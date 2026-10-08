@@ -9,7 +9,7 @@ use tokio::sync::oneshot;
 
 use crate::engine::{PermissionGate, PermissionOutcome};
 use crate::events::{Bus, RuntimeEvent};
-use crate::model::Approval;
+use crate::model::{Approval, ApprovalStatus};
 use crate::policy::Action;
 use crate::store::Store;
 use crate::util::json_hash;
@@ -36,13 +36,40 @@ pub fn parked_message(id: &str) -> String {
     )
 }
 
-/// Key for one-shot grants. Command tools are keyed by the command only, because the model
-/// rewrites free-text fields such as `description` when it retries.
+/// Key for one-shot grants. Only the shell tools (`Bash`, `PowerShell`) are keyed by the command
+/// alone, because the model rewrites free-text fields such as `description` when it retries.
+/// Every other tool is keyed by its full input.
 pub fn grant_key(tool: &str, input: &Value) -> String {
-    match input.get("command").and_then(Value::as_str) {
+    let command = matches!(tool, "Bash" | "PowerShell")
+        .then(|| input.get("command").and_then(Value::as_str))
+        .flatten();
+    match command {
         Some(cmd) => json_hash(&json!({ "tool": tool, "command": cmd })),
         None => json_hash(&json!({ "tool": tool, "input": input })),
     }
+}
+
+/// Removes a waiter entry when dropped, so an aborted `check` future cannot leak it.
+struct WaiterGuard<'a> {
+    waiters: &'a Mutex<HashMap<String, oneshot::Sender<Decision>>>,
+    id: String,
+}
+
+impl Drop for WaiterGuard<'_> {
+    fn drop(&mut self) {
+        self.waiters.lock().unwrap().remove(&self.id);
+    }
+}
+
+fn outcome_of(approved: bool, note: Option<&str>, input: Value) -> PermissionOutcome {
+    if approved {
+        return PermissionOutcome::Allow { input };
+    }
+    let message = match note.map(str::trim) {
+        Some(n) if !n.is_empty() => format!("Denied by the reviewer: {n}"),
+        _ => "Denied by the reviewer.".to_string(),
+    };
+    PermissionOutcome::Deny { message }
 }
 
 pub struct ApprovalHub {
@@ -58,6 +85,11 @@ impl ApprovalHub {
             bus,
             waiters: Mutex::new(HashMap::new()),
         }
+    }
+
+    #[doc(hidden)]
+    pub fn waiter_count(&self) -> usize {
+        self.waiters.lock().unwrap().len()
     }
 
     pub async fn decide(
@@ -93,20 +125,27 @@ impl ApprovalHub {
         let approval = self.store.create_approval(run_id, tool, &input).await?;
         let (tx, rx) = oneshot::channel();
         self.waiters.lock().unwrap().insert(approval.id.clone(), tx);
+        let _guard = WaiterGuard {
+            waiters: &self.waiters,
+            id: approval.id.clone(),
+        };
         let _ = self.bus.send(RuntimeEvent::ApprovalRequested {
             approval: approval.clone(),
         });
+        // A decision may have landed between create_approval and the waiter insert, when
+        // `decide` found no waiter. Re-read now that the waiter is registered: any later
+        // decision reaches the waiter, any earlier one is visible here.
+        let current = self.store.get_approval(&approval.id).await?;
+        if current.status != ApprovalStatus::Pending {
+            return Ok(outcome_of(
+                current.status == ApprovalStatus::Approved,
+                current.note.as_deref(),
+                input,
+            ));
+        }
         match tokio::time::timeout(wait, rx).await {
-            Ok(Ok(d)) if d.approved => Ok(PermissionOutcome::Allow { input }),
-            Ok(Ok(d)) => {
-                let message = match d.note.as_deref().map(str::trim) {
-                    Some(n) if !n.is_empty() => format!("Denied by the reviewer: {n}"),
-                    _ => "Denied by the reviewer.".to_string(),
-                };
-                Ok(PermissionOutcome::Deny { message })
-            }
+            Ok(Ok(d)) => Ok(outcome_of(d.approved, d.note.as_deref(), input)),
             _ => {
-                self.waiters.lock().unwrap().remove(&approval.id);
                 self.store.mark_parked(&approval.id).await?;
                 Ok(PermissionOutcome::Deny {
                     message: parked_message(&approval.id),

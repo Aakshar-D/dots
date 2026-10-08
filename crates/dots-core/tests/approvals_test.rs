@@ -233,3 +233,37 @@ async fn policy_resolution_uses_the_run_workspace() {
         }
     );
 }
+
+#[test]
+fn grant_key_command_shortcut_is_limited_to_shell_tools() {
+    let staging = json!({"command": "deploy", "env": "staging"});
+    let prod = json!({"command": "deploy", "env": "prod"});
+    assert_ne!(
+        grant_key("mcp__x__run", &staging),
+        grant_key("mcp__x__run", &prod)
+    );
+    for tool in ["Bash", "PowerShell"] {
+        let a = json!({"command": "git push", "description": "one"});
+        let b = json!({"command": "git push", "description": "two"});
+        assert_eq!(grant_key(tool, &a), grant_key(tool, &b));
+    }
+}
+
+#[tokio::test]
+async fn aborted_check_removes_its_waiter() {
+    let (_d, _store, hub, run, bus) = setup(Preset::Sandboxed, 30).await;
+    let mut events = bus.subscribe();
+    let h = hub.clone();
+    let rid = run.id.clone();
+    let check =
+        tokio::spawn(async move { h.check(&rid, "Bash", json!({"command": "git push"})).await });
+    loop {
+        if let RuntimeEvent::ApprovalRequested { .. } = events.recv().await.unwrap() {
+            break;
+        }
+    }
+    assert_eq!(hub.waiter_count(), 1);
+    check.abort();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(hub.waiter_count(), 0);
+}
