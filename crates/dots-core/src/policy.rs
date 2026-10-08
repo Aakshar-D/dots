@@ -32,6 +32,7 @@ pub struct Policy {
 
 const READ_TOOLS: &[&str] = &["Read", "LS", "Glob", "Grep"];
 const COMMAND_TOOLS: &[&str] = &["Bash", "PowerShell"];
+const FILE_TOOLS: &[&str] = &["Read", "Write", "Edit", "NotebookEdit", "Glob", "Grep", "LS"];
 
 impl Policy {
     pub fn preset(preset: Preset) -> Policy {
@@ -44,12 +45,17 @@ impl Policy {
                 }
                 Action::Deny
             }
+            // `Custom` starts from the Sandboxed rules for the user to edit.
             Preset::Sandboxed | Preset::Custom => {
                 rules.extend(READ_TOOLS.iter().map(|t| Rule::new(t, Action::Allow)));
                 rules.push(Rule::new("Write", Action::Allow));
                 rules.push(Rule::new("Edit", Action::Allow));
-                for git in ["status", "diff", "log", "add", "commit"] {
+                for git in ["status", "diff", "add", "commit"] {
                     rules.push(Rule::new(&format!("Bash(git {git}:*)"), Action::Allow));
+                }
+                for tool in ["Write", "Edit"] {
+                    rules.push(Rule::new(&format!("{tool}(**/.git/**)"), Action::Deny));
+                    rules.push(Rule::new(&format!("{tool}(**/.git)"), Action::Deny));
                 }
                 Action::Ask
             }
@@ -80,15 +86,30 @@ impl Policy {
     /// (allow patterns, deny patterns) for `--allowedTools` / `--disallowedTools`.
     pub fn cli_lists(&self) -> (Vec<String>, Vec<String>) {
         let pick = |a: Action| -> Vec<String> {
-            self.rules.iter().filter(|r| r.action == a).map(|r| r.tool.clone()).collect()
+            self.rules
+                .iter()
+                .filter(|r| r.action == a)
+                .map(|r| r.tool.trim().to_string())
+                .collect()
         };
         (pick(Action::Allow), pick(Action::Deny))
     }
 
     pub fn validate(&self) -> Result<()> {
         for r in &self.rules {
-            parse_pattern(&r.tool)
-                .map_err(|e| Error::Invalid(format!("policy rule {:?}: {e}", r.tool)))?;
+            let invalid = |e: &str| Error::Invalid(format!("policy rule {:?}: {e}", r.tool));
+            let pattern = parse_pattern(&r.tool).map_err(|e| invalid(&e))?;
+            if let Pattern::WithSpec { tool, spec } = pattern {
+                if COMMAND_TOOLS.contains(&tool) {
+                    let body = spec.strip_suffix(":*");
+                    if body.unwrap_or(spec).contains('*') {
+                        return Err(invalid("'*' is only allowed as a trailing ':*'"));
+                    }
+                    if body.is_some_and(|b| b.ends_with(' ')) {
+                        return Err(invalid("no space allowed before ':*'"));
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -131,20 +152,192 @@ fn parse_pattern(p: &str) -> std::result::Result<Pattern<'_>, String> {
     Ok(Pattern::Exact(p))
 }
 
-fn is_compound(cmd: &str) -> bool {
-    cmd.contains("$(") || cmd.chars().any(|c| matches!(c, ';' | '|' | '&' | '\n' | '`' | '>' | '<'))
+// ---- command matching ----------------------------------------------------
+
+/// Allow side: only plain, shell-inert commands may be matched. Returns the command with runs
+/// of spaces collapsed, or `None` if it contains anything that could smuggle in a second command.
+fn simple_command(command: &str) -> Option<String> {
+    let command = command.trim();
+    let simple = command
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || " -_./=:,@+%".contains(c));
+    if !simple || command.split(' ').any(|t| t.starts_with("--output")) {
+        return None;
+    }
+    Some(command.split(' ').filter(|t| !t.is_empty()).collect::<Vec<_>>().join(" "))
 }
 
-fn segments(cmd: &str) -> impl Iterator<Item = &str> {
-    cmd.split(|c| matches!(c, ';' | '|' | '&' | '\n'))
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-}
-
-fn command_matches(spec: &str, command: &str) -> bool {
+fn allow_command_matches(spec: &str, command: &str) -> bool {
+    let Some(command) = simple_command(command) else {
+        return false;
+    };
     match spec.strip_suffix(":*") {
         Some(prefix) => command == prefix || command.starts_with(&format!("{prefix} ")),
         None => command == spec,
+    }
+}
+
+/// Deny/ask side: fuzzy, fail-closed tokenization (case, path and `.exe` insensitive).
+fn tokenize(s: &str) -> Vec<String> {
+    s.to_lowercase()
+        .split(|c: char| c.is_whitespace() || ";|&\n\r(){}[]<>$\"'`,".contains(c))
+        .filter(|t| !t.is_empty())
+        .map(|t| {
+            let base = t.rsplit(['/', '\\']).next().unwrap_or(t);
+            base.strip_suffix(".exe").unwrap_or(base).to_string()
+        })
+        .filter(|t| !t.is_empty())
+        .collect()
+}
+
+/// True if the spec tokens appear, in order but not necessarily contiguously, in the command.
+fn restrictive_command_matches(spec: &str, command: &str) -> bool {
+    let spec = spec.strip_suffix(":*").unwrap_or(spec);
+    let spec_tokens = tokenize(spec);
+    let command_tokens = tokenize(command);
+    let mut it = command_tokens.iter();
+    spec_tokens.iter().all(|s| it.any(|c| c == s))
+}
+
+// ---- path / url matching -------------------------------------------------
+
+fn normalize_path(p: &str) -> String {
+    let mut p = p.replace('\\', "/");
+    while let Some(rest) = p.strip_prefix("./") {
+        p = rest.to_string();
+    }
+    p
+}
+
+#[derive(Clone, Copy)]
+enum Glob {
+    Lit(char),
+    Star,
+    DoubleStar,
+    Question,
+}
+
+fn parse_glob(pattern: &str) -> Vec<Glob> {
+    let chars: Vec<char> = pattern.chars().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        match chars[i] {
+            '*' if chars.get(i + 1) == Some(&'*') => {
+                out.push(Glob::DoubleStar);
+                i += 2;
+            }
+            '*' => {
+                out.push(Glob::Star);
+                i += 1;
+            }
+            '?' => {
+                out.push(Glob::Question);
+                i += 1;
+            }
+            c => {
+                out.push(Glob::Lit(c));
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+fn glob_match_tokens(pat: &[Glob], text: &[char]) -> bool {
+    // dp[j] == pattern consumed so far matches text[..j]
+    let mut dp = vec![false; text.len() + 1];
+    dp[0] = true;
+    for g in pat {
+        let mut next = vec![false; text.len() + 1];
+        match g {
+            Glob::Lit(c) => {
+                for j in 0..text.len() {
+                    next[j + 1] = dp[j] && text[j] == *c;
+                }
+            }
+            Glob::Question => {
+                for j in 0..text.len() {
+                    next[j + 1] = dp[j] && text[j] != '/';
+                }
+            }
+            Glob::Star => {
+                next[0] = dp[0];
+                for j in 0..text.len() {
+                    next[j + 1] = dp[j + 1] || (next[j] && text[j] != '/');
+                }
+            }
+            Glob::DoubleStar => {
+                next[0] = dp[0];
+                for j in 0..text.len() {
+                    next[j + 1] = dp[j + 1] || next[j];
+                }
+            }
+        }
+        dp = next;
+    }
+    dp[text.len()]
+}
+
+fn glob_matches(pattern: &str, path: &str) -> bool {
+    let text: Vec<char> = path.chars().collect();
+    if glob_match_tokens(&parse_glob(pattern), &text) {
+        return true;
+    }
+    // A leading `**/` may also match zero directories.
+    match pattern.strip_prefix("**/") {
+        Some(rest) => glob_match_tokens(&parse_glob(rest), &text),
+        None => false,
+    }
+}
+
+fn input_path(input: &Value) -> Option<String> {
+    ["file_path", "path", "notebook_path"]
+        .iter()
+        .find_map(|k| input.get(k).and_then(Value::as_str))
+        .map(normalize_path)
+}
+
+fn path_spec_matches(spec: &str, input: &Value, action: Action) -> bool {
+    let Some(path) = input_path(input) else {
+        return action != Action::Allow;
+    };
+    let pattern = normalize_path(spec.trim());
+    if glob_matches(&pattern, &path) {
+        return true;
+    }
+    if action == Action::Allow {
+        return false;
+    }
+    // Deny/ask fail closed: also try every suffix that starts right after a '/'.
+    path.match_indices('/').any(|(i, _)| glob_matches(&pattern, &path[i + 1..]))
+}
+
+/// Hosts a URL could be read as (lowercased), plus whether it carries userinfo (`user@host`).
+fn url_hosts(url: &str) -> Option<(Vec<String>, bool)> {
+    let rest = &url[url.find("://")? + 3..];
+    let authority = &rest[..rest.find(['/', '?', '#']).unwrap_or(rest.len())];
+    let host_of = |s: &str| s[..s.find(':').unwrap_or(s.len())].to_lowercase();
+    let has_userinfo = authority.contains('@');
+    let mut hosts = vec![host_of(authority)];
+    if let Some((_, after)) = authority.rsplit_once('@') {
+        hosts.push(host_of(after));
+    }
+    Some((hosts, has_userinfo))
+}
+
+fn webfetch_domain_matches(domain: &str, input: &Value, action: Action) -> bool {
+    let domain = domain.trim().to_lowercase();
+    let host_matches = |h: &String| *h == domain || h.ends_with(&format!(".{domain}"));
+    match input.get("url").and_then(Value::as_str).and_then(url_hosts) {
+        None => action != Action::Allow,
+        Some((hosts, has_userinfo)) => {
+            if action == Action::Allow {
+                !has_userinfo && hosts.iter().all(host_matches)
+            } else {
+                hosts.iter().any(host_matches)
+            }
+        }
     }
 }
 
@@ -155,17 +348,27 @@ fn pattern_matches(pattern: &str, tool: &str, input: &Value, action: Action) -> 
         Ok(Pattern::Exact(name)) => name == tool,
         Ok(Pattern::Prefix(prefix)) => tool.starts_with(prefix),
         Ok(Pattern::WithSpec { tool: name, spec }) => {
-            if name != tool || !COMMAND_TOOLS.contains(&name) {
+            if name != tool {
                 return false;
             }
-            let Some(command) = input.get("command").and_then(Value::as_str) else {
-                return false;
-            };
-            let command = command.trim();
-            if action == Action::Allow {
-                !is_compound(command) && command_matches(spec, command)
+            if COMMAND_TOOLS.contains(&name) {
+                let Some(command) = input.get("command").and_then(Value::as_str) else {
+                    return false;
+                };
+                if action == Action::Allow {
+                    allow_command_matches(spec, command)
+                } else {
+                    restrictive_command_matches(spec, command)
+                }
+            } else if FILE_TOOLS.contains(&name) {
+                path_spec_matches(spec, input, action)
+            } else if let (true, Some(domain)) =
+                (name == "WebFetch", spec.trim_start().strip_prefix("domain:"))
+            {
+                webfetch_domain_matches(domain, input, action)
             } else {
-                segments(command).any(|seg| command_matches(spec, seg))
+                // Unknown spec: the CLI enforces it; fail closed on deny/ask, never allow.
+                action != Action::Allow
             }
         }
     }
