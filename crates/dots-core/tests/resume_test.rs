@@ -73,6 +73,13 @@ async fn decide(e: &Env, id: &str, approved: bool, note: Option<&str>) -> Option
     }
 }
 
+/// Waits until the run is parked, then lets the runner's own post-finish resume check
+/// run, so a decision made by the test is always the one that triggers the resume.
+async fn parked(e: &Env, run_id: &str) {
+    wait_status(&e.store, run_id, RunStatus::AwaitingApproval, 5).await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+}
+
 fn ask(cmd: &str) -> Step {
     Step::Ask {
         tool: "Bash".into(),
@@ -109,7 +116,7 @@ async fn approve_after_park_resumes_child_with_grant() {
         .enqueue(NewRun::new(&dot.id, TriggerKind::Manual))
         .await
         .unwrap();
-    wait_status(&e.store, &parent.id, RunStatus::AwaitingApproval, 5).await;
+    parked(&e, &parent.id).await;
     let approval = e
         .store
         .approvals_for_run(&parent.id)
@@ -156,7 +163,7 @@ async fn deny_with_note_resumes_with_the_note() {
         .enqueue(NewRun::new(&dot.id, TriggerKind::Manual))
         .await
         .unwrap();
-    wait_status(&e.store, &parent.id, RunStatus::AwaitingApproval, 5).await;
+    parked(&e, &parent.id).await;
     let approval = e
         .store
         .approvals_for_run(&parent.id)
@@ -180,7 +187,7 @@ async fn plain_deny_closes_the_parent_without_a_child() {
         .enqueue(NewRun::new(&dot.id, TriggerKind::Manual))
         .await
         .unwrap();
-    wait_status(&e.store, &parent.id, RunStatus::AwaitingApproval, 5).await;
+    parked(&e, &parent.id).await;
     let approval = e
         .store
         .approvals_for_run(&parent.id)
@@ -249,7 +256,7 @@ async fn two_parked_approvals_resume_once_after_both_are_decided() {
         .enqueue(NewRun::new(&dot.id, TriggerKind::Manual))
         .await
         .unwrap();
-    wait_status(&e.store, &parent.id, RunStatus::AwaitingApproval, 5).await;
+    parked(&e, &parent.id).await;
     let approvals = e.store.approvals_for_run(&parent.id).await.unwrap();
     assert_eq!(approvals.len(), 2);
     assert!(decide(&e, &approvals[0].id, true, None).await.is_none());
@@ -262,4 +269,103 @@ async fn two_parked_approvals_resume_once_after_both_are_decided() {
     );
     wait_status(&e.store, &child.id, RunStatus::Succeeded, 5).await;
     assert_eq!(e.store.list_runs(Some(&dot.id), 10).await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn second_maybe_resume_on_same_parent_is_a_noop() {
+    let e = env(vec![ask("git push"), finished()]).await;
+    let dot = parking_dot(&e).await;
+    let parent = e
+        .runner
+        .enqueue(NewRun::new(&dot.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    parked(&e, &parent.id).await;
+    let approval = e
+        .store
+        .approvals_for_run(&parent.id)
+        .await
+        .unwrap()
+        .remove(0);
+    assert!(decide(&e, &approval.id, true, None).await.is_some());
+    assert!(e.runner.maybe_resume(&parent.id).await.unwrap().is_none());
+    assert_eq!(e.store.list_runs(Some(&dot.id), 10).await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn cancel_before_resume_leaves_parent_cancelled_and_no_child() {
+    let e = env(vec![ask("git push"), finished()]).await;
+    let dot = parking_dot(&e).await;
+    let parent = e
+        .runner
+        .enqueue(NewRun::new(&dot.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    parked(&e, &parent.id).await;
+    let approval = e
+        .store
+        .approvals_for_run(&parent.id)
+        .await
+        .unwrap()
+        .remove(0);
+    let effect = e.hub.decide(&approval.id, true, None).await.unwrap();
+    assert!(matches!(effect, DecideEffect::Parked(_)));
+    assert_eq!(
+        e.runner.cancel(&parent.id).await.unwrap().status,
+        RunStatus::Cancelled
+    );
+    assert!(e.runner.maybe_resume(&parent.id).await.unwrap().is_none());
+    assert_eq!(
+        e.store.get_run(&parent.id).await.unwrap().status,
+        RunStatus::Cancelled
+    );
+    assert_eq!(e.store.list_runs(Some(&dot.id), 10).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn resume_parked_on_non_awaiting_parent_conflicts_and_changes_nothing() {
+    let (_dir, store) = temp_store().await;
+    let dot = store.create_dot(&spec("conflicted")).await.unwrap();
+    let parent = store
+        .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    let a = store
+        .create_approval(&parent.id, "Bash", &json!({"command": "x"}))
+        .await
+        .unwrap();
+    store.decide_approval(&a.id, true, None).await.unwrap();
+    store.mark_parked(&a.id).await.unwrap();
+
+    let mut child = NewRun::new(&dot.id, TriggerKind::Resume);
+    child.parent_run_id = Some(parent.id.clone());
+    child.root_run_id = Some(parent.root_run_id.clone());
+    // The parent is still `queued`, not `awaiting_approval`.
+    let err = store
+        .resume_parked(
+            &parent.id,
+            &[("Bash".into(), "k".into())],
+            &[a.id.clone()],
+            Some(&child),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, dots_core::Error::Conflict(_)), "{err:?}");
+    assert_eq!(
+        store
+            .unresolved_parked_decisions(&parent.id)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(store.list_runs(Some(&dot.id), 10).await.unwrap().len(), 1);
+    assert!(!store
+        .take_grant(&parent.root_run_id, "Bash", "k")
+        .await
+        .unwrap());
+    assert_eq!(
+        store.get_run(&parent.id).await.unwrap().status,
+        RunStatus::Queued
+    );
 }

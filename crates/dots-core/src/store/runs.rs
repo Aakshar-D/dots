@@ -1,5 +1,5 @@
 use serde_json::Value;
-use sqlx::sqlite::SqliteRow;
+use sqlx::sqlite::{SqliteConnection, SqliteRow};
 use sqlx::Row;
 
 use super::{opt_json, Store};
@@ -44,30 +44,99 @@ fn event_from_row(row: &SqliteRow) -> Result<RunEventRecord> {
     })
 }
 
+async fn insert_run(conn: &mut SqliteConnection, new: &NewRun) -> Result<String> {
+    let id = new_id();
+    let root = new.root_run_id.clone().unwrap_or_else(|| id.clone());
+    sqlx::query(
+        "INSERT INTO runs (id, dot_id, root_run_id, parent_run_id, trigger_kind, payload, \
+         status, session_id, workspace_path, branch, base_commit, queued_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(&new.dot_id)
+    .bind(&root)
+    .bind(&new.parent_run_id)
+    .bind(new.trigger.as_str())
+    .bind(new.payload.as_ref().map(|v| v.to_string()))
+    .bind(RunStatus::Queued.as_str())
+    .bind(&new.session_id)
+    .bind(&new.workspace_path)
+    .bind(&new.branch)
+    .bind(&new.base_commit)
+    .bind(now())
+    .execute(conn)
+    .await?;
+    Ok(id)
+}
+
 impl Store {
     pub async fn create_run(&self, new: &NewRun) -> Result<Run> {
-        let id = new_id();
-        let root = new.root_run_id.clone().unwrap_or_else(|| id.clone());
-        sqlx::query(
-            "INSERT INTO runs (id, dot_id, root_run_id, parent_run_id, trigger_kind, payload, \
-             status, session_id, workspace_path, branch, base_commit, queued_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(&id)
-        .bind(&new.dot_id)
-        .bind(&root)
-        .bind(&new.parent_run_id)
-        .bind(new.trigger.as_str())
-        .bind(new.payload.as_ref().map(|v| v.to_string()))
-        .bind(RunStatus::Queued.as_str())
-        .bind(&new.session_id)
-        .bind(&new.workspace_path)
-        .bind(&new.branch)
-        .bind(&new.base_commit)
-        .bind(now())
-        .execute(&self.pool)
-        .await?;
+        let mut conn = self.pool.acquire().await?;
+        let id = insert_run(&mut conn, new).await?;
+        drop(conn);
         self.get_run(&id).await
+    }
+
+    /// Atomically turns the decided parked approvals of `parent_id` into a resume:
+    /// inserts the one-shot `grants` (`(tool, grant_key)`, scoped to the parent's
+    /// `root_run_id`, read inside the transaction), marks `resolved_ids` resolved,
+    /// inserts the optional `child` run, and closes the parent as `succeeded`.
+    /// The parent must still be `awaiting_approval` (e.g. not cancelled concurrently);
+    /// otherwise nothing is written and `Error::Conflict` is returned.
+    pub async fn resume_parked(
+        &self,
+        parent_id: &str,
+        grants: &[(String, String)],
+        resolved_ids: &[String],
+        child: Option<&NewRun>,
+    ) -> Result<Option<Run>> {
+        let mut tx = self.pool.begin().await?;
+        // The guarded update goes first: it takes the write lock and makes
+        // check-and-close atomic with everything below.
+        let res = sqlx::query(
+            "UPDATE runs SET status = 'succeeded' WHERE id = ? AND status = 'awaiting_approval'",
+        )
+        .bind(parent_id)
+        .execute(&mut *tx)
+        .await?;
+        if res.rows_affected() == 0 {
+            tx.rollback().await?;
+            return Err(Error::Conflict(format!(
+                "run {parent_id} is no longer awaiting approval"
+            )));
+        }
+        let root: String = sqlx::query_scalar("SELECT root_run_id FROM runs WHERE id = ?")
+            .bind(parent_id)
+            .fetch_one(&mut *tx)
+            .await?;
+        for (tool, key) in grants {
+            sqlx::query(
+                "INSERT INTO grants (id, root_run_id, tool, input_hash, created_at) \
+                 VALUES (?, ?, ?, ?, ?)",
+            )
+            .bind(new_id())
+            .bind(&root)
+            .bind(tool)
+            .bind(key)
+            .bind(now())
+            .execute(&mut *tx)
+            .await?;
+        }
+        for id in resolved_ids {
+            sqlx::query("UPDATE approvals SET resolved = 1 WHERE id = ?")
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+        }
+        let child_id = match child {
+            Some(new) => Some(insert_run(&mut tx, new).await?),
+            None => None,
+        };
+        tx.commit().await?;
+        match child_id {
+            Some(id) => Ok(Some(self.get_run(&id).await?)),
+            None => Ok(None),
+        }
     }
 
     pub async fn get_run(&self, id: &str) -> Result<Run> {

@@ -192,14 +192,13 @@ impl Runner {
         }
         let decided = self.store.unresolved_parked_decisions(run_id).await?;
         let mut lines = Vec::new();
+        let mut grants = Vec::new();
         let mut needs_child = false;
         for a in &decided {
             let note = a.note.as_deref().map(str::trim).filter(|n| !n.is_empty());
             match (a.status, note) {
                 (ApprovalStatus::Approved, _) => {
-                    self.store
-                        .create_grant(&run.root_run_id, &a.tool, &grant_key(&a.tool, &a.input))
-                        .await?;
+                    grants.push((a.tool.clone(), grant_key(&a.tool, &a.input)));
                     lines.push(format!(
                         "- Approval #{} granted: you may now use {} with the same input. Perform that action now.",
                         a.id, a.tool
@@ -218,20 +217,11 @@ impl Runner {
                     a.id, a.tool
                 )),
             }
-            self.store.mark_resolved(&a.id).await?;
         }
-        // Enqueue the child before closing the parent so observers never see the thread
-        // as fully finished in between.
-        let child = if needs_child {
+        let child = needs_child.then(|| {
             let message = format!(
-                "Human review of your queued actions:
-{}
-
-Continue the task, then end with your summary.",
-                lines.join(
-                    "
-"
-                )
+                "Human review of your queued actions:\n{}\n\nContinue the task, then end with your summary.",
+                lines.join("\n")
             );
             let ids: Vec<String> = decided.iter().map(|a| a.id.clone()).collect();
             let mut new = NewRun::new(&run.dot_id, TriggerKind::Resume);
@@ -242,12 +232,26 @@ Continue the task, then end with your summary.",
             new.workspace_path = run.workspace_path.clone();
             new.branch = run.branch.clone();
             new.base_commit = run.base_commit.clone();
-            Some(self.enqueue(new).await?)
-        } else {
-            None
+            new
+        });
+        // One transaction: grants, resolved flags, child run and closing the parent
+        // either all happen or none do, so a failure never loses a decision.
+        let resolved: Vec<String> = decided.iter().map(|a| a.id.clone()).collect();
+        let child = match self
+            .store
+            .resume_parked(run_id, &grants, &resolved, child.as_ref())
+            .await
+        {
+            Ok(child) => child,
+            // Cancelled (or otherwise closed) concurrently: nothing to resume.
+            Err(Error::Conflict(_)) => return Ok(None),
+            Err(e) => return Err(e),
         };
-        let parent = self.store.set_status(run_id, RunStatus::Succeeded).await?;
-        self.emit_run(&parent);
+        if let Some(c) = &child {
+            self.emit_run(c);
+            self.wake.notify_one();
+        }
+        self.emit_run(&self.store.get_run(run_id).await?);
         Ok(child)
     }
 
@@ -411,10 +415,18 @@ Continue the task, then end with your summary.",
         if signalled {
             return self.store.get_run(run_id).await;
         }
-        if let Some(r) = self.store.cancel_if_inactive(run_id).await? {
-            if let Err(e) = self.store.expire_pending_for_run(run_id).await {
-                tracing::warn!(run = %run_id, "expiring approvals failed: {e}");
+        // Serialised with `maybe_resume` so a cancel never interleaves with a resume.
+        let cancelled = {
+            let _guard = self.resume_lock.lock().await;
+            let cancelled = self.store.cancel_if_inactive(run_id).await?;
+            if cancelled.is_some() {
+                if let Err(e) = self.store.expire_pending_for_run(run_id).await {
+                    tracing::warn!(run = %run_id, "expiring approvals failed: {e}");
+                }
             }
+            cancelled
+        };
+        if let Some(r) = cancelled {
             self.emit_run(&r);
             return Ok(r);
         }
