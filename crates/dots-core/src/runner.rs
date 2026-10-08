@@ -9,9 +9,12 @@ use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
+use serde_json::json;
+
+use crate::approvals::grant_key;
 use crate::engine::{Engine, EngineEvent, RunContext};
 use crate::events::{Bus, RuntimeEvent};
-use crate::model::{EngineKind, NewRun, Run, RunStatus};
+use crate::model::{ApprovalStatus, EngineKind, NewRun, Run, RunStatus, TriggerKind};
 use crate::prompt::build_prompt;
 use crate::store::Store;
 use crate::util::{ct_eq, new_token};
@@ -41,7 +44,6 @@ pub struct Runner {
     active: Mutex<HashMap<String, Active>>,
     secrets: Mutex<HashMap<String, String>>,
     wake: Notify,
-    #[allow(dead_code)] // used by automatic resume (Task 9)
     resume_lock: tokio::sync::Mutex<()>,
 }
 
@@ -173,8 +175,81 @@ impl Runner {
         self.wake.notify_one();
     }
 
-    /// Hook for post-run work; Task 9 adds automatic resume here.
-    async fn after_finish(&self, _run_id: &str) {}
+    async fn after_finish(&self, run_id: &str) {
+        if let Err(e) = self.maybe_resume(run_id).await {
+            tracing::error!(run = %run_id, "resume check failed: {e}");
+        }
+    }
+
+    /// Turns decided, parked approvals of a finished run into a resume child run.
+    pub async fn maybe_resume(&self, run_id: &str) -> Result<Option<Run>> {
+        let _guard = self.resume_lock.lock().await;
+        let run = self.store.get_run(run_id).await?;
+        if run.status != RunStatus::AwaitingApproval
+            || self.store.has_pending_for_run(run_id).await?
+        {
+            return Ok(None);
+        }
+        let decided = self.store.unresolved_parked_decisions(run_id).await?;
+        let mut lines = Vec::new();
+        let mut needs_child = false;
+        for a in &decided {
+            let note = a.note.as_deref().map(str::trim).filter(|n| !n.is_empty());
+            match (a.status, note) {
+                (ApprovalStatus::Approved, _) => {
+                    self.store
+                        .create_grant(&run.root_run_id, &a.tool, &grant_key(&a.tool, &a.input))
+                        .await?;
+                    lines.push(format!(
+                        "- Approval #{} granted: you may now use {} with the same input. Perform that action now.",
+                        a.id, a.tool
+                    ));
+                    needs_child = true;
+                }
+                (_, Some(note)) => {
+                    lines.push(format!(
+                        "- Approval #{} for {} was denied. Reviewer note: {note}",
+                        a.id, a.tool
+                    ));
+                    needs_child = true;
+                }
+                _ => lines.push(format!(
+                    "- Approval #{} for {} was denied. Do not attempt it again.",
+                    a.id, a.tool
+                )),
+            }
+            self.store.mark_resolved(&a.id).await?;
+        }
+        // Enqueue the child before closing the parent so observers never see the thread
+        // as fully finished in between.
+        let child = if needs_child {
+            let message = format!(
+                "Human review of your queued actions:
+{}
+
+Continue the task, then end with your summary.",
+                lines.join(
+                    "
+"
+                )
+            );
+            let ids: Vec<String> = decided.iter().map(|a| a.id.clone()).collect();
+            let mut new = NewRun::new(&run.dot_id, TriggerKind::Resume);
+            new.payload = Some(json!({ "message": message, "approvals": ids }));
+            new.parent_run_id = Some(run.id.clone());
+            new.root_run_id = Some(run.root_run_id.clone());
+            new.session_id = run.session_id.clone();
+            new.workspace_path = run.workspace_path.clone();
+            new.branch = run.branch.clone();
+            new.base_commit = run.base_commit.clone();
+            Some(self.enqueue(new).await?)
+        } else {
+            None
+        };
+        let parent = self.store.set_status(run_id, RunStatus::Succeeded).await?;
+        self.emit_run(&parent);
+        Ok(child)
+    }
 
     async fn record(&self, run_id: &str, ev: &EngineEvent) -> Result<()> {
         match ev {
