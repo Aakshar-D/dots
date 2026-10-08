@@ -1,10 +1,13 @@
 #[macro_use]
 mod macros;
 
+pub mod engine;
 pub mod error;
+pub mod events;
 pub mod model;
 pub mod policy;
 pub mod proc;
+pub mod prompt;
 pub mod scheduler;
 pub mod store;
 pub mod util;
