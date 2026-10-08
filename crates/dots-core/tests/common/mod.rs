@@ -85,3 +85,24 @@ pub fn fake_run(trigger: TriggerKind, payload: Option<Value>, session_id: Option
         ended_at: None,
     }
 }
+
+use dots_core::Error as DotsError;
+
+/// Polls until the run reaches `status` or `secs` elapse (then panics with the last state).
+pub async fn wait_status(store: &Store, run_id: &str, status: RunStatus, secs: u64) -> Run {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+    loop {
+        let run = store.get_run(run_id).await.unwrap();
+        if run.status == status {
+            return run;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("run {run_id} did not reach {status:?}; last state: {run:#?}");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
+pub fn is_not_found(e: &DotsError) -> bool {
+    matches!(e, DotsError::NotFound(_))
+}

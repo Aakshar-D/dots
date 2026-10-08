@@ -1,6 +1,7 @@
 #[macro_use]
 mod macros;
 
+pub mod approvals;
 pub mod engine;
 pub mod error;
 pub mod events;
