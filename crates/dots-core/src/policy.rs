@@ -29,7 +29,10 @@ pub struct Rule {
 
 impl Rule {
     pub fn new(tool: &str, action: Action) -> Self {
-        Self { tool: tool.to_string(), action }
+        Self {
+            tool: tool.to_string(),
+            action,
+        }
     }
 }
 
@@ -42,7 +45,15 @@ pub struct Policy {
 
 const READ_TOOLS: &[&str] = &["Read", "LS", "Glob", "Grep"];
 const COMMAND_TOOLS: &[&str] = &["Bash", "PowerShell"];
-const FILE_TOOLS: &[&str] = &["Read", "Write", "Edit", "NotebookEdit", "Glob", "Grep", "LS"];
+const FILE_TOOLS: &[&str] = &[
+    "Read",
+    "Write",
+    "Edit",
+    "NotebookEdit",
+    "Glob",
+    "Grep",
+    "LS",
+];
 
 impl Policy {
     pub fn preset(preset: Preset) -> Policy {
@@ -76,7 +87,11 @@ impl Policy {
                 Action::Allow
             }
         };
-        Policy { preset, rules, default }
+        Policy {
+            preset,
+            rules,
+            default,
+        }
     }
 
     /// Deny rules win over allow rules, which win over ask rules; otherwise `default`.
@@ -164,7 +179,10 @@ fn parse_pattern(p: &str) -> std::result::Result<Pattern<'_>, String> {
         if spec.trim().is_empty() {
             return Err("empty spec".into());
         }
-        return Ok(Pattern::WithSpec { tool: &p[..open], spec });
+        return Ok(Pattern::WithSpec {
+            tool: &p[..open],
+            spec,
+        });
     }
     if let Some(prefix) = p.strip_suffix('*') {
         if prefix.contains('*') {
@@ -190,7 +208,13 @@ fn simple_command(command: &str) -> Option<String> {
     if !simple || command.split(' ').any(|t| t.starts_with("--output")) {
         return None;
     }
-    Some(command.split(' ').filter(|t| !t.is_empty()).collect::<Vec<_>>().join(" "))
+    Some(
+        command
+            .split(' ')
+            .filter(|t| !t.is_empty())
+            .collect::<Vec<_>>()
+            .join(" "),
+    )
 }
 
 fn allow_command_matches(spec: &str, command: &str) -> bool {
@@ -231,7 +255,7 @@ fn restrictive_command_matches(spec: &str, command: &str) -> bool {
 /// Lexically normalizes a path: `\` -> `/`, lowercase, trailing dots/spaces trimmed from every
 /// component, `//` collapsed, `.` dropped, `..` resolved. Returns (is_absolute, normalized).
 fn lexical_normalize(raw: &str) -> (bool, String) {
-    let s = raw.replace('\\', "/").to_lowercase();
+    let s = raw.replace('\\', "/").to_ascii_lowercase();
     let b = s.as_bytes();
     let (prefix, rest) = if b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
         (&s[..2], &s[2..])
@@ -251,6 +275,8 @@ fn lexical_normalize(raw: &str) -> (bool, String) {
                 }
             }
             _ => {
+                // NTFS alternate data streams / index aliases: `.git:$I30:...` is `.git`.
+                let c = c.split(':').next().unwrap_or(c);
                 let t = c.trim_end_matches(['.', ' ']);
                 if !t.is_empty() {
                     stack.push(t);
@@ -259,12 +285,19 @@ fn lexical_normalize(raw: &str) -> (bool, String) {
         }
     }
     let joined = stack.join("/");
-    (abs, if abs { format!("{prefix}/{joined}") } else { joined })
+    (
+        abs,
+        if abs {
+            format!("{prefix}/{joined}")
+        } else {
+            joined
+        },
+    )
 }
 
 /// Patterns: `\` -> `/`, lowercase, leading `./` stripped. Returns (is_absolute, pattern).
 fn normalize_pattern(spec: &str) -> (bool, String) {
-    let mut p = spec.trim().replace('\\', "/").to_lowercase();
+    let mut p = spec.trim().replace('\\', "/").to_ascii_lowercase();
     while let Some(rest) = p.strip_prefix("./") {
         p = rest.to_string();
     }
@@ -275,8 +308,11 @@ fn normalize_pattern(spec: &str) -> (bool, String) {
 
 /// Allow-side guard on the raw input path: reject traversal and Windows path tricks.
 fn raw_path_is_clean(raw: &str) -> bool {
+    let b = raw.as_bytes();
+    let has_drive = b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':';
+    let rest = if has_drive { &raw[2..] } else { raw };
     !raw.contains('~')
-        && !raw.contains("::$")
+        && !rest.contains(':')
         && raw
             .split(['/', '\\'])
             .all(|c| c != ".." && (c == "." || !(c.ends_with('.') || c.ends_with(' '))))
@@ -377,27 +413,32 @@ fn path_spec_matches(spec: &str, input: &Value, action: Action, workspace: Optio
     if action == Action::Allow && !raw_path_is_clean(raw) {
         return false;
     }
-    let (mut abs, mut path) = lexical_normalize(raw);
+    let (abs, full) = lexical_normalize(raw);
+    // Candidate paths: the workspace-relative form (if any) first, then the full normalized path.
+    let mut relative: Option<String> = None;
     if let (true, Some(ws)) = (abs, workspace) {
         let ws = ws.trim_end_matches('/');
-        if path == ws || path == format!("{ws}/") {
-            (abs, path) = (false, String::new());
-        } else if let Some(rel) = path.strip_prefix(&format!("{ws}/")) {
-            (abs, path) = (false, rel.to_string());
+        if full == ws || full == format!("{ws}/") {
+            relative = Some(String::new());
+        } else if let Some(rel) = full.strip_prefix(&format!("{ws}/")) {
+            relative = Some(rel.to_string());
         }
     }
     let (pattern_abs, pattern) = normalize_pattern(spec);
-    if action == Action::Allow && abs && !pattern_abs {
-        return false;
-    }
-    if glob_matches(&pattern, &path) {
-        return true;
-    }
     if action == Action::Allow {
-        return false;
+        let (path_abs, path) = match relative {
+            Some(rel) => (false, rel),
+            None => (abs, full),
+        };
+        return !(path_abs && !pattern_abs) && glob_matches(&pattern, &path);
     }
-    // Deny/ask fail closed: also try every suffix that starts right after a '/'.
-    path.match_indices('/').any(|(i, _)| glob_matches(&pattern, &path[i + 1..]))
+    // Deny/ask fail closed: test every candidate, whole and at every suffix after a '/'.
+    relative.iter().chain(std::iter::once(&full)).any(|path| {
+        glob_matches(&pattern, path)
+            || path
+                .match_indices('/')
+                .any(|(i, _)| glob_matches(&pattern, &path[i + 1..]))
+    })
 }
 
 struct UrlInfo {
@@ -415,20 +456,26 @@ fn parse_url(url: &str) -> Option<UrlInfo> {
     let authority = &raw_auth[..raw_auth.find('\\').unwrap_or(raw_auth.len())];
     let host_of = |s: &str| {
         let host = &s[..s.find(':').unwrap_or(s.len())];
-        host.to_lowercase().trim_end_matches('.').to_string()
+        host.to_ascii_lowercase().trim_end_matches('.').to_string()
     };
     let mut hosts = vec![host_of(authority)];
     if let Some((_, after)) = authority.rsplit_once('@') {
         hosts.push(host_of(after));
     }
-    Some(UrlInfo { hosts, has_userinfo: authority.contains('@'), suspicious })
+    Some(UrlInfo {
+        hosts,
+        has_userinfo: authority.contains('@'),
+        suspicious,
+    })
 }
 
 fn webfetch_domain_matches(domain: &str, input: &Value, action: Action) -> bool {
     let domain = domain.trim().to_lowercase();
     let host_matches = |h: &String| *h == domain || h.ends_with(&format!(".{domain}"));
     let plain_host = |h: &String| {
-        !h.is_empty() && h.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '-')
+        !h.is_empty()
+            && h.chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '-')
     };
     match input.get("url").and_then(Value::as_str).and_then(parse_url) {
         None => action != Action::Allow,
@@ -438,7 +485,10 @@ fn webfetch_domain_matches(domain: &str, input: &Value, action: Action) -> bool 
                     && !u.suspicious
                     && u.hosts.iter().all(|h| plain_host(h) && host_matches(h))
             } else {
-                u.suspicious || u.hosts.iter().any(host_matches)
+                // Fail closed on `%`/`\` and on any real-host character outside [a-z0-9.-].
+                u.suspicious
+                    || u.hosts.last().is_some_and(|h| !plain_host(h))
+                    || u.hosts.iter().any(host_matches)
             }
         }
     }
@@ -471,9 +521,10 @@ fn pattern_matches(
                 }
             } else if FILE_TOOLS.contains(&name) {
                 path_spec_matches(spec, input, action, workspace)
-            } else if let (true, Some(domain)) =
-                (name == "WebFetch", spec.trim_start().strip_prefix("domain:"))
-            {
+            } else if let (true, Some(domain)) = (
+                name == "WebFetch",
+                spec.trim_start().strip_prefix("domain:"),
+            ) {
                 webfetch_domain_matches(domain, input, action)
             } else {
                 // Unknown spec: the CLI enforces it; fail closed on deny/ask, never allow.

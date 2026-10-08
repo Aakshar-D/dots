@@ -7,7 +7,9 @@ fn tokens_are_43_url_safe_chars_and_unique() {
     let a = new_token();
     let b = new_token();
     assert_eq!(a.len(), 43);
-    assert!(a.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+    assert!(a
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
     assert_ne!(a, b);
 }
 
@@ -43,9 +45,15 @@ fn ct_eq_compares_exactly() {
 #[test]
 fn str_enum_round_trips() {
     assert_eq!(RunStatus::AwaitingApproval.as_str(), "awaiting_approval");
-    assert_eq!(RunStatus::parse("awaiting_approval").unwrap(), RunStatus::AwaitingApproval);
+    assert_eq!(
+        RunStatus::parse("awaiting_approval").unwrap(),
+        RunStatus::AwaitingApproval
+    );
     assert!(RunStatus::parse("nope").is_err());
-    assert_eq!(serde_json::to_string(&TriggerKind::Webhook).unwrap(), "\"webhook\"");
+    assert_eq!(
+        serde_json::to_string(&TriggerKind::Webhook).unwrap(),
+        "\"webhook\""
+    );
     let t: TriggerKind = serde_json::from_str("\"resume\"").unwrap();
     assert_eq!(t, TriggerKind::Resume);
 }

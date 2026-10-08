@@ -22,7 +22,10 @@ pub fn now() -> String {
 /// SHA-256 hex of the JSON value with object keys sorted recursively.
 pub fn json_hash(v: &Value) -> String {
     let s = serde_json::to_string(&canonical(v)).expect("serde_json::Value always serializes");
-    Sha256::digest(s.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
+    Sha256::digest(s.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 fn canonical(v: &Value) -> Value {
