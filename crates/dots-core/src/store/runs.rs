@@ -193,6 +193,22 @@ impl Store {
         self.get_run(id).await
     }
 
+    /// Atomically cancels a run that is `queued` or `awaiting_approval`.
+    /// Returns `None` when the run is in any other state (nothing changed).
+    pub async fn cancel_if_inactive(&self, id: &str) -> Result<Option<Run>> {
+        let res = sqlx::query(
+            "UPDATE runs SET status = 'cancelled', ended_at = ?              WHERE id = ? AND status IN ('queued', 'awaiting_approval')",
+        )
+        .bind(now())
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        if res.rows_affected() == 0 {
+            return Ok(None);
+        }
+        Ok(Some(self.get_run(id).await?))
+    }
+
     pub async fn set_status(&self, id: &str, status: RunStatus) -> Result<Run> {
         sqlx::query("UPDATE runs SET status = ? WHERE id = ?")
             .bind(status.as_str())

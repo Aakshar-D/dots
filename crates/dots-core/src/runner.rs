@@ -61,8 +61,7 @@ impl Runner {
             active: Mutex::new(HashMap::new()),
             secrets: Mutex::new(HashMap::new()),
             wake: Notify::new(),
-            #[allow(dead_code)] // used by automatic resume (Task 9)
-    resume_lock: tokio::sync::Mutex::new(()),
+            resume_lock: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -130,10 +129,11 @@ impl Runner {
                     cancelled_by_user: by_user.clone(),
                 },
             );
-            let run = self.store.get_run(&run.id).await?;
-            self.emit_run(&run);
+            // Nothing fallible may sit between claiming and handing off: failures
+            // after this point go through `execute`'s error path, which frees the slot.
             let this = self.clone();
-            tokio::spawn(async move { this.execute(run, cancel, by_user).await });
+            let run_id = run.id.clone();
+            tokio::spawn(async move { this.execute(run_id, cancel, by_user).await });
             started += 1;
         }
         Ok(started)
@@ -141,13 +141,24 @@ impl Runner {
 
     async fn execute(
         self: Arc<Self>,
-        run: Run,
+        run_id: String,
         cancel: CancellationToken,
         by_user: Arc<AtomicBool>,
     ) {
-        let run_id = run.id.clone();
-        if let Err(e) = self.execute_inner(&run, cancel, &by_user).await {
+        let result = match self.store.get_run(&run_id).await {
+            Ok(run) => {
+                self.emit_run(&run);
+                self.execute_inner(&run, cancel.clone(), &by_user).await
+            }
+            Err(e) => Err(e),
+        };
+        // Whatever happened, never leave an engine running unsupervised.
+        cancel.cancel();
+        if let Err(e) = result {
             tracing::warn!(run = %run_id, "run failed: {e}");
+            if let Err(e2) = self.store.expire_pending_for_run(&run_id).await {
+                tracing::warn!(run = %run_id, "expiring approvals failed: {e2}");
+            }
             if let Ok(r) = self
                 .store
                 .finish_run(&run_id, RunStatus::Failed, None, Some(&e.to_string()))
@@ -195,6 +206,13 @@ impl Runner {
         by_user: &AtomicBool,
     ) -> Result<()> {
         let dot = self.store.get_dot(&run.dot_id).await?;
+        // Resolve the engine first so a missing one never creates a workspace.
+        let engine = self.engines.get(&dot.spec.engine).cloned().ok_or_else(|| {
+            Error::Invalid(format!(
+                "engine '{}' is not available",
+                dot.spec.engine.as_str()
+            ))
+        })?;
         let prepared = match Prepared::from_run(run) {
             Some(p) if p.path.is_dir() => p,
             _ => {
@@ -210,12 +228,6 @@ impl Runner {
                 p
             }
         };
-        let engine = self.engines.get(&dot.spec.engine).cloned().ok_or_else(|| {
-            Error::Invalid(format!(
-                "engine '{}' is not available",
-                dot.spec.engine.as_str()
-            ))
-        })?;
         let secret = new_token();
         self.secrets
             .lock()
@@ -321,20 +333,18 @@ impl Runner {
                 None => false,
             }
         };
-        let run = self.store.get_run(run_id).await?;
         if signalled {
-            return Ok(run);
+            return self.store.get_run(run_id).await;
         }
-        match run.status {
-            RunStatus::Queued | RunStatus::AwaitingApproval => {
-                self.store.expire_pending_for_run(run_id).await?;
-                let r = self
-                    .store
-                    .finish_run(run_id, RunStatus::Cancelled, None, None)
-                    .await?;
-                self.emit_run(&r);
-                Ok(r)
+        if let Some(r) = self.store.cancel_if_inactive(run_id).await? {
+            if let Err(e) = self.store.expire_pending_for_run(run_id).await {
+                tracing::warn!(run = %run_id, "expiring approvals failed: {e}");
             }
+            self.emit_run(&r);
+            return Ok(r);
+        }
+        let run = self.store.get_run(run_id).await?;
+        match run.status {
             RunStatus::Running => Err(Error::Conflict(format!(
                 "run {run_id} is starting; try again"
             ))),

@@ -273,3 +273,48 @@ async fn has_queued_run_and_list_runs() {
     assert_eq!(listed, vec![r2.id, r1.id]);
     assert_eq!(store.list_runs(None, 1).await.unwrap().len(), 1);
 }
+
+#[tokio::test]
+async fn cancel_if_inactive_only_touches_queued_or_awaiting() {
+    let (_dir, store) = temp_store().await;
+    let dot = store.create_dot(&spec("c")).await.unwrap();
+    let queued = store
+        .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    let r = store.cancel_if_inactive(&queued.id).await.unwrap().unwrap();
+    assert_eq!(r.status, RunStatus::Cancelled);
+    assert!(r.ended_at.is_some());
+    // Already terminal: nothing to do.
+    assert!(store
+        .cancel_if_inactive(&queued.id)
+        .await
+        .unwrap()
+        .is_none());
+
+    let running = store
+        .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    assert!(store.claim_run(&running.id).await.unwrap());
+    assert!(store
+        .cancel_if_inactive(&running.id)
+        .await
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        store.get_run(&running.id).await.unwrap().status,
+        RunStatus::Running
+    );
+
+    store
+        .finish_run(&running.id, RunStatus::AwaitingApproval, None, None)
+        .await
+        .unwrap();
+    let r = store
+        .cancel_if_inactive(&running.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(r.status, RunStatus::Cancelled);
+}

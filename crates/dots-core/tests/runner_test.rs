@@ -251,6 +251,18 @@ async fn missing_engine_fails_with_clear_error() {
         run.error.as_deref(),
         Some("invalid input: engine 'local' is not available")
     );
+
+    // A worktree-mode dot with a missing engine must not leave a worktree behind.
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    let mut w = spec("local-wt");
+    w.workdir = repo.to_string_lossy().to_string();
+    w.engine = EngineKind::Local;
+    w.endpoint_url = Some("http://127.0.0.1:11434".into());
+    let wt_dot = store.create_dot(&w).await.unwrap();
+    let id = manual(&runner, &wt_dot).await;
+    wait_status(&store, &id, RunStatus::Failed, 5).await;
+    assert!(!dir.path().join("wt").join(&id).exists());
 }
 
 #[tokio::test]
