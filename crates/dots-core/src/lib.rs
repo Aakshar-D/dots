@@ -9,6 +9,7 @@ pub mod model;
 pub mod policy;
 pub mod proc;
 pub mod prompt;
+pub mod runner;
 pub mod scheduler;
 pub mod store;
 pub mod util;
