@@ -132,16 +132,17 @@ impl ApprovalHub {
         let _ = self.bus.send(RuntimeEvent::ApprovalRequested {
             approval: approval.clone(),
         });
-        // A decision may have landed between create_approval and the waiter insert, when
-        // `decide` found no waiter. Re-read now that the waiter is registered: any later
-        // decision reaches the waiter, any earlier one is visible here.
+        // A decision may have landed between create_approval and the waiter insert. `decide`
+        // found no waiter then, marked the row parked and returned `Parked`, so the caller
+        // resumes the run with a grant. Executing the action here as well would run it twice,
+        // so tell the engine it is queued and leave the outcome to the parked/resume path.
+        // Re-reading after the insert is race-free: a later decision reaches the waiter.
         let current = self.store.get_approval(&approval.id).await?;
         if current.status != ApprovalStatus::Pending {
-            return Ok(outcome_of(
-                current.status == ApprovalStatus::Approved,
-                current.note.as_deref(),
-                input,
-            ));
+            self.store.mark_parked(&approval.id).await?;
+            return Ok(PermissionOutcome::Deny {
+                message: parked_message(&approval.id),
+            });
         }
         match tokio::time::timeout(wait, rx).await {
             Ok(Ok(d)) => Ok(outcome_of(d.approved, d.note.as_deref(), input)),
