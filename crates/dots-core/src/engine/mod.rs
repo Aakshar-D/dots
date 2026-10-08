@@ -9,6 +9,7 @@ use tokio_util::sync::CancellationToken;
 use crate::model::Dot;
 use crate::Result;
 
+pub mod claude;
 pub mod scripted;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
