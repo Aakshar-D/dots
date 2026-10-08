@@ -264,3 +264,75 @@ fn cli_lists_trim_patterns() {
     assert_eq!(allow, vec!["Bash".to_string()]);
     assert_eq!(deny, vec!["Write".to_string()]);
 }
+
+// ---- fix round 2 ----
+
+#[test]
+fn workspace_aware_file_resolution() {
+    let p = Policy::preset(Preset::Sandboxed);
+    let ws = Some(std::path::Path::new("C:/ws/run1"));
+    let w = |path: &str| p.resolve_in("Write", &json!({ "file_path": path }), ws);
+    assert_eq!(w("C:\\ws\\run1\\src\\a.rs"), Action::Allow);
+    assert_eq!(w("C:/Users/u/.gitconfig"), Action::Ask);
+    assert_eq!(w("C:/ws/run1/.GIT/config"), Action::Deny);
+    assert_eq!(w("C:/ws/run1/.git./hooks/x"), Action::Deny);
+    assert_eq!(w("C:/ws/run1/src/../../x"), Action::Ask);
+    assert_eq!(p.resolve_in("Edit", &json!({"file_path": "src\\a.rs"}), ws), Action::Allow);
+    // no workspace: absolute paths never allow-match the relative `./**` pattern
+    assert_eq!(p.resolve("Write", &json!({"file_path": "C:/ws/run1/src/a.rs"})), Action::Ask);
+    assert_eq!(p.resolve("Write", &json!({"file_path": "/etc/passwd"})), Action::Ask);
+}
+
+#[test]
+fn allow_side_rejects_tricky_paths() {
+    let p = Policy::preset(Preset::Sandboxed);
+    for path in ["src/../a.rs", "~/a.rs", "src/a.rs::$DATA", "src./a.rs", "src /a.rs", "a."] {
+        assert_eq!(p.resolve("Write", &json!({ "file_path": path })), Action::Ask, "{path:?}");
+    }
+    assert_eq!(p.resolve("Write", &json!({"file_path": "./src/a.rs"})), Action::Allow);
+}
+
+#[test]
+fn dot_git_deny_is_case_and_trailing_dot_insensitive() {
+    let p = Policy::preset(Preset::Sandboxed);
+    for path in [".GIT/hooks/x", "C:\\repo\\.Git\\config", ".git./config", ".git /config"] {
+        assert_eq!(p.resolve("Write", &json!({ "file_path": path })), Action::Deny, "{path:?}");
+    }
+}
+
+#[test]
+fn webfetch_hardened_host_parsing() {
+    let a = custom(vec![Rule::new("WebFetch(domain:example.com)", Action::Allow)], Action::Ask);
+    let r = |u: &str| a.resolve("WebFetch", &json!({ "url": u }));
+    assert_ne!(r("https://evil.com\\.example.com/x"), Action::Allow);
+    assert_eq!(r("https://api.example.com./x"), Action::Allow);
+    assert_ne!(r("https://evil%2Ecom/"), Action::Allow);
+    let d = custom(vec![Rule::new("WebFetch(domain:example.com)", Action::Deny)], Action::Allow);
+    let r = |u: &str| d.resolve("WebFetch", &json!({ "url": u }));
+    assert_eq!(r("https://evil%2Ecom/"), Action::Deny);
+    assert_eq!(r("https://evil.com\\x"), Action::Deny);
+    assert_eq!(r("https://api.example.com./x"), Action::Deny);
+    assert_eq!(r("https://example.org/"), Action::Allow);
+}
+
+#[test]
+fn command_rules_without_command_field_fail_closed() {
+    let d = custom(vec![Rule::new("Bash(rm:*)", Action::Deny)], Action::Allow);
+    assert_eq!(d.resolve("Bash", &json!({})), Action::Deny);
+    assert_eq!(d.resolve("Bash", &json!({"command": 5})), Action::Deny);
+    let a = custom(vec![Rule::new("Bash(ls:*)", Action::Allow)], Action::Ask);
+    assert_eq!(a.resolve("Bash", &json!({})), Action::Ask);
+}
+
+#[test]
+fn validate_rejects_whitespace_in_tool_name() {
+    let p = custom(vec![Rule::new("Bash (rm:*)", Action::Deny)], Action::Ask);
+    assert!(p.validate().is_err());
+}
+
+#[test]
+fn quote_splicing_does_not_evade_ask() {
+    let p = Policy::preset(Preset::Trusted);
+    assert_eq!(p.resolve("Bash", &bash("g''it push")), Action::Ask);
+    assert_eq!(p.resolve("Bash", &bash("\"g\"it push")), Action::Ask);
+}

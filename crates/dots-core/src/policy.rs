@@ -1,3 +1,13 @@
+//! Per-dot tool policy.
+//!
+//! Allow matching is strict: an allow rule only matches inputs it can fully understand
+//! (plain commands, clean relative or workspace-contained paths, plain hostnames).
+//! Deny/ask matching is best-effort and fails closed where it can, but shell escapes,
+//! variables and aliases can still evade command rules. The per-run worktree plus the
+//! CLI-enforced deny lists (`Policy::cli_lists`) are the actual isolation boundary.
+
+use std::path::Path;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -48,8 +58,8 @@ impl Policy {
             // `Custom` starts from the Sandboxed rules for the user to edit.
             Preset::Sandboxed | Preset::Custom => {
                 rules.extend(READ_TOOLS.iter().map(|t| Rule::new(t, Action::Allow)));
-                rules.push(Rule::new("Write", Action::Allow));
-                rules.push(Rule::new("Edit", Action::Allow));
+                rules.push(Rule::new("Write(./**)", Action::Allow));
+                rules.push(Rule::new("Edit(./**)", Action::Allow));
                 for git in ["status", "diff", "add", "commit"] {
                     rules.push(Rule::new(&format!("Bash(git {git}:*)"), Action::Allow));
                 }
@@ -71,11 +81,18 @@ impl Policy {
 
     /// Deny rules win over allow rules, which win over ask rules; otherwise `default`.
     pub fn resolve(&self, tool: &str, input: &Value) -> Action {
+        self.resolve_in(tool, input, None)
+    }
+
+    /// Like `resolve`, but absolute file paths inside `workspace` are treated as relative to it.
+    pub fn resolve_in(&self, tool: &str, input: &Value, workspace: Option<&Path>) -> Action {
+        let ws = workspace.map(|w| lexical_normalize(&w.to_string_lossy()));
+        let ws = ws.as_ref().filter(|(abs, _)| *abs).map(|(_, t)| t.as_str());
         for action in [Action::Deny, Action::Allow, Action::Ask] {
             if self
                 .rules
                 .iter()
-                .any(|r| r.action == action && pattern_matches(&r.tool, tool, input, action))
+                .any(|r| r.action == action && pattern_matches(&r.tool, tool, input, action, ws))
             {
                 return action;
             }
@@ -99,6 +116,14 @@ impl Policy {
         for r in &self.rules {
             let invalid = |e: &str| Error::Invalid(format!("policy rule {:?}: {e}", r.tool));
             let pattern = parse_pattern(&r.tool).map_err(|e| invalid(&e))?;
+            let name = match pattern {
+                Pattern::Any => "",
+                Pattern::Exact(n) | Pattern::Prefix(n) => n,
+                Pattern::WithSpec { tool, .. } => tool,
+            };
+            if name.chars().any(char::is_whitespace) {
+                return Err(invalid("tool name must not contain whitespace"));
+            }
             if let Pattern::WithSpec { tool, spec } = pattern {
                 if COMMAND_TOOLS.contains(&tool) {
                     let body = spec.strip_suffix(":*");
@@ -115,6 +140,7 @@ impl Policy {
     }
 }
 
+#[derive(Clone, Copy)]
 enum Pattern<'a> {
     Any,
     Exact(&'a str),
@@ -180,7 +206,8 @@ fn allow_command_matches(spec: &str, command: &str) -> bool {
 /// Deny/ask side: fuzzy, fail-closed tokenization (case, path and `.exe` insensitive).
 fn tokenize(s: &str) -> Vec<String> {
     s.to_lowercase()
-        .split(|c: char| c.is_whitespace() || ";|&\n\r(){}[]<>$\"'`,".contains(c))
+        .replace(['\'', '"'], "")
+        .split(|c: char| c.is_whitespace() || ";|&(){}[]<>$`,".contains(c))
         .filter(|t| !t.is_empty())
         .map(|t| {
             let base = t.rsplit(['/', '\\']).next().unwrap_or(t);
@@ -201,12 +228,58 @@ fn restrictive_command_matches(spec: &str, command: &str) -> bool {
 
 // ---- path / url matching -------------------------------------------------
 
-fn normalize_path(p: &str) -> String {
-    let mut p = p.replace('\\', "/");
+/// Lexically normalizes a path: `\` -> `/`, lowercase, trailing dots/spaces trimmed from every
+/// component, `//` collapsed, `.` dropped, `..` resolved. Returns (is_absolute, normalized).
+fn lexical_normalize(raw: &str) -> (bool, String) {
+    let s = raw.replace('\\', "/").to_lowercase();
+    let b = s.as_bytes();
+    let (prefix, rest) = if b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
+        (&s[..2], &s[2..])
+    } else {
+        ("", &s[..])
+    };
+    let abs = !prefix.is_empty() || rest.starts_with('/');
+    let mut stack: Vec<&str> = Vec::new();
+    for c in rest.split('/') {
+        match c {
+            "" | "." => {}
+            ".." => {
+                if stack.last().is_some_and(|l| *l != "..") {
+                    stack.pop();
+                } else if !abs {
+                    stack.push("..");
+                }
+            }
+            _ => {
+                let t = c.trim_end_matches(['.', ' ']);
+                if !t.is_empty() {
+                    stack.push(t);
+                }
+            }
+        }
+    }
+    let joined = stack.join("/");
+    (abs, if abs { format!("{prefix}/{joined}") } else { joined })
+}
+
+/// Patterns: `\` -> `/`, lowercase, leading `./` stripped. Returns (is_absolute, pattern).
+fn normalize_pattern(spec: &str) -> (bool, String) {
+    let mut p = spec.trim().replace('\\', "/").to_lowercase();
     while let Some(rest) = p.strip_prefix("./") {
         p = rest.to_string();
     }
-    p
+    let b = p.as_bytes();
+    let abs = p.starts_with('/') || (b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':');
+    (abs, p)
+}
+
+/// Allow-side guard on the raw input path: reject traversal and Windows path tricks.
+fn raw_path_is_clean(raw: &str) -> bool {
+    !raw.contains('~')
+        && !raw.contains("::$")
+        && raw
+            .split(['/', '\\'])
+            .all(|c| c != ".." && (c == "." || !(c.ends_with('.') || c.ends_with(' '))))
 }
 
 #[derive(Clone, Copy)]
@@ -291,18 +364,32 @@ fn glob_matches(pattern: &str, path: &str) -> bool {
     }
 }
 
-fn input_path(input: &Value) -> Option<String> {
+fn input_path(input: &Value) -> Option<&str> {
     ["file_path", "path", "notebook_path"]
         .iter()
         .find_map(|k| input.get(k).and_then(Value::as_str))
-        .map(normalize_path)
 }
 
-fn path_spec_matches(spec: &str, input: &Value, action: Action) -> bool {
-    let Some(path) = input_path(input) else {
+fn path_spec_matches(spec: &str, input: &Value, action: Action, workspace: Option<&str>) -> bool {
+    let Some(raw) = input_path(input) else {
         return action != Action::Allow;
     };
-    let pattern = normalize_path(spec.trim());
+    if action == Action::Allow && !raw_path_is_clean(raw) {
+        return false;
+    }
+    let (mut abs, mut path) = lexical_normalize(raw);
+    if let (true, Some(ws)) = (abs, workspace) {
+        let ws = ws.trim_end_matches('/');
+        if path == ws || path == format!("{ws}/") {
+            (abs, path) = (false, String::new());
+        } else if let Some(rel) = path.strip_prefix(&format!("{ws}/")) {
+            (abs, path) = (false, rel.to_string());
+        }
+    }
+    let (pattern_abs, pattern) = normalize_pattern(spec);
+    if action == Action::Allow && abs && !pattern_abs {
+        return false;
+    }
     if glob_matches(&pattern, &path) {
         return true;
     }
@@ -313,35 +400,57 @@ fn path_spec_matches(spec: &str, input: &Value, action: Action) -> bool {
     path.match_indices('/').any(|(i, _)| glob_matches(&pattern, &path[i + 1..]))
 }
 
-/// Hosts a URL could be read as (lowercased), plus whether it carries userinfo (`user@host`).
-fn url_hosts(url: &str) -> Option<(Vec<String>, bool)> {
+struct UrlInfo {
+    /// Hosts the URL could be read as (lowercased, port and trailing dot removed).
+    hosts: Vec<String>,
+    has_userinfo: bool,
+    /// Authority contains `%` or `\`, which parsers disagree on.
+    suspicious: bool,
+}
+
+fn parse_url(url: &str) -> Option<UrlInfo> {
     let rest = &url[url.find("://")? + 3..];
-    let authority = &rest[..rest.find(['/', '?', '#']).unwrap_or(rest.len())];
-    let host_of = |s: &str| s[..s.find(':').unwrap_or(s.len())].to_lowercase();
-    let has_userinfo = authority.contains('@');
+    let raw_auth = &rest[..rest.find(['/', '?', '#']).unwrap_or(rest.len())];
+    let suspicious = raw_auth.contains(['%', '\\']);
+    let authority = &raw_auth[..raw_auth.find('\\').unwrap_or(raw_auth.len())];
+    let host_of = |s: &str| {
+        let host = &s[..s.find(':').unwrap_or(s.len())];
+        host.to_lowercase().trim_end_matches('.').to_string()
+    };
     let mut hosts = vec![host_of(authority)];
     if let Some((_, after)) = authority.rsplit_once('@') {
         hosts.push(host_of(after));
     }
-    Some((hosts, has_userinfo))
+    Some(UrlInfo { hosts, has_userinfo: authority.contains('@'), suspicious })
 }
 
 fn webfetch_domain_matches(domain: &str, input: &Value, action: Action) -> bool {
     let domain = domain.trim().to_lowercase();
     let host_matches = |h: &String| *h == domain || h.ends_with(&format!(".{domain}"));
-    match input.get("url").and_then(Value::as_str).and_then(url_hosts) {
+    let plain_host = |h: &String| {
+        !h.is_empty() && h.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '-')
+    };
+    match input.get("url").and_then(Value::as_str).and_then(parse_url) {
         None => action != Action::Allow,
-        Some((hosts, has_userinfo)) => {
+        Some(u) => {
             if action == Action::Allow {
-                !has_userinfo && hosts.iter().all(host_matches)
+                !u.has_userinfo
+                    && !u.suspicious
+                    && u.hosts.iter().all(|h| plain_host(h) && host_matches(h))
             } else {
-                hosts.iter().any(host_matches)
+                u.suspicious || u.hosts.iter().any(host_matches)
             }
         }
     }
 }
 
-fn pattern_matches(pattern: &str, tool: &str, input: &Value, action: Action) -> bool {
+fn pattern_matches(
+    pattern: &str,
+    tool: &str,
+    input: &Value,
+    action: Action,
+    workspace: Option<&str>,
+) -> bool {
     match parse_pattern(pattern) {
         Err(_) => false,
         Ok(Pattern::Any) => true,
@@ -353,7 +462,7 @@ fn pattern_matches(pattern: &str, tool: &str, input: &Value, action: Action) -> 
             }
             if COMMAND_TOOLS.contains(&name) {
                 let Some(command) = input.get("command").and_then(Value::as_str) else {
-                    return false;
+                    return action != Action::Allow;
                 };
                 if action == Action::Allow {
                     allow_command_matches(spec, command)
@@ -361,7 +470,7 @@ fn pattern_matches(pattern: &str, tool: &str, input: &Value, action: Action) -> 
                     restrictive_command_matches(spec, command)
                 }
             } else if FILE_TOOLS.contains(&name) {
-                path_spec_matches(spec, input, action)
+                path_spec_matches(spec, input, action, workspace)
             } else if let (true, Some(domain)) =
                 (name == "WebFetch", spec.trim_start().strip_prefix("domain:"))
             {
