@@ -69,7 +69,7 @@ impl DotSpec {
             use_user_settings: false,
             max_turns: 40,
             timeout_secs: 1800,
-            approval_wait_secs: 600,
+            approval_wait_secs: 240,
             enabled: true,
         }
     }

@@ -116,7 +116,7 @@ Stored at `%LOCALAPPDATA%\dots\dots.db`. Worktrees at `%LOCALAPPDATA%\dots\workt
 - `policy` TEXT (JSON, see §5), `mcp_servers` TEXT NULL (JSON, Claude only)
 - `use_user_settings` INTEGER (0/1, default 0)
 - `max_turns` INTEGER (default 40), `timeout_secs` INTEGER (default 1800),
-  `approval_wait_secs` INTEGER (default 600)
+  `approval_wait_secs` INTEGER (default 240)
 - `enabled` INTEGER, `created_at`, `updated_at`
 
 **runs**
