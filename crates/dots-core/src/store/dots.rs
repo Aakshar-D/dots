@@ -106,7 +106,9 @@ impl Store {
             "UPDATE dots SET name = ?, instructions = ?, engine = ?, model = ?, endpoint_url = ?, \
              workdir = ?, workspace_mode = ?, schedule = ?, policy = ?, mcp_servers = ?, \
              use_user_settings = ?, max_turns = ?, timeout_secs = ?, approval_wait_secs = ?, \
-             enabled = ?, updated_at = ? WHERE id = ?              AND ((workdir = ? AND workspace_mode = ?) OR NOT EXISTS (SELECT 1 FROM runs              WHERE dot_id = ? AND status IN ('queued','running','awaiting_approval')))",
+             enabled = ?, updated_at = ? WHERE id = ? \
+             AND ((workdir = ? AND workspace_mode = ?) OR NOT EXISTS (SELECT 1 FROM runs \
+             WHERE dot_id = ? AND status IN ('queued','running','awaiting_approval')))",
         )
         .bind(&spec.name)
         .bind(&spec.instructions)
@@ -134,7 +136,8 @@ impl Store {
         if res.rows_affected() == 0 {
             self.get_dot(id).await?;
             return Err(Error::Conflict(
-                "workdir and workspace_mode cannot change while the dot has queued, running or                  awaiting runs"
+                "workdir and workspace_mode cannot change while the dot has queued, running or \
+                 awaiting runs"
                     .into(),
             ));
         }
