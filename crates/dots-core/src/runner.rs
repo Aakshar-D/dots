@@ -529,11 +529,13 @@ impl Runner {
         // finished), and it is held before it is claimed, so retrying the two checks
         // catches every transition that lands between them.
         for _ in 0..3 {
-            if self.signal_cancel(run_id) {
+            if let Some(first) = self.signal_cancel(run_id) {
                 // Still held by the runner. If it parked, `execute` applies the cancel once
                 // it lets go; if it already finished, there is nothing left to cancel.
+                // A run that is `cancelled` right after our first signal was cancelled by it
+                // (e.g. before its engine started).
                 let run = self.store.get_run(run_id).await?;
-                if run.status.is_terminal() {
+                if run.status.is_terminal() && !(first && run.status == RunStatus::Cancelled) {
                     return Err(already(&run));
                 }
                 return Ok(run);
@@ -549,16 +551,17 @@ impl Runner {
         Err(already(&self.store.get_run(run_id).await?))
     }
 
-    /// Flags a held run as cancelled by the user; false if the runner does not hold it.
-    fn signal_cancel(&self, run_id: &str) -> bool {
+    /// Flags a held run as cancelled by the user. `None` if the runner does not hold it,
+    /// otherwise whether this was the first cancel request for the run.
+    fn signal_cancel(&self, run_id: &str) -> Option<bool> {
         let active = self.active.lock().unwrap();
         match active.get(run_id) {
             Some(a) => {
-                a.cancelled_by_user.store(true, Ordering::SeqCst);
+                let first = !a.cancelled_by_user.swap(true, Ordering::SeqCst);
                 a.cancel.cancel();
-                true
+                Some(first)
             }
-            None => false,
+            None => None,
         }
     }
 
