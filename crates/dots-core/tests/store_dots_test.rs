@@ -127,3 +127,16 @@ fn next_fire_is_strictly_after() {
     let again = next_fire("0 0 8 * * *", next).unwrap().unwrap();
     assert_eq!(again, Local.with_ymd_and_hms(2026, 10, 9, 8, 0, 0).unwrap());
 }
+
+#[test]
+fn timeout_and_approval_wait_are_capped() {
+    let mut s = spec("caps");
+    s.timeout_secs = 604_800;
+    s.approval_wait_secs = 280;
+    s.validate().unwrap();
+    s.timeout_secs = 604_801;
+    assert!(matches!(s.validate(), Err(Error::Invalid(_))));
+    s.timeout_secs = 1800;
+    s.approval_wait_secs = 281;
+    assert!(matches!(s.validate(), Err(Error::Invalid(_))));
+}

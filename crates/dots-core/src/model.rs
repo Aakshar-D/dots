@@ -34,6 +34,9 @@ impl RunStatus {
     }
 }
 
+pub const MAX_TIMEOUT_SECS: u64 = 7 * 24 * 60 * 60;
+pub const MAX_APPROVAL_WAIT_SECS: u64 = 280;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DotSpec {
     pub name: String,
@@ -112,6 +115,13 @@ impl DotSpec {
         }
         if self.timeout_secs == 0 {
             return invalid("timeout_secs must be at least 1");
+        }
+        if self.timeout_secs > MAX_TIMEOUT_SECS {
+            return invalid("timeout_secs must be at most 604800 (7 days)");
+        }
+        // The CLI aborts a pending permission-prompt call at about 300 s.
+        if self.approval_wait_secs > MAX_APPROVAL_WAIT_SECS {
+            return invalid("approval_wait_secs must be at most 280");
         }
         self.policy.validate()?;
         if let Some(servers) = &self.mcp_servers {
