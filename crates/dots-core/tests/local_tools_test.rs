@@ -371,3 +371,58 @@ async fn shell_stops_at_its_timeout_and_on_cancel() {
     assert_eq!(out, ToolOutput::err("cancelled"));
     assert!(started.elapsed() < Duration::from_secs(15));
 }
+
+#[cfg(windows)]
+#[tokio::test]
+async fn shell_reports_powershell_errors_as_plain_text() {
+    let ws = workspace();
+    let p = ws.path();
+    let out = run(p, "shell", json!({"command": "Get-Item nope-missing"})).await;
+    assert!(
+        out.is_error && out.output.contains("Cannot find path"),
+        "{out:?}"
+    );
+    for leak in ["CLIXML", "_x000D_", "OutputEncoding", "LASTEXITCODE"] {
+        assert!(!out.output.contains(leak), "{leak}: {out:?}");
+    }
+    let out = run(p, "shell", json!({"command": "Write-Error boom"})).await;
+    assert!(out.output.contains("boom"), "{out:?}");
+    assert!(!out.output.contains("OutputEncoding"), "{out:?}");
+}
+
+#[tokio::test]
+async fn shell_keeps_output_when_a_background_process_holds_the_pipes() {
+    #[cfg(windows)]
+    const HOLD: &str = "Write-Output built; Start-Process -NoNewWindow -FilePath ping.exe -ArgumentList '-n','30','127.0.0.1'";
+    #[cfg(not(windows))]
+    const HOLD: &str = "echo built; sleep 30 &";
+    let ws = workspace();
+    let started = Instant::now();
+    let out = run(ws.path(), "shell", json!({"command": HOLD})).await;
+    assert!(out.output.contains("built"), "{out:?}");
+    assert!(
+        out.output
+            .contains("[output stream still held open by a background process]"),
+        "{out:?}"
+    );
+    assert!(started.elapsed() < Duration::from_secs(15));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn shell_timeout_kills_the_whole_process_group() {
+    let ws = workspace();
+    let started = Instant::now();
+    let out = run(
+        ws.path(),
+        "shell",
+        json!({"command": "sleep 30; echo done", "timeout": 1}),
+    )
+    .await;
+    assert!(
+        out.is_error && out.output.contains("timed out after 1s"),
+        "{out:?}"
+    );
+    assert!(!out.output.contains("done"), "{out:?}");
+    assert!(started.elapsed() < Duration::from_secs(5));
+}
