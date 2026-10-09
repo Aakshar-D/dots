@@ -10,6 +10,7 @@ use crate::model::Dot;
 use crate::Result;
 
 pub mod claude;
+pub mod local;
 pub mod scripted;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
