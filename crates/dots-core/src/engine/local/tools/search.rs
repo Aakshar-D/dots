@@ -14,6 +14,7 @@ fn walk(base: &Path) -> impl Iterator<Item = PathBuf> {
     ignore::WalkBuilder::new(base)
         .hidden(false)
         .require_git(false)
+        .sort_by_file_path(|a, b| a.cmp(b))
         .filter_entry(|e| e.file_name() != ".git")
         .build()
         .filter_map(|e| e.ok())
@@ -57,7 +58,7 @@ pub(super) async fn glob(root: &Path, input: &Value) -> ToolOutput {
         if total > MAX_ENTRIES {
             out.push_str(&format!("\n[{} more files]", total - MAX_ENTRIES));
         }
-        ToolOutput::ok(out)
+        ToolOutput::ok(cap_head(out))
     })
     .await;
     found.unwrap_or_else(|e| ToolOutput::err(format!("glob failed: {e}")))
