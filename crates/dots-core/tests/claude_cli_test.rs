@@ -150,12 +150,14 @@ fn argv_contains_required_flags_in_order() {
         joined.starts_with(
             "-p --output-format stream-json --verbose --model haiku --max-turns 12 \
          --permission-prompt-tool mcp__dots__approve --mcp-config C:/data/mcp-RUN1.json \
-         --strict-mcp-config --setting-sources project --allowedTools Read LS Glob Grep \
+         --strict-mcp-config --setting-sources  --allowedTools Read LS Glob Grep \
          --disallowedTools Write Edit NotebookEdit Bash PowerShell"
         ),
         "{joined}"
     );
     assert!(!args.contains(&"--resume".to_string()));
+    // Empty setting sources: no user, project or local settings reach headless runs.
+    assert!(args.windows(2).any(|w| w == ["--setting-sources", ""]));
     assert!(
         !args.contains(&"p".to_string()),
         "prompt must not be in argv"
@@ -167,7 +169,9 @@ fn argv_resume_and_user_settings() {
     let mut c = ctx(Some("sess-9"));
     c.dot.spec.use_user_settings = true;
     let args = build_args(&c, Path::new("m.json"));
-    assert!(!args.contains(&"--setting-sources".to_string()));
+    assert!(args
+        .windows(2)
+        .any(|w| w == ["--setting-sources", "user,project,local"]));
     assert_eq!(&args[args.len() - 2..], ["--resume", "sess-9"]);
 }
 

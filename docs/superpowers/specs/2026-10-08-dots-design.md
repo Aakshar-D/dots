@@ -237,7 +237,7 @@ claude -p --output-format stream-json --input-format stream-json --verbose
   --allowedTools <allow patterns> --disallowedTools <deny patterns>
   --permission-prompt-tool mcp__dots__approve
   --mcp-config <per-run temp json> --strict-mcp-config
-  --setting-sources project            (omitted when use_user_settings = 1)
+  --setting-sources ""                 ("user,project,local" when use_user_settings = 1)
   [--resume <session_id>]
 ```
 
@@ -245,8 +245,12 @@ Working directory = run workspace. Env: `MCP_TOOL_TIMEOUT` set to
 `(approval_wait_secs + 30) * 1000` on a best-effort basis; CLI 2.1.295 ignores it for the
 permission-prompt tool (observed hard cap of about 300 s; CLI 2.1.295 observed 2026-10-09). The per-run MCP config contains the dots MCP server
 (`http://127.0.0.1:<port>/mcp`, header `Authorization: Bearer <per-run secret>`) plus the dot's
-own `mcp_servers`. `--setting-sources project` keeps the user's global hooks (GateGuard,
-caveman, memory hooks) out of headless runs; a dot opts back in with `use_user_settings`.
+own `mcp_servers`. An empty `--setting-sources ""` keeps every settings file out of headless
+runs: the user's global hooks (GateGuard, caveman, memory hooks) and a repo's committed
+`.claude/settings.json`, which could otherwise widen the CLI's own allow list beyond the dot
+policy. CLI 2.1.295 accepts the empty value (probed 2026-10-09: init event emitted, only builtin
+plugins loaded). A dot opts back in to all sources with `use_user_settings`
+(`--setting-sources user,project,local`).
 
 `mcp__dots__approve` handler:
 1. Resolve policy. `allow` → return allow. `deny` → return deny with reason.

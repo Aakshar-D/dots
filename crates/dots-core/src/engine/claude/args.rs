@@ -21,10 +21,15 @@ pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
         mcp_config_path.to_string_lossy().to_string(),
         "--strict-mcp-config".into(),
     ];
-    if !spec.use_user_settings {
-        a.push("--setting-sources".into());
-        a.push("project".into());
-    }
+    // Empty sources keep every settings file (user hooks, and a repo's committed
+    // `.claude/settings.json` that could widen the allow list) out of headless runs.
+    // Accepted by CLI 2.1.295 (probed 2026-10-09).
+    a.push("--setting-sources".into());
+    a.push(if spec.use_user_settings {
+        "user,project,local".into()
+    } else {
+        String::new()
+    });
     let (allow, deny) = spec.policy.cli_lists();
     if !allow.is_empty() {
         a.push("--allowedTools".into());
