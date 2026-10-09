@@ -430,7 +430,7 @@ fn path_spec_matches(spec: &str, input: &Value, action: Action, workspace: Optio
             Some(rel) => (false, rel),
             None => (abs, full),
         };
-        return !(path_abs && !pattern_abs) && glob_matches(&pattern, &path);
+        return (!path_abs || pattern_abs) && glob_matches(&pattern, &path);
     }
     // Deny/ask fail closed: test every candidate, whole and at every suffix after a '/'.
     relative.iter().chain(std::iter::once(&full)).any(|path| {

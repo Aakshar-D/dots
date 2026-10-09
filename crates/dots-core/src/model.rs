@@ -100,7 +100,7 @@ impl DotSpec {
             && self
                 .endpoint_url
                 .as_deref()
-                .map_or(true, |u| u.trim().is_empty())
+                .is_none_or(|u| u.trim().is_empty())
         {
             return invalid("the local engine requires endpoint_url");
         }

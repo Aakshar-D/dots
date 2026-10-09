@@ -345,7 +345,7 @@ async fn resume_parked_on_non_awaiting_parent_conflicts_and_changes_nothing() {
         .resume_parked(
             &parent.id,
             &[("Bash".into(), "k".into())],
-            &[a.id.clone()],
+            std::slice::from_ref(&a.id),
             Some(&child),
         )
         .await
