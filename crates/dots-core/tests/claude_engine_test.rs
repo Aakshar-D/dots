@@ -266,8 +266,41 @@ async fn cancel_kills_the_process() {
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+    let pid = recorded_args(&e)["pid"].as_u64().unwrap();
+    assert!(
+        process_alive(pid),
+        "fake-claude should be running before cancel"
+    );
     e.runner.cancel(&run.id).await.unwrap();
     wait_status(&e.store, &run.id, RunStatus::Cancelled, 10).await;
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while process_alive(pid) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "process {pid} still alive after cancel"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[cfg(windows)]
+fn process_alive(pid: u64) -> bool {
+    let out = std::process::Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .any(|w| w == pid.to_string())
+}
+
+#[cfg(unix)]
+fn process_alive(pid: u64) -> bool {
+    std::process::Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 #[tokio::test]

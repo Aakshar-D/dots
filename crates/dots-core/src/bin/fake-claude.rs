@@ -68,6 +68,7 @@ async fn main() {
     if let Ok(out) = std::env::var("FAKE_CLAUDE_ARGS_OUT") {
         let record = json!({
             "args": args,
+            "pid": std::process::id(),
             "prompt": prompt,
             "cwd": std::env::current_dir().unwrap().to_string_lossy(),
             "mcp_tool_timeout": std::env::var("MCP_TOOL_TIMEOUT").ok(),

@@ -1,6 +1,11 @@
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
+
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt as _;
 
 use async_trait::async_trait;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -54,14 +59,25 @@ async fn read_tail(mut r: impl AsyncRead + Unpin, max: usize) -> String {
     String::from_utf8_lossy(&buf).to_string()
 }
 
+/// Writes a file readable only by the owner on unix (it holds a bearer secret).
+async fn write_private(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
+    let mut opts = tokio::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    opts.mode(0o600);
+    let mut f = opts.open(path).await?;
+    f.write_all(data).await?;
+    f.flush().await
+}
+
 #[async_trait]
 impl Engine for ClaudeEngine {
     async fn start(&self, ctx: RunContext) -> Result<mpsc::Receiver<EngineEvent>> {
         tokio::fs::create_dir_all(&self.scratch_dir).await?;
         let mcp_path = self.scratch_dir.join(format!("mcp-{}.json", ctx.run_id));
-        tokio::fs::write(
+        write_private(
             &mcp_path,
-            serde_json::to_vec_pretty(&args::mcp_config(&ctx))?,
+            &serde_json::to_vec_pretty(&args::mcp_config(&ctx))?,
         )
         .await?;
 
@@ -97,28 +113,43 @@ impl Engine for ClaudeEngine {
 
         tokio::spawn(async move {
             let out_tx = tx.clone();
-            let stdout_task = tokio::spawn(async move {
-                let mut lines = BufReader::new(stdout).lines();
-                let mut terminal = false;
-                while let Ok(Some(line)) = lines.next_line().await {
-                    for ev in parse::parse_line(&line) {
-                        terminal |= matches!(
+            let saw_terminal = Arc::new(AtomicBool::new(false));
+            let flag = saw_terminal.clone();
+            let mut stdout_task = tokio::spawn(async move {
+                let mut reader = BufReader::new(stdout);
+                let mut buf: Vec<u8> = Vec::new();
+                loop {
+                    buf.clear();
+                    match reader.read_until(b'\n', &mut buf).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                    let text = String::from_utf8_lossy(&buf);
+                    let line = text.trim_end_matches(['\r', '\n']);
+                    for ev in parse::parse_line(line) {
+                        let terminal = matches!(
                             ev,
                             EngineEvent::Finished { .. } | EngineEvent::Failed { .. }
                         );
                         if out_tx.send(ev).await.is_err() {
-                            return terminal;
+                            return;
+                        }
+                        if terminal {
+                            flag.store(true, Ordering::SeqCst);
                         }
                     }
                 }
-                terminal
             });
-            let stderr_task = tokio::spawn(read_tail(stderr, STDERR_TAIL));
+            let mut stderr_task = tokio::spawn(read_tail(stderr, STDERR_TAIL));
 
-            if let Err(e) = stdin.write_all(ctx.prompt.as_bytes()).await {
-                tracing::warn!(run = %ctx.run_id, "writing prompt to claude failed: {e}");
-            }
-            drop(stdin);
+            let prompt = ctx.prompt.clone();
+            let run_id = ctx.run_id.clone();
+            tokio::spawn(async move {
+                if let Err(e) = stdin.write_all(prompt.as_bytes()).await {
+                    tracing::warn!(run = %run_id, "writing prompt to claude failed: {e}");
+                }
+                drop(stdin);
+            });
 
             let pid = child.id();
             let mut status = None;
@@ -135,16 +166,18 @@ impl Engine for ClaudeEngine {
             }
 
             let cap = Duration::from_secs(5);
-            let terminal = tokio::time::timeout(cap, stdout_task)
-                .await
-                .ok()
-                .and_then(|r| r.ok())
-                .unwrap_or(false);
-            let tail = tokio::time::timeout(cap, stderr_task)
-                .await
-                .ok()
-                .and_then(|r| r.ok())
-                .unwrap_or_default();
+            if tokio::time::timeout(cap, &mut stdout_task).await.is_err() {
+                stdout_task.abort();
+            }
+            let tail = match tokio::time::timeout(cap, &mut stderr_task).await {
+                Ok(Ok(t)) => t,
+                Ok(Err(_)) => String::new(),
+                Err(_) => {
+                    stderr_task.abort();
+                    String::new()
+                }
+            };
+            let terminal = saw_terminal.load(Ordering::SeqCst);
             if !terminal && !cancelled {
                 let code = status
                     .and_then(|s| s.code())
