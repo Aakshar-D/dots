@@ -10,6 +10,8 @@ use tokio_util::sync::CancellationToken;
 use crate::approvals::{ApprovalHub, DecideEffect};
 use crate::engine::claude::args::resolve_claude;
 use crate::engine::claude::ClaudeEngine;
+use crate::engine::local::client::DEFAULT_RETRY_DELAYS;
+use crate::engine::local::{self, LocalEngine};
 use crate::engine::Engine;
 use crate::events::{new_bus, Bus, RuntimeEvent};
 use crate::model::{Approval, Dot, DotSpec, EngineKind, NewRun, Run, RunStatus, TriggerKind};
@@ -26,6 +28,8 @@ pub struct Config {
     pub max_concurrent_runs: usize,
     pub claude_path: Option<PathBuf>,
     pub claude_env: Vec<(String, String)>,
+    /// Delays between attempts when a local endpoint is unreachable or answers 5xx.
+    pub local_retry_delays: Vec<Duration>,
 }
 
 impl Config {
@@ -36,6 +40,7 @@ impl Config {
             max_concurrent_runs: 2,
             claude_path: None,
             claude_env: Vec::new(),
+            local_retry_delays: DEFAULT_RETRY_DELAYS.to_vec(),
         }
     }
 }
@@ -78,6 +83,14 @@ impl Runtime {
                 tracing::warn!("claude CLI not found; Claude dots will fail until it is configured")
             }
         }
+        engines.insert(
+            EngineKind::Local,
+            Arc::new(LocalEngine::with_retry_delays(
+                store.clone(),
+                hub.clone(),
+                cfg.local_retry_delays.clone(),
+            )),
+        );
 
         let runner = Runner::new(
             store.clone(),
@@ -237,6 +250,12 @@ impl Runtime {
                 Ok(a)
             }
         }
+    }
+
+    /// Checks that `model` at the OpenAI-compatible `endpoint` answers with a well-formed tool
+    /// call (the Settings "Test endpoint" button). Returns a short success message.
+    pub async fn test_endpoint(&self, endpoint: &str, model: &str) -> Result<String> {
+        local::probe(endpoint, model).await
     }
 
     pub fn shutdown(&self) {

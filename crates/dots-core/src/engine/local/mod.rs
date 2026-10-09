@@ -6,6 +6,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 use crate::engine::{Engine, EngineEvent, PermissionGate, PermissionOutcome, RunContext};
 use crate::store::Store;
@@ -22,6 +23,74 @@ const SYSTEM_PROMPT: &str = "You are a dot: an autonomous agent working unattend
     workspace on the user's computer. Use the tools to inspect and change files and to run \
     commands; paths are relative to the workspace root. When the task is done, reply with a \
     short summary and no tool calls.";
+
+/// How long `probe` waits; LM Studio may load the model on the first request.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Asks `model` at `endpoint` to call a one-argument `echo` tool and checks that the reply is a
+/// well-formed tool call. Returns a short success message; every failure is an error that
+/// says what the endpoint or model did instead.
+pub async fn probe(endpoint: &str, model: &str) -> Result<String> {
+    crate::model::check_endpoint_url(endpoint)?;
+    if model.trim().is_empty() {
+        return Err(Error::Invalid("model must not be empty".into()));
+    }
+    let body = json!({
+        "model": model,
+        "messages": [{
+            "role": "user",
+            "content": "Call the echo tool with text set to \"ping\". Do not answer with text."
+        }],
+        "tools": [{
+            "type": "function",
+            "function": {
+                "name": "echo",
+                "description": "Echo the given text back.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"text": {"type": "string"}},
+                    "required": ["text"]
+                }
+            }
+        }],
+        "stream": false
+    });
+    let client = ChatClient::new(Vec::new());
+    let never = CancellationToken::new();
+    let completion =
+        tokio::time::timeout(PROBE_TIMEOUT, client.complete(endpoint, &body, 1, &never))
+            .await
+            .map_err(|_| {
+                Error::Other(format!(
+                    "{model} did not answer within {} s",
+                    PROBE_TIMEOUT.as_secs()
+                ))
+            })??
+            .ok_or_else(|| Error::Other("probe cancelled".into()))?;
+    let Some(call) = completion.tool_calls.first() else {
+        return Err(Error::Invalid(format!(
+            "{model} answered with text instead of a tool call: {}",
+            completion.content.trim()
+        )));
+    };
+    if call.name != "echo" {
+        return Err(Error::Invalid(format!(
+            "{model} called an unknown tool '{}'",
+            call.name
+        )));
+    }
+    let args = match &call.arguments {
+        Value::String(s) => serde_json::from_str::<Value>(s).unwrap_or(Value::Null),
+        other => other.clone(),
+    };
+    match args.get("text").and_then(Value::as_str) {
+        Some(_) => Ok(format!("{model} returned a well-formed tool call")),
+        None => Err(Error::Invalid(format!(
+            "{model} sent malformed tool arguments: {}",
+            call.arguments
+        ))),
+    }
+}
 
 pub struct LocalEngine {
     store: Store,
