@@ -14,7 +14,7 @@ use serde_json::json;
 use crate::approvals::grant_key;
 use crate::engine::{Engine, EngineEvent, RunContext};
 use crate::events::{Bus, RuntimeEvent};
-use crate::model::{ApprovalStatus, EngineKind, NewRun, Run, RunStatus, TriggerKind};
+use crate::model::{ApprovalStatus, EngineKind, NewRun, Run, RunStatus, TriggerKind, WorkspaceMode};
 use crate::prompt::build_prompt;
 use crate::store::Store;
 use crate::util::{ct_eq, new_token};
@@ -403,6 +403,16 @@ impl Runner {
             })?;
         let prepared = match Prepared::from_run(run) {
             Some(p) if p.path.is_dir() => p,
+            // A follow-up of a session whose unchanged worktree was cleaned up: the session
+            // remembers that directory, so recreate the worktree at the same path.
+            Some(p)
+                if run.session_id.is_some()
+                    && dot.spec.workspace_mode == WorkspaceMode::Worktree
+                    && p.branch.is_some()
+                    && p.base_commit.is_some() =>
+            {
+                self.workspaces.restore(&dot, &p).await?
+            }
             _ => {
                 let p = self.workspaces.prepare(&dot, &run.id).await?;
                 self.store

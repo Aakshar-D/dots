@@ -107,6 +107,44 @@ impl WorkspaceManager {
         })
     }
 
+    /// Recreates a removed worktree at its original path so a resumed session finds the
+    /// directory it remembers. Reuses the branch if it still exists, otherwise recreates it
+    /// from `base_commit`. Returns `prepared` unchanged (same path, branch and base).
+    pub async fn restore(&self, dot: &Dot, prepared: &Prepared) -> Result<Prepared> {
+        let (Some(branch), Some(base)) = (&prepared.branch, &prepared.base_commit) else {
+            return Err(Error::Invalid(
+                "cannot restore a worktree without its branch and base commit".into(),
+            ));
+        };
+        let workdir = PathBuf::from(&dot.spec.workdir);
+        if !workdir.is_dir() {
+            return Err(Error::Invalid(format!(
+                "workdir does not exist: {}",
+                workdir.display()
+            )));
+        }
+        // Drop the stale registration of the deleted directory so the path is reusable.
+        git(&workdir, &["worktree", "prune"]).await?;
+        if let Some(parent) = prepared.path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        let path = prepared.path.to_string_lossy().to_string();
+        let branch_ref = format!("refs/heads/{branch}");
+        let exists = git(&workdir, &["rev-parse", "--verify", "--quiet", &branch_ref])
+            .await
+            .is_ok();
+        let added = if exists {
+            git(&workdir, &["worktree", "add", &path, branch]).await
+        } else {
+            git(&workdir, &["worktree", "add", "-b", branch, &path, base]).await
+        };
+        if let Err(e) = added {
+            let _ = tokio::fs::remove_dir_all(&prepared.path).await;
+            return Err(e);
+        }
+        Ok(prepared.clone())
+    }
+
     pub async fn has_changes(&self, path: &Path, base_commit: &str) -> Result<bool> {
         if !git(path, &["status", "--porcelain"]).await?.is_empty() {
             return Ok(true);

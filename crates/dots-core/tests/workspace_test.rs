@@ -94,3 +94,37 @@ async fn changed_worktrees_are_kept() {
         .unwrap());
     assert!(!wm.cleanup_if_unchanged(&dot, &committed).await.unwrap());
 }
+
+#[tokio::test]
+async fn restore_recreates_a_removed_worktree_at_the_same_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    init_repo(&repo);
+    let dot = fake_dot("again", &repo, WorkspaceMode::Worktree);
+    let wm = WorkspaceManager::new(tmp.path().join("wt"));
+
+    // Branch deleted by cleanup: recreated from the base commit.
+    let p = wm.prepare(&dot, "R1").await.unwrap();
+    assert!(wm.cleanup_if_unchanged(&dot, &p).await.unwrap());
+    assert!(!p.path.exists());
+    let restored = wm.restore(&dot, &p).await.unwrap();
+    assert_eq!(restored, p);
+    assert!(p.path.join("README.md").is_file());
+    assert_eq!(
+        git_out(&p.path, &["rev-parse", "--abbrev-ref", "HEAD"]),
+        "dots/again/R1"
+    );
+    assert_eq!(
+        git_out(&p.path, &["rev-parse", "HEAD"]),
+        p.base_commit.clone().unwrap()
+    );
+
+    // Directory deleted behind git's back, branch still there (with a commit): reused.
+    std::fs::write(p.path.join("c.txt"), "y").unwrap();
+    git_out(&p.path, &["add", "."]);
+    git_out(&p.path, &["commit", "-q", "-m", "work"]);
+    let tip = git_out(&p.path, &["rev-parse", "HEAD"]);
+    std::fs::remove_dir_all(&p.path).unwrap();
+    wm.restore(&dot, &p).await.unwrap();
+    assert_eq!(git_out(&p.path, &["rev-parse", "HEAD"]), tip);
+}

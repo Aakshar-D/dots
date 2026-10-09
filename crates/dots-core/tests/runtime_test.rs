@@ -2,7 +2,7 @@ mod common;
 
 use std::path::PathBuf;
 
-use common::{spec, wait_status};
+use common::{init_repo, spec, wait_status};
 use dots_core::model::{DotSpec, NewRun, RunStatus, TriggerKind, WorkspaceMode};
 use dots_core::store::Store;
 use dots_core::{Config, Error, Runtime};
@@ -353,4 +353,34 @@ async fn start_resumes_awaiting_runs_with_parked_decisions() {
         RunStatus::Succeeded
     );
     rt.shutdown();
+}
+
+#[tokio::test]
+async fn chat_follow_up_restores_a_removed_worktree_at_the_same_path() {
+    let t = start(None, None).await;
+    let repo = t.dir.path().join("repo");
+    init_repo(&repo);
+    let mut s = spec("wt-chat");
+    s.workdir = repo.to_string_lossy().to_string();
+    s.workspace_mode = WorkspaceMode::Worktree;
+    let dot = t.rt.create_dot(s).await.unwrap();
+
+    let first = t.rt.chat(&dot.id, "look around", None).await.unwrap();
+    let first = wait_status(t.rt.store(), &first.id, RunStatus::Succeeded, 15).await;
+    let path = PathBuf::from(first.workspace_path.clone().expect("worktree path"));
+    assert!(!path.exists(), "unchanged worktree is removed after the run");
+
+    let follow =
+        t.rt.chat(&dot.id, "and now?", Some(&first.id))
+            .await
+            .unwrap();
+    let follow = wait_status(t.rt.store(), &follow.id, RunStatus::Succeeded, 15).await;
+    assert_eq!(follow.workspace_path, first.workspace_path);
+    assert_eq!(follow.branch, first.branch);
+    assert_eq!(follow.base_commit, first.base_commit);
+    let rec: Value = serde_json::from_str(&std::fs::read_to_string(&t.args_out).unwrap()).unwrap();
+    assert_eq!(PathBuf::from(rec["cwd"].as_str().unwrap()), path);
+    let args: Vec<String> = serde_json::from_value(rec["args"].clone()).unwrap();
+    assert!(args.windows(2).any(|w| w == ["--resume", "fake-session"]));
+    t.rt.shutdown();
 }
