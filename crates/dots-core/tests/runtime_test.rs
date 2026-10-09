@@ -191,7 +191,7 @@ async fn missing_claude_fails_runs_cleanly() {
     let failed = wait_status(t.rt.store(), &run.id, RunStatus::Failed, 15).await;
     assert_eq!(
         failed.error.as_deref(),
-        Some("invalid input: engine 'claude' is not available")
+        Some("claude CLI not found: install Claude Code or set Config.claude_path")
     );
     t.rt.shutdown();
 }

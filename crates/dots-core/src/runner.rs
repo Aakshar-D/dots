@@ -296,12 +296,16 @@ impl Runner {
     ) -> Result<()> {
         let dot = self.store.get_dot(&run.dot_id).await?;
         // Resolve the engine first so a missing one never creates a workspace.
-        let engine = self.engines.get(&dot.spec.engine).cloned().ok_or_else(|| {
-            Error::Invalid(format!(
-                "engine '{}' is not available",
-                dot.spec.engine.as_str()
-            ))
-        })?;
+        let engine = self
+            .engines
+            .get(&dot.spec.engine)
+            .cloned()
+            .ok_or_else(|| match dot.spec.engine {
+                EngineKind::Claude => Error::Other(
+                    "claude CLI not found: install Claude Code or set Config.claude_path".into(),
+                ),
+                other => Error::Invalid(format!("engine '{}' is not available", other.as_str())),
+            })?;
         let prepared = match Prepared::from_run(run) {
             Some(p) if p.path.is_dir() => p,
             _ => {
