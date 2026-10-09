@@ -64,7 +64,6 @@ dots/
     src/tools/               built-in tools for the local engine
     src/policy/              allow/ask/deny resolution, one-shot grants
     src/workspace/           git worktree or plain folder per run
-    src/notify.rs            Notifier trait (implemented by the app)
   crates/fake-claude/        test binary that mimics `claude -p` stream-json output
   apps/dots-app/             Tauri 2 shell: starts runtime, tray, autostart, commands, events
   ui/                        React + Vite + TypeScript
@@ -77,8 +76,9 @@ dots/
   triggering runs, cancelling, deciding approvals, and a broadcast channel of `RuntimeEvent`s.
   It has no Tauri dependency and is fully testable headless.
 - `dots-app` is a thin adapter: maps Tauri commands to `Runtime` methods, forwards
-  `RuntimeEvent`s to the webview as Tauri events, implements `Notifier` with
-  `tauri-plugin-notification`, owns the tray icon and `tauri-plugin-autostart`.
+  `RuntimeEvent`s to the webview as Tauri events, turns `RuntimeEvent`s into Windows
+  notifications with `tauri-plugin-notification` (there is no `Notifier` trait in core; the app
+  subscribes to the event bus), owns the tray icon and `tauri-plugin-autostart`. See §12.
 - The UI talks only to Tauri commands/events. It never calls the local HTTP server.
 - Both engines implement:
 
@@ -131,6 +131,8 @@ Stored at `%LOCALAPPDATA%\dots\dots.db`. Worktrees at `%LOCALAPPDATA%\dots\workt
 - `tokens_in`, `tokens_out` INTEGER
 - `parent_run_id` TEXT NULL (resumes and chat follow-ups link to the previous run)
 - `queued_at`, `started_at`, `ended_at`
+- `reviewed_at` TEXT NULL (migration 0002; set by "Mark reviewed" or "Discard worktree", see
+  §12 Inbox)
 
 **run_events**
 - `run_id` FK, `seq` INTEGER, `ts`, `kind` TEXT, `data` TEXT (JSON); PK (`run_id`, `seq`)
@@ -141,8 +143,11 @@ Stored at `%LOCALAPPDATA%\dots\dots.db`. Worktrees at `%LOCALAPPDATA%\dots\workt
 - `status` TEXT (`pending` | `approved` | `denied` | `expired`)
 - `note` TEXT NULL, `created_at`, `decided_at`
 
-**settings** — key/value: `port` (default 47321), `max_concurrent_runs` (default 2),
-`claude_path`, `tested_claude_version`, `local_endpoints` (JSON list), `autostart`.
+**settings** — key/value, each value a JSON document: `port` (default 47321),
+`max_concurrent_runs` (default 2), `claude_path` (null = search PATH), `tested_claude_version`
+(default: the core constant `TESTED_CLAUDE_VERSION`), `local_endpoints` (JSON list of URLs),
+`autostart` (default true), `schedules_paused` (default false). Missing keys take their
+defaults; unknown keys are ignored.
 
 All timestamps are RFC 3339 UTC strings.
 
@@ -182,8 +187,8 @@ A resume creates a child run linked by `parent_run_id` and reuses the parent's w
    standing rules: work only inside the workspace; when done, end with a summary listing what
    changed and what needs human review.
 5. **Execute.** Engine events are appended to `run_events` and broadcast to the UI.
-6. **Finish.** Final assistant text becomes `summary`. Notifier fires on `failed`,
-   `awaiting_approval`, and `succeeded`. A worktree with no commits and no uncommitted changes is
+6. **Finish.** Final assistant text becomes `summary`. The app notifies on `failed`,
+   `awaiting_approval`, and `succeeded` (§12). A worktree with no commits and no uncommitted changes is
    removed (`git worktree remove`, branch deleted); otherwise it is kept for review. The same
    cleanup runs when a parked run is closed by a plain deny or cancelled.
 7. **Review actions** (UI): view diff, open folder, discard worktree (remove + delete branch).
@@ -202,8 +207,9 @@ A resume creates a child run linked by `parent_run_id` and reuses the parent's w
   cancel that lands before the engine starts finishes the run `cancelled` without starting it.
 - A decision is written together with its `parked` flag; `Live` is reported only when the
   waiting engine actually received it, otherwise the run is resumed (never lost).
-- On app start, `claude --version` is compared to `tested_claude_version`; a mismatch shows a
-  non-blocking warning banner.
+- On app start, `claude --version` (5 s timeout, no console window) is compared to
+  `tested_claude_version`; a mismatch shows a non-blocking warning banner whose "Mark as tested"
+  action stores the detected version as `tested_claude_version`.
 
 ## 5. Policy and approvals
 
@@ -238,6 +244,17 @@ A resume creates a child run linked by `parent_run_id` and reuses the parent's w
     arbitrary code; `.claude` is denied because the CLI loads settings and hooks from it.
     Resolution is workspace-aware (`resolve_in`): `./` patterns anchor to the run workspace.
     Deny/ask command matching is best-effort; allow matching is strict.
+- Path rules on the deny/ask side (pinned for Plan 3):
+  - A pattern ending in `/**` also matches the directory itself: `Read(**/.git/**)` covers
+    `.git`.
+  - A workspace-relative input (as the local engine passes them) is also tested in its absolute
+    form `<workspace>/<rel>`, so absolute deny patterns such as `Read(C:/secrets/**)` match local
+    dots too.
+  - The local engine's walking tools (`glob`, `grep`, `list_dir`) skip every entry whose
+    workspace-relative path resolves to `deny` under the walking tool's own name or under
+    `Read`, and end their output with `(<n> entries hidden by policy)`. A search from the
+    workspace root therefore never reads a denied subtree. Entries that resolve to `ask` are not
+    skipped (the walking call itself was already judged).
   - `trusted`: allow all; ask for `Bash(git push:*)` and `mcp__*`; default allow.
 
 ### Claude engine
@@ -301,7 +318,9 @@ which the one-shot grant allows once. A model that changes the input on retry ge
 `ask`; that is accepted rather than having the engine replay the call itself.
 
 Built-in tools: `read_file`, `write_file`, `edit_file` (exact unique-string replace), `list_dir`,
-`glob`, `grep`, `shell` (PowerShell, timeout default 120 s, output capped at 30 KB). Their
+`glob`, `grep`, `shell` (PowerShell, timeout default 120 s, output capped at 30 KB; the script
+reaches PowerShell on stdin behind a small fixed `-EncodedCommand` bootstrap, so its length is
+not bound by the Windows command-line limit). Their
 argument names match the Claude tools they alias (`file_path`, `content`, `old_string`,
 `new_string`, `path`, `pattern`, `command`), so policy path specs, command rules and
 `grant_key` apply to local dots without translation. All paths are canonicalized and must
@@ -339,10 +358,11 @@ React + Vite + TypeScript inside Tauri 2. Screens:
 - **Run view** — live transcript (assistant text, collapsible tool calls/results), worktree diff,
   summary, status, tokens; cancel, discard worktree, open folder.
 - **Inbox** — pending approvals (tool, pretty-printed input, approve / deny with note) and
-  completed runs with changes awaiting review. Unread count mirrored in the tray tooltip.
+  finished runs awaiting review (definition in §12). Unread count mirrored in the tray tooltip.
 - **Chat** — per-dot threaded chat; each message is a `chat` run resuming the thread's session.
 - **Settings** — port, concurrency, `claude` path and version check, local endpoints with
-  "Test endpoint", data dir, autostart toggle.
+  "Test endpoint", data dir, autostart toggle. Port, concurrency and `claude` path take effect
+  after "Restart Dots" (§12).
 
 Window close hides to tray. Tray menu: Open, Inbox (n), Pause all schedules, Quit.
 
@@ -358,7 +378,8 @@ Window close hides to tray. Tray menu: Open, Inbox (n), Pause all schedules, Qui
 | Workspace setup fails | `failed` before engine start; no partial worktree left |
 | Timeout | Job Object closed; `failed` with `timeout` |
 | App crash/restart mid-run | `failed: interrupted`; worktree kept |
-| Port in use | App starts; UI shows error; webhooks disabled and Claude runs blocked (they need the MCP endpoint) until the port is changed |
+| Port in use | App starts without the HTTP server; `Runtime::status()` reports `server_error`; UI shows a banner linking to Settings; webhooks are off and Claude runs fail fast with "local server is not running: port N is in use. Change the port in Settings and restart Dots." (they need the MCP endpoint); local dots and schedules keep working. Fixed by changing the port and restarting |
+| Runtime fails to start (database, migration) | Window opens to a fatal-error page with the message and the log folder; nothing runs |
 
 ## 9. Testing
 
@@ -395,3 +416,136 @@ Window close hides to tray. Tray menu: Open, Inbox (n), Pause all schedules, Qui
   300 s regardless of `MCP_TOOL_TIMEOUT`. The default `approval_wait_secs` is therefore 240 s;
   longer waits rely on park/resume.
 - Local models vary widely in tool-calling quality; v1 targets simpler jobs on local dots.
+
+## 12. Plan 3 decisions (desktop app and UI)
+
+Decided 2026-10-09. Plan 3 is split into three plans that share this section:
+
+- **3a** — core additions + Tauri shell + command/event surface.
+- **3b** — the six UI screens.
+- **3c** — Job Object hardening, manual smoke, NSIS packaging.
+
+### Core additions (3a)
+
+In task order:
+
+1. Policy fixes and the `shell` stdin script (§5).
+2. Migration 0002 (`runs.reviewed_at`) and a typed `Settings` struct with
+   `Store::get_settings` / `put_settings` (§3).
+3. Degraded start when the port is taken (§8): no server, `server_error` recorded, and Claude
+   registered as an `UnavailableEngine` that fails runs with the actionable message.
+4. Startup `claude --version` check (§4).
+5. `Runtime::status()` → `{ port, server_error, claude: { program, version, tested_version,
+   mismatch }, schedules_paused, data_dir }`.
+6. Read methods, so the app never uses `Runtime::store()`: `list_dots`, `get_dot`,
+   `list_runs(dot_id?, limit)`, `get_run`, `run_thread(root_run_id)` (all runs of a lineage,
+   oldest first), `list_run_events(run_id, after_seq)`, `approvals_for_run`,
+   `inbox() -> { approvals, review_runs }`, `inbox_count()`, and
+   `preview_schedule(expr, n) -> next n fire times` (validates the cron; the UI parses no cron).
+7. Review actions on a thread's shared worktree:
+   - `worktree_diff(run_id) -> { files: [{ path, status, patch, binary }], truncated }` — `git
+     diff <base_commit>` plus untracked files as additions; total patch text capped at 1 MiB.
+   - `discard_worktree(run_id)` — only when no run of the lineage is queued, running or
+     awaiting approval; removes the worktree, deletes the branch, sets `reviewed_at` on the
+     lineage. Folder-mode runs are rejected (`Invalid`).
+   - `mark_reviewed(run_id)` — sets `reviewed_at` on the lineage.
+8. `set_schedules_paused(bool)` — persisted as `schedules_paused`; the scheduler fires nothing
+   while paused.
+9. `settings()` and `update_settings(Settings) -> { restart_required }`. `restart_required` is
+   true when `port`, `max_concurrent_runs` or `claude_path` changed. `autostart` and
+   `schedules_paused` apply live.
+
+### Inbox
+
+The Inbox lists:
+
+- pending approvals;
+- runs awaiting review: the latest run of each lineage that is terminal, has `reviewed_at`
+  NULL, and either kept its worktree (worktree mode, worktree still on disk) or `failed`.
+
+A run leaves the Inbox through "Discard worktree" or "Mark reviewed". Folder-mode successes only
+notify. Unread count = pending approvals + runs awaiting review.
+
+### Tauri shell (`apps/dots-app`)
+
+- Workspace member, Tauri 2. Data dir `%LOCALAPPDATA%\dots`. Logs go to
+  `%LOCALAPPDATA%\dots\logs` through `tracing-appender` (daily files, 7 kept).
+- Startup:
+  1. Read `Settings` with a short-lived `Store`.
+  2. Build `Config` and call `Runtime::start`.
+  3. Manage `Arc<Runtime>` as Tauri state.
+  A hard start failure opens the fatal-error page (§8).
+- Plugins: `single-instance` (a second launch focuses the window), `autostart` (launched with
+  `--hidden`, so login starts in the tray), `notification`, `opener` (open folder), `dialog`
+  (pick workdir). No `shell`, `fs` or `http` plugin.
+- Commands are one-line wrappers over `Runtime` returning `Result<T, CmdError>`, serialized as
+  `{ kind: "not_found" | "invalid" | "conflict" | "internal", message }`.
+- **Commands take ids, never paths.** `open_run_folder(run_id)` resolves the path in core. The
+  workdir comes from the native picker or typed text that `DotSpec::validate` and the runner
+  check. The UI cannot make the backend open or read an arbitrary path.
+- `restart_app` calls `app.restart()`.
+- Capabilities grant only `core:default`, the app's commands and the plugin permissions in use.
+  CSP: `default-src 'self'`, no remote origins.
+- Events:
+  - One forwarder emits each `RuntimeEvent` as the Tauri event `runtime`, same JSON.
+  - On `broadcast` lag it emits `runtime-lagged`; the UI then invalidates all queries and
+    refetches run events after the last seen `seq`.
+- Notifications fire on `ApprovalRequested`, and on `RunUpdated` into `succeeded`, `failed` or
+  `awaiting_approval`, once per (run, status). Chat runs do not notify.
+- After each relevant event, `inbox_count()` updates the tray tooltip ("Dots: n to review") and
+  the "Inbox (n)" menu item.
+- Tray:
+  - Open.
+  - Inbox (n) — shows the window on `/inbox` through a `navigate` event.
+  - Pause all schedules — check item.
+  - Quit — `Runtime::shutdown`, then exit.
+  Left click shows the window; closing the window hides it.
+- Adapter logic (error mapping, notification decisions, tray text, config from settings) lives
+  in plain functions with Rust unit tests; commands stay one-liners.
+
+### UI (3b)
+
+- Stack:
+  - Vite + React 18 + TypeScript (strict) + Tailwind v4 + shadcn/ui, with components copied
+    into `ui/src/components/ui`.
+  - TanStack Query v5 and the `react-router` hash router.
+  - Bun as package manager; `@tauri-apps/cli` as a dev dependency.
+- Data layer:
+  - `ui/src/api/types.ts` (hand-written mirrors of the Rust JSON), `commands.ts` (typed
+    `invoke` wrappers that throw `CmdError`), `events.ts` (one `listen("runtime")`).
+  - Events patch or invalidate query keys: `run`, `runs`, `thread`, `events`, `inbox`,
+    `approvals`. `RunEvent`s are appended to loaded event lists, deduplicated by `seq`.
+- Contract: a `dots-app` test serializes one sample of each shared type to
+  `ui/src/api/__fixtures__/contract.json` and fails when the file is stale; a Vitest test checks
+  the file against `types.ts`.
+- Run view:
+  - Shows a whole thread (root and children) as one transcript.
+  - Assistant text renders as markdown without raw HTML.
+  - Tool calls and results are paired by id and collapsible.
+  - `message` events are hidden; `raw` events are collapsed.
+  - The diff is an in-repo unified-diff component with per-file collapse and a truncation
+    notice.
+- Chat:
+  - Each thread is a lineage of `chat` runs.
+  - Sending continues from the last terminal run of the thread; input is disabled while that run
+    is active.
+  - Approvals of the thread show inline.
+- The editor validates with zod rules mirroring `DotSpec::validate`; server errors still show
+  on save.
+- Tests: Vitest + Testing Library + jsdom, with `invoke` and `listen` mocked.
+
+### Hardening and packaging (3c)
+
+- Job Object (`windows-sys`) in `proc`:
+  - Created with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`.
+  - Assigned right after spawn to the `claude` process of a run and to each local `shell` call.
+  - Cancel and timeout call `TerminateJobObject`; dropping the handle kills the rest.
+  - `kill_tree` stays as the fallback when assignment fails and on other OSes.
+- Manual smoke (`docs/verification/<date>-plan3-smoke.md`):
+  - A Claude dot and a local dot (LM Studio), each with a scheduled run, a webhook run and an
+    approval round trip through the Inbox.
+  - Also checks tray, close-to-tray, autostart, a notification, discard and the port-in-use
+    banner.
+- Packaging: `tauri build` with NSIS — per-user install (`installMode: currentUser`), WebView2
+  `downloadBootstrapper`, icons from `tauri icon`, version 0.1.0, unsigned. Uninstall keeps the
+  data dir.
