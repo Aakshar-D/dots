@@ -1,13 +1,15 @@
-//! Manual end-to-end check against the real `claude` CLI (uses your subscription).
+//! Manual end-to-end check against the real `claude` CLI (uses your subscription) or, with
+//! `--engine local --endpoint <url>`, a local OpenAI-compatible server (LM Studio, Ollama).
 //!
 //! cargo run -p dots-core --example smoke -- <workdir> "<instructions>"
 //!     [--model haiku] [--wait <approval_wait_secs>] [--preset read-only|sandboxed|trusted] [--folder]
+//!     [--engine claude|local] [--endpoint http://127.0.0.1:1234]
 
 use std::time::Duration;
 
 use anyhow::{bail, Context};
 use dots_core::events::RuntimeEvent;
-use dots_core::model::{DotSpec, RunStatus, WorkspaceMode};
+use dots_core::model::{DotSpec, EngineKind, RunStatus, WorkspaceMode};
 use dots_core::policy::{Policy, Preset};
 use dots_core::{Config, Runtime};
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -35,7 +37,9 @@ fn preview(v: &serde_json::Value) -> String {
 async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.len() < 2 {
-        bail!("usage: smoke <workdir> <instructions> [--model m] [--wait secs] [--preset p] [--folder]");
+        bail!(
+            "usage: smoke <workdir> <instructions> [--model m] [--wait secs] [--preset p]              [--folder] [--engine claude|local] [--endpoint url]"
+        );
     }
     let mut cfg = Config::new(std::env::temp_dir().join("dots-smoke"));
     cfg.port = 0;
@@ -45,6 +49,13 @@ async fn main() -> anyhow::Result<()> {
     let name = format!("smoke-{}", chrono::Local::now().format("%Y%m%d-%H%M%S"));
     let mut spec = DotSpec::new(&name, &args[1], &args[0]);
     spec.model = flag(&args, "--model").unwrap_or_else(|| "haiku".into());
+    if let Some(engine) = flag(&args, "--engine") {
+        spec.engine = EngineKind::parse(&engine)?;
+    }
+    spec.endpoint_url = flag(&args, "--endpoint");
+    if let Some(endpoint) = &spec.endpoint_url {
+        println!("probe: {}", rt.test_endpoint(endpoint, &spec.model).await?);
+    }
     if let Some(w) = flag(&args, "--wait") {
         spec.approval_wait_secs = w.parse().context("--wait must be a number of seconds")?;
     }
