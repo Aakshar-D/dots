@@ -195,3 +195,51 @@ async fn missing_claude_fails_runs_cleanly() {
     );
     t.rt.shutdown();
 }
+
+#[tokio::test]
+async fn delete_with_awaiting_run_conflicts_and_keeps_rows() {
+    let t = start(None, None).await;
+    let dot =
+        t.rt.create_dot(folder_spec(&t.dir, "waiting"))
+            .await
+            .unwrap();
+    let store = t.rt.store();
+    let run = store
+        .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    store.claim_run(&run.id).await.unwrap();
+    store
+        .finish_run(&run.id, RunStatus::AwaitingApproval, None, None)
+        .await
+        .unwrap();
+    store
+        .create_approval(&run.id, "Bash", &json!({"command": "x"}))
+        .await
+        .unwrap();
+    assert!(matches!(
+        t.rt.delete_dot(&dot.id).await,
+        Err(Error::Conflict(_))
+    ));
+    store.get_run(&run.id).await.unwrap();
+    assert_eq!(store.approvals_for_run(&run.id).await.unwrap().len(), 1);
+    assert!(matches!(
+        t.rt.delete_dot("nope").await,
+        Err(Error::NotFound(_))
+    ));
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn chat_follow_up_requires_finished_parent_with_session() {
+    let t = start(None, None).await;
+    let dot = t.rt.create_dot(folder_spec(&t.dir, "ghost")).await.unwrap();
+    let queued =
+        t.rt.store()
+            .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
+            .await
+            .unwrap();
+    let res = t.rt.chat(&dot.id, "hi", Some(&queued.id)).await;
+    assert!(matches!(res, Err(Error::Conflict(_))), "{res:?}");
+    t.rt.shutdown();
+}

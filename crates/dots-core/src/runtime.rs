@@ -55,14 +55,14 @@ impl Runtime {
     pub async fn start(cfg: Config) -> Result<Runtime> {
         std::fs::create_dir_all(&cfg.data_dir)?;
         let store = Store::open(&cfg.data_dir.join("dots.db")).await?;
-        let recovered = store.recover_interrupted().await?;
-        if !recovered.is_empty() {
-            tracing::warn!("marked {} interrupted run(s) as failed", recovered.len());
-        }
         let bus = new_bus();
         let hub = Arc::new(ApprovalHub::new(store.clone(), bus.clone()));
         let listener = server::bind(cfg.port).await?;
         let port = listener.local_addr()?.port();
+        let recovered = store.recover_interrupted().await?;
+        if !recovered.is_empty() {
+            tracing::warn!("marked {} interrupted run(s) as failed", recovered.len());
+        }
 
         let mut engines: HashMap<EngineKind, Arc<dyn Engine>> = HashMap::new();
         let claude_program = resolve_claude(cfg.claude_path.as_deref());
@@ -148,18 +148,7 @@ impl Runtime {
     }
 
     pub async fn delete_dot(&self, id: &str) -> Result<()> {
-        let active = self
-            .store
-            .list_runs(Some(id), 1000)
-            .await?
-            .into_iter()
-            .any(|r| !r.status.is_terminal());
-        if active {
-            return Err(Error::Conflict(
-                "dot has queued, running or awaiting runs; cancel them first".into(),
-            ));
-        }
-        self.store.delete_dot(id).await?;
+        self.store.delete_dot_if_idle(id).await?;
         self.scheduler.reload();
         Ok(())
     }
@@ -197,6 +186,11 @@ impl Runtime {
         new.payload = Some(json!({ "message": message }));
         if let Some(pid) = parent_run_id {
             let parent = self.store.get_run(pid).await?;
+            if !parent.status.is_terminal() || parent.session_id.is_none() {
+                return Err(Error::Conflict(
+                    "parent run has no finished session to continue".into(),
+                ));
+            }
             if parent.dot_id != dot_id {
                 return Err(Error::Invalid(format!(
                     "run {pid} belongs to a different dot"
@@ -239,7 +233,9 @@ impl Runtime {
         match self.hub.decide(id, approved, note).await? {
             DecideEffect::Live(a) => Ok(a),
             DecideEffect::Parked(a) => {
-                self.runner.maybe_resume(&a.run_id).await?;
+                if let Err(e) = self.runner.maybe_resume(&a.run_id).await {
+                    tracing::error!(run = %a.run_id, "resume after approval failed: {e}");
+                }
                 Ok(a)
             }
         }

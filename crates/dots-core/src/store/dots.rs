@@ -142,6 +142,24 @@ impl Store {
         Ok(())
     }
 
+    /// Deletes the dot only if it has no queued/running/awaiting runs, atomically.
+    pub async fn delete_dot_if_idle(&self, id: &str) -> Result<()> {
+        let res = sqlx::query(
+            "DELETE FROM dots WHERE id = ? AND NOT EXISTS (SELECT 1 FROM runs WHERE dot_id = ?              AND status IN ('queued','running','awaiting_approval'))",
+        )
+        .bind(id)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        if res.rows_affected() == 0 {
+            self.get_dot(id).await?;
+            return Err(Error::Conflict(
+                "dot has queued, running or awaiting runs; cancel them first".into(),
+            ));
+        }
+        Ok(())
+    }
+
     pub async fn set_dot_enabled(&self, id: &str, enabled: bool) -> Result<Dot> {
         let res = sqlx::query("UPDATE dots SET enabled = ?, updated_at = ? WHERE id = ?")
             .bind(enabled as i64)
