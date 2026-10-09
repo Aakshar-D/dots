@@ -20,6 +20,7 @@ pub mod mcp;
 pub mod webhook;
 
 pub const MAX_WEBHOOK_BODY: usize = 256 * 1024;
+pub const MAX_MCP_BODY: usize = 16 * 1024 * 1024;
 
 #[derive(Clone)]
 pub struct ServerState {
@@ -31,12 +32,17 @@ pub struct ServerState {
 pub fn router(state: ServerState) -> Router {
     Router::new()
         .route("/health", get(|| async { "ok" }))
-        .route("/dots/{id}/trigger", post(webhook::trigger))
+        .route(
+            "/dots/{id}/trigger",
+            post(webhook::trigger).layer(DefaultBodyLimit::max(MAX_WEBHOOK_BODY)),
+        )
+        // Tool inputs (e.g. a Write of a large file) pass through the permission gate.
         .route(
             "/mcp",
-            post(mcp::handle).get(|| async { StatusCode::METHOD_NOT_ALLOWED }),
+            post(mcp::handle)
+                .get(|| async { StatusCode::METHOD_NOT_ALLOWED })
+                .layer(DefaultBodyLimit::max(MAX_MCP_BODY)),
         )
-        .layer(DefaultBodyLimit::max(MAX_WEBHOOK_BODY))
         .layer(middleware::from_fn(loopback_only))
         .with_state(state)
 }

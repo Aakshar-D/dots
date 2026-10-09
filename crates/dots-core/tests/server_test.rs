@@ -295,3 +295,27 @@ async fn mcp_handshake_and_approve_tool() {
     .unwrap();
     assert_eq!(unknown["error"]["code"], -32601);
 }
+
+#[tokio::test]
+async fn mcp_accepts_large_tool_inputs() {
+    let srv = start().await;
+    let d = dot(&srv, "big", 0).await;
+    let run = srv
+        .store
+        .create_run(&NewRun::new(&d.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    let secret = srv.runner.register_secret(&run.id);
+    let content = "x".repeat(300 * 1024);
+    let r = rpc(
+        &srv,
+        Some(&secret),
+        json!({"jsonrpc":"2.0","id":1,"method":"tools/call",
+        "params":{"name":"approve","arguments":{"tool_name":"Write",
+            "input":{"file_path":"a.txt","content": content}}}}),
+    )
+    .await;
+    assert_eq!(r.status(), 200);
+    let body: Value = r.json().await.unwrap();
+    assert_eq!(decision(&body)["behavior"], "allow");
+}
