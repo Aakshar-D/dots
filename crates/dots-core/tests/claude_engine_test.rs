@@ -129,9 +129,7 @@ async fn happy_path_streams_events_and_passes_prompt_on_stdin() {
 
     let rec = recorded_args(&e);
     let args: Vec<String> = serde_json::from_value(rec["args"].clone()).unwrap();
-    assert!(args
-        .windows(2)
-        .any(|w| w == ["--setting-sources", ""]));
+    assert!(args.windows(2).any(|w| w == ["--setting-sources", ""]));
     assert!(!args.iter().any(|a| a.contains("Do the thing")));
     assert_eq!(rec["mcp_tool_timeout"], "310000");
     assert_eq!(PathBuf::from(rec["cwd"].as_str().unwrap()), e.dir.path());

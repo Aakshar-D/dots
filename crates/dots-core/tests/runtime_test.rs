@@ -368,7 +368,10 @@ async fn chat_follow_up_restores_a_removed_worktree_at_the_same_path() {
     let first = t.rt.chat(&dot.id, "look around", None).await.unwrap();
     let first = wait_status(t.rt.store(), &first.id, RunStatus::Succeeded, 15).await;
     let path = PathBuf::from(first.workspace_path.clone().expect("worktree path"));
-    assert!(!path.exists(), "unchanged worktree is removed after the run");
+    assert!(
+        !path.exists(),
+        "unchanged worktree is removed after the run"
+    );
 
     let follow =
         t.rt.chat(&dot.id, "and now?", Some(&first.id))

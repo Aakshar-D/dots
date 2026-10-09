@@ -110,7 +110,11 @@ impl ApprovalHub {
             Err(e) => {
                 // Nothing was written; hand the waiter back so a retry can still go live.
                 if let Some(tx) = waiter.filter(|tx| !tx.is_closed()) {
-                    self.waiters.lock().unwrap().entry(id.to_string()).or_insert(tx);
+                    self.waiters
+                        .lock()
+                        .unwrap()
+                        .entry(id.to_string())
+                        .or_insert(tx);
                 }
                 return Err(e);
             }

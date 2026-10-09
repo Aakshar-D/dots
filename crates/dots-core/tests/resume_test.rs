@@ -80,7 +80,10 @@ async fn parked(e: &Env, run_id: &str) {
     wait_status(&e.store, run_id, RunStatus::AwaitingApproval, 5).await;
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     while e.runner.is_active(run_id) {
-        assert!(std::time::Instant::now() < deadline, "run {run_id} never released");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "run {run_id} never released"
+        );
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
 }
@@ -419,7 +422,10 @@ async fn plain_deny_close_removes_an_unchanged_worktree() {
         e.store.get_run(&parent.id).await.unwrap().status,
         RunStatus::Succeeded
     );
-    assert!(!std::path::Path::new(&path).exists(), "worktree left behind");
+    assert!(
+        !std::path::Path::new(&path).exists(),
+        "worktree left behind"
+    );
 }
 
 #[tokio::test]
@@ -430,5 +436,8 @@ async fn cancel_of_awaiting_run_removes_an_unchanged_worktree() {
         e.runner.cancel(&parent.id).await.unwrap().status,
         RunStatus::Cancelled
     );
-    assert!(!std::path::Path::new(&path).exists(), "worktree left behind");
+    assert!(
+        !std::path::Path::new(&path).exists(),
+        "worktree left behind"
+    );
 }

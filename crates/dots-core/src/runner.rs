@@ -14,7 +14,9 @@ use serde_json::json;
 use crate::approvals::grant_key;
 use crate::engine::{Engine, EngineEvent, RunContext};
 use crate::events::{Bus, RuntimeEvent};
-use crate::model::{ApprovalStatus, EngineKind, NewRun, Run, RunStatus, TriggerKind, WorkspaceMode};
+use crate::model::{
+    ApprovalStatus, EngineKind, NewRun, Run, RunStatus, TriggerKind, WorkspaceMode,
+};
 use crate::prompt::build_prompt;
 use crate::store::Store;
 use crate::util::{ct_eq, new_token};
@@ -135,8 +137,7 @@ impl Runner {
                 if active.len() >= self.cfg.max_concurrent {
                     break;
                 }
-                if active.contains_key(&run.id) || active.values().any(|a| a.dot_id == run.dot_id)
-                {
+                if active.contains_key(&run.id) || active.values().any(|a| a.dot_id == run.dot_id) {
                     continue;
                 }
                 active.insert(
@@ -163,11 +164,10 @@ impl Runner {
             // after this point go through `execute`'s error path, which frees the slot.
             // A panic skips that path, so a watcher task cleans up instead.
             let run_id = run.id.clone();
-            let inner = tokio::spawn(self.clone().execute(
-                run_id.clone(),
-                cancel.clone(),
-                by_user,
-            ));
+            let inner = tokio::spawn(
+                self.clone()
+                    .execute(run_id.clone(), cancel.clone(), by_user),
+            );
             let this = self.clone();
             tokio::spawn(async move {
                 if let Err(e) = inner.await {
@@ -391,16 +391,19 @@ impl Runner {
         }
         let dot = self.store.get_dot(&run.dot_id).await?;
         // Resolve the engine first so a missing one never creates a workspace.
-        let engine = self
-            .engines
-            .get(&dot.spec.engine)
-            .cloned()
-            .ok_or_else(|| match dot.spec.engine {
-                EngineKind::Claude => Error::Other(
-                    "claude CLI not found: install Claude Code or set Config.claude_path".into(),
-                ),
-                other => Error::Invalid(format!("engine '{}' is not available", other.as_str())),
-            })?;
+        let engine =
+            self.engines
+                .get(&dot.spec.engine)
+                .cloned()
+                .ok_or_else(|| match dot.spec.engine {
+                    EngineKind::Claude => Error::Other(
+                        "claude CLI not found: install Claude Code or set Config.claude_path"
+                            .into(),
+                    ),
+                    other => {
+                        Error::Invalid(format!("engine '{}' is not available", other.as_str()))
+                    }
+                })?;
         let prepared = match Prepared::from_run(run) {
             Some(p) if p.path.is_dir() => p,
             // A follow-up of a session whose unchanged worktree was cleaned up: the session
@@ -597,9 +600,5 @@ impl Runner {
 }
 
 fn already(run: &Run) -> Error {
-    Error::Conflict(format!(
-        "run {} is already {}",
-        run.id,
-        run.status.as_str()
-    ))
+    Error::Conflict(format!("run {} is already {}", run.id, run.status.as_str()))
 }
