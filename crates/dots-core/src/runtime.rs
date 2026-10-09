@@ -219,21 +219,7 @@ impl Runtime {
     }
 
     pub async fn cancel_run(&self, run_id: &str) -> Result<Run> {
-        // The runner reports a Conflict while a claimed run has not registered as
-        // active yet; that window is short, so retry briefly before surfacing it.
-        let mut attempts = 0;
-        loop {
-            match self.runner.cancel(run_id).await {
-                Err(Error::Conflict(_)) if attempts < 100 => {
-                    if self.store.get_run(run_id).await?.status != RunStatus::Running {
-                        return self.runner.cancel(run_id).await;
-                    }
-                    attempts += 1;
-                    tokio::time::sleep(Duration::from_millis(20)).await;
-                }
-                other => return other,
-            }
-        }
+        self.runner.cancel(run_id).await
     }
 
     pub async fn decide_approval(

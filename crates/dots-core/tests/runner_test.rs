@@ -111,6 +111,7 @@ async fn successful_run_records_events_and_succeeds() {
 
 #[tokio::test]
 async fn engine_failure_and_missing_result_fail_the_run() {
+    // Separate stores: two dispatchers on one store would race for each other's runs.
     let (dir, store) = temp_store().await;
     let bus = new_bus();
     let failing = runner_with(
@@ -133,11 +134,18 @@ async fn engine_failure_and_missing_result_fail_the_run() {
         Some("boom")
     );
 
-    let silent = runner_with(&store, &bus, &dir, Arc::new(ScriptedEngine::new(vec![])), 2);
+    let (dir2, store2) = temp_store().await;
+    let silent = runner_with(
+        &store2,
+        &bus,
+        &dir2,
+        Arc::new(ScriptedEngine::new(vec![])),
+        2,
+    );
     silent.spawn_dispatcher(CancellationToken::new());
-    let b = folder_dot(&store, &dir, "b").await;
+    let b = folder_dot(&store2, &dir2, "b").await;
     let id = manual(&silent, &b).await;
-    let run = wait_status(&store, &id, RunStatus::Failed, 5).await;
+    let run = wait_status(&store2, &id, RunStatus::Failed, 5).await;
     assert_eq!(run.error.as_deref(), Some("engine exited without a result"));
 }
 
@@ -211,20 +219,32 @@ async fn concurrency_limit_and_one_run_per_dot() {
     let a2 = manual(&runner, &a).await;
     let b1 = manual(&runner, &b).await;
     let c1 = manual(&runner, &c).await;
-    tokio::time::sleep(Duration::from_millis(150)).await;
-    let running: Vec<String> = store
-        .list_runs(None, 10)
-        .await
-        .unwrap()
-        .into_iter()
-        .filter(|r| r.status == RunStatus::Running)
-        .map(|r| r.id)
-        .collect();
-    assert_eq!(running.len(), 2, "{running:?}");
-    assert!(!(running.contains(&a1) && running.contains(&a2)));
-    for id in [a1, a2, b1, c1] {
-        wait_status(&store, &id, RunStatus::Succeeded, 5).await;
+    // Sample until every run has finished: never more than two running, never a1 and a2
+    // together, and the limit is actually reached at some point.
+    let ids = [a1.clone(), a2.clone(), b1, c1];
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let mut saw_two = false;
+    loop {
+        let runs = store.list_runs(None, 10).await.unwrap();
+        let running: Vec<&String> = runs
+            .iter()
+            .filter(|r| r.status == RunStatus::Running)
+            .map(|r| &r.id)
+            .collect();
+        assert!(running.len() <= 2, "{running:?}");
+        assert!(!(running.contains(&&a1) && running.contains(&&a2)));
+        saw_two |= running.len() == 2;
+        let done = runs
+            .iter()
+            .filter(|r| ids.contains(&r.id) && r.status == RunStatus::Succeeded)
+            .count();
+        if done == ids.len() {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "{runs:#?}");
+        tokio::time::sleep(Duration::from_millis(10)).await;
     }
+    assert!(saw_two, "the concurrency limit was never reached");
 }
 
 #[tokio::test]
@@ -329,4 +349,62 @@ async fn recover_delegates_to_store() {
         .unwrap();
     store.claim_run(&run.id).await.unwrap();
     assert_eq!(runner.recover().await.unwrap(), vec![run.id]);
+}
+
+// ---- final review: I3 / M1 ----
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancel_right_after_enqueue_always_succeeds() {
+    let (dir, store) = temp_store().await;
+    let bus = new_bus();
+    let runner = runner_with(
+        &store,
+        &bus,
+        &dir,
+        Arc::new(ScriptedEngine::new(vec![Step::WaitForCancel])),
+        4,
+    );
+    runner.spawn_dispatcher(CancellationToken::new());
+    for i in 0..60u64 {
+        let dot = folder_dot(&store, &dir, &format!("c{i}")).await;
+        let id = manual(&runner, &dot).await;
+        if i % 3 != 0 {
+            tokio::time::sleep(Duration::from_micros(200 * (i % 20))).await;
+        }
+        // No "starting; try again" window: queued, claimed or running all cancel.
+        runner.cancel(&id).await.unwrap();
+        wait_status(&store, &id, RunStatus::Cancelled, 5).await;
+    }
+}
+
+struct PanicEngine;
+
+#[async_trait::async_trait]
+impl Engine for PanicEngine {
+    async fn start(
+        &self,
+        _ctx: dots_core::engine::RunContext,
+    ) -> dots_core::Result<tokio::sync::mpsc::Receiver<EngineEvent>> {
+        panic!("engine exploded");
+    }
+}
+
+#[tokio::test]
+async fn panicking_engine_fails_the_run_and_frees_the_slot() {
+    let (dir, store) = temp_store().await;
+    let bus = new_bus();
+    let runner = runner_with(&store, &bus, &dir, Arc::new(PanicEngine), 1);
+    runner.spawn_dispatcher(CancellationToken::new());
+    let a = folder_dot(&store, &dir, "a").await;
+    let b = folder_dot(&store, &dir, "b").await;
+    let first = manual(&runner, &a).await;
+    let second = manual(&runner, &b).await;
+    for id in [first, second] {
+        let run = wait_status(&store, &id, RunStatus::Failed, 5).await;
+        assert_eq!(
+            run.error.as_deref(),
+            Some("internal error: engine task panicked")
+        );
+    }
+    assert!(!runner.is_active("anything"));
 }

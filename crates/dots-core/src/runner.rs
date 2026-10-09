@@ -116,39 +116,93 @@ impl Runner {
         })
     }
 
+    /// Whether the runner still holds `run_id` (claimed, executing, or finishing up).
+    #[doc(hidden)]
+    pub fn is_active(&self, run_id: &str) -> bool {
+        self.active.lock().unwrap().contains_key(run_id)
+    }
+
     pub async fn dispatch_once(self: &Arc<Self>) -> Result<usize> {
         let mut started = 0;
         for run in self.store.dispatchable_runs().await? {
+            // Register as active before claiming, so a run is never `running` in the store
+            // without a cancellation handle: a cancel in between is recorded on the token
+            // and honoured by `execute` before anything starts.
+            let cancel = CancellationToken::new();
+            let by_user = Arc::new(AtomicBool::new(false));
             {
-                let active = self.active.lock().unwrap();
+                let mut active = self.active.lock().unwrap();
                 if active.len() >= self.cfg.max_concurrent {
                     break;
                 }
-                if active.values().any(|a| a.dot_id == run.dot_id) {
+                if active.contains_key(&run.id) || active.values().any(|a| a.dot_id == run.dot_id)
+                {
                     continue;
                 }
+                active.insert(
+                    run.id.clone(),
+                    Active {
+                        dot_id: run.dot_id.clone(),
+                        cancel: cancel.clone(),
+                        cancelled_by_user: by_user.clone(),
+                    },
+                );
             }
-            if !self.store.claim_run(&run.id).await? {
-                continue;
+            match self.store.claim_run(&run.id).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    self.active.lock().unwrap().remove(&run.id);
+                    continue;
+                }
+                Err(e) => {
+                    self.active.lock().unwrap().remove(&run.id);
+                    return Err(e);
+                }
             }
-            let cancel = CancellationToken::new();
-            let by_user = Arc::new(AtomicBool::new(false));
-            self.active.lock().unwrap().insert(
-                run.id.clone(),
-                Active {
-                    dot_id: run.dot_id.clone(),
-                    cancel: cancel.clone(),
-                    cancelled_by_user: by_user.clone(),
-                },
-            );
             // Nothing fallible may sit between claiming and handing off: failures
             // after this point go through `execute`'s error path, which frees the slot.
-            let this = self.clone();
+            // A panic skips that path, so a watcher task cleans up instead.
             let run_id = run.id.clone();
-            tokio::spawn(async move { this.execute(run_id, cancel, by_user).await });
+            let inner = tokio::spawn(self.clone().execute(
+                run_id.clone(),
+                cancel.clone(),
+                by_user,
+            ));
+            let this = self.clone();
+            tokio::spawn(async move {
+                if let Err(e) = inner.await {
+                    if e.is_panic() {
+                        this.recover_panicked(&run_id, &cancel).await;
+                    }
+                }
+            });
             started += 1;
         }
         Ok(started)
+    }
+
+    /// Cleans up after an `execute` task that panicked: frees the slot and secrets, fails
+    /// the run if it was still running, and expires its pending approvals.
+    async fn recover_panicked(&self, run_id: &str, cancel: &CancellationToken) {
+        tracing::error!(run = %run_id, "engine task panicked");
+        cancel.cancel();
+        self.active.lock().unwrap().remove(run_id);
+        self.secrets.lock().unwrap().retain(|_, r| r != run_id);
+        match self
+            .store
+            .fail_if_running(run_id, "internal error: engine task panicked")
+            .await
+        {
+            Ok(Some(run)) => {
+                if let Err(e) = self.store.expire_pending_for_run(run_id).await {
+                    tracing::warn!(run = %run_id, "expiring approvals failed: {e}");
+                }
+                self.emit_run(&run);
+            }
+            Ok(None) => {}
+            Err(e) => tracing::error!(run = %run_id, "failing panicked run failed: {e}"),
+        }
+        self.wake.notify_one();
     }
 
     async fn execute(
@@ -179,10 +233,25 @@ impl Runner {
                 self.emit_run(&r);
             }
         }
-        self.active.lock().unwrap().remove(&run_id);
         self.secrets.lock().unwrap().retain(|_, r| r != &run_id);
+        // A cancel that arrived after the final status was computed (the run parked) is
+        // applied now, before the resume check could act on the parked decisions.
+        self.apply_late_cancel(&run_id, &by_user).await;
         self.after_finish(&run_id).await;
+        // Released only after the resume check, so `is_active` going false means the
+        // runner is completely done with the run.
+        self.active.lock().unwrap().remove(&run_id);
+        self.apply_late_cancel(&run_id, &by_user).await;
         self.wake.notify_one();
+    }
+
+    async fn apply_late_cancel(&self, run_id: &str, by_user: &AtomicBool) {
+        if !by_user.load(Ordering::SeqCst) {
+            return;
+        }
+        if let Err(e) = self.cancel_inactive(run_id).await {
+            tracing::warn!(run = %run_id, "late cancel failed: {e}");
+        }
     }
 
     async fn after_finish(&self, run_id: &str) {
@@ -257,12 +326,34 @@ impl Runner {
             Err(Error::Conflict(_)) => return Ok(None),
             Err(e) => return Err(e),
         };
-        if let Some(c) = &child {
-            self.emit_run(c);
-            self.wake.notify_one();
+        match &child {
+            Some(c) => {
+                self.emit_run(c);
+                self.wake.notify_one();
+            }
+            // Closed without a follow-up: nothing will use the workspace again.
+            None => self.cleanup_workspace(&run).await,
         }
         self.emit_run(&self.store.get_run(run_id).await?);
         Ok(child)
+    }
+
+    /// Removes the run's worktree if it is unchanged; errors are logged, never returned.
+    async fn cleanup_workspace(&self, run: &Run) {
+        let Some(prepared) = Prepared::from_run(run) else {
+            return;
+        };
+        let result = match self.store.get_dot(&run.dot_id).await {
+            Ok(dot) => self
+                .workspaces
+                .cleanup_if_unchanged(&dot, &prepared)
+                .await
+                .map(|_| ()),
+            Err(e) => Err(e),
+        };
+        if let Err(e) = result {
+            tracing::warn!(run = %run.id, "workspace cleanup failed: {e}");
+        }
     }
 
     async fn record(&self, run_id: &str, ev: &EngineEvent) -> Result<()> {
@@ -294,6 +385,10 @@ impl Runner {
         cancel: CancellationToken,
         by_user: &AtomicBool,
     ) -> Result<()> {
+        // Cancelled between claim and start: never prepare a workspace or start an engine.
+        if cancel.is_cancelled() || by_user.load(Ordering::SeqCst) {
+            return self.finish_cancelled_before_start(&run.id).await;
+        }
         let dot = self.store.get_dot(&run.dot_id).await?;
         // Resolve the engine first so a missing one never creates a workspace.
         let engine = self
@@ -321,6 +416,12 @@ impl Runner {
                 p
             }
         };
+        if cancel.is_cancelled() {
+            if let Err(e) = self.workspaces.cleanup_if_unchanged(&dot, &prepared).await {
+                tracing::warn!(run = %run.id, "workspace cleanup failed: {e}");
+            }
+            return self.finish_cancelled_before_start(&run.id).await;
+        }
         let secret = self.register_secret(&run.id);
         let ctx = RunContext {
             run_id: run.id.clone(),
@@ -411,44 +512,84 @@ impl Runner {
     }
 
     pub async fn cancel(&self, run_id: &str) -> Result<Run> {
-        let signalled = {
-            let active = self.active.lock().unwrap();
-            match active.get(run_id) {
-                Some(a) => {
-                    a.cancelled_by_user.store(true, Ordering::SeqCst);
-                    a.cancel.cancel();
-                    true
+        // A run only moves forward (queued -> held and running -> released and parked or
+        // finished), and it is held before it is claimed, so retrying the two checks
+        // catches every transition that lands between them.
+        for _ in 0..3 {
+            if self.signal_cancel(run_id) {
+                // Still held by the runner. If it parked, `execute` applies the cancel once
+                // it lets go; if it already finished, there is nothing left to cancel.
+                let run = self.store.get_run(run_id).await?;
+                if run.status.is_terminal() {
+                    return Err(already(&run));
                 }
-                None => false,
+                return Ok(run);
             }
-        };
-        if signalled {
-            return self.store.get_run(run_id).await;
+            if let Some(r) = self.cancel_inactive(run_id).await? {
+                return Ok(r);
+            }
+            let run = self.store.get_run(run_id).await?;
+            if run.status.is_terminal() {
+                return Err(already(&run));
+            }
         }
+        Err(already(&self.store.get_run(run_id).await?))
+    }
+
+    /// Flags a held run as cancelled by the user; false if the runner does not hold it.
+    fn signal_cancel(&self, run_id: &str) -> bool {
+        let active = self.active.lock().unwrap();
+        match active.get(run_id) {
+            Some(a) => {
+                a.cancelled_by_user.store(true, Ordering::SeqCst);
+                a.cancel.cancel();
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Cancels a `queued` or `awaiting_approval` run that the runner does not hold, expiring
+    /// its pending approvals and removing an unchanged worktree of a parked run.
+    async fn cancel_inactive(&self, run_id: &str) -> Result<Option<Run>> {
         // Serialised with `maybe_resume` so a cancel never interleaves with a resume.
-        let cancelled = {
+        let (prior, cancelled) = {
             let _guard = self.resume_lock.lock().await;
+            let prior = self.store.get_run(run_id).await?;
             let cancelled = self.store.cancel_if_inactive(run_id).await?;
             if cancelled.is_some() {
                 if let Err(e) = self.store.expire_pending_for_run(run_id).await {
                     tracing::warn!(run = %run_id, "expiring approvals failed: {e}");
                 }
             }
-            cancelled
+            (prior, cancelled)
         };
-        if let Some(r) = cancelled {
-            self.emit_run(&r);
-            return Ok(r);
+        let Some(run) = cancelled else {
+            return Ok(None);
+        };
+        self.emit_run(&run);
+        if prior.status == RunStatus::AwaitingApproval {
+            self.cleanup_workspace(&run).await;
         }
-        let run = self.store.get_run(run_id).await?;
-        match run.status {
-            RunStatus::Running => Err(Error::Conflict(format!(
-                "run {run_id} is starting; try again"
-            ))),
-            other => Err(Error::Conflict(format!(
-                "run {run_id} is already {}",
-                other.as_str()
-            ))),
-        }
+        Ok(Some(run))
     }
+
+    /// Finishes a run that was cancelled before its engine started.
+    async fn finish_cancelled_before_start(&self, run_id: &str) -> Result<()> {
+        self.store.expire_pending_for_run(run_id).await?;
+        let run = self
+            .store
+            .finish_run(run_id, RunStatus::Cancelled, None, None)
+            .await?;
+        self.emit_run(&run);
+        Ok(())
+    }
+}
+
+fn already(run: &Run) -> Error {
+    Error::Conflict(format!(
+        "run {} is already {}",
+        run.id,
+        run.status.as_str()
+    ))
 }

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use common::{spec, temp_store, wait_status};
+use common::{init_repo, spec, temp_store, wait_status};
 use dots_core::approvals::{ApprovalHub, DecideEffect};
 use dots_core::engine::scripted::{ScriptedEngine, Step};
 use dots_core::engine::{Engine, EngineEvent};
@@ -73,11 +73,16 @@ async fn decide(e: &Env, id: &str, approved: bool, note: Option<&str>) -> Option
     }
 }
 
-/// Waits until the run is parked, then lets the runner's own post-finish resume check
-/// run, so a decision made by the test is always the one that triggers the resume.
+/// Waits until the run is parked and the runner has fully released it (its own post-finish
+/// resume check has run), so a decision made by the test is always the one that triggers
+/// the resume.
 async fn parked(e: &Env, run_id: &str) {
     wait_status(&e.store, run_id, RunStatus::AwaitingApproval, 5).await;
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while e.runner.is_active(run_id) {
+        assert!(std::time::Instant::now() < deadline, "run {run_id} never released");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
 }
 
 fn ask(cmd: &str) -> Step {
@@ -368,4 +373,62 @@ async fn resume_parked_on_non_awaiting_parent_conflicts_and_changes_nothing() {
         store.get_run(&parent.id).await.unwrap().status,
         RunStatus::Queued
     );
+}
+
+// ---- final review: M3 ----
+
+async fn worktree_parking_dot(e: &Env) -> Dot {
+    let repo = e.dir.path().join("repo");
+    init_repo(&repo);
+    let mut s = spec("wt-resumer");
+    s.workdir = repo.to_string_lossy().to_string();
+    s.workspace_mode = WorkspaceMode::Worktree;
+    s.approval_wait_secs = 0;
+    e.store.create_dot(&s).await.unwrap()
+}
+
+async fn parked_worktree_run(e: &Env) -> (Run, String) {
+    let dot = worktree_parking_dot(e).await;
+    let parent = e
+        .runner
+        .enqueue(NewRun::new(&dot.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    parked(e, &parent.id).await;
+    let parent = e.store.get_run(&parent.id).await.unwrap();
+    let path = parent.workspace_path.clone().expect("worktree path");
+    assert!(
+        std::path::Path::new(&path).is_dir(),
+        "worktree kept while awaiting"
+    );
+    (parent, path)
+}
+
+#[tokio::test]
+async fn plain_deny_close_removes_an_unchanged_worktree() {
+    let e = env(vec![ask("git push"), finished()]).await;
+    let (parent, path) = parked_worktree_run(&e).await;
+    let approval = e
+        .store
+        .approvals_for_run(&parent.id)
+        .await
+        .unwrap()
+        .remove(0);
+    assert!(decide(&e, &approval.id, false, None).await.is_none());
+    assert_eq!(
+        e.store.get_run(&parent.id).await.unwrap().status,
+        RunStatus::Succeeded
+    );
+    assert!(!std::path::Path::new(&path).exists(), "worktree left behind");
+}
+
+#[tokio::test]
+async fn cancel_of_awaiting_run_removes_an_unchanged_worktree() {
+    let e = env(vec![ask("git push"), finished()]).await;
+    let (parent, path) = parked_worktree_run(&e).await;
+    assert_eq!(
+        e.runner.cancel(&parent.id).await.unwrap().status,
+        RunStatus::Cancelled
+    );
+    assert!(!std::path::Path::new(&path).exists(), "worktree left behind");
 }

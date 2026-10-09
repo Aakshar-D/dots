@@ -262,6 +262,23 @@ impl Store {
         self.get_run(id).await
     }
 
+    /// Marks a run `failed` with `error` only if it is still `running`; `None` otherwise.
+    pub async fn fail_if_running(&self, id: &str, error: &str) -> Result<Option<Run>> {
+        let res = sqlx::query(
+            "UPDATE runs SET status = 'failed', error = ?, ended_at = ? \
+             WHERE id = ? AND status = 'running'",
+        )
+        .bind(error)
+        .bind(now())
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        if res.rows_affected() == 0 {
+            return Ok(None);
+        }
+        Ok(Some(self.get_run(id).await?))
+    }
+
     /// Atomically cancels a run that is `queued` or `awaiting_approval`.
     /// Returns `None` when the run is in any other state (nothing changed).
     pub async fn cancel_if_inactive(&self, id: &str) -> Result<Option<Run>> {
