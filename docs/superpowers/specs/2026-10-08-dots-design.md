@@ -115,8 +115,10 @@ Stored at `%LOCALAPPDATA%\dots\dots.db`. Worktrees at `%LOCALAPPDATA%\dots\workt
 - `webhook_token` TEXT (random 32 bytes, base64url)
 - `policy` TEXT (JSON, see §5), `mcp_servers` TEXT NULL (JSON, Claude only)
 - `use_user_settings` INTEGER (0/1, default 0)
-- `max_turns` INTEGER (default 40), `timeout_secs` INTEGER (default 1800),
-  `approval_wait_secs` INTEGER (default 240)
+- `max_turns` INTEGER (default 40), `timeout_secs` INTEGER (default 1800, max 604800),
+  `approval_wait_secs` INTEGER (default 240, max 280)
+- `workdir` and `workspace_mode` cannot change while the dot has queued, running or
+  awaiting runs (conflict).
 - `enabled` INTEGER, `created_at`, `updated_at`
 
 **runs**
@@ -172,13 +174,18 @@ A resume creates a child run linked by `parent_run_id` and reuses the parent's w
    - `folder`: use `workdir` directly.
    - `workdir` must exist; `worktree` mode additionally requires a git repo. Otherwise the run
      fails with a clear error.
+   - A resume or chat follow-up reuses its parent's workspace. If that worktree was removed
+     (unchanged) after the parent finished, it is recreated at the same path (the resumed
+     session remembers that directory): the branch is reused if it still exists, otherwise
+     recreated from the stored base commit.
 4. **Prompt.** Dot `instructions` + a trigger block (trigger kind, payload JSON, local time) +
    standing rules: work only inside the workspace; when done, end with a summary listing what
    changed and what needs human review.
 5. **Execute.** Engine events are appended to `run_events` and broadcast to the UI.
 6. **Finish.** Final assistant text becomes `summary`. Notifier fires on `failed`,
    `awaiting_approval`, and `succeeded`. A worktree with no commits and no uncommitted changes is
-   removed (`git worktree remove`, branch deleted); otherwise it is kept for review.
+   removed (`git worktree remove`, branch deleted); otherwise it is kept for review. The same
+   cleanup runs when a parked run is closed by a plain deny or cancelled.
 7. **Review actions** (UI): view diff, open folder, discard worktree (remove + delete branch).
    Merging and pushing are the user's job in v1.
 
@@ -187,8 +194,14 @@ A resume creates a child run linked by `parent_run_id` and reuses the parent's w
 - Each run's child process tree is assigned to a Windows Job Object with
   `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`; cancel/timeout closes the job, killing `claude`/`node`
   descendants and any shell commands.
-- On app start, runs left `running` become `failed` with error `interrupted`. `awaiting_approval`
-  runs stay resumable; their pending approvals resume on decision.
+- On app start, runs left `running` become `failed` with error `interrupted` and their pending
+  approvals are expired in the same transaction. `awaiting_approval` runs stay resumable; their
+  pending approvals resume on decision, and awaiting runs whose decisions were parked before
+  the restart are resumed during start.
+- A run is registered with the runner before it is claimed, so a cancel always reaches it; a
+  cancel that lands before the engine starts finishes the run `cancelled` without starting it.
+- A decision is written together with its `parked` flag; `Live` is reported only when the
+  waiting engine actually received it, otherwise the run is resumed (never lost).
 - On app start, `claude --version` is compared to `tested_claude_version`; a mismatch shows a
   non-blocking warning banner.
 
