@@ -8,7 +8,7 @@ use std::time::Duration;
 use std::os::unix::fs::OpenOptionsExt as _;
 
 use async_trait::async_trait;
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::mpsc;
 
@@ -39,24 +39,6 @@ impl ClaudeEngine {
         self.env.push((key.to_string(), value.to_string()));
         self
     }
-}
-
-async fn read_tail(mut r: impl AsyncRead + Unpin, max: usize) -> String {
-    let mut buf: Vec<u8> = Vec::new();
-    let mut chunk = [0u8; 4096];
-    loop {
-        match r.read(&mut chunk).await {
-            Ok(0) | Err(_) => break,
-            Ok(n) => {
-                buf.extend_from_slice(&chunk[..n]);
-                if buf.len() > max {
-                    let excess = buf.len() - max;
-                    buf.drain(..excess);
-                }
-            }
-        }
-    }
-    String::from_utf8_lossy(&buf).to_string()
 }
 
 /// Writes a file readable only by the owner on unix (it holds a bearer secret).
@@ -140,7 +122,7 @@ impl Engine for ClaudeEngine {
                     }
                 }
             });
-            let mut stderr_task = tokio::spawn(read_tail(stderr, STDERR_TAIL));
+            let mut stderr_task = tokio::spawn(crate::proc::read_tail(stderr, STDERR_TAIL));
 
             let prompt = ctx.prompt.clone();
             let run_id = ctx.run_id.clone();

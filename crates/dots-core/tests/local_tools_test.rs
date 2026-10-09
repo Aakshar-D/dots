@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use dots_core::engine::local::tools::{self, ToolOutput, MAX_OUTPUT};
 use serde_json::{json, Value};
@@ -313,4 +314,60 @@ async fn grep_reports_path_line_and_text() {
         run(p, "grep", json!({"pattern": "nothing-here"})).await,
         ToolOutput::ok("no matches for nothing-here")
     );
+}
+
+#[cfg(windows)]
+mod cmds {
+    pub const ECHO: &str = "Write-Output 'hi there'";
+    pub const FAIL: &str = "cmd /c exit 3";
+    pub const SLEEP: &str = "Start-Sleep -Seconds 30";
+    pub const BIG: &str = "'x' * 100000";
+}
+#[cfg(not(windows))]
+mod cmds {
+    pub const ECHO: &str = "echo 'hi there'";
+    pub const FAIL: &str = "exit 3";
+    pub const SLEEP: &str = "sleep 30";
+    pub const BIG: &str = "head -c 100000 /dev/zero | tr '\\0' x";
+}
+
+#[tokio::test]
+async fn shell_runs_in_the_workspace_and_reports_exit_codes() {
+    let ws = workspace();
+    let p = ws.path();
+    let out = run(p, "shell", json!({"command": cmds::ECHO})).await;
+    assert_eq!(out.output.trim(), "hi there");
+    assert!(!out.is_error);
+    let out = run(p, "shell", json!({"command": cmds::FAIL})).await;
+    assert!(
+        out.is_error && out.output.starts_with("exit code 3"),
+        "{out:?}"
+    );
+    let out = run(p, "shell", json!({"command": cmds::BIG})).await;
+    assert!(out.output.len() < MAX_OUTPUT + 100 && out.output.starts_with("[truncated"));
+}
+
+#[tokio::test]
+async fn shell_stops_at_its_timeout_and_on_cancel() {
+    let ws = workspace();
+    let p = ws.path();
+    let started = Instant::now();
+    let out = run(p, "shell", json!({"command": cmds::SLEEP, "timeout": 1})).await;
+    assert!(
+        out.is_error && out.output.contains("timed out after 1s"),
+        "{out:?}"
+    );
+    assert!(started.elapsed() < Duration::from_secs(15));
+
+    let call = tools::prepare("shell", &json!({"command": cmds::SLEEP}), p).unwrap();
+    let cancel = CancellationToken::new();
+    let c = cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        c.cancel();
+    });
+    let started = Instant::now();
+    let out = tools::run(&call, p, &cancel).await;
+    assert_eq!(out, ToolOutput::err("cancelled"));
+    assert!(started.elapsed() < Duration::from_secs(15));
 }

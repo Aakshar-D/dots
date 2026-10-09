@@ -8,6 +8,7 @@ use tokio_util::sync::CancellationToken;
 
 mod fs;
 mod search;
+mod shell;
 
 /// Tool output sent back to the model is capped at this many bytes.
 pub const MAX_OUTPUT: usize = 30 * 1024;
@@ -139,6 +140,7 @@ pub async fn run(call: &PreparedCall, workspace: &Path, cancel: &CancellationTok
         "list_dir" => fs::list_dir(&root, input).await,
         "glob" => search::glob(&root, input).await,
         "grep" => search::grep(&root, input).await,
+        "shell" => shell::shell(&root, input, cancel).await,
         other => ToolOutput::err(format!("unknown tool '{other}'")),
     }
 }
