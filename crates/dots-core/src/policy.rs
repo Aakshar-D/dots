@@ -71,12 +71,17 @@ impl Policy {
                 rules.extend(READ_TOOLS.iter().map(|t| Rule::new(t, Action::Allow)));
                 rules.push(Rule::new("Write(./**)", Action::Allow));
                 rules.push(Rule::new("Edit(./**)", Action::Allow));
-                for git in ["status", "diff", "add", "commit"] {
+                // No `git commit`: commit hooks run arbitrary code, so commits ask.
+                for git in ["status", "diff", "add"] {
                     rules.push(Rule::new(&format!("Bash(git {git}:*)"), Action::Allow));
                 }
-                for tool in ["Write", "Edit"] {
-                    rules.push(Rule::new(&format!("{tool}(**/.git/**)"), Action::Deny));
-                    rules.push(Rule::new(&format!("{tool}(**/.git)"), Action::Deny));
+                // `.git` holds hooks and config; `.claude` holds settings and hooks the CLI
+                // would load on a later run. Both execute code, so neither is writable.
+                for dir in [".git", ".claude"] {
+                    for tool in ["Write", "Edit"] {
+                        rules.push(Rule::new(&format!("{tool}(**/{dir}/**)"), Action::Deny));
+                        rules.push(Rule::new(&format!("{tool}(**/{dir})"), Action::Deny));
+                    }
                 }
                 Action::Ask
             }

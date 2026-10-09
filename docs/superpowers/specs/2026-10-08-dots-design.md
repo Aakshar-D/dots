@@ -218,8 +218,11 @@ A resume creates a child run linked by `parent_run_id` and reuses the parent's w
 - Presets:
   - `read-only`: allow Read/LS/Glob/Grep; deny Write/Edit/Bash; default deny.
   - `sandboxed` (default): allow Read/LS/Glob/Grep, `Write(./**)`, `Edit(./**)`,
-    `Bash(git status:*)`, `Bash(git diff:*)`, `Bash(git add:*)`, `Bash(git commit:*)`; deny
-    `Write(**/.git/**)`, `Edit(**/.git/**)`, `Write(**/.git)`, `Edit(**/.git)`; default ask.
+    `Bash(git status:*)`, `Bash(git diff:*)`, `Bash(git add:*)`; deny
+    `Write(**/.git/**)`, `Edit(**/.git/**)`, `Write(**/.git)`, `Edit(**/.git)`,
+    `Write(**/.claude/**)`, `Edit(**/.claude/**)`, `Write(**/.claude)`, `Edit(**/.claude)`;
+    default ask. `git commit` is not allowed (it falls to ask) because commit hooks execute
+    arbitrary code; `.claude` is denied because the CLI loads settings and hooks from it.
     Resolution is workspace-aware (`resolve_in`): `./` patterns anchor to the run workspace.
     Deny/ask command matching is best-effort; allow matching is strict.
   - `trusted`: allow all; ask for `Bash(git push:*)` and `mcp__*`; default allow.

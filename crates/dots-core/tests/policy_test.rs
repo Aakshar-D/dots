@@ -549,3 +549,37 @@ fn quote_splicing_does_not_evade_ask() {
     assert_eq!(p.resolve("Bash", &bash("g''it push")), Action::Ask);
     assert_eq!(p.resolve("Bash", &bash("\"g\"it push")), Action::Ask);
 }
+
+// ---- final review: C1 ----
+
+#[test]
+fn sandboxed_denies_claude_config_writes_and_asks_for_commits() {
+    for preset in [Preset::Sandboxed, Preset::Custom] {
+        let p = Policy::preset(preset);
+        let ws = Some(std::path::Path::new("C:/ws/run1"));
+        let file = |tool: &str, path: &str| p.resolve_in(tool, &json!({ "file_path": path }), ws);
+        assert_eq!(
+            file("Write", "C:/ws/run1/.claude/settings.json"),
+            Action::Deny
+        );
+        assert_eq!(file("Edit", ".Claude/settings.local.json"), Action::Deny);
+        assert_eq!(file("Write", ".claude"), Action::Deny);
+        assert_eq!(file("Edit", "sub/.claude/hooks.json"), Action::Deny);
+        assert_eq!(file("Write", "src/claude.rs"), Action::Allow);
+        assert_eq!(
+            p.resolve_in("Bash", &bash("git commit -m x"), ws),
+            Action::Ask
+        );
+        assert_eq!(p.resolve_in("Bash", &bash("git add ."), ws), Action::Allow);
+        let (allow, deny) = p.cli_lists();
+        assert!(!allow.iter().any(|r| r.contains("git commit")), "{allow:?}");
+        for r in [
+            "Write(**/.claude/**)",
+            "Edit(**/.claude/**)",
+            "Write(**/.claude)",
+            "Edit(**/.claude)",
+        ] {
+            assert!(deny.contains(&r.to_string()), "{deny:?}");
+        }
+    }
+}
