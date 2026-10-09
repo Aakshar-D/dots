@@ -97,13 +97,16 @@ impl Store {
         rows.iter().map(dot_from_row).collect()
     }
 
+    /// Updates a dot. `workdir`/`workspace_mode` may only change while the dot has no
+    /// queued, running or awaiting runs (their workspaces were derived from the old values);
+    /// otherwise nothing changes and `Error::Conflict` is returned. The check is atomic.
     pub async fn update_dot(&self, id: &str, spec: &DotSpec) -> Result<Dot> {
         spec.validate()?;
         let res = sqlx::query(
             "UPDATE dots SET name = ?, instructions = ?, engine = ?, model = ?, endpoint_url = ?, \
              workdir = ?, workspace_mode = ?, schedule = ?, policy = ?, mcp_servers = ?, \
              use_user_settings = ?, max_turns = ?, timeout_secs = ?, approval_wait_secs = ?, \
-             enabled = ?, updated_at = ? WHERE id = ?",
+             enabled = ?, updated_at = ? WHERE id = ?              AND ((workdir = ? AND workspace_mode = ?) OR NOT EXISTS (SELECT 1 FROM runs              WHERE dot_id = ? AND status IN ('queued','running','awaiting_approval')))",
         )
         .bind(&spec.name)
         .bind(&spec.instructions)
@@ -122,11 +125,18 @@ impl Store {
         .bind(spec.enabled as i64)
         .bind(now())
         .bind(id)
+        .bind(&spec.workdir)
+        .bind(spec.workspace_mode.as_str())
+        .bind(id)
         .execute(&self.pool)
         .await
         .map_err(|e| map_unique(e, &spec.name))?;
         if res.rows_affected() == 0 {
-            return Err(Error::NotFound(format!("dot {id}")));
+            self.get_dot(id).await?;
+            return Err(Error::Conflict(
+                "workdir and workspace_mode cannot change while the dot has queued, running or                  awaiting runs"
+                    .into(),
+            ));
         }
         self.get_dot(id).await
     }

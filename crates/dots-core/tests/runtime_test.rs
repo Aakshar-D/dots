@@ -243,3 +243,38 @@ async fn chat_follow_up_requires_finished_parent_with_session() {
     assert!(matches!(res, Err(Error::Conflict(_))), "{res:?}");
     t.rt.shutdown();
 }
+
+#[tokio::test]
+async fn update_dot_workspace_change_conflicts_while_runs_are_active() {
+    let t = start(None, None).await;
+    let dot = t.rt.create_dot(folder_spec(&t.dir, "moving")).await.unwrap();
+    let store = t.rt.store();
+    let run = store
+        .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    store.claim_run(&run.id).await.unwrap();
+    store
+        .finish_run(&run.id, RunStatus::AwaitingApproval, None, None)
+        .await
+        .unwrap();
+
+    let mut moved = dot.spec.clone();
+    moved.workdir = t.dir.path().join("elsewhere").to_string_lossy().to_string();
+    let res = t.rt.update_dot(&dot.id, moved.clone()).await;
+    assert!(matches!(res, Err(Error::Conflict(_))), "{res:?}");
+    let mut remoded = dot.spec.clone();
+    remoded.workspace_mode = WorkspaceMode::Worktree;
+    let res = t.rt.update_dot(&dot.id, remoded).await;
+    assert!(matches!(res, Err(Error::Conflict(_))), "{res:?}");
+    assert_eq!(store.get_dot(&dot.id).await.unwrap().spec, dot.spec);
+
+    // Other fields stay editable.
+    let mut tweaked = dot.spec.clone();
+    tweaked.model = "haiku".into();
+    t.rt.update_dot(&dot.id, tweaked).await.unwrap();
+
+    t.rt.cancel_run(&run.id).await.unwrap();
+    t.rt.update_dot(&dot.id, moved).await.unwrap();
+    t.rt.shutdown();
+}
