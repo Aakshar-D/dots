@@ -1,3 +1,5 @@
+use tokio::io::{AsyncRead, AsyncReadExt};
+
 /// Windows `CREATE_NO_WINDOW` process creation flag.
 #[cfg(windows)]
 pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -32,4 +34,23 @@ pub async fn kill_tree(pid: u32) {
             .status()
             .await;
     }
+}
+
+/// Reads `r` to the end and returns its last `max` bytes, lossily decoded as UTF-8.
+pub async fn read_tail(mut r: impl AsyncRead + Unpin, max: usize) -> String {
+    let mut buf: Vec<u8> = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        match r.read(&mut chunk).await {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                buf.extend_from_slice(&chunk[..n]);
+                if buf.len() > max {
+                    let excess = buf.len() - max;
+                    buf.drain(..excess);
+                }
+            }
+        }
+    }
+    String::from_utf8_lossy(&buf).to_string()
 }

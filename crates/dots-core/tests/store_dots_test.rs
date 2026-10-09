@@ -43,9 +43,17 @@ async fn invalid_specs_are_rejected() {
     reserved_mcp.mcp_servers = Some(json!({"dots": {}}));
     let mut zero_turns = spec("zero");
     zero_turns.max_turns = 0;
+    let mut local_https = spec("https");
+    local_https.engine = EngineKind::Local;
+    local_https.endpoint_url = Some("https://example.com".into());
+    let mut local_no_host = spec("nohost");
+    local_no_host.engine = EngineKind::Local;
+    local_no_host.endpoint_url = Some("http:///v1".into());
     for s in [
         bad_name,
         local_no_endpoint,
+        local_https,
+        local_no_host,
         five_field_cron,
         reserved_mcp,
         zero_turns,

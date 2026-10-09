@@ -34,6 +34,20 @@ impl RunStatus {
     }
 }
 
+/// Local-engine endpoints are plain `http://` URLs (a local server); https is not supported.
+pub fn check_endpoint_url(url: &str) -> Result<()> {
+    let url = url.trim();
+    let rest = url.strip_prefix("http://").ok_or_else(|| {
+        Error::Invalid(format!(
+            "endpoint_url must start with http:// (https is not supported): {url}"
+        ))
+    })?;
+    if rest.is_empty() || rest.starts_with('/') {
+        return Err(Error::Invalid(format!("endpoint_url has no host: {url}")));
+    }
+    Ok(())
+}
+
 pub const MAX_TIMEOUT_SECS: u64 = 7 * 24 * 60 * 60;
 pub const MAX_APPROVAL_WAIT_SECS: u64 = 280;
 
@@ -99,13 +113,11 @@ impl DotSpec {
         if self.workdir.trim().is_empty() {
             return invalid("workdir must not be empty");
         }
-        if self.engine == EngineKind::Local
-            && self
-                .endpoint_url
-                .as_deref()
-                .is_none_or(|u| u.trim().is_empty())
-        {
-            return invalid("the local engine requires endpoint_url");
+        if self.engine == EngineKind::Local {
+            match self.endpoint_url.as_deref() {
+                Some(url) if !url.trim().is_empty() => check_endpoint_url(url)?,
+                _ => return invalid("the local engine requires endpoint_url"),
+            }
         }
         if let Some(expr) = &self.schedule {
             crate::scheduler::parse_cron(expr)?;
