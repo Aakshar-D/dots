@@ -106,7 +106,7 @@ async fn happy_path_streams_events_and_passes_prompt_on_stdin() {
         None,
     )
     .await;
-    let dot = folder_dot(&e, 600).await;
+    let dot = folder_dot(&e, 280).await;
     let run = e
         .runner
         .enqueue(NewRun::new(&dot.id, TriggerKind::Manual))
@@ -133,7 +133,7 @@ async fn happy_path_streams_events_and_passes_prompt_on_stdin() {
         .windows(2)
         .any(|w| w == ["--setting-sources", ""]));
     assert!(!args.iter().any(|a| a.contains("Do the thing")));
-    assert_eq!(rec["mcp_tool_timeout"], "630000");
+    assert_eq!(rec["mcp_tool_timeout"], "310000");
     assert_eq!(PathBuf::from(rec["cwd"].as_str().unwrap()), e.dir.path());
     assert!(
         std::fs::read_dir(&e.scratch).unwrap().next().is_none(),
@@ -238,7 +238,7 @@ async fn parked_approval_resumes_with_the_same_session() {
 #[tokio::test]
 async fn nonzero_exit_without_result_reports_stderr() {
     let e = e2e(json!([{"stderr": "not logged in"}, {"exit": 3}]), None).await;
-    let dot = folder_dot(&e, 600).await;
+    let dot = folder_dot(&e, 280).await;
     let run = e
         .runner
         .enqueue(NewRun::new(&dot.id, TriggerKind::Manual))
@@ -253,7 +253,7 @@ async fn nonzero_exit_without_result_reports_stderr() {
 #[tokio::test]
 async fn cancel_kills_the_process() {
     let e = e2e(json!([init(), {"sleep_ms": 60000}, success("never")]), None).await;
-    let dot = folder_dot(&e, 600).await;
+    let dot = folder_dot(&e, 280).await;
     let run = e
         .runner
         .enqueue(NewRun::new(&dot.id, TriggerKind::Manual))
@@ -310,7 +310,7 @@ async fn missing_program_fails_the_run() {
         Some(PathBuf::from("Z:/definitely/not/claude.exe")),
     )
     .await;
-    let dot = folder_dot(&e, 600).await;
+    let dot = folder_dot(&e, 280).await;
     let run = e
         .runner
         .enqueue(NewRun::new(&dot.id, TriggerKind::Manual))
