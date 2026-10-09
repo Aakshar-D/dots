@@ -267,3 +267,62 @@ async fn aborted_check_removes_its_waiter() {
     tokio::time::sleep(Duration::from_millis(50)).await;
     assert_eq!(hub.waiter_count(), 0);
 }
+
+// ---- final review: I2 ----
+
+#[tokio::test]
+async fn decide_with_parked_writes_decision_and_flag_in_one_update() {
+    let (_d, store, _hub, run, _bus) = setup(Preset::Sandboxed, 0).await;
+    let a = store
+        .create_approval(&run.id, "Bash", &json!({"command": "git push"}))
+        .await
+        .unwrap();
+    let decided = store
+        .decide_approval_with_parked(&a.id, true, Some("ok"), true)
+        .await
+        .unwrap();
+    assert_eq!(decided.status, ApprovalStatus::Approved);
+    assert_eq!(decided.note.as_deref(), Some("ok"));
+    assert!(decided.decided_at.is_some());
+    assert!(decided.parked);
+    let again = store
+        .decide_approval_with_parked(&a.id, false, None, false)
+        .await;
+    assert!(matches!(again, Err(Error::Conflict(_))), "{again:?}");
+    let stored = store.get_approval(&a.id).await.unwrap();
+    assert_eq!(stored.status, ApprovalStatus::Approved);
+    assert!(stored.parked);
+
+    let b = store
+        .create_approval(&run.id, "Bash", &json!({"command": "git push -f"}))
+        .await
+        .unwrap();
+    let live = store
+        .decide_approval_with_parked(&b.id, false, None, false)
+        .await
+        .unwrap();
+    assert_eq!(live.status, ApprovalStatus::Denied);
+    assert!(!live.parked);
+}
+
+#[tokio::test]
+async fn decision_without_waiter_is_parked_before_it_is_announced() {
+    let (_d, store, hub, run, bus) = setup(Preset::Sandboxed, 0).await;
+    let a = store
+        .create_approval(&run.id, "Bash", &json!({"command": "git push"}))
+        .await
+        .unwrap();
+    let mut events = bus.subscribe();
+    let effect = hub.decide(&a.id, true, None).await.unwrap();
+    let DecideEffect::Parked(decided) = effect else {
+        panic!("{effect:?}")
+    };
+    assert!(decided.parked);
+    let announced = loop {
+        if let RuntimeEvent::ApprovalDecided { approval } = events.recv().await.unwrap() {
+            break approval;
+        }
+    };
+    assert!(announced.parked, "{announced:?}");
+    assert_eq!(announced.status, ApprovalStatus::Approved);
+}

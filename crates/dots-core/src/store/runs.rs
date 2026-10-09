@@ -287,16 +287,40 @@ impl Store {
         self.get_run(id).await
     }
 
-    /// Marks runs left `running` by a previous process as failed / interrupted.
+    /// Marks runs left `running` by a previous process as failed / interrupted and, in the
+    /// same transaction, expires their pending approvals (no engine is left to act on them).
     pub async fn recover_interrupted(&self) -> Result<Vec<String>> {
+        let ts = now();
+        let mut tx = self.pool.begin().await?;
         let ids: Vec<String> = sqlx::query_scalar(
             "UPDATE runs SET status = 'failed', error = 'interrupted', ended_at = ? \
              WHERE status = 'running' RETURNING id",
         )
-        .bind(now())
+        .bind(&ts)
+        .fetch_all(&mut *tx)
+        .await?;
+        for id in &ids {
+            sqlx::query(
+                "UPDATE approvals SET status = 'expired', decided_at = ? \
+                 WHERE run_id = ? AND status = 'pending'",
+            )
+            .bind(&ts)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(ids)
+    }
+
+    pub async fn list_runs_by_status(&self, status: RunStatus) -> Result<Vec<Run>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {RUN_COLUMNS} FROM runs WHERE status = ? ORDER BY queued_at, id"
+        ))
+        .bind(status.as_str())
         .fetch_all(&self.pool)
         .await?;
-        Ok(ids)
+        rows.iter().map(run_from_row).collect()
     }
 
     pub async fn append_event(

@@ -278,3 +278,52 @@ async fn update_dot_workspace_change_conflicts_while_runs_are_active() {
     t.rt.update_dot(&dot.id, moved).await.unwrap();
     t.rt.shutdown();
 }
+
+#[tokio::test]
+async fn start_resumes_awaiting_runs_with_parked_decisions() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("data");
+    let (dot_id, parent_id) = {
+        let store = Store::open(&data.join("dots.db")).await.unwrap();
+        let mut s = spec("restarted");
+        s.workdir = dir.path().to_string_lossy().to_string();
+        s.workspace_mode = WorkspaceMode::Folder;
+        let dot = store.create_dot(&s).await.unwrap();
+        let run = store
+            .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
+            .await
+            .unwrap();
+        store.claim_run(&run.id).await.unwrap();
+        store.set_session(&run.id, "s-before-crash").await.unwrap();
+        store
+            .finish_run(&run.id, RunStatus::AwaitingApproval, None, None)
+            .await
+            .unwrap();
+        let a = store
+            .create_approval(&run.id, "Bash", &json!({"command": "git push"}))
+            .await
+            .unwrap();
+        // Decided and parked, but the process died before the resume was created.
+        store
+            .decide_approval_with_parked(&a.id, true, None, true)
+            .await
+            .unwrap();
+        (dot.id, run.id)
+    };
+    let mut cfg = Config::new(data);
+    cfg.port = 0;
+    cfg.claude_path = Some(PathBuf::from(env!("CARGO_BIN_EXE_fake-claude")));
+    let rt = Runtime::start(cfg).await.unwrap();
+    let runs = rt.store().list_runs(Some(&dot_id), 10).await.unwrap();
+    let child = runs
+        .iter()
+        .find(|r| r.trigger == TriggerKind::Resume)
+        .expect("resume child created at start");
+    assert_eq!(child.parent_run_id.as_deref(), Some(parent_id.as_str()));
+    assert_eq!(child.session_id.as_deref(), Some("s-before-crash"));
+    assert_eq!(
+        rt.store().get_run(&parent_id).await.unwrap().status,
+        RunStatus::Succeeded
+    );
+    rt.shutdown();
+}

@@ -96,18 +96,41 @@ impl Store {
         approved: bool,
         note: Option<&str>,
     ) -> Result<Approval> {
+        self.decide(id, approved, note, None).await
+    }
+
+    /// Records a decision and the `parked` flag in one guarded update, so a decided row
+    /// always says whether a live engine received it. `Conflict` if no longer pending.
+    pub async fn decide_approval_with_parked(
+        &self,
+        id: &str,
+        approved: bool,
+        note: Option<&str>,
+        parked: bool,
+    ) -> Result<Approval> {
+        self.decide(id, approved, note, Some(parked)).await
+    }
+
+    async fn decide(
+        &self,
+        id: &str,
+        approved: bool,
+        note: Option<&str>,
+        parked: Option<bool>,
+    ) -> Result<Approval> {
         let status = if approved {
             ApprovalStatus::Approved
         } else {
             ApprovalStatus::Denied
         };
         let res = sqlx::query(
-            "UPDATE approvals SET status = ?, note = ?, decided_at = ? \
-             WHERE id = ? AND status = 'pending'",
+            "UPDATE approvals SET status = ?, note = ?, decided_at = ?, \
+             parked = COALESCE(?, parked) WHERE id = ? AND status = 'pending'",
         )
         .bind(status.as_str())
         .bind(note)
         .bind(now())
+        .bind(parked.map(i64::from))
         .bind(id)
         .execute(&self.pool)
         .await?;

@@ -98,21 +98,40 @@ impl ApprovalHub {
         approved: bool,
         note: Option<String>,
     ) -> Result<DecideEffect> {
-        let approval = self
+        // Take the waiter first so the decision and its `parked` flag are written together:
+        // a decided row is never left looking live while no engine can receive it.
+        let waiter = self.waiters.lock().unwrap().remove(id);
+        let decided = self
             .store
-            .decide_approval(id, approved, note.as_deref())
-            .await?;
+            .decide_approval_with_parked(id, approved, note.as_deref(), waiter.is_none())
+            .await;
+        let mut approval = match decided {
+            Ok(a) => a,
+            Err(e) => {
+                // Nothing was written; hand the waiter back so a retry can still go live.
+                if let Some(tx) = waiter.filter(|tx| !tx.is_closed()) {
+                    self.waiters.lock().unwrap().entry(id.to_string()).or_insert(tx);
+                }
+                return Err(e);
+            }
+        };
+        let live = match waiter {
+            Some(tx) => tx.send(Decision { approved, note }).is_ok(),
+            None => false,
+        };
+        if !live && !approval.parked {
+            // The engine stopped waiting between the update and the send.
+            self.store.mark_parked(id).await?;
+            approval = self.store.get_approval(id).await?;
+        }
         let _ = self.bus.send(RuntimeEvent::ApprovalDecided {
             approval: approval.clone(),
         });
-        let waiter = self.waiters.lock().unwrap().remove(id);
-        if let Some(tx) = waiter {
-            if tx.send(Decision { approved, note }).is_ok() {
-                return Ok(DecideEffect::Live(approval));
-            }
-        }
-        self.store.mark_parked(id).await?;
-        Ok(DecideEffect::Parked(self.store.get_approval(id).await?))
+        Ok(if live {
+            DecideEffect::Live(approval)
+        } else {
+            DecideEffect::Parked(approval)
+        })
     }
 
     async fn ask(
@@ -123,7 +142,7 @@ impl ApprovalHub {
         wait: Duration,
     ) -> Result<PermissionOutcome> {
         let approval = self.store.create_approval(run_id, tool, &input).await?;
-        let (tx, rx) = oneshot::channel();
+        let (tx, mut rx) = oneshot::channel();
         self.waiters.lock().unwrap().insert(approval.id.clone(), tx);
         let _guard = WaiterGuard {
             waiters: &self.waiters,
@@ -133,26 +152,27 @@ impl ApprovalHub {
             approval: approval.clone(),
         });
         // A decision may have landed between create_approval and the waiter insert. `decide`
-        // found no waiter then, marked the row parked and returned `Parked`, so the caller
+        // found no waiter then, wrote the row as parked and returned `Parked`, so the caller
         // resumes the run with a grant. Executing the action here as well would run it twice,
         // so tell the engine it is queued and leave the outcome to the parked/resume path.
         // Re-reading after the insert is race-free: a later decision reaches the waiter.
         let current = self.store.get_approval(&approval.id).await?;
-        if current.status != ApprovalStatus::Pending {
-            self.store.mark_parked(&approval.id).await?;
-            return Ok(PermissionOutcome::Deny {
-                message: parked_message(&approval.id),
-            });
-        }
-        match tokio::time::timeout(wait, rx).await {
-            Ok(Ok(d)) => Ok(outcome_of(d.approved, d.note.as_deref(), input)),
-            _ => {
-                self.store.mark_parked(&approval.id).await?;
-                Ok(PermissionOutcome::Deny {
-                    message: parked_message(&approval.id),
-                })
+        if current.status == ApprovalStatus::Pending {
+            if let Ok(Ok(d)) = tokio::time::timeout(wait, &mut rx).await {
+                return Ok(outcome_of(d.approved, d.note.as_deref(), input));
             }
         }
+        // Stop accepting decisions, then take one that was sent before the close: `decide`
+        // reports `Live` exactly when its send succeeded, so that decision must be honoured
+        // here; any later send fails and `decide` parks the row itself.
+        rx.close();
+        if let Ok(d) = rx.try_recv() {
+            return Ok(outcome_of(d.approved, d.note.as_deref(), input));
+        }
+        self.store.mark_parked(&approval.id).await?;
+        Ok(PermissionOutcome::Deny {
+            message: parked_message(&approval.id),
+        })
     }
 }
 

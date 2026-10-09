@@ -144,6 +144,10 @@ async fn recover_marks_running_as_interrupted() {
         .create_approval(&waiting.id, "Bash", &json!({"command": "git push"}))
         .await
         .unwrap();
+    let orphan = store
+        .create_approval(&running.id, "Bash", &json!({"command": "git push"}))
+        .await
+        .unwrap();
 
     let ids = store.recover_interrupted().await.unwrap();
     assert_eq!(ids, vec![running.id.clone()]);
@@ -158,6 +162,10 @@ async fn recover_marks_running_as_interrupted() {
         store.get_approval(&appr.id).await.unwrap().status,
         ApprovalStatus::Pending
     );
+    // The interrupted run can never act on its pending approval, so it is expired.
+    let orphan = store.get_approval(&orphan.id).await.unwrap();
+    assert_eq!(orphan.status, ApprovalStatus::Expired);
+    assert!(orphan.decided_at.is_some());
 }
 
 #[tokio::test]
