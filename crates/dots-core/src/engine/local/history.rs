@@ -6,7 +6,8 @@ use crate::store::Store;
 use crate::Result;
 
 /// Tool result recorded for a tool call whose run stopped before it answered.
-pub const INTERRUPTED: &str = "This tool call did not complete because the run stopped.";
+pub const INTERRUPTED: &str =
+    "This tool call was interrupted when the run stopped; it may have partly run.";
 
 /// The conversation of `run_id`'s ancestors (oldest first, following `parent_run_id`), built
 /// from their `message` events and passed through `repair`.

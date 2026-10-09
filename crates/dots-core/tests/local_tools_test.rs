@@ -1,7 +1,8 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use dots_core::engine::local::tools::{self, ToolOutput, MAX_OUTPUT};
+use dots_core::engine::local::tools::{self, ToolOutput, MAX_OUTPUT, MAX_READ_BYTES};
+use dots_core::policy::{Action, Policy, Preset, Rule};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
@@ -153,6 +154,152 @@ fn prepare_validates_calls_before_the_policy() {
         tools::schemas().as_array().unwrap().len(),
         tools::TOOLS.len()
     );
+}
+
+/// Runs `prepare` and then the same policy resolution `ApprovalHub::check` does.
+fn gate(ws: &Path, policy: &Policy, name: &str, args: Value) -> (Value, Action) {
+    let call = tools::prepare(name, &args, ws).unwrap_or_else(|e| panic!("prepare: {e}"));
+    let action = policy.resolve_in(call.alias, &call.input, Some(ws));
+    (call.input, action)
+}
+
+#[test]
+fn padded_paths_are_canonical_before_the_gate() {
+    let ws = workspace();
+    let p = ws.path();
+    std::fs::create_dir(p.join(".git")).unwrap();
+    std::fs::write(p.join(".git/config"), "[core]\n").unwrap();
+    std::fs::create_dir(p.join(".claude")).unwrap();
+    let sandboxed = Policy::preset(Preset::Sandboxed);
+    for (raw, canonical) in [
+        (" .git/config", ".git/config"),
+        ("\t.git/config", ".git/config"),
+        (".git\n", ".git"),
+        (" .claude/settings.json", ".claude/settings.json"),
+    ] {
+        let (input, action) = gate(
+            p,
+            &sandboxed,
+            "write_file",
+            json!({"file_path": raw, "content": "x"}),
+        );
+        assert_eq!(input["file_path"], json!(canonical), "{raw:?}");
+        assert_eq!(action, Action::Deny, "{raw:?}");
+    }
+    let (input, action) = gate(
+        p,
+        &sandboxed,
+        "write_file",
+        json!({"file_path": "./src/new.rs", "content": "x"}),
+    );
+    assert_eq!(input["file_path"], json!("src/new.rs"));
+    assert_eq!(action, Action::Allow);
+    let abs = p.join("README.md");
+    let (input, _) = gate(
+        p,
+        &sandboxed,
+        "read_file",
+        json!({"file_path": abs.to_str().unwrap()}),
+    );
+    assert_eq!(input["file_path"], json!("README.md"));
+    let (input, _) = gate(p, &sandboxed, "list_dir", json!({"path": " ./ "}));
+    assert_eq!(input["path"], json!("."));
+}
+
+#[test]
+fn links_are_resolved_before_the_gate() {
+    let ws = workspace();
+    let p = ws.path();
+    std::fs::create_dir(p.join(".git")).unwrap();
+    std::fs::write(p.join(".git/config"), "[core]\n").unwrap();
+    dir_link(&p.join(".git"), &p.join("link"));
+    let (input, action) = gate(
+        p,
+        &Policy::preset(Preset::Sandboxed),
+        "write_file",
+        json!({"file_path": "link/config", "content": "x"}),
+    );
+    assert_eq!(input["file_path"], json!(".git/config"));
+    assert_eq!(action, Action::Deny);
+}
+
+#[test]
+fn decoy_arguments_are_dropped_before_the_gate() {
+    let ws = workspace();
+    let p = ws.path();
+    std::fs::create_dir(p.join("secrets")).unwrap();
+    std::fs::write(p.join("secrets/key.txt"), "TOP secret\n").unwrap();
+    let mut policy = Policy::preset(Preset::Sandboxed);
+    // `secrets/**` does not match the directory itself, so the preset style pairs it with
+    // the bare name (as it does for `.git`).
+    for spec in ["Grep(secrets/**)", "Grep(secrets)"] {
+        policy.rules.push(Rule::new(spec, Action::Deny));
+    }
+    for target in ["secrets", "secrets/key.txt"] {
+        let (input, action) = gate(
+            p,
+            &policy,
+            "grep",
+            json!({"pattern": "TOP", "path": target, "file_path": "README.md"}),
+        );
+        assert_eq!(input, json!({"pattern": "TOP", "path": target}));
+        assert_eq!(action, Action::Deny, "{target}");
+    }
+}
+
+#[test]
+fn prepare_keeps_only_schema_arguments_of_the_right_type() {
+    let ws = workspace();
+    let p = ws.path();
+    let call = tools::prepare(
+        "shell",
+        &json!({"command": "git status", "description": "check the tree"}),
+        p,
+    )
+    .unwrap();
+    assert_eq!(call.input, json!({"command": "git status"}));
+    let call = tools::prepare(
+        "read_file",
+        &json!({"file_path": "README.md", "offset": 2, "limit": 1, "path": "src"}),
+        p,
+    )
+    .unwrap();
+    assert_eq!(
+        call.input,
+        json!({"file_path": "README.md", "offset": 2, "limit": 1})
+    );
+    let err =
+        tools::prepare("grep", &json!({"pattern": "x", "ignore_case": "yes"}), p).unwrap_err();
+    assert!(err.contains("ignore_case"), "{err}");
+    let err = tools::prepare(
+        "read_file",
+        &json!({"file_path": "README.md", "offset": -1}),
+        p,
+    )
+    .unwrap_err();
+    assert!(err.contains("offset"), "{err}");
+    let err = tools::prepare("shell", &json!({"command": "x", "timeout": "5"}), p).unwrap_err();
+    assert!(err.contains("timeout"), "{err}");
+    let err = tools::prepare("glob", &json!({"pattern": "*", "path": 3}), p).unwrap_err();
+    assert!(err.contains("'path'"), "{err}");
+}
+
+#[tokio::test]
+async fn read_and_edit_refuse_files_over_the_size_limit() {
+    let ws = workspace();
+    let p = ws.path();
+    let f = std::fs::File::create(p.join("huge.log")).unwrap();
+    f.set_len(MAX_READ_BYTES + 1).unwrap();
+    drop(f);
+    let out = run(p, "read_file", json!({"file_path": "huge.log"})).await;
+    assert!(out.is_error && out.output.contains("too large"), "{out:?}");
+    let out = run(
+        p,
+        "edit_file",
+        json!({"file_path": "huge.log", "old_string": "a", "new_string": "b"}),
+    )
+    .await;
+    assert!(out.is_error && out.output.contains("too large"), "{out:?}");
 }
 
 #[tokio::test]

@@ -38,7 +38,8 @@ async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.len() < 2 {
         bail!(
-            "usage: smoke <workdir> <instructions> [--model m] [--wait secs] [--preset p]              [--folder] [--engine claude|local] [--endpoint url]"
+            "usage: smoke <workdir> <instructions> [--model m] [--wait secs] [--preset p] \
+             [--folder] [--engine claude|local] [--endpoint url]"
         );
     }
     let mut cfg = Config::new(std::env::temp_dir().join("dots-smoke"));

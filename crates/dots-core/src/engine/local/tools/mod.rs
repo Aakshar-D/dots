@@ -12,6 +12,8 @@ mod shell;
 
 /// Tool output sent back to the model is capped at this many bytes.
 pub const MAX_OUTPUT: usize = 30 * 1024;
+/// `read_file` and `edit_file` refuse larger files rather than load them into memory.
+pub const MAX_READ_BYTES: u64 = 10 * 1024 * 1024;
 /// Maximum entries listed by `list_dir` and `glob`.
 pub const MAX_ENTRIES: usize = 500;
 
@@ -60,21 +62,67 @@ pub fn alias(name: &str) -> Option<&'static str> {
     TOOLS.iter().find(|(n, _)| *n == name).map(|(_, a)| *a)
 }
 
-fn required(name: &str) -> &'static [&'static str] {
-    match name {
-        "read_file" => &["file_path"],
-        "write_file" => &["file_path", "content"],
-        "edit_file" => &["file_path", "old_string", "new_string"],
-        "glob" | "grep" => &["pattern"],
-        "shell" => &["command"],
-        _ => &[],
-    }
+#[derive(Clone, Copy, PartialEq)]
+enum Arg {
+    Str,
+    /// A string that `prepare` replaces with its canonical workspace-relative form.
+    PathStr,
+    /// A non-negative integer.
+    Count,
+    Bool,
 }
 
+use Arg::{Bool, Count, PathStr, Str};
+
+/// (argument, type, required)
+type Params = &'static [(&'static str, Arg, bool)];
+
+/// The arguments of each local tool. Every other argument is dropped: the policy reads the
+/// first of `file_path`/`path`, so an extra one could stand in for the real target.
+const ARGS: &[(&str, Params)] = &[
+    (
+        "read_file",
+        &[
+            ("file_path", PathStr, true),
+            ("offset", Count, false),
+            ("limit", Count, false),
+        ],
+    ),
+    (
+        "write_file",
+        &[("file_path", PathStr, true), ("content", Str, true)],
+    ),
+    (
+        "edit_file",
+        &[
+            ("file_path", PathStr, true),
+            ("old_string", Str, true),
+            ("new_string", Str, true),
+        ],
+    ),
+    ("list_dir", &[("path", PathStr, false)]),
+    ("glob", &[("pattern", Str, true), ("path", PathStr, false)]),
+    (
+        "grep",
+        &[
+            ("pattern", Str, true),
+            ("path", PathStr, false),
+            ("glob", Str, false),
+            ("ignore_case", Bool, false),
+        ],
+    ),
+    (
+        "shell",
+        &[("command", Str, true), ("timeout", Count, false)],
+    ),
+];
+
 /// Checks a model tool call before the policy sees it: a known tool, arguments that form a
-/// JSON object (sent as a JSON string, as an object, or empty), the required string arguments,
-/// and every path inside the workspace. An empty optional `path` is dropped. The error text is
-/// returned to the model as the tool result.
+/// JSON object (sent as a JSON string, as an object, or empty), only the tool's own arguments
+/// with the right types, and every path inside the workspace. Paths are replaced by their
+/// canonical workspace-relative form, so the policy, approvals and grants judge exactly what
+/// the tool will touch (padding trimmed, links resolved). An empty or null optional argument is
+/// dropped. The error text is returned to the model as the tool result.
 pub fn prepare(
     requested: &str,
     arguments: &Value,
@@ -102,21 +150,50 @@ pub fn prepare(
         },
         _ => return Err(format!("arguments for {name} must be a JSON object")),
     };
-    if input
-        .get("path")
-        .and_then(Value::as_str)
-        .is_some_and(|p| p.trim().is_empty())
-    {
-        input.remove("path");
-    }
-    for key in required(name) {
-        if !input.get(*key).is_some_and(Value::is_string) {
+    let args = ARGS
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map_or(&[][..], |(_, a)| *a);
+    input.retain(|key, _| args.iter().any(|(k, _, _)| k == key));
+    let mut root = None;
+    for &(key, kind, required) in args {
+        let blank = match input.get(key) {
+            None | Some(Value::Null) => true,
+            Some(Value::String(s)) => !required && kind == PathStr && s.trim().is_empty(),
+            Some(_) => false,
+        };
+        // Every required argument is a string.
+        if required && (blank || !input[key].is_string()) {
             return Err(format!("{name} requires the string argument '{key}'"));
         }
-    }
-    for key in ["file_path", "path"] {
-        if let Some(raw) = input.get(key).and_then(Value::as_str) {
-            confine(workspace, raw)?;
+        if blank {
+            input.remove(key);
+            continue;
+        }
+        let value = &input[key];
+        let ok = match kind {
+            Str | PathStr => value.is_string(),
+            Count => value.is_u64(),
+            Bool => value.is_boolean(),
+        };
+        if !ok {
+            let expected = match kind {
+                Str | PathStr => "a string",
+                Count => "a non-negative integer",
+                Bool => "a boolean",
+            };
+            return Err(format!("{name}: '{key}' must be {expected}"));
+        }
+        if kind == PathStr {
+            let root = match &root {
+                Some(r) => r,
+                None => root.insert(
+                    std::fs::canonicalize(workspace)
+                        .map_err(|e| format!("workspace is not accessible: {e}"))?,
+                ),
+            };
+            let path = confine(root, value.as_str().unwrap_or_default())?;
+            input.insert(key.to_string(), Value::String(display(root, &path)));
         }
     }
     Ok(PreparedCall {

@@ -2,11 +2,18 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use super::{cap_head, confine, display, str_arg, ToolOutput, MAX_ENTRIES};
+use super::{cap_head, confine, display, str_arg, ToolOutput, MAX_ENTRIES, MAX_READ_BYTES};
 
 /// Files whose first 8 KB contain a NUL byte are treated as binary and not returned.
 fn is_binary(bytes: &[u8]) -> bool {
     bytes.iter().take(8192).any(|b| *b == 0)
+}
+
+/// The tools run inside the always-on host process, so a huge file is refused, not loaded.
+fn too_large(raw: &str, len: u64) -> ToolOutput {
+    ToolOutput::err(format!(
+        "{raw} is too large ({len} bytes; limit {MAX_READ_BYTES}). Use grep or shell to inspect it."
+    ))
 }
 
 pub(super) async fn read_file(root: &Path, input: &Value) -> ToolOutput {
@@ -15,8 +22,13 @@ pub(super) async fn read_file(root: &Path, input: &Value) -> ToolOutput {
         Ok(p) => p,
         Err(e) => return ToolOutput::err(e),
     };
-    if path.is_dir() {
-        return ToolOutput::err(format!("{raw} is a directory; use list_dir"));
+    match tokio::fs::metadata(&path).await {
+        Ok(m) if m.is_dir() => {
+            return ToolOutput::err(format!("{raw} is a directory; use list_dir"))
+        }
+        Ok(m) if m.len() > MAX_READ_BYTES => return too_large(raw, m.len()),
+        Ok(_) => {}
+        Err(e) => return ToolOutput::err(format!("cannot read {raw}: {e}")),
     }
     let bytes = match tokio::fs::read(&path).await {
         Ok(b) => b,
@@ -82,6 +94,11 @@ pub(super) async fn edit_file(root: &Path, input: &Value) -> ToolOutput {
         Ok(p) => p,
         Err(e) => return ToolOutput::err(e),
     };
+    match tokio::fs::metadata(&path).await {
+        Ok(m) if m.len() > MAX_READ_BYTES => return too_large(raw, m.len()),
+        Ok(_) => {}
+        Err(e) => return ToolOutput::err(format!("cannot read {raw}: {e}")),
+    }
     let text = match tokio::fs::read_to_string(&path).await {
         Ok(t) => t,
         Err(e) => return ToolOutput::err(format!("cannot read {raw}: {e}")),
