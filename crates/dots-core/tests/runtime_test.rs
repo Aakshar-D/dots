@@ -246,18 +246,45 @@ async fn chat_follow_up_requires_finished_parent_with_session() {
 
 #[tokio::test]
 async fn update_dot_workspace_change_conflicts_while_runs_are_active() {
-    let t = start(None, None).await;
-    let dot = t.rt.create_dot(folder_spec(&t.dir, "moving")).await.unwrap();
+    // Seed the parked run before start so the dispatcher can never claim it first.
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("data");
+    let (dot, run) = {
+        let store = Store::open(&data.join("dots.db")).await.unwrap();
+        let dot = store
+            .create_dot(&folder_spec(&dir, "moving"))
+            .await
+            .unwrap();
+        let run = store
+            .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
+            .await
+            .unwrap();
+        assert!(store.claim_run(&run.id).await.unwrap());
+        store
+            .finish_run(&run.id, RunStatus::AwaitingApproval, None, None)
+            .await
+            .unwrap();
+        // Still pending, so the startup resume scan leaves the run parked.
+        store
+            .create_approval(&run.id, "Bash", &json!({"command": "git push"}))
+            .await
+            .unwrap();
+        (dot, run)
+    };
+    let mut cfg = Config::new(data);
+    cfg.port = 0;
+    cfg.claude_path = Some(PathBuf::from(env!("CARGO_BIN_EXE_fake-claude")));
+    let rt = Runtime::start(cfg).await.unwrap();
+    let t = Rt {
+        args_out: dir.path().join("args.json"),
+        dir,
+        rt,
+    };
     let store = t.rt.store();
-    let run = store
-        .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
-        .await
-        .unwrap();
-    store.claim_run(&run.id).await.unwrap();
-    store
-        .finish_run(&run.id, RunStatus::AwaitingApproval, None, None)
-        .await
-        .unwrap();
+    assert_eq!(
+        store.get_run(&run.id).await.unwrap().status,
+        RunStatus::AwaitingApproval
+    );
 
     let mut moved = dot.spec.clone();
     moved.workdir = t.dir.path().join("elsewhere").to_string_lossy().to_string();
