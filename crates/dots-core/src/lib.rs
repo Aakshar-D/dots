@@ -10,6 +10,7 @@ pub mod policy;
 pub mod proc;
 pub mod prompt;
 pub mod runner;
+pub mod runtime;
 pub mod scheduler;
 pub mod server;
 pub mod store;
@@ -17,3 +18,4 @@ pub mod util;
 pub mod workspace;
 
 pub use error::{Error, Result};
+pub use runtime::{Config, Runtime};
