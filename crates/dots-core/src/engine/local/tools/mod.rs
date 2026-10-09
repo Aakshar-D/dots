@@ -7,6 +7,7 @@ use serde_json::{json, Map, Value};
 use tokio_util::sync::CancellationToken;
 
 mod fs;
+mod search;
 
 /// Tool output sent back to the model is capped at this many bytes.
 pub const MAX_OUTPUT: usize = 30 * 1024;
@@ -136,6 +137,8 @@ pub async fn run(call: &PreparedCall, workspace: &Path, cancel: &CancellationTok
         "write_file" => fs::write_file(&root, input).await,
         "edit_file" => fs::edit_file(&root, input).await,
         "list_dir" => fs::list_dir(&root, input).await,
+        "glob" => search::glob(&root, input).await,
+        "grep" => search::grep(&root, input).await,
         other => ToolOutput::err(format!("unknown tool '{other}'")),
     }
 }

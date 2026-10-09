@@ -255,3 +255,62 @@ async fn list_dir_marks_directories_and_hides_git() {
         ToolOutput::ok("(empty directory)")
     );
 }
+
+#[tokio::test]
+async fn glob_matches_relative_paths_and_honours_gitignore() {
+    let ws = workspace();
+    let p = ws.path();
+    assert_eq!(
+        run(p, "glob", json!({"pattern": "**/*.rs"})).await,
+        ToolOutput::ok("src/deep/lib.rs\nsrc/main.rs")
+    );
+    assert_eq!(
+        run(p, "glob", json!({"pattern": "*.md"})).await,
+        ToolOutput::ok("README.md")
+    );
+    assert_eq!(
+        run(p, "glob", json!({"pattern": "*.rs", "path": "src"})).await,
+        ToolOutput::ok("src/main.rs")
+    );
+    std::fs::write(p.join(".gitignore"), "target/\n").unwrap();
+    std::fs::create_dir(p.join("target")).unwrap();
+    std::fs::write(p.join("target/gen.rs"), "").unwrap();
+    let out = run(p, "glob", json!({"pattern": "**/*.rs"})).await;
+    assert!(!out.output.contains("target"), "{out:?}");
+    assert_eq!(
+        run(p, "glob", json!({"pattern": "**/*.zip"})).await,
+        ToolOutput::ok("no files match **/*.zip")
+    );
+}
+
+#[tokio::test]
+async fn grep_reports_path_line_and_text() {
+    let ws = workspace();
+    let p = ws.path();
+    assert_eq!(
+        run(p, "grep", json!({"pattern": "fn \\w+"})).await,
+        ToolOutput::ok("src/deep/lib.rs:1: pub fn Hello() {}\nsrc/main.rs:1: fn main() {}")
+    );
+    assert_eq!(
+        run(
+            p,
+            "grep",
+            json!({"pattern": "hello", "ignore_case": true, "glob": "*.rs"})
+        )
+        .await,
+        ToolOutput::ok("src/deep/lib.rs:1: pub fn Hello() {}")
+    );
+    assert_eq!(
+        run(p, "grep", json!({"pattern": "world", "path": "README.md"})).await,
+        ToolOutput::ok("README.md:2: world")
+    );
+    let out = run(p, "grep", json!({"pattern": "("})).await;
+    assert!(
+        out.is_error && out.output.contains("invalid regular expression"),
+        "{out:?}"
+    );
+    assert_eq!(
+        run(p, "grep", json!({"pattern": "nothing-here"})).await,
+        ToolOutput::ok("no matches for nothing-here")
+    );
+}
