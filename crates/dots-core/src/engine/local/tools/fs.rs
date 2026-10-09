@@ -141,7 +141,7 @@ pub(super) async fn list_dir(root: &Path, input: &Value) -> ToolOutput {
         if total > MAX_ENTRIES {
             out.push_str(&format!("\n[{} more entries]", total - MAX_ENTRIES));
         }
-        ToolOutput::ok(out)
+        ToolOutput::ok(cap_head(out))
     })
     .await;
     listed.unwrap_or_else(|e| ToolOutput::err(format!("list_dir failed: {e}")))

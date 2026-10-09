@@ -83,6 +83,39 @@ fn confine_rejects_escapes() {
 }
 
 #[test]
+fn confine_rejects_dangling_links() {
+    let ws = workspace();
+    let outside = tempfile::tempdir().unwrap();
+    let target = outside.path().join("gone");
+    std::fs::create_dir(&target).unwrap();
+    dir_link(&target, &ws.path().join("dangling"));
+    std::fs::remove_dir(&target).unwrap();
+    for raw in ["dangling", "dangling/new.txt"] {
+        let err = tools::confine(ws.path(), raw).unwrap_err();
+        assert!(err.contains("cannot be resolved"), "{raw}: {err}");
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn confine_refuses_network_device_and_drive_relative_paths() {
+    let ws = workspace();
+    for raw in [
+        r"\\attacker.invalid\share\x",
+        r"\\?\UNC\attacker.invalid\share\x",
+        r"\\.\pipe\x",
+    ] {
+        let err = tools::confine(ws.path(), raw).unwrap_err();
+        assert!(
+            err.contains("network and device paths are not allowed"),
+            "{raw}: {err}"
+        );
+    }
+    let err = tools::confine(ws.path(), "C:foo.txt").unwrap_err();
+    assert!(err.contains("drive-relative"), "{err}");
+}
+
+#[test]
 fn prepare_validates_calls_before_the_policy() {
     let ws = workspace();
     let p = ws.path();

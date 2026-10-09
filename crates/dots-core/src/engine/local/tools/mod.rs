@@ -1,7 +1,7 @@
 //! Built-in tools of the local engine. Argument names match the Claude tools they alias, so
 //! policy path specs, command rules, grants and approvals treat local and Claude calls alike.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, Path, PathBuf, Prefix};
 
 use serde_json::{json, Map, Value};
 use tokio_util::sync::CancellationToken;
@@ -142,7 +142,7 @@ pub async fn run(call: &PreparedCall, workspace: &Path, cancel: &CancellationTok
 
 /// Resolves `raw` (relative to the workspace, or absolute) to a path inside the workspace.
 /// Symlinks and junctions are resolved through the longest existing ancestor, so a link that
-/// points outside is rejected; `..`, NTFS stream names (`a.txt:s`) and empty paths are refused.
+/// points outside is rejected; `..`, NTFS stream names (`a.txt:s`), network/device paths (`\\host\share`), drive-relative paths (`C:foo`), dangling links and empty paths are refused.
 pub fn confine(workspace: &Path, raw: &str) -> Result<PathBuf, String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -152,11 +152,22 @@ pub fn confine(workspace: &Path, raw: &str) -> Result<PathBuf, String> {
     for c in given.components() {
         match c {
             Component::ParentDir => return Err(format!("'..' is not allowed in paths: {raw}")),
+            // Only local drive prefixes: UNC, device and other verbatim paths would make the
+            // filesystem contact another host or device before the permission gate runs.
+            Component::Prefix(p)
+                if !matches!(p.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_)) =>
+            {
+                return Err(format!("network and device paths are not allowed: {raw}"))
+            }
             Component::Normal(n) if n.to_string_lossy().contains(':') => {
                 return Err(format!("invalid path: {raw}"))
             }
             _ => {}
         }
+    }
+    // `C:foo` is relative to that drive's current directory, not to the workspace.
+    if !given.is_absolute() && matches!(given.components().next(), Some(Component::Prefix(_))) {
+        return Err(format!("drive-relative paths are not allowed: {raw}"));
     }
     let root = std::fs::canonicalize(workspace)
         .map_err(|e| format!("workspace is not accessible: {e}"))?;
@@ -170,6 +181,12 @@ pub fn confine(workspace: &Path, raw: &str) -> Result<PathBuf, String> {
         match std::fs::canonicalize(&existing) {
             Ok(c) => break c,
             Err(_) => {
+                // Only a name with no directory entry may be created later. An entry that exists
+                // but does not resolve (a dangling symlink or junction) would be followed on write.
+                match std::fs::symlink_metadata(&existing) {
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    _ => return Err(format!("{raw} cannot be resolved inside the workspace")),
+                }
                 let Some(name) = existing.file_name() else {
                     return Err(format!("invalid path: {raw}"));
                 };
