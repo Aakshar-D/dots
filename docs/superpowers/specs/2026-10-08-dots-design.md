@@ -217,8 +217,11 @@ A resume creates a child run linked by `parent_run_id` and reuses the parent's w
   `allow` rules → `ask` rules → `default`.
 - Presets:
   - `read-only`: allow Read/LS/Glob/Grep; deny Write/Edit/Bash; default deny.
-  - `sandboxed` (default): allow Read/LS/Glob/Grep/Write/Edit, `Bash(git status:*)`,
-    `Bash(git diff:*)`, `Bash(git add:*)`, `Bash(git commit:*)`; default ask.
+  - `sandboxed` (default): allow Read/LS/Glob/Grep, `Write(./**)`, `Edit(./**)`,
+    `Bash(git status:*)`, `Bash(git diff:*)`, `Bash(git add:*)`, `Bash(git commit:*)`; deny
+    `Write(**/.git/**)`, `Edit(**/.git/**)`, `Write(**/.git)`, `Edit(**/.git)`; default ask.
+    Resolution is workspace-aware (`resolve_in`): `./` patterns anchor to the run workspace.
+    Deny/ask command matching is best-effort; allow matching is strict.
   - `trusted`: allow all; ask for `Bash(git push:*)` and `mcp__*`; default allow.
 
 ### Claude engine
@@ -236,7 +239,8 @@ claude -p --output-format stream-json --input-format stream-json --verbose
 ```
 
 Working directory = run workspace. Env: `MCP_TOOL_TIMEOUT` set to
-`(approval_wait_secs + 30) * 1000`. The per-run MCP config contains the dots MCP server
+`(approval_wait_secs + 30) * 1000` on a best-effort basis; CLI 2.1.295 ignores it for the
+permission-prompt tool (observed hard cap of about 300 s; CLI 2.1.295 observed 2026-10-09). The per-run MCP config contains the dots MCP server
 (`http://127.0.0.1:<port>/mcp`, header `Authorization: Bearer <per-run secret>`) plus the dot's
 own `mcp_servers`. `--setting-sources project` keeps the user's global hooks (GateGuard,
 caveman, memory hooks) out of headless runs; a dot opts back in with `use_user_settings`.
@@ -353,7 +357,7 @@ Window close hides to tray. Tray menu: Open, Inbox (n), Pause all schedules, Qui
 
 - `stream-json` and `--permission-prompt-tool` are CLI contracts owned by Claude Code and may
   change; mitigated by recorded fixtures, version pinning, and the startup version check.
-- Holding an MCP tool call open for up to 10 minutes depends on `MCP_TOOL_TIMEOUT` being honored
-  for HTTP MCP servers; verify in phase 2. Fallback: shorten the wait window to the CLI's limit
-  and rely on park/resume.
+- Observed (CLI 2.1.295, 2026-10-09): the CLI aborts a pending permission-prompt call at about
+  300 s regardless of `MCP_TOOL_TIMEOUT`. The default `approval_wait_secs` is therefore 240 s;
+  longer waits rely on park/resume.
 - Local models vary widely in tool-calling quality; v1 targets simpler jobs on local dots.
