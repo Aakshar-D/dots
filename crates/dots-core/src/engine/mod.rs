@@ -39,6 +39,11 @@ pub enum EngineEvent {
     Raw {
         line: String,
     },
+    /// One chat message of a local-engine conversation (system, user, assistant or tool), in
+    /// OpenAI chat format. Persisted so a resume or follow-up can rebuild the conversation.
+    Message {
+        message: Value,
+    },
     Finished {
         summary: String,
     },
@@ -56,6 +61,7 @@ impl EngineEvent {
             Self::ToolResult { .. } => "tool_result",
             Self::Usage { .. } => "usage",
             Self::Raw { .. } => "raw",
+            Self::Message { .. } => "message",
             Self::Finished { .. } => "finished",
             Self::Failed { .. } => "failed",
         }
