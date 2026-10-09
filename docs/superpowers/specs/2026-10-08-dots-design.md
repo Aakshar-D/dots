@@ -295,8 +295,8 @@ the tool result → append results → repeat until no tool calls or `max_turns`
 Every chat message (system, user, assistant with its `tool_calls`, tool result) is persisted as
 a `message` run event. A local run's `session_id` is the `root_run_id` of its lineage. Resume
 uses the engine-agnostic runner flow unchanged: the child run rebuilds the conversation from the
-`message` events of earlier runs in the lineage, appends the runner's resume prompt ("Approval
-#<id> granted … Perform that action now") as a user message, and the model re-issues the call,
+`message` events of earlier runs in the lineage, appends the runner's resume prompt
+(`Approval #<id> granted … Perform that action now`) as a user message, and the model re-issues the call,
 which the one-shot grant allows once. A model that changes the input on retry gets a fresh
 `ask`; that is accepted rather than having the engine replay the call itself.
 
