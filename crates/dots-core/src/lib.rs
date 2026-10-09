@@ -11,6 +11,7 @@ pub mod proc;
 pub mod prompt;
 pub mod runner;
 pub mod scheduler;
+pub mod server;
 pub mod store;
 pub mod util;
 pub mod workspace;

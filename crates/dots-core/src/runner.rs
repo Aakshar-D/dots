@@ -71,6 +71,16 @@ impl Runner {
         let _ = self.bus.send(RuntimeEvent::RunUpdated { run: run.clone() });
     }
 
+    /// Creates the per-run secret the MCP endpoint uses to identify a run.
+    pub fn register_secret(&self, run_id: &str) -> String {
+        let secret = new_token();
+        self.secrets
+            .lock()
+            .unwrap()
+            .insert(secret.clone(), run_id.to_string());
+        secret
+    }
+
     pub fn run_for_secret(&self, secret: &str) -> Option<String> {
         let secrets = self.secrets.lock().unwrap();
         secrets
@@ -307,11 +317,7 @@ impl Runner {
                 p
             }
         };
-        let secret = new_token();
-        self.secrets
-            .lock()
-            .unwrap()
-            .insert(secret.clone(), run.id.clone());
+        let secret = self.register_secret(&run.id);
         let ctx = RunContext {
             run_id: run.id.clone(),
             dot: dot.clone(),
