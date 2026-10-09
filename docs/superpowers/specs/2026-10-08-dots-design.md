@@ -287,17 +287,31 @@ stored raw and never fatal.
 ### Local engine
 
 Loop: send messages + tool schemas to `POST {endpoint}/v1/chat/completions` (non-streaming in v1)
-→ for each `tool_calls` entry, resolve policy → execute allowed tools, return deny text for
-denied ones, park on `ask` using the same wait-window logic → append results → repeat until no
-tool calls or `max_turns`. The full message list is persisted in `run_events`, so a resume
-rebuilds the conversation and appends the approved tool's result (executed on resume) or the
-denial.
+→ for each `tool_calls` entry, ask the run's `PermissionGate` (the same `ApprovalHub::check` the
+Claude engine's MCP `approve` endpoint uses, so policy, grants, the wait window and parking
+behave identically) → execute allowed tools, return the deny text for denied or parked ones as
+the tool result → append results → repeat until no tool calls or `max_turns`.
+
+Every chat message (system, user, assistant with its `tool_calls`, tool result) is persisted as
+a `message` run event. A local run's `session_id` is the `root_run_id` of its lineage. Resume
+uses the engine-agnostic runner flow unchanged: the child run rebuilds the conversation from the
+`message` events of earlier runs in the lineage, appends the runner's resume prompt ("Approval
+#<id> granted … Perform that action now") as a user message, and the model re-issues the call,
+which the one-shot grant allows once. A model that changes the input on retry gets a fresh
+`ask`; that is accepted rather than having the engine replay the call itself.
 
 Built-in tools: `read_file`, `write_file`, `edit_file` (exact unique-string replace), `list_dir`,
-`glob`, `grep`, `shell` (PowerShell, timeout default 120 s, output capped at 30 KB). All paths are
-canonicalized and must resolve inside the workspace (symlinks and junctions resolved first);
-`shell` runs with cwd = workspace. "Test endpoint" in Settings sends a probe request with one
-tool and checks that the model returns a well-formed tool call.
+`glob`, `grep`, `shell` (PowerShell, timeout default 120 s, output capped at 30 KB). Their
+argument names match the Claude tools they alias (`file_path`, `content`, `old_string`,
+`new_string`, `path`, `pattern`, `command`), so policy path specs, command rules and
+`grant_key` apply to local dots without translation. All paths are canonicalized and must
+resolve inside the workspace (symlinks and junctions resolved first); `shell` runs with
+cwd = workspace. "Test endpoint" in Settings sends a probe request with one tool and checks that
+the model returns a well-formed tool call.
+
+Tests drive the loop against a `wiremock` OpenAI-compatible server returning scripted
+responses; no real model is called. Manual smoke target: LM Studio at `http://127.0.0.1:1234`
+with `google/gemma-4-12b-qat` (Ollama is not installed on the dev machine).
 
 ## 6. Local HTTP server
 
