@@ -18,11 +18,28 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
       break;
     case "run_event": {
       const queryKey = keys.events(event.event.run_id);
-      // Only a list that is loaded is extended; one that is not loads in full when asked for.
-      if (qc.getQueryData(queryKey) !== undefined) {
-        qc.setQueryData<RunEventRecord[]>(queryKey, (have = []) =>
-          mergeEvents(have, [event.event]),
-        );
+      const have = qc.getQueryData<RunEventRecord[]>(queryKey);
+      if (have === undefined) {
+        // Not loaded. A first load in flight may have read the backend before this event was
+        // stored, so the list is marked stale once that load has settled and then asks for
+        // what is after its last event. Marking it stale during the load would be undone by
+        // the load's answer. A fetch already running by then started after this event arrived,
+        // so it is joined, not restarted: several events share one question. A list that is
+        // not loading either is left alone: it loads in full when asked for.
+        const load = qc.getQueryCache().find({ queryKey });
+        if (load?.state.fetchStatus === "fetching") {
+          const catchUp = () => void qc.invalidateQueries({ queryKey }, { cancelRefetch: false });
+          void load.promise?.then(catchUp, catchUp);
+        }
+        break;
+      }
+      // `seq` counts up from 1 without gaps within a run.
+      const last = have.at(-1)?.seq ?? 0;
+      if (event.event.seq === last + 1) {
+        qc.setQueryData<RunEventRecord[]>(queryKey, mergeEvents(have, [event.event]));
+      } else if (event.event.seq > last + 1) {
+        // An event in between is missing: ask for everything after the last one loaded.
+        void qc.invalidateQueries({ queryKey });
       }
       break;
     }

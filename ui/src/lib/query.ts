@@ -38,7 +38,8 @@ export function mergeEvents(have: RunEventRecord[], more: RunEventRecord[]): Run
 }
 
 /// A run's events. A refetch asks only for what is missing: the events after the last one
-/// already loaded.
+/// already loaded. The answer is merged into the list as it is when the answer arrives, so an
+/// event a runtime event appended in the meantime stays.
 export function eventsQuery(qc: QueryClient, runId: string) {
   const queryKey = keys.events(runId);
   return {
@@ -46,7 +47,7 @@ export function eventsQuery(qc: QueryClient, runId: string) {
     queryFn: async () => {
       const have = qc.getQueryData<RunEventRecord[]>(queryKey) ?? [];
       const more = await commands.listRunEvents(runId, have.at(-1)?.seq ?? 0);
-      return mergeEvents(have, more);
+      return mergeEvents(qc.getQueryData<RunEventRecord[]>(queryKey) ?? have, more);
     },
   };
 }
