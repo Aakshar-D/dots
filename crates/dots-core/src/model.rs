@@ -178,6 +178,8 @@ pub struct Run {
     pub queued_at: String,
     pub started_at: Option<String>,
     pub ended_at: Option<String>,
+    /// Set when the user marked the run reviewed or discarded its worktree.
+    pub reviewed_at: Option<String>,
 }
 
 /// Input for `Store::create_run`. `root_run_id: None` makes the run its own root.

@@ -9,6 +9,10 @@ use crate::Result;
 mod approvals;
 mod dots;
 mod runs;
+mod settings;
+
+/// The database file inside the data directory.
+pub const DB_FILE: &str = "dots.db";
 
 #[derive(Clone)]
 pub struct Store {
@@ -33,6 +37,11 @@ impl Store {
             .await?;
         sqlx::migrate!("./migrations").run(&pool).await?;
         Ok(Store { pool })
+    }
+
+    /// Closes every connection of this store.
+    pub async fn close(&self) {
+        self.pool.close().await;
     }
 }
 

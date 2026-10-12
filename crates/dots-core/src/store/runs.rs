@@ -9,7 +9,7 @@ use crate::{Error, Result};
 
 const RUN_COLUMNS: &str = "id, dot_id, root_run_id, parent_run_id, trigger_kind, payload, status, \
     session_id, workspace_path, branch, base_commit, summary, error, tokens_in, tokens_out, \
-    queued_at, started_at, ended_at";
+    queued_at, started_at, ended_at, reviewed_at";
 
 fn run_from_row(row: &SqliteRow) -> Result<Run> {
     Ok(Run {
@@ -31,6 +31,7 @@ fn run_from_row(row: &SqliteRow) -> Result<Run> {
         queued_at: row.try_get("queued_at")?,
         started_at: row.try_get("started_at")?,
         ended_at: row.try_get("ended_at")?,
+        reviewed_at: row.try_get("reviewed_at")?,
     })
 }
 

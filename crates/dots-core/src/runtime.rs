@@ -18,6 +18,7 @@ use crate::model::{Approval, Dot, DotSpec, EngineKind, NewRun, Run, RunStatus, T
 use crate::runner::{Runner, RunnerConfig};
 use crate::scheduler::Scheduler;
 use crate::server::{self, ServerState};
+use crate::settings::Settings;
 use crate::store::Store;
 use crate::{Error, Result};
 
@@ -43,6 +44,15 @@ impl Config {
             local_retry_delays: DEFAULT_RETRY_DELAYS.to_vec(),
         }
     }
+
+    /// The start configuration the app derives from stored settings.
+    pub fn from_settings(data_dir: impl Into<PathBuf>, settings: &Settings) -> Self {
+        let mut cfg = Self::new(data_dir);
+        cfg.port = settings.port;
+        cfg.max_concurrent_runs = settings.max_concurrent_runs;
+        cfg.claude_path = settings.claude_path.as_ref().map(PathBuf::from);
+        cfg
+    }
 }
 
 pub struct Runtime {
@@ -59,7 +69,7 @@ pub struct Runtime {
 impl Runtime {
     pub async fn start(cfg: Config) -> Result<Runtime> {
         std::fs::create_dir_all(&cfg.data_dir)?;
-        let store = Store::open(&cfg.data_dir.join("dots.db")).await?;
+        let store = Store::open(&cfg.data_dir.join(crate::store::DB_FILE)).await?;
         let bus = new_bus();
         let hub = Arc::new(ApprovalHub::new(store.clone(), bus.clone()));
         let listener = server::bind(cfg.port).await?;
