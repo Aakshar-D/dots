@@ -53,6 +53,9 @@ async fn bad_and_unknown_rows_are_ignored_one_by_one() {
         ("max_concurrent_runs", "5"),
         ("autostart", "{broken json"),
         ("theme", "\"dark\""),
+        // Right type, but a value `validate` rejects.
+        ("claude_path", "\"\""),
+        ("tested_claude_version", "\"\""),
     ] {
         sqlx::query("INSERT INTO settings (key, value) VALUES (?, ?)")
             .bind(k)
@@ -66,6 +69,8 @@ async fn bad_and_unknown_rows_are_ignored_one_by_one() {
     assert_eq!(s.port, 47321);
     assert_eq!(s.max_concurrent_runs, 5);
     assert!(s.autostart);
+    assert_eq!(s.claude_path, None);
+    assert_eq!(s.tested_claude_version, TESTED_CLAUDE_VERSION);
 }
 
 #[tokio::test]

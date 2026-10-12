@@ -24,8 +24,11 @@ impl Store {
                     continue;
                 }
             }
-            match serde_json::from_value::<Settings>(candidate.clone()) {
-                Ok(_) => merged = candidate,
+            let accepted = serde_json::from_value::<Settings>(candidate.clone())
+                .map_err(crate::Error::from)
+                .and_then(|s| s.validate());
+            match accepted {
+                Ok(()) => merged = candidate,
                 Err(e) => tracing::warn!("ignoring setting {key}: {e}"),
             }
         }
