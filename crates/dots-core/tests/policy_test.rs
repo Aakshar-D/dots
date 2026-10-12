@@ -645,6 +645,26 @@ fn absolute_deny_patterns_match_workspace_relative_inputs() {
 }
 
 #[test]
+fn relative_rules_do_not_match_the_workspace_location() {
+    let ws = std::path::Path::new("C:/Users/someone/AppData/Local/dots/worktrees/01J0RUN");
+    let p = custom(
+        vec![
+            Rule::new("Write(users/**)", Action::Deny),
+            Rule::new("Edit(appdata/**)", Action::Ask),
+        ],
+        Action::Allow,
+    );
+    let write = |path: &str| p.resolve_in("Write", &json!({"file_path": path}), Some(ws));
+    let edit = |path: &str| p.resolve_in("Edit", &json!({"file_path": path}), Some(ws));
+    // The workspace's own location is not what a relative rule names.
+    assert_eq!(write("src/a.rs"), Action::Allow);
+    assert_eq!(edit("src/a.rs"), Action::Allow);
+    // The rule's real target inside the workspace still matches.
+    assert_eq!(write("users/list.txt"), Action::Deny);
+    assert_eq!(edit("appdata/x.txt"), Action::Ask);
+}
+
+#[test]
 fn allow_rules_do_not_gain_the_directory_or_absolute_forms() {
     let ws = std::path::Path::new("C:/work/repo");
     let p = custom(

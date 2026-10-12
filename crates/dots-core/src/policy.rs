@@ -438,21 +438,25 @@ fn path_spec_matches(spec: &str, input: &Value, action: Action, workspace: Optio
         return (!path_abs || pattern_abs) && glob_matches(&pattern, &path);
     }
     // Deny/ask fail closed: test every candidate, whole and at every suffix after a '/'. A
-    // relative input (the local engine's form) is also tested inside the workspace, so absolute
-    // patterns match it. The joined string is normalized again so that a leading `..` which
-    // leaves and re-enters the workspace cannot dodge an absolute pattern. `dir/**` also covers
-    // `dir` itself.
+    // relative input (the local engine's form) is also placed inside the workspace, so absolute
+    // patterns match it. That joined path is normalized again so that a leading `..` which
+    // leaves and re-enters the workspace cannot dodge an absolute pattern. It is matched whole
+    // and only against absolute patterns: its suffixes would let a relative rule match the
+    // workspace's own location (`users/**` against `C:/Users/.../worktrees/RUN`). `dir/**` also
+    // covers `dir` itself.
     let mut candidates: Vec<String> = relative.into_iter().collect();
+    let mut joined: Option<String> = None;
     if let (false, Some(ws)) = (abs, workspace) {
         let ws = ws.trim_end_matches('/');
-        candidates.push(lexical_normalize(&format!("{ws}/{full}")).1);
+        joined = Some(lexical_normalize(&format!("{ws}/{full}")).1);
     }
     candidates.push(full);
     let dir = pattern.strip_suffix("/**").filter(|d| !d.is_empty());
     let hit = |p: &str| glob_matches(&pattern, p) || dir.is_some_and(|d| glob_matches(d, p));
-    candidates
-        .iter()
-        .any(|path| hit(path) || path.match_indices('/').any(|(i, _)| hit(&path[i + 1..])))
+    (pattern_abs && joined.as_deref().is_some_and(hit))
+        || candidates
+            .iter()
+            .any(|path| hit(path) || path.match_indices('/').any(|(i, _)| hit(&path[i + 1..])))
 }
 
 struct UrlInfo {
