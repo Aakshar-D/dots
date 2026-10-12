@@ -9,10 +9,12 @@ pub const CONFIRM_ENV: &str = "DOTS_CONFIRM";
 
 /// The program a settings change would make Dots run as the Claude CLI, when that needs the
 /// user's confirmation: a non-empty `claude_path` that differs from the stored one. Clearing
-/// the path (back to searching `PATH`) and saving it unchanged need none.
+/// the path (back to searching `PATH`) and saving it unchanged need none. The caller passes the
+/// path already normalized, and the comparison is exact: the string returned is the string that
+/// is saved, so any difference, even in whitespace, needs the user's yes.
 pub fn claude_program_to_confirm(current: Option<&str>, next: Option<&str>) -> Option<String> {
-    let next = next.map(str::trim).filter(|p| !p.is_empty())?;
-    (current.map(str::trim) != Some(next)).then(|| next.to_string())
+    let next = next.filter(|p| !p.trim().is_empty())?;
+    (current != Some(next)).then(|| next.to_string())
 }
 
 pub fn claude_program_message(program: &str) -> String {
@@ -64,9 +66,22 @@ mod tests {
             ask(None, Some("C:/x/claude.exe")),
             Some("C:/x/claude.exe".into())
         );
+        // Exact: the string shown is the string saved, so it is returned as given.
         assert_eq!(
-            ask(Some("C:/a.exe"), Some(" C:/b.exe ")),
+            ask(Some("C:/a.exe"), Some("C:/b.exe")),
             Some("C:/b.exe".into())
+        );
+        assert_eq!(
+            ask(Some("C:/a.exe"), Some("C:/a.exe\u{a0}")),
+            Some("C:/a.exe\u{a0}".into())
+        );
+        assert_eq!(
+            ask(Some("C:/a.exe"), Some(" C:/a.exe")),
+            Some(" C:/a.exe".into())
+        );
+        assert_eq!(
+            ask(Some("C:/a.exe "), Some("C:/a.exe")),
+            Some("C:/a.exe".into())
         );
         // Unchanged, cleared, or empty (which validation rejects anyway): no dialog.
         assert_eq!(ask(Some("C:/a.exe"), Some("C:/a.exe")), None);

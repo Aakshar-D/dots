@@ -46,8 +46,10 @@ pub async fn get_settings(state: State<'_, AppState>) -> Res<Settings> {
 pub async fn update_settings(
     app: AppHandle,
     state: State<'_, AppState>,
-    settings: Settings,
+    mut settings: Settings,
 ) -> Res<SettingsSaved> {
+    // Normalized once, so the string compared, shown and saved is the same one.
+    settings.claude_path = settings.claude_path.map(|p| p.trim().to_string());
     let rt = state.rt()?;
     // Pointing Dots at another program needs the user's own yes, in a dialog the webview
     // cannot answer.
