@@ -69,10 +69,20 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            // Closing the window keeps Dots running in the tray.
+            // After a normal start, closing the window keeps Dots running in the tray. After a
+            // failed start there is no tray, so closing the window is the only way out: exit.
+            // `try_state`, because the state may not be managed yet.
             if let WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                let _ = window.hide();
+                let app = window.app_handle();
+                if app
+                    .try_state::<AppState>()
+                    .is_some_and(|s| s.close_hides_window())
+                {
+                    api.prevent_close();
+                    let _ = window.hide();
+                } else {
+                    app.exit(1);
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![

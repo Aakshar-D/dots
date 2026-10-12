@@ -30,6 +30,11 @@ impl AppState {
             .map_err(|_| CmdError::internal("Dots did not start; see the startup error"))
     }
 
+    /// True only when the runtime started: then the tray exists and closing the window hides it.
+    pub fn close_hides_window(&self) -> bool {
+        self.runtime.is_ok()
+    }
+
     pub fn startup_error(&self) -> Option<StartupError> {
         self.runtime.as_ref().err().map(|message| StartupError {
             message: message.clone(),
@@ -41,6 +46,12 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn closing_the_window_exits_after_a_failed_start() {
+        let state = AppState::new(Err("disk full".into()), PathBuf::from("C:/logs"));
+        assert!(!state.close_hides_window());
+    }
 
     #[test]
     fn a_failed_start_answers_every_command_with_an_internal_error() {
