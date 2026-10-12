@@ -453,8 +453,10 @@ In task order:
    `inbox() -> { approvals, review_runs }`, `inbox_count()`, and
    `preview_schedule(expr, n) -> next n fire times` (validates the cron; the UI parses no cron).
 7. Review actions on a thread's shared worktree:
-   - `worktree_diff(run_id) -> { files: [{ path, status, patch, binary }], truncated }` — `git
+   - `worktree_diff(run_id) -> { files: [{ path, status, patch, binary }], truncated, exists }` — `git
      diff <base_commit>` plus untracked files as additions; total patch text capped at 1 MiB.
+     `exists` is false once the worktree was removed (unchanged, or discarded); the run view
+     offers discard and review of a worktree only while it is true (added in Plan 3b).
    - `discard_worktree(run_id)` — only when no run of the lineage is queued, running or
      awaiting approval; removes the worktree, deletes the branch, sets `reviewed_at` on the
      lineage. Folder-mode runs are rejected (`Invalid`). Before any git call it also refuses
