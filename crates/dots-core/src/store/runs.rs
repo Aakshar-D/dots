@@ -173,6 +173,65 @@ impl Store {
         rows.iter().map(run_from_row).collect()
     }
 
+    /// Every run of the lineage rooted at `root_run_id`, oldest first.
+    pub async fn list_thread(&self, root_run_id: &str) -> Result<Vec<Run>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {RUN_COLUMNS} FROM runs WHERE root_run_id = ? ORDER BY queued_at, id"
+        ))
+        .bind(root_run_id)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(run_from_row).collect()
+    }
+
+    /// The newest run of `dot_id`, optionally only among queued, running and awaiting runs.
+    pub async fn latest_run(&self, dot_id: &str, active_only: bool) -> Result<Option<Run>> {
+        let filter = if active_only {
+            "AND status IN ('queued', 'running', 'awaiting_approval')"
+        } else {
+            ""
+        };
+        let row = sqlx::query(&format!(
+            "SELECT {RUN_COLUMNS} FROM runs WHERE dot_id = ? {filter} \
+             ORDER BY queued_at DESC, id DESC LIMIT 1"
+        ))
+        .bind(dot_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.as_ref().map(run_from_row).transpose()
+    }
+
+    /// The newest run of each lineage, if it is finished and not reviewed yet.
+    pub async fn unreviewed_thread_ends(&self) -> Result<Vec<Run>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {RUN_COLUMNS} FROM runs r \
+             WHERE r.reviewed_at IS NULL AND r.status IN ('succeeded', 'failed', 'cancelled') \
+             AND r.id = (SELECT x.id FROM runs x WHERE x.root_run_id = r.root_run_id \
+                         ORDER BY x.queued_at DESC, x.id DESC LIMIT 1) \
+             ORDER BY r.ended_at DESC, r.id DESC"
+        ))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(run_from_row).collect()
+    }
+
+    /// Sets `reviewed_at` on every run of the lineage that has none; returns the runs changed.
+    pub async fn mark_thread_reviewed(&self, root_run_id: &str) -> Result<Vec<Run>> {
+        let ids: Vec<String> = sqlx::query_scalar(
+            "UPDATE runs SET reviewed_at = ? WHERE root_run_id = ? AND reviewed_at IS NULL \
+             RETURNING id",
+        )
+        .bind(now())
+        .bind(root_run_id)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut runs = Vec::new();
+        for id in ids {
+            runs.push(self.get_run(&id).await?);
+        }
+        Ok(runs)
+    }
+
     pub async fn dispatchable_runs(&self) -> Result<Vec<Run>> {
         let rows = sqlx::query(&format!(
             "SELECT {RUN_COLUMNS} FROM runs r WHERE r.status = 'queued' AND NOT EXISTS \

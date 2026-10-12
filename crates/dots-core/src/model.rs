@@ -244,6 +244,39 @@ pub struct Status {
     pub data_dir: String,
 }
 
+/// One row of the Dots screen.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DotOverview {
+    pub dot: Dot,
+    /// The newest queued, running or awaiting run.
+    pub active_run: Option<Run>,
+    pub last_run: Option<Run>,
+    /// RFC 3339 local time; `None` without an enabled schedule.
+    pub next_fire: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PendingApproval {
+    #[serde(flatten)]
+    pub approval: Approval,
+    pub dot_id: String,
+    pub dot_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReviewRun {
+    #[serde(flatten)]
+    pub run: Run,
+    pub dot_name: String,
+}
+
+/// Pending approvals and finished runs awaiting review (spec §12 Inbox).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Inbox {
+    pub approvals: Vec<PendingApproval>,
+    pub review_runs: Vec<ReviewRun>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SettingsSaved {
     pub settings: crate::settings::Settings,

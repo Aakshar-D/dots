@@ -15,8 +15,8 @@ use crate::engine::local::{self, LocalEngine};
 use crate::engine::{Engine, UnavailableEngine};
 use crate::events::{new_bus, Bus, RuntimeEvent};
 use crate::model::{
-    Approval, ClaudeStatus, Dot, DotSpec, EngineKind, NewRun, Run, RunStatus, SettingsSaved,
-    Status, TriggerKind,
+    Approval, ClaudeStatus, Dot, DotOverview, DotSpec, EngineKind, Inbox, NewRun, PendingApproval,
+    ReviewRun, Run, RunEventRecord, RunStatus, SettingsSaved, Status, TriggerKind,
 };
 use crate::runner::{Runner, RunnerConfig};
 use crate::scheduler::Scheduler;
@@ -250,6 +250,147 @@ impl Runtime {
         next.schedules_paused = paused;
         self.update_settings(next).await?;
         Ok(self.status().await)
+    }
+
+    pub async fn list_dots(&self) -> Result<Vec<Dot>> {
+        self.store.list_dots().await
+    }
+
+    pub async fn get_dot(&self, id: &str) -> Result<Dot> {
+        self.store.get_dot(id).await
+    }
+
+    /// Every dot with its active and last run and its next scheduled fire time.
+    pub async fn dot_overview(&self) -> Result<Vec<DotOverview>> {
+        let now = chrono::Local::now();
+        let mut rows = Vec::new();
+        for dot in self.store.list_dots().await? {
+            let next_fire = match (&dot.spec.schedule, dot.spec.enabled) {
+                (Some(expr), true) => crate::scheduler::next_fire(expr, now)
+                    .ok()
+                    .flatten()
+                    .map(|t| t.to_rfc3339()),
+                _ => None,
+            };
+            rows.push(DotOverview {
+                active_run: self.store.latest_run(&dot.id, true).await?,
+                last_run: self.store.latest_run(&dot.id, false).await?,
+                next_fire,
+                dot,
+            });
+        }
+        Ok(rows)
+    }
+
+    /// The next `count` (1 to 10) fire times of a cron expression, RFC 3339 in local time.
+    pub fn preview_schedule(expr: &str, count: usize) -> Result<Vec<String>> {
+        let schedule = crate::scheduler::parse_cron(expr)?;
+        Ok(schedule
+            .after(&chrono::Local::now())
+            .take(count.clamp(1, 10))
+            .map(|t| t.to_rfc3339())
+            .collect())
+    }
+
+    /// Newest first; `limit` is clamped to 1..=500.
+    pub async fn list_runs(&self, dot_id: Option<&str>, limit: i64) -> Result<Vec<Run>> {
+        self.store.list_runs(dot_id, limit.clamp(1, 500)).await
+    }
+
+    pub async fn get_run(&self, id: &str) -> Result<Run> {
+        self.store.get_run(id).await
+    }
+
+    /// The whole lineage (root, resumes, chat follow-ups) `run_id` belongs to, oldest first.
+    pub async fn run_thread(&self, run_id: &str) -> Result<Vec<Run>> {
+        let run = self.store.get_run(run_id).await?;
+        self.store.list_thread(&run.root_run_id).await
+    }
+
+    pub async fn list_run_events(
+        &self,
+        run_id: &str,
+        after_seq: i64,
+    ) -> Result<Vec<RunEventRecord>> {
+        self.store.get_run(run_id).await?;
+        self.store.list_events(run_id, after_seq).await
+    }
+
+    pub async fn approvals_for_run(&self, run_id: &str) -> Result<Vec<Approval>> {
+        self.store.get_run(run_id).await?;
+        self.store.approvals_for_run(run_id).await
+    }
+
+    /// Pending approvals, plus the finished, unreviewed thread ends that failed or kept a
+    /// worktree with changes.
+    pub async fn inbox(&self) -> Result<Inbox> {
+        let mut names = std::collections::HashMap::new();
+        for dot in self.store.list_dots().await? {
+            names.insert(dot.id, dot.spec.name);
+        }
+        let name = |dot_id: &str| names.get(dot_id).cloned().unwrap_or_default();
+        let mut approvals = Vec::new();
+        for approval in self.store.list_pending_approvals().await? {
+            let run = self.store.get_run(&approval.run_id).await?;
+            approvals.push(PendingApproval {
+                dot_name: name(&run.dot_id),
+                dot_id: run.dot_id,
+                approval,
+            });
+        }
+        let review_runs = self
+            .store
+            .unreviewed_thread_ends()
+            .await?
+            .into_iter()
+            .filter(|r| {
+                r.status == RunStatus::Failed
+                    || (r.branch.is_some()
+                        && r.workspace_path
+                            .as_deref()
+                            .is_some_and(|p| Path::new(p).is_dir()))
+            })
+            .map(|run| ReviewRun {
+                dot_name: name(&run.dot_id),
+                run,
+            })
+            .collect();
+        Ok(Inbox {
+            approvals,
+            review_runs,
+        })
+    }
+
+    pub async fn inbox_count(&self) -> Result<usize> {
+        let inbox = self.inbox().await?;
+        Ok(inbox.approvals.len() + inbox.review_runs.len())
+    }
+
+    /// Takes the thread of `run_id` out of the Inbox. Refused while the thread is active.
+    pub async fn mark_reviewed(&self, run_id: &str) -> Result<Run> {
+        let run = self.store.get_run(run_id).await?;
+        self.ensure_thread_idle(&run.root_run_id).await?;
+        for changed in self.store.mark_thread_reviewed(&run.root_run_id).await? {
+            let _ = self.bus.send(RuntimeEvent::RunUpdated { run: changed });
+        }
+        self.store.get_run(run_id).await
+    }
+
+    async fn ensure_thread_idle(&self, root_run_id: &str) -> Result<()> {
+        if let Some(r) = self
+            .store
+            .list_thread(root_run_id)
+            .await?
+            .into_iter()
+            .find(|r| !r.status.is_terminal())
+        {
+            return Err(Error::Conflict(format!(
+                "run {} of this thread is still {}",
+                r.id,
+                r.status.as_str()
+            )));
+        }
+        Ok(())
     }
 
     pub fn port(&self) -> u16 {
