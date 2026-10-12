@@ -63,6 +63,11 @@ async fn approve(mcp: &Value, req: &Value, step: usize) -> String {
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("--version") {
+        let version = std::env::var("FAKE_CLAUDE_VERSION").unwrap_or_else(|_| "2.1.295".into());
+        println!("{version} (Claude Code)");
+        return;
+    }
     let mut prompt = String::new();
     std::io::stdin().read_to_string(&mut prompt).ok();
     if let Ok(out) = std::env::var("FAKE_CLAUDE_ARGS_OUT") {

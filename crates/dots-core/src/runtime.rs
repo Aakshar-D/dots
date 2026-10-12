@@ -4,17 +4,20 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::json;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, Mutex};
 use tokio_util::sync::CancellationToken;
 
 use crate::approvals::{ApprovalHub, DecideEffect};
 use crate::engine::claude::args::resolve_claude;
-use crate::engine::claude::ClaudeEngine;
+use crate::engine::claude::{cli_version, ClaudeEngine};
 use crate::engine::local::client::DEFAULT_RETRY_DELAYS;
 use crate::engine::local::{self, LocalEngine};
-use crate::engine::Engine;
+use crate::engine::{Engine, UnavailableEngine};
 use crate::events::{new_bus, Bus, RuntimeEvent};
-use crate::model::{Approval, Dot, DotSpec, EngineKind, NewRun, Run, RunStatus, TriggerKind};
+use crate::model::{
+    Approval, ClaudeStatus, Dot, DotSpec, EngineKind, NewRun, Run, RunStatus, SettingsSaved,
+    Status, TriggerKind,
+};
 use crate::runner::{Runner, RunnerConfig};
 use crate::scheduler::Scheduler;
 use crate::server::{self, ServerState};
@@ -62,7 +65,13 @@ pub struct Runtime {
     runner: Arc<Runner>,
     scheduler: Arc<Scheduler>,
     port: u16,
+    server_error: Option<String>,
     claude_program: Option<PathBuf>,
+    claude_version: Option<String>,
+    data_dir: PathBuf,
+    /// The stored settings when the runtime started, and now.
+    started: Settings,
+    settings: Mutex<Settings>,
     shutdown: CancellationToken,
 }
 
@@ -70,10 +79,22 @@ impl Runtime {
     pub async fn start(cfg: Config) -> Result<Runtime> {
         std::fs::create_dir_all(&cfg.data_dir)?;
         let store = Store::open(&cfg.data_dir.join(crate::store::DB_FILE)).await?;
+        let settings = store.get_settings().await?;
         let bus = new_bus();
         let hub = Arc::new(ApprovalHub::new(store.clone(), bus.clone()));
-        let listener = server::bind(cfg.port).await?;
-        let port = listener.local_addr()?.port();
+        // A taken port must not keep the app from starting (spec §8): run without the server.
+        let (listener, server_error) = match server::bind(cfg.port).await {
+            Ok(l) => (Some(l), None),
+            Err(e) => {
+                let msg = format!("could not listen on 127.0.0.1:{}: {e}", cfg.port);
+                tracing::error!("{msg}; webhooks are off and Claude dots cannot run");
+                (None, Some(msg))
+            }
+        };
+        let port = match &listener {
+            Some(l) => l.local_addr()?.port(),
+            None => cfg.port,
+        };
         let recovered = store.recover_interrupted().await?;
         if !recovered.is_empty() {
             tracing::warn!("marked {} interrupted run(s) as failed", recovered.len());
@@ -81,18 +102,33 @@ impl Runtime {
 
         let mut engines: HashMap<EngineKind, Arc<dyn Engine>> = HashMap::new();
         let claude_program = resolve_claude(cfg.claude_path.as_deref());
-        match &claude_program {
-            Some(program) => {
+        let claude_version = match &claude_program {
+            Some(program) => cli_version(program, &cfg.claude_env).await,
+            None => None,
+        };
+        let claude: Arc<dyn Engine> = match (&claude_program, &server_error) {
+            // Claude runs need the MCP permission endpoint of the local server.
+            (_, Some(_)) => Arc::new(UnavailableEngine(format!(
+                "local server is not running: port {port} is in use. Change the port in \
+                 Settings and restart Dots."
+            ))),
+            (None, None) => {
+                tracing::warn!(
+                    "claude CLI not found; Claude dots will fail until it is configured"
+                );
+                Arc::new(UnavailableEngine(
+                    "claude CLI not found: install Claude Code or set its path in Settings".into(),
+                ))
+            }
+            (Some(program), None) => {
                 let mut engine = ClaudeEngine::new(program.clone(), cfg.data_dir.join("mcp"));
                 for (k, v) in &cfg.claude_env {
                     engine = engine.with_env(k, v);
                 }
-                engines.insert(EngineKind::Claude, Arc::new(engine));
+                Arc::new(engine)
             }
-            None => {
-                tracing::warn!("claude CLI not found; Claude dots will fail until it is configured")
-            }
-        }
+        };
+        engines.insert(EngineKind::Claude, claude);
         engines.insert(
             EngineKind::Local,
             Arc::new(LocalEngine::with_retry_delays(
@@ -126,17 +162,20 @@ impl Runtime {
             Err(e) => tracing::error!("listing awaiting runs failed: {e}"),
         }
         let shutdown = CancellationToken::new();
-        server::serve(
-            listener,
-            ServerState {
-                store: store.clone(),
-                runner: runner.clone(),
-                hub: hub.clone(),
-            },
-            shutdown.clone(),
-        );
+        if let Some(listener) = listener {
+            server::serve(
+                listener,
+                ServerState {
+                    store: store.clone(),
+                    runner: runner.clone(),
+                    hub: hub.clone(),
+                },
+                shutdown.clone(),
+            );
+        }
         runner.spawn_dispatcher(shutdown.clone());
         let scheduler = Scheduler::new(store.clone(), runner.clone());
+        scheduler.set_paused(settings.schedules_paused);
         scheduler.spawn(shutdown.clone());
         Ok(Runtime {
             store,
@@ -145,9 +184,72 @@ impl Runtime {
             runner,
             scheduler,
             port,
+            server_error,
             claude_program,
+            claude_version,
+            data_dir: cfg.data_dir.clone(),
+            started: settings.clone(),
+            settings: Mutex::new(settings),
             shutdown,
         })
+    }
+
+    pub async fn status(&self) -> Status {
+        let settings = self.settings.lock().await.clone();
+        Status {
+            port: self.port,
+            server_error: self.server_error.clone(),
+            claude: ClaudeStatus {
+                program: self
+                    .claude_program
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().into_owned()),
+                version: self.claude_version.clone(),
+                mismatch: self
+                    .claude_version
+                    .as_ref()
+                    .is_some_and(|v| *v != settings.tested_claude_version),
+                tested_version: settings.tested_claude_version.clone(),
+            },
+            schedules_paused: self.scheduler.is_paused(),
+            restart_required: self.started.restart_required(&settings),
+            data_dir: self.data_dir.to_string_lossy().into_owned(),
+        }
+    }
+
+    /// Records the detected `claude` version as tested, which clears the mismatch warning.
+    pub async fn mark_claude_tested(&self) -> Result<Status> {
+        let Some(version) = self.claude_version.clone() else {
+            return Err(Error::Invalid("no claude CLI version was detected".into()));
+        };
+        let mut next = self.settings().await;
+        next.tested_claude_version = version;
+        self.update_settings(next).await?;
+        Ok(self.status().await)
+    }
+
+    pub async fn settings(&self) -> Settings {
+        self.settings.lock().await.clone()
+    }
+
+    /// Validates and stores `next`. `schedules_paused` applies now; port, concurrency and the
+    /// `claude` path apply after a restart (`restart_required`). Autostart is the app's job.
+    pub async fn update_settings(&self, next: Settings) -> Result<SettingsSaved> {
+        let mut current = self.settings.lock().await;
+        self.store.put_settings(&next).await?;
+        self.scheduler.set_paused(next.schedules_paused);
+        *current = next.clone();
+        Ok(SettingsSaved {
+            restart_required: self.started.restart_required(&next),
+            settings: next,
+        })
+    }
+
+    pub async fn set_schedules_paused(&self, paused: bool) -> Result<Status> {
+        let mut next = self.settings().await;
+        next.schedules_paused = paused;
+        self.update_settings(next).await?;
+        Ok(self.status().await)
     }
 
     pub fn port(&self) -> u16 {

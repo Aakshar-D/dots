@@ -1,4 +1,5 @@
 use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -34,6 +35,7 @@ pub struct Scheduler {
     runner: Arc<Runner>,
     reload: Notify,
     last_fired: Mutex<Option<DateTime<Local>>>,
+    paused: AtomicBool,
 }
 
 impl Scheduler {
@@ -43,7 +45,18 @@ impl Scheduler {
             runner,
             reload: Notify::new(),
             last_fired: Mutex::new(None),
+            paused: AtomicBool::new(false),
         })
+    }
+
+    /// While paused nothing fires; ticks missed meanwhile are skipped, not caught up.
+    pub fn set_paused(&self, paused: bool) {
+        self.paused.store(paused, Ordering::SeqCst);
+        self.reload();
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.paused.load(Ordering::SeqCst)
     }
 
     /// Call after any dot create/update/delete/enable change.
@@ -72,6 +85,10 @@ impl Scheduler {
     }
 
     async fn tick(&self) -> Result<()> {
+        if self.is_paused() {
+            self.reload.notified().await;
+            return Ok(());
+        }
         let now = Local::now();
         let from = match *self.last_fired.lock().unwrap() {
             Some(last) if last > now => last,

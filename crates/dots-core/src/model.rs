@@ -221,6 +221,35 @@ pub struct RunEventRecord {
     pub data: Value,
 }
 
+/// The installed `claude` CLI as seen at startup.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClaudeStatus {
+    pub program: Option<String>,
+    pub version: Option<String>,
+    pub tested_version: String,
+    /// A version was detected and it differs from `tested_version`.
+    pub mismatch: bool,
+}
+
+/// What the app shows in its banners and Settings (spec §12).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Status {
+    pub port: u16,
+    /// Set when the local server could not start; webhooks are off and Claude runs fail.
+    pub server_error: Option<String>,
+    pub claude: ClaudeStatus,
+    pub schedules_paused: bool,
+    /// Port, concurrency or `claude` path changed since start.
+    pub restart_required: bool,
+    pub data_dir: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SettingsSaved {
+    pub settings: crate::settings::Settings,
+    pub restart_required: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Approval {
     pub id: String,
