@@ -8,3 +8,10 @@ export function ErrorNote({ error }: { error: unknown }) {
     </p>
   );
 }
+
+/// The failed loads among `queries`, shown where their data would be. A thread asks the same
+/// thing once per run and one cause fails them all, so each message is shown once.
+export function LoadErrors({ queries }: { queries: { isError: boolean; error: unknown }[] }) {
+  const messages = new Set(queries.filter((q) => q.isError).map((q) => errorMessage(q.error)));
+  return [...messages].map((message) => <ErrorNote key={message} error={message} />);
+}

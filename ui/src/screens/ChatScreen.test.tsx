@@ -217,6 +217,27 @@ describe("the Chat screen", () => {
     );
   });
 
+  it("shows a failed load of a conversation's events and keeps what did load", async () => {
+    chats([chat("a", "10:00")]);
+    backend.on("list_run_events", () => {
+      throw { kind: "internal", message: "database is locked" };
+    });
+    renderApp(`/chat/${dot.id}/a`);
+    const conversation = within(await screen.findByRole("region", { name: "Conversation" }));
+    expect(await conversation.findByRole("alert")).toHaveTextContent("database is locked");
+    expect(conversation.getByText("question a")).toBeVisible();
+  });
+
+  it("shows a failed load of a conversation's approvals", async () => {
+    chats([chat("a", "10:00")]);
+    backend.on("approvals_for_run", () => {
+      throw { kind: "internal", message: "database is locked" };
+    });
+    renderApp(`/chat/${dot.id}/a`);
+    const conversation = within(await screen.findByRole("region", { name: "Conversation" }));
+    expect(await conversation.findByRole("alert")).toHaveTextContent("database is locked");
+  });
+
   it("shows why a message could not be sent and keeps the conversation", async () => {
     chats([chat("a", "10:00")]);
     backend.on("chat", () => {

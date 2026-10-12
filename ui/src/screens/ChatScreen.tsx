@@ -7,7 +7,7 @@ import { Link, useNavigate, useParams } from "react-router";
 import { commands } from "@/api/commands";
 import type { Run, RunEventRecord } from "@/api/types";
 import { ApprovalCard } from "@/components/ApprovalCard";
-import { ErrorNote } from "@/components/ErrorNote";
+import { ErrorNote, LoadErrors } from "@/components/ErrorNote";
 import { Page } from "@/components/Page";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Transcript } from "@/components/Transcript";
@@ -100,6 +100,7 @@ function Conversation({ dotId, rootId }: { dotId: string; rootId: string }) {
     <>
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto p-4">
         <Transcript runs={runs} events={eventsByRun} />
+        <LoadErrors queries={[...events, ...approvals]} />
         {pending.map((approval) => (
           <ApprovalCard key={approval.id} approval={approval} />
         ))}

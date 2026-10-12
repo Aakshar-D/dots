@@ -8,7 +8,7 @@ import type { Approval, Run, RunEventRecord } from "@/api/types";
 import { ApprovalCard } from "@/components/ApprovalCard";
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { DiffView } from "@/components/DiffView";
-import { ErrorNote } from "@/components/ErrorNote";
+import { ErrorNote, LoadErrors } from "@/components/ErrorNote";
 import { Markdown } from "@/components/Markdown";
 import { Page } from "@/components/Page";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -143,6 +143,7 @@ function Thread({ runId, runs }: { runId: string; runs: Run[] }) {
 
   const transcript = (
     <div className="flex flex-col gap-4">
+      <LoadErrors queries={[...events, ...approvals]} />
       {pending.map((approval) => (
         <ApprovalCard key={approval.id} approval={approval} />
       ))}

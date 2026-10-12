@@ -250,6 +250,38 @@ describe("the run view", () => {
     expect(document.getElementById("raw")).toBeNull();
   });
 
+  it("shows a failed load of the run's events", async () => {
+    thread([folderRun], [], [sample.approval]);
+    backend.on("list_run_events", () => {
+      throw { kind: "internal", message: "database is locked" };
+    });
+    renderApp(`/runs/${run.id}`);
+    expect(await screen.findByRole("alert")).toHaveTextContent("database is locked");
+    // What did load is still shown.
+    expect(await screen.findByRole("article", { name: "Approval for Bash" })).toBeVisible();
+  });
+
+  it("shows a failed load of the run's approvals", async () => {
+    thread([folderRun], [ev({ kind: "assistant_text", text: "Starting." })]);
+    // An answer this UI cannot read.
+    backend.on("approvals_for_run", () => [{ id: 7 }]);
+    renderApp(`/runs/${run.id}`);
+    expect(await screen.findByRole("alert")).toHaveTextContent(/^approvals_for_run: unexpected/);
+    expect(await screen.findByText("Starting.")).toBeVisible();
+  });
+
+  it("shows one failure once when it stops the same load for every run of the thread", async () => {
+    const child: Run = { ...folderRun, id: "run-b", parent_run_id: run.id, trigger: "resume" };
+    thread([folderRun, child]);
+    backend.on("list_run_events", () => {
+      throw { kind: "internal", message: "database is locked" };
+    });
+    renderApp(`/runs/${run.id}`);
+    expect(await screen.findByRole("alert")).toHaveTextContent("database is locked");
+    await waitFor(() => expect(backend.callsTo("list_run_events")).toHaveLength(2));
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+  });
+
   it("shows why a run could not be loaded", async () => {
     backend.on("run_thread", () => {
       throw { kind: "not_found", message: "run nope" };
