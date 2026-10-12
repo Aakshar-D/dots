@@ -1,0 +1,127 @@
+import { act, screen, waitFor, within } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
+
+import type { Inbox } from "@/api/types";
+import { backend } from "@/test/backend";
+import { sample } from "@/test/fixtures";
+import { renderApp } from "@/test/render";
+
+const [approval] = sample.inbox.approvals;
+const [worktreeRun] = sample.inbox.review_runs; // succeeded, left a worktree
+const failedRun = {
+  ...worktreeRun,
+  id: "run-failed",
+  status: "failed" as const,
+  branch: null,
+  summary: null,
+  error: "timeout",
+};
+
+/// An inbox the test can empty, the way a decision or a review does.
+function inbox(initial: Inbox) {
+  let current = initial;
+  backend.on("inbox", () => current);
+  return {
+    set: (next: Inbox) => {
+      current = next;
+    },
+  };
+}
+
+describe("the Inbox", () => {
+  it("lists what waits: approvals with their dot, and runs to review", async () => {
+    inbox({ approvals: [approval], review_runs: [worktreeRun, failedRun] });
+    renderApp("/inbox");
+    const approvals = await screen.findByRole("region", { name: "Approvals" });
+    expect(within(approvals).getByRole("link", { name: approval.dot_name })).toHaveAttribute(
+      "href",
+      `/dots/${approval.dot_id}`,
+    );
+    expect(within(approvals).getByRole("link", { name: "Open the run" })).toHaveAttribute(
+      "href",
+      `/runs/${approval.run_id}`,
+    );
+    expect(within(approvals).getByRole("article", { name: "Approval for Bash" })).toBeVisible();
+
+    const runs = within(screen.getByRole("region", { name: "Runs to review" })).getAllByRole(
+      "listitem",
+    );
+    expect(runs).toHaveLength(2);
+    expect(within(runs[0]).getByText("Succeeded")).toBeVisible();
+    expect(within(runs[0]).getByRole("link", { name: "Open" })).toHaveAttribute(
+      "href",
+      `/runs/${worktreeRun.id}`,
+    );
+    expect(within(runs[1]).getByText(/timeout/)).toBeVisible();
+    // Only a run with a worktree can be discarded.
+    expect(within(runs[0]).getByRole("button", { name: "Discard worktree" })).toBeVisible();
+    expect(within(runs[1]).queryByRole("button", { name: "Discard worktree" })).toBeNull();
+  });
+
+  it("approves a tool call and drops it from the list", async () => {
+    const box = inbox({ approvals: [approval], review_runs: [] });
+    backend.on("decide_approval", () => {
+      box.set({ approvals: [], review_runs: [] });
+      return { ...sample.approval, status: "approved" };
+    });
+    const { user } = renderApp("/inbox");
+    await user.click(await screen.findByRole("button", { name: "Approve" }));
+    expect(await screen.findByText(/Nothing waits for you/)).toBeVisible();
+    expect(backend.callsTo("decide_approval")).toEqual([
+      { id: approval.id, approved: true, note: null },
+    ]);
+  });
+
+  it("marks a run as reviewed and drops it from the list", async () => {
+    const box = inbox({ approvals: [], review_runs: [failedRun] });
+    backend.on("mark_reviewed", () => {
+      box.set({ approvals: [], review_runs: [] });
+      return { ...sample.run, id: failedRun.id, reviewed_at: sample.run.ended_at };
+    });
+    const { user } = renderApp("/inbox");
+    await user.click(await screen.findByRole("button", { name: "Mark reviewed" }));
+    expect(await screen.findByText("Marked as reviewed")).toBeVisible();
+    expect(await screen.findByText(/Nothing waits for you/)).toBeVisible();
+    expect(backend.callsTo("mark_reviewed")).toEqual([{ runId: failedRun.id }]);
+  });
+
+  it("discards a worktree only after a confirmation", async () => {
+    const box = inbox({ approvals: [], review_runs: [worktreeRun] });
+    backend.on("discard_worktree", () => {
+      box.set({ approvals: [], review_runs: [] });
+      return { ...sample.run, reviewed_at: sample.run.ended_at };
+    });
+    const { user } = renderApp("/inbox");
+    await user.click(await screen.findByRole("button", { name: "Discard worktree" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveTextContent(worktreeRun.branch!);
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(backend.callsTo("discard_worktree")).toEqual([]);
+
+    await user.click(screen.getByRole("button", { name: "Discard worktree" }));
+    await user.click(await screen.findByRole("button", { name: "Discard the worktree" }));
+    expect(await screen.findByText("Worktree discarded")).toBeVisible();
+    expect(backend.callsTo("discard_worktree")).toEqual([{ runId: worktreeRun.id }]);
+  });
+
+  it("shows a refused action and keeps the run in the list", async () => {
+    inbox({ approvals: [], review_runs: [worktreeRun] });
+    backend.on("mark_reviewed", () => {
+      throw { kind: "conflict", message: "the thread is still running" };
+    });
+    const { user } = renderApp("/inbox");
+    await user.click(await screen.findByRole("button", { name: "Mark reviewed" }));
+    expect(await screen.findByText("the thread is still running")).toBeVisible();
+    expect(screen.getByRole("listitem", { name: /run to review/ })).toBeVisible();
+  });
+
+  it("shows a new approval as soon as the dot asks", async () => {
+    const box = inbox({ approvals: [], review_runs: [] });
+    renderApp("/inbox");
+    expect(await screen.findByText(/Nothing waits for you/)).toBeVisible();
+    await waitFor(() => expect(backend.callsTo("inbox").length).toBeGreaterThan(0));
+    box.set({ approvals: [approval], review_runs: [] });
+    act(() => backend.emit("runtime", { type: "approval_requested", approval: sample.approval }));
+    expect(await screen.findByRole("article", { name: "Approval for Bash" })).toBeVisible();
+  });
+});
