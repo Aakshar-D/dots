@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::Value;
-use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 
@@ -14,7 +14,8 @@ const DEFAULT_TIMEOUT_SECS: u64 = 120;
 const MAX_TIMEOUT_SECS: u64 = 600;
 const HELD_OPEN: &str = "[output stream still held open by a background process]";
 
-/// Runs the user script, which arrives as base64 UTF-8 in place of `SCRIPT_BASE64`.
+/// Runs the user script, which arrives as UTF-8 on stdin, so its length is not bound by the
+/// Windows command-line limit.
 ///
 /// With redirected pipes, `powershell -EncodedCommand` writes errors, warnings and host output to
 /// stderr as CLIXML, and an error message quotes the whole command text, wrapper included. So the
@@ -27,7 +28,9 @@ const HELD_OPEN: &str = "[output stream still held open by a background process]
 #[cfg(windows)]
 const BOOTSTRAP: &str = r#"[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $ProgressPreference = 'SilentlyContinue'
-$__dotsScript = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('SCRIPT_BASE64'))
+$__dotsIn = New-Object IO.MemoryStream
+[Console]::OpenStandardInput().CopyTo($__dotsIn)
+$__dotsScript = [Text.Encoding]::UTF8.GetString($__dotsIn.ToArray())
 $__dotsErrors = $null
 [void][Management.Automation.Language.Parser]::ParseInput($__dotsScript, [ref]$null, [ref]$__dotsErrors)
 if ($__dotsErrors) { $__dotsErrors | ForEach-Object { [Console]::Error.WriteLine("line $($_.Extent.StartLineNumber): $($_.Message)") }; exit 1 }
@@ -44,14 +47,17 @@ try {
 } catch { [Console]::Error.WriteLine($_.ToString()); exit 1 }
 if ($__dotsOk) { exit 0 } elseif ($LASTEXITCODE) { exit $LASTEXITCODE } else { exit 1 }"#;
 
-/// The shell process for `script`. On Windows the bootstrap goes through `-EncodedCommand`,
-/// which avoids every quoting problem of passing it as an argument, and prints UTF-8.
+/// The shell process for `script`, and what to write to its stdin. On Windows the fixed
+/// bootstrap goes through `-EncodedCommand`, which avoids every quoting problem of passing it
+/// as an argument, and prints UTF-8; the script follows on stdin.
 #[cfg(windows)]
-fn command_for(script: &str) -> Command {
+fn command_for(script: &str) -> (Command, Option<Vec<u8>>) {
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine as _;
-    let full = BOOTSTRAP.replace("SCRIPT_BASE64", &STANDARD.encode(script));
-    let utf16: Vec<u8> = full.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    let utf16: Vec<u8> = BOOTSTRAP
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect();
     let mut cmd = Command::new("powershell.exe");
     cmd.args([
         "-NoLogo",
@@ -60,15 +66,15 @@ fn command_for(script: &str) -> Command {
         "-EncodedCommand",
     ])
     .arg(STANDARD.encode(utf16));
-    cmd
+    (cmd, Some(script.as_bytes().to_vec()))
 }
 
 /// The shell leads its own process group so that `stop` can kill everything it started.
 #[cfg(not(windows))]
-fn command_for(script: &str) -> Command {
+fn command_for(script: &str) -> (Command, Option<Vec<u8>>) {
     let mut cmd = Command::new("sh");
     cmd.arg("-c").arg(script).process_group(0);
-    cmd
+    (cmd, None)
 }
 
 /// Kills the shell and its descendants. Outside Windows `proc::kill_tree` would kill only `sh`,
@@ -127,9 +133,13 @@ pub(super) async fn shell(root: &Path, input: &Value, cancel: &CancellationToken
         .and_then(Value::as_u64)
         .unwrap_or(DEFAULT_TIMEOUT_SECS)
         .clamp(1, MAX_TIMEOUT_SECS);
-    let mut cmd = command_for(script);
+    let (mut cmd, stdin) = command_for(script);
     cmd.current_dir(root)
-        .stdin(Stdio::null())
+        .stdin(if stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
@@ -139,6 +149,13 @@ pub(super) async fn shell(root: &Path, input: &Value, cancel: &CancellationToken
         Err(e) => return ToolOutput::err(format!("failed to start the shell: {e}")),
     };
     let pid = child.id();
+    if let (Some(bytes), Some(mut pipe)) = (stdin, child.stdin.take()) {
+        // Written from a task so a large script never blocks reading the output; dropping the
+        // pipe closes it, which ends the bootstrap's read.
+        tokio::spawn(async move {
+            let _ = pipe.write_all(&bytes).await;
+        });
+    }
     let (out, err) = (Tail::default(), Tail::default());
     let mut readers = [
         tokio::spawn(pump(

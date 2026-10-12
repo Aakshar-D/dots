@@ -635,3 +635,23 @@ async fn walking_tools_without_a_filter_hide_nothing() {
     let out = run(p, "grep", json!({"pattern": "hello key"})).await;
     assert_eq!(out.output, "secret/key.txt:1: hello key");
 }
+
+#[tokio::test]
+async fn shell_runs_scripts_longer_than_the_command_line_limit() {
+    let ws = workspace();
+    let mut script = String::new();
+    for i in 0..800 {
+        script.push_str(&format!(
+            "# padding line {i:04} ..........................................\n"
+        ));
+    }
+    script.push_str(if cfg!(windows) {
+        "Write-Output 'done: héllo ✓'"
+    } else {
+        "echo 'done: héllo ✓'"
+    });
+    assert!(script.len() > 40_000);
+    let out = run(ws.path(), "shell", json!({ "command": script })).await;
+    assert!(!out.is_error, "{out:?}");
+    assert_eq!(out.output.trim(), "done: héllo ✓");
+}
