@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use common::{git_out, init_repo, spec, wait_status};
+use dots_core::events::RuntimeEvent;
 use dots_core::model::{FileStatus, Run, RunStatus, WorkspaceMode};
 use dots_core::workspace::{parse_diff, MAX_DIFF_BYTES};
 use dots_core::{Config, Error, Runtime};
@@ -91,6 +92,50 @@ async fn the_diff_shows_tracked_and_untracked_changes() {
             .ends_with("@@ -0,0 +1,2 @@\n+a\n+b\n\\ No newline at end of file"),
         "{}",
         new.patch
+    );
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn a_worktree_run_announces_its_workspace_while_it_runs() {
+    let t = start().await;
+    let mut events = t.rt.subscribe();
+    let run = edited_run(&t).await;
+    let mut announced = false;
+    while let Ok(event) = events.try_recv() {
+        if let RuntimeEvent::RunUpdated { run: seen } = event {
+            announced |= seen.id == run.id
+                && seen.status == RunStatus::Running
+                && seen.branch == run.branch
+                && seen.workspace_path == run.workspace_path;
+        }
+    }
+    assert!(
+        announced,
+        "no RunUpdated carried the branch and folder of the running run"
+    );
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn a_patch_keeps_its_trailing_blank_context_line() {
+    let t = start().await;
+    std::fs::write(t.repo.join("notes.txt"), "one\ntwo\n\n").unwrap();
+    git_out(&t.repo, &["add", "notes.txt"]);
+    git_out(&t.repo, &["commit", "-q", "-m", "notes"]);
+    let run = edited_run(&t).await;
+    let ws = PathBuf::from(run.workspace_path.as_deref().unwrap());
+    std::fs::write(ws.join("notes.txt"), "uno\ntwo\n\n").unwrap();
+
+    let diff = t.rt.worktree_diff(&run.id).await.unwrap();
+    let notes = diff.files.iter().find(|f| f.path == "notes.txt").unwrap();
+    // The hunk is "-one +uno two <blank>": the blank context line is a single space.
+    assert!(
+        notes
+            .patch
+            .ends_with("@@ -1,3 +1,3 @@\n-one\n+uno\n two\n \n"),
+        "{:?}",
+        notes.patch
     );
     t.rt.shutdown();
 }

@@ -223,9 +223,8 @@ impl Runtime {
         let Some(version) = self.claude_version.clone() else {
             return Err(Error::Invalid("no claude CLI version was detected".into()));
         };
-        let mut next = self.settings().await;
-        next.tested_claude_version = version;
-        self.update_settings(next).await?;
+        self.change_settings(|s| s.tested_claude_version = version)
+            .await?;
         Ok(self.status().await)
     }
 
@@ -233,24 +232,43 @@ impl Runtime {
         self.settings.lock().await.clone()
     }
 
-    /// Validates and stores `next`. `schedules_paused` applies now; port, concurrency and the
-    /// `claude` path apply after a restart (`restart_required`). Autostart is the app's job.
+    /// Validates and stores `next`. Port, concurrency and the `claude` path apply after a
+    /// restart (`restart_required`); autostart is the app's job. The stored `schedules_paused`
+    /// and `tested_claude_version` are kept whatever `next` says: only `set_schedules_paused`
+    /// and `mark_claude_tested` change them, so a settings form holding an old copy cannot undo
+    /// a pause or a "mark as tested".
     pub async fn update_settings(&self, next: Settings) -> Result<SettingsSaved> {
-        let mut current = self.settings.lock().await;
-        self.store.put_settings(&next).await?;
-        self.scheduler.set_paused(next.schedules_paused);
-        *current = next.clone();
+        let settings = self
+            .change_settings(|s| {
+                *s = Settings {
+                    schedules_paused: s.schedules_paused,
+                    tested_claude_version: std::mem::take(&mut s.tested_claude_version),
+                    ..next
+                };
+            })
+            .await?;
         Ok(SettingsSaved {
-            restart_required: self.started.restart_required(&next),
-            settings: next,
+            restart_required: self.started.restart_required(&settings),
+            settings,
         })
     }
 
     pub async fn set_schedules_paused(&self, paused: bool) -> Result<Status> {
-        let mut next = self.settings().await;
-        next.schedules_paused = paused;
-        self.update_settings(next).await?;
+        self.change_settings(|s| s.schedules_paused = paused)
+            .await?;
         Ok(self.status().await)
+    }
+
+    /// One read-modify-write of the settings under their lock, so two changes cannot overwrite
+    /// each other. Nothing is stored when the result does not validate.
+    async fn change_settings(&self, change: impl FnOnce(&mut Settings) + Send) -> Result<Settings> {
+        let mut current = self.settings.lock().await;
+        let mut next = current.clone();
+        change(&mut next);
+        self.store.put_settings(&next).await?;
+        self.scheduler.set_paused(next.schedules_paused);
+        *current = next.clone();
+        Ok(next)
     }
 
     pub async fn list_dots(&self) -> Result<Vec<Dot>> {
@@ -479,8 +497,18 @@ impl Runtime {
         self.claude_program.as_deref()
     }
 
-    pub fn webhook_url(&self, dot: &Dot) -> String {
-        format!("http://127.0.0.1:{}/dots/{}/trigger", self.port, dot.id)
+    /// The dot's trigger URL. `Conflict` while the local server is not running: the port then
+    /// belongs to another program, and a webhook sent there would hand it the dot's token.
+    pub fn webhook_url(&self, dot: &Dot) -> Result<String> {
+        if let Some(reason) = &self.server_error {
+            return Err(Error::Conflict(format!(
+                "webhooks are off because the local server is not running: {reason}"
+            )));
+        }
+        Ok(format!(
+            "http://127.0.0.1:{}/dots/{}/trigger",
+            self.port, dot.id
+        ))
     }
 
     pub async fn create_dot(&self, spec: DotSpec) -> Result<Dot> {

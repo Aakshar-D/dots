@@ -24,6 +24,12 @@ impl Prepared {
 
 /// Runs `git -C <dir> <args>` and returns trimmed stdout.
 pub async fn git(dir: &Path, args: &[&str]) -> Result<String> {
+    Ok(git_raw(dir, args).await?.trim().to_string())
+}
+
+/// Like [`git`], but returns stdout exactly as git wrote it. A patch needs this: its last line
+/// can be a blank context line (a single space), which trimming would drop.
+pub async fn git_raw(dir: &Path, args: &[&str]) -> Result<String> {
     let mut cmd = Command::new("git");
     cmd.arg("-C").arg(dir).args(args).kill_on_drop(true);
     crate::proc::hide_window(&mut cmd);
@@ -35,7 +41,7 @@ pub async fn git(dir: &Path, args: &[&str]) -> Result<String> {
             String::from_utf8_lossy(&out.stderr).trim()
         )));
     }
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 /// Total patch text a diff returns; later files are listed without their patch.
@@ -112,7 +118,7 @@ fn untracked_patch(rel: &str, bytes: &[u8]) -> Option<String> {
 /// changes to tracked files, then untracked files (not ignored) as additions. Patch text is
 /// capped at `MAX_DIFF_BYTES`; files past the cap are listed with an empty patch.
 pub async fn diff(path: &Path, base_commit: &str) -> Result<WorktreeDiff> {
-    let tracked = git(
+    let tracked = git_raw(
         path,
         &[
             "-c",

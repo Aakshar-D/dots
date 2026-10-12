@@ -121,7 +121,7 @@ pub async fn regenerate_webhook_token(state: State<'_, AppState>, id: String) ->
 pub async fn webhook_url(state: State<'_, AppState>, id: String) -> Res<String> {
     let rt = state.rt()?;
     let dot = rt.get_dot(&id).await?;
-    Ok(rt.webhook_url(&dot))
+    Ok(rt.webhook_url(&dot)?)
 }
 
 #[tauri::command]
