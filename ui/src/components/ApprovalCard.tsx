@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { notifyError } from "@/lib/notify";
 import { keys } from "@/lib/query";
+import { onSingleClick } from "@/lib/single-click";
 import { toolPreview } from "@/lib/transcript";
 
 /// A tool call that waits for the user: what the dot wants to do, and Approve or Deny with an
@@ -23,6 +24,9 @@ export function ApprovalCard({ approval }: { approval: Approval }) {
     },
     onError: notifyError,
   });
+  // One decision per card: after a success the card stays until its list has reloaded, and its
+  // buttons stay off for that time.
+  const decided = decide.isPending || decide.isSuccess;
   const noteId = `approval-note-${approval.id}`;
   return (
     <article
@@ -53,14 +57,14 @@ export function ApprovalCard({ approval }: { approval: Approval }) {
           value={note}
           onChange={(e) => setNote(e.target.value)}
         />
-        <Button size="sm" disabled={decide.isPending} onClick={() => decide.mutate(true)}>
+        <Button size="sm" disabled={decided} onClick={onSingleClick(() => decide.mutate(true))}>
           Approve
         </Button>
         <Button
           size="sm"
           variant="outline"
-          disabled={decide.isPending}
-          onClick={() => decide.mutate(false)}
+          disabled={decided}
+          onClick={onSingleClick(() => decide.mutate(false))}
         >
           Deny
         </Button>

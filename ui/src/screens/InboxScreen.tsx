@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { relativeTime } from "@/lib/format";
 import { notifyError } from "@/lib/notify";
 import { keys } from "@/lib/query";
+import { onSingleClick } from "@/lib/single-click";
 
 /// A finished run that waits for the user: it failed, or it left a worktree to look at.
 function ReviewRow({ run }: { run: ReviewRun }) {
@@ -55,7 +56,12 @@ function ReviewRow({ run }: { run: ReviewRun }) {
       <Button asChild size="sm" variant="outline">
         <Link to={`/runs/${run.id}`}>Open</Link>
       </Button>
-      <Button size="sm" variant="outline" disabled={busy} onClick={() => markReviewed.mutate()}>
+      <Button
+        size="sm"
+        variant="outline"
+        disabled={busy}
+        onClick={onSingleClick(() => markReviewed.mutate())}
+      >
         Mark reviewed
       </Button>
       {run.worktree_exists && (

@@ -1,4 +1,4 @@
-import { act, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import type { Inbox } from "@/api/types";
@@ -83,6 +83,69 @@ describe("the Inbox", () => {
     ]);
   });
 
+  /// Lets what a command's answer set off reach the screen.
+  const settle = () => act(() => new Promise<void>((resolve) => setTimeout(resolve, 20)));
+
+  it("keeps both buttons of a decided approval off until the list has reloaded", async () => {
+    inbox({ approvals: [approval], review_runs: [] });
+    backend.on("decide_approval", () => ({ ...sample.approval, status: "approved" }));
+    const { user } = renderApp("/inbox");
+    const approve = await screen.findByRole("button", { name: "Approve" });
+
+    // From now on the Inbox's reload is held until the test lets it answer.
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const loads = backend.callsTo("inbox").length;
+    backend.on("inbox", async () => {
+      await held;
+      return { approvals: [], review_runs: [] };
+    });
+
+    await user.click(approve);
+    // The decision has succeeded: the reload it starts is on its way.
+    await waitFor(() => expect(backend.callsTo("inbox").length).toBeGreaterThan(loads));
+    await settle();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Deny" })).toBeDisabled();
+
+    act(() => release());
+    expect(await screen.findByText(/Nothing waits for you/)).toBeVisible();
+  });
+
+  // A double-click is two clicks at one place. The first removes its card or row, the next one
+  // moves up under the pointer, and the second click (`detail` 2) lands on that one. user-event
+  // cannot say this: it counts clicks per element.
+  it.each(["Approve", "Deny"])(
+    "decides one approval when %s is double-clicked and the next card moves up",
+    async (button) => {
+      const next = { ...approval, id: "apr-next", tool: "Write", input: { file_path: "a.txt" } };
+      const box = inbox({ approvals: [approval, next], review_runs: [] });
+      backend.on("decide_approval", (args) => {
+        box.set({ approvals: [next], review_runs: [] });
+        return { ...sample.approval, id: args.id, status: "approved" };
+      });
+      const { user } = renderApp("/inbox");
+      const first = await screen.findByRole("article", { name: "Approval for Bash" });
+      fireEvent.click(within(first).getByRole("button", { name: button }), { detail: 1 });
+      await waitFor(() =>
+        expect(screen.queryByRole("article", { name: "Approval for Bash" })).toBeNull(),
+      );
+      const moved = within(screen.getByRole("article", { name: "Approval for Write" }));
+      fireEvent.click(moved.getByRole("button", { name: button }), { detail: 2 });
+      await settle();
+      expect(backend.callsTo("decide_approval")).toEqual([
+        { id: approval.id, approved: button === "Approve", note: null },
+      ]);
+
+      // A click of its own decides the card that moved up.
+      await user.click(moved.getByRole("button", { name: button }));
+      await waitFor(() => expect(backend.callsTo("decide_approval")).toHaveLength(2));
+      expect(backend.callsTo("decide_approval")[1]).toMatchObject({ id: next.id });
+    },
+  );
+
   it("marks a run as reviewed and drops it from the list", async () => {
     const box = inbox({ approvals: [], review_runs: [failedRun] });
     backend.on("mark_reviewed", () => {
@@ -161,5 +224,25 @@ describe("the Inbox", () => {
     box.set({ approvals: [approval], review_runs: [] });
     act(() => backend.emit("runtime", { type: "approval_requested", approval: sample.approval }));
     expect(await screen.findByRole("article", { name: "Approval for Bash" })).toBeVisible();
+  });
+
+  // Last in this file: the toaster shows a toast of an earlier test again, so no test after
+  // this one may wait for "Marked as reviewed".
+  it("marks one run as reviewed when the button is double-clicked and the next row moves up", async () => {
+    const next = { ...failedRun, id: "run-next" };
+    const box = inbox({ approvals: [], review_runs: [failedRun, next] });
+    backend.on("mark_reviewed", (args) => {
+      box.set({ approvals: [], review_runs: [next] });
+      return { ...sample.run, id: args.runId, reviewed_at: sample.run.ended_at };
+    });
+    renderApp("/inbox");
+    const rows = await screen.findAllByRole("listitem", { name: /run to review/ });
+    fireEvent.click(within(rows[0]).getByRole("button", { name: "Mark reviewed" }), { detail: 1 });
+    await waitFor(() =>
+      expect(screen.getAllByRole("listitem", { name: /run to review/ })).toHaveLength(1),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Mark reviewed" }), { detail: 2 });
+    await settle();
+    expect(backend.callsTo("mark_reviewed")).toEqual([{ runId: failedRun.id }]);
   });
 });
