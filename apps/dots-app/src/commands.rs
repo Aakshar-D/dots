@@ -1,5 +1,9 @@
-//! Tauri commands: one-line wrappers over `Runtime`. They take ids, never paths: the UI
-//! cannot make the backend open or read an arbitrary path.
+//! Tauri commands: one-line wrappers over `Runtime`. Runs, dots and approvals are addressed by
+//! id, so the UI cannot make the backend open, read or delete an arbitrary path. Two values
+//! from the UI are paths, both checked in the core and never opened here: a dot's `workdir`
+//! (`DotSpec::validate`, then the runner requires an existing folder) and the `claude_path`
+//! setting (`Settings::validate`; the runtime runs that program as the Claude CLI from the
+//! next start). The UI is first-party code under a `default-src 'self'` policy.
 
 use dots_core::model::{
     Approval, Dot, DotOverview, DotSpec, Inbox, Run, RunEventRecord, SettingsSaved, Status,
