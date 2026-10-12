@@ -7,6 +7,9 @@ macro_rules! str_enum {
         }
 
         impl $name {
+            /// Every variant, in declaration order.
+            pub const ALL: &'static [$name] = &[ $( $name::$variant ),+ ];
+
             pub fn as_str(&self) -> &'static str {
                 match self { $( Self::$variant => $s ),+ }
             }

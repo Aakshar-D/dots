@@ -3,15 +3,26 @@ use serde::{Deserialize, Serialize};
 /// The error every command returns; the UI branches on `kind`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CmdError {
-    /// `not_found`, `invalid`, `conflict` or `internal`.
+    /// One of [`KINDS`].
     pub kind: String,
     pub message: String,
 }
+
+/// Every `kind` a command can answer with. `cancelled`: the user declined a native
+/// confirmation and nothing was changed.
+pub const KINDS: [&str; 5] = ["not_found", "invalid", "conflict", "internal", "cancelled"];
 
 impl CmdError {
     pub fn internal(message: impl Into<String>) -> Self {
         Self {
             kind: "internal".into(),
+            message: message.into(),
+        }
+    }
+
+    pub fn cancelled(message: impl Into<String>) -> Self {
+        Self {
+            kind: "cancelled".into(),
             message: message.into(),
         }
     }

@@ -85,6 +85,35 @@ export const RunEventRecord = z.strictObject({
   data: z.unknown(),
 });
 
+// What a run event's `data` holds: the engine event, tagged by `kind`. `RunEventRecord.data`
+// stays `unknown` so that an event kind from a newer core cannot break a whole event list;
+// the transcript parses each event with this schema and shows what it cannot parse as raw.
+export const RunEventData = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("session_started"), session_id: z.string() }),
+  z.strictObject({ kind: z.literal("assistant_text"), text: z.string() }),
+  z.strictObject({
+    kind: z.literal("tool_call"),
+    id: z.string(),
+    tool: z.string(),
+    input: z.unknown(),
+  }),
+  z.strictObject({
+    kind: z.literal("tool_result"),
+    id: z.string(),
+    output: z.string(),
+    is_error: z.boolean(),
+  }),
+  z.strictObject({
+    kind: z.literal("usage"),
+    tokens_in: z.number().int(),
+    tokens_out: z.number().int(),
+  }),
+  z.strictObject({ kind: z.literal("raw"), line: z.string() }),
+  z.strictObject({ kind: z.literal("message"), message: z.unknown() }),
+  z.strictObject({ kind: z.literal("finished"), summary: z.string() }),
+  z.strictObject({ kind: z.literal("failed"), error: z.string() }),
+]);
+
 const approvalShape = {
   id: z.string(),
   run_id: z.string(),
@@ -165,9 +194,18 @@ export const WorktreeDiff = z.strictObject({
   truncated: z.boolean(),
 });
 
-export const CmdErrorKind = z.enum(["not_found", "invalid", "conflict", "internal"]);
+// `cancelled`: the user declined a native confirmation; nothing was changed.
+export const CmdErrorKind = z.enum(["not_found", "invalid", "conflict", "internal", "cancelled"]);
 export const CmdError = z.strictObject({ kind: CmdErrorKind, message: z.string() });
 export const StartupError = z.strictObject({ message: z.string(), log_dir: z.string() });
+
+/// Validation limits of the core that the dot editor and Settings mirror. The contract test
+/// checks them against the Rust constants.
+export const LIMITS = {
+  max_timeout_secs: 604800,
+  max_approval_wait_secs: 280,
+  max_concurrent_runs: 16,
+} as const;
 
 export type EngineKind = z.infer<typeof EngineKind>;
 export type WorkspaceMode = z.infer<typeof WorkspaceMode>;
@@ -183,6 +221,7 @@ export type DotSpec = z.infer<typeof DotSpec>;
 export type Dot = z.infer<typeof Dot>;
 export type Run = z.infer<typeof Run>;
 export type RunEventRecord = z.infer<typeof RunEventRecord>;
+export type RunEventData = z.infer<typeof RunEventData>;
 export type Approval = z.infer<typeof Approval>;
 export type RuntimeEvent = z.infer<typeof RuntimeEvent>;
 export type ClaudeStatus = z.infer<typeof ClaudeStatus>;

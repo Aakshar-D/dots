@@ -3,13 +3,14 @@
 //! schema, so a field renamed or added on one side fails the other side's tests.
 //! Regenerate after changing a type: `UPDATE_CONTRACT=1 cargo test -p dots-app contract`.
 
+use dots_core::engine::EngineEvent;
 use dots_core::events::RuntimeEvent;
 use dots_core::model::*;
-use dots_core::policy::{Policy, Preset};
-use dots_core::settings::Settings;
+use dots_core::policy::{Action, Policy, Preset};
+use dots_core::settings::{Settings, MAX_CONCURRENT_RUNS};
 use serde_json::{json, Value};
 
-use crate::error::CmdError;
+use crate::error::{CmdError, KINDS};
 use crate::state::StartupError;
 
 const TS: &str = "2026-10-09T12:00:00.000Z";
@@ -115,7 +116,47 @@ fn status() -> Status {
     }
 }
 
-/// The samples, keyed by the UI schema that parses them.
+/// One sample of every engine event, as stored in a run event's `data`.
+fn engine_events() -> Value {
+    to([
+        EngineEvent::SessionStarted {
+            session_id: "s-1".into(),
+        },
+        EngineEvent::AssistantText {
+            text: "Running the tests.".into(),
+        },
+        EngineEvent::ToolCall {
+            id: "t1".into(),
+            tool: "Bash".into(),
+            input: json!({"command": "cargo test"}),
+        },
+        EngineEvent::ToolResult {
+            id: "t1".into(),
+            output: "test result: ok".into(),
+            is_error: false,
+        },
+        EngineEvent::Usage {
+            tokens_in: 1200,
+            tokens_out: 340,
+        },
+        EngineEvent::Raw {
+            line: "{\"type\":\"future\"}".into(),
+        },
+        EngineEvent::Message {
+            message: json!({"role": "user", "content": "Run the tests."}),
+        },
+        EngineEvent::Finished {
+            summary: "All tests pass.".into(),
+        },
+        EngineEvent::Failed {
+            error: "timeout".into(),
+        },
+    ])
+}
+
+/// The samples, keyed by the UI schema that parses them. `Enums` lists every variant of every
+/// shared enum and `Limits` the validation limits the editor mirrors: the UI parses live data
+/// with its schemas, so a variant or limit it does not know must fail a test, not a screen.
 pub fn samples() -> Value {
     let settings = Settings {
         local_endpoints: vec!["http://127.0.0.1:1234".into()],
@@ -174,6 +215,23 @@ pub fn samples() -> Value {
             truncated: false,
         }),
         "CmdError": to(CmdError { kind: "conflict".into(), message: "run 01J0RUN is already succeeded".into() }),
+        "RunEventData": engine_events(),
+        "Enums": {
+            "EngineKind": EngineKind::ALL,
+            "WorkspaceMode": WorkspaceMode::ALL,
+            "TriggerKind": TriggerKind::ALL,
+            "RunStatus": RunStatus::ALL,
+            "ApprovalStatus": ApprovalStatus::ALL,
+            "Action": Action::ALL,
+            "Preset": Preset::ALL,
+            "FileStatus": FileStatus::ALL,
+            "CmdErrorKind": KINDS,
+        },
+        "Limits": {
+            "max_timeout_secs": MAX_TIMEOUT_SECS,
+            "max_approval_wait_secs": MAX_APPROVAL_WAIT_SECS,
+            "max_concurrent_runs": MAX_CONCURRENT_RUNS,
+        },
         "StartupError": to(StartupError {
             message: "Dots could not start: database disk image is malformed".into(),
             log_dir: "C:/Users/u/AppData/Local/dots/logs".into(),
