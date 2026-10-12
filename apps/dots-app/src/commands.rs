@@ -46,24 +46,15 @@ pub async fn get_settings(state: State<'_, AppState>) -> Res<Settings> {
 pub async fn update_settings(
     app: AppHandle,
     state: State<'_, AppState>,
-    mut settings: Settings,
+    settings: Settings,
 ) -> Res<SettingsSaved> {
-    // Normalized once, so the string compared, shown and saved is the same one.
-    settings.claude_path = settings.claude_path.map(|p| p.trim().to_string());
     let rt = state.rt()?;
     // Pointing Dots at another program needs the user's own yes, in a dialog the webview
     // cannot answer.
-    let stored = rt.settings().await;
-    if let Some(program) = confirm::claude_program_to_confirm(
-        stored.claude_path.as_deref(),
-        settings.claude_path.as_deref(),
-    ) {
-        let message = confirm::claude_program_message(&program);
-        if !confirm::ask(&app, "Change the Claude program?", message).await {
-            return Err(CmdError::cancelled("the Claude program was not changed"));
-        }
-    }
-    let saved = rt.update_settings(settings).await?;
+    let saved = confirm::save_settings_confirmed(&rt, settings, |message| {
+        confirm::ask(&app, "Change the Claude program?", message)
+    })
+    .await?;
     crate::autostart::apply(&app, saved.settings.autostart);
     if let Some(tray) = app.try_state::<Tray>() {
         tray.set_paused(saved.settings.schedules_paused);
