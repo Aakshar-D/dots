@@ -583,3 +583,79 @@ fn sandboxed_denies_claude_config_writes_and_asks_for_commits() {
         }
     }
 }
+
+#[test]
+fn a_dir_glob_deny_also_covers_the_directory_itself() {
+    let p = custom(
+        vec![
+            Rule::new("Read(secret/**)", Action::Deny),
+            Rule::new("LS(**/.git/**)", Action::Deny),
+        ],
+        Action::Allow,
+    );
+    assert_eq!(
+        p.resolve("Read", &json!({"file_path": "secret"})),
+        Action::Deny
+    );
+    assert_eq!(
+        p.resolve("Read", &json!({"file_path": "secret/"})),
+        Action::Deny
+    );
+    assert_eq!(
+        p.resolve("Read", &json!({"file_path": "secret/a.txt"})),
+        Action::Deny
+    );
+    assert_eq!(
+        p.resolve("Read", &json!({"file_path": "secrets"})),
+        Action::Allow
+    );
+    assert_eq!(p.resolve("LS", &json!({"path": ".git"})), Action::Deny);
+    assert_eq!(p.resolve("LS", &json!({"path": "sub/.git"})), Action::Deny);
+    assert_eq!(p.resolve("LS", &json!({"path": ".github"})), Action::Allow);
+}
+
+#[test]
+fn absolute_deny_patterns_match_workspace_relative_inputs() {
+    let ws = std::path::Path::new("C:/work/repo");
+    let p = custom(
+        vec![
+            Rule::new("Read(C:/work/repo/keys/**)", Action::Deny),
+            Rule::new(r"Edit(c:\work\repo\Cargo.toml)", Action::Ask),
+        ],
+        Action::Allow,
+    );
+    let read = |path: &str| p.resolve_in("Read", &json!({"file_path": path}), Some(ws));
+    assert_eq!(read("keys/id_rsa"), Action::Deny);
+    assert_eq!(read("keys"), Action::Deny);
+    assert_eq!(read("./keys/../keys/id_rsa"), Action::Deny);
+    assert_eq!(read("src/main.rs"), Action::Allow);
+    assert_eq!(
+        p.resolve_in("Edit", &json!({"file_path": "Cargo.toml"}), Some(ws)),
+        Action::Ask
+    );
+    // Without a workspace a relative input cannot be placed, so only relative patterns apply.
+    assert_eq!(
+        p.resolve("Read", &json!({"file_path": "keys/id_rsa"})),
+        Action::Allow
+    );
+}
+
+#[test]
+fn allow_rules_do_not_gain_the_directory_or_absolute_forms() {
+    let ws = std::path::Path::new("C:/work/repo");
+    let p = custom(
+        vec![
+            Rule::new("Read(docs/**)", Action::Allow),
+            Rule::new("Write(C:/work/repo/out/**)", Action::Allow),
+        ],
+        Action::Ask,
+    );
+    assert_eq!(
+        p.resolve_in("Read", &json!({"file_path": "docs"}), Some(ws)),
+        Action::Ask
+    );
+    assert_eq!(
+        p.resolve_in("Write", &json!({"file_path": "out/a.txt"}), Some(ws)),
+        Action::Ask
+    );
+}

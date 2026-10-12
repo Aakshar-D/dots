@@ -437,13 +437,24 @@ fn path_spec_matches(spec: &str, input: &Value, action: Action, workspace: Optio
         };
         return (!path_abs || pattern_abs) && glob_matches(&pattern, &path);
     }
-    // Deny/ask fail closed: test every candidate, whole and at every suffix after a '/'.
-    relative.iter().chain(std::iter::once(&full)).any(|path| {
-        glob_matches(&pattern, path)
-            || path
-                .match_indices('/')
-                .any(|(i, _)| glob_matches(&pattern, &path[i + 1..]))
-    })
+    // Deny/ask fail closed: test every candidate, whole and at every suffix after a '/'. A
+    // relative input (the local engine's form) is also tested inside the workspace, so absolute
+    // patterns match it, and `dir/**` also covers `dir` itself.
+    let mut candidates: Vec<String> = relative.into_iter().collect();
+    if let (false, Some(ws)) = (abs, workspace) {
+        let ws = ws.trim_end_matches('/');
+        candidates.push(if full.is_empty() {
+            ws.to_string()
+        } else {
+            format!("{ws}/{full}")
+        });
+    }
+    candidates.push(full);
+    let dir = pattern.strip_suffix("/**").filter(|d| !d.is_empty());
+    let hit = |p: &str| glob_matches(&pattern, p) || dir.is_some_and(|d| glob_matches(d, p));
+    candidates
+        .iter()
+        .any(|path| hit(path) || path.match_indices('/').any(|(i, _)| hit(&path[i + 1..])))
 }
 
 struct UrlInfo {
