@@ -8,8 +8,14 @@ import type { RunEventRecord } from "@/api/types";
 export function createQueryClient(): QueryClient {
   return new QueryClient({
     defaultOptions: {
-      queries: { retry: false, staleTime: Infinity, refetchOnWindowFocus: false },
-      mutations: { retry: false },
+      // "always": every query and command is local IPC, so none waits for the network.
+      queries: {
+        retry: false,
+        staleTime: Infinity,
+        refetchOnWindowFocus: false,
+        networkMode: "always",
+      },
+      mutations: { retry: false, networkMode: "always" },
     },
   });
 }
