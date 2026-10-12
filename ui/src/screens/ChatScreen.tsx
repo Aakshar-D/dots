@@ -184,7 +184,7 @@ function Threads({ dotId, rootId }: { dotId: string; rootId: string | undefined 
 export function ChatScreen() {
   const { dotId, runId } = useParams();
   const navigate = useNavigate();
-  const dots = useQuery({ queryKey: ["dots"], queryFn: commands.listDots });
+  const dots = useQuery({ queryKey: keys.dots, queryFn: commands.listDots });
   if (dots.isPending) return <Page title="Chat" />;
   if (dots.isError) {
     return (

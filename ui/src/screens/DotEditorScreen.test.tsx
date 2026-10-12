@@ -1,6 +1,7 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
+import type { Inbox } from "@/api/types";
 import { specOf } from "@/lib/dot-rules";
 import { localDateTime } from "@/lib/format";
 import { backend } from "@/test/backend";
@@ -112,13 +113,15 @@ describe("the dot editor, new dot", () => {
 });
 
 describe("the dot editor, stored dot", () => {
+  /// A backend holding the dot. A test changes `held.dot` the way another command would.
   function stored() {
-    let current = dot;
-    backend.on("get_dot", () => current);
+    const held = { dot };
+    backend.on("get_dot", () => held.dot);
     backend.on("update_dot", (args) => {
-      current = { ...current, ...(args.spec as object) };
-      return current;
+      held.dot = { ...held.dot, ...(args.spec as object) };
+      return held.dot;
     });
+    return held;
   }
 
   it("loads the dot and saves a change", async () => {
@@ -167,8 +170,11 @@ describe("the dot editor, stored dot", () => {
   });
 
   it("shows the webhook, copies it, and makes a new token after a confirmation", async () => {
-    stored();
-    backend.on("regenerate_webhook_token", () => "tok-new");
+    const held = stored();
+    backend.on("regenerate_webhook_token", () => {
+      held.dot = { ...held.dot, webhook_token: "tok-new" };
+      return "tok-new";
+    });
     const { user } = renderApp(path);
     const url = `http://127.0.0.1:47321/dots/${dot.id}/trigger`;
     await waitFor(() => expect(screen.getByLabelText("Webhook URL")).toHaveValue(url));
@@ -181,6 +187,91 @@ describe("the dot editor, stored dot", () => {
     await user.click(await screen.findByRole("button", { name: "Make a new token" }));
     await waitFor(() => expect(screen.getByLabelText("Token")).toHaveValue("tok-new"));
     expect(backend.callsTo("regenerate_webhook_token")).toEqual([{ id: dot.id }]);
+  });
+
+  /// Types new instructions and leaves them unsaved.
+  async function typeInstructions(user: ReturnType<typeof renderApp>["user"], text: string) {
+    const instructions = await screen.findByLabelText("Instructions");
+    await user.clear(instructions);
+    await user.type(instructions, text);
+  }
+  async function regenerate(user: ReturnType<typeof renderApp>["user"]) {
+    await user.click(screen.getByRole("button", { name: "Regenerate" }));
+    await user.click(await screen.findByRole("button", { name: "Make a new token" }));
+  }
+
+  it("keeps unsaved edits when the dot is loaded again", async () => {
+    const held = stored();
+    // The copy loaded after the new token differs from the form in more than the token.
+    backend.on("regenerate_webhook_token", () => {
+      held.dot = { ...held.dot, name: "renamed", instructions: "Stored.", webhook_token: "tok-new" };
+      return "tok-new";
+    });
+    const { user } = renderApp(path);
+    await typeInstructions(user, "Only summarize.");
+    await regenerate(user);
+
+    // The reload has arrived: the page shows what it brought.
+    expect(await screen.findByRole("heading", { name: "renamed" })).toBeVisible();
+    expect(screen.getByLabelText("Token")).toHaveValue("tok-new");
+    expect(screen.getByLabelText("Instructions")).toHaveValue("Only summarize.");
+    expect(screen.getByLabelText("Name")).toHaveValue(dot.name);
+  });
+
+  it("keeps the editor and its unsaved edits when loading the dot again fails", async () => {
+    const held = stored();
+    backend.on("regenerate_webhook_token", () => {
+      held.dot = { ...held.dot, webhook_token: "tok-new" };
+      backend.on("get_dot", () => {
+        throw { kind: "internal", message: "database is locked" };
+      });
+      return "tok-new";
+    });
+    const { user } = renderApp(path);
+    await typeInstructions(user, "Only summarize.");
+    await regenerate(user);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("database is locked");
+    expect(screen.getByLabelText("Instructions")).toHaveValue("Only summarize.");
+    expect(screen.getByLabelText("Token")).toHaveValue("tok-new");
+  });
+
+  it("takes a new name to Chat's dot picker", async () => {
+    const held = stored();
+    backend.on("list_dots", () => [held.dot]);
+    // Chat is opened first, so it holds the dot under its old name.
+    const { user, router } = renderApp("/chat");
+    expect(await screen.findByRole("option", { name: dot.name })).toBeInTheDocument();
+
+    await act(() => router.navigate(path));
+    const name = await screen.findByLabelText("Name");
+    await user.clear(name);
+    await user.type(name, "renamed");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("Saved")).toBeVisible();
+
+    await user.click(screen.getByRole("link", { name: "Chat" }));
+    expect(await screen.findByRole("option", { name: "renamed" })).toBeInTheDocument();
+  });
+
+  it("drops the deleted dot's runs from the Inbox and its count", async () => {
+    stored();
+    let waiting: Inbox = { approvals: [], review_runs: sample.inbox.review_runs };
+    backend.on("inbox", () => waiting);
+    backend.on("delete_dot", () => {
+      waiting = { approvals: [], review_runs: [] };
+      return null;
+    });
+    const { user, router } = renderApp(path);
+    const inboxLink = await screen.findByRole("link", { name: /^Inbox/ });
+    await waitFor(() => expect(inboxLink).toHaveTextContent(/^Inbox1$/));
+
+    await user.click(await screen.findByRole("button", { name: "Delete" }));
+    await user.click(await screen.findByRole("button", { name: "Delete the dot" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/dots"));
+    await waitFor(() => expect(inboxLink).toHaveTextContent(/^Inbox$/));
+    await user.click(inboxLink);
+    expect(await screen.findByText(/Nothing waits for you/)).toBeVisible();
   });
 
   it("says that webhooks are off instead of showing a URL nobody listens on", async () => {

@@ -26,6 +26,7 @@ export const keys = {
   settings: ["settings"] as const,
   overview: ["overview"] as const,
   inbox: ["inbox"] as const,
+  dots: ["dots"] as const,
   dot: (id: string) => ["dot", id] as const,
   runs: (dotId: string | null) => ["runs", dotId] as const,
   run: (id: string) => ["run", id] as const,
@@ -34,6 +35,15 @@ export const keys = {
   approvals: (runId: string) => ["approvals", runId] as const,
   diff: (runId: string) => ["diff", runId] as const,
 };
+
+/// Marks stale everything a change to a dot can show up in: the dot lists, every loaded dot,
+/// the Inbox (a deleted dot takes its approvals and runs with it) and every list of runs. No
+/// runtime event announces a dot change, so each command that changes a dot calls this.
+export function invalidateDots(qc: QueryClient): void {
+  for (const queryKey of [keys.dots, ["dot"], keys.overview, keys.inbox, ["runs"]]) {
+    void qc.invalidateQueries({ queryKey });
+  }
+}
 
 /// `have` plus the events of `more` it does not hold yet, ordered by `seq`.
 export function mergeEvents(have: RunEventRecord[], more: RunEventRecord[]): RunEventRecord[] {

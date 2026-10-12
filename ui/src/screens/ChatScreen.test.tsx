@@ -1,7 +1,7 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import type { Approval, Run, RunEventRecord } from "@/api/types";
+import type { Approval, Dot, Run, RunEventRecord } from "@/api/types";
 import { backend } from "@/test/backend";
 import { sample } from "@/test/fixtures";
 import { renderApp } from "@/test/render";
@@ -61,6 +61,27 @@ describe("the Chat screen", () => {
     renderApp("/chat");
     expect(await screen.findByText(/no dot to chat with yet/)).toBeVisible();
     expect(screen.getByRole("link", { name: "Create one" })).toHaveAttribute("href", "/dots/new");
+  });
+
+  it("lists a dot created after Chat was first opened", async () => {
+    const dots: Dot[] = [];
+    backend.on("list_dots", () => dots);
+    backend.on("get_dot", (args) => dots.find((d) => d.id === args.id));
+    backend.on("create_dot", (args) => {
+      const created: Dot = { ...dot, ...(args.spec as object), id: "dot-new" };
+      dots.push(created);
+      return created;
+    });
+    const { user, router } = renderApp("/chat");
+    await user.click(await screen.findByRole("link", { name: "Create one" }));
+    await user.type(await screen.findByLabelText("Name"), "nightly");
+    await user.type(screen.getByLabelText("Instructions"), "Run the tests.");
+    await user.type(screen.getByLabelText("Folder"), "C:/dev/app");
+    await user.click(screen.getByRole("button", { name: "Create dot" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/dots/dot-new"));
+
+    await user.click(screen.getByRole("link", { name: "Chat" }));
+    expect(await screen.findByRole("option", { name: "nightly" })).toBeInTheDocument();
   });
 
   it("asks for a dot first", async () => {

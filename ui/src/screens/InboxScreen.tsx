@@ -19,20 +19,24 @@ function ReviewRow({ run }: { run: ReviewRun }) {
   const qc = useQueryClient();
   const done = (message: string) => (changed: Run) => {
     qc.setQueryData(keys.run(changed.id), changed);
-    for (const queryKey of [keys.inbox, ["thread"], ["diff"]]) {
+    for (const queryKey of [["thread"], ["diff"]]) {
       void qc.invalidateQueries({ queryKey });
     }
     toast.success(message);
   };
+  // Also after a refusal: a run that is gone or was reviewed elsewhere has to leave the list.
+  const reload = () => void qc.invalidateQueries({ queryKey: keys.inbox });
   const markReviewed = useMutation({
     mutationFn: () => commands.markReviewed(run.id),
     onSuccess: done("Marked as reviewed"),
     onError: notifyError,
+    onSettled: reload,
   });
   const discard = useMutation({
     mutationFn: () => commands.discardWorktree(run.id),
     onSuccess: done("Worktree discarded"),
     onError: notifyError,
+    onSettled: reload,
   });
   const busy = markReviewed.isPending || discard.isPending;
   return (

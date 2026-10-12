@@ -105,6 +105,63 @@ describe("the Dots screen", () => {
     expect(within(row(scheduled.dot.name)).getByText("Disabled")).toBeVisible();
   });
 
+  /// A backend holding one dot, for a walk between the list and the dot's editor.
+  function oneDot() {
+    const held = { dot: scheduled.dot };
+    backend.on("dot_overview", () => [{ ...scheduled, dot: held.dot }]);
+    backend.on("get_dot", () => held.dot);
+    backend.on("update_dot", (args) => {
+      held.dot = { ...held.dot, ...(args.spec as object) };
+      return held.dot;
+    });
+    return held;
+  }
+  const name = scheduled.dot.name;
+
+  it("hands the dot it switched off to the editor, which then saves it switched off", async () => {
+    const held = oneDot();
+    backend.on("set_dot_enabled", (args) => {
+      held.dot = { ...held.dot, enabled: args.enabled as boolean };
+      return held.dot;
+    });
+    // The editor loads the dot while it is enabled.
+    const { user } = renderApp(`/dots/${scheduled.dot.id}`);
+    expect(await screen.findByLabelText("Enabled")).toBeChecked();
+
+    await user.click(screen.getByRole("link", { name: "Dots" }));
+    await user.click(await screen.findByRole("switch", { name: `${name} enabled` }));
+    await waitFor(() =>
+      expect(screen.getByRole("switch", { name: `${name} enabled` })).not.toBeChecked(),
+    );
+
+    await user.click(screen.getByRole("link", { name }));
+    expect(await screen.findByLabelText("Enabled")).not.toBeChecked();
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(backend.callsTo("update_dot")).toHaveLength(1));
+    expect(backend.callsTo("update_dot")[0]).toMatchObject({
+      id: scheduled.dot.id,
+      spec: { enabled: false },
+    });
+  });
+
+  it("makes the editor load the dot again after a switch whose answer was lost", async () => {
+    const held = oneDot();
+    // The dot is switched off, but the answer is not one the UI can read.
+    backend.on("set_dot_enabled", (args) => {
+      held.dot = { ...held.dot, enabled: args.enabled as boolean };
+      return { id: held.dot.id };
+    });
+    const { user } = renderApp(`/dots/${scheduled.dot.id}`);
+    expect(await screen.findByLabelText("Enabled")).toBeChecked();
+
+    await user.click(screen.getByRole("link", { name: "Dots" }));
+    await user.click(await screen.findByRole("switch", { name: `${name} enabled` }));
+    expect(await screen.findByText(/^set_dot_enabled: unexpected/)).toBeVisible();
+
+    await user.click(screen.getByRole("link", { name }));
+    expect(await screen.findByLabelText("Enabled")).not.toBeChecked();
+  });
+
   it("shows a failed load in place of the list", async () => {
     backend.on("dot_overview", () => {
       throw { kind: "internal", message: "database is locked" };

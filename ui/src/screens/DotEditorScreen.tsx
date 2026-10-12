@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { parseMcp, specErrors, specOf } from "@/lib/dot-rules";
 import { errorMessage, notifyError } from "@/lib/notify";
-import { keys } from "@/lib/query";
+import { invalidateDots, keys } from "@/lib/query";
 import { useDebounced } from "@/lib/use-debounced";
 import { DotForm, type Draft } from "@/screens/dot-editor/DotForm";
 import { RunsList } from "@/screens/dot-editor/RunsList";
@@ -124,8 +124,8 @@ function NewDot() {
       saveLabel="Create dot"
       onSave={async (spec) => {
         const dot = await commands.createDot(spec);
+        invalidateDots(qc);
         qc.setQueryData(keys.dot(dot.id), dot);
-        void qc.invalidateQueries({ queryKey: keys.overview });
         toast.success("Dot created");
         void navigate(`/dots/${dot.id}`);
       }}
@@ -145,20 +145,18 @@ function ExistingDot({ dotId }: { dotId: string }) {
   const remove = useMutation({
     mutationFn: () => commands.deleteDot(dotId),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: keys.overview });
+      // Removed first: the deleted dot must not be loaded again.
       qc.removeQueries({ queryKey: keys.dot(dotId) });
+      invalidateDots(qc);
       toast.success("Dot deleted");
       void navigate("/dots");
     },
     onError: notifyError,
   });
-  if (dot.isPending) return <Page title="Dot" />;
-  if (dot.isError) {
-    return (
-      <Page title="Dot">
-        <ErrorNote error={dot.error} />
-      </Page>
-    );
+  // A dot that was loaded stays on the page while it is loaded again, and when that fails: the
+  // form below holds what the user typed, and it is filled only once, when it mounts.
+  if (dot.data === undefined) {
+    return <Page title="Dot">{dot.isError && <ErrorNote error={dot.error} />}</Page>;
   }
   return (
     <Editor
@@ -168,8 +166,8 @@ function ExistingDot({ dotId }: { dotId: string }) {
       saveLabel="Save"
       onSave={async (spec) => {
         const saved = await commands.updateDot(dotId, spec);
+        invalidateDots(qc);
         qc.setQueryData(keys.dot(dotId), saved);
-        void qc.invalidateQueries({ queryKey: keys.overview });
         toast.success("Saved");
       }}
       actions={
@@ -195,16 +193,19 @@ function ExistingDot({ dotId }: { dotId: string }) {
       }
     >
       {(form) => (
-        <Tabs defaultValue="settings">
-          <TabsList>
-            <TabsTrigger value="settings">Settings</TabsTrigger>
-            <TabsTrigger value="runs">Runs</TabsTrigger>
-          </TabsList>
-          <TabsContent value="settings">{form}</TabsContent>
-          <TabsContent value="runs">
-            <RunsList dotId={dotId} />
-          </TabsContent>
-        </Tabs>
+        <>
+          {dot.isError && <ErrorNote error={dot.error} />}
+          <Tabs defaultValue="settings">
+            <TabsList>
+              <TabsTrigger value="settings">Settings</TabsTrigger>
+              <TabsTrigger value="runs">Runs</TabsTrigger>
+            </TabsList>
+            <TabsContent value="settings">{form}</TabsContent>
+            <TabsContent value="runs">
+              <RunsList dotId={dotId} />
+            </TabsContent>
+          </Tabs>
+        </>
       )}
     </Editor>
   );

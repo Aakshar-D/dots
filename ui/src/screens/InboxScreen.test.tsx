@@ -126,6 +126,33 @@ describe("the Inbox", () => {
     expect(screen.getByRole("listitem", { name: /run to review/ })).toBeVisible();
   });
 
+  it("drops a run whose review was refused once the Inbox has reloaded without it", async () => {
+    // The run is gone (its dot was deleted elsewhere): the core refuses, and the Inbox it
+    // answers next no longer holds the run.
+    const box = inbox({ approvals: [], review_runs: [failedRun] });
+    backend.on("mark_reviewed", () => {
+      box.set({ approvals: [], review_runs: [] });
+      throw { kind: "not_found", message: `run ${failedRun.id}` };
+    });
+    const { user } = renderApp("/inbox");
+    await user.click(await screen.findByRole("button", { name: "Mark reviewed" }));
+    expect(await screen.findByText(`run ${failedRun.id}`)).toBeVisible();
+    expect(await screen.findByText(/Nothing waits for you/)).toBeVisible();
+  });
+
+  it("drops a run whose discard was refused once the Inbox has reloaded without it", async () => {
+    const box = inbox({ approvals: [], review_runs: [worktreeRun] });
+    backend.on("discard_worktree", () => {
+      box.set({ approvals: [], review_runs: [] });
+      throw { kind: "not_found", message: `run ${worktreeRun.id}` };
+    });
+    const { user } = renderApp("/inbox");
+    await user.click(await screen.findByRole("button", { name: "Discard worktree" }));
+    await user.click(await screen.findByRole("button", { name: "Discard the worktree" }));
+    expect(await screen.findByText(`run ${worktreeRun.id}`)).toBeVisible();
+    expect(await screen.findByText(/Nothing waits for you/)).toBeVisible();
+  });
+
   it("shows a new approval as soon as the dot asks", async () => {
     const box = inbox({ approvals: [], review_runs: [] });
     renderApp("/inbox");

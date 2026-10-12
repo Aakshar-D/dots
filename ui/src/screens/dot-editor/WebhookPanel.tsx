@@ -9,7 +9,7 @@ import { Field } from "@/components/Field";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { errorMessage, notifyError } from "@/lib/notify";
-import { keys } from "@/lib/query";
+import { invalidateDots, keys } from "@/lib/query";
 
 function CopyButton({ what, text }: { what: string; text: string }) {
   return (
@@ -37,6 +37,7 @@ export function WebhookPanel({ dot }: { dot: Dot }) {
   const regenerate = useMutation({
     mutationFn: () => commands.regenerateWebhookToken(dot.id),
     onSuccess: (token) => {
+      invalidateDots(qc);
       qc.setQueryData(keys.dot(dot.id), { ...dot, webhook_token: token });
       toast.success("New token. The old one no longer works.");
     },
