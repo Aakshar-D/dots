@@ -177,7 +177,11 @@ export const PendingApproval = z.strictObject({
   dot_id: z.string(),
   dot_name: z.string(),
 });
-export const ReviewRun = z.strictObject({ ...runShape, dot_name: z.string() });
+export const ReviewRun = z.strictObject({
+  ...runShape,
+  dot_name: z.string(),
+  worktree_exists: z.boolean(),
+});
 export const Inbox = z.strictObject({
   approvals: z.array(PendingApproval),
   review_runs: z.array(ReviewRun),

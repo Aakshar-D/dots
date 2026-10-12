@@ -399,7 +399,8 @@
         "tokens_in": 1200,
         "tokens_out": 340,
         "trigger": "schedule",
-        "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
+        "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN",
+        "worktree_exists": true
       }
     ]
   },

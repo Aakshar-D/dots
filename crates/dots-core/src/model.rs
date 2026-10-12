@@ -296,6 +296,9 @@ pub struct ReviewRun {
     #[serde(flatten)]
     pub run: Run,
     pub dot_name: String,
+    /// The run's worktree folder is still on disk, so there is something to discard; false
+    /// for a folder-mode run and for a worktree that was removed.
+    pub worktree_exists: bool,
 }
 
 /// Pending approvals and finished runs awaiting review (spec §12 Inbox).

@@ -195,7 +195,11 @@ pub fn samples() -> Value {
                 dot_id: "01J0DOT".into(),
                 dot_name: "nightly-tests".into(),
             }],
-            review_runs: vec![ReviewRun { run: run(), dot_name: "nightly-tests".into() }],
+            review_runs: vec![ReviewRun {
+                run: run(),
+                dot_name: "nightly-tests".into(),
+                worktree_exists: true,
+            }],
         }),
         "WorktreeDiff": to(WorktreeDiff {
             files: vec![

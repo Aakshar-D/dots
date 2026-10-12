@@ -362,16 +362,17 @@ impl Runtime {
             .unreviewed_thread_ends()
             .await?
             .into_iter()
-            .filter(|r| {
-                r.status == RunStatus::Failed
-                    || (r.branch.is_some()
-                        && r.workspace_path
-                            .as_deref()
-                            .is_some_and(|p| Path::new(p).is_dir()))
-            })
-            .map(|run| ReviewRun {
-                dot_name: name(&run.dot_id),
-                run,
+            .filter_map(|run| {
+                let worktree_exists = run.branch.is_some()
+                    && run
+                        .workspace_path
+                        .as_deref()
+                        .is_some_and(|p| Path::new(p).is_dir());
+                (run.status == RunStatus::Failed || worktree_exists).then(|| ReviewRun {
+                    dot_name: name(&run.dot_id),
+                    run,
+                    worktree_exists,
+                })
             })
             .collect();
         Ok(Inbox {
