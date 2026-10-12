@@ -19,14 +19,22 @@ import { relativeTime } from "@/lib/format";
 import { notifyError } from "@/lib/notify";
 import { eventsQuery, keys } from "@/lib/query";
 
-/// Where a message is typed. Enter sends; Shift+Enter starts a new line.
-function Composer(props: { disabled: boolean; hint: string; onSend: (message: string) => void }) {
+/// Where a message is typed. Enter sends; Shift+Enter starts a new line. The text is cleared
+/// once the send has succeeded; a refused message stays for another try.
+function Composer(props: {
+  disabled: boolean;
+  hint: string;
+  onSend: (message: string) => Promise<unknown>;
+}) {
   const [text, setText] = useState("");
   function send() {
     const message = text.trim();
     if (message === "" || props.disabled) return;
-    props.onSend(message);
-    setText("");
+    // The mutation's onError reports a failure; here it only keeps the text.
+    props.onSend(message).then(
+      () => setText(""),
+      () => {},
+    );
   }
   return (
     <div className="flex items-end gap-2 border-t p-3">
@@ -75,8 +83,10 @@ function Conversation({ dotId, rootId }: { dotId: string; rootId: string }) {
   const send = useMutation({
     mutationFn: (message: string) => commands.chat(dotId, message, latest!.id),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["thread"] });
       void qc.invalidateQueries({ queryKey: ["runs"] });
+      // Returned, so the send stays pending until the thread has reloaded: until then the
+      // thread still ends at the old run, and a second message would continue from it.
+      return qc.invalidateQueries({ queryKey: ["thread"] });
     },
     onError: notifyError,
   });
@@ -102,7 +112,7 @@ function Conversation({ dotId, rootId }: { dotId: string; rootId: string }) {
       <Composer
         disabled={busy || send.isPending || !latest}
         hint={busy ? "The dot is working…" : "Reply to continue this chat"}
-        onSend={(message) => send.mutate(message)}
+        onSend={(message) => send.mutateAsync(message)}
       />
     </>
   );
@@ -128,7 +138,7 @@ function NewConversation({ dotId }: { dotId: string }) {
       <Composer
         disabled={start.isPending}
         hint="Message the dot"
-        onSend={(message) => start.mutate(message)}
+        onSend={(message) => start.mutateAsync(message)}
       />
     </>
   );

@@ -128,6 +128,37 @@ describe("the Chat screen", () => {
     await waitFor(() => expect(screen.getByLabelText("Message")).toBeDisabled());
   });
 
+  it("keeps the composer locked after a send until the thread has reloaded", async () => {
+    const runs = chats([chat("a", "10:00")]);
+    const { user } = renderApp(`/chat/${dot.id}/a`);
+    const box = await screen.findByLabelText("Message");
+    await waitFor(() => expect(box).toBeEnabled());
+
+    // From now on the thread reload is held until the test lets it answer.
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    backend.on("run_thread", async (args) => {
+      await held;
+      const root = runs.find((r) => r.id === args.runId)?.root_run_id;
+      return runs.filter((r) => r.root_run_id === root);
+    });
+
+    await user.type(box, "first{Enter}");
+    await waitFor(() => expect(backend.callsTo("chat")).toHaveLength(1));
+    await waitFor(() => expect(backend.callsTo("run_thread").length).toBeGreaterThan(1));
+    expect(box).toBeDisabled();
+    await user.type(box, "second{Enter}");
+    expect(backend.callsTo("chat")).toHaveLength(1);
+
+    act(() => release());
+    expect(await screen.findByText("first")).toBeVisible();
+    // The new run is queued, so the box stays disabled for the run's sake.
+    await waitFor(() => expect(screen.getByLabelText("Message")).toHaveAttribute("placeholder", "The dot is working…"));
+    expect(screen.getByLabelText("Message")).toBeDisabled();
+  });
+
   it("holds the composer while the dot works and frees it when the run ends", async () => {
     const working = chat("a", "10:00", { status: "running", ended_at: null });
     const runs = chats([working]);
@@ -175,6 +206,7 @@ describe("the Chat screen", () => {
     await waitFor(() => expect(box).toBeEnabled());
     await user.type(box, "hello{Enter}");
     expect(await screen.findByText("the dot is disabled")).toBeVisible();
+    expect(screen.getByLabelText("Message")).toHaveValue("hello");
     const conversation = screen.getByRole("region", { name: "Conversation" });
     expect(within(conversation).getByText("question a")).toBeVisible();
   });
