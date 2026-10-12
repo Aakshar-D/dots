@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
-import { commands, type StartupError, type Status } from "./api/commands";
+import { commands } from "./api/commands";
+import type { StartupError, Status } from "./api/types";
 
 type View =
   | { kind: "loading" }
