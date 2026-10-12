@@ -99,7 +99,31 @@ describe("the run view", () => {
     const { user } = renderApp(`/runs/${run.id}`);
     await user.click(await screen.findByRole("button", { name: "Cancel run" }));
     await waitFor(() => expect(backend.callsTo("cancel_run")).toEqual([{ runId: live.id }]));
-    // Nothing to review or discard while it runs.
+  });
+
+  it("offers no review or discard while a worktree run is still going", async () => {
+    const live: Run = { ...run, status: "running", ended_at: null, summary: null };
+    thread([live]);
+    const { user } = renderApp(`/runs/${run.id}`);
+    expect(await screen.findByRole("button", { name: "Cancel run" })).toBeVisible();
+    // Judge only once the diff has arrived and said that the worktree exists.
+    await user.click(screen.getByRole("tab", { name: "Changes" }));
+    expect(await screen.findByText("src/lib.rs")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Mark reviewed" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Discard worktree" })).toBeNull();
+  });
+
+  it("offers neither discard nor review for a worktree that is already gone", async () => {
+    thread([run]);
+    backend.on("worktree_diff", () => ({ files: [], truncated: false, exists: false }));
+    const { user } = renderApp(`/runs/${run.id}`);
+    await user.click(await screen.findByRole("tab", { name: "Changes" }));
+    expect(
+      await screen.findByText(
+        "This run's worktree was removed: it had no changes, or it was discarded.",
+      ),
+    ).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Discard worktree" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Mark reviewed" })).toBeNull();
   });
 

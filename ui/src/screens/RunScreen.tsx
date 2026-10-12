@@ -48,6 +48,10 @@ function Thread({ runId, runs }: { runId: string; runs: Run[] }) {
     enabled: hasWorktree,
   });
 
+  // The folder is gone once an unchanged worktree was cleaned up or a discard ran; the run keeps
+  // its branch name, so only the diff says whether there is still something to discard.
+  const worktreeKept = diff.data?.exists === true;
+
   const eventsByRun = new Map<string, RunEventRecord[]>(
     runs.map((run, i) => [run.id, events[i]?.data ?? []]),
   );
@@ -80,7 +84,7 @@ function Thread({ runId, runs }: { runId: string; runs: Run[] }) {
   });
 
   const needsReview =
-    !active && latest.reviewed_at === null && (latest.status === "failed" || hasWorktree);
+    !active && latest.reviewed_at === null && (latest.status === "failed" || worktreeKept);
   const tokensIn = runs.reduce((n, r) => n + r.tokens_in, 0);
   const tokensOut = runs.reduce((n, r) => n + r.tokens_out, 0);
   const first = runs[0];
@@ -118,7 +122,7 @@ function Thread({ runId, runs }: { runId: string; runs: Run[] }) {
           Mark reviewed
         </Button>
       )}
-      {hasWorktree && !active && (
+      {worktreeKept && !active && (
         <ConfirmButton
           title="Discard this worktree?"
           description={
@@ -202,6 +206,10 @@ function Thread({ runId, runs }: { runId: string; runs: Run[] }) {
           <TabsContent value="changes">
             {diff.isError ? (
               <ErrorNote error={diff.error} />
+            ) : diff.data && !diff.data.exists ? (
+              <p className="text-muted-foreground">
+                This run's worktree was removed: it had no changes, or it was discarded.
+              </p>
             ) : (
               diff.data && <DiffView diff={diff.data} />
             )}
