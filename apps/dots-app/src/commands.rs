@@ -1,7 +1,14 @@
-//! Tauri commands: one-line wrappers over `Runtime`. They take ids, never paths.
+//! Tauri commands: one-line wrappers over `Runtime`. They take ids, never paths: the UI
+//! cannot make the backend open or read an arbitrary path.
 
-use dots_core::model::Status;
-use tauri::State;
+use dots_core::model::{
+    Approval, Dot, DotOverview, DotSpec, Inbox, Run, RunEventRecord, SettingsSaved, Status,
+    WorktreeDiff,
+};
+use dots_core::settings::Settings;
+use dots_core::Runtime;
+use tauri::{AppHandle, State};
+use tauri_plugin_opener::OpenerExt;
 
 use crate::error::CmdError;
 use crate::state::{AppState, StartupError};
@@ -16,4 +23,199 @@ pub fn startup_error(state: State<'_, AppState>) -> Option<StartupError> {
 #[tauri::command]
 pub async fn status(state: State<'_, AppState>) -> Res<Status> {
     Ok(state.rt()?.status().await)
+}
+
+#[tauri::command]
+pub async fn mark_claude_tested(state: State<'_, AppState>) -> Res<Status> {
+    Ok(state.rt()?.mark_claude_tested().await?)
+}
+
+#[tauri::command]
+pub async fn get_settings(state: State<'_, AppState>) -> Res<Settings> {
+    Ok(state.rt()?.settings().await)
+}
+
+#[tauri::command]
+pub async fn update_settings(state: State<'_, AppState>, settings: Settings) -> Res<SettingsSaved> {
+    Ok(state.rt()?.update_settings(settings).await?)
+}
+
+#[tauri::command]
+pub async fn set_schedules_paused(state: State<'_, AppState>, paused: bool) -> Res<Status> {
+    Ok(state.rt()?.set_schedules_paused(paused).await?)
+}
+
+/// Restarts the app so port, concurrency and `claude` path changes apply. Active runs are
+/// interrupted; the UI warns first.
+#[tauri::command]
+pub fn restart_app(app: AppHandle, state: State<'_, AppState>) {
+    if let Ok(rt) = state.rt() {
+        rt.shutdown();
+    }
+    app.restart();
+}
+
+#[tauri::command]
+pub async fn dot_overview(state: State<'_, AppState>) -> Res<Vec<DotOverview>> {
+    Ok(state.rt()?.dot_overview().await?)
+}
+
+#[tauri::command]
+pub async fn list_dots(state: State<'_, AppState>) -> Res<Vec<Dot>> {
+    Ok(state.rt()?.list_dots().await?)
+}
+
+#[tauri::command]
+pub async fn get_dot(state: State<'_, AppState>, id: String) -> Res<Dot> {
+    Ok(state.rt()?.get_dot(&id).await?)
+}
+
+#[tauri::command]
+pub async fn create_dot(state: State<'_, AppState>, spec: DotSpec) -> Res<Dot> {
+    Ok(state.rt()?.create_dot(spec).await?)
+}
+
+#[tauri::command]
+pub async fn update_dot(state: State<'_, AppState>, id: String, spec: DotSpec) -> Res<Dot> {
+    Ok(state.rt()?.update_dot(&id, spec).await?)
+}
+
+#[tauri::command]
+pub async fn delete_dot(state: State<'_, AppState>, id: String) -> Res<()> {
+    Ok(state.rt()?.delete_dot(&id).await?)
+}
+
+#[tauri::command]
+pub async fn set_dot_enabled(state: State<'_, AppState>, id: String, enabled: bool) -> Res<Dot> {
+    Ok(state.rt()?.set_dot_enabled(&id, enabled).await?)
+}
+
+#[tauri::command]
+pub async fn regenerate_webhook_token(state: State<'_, AppState>, id: String) -> Res<String> {
+    Ok(state.rt()?.regenerate_webhook_token(&id).await?)
+}
+
+#[tauri::command]
+pub async fn webhook_url(state: State<'_, AppState>, id: String) -> Res<String> {
+    let rt = state.rt()?;
+    let dot = rt.get_dot(&id).await?;
+    Ok(rt.webhook_url(&dot))
+}
+
+#[tauri::command]
+pub fn preview_schedule(expr: String, count: usize) -> Res<Vec<String>> {
+    Ok(Runtime::preview_schedule(&expr, count)?)
+}
+
+#[tauri::command]
+pub async fn test_endpoint(
+    state: State<'_, AppState>,
+    endpoint: String,
+    model: String,
+) -> Res<String> {
+    Ok(state.rt()?.test_endpoint(&endpoint, &model).await?)
+}
+
+#[tauri::command]
+pub async fn run_now(state: State<'_, AppState>, dot_id: String) -> Res<Run> {
+    Ok(state.rt()?.run_now(&dot_id).await?)
+}
+
+#[tauri::command]
+pub async fn chat(
+    state: State<'_, AppState>,
+    dot_id: String,
+    message: String,
+    parent_run_id: Option<String>,
+) -> Res<Run> {
+    Ok(state
+        .rt()?
+        .chat(&dot_id, &message, parent_run_id.as_deref())
+        .await?)
+}
+
+#[tauri::command]
+pub async fn cancel_run(state: State<'_, AppState>, run_id: String) -> Res<Run> {
+    Ok(state.rt()?.cancel_run(&run_id).await?)
+}
+
+#[tauri::command]
+pub async fn list_runs(
+    state: State<'_, AppState>,
+    dot_id: Option<String>,
+    limit: i64,
+) -> Res<Vec<Run>> {
+    Ok(state.rt()?.list_runs(dot_id.as_deref(), limit).await?)
+}
+
+#[tauri::command]
+pub async fn get_run(state: State<'_, AppState>, id: String) -> Res<Run> {
+    Ok(state.rt()?.get_run(&id).await?)
+}
+
+#[tauri::command]
+pub async fn run_thread(state: State<'_, AppState>, run_id: String) -> Res<Vec<Run>> {
+    Ok(state.rt()?.run_thread(&run_id).await?)
+}
+
+#[tauri::command]
+pub async fn list_run_events(
+    state: State<'_, AppState>,
+    run_id: String,
+    after_seq: i64,
+) -> Res<Vec<RunEventRecord>> {
+    Ok(state.rt()?.list_run_events(&run_id, after_seq).await?)
+}
+
+#[tauri::command]
+pub async fn approvals_for_run(state: State<'_, AppState>, run_id: String) -> Res<Vec<Approval>> {
+    Ok(state.rt()?.approvals_for_run(&run_id).await?)
+}
+
+#[tauri::command]
+pub async fn decide_approval(
+    state: State<'_, AppState>,
+    id: String,
+    approved: bool,
+    note: Option<String>,
+) -> Res<Approval> {
+    Ok(state.rt()?.decide_approval(&id, approved, note).await?)
+}
+
+#[tauri::command]
+pub async fn inbox(state: State<'_, AppState>) -> Res<Inbox> {
+    Ok(state.rt()?.inbox().await?)
+}
+
+#[tauri::command]
+pub async fn inbox_count(state: State<'_, AppState>) -> Res<usize> {
+    Ok(state.rt()?.inbox_count().await?)
+}
+
+#[tauri::command]
+pub async fn worktree_diff(state: State<'_, AppState>, run_id: String) -> Res<WorktreeDiff> {
+    Ok(state.rt()?.worktree_diff(&run_id).await?)
+}
+
+#[tauri::command]
+pub async fn discard_worktree(state: State<'_, AppState>, run_id: String) -> Res<Run> {
+    Ok(state.rt()?.discard_worktree(&run_id).await?)
+}
+
+#[tauri::command]
+pub async fn mark_reviewed(state: State<'_, AppState>, run_id: String) -> Res<Run> {
+    Ok(state.rt()?.mark_reviewed(&run_id).await?)
+}
+
+/// Opens the run's folder in Explorer. The path comes from the run record, never the UI.
+#[tauri::command]
+pub async fn open_run_folder(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    run_id: String,
+) -> Res<()> {
+    let path = state.rt()?.run_folder(&run_id).await?;
+    app.opener()
+        .open_path(path.to_string_lossy(), None::<&str>)
+        .map_err(|e| CmdError::internal(format!("could not open {}: {e}", path.display())))
 }

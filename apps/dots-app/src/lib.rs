@@ -1,5 +1,7 @@
 pub mod commands;
+pub mod contract;
 pub mod error;
+pub mod events;
 pub mod startup;
 pub mod state;
 
@@ -34,6 +36,9 @@ fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     if let Err(e) = &runtime {
         tracing::error!("{e}");
     }
+    if let Ok((rt, _)) = &runtime {
+        events::spawn_forwarder(app.clone(), rt.clone());
+    }
     app.manage(AppState::new(runtime.map(|(rt, _)| rt), log_dir));
     // A failed start always shows its error page, even when launched hidden.
     if failed || !startup::start_hidden(std::env::args()) {
@@ -64,6 +69,37 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::startup_error,
             commands::status,
+            commands::mark_claude_tested,
+            commands::get_settings,
+            commands::update_settings,
+            commands::set_schedules_paused,
+            commands::restart_app,
+            commands::dot_overview,
+            commands::list_dots,
+            commands::get_dot,
+            commands::create_dot,
+            commands::update_dot,
+            commands::delete_dot,
+            commands::set_dot_enabled,
+            commands::regenerate_webhook_token,
+            commands::webhook_url,
+            commands::preview_schedule,
+            commands::test_endpoint,
+            commands::run_now,
+            commands::chat,
+            commands::cancel_run,
+            commands::list_runs,
+            commands::get_run,
+            commands::run_thread,
+            commands::list_run_events,
+            commands::approvals_for_run,
+            commands::decide_approval,
+            commands::inbox,
+            commands::inbox_count,
+            commands::worktree_diff,
+            commands::discard_worktree,
+            commands::mark_reviewed,
+            commands::open_run_folder,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build the Dots app");
