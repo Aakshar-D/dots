@@ -244,6 +244,31 @@ pub struct Status {
     pub data_dir: String,
 }
 
+str_enum!(FileStatus {
+    Added => "added",
+    Modified => "modified",
+    Deleted => "deleted",
+    Renamed => "renamed",
+});
+
+/// One changed file of a worktree, as a unified diff.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FileDiff {
+    pub path: String,
+    pub status: FileStatus,
+    /// Empty for binary files and for files past the size cap.
+    pub patch: String,
+    pub binary: bool,
+}
+
+/// A worktree's changes against the run's base commit (spec §12, review actions).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct WorktreeDiff {
+    pub files: Vec<FileDiff>,
+    /// Some patches were left out to stay under `workspace::MAX_DIFF_BYTES`.
+    pub truncated: bool,
+}
+
 /// One row of the Dots screen.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DotOverview {

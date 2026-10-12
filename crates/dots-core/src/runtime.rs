@@ -16,13 +16,14 @@ use crate::engine::{Engine, UnavailableEngine};
 use crate::events::{new_bus, Bus, RuntimeEvent};
 use crate::model::{
     Approval, ClaudeStatus, Dot, DotOverview, DotSpec, EngineKind, Inbox, NewRun, PendingApproval,
-    ReviewRun, Run, RunEventRecord, RunStatus, SettingsSaved, Status, TriggerKind,
+    ReviewRun, Run, RunEventRecord, RunStatus, SettingsSaved, Status, TriggerKind, WorktreeDiff,
 };
 use crate::runner::{Runner, RunnerConfig};
 use crate::scheduler::Scheduler;
 use crate::server::{self, ServerState};
 use crate::settings::Settings;
 use crate::store::Store;
+use crate::workspace::{Prepared, WorkspaceManager};
 use crate::{Error, Result};
 
 #[derive(Debug, Clone)]
@@ -374,6 +375,64 @@ impl Runtime {
             let _ = self.bus.send(RuntimeEvent::RunUpdated { run: changed });
         }
         self.store.get_run(run_id).await
+    }
+
+    /// The changes the run's thread made in its worktree. Empty once the worktree is removed.
+    pub async fn worktree_diff(&self, run_id: &str) -> Result<WorktreeDiff> {
+        let run = self.store.get_run(run_id).await?;
+        let (Some(path), Some(base), Some(_)) =
+            (&run.workspace_path, &run.base_commit, &run.branch)
+        else {
+            return Err(Error::Invalid(format!("run {run_id} has no worktree")));
+        };
+        let path = Path::new(path);
+        if !path.is_dir() {
+            return Ok(WorktreeDiff::default());
+        }
+        crate::workspace::diff(path, base).await
+    }
+
+    /// Removes the thread's worktree and branch and marks the thread reviewed. Refused while
+    /// the thread is active, for folder runs, and for any path outside the worktrees folder.
+    pub async fn discard_worktree(&self, run_id: &str) -> Result<Run> {
+        let run = self.store.get_run(run_id).await?;
+        self.ensure_thread_idle(&run.root_run_id).await?;
+        let Some(prepared) = Prepared::from_run(&run).filter(|p| p.branch.is_some()) else {
+            return Err(Error::Invalid(format!("run {run_id} has no worktree")));
+        };
+        let worktrees = self.data_dir.join("worktrees");
+        let inside = prepared.path.starts_with(&worktrees)
+            && prepared.path != worktrees
+            && !prepared
+                .path
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir));
+        if !inside {
+            return Err(Error::Invalid(format!(
+                "refusing to remove {}: not a dots worktree",
+                prepared.path.display()
+            )));
+        }
+        let dot = self.store.get_dot(&run.dot_id).await?;
+        WorkspaceManager::new(worktrees)
+            .discard(Path::new(&dot.spec.workdir), &prepared)
+            .await?;
+        self.mark_reviewed(run_id).await
+    }
+
+    /// The folder a run worked in, for "Open folder".
+    pub async fn run_folder(&self, run_id: &str) -> Result<PathBuf> {
+        let run = self.store.get_run(run_id).await?;
+        let Some(path) = run.workspace_path.map(PathBuf::from) else {
+            return Err(Error::Invalid(format!("run {run_id} has not started yet")));
+        };
+        if !path.is_dir() {
+            return Err(Error::NotFound(format!(
+                "folder {} no longer exists",
+                path.display()
+            )));
+        }
+        Ok(path)
     }
 
     async fn ensure_thread_idle(&self, root_run_id: &str) -> Result<()> {
