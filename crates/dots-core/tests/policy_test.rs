@@ -628,6 +628,10 @@ fn absolute_deny_patterns_match_workspace_relative_inputs() {
     assert_eq!(read("keys/id_rsa"), Action::Deny);
     assert_eq!(read("keys"), Action::Deny);
     assert_eq!(read("./keys/../keys/id_rsa"), Action::Deny);
+    // Leaving the workspace and re-entering it must still hit the absolute deny.
+    assert_eq!(read("../repo/keys/id_rsa"), Action::Deny);
+    // A sibling outside the workspace is not the denied directory.
+    assert_eq!(read("../other/keys/id_rsa"), Action::Allow);
     assert_eq!(read("src/main.rs"), Action::Allow);
     assert_eq!(
         p.resolve_in("Edit", &json!({"file_path": "Cargo.toml"}), Some(ws)),

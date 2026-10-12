@@ -439,15 +439,13 @@ fn path_spec_matches(spec: &str, input: &Value, action: Action, workspace: Optio
     }
     // Deny/ask fail closed: test every candidate, whole and at every suffix after a '/'. A
     // relative input (the local engine's form) is also tested inside the workspace, so absolute
-    // patterns match it, and `dir/**` also covers `dir` itself.
+    // patterns match it. The joined string is normalized again so that a leading `..` which
+    // leaves and re-enters the workspace cannot dodge an absolute pattern. `dir/**` also covers
+    // `dir` itself.
     let mut candidates: Vec<String> = relative.into_iter().collect();
     if let (false, Some(ws)) = (abs, workspace) {
         let ws = ws.trim_end_matches('/');
-        candidates.push(if full.is_empty() {
-            ws.to_string()
-        } else {
-            format!("{ws}/{full}")
-        });
+        candidates.push(lexical_normalize(&format!("{ws}/{full}")).1);
     }
     candidates.push(full);
     let dir = pattern.strip_suffix("/**").filter(|d| !d.is_empty());
