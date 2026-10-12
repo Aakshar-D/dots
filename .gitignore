@@ -1,4 +1,7 @@
 /target
+node_modules/
+/ui/dist/
+/apps/dots-app/gen/
 *.db
 *.db-wal
 *.db-shm
