@@ -1,9 +1,11 @@
+pub mod autostart;
 pub mod commands;
 pub mod contract;
 pub mod error;
 pub mod events;
 pub mod startup;
 pub mod state;
+pub mod tray;
 
 use tauri::{AppHandle, Manager, RunEvent, WindowEvent};
 
@@ -36,7 +38,9 @@ fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     if let Err(e) = &runtime {
         tracing::error!("{e}");
     }
-    if let Ok((rt, _)) = &runtime {
+    if let Ok((rt, settings)) = &runtime {
+        app.manage(tray::Tray::build(app, settings.schedules_paused)?);
+        autostart::apply(app, settings.autostart);
         events::spawn_forwarder(app.clone(), rt.clone());
     }
     app.manage(AppState::new(runtime.map(|(rt, _)| rt), log_dir));
@@ -53,7 +57,12 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_main(app)
         }))
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec![startup::HIDDEN_ARG]),
+        ))
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             setup(app.handle())?;

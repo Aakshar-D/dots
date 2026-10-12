@@ -11,11 +11,12 @@ use dots_core::model::{
 };
 use dots_core::settings::Settings;
 use dots_core::Runtime;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 use tauri_plugin_opener::OpenerExt;
 
 use crate::error::CmdError;
 use crate::state::{AppState, StartupError};
+use crate::tray::Tray;
 
 type Res<T> = Result<T, CmdError>;
 
@@ -40,13 +41,30 @@ pub async fn get_settings(state: State<'_, AppState>) -> Res<Settings> {
 }
 
 #[tauri::command]
-pub async fn update_settings(state: State<'_, AppState>, settings: Settings) -> Res<SettingsSaved> {
-    Ok(state.rt()?.update_settings(settings).await?)
+pub async fn update_settings(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    settings: Settings,
+) -> Res<SettingsSaved> {
+    let saved = state.rt()?.update_settings(settings).await?;
+    crate::autostart::apply(&app, saved.settings.autostart);
+    if let Some(tray) = app.try_state::<Tray>() {
+        tray.set_paused(saved.settings.schedules_paused);
+    }
+    Ok(saved)
 }
 
 #[tauri::command]
-pub async fn set_schedules_paused(state: State<'_, AppState>, paused: bool) -> Res<Status> {
-    Ok(state.rt()?.set_schedules_paused(paused).await?)
+pub async fn set_schedules_paused(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    paused: bool,
+) -> Res<Status> {
+    let status = state.rt()?.set_schedules_paused(paused).await?;
+    if let Some(tray) = app.try_state::<Tray>() {
+        tray.set_paused(status.schedules_paused);
+    }
+    Ok(status)
 }
 
 /// Restarts the app so port, concurrency and `claude` path changes apply. Active runs are
