@@ -54,7 +54,7 @@ function ReviewRow({ run }: { run: ReviewRun }) {
       <Button size="sm" variant="outline" disabled={busy} onClick={() => markReviewed.mutate()}>
         Mark reviewed
       </Button>
-      {run.branch !== null && (
+      {run.worktree_exists && (
         <ConfirmButton
           title="Discard this worktree?"
           description={

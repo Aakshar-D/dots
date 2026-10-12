@@ -13,6 +13,7 @@ const failedRun = {
   id: "run-failed",
   status: "failed" as const,
   branch: null,
+  worktree_exists: false,
   summary: null,
   error: "timeout",
 };
@@ -56,6 +57,16 @@ describe("the Inbox", () => {
     // Only a run with a worktree can be discarded.
     expect(within(runs[0]).getByRole("button", { name: "Discard worktree" })).toBeVisible();
     expect(within(runs[1]).queryByRole("button", { name: "Discard worktree" })).toBeNull();
+  });
+
+  it("offers no discard for a failed run whose worktree is already gone", async () => {
+    inbox({
+      approvals: [],
+      review_runs: [{ ...failedRun, branch: "dots/gone" }],
+    });
+    renderApp("/inbox");
+    expect(await screen.findByRole("button", { name: "Mark reviewed" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Discard worktree" })).toBeNull();
   });
 
   it("approves a tool call and drops it from the list", async () => {
