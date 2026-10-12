@@ -14,7 +14,7 @@ use dots_core::events::new_bus;
 use dots_core::model::{
     Dot, EngineKind, NewRun, Run, RunEventRecord, RunStatus, TriggerKind, WorkspaceMode,
 };
-use dots_core::policy::{Policy, Preset};
+use dots_core::policy::{Action, Policy, Preset, Rule};
 use dots_core::runner::{Runner, RunnerConfig};
 use dots_core::store::Store;
 use llm::{call, calls, completion, messages, text, tool_result, Llm};
@@ -237,4 +237,29 @@ async fn ask_parks_the_call_and_the_run_awaits_approval() {
     assert_eq!(approvals[0].input, json!({"command": "git log -1"}));
     let reqs = llm.requests();
     assert!(tool_result(&reqs[1], "c1").contains("Queued for human approval"));
+}
+
+#[tokio::test]
+async fn searches_skip_paths_the_dot_policy_denies() {
+    let e = env().await;
+    std::fs::create_dir_all(e.ws.join("secret")).unwrap();
+    std::fs::write(e.ws.join("secret/key.txt"), "hello key\n").unwrap();
+    let llm = Llm::start(vec![
+        call("c1", "grep", json!({"pattern": "hello"})),
+        text("Searched."),
+    ])
+    .await;
+    let dot = local_dot(&e, &llm, Preset::Sandboxed).await;
+    let mut s = dot.spec.clone();
+    s.policy
+        .rules
+        .push(Rule::new("Read(secret/**)", Action::Deny));
+    let dot = e.store.update_dot(&dot.id, &s).await.unwrap();
+    let r = run(&e, &dot).await;
+    wait_status(&e.store, &r.id, RunStatus::Succeeded, 10).await;
+    let reqs = llm.requests();
+    assert_eq!(
+        tool_result(&reqs[1], "c1"),
+        "README.md:1: hello\n(1 entry hidden by policy)"
+    );
 }

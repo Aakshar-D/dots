@@ -573,3 +573,65 @@ async fn shell_timeout_kills_the_whole_process_group() {
     assert!(!out.output.contains("done"), "{out:?}");
     assert!(started.elapsed() < Duration::from_secs(5));
 }
+
+/// Runs `name` with the walking tools filtered by `policy`, as the local engine does.
+async fn run_filtered(ws: &Path, policy: &Policy, name: &str, args: Value) -> ToolOutput {
+    let call = tools::prepare(name, &args, ws).unwrap_or_else(|e| panic!("prepare: {e}"));
+    let filter = tools::PathFilter::from_policy(policy, call.alias, ws);
+    tools::run_with(&call, ws, &CancellationToken::new(), &filter).await
+}
+
+#[tokio::test]
+async fn walking_tools_leave_out_what_the_policy_denies() {
+    let ws = workspace();
+    let p = ws.path();
+    std::fs::create_dir_all(p.join("secret/inner")).unwrap();
+    std::fs::write(p.join("secret/key.txt"), "hello key\n").unwrap();
+    std::fs::write(p.join("secret/inner/more.txt"), "hello more\n").unwrap();
+    std::fs::write(p.join("notes.txt"), "hello notes\n").unwrap();
+    let policy = Policy {
+        preset: Preset::Custom,
+        rules: vec![Rule::new("Read(secret/**)", Action::Deny)],
+        default: Action::Allow,
+    };
+
+    let out = run_filtered(p, &policy, "grep", json!({"pattern": "hello"})).await;
+    assert!(!out.is_error, "{}", out.output);
+    assert!(out.output.contains("README.md:1: hello"), "{}", out.output);
+    assert!(
+        out.output.contains("notes.txt:1: hello notes"),
+        "{}",
+        out.output
+    );
+    assert!(!out.output.contains("secret"), "{}", out.output);
+    assert!(
+        out.output.ends_with("(1 entry hidden by policy)"),
+        "{}",
+        out.output
+    );
+
+    let out = run_filtered(p, &policy, "glob", json!({"pattern": "**/*.txt"})).await;
+    assert_eq!(out.output, "notes.txt\n(1 entry hidden by policy)");
+
+    let out = run_filtered(p, &policy, "list_dir", json!({})).await;
+    assert!(!out.output.contains("secret"), "{}", out.output);
+    assert!(
+        out.output.ends_with("(1 entry hidden by policy)"),
+        "{}",
+        out.output
+    );
+
+    // The note counts what was left out, even entries the pattern would not have matched.
+    let out = run_filtered(p, &policy, "glob", json!({"pattern": "*.md"})).await;
+    assert_eq!(out.output, "README.md\n(1 entry hidden by policy)");
+}
+
+#[tokio::test]
+async fn walking_tools_without_a_filter_hide_nothing() {
+    let ws = workspace();
+    let p = ws.path();
+    std::fs::create_dir_all(p.join("secret")).unwrap();
+    std::fs::write(p.join("secret/key.txt"), "hello key\n").unwrap();
+    let out = run(p, "grep", json!({"pattern": "hello key"})).await;
+    assert_eq!(out.output, "secret/key.txt:1: hello key");
+}

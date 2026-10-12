@@ -2,7 +2,10 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use super::{cap_head, confine, display, str_arg, ToolOutput, MAX_ENTRIES, MAX_READ_BYTES};
+use super::{
+    cap_head, confine, display, hidden_note, str_arg, PathFilter, ToolOutput, MAX_ENTRIES,
+    MAX_READ_BYTES,
+};
 
 /// Files whose first 8 KB contain a NUL byte are treated as binary and not returned.
 fn is_binary(bytes: &[u8]) -> bool {
@@ -125,21 +128,28 @@ pub(super) async fn edit_file(root: &Path, input: &Value) -> ToolOutput {
     }
 }
 
-pub(super) async fn list_dir(root: &Path, input: &Value) -> ToolOutput {
+pub(super) async fn list_dir(root: &Path, input: &Value, filter: &PathFilter) -> ToolOutput {
     let raw = input.get("path").and_then(Value::as_str).unwrap_or(".");
     let dir = match confine(root, raw) {
         Ok(p) => p,
         Err(e) => return ToolOutput::err(e),
     };
     let raw = raw.to_string();
+    let (root, filter) = (root.to_path_buf(), filter.clone());
     let listed = tokio::task::spawn_blocking(move || {
         let entries = match std::fs::read_dir(&dir) {
             Ok(rd) => rd,
             Err(e) => return ToolOutput::err(format!("cannot list {raw}: {e}")),
         };
+        let mut hidden = 0;
         let mut names: Vec<String> = entries
             .filter_map(|e| e.ok())
             .filter(|e| e.file_name() != ".git")
+            .filter(|e| {
+                let hide = filter.hides(&display(&root, &e.path()));
+                hidden += usize::from(hide);
+                !hide
+            })
             .map(|e| {
                 let mut name = e.file_name().to_string_lossy().into_owned();
                 if e.file_type().is_ok_and(|t| t.is_dir()) {
@@ -149,7 +159,7 @@ pub(super) async fn list_dir(root: &Path, input: &Value) -> ToolOutput {
             })
             .collect();
         if names.is_empty() {
-            return ToolOutput::ok("(empty directory)");
+            return ToolOutput::ok(format!("(empty directory){}", hidden_note(hidden)));
         }
         names.sort();
         let total = names.len();
@@ -158,7 +168,7 @@ pub(super) async fn list_dir(root: &Path, input: &Value) -> ToolOutput {
         if total > MAX_ENTRIES {
             out.push_str(&format!("\n[{} more entries]", total - MAX_ENTRIES));
         }
-        ToolOutput::ok(cap_head(out))
+        ToolOutput::ok(cap_head(out) + &hidden_note(hidden))
     })
     .await;
     listed.unwrap_or_else(|e| ToolOutput::err(format!("list_dir failed: {e}")))

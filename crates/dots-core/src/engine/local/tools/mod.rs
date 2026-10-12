@@ -2,9 +2,12 @@
 //! policy path specs, command rules, grants and approvals treat local and Claude calls alike.
 
 use std::path::{Component, Path, PathBuf, Prefix};
+use std::sync::Arc;
 
 use serde_json::{json, Map, Value};
 use tokio_util::sync::CancellationToken;
+
+use crate::policy::{Action, Policy};
 
 mod fs;
 mod search;
@@ -203,8 +206,55 @@ pub fn prepare(
     })
 }
 
-/// Runs an allowed call. Every failure becomes an error result for the model.
+/// Decides which entries the walking tools (`list_dir`, `glob`, `grep`) leave out, given each
+/// entry's workspace-relative path. The default hides nothing.
+#[derive(Clone, Default)]
+pub struct PathFilter(Option<Arc<HideFn>>);
+
+type HideFn = dyn Fn(&str) -> bool + Send + Sync;
+
+impl PathFilter {
+    pub fn new(hides: impl Fn(&str) -> bool + Send + Sync + 'static) -> Self {
+        Self(Some(Arc::new(hides)))
+    }
+
+    /// Hides the entries `policy` denies for the walking tool `alias` or for `Read`, so a
+    /// search from the workspace root never reads a denied subtree.
+    pub fn from_policy(policy: &Policy, alias: &'static str, workspace: &Path) -> Self {
+        let (policy, workspace) = (policy.clone(), workspace.to_path_buf());
+        Self::new(move |rel| {
+            let ws = Some(workspace.as_path());
+            policy.resolve_in(alias, &json!({ "path": rel }), ws) == Action::Deny
+                || policy.resolve_in("Read", &json!({ "file_path": rel }), ws) == Action::Deny
+        })
+    }
+
+    pub fn hides(&self, rel: &str) -> bool {
+        self.0.as_ref().is_some_and(|f| f(rel))
+    }
+}
+
+/// The note a walking tool appends when the policy hid `n` entries.
+fn hidden_note(n: usize) -> String {
+    match n {
+        0 => String::new(),
+        1 => "\n(1 entry hidden by policy)".to_string(),
+        n => format!("\n({n} entries hidden by policy)"),
+    }
+}
+
+/// Runs an allowed call with nothing hidden. Every failure becomes an error result for the model.
 pub async fn run(call: &PreparedCall, workspace: &Path, cancel: &CancellationToken) -> ToolOutput {
+    run_with(call, workspace, cancel, &PathFilter::default()).await
+}
+
+/// Runs an allowed call; the walking tools leave out what `filter` hides.
+pub async fn run_with(
+    call: &PreparedCall,
+    workspace: &Path,
+    cancel: &CancellationToken,
+    filter: &PathFilter,
+) -> ToolOutput {
     let root = match std::fs::canonicalize(workspace) {
         Ok(r) => r,
         Err(e) => return ToolOutput::err(format!("workspace is not accessible: {e}")),
@@ -214,9 +264,9 @@ pub async fn run(call: &PreparedCall, workspace: &Path, cancel: &CancellationTok
         "read_file" => fs::read_file(&root, input).await,
         "write_file" => fs::write_file(&root, input).await,
         "edit_file" => fs::edit_file(&root, input).await,
-        "list_dir" => fs::list_dir(&root, input).await,
-        "glob" => search::glob(&root, input).await,
-        "grep" => search::grep(&root, input).await,
+        "list_dir" => fs::list_dir(&root, input, filter).await,
+        "glob" => search::glob(&root, input, filter).await,
+        "grep" => search::grep(&root, input, filter).await,
         "shell" => shell::shell(&root, input, cancel).await,
         other => ToolOutput::err(format!("unknown tool '{other}'")),
     }
