@@ -184,6 +184,34 @@ async fn discard_refuses_paths_outside_the_worktrees_folder() {
     t.rt.shutdown();
 }
 
+#[tokio::test]
+async fn discard_refuses_a_branch_dots_did_not_create() {
+    let t = start().await;
+    let run = edited_run(&t).await;
+    let ws = PathBuf::from(run.workspace_path.as_deref().unwrap());
+    git_out(&t.repo, &["branch", "feature-x"]);
+    let pool = sqlx::SqlitePool::connect(&format!(
+        "sqlite://{}",
+        t.dir.path().join("data").join("dots.db").display()
+    ))
+    .await
+    .unwrap();
+    for tampered in ["feature-x", "dots/x/not-this-run"] {
+        sqlx::query("UPDATE runs SET branch = ? WHERE id = ?")
+            .bind(tampered)
+            .bind(&run.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let err = t.rt.discard_worktree(&run.id).await.unwrap_err();
+        assert!(matches!(err, Error::Invalid(_)), "{tampered}: {err}");
+        assert!(branch_exists(&t.repo, "feature-x"));
+        assert!(ws.is_dir());
+    }
+    pool.close().await;
+    t.rt.shutdown();
+}
+
 #[test]
 fn parse_diff_reads_status_paths_and_binary_markers() {
     let text = "diff --git a/old name.txt b/new name.txt\n\
@@ -199,9 +227,20 @@ index 1111111..0000000\n\
 -fn x() {}\n\
 diff --git a/logo.png b/logo.png\n\
 index 1111111..2222222 100644\n\
-Binary files a/logo.png and b/logo.png differ\n";
+Binary files a/logo.png and b/logo.png differ\n\
+diff --git a/my file.txt b/my file.txt\n\
+index 1111111..2222222 100644\n\
+--- a/my file.txt\t\n\
++++ b/my file.txt\t\n\
+@@ -1 +1 @@\n\
+-a\n\
++b\n";
     let files = parse_diff(text);
-    assert_eq!(files.len(), 3);
+    assert_eq!(files.len(), 4);
+    assert_eq!(
+        (files[3].path.as_str(), files[3].status),
+        ("my file.txt", FileStatus::Modified)
+    );
     assert_eq!(
         (files[0].path.as_str(), files[0].status),
         ("new name.txt", FileStatus::Renamed)

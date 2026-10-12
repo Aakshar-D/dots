@@ -413,6 +413,17 @@ impl Runtime {
                 prepared.path.display()
             )));
         }
+        // The branch comes from the same row as the path: only delete one dots made for this
+        // worktree (`dots/<dot name>/<run id>` beside folder `<run id>`).
+        let branch = prepared.branch.as_deref().unwrap_or_default();
+        let folder = prepared.path.file_name().and_then(|n| n.to_str());
+        let ours = branch.starts_with("dots/")
+            && folder.is_some_and(|f| branch.rsplit('/').next() == Some(f));
+        if !ours {
+            return Err(Error::Invalid(format!(
+                "refusing to delete branch {branch}: not a dots branch"
+            )));
+        }
         let dot = self.store.get_dot(&run.dot_id).await?;
         WorkspaceManager::new(worktrees)
             .discard(Path::new(&dot.spec.workdir), &prepared)

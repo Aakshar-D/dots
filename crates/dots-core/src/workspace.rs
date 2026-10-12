@@ -75,7 +75,8 @@ pub fn parse_diff(text: &str) -> Vec<FileDiff> {
         } else if line.starts_with("Binary files ") {
             file.binary = true;
         } else if let Some(p) = line.strip_prefix("+++ b/") {
-            file.path = p.to_string();
+            // git appends one TAB to header paths that contain a space.
+            file.path = p.strip_suffix('\t').unwrap_or(p).to_string();
         }
     }
     for f in files.iter_mut().filter(|f| f.binary) {
