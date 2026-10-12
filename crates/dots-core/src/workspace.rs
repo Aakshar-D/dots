@@ -180,7 +180,11 @@ pub async fn diff(path: &Path, base_commit: &str) -> Result<WorktreeDiff> {
         }
         used += f.patch.len();
     }
-    Ok(WorktreeDiff { files, truncated })
+    Ok(WorktreeDiff {
+        files,
+        truncated,
+        exists: true,
+    })
 }
 
 #[derive(Debug, Clone)]

@@ -29,6 +29,7 @@ describe("the diff view", () => {
   it("says so when the diff was cut, and when a listed file has nothing to show", () => {
     const cut: WorktreeDiff = {
       truncated: true,
+      exists: true,
       files: [{ path: "big.txt", status: "added", patch: "", binary: false }],
     };
     render(<DiffView diff={cut} />);
@@ -37,7 +38,7 @@ describe("the diff view", () => {
   });
 
   it("says when nothing changed", () => {
-    render(<DiffView diff={{ files: [], truncated: false }} />);
+    render(<DiffView diff={{ files: [], truncated: false, exists: true }} />);
     expect(screen.getByText("No changes.")).toBeVisible();
   });
 });

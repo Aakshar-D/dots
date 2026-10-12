@@ -617,6 +617,7 @@
     "server_error": null
   },
   "WorktreeDiff": {
+    "exists": true,
     "files": [
       {
         "binary": false,

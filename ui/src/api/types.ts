@@ -192,6 +192,7 @@ export const FileDiff = z.strictObject({
 export const WorktreeDiff = z.strictObject({
   files: z.array(FileDiff),
   truncated: z.boolean(),
+  exists: z.boolean(),
 });
 
 // `cancelled`: the user declined a native confirmation; nothing was changed.

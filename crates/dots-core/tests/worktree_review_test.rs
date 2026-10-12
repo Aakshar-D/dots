@@ -167,6 +167,7 @@ async fn discarding_removes_the_worktree_and_branch_and_clears_the_inbox() {
     assert!(ws.is_dir() && branch_exists(&t.repo, &branch));
     assert_eq!(t.rt.inbox_count().await.unwrap(), 1);
     assert_eq!(t.rt.run_folder(&run.id).await.unwrap(), ws);
+    assert!(t.rt.worktree_diff(&run.id).await.unwrap().exists);
 
     let after = t.rt.discard_worktree(&run.id).await.unwrap();
     assert!(after.reviewed_at.is_some());
@@ -174,7 +175,8 @@ async fn discarding_removes_the_worktree_and_branch_and_clears_the_inbox() {
     assert!(!branch_exists(&t.repo, &branch));
     assert_eq!(t.rt.inbox_count().await.unwrap(), 0);
     // The removed worktree has nothing left to show or open.
-    assert!(t.rt.worktree_diff(&run.id).await.unwrap().files.is_empty());
+    let gone = t.rt.worktree_diff(&run.id).await.unwrap();
+    assert!(!gone.exists && gone.files.is_empty());
     assert!(matches!(
         t.rt.run_folder(&run.id).await,
         Err(Error::NotFound(_))

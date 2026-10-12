@@ -395,7 +395,8 @@ impl Runtime {
         self.store.get_run(run_id).await
     }
 
-    /// The changes the run's thread made in its worktree. Empty once the worktree is removed.
+    /// The changes the run's thread made in its worktree. Empty, with `exists` false, once the
+    /// worktree is removed.
     pub async fn worktree_diff(&self, run_id: &str) -> Result<WorktreeDiff> {
         let run = self.store.get_run(run_id).await?;
         let (Some(path), Some(base), Some(_)) =

@@ -213,6 +213,7 @@ pub fn samples() -> Value {
                 },
             ],
             truncated: false,
+            exists: true,
         }),
         "CmdError": to(CmdError { kind: "conflict".into(), message: "run 01J0RUN is already succeeded".into() }),
         "RunEventData": engine_events(),

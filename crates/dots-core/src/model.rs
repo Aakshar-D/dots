@@ -267,6 +267,9 @@ pub struct WorktreeDiff {
     pub files: Vec<FileDiff>,
     /// Some patches were left out to stay under `workspace::MAX_DIFF_BYTES`.
     pub truncated: bool,
+    /// The worktree folder is still on disk; false once it was removed (it had no changes, or
+    /// it was discarded), and `files` is then empty.
+    pub exists: bool,
 }
 
 /// One row of the Dots screen.
