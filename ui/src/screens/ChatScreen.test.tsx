@@ -125,7 +125,8 @@ describe("the Chat screen", () => {
     expect(backend.callsTo("chat")).toEqual([
       { dotId: dot.id, message: "Why did the build fail?", parentRunId: null },
     ]);
-    expect(await screen.findByText("Why did the build fail?")).toBeVisible();
+    const conversation = within(await screen.findByRole("region", { name: "Conversation" }));
+    expect(await conversation.findByText("Why did the build fail?")).toBeVisible();
   });
 
   it("continues a conversation from its last run", async () => {
