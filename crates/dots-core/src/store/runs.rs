@@ -201,11 +201,13 @@ impl Store {
         row.as_ref().map(run_from_row).transpose()
     }
 
-    /// The newest run of each lineage, if it is finished and not reviewed yet.
+    /// The newest run of each lineage, if it is finished and not reviewed yet. Only runs the
+    /// Inbox can ever show (failed, or with a branch) are returned; `Runtime::inbox` filters further.
     pub async fn unreviewed_thread_ends(&self) -> Result<Vec<Run>> {
         let rows = sqlx::query(&format!(
             "SELECT {RUN_COLUMNS} FROM runs r \
              WHERE r.reviewed_at IS NULL AND r.status IN ('succeeded', 'failed', 'cancelled') \
+             AND (r.status = 'failed' OR r.branch IS NOT NULL) \
              AND r.id = (SELECT x.id FROM runs x WHERE x.root_run_id = r.root_run_id \
                          ORDER BY x.queued_at DESC, x.id DESC LIMIT 1) \
              ORDER BY r.ended_at DESC, r.id DESC"
