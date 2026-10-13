@@ -10,7 +10,7 @@ use dots_core::policy::{Action, Policy, Preset};
 use dots_core::settings::{Settings, MAX_CONCURRENT_RUNS};
 use serde_json::{json, Value};
 
-use crate::error::{CmdError, KINDS};
+use crate::error::{CmdError, CmdErrorKind};
 use crate::state::StartupError;
 
 const TS: &str = "2026-10-09T12:00:00.000Z";
@@ -116,9 +116,28 @@ fn status() -> Status {
     }
 }
 
-/// One sample of every engine event, as stored in a run event's `data`.
+/// The sample of `e`'s own variant. The match has no wildcard arm and the array's length is
+/// part of its type, so a new `EngineEvent` variant does not compile until it has a name
+/// here and a sample in `engine_events`.
+fn engine_event_sample<'a>(samples: &'a [EngineEvent; 9], e: &EngineEvent) -> &'a EngineEvent {
+    let [started, text, call, result, usage, raw, message, finished, failed] = samples;
+    match e {
+        EngineEvent::SessionStarted { .. } => started,
+        EngineEvent::AssistantText { .. } => text,
+        EngineEvent::ToolCall { .. } => call,
+        EngineEvent::ToolResult { .. } => result,
+        EngineEvent::Usage { .. } => usage,
+        EngineEvent::Raw { .. } => raw,
+        EngineEvent::Message { .. } => message,
+        EngineEvent::Finished { .. } => finished,
+        EngineEvent::Failed { .. } => failed,
+    }
+}
+
+/// One sample of every engine event, as stored in a run event's `data`, in the order
+/// `engine_event_sample` names them.
 fn engine_events() -> Value {
-    to([
+    let samples = [
         EngineEvent::SessionStarted {
             session_id: "s-1".into(),
         },
@@ -151,12 +170,22 @@ fn engine_events() -> Value {
         EngineEvent::Failed {
             error: "timeout".into(),
         },
-    ])
+    ];
+    for sample in &samples {
+        assert!(
+            std::ptr::eq(engine_event_sample(&samples, sample), sample),
+            "the `{}` sample is not at its variant's place in `engine_events`",
+            sample.kind()
+        );
+    }
+    to(samples)
 }
 
 /// The samples, keyed by the UI schema that parses them. `Enums` lists every variant of every
 /// shared enum and `Limits` the validation limits the editor mirrors: the UI parses live data
 /// with its schemas, so a variant or limit it does not know must fail a test, not a screen.
+/// `NewDotSpec` is the answer of the `new_dot_spec` command, the blank dot of the UI's tests,
+/// and `Commands` names every registered command.
 pub fn samples() -> Value {
     let settings = Settings {
         local_endpoints: vec!["http://127.0.0.1:1234".into()],
@@ -219,8 +248,10 @@ pub fn samples() -> Value {
             truncated: false,
             exists: true,
         }),
-        "CmdError": to(CmdError { kind: "conflict".into(), message: "run 01J0RUN is already succeeded".into() }),
+        "CmdError": to(CmdError { kind: CmdErrorKind::Conflict, message: "run 01J0RUN is already succeeded".into() }),
         "RunEventData": engine_events(),
+        "NewDotSpec": to(crate::commands::new_dot_spec()),
+        "Commands": crate::COMMANDS,
         "Enums": {
             "EngineKind": EngineKind::ALL,
             "WorkspaceMode": WorkspaceMode::ALL,
@@ -230,7 +261,7 @@ pub fn samples() -> Value {
             "Action": Action::ALL,
             "Preset": Preset::ALL,
             "FileStatus": FileStatus::ALL,
-            "CmdErrorKind": KINDS,
+            "CmdErrorKind": CmdErrorKind::ALL,
         },
         "Limits": {
             "max_timeout_secs": MAX_TIMEOUT_SECS,

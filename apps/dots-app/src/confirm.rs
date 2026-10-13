@@ -95,6 +95,7 @@ pub async fn ask(app: &AppHandle, title: &str, message: String) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::CmdErrorKind;
 
     #[test]
     fn only_a_new_program_needs_confirmation() {
@@ -259,7 +260,7 @@ mod tests {
         // `true`: the settings would be saved if the question came first.
         let (result, asked) = save(&rt, bad, true).await;
         let err = result.unwrap_err();
-        assert_eq!(err.kind, "invalid");
+        assert_eq!(err.kind, CmdErrorKind::Invalid);
         assert_eq!(err.message, "port must be between 1 and 65535");
         assert_eq!(asked, [] as [String; 0]);
         assert_eq!(rt.settings().await, before);
@@ -277,7 +278,7 @@ mod tests {
         // `true`: the path would be saved if the question came first.
         let (result, asked) = save(&rt, with_program(&before, disguised), true).await;
         let err = result.unwrap_err();
-        assert_eq!(err.kind, "invalid");
+        assert_eq!(err.kind, CmdErrorKind::Invalid);
         assert_eq!(
             err.message,
             "claude_path must not contain invisible or text-direction characters (found U+202E \
@@ -288,7 +289,7 @@ mod tests {
 
         // A line break inside the path is refused; one pasted after it is trimmed away.
         let (result, asked) = save(&rt, with_program(&before, "C:/tools\n/claude.exe"), true).await;
-        assert_eq!(result.unwrap_err().kind, "invalid");
+        assert_eq!(result.unwrap_err().kind, CmdErrorKind::Invalid);
         assert_eq!(asked, [] as [String; 0]);
         let (result, asked) =
             save(&rt, with_program(&before, &format!("{PROGRAM}\r\n")), true).await;

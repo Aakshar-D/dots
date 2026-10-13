@@ -19,23 +19,7 @@ export const sample = {
 };
 
 /// What `new_dot_spec` answers: the core's defaults with nothing filled in.
-export const blankSpec: T.DotSpec = {
-  name: "",
-  instructions: "",
-  engine: "claude",
-  model: "sonnet",
-  endpoint_url: null,
-  workdir: "",
-  workspace_mode: "worktree",
-  schedule: null,
-  policy: sample.dot.policy,
-  mcp_servers: null,
-  use_user_settings: false,
-  max_turns: 40,
-  timeout_secs: 1800,
-  approval_wait_secs: 240,
-  enabled: true,
-};
+export const blankSpec: T.DotSpec = T.DotSpec.parse(contract.NewDotSpec);
 
 /// A status with nothing to warn about.
 export const quietStatus: T.Status = {

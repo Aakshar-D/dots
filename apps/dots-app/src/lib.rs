@@ -12,6 +12,58 @@ use tauri::{AppHandle, Manager, RunEvent, WindowEvent};
 
 use crate::state::AppState;
 
+/// The commands of `commands.rs`, listed once: `invoke_handler` registers exactly these, and
+/// `COMMANDS` names them in the contract fixture, where the UI's tests compare them with the
+/// names `ui/src/api/commands.ts` invokes.
+macro_rules! command_list {
+    ($($name:ident),+ $(,)?) => {
+        /// The name of every registered command, as the UI invokes it.
+        pub const COMMANDS: &[&str] = &[ $( stringify!($name) ),+ ];
+
+        fn invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
+            tauri::generate_handler![ $( commands::$name ),+ ]
+        }
+    };
+}
+
+command_list![
+    startup_error,
+    status,
+    mark_claude_tested,
+    get_settings,
+    update_settings,
+    set_schedules_paused,
+    restart_app,
+    dot_overview,
+    list_dots,
+    get_dot,
+    create_dot,
+    update_dot,
+    delete_dot,
+    set_dot_enabled,
+    regenerate_webhook_token,
+    webhook_url,
+    preview_schedule,
+    policy_preset,
+    new_dot_spec,
+    test_endpoint,
+    run_now,
+    chat,
+    cancel_run,
+    list_runs,
+    get_run,
+    run_thread,
+    list_run_events,
+    approvals_for_run,
+    decide_approval,
+    inbox,
+    inbox_count,
+    worktree_diff,
+    discard_worktree,
+    mark_reviewed,
+    open_run_folder,
+];
+
 /// Keeps the log writer flushing until the app exits.
 struct LogGuard(#[allow(dead_code)] tracing_appender::non_blocking::WorkerGuard);
 
@@ -127,43 +179,7 @@ pub fn run() {
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![
-            commands::startup_error,
-            commands::status,
-            commands::mark_claude_tested,
-            commands::get_settings,
-            commands::update_settings,
-            commands::set_schedules_paused,
-            commands::restart_app,
-            commands::dot_overview,
-            commands::list_dots,
-            commands::get_dot,
-            commands::create_dot,
-            commands::update_dot,
-            commands::delete_dot,
-            commands::set_dot_enabled,
-            commands::regenerate_webhook_token,
-            commands::webhook_url,
-            commands::preview_schedule,
-            commands::policy_preset,
-            commands::new_dot_spec,
-            commands::test_endpoint,
-            commands::run_now,
-            commands::chat,
-            commands::cancel_run,
-            commands::list_runs,
-            commands::get_run,
-            commands::run_thread,
-            commands::list_run_events,
-            commands::approvals_for_run,
-            commands::decide_approval,
-            commands::inbox,
-            commands::inbox_count,
-            commands::worktree_diff,
-            commands::discard_worktree,
-            commands::mark_reviewed,
-            commands::open_run_folder,
-        ])
+        .invoke_handler(invoke_handler())
         .build(tauri::generate_context!())
         .expect("failed to build the Dots app");
     app.run(|app, event| {
@@ -173,4 +189,30 @@ pub fn run() {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    /// The name of every function in `commands.rs` that is marked as a command. Only the plain
+    /// attribute counts: with `rename`, the name the UI invokes would not be the function's
+    /// name, which is what `COMMANDS` lists.
+    fn defined() -> Vec<&'static str> {
+        include_str!("commands.rs")
+            .split("#[tauri::command]")
+            .skip(1)
+            .map(|after| {
+                let name = after.split_once("fn ").expect("a command is a function").1;
+                &name[..name.find('(').expect("a function has parameters")]
+            })
+            .collect()
+    }
+
+    #[test]
+    fn every_command_in_commands_rs_is_registered_once() {
+        let mut defined = defined();
+        let mut registered = super::COMMANDS.to_vec();
+        defined.sort_unstable();
+        registered.sort_unstable();
+        assert_eq!(registered, defined);
+    }
 }

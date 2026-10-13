@@ -35,6 +35,15 @@ describe("commands", () => {
     expect(calls).toEqual([["chat", { dotId: "d1", message: "hello", parentRunId: null }]]);
   });
 
+  it("invokes exactly the commands the app registers", async () => {
+    // A wrapper calls `invoke` before it first waits, so calling each one without arguments
+    // lists the names with no backend. Their answers, mostly rejections here, do not matter.
+    const wrappers: Record<string, (...args: never[]) => Promise<unknown>> = commands;
+    await Promise.allSettled(Object.values(wrappers).map((wrapper) => wrapper()));
+    const invoked = [...new Set(calls.map(([cmd]) => cmd))];
+    expect(invoked.sort()).toEqual([...fixture.Commands].sort());
+  });
+
   it("returns the parsed answer", async () => {
     reply = async () => fixture.Status;
     expect(await commands.status()).toEqual(fixture.Status);

@@ -59,6 +59,7 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::CmdErrorKind;
 
     #[test]
     fn closing_the_window_exits_after_a_failed_start() {
@@ -70,7 +71,7 @@ mod tests {
     fn a_start_that_found_no_data_folder_fails_like_any_other_without_a_log_folder() {
         let state = AppState::new(Err("no local data folder".into()), None);
         assert!(!state.close_hides_window());
-        assert_eq!(state.rt().err().unwrap().kind, "internal");
+        assert_eq!(state.rt().err().unwrap().kind, CmdErrorKind::Internal);
         // The fatal page leaves the log folder line out when the text is empty.
         assert_eq!(
             state.startup_error(),
@@ -92,7 +93,7 @@ mod tests {
     fn a_failed_start_answers_every_command_with_an_internal_error() {
         let state = AppState::new(Err("disk full".into()), Some(PathBuf::from("C:/logs")));
         let err = state.rt().err().unwrap();
-        assert_eq!(err.kind, "internal");
+        assert_eq!(err.kind, CmdErrorKind::Internal);
         assert_eq!(
             state.startup_error(),
             Some(StartupError {

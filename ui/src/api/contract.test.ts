@@ -5,9 +5,10 @@ import * as T from "./types";
 
 // Written by apps/dots-app/src/contract.rs. Regenerate with
 // `UPDATE_CONTRACT=1 cargo test -p dots-app contract`.
-type SampleName = Exclude<keyof typeof fixture, "Enums" | "Limits">;
+type SampleName = Exclude<keyof typeof fixture, "Enums" | "Limits" | "Commands">;
 const schemas: Record<SampleName, { parse: (v: unknown) => unknown }> = {
   DotSpec: T.DotSpec,
+  NewDotSpec: T.DotSpec,
   Dot: T.Dot,
   Run: T.Run,
   RunEventRecord: T.RunEventRecord,
