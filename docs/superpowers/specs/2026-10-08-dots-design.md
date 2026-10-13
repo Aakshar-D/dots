@@ -269,7 +269,11 @@ A resume creates a child run linked by `parent_run_id` and reuses the parent's w
     directory is judged as a file and is never entered. `list_dir` does not walk: it lists a
     directory that only the default denies by its name, so that the model can reach the allowed
     subtree, and leaves out one that a deny rule matches. The hidden count is one per refused
-    entry: a directory matched by a deny rule counts once, whatever it holds.
+    entry: a directory matched by a deny rule counts once, whatever it holds. The search root
+    is judged like every other entry: a root that is a file is refused whenever it resolves to
+    `deny`, a root that is a directory when a deny rule matches it, with an error and no count.
+    A rule that names a directory alone (`Read(**/secret)`) does not cover what is below it;
+    `Read(secret/**)` does.
   - `trusted`: allow all; ask for `Bash(git push:*)` and `mcp__*`; default allow.
 
 ### Claude engine
@@ -654,7 +658,10 @@ notify. Unread count = pending approvals + runs awaiting review.
     half way, whatever is left of its folder is deleted without following links (`git worktree
     remove` leaves a junction and its folder behind and still succeeds, and a removal that
     fails on a held file has already unregistered the worktree). Discard finds the repository
-    from the worktree itself when the folder still has its `.git`.
+    from the worktree itself when the folder still has its `.git`. The same check of the row
+    runs before a worktree is restored for a follow-up and before a run reuses its worktree; a
+    folder-mode run's row has nothing to be compared with and is not checked. Git 2.31 or
+    newer is needed (`--end-of-options`, `rev-parse --path-format=absolute`).
   - Start: the log folder is created before the appender; a relative `DOTS_DATA_DIR` is made
     absolute; a failure to find the local data folder shows the fatal page; a panic is written
     to the log (the line is appended to the log file directly, because the logger writes on a
