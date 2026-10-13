@@ -504,6 +504,10 @@ notify. Unread count = pending approvals + runs awaiting review.
   (pick workdir). No `shell`, `fs` or `http` plugin. From Plan 3c, `single-instance` is not
   registered when `DOTS_DATA_DIR` is set, so a smoke or development instance never hands over
   to an installed Dots and its real data.
+  Such an instance also leaves the login entry alone. Every instance holds a lock on
+  `dots.lock` in its data folder while it runs; a second instance on the same folder waits up
+  to 3 seconds for it (a restart) and then shows the fatal page instead of starting a second
+  runtime on the database.
 - Commands are one-line wrappers over `Runtime` returning `Result<T, CmdError>`, serialized as
   `{ kind: "not_found" | "invalid" | "conflict" | "internal", message }`. Plan 3b adds the kind
   `cancelled` (the user declined a native confirmation; nothing was changed). From Plan 3c the
@@ -653,7 +657,8 @@ notify. Unread count = pending approvals + runs awaiting review.
   - Start: the log folder is created before the appender; a relative `DOTS_DATA_DIR` is made
     absolute; a failure to find the local data folder shows the fatal page; a panic is written
     to the log (the line is appended to the log file directly, because the logger writes on a
-    worker thread that an abort does not wait for); `Runtime::start` retries the bind briefly
+    worker thread that an abort does not wait for) and the hook is installed before Tauri
+    builds the app, so a panic while the app is built is written too; `Runtime::start` retries the bind briefly
     (2 seconds, only while the port is in use), so a restart does not race the old process's
     socket; `single-instance` is skipped under `DOTS_DATA_DIR`.
   - Notifications: a lagged event stream clears the notifier's memory of live runs.

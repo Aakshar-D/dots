@@ -15,6 +15,9 @@ use crate::state::AppState;
 /// Keeps the log writer flushing until the app exits.
 struct LogGuard(#[allow(dead_code)] tracing_appender::non_blocking::WorkerGuard);
 
+/// Keeps the lock on the data folder until the process ends.
+struct DataDirLock(#[allow(dead_code)] std::fs::File);
+
 /// Shows and focuses the main window.
 pub fn show_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
@@ -24,7 +27,9 @@ pub fn show_main(app: &AppHandle) {
     }
 }
 
-fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+/// `panics_logged`: `run` has installed the panic hook already, so `setup` must not chain a
+/// second one (one line per panic).
+fn setup(app: &AppHandle, panics_logged: bool) -> Result<(), Box<dyn std::error::Error>> {
     // Without a data folder there is nowhere to log and nothing to start: the error goes to
     // the fatal-error page like any other failed start.
     let data_dir = startup::data_dir(
@@ -36,11 +41,21 @@ fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(guard) = startup::init_logging(log_dir) {
             app.manage(LogGuard(guard));
         }
-        startup::log_panics(log_dir.clone());
+        if !panics_logged {
+            startup::log_panics(log_dir.clone());
+        }
     }
     tracing::info!("starting Dots {}", env!("CARGO_PKG_VERSION"));
+    // The lock comes before the runtime touches the database; failing to get it is a failed
+    // start like any other.
     let runtime = match &data_dir {
-        Ok(dir) => tauri::async_runtime::block_on(startup::start_runtime(dir)),
+        Ok(dir) => match startup::lock_data_dir(dir, startup::LOCK_WAIT) {
+            Ok(lock) => {
+                app.manage(DataDirLock(lock));
+                tauri::async_runtime::block_on(startup::start_runtime(dir))
+            }
+            Err(e) => Err(e),
+        },
         Err(e) => Err(e.clone()),
     };
     let failed = runtime.is_err();
@@ -49,7 +64,11 @@ fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     }
     if let Ok((rt, settings)) = &runtime {
         app.manage(tray::Tray::build(app, settings.schedules_paused)?);
-        autostart::apply(app, settings.autostart);
+        autostart::apply(
+            app,
+            settings.autostart,
+            !startup::single_instance(std::env::var_os(startup::DATA_DIR_ENV)),
+        );
         events::spawn_forwarder(app.clone(), rt.clone());
     }
     app.manage(AppState::new(runtime.map(|(rt, _)| rt), log_dir));
@@ -61,6 +80,16 @@ fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 pub fn run() {
+    // First thing: a panic while Tauri builds the app or runs `setup` is logged too, and a
+    // release build has no console to read it from.
+    let early = startup::early_log_dir(
+        std::env::var_os("LOCALAPPDATA"),
+        std::env::var_os(startup::DATA_DIR_ENV),
+    );
+    let panics_logged = early.is_some();
+    if let Some(log_dir) = early {
+        startup::log_panics(log_dir);
+    }
     let mut builder = tauri::Builder::default();
     // Must be registered first: a second launch only focuses the running app. An instance
     // with its own data folder does not take part (`startup::single_instance`).
@@ -77,8 +106,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
-        .setup(|app| {
-            setup(app.handle())?;
+        .setup(move |app| {
+            setup(app.handle(), panics_logged)?;
             Ok(())
         })
         .on_window_event(|window, event| {

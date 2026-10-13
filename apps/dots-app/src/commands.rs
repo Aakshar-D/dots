@@ -55,7 +55,11 @@ pub async fn update_settings(
         confirm::ask(&app, "Change the Claude program?", message)
     })
     .await?;
-    crate::autostart::apply(&app, saved.settings.autostart);
+    crate::autostart::apply(
+        &app,
+        saved.settings.autostart,
+        !crate::startup::single_instance(std::env::var_os(crate::startup::DATA_DIR_ENV)),
+    );
     if let Some(tray) = app.try_state::<Tray>() {
         tray.set_paused(saved.settings.schedules_paused);
     }

@@ -7,6 +7,7 @@ use std::io::Write;
 use std::panic::Location;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use dots_core::settings::{self, Settings};
 use dots_core::{Config, Runtime};
@@ -53,6 +54,60 @@ pub fn data_dir<E: Display>(
 /// over to an installed Dots and its real data (spec §12).
 pub fn single_instance(env_override: Option<OsString>) -> bool {
     data_dir_override(env_override).is_none()
+}
+
+/// Where a panic is logged before Tauri has built the app, from the environment alone:
+/// `DOTS_DATA_DIR`, else `%LOCALAPPDATA%` (which is what Tauri's `local_data_dir` reads on
+/// Windows, so `setup` finds the same folder). `None` when neither names a folder.
+pub fn early_log_dir(
+    local_app_data: Option<OsString>,
+    env_override: Option<OsString>,
+) -> Option<PathBuf> {
+    let local = local_app_data
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .ok_or("%LOCALAPPDATA% is not set");
+    data_dir(local, env_override).ok().map(|d| log_dir(&d))
+}
+
+/// The file every running Dots holds a lock on, in its data folder.
+pub const LOCK_FILE: &str = "dots.lock";
+
+/// How long a start waits for another process's lock on the data folder: "Restart Dots"
+/// starts the new process while the old one is still exiting.
+pub const LOCK_WAIT: Duration = Duration::from_secs(3);
+
+/// Takes an exclusive lock on `dots.lock` in `data_dir` and returns the file: the lock lasts
+/// as long as it is kept. Two Dots on one data folder would run two runtimes on one database
+/// (the second marks the first's live runs as failed). Only a lock held by another process is
+/// waited for, up to `wait`; any other error returns at once.
+pub fn lock_data_dir(data_dir: &Path, wait: Duration) -> Result<std::fs::File, String> {
+    let fail = |what: &str, e: std::io::Error| {
+        format!("Dots could not {what} in {}: {e}", data_dir.display())
+    };
+    std::fs::create_dir_all(data_dir).map_err(|e| fail("create its data folder", e))?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(data_dir.join(LOCK_FILE))
+        .map_err(|e| fail("open its lock file", e))?;
+    let started = Instant::now();
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(file),
+            Err(std::fs::TryLockError::WouldBlock) => {
+                if started.elapsed() >= wait {
+                    return Err(format!(
+                        "another Dots is already using the data folder {}. Close it (it may be in the tray), then start Dots again.",
+                        data_dir.display()
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(std::fs::TryLockError::Error(e)) => return Err(fail("lock its data folder", e)),
+        }
+    }
 }
 
 pub fn log_dir(data_dir: &Path) -> PathBuf {
@@ -343,6 +398,94 @@ mod tests {
         std::fs::write(&file, "x").unwrap();
         record_panic(&file.join("logs"), Some("main"), Some(here), Some("boom"));
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "x");
+    }
+
+    #[test]
+    fn the_early_log_folder_comes_from_the_environment_alone() {
+        let local = || Some(OsString::from("C:/Users/u/AppData/Local"));
+        let cwd = std::env::current_dir().unwrap();
+        assert_eq!(
+            early_log_dir(local(), None),
+            Some(Path::new("C:/Users/u/AppData/Local/dots/logs").to_path_buf())
+        );
+        assert_eq!(
+            early_log_dir(local(), Some("".into())),
+            early_log_dir(local(), None)
+        );
+        assert_eq!(
+            early_log_dir(None, Some("smoke-data".into())),
+            Some(cwd.join("smoke-data").join("logs"))
+        );
+        let absolute = cwd.join("elsewhere");
+        assert_eq!(
+            early_log_dir(local(), Some(absolute.clone().into())),
+            Some(absolute.join("logs"))
+        );
+        assert_eq!(early_log_dir(None, None), None);
+        assert_eq!(early_log_dir(None, Some("".into())), None);
+    }
+
+    #[test]
+    fn the_early_log_folder_is_the_one_setup_computes() {
+        // `setup` gets `%LOCALAPPDATA%` from Tauri; the early path reads the variable.
+        let local = Path::new("C:/Users/u/AppData/Local");
+        for env in [None, Some(OsString::from("smoke-data"))] {
+            let in_setup = data_dir(found(local), env.clone())
+                .map(|d| log_dir(&d))
+                .ok();
+            assert_eq!(early_log_dir(Some(local.into()), env), in_setup);
+        }
+    }
+
+    const NO_WAIT: Duration = Duration::from_millis(150);
+
+    #[test]
+    fn the_lock_file_is_made_in_a_folder_that_does_not_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("a").join("dots");
+        let _lock = lock_data_dir(&data, NO_WAIT).unwrap();
+        assert!(data.join(LOCK_FILE).is_file());
+    }
+
+    #[test]
+    fn a_second_lock_on_one_folder_fails_until_the_first_is_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = lock_data_dir(dir.path(), NO_WAIT).unwrap();
+        let started = std::time::Instant::now();
+        let err = lock_data_dir(dir.path(), NO_WAIT).unwrap_err();
+        assert!(started.elapsed() >= NO_WAIT);
+        assert_eq!(
+            err,
+            format!(
+                "another Dots is already using the data folder {}. Close it (it may be in the tray), then start Dots again.",
+                dir.path().display()
+            )
+        );
+        drop(first);
+        assert!(lock_data_dir(dir.path(), NO_WAIT).is_ok());
+    }
+
+    #[test]
+    fn a_lock_released_during_the_wait_is_obtained() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = lock_data_dir(dir.path(), NO_WAIT).unwrap();
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            drop(first);
+        });
+        assert!(lock_data_dir(dir.path(), Duration::from_secs(2)).is_ok());
+        releaser.join().unwrap();
+    }
+
+    #[test]
+    fn a_lock_error_that_is_not_a_held_lock_returns_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("not-a-dir");
+        std::fs::write(&file, "x").unwrap();
+        let started = std::time::Instant::now();
+        let err = lock_data_dir(&file.join("dots"), Duration::from_secs(5)).unwrap_err();
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(!err.starts_with("another Dots"), "{err}");
     }
 
     #[tokio::test]
