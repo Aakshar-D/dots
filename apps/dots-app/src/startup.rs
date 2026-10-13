@@ -2,13 +2,16 @@
 //! can be tested headless.
 
 use std::ffi::OsString;
+use std::fmt::Display;
+use std::io::Write;
+use std::panic::Location;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use dots_core::settings::{self, Settings};
 use dots_core::{Config, Runtime};
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_appender::rolling::{Builder, Rotation};
+use tracing_appender::rolling::{Builder, RollingFileAppender, Rotation};
 use tracing_subscriber::EnvFilter;
 
 /// Passed by the autostart entry: start in the tray without showing the window.
@@ -18,12 +21,38 @@ const LOG_FILES_KEPT: usize = 7;
 /// Overrides the data directory, for smoke tests and a second development instance.
 pub const DATA_DIR_ENV: &str = "DOTS_DATA_DIR";
 
-/// `%LOCALAPPDATA%\dots` (spec §3) given `%LOCALAPPDATA%`, unless `DOTS_DATA_DIR` is set.
-pub fn data_dir(local_data: &Path, env_override: Option<OsString>) -> PathBuf {
-    match env_override.filter(|v| !v.is_empty()) {
-        Some(dir) => PathBuf::from(dir),
-        None => local_data.join("dots"),
+/// The folder `DOTS_DATA_DIR` names. An empty value counts as not set.
+fn data_dir_override(env_override: Option<OsString>) -> Option<OsString> {
+    env_override.filter(|v| !v.is_empty())
+}
+
+/// `%LOCALAPPDATA%\dots` (spec §3) given `%LOCALAPPDATA%`, unless `DOTS_DATA_DIR` is set; then
+/// `local_data` is not needed. The override is made absolute here, from the current folder
+/// and without touching the disk: the core hands paths below the data folder to git, which
+/// runs in a dot's folder, and compares stored worktree paths with it, so one folder must
+/// have one spelling. The error is the text the fatal-error page shows.
+pub fn data_dir<E: Display>(
+    local_data: Result<PathBuf, E>,
+    env_override: Option<OsString>,
+) -> Result<PathBuf, String> {
+    match data_dir_override(env_override) {
+        Some(dir) => std::path::absolute(&dir).map_err(|e| {
+            format!(
+                "Dots could not use the folder {} from {DATA_DIR_ENV}: {e}",
+                Path::new(&dir).display()
+            )
+        }),
+        None => local_data
+            .map(|local| local.join("dots"))
+            .map_err(|e| format!("Dots could not find the local application data folder: {e}")),
     }
+}
+
+/// Whether a second launch hands over to the running app. Not under `DOTS_DATA_DIR`: the
+/// plugin knows the app, not its data folder, so a smoke or development instance would hand
+/// over to an installed Dots and its real data (spec §12).
+pub fn single_instance(env_override: Option<OsString>) -> bool {
+    data_dir_override(env_override).is_none()
 }
 
 pub fn log_dir(data_dir: &Path) -> PathBuf {
@@ -34,16 +63,24 @@ pub fn start_hidden(mut args: impl Iterator<Item = String>) -> bool {
     args.any(|a| a == HIDDEN_ARG)
 }
 
-/// Daily log files in `log_dir`, the last seven kept. `None` if logging could not start;
-/// the app runs without a log then. Keep the guard alive for the whole run.
-pub fn init_logging(log_dir: &Path) -> Option<WorkerGuard> {
-    let appender = Builder::new()
+/// Today's log file in `log_dir`: daily files, the last seven kept. The folder is created
+/// first: the appender looks for old files before it opens today's, and prints an error when
+/// the folder is not there yet.
+fn appender(log_dir: &Path) -> Option<RollingFileAppender> {
+    std::fs::create_dir_all(log_dir).ok()?;
+    Builder::new()
         .rotation(Rotation::DAILY)
         .filename_prefix("dots")
         .filename_suffix("log")
         .max_log_files(LOG_FILES_KEPT)
         .build(log_dir)
-        .ok()?;
+        .ok()
+}
+
+/// Daily log files in `log_dir`, the last seven kept. `None` if logging could not start;
+/// the app runs without a log then. Keep the guard alive for the whole run.
+pub fn init_logging(log_dir: &Path) -> Option<WorkerGuard> {
+    let appender = appender(log_dir)?;
     let (writer, guard) = tracing_appender::non_blocking(appender);
     tracing_subscriber::fmt()
         .with_writer(writer)
@@ -52,6 +89,43 @@ pub fn init_logging(log_dir: &Path) -> Option<WorkerGuard> {
         .try_init()
         .ok()?;
     Some(guard)
+}
+
+/// Writes a panic to today's log file, as a line shaped like the logger's. It goes straight
+/// to the file and not through `tracing`: the logger hands its lines to a writer thread, and
+/// a panic can end the process before that thread has written them. Nothing here may panic.
+pub fn record_panic(
+    log_dir: &Path,
+    thread: Option<&str>,
+    location: Option<&Location<'_>>,
+    message: Option<&str>,
+) {
+    let place = location.map_or_else(|| "an unknown place".to_string(), Location::to_string);
+    let line = format!(
+        "{} ERROR dots_app: thread '{}' panicked at {place}: {}\n",
+        dots_core::util::now(),
+        thread.unwrap_or("<unnamed>"),
+        message.unwrap_or("(no message)"),
+    );
+    if let Some(mut log) = appender(log_dir) {
+        let _ = log.write_all(line.as_bytes());
+    }
+}
+
+/// From here on a panic leaves a line in the log. The hook that was installed before still
+/// runs afterwards (the default one prints the panic to stderr, which a release build does
+/// not have).
+pub fn log_panics(log_dir: PathBuf) {
+    let before = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        record_panic(
+            &log_dir,
+            std::thread::current().name(),
+            info.location(),
+            info.payload_as_str(),
+        );
+        before(info);
+    }));
 }
 
 /// Reads the stored settings and starts the runtime with them. The error is the text the
@@ -72,18 +146,38 @@ pub async fn start_runtime(data_dir: &Path) -> Result<(Arc<Runtime>, Settings), 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::{runtime_of, AppState};
+
+    /// `%LOCALAPPDATA%` as Tauri found it.
+    fn found(local: &Path) -> Result<PathBuf, String> {
+        Ok(local.to_path_buf())
+    }
+
+    /// The text of the only file in `log_dir`, which must be one of the logger's daily files.
+    fn only_log_file(log_dir: &Path) -> String {
+        let files: Vec<PathBuf> = std::fs::read_dir(log_dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        assert_eq!(files.len(), 1, "{files:?}");
+        let name = files[0].file_name().unwrap().to_string_lossy().into_owned();
+        assert!(
+            name.starts_with("dots.") && name.ends_with(".log"),
+            "{name}"
+        );
+        std::fs::read_to_string(&files[0]).unwrap()
+    }
 
     #[test]
     fn paths_and_the_hidden_flag() {
         let local = Path::new("C:/Users/u/AppData/Local");
-        assert_eq!(data_dir(local, None), local.join("dots"));
-        assert_eq!(data_dir(local, Some("".into())), local.join("dots"));
+        assert_eq!(data_dir(found(local), None), Ok(local.join("dots")));
         assert_eq!(
-            data_dir(local, Some("D:/smoke".into())),
-            PathBuf::from("D:/smoke")
+            data_dir(found(local), Some("".into())),
+            Ok(local.join("dots"))
         );
         assert_eq!(
-            log_dir(&data_dir(local, None)),
+            log_dir(&local.join("dots")),
             local.join("dots").join("logs")
         );
         let args = |a: &[&str]| {
@@ -94,6 +188,161 @@ mod tests {
         };
         assert!(start_hidden(args(&["dots.exe", "--hidden"])));
         assert!(!start_hidden(args(&["dots.exe"])));
+    }
+
+    #[test]
+    fn a_data_dir_override_is_made_absolute() {
+        let local = Path::new("C:/Users/u/AppData/Local");
+        let cwd = std::env::current_dir().unwrap();
+        // Compared as text: the core compares stored worktree paths with this folder.
+        let given =
+            |dir: &str| data_dir(found(local), Some(dir.into())).map(PathBuf::into_os_string);
+        assert_eq!(given("smoke-data"), Ok(cwd.join("smoke-data").into()));
+        let absolute = cwd.join("elsewhere");
+        assert_eq!(
+            given(&absolute.to_string_lossy()),
+            Ok(absolute.clone().into())
+        );
+        if cfg!(windows) {
+            // One spelling for one folder, however the variable spells it.
+            assert_eq!(given("./smoke-data"), Ok(cwd.join("smoke-data").into()));
+            assert_eq!(
+                given("nested/../smoke-data"),
+                Ok(cwd.join("smoke-data").into())
+            );
+            assert_eq!(
+                given(&absolute.to_string_lossy().replace('\\', "/")),
+                Ok(absolute.into())
+            );
+        }
+    }
+
+    #[test]
+    fn a_missing_local_data_folder_is_a_startup_error_unless_the_override_names_a_folder() {
+        let missing = || Err::<PathBuf, _>("unknown path");
+        assert_eq!(
+            data_dir(missing(), None),
+            Err("Dots could not find the local application data folder: unknown path".into())
+        );
+        assert_eq!(
+            data_dir(missing(), Some("".into())),
+            Err("Dots could not find the local application data folder: unknown path".into())
+        );
+        let cwd = std::env::current_dir().unwrap();
+        assert_eq!(
+            data_dir(missing(), Some("smoke-data".into())),
+            Ok(cwd.join("smoke-data"))
+        );
+    }
+
+    #[test]
+    fn single_instance_is_skipped_under_a_data_dir_override() {
+        assert!(single_instance(None));
+        // An empty value is "not set", as it is for `data_dir`.
+        assert!(single_instance(Some("".into())));
+        assert!(!single_instance(Some("D:/smoke".into())));
+        assert!(!single_instance(Some("smoke-data".into())));
+    }
+
+    const CHILD_LOG_DIR: &str = "DOTS_TEST_CHILD_LOG_DIR";
+
+    /// Runs one test of this binary, a `child_…` one below, in a process of its own with
+    /// `log_dir` handed over: its stderr can be read there, and it may panic for real.
+    /// Returns whether it passed, and its stdout and stderr.
+    fn run_child(test: &str, log_dir: &Path) -> (bool, String, String) {
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &format!("startup::tests::{test}"), "--nocapture"])
+            .env(CHILD_LOG_DIR, log_dir)
+            .output()
+            .unwrap();
+        (
+            child.status.success(),
+            String::from_utf8_lossy(&child.stdout).into_owned(),
+            String::from_utf8_lossy(&child.stderr).into_owned(),
+        )
+    }
+
+    /// Does nothing on its own; see `the_log_folder_is_created_before_the_appender`.
+    #[test]
+    fn child_opens_the_log() {
+        if let Some(dir) = std::env::var_os(CHILD_LOG_DIR) {
+            assert!(appender(Path::new(&dir)).is_some());
+        }
+    }
+
+    #[test]
+    fn the_log_folder_is_created_before_the_appender() {
+        let dir = tempfile::tempdir().unwrap();
+        let logs = dir.path().join("dots").join("logs");
+        let (passed, out, err) = run_child("child_opens_the_log", &logs);
+        assert!(passed && out.contains("1 passed"), "{out}{err}");
+        assert_eq!(only_log_file(&logs), "");
+        // The appender looks for old files before it opens today's, and reports a folder
+        // that is not there yet as an error.
+        assert_eq!(err, "");
+    }
+
+    /// Does nothing on its own; see `a_real_panic_reaches_the_log_and_then_the_hook_before`.
+    #[test]
+    fn child_panics() {
+        if let Some(dir) = std::env::var_os(CHILD_LOG_DIR) {
+            log_panics(PathBuf::from(dir));
+            panic!("boom from the child");
+        }
+    }
+
+    #[test]
+    fn a_real_panic_reaches_the_log_and_then_the_hook_before() {
+        let dir = tempfile::tempdir().unwrap();
+        let logs = dir.path().join("logs");
+        let (passed, out, err) = run_child("child_panics", &logs);
+        assert!(!passed && out.contains("1 failed"), "{out}{err}");
+        let text = only_log_file(&logs);
+        let line = text.strip_suffix('\n').unwrap();
+        assert!(!line.contains('\n'), "{text}");
+        assert!(line.contains(" ERROR dots_app: thread '"), "{text}");
+        assert!(line.contains("startup.rs:"), "{text}");
+        assert!(line.ends_with(": boom from the child"), "{text}");
+        // The default hook still printed it.
+        assert!(
+            err.contains("panicked at") && err.contains("boom from the child"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_panic_is_written_to_the_log_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let logs = dir.path().join("logs");
+        // The logger's own file for today, with a line in it.
+        appender(&logs).unwrap().write_all(b"earlier\n").unwrap();
+        let here = Location::caller();
+        record_panic(&logs, Some("main"), Some(here), Some("index out of bounds"));
+        record_panic(&logs, None, None, None);
+        let text = only_log_file(&logs);
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 3, "{text}");
+        assert_eq!(lines[0], "earlier");
+        let (ts, rest) = lines[1].split_once(' ').unwrap();
+        assert!(
+            ts.ends_with('Z') && ts.len() == "2026-10-13T08:00:00.000Z".len(),
+            "{ts}"
+        );
+        assert_eq!(
+            rest,
+            format!("ERROR dots_app: thread 'main' panicked at {here}: index out of bounds")
+        );
+        assert!(
+            lines[2].ends_with(
+                " ERROR dots_app: thread '<unnamed>' panicked at an unknown place: (no message)"
+            ),
+            "{text}"
+        );
+        // A log folder that cannot be made must not turn one panic into two.
+        let file = dir.path().join("not-a-dir");
+        std::fs::write(&file, "x").unwrap();
+        record_panic(&file.join("logs"), Some("main"), Some(here), Some("boom"));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "x");
     }
 
     #[tokio::test]
@@ -123,6 +372,9 @@ mod tests {
         let status = rt.status().await;
         assert_eq!(status.port, port);
         assert_eq!(status.data_dir, data.to_string_lossy());
+        // What the tray menu and the exit handler get to shut down.
+        let state = AppState::new(Ok(rt.clone()), Some(log_dir(&data)));
+        assert!(runtime_of(Some(&state)).is_some_and(|r| Arc::ptr_eq(&r, &rt)));
         rt.shutdown();
     }
 

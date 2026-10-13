@@ -1,7 +1,7 @@
 //! Forwards `RuntimeEvent`s to the webview, turns some into OS notifications, and keeps the
 //! tray's Inbox count current.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use dots_core::events::RuntimeEvent;
@@ -32,30 +32,49 @@ pub enum Notice {
 /// Decides which events notify: approval requests, and a run moving from queued or running
 /// into succeeded, failed or awaiting approval. Chat runs never notify (the user is watching
 /// them). A run first seen in a final state (e.g. marked reviewed) and a parked run closed by
-/// a decision do not notify either.
+/// a decision do not notify either. A run that parks on an approval request this notifier
+/// has announced does not notify a second time: one park, one notification.
 #[derive(Default)]
 pub struct Notifier {
     active: HashMap<String, RunStatus>,
+    /// Runs with an announced approval request that have neither parked nor ended since.
+    asked: HashSet<String>,
 }
 
 impl Notifier {
+    /// Events were missed (the stream lagged): what this notifier remembers of live runs may
+    /// be out of date, so it starts again. A run then notifies only once it is seen queued or
+    /// running again.
+    pub fn forget(&mut self) {
+        self.active.clear();
+        self.asked.clear();
+    }
+
     pub fn decide(&mut self, ev: &RuntimeEvent) -> Option<Notice> {
         match ev {
-            RuntimeEvent::ApprovalRequested { approval } => Some(Notice::ApprovalNeeded {
-                run_id: approval.run_id.clone(),
-                tool: approval.tool.clone(),
-            }),
+            RuntimeEvent::ApprovalRequested { approval } => {
+                self.asked.insert(approval.run_id.clone());
+                Some(Notice::ApprovalNeeded {
+                    run_id: approval.run_id.clone(),
+                    tool: approval.tool.clone(),
+                })
+            }
             RuntimeEvent::RunUpdated { run } => {
                 let prev = if run.status.is_terminal() {
                     self.active.remove(&run.id)
                 } else {
                     self.active.insert(run.id.clone(), run.status)
                 };
+                // A run parks on a request (`ApprovalHub::ask`), and the request was announced:
+                // that was the notice for this park. Parking or ending closes the request.
+                let told = !matches!(run.status, RunStatus::Queued | RunStatus::Running)
+                    && self.asked.remove(&run.id);
                 let was_working = matches!(prev, Some(RunStatus::Queued | RunStatus::Running));
-                let ended = matches!(
-                    run.status,
-                    RunStatus::Succeeded | RunStatus::Failed | RunStatus::AwaitingApproval
-                );
+                let ended = match run.status {
+                    RunStatus::Succeeded | RunStatus::Failed => true,
+                    RunStatus::AwaitingApproval => !told,
+                    _ => false,
+                };
                 (was_working && ended && run.trigger != TriggerKind::Chat).then(|| {
                     Notice::RunEnded {
                         run: Box::new(run.clone()),
@@ -128,6 +147,7 @@ pub fn spawn_forwarder(app: AppHandle, rt: Arc<Runtime>) {
                 }
                 Err(RecvError::Lagged(n)) => {
                     tracing::warn!("UI event forwarder skipped {n} events");
+                    notifier.forget();
                     let _ = app.emit(LAGGED_EVENT, ());
                     tray::refresh_count(&app, &rt).await;
                 }
@@ -223,6 +243,79 @@ mod tests {
         );
     }
 
+    /// An approval request of run `run_id`.
+    fn asked(run_id: &str) -> RuntimeEvent {
+        RuntimeEvent::ApprovalRequested {
+            approval: Approval {
+                id: "a1".into(),
+                run_id: run_id.into(),
+                tool: "Bash".into(),
+                input: json!({}),
+                input_hash: "h".into(),
+                status: ApprovalStatus::Pending,
+                note: None,
+                parked: false,
+                resolved: false,
+                created_at: "t".into(),
+                decided_at: None,
+            },
+        }
+    }
+
+    #[test]
+    fn one_park_is_one_notification() {
+        let mut n = Notifier::default();
+        let s = TriggerKind::Schedule;
+        // The request notifies. When nobody answers and the run parks on it, the user has
+        // been told already; closing the parked run after the decision is quiet as before.
+        assert_eq!(notified(&mut n, "r", s, &[Queued, Running]), [false, false]);
+        assert!(matches!(
+            n.decide(&asked("r")),
+            Some(Notice::ApprovalNeeded { .. })
+        ));
+        assert_eq!(
+            notified(&mut n, "r", s, &[AwaitingApproval, Succeeded]),
+            [false, false]
+        );
+        // Each request notifies; the park after the second one still does not.
+        assert_eq!(
+            notified(&mut n, "two", s, &[Queued, Running]),
+            [false, false]
+        );
+        assert!(n.decide(&asked("two")).is_some());
+        assert!(n.decide(&asked("two")).is_some());
+        assert_eq!(notified(&mut n, "two", s, &[AwaitingApproval]), [false]);
+        // A request answered while the run waited hides nothing: the run's end notifies.
+        assert_eq!(
+            notified(&mut n, "live", s, &[Queued, Running]),
+            [false, false]
+        );
+        assert!(n.decide(&asked("live")).is_some());
+        assert_eq!(notified(&mut n, "live", s, &[Succeeded]), [true]);
+        // Only the parked run is still remembered, and no request.
+        assert_eq!(n.active.keys().collect::<Vec<_>>(), ["two"]);
+        assert!(n.asked.is_empty());
+    }
+
+    #[test]
+    fn a_lag_clears_the_memory_of_live_runs() {
+        let mut n = Notifier::default();
+        let m = TriggerKind::Manual;
+        assert_eq!(notified(&mut n, "a", m, &[Queued, Running]), [false, false]);
+        assert_eq!(notified(&mut n, "b", m, &[Queued, Running]), [false, false]);
+        assert!(n.decide(&asked("b")).is_some());
+        n.forget();
+        // "a" may have ended during the gap and be published again by "Mark reviewed".
+        assert_eq!(notified(&mut n, "a", m, &[Succeeded]), [false]);
+        // The request seen before the gap may not be the one "b" parks on.
+        assert_eq!(
+            notified(&mut n, "b", m, &[Running, AwaitingApproval]),
+            [false, true]
+        );
+        // A run seen working after the gap is trusted again.
+        assert_eq!(notified(&mut n, "c", m, &[Running, Failed]), [false, true]);
+    }
+
     #[test]
     fn chat_runs_and_runs_first_seen_finished_stay_quiet() {
         let mut n = Notifier::default();
@@ -245,21 +338,8 @@ mod tests {
     #[test]
     fn approval_requests_notify_and_run_events_do_not() {
         let mut n = Notifier::default();
-        let approval = Approval {
-            id: "a1".into(),
-            run_id: "r1".into(),
-            tool: "Bash".into(),
-            input: json!({}),
-            input_hash: "h".into(),
-            status: ApprovalStatus::Pending,
-            note: None,
-            parked: false,
-            resolved: false,
-            created_at: "t".into(),
-            decided_at: None,
-        };
         assert_eq!(
-            n.decide(&RuntimeEvent::ApprovalRequested { approval }),
+            n.decide(&asked("r1")),
             Some(Notice::ApprovalNeeded {
                 run_id: "r1".into(),
                 tool: "Bash".into()

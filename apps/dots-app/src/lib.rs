@@ -25,16 +25,24 @@ pub fn show_main(app: &AppHandle) {
 }
 
 fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+    // Without a data folder there is nowhere to log and nothing to start: the error goes to
+    // the fatal-error page like any other failed start.
     let data_dir = startup::data_dir(
-        &app.path().local_data_dir()?,
+        app.path().local_data_dir(),
         std::env::var_os(startup::DATA_DIR_ENV),
     );
-    let log_dir = startup::log_dir(&data_dir);
-    if let Some(guard) = startup::init_logging(&log_dir) {
-        app.manage(LogGuard(guard));
+    let log_dir = data_dir.as_deref().ok().map(startup::log_dir);
+    if let Some(log_dir) = &log_dir {
+        if let Some(guard) = startup::init_logging(log_dir) {
+            app.manage(LogGuard(guard));
+        }
+        startup::log_panics(log_dir.clone());
     }
     tracing::info!("starting Dots {}", env!("CARGO_PKG_VERSION"));
-    let runtime = tauri::async_runtime::block_on(startup::start_runtime(&data_dir));
+    let runtime = match &data_dir {
+        Ok(dir) => tauri::async_runtime::block_on(startup::start_runtime(dir)),
+        Err(e) => Err(e.clone()),
+    };
     let failed = runtime.is_err();
     if let Err(e) = &runtime {
         tracing::error!("{e}");
@@ -53,11 +61,15 @@ fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 pub fn run() {
-    let app = tauri::Builder::default()
-        // Must be registered first: a second launch only focuses the running app.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+    let mut builder = tauri::Builder::default();
+    // Must be registered first: a second launch only focuses the running app. An instance
+    // with its own data folder does not take part (`startup::single_instance`).
+    if startup::single_instance(std::env::var_os(startup::DATA_DIR_ENV)) {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_main(app)
-        }))
+        }));
+    }
+    let app = builder
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec![startup::HIDDEN_ARG]),
@@ -127,7 +139,7 @@ pub fn run() {
         .expect("failed to build the Dots app");
     app.run(|app, event| {
         if let RunEvent::Exit = event {
-            if let Ok(rt) = app.state::<AppState>().rt() {
+            if let Some(rt) = state::runtime_of(app.try_state::<AppState>().as_deref()) {
                 rt.shutdown();
             }
         }
