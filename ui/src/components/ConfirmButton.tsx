@@ -12,6 +12,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { onSingleClick } from "@/lib/single-click";
 
 /// A button for something that cannot be undone: it asks first.
 export function ConfirmButton(props: {
@@ -42,7 +43,11 @@ export function ConfirmButton(props: {
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction onClick={props.onConfirm}>{props.confirmLabel}</AlertDialogAction>
+          {/* The dialog stays on the screen while it closes, so the second click of a
+              double-click lands on this button again: only the first one confirms. */}
+          <AlertDialogAction onClick={onSingleClick(props.onConfirm)}>
+            {props.confirmLabel}
+          </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>

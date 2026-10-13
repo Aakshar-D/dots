@@ -423,7 +423,8 @@ fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> 
 
 #[cfg(windows)]
 const SHELL_DESCRIPTION: &str = "Run a PowerShell command in the workspace directory and return \
-    its output. Default timeout 120 seconds, maximum 600.";
+    its output. Default timeout 120 seconds, maximum 600. A process the command starts in the \
+    background is stopped when the command returns.";
 #[cfg(not(windows))]
 const SHELL_DESCRIPTION: &str = "Run a sh command in the workspace directory and return its \
     output. Default timeout 120 seconds, maximum 600.";

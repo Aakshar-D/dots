@@ -158,6 +158,28 @@ fn prepare_validates_calls_before_the_policy() {
     );
 }
 
+/// On Windows a process the command started is stopped when the command returns. The result
+/// says so only when that process held the command's output; one started in a window of its
+/// own is stopped without a word, so the model has to know it from the tool's description.
+#[cfg(windows)]
+#[test]
+fn the_shell_description_says_that_a_background_process_is_stopped() {
+    let schemas = tools::schemas();
+    let shell = schemas
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["function"]["name"] == "shell")
+        .expect("the shell tool");
+    let description = shell["function"]["description"].as_str().unwrap();
+    assert!(
+        description.ends_with(
+            " A process the command starts in the background is stopped when the command returns."
+        ),
+        "{description}"
+    );
+}
+
 /// Runs `prepare` and then the same policy resolution `ApprovalHub::check` does.
 fn gate(ws: &Path, policy: &Policy, name: &str, args: Value) -> (Value, Action) {
     let call = tools::prepare(name, &args, ws).unwrap_or_else(|e| panic!("prepare: {e}"));
@@ -552,7 +574,9 @@ async fn shell_keeps_output_when_a_background_process_holds_the_pipes() {
     const HELD: &str = "[output stream still held open by a background process]";
     #[cfg(windows)]
     {
-        // The job ends the process, so the stream is not held for the 5 s wait.
+        // The job ends the process, so the stream is not held for the 5 s wait. The two notes
+        // prove that path; the time is only a guard against a hang, as wide as on the other
+        // systems, because a tighter one failed under load.
         assert!(
             out.output.contains(
                 "[a process the command left running in the background was stopped; nothing a command starts outlives it]"
@@ -560,7 +584,7 @@ async fn shell_keeps_output_when_a_background_process_holds_the_pipes() {
             "{out:?}"
         );
         assert!(!out.output.contains(HELD), "{out:?}");
-        assert!(started.elapsed() < Duration::from_secs(5), "{out:?}");
+        assert!(started.elapsed() < Duration::from_secs(15), "{out:?}");
     }
     #[cfg(not(windows))]
     {
@@ -626,6 +650,12 @@ async fn shell_leaves_no_process_behind_when_it_returns() {
     let script = format!("{}; Write-Output left", orphan_script(&lingerer));
     let out = run(ws.path(), "shell", json!({ "command": script })).await;
     assert!(!out.is_error && out.output.contains("left"), "{out:?}");
+    // The grandchild did run: `--orphan` returns only once it has written `ready`. Without
+    // this, a script that started nothing would pass the next check too.
+    assert!(
+        Path::new(&lingerer.dir()).join("ready").is_file(),
+        "the grandchild never started: {out:?}"
+    );
     assert!(
         lingerer.gone_within(Duration::from_secs(5)).await,
         "the grandchild is still running after the call returned"

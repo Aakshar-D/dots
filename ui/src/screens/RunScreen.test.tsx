@@ -410,6 +410,25 @@ describe("the run view", () => {
     expect(backend.callsTo("mark_reviewed")).toEqual([{ runId: run.id }]);
   });
 
+  it("discards the worktree once when the confirmation is double-clicked", async () => {
+    // The thread the core answers keeps its worktree here; only the calls are counted.
+    thread([run]);
+    backend.on("discard_worktree", () => ({ ...run, reviewed_at: run.ended_at }));
+    const { user } = renderApp(`/runs/${run.id}`);
+    await user.click(await screen.findByRole("button", { name: "Discard worktree" }));
+    const confirm = await screen.findByRole("button", { name: "Discard the worktree" });
+    // In the app the dialog stays on the screen while it closes, so the second click of a
+    // double-click lands on the same button. Here the two clicks arrive before the dialog is
+    // drawn again, which is that moment.
+    act(() => {
+      fireEvent.click(confirm, { detail: 1 });
+      fireEvent.click(confirm, { detail: 2 });
+    });
+    await waitFor(() => expect(backend.callsTo("discard_worktree")).not.toEqual([]));
+    await settle();
+    expect(backend.callsTo("discard_worktree")).toEqual([{ runId: run.id }]);
+  });
+
   it("holds both review actions while one is on its way", async () => {
     thread([run]);
     const answer = later<Run>();
