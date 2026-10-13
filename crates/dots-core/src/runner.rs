@@ -430,8 +430,14 @@ impl Runner {
                     )
                     .await?;
                 // The run now has a folder, a branch and a base commit: say so, or a view of
-                // the running run would not know them until it ends.
-                self.emit_run(&self.store.get_run(&run.id).await?);
+                // the running run would not know them until it ends. Only an announcement:
+                // a failed read must not fail a run whose workspace is made and recorded.
+                match self.store.get_run(&run.id).await {
+                    Ok(stored) => self.emit_run(&stored),
+                    Err(e) => {
+                        tracing::warn!(run = %run.id, "announcing the workspace failed: {e}")
+                    }
+                }
                 p
             }
         };
@@ -589,10 +595,12 @@ impl Runner {
         let Some(run) = cancelled else {
             return Ok(None);
         };
-        self.emit_run(&run);
+        // Clean up before publishing, as `execute_inner` does: whoever sees `cancelled` must
+        // not find a leftover unchanged worktree.
         if prior.status == RunStatus::AwaitingApproval {
             self.cleanup_workspace(&run).await;
         }
+        self.emit_run(&run);
         Ok(Some(run))
     }
 

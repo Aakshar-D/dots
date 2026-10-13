@@ -8,7 +8,7 @@ use common::{init_repo, spec, temp_store, wait_status};
 use dots_core::approvals::ApprovalHub;
 use dots_core::engine::scripted::{ScriptedEngine, Step};
 use dots_core::engine::{Engine, EngineEvent};
-use dots_core::events::{new_bus, Bus};
+use dots_core::events::{new_bus, Bus, RuntimeEvent};
 use dots_core::model::{Dot, EngineKind, NewRun, RunStatus, TriggerKind, WorkspaceMode};
 use dots_core::runner::{Runner, RunnerConfig};
 use dots_core::store::Store;
@@ -335,6 +335,73 @@ async fn unchanged_worktree_is_removed_after_success() {
     let path = run.workspace_path.unwrap();
     assert!(path.ends_with(&id));
     assert!(!std::path::Path::new(&path).exists());
+}
+
+/// Telling the UI about a run's new workspace needs one read of the run row. Two triggers make
+/// exactly that read fail: the row cannot be decoded from the moment its workspace is stored
+/// until its status next changes.
+#[tokio::test]
+async fn a_failed_read_for_the_workspace_announcement_does_not_fail_the_run() {
+    let (dir, store) = temp_store().await;
+    let pool = sqlx::SqlitePool::connect(&format!(
+        "sqlite://{}",
+        dir.path().join("dots.db").display()
+    ))
+    .await
+    .unwrap();
+    for sql in [
+        "CREATE TRIGGER break_row AFTER UPDATE OF workspace_path ON runs \
+         BEGIN UPDATE runs SET payload = '{' WHERE id = NEW.id; END",
+        "CREATE TRIGGER mend_row AFTER UPDATE OF status ON runs \
+         BEGIN UPDATE runs SET payload = NULL WHERE id = NEW.id; END",
+    ] {
+        sqlx::query(sql).execute(&pool).await.unwrap();
+    }
+    pool.close().await;
+    let bus = new_bus();
+    let runner = runner_with(
+        &store,
+        &bus,
+        &dir,
+        Arc::new(ScriptedEngine::new(vec![finished()])),
+        1,
+    );
+    let mut events = bus.subscribe();
+    runner.spawn_dispatcher(CancellationToken::new());
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    let mut s = spec("wt");
+    s.workdir = repo.to_string_lossy().to_string();
+    let dot = store.create_dot(&s).await.unwrap();
+    let id = manual(&runner, &dot).await;
+
+    // The row is unreadable for a moment, so `wait_status` cannot be used here.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let run = loop {
+        match store.get_run(&id).await {
+            Ok(run) if run.status.is_terminal() => break run,
+            _ => {}
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the run never finished"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    assert_eq!(
+        (run.status, run.error.as_deref()),
+        (RunStatus::Succeeded, None)
+    );
+    assert!(run.branch.is_some());
+    // The fault did hit the announcement: no update of the running run carried its branch.
+    while let Ok(event) = events.try_recv() {
+        if let RuntimeEvent::RunUpdated { run } = event {
+            assert!(
+                !(run.status == RunStatus::Running && run.branch.is_some()),
+                "the announcement was read after all"
+            );
+        }
+    }
 }
 
 #[tokio::test]

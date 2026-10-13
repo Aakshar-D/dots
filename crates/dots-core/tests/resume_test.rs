@@ -8,7 +8,7 @@ use common::{init_repo, spec, temp_store, wait_status};
 use dots_core::approvals::{ApprovalHub, DecideEffect};
 use dots_core::engine::scripted::{ScriptedEngine, Step};
 use dots_core::engine::{Engine, EngineEvent};
-use dots_core::events::new_bus;
+use dots_core::events::{new_bus, Bus, RuntimeEvent};
 use dots_core::model::{Dot, EngineKind, NewRun, Run, RunStatus, TriggerKind, WorkspaceMode};
 use dots_core::runner::{Runner, RunnerConfig};
 use dots_core::store::Store;
@@ -19,6 +19,7 @@ use tokio_util::sync::CancellationToken;
 struct Env {
     dir: TempDir,
     store: Store,
+    bus: Bus,
     hub: Arc<ApprovalHub>,
     runner: Arc<Runner>,
 }
@@ -34,7 +35,7 @@ async fn env(steps: Vec<Step>) -> Env {
     );
     let runner = Runner::new(
         store.clone(),
-        bus,
+        bus.clone(),
         engines,
         RunnerConfig {
             max_concurrent: 2,
@@ -47,6 +48,7 @@ async fn env(steps: Vec<Step>) -> Env {
     Env {
         dir,
         store,
+        bus,
         hub,
         runner,
     }
@@ -439,5 +441,36 @@ async fn cancel_of_awaiting_run_removes_an_unchanged_worktree() {
     assert!(
         !std::path::Path::new(&path).exists(),
         "worktree left behind"
+    );
+}
+
+#[tokio::test]
+async fn cancel_of_awaiting_run_publishes_cancelled_after_the_worktree_is_gone() {
+    let e = env(vec![ask("git push"), finished()]).await;
+    let (parent, path) = parked_worktree_run(&e).await;
+    let mut events = e.bus.subscribe();
+    let id = parent.id.clone();
+    // Looks at the folder the moment the terminal status arrives, as the Inbox does.
+    let seen = tokio::spawn(async move {
+        loop {
+            match events.recv().await {
+                Ok(RuntimeEvent::RunUpdated { run })
+                    if run.id == id && run.status == RunStatus::Cancelled =>
+                {
+                    return std::path::Path::new(&path).exists();
+                }
+                Ok(_) => {}
+                Err(err) => panic!("the event stream ended: {err}"),
+            }
+        }
+    });
+    e.runner.cancel(&parent.id).await.unwrap();
+    let still_there = tokio::time::timeout(Duration::from_secs(5), seen)
+        .await
+        .expect("no cancelled status was published")
+        .unwrap();
+    assert!(
+        !still_there,
+        "cancelled was published while the unchanged worktree was still on disk"
     );
 }

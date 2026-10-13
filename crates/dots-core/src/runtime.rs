@@ -396,56 +396,43 @@ impl Runtime {
         self.store.get_run(run_id).await
     }
 
+    /// The worktree a run row describes, for the review actions. The row is the only thing
+    /// between the database and git commands in the user's repository, so before any of them
+    /// it must name a worktree dots made (`WorkspaceManager::check_owned`). `Invalid` for a
+    /// folder run and for a row that fails the check.
+    fn review_worktree(&self, run: &Run) -> Result<(WorkspaceManager, Prepared)> {
+        let Some(prepared) = Prepared::from_run(run).filter(|p| p.branch.is_some()) else {
+            return Err(Error::Invalid(format!("run {} has no worktree", run.id)));
+        };
+        let workspaces = WorkspaceManager::new(self.data_dir.join("worktrees"));
+        workspaces.check_owned(&prepared)?;
+        Ok((workspaces, prepared))
+    }
+
     /// The changes the run's thread made in its worktree. Empty, with `exists` false, once the
-    /// worktree is removed.
+    /// worktree is removed. Refused for folder runs and for any row that does not name a
+    /// worktree of dots, whether or not its folder exists.
     pub async fn worktree_diff(&self, run_id: &str) -> Result<WorktreeDiff> {
         let run = self.store.get_run(run_id).await?;
-        let (Some(path), Some(base), Some(_)) =
-            (&run.workspace_path, &run.base_commit, &run.branch)
-        else {
+        let (_, prepared) = self.review_worktree(&run)?;
+        let Some(base) = &prepared.base_commit else {
             return Err(Error::Invalid(format!("run {run_id} has no worktree")));
         };
-        let path = Path::new(path);
-        if !path.is_dir() {
+        if !prepared.path.is_dir() {
             return Ok(WorktreeDiff::default());
         }
-        crate::workspace::diff(path, base).await
+        crate::workspace::diff(&prepared.path, base).await
     }
 
     /// Removes the thread's worktree and branch and marks the thread reviewed. Refused while
-    /// the thread is active, for folder runs, and for any path outside the worktrees folder.
+    /// the thread is active, for folder runs, and for any row that does not name a worktree of
+    /// dots.
     pub async fn discard_worktree(&self, run_id: &str) -> Result<Run> {
         let run = self.store.get_run(run_id).await?;
         self.ensure_thread_idle(&run.root_run_id).await?;
-        let Some(prepared) = Prepared::from_run(&run).filter(|p| p.branch.is_some()) else {
-            return Err(Error::Invalid(format!("run {run_id} has no worktree")));
-        };
-        let worktrees = self.data_dir.join("worktrees");
-        let inside = prepared.path.starts_with(&worktrees)
-            && prepared.path != worktrees
-            && !prepared
-                .path
-                .components()
-                .any(|c| matches!(c, std::path::Component::ParentDir));
-        if !inside {
-            return Err(Error::Invalid(format!(
-                "refusing to remove {}: not a dots worktree",
-                prepared.path.display()
-            )));
-        }
-        // The branch comes from the same row as the path: only delete one dots made for this
-        // worktree (`dots/<dot name>/<run id>` beside folder `<run id>`).
-        let branch = prepared.branch.as_deref().unwrap_or_default();
-        let folder = prepared.path.file_name().and_then(|n| n.to_str());
-        let ours = branch.starts_with("dots/")
-            && folder.is_some_and(|f| branch.rsplit('/').next() == Some(f));
-        if !ours {
-            return Err(Error::Invalid(format!(
-                "refusing to delete branch {branch}: not a dots branch"
-            )));
-        }
+        let (workspaces, prepared) = self.review_worktree(&run)?;
         let dot = self.store.get_dot(&run.dot_id).await?;
-        WorkspaceManager::new(worktrees)
+        workspaces
             .discard(Path::new(&dot.spec.workdir), &prepared)
             .await?;
         self.mark_reviewed(run_id).await

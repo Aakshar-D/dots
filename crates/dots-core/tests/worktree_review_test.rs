@@ -7,6 +7,8 @@ use std::time::Duration;
 use common::{git_out, init_repo, spec, wait_status};
 use dots_core::events::RuntimeEvent;
 use dots_core::model::{FileStatus, Run, RunStatus, WorkspaceMode};
+#[cfg(windows)]
+use dots_core::policy::{Policy, Preset};
 use dots_core::workspace::{parse_diff, MAX_DIFF_BYTES};
 use dots_core::{Config, Error, Runtime};
 use llm::{call, calls, text, Llm};
@@ -207,55 +209,203 @@ async fn folder_runs_have_no_worktree_to_diff_or_discard() {
     t.rt.shutdown();
 }
 
-#[tokio::test]
-async fn discard_refuses_paths_outside_the_worktrees_folder() {
-    let t = start().await;
-    let run = edited_run(&t).await;
-    // Simulate a tampered row pointing at the user's own checkout.
+/// Rewrites one column of a run row behind the runtime's back, as a tampered database would.
+async fn tamper(t: &Rt, run_id: &str, column: &str, value: &str) {
     let pool = sqlx::SqlitePool::connect(&format!(
         "sqlite://{}",
         t.dir.path().join("data").join("dots.db").display()
     ))
     .await
     .unwrap();
-    sqlx::query("UPDATE runs SET workspace_path = ? WHERE id = ?")
-        .bind(t.repo.to_string_lossy().to_string())
-        .bind(&run.id)
+    sqlx::query(&format!("UPDATE runs SET {column} = ? WHERE id = ?"))
+        .bind(value)
+        .bind(run_id)
         .execute(&pool)
         .await
         .unwrap();
     pool.close().await;
-    let err = t.rt.discard_worktree(&run.id).await.unwrap_err();
-    assert!(matches!(err, Error::Invalid(_)), "{err}");
-    assert!(t.repo.join("README.md").is_file());
+}
+
+#[tokio::test]
+async fn diff_and_discard_refuse_a_path_that_is_not_a_direct_child_of_the_worktrees_folder() {
+    let t = start().await;
+    let run = edited_run(&t).await;
+    let ws = PathBuf::from(run.workspace_path.as_deref().unwrap());
+    let branch = run.branch.clone().unwrap();
+    let worktrees = ws.parent().unwrap().to_path_buf();
+    let name = ws.file_name().unwrap().to_string_lossy().to_string();
+    std::fs::create_dir(ws.join("sub")).unwrap();
+    let tampered = [
+        // The user's own checkout.
+        t.repo.clone(),
+        // The worktrees folder itself, a folder deeper inside it, and a way round through `..`.
+        worktrees.clone(),
+        ws.join("sub"),
+        worktrees.join("elsewhere").join("..").join(&name),
+        // Outside and not on disk: still refused, not reported as a removed worktree.
+        t.dir.path().join("nowhere"),
+    ];
+    for path in &tampered {
+        let path = path.to_string_lossy().to_string();
+        tamper(&t, &run.id, "workspace_path", &path).await;
+        let err = t.rt.worktree_diff(&run.id).await.unwrap_err();
+        assert!(matches!(err, Error::Invalid(_)), "diff of {path}: {err}");
+        let err = t.rt.discard_worktree(&run.id).await.unwrap_err();
+        assert!(matches!(err, Error::Invalid(_)), "discard of {path}: {err}");
+        assert!(t.repo.join("README.md").is_file());
+        assert!(ws.join("new.txt").is_file() && branch_exists(&t.repo, &branch));
+    }
+    assert!(t.rt.get_run(&run.id).await.unwrap().reviewed_at.is_none());
+
+    // The true row still works, and a worktree folder that is simply gone is not an error.
+    tamper(&t, &run.id, "workspace_path", &ws.to_string_lossy()).await;
+    assert!(t.rt.worktree_diff(&run.id).await.unwrap().exists);
+    std::fs::remove_dir_all(&ws).unwrap();
+    let gone = t.rt.worktree_diff(&run.id).await.unwrap();
+    assert!(!gone.exists && gone.files.is_empty() && !gone.truncated);
     t.rt.shutdown();
 }
 
 #[tokio::test]
-async fn discard_refuses_a_branch_dots_did_not_create() {
+async fn diff_and_discard_refuse_a_branch_dots_did_not_create() {
     let t = start().await;
     let run = edited_run(&t).await;
     let ws = PathBuf::from(run.workspace_path.as_deref().unwrap());
+    let name = ws.file_name().unwrap().to_string_lossy().to_string();
     git_out(&t.repo, &["branch", "feature-x"]);
-    let pool = sqlx::SqlitePool::connect(&format!(
-        "sqlite://{}",
-        t.dir.path().join("data").join("dots.db").display()
-    ))
-    .await
-    .unwrap();
-    for tampered in ["feature-x", "dots/x/not-this-run"] {
-        sqlx::query("UPDATE runs SET branch = ? WHERE id = ?")
-            .bind(tampered)
-            .bind(&run.id)
-            .execute(&pool)
-            .await
-            .unwrap();
+    for tampered in [
+        "feature-x".to_string(),
+        "dots/x/not-this-run".to_string(),
+        format!("dots/{name}"),
+    ] {
+        tamper(&t, &run.id, "branch", &tampered).await;
+        let err = t.rt.worktree_diff(&run.id).await.unwrap_err();
+        assert!(matches!(err, Error::Invalid(_)), "{tampered}: {err}");
         let err = t.rt.discard_worktree(&run.id).await.unwrap_err();
         assert!(matches!(err, Error::Invalid(_)), "{tampered}: {err}");
         assert!(branch_exists(&t.repo, "feature-x"));
         assert!(ws.is_dir());
     }
-    pool.close().await;
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn discard_finds_the_repository_from_the_worktree_when_the_dot_moved() {
+    let t = start().await;
+    let run = edited_run(&t).await;
+    let ws = PathBuf::from(run.workspace_path.as_deref().unwrap());
+    let branch = run.branch.clone().unwrap();
+    // After the run, the dot is pointed at another repository.
+    let other = t.dir.path().join("other");
+    init_repo(&other);
+    let mut spec = t.rt.get_dot(&run.dot_id).await.unwrap().spec;
+    spec.workdir = other.to_string_lossy().to_string();
+    t.rt.update_dot(&run.dot_id, spec).await.unwrap();
+
+    let after = t.rt.discard_worktree(&run.id).await.unwrap();
+    assert!(after.reviewed_at.is_some());
+    assert!(!ws.exists());
+    assert!(!branch_exists(&t.repo, &branch));
+    // The repository the worktree came from no longer lists it.
+    let listed = git_out(&t.repo, &["worktree", "list", "--porcelain"]);
+    assert_eq!(listed.matches("worktree ").count(), 1, "{listed}");
+    assert_eq!(git_out(&other, &["branch", "--list"]), "* main");
+    t.rt.shutdown();
+}
+
+/// A folder outside every worktree and repository, holding `keep.txt`.
+#[cfg(windows)]
+fn outside_folder(t: &Rt) -> PathBuf {
+    let outside = t.dir.path().join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("keep.txt"), "keep me\n").unwrap();
+    outside
+}
+
+/// Git removes a worktree but leaves a junction inside it where it is, and still reports
+/// success. A junction needs no privilege, so these tests always run on Windows.
+#[cfg(windows)]
+#[tokio::test]
+async fn discarding_a_worktree_with_a_junction_removes_the_folder_and_spares_the_target() {
+    let t = start().await;
+    let run = edited_run(&t).await;
+    let ws = PathBuf::from(run.workspace_path.as_deref().unwrap());
+    let branch = run.branch.clone().unwrap();
+    let outside = outside_folder(&t);
+    let made = std::process::Command::new("cmd")
+        .args(["/c", "mklink", "/J"])
+        .arg(ws.join("junc"))
+        .arg(&outside)
+        .output()
+        .unwrap();
+    assert!(made.status.success());
+    assert!(ws.join("junc").join("keep.txt").is_file());
+
+    let after = t.rt.discard_worktree(&run.id).await.unwrap();
+    assert!(after.reviewed_at.is_some());
+    assert!(!ws.exists(), "the worktree folder was left behind");
+    assert!(!branch_exists(&t.repo, &branch));
+    // Only the junction went: what it pointed to is as it was.
+    assert_eq!(
+        std::fs::read_to_string(outside.join("keep.txt")).unwrap(),
+        "keep me\n"
+    );
+    // The removed worktree reads as removed, and a second discard is still harmless.
+    let gone = t.rt.worktree_diff(&run.id).await.unwrap();
+    assert!(!gone.exists && gone.files.is_empty());
+    assert_eq!(t.rt.inbox_count().await.unwrap(), 0);
+    t.rt.discard_worktree(&run.id).await.unwrap();
+    t.rt.shutdown();
+}
+
+/// What pnpm makes of `node_modules`: a junction the repository ignores. The run changed
+/// nothing git can see, so its worktree is cleaned up when it ends.
+#[cfg(windows)]
+#[tokio::test]
+async fn an_unchanged_run_with_an_ignored_junction_is_cleaned_up_and_stays_out_of_the_inbox() {
+    let t = start().await;
+    std::fs::write(t.repo.join(".gitignore"), "node_modules\n").unwrap();
+    git_out(&t.repo, &["add", ".gitignore"]);
+    git_out(&t.repo, &["commit", "-q", "-m", "ignore node_modules"]);
+    let outside = outside_folder(&t);
+    let link = format!("cmd /c mklink /J node_modules '{}'", outside.display());
+    let llm = Llm::start(vec![
+        call("c1", "shell", json!({ "command": link })),
+        text("Linked."),
+    ])
+    .await;
+    let mut s = spec("linker");
+    s.workdir = t.repo.to_string_lossy().to_string();
+    s.workspace_mode = WorkspaceMode::Worktree;
+    s.engine = dots_core::model::EngineKind::Local;
+    s.endpoint_url = Some(llm.endpoint());
+    s.model = "m".into();
+    s.policy = Policy::preset(Preset::Trusted);
+    let dot = t.rt.create_dot(s).await.unwrap();
+    let run = t.rt.run_now(&dot.id).await.unwrap();
+    let run = wait_status(t.rt.store(), &run.id, RunStatus::Succeeded, 30).await;
+
+    // The dot did make the junction.
+    let events = t.rt.list_run_events(&run.id, 0).await.unwrap();
+    let result = events.iter().find(|e| e.kind == "tool_result").unwrap();
+    assert_eq!(result.data["is_error"], json!(false), "{}", result.data);
+    assert!(
+        result.data["output"]
+            .as_str()
+            .unwrap()
+            .contains("Junction created"),
+        "{}",
+        result.data
+    );
+
+    let ws = PathBuf::from(run.workspace_path.as_deref().unwrap());
+    assert!(!ws.exists(), "the worktree folder was left behind");
+    assert!(!branch_exists(&t.repo, run.branch.as_deref().unwrap()));
+    assert_eq!(t.rt.inbox_count().await.unwrap(), 0);
+    assert_eq!(
+        std::fs::read_to_string(outside.join("keep.txt")).unwrap(),
+        "keep me\n"
+    );
     t.rt.shutdown();
 }
 

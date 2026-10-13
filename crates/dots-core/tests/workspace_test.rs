@@ -1,9 +1,50 @@
 mod common;
 
+use std::path::{Path, PathBuf};
+
 use common::{fake_dot, git_out, init_repo};
-use dots_core::model::WorkspaceMode;
-use dots_core::workspace::WorkspaceManager;
+use dots_core::model::{FileStatus, WorkspaceMode};
+use dots_core::workspace::{diff, link_on_path, untracked_entry, Prepared, WorkspaceManager};
 use dots_core::Error;
+
+/// A worktree of a new repository under `tmp`, and a folder outside it that holds `secret.txt`.
+async fn worktree_and_outside(tmp: &Path) -> (Prepared, PathBuf) {
+    let repo = tmp.join("repo");
+    init_repo(&repo);
+    let dot = fake_dot("links", &repo, WorkspaceMode::Worktree);
+    let p = WorkspaceManager::new(tmp.join("wt"))
+        .prepare(&dot, "R1")
+        .await
+        .unwrap();
+    let outside = tmp.join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("secret.txt"), "TOP-SECRET\n").unwrap();
+    (p, outside)
+}
+
+/// Makes `link` a junction to the folder `target`. A junction needs no privilege, so the tests
+/// that use one always run on Windows.
+#[cfg(windows)]
+fn make_junction(link: &Path, target: &Path) {
+    let made = std::process::Command::new("cmd")
+        .args(["/c", "mklink", "/J"])
+        .arg(link)
+        .arg(target)
+        .output()
+        .unwrap();
+    assert!(
+        made.status.success(),
+        "mklink /J failed: {}",
+        String::from_utf8_lossy(&made.stderr)
+    );
+}
+
+/// Says on the terminal that a test did not run. Written straight to stderr, which the test
+/// harness does not capture, so the line shows in a passing `cargo test`.
+fn report_skipped(test: &str, why: &dyn std::fmt::Display) {
+    use std::io::Write;
+    let _ = writeln!(std::io::stderr(), "SKIPPED {test}: {why}");
+}
 
 #[tokio::test]
 async fn folder_mode_uses_workdir_directly() {
@@ -127,4 +168,259 @@ async fn restore_recreates_a_removed_worktree_at_the_same_path() {
     std::fs::remove_dir_all(&p.path).unwrap();
     wm.restore(&dot, &p).await.unwrap();
     assert_eq!(git_out(&p.path, &["rev-parse", "HEAD"]), tip);
+}
+
+#[tokio::test]
+async fn an_untracked_name_keeps_its_leading_space() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (p, _outside) = worktree_and_outside(tmp.path()).await;
+    // A space sorts before every other name, so this is the first path git lists.
+    std::fs::write(p.path.join(" lead.txt"), "x\n").unwrap();
+    std::fs::write(p.path.join("next.txt"), "y\n").unwrap();
+
+    let d = diff(&p.path, p.base_commit.as_deref().unwrap())
+        .await
+        .unwrap();
+    let paths: Vec<&str> = d.files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(paths, [" lead.txt", "next.txt"]);
+    assert!(
+        d.files[0].patch.ends_with("@@ -0,0 +1,1 @@\n+x\n"),
+        "{:?}",
+        d.files[0].patch
+    );
+}
+
+/// A junction needs no privilege, so this test always runs on Windows. Git walks into a
+/// junction and reports the files behind it; the diff must show the junction and stop there.
+#[cfg(windows)]
+#[tokio::test]
+async fn an_untracked_junction_is_listed_once_and_not_entered() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (p, outside) = worktree_and_outside(tmp.path()).await;
+    make_junction(&p.path.join("junc"), &outside);
+
+    let d = diff(&p.path, p.base_commit.as_deref().unwrap())
+        .await
+        .unwrap();
+    let paths: Vec<&str> = d.files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(paths, ["junc"]);
+    let link = &d.files[0];
+    assert_eq!((link.status, link.binary), (FileStatus::Added, false));
+    // Shown as git shows a link: the place it points to, never what is there.
+    assert!(
+        link.patch.contains("new file mode 120000"),
+        "{}",
+        link.patch
+    );
+    assert!(link.patch.contains("outside"), "{}", link.patch);
+    assert!(!link.patch.contains("TOP-SECRET"), "{}", link.patch);
+    assert!(!d.truncated);
+}
+
+#[tokio::test]
+async fn an_untracked_symlink_is_listed_and_its_target_is_not_read() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (p, outside) = worktree_and_outside(tmp.path()).await;
+    let target = outside.join("secret.txt");
+    let link = p.path.join("link.txt");
+    #[cfg(windows)]
+    let made = std::os::windows::fs::symlink_file(&target, &link);
+    #[cfg(unix)]
+    let made = std::os::unix::fs::symlink(&target, &link);
+    if let Err(e) = made {
+        // Windows without developer mode or the symlink privilege (error 1314). Any other
+        // failure is a broken test, and neither may pass silently.
+        assert_eq!(e.raw_os_error(), Some(1314), "creating a symlink: {e}");
+        report_skipped(
+            "an_untracked_symlink_is_listed_and_its_target_is_not_read",
+            &e,
+        );
+        return;
+    }
+
+    let d = diff(&p.path, p.base_commit.as_deref().unwrap())
+        .await
+        .unwrap();
+    let paths: Vec<&str> = d.files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(paths, ["link.txt"]);
+    let shown = &d.files[0];
+    assert_eq!((shown.status, shown.binary), (FileStatus::Added, false));
+    assert!(
+        shown.patch.contains("new file mode 120000"),
+        "{}",
+        shown.patch
+    );
+    assert!(shown.patch.contains("secret.txt"), "{}", shown.patch);
+    assert!(!shown.patch.contains("TOP-SECRET"), "{}", shown.patch);
+}
+
+/// The decision itself, without a real link: a path the diff is told is a link is listed and
+/// never opened, whatever is behind it.
+#[tokio::test]
+async fn a_path_marked_as_a_link_is_listed_without_being_opened() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("note.txt"), "TOP-SECRET\n").unwrap();
+
+    let (opened, _) = untracked_entry(tmp.path(), "note.txt", false).await;
+    assert!(opened.patch.ends_with("+TOP-SECRET\n"), "{}", opened.patch);
+
+    let (listed, truncated) = untracked_entry(tmp.path(), "note.txt", true).await;
+    assert_eq!(
+        (listed.path.as_str(), listed.status, listed.binary),
+        ("note.txt", FileStatus::Added, false)
+    );
+    // Not a real link, so there is no target to show; the file itself was not read.
+    assert_eq!(listed.patch, "");
+    assert!(!truncated);
+
+    // Ordinary files and folders, and paths that are not there, are not links.
+    std::fs::create_dir(tmp.path().join("sub")).unwrap();
+    std::fs::write(tmp.path().join("sub").join("a.txt"), "a").unwrap();
+    for rel in ["note.txt", "sub/a.txt", "missing/b.txt"] {
+        assert_eq!(link_on_path(tmp.path(), rel), None, "{rel}");
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn a_junction_above_a_path_is_found_as_the_link() {
+    let tmp = tempfile::tempdir().unwrap();
+    let outside = tmp.path().join("outside");
+    std::fs::create_dir_all(outside.join("deep")).unwrap();
+    let root = tmp.path().join("root");
+    std::fs::create_dir_all(root.join("sub")).unwrap();
+    make_junction(&root.join("sub").join("junc"), &outside);
+    for rel in ["sub/junc", "sub/junc/deep", "sub/junc/deep/x.txt"] {
+        assert_eq!(
+            link_on_path(&root, rel).as_deref(),
+            Some("sub/junc"),
+            "{rel}"
+        );
+    }
+    assert_eq!(link_on_path(&root, "sub/other.txt"), None);
+}
+
+#[test]
+fn only_a_direct_child_of_the_worktrees_folder_with_its_own_branch_is_a_dots_worktree() {
+    let wm = WorkspaceManager::new("C:/data/worktrees");
+    let check = |path: &str, branch: Option<&str>| {
+        wm.check_owned(&Prepared {
+            path: PathBuf::from(path),
+            branch: branch.map(str::to_string),
+            base_commit: None,
+        })
+    };
+    check("C:/data/worktrees/R1", Some("dots/triage/R1")).unwrap();
+    // A trailing separator names the same folder.
+    check("C:/data/worktrees/R1/", Some("dots/triage/R1")).unwrap();
+
+    // Each branch below fits its path's last name, so only the path can be the reason.
+    for (path, branch) in [
+        ("C:/data/worktrees", "dots/triage/worktrees"),
+        ("C:/data/worktrees/R1/sub", "dots/triage/sub"),
+        ("C:/data/worktrees/../R1", "dots/triage/R1"),
+        ("C:/data/worktrees/R2/../R1", "dots/triage/R1"),
+        ("C:/data/worktrees/R1/..", "dots/triage/R1"),
+        ("C:/data/worktrees-old/R1", "dots/triage/R1"),
+        ("C:/data/R1", "dots/triage/R1"),
+        ("C:/repo", "dots/triage/repo"),
+        ("worktrees/R1", "dots/triage/R1"),
+    ] {
+        let err = check(path, Some(branch)).unwrap_err();
+        assert!(matches!(err, Error::Invalid(_)), "{path}: {err}");
+        assert!(err.to_string().contains("not a dots worktree"), "{err}");
+    }
+    for branch in [
+        "feature-x",
+        "main",
+        "dots/triage/R2",
+        "dots/R1",
+        "dots//R1",
+        "x/dots/triage/R1",
+        "dots/triage/R1/",
+        "",
+    ] {
+        let err = check("C:/data/worktrees/R1", Some(branch)).unwrap_err();
+        assert!(matches!(err, Error::Invalid(_)), "{branch}: {err}");
+        assert!(err.to_string().contains("not the dots branch"), "{err}");
+    }
+    let err = check("C:/data/worktrees/R1", None).unwrap_err();
+    assert!(matches!(err, Error::Invalid(_)), "{err}");
+}
+
+/// Git removes a worktree but leaves a junction inside it where it is, and still reports
+/// success. What is left is removed as links, never through them.
+#[cfg(windows)]
+#[tokio::test]
+async fn removing_a_worktree_with_a_junction_removes_the_folder_and_spares_the_target() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (p, outside) = worktree_and_outside(tmp.path()).await;
+    std::fs::create_dir(p.path.join("deps")).unwrap();
+    make_junction(&p.path.join("deps").join("junc"), &outside);
+    std::fs::write(p.path.join("new.txt"), "x").unwrap();
+
+    let wm = WorkspaceManager::new(tmp.path().join("wt"));
+    wm.remove(&tmp.path().join("repo"), &p).await.unwrap();
+    assert!(!p.path.exists(), "the worktree folder was left behind");
+    assert_eq!(
+        std::fs::read_to_string(outside.join("secret.txt")).unwrap(),
+        "TOP-SECRET
+"
+    );
+    assert!(git_out(
+        &tmp.path().join("repo"),
+        &["branch", "--list", "dots/links/R1"]
+    )
+    .is_empty());
+}
+
+/// What git leaves is only ever deleted inside the manager's own folder; anywhere else the
+/// removal fails and says which folder is still there.
+#[cfg(windows)]
+#[tokio::test]
+async fn a_leftover_outside_the_worktrees_folder_is_reported_and_not_deleted() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (p, outside) = worktree_and_outside(tmp.path()).await;
+    make_junction(&p.path.join("junc"), &outside);
+
+    let elsewhere = WorkspaceManager::new(tmp.path().join("elsewhere"));
+    let err = elsewhere
+        .remove(&tmp.path().join("repo"), &p)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::Invalid(_)), "{err}");
+    assert!(
+        err.to_string().contains(&p.path.display().to_string()),
+        "{err}"
+    );
+    assert!(p.path.join("junc").join("secret.txt").is_file());
+}
+
+/// A leftover that cannot be deleted is an error that names the folder, never a silent success.
+#[cfg(windows)]
+#[tokio::test]
+async fn a_leftover_that_cannot_be_removed_fails_and_names_the_folder() {
+    use std::os::windows::fs::OpenOptionsExt;
+    // FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT: open the junction itself.
+    const THE_LINK_ITSELF: u32 = 0x0200_0000 | 0x0020_0000;
+    const FILE_SHARE_READ: u32 = 1;
+    let tmp = tempfile::tempdir().unwrap();
+    let (p, outside) = worktree_and_outside(tmp.path()).await;
+    make_junction(&p.path.join("junc"), &outside);
+    // Held open without sharing delete, the junction cannot be removed.
+    let held = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .custom_flags(THE_LINK_ITSELF)
+        .open(p.path.join("junc"))
+        .unwrap();
+
+    let wm = WorkspaceManager::new(tmp.path().join("wt"));
+    let err = wm.remove(&tmp.path().join("repo"), &p).await.unwrap_err();
+    let text = err.to_string();
+    assert!(text.contains("could not remove what git left of"), "{text}");
+    assert!(text.contains(&p.path.display().to_string()), "{text}");
+    assert!(p.path.join("junc").exists());
+    drop(held);
+    assert!(outside.join("secret.txt").is_file());
 }
