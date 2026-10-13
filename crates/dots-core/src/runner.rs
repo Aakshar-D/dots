@@ -408,7 +408,16 @@ impl Runner {
             return Err(Error::Other(reason));
         }
         let prepared = match Prepared::from_run(run) {
-            Some(p) if p.path.is_dir() => p,
+            Some(p) if p.path.is_dir() => {
+                // A resumed or follow-up run works in the folder its row names, and the
+                // policy's `./` rules are anchored there. A row with a branch names a worktree:
+                // it must be one of dots' own, or the run fails here, before the engine starts.
+                // A folder run has no branch and nothing to compare its folder with.
+                if p.branch.is_some() {
+                    self.workspaces.check_owned(&p)?;
+                }
+                p
+            }
             // A follow-up of a session whose unchanged worktree was cleaned up: the session
             // remembers that directory, so recreate the worktree at the same path.
             Some(p)
@@ -429,6 +438,15 @@ impl Runner {
                         p.base_commit.as_deref(),
                     )
                     .await?;
+                // The run now has a folder, a branch and a base commit: say so, or a view of
+                // the running run would not know them until it ends. Only an announcement:
+                // a failed read must not fail a run whose workspace is made and recorded.
+                match self.store.get_run(&run.id).await {
+                    Ok(stored) => self.emit_run(&stored),
+                    Err(e) => {
+                        tracing::warn!(run = %run.id, "announcing the workspace failed: {e}")
+                    }
+                }
                 p
             }
         };
@@ -586,10 +604,12 @@ impl Runner {
         let Some(run) = cancelled else {
             return Ok(None);
         };
-        self.emit_run(&run);
+        // Clean up before publishing, as `execute_inner` does: whoever sees `cancelled` must
+        // not find a leftover unchanged worktree.
         if prior.status == RunStatus::AwaitingApproval {
             self.cleanup_workspace(&run).await;
         }
+        self.emit_run(&run);
         Ok(Some(run))
     }
 

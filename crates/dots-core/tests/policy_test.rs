@@ -683,3 +683,132 @@ fn allow_rules_do_not_gain_the_directory_or_absolute_forms() {
         Action::Ask
     );
 }
+
+#[test]
+fn denied_by_rule_tells_a_deny_rule_from_the_default() {
+    let ws = std::path::Path::new("C:/work/repo");
+    let p = custom(
+        vec![
+            Rule::new("Read(src/**)", Action::Allow),
+            Rule::new("Read(secret/**)", Action::Deny),
+            Rule::new("Read(C:/work/repo/keys/**)", Action::Deny),
+            Rule::new("Read(drafts/**)", Action::Ask),
+        ],
+        Action::Deny,
+    );
+    let read = |path: &str| {
+        let input = json!({ "file_path": path });
+        (
+            p.resolve_in("Read", &input, Some(ws)),
+            p.denied_by_rule("Read", &input, Some(ws)),
+        )
+    };
+    // A deny rule: the directory a `/**` pattern names, what is inside it, the same name deeper
+    // in the tree, and an absolute pattern against a workspace-relative input.
+    for path in [
+        "secret",
+        "secret/key.txt",
+        "sub/secret",
+        "keys",
+        "keys/id_rsa",
+    ] {
+        assert_eq!(read(path), (Action::Deny, true), "{path}");
+    }
+    // Denied, but only by the default. `src` itself is not what the allow rule `src/**` names.
+    for path in ["src", "other", "other/a.txt", "secrets"] {
+        assert_eq!(read(path), (Action::Deny, false), "{path}");
+    }
+    // Allow and ask rules are not deny rules.
+    assert_eq!(read("src/main.rs"), (Action::Allow, false));
+    assert_eq!(read("drafts/a.md"), (Action::Ask, false));
+    // Without a workspace only the relative deny pattern can match.
+    let secret = json!({"file_path": "secret/key.txt"});
+    let keys = json!({"file_path": "keys/id_rsa"});
+    assert!(p.denied_by_rule("Read", &secret, None));
+    assert!(!p.denied_by_rule("Read", &keys, None));
+    // A rule for another tool does not count.
+    assert!(!p.denied_by_rule("Glob", &json!({"path": "secret"}), Some(ws)));
+}
+
+#[test]
+fn denied_by_rule_does_not_depend_on_the_default_or_on_allow_rules() {
+    let secret = json!({"file_path": "secret/key.txt"});
+    for &default in Action::ALL {
+        let p = custom(
+            vec![
+                Rule::new("Read", Action::Allow),
+                Rule::new("Read(secret/**)", Action::Deny),
+            ],
+            default,
+        );
+        assert!(p.denied_by_rule("Read", &secret, None), "{default:?}");
+        assert_eq!(p.resolve("Read", &secret), Action::Deny, "{default:?}");
+        assert!(!p.denied_by_rule("Read", &json!({"file_path": "a.txt"}), None));
+    }
+    // A deny rule without a path spec matches every path.
+    let p = custom(vec![Rule::new("Read", Action::Deny)], Action::Allow);
+    assert!(p.denied_by_rule("Read", &secret, None));
+    // A relative deny rule does not match the workspace's own location.
+    let ws = std::path::Path::new("C:/Users/someone/AppData/Local/dots/worktrees/01J0RUN");
+    let p = custom(
+        vec![Rule::new("Glob(users/**)", Action::Deny)],
+        Action::Allow,
+    );
+    assert!(!p.denied_by_rule("Glob", &json!({"path": "src"}), Some(ws)));
+    assert!(p.denied_by_rule("Glob", &json!({"path": "users"}), Some(ws)));
+}
+
+#[test]
+fn denied_by_rule_agrees_with_resolve_for_every_preset() {
+    let ws = Some(std::path::Path::new("C:/ws/run1"));
+    let inputs = [
+        json!({}),
+        json!({"file_path": "src/a.rs"}),
+        json!({"file_path": ".git/config"}),
+        json!({"file_path": "C:/ws/run1/.claude/settings.json"}),
+        json!({"path": ".git"}),
+        json!({"path": "."}),
+        bash("git status"),
+        bash("git push origin main"),
+        json!({"url": "https://example.com/"}),
+    ];
+    let tools = [
+        "Read",
+        "Write",
+        "Edit",
+        "NotebookEdit",
+        "LS",
+        "Glob",
+        "Grep",
+        "Bash",
+        "PowerShell",
+        "WebFetch",
+        "mcp__files__read",
+    ];
+    for &preset in Preset::ALL {
+        let p = Policy::preset(preset);
+        for tool in tools {
+            for input in &inputs {
+                let action = p.resolve_in(tool, input, ws);
+                let by_rule = p.denied_by_rule(tool, input, ws);
+                let case = format!("{preset:?} {tool} {input}");
+                // A deny rule always resolves to deny.
+                assert!(!by_rule || action == Action::Deny, "{case}");
+                // A deny that no rule made can only be the default.
+                assert!(
+                    action != Action::Deny || by_rule || p.default == Action::Deny,
+                    "{case}"
+                );
+            }
+        }
+    }
+    let read_only = Policy::preset(Preset::ReadOnly);
+    assert!(read_only.denied_by_rule("Write", &json!({"file_path": "a.txt"}), ws));
+    assert!(!read_only.denied_by_rule("WebFetch", &json!({}), ws));
+    assert!(!read_only.denied_by_rule("Read", &json!({"file_path": ".git/config"}), ws));
+    let sandboxed = Policy::preset(Preset::Sandboxed);
+    assert!(sandboxed.denied_by_rule("Write", &json!({"file_path": ".git/config"}), ws));
+    assert!(sandboxed.denied_by_rule("Edit", &json!({"file_path": ".claude"}), ws));
+    assert!(!sandboxed.denied_by_rule("Read", &json!({"file_path": ".git/config"}), ws));
+    assert!(!sandboxed.denied_by_rule("Write", &json!({"file_path": "src/a.rs"}), ws));
+}

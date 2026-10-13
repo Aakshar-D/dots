@@ -18,6 +18,43 @@
     "kind": "conflict",
     "message": "run 01J0RUN is already succeeded"
   },
+  "Commands": [
+    "startup_error",
+    "status",
+    "mark_claude_tested",
+    "get_settings",
+    "update_settings",
+    "set_schedules_paused",
+    "restart_app",
+    "dot_overview",
+    "list_dots",
+    "get_dot",
+    "create_dot",
+    "update_dot",
+    "delete_dot",
+    "set_dot_enabled",
+    "regenerate_webhook_token",
+    "webhook_url",
+    "preview_schedule",
+    "policy_preset",
+    "new_dot_spec",
+    "test_endpoint",
+    "run_now",
+    "chat",
+    "cancel_run",
+    "list_runs",
+    "get_run",
+    "run_thread",
+    "list_run_events",
+    "approvals_for_run",
+    "decide_approval",
+    "inbox",
+    "inbox_count",
+    "worktree_diff",
+    "discard_worktree",
+    "mark_reviewed",
+    "open_run_folder"
+  ],
   "Dot": {
     "approval_wait_secs": 240,
     "created_at": "2026-10-09T12:00:00.000Z",
@@ -301,6 +338,61 @@
     "workdir": "C:/notes",
     "workspace_mode": "folder"
   },
+  "Enums": {
+    "Action": [
+      "allow",
+      "ask",
+      "deny"
+    ],
+    "ApprovalStatus": [
+      "pending",
+      "approved",
+      "denied",
+      "expired"
+    ],
+    "CmdErrorKind": [
+      "not_found",
+      "invalid",
+      "conflict",
+      "internal",
+      "cancelled"
+    ],
+    "EngineKind": [
+      "claude",
+      "local"
+    ],
+    "FileStatus": [
+      "added",
+      "modified",
+      "deleted",
+      "renamed"
+    ],
+    "Preset": [
+      "read-only",
+      "sandboxed",
+      "trusted",
+      "custom"
+    ],
+    "RunStatus": [
+      "queued",
+      "running",
+      "awaiting_approval",
+      "succeeded",
+      "failed",
+      "cancelled"
+    ],
+    "TriggerKind": [
+      "schedule",
+      "webhook",
+      "manual",
+      "chat",
+      "resume"
+    ],
+    "WorkspaceMode": [
+      "worktree",
+      "folder"
+    ]
+  },
   "Inbox": {
     "approvals": [
       {
@@ -344,9 +436,105 @@
         "tokens_in": 1200,
         "tokens_out": 340,
         "trigger": "schedule",
-        "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
+        "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN",
+        "worktree_exists": true
       }
     ]
+  },
+  "Limits": {
+    "max_approval_wait_secs": 280,
+    "max_concurrent_runs": 16,
+    "max_timeout_secs": 604800
+  },
+  "NewDotSpec": {
+    "approval_wait_secs": 240,
+    "enabled": true,
+    "endpoint_url": null,
+    "engine": "claude",
+    "instructions": "",
+    "max_turns": 40,
+    "mcp_servers": null,
+    "model": "sonnet",
+    "name": "",
+    "policy": {
+      "default": "ask",
+      "preset": "sandboxed",
+      "rules": [
+        {
+          "action": "allow",
+          "tool": "Read"
+        },
+        {
+          "action": "allow",
+          "tool": "LS"
+        },
+        {
+          "action": "allow",
+          "tool": "Glob"
+        },
+        {
+          "action": "allow",
+          "tool": "Grep"
+        },
+        {
+          "action": "allow",
+          "tool": "Write(./**)"
+        },
+        {
+          "action": "allow",
+          "tool": "Edit(./**)"
+        },
+        {
+          "action": "allow",
+          "tool": "Bash(git status:*)"
+        },
+        {
+          "action": "allow",
+          "tool": "Bash(git diff:*)"
+        },
+        {
+          "action": "allow",
+          "tool": "Bash(git add:*)"
+        },
+        {
+          "action": "deny",
+          "tool": "Write(**/.git/**)"
+        },
+        {
+          "action": "deny",
+          "tool": "Write(**/.git)"
+        },
+        {
+          "action": "deny",
+          "tool": "Edit(**/.git/**)"
+        },
+        {
+          "action": "deny",
+          "tool": "Edit(**/.git)"
+        },
+        {
+          "action": "deny",
+          "tool": "Write(**/.claude/**)"
+        },
+        {
+          "action": "deny",
+          "tool": "Write(**/.claude)"
+        },
+        {
+          "action": "deny",
+          "tool": "Edit(**/.claude/**)"
+        },
+        {
+          "action": "deny",
+          "tool": "Edit(**/.claude)"
+        }
+      ]
+    },
+    "schedule": null,
+    "timeout_secs": 1800,
+    "use_user_settings": false,
+    "workdir": "",
+    "workspace_mode": "worktree"
   },
   "Run": {
     "base_commit": "0123abcd",
@@ -371,6 +559,54 @@
     "trigger": "schedule",
     "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
   },
+  "RunEventData": [
+    {
+      "kind": "session_started",
+      "session_id": "s-1"
+    },
+    {
+      "kind": "assistant_text",
+      "text": "Running the tests."
+    },
+    {
+      "id": "t1",
+      "input": {
+        "command": "cargo test"
+      },
+      "kind": "tool_call",
+      "tool": "Bash"
+    },
+    {
+      "id": "t1",
+      "is_error": false,
+      "kind": "tool_result",
+      "output": "test result: ok"
+    },
+    {
+      "kind": "usage",
+      "tokens_in": 1200,
+      "tokens_out": 340
+    },
+    {
+      "kind": "raw",
+      "line": "{\"type\":\"future\"}"
+    },
+    {
+      "kind": "message",
+      "message": {
+        "content": "Run the tests.",
+        "role": "user"
+      }
+    },
+    {
+      "kind": "finished",
+      "summary": "All tests pass."
+    },
+    {
+      "error": "timeout",
+      "kind": "failed"
+    }
+  ],
   "RunEventRecord": {
     "data": {
       "id": "t1",
@@ -509,6 +745,7 @@
     "server_error": null
   },
   "WorktreeDiff": {
+    "exists": true,
     "files": [
       {
         "binary": false,

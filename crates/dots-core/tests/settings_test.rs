@@ -100,6 +100,231 @@ async fn invalid_settings_are_rejected_and_not_stored() {
     assert_eq!(store.get_settings().await.unwrap(), Settings::default());
 }
 
+fn with_claude_path(path: &str) -> Settings {
+    Settings {
+        claude_path: Some(path.into()),
+        ..Settings::default()
+    }
+}
+
+#[test]
+fn claude_path_accepts_ordinary_paths() {
+    for path in [
+        r"C:\Users\ana\.local\bin\claude.exe",
+        r"C:\Program Files\Claude Code\claude.exe",
+        r"C:\Users\Zoë Müller\工具\claude.exe",
+        // An emoji without a variation selector.
+        "D:/apps/\u{2764}/claude.cmd",
+        "claude",
+    ] {
+        with_claude_path(path)
+            .validate()
+            .unwrap_or_else(|e| panic!("{path}: {e}"));
+    }
+}
+
+#[test]
+fn claude_path_refuses_characters_that_hide_or_reorder_it() {
+    const CONTROL: &str = "control characters such as a tab or a line break";
+    const FORMAT: &str = "invisible or text-direction characters";
+    let cases = [
+        ("C:/tools\tclaude.exe", CONTROL, "U+0009 at character 9"),
+        (
+            "C:/tools/claude.exe\nD:/x.exe",
+            CONTROL,
+            "U+000A at character 20",
+        ),
+        ("C:/tools/a\r.exe", CONTROL, "U+000D at character 11"),
+        ("C:/tools/a\0.exe", CONTROL, "U+0000 at character 11"),
+        ("C:/tools/a\u{7f}.exe", CONTROL, "U+007F at character 11"),
+        ("C:/tools/a\u{85}.exe", CONTROL, "U+0085 at character 11"),
+        ("C:/tools/a\u{2028}.exe", CONTROL, "U+2028 at character 11"),
+        ("C:/tools/a\u{2029}.exe", CONTROL, "U+2029 at character 11"),
+        // Shown as "C:/tools/claude.exe": the override turns the rest around.
+        (
+            "C:/tools/\u{202e}exe.edualc",
+            FORMAT,
+            "U+202E at character 10",
+        ),
+        (
+            "C:/tools/cla\u{200b}ude.exe",
+            FORMAT,
+            "U+200B at character 13",
+        ),
+        // What "Copy" in a file's Properties dialog puts around a path.
+        (
+            "\u{202a}C:/tools/claude.exe\u{202c}",
+            FORMAT,
+            "U+202A at character 1",
+        ),
+        (
+            "\u{feff}C:/tools/claude.exe",
+            FORMAT,
+            "U+FEFF at character 1",
+        ),
+        (
+            "C:/tools/\u{2066}a\u{2069}.exe",
+            FORMAT,
+            "U+2066 at character 10",
+        ),
+        // Counted in characters, not bytes.
+        ("C:/工具/a\u{200f}.exe", FORMAT, "U+200F at character 8"),
+        ("C:/tools/a\u{e0041}.exe", FORMAT, "U+E0041 at character 11"),
+        // Not format characters, but they draw nothing as well.
+        (
+            "C:/tools/cla\u{34f}ude.exe",
+            FORMAT,
+            "U+034F at character 13",
+        ),
+        (
+            "C:/tools/cla\u{fe00}ude.exe",
+            FORMAT,
+            "U+FE00 at character 13",
+        ),
+        (
+            "C:/tools/\u{2764}\u{fe0f}/a.exe",
+            FORMAT,
+            "U+FE0F at character 11",
+        ),
+        ("C:/tools/a\u{e0100}.exe", FORMAT, "U+E0100 at character 11"),
+        ("C:/tools/a\u{115f}.exe", FORMAT, "U+115F at character 11"),
+        ("C:/tools/a\u{3164}.exe", FORMAT, "U+3164 at character 11"),
+        ("C:/tools/a\u{ffa0}.exe", FORMAT, "U+FFA0 at character 11"),
+        ("C:/tools/a\u{17b4}.exe", FORMAT, "U+17B4 at character 11"),
+        ("C:/tools/a\u{180b}.exe", FORMAT, "U+180B at character 11"),
+        ("C:/tools/a\u{fff0}.exe", FORMAT, "U+FFF0 at character 11"),
+        // A blank that `trim` keeps, where nobody would look.
+        (
+            "C:/tools/claude.exe\u{2800}",
+            FORMAT,
+            "U+2800 at character 20",
+        ),
+    ];
+    for (path, rule, found) in cases {
+        let err = with_claude_path(path).validate().unwrap_err();
+        assert!(matches!(err, dots_core::Error::Invalid(_)), "{err:?}");
+        assert_eq!(
+            err.to_string(),
+            format!("invalid input: claude_path must not contain {rule} (found {found})"),
+            "{path:?}"
+        );
+    }
+}
+
+#[test]
+fn claude_path_refuses_every_format_character_and_nothing_next_to_them() {
+    // Unicode general category Cf, as inclusive ranges.
+    const FORMAT: [(u32, u32); 21] = [
+        (0xAD, 0xAD),
+        (0x600, 0x605),
+        (0x61C, 0x61C),
+        (0x6DD, 0x6DD),
+        (0x70F, 0x70F),
+        (0x890, 0x891),
+        (0x8E2, 0x8E2),
+        (0x180E, 0x180E),
+        (0x200B, 0x200F),
+        (0x202A, 0x202E),
+        (0x2060, 0x2064),
+        (0x2066, 0x206F),
+        (0xFEFF, 0xFEFF),
+        (0xFFF9, 0xFFFB),
+        (0x110BD, 0x110BD),
+        (0x110CD, 0x110CD),
+        (0x13430, 0x1343F),
+        (0x1BCA0, 0x1BCA3),
+        (0x1D173, 0x1D17A),
+        (0xE0001, 0xE0001),
+        (0xE0020, 0xE007F),
+    ];
+    let refused = |code: u32| {
+        let c = char::from_u32(code).unwrap();
+        with_claude_path(&format!("C:/a{c}b")).validate().is_err()
+    };
+    for (first, last) in FORMAT {
+        for code in first..=last {
+            assert!(refused(code), "U+{code:04X} should be refused");
+        }
+    }
+    // The default-ignorable code points that are not format characters, and the blank braille
+    // pattern: first and last of each range are refused, the code point beside it is not.
+    const INVISIBLE: [(u32, u32); 11] = [
+        (0x34F, 0x34F),
+        (0x115F, 0x1160),
+        (0x17B4, 0x17B5),
+        (0x180B, 0x180D),
+        (0x180F, 0x180F),
+        (0x2800, 0x2800),
+        (0x3164, 0x3164),
+        (0xFE00, 0xFE0F),
+        (0xFFA0, 0xFFA0),
+        (0xFFF0, 0xFFF8),
+        (0xE0080, 0xE0FFF),
+    ];
+    for (first, last) in INVISIBLE {
+        for code in [first, last] {
+            assert!(refused(code), "U+{code:04X} should be refused");
+        }
+        // U+180E, U+FFF9 and U+E007F next to three of the ranges are format characters, refused
+        // already.
+        for code in [first - 1, last + 1] {
+            if ![0x180E, 0xFFF9, 0xE007F].contains(&code) {
+                assert!(!refused(code), "U+{code:04X} should be accepted");
+            }
+        }
+    }
+    // So are the code points not assigned yet inside two of those blocks.
+    for code in [0x2065, 0xE0000, 0xE0002, 0xE001F] {
+        assert!(refused(code), "U+{code:04X} should be refused");
+    }
+    // The neighbours of the ranges are ordinary characters, and so are the look-alikes of a
+    // space (no-break, hair, narrow no-break, ideographic), which are not format characters.
+    for code in [
+        0xAC, 0xAE, 0x606, 0x61B, 0x61D, 0x200A, 0x2010, 0x202F, 0x205F, 0x2070, 0xFEFC, 0xFFFC,
+        0xA0, 0x3000,
+    ] {
+        assert!(!refused(code), "U+{code:04X} should be accepted");
+    }
+}
+
+#[tokio::test]
+async fn a_stored_claude_path_with_a_hidden_character_is_ignored() {
+    let (dir, store) = temp_store().await;
+    let pool = sqlx::SqlitePool::connect(&format!(
+        "sqlite://{}",
+        dir.path().join("dots.db").display()
+    ))
+    .await
+    .unwrap();
+    // Stored by a version that did not check the path.
+    for (k, v) in [
+        ("port", "40003".to_string()),
+        (
+            "claude_path",
+            serde_json::to_string("C:/tools/\u{202e}exe.edualc").unwrap(),
+        ),
+    ] {
+        sqlx::query("INSERT INTO settings (key, value) VALUES (?, ?)")
+            .bind(k)
+            .bind(v)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    // The app still starts: the path is dropped (PATH is searched), the rest is kept.
+    let s = store.get_settings().await.unwrap();
+    assert_eq!(s.claude_path, None);
+    assert_eq!(s.port, 40003);
+    // The next save replaces the row.
+    store.put_settings(&s).await.unwrap();
+    let raw: String = sqlx::query_scalar("SELECT value FROM settings WHERE key = 'claude_path'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+    assert_eq!(raw, "null");
+}
+
 #[test]
 fn only_port_concurrency_and_claude_path_need_a_restart() {
     let base = Settings::default();

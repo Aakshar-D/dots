@@ -207,31 +207,63 @@ pub fn prepare(
 }
 
 /// Decides which entries the walking tools (`list_dir`, `glob`, `grep`) leave out, given each
-/// entry's workspace-relative path. The default hides nothing.
+/// entry's workspace-relative path and whether it is a directory. The default hides nothing.
 #[derive(Clone, Default)]
 pub struct PathFilter(Option<Arc<HideFn>>);
 
-type HideFn = dyn Fn(&str) -> bool + Send + Sync;
+type HideFn = dyn Fn(&str, bool) -> bool + Send + Sync;
 
 impl PathFilter {
-    pub fn new(hides: impl Fn(&str) -> bool + Send + Sync + 'static) -> Self {
+    pub fn new(hides: impl Fn(&str, bool) -> bool + Send + Sync + 'static) -> Self {
         Self(Some(Arc::new(hides)))
     }
 
-    /// Hides the entries `policy` denies for the walking tool `alias` or for `Read`, so a
-    /// search from the workspace root never reads a denied subtree.
+    /// Hides what `policy` denies for the walking tool `alias` or for `Read`. A directory is
+    /// hidden only when a deny rule matches it, so a search from the workspace root never
+    /// reads a subtree a rule denies, and still reaches an allowed subtree when the default is
+    /// `deny`. Every other entry is hidden whenever it resolves to `deny`, by rule or by default.
     pub fn from_policy(policy: &Policy, alias: &'static str, workspace: &Path) -> Self {
         let (policy, workspace) = (policy.clone(), workspace.to_path_buf());
-        Self::new(move |rel| {
+        Self::new(move |rel, is_dir| {
             let ws = Some(workspace.as_path());
-            policy.resolve_in(alias, &json!({ "path": rel }), ws) == Action::Deny
-                || policy.resolve_in("Read", &json!({ "file_path": rel }), ws) == Action::Deny
+            let denied = |tool: &str, input: Value| {
+                if is_dir {
+                    policy.denied_by_rule(tool, &input, ws)
+                } else {
+                    policy.resolve_in(tool, &input, ws) == Action::Deny
+                }
+            };
+            denied(alias, json!({ "path": rel })) || denied("Read", json!({ "file_path": rel }))
         })
     }
 
-    pub fn hides(&self, rel: &str) -> bool {
-        self.0.as_ref().is_some_and(|f| f(rel))
+    /// `is_dir` is true only for a real directory: a link to one is judged as a file.
+    pub fn hides(&self, rel: &str, is_dir: bool) -> bool {
+        self.0.as_ref().is_some_and(|f| f(rel, is_dir))
     }
+}
+
+/// The error a walking tool returns, in place of any listing or count, when `filter` hides its
+/// search root. The root is judged like every entry below it: a directory is refused when a
+/// deny rule matches it (one that only the default denies stays enterable), and anything else
+/// whenever it resolves to `deny`. The permission gate judged the call under the walking tool's
+/// name only, and neither it nor the walk judges the root under `Read`.
+///
+/// `base` is the root as `confine` resolved it, so a link has already been followed; `raw` is
+/// the path the tool was called with.
+fn root_refusal(root: &Path, base: &Path, raw: &str, filter: &PathFilter) -> Option<ToolOutput> {
+    let rel = display(root, base);
+    if !filter.hides(&rel, base.is_dir()) {
+        return None;
+    }
+    let shown = if rel == "." {
+        "the workspace root"
+    } else {
+        raw
+    };
+    Some(ToolOutput::err(format!(
+        "{shown} is denied by this dot's policy"
+    )))
 }
 
 /// The note a walking tool appends when the policy hid `n` entries.
@@ -391,7 +423,8 @@ fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> 
 
 #[cfg(windows)]
 const SHELL_DESCRIPTION: &str = "Run a PowerShell command in the workspace directory and return \
-    its output. Default timeout 120 seconds, maximum 600.";
+    its output. Default timeout 120 seconds, maximum 600. A process the command starts in the \
+    background is stopped when the command returns.";
 #[cfg(not(windows))]
 const SHELL_DESCRIPTION: &str = "Run a sh command in the workspace directory and return its \
     output. Default timeout 120 seconds, maximum 600.";

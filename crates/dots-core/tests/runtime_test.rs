@@ -47,7 +47,7 @@ fn folder_spec(dir: &TempDir, name: &str) -> DotSpec {
 async fn webhook_to_success_end_to_end() {
     let t = start(None, None).await;
     let dot = t.rt.create_dot(folder_spec(&t.dir, "hook")).await.unwrap();
-    let url = t.rt.webhook_url(&dot);
+    let url = t.rt.webhook_url(&dot).unwrap();
     assert!(url.starts_with(&format!("http://127.0.0.1:{}/dots/", t.rt.port())));
     let resp: Value = reqwest::Client::new()
         .post(&url)
@@ -240,7 +240,151 @@ async fn chat_follow_up_requires_finished_parent_with_session() {
             .await
             .unwrap();
     let res = t.rt.chat(&dot.id, "hi", Some(&queued.id)).await;
-    assert!(matches!(res, Err(Error::Conflict(_))), "{res:?}");
+    assert_eq!(refusal(res), CHAT_BUSY);
+
+    // Ended, but before the engine gave it a session: there is nothing to continue.
+    t.rt.cancel_run(&queued.id).await.unwrap();
+    // The cancel can land while the runner is taking the run up: wait until the run has ended.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !t
+        .rt
+        .store()
+        .get_run(&queued.id)
+        .await
+        .unwrap()
+        .status
+        .is_terminal()
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the cancelled run did not end"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let res = t.rt.chat(&dot.id, "hi", Some(&queued.id)).await;
+    assert_eq!(
+        refusal(res),
+        "this chat cannot be continued because its last run ended before the dot started \
+         working; start a new chat"
+    );
+    assert_eq!(t.rt.run_thread(&queued.id).await.unwrap().len(), 1);
+    t.rt.shutdown();
+}
+
+const CHAT_BUSY: &str = "the dot is still working on this chat; wait until it has finished, \
+                         then send your message again";
+
+/// The text of the `Conflict` a refused follow-up answers with, which the UI shows as it is.
+fn refusal<T: std::fmt::Debug>(res: Result<T, Error>) -> String {
+    match res {
+        Err(Error::Conflict(text)) => text,
+        other => panic!("expected a conflict, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn chat_follow_up_must_continue_the_latest_run_of_its_thread() {
+    let t = start(None, None).await;
+    let dot = t.rt.create_dot(folder_spec(&t.dir, "line")).await.unwrap();
+    let first = t.rt.chat(&dot.id, "one", None).await.unwrap();
+    wait_status(t.rt.store(), &first.id, RunStatus::Succeeded, 15).await;
+    let second = t.rt.chat(&dot.id, "two", Some(&first.id)).await.unwrap();
+    wait_status(t.rt.store(), &second.id, RunStatus::Succeeded, 15).await;
+
+    // A screen that still ends at the first run: its reply would make a second branch.
+    let res = t.rt.chat(&dot.id, "two again", Some(&first.id)).await;
+    assert_eq!(
+        refusal(res),
+        "this chat has a newer message than the one you replied to; open the chat again, then \
+         send your message"
+    );
+    assert_eq!(t.rt.run_thread(&first.id).await.unwrap().len(), 2);
+
+    // The normal follow-up continues from the end of the thread.
+    let third = t.rt.chat(&dot.id, "three", Some(&second.id)).await.unwrap();
+    assert_eq!(third.parent_run_id.as_deref(), Some(second.id.as_str()));
+    assert_eq!(third.root_run_id, first.id);
+    wait_status(t.rt.store(), &third.id, RunStatus::Succeeded, 15).await;
+    let thread = t.rt.run_thread(&first.id).await.unwrap();
+    let ids: Vec<&str> = thread.iter().map(|r| r.id.as_str()).collect();
+    assert_eq!(ids, [&first.id, &second.id, &third.id]);
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn chat_follow_up_is_refused_while_its_thread_waits_for_an_approval() {
+    // Seeded before start, so the dispatcher never sees these runs: a finished first run and
+    // its follow-up, which is parked on an approval nobody has answered.
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("data");
+    let (dot, first, parked) = {
+        let store = Store::open(&data.join("dots.db")).await.unwrap();
+        let dot = store.create_dot(&folder_spec(&dir, "asks")).await.unwrap();
+        let first = store
+            .create_run(&NewRun::new(&dot.id, TriggerKind::Chat))
+            .await
+            .unwrap();
+        store.claim_run(&first.id).await.unwrap();
+        store.set_session(&first.id, "s1").await.unwrap();
+        store
+            .finish_run(&first.id, RunStatus::Succeeded, Some("ok"), None)
+            .await
+            .unwrap();
+        // Runs are ordered by the millisecond they were queued in.
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        let mut new = NewRun::new(&dot.id, TriggerKind::Chat);
+        new.parent_run_id = Some(first.id.clone());
+        new.root_run_id = Some(first.id.clone());
+        new.session_id = Some("s1".into());
+        let parked = store.create_run(&new).await.unwrap();
+        store.claim_run(&parked.id).await.unwrap();
+        store
+            .finish_run(&parked.id, RunStatus::AwaitingApproval, None, None)
+            .await
+            .unwrap();
+        store
+            .create_approval(&parked.id, "Bash", &json!({"command": "git push"}))
+            .await
+            .unwrap();
+        (dot, first, parked)
+    };
+    let mut cfg = Config::new(data);
+    cfg.port = 0;
+    cfg.claude_path = Some(PathBuf::from(env!("CARGO_BIN_EXE_fake-claude")));
+    let rt = Runtime::start(cfg).await.unwrap();
+
+    // Whichever run of the thread the reply names, the thread is not idle.
+    for parent in [&parked.id, &first.id] {
+        let res = rt.chat(&dot.id, "and?", Some(parent)).await;
+        assert_eq!(
+            refusal(res),
+            "this chat is waiting for an approval; answer it, then send your message again"
+        );
+    }
+    assert_eq!(rt.run_thread(&first.id).await.unwrap().len(), 2);
+    rt.shutdown();
+}
+
+#[tokio::test]
+async fn two_follow_ups_sent_at_once_do_not_fork_the_thread() {
+    let t = start(None, None).await;
+    let dot = t.rt.create_dot(folder_spec(&t.dir, "twice")).await.unwrap();
+    let first = t.rt.chat(&dot.id, "one", None).await.unwrap();
+    wait_status(t.rt.store(), &first.id, RunStatus::Succeeded, 15).await;
+
+    let (a, b) = tokio::join!(
+        t.rt.chat(&dot.id, "two", Some(&first.id)),
+        t.rt.chat(&dot.id, "two", Some(&first.id)),
+    );
+    let (sent, refused) = match (a, b) {
+        (Ok(run), refused @ Err(_)) | (refused @ Err(_), Ok(run)) => (run, refused),
+        other => panic!("expected one follow-up and one refusal, got {other:?}"),
+    };
+    assert_eq!(refusal(refused), CHAT_BUSY);
+    let thread = t.rt.run_thread(&first.id).await.unwrap();
+    let ids: Vec<&str> = thread.iter().map(|r| r.id.as_str()).collect();
+    assert_eq!(ids, [&first.id, &sent.id]);
+    wait_status(t.rt.store(), &sent.id, RunStatus::Succeeded, 15).await;
     t.rt.shutdown();
 }
 

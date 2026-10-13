@@ -8,7 +8,7 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, Tray
 use tauri::{AppHandle, Emitter, Manager, Wry};
 
 use crate::events::{NAVIGATE_EVENT, STATUS_EVENT};
-use crate::state::AppState;
+use crate::state::{runtime_of, AppState};
 
 pub fn tooltip(count: usize) -> String {
     match count {
@@ -90,7 +90,7 @@ pub async fn refresh_count(app: &AppHandle, rt: &Runtime) {
 }
 
 fn on_menu(app: &AppHandle, id: &str) {
-    let rt: Option<Arc<Runtime>> = app.state::<AppState>().rt().ok();
+    let rt: Option<Arc<Runtime>> = runtime_of(app.try_state::<AppState>().as_deref());
     match id {
         "open" => crate::show_main(app),
         "inbox" => {

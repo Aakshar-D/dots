@@ -107,3 +107,67 @@ pub async fn wait_status(store: &Store, run_id: &str, status: RunStatus, secs: u
 pub fn is_not_found(e: &DotsError) -> bool {
     matches!(e, DotsError::NotFound(_))
 }
+
+/// The directory of one lingering process of the fake CLI (`fake-claude --linger`, started by
+/// its `--orphan` and `--tree` modes and by the `orphan` script step). The process is watched
+/// through the lock it holds, not through its process id, and is told to stop when this is
+/// dropped, so a failed test leaves nothing running and kills nothing.
+pub struct Lingerer {
+    dir: TempDir,
+}
+
+impl Lingerer {
+    pub fn new() -> Self {
+        Self {
+            dir: tempfile::tempdir().unwrap(),
+        }
+    }
+
+    /// The directory, as the fake CLI takes it.
+    pub fn dir(&self) -> String {
+        self.dir.path().to_string_lossy().to_string()
+    }
+
+    /// Whether the process is running: it holds a lock on `alive` for as long as it lives.
+    pub fn alive(&self) -> bool {
+        match std::fs::File::open(self.dir.path().join("alive")) {
+            Ok(file) => matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock)),
+            Err(_) => false,
+        }
+    }
+
+    /// Waits until the process runs.
+    pub async fn started(&self) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while !self.dir.path().join("ready").exists() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the lingering process did not start"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(self.alive(), "the lingering process should be running");
+    }
+
+    /// Whether the process ends within `limit`.
+    pub async fn gone_within(&self, limit: std::time::Duration) -> bool {
+        let deadline = std::time::Instant::now() + limit;
+        while self.alive() {
+            if std::time::Instant::now() > deadline {
+                return false;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        true
+    }
+}
+
+impl Drop for Lingerer {
+    fn drop(&mut self) {
+        let _ = std::fs::write(self.dir.path().join("stop"), "");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while self.alive() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+}

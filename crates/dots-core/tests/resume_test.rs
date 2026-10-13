@@ -8,7 +8,7 @@ use common::{init_repo, spec, temp_store, wait_status};
 use dots_core::approvals::{ApprovalHub, DecideEffect};
 use dots_core::engine::scripted::{ScriptedEngine, Step};
 use dots_core::engine::{Engine, EngineEvent};
-use dots_core::events::new_bus;
+use dots_core::events::{new_bus, Bus, RuntimeEvent};
 use dots_core::model::{Dot, EngineKind, NewRun, Run, RunStatus, TriggerKind, WorkspaceMode};
 use dots_core::runner::{Runner, RunnerConfig};
 use dots_core::store::Store;
@@ -19,6 +19,7 @@ use tokio_util::sync::CancellationToken;
 struct Env {
     dir: TempDir,
     store: Store,
+    bus: Bus,
     hub: Arc<ApprovalHub>,
     runner: Arc<Runner>,
 }
@@ -34,7 +35,7 @@ async fn env(steps: Vec<Step>) -> Env {
     );
     let runner = Runner::new(
         store.clone(),
-        bus,
+        bus.clone(),
         engines,
         RunnerConfig {
             max_concurrent: 2,
@@ -47,6 +48,7 @@ async fn env(steps: Vec<Step>) -> Env {
     Env {
         dir,
         store,
+        bus,
         hub,
         runner,
     }
@@ -428,6 +430,46 @@ async fn plain_deny_close_removes_an_unchanged_worktree() {
     );
 }
 
+/// The resume child takes its folder from its parent's row. A worktree row whose folder is not
+/// one of dots' worktrees fails the child before the engine starts in that folder.
+#[tokio::test]
+async fn a_resumed_run_fails_before_the_engine_starts_when_its_row_names_no_dots_worktree() {
+    let e = env(vec![ask("git push"), finished()]).await;
+    let (parent, _path) = parked_worktree_run(&e).await;
+    let outside = e.dir.path().join("outside");
+    std::fs::create_dir(&outside).unwrap();
+    // As a tampered database would have it: the row's folder is replaced, the rest is kept.
+    e.store
+        .set_workspace(
+            &parent.id,
+            &outside.to_string_lossy(),
+            parent.branch.as_deref(),
+            parent.base_commit.as_deref(),
+        )
+        .await
+        .unwrap();
+    let approval = e
+        .store
+        .approvals_for_run(&parent.id)
+        .await
+        .unwrap()
+        .remove(0);
+    let child = decide(&e, &approval.id, true, None)
+        .await
+        .expect("child run");
+    assert_eq!(
+        child.workspace_path,
+        Some(outside.to_string_lossy().to_string())
+    );
+    let child = wait_status(&e.store, &child.id, RunStatus::Failed, 5).await;
+    let error = child.error.unwrap_or_default();
+    assert!(error.contains("not a dots worktree"), "{error}");
+    // The scripted engine records an event as soon as it starts.
+    let events = e.store.list_events(&child.id, 0).await.unwrap();
+    assert!(events.is_empty(), "{events:?}");
+    assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
+}
+
 #[tokio::test]
 async fn cancel_of_awaiting_run_removes_an_unchanged_worktree() {
     let e = env(vec![ask("git push"), finished()]).await;
@@ -439,5 +481,36 @@ async fn cancel_of_awaiting_run_removes_an_unchanged_worktree() {
     assert!(
         !std::path::Path::new(&path).exists(),
         "worktree left behind"
+    );
+}
+
+#[tokio::test]
+async fn cancel_of_awaiting_run_publishes_cancelled_after_the_worktree_is_gone() {
+    let e = env(vec![ask("git push"), finished()]).await;
+    let (parent, path) = parked_worktree_run(&e).await;
+    let mut events = e.bus.subscribe();
+    let id = parent.id.clone();
+    // Looks at the folder the moment the terminal status arrives, as the Inbox does.
+    let seen = tokio::spawn(async move {
+        loop {
+            match events.recv().await {
+                Ok(RuntimeEvent::RunUpdated { run })
+                    if run.id == id && run.status == RunStatus::Cancelled =>
+                {
+                    return std::path::Path::new(&path).exists();
+                }
+                Ok(_) => {}
+                Err(err) => panic!("the event stream ended: {err}"),
+            }
+        }
+    });
+    e.runner.cancel(&parent.id).await.unwrap();
+    let still_there = tokio::time::timeout(Duration::from_secs(5), seen)
+        .await
+        .expect("no cancelled status was published")
+        .unwrap();
+    assert!(
+        !still_there,
+        "cancelled was published while the unchanged worktree was still on disk"
     );
 }

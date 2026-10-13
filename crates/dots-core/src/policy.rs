@@ -106,18 +106,28 @@ impl Policy {
 
     /// Like `resolve`, but absolute file paths inside `workspace` are treated as relative to it.
     pub fn resolve_in(&self, tool: &str, input: &Value, workspace: Option<&Path>) -> Action {
-        let ws = workspace.map(|w| lexical_normalize(&w.to_string_lossy()));
-        let ws = ws.as_ref().filter(|(abs, _)| *abs).map(|(_, t)| t.as_str());
+        let ws = workspace_key(workspace);
         for action in [Action::Deny, Action::Allow, Action::Ask] {
-            if self
-                .rules
-                .iter()
-                .any(|r| r.action == action && pattern_matches(&r.tool, tool, input, action, ws))
-            {
+            if self.rule_matches(action, tool, input, ws.as_deref()) {
                 return action;
             }
         }
         self.default
+    }
+
+    /// True when a deny rule matches the call, so `resolve_in` returns `deny` whatever the
+    /// other rules and the default say. False for a call that only the default denies. The
+    /// walking tools use it to tell a directory the user closed from one no rule mentions.
+    pub fn denied_by_rule(&self, tool: &str, input: &Value, workspace: Option<&Path>) -> bool {
+        let ws = workspace_key(workspace);
+        self.rule_matches(Action::Deny, tool, input, ws.as_deref())
+    }
+
+    /// True if a rule with this `action` matches the call. `ws` comes from `workspace_key`.
+    fn rule_matches(&self, action: Action, tool: &str, input: &Value, ws: Option<&str>) -> bool {
+        self.rules
+            .iter()
+            .any(|r| r.action == action && pattern_matches(&r.tool, tool, input, action, ws))
     }
 
     /// (allow patterns, deny patterns) for `--allowedTools` / `--disallowedTools`.
@@ -298,6 +308,12 @@ fn lexical_normalize(raw: &str) -> (bool, String) {
             joined
         },
     )
+}
+
+/// The normalized workspace path that file rules are matched against; `None` unless absolute.
+fn workspace_key(workspace: Option<&Path>) -> Option<String> {
+    let (abs, normalized) = lexical_normalize(&workspace?.to_string_lossy());
+    abs.then_some(normalized)
 }
 
 /// Patterns: `\` -> `/`, lowercase, leading `./` stripped. Returns (is_absolute, pattern).

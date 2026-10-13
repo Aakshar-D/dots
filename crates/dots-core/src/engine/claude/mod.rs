@@ -112,6 +112,11 @@ impl Engine for ClaudeEngine {
                 )));
             }
         };
+        // Before anything else: what claude starts ahead of this is outside the job.
+        let job = crate::proc::Job::assign(&child).unwrap_or_else(|e| {
+            tracing::warn!(run = %ctx.run_id, "no job object for claude, using kill_tree: {e}");
+            crate::proc::Job::fallback(&child)
+        });
         let mut stdin = child.stdin.take().expect("stdin is piped");
         let stdout = child.stdout.take().expect("stdout is piped");
         let stderr = child.stderr.take().expect("stderr is piped");
@@ -157,19 +162,19 @@ impl Engine for ClaudeEngine {
                 drop(stdin);
             });
 
-            let pid = child.id();
             let mut status = None;
             let cancelled = tokio::select! {
                 s = child.wait() => { status = s.ok(); false }
                 _ = ctx.cancel.cancelled() => true,
             };
             if cancelled {
-                if let Some(pid) = pid {
-                    crate::proc::kill_tree(pid).await;
-                }
+                job.terminate().await;
                 let _ = child.start_kill();
                 status = child.wait().await.ok();
             }
+            // Whatever claude left running goes now: it would hold the pipes read below open,
+            // and must be gone before the run is reported as over.
+            job.close();
 
             let cap = Duration::from_secs(5);
             if tokio::time::timeout(cap, &mut stdout_task).await.is_err() {

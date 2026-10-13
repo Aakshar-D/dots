@@ -3,8 +3,8 @@ use std::path::Path;
 use serde_json::Value;
 
 use super::{
-    cap_head, confine, display, hidden_note, str_arg, PathFilter, ToolOutput, MAX_ENTRIES,
-    MAX_READ_BYTES,
+    cap_head, confine, display, hidden_note, root_refusal, str_arg, PathFilter, ToolOutput,
+    MAX_ENTRIES, MAX_READ_BYTES,
 };
 
 /// Files whose first 8 KB contain a NUL byte are treated as binary and not returned.
@@ -137,6 +137,9 @@ pub(super) async fn list_dir(root: &Path, input: &Value, filter: &PathFilter) ->
     let raw = raw.to_string();
     let (root, filter) = (root.to_path_buf(), filter.clone());
     let listed = tokio::task::spawn_blocking(move || {
+        if let Some(refused) = root_refusal(&root, &dir, &raw, &filter) {
+            return refused;
+        }
         let entries = match std::fs::read_dir(&dir) {
             Ok(rd) => rd,
             Err(e) => return ToolOutput::err(format!("cannot list {raw}: {e}")),
@@ -145,17 +148,17 @@ pub(super) async fn list_dir(root: &Path, input: &Value, filter: &PathFilter) ->
         let mut names: Vec<String> = entries
             .filter_map(|e| e.ok())
             .filter(|e| e.file_name() != ".git")
-            .filter(|e| {
-                let hide = filter.hides(&display(&root, &e.path()));
-                hidden += usize::from(hide);
-                !hide
-            })
-            .map(|e| {
+            .filter_map(|e| {
+                let is_dir = e.file_type().is_ok_and(|t| t.is_dir());
+                if filter.hides(&display(&root, &e.path()), is_dir) {
+                    hidden += 1;
+                    return None;
+                }
                 let mut name = e.file_name().to_string_lossy().into_owned();
-                if e.file_type().is_ok_and(|t| t.is_dir()) {
+                if is_dir {
                     name.push('/');
                 }
-                name
+                Some(name)
             })
             .collect();
         if names.is_empty() {

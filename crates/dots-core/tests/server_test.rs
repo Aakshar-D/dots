@@ -1,8 +1,10 @@
 mod common;
 
 use std::collections::HashMap;
+use std::io::ErrorKind;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use common::{spec, temp_store};
 use dots_core::approvals::{parked_message, ApprovalHub};
@@ -10,7 +12,7 @@ use dots_core::engine::Engine;
 use dots_core::events::new_bus;
 use dots_core::model::{Dot, EngineKind, NewRun, TriggerKind};
 use dots_core::runner::{Runner, RunnerConfig};
-use dots_core::server::{bind, serve, ServerState};
+use dots_core::server::{bind, no_server_text, retry_while_in_use, serve, ServerState};
 use dots_core::store::Store;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
@@ -318,4 +320,69 @@ async fn mcp_accepts_large_tool_inputs() {
     assert_eq!(r.status(), 200);
     let body: Value = r.json().await.unwrap();
     assert_eq!(decision(&body)["behavior"], "allow");
+}
+
+/// Runs `retry_while_in_use` over attempts that fail with `kind` until `succeed_at` (counted
+/// from 0). Returns the result and how many attempts were made.
+async fn attempts(
+    wait: Duration,
+    kind: ErrorKind,
+    succeed_at: usize,
+) -> (std::io::Result<usize>, usize) {
+    let calls = AtomicUsize::new(0);
+    let result = retry_while_in_use(wait, || {
+        let n = calls.fetch_add(1, Ordering::SeqCst);
+        async move {
+            if n < succeed_at {
+                Err(std::io::Error::from(kind))
+            } else {
+                Ok(n)
+            }
+        }
+    })
+    .await;
+    (result, calls.into_inner())
+}
+
+#[tokio::test]
+async fn a_bind_is_retried_only_while_the_port_is_in_use_and_only_for_the_wait() {
+    const NEVER: usize = usize::MAX;
+    // In use twice, then free: the third attempt is the answer.
+    let (result, calls) = attempts(Duration::from_secs(2), ErrorKind::AddrInUse, 2).await;
+    assert_eq!((result.unwrap(), calls), (2, 3));
+
+    // Any other failure is final at once, however long the wait.
+    let (result, calls) =
+        attempts(Duration::from_secs(2), ErrorKind::PermissionDenied, NEVER).await;
+    assert_eq!(result.unwrap_err().kind(), ErrorKind::PermissionDenied);
+    assert_eq!(calls, 1);
+
+    // No wait: one attempt.
+    let (result, calls) = attempts(Duration::ZERO, ErrorKind::AddrInUse, NEVER).await;
+    assert_eq!(result.unwrap_err().kind(), ErrorKind::AddrInUse);
+    assert_eq!(calls, 1);
+
+    // In use for the whole wait: the answer is "in use", once the wait is over.
+    let started = Instant::now();
+    let wait = Duration::from_millis(200);
+    let (result, calls) = attempts(wait, ErrorKind::AddrInUse, NEVER).await;
+    assert_eq!(result.unwrap_err().kind(), ErrorKind::AddrInUse);
+    assert!(started.elapsed() >= wait, "{:?}", started.elapsed());
+    assert!(calls > 1, "{calls}");
+}
+
+#[test]
+fn the_run_error_says_in_use_only_for_a_port_in_use() {
+    assert_eq!(
+        no_server_text(47321, &std::io::Error::from(ErrorKind::AddrInUse)),
+        "local server is not running: port 47321 is in use. Change the port in Settings and \
+         restart Dots."
+    );
+    // Windows answers "access denied" for a port in a range it has reserved.
+    let denied = std::io::Error::new(ErrorKind::PermissionDenied, "access denied");
+    assert_eq!(
+        no_server_text(50000, &denied),
+        "local server is not running: could not listen on port 50000: access denied. Try \
+         another port in Settings and restart Dots."
+    );
 }

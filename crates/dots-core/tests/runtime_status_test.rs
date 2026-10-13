@@ -33,6 +33,9 @@ async fn a_taken_port_starts_without_the_server_and_fails_claude_runs() {
     let taken = holder.local_addr().unwrap().port();
     let mut cfg = config(&dir);
     cfg.port = taken;
+    // The port stays taken for the whole wait, so the default of two seconds would only make
+    // this test slow.
+    cfg.bind_wait = Duration::from_millis(200);
     let rt = Runtime::start(cfg).await.unwrap();
 
     let status = rt.status().await;
@@ -41,6 +44,8 @@ async fn a_taken_port_starts_without_the_server_and_fails_claude_runs() {
     assert!(err.contains(&taken.to_string()), "{err}");
 
     let dot = rt.create_dot(folder_spec(&dir, "cli")).await.unwrap();
+    // No URL on a port that another program owns.
+    assert!(matches!(rt.webhook_url(&dot), Err(Error::Conflict(_))));
     let run = rt.run_now(&dot.id).await.unwrap();
     let failed = wait_status(rt.store(), &run.id, RunStatus::Failed, 15).await;
     assert_eq!(
@@ -61,6 +66,33 @@ async fn a_taken_port_starts_without_the_server_and_fails_claude_runs() {
     let run = rt.run_now(&local.id).await.unwrap();
     let done = wait_status(rt.store(), &run.id, RunStatus::Succeeded, 15).await;
     assert_eq!(done.summary.as_deref(), Some("done locally"));
+    rt.shutdown();
+}
+
+#[tokio::test]
+async fn a_port_freed_a_moment_after_the_start_began_still_gets_the_server() {
+    let dir = tempfile::tempdir().unwrap();
+    let holder = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = holder.local_addr().unwrap().port();
+    // The process that "Restart Dots" replaces: it lets go of the port a moment later.
+    let old_process = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(400));
+        drop(holder);
+    });
+    let mut cfg = config(&dir);
+    cfg.port = port;
+    let rt = Runtime::start(cfg).await.unwrap();
+    old_process.join().unwrap();
+
+    let status = rt.status().await;
+    assert_eq!((status.port, status.server_error), (port, None));
+    let health = reqwest::get(format!("http://127.0.0.1:{port}/health"))
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert_eq!(health, "ok");
     rt.shutdown();
 }
 
@@ -153,6 +185,28 @@ async fn updating_settings_reports_when_a_restart_is_needed() {
         rt.update_settings(bad).await,
         Err(Error::Invalid(_))
     ));
+    rt.shutdown();
+}
+
+#[tokio::test]
+async fn saving_settings_keeps_the_pause_and_the_tested_version() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut cfg = config(&dir);
+    cfg.claude_env
+        .push(("FAKE_CLAUDE_VERSION".into(), "2.1.300".into()));
+    let rt = Runtime::start(cfg).await.unwrap();
+    // A settings form loads its copy; then the tray pauses and the CLI is marked as tested.
+    let mut form = rt.settings().await;
+    rt.set_schedules_paused(true).await.unwrap();
+    rt.mark_claude_tested().await.unwrap();
+
+    form.autostart = false;
+    let saved = rt.update_settings(form).await.unwrap().settings;
+    assert!(!saved.autostart);
+    assert!(saved.schedules_paused);
+    assert_eq!(saved.tested_claude_version, "2.1.300");
+    assert_eq!(rt.store().get_settings().await.unwrap(), saved);
+    assert!(rt.status().await.schedules_paused);
     rt.shutdown();
 }
 

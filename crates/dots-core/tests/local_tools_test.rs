@@ -1,3 +1,5 @@
+mod common;
+
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -153,6 +155,28 @@ fn prepare_validates_calls_before_the_policy() {
     assert_eq!(
         tools::schemas().as_array().unwrap().len(),
         tools::TOOLS.len()
+    );
+}
+
+/// On Windows a process the command started is stopped when the command returns. The result
+/// says so only when that process held the command's output; one started in a window of its
+/// own is stopped without a word, so the model has to know it from the tool's description.
+#[cfg(windows)]
+#[test]
+fn the_shell_description_says_that_a_background_process_is_stopped() {
+    let schemas = tools::schemas();
+    let shell = schemas
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["function"]["name"] == "shell")
+        .expect("the shell tool");
+    let description = shell["function"]["description"].as_str().unwrap();
+    assert!(
+        description.ends_with(
+            " A process the command starts in the background is stopped when the command returns."
+        ),
+        "{description}"
     );
 }
 
@@ -547,12 +571,95 @@ async fn shell_keeps_output_when_a_background_process_holds_the_pipes() {
     let started = Instant::now();
     let out = run(ws.path(), "shell", json!({"command": HOLD})).await;
     assert!(out.output.contains("built"), "{out:?}");
-    assert!(
-        out.output
-            .contains("[output stream still held open by a background process]"),
-        "{out:?}"
+    const HELD: &str = "[output stream still held open by a background process]";
+    #[cfg(windows)]
+    {
+        // The job ends the process, so the stream is not held for the 5 s wait. The two notes
+        // prove that path; the time is only a guard against a hang, as wide as on the other
+        // systems, because a tighter one failed under load.
+        assert!(
+            out.output.contains(
+                "[a process the command left running in the background was stopped; nothing a command starts outlives it]"
+            ),
+            "{out:?}"
+        );
+        assert!(!out.output.contains(HELD), "{out:?}");
+        assert!(started.elapsed() < Duration::from_secs(15), "{out:?}");
+    }
+    #[cfg(not(windows))]
+    {
+        assert!(out.output.contains(HELD), "{out:?}");
+        assert!(started.elapsed() < Duration::from_secs(15));
+    }
+}
+
+/// PowerShell that runs `fake-claude --orphan` and waits for it: when it is done, a grandchild
+/// of the shell lingers and the process that started it has exited. `Start-Process` is used
+/// because `&` would also wait for the grandchild, which inherits the pipes `&` reads from.
+#[cfg(windows)]
+fn orphan_script(lingerer: &common::Lingerer) -> String {
+    format!(
+        "$p = Start-Process -NoNewWindow -PassThru -FilePath '{}' -ArgumentList '--orphan','\"{}\"'; $p.WaitForExit()",
+        env!("CARGO_BIN_EXE_fake-claude"),
+        lingerer.dir()
+    )
+}
+
+/// `taskkill /T` follows parent links, so it misses a process whose parent has exited.
+#[cfg(windows)]
+#[tokio::test]
+async fn shell_cancel_kills_a_grandchild_whose_parent_has_exited() {
+    let ws = workspace();
+    let lingerer = common::Lingerer::new();
+    // The file says that the grandchild's parent has exited.
+    let script = format!(
+        "{}; Set-Content -Path orphaned -Value 1; Start-Sleep -Seconds 30",
+        orphan_script(&lingerer)
     );
-    assert!(started.elapsed() < Duration::from_secs(15));
+    let call = tools::prepare("shell", &json!({ "command": script }), ws.path()).unwrap();
+    let cancel = CancellationToken::new();
+    let cancel_once_orphaned = async {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !ws.path().join("orphaned").exists() {
+            assert!(Instant::now() < deadline, "the script did not get that far");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(lingerer.alive(), "the grandchild should be running");
+        cancel.cancel();
+        Instant::now()
+    };
+    let (out, cancelled) =
+        tokio::join!(tools::run(&call, ws.path(), &cancel), cancel_once_orphaned);
+    assert_eq!(out, ToolOutput::err("cancelled"));
+    // The grandchild holds the shell's output pipes; left alone it delays the answer by 5 s.
+    assert!(
+        cancelled.elapsed() < Duration::from_secs(3),
+        "cancel waited for the grandchild"
+    );
+    assert!(
+        lingerer.gone_within(Duration::from_secs(5)).await,
+        "the grandchild is still running after cancel"
+    );
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn shell_leaves_no_process_behind_when_it_returns() {
+    let ws = workspace();
+    let lingerer = common::Lingerer::new();
+    let script = format!("{}; Write-Output left", orphan_script(&lingerer));
+    let out = run(ws.path(), "shell", json!({ "command": script })).await;
+    assert!(!out.is_error && out.output.contains("left"), "{out:?}");
+    // The grandchild did run: `--orphan` returns only once it has written `ready`. Without
+    // this, a script that started nothing would pass the next check too.
+    assert!(
+        Path::new(&lingerer.dir()).join("ready").is_file(),
+        "the grandchild never started: {out:?}"
+    );
+    assert!(
+        lingerer.gone_within(Duration::from_secs(5)).await,
+        "the grandchild is still running after the call returned"
+    );
 }
 
 #[cfg(unix)]
@@ -634,6 +741,428 @@ async fn walking_tools_without_a_filter_hide_nothing() {
     std::fs::write(p.join("secret/key.txt"), "hello key\n").unwrap();
     let out = run(p, "grep", json!({"pattern": "hello key"})).await;
     assert_eq!(out.output, "secret/key.txt:1: hello key");
+}
+
+/// A custom policy that allows the walking tools everywhere, plus `rules`.
+fn walking_policy(rules: Vec<Rule>, default: Action) -> Policy {
+    let mut all: Vec<Rule> = ["LS", "Glob", "Grep"]
+        .iter()
+        .map(|t| Rule::new(t, Action::Allow))
+        .collect();
+    all.extend(rules);
+    Policy {
+        preset: Preset::Custom,
+        rules: all,
+        default,
+    }
+}
+
+#[tokio::test]
+async fn walking_tools_reach_an_allowed_subtree_under_default_deny() {
+    let ws = workspace();
+    let p = ws.path();
+    std::fs::create_dir_all(p.join("other/inner")).unwrap();
+    std::fs::write(p.join("other/a.txt"), "fn other\n").unwrap();
+    std::fs::write(p.join("other/inner/b.txt"), "fn inner\n").unwrap();
+    let policy = walking_policy(vec![Rule::new("Read(src/**)", Action::Allow)], Action::Deny);
+
+    // `src`, `other` and `other/inner` are denied by the default only: they are entered and not
+    // counted. The three files outside `src` are denied by the default: each is hidden.
+    let out = run_filtered(p, &policy, "grep", json!({"pattern": "fn"})).await;
+    assert_eq!(
+        out.output,
+        "src/deep/lib.rs:1: pub fn Hello() {}\nsrc/main.rs:1: fn main() {}\n\
+         (3 entries hidden by policy)"
+    );
+
+    let out = run_filtered(p, &policy, "glob", json!({"pattern": "**/*"})).await;
+    assert_eq!(
+        out.output,
+        "src/deep/lib.rs\nsrc/main.rs\n(3 entries hidden by policy)"
+    );
+
+    let out = run_filtered(p, &policy, "list_dir", json!({})).await;
+    assert_eq!(out.output, "other/\nsrc/\n(1 entry hidden by policy)");
+    let out = run_filtered(p, &policy, "list_dir", json!({"path": "other"})).await;
+    assert_eq!(out.output, "inner/\n(1 entry hidden by policy)");
+    let out = run_filtered(p, &policy, "list_dir", json!({"path": "src"})).await;
+    assert_eq!(out.output, "deep/\nmain.rs");
+}
+
+#[tokio::test]
+async fn a_directory_matched_by_a_deny_rule_is_not_entered() {
+    let ws = workspace();
+    let p = ws.path();
+    std::fs::create_dir_all(p.join("secret/inner")).unwrap();
+    std::fs::write(p.join("secret/key.txt"), "hello key\n").unwrap();
+    std::fs::write(p.join("secret/inner/more.txt"), "hello more\n").unwrap();
+    // `**/secret` names the directory and nothing inside it, and `Read` is allowed: the two
+    // files would be found if the walk entered `secret`.
+    for &default in Action::ALL {
+        let policy = walking_policy(
+            vec![
+                Rule::new("Read", Action::Allow),
+                Rule::new("Read(**/secret)", Action::Deny),
+            ],
+            default,
+        );
+        for file in ["secret/key.txt", "secret/inner/more.txt"] {
+            let input = json!({ "file_path": file });
+            assert_eq!(policy.resolve_in("Read", &input, Some(p)), Action::Allow);
+        }
+        let out = run_filtered(p, &policy, "grep", json!({"pattern": "hello"})).await;
+        assert_eq!(
+            out.output, "README.md:1: hello\n(1 entry hidden by policy)",
+            "{default:?}"
+        );
+        let out = run_filtered(p, &policy, "glob", json!({"pattern": "**/*.txt"})).await;
+        assert_eq!(
+            out.output, "no files match **/*.txt\n(1 entry hidden by policy)",
+            "{default:?}"
+        );
+        let out = run_filtered(p, &policy, "list_dir", json!({})).await;
+        assert_eq!(
+            out.output, "README.md\nsrc/\n(1 entry hidden by policy)",
+            "{default:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_hidden_count_is_one_per_denied_directory_and_one_per_hidden_file() {
+    let ws = workspace();
+    let p = ws.path();
+    for dir in ["src/secret", "other"] {
+        std::fs::create_dir_all(p.join(dir)).unwrap();
+        std::fs::write(p.join(dir).join("a.txt"), "fn a\n").unwrap();
+        std::fs::write(p.join(dir).join("b.txt"), "fn b\n").unwrap();
+    }
+    std::fs::write(p.join("src/deep/key.pem"), "fn key\n").unwrap();
+    let policy = walking_policy(
+        vec![
+            Rule::new("Read(src/**)", Action::Allow),
+            Rule::new("Read(secret/**)", Action::Deny),
+            Rule::new("Read(**/*.pem)", Action::Deny),
+        ],
+        Action::Deny,
+    );
+    // README.md (default): 1. `other` is entered, its two files (default): 2. `src/secret` (deny
+    // rule, with two files inside): 1. src/deep/key.pem (deny rule): 1.
+    let found = "src/deep/lib.rs:1: pub fn Hello() {}\nsrc/main.rs:1: fn main() {}";
+    let out = run_filtered(p, &policy, "grep", json!({"pattern": "fn"})).await;
+    assert_eq!(out.output, format!("{found}\n(5 entries hidden by policy)"));
+    // Searching inside `src` counts what is hidden there only.
+    let out = run_filtered(p, &policy, "grep", json!({"pattern": "fn", "path": "src"})).await;
+    assert_eq!(out.output, format!("{found}\n(2 entries hidden by policy)"));
+    let out = run_filtered(p, &policy, "list_dir", json!({"path": "src"})).await;
+    assert_eq!(out.output, "deep/\nmain.rs\n(1 entry hidden by policy)");
+}
+
+#[tokio::test]
+async fn an_entry_that_resolves_to_ask_is_not_skipped() {
+    let ws = workspace();
+    let p = ws.path();
+    std::fs::create_dir(p.join("drafts")).unwrap();
+    std::fs::write(p.join("drafts/a.txt"), "hello draft\n").unwrap();
+    let policy = walking_policy(
+        vec![Rule::new("Read(drafts/**)", Action::Ask)],
+        Action::Deny,
+    );
+    // README.md and the two files under `src` are denied by the default.
+    let out = run_filtered(p, &policy, "grep", json!({"pattern": "hello"})).await;
+    assert_eq!(
+        out.output,
+        "drafts/a.txt:1: hello draft\n(3 entries hidden by policy)"
+    );
+    let out = run_filtered(p, &policy, "list_dir", json!({"path": "drafts"})).await;
+    assert_eq!(out.output, "a.txt");
+
+    // Under default ask nothing is denied, so nothing is hidden.
+    let policy = walking_policy(vec![], Action::Ask);
+    let out = run_filtered(p, &policy, "grep", json!({"pattern": "hello"})).await;
+    assert_eq!(
+        out.output,
+        "README.md:1: hello\ndrafts/a.txt:1: hello draft"
+    );
+    let out = run_filtered(p, &policy, "list_dir", json!({})).await;
+    assert_eq!(out.output, "README.md\ndrafts/\nsrc/");
+}
+
+#[tokio::test]
+async fn a_link_to_a_directory_is_judged_as_a_file() {
+    let ws = workspace();
+    let p = ws.path();
+    dir_link(&p.join("src"), &p.join("jump"));
+    let policy = walking_policy(vec![Rule::new("Read(src/**)", Action::Allow)], Action::Deny);
+    // The link is not a directory to enter: the default denies it like any file. README.md is
+    // the other hidden entry.
+    let out = run_filtered(p, &policy, "grep", json!({"pattern": "fn"})).await;
+    assert_eq!(
+        out.output,
+        "src/deep/lib.rs:1: pub fn Hello() {}\nsrc/main.rs:1: fn main() {}\n\
+         (2 entries hidden by policy)"
+    );
+    let out = run_filtered(p, &policy, "list_dir", json!({})).await;
+    assert_eq!(out.output, "src/\n(2 entries hidden by policy)");
+}
+
+#[tokio::test]
+async fn read_only_and_sandboxed_walks_skip_git_and_show_dot_claude() {
+    let ws = workspace();
+    let p = ws.path();
+    for dir in [".git", ".claude"] {
+        std::fs::create_dir(p.join(dir)).unwrap();
+    }
+    std::fs::write(p.join(".git/config"), "hello git\n").unwrap();
+    std::fs::write(p.join(".claude/settings.json"), "hello claude\n").unwrap();
+    for preset in [Preset::ReadOnly, Preset::Sandboxed] {
+        let policy = Policy::preset(preset);
+        // `.git` is never walked and is not counted; no read rule denies `.claude`.
+        let out = run_filtered(p, &policy, "grep", json!({"pattern": "hello"})).await;
+        assert_eq!(
+            out.output, ".claude/settings.json:1: hello claude\nREADME.md:1: hello",
+            "{preset:?}"
+        );
+        let out = run_filtered(p, &policy, "glob", json!({"pattern": "**/*"})).await;
+        assert_eq!(
+            out.output, ".claude/settings.json\nREADME.md\nsrc/deep/lib.rs\nsrc/main.rs",
+            "{preset:?}"
+        );
+        let out = run_filtered(p, &policy, "list_dir", json!({})).await;
+        assert_eq!(out.output, ".claude/\nREADME.md\nsrc/", "{preset:?}");
+    }
+}
+
+/// The error a walking tool gives in place of a result when the policy denies its search root.
+fn root_denied(path: &str) -> ToolOutput {
+    ToolOutput::err(format!("{path} is denied by this dot's policy"))
+}
+
+#[tokio::test]
+async fn grep_refuses_a_file_root_the_policy_denies() {
+    let ws = workspace();
+    let p = ws.path();
+    std::fs::write(p.join(".env"), "PASSWORD=hunter2\n").unwrap();
+    let dot_env = json!({"pattern": ".", "path": ".env"});
+
+    // A deny rule on `Read` covers the file; `Grep` itself is allowed, as in every preset.
+    let mut read_only = Policy::preset(Preset::ReadOnly);
+    read_only
+        .rules
+        .push(Rule::new("Read(**/.env)", Action::Deny));
+    let by_rule = walking_policy(
+        vec![
+            Rule::new("Read", Action::Allow),
+            Rule::new("Read(**/.env)", Action::Deny),
+        ],
+        Action::Allow,
+    );
+    for policy in [&read_only, &by_rule] {
+        assert_eq!(
+            policy.resolve_in("Grep", &dot_env, Some(p)),
+            Action::Allow,
+            "the gate lets the call through"
+        );
+        let out = run_filtered(p, policy, "grep", dot_env.clone()).await;
+        assert_eq!(out, root_denied(".env"));
+    }
+
+    // A file is hidden whenever it resolves to `deny`, so the default is enough.
+    let by_default = walking_policy(vec![Rule::new("Read(src/**)", Action::Allow)], Action::Deny);
+    let out = run_filtered(p, &by_default, "grep", dot_env.clone()).await;
+    assert_eq!(out, root_denied(".env"));
+    let out = run_filtered(
+        p,
+        &by_default,
+        "grep",
+        json!({"pattern": "hello", "path": "README.md"}),
+    )
+    .await;
+    assert_eq!(out, root_denied("README.md"));
+    // A root that does not exist is not a directory: it is judged as a file, like `read_file`
+    // of that path at the permission gate.
+    let out = run_filtered(
+        p,
+        &by_default,
+        "grep",
+        json!({"pattern": "x", "path": "nothing-here"}),
+    )
+    .await;
+    assert_eq!(out, root_denied("nothing-here"));
+
+    // A file root that is allowed is searched as before, under each of the three policies.
+    for policy in [&read_only, &by_rule, &by_default] {
+        let out = run_filtered(
+            p,
+            policy,
+            "grep",
+            json!({"pattern": "fn", "path": "src/main.rs"}),
+        )
+        .await;
+        assert_eq!(out, ToolOutput::ok("src/main.rs:1: fn main() {}"));
+    }
+}
+
+/// A call of each walking tool with `path` as its search root.
+fn rooted_calls(path: &str) -> [(&'static str, Value); 3] {
+    [
+        ("grep", json!({"pattern": "hello", "path": path})),
+        ("glob", json!({"pattern": "**/*", "path": path})),
+        ("list_dir", json!({"path": path})),
+    ]
+}
+
+#[tokio::test]
+async fn walking_tools_refuse_a_directory_root_a_deny_rule_matches() {
+    let ws = workspace();
+    let p = ws.path();
+    std::fs::create_dir_all(p.join("secret/inner")).unwrap();
+    std::fs::write(p.join("secret/key.txt"), "hello key\n").unwrap();
+    std::fs::write(p.join("secret/inner/more.txt"), "hello more\n").unwrap();
+
+    // `**/secret` names the directory only (its files resolve to allow under `Read`);
+    // `secret/**` names the directory and everything in it. Neither may be the root of a walk.
+    for rule in ["Read(**/secret)", "Read(secret/**)"] {
+        for &default in Action::ALL {
+            let policy = walking_policy(
+                vec![
+                    Rule::new("Read", Action::Allow),
+                    Rule::new(rule, Action::Deny),
+                ],
+                default,
+            );
+            for (tool, args) in rooted_calls("secret") {
+                let out = run_filtered(p, &policy, tool, args).await;
+                // The whole answer: no listing, no match and no count of hidden entries.
+                assert_eq!(out, root_denied("secret"), "{tool} {rule} {default:?}");
+            }
+        }
+    }
+
+    // `secret/**` also covers a directory deeper inside.
+    let policy = walking_policy(
+        vec![
+            Rule::new("Read", Action::Allow),
+            Rule::new("Read(secret/**)", Action::Deny),
+        ],
+        Action::Allow,
+    );
+    for (tool, args) in rooted_calls("secret/inner") {
+        let out = run_filtered(p, &policy, tool, args).await;
+        assert_eq!(out, root_denied("secret/inner"), "{tool}");
+    }
+
+    // A deny rule under the walking tool's own name, with `Read` allowed everywhere. The gate
+    // refuses this call before the tool runs; the tool refuses it by itself too.
+    for (tool, args) in rooted_calls("secret") {
+        let alias = tools::alias(tool).unwrap();
+        let policy = Policy {
+            preset: Preset::Custom,
+            rules: vec![Rule::new(&format!("{alias}(secret/**)"), Action::Deny)],
+            default: Action::Allow,
+        };
+        assert_eq!(
+            policy.resolve_in("Read", &json!({"file_path": "secret/key.txt"}), Some(p)),
+            Action::Allow
+        );
+        let out = run_filtered(p, &policy, tool, args).await;
+        assert_eq!(out, root_denied("secret"), "{tool}");
+    }
+}
+
+#[tokio::test]
+async fn walking_tools_refuse_the_workspace_root_when_a_deny_rule_matches_it() {
+    let ws = workspace();
+    let p = ws.path();
+    // A bare `Read` deny rule matches every path, the workspace root included.
+    let policy = walking_policy(vec![Rule::new("Read", Action::Deny)], Action::Allow);
+    let calls = [
+        ("grep", json!({"pattern": "hello"})),
+        ("glob", json!({"pattern": "**/*"})),
+        ("list_dir", json!({})),
+    ];
+    for (tool, args) in calls.into_iter().chain(rooted_calls(".")) {
+        let out = run_filtered(p, &policy, tool, args).await;
+        assert_eq!(out, root_denied("the workspace root"), "{tool}");
+    }
+}
+
+#[tokio::test]
+async fn a_directory_root_that_only_the_default_denies_is_still_entered() {
+    let ws = workspace();
+    let p = ws.path();
+    std::fs::create_dir_all(p.join("other/inner")).unwrap();
+    std::fs::write(p.join("other/a.txt"), "hello other\n").unwrap();
+    std::fs::write(p.join("other/inner/b.txt"), "hello inner\n").unwrap();
+    // No rule names `other`: the default denies it, and the allowed subtree lies inside it.
+    let policy = walking_policy(
+        vec![Rule::new("Read(other/inner/**)", Action::Allow)],
+        Action::Deny,
+    );
+    assert_eq!(
+        policy.resolve_in("Read", &json!({"file_path": "other"}), Some(p)),
+        Action::Deny
+    );
+    let [grep, glob, list_dir] = rooted_calls("other");
+    let out = run_filtered(p, &policy, grep.0, grep.1).await;
+    assert_eq!(
+        out,
+        ToolOutput::ok("other/inner/b.txt:1: hello inner\n(1 entry hidden by policy)")
+    );
+    let out = run_filtered(p, &policy, glob.0, glob.1).await;
+    assert_eq!(
+        out,
+        ToolOutput::ok("other/inner/b.txt\n(1 entry hidden by policy)")
+    );
+    let out = run_filtered(p, &policy, list_dir.0, list_dir.1).await;
+    assert_eq!(out, ToolOutput::ok("inner/\n(1 entry hidden by policy)"));
+}
+
+#[tokio::test]
+async fn a_deny_rule_elsewhere_leaves_the_search_root_alone() {
+    let ws = workspace();
+    let p = ws.path();
+    std::fs::create_dir_all(p.join("secret")).unwrap();
+    std::fs::write(p.join("secret/key.txt"), "hello key\n").unwrap();
+    let policy = Policy {
+        preset: Preset::Custom,
+        rules: vec![Rule::new("Read(secret/**)", Action::Deny)],
+        default: Action::Allow,
+    };
+    // The workspace root, named or left out, is walked as before: `secret` is the hidden entry.
+    for args in [
+        json!({"pattern": "hello"}),
+        json!({"pattern": "hello", "path": "."}),
+    ] {
+        let out = run_filtered(p, &policy, "grep", args).await;
+        assert_eq!(
+            out,
+            ToolOutput::ok("README.md:1: hello\n(1 entry hidden by policy)")
+        );
+    }
+    let out = run_filtered(p, &policy, "glob", json!({"pattern": "*", "path": "."})).await;
+    assert_eq!(out, ToolOutput::ok("README.md\n(1 entry hidden by policy)"));
+    let out = run_filtered(p, &policy, "list_dir", json!({"path": "."})).await;
+    assert_eq!(
+        out,
+        ToolOutput::ok("README.md\nsrc/\n(1 entry hidden by policy)")
+    );
+    // A root the rule does not name is walked with nothing hidden.
+    let out = run_filtered(p, &policy, "grep", json!({"pattern": "fn", "path": "src"})).await;
+    assert_eq!(
+        out,
+        ToolOutput::ok("src/deep/lib.rs:1: pub fn Hello() {}\nsrc/main.rs:1: fn main() {}")
+    );
+    let out = run_filtered(
+        p,
+        &policy,
+        "glob",
+        json!({"pattern": "**/*", "path": "src"}),
+    )
+    .await;
+    assert_eq!(out, ToolOutput::ok("src/deep/lib.rs\nsrc/main.rs"));
+    let out = run_filtered(p, &policy, "list_dir", json!({"path": "src"})).await;
+    assert_eq!(out, ToolOutput::ok("deep/\nmain.rs"));
 }
 
 #[tokio::test]

@@ -281,6 +281,76 @@ async fn cancel_kills_the_process() {
     }
 }
 
+/// `taskkill /T` follows parent links, so it misses a process whose parent has exited.
+#[cfg(windows)]
+#[tokio::test]
+async fn cancel_kills_a_grandchild_whose_parent_has_exited() {
+    let lingerer = common::Lingerer::new();
+    let e = e2e(
+        json!([init(),
+               {"orphan": lingerer.dir()},
+               {"emit": {"type": "assistant", "message": {"content": [{"type": "text", "text": "orphaned"}]}}},
+               {"sleep_ms": 60000},
+               success("never")]),
+        None,
+    )
+    .await;
+    let dot = folder_dot(&e, 280).await;
+    let run = e
+        .runner
+        .enqueue(NewRun::new(&dot.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    // The text follows the `orphan` step, which ends when the grandchild's parent has exited.
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let evs = e.store.list_events(&run.id, 0).await.unwrap();
+        if evs.iter().any(|ev| ev.kind == "assistant_text") {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the fake CLI did not get past its orphan step"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(lingerer.alive(), "the grandchild should be running");
+    e.runner.cancel(&run.id).await.unwrap();
+    wait_status(&e.store, &run.id, RunStatus::Cancelled, 10).await;
+    assert!(
+        lingerer.gone_within(Duration::from_secs(5)).await,
+        "the grandchild is still running after cancel"
+    );
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn a_finished_run_leaves_no_process_behind() {
+    let lingerer = common::Lingerer::new();
+    let e = e2e(
+        json!([init(), {"orphan": lingerer.dir()}, success("done")]),
+        None,
+    )
+    .await;
+    let dot = folder_dot(&e, 280).await;
+    let started = std::time::Instant::now();
+    let run = e
+        .runner
+        .enqueue(NewRun::new(&dot.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    wait_status(&e.store, &run.id, RunStatus::Succeeded, 15).await;
+    // The grandchild holds the CLI's output pipes; left alone it keeps the run open for 10 s.
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "the run waited for a process its CLI left behind"
+    );
+    assert!(
+        lingerer.gone_within(Duration::from_secs(5)).await,
+        "the grandchild is still running after the run ended"
+    );
+}
+
 #[cfg(windows)]
 fn process_alive(pid: u64) -> bool {
     let out = std::process::Command::new("tasklist")

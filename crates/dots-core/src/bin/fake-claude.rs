@@ -1,9 +1,53 @@
 //! Test stand-in for `claude -p --output-format stream-json`. Used only by dots-core tests.
 
 use std::io::{Read, Write};
-use std::time::Duration;
+use std::path::Path;
+use std::process::Stdio;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
+use tokio::process::{Child, Command};
+
+/// Stays alive until `<dir>/stop` appears, `dir` is removed or 30 s pass, and holds a lock on
+/// `<dir>/alive` all the while. The OS releases the lock when the process dies, so a test sees
+/// whether it still runs without knowing its process id. `<dir>/ready` appears once the lock is
+/// held.
+fn linger(dir: &Path) {
+    let alive = std::fs::File::create(dir.join("alive")).unwrap();
+    alive.lock().unwrap();
+    std::fs::write(dir.join("ready"), "").unwrap();
+    let end = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < end && dir.exists() && !dir.join("stop").exists() {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// This program again, in `mode` for `dir`, with no console window and no streams of its own.
+/// It still inherits every handle of this process, as children on Windows do, so a lingering
+/// process holds the output pipes of whoever started this one, like a real background process.
+fn helper(mode: &str, dir: &str) -> Command {
+    let mut cmd = Command::new(std::env::current_exe().unwrap());
+    cmd.args([mode, dir])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    dots_core::proc::hide_window(&mut cmd);
+    cmd
+}
+
+/// Starts a lingering process and returns once it is ready. Stdin is read to its end first, so
+/// whoever started this process can put it in a job before it has a child.
+async fn start_lingerer(dir: &str) -> Child {
+    std::io::stdin().read_to_end(&mut Vec::new()).ok();
+    let child = helper("--linger", dir).spawn().unwrap();
+    let ready = Path::new(dir).join("ready");
+    let end = Instant::now() + Duration::from_secs(10);
+    while !ready.exists() {
+        assert!(Instant::now() < end, "the lingering process did not start");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    child
+}
 
 fn flag(args: &[String], name: &str) -> Option<String> {
     args.iter()
@@ -68,6 +112,32 @@ async fn main() {
         println!("{version} (Claude Code)");
         return;
     }
+    match (args.first().map(String::as_str), args.get(1)) {
+        (Some("--linger"), Some(dir)) => return linger(Path::new(dir)),
+        // Leaves a lingering child behind: a process whose parent has exited.
+        (Some("--orphan"), Some(dir)) => {
+            start_lingerer(dir).await;
+            return;
+        }
+        // Stays for as long as its lingering child: a tree with every link alive.
+        (Some("--tree"), Some(dir)) => {
+            let _ = start_lingerer(dir).await.wait().await;
+            return;
+        }
+        // Holds an orphan in a job and never lets go of it, as Dots does until it is killed.
+        (Some("--hold-job"), Some(dir)) => {
+            let mut child = helper("--orphan", dir)
+                .stdin(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let _job = dots_core::proc::Job::assign(&child).unwrap();
+            drop(child.stdin.take());
+            let _ = child.wait().await;
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            return;
+        }
+        _ => {}
+    }
     let mut prompt = String::new();
     std::io::stdin().read_to_string(&mut prompt).ok();
     if let Ok(out) = std::env::var("FAKE_CLAUDE_ARGS_OUT") {
@@ -103,6 +173,9 @@ async fn main() {
             eprintln!("{text}");
         } else if let Some(code) = step.get("exit").and_then(Value::as_i64) {
             std::process::exit(code as i32);
+        } else if let Some(dir) = step.get("orphan").and_then(Value::as_str) {
+            // Done once the child has exited and has left its own child lingering in `dir`.
+            assert!(helper("--orphan", dir).status().await.unwrap().success());
         } else if let Some(req) = step.get("approve") {
             let text = approve(mcp.as_ref().expect("--mcp-config is required"), req, i).await;
             let decision: Value = serde_json::from_str(&text).unwrap();
