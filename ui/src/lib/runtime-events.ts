@@ -4,7 +4,7 @@ import { useNavigate } from "react-router";
 
 import { onLagged, onNavigate, onRuntimeEvent, onStatus } from "@/api/events";
 import type { RunEventRecord, RuntimeEvent } from "@/api/types";
-import { invalidate, keys, mergeEvents } from "@/lib/query";
+import { invalidate, keys, mergeEvents, takeStatus } from "@/lib/query";
 
 /// Brings the query caches in step with one runtime event.
 export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
@@ -65,7 +65,7 @@ export function useRuntimeEvents(): void {
       onLagged(refetch),
       onNavigate((path) => void navigate(path)),
       onStatus((status) => {
-        qc.setQueryData(keys.status, status);
+        takeStatus(qc, status);
         // A pause or a resume moves every schedule's next run, which the overview holds.
         invalidate(qc, keys.overview);
       }),

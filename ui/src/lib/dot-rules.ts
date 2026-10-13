@@ -46,6 +46,12 @@ export function parseMcp(
   return { value: parsed as Record<string, unknown> };
 }
 
+/// The MCP servers a draft saves. Only a Claude dot has them: a local dot's form hides the
+/// field, so what it still holds is neither checked nor saved.
+export function mcpOf(spec: DotSpec, mcpText: string): ReturnType<typeof parseMcp> {
+  return spec.engine === "claude" ? parseMcp(mcpText) : { value: null };
+}
+
 /// What is wrong with a draft, by field. Empty when it can be saved.
 export function specErrors(spec: DotSpec, mcpText: string): SpecErrors {
   const errors: SpecErrors = {};
@@ -66,7 +72,7 @@ export function specErrors(spec: DotSpec, mcpText: string): SpecErrors {
   if (spec.policy.rules.some((r) => r.tool.trim() === "")) {
     errors.policy = "Every rule needs a tool pattern.";
   }
-  const mcp = parseMcp(mcpText);
+  const mcp = mcpOf(spec, mcpText);
   if ("error" in mcp) errors.mcp_servers = mcp.error;
   return errors;
 }

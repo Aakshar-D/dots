@@ -13,7 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { errorMessage, notifyError } from "@/lib/notify";
-import { keys } from "@/lib/query";
+import { invalidate, keys, takeStatus } from "@/lib/query";
 
 type Errors = { port?: string; max?: string };
 
@@ -98,14 +98,13 @@ function Form({ stored, status }: { stored: Settings; status: Status | undefined
   const [endpointError, setEndpointError] = useState<string>();
   const [tried, setTried] = useState(false);
   const set = (change: Partial<Settings>) => setDraft({ ...draft, ...change });
-  const takeStatus = (next: Status) => qc.setQueryData(keys.status, next);
 
   const save = useMutation({
     mutationFn: commands.updateSettings,
     onSuccess: (saved) => {
       qc.setQueryData(keys.settings, saved.settings);
       // The restart banner comes from the status.
-      void qc.invalidateQueries({ queryKey: keys.status });
+      invalidate(qc, keys.status);
       toast.success(saved.restart_required ? "Saved. Restart Dots to apply." : "Saved");
     },
   });
@@ -114,14 +113,15 @@ function Form({ stored, status }: { stored: Settings; status: Status | undefined
   const pause = useMutation({
     mutationFn: commands.setSchedulesPaused,
     onSuccess: (next) => {
-      takeStatus(next);
-      void qc.invalidateQueries({ queryKey: keys.overview });
+      takeStatus(qc, next);
+      // A pause or a resume moves every schedule's next run, which the Dots list holds.
+      invalidate(qc, keys.overview);
     },
     onError: notifyError,
   });
   const markTested = useMutation({
     mutationFn: commands.markClaudeTested,
-    onSuccess: takeStatus,
+    onSuccess: (next) => takeStatus(qc, next),
     onError: notifyError,
   });
 
@@ -255,7 +255,11 @@ function Form({ stored, status }: { stored: Settings; status: Status | undefined
             id="settings-claude-path"
             className="font-mono"
             value={claudePath}
-            onChange={(e) => setClaudePath(e.target.value)}
+            onChange={(e) => {
+              setClaudePath(e.target.value);
+              // "Not saved" is about the path that was declined, not about this one.
+              if (declined) save.reset();
+            }}
           />
         </Field>
       </Section>

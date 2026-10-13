@@ -1,7 +1,7 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import type { Dot, DotOverview } from "@/api/types";
+import type { Dot, DotOverview, Run } from "@/api/types";
 import { localDateTime } from "@/lib/format";
 import { nextRun } from "@/screens/DotsScreen";
 import { backend, later } from "@/test/backend";
@@ -121,6 +121,57 @@ describe("the Dots screen", () => {
     );
     expect(backend.callsTo("set_dot_enabled")).toEqual([{ id: scheduled.dot.id, enabled: false }]);
     expect(within(row(scheduled.dot.name)).getByText("Disabled")).toBeVisible();
+  });
+
+  it("holds only the switch of the dot that is being switched", async () => {
+    backend.on("dot_overview", () => [scheduled, busy]);
+    const answers = { [scheduled.dot.id]: later<Dot>(), [busy.dot.id]: later<Dot>() };
+    backend.on("set_dot_enabled", (args) => answers[args.id as string].answer);
+    const { user } = renderApp("/dots");
+    const first = await screen.findByRole("switch", { name: `${scheduled.dot.name} enabled` });
+    const second = screen.getByRole("switch", { name: "triage enabled" });
+
+    await user.click(first);
+    await waitFor(() => expect(first).toBeDisabled());
+    expect(second).toBeEnabled();
+    await user.click(second);
+    await waitFor(() => expect(second).toBeDisabled());
+    expect(backend.callsTo("set_dot_enabled")).toEqual([
+      { id: scheduled.dot.id, enabled: false },
+      { id: busy.dot.id, enabled: false },
+    ]);
+
+    // Each switch is free again when its own command has answered.
+    await act(async () => answers[busy.dot.id].give({ ...busy.dot, enabled: false }));
+    await waitFor(() => expect(second).toBeEnabled());
+    expect(first).toBeDisabled();
+    await act(async () => answers[scheduled.dot.id].give({ ...scheduled.dot, enabled: false }));
+    await waitFor(() => expect(first).toBeEnabled());
+  });
+
+  it("holds only the Run button of the dot that is being started", async () => {
+    backend.on("dot_overview", () => [scheduled, busy]);
+    const answers = { [scheduled.dot.id]: later<Run>(), [busy.dot.id]: later<Run>() };
+    backend.on("run_now", (args) => answers[args.dotId as string].answer);
+    const { user, router } = renderApp("/dots");
+    const first = await screen.findByRole("button", { name: `Run ${scheduled.dot.name} now` });
+    const second = screen.getByRole("button", { name: "Run triage now" });
+
+    await user.click(first);
+    await waitFor(() => expect(first).toBeDisabled());
+    expect(second).toBeEnabled();
+    await user.click(second);
+    await waitFor(() => expect(second).toBeDisabled());
+    expect(backend.callsTo("run_now")).toEqual([
+      { dotId: scheduled.dot.id },
+      { dotId: busy.dot.id },
+    ]);
+
+    // Each started run is opened when the core has answered: the last answer is what stays.
+    await act(async () => answers[busy.dot.id].give({ ...sample.run, id: "run-triage" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/runs/run-triage"));
+    await act(async () => answers[scheduled.dot.id].give({ ...sample.run, id: "run-nightly" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/runs/run-nightly"));
   });
 
   /// A backend holding one dot, for a walk between the list and the dot's editor.

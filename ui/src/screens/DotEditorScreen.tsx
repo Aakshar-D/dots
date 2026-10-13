@@ -11,7 +11,7 @@ import { ErrorNote } from "@/components/ErrorNote";
 import { Page } from "@/components/Page";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { parseMcp, specErrors, specOf } from "@/lib/dot-rules";
+import { mcpOf, specErrors, specOf } from "@/lib/dot-rules";
 import { errorMessage, notifyError } from "@/lib/notify";
 import { invalidateDots, keys, useSwitchingDot } from "@/lib/query";
 import { useDebounced } from "@/lib/use-debounced";
@@ -55,7 +55,7 @@ function Editor(props: {
   function submit() {
     setTried(true);
     if (Object.keys(errors).length > 0) return;
-    const mcp = parseMcp(draft.mcpText);
+    const mcp = mcpOf(draft.spec, draft.mcpText);
     save.mutate({
       ...draft.spec,
       schedule: draft.spec.schedule?.trim() || null,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseMcp, specErrors, specOf } from "@/lib/dot-rules";
+import { mcpOf, parseMcp, specErrors, specOf } from "@/lib/dot-rules";
 import { blankSpec, sample } from "@/test/fixtures";
 
 const good = { ...blankSpec, name: "nightly", instructions: "Run the tests.", workdir: "C:/dev" };
@@ -60,6 +60,16 @@ describe("dot editor rules", () => {
     expect(parseMcp('"x"')).toHaveProperty("error");
     expect(parseMcp('{"dots": {}}')).toEqual({ error: "The server name 'dots' is reserved." });
     expect(specErrors(good, "{nope").mcp_servers).toBe("This is not valid JSON.");
+  });
+
+  it("checks and saves the MCP servers of a Claude dot only", () => {
+    const local = { ...good, engine: "local" as const, endpoint_url: "http://127.0.0.1:1234" };
+    // A local dot's form hides the field: what it still holds is neither checked nor saved.
+    expect(specErrors(local, "{nope")).toEqual({});
+    expect(mcpOf(local, '{"gh": {}}')).toEqual({ value: null });
+    expect(mcpOf(local, "{nope")).toEqual({ value: null });
+    expect(mcpOf(good, '{"gh": {}}')).toEqual({ value: { gh: {} } });
+    expect(mcpOf(good, "{nope")).toEqual({ error: "This is not valid JSON." });
   });
 
   it("takes the editable fields of a stored dot", () => {

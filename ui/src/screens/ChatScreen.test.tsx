@@ -2,7 +2,7 @@ import { act, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import type { Approval, Dot, Run, RunEventRecord } from "@/api/types";
-import { backend } from "@/test/backend";
+import { backend, later } from "@/test/backend";
 import { sample } from "@/test/fixtures";
 import { renderApp } from "@/test/render";
 
@@ -25,6 +25,16 @@ const said = (runId: string, seq: number, text: string): RunEventRecord => ({
   kind: "assistant_text",
   data: { kind: "assistant_text", text },
 });
+
+/// A browser takes the focus from a control that is disabled and leaves it on the page. jsdom
+/// keeps it on the control and cannot blur it there, so the focus goes by way of another one.
+function loseFocus() {
+  const other = screen.getByLabelText("Dot");
+  act(() => {
+    other.focus();
+    other.blur();
+  });
+}
 
 /// A backend holding the dot's chat runs; `chat` appends a queued run like the core does.
 function chats(runs: Run[], events: RunEventRecord[] = [], approvals: Approval[] = []) {
@@ -195,6 +205,106 @@ describe("the Chat screen", () => {
     await waitFor(() => expect(screen.getByLabelText("Message")).toBeEnabled());
   });
 
+  it("says that a chat whose last run ended without a session cannot be continued", async () => {
+    const working = chat("a", "10:00", { status: "running", ended_at: null, session_id: null });
+    const runs = chats([working]);
+    const { user, router } = renderApp(`/chat/${dot.id}/a`);
+    const conversation = within(await screen.findByRole("region", { name: "Conversation" }));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Message")).toHaveAttribute("placeholder", "The dot is working…"),
+    );
+    // The run can still get its session.
+    expect(conversation.queryByText(/cannot be continued/)).toBeNull();
+
+    // It fails before the engine has one: the core would refuse every follow-up.
+    const failed: Run = {
+      ...working,
+      status: "failed",
+      summary: null,
+      error: "the claude CLI was not found",
+      ended_at: sample.run.ended_at,
+    };
+    runs[0] = failed;
+    act(() => backend.emit("runtime", { type: "run_updated", run: failed }));
+    expect(await conversation.findByText(/This chat cannot be continued/)).toBeVisible();
+    expect(screen.getByLabelText("Message")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+
+    await user.click(conversation.getByRole("link", { name: "Start a new chat" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe(`/chat/${dot.id}`));
+    expect(await screen.findByLabelText("Message")).toBeEnabled();
+  });
+
+  it("gives the message box the focus back when the answer to a send has ended", async () => {
+    const runs = chats([chat("a", "10:00")]);
+    const { user } = renderApp(`/chat/${dot.id}/a`);
+    const box = await screen.findByLabelText("Message");
+    await waitFor(() => expect(box).toBeEnabled());
+    await user.type(box, "And now?{Enter}");
+    await waitFor(() => expect(box).toHaveAttribute("placeholder", "The dot is working…"));
+    loseFocus();
+    expect(box).not.toHaveFocus();
+
+    const done: Run = { ...runs[1], status: "succeeded", ended_at: sample.run.ended_at };
+    runs[1] = done;
+    act(() => backend.emit("runtime", { type: "run_updated", run: done }));
+    await waitFor(() => expect(box).toBeEnabled());
+    expect(box).toHaveFocus();
+  });
+
+  it("gives the message box the focus back, with its text, after a refused send", async () => {
+    chats([chat("a", "10:00")]);
+    const refusal = later<Run>();
+    backend.on("chat", () => refusal.answer);
+    const { user } = renderApp(`/chat/${dot.id}/a`);
+    const box = await screen.findByLabelText("Message");
+    await waitFor(() => expect(box).toBeEnabled());
+    await user.type(box, "hello{Enter}");
+    await waitFor(() => expect(box).toBeDisabled());
+    loseFocus();
+    expect(box).not.toHaveFocus();
+
+    await act(async () => refusal.fail({ kind: "conflict", message: "the dot is disabled" }));
+    await waitFor(() => expect(box).toBeEnabled());
+    expect(box).toHaveFocus();
+    expect(box).toHaveValue("hello");
+  });
+
+  it("leaves the focus where the user put it while the dot worked", async () => {
+    const working = chat("a", "10:00", { status: "running", ended_at: null });
+    const runs = chats([working]);
+    renderApp(`/chat/${dot.id}/a`);
+    const box = await screen.findByLabelText("Message");
+    await waitFor(() => expect(box).toBeDisabled());
+    const picker = screen.getByLabelText("Dot");
+    act(() => picker.focus());
+
+    const done: Run = { ...working, status: "succeeded", ended_at: sample.run.ended_at };
+    runs[0] = done;
+    act(() => backend.emit("runtime", { type: "run_updated", run: done }));
+    await waitFor(() => expect(box).toBeEnabled());
+    expect(picker).toHaveFocus();
+  });
+
+  it("lists a chat that was started while the list of chats was loading", async () => {
+    const runs = chats([]);
+    const { user, router, listening } = renderApp("/chat");
+    await screen.findByText("Choose a dot to chat with.");
+    await listening();
+
+    // The list of the dot's chats is read before the first message is sent, and answers after.
+    const read = later<Run[]>();
+    backend.on("list_runs", () => (backend.callsTo("list_runs").length === 1 ? read.answer : runs));
+    await user.selectOptions(screen.getByLabelText("Dot"), dot.id);
+    await user.type(await screen.findByLabelText("Message"), "Why did the build fail?{Enter}");
+    await waitFor(() => expect(router.state.location.pathname).toBe(`/chat/${dot.id}/run-1`));
+    await act(async () => read.give([]));
+
+    const list = within(screen.getByRole("navigation", { name: "Chats" }));
+    expect(await list.findByRole("link", { name: /Why did the build fail/ })).toBeVisible();
+    expect(backend.callsTo("list_runs")).toHaveLength(2);
+  });
+
   it("writes a line break on Shift+Enter instead of sending", async () => {
     chats([]);
     const { user } = renderApp(`/chat/${dot.id}`);
@@ -273,5 +383,98 @@ describe("the Chat screen", () => {
     expect(screen.getByLabelText("Message")).toHaveValue("hello");
     const conversation = screen.getByRole("region", { name: "Conversation" });
     expect(within(conversation).getByText("question a")).toBeVisible();
+  });
+
+  /// A core that holds one more run of thread "a" than the screen does, and so refuses the
+  /// screen's next follow-up. `run_thread` answers with that run from the refusal on.
+  function behind(newer: Partial<Run>, refusal: string) {
+    const runs = chats([chat("a", "10:00")]);
+    const thread = { root_run_id: "a", parent_run_id: "a" };
+    backend.on("chat", () => {
+      if (backend.callsTo("chat").length === 1) {
+        runs.push(chat("a2", "10:05", { ...thread, ...newer }));
+        throw { kind: "conflict", message: refusal };
+      }
+      const next = chat("a3", "10:10", { ...thread, parent_run_id: "a2", status: "queued" });
+      runs.push(next);
+      return next;
+    });
+    return runs;
+  }
+
+  it("loads the thread and the list of chats again when a follow-up is refused", async () => {
+    behind(
+      { payload: { message: "asked in another window" } },
+      "this chat has a newer message than the one you replied to; open the chat again, then send your message",
+    );
+    const { user, listening } = renderApp(`/chat/${dot.id}/a`);
+    const box = await screen.findByLabelText("Message");
+    await waitFor(() => expect(box).toBeEnabled());
+    await listening();
+    const asked = { thread: backend.callsTo("run_thread").length, list: backend.callsTo("list_runs").length };
+
+    await user.type(box, "hello{Enter}");
+    expect(await screen.findByText(/this chat has a newer message/)).toBeVisible();
+    // The run the screen did not know of is in the transcript, and the text is still there.
+    const conversation = within(screen.getByRole("region", { name: "Conversation" }));
+    expect(await conversation.findByText("asked in another window")).toBeVisible();
+    expect(box).toHaveValue("hello");
+    expect(backend.callsTo("run_thread")).toHaveLength(asked.thread + 1);
+    expect(backend.callsTo("list_runs")).toHaveLength(asked.list + 1);
+
+    // The next try replies to the run the thread really ends with.
+    await waitFor(() => expect(box).toBeEnabled());
+    await user.type(box, "{Enter}");
+    await waitFor(() => expect(backend.callsTo("chat")).toHaveLength(2));
+    expect(backend.callsTo("chat")[1]).toEqual({
+      dotId: dot.id,
+      message: "hello",
+      parentRunId: "a2",
+    });
+  });
+
+  it("says that the chat cannot be continued when a refusal brings a last run without a session", async () => {
+    behind(
+      { status: "failed", summary: null, error: "the claude CLI was not found", session_id: null },
+      "this chat cannot be continued because its last run ended before the dot started working; start a new chat",
+    );
+    const { user } = renderApp(`/chat/${dot.id}/a`);
+    const box = await screen.findByLabelText("Message");
+    await waitFor(() => expect(box).toBeEnabled());
+    await user.type(box, "hello{Enter}");
+
+    const conversation = within(screen.getByRole("region", { name: "Conversation" }));
+    expect(await conversation.findByText(/This chat cannot be continued/)).toBeVisible();
+    expect(conversation.getByRole("link", { name: "Start a new chat" })).toBeVisible();
+    expect(box).toBeDisabled();
+    expect(box).toHaveValue("hello");
+    // No second try goes out.
+    await user.type(box, "{Enter}");
+    expect(backend.callsTo("chat")).toHaveLength(1);
+  });
+
+  it("keeps the composer locked after a refused follow-up until the thread has reloaded", async () => {
+    const runs = behind(
+      { status: "running", ended_at: null },
+      "the dot is still working on this chat; wait until it has finished, then send your message again",
+    );
+    const { user } = renderApp(`/chat/${dot.id}/a`);
+    const box = await screen.findByLabelText("Message");
+    await waitFor(() => expect(box).toBeEnabled());
+
+    // From now on the thread reload is held until the test lets it answer.
+    const read = later<Run[]>();
+    backend.on("run_thread", () => read.answer);
+    await user.type(box, "hello{Enter}");
+    expect(await screen.findByText(/the dot is still working on this chat/)).toBeVisible();
+    // Until the thread is here the screen still ends at the old run: no second try.
+    expect(box).toBeDisabled();
+    await user.type(box, "{Enter}");
+    expect(backend.callsTo("chat")).toHaveLength(1);
+
+    await act(async () => read.give(runs));
+    await waitFor(() => expect(box).toHaveAttribute("placeholder", "The dot is working…"));
+    expect(box).toBeDisabled();
+    expect(box).toHaveValue("hello");
   });
 });

@@ -1,9 +1,9 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import type { Settings } from "@/api/types";
+import type { DotOverview, Settings, Status } from "@/api/types";
 import { settingsErrors } from "@/screens/SettingsScreen";
-import { backend } from "@/test/backend";
+import { backend, later } from "@/test/backend";
 import { quietStatus, sample } from "@/test/fixtures";
 import { renderApp } from "@/test/render";
 
@@ -111,6 +111,24 @@ describe("the Settings screen", () => {
     expect(screen.queryByText("Saved")).toBeNull();
   });
 
+  it("stops saying 'Not saved' once the path is edited after a decline", async () => {
+    backend.on("update_settings", () => {
+      throw { kind: "cancelled", message: "the Claude program was not changed" };
+    });
+    const { user } = renderApp("/settings");
+    const path = await screen.findByLabelText("Program path");
+    await user.type(path, "C:/evil.exe");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText(/^Not saved:/)).toBeVisible();
+
+    // Another field does not answer what was declined; a new path does.
+    await user.click(screen.getByLabelText("Start Dots when I sign in"));
+    expect(screen.getByText(/^Not saved:/)).toBeVisible();
+    await user.type(path, "{Backspace}");
+    expect(screen.queryByText(/^Not saved:/)).toBeNull();
+    expect(screen.getByText(/^Leave empty to find claude on your PATH/)).toBeVisible();
+  });
+
   it("shows the core's refusal when a save fails", async () => {
     backend.on("update_settings", () => {
       throw { kind: "invalid", message: "endpoint_url must start with http://" };
@@ -118,6 +136,9 @@ describe("the Settings screen", () => {
     const { user } = renderApp("/settings");
     await user.click(await screen.findByRole("button", { name: "Save" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("must start with http://");
+    // A refusal is about what was sent: it stays until the next save, whatever is typed.
+    await user.type(screen.getByLabelText("Program path"), "x");
+    expect(screen.getByRole("alert")).toHaveTextContent("must start with http://");
   });
 
   it("adds and removes local endpoints", async () => {
@@ -172,6 +193,67 @@ describe("the Settings screen", () => {
     expect(backend.callsTo("set_schedules_paused")).toEqual([{ paused: true }]);
     expect(backend.callsTo("update_settings")).toEqual([]);
     expect(await screen.findByRole("button", { name: "Resume schedules" })).toBeVisible();
+  });
+
+  it("keeps a pause when an older status was on its way", async () => {
+    let paused = false;
+    backend.on("status", () => ({ ...quietStatus, schedules_paused: paused }));
+    backend.on("set_schedules_paused", (args) => {
+      paused = args.paused as boolean;
+      return { ...quietStatus, schedules_paused: paused };
+    });
+    const { user, listening, queryClient } = renderApp("/settings");
+    const pause = await screen.findByLabelText("Pause all schedules");
+    await listening();
+
+    // The status is asked for again, and the core reads it for that answer before the pause.
+    const read = later<Status>();
+    const asked = backend.callsTo("status").length;
+    backend.on("status", () =>
+      backend.callsTo("status").length === asked + 1
+        ? read.answer
+        : { ...quietStatus, schedules_paused: paused },
+    );
+    act(() => backend.emit("runtime-lagged", null));
+    await waitFor(() => expect(backend.callsTo("status")).toHaveLength(asked + 1));
+    await user.click(pause);
+    await waitFor(() => expect(pause).toBeChecked());
+    await act(async () => read.give(quietStatus));
+    await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+
+    expect(pause).toBeChecked();
+    expect(backend.callsTo("status")).toHaveLength(asked + 2);
+  });
+
+  it("makes the Dots list load again after a pause that came during its first load", async () => {
+    let paused = false;
+    backend.on("status", () => ({ ...quietStatus, schedules_paused: paused }));
+    backend.on("set_schedules_paused", (args) => {
+      paused = args.paused as boolean;
+      return { ...quietStatus, schedules_paused: paused };
+    });
+    const { user, listening } = renderApp("/settings");
+    await screen.findByLabelText("Pause all schedules");
+    await listening();
+
+    // The Dots list is read, and left for Settings before its answer is here.
+    const before: DotOverview = sample.overview;
+    const after: DotOverview = { ...before, dot: { ...before.dot, name: "read-after-the-pause" } };
+    const read = later<DotOverview[]>();
+    backend.on("dot_overview", () =>
+      backend.callsTo("dot_overview").length === 1 ? read.answer : [after],
+    );
+    await user.click(screen.getByRole("link", { name: "Dots" }));
+    await waitFor(() => expect(backend.callsTo("dot_overview")).toHaveLength(1));
+    await user.click(screen.getByRole("link", { name: "Settings" }));
+    await user.click(await screen.findByLabelText("Pause all schedules"));
+    await waitFor(() => expect(screen.getByLabelText("Pause all schedules")).toBeChecked());
+    await act(async () => read.give([before]));
+
+    // The answer was read before the pause, so the list is asked for again when it is shown.
+    await user.click(screen.getByRole("link", { name: "Dots" }));
+    expect(await screen.findByRole("link", { name: "read-after-the-pause" })).toBeVisible();
+    expect(backend.callsTo("dot_overview")).toHaveLength(2);
   });
 
   it("offers to mark an untested CLI version as tested", async () => {

@@ -154,6 +154,45 @@ describe("the dot editor, stored dot", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("only allowed as a trailing");
   });
 
+  const endpoint = "http://127.0.0.1:1234";
+
+  it("saves a dot switched to the local engine without its MCP servers", async () => {
+    stored();
+    const { user } = renderApp(path);
+    await user.selectOptions(await screen.findByLabelText("Engine"), "local");
+    await user.type(screen.getByLabelText("Endpoint"), endpoint);
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("Saved")).toBeVisible();
+    // The dot was stored with MCP servers, which only the Claude engine has.
+    expect(dot.mcp_servers).not.toBeNull();
+    expect(backend.callsTo("update_dot")).toEqual([
+      {
+        id: dot.id,
+        spec: { ...specOf(dot), engine: "local", endpoint_url: endpoint, mcp_servers: null },
+      },
+    ]);
+  });
+
+  it("does not hold a local dot back for MCP text its form no longer shows", async () => {
+    stored();
+    const { user } = renderApp(path);
+    // user-event reads "{{" as one typed "{". Added to the stored servers, it is not JSON.
+    await user.type(await screen.findByLabelText("MCP servers"), "{{nope");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("Fix the marked fields");
+    expect(screen.getByText("This is not valid JSON.")).toBeVisible();
+
+    await user.selectOptions(screen.getByLabelText("Engine"), "local");
+    await user.type(screen.getByLabelText("Endpoint"), endpoint);
+    expect(screen.queryByRole("alert")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("Saved")).toBeVisible();
+    expect(backend.callsTo("update_dot")).toHaveLength(1);
+    expect(backend.callsTo("update_dot")[0]).toMatchObject({
+      spec: { engine: "local", mcp_servers: null },
+    });
+  });
+
   it("deletes the dot only after a confirmation", async () => {
     stored();
     backend.on("delete_dot", () => null);

@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useMutationState, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Play, Plus } from "lucide-react";
 import { Link, useNavigate } from "react-router";
 
@@ -21,6 +21,9 @@ import { localDateTime, relativeTime } from "@/lib/format";
 import { notifyError } from "@/lib/notify";
 import { invalidateDots, keys, setDotEnabledMutation } from "@/lib/query";
 
+/// The key of this screen's "Run now", so that the ones on their way can be found.
+const RUN_NOW = ["run-now"] as const;
+
 /// When the dot runs next on its schedule, or why it will not.
 export function nextRun(row: DotOverview, schedulesPaused: boolean): string {
   if (!row.dot.schedule) return "No schedule";
@@ -35,9 +38,21 @@ export function DotsScreen() {
   const overview = useQuery({ queryKey: keys.overview, queryFn: commands.dotOverview });
   const status = useQuery({ queryKey: keys.status, queryFn: commands.status }).data;
   const runNow = useMutation({
+    mutationKey: RUN_NOW,
     mutationFn: commands.runNow,
     onSuccess: (run) => void navigate(`/runs/${run.id}`),
     onError: notifyError,
+  });
+  // A row's switch and its Run button are held while that dot's own command is on its way,
+  // and no other row's. Each command is its own mutation, so several can be pending at once,
+  // which `runNow.isPending` and `setEnabled.isPending` cannot tell apart.
+  const starting = useMutationState({
+    filters: { mutationKey: RUN_NOW, status: "pending" },
+    select: (mutation) => mutation.state.variables as string,
+  });
+  const switching = useMutationState({
+    filters: { mutationKey: setDotEnabledMutation.mutationKey, status: "pending" },
+    select: (mutation) => (mutation.state.variables as { id: string }).id,
   });
   const setEnabled = useMutation({
     ...setDotEnabledMutation,
@@ -133,7 +148,7 @@ export function DotsScreen() {
                   <Switch
                     aria-label={`${dot.name} enabled`}
                     checked={dot.enabled}
-                    disabled={setEnabled.isPending}
+                    disabled={switching.includes(dot.id)}
                     onCheckedChange={(enabled) => setEnabled.mutate({ id: dot.id, enabled })}
                   />
                 </TableCell>
@@ -141,7 +156,7 @@ export function DotsScreen() {
                   <Button
                     size="sm"
                     variant="outline"
-                    disabled={runNow.isPending}
+                    disabled={starting.includes(dot.id)}
                     onClick={() => runNow.mutate(dot.id)}
                     aria-label={`Run ${dot.name} now`}
                   >

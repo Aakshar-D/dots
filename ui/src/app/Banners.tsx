@@ -4,9 +4,10 @@ import { Link } from "react-router";
 
 import { commands } from "@/api/commands";
 import type { Status } from "@/api/types";
+import { ConfirmButton } from "@/components/ConfirmButton";
 import { Button } from "@/components/ui/button";
 import { notifyError } from "@/lib/notify";
-import { keys } from "@/lib/query";
+import { invalidate, keys, takeStatus } from "@/lib/query";
 
 function Banner(props: { tone: "error" | "warning" | "info"; children: ReactNode }) {
   const tone = {
@@ -24,12 +25,51 @@ function Banner(props: { tone: "error" | "warning" | "info"; children: ReactNode
   );
 }
 
+/// "Restart Dots". With no run that has not ended it restarts at once. Otherwise it asks
+/// first: `active` names the dots that have such a run, and is `undefined` when that is not
+/// known, which asks too.
+function RestartButton(props: {
+  active: string[] | undefined;
+  disabled: boolean;
+  onRestart: () => void;
+}) {
+  const { active } = props;
+  if (active?.length === 0) {
+    return (
+      <Button size="sm" variant="outline" disabled={props.disabled} onClick={props.onRestart}>
+        Restart Dots
+      </Button>
+    );
+  }
+  const found = !active
+    ? "Dots could not check whether a run is active."
+    : active.length === 1
+      ? `${active[0]} has a run that has not ended.`
+      : `${active.join(", ")} have runs that have not ended.`;
+  return (
+    <ConfirmButton
+      title="Restart Dots now?"
+      description={
+        <>
+          {found} A run that is working is stopped by the restart and ends as failed
+          ("interrupted"). Runs that wait in the queue or for an approval continue after it.
+        </>
+      }
+      confirmLabel="Restart now"
+      onConfirm={props.onRestart}
+      disabled={props.disabled}
+    >
+      Restart Dots
+    </ConfirmButton>
+  );
+}
+
 /// What the user must know on every screen: no local server, no or an untested CLI, settings
 /// waiting for a restart, paused schedules.
 export function Banners() {
   const qc = useQueryClient();
   const status = useQuery({ queryKey: keys.status, queryFn: commands.status }).data;
-  const take = (next: Status) => qc.setQueryData(keys.status, next);
+  const take = (next: Status) => takeStatus(qc, next);
   const markTested = useMutation({
     mutationFn: commands.markClaudeTested,
     onSuccess: take,
@@ -39,11 +79,20 @@ export function Banners() {
     mutationFn: () => commands.setSchedulesPaused(false),
     onSuccess: (next) => {
       take(next);
-      void qc.invalidateQueries({ queryKey: keys.overview });
+      invalidate(qc, keys.overview);
     },
     onError: notifyError,
   });
   const restart = useMutation({ mutationFn: commands.restartApp, onError: notifyError });
+  // A restart ends a run that is working as failed ("interrupted"), so the restart button asks
+  // first while a run has not ended. The Dots list holds that: each dot's newest run that is
+  // queued, running or awaiting approval. It is asked for only while a restart is on offer,
+  // and runtime events keep it current like on the Dots screen.
+  const overview = useQuery({
+    queryKey: keys.overview,
+    queryFn: commands.dotOverview,
+    enabled: status?.restart_required === true,
+  });
   if (!status) return null;
   const { claude } = status;
   const settings = (
@@ -90,14 +139,12 @@ export function Banners() {
       {status.restart_required && (
         <Banner tone="warning">
           <span className="flex-1">Some settings take effect after a restart.</span>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={restart.isPending}
-            onClick={() => restart.mutate()}
-          >
-            Restart Dots
-          </Button>
+          <RestartButton
+            // `undefined` until the list is here, and when it could not be loaded.
+            active={overview.data?.filter((row) => row.active_run).map((row) => row.dot.name)}
+            disabled={restart.isPending || overview.isPending}
+            onRestart={() => restart.mutate()}
+          />
         </Banner>
       )}
       {status.schedules_paused && (

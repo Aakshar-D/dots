@@ -1,7 +1,7 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { cn } from "cn";
 import { Plus, Send } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 
 import { commands } from "@/api/commands";
@@ -17,7 +17,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { chatThreads, isActive } from "@/lib/chat-threads";
 import { relativeTime } from "@/lib/format";
 import { notifyError } from "@/lib/notify";
-import { eventsQuery, keys } from "@/lib/query";
+import { eventsQuery, invalidate, keys } from "@/lib/query";
 
 /// Where a message is typed. Enter sends; Shift+Enter starts a new line. The text is cleared
 /// once the send has succeeded; a refused message stays for another try.
@@ -27,6 +27,19 @@ function Composer(props: {
   onSend: (message: string) => Promise<unknown>;
 }) {
   const [text, setText] = useState("");
+  const box = useRef<HTMLTextAreaElement>(null);
+  // The box is disabled while a send is on its way and while the dot works, and a browser
+  // takes the focus from a disabled control. When the box can be used again it gets the focus
+  // back, unless the user has put it somewhere else in the meantime.
+  const wasDisabled = useRef(props.disabled);
+  useEffect(() => {
+    const freed = wasDisabled.current && !props.disabled;
+    wasDisabled.current = props.disabled;
+    const focused = document.activeElement;
+    if (freed && (focused === null || focused === document.body || focused === box.current)) {
+      box.current?.focus();
+    }
+  }, [props.disabled]);
   function send() {
     const message = text.trim();
     if (message === "" || props.disabled) return;
@@ -43,6 +56,7 @@ function Composer(props: {
       </label>
       <Textarea
         id="chat-message"
+        ref={box}
         rows={2}
         placeholder={props.hint}
         disabled={props.disabled}
@@ -80,15 +94,30 @@ function Conversation({ dotId, rootId }: { dotId: string; rootId: string }) {
   const latest = runs.at(-1);
   // A follow-up continues from the thread's last run, so it has to have ended.
   const busy = runs.some(isActive);
+  // And it resumes that run's session. A run that ended before its engine had one (a failed
+  // start, a cancel while queued) leaves nothing to resume: the core refuses every follow-up.
+  const closed = !busy && latest !== undefined && latest.session_id === null;
+  // Loads the dot's chats and the thread again. The thread's promise is returned for the send
+  // to wait on. That needs the promise `invalidate` does not give, and not its care for a
+  // fetch in flight: the thread is on screen with its runs, so a refetch on its way is started
+  // again.
+  const reload = () => {
+    invalidate(qc, ["runs"]);
+    return qc.invalidateQueries({ queryKey: ["thread"] });
+  };
   const send = useMutation({
     mutationFn: (message: string) => commands.chat(dotId, message, latest!.id),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["runs"] });
-      // Returned, so the send stays pending until the thread has reloaded: until then the
-      // thread still ends at the old run, and a second message would continue from it.
-      return qc.invalidateQueries({ queryKey: ["thread"] });
+    // Returned, so the send stays pending until the thread has reloaded: until then the
+    // thread still ends at the old run, and a second message would continue from it.
+    onSuccess: reload,
+    // The core refuses a follow-up when the thread it holds is ahead of this one: a newer
+    // message, a run that still works or waits for an approval, a last run without a session.
+    // So the thread is loaded again after any refusal, and the composer follows what it brings;
+    // until then a second try would only be refused the same way.
+    onError: (error) => {
+      notifyError(error);
+      return reload();
     },
-    onError: notifyError,
   });
   if (thread.isPending) return null;
   if (thread.isError) return <ErrorNote error={thread.error} />;
@@ -111,10 +140,26 @@ function Conversation({ dotId, rootId }: { dotId: string; rootId: string }) {
             {failure}
           </p>
         )}
+        {closed && (
+          <p className="text-muted-foreground">
+            This chat cannot be continued: its last run ended before the dot had a session to
+            resume.{" "}
+            <Link to={`/chat/${dotId}`} className="underline">
+              Start a new chat
+            </Link>
+            .
+          </p>
+        )}
       </div>
       <Composer
-        disabled={busy || send.isPending || !latest}
-        hint={busy ? "The dot is working…" : "Reply to continue this chat"}
+        disabled={busy || send.isPending || !latest || closed}
+        hint={
+          busy
+            ? "The dot is working…"
+            : closed
+              ? "This chat cannot be continued"
+              : "Reply to continue this chat"
+        }
         onSend={(message) => send.mutateAsync(message)}
       />
     </>
@@ -128,7 +173,7 @@ function NewConversation({ dotId }: { dotId: string }) {
   const start = useMutation({
     mutationFn: (message: string) => commands.chat(dotId, message, null),
     onSuccess: (run) => {
-      void qc.invalidateQueries({ queryKey: ["runs"] });
+      invalidate(qc, ["runs"]);
       void navigate(`/chat/${dotId}/${run.id}`);
     },
     onError: notifyError,

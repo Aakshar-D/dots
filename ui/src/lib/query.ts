@@ -1,7 +1,7 @@
 import { QueryClient, useIsMutating, type QueryKey } from "@tanstack/react-query";
 
 import { commands } from "@/api/commands";
-import type { RunEventRecord } from "@/api/types";
+import type { RunEventRecord, Status } from "@/api/types";
 
 /// Data stays fresh until a runtime event or a mutation marks it stale (lib/runtime-events.ts):
 /// the backend tells the UI when something changed, so nothing polls.
@@ -78,6 +78,16 @@ export function invalidate(qc: QueryClient, queryKey?: QueryKey): void {
       void qc.invalidateQueries({ queryKey: key, exact: true }, { cancelRefetch: false });
     void settled?.then(again, again);
   }
+}
+
+/// Takes a status the backend sent: the tray's event, or the answer of a command that changed
+/// it. A question about the status that is on its way may have been answered before that
+/// change, and its answer would replace this status. So that question is dropped for one asked
+/// now: marking a query that has data and is on screen stale starts its fetch again.
+export function takeStatus(qc: QueryClient, status: Status): void {
+  const asking = qc.getQueryState(keys.status)?.fetchStatus === "fetching";
+  qc.setQueryData(keys.status, status);
+  if (asking) invalidate(qc, keys.status);
 }
 
 /// Marks stale everything a change to a dot can show up in: the dot lists, every loaded dot,
