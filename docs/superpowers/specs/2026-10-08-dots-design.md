@@ -641,9 +641,13 @@ notify. Unread count = pending approvals + runs awaiting review.
     must be a direct child of `<data dir>/worktrees` and its branch must be
     `dots/<name>/<that folder's name>`; untracked symlinks are listed, not followed. A link is
     shown as git shows one (mode 120000, one line with its target), and the files git names
-    behind a junction are left out. After git has removed a worktree, whatever is left of its
-    folder is deleted without following links (`git worktree remove` leaves a junction and its
-    folder behind and still succeeds). Discard finds the repository from the worktree itself.
+    behind a junction are left out. The row's base commit must be a full hexadecimal commit id
+    and is passed to git after `--end-of-options`. The check runs before any git command, also
+    where an unchanged worktree is cleaned up. After git has removed a worktree, or has failed
+    half way, whatever is left of its folder is deleted without following links (`git worktree
+    remove` leaves a junction and its folder behind and still succeeds, and a removal that
+    fails on a held file has already unregistered the worktree). Discard finds the repository
+    from the worktree itself when the folder still has its `.git`.
   - Start: the log folder is created before the appender; a relative `DOTS_DATA_DIR` is made
     absolute; a failure to find the local data folder shows the fatal page; a panic is written
     to the log (the line is appended to the log file directly, because the logger writes on a

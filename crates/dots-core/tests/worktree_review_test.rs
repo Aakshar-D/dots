@@ -290,6 +290,41 @@ async fn diff_and_discard_refuse_a_branch_dots_did_not_create() {
 }
 
 #[tokio::test]
+async fn diff_and_discard_refuse_a_base_commit_that_is_not_a_commit_id() {
+    let t = start().await;
+    let run = edited_run(&t).await;
+    let ws = PathBuf::from(run.workspace_path.as_deref().unwrap());
+    let branch = run.branch.clone().unwrap();
+    let pwned = t.dir.path().join("pwned.txt");
+    for tampered in [
+        format!("--output={}", pwned.display()),
+        "--ext-diff".to_string(),
+        "HEAD".to_string(),
+        "abc123".to_string(),
+        format!("{}z", &run.base_commit.clone().unwrap()[..39]),
+    ] {
+        tamper(&t, &run.id, "base_commit", &tampered).await;
+        let err = t.rt.worktree_diff(&run.id).await.unwrap_err();
+        assert!(matches!(err, Error::Invalid(_)), "{tampered}: {err}");
+        assert!(err.to_string().contains("not a commit id"), "{err}");
+        let err = t.rt.discard_worktree(&run.id).await.unwrap_err();
+        assert!(matches!(err, Error::Invalid(_)), "{tampered}: {err}");
+        assert!(!pwned.exists(), "git wrote {}", pwned.display());
+        assert!(ws.is_dir() && branch_exists(&t.repo, &branch));
+    }
+    // The true commit id still works.
+    tamper(
+        &t,
+        &run.id,
+        "base_commit",
+        &run.base_commit.clone().unwrap(),
+    )
+    .await;
+    assert!(t.rt.worktree_diff(&run.id).await.unwrap().exists);
+    t.rt.shutdown();
+}
+
+#[tokio::test]
 async fn discard_finds_the_repository_from_the_worktree_when_the_dot_moved() {
     let t = start().await;
     let run = edited_run(&t).await;

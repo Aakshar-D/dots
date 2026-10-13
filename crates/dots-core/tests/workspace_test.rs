@@ -394,6 +394,10 @@ async fn a_leftover_outside_the_worktrees_folder_is_reported_and_not_deleted() {
         "{err}"
     );
     assert!(p.path.join("junc").join("secret.txt").is_file());
+    // The check runs before git: nothing at all was removed.
+    let repo = tmp.path().join("repo");
+    assert!(git_out(&repo, &["worktree", "list", "--porcelain"]).contains("/R1"));
+    assert!(!git_out(&repo, &["branch", "--list", "dots/links/R1"]).is_empty());
 }
 
 /// A leftover that cannot be deleted is an error that names the folder, never a silent success.
@@ -423,4 +427,125 @@ async fn a_leftover_that_cannot_be_removed_fails_and_names_the_folder() {
     assert!(p.path.join("junc").exists());
     drop(held);
     assert!(outside.join("secret.txt").is_file());
+    // Git has unregistered the worktree by now; once the hold is released, a second discard
+    // still finishes the job.
+    wm.discard(&tmp.path().join("repo"), &p).await.unwrap();
+    assert!(!p.path.exists());
+    assert!(outside.join("secret.txt").is_file());
+    assert!(git_out(
+        &tmp.path().join("repo"),
+        &["branch", "--list", "dots/links/R1"]
+    )
+    .is_empty());
+}
+
+/// Git no longer knows the worktree (it failed half way, or the registration was pruned), but
+/// its folder is still there. Discard still removes the folder and the branch.
+#[tokio::test]
+async fn discard_removes_a_folder_git_no_longer_knows_and_the_branch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (p, _outside) = worktree_and_outside(tmp.path()).await;
+    let repo = tmp.path().join("repo");
+    std::fs::remove_file(p.path.join(".git")).unwrap();
+    git_out(&repo, &["worktree", "prune"]);
+    assert!(p.path.is_dir());
+
+    let wm = WorkspaceManager::new(tmp.path().join("wt"));
+    wm.discard(&repo, &p).await.unwrap();
+    assert!(!p.path.exists());
+    assert!(git_out(&repo, &["branch", "--list", "dots/links/R1"]).is_empty());
+}
+
+/// A leftover folder without a `.git` of its own, inside a data folder that lies in another
+/// repository: that repository is not the worktree's, and nothing of it is touched.
+#[tokio::test]
+async fn a_leftover_inside_another_repository_does_not_make_it_the_worktrees_repository() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    init_repo(&repo);
+    let outer = tmp.path().join("outer");
+    init_repo(&outer);
+    git_out(&outer, &["branch", "dots/links/R9"]);
+    git_out(&repo, &["branch", "dots/links/R9"]);
+    let path = outer.join("wt").join("R9");
+    std::fs::create_dir_all(&path).unwrap();
+    std::fs::write(path.join("left.txt"), "x").unwrap();
+    let p = Prepared {
+        path: path.clone(),
+        branch: Some("dots/links/R9".into()),
+        base_commit: None,
+    };
+
+    WorkspaceManager::new(outer.join("wt"))
+        .discard(&repo, &p)
+        .await
+        .unwrap();
+    assert!(!path.exists());
+    assert!(git_out(&repo, &["branch", "--list", "dots/links/R9"]).is_empty());
+    assert!(!git_out(&outer, &["branch", "--list", "dots/links/R9"]).is_empty());
+}
+
+/// The unchanged-run cleanup works from a run row. A row that does not name a worktree of
+/// dots is refused before any git command: no other branch or worktree is touched.
+#[tokio::test]
+async fn cleaning_up_an_unchanged_run_refuses_a_forged_row_before_any_git_command() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    init_repo(&repo);
+    let dot = fake_dot("links", &repo, WorkspaceMode::Worktree);
+    let wm = WorkspaceManager::new(tmp.path().join("wt"));
+    let a = wm.prepare(&dot, "R1").await.unwrap();
+    let b = wm.prepare(&dot, "R2").await.unwrap();
+    git_out(&repo, &["branch", "feature-x"]);
+    let foreign = tmp.path().join("foreign");
+    git_out(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "dots/links/foreign",
+            &foreign.to_string_lossy(),
+        ],
+    );
+
+    let forged = [
+        // Another existing branch.
+        Prepared {
+            branch: Some("feature-x".into()),
+            ..a.clone()
+        },
+        Prepared {
+            branch: a.branch.clone(),
+            ..b.clone()
+        },
+        // Another linked worktree, outside the worktrees folder.
+        Prepared {
+            path: foreign.clone(),
+            branch: Some("dots/links/foreign".into()),
+            base_commit: a.base_commit.clone(),
+        },
+    ];
+    for row in &forged {
+        let err = wm.cleanup_if_unchanged(&dot, row).await.unwrap_err();
+        assert!(matches!(err, Error::Invalid(_)), "{row:?}: {err}");
+        for dir in [&a.path, &b.path, &foreign] {
+            assert!(dir.is_dir(), "{} was removed", dir.display());
+        }
+        let branches = git_out(&repo, &["branch", "--list"]);
+        for name in [
+            "feature-x",
+            "dots/links/R1",
+            "dots/links/R2",
+            "dots/links/foreign",
+        ] {
+            assert!(branches.contains(name), "{name} was deleted: {branches}");
+        }
+    }
+    assert_eq!(
+        git_out(&repo, &["worktree", "list", "--porcelain"])
+            .matches("worktree ")
+            .count(),
+        4
+    );
 }

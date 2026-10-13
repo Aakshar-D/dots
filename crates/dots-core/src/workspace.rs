@@ -47,8 +47,11 @@ pub async fn git_raw(dir: &Path, args: &[&str]) -> Result<String> {
 
 /// The repository a worktree belongs to, as the worktree itself records it: the git directory
 /// its repository's worktrees share, in which `git -C` runs worktree and branch commands as it
-/// does in the checkout. `None` when the folder is gone or is not a worktree.
+/// does in the checkout. `None` when the folder is gone, is not a worktree, or has no `.git`
+/// of its own: git would then search the parent folders and could answer with an unrelated
+/// repository that happens to contain the data folder.
 async fn repository_of(worktree: &Path) -> Option<PathBuf> {
+    std::fs::symlink_metadata(worktree.join(".git")).ok()?;
     let args = ["rev-parse", "--path-format=absolute", "--git-common-dir"];
     let dir = git(worktree, &args).await.ok()?;
     (!dir.is_empty()).then(|| PathBuf::from(dir))
@@ -190,6 +193,7 @@ pub async fn diff(path: &Path, base_commit: &str) -> Result<WorktreeDiff> {
             "--no-ext-diff",
             "--no-textconv",
             "--find-renames",
+            "--end-of-options",
             base_commit,
             "--",
         ],
@@ -358,28 +362,36 @@ impl WorkspaceManager {
         Ok(ahead != "0")
     }
 
-    /// Has git remove the worktree at `prepared.path`, registered in `repo`, and makes sure its
-    /// folder is gone afterwards. Git leaves a junction where it is and still reports success,
-    /// so a worktree that holds one (a `node_modules` made by pnpm, say) stays behind as a
-    /// folder with the junction in it. What is left is deleted here without following any
-    /// link: `remove_dir_all` removes a symlink or a junction as the link itself, never what
-    /// it points to. That only ever happens to a folder that passes `check_owned`; when the
-    /// folder cannot be deleted the error names it.
+    /// Removes the worktree at `prepared.path`, registered in `repo`: check, git, leftover,
+    /// prune. The row must pass `check_owned` before any git command runs. Git then removes
+    /// the worktree; its failure is logged and does not stop the removal, because git may
+    /// have failed half way (a held file) after unregistering the worktree, and a retry
+    /// would only get "is not a working tree". Whatever is left of the folder (git leaves a
+    /// junction where it is and still succeeds) is deleted without following any link:
+    /// `remove_dir_all` removes a symlink or a junction as the link itself, never what it
+    /// points to. When the folder cannot be deleted the error names it. If git failed, a
+    /// `git worktree prune` clears any registration it kept.
     async fn remove_worktree(&self, repo: &Path, prepared: &Prepared) -> Result<()> {
-        let path = prepared.path.to_string_lossy().to_string();
-        git(repo, &["worktree", "remove", "--force", &path]).await?;
-        if !prepared.path.exists() {
-            return Ok(());
-        }
         self.check_owned(prepared)?;
-        tokio::fs::remove_dir_all(&prepared.path)
-            .await
-            .map_err(|e| {
-                Error::Other(format!(
-                    "could not remove what git left of worktree {}: {e}",
-                    prepared.path.display()
-                ))
-            })
+        let path = prepared.path.to_string_lossy().to_string();
+        let removed = git(repo, &["worktree", "remove", "--force", &path]).await;
+        if prepared.path.exists() {
+            tokio::fs::remove_dir_all(&prepared.path)
+                .await
+                .map_err(|e| {
+                    Error::Other(format!(
+                        "could not remove what git left of worktree {}: {e}",
+                        prepared.path.display()
+                    ))
+                })?;
+        }
+        if let Err(e) = removed {
+            tracing::warn!(worktree = %path, "git could not remove the worktree: {e}");
+            if let Err(e) = git(repo, &["worktree", "prune"]).await {
+                tracing::warn!(worktree = %path, "pruning worktrees failed: {e}");
+            }
+        }
+        Ok(())
     }
 
     pub async fn remove(&self, workdir: &Path, prepared: &Prepared) -> Result<()> {
@@ -458,6 +470,9 @@ impl WorkspaceManager {
         let (Some(_), Some(base)) = (&prepared.branch, &prepared.base_commit) else {
             return Ok(false);
         };
+        // The row comes from the database: it must name a worktree of dots before git runs
+        // anything in it.
+        self.check_owned(prepared)?;
         if !prepared.path.exists() || self.has_changes(&prepared.path, base).await? {
             return Ok(false);
         }
