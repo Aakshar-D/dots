@@ -113,8 +113,8 @@ fn claude_path_accepts_ordinary_paths() {
         r"C:\Users\ana\.local\bin\claude.exe",
         r"C:\Program Files\Claude Code\claude.exe",
         r"C:\Users\Zoë Müller\工具\claude.exe",
-        // An emoji with its variation selector: a folder name Explorer can make.
-        "D:/apps/\u{2764}\u{fe0f}/claude.cmd",
+        // An emoji without a variation selector.
+        "D:/apps/\u{2764}/claude.cmd",
         "claude",
     ] {
         with_claude_path(path)
@@ -170,6 +170,35 @@ fn claude_path_refuses_characters_that_hide_or_reorder_it() {
         // Counted in characters, not bytes.
         ("C:/工具/a\u{200f}.exe", FORMAT, "U+200F at character 8"),
         ("C:/tools/a\u{e0041}.exe", FORMAT, "U+E0041 at character 11"),
+        // Not format characters, but they draw nothing as well.
+        (
+            "C:/tools/cla\u{34f}ude.exe",
+            FORMAT,
+            "U+034F at character 13",
+        ),
+        (
+            "C:/tools/cla\u{fe00}ude.exe",
+            FORMAT,
+            "U+FE00 at character 13",
+        ),
+        (
+            "C:/tools/\u{2764}\u{fe0f}/a.exe",
+            FORMAT,
+            "U+FE0F at character 11",
+        ),
+        ("C:/tools/a\u{e0100}.exe", FORMAT, "U+E0100 at character 11"),
+        ("C:/tools/a\u{115f}.exe", FORMAT, "U+115F at character 11"),
+        ("C:/tools/a\u{3164}.exe", FORMAT, "U+3164 at character 11"),
+        ("C:/tools/a\u{ffa0}.exe", FORMAT, "U+FFA0 at character 11"),
+        ("C:/tools/a\u{17b4}.exe", FORMAT, "U+17B4 at character 11"),
+        ("C:/tools/a\u{180b}.exe", FORMAT, "U+180B at character 11"),
+        ("C:/tools/a\u{fff0}.exe", FORMAT, "U+FFF0 at character 11"),
+        // A blank that `trim` keeps, where nobody would look.
+        (
+            "C:/tools/claude.exe\u{2800}",
+            FORMAT,
+            "U+2800 at character 20",
+        ),
     ];
     for (path, rule, found) in cases {
         let err = with_claude_path(path).validate().unwrap_err();
@@ -215,6 +244,33 @@ fn claude_path_refuses_every_format_character_and_nothing_next_to_them() {
     for (first, last) in FORMAT {
         for code in first..=last {
             assert!(refused(code), "U+{code:04X} should be refused");
+        }
+    }
+    // The default-ignorable code points that are not format characters, and the blank braille
+    // pattern: first and last of each range are refused, the code point beside it is not.
+    const INVISIBLE: [(u32, u32); 11] = [
+        (0x34F, 0x34F),
+        (0x115F, 0x1160),
+        (0x17B4, 0x17B5),
+        (0x180B, 0x180D),
+        (0x180F, 0x180F),
+        (0x2800, 0x2800),
+        (0x3164, 0x3164),
+        (0xFE00, 0xFE0F),
+        (0xFFA0, 0xFFA0),
+        (0xFFF0, 0xFFF8),
+        (0xE0080, 0xE0FFF),
+    ];
+    for (first, last) in INVISIBLE {
+        for code in [first, last] {
+            assert!(refused(code), "U+{code:04X} should be refused");
+        }
+        // U+180E, U+FFF9 and U+E007F next to three of the ranges are format characters, refused
+        // already.
+        for code in [first - 1, last + 1] {
+            if ![0x180E, 0xFFF9, 0xE007F].contains(&code) {
+                assert!(!refused(code), "U+{code:04X} should be accepted");
+            }
         }
     }
     // So are the code points not assigned yet inside two of those blocks.

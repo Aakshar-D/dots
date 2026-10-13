@@ -518,9 +518,11 @@ notify. Unread count = pending approvals + runs awaiting review.
     dialog shown from Rust ("Dots will run this program as the Claude CLI: `<path>`"). The
     webview cannot answer that dialog. Declining saves nothing. Debug builds accept the
     environment variable `DOTS_CONFIRM=yes` in place of the dialog, for smoke runs.
-    From Plan 3c, `Settings::validate` refuses a `claude_path` that holds a control character
-    or a Unicode format character (zero-width characters, the byte order mark, the soft hyphen,
-    every text-direction control): such a path could read differently in the dialog from what
+    From Plan 3c, `Settings::validate` refuses a `claude_path` that holds a control character,
+    a Unicode format character (zero-width characters, the byte order mark, the soft hyphen,
+    every text-direction control) or any other character that draws nothing (Unicode's
+    default-ignorable code points, such as variation selectors and fillers, and the blank
+    braille pattern): such a path could read differently in the dialog from what
     will run. A stored path that the rule refuses is ignored when settings are read.
 - `restart_app` shuts the runtime down, then calls `app.restart()`.
 - Capabilities grant only `core:default`, the app's commands and the plugin permissions in use
