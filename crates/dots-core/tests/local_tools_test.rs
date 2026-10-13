@@ -1,3 +1,5 @@
+mod common;
+
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -553,6 +555,69 @@ async fn shell_keeps_output_when_a_background_process_holds_the_pipes() {
         "{out:?}"
     );
     assert!(started.elapsed() < Duration::from_secs(15));
+}
+
+/// PowerShell that runs `fake-claude --orphan` and waits for it: when it is done, a grandchild
+/// of the shell lingers and the process that started it has exited. `Start-Process` is used
+/// because `&` would also wait for the grandchild, which inherits the pipes `&` reads from.
+#[cfg(windows)]
+fn orphan_script(lingerer: &common::Lingerer) -> String {
+    format!(
+        "$p = Start-Process -NoNewWindow -PassThru -FilePath '{}' -ArgumentList '--orphan','\"{}\"'; $p.WaitForExit()",
+        env!("CARGO_BIN_EXE_fake-claude"),
+        lingerer.dir()
+    )
+}
+
+/// `taskkill /T` follows parent links, so it misses a process whose parent has exited.
+#[cfg(windows)]
+#[tokio::test]
+async fn shell_cancel_kills_a_grandchild_whose_parent_has_exited() {
+    let ws = workspace();
+    let lingerer = common::Lingerer::new();
+    // The file says that the grandchild's parent has exited.
+    let script = format!(
+        "{}; Set-Content -Path orphaned -Value 1; Start-Sleep -Seconds 30",
+        orphan_script(&lingerer)
+    );
+    let call = tools::prepare("shell", &json!({ "command": script }), ws.path()).unwrap();
+    let cancel = CancellationToken::new();
+    let cancel_once_orphaned = async {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !ws.path().join("orphaned").exists() {
+            assert!(Instant::now() < deadline, "the script did not get that far");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(lingerer.alive(), "the grandchild should be running");
+        cancel.cancel();
+        Instant::now()
+    };
+    let (out, cancelled) =
+        tokio::join!(tools::run(&call, ws.path(), &cancel), cancel_once_orphaned);
+    assert_eq!(out, ToolOutput::err("cancelled"));
+    // The grandchild holds the shell's output pipes; left alone it delays the answer by 5 s.
+    assert!(
+        cancelled.elapsed() < Duration::from_secs(3),
+        "cancel waited for the grandchild"
+    );
+    assert!(
+        lingerer.gone_within(Duration::from_secs(5)).await,
+        "the grandchild is still running after cancel"
+    );
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn shell_leaves_no_process_behind_when_it_returns() {
+    let ws = workspace();
+    let lingerer = common::Lingerer::new();
+    let script = format!("{}; Write-Output left", orphan_script(&lingerer));
+    let out = run(ws.path(), "shell", json!({ "command": script })).await;
+    assert!(!out.is_error && out.output.contains("left"), "{out:?}");
+    assert!(
+        lingerer.gone_within(Duration::from_secs(5)).await,
+        "the grandchild is still running after the call returned"
+    );
 }
 
 #[cfg(unix)]

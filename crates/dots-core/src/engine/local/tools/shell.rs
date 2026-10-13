@@ -77,17 +77,23 @@ fn command_for(script: &str) -> (Command, Option<Vec<u8>>) {
     (cmd, None)
 }
 
-/// Kills the shell and its descendants. Outside Windows `proc::kill_tree` would kill only `sh`,
-/// so the shell's process group is killed instead.
-async fn stop(pid: u32) {
+/// Kills the shell and its descendants. Outside Windows the job would kill only `sh`, so the
+/// shell's process group is killed instead.
+async fn stop(job: &crate::proc::Job, pid: Option<u32>) {
     #[cfg(windows)]
-    crate::proc::kill_tree(pid).await;
+    {
+        let _ = pid;
+        job.terminate().await;
+    }
     #[cfg(not(windows))]
     {
-        let _ = Command::new("kill")
-            .args(["-KILL", "--", &format!("-{pid}")])
-            .status()
-            .await;
+        let _ = job;
+        if let Some(pid) = pid {
+            let _ = Command::new("kill")
+                .args(["-KILL", "--", &format!("-{pid}")])
+                .status()
+                .await;
+        }
     }
 }
 
@@ -148,6 +154,12 @@ pub(super) async fn shell(root: &Path, input: &Value, cancel: &CancellationToken
         Ok(c) => c,
         Err(e) => return ToolOutput::err(format!("failed to start the shell: {e}")),
     };
+    // Before the script is sent: the shell starts nothing of the user's ahead of this. The job
+    // lives until this call returns, so nothing the script started outlives the call.
+    let job = crate::proc::Job::assign(&child).unwrap_or_else(|e| {
+        tracing::warn!("no job object for the shell, using kill_tree: {e}");
+        crate::proc::Job::fallback(&child)
+    });
     let pid = child.id();
     if let (Some(bytes), Some(mut pipe)) = (stdin, child.stdin.take()) {
         // Written from a task so a large script never blocks reading the output; dropping the
@@ -174,9 +186,7 @@ pub(super) async fn shell(root: &Path, input: &Value, cancel: &CancellationToken
         _ = cancel.cancelled() => End::Cancelled,
     };
     if !matches!(end, End::Exited(_)) {
-        if let Some(pid) = pid {
-            stop(pid).await;
-        }
+        stop(&job, pid).await;
         let _ = child.start_kill();
         let _ = child.wait().await;
     }
