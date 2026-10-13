@@ -528,7 +528,8 @@ notify. Unread count = pending approvals + runs awaiting review.
     default-ignorable code points, such as variation selectors and fillers, and the blank
     braille pattern): such a path could read differently in the dialog from what
     will run. A stored path that the rule refuses is ignored when settings are read.
-- `restart_app` shuts the runtime down, then calls `app.restart()`.
+- `restart_app` shuts the runtime down, then calls `app.restart()`. The restarted app shows
+  its window even when the old one was started with `--hidden`.
 - Capabilities grant only `core:default`, the app's commands and the plugin permissions in use
   (`dialog:allow-open`). CSP: `default-src 'self'; style-src 'self' 'unsafe-inline'; img-src
   'self' data:; connect-src ipc: http://ipc.localhost`, no remote origins (Tauri's IPC needs

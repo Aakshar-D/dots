@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use dots_core::Runtime;
@@ -13,10 +13,11 @@ pub struct StartupError {
     pub log_dir: String,
 }
 
-/// Tauri-managed state: the runtime, or why it is missing.
+/// Tauri-managed state: the runtime, or why it is missing, and the folders `setup` found.
 pub struct AppState {
     runtime: Result<Arc<Runtime>, String>,
     log_dir: Option<PathBuf>,
+    data_dir: Option<PathBuf>,
 }
 
 /// The runtime, if the state is managed and the runtime started. For code that can run when
@@ -29,7 +30,23 @@ pub fn runtime_of(state: Option<&AppState>) -> Option<Arc<Runtime>> {
 impl AppState {
     /// `log_dir` is `None` when no data folder was found, so there is no log.
     pub fn new(runtime: Result<Arc<Runtime>, String>, log_dir: Option<PathBuf>) -> Self {
-        Self { runtime, log_dir }
+        Self {
+            runtime,
+            log_dir,
+            data_dir: None,
+        }
+    }
+
+    /// Keeps the data folder `setup` found, whether or not the runtime started in it.
+    pub fn with_data_dir(mut self, data_dir: Option<PathBuf>) -> Self {
+        self.data_dir = data_dir;
+        self
+    }
+
+    /// The data folder, for what a command leaves there itself (the restart mark). `None`
+    /// when no data folder was found.
+    pub fn data_dir(&self) -> Option<&Path> {
+        self.data_dir.as_deref()
     }
 
     pub fn rt(&self) -> Result<Arc<Runtime>, CmdError> {
@@ -87,6 +104,16 @@ mod tests {
         assert!(runtime_of(None).is_none());
         let failed = AppState::new(Err("disk full".into()), None);
         assert!(runtime_of(Some(&failed)).is_none());
+    }
+
+    #[test]
+    fn the_data_folder_is_kept_also_after_a_failed_start() {
+        let state = AppState::new(Err("port in use".into()), Some(PathBuf::from("C:/d/logs")));
+        assert_eq!(state.data_dir(), None);
+        // "Restart Dots" on the fatal-error page leaves its mark there too.
+        let state = state.with_data_dir(Some(PathBuf::from("C:/d")));
+        assert_eq!(state.data_dir(), Some(std::path::Path::new("C:/d")));
+        assert!(state.startup_error().is_some());
     }
 
     #[test]

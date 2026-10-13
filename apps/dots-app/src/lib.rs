@@ -100,10 +100,13 @@ fn setup(app: &AppHandle, panics_logged: bool) -> Result<(), Box<dyn std::error:
     tracing::info!("starting Dots {}", env!("CARGO_PKG_VERSION"));
     // The lock comes before the runtime touches the database; failing to get it is a failed
     // start like any other.
+    let mut restarted = false;
     let runtime = match &data_dir {
         Ok(dir) => match startup::lock_data_dir(dir, startup::LOCK_WAIT) {
             Ok(lock) => {
                 app.manage(DataDirLock(lock));
+                // Only the Dots that holds the data folder takes the mark "Restart Dots" left.
+                restarted = startup::take_restart_mark(dir);
                 tauri::async_runtime::block_on(startup::start_runtime(dir))
             }
             Err(e) => Err(e),
@@ -123,9 +126,11 @@ fn setup(app: &AppHandle, panics_logged: bool) -> Result<(), Box<dyn std::error:
         );
         events::spawn_forwarder(app.clone(), rt.clone());
     }
-    app.manage(AppState::new(runtime.map(|(rt, _)| rt), log_dir));
-    // A failed start always shows its error page, even when launched hidden.
-    if failed || !startup::start_hidden(std::env::args()) {
+    app.manage(AppState::new(runtime.map(|(rt, _)| rt), log_dir).with_data_dir(data_dir.ok()));
+    // A failed start always shows its error page, even when launched hidden; so does a start
+    // that "Restart Dots" asked for.
+    let hidden = startup::start_hidden(std::env::args());
+    if startup::show_window(failed, hidden, restarted) {
         show_main(app);
     }
     Ok(())

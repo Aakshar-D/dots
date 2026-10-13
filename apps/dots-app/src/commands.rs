@@ -80,11 +80,16 @@ pub async fn set_schedules_paused(
 }
 
 /// Restarts the app so port, concurrency and `claude` path changes apply. Active runs are
-/// interrupted; the UI warns first.
+/// interrupted; the UI warns first. The restart passes the old arguments on, `--hidden` of a
+/// start at login included, so a mark in the data folder tells the new process to show its
+/// window: the person who clicked is waiting for it.
 #[tauri::command]
 pub fn restart_app(app: AppHandle, state: State<'_, AppState>) {
     if let Ok(rt) = state.rt() {
         rt.shutdown();
+    }
+    if let Some(data_dir) = state.data_dir() {
+        crate::startup::mark_restart(data_dir);
     }
     app.restart();
 }

@@ -118,6 +118,41 @@ pub fn start_hidden(mut args: impl Iterator<Item = String>) -> bool {
     args.any(|a| a == HIDDEN_ARG)
 }
 
+/// The file "Restart Dots" leaves in the data folder for the process it starts. Tauri restarts
+/// the app with the arguments it was started with, so after a start at login the new process
+/// gets `--hidden` again; the mark tells it that a person asked for it and is waiting.
+pub const RESTART_MARK: &str = "show-after-restart";
+
+/// Leaves the restart mark in `data_dir`. A failure is logged and not returned: the restart
+/// goes on, and at worst the window stays in the tray as it did before there was a mark.
+pub fn mark_restart(data_dir: &Path) {
+    if let Err(e) = std::fs::write(data_dir.join(RESTART_MARK), "") {
+        tracing::warn!(
+            "could not leave the restart mark in {}: {e}",
+            data_dir.display()
+        );
+    }
+}
+
+/// Whether "Restart Dots" left its mark in `data_dir`; the mark is removed, so it counts for
+/// one start. Call it only while holding the lock on the data folder.
+pub fn take_restart_mark(data_dir: &Path) -> bool {
+    let mark = data_dir.join(RESTART_MARK);
+    if !mark.is_file() {
+        return false;
+    }
+    if let Err(e) = std::fs::remove_file(&mark) {
+        tracing::warn!("could not remove the restart mark {}: {e}", mark.display());
+    }
+    true
+}
+
+/// Whether a start shows the main window: always after a failed start (its error page), when
+/// Dots was not started hidden, and after "Restart Dots" whatever the arguments say.
+pub fn show_window(failed: bool, hidden: bool, restarted: bool) -> bool {
+    failed || !hidden || restarted
+}
+
 /// Today's log file in `log_dir`: daily files, the last seven kept. The folder is created
 /// first: the appender looks for old files before it opens today's, and prints an error when
 /// the folder is not there yet.
@@ -297,6 +332,50 @@ mod tests {
         assert!(single_instance(Some("".into())));
         assert!(!single_instance(Some("D:/smoke".into())));
         assert!(!single_instance(Some("smoke-data".into())));
+    }
+
+    #[test]
+    fn a_restart_mark_is_taken_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let mark = dir.path().join(RESTART_MARK);
+        // A start that no restart came before finds no mark.
+        assert!(!take_restart_mark(dir.path()));
+        mark_restart(dir.path());
+        assert!(mark.is_file());
+        // Marking twice leaves one mark.
+        mark_restart(dir.path());
+        assert!(take_restart_mark(dir.path()));
+        assert!(!mark.exists(), "the mark was not removed");
+        assert!(!take_restart_mark(dir.path()));
+    }
+
+    #[test]
+    fn a_restart_mark_that_cannot_be_written_does_not_stop_the_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("no-such-folder");
+        mark_restart(&missing);
+        assert!(!missing.exists());
+        assert!(!take_restart_mark(&missing));
+    }
+
+    #[test]
+    fn the_window_is_shown_after_a_failed_start_an_open_start_or_a_restart() {
+        const FAILED: bool = true;
+        const HIDDEN: bool = true;
+        const RESTARTED: bool = true;
+        // Started at login: in the tray, without a window.
+        assert!(!show_window(!FAILED, HIDDEN, !RESTARTED));
+        // "Restart Dots" passes `--hidden` on from a login start: the window still comes back.
+        assert!(show_window(!FAILED, HIDDEN, RESTARTED));
+        // A failed start always shows its error page.
+        assert!(show_window(FAILED, HIDDEN, !RESTARTED));
+        assert!(show_window(FAILED, HIDDEN, RESTARTED));
+        // Started by the person: shown, whatever else is true.
+        for failed in [false, true] {
+            for restarted in [false, true] {
+                assert!(show_window(failed, !HIDDEN, restarted));
+            }
+        }
     }
 
     const CHILD_LOG_DIR: &str = "DOTS_TEST_CHILD_LOG_DIR";
