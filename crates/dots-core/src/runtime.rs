@@ -30,6 +30,9 @@ use crate::{Error, Result};
 pub struct Config {
     pub data_dir: PathBuf,
     pub port: u16,
+    /// How long `Runtime::start` keeps trying a port that is in use before it starts without
+    /// the server (`server::bind_retrying`). A test that holds the port on purpose shortens it.
+    pub bind_wait: Duration,
     pub max_concurrent_runs: usize,
     pub claude_path: Option<PathBuf>,
     pub claude_env: Vec<(String, String)>,
@@ -42,6 +45,7 @@ impl Config {
         Self {
             data_dir: data_dir.into(),
             port: 47321,
+            bind_wait: server::BIND_WAIT,
             max_concurrent_runs: 2,
             claude_path: None,
             claude_env: Vec::new(),
@@ -73,6 +77,8 @@ pub struct Runtime {
     /// The stored settings when the runtime started, and now.
     started: Settings,
     settings: Mutex<Settings>,
+    /// Makes `chat` check a thread and add to it in one step.
+    chat_lock: Mutex<()>,
     shutdown: CancellationToken,
 }
 
@@ -84,14 +90,18 @@ impl Runtime {
         let bus = new_bus();
         let hub = Arc::new(ApprovalHub::new(store.clone(), bus.clone()));
         // A taken port must not keep the app from starting (spec §8): run without the server.
-        let (listener, server_error) = match server::bind(cfg.port).await {
+        // The bind waits a moment for a port in use, which after "Restart Dots" is the old
+        // process on its way out.
+        let (listener, bind_error) = match server::bind_retrying(cfg.port, cfg.bind_wait).await {
             Ok(l) => (Some(l), None),
-            Err(e) => {
-                let msg = format!("could not listen on 127.0.0.1:{}: {e}", cfg.port);
-                tracing::error!("{msg}; webhooks are off and Claude dots cannot run");
-                (None, Some(msg))
-            }
+            Err(e) => (None, Some(e)),
         };
+        let server_error = bind_error
+            .as_ref()
+            .map(|e| format!("could not listen on 127.0.0.1:{}: {e}", cfg.port));
+        if let Some(msg) = &server_error {
+            tracing::error!("{msg}; webhooks are off and Claude dots cannot run");
+        }
         let port = match &listener {
             Some(l) => l.local_addr()?.port(),
             None => cfg.port,
@@ -107,12 +117,9 @@ impl Runtime {
             Some(program) => cli_version(program, &cfg.claude_env).await,
             None => None,
         };
-        let claude: Arc<dyn Engine> = match (&claude_program, &server_error) {
+        let claude: Arc<dyn Engine> = match (&claude_program, &bind_error) {
             // Claude runs need the MCP permission endpoint of the local server.
-            (_, Some(_)) => Arc::new(UnavailableEngine(format!(
-                "local server is not running: port {port} is in use. Change the port in \
-                 Settings and restart Dots."
-            ))),
+            (_, Some(e)) => Arc::new(UnavailableEngine(server::no_server_text(port, e))),
             (None, None) => {
                 tracing::warn!(
                     "claude CLI not found; Claude dots will fail until it is configured"
@@ -191,6 +198,7 @@ impl Runtime {
             data_dir: cfg.data_dir.clone(),
             started: settings.clone(),
             settings: Mutex::new(settings),
+            chat_lock: Mutex::new(()),
             shutdown,
         })
     }
@@ -558,17 +566,51 @@ impl Runtime {
         self.store.get_dot(dot_id).await?;
         let mut new = NewRun::new(dot_id, TriggerKind::Chat);
         new.payload = Some(json!({ "message": message }));
+        // Held until the new run is stored: of two follow-ups sent at once, the second must
+        // find the first one's run in the thread.
+        let _one_at_a_time = self.chat_lock.lock().await;
         if let Some(pid) = parent_run_id {
-            let parent = self.store.get_run(pid).await?;
-            if !parent.status.is_terminal() || parent.session_id.is_none() {
-                return Err(Error::Conflict(
-                    "parent run has no finished session to continue".into(),
-                ));
-            }
-            if parent.dot_id != dot_id {
+            let named = self.store.get_run(pid).await?;
+            if named.dot_id != dot_id {
                 return Err(Error::Invalid(format!(
                     "run {pid} belongs to a different dot"
                 )));
+            }
+            // A thread is one line of runs: a follow-up continues from its end, and only once
+            // every run of it has ended. Anything else would give one run two children, each
+            // resuming the same session in the same folder. The UI keeps its composer locked
+            // until then, so these refusals answer a stale screen or a second window; their
+            // text is shown to the user as it is.
+            let thread = self.store.list_thread(&named.root_run_id).await?;
+            if let Some(active) = thread.iter().find(|r| !r.status.is_terminal()) {
+                return Err(Error::Conflict(
+                    match active.status {
+                        RunStatus::AwaitingApproval => {
+                            "this chat is waiting for an approval; answer it, then send your \
+                             message again"
+                        }
+                        _ => {
+                            "the dot is still working on this chat; wait until it has \
+                             finished, then send your message again"
+                        }
+                    }
+                    .into(),
+                ));
+            }
+            // The parent is taken from this reading of the thread, in which it has ended.
+            let Some(parent) = thread.last().filter(|r| r.id == pid) else {
+                return Err(Error::Conflict(
+                    "this chat has a newer message than the one you replied to; open the chat \
+                     again, then send your message"
+                        .into(),
+                ));
+            };
+            if parent.session_id.is_none() {
+                return Err(Error::Conflict(
+                    "this chat cannot be continued because its last run ended before the dot \
+                     started working; start a new chat"
+                        .into(),
+                ));
             }
             new.parent_run_id = Some(parent.id.clone());
             new.root_run_id = Some(parent.root_run_id.clone());

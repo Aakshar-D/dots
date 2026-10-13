@@ -265,4 +265,38 @@ mod tests {
         assert_eq!(rt.settings().await, before);
         rt.shutdown();
     }
+
+    #[tokio::test]
+    async fn a_program_path_that_would_not_show_as_it_is_never_reaches_the_question() {
+        let dir = tempfile::tempdir().unwrap();
+        let rt = runtime(&dir).await;
+        let before = rt.settings().await;
+
+        // In a dialog this reads "C:/tools/claude.exe": the override turns the rest around.
+        let disguised = "C:/tools/\u{202e}exe.edualc";
+        // `true`: the path would be saved if the question came first.
+        let (result, asked) = save(&rt, with_program(&before, disguised), true).await;
+        let err = result.unwrap_err();
+        assert_eq!(err.kind, "invalid");
+        assert_eq!(
+            err.message,
+            "claude_path must not contain invisible or text-direction characters (found U+202E \
+             at character 10)"
+        );
+        assert_eq!(asked, [] as [String; 0]);
+        assert_eq!(rt.settings().await, before);
+
+        // A line break inside the path is refused; one pasted after it is trimmed away.
+        let (result, asked) = save(&rt, with_program(&before, "C:/tools\n/claude.exe"), true).await;
+        assert_eq!(result.unwrap_err().kind, "invalid");
+        assert_eq!(asked, [] as [String; 0]);
+        let (result, asked) =
+            save(&rt, with_program(&before, &format!("{PROGRAM}\r\n")), true).await;
+        assert_eq!(
+            result.unwrap().settings.claude_path.as_deref(),
+            Some(PROGRAM)
+        );
+        assert_eq!(asked, [claude_program_message(PROGRAM)]);
+        rt.shutdown();
+    }
 }
