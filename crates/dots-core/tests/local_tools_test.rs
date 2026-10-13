@@ -549,12 +549,24 @@ async fn shell_keeps_output_when_a_background_process_holds_the_pipes() {
     let started = Instant::now();
     let out = run(ws.path(), "shell", json!({"command": HOLD})).await;
     assert!(out.output.contains("built"), "{out:?}");
-    assert!(
-        out.output
-            .contains("[output stream still held open by a background process]"),
-        "{out:?}"
-    );
-    assert!(started.elapsed() < Duration::from_secs(15));
+    const HELD: &str = "[output stream still held open by a background process]";
+    #[cfg(windows)]
+    {
+        // The job ends the process, so the stream is not held for the 5 s wait.
+        assert!(
+            out.output.contains(
+                "[a process the command left running in the background was stopped; nothing a command starts outlives it]"
+            ),
+            "{out:?}"
+        );
+        assert!(!out.output.contains(HELD), "{out:?}");
+        assert!(started.elapsed() < Duration::from_secs(5), "{out:?}");
+    }
+    #[cfg(not(windows))]
+    {
+        assert!(out.output.contains(HELD), "{out:?}");
+        assert!(started.elapsed() < Duration::from_secs(15));
+    }
 }
 
 /// PowerShell that runs `fake-claude --orphan` and waits for it: when it is done, a grandchild

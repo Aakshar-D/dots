@@ -13,6 +13,7 @@ use super::{cap_tail, str_arg, ToolOutput, MAX_OUTPUT};
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
 const MAX_TIMEOUT_SECS: u64 = 600;
 const HELD_OPEN: &str = "[output stream still held open by a background process]";
+const STOPPED: &str = "[a process the command left running in the background was stopped; nothing a command starts outlives it]";
 
 /// Runs the user script, which arrives as UTF-8 on stdin, so its length is not bound by the
 /// Windows command-line limit.
@@ -115,6 +116,19 @@ fn take(tail: &Tail) -> String {
     String::from_utf8_lossy(&std::mem::take(&mut *tail.lock().unwrap())).into_owned()
 }
 
+/// Waits up to `limit` for the reader tasks to finish; says whether they all did. A task is
+/// polled through `is_finished`, not awaited, so the helper can be called again.
+async fn readers_done_within(readers: &[tokio::task::JoinHandle<()>], limit: Duration) -> bool {
+    let deadline = tokio::time::Instant::now() + limit;
+    while !readers.iter().all(|r| r.is_finished()) {
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    true
+}
+
 /// Appends `more` to `text` on a new line, unless `more` is blank.
 fn append_line(text: &mut String, more: &str) {
     if more.trim().is_empty() {
@@ -155,7 +169,8 @@ pub(super) async fn shell(root: &Path, input: &Value, cancel: &CancellationToken
         Err(e) => return ToolOutput::err(format!("failed to start the shell: {e}")),
     };
     // Before the script is sent: the shell starts nothing of the user's ahead of this. The job
-    // lives until this call returns, so nothing the script started outlives the call.
+    // is closed once the shell has ended, before the rest of its output is read, so nothing the
+    // script started outlives the shell.
     let job = crate::proc::Job::assign(&child).unwrap_or_else(|e| {
         tracing::warn!("no job object for the shell, using kill_tree: {e}");
         crate::proc::Job::fallback(&child)
@@ -169,7 +184,7 @@ pub(super) async fn shell(root: &Path, input: &Value, cancel: &CancellationToken
         });
     }
     let (out, err) = (Tail::default(), Tail::default());
-    let mut readers = [
+    let readers = [
         tokio::spawn(pump(
             child.stdout.take().expect("stdout is piped"),
             out.clone(),
@@ -190,15 +205,14 @@ pub(super) async fn shell(root: &Path, input: &Value, cancel: &CancellationToken
         let _ = child.start_kill();
         let _ = child.wait().await;
     }
-    // A background process the shell started may hold the pipes open; wait 5 s at most in all,
-    // then keep what was read.
-    let _ = tokio::time::timeout(Duration::from_secs(5), async {
-        for r in &mut readers {
-            let _ = r.await;
-        }
-    })
-    .await;
-    let held = readers.iter().any(|r| !r.is_finished());
+    // Output still open a second after the shell ended means that a process the script left
+    // running holds the pipes. Closing the job ends it where Windows allows, and the pipes then
+    // reach their end.
+    let left_running = !readers_done_within(&readers, Duration::from_secs(1)).await;
+    job.close();
+    // Where the job cannot kill (the `kill_tree` fallback, other OSes) the process may still hold
+    // the pipes: wait 5 s at most more, then keep what was read.
+    let held = !readers_done_within(&readers, Duration::from_secs(5)).await;
     for r in &readers {
         r.abort();
     }
@@ -206,6 +220,8 @@ pub(super) async fn shell(root: &Path, input: &Value, cancel: &CancellationToken
     append_line(&mut text, &take(&err));
     if held {
         append_line(&mut text, HELD_OPEN);
+    } else if left_running {
+        append_line(&mut text, STOPPED);
     }
     let text = cap_tail(text);
     match end {

@@ -614,8 +614,10 @@ notify. Unread count = pending approvals + runs awaiting review.
     in that window.
   - Cancel and timeout call `TerminateJobObject`; dropping the handle kills the rest. The
     Claude engine closes the job as soon as `claude` has ended.
-  - A `shell` call holds its job until it returns, so a background process that a local dot
-    starts in one call does not live into the next.
+  - A `shell` call closes its job when the shell has ended, before it reads the rest of the
+    output, so a background process that a local dot starts in one call does not live into the
+    next. When output was still open a second after the shell ended, the result says that a
+    process left running was stopped.
   - `kill_tree` stays as the fallback when assignment fails and on other OSes.
 - Manual smoke (`docs/verification/<date>-plan3-smoke.md`):
   - A Claude dot and a local dot (LM Studio), each with a scheduled run, a webhook run and an
