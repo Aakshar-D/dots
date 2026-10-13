@@ -207,30 +207,39 @@ pub fn prepare(
 }
 
 /// Decides which entries the walking tools (`list_dir`, `glob`, `grep`) leave out, given each
-/// entry's workspace-relative path. The default hides nothing.
+/// entry's workspace-relative path and whether it is a directory. The default hides nothing.
 #[derive(Clone, Default)]
 pub struct PathFilter(Option<Arc<HideFn>>);
 
-type HideFn = dyn Fn(&str) -> bool + Send + Sync;
+type HideFn = dyn Fn(&str, bool) -> bool + Send + Sync;
 
 impl PathFilter {
-    pub fn new(hides: impl Fn(&str) -> bool + Send + Sync + 'static) -> Self {
+    pub fn new(hides: impl Fn(&str, bool) -> bool + Send + Sync + 'static) -> Self {
         Self(Some(Arc::new(hides)))
     }
 
-    /// Hides the entries `policy` denies for the walking tool `alias` or for `Read`, so a
-    /// search from the workspace root never reads a denied subtree.
+    /// Hides what `policy` denies for the walking tool `alias` or for `Read`. A directory is
+    /// hidden only when a deny rule matches it, so a search from the workspace root never
+    /// reads a subtree a rule denies, and still reaches an allowed subtree when the default is
+    /// `deny`. Every other entry is hidden whenever it resolves to `deny`, by rule or by default.
     pub fn from_policy(policy: &Policy, alias: &'static str, workspace: &Path) -> Self {
         let (policy, workspace) = (policy.clone(), workspace.to_path_buf());
-        Self::new(move |rel| {
+        Self::new(move |rel, is_dir| {
             let ws = Some(workspace.as_path());
-            policy.resolve_in(alias, &json!({ "path": rel }), ws) == Action::Deny
-                || policy.resolve_in("Read", &json!({ "file_path": rel }), ws) == Action::Deny
+            let denied = |tool: &str, input: Value| {
+                if is_dir {
+                    policy.denied_by_rule(tool, &input, ws)
+                } else {
+                    policy.resolve_in(tool, &input, ws) == Action::Deny
+                }
+            };
+            denied(alias, json!({ "path": rel })) || denied("Read", json!({ "file_path": rel }))
         })
     }
 
-    pub fn hides(&self, rel: &str) -> bool {
-        self.0.as_ref().is_some_and(|f| f(rel))
+    /// `is_dir` is true only for a real directory: a link to one is judged as a file.
+    pub fn hides(&self, rel: &str, is_dir: bool) -> bool {
+        self.0.as_ref().is_some_and(|f| f(rel, is_dir))
     }
 }
 

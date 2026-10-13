@@ -14,7 +14,8 @@ const MAX_LINE_CHARS: usize = 300;
 const MAX_GREP_FILE: u64 = 2 * 1024 * 1024;
 
 /// Walks `base`, honouring `.gitignore` files and skipping `.git` and the entries `filter`
-/// hides; a hidden directory is not entered. Hidden entries are counted in `hidden`.
+/// hides; a hidden directory is not entered. `hidden` counts each hidden entry once: a hidden
+/// directory is one entry, whatever it holds.
 fn walk(
     root: &Path,
     base: &Path,
@@ -31,7 +32,8 @@ fn walk(
                 return false;
             }
             // Depth 0 is `base` itself, which the permission gate already judged.
-            if e.depth() > 0 && filter.hides(&display(&root, e.path())) {
+            let is_dir = e.file_type().is_some_and(|t| t.is_dir());
+            if e.depth() > 0 && filter.hides(&display(&root, e.path()), is_dir) {
                 hidden.fetch_add(1, Ordering::Relaxed);
                 return false;
             }

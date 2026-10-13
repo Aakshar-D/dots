@@ -145,17 +145,17 @@ pub(super) async fn list_dir(root: &Path, input: &Value, filter: &PathFilter) ->
         let mut names: Vec<String> = entries
             .filter_map(|e| e.ok())
             .filter(|e| e.file_name() != ".git")
-            .filter(|e| {
-                let hide = filter.hides(&display(&root, &e.path()));
-                hidden += usize::from(hide);
-                !hide
-            })
-            .map(|e| {
+            .filter_map(|e| {
+                let is_dir = e.file_type().is_ok_and(|t| t.is_dir());
+                if filter.hides(&display(&root, &e.path()), is_dir) {
+                    hidden += 1;
+                    return None;
+                }
                 let mut name = e.file_name().to_string_lossy().into_owned();
-                if e.file_type().is_ok_and(|t| t.is_dir()) {
+                if is_dir {
                     name.push('/');
                 }
-                name
+                Some(name)
             })
             .collect();
         if names.is_empty() {

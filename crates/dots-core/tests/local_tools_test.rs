@@ -713,6 +713,196 @@ async fn walking_tools_without_a_filter_hide_nothing() {
     assert_eq!(out.output, "secret/key.txt:1: hello key");
 }
 
+/// A custom policy that allows the walking tools everywhere, plus `rules`.
+fn walking_policy(rules: Vec<Rule>, default: Action) -> Policy {
+    let mut all: Vec<Rule> = ["LS", "Glob", "Grep"]
+        .iter()
+        .map(|t| Rule::new(t, Action::Allow))
+        .collect();
+    all.extend(rules);
+    Policy {
+        preset: Preset::Custom,
+        rules: all,
+        default,
+    }
+}
+
+#[tokio::test]
+async fn walking_tools_reach_an_allowed_subtree_under_default_deny() {
+    let ws = workspace();
+    let p = ws.path();
+    std::fs::create_dir_all(p.join("other/inner")).unwrap();
+    std::fs::write(p.join("other/a.txt"), "fn other\n").unwrap();
+    std::fs::write(p.join("other/inner/b.txt"), "fn inner\n").unwrap();
+    let policy = walking_policy(vec![Rule::new("Read(src/**)", Action::Allow)], Action::Deny);
+
+    // `src`, `other` and `other/inner` are denied by the default only: they are entered and not
+    // counted. The three files outside `src` are denied by the default: each is hidden.
+    let out = run_filtered(p, &policy, "grep", json!({"pattern": "fn"})).await;
+    assert_eq!(
+        out.output,
+        "src/deep/lib.rs:1: pub fn Hello() {}\nsrc/main.rs:1: fn main() {}\n\
+         (3 entries hidden by policy)"
+    );
+
+    let out = run_filtered(p, &policy, "glob", json!({"pattern": "**/*"})).await;
+    assert_eq!(
+        out.output,
+        "src/deep/lib.rs\nsrc/main.rs\n(3 entries hidden by policy)"
+    );
+
+    let out = run_filtered(p, &policy, "list_dir", json!({})).await;
+    assert_eq!(out.output, "other/\nsrc/\n(1 entry hidden by policy)");
+    let out = run_filtered(p, &policy, "list_dir", json!({"path": "other"})).await;
+    assert_eq!(out.output, "inner/\n(1 entry hidden by policy)");
+    let out = run_filtered(p, &policy, "list_dir", json!({"path": "src"})).await;
+    assert_eq!(out.output, "deep/\nmain.rs");
+}
+
+#[tokio::test]
+async fn a_directory_matched_by_a_deny_rule_is_not_entered() {
+    let ws = workspace();
+    let p = ws.path();
+    std::fs::create_dir_all(p.join("secret/inner")).unwrap();
+    std::fs::write(p.join("secret/key.txt"), "hello key\n").unwrap();
+    std::fs::write(p.join("secret/inner/more.txt"), "hello more\n").unwrap();
+    // `**/secret` names the directory and nothing inside it, and `Read` is allowed: the two
+    // files would be found if the walk entered `secret`.
+    for &default in Action::ALL {
+        let policy = walking_policy(
+            vec![
+                Rule::new("Read", Action::Allow),
+                Rule::new("Read(**/secret)", Action::Deny),
+            ],
+            default,
+        );
+        for file in ["secret/key.txt", "secret/inner/more.txt"] {
+            let input = json!({ "file_path": file });
+            assert_eq!(policy.resolve_in("Read", &input, Some(p)), Action::Allow);
+        }
+        let out = run_filtered(p, &policy, "grep", json!({"pattern": "hello"})).await;
+        assert_eq!(
+            out.output, "README.md:1: hello\n(1 entry hidden by policy)",
+            "{default:?}"
+        );
+        let out = run_filtered(p, &policy, "glob", json!({"pattern": "**/*.txt"})).await;
+        assert_eq!(
+            out.output, "no files match **/*.txt\n(1 entry hidden by policy)",
+            "{default:?}"
+        );
+        let out = run_filtered(p, &policy, "list_dir", json!({})).await;
+        assert_eq!(
+            out.output, "README.md\nsrc/\n(1 entry hidden by policy)",
+            "{default:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_hidden_count_is_one_per_denied_directory_and_one_per_hidden_file() {
+    let ws = workspace();
+    let p = ws.path();
+    for dir in ["src/secret", "other"] {
+        std::fs::create_dir_all(p.join(dir)).unwrap();
+        std::fs::write(p.join(dir).join("a.txt"), "fn a\n").unwrap();
+        std::fs::write(p.join(dir).join("b.txt"), "fn b\n").unwrap();
+    }
+    std::fs::write(p.join("src/deep/key.pem"), "fn key\n").unwrap();
+    let policy = walking_policy(
+        vec![
+            Rule::new("Read(src/**)", Action::Allow),
+            Rule::new("Read(secret/**)", Action::Deny),
+            Rule::new("Read(**/*.pem)", Action::Deny),
+        ],
+        Action::Deny,
+    );
+    // README.md (default): 1. `other` is entered, its two files (default): 2. `src/secret` (deny
+    // rule, with two files inside): 1. src/deep/key.pem (deny rule): 1.
+    let found = "src/deep/lib.rs:1: pub fn Hello() {}\nsrc/main.rs:1: fn main() {}";
+    let out = run_filtered(p, &policy, "grep", json!({"pattern": "fn"})).await;
+    assert_eq!(out.output, format!("{found}\n(5 entries hidden by policy)"));
+    // Searching inside `src` counts what is hidden there only.
+    let out = run_filtered(p, &policy, "grep", json!({"pattern": "fn", "path": "src"})).await;
+    assert_eq!(out.output, format!("{found}\n(2 entries hidden by policy)"));
+    let out = run_filtered(p, &policy, "list_dir", json!({"path": "src"})).await;
+    assert_eq!(out.output, "deep/\nmain.rs\n(1 entry hidden by policy)");
+}
+
+#[tokio::test]
+async fn an_entry_that_resolves_to_ask_is_not_skipped() {
+    let ws = workspace();
+    let p = ws.path();
+    std::fs::create_dir(p.join("drafts")).unwrap();
+    std::fs::write(p.join("drafts/a.txt"), "hello draft\n").unwrap();
+    let policy = walking_policy(
+        vec![Rule::new("Read(drafts/**)", Action::Ask)],
+        Action::Deny,
+    );
+    // README.md and the two files under `src` are denied by the default.
+    let out = run_filtered(p, &policy, "grep", json!({"pattern": "hello"})).await;
+    assert_eq!(
+        out.output,
+        "drafts/a.txt:1: hello draft\n(3 entries hidden by policy)"
+    );
+    let out = run_filtered(p, &policy, "list_dir", json!({"path": "drafts"})).await;
+    assert_eq!(out.output, "a.txt");
+
+    // Under default ask nothing is denied, so nothing is hidden.
+    let policy = walking_policy(vec![], Action::Ask);
+    let out = run_filtered(p, &policy, "grep", json!({"pattern": "hello"})).await;
+    assert_eq!(
+        out.output,
+        "README.md:1: hello\ndrafts/a.txt:1: hello draft"
+    );
+    let out = run_filtered(p, &policy, "list_dir", json!({})).await;
+    assert_eq!(out.output, "README.md\ndrafts/\nsrc/");
+}
+
+#[tokio::test]
+async fn a_link_to_a_directory_is_judged_as_a_file() {
+    let ws = workspace();
+    let p = ws.path();
+    dir_link(&p.join("src"), &p.join("jump"));
+    let policy = walking_policy(vec![Rule::new("Read(src/**)", Action::Allow)], Action::Deny);
+    // The link is not a directory to enter: the default denies it like any file. README.md is
+    // the other hidden entry.
+    let out = run_filtered(p, &policy, "grep", json!({"pattern": "fn"})).await;
+    assert_eq!(
+        out.output,
+        "src/deep/lib.rs:1: pub fn Hello() {}\nsrc/main.rs:1: fn main() {}\n\
+         (2 entries hidden by policy)"
+    );
+    let out = run_filtered(p, &policy, "list_dir", json!({})).await;
+    assert_eq!(out.output, "src/\n(2 entries hidden by policy)");
+}
+
+#[tokio::test]
+async fn read_only_and_sandboxed_walks_skip_git_and_show_dot_claude() {
+    let ws = workspace();
+    let p = ws.path();
+    for dir in [".git", ".claude"] {
+        std::fs::create_dir(p.join(dir)).unwrap();
+    }
+    std::fs::write(p.join(".git/config"), "hello git\n").unwrap();
+    std::fs::write(p.join(".claude/settings.json"), "hello claude\n").unwrap();
+    for preset in [Preset::ReadOnly, Preset::Sandboxed] {
+        let policy = Policy::preset(preset);
+        // `.git` is never walked and is not counted; no read rule denies `.claude`.
+        let out = run_filtered(p, &policy, "grep", json!({"pattern": "hello"})).await;
+        assert_eq!(
+            out.output, ".claude/settings.json:1: hello claude\nREADME.md:1: hello",
+            "{preset:?}"
+        );
+        let out = run_filtered(p, &policy, "glob", json!({"pattern": "**/*"})).await;
+        assert_eq!(
+            out.output, ".claude/settings.json\nREADME.md\nsrc/deep/lib.rs\nsrc/main.rs",
+            "{preset:?}"
+        );
+        let out = run_filtered(p, &policy, "list_dir", json!({})).await;
+        assert_eq!(out.output, ".claude/\nREADME.md\nsrc/", "{preset:?}");
+    }
+}
+
 #[tokio::test]
 async fn shell_runs_scripts_longer_than_the_command_line_limit() {
     let ws = workspace();
