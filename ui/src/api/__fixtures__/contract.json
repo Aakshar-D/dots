@@ -1,0 +1,528 @@
+{
+  "Approval": {
+    "created_at": "2026-10-09T12:00:00.000Z",
+    "decided_at": null,
+    "id": "01J0APR",
+    "input": {
+      "command": "git push origin main"
+    },
+    "input_hash": "h1",
+    "note": null,
+    "parked": false,
+    "resolved": false,
+    "run_id": "01J0RUN",
+    "status": "pending",
+    "tool": "Bash"
+  },
+  "CmdError": {
+    "kind": "conflict",
+    "message": "run 01J0RUN is already succeeded"
+  },
+  "Dot": {
+    "approval_wait_secs": 240,
+    "created_at": "2026-10-09T12:00:00.000Z",
+    "enabled": true,
+    "endpoint_url": null,
+    "engine": "claude",
+    "id": "01J0DOT",
+    "instructions": "Run the tests and summarize failures.",
+    "max_turns": 40,
+    "mcp_servers": {
+      "github": {
+        "type": "http",
+        "url": "http://127.0.0.1:9000/mcp"
+      }
+    },
+    "model": "sonnet",
+    "name": "nightly-tests",
+    "policy": {
+      "default": "ask",
+      "preset": "sandboxed",
+      "rules": [
+        {
+          "action": "allow",
+          "tool": "Read"
+        },
+        {
+          "action": "allow",
+          "tool": "LS"
+        },
+        {
+          "action": "allow",
+          "tool": "Glob"
+        },
+        {
+          "action": "allow",
+          "tool": "Grep"
+        },
+        {
+          "action": "allow",
+          "tool": "Write(./**)"
+        },
+        {
+          "action": "allow",
+          "tool": "Edit(./**)"
+        },
+        {
+          "action": "allow",
+          "tool": "Bash(git status:*)"
+        },
+        {
+          "action": "allow",
+          "tool": "Bash(git diff:*)"
+        },
+        {
+          "action": "allow",
+          "tool": "Bash(git add:*)"
+        },
+        {
+          "action": "deny",
+          "tool": "Write(**/.git/**)"
+        },
+        {
+          "action": "deny",
+          "tool": "Write(**/.git)"
+        },
+        {
+          "action": "deny",
+          "tool": "Edit(**/.git/**)"
+        },
+        {
+          "action": "deny",
+          "tool": "Edit(**/.git)"
+        },
+        {
+          "action": "deny",
+          "tool": "Write(**/.claude/**)"
+        },
+        {
+          "action": "deny",
+          "tool": "Write(**/.claude)"
+        },
+        {
+          "action": "deny",
+          "tool": "Edit(**/.claude/**)"
+        },
+        {
+          "action": "deny",
+          "tool": "Edit(**/.claude)"
+        }
+      ]
+    },
+    "schedule": "0 0 2 * * *",
+    "timeout_secs": 1800,
+    "updated_at": "2026-10-09T12:00:00.000Z",
+    "use_user_settings": false,
+    "webhook_token": "tok_abc",
+    "workdir": "C:/dev/app",
+    "workspace_mode": "worktree"
+  },
+  "DotOverview": {
+    "active_run": null,
+    "dot": {
+      "approval_wait_secs": 240,
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "enabled": true,
+      "endpoint_url": null,
+      "engine": "claude",
+      "id": "01J0DOT",
+      "instructions": "Run the tests and summarize failures.",
+      "max_turns": 40,
+      "mcp_servers": {
+        "github": {
+          "type": "http",
+          "url": "http://127.0.0.1:9000/mcp"
+        }
+      },
+      "model": "sonnet",
+      "name": "nightly-tests",
+      "policy": {
+        "default": "ask",
+        "preset": "sandboxed",
+        "rules": [
+          {
+            "action": "allow",
+            "tool": "Read"
+          },
+          {
+            "action": "allow",
+            "tool": "LS"
+          },
+          {
+            "action": "allow",
+            "tool": "Glob"
+          },
+          {
+            "action": "allow",
+            "tool": "Grep"
+          },
+          {
+            "action": "allow",
+            "tool": "Write(./**)"
+          },
+          {
+            "action": "allow",
+            "tool": "Edit(./**)"
+          },
+          {
+            "action": "allow",
+            "tool": "Bash(git status:*)"
+          },
+          {
+            "action": "allow",
+            "tool": "Bash(git diff:*)"
+          },
+          {
+            "action": "allow",
+            "tool": "Bash(git add:*)"
+          },
+          {
+            "action": "deny",
+            "tool": "Write(**/.git/**)"
+          },
+          {
+            "action": "deny",
+            "tool": "Write(**/.git)"
+          },
+          {
+            "action": "deny",
+            "tool": "Edit(**/.git/**)"
+          },
+          {
+            "action": "deny",
+            "tool": "Edit(**/.git)"
+          },
+          {
+            "action": "deny",
+            "tool": "Write(**/.claude/**)"
+          },
+          {
+            "action": "deny",
+            "tool": "Write(**/.claude)"
+          },
+          {
+            "action": "deny",
+            "tool": "Edit(**/.claude/**)"
+          },
+          {
+            "action": "deny",
+            "tool": "Edit(**/.claude)"
+          }
+        ]
+      },
+      "schedule": "0 0 2 * * *",
+      "timeout_secs": 1800,
+      "updated_at": "2026-10-09T12:00:00.000Z",
+      "use_user_settings": false,
+      "webhook_token": "tok_abc",
+      "workdir": "C:/dev/app",
+      "workspace_mode": "worktree"
+    },
+    "last_run": {
+      "base_commit": "0123abcd",
+      "branch": "dots/nightly-tests/01J0RUN",
+      "dot_id": "01J0DOT",
+      "ended_at": "2026-10-09T12:00:00.000Z",
+      "error": null,
+      "id": "01J0RUN",
+      "parent_run_id": null,
+      "payload": {
+        "scheduled_for": "2026-10-09T02:00:00+01:00"
+      },
+      "queued_at": "2026-10-09T12:00:00.000Z",
+      "reviewed_at": null,
+      "root_run_id": "01J0RUN",
+      "session_id": "sess-1",
+      "started_at": "2026-10-09T12:00:00.000Z",
+      "status": "succeeded",
+      "summary": "All tests pass.",
+      "tokens_in": 1200,
+      "tokens_out": 340,
+      "trigger": "schedule",
+      "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
+    },
+    "next_fire": "2026-10-10T02:00:00+01:00"
+  },
+  "DotSpec": {
+    "approval_wait_secs": 240,
+    "enabled": true,
+    "endpoint_url": "http://127.0.0.1:1234",
+    "engine": "local",
+    "instructions": "Tidy the notes folder.",
+    "max_turns": 40,
+    "mcp_servers": null,
+    "model": "google/gemma-4-12b-qat",
+    "name": "notes",
+    "policy": {
+      "default": "deny",
+      "preset": "read-only",
+      "rules": [
+        {
+          "action": "allow",
+          "tool": "Read"
+        },
+        {
+          "action": "allow",
+          "tool": "LS"
+        },
+        {
+          "action": "allow",
+          "tool": "Glob"
+        },
+        {
+          "action": "allow",
+          "tool": "Grep"
+        },
+        {
+          "action": "deny",
+          "tool": "Write"
+        },
+        {
+          "action": "deny",
+          "tool": "Edit"
+        },
+        {
+          "action": "deny",
+          "tool": "NotebookEdit"
+        },
+        {
+          "action": "deny",
+          "tool": "Bash"
+        },
+        {
+          "action": "deny",
+          "tool": "PowerShell"
+        }
+      ]
+    },
+    "schedule": null,
+    "timeout_secs": 1800,
+    "use_user_settings": false,
+    "workdir": "C:/notes",
+    "workspace_mode": "folder"
+  },
+  "Inbox": {
+    "approvals": [
+      {
+        "created_at": "2026-10-09T12:00:00.000Z",
+        "decided_at": null,
+        "dot_id": "01J0DOT",
+        "dot_name": "nightly-tests",
+        "id": "01J0APR",
+        "input": {
+          "command": "git push origin main"
+        },
+        "input_hash": "h1",
+        "note": null,
+        "parked": false,
+        "resolved": false,
+        "run_id": "01J0RUN",
+        "status": "pending",
+        "tool": "Bash"
+      }
+    ],
+    "review_runs": [
+      {
+        "base_commit": "0123abcd",
+        "branch": "dots/nightly-tests/01J0RUN",
+        "dot_id": "01J0DOT",
+        "dot_name": "nightly-tests",
+        "ended_at": "2026-10-09T12:00:00.000Z",
+        "error": null,
+        "id": "01J0RUN",
+        "parent_run_id": null,
+        "payload": {
+          "scheduled_for": "2026-10-09T02:00:00+01:00"
+        },
+        "queued_at": "2026-10-09T12:00:00.000Z",
+        "reviewed_at": null,
+        "root_run_id": "01J0RUN",
+        "session_id": "sess-1",
+        "started_at": "2026-10-09T12:00:00.000Z",
+        "status": "succeeded",
+        "summary": "All tests pass.",
+        "tokens_in": 1200,
+        "tokens_out": 340,
+        "trigger": "schedule",
+        "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
+      }
+    ]
+  },
+  "Run": {
+    "base_commit": "0123abcd",
+    "branch": "dots/nightly-tests/01J0RUN",
+    "dot_id": "01J0DOT",
+    "ended_at": "2026-10-09T12:00:00.000Z",
+    "error": null,
+    "id": "01J0RUN",
+    "parent_run_id": null,
+    "payload": {
+      "scheduled_for": "2026-10-09T02:00:00+01:00"
+    },
+    "queued_at": "2026-10-09T12:00:00.000Z",
+    "reviewed_at": null,
+    "root_run_id": "01J0RUN",
+    "session_id": "sess-1",
+    "started_at": "2026-10-09T12:00:00.000Z",
+    "status": "succeeded",
+    "summary": "All tests pass.",
+    "tokens_in": 1200,
+    "tokens_out": 340,
+    "trigger": "schedule",
+    "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
+  },
+  "RunEventRecord": {
+    "data": {
+      "id": "t1",
+      "input": {
+        "file_path": "a.rs"
+      },
+      "kind": "tool_call",
+      "tool": "Read"
+    },
+    "kind": "tool_call",
+    "run_id": "01J0RUN",
+    "seq": 3,
+    "ts": "2026-10-09T12:00:00.000Z"
+  },
+  "RuntimeEvent": [
+    {
+      "run": {
+        "base_commit": "0123abcd",
+        "branch": "dots/nightly-tests/01J0RUN",
+        "dot_id": "01J0DOT",
+        "ended_at": "2026-10-09T12:00:00.000Z",
+        "error": null,
+        "id": "01J0RUN",
+        "parent_run_id": null,
+        "payload": {
+          "scheduled_for": "2026-10-09T02:00:00+01:00"
+        },
+        "queued_at": "2026-10-09T12:00:00.000Z",
+        "reviewed_at": null,
+        "root_run_id": "01J0RUN",
+        "session_id": "sess-1",
+        "started_at": "2026-10-09T12:00:00.000Z",
+        "status": "succeeded",
+        "summary": "All tests pass.",
+        "tokens_in": 1200,
+        "tokens_out": 340,
+        "trigger": "schedule",
+        "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
+      },
+      "type": "run_updated"
+    },
+    {
+      "event": {
+        "data": {
+          "id": "t1",
+          "input": {
+            "file_path": "a.rs"
+          },
+          "kind": "tool_call",
+          "tool": "Read"
+        },
+        "kind": "tool_call",
+        "run_id": "01J0RUN",
+        "seq": 3,
+        "ts": "2026-10-09T12:00:00.000Z"
+      },
+      "type": "run_event"
+    },
+    {
+      "approval": {
+        "created_at": "2026-10-09T12:00:00.000Z",
+        "decided_at": null,
+        "id": "01J0APR",
+        "input": {
+          "command": "git push origin main"
+        },
+        "input_hash": "h1",
+        "note": null,
+        "parked": false,
+        "resolved": false,
+        "run_id": "01J0RUN",
+        "status": "pending",
+        "tool": "Bash"
+      },
+      "type": "approval_requested"
+    },
+    {
+      "approval": {
+        "created_at": "2026-10-09T12:00:00.000Z",
+        "decided_at": "2026-10-09T12:00:00.000Z",
+        "id": "01J0APR",
+        "input": {
+          "command": "git push origin main"
+        },
+        "input_hash": "h1",
+        "note": "not on main",
+        "parked": true,
+        "resolved": false,
+        "run_id": "01J0RUN",
+        "status": "denied",
+        "tool": "Bash"
+      },
+      "type": "approval_decided"
+    }
+  ],
+  "Settings": {
+    "autostart": true,
+    "claude_path": null,
+    "local_endpoints": [
+      "http://127.0.0.1:1234"
+    ],
+    "max_concurrent_runs": 2,
+    "port": 47321,
+    "schedules_paused": false,
+    "tested_claude_version": "2.1.295"
+  },
+  "SettingsSaved": {
+    "restart_required": true,
+    "settings": {
+      "autostart": true,
+      "claude_path": null,
+      "local_endpoints": [
+        "http://127.0.0.1:1234"
+      ],
+      "max_concurrent_runs": 2,
+      "port": 47321,
+      "schedules_paused": false,
+      "tested_claude_version": "2.1.295"
+    }
+  },
+  "StartupError": {
+    "log_dir": "C:/Users/u/AppData/Local/dots/logs",
+    "message": "Dots could not start: database disk image is malformed"
+  },
+  "Status": {
+    "claude": {
+      "mismatch": true,
+      "program": "C:/Users/u/AppData/Roaming/npm/claude.exe",
+      "tested_version": "2.1.295",
+      "version": "2.1.300"
+    },
+    "data_dir": "C:/Users/u/AppData/Local/dots",
+    "port": 47321,
+    "restart_required": false,
+    "schedules_paused": false,
+    "server_error": null
+  },
+  "WorktreeDiff": {
+    "files": [
+      {
+        "binary": false,
+        "patch": "diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1 @@\n-a\n+b\n",
+        "path": "src/lib.rs",
+        "status": "modified"
+      },
+      {
+        "binary": true,
+        "patch": "",
+        "path": "logo.png",
+        "status": "added"
+      }
+    ],
+    "truncated": false
+  }
+}

@@ -326,3 +326,20 @@ async fn cancel_if_inactive_only_touches_queued_or_awaiting() {
         .unwrap();
     assert_eq!(r.status, RunStatus::Cancelled);
 }
+
+#[tokio::test]
+async fn the_lineage_index_exists() {
+    let (dir, _store) = temp_store().await;
+    let pool = sqlx::SqlitePool::connect(&format!(
+        "sqlite://{}",
+        dir.path().join("dots.db").display()
+    ))
+    .await
+    .unwrap();
+    let rows =
+        sqlx::query("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'runs_root'")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(rows.len(), 1);
+}

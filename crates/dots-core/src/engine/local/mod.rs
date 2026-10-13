@@ -13,7 +13,7 @@ use crate::store::Store;
 use crate::{Error, Result};
 
 use self::client::{ChatClient, ToolCallRequest, DEFAULT_RETRY_DELAYS};
-use self::tools::{PreparedCall, ToolOutput};
+use self::tools::{PathFilter, PreparedCall, ToolOutput};
 
 pub mod client;
 pub mod history;
@@ -269,8 +269,14 @@ impl Session {
                 };
                 match checked {
                     Ok(PermissionOutcome::Allow { input }) => {
+                        let filter = PathFilter::from_policy(
+                            &self.ctx.dot.spec.policy,
+                            p.alias,
+                            &self.ctx.workspace,
+                        );
                         let allowed = PreparedCall { input, ..p };
-                        tools::run(&allowed, &self.ctx.workspace, &self.ctx.cancel).await
+                        tools::run_with(&allowed, &self.ctx.workspace, &self.ctx.cancel, &filter)
+                            .await
                     }
                     Ok(PermissionOutcome::Deny { message }) => ToolOutput::err(message),
                     Err(e) => ToolOutput::err(format!("permission check failed: {e}")),

@@ -404,6 +404,9 @@ impl Runner {
                         Error::Invalid(format!("engine '{}' is not available", other.as_str()))
                     }
                 })?;
+        if let Some(reason) = engine.unavailable() {
+            return Err(Error::Other(reason));
+        }
         let prepared = match Prepared::from_run(run) {
             Some(p) if p.path.is_dir() => p,
             // A follow-up of a session whose unchanged worktree was cleaned up: the session

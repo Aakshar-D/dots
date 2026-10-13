@@ -178,6 +178,8 @@ pub struct Run {
     pub queued_at: String,
     pub started_at: Option<String>,
     pub ended_at: Option<String>,
+    /// Set when the user marked the run reviewed or discarded its worktree.
+    pub reviewed_at: Option<String>,
 }
 
 /// Input for `Store::create_run`. `root_run_id: None` makes the run its own root.
@@ -217,6 +219,93 @@ pub struct RunEventRecord {
     pub ts: String,
     pub kind: String,
     pub data: Value,
+}
+
+/// The installed `claude` CLI as seen at startup.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClaudeStatus {
+    pub program: Option<String>,
+    pub version: Option<String>,
+    pub tested_version: String,
+    /// A version was detected and it differs from `tested_version`.
+    pub mismatch: bool,
+}
+
+/// What the app shows in its banners and Settings (spec §12).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Status {
+    pub port: u16,
+    /// Set when the local server could not start; webhooks are off and Claude runs fail.
+    pub server_error: Option<String>,
+    pub claude: ClaudeStatus,
+    pub schedules_paused: bool,
+    /// Port, concurrency or `claude` path changed since start.
+    pub restart_required: bool,
+    pub data_dir: String,
+}
+
+str_enum!(FileStatus {
+    Added => "added",
+    Modified => "modified",
+    Deleted => "deleted",
+    Renamed => "renamed",
+});
+
+/// One changed file of a worktree, as a unified diff.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FileDiff {
+    pub path: String,
+    pub status: FileStatus,
+    /// Empty for binary files and for files past the size cap.
+    pub patch: String,
+    pub binary: bool,
+}
+
+/// A worktree's changes against the run's base commit (spec §12, review actions).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct WorktreeDiff {
+    pub files: Vec<FileDiff>,
+    /// Some patches were left out to stay under `workspace::MAX_DIFF_BYTES`.
+    pub truncated: bool,
+}
+
+/// One row of the Dots screen.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DotOverview {
+    pub dot: Dot,
+    /// The newest queued, running or awaiting run.
+    pub active_run: Option<Run>,
+    pub last_run: Option<Run>,
+    /// RFC 3339 local time; `None` without an enabled schedule.
+    pub next_fire: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PendingApproval {
+    #[serde(flatten)]
+    pub approval: Approval,
+    pub dot_id: String,
+    pub dot_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReviewRun {
+    #[serde(flatten)]
+    pub run: Run,
+    pub dot_name: String,
+}
+
+/// Pending approvals and finished runs awaiting review (spec §12 Inbox).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Inbox {
+    pub approvals: Vec<PendingApproval>,
+    pub review_runs: Vec<ReviewRun>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SettingsSaved {
+    pub settings: crate::settings::Settings,
+    pub restart_required: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

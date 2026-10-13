@@ -1,3 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/dots-core"]
+members = ["crates/dots-core", "apps/dots-app"]
+# `cargo test` and `cargo build` without `-p` stay headless: the app needs the built UI
+# and, on Linux, WebKitGTK.
+default-members = ["crates/dots-core"]

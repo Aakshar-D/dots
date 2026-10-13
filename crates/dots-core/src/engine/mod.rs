@@ -85,6 +85,27 @@ pub trait Engine: Send + Sync {
     /// Starts a run. Events arrive on the returned channel, which closes when the engine is
     /// done. The engine must stop promptly once `ctx.cancel` is cancelled.
     async fn start(&self, ctx: RunContext) -> Result<mpsc::Receiver<EngineEvent>>;
+
+    /// Why this engine cannot run anything now. `Some` fails a run before its workspace is
+    /// prepared.
+    fn unavailable(&self) -> Option<String> {
+        None
+    }
+}
+
+/// Stands in for an engine that cannot run (no `claude` CLI, or no local server for its MCP
+/// endpoint): every run fails with the reason.
+pub struct UnavailableEngine(pub String);
+
+#[async_trait]
+impl Engine for UnavailableEngine {
+    async fn start(&self, _ctx: RunContext) -> Result<mpsc::Receiver<EngineEvent>> {
+        Err(crate::Error::Other(self.0.clone()))
+    }
+
+    fn unavailable(&self) -> Option<String> {
+        Some(self.0.clone())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

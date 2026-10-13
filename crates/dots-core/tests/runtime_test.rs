@@ -191,7 +191,7 @@ async fn missing_claude_fails_runs_cleanly() {
     let failed = wait_status(t.rt.store(), &run.id, RunStatus::Failed, 15).await;
     assert_eq!(
         failed.error.as_deref(),
-        Some("claude CLI not found: install Claude Code or set Config.claude_path")
+        Some("claude CLI not found: install Claude Code or set its path in Settings")
     );
     t.rt.shutdown();
 }

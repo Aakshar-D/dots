@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -17,6 +17,30 @@ use crate::{Error, Result};
 
 pub mod args;
 pub mod parse;
+
+/// The installed CLI's version from `claude --version` (`2.1.295 (Claude Code)` gives
+/// `2.1.295`). `None` when it fails or takes longer than 5 s.
+pub async fn cli_version(program: &Path, env: &[(String, String)]) -> Option<String> {
+    let mut cmd = Command::new(program);
+    cmd.arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    crate::proc::hide_window(&mut cmd);
+    let out = tokio::time::timeout(Duration::from_secs(5), cmd.output())
+        .await
+        .ok()?
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    text.split_whitespace().next().map(str::to_string)
+}
 
 const STDERR_TAIL: usize = 4096;
 

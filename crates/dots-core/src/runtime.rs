@@ -4,21 +4,26 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::json;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, Mutex};
 use tokio_util::sync::CancellationToken;
 
 use crate::approvals::{ApprovalHub, DecideEffect};
 use crate::engine::claude::args::resolve_claude;
-use crate::engine::claude::ClaudeEngine;
+use crate::engine::claude::{cli_version, ClaudeEngine};
 use crate::engine::local::client::DEFAULT_RETRY_DELAYS;
 use crate::engine::local::{self, LocalEngine};
-use crate::engine::Engine;
+use crate::engine::{Engine, UnavailableEngine};
 use crate::events::{new_bus, Bus, RuntimeEvent};
-use crate::model::{Approval, Dot, DotSpec, EngineKind, NewRun, Run, RunStatus, TriggerKind};
+use crate::model::{
+    Approval, ClaudeStatus, Dot, DotOverview, DotSpec, EngineKind, Inbox, NewRun, PendingApproval,
+    ReviewRun, Run, RunEventRecord, RunStatus, SettingsSaved, Status, TriggerKind, WorktreeDiff,
+};
 use crate::runner::{Runner, RunnerConfig};
 use crate::scheduler::Scheduler;
 use crate::server::{self, ServerState};
+use crate::settings::Settings;
 use crate::store::Store;
+use crate::workspace::{Prepared, WorkspaceManager};
 use crate::{Error, Result};
 
 #[derive(Debug, Clone)]
@@ -43,6 +48,15 @@ impl Config {
             local_retry_delays: DEFAULT_RETRY_DELAYS.to_vec(),
         }
     }
+
+    /// The start configuration the app derives from stored settings.
+    pub fn from_settings(data_dir: impl Into<PathBuf>, settings: &Settings) -> Self {
+        let mut cfg = Self::new(data_dir);
+        cfg.port = settings.port;
+        cfg.max_concurrent_runs = settings.max_concurrent_runs;
+        cfg.claude_path = settings.claude_path.as_ref().map(PathBuf::from);
+        cfg
+    }
 }
 
 pub struct Runtime {
@@ -52,18 +66,36 @@ pub struct Runtime {
     runner: Arc<Runner>,
     scheduler: Arc<Scheduler>,
     port: u16,
+    server_error: Option<String>,
     claude_program: Option<PathBuf>,
+    claude_version: Option<String>,
+    data_dir: PathBuf,
+    /// The stored settings when the runtime started, and now.
+    started: Settings,
+    settings: Mutex<Settings>,
     shutdown: CancellationToken,
 }
 
 impl Runtime {
     pub async fn start(cfg: Config) -> Result<Runtime> {
         std::fs::create_dir_all(&cfg.data_dir)?;
-        let store = Store::open(&cfg.data_dir.join("dots.db")).await?;
+        let store = Store::open(&cfg.data_dir.join(crate::store::DB_FILE)).await?;
+        let settings = store.get_settings().await?;
         let bus = new_bus();
         let hub = Arc::new(ApprovalHub::new(store.clone(), bus.clone()));
-        let listener = server::bind(cfg.port).await?;
-        let port = listener.local_addr()?.port();
+        // A taken port must not keep the app from starting (spec §8): run without the server.
+        let (listener, server_error) = match server::bind(cfg.port).await {
+            Ok(l) => (Some(l), None),
+            Err(e) => {
+                let msg = format!("could not listen on 127.0.0.1:{}: {e}", cfg.port);
+                tracing::error!("{msg}; webhooks are off and Claude dots cannot run");
+                (None, Some(msg))
+            }
+        };
+        let port = match &listener {
+            Some(l) => l.local_addr()?.port(),
+            None => cfg.port,
+        };
         let recovered = store.recover_interrupted().await?;
         if !recovered.is_empty() {
             tracing::warn!("marked {} interrupted run(s) as failed", recovered.len());
@@ -71,18 +103,33 @@ impl Runtime {
 
         let mut engines: HashMap<EngineKind, Arc<dyn Engine>> = HashMap::new();
         let claude_program = resolve_claude(cfg.claude_path.as_deref());
-        match &claude_program {
-            Some(program) => {
+        let claude_version = match &claude_program {
+            Some(program) => cli_version(program, &cfg.claude_env).await,
+            None => None,
+        };
+        let claude: Arc<dyn Engine> = match (&claude_program, &server_error) {
+            // Claude runs need the MCP permission endpoint of the local server.
+            (_, Some(_)) => Arc::new(UnavailableEngine(format!(
+                "local server is not running: port {port} is in use. Change the port in \
+                 Settings and restart Dots."
+            ))),
+            (None, None) => {
+                tracing::warn!(
+                    "claude CLI not found; Claude dots will fail until it is configured"
+                );
+                Arc::new(UnavailableEngine(
+                    "claude CLI not found: install Claude Code or set its path in Settings".into(),
+                ))
+            }
+            (Some(program), None) => {
                 let mut engine = ClaudeEngine::new(program.clone(), cfg.data_dir.join("mcp"));
                 for (k, v) in &cfg.claude_env {
                     engine = engine.with_env(k, v);
                 }
-                engines.insert(EngineKind::Claude, Arc::new(engine));
+                Arc::new(engine)
             }
-            None => {
-                tracing::warn!("claude CLI not found; Claude dots will fail until it is configured")
-            }
-        }
+        };
+        engines.insert(EngineKind::Claude, claude);
         engines.insert(
             EngineKind::Local,
             Arc::new(LocalEngine::with_retry_delays(
@@ -116,17 +163,20 @@ impl Runtime {
             Err(e) => tracing::error!("listing awaiting runs failed: {e}"),
         }
         let shutdown = CancellationToken::new();
-        server::serve(
-            listener,
-            ServerState {
-                store: store.clone(),
-                runner: runner.clone(),
-                hub: hub.clone(),
-            },
-            shutdown.clone(),
-        );
+        if let Some(listener) = listener {
+            server::serve(
+                listener,
+                ServerState {
+                    store: store.clone(),
+                    runner: runner.clone(),
+                    hub: hub.clone(),
+                },
+                shutdown.clone(),
+            );
+        }
         runner.spawn_dispatcher(shutdown.clone());
         let scheduler = Scheduler::new(store.clone(), runner.clone());
+        scheduler.set_paused(settings.schedules_paused);
         scheduler.spawn(shutdown.clone());
         Ok(Runtime {
             store,
@@ -135,9 +185,282 @@ impl Runtime {
             runner,
             scheduler,
             port,
+            server_error,
             claude_program,
+            claude_version,
+            data_dir: cfg.data_dir.clone(),
+            started: settings.clone(),
+            settings: Mutex::new(settings),
             shutdown,
         })
+    }
+
+    pub async fn status(&self) -> Status {
+        let settings = self.settings.lock().await.clone();
+        Status {
+            port: self.port,
+            server_error: self.server_error.clone(),
+            claude: ClaudeStatus {
+                program: self
+                    .claude_program
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().into_owned()),
+                version: self.claude_version.clone(),
+                mismatch: self
+                    .claude_version
+                    .as_ref()
+                    .is_some_and(|v| *v != settings.tested_claude_version),
+                tested_version: settings.tested_claude_version.clone(),
+            },
+            schedules_paused: self.scheduler.is_paused(),
+            restart_required: self.started.restart_required(&settings),
+            data_dir: self.data_dir.to_string_lossy().into_owned(),
+        }
+    }
+
+    /// Records the detected `claude` version as tested, which clears the mismatch warning.
+    pub async fn mark_claude_tested(&self) -> Result<Status> {
+        let Some(version) = self.claude_version.clone() else {
+            return Err(Error::Invalid("no claude CLI version was detected".into()));
+        };
+        let mut next = self.settings().await;
+        next.tested_claude_version = version;
+        self.update_settings(next).await?;
+        Ok(self.status().await)
+    }
+
+    pub async fn settings(&self) -> Settings {
+        self.settings.lock().await.clone()
+    }
+
+    /// Validates and stores `next`. `schedules_paused` applies now; port, concurrency and the
+    /// `claude` path apply after a restart (`restart_required`). Autostart is the app's job.
+    pub async fn update_settings(&self, next: Settings) -> Result<SettingsSaved> {
+        let mut current = self.settings.lock().await;
+        self.store.put_settings(&next).await?;
+        self.scheduler.set_paused(next.schedules_paused);
+        *current = next.clone();
+        Ok(SettingsSaved {
+            restart_required: self.started.restart_required(&next),
+            settings: next,
+        })
+    }
+
+    pub async fn set_schedules_paused(&self, paused: bool) -> Result<Status> {
+        let mut next = self.settings().await;
+        next.schedules_paused = paused;
+        self.update_settings(next).await?;
+        Ok(self.status().await)
+    }
+
+    pub async fn list_dots(&self) -> Result<Vec<Dot>> {
+        self.store.list_dots().await
+    }
+
+    pub async fn get_dot(&self, id: &str) -> Result<Dot> {
+        self.store.get_dot(id).await
+    }
+
+    /// Every dot with its active and last run and its next scheduled fire time.
+    pub async fn dot_overview(&self) -> Result<Vec<DotOverview>> {
+        let now = chrono::Local::now();
+        let mut rows = Vec::new();
+        for dot in self.store.list_dots().await? {
+            let next_fire = match (&dot.spec.schedule, dot.spec.enabled) {
+                (Some(expr), true) => crate::scheduler::next_fire(expr, now)
+                    .ok()
+                    .flatten()
+                    .map(|t| t.to_rfc3339()),
+                _ => None,
+            };
+            rows.push(DotOverview {
+                active_run: self.store.latest_run(&dot.id, true).await?,
+                last_run: self.store.latest_run(&dot.id, false).await?,
+                next_fire,
+                dot,
+            });
+        }
+        Ok(rows)
+    }
+
+    /// The next `count` (1 to 10) fire times of a cron expression, RFC 3339 in local time.
+    pub fn preview_schedule(expr: &str, count: usize) -> Result<Vec<String>> {
+        let schedule = crate::scheduler::parse_cron(expr)?;
+        Ok(schedule
+            .after(&chrono::Local::now())
+            .take(count.clamp(1, 10))
+            .map(|t| t.to_rfc3339())
+            .collect())
+    }
+
+    /// Newest first; `limit` is clamped to 1..=500.
+    pub async fn list_runs(&self, dot_id: Option<&str>, limit: i64) -> Result<Vec<Run>> {
+        self.store.list_runs(dot_id, limit.clamp(1, 500)).await
+    }
+
+    pub async fn get_run(&self, id: &str) -> Result<Run> {
+        self.store.get_run(id).await
+    }
+
+    /// The whole lineage (root, resumes, chat follow-ups) `run_id` belongs to, oldest first.
+    pub async fn run_thread(&self, run_id: &str) -> Result<Vec<Run>> {
+        let run = self.store.get_run(run_id).await?;
+        self.store.list_thread(&run.root_run_id).await
+    }
+
+    pub async fn list_run_events(
+        &self,
+        run_id: &str,
+        after_seq: i64,
+    ) -> Result<Vec<RunEventRecord>> {
+        self.store.get_run(run_id).await?;
+        self.store.list_events(run_id, after_seq).await
+    }
+
+    pub async fn approvals_for_run(&self, run_id: &str) -> Result<Vec<Approval>> {
+        self.store.get_run(run_id).await?;
+        self.store.approvals_for_run(run_id).await
+    }
+
+    /// Pending approvals, plus the finished, unreviewed thread ends that failed or kept a
+    /// worktree with changes.
+    pub async fn inbox(&self) -> Result<Inbox> {
+        let mut names = std::collections::HashMap::new();
+        for dot in self.store.list_dots().await? {
+            names.insert(dot.id, dot.spec.name);
+        }
+        let name = |dot_id: &str| names.get(dot_id).cloned().unwrap_or_default();
+        let mut approvals = Vec::new();
+        for approval in self.store.list_pending_approvals().await? {
+            let run = self.store.get_run(&approval.run_id).await?;
+            approvals.push(PendingApproval {
+                dot_name: name(&run.dot_id),
+                dot_id: run.dot_id,
+                approval,
+            });
+        }
+        let review_runs = self
+            .store
+            .unreviewed_thread_ends()
+            .await?
+            .into_iter()
+            .filter(|r| {
+                r.status == RunStatus::Failed
+                    || (r.branch.is_some()
+                        && r.workspace_path
+                            .as_deref()
+                            .is_some_and(|p| Path::new(p).is_dir()))
+            })
+            .map(|run| ReviewRun {
+                dot_name: name(&run.dot_id),
+                run,
+            })
+            .collect();
+        Ok(Inbox {
+            approvals,
+            review_runs,
+        })
+    }
+
+    pub async fn inbox_count(&self) -> Result<usize> {
+        let inbox = self.inbox().await?;
+        Ok(inbox.approvals.len() + inbox.review_runs.len())
+    }
+
+    /// Takes the thread of `run_id` out of the Inbox. Refused while the thread is active.
+    pub async fn mark_reviewed(&self, run_id: &str) -> Result<Run> {
+        let run = self.store.get_run(run_id).await?;
+        self.ensure_thread_idle(&run.root_run_id).await?;
+        for changed in self.store.mark_thread_reviewed(&run.root_run_id).await? {
+            let _ = self.bus.send(RuntimeEvent::RunUpdated { run: changed });
+        }
+        self.store.get_run(run_id).await
+    }
+
+    /// The changes the run's thread made in its worktree. Empty once the worktree is removed.
+    pub async fn worktree_diff(&self, run_id: &str) -> Result<WorktreeDiff> {
+        let run = self.store.get_run(run_id).await?;
+        let (Some(path), Some(base), Some(_)) =
+            (&run.workspace_path, &run.base_commit, &run.branch)
+        else {
+            return Err(Error::Invalid(format!("run {run_id} has no worktree")));
+        };
+        let path = Path::new(path);
+        if !path.is_dir() {
+            return Ok(WorktreeDiff::default());
+        }
+        crate::workspace::diff(path, base).await
+    }
+
+    /// Removes the thread's worktree and branch and marks the thread reviewed. Refused while
+    /// the thread is active, for folder runs, and for any path outside the worktrees folder.
+    pub async fn discard_worktree(&self, run_id: &str) -> Result<Run> {
+        let run = self.store.get_run(run_id).await?;
+        self.ensure_thread_idle(&run.root_run_id).await?;
+        let Some(prepared) = Prepared::from_run(&run).filter(|p| p.branch.is_some()) else {
+            return Err(Error::Invalid(format!("run {run_id} has no worktree")));
+        };
+        let worktrees = self.data_dir.join("worktrees");
+        let inside = prepared.path.starts_with(&worktrees)
+            && prepared.path != worktrees
+            && !prepared
+                .path
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir));
+        if !inside {
+            return Err(Error::Invalid(format!(
+                "refusing to remove {}: not a dots worktree",
+                prepared.path.display()
+            )));
+        }
+        // The branch comes from the same row as the path: only delete one dots made for this
+        // worktree (`dots/<dot name>/<run id>` beside folder `<run id>`).
+        let branch = prepared.branch.as_deref().unwrap_or_default();
+        let folder = prepared.path.file_name().and_then(|n| n.to_str());
+        let ours = branch.starts_with("dots/")
+            && folder.is_some_and(|f| branch.rsplit('/').next() == Some(f));
+        if !ours {
+            return Err(Error::Invalid(format!(
+                "refusing to delete branch {branch}: not a dots branch"
+            )));
+        }
+        let dot = self.store.get_dot(&run.dot_id).await?;
+        WorkspaceManager::new(worktrees)
+            .discard(Path::new(&dot.spec.workdir), &prepared)
+            .await?;
+        self.mark_reviewed(run_id).await
+    }
+
+    /// The folder a run worked in, for "Open folder".
+    pub async fn run_folder(&self, run_id: &str) -> Result<PathBuf> {
+        let run = self.store.get_run(run_id).await?;
+        let Some(path) = run.workspace_path.map(PathBuf::from) else {
+            return Err(Error::Invalid(format!("run {run_id} has not started yet")));
+        };
+        if !path.is_dir() {
+            return Err(Error::NotFound(format!(
+                "folder {} no longer exists",
+                path.display()
+            )));
+        }
+        Ok(path)
+    }
+
+    async fn ensure_thread_idle(&self, root_run_id: &str) -> Result<()> {
+        if let Some(r) = self
+            .store
+            .list_thread(root_run_id)
+            .await?
+            .into_iter()
+            .find(|r| !r.status.is_terminal())
+        {
+            return Err(Error::Conflict(format!(
+                "run {} of this thread is still {}",
+                r.id,
+                r.status.as_str()
+            )));
+        }
+        Ok(())
     }
 
     pub fn port(&self) -> u16 {
