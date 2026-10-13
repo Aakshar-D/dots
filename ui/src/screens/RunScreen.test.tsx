@@ -219,7 +219,7 @@ describe("the run view", () => {
         ev({ kind: "assistant_text", text: "Pushed." }, "run-b"),
       ],
     );
-    renderApp("/runs/run-b");
+    const { listening } = renderApp("/runs/run-b");
     expect(await screen.findByText("Fix the bug.")).toBeVisible();
     await screen.findByText("Pushed.");
     const sections = screen.getAllByRole("region", { name: /Chat message|Continued after approval/ });
@@ -227,7 +227,9 @@ describe("the run view", () => {
     expect(within(sections[0]).getByText("I need to push.")).toBeVisible();
     expect(within(sections[1]).getByText("Pushed.")).toBeVisible();
     expect(screen.getByText("1210 in, 345 out")).toBeVisible();
-    expect(backend.callsTo("run_thread")).toEqual([{ runId: "run-b" }]);
+    // The thread is asked for by the run in the address, and again once the app listens.
+    await listening();
+    expect(backend.callsTo("run_thread")).toEqual([{ runId: "run-b" }, { runId: "run-b" }]);
   });
 
   it("renders model text without live links, images or raw HTML", async () => {

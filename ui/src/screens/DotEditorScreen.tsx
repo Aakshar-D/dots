@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { parseMcp, specErrors, specOf } from "@/lib/dot-rules";
 import { errorMessage, notifyError } from "@/lib/notify";
-import { invalidateDots, keys } from "@/lib/query";
+import { invalidateDots, keys, useSwitchingDot } from "@/lib/query";
 import { useDebounced } from "@/lib/use-debounced";
 import { DotForm, type Draft } from "@/screens/dot-editor/DotForm";
 import { RunsList } from "@/screens/dot-editor/RunsList";
@@ -44,7 +44,7 @@ function Editor(props: {
   // The core validates the cron expression and computes the preview; the UI parses no cron.
   const expr = useDebounced((draft.spec.schedule ?? "").trim(), 300);
   const preview = useQuery({
-    queryKey: ["schedule-preview", expr],
+    queryKey: keys.schedulePreview(expr),
     queryFn: () => commands.previewSchedule(expr, 3),
     enabled: expr !== "",
   });
@@ -107,7 +107,7 @@ function Editor(props: {
 function NewDot() {
   const qc = useQueryClient();
   const navigate = useNavigate();
-  const blank = useQuery({ queryKey: ["new-dot-spec"], queryFn: commands.newDotSpec });
+  const blank = useQuery({ queryKey: keys.newDotSpec, queryFn: commands.newDotSpec });
   if (blank.isPending) return <Page title="New dot" />;
   if (blank.isError) {
     return (
@@ -136,7 +136,16 @@ function NewDot() {
 function ExistingDot({ dotId }: { dotId: string }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
-  const dot = useQuery({ queryKey: keys.dot(dotId), queryFn: () => commands.getDot(dotId) });
+  // The form below is filled once, from the first copy of the dot that is here. While the Dots
+  // list's switch of this dot is on its way to the core, the core may still answer with the
+  // copy from before it, so the dot is not asked for: the switch's answer is the copy (it is
+  // written to the cache), and after a switch without an answer the dot is loaded.
+  const switching = useSwitchingDot(dotId);
+  const dot = useQuery({
+    queryKey: keys.dot(dotId),
+    queryFn: () => commands.getDot(dotId),
+    enabled: !switching,
+  });
   const runNow = useMutation({
     mutationFn: () => commands.runNow(dotId),
     onSuccess: (run) => void navigate(`/runs/${run.id}`),

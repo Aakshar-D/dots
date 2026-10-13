@@ -1,10 +1,18 @@
 import { QueryObserver } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 
-import type { RunEventRecord } from "@/api/types";
-import { createQueryClient, eventsQuery, keys, mergeEvents } from "@/lib/query";
+import { commands } from "@/api/commands";
+import type { DotOverview, Inbox, RunEventRecord } from "@/api/types";
+import {
+  createQueryClient,
+  eventsQuery,
+  invalidate,
+  invalidateDots,
+  keys,
+  mergeEvents,
+} from "@/lib/query";
 import { applyRuntimeEvent } from "@/lib/runtime-events";
-import { backend } from "@/test/backend";
+import { backend, later } from "@/test/backend";
 import { sample } from "@/test/fixtures";
 
 type Client = ReturnType<typeof createQueryClient>;
@@ -26,13 +34,6 @@ const watch = (qc: Client) => new QueryObserver(qc, eventsQuery(qc, runId)).subs
 /// Answers `list_run_events` from what the backend holds: the events after `afterSeq`.
 const holding = (stored: RunEventRecord[]) => (args: Record<string, unknown>) =>
   stored.filter((e) => e.seq > (args.afterSeq as number));
-
-/// An answer the test gives later, as a backend that read its rows before a newer event.
-function later<T>() {
-  let give!: (value: T) => void;
-  const answer = new Promise<T>((resolve) => (give = resolve));
-  return { answer, give };
-}
 
 describe("runtime events and the query cache", () => {
   it("merges events by seq without duplicates", () => {
@@ -56,24 +57,25 @@ describe("runtime events and the query cache", () => {
     expect(qc.getQueryData<RunEventRecord[]>(key)?.map((e) => e.seq)).toEqual([1, 2]);
   });
 
-  it("stores an updated run and marks what lists it stale", () => {
+  it("marks what shows an updated run stale", () => {
     const qc = createQueryClient();
     const run = { ...sample.run, status: "failed" as const };
     const lists = [
       keys.thread(run.root_run_id),
       keys.runs(run.dot_id),
-      keys.runs(null),
+      [...keys.runs(run.dot_id), "chat"],
       keys.diff(run.id),
       keys.overview,
       keys.inbox,
+      // A run that ends takes its pending approvals with it, and no approval event says so.
+      keys.approvals(run.id),
     ];
-    for (const key of lists) qc.setQueryData(key, []);
-    qc.setQueryData(keys.settings, sample.settings);
+    const untouched = [keys.settings, keys.approvals("another-run")];
+    for (const key of [...lists, ...untouched]) qc.setQueryData(key, []);
 
     applyRuntimeEvent(qc, { type: "run_updated", run });
-    expect(qc.getQueryData(keys.run(run.id))).toEqual(run);
     for (const key of lists) expect(stale(qc, key), key.join("/")).toBe(true);
-    expect(stale(qc, keys.settings)).toBe(false);
+    for (const key of untouched) expect(stale(qc, key), key.join("/")).toBe(false);
   });
 
   it("marks the inbox and the run's approvals stale on an approval event", () => {
@@ -195,5 +197,143 @@ describe("a run's events while their list loads or refetches", () => {
     expect(stale(qc, key)).toBe(false);
     expect(asked()).toEqual([]);
     unwatch();
+  });
+
+  it("marks a list nobody shows stale when a gap opened during its refetch", async () => {
+    const qc = createQueryClient();
+    qc.setQueryData(key, [event(1), event(2)]);
+    const read = later<RunEventRecord[]>();
+    backend.on("list_run_events", () => read.answer);
+    // The screen asks for more and closes: the fetch goes on with nobody showing the list.
+    const unwatch = watch(qc);
+    const refetch = qc.refetchQueries({ queryKey: key });
+    await vi.waitFor(() => expect(asked()).toEqual([{ runId, afterSeq: 2 }]));
+    unwatch();
+
+    // The backend read event 3 only; 4 and 5 are stored before it answers, and 5 arrives.
+    arrive(qc, 5);
+    read.give([event(3)]);
+    await refetch;
+
+    // Stale, so the screen that shows it next asks for what is after event 3.
+    await vi.waitFor(() => expect(stale(qc, key)).toBe(true));
+    expect(seqs(qc)).toEqual([1, 2, 3]);
+    expect(asked()).toHaveLength(1);
+  });
+});
+
+describe("a change announced while a fetch is in flight", () => {
+  const empty: Inbox = { approvals: [], review_runs: [] };
+  /// Shows the Inbox as the app's frame does.
+  const watchInbox = (qc: Client) =>
+    new QueryObserver(qc, { queryKey: keys.inbox, queryFn: commands.inbox }).subscribe(() => {});
+  const loads = () => backend.callsTo("inbox").length;
+  /// The first `inbox` call is answered by the test, every later one with `then`.
+  function heldFirst(then: Inbox) {
+    const read = later<Inbox>();
+    backend.on("inbox", () => (loads() === 1 ? read.answer : then));
+    return read;
+  }
+
+  it("loads the Inbox again when a run changed during its first load", async () => {
+    const qc = createQueryClient();
+    const read = heldFirst(sample.inbox);
+    const unwatch = watchInbox(qc);
+    await vi.waitFor(() => expect(loads()).toBe(1));
+
+    // The first load read an empty Inbox; a run fails and waits for a review before it answers.
+    applyRuntimeEvent(qc, { type: "run_updated", run: { ...sample.run, status: "failed" } });
+    read.give(empty);
+
+    await vi.waitFor(() => expect(qc.getQueryData(keys.inbox)).toEqual(sample.inbox));
+    expect(loads()).toBe(2);
+    unwatch();
+  });
+
+  it("asks once more after a first load, however many changes it missed", async () => {
+    const qc = createQueryClient();
+    const read = heldFirst(sample.inbox);
+    const unwatch = watchInbox(qc);
+    await vi.waitFor(() => expect(loads()).toBe(1));
+
+    applyRuntimeEvent(qc, { type: "approval_requested", approval: sample.approval });
+    applyRuntimeEvent(qc, { type: "approval_decided", approval: sample.approval });
+    invalidate(qc);
+    read.give(empty);
+
+    await vi.waitFor(() => expect(qc.getQueryData(keys.inbox)).toEqual(sample.inbox));
+    expect(stale(qc, keys.inbox)).toBe(false);
+    expect(loads()).toBe(2);
+    unwatch();
+  });
+
+  it("asks again after a first load that failed", async () => {
+    const qc = createQueryClient();
+    const read = heldFirst(sample.inbox);
+    const unwatch = watchInbox(qc);
+    await vi.waitFor(() => expect(loads()).toBe(1));
+
+    invalidate(qc, keys.inbox);
+    read.fail({ kind: "internal", message: "database is locked" });
+
+    await vi.waitFor(() => expect(qc.getQueryData(keys.inbox)).toEqual(sample.inbox));
+    expect(loads()).toBe(2);
+    unwatch();
+  });
+
+  it("restarts a refetch of a list on screen and asks no third time", async () => {
+    const qc = createQueryClient();
+    qc.setQueryData(keys.inbox, empty);
+    const unwatch = watchInbox(qc);
+    const read = heldFirst(sample.inbox);
+    void qc.refetchQueries({ queryKey: keys.inbox });
+    await vi.waitFor(() => expect(loads()).toBe(1));
+
+    // TanStack drops the running refetch and starts one that reads after the change.
+    invalidate(qc, keys.inbox);
+    await vi.waitFor(() => expect(qc.getQueryData(keys.inbox)).toEqual(sample.inbox));
+    read.give(empty);
+    await vi.waitFor(() => expect(qc.isFetching()).toBe(0));
+
+    expect(qc.getQueryData(keys.inbox)).toEqual(sample.inbox);
+    expect(stale(qc, keys.inbox)).toBe(false);
+    expect(loads()).toBe(2);
+    unwatch();
+  });
+
+  it("loads the Dots list again when a dot changed during its first load", async () => {
+    const qc = createQueryClient();
+    const renamed = { ...sample.overview, dot: { ...sample.dot, name: "renamed" } };
+    const read = later<DotOverview[]>();
+    const asked = () => backend.callsTo("dot_overview").length;
+    backend.on("dot_overview", () => (asked() === 1 ? read.answer : [renamed]));
+    const unwatch = new QueryObserver(qc, {
+      queryKey: keys.overview,
+      queryFn: commands.dotOverview,
+    }).subscribe(() => {});
+    await vi.waitFor(() => expect(asked()).toBe(1));
+
+    // The list read the dot before it was saved under a new name. No runtime event says so.
+    invalidateDots(qc);
+    read.give([sample.overview]);
+
+    await vi.waitFor(() => expect(qc.getQueryData(keys.overview)).toEqual([renamed]));
+    expect(asked()).toBe(2);
+    unwatch();
+  });
+
+  it("leaves a query that is removed during its first load alone", async () => {
+    const qc = createQueryClient();
+    const read = heldFirst(sample.inbox);
+    const load = qc.prefetchQuery({ queryKey: keys.inbox, queryFn: commands.inbox });
+    await vi.waitFor(() => expect(loads()).toBe(1));
+
+    invalidate(qc, keys.inbox);
+    qc.removeQueries({ queryKey: keys.inbox });
+    read.give(empty);
+    await load;
+
+    expect(qc.getQueryState(keys.inbox)).toBeUndefined();
+    expect(loads()).toBe(1);
   });
 });

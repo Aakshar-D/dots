@@ -159,6 +159,24 @@ describe("the Inbox", () => {
     expect(backend.callsTo("mark_reviewed")).toEqual([{ runId: failedRun.id }]);
   });
 
+  it("marks one run as reviewed when the button is double-clicked and the next row moves up", async () => {
+    const next = { ...failedRun, id: "run-next" };
+    const box = inbox({ approvals: [], review_runs: [failedRun, next] });
+    backend.on("mark_reviewed", (args) => {
+      box.set({ approvals: [], review_runs: [next] });
+      return { ...sample.run, id: args.runId, reviewed_at: sample.run.ended_at };
+    });
+    renderApp("/inbox");
+    const rows = await screen.findAllByRole("listitem", { name: /run to review/ });
+    fireEvent.click(within(rows[0]).getByRole("button", { name: "Mark reviewed" }), { detail: 1 });
+    await waitFor(() =>
+      expect(screen.getAllByRole("listitem", { name: /run to review/ })).toHaveLength(1),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Mark reviewed" }), { detail: 2 });
+    await settle();
+    expect(backend.callsTo("mark_reviewed")).toEqual([{ runId: failedRun.id }]);
+  });
+
   it("discards a worktree only after a confirmation", async () => {
     const box = inbox({ approvals: [], review_runs: [worktreeRun] });
     backend.on("discard_worktree", () => {
@@ -224,25 +242,5 @@ describe("the Inbox", () => {
     box.set({ approvals: [approval], review_runs: [] });
     act(() => backend.emit("runtime", { type: "approval_requested", approval: sample.approval }));
     expect(await screen.findByRole("article", { name: "Approval for Bash" })).toBeVisible();
-  });
-
-  // Last in this file: the toaster shows a toast of an earlier test again, so no test after
-  // this one may wait for "Marked as reviewed".
-  it("marks one run as reviewed when the button is double-clicked and the next row moves up", async () => {
-    const next = { ...failedRun, id: "run-next" };
-    const box = inbox({ approvals: [], review_runs: [failedRun, next] });
-    backend.on("mark_reviewed", (args) => {
-      box.set({ approvals: [], review_runs: [next] });
-      return { ...sample.run, id: args.runId, reviewed_at: sample.run.ended_at };
-    });
-    renderApp("/inbox");
-    const rows = await screen.findAllByRole("listitem", { name: /run to review/ });
-    fireEvent.click(within(rows[0]).getByRole("button", { name: "Mark reviewed" }), { detail: 1 });
-    await waitFor(() =>
-      expect(screen.getAllByRole("listitem", { name: /run to review/ })).toHaveLength(1),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Mark reviewed" }), { detail: 2 });
-    await settle();
-    expect(backend.callsTo("mark_reviewed")).toEqual([{ runId: failedRun.id }]);
   });
 });

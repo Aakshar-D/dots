@@ -59,9 +59,8 @@ function Thread({ runId, runs }: { runId: string; runs: Run[] }) {
     .flatMap((q) => q.data ?? [])
     .filter((a) => a.status === "pending");
 
-  // A review action answers with the run it changed; the lists it belongs to are refetched.
-  const reviewed = (message: string) => (run: Run) => {
-    qc.setQueryData(keys.run(run.id), run);
+  // After a review action the lists its run belongs to are refetched.
+  const reviewed = (message: string) => () => {
     for (const queryKey of [["thread"], ["diff"], keys.inbox]) {
       void qc.invalidateQueries({ queryKey });
     }

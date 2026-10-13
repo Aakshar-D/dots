@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 
 import { cleanup, configure } from "@testing-library/react";
+import { toast } from "sonner";
 import { afterEach, beforeEach, vi } from "vitest";
 
 import { backend } from "./backend";
@@ -53,4 +54,9 @@ beforeEach(() => {
   backend.reset();
   installDefaults();
 });
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  // sonner keeps its toasts outside React and hands the live ones to every new toaster: left
+  // alone, a test would show the toasts of the tests before it.
+  toast.dismiss();
+});

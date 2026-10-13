@@ -3,9 +3,23 @@
 type Handler = (args: Record<string, unknown>) => unknown;
 type Listener = (event: { payload: unknown }) => void;
 
+/// An answer the test gives or refuses later: a command still on its way, or one that read its
+/// rows before something changed.
+export function later<T>() {
+  let give!: (value: T) => void;
+  let fail!: (error: unknown) => void;
+  const answer = new Promise<T>((resolve, reject) => {
+    give = resolve;
+    fail = reject;
+  });
+  return { answer, give, fail };
+}
+
 class FakeBackend {
   private handlers = new Map<string, Handler>();
   private listeners = new Map<string, Set<Listener>>();
+  /// While set, `listen` waits for it before it attaches a listener.
+  private attaching: Promise<void> | null = null;
   /// Every command invoked, in order, with its arguments.
   calls: [string, Record<string, unknown>][] = [];
 
@@ -23,9 +37,18 @@ class FakeBackend {
     for (const listener of this.listeners.get(event) ?? []) listener({ payload });
   }
 
+  /// Makes `listen` as slow as the real bridge can be: from now on a listener hears nothing
+  /// until the returned function is called, and what is emitted before that is lost.
+  holdListeners(): () => void {
+    const held = later<void>();
+    this.attaching = held.answer;
+    return () => held.give();
+  }
+
   reset(): void {
     this.handlers.clear();
     this.listeners.clear();
+    this.attaching = null;
     this.calls = [];
   }
 
@@ -37,6 +60,7 @@ class FakeBackend {
   }
 
   async listen(event: string, listener: Listener): Promise<() => void> {
+    if (this.attaching) await this.attaching;
     const set = this.listeners.get(event) ?? new Set();
     this.listeners.set(event, set);
     set.add(listener);

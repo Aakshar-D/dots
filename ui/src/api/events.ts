@@ -6,10 +6,16 @@ import { z } from "zod";
 import * as T from "./types";
 import type { RuntimeEvent, Status } from "./types";
 
+const Typed = z.object({ type: z.string() });
+
 function parse<S extends z.ZodType>(event: string, schema: S, payload: unknown) {
   const parsed = schema.safeParse(payload);
   if (parsed.success) return parsed.data;
-  console.error(`event "${event}" in a shape this UI does not know`, parsed.error.issues[0]);
+  // The log names the type that arrived, when the payload has one: a newer core can send a
+  // type this UI has no schema for, and the issues alone do not say which.
+  const typed = Typed.safeParse(payload);
+  const of = typed.success ? ` of type "${typed.data.type}"` : "";
+  console.error(`event "${event}"${of} in a shape this UI does not know`, parsed.error.issues);
   return undefined;
 }
 
@@ -17,7 +23,7 @@ function parse<S extends z.ZodType>(event: string, schema: S, payload: unknown) 
 /// the caller cannot patch its caches from it, so it should refetch, as after `onLagged`.
 export function onRuntimeEvent(
   handler: (event: RuntimeEvent) => void,
-  onInvalid: () => void = () => {},
+  onInvalid: () => void,
 ): Promise<UnlistenFn> {
   return listen("runtime", (e) => {
     const event = parse("runtime", T.RuntimeEvent, e.payload);

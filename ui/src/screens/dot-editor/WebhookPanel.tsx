@@ -31,7 +31,7 @@ function CopyButton({ what, text }: { what: string; text: string }) {
 export function WebhookPanel({ dot }: { dot: Dot }) {
   const qc = useQueryClient();
   const url = useQuery({
-    queryKey: ["webhook-url", dot.id],
+    queryKey: keys.webhookUrl(dot.id),
     queryFn: () => commands.webhookUrl(dot.id),
   });
   const regenerate = useMutation({

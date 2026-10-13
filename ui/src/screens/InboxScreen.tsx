@@ -3,7 +3,7 @@ import { Link } from "react-router";
 import { toast } from "sonner";
 
 import { commands } from "@/api/commands";
-import type { ReviewRun, Run } from "@/api/types";
+import type { ReviewRun } from "@/api/types";
 import { ApprovalCard } from "@/components/ApprovalCard";
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { ErrorNote } from "@/components/ErrorNote";
@@ -18,8 +18,7 @@ import { onSingleClick } from "@/lib/single-click";
 /// A finished run that waits for the user: it failed, or it left a worktree to look at.
 function ReviewRow({ run }: { run: ReviewRun }) {
   const qc = useQueryClient();
-  const done = (message: string) => (changed: Run) => {
-    qc.setQueryData(keys.run(changed.id), changed);
+  const done = (message: string) => () => {
     for (const queryKey of [["thread"], ["diff"]]) {
       void qc.invalidateQueries({ queryKey });
     }

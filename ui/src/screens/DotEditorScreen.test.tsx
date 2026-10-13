@@ -248,8 +248,7 @@ describe("the dot editor, stored dot", () => {
     await user.clear(name);
     await user.type(name, "renamed");
     await user.click(screen.getByRole("button", { name: "Save" }));
-    // Not the "Saved" toast: the toaster shows the one of an earlier test again.
-    expect(await screen.findByRole("heading", { name: "renamed" })).toBeVisible();
+    expect(await screen.findByText("Saved")).toBeVisible();
 
     await user.click(screen.getByRole("link", { name: "Chat" }));
     expect(await screen.findByRole("option", { name: "renamed" })).toBeInTheDocument();

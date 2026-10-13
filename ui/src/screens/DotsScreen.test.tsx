@@ -1,10 +1,10 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import type { DotOverview } from "@/api/types";
+import type { Dot, DotOverview } from "@/api/types";
 import { localDateTime } from "@/lib/format";
 import { nextRun } from "@/screens/DotsScreen";
-import { backend } from "@/test/backend";
+import { backend, later } from "@/test/backend";
 import { quietStatus, sample } from "@/test/fixtures";
 import { renderApp } from "@/test/render";
 
@@ -55,6 +55,24 @@ describe("the Dots screen", () => {
     renderApp("/dots");
     await screen.findByRole("link", { name: scheduled.dot.name });
     expect(await within(row(scheduled.dot.name)).findByText("Paused")).toBeVisible();
+  });
+
+  it("shows the new next run when the tray resumes the schedules", async () => {
+    const paused = { ...quietStatus, schedules_paused: true };
+    // While paused the core holds the time the dot would have run, which is past by now.
+    const next = "2026-10-20T01:00:00.000Z";
+    let overview = [scheduled];
+    backend.on("dot_overview", () => overview);
+    backend.on("status", () => paused);
+    const { listening } = renderApp("/dots");
+    await screen.findByRole("link", { name: scheduled.dot.name });
+    expect(await within(row(scheduled.dot.name)).findByText("Paused")).toBeVisible();
+    await listening();
+
+    overview = [{ ...scheduled, next_fire: next }];
+    backend.on("status", () => quietStatus);
+    act(() => backend.emit("status", quietStatus));
+    expect(await within(row(scheduled.dot.name)).findByText(localDateTime(next))).toBeVisible();
   });
 
   it("explains what a dot is when there are none, and offers to make one", async () => {
@@ -160,6 +178,42 @@ describe("the Dots screen", () => {
 
     await user.click(screen.getByRole("link", { name }));
     expect(await screen.findByLabelText("Enabled")).not.toBeChecked();
+  });
+
+  it("fills an editor opened during a switch from the switch's answer", async () => {
+    const held = oneDot();
+    const answer = later<Dot>();
+    backend.on("set_dot_enabled", () => answer.answer);
+    const { user } = renderApp("/dots");
+    await user.click(await screen.findByRole("switch", { name: `${name} enabled` }));
+    await waitFor(() => expect(backend.callsTo("set_dot_enabled")).toHaveLength(1));
+
+    // The command is on its way to the core, which still holds the enabled dot: a copy loaded
+    // now would be the old one, so the editor waits for the command.
+    await user.click(screen.getByRole("link", { name }));
+    await screen.findByRole("heading", { name: "Dot" });
+    await act(() => new Promise<void>((resolve) => setTimeout(resolve, 20)));
+    expect(backend.callsTo("get_dot")).toEqual([]);
+    expect(screen.queryByLabelText("Enabled")).toBeNull();
+
+    held.dot = { ...held.dot, enabled: false };
+    await act(async () => answer.give(held.dot));
+    expect(await screen.findByLabelText("Enabled")).not.toBeChecked();
+  });
+
+  it("loads the dot for an editor opened during a switch that then fails", async () => {
+    oneDot();
+    const answer = later<Dot>();
+    backend.on("set_dot_enabled", () => answer.answer);
+    const { user } = renderApp("/dots");
+    await user.click(await screen.findByRole("switch", { name: `${name} enabled` }));
+    await waitFor(() => expect(backend.callsTo("set_dot_enabled")).toHaveLength(1));
+    await user.click(screen.getByRole("link", { name }));
+    await screen.findByRole("heading", { name: "Dot" });
+
+    await act(async () => answer.fail({ kind: "internal", message: "database is locked" }));
+    expect(await screen.findByLabelText("Enabled")).toBeChecked();
+    expect(screen.getByText("database is locked")).toBeVisible();
   });
 
   it("shows a failed load in place of the list", async () => {

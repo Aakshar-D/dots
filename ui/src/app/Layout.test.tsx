@@ -1,7 +1,8 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { backend } from "@/test/backend";
+import type { DotOverview } from "@/api/types";
+import { backend, later } from "@/test/backend";
 import { quietStatus, sample } from "@/test/fixtures";
 import { renderApp } from "@/test/render";
 
@@ -44,9 +45,9 @@ describe("the app frame", () => {
   });
 
   it("shows no banner when nothing needs attention", async () => {
-    renderApp("/dots");
+    const { listening } = renderApp("/dots");
     await screen.findByRole("navigation", { name: "Main" });
-    await waitFor(() => expect(backend.callsTo("status")).toHaveLength(1));
+    await listening();
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.queryByRole("status")).toBeNull();
   });
@@ -91,23 +92,67 @@ describe("the app frame", () => {
   });
 
   it("refetches after a lagged stream and after an event it cannot read", async () => {
-    renderApp("/dots");
+    const { listening } = renderApp("/dots");
     await screen.findByRole("navigation", { name: "Main" });
-    await waitFor(() => expect(backend.callsTo("inbox")).toHaveLength(1));
+    await listening();
+    const loads = backend.callsTo("inbox").length;
     act(() => backend.emit("runtime-lagged", null));
-    await waitFor(() => expect(backend.callsTo("inbox")).toHaveLength(2));
+    await waitFor(() => expect(backend.callsTo("inbox")).toHaveLength(loads + 1));
 
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     act(() => backend.emit("runtime", { type: "from_a_newer_core" }));
-    await waitFor(() => expect(backend.callsTo("inbox")).toHaveLength(3));
+    await waitFor(() => expect(backend.callsTo("inbox")).toHaveLength(loads + 2));
     expect(logged).toHaveBeenCalledTimes(1);
     logged.mockRestore();
   });
 
+  it("loads a screen again when the stream lagged during its first load", async () => {
+    const { user, listening } = renderApp("/settings");
+    await screen.findByRole("heading", { name: "Settings" });
+    await listening();
+
+    const idle: DotOverview = { ...sample.overview, active_run: null };
+    const running = { ...idle, active_run: { ...sample.run, status: "running" as const } };
+    const read = later<DotOverview[]>();
+    backend.on("dot_overview", () =>
+      backend.callsTo("dot_overview").length === 1 ? read.answer : [running],
+    );
+    await user.click(screen.getByRole("link", { name: "Dots" }));
+    await waitFor(() => expect(backend.callsTo("dot_overview")).toHaveLength(1));
+
+    // The first load read an idle dot. Its run starts, and the event that says so is dropped.
+    act(() => backend.emit("runtime-lagged", null));
+    await act(async () => read.give([idle]));
+
+    const name = `Open the active run of ${idle.dot.name}`;
+    expect(await screen.findByRole("link", { name })).toHaveTextContent("Running");
+    expect(backend.callsTo("dot_overview")).toHaveLength(2);
+  });
+
+  it("asks again once it listens, for what the backend emitted before", async () => {
+    const attach = backend.holdListeners();
+    let paused = false;
+    backend.on("status", () => ({ ...quietStatus, schedules_paused: paused }));
+    const { listening } = renderApp("/dots");
+    await screen.findByRole("navigation", { name: "Main" });
+    await waitFor(() => expect(backend.callsTo("status")).toHaveLength(1));
+
+    // The tray pauses the schedules while nothing listens yet: its event is lost.
+    paused = true;
+    act(() => backend.emit("status", { ...quietStatus, schedules_paused: true }));
+    await act(async () => attach());
+
+    expect(await screen.findByText(/Schedules are paused/)).toBeVisible();
+    // Once: listening does not start a second round of questions.
+    await listening();
+    expect(backend.callsTo("status")).toHaveLength(2);
+    expect(backend.callsTo("inbox")).toHaveLength(2);
+  });
+
   it("updates the inbox count when an approval is requested", async () => {
-    renderApp("/dots");
+    const { listening } = renderApp("/dots");
     const nav = await screen.findByRole("navigation", { name: "Main" });
-    await waitFor(() => expect(backend.callsTo("inbox")).toHaveLength(1));
+    await listening();
     backend.on("inbox", () => sample.inbox);
     act(() => backend.emit("runtime", { type: "approval_requested", approval: sample.approval }));
     expect(await within(nav).findByRole("link", { name: /^Inbox\s*2$/ })).toBeVisible();

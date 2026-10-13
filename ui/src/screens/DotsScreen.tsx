@@ -19,7 +19,7 @@ import {
 } from "@/components/ui/table";
 import { localDateTime, relativeTime } from "@/lib/format";
 import { notifyError } from "@/lib/notify";
-import { invalidateDots, keys } from "@/lib/query";
+import { invalidateDots, keys, setDotEnabledMutation } from "@/lib/query";
 
 /// When the dot runs next on its schedule, or why it will not.
 export function nextRun(row: DotOverview, schedulesPaused: boolean): string {
@@ -40,10 +40,11 @@ export function DotsScreen() {
     onError: notifyError,
   });
   const setEnabled = useMutation({
-    mutationFn: (v: { id: string; enabled: boolean }) => commands.setDotEnabled(v.id, v.enabled),
+    ...setDotEnabledMutation,
     // The editor fills its form from the cached dot when it opens, so that copy must never be
     // older than this change. It is dropped before the command goes out, and the command's
-    // answer is the new copy; without an answer the editor loads the dot itself.
+    // answer is the new copy; without an answer the editor loads the dot itself. An editor
+    // opened while the command is on its way waits for it (`useSwitchingDot`).
     onMutate: (v) => qc.removeQueries({ queryKey: keys.dot(v.id) }),
     onSuccess: (dot) => void qc.setQueryData(keys.dot(dot.id), dot),
     onSettled: () => invalidateDots(qc),

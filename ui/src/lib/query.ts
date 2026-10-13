@@ -1,4 +1,4 @@
-import { QueryClient } from "@tanstack/react-query";
+import { QueryClient, useIsMutating, type QueryKey } from "@tanstack/react-query";
 
 import { commands } from "@/api/commands";
 import type { RunEventRecord } from "@/api/types";
@@ -28,20 +28,64 @@ export const keys = {
   inbox: ["inbox"] as const,
   dots: ["dots"] as const,
   dot: (id: string) => ["dot", id] as const,
-  runs: (dotId: string | null) => ["runs", dotId] as const,
-  run: (id: string) => ["run", id] as const,
+  newDotSpec: ["new-dot-spec"] as const,
+  schedulePreview: (expr: string) => ["schedule-preview", expr] as const,
+  webhookUrl: (dotId: string) => ["webhook-url", dotId] as const,
+  runs: (dotId: string) => ["runs", dotId] as const,
   thread: (runId: string) => ["thread", runId] as const,
   events: (runId: string) => ["events", runId] as const,
   approvals: (runId: string) => ["approvals", runId] as const,
   diff: (runId: string) => ["diff", runId] as const,
 };
 
+type DotSwitch = { id: string; enabled: boolean };
+
+/// The mutation that switches a dot on or off (the Dots list). It has a key so that the dot's
+/// editor can see one in flight (`useSwitchingDot`).
+export const setDotEnabledMutation = {
+  mutationKey: ["set-dot-enabled"] as const,
+  mutationFn: (v: DotSwitch) => commands.setDotEnabled(v.id, v.enabled),
+};
+
+/// Whether a switch of this dot is on its way to the core. Until it has answered, a copy of the
+/// dot loaded from the core may be the one from before the switch.
+export function useSwitchingDot(dotId: string): boolean {
+  return (
+    useIsMutating({
+      mutationKey: setDotEnabledMutation.mutationKey,
+      predicate: (m) => (m.state.variables as DotSwitch | undefined)?.id === dotId,
+    }) > 0
+  );
+}
+
+/// Marks the queries under `queryKey` stale, every query without one, and loads those on screen
+/// again: what follows a change in the backend.
+///
+/// `invalidateQueries` alone loses the mark of a query whose fetch is in flight and is not
+/// restarted, which is a first load, and a refetch of a query no screen shows. That fetch may
+/// have read the backend before the change, and its answer clears the mark. So each query that
+/// is fetching now is marked again when that fetch has settled. A fetch running by then started
+/// after the change, so it is joined, not restarted: several changes share one question. This
+/// holds for a fetch that was restarted too: its promise, taken before, settles at once.
+export function invalidate(qc: QueryClient, queryKey?: QueryKey): void {
+  const fetching = qc
+    .getQueryCache()
+    .findAll({ queryKey, fetchStatus: "fetching" })
+    .map((query) => ({ key: query.queryKey, settled: query.promise }));
+  void qc.invalidateQueries({ queryKey });
+  for (const { key, settled } of fetching) {
+    const again = () =>
+      void qc.invalidateQueries({ queryKey: key, exact: true }, { cancelRefetch: false });
+    void settled?.then(again, again);
+  }
+}
+
 /// Marks stale everything a change to a dot can show up in: the dot lists, every loaded dot,
 /// the Inbox (a deleted dot takes its approvals and runs with it) and every list of runs. No
 /// runtime event announces a dot change, so each command that changes a dot calls this.
 export function invalidateDots(qc: QueryClient): void {
   for (const queryKey of [keys.dots, ["dot"], keys.overview, keys.inbox, ["runs"]]) {
-    void qc.invalidateQueries({ queryKey });
+    invalidate(qc, queryKey);
   }
 }
 
