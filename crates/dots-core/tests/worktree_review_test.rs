@@ -21,6 +21,11 @@ struct Rt {
     rt: Runtime,
 }
 
+/// The file the fake CLI leaves when it is started (its arguments and its working folder).
+fn cli_started(dir: &Path) -> PathBuf {
+    dir.join("args.json")
+}
+
 async fn start() -> Rt {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("repo");
@@ -28,6 +33,11 @@ async fn start() -> Rt {
     let mut cfg = Config::new(dir.path().join("data"));
     cfg.port = 0;
     cfg.claude_path = Some(PathBuf::from(env!("CARGO_BIN_EXE_fake-claude")));
+    // The fake CLI writes this file whenever it is started.
+    cfg.claude_env.push((
+        "FAKE_CLAUDE_ARGS_OUT".into(),
+        cli_started(dir.path()).to_string_lossy().to_string(),
+    ));
     cfg.local_retry_delays = vec![Duration::ZERO; 2];
     let rt = Runtime::start(cfg).await.unwrap();
     Rt { dir, repo, rt }
@@ -321,6 +331,71 @@ async fn diff_and_discard_refuse_a_base_commit_that_is_not_a_commit_id() {
     )
     .await;
     assert!(t.rt.worktree_diff(&run.id).await.unwrap().exists);
+    t.rt.shutdown();
+}
+
+/// A follow-up run takes its folder, branch and base commit from the row of the run it
+/// continues. A worktree row that does not name a worktree of dots fails the run before a
+/// folder is made, before git runs and before the engine starts: the engine would work in that
+/// folder, with the policy's `./` rules anchored there.
+#[tokio::test]
+async fn a_follow_up_fails_before_the_engine_starts_when_its_row_names_no_dots_worktree() {
+    let t = start().await;
+    let started = cli_started(t.dir.path());
+    let mut s = spec("wt-chat");
+    s.workdir = t.repo.to_string_lossy().to_string();
+    s.workspace_mode = WorkspaceMode::Worktree;
+    let dot = t.rt.create_dot(s).await.unwrap();
+    let first = t.rt.chat(&dot.id, "look around", None).await.unwrap();
+    let first = wait_status(t.rt.store(), &first.id, RunStatus::Succeeded, 15).await;
+    assert!(started.is_file(), "the first run starts the fake CLI");
+    let ws = PathBuf::from(first.workspace_path.as_deref().unwrap());
+    assert!(!ws.exists(), "the unchanged worktree is cleaned up");
+
+    // A folder that exists would be used as it is; one that does not would be made by
+    // `git worktree add`, with its parent folders.
+    let existing = t.dir.path().join("outside");
+    std::fs::create_dir(&existing).unwrap();
+    let missing = t.dir.path().join("nowhere").join("deep");
+    let mut last = first.clone();
+    for forged in [&existing, &missing] {
+        let _ = std::fs::remove_file(&started);
+        tamper(&t, &last.id, "workspace_path", &forged.to_string_lossy()).await;
+        let follow =
+            t.rt.chat(&dot.id, "and now?", Some(&last.id))
+                .await
+                .unwrap();
+        assert_eq!(
+            follow.workspace_path,
+            Some(forged.to_string_lossy().to_string())
+        );
+        last = wait_status(t.rt.store(), &follow.id, RunStatus::Failed, 15).await;
+        let error = last.error.clone().unwrap_or_default();
+        assert!(error.contains("not a dots worktree"), "{error}");
+        assert!(error.contains(&forged.display().to_string()), "{error}");
+        assert!(
+            !started.exists(),
+            "the fake CLI was started for {}",
+            forged.display()
+        );
+        let events = t.rt.list_run_events(&last.id, 0).await.unwrap();
+        assert!(events.is_empty(), "{events:?}");
+        assert_eq!(std::fs::read_dir(&existing).unwrap().count(), 0);
+        assert!(!t.dir.path().join("nowhere").exists());
+        assert!(!ws.exists());
+        assert_eq!(git_out(&t.repo, &["branch", "--list"]), "* main");
+    }
+
+    // The true row still continues the chat, in its restored worktree.
+    tamper(&t, &last.id, "workspace_path", &ws.to_string_lossy()).await;
+    let follow =
+        t.rt.chat(&dot.id, "once more", Some(&last.id))
+            .await
+            .unwrap();
+    wait_status(t.rt.store(), &follow.id, RunStatus::Succeeded, 15).await;
+    let rec: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&started).unwrap()).unwrap();
+    assert_eq!(PathBuf::from(rec["cwd"].as_str().unwrap()), ws);
     t.rt.shutdown();
 }
 

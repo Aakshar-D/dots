@@ -315,7 +315,11 @@ impl WorkspaceManager {
     /// Recreates a removed worktree at its original path so a resumed session finds the
     /// directory it remembers. Reuses the branch if it still exists, otherwise recreates it
     /// from `base_commit`. Returns `prepared` unchanged (same path, branch and base).
+    ///
+    /// `prepared` comes from a run row, and its path, branch and base commit all go to git and
+    /// to the file system: it must pass `check_owned` before anything else happens.
     pub async fn restore(&self, dot: &Dot, prepared: &Prepared) -> Result<Prepared> {
+        self.check_owned(prepared)?;
         let (Some(branch), Some(base)) = (&prepared.branch, &prepared.base_commit) else {
             return Err(Error::Invalid(
                 "cannot restore a worktree without its branch and base commit".into(),
@@ -338,10 +342,22 @@ impl WorkspaceManager {
         let exists = git(&workdir, &["rev-parse", "--verify", "--quiet", &branch_ref])
             .await
             .is_ok();
+        // The branch after `-b` is that option's value; everything after `--end-of-options` is
+        // a path or a revision to git, whatever it looks like.
         let added = if exists {
-            git(&workdir, &["worktree", "add", &path, branch]).await
+            let args = ["worktree", "add", "--end-of-options", &path, branch];
+            git(&workdir, &args).await
         } else {
-            git(&workdir, &["worktree", "add", "-b", branch, &path, base]).await
+            let args = [
+                "worktree",
+                "add",
+                "-b",
+                branch,
+                "--end-of-options",
+                &path,
+                base,
+            ];
+            git(&workdir, &args).await
         };
         if let Err(e) = added {
             let _ = tokio::fs::remove_dir_all(&prepared.path).await;
@@ -350,15 +366,15 @@ impl WorkspaceManager {
         Ok(prepared.clone())
     }
 
+    /// Whether the worktree at `path` has uncommitted changes or commits after `base_commit`.
+    /// The base commit follows `--end-of-options`, so git reads it as a revision and never as
+    /// one of its own options (`--output=<file>` would empty that file).
     pub async fn has_changes(&self, path: &Path, base_commit: &str) -> Result<bool> {
         if !git(path, &["status", "--porcelain"]).await?.is_empty() {
             return Ok(true);
         }
-        let ahead = git(
-            path,
-            &["rev-list", "--count", &format!("{base_commit}..HEAD")],
-        )
-        .await?;
+        let range = format!("{base_commit}..HEAD");
+        let ahead = git(path, &["rev-list", "--count", "--end-of-options", &range]).await?;
         Ok(ahead != "0")
     }
 
@@ -374,7 +390,8 @@ impl WorkspaceManager {
     async fn remove_worktree(&self, repo: &Path, prepared: &Prepared) -> Result<()> {
         self.check_owned(prepared)?;
         let path = prepared.path.to_string_lossy().to_string();
-        let removed = git(repo, &["worktree", "remove", "--force", &path]).await;
+        let args = ["worktree", "remove", "--force", "--end-of-options", &path];
+        let removed = git(repo, &args).await;
         if prepared.path.exists() {
             tokio::fs::remove_dir_all(&prepared.path)
                 .await
@@ -397,15 +414,18 @@ impl WorkspaceManager {
     pub async fn remove(&self, workdir: &Path, prepared: &Prepared) -> Result<()> {
         self.remove_worktree(workdir, prepared).await?;
         if let Some(branch) = &prepared.branch {
-            git(workdir, &["branch", "-D", branch]).await?;
+            git(workdir, &["branch", "-D", "--end-of-options", branch]).await?;
         }
         Ok(())
     }
 
     /// Checks that `prepared` is a worktree this manager made: a folder directly inside its
     /// root (one level, no `..`, not the root itself), on the branch `dots/…/<that folder's
-    /// name>`. Only the text of the path and the branch is examined, so the check runs before
-    /// anything touches the disk or git.
+    /// name>`, and, when it has a base commit, one that is a full commit id (40 or 64
+    /// hexadecimal characters). Only the text of the path, the branch and the base commit is
+    /// examined, so the check runs before anything touches the disk or git. This is the one
+    /// definition of "this row names a worktree of dots": every use of a run row's worktree
+    /// (diff, discard, cleanup, restore, reuse by a later run) goes through it first.
     pub fn check_owned(&self, prepared: &Prepared) -> Result<()> {
         let mut inside = prepared
             .path
@@ -434,6 +454,15 @@ impl WorkspaceManager {
                 "refusing to use branch {branch}: not the dots branch of worktree {folder}"
             )));
         }
+        // The base commit goes to git as an argument: only a full commit id is one.
+        if let Some(base) = &prepared.base_commit {
+            let id = matches!(base.len(), 40 | 64) && base.bytes().all(|b| b.is_ascii_hexdigit());
+            if !id {
+                return Err(Error::Invalid(format!(
+                    "refusing to use base commit {base}: not a commit id"
+                )));
+            }
+        }
         Ok(())
     }
 
@@ -456,7 +485,7 @@ impl WorkspaceManager {
                 .await
                 .is_ok()
             {
-                git(&repo, &["branch", "-D", branch]).await?;
+                git(&repo, &["branch", "-D", "--end-of-options", branch]).await?;
             }
         }
         Ok(())
@@ -470,8 +499,8 @@ impl WorkspaceManager {
         let (Some(_), Some(base)) = (&prepared.branch, &prepared.base_commit) else {
             return Ok(false);
         };
-        // The row comes from the database: it must name a worktree of dots before git runs
-        // anything in it.
+        // The row comes from the database: it must name a worktree of dots, base commit
+        // included, before git runs anything in it.
         self.check_owned(prepared)?;
         if !prepared.path.exists() || self.has_changes(&prepared.path, base).await? {
             return Ok(false);

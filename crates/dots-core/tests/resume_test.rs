@@ -430,6 +430,46 @@ async fn plain_deny_close_removes_an_unchanged_worktree() {
     );
 }
 
+/// The resume child takes its folder from its parent's row. A worktree row whose folder is not
+/// one of dots' worktrees fails the child before the engine starts in that folder.
+#[tokio::test]
+async fn a_resumed_run_fails_before_the_engine_starts_when_its_row_names_no_dots_worktree() {
+    let e = env(vec![ask("git push"), finished()]).await;
+    let (parent, _path) = parked_worktree_run(&e).await;
+    let outside = e.dir.path().join("outside");
+    std::fs::create_dir(&outside).unwrap();
+    // As a tampered database would have it: the row's folder is replaced, the rest is kept.
+    e.store
+        .set_workspace(
+            &parent.id,
+            &outside.to_string_lossy(),
+            parent.branch.as_deref(),
+            parent.base_commit.as_deref(),
+        )
+        .await
+        .unwrap();
+    let approval = e
+        .store
+        .approvals_for_run(&parent.id)
+        .await
+        .unwrap()
+        .remove(0);
+    let child = decide(&e, &approval.id, true, None)
+        .await
+        .expect("child run");
+    assert_eq!(
+        child.workspace_path,
+        Some(outside.to_string_lossy().to_string())
+    );
+    let child = wait_status(&e.store, &child.id, RunStatus::Failed, 5).await;
+    let error = child.error.unwrap_or_default();
+    assert!(error.contains("not a dots worktree"), "{error}");
+    // The scripted engine records an event as soon as it starts.
+    let events = e.store.list_events(&child.id, 0).await.unwrap();
+    assert!(events.is_empty(), "{events:?}");
+    assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
+}
+
 #[tokio::test]
 async fn cancel_of_awaiting_run_removes_an_unchanged_worktree() {
     let e = env(vec![ask("git push"), finished()]).await;

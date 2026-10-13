@@ -408,7 +408,16 @@ impl Runner {
             return Err(Error::Other(reason));
         }
         let prepared = match Prepared::from_run(run) {
-            Some(p) if p.path.is_dir() => p,
+            Some(p) if p.path.is_dir() => {
+                // A resumed or follow-up run works in the folder its row names, and the
+                // policy's `./` rules are anchored there. A row with a branch names a worktree:
+                // it must be one of dots' own, or the run fails here, before the engine starts.
+                // A folder run has no branch and nothing to compare its folder with.
+                if p.branch.is_some() {
+                    self.workspaces.check_owned(&p)?;
+                }
+                p
+            }
             // A follow-up of a session whose unchanged worktree was cleaned up: the session
             // remembers that directory, so recreate the worktree at the same path.
             Some(p)

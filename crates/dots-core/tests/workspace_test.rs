@@ -549,3 +549,186 @@ async fn cleaning_up_an_unchanged_run_refuses_a_forged_row_before_any_git_comman
         4
     );
 }
+
+/// The files git would make for a base commit of `--output=<out>`: git reads the value as its
+/// own option and opens the named file for writing, with or without the `..HEAD` Dots appends.
+fn output_files(out: &Path) -> [PathBuf; 2] {
+    [
+        out.to_path_buf(),
+        PathBuf::from(format!("{}..HEAD", out.display())),
+    ]
+}
+
+#[test]
+fn a_base_commit_must_be_a_full_commit_id_to_name_a_dots_worktree() {
+    let wm = WorkspaceManager::new("C:/data/worktrees");
+    let check = |base: Option<&str>| {
+        wm.check_owned(&Prepared {
+            path: PathBuf::from("C:/data/worktrees/R1"),
+            branch: Some("dots/triage/R1".into()),
+            base_commit: base.map(str::to_string),
+        })
+    };
+    let sha1 = "0123456789abcdefABCDEF0123456789abcdef01";
+    assert_eq!(sha1.len(), 40);
+    check(Some(sha1)).unwrap();
+    check(Some(&format!("{sha1}{}", &sha1[..24]))).unwrap();
+    // A row without a base commit has nothing to hand to git.
+    check(None).unwrap();
+    for base in [
+        "--output=C:/x",
+        "--ext-diff",
+        "HEAD",
+        "main",
+        "abc123",
+        "",
+        &sha1[..39],
+        &format!("{}z", &sha1[..39]),
+        &format!("{sha1}0"),
+        &format!(" {}", &sha1[..39]),
+    ] {
+        let err = check(Some(base)).unwrap_err();
+        assert!(matches!(err, Error::Invalid(_)), "{base}: {err}");
+        assert_eq!(
+            err.to_string(),
+            Error::Invalid(format!(
+                "refusing to use base commit {base}: not a commit id"
+            ))
+            .to_string()
+        );
+    }
+}
+
+/// The unchanged-run cleanup runs by itself, at the end of a resumed run, on a cancel and on a
+/// plain deny. Its row's base commit goes to `git rev-list`: one that is not a commit id is
+/// refused before git sees it.
+#[tokio::test]
+async fn cleaning_up_an_unchanged_run_refuses_a_forged_base_commit_before_any_git_command() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    init_repo(&repo);
+    let dot = fake_dot("links", &repo, WorkspaceMode::Worktree);
+    let wm = WorkspaceManager::new(tmp.path().join("wt"));
+    let p = wm.prepare(&dot, "R1").await.unwrap();
+    let out = tmp.path().join("pwned");
+
+    for base in [
+        format!("--output={}", out.display()),
+        "HEAD".to_string(),
+        "abc123".to_string(),
+    ] {
+        let forged = Prepared {
+            base_commit: Some(base.clone()),
+            ..p.clone()
+        };
+        let cleaned = wm.cleanup_if_unchanged(&dot, &forged).await;
+        for made in output_files(&out) {
+            assert!(!made.exists(), "git wrote {}", made.display());
+        }
+        let err = cleaned.expect_err(&base);
+        assert!(matches!(err, Error::Invalid(_)), "{base}: {err}");
+        assert!(err.to_string().contains("not a commit id"), "{err}");
+        // The unchanged worktree and its branch were not cleaned up on the word of that row.
+        assert!(p.path.join("README.md").is_file(), "{base}");
+        assert!(!git_out(&repo, &["branch", "--list", "dots/links/R1"]).is_empty());
+    }
+    // The true row is still cleaned up.
+    assert!(wm.cleanup_if_unchanged(&dot, &p).await.unwrap());
+}
+
+/// `has_changes` is also reachable without the check, so the base commit follows
+/// `--end-of-options`: git then reads it as a revision, whatever it looks like.
+#[tokio::test]
+async fn has_changes_never_lets_git_read_the_base_commit_as_an_option() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    init_repo(&repo);
+    let dot = fake_dot("links", &repo, WorkspaceMode::Worktree);
+    let wm = WorkspaceManager::new(tmp.path().join("wt"));
+    let p = wm.prepare(&dot, "R1").await.unwrap();
+    let out = tmp.path().join("pwned");
+
+    let answer = wm
+        .has_changes(&p.path, &format!("--output={}", out.display()))
+        .await;
+    for made in output_files(&out) {
+        assert!(!made.exists(), "git wrote {}", made.display());
+    }
+    assert!(answer.is_err(), "{answer:?}");
+    // A true base still gets its answer.
+    assert!(!wm
+        .has_changes(&p.path, p.base_commit.as_deref().unwrap())
+        .await
+        .unwrap());
+}
+
+/// `restore` works from a run row too: it adds a worktree at the row's path, on the row's
+/// branch, from the row's base commit. A row that does not name a worktree of dots is refused
+/// before a folder is made or git runs.
+#[tokio::test]
+async fn restore_refuses_a_forged_row_before_it_touches_the_disk_or_git() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    init_repo(&repo);
+    let dot = fake_dot("again", &repo, WorkspaceMode::Worktree);
+    let wm = WorkspaceManager::new(tmp.path().join("wt"));
+    let p = wm.prepare(&dot, "R1").await.unwrap();
+    // The state `restore` is for: the unchanged worktree and its branch were cleaned up.
+    assert!(wm.cleanup_if_unchanged(&dot, &p).await.unwrap());
+    let out = tmp.path().join("pwned");
+    let untouched = |what: &str| {
+        assert!(!p.path.exists(), "{what}: a worktree was added");
+        assert_eq!(git_out(&repo, &["branch", "--list"]), "* main", "{what}");
+        let listed = git_out(&repo, &["worktree", "list", "--porcelain"]);
+        assert_eq!(listed.matches("worktree ").count(), 1, "{what}: {listed}");
+    };
+
+    // A path outside the worktrees folder, whose parent folders do not exist either.
+    let outside = tmp.path().join("outside");
+    for path in [outside.join("deep").join("R1"), repo.join("R1")] {
+        let forged = Prepared {
+            path: path.clone(),
+            ..p.clone()
+        };
+        let err = wm.restore(&dot, &forged).await.unwrap_err();
+        assert!(matches!(err, Error::Invalid(_)), "{err}");
+        assert!(err.to_string().contains("not a dots worktree"), "{err}");
+        assert!(!path.exists(), "{} was made", path.display());
+        assert!(!outside.exists(), "the parent folders were made");
+        untouched("path");
+    }
+
+    for branch in ["feature-x", "dots/again/R2", "-B"] {
+        let forged = Prepared {
+            branch: Some(branch.into()),
+            ..p.clone()
+        };
+        let err = wm.restore(&dot, &forged).await.unwrap_err();
+        assert!(matches!(err, Error::Invalid(_)), "{branch}: {err}");
+        assert!(err.to_string().contains("not the dots branch"), "{err}");
+        untouched(branch);
+    }
+
+    for base in [
+        format!("--output={}", out.display()),
+        "--orphan".to_string(),
+        "HEAD".to_string(),
+        "main".to_string(),
+    ] {
+        let forged = Prepared {
+            base_commit: Some(base.clone()),
+            ..p.clone()
+        };
+        let err = wm.restore(&dot, &forged).await.unwrap_err();
+        assert!(matches!(err, Error::Invalid(_)), "{base}: {err}");
+        assert!(err.to_string().contains("not a commit id"), "{err}");
+        for made in output_files(&out) {
+            assert!(!made.exists(), "git wrote {}", made.display());
+        }
+        untouched(&base);
+    }
+
+    // The true row is still restored.
+    assert_eq!(wm.restore(&dot, &p).await.unwrap(), p);
+    assert!(p.path.join("README.md").is_file());
+}

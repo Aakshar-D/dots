@@ -406,23 +406,14 @@ impl Runtime {
 
     /// The worktree a run row describes, for the review actions. The row is the only thing
     /// between the database and git commands in the user's repository, so before any of them
-    /// it must name a worktree dots made (`WorkspaceManager::check_owned`). `Invalid` for a
-    /// folder run and for a row that fails the check.
+    /// it must name a worktree dots made (`WorkspaceManager::check_owned`: path, branch and
+    /// base commit). `Invalid` for a folder run and for a row that fails the check.
     fn review_worktree(&self, run: &Run) -> Result<(WorkspaceManager, Prepared)> {
         let Some(prepared) = Prepared::from_run(run).filter(|p| p.branch.is_some()) else {
             return Err(Error::Invalid(format!("run {} has no worktree", run.id)));
         };
         let workspaces = WorkspaceManager::new(self.data_dir.join("worktrees"));
         workspaces.check_owned(&prepared)?;
-        // The base commit goes to `git diff` as an argument: only a full commit id is one.
-        if let Some(base) = &prepared.base_commit {
-            let id = matches!(base.len(), 40 | 64) && base.bytes().all(|b| b.is_ascii_hexdigit());
-            if !id {
-                return Err(Error::Invalid(format!(
-                    "refusing to use base commit {base}: not a commit id"
-                )));
-            }
-        }
         Ok((workspaces, prepared))
     }
 
