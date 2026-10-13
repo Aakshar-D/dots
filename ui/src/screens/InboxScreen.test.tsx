@@ -1,8 +1,8 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import type { Inbox } from "@/api/types";
-import { backend } from "@/test/backend";
+import type { Approval, Inbox, Run, WorktreeDiff } from "@/api/types";
+import { backend, later } from "@/test/backend";
 import { sample } from "@/test/fixtures";
 import { renderApp } from "@/test/render";
 
@@ -232,6 +232,77 @@ describe("the Inbox", () => {
     await user.click(await screen.findByRole("button", { name: "Discard the worktree" }));
     expect(await screen.findByText(`run ${worktreeRun.id}`)).toBeVisible();
     expect(await screen.findByText(/Nothing waits for you/)).toBeVisible();
+  });
+
+  // A load that was on its way when an action changed what it reads answers with the state from
+  // before. No screen shows the run by then, so nothing restarts that load: its answer has to
+  // count as stale, or the run view would show it as it is.
+  it("loads a run's changes again when its worktree was discarded while they were loading", async () => {
+    const box = inbox({ approvals: [], review_runs: [worktreeRun] });
+    backend.on("run_thread", () => [sample.run]);
+    backend.on("get_dot", () => sample.dot);
+    backend.on("list_run_events", () => []);
+    backend.on("approvals_for_run", () => []);
+    const before = later<WorktreeDiff>();
+    backend.on("worktree_diff", () => before.answer);
+    backend.on("discard_worktree", () => {
+      box.set({ approvals: [], review_runs: [] });
+      backend.on("worktree_diff", () => ({ files: [], truncated: false, exists: false }));
+      return { ...sample.run, reviewed_at: sample.run.ended_at };
+    });
+    const { user, router, listening } = renderApp("/inbox");
+    await listening();
+    await user.click(await screen.findByRole("link", { name: "Open" }));
+    await waitFor(() => expect(backend.callsTo("worktree_diff")).toHaveLength(1));
+    await user.click(screen.getByRole("link", { name: /Inbox/ }));
+    await user.click(await screen.findByRole("button", { name: "Discard worktree" }));
+    await user.click(await screen.findByRole("button", { name: "Discard the worktree" }));
+    expect(await screen.findByText("Worktree discarded")).toBeVisible();
+    before.give(sample.diff);
+    await settle();
+
+    await act(() => router.navigate(`/runs/${sample.run.id}`));
+    await waitFor(() => expect(backend.callsTo("worktree_diff")).toHaveLength(2));
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Discard worktree" })).toBeNull(),
+    );
+  });
+
+  it("loads a run's approvals again when one was decided while they were loading", async () => {
+    const box = inbox({ approvals: [approval], review_runs: [] });
+    const waiting: Run = {
+      ...sample.run,
+      branch: null,
+      status: "awaiting_approval",
+      ended_at: null,
+      summary: null,
+    };
+    backend.on("run_thread", () => [waiting]);
+    backend.on("get_dot", () => sample.dot);
+    backend.on("list_run_events", () => []);
+    const before = later<Approval[]>();
+    backend.on("approvals_for_run", () => before.answer);
+    backend.on("decide_approval", () => {
+      const approved: Approval = { ...sample.approval, status: "approved" };
+      box.set({ approvals: [], review_runs: [] });
+      backend.on("approvals_for_run", () => [approved]);
+      return approved;
+    });
+    const { user, router, listening } = renderApp("/inbox");
+    await listening();
+    await user.click(await screen.findByRole("link", { name: "Open the run" }));
+    await waitFor(() => expect(backend.callsTo("approvals_for_run")).toHaveLength(1));
+    await user.click(screen.getByRole("link", { name: /Inbox/ }));
+    await user.click(await screen.findByRole("button", { name: "Approve" }));
+    expect(await screen.findByText(/Nothing waits for you/)).toBeVisible();
+    before.give([sample.approval]);
+    await settle();
+
+    await act(() => router.navigate(`/runs/${waiting.id}`));
+    await waitFor(() => expect(backend.callsTo("approvals_for_run")).toHaveLength(2));
+    await waitFor(() =>
+      expect(screen.queryByRole("article", { name: "Approval for Bash" })).toBeNull(),
+    );
   });
 
   it("shows a new approval as soon as the dot asks", async () => {

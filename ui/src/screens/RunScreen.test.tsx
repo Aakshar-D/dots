@@ -1,13 +1,15 @@
-import { act, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import type { Approval, Run, RunEventRecord } from "@/api/types";
-import { backend } from "@/test/backend";
+import type { Approval, Run, RunEventRecord, WorktreeDiff } from "@/api/types";
+import { backend, later } from "@/test/backend";
 import { sample } from "@/test/fixtures";
 import { renderApp } from "@/test/render";
 
 const run = sample.run; // a succeeded scheduled worktree run
 const folderRun: Run = { ...run, branch: null, base_commit: null };
+/// What the core answers for a worktree that was removed.
+const gone: WorktreeDiff = { files: [], truncated: false, exists: false };
 let seq = 0;
 const ev = (data: Record<string, unknown>, runId = run.id): RunEventRecord => ({
   run_id: runId,
@@ -27,6 +29,9 @@ function thread(runs: Run[], events: RunEventRecord[] = [], approvals: Approval[
   backend.on("approvals_for_run", (args) => approvals.filter((a) => a.run_id === args.runId));
   backend.on("worktree_diff", () => sample.diff);
 }
+
+/// Lets what a command's answer set off reach the screen.
+const settle = () => act(() => new Promise<void>((resolve) => setTimeout(resolve, 20)));
 
 describe("the run view", () => {
   it("shows the run's state, numbers and summary", async () => {
@@ -65,6 +70,132 @@ describe("the run view", () => {
     expect(within(call).getByText("test result: ok")).toBeInTheDocument();
     expect(screen.queryByText("hidden")).toBeNull();
     expect(screen.getByText("Unparsed output").closest("details")).not.toHaveAttribute("open");
+  });
+
+  it("says that a tool call without a result is running only while its run is going", async () => {
+    // The first run was stopped in the middle of a call; the second is in the middle of one.
+    const stopped: Run = { ...folderRun, id: "run-a", status: "failed", error: "timeout after 5s" };
+    const live: Run = {
+      ...folderRun,
+      id: "run-b",
+      parent_run_id: "run-a",
+      trigger: "resume",
+      status: "running",
+      ended_at: null,
+      summary: null,
+    };
+    thread(
+      [stopped, live],
+      [
+        ev({ kind: "tool_call", id: "t1", tool: "Bash", input: { command: "sleep 60" } }, "run-a"),
+        ev({ kind: "tool_call", id: "t2", tool: "Read", input: { file_path: "a.rs" } }, "run-b"),
+      ],
+    );
+    renderApp("/runs/run-b");
+    const first = (await screen.findByText("Bash")).closest("details")!;
+    const second = (await screen.findByText("Read")).closest("details")!;
+    expect(within(first).getByText("no result")).toBeInTheDocument();
+    expect(within(first).queryByText("running")).toBeNull();
+    expect(within(second).getByText("running")).toBeInTheDocument();
+
+    const cancelled: Run = { ...live, status: "cancelled", ended_at: run.ended_at };
+    backend.on("run_thread", () => [stopped, cancelled]);
+    act(() => backend.emit("runtime", { type: "run_updated", run: cancelled }));
+    expect(
+      await within(screen.getByText("Read").closest("details")!).findByText("no result"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("running")).toBeNull();
+  });
+
+  it("says how long a run has been going, and how long it took once it has ended", async () => {
+    const started = Date.now() - 4000;
+    const live: Run = {
+      ...folderRun,
+      status: "running",
+      started_at: new Date(started).toISOString(),
+      ended_at: null,
+      summary: null,
+    };
+    thread([live]);
+    renderApp(`/runs/${run.id}`);
+    expect((await screen.findByText("Running for")).nextElementSibling).toHaveTextContent(/^\ds$/);
+    expect(screen.queryByText("Took")).toBeNull();
+
+    const done: Run = {
+      ...live,
+      status: "succeeded",
+      ended_at: new Date(started + 300_000).toISOString(),
+    };
+    backend.on("run_thread", () => [done]);
+    act(() => backend.emit("runtime", { type: "run_updated", run: done }));
+    expect((await screen.findByText("Took")).nextElementSibling).toHaveTextContent("5m 00s");
+    expect(screen.queryByText("Running for")).toBeNull();
+  });
+
+  it("does not say that a run that waits to start is running", async () => {
+    const queued: Run = {
+      ...folderRun,
+      status: "queued",
+      started_at: null,
+      ended_at: null,
+      summary: null,
+    };
+    thread([queued]);
+    renderApp(`/runs/${run.id}`);
+    expect((await screen.findByText("Took")).nextElementSibling).toHaveTextContent("not started");
+    expect(screen.queryByText("Running for")).toBeNull();
+  });
+
+  it("shows a failure once when the run also stored it as an event", async () => {
+    const failed: Run = { ...folderRun, status: "failed", summary: null, error: "engine: boom" };
+    thread(
+      [failed],
+      [
+        ev({ kind: "assistant_text", text: "Trying." }),
+        ev({ kind: "failed", error: "engine: boom" }),
+      ],
+    );
+    renderApp(`/runs/${run.id}`);
+    expect(await screen.findByText("Trying.")).toBeVisible();
+    expect(screen.getAllByText("engine: boom")).toHaveLength(1);
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+  });
+
+  it("keeps an earlier run's failure in its place, and a stored failure that says something else", async () => {
+    const earlier: Run = {
+      ...folderRun,
+      id: "run-a",
+      status: "failed",
+      summary: null,
+      error: "rate limited",
+    };
+    const latest: Run = {
+      ...folderRun,
+      id: "run-b",
+      parent_run_id: "run-a",
+      trigger: "resume",
+      status: "failed",
+      summary: null,
+      error: "rate limited",
+    };
+    // Both runs failed the same way; the last one stored a second failure too.
+    thread(
+      [earlier, latest],
+      [
+        ev({ kind: "failed", error: "rate limited" }, "run-a"),
+        ev({ kind: "failed", error: "interrupted" }, "run-b"),
+        ev({ kind: "failed", error: "rate limited" }, "run-b"),
+      ],
+    );
+    renderApp("/runs/run-b");
+    const sections = await screen.findAllByRole("region", {
+      name: /Scheduled run|Continued after approval/,
+    });
+    expect(await within(sections[0]).findByRole("alert")).toHaveTextContent("rate limited");
+    expect(await within(sections[1]).findByRole("alert")).toHaveTextContent("interrupted");
+    // Above the transcript and in the earlier run, not in the last run again.
+    expect(screen.getAllByText("rate limited")).toHaveLength(2);
+    expect(screen.getAllByRole("alert")).toHaveLength(3);
   });
 
   it("follows a live run: new events and the new status arrive without a reload", async () => {
@@ -113,9 +244,9 @@ describe("the run view", () => {
     expect(screen.queryByRole("button", { name: "Discard worktree" })).toBeNull();
   });
 
-  it("offers neither discard nor review for a worktree that is already gone", async () => {
+  it("offers no discard, review or folder for a worktree that is already gone", async () => {
     thread([run]);
-    backend.on("worktree_diff", () => ({ files: [], truncated: false, exists: false }));
+    backend.on("worktree_diff", () => gone);
     const { user } = renderApp(`/runs/${run.id}`);
     await user.click(await screen.findByRole("tab", { name: "Changes" }));
     expect(
@@ -124,6 +255,56 @@ describe("the run view", () => {
       ),
     ).toBeVisible();
     expect(screen.queryByRole("button", { name: "Discard worktree" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Mark reviewed" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Open folder" })).toBeNull();
+  });
+
+  it("offers the folder, but no review, while the changes are still loading", async () => {
+    thread([run]);
+    const diff = later<WorktreeDiff>();
+    backend.on("worktree_diff", () => diff.answer);
+    renderApp(`/runs/${run.id}`);
+    expect(await screen.findByRole("button", { name: "Open folder" })).toBeVisible();
+    await waitFor(() => expect(backend.callsTo("worktree_diff")).toHaveLength(1));
+    expect(screen.queryByRole("button", { name: "Mark reviewed" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Discard worktree" })).toBeNull();
+
+    act(() => diff.give(sample.diff));
+    expect(await screen.findByRole("button", { name: "Mark reviewed" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Discard worktree" })).toBeVisible();
+  });
+
+  it("shows why the changes could not be loaded and still lets the run be marked as reviewed", async () => {
+    thread([run]);
+    backend.on("worktree_diff", () => {
+      throw { kind: "internal", message: "git diff failed" };
+    });
+    backend.on("mark_reviewed", () => {
+      const reviewed = { ...run, reviewed_at: run.ended_at };
+      backend.on("run_thread", () => [reviewed]);
+      return reviewed;
+    });
+    const { user } = renderApp(`/runs/${run.id}`);
+    await user.click(await screen.findByRole("tab", { name: "Changes" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("git diff failed");
+    // Whether there is a worktree to discard is not known.
+    expect(screen.queryByRole("button", { name: "Discard worktree" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Mark reviewed" }));
+    expect(await screen.findByText("Marked as reviewed")).toBeVisible();
+    expect(backend.callsTo("mark_reviewed")).toEqual([{ runId: run.id }]);
+    // A reviewed run is not offered again, whatever the diff says.
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Mark reviewed" })).toBeNull());
+  });
+
+  it("offers no review for a run still going whose changes could not be loaded", async () => {
+    const live: Run = { ...run, status: "running", ended_at: null, summary: null };
+    thread([live]);
+    backend.on("worktree_diff", () => {
+      throw { kind: "internal", message: "git diff failed" };
+    });
+    const { user } = renderApp(`/runs/${run.id}`);
+    await user.click(await screen.findByRole("tab", { name: "Changes" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("git diff failed");
     expect(screen.queryByRole("button", { name: "Mark reviewed" })).toBeNull();
   });
 
@@ -149,7 +330,12 @@ describe("the run view", () => {
 
   it("discards the worktree only after a confirmation that names the branch", async () => {
     thread([run]);
-    backend.on("discard_worktree", () => ({ ...run, reviewed_at: run.ended_at }));
+    backend.on("discard_worktree", () => {
+      const reviewed = { ...run, reviewed_at: run.ended_at };
+      backend.on("run_thread", () => [reviewed]);
+      backend.on("worktree_diff", () => gone);
+      return reviewed;
+    });
     const { user } = renderApp(`/runs/${run.id}`);
     await user.click(await screen.findByRole("button", { name: "Discard worktree" }));
     const dialog = await screen.findByRole("alertdialog", { name: "Discard this worktree?" });
@@ -158,6 +344,87 @@ describe("the run view", () => {
     await user.click(within(dialog).getByRole("button", { name: "Discard the worktree" }));
     expect(await screen.findByText("Worktree discarded")).toBeVisible();
     expect(backend.callsTo("discard_worktree")).toEqual([{ runId: run.id }]);
+    // The folder went with the worktree: nothing is left to open or to discard.
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Open folder" })).toBeNull());
+    expect(screen.queryByRole("button", { name: "Discard worktree" })).toBeNull();
+  });
+
+  it("reloads the changes when a discard is refused", async () => {
+    // The worktree was removed elsewhere: the core refuses, and the diff it answers next says so.
+    thread([run]);
+    backend.on("discard_worktree", () => {
+      backend.on("worktree_diff", () => gone);
+      throw { kind: "not_found", message: "the worktree is gone" };
+    });
+    const { user } = renderApp(`/runs/${run.id}`);
+    await user.click(await screen.findByRole("button", { name: "Discard worktree" }));
+    await user.click(await screen.findByRole("button", { name: "Discard the worktree" }));
+    expect(await screen.findByText("the worktree is gone")).toBeVisible();
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Discard worktree" })).toBeNull(),
+    );
+  });
+
+  it("reloads the run when a review is refused", async () => {
+    // A follow-up run started and its event was missed: the core refuses, and the thread it
+    // answers next holds the new run.
+    const failed: Run = { ...folderRun, status: "failed", summary: null, error: "timeout" };
+    const next: Run = {
+      ...folderRun,
+      id: "run-b",
+      parent_run_id: run.id,
+      trigger: "resume",
+      status: "running",
+      ended_at: null,
+      summary: null,
+    };
+    thread([failed]);
+    backend.on("mark_reviewed", () => {
+      backend.on("run_thread", () => [failed, next]);
+      throw { kind: "conflict", message: "the thread is still running" };
+    });
+    const { user, listening } = renderApp(`/runs/${run.id}`);
+    const button = await screen.findByRole("button", { name: "Mark reviewed" });
+    await listening();
+    const loads = backend.callsTo("inbox").length;
+    await user.click(button);
+    expect(await screen.findByText("the thread is still running")).toBeVisible();
+    expect(await screen.findByRole("button", { name: "Cancel run" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Mark reviewed" })).toBeNull();
+    // The Inbox is asked again too, as after a refusal in the Inbox itself.
+    expect(backend.callsTo("inbox").length).toBeGreaterThan(loads);
+  });
+
+  it("marks the run as reviewed once when the button is double-clicked", async () => {
+    // The thread the core answers stays unreviewed here, so the button stays where it is.
+    const failed: Run = { ...folderRun, status: "failed", summary: null, error: "timeout" };
+    thread([failed]);
+    backend.on("mark_reviewed", () => ({ ...failed, reviewed_at: run.ended_at }));
+    renderApp(`/runs/${run.id}`);
+    const button = await screen.findByRole("button", { name: "Mark reviewed" });
+    fireEvent.click(button, { detail: 1 });
+    expect(await screen.findByText("Marked as reviewed")).toBeVisible();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Mark reviewed" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Mark reviewed" }), { detail: 2 });
+    await settle();
+    expect(backend.callsTo("mark_reviewed")).toEqual([{ runId: run.id }]);
+  });
+
+  it("holds both review actions while one is on its way", async () => {
+    thread([run]);
+    const answer = later<Run>();
+    backend.on("mark_reviewed", () => answer.answer);
+    const { user } = renderApp(`/runs/${run.id}`);
+    await user.click(await screen.findByRole("button", { name: "Mark reviewed" }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Discard worktree" })).toBeDisabled(),
+    );
+    expect(screen.getByRole("button", { name: "Mark reviewed" })).toBeDisabled();
+
+    act(() => answer.give({ ...run, reviewed_at: run.ended_at }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Discard worktree" })).toBeEnabled(),
+    );
   });
 
   it("marks a failed run as reviewed and shows why it failed", async () => {

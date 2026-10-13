@@ -218,6 +218,27 @@ describe("the Chat screen", () => {
     );
   });
 
+  it("shows a failure once when the run also stored it as an event", async () => {
+    chats(
+      [chat("a", "10:00", { status: "failed", summary: null, error: "engine: boom" })],
+      [
+        said("a", 1, "Trying."),
+        {
+          run_id: "a",
+          seq: 2,
+          ts: sample.run.queued_at,
+          kind: "failed",
+          data: { kind: "failed", error: "engine: boom" },
+        },
+      ],
+    );
+    renderApp(`/chat/${dot.id}/a`);
+    const conversation = within(await screen.findByRole("region", { name: "Conversation" }));
+    expect(await conversation.findByText("Trying.")).toBeVisible();
+    expect(conversation.getAllByRole("alert")).toHaveLength(1);
+    expect(conversation.getByRole("alert")).toHaveTextContent("engine: boom");
+  });
+
   it("shows a failed load of a conversation's events and keeps what did load", async () => {
     chats([chat("a", "10:00")]);
     backend.on("list_run_events", () => {

@@ -39,6 +39,8 @@ export function chatThreads(runs: Run[]): ChatThread[] {
   );
 }
 
+/// Whether the run has not ended: it waits to start, runs, or waits for an approval. The one
+/// definition for every screen (the core's is `RunStatus::is_terminal`).
 export function isActive(run: Run): boolean {
   return run.status === "queued" || run.status === "running" || run.status === "awaiting_approval";
 }

@@ -1,44 +1,19 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router";
-import { toast } from "sonner";
 
 import { commands } from "@/api/commands";
 import type { ReviewRun } from "@/api/types";
 import { ApprovalCard } from "@/components/ApprovalCard";
-import { ConfirmButton } from "@/components/ConfirmButton";
 import { ErrorNote } from "@/components/ErrorNote";
 import { Page } from "@/components/Page";
+import { ReviewActions } from "@/components/ReviewActions";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { relativeTime } from "@/lib/format";
-import { notifyError } from "@/lib/notify";
 import { keys } from "@/lib/query";
-import { onSingleClick } from "@/lib/single-click";
 
 /// A finished run that waits for the user: it failed, or it left a worktree to look at.
 function ReviewRow({ run }: { run: ReviewRun }) {
-  const qc = useQueryClient();
-  const done = (message: string) => () => {
-    for (const queryKey of [["thread"], ["diff"]]) {
-      void qc.invalidateQueries({ queryKey });
-    }
-    toast.success(message);
-  };
-  // Also after a refusal: a run that is gone or was reviewed elsewhere has to leave the list.
-  const reload = () => void qc.invalidateQueries({ queryKey: keys.inbox });
-  const markReviewed = useMutation({
-    mutationFn: () => commands.markReviewed(run.id),
-    onSuccess: done("Marked as reviewed"),
-    onError: notifyError,
-    onSettled: reload,
-  });
-  const discard = useMutation({
-    mutationFn: () => commands.discardWorktree(run.id),
-    onSuccess: done("Worktree discarded"),
-    onError: notifyError,
-    onSettled: reload,
-  });
-  const busy = markReviewed.isPending || discard.isPending;
   return (
     <li
       aria-label={`${run.dot_name} run to review`}
@@ -55,30 +30,12 @@ function ReviewRow({ run }: { run: ReviewRun }) {
       <Button asChild size="sm" variant="outline">
         <Link to={`/runs/${run.id}`}>Open</Link>
       </Button>
-      <Button
-        size="sm"
-        variant="outline"
-        disabled={busy}
-        onClick={onSingleClick(() => markReviewed.mutate())}
-      >
-        Mark reviewed
-      </Button>
-      {run.worktree_exists && (
-        <ConfirmButton
-          title="Discard this worktree?"
-          description={
-            <>
-              The worktree folder and the branch <code>{run.branch}</code> are deleted, with
-              every change the dot made there. This cannot be undone.
-            </>
-          }
-          confirmLabel="Discard the worktree"
-          onConfirm={() => discard.mutate()}
-          disabled={busy}
-        >
-          Discard worktree
-        </ConfirmButton>
-      )}
+      <ReviewActions
+        runId={run.id}
+        branch={run.branch}
+        canReview
+        canDiscard={run.worktree_exists}
+      />
     </li>
   );
 }

@@ -1,6 +1,7 @@
 import type { Run, RunEventRecord } from "@/api/types";
 import { Markdown } from "@/components/Markdown";
 import { StatusBadge } from "@/components/StatusBadge";
+import { isActive } from "@/lib/chat-threads";
 import { localDateTime } from "@/lib/format";
 import { toolPreview, transcriptItems, type TranscriptItem } from "@/lib/transcript";
 
@@ -21,7 +22,9 @@ function chatMessage(run: Run): string | null {
   return typeof message === "string" ? message : null;
 }
 
-function Item({ item }: { item: TranscriptItem }) {
+/// `active`: the item's run is still going. Only then can a tool call without a result be one
+/// that runs; in a run that has ended, the result never came.
+function Item({ item, active }: { item: TranscriptItem; active: boolean }) {
   switch (item.type) {
     case "text":
       return <Markdown text={item.text} />;
@@ -47,7 +50,13 @@ function Item({ item }: { item: TranscriptItem }) {
               {toolPreview(item.input)}
             </span>
             <span className={item.result?.isError ? "text-destructive" : "text-muted-foreground"}>
-              {item.result === null ? "running" : item.result.isError ? "failed" : "done"}
+              {item.result === null
+                ? active
+                  ? "running"
+                  : "no result"
+                : item.result.isError
+                  ? "failed"
+                  : "done"}
             </span>
           </summary>
           <pre className="mt-1 overflow-x-auto text-xs whitespace-pre-wrap">
@@ -68,13 +77,23 @@ function Item({ item }: { item: TranscriptItem }) {
 }
 
 /// A thread as one conversation: each run of the lineage in order, with its events.
-export function Transcript(props: { runs: Run[]; events: Map<string, RunEventRecord[]> }) {
+export function Transcript(props: {
+  runs: Run[];
+  events: Map<string, RunEventRecord[]>;
+  /// The last run's error, when the screen shows it by itself. A failed run stores its error as
+  /// an event too: the one of the last run that says the same is left out, so that the error is
+  /// on screen once.
+  shownError?: string | null;
+}) {
   const many = props.runs.length > 1;
   return (
     <div className="flex flex-col gap-4">
-      {props.runs.map((run) => {
+      {props.runs.map((run, i) => {
         const message = chatMessage(run);
-        const items = transcriptItems(props.events.get(run.id) ?? []);
+        const last = i === props.runs.length - 1;
+        const items = transcriptItems(props.events.get(run.id) ?? []).filter(
+          (item) => !(last && item.type === "error" && item.text === props.shownError),
+        );
         return (
           <section key={run.id} aria-label={`${TRIGGER[run.trigger]}, ${localDateTime(run.queued_at)}`}>
             <header className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
@@ -89,7 +108,7 @@ export function Transcript(props: { runs: Run[]; events: Map<string, RunEventRec
                 </p>
               )}
               {items.map((item) => (
-                <Item key={item.seq} item={item} />
+                <Item key={item.seq} item={item} active={isActive(run)} />
               ))}
               {items.length === 0 && message === null && run.status === "queued" && (
                 <p className="text-muted-foreground">Waiting to start.</p>

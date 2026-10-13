@@ -96,17 +96,19 @@ function Conversation({ dotId, rootId }: { dotId: string; rootId: string }) {
     runs.map((run, i) => [run.id, events[i]?.data ?? []]),
   );
   const pending = approvals.flatMap((q) => q.data ?? []).filter((a) => a.status === "pending");
+  // Why the last run failed stands below the conversation, so the transcript does not repeat it.
+  const failure = latest?.status === "failed" ? latest.error : null;
   return (
     <>
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto p-4">
-        <Transcript runs={runs} events={eventsByRun} />
+        <Transcript runs={runs} events={eventsByRun} shownError={failure} />
         <LoadErrors queries={[...events, ...approvals]} />
         {pending.map((approval) => (
           <ApprovalCard key={approval.id} approval={approval} />
         ))}
-        {latest?.status === "failed" && latest.error && (
+        {failure && (
           <p role="alert" className="rounded-md border border-destructive/50 p-2 text-destructive">
-            {latest.error}
+            {failure}
           </p>
         )}
       </div>

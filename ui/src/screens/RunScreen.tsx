@@ -1,27 +1,24 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FolderOpen } from "lucide-react";
 import { Link, useParams } from "react-router";
-import { toast } from "sonner";
 
 import { commands } from "@/api/commands";
 import type { Approval, Run, RunEventRecord } from "@/api/types";
 import { ApprovalCard } from "@/components/ApprovalCard";
-import { ConfirmButton } from "@/components/ConfirmButton";
 import { DiffView } from "@/components/DiffView";
 import { ErrorNote, LoadErrors } from "@/components/ErrorNote";
 import { Markdown } from "@/components/Markdown";
 import { Page } from "@/components/Page";
+import { ReviewActions } from "@/components/ReviewActions";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Transcript } from "@/components/Transcript";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { isActive } from "@/lib/chat-threads";
 import { duration, localDateTime } from "@/lib/format";
 import { notifyError } from "@/lib/notify";
 import { eventsQuery, keys } from "@/lib/query";
 import { useNow } from "@/lib/use-now";
-
-const isActive = (run: Run) =>
-  run.status === "queued" || run.status === "running" || run.status === "awaiting_approval";
 
 /// One thread: the run in the address and every other run of its lineage, as one transcript,
 /// with what the thread changed and the actions on it.
@@ -49,8 +46,10 @@ function Thread({ runId, runs }: { runId: string; runs: Run[] }) {
   });
 
   // The folder is gone once an unchanged worktree was cleaned up or a discard ran; the run keeps
-  // its branch name, so only the diff says whether there is still something to discard.
+  // its branch name and its path, so only the diff says whether there is still something to
+  // discard or to open. Until the diff has answered, neither is known.
   const worktreeKept = diff.data?.exists === true;
+  const worktreeGone = diff.data?.exists === false;
 
   const eventsByRun = new Map<string, RunEventRecord[]>(
     runs.map((run, i) => [run.id, events[i]?.data ?? []]),
@@ -59,34 +58,22 @@ function Thread({ runId, runs }: { runId: string; runs: Run[] }) {
     .flatMap((q) => q.data ?? [])
     .filter((a) => a.status === "pending");
 
-  // After a review action the lists its run belongs to are refetched.
-  const reviewed = (message: string) => () => {
-    for (const queryKey of [["thread"], ["diff"], keys.inbox]) {
-      void qc.invalidateQueries({ queryKey });
-    }
-    toast.success(message);
-  };
   const cancel = useMutation({ mutationFn: commands.cancelRun, onError: notifyError });
-  const discard = useMutation({
-    mutationFn: () => commands.discardWorktree(runId),
-    onSuccess: reviewed("Worktree discarded"),
-    onError: notifyError,
-  });
-  const markReviewed = useMutation({
-    mutationFn: () => commands.markReviewed(runId),
-    onSuccess: reviewed("Marked as reviewed"),
-    onError: notifyError,
-  });
   const openFolder = useMutation({
     mutationFn: () => commands.openRunFolder(runId),
     onError: notifyError,
   });
 
+  // A diff that failed to load does not say whether a worktree waits to be looked at. The run
+  // can be marked all the same, so that a diff that cannot be read does not keep it unreviewed.
   const needsReview =
-    !active && latest.reviewed_at === null && (latest.status === "failed" || worktreeKept);
+    !active &&
+    latest.reviewed_at === null &&
+    (latest.status === "failed" || worktreeKept || diff.isError);
   const tokensIn = runs.reduce((n, r) => n + r.tokens_in, 0);
   const tokensOut = runs.reduce((n, r) => n + r.tokens_out, 0);
   const first = runs[0];
+  const took = duration(first.started_at, active ? null : latest.ended_at, now);
 
   const actions = (
     <>
@@ -101,7 +88,7 @@ function Thread({ runId, runs }: { runId: string; runs: Run[] }) {
           Cancel run
         </Button>
       )}
-      {latest.workspace_path !== null && (
+      {latest.workspace_path !== null && !worktreeGone && (
         <Button
           size="sm"
           variant="outline"
@@ -111,32 +98,12 @@ function Thread({ runId, runs }: { runId: string; runs: Run[] }) {
           <FolderOpen aria-hidden /> Open folder
         </Button>
       )}
-      {needsReview && (
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={markReviewed.isPending}
-          onClick={() => markReviewed.mutate()}
-        >
-          Mark reviewed
-        </Button>
-      )}
-      {worktreeKept && !active && (
-        <ConfirmButton
-          title="Discard this worktree?"
-          description={
-            <>
-              The worktree folder and the branch <code>{latest.branch}</code> are deleted, with
-              every change the dot made there. This cannot be undone.
-            </>
-          }
-          confirmLabel="Discard the worktree"
-          onConfirm={() => discard.mutate()}
-          disabled={discard.isPending}
-        >
-          Discard worktree
-        </ConfirmButton>
-      )}
+      <ReviewActions
+        runId={runId}
+        branch={latest.branch}
+        canReview={needsReview}
+        canDiscard={worktreeKept && !active}
+      />
     </>
   );
 
@@ -146,7 +113,8 @@ function Thread({ runId, runs }: { runId: string; runs: Run[] }) {
       {pending.map((approval) => (
         <ApprovalCard key={approval.id} approval={approval} />
       ))}
-      <Transcript runs={runs} events={eventsByRun} />
+      {/* The run's error stands above, so the transcript does not repeat it. */}
+      <Transcript runs={runs} events={eventsByRun} shownError={latest.error} />
     </div>
   );
 
@@ -168,10 +136,9 @@ function Thread({ runId, runs }: { runId: string; runs: Run[] }) {
           <dd className="text-foreground">{localDateTime(first.queued_at)}</dd>
         </div>
         <div className="flex gap-1">
-          <dt>Took</dt>
-          <dd className="text-foreground">
-            {duration(first.started_at, active ? null : latest.ended_at, now) || "not started"}
-          </dd>
+          {/* A thread that waits to start runs for no time yet: it keeps "not started". */}
+          <dt>{active && took !== "" ? "Running for" : "Took"}</dt>
+          <dd className="text-foreground">{took || "not started"}</dd>
         </div>
         <div className="flex gap-1">
           <dt>Tokens</dt>

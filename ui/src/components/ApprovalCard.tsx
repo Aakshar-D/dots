@@ -6,7 +6,7 @@ import type { Approval } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { notifyError } from "@/lib/notify";
-import { keys } from "@/lib/query";
+import { invalidate, keys } from "@/lib/query";
 import { onSingleClick } from "@/lib/single-click";
 import { toolPreview } from "@/lib/transcript";
 
@@ -19,8 +19,8 @@ export function ApprovalCard({ approval }: { approval: Approval }) {
     mutationFn: (approved: boolean) =>
       commands.decideApproval(approval.id, approved, note.trim() || null),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: keys.inbox });
-      void qc.invalidateQueries({ queryKey: keys.approvals(approval.run_id) });
+      invalidate(qc, keys.inbox);
+      invalidate(qc, keys.approvals(approval.run_id));
     },
     onError: notifyError,
   });
