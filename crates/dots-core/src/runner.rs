@@ -429,6 +429,9 @@ impl Runner {
                         p.base_commit.as_deref(),
                     )
                     .await?;
+                // The run now has a folder, a branch and a base commit: say so, or a view of
+                // the running run would not know them until it ends.
+                self.emit_run(&self.store.get_run(&run.id).await?);
                 p
             }
         };

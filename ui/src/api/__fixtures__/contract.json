@@ -301,6 +301,61 @@
     "workdir": "C:/notes",
     "workspace_mode": "folder"
   },
+  "Enums": {
+    "Action": [
+      "allow",
+      "ask",
+      "deny"
+    ],
+    "ApprovalStatus": [
+      "pending",
+      "approved",
+      "denied",
+      "expired"
+    ],
+    "CmdErrorKind": [
+      "not_found",
+      "invalid",
+      "conflict",
+      "internal",
+      "cancelled"
+    ],
+    "EngineKind": [
+      "claude",
+      "local"
+    ],
+    "FileStatus": [
+      "added",
+      "modified",
+      "deleted",
+      "renamed"
+    ],
+    "Preset": [
+      "read-only",
+      "sandboxed",
+      "trusted",
+      "custom"
+    ],
+    "RunStatus": [
+      "queued",
+      "running",
+      "awaiting_approval",
+      "succeeded",
+      "failed",
+      "cancelled"
+    ],
+    "TriggerKind": [
+      "schedule",
+      "webhook",
+      "manual",
+      "chat",
+      "resume"
+    ],
+    "WorkspaceMode": [
+      "worktree",
+      "folder"
+    ]
+  },
   "Inbox": {
     "approvals": [
       {
@@ -344,9 +399,15 @@
         "tokens_in": 1200,
         "tokens_out": 340,
         "trigger": "schedule",
-        "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
+        "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN",
+        "worktree_exists": true
       }
     ]
+  },
+  "Limits": {
+    "max_approval_wait_secs": 280,
+    "max_concurrent_runs": 16,
+    "max_timeout_secs": 604800
   },
   "Run": {
     "base_commit": "0123abcd",
@@ -371,6 +432,54 @@
     "trigger": "schedule",
     "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
   },
+  "RunEventData": [
+    {
+      "kind": "session_started",
+      "session_id": "s-1"
+    },
+    {
+      "kind": "assistant_text",
+      "text": "Running the tests."
+    },
+    {
+      "id": "t1",
+      "input": {
+        "command": "cargo test"
+      },
+      "kind": "tool_call",
+      "tool": "Bash"
+    },
+    {
+      "id": "t1",
+      "is_error": false,
+      "kind": "tool_result",
+      "output": "test result: ok"
+    },
+    {
+      "kind": "usage",
+      "tokens_in": 1200,
+      "tokens_out": 340
+    },
+    {
+      "kind": "raw",
+      "line": "{\"type\":\"future\"}"
+    },
+    {
+      "kind": "message",
+      "message": {
+        "content": "Run the tests.",
+        "role": "user"
+      }
+    },
+    {
+      "kind": "finished",
+      "summary": "All tests pass."
+    },
+    {
+      "error": "timeout",
+      "kind": "failed"
+    }
+  ],
   "RunEventRecord": {
     "data": {
       "id": "t1",
@@ -509,6 +618,7 @@
     "server_error": null
   },
   "WorktreeDiff": {
+    "exists": true,
     "files": [
       {
         "binary": false,

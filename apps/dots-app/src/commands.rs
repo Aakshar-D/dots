@@ -9,11 +9,13 @@ use dots_core::model::{
     Approval, Dot, DotOverview, DotSpec, Inbox, Run, RunEventRecord, SettingsSaved, Status,
     WorktreeDiff,
 };
+use dots_core::policy::{Policy, Preset};
 use dots_core::settings::Settings;
 use dots_core::Runtime;
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_opener::OpenerExt;
 
+use crate::confirm;
 use crate::error::CmdError;
 use crate::state::{AppState, StartupError};
 use crate::tray::Tray;
@@ -46,7 +48,13 @@ pub async fn update_settings(
     state: State<'_, AppState>,
     settings: Settings,
 ) -> Res<SettingsSaved> {
-    let saved = state.rt()?.update_settings(settings).await?;
+    let rt = state.rt()?;
+    // Pointing Dots at another program needs the user's own yes, in a dialog the webview
+    // cannot answer.
+    let saved = confirm::save_settings_confirmed(&rt, settings, |message| {
+        confirm::ask(&app, "Change the Claude program?", message)
+    })
+    .await?;
     crate::autostart::apply(&app, saved.settings.autostart);
     if let Some(tray) = app.try_state::<Tray>() {
         tray.set_paused(saved.settings.schedules_paused);
@@ -121,12 +129,24 @@ pub async fn regenerate_webhook_token(state: State<'_, AppState>, id: String) ->
 pub async fn webhook_url(state: State<'_, AppState>, id: String) -> Res<String> {
     let rt = state.rt()?;
     let dot = rt.get_dot(&id).await?;
-    Ok(rt.webhook_url(&dot))
+    Ok(rt.webhook_url(&dot)?)
 }
 
 #[tauri::command]
 pub fn preview_schedule(expr: String, count: usize) -> Res<Vec<String>> {
     Ok(Runtime::preview_schedule(&expr, count)?)
+}
+
+/// The rules of a policy preset, for the editor's preset picker.
+#[tauri::command]
+pub fn policy_preset(preset: Preset) -> Policy {
+    Policy::preset(preset)
+}
+
+/// A dot with the core's defaults and nothing filled in, for the "New dot" form.
+#[tauri::command]
+pub fn new_dot_spec() -> DotSpec {
+    DotSpec::new("", "", "")
 }
 
 #[tauri::command]

@@ -192,6 +192,14 @@ async fn the_inbox_lists_failures_and_kept_worktrees_until_reviewed() {
         .find(|r| r.run.id == kept.id)
         .unwrap();
     assert_eq!(row.dot_name, "writer");
+    // The kept run has something to discard; the failed one has no worktree on disk.
+    assert!(row.worktree_exists);
+    let gone = inbox
+        .review_runs
+        .iter()
+        .find(|r| r.run.id == failed.id)
+        .unwrap();
+    assert!(!gone.worktree_exists);
     assert_eq!(t.rt.inbox_count().await.unwrap(), 2);
 
     let reviewed = t.rt.mark_reviewed(&failed.id).await.unwrap();

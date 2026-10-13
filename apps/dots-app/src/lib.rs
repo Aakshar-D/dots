@@ -1,5 +1,6 @@
 pub mod autostart;
 pub mod commands;
+pub mod confirm;
 pub mod contract;
 pub mod error;
 pub mod events;
@@ -103,6 +104,8 @@ pub fn run() {
             commands::regenerate_webhook_token,
             commands::webhook_url,
             commands::preview_schedule,
+            commands::policy_preset,
+            commands::new_dot_spec,
             commands::test_endpoint,
             commands::run_now,
             commands::chat,
