@@ -201,8 +201,9 @@ A resume creates a child run linked by `parent_run_id` and reuses the parent's w
 ### Timeouts, cancellation, recovery
 
 - Each run's child process tree is assigned to a Windows Job Object with
-  `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`; cancel/timeout closes the job, killing `claude`/`node`
-  descendants and any shell commands.
+  `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`; cancel and timeout terminate the job
+  (`TerminateJobObject`), killing `claude`/`node` descendants and any shell commands, and
+  closing its handle kills whatever is left (§12, 3c).
 - On app start, runs left `running` become `failed` with error `interrupted` and their pending
   approvals are expired in the same transaction. `awaiting_approval` runs stay resumable; their
   pending approvals resume on decision, and awaiting runs whose decisions were parked before
@@ -264,7 +265,11 @@ A resume creates a child run linked by `parent_run_id` and reuses the parent's w
   - Refined in Plan 3c: a *directory* is skipped only when a deny rule matches it; a directory
     that is denied only by the policy's default is still entered, so an allowed subtree stays
     reachable under default deny (`Read(src/**)` allowed, search from the root). A *file* is
-    skipped whenever it resolves to `deny`, by rule or by default.
+    skipped whenever it resolves to `deny`, by rule or by default. A symlink or a junction to a
+    directory is judged as a file and is never entered. `list_dir` does not walk: it lists a
+    directory that only the default denies by its name, so that the model can reach the allowed
+    subtree, and leaves out one that a deny rule matches. The hidden count is one per refused
+    entry: a directory matched by a deny rule counts once, whatever it holds.
   - `trusted`: allow all; ask for `Bash(git push:*)` and `mcp__*`; default allow.
 
 ### Claude engine
@@ -388,7 +393,7 @@ Window close hides to tray. Tray menu: Open, Inbox (n), Pause all schedules, Qui
 | Workspace setup fails | `failed` before engine start; no partial worktree left |
 | Timeout | Job Object closed; `failed` with `timeout` |
 | App crash/restart mid-run | `failed: interrupted`; worktree kept |
-| Port in use | App starts without the HTTP server; `Runtime::status()` reports `server_error`; UI shows a banner linking to Settings; webhooks are off and Claude runs fail fast with "local server is not running: port N is in use. Change the port in Settings and restart Dots." (they need the MCP endpoint); local dots and schedules keep working. Fixed by changing the port and restarting |
+| Port in use | App starts without the HTTP server; `Runtime::status()` reports `server_error`; UI shows a banner linking to Settings; webhooks are off and Claude runs fail fast with "local server is not running: port N is in use. Change the port in Settings and restart Dots." (they need the MCP endpoint); local dots and schedules keep working. Fixed by changing the port and restarting. From Plan 3c the start retries a port that is in use for 2 seconds first (a restart must not race the old process's socket), and a bind that fails for any other reason says so: "local server is not running: could not listen on port N: <os error>. Try another port in Settings and restart Dots." |
 | Runtime fails to start (database, migration) | Window opens to a fatal-error page with the message and the log folder; nothing runs. There is no tray in this state, so closing the window exits the app and the next launch tries again |
 
 ## 9. Testing
@@ -501,7 +506,8 @@ notify. Unread count = pending approvals + runs awaiting review.
   to an installed Dots and its real data.
 - Commands are one-line wrappers over `Runtime` returning `Result<T, CmdError>`, serialized as
   `{ kind: "not_found" | "invalid" | "conflict" | "internal", message }`. Plan 3b adds the kind
-  `cancelled` (the user declined a native confirmation; nothing was changed).
+  `cancelled` (the user declined a native confirmation; nothing was changed). From Plan 3c the
+  kind is an enum in Rust (`CmdErrorKind`); the JSON is unchanged.
 - **Runs, dots and approvals are addressed by id.** `open_run_folder(run_id)` resolves the path
   in core; the UI cannot make the backend open, read or delete an arbitrary path. Two values
   from the UI are paths:
@@ -512,6 +518,10 @@ notify. Unread count = pending approvals + runs awaiting review.
     dialog shown from Rust ("Dots will run this program as the Claude CLI: `<path>`"). The
     webview cannot answer that dialog. Declining saves nothing. Debug builds accept the
     environment variable `DOTS_CONFIRM=yes` in place of the dialog, for smoke runs.
+    From Plan 3c, `Settings::validate` refuses a `claude_path` that holds a control character
+    or a Unicode format character (zero-width characters, the byte order mark, the soft hyphen,
+    every text-direction control): such a path could read differently in the dialog from what
+    will run. A stored path that the rule refuses is ignored when settings are read.
 - `restart_app` shuts the runtime down, then calls `app.restart()`.
 - Capabilities grant only `core:default`, the app's commands and the plugin permissions in use
   (`dialog:allow-open`). CSP: `default-src 'self'; style-src 'self' 'unsafe-inline'; img-src
@@ -524,7 +534,9 @@ notify. Unread count = pending approvals + runs awaiting review.
 - Notifications fire on `ApprovalRequested`, and on `RunUpdated` into `succeeded`, `failed` or
   `awaiting_approval`, once per (run, status), and only for a run this process saw queued or
   running. Chat runs do not notify; neither does a parked run closed by its decision, nor a run
-  re-published by "Mark reviewed".
+  re-published by "Mark reviewed". From Plan 3c a park shows one notification, not two: the
+  update into `awaiting_approval` does not notify when the approval request of that run was
+  already announced.
 - After each relevant event, `inbox_count()` updates the tray tooltip ("Dots: n to review") and
   the "Inbox (n)" menu item.
 - Tray:
@@ -551,12 +563,18 @@ notify. Unread count = pending approvals + runs awaiting review.
   - Command results and event payloads are parsed with their schemas, not cast. A result that
     does not parse is a `CommandError` of kind `internal`; an event that does not parse is
     logged and treated like `runtime-lagged` (invalidate and refetch).
-  - Events patch or invalidate query keys: `run`, `runs`, `thread`, `events`, `inbox`,
-    `approvals`. `RunEvent`s are appended to loaded event lists, deduplicated by `seq`.
+  - Events patch or invalidate query keys: `runs`, `thread`, `events`, `inbox`, `approvals`
+    (Plan 3c removed the key `run`, which no query read). `RunEvent`s are appended to loaded
+    event lists, deduplicated by `seq`.
+  - From Plan 3c an invalidation that arrives while its query is being fetched is kept (the
+    query is marked stale again when that fetch has settled), and the app refetches everything
+    once when its listeners are attached, so the first screen's data is asked for twice.
 - Contract: a `dots-app` test serializes one sample of each shared type to
   `ui/src/api/__fixtures__/contract.json` and fails when the file is stale; a Vitest test checks
   the file against `types.ts`. Because live data is now parsed, the fixture also lists every
-  variant of every shared enum.
+  variant of every shared enum. From Plan 3c it also lists the name of every registered command
+  and the answer of `new_dot_spec`, and its engine-event samples are tied to the enum's
+  variants, so a new variant without a sample does not compile.
 - Shell around the screens:
   - Banners: `server_error` (links to Settings), CLI version mismatch ("Mark as tested"),
     restart required ("Restart Dots"), schedules paused.
@@ -576,7 +594,10 @@ notify. Unread count = pending approvals + runs awaiting review.
 - Chat:
   - Each thread is a lineage of `chat` runs.
   - Sending continues from the last terminal run of the thread; input is disabled while that run
-    is active.
+    is active. From Plan 3c the core holds this rule too: `chat` with a parent answers
+    `conflict` when the parent is not the last run of its thread, when the thread is working or
+    waiting for an approval, or when the parent has no session to continue. The check and the
+    insert of the new run happen under one lock, so two replies sent at once cannot both pass.
   - Approvals of the thread show inline.
 - The editor validates with zod rules mirroring `DotSpec::validate`; server errors still show
   on save.
@@ -587,25 +608,47 @@ notify. Unread count = pending approvals + runs awaiting review.
 - Job Object (`windows-sys`) in `proc`:
   - Created with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`.
   - Assigned right after spawn to the `claude` process of a run and to each local `shell` call.
-  - Cancel and timeout call `TerminateJobObject`; dropping the handle kills the rest.
+    `tokio::process` on stable Rust cannot start a child suspended, so a process that the child
+    starts before the assignment (measured: 35 to 72 microseconds) is outside the job. Both
+    engines send their work on stdin after the assignment, so nothing the model asked for runs
+    in that window.
+  - Cancel and timeout call `TerminateJobObject`; dropping the handle kills the rest. The
+    Claude engine closes the job as soon as `claude` has ended.
+  - A `shell` call holds its job until it returns, so a background process that a local dot
+    starts in one call does not live into the next.
   - `kill_tree` stays as the fallback when assignment fails and on other OSes.
 - Manual smoke (`docs/verification/<date>-plan3-smoke.md`):
   - A Claude dot and a local dot (LM Studio), each with a scheduled run, a webhook run and an
     approval round trip through the Inbox.
   - Also checks tray, close-to-tray, autostart, a notification, discard and the port-in-use
     banner.
+  - The document has two parts. Part A is run by an agent from a terminal against a debug
+    build, with a temporary data folder, the fake CLI and LM Studio, and holds the result of
+    each step. Part B is a checklist for the person who owns the machine: the real `claude`
+    CLI, the tray, a notification, autostart, the native dialog, the installer. The Claude
+    dot's part of the first line is met only when Part B is done.
 - Packaging: `tauri build` with NSIS — per-user install (`installMode: currentUser`), WebView2
   `downloadBootstrapper`, icons from `tauri icon`, version 0.1.0, unsigned. Uninstall keeps the
-  data dir.
+  data dir. An agent builds the installer and reads its generated script; only a person runs
+  it. Known and open: the per-user install folder `%LOCALAPPDATA%\Dots` is the data folder
+  `%LOCALAPPDATA%\dots` (Windows ignores the case), so the program's two files lie beside the
+  data; the uninstaller removes only those two files.
 - Hardening carried over from the Plan 3a reviews:
   - Policy: the walking-tool directory rule above (§5).
   - Review actions: `worktree_diff` applies the same containment check as discard; a worktree
-    must be a direct child of `<data dir>/worktrees`; untracked symlinks are listed, not
-    followed.
+    must be a direct child of `<data dir>/worktrees` and its branch must be
+    `dots/<name>/<that folder's name>`; untracked symlinks are listed, not followed. A link is
+    shown as git shows one (mode 120000, one line with its target), and the files git names
+    behind a junction are left out. After git has removed a worktree, whatever is left of its
+    folder is deleted without following links (`git worktree remove` leaves a junction and its
+    folder behind and still succeeds). Discard finds the repository from the worktree itself.
   - Start: the log folder is created before the appender; a relative `DOTS_DATA_DIR` is made
     absolute; a failure to find the local data folder shows the fatal page; a panic is written
-    to the log; `Runtime::start` retries the bind briefly, so a restart does not race the old
-    process's socket; `single-instance` is skipped under `DOTS_DATA_DIR`.
+    to the log (the line is appended to the log file directly, because the logger writes on a
+    worker thread that an abort does not wait for); `Runtime::start` retries the bind briefly
+    (2 seconds, only while the port is in use), so a restart does not race the old process's
+    socket; `single-instance` is skipped under `DOTS_DATA_DIR`.
   - Notifications: a lagged event stream clears the notifier's memory of live runs.
+  - "Restart Dots" asks first while a run is queued, running or waiting for an approval.
   - "Test endpoint" and `local_endpoints` accept any `http://` host on purpose (a model server
     on the local network); this is stated in Settings.
