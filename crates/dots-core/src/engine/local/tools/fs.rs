@@ -3,8 +3,8 @@ use std::path::Path;
 use serde_json::Value;
 
 use super::{
-    cap_head, confine, display, hidden_note, str_arg, PathFilter, ToolOutput, MAX_ENTRIES,
-    MAX_READ_BYTES,
+    cap_head, confine, display, hidden_note, root_refusal, str_arg, PathFilter, ToolOutput,
+    MAX_ENTRIES, MAX_READ_BYTES,
 };
 
 /// Files whose first 8 KB contain a NUL byte are treated as binary and not returned.
@@ -137,6 +137,9 @@ pub(super) async fn list_dir(root: &Path, input: &Value, filter: &PathFilter) ->
     let raw = raw.to_string();
     let (root, filter) = (root.to_path_buf(), filter.clone());
     let listed = tokio::task::spawn_blocking(move || {
+        if let Some(refused) = root_refusal(&root, &dir, &raw, &filter) {
+            return refused;
+        }
         let entries = match std::fs::read_dir(&dir) {
             Ok(rd) => rd,
             Err(e) => return ToolOutput::err(format!("cannot list {raw}: {e}")),

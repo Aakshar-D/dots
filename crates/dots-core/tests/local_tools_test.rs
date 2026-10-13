@@ -903,6 +903,238 @@ async fn read_only_and_sandboxed_walks_skip_git_and_show_dot_claude() {
     }
 }
 
+/// The error a walking tool gives in place of a result when the policy denies its search root.
+fn root_denied(path: &str) -> ToolOutput {
+    ToolOutput::err(format!("{path} is denied by this dot's policy"))
+}
+
+#[tokio::test]
+async fn grep_refuses_a_file_root_the_policy_denies() {
+    let ws = workspace();
+    let p = ws.path();
+    std::fs::write(p.join(".env"), "PASSWORD=hunter2\n").unwrap();
+    let dot_env = json!({"pattern": ".", "path": ".env"});
+
+    // A deny rule on `Read` covers the file; `Grep` itself is allowed, as in every preset.
+    let mut read_only = Policy::preset(Preset::ReadOnly);
+    read_only
+        .rules
+        .push(Rule::new("Read(**/.env)", Action::Deny));
+    let by_rule = walking_policy(
+        vec![
+            Rule::new("Read", Action::Allow),
+            Rule::new("Read(**/.env)", Action::Deny),
+        ],
+        Action::Allow,
+    );
+    for policy in [&read_only, &by_rule] {
+        assert_eq!(
+            policy.resolve_in("Grep", &dot_env, Some(p)),
+            Action::Allow,
+            "the gate lets the call through"
+        );
+        let out = run_filtered(p, policy, "grep", dot_env.clone()).await;
+        assert_eq!(out, root_denied(".env"));
+    }
+
+    // A file is hidden whenever it resolves to `deny`, so the default is enough.
+    let by_default = walking_policy(vec![Rule::new("Read(src/**)", Action::Allow)], Action::Deny);
+    let out = run_filtered(p, &by_default, "grep", dot_env.clone()).await;
+    assert_eq!(out, root_denied(".env"));
+    let out = run_filtered(
+        p,
+        &by_default,
+        "grep",
+        json!({"pattern": "hello", "path": "README.md"}),
+    )
+    .await;
+    assert_eq!(out, root_denied("README.md"));
+    // A root that does not exist is not a directory: it is judged as a file, like `read_file`
+    // of that path at the permission gate.
+    let out = run_filtered(
+        p,
+        &by_default,
+        "grep",
+        json!({"pattern": "x", "path": "nothing-here"}),
+    )
+    .await;
+    assert_eq!(out, root_denied("nothing-here"));
+
+    // A file root that is allowed is searched as before, under each of the three policies.
+    for policy in [&read_only, &by_rule, &by_default] {
+        let out = run_filtered(
+            p,
+            policy,
+            "grep",
+            json!({"pattern": "fn", "path": "src/main.rs"}),
+        )
+        .await;
+        assert_eq!(out, ToolOutput::ok("src/main.rs:1: fn main() {}"));
+    }
+}
+
+/// A call of each walking tool with `path` as its search root.
+fn rooted_calls(path: &str) -> [(&'static str, Value); 3] {
+    [
+        ("grep", json!({"pattern": "hello", "path": path})),
+        ("glob", json!({"pattern": "**/*", "path": path})),
+        ("list_dir", json!({"path": path})),
+    ]
+}
+
+#[tokio::test]
+async fn walking_tools_refuse_a_directory_root_a_deny_rule_matches() {
+    let ws = workspace();
+    let p = ws.path();
+    std::fs::create_dir_all(p.join("secret/inner")).unwrap();
+    std::fs::write(p.join("secret/key.txt"), "hello key\n").unwrap();
+    std::fs::write(p.join("secret/inner/more.txt"), "hello more\n").unwrap();
+
+    // `**/secret` names the directory only (its files resolve to allow under `Read`);
+    // `secret/**` names the directory and everything in it. Neither may be the root of a walk.
+    for rule in ["Read(**/secret)", "Read(secret/**)"] {
+        for &default in Action::ALL {
+            let policy = walking_policy(
+                vec![
+                    Rule::new("Read", Action::Allow),
+                    Rule::new(rule, Action::Deny),
+                ],
+                default,
+            );
+            for (tool, args) in rooted_calls("secret") {
+                let out = run_filtered(p, &policy, tool, args).await;
+                // The whole answer: no listing, no match and no count of hidden entries.
+                assert_eq!(out, root_denied("secret"), "{tool} {rule} {default:?}");
+            }
+        }
+    }
+
+    // `secret/**` also covers a directory deeper inside.
+    let policy = walking_policy(
+        vec![
+            Rule::new("Read", Action::Allow),
+            Rule::new("Read(secret/**)", Action::Deny),
+        ],
+        Action::Allow,
+    );
+    for (tool, args) in rooted_calls("secret/inner") {
+        let out = run_filtered(p, &policy, tool, args).await;
+        assert_eq!(out, root_denied("secret/inner"), "{tool}");
+    }
+
+    // A deny rule under the walking tool's own name, with `Read` allowed everywhere. The gate
+    // refuses this call before the tool runs; the tool refuses it by itself too.
+    for (tool, args) in rooted_calls("secret") {
+        let alias = tools::alias(tool).unwrap();
+        let policy = Policy {
+            preset: Preset::Custom,
+            rules: vec![Rule::new(&format!("{alias}(secret/**)"), Action::Deny)],
+            default: Action::Allow,
+        };
+        assert_eq!(
+            policy.resolve_in("Read", &json!({"file_path": "secret/key.txt"}), Some(p)),
+            Action::Allow
+        );
+        let out = run_filtered(p, &policy, tool, args).await;
+        assert_eq!(out, root_denied("secret"), "{tool}");
+    }
+}
+
+#[tokio::test]
+async fn walking_tools_refuse_the_workspace_root_when_a_deny_rule_matches_it() {
+    let ws = workspace();
+    let p = ws.path();
+    // A bare `Read` deny rule matches every path, the workspace root included.
+    let policy = walking_policy(vec![Rule::new("Read", Action::Deny)], Action::Allow);
+    let calls = [
+        ("grep", json!({"pattern": "hello"})),
+        ("glob", json!({"pattern": "**/*"})),
+        ("list_dir", json!({})),
+    ];
+    for (tool, args) in calls.into_iter().chain(rooted_calls(".")) {
+        let out = run_filtered(p, &policy, tool, args).await;
+        assert_eq!(out, root_denied("the workspace root"), "{tool}");
+    }
+}
+
+#[tokio::test]
+async fn a_directory_root_that_only_the_default_denies_is_still_entered() {
+    let ws = workspace();
+    let p = ws.path();
+    std::fs::create_dir_all(p.join("other/inner")).unwrap();
+    std::fs::write(p.join("other/a.txt"), "hello other\n").unwrap();
+    std::fs::write(p.join("other/inner/b.txt"), "hello inner\n").unwrap();
+    // No rule names `other`: the default denies it, and the allowed subtree lies inside it.
+    let policy = walking_policy(
+        vec![Rule::new("Read(other/inner/**)", Action::Allow)],
+        Action::Deny,
+    );
+    assert_eq!(
+        policy.resolve_in("Read", &json!({"file_path": "other"}), Some(p)),
+        Action::Deny
+    );
+    let [grep, glob, list_dir] = rooted_calls("other");
+    let out = run_filtered(p, &policy, grep.0, grep.1).await;
+    assert_eq!(
+        out,
+        ToolOutput::ok("other/inner/b.txt:1: hello inner\n(1 entry hidden by policy)")
+    );
+    let out = run_filtered(p, &policy, glob.0, glob.1).await;
+    assert_eq!(
+        out,
+        ToolOutput::ok("other/inner/b.txt\n(1 entry hidden by policy)")
+    );
+    let out = run_filtered(p, &policy, list_dir.0, list_dir.1).await;
+    assert_eq!(out, ToolOutput::ok("inner/\n(1 entry hidden by policy)"));
+}
+
+#[tokio::test]
+async fn a_deny_rule_elsewhere_leaves_the_search_root_alone() {
+    let ws = workspace();
+    let p = ws.path();
+    std::fs::create_dir_all(p.join("secret")).unwrap();
+    std::fs::write(p.join("secret/key.txt"), "hello key\n").unwrap();
+    let policy = Policy {
+        preset: Preset::Custom,
+        rules: vec![Rule::new("Read(secret/**)", Action::Deny)],
+        default: Action::Allow,
+    };
+    // The workspace root, named or left out, is walked as before: `secret` is the hidden entry.
+    for args in [
+        json!({"pattern": "hello"}),
+        json!({"pattern": "hello", "path": "."}),
+    ] {
+        let out = run_filtered(p, &policy, "grep", args).await;
+        assert_eq!(
+            out,
+            ToolOutput::ok("README.md:1: hello\n(1 entry hidden by policy)")
+        );
+    }
+    let out = run_filtered(p, &policy, "glob", json!({"pattern": "*", "path": "."})).await;
+    assert_eq!(out, ToolOutput::ok("README.md\n(1 entry hidden by policy)"));
+    let out = run_filtered(p, &policy, "list_dir", json!({"path": "."})).await;
+    assert_eq!(
+        out,
+        ToolOutput::ok("README.md\nsrc/\n(1 entry hidden by policy)")
+    );
+    // A root the rule does not name is walked with nothing hidden.
+    let out = run_filtered(p, &policy, "grep", json!({"pattern": "fn", "path": "src"})).await;
+    assert_eq!(
+        out,
+        ToolOutput::ok("src/deep/lib.rs:1: pub fn Hello() {}\nsrc/main.rs:1: fn main() {}")
+    );
+    let out = run_filtered(
+        p,
+        &policy,
+        "glob",
+        json!({"pattern": "**/*", "path": "src"}),
+    )
+    .await;
+    assert_eq!(out, ToolOutput::ok("src/deep/lib.rs\nsrc/main.rs"));
+    let out = run_filtered(p, &policy, "list_dir", json!({"path": "src"})).await;
+    assert_eq!(out, ToolOutput::ok("deep/\nmain.rs"));
+}
+
 #[tokio::test]
 async fn shell_runs_scripts_longer_than_the_command_line_limit() {
     let ws = workspace();

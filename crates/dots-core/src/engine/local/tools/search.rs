@@ -5,7 +5,8 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use super::{
-    cap_head, confine, display, hidden_note, str_arg, PathFilter, ToolOutput, MAX_ENTRIES,
+    cap_head, confine, display, hidden_note, root_refusal, str_arg, PathFilter, ToolOutput,
+    MAX_ENTRIES,
 };
 
 const MAX_MATCHES: usize = 200;
@@ -15,7 +16,8 @@ const MAX_GREP_FILE: u64 = 2 * 1024 * 1024;
 
 /// Walks `base`, honouring `.gitignore` files and skipping `.git` and the entries `filter`
 /// hides; a hidden directory is not entered. `hidden` counts each hidden entry once: a hidden
-/// directory is one entry, whatever it holds.
+/// directory is one entry, whatever it holds. `base` itself is never filtered here (`ignore`
+/// does not hand depth 0 to `filter_entry`): the caller judges it first, with `root_refusal`.
 fn walk(
     root: &Path,
     base: &Path,
@@ -31,9 +33,8 @@ fn walk(
             if e.file_name() == ".git" {
                 return false;
             }
-            // Depth 0 is `base` itself, which the permission gate already judged.
             let is_dir = e.file_type().is_some_and(|t| t.is_dir());
-            if e.depth() > 0 && filter.hides(&display(&root, e.path()), is_dir) {
+            if filter.hides(&display(&root, e.path()), is_dir) {
                 hidden.fetch_add(1, Ordering::Relaxed);
                 return false;
             }
@@ -45,16 +46,16 @@ fn walk(
         .map(|e| e.into_path())
 }
 
-fn base_dir(root: &Path, input: &Value) -> Result<PathBuf, String> {
-    confine(
-        root,
-        input.get("path").and_then(Value::as_str).unwrap_or("."),
-    )
+/// The search root: the `path` argument as it was given (default: the workspace root) and the
+/// path it resolves to.
+fn base_dir(root: &Path, input: &Value) -> Result<(String, PathBuf), String> {
+    let raw = input.get("path").and_then(Value::as_str).unwrap_or(".");
+    Ok((raw.to_string(), confine(root, raw)?))
 }
 
 pub(super) async fn glob(root: &Path, input: &Value, filter: &PathFilter) -> ToolOutput {
     let pattern = str_arg(input, "pattern").replace('\\', "/");
-    let base = match base_dir(root, input) {
+    let (raw, base) = match base_dir(root, input) {
         Ok(b) => b,
         Err(e) => return ToolOutput::err(e),
     };
@@ -67,6 +68,9 @@ pub(super) async fn glob(root: &Path, input: &Value, filter: &PathFilter) -> Too
     };
     let (root, filter) = (root.to_path_buf(), filter.clone());
     let found = tokio::task::spawn_blocking(move || {
+        if let Some(refused) = root_refusal(&root, &base, &raw, &filter) {
+            return refused;
+        }
         let hidden = Arc::new(AtomicUsize::new(0));
         let mut hits: Vec<String> = walk(&root, &base, &filter, &hidden)
             .filter(|p| matcher.is_match(p.strip_prefix(&base).unwrap_or(p)))
@@ -109,12 +113,15 @@ pub(super) async fn grep(root: &Path, input: &Value, filter: &PathFilter) -> Too
         },
         _ => None,
     };
-    let base = match base_dir(root, input) {
+    let (raw, base) = match base_dir(root, input) {
         Ok(b) => b,
         Err(e) => return ToolOutput::err(e),
     };
     let (root, filter) = (root.to_path_buf(), filter.clone());
     let found = tokio::task::spawn_blocking(move || {
+        if let Some(refused) = root_refusal(&root, &base, &raw, &filter) {
+            return refused;
+        }
         let hidden = Arc::new(AtomicUsize::new(0));
         let mut hits = Vec::new();
         'files: for path in walk(&root, &base, &filter, &hidden) {

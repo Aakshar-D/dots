@@ -243,6 +243,29 @@ impl PathFilter {
     }
 }
 
+/// The error a walking tool returns, in place of any listing or count, when `filter` hides its
+/// search root. The root is judged like every entry below it: a directory is refused when a
+/// deny rule matches it (one that only the default denies stays enterable), and anything else
+/// whenever it resolves to `deny`. The permission gate judged the call under the walking tool's
+/// name only, and neither it nor the walk judges the root under `Read`.
+///
+/// `base` is the root as `confine` resolved it, so a link has already been followed; `raw` is
+/// the path the tool was called with.
+fn root_refusal(root: &Path, base: &Path, raw: &str, filter: &PathFilter) -> Option<ToolOutput> {
+    let rel = display(root, base);
+    if !filter.hides(&rel, base.is_dir()) {
+        return None;
+    }
+    let shown = if rel == "." {
+        "the workspace root"
+    } else {
+        raw
+    };
+    Some(ToolOutput::err(format!(
+        "{shown} is denied by this dot's policy"
+    )))
+}
+
 /// The note a walking tool appends when the policy hid `n` entries.
 fn hidden_note(n: usize) -> String {
     match n {
