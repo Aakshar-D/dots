@@ -91,6 +91,22 @@ describe("runtime events and the query cache", () => {
       false,
     ]);
   });
+
+  it("refetches the approvals of the approval's own run when Dots performs its call", () => {
+    const qc = createQueryClient();
+    // The call is performed by a resume run; the approval belongs to that run's parent.
+    const parent = keys.approvals(sample.approval.run_id);
+    const resume = keys.approvals("the-resume-run");
+    for (const key of [keys.inbox, parent, resume]) qc.setQueryData(key, []);
+
+    const performed = { ...sample.approval, self_apply: true, apply_state: "applied" as const };
+    applyRuntimeEvent(qc, { type: "approval_updated", approval: performed });
+    expect([stale(qc, keys.inbox), stale(qc, parent), stale(qc, resume)]).toEqual([
+      true,
+      true,
+      false,
+    ]);
+  });
 });
 
 describe("a run's events while their list loads or refetches", () => {

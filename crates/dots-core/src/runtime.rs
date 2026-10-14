@@ -146,6 +146,15 @@ impl Runtime {
             )),
         );
 
+        // From here on a new approval records whether Dots performs its call after a late
+        // decision. The hub exists before the engines (the local engine asks it), so it is
+        // told now which of them do.
+        hub.set_self_apply(
+            engines
+                .iter()
+                .filter(|(_, engine)| engine.applies_approved_calls())
+                .map(|(kind, _)| *kind),
+        );
         let runner = Runner::new(
             store.clone(),
             bus.clone(),

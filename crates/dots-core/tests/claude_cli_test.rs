@@ -139,6 +139,7 @@ fn ctx(session: Option<&str>) -> RunContext {
         mcp_url: "http://127.0.0.1:47321/mcp".into(),
         mcp_secret: "SECRET".into(),
         cancel: CancellationToken::new(),
+        approved_calls: Vec::new(),
     }
 }
 

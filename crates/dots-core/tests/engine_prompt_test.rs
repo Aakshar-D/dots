@@ -8,8 +8,10 @@ use async_trait::async_trait;
 use chrono::{Local, TimeZone};
 use common::{fake_dot, fake_run};
 use dots_core::engine::scripted::{ScriptedEngine, Step};
-use dots_core::engine::{Engine, EngineEvent, PermissionGate, PermissionOutcome, RunContext};
-use dots_core::model::{TriggerKind, WorkspaceMode};
+use dots_core::engine::{
+    Engine, EngineEvent, PermissionGate, PermissionOutcome, RunContext, UnavailableEngine,
+};
+use dots_core::model::{ApplyState, TriggerKind, WorkspaceMode};
 use dots_core::prompt::build_prompt;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
@@ -24,6 +26,7 @@ fn ctx(cancel: CancellationToken) -> RunContext {
         mcp_url: "http://127.0.0.1:1/mcp".into(),
         mcp_secret: "s".into(),
         cancel,
+        approved_calls: Vec::new(),
     }
 }
 
@@ -116,6 +119,17 @@ async fn scripted_ask_reports_gate_outcome() {
             is_error: true
         })
     );
+}
+
+#[tokio::test]
+async fn a_gate_and_an_engine_perform_no_approved_call_unless_they_say_so() {
+    // A gate that only decides: it claims nothing, so nothing is ever run for it.
+    let gate = DenyAll;
+    assert!(!gate.claim_apply("a1").await.unwrap());
+    gate.settle_apply("a1", ApplyState::Applied).await.unwrap();
+    assert!(!gate.skip_apply("a1").await.unwrap());
+    assert!(!ScriptedEngine::new(Vec::new()).applies_approved_calls());
+    assert!(!UnavailableEngine("off".into()).applies_approved_calls());
 }
 
 fn at() -> chrono::DateTime<Local> {

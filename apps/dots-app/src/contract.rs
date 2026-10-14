@@ -211,6 +211,16 @@ pub fn samples() -> Value {
                 decided_at: Some(TS.into()),
                 ..approval()
             }}),
+            to(RuntimeEvent::ApprovalUpdated { approval: Approval {
+                status: ApprovalStatus::Approved,
+                parked: true,
+                resolved: true,
+                decided_at: Some(TS.into()),
+                self_apply: true,
+                apply_state: Some(ApplyState::Applied),
+                applied_at: Some(TS.into()),
+                ..approval()
+            }}),
         ],
         "Status": to(status()),
         "Settings": to(&settings),

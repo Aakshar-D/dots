@@ -146,6 +146,7 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("run_event"), event: RunEventRecord }),
   z.strictObject({ type: z.literal("approval_requested"), approval: Approval }),
   z.strictObject({ type: z.literal("approval_decided"), approval: Approval }),
+  z.strictObject({ type: z.literal("approval_updated"), approval: Approval }),
 ]);
 
 export const ClaudeStatus = z.strictObject({

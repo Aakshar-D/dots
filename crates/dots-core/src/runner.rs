@@ -466,6 +466,7 @@ impl Runner {
             mcp_url: self.cfg.mcp_url.clone(),
             mcp_secret: secret,
             cancel: cancel.clone(),
+            approved_calls: Vec::new(),
         };
         let mut rx = engine.start(ctx).await?;
 

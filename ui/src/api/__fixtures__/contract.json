@@ -720,6 +720,27 @@
         "tool": "Bash"
       },
       "type": "approval_decided"
+    },
+    {
+      "approval": {
+        "applied_at": "2026-10-09T12:00:00.000Z",
+        "apply_state": "applied",
+        "created_at": "2026-10-09T12:00:00.000Z",
+        "decided_at": "2026-10-09T12:00:00.000Z",
+        "id": "01J0APR",
+        "input": {
+          "command": "git push origin main"
+        },
+        "input_hash": "h1",
+        "note": null,
+        "parked": true,
+        "resolved": true,
+        "run_id": "01J0RUN",
+        "self_apply": true,
+        "status": "approved",
+        "tool": "Bash"
+      },
+      "type": "approval_updated"
     }
   ],
   "Settings": {
