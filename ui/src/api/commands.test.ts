@@ -35,6 +35,22 @@ describe("commands", () => {
     expect(calls).toEqual([["chat", { dotId: "d1", message: "hello", parentRunId: null }]]);
   });
 
+  it("sends an approval's rule and a run's batch as the core names them", async () => {
+    reply = async () => fixture.Approval;
+    await commands.decideApproval("a1", true, null, "Bash(git push)");
+    await commands.decideApproval("a1", false, "no", null);
+    reply = async () => fixture.RuleCandidate;
+    expect(await commands.approvalRuleCandidates("a1")).toEqual(fixture.RuleCandidate);
+    reply = async () => [fixture.Approval];
+    expect(await commands.decideRunApprovals("r1", true, null)).toEqual([fixture.Approval]);
+    expect(calls).toEqual([
+      ["decide_approval", { id: "a1", approved: true, note: null, allowRule: "Bash(git push)" }],
+      ["decide_approval", { id: "a1", approved: false, note: "no", allowRule: null }],
+      ["approval_rule_candidates", { id: "a1" }],
+      ["decide_run_approvals", { runId: "r1", approved: true, note: null }],
+    ]);
+  });
+
   it("invokes exactly the commands the app registers", async () => {
     // A wrapper calls `invoke` before it first waits, so calling each one without arguments
     // lists the names with no backend. Their answers, mostly rejections here, do not matter.

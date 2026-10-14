@@ -51,6 +51,8 @@
     "list_run_events",
     "approvals_for_run",
     "decide_approval",
+    "approval_rule_candidates",
+    "decide_run_approvals",
     "inbox",
     "inbox_count",
     "worktree_diff",
@@ -550,6 +552,20 @@
     "workdir": "",
     "workspace_mode": "worktree"
   },
+  "RuleCandidate": [
+    {
+      "label": "this exact command",
+      "pattern": "Bash(git push origin main)"
+    },
+    {
+      "label": "commands that start with git push origin",
+      "pattern": "Bash(git push origin:*)"
+    },
+    {
+      "label": "commands that start with git push",
+      "pattern": "Bash(git push:*)"
+    }
+  ],
   "Run": {
     "base_commit": "0123abcd",
     "branch": "dots/nightly-tests/01J0RUN",

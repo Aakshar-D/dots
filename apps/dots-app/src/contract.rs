@@ -6,7 +6,7 @@
 use dots_core::engine::EngineEvent;
 use dots_core::events::RuntimeEvent;
 use dots_core::model::*;
-use dots_core::policy::{Action, Policy, Preset};
+use dots_core::policy::{allow_candidates, Action, Policy, Preset};
 use dots_core::settings::{Settings, MAX_CONCURRENT_RUNS};
 use serde_json::{json, Value};
 
@@ -222,6 +222,12 @@ pub fn samples() -> Value {
                 ..approval()
             }}),
         ],
+        // What `approval_rule_candidates` answers for the `Approval` sample.
+        "RuleCandidate": to(allow_candidates(
+            &approval().tool,
+            &approval().input,
+            Some(std::path::Path::new("C:/Users/u/AppData/Local/dots/worktrees/01J0RUN")),
+        )),
         "Status": to(status()),
         "Settings": to(&settings),
         "SettingsSaved": to(SettingsSaved { settings: settings.clone(), restart_required: true }),

@@ -141,6 +141,10 @@ const approvalShape = {
 };
 export const Approval = z.strictObject(approvalShape);
 
+// An allow rule the core offers to save with an approval: the rule's pattern, and what it
+// covers in words.
+export const RuleCandidate = z.strictObject({ pattern: z.string(), label: z.string() });
+
 export const RuntimeEvent = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("run_updated"), run: Run }),
   z.strictObject({ type: z.literal("run_event"), event: RunEventRecord }),
@@ -242,6 +246,7 @@ export type Run = z.infer<typeof Run>;
 export type RunEventRecord = z.infer<typeof RunEventRecord>;
 export type RunEventData = z.infer<typeof RunEventData>;
 export type Approval = z.infer<typeof Approval>;
+export type RuleCandidate = z.infer<typeof RuleCandidate>;
 export type RuntimeEvent = z.infer<typeof RuntimeEvent>;
 export type ClaudeStatus = z.infer<typeof ClaudeStatus>;
 export type Status = z.infer<typeof Status>;

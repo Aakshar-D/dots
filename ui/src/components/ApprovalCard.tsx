@@ -17,7 +17,7 @@ export function ApprovalCard({ approval }: { approval: Approval }) {
   const [note, setNote] = useState("");
   const decide = useMutation({
     mutationFn: (approved: boolean) =>
-      commands.decideApproval(approval.id, approved, note.trim() || null),
+      commands.decideApproval(approval.id, approved, note.trim() || null, null),
     onSuccess: () => {
       invalidate(qc, keys.inbox);
       invalidate(qc, keys.approvals(approval.run_id));

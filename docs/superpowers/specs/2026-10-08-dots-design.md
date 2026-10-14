@@ -546,6 +546,10 @@ notify. Unread count = pending approvals + runs awaiting review.
   `{ kind: "not_found" | "invalid" | "conflict" | "internal", message }`. Plan 3b adds the kind
   `cancelled` (the user declined a native confirmation; nothing was changed). From Plan 3c the
   kind is an enum in Rust (`CmdErrorKind`); the JSON is unchanged.
+- Approvals v2 adds two commands and one argument: `approval_rule_candidates(id)` answers the
+  allow rules that may be saved with an approval, `decide_run_approvals(run_id, approved,
+  note)` decides every pending approval of a run, and `decide_approval` takes `allow_rule`,
+  which the core accepts only when it is one of those candidates.
 - **Runs, dots and approvals are addressed by id.** `open_run_folder(run_id)` resolves the path
   in core; the UI cannot make the backend open, read or delete an arbitrary path. Two values
   from the UI are paths:
@@ -572,6 +576,8 @@ notify. Unread count = pending approvals + runs awaiting review.
   - One forwarder emits each `RuntimeEvent` as the Tauri event `runtime`, same JSON.
   - On `broadcast` lag it emits `runtime-lagged`; the UI then invalidates all queries and
     refetches run events after the last seen `seq`.
+  - From Approvals v2 there is a fifth event, `ApprovalUpdated`: a decided approval whose call
+    Dots performs changed its `apply_state`. It never notifies.
 - Notifications fire on `ApprovalRequested`, and on `RunUpdated` into `succeeded`, `failed` or
   `awaiting_approval`, once per (run, status), and only for a run this process saw queued or
   running. Chat runs do not notify; neither does a parked run closed by its decision, nor a run
@@ -606,7 +612,9 @@ notify. Unread count = pending approvals + runs awaiting review.
     logged and treated like `runtime-lagged` (invalidate and refetch).
   - Events patch or invalidate query keys: `runs`, `thread`, `events`, `inbox`, `approvals`
     (Plan 3c removed the key `run`, which no query read). `RunEvent`s are appended to loaded
-    event lists, deduplicated by `seq`.
+    event lists, deduplicated by `seq`. `ApprovalUpdated` invalidates `inbox` and the
+    `approvals` of the approval's own run, which is the parent of the run that performs the
+    call: that run's own `RunUpdated` does not reach those approvals.
   - From Plan 3c an invalidation that arrives while its query is being fetched is kept (the
     query is marked stale again when that fetch has settled), and the app refetches everything
     once when its listeners are attached, so the first screen's data is asked for twice.
@@ -615,7 +623,9 @@ notify. Unread count = pending approvals + runs awaiting review.
   the file against `types.ts`. Because live data is now parsed, the fixture also lists every
   variant of every shared enum. From Plan 3c it also lists the name of every registered command
   and the answer of `new_dot_spec`, and its engine-event samples are tied to the enum's
-  variants, so a new variant without a sample does not compile.
+  variants, so a new variant without a sample does not compile. From Approvals v2 it also
+  holds a sample of `ApprovalUpdated`, every `ApplyState`, and the rule candidates the core
+  derives for the `Approval` sample (`RuleCandidate`).
 - Shell around the screens:
   - Banners: `server_error` (links to Settings), CLI version mismatch ("Mark as tested"),
     restart required ("Restart Dots"), schedules paused.

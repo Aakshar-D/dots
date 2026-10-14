@@ -56,6 +56,8 @@ command_list![
     list_run_events,
     approvals_for_run,
     decide_approval,
+    approval_rule_candidates,
+    decide_run_approvals,
     inbox,
     inbox_count,
     worktree_diff,

@@ -482,7 +482,7 @@ describe("the run view", () => {
     await user.click(within(card).getByRole("button", { name: "Deny" }));
     await waitFor(() =>
       expect(backend.callsTo("decide_approval")).toEqual([
-        { id: sample.approval.id, approved: false, note: "not on main" },
+        { id: sample.approval.id, approved: false, note: "not on main", allowRule: null },
       ]),
     );
   });

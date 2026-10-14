@@ -10,6 +10,8 @@ export const sample = {
   run: T.Run.parse(contract.Run),
   event: T.RunEventRecord.parse(contract.RunEventRecord),
   approval: T.Approval.parse(contract.Approval),
+  /// What the core offers to save with `approval`, narrowest first.
+  rules: T.RuleCandidate.array().parse(contract.RuleCandidate),
   status: T.Status.parse(contract.Status),
   settings: T.Settings.parse(contract.Settings),
   overview: T.DotOverview.parse(contract.DotOverview),

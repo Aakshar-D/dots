@@ -79,7 +79,7 @@ describe("the Inbox", () => {
     await user.click(await screen.findByRole("button", { name: "Approve" }));
     expect(await screen.findByText(/Nothing waits for you/)).toBeVisible();
     expect(backend.callsTo("decide_approval")).toEqual([
-      { id: approval.id, approved: true, note: null },
+      { id: approval.id, approved: true, note: null, allowRule: null },
     ]);
   });
 
@@ -136,7 +136,7 @@ describe("the Inbox", () => {
       fireEvent.click(moved.getByRole("button", { name: button }), { detail: 2 });
       await settle();
       expect(backend.callsTo("decide_approval")).toEqual([
-        { id: approval.id, approved: button === "Approve", note: null },
+        { id: approval.id, approved: button === "Approve", note: null, allowRule: null },
       ]);
 
       // A click of its own decides the card that moved up.

@@ -9,7 +9,7 @@ use dots_core::model::{
     Approval, Dot, DotOverview, DotSpec, Inbox, Run, RunEventRecord, SettingsSaved, Status,
     WorktreeDiff,
 };
-use dots_core::policy::{Policy, Preset};
+use dots_core::policy::{Policy, Preset, RuleCandidate};
 use dots_core::settings::Settings;
 use dots_core::Runtime;
 use tauri::{AppHandle, Manager, State};
@@ -229,10 +229,32 @@ pub async fn decide_approval(
     id: String,
     approved: bool,
     note: Option<String>,
+    allow_rule: Option<String>,
 ) -> Res<Approval> {
     Ok(state
         .rt()?
-        .decide_approval(&id, approved, note, None)
+        .decide_approval(&id, approved, note, allow_rule)
+        .await?)
+}
+
+#[tauri::command]
+pub async fn approval_rule_candidates(
+    state: State<'_, AppState>,
+    id: String,
+) -> Res<Vec<RuleCandidate>> {
+    Ok(state.rt()?.approval_rule_candidates(&id).await?)
+}
+
+#[tauri::command]
+pub async fn decide_run_approvals(
+    state: State<'_, AppState>,
+    run_id: String,
+    approved: bool,
+    note: Option<String>,
+) -> Res<Vec<Approval>> {
+    Ok(state
+        .rt()?
+        .decide_run_approvals(&run_id, approved, note)
         .await?)
 }
 

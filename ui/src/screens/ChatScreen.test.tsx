@@ -323,7 +323,7 @@ describe("the Chat screen", () => {
     await user.click(within(card).getByRole("button", { name: "Approve" }));
     await waitFor(() =>
       expect(backend.callsTo("decide_approval")).toEqual([
-        { id: sample.approval.id, approved: true, note: null },
+        { id: sample.approval.id, approved: true, note: null, allowRule: null },
       ]),
     );
   });
