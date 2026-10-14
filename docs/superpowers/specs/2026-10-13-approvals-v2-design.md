@@ -428,6 +428,9 @@ The plan's table "Deliberate deviations from the spec" gives the reason for each
   dialog lists each call, not only its tool.
 - New: a dot that is moved to another engine while its run is parked gets the calls Dots was to
   perform given up (`skipped`), with no grant.
+- New: file candidates are not offered for UNC, device or drive-relative paths. A command whose
+  first token is a shell or wrapper, or sets a variable, gets only the exact rule. A two-token
+  prefix is not offered when its second token is an option.
 
 ## 14. Follow-up candidates from the same review
 

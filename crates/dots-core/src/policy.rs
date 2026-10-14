@@ -45,6 +45,27 @@ pub struct Policy {
 
 const READ_TOOLS: &[&str] = &["Read", "LS", "Glob", "Grep"];
 const COMMAND_TOOLS: &[&str] = &["Bash", "PowerShell"];
+/// Commands that run whatever follows them: a prefix rule through one would allow any command.
+const WRAPPER_COMMANDS: &[&str] = &[
+    "sh",
+    "bash",
+    "zsh",
+    "dash",
+    "fish",
+    "cmd",
+    "pwsh",
+    "powershell",
+    "env",
+    "sudo",
+    "doas",
+    "xargs",
+    "nohup",
+    "time",
+    "nice",
+    "timeout",
+    "start",
+    "call",
+];
 const FILE_TOOLS: &[&str] = &[
     "Read",
     "Write",
@@ -589,8 +610,13 @@ pub fn allow_candidates(tool: &str, input: &Value, workspace: Option<&Path>) -> 
         if let Some(command) = command {
             let tokens: Vec<&str> = command.split(' ').collect();
             found.push((format!("{tool}({command})"), "this exact command".into()));
+            let first = tokens[0].to_ascii_lowercase();
+            let first = first.strip_suffix(".exe").unwrap_or(&first);
+            let wrapper = WRAPPER_COMMANDS.contains(&first) || tokens[0].contains('=');
+            // An option or a path switch after the command name decides what the command does.
+            let optional_second = tokens.get(1).is_some_and(|t| t.starts_with(['-', '/']));
             for len in [tokens.len().saturating_sub(1), 2] {
-                if len >= 2 && len < tokens.len() {
+                if len >= 2 && len < tokens.len() && !wrapper && !(len == 2 && optional_second) {
                     let prefix = tokens[..len].join(" ");
                     found.push((
                         format!("{tool}({prefix}:*)"),
@@ -600,7 +626,19 @@ pub fn allow_candidates(tool: &str, input: &Value, workspace: Option<&Path>) -> 
             }
         }
     } else if FILE_TOOLS.contains(&tool) {
-        let raw = input_path(input).filter(|r| raw_path_is_clean(r) && !r.contains(['*', '?']));
+        // UNC, device and drive-relative paths name places the rules below would misdescribe.
+        let named_plainly = |r: &str| {
+            let r = r.replace('\\', "/");
+            let b = r.as_bytes();
+            let unc = r.starts_with("//");
+            let drive_relative = b.len() >= 2
+                && b[0].is_ascii_alphabetic()
+                && b[1] == b':'
+                && b.get(2) != Some(&b'/');
+            !unc && !drive_relative
+        };
+        let raw = input_path(input)
+            .filter(|r| raw_path_is_clean(r) && !r.contains(['*', '?']) && named_plainly(r));
         if let Some(raw) = raw {
             let (abs, tidy) = tidy_path(raw);
             let inside = ws.as_deref().filter(|_| abs).and_then(|ws| {

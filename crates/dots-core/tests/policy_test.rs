@@ -996,6 +996,11 @@ fn a_file_call_without_a_usable_path_offers_nothing() {
         "./",
         "",
         "C:/work/repo",
+        r"\\server\share\f.txt",
+        r"\\server\f.txt",
+        r"\\.\pipe\name",
+        "//server/share/f.txt",
+        "C:src/main.rs",
     ] {
         for tool in [
             "Read",
@@ -1168,4 +1173,70 @@ fn a_candidate_serializes_as_pattern_and_label() {
         serde_json::to_value(&c).unwrap(),
         json!({"pattern": "Bash(ls)", "label": "this exact command"})
     );
+}
+
+#[test]
+fn a_shell_or_wrapper_or_option_gets_no_prefix_that_would_allow_any_command() {
+    assert_eq!(
+        offered("Bash", bash("cmd /c dir")),
+        vec!["Bash(cmd /c dir)"]
+    );
+    assert_eq!(
+        offered("PowerShell", bash("pwsh -c Get-Date")),
+        vec!["PowerShell(pwsh -c Get-Date)"]
+    );
+    assert_eq!(
+        offered("Bash", bash("env git status")),
+        vec!["Bash(env git status)"]
+    );
+    assert_eq!(
+        offered("Bash", bash("FOO=1 git status")),
+        vec!["Bash(FOO=1 git status)"]
+    );
+    assert_eq!(
+        offered("Bash", bash("Bash.EXE -c ls")),
+        vec!["Bash(Bash.EXE -c ls)"]
+    );
+    // An option as the second token: the two-token prefix is left out, the longer one stays.
+    assert_eq!(
+        offered("Bash", bash("git -c a=b log")),
+        vec!["Bash(git -c a=b log)", "Bash(git -c a=b:*)"]
+    );
+    assert_eq!(
+        offered("Bash", bash("git -c a=b")),
+        vec!["Bash(git -c a=b)"]
+    );
+    assert_eq!(
+        offered("Bash", bash("git push origin main")),
+        vec![
+            "Bash(git push origin main)",
+            "Bash(git push origin:*)",
+            "Bash(git push:*)"
+        ]
+    );
+}
+
+#[test]
+fn a_deny_rule_still_wins_over_a_candidate() {
+    let call = bash("git push origin main");
+    let candidate = &allow_candidates("Bash", &call, ws())[0].pattern;
+    let p = custom(
+        vec![
+            Rule::new("Bash(git push:*)", Action::Deny),
+            Rule::new(candidate, Action::Allow),
+        ],
+        Action::Ask,
+    );
+    assert_eq!(p.resolve_in("Bash", &call, ws()), Action::Deny);
+
+    let write = file(".git/hooks/pre-commit");
+    let candidate = &allow_candidates("Write", &write, ws())[0].pattern;
+    let p = custom(
+        vec![
+            Rule::new("Write(**/.git/**)", Action::Deny),
+            Rule::new(candidate, Action::Allow),
+        ],
+        Action::Ask,
+    );
+    assert_eq!(p.resolve_in("Write", &write, ws()), Action::Deny);
 }
