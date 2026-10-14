@@ -158,10 +158,6 @@ fn prepare_validates_calls_before_the_policy() {
     );
 }
 
-/// On Windows a process the command started is stopped when the command returns. The result
-/// says so only when that process held the command's output; one started in a window of its
-/// own is stopped without a word, so the model has to know it from the tool's description.
-#[cfg(windows)]
 #[test]
 fn a_prepared_input_passes_prepare_again_unchanged() {
     // An approval stores the prepared input under the policy alias. When Dots performs the call
@@ -219,6 +215,10 @@ fn a_prepared_input_passes_prepare_again_unchanged() {
     }
 }
 
+/// On Windows a process the command started is stopped when the command returns. The result
+/// says so only when that process held the command's output; one started in a window of its
+/// own is stopped without a word, so the model has to know it from the tool's description.
+#[cfg(windows)]
 #[test]
 fn the_shell_description_says_that_a_background_process_is_stopped() {
     let schemas = tools::schemas();

@@ -679,3 +679,150 @@ async fn a_run_without_approved_calls_starts_as_before() {
     assert_eq!(report(&llm), CONTINUE);
     assert!(events(&e, &child.id, "tool_call").await.is_empty());
 }
+
+// ---- Fix round: cancel before a claim, and a claim that cannot be recorded ----
+
+/// A gate that is the hub, except that claiming one approval fails.
+struct FailingClaim {
+    hub: Arc<ApprovalHub>,
+    fails: String,
+}
+
+#[async_trait::async_trait]
+impl dots_core::engine::PermissionGate for FailingClaim {
+    async fn check(
+        &self,
+        run_id: &str,
+        tool: &str,
+        input: Value,
+    ) -> dots_core::Result<dots_core::engine::PermissionOutcome> {
+        self.hub.check(run_id, tool, input).await
+    }
+    async fn claim_apply(&self, id: &str) -> dots_core::Result<bool> {
+        if id == self.fails {
+            return Err(dots_core::Error::Other("disk full".into()));
+        }
+        self.hub.claim_apply(id).await
+    }
+    async fn settle_apply(&self, id: &str, state: ApplyState) -> dots_core::Result<()> {
+        self.hub.settle_apply(id, state).await
+    }
+    async fn skip_apply(&self, id: &str) -> dots_core::Result<bool> {
+        self.hub.skip_apply(id).await
+    }
+}
+
+/// Starts the engine by hand on the resume run, with `gate`, and drains its events.
+async fn start_by_hand(
+    e: &Env,
+    dot: &Dot,
+    child: &Run,
+    approvals: Vec<Approval>,
+    gate: Arc<dyn dots_core::engine::PermissionGate>,
+    cancel: CancellationToken,
+) {
+    let engine = LocalEngine::with_retry_delays(e.store.clone(), gate, vec![Duration::ZERO; 2]);
+    let ctx = dots_core::engine::RunContext {
+        run_id: child.id.clone(),
+        dot: dot.clone(),
+        workspace: e.ws.clone(),
+        prompt: CONTINUE.into(),
+        session_id: child.session_id.clone(),
+        mcp_url: "http://127.0.0.1:1/mcp".into(),
+        mcp_secret: "s".into(),
+        cancel,
+        approved_calls: approvals,
+    };
+    let mut rx = engine.start(ctx).await.unwrap();
+    while rx.recv().await.is_some() {}
+}
+
+#[tokio::test]
+async fn a_run_cancelled_before_its_calls_are_reached_claims_and_performs_none() {
+    let e = env_manual().await;
+    let llm = Llm::start(vec![text("unused")]).await;
+    let dot = local_dot(&e, &llm, Preset::Sandboxed).await;
+    let (child, approvals) = queued_resume(
+        &e,
+        &dot,
+        &[("Write", json!({"file_path": "made.txt", "content": "x"}))],
+    )
+    .await;
+    let hub = Arc::new(ApprovalHub::new(e.store.clone(), new_bus()));
+    hub.set_self_apply([EngineKind::Local]);
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+    start_by_hand(&e, &dot, &child, approvals.clone(), hub, cancel).await;
+
+    assert!(!e.ws.join("made.txt").exists());
+    assert!(events(&e, &child.id, "tool_call").await.is_empty());
+    assert_eq!(llm.requests().len(), 0);
+    // Still waiting, not claimed; the runner's close at the end of the run gives it up.
+    assert_eq!(states(&e, &approvals).await, vec![Some(ApplyState::Queued)]);
+    e.store.close_applies(&approvals[0].run_id).await.unwrap();
+    assert_eq!(
+        states(&e, &approvals).await,
+        vec![Some(ApplyState::Skipped)]
+    );
+}
+
+#[tokio::test]
+async fn a_claim_that_cannot_be_recorded_is_reported_and_gives_up_the_rest() {
+    let e = env_manual().await;
+    let llm = Llm::start(vec![text("Noted.")]).await;
+    let dot = local_dot(&e, &llm, Preset::Sandboxed).await;
+    let (child, approvals) = queued_resume(
+        &e,
+        &dot,
+        &[
+            ("Write", json!({"file_path": "first.txt", "content": "1"})),
+            ("Write", json!({"file_path": "second.txt", "content": "2"})),
+            ("Write", json!({"file_path": "third.txt", "content": "3"})),
+        ],
+    )
+    .await;
+    let hub = Arc::new(ApprovalHub::new(e.store.clone(), new_bus()));
+    hub.set_self_apply([EngineKind::Local]);
+    let gate = Arc::new(FailingClaim {
+        hub,
+        fails: approvals[1].id.clone(),
+    });
+    start_by_hand(
+        &e,
+        &dot,
+        &child,
+        approvals.clone(),
+        gate,
+        CancellationToken::new(),
+    )
+    .await;
+
+    assert!(e.ws.join("first.txt").exists());
+    assert!(!e.ws.join("second.txt").exists());
+    assert!(!e.ws.join("third.txt").exists());
+    assert_eq!(
+        states(&e, &approvals).await,
+        vec![
+            Some(ApplyState::Applied),
+            Some(ApplyState::Queued),
+            Some(ApplyState::Skipped)
+        ]
+    );
+    let told = report(&llm);
+    assert!(
+        told.contains(&format!(
+            "- Approval #{}, Write {}: not performed, because Dots could not record that it \
+             was starting it.",
+            approvals[1].id, approvals[1].input
+        )),
+        "{told}"
+    );
+    assert!(
+        told.contains(&format!(
+            "- Approval #{}, Write {}: not performed, because an earlier approved action did \
+             not complete.",
+            approvals[2].id, approvals[2].input
+        )),
+        "{told}"
+    );
+}

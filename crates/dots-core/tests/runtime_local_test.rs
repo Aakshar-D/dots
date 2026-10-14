@@ -227,7 +227,7 @@ async fn cancelling_while_dots_performs_a_call_leaves_its_outcome_unknown() {
 
     t.rt.cancel_run(&child.id).await.unwrap();
     wait_status(t.rt.store(), &child.id, RunStatus::Cancelled, 30).await;
-    // Dots stopped the command and has no result for it: it says so, and never runs it again.
+    // Dots stopped the command and has no result for it: it says so.
     let closed = wait_apply(&t, &approval.id, ApplyState::Unknown).await;
     assert_eq!(closed.applied_at, None);
     // The model was not asked after the cancel.

@@ -34,6 +34,9 @@ const REPORT_HEAD: &str = "Dots performed your approved actions. The text under 
 const NOT_PERFORMED: &str = "not performed, because an earlier approved action did not \
     complete. Request it again if it is still needed.";
 
+/// What the model is told about an approved call whose start could not be recorded.
+const NOT_STARTED: &str = "not performed, because Dots could not record that it was starting it.";
+
 /// How long `probe` waits; LM Studio may load the model on the first request.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -269,7 +272,8 @@ impl Session {
     }
 
     /// Performs the approved calls this run was handed, in order, each exactly as it was
-    /// approved. Returns one report line per call for the model, or `None` when the run must
+    /// approved. Returns one report line per call that was claimed, given up or could not be
+    /// claimed (a call that is not this run's to perform has none), or `None` when the run must
     /// stop (cancelled, the runner stopped listening, or an outcome could not be recorded).
     ///
     /// A call is claimed before it runs and its outcome is recorded before anything else is
@@ -285,6 +289,11 @@ impl Session {
         let mut lines = Vec::new();
         let mut stopped = false;
         for approval in &approved {
+            // A cancel that landed meanwhile stops the run before another call is claimed; the
+            // runner gives up the calls left unclaimed when it ends.
+            if self.ctx.cancel.is_cancelled() {
+                return None;
+            }
             let what = format!(
                 "Approval #{}, {} {}",
                 approval.id, approval.tool, approval.input
@@ -302,7 +311,9 @@ impl Session {
                 // Not this run's to perform: it is not run and not reported.
                 Ok(false) => continue,
                 Err(e) => {
+                    // The call never ran. The model is told, and the calls after it are given up.
                     tracing::warn!(approval = %approval.id, "claiming failed: {e}");
+                    lines.push(format!("- {what}: {NOT_STARTED}"));
                     stopped = true;
                     continue;
                 }
