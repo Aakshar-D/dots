@@ -433,6 +433,9 @@ The plan's table "Deliberate deviations from the spec" gives the reason for each
   whose last status was written but whose calls were not closed (the process stopped in
   between, or the close failed) no longer leaves them `queued` for good. Nothing is announced,
   as for the rest of recovery.
+- Section 8 (final review): the dot editor does not fill its form from a cached copy of the dot
+  that was marked stale (for example by a rule saved from the Inbox) while it is loaded again;
+  it waits for the fresh copy, so Save no longer drops the saved rule.
 - Section 3.2 (final review): `resume_parked` queues only an approved, self-apply approval of
   the parent run that is not queued yet; any other id makes it write nothing and return
   `Conflict`.

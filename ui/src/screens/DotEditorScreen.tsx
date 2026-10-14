@@ -163,8 +163,12 @@ function ExistingDot({ dotId }: { dotId: string }) {
     onError: notifyError,
   });
   // A dot that was loaded stays on the page while it is loaded again, and when that fails: the
-  // form below holds what the user typed, and it is filled only once, when it mounts.
-  if (dot.data === undefined) {
+  // form below holds what the user typed, and it is filled only once, when it mounts. So it is
+  // not mounted from a cached copy that is being loaded again because it was marked stale (a
+  // rule saved from the Inbox changed the dot): saving that copy would undo the change. During
+  // a switch the query is off, and the switch's answer is the copy.
+  const refreshing = dot.isFetching && !dot.isFetchedAfterMount;
+  if (dot.data === undefined || refreshing) {
     return <Page title="Dot">{dot.isError && <ErrorNote error={dot.error} />}</Page>;
   }
   return (

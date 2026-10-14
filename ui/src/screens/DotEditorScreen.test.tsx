@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { Inbox } from "@/api/types";
 import { specOf } from "@/lib/dot-rules";
 import { localDateTime } from "@/lib/format";
+import { invalidateDots } from "@/lib/query";
 import { backend } from "@/test/backend";
 import { blankSpec, sample } from "@/test/fixtures";
 import { renderApp } from "@/test/render";
@@ -273,6 +274,30 @@ describe("the dot editor, stored dot", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("database is locked");
     expect(screen.getByLabelText("Instructions")).toHaveValue("Only summarize.");
     expect(screen.getByLabelText("Token")).toHaveValue("tok-new");
+  });
+
+  it("fills the form from the dot as it is now, not from a copy marked stale", async () => {
+    const held = stored();
+    const { user, router, queryClient } = renderApp(path);
+    expect(await screen.findByLabelText("Name")).toHaveValue(dot.name);
+
+    // Away from the editor, a rule is saved with an approval (in the Inbox): the dot's cached
+    // copy is marked stale, and the core now holds the policy with the rule.
+    await act(() => router.navigate("/inbox"));
+    const rule = { tool: "Bash(git status:*)", action: "allow" as const };
+    held.dot = {
+      ...held.dot,
+      policy: { ...held.dot.policy, preset: "custom", rules: [...held.dot.policy.rules, rule] },
+    };
+    act(() => invalidateDots(queryClient));
+
+    await act(() => router.navigate(path));
+    const added = `Rule ${dot.policy.rules.length + 1} tool`;
+    expect(await screen.findByLabelText(added)).toHaveValue(rule.tool);
+    // Saving keeps the rule.
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("Saved")).toBeVisible();
+    expect(backend.callsTo("update_dot")).toEqual([{ id: dot.id, spec: specOf(held.dot) }]);
   });
 
   it("takes a new name to Chat's dot picker", async () => {
