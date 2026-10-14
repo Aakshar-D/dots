@@ -7,8 +7,10 @@ use common::{spec, temp_store};
 use dots_core::approvals::{grant_key, parked_message, ApprovalHub, DecideEffect};
 use dots_core::engine::{PermissionGate, PermissionOutcome};
 use dots_core::events::{new_bus, RuntimeEvent};
-use dots_core::model::{ApprovalStatus, NewRun, Run, TriggerKind};
-use dots_core::policy::{Policy, Preset};
+use dots_core::model::{
+    ApplyState, ApprovalStatus, EngineKind, NewRun, Run, RunStatus, TriggerKind,
+};
+use dots_core::policy::{Action, Policy, Preset, Rule};
 use dots_core::store::Store;
 use dots_core::Error;
 use serde_json::json;
@@ -325,4 +327,163 @@ async fn decision_without_waiter_is_parked_before_it_is_announced() {
     };
     assert!(announced.parked, "{announced:?}");
     assert_eq!(announced.status, ApprovalStatus::Approved);
+}
+
+// ---- Approvals v2: calls that Dots performs itself ----
+
+#[tokio::test]
+async fn an_approval_says_whether_dots_will_perform_its_call() {
+    let (_d, store, hub, run, _bus) = setup(Preset::Sandboxed, 0).await;
+    let ask = |n: u32| json!({"command": format!("git push {n}")});
+    // No engine performs calls itself: a late decision becomes a grant, as before.
+    hub.check(&run.id, "Bash", ask(1)).await.unwrap();
+    // The dot of `setup` is a Claude dot. An engine of another kind changes nothing for it.
+    hub.set_self_apply([EngineKind::Local]);
+    hub.check(&run.id, "Bash", ask(2)).await.unwrap();
+    hub.set_self_apply([EngineKind::Claude, EngineKind::Local]);
+    hub.check(&run.id, "Bash", ask(3)).await.unwrap();
+    // Taking the engine out again does not touch the approval made meanwhile.
+    hub.set_self_apply(Vec::<EngineKind>::new());
+    hub.check(&run.id, "Bash", ask(4)).await.unwrap();
+
+    let mut flags: Vec<(String, bool)> = store
+        .approvals_for_run(&run.id)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|a| {
+            (
+                a.input["command"].as_str().unwrap().to_string(),
+                a.self_apply,
+            )
+        })
+        .collect();
+    flags.sort();
+    assert_eq!(
+        flags,
+        vec![
+            ("git push 1".to_string(), false),
+            ("git push 2".to_string(), false),
+            ("git push 3".to_string(), true),
+            ("git push 4".to_string(), false),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_rule_is_saved_with_an_approval_and_refused_with_a_denial() {
+    let (_d, store, hub, run, bus) = setup(Preset::Sandboxed, 5).await;
+    let mut events = bus.subscribe();
+    let h = hub.clone();
+    let rid = run.id.clone();
+    let check =
+        tokio::spawn(async move { h.check(&rid, "Bash", json!({"command": "git push"})).await });
+    let approval = loop {
+        if let RuntimeEvent::ApprovalRequested { approval } = events.recv().await.unwrap() {
+            break approval;
+        }
+    };
+    let rule = Rule::new("Bash(git push)", Action::Allow);
+    // Refused before anything is touched: the engine still waits and can still be answered.
+    let err = hub
+        .decide_with_rule(&approval.id, false, None, Some(rule.clone()))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::Invalid(_)), "{err:?}");
+    assert_eq!(hub.waiter_count(), 1);
+    assert_eq!(
+        store.get_approval(&approval.id).await.unwrap().status,
+        ApprovalStatus::Pending
+    );
+
+    let effect = hub
+        .decide_with_rule(&approval.id, true, None, Some(rule.clone()))
+        .await
+        .unwrap();
+    assert!(matches!(effect, DecideEffect::Live(_)));
+    assert!(matches!(
+        check.await.unwrap().unwrap(),
+        PermissionOutcome::Allow { .. }
+    ));
+    let policy = store.get_dot(&run.dot_id).await.unwrap().spec.policy;
+    assert_eq!(policy.rules.last(), Some(&rule));
+    assert_eq!(policy.preset, Preset::Custom);
+    // The rule holds for the next call at once: no question, no approval row.
+    let again = hub
+        .check(&run.id, "Bash", json!({"command": "git push"}))
+        .await
+        .unwrap();
+    assert!(matches!(again, PermissionOutcome::Allow { .. }));
+    assert_eq!(store.approvals_for_run(&run.id).await.unwrap().len(), 1);
+}
+
+/// An approved, parked approval of `run` whose call Dots is to perform.
+async fn approved_call(store: &Store, run: &Run, command: &str) -> String {
+    let a = store
+        .create_approval_with(&run.id, "Bash", &json!({ "command": command }), true)
+        .await
+        .unwrap();
+    store
+        .decide_approval_with_parked(&a.id, true, None, true)
+        .await
+        .unwrap();
+    a.id
+}
+
+#[tokio::test]
+async fn claiming_settling_and_skipping_a_call_are_each_announced_once() {
+    let (_d, store, hub, run, bus) = setup(Preset::Sandboxed, 0).await;
+    let first = approved_call(&store, &run, "one").await;
+    let second = approved_call(&store, &run, "two").await;
+    store
+        .set_status(&run.id, RunStatus::AwaitingApproval)
+        .await
+        .unwrap();
+    let ids = vec![first.clone(), second.clone()];
+    store
+        .resume_parked(&run.id, &[], &ids, &ids, None)
+        .await
+        .unwrap();
+    let mut events = bus.subscribe();
+    // What was announced since the last look: the hub sends before it returns.
+    let mut updates = move || {
+        let mut seen = Vec::new();
+        while let Ok(ev) = events.try_recv() {
+            match ev {
+                RuntimeEvent::ApprovalUpdated { approval } => {
+                    seen.push((approval.id, approval.apply_state))
+                }
+                other => panic!("unexpected event {other:?}"),
+            }
+        }
+        seen
+    };
+
+    assert!(hub.claim_apply(&first).await.unwrap());
+    assert_eq!(updates(), vec![(first.clone(), Some(ApplyState::Applying))]);
+    // A claim that is lost changes nothing and announces nothing.
+    assert!(!hub.claim_apply(&first).await.unwrap());
+    assert!(!hub.claim_apply("no-such-approval").await.unwrap());
+    assert!(updates().is_empty());
+
+    hub.settle_apply(&first, ApplyState::Applied).await.unwrap();
+    assert_eq!(updates(), vec![(first.clone(), Some(ApplyState::Applied))]);
+    assert!(store
+        .get_approval(&first)
+        .await
+        .unwrap()
+        .applied_at
+        .is_some());
+    // An outcome is written once, and only for a call that was claimed.
+    for id in [&first, &second] {
+        let err = hub.settle_apply(id, ApplyState::Failed).await.unwrap_err();
+        assert!(matches!(err, Error::Conflict(_)), "{err:?}");
+    }
+    assert!(updates().is_empty());
+
+    assert!(hub.skip_apply(&second).await.unwrap());
+    assert_eq!(updates(), vec![(second.clone(), Some(ApplyState::Skipped))]);
+    assert!(!hub.skip_apply(&second).await.unwrap());
+    assert!(!hub.claim_apply(&second).await.unwrap());
+    assert!(updates().is_empty());
 }

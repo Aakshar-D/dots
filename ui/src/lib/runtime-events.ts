@@ -46,6 +46,8 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
     }
     case "approval_requested":
     case "approval_decided":
+    // The approval's own run, which for a call Dots performs is the parent of the run at work.
+    case "approval_updated":
       invalidate(qc, keys.inbox);
       invalidate(qc, keys.approvals(event.approval.run_id));
       break;

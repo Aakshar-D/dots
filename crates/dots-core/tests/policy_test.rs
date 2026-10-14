@@ -1,4 +1,4 @@
-use dots_core::policy::{Action, Policy, Preset, Rule};
+use dots_core::policy::{allow_candidates, Action, Policy, Preset, Rule, RuleCandidate};
 use serde_json::json;
 
 fn bash(cmd: &str) -> serde_json::Value {
@@ -811,4 +811,456 @@ fn denied_by_rule_agrees_with_resolve_for_every_preset() {
     assert!(sandboxed.denied_by_rule("Edit", &json!({"file_path": ".claude"}), ws));
     assert!(!sandboxed.denied_by_rule("Read", &json!({"file_path": ".git/config"}), ws));
     assert!(!sandboxed.denied_by_rule("Write", &json!({"file_path": "src/a.rs"}), ws));
+}
+
+// ---- Approvals v2: the allow rules offered for a call that asked ----
+
+const WS: &str = "C:/work/repo";
+
+fn ws() -> Option<&'static std::path::Path> {
+    Some(std::path::Path::new(WS))
+}
+
+/// The patterns offered for a call in the workspace `WS`.
+fn offered(tool: &str, input: serde_json::Value) -> Vec<String> {
+    allow_candidates(tool, &input, ws())
+        .into_iter()
+        .map(|c| c.pattern)
+        .collect()
+}
+
+fn file(path: &str) -> serde_json::Value {
+    json!({ "file_path": path })
+}
+
+#[test]
+fn a_plain_command_offers_itself_and_its_prefixes_narrowest_first() {
+    let got = allow_candidates("Bash", &bash("git push origin main"), ws());
+    assert_eq!(
+        got,
+        vec![
+            RuleCandidate {
+                pattern: "Bash(git push origin main)".into(),
+                label: "this exact command".into(),
+            },
+            RuleCandidate {
+                pattern: "Bash(git push origin:*)".into(),
+                label: "commands that start with git push origin".into(),
+            },
+            RuleCandidate {
+                pattern: "Bash(git push:*)".into(),
+                label: "commands that start with git push".into(),
+            },
+        ]
+    );
+    // Five tokens: still the command, all but its last token, and its first two.
+    assert_eq!(
+        offered("Bash", bash("npm run build -- --watch")),
+        vec![
+            "Bash(npm run build -- --watch)",
+            "Bash(npm run build --:*)",
+            "Bash(npm run:*)",
+        ]
+    );
+    // Three tokens: the two prefixes are the same one.
+    assert_eq!(
+        offered("Bash", bash("cargo test --workspace")),
+        vec!["Bash(cargo test --workspace)", "Bash(cargo test:*)"]
+    );
+    // The tool's own name is kept, and runs of spaces are collapsed as the matcher does.
+    assert_eq!(
+        offered("PowerShell", bash("  git   push  origin ")),
+        vec!["PowerShell(git push origin)", "PowerShell(git push:*)"]
+    );
+}
+
+#[test]
+fn a_one_or_two_token_command_offers_only_itself() {
+    assert_eq!(offered("Bash", bash("ls")), vec!["Bash(ls)"]);
+    assert_eq!(offered("Bash", bash("git push")), vec!["Bash(git push)"]);
+    // Never the bare tool, never a one-token prefix.
+    for command in ["ls", "git push", "git push origin main", "a b c d e f"] {
+        for pattern in offered("Bash", bash(command)) {
+            assert_ne!(pattern, "Bash", "{command}");
+            let spec = &pattern["Bash(".len()..pattern.len() - 1];
+            if let Some(prefix) = spec.strip_suffix(":*") {
+                assert!(prefix.contains(' '), "{pattern} is a one-token prefix");
+            }
+        }
+    }
+}
+
+#[test]
+fn a_command_that_is_not_plain_offers_nothing() {
+    for command in [
+        "git push | tee log",
+        "git push; rm -rf .",
+        "git push && echo ok",
+        "git commit -m \"a b\"",
+        "git commit -m 'a b'",
+        "echo $HOME",
+        "echo `whoami`",
+        "echo $(whoami)",
+        "git log > out.txt",
+        "curl --output x http://example.com",
+        "git push\norigin",
+        "",
+        "   ",
+    ] {
+        assert_eq!(
+            offered("Bash", bash(command)),
+            Vec::<String>::new(),
+            "{command:?}"
+        );
+        assert_eq!(
+            offered("PowerShell", bash(command)),
+            Vec::<String>::new(),
+            "{command:?}"
+        );
+    }
+    // No command at all, or one that is not a string.
+    assert!(offered("Bash", json!({})).is_empty());
+    assert!(offered("Bash", json!({"command": 7})).is_empty());
+}
+
+#[test]
+fn a_file_call_offers_the_path_and_its_directory() {
+    assert_eq!(
+        allow_candidates("Write", &file("docs/guide/intro.md"), ws()),
+        vec![
+            RuleCandidate {
+                pattern: "Write(docs/guide/intro.md)".into(),
+                label: "this path".into(),
+            },
+            RuleCandidate {
+                pattern: "Write(docs/guide/**)".into(),
+                label: "everything under docs/guide/".into(),
+            },
+        ]
+    );
+    // A file in the workspace root has no directory to offer: that would be the whole workspace.
+    assert_eq!(offered("Edit", file("README.md")), vec!["Edit(README.md)"]);
+    // An absolute path inside the workspace is written relative to it, with its case kept.
+    assert_eq!(
+        offered("Edit", file("C:\\Work\\Repo\\Src\\Main.rs")),
+        vec!["Edit(Src/Main.rs)", "Edit(Src/**)"]
+    );
+    assert_eq!(
+        offered("Read", file("./src//lib.rs")),
+        vec!["Read(src/lib.rs)", "Read(src/**)"]
+    );
+    // Outside the workspace the path stays absolute; a drive root is not offered as a directory.
+    assert_eq!(
+        offered("Read", file("C:/Other/notes/todo.txt")),
+        vec!["Read(C:/Other/notes/todo.txt)", "Read(C:/Other/notes/**)"]
+    );
+    assert_eq!(
+        offered("Read", file("D:/todo.txt")),
+        vec!["Read(D:/todo.txt)"]
+    );
+    assert_eq!(
+        offered("Read", file("/etc/hosts")),
+        vec!["Read(/etc/hosts)", "Read(/etc/**)"]
+    );
+    assert_eq!(offered("Read", file("/hosts")), vec!["Read(/hosts)"]);
+    // The other path arguments the policy reads.
+    assert_eq!(
+        offered("Grep", json!({"pattern": "todo", "path": "src/app"})),
+        vec!["Grep(src/app)", "Grep(src/**)"]
+    );
+    assert_eq!(
+        offered("NotebookEdit", json!({"notebook_path": "nb/a.ipynb"})),
+        vec!["NotebookEdit(nb/a.ipynb)", "NotebookEdit(nb/**)"]
+    );
+    // Without a workspace an absolute path stays absolute.
+    let none = allow_candidates("Write", &file("C:/work/repo/a/b.txt"), None);
+    let none: Vec<&str> = none.iter().map(|c| c.pattern.as_str()).collect();
+    assert_eq!(
+        none,
+        vec!["Write(C:/work/repo/a/b.txt)", "Write(C:/work/repo/a/**)"]
+    );
+}
+
+#[test]
+fn a_file_call_without_a_usable_path_offers_nothing() {
+    for path in [
+        "../outside.txt",
+        "src/../../outside.txt",
+        "~/notes.txt",
+        "notes.txt:stream",
+        "src/*.rs",
+        "src/a?.rs",
+        "dir./file",
+        "file. ",
+        ".",
+        "./",
+        "",
+        "C:/work/repo",
+        r"\\server\share\f.txt",
+        r"\\server\f.txt",
+        r"\\.\pipe\name",
+        "//server/share/f.txt",
+        "C:src/main.rs",
+    ] {
+        for tool in [
+            "Read",
+            "Write",
+            "Edit",
+            "Glob",
+            "Grep",
+            "LS",
+            "NotebookEdit",
+        ] {
+            assert_eq!(
+                offered(tool, file(path)),
+                Vec::<String>::new(),
+                "{tool} {path:?}"
+            );
+        }
+    }
+    // No path argument: only the bare tool could match, and that is never offered.
+    assert!(offered("Glob", json!({"pattern": "**/*.rs"})).is_empty());
+    assert!(offered("Write", json!({"content": "x"})).is_empty());
+    assert!(offered("LS", json!({})).is_empty());
+}
+
+#[test]
+fn a_fetch_offers_its_host_and_any_other_tool_its_name() {
+    assert_eq!(
+        allow_candidates(
+            "WebFetch",
+            &json!({"url": "https://Docs.RS:443/serde?x=1"}),
+            ws()
+        ),
+        vec![RuleCandidate {
+            pattern: "WebFetch(domain:docs.rs)".into(),
+            label: "this host and its subdomains".into(),
+        }]
+    );
+    for url in [
+        "https://user@docs.rs/",
+        "https://docs.rs%2eevil.com/",
+        "https://docs.rs\\@evil.com/",
+        "https://[::1]/",
+        "not a url",
+        "https:///path",
+    ] {
+        assert!(
+            offered("WebFetch", json!({ "url": url })).is_empty(),
+            "{url}"
+        );
+    }
+    assert!(offered("WebFetch", json!({})).is_empty());
+
+    assert_eq!(
+        allow_candidates("mcp__github__create_issue", &json!({"title": "x"}), ws()),
+        vec![RuleCandidate {
+            pattern: "mcp__github__create_issue".into(),
+            label: "every call of this tool".into(),
+        }]
+    );
+    assert_eq!(
+        offered("WebSearch", json!({"query": "x"})),
+        vec!["WebSearch"]
+    );
+    // A name the pattern syntax would read as something else is not offered.
+    for tool in ["mcp__github__*", "*", "", "two words", "Tool(spec)"] {
+        assert!(offered(tool, json!({})).is_empty(), "{tool:?}");
+    }
+}
+
+#[test]
+fn every_candidate_is_a_valid_rule_that_allows_its_call_and_no_deny_rule_yields_to_it() {
+    let calls: Vec<(&str, serde_json::Value)> = vec![
+        ("Bash", bash("git push origin main")),
+        ("Bash", bash("git push")),
+        ("PowerShell", bash("npm run build -- --watch")),
+        ("Write", file("docs/guide/intro.md")),
+        ("Edit", file("C:/work/repo/src/main.rs")),
+        ("Read", file("C:/Other/notes/todo.txt")),
+        ("Grep", json!({"pattern": "x", "path": "src/app"})),
+        ("WebFetch", json!({"url": "https://api.docs.rs/x"})),
+        ("mcp__github__create_issue", json!({"title": "x"})),
+    ];
+    let mut seen = 0;
+    for (tool, input) in &calls {
+        let candidates = allow_candidates(tool, input, ws());
+        assert!(!candidates.is_empty(), "{tool} {input}");
+        for c in candidates {
+            seen += 1;
+            let case = format!("{} for {tool} {input}", c.pattern);
+            // On its own, under a default that asks.
+            let alone = custom(vec![Rule::new(&c.pattern, Action::Allow)], Action::Ask);
+            alone.validate().unwrap_or_else(|e| panic!("{case}: {e}"));
+            assert_eq!(alone.resolve_in(tool, input, ws()), Action::Allow, "{case}");
+            // An ask rule for the same call yields to it; a deny rule does not.
+            let asked = custom(
+                vec![
+                    Rule::new("*", Action::Ask),
+                    Rule::new(&c.pattern, Action::Allow),
+                ],
+                Action::Ask,
+            );
+            assert_eq!(asked.resolve_in(tool, input, ws()), Action::Allow, "{case}");
+            let denied = custom(
+                vec![
+                    Rule::new(tool, Action::Deny),
+                    Rule::new(&c.pattern, Action::Allow),
+                ],
+                Action::Ask,
+            );
+            assert_eq!(denied.resolve_in(tool, input, ws()), Action::Deny, "{case}");
+        }
+    }
+    assert_eq!(seen, 17);
+}
+
+#[test]
+fn a_candidate_allows_no_more_than_its_label_says() {
+    let with = |pattern: &str| custom(vec![Rule::new(pattern, Action::Allow)], Action::Ask);
+    let exact = with("Bash(git push origin main)");
+    for command in [
+        "git push origin main --force",
+        "git push origin",
+        "git push origin main; rm -rf .",
+    ] {
+        assert_eq!(
+            exact.resolve("Bash", &bash(command)),
+            Action::Ask,
+            "{command}"
+        );
+    }
+    let prefix = with("Bash(git push:*)");
+    assert_eq!(
+        prefix.resolve("Bash", &bash("git push --force")),
+        Action::Allow
+    );
+    for command in ["git pushx", "git pull", "git push | sh", "git"] {
+        assert_eq!(
+            prefix.resolve("Bash", &bash(command)),
+            Action::Ask,
+            "{command}"
+        );
+    }
+    // A rule for one tool says nothing about another.
+    assert_eq!(prefix.resolve("PowerShell", &bash("git push")), Action::Ask);
+
+    let dir = with("Write(docs/guide/**)");
+    assert_eq!(
+        dir.resolve_in("Write", &file("docs/guide/deep/a.md"), ws()),
+        Action::Allow
+    );
+    for path in ["docs/other.md", "docs/guide/../../x", "src/docs/guide/a.md"] {
+        assert_eq!(
+            dir.resolve_in("Write", &file(path), ws()),
+            Action::Ask,
+            "{path}"
+        );
+    }
+    assert_eq!(
+        with("Write(docs/guide/intro.md)").resolve_in("Write", &file("docs/guide/other.md"), ws()),
+        Action::Ask
+    );
+}
+
+#[test]
+fn a_candidate_serializes_as_pattern_and_label() {
+    let c = RuleCandidate {
+        pattern: "Bash(ls)".into(),
+        label: "this exact command".into(),
+    };
+    assert_eq!(
+        serde_json::to_value(&c).unwrap(),
+        json!({"pattern": "Bash(ls)", "label": "this exact command"})
+    );
+}
+
+#[test]
+fn a_shell_or_wrapper_or_option_gets_no_prefix_that_would_allow_any_command() {
+    assert_eq!(
+        offered("Bash", bash("cmd /c dir")),
+        vec!["Bash(cmd /c dir)"]
+    );
+    assert_eq!(
+        offered("PowerShell", bash("pwsh -c Get-Date")),
+        vec!["PowerShell(pwsh -c Get-Date)"]
+    );
+    assert_eq!(
+        offered("Bash", bash("env git status")),
+        vec!["Bash(env git status)"]
+    );
+    assert_eq!(
+        offered("Bash", bash("FOO=1 git status")),
+        vec!["Bash(FOO=1 git status)"]
+    );
+    assert_eq!(
+        offered("Bash", bash("Bash.EXE -c ls")),
+        vec!["Bash(Bash.EXE -c ls)"]
+    );
+    for (command, exact) in [
+        ("/usr/bin/env git status", "Bash(/usr/bin/env git status)"),
+        ("/usr/bin/sudo rm a b", "Bash(/usr/bin/sudo rm a b)"),
+        ("/usr/bin/env sh a b", "Bash(/usr/bin/env sh a b)"),
+        (
+            "C:/Windows/System32/cmd.exe /c del x",
+            "Bash(C:/Windows/System32/cmd.exe /c del x)",
+        ),
+        ("wsl git status", "Bash(wsl git status)"),
+        ("exec rm a b", "Bash(exec rm a b)"),
+        // PowerShell launchers: the local Bash tool runs PowerShell.
+        (
+            "Start-Process cmd /c del x",
+            "Bash(Start-Process cmd /c del x)",
+        ),
+        ("iex foo bar", "Bash(iex foo bar)"),
+        (
+            "Invoke-Expression foo bar",
+            "Bash(Invoke-Expression foo bar)",
+        ),
+        ("saps cmd /c del x", "Bash(saps cmd /c del x)"),
+    ] {
+        assert_eq!(offered("Bash", bash(command)), vec![exact], "{command}");
+    }
+    // An option as the second token: the two-token prefix is left out, the longer one stays.
+    assert_eq!(
+        offered("Bash", bash("git -c a=b log")),
+        vec!["Bash(git -c a=b log)", "Bash(git -c a=b:*)"]
+    );
+    assert_eq!(
+        offered("Bash", bash("git -c a=b")),
+        vec!["Bash(git -c a=b)"]
+    );
+    assert_eq!(
+        offered("Bash", bash("git push origin main")),
+        vec![
+            "Bash(git push origin main)",
+            "Bash(git push origin:*)",
+            "Bash(git push:*)"
+        ]
+    );
+}
+
+#[test]
+fn a_deny_rule_still_wins_over_a_candidate() {
+    let call = bash("git push origin main");
+    let candidate = &allow_candidates("Bash", &call, ws())[0].pattern;
+    let p = custom(
+        vec![
+            Rule::new("Bash(git push:*)", Action::Deny),
+            Rule::new(candidate, Action::Allow),
+        ],
+        Action::Ask,
+    );
+    assert_eq!(p.resolve_in("Bash", &call, ws()), Action::Deny);
+
+    let write = file(".git/hooks/pre-commit");
+    let candidate = &allow_candidates("Write", &write, ws())[0].pattern;
+    let p = custom(
+        vec![
+            Rule::new("Write(**/.git/**)", Action::Deny),
+            Rule::new(candidate, Action::Allow),
+        ],
+        Action::Ask,
+    );
+    assert_eq!(p.resolve_in("Write", &write, ws()), Action::Deny);
 }

@@ -23,6 +23,9 @@ use crate::util::{ct_eq, new_token};
 use crate::workspace::{Prepared, WorkspaceManager};
 use crate::{Error, Result};
 
+/// How every resume prompt ends.
+const CONTINUE: &str = "Continue the task, then end with your summary.";
+
 #[derive(Debug, Clone)]
 pub struct RunnerConfig {
     pub max_concurrent: usize,
@@ -202,6 +205,7 @@ impl Runner {
             Ok(None) => {}
             Err(e) => tracing::error!(run = %run_id, "failing panicked run failed: {e}"),
         }
+        self.close_applies(run_id).await;
         self.wake.notify_one();
     }
 
@@ -234,6 +238,7 @@ impl Runner {
             }
         }
         self.secrets.lock().unwrap().retain(|_, r| r != &run_id);
+        self.close_applies(&run_id).await;
         // A cancel that arrived after the final status was computed (the run parked) is
         // applied now, before the resume check could act on the parked decisions.
         self.apply_late_cancel(&run_id, &by_user).await;
@@ -251,6 +256,29 @@ impl Runner {
         }
         if let Err(e) = self.cancel_inactive(run_id).await {
             tracing::warn!(run = %run_id, "late cancel failed: {e}");
+        }
+    }
+
+    /// Closes the approved calls that the resume run `run_id` was to perform, once that run no
+    /// longer runs (it ended, parked, or was cancelled before it started): a call it claimed
+    /// and gave no outcome is `unknown`, a call it never reached is `skipped`. Nothing performs
+    /// them later. Each change is announced; errors are logged, never returned.
+    async fn close_applies(&self, run_id: &str) {
+        let closed = match self.store.get_run(run_id).await {
+            Ok(run) if run.trigger == TriggerKind::Resume => match run.parent_run_id {
+                Some(parent) => self.store.close_applies(&parent).await,
+                None => return,
+            },
+            Ok(_) => return,
+            Err(e) => Err(e),
+        };
+        match closed {
+            Ok(approvals) => {
+                for approval in approvals {
+                    let _ = self.bus.send(RuntimeEvent::ApprovalUpdated { approval });
+                }
+            }
+            Err(e) => tracing::warn!(run = %run_id, "closing approved calls failed: {e}"),
         }
     }
 
@@ -272,10 +300,17 @@ impl Runner {
         let decided = self.store.unresolved_parked_decisions(run_id).await?;
         let mut lines = Vec::new();
         let mut grants = Vec::new();
+        let mut queued = Vec::new();
         let mut needs_child = false;
         for a in &decided {
             let note = a.note.as_deref().map(str::trim).filter(|n| !n.is_empty());
             match (a.status, note) {
+                // Dots performs this call itself, as the first thing the child run does: no
+                // grant, and nothing to tell the model until the call has a result.
+                (ApprovalStatus::Approved, _) if a.self_apply => {
+                    queued.push(a.id.clone());
+                    needs_child = true;
+                }
                 (ApprovalStatus::Approved, _) => {
                     grants.push((a.tool.clone(), grant_key(&a.tool, &a.input)));
                     lines.push(format!(
@@ -298,10 +333,16 @@ impl Runner {
             }
         }
         let child = needs_child.then(|| {
-            let message = format!(
-                "Human review of your queued actions:\n{}\n\nContinue the task, then end with your summary.",
-                lines.join("\n")
-            );
+            // Without a line there is nothing to review: every decision is a call that Dots
+            // performs, and the engine reports those itself.
+            let message = if lines.is_empty() {
+                CONTINUE.to_string()
+            } else {
+                format!(
+                    "Human review of your queued actions:\n{}\n\n{CONTINUE}",
+                    lines.join("\n")
+                )
+            };
             let ids: Vec<String> = decided.iter().map(|a| a.id.clone()).collect();
             let mut new = NewRun::new(&run.dot_id, TriggerKind::Resume);
             new.payload = Some(json!({ "message": message, "approvals": ids }));
@@ -313,12 +354,12 @@ impl Runner {
             new.base_commit = run.base_commit.clone();
             new
         });
-        // One transaction: grants, resolved flags, child run and closing the parent
-        // either all happen or none do, so a failure never loses a decision.
+        // One transaction: grants, resolved flags, queued calls, child run and closing the
+        // parent either all happen or none do, so a failure never loses a decision.
         let resolved: Vec<String> = decided.iter().map(|a| a.id.clone()).collect();
         let child = match self
             .store
-            .resume_parked(run_id, &grants, &resolved, child.as_ref())
+            .resume_parked(run_id, &grants, &resolved, &queued, child.as_ref())
             .await
         {
             Ok(child) => child,
@@ -456,6 +497,16 @@ impl Runner {
             }
             return self.finish_cancelled_before_start(&run.id).await;
         }
+        // A resume run on an engine that performs approved calls itself is handed the calls
+        // its parent queued. The engine claims each one before it runs it.
+        let approved_calls = match &run.parent_run_id {
+            Some(parent)
+                if run.trigger == TriggerKind::Resume && engine.applies_approved_calls() =>
+            {
+                self.store.queued_applies(parent).await?
+            }
+            _ => Vec::new(),
+        };
         let secret = self.register_secret(&run.id);
         let ctx = RunContext {
             run_id: run.id.clone(),
@@ -466,6 +517,7 @@ impl Runner {
             mcp_url: self.cfg.mcp_url.clone(),
             mcp_secret: secret,
             cancel: cancel.clone(),
+            approved_calls,
         };
         let mut rx = engine.start(ctx).await?;
 
@@ -604,6 +656,8 @@ impl Runner {
         let Some(run) = cancelled else {
             return Ok(None);
         };
+        // A resume run cancelled before it started performs none of its parent's calls.
+        self.close_applies(run_id).await;
         // Clean up before publishing, as `execute_inner` does: whoever sees `cancelled` must
         // not find a leftover unchanged worktree.
         if prior.status == RunStatus::AwaitingApproval {

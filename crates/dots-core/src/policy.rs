@@ -45,6 +45,47 @@ pub struct Policy {
 
 const READ_TOOLS: &[&str] = &["Read", "LS", "Glob", "Grep"];
 const COMMAND_TOOLS: &[&str] = &["Bash", "PowerShell"];
+/// Commands that run whatever follows them: a prefix rule through one would allow any command.
+const WRAPPER_COMMANDS: &[&str] = &[
+    "sh",
+    "bash",
+    "zsh",
+    "dash",
+    "fish",
+    "cmd",
+    "pwsh",
+    "powershell",
+    "env",
+    "sudo",
+    "doas",
+    "xargs",
+    "nohup",
+    "time",
+    "nice",
+    "timeout",
+    "start",
+    "call",
+    "wsl",
+    "exec",
+    "command",
+    "eval",
+    "su",
+    "runas",
+    "stdbuf",
+    "chroot",
+    "watch",
+    // PowerShell launchers and their aliases: the local Bash tool runs PowerShell.
+    "start-process",
+    "saps",
+    "invoke-expression",
+    "iex",
+    "invoke-command",
+    "icm",
+    "start-job",
+    "sajb",
+    "invoke-item",
+    "ii",
+];
 const FILE_TOOLS: &[&str] = &[
     "Read",
     "Write",
@@ -168,6 +209,15 @@ impl Policy {
         }
         Ok(())
     }
+}
+
+/// One allow rule that Dots offers to save for a call that asked.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuleCandidate {
+    /// The rule's pattern, as `Rule::tool` holds it.
+    pub pattern: String,
+    /// What the pattern covers, for the person who picks it.
+    pub label: String,
 }
 
 #[derive(Clone, Copy)]
@@ -526,6 +576,152 @@ fn webfetch_domain_matches(domain: &str, input: &Value, action: Action) -> bool 
             }
         }
     }
+}
+
+/// A clean input path with `\` as `/` and its empty and `.` components dropped; its case is
+/// kept, because the pattern made from it is shown to a person. Returns (is_absolute, path).
+/// For a path that passes `raw_path_is_clean`, the lowercase of the result is what
+/// `lexical_normalize` returns.
+fn tidy_path(raw: &str) -> (bool, String) {
+    let s = raw.replace('\\', "/");
+    let b = s.as_bytes();
+    let (prefix, rest) = if b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
+        (&s[..2], &s[2..])
+    } else {
+        ("", &s[..])
+    };
+    let abs = !prefix.is_empty() || rest.starts_with('/');
+    let joined = rest
+        .split('/')
+        .filter(|c| !c.is_empty() && *c != ".")
+        .collect::<Vec<_>>()
+        .join("/");
+    (
+        abs,
+        if abs {
+            format!("{prefix}/{joined}")
+        } else {
+            joined
+        },
+    )
+}
+
+/// The allow rules Dots offers to save when a person approves this call, narrowest first.
+/// Empty when the call can only be approved one at a time.
+///
+/// - A command tool: the exact command, the command without its last token as a prefix, and
+///   its first two tokens as a prefix. Only for a command `simple_command` accepts. A command
+///   that starts with a shell or wrapper (`WRAPPER_COMMANDS`, also given with its path) or sets a
+///   variable gets only the exact rule. A two-token prefix is left out when its second token
+///   starts with `-` or `/`.
+/// - A file tool: the path, and everything under its directory. A path inside `workspace` is
+///   written relative to it. Not for the workspace root or a drive root as the directory, and
+///   not at all for a UNC, device or drive-relative path.
+/// - `WebFetch`: the host.
+/// - Any other tool: its name.
+///
+/// A bare command or file tool (`Bash`, `Write`) and a one-token command prefix (`Bash(git:*)`)
+/// are never offered. Every candidate returned is a valid rule that, as an allow rule, matches
+/// this call: one that is not is left out, so the caller can save any of them unchecked.
+pub fn allow_candidates(tool: &str, input: &Value, workspace: Option<&Path>) -> Vec<RuleCandidate> {
+    let ws = workspace_key(workspace);
+    let mut found: Vec<(String, String)> = Vec::new();
+    if COMMAND_TOOLS.contains(&tool) {
+        let command = input
+            .get("command")
+            .and_then(Value::as_str)
+            .and_then(simple_command);
+        if let Some(command) = command {
+            let tokens: Vec<&str> = command.split(' ').collect();
+            found.push((format!("{tool}({command})"), "this exact command".into()));
+            // The program's name without its directory and `.exe`, as the deny side reads it.
+            let first = tokens[0]
+                .rsplit('/')
+                .next()
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            let first = first.strip_suffix(".exe").unwrap_or(&first);
+            let wrapper = WRAPPER_COMMANDS.contains(&first) || tokens[0].contains('=');
+            // An option or a path switch after the command name decides what the command does.
+            let optional_second = tokens.get(1).is_some_and(|t| t.starts_with(['-', '/']));
+            for len in [tokens.len().saturating_sub(1), 2] {
+                if len >= 2 && len < tokens.len() && !wrapper && !(len == 2 && optional_second) {
+                    let prefix = tokens[..len].join(" ");
+                    found.push((
+                        format!("{tool}({prefix}:*)"),
+                        format!("commands that start with {prefix}"),
+                    ));
+                }
+            }
+        }
+    } else if FILE_TOOLS.contains(&tool) {
+        // UNC, device and drive-relative paths name places the rules below would misdescribe.
+        let named_plainly = |r: &str| {
+            let r = r.replace('\\', "/");
+            let b = r.as_bytes();
+            let unc = r.starts_with("//");
+            let drive_relative = b.len() >= 2
+                && b[0].is_ascii_alphabetic()
+                && b[1] == b':'
+                && b.get(2) != Some(&b'/');
+            !unc && !drive_relative
+        };
+        let raw = input_path(input)
+            .filter(|r| raw_path_is_clean(r) && !r.contains(['*', '?']) && named_plainly(r));
+        if let Some(raw) = raw {
+            let (abs, tidy) = tidy_path(raw);
+            let inside = ws.as_deref().filter(|_| abs).and_then(|ws| {
+                let ws = ws.trim_end_matches('/');
+                tidy.to_ascii_lowercase()
+                    .starts_with(&format!("{ws}/"))
+                    .then(|| tidy[ws.len() + 1..].to_string())
+            });
+            let path = inside.unwrap_or(tidy);
+            if !path.is_empty() {
+                found.push((format!("{tool}({path})"), "this path".into()));
+                if let Some((parent, _)) = path.rsplit_once('/') {
+                    let is_root = parent.is_empty() || (parent.len() == 2 && parent.ends_with(':'));
+                    if !is_root {
+                        found.push((
+                            format!("{tool}({parent}/**)"),
+                            format!("everything under {parent}/"),
+                        ));
+                    }
+                }
+            }
+        }
+    } else if tool == "WebFetch" {
+        let host = input
+            .get("url")
+            .and_then(Value::as_str)
+            .and_then(parse_url)
+            .filter(|u| !u.has_userinfo && !u.suspicious)
+            .and_then(|u| u.hosts.into_iter().next());
+        if let Some(host) = host {
+            found.push((
+                format!("WebFetch(domain:{host})"),
+                "this host and its subdomains".into(),
+            ));
+        }
+    } else if !tool.contains('*') {
+        // A name that ends in `*` would be read as a prefix of other tools' names.
+        found.push((tool.to_string(), "every call of this tool".into()));
+    }
+    let mut out: Vec<RuleCandidate> = Vec::new();
+    for (pattern, label) in found {
+        let rule = Policy {
+            preset: Preset::Custom,
+            rules: vec![Rule::new(&pattern, Action::Allow)],
+            default: Action::Ask,
+        };
+        if rule.validate().is_ok()
+            && pattern_matches(&pattern, tool, input, Action::Allow, ws.as_deref())
+            && !out.iter().any(|c| c.pattern == pattern)
+        {
+            out.push(RuleCandidate { pattern, label });
+        }
+    }
+    out
 }
 
 fn pattern_matches(

@@ -94,7 +94,8 @@ async fn main() -> anyhow::Result<()> {
                     Some((a, n)) => (a == "y", Some(n.to_string())),
                     None => (line == "y", None),
                 };
-                rt.decide_approval(&approval.id, approved, note).await?;
+                rt.decide_approval(&approval.id, approved, note, None)
+                    .await?;
             }
             RuntimeEvent::RunUpdated { run } if run.dot_id == dot.id => {
                 let err = run

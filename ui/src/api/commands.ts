@@ -97,8 +97,19 @@ export const commands = {
   listRunEvents: (runId: string, afterSeq: number) =>
     call(T.RunEventRecord.array(), "list_run_events", { runId, afterSeq }),
   approvalsForRun: (runId: string) => call(T.Approval.array(), "approvals_for_run", { runId }),
-  decideApproval: (id: string, approved: boolean, note: string | null) =>
-    call(T.Approval, "decide_approval", { id, approved, note }),
+  /// `allowRule`: with an approval, also save this allow rule to the dot's policy. It must be
+  /// a pattern that `approvalRuleCandidates` offers for this approval; the core refuses any
+  /// other with kind `invalid`, and then decides nothing.
+  decideApproval: (id: string, approved: boolean, note: string | null, allowRule: string | null) =>
+    call(T.Approval, "decide_approval", { id, approved, note, allowRule }),
+  /// The allow rules that can be saved while approving this call, narrowest first. Empty when
+  /// the call can only be approved one at a time.
+  approvalRuleCandidates: (id: string) =>
+    call(T.RuleCandidate.array(), "approval_rule_candidates", { id }),
+  /// Gives every pending approval of one run the same answer, in the order they were asked.
+  /// Answers the approvals it decided.
+  decideRunApprovals: (runId: string, approved: boolean, note: string | null) =>
+    call(T.Approval.array(), "decide_run_approvals", { runId, approved, note }),
   inbox: () => call(T.Inbox, "inbox"),
   inboxCount: () => call(z.number().int(), "inbox_count"),
 

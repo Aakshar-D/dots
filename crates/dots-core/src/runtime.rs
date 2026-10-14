@@ -18,6 +18,7 @@ use crate::model::{
     Approval, ClaudeStatus, Dot, DotOverview, DotSpec, EngineKind, Inbox, NewRun, PendingApproval,
     ReviewRun, Run, RunEventRecord, RunStatus, SettingsSaved, Status, TriggerKind, WorktreeDiff,
 };
+use crate::policy::{allow_candidates, Action, Rule, RuleCandidate};
 use crate::runner::{Runner, RunnerConfig};
 use crate::scheduler::Scheduler;
 use crate::server::{self, ServerState};
@@ -146,6 +147,15 @@ impl Runtime {
             )),
         );
 
+        // From here on a new approval records whether Dots performs its call after a late
+        // decision. The hub exists before the engines (the local engine asks it), so it is
+        // told now which of them do.
+        hub.set_self_apply(
+            engines
+                .iter()
+                .filter(|(_, engine)| engine.applies_approved_calls())
+                .map(|(kind, _)| *kind),
+        );
         let runner = Runner::new(
             store.clone(),
             bus.clone(),
@@ -617,13 +627,44 @@ impl Runtime {
         self.runner.cancel(run_id).await
     }
 
+    /// The allow rules a person may save while approving this call, narrowest first. Empty when
+    /// the call can only be approved one at a time.
+    pub async fn approval_rule_candidates(&self, approval_id: &str) -> Result<Vec<RuleCandidate>> {
+        let approval = self.store.get_approval(approval_id).await?;
+        let run = self.store.get_run(&approval.run_id).await?;
+        let workspace = run.workspace_path.as_deref().map(Path::new);
+        Ok(allow_candidates(&approval.tool, &approval.input, workspace))
+    }
+
+    /// Decides an approval. With `allow_rule`, an approval also saves that allow rule to the
+    /// dot's policy. The pattern must be one that `approval_rule_candidates` offers for this
+    /// approval: whoever calls this cannot widen the dot's policy beyond what Dots derived
+    /// from the call a person is looking at. Anything else is `Invalid` and nothing is decided.
     pub async fn decide_approval(
         &self,
         id: &str,
         approved: bool,
         note: Option<String>,
+        allow_rule: Option<String>,
     ) -> Result<Approval> {
-        match self.hub.decide(id, approved, note).await? {
+        let rule = match allow_rule {
+            None => None,
+            Some(_) if !approved => {
+                return Err(Error::Invalid(
+                    "a rule can only be saved with an approval".into(),
+                ))
+            }
+            Some(pattern) => {
+                let offered = self.approval_rule_candidates(id).await?;
+                if !offered.iter().any(|c| c.pattern == pattern) {
+                    return Err(Error::Invalid(format!(
+                        "{pattern:?} is not one of the rules offered for approval {id}"
+                    )));
+                }
+                Some(Rule::new(&pattern, Action::Allow))
+            }
+        };
+        match self.hub.decide_with_rule(id, approved, note, rule).await? {
             DecideEffect::Live(a) => Ok(a),
             DecideEffect::Parked(a) => {
                 if let Err(e) = self.runner.maybe_resume(&a.run_id).await {
@@ -631,6 +672,46 @@ impl Runtime {
                 }
                 Ok(a)
             }
+        }
+    }
+
+    /// Gives every pending approval of one run the same answer, in the order they were asked,
+    /// and resumes the run once. An approval that is no longer pending when its turn comes is
+    /// left out of the result. No rule can be saved this way.
+    pub async fn decide_run_approvals(
+        &self,
+        run_id: &str,
+        approved: bool,
+        note: Option<String>,
+    ) -> Result<Vec<Approval>> {
+        self.store.get_run(run_id).await?;
+        let mut decided = Vec::new();
+        let mut parked = false;
+        let mut failure = None;
+        for pending in self.store.pending_for_run(run_id).await? {
+            match self.hub.decide(&pending.id, approved, note.clone()).await {
+                Ok(DecideEffect::Live(a)) => decided.push(a),
+                Ok(DecideEffect::Parked(a)) => {
+                    parked = true;
+                    decided.push(a);
+                }
+                Err(Error::Conflict(_)) => {}
+                Err(e) => {
+                    failure = Some(e);
+                    break;
+                }
+            }
+        }
+        // What was decided stands, also when a later decision failed: the run must not wait
+        // for a resume that nobody triggers.
+        if parked {
+            if let Err(e) = self.runner.maybe_resume(run_id).await {
+                tracing::error!(run = %run_id, "resume after approvals failed: {e}");
+            }
+        }
+        match failure {
+            Some(e) => Err(e),
+            None => Ok(decided),
         }
     }
 

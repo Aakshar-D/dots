@@ -1,5 +1,7 @@
 {
   "Approval": {
+    "applied_at": null,
+    "apply_state": null,
     "created_at": "2026-10-09T12:00:00.000Z",
     "decided_at": null,
     "id": "01J0APR",
@@ -11,6 +13,7 @@
     "parked": false,
     "resolved": false,
     "run_id": "01J0RUN",
+    "self_apply": false,
     "status": "pending",
     "tool": "Bash"
   },
@@ -48,6 +51,8 @@
     "list_run_events",
     "approvals_for_run",
     "decide_approval",
+    "approval_rule_candidates",
+    "decide_run_approvals",
     "inbox",
     "inbox_count",
     "worktree_diff",
@@ -344,6 +349,14 @@
       "ask",
       "deny"
     ],
+    "ApplyState": [
+      "queued",
+      "applying",
+      "applied",
+      "failed",
+      "unknown",
+      "skipped"
+    ],
     "ApprovalStatus": [
       "pending",
       "approved",
@@ -396,6 +409,8 @@
   "Inbox": {
     "approvals": [
       {
+        "applied_at": null,
+        "apply_state": null,
         "created_at": "2026-10-09T12:00:00.000Z",
         "decided_at": null,
         "dot_id": "01J0DOT",
@@ -409,6 +424,7 @@
         "parked": false,
         "resolved": false,
         "run_id": "01J0RUN",
+        "self_apply": false,
         "status": "pending",
         "tool": "Bash"
       }
@@ -536,6 +552,20 @@
     "workdir": "",
     "workspace_mode": "worktree"
   },
+  "RuleCandidate": [
+    {
+      "label": "this exact command",
+      "pattern": "Bash(git push origin main)"
+    },
+    {
+      "label": "commands that start with git push origin",
+      "pattern": "Bash(git push origin:*)"
+    },
+    {
+      "label": "commands that start with git push",
+      "pattern": "Bash(git push:*)"
+    }
+  ],
   "Run": {
     "base_commit": "0123abcd",
     "branch": "dots/nightly-tests/01J0RUN",
@@ -667,6 +697,8 @@
     },
     {
       "approval": {
+        "applied_at": null,
+        "apply_state": null,
         "created_at": "2026-10-09T12:00:00.000Z",
         "decided_at": null,
         "id": "01J0APR",
@@ -678,6 +710,7 @@
         "parked": false,
         "resolved": false,
         "run_id": "01J0RUN",
+        "self_apply": false,
         "status": "pending",
         "tool": "Bash"
       },
@@ -685,6 +718,8 @@
     },
     {
       "approval": {
+        "applied_at": null,
+        "apply_state": null,
         "created_at": "2026-10-09T12:00:00.000Z",
         "decided_at": "2026-10-09T12:00:00.000Z",
         "id": "01J0APR",
@@ -696,10 +731,32 @@
         "parked": true,
         "resolved": false,
         "run_id": "01J0RUN",
+        "self_apply": false,
         "status": "denied",
         "tool": "Bash"
       },
       "type": "approval_decided"
+    },
+    {
+      "approval": {
+        "applied_at": "2026-10-09T12:00:00.000Z",
+        "apply_state": "applied",
+        "created_at": "2026-10-09T12:00:00.000Z",
+        "decided_at": "2026-10-09T12:00:00.000Z",
+        "id": "01J0APR",
+        "input": {
+          "command": "git push origin main"
+        },
+        "input_hash": "h1",
+        "note": null,
+        "parked": true,
+        "resolved": true,
+        "run_id": "01J0RUN",
+        "self_apply": true,
+        "status": "approved",
+        "tool": "Bash"
+      },
+      "type": "approval_updated"
     }
   ],
   "Settings": {

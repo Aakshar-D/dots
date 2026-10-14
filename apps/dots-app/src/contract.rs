@@ -6,7 +6,7 @@
 use dots_core::engine::EngineEvent;
 use dots_core::events::RuntimeEvent;
 use dots_core::model::*;
-use dots_core::policy::{Action, Policy, Preset};
+use dots_core::policy::{allow_candidates, Action, Policy, Preset};
 use dots_core::settings::{Settings, MAX_CONCURRENT_RUNS};
 use serde_json::{json, Value};
 
@@ -87,6 +87,9 @@ fn approval() -> Approval {
         resolved: false,
         created_at: TS.into(),
         decided_at: None,
+        self_apply: false,
+        apply_state: None,
+        applied_at: None,
     }
 }
 
@@ -208,7 +211,23 @@ pub fn samples() -> Value {
                 decided_at: Some(TS.into()),
                 ..approval()
             }}),
+            to(RuntimeEvent::ApprovalUpdated { approval: Approval {
+                status: ApprovalStatus::Approved,
+                parked: true,
+                resolved: true,
+                decided_at: Some(TS.into()),
+                self_apply: true,
+                apply_state: Some(ApplyState::Applied),
+                applied_at: Some(TS.into()),
+                ..approval()
+            }}),
         ],
+        // What `approval_rule_candidates` answers for the `Approval` sample.
+        "RuleCandidate": to(allow_candidates(
+            &approval().tool,
+            &approval().input,
+            Some(std::path::Path::new("C:/Users/u/AppData/Local/dots/worktrees/01J0RUN")),
+        )),
         "Status": to(status()),
         "Settings": to(&settings),
         "SettingsSaved": to(SettingsSaved { settings: settings.clone(), restart_required: true }),
@@ -258,6 +277,7 @@ pub fn samples() -> Value {
             "TriggerKind": TriggerKind::ALL,
             "RunStatus": RunStatus::ALL,
             "ApprovalStatus": ApprovalStatus::ALL,
+            "ApplyState": ApplyState::ALL,
             "Action": Action::ALL,
             "Preset": Preset::ALL,
             "FileStatus": FileStatus::ALL,

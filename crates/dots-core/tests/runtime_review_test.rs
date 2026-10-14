@@ -242,7 +242,7 @@ async fn a_pending_approval_is_listed_with_its_dot() {
         t.rt.mark_reviewed(&run.id).await,
         Err(Error::Conflict(_))
     ));
-    t.rt.decide_approval(&a.approval.id, false, None)
+    t.rt.decide_approval(&a.approval.id, false, None, None)
         .await
         .unwrap();
     wait_status(t.rt.store(), &run.id, RunStatus::Succeeded, 15).await;

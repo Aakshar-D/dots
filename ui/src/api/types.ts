@@ -17,6 +17,15 @@ export const RunStatus = z.enum([
   "cancelled",
 ]);
 export const ApprovalStatus = z.enum(["pending", "approved", "denied", "expired"]);
+// Where a call that Dots performs itself stands (a parked approval of a local dot).
+export const ApplyState = z.enum([
+  "queued",
+  "applying",
+  "applied",
+  "failed",
+  "unknown",
+  "skipped",
+]);
 export const Action = z.enum(["allow", "ask", "deny"]);
 export const Preset = z.enum(["read-only", "sandboxed", "trusted", "custom"]);
 export const FileStatus = z.enum(["added", "modified", "deleted", "renamed"]);
@@ -126,14 +135,22 @@ const approvalShape = {
   resolved: z.boolean(),
   created_at: z.string(),
   decided_at: nullable(z.string()),
+  self_apply: z.boolean(),
+  apply_state: nullable(ApplyState),
+  applied_at: nullable(z.string()),
 };
 export const Approval = z.strictObject(approvalShape);
+
+// An allow rule the core offers to save with an approval: the rule's pattern, and what it
+// covers in words.
+export const RuleCandidate = z.strictObject({ pattern: z.string(), label: z.string() });
 
 export const RuntimeEvent = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("run_updated"), run: Run }),
   z.strictObject({ type: z.literal("run_event"), event: RunEventRecord }),
   z.strictObject({ type: z.literal("approval_requested"), approval: Approval }),
   z.strictObject({ type: z.literal("approval_decided"), approval: Approval }),
+  z.strictObject({ type: z.literal("approval_updated"), approval: Approval }),
 ]);
 
 export const ClaudeStatus = z.strictObject({
@@ -217,6 +234,7 @@ export type WorkspaceMode = z.infer<typeof WorkspaceMode>;
 export type TriggerKind = z.infer<typeof TriggerKind>;
 export type RunStatus = z.infer<typeof RunStatus>;
 export type ApprovalStatus = z.infer<typeof ApprovalStatus>;
+export type ApplyState = z.infer<typeof ApplyState>;
 export type Action = z.infer<typeof Action>;
 export type Preset = z.infer<typeof Preset>;
 export type FileStatus = z.infer<typeof FileStatus>;
@@ -228,6 +246,7 @@ export type Run = z.infer<typeof Run>;
 export type RunEventRecord = z.infer<typeof RunEventRecord>;
 export type RunEventData = z.infer<typeof RunEventData>;
 export type Approval = z.infer<typeof Approval>;
+export type RuleCandidate = z.infer<typeof RuleCandidate>;
 export type RuntimeEvent = z.infer<typeof RuntimeEvent>;
 export type ClaudeStatus = z.infer<typeof ClaudeStatus>;
 export type Status = z.infer<typeof Status>;

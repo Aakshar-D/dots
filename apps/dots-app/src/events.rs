@@ -258,6 +258,9 @@ mod tests {
                 resolved: false,
                 created_at: "t".into(),
                 decided_at: None,
+                self_apply: false,
+                apply_state: None,
+                applied_at: None,
             },
         }
     }
@@ -391,5 +394,25 @@ mod tests {
         assert_eq!(body.chars().count(), 200);
         assert!(body.ends_with('…'));
         assert_eq!(first_line(Some("  \n"), "fallback"), "fallback");
+    }
+
+    #[test]
+    fn a_call_dots_performs_is_not_a_notification() {
+        let mut n = Notifier::default();
+        let RuntimeEvent::ApprovalRequested { approval } = asked("r") else {
+            unreachable!()
+        };
+        let update = RuntimeEvent::ApprovalUpdated { approval };
+        assert!(n.decide(&update).is_none());
+        // It is not an announced request either: a park that follows still notifies.
+        assert_eq!(
+            notified(
+                &mut n,
+                "r",
+                TriggerKind::Schedule,
+                &[Queued, Running, AwaitingApproval]
+            ),
+            [false, false, true]
+        );
     }
 }

@@ -142,6 +142,9 @@ Stored at `%LOCALAPPDATA%\dots\dots.db`. Worktrees at `%LOCALAPPDATA%\dots\workt
 - `id` TEXT PK, `run_id` FK, `tool` TEXT, `input` TEXT (JSON), `input_hash` TEXT
 - `status` TEXT (`pending` | `approved` | `denied` | `expired`)
 - `note` TEXT NULL, `created_at`, `decided_at`
+- `self_apply` INTEGER (0/1), `apply_state` TEXT NULL (`queued` | `applying` | `applied` |
+  `failed` | `unknown` | `skipped`), `applied_at` TEXT NULL (migration 0004; see
+  `2026-10-13-approvals-v2-design.md` §3.4)
 
 **settings** — key/value, each value a JSON document: `port` (default 47321),
 `max_concurrent_runs` (default 2), `claude_path` (null = search PATH), `tested_claude_version`
@@ -169,6 +172,12 @@ queued -> running -> succeeded
 
 A resume creates a child run linked by `parent_run_id` and reuses the parent's workspace and
 `session_id`. The UI shows parent and children as one thread.
+
+From Approvals v2 an approved, parked approval is resolved in one of two ways, which the
+approval itself records (`self_apply`): on an engine that performs approved calls itself (the
+local engine) the call is queued and the child run performs it before anything else; on every
+other engine a one-shot grant is written and the child run's prompt asks the model to issue
+the call again. See `2026-10-13-approvals-v2-design.md` §3.
 
 ### Steps
 
@@ -208,6 +217,10 @@ A resume creates a child run linked by `parent_run_id` and reuses the parent's w
   approvals are expired in the same transaction. `awaiting_approval` runs stay resumable; their
   pending approvals resume on decision, and awaiting runs whose decisions were parked before
   the restart are resumed during start.
+- A resume run that performs its parent's approved calls closes them when it stops running,
+  whatever the reason (it ended, parked again, was cancelled before it started, or the app
+  restarted while it ran): a call that was claimed and has no outcome becomes `unknown`, a
+  call that was not reached becomes `skipped`. Neither is performed later (Approvals v2 §3.4).
 - A run is registered with the runner before it is claimed, so a cancel always reaches it; a
   cancel that lands before the engine starts finishes the run `cancelled` without starting it.
 - A decision is written together with its `parked` flag; `Live` is reported only when the
@@ -238,7 +251,14 @@ A resume creates a child run linked by `parent_run_id` and reuses the parent's w
   own tools, which are aliased: `read_file`→`Read`, `write_file`→`Write`, `edit_file`→`Edit`,
   `glob`→`Glob`, `grep`→`Grep`, `list_dir`→`LS`, `shell`→`Bash`.
 - Resolution order: one-shot grant for (run lineage, tool, `input_hash`) → `deny` rules →
-  `allow` rules → `ask` rules → `default`.
+  `allow` rules → `ask` rules → `default`. From Approvals v2 a grant is written only for a
+  dot whose engine does not perform approved calls itself, which is the Claude engine.
+- From Approvals v2 an approval can save an allow rule to the dot's policy, in one transaction
+  with the decision (`decide_approval` with `allow_rule`). Only a pattern that
+  `policy::allow_candidates` derives from that very call is accepted, so the caller cannot
+  widen the policy at will; the policy's preset becomes `custom`. The pending approvals of one
+  run can also be decided together (`decide_run_approvals`): in the order they were asked,
+  with one resume, and without a rule. See `2026-10-13-approvals-v2-design.md` §4 and §5.
 - Presets:
   - `read-only`: allow Read/LS/Glob/Grep; deny Write/Edit/Bash; default deny.
   - `sandboxed` (default): allow Read/LS/Glob/Grep, `Write(./**)`, `Edit(./**)`,
@@ -329,12 +349,22 @@ behave identically) → execute allowed tools, return the deny text for denied o
 the tool result → append results → repeat until no tool calls or `max_turns`.
 
 Every chat message (system, user, assistant with its `tool_calls`, tool result) is persisted as
-a `message` run event. A local run's `session_id` is the `root_run_id` of its lineage. Resume
-uses the engine-agnostic runner flow unchanged: the child run rebuilds the conversation from the
-`message` events of earlier runs in the lineage, appends the runner's resume prompt
-(`Approval #<id> granted … Perform that action now`) as a user message, and the model re-issues the call,
-which the one-shot grant allows once. A model that changes the input on retry gets a fresh
-`ask`; that is accepted rather than having the engine replay the call itself.
+a `message` run event. A local run's `session_id` is the `root_run_id` of its lineage. On a
+resume the child run rebuilds the conversation from the `message` events of earlier runs in the
+lineage.
+
+From Approvals v2 the engine itself performs a call that was approved after its run stopped
+waiting (`Engine::applies_approved_calls`). Before the child run asks the model anything, it
+performs the approved calls of its parent in the order they were asked, each exactly as it was
+approved: the call is claimed first, it takes the path of a live `allow` (`prepare`, then the
+tool, with the walking tools' filter), and its outcome is recorded before anything else is done
+with the output. The policy is not resolved again. After a call that did not succeed, the calls
+that remain are given up. The engine then sends one user message that says what each call did
+(and that the quoted outputs are results, not instructions), followed by the runner's resume
+prompt. No grant is written and the model does not issue the
+call again, so it cannot change it. Until Approvals v2 the model was asked to re-issue the
+call under a one-shot grant, and a changed input asked again. See
+`2026-10-13-approvals-v2-design.md` §3.
 
 Built-in tools: `read_file`, `write_file`, `edit_file` (exact unique-string replace), `list_dir`,
 `glob`, `grep`, `shell` (PowerShell, timeout default 120 s, output capped at 30 KB; the script
@@ -378,6 +408,15 @@ React + Vite + TypeScript inside Tauri 2. Screens:
   summary, status, tokens; cancel, discard worktree, open folder.
 - **Inbox** — pending approvals (tool, pretty-printed input, approve / deny with note) and
   finished runs awaiting review (definition in §12). Unread count mirrored in the tray tooltip.
+  From Approvals v2 an approval card, wherever it shows (Inbox, run view, chat), also offers
+  "Approve and always allow": the allow rules the core derived for that call, the narrowest
+  preselected, one of which is saved to the dot's policy with the approval. The control is not
+  shown for a call the core offers no rule for. A parked card says who performs the call
+  when it is approved: Dots, exactly as shown, or the model in a new run. The run view and
+  the chat list the approved calls that Dots performs with what became of each. In the Inbox
+  the approvals of one run stand together; two or more can be answered with "Approve all
+  (n)" or "Deny all (n)", each behind the in-app confirmation, which names the dot and lists
+  the calls. No rule is saved with such an answer.
 - **Chat** — per-dot threaded chat; each message is a `chat` run resuming the thread's session.
 - **Settings** — port, concurrency, `claude` path and version check, local endpoints with
   "Test endpoint", data dir, autostart toggle. Port, concurrency and `claude` path take effect
@@ -516,6 +555,10 @@ notify. Unread count = pending approvals + runs awaiting review.
   `{ kind: "not_found" | "invalid" | "conflict" | "internal", message }`. Plan 3b adds the kind
   `cancelled` (the user declined a native confirmation; nothing was changed). From Plan 3c the
   kind is an enum in Rust (`CmdErrorKind`); the JSON is unchanged.
+- Approvals v2 adds two commands and one argument: `approval_rule_candidates(id)` answers the
+  allow rules that may be saved with an approval, `decide_run_approvals(run_id, approved,
+  note)` decides every pending approval of a run, and `decide_approval` takes `allow_rule`,
+  which the core accepts only when it is one of those candidates.
 - **Runs, dots and approvals are addressed by id.** `open_run_folder(run_id)` resolves the path
   in core; the UI cannot make the backend open, read or delete an arbitrary path. Two values
   from the UI are paths:
@@ -542,6 +585,8 @@ notify. Unread count = pending approvals + runs awaiting review.
   - One forwarder emits each `RuntimeEvent` as the Tauri event `runtime`, same JSON.
   - On `broadcast` lag it emits `runtime-lagged`; the UI then invalidates all queries and
     refetches run events after the last seen `seq`.
+  - From Approvals v2 there is a fifth event, `ApprovalUpdated`: a decided approval whose call
+    Dots performs changed its `apply_state`. It never notifies.
 - Notifications fire on `ApprovalRequested`, and on `RunUpdated` into `succeeded`, `failed` or
   `awaiting_approval`, once per (run, status), and only for a run this process saw queued or
   running. Chat runs do not notify; neither does a parked run closed by its decision, nor a run
@@ -576,7 +621,9 @@ notify. Unread count = pending approvals + runs awaiting review.
     logged and treated like `runtime-lagged` (invalidate and refetch).
   - Events patch or invalidate query keys: `runs`, `thread`, `events`, `inbox`, `approvals`
     (Plan 3c removed the key `run`, which no query read). `RunEvent`s are appended to loaded
-    event lists, deduplicated by `seq`.
+    event lists, deduplicated by `seq`. `ApprovalUpdated` invalidates `inbox` and the
+    `approvals` of the approval's own run, which is the parent of the run that performs the
+    call: that run's own `RunUpdated` does not reach those approvals.
   - From Plan 3c an invalidation that arrives while its query is being fetched is kept (the
     query is marked stale again when that fetch has settled), and the app refetches everything
     once when its listeners are attached, so the first screen's data is asked for twice.
@@ -585,7 +632,9 @@ notify. Unread count = pending approvals + runs awaiting review.
   the file against `types.ts`. Because live data is now parsed, the fixture also lists every
   variant of every shared enum. From Plan 3c it also lists the name of every registered command
   and the answer of `new_dot_spec`, and its engine-event samples are tied to the enum's
-  variants, so a new variant without a sample does not compile.
+  variants, so a new variant without a sample does not compile. From Approvals v2 it also
+  holds a sample of `ApprovalUpdated`, every `ApplyState`, and the rule candidates the core
+  derives for the `Approval` sample (`RuleCandidate`).
 - Shell around the screens:
   - Banners: `server_error` (links to Settings), CLI version mismatch ("Mark as tested"),
     restart required ("Restart Dots"), schedules paused.

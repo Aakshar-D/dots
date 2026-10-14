@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -9,11 +9,11 @@ use tokio::sync::oneshot;
 
 use crate::engine::{PermissionGate, PermissionOutcome};
 use crate::events::{Bus, RuntimeEvent};
-use crate::model::{Approval, ApprovalStatus};
-use crate::policy::Action;
+use crate::model::{ApplyState, Approval, ApprovalStatus, EngineKind};
+use crate::policy::{Action, Rule};
 use crate::store::Store;
 use crate::util::json_hash;
-use crate::Result;
+use crate::{Error, Result};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Decision {
@@ -76,6 +76,8 @@ pub struct ApprovalHub {
     store: Store,
     bus: Bus,
     waiters: Mutex<HashMap<String, oneshot::Sender<Decision>>>,
+    /// The engines that perform an approved call themselves after a late decision.
+    self_apply: Mutex<HashSet<EngineKind>>,
 }
 
 impl ApprovalHub {
@@ -84,7 +86,21 @@ impl ApprovalHub {
             store,
             bus,
             waiters: Mutex::new(HashMap::new()),
+            self_apply: Mutex::new(HashSet::new()),
         }
+    }
+
+    /// Names the engines whose dots get approvals with `self_apply` from now on
+    /// (`Engine::applies_approved_calls`). Approvals that exist keep what they recorded.
+    pub fn set_self_apply(&self, kinds: impl IntoIterator<Item = EngineKind>) {
+        *self.self_apply.lock().unwrap() = kinds.into_iter().collect();
+    }
+
+    /// Announces an approval whose `apply_state` just changed.
+    async fn announce_update(&self, id: &str) -> Result<()> {
+        let approval = self.store.get_approval(id).await?;
+        let _ = self.bus.send(RuntimeEvent::ApprovalUpdated { approval });
+        Ok(())
     }
 
     #[doc(hidden)]
@@ -98,13 +114,41 @@ impl ApprovalHub {
         approved: bool,
         note: Option<String>,
     ) -> Result<DecideEffect> {
+        self.decide_with_rule(id, approved, note, None).await
+    }
+
+    /// Like `decide`. With `rule`, an approval also adds that rule to the policy of the
+    /// approval's dot, in one transaction with the decision: `check` reads the policy on every
+    /// call, so the rule holds from the moment the decision does. The caller chooses the rule;
+    /// this only refuses one that comes with a denial.
+    pub async fn decide_with_rule(
+        &self,
+        id: &str,
+        approved: bool,
+        note: Option<String>,
+        rule: Option<Rule>,
+    ) -> Result<DecideEffect> {
+        if rule.is_some() && !approved {
+            return Err(Error::Invalid(
+                "a rule can only be saved with an approval".into(),
+            ));
+        }
         // Take the waiter first so the decision and its `parked` flag are written together:
         // a decided row is never left looking live while no engine can receive it.
         let waiter = self.waiters.lock().unwrap().remove(id);
-        let decided = self
-            .store
-            .decide_approval_with_parked(id, approved, note.as_deref(), waiter.is_none())
-            .await;
+        let parked = waiter.is_none();
+        let decided = match &rule {
+            Some(rule) => {
+                self.store
+                    .approve_with_rule(id, note.as_deref(), parked, rule)
+                    .await
+            }
+            None => {
+                self.store
+                    .decide_approval_with_parked(id, approved, note.as_deref(), parked)
+                    .await
+            }
+        };
         let mut approval = match decided {
             Ok(a) => a,
             Err(e) => {
@@ -144,8 +188,12 @@ impl ApprovalHub {
         tool: &str,
         input: Value,
         wait: Duration,
+        self_apply: bool,
     ) -> Result<PermissionOutcome> {
-        let approval = self.store.create_approval(run_id, tool, &input).await?;
+        let approval = self
+            .store
+            .create_approval_with(run_id, tool, &input, self_apply)
+            .await?;
         let (tx, mut rx) = oneshot::channel();
         self.waiters.lock().unwrap().insert(approval.id.clone(), tx);
         let _guard = WaiterGuard {
@@ -203,8 +251,34 @@ impl PermissionGate for ApprovalHub {
             }),
             Action::Ask => {
                 let wait = Duration::from_secs(dot.spec.approval_wait_secs);
-                self.ask(run_id, tool, input, wait).await
+                let self_apply = self.self_apply.lock().unwrap().contains(&dot.spec.engine);
+                self.ask(run_id, tool, input, wait, self_apply).await
             }
         }
+    }
+
+    async fn claim_apply(&self, approval_id: &str) -> Result<bool> {
+        let claimed = self.store.claim_apply(approval_id).await?;
+        if claimed {
+            self.announce_update(approval_id).await?;
+        }
+        Ok(claimed)
+    }
+
+    async fn settle_apply(&self, approval_id: &str, state: ApplyState) -> Result<()> {
+        if !self.store.settle_apply(approval_id, state).await? {
+            return Err(Error::Conflict(format!(
+                "approval {approval_id} is not being performed"
+            )));
+        }
+        self.announce_update(approval_id).await
+    }
+
+    async fn skip_apply(&self, approval_id: &str) -> Result<bool> {
+        let skipped = self.store.skip_apply(approval_id).await?;
+        if skipped {
+            self.announce_update(approval_id).await?;
+        }
+        Ok(skipped)
     }
 }

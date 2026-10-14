@@ -6,7 +6,7 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use crate::model::Dot;
+use crate::model::{ApplyState, Approval, Dot};
 use crate::Result;
 
 pub mod claude;
@@ -78,6 +78,10 @@ pub struct RunContext {
     pub mcp_url: String,
     pub mcp_secret: String,
     pub cancel: CancellationToken,
+    /// Approved calls of the parked parent run that this run performs before anything else, in
+    /// the order they were asked. Only a `resume` run on an engine that
+    /// `applies_approved_calls` gets any.
+    pub approved_calls: Vec<Approval>,
 }
 
 #[async_trait]
@@ -90,6 +94,13 @@ pub trait Engine: Send + Sync {
     /// prepared.
     fn unavailable(&self) -> Option<String> {
         None
+    }
+
+    /// Whether this engine performs an approved call itself when the approval is decided after
+    /// the engine stopped waiting (`RunContext::approved_calls`). When false, such a decision
+    /// becomes a one-shot grant and the model is asked to issue the call again.
+    fn applies_approved_calls(&self) -> bool {
+        false
     }
 }
 
@@ -117,4 +128,20 @@ pub enum PermissionOutcome {
 #[async_trait]
 pub trait PermissionGate: Send + Sync {
     async fn check(&self, run_id: &str, tool: &str, input: Value) -> Result<PermissionOutcome>;
+
+    /// Claims an approved call that waits for Dots to perform it. False means the call is not
+    /// the caller's to perform, and it must not be run. A gate without approvals claims nothing.
+    async fn claim_apply(&self, _approval_id: &str) -> Result<bool> {
+        Ok(false)
+    }
+
+    /// Records how a claimed call ended: `ApplyState::Applied` or `ApplyState::Failed`.
+    async fn settle_apply(&self, _approval_id: &str, _state: ApplyState) -> Result<()> {
+        Ok(())
+    }
+
+    /// Gives up a call that waits to be performed. True when it was waiting.
+    async fn skip_apply(&self, _approval_id: &str) -> Result<bool> {
+        Ok(false)
+    }
 }
