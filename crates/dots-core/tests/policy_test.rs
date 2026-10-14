@@ -1207,6 +1207,17 @@ fn a_shell_or_wrapper_or_option_gets_no_prefix_that_would_allow_any_command() {
         ),
         ("wsl git status", "Bash(wsl git status)"),
         ("exec rm a b", "Bash(exec rm a b)"),
+        // PowerShell launchers: the local Bash tool runs PowerShell.
+        (
+            "Start-Process cmd /c del x",
+            "Bash(Start-Process cmd /c del x)",
+        ),
+        ("iex foo bar", "Bash(iex foo bar)"),
+        (
+            "Invoke-Expression foo bar",
+            "Bash(Invoke-Expression foo bar)",
+        ),
+        ("saps cmd /c del x", "Bash(saps cmd /c del x)"),
     ] {
         assert_eq!(offered("Bash", bash(command)), vec![exact], "{command}");
     }

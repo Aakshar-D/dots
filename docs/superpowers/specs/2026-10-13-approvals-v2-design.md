@@ -431,7 +431,9 @@ The plan's table "Deliberate deviations from the spec" gives the reason for each
 - New: file candidates are not offered for UNC, device or drive-relative paths. A command whose
   first token is a shell or wrapper (also when given with its path), or sets a variable, gets
   only the exact rule. A two-token prefix is not offered when its second token is an option or a
-  path.
+  path. The wrappers include the PowerShell launchers and their aliases (`Start-Process`/`saps`,
+  `Invoke-Expression`/`iex`, `Invoke-Command`/`icm`, `Start-Job`/`sajb`, `Invoke-Item`/`ii`),
+  since the local Bash tool runs PowerShell.
 
 ## 14. Follow-up candidates from the same review
 

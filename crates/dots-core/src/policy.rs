@@ -74,6 +74,17 @@ const WRAPPER_COMMANDS: &[&str] = &[
     "stdbuf",
     "chroot",
     "watch",
+    // PowerShell launchers and their aliases: the local Bash tool runs PowerShell.
+    "start-process",
+    "saps",
+    "invoke-expression",
+    "iex",
+    "invoke-command",
+    "icm",
+    "start-job",
+    "sajb",
+    "invoke-item",
+    "ii",
 ];
 const FILE_TOOLS: &[&str] = &[
     "Read",
