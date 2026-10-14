@@ -83,7 +83,8 @@ impl Store {
     /// `root_run_id`, read inside the transaction), marks `resolved_ids` resolved, queues
     /// `queued_ids` (approved calls that Dots performs itself in the child run, which get no
     /// grant), inserts the optional `child` run, and closes the parent as `succeeded`.
-    /// The parent must still be `awaiting_approval` (e.g. not cancelled concurrently);
+    /// The parent must still be `awaiting_approval` (e.g. not cancelled concurrently), and each
+    /// of `queued_ids` an approved, self-apply, not yet queued approval of the parent;
     /// otherwise nothing is written and `Error::Conflict` is returned.
     pub async fn resume_parked(
         &self,
@@ -132,10 +133,21 @@ impl Store {
                 .await?;
         }
         for id in queued_ids {
-            sqlx::query("UPDATE approvals SET apply_state = 'queued' WHERE id = ?")
-                .bind(id)
-                .execute(&mut *tx)
-                .await?;
+            // Only an approved call of this run that Dots is to perform, and not yet queued.
+            let res = sqlx::query(
+                "UPDATE approvals SET apply_state = 'queued' WHERE id = ? AND run_id = ? \
+                 AND status = 'approved' AND self_apply = 1 AND apply_state IS NULL",
+            )
+            .bind(id)
+            .bind(parent_id)
+            .execute(&mut *tx)
+            .await?;
+            if res.rows_affected() != 1 {
+                tx.rollback().await?;
+                return Err(Error::Conflict(format!(
+                    "approval {id} is not an approved call of run {parent_id} for Dots to perform"
+                )));
+            }
         }
         let child_id = match child {
             Some(new) => Some(insert_run(&mut tx, new).await?),

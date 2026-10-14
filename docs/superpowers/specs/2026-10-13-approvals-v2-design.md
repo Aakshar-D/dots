@@ -433,6 +433,9 @@ The plan's table "Deliberate deviations from the spec" gives the reason for each
   whose last status was written but whose calls were not closed (the process stopped in
   between, or the close failed) no longer leaves them `queued` for good. Nothing is announced,
   as for the rest of recovery.
+- Section 3.2 (final review): `resume_parked` queues only an approved, self-apply approval of
+  the parent run that is not queued yet; any other id makes it write nothing and return
+  `Conflict`.
 - New: file candidates are not offered for UNC, device or drive-relative paths. A command whose
   first token is a shell or wrapper (also when given with its path), or sets a variable, gets
   only the exact rule. A two-token prefix is not offered when its second token is an option or a

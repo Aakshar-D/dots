@@ -838,3 +838,108 @@ async fn recover_skips_the_calls_a_resume_run_left_queued_when_it_ended() {
         RunStatus::Queued
     );
 }
+
+#[tokio::test]
+async fn resume_parked_refuses_to_queue_a_call_dots_is_not_to_perform() {
+    let (_d, store) = temp_store().await;
+    let dot = store.create_dot(&spec("a")).await.unwrap();
+    let parent = store
+        .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    let ask = |self_apply: bool| {
+        let store = store.clone();
+        let run = parent.id.clone();
+        async move {
+            store
+                .create_approval_with(&run, "Bash", &json!({"command": "x"}), self_apply)
+                .await
+                .unwrap()
+        }
+    };
+    let denied = ask(true).await;
+    store
+        .decide_approval_with_parked(&denied.id, false, None, true)
+        .await
+        .unwrap();
+    let granted = ask(false).await;
+    store
+        .decide_approval_with_parked(&granted.id, true, None, true)
+        .await
+        .unwrap();
+    let own = ask(true).await;
+    store
+        .decide_approval_with_parked(&own.id, true, None, true)
+        .await
+        .unwrap();
+    // An approved call of another run.
+    let other_run = store
+        .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    let foreign = store
+        .create_approval_with(&other_run.id, "Bash", &json!({"command": "y"}), true)
+        .await
+        .unwrap();
+    store
+        .decide_approval_with_parked(&foreign.id, true, None, true)
+        .await
+        .unwrap();
+    store
+        .set_status(&parent.id, RunStatus::AwaitingApproval)
+        .await
+        .unwrap();
+
+    let all = vec![
+        denied.id.clone(),
+        granted.id.clone(),
+        own.id.clone(),
+        foreign.id.clone(),
+    ];
+    for bad in [&denied.id, &granted.id, &foreign.id] {
+        let mut new = NewRun::new(&dot.id, TriggerKind::Resume);
+        new.parent_run_id = Some(parent.id.clone());
+        new.root_run_id = Some(parent.root_run_id.clone());
+        let err = store
+            .resume_parked(
+                &parent.id,
+                &[("Bash".into(), "k".into())],
+                &all,
+                &[own.id.clone(), bad.clone()],
+                Some(&new),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::Conflict(_)), "{bad}: {err:?}");
+        // Nothing was written: the parent still waits, no child, nothing resolved or queued.
+        assert_eq!(
+            store.get_run(&parent.id).await.unwrap().status,
+            RunStatus::AwaitingApproval
+        );
+        assert_eq!(
+            store.list_thread(&parent.root_run_id).await.unwrap().len(),
+            1
+        );
+        for id in &all {
+            let a = store.get_approval(id).await.unwrap();
+            assert!(!a.resolved, "{id} resolved");
+            assert_eq!(a.apply_state, None, "{id} queued");
+        }
+    }
+    // The call Dots is to perform is queued alone.
+    let mut new = NewRun::new(&dot.id, TriggerKind::Resume);
+    new.parent_run_id = Some(parent.id.clone());
+    new.root_run_id = Some(parent.root_run_id.clone());
+    let child = store
+        .resume_parked(
+            &parent.id,
+            &[],
+            &all,
+            std::slice::from_ref(&own.id),
+            Some(&new),
+        )
+        .await
+        .unwrap();
+    assert!(child.is_some());
+    assert_eq!(apply_state(&store, &own.id).await, Some(ApplyState::Queued));
+}
