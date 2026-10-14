@@ -4,6 +4,7 @@ use sqlx::Row;
 
 use super::Store;
 use crate::model::{ApplyState, Approval, ApprovalStatus};
+use crate::policy::{Policy, Preset, Rule};
 use crate::util::{json_hash, new_id, now};
 use crate::{Error, Result};
 
@@ -80,10 +81,12 @@ impl Store {
         approval_from_row(&row)
     }
 
+    /// Every pending approval, in the order they were asked (see `queued_applies`): the Inbox
+    /// lists a run's calls in the order `decide_run_approvals` will answer them.
     pub async fn list_pending_approvals(&self) -> Result<Vec<Approval>> {
         let rows = sqlx::query(&format!(
             "SELECT {APPROVAL_COLUMNS} FROM approvals WHERE status = 'pending' \
-             ORDER BY created_at, id"
+             ORDER BY rowid"
         ))
         .fetch_all(&self.pool)
         .await?;
@@ -116,7 +119,7 @@ impl Store {
         approved: bool,
         note: Option<&str>,
     ) -> Result<Approval> {
-        self.decide(id, approved, note, None).await
+        self.decide(id, approved, note, None, None).await
     }
 
     /// Records a decision and the `parked` flag in one guarded update, so a decided row
@@ -128,7 +131,21 @@ impl Store {
         note: Option<&str>,
         parked: bool,
     ) -> Result<Approval> {
-        self.decide(id, approved, note, Some(parked)).await
+        self.decide(id, approved, note, Some(parked), None).await
+    }
+
+    /// Approves `id` like `decide_approval_with_parked` and, in the same transaction, adds
+    /// `rule` to the policy of the approval's dot. A policy that already holds the rule is
+    /// left as it is; otherwise the rule is appended and the policy's preset becomes `custom`.
+    /// When the approval is no longer pending, nothing is written (`Conflict`).
+    pub async fn approve_with_rule(
+        &self,
+        id: &str,
+        note: Option<&str>,
+        parked: bool,
+        rule: &Rule,
+    ) -> Result<Approval> {
+        self.decide(id, true, note, Some(parked), Some(rule)).await
     }
 
     async fn decide(
@@ -137,12 +154,16 @@ impl Store {
         approved: bool,
         note: Option<&str>,
         parked: Option<bool>,
+        rule: Option<&Rule>,
     ) -> Result<Approval> {
         let status = if approved {
             ApprovalStatus::Approved
         } else {
             ApprovalStatus::Denied
         };
+        let mut tx = self.pool.begin().await?;
+        // The guarded update goes first: it takes the write lock, so the policy read below
+        // cannot be overtaken by another writer of the dot.
         let res = sqlx::query(
             "UPDATE approvals SET status = ?, note = ?, decided_at = ?, \
              parked = COALESCE(?, parked) WHERE id = ? AND status = 'pending'",
@@ -152,16 +173,50 @@ impl Store {
         .bind(now())
         .bind(parked.map(i64::from))
         .bind(id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
         if res.rows_affected() == 0 {
+            tx.rollback().await?;
             let existing = self.get_approval(id).await?;
             return Err(Error::Conflict(format!(
                 "approval {id} is already {}",
                 existing.status.as_str()
             )));
         }
+        if let Some(rule) = rule {
+            let (dot_id, stored): (String, String) = sqlx::query_as(
+                "SELECT d.id, d.policy FROM dots d JOIN runs r ON r.dot_id = d.id \
+                 JOIN approvals a ON a.run_id = r.id WHERE a.id = ?",
+            )
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await?;
+            let mut policy: Policy = serde_json::from_str(&stored)?;
+            if !policy.rules.contains(rule) {
+                policy.rules.push(rule.clone());
+                policy.preset = Preset::Custom;
+                sqlx::query("UPDATE dots SET policy = ?, updated_at = ? WHERE id = ?")
+                    .bind(serde_json::to_string(&policy)?)
+                    .bind(now())
+                    .bind(&dot_id)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+        }
+        tx.commit().await?;
         self.get_approval(id).await
+    }
+
+    /// The pending approvals of `run_id`, in the order they were asked (see `queued_applies`).
+    pub async fn pending_for_run(&self, run_id: &str) -> Result<Vec<Approval>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {APPROVAL_COLUMNS} FROM approvals WHERE run_id = ? AND status = 'pending' \
+             ORDER BY rowid"
+        ))
+        .bind(run_id)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(approval_from_row).collect()
     }
 
     pub async fn mark_parked(&self, id: &str) -> Result<()> {

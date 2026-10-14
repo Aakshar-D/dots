@@ -10,7 +10,7 @@ use tokio::sync::oneshot;
 use crate::engine::{PermissionGate, PermissionOutcome};
 use crate::events::{Bus, RuntimeEvent};
 use crate::model::{ApplyState, Approval, ApprovalStatus, EngineKind};
-use crate::policy::Action;
+use crate::policy::{Action, Rule};
 use crate::store::Store;
 use crate::util::json_hash;
 use crate::{Error, Result};
@@ -114,13 +114,41 @@ impl ApprovalHub {
         approved: bool,
         note: Option<String>,
     ) -> Result<DecideEffect> {
+        self.decide_with_rule(id, approved, note, None).await
+    }
+
+    /// Like `decide`. With `rule`, an approval also adds that rule to the policy of the
+    /// approval's dot, in one transaction with the decision: `check` reads the policy on every
+    /// call, so the rule holds from the moment the decision does. The caller chooses the rule;
+    /// this only refuses one that comes with a denial.
+    pub async fn decide_with_rule(
+        &self,
+        id: &str,
+        approved: bool,
+        note: Option<String>,
+        rule: Option<Rule>,
+    ) -> Result<DecideEffect> {
+        if rule.is_some() && !approved {
+            return Err(Error::Invalid(
+                "a rule can only be saved with an approval".into(),
+            ));
+        }
         // Take the waiter first so the decision and its `parked` flag are written together:
         // a decided row is never left looking live while no engine can receive it.
         let waiter = self.waiters.lock().unwrap().remove(id);
-        let decided = self
-            .store
-            .decide_approval_with_parked(id, approved, note.as_deref(), waiter.is_none())
-            .await;
+        let parked = waiter.is_none();
+        let decided = match &rule {
+            Some(rule) => {
+                self.store
+                    .approve_with_rule(id, note.as_deref(), parked, rule)
+                    .await
+            }
+            None => {
+                self.store
+                    .decide_approval_with_parked(id, approved, note.as_deref(), parked)
+                    .await
+            }
+        };
         let mut approval = match decided {
             Ok(a) => a,
             Err(e) => {

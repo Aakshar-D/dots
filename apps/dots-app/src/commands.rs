@@ -230,7 +230,10 @@ pub async fn decide_approval(
     approved: bool,
     note: Option<String>,
 ) -> Res<Approval> {
-    Ok(state.rt()?.decide_approval(&id, approved, note).await?)
+    Ok(state
+        .rt()?
+        .decide_approval(&id, approved, note, None)
+        .await?)
 }
 
 #[tauri::command]

@@ -126,7 +126,7 @@ async fn decide_approval_resumes_parked_run() {
             .await
             .unwrap()
             .remove(0);
-    t.rt.decide_approval(&approval.id, true, None)
+    t.rt.decide_approval(&approval.id, true, None, None)
         .await
         .unwrap();
     let mut child_id = None;
@@ -538,4 +538,56 @@ async fn chat_follow_up_restores_a_removed_worktree_at_the_same_path() {
     let args: Vec<String> = serde_json::from_value(rec["args"].clone()).unwrap();
     assert!(args.windows(2).any(|w| w == ["--resume", "fake-session"]));
     t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn a_rule_can_be_saved_with_the_approval_of_a_claude_dot() {
+    let script = json!([
+        {"emit": {"type": "system", "subtype": "init", "session_id": "$SESSION"}},
+        {"approve": {"tool_name": "Bash", "input": {"command": "git push"}}},
+        {"emit": {"type": "result", "subtype": "success", "is_error": false, "result": "ok",
+                  "usage": {"input_tokens": 1, "output_tokens": 1}}}
+    ]);
+    let t = start(Some(script), None).await;
+    let mut s = folder_spec(&t.dir, "ruled");
+    s.approval_wait_secs = 0;
+    let dot = t.rt.create_dot(s).await.unwrap();
+    let parent = t.rt.run_now(&dot.id).await.unwrap();
+    wait_status(t.rt.store(), &parent.id, RunStatus::AwaitingApproval, 15).await;
+    let approval =
+        t.rt.store()
+            .list_pending_approvals()
+            .await
+            .unwrap()
+            .remove(0);
+    let offered: Vec<String> =
+        t.rt.approval_rule_candidates(&approval.id)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|c| c.pattern)
+            .collect();
+    assert_eq!(offered, vec!["Bash(git push)"]);
+    t.rt.decide_approval(&approval.id, true, None, Some("Bash(git push)".into()))
+        .await
+        .unwrap();
+
+    let policy = t.rt.get_dot(&dot.id).await.unwrap().spec.policy;
+    assert_eq!(policy.rules.len(), dot.spec.policy.rules.len() + 1);
+    // From the next run the CLI gets the rule in its own allow list.
+    assert!(policy.cli_lists().0.contains(&"Bash(git push)".to_string()));
+    // The engine is unchanged: a grant, and a resume that asks the model to repeat the call.
+    let decided = t.rt.store().get_approval(&approval.id).await.unwrap();
+    assert!(!decided.self_apply);
+    assert_eq!(decided.apply_state, None);
+    for _ in 0..100 {
+        let runs = t.rt.store().list_runs(Some(&dot.id), 10).await.unwrap();
+        if let Some(child) = runs.iter().find(|r| r.trigger == TriggerKind::Resume) {
+            wait_status(t.rt.store(), &child.id, RunStatus::Succeeded, 15).await;
+            t.rt.shutdown();
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    panic!("no resume run");
 }

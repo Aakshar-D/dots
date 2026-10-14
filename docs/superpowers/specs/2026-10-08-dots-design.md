@@ -253,6 +253,12 @@ the call again. See `2026-10-13-approvals-v2-design.md` §3.
 - Resolution order: one-shot grant for (run lineage, tool, `input_hash`) → `deny` rules →
   `allow` rules → `ask` rules → `default`. From Approvals v2 a grant is written only for a
   dot whose engine does not perform approved calls itself, which is the Claude engine.
+- From Approvals v2 an approval can save an allow rule to the dot's policy, in one transaction
+  with the decision (`decide_approval` with `allow_rule`). Only a pattern that
+  `policy::allow_candidates` derives from that very call is accepted, so the caller cannot
+  widen the policy at will; the policy's preset becomes `custom`. The pending approvals of one
+  run can also be decided together (`decide_run_approvals`): in the order they were asked,
+  with one resume, and without a rule. See `2026-10-13-approvals-v2-design.md` §4 and §5.
 - Presets:
   - `read-only`: allow Read/LS/Glob/Grep; deny Write/Edit/Bash; default deny.
   - `sandboxed` (default): allow Read/LS/Glob/Grep, `Write(./**)`, `Edit(./**)`,

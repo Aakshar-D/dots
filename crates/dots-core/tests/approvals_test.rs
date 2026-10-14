@@ -10,7 +10,7 @@ use dots_core::events::{new_bus, RuntimeEvent};
 use dots_core::model::{
     ApplyState, ApprovalStatus, EngineKind, NewRun, Run, RunStatus, TriggerKind,
 };
-use dots_core::policy::{Policy, Preset};
+use dots_core::policy::{Action, Policy, Preset, Rule};
 use dots_core::store::Store;
 use dots_core::Error;
 use serde_json::json;
@@ -368,6 +368,53 @@ async fn an_approval_says_whether_dots_will_perform_its_call() {
             ("git push 4".to_string(), false),
         ]
     );
+}
+
+#[tokio::test]
+async fn a_rule_is_saved_with_an_approval_and_refused_with_a_denial() {
+    let (_d, store, hub, run, bus) = setup(Preset::Sandboxed, 5).await;
+    let mut events = bus.subscribe();
+    let h = hub.clone();
+    let rid = run.id.clone();
+    let check =
+        tokio::spawn(async move { h.check(&rid, "Bash", json!({"command": "git push"})).await });
+    let approval = loop {
+        if let RuntimeEvent::ApprovalRequested { approval } = events.recv().await.unwrap() {
+            break approval;
+        }
+    };
+    let rule = Rule::new("Bash(git push)", Action::Allow);
+    // Refused before anything is touched: the engine still waits and can still be answered.
+    let err = hub
+        .decide_with_rule(&approval.id, false, None, Some(rule.clone()))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::Invalid(_)), "{err:?}");
+    assert_eq!(hub.waiter_count(), 1);
+    assert_eq!(
+        store.get_approval(&approval.id).await.unwrap().status,
+        ApprovalStatus::Pending
+    );
+
+    let effect = hub
+        .decide_with_rule(&approval.id, true, None, Some(rule.clone()))
+        .await
+        .unwrap();
+    assert!(matches!(effect, DecideEffect::Live(_)));
+    assert!(matches!(
+        check.await.unwrap().unwrap(),
+        PermissionOutcome::Allow { .. }
+    ));
+    let policy = store.get_dot(&run.dot_id).await.unwrap().spec.policy;
+    assert_eq!(policy.rules.last(), Some(&rule));
+    assert_eq!(policy.preset, Preset::Custom);
+    // The rule holds for the next call at once: no question, no approval row.
+    let again = hub
+        .check(&run.id, "Bash", json!({"command": "git push"}))
+        .await
+        .unwrap();
+    assert!(matches!(again, PermissionOutcome::Allow { .. }));
+    assert_eq!(store.approvals_for_run(&run.id).await.unwrap().len(), 1);
 }
 
 /// An approved, parked approval of `run` whose call Dots is to perform.

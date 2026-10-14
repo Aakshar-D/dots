@@ -2,6 +2,7 @@ mod common;
 
 use common::{spec, temp_store};
 use dots_core::model::{ApplyState, Approval, ApprovalStatus, NewRun, Run, RunStatus, TriggerKind};
+use dots_core::policy::{Action, Preset, Rule};
 use dots_core::store::Store;
 use dots_core::Error;
 use serde_json::json;
@@ -654,4 +655,136 @@ async fn approvals_made_before_the_migration_are_not_self_applied() {
     assert!(!old.self_apply);
     assert_eq!(old.apply_state, None);
     assert_eq!(old.applied_at, None);
+}
+
+// ---- Approvals v2: a rule saved with an approval ----
+
+#[tokio::test]
+async fn approving_with_a_rule_writes_the_decision_and_the_policy_together() {
+    let (_d, store) = temp_store().await;
+    let dot = store.create_dot(&spec("a")).await.unwrap();
+    let run = store
+        .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    let push = json!({"command": "git push"});
+    let first = store.create_approval(&run.id, "Bash", &push).await.unwrap();
+    let second = store.create_approval(&run.id, "Bash", &push).await.unwrap();
+    let before = dot.spec.policy.clone();
+    assert_eq!(before.preset, Preset::Sandboxed);
+    let rule = Rule::new("Bash(git push)", Action::Allow);
+
+    let approved = store
+        .approve_with_rule(&first.id, Some("ok"), true, &rule)
+        .await
+        .unwrap();
+    assert_eq!(approved.status, ApprovalStatus::Approved);
+    assert_eq!(approved.note.as_deref(), Some("ok"));
+    assert!(approved.parked);
+    let saved = store.get_dot(&dot.id).await.unwrap();
+    let mut expected = before.clone();
+    expected.rules.push(rule.clone());
+    expected.preset = Preset::Custom;
+    assert_eq!(saved.spec.policy, expected);
+
+    // The same rule with another approval: the decision is recorded, the dot is not touched.
+    let again = store
+        .approve_with_rule(&second.id, None, false, &rule)
+        .await
+        .unwrap();
+    assert_eq!(again.status, ApprovalStatus::Approved);
+    assert!(!again.parked);
+    let unchanged = store.get_dot(&dot.id).await.unwrap();
+    assert_eq!(unchanged, saved);
+
+    // An approval that is no longer pending: a conflict, and neither row changes.
+    let other = Rule::new("Bash(git status)", Action::Allow);
+    let err = store
+        .approve_with_rule(&first.id, Some("again"), false, &other)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::Conflict(_)), "{err:?}");
+    assert_eq!(store.get_dot(&dot.id).await.unwrap(), saved);
+    assert_eq!(store.get_approval(&first.id).await.unwrap(), approved);
+    let err = store
+        .approve_with_rule("no-such-approval", None, true, &other)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::NotFound(_)), "{err:?}");
+    assert_eq!(store.get_dot(&dot.id).await.unwrap(), saved);
+}
+
+#[tokio::test]
+async fn a_rule_the_policy_already_holds_keeps_the_preset() {
+    let (_d, store) = temp_store().await;
+    let dot = store.create_dot(&spec("a")).await.unwrap();
+    let run = store
+        .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    let a = store
+        .create_approval(&run.id, "Read", &json!({"file_path": "a.txt"}))
+        .await
+        .unwrap();
+    // The sandboxed preset already allows `Read`.
+    let held = Rule::new("Read", Action::Allow);
+    assert!(dot.spec.policy.rules.contains(&held));
+    store
+        .approve_with_rule(&a.id, None, true, &held)
+        .await
+        .unwrap();
+    assert_eq!(store.get_dot(&dot.id).await.unwrap(), dot);
+}
+
+#[tokio::test]
+async fn pending_approvals_of_a_run_come_in_the_order_they_were_asked() {
+    let (_d, store) = temp_store().await;
+    let dot = store.create_dot(&spec("a")).await.unwrap();
+    let run = store
+        .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    let other = store
+        .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    let mut asked = Vec::new();
+    for i in 0..30 {
+        let a = store
+            .create_approval(&run.id, "Bash", &json!({"command": format!("step {i}")}))
+            .await
+            .unwrap();
+        asked.push(a.id);
+    }
+    store
+        .create_approval(&other.id, "Bash", &json!({"command": "elsewhere"}))
+        .await
+        .unwrap();
+    store.decide_approval(&asked[3], true, None).await.unwrap();
+    store.decide_approval(&asked[7], false, None).await.unwrap();
+    let pending: Vec<String> = store
+        .pending_for_run(&run.id)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|a| a.id)
+        .collect();
+    let expected: Vec<String> = asked
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != 3 && *i != 7)
+        .map(|(_, id)| id.clone())
+        .collect();
+    assert_eq!(pending, expected);
+    // The Inbox's list is in the same order, with the other run's call where it was asked.
+    let listed: Vec<String> = store
+        .list_pending_approvals()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|a| a.run_id == run.id)
+        .map(|a| a.id)
+        .collect();
+    assert_eq!(listed, expected);
+    assert_eq!(store.list_pending_approvals().await.unwrap().len(), 29);
 }
