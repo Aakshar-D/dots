@@ -173,6 +173,12 @@ queued -> running -> succeeded
 A resume creates a child run linked by `parent_run_id` and reuses the parent's workspace and
 `session_id`. The UI shows parent and children as one thread.
 
+From Approvals v2 an approved, parked approval is resolved in one of two ways, which the
+approval itself records (`self_apply`): on an engine that performs approved calls itself (the
+local engine) the call is queued and the child run performs it before anything else; on every
+other engine a one-shot grant is written and the child run's prompt asks the model to issue
+the call again. See `2026-10-13-approvals-v2-design.md` §3.
+
 ### Steps
 
 1. **Trigger.** Scheduler tick, `POST /dots/{id}/trigger`, "Run now", or a chat message inserts a
@@ -211,6 +217,10 @@ A resume creates a child run linked by `parent_run_id` and reuses the parent's w
   approvals are expired in the same transaction. `awaiting_approval` runs stay resumable; their
   pending approvals resume on decision, and awaiting runs whose decisions were parked before
   the restart are resumed during start.
+- A resume run that performs its parent's approved calls closes them when it stops running,
+  whatever the reason (it ended, parked again, was cancelled before it started, or the app
+  restarted while it ran): a call that was claimed and has no outcome becomes `unknown`, a
+  call that was not reached becomes `skipped`. Neither is performed later (Approvals v2 §3.4).
 - A run is registered with the runner before it is claimed, so a cancel always reaches it; a
   cancel that lands before the engine starts finishes the run `cancelled` without starting it.
 - A decision is written together with its `parked` flag; `Live` is reported only when the
