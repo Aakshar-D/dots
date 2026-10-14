@@ -65,6 +65,15 @@ const WRAPPER_COMMANDS: &[&str] = &[
     "timeout",
     "start",
     "call",
+    "wsl",
+    "exec",
+    "command",
+    "eval",
+    "su",
+    "runas",
+    "stdbuf",
+    "chroot",
+    "watch",
 ];
 const FILE_TOOLS: &[&str] = &[
     "Read",
@@ -590,9 +599,13 @@ fn tidy_path(raw: &str) -> (bool, String) {
 /// Empty when the call can only be approved one at a time.
 ///
 /// - A command tool: the exact command, the command without its last token as a prefix, and
-///   its first two tokens as a prefix. Only for a command `simple_command` accepts.
+///   its first two tokens as a prefix. Only for a command `simple_command` accepts. A command
+///   that starts with a shell or wrapper (`WRAPPER_COMMANDS`, also given with its path) or sets a
+///   variable gets only the exact rule. A two-token prefix is left out when its second token
+///   starts with `-` or `/`.
 /// - A file tool: the path, and everything under its directory. A path inside `workspace` is
-///   written relative to it. Not for the workspace root or a drive root as the directory.
+///   written relative to it. Not for the workspace root or a drive root as the directory, and
+///   not at all for a UNC, device or drive-relative path.
 /// - `WebFetch`: the host.
 /// - Any other tool: its name.
 ///
@@ -610,7 +623,12 @@ pub fn allow_candidates(tool: &str, input: &Value, workspace: Option<&Path>) -> 
         if let Some(command) = command {
             let tokens: Vec<&str> = command.split(' ').collect();
             found.push((format!("{tool}({command})"), "this exact command".into()));
-            let first = tokens[0].to_ascii_lowercase();
+            // The program's name without its directory and `.exe`, as the deny side reads it.
+            let first = tokens[0]
+                .rsplit('/')
+                .next()
+                .unwrap_or("")
+                .to_ascii_lowercase();
             let first = first.strip_suffix(".exe").unwrap_or(&first);
             let wrapper = WRAPPER_COMMANDS.contains(&first) || tokens[0].contains('=');
             // An option or a path switch after the command name decides what the command does.

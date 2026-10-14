@@ -1197,6 +1197,19 @@ fn a_shell_or_wrapper_or_option_gets_no_prefix_that_would_allow_any_command() {
         offered("Bash", bash("Bash.EXE -c ls")),
         vec!["Bash(Bash.EXE -c ls)"]
     );
+    for (command, exact) in [
+        ("/usr/bin/env git status", "Bash(/usr/bin/env git status)"),
+        ("/usr/bin/sudo rm a b", "Bash(/usr/bin/sudo rm a b)"),
+        ("/usr/bin/env sh a b", "Bash(/usr/bin/env sh a b)"),
+        (
+            "C:/Windows/System32/cmd.exe /c del x",
+            "Bash(C:/Windows/System32/cmd.exe /c del x)",
+        ),
+        ("wsl git status", "Bash(wsl git status)"),
+        ("exec rm a b", "Bash(exec rm a b)"),
+    ] {
+        assert_eq!(offered("Bash", bash(command)), vec![exact], "{command}");
+    }
     // An option as the second token: the two-token prefix is left out, the longer one stays.
     assert_eq!(
         offered("Bash", bash("git -c a=b log")),
