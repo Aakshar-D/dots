@@ -526,6 +526,25 @@ describe("the approvals of one run", () => {
     expect(within(group).getByRole("button", { name: "Approve all (2)" })).toBeEnabled();
   });
 
+  it("can be answered together again when the run asks for more after a batch", async () => {
+    const box = inbox({ approvals: [approval, second], review_runs: [] });
+    const later1 = { ...approval, id: "apr-4", tool: "Edit", input: { file_path: "c.txt" } };
+    const later2 = { ...approval, id: "apr-5", tool: "Read", input: { file_path: "d.txt" } };
+    backend.on("decide_run_approvals", () => {
+      // The run went on and asked for two more calls before the Inbox reloaded.
+      box.set({ approvals: [later1, later2], review_runs: [] });
+      return answered.map((a) => ({ ...a, status: "approved" }));
+    });
+    const { user } = renderApp("/inbox");
+    await user.click(await screen.findByRole("button", { name: "Approve all (2)" }));
+    await user.click(await screen.findByRole("button", { name: "Approve all" }));
+    expect(await screen.findByRole("article", { name: "Approval for Edit" })).toBeVisible();
+    const group = screen.getByRole("group", mine);
+    expect(within(group).getAllByRole("article")).toHaveLength(2);
+    expect(within(group).getByRole("button", { name: "Approve all (2)" })).toBeEnabled();
+    expect(within(group).getByRole("button", { name: "Deny all (2)" })).toBeEnabled();
+  });
+
   it("can still be answered one at a time", async () => {
     const box = inbox({ approvals: [approval, second], review_runs: [] });
     backend.on("decide_approval", (args) => {

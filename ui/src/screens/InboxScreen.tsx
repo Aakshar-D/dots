@@ -44,10 +44,10 @@ function ReviewRow({ run }: { run: ReviewRun }) {
   );
 }
 
-/// The tool calls one run waits for. Two or more can be answered together: the core decides
-/// them in the order they were asked and resumes the run once. A rule is saved only with a
-/// single approval, on its card.
-function RunApprovalsGroup({ group }: { group: RunApprovals }) {
+/// "Approve all" and "Deny all" for the calls of one run that the Inbox lists now. Mounted per
+/// set of calls (its key): one answer per set, and a new set asked after a batch can be
+/// answered again.
+function RunBatch({ group }: { group: RunApprovals }) {
   const qc = useQueryClient();
   const decideAll = useMutation({
     mutationFn: (approved: boolean) => commands.decideRunApprovals(group.runId, approved, null),
@@ -57,7 +57,7 @@ function RunApprovalsGroup({ group }: { group: RunApprovals }) {
     },
     onError: notifyError,
   });
-  // One answer per group: after a success the group stays until the Inbox has reloaded.
+  // One answer per set: after a success the buttons stay off until the Inbox has reloaded.
   const decided = decideAll.isPending || decideAll.isSuccess;
   const count = group.approvals.length;
   const calls = group.approvals.map((approval) => (
@@ -65,6 +65,47 @@ function RunApprovalsGroup({ group }: { group: RunApprovals }) {
       {approval.tool} {toolPreview(approval.input)}
     </span>
   ));
+  return (
+    <>
+      <ConfirmButton
+        title={`Approve all ${count} calls?`}
+        description={
+          <>
+            {group.dotName} may perform every call this run waits for, in the order it asked:
+            {calls}
+          </>
+        }
+        confirmLabel="Approve all"
+        disabled={decided}
+        onConfirm={() => decideAll.mutate(true)}
+      >
+        Approve all ({count})
+      </ConfirmButton>
+      <ConfirmButton
+        title={`Deny all ${count} calls?`}
+        description={
+          <>
+            {group.dotName} may perform none of the calls this run waits for, and gets no note:
+            {calls}
+          </>
+        }
+        confirmLabel="Deny all"
+        disabled={decided}
+        onConfirm={() => decideAll.mutate(false)}
+      >
+        Deny all ({count})
+      </ConfirmButton>
+    </>
+  );
+}
+
+/// The tool calls one run waits for. Two or more can be answered together: the core decides
+/// them in the order they were asked and resumes the run once. A rule is saved only with a
+/// single approval, on its card.
+function RunApprovalsGroup({ group }: { group: RunApprovals }) {
+  // The batch, not the group, is keyed by the calls: the cards keep what was typed into them
+  // when the run asks for another call.
+  const batchKey = group.approvals.map((approval) => approval.id).join(" ");
   return (
     <div
       role="group"
@@ -81,40 +122,7 @@ function RunApprovalsGroup({ group }: { group: RunApprovals }) {
             Open the run
           </Link>
         </p>
-        {count > 1 && (
-          <>
-            <ConfirmButton
-              title={`Approve all ${count} calls?`}
-              description={
-                <>
-                  {group.dotName} may perform every call this run waits for, in the order it
-                  asked:
-                  {calls}
-                </>
-              }
-              confirmLabel="Approve all"
-              disabled={decided}
-              onConfirm={() => decideAll.mutate(true)}
-            >
-              Approve all ({count})
-            </ConfirmButton>
-            <ConfirmButton
-              title={`Deny all ${count} calls?`}
-              description={
-                <>
-                  {group.dotName} may perform none of the calls this run waits for, and gets no
-                  note:
-                  {calls}
-                </>
-              }
-              confirmLabel="Deny all"
-              disabled={decided}
-              onConfirm={() => decideAll.mutate(false)}
-            >
-              Deny all ({count})
-            </ConfirmButton>
-          </>
-        )}
+        {group.approvals.length > 1 && <RunBatch key={batchKey} group={group} />}
       </div>
       {group.approvals.map((approval) => (
         <ApprovalCard key={approval.id} approval={approval} dotName={group.dotName} />

@@ -436,6 +436,9 @@ The plan's table "Deliberate deviations from the spec" gives the reason for each
 - Section 8 (final review): the dot editor does not fill its form from a cached copy of the dot
   that was marked stale (for example by a rule saved from the Inbox) while it is loaded again;
   it waits for the fresh copy, so Save no longer drops the saved rule.
+- Section 8 (final review): a run's "Approve all" and "Deny all" answer the set of calls the
+  Inbox lists; after a batch they are off until the Inbox reloads, and on again when the run
+  has asked for a new set of two or more.
 - Section 3.2 (final review): `resume_parked` queues only an approved, self-apply approval of
   the parent run that is not queued yet; any other id makes it write nothing and return
   `Conflict`.
