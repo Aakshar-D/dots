@@ -413,7 +413,10 @@ React + Vite + TypeScript inside Tauri 2. Screens:
   preselected, one of which is saved to the dot's policy with the approval. The control is not
   shown for a call the core offers no rule for. A parked card says who performs the call
   when it is approved: Dots, exactly as shown, or the model in a new run. The run view and
-  the chat list the approved calls that Dots performs with what became of each.
+  the chat list the approved calls that Dots performs with what became of each. In the Inbox
+  the approvals of one run stand together; two or more can be answered with "Approve all
+  (n)" or "Deny all (n)", each behind the in-app confirmation, which names the dot and lists
+  the calls. No rule is saved with such an answer.
 - **Chat** — per-dot threaded chat; each message is a `chat` run resuming the thread's session.
 - **Settings** — port, concurrency, `claude` path and version check, local endpoints with
   "Test endpoint", data dir, autostart toggle. Port, concurrency and `claude` path take effect

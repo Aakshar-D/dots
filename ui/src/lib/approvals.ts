@@ -1,4 +1,32 @@
-import type { ApplyState, Approval } from "@/api/types";
+import type { ApplyState, Approval, PendingApproval } from "@/api/types";
+
+/// The pending approvals of one run, which the Inbox shows together.
+export type RunApprovals = {
+  runId: string;
+  dotId: string;
+  dotName: string;
+  approvals: PendingApproval[];
+};
+
+/// Groups pending approvals by their run. A group stands where its first approval stood, and
+/// the approvals inside a group keep the order the core gave them, the order they were asked.
+export function byRun(approvals: PendingApproval[]): RunApprovals[] {
+  const groups = new Map<string, RunApprovals>();
+  for (const approval of approvals) {
+    const group = groups.get(approval.run_id);
+    if (group) {
+      group.approvals.push(approval);
+    } else {
+      groups.set(approval.run_id, {
+        runId: approval.run_id,
+        dotId: approval.dot_id,
+        dotName: approval.dot_name,
+        approvals: [approval],
+      });
+    }
+  }
+  return [...groups.values()];
+}
 
 /// What became of a call that Dots performs itself, in words.
 export const APPLY_LABEL: Record<ApplyState, string> = {

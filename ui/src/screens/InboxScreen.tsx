@@ -1,16 +1,20 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router";
 
 import { commands } from "@/api/commands";
 import type { ReviewRun } from "@/api/types";
 import { ApprovalCard } from "@/components/ApprovalCard";
+import { ConfirmButton } from "@/components/ConfirmButton";
 import { ErrorNote } from "@/components/ErrorNote";
 import { Page } from "@/components/Page";
 import { ReviewActions } from "@/components/ReviewActions";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
+import { byRun, type RunApprovals } from "@/lib/approvals";
 import { relativeTime } from "@/lib/format";
-import { keys } from "@/lib/query";
+import { notifyError } from "@/lib/notify";
+import { invalidate, keys } from "@/lib/query";
+import { toolPreview } from "@/lib/transcript";
 
 /// A finished run that waits for the user: it failed, or it left a worktree to look at.
 function ReviewRow({ run }: { run: ReviewRun }) {
@@ -37,6 +41,85 @@ function ReviewRow({ run }: { run: ReviewRun }) {
         canDiscard={run.worktree_exists}
       />
     </li>
+  );
+}
+
+/// The tool calls one run waits for. Two or more can be answered together: the core decides
+/// them in the order they were asked and resumes the run once. A rule is saved only with a
+/// single approval, on its card.
+function RunApprovalsGroup({ group }: { group: RunApprovals }) {
+  const qc = useQueryClient();
+  const decideAll = useMutation({
+    mutationFn: (approved: boolean) => commands.decideRunApprovals(group.runId, approved, null),
+    onSuccess: () => {
+      invalidate(qc, keys.inbox);
+      invalidate(qc, keys.approvals(group.runId));
+    },
+    onError: notifyError,
+  });
+  // One answer per group: after a success the group stays until the Inbox has reloaded.
+  const decided = decideAll.isPending || decideAll.isSuccess;
+  const count = group.approvals.length;
+  const calls = group.approvals.map((approval) => (
+    <span key={approval.id} className="block font-mono text-xs">
+      {approval.tool} {toolPreview(approval.input)}
+    </span>
+  ));
+  return (
+    <div
+      role="group"
+      aria-label={`Approvals asked by ${group.dotName}`}
+      className="flex flex-col gap-2"
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="min-w-0 flex-1 text-xs text-muted-foreground">
+          <Link to={`/dots/${group.dotId}`} className="text-foreground hover:underline">
+            {group.dotName}
+          </Link>{" "}
+          asked {relativeTime(group.approvals[0].created_at)} ·{" "}
+          <Link to={`/runs/${group.runId}`} className="hover:underline">
+            Open the run
+          </Link>
+        </p>
+        {count > 1 && (
+          <>
+            <ConfirmButton
+              title={`Approve all ${count} calls?`}
+              description={
+                <>
+                  {group.dotName} may perform every call this run waits for, in the order it
+                  asked:
+                  {calls}
+                </>
+              }
+              confirmLabel="Approve all"
+              disabled={decided}
+              onConfirm={() => decideAll.mutate(true)}
+            >
+              Approve all ({count})
+            </ConfirmButton>
+            <ConfirmButton
+              title={`Deny all ${count} calls?`}
+              description={
+                <>
+                  {group.dotName} may perform none of the calls this run waits for, and gets no
+                  note:
+                  {calls}
+                </>
+              }
+              confirmLabel="Deny all"
+              disabled={decided}
+              onConfirm={() => decideAll.mutate(false)}
+            >
+              Deny all ({count})
+            </ConfirmButton>
+          </>
+        )}
+      </div>
+      {group.approvals.map((approval) => (
+        <ApprovalCard key={approval.id} approval={approval} dotName={group.dotName} />
+      ))}
+    </div>
   );
 }
 
@@ -69,19 +152,8 @@ export function InboxScreen() {
           <h2 id="inbox-approvals" className="font-semibold">
             Approvals
           </h2>
-          {approvals.map((approval) => (
-            <div key={approval.id} className="flex flex-col gap-1">
-              <p className="text-xs text-muted-foreground">
-                <Link to={`/dots/${approval.dot_id}`} className="text-foreground hover:underline">
-                  {approval.dot_name}
-                </Link>{" "}
-                asked {relativeTime(approval.created_at)} ·{" "}
-                <Link to={`/runs/${approval.run_id}`} className="hover:underline">
-                  Open the run
-                </Link>
-              </p>
-              <ApprovalCard approval={approval} dotName={approval.dot_name} />
-            </div>
+          {byRun(approvals).map((group) => (
+            <RunApprovalsGroup key={group.runId} group={group} />
           ))}
         </section>
       )}

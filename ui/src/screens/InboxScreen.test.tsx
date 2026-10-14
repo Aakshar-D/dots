@@ -440,6 +440,111 @@ describe("saving a rule with an approval", () => {
   });
 });
 
+describe("the approvals of one run", () => {
+  const second = { ...approval, id: "apr-2", tool: "Write", input: { file_path: "notes.md" } };
+  const elsewhere = {
+    ...approval,
+    id: "apr-3",
+    run_id: "run-other",
+    dot_id: "dot-other",
+    dot_name: "tidy-notes",
+    tool: "Edit",
+    input: { file_path: "b.txt" },
+  };
+  const mine = { name: `Approvals asked by ${approval.dot_name}` };
+  const empty: Inbox = { approvals: [], review_runs: [] };
+  const answered = [approval, second].map((a) => ({ ...sample.approval, id: a.id }));
+
+  it("stand together under their dot, and a single one has no batch buttons", async () => {
+    // The core lists approvals in the order asked; a call of another run came in between.
+    inbox({ approvals: [approval, elsewhere, second], review_runs: [] });
+    renderApp("/inbox");
+    const group = await screen.findByRole("group", mine);
+    const cards = within(group).getAllByRole("article");
+    expect(cards.map((card) => card.getAttribute("aria-label"))).toEqual([
+      "Approval for Bash",
+      "Approval for Write",
+    ]);
+    expect(within(group).getByRole("button", { name: "Approve all (2)" })).toBeVisible();
+    expect(within(group).getByRole("button", { name: "Deny all (2)" })).toBeVisible();
+    // The run is named once for the group, not once per call.
+    expect(within(group).getAllByRole("link", { name: "Open the run" })).toHaveLength(1);
+
+    const other = screen.getByRole("group", { name: "Approvals asked by tidy-notes" });
+    expect(within(other).getAllByRole("article")).toHaveLength(1);
+    expect(within(other).queryByRole("button", { name: /all \(/ })).toBeNull();
+    expect(within(other).getByRole("link", { name: "Open the run" })).toHaveAttribute(
+      "href",
+      "/runs/run-other",
+    );
+    // A group stands where its first call stood.
+    const names = screen
+      .getAllByRole("group", { name: /^Approvals asked by/ })
+      .map((g) => g.getAttribute("aria-label"));
+    expect(names).toEqual([mine.name, "Approvals asked by tidy-notes"]);
+  });
+
+  it.each([
+    ["Approve all (2)", "Approve all", true],
+    ["Deny all (2)", "Deny all", false],
+  ])("are answered together by %s, after a confirmation that lists them", async (open, confirm, approved) => {
+    const box = inbox({ approvals: [approval, second], review_runs: [] });
+    backend.on("decide_run_approvals", () => {
+      box.set(empty);
+      return answered.map((a) => ({ ...a, status: approved ? "approved" : "denied" }));
+    });
+    const { user } = renderApp("/inbox");
+    await user.click(await screen.findByRole("button", { name: open }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveTextContent(approval.dot_name);
+    expect(dialog).toHaveTextContent("Bash git push origin main");
+    expect(dialog).toHaveTextContent("Write notes.md");
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(backend.callsTo("decide_run_approvals")).toEqual([]);
+
+    await user.click(screen.getByRole("button", { name: open }));
+    await user.click(await screen.findByRole("button", { name: confirm }));
+    expect(await screen.findByText(/Nothing waits for you/)).toBeVisible();
+    expect(backend.callsTo("decide_run_approvals")).toEqual([
+      { runId: approval.run_id, approved, note: null },
+    ]);
+    // One command for the run, and none per call.
+    expect(backend.callsTo("decide_approval")).toEqual([]);
+  });
+
+  it("stay, with their buttons, when the core refuses the batch", async () => {
+    inbox({ approvals: [approval, second], review_runs: [] });
+    backend.on("decide_run_approvals", () => {
+      throw { kind: "internal", message: "database is locked" };
+    });
+    const { user } = renderApp("/inbox");
+    await user.click(await screen.findByRole("button", { name: "Approve all (2)" }));
+    await user.click(await screen.findByRole("button", { name: "Approve all" }));
+    expect(await screen.findByText("database is locked")).toBeVisible();
+    const group = screen.getByRole("group", mine);
+    expect(within(group).getAllByRole("article")).toHaveLength(2);
+    expect(within(group).getByRole("button", { name: "Approve all (2)" })).toBeEnabled();
+  });
+
+  it("can still be answered one at a time", async () => {
+    const box = inbox({ approvals: [approval, second], review_runs: [] });
+    backend.on("decide_approval", (args) => {
+      box.set({ approvals: [second], review_runs: [] });
+      return { ...sample.approval, id: args.id, status: "approved" };
+    });
+    const { user } = renderApp("/inbox");
+    const first = await screen.findByRole("article", { name: "Approval for Bash" });
+    await user.click(within(first).getByRole("button", { name: "Approve" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("article", { name: "Approval for Bash" })).toBeNull(),
+    );
+    // One call is left: its group has nothing to batch.
+    expect(screen.getByRole("article", { name: "Approval for Write" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: /all \(/ })).toBeNull();
+    expect(backend.callsTo("decide_run_approvals")).toEqual([]);
+  });
+});
+
 describe("a parked approval", () => {
   it("says what approving does, by who will perform the call", async () => {
     const parked = { ...approval, parked: true };
