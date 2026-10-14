@@ -65,6 +65,11 @@ pub fn alias(name: &str) -> Option<&'static str> {
     TOOLS.iter().find(|(n, _)| *n == name).map(|(_, a)| *a)
 }
 
+/// The local tool behind a policy alias (`Bash` is `shell`): what an approval's `tool` names.
+pub fn local_name(alias: &str) -> Option<&'static str> {
+    TOOLS.iter().find(|(_, a)| *a == alias).map(|(n, _)| *n)
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum Arg {
     Str,

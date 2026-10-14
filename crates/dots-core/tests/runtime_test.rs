@@ -140,6 +140,14 @@ async fn decide_approval_resumes_parked_run() {
     }
     let child_id = child_id.expect("resume run");
     wait_status(t.rt.store(), &child_id, RunStatus::Succeeded, 15).await;
+    // A Claude dot: the CLI runs its own tools, so Dots performs nothing itself. The late
+    // approval became a grant and the model was asked to issue the call again.
+    let decided = t.rt.store().get_approval(&approval.id).await.unwrap();
+    assert!(!decided.self_apply);
+    assert_eq!(decided.apply_state, None);
+    let child = t.rt.store().get_run(&child_id).await.unwrap();
+    let prompt = child.payload.as_ref().unwrap()["message"].as_str().unwrap();
+    assert!(prompt.contains("granted"), "{prompt}");
     t.rt.shutdown();
 }
 

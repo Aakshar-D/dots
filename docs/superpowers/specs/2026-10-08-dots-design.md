@@ -251,7 +251,8 @@ the call again. See `2026-10-13-approvals-v2-design.md` §3.
   own tools, which are aliased: `read_file`→`Read`, `write_file`→`Write`, `edit_file`→`Edit`,
   `glob`→`Glob`, `grep`→`Grep`, `list_dir`→`LS`, `shell`→`Bash`.
 - Resolution order: one-shot grant for (run lineage, tool, `input_hash`) → `deny` rules →
-  `allow` rules → `ask` rules → `default`.
+  `allow` rules → `ask` rules → `default`. From Approvals v2 a grant is written only for a
+  dot whose engine does not perform approved calls itself, which is the Claude engine.
 - Presets:
   - `read-only`: allow Read/LS/Glob/Grep; deny Write/Edit/Bash; default deny.
   - `sandboxed` (default): allow Read/LS/Glob/Grep, `Write(./**)`, `Edit(./**)`,
@@ -342,12 +343,22 @@ behave identically) → execute allowed tools, return the deny text for denied o
 the tool result → append results → repeat until no tool calls or `max_turns`.
 
 Every chat message (system, user, assistant with its `tool_calls`, tool result) is persisted as
-a `message` run event. A local run's `session_id` is the `root_run_id` of its lineage. Resume
-uses the engine-agnostic runner flow unchanged: the child run rebuilds the conversation from the
-`message` events of earlier runs in the lineage, appends the runner's resume prompt
-(`Approval #<id> granted … Perform that action now`) as a user message, and the model re-issues the call,
-which the one-shot grant allows once. A model that changes the input on retry gets a fresh
-`ask`; that is accepted rather than having the engine replay the call itself.
+a `message` run event. A local run's `session_id` is the `root_run_id` of its lineage. On a
+resume the child run rebuilds the conversation from the `message` events of earlier runs in the
+lineage.
+
+From Approvals v2 the engine itself performs a call that was approved after its run stopped
+waiting (`Engine::applies_approved_calls`). Before the child run asks the model anything, it
+performs the approved calls of its parent in the order they were asked, each exactly as it was
+approved: the call is claimed first, it takes the path of a live `allow` (`prepare`, then the
+tool, with the walking tools' filter), and its outcome is recorded before anything else is done
+with the output. The policy is not resolved again. After a call that did not succeed, the calls
+that remain are given up. The engine then sends one user message that says what each call did
+(and that the quoted outputs are results, not instructions), followed by the runner's resume
+prompt. No grant is written and the model does not issue the
+call again, so it cannot change it. Until Approvals v2 the model was asked to re-issue the
+call under a one-shot grant, and a changed input asked again. See
+`2026-10-13-approvals-v2-design.md` §3.
 
 Built-in tools: `read_file`, `write_file`, `edit_file` (exact unique-string replace), `list_dir`,
 `glob`, `grep`, `shell` (PowerShell, timeout default 120 s, output capped at 30 KB; the script

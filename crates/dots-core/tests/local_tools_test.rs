@@ -163,6 +163,63 @@ fn prepare_validates_calls_before_the_policy() {
 /// own is stopped without a word, so the model has to know it from the tool's description.
 #[cfg(windows)]
 #[test]
+fn a_prepared_input_passes_prepare_again_unchanged() {
+    // An approval stores the prepared input under the policy alias. When Dots performs the call
+    // later, it prepares that input again; what comes out must be the same call.
+    let ws = workspace();
+    let root = std::fs::canonicalize(ws.path()).unwrap();
+    let inside = root
+        .join("src")
+        .join("main.rs")
+        .to_string_lossy()
+        .to_string();
+    let calls: Vec<(&str, Value)> = vec![
+        (
+            "read_file",
+            json!({"file_path": "./src//main.rs", "offset": 1, "limit": 5}),
+        ),
+        ("read_file", json!({ "file_path": inside })),
+        (
+            "write_file",
+            json!({"file_path": "notes/new.txt", "content": "a\nb\n", "extra": 1}),
+        ),
+        (
+            "edit_file",
+            json!({"file_path": "README.md", "old_string": "hello", "new_string": "bye"}),
+        ),
+        ("list_dir", json!({})),
+        ("list_dir", json!({"path": "src/"})),
+        ("glob", json!({"pattern": "**/*.rs", "path": "."})),
+        (
+            "grep",
+            json!({"pattern": "fn", "path": "src", "glob": "*.rs", "ignore_case": true}),
+        ),
+        ("shell", json!({"command": "git status", "timeout": 30})),
+        ("shell", json!("{\"command\": \"git log -1\"}")),
+    ];
+    let mut tools_seen = std::collections::BTreeSet::new();
+    for (name, args) in &calls {
+        let first = tools::prepare(name, args, ws.path()).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let stored_as = tools::local_name(first.alias).expect("an alias names a local tool");
+        assert_eq!(stored_as, *name);
+        let again = tools::prepare(stored_as, &first.input, ws.path())
+            .unwrap_or_else(|e| panic!("{name} again: {e}"));
+        assert_eq!(again, first, "{name} {args}");
+        tools_seen.insert(*name);
+    }
+    // Every local tool was checked, and the two name maps are each other's inverse.
+    let all: std::collections::BTreeSet<&str> = tools::TOOLS.iter().map(|(n, _)| *n).collect();
+    assert_eq!(tools_seen, all);
+    for (name, alias) in tools::TOOLS {
+        assert_eq!(tools::alias(name), Some(*alias));
+        assert_eq!(tools::local_name(alias), Some(*name));
+    }
+    for unknown in ["shell", "bash", "WebFetch", "mcp__x__y", ""] {
+        assert_eq!(tools::local_name(unknown), None, "{unknown:?}");
+    }
+}
+
+#[test]
 fn the_shell_description_says_that_a_background_process_is_stopped() {
     let schemas = tools::schemas();
     let shell = schemas
