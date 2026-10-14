@@ -4,6 +4,7 @@ import { Link, useParams } from "react-router";
 
 import { commands } from "@/api/commands";
 import type { Approval, Run, RunEventRecord } from "@/api/types";
+import { AppliedCalls } from "@/components/AppliedCalls";
 import { ApprovalCard } from "@/components/ApprovalCard";
 import { DiffView } from "@/components/DiffView";
 import { ErrorNote, LoadErrors } from "@/components/ErrorNote";
@@ -54,9 +55,8 @@ function Thread({ runId, runs }: { runId: string; runs: Run[] }) {
   const eventsByRun = new Map<string, RunEventRecord[]>(
     runs.map((run, i) => [run.id, events[i]?.data ?? []]),
   );
-  const pending: Approval[] = approvals
-    .flatMap((q) => q.data ?? [])
-    .filter((a) => a.status === "pending");
+  const asked: Approval[] = approvals.flatMap((q) => q.data ?? []);
+  const pending = asked.filter((a) => a.status === "pending");
 
   const cancel = useMutation({ mutationFn: commands.cancelRun, onError: notifyError });
   const openFolder = useMutation({
@@ -111,8 +111,9 @@ function Thread({ runId, runs }: { runId: string; runs: Run[] }) {
     <div className="flex flex-col gap-4">
       <LoadErrors queries={[...events, ...approvals]} />
       {pending.map((approval) => (
-        <ApprovalCard key={approval.id} approval={approval} />
+        <ApprovalCard key={approval.id} approval={approval} dotName={dot.data?.name} />
       ))}
+      <AppliedCalls approvals={asked} />
       {/* The run's error stands above, so the transcript does not repeat it. */}
       <Transcript runs={runs} events={eventsByRun} shownError={latest.error} />
     </div>

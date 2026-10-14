@@ -477,4 +477,29 @@ describe("the Chat screen", () => {
     expect(box).toBeDisabled();
     expect(box).toHaveValue("hello");
   });
+
+  it("says what became of a call Dots performed in the conversation", async () => {
+    const performed: Approval = {
+      ...sample.approval,
+      run_id: "a",
+      status: "approved",
+      parked: true,
+      self_apply: true,
+      apply_state: "applied",
+    };
+    chats([chat("a", "10:00")], [], [performed]);
+    renderApp(`/chat/${dot.id}/a`);
+    const calls = await screen.findByRole("list", { name: "Approved calls" });
+    expect(within(calls).getByText("Performed by Dots")).toBeVisible();
+    expect(within(calls).getByText("git push origin main")).toBeVisible();
+  });
+
+  it("names the dot in the rules a pending call offers", async () => {
+    const waiting = chat("a", "10:00", { status: "awaiting_approval", ended_at: null });
+    chats([waiting], [], [{ ...sample.approval, run_id: "a" }]);
+    backend.on("approval_rule_candidates", () => sample.rules);
+    const { user } = renderApp(`/chat/${dot.id}/a`);
+    await user.click(await screen.findByRole("button", { name: "Approve and always allow" }));
+    expect(screen.getByRole("group", { name: `Always allow for ${dot.name}` })).toBeVisible();
+  });
 });

@@ -35,6 +35,8 @@ export function installDefaults(): void {
   backend.on("startup_error", () => null);
   backend.on("status", () => quietStatus);
   backend.on("inbox", () => ({ approvals: [], review_runs: [] }));
+  // An approval card asks for these when it shows; by default the core offers no rule.
+  backend.on("approval_rule_candidates", () => []);
   backend.on("dot_overview", () => []);
   backend.on("list_dots", () => []);
   backend.on("get_settings", () => sample.settings);

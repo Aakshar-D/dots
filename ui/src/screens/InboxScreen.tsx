@@ -80,7 +80,7 @@ export function InboxScreen() {
                   Open the run
                 </Link>
               </p>
-              <ApprovalCard approval={approval} />
+              <ApprovalCard approval={approval} dotName={approval.dot_name} />
             </div>
           ))}
         </section>

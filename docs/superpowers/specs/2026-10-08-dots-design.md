@@ -408,6 +408,12 @@ React + Vite + TypeScript inside Tauri 2. Screens:
   summary, status, tokens; cancel, discard worktree, open folder.
 - **Inbox** — pending approvals (tool, pretty-printed input, approve / deny with note) and
   finished runs awaiting review (definition in §12). Unread count mirrored in the tray tooltip.
+  From Approvals v2 an approval card, wherever it shows (Inbox, run view, chat), also offers
+  "Approve and always allow": the allow rules the core derived for that call, the narrowest
+  preselected, one of which is saved to the dot's policy with the approval. The control is not
+  shown for a call the core offers no rule for. A parked card says who performs the call
+  when it is approved: Dots, exactly as shown, or the model in a new run. The run view and
+  the chat list the approved calls that Dots performs with what became of each.
 - **Chat** — per-dot threaded chat; each message is a `chat` run resuming the thread's session.
 - **Settings** — port, concurrency, `claude` path and version check, local endpoints with
   "Test endpoint", data dir, autostart toggle. Port, concurrency and `claude` path take effect

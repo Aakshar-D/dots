@@ -6,6 +6,7 @@ import { Link, useNavigate, useParams } from "react-router";
 
 import { commands } from "@/api/commands";
 import type { Run, RunEventRecord } from "@/api/types";
+import { AppliedCalls } from "@/components/AppliedCalls";
 import { ApprovalCard } from "@/components/ApprovalCard";
 import { ErrorNote, LoadErrors } from "@/components/ErrorNote";
 import { Page } from "@/components/Page";
@@ -77,7 +78,8 @@ function Composer(props: {
 }
 
 /// One conversation: its runs as a transcript, approvals it waits for, and the composer.
-function Conversation({ dotId, rootId }: { dotId: string; rootId: string }) {
+function Conversation(props: { dotId: string; dotName?: string; rootId: string }) {
+  const { dotId, dotName, rootId } = props;
   const qc = useQueryClient();
   const thread = useQuery({
     queryKey: keys.thread(rootId),
@@ -124,7 +126,8 @@ function Conversation({ dotId, rootId }: { dotId: string; rootId: string }) {
   const eventsByRun = new Map<string, RunEventRecord[]>(
     runs.map((run, i) => [run.id, events[i]?.data ?? []]),
   );
-  const pending = approvals.flatMap((q) => q.data ?? []).filter((a) => a.status === "pending");
+  const asked = approvals.flatMap((q) => q.data ?? []);
+  const pending = asked.filter((a) => a.status === "pending");
   // Why the last run failed stands below the conversation, so the transcript does not repeat it.
   const failure = latest?.status === "failed" ? latest.error : null;
   return (
@@ -132,8 +135,9 @@ function Conversation({ dotId, rootId }: { dotId: string; rootId: string }) {
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto p-4">
         <Transcript runs={runs} events={eventsByRun} shownError={failure} />
         <LoadErrors queries={[...events, ...approvals]} />
+        <AppliedCalls approvals={asked} />
         {pending.map((approval) => (
-          <ApprovalCard key={approval.id} approval={approval} />
+          <ApprovalCard key={approval.id} approval={approval} dotName={dotName} />
         ))}
         {failure && (
           <p role="alert" className="rounded-md border border-destructive/50 p-2 text-destructive">
@@ -276,7 +280,12 @@ export function ChatScreen() {
         {!dotId ? (
           <p className="p-4 text-muted-foreground">Choose a dot to chat with.</p>
         ) : runId ? (
-          <Conversation key={runId} dotId={dotId} rootId={runId} />
+          <Conversation
+            key={runId}
+            dotId={dotId}
+            dotName={dots.data.find((dot) => dot.id === dotId)?.name}
+            rootId={runId}
+          />
         ) : (
           <NewConversation key={dotId} dotId={dotId} />
         )}

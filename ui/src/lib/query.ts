@@ -35,6 +35,7 @@ export const keys = {
   thread: (runId: string) => ["thread", runId] as const,
   events: (runId: string) => ["events", runId] as const,
   approvals: (runId: string) => ["approvals", runId] as const,
+  approvalRules: (approvalId: string) => ["approval-rules", approvalId] as const,
   diff: (runId: string) => ["diff", runId] as const,
 };
 

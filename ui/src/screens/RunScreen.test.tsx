@@ -1,7 +1,7 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import type { Approval, Run, RunEventRecord, WorktreeDiff } from "@/api/types";
+import type { ApplyState, Approval, Run, RunEventRecord, WorktreeDiff } from "@/api/types";
 import { backend, later } from "@/test/backend";
 import { sample } from "@/test/fixtures";
 import { renderApp } from "@/test/render";
@@ -576,5 +576,82 @@ describe("the run view", () => {
     });
     renderApp("/runs/nope");
     expect(await screen.findByRole("alert")).toHaveTextContent("run nope");
+  });
+});
+
+describe("the calls Dots performed in a thread", () => {
+  /// An approval that was decided late: `state` is where the call Dots performs stands, and
+  /// null stands for an approval the model was asked to repeat.
+  const decided = (id: string, state: ApplyState | null): Approval => ({
+    ...sample.approval,
+    id,
+    input: { command: `step ${id}` },
+    status: "approved",
+    parked: true,
+    resolved: true,
+    self_apply: state !== null,
+    apply_state: state,
+  });
+  const labels: [ApplyState, string][] = [
+    ["applied", "Performed by Dots"],
+    ["failed", "Performed; the tool reported an error"],
+    ["unknown", "Outcome unknown: Dots stopped while this ran"],
+    ["skipped", "Not performed"],
+    ["queued", "Waiting to be performed"],
+    ["applying", "Being performed"],
+  ];
+
+  it("says what became of each one, and lists no other approval", async () => {
+    thread(
+      [folderRun],
+      [],
+      [...labels.map(([state]) => decided(state, state)), decided("repeated", null)],
+    );
+    renderApp(`/runs/${run.id}`);
+    const rows = within(await screen.findByRole("list", { name: "Approved calls" })).getAllByRole(
+      "listitem",
+    );
+    expect(rows).toHaveLength(labels.length);
+    labels.forEach(([state, label], i) => {
+      expect(within(rows[i]).getByText("Bash")).toBeVisible();
+      expect(within(rows[i]).getByText(`step ${state}`)).toBeVisible();
+      expect(within(rows[i]).getByText(label)).toBeVisible();
+    });
+    expect(screen.queryByText("step repeated")).toBeNull();
+    // They are decided: none of them is a card to answer.
+    expect(screen.queryByRole("article", { name: "Approval for Bash" })).toBeNull();
+  });
+
+  it("shows no such list for a thread without one", async () => {
+    thread([folderRun], [], [decided("repeated", null)]);
+    renderApp(`/runs/${run.id}`);
+    expect(await screen.findByRole("heading", { name: `${sample.dot.name} run` })).toBeVisible();
+    await waitFor(() => expect(backend.callsTo("approvals_for_run").length).toBeGreaterThan(0));
+    await settle();
+    expect(screen.queryByRole("list", { name: "Approved calls" })).toBeNull();
+  });
+
+  it("follows a call as the core announces what became of it", async () => {
+    thread([folderRun], [], [decided("a", "queued")]);
+    renderApp(`/runs/${run.id}`);
+    expect(await screen.findByText("Waiting to be performed")).toBeVisible();
+    for (const [state, label] of labels.slice(0, 1)) {
+      const now = decided("a", state);
+      backend.on("approvals_for_run", () => [now]);
+      act(() => backend.emit("runtime", { type: "approval_updated", approval: now }));
+      expect(await screen.findByText(label)).toBeVisible();
+    }
+    expect(screen.queryByText("Waiting to be performed")).toBeNull();
+  });
+
+  it("names the dot in the rules a pending call offers", async () => {
+    const waiting: Run = { ...folderRun, status: "awaiting_approval", ended_at: null };
+    thread([waiting], [], [sample.approval]);
+    backend.on("approval_rule_candidates", () => sample.rules);
+    const { user } = renderApp(`/runs/${run.id}`);
+    await user.click(await screen.findByRole("button", { name: "Approve and always allow" }));
+    expect(
+      screen.getByRole("group", { name: `Always allow for ${sample.dot.name}` }),
+    ).toBeVisible();
   });
 });
