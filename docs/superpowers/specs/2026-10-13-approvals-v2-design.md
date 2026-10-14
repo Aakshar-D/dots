@@ -428,6 +428,11 @@ The plan's table "Deliberate deviations from the spec" gives the reason for each
   dialog lists each call, not only its tool.
 - New: a dot that is moved to another engine while its run is parked gets the calls Dots was to
   perform given up (`skipped`), with no grant.
+- Section 3.4, "Start" (final review): `recover_interrupted` also turns every remaining `queued`
+  into `skipped` unless its run has a `resume` child that is `queued` or `running`. A resume run
+  whose last status was written but whose calls were not closed (the process stopped in
+  between, or the close failed) no longer leaves them `queued` for good. Nothing is announced,
+  as for the rest of recovery.
 - New: file candidates are not offered for UNC, device or drive-relative paths. A command whose
   first token is a shell or wrapper (also when given with its path), or sets a variable, gets
   only the exact rule. A two-token prefix is not offered when its second token is an option or a

@@ -788,3 +788,53 @@ async fn pending_approvals_of_a_run_come_in_the_order_they_were_asked() {
     assert_eq!(listed, expected);
     assert_eq!(store.list_pending_approvals().await.unwrap().len(), 29);
 }
+
+#[tokio::test]
+async fn recover_skips_the_calls_a_resume_run_left_queued_when_it_ended() {
+    let (_d, store) = temp_store().await;
+    // Resume runs whose final status was written, but whose calls were never closed (the
+    // process ended in between, or the close failed): nothing will perform those calls.
+    let (_p1, succeeded, left1) = resumed_with_queued(&store, "a", 2).await;
+    store.claim_run(&succeeded.id).await.unwrap();
+    assert!(store.claim_apply(&left1[0].id).await.unwrap());
+    assert!(store
+        .settle_apply(&left1[0].id, ApplyState::Applied)
+        .await
+        .unwrap());
+    store
+        .finish_run(&succeeded.id, RunStatus::Succeeded, None, None)
+        .await
+        .unwrap();
+    let (_p2, parked, left2) = resumed_with_queued(&store, "b", 1).await;
+    store.claim_run(&parked.id).await.unwrap();
+    store
+        .set_status(&parked.id, RunStatus::AwaitingApproval)
+        .await
+        .unwrap();
+    // A resume run that has not started yet: its calls are still to be performed.
+    let (_p3, waiting, later) = resumed_with_queued(&store, "c", 2).await;
+
+    assert!(store.recover_interrupted().await.unwrap().is_empty());
+    assert_eq!(
+        apply_state(&store, &left1[0].id).await,
+        Some(ApplyState::Applied)
+    );
+    assert_eq!(
+        apply_state(&store, &left1[1].id).await,
+        Some(ApplyState::Skipped)
+    );
+    assert_eq!(
+        apply_state(&store, &left2[0].id).await,
+        Some(ApplyState::Skipped)
+    );
+    for call in &later {
+        assert_eq!(
+            apply_state(&store, &call.id).await,
+            Some(ApplyState::Queued)
+        );
+    }
+    assert_eq!(
+        store.get_run(&waiting.id).await.unwrap().status,
+        RunStatus::Queued
+    );
+}

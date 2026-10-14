@@ -377,7 +377,8 @@ impl Store {
     /// Marks runs left `running` by a previous process as failed / interrupted and, in the
     /// same transaction, expires their pending approvals (no engine is left to act on them)
     /// and closes the approved calls they were performing (`applying` becomes `unknown`,
-    /// `queued` becomes `skipped`).
+    /// `queued` becomes `skipped`). Also closes every call left `applying`, and every call left
+    /// `queued` whose resume run is neither queued nor running. Returns the interrupted runs.
     pub async fn recover_interrupted(&self) -> Result<Vec<String>> {
         let ts = now();
         let mut tx = self.pool.begin().await?;
@@ -413,6 +414,16 @@ impl Store {
         sqlx::query("UPDATE approvals SET apply_state = 'unknown' WHERE apply_state = 'applying'")
             .execute(&mut *tx)
             .await?;
+        // A queued call is performed only by its run's resume run while that run is still to
+        // start or works. One whose resume run ended without closing it (the process stopped
+        // between the run's last status and the close, or the close failed) is given up.
+        sqlx::query(
+            "UPDATE approvals SET apply_state = 'skipped' WHERE apply_state = 'queued' \
+             AND NOT EXISTS (SELECT 1 FROM runs c WHERE c.parent_run_id = approvals.run_id \
+             AND c.trigger_kind = 'resume' AND c.status IN ('queued', 'running'))",
+        )
+        .execute(&mut *tx)
+        .await?;
         tx.commit().await?;
         Ok(ids)
     }
