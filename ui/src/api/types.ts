@@ -17,6 +17,15 @@ export const RunStatus = z.enum([
   "cancelled",
 ]);
 export const ApprovalStatus = z.enum(["pending", "approved", "denied", "expired"]);
+// Where a call that Dots performs itself stands (a parked approval of a local dot).
+export const ApplyState = z.enum([
+  "queued",
+  "applying",
+  "applied",
+  "failed",
+  "unknown",
+  "skipped",
+]);
 export const Action = z.enum(["allow", "ask", "deny"]);
 export const Preset = z.enum(["read-only", "sandboxed", "trusted", "custom"]);
 export const FileStatus = z.enum(["added", "modified", "deleted", "renamed"]);
@@ -126,6 +135,9 @@ const approvalShape = {
   resolved: z.boolean(),
   created_at: z.string(),
   decided_at: nullable(z.string()),
+  self_apply: z.boolean(),
+  apply_state: nullable(ApplyState),
+  applied_at: nullable(z.string()),
 };
 export const Approval = z.strictObject(approvalShape);
 
@@ -217,6 +229,7 @@ export type WorkspaceMode = z.infer<typeof WorkspaceMode>;
 export type TriggerKind = z.infer<typeof TriggerKind>;
 export type RunStatus = z.infer<typeof RunStatus>;
 export type ApprovalStatus = z.infer<typeof ApprovalStatus>;
+export type ApplyState = z.infer<typeof ApplyState>;
 export type Action = z.infer<typeof Action>;
 export type Preset = z.infer<typeof Preset>;
 export type FileStatus = z.infer<typeof FileStatus>;

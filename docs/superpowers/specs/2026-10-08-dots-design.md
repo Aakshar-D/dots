@@ -142,6 +142,9 @@ Stored at `%LOCALAPPDATA%\dots\dots.db`. Worktrees at `%LOCALAPPDATA%\dots\workt
 - `id` TEXT PK, `run_id` FK, `tool` TEXT, `input` TEXT (JSON), `input_hash` TEXT
 - `status` TEXT (`pending` | `approved` | `denied` | `expired`)
 - `note` TEXT NULL, `created_at`, `decided_at`
+- `self_apply` INTEGER (0/1), `apply_state` TEXT NULL (`queued` | `applying` | `applied` |
+  `failed` | `unknown` | `skipped`), `applied_at` TEXT NULL (migration 0004; see
+  `2026-10-13-approvals-v2-design.md` §3.4)
 
 **settings** — key/value, each value a JSON document: `port` (default 47321),
 `max_concurrent_runs` (default 2), `claude_path` (null = search PATH), `tested_claude_version`

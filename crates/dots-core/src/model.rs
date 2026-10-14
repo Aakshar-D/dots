@@ -27,6 +27,16 @@ str_enum!(ApprovalStatus {
     Denied => "denied",
     Expired => "expired",
 });
+// A call that Dots performs itself after a late approval: `queued -> applying -> applied |
+// failed | unknown`, or `queued -> skipped`. Nothing leaves the last four.
+str_enum!(ApplyState {
+    Queued => "queued",
+    Applying => "applying",
+    Applied => "applied",
+    Failed => "failed",
+    Unknown => "unknown",
+    Skipped => "skipped",
+});
 
 impl RunStatus {
     pub fn is_terminal(&self) -> bool {
@@ -327,4 +337,10 @@ pub struct Approval {
     pub resolved: bool,
     pub created_at: String,
     pub decided_at: Option<String>,
+    /// Dots performs this call itself when it is approved after the engine stopped waiting.
+    pub self_apply: bool,
+    /// Where a call that Dots performs stands; `None` for every other approval.
+    pub apply_state: Option<ApplyState>,
+    /// When the call ended `applied` or `failed`.
+    pub applied_at: Option<String>,
 }

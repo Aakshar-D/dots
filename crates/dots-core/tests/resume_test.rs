@@ -356,6 +356,7 @@ async fn resume_parked_on_non_awaiting_parent_conflicts_and_changes_nothing() {
             &parent.id,
             &[("Bash".into(), "k".into())],
             std::slice::from_ref(&a.id),
+            std::slice::from_ref(&a.id),
             Some(&child),
         )
         .await
@@ -374,6 +375,11 @@ async fn resume_parked_on_non_awaiting_parent_conflicts_and_changes_nothing() {
         .take_grant(&parent.root_run_id, "Bash", "k")
         .await
         .unwrap());
+    assert_eq!(
+        store.get_approval(&a.id).await.unwrap().apply_state,
+        None,
+        "nothing was queued for Dots to perform"
+    );
     assert_eq!(
         store.get_run(&parent.id).await.unwrap().status,
         RunStatus::Queued

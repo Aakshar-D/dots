@@ -1,7 +1,8 @@
 mod common;
 
 use common::{spec, temp_store};
-use dots_core::model::{ApprovalStatus, NewRun, RunStatus, TriggerKind};
+use dots_core::model::{ApplyState, Approval, ApprovalStatus, NewRun, Run, RunStatus, TriggerKind};
+use dots_core::store::Store;
 use dots_core::Error;
 use serde_json::json;
 
@@ -342,4 +343,315 @@ async fn the_lineage_index_exists() {
             .await
             .unwrap();
     assert_eq!(rows.len(), 1);
+}
+
+// ---- Approvals v2: calls that Dots performs itself ----
+
+/// A parent run that parked with `n` approved calls, resumed: the calls are queued for Dots to
+/// perform and the resume child exists. Returns (parent, child, approvals in the order asked).
+async fn resumed_with_queued(store: &Store, name: &str, n: usize) -> (Run, Run, Vec<Approval>) {
+    let dot = store.create_dot(&spec(name)).await.unwrap();
+    let parent = store
+        .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    let mut ids = Vec::new();
+    for i in 0..n {
+        let a = store
+            .create_approval_with(
+                &parent.id,
+                "Bash",
+                &json!({"command": format!("step {i}")}),
+                true,
+            )
+            .await
+            .unwrap();
+        store
+            .decide_approval_with_parked(&a.id, true, None, true)
+            .await
+            .unwrap();
+        ids.push(a.id);
+    }
+    store
+        .set_status(&parent.id, RunStatus::AwaitingApproval)
+        .await
+        .unwrap();
+    let mut new = NewRun::new(&dot.id, TriggerKind::Resume);
+    new.parent_run_id = Some(parent.id.clone());
+    new.root_run_id = Some(parent.root_run_id.clone());
+    let child = store
+        .resume_parked(&parent.id, &[], &ids, &ids, Some(&new))
+        .await
+        .unwrap()
+        .expect("child run");
+    let mut approvals = Vec::new();
+    for id in &ids {
+        approvals.push(store.get_approval(id).await.unwrap());
+    }
+    (parent, child, approvals)
+}
+
+async fn apply_state(store: &Store, id: &str) -> Option<ApplyState> {
+    store.get_approval(id).await.unwrap().apply_state
+}
+
+#[tokio::test]
+async fn an_approval_records_whether_dots_performs_it() {
+    let (_d, store) = temp_store().await;
+    let dot = store.create_dot(&spec("a")).await.unwrap();
+    let run = store
+        .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    let input = json!({"command": "git push"});
+    let plain = store
+        .create_approval(&run.id, "Bash", &input)
+        .await
+        .unwrap();
+    assert!(!plain.self_apply);
+    assert_eq!(plain.apply_state, None);
+    assert_eq!(plain.applied_at, None);
+    let own = store
+        .create_approval_with(&run.id, "Bash", &input, true)
+        .await
+        .unwrap();
+    assert!(own.self_apply);
+    assert_eq!(own.apply_state, None, "nothing is queued before the resume");
+    assert!(store.queued_applies(&run.id).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn resume_parked_queues_the_calls_in_the_order_they_were_asked() {
+    let (_d, store) = temp_store().await;
+    // Many calls made as fast as the store allows: several share a millisecond, so neither
+    // `created_at` nor the ids order them. The order of insertion does.
+    let (parent, child, approvals) = resumed_with_queued(&store, "a", 40).await;
+    assert_eq!(child.parent_run_id.as_deref(), Some(parent.id.as_str()));
+    let commands: Vec<String> = approvals
+        .iter()
+        .map(|a| a.input["command"].as_str().unwrap().to_string())
+        .collect();
+    let asked: Vec<String> = (0..40).map(|i| format!("step {i}")).collect();
+    assert_eq!(commands, asked);
+    for a in &approvals {
+        assert_eq!(a.apply_state, Some(ApplyState::Queued));
+        assert_eq!(a.status, ApprovalStatus::Approved);
+        assert!(a.resolved);
+        assert_eq!(a.applied_at, None);
+    }
+    let queued = store.queued_applies(&parent.id).await.unwrap();
+    assert_eq!(queued, approvals);
+    // Queued calls belong to the parent, not to the run that performs them.
+    assert!(store.queued_applies(&child.id).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_queued_call_is_claimed_by_exactly_one_caller() {
+    let (_d, store) = temp_store().await;
+    let (_parent, _child, approvals) = resumed_with_queued(&store, "a", 1).await;
+    let id = approvals[0].id.clone();
+    let mut claims = Vec::new();
+    for _ in 0..8 {
+        let store = store.clone();
+        let id = id.clone();
+        claims.push(tokio::spawn(async move {
+            store.claim_apply(&id).await.unwrap()
+        }));
+    }
+    let mut won = 0;
+    for claim in claims {
+        if claim.await.unwrap() {
+            won += 1;
+        }
+    }
+    assert_eq!(won, 1);
+    assert_eq!(apply_state(&store, &id).await, Some(ApplyState::Applying));
+    assert!(!store.claim_apply(&id).await.unwrap());
+}
+
+#[tokio::test]
+async fn an_outcome_is_settled_once_and_only_for_a_claimed_call() {
+    let (_d, store) = temp_store().await;
+    let (_parent, _child, approvals) = resumed_with_queued(&store, "a", 2).await;
+    let (first, second) = (&approvals[0].id, &approvals[1].id);
+    // Not claimed: nothing to settle.
+    assert!(!store
+        .settle_apply(first, ApplyState::Applied)
+        .await
+        .unwrap());
+    assert_eq!(apply_state(&store, first).await, Some(ApplyState::Queued));
+
+    assert!(store.claim_apply(first).await.unwrap());
+    assert!(store
+        .settle_apply(first, ApplyState::Applied)
+        .await
+        .unwrap());
+    let done = store.get_approval(first).await.unwrap();
+    assert_eq!(done.apply_state, Some(ApplyState::Applied));
+    assert!(done.applied_at.is_some());
+    // A second outcome does not replace the first.
+    assert!(!store.settle_apply(first, ApplyState::Failed).await.unwrap());
+    assert_eq!(apply_state(&store, first).await, Some(ApplyState::Applied));
+    // A settled call cannot be claimed again.
+    assert!(!store.claim_apply(first).await.unwrap());
+
+    assert!(store.claim_apply(second).await.unwrap());
+    assert!(store
+        .settle_apply(second, ApplyState::Failed)
+        .await
+        .unwrap());
+    let failed = store.get_approval(second).await.unwrap();
+    assert_eq!(failed.apply_state, Some(ApplyState::Failed));
+    assert!(failed.applied_at.is_some());
+
+    // Only the two outcomes of a performed call can be settled.
+    for state in [
+        ApplyState::Queued,
+        ApplyState::Applying,
+        ApplyState::Unknown,
+        ApplyState::Skipped,
+    ] {
+        let err = store.settle_apply(second, state).await.unwrap_err();
+        assert!(matches!(err, Error::Invalid(_)), "{state:?}: {err:?}");
+    }
+}
+
+#[tokio::test]
+async fn skip_and_close_end_what_was_not_performed() {
+    let (_d, store) = temp_store().await;
+    let (parent, _child, approvals) = resumed_with_queued(&store, "a", 4).await;
+    let [done, claimed, waiting, given_up] = [0, 1, 2, 3].map(|i| approvals[i].id.clone());
+    assert!(store.claim_apply(&done).await.unwrap());
+    assert!(store
+        .settle_apply(&done, ApplyState::Applied)
+        .await
+        .unwrap());
+    assert!(store.claim_apply(&claimed).await.unwrap());
+    assert!(store.skip_apply(&given_up).await.unwrap());
+    // Skipping is for a queued call only.
+    assert!(!store.skip_apply(&given_up).await.unwrap());
+    assert!(!store.skip_apply(&claimed).await.unwrap());
+    assert!(!store.skip_apply(&done).await.unwrap());
+
+    let closed = store.close_applies(&parent.id).await.unwrap();
+    let closed: Vec<(&str, Option<ApplyState>)> = closed
+        .iter()
+        .map(|a| (a.id.as_str(), a.apply_state))
+        .collect();
+    assert_eq!(
+        closed,
+        vec![
+            (claimed.as_str(), Some(ApplyState::Unknown)),
+            (waiting.as_str(), Some(ApplyState::Skipped)),
+        ]
+    );
+    // What had an end keeps it.
+    assert_eq!(apply_state(&store, &done).await, Some(ApplyState::Applied));
+    assert_eq!(
+        apply_state(&store, &given_up).await,
+        Some(ApplyState::Skipped)
+    );
+    assert_eq!(store.get_approval(&claimed).await.unwrap().applied_at, None);
+    // Nothing is left open, so a second close changes nothing.
+    assert!(store.close_applies(&parent.id).await.unwrap().is_empty());
+    for id in [&claimed, &waiting, &given_up] {
+        assert!(!store.claim_apply(id).await.unwrap(), "{id} is closed");
+    }
+}
+
+#[tokio::test]
+async fn recover_closes_the_calls_of_an_interrupted_resume_run() {
+    let (_d, store) = temp_store().await;
+    // A resume run that was performing its parent's calls when the process ended.
+    let (_p1, interrupted, calls) = resumed_with_queued(&store, "a", 3).await;
+    store.claim_run(&interrupted.id).await.unwrap();
+    assert!(store.claim_apply(&calls[0].id).await.unwrap());
+    assert!(store
+        .settle_apply(&calls[0].id, ApplyState::Applied)
+        .await
+        .unwrap());
+    assert!(store.claim_apply(&calls[1].id).await.unwrap());
+    // A resume run that had not started: its calls are still to be performed.
+    let (_p2, waiting, later) = resumed_with_queued(&store, "b", 1).await;
+    // A plain approval of another dot's run, never performed by Dots.
+    let other = store.create_dot(&spec("c")).await.unwrap();
+    let run = store
+        .create_run(&NewRun::new(&other.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    let plain = store
+        .create_approval(&run.id, "Bash", &json!({"command": "x"}))
+        .await
+        .unwrap();
+
+    let ids = store.recover_interrupted().await.unwrap();
+    assert_eq!(ids, vec![interrupted.id.clone()]);
+    assert_eq!(
+        apply_state(&store, &calls[0].id).await,
+        Some(ApplyState::Applied)
+    );
+    assert_eq!(
+        apply_state(&store, &calls[1].id).await,
+        Some(ApplyState::Unknown)
+    );
+    assert_eq!(
+        apply_state(&store, &calls[2].id).await,
+        Some(ApplyState::Skipped)
+    );
+    assert_eq!(
+        apply_state(&store, &later[0].id).await,
+        Some(ApplyState::Queued)
+    );
+    assert_eq!(
+        store.get_run(&waiting.id).await.unwrap().status,
+        RunStatus::Queued
+    );
+    assert_eq!(apply_state(&store, &plain.id).await, None);
+}
+
+#[tokio::test]
+async fn recover_leaves_no_call_claimed() {
+    let (_d, store) = temp_store().await;
+    // Claimed, but its resume run already ended (the runner had no chance to close it).
+    let (_parent, child, calls) = resumed_with_queued(&store, "a", 1).await;
+    store.claim_run(&child.id).await.unwrap();
+    assert!(store.claim_apply(&calls[0].id).await.unwrap());
+    store
+        .finish_run(&child.id, RunStatus::Failed, None, Some("boom"))
+        .await
+        .unwrap();
+    assert!(store.recover_interrupted().await.unwrap().is_empty());
+    assert_eq!(
+        apply_state(&store, &calls[0].id).await,
+        Some(ApplyState::Unknown)
+    );
+}
+
+#[tokio::test]
+async fn approvals_made_before_the_migration_are_not_self_applied() {
+    let (dir, store) = temp_store().await;
+    let dot = store.create_dot(&spec("a")).await.unwrap();
+    let run = store
+        .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    // A row written without the new columns, as before migration 0004: they take their defaults.
+    let pool = sqlx::SqlitePool::connect(&format!(
+        "sqlite://{}",
+        dir.path().join("dots.db").display()
+    ))
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO approvals (id, run_id, tool, input, input_hash, status, created_at) \
+         VALUES ('old', ?, 'Bash', '{}', 'h', 'pending', '2026-10-01T00:00:00.000Z')",
+    )
+    .bind(&run.id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let old = store.get_approval("old").await.unwrap();
+    assert!(!old.self_apply);
+    assert_eq!(old.apply_state, None);
+    assert_eq!(old.applied_at, None);
 }

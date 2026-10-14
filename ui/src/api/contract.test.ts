@@ -32,6 +32,7 @@ const enums: Record<keyof typeof fixture.Enums, { options: readonly string[] }> 
   TriggerKind: T.TriggerKind,
   RunStatus: T.RunStatus,
   ApprovalStatus: T.ApprovalStatus,
+  ApplyState: T.ApplyState,
   Action: T.Action,
   Preset: T.Preset,
   FileStatus: T.FileStatus,

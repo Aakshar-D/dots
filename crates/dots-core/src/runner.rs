@@ -318,7 +318,7 @@ impl Runner {
         let resolved: Vec<String> = decided.iter().map(|a| a.id.clone()).collect();
         let child = match self
             .store
-            .resume_parked(run_id, &grants, &resolved, child.as_ref())
+            .resume_parked(run_id, &grants, &resolved, &[], child.as_ref())
             .await
         {
             Ok(child) => child,

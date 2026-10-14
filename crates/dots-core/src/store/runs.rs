@@ -80,8 +80,9 @@ impl Store {
 
     /// Atomically turns the decided parked approvals of `parent_id` into a resume:
     /// inserts the one-shot `grants` (`(tool, grant_key)`, scoped to the parent's
-    /// `root_run_id`, read inside the transaction), marks `resolved_ids` resolved,
-    /// inserts the optional `child` run, and closes the parent as `succeeded`.
+    /// `root_run_id`, read inside the transaction), marks `resolved_ids` resolved, queues
+    /// `queued_ids` (approved calls that Dots performs itself in the child run, which get no
+    /// grant), inserts the optional `child` run, and closes the parent as `succeeded`.
     /// The parent must still be `awaiting_approval` (e.g. not cancelled concurrently);
     /// otherwise nothing is written and `Error::Conflict` is returned.
     pub async fn resume_parked(
@@ -89,6 +90,7 @@ impl Store {
         parent_id: &str,
         grants: &[(String, String)],
         resolved_ids: &[String],
+        queued_ids: &[String],
         child: Option<&NewRun>,
     ) -> Result<Option<Run>> {
         let mut tx = self.pool.begin().await?;
@@ -125,6 +127,12 @@ impl Store {
         }
         for id in resolved_ids {
             sqlx::query("UPDATE approvals SET resolved = 1 WHERE id = ?")
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+        }
+        for id in queued_ids {
+            sqlx::query("UPDATE approvals SET apply_state = 'queued' WHERE id = ?")
                 .bind(id)
                 .execute(&mut *tx)
                 .await?;
@@ -367,7 +375,9 @@ impl Store {
     }
 
     /// Marks runs left `running` by a previous process as failed / interrupted and, in the
-    /// same transaction, expires their pending approvals (no engine is left to act on them).
+    /// same transaction, expires their pending approvals (no engine is left to act on them)
+    /// and closes the approved calls they were performing (`applying` becomes `unknown`,
+    /// `queued` becomes `skipped`).
     pub async fn recover_interrupted(&self) -> Result<Vec<String>> {
         let ts = now();
         let mut tx = self.pool.begin().await?;
@@ -387,7 +397,22 @@ impl Store {
             .bind(id)
             .execute(&mut *tx)
             .await?;
+            // An interrupted resume run was performing its parent's approved calls: one it had
+            // claimed has no result, and one it had not reached will not be performed.
+            sqlx::query(
+                "UPDATE approvals SET apply_state = CASE apply_state WHEN 'applying' \
+                 THEN 'unknown' ELSE 'skipped' END \
+                 WHERE apply_state IN ('queued', 'applying') \
+                 AND run_id = (SELECT parent_run_id FROM runs WHERE id = ?)",
+            )
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
         }
+        // No run is running now, so nothing claimed can still get a result.
+        sqlx::query("UPDATE approvals SET apply_state = 'unknown' WHERE apply_state = 'applying'")
+            .execute(&mut *tx)
+            .await?;
         tx.commit().await?;
         Ok(ids)
     }

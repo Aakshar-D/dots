@@ -258,6 +258,9 @@ mod tests {
                 resolved: false,
                 created_at: "t".into(),
                 decided_at: None,
+                self_apply: false,
+                apply_state: None,
+                applied_at: None,
             },
         }
     }

@@ -87,6 +87,9 @@ fn approval() -> Approval {
         resolved: false,
         created_at: TS.into(),
         decided_at: None,
+        self_apply: false,
+        apply_state: None,
+        applied_at: None,
     }
 }
 
@@ -258,6 +261,7 @@ pub fn samples() -> Value {
             "TriggerKind": TriggerKind::ALL,
             "RunStatus": RunStatus::ALL,
             "ApprovalStatus": ApprovalStatus::ALL,
+            "ApplyState": ApplyState::ALL,
             "Action": Action::ALL,
             "Preset": Preset::ALL,
             "FileStatus": FileStatus::ALL,

@@ -1,5 +1,7 @@
 {
   "Approval": {
+    "applied_at": null,
+    "apply_state": null,
     "created_at": "2026-10-09T12:00:00.000Z",
     "decided_at": null,
     "id": "01J0APR",
@@ -11,6 +13,7 @@
     "parked": false,
     "resolved": false,
     "run_id": "01J0RUN",
+    "self_apply": false,
     "status": "pending",
     "tool": "Bash"
   },
@@ -344,6 +347,14 @@
       "ask",
       "deny"
     ],
+    "ApplyState": [
+      "queued",
+      "applying",
+      "applied",
+      "failed",
+      "unknown",
+      "skipped"
+    ],
     "ApprovalStatus": [
       "pending",
       "approved",
@@ -396,6 +407,8 @@
   "Inbox": {
     "approvals": [
       {
+        "applied_at": null,
+        "apply_state": null,
         "created_at": "2026-10-09T12:00:00.000Z",
         "decided_at": null,
         "dot_id": "01J0DOT",
@@ -409,6 +422,7 @@
         "parked": false,
         "resolved": false,
         "run_id": "01J0RUN",
+        "self_apply": false,
         "status": "pending",
         "tool": "Bash"
       }
@@ -667,6 +681,8 @@
     },
     {
       "approval": {
+        "applied_at": null,
+        "apply_state": null,
         "created_at": "2026-10-09T12:00:00.000Z",
         "decided_at": null,
         "id": "01J0APR",
@@ -678,6 +694,7 @@
         "parked": false,
         "resolved": false,
         "run_id": "01J0RUN",
+        "self_apply": false,
         "status": "pending",
         "tool": "Bash"
       },
@@ -685,6 +702,8 @@
     },
     {
       "approval": {
+        "applied_at": null,
+        "apply_state": null,
         "created_at": "2026-10-09T12:00:00.000Z",
         "decided_at": "2026-10-09T12:00:00.000Z",
         "id": "01J0APR",
@@ -696,6 +715,7 @@
         "parked": true,
         "resolved": false,
         "run_id": "01J0RUN",
+        "self_apply": false,
         "status": "denied",
         "tool": "Bash"
       },
