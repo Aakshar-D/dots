@@ -524,26 +524,59 @@ impl Runtime {
         ))
     }
 
+    /// Brings the dot's schedule row in line with the dot after a change of it (Scheduler v2
+    /// spec §4): made for a new schedule, reset for a changed one or when `enabled_now` (the
+    /// dot was disabled and is enabled now), deleted without a schedule. A change of the row
+    /// is published as `ScheduleUpdated`.
+    async fn sync_schedule(&self, dot: &Dot, enabled_now: bool) -> Result<()> {
+        let schedule = dot.spec.schedule.as_ref();
+        if self
+            .store
+            .sync_schedule_state(&dot.id, schedule, enabled_now, Utc::now())
+            .await?
+        {
+            self.schedule_updated(&dot.id);
+        }
+        Ok(())
+    }
+
+    fn schedule_updated(&self, dot_id: &str) {
+        let _ = self.bus.send(RuntimeEvent::ScheduleUpdated {
+            dot_id: dot_id.to_string(),
+        });
+    }
+
     pub async fn create_dot(&self, spec: DotSpec) -> Result<Dot> {
         let dot = self.store.create_dot(&spec).await?;
+        self.sync_schedule(&dot, false).await?;
         self.scheduler.reload();
         Ok(dot)
     }
 
     pub async fn update_dot(&self, id: &str, spec: DotSpec) -> Result<Dot> {
+        let was_enabled = self.store.get_dot(id).await?.spec.enabled;
         let dot = self.store.update_dot(id, &spec).await?;
+        self.sync_schedule(&dot, dot.spec.enabled && !was_enabled)
+            .await?;
         self.scheduler.reload();
         Ok(dot)
     }
 
+    /// Deletes the dot; its schedule row goes with it (`ON DELETE CASCADE`).
     pub async fn delete_dot(&self, id: &str) -> Result<()> {
+        let had_row = self.store.get_schedule_state(id).await?.is_some();
         self.store.delete_dot_if_idle(id).await?;
+        if had_row {
+            self.schedule_updated(id);
+        }
         self.scheduler.reload();
         Ok(())
     }
 
     pub async fn set_dot_enabled(&self, id: &str, enabled: bool) -> Result<Dot> {
+        let was_enabled = self.store.get_dot(id).await?.spec.enabled;
         let dot = self.store.set_dot_enabled(id, enabled).await?;
+        self.sync_schedule(&dot, enabled && !was_enabled).await?;
         self.scheduler.reload();
         Ok(dot)
     }

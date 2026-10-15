@@ -22,6 +22,10 @@ pub enum RuntimeEvent {
     ApprovalUpdated {
         approval: Approval,
     },
+    /// The dot's schedule row (`schedule_state`) was made, changed or deleted.
+    ScheduleUpdated {
+        dot_id: String,
+    },
 }
 
 pub type Bus = broadcast::Sender<RuntimeEvent>;

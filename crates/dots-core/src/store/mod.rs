@@ -9,6 +9,7 @@ use crate::Result;
 mod approvals;
 mod dots;
 mod runs;
+mod schedules;
 mod settings;
 
 /// The database file inside the data directory.

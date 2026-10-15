@@ -16,7 +16,13 @@ pub fn new_token() -> String {
 
 /// Current time as RFC 3339 UTC with milliseconds, e.g. `2026-10-08T18:24:30.129Z`.
 pub fn now() -> String {
-    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+    timestamp(chrono::Utc::now())
+}
+
+/// `t` as the store writes times: RFC 3339 UTC with milliseconds (`now()`'s form). Strings of
+/// this form sort as their times do.
+pub fn timestamp(t: chrono::DateTime<chrono::Utc>) -> String {
+    t.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
 /// SHA-256 hex of the JSON value with object keys sorted recursively.

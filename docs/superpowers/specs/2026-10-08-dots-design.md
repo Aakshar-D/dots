@@ -158,7 +158,11 @@ Stored at `%LOCALAPPDATA%\dots\dots.db`. Worktrees at `%LOCALAPPDATA%\dots\workt
 `dot_id` PK (FK `dots`, ON DELETE CASCADE), `rule_key` (the schedule's JSON when the row was
 made), `status` (`active` | `completed` | `expired`), `last_slot_at`, `fired_count`,
 `watch_run_id`, `retry_slot_at`, `retry_attempt`, `retry_at`, `attention_run_id` (the run
-columns are FKs to `runs`, ON DELETE SET NULL), `updated_at`.
+columns are FKs to `runs`, ON DELETE SET NULL), `updated_at`. The runtime keeps the row in line
+with its dot: creating a dot with a schedule makes it; changing the schedule (its JSON differs
+from `rule_key`) or enabling a disabled dot resets it (`active`, `last_slot_at` = now, no count,
+watched run, retry or attention); removing the schedule deletes it, and so does deleting the dot.
+Disabling a dot leaves its row as it is. Each change of a row is published as `ScheduleUpdated`.
 
 **settings** — key/value, each value a JSON document: `port` (default 47321),
 `max_concurrent_runs` (default 2), `claude_path` (null = search PATH), `tested_claude_version`
@@ -607,6 +611,8 @@ notify. Unread count = pending approvals + runs awaiting review.
     refetches run events after the last seen `seq`.
   - From Approvals v2 there is a fifth event, `ApprovalUpdated`: a decided approval whose call
     Dots performs changed its `apply_state`. It never notifies.
+  - From Scheduler v2 there is a sixth event, `ScheduleUpdated { dot_id }`: the dot's
+    `schedule_state` row was made, changed or deleted. It updates the tray's Inbox count.
 - Notifications fire on `ApprovalRequested`, and on `RunUpdated` into `succeeded`, `failed` or
   `awaiting_approval`, once per (run, status), and only for a run this process saw queued or
   running. Chat runs do not notify; neither does a parked run closed by its decision, nor a run
@@ -643,7 +649,8 @@ notify. Unread count = pending approvals + runs awaiting review.
     (Plan 3c removed the key `run`, which no query read). `RunEvent`s are appended to loaded
     event lists, deduplicated by `seq`. `ApprovalUpdated` invalidates `inbox` and the
     `approvals` of the approval's own run, which is the parent of the run that performs the
-    call: that run's own `RunUpdated` does not reach those approvals.
+    call: that run's own `RunUpdated` does not reach those approvals. `ScheduleUpdated`
+    invalidates `dots`, `overview` and `inbox`.
   - From Plan 3c an invalidation that arrives while its query is being fetched is kept (the
     query is marked stale again when that fetch has settled), and the app refetches everything
     once when its listeners are attached, so the first screen's data is asked for twice.
@@ -654,7 +661,8 @@ notify. Unread count = pending approvals + runs awaiting review.
   and the answer of `new_dot_spec`, and its engine-event samples are tied to the enum's
   variants, so a new variant without a sample does not compile. From Approvals v2 it also
   holds a sample of `ApprovalUpdated`, every `ApplyState`, and the rule candidates the core
-  derives for the `Approval` sample (`RuleCandidate`).
+  derives for the `Approval` sample (`RuleCandidate`). From Scheduler v2 it holds a sample of
+  every `RuntimeEvent` type, `ScheduleUpdated` among them, and the UI test checks that.
 - Shell around the screens:
   - Banners: `server_error` (links to Settings), CLI version mismatch ("Mark as tested"),
     restart required ("Restart Dots"), schedules paused.

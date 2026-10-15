@@ -191,6 +191,8 @@ pub struct Run {
     pub ended_at: Option<String>,
     /// Set when the user marked the run reviewed or discarded its worktree.
     pub reviewed_at: Option<String>,
+    /// The failed scheduled run that this run retries.
+    pub retry_of: Option<String>,
 }
 
 /// Input for `Store::create_run`. `root_run_id: None` makes the run its own root.
@@ -205,6 +207,7 @@ pub struct NewRun {
     pub workspace_path: Option<String>,
     pub branch: Option<String>,
     pub base_commit: Option<String>,
+    pub retry_of: Option<String>,
 }
 
 impl NewRun {
@@ -219,8 +222,69 @@ impl NewRun {
             workspace_path: None,
             branch: None,
             base_commit: None,
+            retry_of: None,
         }
     }
+}
+
+str_enum!(ScheduleStatus {
+    Active => "active",
+    Completed => "completed",
+    Expired => "expired",
+});
+
+/// A retry that waits (Scheduler v2 spec §6). Times are RFC 3339 UTC (`util::timestamp`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingRetry {
+    /// The slot whose occurrence is retried.
+    pub slot_at: String,
+    /// The attempt the retry is, 2 to 6.
+    pub attempt: u32,
+    /// When it starts.
+    pub at: String,
+}
+
+/// Where a dot's schedule stands: its `schedule_state` row (Scheduler v2 spec §4). Times are
+/// RFC 3339 UTC (`util::timestamp`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScheduleState {
+    pub dot_id: String,
+    /// The schedule's JSON when the row was made or reset (`Schedule::rule_key`).
+    pub rule_key: String,
+    pub status: ScheduleStatus,
+    /// The newest slot handled: fired, coalesced or skipped.
+    pub last_slot_at: String,
+    /// Slots that started a run or joined a queued one.
+    pub fired_count: u32,
+    /// The run whose outcome decides the current occurrence.
+    pub watch_run_id: Option<String>,
+    pub retry: Option<PendingRetry>,
+    /// The last failed run of an occurrence that failed in the end ("Needs attention").
+    pub attention_run_id: Option<String>,
+    pub updated_at: String,
+}
+
+/// Input for `Store::update_schedule_state`: the fields to write, in one statement. `None`
+/// leaves a field as it is; `Some(None)` clears it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ScheduleChange {
+    pub status: Option<ScheduleStatus>,
+    pub watch_run_id: Option<Option<String>>,
+    pub retry: Option<Option<PendingRetry>>,
+    pub attention_run_id: Option<Option<String>>,
+    /// Writes only while the row watches this run: the change follows from judging it.
+    pub if_watching: Option<String>,
+}
+
+/// What `Store::record_slot` and `Store::start_retry` did with a slot or a retry.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SlotStart {
+    /// The slot was skipped: no run.
+    Skipped,
+    /// A new run was queued. It is announced and the dispatcher woken by the caller.
+    Enqueued(Run),
+    /// The dot's queued run serves it.
+    Coalesced(Run),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

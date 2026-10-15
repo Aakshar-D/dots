@@ -200,6 +200,7 @@ mod tests {
             started_at: None,
             ended_at: None,
             reviewed_at: None,
+            retry_of: None,
         }
     }
 
@@ -359,6 +360,15 @@ mod tests {
         };
         assert_eq!(n.decide(&ev), None);
         assert!(!affects_inbox(&ev));
+    }
+
+    #[test]
+    fn a_schedule_update_does_not_notify_but_may_change_the_inbox() {
+        let mut n = Notifier::default();
+        let ev = RuntimeEvent::ScheduleUpdated { dot_id: "d".into() };
+        assert_eq!(n.decide(&ev), None);
+        // The row holds "Needs attention", which the Inbox lists.
+        assert!(affects_inbox(&ev));
     }
 
     #[test]

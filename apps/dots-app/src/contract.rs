@@ -72,6 +72,7 @@ fn run() -> Run {
         started_at: Some(TS.into()),
         ended_at: Some(TS.into()),
         reviewed_at: None,
+        retry_of: None,
     }
 }
 
@@ -254,6 +255,7 @@ pub fn samples() -> Value {
                 applied_at: Some(TS.into()),
                 ..approval()
             }}),
+            to(RuntimeEvent::ScheduleUpdated { dot_id: "01J0DOT".into() }),
         ],
         // What `approval_rule_candidates` answers for the `Approval` sample.
         "RuleCandidate": to(allow_candidates(

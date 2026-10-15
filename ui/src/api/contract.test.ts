@@ -64,6 +64,11 @@ describe("Rust/TypeScript contract", () => {
     expect(fixture.RunEventData.map((e) => e.kind).sort()).toEqual([...kinds].sort());
   });
 
+  it("has a sample of every runtime event type", () => {
+    const types = T.RuntimeEvent.options.map((o) => o.shape.type.value);
+    expect(fixture.RuntimeEvent.map((e) => e.type).sort()).toEqual([...types].sort());
+  });
+
   it("has a sample of every schedule kind and bound", () => {
     const kinds = T.ScheduleRule.options.map((o) => o.shape.kind.value);
     expect([...new Set(fixture.Schedule.map((s) => s.rule.kind))].sort()).toEqual(

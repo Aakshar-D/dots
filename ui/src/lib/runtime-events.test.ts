@@ -92,6 +92,17 @@ describe("runtime events and the query cache", () => {
     ]);
   });
 
+  it("marks the dots, the overview and the inbox stale on a schedule update", () => {
+    const qc = createQueryClient();
+    const lists = [keys.dots, keys.overview, keys.inbox];
+    const untouched = [keys.dot(sample.dot.id), keys.runs(sample.dot.id), keys.settings];
+    for (const key of [...lists, ...untouched]) qc.setQueryData(key, []);
+
+    applyRuntimeEvent(qc, { type: "schedule_updated", dot_id: sample.dot.id });
+    for (const key of lists) expect(stale(qc, key), key.join("/")).toBe(true);
+    for (const key of untouched) expect(stale(qc, key), key.join("/")).toBe(false);
+  });
+
   it("refetches the approvals of the approval's own run when Dots performs its call", () => {
     const qc = createQueryClient();
     // The call is performed by a resume run; the approval belongs to that run's parent.

@@ -86,6 +86,7 @@ pub fn fake_run(trigger: TriggerKind, payload: Option<Value>, session_id: Option
         started_at: None,
         ended_at: None,
         reviewed_at: None,
+        retry_of: None,
     }
 }
 

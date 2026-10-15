@@ -51,6 +51,11 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
       invalidate(qc, keys.inbox);
       invalidate(qc, keys.approvals(event.approval.run_id));
       break;
+    case "schedule_updated":
+      // Where the dot's schedule stands: its next run, retry and "Needs attention", which the
+      // Dots list and the Inbox show.
+      for (const queryKey of [keys.dots, keys.overview, keys.inbox]) invalidate(qc, queryKey);
+      break;
   }
 }
 

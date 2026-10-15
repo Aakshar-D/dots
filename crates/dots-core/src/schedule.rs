@@ -90,6 +90,13 @@ impl Schedule {
         }
     }
 
+    /// The schedule's JSON, which the schedule row keeps as its `rule_key` (spec §4): a row
+    /// whose key differs from the dot's schedule is reset. It includes the `Every` anchor, so
+    /// it is taken after `prepare_save`.
+    pub fn rule_key(&self) -> String {
+        serde_json::to_string(self).expect("a schedule always serialises")
+    }
+
     /// The structural rules of spec §2. Times and dates that do not parse are refused earlier,
     /// when the JSON is read.
     pub fn validate(&self) -> Result<()> {

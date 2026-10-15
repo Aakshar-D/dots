@@ -108,6 +108,8 @@ const runShape = {
   started_at: nullable(z.string()),
   ended_at: nullable(z.string()),
   reviewed_at: nullable(z.string()),
+  // The failed scheduled run that this run retries.
+  retry_of: nullable(z.string()),
 };
 export const Run = z.strictObject(runShape);
 
@@ -176,6 +178,8 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("approval_requested"), approval: Approval }),
   z.strictObject({ type: z.literal("approval_decided"), approval: Approval }),
   z.strictObject({ type: z.literal("approval_updated"), approval: Approval }),
+  // The dot's schedule row was made, changed or deleted.
+  z.strictObject({ type: z.literal("schedule_updated"), dot_id: z.string() }),
 ]);
 
 export const ClaudeStatus = z.strictObject({
