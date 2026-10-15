@@ -150,7 +150,8 @@ impl Store {
     /// Handles the due slot `at`, in one transaction (spec §5). `fire: None` skips it.
     /// `Some(new)` fires it: the slot joins the dot's queued run if there is one, and `new`
     /// is inserted otherwise. Either way `last_slot_at = at`; a fired slot also counts, its
-    /// run becomes the watched run, and a pending retry of an older slot is dropped.
+    /// run becomes the watched run, and a pending retry of an older slot is dropped (the
+    /// caller gives `new` the dropped retry's `attempt`, so the count runs on).
     /// `Conflict`, and nothing is written, when the dot has no row or its `last_slot_at` is
     /// not before `at` (the row was reset or handled the slot after the caller read it).
     pub async fn record_slot(

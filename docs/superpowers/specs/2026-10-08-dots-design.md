@@ -215,7 +215,10 @@ the call again. See `2026-10-13-approvals-v2-design.md` §3.
    any `tool_call` event (in it or in the parked runs it resumes) is retried 1, 2, 4, 8 and
    16 minutes after it ended, up to 6 attempts, by a `schedule` run with `retry_of` and the
    payload `{scheduled_for, attempt}` (joined into a queued run of the dot if there is one;
-   dropped when a newer slot fires). A failure after a tool call, or of the sixth attempt,
+   dropped when a newer slot fires, whose new run then carries the dropped retry's `attempt`,
+   so attempts count consecutive failures across occurrences and a schedule that fires more
+   often than its retries still reaches the sixth; a slot with no pending retry is attempt
+   1). A failure after a tool call, or of the sixth attempt,
    sets "Needs attention" (`schedule_state.attention_run_id`); the schedule keeps firing. A
    later manual or scheduled run of the dot that succeeds, a dismiss, or a reset of the row
    clears it. A cancelled or deleted watched run ends the occurrence quietly.

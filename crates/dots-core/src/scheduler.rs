@@ -38,6 +38,8 @@ pub const MAX_SLEEP: TimeDelta = TimeDelta::seconds(60);
 /// The wait before a pass that failed is tried again.
 pub const ERROR_WAIT: TimeDelta = TimeDelta::seconds(30);
 /// The attempts an occurrence has at most: the run of its slot and five retries (spec §6).
+/// A slot that drops a pending retry carries its attempt, so the count runs on across the
+/// occurrences of a schedule that fires more often than its retries come.
 pub const MAX_ATTEMPTS: u32 = 6;
 
 /// How long after attempt `attempt` (1 to 5) ended the next one starts: 1, 2, 4, 8 and 16
@@ -270,7 +272,9 @@ impl Scheduler {
             let counted = limit.is_some_and(|n| fired >= n);
             let fire =
                 !counted && (late < ON_TIME || (schedule.catch_up && late < CATCH_UP_WINDOW));
-            let new = fire.then(|| scheduled_run(dot, due, late >= ON_TIME));
+            // A fired slot drops a pending retry; its run takes the retry's attempt over.
+            let attempt = retry.as_ref().map(|r| r.attempt);
+            let new = fire.then(|| scheduled_run(dot, due, late >= ON_TIME, attempt));
             match self
                 .store
                 .record_slot(&dot.id, due, new.as_ref(), now)
@@ -539,8 +543,8 @@ impl Scheduler {
 
     /// The slot whose occurrence `run` serves, and which attempt it is. A resume run speaks
     /// for the run it resumes; a scheduled run names both in its payload (`scheduled_for`,
-    /// and `attempt` for a retry). A run of another trigger that a slot or retry joined is
-    /// taken as attempt 1 of the newest handled slot.
+    /// and `attempt` for a retry or for a slot that dropped one). A run of another trigger
+    /// that a slot or retry joined is taken as attempt 1 of the newest handled slot.
     async fn occurrence(&self, run: &Run, last_slot_at: &str) -> Result<(DateTime<Utc>, u32)> {
         let mut head = run.clone();
         while head.trigger == TriggerKind::Resume {
@@ -622,12 +626,17 @@ impl Scheduler {
     }
 }
 
-/// The run that serves the slot at `at`; `caught_up` when the slot was missed.
-fn scheduled_run(dot: &Dot, at: DateTime<Utc>, caught_up: bool) -> NewRun {
+/// The run that serves the slot at `at`; `caught_up` when the slot was missed. `attempt`:
+/// that of the pending retry the slot drops, if any (spec §6); without it the run is
+/// attempt 1.
+fn scheduled_run(dot: &Dot, at: DateTime<Utc>, caught_up: bool, attempt: Option<u32>) -> NewRun {
     let mut new = NewRun::new(&dot.id, TriggerKind::Schedule);
     let mut payload = json!({ "scheduled_for": at.with_timezone(&Local).to_rfc3339() });
     if caught_up {
         payload["caught_up"] = json!(true);
+    }
+    if let Some(attempt) = attempt {
+        payload["attempt"] = json!(attempt);
     }
     new.payload = Some(payload);
     new

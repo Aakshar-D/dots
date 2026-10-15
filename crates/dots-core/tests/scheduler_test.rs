@@ -906,7 +906,13 @@ async fn a_slot_that_fires_drops_a_waiting_retry() {
     h.at(660).await;
     let second = h.watched(&dot).await;
     assert_ne!(second.id, first.id);
-    assert_eq!(second.payload, Some(slot_payload(660, false)));
+    let mut payload = slot_payload(660, false);
+    payload["attempt"] = json!(2);
+    assert_eq!(
+        second.payload,
+        Some(payload),
+        "the slot's run carries the dropped retry's attempt"
+    );
     assert_eq!(second.retry_of, None);
     let row = h.row(&dot).await;
     assert_eq!((row.retry, row.fired_count), (None, 2));
@@ -1196,4 +1202,77 @@ async fn a_row_reset_during_a_pass_is_not_overwritten() {
     assert_eq!(h.row(&dot).await, row);
     h.at(60).await;
     assert_eq!(h.row(&dot).await.fired_count, 1);
+}
+
+/// Spec §6, the carry rule: a slot that drops a pending retry carries its attempt. A schedule
+/// that fires more often than its retries come, and keeps failing before any tool call,
+/// needs attention after its sixth failed attempt in a row, announced once. A slot with no
+/// pending retry, as after a success, is attempt 1 again.
+#[tokio::test]
+async fn a_frequent_schedule_that_keeps_failing_needs_attention_after_six_attempts() {
+    let mut h = Harness::new().await;
+    let dot = h.dot("frequent", Some(every(2, 60, true)), 0).await;
+    h.start();
+    h.settle().await;
+    // (time, attempt, wake after the failure): slots every 120 s from 60; the retry after
+    // attempt 1 comes before the next slot, every later one is dropped by a slot. The loop
+    // wakes at the slot, the retry or after 60 s, whichever is first.
+    let attempts = [
+        (60, 1, 120),
+        (120, 2, 180),
+        (180, 3, 240),
+        (300, 4, 360),
+        (420, 5, 480),
+        (540, 6, 600),
+    ];
+    let mut failed = None;
+    for (at, attempt, wake) in attempts {
+        h.at(at).await;
+        let run = h.watched(&dot).await;
+        let carried = run.payload.as_ref().and_then(|p| p.get("attempt"));
+        assert_eq!(
+            carried.and_then(Value::as_u64),
+            (attempt > 1).then_some(attempt),
+            "the attempt of the run at {at}"
+        );
+        assert_eq!(run.retry_of.is_some(), at == 120, "a retry run only at 120");
+        assert!(h.notices().is_empty());
+        assert_eq!(h.judge(&run.id, RunStatus::Failed).await, wake);
+        failed = Some(run);
+    }
+    let failed = failed.unwrap();
+    let row = h.row(&dot).await;
+    assert_eq!(
+        (row.status, row.watch_run_id, row.retry),
+        (ScheduleStatus::Active, None, None),
+        "no seventh attempt"
+    );
+    assert_eq!(row.attention_run_id.as_deref(), Some(failed.id.as_str()));
+    assert_eq!(
+        h.notices(),
+        [(dot.id.clone(), failed.id.clone(), Some(DOWN.to_string()))]
+    );
+
+    // No retry waits: the next slot is attempt 1, and its success clears the flag.
+    h.at(660).await;
+    let ok = h.watched(&dot).await;
+    assert_eq!(ok.payload, Some(slot_payload(660, false)));
+    h.judge(&ok.id, RunStatus::Succeeded).await;
+    assert_eq!(h.row(&dot).await.attention_run_id, None);
+
+    // After the success, a failure starts the count again: attempt 1, retried a minute later.
+    h.at(780).await;
+    let again = h.watched(&dot).await;
+    assert_eq!(again.payload, Some(slot_payload(780, false)));
+    h.judge(&again.id, RunStatus::Failed).await;
+    let row = h.row(&dot).await;
+    assert_eq!(
+        row.retry,
+        Some(PendingRetry {
+            slot_at: ts(780),
+            attempt: 2,
+            at: ts(840)
+        })
+    );
+    assert!(h.notices().is_empty(), "announced once");
 }
