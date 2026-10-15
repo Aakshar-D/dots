@@ -121,8 +121,12 @@ impl Scheduler {
     /// While paused no pass runs: nothing fires and no retry starts. A resume does not catch
     /// up: the first pass after it moves every active row's `last_slot_at` to now.
     pub fn set_paused(&self, paused: bool) {
-        if self.paused.swap(paused, Ordering::SeqCst) && !paused {
+        if paused {
+            self.paused.store(true, Ordering::SeqCst);
+        } else if self.paused.load(Ordering::SeqCst) {
+            // `resumed` first: a pass that finds `paused` cleared finds the resume too.
             self.resumed.store(true, Ordering::SeqCst);
+            self.paused.store(false, Ordering::SeqCst);
         }
         self.reload();
     }
@@ -196,8 +200,17 @@ impl Scheduler {
         }
         let now = self.clock.now();
         if self.resumed.swap(false, Ordering::SeqCst) {
-            for dot_id in self.store.resume_schedules(now).await? {
-                self.updated(&dot_id);
+            match self.store.resume_schedules(now).await {
+                Ok(moved) => {
+                    for dot_id in moved {
+                        self.updated(&dot_id);
+                    }
+                }
+                Err(e) => {
+                    // Kept for the next pass, which would otherwise catch up the pause's slots.
+                    self.resumed.store(true, Ordering::SeqCst);
+                    return Err(e);
+                }
             }
         }
         self.pass(now).await.map(Some)

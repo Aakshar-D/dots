@@ -346,6 +346,39 @@ async fn the_lineage_index_exists() {
     assert_eq!(rows.len(), 1);
 }
 
+/// Scheduler v2 looks runs up by their parent (`resume_child`, `succeeded_after`) and by the
+/// run they retry (`retry_of`, set null when that run is deleted): both are indexed.
+#[tokio::test]
+async fn the_parent_and_retry_indexes_exist() {
+    let (dir, _store) = temp_store().await;
+    let pool = sqlx::SqlitePool::connect(&format!(
+        "sqlite://{}",
+        dir.path().join("dots.db").display()
+    ))
+    .await
+    .unwrap();
+    let names: Vec<(String, String)> = sqlx::query_as(
+        "SELECT name, sql FROM sqlite_master WHERE type = 'index' \
+         AND name IN ('runs_parent', 'runs_retry_of') ORDER BY name",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        names,
+        [
+            (
+                "runs_parent".to_string(),
+                "CREATE INDEX runs_parent ON runs(parent_run_id)".to_string()
+            ),
+            (
+                "runs_retry_of".to_string(),
+                "CREATE INDEX runs_retry_of ON runs(retry_of)".to_string()
+            ),
+        ]
+    );
+}
+
 // ---- Approvals v2: calls that Dots performs itself ----
 
 /// A parent run that parked with `n` approved calls, resumed: the calls are queued for Dots to

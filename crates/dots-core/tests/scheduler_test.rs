@@ -618,6 +618,42 @@ async fn a_resume_does_not_catch_up_the_slots_of_the_pause() {
     assert_eq!(h.runs(&dot).await.len(), 1);
 }
 
+/// Final review F6: a resume whose first pass fails on a store error is kept. The pass after
+/// the error wait moves the rows to its time, so the slots of the pause are not caught up.
+#[tokio::test]
+async fn a_resume_is_kept_across_a_store_error() {
+    let mut h = Harness::new().await;
+    let dot = h.dot("paused", Some(every(10, 0, true)), 0).await;
+    h.start();
+    h.settle().await;
+
+    h.sched.set_paused(true);
+    h.clock.set(after(35 * 60));
+    h.exec(
+        "ALTER TABLE schedule_state RENAME TO schedule_state_away",
+        &[],
+    )
+    .await;
+    h.sched.set_paused(false);
+    assert_eq!(
+        h.settle().await,
+        35 * 60 + 30,
+        "the pass failed: it is tried again 30 s later"
+    );
+    h.exec(
+        "ALTER TABLE schedule_state_away RENAME TO schedule_state",
+        &[],
+    )
+    .await;
+
+    assert_eq!(h.at(35 * 60 + 30).await, 35 * 60 + 90);
+    assert!(
+        h.runs(&dot).await.is_empty(),
+        "the slots of the pause are not caught up"
+    );
+    assert_eq!(h.row(&dot).await.last_slot_at, ts(35 * 60 + 30));
+}
+
 #[tokio::test]
 async fn a_scheduler_started_paused_does_nothing_until_resumed() {
     let mut h = Harness::new().await;

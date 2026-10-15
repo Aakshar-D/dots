@@ -28,3 +28,8 @@ CREATE TABLE schedule_state (
     attention_run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
     updated_at       TEXT NOT NULL
 );
+
+-- A resume run is found by its parent, and a retry by the run it repeats (a deleted run sets
+-- `retry_of` null in the runs that name it).
+CREATE INDEX runs_parent ON runs(parent_run_id);
+CREATE INDEX runs_retry_of ON runs(retry_of);
