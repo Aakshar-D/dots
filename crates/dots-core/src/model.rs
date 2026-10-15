@@ -265,7 +265,7 @@ pub struct ScheduleState {
     pub updated_at: String,
 }
 
-/// Input for `Store::update_schedule_state`: the fields to write, in one statement. `None`
+/// Input for `Store::update_schedule_state`: the fields to write, in one transaction. `None`
 /// leaves a field as it is; `Some(None)` clears it.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ScheduleChange {
@@ -273,6 +273,10 @@ pub struct ScheduleChange {
     pub watch_run_id: Option<Option<String>>,
     pub retry: Option<Option<PendingRetry>>,
     pub attention_run_id: Option<Option<String>>,
+    /// Also marks this run reviewed, in the same transaction, when the row is written: the
+    /// scheduler judged its failure into a retry or into "Needs attention", so it is not a run
+    /// to review as well.
+    pub reviewed_run: Option<String>,
     /// Writes only while the row watches this run: the change follows from judging it.
     pub if_watching: Option<String>,
     /// Writes only while `last_slot_at` is this: a reset of the row meanwhile moved it.

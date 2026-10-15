@@ -507,7 +507,9 @@ impl Scheduler {
 
     /// What a failed watched run leads to (spec §6). Failed before any tool call, with
     /// attempts left: the next attempt, `retry_delay` after it ended; the row keeps watching
-    /// it, the run the retry repeats. Otherwise "Needs attention".
+    /// it, the run the retry repeats. Otherwise "Needs attention". Either way the run is
+    /// judged, and the same write marks it reviewed: the retry or the flag speaks for it, so
+    /// it is not also a run to review.
     async fn failed(
         &self,
         run: &Run,
@@ -531,12 +533,14 @@ impl Scheduler {
             );
             return Ok(ScheduleChange {
                 retry: Some(Some(retry)),
+                reviewed_run: Some(run.id.clone()),
                 ..Default::default()
             });
         }
         Ok(ScheduleChange {
             watch_run_id: Some(None),
             attention_run_id: Some(Some(run.id.clone())),
+            reviewed_run: Some(run.id.clone()),
             ..Default::default()
         })
     }

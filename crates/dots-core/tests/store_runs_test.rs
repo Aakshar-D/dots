@@ -969,11 +969,12 @@ async fn failed_run(
         .unwrap()
 }
 
-/// A failed scheduled run that called no tool changed nothing, and its occurrence is retried
-/// or ends in "Needs attention", so it is not a run to review (Scheduler v2). Any other
-/// failure is.
+/// A failed run is a run to review whatever its trigger and whether it called a tool, until
+/// it is marked reviewed. The scheduler marks the failed runs it judges into a retry or into
+/// "Needs attention" (`ScheduleChange::reviewed_run`), so a failed scheduled run that is still
+/// listed is one it never judged, such as a run that a later slot overran.
 #[tokio::test]
-async fn a_failed_scheduled_run_that_called_no_tool_is_not_for_review() {
+async fn a_failed_run_is_for_review_whatever_its_trigger() {
     let (_d, store) = temp_store().await;
     let dot = store.create_dot(&spec("a")).await.unwrap();
     let quiet = failed_run(&store, &dot.id, TriggerKind::Schedule, None, false).await;
@@ -997,7 +998,7 @@ async fn a_failed_scheduled_run_that_called_no_tool_is_not_for_review() {
         .map(|r| r.id)
         .collect();
     ids.sort();
-    let mut want = vec![called.id, manual.id, hook.id];
+    let mut want = vec![quiet.id, retry.id, called.id, manual.id, hook.id];
     want.sort();
-    assert_eq!(ids, want, "not {} nor its retry {}", quiet.id, retry.id);
+    assert_eq!(ids, want);
 }

@@ -766,6 +766,72 @@ async fn a_failure_after_a_tool_call_needs_attention_until_a_scheduled_run_succe
     assert!(h.notices().is_empty(), "clearing the flag is quiet");
 }
 
+/// Final review F1: a run still running when the next slot fires is no longer watched, so the
+/// scheduler never judges it. When it then fails before any tool call, it is a run to review.
+/// A failed run the scheduler judged, into a retry or into "Needs attention", is marked
+/// reviewed with that write and is not listed.
+#[tokio::test]
+async fn an_overrun_run_that_fails_is_for_review_and_a_judged_one_is_not() {
+    let mut h = Harness::new().await;
+    let dot = h.dot("slow", Some(every(10, 60, true)), 0).await;
+    h.start();
+    h.settle().await;
+    h.at(60).await;
+    let overrun = h.watched(&dot).await;
+    assert!(h.store.claim_run(&overrun.id).await.unwrap());
+
+    // The next slot comes while the run is still running: a new run is queued and watched.
+    h.at(660).await;
+    let next = h.watched(&dot).await;
+    assert_ne!(next.id, overrun.id);
+    h.end(&overrun.id, RunStatus::Failed).await;
+    h.sched.reload();
+    h.settle().await;
+    let review = |h: &Harness| {
+        let store = h.store.clone();
+        async move {
+            let runs = store.unreviewed_thread_ends().await.unwrap();
+            runs.into_iter().map(|r| r.id).collect::<Vec<_>>()
+        }
+    };
+    assert_eq!(
+        review(&h).await,
+        [overrun.id.clone()],
+        "never judged: listed"
+    );
+
+    // The watched run fails before any call: judged into a retry, and marked reviewed.
+    h.judge(&next.id, RunStatus::Failed).await;
+    assert!(h.row(&dot).await.retry.is_some());
+    assert!(h
+        .store
+        .get_run(&next.id)
+        .await
+        .unwrap()
+        .reviewed_at
+        .is_some());
+    assert_eq!(review(&h).await, [overrun.id.clone()]);
+
+    // Its retry fails after a tool call: judged into "Needs attention", and marked reviewed.
+    h.at(720).await;
+    let retry = h.watched(&dot).await;
+    assert_eq!(retry.retry_of.as_deref(), Some(next.id.as_str()));
+    h.tool_call(&retry.id).await;
+    h.judge(&retry.id, RunStatus::Failed).await;
+    assert_eq!(
+        h.row(&dot).await.attention_run_id.as_deref(),
+        Some(retry.id.as_str())
+    );
+    assert!(h
+        .store
+        .get_run(&retry.id)
+        .await
+        .unwrap()
+        .reviewed_at
+        .is_some());
+    assert_eq!(review(&h).await, [overrun.id.clone()]);
+}
+
 /// Spec §6 and §10: a cancelled watched run, and a watched run that was deleted (its thread
 /// discarded), end the occurrence without a retry or "Needs attention".
 #[tokio::test]

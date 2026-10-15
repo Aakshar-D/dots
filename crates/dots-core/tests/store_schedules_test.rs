@@ -408,6 +408,52 @@ async fn an_update_writes_only_the_fields_it_names() {
     );
 }
 
+/// The write that judges a failed run marks it reviewed, in the same transaction, so a judged
+/// run leaves "Runs to review"; a write the guard refuses marks nothing.
+#[tokio::test]
+async fn the_write_that_judges_a_failed_run_marks_it_reviewed() {
+    let (_d, store) = temp_store().await;
+    let dot = scheduled(&store, "a").await;
+    let failed = failed_run(&store, &dot).await;
+    busy(&store, &dot, &failed).await;
+    let ends = |store: Store| async move {
+        let runs = store.unreviewed_thread_ends().await.unwrap();
+        runs.into_iter().map(|r| r.id).collect::<Vec<_>>()
+    };
+    assert_eq!(ends(store.clone()).await, [failed.clone()]);
+
+    let refused = ScheduleChange {
+        retry: Some(None),
+        reviewed_run: Some(failed.clone()),
+        if_watching: Some("another-run".into()),
+        ..Default::default()
+    };
+    assert_eq!(
+        store
+            .update_schedule_state(&dot.id, &refused, t(T1))
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(store.get_run(&failed).await.unwrap().reviewed_at, None);
+
+    let judged = ScheduleChange {
+        if_watching: Some(failed.clone()),
+        ..refused
+    };
+    let row = store
+        .update_schedule_state(&dot.id, &judged, t(T1))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.retry, None);
+    assert_eq!(
+        store.get_run(&failed).await.unwrap().reviewed_at.as_deref(),
+        Some(T1)
+    );
+    assert!(ends(store.clone()).await.is_empty());
+}
+
 #[tokio::test]
 async fn a_run_records_the_run_it_retries() {
     let (_d, store) = temp_store().await;

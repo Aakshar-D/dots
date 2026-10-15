@@ -315,10 +315,10 @@ impl Store {
             .collect()
     }
 
-    /// Writes the fields `change` names, in one statement, and returns the row. `None` when
-    /// nothing was written: the dot has no row, the row does not watch `change.if_watching`,
-    /// or its `last_slot_at` is not `change.if_last_slot_at` (a reset moved it after the
-    /// caller read the row).
+    /// Writes the fields `change` names, in one transaction, and returns the row. A written
+    /// row also marks `change.reviewed_run` reviewed. `None` when nothing was written: the dot
+    /// has no row, the row does not watch `change.if_watching`, or its `last_slot_at` is not
+    /// `change.if_last_slot_at` (a reset moved it after the caller read the row).
     pub async fn update_schedule_state(
         &self,
         dot_id: &str,
@@ -326,6 +326,7 @@ impl Store {
         now: DateTime<Utc>,
     ) -> Result<Option<ScheduleState>> {
         let retry = change.retry.as_ref().map(Option::as_ref);
+        let mut tx = self.pool.begin().await?;
         let row = sqlx::query(&format!(
             "UPDATE schedule_state SET \
              status = CASE WHEN ? THEN ? ELSE status END, \
@@ -357,8 +358,20 @@ impl Store {
         .bind(&change.if_watching)
         .bind(&change.if_last_slot_at)
         .bind(&change.if_last_slot_at)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await?;
-        row.as_ref().map(state_from_row).transpose()
+        let Some(row) = row else {
+            tx.rollback().await?;
+            return Ok(None);
+        };
+        if let Some(run_id) = &change.reviewed_run {
+            sqlx::query("UPDATE runs SET reviewed_at = ? WHERE id = ? AND reviewed_at IS NULL")
+                .bind(timestamp(now))
+                .bind(run_id)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        state_from_row(&row).map(Some)
     }
 }
