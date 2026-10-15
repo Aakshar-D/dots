@@ -180,7 +180,7 @@ impl Schedule {
     /// bound is inclusive), a time in a gap moves forward like a slot.
     pub fn until_instant<Tz: TimeZone>(&self, tz: &Tz) -> Option<DateTime<Tz>> {
         match self.until {
-            Some(Until::Date(date)) => match tz.from_local_datetime(&date) {
+            Some(Until::Date(date)) => match local_instants(tz, date) {
                 LocalResult::Ambiguous(_, latest) => Some(latest),
                 _ => resolve(tz, date),
             },
@@ -313,18 +313,41 @@ fn upcoming_within_date<A: TimeZone, Tz: TimeZone + 'static>(
     })
 }
 
+/// The instants in `tz` of the wall time `local`: those `tz.from_local_datetime` gives that
+/// read back as `local`, each with the offset `tz` has at that instant. chrono 0.4's Windows
+/// `Local` reports the wall time at the end of a fall-back overlap as ambiguous, with an
+/// earlier instant that reads back as the repeated hour, and the wall time at the start of a
+/// spring-forward gap as one instant that reads back as the hour after the gap. Kept as is,
+/// a 02:00 slot (US) would fire at the second 01:00, and a 02:00 cron would repeat 03:00.
+fn local_instants<Tz: TimeZone>(tz: &Tz, local: NaiveDateTime) -> LocalResult<DateTime<Tz>> {
+    let read_back = |t: DateTime<Tz>| {
+        let t = tz.from_utc_datetime(&t.naive_utc());
+        (t.naive_local() == local).then_some(t)
+    };
+    match tz.from_local_datetime(&local) {
+        LocalResult::Single(t) => read_back(t).map_or(LocalResult::None, LocalResult::Single),
+        LocalResult::Ambiguous(earliest, latest) => {
+            match (read_back(earliest), read_back(latest)) {
+                (Some(earliest), Some(latest)) => LocalResult::Ambiguous(earliest, latest),
+                (Some(t), None) | (None, Some(t)) => LocalResult::Single(t),
+                (None, None) => LocalResult::None,
+            }
+        }
+        LocalResult::None => LocalResult::None,
+    }
+}
+
 /// A local date and time as an instant in `tz`, with the DST rules of spec §3: a time that
 /// occurs twice is its earlier instant; a time in a gap moves forward by the length of the gap
-/// (02:30 on a night when clocks go from 02:00 to 03:00 becomes 03:30).
+/// (02:30 on a night when clocks go from 02:00 to 03:00 becomes 03:30). Only an instant that
+/// reads back as `local` counts (`local_instants`).
 fn resolve<Tz: TimeZone>(tz: &Tz, local: NaiveDateTime) -> Option<DateTime<Tz>> {
-    match tz.from_local_datetime(&local) {
+    match local_instants(tz, local) {
         LocalResult::Single(t) => Some(t),
         LocalResult::Ambiguous(earliest, _) => Some(earliest),
         LocalResult::None => {
             // Read the time with the offset from before the gap.
-            let before = tz
-                .from_local_datetime(&(local - TimeDelta::days(1)))
-                .earliest()?;
+            let before = local_instants(tz, local - TimeDelta::days(1)).earliest()?;
             let offset = TimeDelta::seconds(before.offset().fix().local_minus_utc() as i64);
             Some(tz.from_utc_datetime(&(local - offset)))
         }
@@ -336,9 +359,10 @@ fn resolve<Tz: TimeZone>(tz: &Tz, local: NaiveDateTime) -> Option<DateTime<Tz>> 
 const CRON_MARGIN: TimeDelta = TimeDelta::hours(3);
 
 /// A wall-clock time matched by a cron expression as an instant in `tz`: a time that occurs
-/// twice is its earlier instant, a time in a gap does not exist and is skipped (spec §3).
+/// twice is its earlier instant, a time in a gap does not exist and is skipped (spec §3). Only
+/// an instant that reads back as `wall` counts (`local_instants`).
 fn cron_resolve<Tz: TimeZone>(tz: &Tz, wall: NaiveDateTime) -> Option<DateTime<Tz>> {
-    match tz.from_local_datetime(&wall) {
+    match local_instants(tz, wall) {
         LocalResult::Single(t) | LocalResult::Ambiguous(t, _) => Some(t),
         LocalResult::None => None,
     }

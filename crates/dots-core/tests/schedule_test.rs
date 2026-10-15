@@ -1,7 +1,7 @@
 mod common;
 
 use chrono::{DateTime, Local, NaiveDateTime, NaiveTime, TimeDelta, Utc, Weekday};
-use common::tz::{at, rfc, TestTz};
+use common::tz::{at, rfc, ChronoWindowsTz, TestTz};
 use dots_core::schedule::{
     due_slot, newest_slot_in, next_slot, slots_after, upcoming, Rule, Schedule, Until,
 };
@@ -470,6 +470,84 @@ fn cron_across_the_gap_and_the_overlap() {
             "2026-10-25T02:02:00+02:00",
             "2026-10-25T02:03:00+02:00"
         ]
+    );
+}
+
+/// Final review F3: chrono's Windows `Local` reports the end of the overlap (03:00 on
+/// fall-back day) as ambiguous, its earlier instant reading back as the second 02:00, and the
+/// start of the gap (02:00 on spring-forward day) as one instant that reads back as 03:00.
+/// Only an instant that reads back as the asked wall time counts: 03:00 fires at 03:00+01:00,
+/// not an hour early, and 02:00 on spring-forward day is in the gap (Daily moves it forward,
+/// cron skips it).
+#[test]
+fn a_wall_time_counts_only_if_it_reads_back_as_itself() {
+    let tz = ChronoWindowsTz;
+    let first = |rule: &Rule, after: &str, n: usize| -> Vec<String> {
+        slots_after(rule, &at(after), &tz)
+            .unwrap()
+            .take(n)
+            .map(|t| t.to_rfc3339())
+            .collect()
+    };
+    let newest = |rule: &Rule, after: &str, upto: &str| {
+        newest_slot_in(rule, &at(after), &at(upto), &tz)
+            .unwrap()
+            .map(|t| t.to_rfc3339())
+    };
+
+    // The end of the overlap.
+    for r in [daily("03:00"), cron("0 0 3 * * *")] {
+        assert_eq!(
+            first(&r, "2026-10-24T12:00:00+02:00", 2),
+            ["2026-10-25T03:00:00+01:00", "2026-10-26T03:00:00+01:00"],
+            "{r:?}"
+        );
+        assert_eq!(
+            newest(&r, "2026-10-25T00:00:00+02:00", "2026-10-25T02:30:00+01:00"),
+            None,
+            "{r:?} is not due an hour early"
+        );
+    }
+    assert_eq!(
+        first(&cron("0 0 * * * *"), "2026-10-25T00:30:00+02:00", 4),
+        [
+            "2026-10-25T01:00:00+02:00",
+            "2026-10-25T02:00:00+02:00",
+            "2026-10-25T03:00:00+01:00",
+            "2026-10-25T04:00:00+01:00"
+        ]
+    );
+    let until = on(daily("09:00"), Some(Until::Date(local("2026-10-25T03:00"))));
+    assert_eq!(
+        until.until_instant(&tz).unwrap().to_rfc3339(),
+        "2026-10-25T03:00:00+01:00"
+    );
+
+    // The start of the gap.
+    assert_eq!(
+        first(&daily("02:00"), "2026-03-28T12:00:00+01:00", 2),
+        ["2026-03-29T03:00:00+02:00", "2026-03-30T02:00:00+02:00"]
+    );
+    assert_eq!(
+        first(&cron("0 0 2 * * *"), "2026-03-28T12:00:00+01:00", 2),
+        ["2026-03-30T02:00:00+02:00", "2026-03-31T02:00:00+02:00"]
+    );
+    assert_eq!(
+        first(&cron("0 0 * * * *"), "2026-03-29T00:30:00+01:00", 3),
+        [
+            "2026-03-29T01:00:00+01:00",
+            "2026-03-29T03:00:00+02:00",
+            "2026-03-29T04:00:00+02:00"
+        ],
+        "the 03:00 instant once"
+    );
+    assert_eq!(
+        newest(
+            &cron("0 0 2 * * *"),
+            "2026-03-29T00:30:00+01:00",
+            "2026-03-29T03:30:00+02:00"
+        ),
+        None
     );
 }
 

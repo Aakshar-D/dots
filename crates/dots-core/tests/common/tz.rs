@@ -73,3 +73,42 @@ pub fn at(s: &str) -> DateTime<TestTz> {
 pub fn rfc(times: impl IntoIterator<Item = DateTime<TestTz>>) -> Vec<String> {
     times.into_iter().map(|t| t.to_rfc3339()).collect()
 }
+
+/// `TestTz` as chrono 0.4's Windows `Local` reads the two ends of its DST changes (final
+/// review F3): the wall time at the end of the overlap, 03:00 on 25 October 2026, is reported
+/// `Ambiguous(+02:00, +01:00)`, although 03:00+02:00 is 01:00 UTC, which reads back as the
+/// second 02:00; the wall time at the start of the gap, 02:00 on 29 March 2026, is reported
+/// `Single(+01:00)`, which is 01:00 UTC and reads back as 03:00. Every other time is
+/// `TestTz`'s.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChronoWindowsTz;
+
+impl TimeZone for ChronoWindowsTz {
+    type Offset = FixedOffset;
+
+    fn from_offset(_: &FixedOffset) -> Self {
+        ChronoWindowsTz
+    }
+
+    fn offset_from_local_date(&self, local: &NaiveDate) -> LocalResult<FixedOffset> {
+        self.offset_from_local_datetime(&local.and_hms_opt(0, 0, 0).unwrap())
+    }
+
+    fn offset_from_local_datetime(&self, local: &NaiveDateTime) -> LocalResult<FixedOffset> {
+        if *local == utc("2026-10-25T03:00") {
+            LocalResult::Ambiguous(summer(), winter())
+        } else if *local == utc("2026-03-29T02:00") {
+            LocalResult::Single(winter())
+        } else {
+            TestTz.offset_from_local_datetime(local)
+        }
+    }
+
+    fn offset_from_utc_date(&self, utc: &NaiveDate) -> FixedOffset {
+        TestTz.offset_from_utc_date(utc)
+    }
+
+    fn offset_from_utc_datetime(&self, at: &NaiveDateTime) -> FixedOffset {
+        TestTz.offset_from_utc_datetime(at)
+    }
+}
