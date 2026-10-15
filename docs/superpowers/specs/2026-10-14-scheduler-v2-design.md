@@ -2,6 +2,13 @@
 
 Date: 2026-10-14. Status: approved in conversation, section by section; this document is the written form.
 
+**Changed during implementation (2026-10-15).** This spec was amended after the plan (`docs/superpowers/plans/2026-10-14-scheduler-v2.md`) was written, to say what was built:
+
+- §3 Cron: an ambiguous wall time fires once, at its earlier instant; a time in the gap is skipped; a wall time counts only at an instant that reads back as itself (the ends of the overlap and the gap on Windows).
+- §6: a slot that drops a pending retry carries its attempt; a retry too late to start is dropped into "Needs attention"; a failed run the scheduler judges is marked reviewed; what clears the flag.
+- §8: `preview_schedule` refuses a schedule that would never run.
+- §9: the run view's line for a slot's run that carries an attempt, and for a retry.
+
 Extends the main spec `docs/superpowers/specs/2026-10-08-dots-design.md` (§3 data model, §4 run lifecycle, §8 scheduler, §12 UI). Section 11 lists the passages of the main spec this changes.
 
 ## 1. Why
@@ -74,7 +81,10 @@ A **slot** is an instant at which the schedule is due. `slots_after(rule, after,
 - `Daily` and `Weekly`: the wall-clock time on each matching day, with these DST rules:
   - A local time that does not exist (spring-forward gap) moves forward by the length of the gap: 02:30 on a day when clocks go from 02:00 to 03:00 becomes 03:30.
   - A local time that occurs twice (fall-back overlap) fires once, at the earlier instant.
-- `Cron`: as the `cron` crate computes it in `Local`. Its behaviour across DST is whatever the crate does; the plan records what that is in a test and in this section's amendment, and does not change it.
+- `Cron`: the wall-clock times the `cron` crate computes, each taken in `Local` with the same overlap rule as Daily (changed during implementation; the first version followed the crate):
+  - A wall time that occurs twice (fall-back overlap) fires once, at its earlier instant.
+  - A wall time that does not exist (spring-forward gap) is skipped, not moved.
+  - A wall time counts only at an instant that reads back as that wall time. chrono 0.4's Windows `Local` reports the wall time at the end of the overlap (02:00 in the US) as ambiguous, with an earlier instant that the clock shows as the second 01:00, and the wall time at the start of the gap as one instant that the clock shows as 03:00. Kept as is, a Daily or cron at 02:00 would fire an hour early on fall-back day, and a cron at 02:00 would repeat 03:00 on spring-forward day. The same rule applies to Daily, Weekly, `Once` and `Until::Date`, where a time that is not read back is taken as in the gap.
 
 All times are the PC's local time zone as the OS reports it. When the zone changes (travel, a settings change), the next pass computes slots in the new zone; `Every` is unaffected.
 
@@ -129,7 +139,7 @@ Then sleep until the earliest of: the next slot of every active row, every `retr
 
 **Fire.** If the dot already has a `queued` run, the slot is coalesced into it (as today, logged) and that run becomes the watched run. Otherwise a run is enqueued with trigger `schedule` and payload `{"scheduled_for": <slot, RFC 3339>}`, plus `"caught_up": true` for a catch-up. Either way `fired_count` goes up by one, and a pending retry of an older slot is dropped: the newer occurrence serves.
 
-**Pause.** While schedules are paused (the setting `schedules_paused`), no pass runs and no retry starts. On resume, every active row gets `last_slot_at = now` (a deliberate pause never catches up); a retry that came due during the pause starts on the first pass. At a start with schedules paused nothing happens until resume.
+**Pause.** While schedules are paused (the setting `schedules_paused`), no pass runs and no retry starts. On resume, every active row gets `last_slot_at = now` (a deliberate pause never catches up); a retry that came due during the pause starts on the first pass, unless it is too late to start (§6). At a start with schedules paused nothing happens until resume.
 
 **At start.** Recovery (`recover_interrupted`) runs first, as today. The first pass then applies the rules above, so a PC that was off at 09:00 and starts at 09:20 runs the 09:00 slot once if `catch_up` is on.
 
@@ -156,10 +166,13 @@ Then sleep until the earliest of: the next slot of every active row, every `retr
 - If the dot already has a `queued` run, the retry is coalesced into it and that run is watched.
 - Otherwise a run is enqueued with trigger `schedule`, `retry_of = <the failed run>` and payload `{"scheduled_for": <retry_slot_at>, "attempt": k + 1}`.
 - A retry does not count toward `Until::Count`.
-- A slot that fires while a retry is pending drops the retry.
+- A slot that fires while a retry is pending drops the retry. The slot's run carries the dropped retry's attempt (payload `attempt`), so the attempts count failures in a row across occurrences, and a schedule that fires more often than its retries come still reaches the sixth attempt. A slot with no pending retry is attempt 1.
+- A retry that is due but too late to start is dropped, and the occurrence failed in the end: "Needs attention" is set for the failed run the retry would repeat, notified once, as when the attempts are used up. Too late: its slot is 24 h old or older (the catch-up window), or the schedule has no `catch_up` and the retry is 60 s overdue or more (Dots was closed, or schedules were paused).
 - The retry fields are cleared when the retry starts or is dropped.
 
-**Needs attention.** Set when an occurrence's attempts are used up or its failure is not retryable: `attention_run_id = <the last failed run>`. The schedule keeps firing. The flag clears when a later scheduled run of the dot succeeds, when the person dismisses it, or when the row is reset.
+**Review.** The write that judges a failed watched run into a retry or into "Needs attention" also sets that run's `reviewed_at`: the retry, or the flag the Inbox lists, speaks for it, so it is not a run to review as well, and dismissing the flag does not bring it back. A failed scheduled run the scheduler never judged is a run to review, as any failed run is: one that a later slot overran (it was still running when the next slot queued a new watched run), or one that ended after its dot was disabled or its schedule changed.
+
+**Needs attention.** Set when an occurrence's attempts are used up, its failure is not retryable, or its retry was too late to start: `attention_run_id = <the last failed run>`. The schedule keeps firing. The flag clears when a later scheduled or manual run of the dot succeeds ("Run now"), when the person dismisses it, or when the row is reset. A resume run that succeeds counts when its chain of parked runs starts with a manual or scheduled run (a "Run now" that needed an approval); a chat or webhook run does not count. Each pass looks at every flagged row, whatever its status and whether the dot is enabled, so a `Once` or the last occurrence of a bounded schedule, which is completed at once, and a disabled dot, whose flag the Inbox still lists, are cleared too.
 
 ## 7. Events and notifications
 
@@ -174,7 +187,7 @@ Then sleep until the earliest of: the next slot of every active row, every `retr
 ## 8. Commands and contract
 
 - `DotSpec.schedule` in the contract becomes the `Schedule` object (zod: a discriminated union on `rule.kind`).
-- `preview_schedule(schedule: Schedule, n: u32) -> Vec<String>`: the next `n` slots after now as RFC 3339 local times, `[]` when there is none. It validates the schedule like `validate()` (the UI parses no schedule).
+- `preview_schedule(schedule: Schedule, n: u32) -> Vec<String>`: the next `n` slots after now as RFC 3339 local times. It validates the schedule like `validate()` (the UI parses no schedule), and refuses a schedule that would never run (`Invalid`, "this schedule would never run", as a save does) instead of answering `[]` (changed during implementation).
 - `DotOverview` gains `schedule_state: Option<ScheduleState>`:
   - `status`, `fired_count`, `next_fire` (RFC 3339 local or null; replaces the top-level `next_fire`);
   - `retry_at` and `retry_attempt` (null unless a retry waits);
@@ -207,7 +220,7 @@ Then sleep until the earliest of: the next slot of every active row, every `retr
 
 **Inbox.** A group "Needs attention": per dot, the failed run (a link to the run view), its error, "Run now" and "Dismiss".
 
-**Run view.** Under the trigger: "Scheduled for 09:00", "Scheduled for 09:00, caught up after the PC was off", or "Retry 2 of 6 of run <link>".
+**Run view.** Under the trigger: "Scheduled for 09:00", "Scheduled for 09:00, caught up after the PC was off", "Scheduled for 09:00 · attempt 3 of 6" for a slot's run that carries the attempt of a retry it dropped (no `retry_of`), or "Retry 2 of 6 of the failed run" for a retry (with `retry_of`), the words being the link to the failed run. "Scheduled for" gives the date and the time (changed during implementation).
 
 ## 10. Errors and edge cases
 
@@ -233,7 +246,7 @@ The plan edits these passages of `2026-10-08-dots-design.md` in the commits that
 
 ## 12. Testing
 
-- **Slots (unit).** Every kind, with a hand-written test `TimeZone` that has a one-hour spring-forward gap and a one-hour fall-back overlap (no new dependency): the moved 02:30, the single fire in the overlap, `Every` in elapsed time, weekly day sets, `Once` before and after `after`, `Until::Date` inclusive. One test records what the `cron` crate does across the gap and the overlap.
+- **Slots (unit).** Every kind, with a hand-written test `TimeZone` that has a one-hour spring-forward gap and a one-hour fall-back overlap (no new dependency): the moved 02:30, the single fire in the overlap, `Every` in elapsed time, weekly day sets, `Once` before and after `after`, `Until::Date` inclusive. One test checks cron across the gap and the overlap (§3), and one the ends of the overlap and the gap as chrono's Windows `Local` reports them, with a second test zone that reports them so.
 - **Validation (unit).** Each refusal in §2; a past `Once` refused on create and change but loaded as completed.
 - **Migration.** A database with a cron string upgrades to the object with `catch_up: false`; `schedule_state` is empty until the first pass or save.
 - **Scheduler (fake clock).**

@@ -220,8 +220,16 @@ the call again. See `2026-10-13-approvals-v2-design.md` §3.
    often than its retries still reaches the sixth; a slot with no pending retry is attempt
    1). A failure after a tool call, or of the sixth attempt,
    sets "Needs attention" (`schedule_state.attention_run_id`); the schedule keeps firing. A
-   later manual or scheduled run of the dot that succeeds, a dismiss, or a reset of the row
-   clears it. A cancelled or deleted watched run ends the occurrence quietly.
+   retry that comes due too late is not started, and its occurrence ends the same way (notified
+   once): its slot is 24 h old or older, or the schedule has no `catch_up` and the retry is
+   60 s overdue or more (Dots was closed, or schedules were paused). The write that judges a
+   failed watched run into a retry or into "Needs attention" also sets that run's
+   `reviewed_at`: the retry or the flag
+   speaks for it (§12 Inbox). A later manual or scheduled run of the dot that succeeds, or a
+   resume run that succeeds whose chain starts with one (a "Run now" that needed an approval),
+   clears the flag, whatever the schedule's status and whether the dot is enabled; so do a
+   dismiss and a reset of the row. A chat or webhook run does not. A cancelled or deleted
+   watched run ends the occurrence quietly.
 2. **Dispatch.** The runner starts queued runs FIFO while running count < `max_concurrent_runs`
    and the dot has no other `running` run.
 3. **Workspace.**
@@ -453,7 +461,9 @@ React + Vite + TypeScript inside Tauri 2. Screens:
 - **Run view** — live transcript (assistant text, collapsible tool calls/results), worktree diff,
   summary, status, tokens; cancel, discard worktree, open folder. From Scheduler v2 a
   scheduled run's trigger has a line under it: "Scheduled for <slot>", "…, caught up after
-  the PC was off", or "Retry 2 of 6 of the failed run" with a link to that run.
+  the PC was off", "Scheduled for <slot> · attempt 3 of 6" for a slot's run that carries the
+  attempt of a retry it dropped, or "Retry 2 of 6 of the failed run" with a link to that run
+  for a retry (`retry_of`).
 - **Inbox** — pending approvals (tool, pretty-printed input, approve / deny with note),
   schedules that need attention (from Scheduler v2) and finished runs awaiting review
   (definition in §12). Unread count mirrored in the tray tooltip and the sidebar.
@@ -586,9 +596,12 @@ The Inbox lists:
 - from Scheduler v2, schedules that need attention (an occurrence failed in the end);
 - runs awaiting review: the latest run of each lineage that is terminal, has `reviewed_at`
   NULL, and either kept its worktree (worktree mode, worktree still on disk) or `failed`.
-  From Scheduler v2 a failed run with trigger `schedule` that recorded no `tool_call` event
-  is not listed: it changed nothing, and its occurrence is retried or ends in "needs
-  attention", which the Inbox lists instead.
+  From Scheduler v2 the scheduler sets `reviewed_at` on a failed run it judges into a retry
+  or into "needs attention", in the same write: the retry, or the flag the Inbox lists, speaks
+  for it, so it is not listed here as well, and dismissing the flag does not bring it back. A
+  failed scheduled run the scheduler never judged is listed, as any failed run is: one that a
+  later slot overran (still running when the next slot queued a new watched run), or one that
+  ended after its dot was disabled or its schedule changed.
 
 A run leaves the Inbox through "Discard worktree" or "Mark reviewed". Folder-mode successes only
 notify. Unread count = pending approvals + runs awaiting review + schedules that need
@@ -598,7 +611,9 @@ The "Needs attention" group stands between the approvals and the runs to review.
 names the dot (a link to its editor), when the run failed and its error, a link to the failed
 run, "Run now" (starts a `manual` run and opens it) and "Dismiss"
 (`dismiss_schedule_attention`). Both reload the Inbox and the Dots list when they answer. A
-flag leaves the Inbox when it is dismissed or a later run of the dot succeeds.
+flag leaves the Inbox when it is dismissed or a later manual or scheduled run of the dot
+succeeds (also its resume run, after an approval), also for a completed schedule or a disabled
+dot; a chat or webhook run does not clear it.
 
 ### Tauri shell (`apps/dots-app`)
 
