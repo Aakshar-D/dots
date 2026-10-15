@@ -426,8 +426,8 @@ fn cron_is_what_the_cron_crate_computes() {
     ));
 }
 
-/// Records what the `cron` crate does across DST (spec §3); Dots does not change it, except
-/// that a slot earlier than the one before it is dropped, so slots stay in order.
+/// Cron follows the Daily rules in spirit (spec §3): a wall-clock time that occurs twice fires
+/// once, at the earlier instant; one in the gap does not exist and is skipped, not moved.
 #[test]
 fn cron_across_the_gap_and_the_overlap() {
     // Gap: a time that does not exist is skipped, not moved.
@@ -443,36 +443,132 @@ fn cron_across_the_gap_and_the_overlap() {
         first(&cron("0 30 2 * * *"), "2026-03-28T12:00:00+01:00", 2),
         ["2026-03-30T02:30:00+02:00", "2026-03-31T02:30:00+02:00"]
     );
-    // Overlap: a time that occurs twice fires twice.
+    // Overlap: a time that occurs twice fires once, at the earlier instant.
     assert_eq!(
         first(&cron("0 0 * * * *"), "2026-10-25T00:30:00+02:00", 4),
         [
             "2026-10-25T01:00:00+02:00",
             "2026-10-25T02:00:00+02:00",
-            "2026-10-25T02:00:00+01:00",
-            "2026-10-25T03:00:00+01:00"
+            "2026-10-25T03:00:00+01:00",
+            "2026-10-25T04:00:00+01:00"
         ]
     );
     assert_eq!(
         first(&cron("0 30 2 * * *"), "2026-10-24T12:00:00+02:00", 3),
         [
             "2026-10-25T02:30:00+02:00",
-            "2026-10-25T02:30:00+01:00",
-            "2026-10-26T02:30:00+01:00"
+            "2026-10-26T02:30:00+01:00",
+            "2026-10-27T02:30:00+01:00"
         ]
     );
-    // Every minute: after the second 02:00 the crate goes back to the first pass of the hour
-    // (02:01+02:00); those slots are dropped, so the first pass ends at 02:00.
     assert_eq!(
         first(&cron("0 * * * * *"), "2026-10-25T01:58:00+02:00", 5),
         [
             "2026-10-25T01:59:00+02:00",
             "2026-10-25T02:00:00+02:00",
-            "2026-10-25T02:00:00+01:00",
-            "2026-10-25T02:01:00+01:00",
-            "2026-10-25T02:02:00+01:00"
+            "2026-10-25T02:01:00+02:00",
+            "2026-10-25T02:02:00+02:00",
+            "2026-10-25T02:03:00+02:00"
         ]
     );
+}
+
+#[test]
+fn a_cron_walk_resumed_from_any_slot_is_the_tail_of_the_walk() {
+    for (expr, start, n) in [
+        ("0 0 * * * *", "2026-10-25T00:30:00+02:00", 6),
+        ("0 30 2 * * *", "2026-10-24T12:00:00+02:00", 4),
+        ("0 * * * * *", "2026-10-25T01:58:00+02:00", 70),
+        ("0 0 * * * *", "2026-03-29T00:30:00+01:00", 6),
+    ] {
+        let r = cron(expr);
+        let walk = first(&r, start, n);
+        assert_eq!(walk.len(), n);
+        for i in 0..n - 1 {
+            assert_eq!(
+                first(&r, &walk[i], n - i - 1),
+                walk[i + 1..],
+                "{expr} resumed from {}",
+                walk[i]
+            );
+        }
+    }
+}
+
+#[test]
+fn cron_newest_slot_in_agrees_with_the_forward_walk_in_the_overlap() {
+    let forward = |rule: &Rule, after: &str, upto: &str| {
+        let upto = at(upto);
+        slots_after(rule, &at(after), &TestTz)
+            .unwrap()
+            .take_while(|t| *t <= upto)
+            .last()
+            .map(|t| t.to_rfc3339())
+    };
+    let hourly = cron("0 0 * * * *");
+    let daily_230 = cron("0 30 2 * * *");
+    let minutely = cron("0 * * * * *");
+    for (rule, after, upto, expected) in [
+        (
+            &hourly,
+            "2026-10-25T01:30:00+02:00",
+            "2026-10-25T02:30:00+01:00",
+            Some("2026-10-25T02:00:00+02:00"),
+        ),
+        (
+            &hourly,
+            "2026-10-25T02:00:00+02:00",
+            "2026-10-25T02:30:00+01:00",
+            None,
+        ),
+        (
+            &hourly,
+            "2026-10-25T02:00:00+02:00",
+            "2026-10-25T03:00:00+01:00",
+            Some("2026-10-25T03:00:00+01:00"),
+        ),
+        (
+            &daily_230,
+            "2026-10-25T02:30:00+02:00",
+            "2026-10-25T02:45:00+01:00",
+            None,
+        ),
+        (
+            &daily_230,
+            "2026-10-24T12:00:00+02:00",
+            "2026-10-25T02:45:00+01:00",
+            Some("2026-10-25T02:30:00+02:00"),
+        ),
+        (
+            &minutely,
+            "2026-10-25T02:00:00+02:00",
+            "2026-10-25T02:30:00+02:00",
+            Some("2026-10-25T02:30:00+02:00"),
+        ),
+        (
+            &minutely,
+            "2026-10-25T02:00:00+02:00",
+            "2026-10-25T02:30:00+01:00",
+            Some("2026-10-25T02:59:00+02:00"),
+        ),
+        (
+            &minutely,
+            "2026-10-25T02:59:00+02:00",
+            "2026-10-25T02:30:00+01:00",
+            None,
+        ),
+    ] {
+        assert_eq!(
+            forward(rule, after, upto).as_deref(),
+            expected,
+            "forward {after}..{upto}"
+        );
+        assert_eq!(
+            newest(rule, after, upto).as_deref(),
+            expected,
+            "newest {after}..{upto}"
+        );
+    }
 }
 
 // --- Newest slot in a window ---

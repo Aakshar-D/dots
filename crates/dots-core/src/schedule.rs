@@ -176,18 +176,13 @@ pub fn slots_after<A: TimeZone, Tz: TimeZone + 'static>(
         Rule::Daily { time } => wall_clock_slots(tz, after, *time, None),
         Rule::Weekly { days, time } => wall_clock_slots(tz, after, *time, Some(days.clone())),
         Rule::Cron { expr } => {
-            let mut last = after.clone();
+            let tz = tz.clone();
+            let start = after.naive_local() - CRON_MARGIN;
             Box::new(
                 crate::scheduler::parse_cron(expr)?
-                    .after_owned(after)
-                    .filter(move |t| {
-                        // The crate can step back in a fall-back overlap; keep slots in order.
-                        let later = *t > last;
-                        if later {
-                            last = t.clone();
-                        }
-                        later
-                    }),
+                    .after_owned(start.and_utc())
+                    .filter_map(move |wall| cron_resolve(&tz, wall.naive_utc()))
+                    .filter(move |t| *t > after),
             )
         }
     })
@@ -218,11 +213,13 @@ pub fn newest_slot_in<A: TimeZone, B: TimeZone, Tz: TimeZone + 'static>(
             newest_wall_clock(tz, &after, &upto, *time, Some(days.as_slice()))
         }
         Rule::Cron { expr } => {
-            // The crate's backward iterator starts strictly before its start unless the start
-            // has a fraction of a second: one nanosecond more makes `upto` itself a candidate.
-            let mut back = crate::scheduler::parse_cron(expr)?
-                .after_owned(upto.clone() + TimeDelta::nanoseconds(1));
-            std::iter::from_fn(|| back.next_back()).find(|t| *t <= upto)
+            // Walk the wall clock backwards from past `upto`; the first slot at or before it
+            // is the newest, the same set `slots_after` walks forward.
+            let start = upto.naive_local() + CRON_MARGIN + TimeDelta::nanoseconds(1);
+            let mut back = crate::scheduler::parse_cron(expr)?.after_owned(start.and_utc());
+            std::iter::from_fn(|| back.next_back())
+                .filter_map(|wall| cron_resolve(tz, wall.naive_utc()))
+                .find(|t| *t <= upto)
         }
     };
     Ok(newest.filter(|t| *t > after))
@@ -295,6 +292,19 @@ fn resolve<Tz: TimeZone>(tz: &Tz, local: NaiveDateTime) -> Option<DateTime<Tz>> 
             let offset = TimeDelta::seconds(before.offset().fix().local_minus_utc() as i64);
             Some(tz.from_utc_datetime(&(local - offset)))
         }
+    }
+}
+
+/// How far from a wall-clock time the cron walk starts, so that an offset change of a few
+/// hours cannot hide a slot.
+const CRON_MARGIN: TimeDelta = TimeDelta::hours(3);
+
+/// A wall-clock time matched by a cron expression as an instant in `tz`: a time that occurs
+/// twice is its earlier instant, a time in a gap does not exist and is skipped (spec §3).
+fn cron_resolve<Tz: TimeZone>(tz: &Tz, wall: NaiveDateTime) -> Option<DateTime<Tz>> {
+    match tz.from_local_datetime(&wall) {
+        LocalResult::Single(t) | LocalResult::Ambiguous(t, _) => Some(t),
+        LocalResult::None => None,
     }
 }
 

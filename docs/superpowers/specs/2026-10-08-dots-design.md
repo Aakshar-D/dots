@@ -443,7 +443,7 @@ Window close hides to tray. Tray menu: Open, Inbox (n), Pause all schedules, Qui
 ## 9. Testing
 
 - **Unit (dots-core):** policy resolution and pattern matching; schedule slots, with DST checked in a
-  hand-written test time zone; run state
+  hand-written test time zone (cron too: a wall-clock time that occurs twice fires once, at the earlier instant; one in the spring-forward gap is skipped); run state
   transitions; path confinement including `..`, absolute paths, symlinks, junctions; prompt
   assembly.
 - **Stream-json parser:** fixtures recorded from real `claude -p` runs (success, tool use,
