@@ -2,7 +2,9 @@
 //! runtime keeps a row in line with its dot (`sync_schedule_state`); the scheduler's pass
 //! handles slots and retries with `record_slot` and `start_retry` and writes the rest with
 //! `update_schedule_state`, each in one transaction. Callers pass `now`, so the scheduler's
-//! clock decides every time written here.
+//! clock decides every time written here. The judging of a watched run asks the runs what
+//! it needs here too (`resume_child`, `called_a_tool`, `succeeded_after`), and the Inbox
+//! lists the flags with `list_schedule_attention`.
 
 use chrono::{DateTime, Utc};
 use sqlx::sqlite::{SqliteConnection, SqliteRow};
@@ -11,7 +13,7 @@ use sqlx::Row;
 use super::runs::insert_run;
 use super::Store;
 use crate::model::{
-    NewRun, PendingRetry, ScheduleChange, ScheduleState, ScheduleStatus, SlotStart,
+    NeedsAttention, NewRun, PendingRetry, ScheduleChange, ScheduleState, ScheduleStatus, SlotStart,
 };
 use crate::schedule::Schedule;
 use crate::util::timestamp;
@@ -238,6 +240,78 @@ impl Store {
         } else {
             SlotStart::Enqueued(run)
         })
+    }
+
+    /// The resume run that took over from `run_id` after its approvals were decided, if any
+    /// (the newest, should there be more than one).
+    pub async fn resume_child(&self, run_id: &str) -> Result<Option<String>> {
+        let id = sqlx::query_scalar(
+            "SELECT id FROM runs WHERE parent_run_id = ? AND trigger_kind = 'resume' \
+             ORDER BY queued_at DESC, id DESC LIMIT 1",
+        )
+        .bind(run_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(id)
+    }
+
+    /// Whether `run_id`, or a run it resumes (up its chain of parked parents), has a
+    /// `tool_call` event: it may have changed something, so it is not retried (spec §6).
+    pub async fn called_a_tool(&self, run_id: &str) -> Result<bool> {
+        let called = sqlx::query_scalar(
+            "WITH RECURSIVE chain(id) AS ( \
+               SELECT ? \
+               UNION SELECT r.parent_run_id FROM runs r JOIN chain c ON r.id = c.id \
+               WHERE r.trigger_kind = 'resume' AND r.parent_run_id IS NOT NULL) \
+             SELECT EXISTS (SELECT 1 FROM run_events \
+               WHERE kind = 'tool_call' AND run_id IN (SELECT id FROM chain))",
+        )
+        .bind(run_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(called)
+    }
+
+    /// Whether a manual or scheduled run of `dot_id` queued after `run_id` has succeeded. A
+    /// parked run closed by its decision does not count: its resume run carries the outcome.
+    pub async fn succeeded_after(&self, dot_id: &str, run_id: &str) -> Result<bool> {
+        let found = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM runs r, runs f \
+             WHERE f.id = ? AND r.dot_id = ? AND r.id <> f.id \
+             AND r.trigger_kind IN ('manual', 'schedule') AND r.status = 'succeeded' \
+             AND r.queued_at >= f.queued_at \
+             AND NOT EXISTS (SELECT 1 FROM runs c WHERE c.parent_run_id = r.id \
+                             AND c.trigger_kind = 'resume'))",
+        )
+        .bind(run_id)
+        .bind(dot_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(found)
+    }
+
+    /// The schedules that need attention (spec §8, the Inbox), newest failure first. A dot
+    /// that is disabled keeps its flag until it is dismissed or the row is reset.
+    pub async fn list_schedule_attention(&self) -> Result<Vec<NeedsAttention>> {
+        let rows = sqlx::query(
+            "SELECT s.dot_id, d.name, r.id, r.error, COALESCE(r.ended_at, r.queued_at) \
+             AS failed_at FROM schedule_state s \
+             JOIN dots d ON d.id = s.dot_id JOIN runs r ON r.id = s.attention_run_id \
+             ORDER BY failed_at DESC, s.dot_id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|row| {
+                Ok(NeedsAttention {
+                    dot_id: row.try_get("dot_id")?,
+                    dot_name: row.try_get("name")?,
+                    run_id: row.try_get("id")?,
+                    error: row.try_get("error")?,
+                    failed_at: row.try_get("failed_at")?,
+                })
+            })
+            .collect()
     }
 
     /// Writes the fields `change` names, in one statement, and returns the row. `None` when

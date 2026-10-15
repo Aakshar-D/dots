@@ -256,6 +256,11 @@ pub fn samples() -> Value {
                 ..approval()
             }}),
             to(RuntimeEvent::ScheduleUpdated { dot_id: "01J0DOT".into() }),
+            to(RuntimeEvent::ScheduleAttention {
+                dot_id: "01J0DOT".into(),
+                run_id: "01J0RUN".into(),
+                error: Some("model server unreachable".into()),
+            }),
         ],
         // What `approval_rule_candidates` answers for the `Approval` sample.
         "RuleCandidate": to(allow_candidates(
@@ -282,6 +287,13 @@ pub fn samples() -> Value {
                 run: run(),
                 dot_name: "nightly-tests".into(),
                 worktree_exists: true,
+            }],
+            attention: vec![NeedsAttention {
+                dot_id: "01J0DOT".into(),
+                dot_name: "nightly-tests".into(),
+                run_id: "01J0RUN".into(),
+                error: Some("model server unreachable".into()),
+                failed_at: TS.into(),
             }],
         }),
         "WorktreeDiff": to(WorktreeDiff {

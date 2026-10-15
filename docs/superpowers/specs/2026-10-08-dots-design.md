@@ -210,7 +210,15 @@ the call again. See `2026-10-13-approvals-v2-design.md` §3.
    `catch_up` and the slot is less than 24 h old, and only the newest missed slot does; other
    missed slots are skipped. A slot for a dot that already has a `queued` run is coalesced into
    it (logged). The run that serves a slot, new or joined, is the schedule's watched run
-   (`schedule_state.watch_run_id`): its outcome decides the occurrence.
+   (`schedule_state.watch_run_id`): its outcome decides the occurrence (Scheduler v2 spec §6).
+   A parked watched run hands the watch to its resume run. A watched run that failed before
+   any `tool_call` event (in it or in the parked runs it resumes) is retried 1, 2, 4, 8 and
+   16 minutes after it ended, up to 6 attempts, by a `schedule` run with `retry_of` and the
+   payload `{scheduled_for, attempt}` (joined into a queued run of the dot if there is one;
+   dropped when a newer slot fires). A failure after a tool call, or of the sixth attempt,
+   sets "Needs attention" (`schedule_state.attention_run_id`); the schedule keeps firing. A
+   later manual or scheduled run of the dot that succeeds, a dismiss, or a reset of the row
+   clears it. A cancelled or deleted watched run ends the occurrence quietly.
 2. **Dispatch.** The runner starts queued runs FIFO while running count < `max_concurrent_runs`
    and the dot has no other `running` run.
 3. **Workspace.**
@@ -228,7 +236,8 @@ the call again. See `2026-10-13-approvals-v2-design.md` §3.
    changed and what needs human review.
 5. **Execute.** Engine events are appended to `run_events` and broadcast to the UI.
 6. **Finish.** Final assistant text becomes `summary`. The app notifies on `failed`,
-   `awaiting_approval`, and `succeeded` (§12). A worktree with no commits and no uncommitted changes is
+   `awaiting_approval`, and `succeeded` (§12); from Scheduler v2 not on a failed `schedule`
+   run, which is retried or ends in "Needs attention" (notified once). A worktree with no commits and no uncommitted changes is
    removed (`git worktree remove`, branch deleted); otherwise it is kept for review. The same
    cleanup runs when a parked run is closed by a plain deny or cancelled.
 7. **Review actions** (UI): view diff, open folder, discard worktree (remove + delete branch).
@@ -526,7 +535,9 @@ In task order:
 6. Read methods, so the app never uses `Runtime::store()`: `list_dots`, `get_dot`,
    `list_runs(dot_id?, limit)`, `get_run`, `run_thread(root_run_id)` (all runs of a lineage,
    oldest first), `list_run_events(run_id, after_seq)`, `approvals_for_run`,
-   `inbox() -> { approvals, review_runs }`, `inbox_count()`, and
+   `inbox() -> { approvals, review_runs, attention }` (from Scheduler v2, `attention`
+   lists the schedules that need attention: `dot_id, dot_name, run_id, error, failed_at`,
+   newest first), `inbox_count()` (counts all three), and
    `preview_schedule(schedule, n) -> next n slots` (from Scheduler v2 it takes the schedule
    object, validates it like `DotSpec::validate`, answers `[]` when no slot is left, and
    previews an `every` rule from now; the UI parses no schedule).
@@ -558,11 +569,13 @@ In task order:
 The Inbox lists:
 
 - pending approvals;
+- from Scheduler v2, schedules that need attention (an occurrence failed in the end);
 - runs awaiting review: the latest run of each lineage that is terminal, has `reviewed_at`
   NULL, and either kept its worktree (worktree mode, worktree still on disk) or `failed`.
 
 A run leaves the Inbox through "Discard worktree" or "Mark reviewed". Folder-mode successes only
-notify. Unread count = pending approvals + runs awaiting review.
+notify. Unread count = pending approvals + runs awaiting review + schedules that need
+attention.
 
 ### Tauri shell (`apps/dots-app`)
 
@@ -620,12 +633,16 @@ notify. Unread count = pending approvals + runs awaiting review.
     Dots performs changed its `apply_state`. It never notifies.
   - From Scheduler v2 there is a sixth event, `ScheduleUpdated { dot_id }`: the dot's
     `schedule_state` row was made, changed or deleted. It updates the tray's Inbox count.
+  - And a seventh, `ScheduleAttention { dot_id, run_id, error }`: the dot's schedule needs
+    attention now. The core sends it once, when the flag goes from clear to set, together
+    with a `ScheduleUpdated`. Only the notifier uses it.
 - Notifications fire on `ApprovalRequested`, and on `RunUpdated` into `succeeded`, `failed` or
   `awaiting_approval`, once per (run, status), and only for a run this process saw queued or
   running. Chat runs do not notify; neither does a parked run closed by its decision, nor a run
   re-published by "Mark reviewed". From Plan 3c a park shows one notification, not two: the
   update into `awaiting_approval` does not notify when the approval request of that run was
-  already announced.
+  already announced. From Scheduler v2 a failed run with trigger `schedule` does not notify;
+  `ScheduleAttention` does, once: "<dot>: scheduled run failed" with the error's first line.
 - After each relevant event, `inbox_count()` updates the tray tooltip ("Dots: n to review") and
   the "Inbox (n)" menu item.
 - Tray:
@@ -657,7 +674,8 @@ notify. Unread count = pending approvals + runs awaiting review.
     event lists, deduplicated by `seq`. `ApprovalUpdated` invalidates `inbox` and the
     `approvals` of the approval's own run, which is the parent of the run that performs the
     call: that run's own `RunUpdated` does not reach those approvals. `ScheduleUpdated`
-    invalidates `dots`, `overview` and `inbox`.
+    invalidates `dots`, `overview` and `inbox`; `ScheduleAttention` invalidates nothing (the
+    `ScheduleUpdated` sent with it does).
   - From Plan 3c an invalidation that arrives while its query is being fetched is kept (the
     query is marked stale again when that fetch has settled), and the app refetches everything
     once when its listeners are attached, so the first screen's data is asked for twice.

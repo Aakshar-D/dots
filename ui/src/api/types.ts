@@ -180,6 +180,13 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("approval_updated"), approval: Approval }),
   // The dot's schedule row was made, changed or deleted.
   z.strictObject({ type: z.literal("schedule_updated"), dot_id: z.string() }),
+  // The dot's schedule needs attention now (sent once, with a `schedule_updated`).
+  z.strictObject({
+    type: z.literal("schedule_attention"),
+    dot_id: z.string(),
+    run_id: z.string(),
+    error: nullable(z.string()),
+  }),
 ]);
 
 export const ClaudeStatus = z.strictObject({
@@ -228,9 +235,19 @@ export const ReviewRun = z.strictObject({
   dot_name: z.string(),
   worktree_exists: z.boolean(),
 });
+// A schedule whose occurrence failed in the end ("Needs attention").
+export const NeedsAttention = z.strictObject({
+  dot_id: z.string(),
+  dot_name: z.string(),
+  run_id: z.string(),
+  error: nullable(z.string()),
+  failed_at: z.string(),
+});
 export const Inbox = z.strictObject({
   approvals: z.array(PendingApproval),
   review_runs: z.array(ReviewRun),
+  // Newest failure first. Optional until the Inbox screen shows it.
+  attention: z.array(NeedsAttention).optional(),
 });
 
 export const FileDiff = z.strictObject({
@@ -288,6 +305,7 @@ export type SettingsSaved = z.infer<typeof SettingsSaved>;
 export type DotOverview = z.infer<typeof DotOverview>;
 export type PendingApproval = z.infer<typeof PendingApproval>;
 export type ReviewRun = z.infer<typeof ReviewRun>;
+export type NeedsAttention = z.infer<typeof NeedsAttention>;
 export type Inbox = z.infer<typeof Inbox>;
 export type FileDiff = z.infer<typeof FileDiff>;
 export type WorktreeDiff = z.infer<typeof WorktreeDiff>;

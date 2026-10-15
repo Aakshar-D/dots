@@ -17,7 +17,8 @@ use crate::engine::{Engine, UnavailableEngine};
 use crate::events::{new_bus, Bus, RuntimeEvent};
 use crate::model::{
     Approval, ClaudeStatus, Dot, DotOverview, DotSpec, EngineKind, Inbox, NewRun, PendingApproval,
-    ReviewRun, Run, RunEventRecord, RunStatus, SettingsSaved, Status, TriggerKind, WorktreeDiff,
+    ReviewRun, Run, RunEventRecord, RunStatus, ScheduleChange, SettingsSaved, Status, TriggerKind,
+    WorktreeDiff,
 };
 use crate::policy::{allow_candidates, Action, Rule, RuleCandidate};
 use crate::runner::{Runner, RunnerConfig};
@@ -381,8 +382,8 @@ impl Runtime {
         self.store.approvals_for_run(run_id).await
     }
 
-    /// Pending approvals, plus the finished, unreviewed thread ends that failed or kept a
-    /// worktree with changes.
+    /// Pending approvals, the finished, unreviewed thread ends that failed or kept a worktree
+    /// with changes, and the schedules that need attention.
     pub async fn inbox(&self) -> Result<Inbox> {
         let mut names = std::collections::HashMap::new();
         for dot in self.store.list_dots().await? {
@@ -419,12 +420,38 @@ impl Runtime {
         Ok(Inbox {
             approvals,
             review_runs,
+            attention: self.store.list_schedule_attention().await?,
         })
     }
 
     pub async fn inbox_count(&self) -> Result<usize> {
         let inbox = self.inbox().await?;
-        Ok(inbox.approvals.len() + inbox.review_runs.len())
+        Ok(inbox.approvals.len() + inbox.review_runs.len() + inbox.attention.len())
+    }
+
+    /// Clears the dot's "Needs attention" (Scheduler v2 spec §8); the schedule is not
+    /// otherwise changed. `NotFound` when the dot has no schedule row; nothing happens when
+    /// the flag is not set.
+    pub async fn dismiss_schedule_attention(&self, dot_id: &str) -> Result<()> {
+        let Some(state) = self.store.get_schedule_state(dot_id).await? else {
+            return Err(Error::NotFound(format!("schedule of dot {dot_id}")));
+        };
+        if state.attention_run_id.is_none() {
+            return Ok(());
+        }
+        let change = ScheduleChange {
+            attention_run_id: Some(None),
+            ..Default::default()
+        };
+        if self
+            .store
+            .update_schedule_state(dot_id, &change, self.clock.now())
+            .await?
+            .is_some()
+        {
+            self.schedule_updated(dot_id);
+        }
+        Ok(())
     }
 
     /// Takes the thread of `run_id` out of the Inbox. Refused while the thread is active.

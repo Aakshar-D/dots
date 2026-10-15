@@ -444,6 +444,15 @@
         "tool": "Bash"
       }
     ],
+    "attention": [
+      {
+        "dot_id": "01J0DOT",
+        "dot_name": "nightly-tests",
+        "error": "model server unreachable",
+        "failed_at": "2026-10-09T12:00:00.000Z",
+        "run_id": "01J0RUN"
+      }
+    ],
     "review_runs": [
       {
         "base_commit": "0123abcd",
@@ -779,6 +788,12 @@
     {
       "dot_id": "01J0DOT",
       "type": "schedule_updated"
+    },
+    {
+      "dot_id": "01J0DOT",
+      "error": "model server unreachable",
+      "run_id": "01J0RUN",
+      "type": "schedule_attention"
     }
   ],
   "Schedule": [

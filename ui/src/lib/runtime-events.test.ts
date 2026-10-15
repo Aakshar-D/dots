@@ -103,6 +103,20 @@ describe("runtime events and the query cache", () => {
     for (const key of untouched) expect(stale(qc, key), key.join("/")).toBe(false);
   });
 
+  it("leaves the caches to the schedule update that comes with a schedule's attention", () => {
+    const qc = createQueryClient();
+    const all = [keys.dots, keys.overview, keys.inbox, keys.dot(sample.dot.id)];
+    for (const key of all) qc.setQueryData(key, []);
+
+    applyRuntimeEvent(qc, {
+      type: "schedule_attention",
+      dot_id: sample.dot.id,
+      run_id: sample.run.id,
+      error: "model server unreachable",
+    });
+    for (const key of all) expect(stale(qc, key), key.join("/")).toBe(false);
+  });
+
   it("refetches the approvals of the approval's own run when Dots performs its call", () => {
     const qc = createQueryClient();
     // The call is performed by a resume run; the approval belongs to that run's parent.

@@ -7,12 +7,13 @@ use common::clock::FakeClock;
 use common::spec;
 use dots_core::events::RuntimeEvent;
 use dots_core::model::{
-    Dot, DotSpec, ScheduleChange, ScheduleState, ScheduleStatus, WorkspaceMode,
+    Dot, DotSpec, NeedsAttention, NewRun, Run, RunStatus, ScheduleChange, ScheduleState,
+    ScheduleStatus, TriggerKind, WorkspaceMode,
 };
 use dots_core::schedule::Schedule;
 use dots_core::store::{Store, DB_FILE};
 use dots_core::util::{now, timestamp};
-use dots_core::{Config, Runtime};
+use dots_core::{Config, Error, Runtime};
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::sync::broadcast::Receiver;
@@ -238,5 +239,95 @@ async fn the_runtime_takes_the_times_of_its_rows_from_its_clock() {
         timestamp(resumed)
     );
     assert!(rt.list_runs(None, 10).await.unwrap().is_empty());
+    rt.shutdown();
+}
+
+/// A scheduled run of `dot` that failed with `error`, set as the schedule's "Needs
+/// attention" (as the scheduler sets it).
+async fn flag(rt: &Runtime, dot: &Dot, error: &str) -> Run {
+    let run = rt
+        .store()
+        .create_run(&NewRun::new(&dot.id, TriggerKind::Schedule))
+        .await
+        .unwrap();
+    let run = rt
+        .store()
+        .finish_run(&run.id, RunStatus::Failed, None, Some(error))
+        .await
+        .unwrap();
+    let change = ScheduleChange {
+        attention_run_id: Some(Some(run.id.clone())),
+        ..Default::default()
+    };
+    rt.store()
+        .update_schedule_state(&dot.id, &change, Utc::now())
+        .await
+        .unwrap()
+        .unwrap();
+    run
+}
+
+fn attention(dot: &Dot, run: &Run) -> NeedsAttention {
+    NeedsAttention {
+        dot_id: dot.id.clone(),
+        dot_name: dot.spec.name.clone(),
+        run_id: run.id.clone(),
+        error: run.error.clone(),
+        failed_at: run.ended_at.clone().unwrap(),
+    }
+}
+
+/// Scheduler v2 spec §8: the Inbox lists the schedules that need attention, newest failure
+/// first, and counts them; `dismiss_schedule_attention` clears a flag, quietly when there is
+/// none, and refuses a dot without a schedule.
+#[tokio::test]
+async fn attention_is_listed_in_the_inbox_until_dismissed() {
+    let dir = tempfile::tempdir().unwrap();
+    let rt = start(&dir).await;
+    let older = rt
+        .create_dot(folder_spec(&dir, "older", Some(every(600))))
+        .await
+        .unwrap();
+    let newer = rt
+        .create_dot(folder_spec(&dir, "newer", Some(every(600))))
+        .await
+        .unwrap();
+    let plain = rt
+        .create_dot(folder_spec(&dir, "plain", None))
+        .await
+        .unwrap();
+    let first = flag(&rt, &older, "model server down").await;
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    let second = flag(&rt, &newer, "claude: not found").await;
+
+    let inbox = rt.inbox().await.unwrap();
+    assert_eq!(
+        inbox.attention,
+        [attention(&newer, &second), attention(&older, &first)]
+    );
+    assert_eq!(
+        rt.inbox_count().await.unwrap(),
+        inbox.approvals.len() + inbox.review_runs.len() + 2
+    );
+
+    let mut rx = rt.subscribe();
+    rt.dismiss_schedule_attention(&older.id).await.unwrap();
+    assert_eq!(row(&rt, &older).await.unwrap().attention_run_id, None);
+    assert_eq!(updated(&mut rx), [older.id.as_str()]);
+    assert_eq!(
+        rt.inbox().await.unwrap().attention,
+        [attention(&newer, &second)]
+    );
+
+    // No flag: nothing to do, and no error.
+    rt.dismiss_schedule_attention(&older.id).await.unwrap();
+    assert!(updated(&mut rx).is_empty());
+    // No schedule row: not found.
+    for id in [plain.id.as_str(), "no-such-dot"] {
+        assert!(matches!(
+            rt.dismiss_schedule_attention(id).await,
+            Err(Error::NotFound(_))
+        ));
+    }
     rt.shutdown();
 }

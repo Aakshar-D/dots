@@ -26,6 +26,14 @@ pub enum RuntimeEvent {
     ScheduleUpdated {
         dot_id: String,
     },
+    /// The dot's schedule needs attention: an occurrence failed in the end (Scheduler v2 spec
+    /// §6). Published once, when the flag goes from clear to set, with the failed run and its
+    /// error; a `ScheduleUpdated` for the row goes with it. The app notifies on it.
+    ScheduleAttention {
+        dot_id: String,
+        run_id: String,
+        error: Option<String>,
+    },
 }
 
 pub type Bus = broadcast::Sender<RuntimeEvent>;

@@ -376,11 +376,26 @@ pub struct ReviewRun {
     pub worktree_exists: bool,
 }
 
-/// Pending approvals and finished runs awaiting review (spec §12 Inbox).
+/// A schedule whose occurrence failed in the end (Scheduler v2 spec §6, "Needs attention").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NeedsAttention {
+    pub dot_id: String,
+    pub dot_name: String,
+    /// The last failed run of the occurrence.
+    pub run_id: String,
+    pub error: Option<String>,
+    /// When that run ended, RFC 3339 UTC.
+    pub failed_at: String,
+}
+
+/// Pending approvals, finished runs awaiting review and schedules that need attention (spec
+/// §12 Inbox; Scheduler v2 spec §8).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Inbox {
     pub approvals: Vec<PendingApproval>,
     pub review_runs: Vec<ReviewRun>,
+    /// Newest failure first.
+    pub attention: Vec<NeedsAttention>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

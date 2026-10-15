@@ -25,15 +25,27 @@ pub const STATUS_EVENT: &str = "status";
 /// Something worth an OS notification.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Notice {
-    ApprovalNeeded { run_id: String, tool: String },
-    RunEnded { run: Box<Run> },
+    ApprovalNeeded {
+        run_id: String,
+        tool: String,
+    },
+    RunEnded {
+        run: Box<Run>,
+    },
+    /// A schedule needs attention: its occurrence failed in the end (Scheduler v2 spec §7).
+    ScheduleFailed {
+        dot_id: String,
+        error: Option<String>,
+    },
 }
 
-/// Decides which events notify: approval requests, and a run moving from queued or running
-/// into succeeded, failed or awaiting approval. Chat runs never notify (the user is watching
-/// them). A run first seen in a final state (e.g. marked reviewed) and a parked run closed by
-/// a decision do not notify either. A run that parks on an approval request this notifier
-/// has announced does not notify a second time: one park, one notification.
+/// Decides which events notify: approval requests, a run moving from queued or running into
+/// succeeded, failed or awaiting approval, and a schedule that needs attention. Chat runs
+/// never notify (the user is watching them). A scheduled run that fails does not notify by
+/// itself: it is retried, or its schedule needs attention, which notifies. A run first seen
+/// in a final state (e.g. marked reviewed) and a parked run closed by a decision do not
+/// notify either. A run that parks on an approval request this notifier has announced does
+/// not notify a second time: one park, one notification.
 #[derive(Default)]
 pub struct Notifier {
     active: HashMap<String, RunStatus>,
@@ -71,7 +83,8 @@ impl Notifier {
                     && self.asked.remove(&run.id);
                 let was_working = matches!(prev, Some(RunStatus::Queued | RunStatus::Running));
                 let ended = match run.status {
-                    RunStatus::Succeeded | RunStatus::Failed => true,
+                    RunStatus::Succeeded => true,
+                    RunStatus::Failed => run.trigger != TriggerKind::Schedule,
                     RunStatus::AwaitingApproval => !told,
                     _ => false,
                 };
@@ -81,6 +94,11 @@ impl Notifier {
                     }
                 })
             }
+            // The core publishes this once, when the flag goes from clear to set.
+            RuntimeEvent::ScheduleAttention { dot_id, error, .. } => Some(Notice::ScheduleFailed {
+                dot_id: dot_id.clone(),
+                error: error.clone(),
+            }),
             _ => None,
         }
     }
@@ -119,6 +137,10 @@ pub fn notice_text(notice: &Notice, dot_name: &str) -> (String, String) {
                 "Open the Inbox to decide.".to_string(),
             ),
         },
+        Notice::ScheduleFailed { error, .. } => (
+            format!("{dot_name}: scheduled run failed"),
+            first_line(error.as_deref(), "The run failed."),
+        ),
     }
 }
 
@@ -158,13 +180,14 @@ pub fn spawn_forwarder(app: AppHandle, rt: Arc<Runtime>) {
 }
 
 async fn notify(app: &AppHandle, rt: &Runtime, notice: &Notice) {
-    let run_id = match notice {
-        Notice::ApprovalNeeded { run_id, .. } => run_id,
-        Notice::RunEnded { run } => &run.id,
+    let dot_id = match notice {
+        Notice::ApprovalNeeded { run_id, .. } => rt.get_run(run_id).await.map(|r| r.dot_id).ok(),
+        Notice::RunEnded { run } => Some(run.dot_id.clone()),
+        Notice::ScheduleFailed { dot_id, .. } => Some(dot_id.clone()),
     };
-    let name = match rt.get_run(run_id).await {
-        Ok(run) => rt.get_dot(&run.dot_id).await.map(|d| d.spec.name).ok(),
-        Err(_) => None,
+    let name = match dot_id {
+        Some(id) => rt.get_dot(&id).await.map(|d| d.spec.name).ok(),
+        None => None,
     };
     let (title, body) = notice_text(notice, name.as_deref().unwrap_or("A dot"));
     if let Err(e) = app.notification().builder().title(title).body(body).show() {
@@ -368,6 +391,54 @@ mod tests {
         let ev = RuntimeEvent::ScheduleUpdated { dot_id: "d".into() };
         assert_eq!(n.decide(&ev), None);
         // The row holds "Needs attention", which the Inbox lists.
+        assert!(affects_inbox(&ev));
+    }
+
+    #[test]
+    fn a_failed_scheduled_run_is_quiet_and_its_attention_notifies() {
+        let mut n = Notifier::default();
+        let s = TriggerKind::Schedule;
+        // Retried, or it ends in "Needs attention", which notifies.
+        assert_eq!(
+            notified(&mut n, "f", s, &[Queued, Running, Failed]),
+            [false, false, false]
+        );
+        assert_eq!(
+            notified(&mut n, "ok", s, &[Queued, Running, Succeeded]),
+            [false, false, true]
+        );
+        // Other runs of a scheduled dot notify their failure as before.
+        assert_eq!(
+            notified(&mut n, "m", TriggerKind::Manual, &[Running, Failed]),
+            [false, true]
+        );
+
+        // The core publishes this once, when the flag goes from clear to set.
+        let ev = RuntimeEvent::ScheduleAttention {
+            dot_id: "d".into(),
+            run_id: "f".into(),
+            error: Some("model server down\nat 09:00".into()),
+        };
+        let notice = n.decide(&ev).expect("a notice");
+        assert_eq!(
+            notice,
+            Notice::ScheduleFailed {
+                dot_id: "d".into(),
+                error: Some("model server down\nat 09:00".into()),
+            }
+        );
+        assert_eq!(
+            notice_text(&notice, "nightly"),
+            (
+                "nightly: scheduled run failed".into(),
+                "model server down".into()
+            )
+        );
+        let unknown = Notice::ScheduleFailed {
+            dot_id: "d".into(),
+            error: None,
+        };
+        assert_eq!(notice_text(&unknown, "nightly").1, "The run failed.");
         assert!(affects_inbox(&ev));
     }
 

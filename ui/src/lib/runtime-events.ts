@@ -56,6 +56,9 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
       // Dots list and the Inbox show.
       for (const queryKey of [keys.dots, keys.overview, keys.inbox]) invalidate(qc, queryKey);
       break;
+    case "schedule_attention":
+      // For the notification; the `schedule_updated` sent with it refreshes the screens.
+      break;
   }
 }
 
