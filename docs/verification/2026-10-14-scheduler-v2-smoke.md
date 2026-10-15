@@ -134,7 +134,7 @@ Result: pass. The block's first `get_dot` line threw as in the plan (`.spec` is 
 
 ### A5. Dots closed across a slot and started again runs one catch-up run
 
-Two lines differ from the plan's block: an `echo` of the last status of `every-dot` was added after the first wait, and the last command reads `.enabled`, not `.spec.enabled` (finding 1).
+Four lines differ from the plan's block: an `echo` of the last status of `every-dot` was added after the first wait, an `echo "started at …"` was added before `start_app`, the query of the runs of `every-dot` since the start maps to `[r.status, r.payload, r.queued_at]` instead of `r.payload`, and the last command reads `.enabled`, not `.spec.enabled` (finding 1).
 
 ```bash
 . "${E:?}"
@@ -247,7 +247,7 @@ Result: pass. Process 24084 (the app under `target\debug`) stopped; the temporar
 1. The blocks of A4, A5 and A8 read `get_dot`'s answer as `{ spec: … }`. It is the dot itself, with the spec's fields at the top level (`id`, `name`, `schedule`, `enabled`, `endpoint_url`, …), and the same for `set_dot_enabled` and `update_dot`. The plan's block threw "Cannot read properties of undefined (reading 'schedule')" at A4; at A5 `.spec.enabled` and at A8 `d.spec` would have failed the same way. The blocks above are corrected: `.schedule`, `.enabled`, `{ ...d, endpoint_url }`, `.endpoint_url`. `update_dot` accepts the dot's extra fields (`id`, `created_at`, …) in `spec` without complaint. Not a defect of the product.
 2. The plan's `wait "retry-dot needs attention"` (A7 and A8) does not match what the Inbox page shows: the card's title is "retry-dot" under the heading "Needs attention", and the page text never holds the two as one phrase. The wait timed out after 30 s at A7 and the block went on; the screenshot and the text show the page as designed. The blocks above wait for "Needs attention". Not a defect of the product.
 3. A4: the runs of a model that thinks (about 320 output tokens for the answer "done") last more than a minute, so a schedule `Every 1 minute` had a run still active at the next slot. The slot of 10:19:42 was "coalesced into the queued run" (log line at 14:19:43), so it has no run of its own, and `fired_count` counts it (3 where the plan expected 2). The plan's A4 expectation of "two runs" and the count of the view are both right for a dot whose run is shorter than a slot; the steps did not foresee this case. As designed.
-4. The environment: `lms ps` woke LM Studio's service and the server then reported itself running on port 1234 before `server start` ran; the model was not loaded. The smoke loaded the model and stopped both at A10, and the person's LM Studio had nothing loaded before and has nothing loaded now. The two Task fixes named in the dispatch that the steps do not reach (a cron slot in the fall-back overlap, the status write that skips a reset row) are not exercised here; the fix that a slot firing during a pending retry drops the retry could not show either: `retry-dot` is daily, so its six runs are as the plan expects, and `every-dot` never failed, so no attempt appeared on it.
+4. The environment: `lms ps` woke LM Studio's service and the server then reported itself running on port 1234 before `server start` ran; the model was not loaded. The smoke loaded the model and stopped both at A10, and the person's LM Studio had nothing loaded before and has nothing loaded now. The two Task fixes named in the dispatch that the steps do not reach (a cron slot in the fall-back overlap, the status write that skips a reset row) are not exercised here; the fix that a slot firing during a pending retry drops the retry, and the run view of the run it leaves ("attempt k of 6" without `retry_of`), were not exercised either: `retry-dot` is daily, so its six runs are as the plan expects, and `every-dot` never failed, so no attempt appeared on it.
 
 ## What Part A does not show
 
@@ -255,6 +255,7 @@ Result: pass. Process 24084 (the app under `target\debug`) stopped; the temporar
 - A schedule that expires: it needs an old cron string that a newer crate refuses.
 - A dot deleted or disabled while a retry waits.
 - A retry joined into a queued run.
+- The run view of a scheduled run with `attempt` > 1 and no `retry_of` ("Scheduled for <date, time> · attempt k of 6", the Task 8 fix): A6 and A7 only show retry runs, which carry `retry_of` ("Retry k of 6 of the failed run"). It was not exercised; it arises when a slot fires while a retry is pending, which no step does.
 - The notification itself. A7 counts the `schedule_attention` events that reach the page (1, once for the occurrence and none for the attempts); that Windows shows a toast for it is B3.
 - The fall-back overlap of a cron slot, the reset-row guard of the pass, and a slot that fires during a pending retry (Task 1 and Task 5 fixes): the unit tests of those tasks cover them, not this smoke.
 
