@@ -832,7 +832,7 @@ async fn an_overrun_run_that_fails_is_for_review_and_a_judged_one_is_not() {
     };
     assert_eq!(
         review(&h).await,
-        [overrun.id.clone()],
+        [overrun.id.as_str()],
         "never judged: listed"
     );
 
@@ -846,7 +846,7 @@ async fn an_overrun_run_that_fails_is_for_review_and_a_judged_one_is_not() {
         .unwrap()
         .reviewed_at
         .is_some());
-    assert_eq!(review(&h).await, [overrun.id.clone()]);
+    assert_eq!(review(&h).await, [overrun.id.as_str()]);
 
     // Its retry fails after a tool call: judged into "Needs attention", and marked reviewed.
     h.at(720).await;
@@ -865,7 +865,7 @@ async fn an_overrun_run_that_fails_is_for_review_and_a_judged_one_is_not() {
         .unwrap()
         .reviewed_at
         .is_some());
-    assert_eq!(review(&h).await, [overrun.id.clone()]);
+    assert_eq!(review(&h).await, [overrun.id.as_str()]);
 }
 
 /// Spec §6 and §10: a cancelled watched run, and a watched run that was deleted (its thread

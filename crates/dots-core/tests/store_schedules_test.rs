@@ -420,7 +420,7 @@ async fn the_write_that_judges_a_failed_run_marks_it_reviewed() {
         let runs = store.unreviewed_thread_ends().await.unwrap();
         runs.into_iter().map(|r| r.id).collect::<Vec<_>>()
     };
-    assert_eq!(ends(store.clone()).await, [failed.clone()]);
+    assert_eq!(ends(store.clone()).await, [failed.as_str()]);
 
     let refused = ScheduleChange {
         retry: Some(None),
