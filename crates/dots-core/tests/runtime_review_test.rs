@@ -150,11 +150,22 @@ fn preview_schedule_lists_the_next_fire_times() {
         gap > chrono::TimeDelta::minutes(89) && gap <= chrono::TimeDelta::minutes(91),
         "{times:?}"
     );
-    // Refused like `DotSpec::validate`; empty when no slot is left.
+    // An every schedule sent back with its anchor keeps its phase.
+    let anchored = json!({"rule": {"kind": "every", "minutes": 60,
+        "anchor": "2020-01-01T00:20:00Z"}});
+    let times = preview(anchored, 2).unwrap();
+    assert!(times.iter().all(|t| t.contains(":20:00")), "{times:?}");
+    // Refused like `DotSpec::validate`, and like a create or a change of the schedule when no
+    // slot is left, so the editor can say why before a save.
     let no_day = json!({"rule": {"kind": "weekly", "days": [], "time": "09:00"}});
     assert!(matches!(preview(no_day, 3), Err(Error::Invalid(_))));
-    let past = json!({"rule": {"kind": "once", "at": "2020-01-01T09:00"}});
-    assert_eq!(preview(past, 3).unwrap(), Vec::<String>::new());
+    let never =
+        |v| matches!(preview(v, 3), Err(Error::Invalid(m)) if m == "this schedule would never run");
+    assert!(never(
+        json!({"rule": {"kind": "once", "at": "2020-01-01T09:00"}})
+    ));
+    assert!(never(json!({"rule": {"kind": "daily", "time": "09:00"},
+        "until": {"date": "2020-01-01T08:00"}})));
 }
 
 #[tokio::test]

@@ -18,6 +18,9 @@ export const sample = {
   inbox: T.Inbox.parse(contract.Inbox),
   diff: T.WorktreeDiff.parse(contract.WorktreeDiff),
   startupError: T.StartupError.parse(contract.StartupError),
+  /// One schedule of each kind: once; every with an anchor and a count; every without an
+  /// anchor; daily until a date; weekly; cron.
+  schedules: T.Schedule.array().parse(contract.Schedule),
 };
 
 /// What `new_dot_spec` answers: the core's defaults with nothing filled in.

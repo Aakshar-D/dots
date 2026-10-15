@@ -363,13 +363,16 @@ impl Runtime {
     }
 
     /// The next `count` (1 to 10) slots of a schedule saved now, RFC 3339 in local time, within
-    /// its bounds; empty when it has none. Refuses what `DotSpec::validate` refuses, so the UI
-    /// parses no schedule.
+    /// its bounds. Refuses what `DotSpec::validate` refuses, and what a create or a change of
+    /// the schedule refuses ("this schedule would never run": no slot is left), so the UI
+    /// parses no schedule and can say why before a save. An `Every` sent with its anchor keeps
+    /// its phase; one without starts now.
     pub fn preview_schedule(schedule: &Schedule, count: usize) -> Result<Vec<String>> {
         schedule.validate()?;
         let now = Local::now();
         let mut schedule = schedule.clone();
         schedule.fill_anchor(None, now.with_timezone(&Utc));
+        schedule.check_runs_after(&now, &Local)?;
         Ok(upcoming(&schedule, &now, &Local)?
             .take(count.clamp(1, 10))
             .map(|t| t.to_rfc3339())

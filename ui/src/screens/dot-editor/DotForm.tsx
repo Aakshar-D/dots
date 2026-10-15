@@ -1,14 +1,7 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import type { ReactNode } from "react";
 
-import {
-  EngineKind,
-  WorkspaceMode,
-  type Dot,
-  type DotSpec,
-  type Schedule,
-  type ScheduleRule,
-} from "@/api/types";
+import { EngineKind, WorkspaceMode, type Dot, type DotSpec } from "@/api/types";
 import { Field } from "@/components/Field";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,42 +9,14 @@ import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { cronSchedule, type SpecErrors } from "@/lib/dot-rules";
-import { localDateTime } from "@/lib/format";
+import type { SpecErrors } from "@/lib/dot-rules";
 import { notifyError } from "@/lib/notify";
 import { PolicyEditor } from "@/screens/dot-editor/PolicyEditor";
+import { ScheduleEditor, type SchedulePreview } from "@/screens/dot-editor/ScheduleEditor";
 import { WebhookPanel } from "@/screens/dot-editor/WebhookPanel";
 
 /// What the editor holds: the spec, and the MCP servers as the text being typed.
 export type Draft = { spec: DotSpec; mcpText: string };
-
-export type SchedulePreview = { times: string[]; pending: boolean };
-
-const localDate = (dateTime: string) => dateTime.replace("T", " ");
-
-function describeRule(rule: ScheduleRule): string {
-  switch (rule.kind) {
-    case "once":
-      return `Once at ${localDate(rule.at)}`;
-    case "every":
-      return `Every ${rule.minutes} minutes`;
-    case "daily":
-      return `Daily at ${rule.time}`;
-    case "weekly":
-      return `Weekly on ${rule.days.join(", ")} at ${rule.time}`;
-    case "cron":
-      return `Cron ${rule.expr}`;
-  }
-}
-
-/// A schedule in words, for the kinds this form cannot edit yet.
-function describeSchedule({ rule, until }: Schedule): string {
-  const what = describeRule(rule);
-  if (until === null) return what;
-  return "count" in until
-    ? `${what}, at most ${until.count} runs`
-    : `${what}, until ${localDate(until.date)}`;
-}
 
 function Section(props: { title: string; children: ReactNode }) {
   return (
@@ -216,48 +181,13 @@ export function DotForm(props: {
       </Section>
 
       <Section title="Schedule">
-        {spec.schedule && spec.schedule.rule.kind !== "cron" ? (
-          <div className="flex flex-col gap-1.5">
-            <div className="flex items-center gap-3">
-              <span className="text-sm">{describeSchedule(spec.schedule)}</span>
-              <Button size="sm" variant="outline" onClick={() => set("schedule", null)}>
-                Remove schedule
-              </Button>
-            </div>
-            {errors.schedule ? (
-              <p className="text-xs text-destructive">{errors.schedule}</p>
-            ) : (
-              <p className="text-xs text-muted-foreground">
-                This editor cannot change this kind of schedule yet. Saving keeps it as it is.
-              </p>
-            )}
-          </div>
-        ) : (
-          <Field
-            label="Cron expression"
-            htmlFor="dot-schedule"
-            error={errors.schedule}
-            hint="Six fields: second minute hour day-of-month month day-of-week. Empty: no schedule."
-          >
-            <Input
-              id="dot-schedule"
-              className="font-mono"
-              placeholder="0 0 2 * * *"
-              value={spec.schedule?.rule.kind === "cron" ? spec.schedule.rule.expr : ""}
-              onChange={(e) => set("schedule", cronSchedule(e.target.value))}
-            />
-          </Field>
-        )}
-        {props.schedule.times.length > 0 && (
-          <div className="text-xs text-muted-foreground">
-            <span>Next runs:</span>
-            <ul aria-label="Next runs" className="mt-1 flex flex-col gap-0.5">
-              {props.schedule.times.map((t) => (
-                <li key={t}>{localDateTime(t)}</li>
-              ))}
-            </ul>
-          </div>
-        )}
+        <ScheduleEditor
+          schedule={spec.schedule}
+          stored={props.existing?.schedule ?? null}
+          onChange={(schedule) => set("schedule", schedule)}
+          error={errors.schedule}
+          preview={props.schedule}
+        />
       </Section>
 
       {props.existing && (

@@ -439,8 +439,12 @@ React + Vite + TypeScript inside Tauri 2. Screens:
 
 - **Dots** — list: name, engine/model, state, next scheduled run, last result, enable toggle,
   Run now.
-- **Dot editor** — name; instructions (markdown); engine, model, endpoint; workdir + mode; cron
-  with human-readable preview and next 3 fire times; webhook URL + token (copy, regenerate);
+- **Dot editor** — name; instructions (markdown); engine, model, endpoint; workdir + mode;
+  schedule (from Scheduler v2: a kind picker None / Once / Every / Daily / Weekly / Cron with
+  the kind's fields — a date and time; minutes, typed in minutes or hours; a time; seven day
+  toggles and a time; the cron text — then "Catch up a missed run" and "Stop" (never, after N
+  runs, after a date), both hidden for Once; the next 3 fire times from `preview_schedule`, and
+  the core's objection under the fields); webhook URL + token (copy, regenerate);
   policy editor (preset picker + rule table); limits; MCP servers (Claude only);
   use-user-settings toggle.
 - **Run view** — live transcript (assistant text, collapsible tool calls/results), worktree diff,
@@ -542,8 +546,9 @@ In task order:
    lists the schedules that need attention: `dot_id, dot_name, run_id, error, failed_at`,
    newest first), `inbox_count()` (counts all three), and
    `preview_schedule(schedule, n) -> next n slots` (from Scheduler v2 it takes the schedule
-   object, validates it like `DotSpec::validate`, answers `[]` when no slot is left, and
-   previews an `every` rule from now; the UI parses no schedule).
+   object, validates it like `DotSpec::validate`, refuses one with no slot left as a create or
+   a change does (`invalid`, "this schedule would never run"), and previews an `every` rule
+   from the anchor it is sent, or from now without one; the UI parses no schedule).
 7. Review actions on a thread's shared worktree:
    - `worktree_diff(run_id) -> { files: [{ path, status, patch, binary }], truncated, exists }` — `git
      diff <base_commit>` plus untracked files as additions; total patch text capped at 1 MiB.
@@ -728,7 +733,10 @@ attention.
     insert of the new run happen under one lock, so two replies sent at once cannot both pass.
   - Approvals of the thread show inline.
 - The editor validates with zod rules mirroring `DotSpec::validate`; server errors still show
-  on save.
+  on save. From Scheduler v2 the schedule is checked by the core through `preview_schedule`
+  while it is typed; the UI only holds back an emptied field or a number the core cannot
+  take. The objection blocks a save when the schedule is new or changed; for the stored
+  schedule saved unchanged (a passed Once) it is a note, as the core keeps it.
 - Tests: Vitest + Testing Library + jsdom, with `invoke` and `listen` mocked.
 
 ### Hardening and packaging (3c)
