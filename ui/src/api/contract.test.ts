@@ -8,6 +8,7 @@ import * as T from "./types";
 type SampleName = Exclude<keyof typeof fixture, "Enums" | "Limits" | "Commands">;
 const schemas: Record<SampleName, { parse: (v: unknown) => unknown }> = {
   DotSpec: T.DotSpec,
+  Schedule: T.Schedule.array(),
   NewDotSpec: T.DotSpec,
   Dot: T.Dot,
   Run: T.Run,
@@ -37,6 +38,7 @@ const enums: Record<keyof typeof fixture.Enums, { options: readonly string[] }> 
   Action: T.Action,
   Preset: T.Preset,
   FileStatus: T.FileStatus,
+  ScheduleStatus: T.ScheduleStatus,
   CmdErrorKind: T.CmdErrorKind,
 };
 
@@ -61,6 +63,21 @@ describe("Rust/TypeScript contract", () => {
   it("has a sample of every engine event kind", () => {
     const kinds = T.RunEventData.options.map((o) => o.shape.kind.value);
     expect(fixture.RunEventData.map((e) => e.kind).sort()).toEqual([...kinds].sort());
+  });
+
+  it("has a sample of every runtime event type", () => {
+    const types = T.RuntimeEvent.options.map((o) => o.shape.type.value);
+    expect(fixture.RuntimeEvent.map((e) => e.type).sort()).toEqual([...types].sort());
+  });
+
+  it("has a sample of every schedule kind and bound", () => {
+    const kinds = T.ScheduleRule.options.map((o) => o.shape.kind.value);
+    expect([...new Set(fixture.Schedule.map((s) => s.rule.kind))].sort()).toEqual(
+      [...kinds].sort(),
+    );
+    expect(fixture.Schedule.map((s) => s.until && Object.keys(s.until)[0])).toEqual(
+      expect.arrayContaining([null, "count", "date"]),
+    );
   });
 
   it("mirrors the core's limits", () => {

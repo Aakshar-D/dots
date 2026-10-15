@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { duration, localDateTime, relativeTime } from "./format";
+import { duration, localDateTime, localTime, relativeTime } from "./format";
 
 const at = (iso: string) => Date.parse(iso);
 
@@ -31,5 +31,15 @@ describe("format", () => {
     expect(localDateTime(null)).toBe("");
     expect(localDateTime("soon")).toBe("soon");
     expect(localDateTime("2026-10-12T10:00:00.000Z")).not.toBe("");
+    expect(localTime(null)).toBe("");
+    expect(localTime("soon")).toBe("soon");
+  });
+
+  it("writes the time of day alone, without the date", () => {
+    const iso = "2026-10-12T10:04:00.000Z";
+    const time = localTime(iso);
+    expect(time).not.toBe("");
+    expect(localDateTime(iso)).toContain(time);
+    expect(localDateTime(iso)).not.toBe(time);
   });
 });

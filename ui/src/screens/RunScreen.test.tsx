@@ -2,6 +2,7 @@ import { act, fireEvent, screen, waitFor, within } from "@testing-library/react"
 import { describe, expect, it } from "vitest";
 
 import type { ApplyState, Approval, Run, RunEventRecord, WorktreeDiff } from "@/api/types";
+import { localDateTime } from "@/lib/format";
 import { backend, later } from "@/test/backend";
 import { sample } from "@/test/fixtures";
 import { renderApp } from "@/test/render";
@@ -653,5 +654,73 @@ describe("the calls Dots performed in a thread", () => {
     expect(
       screen.getByRole("group", { name: `Always allow for ${sample.dot.name}` }),
     ).toBeVisible();
+  });
+});
+
+describe("the line under a scheduled run's trigger", () => {
+  const slot = "2026-10-09T02:00:00+01:00";
+  const scheduled: Run = { ...folderRun, payload: { scheduled_for: slot } };
+  const section = () => screen.findByRole("region", { name: /^Scheduled run,/ });
+
+  it("says which slot the run was for", async () => {
+    thread([scheduled]);
+    renderApp(`/runs/${scheduled.id}`);
+    expect(
+      within(await section()).getByText(`Scheduled for ${localDateTime(slot)}`),
+    ).toBeVisible();
+  });
+
+  it("says that a missed slot was caught up", async () => {
+    const caughtUp: Run = { ...scheduled, payload: { scheduled_for: slot, caught_up: true } };
+    thread([caughtUp]);
+    renderApp(`/runs/${caughtUp.id}`);
+    expect(
+      within(await section()).getByText(
+        `Scheduled for ${localDateTime(slot)}, caught up after the PC was off`,
+      ),
+    ).toBeVisible();
+  });
+
+  it("says which attempt a retry is, and links the run that failed", async () => {
+    const retry: Run = {
+      ...scheduled,
+      id: "run-retry",
+      retry_of: "run-failed",
+      payload: { scheduled_for: slot, attempt: 2 },
+    };
+    thread([retry]);
+    renderApp(`/runs/${retry.id}`);
+    const shown = within(await section());
+    expect(shown.getByText("Retry 2 of 6 of")).toBeVisible();
+    expect(shown.getByRole("link", { name: "the failed run" })).toHaveAttribute(
+      "href",
+      "/runs/run-failed",
+    );
+    expect(shown.queryByText(/^Scheduled for/)).toBeNull();
+  });
+
+  it("shows the slot and the attempt of a run that carries one but retries no run", async () => {
+    const dropped: Run = {
+      ...scheduled,
+      id: "run-dropped",
+      retry_of: null,
+      payload: { scheduled_for: slot, attempt: 3 },
+    };
+    thread([dropped]);
+    renderApp(`/runs/${dropped.id}`);
+    const shown = within(await section());
+    expect(shown.getByText(`Scheduled for ${localDateTime(slot)} · attempt 3 of 6`)).toBeVisible();
+    expect(shown.queryByText(/Retry/)).toBeNull();
+    expect(shown.queryByRole("link")).toBeNull();
+  });
+
+  it("says nothing for a run of another trigger, or a payload it cannot read", async () => {
+    const manual: Run = { ...folderRun, id: "run-manual", trigger: "manual", payload: null };
+    const odd: Run = { ...scheduled, id: "run-odd", payload: { scheduled_for: 7 } };
+    thread([manual, odd]);
+    renderApp(`/runs/${odd.id}`);
+    await screen.findByRole("region", { name: /^Manual run,/ });
+    expect(within(await section()).queryByText(/^Scheduled for|^Retry/)).toBeNull();
+    expect(screen.queryByText(/^Scheduled for|^Retry/)).toBeNull();
   });
 });

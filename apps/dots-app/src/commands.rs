@@ -10,6 +10,7 @@ use dots_core::model::{
     WorktreeDiff,
 };
 use dots_core::policy::{Policy, Preset, RuleCandidate};
+use dots_core::schedule::Schedule;
 use dots_core::settings::Settings;
 use dots_core::Runtime;
 use tauri::{AppHandle, Manager, State};
@@ -142,8 +143,8 @@ pub async fn webhook_url(state: State<'_, AppState>, id: String) -> Res<String> 
 }
 
 #[tauri::command]
-pub fn preview_schedule(expr: String, count: usize) -> Res<Vec<String>> {
-    Ok(Runtime::preview_schedule(&expr, count)?)
+pub fn preview_schedule(schedule: Schedule, count: usize) -> Res<Vec<String>> {
+    Ok(Runtime::preview_schedule(&schedule, count)?)
 }
 
 /// The rules of a policy preset, for the editor's preset picker.
@@ -266,6 +267,12 @@ pub async fn inbox(state: State<'_, AppState>) -> Res<Inbox> {
 #[tauri::command]
 pub async fn inbox_count(state: State<'_, AppState>) -> Res<usize> {
     Ok(state.rt()?.inbox_count().await?)
+}
+
+/// Clears the "Needs attention" of the dot's schedule.
+#[tauri::command]
+pub async fn dismiss_schedule_attention(state: State<'_, AppState>, dot_id: String) -> Res<()> {
+    Ok(state.rt()?.dismiss_schedule_attention(&dot_id).await?)
 }
 
 #[tauri::command]

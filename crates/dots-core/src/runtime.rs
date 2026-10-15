@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use chrono::{DateTime, Local, Utc};
 use serde_json::json;
 use tokio::sync::{broadcast, Mutex};
 use tokio_util::sync::CancellationToken;
@@ -15,12 +16,14 @@ use crate::engine::local::{self, LocalEngine};
 use crate::engine::{Engine, UnavailableEngine};
 use crate::events::{new_bus, Bus, RuntimeEvent};
 use crate::model::{
-    Approval, ClaudeStatus, Dot, DotOverview, DotSpec, EngineKind, Inbox, NewRun, PendingApproval,
-    ReviewRun, Run, RunEventRecord, RunStatus, SettingsSaved, Status, TriggerKind, WorktreeDiff,
+    Approval, AttentionRun, ClaudeStatus, Dot, DotOverview, DotSpec, EngineKind, Inbox, NewRun,
+    PendingApproval, ReviewRun, Run, RunEventRecord, RunStatus, ScheduleChange, ScheduleView,
+    SettingsSaved, Status, TriggerKind, WorktreeDiff,
 };
 use crate::policy::{allow_candidates, Action, Rule, RuleCandidate};
 use crate::runner::{Runner, RunnerConfig};
-use crate::scheduler::Scheduler;
+use crate::schedule::{upcoming, Schedule};
+use crate::scheduler::{Clock, Scheduler, SystemClock};
 use crate::server::{self, ServerState};
 use crate::settings::Settings;
 use crate::store::Store;
@@ -39,6 +42,8 @@ pub struct Config {
     pub claude_env: Vec<(String, String)>,
     /// Delays between attempts when a local endpoint is unreachable or answers 5xx.
     pub local_retry_delays: Vec<Duration>,
+    /// Where the scheduler and the schedule rows get the time. Tests move a fake one by hand.
+    pub clock: Arc<dyn Clock>,
 }
 
 impl Config {
@@ -51,6 +56,7 @@ impl Config {
             claude_path: None,
             claude_env: Vec::new(),
             local_retry_delays: DEFAULT_RETRY_DELAYS.to_vec(),
+            clock: Arc::new(SystemClock),
         }
     }
 
@@ -70,6 +76,7 @@ pub struct Runtime {
     hub: Arc<ApprovalHub>,
     runner: Arc<Runner>,
     scheduler: Arc<Scheduler>,
+    clock: Arc<dyn Clock>,
     port: u16,
     server_error: Option<String>,
     claude_program: Option<PathBuf>,
@@ -110,6 +117,13 @@ impl Runtime {
         let recovered = store.recover_interrupted().await?;
         if !recovered.is_empty() {
             tracing::warn!("marked {} interrupted run(s) as failed", recovered.len());
+        }
+        // Every schedule has its row before the scheduler's first pass: a dot upgraded by
+        // migration 0005 gets one now, and a row a failed change left stale is reset.
+        for dot in store.list_dots().await? {
+            store
+                .sync_schedule_state(&dot.id, dot.spec.schedule.as_ref(), false, cfg.clock.now())
+                .await?;
         }
 
         let mut engines: HashMap<EngineKind, Arc<dyn Engine>> = HashMap::new();
@@ -192,7 +206,12 @@ impl Runtime {
             );
         }
         runner.spawn_dispatcher(shutdown.clone());
-        let scheduler = Scheduler::new(store.clone(), runner.clone());
+        let scheduler = Scheduler::new(
+            store.clone(),
+            runner.clone(),
+            bus.clone(),
+            cfg.clock.clone(),
+        );
         scheduler.set_paused(settings.schedules_paused);
         scheduler.spawn(shutdown.clone());
         Ok(Runtime {
@@ -201,6 +220,7 @@ impl Runtime {
             hub,
             runner,
             scheduler,
+            clock: cfg.clock.clone(),
             port,
             server_error,
             claude_program,
@@ -297,33 +317,63 @@ impl Runtime {
         self.store.get_dot(id).await
     }
 
-    /// Every dot with its active and last run and its next scheduled fire time.
+    /// Every dot with its active and last run and where its schedule stands.
     pub async fn dot_overview(&self) -> Result<Vec<DotOverview>> {
-        let now = chrono::Local::now();
+        let now = self.clock.now();
         let mut rows = Vec::new();
         for dot in self.store.list_dots().await? {
-            let next_fire = match (&dot.spec.schedule, dot.spec.enabled) {
-                (Some(expr), true) => crate::scheduler::next_fire(expr, now)
-                    .ok()
-                    .flatten()
-                    .map(|t| t.to_rfc3339()),
-                _ => None,
-            };
             rows.push(DotOverview {
                 active_run: self.store.latest_run(&dot.id, true).await?,
                 last_run: self.store.latest_run(&dot.id, false).await?,
-                next_fire,
+                schedule_state: self.schedule_view(&dot, now).await?,
                 dot,
             });
         }
         Ok(rows)
     }
 
-    /// The next `count` (1 to 10) fire times of a cron expression, RFC 3339 in local time.
-    pub fn preview_schedule(expr: &str, count: usize) -> Result<Vec<String>> {
-        let schedule = crate::scheduler::parse_cron(expr)?;
-        Ok(schedule
-            .after(&chrono::Local::now())
+    /// The view of the dot's schedule row in local time; `None` without a schedule or a row.
+    async fn schedule_view(&self, dot: &Dot, now: DateTime<Utc>) -> Result<Option<ScheduleView>> {
+        let Some(schedule) = &dot.spec.schedule else {
+            return Ok(None);
+        };
+        let Some(state) = self.store.get_schedule_state(&dot.id).await? else {
+            return Ok(None);
+        };
+        let attention = match &state.attention_run_id {
+            Some(id) => match self.store.get_run(id).await {
+                Ok(run) => Some(AttentionRun {
+                    run_id: run.id,
+                    error: run.error,
+                }),
+                // Deleted since the row was read: its flag went with it.
+                Err(Error::NotFound(_)) => None,
+                Err(e) => return Err(e),
+            },
+            None => None,
+        };
+        Ok(Some(ScheduleView::new(
+            &state,
+            schedule,
+            dot.spec.enabled,
+            attention,
+            now,
+            &Local,
+        )))
+    }
+
+    /// The next `count` (1 to 10) slots of a schedule saved now, RFC 3339 in local time, within
+    /// its bounds. Refuses what `DotSpec::validate` refuses, and what a create or a change of
+    /// the schedule refuses ("this schedule would never run": no slot is left), so the UI
+    /// parses no schedule and can say why before a save. An `Every` sent with its anchor keeps
+    /// its phase; one without starts now.
+    pub fn preview_schedule(schedule: &Schedule, count: usize) -> Result<Vec<String>> {
+        schedule.validate()?;
+        let now = Local::now();
+        let mut schedule = schedule.clone();
+        schedule.fill_anchor(None, now.with_timezone(&Utc));
+        schedule.check_runs_after(&now, &Local)?;
+        Ok(upcoming(&schedule, &now, &Local)?
             .take(count.clamp(1, 10))
             .map(|t| t.to_rfc3339())
             .collect())
@@ -358,8 +408,8 @@ impl Runtime {
         self.store.approvals_for_run(run_id).await
     }
 
-    /// Pending approvals, plus the finished, unreviewed thread ends that failed or kept a
-    /// worktree with changes.
+    /// Pending approvals, the finished, unreviewed thread ends that failed or kept a worktree
+    /// with changes, and the schedules that need attention.
     pub async fn inbox(&self) -> Result<Inbox> {
         let mut names = std::collections::HashMap::new();
         for dot in self.store.list_dots().await? {
@@ -396,12 +446,38 @@ impl Runtime {
         Ok(Inbox {
             approvals,
             review_runs,
+            attention: self.store.list_schedule_attention().await?,
         })
     }
 
     pub async fn inbox_count(&self) -> Result<usize> {
         let inbox = self.inbox().await?;
-        Ok(inbox.approvals.len() + inbox.review_runs.len())
+        Ok(inbox.approvals.len() + inbox.review_runs.len() + inbox.attention.len())
+    }
+
+    /// Clears the dot's "Needs attention" (Scheduler v2 spec §8); the schedule is not
+    /// otherwise changed. `NotFound` when the dot has no schedule row; nothing happens when
+    /// the flag is not set.
+    pub async fn dismiss_schedule_attention(&self, dot_id: &str) -> Result<()> {
+        let Some(state) = self.store.get_schedule_state(dot_id).await? else {
+            return Err(Error::NotFound(format!("schedule of dot {dot_id}")));
+        };
+        if state.attention_run_id.is_none() {
+            return Ok(());
+        }
+        let change = ScheduleChange {
+            attention_run_id: Some(None),
+            ..Default::default()
+        };
+        if self
+            .store
+            .update_schedule_state(dot_id, &change, self.clock.now())
+            .await?
+            .is_some()
+        {
+            self.schedule_updated(dot_id);
+        }
+        Ok(())
     }
 
     /// Takes the thread of `run_id` out of the Inbox. Refused while the thread is active.
@@ -518,26 +594,59 @@ impl Runtime {
         ))
     }
 
+    /// Brings the dot's schedule row in line with the dot after a change of it (Scheduler v2
+    /// spec §4): made for a new schedule, reset for a changed one or when `enabled_now` (the
+    /// dot was disabled and is enabled now), deleted without a schedule. A change of the row
+    /// is published as `ScheduleUpdated`.
+    async fn sync_schedule(&self, dot: &Dot, enabled_now: bool) -> Result<()> {
+        let schedule = dot.spec.schedule.as_ref();
+        if self
+            .store
+            .sync_schedule_state(&dot.id, schedule, enabled_now, self.clock.now())
+            .await?
+        {
+            self.schedule_updated(&dot.id);
+        }
+        Ok(())
+    }
+
+    fn schedule_updated(&self, dot_id: &str) {
+        let _ = self.bus.send(RuntimeEvent::ScheduleUpdated {
+            dot_id: dot_id.to_string(),
+        });
+    }
+
     pub async fn create_dot(&self, spec: DotSpec) -> Result<Dot> {
         let dot = self.store.create_dot(&spec).await?;
+        self.sync_schedule(&dot, false).await?;
         self.scheduler.reload();
         Ok(dot)
     }
 
     pub async fn update_dot(&self, id: &str, spec: DotSpec) -> Result<Dot> {
+        let was_enabled = self.store.get_dot(id).await?.spec.enabled;
         let dot = self.store.update_dot(id, &spec).await?;
+        self.sync_schedule(&dot, dot.spec.enabled && !was_enabled)
+            .await?;
         self.scheduler.reload();
         Ok(dot)
     }
 
+    /// Deletes the dot; its schedule row goes with it (`ON DELETE CASCADE`).
     pub async fn delete_dot(&self, id: &str) -> Result<()> {
+        let had_row = self.store.get_schedule_state(id).await?.is_some();
         self.store.delete_dot_if_idle(id).await?;
+        if had_row {
+            self.schedule_updated(id);
+        }
         self.scheduler.reload();
         Ok(())
     }
 
     pub async fn set_dot_enabled(&self, id: &str, enabled: bool) -> Result<Dot> {
+        let was_enabled = self.store.get_dot(id).await?.spec.enabled;
         let dot = self.store.set_dot_enabled(id, enabled).await?;
+        self.sync_schedule(&dot, enabled && !was_enabled).await?;
         self.scheduler.reload();
         Ok(dot)
     }

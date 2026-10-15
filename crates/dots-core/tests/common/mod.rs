@@ -1,5 +1,8 @@
 #![allow(dead_code)]
 
+pub mod clock;
+pub mod tz;
+
 use std::path::Path;
 
 use dots_core::model::{Dot, DotSpec, Run, RunStatus, TriggerKind, WorkspaceMode};
@@ -84,6 +87,7 @@ pub fn fake_run(trigger: TriggerKind, payload: Option<Value>, session_id: Option
         started_at: None,
         ended_at: None,
         reviewed_at: None,
+        retry_of: None,
     }
 }
 

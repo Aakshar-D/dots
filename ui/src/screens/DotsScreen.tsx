@@ -3,10 +3,11 @@ import { Play, Plus } from "lucide-react";
 import { Link, useNavigate } from "react-router";
 
 import { commands } from "@/api/commands";
-import type { DotOverview } from "@/api/types";
+import { LIMITS, type DotOverview } from "@/api/types";
 import { ErrorNote } from "@/components/ErrorNote";
 import { Page } from "@/components/Page";
 import { StatusBadge } from "@/components/StatusBadge";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -17,19 +18,37 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { localDateTime, relativeTime } from "@/lib/format";
+import { localDateTime, localTime, relativeTime } from "@/lib/format";
 import { notifyError } from "@/lib/notify";
 import { invalidateDots, keys, setDotEnabledMutation } from "@/lib/query";
 
 /// The key of this screen's "Run now", so that the ones on their way can be found.
 const RUN_NOW = ["run-now"] as const;
 
-/// When the dot runs next on its schedule, or why it will not.
+/// When the dot runs next on its schedule, or why it will not. An ended schedule says how it
+/// ended, paused or not: a schedule that completed without firing once had its only slot
+/// missed and skipped.
 export function nextRun(row: DotOverview, schedulesPaused: boolean): string {
   if (!row.dot.schedule) return "No schedule";
   if (!row.dot.enabled) return "Disabled";
+  const state = row.schedule_state;
+  if (state?.status === "completed") {
+    return state.fired_count === 0 ? "Completed (missed)" : "Completed";
+  }
+  if (state?.status === "expired") return "Expired";
   if (schedulesPaused) return "Paused";
-  return localDateTime(row.next_fire) || "Not scheduled";
+  return localDateTime(state?.next_fire) || "Not scheduled";
+}
+
+/// When the retry of the dot's last occurrence starts, and which attempt it is; null when no
+/// retry waits, or when none can start (the dot is off or schedules are paused).
+export function retrying(row: DotOverview, schedulesPaused: boolean): string | null {
+  const state = row.schedule_state;
+  if (!row.dot.enabled || schedulesPaused || !state?.retry_at || state.retry_attempt === null) {
+    return null;
+  }
+  const of = LIMITS.max_schedule_attempts;
+  return `Retrying at ${localTime(state.retry_at)} (attempt ${state.retry_attempt} of ${of})`;
 }
 
 export function DotsScreen() {
@@ -108,12 +127,23 @@ export function DotsScreen() {
         <TableBody>
           {overview.data.map((row) => {
             const { dot, active_run: active, last_run: last } = row;
+            const paused = status?.schedules_paused ?? false;
+            const attention = row.schedule_state?.attention;
+            const retry = retrying(row, paused);
             return (
               <TableRow key={dot.id}>
                 <TableCell>
-                  <Link to={`/dots/${dot.id}`} className="font-medium hover:underline">
-                    {dot.name}
-                  </Link>
+                  <div className="flex items-center gap-2">
+                    <Link to={`/dots/${dot.id}`} className="font-medium hover:underline">
+                      {dot.name}
+                    </Link>
+                    {/* The Inbox lists the run that failed, with Run now and Dismiss. */}
+                    {attention && (
+                      <Badge variant="destructive" title={attention.error ?? undefined}>
+                        Needs attention
+                      </Badge>
+                    )}
+                  </div>
                 </TableCell>
                 <TableCell className="text-muted-foreground">
                   {dot.engine} · {dot.model}
@@ -127,7 +157,12 @@ export function DotsScreen() {
                     <span className="text-muted-foreground">Idle</span>
                   )}
                 </TableCell>
-                <TableCell>{nextRun(row, status?.schedules_paused ?? false)}</TableCell>
+                <TableCell>
+                  <div className="flex flex-col">
+                    <span>{nextRun(row, paused)}</span>
+                    {retry && <span className="text-xs text-muted-foreground">{retry}</span>}
+                  </div>
+                </TableCell>
                 <TableCell>
                   {last ? (
                     <Link

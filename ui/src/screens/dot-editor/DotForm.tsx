@@ -10,15 +10,13 @@ import { NativeSelect } from "@/components/ui/native-select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import type { SpecErrors } from "@/lib/dot-rules";
-import { localDateTime } from "@/lib/format";
 import { notifyError } from "@/lib/notify";
 import { PolicyEditor } from "@/screens/dot-editor/PolicyEditor";
+import { ScheduleEditor, type SchedulePreview } from "@/screens/dot-editor/ScheduleEditor";
 import { WebhookPanel } from "@/screens/dot-editor/WebhookPanel";
 
 /// What the editor holds: the spec, and the MCP servers as the text being typed.
 export type Draft = { spec: DotSpec; mcpText: string };
-
-export type SchedulePreview = { times: string[]; pending: boolean };
 
 function Section(props: { title: string; children: ReactNode }) {
   return (
@@ -183,30 +181,13 @@ export function DotForm(props: {
       </Section>
 
       <Section title="Schedule">
-        <Field
-          label="Cron expression"
-          htmlFor="dot-schedule"
+        <ScheduleEditor
+          schedule={spec.schedule}
+          stored={props.existing?.schedule ?? null}
+          onChange={(schedule) => set("schedule", schedule)}
           error={errors.schedule}
-          hint="Six fields: second minute hour day-of-month month day-of-week. Empty: no schedule."
-        >
-          <Input
-            id="dot-schedule"
-            className="font-mono"
-            placeholder="0 0 2 * * *"
-            value={spec.schedule ?? ""}
-            onChange={(e) => set("schedule", e.target.value === "" ? null : e.target.value)}
-          />
-        </Field>
-        {props.schedule.times.length > 0 && (
-          <div className="text-xs text-muted-foreground">
-            <span>Next runs:</span>
-            <ul aria-label="Next runs" className="mt-1 flex flex-col gap-0.5">
-              {props.schedule.times.map((t) => (
-                <li key={t}>{localDateTime(t)}</li>
-              ))}
-            </ul>
-          </div>
-        )}
+          preview={props.schedule}
+        />
       </Section>
 
       {props.existing && (

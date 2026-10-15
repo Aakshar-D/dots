@@ -1,4 +1,5 @@
 const dateTime = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
+const timeOfDay = new Intl.DateTimeFormat(undefined, { timeStyle: "short" });
 
 /// An RFC 3339 timestamp in the user's locale and time zone. "" for none; the text itself
 /// when it is not a timestamp.
@@ -6,6 +7,15 @@ export function localDateTime(iso: string | null | undefined): string {
   if (!iso) return "";
   const t = Date.parse(iso);
   return Number.isNaN(t) ? iso : dateTime.format(t);
+}
+
+/// The time of day of an RFC 3339 timestamp, in the user's locale and time zone, for a time
+/// that is close enough not to need its date. "" for none; the text itself when it is not a
+/// timestamp.
+export function localTime(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const t = Date.parse(iso);
+  return Number.isNaN(t) ? iso : timeOfDay.format(t);
 }
 
 /// "45s", "3m 05s", "2h 07m". Without an end the run is still going: measured up to `now`.

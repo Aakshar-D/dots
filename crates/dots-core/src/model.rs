@@ -1,7 +1,9 @@
+use chrono::{DateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::policy::{Policy, Preset};
+use crate::schedule::{next_slot, Schedule, Until};
 use crate::{Error, Result};
 
 str_enum!(EngineKind { Claude => "claude", Local => "local" });
@@ -70,7 +72,7 @@ pub struct DotSpec {
     pub endpoint_url: Option<String>,
     pub workdir: String,
     pub workspace_mode: WorkspaceMode,
-    pub schedule: Option<String>,
+    pub schedule: Option<Schedule>,
     pub policy: Policy,
     pub mcp_servers: Option<Value>,
     pub use_user_settings: bool,
@@ -129,8 +131,8 @@ impl DotSpec {
                 _ => return invalid("the local engine requires endpoint_url"),
             }
         }
-        if let Some(expr) = &self.schedule {
-            crate::scheduler::parse_cron(expr)?;
+        if let Some(schedule) = &self.schedule {
+            schedule.validate()?;
         }
         if self.max_turns == 0 {
             return invalid("max_turns must be at least 1");
@@ -190,6 +192,8 @@ pub struct Run {
     pub ended_at: Option<String>,
     /// Set when the user marked the run reviewed or discarded its worktree.
     pub reviewed_at: Option<String>,
+    /// The failed scheduled run that this run retries.
+    pub retry_of: Option<String>,
 }
 
 /// Input for `Store::create_run`. `root_run_id: None` makes the run its own root.
@@ -204,6 +208,7 @@ pub struct NewRun {
     pub workspace_path: Option<String>,
     pub branch: Option<String>,
     pub base_commit: Option<String>,
+    pub retry_of: Option<String>,
 }
 
 impl NewRun {
@@ -218,8 +223,75 @@ impl NewRun {
             workspace_path: None,
             branch: None,
             base_commit: None,
+            retry_of: None,
         }
     }
+}
+
+str_enum!(ScheduleStatus {
+    Active => "active",
+    Completed => "completed",
+    Expired => "expired",
+});
+
+/// A retry that waits (Scheduler v2 spec §6). Times are RFC 3339 UTC (`util::timestamp`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingRetry {
+    /// The slot whose occurrence is retried.
+    pub slot_at: String,
+    /// The attempt the retry is, 2 to 6.
+    pub attempt: u32,
+    /// When it starts.
+    pub at: String,
+}
+
+/// Where a dot's schedule stands: its `schedule_state` row (Scheduler v2 spec §4). Times are
+/// RFC 3339 UTC (`util::timestamp`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScheduleState {
+    pub dot_id: String,
+    /// The schedule's JSON when the row was made or reset (`Schedule::rule_key`).
+    pub rule_key: String,
+    pub status: ScheduleStatus,
+    /// The newest slot handled: fired, coalesced or skipped.
+    pub last_slot_at: String,
+    /// Slots that started a run or joined a queued one.
+    pub fired_count: u32,
+    /// The run whose outcome decides the current occurrence.
+    pub watch_run_id: Option<String>,
+    pub retry: Option<PendingRetry>,
+    /// The last failed run of an occurrence that failed in the end ("Needs attention").
+    pub attention_run_id: Option<String>,
+    pub updated_at: String,
+}
+
+/// Input for `Store::update_schedule_state`: the fields to write, in one transaction. `None`
+/// leaves a field as it is; `Some(None)` clears it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ScheduleChange {
+    pub status: Option<ScheduleStatus>,
+    pub watch_run_id: Option<Option<String>>,
+    pub retry: Option<Option<PendingRetry>>,
+    pub attention_run_id: Option<Option<String>>,
+    /// Also marks this run reviewed, in the same transaction, when the row is written: the
+    /// scheduler judged the failure of a scheduled run that made no tool call into a retry or
+    /// into "Needs attention", so it is not a run to review as well.
+    pub reviewed_run: Option<String>,
+    /// Writes only while the row watches this run: the change follows from judging it.
+    pub if_watching: Option<String>,
+    /// Writes only while `last_slot_at` is this: a reset of the row meanwhile moved it.
+    pub if_last_slot_at: Option<String>,
+}
+
+/// What `Store::record_slot` and `Store::start_retry` did with a slot or a retry.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SlotStart {
+    /// The slot was skipped: no run.
+    Skipped,
+    /// A new run was queued. It is announced and the dispatcher woken by the caller.
+    Enqueued(Run),
+    /// The dot's queued run serves it.
+    Coalesced(Run),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -282,6 +354,71 @@ pub struct WorktreeDiff {
     pub exists: bool,
 }
 
+/// The run that left a schedule needing attention, with its error.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttentionRun {
+    pub run_id: String,
+    pub error: Option<String>,
+}
+
+/// Where a dot's schedule stands, as the Dots screen shows it (Scheduler v2 spec §8): its
+/// `schedule_state` row, with the times in local time and what comes next.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScheduleView {
+    pub status: ScheduleStatus,
+    pub fired_count: u32,
+    /// The first slot after now, RFC 3339; `None` when nothing more fires: the dot is
+    /// disabled, the schedule is not active, or it has no slot or no count left.
+    pub next_fire: Option<String>,
+    /// When the waiting retry starts, RFC 3339, and the attempt it is; `None` unless a retry
+    /// waits on an enabled dot.
+    pub retry_at: Option<String>,
+    pub retry_attempt: Option<u32>,
+    pub attention: Option<AttentionRun>,
+}
+
+impl ScheduleView {
+    /// The view of `state`, the row of a dot with `schedule`, at `now`, with times in `tz`.
+    /// `attention` is the run the row's `attention_run_id` names.
+    pub fn new<Tz>(
+        state: &ScheduleState,
+        schedule: &Schedule,
+        enabled: bool,
+        attention: Option<AttentionRun>,
+        now: DateTime<Utc>,
+        tz: &Tz,
+    ) -> ScheduleView
+    where
+        Tz: TimeZone + 'static,
+        Tz::Offset: std::fmt::Display,
+    {
+        let parse = |t: &str| DateTime::parse_from_rfc3339(t).ok();
+        let counted = match schedule.until {
+            Some(Until::Count(n)) => state.fired_count >= n,
+            _ => false,
+        };
+        let live = enabled && state.status == ScheduleStatus::Active;
+        // A slot the pass has not handled yet is past: the next fire time is after now.
+        let after =
+            parse(&state.last_slot_at).map_or(now, |last| now.max(last.with_timezone(&Utc)));
+        let next_fire = (live && !counted)
+            .then(|| next_slot(schedule, &after, tz).ok().flatten())
+            .flatten()
+            .map(|t| t.to_rfc3339());
+        let retry = state.retry.as_ref().filter(|_| live);
+        ScheduleView {
+            status: state.status,
+            fired_count: state.fired_count,
+            next_fire,
+            retry_at: retry.map(|r| {
+                parse(&r.at).map_or_else(|| r.at.clone(), |at| at.with_timezone(tz).to_rfc3339())
+            }),
+            retry_attempt: retry.map(|r| r.attempt),
+            attention,
+        }
+    }
+}
+
 /// One row of the Dots screen.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DotOverview {
@@ -289,8 +426,8 @@ pub struct DotOverview {
     /// The newest queued, running or awaiting run.
     pub active_run: Option<Run>,
     pub last_run: Option<Run>,
-    /// RFC 3339 local time; `None` without an enabled schedule.
-    pub next_fire: Option<String>,
+    /// `None` without a schedule.
+    pub schedule_state: Option<ScheduleView>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -311,11 +448,26 @@ pub struct ReviewRun {
     pub worktree_exists: bool,
 }
 
-/// Pending approvals and finished runs awaiting review (spec §12 Inbox).
+/// A schedule whose occurrence failed in the end (Scheduler v2 spec §6, "Needs attention").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NeedsAttention {
+    pub dot_id: String,
+    pub dot_name: String,
+    /// The last failed run of the occurrence.
+    pub run_id: String,
+    pub error: Option<String>,
+    /// When that run ended, RFC 3339 UTC.
+    pub failed_at: String,
+}
+
+/// Pending approvals, finished runs awaiting review and schedules that need attention (spec
+/// §12 Inbox; Scheduler v2 spec §8).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Inbox {
     pub approvals: Vec<PendingApproval>,
     pub review_runs: Vec<ReviewRun>,
+    /// Newest failure first.
+    pub attention: Vec<NeedsAttention>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

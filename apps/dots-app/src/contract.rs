@@ -7,6 +7,8 @@ use dots_core::engine::EngineEvent;
 use dots_core::events::RuntimeEvent;
 use dots_core::model::*;
 use dots_core::policy::{allow_candidates, Action, Policy, Preset};
+use dots_core::schedule::Schedule;
+use dots_core::scheduler::MAX_ATTEMPTS;
 use dots_core::settings::{Settings, MAX_CONCURRENT_RUNS};
 use serde_json::{json, Value};
 
@@ -25,7 +27,7 @@ fn spec() -> DotSpec {
         "Run the tests and summarize failures.",
         "C:/dev/app",
     );
-    s.schedule = Some("0 0 2 * * *".into());
+    s.schedule = Some(Schedule::cron("0 0 2 * * *"));
     s.mcp_servers = Some(json!({"github": {"type": "http", "url": "http://127.0.0.1:9000/mcp"}}));
     s
 }
@@ -71,6 +73,7 @@ fn run() -> Run {
         started_at: Some(TS.into()),
         ended_at: Some(TS.into()),
         reviewed_at: None,
+        retry_of: None,
     }
 }
 
@@ -184,8 +187,40 @@ fn engine_events() -> Value {
     to(samples)
 }
 
+/// One schedule of every rule kind, with every kind of bound. The `every` without an anchor is
+/// what the UI sends; the core fills the anchor when the dot is saved. Read through the core's
+/// type, so a sample in a form the core does not accept fails here.
+fn schedules() -> Value {
+    let samples = [
+        json!({"rule": {"kind": "once", "at": "2026-10-20T09:00"}, "catch_up": true, "until": null}),
+        json!({
+            "rule": {"kind": "every", "minutes": 90, "anchor": "2026-10-09T12:00:00Z"},
+            "catch_up": true,
+            "until": {"count": 10}
+        }),
+        json!({"rule": {"kind": "every", "minutes": 30}, "catch_up": false, "until": null}),
+        json!({
+            "rule": {"kind": "daily", "time": "09:00"},
+            "catch_up": true,
+            "until": {"date": "2026-12-31T18:00"}
+        }),
+        json!({
+            "rule": {"kind": "weekly", "days": ["mon", "fri"], "time": "07:30"},
+            "catch_up": true,
+            "until": null
+        }),
+        to(Schedule::cron("0 0 2 * * *")),
+    ];
+    let read: Vec<Schedule> = samples
+        .into_iter()
+        .map(|v| serde_json::from_value(v).expect("sample schedule"))
+        .collect();
+    to(read)
+}
+
 /// The samples, keyed by the UI schema that parses them. `Enums` lists every variant of every
-/// shared enum and `Limits` the validation limits the editor mirrors: the UI parses live data
+/// shared enum and `Limits` the validation limits the editor mirrors, with the attempts of a
+/// scheduled occurrence that the Dots list and the run view name: the UI parses live data
 /// with its schemas, so a variant or limit it does not know must fail a test, not a screen.
 /// `NewDotSpec` is the answer of the `new_dot_spec` command, the blank dot of the UI's tests,
 /// and `Commands` names every registered command.
@@ -196,12 +231,30 @@ pub fn samples() -> Value {
     };
     json!({
         "DotSpec": to(local_spec()),
+        "Schedule": schedules(),
         "Dot": to(dot()),
         "Run": to(run()),
         "RunEventRecord": to(event()),
         "Approval": to(approval()),
         "RuntimeEvent": [
-            to(RuntimeEvent::RunUpdated { run: run() }),
+            // A retry, queued: it names the run it retries.
+            to(RuntimeEvent::RunUpdated { run: Run {
+                id: "01J0RUN2".into(),
+                root_run_id: "01J0RUN2".into(),
+                payload: Some(json!({"scheduled_for": "2026-10-09T02:00:00+01:00", "attempt": 2})),
+                status: RunStatus::Queued,
+                session_id: None,
+                workspace_path: None,
+                branch: None,
+                base_commit: None,
+                summary: None,
+                tokens_in: 0,
+                tokens_out: 0,
+                started_at: None,
+                ended_at: None,
+                retry_of: Some("01J0RUN".into()),
+                ..run()
+            }}),
             to(RuntimeEvent::RunEvent { event: event() }),
             to(RuntimeEvent::ApprovalRequested { approval: approval() }),
             to(RuntimeEvent::ApprovalDecided { approval: Approval {
@@ -221,6 +274,12 @@ pub fn samples() -> Value {
                 applied_at: Some(TS.into()),
                 ..approval()
             }}),
+            to(RuntimeEvent::ScheduleUpdated { dot_id: "01J0DOT".into() }),
+            to(RuntimeEvent::ScheduleAttention {
+                dot_id: "01J0DOT".into(),
+                run_id: "01J0RUN".into(),
+                error: Some("model server unreachable".into()),
+            }),
         ],
         // What `approval_rule_candidates` answers for the `Approval` sample.
         "RuleCandidate": to(allow_candidates(
@@ -231,11 +290,22 @@ pub fn samples() -> Value {
         "Status": to(status()),
         "Settings": to(&settings),
         "SettingsSaved": to(SettingsSaved { settings: settings.clone(), restart_required: true }),
+        // Every field of the schedule's view is set, so the UI's schema checks each one.
         "DotOverview": to(DotOverview {
             dot: dot(),
             active_run: None,
             last_run: Some(run()),
-            next_fire: Some("2026-10-10T02:00:00+01:00".into()),
+            schedule_state: Some(ScheduleView {
+                status: ScheduleStatus::Active,
+                fired_count: 3,
+                next_fire: Some("2026-10-10T02:00:00+01:00".into()),
+                retry_at: Some("2026-10-09T13:02:00+01:00".into()),
+                retry_attempt: Some(2),
+                attention: Some(AttentionRun {
+                    run_id: "01J0RUN0".into(),
+                    error: Some("model server unreachable".into()),
+                }),
+            }),
         }),
         "Inbox": to(Inbox {
             approvals: vec![PendingApproval {
@@ -247,6 +317,13 @@ pub fn samples() -> Value {
                 run: run(),
                 dot_name: "nightly-tests".into(),
                 worktree_exists: true,
+            }],
+            attention: vec![NeedsAttention {
+                dot_id: "01J0DOT".into(),
+                dot_name: "nightly-tests".into(),
+                run_id: "01J0RUN".into(),
+                error: Some("model server unreachable".into()),
+                failed_at: TS.into(),
             }],
         }),
         "WorktreeDiff": to(WorktreeDiff {
@@ -281,12 +358,14 @@ pub fn samples() -> Value {
             "Action": Action::ALL,
             "Preset": Preset::ALL,
             "FileStatus": FileStatus::ALL,
+            "ScheduleStatus": ScheduleStatus::ALL,
             "CmdErrorKind": CmdErrorKind::ALL,
         },
         "Limits": {
             "max_timeout_secs": MAX_TIMEOUT_SECS,
             "max_approval_wait_secs": MAX_APPROVAL_WAIT_SECS,
             "max_concurrent_runs": MAX_CONCURRENT_RUNS,
+            "max_schedule_attempts": MAX_ATTEMPTS,
         },
         "StartupError": to(StartupError {
             message: "Dots could not start: database disk image is malformed".into(),

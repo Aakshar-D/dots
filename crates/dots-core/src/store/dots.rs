@@ -1,8 +1,10 @@
+use chrono::{Local, SubsecRound, Utc};
 use sqlx::sqlite::SqliteRow;
 use sqlx::Row;
 
 use super::{opt_json, Store};
 use crate::model::{Dot, DotSpec, EngineKind, WorkspaceMode};
+use crate::schedule::Schedule;
 use crate::util::{new_id, new_token, now};
 use crate::{Error, Result};
 
@@ -24,7 +26,10 @@ fn dot_from_row(row: &SqliteRow) -> Result<Dot> {
             endpoint_url: row.try_get("endpoint_url")?,
             workdir: row.try_get("workdir")?,
             workspace_mode: WorkspaceMode::parse(&row.try_get::<String, _>("workspace_mode")?)?,
-            schedule: row.try_get("schedule")?,
+            schedule: row
+                .try_get::<Option<String>, _>("schedule")?
+                .map(|s| serde_json::from_str(&s))
+                .transpose()?,
             policy: serde_json::from_str(&row.try_get::<String, _>("policy")?)?,
             mcp_servers: opt_json(row.try_get("mcp_servers")?)?,
             use_user_settings: row.try_get::<i64, _>("use_user_settings")? != 0,
@@ -34,6 +39,27 @@ fn dot_from_row(row: &SqliteRow) -> Result<Dot> {
             enabled: row.try_get::<i64, _>("enabled")? != 0,
         },
     })
+}
+
+/// The spec as it is stored: validated, its schedule prepared against `previous`, the stored
+/// one (`Schedule::prepare_save`: the `Every` anchor, and the refusal of a new or changed
+/// schedule that would never run).
+fn prepared(spec: &DotSpec, previous: Option<&Schedule>) -> Result<DotSpec> {
+    spec.validate()?;
+    let mut spec = spec.clone();
+    if let Some(schedule) = &mut spec.schedule {
+        // Whole milliseconds, as `util::now()`: the stored anchor reads back the same.
+        schedule.prepare_save(previous, Utc::now().trunc_subsecs(3), &Local)?;
+    }
+    Ok(spec)
+}
+
+fn schedule_json(spec: &DotSpec) -> Result<Option<String>> {
+    Ok(spec
+        .schedule
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()?)
 }
 
 fn map_unique(e: sqlx::Error, name: &str) -> Error {
@@ -47,7 +73,7 @@ fn map_unique(e: sqlx::Error, name: &str) -> Error {
 
 impl Store {
     pub async fn create_dot(&self, spec: &DotSpec) -> Result<Dot> {
-        spec.validate()?;
+        let spec = &prepared(spec, None)?;
         let id = new_id();
         let ts = now();
         sqlx::query(
@@ -64,7 +90,7 @@ impl Store {
         .bind(&spec.endpoint_url)
         .bind(&spec.workdir)
         .bind(spec.workspace_mode.as_str())
-        .bind(&spec.schedule)
+        .bind(schedule_json(spec)?)
         .bind(new_token())
         .bind(serde_json::to_string(&spec.policy)?)
         .bind(spec.mcp_servers.as_ref().map(|v| v.to_string()))
@@ -99,9 +125,11 @@ impl Store {
 
     /// Updates a dot. `workdir`/`workspace_mode` may only change while the dot has no
     /// queued, running or awaiting runs (their workspaces were derived from the old values);
-    /// otherwise nothing changes and `Error::Conflict` is returned. The check is atomic.
+    /// otherwise nothing changes and `Error::Conflict` is returned. The check is atomic. The
+    /// schedule is prepared against the stored one (`prepared`).
     pub async fn update_dot(&self, id: &str, spec: &DotSpec) -> Result<Dot> {
-        spec.validate()?;
+        let previous = self.get_dot(id).await?.spec.schedule;
+        let spec = &prepared(spec, previous.as_ref())?;
         let res = sqlx::query(
             "UPDATE dots SET name = ?, instructions = ?, engine = ?, model = ?, endpoint_url = ?, \
              workdir = ?, workspace_mode = ?, schedule = ?, policy = ?, mcp_servers = ?, \
@@ -117,7 +145,7 @@ impl Store {
         .bind(&spec.endpoint_url)
         .bind(&spec.workdir)
         .bind(spec.workspace_mode.as_str())
-        .bind(&spec.schedule)
+        .bind(schedule_json(spec)?)
         .bind(serde_json::to_string(&spec.policy)?)
         .bind(spec.mcp_servers.as_ref().map(|v| v.to_string()))
         .bind(spec.use_user_settings as i64)

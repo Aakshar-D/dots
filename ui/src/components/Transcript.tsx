@@ -1,4 +1,8 @@
-import type { Run, RunEventRecord } from "@/api/types";
+import type { ReactNode } from "react";
+import { Link } from "react-router";
+import { z } from "zod";
+
+import { LIMITS, type Run, type RunEventRecord } from "@/api/types";
 import { Markdown } from "@/components/Markdown";
 import { StatusBadge } from "@/components/StatusBadge";
 import { isActive } from "@/lib/chat-threads";
@@ -20,6 +24,42 @@ function chatMessage(run: Run): string | null {
   }
   const message = (run.payload as Record<string, unknown>).message;
   return typeof message === "string" ? message : null;
+}
+
+/// What the scheduler wrote into the payload of a run it started: the slot, whether the slot
+/// had been missed, and which attempt of the occurrence the run is (a first one has none).
+const SchedulePayload = z.object({
+  scheduled_for: z.string(),
+  caught_up: z.boolean().optional(),
+  attempt: z.number().int().optional(),
+});
+
+/// The line under a scheduled run's trigger: the slot it served, or the attempt it retries,
+/// with a link to the run that failed. Nothing for another trigger or a payload it cannot read.
+function ScheduleLine({ run }: { run: Run }) {
+  if (run.trigger !== "schedule") return null;
+  const payload = SchedulePayload.safeParse(run.payload);
+  if (!payload.success) return null;
+  const { scheduled_for: slot, caught_up: caughtUp, attempt } = payload.data;
+  let line: ReactNode = `Scheduled for ${localDateTime(slot)}`;
+  if (caughtUp) line = `${line}, caught up after the PC was off`;
+  const of = LIMITS.max_schedule_attempts;
+  if (attempt !== undefined && attempt > 1) {
+    // A retry names the run it retries. A slot that dropped a pending retry carries its attempt
+    // without `retry_of`: it still serves its own slot.
+    line =
+      run.retry_of === null ? (
+        `${line} · attempt ${attempt} of ${of}`
+      ) : (
+        <>
+          Retry {attempt} of {of} of{" "}
+          <Link to={`/runs/${run.retry_of}`} className="text-foreground hover:underline">
+            the failed run
+          </Link>
+        </>
+      );
+  }
+  return <p className="mb-2 text-xs text-muted-foreground">{line}</p>;
 }
 
 /// `active`: the item's run is still going. Only then can a tool call without a result be one
@@ -101,6 +141,7 @@ export function Transcript(props: {
               <span>{localDateTime(run.queued_at)}</span>
               {many && <StatusBadge status={run.status} />}
             </header>
+            <ScheduleLine run={run} />
             <div className="flex flex-col gap-2">
               {message !== null && (
                 <p className="self-end rounded-lg bg-primary px-3 py-1.5 whitespace-pre-wrap text-primary-foreground">

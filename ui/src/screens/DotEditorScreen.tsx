@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { hashKey, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Play } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { useNavigate, useParams } from "react-router";
@@ -11,7 +11,7 @@ import { ErrorNote } from "@/components/ErrorNote";
 import { Page } from "@/components/Page";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { mcpOf, specErrors, specOf } from "@/lib/dot-rules";
+import { mcpOf, scheduleError, scheduleOf, specErrors, specOf } from "@/lib/dot-rules";
 import { errorMessage, notifyError } from "@/lib/notify";
 import { invalidateDots, keys, useSwitchingDot } from "@/lib/query";
 import { useDebounced } from "@/lib/use-debounced";
@@ -41,16 +41,24 @@ function Editor(props: {
   const settings = useQuery({ queryKey: keys.settings, queryFn: commands.getSettings }).data;
   const save = useMutation({ mutationFn: props.onSave });
 
-  // The core validates the cron expression and computes the preview; the UI parses no cron.
-  const expr = useDebounced((draft.spec.schedule ?? "").trim(), 300);
+  // The core validates the schedule and computes the preview; the UI parses no schedule. It
+  // only holds back one with an emptied field, which the core could not even be sent.
+  const schedule = scheduleOf(useDebounced(draft.spec.schedule, 300));
+  const sendable = schedule !== null && scheduleError(schedule) === undefined;
   const preview = useQuery({
-    queryKey: keys.schedulePreview(expr),
-    queryFn: () => commands.previewSchedule(expr, 3),
-    enabled: expr !== "",
+    queryKey: keys.schedulePreview(schedule),
+    queryFn: () => (schedule ? commands.previewSchedule(schedule, 3) : []),
+    enabled: sendable,
   });
+  // The core refuses a new or changed schedule that would never run, and keeps one saved
+  // unchanged (a dot whose once has passed can still be edited). So its objection to the
+  // stored schedule is a note, and blocks a save only once the schedule changed.
+  const stored = props.existing?.schedule ?? null;
+  const changed = hashKey([schedule]) !== hashKey([scheduleOf(stored)]);
+  const objection = sendable && preview.isError ? errorMessage(preview.error) : undefined;
 
   const errors = specErrors(draft.spec, draft.mcpText);
-  if (expr !== "" && preview.isError) errors.schedule = errorMessage(preview.error);
+  if (objection && changed) errors.schedule ??= objection;
 
   function submit() {
     setTried(true);
@@ -58,7 +66,7 @@ function Editor(props: {
     const mcp = mcpOf(draft.spec, draft.mcpText);
     save.mutate({
       ...draft.spec,
-      schedule: draft.spec.schedule?.trim() || null,
+      schedule: scheduleOf(draft.spec.schedule),
       endpoint_url: draft.spec.endpoint_url?.trim() || null,
       mcp_servers: "value" in mcp ? mcp.value : null,
     });
@@ -75,14 +83,15 @@ function Editor(props: {
       <DotForm
         draft={draft}
         onChange={setDraft}
-        // Until the first save attempt only the schedule's error shows: the core reports it
-        // while the user types, and an empty new form should not start out red.
-        errors={tried ? errors : errors.schedule ? { schedule: errors.schedule } : {}}
+        // Until the first save attempt only the core's objection to the schedule shows: it
+        // comes while the user types, and an empty new form should not start out red.
+        errors={tried ? errors : objection && changed ? { schedule: objection } : {}}
         existing={props.existing}
         endpoints={settings?.local_endpoints ?? []}
         schedule={{
-          times: expr !== "" && preview.data ? preview.data : [],
+          times: sendable && preview.data ? preview.data : [],
           pending: preview.isFetching,
+          note: changed ? undefined : objection,
         }}
       />
     </div>

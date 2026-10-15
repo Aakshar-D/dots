@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "react-router";
+import { Play } from "lucide-react";
+import { Link, useNavigate } from "react-router";
 
 import { commands } from "@/api/commands";
-import type { ReviewRun } from "@/api/types";
+import type { NeedsAttention, ReviewRun } from "@/api/types";
 import { ApprovalCard } from "@/components/ApprovalCard";
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { ErrorNote } from "@/components/ErrorNote";
@@ -14,6 +15,7 @@ import { byRun, type RunApprovals } from "@/lib/approvals";
 import { relativeTime } from "@/lib/format";
 import { notifyError } from "@/lib/notify";
 import { invalidate, keys } from "@/lib/query";
+import { onSingleClick } from "@/lib/single-click";
 import { toolPreview } from "@/lib/transcript";
 
 /// A finished run that waits for the user: it failed, or it left a worktree to look at.
@@ -40,6 +42,65 @@ function ReviewRow({ run }: { run: ReviewRun }) {
         canReview
         canDiscard={run.worktree_exists}
       />
+    </li>
+  );
+}
+
+/// A schedule whose last occurrence failed in the end: its retries were used up, or its run
+/// had called a tool. The schedule keeps firing; the flag goes when a later run of the dot
+/// succeeds or when it is dismissed here.
+function AttentionRow({ item }: { item: NeedsAttention }) {
+  const qc = useQueryClient();
+  const navigate = useNavigate();
+  // The flag shows in the Inbox and in the Dots list. The core also announces the change
+  // (`ScheduleUpdated`); this reload does not wait for it.
+  const reload = () => {
+    for (const queryKey of [keys.inbox, keys.overview]) invalidate(qc, queryKey);
+  };
+  const runNow = useMutation({
+    mutationFn: () => commands.runNow(item.dot_id),
+    onSuccess: (run) => void navigate(`/runs/${run.id}`),
+    onError: notifyError,
+    onSettled: reload,
+  });
+  const dismiss = useMutation({
+    mutationFn: () => commands.dismissScheduleAttention(item.dot_id),
+    onError: notifyError,
+    onSettled: reload,
+  });
+  return (
+    <li
+      aria-label={`${item.dot_name} needs attention`}
+      className="flex items-center gap-3 rounded-lg border p-3"
+    >
+      <div className="flex min-w-0 flex-1 flex-col">
+        <Link to={`/dots/${item.dot_id}`} className="font-medium hover:underline">
+          {item.dot_name}
+        </Link>
+        <span className="truncate text-xs text-muted-foreground">
+          Scheduled run failed {relativeTime(item.failed_at)}
+          {item.error && ` · ${item.error}`}
+        </span>
+      </div>
+      <Button asChild size="sm" variant="outline">
+        <Link to={`/runs/${item.run_id}`}>Open the failed run</Link>
+      </Button>
+      <Button
+        size="sm"
+        variant="outline"
+        disabled={runNow.isPending}
+        onClick={onSingleClick(() => runNow.mutate())}
+      >
+        <Play aria-hidden /> Run now
+      </Button>
+      <Button
+        size="sm"
+        variant="outline"
+        disabled={dismiss.isPending}
+        onClick={onSingleClick(() => dismiss.mutate())}
+      >
+        Dismiss
+      </Button>
     </li>
   );
 }
@@ -131,7 +192,8 @@ function RunApprovalsGroup({ group }: { group: RunApprovals }) {
   );
 }
 
-/// Everything that waits for the user: tool calls to approve, and finished runs to review.
+/// Everything that waits for the user: tool calls to approve, schedules that need attention,
+/// and finished runs to review.
 export function InboxScreen() {
   const inbox = useQuery({ queryKey: keys.inbox, queryFn: commands.inbox });
   if (inbox.isPending) return <Page title="Inbox" />;
@@ -142,13 +204,13 @@ export function InboxScreen() {
       </Page>
     );
   }
-  const { approvals, review_runs: runs } = inbox.data;
-  if (approvals.length === 0 && runs.length === 0) {
+  const { approvals, review_runs: runs, attention } = inbox.data;
+  if (approvals.length === 0 && runs.length === 0 && attention.length === 0) {
     return (
       <Page title="Inbox">
         <p className="text-muted-foreground">
-          Nothing waits for you. Approvals a dot asks for and finished runs to review show up
-          here.
+          Nothing waits for you. Approvals a dot asks for, schedules that need attention and
+          finished runs to review show up here.
         </p>
       </Page>
     );
@@ -163,6 +225,18 @@ export function InboxScreen() {
           {byRun(approvals).map((group) => (
             <RunApprovalsGroup key={group.runId} group={group} />
           ))}
+        </section>
+      )}
+      {attention.length > 0 && (
+        <section aria-labelledby="inbox-attention" className="flex flex-col gap-2">
+          <h2 id="inbox-attention" className="font-semibold">
+            Needs attention
+          </h2>
+          <ul className="flex flex-col gap-2">
+            {attention.map((item) => (
+              <AttentionRow key={item.dot_id} item={item} />
+            ))}
+          </ul>
         </section>
       )}
       {runs.length > 0 && (

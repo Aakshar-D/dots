@@ -346,6 +346,39 @@ async fn the_lineage_index_exists() {
     assert_eq!(rows.len(), 1);
 }
 
+/// Scheduler v2 looks runs up by their parent (`resume_child`, `succeeded_after`) and by the
+/// run they retry (`retry_of`, set null when that run is deleted): both are indexed.
+#[tokio::test]
+async fn the_parent_and_retry_indexes_exist() {
+    let (dir, _store) = temp_store().await;
+    let pool = sqlx::SqlitePool::connect(&format!(
+        "sqlite://{}",
+        dir.path().join("dots.db").display()
+    ))
+    .await
+    .unwrap();
+    let names: Vec<(String, String)> = sqlx::query_as(
+        "SELECT name, sql FROM sqlite_master WHERE type = 'index' \
+         AND name IN ('runs_parent', 'runs_retry_of') ORDER BY name",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        names,
+        [
+            (
+                "runs_parent".to_string(),
+                "CREATE INDEX runs_parent ON runs(parent_run_id)".to_string()
+            ),
+            (
+                "runs_retry_of".to_string(),
+                "CREATE INDEX runs_retry_of ON runs(retry_of)".to_string()
+            ),
+        ]
+    );
+}
+
 // ---- Approvals v2: calls that Dots performs itself ----
 
 /// A parent run that parked with `n` approved calls, resumed: the calls are queued for Dots to
@@ -942,4 +975,63 @@ async fn resume_parked_refuses_to_queue_a_call_dots_is_not_to_perform() {
         .unwrap();
     assert!(child.is_some());
     assert_eq!(apply_state(&store, &own.id).await, Some(ApplyState::Queued));
+}
+
+/// A failed run of `trigger` for `dot`, retrying `retry_of`; with a `tool_call` event when
+/// `called` is set.
+async fn failed_run(
+    store: &Store,
+    dot: &str,
+    trigger: TriggerKind,
+    retry_of: Option<&str>,
+    called: bool,
+) -> Run {
+    let mut new = NewRun::new(dot, trigger);
+    new.retry_of = retry_of.map(str::to_string);
+    let run = store.create_run(&new).await.unwrap();
+    if called {
+        let call = json!({"kind": "tool_call", "id": "c1", "tool": "Bash", "input": {}});
+        store
+            .append_event(&run.id, "tool_call", &call)
+            .await
+            .unwrap();
+    }
+    store
+        .finish_run(&run.id, RunStatus::Failed, None, Some("down"))
+        .await
+        .unwrap()
+}
+
+/// A failed run is a run to review whatever its trigger and whether it called a tool, until
+/// it is marked reviewed. The scheduler marks the failed scheduled runs without a tool call
+/// that it judges into a retry or into "Needs attention" (`ScheduleChange::reviewed_run`), so
+/// such a run that is still listed is one it never judged, such as a run a later slot overran.
+#[tokio::test]
+async fn a_failed_run_is_for_review_whatever_its_trigger() {
+    let (_d, store) = temp_store().await;
+    let dot = store.create_dot(&spec("a")).await.unwrap();
+    let quiet = failed_run(&store, &dot.id, TriggerKind::Schedule, None, false).await;
+    let retry = failed_run(
+        &store,
+        &dot.id,
+        TriggerKind::Schedule,
+        Some(&quiet.id),
+        false,
+    )
+    .await;
+    let called = failed_run(&store, &dot.id, TriggerKind::Schedule, None, true).await;
+    let manual = failed_run(&store, &dot.id, TriggerKind::Manual, None, false).await;
+    let hook = failed_run(&store, &dot.id, TriggerKind::Webhook, None, false).await;
+
+    let mut ids: Vec<String> = store
+        .unreviewed_thread_ends()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|r| r.id)
+        .collect();
+    ids.sort();
+    let mut want = vec![quiet.id, retry.id, called.id, manual.id, hook.id];
+    want.sort();
+    assert_eq!(ids, want);
 }

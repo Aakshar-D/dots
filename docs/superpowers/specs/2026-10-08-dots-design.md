@@ -14,7 +14,7 @@ user's approval.
 
 ### Success criteria
 
-- A dot configured with a cron schedule runs unattended while the app sits in the tray, and its
+- A dot configured with a schedule runs unattended while the app sits in the tray, and its
   result appears in the inbox with a Windows notification.
 - A dot can be triggered by `POST` to a local webhook URL with its token.
 - A Claude-backed dot runs on the user's Claude subscription via the official `claude` CLI.
@@ -30,7 +30,7 @@ user's approval.
 | Scope | General platform: many dots, each with its own job, tools, schedule |
 | Hosting | Local Windows machine |
 | Model backends | Hybrid: Claude via `claude` CLI (subscription); local models via own tool loop over OpenAI-compatible API |
-| Triggers (v1) | Schedule (cron), webhook, manual (Run now + chat) |
+| Triggers (v1) | Schedule (once, every, daily, weekly, cron; Scheduler v2), webhook, manual (Run now + chat) |
 | Autonomy | Per-dot policy: each tool is `allow`, `ask`, or `deny`; new dots default to "sandboxed" preset |
 | Language | Rust |
 | UI | Tauri 2 desktop app, React + Vite frontend |
@@ -55,7 +55,9 @@ dots/
   Cargo.toml                 workspace
   crates/dots-core/          library: all logic, no UI dependency
     src/store/               SQLite via sqlx, embedded migrations
-    src/scheduler/           tokio-cron-scheduler -> enqueue runs
+    src/schedule.rs          schedules (once, every, daily, weekly, cron) and their slots in local time
+    src/scheduler.rs         the loop: a pass over the schedule rows (fire, catch up, skip,
+                             complete), sleeping on a clock that tests move by hand
     src/server/              axum on 127.0.0.1:<port>: webhooks + MCP permission endpoint
     src/runner/              queue, concurrency, timeouts, cancellation, restart recovery
     src/engine/mod.rs        Engine trait + EngineEvent
@@ -111,7 +113,12 @@ Stored at `%LOCALAPPDATA%\dots\dots.db`. Worktrees at `%LOCALAPPDATA%\dots\workt
 - `id` TEXT PK (ULID), `name` TEXT UNIQUE, `instructions` TEXT (markdown)
 - `engine` TEXT (`claude` | `local`), `model` TEXT, `endpoint_url` TEXT NULL (local only)
 - `workdir` TEXT, `workspace_mode` TEXT (`worktree` | `folder`)
-- `schedule` TEXT NULL (cron, 6-field with seconds), `timezone` TEXT (default local)
+- `schedule` TEXT NULL: the schedule as JSON (`2026-10-14-scheduler-v2-design.md` §2), e.g.
+  `{"rule": {"kind": "daily", "time": "09:00"}, "catch_up": true, "until": {"count": 10}}`; rule
+  kinds `once`, `every`, `daily`, `weekly` and `cron` (6-field with seconds, or 7 with year). A
+  `once` in the past or a stop date before the first slot is refused when the dot is created or
+  its schedule changes, not when it is loaded. The core sets an `every` rule's `anchor`.
+  `timezone` TEXT (default local, unused: schedules use the PC's local time)
 - `webhook_token` TEXT (random 32 bytes, base64url)
 - `policy` TEXT (JSON, see §5), `mcp_servers` TEXT NULL (JSON, Claude only)
 - `use_user_settings` INTEGER (0/1, default 0)
@@ -133,6 +140,8 @@ Stored at `%LOCALAPPDATA%\dots\dots.db`. Worktrees at `%LOCALAPPDATA%\dots\workt
 - `queued_at`, `started_at`, `ended_at`
 - `reviewed_at` TEXT NULL (migration 0002; set by "Mark reviewed" or "Discard worktree", see
   §12 Inbox)
+- `retry_of` TEXT NULL, FK `runs(id)` ON DELETE SET NULL (migration 0005): the failed scheduled
+  run that this run retries
 
 **run_events**
 - `run_id` FK, `seq` INTEGER, `ts`, `kind` TEXT, `data` TEXT (JSON); PK (`run_id`, `seq`)
@@ -146,6 +155,16 @@ Stored at `%LOCALAPPDATA%\dots\dots.db`. Worktrees at `%LOCALAPPDATA%\dots\workt
   `failed` | `unknown` | `skipped`), `applied_at` TEXT NULL (migration 0004; see
   `2026-10-13-approvals-v2-design.md` §3.4)
 
+**schedule_state** (migration 0005; Scheduler v2 spec §4) — one row per dot with a schedule:
+`dot_id` PK (FK `dots`, ON DELETE CASCADE), `rule_key` (the schedule's JSON when the row was
+made), `status` (`active` | `completed` | `expired`), `last_slot_at`, `fired_count`,
+`watch_run_id`, `retry_slot_at`, `retry_attempt`, `retry_at`, `attention_run_id` (the run
+columns are FKs to `runs`, ON DELETE SET NULL), `updated_at`. The runtime keeps the row in line
+with its dot: creating a dot with a schedule makes it; changing the schedule (its JSON differs
+from `rule_key`) or enabling a disabled dot resets it (`active`, `last_slot_at` = now, no count,
+watched run, retry or attention); removing the schedule deletes it, and so does deleting the dot.
+Disabling a dot leaves its row as it is. Each change of a row is published as `ScheduleUpdated`.
+
 **settings** — key/value, each value a JSON document: `port` (default 47321),
 `max_concurrent_runs` (default 2), `claude_path` (null = search PATH), `tested_claude_version`
 (default: the core constant `TESTED_CLAUDE_VERSION`), `local_endpoints` (JSON list of URLs),
@@ -154,7 +173,10 @@ defaults; unknown keys are ignored. A stored value of the wrong type, or one tha
 rejects (for example `max_concurrent_runs` 0), is ignored on its own and its default is used.
 
 Migrations: `0002` adds `runs.reviewed_at`; `0003` adds the index
-`runs(root_run_id, queued_at, id)` that the Inbox query needs.
+`runs(root_run_id, queued_at, id)` that the Inbox query needs; `0004` adds the approval apply
+columns; `0005` converts each cron string in `dots.schedule` to
+`{"rule":{"kind":"cron","expr":...},"catch_up":false,"until":null}` (no catch-up, so an upgraded
+schedule behaves as before), adds `runs.retry_of` and creates `schedule_state`.
 
 All timestamps are RFC 3339 UTC strings.
 
@@ -181,9 +203,32 @@ the call again. See `2026-10-13-approvals-v2-design.md` §3.
 
 ### Steps
 
-1. **Trigger.** Scheduler tick, `POST /dots/{id}/trigger`, "Run now", or a chat message inserts a
-   `queued` run with its payload. A schedule tick for a dot that already has a `queued` run is
-   coalesced (dropped, logged).
+1. **Trigger.** A schedule slot, `POST /dots/{id}/trigger`, "Run now", or a chat message inserts
+   a `queued` run with its payload. From Scheduler v2 (`2026-10-14-scheduler-v2-design.md` §5) a
+   slot fires when it is due (less than 60 s late); a slot missed while Dots was closed or the
+   PC slept fires once as a catch-up (payload `caught_up: true`) when the schedule has
+   `catch_up` and the slot is less than 24 h old, and only the newest missed slot does; other
+   missed slots are skipped. A slot for a dot that already has a `queued` run is coalesced into
+   it (logged). The run that serves a slot, new or joined, is the schedule's watched run
+   (`schedule_state.watch_run_id`): its outcome decides the occurrence (Scheduler v2 spec §6).
+   A parked watched run hands the watch to its resume run. A watched run that failed before
+   any `tool_call` event (in it or in the parked runs it resumes) is retried 1, 2, 4, 8 and
+   16 minutes after it ended, up to 6 attempts, by a `schedule` run with `retry_of` and the
+   payload `{scheduled_for, attempt}` (joined into a queued run of the dot if there is one;
+   dropped when a newer slot fires, whose new run then carries the dropped retry's `attempt`,
+   so attempts count consecutive failures across occurrences and a schedule that fires more
+   often than its retries still reaches the sixth; a slot with no pending retry is attempt
+   1). A failure after a tool call, or of the sixth attempt,
+   sets "Needs attention" (`schedule_state.attention_run_id`); the schedule keeps firing. A
+   retry that comes due too late is not started, and its occurrence ends the same way (notified
+   once): its slot is 24 h old or older, or the schedule has no `catch_up` and the retry is
+   60 s overdue or more (Dots was closed, or schedules were paused). The write that judges a
+   `schedule` run's failure that made no tool call, into a retry or into "Needs attention",
+   also sets that run's `reviewed_at`: the retry or the flag speaks for it (§12 Inbox). A later manual or scheduled run of the dot that succeeds, or a
+   resume run that succeeds whose chain starts with one (a "Run now" that needed an approval),
+   clears the flag, whatever the schedule's status and whether the dot is enabled; so do a
+   dismiss and a reset of the row. A chat or webhook run does not. A cancelled or deleted
+   watched run ends the occurrence quietly.
 2. **Dispatch.** The runner starts queued runs FIFO while running count < `max_concurrent_runs`
    and the dot has no other `running` run.
 3. **Workspace.**
@@ -201,7 +246,8 @@ the call again. See `2026-10-13-approvals-v2-design.md` §3.
    changed and what needs human review.
 5. **Execute.** Engine events are appended to `run_events` and broadcast to the UI.
 6. **Finish.** Final assistant text becomes `summary`. The app notifies on `failed`,
-   `awaiting_approval`, and `succeeded` (§12). A worktree with no commits and no uncommitted changes is
+   `awaiting_approval`, and `succeeded` (§12); from Scheduler v2 not on a failed `schedule`
+   run, which is retried or ends in "Needs attention" (notified once). A worktree with no commits and no uncommitted changes is
    removed (`git worktree remove`, branch deleted); otherwise it is kept for review. The same
    cleanup runs when a parked run is closed by a plain deny or cancelled.
 7. **Review actions** (UI): view diff, open folder, discard worktree (remove + delete branch).
@@ -399,15 +445,27 @@ Exposing webhooks beyond localhost (e.g. tunnels) is the user's choice and out o
 React + Vite + TypeScript inside Tauri 2. Screens:
 
 - **Dots** — list: name, engine/model, state, next scheduled run, last result, enable toggle,
-  Run now.
-- **Dot editor** — name; instructions (markdown); engine, model, endpoint; workdir + mode; cron
-  with human-readable preview and next 3 fire times; webhook URL + token (copy, regenerate);
+  Run now. From Scheduler v2 the next-run column says how an ended schedule ended
+  ("Completed", "Completed (missed)" when it completed without firing, "Expired"), and
+  "Retrying at 09:04 (attempt 2 of 6)" under it while a retry waits; a dot whose schedule
+  needs attention carries a "Needs attention" badge.
+- **Dot editor** — name; instructions (markdown); engine, model, endpoint; workdir + mode;
+  schedule (from Scheduler v2: a kind picker None / Once / Every / Daily / Weekly / Cron with
+  the kind's fields — a date and time; minutes, typed in minutes or hours; a time; seven day
+  toggles and a time; the cron text — then "Catch up a missed run" and "Stop" (never, after N
+  runs, after a date), both hidden for Once; the next 3 fire times from `preview_schedule`, and
+  the core's objection under the fields); webhook URL + token (copy, regenerate);
   policy editor (preset picker + rule table); limits; MCP servers (Claude only);
   use-user-settings toggle.
 - **Run view** — live transcript (assistant text, collapsible tool calls/results), worktree diff,
-  summary, status, tokens; cancel, discard worktree, open folder.
-- **Inbox** — pending approvals (tool, pretty-printed input, approve / deny with note) and
-  finished runs awaiting review (definition in §12). Unread count mirrored in the tray tooltip.
+  summary, status, tokens; cancel, discard worktree, open folder. From Scheduler v2 a
+  scheduled run's trigger has a line under it: "Scheduled for <slot>", "…, caught up after
+  the PC was off", "Scheduled for <slot> · attempt 3 of 6" for a slot's run that carries the
+  attempt of a retry it dropped, or "Retry 2 of 6 of the failed run" with a link to that run
+  for a retry (`retry_of`).
+- **Inbox** — pending approvals (tool, pretty-printed input, approve / deny with note),
+  schedules that need attention (from Scheduler v2) and finished runs awaiting review
+  (definition in §12). Unread count mirrored in the tray tooltip and the sidebar.
   From Approvals v2 an approval card, wherever it shows (Inbox, run view, chat), also offers
   "Approve and always allow": the allow rules the core derived for that call, the narrowest
   preselected, one of which is saved to the dot's policy with the approval. The control is not
@@ -441,7 +499,8 @@ Window close hides to tray. Tray menu: Open, Inbox (n), Pause all schedules, Qui
 
 ## 9. Testing
 
-- **Unit (dots-core):** policy resolution and pattern matching; cron parsing / next fire; run state
+- **Unit (dots-core):** policy resolution and pattern matching; schedule slots, with DST checked in a
+  hand-written test time zone (cron too: a wall-clock time that occurs twice fires once, at the earlier instant; one in the spring-forward gap is skipped); run state
   transitions; path confinement including `..`, absolute paths, symlinks, junctions; prompt
   assembly.
 - **Stream-json parser:** fixtures recorded from real `claude -p` runs (success, tool use,
@@ -498,8 +557,13 @@ In task order:
 6. Read methods, so the app never uses `Runtime::store()`: `list_dots`, `get_dot`,
    `list_runs(dot_id?, limit)`, `get_run`, `run_thread(root_run_id)` (all runs of a lineage,
    oldest first), `list_run_events(run_id, after_seq)`, `approvals_for_run`,
-   `inbox() -> { approvals, review_runs }`, `inbox_count()`, and
-   `preview_schedule(expr, n) -> next n fire times` (validates the cron; the UI parses no cron).
+   `inbox() -> { approvals, review_runs, attention }` (from Scheduler v2, `attention`
+   lists the schedules that need attention: `dot_id, dot_name, run_id, error, failed_at`,
+   newest first), `inbox_count()` (counts all three), and
+   `preview_schedule(schedule, n) -> next n slots` (from Scheduler v2 it takes the schedule
+   object, validates it like `DotSpec::validate`, refuses one with no slot left as a create or
+   a change does (`invalid`, "this schedule would never run"), and previews an `every` rule
+   from the anchor it is sent, or from now without one; the UI parses no schedule).
 7. Review actions on a thread's shared worktree:
    - `worktree_diff(run_id) -> { files: [{ path, status, patch, binary }], truncated, exists }` — `git
      diff <base_commit>` plus untracked files as additions; total patch text capped at 1 MiB.
@@ -513,7 +577,8 @@ In task order:
      delete in the user's repository.
    - `mark_reviewed(run_id)` — sets `reviewed_at` on the lineage.
 8. `set_schedules_paused(bool)` — persisted as `schedules_paused`; the scheduler fires nothing
-   while paused.
+   while paused. From Scheduler v2 a resume does not catch up: every active schedule's last
+   handled slot becomes the time of the resume, so the slots of the pause are skipped.
 9. `settings()` and `update_settings(Settings) -> { settings, restart_required }`.
    `restart_required` is true when `port`, `max_concurrent_runs` or `claude_path` differ from
    the values the runtime started with. `autostart` and `schedules_paused` apply live.
@@ -527,11 +592,30 @@ In task order:
 The Inbox lists:
 
 - pending approvals;
+- from Scheduler v2, schedules that need attention (an occurrence failed in the end);
 - runs awaiting review: the latest run of each lineage that is terminal, has `reviewed_at`
   NULL, and either kept its worktree (worktree mode, worktree still on disk) or `failed`.
+  From Scheduler v2 the scheduler sets `reviewed_at` on a failed run with trigger `schedule`
+  whose failure made no tool call, when it judges it into a retry or into "needs attention",
+  in the same write: the run changed nothing and the retry, or the flag the Inbox lists,
+  speaks for it, so it is not listed here as well, and dismissing the flag does not bring it
+  back. Every other failed run is listed: a failure after a tool call (listed here and under
+  "needs attention"), a manual or webhook run that a slot or retry joined, and a failed
+  scheduled run the scheduler never judged: one that a later slot overran (still running when
+  the next slot queued a new watched run), or one that ended after its dot was disabled or its
+  schedule changed.
 
 A run leaves the Inbox through "Discard worktree" or "Mark reviewed". Folder-mode successes only
-notify. Unread count = pending approvals + runs awaiting review.
+notify. Unread count = pending approvals + runs awaiting review + schedules that need
+attention; the sidebar's Inbox badge shows the same count.
+
+The "Needs attention" group stands between the approvals and the runs to review. Each item
+names the dot (a link to its editor), when the run failed and its error, a link to the failed
+run, "Run now" (starts a `manual` run and opens it) and "Dismiss"
+(`dismiss_schedule_attention`). Both reload the Inbox and the Dots list when they answer. A
+flag leaves the Inbox when it is dismissed or a later manual or scheduled run of the dot
+succeeds (also its resume run, after an approval), also for a completed schedule or a disabled
+dot; a chat or webhook run does not clear it.
 
 ### Tauri shell (`apps/dots-app`)
 
@@ -559,6 +643,13 @@ notify. Unread count = pending approvals + runs awaiting review.
   allow rules that may be saved with an approval, `decide_run_approvals(run_id, approved,
   note)` decides every pending approval of a run, and `decide_approval` takes `allow_rule`,
   which the core accepts only when it is one of those candidates.
+- Scheduler v2 adds `dismiss_schedule_attention(dot_id)`: it clears the dot's "needs
+  attention", answers `not_found` when the dot has no schedule row, and does nothing when the
+  flag is not set. In `dot_overview` each row's `next_fire` is replaced by `schedule_state`
+  (null without a schedule): `{ status, fired_count, next_fire, retry_at, retry_attempt,
+  attention: { run_id, error } | null }`, times in RFC 3339 local. `next_fire` is the first
+  slot after now, null while the dot is disabled, when the schedule is not `active`, or when
+  no slot or count is left; `retry_at` and `retry_attempt` are set while a retry waits.
 - **Runs, dots and approvals are addressed by id.** `open_run_folder(run_id)` resolves the path
   in core; the UI cannot make the backend open, read or delete an arbitrary path. Two values
   from the UI are paths:
@@ -587,18 +678,24 @@ notify. Unread count = pending approvals + runs awaiting review.
     refetches run events after the last seen `seq`.
   - From Approvals v2 there is a fifth event, `ApprovalUpdated`: a decided approval whose call
     Dots performs changed its `apply_state`. It never notifies.
+  - From Scheduler v2 there is a sixth event, `ScheduleUpdated { dot_id }`: the dot's
+    `schedule_state` row was made, changed or deleted. It updates the tray's Inbox count.
+  - And a seventh, `ScheduleAttention { dot_id, run_id, error }`: the dot's schedule needs
+    attention now. The core sends it once, when the flag goes from clear to set, together
+    with a `ScheduleUpdated`. Only the notifier uses it.
 - Notifications fire on `ApprovalRequested`, and on `RunUpdated` into `succeeded`, `failed` or
   `awaiting_approval`, once per (run, status), and only for a run this process saw queued or
   running. Chat runs do not notify; neither does a parked run closed by its decision, nor a run
   re-published by "Mark reviewed". From Plan 3c a park shows one notification, not two: the
   update into `awaiting_approval` does not notify when the approval request of that run was
-  already announced.
+  already announced. From Scheduler v2 a failed run with trigger `schedule` does not notify;
+  `ScheduleAttention` does, once: "<dot>: scheduled run failed" with the error's first line.
 - After each relevant event, `inbox_count()` updates the tray tooltip ("Dots: n to review") and
   the "Inbox (n)" menu item.
 - Tray:
   - Open.
   - Inbox (n) — shows the window on `/inbox` through a `navigate` event.
-  - Pause all schedules — check item.
+  - Pause all schedules — check item. Unchecking it does not catch up the slots of the pause.
   - Quit — `Runtime::shutdown`, then exit.
   Left click shows the window; closing the window hides it.
 - Adapter logic (error mapping, notification decisions, tray text, config from settings) lives
@@ -623,7 +720,9 @@ notify. Unread count = pending approvals + runs awaiting review.
     (Plan 3c removed the key `run`, which no query read). `RunEvent`s are appended to loaded
     event lists, deduplicated by `seq`. `ApprovalUpdated` invalidates `inbox` and the
     `approvals` of the approval's own run, which is the parent of the run that performs the
-    call: that run's own `RunUpdated` does not reach those approvals.
+    call: that run's own `RunUpdated` does not reach those approvals. `ScheduleUpdated`
+    invalidates `dots`, `overview` and `inbox`; `ScheduleAttention` invalidates nothing (the
+    `ScheduleUpdated` sent with it does).
   - From Plan 3c an invalidation that arrives while its query is being fetched is kept (the
     query is marked stale again when that fetch has settled), and the app refetches everything
     once when its listeners are attached, so the first screen's data is asked for twice.
@@ -634,11 +733,20 @@ notify. Unread count = pending approvals + runs awaiting review.
   and the answer of `new_dot_spec`, and its engine-event samples are tied to the enum's
   variants, so a new variant without a sample does not compile. From Approvals v2 it also
   holds a sample of `ApprovalUpdated`, every `ApplyState`, and the rule candidates the core
-  derives for the `Approval` sample (`RuleCandidate`).
+  derives for the `Approval` sample (`RuleCandidate`). From Scheduler v2 it holds a sample of
+  every `RuntimeEvent` type, `ScheduleUpdated` among them (the UI test checks that), every
+  `ScheduleStatus`, a queued retry (the `RunUpdated` sample, with `retry_of`), and a
+  `DotOverview` sample that sets every field of `schedule_state`; `Limits` gains
+  `max_schedule_attempts` (the core's `MAX_ATTEMPTS`, 6), which the Dots list and the run view
+  name.
 - Shell around the screens:
   - Banners: `server_error` (links to Settings), CLI version mismatch ("Mark as tested"),
     restart required ("Restart Dots"), schedules paused.
   - While schedules are paused the Dots list shows "paused" in place of the next fire time.
+    From Scheduler v2 an ended schedule shows "Completed", "Completed (missed)" (status
+    `completed` with `fired_count` 0) or "Expired" instead, paused or not. A waiting retry
+    shows "Retrying at <time> (attempt k of 6)" under it, unless the dot is off or schedules
+    are paused; `schedule_state.attention` shows the "Needs attention" badge by the name.
   - Destructive actions (discard worktree, delete dot, regenerate webhook token) ask first in
     an in-app dialog.
   - `webhook_url` answers `conflict` while the local server is not running, so the editor
@@ -648,6 +756,12 @@ notify. Unread count = pending approvals + runs awaiting review.
   - Assistant text renders as markdown without raw HTML.
   - Tool calls and results are paired by id and collapsible.
   - `message` events are hidden; `raw` events are collapsed.
+  - From Scheduler v2 a run with trigger `schedule` has a line under its trigger, read from
+    its payload (`scheduled_for`, `caught_up`, `attempt`) and `retry_of`: "Scheduled for
+    <slot>" or "Scheduled for <slot>, caught up after the PC was off"; with `retry_of` set
+    (attempt 2 or more) only "Retry k of 6 of the failed run", a link to that run. A slot
+    that dropped a pending retry carries its attempt without `retry_of`: it shows its slot
+    line, then " · attempt k of 6". A payload that does not read so shows no line.
   - The diff is an in-repo unified-diff component with per-file collapse and a truncation
     notice. The core returns git's patch text untrimmed, so a hunk that ends in a blank context
     line keeps it.
@@ -660,7 +774,10 @@ notify. Unread count = pending approvals + runs awaiting review.
     insert of the new run happen under one lock, so two replies sent at once cannot both pass.
   - Approvals of the thread show inline.
 - The editor validates with zod rules mirroring `DotSpec::validate`; server errors still show
-  on save.
+  on save. From Scheduler v2 the schedule is checked by the core through `preview_schedule`
+  while it is typed; the UI only holds back an emptied field or a number the core cannot
+  take. The objection blocks a save when the schedule is new or changed; for the stored
+  schedule saved unchanged (a passed Once) it is a note, as the core keeps it.
 - Tests: Vitest + Testing Library + jsdom, with `invoke` and `listen` mocked.
 
 ### Hardening and packaging (3c)

@@ -92,6 +92,31 @@ describe("runtime events and the query cache", () => {
     ]);
   });
 
+  it("marks the dots, the overview and the inbox stale on a schedule update", () => {
+    const qc = createQueryClient();
+    const lists = [keys.dots, keys.overview, keys.inbox];
+    const untouched = [keys.dot(sample.dot.id), keys.runs(sample.dot.id), keys.settings];
+    for (const key of [...lists, ...untouched]) qc.setQueryData(key, []);
+
+    applyRuntimeEvent(qc, { type: "schedule_updated", dot_id: sample.dot.id });
+    for (const key of lists) expect(stale(qc, key), key.join("/")).toBe(true);
+    for (const key of untouched) expect(stale(qc, key), key.join("/")).toBe(false);
+  });
+
+  it("leaves the caches to the schedule update that comes with a schedule's attention", () => {
+    const qc = createQueryClient();
+    const all = [keys.dots, keys.overview, keys.inbox, keys.dot(sample.dot.id)];
+    for (const key of all) qc.setQueryData(key, []);
+
+    applyRuntimeEvent(qc, {
+      type: "schedule_attention",
+      dot_id: sample.dot.id,
+      run_id: sample.run.id,
+      error: "model server unreachable",
+    });
+    for (const key of all) expect(stale(qc, key), key.join("/")).toBe(false);
+  });
+
   it("refetches the approvals of the approval's own run when Dots performs its call", () => {
     const qc = createQueryClient();
     // The call is performed by a resume run; the approval belongs to that run's parent.
@@ -239,7 +264,7 @@ describe("a run's events while their list loads or refetches", () => {
 });
 
 describe("a change announced while a fetch is in flight", () => {
-  const empty: Inbox = { approvals: [], review_runs: [] };
+  const empty: Inbox = { approvals: [], review_runs: [], attention: [] };
   /// Shows the Inbox as the app's frame does.
   const watchInbox = (qc: Client) =>
     new QueryObserver(qc, { queryKey: keys.inbox, queryFn: commands.inbox }).subscribe(() => {});

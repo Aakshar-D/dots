@@ -21,7 +21,10 @@ const LINKS = [
 export function Layout() {
   useRuntimeEvents();
   const inbox = useQuery({ queryKey: keys.inbox, queryFn: commands.inbox }).data;
-  const waiting = inbox ? inbox.approvals.length + inbox.review_runs.length : 0;
+  // The same count as the tray's (`inbox_count`).
+  const waiting = inbox
+    ? inbox.approvals.length + inbox.review_runs.length + inbox.attention.length
+    : 0;
   return (
     <div className="flex h-screen bg-background text-sm text-foreground">
       <nav

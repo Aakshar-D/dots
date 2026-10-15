@@ -9,7 +9,7 @@ use crate::{Error, Result};
 
 const RUN_COLUMNS: &str = "id, dot_id, root_run_id, parent_run_id, trigger_kind, payload, status, \
     session_id, workspace_path, branch, base_commit, summary, error, tokens_in, tokens_out, \
-    queued_at, started_at, ended_at, reviewed_at";
+    queued_at, started_at, ended_at, reviewed_at, retry_of";
 
 fn run_from_row(row: &SqliteRow) -> Result<Run> {
     Ok(Run {
@@ -32,6 +32,7 @@ fn run_from_row(row: &SqliteRow) -> Result<Run> {
         started_at: row.try_get("started_at")?,
         ended_at: row.try_get("ended_at")?,
         reviewed_at: row.try_get("reviewed_at")?,
+        retry_of: row.try_get("retry_of")?,
     })
 }
 
@@ -45,13 +46,13 @@ fn event_from_row(row: &SqliteRow) -> Result<RunEventRecord> {
     })
 }
 
-async fn insert_run(conn: &mut SqliteConnection, new: &NewRun) -> Result<String> {
+pub(super) async fn insert_run(conn: &mut SqliteConnection, new: &NewRun) -> Result<String> {
     let id = new_id();
     let root = new.root_run_id.clone().unwrap_or_else(|| id.clone());
     sqlx::query(
         "INSERT INTO runs (id, dot_id, root_run_id, parent_run_id, trigger_kind, payload, \
-         status, session_id, workspace_path, branch, base_commit, queued_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         status, session_id, workspace_path, branch, base_commit, queued_at, retry_of) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(&new.dot_id)
@@ -65,6 +66,7 @@ async fn insert_run(conn: &mut SqliteConnection, new: &NewRun) -> Result<String>
     .bind(&new.branch)
     .bind(&new.base_commit)
     .bind(now())
+    .bind(&new.retry_of)
     .execute(conn)
     .await?;
     Ok(id)
@@ -223,6 +225,9 @@ impl Store {
 
     /// The newest run of each lineage, if it is finished and not reviewed yet. Only runs the
     /// Inbox can ever show (failed, or with a branch) are returned; `Runtime::inbox` filters further.
+    /// A failed scheduled run that made no tool call and that the scheduler judged into a retry
+    /// or into "Needs attention" is marked reviewed when it is judged (Scheduler v2), so it is
+    /// not listed.
     pub async fn unreviewed_thread_ends(&self) -> Result<Vec<Run>> {
         let rows = sqlx::query(&format!(
             "SELECT {RUN_COLUMNS} FROM runs r \
