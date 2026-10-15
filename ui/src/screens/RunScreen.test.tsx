@@ -709,7 +709,7 @@ describe("the line under a scheduled run's trigger", () => {
     thread([dropped]);
     renderApp(`/runs/${dropped.id}`);
     const shown = within(await section());
-    expect(shown.getByText(`Scheduled for ${localDateTime(slot)} · attempt 3 of 6`)).toBeVisible();
+    expect(shown.getByText(`Scheduled for ${localDateTime(slot)} Â· attempt 3 of 6`)).toBeVisible();
     expect(shown.queryByText(/Retry/)).toBeNull();
     expect(shown.queryByRole("link")).toBeNull();
   });

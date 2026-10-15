@@ -49,7 +49,7 @@ function ScheduleLine({ run }: { run: Run }) {
     // without `retry_of`: it still serves its own slot.
     line =
       run.retry_of === null ? (
-        `${line} · attempt ${attempt} of ${of}`
+        `${line} Â· attempt ${attempt} of ${of}`
       ) : (
         <>
           Retry {attempt} of {of} of{" "}
