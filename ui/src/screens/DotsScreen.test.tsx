@@ -13,8 +13,13 @@ const busy: DotOverview = {
   dot: { ...sample.dot, id: "dot-busy", name: "triage", schedule: null },
   active_run: { ...sample.run, id: "run-active", dot_id: "dot-busy", status: "running" },
   last_run: null,
-  next_fire: null,
+  schedule_state: null,
 };
+/// `scheduled` with its next fire time at `next_fire`.
+const firing = (next_fire: string | null): DotOverview => ({
+  ...scheduled,
+  schedule_state: { ...scheduled.schedule_state!, next_fire },
+});
 const row = (name: string) => screen.getByRole("link", { name }).closest("tr")!;
 
 describe("the Dots screen", () => {
@@ -26,7 +31,7 @@ describe("the Dots screen", () => {
     const first = within(row(scheduled.dot.name));
     expect(first.getByText(`${scheduled.dot.engine} · ${scheduled.dot.model}`)).toBeVisible();
     expect(first.getByText("Idle")).toBeVisible();
-    expect(first.getByText(localDateTime(scheduled.next_fire))).toBeVisible();
+    expect(first.getByText(localDateTime(scheduled.schedule_state!.next_fire))).toBeVisible();
     expect(
       first.getByRole("link", { name: `Open the last run of ${scheduled.dot.name}` }),
     ).toHaveAttribute("href", `/runs/${scheduled.last_run!.id}`);
@@ -42,11 +47,12 @@ describe("the Dots screen", () => {
 
   it("says why a scheduled dot will not run", () => {
     const disabled = { ...scheduled, dot: { ...scheduled.dot, enabled: false } };
-    expect(nextRun(scheduled, false)).toBe(localDateTime(scheduled.next_fire));
+    expect(nextRun(scheduled, false)).toBe(localDateTime(scheduled.schedule_state!.next_fire));
     expect(nextRun(scheduled, true)).toBe("Paused");
     expect(nextRun(disabled, true)).toBe("Disabled");
     expect(nextRun(busy, false)).toBe("No schedule");
-    expect(nextRun({ ...scheduled, next_fire: null }, false)).toBe("Not scheduled");
+    expect(nextRun(firing(null), false)).toBe("Not scheduled");
+    expect(nextRun({ ...scheduled, schedule_state: null }, false)).toBe("Not scheduled");
   });
 
   it("shows Paused in place of the next run while schedules are paused", async () => {
@@ -69,7 +75,7 @@ describe("the Dots screen", () => {
     expect(await within(row(scheduled.dot.name)).findByText("Paused")).toBeVisible();
     await listening();
 
-    overview = [{ ...scheduled, next_fire: next }];
+    overview = [firing(next)];
     backend.on("status", () => quietStatus);
     act(() => backend.emit("status", quietStatus));
     expect(await within(row(scheduled.dot.name)).findByText(localDateTime(next))).toBeVisible();

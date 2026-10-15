@@ -55,6 +55,7 @@
     "decide_run_approvals",
     "inbox",
     "inbox_count",
+    "dismiss_schedule_attention",
     "worktree_diff",
     "discard_worktree",
     "mark_reviewed",
@@ -298,7 +299,17 @@
       "trigger": "schedule",
       "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
     },
-    "next_fire": "2026-10-10T02:00:00+01:00"
+    "schedule_state": {
+      "attention": {
+        "error": "model server unreachable",
+        "run_id": "01J0RUN0"
+      },
+      "fired_count": 3,
+      "next_fire": "2026-10-10T02:00:00+01:00",
+      "retry_at": "2026-10-09T13:02:00+01:00",
+      "retry_attempt": 2,
+      "status": "active"
+    }
   },
   "DotSpec": {
     "approval_wait_secs": 240,
@@ -408,6 +419,11 @@
       "succeeded",
       "failed",
       "cancelled"
+    ],
+    "ScheduleStatus": [
+      "active",
+      "completed",
+      "expired"
     ],
     "TriggerKind": [
       "schedule",
@@ -680,28 +696,29 @@
   "RuntimeEvent": [
     {
       "run": {
-        "base_commit": "0123abcd",
-        "branch": "dots/nightly-tests/01J0RUN",
+        "base_commit": null,
+        "branch": null,
         "dot_id": "01J0DOT",
-        "ended_at": "2026-10-09T12:00:00.000Z",
+        "ended_at": null,
         "error": null,
-        "id": "01J0RUN",
+        "id": "01J0RUN2",
         "parent_run_id": null,
         "payload": {
+          "attempt": 2,
           "scheduled_for": "2026-10-09T02:00:00+01:00"
         },
         "queued_at": "2026-10-09T12:00:00.000Z",
-        "retry_of": null,
+        "retry_of": "01J0RUN",
         "reviewed_at": null,
-        "root_run_id": "01J0RUN",
-        "session_id": "sess-1",
-        "started_at": "2026-10-09T12:00:00.000Z",
-        "status": "succeeded",
-        "summary": "All tests pass.",
-        "tokens_in": 1200,
-        "tokens_out": 340,
+        "root_run_id": "01J0RUN2",
+        "session_id": null,
+        "started_at": null,
+        "status": "queued",
+        "summary": null,
+        "tokens_in": 0,
+        "tokens_out": 0,
         "trigger": "schedule",
-        "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
+        "workspace_path": null
       },
       "type": "run_updated"
     },

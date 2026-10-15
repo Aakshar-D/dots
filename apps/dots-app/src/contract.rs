@@ -235,7 +235,24 @@ pub fn samples() -> Value {
         "RunEventRecord": to(event()),
         "Approval": to(approval()),
         "RuntimeEvent": [
-            to(RuntimeEvent::RunUpdated { run: run() }),
+            // A retry, queued: it names the run it retries.
+            to(RuntimeEvent::RunUpdated { run: Run {
+                id: "01J0RUN2".into(),
+                root_run_id: "01J0RUN2".into(),
+                payload: Some(json!({"scheduled_for": "2026-10-09T02:00:00+01:00", "attempt": 2})),
+                status: RunStatus::Queued,
+                session_id: None,
+                workspace_path: None,
+                branch: None,
+                base_commit: None,
+                summary: None,
+                tokens_in: 0,
+                tokens_out: 0,
+                started_at: None,
+                ended_at: None,
+                retry_of: Some("01J0RUN".into()),
+                ..run()
+            }}),
             to(RuntimeEvent::RunEvent { event: event() }),
             to(RuntimeEvent::ApprovalRequested { approval: approval() }),
             to(RuntimeEvent::ApprovalDecided { approval: Approval {
@@ -271,11 +288,22 @@ pub fn samples() -> Value {
         "Status": to(status()),
         "Settings": to(&settings),
         "SettingsSaved": to(SettingsSaved { settings: settings.clone(), restart_required: true }),
+        // Every field of the schedule's view is set, so the UI's schema checks each one.
         "DotOverview": to(DotOverview {
             dot: dot(),
             active_run: None,
             last_run: Some(run()),
-            next_fire: Some("2026-10-10T02:00:00+01:00".into()),
+            schedule_state: Some(ScheduleView {
+                status: ScheduleStatus::Active,
+                fired_count: 3,
+                next_fire: Some("2026-10-10T02:00:00+01:00".into()),
+                retry_at: Some("2026-10-09T13:02:00+01:00".into()),
+                retry_attempt: Some(2),
+                attention: Some(AttentionRun {
+                    run_id: "01J0RUN0".into(),
+                    error: Some("model server unreachable".into()),
+                }),
+            }),
         }),
         "Inbox": to(Inbox {
             approvals: vec![PendingApproval {
@@ -328,6 +356,7 @@ pub fn samples() -> Value {
             "Action": Action::ALL,
             "Preset": Preset::ALL,
             "FileStatus": FileStatus::ALL,
+            "ScheduleStatus": ScheduleStatus::ALL,
             "CmdErrorKind": CmdErrorKind::ALL,
         },
         "Limits": {

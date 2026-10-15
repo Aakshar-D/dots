@@ -1,8 +1,9 @@
+use chrono::{DateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::policy::{Policy, Preset};
-use crate::schedule::Schedule;
+use crate::schedule::{next_slot, Schedule, Until};
 use crate::{Error, Result};
 
 str_enum!(EngineKind { Claude => "claude", Local => "local" });
@@ -349,6 +350,71 @@ pub struct WorktreeDiff {
     pub exists: bool,
 }
 
+/// The run that left a schedule needing attention, with its error.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttentionRun {
+    pub run_id: String,
+    pub error: Option<String>,
+}
+
+/// Where a dot's schedule stands, as the Dots screen shows it (Scheduler v2 spec §8): its
+/// `schedule_state` row, with the times in local time and what comes next.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScheduleView {
+    pub status: ScheduleStatus,
+    pub fired_count: u32,
+    /// The first slot after now, RFC 3339; `None` when nothing more fires: the dot is
+    /// disabled, the schedule is not active, or it has no slot or no count left.
+    pub next_fire: Option<String>,
+    /// When the waiting retry starts, RFC 3339, and the attempt it is; `None` unless a retry
+    /// waits on an enabled dot.
+    pub retry_at: Option<String>,
+    pub retry_attempt: Option<u32>,
+    pub attention: Option<AttentionRun>,
+}
+
+impl ScheduleView {
+    /// The view of `state`, the row of a dot with `schedule`, at `now`, with times in `tz`.
+    /// `attention` is the run the row's `attention_run_id` names.
+    pub fn new<Tz>(
+        state: &ScheduleState,
+        schedule: &Schedule,
+        enabled: bool,
+        attention: Option<AttentionRun>,
+        now: DateTime<Utc>,
+        tz: &Tz,
+    ) -> ScheduleView
+    where
+        Tz: TimeZone + 'static,
+        Tz::Offset: std::fmt::Display,
+    {
+        let parse = |t: &str| DateTime::parse_from_rfc3339(t).ok();
+        let counted = match schedule.until {
+            Some(Until::Count(n)) => state.fired_count >= n,
+            _ => false,
+        };
+        let live = enabled && state.status == ScheduleStatus::Active;
+        // A slot the pass has not handled yet is past: the next fire time is after now.
+        let after =
+            parse(&state.last_slot_at).map_or(now, |last| now.max(last.with_timezone(&Utc)));
+        let next_fire = (live && !counted)
+            .then(|| next_slot(schedule, &after, tz).ok().flatten())
+            .flatten()
+            .map(|t| t.to_rfc3339());
+        let retry = state.retry.as_ref().filter(|_| live);
+        ScheduleView {
+            status: state.status,
+            fired_count: state.fired_count,
+            next_fire,
+            retry_at: retry.map(|r| {
+                parse(&r.at).map_or_else(|| r.at.clone(), |at| at.with_timezone(tz).to_rfc3339())
+            }),
+            retry_attempt: retry.map(|r| r.attempt),
+            attention,
+        }
+    }
+}
+
 /// One row of the Dots screen.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DotOverview {
@@ -356,8 +422,8 @@ pub struct DotOverview {
     /// The newest queued, running or awaiting run.
     pub active_run: Option<Run>,
     pub last_run: Option<Run>,
-    /// RFC 3339 local time; `None` without an enabled schedule.
-    pub next_fire: Option<String>,
+    /// `None` without a schedule.
+    pub schedule_state: Option<ScheduleView>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -51,6 +51,12 @@ describe("commands", () => {
     ]);
   });
 
+  it("dismisses a schedule's attention by its dot", async () => {
+    reply = async () => null;
+    expect(await commands.dismissScheduleAttention("d1")).toBeNull();
+    expect(calls).toEqual([["dismiss_schedule_attention", { dotId: "d1" }]]);
+  });
+
   it("invokes exactly the commands the app registers", async () => {
     // A wrapper calls `invoke` before it first waits, so calling each one without arguments
     // lists the names with no backend. Their answers, mostly rejections here, do not matter.

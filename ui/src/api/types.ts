@@ -29,6 +29,7 @@ export const ApplyState = z.enum([
 export const Action = z.enum(["allow", "ask", "deny"]);
 export const Preset = z.enum(["read-only", "sandboxed", "trusted", "custom"]);
 export const FileStatus = z.enum(["added", "modified", "deleted", "renamed"]);
+export const ScheduleStatus = z.enum(["active", "completed", "expired"]);
 
 export const Rule = z.strictObject({ tool: z.string(), action: Action });
 export const Policy = z.strictObject({
@@ -218,11 +219,24 @@ export const SettingsSaved = z.strictObject({
   restart_required: z.boolean(),
 });
 
+// Where a dot's schedule stands (Scheduler v2 spec §8). Times are RFC 3339 local.
+// `next_fire` is null when nothing more fires (disabled, not active, nothing left);
+// `retry_at` and `retry_attempt` are set only while a retry waits.
+export const ScheduleView = z.strictObject({
+  status: ScheduleStatus,
+  fired_count: z.number().int(),
+  next_fire: nullable(z.string()),
+  retry_at: nullable(z.string()),
+  retry_attempt: nullable(z.number().int()),
+  attention: nullable(z.strictObject({ run_id: z.string(), error: nullable(z.string()) })),
+});
+
 export const DotOverview = z.strictObject({
   dot: Dot,
   active_run: nullable(Run),
   last_run: nullable(Run),
-  next_fire: nullable(z.string()),
+  // Null without a schedule.
+  schedule_state: nullable(ScheduleView),
 });
 
 export const PendingApproval = z.strictObject({
@@ -246,8 +260,8 @@ export const NeedsAttention = z.strictObject({
 export const Inbox = z.strictObject({
   approvals: z.array(PendingApproval),
   review_runs: z.array(ReviewRun),
-  // Newest failure first. Optional until the Inbox screen shows it.
-  attention: z.array(NeedsAttention).optional(),
+  // Newest failure first.
+  attention: z.array(NeedsAttention),
 });
 
 export const FileDiff = z.strictObject({
@@ -284,6 +298,7 @@ export type ApplyState = z.infer<typeof ApplyState>;
 export type Action = z.infer<typeof Action>;
 export type Preset = z.infer<typeof Preset>;
 export type FileStatus = z.infer<typeof FileStatus>;
+export type ScheduleStatus = z.infer<typeof ScheduleStatus>;
 export type Rule = z.infer<typeof Rule>;
 export type Policy = z.infer<typeof Policy>;
 export type Weekday = z.infer<typeof Weekday>;
@@ -302,6 +317,7 @@ export type ClaudeStatus = z.infer<typeof ClaudeStatus>;
 export type Status = z.infer<typeof Status>;
 export type Settings = z.infer<typeof Settings>;
 export type SettingsSaved = z.infer<typeof SettingsSaved>;
+export type ScheduleView = z.infer<typeof ScheduleView>;
 export type DotOverview = z.infer<typeof DotOverview>;
 export type PendingApproval = z.infer<typeof PendingApproval>;
 export type ReviewRun = z.infer<typeof ReviewRun>;

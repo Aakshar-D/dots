@@ -943,3 +943,61 @@ async fn resume_parked_refuses_to_queue_a_call_dots_is_not_to_perform() {
     assert!(child.is_some());
     assert_eq!(apply_state(&store, &own.id).await, Some(ApplyState::Queued));
 }
+
+/// A failed run of `trigger` for `dot`, retrying `retry_of`; with a `tool_call` event when
+/// `called` is set.
+async fn failed_run(
+    store: &Store,
+    dot: &str,
+    trigger: TriggerKind,
+    retry_of: Option<&str>,
+    called: bool,
+) -> Run {
+    let mut new = NewRun::new(dot, trigger);
+    new.retry_of = retry_of.map(str::to_string);
+    let run = store.create_run(&new).await.unwrap();
+    if called {
+        let call = json!({"kind": "tool_call", "id": "c1", "tool": "Bash", "input": {}});
+        store
+            .append_event(&run.id, "tool_call", &call)
+            .await
+            .unwrap();
+    }
+    store
+        .finish_run(&run.id, RunStatus::Failed, None, Some("down"))
+        .await
+        .unwrap()
+}
+
+/// A failed scheduled run that called no tool changed nothing, and its occurrence is retried
+/// or ends in "Needs attention", so it is not a run to review (Scheduler v2). Any other
+/// failure is.
+#[tokio::test]
+async fn a_failed_scheduled_run_that_called_no_tool_is_not_for_review() {
+    let (_d, store) = temp_store().await;
+    let dot = store.create_dot(&spec("a")).await.unwrap();
+    let quiet = failed_run(&store, &dot.id, TriggerKind::Schedule, None, false).await;
+    let retry = failed_run(
+        &store,
+        &dot.id,
+        TriggerKind::Schedule,
+        Some(&quiet.id),
+        false,
+    )
+    .await;
+    let called = failed_run(&store, &dot.id, TriggerKind::Schedule, None, true).await;
+    let manual = failed_run(&store, &dot.id, TriggerKind::Manual, None, false).await;
+    let hook = failed_run(&store, &dot.id, TriggerKind::Webhook, None, false).await;
+
+    let mut ids: Vec<String> = store
+        .unreviewed_thread_ends()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|r| r.id)
+        .collect();
+    ids.sort();
+    let mut want = vec![called.id, manual.id, hook.id];
+    want.sort();
+    assert_eq!(ids, want, "not {} nor its retry {}", quiet.id, retry.id);
+}

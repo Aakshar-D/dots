@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use common::{init_repo, spec, wait_status};
-use dots_core::model::{DotSpec, EngineKind, RunStatus, WorkspaceMode};
+use dots_core::model::{DotOverview, DotSpec, EngineKind, RunStatus, WorkspaceMode};
 use dots_core::schedule::Schedule;
 use dots_core::{Config, Error, Runtime};
 use llm::{call, text, Llm};
@@ -71,6 +71,7 @@ async fn changed_worktree_run(t: &Rt, name: &str) -> dots_core::model::Run {
 
 #[tokio::test]
 async fn dot_overview_shows_active_and_last_runs_and_the_next_fire() {
+    let next_fire = |row: &DotOverview| row.schedule_state.as_ref()?.next_fire.clone();
     let t = start().await;
     let mut s = folder_spec(&t, "sched");
     s.schedule = Some(Schedule::cron("0 0 9 * * *"));
@@ -91,13 +92,13 @@ async fn dot_overview_shows_active_and_last_runs_and_the_next_fire() {
         row.last_run.as_ref().map(|r| r.id.as_str()),
         Some(run.id.as_str())
     );
-    let next = row.next_fire.as_deref().expect("next fire");
+    let next = next_fire(row).expect("next fire");
     assert!(next.contains("T09:00:00"), "{next}");
     let row = rows.iter().find(|r| r.dot.id == daily.id).unwrap();
-    let next = row.next_fire.as_deref().expect("next fire");
+    let next = next_fire(row).expect("next fire");
     assert!(next.contains("T07:15:00"), "{next}");
     let row = rows.iter().find(|r| r.dot.id == idle.id).unwrap();
-    assert!(row.last_run.is_none() && row.next_fire.is_none());
+    assert!(row.last_run.is_none() && row.schedule_state.is_none());
 
     // A run waiting on its model shows as active.
     let llm = Llm::start(vec![text("late").set_delay(Duration::from_secs(5))]).await;

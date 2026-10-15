@@ -38,6 +38,7 @@ const enums: Record<keyof typeof fixture.Enums, { options: readonly string[] }> 
   Action: T.Action,
   Preset: T.Preset,
   FileStatus: T.FileStatus,
+  ScheduleStatus: T.ScheduleStatus,
   CmdErrorKind: T.CmdErrorKind,
 };
 

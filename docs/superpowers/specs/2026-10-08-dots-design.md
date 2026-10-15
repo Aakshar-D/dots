@@ -575,6 +575,9 @@ The Inbox lists:
 - from Scheduler v2, schedules that need attention (an occurrence failed in the end);
 - runs awaiting review: the latest run of each lineage that is terminal, has `reviewed_at`
   NULL, and either kept its worktree (worktree mode, worktree still on disk) or `failed`.
+  From Scheduler v2 a failed run with trigger `schedule` that recorded no `tool_call` event
+  is not listed: it changed nothing, and its occurrence is retried or ends in "needs
+  attention", which the Inbox lists instead.
 
 A run leaves the Inbox through "Discard worktree" or "Mark reviewed". Folder-mode successes only
 notify. Unread count = pending approvals + runs awaiting review + schedules that need
@@ -606,6 +609,13 @@ attention.
   allow rules that may be saved with an approval, `decide_run_approvals(run_id, approved,
   note)` decides every pending approval of a run, and `decide_approval` takes `allow_rule`,
   which the core accepts only when it is one of those candidates.
+- Scheduler v2 adds `dismiss_schedule_attention(dot_id)`: it clears the dot's "needs
+  attention", answers `not_found` when the dot has no schedule row, and does nothing when the
+  flag is not set. In `dot_overview` each row's `next_fire` is replaced by `schedule_state`
+  (null without a schedule): `{ status, fired_count, next_fire, retry_at, retry_attempt,
+  attention: { run_id, error } | null }`, times in RFC 3339 local. `next_fire` is the first
+  slot after now, null while the dot is disabled, when the schedule is not `active`, or when
+  no slot or count is left; `retry_at` and `retry_attempt` are set while a retry waits.
 - **Runs, dots and approvals are addressed by id.** `open_run_folder(run_id)` resolves the path
   in core; the UI cannot make the backend open, read or delete an arbitrary path. Two values
   from the UI are paths:
@@ -690,7 +700,9 @@ attention.
   variants, so a new variant without a sample does not compile. From Approvals v2 it also
   holds a sample of `ApprovalUpdated`, every `ApplyState`, and the rule candidates the core
   derives for the `Approval` sample (`RuleCandidate`). From Scheduler v2 it holds a sample of
-  every `RuntimeEvent` type, `ScheduleUpdated` among them, and the UI test checks that.
+  every `RuntimeEvent` type, `ScheduleUpdated` among them (the UI test checks that), every
+  `ScheduleStatus`, a queued retry (the `RunUpdated` sample, with `retry_of`), and a
+  `DotOverview` sample that sets every field of `schedule_state`.
 - Shell around the screens:
   - Banners: `server_error` (links to Settings), CLI version mismatch ("Mark as tested"),
     restart required ("Restart Dots"), schedules paused.

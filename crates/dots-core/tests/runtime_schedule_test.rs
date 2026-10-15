@@ -2,13 +2,13 @@ mod common;
 
 use std::path::PathBuf;
 
-use chrono::{DateTime, TimeDelta, Utc};
+use chrono::{DateTime, FixedOffset, Local, TimeDelta, Utc};
 use common::clock::FakeClock;
 use common::spec;
 use dots_core::events::RuntimeEvent;
 use dots_core::model::{
-    Dot, DotSpec, NeedsAttention, NewRun, Run, RunStatus, ScheduleChange, ScheduleState,
-    ScheduleStatus, TriggerKind, WorkspaceMode,
+    AttentionRun, Dot, DotSpec, NeedsAttention, NewRun, PendingRetry, Run, RunStatus,
+    ScheduleChange, ScheduleState, ScheduleStatus, ScheduleView, TriggerKind, WorkspaceMode,
 };
 use dots_core::schedule::Schedule;
 use dots_core::store::{Store, DB_FILE};
@@ -329,5 +329,196 @@ async fn attention_is_listed_in_the_inbox_until_dismissed() {
             Err(Error::NotFound(_))
         ));
     }
+    rt.shutdown();
+}
+
+/// Every hour from 2030-01-07T09:00Z, bounded by `until`.
+fn hourly(until: serde_json::Value) -> Schedule {
+    serde_json::from_value(json!({
+        "rule": {"kind": "every", "minutes": 60, "anchor": "2030-01-07T09:00:00Z"},
+        "catch_up": true,
+        "until": until
+    }))
+    .unwrap()
+}
+
+fn row_at(last_slot_at: &str, fired_count: u32) -> ScheduleState {
+    ScheduleState {
+        dot_id: "d".into(),
+        rule_key: String::new(),
+        status: ScheduleStatus::Active,
+        last_slot_at: last_slot_at.into(),
+        fired_count,
+        watch_run_id: None,
+        retry: None,
+        attention_run_id: None,
+        updated_at: last_slot_at.into(),
+    }
+}
+
+fn utc(t: &str) -> DateTime<Utc> {
+    DateTime::parse_from_rfc3339(t).unwrap().with_timezone(&Utc)
+}
+
+/// Scheduler v2 spec §8: what the Dots screen is told about a schedule. The next fire time is
+/// the first slot after now, none once nothing more fires; times are in the view's zone.
+#[test]
+fn a_schedule_view_says_what_comes_next() {
+    let now = utc("2030-01-07T10:30:00Z");
+    let s = hourly(json!(null));
+    let view = ScheduleView::new(
+        &row_at("2030-01-07T10:00:00.000Z", 1),
+        &s,
+        true,
+        None,
+        now,
+        &Utc,
+    );
+    assert_eq!(
+        view,
+        ScheduleView {
+            status: ScheduleStatus::Active,
+            fired_count: 1,
+            next_fire: Some("2030-01-07T11:00:00+00:00".into()),
+            retry_at: None,
+            retry_attempt: None,
+            attention: None,
+        }
+    );
+    // A slot the pass has not handled yet is past: it is not the next one.
+    let view = ScheduleView::new(
+        &row_at("2030-01-07T09:00:00.000Z", 0),
+        &s,
+        true,
+        None,
+        now,
+        &Utc,
+    );
+    assert_eq!(view.next_fire.as_deref(), Some("2030-01-07T11:00:00+00:00"));
+
+    // A waiting retry and the attention, in the view's zone.
+    let mut row = row_at("2030-01-07T10:00:00.000Z", 1);
+    row.retry = Some(PendingRetry {
+        slot_at: "2030-01-07T10:00:00.000Z".into(),
+        attempt: 2,
+        at: "2030-01-07T10:31:00.000Z".into(),
+    });
+    let flag = AttentionRun {
+        run_id: "r1".into(),
+        error: Some("down".into()),
+    };
+    let plus_one = FixedOffset::east_opt(3600).unwrap();
+    let view = ScheduleView::new(&row, &s, true, Some(flag.clone()), now, &plus_one);
+    assert_eq!(
+        (
+            view.next_fire.as_deref(),
+            view.retry_at.as_deref(),
+            view.retry_attempt
+        ),
+        (
+            Some("2030-01-07T12:00:00+01:00"),
+            Some("2030-01-07T11:31:00+01:00"),
+            Some(2)
+        )
+    );
+    assert_eq!(view.attention, Some(flag.clone()));
+
+    // A disabled dot fires and retries nothing; its flag stays.
+    let view = ScheduleView::new(&row, &s, false, Some(flag.clone()), now, &Utc);
+    assert_eq!(
+        (
+            view.next_fire,
+            view.retry_at,
+            view.retry_attempt,
+            view.attention
+        ),
+        (None, None, None, Some(flag))
+    );
+    // Neither does a schedule whose count is reached (its last outcome may still be pending),
+    // nor a completed or expired one.
+    let counted = hourly(json!({"count": 1}));
+    let view = ScheduleView::new(
+        &row_at("2030-01-07T10:00:00.000Z", 1),
+        &counted,
+        true,
+        None,
+        now,
+        &Utc,
+    );
+    assert_eq!(
+        (view.status, view.next_fire),
+        (ScheduleStatus::Active, None)
+    );
+    for status in [ScheduleStatus::Completed, ScheduleStatus::Expired] {
+        let mut row = row_at("2030-01-07T10:00:00.000Z", 1);
+        row.status = status;
+        let view = ScheduleView::new(&row, &s, true, None, now, &Utc);
+        assert_eq!((view.status, view.next_fire), (status, None));
+    }
+}
+
+/// `dot_overview` gives each dot with a schedule the view of its row, with the error of the
+/// run that needs attention, at the runtime clock's time; a dot without a schedule has none.
+#[tokio::test]
+async fn the_overview_shows_where_each_schedule_stands() {
+    let dir = tempfile::tempdir().unwrap();
+    let t0 = utc("2030-01-07T09:00:00Z");
+    let mut cfg = config(&dir);
+    cfg.clock = FakeClock::new(t0);
+    let rt = Runtime::start(cfg).await.unwrap();
+    let on = rt
+        .create_dot(folder_spec(&dir, "on", Some(hourly(json!(null)))))
+        .await
+        .unwrap();
+    let mut s = folder_spec(&dir, "off", Some(hourly(json!(null))));
+    s.enabled = false;
+    let off = rt.create_dot(s).await.unwrap();
+    let plain = rt
+        .create_dot(folder_spec(&dir, "plain", None))
+        .await
+        .unwrap();
+    let failed = flag(&rt, &on, "model server down").await;
+    let change = ScheduleChange {
+        retry: Some(Some(PendingRetry {
+            slot_at: timestamp(t0),
+            attempt: 2,
+            at: timestamp(t0 + TimeDelta::minutes(5)),
+        })),
+        ..Default::default()
+    };
+    rt.store()
+        .update_schedule_state(&on.id, &change, t0)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let rows = rt.dot_overview().await.unwrap();
+    let view = |dot: &Dot| {
+        rows.iter()
+            .find(|r| r.dot.id == dot.id)
+            .unwrap()
+            .schedule_state
+            .clone()
+    };
+    let local = |t: DateTime<Utc>| t.with_timezone(&Local).to_rfc3339();
+    assert_eq!(
+        view(&on),
+        Some(ScheduleView {
+            status: ScheduleStatus::Active,
+            fired_count: 0,
+            next_fire: Some(local(t0 + TimeDelta::hours(1))),
+            retry_at: Some(local(t0 + TimeDelta::minutes(5))),
+            retry_attempt: Some(2),
+            attention: Some(AttentionRun {
+                run_id: failed.id,
+                error: Some("model server down".into()),
+            }),
+        })
+    );
+    assert_eq!(
+        view(&off).map(|v| (v.status, v.next_fire)),
+        Some((ScheduleStatus::Active, None))
+    );
+    assert_eq!(view(&plain), None);
     rt.shutdown();
 }

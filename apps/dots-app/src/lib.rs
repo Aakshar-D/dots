@@ -60,6 +60,7 @@ command_list![
     decide_run_approvals,
     inbox,
     inbox_count,
+    dismiss_schedule_attention,
     worktree_diff,
     discard_worktree,
     mark_reviewed,

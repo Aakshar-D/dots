@@ -269,6 +269,12 @@ pub async fn inbox_count(state: State<'_, AppState>) -> Res<usize> {
     Ok(state.rt()?.inbox_count().await?)
 }
 
+/// Clears the "Needs attention" of the dot's schedule.
+#[tauri::command]
+pub async fn dismiss_schedule_attention(state: State<'_, AppState>, dot_id: String) -> Res<()> {
+    Ok(state.rt()?.dismiss_schedule_attention(&dot_id).await?)
+}
+
 #[tauri::command]
 pub async fn worktree_diff(state: State<'_, AppState>, run_id: String) -> Res<WorktreeDiff> {
     Ok(state.rt()?.worktree_diff(&run_id).await?)

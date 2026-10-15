@@ -225,11 +225,16 @@ impl Store {
 
     /// The newest run of each lineage, if it is finished and not reviewed yet. Only runs the
     /// Inbox can ever show (failed, or with a branch) are returned; `Runtime::inbox` filters further.
+    /// A failed scheduled run that called no tool is left out (Scheduler v2): it changed
+    /// nothing, and its occurrence is retried or ends in "Needs attention".
     pub async fn unreviewed_thread_ends(&self) -> Result<Vec<Run>> {
         let rows = sqlx::query(&format!(
             "SELECT {RUN_COLUMNS} FROM runs r \
              WHERE r.reviewed_at IS NULL AND r.status IN ('succeeded', 'failed', 'cancelled') \
              AND (r.status = 'failed' OR r.branch IS NOT NULL) \
+             AND NOT (r.status = 'failed' AND r.trigger_kind = 'schedule' \
+                      AND NOT EXISTS (SELECT 1 FROM run_events e \
+                                      WHERE e.run_id = r.id AND e.kind = 'tool_call')) \
              AND r.id = (SELECT x.id FROM runs x WHERE x.root_run_id = r.root_run_id \
                          ORDER BY x.queued_at DESC, x.id DESC LIMIT 1) \
              ORDER BY r.ended_at DESC, r.id DESC"

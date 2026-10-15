@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{Local, Utc};
+use chrono::{DateTime, Local, Utc};
 use serde_json::json;
 use tokio::sync::{broadcast, Mutex};
 use tokio_util::sync::CancellationToken;
@@ -16,13 +16,13 @@ use crate::engine::local::{self, LocalEngine};
 use crate::engine::{Engine, UnavailableEngine};
 use crate::events::{new_bus, Bus, RuntimeEvent};
 use crate::model::{
-    Approval, ClaudeStatus, Dot, DotOverview, DotSpec, EngineKind, Inbox, NewRun, PendingApproval,
-    ReviewRun, Run, RunEventRecord, RunStatus, ScheduleChange, SettingsSaved, Status, TriggerKind,
-    WorktreeDiff,
+    Approval, AttentionRun, ClaudeStatus, Dot, DotOverview, DotSpec, EngineKind, Inbox, NewRun,
+    PendingApproval, ReviewRun, Run, RunEventRecord, RunStatus, ScheduleChange, ScheduleView,
+    SettingsSaved, Status, TriggerKind, WorktreeDiff,
 };
 use crate::policy::{allow_candidates, Action, Rule, RuleCandidate};
 use crate::runner::{Runner, RunnerConfig};
-use crate::schedule::{next_slot, upcoming, Schedule};
+use crate::schedule::{upcoming, Schedule};
 use crate::scheduler::{Clock, Scheduler, SystemClock};
 use crate::server::{self, ServerState};
 use crate::settings::Settings;
@@ -317,26 +317,49 @@ impl Runtime {
         self.store.get_dot(id).await
     }
 
-    /// Every dot with its active and last run and its next scheduled fire time.
+    /// Every dot with its active and last run and where its schedule stands.
     pub async fn dot_overview(&self) -> Result<Vec<DotOverview>> {
-        let now = self.clock.now().with_timezone(&Local);
+        let now = self.clock.now();
         let mut rows = Vec::new();
         for dot in self.store.list_dots().await? {
-            let next_fire = match (&dot.spec.schedule, dot.spec.enabled) {
-                (Some(schedule), true) => next_slot(schedule, &now, &Local)
-                    .ok()
-                    .flatten()
-                    .map(|t| t.to_rfc3339()),
-                _ => None,
-            };
             rows.push(DotOverview {
                 active_run: self.store.latest_run(&dot.id, true).await?,
                 last_run: self.store.latest_run(&dot.id, false).await?,
-                next_fire,
+                schedule_state: self.schedule_view(&dot, now).await?,
                 dot,
             });
         }
         Ok(rows)
+    }
+
+    /// The view of the dot's schedule row in local time; `None` without a schedule or a row.
+    async fn schedule_view(&self, dot: &Dot, now: DateTime<Utc>) -> Result<Option<ScheduleView>> {
+        let Some(schedule) = &dot.spec.schedule else {
+            return Ok(None);
+        };
+        let Some(state) = self.store.get_schedule_state(&dot.id).await? else {
+            return Ok(None);
+        };
+        let attention = match &state.attention_run_id {
+            Some(id) => match self.store.get_run(id).await {
+                Ok(run) => Some(AttentionRun {
+                    run_id: run.id,
+                    error: run.error,
+                }),
+                // Deleted since the row was read: its flag went with it.
+                Err(Error::NotFound(_)) => None,
+                Err(e) => return Err(e),
+            },
+            None => None,
+        };
+        Ok(Some(ScheduleView::new(
+            &state,
+            schedule,
+            dot.spec.enabled,
+            attention,
+            now,
+            &Local,
+        )))
     }
 
     /// The next `count` (1 to 10) slots of a schedule saved now, RFC 3339 in local time, within

@@ -29,7 +29,7 @@ export function nextRun(row: DotOverview, schedulesPaused: boolean): string {
   if (!row.dot.schedule) return "No schedule";
   if (!row.dot.enabled) return "Disabled";
   if (schedulesPaused) return "Paused";
-  return localDateTime(row.next_fire) || "Not scheduled";
+  return localDateTime(row.schedule_state?.next_fire) || "Not scheduled";
 }
 
 export function DotsScreen() {

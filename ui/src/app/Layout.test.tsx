@@ -218,8 +218,12 @@ describe("the app frame", () => {
     // While paused the core holds the time the dot would have run; a resume moves it on.
     const next = "2026-10-20T01:00:00.000Z";
     const read = later<DotOverview[]>();
+    const moved: DotOverview = {
+      ...idle,
+      schedule_state: { ...idle.schedule_state!, next_fire: next },
+    };
     backend.on("dot_overview", () =>
-      backend.callsTo("dot_overview").length === 1 ? read.answer : [{ ...idle, next_fire: next }],
+      backend.callsTo("dot_overview").length === 1 ? read.answer : [moved],
     );
     await user.click(screen.getByRole("link", { name: "Dots" }));
     await waitFor(() => expect(backend.callsTo("dot_overview")).toHaveLength(1));

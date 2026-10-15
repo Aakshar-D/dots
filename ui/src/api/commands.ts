@@ -113,6 +113,10 @@ export const commands = {
     call(T.Approval.array(), "decide_run_approvals", { runId, approved, note }),
   inbox: () => call(T.Inbox, "inbox"),
   inboxCount: () => call(z.number().int(), "inbox_count"),
+  /// Clears the "Needs attention" of the dot's schedule; nothing happens when it is not set.
+  /// Rejects with kind `not_found` when the dot has no schedule.
+  dismissScheduleAttention: (dotId: string) =>
+    call(nothing, "dismiss_schedule_attention", { dotId }),
 
   worktreeDiff: (runId: string) => call(T.WorktreeDiff, "worktree_diff", { runId }),
   discardWorktree: (runId: string) => call(T.Run, "discard_worktree", { runId }),

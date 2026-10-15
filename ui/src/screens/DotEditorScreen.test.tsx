@@ -390,10 +390,10 @@ describe("the dot editor, stored dot", () => {
 
   it("drops the deleted dot's runs from the Inbox and its count", async () => {
     stored();
-    let waiting: Inbox = { approvals: [], review_runs: sample.inbox.review_runs };
+    let waiting: Inbox = { approvals: [], review_runs: sample.inbox.review_runs, attention: [] };
     backend.on("inbox", () => waiting);
     backend.on("delete_dot", () => {
-      waiting = { approvals: [], review_runs: [] };
+      waiting = { approvals: [], review_runs: [], attention: [] };
       return null;
     });
     const { user, router } = renderApp(path);
