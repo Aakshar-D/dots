@@ -14,7 +14,7 @@ user's approval.
 
 ### Success criteria
 
-- A dot configured with a cron schedule runs unattended while the app sits in the tray, and its
+- A dot configured with a schedule runs unattended while the app sits in the tray, and its
   result appears in the inbox with a Windows notification.
 - A dot can be triggered by `POST` to a local webhook URL with its token.
 - A Claude-backed dot runs on the user's Claude subscription via the official `claude` CLI.
@@ -30,7 +30,7 @@ user's approval.
 | Scope | General platform: many dots, each with its own job, tools, schedule |
 | Hosting | Local Windows machine |
 | Model backends | Hybrid: Claude via `claude` CLI (subscription); local models via own tool loop over OpenAI-compatible API |
-| Triggers (v1) | Schedule (cron), webhook, manual (Run now + chat) |
+| Triggers (v1) | Schedule (once, every, daily, weekly, cron; Scheduler v2), webhook, manual (Run now + chat) |
 | Autonomy | Per-dot policy: each tool is `allow`, `ask`, or `deny`; new dots default to "sandboxed" preset |
 | Language | Rust |
 | UI | Tauri 2 desktop app, React + Vite frontend |
@@ -112,7 +112,12 @@ Stored at `%LOCALAPPDATA%\dots\dots.db`. Worktrees at `%LOCALAPPDATA%\dots\workt
 - `id` TEXT PK (ULID), `name` TEXT UNIQUE, `instructions` TEXT (markdown)
 - `engine` TEXT (`claude` | `local`), `model` TEXT, `endpoint_url` TEXT NULL (local only)
 - `workdir` TEXT, `workspace_mode` TEXT (`worktree` | `folder`)
-- `schedule` TEXT NULL (cron, 6-field with seconds), `timezone` TEXT (default local)
+- `schedule` TEXT NULL: the schedule as JSON (`2026-10-14-scheduler-v2-design.md` §2), e.g.
+  `{"rule": {"kind": "daily", "time": "09:00"}, "catch_up": true, "until": {"count": 10}}`; rule
+  kinds `once`, `every`, `daily`, `weekly` and `cron` (6-field with seconds, or 7 with year). A
+  `once` in the past or a stop date before the first slot is refused when the dot is created or
+  its schedule changes, not when it is loaded. The core sets an `every` rule's `anchor`.
+  `timezone` TEXT (default local, unused: schedules use the PC's local time)
 - `webhook_token` TEXT (random 32 bytes, base64url)
 - `policy` TEXT (JSON, see §5), `mcp_servers` TEXT NULL (JSON, Claude only)
 - `use_user_settings` INTEGER (0/1, default 0)
@@ -134,6 +139,8 @@ Stored at `%LOCALAPPDATA%\dots\dots.db`. Worktrees at `%LOCALAPPDATA%\dots\workt
 - `queued_at`, `started_at`, `ended_at`
 - `reviewed_at` TEXT NULL (migration 0002; set by "Mark reviewed" or "Discard worktree", see
   §12 Inbox)
+- `retry_of` TEXT NULL, FK `runs(id)` ON DELETE SET NULL (migration 0005): the failed scheduled
+  run that this run retries
 
 **run_events**
 - `run_id` FK, `seq` INTEGER, `ts`, `kind` TEXT, `data` TEXT (JSON); PK (`run_id`, `seq`)
@@ -147,6 +154,12 @@ Stored at `%LOCALAPPDATA%\dots\dots.db`. Worktrees at `%LOCALAPPDATA%\dots\workt
   `failed` | `unknown` | `skipped`), `applied_at` TEXT NULL (migration 0004; see
   `2026-10-13-approvals-v2-design.md` §3.4)
 
+**schedule_state** (migration 0005; Scheduler v2 spec §4) — one row per dot with a schedule:
+`dot_id` PK (FK `dots`, ON DELETE CASCADE), `rule_key` (the schedule's JSON when the row was
+made), `status` (`active` | `completed` | `expired`), `last_slot_at`, `fired_count`,
+`watch_run_id`, `retry_slot_at`, `retry_attempt`, `retry_at`, `attention_run_id` (the run
+columns are FKs to `runs`, ON DELETE SET NULL), `updated_at`.
+
 **settings** — key/value, each value a JSON document: `port` (default 47321),
 `max_concurrent_runs` (default 2), `claude_path` (null = search PATH), `tested_claude_version`
 (default: the core constant `TESTED_CLAUDE_VERSION`), `local_endpoints` (JSON list of URLs),
@@ -155,7 +168,10 @@ defaults; unknown keys are ignored. A stored value of the wrong type, or one tha
 rejects (for example `max_concurrent_runs` 0), is ignored on its own and its default is used.
 
 Migrations: `0002` adds `runs.reviewed_at`; `0003` adds the index
-`runs(root_run_id, queued_at, id)` that the Inbox query needs.
+`runs(root_run_id, queued_at, id)` that the Inbox query needs; `0004` adds the approval apply
+columns; `0005` converts each cron string in `dots.schedule` to
+`{"rule":{"kind":"cron","expr":...},"catch_up":false,"until":null}` (no catch-up, so an upgraded
+schedule behaves as before), adds `runs.retry_of` and creates `schedule_state`.
 
 All timestamps are RFC 3339 UTC strings.
 
@@ -501,7 +517,9 @@ In task order:
    `list_runs(dot_id?, limit)`, `get_run`, `run_thread(root_run_id)` (all runs of a lineage,
    oldest first), `list_run_events(run_id, after_seq)`, `approvals_for_run`,
    `inbox() -> { approvals, review_runs }`, `inbox_count()`, and
-   `preview_schedule(expr, n) -> next n fire times` (validates the cron; the UI parses no cron).
+   `preview_schedule(schedule, n) -> next n slots` (from Scheduler v2 it takes the schedule
+   object, validates it like `DotSpec::validate`, answers `[]` when no slot is left, and
+   previews an `every` rule from now; the UI parses no schedule).
 7. Review actions on a thread's shared worktree:
    - `worktree_diff(run_id) -> { files: [{ path, status, patch, binary }], truncated, exists }` — `git
      diff <base_commit>` plus untracked files as additions; total patch text capped at 1 MiB.

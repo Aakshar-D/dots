@@ -5,7 +5,7 @@ import { invoke, type InvokeArgs } from "@tauri-apps/api/core";
 import { z } from "zod";
 
 import * as T from "./types";
-import type { CmdErrorKind, DotSpec, Preset, Settings } from "./types";
+import type { CmdErrorKind, DotSpec, Preset, Schedule, Settings } from "./types";
 
 /// A command failure. `kind` mirrors the Rust `CmdError`.
 export class CommandError extends Error {
@@ -79,8 +79,9 @@ export const commands = {
   regenerateWebhookToken: (id: string) => call(text, "regenerate_webhook_token", { id }),
   /// Rejects with kind `conflict` while the local server is not running.
   webhookUrl: (id: string) => call(text, "webhook_url", { id }),
-  previewSchedule: (expr: string, count: number) =>
-    call(text.array(), "preview_schedule", { expr, count }),
+  /// The next `count` slots of a schedule saved now; the core's objection when it is not valid.
+  previewSchedule: (schedule: Schedule, count: number) =>
+    call(text.array(), "preview_schedule", { schedule, count }),
   policyPreset: (preset: Preset) => call(T.Policy, "policy_preset", { preset }),
   newDotSpec: () => call(T.DotSpec, "new_dot_spec"),
   testEndpoint: (endpoint: string, model: string) =>

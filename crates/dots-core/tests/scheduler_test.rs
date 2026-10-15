@@ -9,6 +9,7 @@ use dots_core::engine::Engine;
 use dots_core::events::new_bus;
 use dots_core::model::{EngineKind, TriggerKind};
 use dots_core::runner::{Runner, RunnerConfig};
+use dots_core::schedule::Schedule;
 use dots_core::scheduler::Scheduler;
 use dots_core::store::Store;
 use tokio_util::sync::CancellationToken;
@@ -32,7 +33,7 @@ fn idle_runner(store: &Store, dir: &tempfile::TempDir) -> Arc<Runner> {
 async fn every_second_schedule_enqueues_once_and_coalesces() {
     let (dir, store) = temp_store().await;
     let mut s = spec("tick");
-    s.schedule = Some("* * * * * *".into());
+    s.schedule = Some(Schedule::cron("* * * * * *"));
     let dot = store.create_dot(&s).await.unwrap();
     let sched = Scheduler::new(store.clone(), idle_runner(&store, &dir));
     sched.spawn(CancellationToken::new());
@@ -51,10 +52,39 @@ async fn every_second_schedule_enqueues_once_and_coalesces() {
 async fn disabled_and_unscheduled_dots_are_ignored() {
     let (dir, store) = temp_store().await;
     let mut off = spec("off");
-    off.schedule = Some("* * * * * *".into());
+    off.schedule = Some(Schedule::cron("* * * * * *"));
     off.enabled = false;
     store.create_dot(&off).await.unwrap();
     store.create_dot(&spec("manual-only")).await.unwrap();
+    let sched = Scheduler::new(store.clone(), idle_runner(&store, &dir));
+    sched.spawn(CancellationToken::new());
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert!(store.list_runs(None, 10).await.unwrap().is_empty());
+}
+
+/// The loop takes its slots from the schedule module, so a stop date is kept.
+#[tokio::test]
+async fn a_schedule_past_its_stop_date_fires_nothing() {
+    let (dir, store) = temp_store().await;
+    let mut s = spec("stopped");
+    s.schedule = Some(Schedule::cron("* * * * * *"));
+    let dot = store.create_dot(&s).await.unwrap();
+    // The stop date passed (written behind the store's back: a past date is refused on save).
+    let pool = sqlx::SqlitePool::connect(&format!(
+        "sqlite://{}",
+        dir.path().join("dots.db").display()
+    ))
+    .await
+    .unwrap();
+    sqlx::query("UPDATE dots SET schedule = ? WHERE id = ?")
+        .bind(
+            r#"{"rule":{"kind":"cron","expr":"* * * * * *"},"catch_up":false,
+               "until":{"date":"2020-01-01T09:00"}}"#,
+        )
+        .bind(&dot.id)
+        .execute(&pool)
+        .await
+        .unwrap();
     let sched = Scheduler::new(store.clone(), idle_runner(&store, &dir));
     sched.spawn(CancellationToken::new());
     tokio::time::sleep(Duration::from_millis(1500)).await;
@@ -68,7 +98,7 @@ async fn reload_picks_up_new_schedules() {
     sched.spawn(CancellationToken::new());
     tokio::time::sleep(Duration::from_millis(100)).await;
     let mut s = spec("late");
-    s.schedule = Some("* * * * * *".into());
+    s.schedule = Some(Schedule::cron("* * * * * *"));
     let dot = store.create_dot(&s).await.unwrap();
     sched.reload();
     let deadline = std::time::Instant::now() + Duration::from_secs(3);

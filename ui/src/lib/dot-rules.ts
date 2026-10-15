@@ -2,7 +2,7 @@
 // mistakes show next to their field before a save; the core still has the last word.
 import { z } from "zod";
 
-import { LIMITS, type DotSpec } from "@/api/types";
+import { LIMITS, type DotSpec, type Schedule } from "@/api/types";
 
 export type SpecErrors = Partial<Record<keyof DotSpec, string>>;
 
@@ -75,6 +75,20 @@ export function specErrors(spec: DotSpec, mcpText: string): SpecErrors {
   const mcp = mcpOf(spec, mcpText);
   if ("error" in mcp) errors.mcp_servers = mcp.error;
   return errors;
+}
+
+/// The schedule the cron field holds once `text` is typed into it: a cron schedule without
+/// catch-up or stop, as cron schedules were before Scheduler v2. An empty field is no schedule.
+export function cronSchedule(text: string): Schedule | null {
+  return text === "" ? null : { rule: { kind: "cron", expr: text }, catch_up: false, until: null };
+}
+
+/// The schedule a draft saves and previews: a cron expression without its surrounding spaces,
+/// none when only spaces are left. Other kinds as they are.
+export function scheduleOf(schedule: Schedule | null): Schedule | null {
+  if (schedule?.rule.kind !== "cron") return schedule;
+  const expr = schedule.rule.expr.trim();
+  return expr === "" ? null : { ...schedule, rule: { kind: "cron", expr } };
 }
 
 /// The editable part of a stored dot.

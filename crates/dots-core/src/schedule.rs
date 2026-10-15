@@ -78,6 +78,18 @@ fn invalid<T>(m: &str) -> Result<T> {
 }
 
 impl Schedule {
+    /// A cron schedule as Dots had them before Scheduler v2: no catch-up, no bound. Migration
+    /// 0005 converts a stored cron string to this.
+    pub fn cron(expr: &str) -> Schedule {
+        Schedule {
+            rule: Rule::Cron {
+                expr: expr.to_string(),
+            },
+            catch_up: false,
+            until: None,
+        }
+    }
+
     /// The structural rules of spec §2. Times and dates that do not parse are refused earlier,
     /// when the JSON is read.
     pub fn validate(&self) -> Result<()> {
@@ -138,6 +150,23 @@ impl Schedule {
             (Some(a), Some((m, Some(b)))) if a == b && m != *minutes => Some(now),
             (Some(a), _) => Some(a),
         };
+    }
+
+    /// What the core does to a schedule that is saved (spec §2): `fill_anchor` from
+    /// `previous`, the stored schedule (`None` on create), then `check_runs_after(now)` when the
+    /// schedule is new or changed. A schedule saved unchanged is not checked again, so a dot
+    /// whose `Once` has passed can still be edited.
+    pub fn prepare_save<Tz: TimeZone + 'static>(
+        &mut self,
+        previous: Option<&Schedule>,
+        now: DateTime<Utc>,
+        tz: &Tz,
+    ) -> Result<()> {
+        self.fill_anchor(previous, now);
+        if previous != Some(self) {
+            self.check_runs_after(&now, tz)?;
+        }
+        Ok(())
     }
 
     /// The instant of `Until::Date` in `tz`: a time that occurs twice is its later instant (the

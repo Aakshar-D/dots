@@ -11,7 +11,7 @@ import { ErrorNote } from "@/components/ErrorNote";
 import { Page } from "@/components/Page";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { mcpOf, specErrors, specOf } from "@/lib/dot-rules";
+import { mcpOf, scheduleOf, specErrors, specOf } from "@/lib/dot-rules";
 import { errorMessage, notifyError } from "@/lib/notify";
 import { invalidateDots, keys, useSwitchingDot } from "@/lib/query";
 import { useDebounced } from "@/lib/use-debounced";
@@ -41,16 +41,16 @@ function Editor(props: {
   const settings = useQuery({ queryKey: keys.settings, queryFn: commands.getSettings }).data;
   const save = useMutation({ mutationFn: props.onSave });
 
-  // The core validates the cron expression and computes the preview; the UI parses no cron.
-  const expr = useDebounced((draft.spec.schedule ?? "").trim(), 300);
+  // The core validates the schedule and computes the preview; the UI parses no schedule.
+  const schedule = scheduleOf(useDebounced(draft.spec.schedule, 300));
   const preview = useQuery({
-    queryKey: keys.schedulePreview(expr),
-    queryFn: () => commands.previewSchedule(expr, 3),
-    enabled: expr !== "",
+    queryKey: keys.schedulePreview(schedule),
+    queryFn: () => (schedule ? commands.previewSchedule(schedule, 3) : []),
+    enabled: schedule !== null,
   });
 
   const errors = specErrors(draft.spec, draft.mcpText);
-  if (expr !== "" && preview.isError) errors.schedule = errorMessage(preview.error);
+  if (schedule !== null && preview.isError) errors.schedule = errorMessage(preview.error);
 
   function submit() {
     setTried(true);
@@ -58,7 +58,7 @@ function Editor(props: {
     const mcp = mcpOf(draft.spec, draft.mcpText);
     save.mutate({
       ...draft.spec,
-      schedule: draft.spec.schedule?.trim() || null,
+      schedule: scheduleOf(draft.spec.schedule),
       endpoint_url: draft.spec.endpoint_url?.trim() || null,
       mcp_servers: "value" in mcp ? mcp.value : null,
     });
@@ -81,7 +81,7 @@ function Editor(props: {
         existing={props.existing}
         endpoints={settings?.local_endpoints ?? []}
         schedule={{
-          times: expr !== "" && preview.data ? preview.data : [],
+          times: schedule !== null && preview.data ? preview.data : [],
           pending: preview.isFetching,
         }}
       />

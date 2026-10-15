@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use common::{spec, wait_status};
 use dots_core::model::{DotSpec, EngineKind, RunStatus, WorkspaceMode};
+use dots_core::schedule::Schedule;
 use dots_core::settings::{Settings, TESTED_CLAUDE_VERSION};
 use dots_core::{Config, Error, Runtime};
 use llm::{text, Llm};
@@ -222,7 +223,7 @@ async fn paused_schedules_fire_nothing_until_resumed() {
     );
     assert!(rt.settings().await.schedules_paused);
     let mut s = folder_spec(&dir, "ticker");
-    s.schedule = Some("* * * * * *".into());
+    s.schedule = Some(Schedule::cron("* * * * * *"));
     let dot = rt.create_dot(s).await.unwrap();
     tokio::time::sleep(Duration::from_millis(2500)).await;
     assert!(rt

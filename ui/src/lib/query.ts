@@ -1,7 +1,7 @@
 import { QueryClient, useIsMutating, type QueryKey } from "@tanstack/react-query";
 
 import { commands } from "@/api/commands";
-import type { RunEventRecord, Status } from "@/api/types";
+import type { RunEventRecord, Schedule, Status } from "@/api/types";
 
 /// Data stays fresh until a runtime event or a mutation marks it stale (lib/runtime-events.ts):
 /// the backend tells the UI when something changed, so nothing polls.
@@ -29,7 +29,7 @@ export const keys = {
   dots: ["dots"] as const,
   dot: (id: string) => ["dot", id] as const,
   newDotSpec: ["new-dot-spec"] as const,
-  schedulePreview: (expr: string) => ["schedule-preview", expr] as const,
+  schedulePreview: (schedule: Schedule | null) => ["schedule-preview", schedule] as const,
   webhookUrl: (dotId: string) => ["webhook-url", dotId] as const,
   runs: (dotId: string) => ["runs", dotId] as const,
   thread: (runId: string) => ["thread", runId] as const,

@@ -11,6 +11,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::model::{Dot, NewRun, Run, TriggerKind};
 use crate::runner::Runner;
+use crate::schedule::next_slot;
 use crate::store::Store;
 use crate::{Error, Result};
 
@@ -23,11 +24,6 @@ pub fn parse_cron(expr: &str) -> Result<cron::Schedule> {
         )));
     }
     cron::Schedule::from_str(expr).map_err(|e| Error::Invalid(format!("cron {expr:?}: {e}")))
-}
-
-/// Next fire time strictly after `after`, in local time.
-pub fn next_fire(expr: &str, after: DateTime<Local>) -> Result<Option<DateTime<Local>>> {
-    Ok(parse_cron(expr)?.after(&after).next())
 }
 
 pub struct Scheduler {
@@ -96,13 +92,13 @@ impl Scheduler {
         };
         let mut due: Vec<(DateTime<Local>, Dot)> = Vec::new();
         for dot in self.store.list_dots().await? {
-            let Some(expr) = dot.spec.schedule.clone() else {
+            let Some(schedule) = &dot.spec.schedule else {
                 continue;
             };
             if !dot.spec.enabled {
                 continue;
             }
-            match next_fire(&expr, from) {
+            match next_slot(schedule, &from, &Local) {
                 Ok(Some(t)) => due.push((t, dot)),
                 Ok(None) => {}
                 Err(e) => tracing::warn!(dot = %dot.spec.name, "bad schedule: {e}"),

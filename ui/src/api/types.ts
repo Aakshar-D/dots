@@ -37,6 +37,31 @@ export const Policy = z.strictObject({
   default: Action,
 });
 
+// A dot's schedule (Scheduler v2 spec §2). Times are "HH:MM" and date-times
+// "YYYY-MM-DDTHH:MM", local and without an offset; the core checks them. `anchor` (RFC 3339
+// UTC) is the core's: the UI sends null, and the core keeps the stored phase.
+export const Weekday = z.enum(["mon", "tue", "wed", "thu", "fri", "sat", "sun"]);
+export const ScheduleRule = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("once"), at: z.string() }),
+  z.strictObject({
+    kind: z.literal("every"),
+    minutes: z.number().int(),
+    anchor: nullable(z.string()),
+  }),
+  z.strictObject({ kind: z.literal("daily"), time: z.string() }),
+  z.strictObject({ kind: z.literal("weekly"), days: z.array(Weekday), time: z.string() }),
+  z.strictObject({ kind: z.literal("cron"), expr: z.string() }),
+]);
+export const Until = z.union([
+  z.strictObject({ count: z.number().int() }),
+  z.strictObject({ date: z.string() }),
+]);
+export const Schedule = z.strictObject({
+  rule: ScheduleRule,
+  catch_up: z.boolean(),
+  until: nullable(Until),
+});
+
 const dotSpecShape = {
   name: z.string(),
   instructions: z.string(),
@@ -45,7 +70,7 @@ const dotSpecShape = {
   endpoint_url: nullable(z.string()),
   workdir: z.string(),
   workspace_mode: WorkspaceMode,
-  schedule: nullable(z.string()),
+  schedule: nullable(Schedule),
   policy: Policy,
   mcp_servers: nullable(z.record(z.string(), z.unknown())),
   use_user_settings: z.boolean(),
@@ -240,6 +265,10 @@ export type Preset = z.infer<typeof Preset>;
 export type FileStatus = z.infer<typeof FileStatus>;
 export type Rule = z.infer<typeof Rule>;
 export type Policy = z.infer<typeof Policy>;
+export type Weekday = z.infer<typeof Weekday>;
+export type ScheduleRule = z.infer<typeof ScheduleRule>;
+export type Until = z.infer<typeof Until>;
+export type Schedule = z.infer<typeof Schedule>;
 export type DotSpec = z.infer<typeof DotSpec>;
 export type Dot = z.infer<typeof Dot>;
 export type Run = z.infer<typeof Run>;

@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use common::{init_repo, spec, wait_status};
 use dots_core::model::{DotSpec, EngineKind, RunStatus, WorkspaceMode};
+use dots_core::schedule::Schedule;
 use dots_core::{Config, Error, Runtime};
 use llm::{call, text, Llm};
 use serde_json::json;
@@ -27,6 +28,10 @@ async fn start() -> Rt {
     cfg.local_retry_delays = vec![Duration::ZERO; 2];
     let rt = Runtime::start(cfg).await.unwrap();
     Rt { dir, repo, rt }
+}
+
+fn schedule(v: serde_json::Value) -> Schedule {
+    serde_json::from_value(v).unwrap()
 }
 
 /// A Claude dot (fake CLI) working directly in a plain folder.
@@ -68,8 +73,13 @@ async fn changed_worktree_run(t: &Rt, name: &str) -> dots_core::model::Run {
 async fn dot_overview_shows_active_and_last_runs_and_the_next_fire() {
     let t = start().await;
     let mut s = folder_spec(&t, "sched");
-    s.schedule = Some("0 0 9 * * *".into());
+    s.schedule = Some(Schedule::cron("0 0 9 * * *"));
     let dot = t.rt.create_dot(s).await.unwrap();
+    let mut s = folder_spec(&t, "daily");
+    s.schedule = Some(schedule(
+        json!({"rule": {"kind": "daily", "time": "07:15"}}),
+    ));
+    let daily = t.rt.create_dot(s).await.unwrap();
     let idle = t.rt.create_dot(folder_spec(&t, "idle")).await.unwrap();
     let run = t.rt.run_now(&dot.id).await.unwrap();
     wait_status(t.rt.store(), &run.id, RunStatus::Succeeded, 15).await;
@@ -83,6 +93,9 @@ async fn dot_overview_shows_active_and_last_runs_and_the_next_fire() {
     );
     let next = row.next_fire.as_deref().expect("next fire");
     assert!(next.contains("T09:00:00"), "{next}");
+    let row = rows.iter().find(|r| r.dot.id == daily.id).unwrap();
+    let next = row.next_fire.as_deref().expect("next fire");
+    assert!(next.contains("T07:15:00"), "{next}");
     let row = rows.iter().find(|r| r.dot.id == idle.id).unwrap();
     assert!(row.last_run.is_none() && row.next_fire.is_none());
 
@@ -106,18 +119,41 @@ async fn dot_overview_shows_active_and_last_runs_and_the_next_fire() {
 
 #[test]
 fn preview_schedule_lists_the_next_fire_times() {
-    let times = Runtime::preview_schedule("0 30 9 * * Mon", 3).unwrap();
+    let preview = |v: serde_json::Value, n| Runtime::preview_schedule(&schedule(v), n);
+    let times = Runtime::preview_schedule(&Schedule::cron("0 30 9 * * Mon"), 3).unwrap();
     assert_eq!(times.len(), 3);
     assert!(times.iter().all(|t| t.contains("T09:30:00")), "{times:?}");
     assert!(times[0] < times[1] && times[1] < times[2]);
     assert_eq!(
-        Runtime::preview_schedule("0 0 * * * *", 50).unwrap().len(),
+        Runtime::preview_schedule(&Schedule::cron("0 0 * * * *"), 50)
+            .unwrap()
+            .len(),
         10
     );
     assert!(matches!(
-        Runtime::preview_schedule("every day", 3),
+        Runtime::preview_schedule(&Schedule::cron("every day"), 3),
         Err(Error::Invalid(_))
     ));
+
+    // The builder's kinds, within their bounds.
+    let daily = json!({"rule": {"kind": "daily", "time": "07:15"}, "until": {"count": 2}});
+    let times = preview(daily, 3).unwrap();
+    assert_eq!(times.len(), 2, "{times:?}");
+    assert!(times.iter().all(|t| t.contains("T07:15:00")), "{times:?}");
+    // An every schedule as the UI sends it, without an anchor, starts now.
+    let before = chrono::Local::now();
+    let times = preview(json!({"rule": {"kind": "every", "minutes": 90}}), 2).unwrap();
+    let first = chrono::DateTime::parse_from_rfc3339(&times[0]).unwrap();
+    let gap = first.with_timezone(&chrono::Local) - before;
+    assert!(
+        gap > chrono::TimeDelta::minutes(89) && gap <= chrono::TimeDelta::minutes(91),
+        "{times:?}"
+    );
+    // Refused like `DotSpec::validate`; empty when no slot is left.
+    let no_day = json!({"rule": {"kind": "weekly", "days": [], "time": "09:00"}});
+    assert!(matches!(preview(no_day, 3), Err(Error::Invalid(_))));
+    let past = json!({"rule": {"kind": "once", "at": "2020-01-01T09:00"}});
+    assert_eq!(preview(past, 3).unwrap(), Vec::<String>::new());
 }
 
 #[tokio::test]

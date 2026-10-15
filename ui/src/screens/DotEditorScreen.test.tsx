@@ -1,7 +1,7 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import type { Inbox } from "@/api/types";
+import type { Inbox, Schedule } from "@/api/types";
 import { specOf } from "@/lib/dot-rules";
 import { localDateTime } from "@/lib/format";
 import { invalidateDots } from "@/lib/query";
@@ -11,6 +11,10 @@ import { renderApp } from "@/test/render";
 
 const dot = sample.dot;
 const path = `/dots/${dot.id}`;
+
+/// What the cron field saves.
+const cron = (expr: string) =>
+  ({ rule: { kind: "cron", expr }, catch_up: false, until: null }) satisfies Schedule;
 
 describe("the dot editor, new dot", () => {
   it("creates a dot from the core's defaults and what was typed", async () => {
@@ -86,7 +90,10 @@ describe("the dot editor, new dot", () => {
     expect(within(next).getAllByRole("listitem").map((li) => li.textContent)).toEqual(
       ["2026-10-13", "2026-10-14", "2026-10-15"].map((d) => localDateTime(`${d}T02:00:00+01:00`)),
     );
-    expect(backend.callsTo("preview_schedule").at(-1)).toEqual({ expr: "0 0 2 * * *", count: 3 });
+    expect(backend.callsTo("preview_schedule").at(-1)).toEqual({
+      schedule: cron("0 0 2 * * *"),
+      count: 3,
+    });
 
     backend.on("preview_schedule", () => {
       throw { kind: "invalid", message: "invalid cron expression: every" };
@@ -102,6 +109,30 @@ describe("the dot editor, new dot", () => {
     await user.type(screen.getByLabelText("Folder"), "C:/dev/app");
     await user.click(screen.getByRole("button", { name: "Create dot" }));
     expect(backend.callsTo("create_dot")).toEqual([]);
+  });
+
+  it("saves the cron expression as a cron schedule without catch-up", async () => {
+    backend.on("create_dot", (args) => ({ ...dot, ...(args.spec as object), id: "dot-new" }));
+    backend.on("get_dot", () => ({ ...dot, id: "dot-new", name: "nightly" }));
+    const { user, router } = renderApp("/dots/new");
+    await user.type(await screen.findByLabelText("Name"), "nightly");
+    await user.type(screen.getByLabelText("Instructions"), "Run the tests.");
+    await user.type(screen.getByLabelText("Folder"), "C:/dev/app");
+    await user.type(screen.getByLabelText("Cron expression"), " 0 0 2 * * * ");
+    await user.click(screen.getByRole("button", { name: "Create dot" }));
+
+    await waitFor(() => expect(router.state.location.pathname).toBe("/dots/dot-new"));
+    expect(backend.callsTo("create_dot")).toEqual([
+      {
+        spec: {
+          ...blankSpec,
+          name: "nightly",
+          instructions: "Run the tests.",
+          workdir: "C:/dev/app",
+          schedule: cron("0 0 2 * * *"),
+        },
+      },
+    ]);
   });
 
   it("refuses MCP servers that are not a JSON object", async () => {
@@ -130,7 +161,8 @@ describe("the dot editor, stored dot", () => {
     const { user } = renderApp(path);
     expect(await screen.findByRole("heading", { name: dot.name })).toBeVisible();
     expect(screen.getByLabelText("Name")).toHaveValue(dot.name);
-    expect(screen.getByLabelText("Cron expression")).toHaveValue(dot.schedule);
+    expect(dot.schedule?.rule.kind).toBe("cron");
+    expect(screen.getByLabelText("Cron expression")).toHaveValue(cron("0 0 2 * * *").rule.expr);
     expect(screen.getByLabelText("MCP servers")).toHaveValue(
       JSON.stringify(dot.mcp_servers, null, 2),
     );
@@ -153,6 +185,44 @@ describe("the dot editor, stored dot", () => {
     const { user } = renderApp(path);
     await user.click(await screen.findByRole("button", { name: "Save" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("only allowed as a trailing");
+  });
+
+  it("clears the schedule when the cron expression is emptied", async () => {
+    stored();
+    const { user } = renderApp(path);
+    await user.clear(await screen.findByLabelText("Cron expression"));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("Saved")).toBeVisible();
+    expect(backend.callsTo("update_dot")).toEqual([
+      { id: dot.id, spec: { ...specOf(dot), schedule: null } },
+    ]);
+  });
+
+  it("shows a schedule it cannot edit yet and keeps it on save", async () => {
+    const daily: Schedule = {
+      rule: { kind: "weekly", days: ["mon", "fri"], time: "09:00" },
+      catch_up: true,
+      until: { count: 10 },
+    };
+    const held = stored();
+    held.dot = { ...dot, schedule: daily };
+    const { user } = renderApp(path);
+    expect(await screen.findByText("Weekly on mon, fri at 09:00, at most 10 runs")).toBeVisible();
+    expect(screen.queryByLabelText("Cron expression")).toBeNull();
+    expect(backend.callsTo("preview_schedule").at(-1)).toEqual({ schedule: daily, count: 3 });
+
+    const instructions = screen.getByLabelText("Instructions");
+    await user.clear(instructions);
+    await user.type(instructions, "Only summarize.");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("Saved")).toBeVisible();
+    expect(backend.callsTo("update_dot")).toEqual([
+      { id: dot.id, spec: { ...specOf(held.dot), instructions: "Only summarize." } },
+    ]);
+
+    // Removed, the cron field is back.
+    await user.click(screen.getByRole("button", { name: "Remove schedule" }));
+    expect(screen.getByLabelText("Cron expression")).toHaveValue("");
   });
 
   const endpoint = "http://127.0.0.1:1234";

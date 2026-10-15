@@ -151,7 +151,14 @@
         }
       ]
     },
-    "schedule": "0 0 2 * * *",
+    "schedule": {
+      "catch_up": false,
+      "rule": {
+        "expr": "0 0 2 * * *",
+        "kind": "cron"
+      },
+      "until": null
+    },
     "timeout_secs": 1800,
     "updated_at": "2026-10-09T12:00:00.000Z",
     "use_user_settings": false,
@@ -252,7 +259,14 @@
           }
         ]
       },
-      "schedule": "0 0 2 * * *",
+      "schedule": {
+        "catch_up": false,
+        "rule": {
+          "expr": "0 0 2 * * *",
+          "kind": "cron"
+        },
+        "until": null
+      },
       "timeout_secs": 1800,
       "updated_at": "2026-10-09T12:00:00.000Z",
       "use_user_settings": false,
@@ -757,6 +771,66 @@
         "tool": "Bash"
       },
       "type": "approval_updated"
+    }
+  ],
+  "Schedule": [
+    {
+      "catch_up": true,
+      "rule": {
+        "at": "2026-10-20T09:00",
+        "kind": "once"
+      },
+      "until": null
+    },
+    {
+      "catch_up": true,
+      "rule": {
+        "anchor": "2026-10-09T12:00:00Z",
+        "kind": "every",
+        "minutes": 90
+      },
+      "until": {
+        "count": 10
+      }
+    },
+    {
+      "catch_up": false,
+      "rule": {
+        "anchor": null,
+        "kind": "every",
+        "minutes": 30
+      },
+      "until": null
+    },
+    {
+      "catch_up": true,
+      "rule": {
+        "kind": "daily",
+        "time": "09:00"
+      },
+      "until": {
+        "date": "2026-12-31T18:00"
+      }
+    },
+    {
+      "catch_up": true,
+      "rule": {
+        "days": [
+          "mon",
+          "fri"
+        ],
+        "kind": "weekly",
+        "time": "07:30"
+      },
+      "until": null
+    },
+    {
+      "catch_up": false,
+      "rule": {
+        "expr": "0 0 2 * * *",
+        "kind": "cron"
+      },
+      "until": null
     }
   ],
   "Settings": {

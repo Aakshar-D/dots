@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use chrono::{Local, Utc};
 use serde_json::json;
 use tokio::sync::{broadcast, Mutex};
 use tokio_util::sync::CancellationToken;
@@ -20,6 +21,7 @@ use crate::model::{
 };
 use crate::policy::{allow_candidates, Action, Rule, RuleCandidate};
 use crate::runner::{Runner, RunnerConfig};
+use crate::schedule::{next_slot, upcoming, Schedule};
 use crate::scheduler::Scheduler;
 use crate::server::{self, ServerState};
 use crate::settings::Settings;
@@ -299,11 +301,11 @@ impl Runtime {
 
     /// Every dot with its active and last run and its next scheduled fire time.
     pub async fn dot_overview(&self) -> Result<Vec<DotOverview>> {
-        let now = chrono::Local::now();
+        let now = Local::now();
         let mut rows = Vec::new();
         for dot in self.store.list_dots().await? {
             let next_fire = match (&dot.spec.schedule, dot.spec.enabled) {
-                (Some(expr), true) => crate::scheduler::next_fire(expr, now)
+                (Some(schedule), true) => next_slot(schedule, &now, &Local)
                     .ok()
                     .flatten()
                     .map(|t| t.to_rfc3339()),
@@ -319,11 +321,15 @@ impl Runtime {
         Ok(rows)
     }
 
-    /// The next `count` (1 to 10) fire times of a cron expression, RFC 3339 in local time.
-    pub fn preview_schedule(expr: &str, count: usize) -> Result<Vec<String>> {
-        let schedule = crate::scheduler::parse_cron(expr)?;
-        Ok(schedule
-            .after(&chrono::Local::now())
+    /// The next `count` (1 to 10) slots of a schedule saved now, RFC 3339 in local time, within
+    /// its bounds; empty when it has none. Refuses what `DotSpec::validate` refuses, so the UI
+    /// parses no schedule.
+    pub fn preview_schedule(schedule: &Schedule, count: usize) -> Result<Vec<String>> {
+        schedule.validate()?;
+        let now = Local::now();
+        let mut schedule = schedule.clone();
+        schedule.fill_anchor(None, now.with_timezone(&Utc));
+        Ok(upcoming(&schedule, &now, &Local)?
             .take(count.clamp(1, 10))
             .map(|t| t.to_rfc3339())
             .collect())

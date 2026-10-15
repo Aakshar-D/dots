@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::policy::{Policy, Preset};
+use crate::schedule::Schedule;
 use crate::{Error, Result};
 
 str_enum!(EngineKind { Claude => "claude", Local => "local" });
@@ -70,7 +71,7 @@ pub struct DotSpec {
     pub endpoint_url: Option<String>,
     pub workdir: String,
     pub workspace_mode: WorkspaceMode,
-    pub schedule: Option<String>,
+    pub schedule: Option<Schedule>,
     pub policy: Policy,
     pub mcp_servers: Option<Value>,
     pub use_user_settings: bool,
@@ -129,8 +130,8 @@ impl DotSpec {
                 _ => return invalid("the local engine requires endpoint_url"),
             }
         }
-        if let Some(expr) = &self.schedule {
-            crate::scheduler::parse_cron(expr)?;
+        if let Some(schedule) = &self.schedule {
+            schedule.validate()?;
         }
         if self.max_turns == 0 {
             return invalid("max_turns must be at least 1");

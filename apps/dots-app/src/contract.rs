@@ -7,6 +7,7 @@ use dots_core::engine::EngineEvent;
 use dots_core::events::RuntimeEvent;
 use dots_core::model::*;
 use dots_core::policy::{allow_candidates, Action, Policy, Preset};
+use dots_core::schedule::Schedule;
 use dots_core::settings::{Settings, MAX_CONCURRENT_RUNS};
 use serde_json::{json, Value};
 
@@ -25,7 +26,7 @@ fn spec() -> DotSpec {
         "Run the tests and summarize failures.",
         "C:/dev/app",
     );
-    s.schedule = Some("0 0 2 * * *".into());
+    s.schedule = Some(Schedule::cron("0 0 2 * * *"));
     s.mcp_servers = Some(json!({"github": {"type": "http", "url": "http://127.0.0.1:9000/mcp"}}));
     s
 }
@@ -184,6 +185,37 @@ fn engine_events() -> Value {
     to(samples)
 }
 
+/// One schedule of every rule kind, with every kind of bound. The `every` without an anchor is
+/// what the UI sends; the core fills the anchor when the dot is saved. Read through the core's
+/// type, so a sample in a form the core does not accept fails here.
+fn schedules() -> Value {
+    let samples = [
+        json!({"rule": {"kind": "once", "at": "2026-10-20T09:00"}, "catch_up": true, "until": null}),
+        json!({
+            "rule": {"kind": "every", "minutes": 90, "anchor": "2026-10-09T12:00:00Z"},
+            "catch_up": true,
+            "until": {"count": 10}
+        }),
+        json!({"rule": {"kind": "every", "minutes": 30}, "catch_up": false, "until": null}),
+        json!({
+            "rule": {"kind": "daily", "time": "09:00"},
+            "catch_up": true,
+            "until": {"date": "2026-12-31T18:00"}
+        }),
+        json!({
+            "rule": {"kind": "weekly", "days": ["mon", "fri"], "time": "07:30"},
+            "catch_up": true,
+            "until": null
+        }),
+        to(Schedule::cron("0 0 2 * * *")),
+    ];
+    let read: Vec<Schedule> = samples
+        .into_iter()
+        .map(|v| serde_json::from_value(v).expect("sample schedule"))
+        .collect();
+    to(read)
+}
+
 /// The samples, keyed by the UI schema that parses them. `Enums` lists every variant of every
 /// shared enum and `Limits` the validation limits the editor mirrors: the UI parses live data
 /// with its schemas, so a variant or limit it does not know must fail a test, not a screen.
@@ -196,6 +228,7 @@ pub fn samples() -> Value {
     };
     json!({
         "DotSpec": to(local_spec()),
+        "Schedule": schedules(),
         "Dot": to(dot()),
         "Run": to(run()),
         "RunEventRecord": to(event()),
