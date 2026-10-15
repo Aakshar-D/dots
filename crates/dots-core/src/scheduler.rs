@@ -347,7 +347,21 @@ impl Scheduler {
         }
 
         // Step 3: a retry that is due starts. While it waited, the row watched the failed run
-        // it repeats.
+        // it repeats. A retry too late to start (Dots was closed) is dropped instead, and the
+        // occurrence failed in the end.
+        if let Some(due) = &retry {
+            if too_late(schedule, due, now)? {
+                let attention_set = state.attention_run_id.is_some();
+                if !self
+                    .drop_retry(dot, due, watch.as_deref(), &row_slot, attention_set, now)
+                    .await?
+                {
+                    return Ok(None);
+                }
+                retry = None;
+                watch = None;
+            }
+        }
         if let Some(due) = &retry {
             if parse_time(&due.at)? <= now {
                 let new = retry_run(dot, due, watch.clone())?;
@@ -502,18 +516,67 @@ impl Scheduler {
             };
             self.updated(&dot.id);
             if !attention_set && row.attention_run_id.as_deref() == Some(run.id.as_str()) {
-                tracing::warn!(
-                    dot = %dot.spec.name, run = %run.id,
-                    "scheduled run failed in the end: the schedule needs attention"
-                );
-                let _ = self.bus.send(RuntimeEvent::ScheduleAttention {
-                    dot_id: dot.id.clone(),
-                    run_id: run.id.clone(),
-                    error: run.error.clone(),
-                });
+                self.announce_attention(dot, &run);
             }
             return Ok(Some(row));
         }
+    }
+
+    /// Drops the pending retry `retry`, too late to start (final review F4): the occurrence
+    /// failed in the end, so `failed`, the failed run the retry would repeat, needs attention,
+    /// as when the attempts run out. `attention_set`: the flag was set before. The write is
+    /// guarded by the watch and by `last_slot_at`; false when the row changed meanwhile and
+    /// nothing was written.
+    async fn drop_retry(
+        &self,
+        dot: &Dot,
+        retry: &PendingRetry,
+        failed: Option<&str>,
+        last_slot_at: &str,
+        attention_set: bool,
+        now: DateTime<Utc>,
+    ) -> Result<bool> {
+        let change = ScheduleChange {
+            watch_run_id: Some(None),
+            retry: Some(None),
+            attention_run_id: failed.map(|id| Some(id.to_string())),
+            if_watching: failed.map(str::to_string),
+            if_last_slot_at: Some(last_slot_at.to_string()),
+            ..Default::default()
+        };
+        let Some(row) = self
+            .store
+            .update_schedule_state(&dot.id, &change, now)
+            .await?
+        else {
+            tracing::debug!(dot = %dot.spec.name, "row reset meanwhile: retry left");
+            return Ok(false);
+        };
+        tracing::info!(
+            dot = %dot.spec.name, slot = %retry.slot_at, attempt = retry.attempt,
+            "retry too late to start: dropped"
+        );
+        self.updated(&dot.id);
+        if let Some(id) = failed.filter(|id| row.attention_run_id.as_deref() == Some(*id)) {
+            if !attention_set {
+                let run = self.store.get_run(id).await?;
+                self.announce_attention(dot, &run);
+            }
+        }
+        Ok(true)
+    }
+
+    /// The flag went from clear to set for the failed run `run`: announced once (spec §7).
+    fn announce_attention(&self, dot: &Dot, run: &Run) {
+        tracing::warn!(
+            dot = %dot.spec.name, run = %run.id,
+            "scheduled run failed in the end: the schedule needs attention"
+        );
+        let _ = self.bus.send(RuntimeEvent::ScheduleAttention {
+            dot_id: dot.id.clone(),
+            run_id: run.id.clone(),
+            error: run.error.clone(),
+        });
     }
 
     /// What a failed watched run leads to (spec §6). Failed before any tool call, with
@@ -639,6 +702,15 @@ impl Scheduler {
             dot_id: dot_id.to_string(),
         });
     }
+}
+
+/// Whether the pending retry `retry` is due and too late to start (final review F4): its slot
+/// is `CATCH_UP_WINDOW` old or older, or the schedule does not catch up and the retry is
+/// `ON_TIME` overdue or more. A missed slot follows the same two limits.
+fn too_late(schedule: &Schedule, retry: &PendingRetry, now: DateTime<Utc>) -> Result<bool> {
+    let at = parse_time(&retry.at)?;
+    let slot = parse_time(&retry.slot_at)?;
+    Ok(at <= now && (now - slot >= CATCH_UP_WINDOW || (!schedule.catch_up && now - at >= ON_TIME)))
 }
 
 /// The run that serves the slot at `at`; `caught_up` when the slot was missed. `attempt`:

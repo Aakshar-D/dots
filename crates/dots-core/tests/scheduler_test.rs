@@ -1170,6 +1170,74 @@ async fn a_restart_while_a_retry_waits_keeps_it() {
     assert_eq!(retry.payload.unwrap()["attempt"], json!(2));
 }
 
+/// Final review F4: without catch-up, a retry more than `ON_TIME` overdue (Dots was closed) is
+/// dropped, and the occurrence ends as failed: "Needs attention", announced once. A retry less
+/// late than that starts.
+#[tokio::test]
+async fn without_catch_up_a_retry_overdue_by_a_minute_is_dropped_into_attention() {
+    let mut h = Harness::new().await;
+    let dot = h.dot("strict", Some(every(1440, 60, false)), 0).await;
+    h.start();
+    h.settle().await;
+    h.at(60).await;
+    let first = h.watched(&dot).await;
+    assert_eq!(h.judge(&first.id, RunStatus::Failed).await, 120);
+
+    // Closed until 59 s after the retry was due: it starts.
+    h.stop();
+    h.clock.set(after(179));
+    h.restart();
+    h.settle().await;
+    let second = h.watched(&dot).await;
+    assert_eq!(second.retry_of.as_deref(), Some(first.id.as_str()));
+    assert_eq!(h.judge(&second.id, RunStatus::Failed).await, 239);
+    assert_eq!(h.row(&dot).await.retry.unwrap().at, ts(299));
+    h.events();
+
+    // Closed until 60 s after the next retry was due: it is dropped.
+    h.stop();
+    h.clock.set(after(359));
+    h.restart();
+    assert_eq!(h.settle().await, 419);
+    let row = h.row(&dot).await;
+    assert_eq!(
+        (row.status, row.watch_run_id, row.retry),
+        (ScheduleStatus::Active, None, None)
+    );
+    assert_eq!(row.attention_run_id.as_deref(), Some(second.id.as_str()));
+    assert_eq!(h.runs(&dot).await.len(), 2, "no third attempt");
+    assert_eq!(h.events(), (vec![dot.id.clone()], vec![]));
+    assert_eq!(
+        h.notices(),
+        [(dot.id.clone(), second.id.clone(), Some(DOWN.to_string()))]
+    );
+}
+
+/// Final review F4: a retry whose slot is `CATCH_UP_WINDOW` old or older is dropped, also with
+/// catch-up on, and the occurrence ends in "Needs attention".
+#[tokio::test]
+async fn a_retry_of_a_slot_a_day_old_is_dropped_into_attention() {
+    let mut h = Harness::new().await;
+    let dot = h.dot("weekly", Some(every(7 * 1440, 60, true)), 0).await;
+    h.start();
+    h.settle().await;
+    h.at(60).await;
+    let first = h.watched(&dot).await;
+    h.judge(&first.id, RunStatus::Failed).await;
+    h.events();
+
+    h.stop();
+    h.clock.set(after(60 + 86400));
+    h.restart();
+    h.settle().await;
+    let row = h.row(&dot).await;
+    assert_eq!((row.watch_run_id, row.retry), (None, None));
+    assert_eq!(row.attention_run_id.as_deref(), Some(first.id.as_str()));
+    assert_eq!(h.runs(&dot).await.len(), 1);
+    assert_eq!(h.events(), (vec![dot.id.clone()], vec![]));
+    assert_eq!(h.notices().len(), 1);
+}
+
 /// Spec §6 "Watching": a watched run that ended while Dots was closed is judged by the first
 /// pass after the start; its retry, already due, starts at once.
 #[tokio::test]
