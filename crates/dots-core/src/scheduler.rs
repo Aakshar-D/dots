@@ -236,7 +236,42 @@ impl Scheduler {
             }
         }
         *self.watched.lock().unwrap() = watched;
+        self.clear_attention(now).await?;
         Ok(wake)
+    }
+
+    /// "Needs attention" also clears when a later manual or scheduled run of the dot succeeds
+    /// (the Inbox offers "Run now" next to the flag). Every flagged row is looked at, whatever
+    /// its status and whether its dot is enabled: a `Once` that ended in attention is
+    /// completed at once, and the Inbox lists the flag of a disabled dot too. The rows are
+    /// read after the pass judged its runs; the write is guarded by the row's `last_slot_at`,
+    /// so a row reset meanwhile is left alone.
+    async fn clear_attention(&self, now: DateTime<Utc>) -> Result<()> {
+        for state in self.store.list_flagged_schedule_states().await? {
+            let Some(flagged) = &state.attention_run_id else {
+                continue;
+            };
+            if !self.store.succeeded_after(&state.dot_id, flagged).await? {
+                continue;
+            }
+            let change = ScheduleChange {
+                attention_run_id: Some(None),
+                if_last_slot_at: Some(state.last_slot_at.clone()),
+                ..Default::default()
+            };
+            if self
+                .store
+                .update_schedule_state(&state.dot_id, &change, now)
+                .await?
+                .is_some()
+            {
+                tracing::info!(dot = %state.dot_id, "a later run succeeded: attention cleared");
+                self.updated(&state.dot_id);
+            } else {
+                tracing::debug!(dot = %state.dot_id, "row reset meanwhile: attention left");
+            }
+        }
+        Ok(())
     }
 
     /// A pass for one row (spec §5): the due slot is fired, caught up or skipped, a due retry
@@ -258,7 +293,6 @@ impl Scheduler {
         let mut fired = state.fired_count;
         let mut watch = state.watch_run_id.clone();
         let mut retry = state.retry.clone();
-        let mut attention = state.attention_run_id.clone();
         let limit = match schedule.until {
             Some(Until::Count(n)) => Some(n),
             _ => None,
@@ -350,36 +384,13 @@ impl Scheduler {
         // repeats was judged already.
         if retry.is_none() {
             if let Some(id) = &watch {
+                let attention_set = state.attention_run_id.is_some();
                 if let Some(row) = self
-                    .judge(dot, id, &state.last_slot_at, attention.is_some(), now)
+                    .judge(dot, id, &state.last_slot_at, attention_set, now)
                     .await?
                 {
                     watch = row.watch_run_id;
                     retry = row.retry;
-                    attention = row.attention_run_id;
-                }
-            }
-        }
-
-        // "Needs attention" also clears when a later manual or scheduled run of the dot
-        // succeeds: the Inbox offers "Run now" next to the flag.
-        if let Some(flagged) = &attention {
-            if self.store.succeeded_after(&dot.id, flagged).await? {
-                let change = ScheduleChange {
-                    attention_run_id: Some(None),
-                    if_last_slot_at: Some(row_slot.clone()),
-                    ..Default::default()
-                };
-                if self
-                    .store
-                    .update_schedule_state(&dot.id, &change, now)
-                    .await?
-                    .is_some()
-                {
-                    tracing::info!(dot = %dot.spec.name, "a later run succeeded: attention cleared");
-                    self.updated(&dot.id);
-                } else {
-                    tracing::debug!(dot = %dot.spec.name, "row reset meanwhile: attention left");
                 }
             }
         }

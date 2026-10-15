@@ -1027,6 +1027,106 @@ async fn a_run_now_that_succeeds_clears_the_attention() {
     assert!(h.notices().is_empty());
 }
 
+/// Final review F2: a successful Run now clears the flag whatever the row's status and
+/// whether the dot is enabled: a `Once` whose occurrence ended in attention is completed at
+/// once, and the Inbox still lists the flag of a disabled dot.
+#[tokio::test]
+async fn a_run_now_clears_the_flag_of_a_completed_once_and_of_a_disabled_dot() {
+    let mut h = Harness::new().await;
+    let once = schedule(json!({
+        "rule": {"kind": "once", "at": local(60)},
+        "catch_up": true,
+        "until": null
+    }));
+    let once = h.dot("once", Some(once), 0).await;
+    let off = h.dot("off", Some(every(1440, 60, true)), 0).await;
+    h.start();
+    h.settle().await;
+    h.at(60).await;
+    for dot in [&once, &off] {
+        let run = h.watched(dot).await;
+        h.tool_call(&run.id).await;
+        h.judge(&run.id, RunStatus::Failed).await;
+        assert!(h.row(dot).await.attention_run_id.is_some());
+    }
+    assert_eq!(h.row(&once).await.status, ScheduleStatus::Completed);
+    h.raw("UPDATE dots SET enabled = 0 WHERE id = ?", &off)
+        .await;
+    h.sched.reload();
+    h.settle().await;
+    assert_eq!(h.notices().len(), 2);
+    h.events();
+
+    for dot in [&once, &off] {
+        let manual = h
+            .store
+            .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
+            .await
+            .unwrap();
+        h.judge(&manual.id, RunStatus::Succeeded).await;
+        assert_eq!(h.row(dot).await.attention_run_id, None, "{}", dot.spec.name);
+        assert_eq!(h.events().0, vec![dot.id.clone()], "{}", dot.spec.name);
+    }
+    assert_eq!(h.row(&once).await.status, ScheduleStatus::Completed);
+    assert!(h.notices().is_empty());
+}
+
+/// Final review F2: a Run now that parks on an approval counts once the decision resumes it
+/// and its resume run succeeds. A webhook run that succeeds does not clear the flag.
+#[tokio::test]
+async fn a_run_now_that_parks_clears_the_flag_once_its_resume_succeeds() {
+    let mut h = Harness::new().await;
+    let dot = h.dot("asks", Some(every(1440, 60, true)), 0).await;
+    h.start();
+    h.settle().await;
+    h.at(60).await;
+    let failed = h.watched(&dot).await;
+    h.tool_call(&failed.id).await;
+    h.judge(&failed.id, RunStatus::Failed).await;
+    assert!(h.row(&dot).await.attention_run_id.is_some());
+
+    let hook = h
+        .store
+        .create_run(&NewRun::new(&dot.id, TriggerKind::Webhook))
+        .await
+        .unwrap();
+    h.judge(&hook.id, RunStatus::Succeeded).await;
+    assert!(
+        h.row(&dot).await.attention_run_id.is_some(),
+        "a webhook run does not clear"
+    );
+
+    let manual = h
+        .store
+        .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    h.store
+        .set_status(&manual.id, RunStatus::AwaitingApproval)
+        .await
+        .unwrap();
+    let mut resume = NewRun::new(&dot.id, TriggerKind::Resume);
+    resume.parent_run_id = Some(manual.id.clone());
+    resume.root_run_id = Some(manual.id.clone());
+    let child = h
+        .store
+        .resume_parked(&manual.id, &[], &[], &[], Some(&resume))
+        .await
+        .unwrap()
+        .unwrap();
+    h.sched.reload();
+    h.settle().await;
+    assert!(
+        h.row(&dot).await.attention_run_id.is_some(),
+        "the parked run closed by its decision has not succeeded"
+    );
+    h.events();
+
+    h.judge(&child.id, RunStatus::Succeeded).await;
+    assert_eq!(h.row(&dot).await.attention_run_id, None);
+    assert_eq!(h.events().0, vec![dot.id.clone()]);
+}
+
 /// Spec §5 "Pause": no retry starts while schedules are paused; one that came due during the
 /// pause starts on the first pass after the resume.
 #[tokio::test]

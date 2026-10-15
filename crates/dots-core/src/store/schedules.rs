@@ -87,6 +87,18 @@ impl Store {
         rows.iter().map(state_from_row).collect()
     }
 
+    /// The rows that need attention, of every dot and whatever their status, by dot id: the
+    /// scheduler looks for a later run that clears each flag.
+    pub async fn list_flagged_schedule_states(&self) -> Result<Vec<ScheduleState>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {STATE_COLUMNS} FROM schedule_state \
+             WHERE attention_run_id IS NOT NULL ORDER BY dot_id"
+        ))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(state_from_row).collect()
+    }
+
     /// Brings the dot's row in line with its schedule, in one statement (spec §4, lifecycle of
     /// a row). Without a schedule the row is deleted. With one, a missing row is created, and
     /// a row is reset when `reset` is set (the dot was enabled) or when its `rule_key` is not
@@ -275,14 +287,21 @@ impl Store {
 
     /// Whether a manual or scheduled run of `dot_id` queued after `run_id` has succeeded. A
     /// parked run closed by its decision does not count: its resume run carries the outcome.
+    /// A resume run that succeeded counts when the head of its chain of parked runs is a
+    /// manual or scheduled run (a Run now that needed an approval); chat and webhook do not.
     pub async fn succeeded_after(&self, dot_id: &str, run_id: &str) -> Result<bool> {
         let found = sqlx::query_scalar(
-            "SELECT EXISTS (SELECT 1 FROM runs r, runs f \
-             WHERE f.id = ? AND r.dot_id = ? AND r.id <> f.id \
-             AND r.trigger_kind IN ('manual', 'schedule') AND r.status = 'succeeded' \
-             AND r.queued_at >= f.queued_at \
-             AND NOT EXISTS (SELECT 1 FROM runs c WHERE c.parent_run_id = r.id \
-                             AND c.trigger_kind = 'resume'))",
+            "WITH RECURSIVE chain(id, parent, kind) AS ( \
+               SELECT r.id, r.parent_run_id, r.trigger_kind FROM runs r, runs f \
+               WHERE f.id = ? AND r.dot_id = ? AND r.id <> f.id \
+               AND r.trigger_kind IN ('manual', 'schedule', 'resume') \
+               AND r.status = 'succeeded' AND r.queued_at >= f.queued_at \
+               AND NOT EXISTS (SELECT 1 FROM runs c WHERE c.parent_run_id = r.id \
+                               AND c.trigger_kind = 'resume') \
+               UNION ALL \
+               SELECT p.id, p.parent_run_id, p.trigger_kind FROM chain c \
+               JOIN runs p ON p.id = c.parent WHERE c.kind = 'resume') \
+             SELECT EXISTS (SELECT 1 FROM chain WHERE kind IN ('manual', 'schedule'))",
         )
         .bind(run_id)
         .bind(dot_id)
