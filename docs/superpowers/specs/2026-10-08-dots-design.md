@@ -55,6 +55,7 @@ dots/
   Cargo.toml                 workspace
   crates/dots-core/          library: all logic, no UI dependency
     src/store/               SQLite via sqlx, embedded migrations
+    src/schedule.rs          schedules (once, every, daily, weekly, cron) and their slots in local time
     src/scheduler/           tokio-cron-scheduler -> enqueue runs
     src/server/              axum on 127.0.0.1:<port>: webhooks + MCP permission endpoint
     src/runner/              queue, concurrency, timeouts, cancellation, restart recovery
@@ -441,7 +442,8 @@ Window close hides to tray. Tray menu: Open, Inbox (n), Pause all schedules, Qui
 
 ## 9. Testing
 
-- **Unit (dots-core):** policy resolution and pattern matching; cron parsing / next fire; run state
+- **Unit (dots-core):** policy resolution and pattern matching; schedule slots, with DST checked in a
+  hand-written test time zone; run state
   transitions; path confinement including `..`, absolute paths, symlinks, junctions; prompt
   assembly.
 - **Stream-json parser:** fixtures recorded from real `claude -p` runs (success, tool use,

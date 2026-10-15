@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+pub mod tz;
+
 use std::path::Path;
 
 use dots_core::model::{Dot, DotSpec, Run, RunStatus, TriggerKind, WorkspaceMode};
