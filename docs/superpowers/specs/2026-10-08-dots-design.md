@@ -56,7 +56,8 @@ dots/
   crates/dots-core/          library: all logic, no UI dependency
     src/store/               SQLite via sqlx, embedded migrations
     src/schedule.rs          schedules (once, every, daily, weekly, cron) and their slots in local time
-    src/scheduler/           tokio-cron-scheduler -> enqueue runs
+    src/scheduler.rs         the loop: a pass over the schedule rows (fire, catch up, skip,
+                             complete), sleeping on a clock that tests move by hand
     src/server/              axum on 127.0.0.1:<port>: webhooks + MCP permission endpoint
     src/runner/              queue, concurrency, timeouts, cancellation, restart recovery
     src/engine/mod.rs        Engine trait + EngineEvent
@@ -202,9 +203,14 @@ the call again. See `2026-10-13-approvals-v2-design.md` §3.
 
 ### Steps
 
-1. **Trigger.** Scheduler tick, `POST /dots/{id}/trigger`, "Run now", or a chat message inserts a
-   `queued` run with its payload. A schedule tick for a dot that already has a `queued` run is
-   coalesced (dropped, logged).
+1. **Trigger.** A schedule slot, `POST /dots/{id}/trigger`, "Run now", or a chat message inserts
+   a `queued` run with its payload. From Scheduler v2 (`2026-10-14-scheduler-v2-design.md` §5) a
+   slot fires when it is due (less than 60 s late); a slot missed while Dots was closed or the
+   PC slept fires once as a catch-up (payload `caught_up: true`) when the schedule has
+   `catch_up` and the slot is less than 24 h old, and only the newest missed slot does; other
+   missed slots are skipped. A slot for a dot that already has a `queued` run is coalesced into
+   it (logged). The run that serves a slot, new or joined, is the schedule's watched run
+   (`schedule_state.watch_run_id`): its outcome decides the occurrence.
 2. **Dispatch.** The runner starts queued runs FIFO while running count < `max_concurrent_runs`
    and the dot has no other `running` run.
 3. **Workspace.**
@@ -537,7 +543,8 @@ In task order:
      delete in the user's repository.
    - `mark_reviewed(run_id)` — sets `reviewed_at` on the lineage.
 8. `set_schedules_paused(bool)` — persisted as `schedules_paused`; the scheduler fires nothing
-   while paused.
+   while paused. From Scheduler v2 a resume does not catch up: every active schedule's last
+   handled slot becomes the time of the resume, so the slots of the pause are skipped.
 9. `settings()` and `update_settings(Settings) -> { settings, restart_required }`.
    `restart_required` is true when `port`, `max_concurrent_runs` or `claude_path` differ from
    the values the runtime started with. `autostart` and `schedules_paused` apply live.
@@ -624,7 +631,7 @@ notify. Unread count = pending approvals + runs awaiting review.
 - Tray:
   - Open.
   - Inbox (n) — shows the window on `/inbox` through a `navigate` event.
-  - Pause all schedules — check item.
+  - Pause all schedules — check item. Unchecking it does not catch up the slots of the pause.
   - Quit — `Runtime::shutdown`, then exit.
   Left click shows the window; closing the window hides it.
 - Adapter logic (error mapping, notification decisions, tray text, config from settings) lives

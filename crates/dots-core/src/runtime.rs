@@ -22,7 +22,7 @@ use crate::model::{
 use crate::policy::{allow_candidates, Action, Rule, RuleCandidate};
 use crate::runner::{Runner, RunnerConfig};
 use crate::schedule::{next_slot, upcoming, Schedule};
-use crate::scheduler::Scheduler;
+use crate::scheduler::{Clock, Scheduler, SystemClock};
 use crate::server::{self, ServerState};
 use crate::settings::Settings;
 use crate::store::Store;
@@ -41,6 +41,8 @@ pub struct Config {
     pub claude_env: Vec<(String, String)>,
     /// Delays between attempts when a local endpoint is unreachable or answers 5xx.
     pub local_retry_delays: Vec<Duration>,
+    /// Where the scheduler and the schedule rows get the time. Tests move a fake one by hand.
+    pub clock: Arc<dyn Clock>,
 }
 
 impl Config {
@@ -53,6 +55,7 @@ impl Config {
             claude_path: None,
             claude_env: Vec::new(),
             local_retry_delays: DEFAULT_RETRY_DELAYS.to_vec(),
+            clock: Arc::new(SystemClock),
         }
     }
 
@@ -72,6 +75,7 @@ pub struct Runtime {
     hub: Arc<ApprovalHub>,
     runner: Arc<Runner>,
     scheduler: Arc<Scheduler>,
+    clock: Arc<dyn Clock>,
     port: u16,
     server_error: Option<String>,
     claude_program: Option<PathBuf>,
@@ -112,6 +116,13 @@ impl Runtime {
         let recovered = store.recover_interrupted().await?;
         if !recovered.is_empty() {
             tracing::warn!("marked {} interrupted run(s) as failed", recovered.len());
+        }
+        // Every schedule has its row before the scheduler's first pass: a dot upgraded by
+        // migration 0005 gets one now, and a row a failed change left stale is reset.
+        for dot in store.list_dots().await? {
+            store
+                .sync_schedule_state(&dot.id, dot.spec.schedule.as_ref(), false, cfg.clock.now())
+                .await?;
         }
 
         let mut engines: HashMap<EngineKind, Arc<dyn Engine>> = HashMap::new();
@@ -194,7 +205,12 @@ impl Runtime {
             );
         }
         runner.spawn_dispatcher(shutdown.clone());
-        let scheduler = Scheduler::new(store.clone(), runner.clone());
+        let scheduler = Scheduler::new(
+            store.clone(),
+            runner.clone(),
+            bus.clone(),
+            cfg.clock.clone(),
+        );
         scheduler.set_paused(settings.schedules_paused);
         scheduler.spawn(shutdown.clone());
         Ok(Runtime {
@@ -203,6 +219,7 @@ impl Runtime {
             hub,
             runner,
             scheduler,
+            clock: cfg.clock.clone(),
             port,
             server_error,
             claude_program,
@@ -301,7 +318,7 @@ impl Runtime {
 
     /// Every dot with its active and last run and its next scheduled fire time.
     pub async fn dot_overview(&self) -> Result<Vec<DotOverview>> {
-        let now = Local::now();
+        let now = self.clock.now().with_timezone(&Local);
         let mut rows = Vec::new();
         for dot in self.store.list_dots().await? {
             let next_fire = match (&dot.spec.schedule, dot.spec.enabled) {
@@ -532,7 +549,7 @@ impl Runtime {
         let schedule = dot.spec.schedule.as_ref();
         if self
             .store
-            .sync_schedule_state(&dot.id, schedule, enabled_now, Utc::now())
+            .sync_schedule_state(&dot.id, schedule, enabled_now, self.clock.now())
             .await?
         {
             self.schedule_updated(&dot.id);

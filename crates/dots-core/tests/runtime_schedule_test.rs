@@ -2,24 +2,30 @@ mod common;
 
 use std::path::PathBuf;
 
-use chrono::Utc;
+use chrono::{DateTime, TimeDelta, Utc};
+use common::clock::FakeClock;
 use common::spec;
 use dots_core::events::RuntimeEvent;
 use dots_core::model::{
     Dot, DotSpec, ScheduleChange, ScheduleState, ScheduleStatus, WorkspaceMode,
 };
 use dots_core::schedule::Schedule;
-use dots_core::util::now;
+use dots_core::store::{Store, DB_FILE};
+use dots_core::util::{now, timestamp};
 use dots_core::{Config, Runtime};
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::sync::broadcast::Receiver;
 
-async fn start(dir: &TempDir) -> Runtime {
+fn config(dir: &TempDir) -> Config {
     let mut cfg = Config::new(dir.path().join("data"));
     cfg.port = 0;
     cfg.claude_path = Some(PathBuf::from(env!("CARGO_BIN_EXE_fake-claude")));
-    Runtime::start(cfg).await.unwrap()
+    cfg
+}
+
+async fn start(dir: &TempDir) -> Runtime {
+    Runtime::start(config(dir)).await.unwrap()
 }
 
 /// Every `minutes`, as the editor sends it: without an anchor. The first slot is hours away,
@@ -181,5 +187,56 @@ async fn only_a_dot_with_a_schedule_has_a_row_and_it_goes_with_the_dot() {
     assert_eq!(updated(&mut rx), [dot.id.as_str()]);
     rt.delete_dot(&plain.id).await.unwrap();
     assert!(updated(&mut rx).is_empty());
+    rt.shutdown();
+}
+
+/// The runtime writes the times of a schedule's row from its clock: at start, where it makes
+/// the row of a dot upgraded by migration 0005, on a change of the dot, and on a resume after
+/// a pause, which does not catch up the slots of the pause.
+#[tokio::test]
+async fn the_runtime_takes_the_times_of_its_rows_from_its_clock() {
+    let dir = tempfile::tempdir().unwrap();
+    let t0 = DateTime::parse_from_rfc3339("2030-01-07T09:00:00.000Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    // A dot from before the upgrade: a schedule, no row.
+    let data = dir.path().join("data");
+    std::fs::create_dir_all(&data).unwrap();
+    let store = Store::open(&data.join(DB_FILE)).await.unwrap();
+    let old = store
+        .create_dot(&folder_spec(&dir, "old", Some(every(600))))
+        .await
+        .unwrap();
+    store.close().await;
+
+    let clock = FakeClock::new(t0);
+    let mut cfg = config(&dir);
+    cfg.clock = clock.clone();
+    let rt = Runtime::start(cfg).await.unwrap();
+    assert_eq!(row(&rt, &old).await.unwrap().last_slot_at, timestamp(t0));
+
+    let dot = rt
+        .create_dot(folder_spec(&dir, "new", Some(every(600))))
+        .await
+        .unwrap();
+    assert_eq!(row(&rt, &dot).await.unwrap().last_slot_at, timestamp(t0));
+
+    rt.set_schedules_paused(true).await.unwrap();
+    let resumed = t0 + TimeDelta::hours(30);
+    clock.set(resumed);
+    rt.set_schedules_paused(false).await.unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while row(&rt, &dot).await.unwrap().last_slot_at != timestamp(resumed) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the resume did not move the row"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(
+        row(&rt, &old).await.unwrap().last_slot_at,
+        timestamp(resumed)
+    );
+    assert!(rt.list_runs(None, 10).await.unwrap().is_empty());
     rt.shutdown();
 }

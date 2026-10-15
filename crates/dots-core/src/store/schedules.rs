@@ -126,6 +126,25 @@ impl Store {
         Ok(res.rows_affected() > 0)
     }
 
+    /// A resume after a pause (spec §5, "Pause"): every active row's `last_slot_at` becomes
+    /// `now`, so the slots of the pause are not caught up. A row that is already at or after
+    /// `now` is left alone; the watch, a waiting retry and the attention stay. Returns the dots
+    /// whose row moved.
+    pub async fn resume_schedules(&self, now: DateTime<Utc>) -> Result<Vec<String>> {
+        let ts = timestamp(now);
+        let ids = sqlx::query_scalar(
+            "UPDATE schedule_state SET last_slot_at = ?, updated_at = ? \
+             WHERE status = ? AND last_slot_at < ? RETURNING dot_id",
+        )
+        .bind(&ts)
+        .bind(&ts)
+        .bind(ScheduleStatus::Active.as_str())
+        .bind(&ts)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(ids)
+    }
+
     /// Handles the due slot `at`, in one transaction (spec §5). `fire: None` skips it.
     /// `Some(new)` fires it: the slot joins the dot's queued run if there is one, and `new`
     /// is inserted otherwise. Either way `last_slot_at = at`; a fired slot also counts, its

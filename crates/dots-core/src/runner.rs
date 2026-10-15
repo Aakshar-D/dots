@@ -96,9 +96,15 @@ impl Runner {
 
     pub async fn enqueue(&self, new: NewRun) -> Result<Run> {
         let run = self.store.create_run(&new).await?;
-        self.emit_run(&run);
-        self.wake.notify_one();
+        self.enqueued(&run);
         Ok(run)
+    }
+
+    /// Announces a run queued by someone else (the scheduler queues its runs in the same
+    /// transaction as its schedule row) and wakes the dispatcher for it.
+    pub fn enqueued(&self, run: &Run) {
+        self.emit_run(run);
+        self.wake.notify_one();
     }
 
     pub async fn recover(&self) -> Result<Vec<String>> {

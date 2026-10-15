@@ -423,6 +423,47 @@ async fn a_run_records_the_run_it_retries() {
     assert_eq!(retry.retry_of, Some(plain.id));
 }
 
+#[tokio::test]
+async fn a_resume_moves_every_active_row_to_now_and_keeps_the_rest() {
+    let (_d, store) = temp_store().await;
+    let paused = scheduled(&store, "paused").await;
+    let run = failed_run(&store, &paused).await;
+    busy(&store, &paused, &run).await;
+    let done = scheduled(&store, "done").await;
+    let complete = ScheduleChange {
+        status: Some(ScheduleStatus::Completed),
+        ..Default::default()
+    };
+    store
+        .update_schedule_state(&done.id, &complete, t(T0))
+        .await
+        .unwrap();
+    // A row reset after the resume time is not moved back.
+    let later = scheduled(&store, "later").await;
+    store
+        .sync_schedule_state(&later.id, later.spec.schedule.as_ref(), true, t(T3))
+        .await
+        .unwrap();
+    let (done_before, later_before) = (state(&store, &done).await, state(&store, &later).await);
+
+    assert_eq!(
+        store.resume_schedules(t(T2)).await.unwrap(),
+        vec![paused.id.clone()]
+    );
+
+    // Only the time moves: the watch, the retry and the attention stay.
+    let row = state(&store, &paused).await;
+    assert_eq!(
+        (row.last_slot_at.as_str(), row.updated_at.as_str()),
+        (T2, T2)
+    );
+    assert_eq!(row.watch_run_id.as_deref(), Some(run.as_str()));
+    assert_eq!(row.retry, Some(retry(2)));
+    assert_eq!(row.attention_run_id.as_deref(), Some(run.as_str()));
+    assert_eq!(state(&store, &done).await, done_before);
+    assert_eq!(state(&store, &later).await, later_before);
+}
+
 #[test]
 fn timestamps_have_milliseconds_and_a_z() {
     assert_eq!(
