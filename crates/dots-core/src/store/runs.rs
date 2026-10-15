@@ -225,8 +225,9 @@ impl Store {
 
     /// The newest run of each lineage, if it is finished and not reviewed yet. Only runs the
     /// Inbox can ever show (failed, or with a branch) are returned; `Runtime::inbox` filters further.
-    /// A failed run the scheduler judged into a retry or into "Needs attention" is marked
-    /// reviewed when it is judged (Scheduler v2), so it is not listed.
+    /// A failed scheduled run that made no tool call and that the scheduler judged into a retry
+    /// or into "Needs attention" is marked reviewed when it is judged (Scheduler v2), so it is
+    /// not listed.
     pub async fn unreviewed_thread_ends(&self) -> Result<Vec<Run>> {
         let rows = sqlx::query(&format!(
             "SELECT {RUN_COLUMNS} FROM runs r \

@@ -594,9 +594,14 @@ impl Scheduler {
 
     /// What a failed watched run leads to (spec §6). Failed before any tool call, with
     /// attempts left: the next attempt, `retry_delay` after it ended; the row keeps watching
-    /// it, the run the retry repeats. Otherwise "Needs attention". Either way the run is
-    /// judged, and the same write marks it reviewed: the retry or the flag speaks for it, so
-    /// it is not also a run to review.
+    /// it, the run the retry repeats. Otherwise "Needs attention".
+    ///
+    /// A run with trigger `schedule` that made no tool call is marked reviewed by the same
+    /// write: it changed nothing, and the retry or the flag speaks for it. A failure after a
+    /// tool call may have changed something, so it stays a run to review besides the flag. A
+    /// run of another trigger that a slot or retry joined (a manual or webhook run, or a resume
+    /// run) is the person's or the caller's run: it notifies its own failure and stays a run
+    /// to review too.
     async fn failed(
         &self,
         run: &Run,
@@ -604,7 +609,10 @@ impl Scheduler {
         now: DateTime<Utc>,
     ) -> Result<ScheduleChange> {
         let (slot, attempt) = self.occurrence(run, last_slot_at).await?;
-        if attempt < MAX_ATTEMPTS && !self.store.called_a_tool(&run.id).await? {
+        let called = self.store.called_a_tool(&run.id).await?;
+        let reviewed_run =
+            (run.trigger == TriggerKind::Schedule && !called).then(|| run.id.clone());
+        if attempt < MAX_ATTEMPTS && !called {
             let ended = match &run.ended_at {
                 Some(t) => parse_time(t)?,
                 None => now,
@@ -620,14 +628,14 @@ impl Scheduler {
             );
             return Ok(ScheduleChange {
                 retry: Some(Some(retry)),
-                reviewed_run: Some(run.id.clone()),
+                reviewed_run,
                 ..Default::default()
             });
         }
         Ok(ScheduleChange {
             watch_run_id: Some(None),
             attention_run_id: Some(Some(run.id.clone())),
-            reviewed_run: Some(run.id.clone()),
+            reviewed_run,
             ..Default::default()
         })
     }

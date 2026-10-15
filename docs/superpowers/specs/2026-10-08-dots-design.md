@@ -223,9 +223,8 @@ the call again. See `2026-10-13-approvals-v2-design.md` §3.
    retry that comes due too late is not started, and its occurrence ends the same way (notified
    once): its slot is 24 h old or older, or the schedule has no `catch_up` and the retry is
    60 s overdue or more (Dots was closed, or schedules were paused). The write that judges a
-   failed watched run into a retry or into "Needs attention" also sets that run's
-   `reviewed_at`: the retry or the flag
-   speaks for it (§12 Inbox). A later manual or scheduled run of the dot that succeeds, or a
+   `schedule` run's failure that made no tool call, into a retry or into "Needs attention",
+   also sets that run's `reviewed_at`: the retry or the flag speaks for it (§12 Inbox). A later manual or scheduled run of the dot that succeeds, or a
    resume run that succeeds whose chain starts with one (a "Run now" that needed an approval),
    clears the flag, whatever the schedule's status and whether the dot is enabled; so do a
    dismiss and a reset of the row. A chat or webhook run does not. A cancelled or deleted
@@ -596,12 +595,15 @@ The Inbox lists:
 - from Scheduler v2, schedules that need attention (an occurrence failed in the end);
 - runs awaiting review: the latest run of each lineage that is terminal, has `reviewed_at`
   NULL, and either kept its worktree (worktree mode, worktree still on disk) or `failed`.
-  From Scheduler v2 the scheduler sets `reviewed_at` on a failed run it judges into a retry
-  or into "needs attention", in the same write: the retry, or the flag the Inbox lists, speaks
-  for it, so it is not listed here as well, and dismissing the flag does not bring it back. A
-  failed scheduled run the scheduler never judged is listed, as any failed run is: one that a
-  later slot overran (still running when the next slot queued a new watched run), or one that
-  ended after its dot was disabled or its schedule changed.
+  From Scheduler v2 the scheduler sets `reviewed_at` on a failed run with trigger `schedule`
+  whose failure made no tool call, when it judges it into a retry or into "needs attention",
+  in the same write: the run changed nothing and the retry, or the flag the Inbox lists,
+  speaks for it, so it is not listed here as well, and dismissing the flag does not bring it
+  back. Every other failed run is listed: a failure after a tool call (listed here and under
+  "needs attention"), a manual or webhook run that a slot or retry joined, and a failed
+  scheduled run the scheduler never judged: one that a later slot overran (still running when
+  the next slot queued a new watched run), or one that ended after its dot was disabled or its
+  schedule changed.
 
 A run leaves the Inbox through "Discard worktree" or "Mark reviewed". Folder-mode successes only
 notify. Unread count = pending approvals + runs awaiting review + schedules that need

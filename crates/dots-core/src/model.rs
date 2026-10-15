@@ -274,8 +274,8 @@ pub struct ScheduleChange {
     pub retry: Option<Option<PendingRetry>>,
     pub attention_run_id: Option<Option<String>>,
     /// Also marks this run reviewed, in the same transaction, when the row is written: the
-    /// scheduler judged its failure into a retry or into "Needs attention", so it is not a run
-    /// to review as well.
+    /// scheduler judged the failure of a scheduled run that made no tool call into a retry or
+    /// into "Needs attention", so it is not a run to review as well.
     pub reviewed_run: Option<String>,
     /// Writes only while the row watches this run: the change follows from judging it.
     pub if_watching: Option<String>,

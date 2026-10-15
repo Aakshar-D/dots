@@ -751,6 +751,10 @@ async fn a_failure_before_any_call_is_retried_up_to_the_sixth_attempt() {
         [(dot.id.clone(), failed.id.clone(), Some(DOWN.to_string()))]
     );
     assert_eq!(h.runs(&dot).await.len(), 6);
+    assert!(
+        h.store.unreviewed_thread_ends().await.unwrap().is_empty(),
+        "no attempt made a tool call: each is marked reviewed when judged"
+    );
 
     // The schedule goes on: the next slot fires.
     h.at(60 + 86400).await;
@@ -804,8 +808,9 @@ async fn a_failure_after_a_tool_call_needs_attention_until_a_scheduled_run_succe
 
 /// Final review F1: a run still running when the next slot fires is no longer watched, so the
 /// scheduler never judges it. When it then fails before any tool call, it is a run to review.
-/// A failed run the scheduler judged, into a retry or into "Needs attention", is marked
-/// reviewed with that write and is not listed.
+/// A scheduled run that failed before any tool call and that the scheduler judged into a
+/// retry is marked reviewed with that write and is not listed. One that failed after a tool
+/// call may have changed something: it needs attention and stays a run to review.
 #[tokio::test]
 async fn an_overrun_run_that_fails_is_for_review_and_a_judged_one_is_not() {
     let mut h = Harness::new().await;
@@ -848,7 +853,7 @@ async fn an_overrun_run_that_fails_is_for_review_and_a_judged_one_is_not() {
         .is_some());
     assert_eq!(review(&h).await, [overrun.id.as_str()]);
 
-    // Its retry fails after a tool call: judged into "Needs attention", and marked reviewed.
+    // Its retry fails after a tool call: judged into "Needs attention", and still for review.
     h.at(720).await;
     let retry = h.watched(&dot).await;
     assert_eq!(retry.retry_of.as_deref(), Some(next.id.as_str()));
@@ -858,14 +863,61 @@ async fn an_overrun_run_that_fails_is_for_review_and_a_judged_one_is_not() {
         h.row(&dot).await.attention_run_id.as_deref(),
         Some(retry.id.as_str())
     );
-    assert!(h
+    assert_eq!(
+        h.store.get_run(&retry.id).await.unwrap().reviewed_at,
+        None,
+        "it may have changed something"
+    );
+    let mut listed = review(&h).await;
+    listed.sort();
+    let mut want = vec![overrun.id.clone(), retry.id.clone()];
+    want.sort();
+    assert_eq!(listed, want);
+}
+
+/// Final review F1, follow-up: a manual run that a retry joined is judged as the occurrence's
+/// run, but it is the person's run: its failure is retried, and it stays a run to review.
+#[tokio::test]
+async fn a_joined_manual_run_that_fails_stays_for_review() {
+    let mut h = Harness::new().await;
+    let dot = h.dot("joined", Some(every(1440, 60, true)), 0).await;
+    h.start();
+    h.settle().await;
+    h.at(60).await;
+    let first = h.watched(&dot).await;
+    h.judge(&first.id, RunStatus::Failed).await;
+    let manual = h
         .store
-        .get_run(&retry.id)
+        .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    h.at(120).await;
+    assert_eq!(
+        h.row(&dot).await.watch_run_id.as_deref(),
+        Some(manual.id.as_str())
+    );
+
+    h.judge(&manual.id, RunStatus::Failed).await;
+    assert!(h.row(&dot).await.retry.is_some(), "judged into a retry");
+    assert_eq!(h.store.get_run(&manual.id).await.unwrap().reviewed_at, None);
+    assert!(
+        h.store
+            .get_run(&first.id)
+            .await
+            .unwrap()
+            .reviewed_at
+            .is_some(),
+        "the scheduled run is marked"
+    );
+    let listed: Vec<String> = h
+        .store
+        .unreviewed_thread_ends()
         .await
         .unwrap()
-        .reviewed_at
-        .is_some());
-    assert_eq!(review(&h).await, [overrun.id.as_str()]);
+        .into_iter()
+        .map(|r| r.id)
+        .collect();
+    assert_eq!(listed, [manual.id.as_str()]);
 }
 
 /// Spec §6 and §10: a cancelled watched run, and a watched run that was deleted (its thread

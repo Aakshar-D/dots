@@ -1003,9 +1003,9 @@ async fn failed_run(
 }
 
 /// A failed run is a run to review whatever its trigger and whether it called a tool, until
-/// it is marked reviewed. The scheduler marks the failed runs it judges into a retry or into
-/// "Needs attention" (`ScheduleChange::reviewed_run`), so a failed scheduled run that is still
-/// listed is one it never judged, such as a run that a later slot overran.
+/// it is marked reviewed. The scheduler marks the failed scheduled runs without a tool call
+/// that it judges into a retry or into "Needs attention" (`ScheduleChange::reviewed_run`), so
+/// such a run that is still listed is one it never judged, such as a run a later slot overran.
 #[tokio::test]
 async fn a_failed_run_is_for_review_whatever_its_trigger() {
     let (_d, store) = temp_store().await;
