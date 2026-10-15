@@ -699,6 +699,21 @@ describe("the line under a scheduled run's trigger", () => {
     expect(shown.queryByText(/^Scheduled for/)).toBeNull();
   });
 
+  it("shows the slot and the attempt of a run that carries one but retries no run", async () => {
+    const dropped: Run = {
+      ...scheduled,
+      id: "run-dropped",
+      retry_of: null,
+      payload: { scheduled_for: slot, attempt: 3 },
+    };
+    thread([dropped]);
+    renderApp(`/runs/${dropped.id}`);
+    const shown = within(await section());
+    expect(shown.getByText(`Scheduled for ${localDateTime(slot)} · attempt 3 of 6`)).toBeVisible();
+    expect(shown.queryByText(/Retry/)).toBeNull();
+    expect(shown.queryByRole("link")).toBeNull();
+  });
+
   it("says nothing for a run of another trigger, or a payload it cannot read", async () => {
     const manual: Run = { ...folderRun, id: "run-manual", trigger: "manual", payload: null };
     const odd: Run = { ...scheduled, id: "run-odd", payload: { scheduled_for: 7 } };

@@ -43,14 +43,16 @@ function ScheduleLine({ run }: { run: Run }) {
   const { scheduled_for: slot, caught_up: caughtUp, attempt } = payload.data;
   let line: ReactNode = `Scheduled for ${localDateTime(slot)}`;
   if (caughtUp) line = `${line}, caught up after the PC was off`;
+  const of = LIMITS.max_schedule_attempts;
   if (attempt !== undefined && attempt > 1) {
-    const retry = `Retry ${attempt} of ${LIMITS.max_schedule_attempts}`;
+    // A retry names the run it retries. A slot that dropped a pending retry carries its attempt
+    // without `retry_of`: it still serves its own slot.
     line =
       run.retry_of === null ? (
-        retry
+        `${line} · attempt ${attempt} of ${of}`
       ) : (
         <>
-          {retry} of{" "}
+          Retry {attempt} of {of} of{" "}
           <Link to={`/runs/${run.retry_of}`} className="text-foreground hover:underline">
             the failed run
           </Link>

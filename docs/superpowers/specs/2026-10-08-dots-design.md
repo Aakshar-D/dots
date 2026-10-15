@@ -741,9 +741,10 @@ flag leaves the Inbox when it is dismissed or a later run of the dot succeeds.
   - `message` events are hidden; `raw` events are collapsed.
   - From Scheduler v2 a run with trigger `schedule` has a line under its trigger, read from
     its payload (`scheduled_for`, `caught_up`, `attempt`) and `retry_of`: "Scheduled for
-    <slot>", "Scheduled for <slot>, caught up after the PC was off", or, for attempt 2 or
-    more, "Retry k of 6 of the failed run" with a link to the run in `retry_of`. A payload
-    that does not read so shows no line.
+    <slot>" or "Scheduled for <slot>, caught up after the PC was off"; with `retry_of` set
+    (attempt 2 or more) only "Retry k of 6 of the failed run", a link to that run. A slot
+    that dropped a pending retry carries its attempt without `retry_of`: it shows its slot
+    line, then " · attempt k of 6". A payload that does not read so shows no line.
   - The diff is an in-repo unified-diff component with per-file collapse and a truncation
     notice. The core returns git's patch text untrimmed, so a hunk that ends in a blank context
     line keeps it.
