@@ -315,8 +315,9 @@ impl Store {
     }
 
     /// Writes the fields `change` names, in one statement, and returns the row. `None` when
-    /// nothing was written: the dot has no row, or the row does not watch
-    /// `change.if_watching`.
+    /// nothing was written: the dot has no row, the row does not watch `change.if_watching`,
+    /// or its `last_slot_at` is not `change.if_last_slot_at` (a reset moved it after the
+    /// caller read the row).
     pub async fn update_schedule_state(
         &self,
         dot_id: &str,
@@ -334,6 +335,7 @@ impl Store {
              attention_run_id = CASE WHEN ? THEN ? ELSE attention_run_id END, \
              updated_at = ? \
              WHERE dot_id = ? AND (? IS NULL OR watch_run_id = ?) \
+             AND (? IS NULL OR last_slot_at = ?) \
              RETURNING {STATE_COLUMNS}"
         ))
         .bind(change.status.is_some())
@@ -352,6 +354,8 @@ impl Store {
         .bind(dot_id)
         .bind(&change.if_watching)
         .bind(&change.if_watching)
+        .bind(&change.if_last_slot_at)
+        .bind(&change.if_last_slot_at)
         .fetch_optional(&self.pool)
         .await?;
         row.as_ref().map(state_from_row).transpose()

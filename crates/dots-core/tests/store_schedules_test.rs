@@ -471,3 +471,67 @@ fn timestamps_have_milliseconds_and_a_z() {
         "2026-10-14T09:00:00.123Z"
     );
 }
+
+/// Task 4 review: a scheduler pass guards its status writes with the `last_slot_at` it read.
+/// A reset after that read (the dot enabled again, or a new schedule) moves it, so the write
+/// is refused and the reset row stays as it is.
+#[tokio::test]
+async fn a_guarded_write_is_refused_after_a_reset() {
+    let (_d, store) = temp_store().await;
+    let dot = scheduled(&store, "a").await;
+    let read = state(&store, &dot).await;
+    let done = ScheduleChange {
+        status: Some(ScheduleStatus::Completed),
+        if_last_slot_at: Some(read.last_slot_at.clone()),
+        ..Default::default()
+    };
+
+    // Enabled again: the same schedule, a reset row.
+    assert!(store
+        .sync_schedule_state(&dot.id, dot.spec.schedule.as_ref(), true, t(T1))
+        .await
+        .unwrap());
+    let reset = fresh(&dot, &daily_at_nine(), T1);
+    assert_eq!(
+        store
+            .update_schedule_state(&dot.id, &done, t(T2))
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(state(&store, &dot).await, reset);
+
+    // A new schedule: reset again, and a write guarded by the row before is refused too.
+    let hourly = Schedule::cron("0 0 * * * *");
+    assert!(store
+        .sync_schedule_state(&dot.id, Some(&hourly), false, t(T2))
+        .await
+        .unwrap());
+    let stale = ScheduleChange {
+        if_last_slot_at: Some(T1.into()),
+        ..done.clone()
+    };
+    assert_eq!(
+        store
+            .update_schedule_state(&dot.id, &stale, t(T3))
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(state(&store, &dot).await, fresh(&dot, &hourly, T2));
+
+    // The row as it is now: written.
+    let current = ScheduleChange {
+        if_last_slot_at: Some(T2.into()),
+        ..done
+    };
+    let row = store
+        .update_schedule_state(&dot.id, &current, t(T3))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (row.status, row.updated_at.as_str()),
+        (ScheduleStatus::Completed, T3)
+    );
+}

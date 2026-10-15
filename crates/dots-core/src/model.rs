@@ -274,6 +274,8 @@ pub struct ScheduleChange {
     pub attention_run_id: Option<Option<String>>,
     /// Writes only while the row watches this run: the change follows from judging it.
     pub if_watching: Option<String>,
+    /// Writes only while `last_slot_at` is this: a reset of the row meanwhile moved it.
+    pub if_last_slot_at: Option<String>,
 }
 
 /// What `Store::record_slot` and `Store::start_retry` did with a slot or a retry.

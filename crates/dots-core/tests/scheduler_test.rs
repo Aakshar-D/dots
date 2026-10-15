@@ -1075,3 +1075,125 @@ async fn the_end_of_a_watched_run_wakes_the_loop() {
     assert_eq!(h.settle().await, 120);
     assert_eq!(h.row(&dot).await.retry.unwrap().attempt, 2);
 }
+
+/// A clock that runs a hook once, inside its `n`th reading of the time after `arm`: a test
+/// changes the database there, between a pass's reads and its writes. The hook runs on a
+/// thread of its own and is waited for, so the pass stands still meanwhile.
+struct HookClock {
+    inner: Arc<FakeClock>,
+    /// The reading the hook runs in, counted down, and the hook.
+    hook: std::sync::Mutex<Option<(u32, Hook)>>,
+}
+
+type Hook = Box<dyn FnOnce() + Send>;
+
+impl std::fmt::Debug for HookClock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HookClock")
+            .field("inner", &self.inner)
+            .finish()
+    }
+}
+
+impl HookClock {
+    fn arm(&self, n: u32, hook: impl FnOnce() + Send + 'static) {
+        *self.hook.lock().unwrap() = Some((n, Box::new(hook)));
+    }
+}
+
+#[async_trait::async_trait]
+impl Clock for HookClock {
+    fn now(&self) -> DateTime<Utc> {
+        let hook = {
+            let mut armed = self.hook.lock().unwrap();
+            match armed.as_mut() {
+                Some((n, _)) if *n > 1 => {
+                    *n -= 1;
+                    None
+                }
+                Some(_) => armed.take().map(|(_, hook)| hook),
+                None => None,
+            }
+        };
+        if let Some(hook) = hook {
+            std::thread::spawn(hook).join().unwrap();
+        }
+        self.inner.now()
+    }
+
+    async fn sleep_until(&self, deadline: DateTime<Utc>) {
+        self.inner.sleep_until(deadline).await
+    }
+}
+
+/// Task 4 review: a pass writes a row's status only if the row was not reset after the pass
+/// read it. Here the person saves a schedule that parses while a pass is about to mark the
+/// old one `expired`: the reset row stays active, and nothing is announced for it.
+#[tokio::test]
+async fn a_row_reset_during_a_pass_is_not_overwritten() {
+    let mut h = Harness::new().await;
+    let dot = h.dot("old", Some(Schedule::cron("0 0 9 * * *")), -60).await;
+    h.raw(
+        r#"UPDATE dots SET schedule = '{"rule":{"kind":"cron","expr":"not cron"},
+           "catch_up":false,"until":null}' WHERE id = ?"#,
+        &dot,
+    )
+    .await;
+    let clock = Arc::new(HookClock {
+        inner: h.clock.clone(),
+        hook: std::sync::Mutex::new(None),
+    });
+    h.sched = Scheduler::new(
+        h.store.clone(),
+        h.runner.clone(),
+        h.bus.clone(),
+        clock.clone(),
+    );
+
+    // The first reading of the time starts the pass; the second is the expiry's, after the
+    // pass read the rows and the dots.
+    let fixed = every(1440, 60, true);
+    let (db, id, saved) = (h.dir.path().join("dots.db"), dot.id.clone(), fixed.clone());
+    clock.arm(2, move || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let store = Store::open(&db).await.unwrap();
+                let opts = sqlx::sqlite::SqliteConnectOptions::new().filename(&db);
+                let pool = sqlx::SqlitePool::connect_with(opts).await.unwrap();
+                sqlx::query("UPDATE dots SET schedule = ? WHERE id = ?")
+                    .bind(serde_json::to_string(&saved).unwrap())
+                    .bind(&id)
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+                pool.close().await;
+                assert!(store
+                    .sync_schedule_state(&id, Some(&saved), false, after(0))
+                    .await
+                    .unwrap());
+            });
+    });
+    h.start();
+    h.settle().await;
+    let row = h.row(&dot).await;
+    assert_eq!(
+        (row.status, row.rule_key.clone(), row.last_slot_at.clone()),
+        (ScheduleStatus::Active, fixed.rule_key(), ts(0)),
+        "the reset row is not expired"
+    );
+    assert_eq!(
+        h.events().0,
+        Vec::<String>::new(),
+        "no write, no announcement"
+    );
+
+    // The reload that follows the save brings a pass over the new schedule.
+    h.sched.reload();
+    assert_eq!(h.settle().await, 60);
+    assert_eq!(h.row(&dot).await, row);
+    h.at(60).await;
+    assert_eq!(h.row(&dot).await.fired_count, 1);
+}

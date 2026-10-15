@@ -203,6 +203,10 @@ impl Scheduler {
 
     /// A pass (spec §5) over the active rows of the enabled dots; returns when to wake.
     async fn pass(&self, now: DateTime<Utc>) -> Result<DateTime<Utc>> {
+        // The rows are read first: a row reset after this read, even with the dot read below
+        // already changed, has a new `last_slot_at`, so the guarded writes of this pass leave
+        // it alone.
+        let states = self.store.list_schedule_states().await?;
         let mut dots: HashMap<String, Dot> = self
             .store
             .list_dots()
@@ -212,7 +216,7 @@ impl Scheduler {
             .collect();
         let mut wake = now + MAX_SLEEP;
         let mut watched = HashSet::new();
-        for state in self.store.list_schedule_states().await? {
+        for state in states {
             if state.status != ScheduleStatus::Active {
                 continue;
             }
@@ -246,6 +250,9 @@ impl Scheduler {
         watched: &mut HashSet<String>,
     ) -> Result<Option<DateTime<Utc>>> {
         let mut last = parse_time(&state.last_slot_at)?;
+        // The row's `last_slot_at` as this pass left it: the status and attention writes
+        // below are guarded by it, so a row reset since it was read is not overwritten.
+        let mut row_slot = state.last_slot_at.clone();
         let mut fired = state.fired_count;
         let mut watch = state.watch_run_id.clone();
         let mut retry = state.retry.clone();
@@ -256,7 +263,7 @@ impl Scheduler {
         };
         let due = match due_slot(schedule, &last, &now, &Local) {
             Ok(due) => due.map(|t| t.with_timezone(&Utc)),
-            Err(e) => return self.expire(dot, &e).await,
+            Err(e) => return self.expire(dot, &e, &row_slot).await,
         };
         if let Some(due) = due {
             let late = now - due;
@@ -271,6 +278,7 @@ impl Scheduler {
             {
                 Ok(start) => {
                     last = due;
+                    row_slot = timestamp(due);
                     match start {
                         SlotStart::Skipped => {
                             tracing::info!(dot = %dot.spec.name, slot = %due, "missed slot skipped");
@@ -355,6 +363,7 @@ impl Scheduler {
             if self.store.succeeded_after(&dot.id, flagged).await? {
                 let change = ScheduleChange {
                     attention_run_id: Some(None),
+                    if_last_slot_at: Some(row_slot.clone()),
                     ..Default::default()
                 };
                 if self
@@ -365,6 +374,8 @@ impl Scheduler {
                 {
                     tracing::info!(dot = %dot.spec.name, "a later run succeeded: attention cleared");
                     self.updated(&dot.id);
+                } else {
+                    tracing::debug!(dot = %dot.spec.name, "row reset meanwhile: attention left");
                 }
             }
         }
@@ -374,15 +385,19 @@ impl Scheduler {
         } else {
             match next_slot(schedule, &last, &Local) {
                 Ok(next) => next.map(|t| t.with_timezone(&Utc)),
-                Err(e) => return self.expire(dot, &e).await,
+                Err(e) => return self.expire(dot, &e, &row_slot).await,
             }
         };
         let retry_at = retry.as_ref().map(|r| parse_time(&r.at)).transpose()?;
         if next.is_none() && retry_at.is_none() && watch.is_none() {
             // No slot is left, the last occurrence is judged and no retry can follow: the
             // count is reached, a `Once` is handled, or the stop date has passed.
-            self.set_status(dot, ScheduleStatus::Completed, now).await?;
-            tracing::info!(dot = %dot.spec.name, "schedule completed");
+            if self
+                .set_status(dot, ScheduleStatus::Completed, &row_slot, now)
+                .await?
+            {
+                tracing::info!(dot = %dot.spec.name, "schedule completed");
+            }
             return Ok(None);
         }
         watched.extend(watch);
@@ -435,7 +450,13 @@ impl Scheduler {
                                 id = child;
                                 continue;
                             }
-                            None => return Ok(written),
+                            None => {
+                                tracing::debug!(
+                                    dot = %dot.spec.name, run = %id,
+                                    "row reset or watch moved meanwhile: not judged"
+                                );
+                                return Ok(written);
+                            }
                         }
                     }
                     // The occurrence is done.
@@ -458,6 +479,10 @@ impl Scheduler {
                 .update_schedule_state(&dot.id, &change, now)
                 .await?
             else {
+                tracing::debug!(
+                    dot = %dot.spec.name, run = %run.id,
+                    "row reset or watch moved meanwhile: not judged"
+                );
                 return Ok(written);
             };
             self.updated(&dot.id);
@@ -543,21 +568,35 @@ impl Scheduler {
     }
 
     /// The schedule no longer parses (spec §10): the row is `expired` and fires nothing.
-    async fn expire(&self, dot: &Dot, e: &Error) -> Result<Option<DateTime<Utc>>> {
-        tracing::warn!(dot = %dot.spec.name, "schedule expired: {e}");
-        self.set_status(dot, ScheduleStatus::Expired, self.clock.now())
-            .await?;
+    /// `last_slot_at`: the row's, as the pass left it.
+    async fn expire(
+        &self,
+        dot: &Dot,
+        e: &Error,
+        last_slot_at: &str,
+    ) -> Result<Option<DateTime<Utc>>> {
+        if self
+            .set_status(dot, ScheduleStatus::Expired, last_slot_at, self.clock.now())
+            .await?
+        {
+            tracing::warn!(dot = %dot.spec.name, "schedule expired: {e}");
+        }
         Ok(None)
     }
 
+    /// Writes `status` while the row's `last_slot_at` is still `last_slot_at`, as the pass
+    /// left it. A row reset meanwhile (a new schedule, or the dot enabled again) is left as
+    /// it is: the reload that follows the reset brings the next pass. True when written.
     async fn set_status(
         &self,
         dot: &Dot,
         status: ScheduleStatus,
+        last_slot_at: &str,
         now: DateTime<Utc>,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let change = ScheduleChange {
             status: Some(status),
+            if_last_slot_at: Some(last_slot_at.to_string()),
             ..Default::default()
         };
         if self
@@ -567,8 +606,13 @@ impl Scheduler {
             .is_some()
         {
             self.updated(&dot.id);
+            return Ok(true);
         }
-        Ok(())
+        tracing::debug!(
+            dot = %dot.spec.name, status = status.as_str(),
+            "row reset meanwhile: status not written"
+        );
+        Ok(false)
     }
 
     fn updated(&self, dot_id: &str) {
