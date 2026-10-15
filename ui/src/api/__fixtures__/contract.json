@@ -501,6 +501,7 @@
   "Limits": {
     "max_approval_wait_secs": 280,
     "max_concurrent_runs": 16,
+    "max_schedule_attempts": 6,
     "max_timeout_secs": 604800
   },
   "NewDotSpec": {

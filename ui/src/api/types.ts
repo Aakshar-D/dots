@@ -281,12 +281,14 @@ export const CmdErrorKind = z.enum(["not_found", "invalid", "conflict", "interna
 export const CmdError = z.strictObject({ kind: CmdErrorKind, message: z.string() });
 export const StartupError = z.strictObject({ message: z.string(), log_dir: z.string() });
 
-/// Validation limits of the core that the dot editor and Settings mirror. The contract test
-/// checks them against the Rust constants.
+/// Validation limits of the core that the dot editor and Settings mirror, and the attempts a
+/// scheduled occurrence has at most, which the Dots list and the run view name. The contract
+/// test checks them against the Rust constants.
 export const LIMITS = {
   max_timeout_secs: 604800,
   max_approval_wait_secs: 280,
   max_concurrent_runs: 16,
+  max_schedule_attempts: 6,
 } as const;
 
 export type EngineKind = z.infer<typeof EngineKind>;

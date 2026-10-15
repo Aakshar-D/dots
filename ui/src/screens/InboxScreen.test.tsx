@@ -595,3 +595,112 @@ describe("a parked approval", () => {
     expect(within(live).queryByText(/parked/)).toBeNull();
   });
 });
+
+describe("a schedule that needs attention", () => {
+  const [flagged] = sample.inbox.attention;
+  const empty: Inbox = { approvals: [], review_runs: [], attention: [] };
+  const only = (attention: Inbox["attention"]): Inbox => ({ ...empty, attention });
+  const item = () => screen.findByRole("listitem", { name: `${flagged.dot_name} needs attention` });
+  /// Lets what a command's answer set off reach the screen.
+  const settle = () => act(() => new Promise<void>((resolve) => setTimeout(resolve, 20)));
+
+  it("names the dot, the run that failed and why, and offers Run now and Dismiss", async () => {
+    inbox({ approvals: [approval], review_runs: [failedRun], attention: [flagged] });
+    renderApp("/inbox");
+    const group = await screen.findByRole("region", { name: "Needs attention" });
+    const shown = within(await item());
+    expect(within(group).getAllByRole("listitem")).toHaveLength(1);
+    expect(shown.getByRole("link", { name: flagged.dot_name })).toHaveAttribute(
+      "href",
+      `/dots/${flagged.dot_id}`,
+    );
+    expect(shown.getByRole("link", { name: "Open the failed run" })).toHaveAttribute(
+      "href",
+      `/runs/${flagged.run_id}`,
+    );
+    expect(shown.getByText(new RegExp(flagged.error!))).toBeVisible();
+    expect(shown.getByRole("button", { name: "Run now" })).toBeVisible();
+    expect(shown.getByRole("button", { name: "Dismiss" })).toBeVisible();
+    // The group stands between the approvals and the runs to review.
+    const groups = screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent);
+    expect(groups).toEqual(["Approvals", "Needs attention", "Runs to review"]);
+  });
+
+  it("is all that waits when nothing else does", async () => {
+    inbox(only([{ ...flagged, error: null }]));
+    renderApp("/inbox");
+    expect(await item()).toBeVisible();
+    expect(screen.queryByText(/Nothing waits for you/)).toBeNull();
+  });
+
+  it("dismisses the flag, and reloads the Inbox and the Dots list", async () => {
+    const box = inbox(only([flagged]));
+    backend.on("dismiss_schedule_attention", () => {
+      box.set(empty);
+      return null;
+    });
+    const { user, queryClient, listening } = renderApp("/inbox");
+    await listening();
+    queryClient.setQueryData(keys.overview, [sample.overview]);
+    await user.click(within(await item()).getByRole("button", { name: "Dismiss" }));
+    expect(await screen.findByText(/Nothing waits for you/)).toBeVisible();
+    expect(backend.callsTo("dismiss_schedule_attention")).toEqual([{ dotId: flagged.dot_id }]);
+    expect(queryClient.getQueryState(keys.overview)?.isInvalidated).toBe(true);
+  });
+
+  it("dismisses one flag when the button is double-clicked and the next item moves up", async () => {
+    const next = { ...flagged, dot_id: "dot-other", dot_name: "tidy-notes", run_id: "run-other" };
+    const box = inbox(only([flagged, next]));
+    backend.on("dismiss_schedule_attention", () => {
+      box.set(only([next]));
+      return null;
+    });
+    renderApp("/inbox");
+    fireEvent.click(within(await item()).getByRole("button", { name: "Dismiss" }), { detail: 1 });
+    await waitFor(() =>
+      expect(screen.getAllByRole("listitem", { name: /needs attention/ })).toHaveLength(1),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }), { detail: 2 });
+    await settle();
+    expect(backend.callsTo("dismiss_schedule_attention")).toEqual([{ dotId: flagged.dot_id }]);
+  });
+
+  it("keeps the flag and says why when the core refuses the dismissal", async () => {
+    inbox(only([flagged]));
+    backend.on("dismiss_schedule_attention", () => {
+      throw { kind: "not_found", message: `schedule of dot ${flagged.dot_id}` };
+    });
+    const { user } = renderApp("/inbox");
+    await user.click(within(await item()).getByRole("button", { name: "Dismiss" }));
+    expect(await screen.findByText(`schedule of dot ${flagged.dot_id}`)).toBeVisible();
+    expect(await item()).toBeVisible();
+  });
+
+  it("starts a run of the dot, opens it and reloads the Inbox", async () => {
+    inbox(only([flagged]));
+    backend.on("run_now", () => ({ ...sample.run, id: "run-new", status: "queued" }));
+    backend.on("run_thread", () => [{ ...sample.run, id: "run-new", status: "queued" }]);
+    backend.on("get_dot", () => sample.dot);
+    backend.on("list_run_events", () => []);
+    backend.on("approvals_for_run", () => []);
+    backend.on("worktree_diff", () => sample.diff);
+    const { user, router, listening } = renderApp("/inbox");
+    await listening();
+    const loads = backend.callsTo("inbox").length;
+    await user.click(within(await item()).getByRole("button", { name: "Run now" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/runs/run-new"));
+    expect(backend.callsTo("run_now")).toEqual([{ dotId: flagged.dot_id }]);
+    await waitFor(() => expect(backend.callsTo("inbox").length).toBeGreaterThan(loads));
+  });
+
+  it("shows why a run could not start, and keeps the flag", async () => {
+    inbox(only([flagged]));
+    backend.on("run_now", () => {
+      throw { kind: "conflict", message: "the dot is disabled" };
+    });
+    const { user } = renderApp("/inbox");
+    await user.click(within(await item()).getByRole("button", { name: "Run now" }));
+    expect(await screen.findByText("the dot is disabled")).toBeVisible();
+    expect(await item()).toBeVisible();
+  });
+});

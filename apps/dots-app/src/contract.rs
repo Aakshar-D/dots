@@ -8,6 +8,7 @@ use dots_core::events::RuntimeEvent;
 use dots_core::model::*;
 use dots_core::policy::{allow_candidates, Action, Policy, Preset};
 use dots_core::schedule::Schedule;
+use dots_core::scheduler::MAX_ATTEMPTS;
 use dots_core::settings::{Settings, MAX_CONCURRENT_RUNS};
 use serde_json::{json, Value};
 
@@ -218,7 +219,8 @@ fn schedules() -> Value {
 }
 
 /// The samples, keyed by the UI schema that parses them. `Enums` lists every variant of every
-/// shared enum and `Limits` the validation limits the editor mirrors: the UI parses live data
+/// shared enum and `Limits` the validation limits the editor mirrors, with the attempts of a
+/// scheduled occurrence that the Dots list and the run view name: the UI parses live data
 /// with its schemas, so a variant or limit it does not know must fail a test, not a screen.
 /// `NewDotSpec` is the answer of the `new_dot_spec` command, the blank dot of the UI's tests,
 /// and `Commands` names every registered command.
@@ -363,6 +365,7 @@ pub fn samples() -> Value {
             "max_timeout_secs": MAX_TIMEOUT_SECS,
             "max_approval_wait_secs": MAX_APPROVAL_WAIT_SECS,
             "max_concurrent_runs": MAX_CONCURRENT_RUNS,
+            "max_schedule_attempts": MAX_ATTEMPTS,
         },
         "StartupError": to(StartupError {
             message: "Dots could not start: database disk image is malformed".into(),

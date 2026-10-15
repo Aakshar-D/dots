@@ -2,13 +2,24 @@ import { act, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import type { Dot, DotOverview, Run } from "@/api/types";
-import { localDateTime } from "@/lib/format";
-import { nextRun } from "@/screens/DotsScreen";
+import { localDateTime, localTime } from "@/lib/format";
+import { nextRun, retrying } from "@/screens/DotsScreen";
 import { backend, later } from "@/test/backend";
 import { quietStatus, sample } from "@/test/fixtures";
 import { renderApp } from "@/test/render";
 
-const scheduled: DotOverview = sample.overview;
+/// The contract's sample, whose retry waits and which needs attention.
+const troubled: DotOverview = sample.overview;
+/// A scheduled dot with nothing waiting.
+const scheduled: DotOverview = {
+  ...troubled,
+  schedule_state: {
+    ...troubled.schedule_state!,
+    retry_at: null,
+    retry_attempt: null,
+    attention: null,
+  },
+};
 const busy: DotOverview = {
   dot: { ...sample.dot, id: "dot-busy", name: "triage", schedule: null },
   active_run: { ...sample.run, id: "run-active", dot_id: "dot-busy", status: "running" },
@@ -19,6 +30,11 @@ const busy: DotOverview = {
 const firing = (next_fire: string | null): DotOverview => ({
   ...scheduled,
   schedule_state: { ...scheduled.schedule_state!, next_fire },
+});
+/// `scheduled` with the state `status` after `fired_count` slots fired.
+const ended = (status: "completed" | "expired", fired_count: number): DotOverview => ({
+  ...scheduled,
+  schedule_state: { ...scheduled.schedule_state!, status, fired_count, next_fire: null },
 });
 const row = (name: string) => screen.getByRole("link", { name }).closest("tr")!;
 
@@ -43,6 +59,9 @@ describe("the Dots screen", () => {
     );
     expect(second.getByText("No schedule")).toBeVisible();
     expect(second.getByText("Never ran")).toBeVisible();
+    // Nothing waits for either.
+    expect(screen.queryByText("Needs attention")).toBeNull();
+    expect(screen.queryByText(/^Retrying at/)).toBeNull();
   });
 
   it("says why a scheduled dot will not run", () => {
@@ -53,6 +72,49 @@ describe("the Dots screen", () => {
     expect(nextRun(busy, false)).toBe("No schedule");
     expect(nextRun(firing(null), false)).toBe("Not scheduled");
     expect(nextRun({ ...scheduled, schedule_state: null }, false)).toBe("Not scheduled");
+  });
+
+  it("says that a schedule has ended, and how", () => {
+    expect(nextRun(ended("completed", 3), false)).toBe("Completed");
+    // A Once whose slot was missed and skipped completed without a run.
+    expect(nextRun(ended("completed", 0), false)).toBe("Completed (missed)");
+    // A stored cron expression that no longer parses.
+    expect(nextRun(ended("expired", 2), false)).toBe("Expired");
+    // An ended schedule stays ended while schedules are paused.
+    expect(nextRun(ended("completed", 1), true)).toBe("Completed");
+    const off = { ...ended("completed", 1), dot: { ...scheduled.dot, enabled: false } };
+    expect(nextRun(off, false)).toBe("Disabled");
+  });
+
+  it("says when a retry waits, unless nothing can run", () => {
+    const at = troubled.schedule_state!.retry_at;
+    expect(retrying(troubled, false)).toBe(`Retrying at ${localTime(at)} (attempt 2 of 6)`);
+    expect(retrying(scheduled, false)).toBeNull();
+    expect(retrying(troubled, true)).toBeNull();
+    expect(retrying({ ...troubled, dot: { ...troubled.dot, enabled: false } }, false)).toBeNull();
+    expect(retrying({ ...troubled, schedule_state: null }, false)).toBeNull();
+  });
+
+  it("flags a dot whose schedule needs attention, and shows its waiting retry", async () => {
+    backend.on("dot_overview", () => [troubled, busy]);
+    renderApp("/dots");
+    await screen.findByRole("link", { name: troubled.dot.name });
+    const first = within(row(troubled.dot.name));
+    expect(first.getByText("Needs attention")).toBeVisible();
+    expect(first.getByText(localDateTime(troubled.schedule_state!.next_fire))).toBeVisible();
+    expect(
+      first.getByText(
+        `Retrying at ${localTime(troubled.schedule_state!.retry_at)} (attempt 2 of 6)`,
+      ),
+    ).toBeVisible();
+    expect(within(row("triage")).queryByText("Needs attention")).toBeNull();
+  });
+
+  it("shows how an ended schedule ended in place of the next run", async () => {
+    backend.on("dot_overview", () => [ended("completed", 0)]);
+    renderApp("/dots");
+    await screen.findByRole("link", { name: scheduled.dot.name });
+    expect(within(row(scheduled.dot.name)).getByText("Completed (missed)")).toBeVisible();
   });
 
   it("shows Paused in place of the next run while schedules are paused", async () => {

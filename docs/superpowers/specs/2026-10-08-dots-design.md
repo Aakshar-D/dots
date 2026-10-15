@@ -438,7 +438,10 @@ Exposing webhooks beyond localhost (e.g. tunnels) is the user's choice and out o
 React + Vite + TypeScript inside Tauri 2. Screens:
 
 - **Dots** — list: name, engine/model, state, next scheduled run, last result, enable toggle,
-  Run now.
+  Run now. From Scheduler v2 the next-run column says how an ended schedule ended
+  ("Completed", "Completed (missed)" when it completed without firing, "Expired"), and
+  "Retrying at 09:04 (attempt 2 of 6)" under it while a retry waits; a dot whose schedule
+  needs attention carries a "Needs attention" badge.
 - **Dot editor** — name; instructions (markdown); engine, model, endpoint; workdir + mode;
   schedule (from Scheduler v2: a kind picker None / Once / Every / Daily / Weekly / Cron with
   the kind's fields — a date and time; minutes, typed in minutes or hours; a time; seven day
@@ -448,9 +451,12 @@ React + Vite + TypeScript inside Tauri 2. Screens:
   policy editor (preset picker + rule table); limits; MCP servers (Claude only);
   use-user-settings toggle.
 - **Run view** — live transcript (assistant text, collapsible tool calls/results), worktree diff,
-  summary, status, tokens; cancel, discard worktree, open folder.
-- **Inbox** — pending approvals (tool, pretty-printed input, approve / deny with note) and
-  finished runs awaiting review (definition in §12). Unread count mirrored in the tray tooltip.
+  summary, status, tokens; cancel, discard worktree, open folder. From Scheduler v2 a
+  scheduled run's trigger has a line under it: "Scheduled for <slot>", "…, caught up after
+  the PC was off", or "Retry 2 of 6 of the failed run" with a link to that run.
+- **Inbox** — pending approvals (tool, pretty-printed input, approve / deny with note),
+  schedules that need attention (from Scheduler v2) and finished runs awaiting review
+  (definition in §12). Unread count mirrored in the tray tooltip and the sidebar.
   From Approvals v2 an approval card, wherever it shows (Inbox, run view, chat), also offers
   "Approve and always allow": the allow rules the core derived for that call, the narrowest
   preselected, one of which is saved to the dot's policy with the approval. The control is not
@@ -586,7 +592,13 @@ The Inbox lists:
 
 A run leaves the Inbox through "Discard worktree" or "Mark reviewed". Folder-mode successes only
 notify. Unread count = pending approvals + runs awaiting review + schedules that need
-attention.
+attention; the sidebar's Inbox badge shows the same count.
+
+The "Needs attention" group stands between the approvals and the runs to review. Each item
+names the dot (a link to its editor), when the run failed and its error, a link to the failed
+run, "Run now" (starts a `manual` run and opens it) and "Dismiss"
+(`dismiss_schedule_attention`). Both reload the Inbox and the Dots list when they answer. A
+flag leaves the Inbox when it is dismissed or a later run of the dot succeeds.
 
 ### Tauri shell (`apps/dots-app`)
 
@@ -707,11 +719,17 @@ attention.
   derives for the `Approval` sample (`RuleCandidate`). From Scheduler v2 it holds a sample of
   every `RuntimeEvent` type, `ScheduleUpdated` among them (the UI test checks that), every
   `ScheduleStatus`, a queued retry (the `RunUpdated` sample, with `retry_of`), and a
-  `DotOverview` sample that sets every field of `schedule_state`.
+  `DotOverview` sample that sets every field of `schedule_state`; `Limits` gains
+  `max_schedule_attempts` (the core's `MAX_ATTEMPTS`, 6), which the Dots list and the run view
+  name.
 - Shell around the screens:
   - Banners: `server_error` (links to Settings), CLI version mismatch ("Mark as tested"),
     restart required ("Restart Dots"), schedules paused.
   - While schedules are paused the Dots list shows "paused" in place of the next fire time.
+    From Scheduler v2 an ended schedule shows "Completed", "Completed (missed)" (status
+    `completed` with `fired_count` 0) or "Expired" instead, paused or not. A waiting retry
+    shows "Retrying at <time> (attempt k of 6)" under it, unless the dot is off or schedules
+    are paused; `schedule_state.attention` shows the "Needs attention" badge by the name.
   - Destructive actions (discard worktree, delete dot, regenerate webhook token) ask first in
     an in-app dialog.
   - `webhook_url` answers `conflict` while the local server is not running, so the editor
@@ -721,6 +739,11 @@ attention.
   - Assistant text renders as markdown without raw HTML.
   - Tool calls and results are paired by id and collapsible.
   - `message` events are hidden; `raw` events are collapsed.
+  - From Scheduler v2 a run with trigger `schedule` has a line under its trigger, read from
+    its payload (`scheduled_for`, `caught_up`, `attempt`) and `retry_of`: "Scheduled for
+    <slot>", "Scheduled for <slot>, caught up after the PC was off", or, for attempt 2 or
+    more, "Retry k of 6 of the failed run" with a link to the run in `retry_of`. A payload
+    that does not read so shows no line.
   - The diff is an in-repo unified-diff component with per-file collapse and a truncation
     notice. The core returns git's patch text untrimmed, so a hunk that ends in a blank context
     line keeps it.
