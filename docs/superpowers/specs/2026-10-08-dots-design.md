@@ -66,7 +66,8 @@ dots/
     src/kit/                 skills and plugins on disk: `SKILL.md` frontmatter, skill and plugin
                              reading, Claude Code's installed plugins, and a Claude-engine run's
                              plugin folders (copies without `.mcp.json`, `monitors/`, hooks
-                             unless allowed, or `allowed-tools`; MCP/skills spec §7)
+                             unless allowed, `allowed-tools`, or names Windows reads as
+                             another file's; MCP/skills spec §7)
     src/library_service.rs   the Library at runtime: add, change, remove (asking first when dots
                              use an item), probe, check and accept a server's tool list, a
                              plugin's own MCP server items, `LibraryUpdated` (MCP/skills spec §9)

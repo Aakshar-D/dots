@@ -57,18 +57,55 @@ impl RunKit {
     }
 }
 
+/// A name as Windows matches it when it opens a path: without a trailing `.` or space (Win32
+/// strips them from each component) and in upper case (NTFS ignores case; Unicode upper case,
+/// so `ſ` matches `S` as well).
+fn windows_key(name: &str) -> String {
+    name.trim_end_matches(['.', ' ']).to_uppercase()
+}
+
+/// True when `a` and `b` name the same file on Windows (see `windows_key`).
+fn same_name_on_windows(a: &str, b: &str) -> bool {
+    windows_key(a) == windows_key(b)
+}
+
+/// Why the entry `name` of a folder whose entries are `names` is left out of a copy: a name
+/// that ends in `.` or a space (Windows would read and write another file under it: `hooks.`
+/// is `hooks`, `SKILL.md.` overwrites `SKILL.md` uncleaned), or one that names the same file as
+/// another entry on Windows (`a.md` and `A.MD`). `None` for a name that is safe to copy.
+fn ambiguous_name(name: &str, names: &[String]) -> Option<&'static str> {
+    if name.ends_with(['.', ' ']) {
+        return Some("its name ends in a dot or a space");
+    }
+    let key = windows_key(name);
+    let twins = names.iter().filter(|n| windows_key(n) == key).count();
+    (twins > 1).then_some("another file of its folder has the same name on Windows")
+}
+
 /// The files of `src` to copy, as paths relative to it, and their total size. `None` when the
 /// total goes past `MAX_COPY_BYTES`. Symbolic links are not followed or copied, and `.git` is
-/// left out; `skip` names more paths to leave out.
+/// left out; `skip` names more paths to leave out. A file or folder whose name Windows would
+/// read as another (`ambiguous_name`) is left out, on every platform, with a log line.
 fn collect(src: &Path, skip: &dyn Fn(&Path) -> bool) -> std::io::Result<Option<Vec<PathBuf>>> {
     let mut files = Vec::new();
     let mut total = 0u64;
     let mut stack = vec![PathBuf::new()];
     while let Some(rel) = stack.pop() {
-        for entry in fs::read_dir(src.join(&rel))? {
-            let entry = entry?;
+        let entries = fs::read_dir(src.join(&rel))?.collect::<std::io::Result<Vec<_>>>()?;
+        let names: Vec<String> = entries
+            .iter()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        for (entry, name) in entries.iter().zip(&names) {
             let path = rel.join(entry.file_name());
             if entry.file_name() == ".git" || skip(&path) {
+                continue;
+            }
+            if let Some(why) = ambiguous_name(name, &names) {
+                tracing::warn!(
+                    "left {} out of a plugin copy: {why}",
+                    src.join(&path).display()
+                );
                 continue;
             }
             let kind = entry.file_type()?;
@@ -177,7 +214,11 @@ fn copy_folder(
 /// - `dots-skills/`: a generated plugin whose `skills/<name>/` holds a copy of each skill;
 /// - `<name>/`: a copy of each plugin, its manifest named `<name>`, without `.mcp.json` (its servers go through the gateway),
 ///   without `.lsp.json` and `lspServers`, without `monitors/`, and without `hooks/` unless
-///   `run_hooks` (those names are matched without regard to case).
+///   `run_hooks` (those names are matched as Windows matches them: without regard to case or
+///   a trailing `.` or space).
+///
+/// In every copy, skills too, a file or folder whose name ends in `.` or a space, or names the
+/// same file as another entry of its folder on Windows, is left out (`collect`).
 ///
 /// Every copied markdown file loses `allowed-tools`, `hooks` (unless the plugin's `run_hooks`),
 /// `permissionMode` and `mcpServers`. A skill or plugin that is
@@ -250,8 +291,8 @@ pub fn prepare_run_kit(
             let first = rel.components().next().map(|c| c.as_os_str().to_owned());
             let top = rel.components().count() == 1;
             let first = first.as_deref().and_then(|f| f.to_str()).unwrap_or("");
-            // Names are matched without regard to case: NTFS and Claude Code both are lenient.
-            let is = |name: &str| first.eq_ignore_ascii_case(name);
+            // Names are matched as Windows matches them: NTFS and Claude Code both are lenient.
+            let is = |name: &str| same_name_on_windows(first, name);
             if is(".mcp.json") || is(".lsp.json") {
                 top
             } else if is("monitors") {

@@ -687,3 +687,103 @@ fn hooks_survive_only_when_the_plugin_runs_hooks_and_the_form_is_plain() {
         "---\ndescription: d\nhooks:\n  Stop:\n    - command: ok\n---\nbody\n"
     );
 }
+
+/// `path` in the form that reaches the file system as written: on Windows with the `\\?\`
+/// prefix, so a name that ends in `.` or a space is created as it is.
+fn verbatim(path: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        if path.to_string_lossy().starts_with(r"\\?\") {
+            return path.to_path_buf();
+        }
+        let mut raw = std::ffi::OsString::from(r"\\?\");
+        raw.push(path.as_os_str());
+        PathBuf::from(raw)
+    }
+    #[cfg(not(windows))]
+    {
+        path.to_path_buf()
+    }
+}
+
+/// Creates the file `name` (which may end in `.` or a space) in the folder `dir`.
+fn write_raw(dir: &Path, name: &str, text: &str) {
+    fs::create_dir_all(dir).unwrap();
+    fs::write(verbatim(dir).join(name), text).unwrap();
+}
+
+/// Every file under `dir`, as `/`-separated paths relative to it.
+fn files_under(dir: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut stack = vec![PathBuf::new()];
+    while let Some(rel) = stack.pop() {
+        for entry in fs::read_dir(verbatim(&dir.join(&rel))).unwrap() {
+            let entry = entry.unwrap();
+            let path = rel.join(entry.file_name());
+            if entry.file_type().unwrap().is_dir() {
+                stack.push(path);
+            } else {
+                out.push(path.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+#[test]
+fn names_windows_reads_as_another_file_are_left_out_of_every_copy() {
+    let tmp = tempdir().unwrap();
+    let root = tmp.path().join("src").join("p");
+    let dirty = "---\nallowed-tools: Bash(curl *)\n---\nGo\n";
+    write(&root.join("commands").join("ok.md"), dirty);
+    // `hooks.` is read and written as `hooks`, `.mcp.json.` as `.mcp.json`.
+    fs::create_dir_all(verbatim(&root).join("hooks.")).unwrap();
+    write_raw(&verbatim(&root).join("hooks."), "hooks.json", "{}");
+    write_raw(&root, ".mcp.json.", r#"{"x":{"command":"x"}}"#);
+    // A markdown name with a trailing dot or space has no `.md` extension, so it would not be
+    // cleaned, and it would overwrite the cleaned file of the same name.
+    write_raw(&root.join("commands"), "go.md.", dirty);
+    write(&root.join("commands").join("x.md"), dirty);
+    write_raw(&root.join("commands"), "X.MD.", dirty);
+    write(&root.join("skills").join("a").join("SKILL.md"), dirty);
+    write_raw(&root.join("skills").join("a"), "SKILL.md ", dirty);
+    let skill = tmp.path().join("src").join("s");
+    write(&skill.join("SKILL.md"), dirty);
+    write_raw(&skill, "notes.md.", dirty);
+
+    let plugins = tmp.path().join("plugins");
+    let kit = prepare_run_kit(
+        &plugins,
+        "r1",
+        &[KitSkill {
+            name: "s".into(),
+            dir: skill,
+        }],
+        &[KitPlugin {
+            name: "p".into(),
+            dir: root,
+            run_hooks: false,
+        }],
+    )
+    .unwrap();
+    assert!(kit.left_out.is_empty(), "{:?}", kit.left_out);
+    let copy = plugins.join("run-r1").join("p");
+    assert_eq!(
+        files_under(&copy),
+        [".claude-plugin/plugin.json", "commands/ok.md"]
+    );
+    assert!(!copy.join("hooks").exists());
+    assert!(!copy.join(".mcp.json").exists());
+    assert_eq!(read(&copy.join("commands").join("ok.md")), "---\n---\nGo\n");
+    let skills = plugins.join("run-r1").join("dots-skills");
+    assert_eq!(
+        files_under(&skills),
+        [".claude-plugin/plugin.json", "skills/s/SKILL.md"]
+    );
+    assert_eq!(
+        read(&skills.join("skills").join("s").join("SKILL.md")),
+        "---\n---\nGo\n"
+    );
+    kit.cleanup();
+}
