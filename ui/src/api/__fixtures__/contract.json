@@ -9,6 +9,7 @@
       "command": "git push origin main"
     },
     "input_hash": "h1",
+    "mcp_fingerprint": null,
     "note": null,
     "parked": false,
     "resolved": false,
@@ -480,6 +481,7 @@
           "command": "git push origin main"
         },
         "input_hash": "h1",
+        "mcp_fingerprint": null,
         "note": null,
         "parked": false,
         "resolved": false,
@@ -805,6 +807,7 @@
           "command": "git push origin main"
         },
         "input_hash": "h1",
+        "mcp_fingerprint": null,
         "note": null,
         "parked": false,
         "resolved": false,
@@ -826,6 +829,7 @@
           "command": "git push origin main"
         },
         "input_hash": "h1",
+        "mcp_fingerprint": null,
         "note": "not on main",
         "parked": true,
         "resolved": false,
@@ -847,6 +851,7 @@
           "command": "git push origin main"
         },
         "input_hash": "h1",
+        "mcp_fingerprint": null,
         "note": null,
         "parked": true,
         "resolved": true,

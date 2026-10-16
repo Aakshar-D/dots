@@ -69,6 +69,9 @@ pub struct RunServer {
     accepted: HashMap<String, bool>,
     accepted_fingerprint: Option<String>,
     live: Arc<Mutex<Live>>,
+    /// The count of list changes the watcher has listed and checked (`McpSession::list_changed`
+    /// counts the ones announced).
+    handled: watch::Receiver<u64>,
 }
 
 impl RunServer {
@@ -113,6 +116,20 @@ impl RunServer {
             held: self.held() || read_only.is_none(),
             read_only: read_only.unwrap_or(false),
         }
+    }
+
+    /// Waits until every list change the server announced so far has been listed and checked,
+    /// so `tools` and `trust` are current: a change announced with a call's result holds the
+    /// server before the next call is checked. Waits at most `mcp::ANSWER_TIMEOUT`, and not at
+    /// all once the run's tools are closed.
+    pub async fn settled(&self) {
+        let announced = *self.session.list_changed().borrow();
+        let mut handled = self.handled.clone();
+        let _ = tokio::time::timeout(
+            crate::mcp::ANSWER_TIMEOUT,
+            handled.wait_for(|n| *n >= announced),
+        )
+        .await;
     }
 }
 
@@ -232,6 +249,7 @@ impl RunTools {
                     if let Some(notice) = held_notice(&item.name, &catalog) {
                         notices.push(notice);
                     }
+                    let (handled_tx, handled) = watch::channel(0);
                     let server = RunServer {
                         accepted: accepted_tools(&catalog),
                         accepted_fingerprint: catalog.accepted_fingerprint.clone(),
@@ -242,8 +260,9 @@ impl RunTools {
                         session: Arc::new(session),
                         item_id: item.id,
                         name: item.name,
+                        handled,
                     };
-                    tools.watch(&server, changes, store, bus);
+                    tools.watch(&server, changes, handled_tx, store, bus);
                     tools.servers.push(server);
                 }
                 Err(e) => {
@@ -328,6 +347,7 @@ impl RunTools {
         &self,
         server: &RunServer,
         mut changes: watch::Receiver<u64>,
+        handled: watch::Sender<u64>,
         store: &Store,
         bus: &Bus,
     ) {
@@ -342,6 +362,7 @@ impl RunTools {
                     _ = stop.cancelled() => return,
                     changed = changes.changed() => if changed.is_err() { return },
                 }
+                let announced = *changes.borrow_and_update();
                 let listed = match session.list_tools().await {
                     Ok(listed) => listed,
                     Err(e) => {
@@ -349,6 +370,7 @@ impl RunTools {
                         if session.is_stopped() {
                             return;
                         }
+                        handled.send_replace(announced);
                         continue;
                     }
                 };
@@ -359,9 +381,12 @@ impl RunTools {
                         false
                     }
                 };
-                let mut live = live.lock().unwrap();
-                live.tools = listed;
-                live.held |= !accepted;
+                {
+                    let mut live = live.lock().unwrap();
+                    live.tools = listed;
+                    live.held |= !accepted;
+                }
+                handled.send_replace(announced);
             }
         });
         self.watchers.lock().unwrap().push(handle);

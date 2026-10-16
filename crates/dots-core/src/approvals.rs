@@ -9,8 +9,8 @@ use tokio::sync::oneshot;
 
 use crate::engine::{PermissionGate, PermissionOutcome};
 use crate::events::{Bus, RuntimeEvent};
-use crate::model::{ApplyState, Approval, ApprovalStatus, EngineKind};
-use crate::policy::{Action, Rule};
+use crate::model::{ApplyState, Approval, ApprovalStatus, Dot, EngineKind};
+use crate::policy::{Action, McpTrust, Rule};
 use crate::store::Store;
 use crate::util::json_hash;
 use crate::{Error, Result};
@@ -189,10 +189,11 @@ impl ApprovalHub {
         input: Value,
         wait: Duration,
         self_apply: bool,
+        mcp_fingerprint: Option<&str>,
     ) -> Result<PermissionOutcome> {
         let approval = self
             .store
-            .create_approval_with(run_id, tool, &input, self_apply)
+            .create_mcp_approval(run_id, tool, &input, self_apply, mcp_fingerprint)
             .await?;
         let (tx, mut rx) = oneshot::channel();
         self.waiters.lock().unwrap().insert(approval.id.clone(), tx);
@@ -226,6 +227,33 @@ impl ApprovalHub {
             message: parked_message(&approval.id),
         })
     }
+
+    /// Carries out what the policy resolved for a call of `dot`'s run.
+    async fn act(
+        &self,
+        action: Action,
+        run_id: &str,
+        dot: &Dot,
+        tool: &str,
+        input: Value,
+        mcp_fingerprint: Option<&str>,
+    ) -> Result<PermissionOutcome> {
+        match action {
+            Action::Allow => Ok(PermissionOutcome::Allow { input }),
+            Action::Deny => Ok(PermissionOutcome::Deny {
+                message: format!(
+                    "Denied by the policy of dot '{}': {tool} is not permitted.",
+                    dot.spec.name
+                ),
+            }),
+            Action::Ask => {
+                let wait = Duration::from_secs(dot.spec.approval_wait_secs);
+                let self_apply = self.self_apply.lock().unwrap().contains(&dot.spec.engine);
+                self.ask(run_id, tool, input, wait, self_apply, mcp_fingerprint)
+                    .await
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -241,20 +269,25 @@ impl PermissionGate for ApprovalHub {
             return Ok(PermissionOutcome::Allow { input });
         }
         let workspace = run.workspace_path.as_deref().map(Path::new);
-        match dot.spec.policy.resolve_in(tool, &input, workspace) {
-            Action::Allow => Ok(PermissionOutcome::Allow { input }),
-            Action::Deny => Ok(PermissionOutcome::Deny {
-                message: format!(
-                    "Denied by the policy of dot '{}': {tool} is not permitted.",
-                    dot.spec.name
-                ),
-            }),
-            Action::Ask => {
-                let wait = Duration::from_secs(dot.spec.approval_wait_secs);
-                let self_apply = self.self_apply.lock().unwrap().contains(&dot.spec.engine);
-                self.ask(run_id, tool, input, wait, self_apply).await
-            }
-        }
+        let action = dot.spec.policy.resolve_in(tool, &input, workspace);
+        self.act(action, run_id, &dot, tool, input, None).await
+    }
+
+    /// No one-shot grant is taken here: the local engine never gets one, and a grant for an
+    /// MCP call must also match the server's fingerprint (the Claude engine's gateway).
+    async fn check_mcp(
+        &self,
+        run_id: &str,
+        tool: &str,
+        input: Value,
+        trust: McpTrust,
+        fingerprint: Option<String>,
+    ) -> Result<PermissionOutcome> {
+        let run = self.store.get_run(run_id).await?;
+        let dot = self.store.get_dot(&run.dot_id).await?;
+        let action = dot.spec.policy.resolve_mcp(tool, &input, trust);
+        self.act(action, run_id, &dot, tool, input, fingerprint.as_deref())
+            .await
     }
 
     async fn claim_apply(&self, approval_id: &str) -> Result<bool> {

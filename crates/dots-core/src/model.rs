@@ -511,4 +511,8 @@ pub struct Approval {
     pub apply_state: Option<ApplyState>,
     /// When the call ended `applied` or `failed`.
     pub applied_at: Option<String>,
+    /// For an MCP tool (`mcp__<server>__<tool>`): the server's accepted fingerprint when the
+    /// call asked, `None` when it had no accepted list. A decided call goes through later only
+    /// while the server's accepted fingerprint is still this one (MCP/skills spec section 4).
+    pub mcp_fingerprint: Option<String>,
 }

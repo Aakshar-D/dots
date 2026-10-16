@@ -12,6 +12,7 @@ use crate::policy::{Action, Policy};
 mod fs;
 mod search;
 mod shell;
+pub mod skill;
 
 /// Tool output sent back to the model is capped at this many bytes.
 pub const MAX_OUTPUT: usize = 30 * 1024;
@@ -21,6 +22,8 @@ pub const MAX_READ_BYTES: u64 = 10 * 1024 * 1024;
 pub const MAX_ENTRIES: usize = 500;
 
 /// (local tool name, policy alias). The policy, grants and approvals only see the alias.
+/// `skill` reads the run's skills, not the workspace: the engine runs it (`skill::run`) and
+/// offers it only to a run that has skills.
 pub const TOOLS: &[(&str, &str)] = &[
     ("read_file", "Read"),
     ("write_file", "Write"),
@@ -29,6 +32,7 @@ pub const TOOLS: &[(&str, &str)] = &[
     ("glob", "Glob"),
     ("grep", "Grep"),
     ("shell", "Bash"),
+    ("skill", "Skill"),
 ];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -123,6 +127,7 @@ const ARGS: &[(&str, Params)] = &[
         "shell",
         &[("command", Str, true), ("timeout", Count, false)],
     ),
+    ("skill", &[("name", Str, true), ("file", Str, false)]),
 ];
 
 /// Checks a model tool call before the policy sees it: a known tool, arguments that form a
@@ -434,7 +439,7 @@ const SHELL_DESCRIPTION: &str = "Run a PowerShell command in the workspace direc
 const SHELL_DESCRIPTION: &str = "Run a sh command in the workspace directory and return its \
     output. Default timeout 120 seconds, maximum 600.";
 
-/// OpenAI `tools` array for every built-in tool.
+/// OpenAI `tools` array for every built-in tool but `skill` (`skill::schema`).
 pub fn schemas() -> Value {
     let s = |d: &str| json!({"type": "string", "description": d});
     let path = s("File path relative to the workspace root");

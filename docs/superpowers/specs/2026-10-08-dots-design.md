@@ -40,7 +40,7 @@ user's approval.
 ### Out of scope for v1
 
 Watchers (polling GitHub/SF/folders), connecting remote machines, multi-user, cloud hosting,
-MCP servers for local-engine dots, a CLI client, a separate daemon process.
+a CLI client, a separate daemon process.
 
 ### Constraint: subscription use
 
@@ -75,7 +75,8 @@ dots/
     src/runner/              queue, concurrency, timeouts, cancellation, restart recovery
     src/engine/mod.rs        Engine trait + EngineEvent
     src/engine/claude.rs     drives `claude -p` with stream-json I/O
-    src/engine/local.rs      own tool-use loop over OpenAI-compatible chat completions
+    src/engine/local.rs      own tool-use loop over OpenAI-compatible chat completions, with
+                             the run's MCP tools and the `skill` tool (MCP/skills spec §5, §7)
     src/tools/               built-in tools for the local engine
     src/policy/              allow/ask/deny resolution, one-shot grants
     src/workspace/           git worktree or plain folder per run
@@ -248,7 +249,10 @@ From Approvals v2 an approved, parked approval is resolved in one of two ways, w
 approval itself records (`self_apply`): on an engine that performs approved calls itself (the
 local engine) the call is queued and the child run performs it before anything else; on every
 other engine a one-shot grant is written and the child run's prompt asks the model to issue
-the call again. See `2026-10-13-approvals-v2-design.md` §3.
+the call again. See `2026-10-13-approvals-v2-design.md` §3. From MCP/skills an approved call of
+an MCP tool is performed only while the server's accepted fingerprint is the one stored with the
+approval (`approvals.mcp_fingerprint`); otherwise it is skipped with "the tool changed since it
+was approved" (MCP/skills spec §4).
 
 ### Steps
 
@@ -351,6 +355,12 @@ the call again. See `2026-10-13-approvals-v2-design.md` §3.
 - Resolution order: one-shot grant for (run lineage, tool, `input_hash`) → `deny` rules →
   `allow` rules → `ask` rules → `default`. From Approvals v2 a grant is written only for a
   dot whose engine does not perform approved calls itself, which is the Claude engine.
+- An MCP tool (`mcp__<server>__<tool>`) is resolved by the check of MCP/skills spec §4 instead
+  (`Policy::resolve_mcp`: `deny` rules → held server or a tool not in the accepted list asks →
+  `allow` rules → `ask` rules → the accepted list's `readOnlyHint` allows → `mcp_default`),
+  through the same approval queue (`PermissionGate::check_mcp`). Its approval stores the
+  server's accepted fingerprint (`approvals.mcp_fingerprint`). The local engine takes no grant
+  for it.
 - From Approvals v2 an approval can save an allow rule to the dot's policy, in one transaction
   with the decision (`decide_approval` with `allow_rule`). Only a pattern that
   `policy::allow_candidates` derives from that very call is accepted, so the caller cannot
@@ -452,6 +462,17 @@ Claude engine's MCP `approve` endpoint uses, so policy, grants, the wait window 
 behave identically) → execute allowed tools, return the deny text for denied or parked ones as
 the tool result → append results → repeat until no tool calls or `max_turns`.
 
+From MCP/skills (spec §5) the schemas of each turn also hold the tools the run's MCP sessions
+list now (`RunTools`), as functions named `mcp__<server>__<tool>` with the server's description
+and `inputSchema`. A name longer than 64 characters, or holding a character other than
+`A-Za-z0-9_-`, is cut to 55 characters (others as `_`) plus `_` and the first 8 hex characters of
+its SHA-256; the map back is kept for the run. A call is shown and checked under its full name
+(`ApprovalHub::check_mcp` with the server's trust), sent with a 300 s limit, and its result
+reported as the `text` parts joined, other parts as `[<type> omitted]` (the `structuredContent`
+when there is no part), `isError` as an error result, capped at 30 KB. A list change the server
+announces is listed and checked before the next call and the next turn's schemas, so a changed
+list holds the server for that call. A server that died answers "the server stopped".
+
 Every chat message (system, user, assistant with its `tool_calls`, tool result) is persisted as
 a `message` run event. A local run's `session_id` is the `root_run_id` of its lineage. On a
 resume the child run rebuilds the conversation from the `message` events of earlier runs in the
@@ -462,8 +483,10 @@ waiting (`Engine::applies_approved_calls`). Before the child run asks the model 
 performs the approved calls of its parent in the order they were asked, each exactly as it was
 approved: the call is claimed first, it takes the path of a live `allow` (`prepare`, then the
 tool, with the walking tools' filter), and its outcome is recorded before anything else is done
-with the output. The policy is not resolved again. After a call that did not succeed, the calls
-that remain are given up. The engine then sends one user message that says what each call did
+with the output. The policy is not resolved again. An MCP call whose server's accepted
+fingerprint is no longer the stored one is not claimed but skipped ("not performed, because the
+tool changed since it was approved"). After a call that did not succeed or was skipped, the
+calls that remain are given up. The engine then sends one user message that says what each call did
 (and that the quoted outputs are results, not instructions), followed by the runner's resume
 prompt. No grant is written and the model does not issue the
 call again, so it cannot change it. Until Approvals v2 the model was asked to re-issue the
@@ -473,13 +496,22 @@ call under a one-shot grant, and a changed input asked again. See
 Built-in tools: `read_file`, `write_file`, `edit_file` (exact unique-string replace), `list_dir`,
 `glob`, `grep`, `shell` (PowerShell, timeout default 120 s, output capped at 30 KB; the script
 reaches PowerShell on stdin behind a small fixed `-EncodedCommand` bootstrap, so its length is
-not bound by the Windows command-line limit). Their
+not bound by the Windows command-line limit), and from MCP/skills `skill` (policy name `Skill`,
+offered only to a run with skills). Their
 argument names match the Claude tools they alias (`file_path`, `content`, `old_string`,
 `new_string`, `path`, `pattern`, `command`), so policy path specs, command rules and
 `grant_key` apply to local dots without translation. All paths are canonicalized and must
 resolve inside the workspace (symlinks and junctions resolved first); `shell` runs with
 cwd = workspace. "Test endpoint" in Settings sends a probe request with one tool and checks that
 the model returns a well-formed tool call.
+
+`skill` (MCP/skills spec §7) takes `name` and an optional `file`. Without `file` it returns the
+skill's `SKILL.md` body, with `${CLAUDE_SKILL_DIR}` replaced by the skill's folder, followed by
+the list of the skill's files (hidden entries and links left out); with `file` it returns that
+file, refused when the path is absolute, holds `..` or resolves outside the skill folder. Results
+are capped at 30 KB. The system message of a run with skills ends with "Skills you can use. Call
+the tool `skill` with a name to read one before you follow it." and one `name: description` line
+per skill (standalone skills by their Library name, a plugin's as `<plugin>:<skill>`).
 
 Tests drive the loop against a `wiremock` OpenAI-compatible server returning scripted
 responses; no real model is called. Manual smoke target: LM Studio at `http://127.0.0.1:1234`

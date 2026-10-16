@@ -9,6 +9,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::library::LibraryItem;
 use crate::model::{ApplyState, Approval, Dot};
+use crate::policy::McpTrust;
 use crate::run_tools::RunTools;
 use crate::Result;
 
@@ -144,6 +145,22 @@ pub enum PermissionOutcome {
 #[async_trait]
 pub trait PermissionGate: Send + Sync {
     async fn check(&self, run_id: &str, tool: &str, input: Value) -> Result<PermissionOutcome>;
+
+    /// Checks a call of the MCP tool `tool` (`mcp__<server>__<tool>`) with what the run knows of
+    /// its server (`Policy::resolve_mcp`). An approval it asks for stores `fingerprint`, the
+    /// server's accepted one. A gate that does not check MCP calls denies them.
+    async fn check_mcp(
+        &self,
+        _run_id: &str,
+        tool: &str,
+        _input: Value,
+        _trust: McpTrust,
+        _fingerprint: Option<String>,
+    ) -> Result<PermissionOutcome> {
+        Ok(PermissionOutcome::Deny {
+            message: format!("{tool} cannot be checked, so it is not permitted."),
+        })
+    }
 
     /// Claims an approved call that waits for Dots to perform it. False means the call is not
     /// the caller's to perform, and it must not be run. A gate without approvals claims nothing.

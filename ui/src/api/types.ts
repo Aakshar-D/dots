@@ -176,6 +176,8 @@ const approvalShape = {
   self_apply: z.boolean(),
   apply_state: nullable(ApplyState),
   applied_at: nullable(z.string()),
+  // For an MCP call: the server's accepted fingerprint when it asked.
+  mcp_fingerprint: nullable(z.string()),
 };
 export const Approval = z.strictObject(approvalShape);
 

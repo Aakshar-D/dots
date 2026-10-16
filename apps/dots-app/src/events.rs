@@ -285,6 +285,7 @@ mod tests {
                 self_apply: false,
                 apply_state: None,
                 applied_at: None,
+                mcp_fingerprint: None,
             },
         }
     }

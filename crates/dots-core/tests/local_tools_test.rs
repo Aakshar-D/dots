@@ -152,9 +152,10 @@ fn prepare_validates_calls_before_the_policy() {
     let err = tools::prepare("read_file", &json!({"file_path": "../x"}), p).unwrap_err();
     assert!(err.contains(".."), "{err}");
     assert_eq!(tools::alias("grep"), Some("Grep"));
+    // Every local tool but `skill`, which a run gets only with skills (`skill::schema`).
     assert_eq!(
         tools::schemas().as_array().unwrap().len(),
-        tools::TOOLS.len()
+        tools::TOOLS.len() - 1
     );
 }
 
@@ -192,6 +193,8 @@ fn a_prepared_input_passes_prepare_again_unchanged() {
         ),
         ("shell", json!({"command": "git status", "timeout": 30})),
         ("shell", json!("{\"command\": \"git log -1\"}")),
+        ("skill", json!({"name": "pdf", "file": "ref/a.md"})),
+        ("skill", json!({"name": "forms:fill", "file": ""})),
     ];
     let mut tools_seen = std::collections::BTreeSet::new();
     for (name, args) in &calls {
