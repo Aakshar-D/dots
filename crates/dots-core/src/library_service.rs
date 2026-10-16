@@ -243,16 +243,30 @@ pub(crate) async fn sync_plugin_servers(
     Ok(warnings)
 }
 
+/// A plugin read again at a run's start (`refresh_plugin`).
+#[derive(Debug)]
+pub(crate) struct RefreshedPlugin {
+    pub info: PluginInfo,
+    /// What the run reports about the plugin, each to be prefixed with its name.
+    pub warnings: Vec<String>,
+    /// A run event of its own: the plugin moved and its hooks were switched off.
+    pub notice: Option<String>,
+    /// Whether the plugin's hooks run, as stored now.
+    pub run_hooks: bool,
+}
+
 /// Reads the plugin's folder again, as a run does at its start (spec section 6). An installed
 /// plugin whose folder is gone is looked up in Claude Code's list again, and its new folder is
-/// stored. Its MCP server items are brought in line. `Ok(Err(reason))` when the folder cannot
-/// be used: "folder not found" or "could not be read: ...".
+/// stored; its hooks are switched off, since the folder they would run from is a new one, with
+/// a notice when they were on. Its MCP server items are brought in line. `Ok(Err(reason))`
+/// when the folder cannot be used: "folder not found" or "could not be read: ...".
 pub(crate) async fn refresh_plugin(
     store: &Store,
     bus: &Bus,
     item: &LibraryItem,
-) -> Result<std::result::Result<(PluginInfo, Vec<String>), String>> {
+) -> Result<std::result::Result<RefreshedPlugin, String>> {
     let mut config = plugin_config(item)?.clone();
+    let mut notice = None;
     if !Path::new(&config.path).is_dir() {
         let moved = config.installed_id.clone().and_then(|id| {
             kit::find_installed(&process_env, &id)
@@ -261,6 +275,14 @@ pub(crate) async fn refresh_plugin(
         });
         if let Some(path) = moved {
             config.path = path.to_string_lossy().into_owned();
+            if config.run_hooks {
+                config.run_hooks = false;
+                notice = Some(format!(
+                    "the plugin {} moved, so its hooks were switched off; switch them on again \
+                     in the Library",
+                    item.name
+                ));
+            }
             match store
                 .update_library_item(&item.id, &LibraryConfig::Plugin(config.clone()))
                 .await
@@ -287,7 +309,12 @@ pub(crate) async fn refresh_plugin(
         Err(Error::NotFound(_)) => return Ok(Err(GONE.into())),
         Err(e) => return Err(e),
     }
-    Ok(Ok((info, warnings)))
+    Ok(Ok(RefreshedPlugin {
+        info,
+        warnings,
+        notice,
+        run_hooks: config.run_hooks,
+    }))
 }
 
 pub struct LibraryService {

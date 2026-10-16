@@ -214,16 +214,18 @@ impl RunTools {
         let mut notices = Vec::new();
 
         // Plugins first: reading one brings its MCP server items in line.
-        let mut plugins: Vec<(LibraryItem, PluginInfo)> = Vec::new();
+        // Each with whether its hooks run, as stored after the reading.
+        let mut plugins: Vec<(LibraryItem, PluginInfo, bool)> = Vec::new();
         let mut left_out = HashSet::new();
         for name in &uses.plugins {
             let Some(item) = store.find_library_item(LibraryKind::Plugin, name).await? else {
                 continue;
             };
             match refresh_plugin(store, bus, &item).await? {
-                Ok((info, warnings)) => {
-                    notices.extend(warnings.iter().map(|w| format!("plugin {name}: {w}")));
-                    plugins.push((item, info));
+                Ok(read) => {
+                    notices.extend(read.notice);
+                    notices.extend(read.warnings.iter().map(|w| format!("plugin {name}: {w}")));
+                    plugins.push((item, read.info, read.run_hooks));
                 }
                 Err(reason) => {
                     notices.push(format!("plugin {name}: {reason}"));
@@ -300,7 +302,7 @@ impl RunTools {
                 Err(e) => notices.push(format!("skill {name}: {}", skill_problem(&dir, &e))),
             }
         }
-        for (item, info) in &plugins {
+        for (item, info, _) in &plugins {
             for (name, skill) in info.qualified_skills(&item.name) {
                 tools.skills.push(RunSkill {
                     name,
@@ -313,10 +315,10 @@ impl RunTools {
         if let Some(dir) = plugins_dir {
             let kit_plugins: Vec<KitPlugin> = plugins
                 .iter()
-                .map(|(item, info)| KitPlugin {
+                .map(|(item, info, run_hooks)| KitPlugin {
                     name: item.name.clone(),
                     dir: info.root.clone(),
-                    run_hooks: matches!(&item.config, LibraryConfig::Plugin(c) if c.run_hooks),
+                    run_hooks: *run_hooks,
                 })
                 .collect();
             let (dir, run_id) = (dir.to_path_buf(), run_id.to_string());

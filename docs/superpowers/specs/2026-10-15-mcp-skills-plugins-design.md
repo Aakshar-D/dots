@@ -164,7 +164,7 @@ The tools of every open session are added to the tools sent to the model, as Ope
 | A server dies during a run | Its tools return "the server stopped"; no restart |
 | A call is made to a tool the accepted list does not have | Step 2 of the check: ask |
 | A skill or plugin folder is missing, or `SKILL.md` is missing | That item is left out, with a run event ("skill pdf: folder not found") |
-| An installed plugin's `installPath` no longer exists | Dots looks up `installed_id` in `installed_plugins.json` again and uses the new path; if none, the plugin is left out with an event |
+| An installed plugin's `installPath` no longer exists | Dots looks up `installed_id` in `installed_plugins.json` again and stores the new path, with `run_hooks` off: the hooks the person allowed were those of the old folder. If they were on, the run gets the event "the plugin <name> moved, so its hooks were switched off; switch them on again in the Library" and runs without them. If there is no new path, the plugin is left out with an event |
 | A plugin copy is larger than 50 MB | Left out, with an event |
 | A dot uses an item that was deleted | Not possible: delete removes it from `uses` |
 | The person changes a server's config | The catalog is reset to `unchecked` and the next check asks to accept. When an http server moves to another origin (scheme, host, port, as the HTTP client reaches them after `${VAR}` in the URL is expanded), the accepted list is dropped too, so the same tools at a new host are not accepted again silently |

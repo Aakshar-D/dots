@@ -20,6 +20,9 @@ use serde_json::{json, Value};
 use tempfile::TempDir;
 use tokio::sync::broadcast;
 
+/// Held by the tests that set `CLAUDE_CODE_PLUGIN_CACHE_DIR`, which the process shares.
+static CACHE_DIR_VAR: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 fn service(store: &Store, bus: &Bus) -> LibraryService {
     LibraryService::new(store.clone(), bus.clone())
 }
@@ -528,6 +531,7 @@ async fn environment_variables_say_which_are_set_and_never_their_values() {
 
 #[tokio::test]
 async fn installed_plugins_are_read_from_the_cache_folder() {
+    let _var = CACHE_DIR_VAR.lock().await;
     let (dir, store) = temp_store().await;
     let bus = new_bus();
     let lib = service(&store, &bus);
@@ -670,4 +674,95 @@ async fn runs_opening_one_plugin_together_after_its_servers_changed_all_succeed(
         .map(|i| i.name)
         .collect();
     assert_eq!(owned, ["plugin_forms_beta", "plugin_forms_gamma"]);
+}
+
+/// A run that finds an installed plugin at a new folder stores the folder and switches its hooks
+/// off: the hooks the person allowed were those of the old folder. The run copies the plugin
+/// without them and says so; a later run says nothing more.
+#[tokio::test]
+async fn an_installed_plugin_that_moved_has_its_hooks_switched_off() {
+    use dots_core::library::Uses;
+    use dots_core::run_tools::{OpenRequest, RunTools};
+    use tokio_util::sync::CancellationToken;
+
+    let _var = CACHE_DIR_VAR.lock().await;
+    let (dir, store) = temp_store().await;
+    let bus = new_bus();
+    let lib = service(&store, &bus);
+    let hooky = |name: &str| {
+        let path = plugin_dir(dir.path(), name, &[]);
+        write(&Path::new(&path).join("hooks").join("hooks.json"), "{}");
+        path
+    };
+    let old = hooky("forms-1.0");
+    lib.add(
+        "forms",
+        LibraryConfig::Plugin(PluginConfig {
+            path: old.clone(),
+            installed_id: Some("forms@mkt".into()),
+            run_hooks: true,
+        }),
+        None,
+    )
+    .await
+    .unwrap();
+    std::fs::remove_dir_all(&old).unwrap();
+    let new = hooky("forms-1.1");
+    let cache = dir.path().join("cache");
+    write(
+        &cache.join("installed_plugins.json"),
+        &json!({"plugins": {"forms@mkt": [{"scope": "user", "installPath": new}]}}).to_string(),
+    );
+    std::env::set_var("CLAUDE_CODE_PLUGIN_CACHE_DIR", &cache);
+    let uses = Uses {
+        plugins: vec!["forms".into()],
+        ..Default::default()
+    };
+    let plugins_dir = dir.path().join("plugins");
+    let open = |run_id: &'static str| {
+        let (store, bus, uses, ws, plugins_dir) = (&store, &bus, &uses, dir.path(), &plugins_dir);
+        async move {
+            RunTools::open(OpenRequest {
+                store,
+                bus,
+                run_id,
+                uses,
+                workspace: ws,
+                plugins_dir: Some(plugins_dir),
+                cancel: &CancellationToken::new(),
+            })
+            .await
+            .unwrap()
+        }
+    };
+    let (tools, notices) = open("01RUN").await;
+    assert_eq!(
+        notices,
+        [
+            "the plugin forms moved, so its hooks were switched off; switch them on again in the \
+          Library"
+        ]
+    );
+    let copy = plugins_dir.join("run-01RUN").join("forms");
+    assert!(copy.join("skills").join("fill").join("SKILL.md").is_file());
+    assert!(!copy.join("hooks").exists());
+    let stored = store
+        .find_library_item(LibraryKind::Plugin, "forms")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored.config,
+        LibraryConfig::Plugin(PluginConfig {
+            path: new,
+            installed_id: Some("forms@mkt".into()),
+            run_hooks: false,
+        })
+    );
+    tools.close().await;
+
+    let (tools, notices) = open("01RUN2").await;
+    std::env::remove_var("CLAUDE_CODE_PLUGIN_CACHE_DIR");
+    assert!(notices.is_empty(), "{notices:?}");
+    tools.close().await;
 }
