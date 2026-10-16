@@ -271,8 +271,19 @@ impl PermissionGate for ApprovalHub {
         {
             return Ok(PermissionOutcome::Allow { input });
         }
-        let workspace = run.workspace_path.as_deref().map(Path::new);
-        let action = dot.spec.policy.resolve_in(tool, &input, workspace);
+        // An MCP tool the CLI reached outside the gateway (not Dots' own `mcp__dots__*`) is
+        // never decided by `default`: it is an unknown tool, so deny and allow rules apply
+        // and anything else falls to `mcp_default` (spec section 4).
+        let action = if tool.starts_with("mcp__") && !tool.starts_with("mcp__dots__") {
+            let unknown = McpTrust {
+                held: false,
+                read_only: false,
+            };
+            dot.spec.policy.resolve_mcp(tool, &input, unknown)
+        } else {
+            let workspace = run.workspace_path.as_deref().map(Path::new);
+            dot.spec.policy.resolve_in(tool, &input, workspace)
+        };
         self.act(action, run_id, &dot, tool, input, None).await
     }
 

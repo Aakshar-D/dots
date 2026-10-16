@@ -555,3 +555,41 @@ async fn an_mcp_grant_allows_only_under_the_fingerprint_it_was_approved_with() {
         .unwrap());
     assert_eq!(store.approvals_for_run(&run.id).await.unwrap().len(), 1);
 }
+
+/// An MCP tool the CLI reached outside the gateway, asked about through `check`, is decided by
+/// the MCP check and never falls to `default` (MCP/skills spec section 4).
+#[tokio::test]
+async fn check_decides_an_mcp_tool_outside_the_gateway_by_the_mcp_default() {
+    let tool = "mcp__other__write";
+    // Trusted: default allow, but an unknown MCP tool asks (approval row, parks at once).
+    let (_d, store, hub, run, _bus) = setup(Preset::Trusted, 0).await;
+    assert!(matches!(
+        hub.check(&run.id, tool, json!({})).await.unwrap(),
+        PermissionOutcome::Deny { .. }
+    ));
+    assert_eq!(store.approvals_for_run(&run.id).await.unwrap().len(), 1);
+    // Read-only denies without asking.
+    let (_d, store, hub, run, _bus) = setup(Preset::ReadOnly, 0).await;
+    assert!(matches!(
+        hub.check(&run.id, tool, json!({})).await.unwrap(),
+        PermissionOutcome::Deny { .. }
+    ));
+    assert!(store.approvals_for_run(&run.id).await.unwrap().is_empty());
+    // An explicit allow rule allows; an explicit deny rule denies.
+    for (action, allowed) in [(Action::Allow, true), (Action::Deny, false)] {
+        let (_d, store, hub, run, _bus) = setup(Preset::Trusted, 0).await;
+        let mut dot = store.get_dot(&run.dot_id).await.unwrap();
+        dot.spec.policy.rules.push(Rule {
+            tool: "mcp__other__*".into(),
+            action,
+        });
+        store.update_dot(&dot.id, &dot.spec).await.unwrap();
+        let out = hub.check(&run.id, tool, json!({})).await.unwrap();
+        assert_eq!(
+            matches!(out, PermissionOutcome::Allow { .. }),
+            allowed,
+            "{action:?}"
+        );
+        assert!(store.approvals_for_run(&run.id).await.unwrap().is_empty());
+    }
+}

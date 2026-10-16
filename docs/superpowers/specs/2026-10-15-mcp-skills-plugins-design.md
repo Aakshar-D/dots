@@ -149,7 +149,7 @@ The tools of every open session are added to the tools sent to the model, as Ope
 ### Claude engine
 
 - `--mcp-config` lists, besides the existing `dots` entry, one entry per open session: `{"type": "http", "url": "http://127.0.0.1:<port>/mcp/s/<server>", "headers": {"Authorization": "Bearer <run secret>"}}`. `--strict-mcp-config` stays.
-- `--allowedTools mcp__<server>__*` is passed for each of them, so the CLI does not ask Dots' `approve` tool for these calls; the gateway decides instead.
+- `--allowedTools mcp__<server>__*` is passed for each of them, so the CLI does not ask Dots' `approve` tool for these calls; the gateway decides instead. `approve` answers allow for a gateway tool; for any other `mcp__*` tool it is asked about (not `mcp__dots__*`) it applies the section 4 check with no trust, so only deny and allow rules and `mcp_default` decide, never `default`.
 - The gateway route `POST /mcp/s/<server>` (loopback only, the run secret as today) answers `initialize`, `tools/list` from the run's open session, and `tools/call` by running the check of section 4, waiting for an approval if it asks, and forwarding the call to the server. A denied or parked call returns a tool result with `isError: true` and the same text the local engine gives.
 - `MCP_TOOL_TIMEOUT` stays `(approval_wait_secs + 30) × 1000`.
 

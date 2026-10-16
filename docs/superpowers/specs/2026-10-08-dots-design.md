@@ -441,7 +441,9 @@ the dot uses, its plugins' included), named as the server and pointing at the ga
 server itself, and no `${VAR}` value is written to the file. `--allowedTools` gets
 `mcp__<server>__*` for each of them, so the CLI does not ask `approve` for these calls: the
 gateway checks each one (§6), and the `approve` tool answers allow for a gateway tool in case it
-is asked. Each of the run's plugin folders (MCP/skills spec §7: `dots-skills` with the dot's
+is asked. Any other `mcp__*` tool it is asked about (not `mcp__dots__*`: a server the CLI reached
+by itself) is decided by the policy's MCP check with no trust, so deny and allow rules apply and
+anything else falls to `mcp_default`, never to `default`. Each of the run's plugin folders (MCP/skills spec §7: `dots-skills` with the dot's
 skills, then a copy of each plugin) is passed with `--plugin-dir`; each entry of the
 `system/init` event's `plugin_errors` becomes a `notice` run event and a log line. An empty `--setting-sources ""` keeps every settings file out of headless
 runs: the user's global hooks (GateGuard, caveman, memory hooks) and a repo's committed

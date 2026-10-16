@@ -661,3 +661,84 @@ async fn the_gateway_answers_a_running_runs_open_servers_and_checks_each_call() 
 
     tools.close().await;
 }
+
+/// `approve` for a tool: the decision JSON it answers.
+async fn approve(e: &Env, secret: &str, tool: &str) -> Value {
+    let reply: Value = rpc(
+        e,
+        "/mcp",
+        Some(secret),
+        json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+               "params": {"name": "approve", "arguments": {"tool_name": tool, "input": {}}}}),
+    )
+    .await
+    .json()
+    .await
+    .unwrap();
+    serde_json::from_str(reply["result"]["content"][0]["text"].as_str().unwrap()).unwrap()
+}
+
+#[tokio::test]
+async fn under_trusted_a_writing_gateway_tool_asks_and_so_does_a_tool_outside_the_gateway() {
+    let e = env(json!([]), false).await;
+    let fake = FakeMcp::new(json!({"tools": [tool("read", true), tool("write", false)]}));
+    add_server(&e, "files", fake.stdio()).await;
+    let dot = claude_dot(&e, |s| {
+        s.policy = Policy::preset(Preset::Trusted);
+        s.uses.mcp_servers = vec!["files".into()];
+        s.policy.rules.push(Rule {
+            tool: "mcp__allowed__*".into(),
+            action: Action::Allow,
+        });
+        s.policy.rules.push(Rule {
+            tool: "mcp__blocked__*".into(),
+            action: Action::Deny,
+        });
+    })
+    .await;
+    let run = e
+        .store
+        .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    let cancel = CancellationToken::new();
+    let (tools, _) = RunTools::open(OpenRequest {
+        store: &e.store,
+        bus: &e.bus,
+        run_id: &run.id,
+        uses: &dot.spec.uses,
+        workspace: e.dir.path(),
+        plugins_dir: None,
+        cancel: &cancel,
+    })
+    .await
+    .unwrap();
+    let secret = e.runner.register_secret(&run.id);
+    e.runner.register_tools(&run.id, Arc::new(tools));
+
+    // The gateway tool: a read runs, a write asks and parks.
+    let read = call(&e, &secret, "read", json!({})).await;
+    assert!(read["result"].get("isError").is_none(), "{read}");
+    let write = call(&e, &secret, "write", json!({"q": "w"})).await;
+    assert_eq!(write["result"]["isError"], true);
+    assert_eq!(e.store.approvals_for_run(&run.id).await.unwrap().len(), 1);
+    assert!(fake.received("tools/call").len() == 1);
+
+    // A tool of a server the CLI reached by itself is never decided by Trusted's default allow.
+    let other = approve(&e, &secret, "mcp__other__write").await;
+    assert_eq!(other["behavior"], "deny", "{other}");
+    let approvals = e.store.approvals_for_run(&run.id).await.unwrap();
+    assert_eq!(approvals.len(), 2);
+    assert_eq!(approvals[1].tool, "mcp__other__write");
+    // An explicit allow rule still allows, an explicit deny rule still denies, asking nothing.
+    assert_eq!(
+        approve(&e, &secret, "mcp__allowed__x").await["behavior"],
+        "allow"
+    );
+    assert_eq!(
+        approve(&e, &secret, "mcp__blocked__x").await["behavior"],
+        "deny"
+    );
+    assert_eq!(e.store.approvals_for_run(&run.id).await.unwrap().len(), 2);
+    e.runner.run_tools(&run.id).unwrap().close().await;
+}
