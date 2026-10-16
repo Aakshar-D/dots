@@ -330,3 +330,38 @@ pub fn remove_field(text: &str, key: &str) -> String {
     }
     out
 }
+
+/// Fail-closed cleaning: when the frontmatter of `text` is in a form this reader does not follow
+/// (an indented key, a flow mapping or explicit key, a quoted key with an escape), YAML parsers
+/// may still read a key that `remove_field` cannot find. Returns the text without its frontmatter
+/// block then; `None` when the form is understood or there is no closed frontmatter.
+pub(crate) fn drop_unsupported_frontmatter(text: &str) -> Option<String> {
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let opens = lines
+        .first()
+        .is_some_and(|l| is_open(l.strip_prefix('\u{feff}').unwrap_or(l)));
+    let close = (1..lines.len()).find(|&i| is_close(lines[i]))?;
+    if !opens {
+        return None;
+    }
+    let mut in_value = false;
+    let mut unsupported = false;
+    for raw in &lines[1..close] {
+        let line = raw.trim_end_matches(['\r', '\n']);
+        if is_blank(line) || is_comment(line) {
+            continue;
+        }
+        if in_value && (indent(line) > 0 || line.starts_with("- ") || line == "-") {
+            continue;
+        }
+        if indent(line) > 0
+            || line.starts_with(['{', '[', '?'])
+            || (line.starts_with('"') && line.split("\":").next().is_some_and(|k| k.contains('\\')))
+        {
+            unsupported = true;
+            break;
+        }
+        in_value = true;
+    }
+    unsupported.then(|| lines[close + 1..].concat())
+}

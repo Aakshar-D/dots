@@ -1,7 +1,7 @@
 //! The per-run plugin folders (MCP/skills spec section 7).
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use dots_core::kit::{prepare_run_kit, KitPlugin, KitSkill, MAX_COPY_BYTES};
 use dots_core::library::LibraryKind;
@@ -442,4 +442,123 @@ fn the_copied_manifest_is_named_after_the_library_item() {
         serde_json::from_str::<Value>(&read(&docs)).unwrap()["version"],
         "1"
     );
+}
+
+fn copy_of(name: &str, build: impl Fn(&Path), run_hooks: bool) -> (tempfile::TempDir, PathBuf) {
+    let tmp = tempdir().unwrap();
+    let root = tmp.path().join("src").join(name);
+    fs::create_dir_all(&root).unwrap();
+    build(&root);
+    let plugin = KitPlugin {
+        name: name.into(),
+        dir: root,
+        run_hooks,
+    };
+    let plugins = tmp.path().join("plugins");
+    prepare_run_kit(&plugins, "r1", &[], &[plugin]).unwrap();
+    let copy = plugins.join("run-r1").join(name);
+    (tmp, copy)
+}
+
+#[test]
+fn names_are_matched_without_regard_to_case() {
+    let (_tmp, copy) = copy_of(
+        "p",
+        |root| {
+            write(&root.join("Hooks").join("hooks.json"), "{}");
+            write(&root.join(".MCP.json"), "{}");
+            write(&root.join("Monitors").join("x"), "x");
+            write(
+                &root.join("Commands").join("go.md"),
+                "---\nallowed-tools: Bash(curl *)\n---\nGo\n",
+            );
+            write(
+                &root.join("skills").join("a").join("Skill.md"),
+                "---\nallowed-tools: Bash\n---\nA\n",
+            );
+        },
+        false,
+    );
+    assert!(!copy.join("Hooks").exists());
+    assert!(!copy.join(".MCP.json").exists());
+    assert!(!copy.join("Monitors").exists());
+    assert_eq!(read(&copy.join("Commands").join("go.md")), "---\n---\nGo\n");
+    assert_eq!(
+        read(&copy.join("skills").join("a").join("Skill.md")),
+        "---\n---\nA\n"
+    );
+}
+
+#[test]
+fn markdown_in_folders_named_by_the_manifest_is_cleaned_too() {
+    let (_tmp, copy) = copy_of(
+        "p",
+        |root| {
+            write(
+                &root.join(".claude-plugin").join("plugin.json"),
+                r#"{"commands":"./extra","agents":["./more"]}"#,
+            );
+            write(
+                &root.join("extra").join("go.MD"),
+                "---\nallowed-tools: Bash(curl *)\n---\nGo\n",
+            );
+            write(
+                &root.join("more").join("a.md"),
+                "---\nname: a\npermissionMode: bypassPermissions\nmcpServers:\n  x:\n    command: x\n---\nA\n",
+            );
+        },
+        false,
+    );
+    assert_eq!(read(&copy.join("extra").join("go.MD")), "---\n---\nGo\n");
+    assert_eq!(
+        read(&copy.join("more").join("a.md")),
+        "---\nname: a\n---\nA\n"
+    );
+}
+
+#[test]
+fn a_frontmatter_in_a_form_dots_does_not_read_is_dropped() {
+    let forms = [
+        "---\n{allowed-tools: \"Bash(*)\", description: x}\n---\nbody\n",
+        "---\n  allowed-tools: Bash(*)\n  description: x\n---\nbody\n",
+        "---\n\"allowed\\x2dtools\": Bash(*)\ndescription: x\n---\nbody\n",
+        "---\n? allowed-tools\n: Bash(*)\n---\nbody\n",
+    ];
+    let (_tmp, copy) = copy_of(
+        "p",
+        |root| {
+            for (i, form) in forms.iter().enumerate() {
+                write(&root.join("commands").join(format!("c{i}.md")), form);
+            }
+        },
+        false,
+    );
+    for i in 0..forms.len() {
+        assert_eq!(
+            read(&copy.join("commands").join(format!("c{i}.md"))),
+            "body\n",
+            "form {i}"
+        );
+    }
+}
+
+#[test]
+fn lsp_servers_are_left_out() {
+    let (_tmp, copy) = copy_of(
+        "p",
+        |root| {
+            write(&root.join(".LSP.json"), "{}");
+            write(
+                &root.join(".claude-plugin").join("plugin.json"),
+                r#"{"name":"p","lspServers":{"x":{"command":"x"}}}"#,
+            );
+            write(&root.join("sub").join(".lsp.json"), "{}");
+        },
+        true,
+    );
+    assert!(!copy.join(".LSP.json").exists());
+    assert!(copy.join("sub").join(".lsp.json").exists());
+    let manifest: Value =
+        serde_json::from_str(&read(&copy.join(".claude-plugin").join("plugin.json"))).unwrap();
+    assert!(manifest.get("lspServers").is_none());
 }

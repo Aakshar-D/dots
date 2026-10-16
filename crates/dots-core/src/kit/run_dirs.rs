@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
-use super::frontmatter::remove_field;
+use super::frontmatter::{drop_unsupported_frontmatter, remove_field};
 use crate::library::LibraryKind;
 use crate::{Error, Result};
 
@@ -87,32 +87,37 @@ fn collect(src: &Path, skip: &dyn Fn(&Path) -> bool) -> std::io::Result<Option<V
     Ok(Some(files))
 }
 
-/// The cleaned text of a copied file. A `SKILL.md`, a command file and an agent file lose
-/// `allowed-tools`, and `hooks` unless `run_hooks`; an agent file also loses `permissionMode`
-/// and `mcpServers`, always (an agent must not change Dots' permission handling or bring
-/// servers past the gateway).
+/// The cleaned text of a copied file. Every markdown file (whatever its folder or the case of its
+/// name: a manifest can point commands, agents and skills anywhere) loses `allowed-tools`, `hooks`
+/// unless `run_hooks`, and `permissionMode` and `mcpServers` (an agent must not change Dots'
+/// permission handling or bring servers past the gateway). A frontmatter in a form Dots does not
+/// understand is dropped whole, so that no spelling of a key survives.
 fn cleaned(rel: &Path, bytes: Vec<u8>, run_hooks: bool) -> Vec<u8> {
-    let is_md = rel.extension().is_some_and(|e| e == "md");
-    let is_skill = rel.file_name().is_some_and(|n| n == "SKILL.md");
-    let is_command = is_md && rel.starts_with("commands");
-    let is_agent = is_md && rel.starts_with("agents");
-    if !(is_skill || is_command || is_agent) {
+    if !rel
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("md"))
+    {
         return bytes;
     }
     let mut text = String::from_utf8_lossy(&bytes).into_owned();
+    if let Some(body) = drop_unsupported_frontmatter(&text) {
+        tracing::warn!(
+            "dropped the frontmatter of {} in a plugin copy: a form Dots does not read",
+            rel.display()
+        );
+        return body.into_bytes();
+    }
     text = remove_field(&text, "allowed-tools");
     if !run_hooks {
         text = remove_field(&text, "hooks");
     }
-    if is_agent {
-        text = remove_field(&text, "permissionMode");
-        text = remove_field(&text, "mcpServers");
-    }
+    text = remove_field(&text, "permissionMode");
+    text = remove_field(&text, "mcpServers");
     text.into_bytes()
 }
 
 /// Writes the copy's manifest: the original (when it is a JSON object) without `mcpServers`,
-/// `monitors` and, unless `run_hooks`, `hooks`; `name` set to the plugin's Library name, so
+/// `lspServers`, `monitors` and, unless `run_hooks`, `hooks`; `name` set to the plugin's Library name, so
 /// Claude Code calls its skills `<name>:<skill>`. A plugin with no manifest, or an unreadable
 /// one, gets `{"name": ...}`.
 fn write_manifest(dest: &Path, name: &str, run_hooks: bool) -> std::io::Result<()> {
@@ -122,6 +127,7 @@ fn write_manifest(dest: &Path, name: &str, run_hooks: bool) -> std::io::Result<(
         _ => serde_json::Map::new(),
     };
     manifest.remove("mcpServers");
+    manifest.remove("lspServers");
     manifest.remove("monitors");
     if !run_hooks {
         manifest.remove("hooks");
@@ -172,10 +178,11 @@ fn copy_folder(
 ///
 /// - `dots-skills/`: a generated plugin whose `skills/<name>/` holds a copy of each skill;
 /// - `<name>/`: a copy of each plugin, its manifest named `<name>`, without `.mcp.json` (its servers go through the gateway),
-///   without `monitors/`, and without `hooks/` unless `run_hooks`.
+///   without `.lsp.json` and `lspServers`, without `monitors/`, and without `hooks/` unless
+///   `run_hooks` (those names are matched without regard to case).
 ///
-/// Every copied `SKILL.md`, command and agent file loses `allowed-tools`, `hooks` (unless the
-/// plugin's `run_hooks`) and, for an agent, `permissionMode` and `mcpServers`. A skill or plugin that is
+/// Every copied markdown file loses `allowed-tools`, `hooks` (unless the plugin's `run_hooks`),
+/// `permissionMode` and `mcpServers`. A skill or plugin that is
 /// missing, has no `SKILL.md` (a skill), or is over 50 MB is listed in `left_out`. Nothing is
 /// created when nothing goes in. This blocks: call it from `spawn_blocking`.
 pub fn prepare_run_kit(
@@ -244,11 +251,17 @@ pub fn prepare_run_kit(
         let skip = move |rel: &Path| {
             let first = rel.components().next().map(|c| c.as_os_str().to_owned());
             let top = rel.components().count() == 1;
-            match first.as_deref().and_then(|f| f.to_str()) {
-                Some(".mcp.json") => top,
-                Some("monitors") => true,
-                Some("hooks") => !run_hooks,
-                _ => false,
+            let first = first.as_deref().and_then(|f| f.to_str()).unwrap_or("");
+            // Names are matched without regard to case: NTFS and Claude Code both are lenient.
+            let is = |name: &str| first.eq_ignore_ascii_case(name);
+            if is(".mcp.json") || is(".lsp.json") {
+                top
+            } else if is("monitors") {
+                true
+            } else if is("hooks") {
+                !run_hooks
+            } else {
+                false
             }
         };
         let copied = copy_folder(&plugin.dir, &dest, run_hooks, &skip).and_then(|()| {

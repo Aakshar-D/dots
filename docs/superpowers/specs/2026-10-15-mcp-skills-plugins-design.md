@@ -176,8 +176,8 @@ The tools of every open session are added to the tools sent to the model, as Ope
 For each run Dots writes plugin folders under `<data_dir>/plugins/run-<run_id>/` and passes each with `--plugin-dir`:
 
 - `dots-skills/`: a generated plugin (`.claude-plugin/plugin.json` with `"name": "dots-skills"`) whose `skills/` holds a copy of each standalone skill the dot uses. Its skills appear as `dots-skills:<name>`.
-- One copy of each plugin the dot uses, without `.mcp.json` (its servers go through the gateway), without `hooks/` unless `run_hooks` is on, and without `monitors/`.
-- In every copied `SKILL.md` and command file, Dots removes the `allowed-tools` field from the frontmatter, so a skill cannot let itself run a tool without Dots' check.
+- One copy of each plugin the dot uses, without `.mcp.json` (its servers go through the gateway), without `.lsp.json` and the manifest's `lspServers` (Claude Code would start LSP servers itself), without `hooks/` unless `run_hooks` is on, and without `monitors/`. These names are matched without regard to case.
+- In every markdown file of a copy (skills, commands, agents, in any folder the manifest names), Dots removes the `allowed-tools` field from the frontmatter, so nothing can let itself run a tool without Dots' check; it also removes `hooks` (unless `run_hooks`), `permissionMode` and `mcpServers`. A frontmatter in a form Dots does not read (an indented key, a flow mapping, an explicit `?` key, a quoted key with an escape) is dropped whole and the body kept.
 - The folders are deleted when the run ends, as the MCP config file is today.
 - Dots reads the CLI's `system/init` event: each entry of `plugin_errors` becomes a run event and a log line.
 - `--setting-sources` is unchanged: empty by default, `user,project,local` with `use_user_settings`.
