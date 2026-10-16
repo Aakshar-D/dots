@@ -230,3 +230,55 @@ fn a_new_catalog_is_unchecked() {
         CatalogStatus::Changed
     );
 }
+
+#[test]
+fn control_and_direction_characters_are_refused_in_what_a_dialog_shows() {
+    let with = |args: &[&str], cwd: Option<&str>, env: &[(&str, &str)]| {
+        LibraryConfig::McpServer(McpServerConfig::Stdio {
+            command: "node".into(),
+            args: args.iter().map(|a| a.to_string()).collect(),
+            cwd: cwd.map(String::from),
+            env: env
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        })
+    };
+    assert!(with(&["a b", "--x=\u{e9}"], Some("C:/d"), &[("A", "${A}")])
+        .validate()
+        .is_ok());
+    for bad in [
+        "\n", "\r", "\t", "\u{7f}", "\u{85}", "\u{202e}", "\u{2066}", "\u{2069}", "\u{200f}",
+        "\u{061c}",
+    ] {
+        let text = format!("x{bad}y");
+        assert!(invalid(with(&[&text], None, &[]).validate()), "arg {bad:?}");
+        assert!(
+            invalid(with(&[], Some(&text), &[]).validate()),
+            "cwd {bad:?}"
+        );
+        assert!(
+            invalid(with(&[], None, &[(&text, "v")]).validate()),
+            "key {bad:?}"
+        );
+        assert!(
+            invalid(with(&[], None, &[("K", &text)]).validate()),
+            "value {bad:?}"
+        );
+        let url = LibraryConfig::McpServer(McpServerConfig::Http {
+            url: format!("https://h/{text}"),
+            headers: BTreeMap::new(),
+        });
+        assert!(invalid(url.validate()), "url {bad:?}");
+        let header = LibraryConfig::McpServer(McpServerConfig::Http {
+            url: "https://h/".into(),
+            headers: BTreeMap::from([(text, "v".to_string())]),
+        });
+        assert!(invalid(header.validate()), "header {bad:?}");
+    }
+    assert_eq!(
+        dots_core::library::http_origin("HTTPS://user:p@Host.example:8443/a?b#c").as_deref(),
+        Some("https://host.example:8443")
+    );
+    assert_eq!(dots_core::library::http_origin("ftp://h/"), None);
+}

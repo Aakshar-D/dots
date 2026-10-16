@@ -328,7 +328,7 @@ pub async fn library_add(
 ) -> Res<LibraryItem> {
     let rt = state.rt()?;
     confirm::add_confirmed(&rt, &name, config, accept.as_deref(), |message| {
-        confirm::ask(&app, "Run this program?", message)
+        confirm::ask(&app, confirm::library_title(&message), message)
     })
     .await
 }
@@ -342,7 +342,7 @@ pub async fn library_update(
 ) -> Res<LibraryItem> {
     let rt = state.rt()?;
     confirm::update_confirmed(&rt, &id, config, |message| {
-        confirm::ask(&app, "Run this program?", message)
+        confirm::ask(&app, confirm::library_title(&message), message)
     })
     .await
 }
@@ -365,7 +365,7 @@ pub async fn library_probe(
 ) -> Res<McpProbe> {
     let rt = state.rt()?;
     confirm::probe_confirmed(&rt, config, |message| {
-        confirm::ask(&app, "Run this program?", message)
+        confirm::ask(&app, confirm::library_title(&message), message)
     })
     .await
 }

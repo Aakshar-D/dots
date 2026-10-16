@@ -249,26 +249,76 @@ impl LibraryConfig {
         }
     }
 
-    /// The config is complete: a command or an http(s) URL, a folder.
+    /// The config is complete: a command or an http(s) URL, a folder. Text Dots shows in a
+    /// confirmation (a stdio command line, folder and env, an http URL and header names) holds no
+    /// control or bidirectional format character, so what the person reads is what runs.
     pub fn validate(&self) -> Result<()> {
         match self {
-            Self::McpServer(McpServerConfig::Stdio { command, .. })
-                if command.trim().is_empty() =>
-            {
-                invalid("an MCP server needs the command that starts it")
+            Self::McpServer(McpServerConfig::Stdio {
+                command,
+                args,
+                cwd,
+                env,
+            }) => {
+                if command.trim().is_empty() {
+                    return invalid("an MCP server needs the command that starts it");
+                }
+                let parts = std::iter::once(command)
+                    .chain(args)
+                    .chain(cwd.iter())
+                    .chain(env.keys())
+                    .chain(env.values());
+                for part in parts {
+                    check_plain(part)?;
+                }
+                Ok(())
             }
-            Self::McpServer(McpServerConfig::Http { url, .. })
-                if !(url.starts_with("http://") || url.starts_with("https://")) =>
-            {
-                invalid(format!(
-                    "MCP server URL must start with http:// or https://: {url}"
-                ))
+            Self::McpServer(McpServerConfig::Http { url, headers }) => {
+                if !(url.starts_with("http://") || url.starts_with("https://")) {
+                    return invalid(format!(
+                        "MCP server URL must start with http:// or https://: {url}"
+                    ));
+                }
+                for part in std::iter::once(url).chain(headers.keys()) {
+                    check_plain(part)?;
+                }
+                Ok(())
             }
             Self::Skill(c) if c.path.trim().is_empty() => invalid("a skill needs its folder"),
             Self::Plugin(c) if c.path.trim().is_empty() => invalid("a plugin needs its folder"),
             _ => Ok(()),
         }
     }
+}
+
+/// Refuses a control character (C0, DEL, C1) and a Unicode bidirectional format character
+/// (U+061C, U+200E, U+200F, U+202A-U+202E, U+2066-U+2069): they hide or reorder text in a dialog.
+fn check_plain(text: &str) -> Result<()> {
+    let bad = text.chars().find(|c| {
+        c.is_control()
+            || matches!(*c, '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+    });
+    match bad {
+        Some(c) => invalid(format!(
+            "an MCP server's command, arguments, folder, environment, URL and header names \
+             hold no control or direction character (found U+{:04X})",
+            c as u32
+        )),
+        None => Ok(()),
+    }
+}
+
+/// The origin (`scheme://host[:port]`, lower case, without credentials) of an http(s) URL, or
+/// `None` when the text is not one. A change of origin sends the server's requests elsewhere.
+pub fn http_origin(url: &str) -> Option<String> {
+    let (scheme, rest) = url.split_once("://")?;
+    let scheme = scheme.to_ascii_lowercase();
+    if scheme != "http" && scheme != "https" {
+        return None;
+    }
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = authority.rsplit('@').next().unwrap_or("");
+    (!host.is_empty()).then(|| format!("{scheme}://{}", host.to_ascii_lowercase()))
 }
 
 /// Whether a key names a secret: `TOKEN`, `KEY`, `SECRET`, `PASSWORD` or `AUTH` in it, in any

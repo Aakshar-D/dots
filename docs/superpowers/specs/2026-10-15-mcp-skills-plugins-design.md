@@ -167,7 +167,7 @@ The tools of every open session are added to the tools sent to the model, as Ope
 | An installed plugin's `installPath` no longer exists | Dots looks up `installed_id` in `installed_plugins.json` again and uses the new path; if none, the plugin is left out with an event |
 | A plugin copy is larger than 50 MB | Left out, with an event |
 | A dot uses an item that was deleted | Not possible: delete removes it from `uses` |
-| The person changes a server's config | The catalog is reset to `unchecked` and the next check asks to accept |
+| The person changes a server's config | The catalog is reset to `unchecked` and the next check asks to accept. When an http server moves to another origin (scheme, host, port), the accepted list is dropped too, so the same tools at a new host are not accepted again silently |
 
 ## 7. Skills and plugins in each engine
 

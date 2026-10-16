@@ -172,7 +172,8 @@ impl Store {
 
     /// Changes an item's config; its kind and name stay. A changed MCP server config resets
     /// the server's catalog to `unchecked` (spec section 6): what it lists must be checked and
-    /// accepted again. The accepted list stays for that review.
+    /// accepted again. The accepted list stays for that review, except when an http server
+    /// moves to another origin: then nothing accepted for the old host carries over.
     pub async fn update_library_item(
         &self,
         id: &str,
@@ -202,6 +203,15 @@ impl Store {
             return Err(Error::NotFound(format!("library item {id}")));
         }
         if config.kind() == LibraryKind::McpServer {
+            if moved_origin(&old.config, config) {
+                sqlx::query(
+                    "UPDATE mcp_catalogs SET accepted_fingerprint = NULL, accepted_tools = NULL \
+                     WHERE server_id = ?",
+                )
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+            }
             sqlx::query(
                 "UPDATE mcp_catalogs SET status = ?, seen_fingerprint = NULL, seen_tools = NULL, \
                  checked_at = NULL, error = NULL WHERE server_id = ?",
@@ -427,4 +437,18 @@ impl Store {
         }
         self.get_catalog(server_id).await
     }
+}
+
+/// Whether the origin of an http MCP server differs between two configs (a stdio server has none,
+/// so a move between stdio and http counts as moved).
+fn moved_origin(old: &LibraryConfig, new: &LibraryConfig) -> bool {
+    use crate::library::{http_origin, McpServerConfig};
+    let origin = |c: &LibraryConfig| match c {
+        LibraryConfig::McpServer(McpServerConfig::Http { url, .. }) => {
+            Some(http_origin(url).unwrap_or_else(|| url.clone()))
+        }
+        _ => None,
+    };
+    let (a, b) = (origin(old), origin(new));
+    a != b
 }

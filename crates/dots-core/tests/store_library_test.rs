@@ -716,3 +716,56 @@ async fn migration_0006_keeps_a_stored_mcp_default() {
     let store = Store::open(&path).await.unwrap();
     assert_eq!(store.get_dot("D1").await.unwrap().spec.policy, policy);
 }
+
+fn http(url: &str, header: &str) -> LibraryConfig {
+    LibraryConfig::McpServer(McpServerConfig::Http {
+        url: url.into(),
+        headers: BTreeMap::from([("X-Key".to_string(), header.to_string())]),
+    })
+}
+
+#[tokio::test]
+async fn moving_an_http_server_to_another_origin_drops_what_was_accepted() {
+    let (_d, store) = temp_store().await;
+    let tools = json!([{"name": "t"}]);
+    let item = store
+        .add_library_item("web", &http("https://a.example/mcp", "1"), None)
+        .await
+        .unwrap();
+    let accept = || async {
+        store
+            .record_catalog_seen(&item.id, "f1", &tools)
+            .await
+            .unwrap();
+        store.accept_catalog(&item.id, "f1").await.unwrap();
+    };
+    accept().await;
+
+    // Same origin (another path and header): the accepted list stays for the review.
+    store
+        .update_library_item(&item.id, &http("https://A.example/other", "2"))
+        .await
+        .unwrap();
+    let c = store.get_catalog(&item.id).await.unwrap();
+    assert_eq!(c.status, CatalogStatus::Unchecked);
+    assert_eq!(c.accepted_fingerprint.as_deref(), Some("f1"));
+    let c = store
+        .record_catalog_seen(&item.id, "f1", &tools)
+        .await
+        .unwrap();
+    assert_eq!(c.status, CatalogStatus::Accepted);
+
+    // Another host with the same tool list is not accepted again silently.
+    store
+        .update_library_item(&item.id, &http("https://b.example/mcp", "2"))
+        .await
+        .unwrap();
+    let c = store.get_catalog(&item.id).await.unwrap();
+    assert_eq!(c.accepted_fingerprint, None);
+    assert_eq!(c.accepted_tools, None);
+    let c = store
+        .record_catalog_seen(&item.id, "f1", &tools)
+        .await
+        .unwrap();
+    assert_eq!(c.status, CatalogStatus::Changed);
+}

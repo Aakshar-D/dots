@@ -2,7 +2,9 @@
 
 use std::future::Future;
 
-use dots_core::library::{LibraryConfig, LibraryItem, McpServerConfig};
+use dots_core::library::{
+    check_name, http_origin, LibraryConfig, LibraryItem, LibraryKind, McpServerConfig,
+};
 use dots_core::library_service::McpProbe;
 use dots_core::model::SettingsSaved;
 use dots_core::settings::Settings;
@@ -65,16 +67,22 @@ where
 
 /// The question to ask before Dots runs or stores what a Library `config` names, or `None`
 /// when none is needed. `stored` is the item's config now (`None` for a new item or a probe).
+/// Every part of a command line, folder, key, origin and plugin command line shows in double
+/// quotes with `"` and `\` escaped (a control or direction character, which the core refuses in a
+/// config, as `\u{..}`), so where one part ends is visible.
 /// - A stdio MCP server whose `command`, `args`, `cwd` or `env` differ from the stored ones (a
 ///   new server differs): Dots would start that program. `env` is compared as stored, the
 ///   `${VAR}` text, and the question names its keys, never values.
-/// - A plugin that starts stdio servers: `plugin_starts` holds their command lines, which the
-///   caller read from the plugin's `.mcp.json` when the plugin is new or its path changed (and
-///   left empty otherwise). It is combined with
-/// - a plugin whose `run_hooks` goes from off to on (a new plugin counts as off): its hooks run
-///   commands without approval.
+/// - An http MCP server whose `url` or header values name `${VAR}`: Dots would send the values of
+///   those variables to the URL's origin. It asks when the origin or the set of variable names is
+///   new or changed (a stored stdio server or other kind counts as new). Names, never values.
+/// - A plugin that starts stdio servers: `plugin_starts` holds their (quoted) command lines, which
+///   the caller read from the plugin's `.mcp.json` when the plugin is new or its path changed
+///   (and left empty otherwise). It is combined with
+/// - a plugin whose hooks are newly on: `run_hooks` went from off to on, or is on at a new path
+///   (a new plugin counts as off). Its hooks run commands without approval.
 ///
-/// Anything else, a `headers` change included, needs none. This function reads no disk.
+/// Anything else, a header literal change included, needs none. This function reads no disk.
 pub fn library_confirmation(
     stored: Option<&LibraryConfig>,
     next: &LibraryConfig,
@@ -100,12 +108,12 @@ pub fn library_confirmation(
             }
             let place = cwd
                 .as_deref()
-                .map(|d| format!(" in {d}"))
+                .map(|d| format!(" in {}", quoted(d)))
                 .unwrap_or_default();
             let keys = if env.is_empty() {
                 String::new()
             } else {
-                let keys: Vec<&str> = env.keys().map(String::as_str).collect();
+                let keys: Vec<String> = env.keys().map(|k| quoted(k)).collect();
                 format!(" with env {}", keys.join(", "))
             };
             Some(format!(
@@ -113,8 +121,32 @@ pub fn library_confirmation(
                 command_line(command, args)
             ))
         }
+        LibraryConfig::McpServer(server @ McpServerConfig::Http { url, .. }) => {
+            let variables = server.variables();
+            if variables.is_empty() {
+                return None;
+            }
+            let origin = http_origin(url).unwrap_or_else(|| url.clone());
+            if let Some(LibraryConfig::McpServer(old @ McpServerConfig::Http { url: u, .. })) =
+                stored
+            {
+                let old_origin = http_origin(u).unwrap_or_else(|| u.clone());
+                if old_origin == origin && old.variables() == variables {
+                    return None;
+                }
+            }
+            Some(format!(
+                "Dots will send the values of {} to {}. Send them?\n\nAllow this only for a \
+                 server you trust.",
+                variables.join(", "),
+                quoted(&origin)
+            ))
+        }
         LibraryConfig::Plugin(p) => {
-            let was_on = matches!(stored, Some(LibraryConfig::Plugin(old)) if old.run_hooks);
+            let was_on = matches!(
+                stored,
+                Some(LibraryConfig::Plugin(old)) if old.run_hooks && old.path == p.path
+            );
             let hooks = p.run_hooks && !was_on;
             match (plugin_starts.is_empty(), hooks) {
                 (true, false) => None,
@@ -140,9 +172,42 @@ pub fn library_confirmation(
     }
 }
 
+/// The title of the dialog for a question `library_confirmation` made.
+pub fn library_title(question: &str) -> &'static str {
+    if question.starts_with("Dots will send") {
+        "Send these variables?"
+    } else if question.starts_with("This plugin") {
+        "Add this plugin?"
+    } else {
+        "Run this program?"
+    }
+}
+
+/// `text` in double quotes, `"` and `\` escaped, a control or direction character as `\u{..}`.
+fn quoted(text: &str) -> String {
+    let mut out = String::from("\"");
+    for c in text.chars() {
+        match c {
+            '"' | '\\' => {
+                out.push('\\');
+                out.push(c);
+            }
+            c if c.is_control()
+                || matches!(c, '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}') =>
+            {
+                out.push_str(&format!("\\u{{{:04X}}}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 fn command_line(command: &str, args: &[String]) -> String {
     std::iter::once(command)
         .chain(args.iter().map(String::as_str))
+        .map(quoted)
         .collect::<Vec<_>>()
         .join(" ")
 }
@@ -199,6 +264,8 @@ where
     Fut: Future<Output = bool>,
 {
     let next = LibraryConfig::McpServer(config);
+    // Refused before it is asked: the person never allows what the core would refuse.
+    next.validate()?;
     confirm_library(None, &next, ask).await?;
     let LibraryConfig::McpServer(config) = next else {
         unreachable!("wrapped above")
@@ -218,6 +285,14 @@ where
     F: FnOnce(String) -> Fut,
     Fut: Future<Output = bool>,
 {
+    config.validate()?;
+    check_name(config.kind(), name)?;
+    if accept.is_some() && config.kind() != LibraryKind::McpServer {
+        return Err(dots_core::Error::Invalid(
+            "only an MCP server has a tool list to accept".into(),
+        )
+        .into());
+    }
     confirm_library(None, &config, ask).await?;
     Ok(rt.library().add(name, config, accept).await?)
 }
@@ -240,10 +315,28 @@ where
         .await?
         .into_iter()
         .find(|e| e.item.id == id)
-        .map(|e| e.item.config);
-    // An id the Library does not have is the core's `not_found`, before any question.
-    if stored.is_some() {
-        confirm_library(stored.as_ref(), &config, ask).await?;
+        .map(|e| e.item);
+    // An id the Library does not have is the core's `not_found`, before any question. So is
+    // what the core refuses: a bad config, another kind, a plugin's own server.
+    if let Some(stored) = &stored {
+        config.validate()?;
+        if stored.config.kind() != config.kind() {
+            return Err(dots_core::Error::Invalid(format!(
+                "the {} {:?} cannot become a {}",
+                stored.config.kind().label(),
+                stored.name,
+                config.kind().label()
+            ))
+            .into());
+        }
+        if stored.owner_id.is_some() {
+            return Err(dots_core::Error::Invalid(format!(
+                "the MCP server {:?} comes with a plugin; change the plugin instead",
+                stored.name
+            ))
+            .into());
+        }
+        confirm_library(Some(&stored.config), &config, ask).await?;
     }
     Ok(rt.library().update(id, config).await?)
 }
@@ -344,11 +437,11 @@ mod tests {
         let q = |s: Option<&LibraryConfig>, n: &LibraryConfig| library_confirmation(s, n, &[]);
         let next = stdio("npx", &["-y", "srv"], Some("C:/d"));
         let asked = q(None, &next).unwrap();
-        assert!(asked.starts_with("Dots will run: npx -y srv in C:/d. Run it?"));
+        assert!(asked.starts_with(r#"Dots will run: "npx" "-y" "srv" in "C:/d". Run it?"#));
         // Without a folder the question names none.
         assert!(q(None, &stdio("srv", &[], None))
             .unwrap()
-            .starts_with("Dots will run: srv. Run it?"));
+            .starts_with(r#"Dots will run: "srv". Run it?"#));
         // The same command line, args, folder and env: no question.
         assert_eq!(q(Some(&next), &next), None);
         // Any difference in the command, an argument or the folder asks.
@@ -396,7 +489,9 @@ mod tests {
         )
         .unwrap();
         assert!(
-            asked.starts_with("Dots will run: npx srv with env NODE_OPTIONS, PATH. Run it?"),
+            asked.starts_with(
+                r#"Dots will run: "npx" "srv" with env "NODE_OPTIONS", "PATH". Run it?"#
+            ),
             "{asked}"
         );
         assert!(!asked.contains("evil") && !asked.contains("--require"));
@@ -415,7 +510,7 @@ mod tests {
         });
         assert!(q(None, &in_dir)
             .unwrap()
-            .starts_with("Dots will run: npx srv in C:/d with env A. Run it?"));
+            .starts_with(r#"Dots will run: "npx" "srv" in "C:/d" with env "A". Run it?"#));
     }
 
     #[test]
@@ -460,12 +555,15 @@ mod tests {
         };
         let config = at(dir.path());
         // New: the stdio server's command line; the HTTP one starts nothing.
-        assert_eq!(plugin_starts(None, &config), ["node a.js"]);
+        assert_eq!(plugin_starts(None, &config), [r#""node" "a.js""#]);
         // Same path: not read, not asked again.
         assert!(plugin_starts(Some(&config), &config).is_empty());
         // Another path: read again.
         let elsewhere = at(std::path::Path::new("C:/no/such/plugin"));
-        assert_eq!(plugin_starts(Some(&elsewhere), &config), ["node a.js"]);
+        assert_eq!(
+            plugin_starts(Some(&elsewhere), &config),
+            [r#""node" "a.js""#]
+        );
         // Unreadable: nothing here; the core refuses the folder.
         assert!(plugin_starts(None, &elsewhere).is_empty());
         // Not a plugin.
@@ -496,6 +594,174 @@ mod tests {
         assert_eq!(q(Some(&plugin(true)), &plugin(false)), None);
         assert_eq!(q(Some(&plugin(false)), &plugin(false)), None);
         assert_eq!(q(None, &plugin(false)), None);
+    }
+
+    #[test]
+    fn a_moved_plugin_with_hooks_on_asks_about_the_hooks_again() {
+        let at = |path: &str, run_hooks: bool| {
+            LibraryConfig::Plugin(dots_core::library::PluginConfig {
+                path: path.into(),
+                installed_id: None,
+                run_hooks,
+            })
+        };
+        let (a, b) = (at("C:/a", true), at("C:/b", true));
+        // The same path, hooks already on: nothing. Another path: the hooks are new there.
+        assert_eq!(library_confirmation(Some(&a), &a, &[]), None);
+        let asked = library_confirmation(Some(&a), &b, &[]).unwrap();
+        assert!(asked.contains("hooks run commands"), "{asked}");
+        let starts = vec![r#""node" "x.js""#.to_string()];
+        let asked = library_confirmation(Some(&a), &b, &starts).unwrap();
+        assert!(asked.contains("Its hooks also run commands"), "{asked}");
+        // Moved with hooks off: no hooks sentence.
+        assert_eq!(
+            library_confirmation(Some(&a), &at("C:/b", false), &[]),
+            None
+        );
+    }
+
+    #[test]
+    fn every_part_shows_quoted_so_the_boundaries_are_visible() {
+        let q = |n: &LibraryConfig| library_confirmation(None, n, &[]).unwrap();
+        // One argument with a space is not two.
+        let one = q(&stdio("node", &["a b"], None));
+        let two = q(&stdio("node", &["a", "b"], None));
+        assert!(
+            one.starts_with(r#"Dots will run: "node" "a b". Run it?"#),
+            "{one}"
+        );
+        assert_ne!(one, two);
+        // A quote and a backslash are escaped; a control or direction character is spelled out.
+        let odd = q(&stdio("node", &["x\" \\ \n\u{202e}"], None));
+        assert!(
+            odd.starts_with(r#"Dots will run: "node" "x\" \\ \u{000A}\u{202E}". Run it?"#),
+            "{odd}"
+        );
+    }
+
+    #[tokio::test]
+    async fn what_the_core_refuses_is_refused_before_any_question() {
+        let dir = tempfile::tempdir().unwrap();
+        let rt = runtime(&dir).await;
+        let asked = std::cell::Cell::new(0);
+        let ask = |_| {
+            asked.set(asked.get() + 1);
+            std::future::ready(true)
+        };
+        let LibraryConfig::McpServer(bad_arg) = stdio("node", &["a\nb"], None) else {
+            unreachable!()
+        };
+        let err = probe_confirmed(&rt, bad_arg, ask).await.unwrap_err();
+        assert_eq!(err.kind, CmdErrorKind::Invalid);
+        let in_key = LibraryConfig::McpServer(McpServerConfig::Stdio {
+            command: "node".into(),
+            args: vec![],
+            cwd: None,
+            env: [("A\nB".to_string(), "v".to_string())].into(),
+        });
+        let err = add_confirmed(&rt, "srv", in_key, None, ask)
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind, CmdErrorKind::Invalid);
+        let bidi = stdio("node", &["a\u{202e}b"], None);
+        let err = add_confirmed(&rt, "srv", bidi, None, ask)
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind, CmdErrorKind::Invalid);
+        // A bad name.
+        let err = add_confirmed(&rt, "Bad Name", stdio("node", &[], None), None, ask)
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind, CmdErrorKind::Invalid);
+        // A kind change on update.
+        let item = add_confirmed(&rt, "srv", http(), None, ask).await.unwrap();
+        let skill = LibraryConfig::Skill(dots_core::library::SkillConfig {
+            path: "C:/s".into(),
+        });
+        let err = update_confirmed(&rt, &item.id, skill, ask)
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind, CmdErrorKind::Invalid);
+        assert_eq!(asked.get(), 0);
+        rt.shutdown();
+    }
+
+    fn http_with(url: &str, header: &str) -> LibraryConfig {
+        LibraryConfig::McpServer(McpServerConfig::Http {
+            url: url.into(),
+            headers: [("X-Key".to_string(), header.to_string())].into(),
+        })
+    }
+
+    #[test]
+    fn an_http_server_that_sends_variables_asks_for_a_new_origin_or_variable() {
+        let q = |s: Option<&LibraryConfig>, n: &LibraryConfig| library_confirmation(s, n, &[]);
+        let base = http_with("https://Host.example:8443/mcp", "Bearer ${GITHUB_TOKEN}");
+        let asked = q(None, &base).unwrap();
+        assert!(
+            asked.starts_with(
+                r#"Dots will send the values of GITHUB_TOKEN to "https://host.example:8443". Send them?"#
+            ),
+            "{asked}"
+        );
+        assert_eq!(library_title(&asked), "Send these variables?");
+        // Only a literal, the origin and the variables the same: no question.
+        let same = http_with("https://host.example:8443/other", "Bearer ${GITHUB_TOKEN}");
+        assert_eq!(q(Some(&base), &same), None);
+        // Another origin, another or one more variable, or a stored stdio server: asks.
+        for next in [
+            http_with("https://evil.example/mcp", "Bearer ${GITHUB_TOKEN}"),
+            http_with("http://host.example:8443/mcp", "Bearer ${GITHUB_TOKEN}"),
+            http_with("https://host.example:8443/mcp", "${OTHER}"),
+            http_with("https://host.example:8443/${AWS_SECRET}", "${GITHUB_TOKEN}"),
+        ] {
+            assert!(q(Some(&base), &next).is_some(), "{next:?}");
+        }
+        assert!(q(Some(&stdio("x", &[], None)), &base).is_some());
+        // Nothing to send, nothing to ask.
+        assert_eq!(q(None, &http_with("https://h/mcp", "plain")), None);
+        let two = q(None, &http_with("https://h/${B}", "${A}")).unwrap();
+        assert!(two.contains("values of A, B to"), "{two}");
+    }
+
+    #[tokio::test]
+    async fn a_refused_variable_send_is_cancelled_before_the_core() {
+        let dir = tempfile::tempdir().unwrap();
+        let rt = runtime(&dir).await;
+        let LibraryConfig::McpServer(leak) =
+            http_with("https://attacker.example/${AWS_SECRET_ACCESS_KEY}", "x")
+        else {
+            unreachable!()
+        };
+        let mut asked = Vec::new();
+        let err = probe_confirmed(&rt, leak, |q| {
+            asked.push(q);
+            std::future::ready(false)
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(err.kind, CmdErrorKind::Cancelled);
+        assert!(
+            asked[0].contains("AWS_SECRET_ACCESS_KEY") && asked[0].contains("attacker.example")
+        );
+        let no = |_| std::future::ready(false);
+        let yes = |_| std::future::ready(true);
+        let config = http_with("https://a.example/mcp", "${TOK}");
+        let err = add_confirmed(&rt, "web", config.clone(), None, no)
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind, CmdErrorKind::Cancelled);
+        assert!(rt.library().list().await.unwrap().is_empty());
+        let item = add_confirmed(&rt, "web", config, None, yes).await.unwrap();
+        // A header literal only: no question (a refusal would stop it). Another origin asks.
+        let same = http_with("https://a.example/mcp", "${TOK}");
+        update_confirmed(&rt, &item.id, same, no).await.unwrap();
+        let moved = http_with("https://b.example/mcp", "${TOK}");
+        let err = update_confirmed(&rt, &item.id, moved, no)
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind, CmdErrorKind::Cancelled);
+        rt.shutdown();
     }
 
     #[test]
@@ -531,7 +797,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.kind, CmdErrorKind::Cancelled);
         assert_eq!(asked.len(), 1);
-        assert!(asked[0].starts_with("Dots will run: dots-no-such-mcp-server a. Run it?"));
+        assert!(asked[0].starts_with(r#"Dots will run: "dots-no-such-mcp-server" "a". Run it?"#));
 
         let no = |_| std::future::ready(false);
         let yes = |_| std::future::ready(true);

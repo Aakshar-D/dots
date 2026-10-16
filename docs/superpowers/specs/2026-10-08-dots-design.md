@@ -784,16 +784,22 @@ dot; a chat or webhook run does not clear it.
   the fingerprint `library_probe` answered. `library_remove` answers `conflict`, naming the
   dots, while dots use the item and `confirm` is false. A command the web UI names is
   confirmed in a native dialog from Rust, like `claude_path`, before Dots runs or stores it
-  (the same `DOTS_CONFIRM=yes` seam in debug builds): `library_probe` with a stdio config, and
+  (the same `DOTS_CONFIRM=yes` seam in debug builds). The config, the name and the kind are
+  checked first, so the person is never asked about what the core refuses; the core refuses
+  control and bidirectional format characters in a stdio command, argument, folder and env, and
+  in an http URL and header names. The dialog shows each part in double quotes (`"` and `\`
+  escaped), so where one ends is visible. `library_probe` with a stdio config, and
   `library_add` / `library_update` whose stdio `command`, `args`, `cwd` or `env` (as stored,
   the `${VAR}` text) differ from the stored ones (a new server differs) ask "Dots will run:
-  <command> <args> in <cwd> with env KEY1, KEY2. Run it?" (keys only, never values); a
-  `library_add` of a plugin, or a `library_update` that changes its path, whose `.mcp.json` has
-  stdio servers asks "This plugin starts: <cmd> <args>; <cmd> <args>. Add it?"; and turning a
-  plugin's `run_hooks` on asks "This plugin's hooks run commands on their own, without
-  approval, and can approve tool calls. Run them?". When both apply to a plugin, one dialog
-  holds both. A refusal answers `cancelled` and nothing is started or stored. A skill or plugin folder is
-  only read.
+  <command> <args> in <cwd> with env KEY1, KEY2. Run it?" (keys only, never values). An http
+  config whose `url` or header values name `${VAR}` asks "Dots will send the values of A, B to
+  <origin>. Send them?" (names only) when the origin or the set of variables is new or changed.
+  A `library_add` of a plugin, or a `library_update` that changes its path, whose `.mcp.json`
+  has stdio servers asks "This plugin starts: <cmd> <args>; <cmd> <args>. Add it?"; and hooks
+  newly on (switched on, or on at a new path) ask "This plugin's hooks run commands on their
+  own, without approval, and can approve tool calls. Run them?". When both apply to a plugin,
+  one dialog holds both. A refusal answers `cancelled` and nothing is started or stored. A
+  skill or plugin folder is only read.
 - **Runs, dots and approvals are addressed by id.** `open_run_folder(run_id)` resolves the path
   in core; the UI cannot make the backend open, read or delete an arbitrary path. Two values
   from the UI are paths:
