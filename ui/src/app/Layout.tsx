@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "cn";
-import { Bot, Inbox as InboxIcon, MessageSquare, Settings as SettingsIcon } from "lucide-react";
+import { Bot, Inbox as InboxIcon, Library as LibraryIcon, MessageSquare, Settings as SettingsIcon } from "lucide-react";
 import { NavLink, Outlet } from "react-router";
 
 import { commands } from "@/api/commands";
@@ -12,6 +12,7 @@ import { useRuntimeEvents } from "@/lib/runtime-events";
 
 const LINKS = [
   { to: "/dots", label: "Dots", icon: Bot },
+  { to: "/library", label: "Library", icon: LibraryIcon },
   { to: "/inbox", label: "Inbox", icon: InboxIcon },
   { to: "/chat", label: "Chat", icon: MessageSquare },
   { to: "/settings", label: "Settings", icon: SettingsIcon },

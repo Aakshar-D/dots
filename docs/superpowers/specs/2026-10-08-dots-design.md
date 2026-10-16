@@ -563,6 +563,22 @@ React + Vite + TypeScript inside Tauri 2. Screens:
   ("Completed", "Completed (missed)" when it completed without firing, "Expired"), and
   "Retrying at 09:04 (attempt 2 of 6)" under it while a retry waits; a dot whose schedule
   needs attention carries a "Needs attention" badge.
+- **Library** — (MCP/skills spec §8) between Dots and Inbox, with three tabs. MCP servers:
+  name, transport, a status badge (Accepted, Tools changed, Unreachable, Unchecked) and, apart
+  from it, the `${VAR}` the environment of Dots does not set; the dots that use it; "Check
+  now", "Edit", "Remove"; "Review" for a changed tool list (also reached by
+  `/library?review=<server id>`, which the Inbox links to) showing the tools added, removed and
+  changed, with "Accept". "Add server" is a form (name; stdio: command, arguments, working
+  folder, env; http: URL, headers) with the `${VAR}` hint, the variables that are not set, a
+  warning for a pasted secret and "Test connection", which lists the tools with a "read-only"
+  badge; saving after a test accepts the list that was shown, and a server that could not be
+  tested is saved unchecked. A plugin's own servers are listed with their plugin and have no
+  Edit or Remove. Skills: name, description, folder, dots; "Add skill" picks a folder, scans it
+  and lists every `SKILL.md` below it to tick. Plugins: name, folder, parts, the dots that use
+  it, the switch "Run this plugin's hooks"; "Add plugin" picks one of the installed Claude
+  Code plugins or a folder. Removing asks first and names the dots. The screen never asks a
+  second time for what the core confirms in a native dialog (a program to run, env changes, a
+  plugin's servers and hooks); a refusal (`cancelled`) shows as a calm note, not as an error.
 - **Dot editor** — name; instructions (markdown); engine, model, endpoint; workdir + mode;
   schedule (from Scheduler v2: a kind picker None / Once / Every / Daily / Weekly / Cron with
   the kind's fields — a date and time; minutes, typed in minutes or hours; a time; seven day
@@ -862,7 +878,7 @@ dot; a chat or webhook run does not clear it.
   - TanStack Query v5 and the `react-router` hash router.
   - Bun as package manager; `@tauri-apps/cli` as a dev dependency.
 - Look: one dark theme (no light mode), shadcn/ui's neutral palette, compact desktop-tool
-  density, a left sidebar for Dots, Inbox (with its count), Chat and Settings.
+  density, a left sidebar for Dots, Library, Inbox (with its count), Chat and Settings.
 - Data layer:
   - `ui/src/api/types.ts` (strict zod schemas mirroring the Rust JSON), `commands.ts` (typed
     `invoke` wrappers that throw `CommandError`), `events.ts` (one `listen("runtime")`).
