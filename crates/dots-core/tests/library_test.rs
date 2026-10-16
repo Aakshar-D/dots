@@ -29,7 +29,17 @@ fn an_mcp_server_name_is_its_tool_prefix() {
         assert!(check_name(LibraryKind::McpServer, good).is_ok(), "{good}");
     }
     // `__` would make `mcp__<server>__<tool>` ambiguous; `dots` is Dots' own server.
-    for bad in ["", "Sf", "a.b", "a b", "a__b", "dots", &"x".repeat(41)] {
+    for bad in [
+        "",
+        "Sf",
+        "a.b",
+        "a b",
+        "a__b",
+        "_a",
+        "files_",
+        "dots",
+        &"x".repeat(41),
+    ] {
         assert!(invalid(check_name(LibraryKind::McpServer, bad)), "{bad:?}");
     }
 }

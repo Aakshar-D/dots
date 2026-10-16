@@ -182,7 +182,7 @@ Stored at `%LOCALAPPDATA%\dots\dots.db`. Worktrees at `%LOCALAPPDATA%\dots\workt
 
 **library_items** (migration 0006; MCP/skills spec §2) — the Library: `id` PK (ULID), `kind`
 (`mcp_server` | `skill` | `plugin`), `name` (UNIQUE with `kind`; an MCP server's matches
-`^[a-z0-9_-]{1,40}$`, without `__`, not `dots`; a skill's or plugin's is 1-64 of `A-Za-z0-9._-`
+`^[a-z0-9_-]{1,40}$`, without `__`, neither starting nor ending with `_`, not `dots`; a skill's or plugin's is 1-64 of `A-Za-z0-9._-`
 starting with a letter or digit), `config` (JSON of the kind: an MCP server's
 `{"transport": "stdio", "command", "args", "cwd", "env"}` or `{"transport": "http", "url",
 "headers"}` with `${VAR}` references, a skill's `{"path"}`, a plugin's `{"path", "installed_id",

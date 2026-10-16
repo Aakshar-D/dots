@@ -194,8 +194,8 @@ fn invalid<T>(message: impl Into<String>) -> Result<T> {
     Err(Error::Invalid(message.into()))
 }
 
-/// An item name: an MCP server's is its tool prefix (`^[a-z0-9_-]{1,40}$`, no `__`, not
-/// `dots`); a skill's or plugin's becomes a folder name (1-64 of `A-Za-z0-9._-`, starting with
+/// An item name: an MCP server's is its tool prefix (`^[a-z0-9_-]{1,40}$`, no `__`, not starting or
+/// ending with `_`, not `dots`); a skill's or plugin's becomes a folder name (1-64 of `A-Za-z0-9._-`, starting with
 /// a letter or digit).
 pub fn check_name(kind: LibraryKind, name: &str) -> Result<()> {
     match kind {
@@ -212,6 +212,12 @@ pub fn check_name(kind: LibraryKind, name: &str) -> Result<()> {
             // `mcp__<server>__<tool>` is split at the first `__` after `mcp__`.
             if name.contains("__") {
                 return invalid(format!("MCP server name {name:?}: '__' is not allowed"));
+            }
+            // `mcp__files_` + `__x` would read as server `files`, tool `_x`.
+            if name.starts_with('_') || name.ends_with('_') {
+                return invalid(format!(
+                    "MCP server name {name:?}: it must not start or end with '_'"
+                ));
             }
             if name == "dots" {
                 return invalid("the MCP server name 'dots' is reserved");

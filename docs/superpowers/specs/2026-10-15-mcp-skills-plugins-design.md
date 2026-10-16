@@ -54,7 +54,7 @@ CREATE TABLE library_items (
   "headers": { "Authorization": "Bearer ${EXAMPLE_TOKEN}" } }
 ```
 
-- The name is the tool prefix: tools are `mcp__<name>__<tool>`. It matches `^[a-z0-9_-]{1,40}$`; `dots` is reserved.
+- The name is the tool prefix: tools are `mcp__<name>__<tool>`. It matches `^[a-z0-9_-]{1,40}$`, has no `__` and neither starts nor ends with `_` (`mcp__files___x` would read as server `files`); `dots` is reserved.
 - `${VAR}` in `env` values, `args`, `cwd`, `url` and `headers` is replaced, when the server starts, by the value of `VAR` in Dots' own environment. The value is never written to the database, an export, a log or a run event. A plain value with no `${…}` is stored as written; the editor warns when a key looks like a secret (`TOKEN`, `KEY`, `SECRET`, `PASSWORD`, `AUTH` in its name, or a header named `Authorization`) and the value has no `${…}`.
 - A variable that is not set stops that server from starting (section 6).
 

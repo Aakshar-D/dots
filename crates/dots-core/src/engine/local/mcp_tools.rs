@@ -138,7 +138,7 @@ async fn send(
         .await
     {
         Ok(result) => format_result(&result),
-        Err(e) => ToolOutput::err(e.to_string()),
+        Err(e) => ToolOutput::err(cap_head(e.to_string())),
     }
 }
 

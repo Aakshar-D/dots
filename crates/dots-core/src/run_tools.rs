@@ -249,7 +249,7 @@ impl RunTools {
                     if let Some(notice) = held_notice(&item.name, &catalog) {
                         notices.push(notice);
                     }
-                    let (handled_tx, handled) = watch::channel(0);
+                    let (handled_tx, handled) = watch::channel(*changes.borrow());
                     let server = RunServer {
                         accepted: accepted_tools(&catalog),
                         accepted_fingerprint: catalog.accepted_fingerprint.clone(),

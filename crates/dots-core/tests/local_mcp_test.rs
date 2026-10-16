@@ -589,3 +589,27 @@ async fn an_approved_call_is_skipped_when_the_tool_changed_since_it_was_approved
     );
     assert!(events(&e, &child.id, "tool_call").await.is_empty());
 }
+
+#[tokio::test]
+async fn a_huge_server_error_reaches_the_model_capped() {
+    let e = env(true).await;
+    let mut huge = tool("huge", true);
+    huge["error"] = json!({"code": -32000, "message": "z".repeat(40_000)});
+    let fake = FakeMcp::new(json!({"tools": [huge]}));
+    add_server(&e, "files", fake.stdio()).await;
+    let llm = Llm::start(vec![
+        call("c1", "mcp__files__huge", json!({})),
+        text("Done."),
+    ])
+    .await;
+    let dot = local_dot(&e, &llm, Policy::preset(Preset::Sandboxed), &["files"]).await;
+    let r = run(&e, &dot).await;
+    wait_status(&e.store, &r.id, RunStatus::Succeeded, 20).await;
+    let out = tool_result(&llm.requests()[1], "c1");
+    assert!(
+        out.starts_with("zzzz") && out.contains("[truncated:"),
+        "{}",
+        out.len()
+    );
+    assert!(out.len() < 31 * 1024, "{}", out.len());
+}
