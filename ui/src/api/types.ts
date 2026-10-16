@@ -30,6 +30,10 @@ export const Action = z.enum(["allow", "ask", "deny"]);
 export const Preset = z.enum(["read-only", "sandboxed", "trusted", "custom"]);
 export const FileStatus = z.enum(["added", "modified", "deleted", "renamed"]);
 export const ScheduleStatus = z.enum(["active", "completed", "expired"]);
+export const LibraryKind = z.enum(["mcp_server", "skill", "plugin"]);
+// Where an MCP server's tool list stands: accepted, changed since, last check failed, or never
+// accepted.
+export const CatalogStatus = z.enum(["accepted", "changed", "unreachable", "unchecked"]);
 
 export const Rule = z.strictObject({ tool: z.string(), action: Action });
 export const Policy = z.strictObject({
@@ -193,6 +197,8 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("approval_updated"), approval: Approval }),
   // The dot's schedule row was made, changed or deleted.
   z.strictObject({ type: z.literal("schedule_updated"), dot_id: z.string() }),
+  // A Library item was added, changed, removed or checked (an MCP server's catalog included).
+  z.strictObject({ type: z.literal("library_updated"), item_id: z.string() }),
   // The dot's schedule needs attention now (sent once, with a `schedule_updated`).
   z.strictObject({
     type: z.literal("schedule_attention"),
@@ -285,6 +291,129 @@ export const Inbox = z.strictObject({
   tools_changed: z.array(ToolsChanged),
 });
 
+// The Library (MCP/skills spec section 2 and 9). `${VAR}` in a server's config stays a
+// reference: the core reads the environment when the server starts.
+export const McpServerConfig = z.discriminatedUnion("transport", [
+  z.strictObject({
+    transport: z.literal("stdio"),
+    command: z.string(),
+    args: z.array(z.string()),
+    cwd: nullable(z.string()),
+    env: z.record(z.string(), z.string()),
+  }),
+  z.strictObject({
+    transport: z.literal("http"),
+    url: z.string(),
+    headers: z.record(z.string(), z.string()),
+  }),
+]);
+export const SkillConfig = z.strictObject({ path: z.string() });
+export const PluginConfig = z.strictObject({
+  path: z.string(),
+  // `<plugin>@<marketplace>` when picked from the installed Claude Code plugins.
+  installed_id: nullable(z.string()),
+  run_hooks: z.boolean(),
+});
+// An item's config with its kind: what `library_add` and `library_update` take.
+export const LibraryConfig = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("mcp_server"), config: McpServerConfig }),
+  z.strictObject({ kind: z.literal("skill"), config: SkillConfig }),
+  z.strictObject({ kind: z.literal("plugin"), config: PluginConfig }),
+]);
+const libraryItemShape = {
+  id: z.string(),
+  name: z.string(),
+  // The plugin an MCP server comes from; it goes with the plugin.
+  owner_id: nullable(z.string()),
+  created_at: z.string(),
+  updated_at: z.string(),
+};
+// One strict object per kind: the item's fields and its config sit side by side in the JSON.
+const libraryItemOf = <E extends z.ZodRawShape>(extra: E) =>
+  z.discriminatedUnion("kind", [
+    z.strictObject({
+      kind: z.literal("mcp_server"),
+      config: McpServerConfig,
+      ...libraryItemShape,
+      ...extra,
+    }),
+    z.strictObject({
+      kind: z.literal("skill"),
+      config: SkillConfig,
+      ...libraryItemShape,
+      ...extra,
+    }),
+    z.strictObject({
+      kind: z.literal("plugin"),
+      config: PluginConfig,
+      ...libraryItemShape,
+      ...extra,
+    }),
+  ]);
+export const LibraryItem = libraryItemOf({});
+// A tool of `tools/list` as the server sent it (camelCase, optional fields left out).
+export const McpTool = z.object({
+  name: z.string(),
+  title: z.string().optional(),
+  description: z.string().optional(),
+  inputSchema: z.unknown(),
+  annotations: z.unknown().optional(),
+});
+export const McpCatalog = z.strictObject({
+  server_id: z.string(),
+  status: CatalogStatus,
+  accepted_fingerprint: nullable(z.string()),
+  // `tools/list` results (arrays of `McpTool`), kept as JSON.
+  accepted_tools: nullable(z.unknown()),
+  seen_fingerprint: nullable(z.string()),
+  seen_tools: nullable(z.unknown()),
+  checked_at: nullable(z.string()),
+  error: nullable(z.string()),
+});
+export const SkillDetail = z.strictObject({ description: z.string() });
+export const PluginDetail = z.strictObject({
+  version: nullable(z.string()),
+  description: nullable(z.string()),
+  // Qualified: `<plugin>:<skill>`.
+  skills: z.array(z.string()),
+  commands: z.array(z.string()),
+  agents: z.array(z.string()),
+  // The names of its MCP server items.
+  servers: z.array(z.string()),
+  has_hooks: z.boolean(),
+  warnings: z.array(z.string()),
+});
+export const LibraryEntry = libraryItemOf({
+  // The dots that use it; for a plugin's server, the dots that use the plugin.
+  used_by: z.array(DotRef),
+  catalog: nullable(McpCatalog),
+  // The `${VAR}` of a server's config that the environment of Dots does not set.
+  missing_variables: z.array(z.string()),
+  skill: nullable(SkillDetail),
+  plugin: nullable(PluginDetail),
+  // Why a skill or plugin folder could not be read.
+  problem: nullable(z.string()),
+});
+export const McpProbe = z.strictObject({ tools: z.array(McpTool), fingerprint: z.string() });
+export const ScannedSkill = z.strictObject({
+  name: z.string(),
+  description: z.string(),
+  path: z.string(),
+  // Why `name` cannot be a Library name.
+  name_error: nullable(z.string()),
+});
+export const InstalledPlugin = z.strictObject({
+  id: z.string(),
+  name: z.string(),
+  marketplace: nullable(z.string()),
+  scope: nullable(z.string()),
+  install_path: z.string(),
+  version: nullable(z.string()),
+  exists: z.boolean(),
+});
+// Whether the environment of Dots sets a variable. Never its value.
+export const EnvVariable = z.strictObject({ name: z.string(), set: z.boolean() });
+
 export const FileDiff = z.strictObject({
   path: z.string(),
   status: FileStatus,
@@ -322,6 +451,8 @@ export type Action = z.infer<typeof Action>;
 export type Preset = z.infer<typeof Preset>;
 export type FileStatus = z.infer<typeof FileStatus>;
 export type ScheduleStatus = z.infer<typeof ScheduleStatus>;
+export type LibraryKind = z.infer<typeof LibraryKind>;
+export type CatalogStatus = z.infer<typeof CatalogStatus>;
 export type Rule = z.infer<typeof Rule>;
 export type Policy = z.infer<typeof Policy>;
 export type Weekday = z.infer<typeof Weekday>;
@@ -349,6 +480,20 @@ export type NeedsAttention = z.infer<typeof NeedsAttention>;
 export type DotRef = z.infer<typeof DotRef>;
 export type ToolsChanged = z.infer<typeof ToolsChanged>;
 export type Inbox = z.infer<typeof Inbox>;
+export type McpServerConfig = z.infer<typeof McpServerConfig>;
+export type SkillConfig = z.infer<typeof SkillConfig>;
+export type PluginConfig = z.infer<typeof PluginConfig>;
+export type LibraryConfig = z.infer<typeof LibraryConfig>;
+export type LibraryItem = z.infer<typeof LibraryItem>;
+export type McpTool = z.infer<typeof McpTool>;
+export type McpCatalog = z.infer<typeof McpCatalog>;
+export type SkillDetail = z.infer<typeof SkillDetail>;
+export type PluginDetail = z.infer<typeof PluginDetail>;
+export type LibraryEntry = z.infer<typeof LibraryEntry>;
+export type McpProbe = z.infer<typeof McpProbe>;
+export type ScannedSkill = z.infer<typeof ScannedSkill>;
+export type InstalledPlugin = z.infer<typeof InstalledPlugin>;
+export type EnvVariable = z.infer<typeof EnvVariable>;
 export type FileDiff = z.infer<typeof FileDiff>;
 export type WorktreeDiff = z.infer<typeof WorktreeDiff>;
 export type CmdErrorKind = z.infer<typeof CmdErrorKind>;

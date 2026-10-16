@@ -776,6 +776,24 @@ dot; a chat or webhook run does not clear it.
   attention: { run_id, error } | null }`, times in RFC 3339 local. `next_fire` is the first
   slot after now, null while the dot is disabled, when the schedule is not `active`, or when
   no slot or count is left; `retry_at` and `retry_attempt` are set while a retry waits.
+- The MCP/skills feature adds ten commands, each a one-line wrapper over `Runtime::library()`:
+  `library_list`, `library_add(name, config, accept)`, `library_update(id, config)`,
+  `library_remove(id, confirm)`, `library_probe(config)`, `library_check(id)`,
+  `library_accept(id, fingerprint)`, `library_scan_skills(path)`, `installed_claude_plugins()`
+  and `environment_variables(names)`. `config` carries its kind (`{kind, config}`); `accept` is
+  the fingerprint `library_probe` answered. `library_remove` answers `conflict`, naming the
+  dots, while dots use the item and `confirm` is false. A command the web UI names is
+  confirmed in a native dialog from Rust, like `claude_path`, before Dots runs or stores it
+  (the same `DOTS_CONFIRM=yes` seam in debug builds): `library_probe` with a stdio config, and
+  `library_add` / `library_update` whose stdio `command`, `args`, `cwd` or `env` (as stored,
+  the `${VAR}` text) differ from the stored ones (a new server differs) ask "Dots will run:
+  <command> <args> in <cwd> with env KEY1, KEY2. Run it?" (keys only, never values); a
+  `library_add` of a plugin, or a `library_update` that changes its path, whose `.mcp.json` has
+  stdio servers asks "This plugin starts: <cmd> <args>; <cmd> <args>. Add it?"; and turning a
+  plugin's `run_hooks` on asks "This plugin's hooks run commands on their own, without
+  approval, and can approve tool calls. Run them?". When both apply to a plugin, one dialog
+  holds both. A refusal answers `cancelled` and nothing is started or stored. A skill or plugin folder is
+  only read.
 - **Runs, dots and approvals are addressed by id.** `open_run_folder(run_id)` resolves the path
   in core; the UI cannot make the backend open, read or delete an arbitrary path. Two values
   from the UI are paths:
@@ -809,6 +827,9 @@ dot; a chat or webhook run does not clear it.
   - And a seventh, `ScheduleAttention { dot_id, run_id, error }`: the dot's schedule needs
     attention now. The core sends it once, when the flag goes from clear to set, together
     with a `ScheduleUpdated`. Only the notifier uses it.
+  - And an eighth, `LibraryUpdated { item_id }`: a Library item was added, changed, removed or
+    checked. It never notifies; it updates the tray's Inbox count (a server whose tool list
+    changed is an Inbox group).
 - Notifications fire on `ApprovalRequested`, and on `RunUpdated` into `succeeded`, `failed` or
   `awaiting_approval`, once per (run, status), and only for a run this process saw queued or
   running. Chat runs do not notify; neither does a parked run closed by its decision, nor a run
@@ -848,7 +869,8 @@ dot; a chat or webhook run does not clear it.
     `approvals` of the approval's own run, which is the parent of the run that performs the
     call: that run's own `RunUpdated` does not reach those approvals. `ScheduleUpdated`
     invalidates `dots`, `overview` and `inbox`; `ScheduleAttention` invalidates nothing (the
-    `ScheduleUpdated` sent with it does).
+    `ScheduleUpdated` sent with it does). `LibraryUpdated` invalidates `library`, `inbox`,
+    `dots`, every `dot` and `overview` (removing an item takes it out of the dots that use it).
   - From Plan 3c an invalidation that arrives while its query is being fetched is kept (the
     query is marked stale again when that fetch has settled), and the app refetches everything
     once when its listeners are attached, so the first screen's data is asked for twice.
@@ -864,7 +886,10 @@ dot; a chat or webhook run does not clear it.
   `ScheduleStatus`, a queued retry (the `RunUpdated` sample, with `retry_of`), and a
   `DotOverview` sample that sets every field of `schedule_state`; `Limits` gains
   `max_schedule_attempts` (the core's `MAX_ATTEMPTS`, 6), which the Dots list and the run view
-  name.
+  name. From the MCP/skills feature it also holds the Library samples (a config of every kind
+  and transport, `LibraryEntry` of every kind, a catalog, a probe, scanned skills, installed
+  plugins, environment variables), a `LibraryUpdated` event, and every `LibraryKind` and
+  `CatalogStatus`.
 - Shell around the screens:
   - Banners: `server_error` (links to Settings), CLI version mismatch ("Mark as tested"),
     restart required ("Restart Dots"), schedules paused.

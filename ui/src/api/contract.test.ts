@@ -22,6 +22,15 @@ const schemas: Record<SampleName, { parse: (v: unknown) => unknown }> = {
   SettingsSaved: T.SettingsSaved,
   DotOverview: T.DotOverview,
   Inbox: T.Inbox,
+  LibraryConfig: T.LibraryConfig.array(),
+  McpServerConfig: T.McpServerConfig.array(),
+  LibraryItem: T.LibraryItem.array(),
+  LibraryEntry: T.LibraryEntry.array(),
+  McpCatalog: T.McpCatalog,
+  McpProbe: T.McpProbe,
+  ScannedSkill: T.ScannedSkill.array(),
+  InstalledPlugin: T.InstalledPlugin.array(),
+  EnvVariable: T.EnvVariable.array(),
   WorktreeDiff: T.WorktreeDiff,
   CmdError: T.CmdError,
   StartupError: T.StartupError,
@@ -40,6 +49,8 @@ const enums: Record<keyof typeof fixture.Enums, { options: readonly string[] }> 
   FileStatus: T.FileStatus,
   ScheduleStatus: T.ScheduleStatus,
   CmdErrorKind: T.CmdErrorKind,
+  LibraryKind: T.LibraryKind,
+  CatalogStatus: T.CatalogStatus,
 };
 
 describe("Rust/TypeScript contract", () => {
@@ -68,6 +79,25 @@ describe("Rust/TypeScript contract", () => {
   it("has a sample of every runtime event type", () => {
     const types = T.RuntimeEvent.options.map((o) => o.shape.type.value);
     expect(fixture.RuntimeEvent.map((e) => e.type).sort()).toEqual([...types].sort());
+  });
+
+  it("has a sample of every Library kind and server transport", () => {
+    const kinds = T.LibraryConfig.options.map((o) => o.shape.kind.value);
+    expect([...new Set(fixture.LibraryConfig.map((c) => c.kind))].sort()).toEqual(
+      [...kinds].sort(),
+    );
+    expect([...new Set(fixture.LibraryEntry.map((e) => e.kind))].sort()).toEqual(
+      [...kinds].sort(),
+    );
+    const transports = T.McpServerConfig.options.map((o) => o.shape.transport.value);
+    expect(fixture.McpServerConfig.map((c) => c.transport).sort()).toEqual(
+      [...transports].sort(),
+    );
+  });
+
+  it("has a catalog sample of every status", () => {
+    const statuses = fixture.LibraryEntry.map((e) => e.catalog?.status);
+    expect(statuses).toEqual(expect.arrayContaining(["accepted", "changed"]));
   });
 
   it("has a sample of every schedule kind and bound", () => {

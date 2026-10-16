@@ -3,8 +3,15 @@
 //! from the UI are paths, both checked in the core and never opened here: a dot's `workdir`
 //! (`DotSpec::validate`, then the runner requires an existing folder) and the `claude_path`
 //! setting (`Settings::validate`; the runtime runs that program as the Claude CLI from the
-//! next start). The UI is first-party code under a `default-src 'self'` policy.
+//! next start). The Library commands take more: a skill or plugin folder, a folder to scan for
+//! skills, and the command of an MCP server, which `library_probe` starts and a dot's runs
+//! start. Like `claude_path`, a new command line or env (and a plugin's servers and hooks) is confirmed in
+//! a native dialog from Rust before it is run or stored (`confirm.rs`). The UI is first-party
+//! code under a `default-src 'self'` policy.
 
+use dots_core::kit::InstalledPlugin;
+use dots_core::library::{LibraryConfig, LibraryItem, McpCatalog, McpServerConfig};
+use dots_core::library_service::{EnvVariable, LibraryEntry, McpProbe, ScannedSkill};
 use dots_core::model::{
     Approval, Dot, DotOverview, DotSpec, Inbox, Run, RunEventRecord, SettingsSaved, Status,
     WorktreeDiff,
@@ -301,4 +308,101 @@ pub async fn open_run_folder(
     app.opener()
         .open_path(path.to_string_lossy(), None::<&str>)
         .map_err(|e| CmdError::internal(format!("could not open {}: {e}", path.display())))
+}
+
+/// Every Library item with its users, catalog and, for a skill or plugin, what its folder holds.
+#[tauri::command]
+pub async fn library_list(state: State<'_, AppState>) -> Res<Vec<LibraryEntry>> {
+    Ok(state.rt()?.library().list().await?)
+}
+
+/// `accept`: the fingerprint `library_probe` answered. The tool list the server gives now is
+/// accepted only when it has that fingerprint; without it, a server is saved unchecked.
+#[tauri::command]
+pub async fn library_add(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+    config: LibraryConfig,
+    accept: Option<String>,
+) -> Res<LibraryItem> {
+    let rt = state.rt()?;
+    confirm::add_confirmed(&rt, &name, config, accept.as_deref(), |message| {
+        confirm::ask(&app, "Run this program?", message)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn library_update(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    config: LibraryConfig,
+) -> Res<LibraryItem> {
+    let rt = state.rt()?;
+    confirm::update_confirmed(&rt, &id, config, |message| {
+        confirm::ask(&app, "Run this program?", message)
+    })
+    .await
+}
+
+/// Refused with kind `conflict`, naming the dots, while dots use the item and `confirm` is not set.
+#[tauri::command]
+pub async fn library_remove(state: State<'_, AppState>, id: String, confirm: bool) -> Res<()> {
+    Ok(state.rt()?.library().remove(&id, confirm).await?)
+}
+
+/// Starts the server, lists its tools and stops it again; nothing is saved. A stdio server needs the
+/// person's yes in a native dialog first (`confirm::library_confirmation`), as do `library_add`
+/// and `library_update` for a stdio command line or env they do not already hold, for the
+/// stdio servers of a new plugin (or a new plugin path) and for plugin hooks switched on; a refusal answers `cancelled` and nothing is started or stored.
+#[tauri::command]
+pub async fn library_probe(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    config: McpServerConfig,
+) -> Res<McpProbe> {
+    let rt = state.rt()?;
+    confirm::probe_confirmed(&rt, config, |message| {
+        confirm::ask(&app, "Run this program?", message)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn library_check(state: State<'_, AppState>, id: String) -> Res<McpCatalog> {
+    Ok(state.rt()?.library().check(&id).await?)
+}
+
+/// Refused with kind `conflict` when the fingerprint is no longer the one last seen.
+#[tauri::command]
+pub async fn library_accept(
+    state: State<'_, AppState>,
+    id: String,
+    fingerprint: String,
+) -> Res<McpCatalog> {
+    Ok(state.rt()?.library().accept(&id, &fingerprint).await?)
+}
+
+#[tauri::command]
+pub async fn library_scan_skills(
+    state: State<'_, AppState>,
+    path: String,
+) -> Res<Vec<ScannedSkill>> {
+    Ok(state.rt()?.library().scan_skills(&path).await?)
+}
+
+#[tauri::command]
+pub fn installed_claude_plugins(state: State<'_, AppState>) -> Res<Vec<InstalledPlugin>> {
+    Ok(state.rt()?.library().installed_plugins())
+}
+
+/// Which of the names Dots' environment sets. Never a value.
+#[tauri::command]
+pub fn environment_variables(
+    state: State<'_, AppState>,
+    names: Vec<String>,
+) -> Res<Vec<EnvVariable>> {
+    Ok(state.rt()?.library().environment_variables(&names))
 }

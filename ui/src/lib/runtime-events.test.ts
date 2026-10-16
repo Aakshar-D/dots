@@ -103,6 +103,19 @@ describe("runtime events and the query cache", () => {
     for (const key of untouched) expect(stale(qc, key), key.join("/")).toBe(false);
   });
 
+  it("marks the Library, the inbox and what shows a dot's uses stale on a Library update", () => {
+    const qc = createQueryClient();
+    // Removing an item takes it out of the dots that use it; a changed tool list is an Inbox
+    // group.
+    const lists = [keys.library, keys.inbox, keys.dots, keys.dot(sample.dot.id), keys.overview];
+    const untouched = [keys.settings, keys.runs(sample.dot.id), keys.installedPlugins];
+    for (const key of [...lists, ...untouched]) qc.setQueryData(key, []);
+
+    applyRuntimeEvent(qc, { type: "library_updated", item_id: "01J0SRV" });
+    for (const key of lists) expect(stale(qc, key), key.join("/")).toBe(true);
+    for (const key of untouched) expect(stale(qc, key), key.join("/")).toBe(false);
+  });
+
   it("leaves the caches to the schedule update that comes with a schedule's attention", () => {
     const qc = createQueryClient();
     const all = [keys.dots, keys.overview, keys.inbox, keys.dot(sample.dot.id)];
