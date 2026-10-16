@@ -225,7 +225,9 @@ describe("adding a server", () => {
     await user.type(within(dialog).getByLabelText("Name"), "Bad Name");
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
     expect(
-      within(dialog).getByText('Use 1 to 40 of a-z, 0-9, _ and -. "dots" is reserved.'),
+      within(dialog).getByText(
+        'Use 1 to 40 of a-z, 0-9, _ and -, with no "__" and no "_" at the start or end. "dots" is reserved.',
+      ),
     ).toBeVisible();
     expect(within(dialog).getByText("Enter the command to run.")).toBeVisible();
     await user.type(within(dialog).getByLabelText("Environment"), "no-equals");
@@ -245,7 +247,7 @@ describe("adding a server", () => {
     await user.type(within(dialog).getByLabelText("Name"), "files");
     await user.type(within(dialog).getByLabelText("Command"), "npx");
     await user.click(within(dialog).getByRole("button", { name: "Test connection" }));
-    expect(await within(dialog).findByText(/You declined to run it/)).toBeVisible();
+    expect(await within(dialog).findByText(/You declined. Nothing was tested./)).toBeVisible();
     expect(screen.queryByText(/declined: nothing/)).toBeNull();
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
     expect(await within(dialog).findByRole("alert")).toHaveTextContent("already exists");
@@ -282,7 +284,7 @@ describe("adding a server", () => {
         },
       ]),
     );
-    expect(await within(dialog).findByText(/You declined the change/)).toBeVisible();
+    expect(await within(dialog).findByText(/You declined. Nothing was saved./)).toBeVisible();
     expect(screen.getByRole("dialog", { name: "Edit github" })).toBeVisible();
   });
 });
@@ -533,5 +535,80 @@ describe("plugins", () => {
     );
     // The core asks about the servers the plugin starts; a refusal is not an error.
     expect(await within(dialog).findByText(/You declined: the plugin was not added/)).toBeVisible();
+  });
+});
+
+describe("the server form's checks", () => {
+  async function open() {
+    const view = renderApp("/library");
+    await view.user.click(await screen.findByRole("button", { name: "Add server" }));
+    return { ...view, dialog: await screen.findByRole("dialog", { name: "Add MCP server" }) };
+  }
+  const NAME =
+    'Use 1 to 40 of a-z, 0-9, _ and -, with no "__" and no "_" at the start or end. "dots" is reserved.';
+
+  it.each(["_x", "x_", "a__b"])("refuses the name %s", async (name) => {
+    const { user, dialog } = await open();
+    await user.type(within(dialog).getByLabelText("Name"), name);
+    await user.type(within(dialog).getByLabelText("Command"), "run");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    expect(within(dialog).getByText(NAME)).toBeVisible();
+    expect(backend.callsTo("library_add")).toEqual([]);
+  });
+
+  it.each(["http://host\\path", "http:///x", "http://host/\u202ex", "http://ho\u0001st/"])(
+    "refuses the url %j",
+    async (url) => {
+      const { user, dialog } = await open();
+      await user.selectOptions(within(dialog).getByLabelText("Transport"), "http");
+      await user.type(within(dialog).getByLabelText("Name"), "web");
+      await user.click(within(dialog).getByLabelText("URL"));
+      await user.paste(url);
+      await user.click(within(dialog).getByRole("button", { name: "Save" }));
+      const message = within(dialog).getByText(/Enter a URL that starts with/);
+      expect(message).toBeVisible();
+      expect(message.textContent).not.toContain("\\");
+      expect(backend.callsTo("library_add")).toEqual([]);
+    },
+  );
+
+  it.each([
+    ["Command", "ru\u0007n"],
+    ["Arguments", "-a\u200e"],
+    ["Working folder", "C:\\w\u0085"],
+    ["Environment", "K\u202eY=1"],
+  ])("refuses control or direction characters in %s", async (label, text) => {
+    const { user, dialog } = await open();
+    await user.type(within(dialog).getByLabelText("Name"), "files");
+    if (label !== "Command") await user.type(within(dialog).getByLabelText("Command"), "run");
+    await user.click(within(dialog).getByLabelText(label));
+    await user.paste(text);
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    expect(within(dialog).getByText("Remove the control or direction characters.")).toBeVisible();
+    expect(backend.callsTo("library_add")).toEqual([]);
+  });
+
+  it("says what an http server's variables do, and what a stdio server's do", async () => {
+    const { user, dialog } = await open();
+    expect(within(dialog).getByText(/when the server starts/)).toBeVisible();
+    await user.selectOptions(within(dialog).getByLabelText("Transport"), "http");
+    expect(within(dialog).getByText(/sends its value to the server.*asks first/)).toBeVisible();
+    expect(within(dialog).queryByText(/when the server starts/)).toBeNull();
+  });
+
+  it("keeps an open form when a refetch of the list fails", async () => {
+    listing([github]);
+    const { user, queryClient } = renderApp("/library");
+    const row = await screen.findByRole("listitem", { name: "github" });
+    await user.click(within(row).getByRole("button", { name: "Edit" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edit github" });
+    await user.type(within(dialog).getByLabelText("Working folder"), "C:\\work");
+    backend.on("library_list", () => {
+      throw { kind: "internal", message: "no database" };
+    });
+    await act(() => queryClient.invalidateQueries());
+    expect(await screen.findByText("no database")).toBeVisible();
+    expect(screen.getByRole("dialog", { name: "Edit github" })).toBeVisible();
+    expect(within(dialog).getByLabelText("Working folder")).toHaveValue("C:\\work");
   });
 });

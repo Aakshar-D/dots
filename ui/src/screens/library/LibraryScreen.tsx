@@ -22,14 +22,15 @@ export function LibraryScreen() {
   const [tab, setTab] = useState("servers");
 
   if (library.isPending) return <Page title="Library" />;
-  if (library.isError) {
+  // A failed refetch keeps the list (and an open form) and shows the error above it.
+  if (library.isError && !library.data) {
     return (
       <Page title="Library">
         <ErrorNote error={library.error} />
       </Page>
     );
   }
-  const entries = library.data;
+  const entries = library.data ?? [];
   const servers = entries.filter((e): e is ServerEntry => e.kind === "mcp_server");
   const skills = entries.filter((e): e is SkillEntry => e.kind === "skill");
   const plugins = entries.filter((e): e is PluginEntry => e.kind === "plugin");
@@ -41,6 +42,7 @@ export function LibraryScreen() {
 
   return (
     <Page title="Library">
+      {library.isError && <ErrorNote error={library.error} />}
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
           <TabsTrigger value="servers">MCP servers</TabsTrigger>

@@ -35,9 +35,27 @@ type Draft = {
   headers: string;
 };
 
-type Errors = Partial<Record<"name" | "command" | "args" | "env" | "url" | "headers", string>>;
+type Errors = Partial<
+  Record<"name" | "command" | "args" | "cwd" | "env" | "url" | "headers", string>
+>;
 
-const NAME_ERROR = 'Use 1 to 40 of a-z, 0-9, _ and -. "dots" is reserved.';
+const NAME_ERROR =
+  'Use 1 to 40 of a-z, 0-9, _ and -, with no "__" and no "_" at the start or end. "dots" is reserved.';
+const CONTROL_ERROR = "Remove the control or direction characters.";
+const URL_ERROR = "Enter a URL that starts with http:// or https:// and names a host.";
+
+/// C0, DEL, C1 and the bidi marks the core refuses in a command, argument, folder or env key.
+// eslint-disable-next-line no-control-regex
+const CONTROL = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
+const hasControl = (text: string) => CONTROL.test(text);
+
+function urlOk(url: string): boolean {
+  if (hasControl(url) || url.includes("\\")) return false;
+  const m = /^https?:\/\/([^/?#\s]*)/.exec(url);
+  if (m === null) return false;
+  const host = m[1]!.split("@").pop()!;
+  return host !== "" && !host.startsWith(":");
+}
 
 function draftOf(entry: ServerEntry | null): Draft {
   const blank: Draft = {
@@ -77,13 +95,24 @@ export function readDraft(
   checkName: boolean,
 ): { config: McpServerConfig; errors: Errors } | { config: null; errors: Errors } {
   const errors: Errors = {};
-  if (checkName && (draft.name === "dots" || !/^[a-z0-9_-]{1,40}$/.test(draft.name))) {
+  if (
+    checkName &&
+    (draft.name === "dots" ||
+      !/^[a-z0-9_-]{1,40}$/.test(draft.name) ||
+      draft.name.includes("__") ||
+      draft.name.startsWith("_") ||
+      draft.name.endsWith("_"))
+  ) {
     errors.name = NAME_ERROR;
   }
   if (draft.transport === "stdio") {
     if (draft.command.trim() === "") errors.command = "Enter the command to run.";
+    else if (hasControl(draft.command)) errors.command = CONTROL_ERROR;
+    if (hasControl(draft.args.replace(/\r?\n/g, ""))) errors.args = CONTROL_ERROR;
+    if (hasControl(draft.cwd)) errors.cwd = CONTROL_ERROR;
     const env = parseLines(draft.env, "=");
     if (!env.ok) errors.env = `Line ${env.line} needs the form KEY=VALUE.`;
+    else if (Object.keys(env.entries).some(hasControl)) errors.env = CONTROL_ERROR;
     if (Object.keys(errors).length > 0 || !env.ok) return { config: null, errors };
     return {
       errors,
@@ -96,7 +125,7 @@ export function readDraft(
       },
     };
   }
-  if (!/^https?:\/\/\S+$/.test(draft.url.trim())) errors.url = "The URL starts with http:// or https://.";
+  if (!urlOk(draft.url.trim())) errors.url = URL_ERROR;
   const headers = parseLines(draft.headers, ":");
   if (!headers.ok) errors.headers = `Line ${headers.line} needs the form Name: value.`;
   if (Object.keys(errors).length > 0 || !headers.ok) return { config: null, errors };
@@ -207,8 +236,9 @@ export function ServerForm(props: { entry: ServerEntry | null; onClose: () => vo
             </NativeSelect>
           </Field>
           <p className="text-xs text-muted-foreground">
-            Write <code>{"${VAR}"}</code> where a value should come from a variable: Dots reads the
-            variable from Dots' environment when the server starts, and never stores its value.
+            Write <code>{"${VAR}"}</code> where a value should come from a variable: {stdio
+              ? "Dots reads the variable from Dots' environment when the server starts, and never stores its value."
+              : "Dots reads the variable from Dots' environment and sends its value to the server. It asks first when the host is new, and never stores the value."}
           </p>
           {stdio ? (
             <>
@@ -220,7 +250,12 @@ export function ServerForm(props: { entry: ServerEntry | null; onClose: () => vo
                   onChange={(e) => set({ command: e.target.value })}
                 />
               </Field>
-              <Field label="Arguments" htmlFor="server-args" hint="One argument per line.">
+              <Field
+                label="Arguments"
+                htmlFor="server-args"
+                error={shown.args}
+                hint="One argument per line."
+              >
                 <Textarea
                   id="server-args"
                   rows={3}
@@ -232,6 +267,7 @@ export function ServerForm(props: { entry: ServerEntry | null; onClose: () => vo
               <Field
                 label="Working folder"
                 htmlFor="server-cwd"
+                error={shown.cwd}
                 hint="Empty: the folder the run works in."
               >
                 <div className="flex gap-2">
@@ -329,7 +365,7 @@ export function ServerForm(props: { entry: ServerEntry | null; onClose: () => vo
             {probe.isError &&
               (isDeclined(probe.error) ? (
                 <p role="status" className="text-xs text-muted-foreground">
-                  You declined to run it. Nothing was started.
+                  You declined. Nothing was tested.
                 </p>
               ) : (
                 <>
@@ -349,9 +385,7 @@ export function ServerForm(props: { entry: ServerEntry | null; onClose: () => vo
           {save.isError &&
             (isDeclined(save.error) ? (
               <p role="status" className="text-xs text-muted-foreground">
-                {entry
-                  ? "You declined the change. Nothing was saved."
-                  : "You declined to run it. Nothing was saved."}
+                You declined. Nothing was saved.
               </p>
             ) : (
               <p role="alert" className="text-xs text-destructive">
