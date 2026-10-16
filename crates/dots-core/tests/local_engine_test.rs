@@ -732,6 +732,7 @@ async fn start_by_hand(
         mcp_secret: "s".into(),
         cancel,
         approved_calls: approvals,
+        mcp_servers: Vec::new(),
     };
     let mut rx = engine.start(ctx).await.unwrap();
     while rx.recv().await.is_some() {}

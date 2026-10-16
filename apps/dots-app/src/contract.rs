@@ -5,6 +5,7 @@
 
 use dots_core::engine::EngineEvent;
 use dots_core::events::RuntimeEvent;
+use dots_core::library::Uses;
 use dots_core::model::*;
 use dots_core::policy::{allow_candidates, Action, Policy, Preset};
 use dots_core::schedule::Schedule;
@@ -28,7 +29,11 @@ fn spec() -> DotSpec {
         "C:/dev/app",
     );
     s.schedule = Some(Schedule::cron("0 0 2 * * *"));
-    s.mcp_servers = Some(json!({"github": {"type": "http", "url": "http://127.0.0.1:9000/mcp"}}));
+    s.uses = Uses {
+        mcp_servers: vec!["github".into()],
+        skills: vec!["pdf".into()],
+        plugins: vec!["pdf-tools".into()],
+    };
     s
 }
 

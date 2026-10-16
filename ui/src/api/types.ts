@@ -64,6 +64,13 @@ export const Schedule = z.strictObject({
   until: nullable(Until),
 });
 
+/// The Library items a dot uses, by name.
+export const Uses = z.strictObject({
+  mcp_servers: z.array(z.string()),
+  skills: z.array(z.string()),
+  plugins: z.array(z.string()),
+});
+
 const dotSpecShape = {
   name: z.string(),
   instructions: z.string(),
@@ -74,7 +81,7 @@ const dotSpecShape = {
   workspace_mode: WorkspaceMode,
   schedule: nullable(Schedule),
   policy: Policy,
-  mcp_servers: nullable(z.record(z.string(), z.unknown())),
+  uses: Uses,
   use_user_settings: z.boolean(),
   max_turns: z.number().int(),
   timeout_secs: z.number().int(),
@@ -308,6 +315,7 @@ export type Weekday = z.infer<typeof Weekday>;
 export type ScheduleRule = z.infer<typeof ScheduleRule>;
 export type Until = z.infer<typeof Until>;
 export type Schedule = z.infer<typeof Schedule>;
+export type Uses = z.infer<typeof Uses>;
 export type DotSpec = z.infer<typeof DotSpec>;
 export type Dot = z.infer<typeof Dot>;
 export type Run = z.infer<typeof Run>;

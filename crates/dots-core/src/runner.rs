@@ -513,6 +513,7 @@ impl Runner {
             }
             _ => Vec::new(),
         };
+        let mcp_servers = self.store.used_mcp_servers(&dot.spec.uses).await?;
         let secret = self.register_secret(&run.id);
         let ctx = RunContext {
             run_id: run.id.clone(),
@@ -524,6 +525,7 @@ impl Runner {
             mcp_secret: secret,
             cancel: cancel.clone(),
             approved_calls,
+            mcp_servers,
         };
         let mut rx = engine.start(ctx).await?;
 

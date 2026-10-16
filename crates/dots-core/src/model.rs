@@ -2,6 +2,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::library::Uses;
 use crate::policy::{Policy, Preset};
 use crate::schedule::{next_slot, Schedule, Until};
 use crate::{Error, Result};
@@ -74,7 +75,9 @@ pub struct DotSpec {
     pub workspace_mode: WorkspaceMode,
     pub schedule: Option<Schedule>,
     pub policy: Policy,
-    pub mcp_servers: Option<Value>,
+    /// The Library items the dot uses (MCP/skills spec section 2).
+    #[serde(default)]
+    pub uses: Uses,
     pub use_user_settings: bool,
     pub max_turns: u32,
     pub timeout_secs: u64,
@@ -94,7 +97,7 @@ impl DotSpec {
             workspace_mode: WorkspaceMode::Worktree,
             schedule: None,
             policy: Policy::preset(Preset::Sandboxed),
-            mcp_servers: None,
+            uses: Uses::default(),
             use_user_settings: false,
             max_turns: 40,
             timeout_secs: 1800,
@@ -148,14 +151,8 @@ impl DotSpec {
             return invalid("approval_wait_secs must be at most 280");
         }
         self.policy.validate()?;
-        if let Some(servers) = &self.mcp_servers {
-            let Some(obj) = servers.as_object() else {
-                return invalid("mcp_servers must be a JSON object of name -> server config");
-            };
-            if obj.contains_key("dots") {
-                return invalid("mcp server name 'dots' is reserved");
-            }
-        }
+        // Whether the Library has each item is checked by the store when the dot is saved.
+        self.uses.validate()?;
         Ok(())
     }
 }

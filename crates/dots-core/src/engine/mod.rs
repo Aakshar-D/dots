@@ -6,6 +6,7 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use crate::library::LibraryItem;
 use crate::model::{ApplyState, Approval, Dot};
 use crate::Result;
 
@@ -82,6 +83,9 @@ pub struct RunContext {
     /// the order they were asked. Only a `resume` run on an engine that
     /// `applies_approved_calls` gets any.
     pub approved_calls: Vec<Approval>,
+    /// The Library's MCP servers the dot uses, its plugins' included, as stored: `${VAR}` not
+    /// expanded (`Store::used_mcp_servers`).
+    pub mcp_servers: Vec<LibraryItem>,
 }
 
 #[async_trait]

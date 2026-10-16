@@ -120,7 +120,12 @@ Stored at `%LOCALAPPDATA%\dots\dots.db`. Worktrees at `%LOCALAPPDATA%\dots\workt
   its schedule changes, not when it is loaded. The core sets an `every` rule's `anchor`.
   `timezone` TEXT (default local, unused: schedules use the PC's local time)
 - `webhook_token` TEXT (random 32 bytes, base64url)
-- `policy` TEXT (JSON, see §5), `mcp_servers` TEXT NULL (JSON, Claude only)
+- `policy` TEXT (JSON, see §5)
+- `uses` TEXT (JSON, migration 0006): the Library items the dot uses, by name,
+  `{"mcp_servers": [...], "skills": [...], "plugins": [...]}`; both engines. Saving a dot refuses
+  a name the Library does not have (a plugin's MCP server is not named: it comes with the
+  plugin); removing a Library item removes its name here. It replaces `mcp_servers` (the old
+  per-dot JSON, Claude only), which 0006 drops.
 - `use_user_settings` INTEGER (0/1, default 0)
 - `max_turns` INTEGER (default 40), `timeout_secs` INTEGER (default 1800, max 604800),
   `approval_wait_secs` INTEGER (default 240, max 280)
@@ -154,6 +159,23 @@ Stored at `%LOCALAPPDATA%\dots\dots.db`. Worktrees at `%LOCALAPPDATA%\dots\workt
 - `self_apply` INTEGER (0/1), `apply_state` TEXT NULL (`queued` | `applying` | `applied` |
   `failed` | `unknown` | `skipped`), `applied_at` TEXT NULL (migration 0004; see
   `2026-10-13-approvals-v2-design.md` §3.4)
+- `mcp_fingerprint` TEXT NULL (migration 0006): for an MCP call, the server's accepted
+  fingerprint when it was asked (`2026-10-15-mcp-skills-plugins-design.md` §4)
+
+**library_items** (migration 0006; MCP/skills spec §2) — the Library: `id` PK (ULID), `kind`
+(`mcp_server` | `skill` | `plugin`), `name` (UNIQUE with `kind`; an MCP server's matches
+`^[a-z0-9_-]{1,40}$`, without `__`, not `dots`; a skill's or plugin's is 1-64 of `A-Za-z0-9._-`
+starting with a letter or digit), `config` (JSON of the kind: an MCP server's
+`{"transport": "stdio", "command", "args", "cwd", "env"}` or `{"transport": "http", "url",
+"headers"}` with `${VAR}` references, a skill's `{"path"}`, a plugin's `{"path", "installed_id",
+"run_hooks"}`), `owner_id` (FK `library_items`, ON DELETE CASCADE: the plugin an MCP server comes
+from), `created_at`, `updated_at`.
+
+**mcp_catalogs** (migration 0006; MCP/skills spec §3) — one row per MCP server: `server_id` PK
+(FK `library_items`, ON DELETE CASCADE), `accepted_fingerprint`, `accepted_tools`,
+`seen_fingerprint`, `seen_tools` (JSON tool lists), `status` (`accepted` | `changed` |
+`unreachable` | `unchecked`; a new server and a server whose config changed are `unchecked`),
+`checked_at`, `error`.
 
 **schedule_state** (migration 0005; Scheduler v2 spec §4) — one row per dot with a schedule:
 `dot_id` PK (FK `dots`, ON DELETE CASCADE), `rule_key` (the schedule's JSON when the row was
@@ -176,7 +198,17 @@ Migrations: `0002` adds `runs.reviewed_at`; `0003` adds the index
 `runs(root_run_id, queued_at, id)` that the Inbox query needs; `0004` adds the approval apply
 columns; `0005` converts each cron string in `dots.schedule` to
 `{"rule":{"kind":"cron","expr":...},"catch_up":false,"until":null}` (no catch-up, so an upgraded
-schedule behaves as before), adds `runs.retry_of` and creates `schedule_state`.
+schedule behaves as before), adds `runs.retry_of` and creates `schedule_state`; `0006` creates
+`library_items` and `mcp_catalogs`, adds `approvals.mcp_fingerprint` and `dots.uses`, and drops
+`dots.mcp_servers`. Its conversion needs code, so the SQL keeps each dot's old servers in a
+table `upgrade_0006` and the store finishes it when it opens, in one transaction, then drops
+that table: each old server becomes an MCP server item (`unchecked`) ticked in the dot's `uses`,
+under a valid name made from the old one; dots with a server of the same name and config share
+one item, another config gets `<name>-2`, `-3`, ...; the dot's rules naming `mcp__<old>` are
+renamed; a secret-looking inline value becomes a variable (an env value `${<KEY>}`, an
+`Authorization` header `Bearer ${<NAME>_TOKEN}`, another header `${<HEADER>}`); a server Dots
+cannot read is left out with a log line. Every stored policy without `mcp_default` gets it
+(`deny` for Read-only, else `ask`), and a Trusted policy loses the preset's old `mcp__*` ask rule.
 
 All timestamps are RFC 3339 UTC strings.
 
@@ -367,8 +399,9 @@ claude -p --output-format stream-json --input-format stream-json --verbose
 Working directory = run workspace. Env: `MCP_TOOL_TIMEOUT` set to
 `(approval_wait_secs + 30) * 1000` on a best-effort basis; CLI 2.1.295 ignores it for the
 permission-prompt tool (observed hard cap of about 300 s; CLI 2.1.295 observed 2026-10-09). The per-run MCP config contains the dots MCP server
-(`http://127.0.0.1:<port>/mcp`, header `Authorization: Bearer <per-run secret>`) plus the dot's
-own `mcp_servers`. An empty `--setting-sources ""` keeps every settings file out of headless
+(`http://127.0.0.1:<port>/mcp`, header `Authorization: Bearer <per-run secret>`) plus the Library
+MCP servers the dot uses, its plugins' included, with `${VAR}` read from Dots' environment (a
+server whose variable is not set is left out). An empty `--setting-sources ""` keeps every settings file out of headless
 runs: the user's global hooks (GateGuard, caveman, memory hooks) and a repo's committed
 `.claude/settings.json`, which could otherwise widen the CLI's own allow list beyond the dot
 policy. CLI 2.1.295 accepts the empty value (probed 2026-10-09: init event emitted, only builtin
@@ -463,8 +496,8 @@ React + Vite + TypeScript inside Tauri 2. Screens:
   toggles and a time; the cron text — then "Catch up a missed run" and "Stop" (never, after N
   runs, after a date), both hidden for Once; the next 3 fire times from `preview_schedule`, and
   the core's objection under the fields); webhook URL + token (copy, regenerate);
-  policy editor (preset picker + rule table); limits; MCP servers (Claude only);
-  use-user-settings toggle.
+  policy editor (preset picker + rule table); limits; use-user-settings toggle (Claude only).
+  The dot's `uses` (Library items) is kept as stored when the form is saved.
 - **Run view** — live transcript (assistant text, collapsible tool calls/results), worktree diff,
   summary, status, tokens; cancel, discard worktree, open folder. From Scheduler v2 a
   scheduled run's trigger has a line under it: "Scheduled for <slot>", "…, caught up after

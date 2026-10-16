@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Value};
 
 use crate::engine::RunContext;
+use crate::library::{LibraryConfig, McpServerConfig};
 
 pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
     let spec = &ctx.dot.spec;
@@ -46,11 +47,21 @@ pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
     a
 }
 
-pub fn mcp_config(ctx: &RunContext) -> Value {
+/// The run's `--mcp-config`: the Library's MCP servers the dot uses, with `${VAR}` read from
+/// `env`, and Dots' own `dots` server. A server whose variable is not set is left out.
+pub fn mcp_config(ctx: &RunContext, env: &dyn Fn(&str) -> Option<String>) -> Value {
     let mut servers = serde_json::Map::new();
-    if let Some(Value::Object(extra)) = &ctx.dot.spec.mcp_servers {
-        for (name, cfg) in extra {
-            servers.insert(name.clone(), cfg.clone());
+    for item in &ctx.mcp_servers {
+        let LibraryConfig::McpServer(config) = &item.config else {
+            continue;
+        };
+        match config.expanded(env) {
+            Ok(config) => {
+                servers.insert(item.name.clone(), claude_entry(&config));
+            }
+            Err(e) => {
+                tracing::warn!(run = %ctx.run_id, "MCP server {} left out: {e}", item.name)
+            }
         }
     }
     servers.insert(
@@ -62,6 +73,28 @@ pub fn mcp_config(ctx: &RunContext) -> Value {
         }),
     );
     json!({ "mcpServers": servers })
+}
+
+/// A server as an entry of Claude Code's `mcpServers`.
+fn claude_entry(config: &McpServerConfig) -> Value {
+    match config {
+        McpServerConfig::Stdio {
+            command,
+            args,
+            cwd,
+            env,
+        } => {
+            let mut entry =
+                json!({ "type": "stdio", "command": command, "args": args, "env": env });
+            if let Some(cwd) = cwd {
+                entry["cwd"] = json!(cwd);
+            }
+            entry
+        }
+        McpServerConfig::Http { url, headers } => {
+            json!({ "type": "http", "url": url, "headers": headers })
+        }
+    }
 }
 
 /// The configured path if it is a file; otherwise search PATH.

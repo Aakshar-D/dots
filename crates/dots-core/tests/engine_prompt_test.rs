@@ -27,6 +27,7 @@ fn ctx(cancel: CancellationToken) -> RunContext {
         mcp_secret: "s".into(),
         cancel,
         approved_calls: Vec::new(),
+        mcp_servers: Vec::new(),
     }
 }
 

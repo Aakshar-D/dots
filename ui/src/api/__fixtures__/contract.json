@@ -70,12 +70,6 @@
     "id": "01J0DOT",
     "instructions": "Run the tests and summarize failures.",
     "max_turns": 40,
-    "mcp_servers": {
-      "github": {
-        "type": "http",
-        "url": "http://127.0.0.1:9000/mcp"
-      }
-    },
     "model": "sonnet",
     "name": "nightly-tests",
     "policy": {
@@ -168,6 +162,17 @@
     "timeout_secs": 1800,
     "updated_at": "2026-10-09T12:00:00.000Z",
     "use_user_settings": false,
+    "uses": {
+      "mcp_servers": [
+        "github"
+      ],
+      "plugins": [
+        "pdf-tools"
+      ],
+      "skills": [
+        "pdf"
+      ]
+    },
     "webhook_token": "tok_abc",
     "workdir": "C:/dev/app",
     "workspace_mode": "worktree"
@@ -183,12 +188,6 @@
       "id": "01J0DOT",
       "instructions": "Run the tests and summarize failures.",
       "max_turns": 40,
-      "mcp_servers": {
-        "github": {
-          "type": "http",
-          "url": "http://127.0.0.1:9000/mcp"
-        }
-      },
       "model": "sonnet",
       "name": "nightly-tests",
       "policy": {
@@ -281,6 +280,17 @@
       "timeout_secs": 1800,
       "updated_at": "2026-10-09T12:00:00.000Z",
       "use_user_settings": false,
+      "uses": {
+        "mcp_servers": [
+          "github"
+        ],
+        "plugins": [
+          "pdf-tools"
+        ],
+        "skills": [
+          "pdf"
+        ]
+      },
       "webhook_token": "tok_abc",
       "workdir": "C:/dev/app",
       "workspace_mode": "worktree"
@@ -328,7 +338,6 @@
     "engine": "local",
     "instructions": "Tidy the notes folder.",
     "max_turns": 40,
-    "mcp_servers": null,
     "model": "google/gemma-4-12b-qat",
     "name": "notes",
     "policy": {
@@ -381,6 +390,11 @@
     "schedule": null,
     "timeout_secs": 1800,
     "use_user_settings": false,
+    "uses": {
+      "mcp_servers": [],
+      "plugins": [],
+      "skills": []
+    },
     "workdir": "C:/notes",
     "workspace_mode": "folder"
   },
@@ -526,7 +540,6 @@
     "engine": "claude",
     "instructions": "",
     "max_turns": 40,
-    "mcp_servers": null,
     "model": "sonnet",
     "name": "",
     "policy": {
@@ -611,6 +624,11 @@
     "schedule": null,
     "timeout_secs": 1800,
     "use_user_settings": false,
+    "uses": {
+      "mcp_servers": [],
+      "plugins": [],
+      "skills": []
+    },
     "workdir": "",
     "workspace_mode": "worktree"
   },

@@ -8,9 +8,10 @@ use common::fake_dot;
 use dots_core::engine::claude::args::{build_args, mcp_config, resolve_claude, resolve_in_dirs};
 use dots_core::engine::claude::parse::parse_line;
 use dots_core::engine::{EngineEvent, RunContext};
+use dots_core::library::{LibraryConfig, LibraryItem};
 use dots_core::model::WorkspaceMode;
 use dots_core::policy::{Policy, Preset};
-use serde_json::json;
+use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
 const INIT: &str = r#"{"type":"system","subtype":"init","cwd":"C:\\x","session_id":"84fee880-875a-47ff-835e-60eba6825534","tools":["Bash"],"model":"claude-haiku-5-5","permissionMode":"default"}"#;
@@ -129,7 +130,15 @@ fn ctx(session: Option<&str>) -> RunContext {
     dot.spec.model = "haiku".into();
     dot.spec.max_turns = 12;
     dot.spec.policy = Policy::preset(Preset::ReadOnly);
-    dot.spec.mcp_servers = Some(json!({"sf": {"type": "stdio", "command": "sf-mcp"}}));
+    dot.spec.uses.mcp_servers = vec!["sf".into(), "gh".into()];
+    let item = |name: &str, config: Value| LibraryItem {
+        id: format!("ID-{name}"),
+        name: name.into(),
+        config: LibraryConfig::McpServer(serde_json::from_value(config).unwrap()),
+        owner_id: None,
+        created_at: "t".into(),
+        updated_at: "t".into(),
+    };
     RunContext {
         run_id: "RUN1".into(),
         dot,
@@ -140,6 +149,31 @@ fn ctx(session: Option<&str>) -> RunContext {
         mcp_secret: "SECRET".into(),
         cancel: CancellationToken::new(),
         approved_calls: Vec::new(),
+        mcp_servers: vec![
+            item(
+                "sf",
+                json!({"transport": "stdio", "command": "sf-mcp", "args": ["--org", "${SF_ORG}"],
+                       "env": {"SF_TOKEN": "${SF_TOKEN}", "MODE": "readonly"}}),
+            ),
+            item(
+                "gh",
+                json!({"transport": "http", "url": "https://gh.example.com/mcp",
+                       "headers": {"Authorization": "Bearer ${GH_TOKEN}"}}),
+            ),
+            item(
+                "lost",
+                json!({"transport": "stdio", "command": "lost", "env": {"K": "${NOT_SET}"}}),
+            ),
+        ],
+    }
+}
+
+fn test_env(name: &str) -> Option<String> {
+    match name {
+        "SF_ORG" => Some("acme".into()),
+        "SF_TOKEN" => Some("sf-secret".into()),
+        "GH_TOKEN" => Some("gh-secret".into()),
+        _ => None,
     }
 }
 
@@ -177,9 +211,21 @@ fn argv_resume_and_user_settings() {
 }
 
 #[test]
-fn mcp_config_merges_dot_servers_and_adds_dots() {
-    let cfg = mcp_config(&ctx(None));
-    assert_eq!(cfg["mcpServers"]["sf"]["command"], "sf-mcp");
+fn mcp_config_lists_the_library_servers_with_their_variables_and_adds_dots() {
+    let cfg = mcp_config(&ctx(None), &test_env);
+    assert_eq!(
+        cfg["mcpServers"]["sf"],
+        json!({"type": "stdio", "command": "sf-mcp", "args": ["--org", "acme"],
+               "env": {"MODE": "readonly", "SF_TOKEN": "sf-secret"}})
+    );
+    assert_eq!(
+        cfg["mcpServers"]["gh"],
+        json!({"type": "http", "url": "https://gh.example.com/mcp",
+               "headers": {"Authorization": "Bearer gh-secret"}})
+    );
+    // A server whose variable is not set is left out.
+    assert!(cfg["mcpServers"].get("lost").is_none(), "{cfg}");
+    assert_eq!(cfg["mcpServers"].as_object().unwrap().len(), 3);
     assert_eq!(cfg["mcpServers"]["dots"]["type"], "http");
     assert_eq!(
         cfg["mcpServers"]["dots"]["url"],

@@ -83,7 +83,7 @@ impl Engine for ClaudeEngine {
         let mcp_path = self.scratch_dir.join(format!("mcp-{}.json", ctx.run_id));
         write_private(
             &mcp_path,
-            &serde_json::to_vec_pretty(&args::mcp_config(&ctx))?,
+            &serde_json::to_vec_pretty(&args::mcp_config(&ctx, &|k| std::env::var(k).ok()))?,
         )
         .await?;
 
