@@ -786,7 +786,7 @@ dot; a chat or webhook run does not clear it.
   confirmed in a native dialog from Rust, like `claude_path`, before Dots runs or stores it
   (the same `DOTS_CONFIRM=yes` seam in debug builds). The config, the name and the kind are
   checked first, so the person is never asked about what the core refuses; the core refuses
-  control and bidirectional format characters in a stdio command, argument, folder and env, and
+  control and bidirectional format characters in a stdio command, argument, folder and env key (values are never shown), and
   in an http URL and header names. The dialog shows each part in double quotes (`"` and `\`
   escaped), so where one ends is visible. `library_probe` with a stdio config, and
   `library_add` / `library_update` whose stdio `command`, `args`, `cwd` or `env` (as stored,

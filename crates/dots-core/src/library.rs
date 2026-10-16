@@ -266,8 +266,7 @@ impl LibraryConfig {
                 let parts = std::iter::once(command)
                     .chain(args)
                     .chain(cwd.iter())
-                    .chain(env.keys())
-                    .chain(env.values());
+                    .chain(env.keys());
                 for part in parts {
                     check_plain(part)?;
                 }
@@ -300,7 +299,7 @@ fn check_plain(text: &str) -> Result<()> {
     });
     match bad {
         Some(c) => invalid(format!(
-            "an MCP server's command, arguments, folder, environment, URL and header names \
+            "an MCP server's command, arguments, folder, environment names, URL and header names \
              hold no control or direction character (found U+{:04X})",
             c as u32
         )),
@@ -308,17 +307,18 @@ fn check_plain(text: &str) -> Result<()> {
     }
 }
 
-/// The origin (`scheme://host[:port]`, lower case, without credentials) of an http(s) URL, or
-/// `None` when the text is not one. A change of origin sends the server's requests elsewhere.
+/// The origin of an http(s) URL as the HTTP client (`reqwest::Url`, the WHATWG parser) sees it:
+/// `scheme://host[:port]`, lower case, the default port left out. `None` when the text does not
+/// parse, or names a `${VAR}` in the host (which is only known when the server starts): the
+/// caller then shows and compares the raw URL. A change of origin sends the requests elsewhere.
 pub fn http_origin(url: &str) -> Option<String> {
-    let (scheme, rest) = url.split_once("://")?;
-    let scheme = scheme.to_ascii_lowercase();
-    if scheme != "http" && scheme != "https" {
+    let rest = url.split_once("://")?.1;
+    let authority = rest.split(['/', '?', '#', '\\']).next().unwrap_or("");
+    if authority.contains("${") {
         return None;
     }
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    let host = authority.rsplit('@').next().unwrap_or("");
-    (!host.is_empty()).then(|| format!("{scheme}://{}", host.to_ascii_lowercase()))
+    let parsed = reqwest::Url::parse(url).ok()?;
+    matches!(parsed.scheme(), "http" | "https").then(|| parsed.origin().ascii_serialization())
 }
 
 /// Whether a key names a secret: `TOKEN`, `KEY`, `SECRET`, `PASSWORD` or `AUTH` in it, in any

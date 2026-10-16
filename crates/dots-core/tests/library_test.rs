@@ -261,10 +261,6 @@ fn control_and_direction_characters_are_refused_in_what_a_dialog_shows() {
             invalid(with(&[], None, &[(&text, "v")]).validate()),
             "key {bad:?}"
         );
-        assert!(
-            invalid(with(&[], None, &[("K", &text)]).validate()),
-            "value {bad:?}"
-        );
         let url = LibraryConfig::McpServer(McpServerConfig::Http {
             url: format!("https://h/{text}"),
             headers: BTreeMap::new(),
@@ -281,4 +277,42 @@ fn control_and_direction_characters_are_refused_in_what_a_dialog_shows() {
         Some("https://host.example:8443")
     );
     assert_eq!(dots_core::library::http_origin("ftp://h/"), None);
+}
+
+#[test]
+fn the_origin_is_the_one_the_http_client_uses() {
+    let o = |u: &str| dots_core::library::http_origin(u);
+    // A backslash ends the authority for http(s): the host is evil.example.
+    assert_eq!(
+        o(r"https://evil.example\@api.github.com/mcp").as_deref(),
+        Some("https://evil.example")
+    );
+    // Default port, host case and a trailing dot's absence do not make another origin.
+    assert_eq!(o("https://h.example:443/a"), o("HTTPS://H.Example/b"));
+    assert_ne!(o("https://h.example:444/"), o("https://h.example/"));
+    assert_eq!(o("http://h.example:80/"), o("http://h.example/"));
+    // A variable in the host is only known at start: no origin, the raw url is compared.
+    assert_eq!(o("https://${HOST}/mcp"), None);
+    assert_eq!(o("https://x.${Domain}:8443/mcp"), None);
+    // A variable in the path leaves the origin.
+    assert_eq!(
+        o("https://h.example/${P}").as_deref(),
+        Some("https://h.example")
+    );
+}
+
+#[test]
+fn an_env_value_may_hold_any_text_but_a_key_may_not() {
+    let env = |k: &str, v: &str| {
+        LibraryConfig::McpServer(McpServerConfig::Stdio {
+            command: "node".into(),
+            args: vec![],
+            cwd: None,
+            env: BTreeMap::from([(k.to_string(), v.to_string())]),
+        })
+    };
+    assert!(env("CERT", "-----BEGIN-----\n{\"a\":\t1}\n\u{202e}")
+        .validate()
+        .is_ok());
+    assert!(invalid(env("A\nB", "v").validate()));
 }

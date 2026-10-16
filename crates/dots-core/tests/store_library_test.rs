@@ -769,3 +769,58 @@ async fn moving_an_http_server_to_another_origin_drops_what_was_accepted() {
         .unwrap();
     assert_eq!(c.status, CatalogStatus::Changed);
 }
+
+#[tokio::test]
+async fn a_backslash_url_moves_the_origin_to_the_host_the_client_uses() {
+    let (_d, store) = temp_store().await;
+    let tools = json!([{"name": "t"}]);
+    let item = store
+        .add_library_item("web", &http("https://api.github.com/mcp", "1"), None)
+        .await
+        .unwrap();
+    store
+        .record_catalog_seen(&item.id, "f1", &tools)
+        .await
+        .unwrap();
+    store.accept_catalog(&item.id, "f1").await.unwrap();
+    // The default port is the same origin: the accepted list stays.
+    store
+        .update_library_item(&item.id, &http("https://api.github.com:443/mcp", "1"))
+        .await
+        .unwrap();
+    let c = store.get_catalog(&item.id).await.unwrap();
+    assert_eq!(c.accepted_fingerprint.as_deref(), Some("f1"));
+    // To the client this is evil.example.
+    store
+        .update_library_item(
+            &item.id,
+            &http(r"https://evil.example\@api.github.com/mcp", "1"),
+        )
+        .await
+        .unwrap();
+    let c = store.get_catalog(&item.id).await.unwrap();
+    assert_eq!(c.accepted_fingerprint, None);
+    // An unparsable url (a variable in the host) is a move unless the text is equal.
+    let var = |p: &str| http(&format!("https://${{HOST}}/{p}"), "1");
+    store
+        .update_library_item(&item.id, &var("a"))
+        .await
+        .unwrap();
+    store
+        .record_catalog_seen(&item.id, "f1", &tools)
+        .await
+        .unwrap();
+    store.accept_catalog(&item.id, "f1").await.unwrap();
+    store
+        .update_library_item(&item.id, &var("a"))
+        .await
+        .unwrap();
+    let c = store.get_catalog(&item.id).await.unwrap();
+    assert_eq!(c.accepted_fingerprint.as_deref(), Some("f1"));
+    store
+        .update_library_item(&item.id, &var("b"))
+        .await
+        .unwrap();
+    let c = store.get_catalog(&item.id).await.unwrap();
+    assert_eq!(c.accepted_fingerprint, None);
+}
