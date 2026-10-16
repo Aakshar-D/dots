@@ -121,15 +121,33 @@ impl RunServer {
     /// Waits until every list change the server announced so far has been listed and checked,
     /// so `tools` and `trust` are current: a change announced with a call's result holds the
     /// server before the next call is checked. Waits at most `mcp::ANSWER_TIMEOUT`, and not at
-    /// all once the run's tools are closed.
-    pub async fn settled(&self) {
+    /// all once the run's tools are closed. False when the wait timed out: a change is still
+    /// being listed, so `tools` and `trust` may be those of the old list.
+    pub async fn settled(&self) -> bool {
         let announced = *self.session.list_changed().borrow();
         let mut handled = self.handled.clone();
-        let _ = tokio::time::timeout(
+        let waited = tokio::time::timeout(
             crate::mcp::ANSWER_TIMEOUT,
             handled.wait_for(|n| *n >= announced),
         )
         .await;
+        waited.is_ok()
+    }
+
+    /// `trust` of `tool` for the check of a call, once the server has `settled`. When it did not
+    /// settle in time, the server is treated as held for this call (it asks): a list change it
+    /// announced may not be on the accepted list, and the old list's trust must not decide.
+    pub async fn settled_trust(&self, tool: &str) -> McpTrust {
+        let settled = self.settled().await;
+        let mut trust = self.trust(tool);
+        if !settled {
+            tracing::warn!(
+                "{}: its changed tools were not listed in time; the call of {tool} asks",
+                self.name
+            );
+            trust.held = true;
+        }
+        trust
     }
 }
 

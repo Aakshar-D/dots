@@ -160,7 +160,7 @@ The tools of every open session are added to the tools sent to the model, as Ope
 | A server cannot start: a variable is not set, the command is not found, it exits | It is left out of the run; a run event "salesforce: could not start: SF_TOKEN is not set"; the catalog becomes `unreachable` with the error; the run goes on |
 | A server does not answer `initialize` or `tools/list` within 30 s | Same as above, "did not answer" |
 | The tool list differs from the accepted one at run start | Status `changed`; the server is held for this run and later ones; the Inbox shows it (section 8) |
-| `notifications/tools/list_changed` during a run | The client lists again; a new fingerprint sets `changed` at once, so the next call asks |
+| `notifications/tools/list_changed` during a run | The client lists again; a new fingerprint sets `changed` at once, so the next call asks. A call waits for that listing up to 30 s; if it is not done by then, that call asks as if the server were held |
 | A server dies during a run | Its tools return "the server stopped"; no restart |
 | A call is made to a tool the accepted list does not have | Step 2 of the check: ask |
 | A skill or plugin folder is missing, or `SKILL.md` is missing | That item is left out, with a run event ("skill pdf: folder not found") |

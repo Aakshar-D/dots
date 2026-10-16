@@ -156,7 +156,8 @@ impl Session {
         }
         let mut given = HashSet::new();
         for server in self.ctx.tools.servers() {
-            server.settled().await;
+            // Not settled in time: the list may be the old one; each call is checked anyway.
+            let _ = server.settled().await;
             for tool in server.tools() {
                 let qualified = format!("mcp__{}__{}", server.name(), tool.name);
                 let name = model_name(&qualified);
@@ -207,14 +208,18 @@ impl Session {
         let Some((server, tool)) = self.ctx.tools.resolve(qualified) else {
             return Some(ToolOutput::err(not_open(qualified)));
         };
-        // A list change announced with an earlier result holds the server before this check.
-        server.settled().await;
+        // A list change announced with an earlier result holds the server before this check; one
+        // not listed in time holds it for this call.
+        let trust = tokio::select! {
+            trust = server.settled_trust(tool) => trust,
+            _ = self.ctx.cancel.cancelled() => return None,
+        };
         let checked = tokio::select! {
             r = self.gate.check_mcp(
                 &self.ctx.run_id,
                 qualified,
                 input,
-                server.trust(tool),
+                trust,
                 server.accepted_fingerprint(),
             ) => r,
             _ = self.ctx.cancel.cancelled() => return None,

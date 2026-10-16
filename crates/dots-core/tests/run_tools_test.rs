@@ -386,8 +386,8 @@ async fn a_server_whose_tools_cannot_be_listed_after_a_change_is_held() {
         )
         .await
         .unwrap();
-    // `settled` returns once the watcher has dealt with the announced change.
-    srv.settled().await;
+    // `settled` returns once the watcher has dealt with the announced change, and says so.
+    assert!(srv.settled().await);
     assert!(srv.held(), "the server stayed trusted on the old list");
     // The old list stays, but a read-only hint no longer lets a call through.
     let listed: Vec<String> = srv.tools().into_iter().map(|t| t.name).collect();

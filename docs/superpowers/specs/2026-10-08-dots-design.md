@@ -491,7 +491,8 @@ its SHA-256; the map back is kept for the run. A call is shown and checked under
 reported as the `text` parts joined, other parts as `[<type> omitted]` (the `structuredContent`
 when there is no part), `isError` as an error result, capped at 30 KB. A list change the server
 announces is listed and checked before the next call and the next turn's schemas, so a changed
-list holds the server for that call. A server that died answers "the server stopped".
+list holds the server for that call; a change not listed and checked within 30 s holds the
+server for that call too (it asks). A server that died answers "the server stopped".
 
 Every chat message (system, user, assistant with its `tool_calls`, tool result) is persisted as
 a `message` run event. A local run's `session_id` is the `root_run_id` of its lineage. On a

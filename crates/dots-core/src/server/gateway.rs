@@ -52,7 +52,8 @@ pub async fn handle(
         "ping" => json!({}),
         "tools/list" => {
             // A list change the server announced is listed first.
-            open.settled().await;
+            // Not settled in time: the list may be the old one; each call is checked anyway.
+            let _ = open.settled().await;
             json!({ "tools": open.tools() })
         }
         "tools/call" => match call(&s, &run_id, open, &req).await {
@@ -92,15 +93,16 @@ async fn call(
         Some(_) => return Err((-32602, "params.arguments must be an object".to_string())),
     };
     let qualified = format!("mcp__{}__{tool}", server.name());
-    // A list change announced with an earlier result holds the server before this check.
-    server.settled().await;
+    // A list change announced with an earlier result holds the server before this check; one
+    // not listed in time holds it for this call.
+    let trust = server.settled_trust(tool).await;
     let checked = s
         .hub
         .check_mcp(
             run_id,
             &qualified,
             input,
-            server.trust(tool),
+            trust,
             server.accepted_fingerprint(),
         )
         .await;
