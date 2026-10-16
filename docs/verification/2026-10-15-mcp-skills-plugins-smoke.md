@@ -4,7 +4,7 @@
 - Build: debug (`bun run tauri build --debug --no-bundle`, into the shared target folder `C:/Users/aksha/dots/target`), branch `feat/mcp-skills` at commit `89eb313` (Tasks 1 to 10, with their fix rounds). Windows 11. The local model is `google/gemma-4-12b-qat` in LM Studio, loaded with a context of 8192.
 - Names changed after the run: a plugin's MCP server item is now named `plugin-<plugin>-<server>`, no longer `plugin_<plugin>_<server>` (a fix of the final review: the old name is Claude Code's own prefix for a plugin's server). This document says `plugin-smokeplug-notes` and `mcp__plugin-smokeplug-notes__peek` where the run saw `plugin_smokeplug_notes` and `mcp__plugin_smokeplug_notes__peek`; Part A was not run again.
 - Part A (agent steps): 11 steps (A1 to A11), 11 as expected in what Dots did. Two checks inside them could not be made as written (findings 1 and 2). 8 findings in all, none a defect that stops the feature: the rest are display notes, differences in the environment and a known open item.
-- Part B (person steps): 4 steps, all open. Nothing in Part B was run; the agent never runs the real `claude` CLI.
+- Part B (person steps): 7 steps, all open (B5 to B7 were added after the final review). Nothing in Part B was run; the agent never runs the real `claude` CLI.
 - Screenshots: not in the repository. They are in the scratchpad folder of the run (the folder `SHOTS` below: `C:/Users/aksha/AppData/Local/Temp/claude/C--Users-aksha-dots/5f801379-3be9-46b5-8f0d-fa7a43eda6aa/scratchpad/mcp/smoke-shots`), 9 pictures, the app's log `dots.2026-10-16.log`, and the kit for Part B in `SHOTS/kit`. Each result says what the picture shows.
 
 ## What this covers
@@ -350,7 +350,7 @@ Result: pass. `stopping 12264`, "SUCCESS: The process with PID 12264 has been te
 
 ## What Part A does not show
 
-- B1 to B4 below: the real `claude` CLI, its `--allowedTools` with `mcp__<server>__*`, `--plugin-dir` more than once, `plugin_errors`, the gateway's answers to the CLI's HTTP client, `--setting-sources ""` and `~/.claude/skills`, and `CLAUDE_CODE_PLUGIN_CACHE_DIR`.
+- B1 to B7 below: the real `claude` CLI, its `--allowedTools` with `mcp__<server>__*`, `--plugin-dir` more than once, `plugin_errors`, the gateway's answers to the CLI's HTTP client, `--setting-sources ""` and `~/.claude/skills`, and `CLAUDE_CODE_PLUGIN_CACHE_DIR`.
 - An HTTP server (the tests of Task 3 cover it with `fake-mcp --http`), including the native question before `${VAR}` values go to a new host and the catalog that loses its accepted list when the url moves to another origin.
 - A server that cannot start or a variable that is not set (Task 5's `a_server_that_cannot_start_is_left_out_with_a_run_event`), and a server held because its changed list cannot be listed again.
 - A plugin's hooks, and an installed plugin that moved (the native question asked again with hooks on).
@@ -359,6 +359,7 @@ Result: pass. `stopping 12264`, "SUCCESS: The process with PID 12264 has been te
 - The upgrade of a database with per-dot MCP JSON (Task 2's `migration_0006_moves_each_dots_servers_into_the_library`).
 - The Library forms (add, edit and remove by clicking) and the "Add plugin" list of installed plugins: Part A called the same commands through the bridge.
 - The ticks of the dot editor (finding 2).
+- The names of a plugin's server items since the final review, `plugin-<plugin>-<server>`: Part A saw `plugin_smokeplug_notes` (see the top of this document). The new names, and that a tool under Claude Code's own name `mcp__plugin_<plugin>_<server>__*` is neither in a run's `--allowedTools` nor passed by `approve`, are covered by the core tests only; whether the CLI starts such a server itself is B5.
 
 ## Part B: person steps
 
@@ -393,5 +394,54 @@ Part B is a checklist for the person who owns the machine. The person runs the r
   Result:
 
 - [ ] **B4.** `CLAUDE_CODE_PLUGIN_CACHE_DIR`. Find in Claude Code's documentation (or `claude plugin --help`) which folder the variable names, and whether `installed_plugins.json` is in that folder or in the folder above it. Dots reads it as the folder that holds `installed_plugins.json` (`kit::plugins_root`). In the B3 instance, "Add plugin" lists the installed Claude Code plugins: compare them with `claude plugin list`.
+
+  Result:
+
+- [ ] **B5.** Whether `--strict-mcp-config` keeps out the MCP servers of plugins enabled in the person's Claude Code settings. A dot with "Load my Claude Code user settings" passes `--setting-sources user,project,local`, which loads `enabledPlugins`; if the CLI then starts a plugin's server itself, its tools are named `mcp__plugin_<plugin>_<server>__*`. Pick a plugin from `claude plugin list` that is enabled and has an MCP server (for example one whose tools show as `mcp__plugin_...` in an interactive session).
+
+  ```bash
+  claude plugin list
+  printf '{"mcpServers": {}}\n' > empty.json
+  claude -p "Say ok." --output-format stream-json --verbose --strict-mcp-config --mcp-config empty.json --setting-sources user,project,local | head -1 > init-user.json
+  grep -o '"mcp_servers":\[[^]]*\]' init-user.json
+  grep -o '"mcp__plugin_[^"]*"' init-user.json | sort -u | head
+  ```
+
+  Expected: `mcp_servers` is empty and no `mcp__plugin_...` tool is listed: `--strict-mcp-config` keeps every server Dots did not give out, plugin servers included. If a plugin's server is listed, the CLI starts it itself: Dots no longer allows or passes those tools (a plugin's server items are named `plugin-<plugin>-<server>` since the final review), so each call of such a tool goes to `approve` and is decided by the MCP check (`mcp_default`); record the servers and tools listed, so the spec's section 12 can name the risk.
+
+  Result:
+
+- [ ] **B6.** Whether the CLI honours `MCP_TOOL_TIMEOUT` for an http MCP server's `tools/call`. Dots sets it to the dot's `approval_wait_secs` + 30 s and stops the gateway's own wait before it; a CLI that gives up sooner on an http call ends a call whose approval is still waiting, and a model that calls again makes a second approval in the Inbox. Here `fake-mcp` serves one tool that answers after 20 s.
+
+  ```bash
+  printf '{"tools": [{"name": "slow", "description": "Answer slowly.", "inputSchema": {"type": "object", "properties": {}}, "delay_ms": 20000}]}\n' > slow.json
+  "$FAKE" "$(cygpath -m "$PWD/slow.json")" --http > slow-url.txt &
+  SLOW_PID=$!; until [ -s slow-url.txt ]; do sleep 0.2; done; URL=$(head -1 slow-url.txt)
+  printf '{"mcpServers": {"slow": {"type": "http", "url": "%s"}}}\n' "$URL" > slow-config.json
+  for limit in 5000 60000; do
+    start=$(date +%s)
+    MCP_TOOL_TIMEOUT=$limit claude -p "Call the tool mcp__slow__slow once, then say done." --output-format stream-json --verbose --strict-mcp-config --mcp-config slow-config.json --allowedTools "mcp__slow__*" --setting-sources "" > "slow-$limit.jsonl"
+    echo "limit $limit: $(( $(date +%s) - start )) s"; grep -o '"type":"tool_result"[^}]*' "slow-$limit.jsonl" | head -2
+  done
+  kill $SLOW_PID
+  ```
+
+  Expected: with 5000 the tool result is a timeout error after about 5 s; with 60000 it is "slow: {}" after about 20 s. Then the CLI honours the variable for http servers and Dots' limits hold. If the 5000 run also waits the 20 s and succeeds, the CLI ignores the variable for http: record its own limit (a longer delay shows it), since a limit shorter than `approval_wait_secs` gives a timeout while an approval waits, and a retry by the model a duplicate approval.
+
+  Result:
+
+- [ ] **B7.** Whether a `!` shell command in a copied command or skill asks Dots' `approve` under Sandboxed, now that the copy has no `allowed-tools`. Claude Code runs `` !`command` `` lines of a command (and, in newer versions, of a skill) before the model sees the text, under the permissions of `allowed-tools`. In the B3 instance (or a fresh one, as in B3), make the plugin and add it:
+
+  ```bash
+  P="$KIT/plugins/bangplug"; mkdir -p "$P/.claude-plugin" "$P/commands" "$P/skills/bang"
+  printf '{"name": "bangplug", "version": "0.1.0"}\n' > "$P/.claude-plugin/plugin.json"
+  printf -- '---\ndescription: Write a marker file.\nallowed-tools: Bash(echo:*)\n---\nMarker: !`echo bang > bang-command.txt`\nSay what the marker line shows.\n' > "$P/commands/bang.md"
+  printf -- '---\nname: bang\ndescription: Read this skill when you are asked for the bang skill.\nallowed-tools: Bash\n---\nMarker: !`echo bang > bang-skill.txt`\nSay what the marker line shows.\n' > "$P/skills/bang/SKILL.md"
+  cat "$P/commands/bang.md" "$P/skills/bang/SKILL.md"
+  ```
+
+  In the Library add the plugin folder `$KITM/plugins/bangplug`. Create two Claude dots under Sandboxed, each in its own empty folder, both using `bangplug`: the first with the instructions `/bangplug:bang`, the second with "Use the skill bangplug:bang, then say what its marker line shows.". Run each with "Run now", and look in each folder for `bang-command.txt` and `bang-skill.txt`.
+
+  Expected: for each `!` line, the Inbox shows an approval for `Bash` with `echo bang > ...` before the file exists (the CLI asked Dots' `approve`), and the file appears only after "Approve"; or the CLI does not run the line at all (no file, no approval; the model sees the line unexpanded or a permission error). Record which, for the command and for the skill. A file that appears with no approval means `!` lines run past Dots' check: a defect to report.
 
   Result:
