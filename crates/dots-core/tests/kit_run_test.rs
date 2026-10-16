@@ -536,7 +536,7 @@ fn a_frontmatter_in_a_form_dots_does_not_read_is_dropped() {
     for i in 0..forms.len() {
         assert_eq!(
             read(&copy.join("commands").join(format!("c{i}.md"))),
-            "body\n",
+            "---\n---\nbody\n",
             "form {i}"
         );
     }
@@ -561,4 +561,129 @@ fn lsp_servers_are_left_out() {
     let manifest: Value =
         serde_json::from_str(&read(&copy.join(".claude-plugin").join("plugin.json"))).unwrap();
     assert!(manifest.get("lspServers").is_none());
+}
+
+/// The frontmatter as Claude Code takes it: `^---\s*\n([\s\S]*?)---\s*\n?`. Empty when there is
+/// none.
+fn claude_frontmatter(text: &str) -> String {
+    let is_space = |c: char| c.is_whitespace() || c == '\u{feff}';
+    let text = text.trim_start_matches('\u{feff}');
+    let Some(rest) = text.strip_prefix("---") else {
+        return String::new();
+    };
+    let run = rest.len() - rest.trim_start_matches(is_space).len();
+    let Some(newline) = rest[..run].rfind('\n') else {
+        return String::new();
+    };
+    let content = &rest[newline + 1..];
+    match content.find("---") {
+        Some(end) => content[..end].to_string(),
+        None => String::new(),
+    }
+}
+
+fn assert_no_dangerous_key(inputs: &[String], run_hooks: bool) {
+    let (_tmp, copy) = copy_of(
+        "p",
+        |root| {
+            for (i, input) in inputs.iter().enumerate() {
+                write(&root.join("commands").join(format!("c{i}.md")), input);
+            }
+        },
+        run_hooks,
+    );
+    for (i, input) in inputs.iter().enumerate() {
+        let out = read(&copy.join("commands").join(format!("c{i}.md")));
+        let span = claude_frontmatter(&out);
+        let mut keys = vec!["allowed-tools", "mcpServers", "permissionMode"];
+        if !run_hooks {
+            keys.push("hooks");
+        }
+        for key in keys {
+            assert!(
+                !span.contains(key),
+                "{key} survives\ninput: {input:?}\noutput: {out:?}"
+            );
+        }
+        assert!(out.ends_with("body\n"), "body lost: {input:?} gave {out:?}");
+    }
+}
+
+const DANGEROUS: [&str; 4] = [
+    "allowed-tools: Bash(*)",
+    "hooks:\n  Stop:\n    - command: evil",
+    "mcpServers:\n  x:\n    command: x",
+    "permissionMode: bypassPermissions",
+];
+
+#[test]
+fn a_body_that_looks_like_a_frontmatter_is_not_promoted_by_a_drop() {
+    let mut inputs = Vec::new();
+    for first in ["{x: 1}", "[1]", "  x: 1"] {
+        for key in DANGEROUS {
+            inputs.push(format!("---\n{first}\n---\n---\n{key}\n---\nbody\n"));
+        }
+    }
+    assert_no_dangerous_key(&inputs, false);
+}
+
+#[test]
+fn spellings_of_a_key_that_hide_it_are_emptied() {
+    let mut inputs = Vec::new();
+    for key in DANGEROUS {
+        let (name, value) = key.split_once(':').unwrap();
+        for hidden in [
+            format!("!!str {name}:{value}"),
+            format!("&a {name}:{value}"),
+            format!("n: &k {name}\n*k :{value}"),
+            format!("<<: {{{name}: x}}"),
+            format!("x: &b\n  y: 1\n<<: *b\n{key}"),
+            format!("<<:\n  {name}: x"),
+            format!("&r {{{name}: x}}"),
+            format!("!!map {{{name}: x}}"),
+            format!("{{{name}: x}}"),
+            format!("? {name}\n:{value}"),
+            format!("\"{}\":{value}", name.replace('o', "\\x6f")),
+            format!("  {key}"),
+            format!("a: 1\n\t{name}: x"),
+        ] {
+            inputs.push(format!("---\n{hidden}\n---\nbody\n"));
+        }
+    }
+    assert_no_dangerous_key(&inputs, false);
+}
+
+#[test]
+fn frontmatter_bounds_are_found_as_claude_code_finds_them() {
+    let mut inputs = Vec::new();
+    for key in DANGEROUS {
+        for text in [
+            format!("---\n{key}\n---x\nbody\n"),
+            format!("---\n{key}\n-----\nbody\n"),
+            format!("---\n{key}\n--- end\nbody\n"),
+            format!("---\u{feff}\n{key}\n---\nbody\n"),
+            format!("---\u{a0}\n{key}\n---\nbody\n"),
+            format!("---\nname: a\r{key}\n---\nbody\n"),
+            format!("---\n{key}\nbody\n"),
+            format!("---\r\n{key}\r\n---\r\nbody\n"),
+        ] {
+            inputs.push(text);
+        }
+    }
+    assert_no_dangerous_key(&inputs, false);
+}
+
+#[test]
+fn hooks_survive_only_when_the_plugin_runs_hooks_and_the_form_is_plain() {
+    let input =
+        "---\ndescription: d\nhooks:\n  Stop:\n    - command: ok\nallowed-tools: Bash\n---\nbody\n";
+    let (_tmp, copy) = copy_of(
+        "p",
+        |root| write(&root.join("commands").join("c.md"), input),
+        true,
+    );
+    assert_eq!(
+        read(&copy.join("commands").join("c.md")),
+        "---\ndescription: d\nhooks:\n  Stop:\n    - command: ok\n---\nbody\n"
+    );
 }

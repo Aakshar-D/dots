@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
-use super::frontmatter::{drop_unsupported_frontmatter, remove_field};
+use super::frontmatter::clean_markdown;
 use crate::library::LibraryKind;
 use crate::{Error, Result};
 
@@ -91,7 +91,7 @@ fn collect(src: &Path, skip: &dyn Fn(&Path) -> bool) -> std::io::Result<Option<V
 /// name: a manifest can point commands, agents and skills anywhere) loses `allowed-tools`, `hooks`
 /// unless `run_hooks`, and `permissionMode` and `mcpServers` (an agent must not change Dots'
 /// permission handling or bring servers past the gateway). A frontmatter in a form Dots does not
-/// understand is dropped whole, so that no spelling of a key survives.
+/// follow exactly is emptied (the body is kept), see `clean_markdown`.
 fn cleaned(rel: &Path, bytes: Vec<u8>, run_hooks: bool) -> Vec<u8> {
     if !rel
         .extension()
@@ -99,21 +99,19 @@ fn cleaned(rel: &Path, bytes: Vec<u8>, run_hooks: bool) -> Vec<u8> {
     {
         return bytes;
     }
-    let mut text = String::from_utf8_lossy(&bytes).into_owned();
-    if let Some(body) = drop_unsupported_frontmatter(&text) {
+    let text = String::from_utf8_lossy(&bytes);
+    let mut keys = vec!["allowed-tools", "permissionMode", "mcpServers"];
+    if !run_hooks {
+        keys.push("hooks");
+    }
+    let (out, emptied) = clean_markdown(&text, &keys);
+    if emptied {
         tracing::warn!(
-            "dropped the frontmatter of {} in a plugin copy: a form Dots does not read",
+            "emptied the frontmatter of {} in a plugin copy: a form Dots does not read",
             rel.display()
         );
-        return body.into_bytes();
     }
-    text = remove_field(&text, "allowed-tools");
-    if !run_hooks {
-        text = remove_field(&text, "hooks");
-    }
-    text = remove_field(&text, "permissionMode");
-    text = remove_field(&text, "mcpServers");
-    text.into_bytes()
+    out.into_bytes()
 }
 
 /// Writes the copy's manifest: the original (when it is a JSON object) without `mcpServers`,
