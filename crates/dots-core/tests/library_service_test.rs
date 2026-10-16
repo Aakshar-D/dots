@@ -347,15 +347,15 @@ async fn a_plugins_mcp_servers_are_kept_in_line_with_its_folder() {
     };
     assert_eq!(
         owned(store.list_library_items().await.unwrap()),
-        ["plugin_forms_alpha", "plugin_forms_beta"]
+        ["plugin-forms-alpha", "plugin-forms-beta"]
     );
     let beta = store
-        .find_library_item(LibraryKind::McpServer, "plugin_forms_beta")
+        .find_library_item(LibraryKind::McpServer, "plugin-forms-beta")
         .await
         .unwrap()
         .unwrap();
     let alpha = store
-        .find_library_item(LibraryKind::McpServer, "plugin_forms_alpha")
+        .find_library_item(LibraryKind::McpServer, "plugin-forms-alpha")
         .await
         .unwrap()
         .unwrap();
@@ -388,7 +388,7 @@ async fn a_plugins_mcp_servers_are_kept_in_line_with_its_folder() {
     lib.update(&item.id, switched).await.unwrap();
     assert_eq!(
         owned(store.list_library_items().await.unwrap()),
-        ["plugin_forms_beta", "plugin_forms_gamma"]
+        ["plugin-forms-beta", "plugin-forms-gamma"]
     );
     assert!(store.get_library_item(&alpha.id).await.is_err());
     let beta_now = store.get_library_item(&beta.id).await.unwrap();
@@ -454,12 +454,12 @@ async fn the_list_says_who_uses_an_item_and_what_it_holds() {
         files.catalog.as_ref().unwrap().status,
         CatalogStatus::Unchecked
     );
-    let owned = entry("plugin_forms_alpha");
+    let owned = entry("plugin-forms-alpha");
     assert_eq!(owned.used_by[0].name, "nightly", "used through its plugin");
     let forms = entry("forms");
     let parts = forms.plugin.as_ref().unwrap();
     assert_eq!(parts.skills, ["forms:fill"]);
-    assert_eq!(parts.servers, ["plugin_forms_alpha"]);
+    assert_eq!(parts.servers, ["plugin-forms-alpha"]);
     assert!(!parts.has_hooks);
     assert_eq!(parts.version.as_deref(), Some("1.0.0"));
     assert!(forms.problem.is_none());
@@ -673,7 +673,7 @@ async fn runs_opening_one_plugin_together_after_its_servers_changed_all_succeed(
         .into_iter()
         .map(|i| i.name)
         .collect();
-    assert_eq!(owned, ["plugin_forms_beta", "plugin_forms_gamma"]);
+    assert_eq!(owned, ["plugin-forms-beta", "plugin-forms-gamma"]);
 }
 
 /// A run that finds an installed plugin at a new folder stores the folder and switches its hooks

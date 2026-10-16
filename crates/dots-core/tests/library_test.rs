@@ -77,9 +77,9 @@ fn a_generated_server_name_is_always_a_valid_one() {
     assert_eq!(mcp_server_name("dots"), "dots-server");
     assert_eq!(
         plugin_server_name("pdf-tools", "files"),
-        "plugin_pdf-tools_files"
+        "plugin-pdf-tools-files"
     );
-    assert_eq!(plugin_server_name("my__plug", "_x"), "plugin_my_plug_x");
+    assert_eq!(plugin_server_name("my__plug", "_x"), "plugin-my_plug-_x");
     let long = mcp_server_name(&"Long.Name".repeat(10));
     assert_eq!(long.len(), 40);
     assert_ne!(long, mcp_server_name(&"Long.Name".repeat(11)));

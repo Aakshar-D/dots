@@ -133,7 +133,7 @@ async fn a_run_opens_its_servers_and_its_plugins_servers() {
     let (tools, notices) = f.open(&uses, None).await;
 
     let names: Vec<&str> = tools.servers().iter().map(|s| s.name()).collect();
-    assert_eq!(names, ["files", "plugin_forms_alpha"]);
+    assert_eq!(names, ["files", "plugin-forms-alpha"]);
     let srv = tools.server("files").unwrap();
     assert_eq!(srv.item_id(), files_id);
     assert!(!srv.held());
@@ -166,12 +166,12 @@ async fn a_run_opens_its_servers_and_its_plugins_servers() {
     );
 
     // The plugin's server was never accepted: it is held, and the run says so.
-    let owned = tools.server("plugin_forms_alpha").unwrap();
+    let owned = tools.server("plugin-forms-alpha").unwrap();
     assert!(owned.held());
     assert!(owned.trust("a").held);
     assert_eq!(notices.len(), 1, "{notices:?}");
     assert!(
-        notices[0].starts_with("plugin_forms_alpha: "),
+        notices[0].starts_with("plugin-forms-alpha: "),
         "{notices:?}"
     );
 

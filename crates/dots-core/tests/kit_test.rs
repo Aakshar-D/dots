@@ -412,9 +412,9 @@ fn server_items_get_the_plugin_prefix() {
         names,
         // `My Server` and `my_server` come out the same: the first (by key) is kept.
         [
-            "plugin_pdf-tools_my_server",
-            "plugin_pdf-tools_db",
-            "plugin_pdf-tools_my-server"
+            "plugin-pdf-tools-my_server",
+            "plugin-pdf-tools-db",
+            "plugin-pdf-tools-my-server"
         ]
     );
     for (name, _) in &items {

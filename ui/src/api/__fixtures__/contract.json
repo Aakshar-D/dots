@@ -757,7 +757,7 @@
       "id": "01J0SRV2",
       "kind": "mcp_server",
       "missing_variables": [],
-      "name": "plugin_pdf-tools_render",
+      "name": "plugin-pdf-tools-render",
       "owner_id": "01J0PLG",
       "plugin": null,
       "problem": null,
@@ -812,7 +812,7 @@
         "description": "PDF tools.",
         "has_hooks": true,
         "servers": [
-          "plugin_pdf-tools_render"
+          "plugin-pdf-tools-render"
         ],
         "skills": [
           "pdf-tools:merge"

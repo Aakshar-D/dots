@@ -116,7 +116,7 @@ async fn bad_names_and_configs_are_refused() {
         .await
         .unwrap();
     let err = store
-        .add_library_item("plugin_pdf_x", &server("x"), Some(&sk.id))
+        .add_library_item("plugin-pdf-x", &server("x"), Some(&sk.id))
         .await
         .unwrap_err();
     assert!(matches!(err, Error::Invalid(_)), "{err:?}");
@@ -130,7 +130,7 @@ async fn bad_names_and_configs_are_refused() {
         .unwrap_err();
     assert!(matches!(err, Error::Invalid(_)), "{err:?}");
     assert!(store
-        .add_library_item("plugin_tools_x", &server("x"), Some(&pl.id))
+        .add_library_item("plugin-tools-x", &server("x"), Some(&pl.id))
         .await
         .is_ok());
 }
@@ -249,7 +249,7 @@ async fn a_dot_uses_only_what_the_library_has() {
         .await
         .unwrap();
     store
-        .add_library_item("plugin_tools_files", &server("f"), Some(&tools.id))
+        .add_library_item("plugin-tools-files", &server("f"), Some(&tools.id))
         .await
         .unwrap();
     store
@@ -271,7 +271,7 @@ async fn a_dot_uses_only_what_the_library_has() {
         ("skl", uses(&[], &["sf"], &[])),
         ("plg", uses(&[], &[], &["pdf"])),
         // A plugin's server comes with the plugin; it is not ticked on its own.
-        ("own", uses(&["plugin_tools_files"], &[], &[])),
+        ("own", uses(&["plugin-tools-files"], &[], &[])),
         ("dup", uses(&["sf", "sf"], &[], &[])),
     ] {
         let mut s = spec(name);
@@ -302,7 +302,7 @@ async fn a_run_gets_the_ticked_servers_and_those_of_the_ticked_plugins() {
         .await
         .unwrap();
     let files = store
-        .add_library_item("plugin_tools_files", &server("f"), Some(&tools.id))
+        .add_library_item("plugin-tools-files", &server("f"), Some(&tools.id))
         .await
         .unwrap();
     let sf = store
@@ -340,7 +340,7 @@ async fn removing_an_item_unticks_it_and_takes_a_plugins_servers_along() {
         .await
         .unwrap();
     let files = store
-        .add_library_item("plugin_tools_files", &server("f"), Some(&tools.id))
+        .add_library_item("plugin-tools-files", &server("f"), Some(&tools.id))
         .await
         .unwrap();
     let sf = store

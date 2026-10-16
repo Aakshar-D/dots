@@ -53,7 +53,7 @@ impl PluginInfo {
             .collect()
     }
 
-    /// The servers as Library items would hold them: the name `plugin_<plugin>_<server>` (made
+    /// The servers as Library items would hold them: the name `plugin-<plugin>-<server>` (made
     /// valid) with the config. `plugin` is the plugin's Library name. A server whose name comes
     /// out the same as an earlier one's is left out.
     pub fn server_items(&self, plugin: &str) -> Vec<(String, McpServerConfig)> {

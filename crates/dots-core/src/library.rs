@@ -473,8 +473,11 @@ pub fn mcp_server_name(raw: &str) -> String {
     name
 }
 
-/// The name of the MCP server `server` of the plugin `plugin`: `plugin_<plugin>_<server>`, the
-/// tool prefix Claude Code gives it, made valid by `mcp_server_name`.
+/// The name of the MCP server `server` of the plugin `plugin`: `plugin-<plugin>-<server>`, made
+/// valid by `mcp_server_name`. Not `plugin_<plugin>_<server>`, Claude Code's own prefix for a
+/// plugin's server: a CLI that loads the same plugin from the person's settings and starts its
+/// server itself would find that server's tools under the run's `--allowedTools
+/// mcp__<name>__*` and the gateway's pass in `approve`, and they would skip Dots' check.
 pub fn plugin_server_name(plugin: &str, server: &str) -> String {
-    mcp_server_name(&format!("plugin_{plugin}_{server}"))
+    mcp_server_name(&format!("plugin-{plugin}-{server}"))
 }

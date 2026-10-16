@@ -437,10 +437,17 @@ async fn a_claude_run_gets_its_plugin_folders_and_reports_plugin_errors() {
     );
     let servers = &rec["mcp_config"]["mcpServers"];
     assert_eq!(
-        servers["plugin_forms_files"]["url"],
-        format!("{}/mcp/s/plugin_forms_files", e.base)
+        servers["plugin-forms-files"]["url"],
+        format!("{}/mcp/s/plugin-forms-files", e.base)
     );
-    assert!(values_of(&args, "--allowedTools").contains(&"mcp__plugin_forms_files__*".into()));
+    let allowed = values_of(&args, "--allowedTools");
+    assert!(allowed.contains(&"mcp__plugin-forms-files__*".into()));
+    // Claude Code's own prefix for the plugin's server is never allowed: a CLI that loads the
+    // plugin from the person's settings and starts its server itself is not let past the check.
+    assert!(
+        allowed.iter().all(|t| !t.starts_with("mcp__plugin_")),
+        "{allowed:?}"
+    );
     // The folders go with the run.
     assert!(dirs.iter().all(|d| !Path::new(d).exists()));
 
@@ -740,5 +747,73 @@ async fn under_trusted_a_writing_gateway_tool_asks_and_so_does_a_tool_outside_th
         "deny"
     );
     assert_eq!(e.store.approvals_for_run(&run.id).await.unwrap().len(), 2);
+    e.runner.run_tools(&run.id).unwrap().close().await;
+}
+
+/// A plugin's server under Claude Code's own name for it (`mcp__plugin_<plugin>_<server>__*`, a
+/// server the CLI started itself from the person's settings) is not a gateway tool: `approve`
+/// decides it by the MCP check, even under Trusted. The gateway's name passes.
+#[tokio::test]
+async fn a_plugin_server_under_claude_codes_own_name_is_checked_by_approve() {
+    let e = env(json!([]), false).await;
+    let fake = FakeMcp::new(json!({"tools": [tool("fill", false)]}));
+    let plugin = e.dir.path().join("lib").join("forms");
+    write_file(
+        &plugin.join(".claude-plugin").join("plugin.json"),
+        r#"{"name": "forms"}"#,
+    );
+    let McpServerConfig::Stdio { command, args, .. } = fake.stdio() else {
+        unreachable!()
+    };
+    write_file(
+        &plugin.join(".mcp.json"),
+        &json!({"mcpServers": {"files": {"command": command, "args": args}}}).to_string(),
+    );
+    e.lib
+        .add(
+            "forms",
+            LibraryConfig::Plugin(PluginConfig {
+                path: plugin.to_string_lossy().into_owned(),
+                installed_id: None,
+                run_hooks: false,
+            }),
+            None,
+        )
+        .await
+        .unwrap();
+    let dot = claude_dot(&e, |s| {
+        s.policy = Policy::preset(Preset::Trusted);
+        s.uses.plugins = vec!["forms".into()];
+    })
+    .await;
+    let run = e
+        .store
+        .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    let cancel = CancellationToken::new();
+    let (tools, _) = RunTools::open(OpenRequest {
+        store: &e.store,
+        bus: &e.bus,
+        run_id: &run.id,
+        uses: &dot.spec.uses,
+        workspace: e.dir.path(),
+        plugins_dir: None,
+        cancel: &cancel,
+    })
+    .await
+    .unwrap();
+    assert!(tools.server("plugin-forms-files").is_some());
+    let secret = e.runner.register_secret(&run.id);
+    e.runner.register_tools(&run.id, Arc::new(tools));
+
+    let gateway = approve(&e, &secret, "mcp__plugin-forms-files__fill").await;
+    assert_eq!(gateway["behavior"], "allow", "{gateway}");
+    assert!(e.store.approvals_for_run(&run.id).await.unwrap().is_empty());
+    let own = approve(&e, &secret, "mcp__plugin_forms_files__fill").await;
+    assert_eq!(own["behavior"], "deny", "{own}");
+    let approvals = e.store.approvals_for_run(&run.id).await.unwrap();
+    assert_eq!(approvals.len(), 1);
+    assert_eq!(approvals[0].tool, "mcp__plugin_forms_files__fill");
     e.runner.run_tools(&run.id).unwrap().close().await;
 }

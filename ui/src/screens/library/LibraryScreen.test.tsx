@@ -60,7 +60,7 @@ describe("the Library screen", () => {
     expect(within(row).getByText("stdio")).toBeVisible();
     expect(within(row).getByText("Missing variable: GITHUB_TOKEN")).toBeVisible();
     expect(within(row).getByText("Used by nightly-tests")).toBeVisible();
-    const fromPlugin = screen.getByRole("listitem", { name: "plugin_pdf-tools_render" });
+    const fromPlugin = screen.getByRole("listitem", { name: "plugin-pdf-tools-render" });
     expect(within(fromPlugin).getByText("Accepted")).toBeVisible();
     expect(within(fromPlugin).getByText("http")).toBeVisible();
     expect(within(fromPlugin).getByText("Comes with plugin pdf-tools")).toBeVisible();

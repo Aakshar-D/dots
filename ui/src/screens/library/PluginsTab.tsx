@@ -181,7 +181,7 @@ function AddPluginDialog(props: { existing: PluginEntry[]; onClose: () => void }
               <Field
                 label="Name"
                 htmlFor="plugin-name"
-                hint="The Library name. Its MCP servers are named plugin_<name>_<server>."
+                hint="The Library name. Its MCP servers are named plugin-<name>-<server>."
               >
                 <Input
                   id="plugin-name"

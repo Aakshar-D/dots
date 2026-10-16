@@ -16,9 +16,9 @@ describe("MCP tool names", () => {
   });
 
   it("shows server and tool, or the plugin that owns the server", () => {
-    const owners = new Map([["plugin_pdf-tools_render", "pdf-tools"]]);
+    const owners = new Map([["plugin-pdf-tools-render", "pdf-tools"]]);
     expect(mcpToolLabel("mcp__salesforce__query", owners)).toBe("salesforce › query");
-    expect(mcpToolLabel("mcp__plugin_pdf-tools_render__page", owners)).toBe("pdf-tools › page");
+    expect(mcpToolLabel("mcp__plugin-pdf-tools-render__page", owners)).toBe("pdf-tools › page");
     expect(mcpToolLabel("Bash", owners)).toBe("Bash");
   });
 });

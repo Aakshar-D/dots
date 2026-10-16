@@ -167,7 +167,7 @@ fn library_entries() -> Vec<LibraryEntry> {
     );
     let mut owned = library_item(
         "01J0SRV2",
-        "plugin_pdf-tools_render",
+        "plugin-pdf-tools-render",
         LibraryConfig::McpServer(http_server()),
     );
     owned.owner_id = Some("01J0PLG".into());
@@ -197,7 +197,7 @@ fn library_entries() -> Vec<LibraryEntry> {
                 skills: vec!["pdf-tools:merge".into()],
                 commands: vec!["split".into()],
                 agents: vec!["reviewer".into()],
-                servers: vec!["plugin_pdf-tools_render".into()],
+                servers: vec!["plugin-pdf-tools-render".into()],
                 has_hooks: true,
                 warnings: vec!["agents/broken.md: could not be read".into()],
             }),

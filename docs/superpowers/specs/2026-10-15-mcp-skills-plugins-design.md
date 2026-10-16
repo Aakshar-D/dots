@@ -75,7 +75,7 @@ The folder holds `SKILL.md`. Dots reads its YAML frontmatter as Claude Code does
 
 - `path` is a plugin folder. `installed_id` is set when the plugin was picked from the person's installed Claude Code plugins (read from `~/.claude/plugins/installed_plugins.json`, or `CLAUDE_CODE_PLUGIN_CACHE_DIR`); its `installPath` may change on an update (section 7).
 - Dots reads the plugin's parts: `.claude-plugin/plugin.json` (`name`; default the folder name), `skills/`, `commands/`, `agents/`, `hooks/hooks.json` and `.mcp.json`.
-- Each server of `.mcp.json` becomes an MCP server item with `owner_id` set to the plugin and the name `plugin_<plugin>_<server>`, which is the tool prefix Claude Code itself gives a plugin's servers. `${CLAUDE_PLUGIN_ROOT}` in its config is replaced by the plugin's path. These items are refreshed whenever the plugin is read and deleted with it.
+- Each server of `.mcp.json` becomes an MCP server item with `owner_id` set to the plugin and the name `plugin-<plugin>-<server>` (made valid as any server name). It is not `plugin_<plugin>_<server>`, the prefix Claude Code itself gives a plugin's servers: with the person's settings loaded and the same plugin enabled in Claude Code, the CLI may start that server itself, and its tools must not fall under the run's `--allowedTools mcp__<server>__*` or the gateway's pass in `approve`. `${CLAUDE_PLUGIN_ROOT}` in its config is replaced by the plugin's path. These items are refreshed whenever the plugin is read and deleted with it.
 - `run_hooks` is off by default. Switching it on asks first: "This plugin's hooks run commands on their own, without approval, and can approve tool calls. Run them?" Hooks run only on Claude-engine dots.
 
 ### A dot's uses
