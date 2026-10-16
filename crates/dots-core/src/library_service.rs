@@ -223,7 +223,8 @@ pub(crate) async fn sync_plugin_servers(
                         .is_some_and(|i| i.owner_id.as_deref() == Some(plugin.id.as_str()));
                     if !ours {
                         warnings.push(format!(
-                            "its MCP server {name} is left out: the Library already has an MCP                              server of that name"
+                            "its MCP server {name} is left out: the Library already has an MCP \
+                             server of that name"
                         ));
                     }
                 }

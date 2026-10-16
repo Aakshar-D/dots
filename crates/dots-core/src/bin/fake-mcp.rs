@@ -13,6 +13,7 @@
 //!   and the id `s-<method>` is sent to the client before the answer).
 //!   A tool can also have `big_bytes`: its default result text is that many bytes long.
 //! - `after_switch`: the tools after a `switch`.
+//! - `fail_list_after_switch`: after a `switch`, every `tools/list` is answered with an error.
 //! - `page_size`: tools per `tools/list` page (default: all in one).
 //! - `protocol_version`: the version `initialize` answers (default: the client's).
 //! - `init_delay_ms`, `exit_at_initialize`: a slow or dying `initialize`.
@@ -35,7 +36,7 @@
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::Write as _;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -66,6 +67,7 @@ struct Fake {
     tools: Mutex<Vec<Value>>,
     log: Option<Mutex<File>>,
     switched: Notify,
+    list_broken: AtomicBool,
     sessions: Mutex<HashSet<String>>,
     next_session: AtomicU64,
 }
@@ -140,6 +142,9 @@ impl Fake {
                 )
             }
             "ping" => result(id, json!({})),
+            "tools/list" if self.list_broken.load(Ordering::SeqCst) => {
+                error(id, -32000, "cannot list the tools")
+            }
             "tools/list" => {
                 let tools: Vec<Value> = self.tools.lock().unwrap().iter().map(listed).collect();
                 let start: usize = params["cursor"]
@@ -184,6 +189,9 @@ impl Fake {
                     let after = self.script["after_switch"].as_array().cloned();
                     *self.tools.lock().unwrap() = after.unwrap_or_default();
                     before.push(list_changed());
+                    if self.flag("fail_list_after_switch") {
+                        self.list_broken.store(true, Ordering::SeqCst);
+                    }
                     self.switched.notify_waiters();
                 }
                 if let Some(e) = tool.get("error") {
@@ -364,6 +372,7 @@ async fn main() {
         script,
         log,
         switched: Notify::new(),
+        list_broken: AtomicBool::new(false),
         sessions: Mutex::new(HashSet::new()),
         next_session: AtomicU64::new(1),
     });

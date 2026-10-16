@@ -359,6 +359,50 @@ async fn a_list_change_during_the_run_holds_the_server_at_once() {
 }
 
 #[tokio::test]
+async fn a_server_whose_tools_cannot_be_listed_after_a_change_is_held() {
+    let f = fixture().await;
+    let mut flip = tool("flip", false);
+    flip["switch"] = json!(true);
+    let fake = FakeMcp::new(json!({
+        "tools": [tool("read", true), flip],
+        "after_switch": [tool("read", true), tool("new", true)],
+        "fail_list_after_switch": true,
+    }));
+    f.accepted_server("files", &fake).await;
+    let uses = Uses {
+        mcp_servers: vec!["files".into()],
+        ..Default::default()
+    };
+    let (tools, notices) = f.open(&uses, None).await;
+    assert!(notices.is_empty(), "{notices:?}");
+    let srv = tools.server("files").unwrap();
+    assert!(!srv.held());
+    srv.session()
+        .call_tool(
+            "flip",
+            json!({}),
+            Duration::from_secs(10),
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    // `settled` returns once the watcher has dealt with the announced change.
+    srv.settled().await;
+    assert!(srv.held(), "the server stayed trusted on the old list");
+    // The old list stays, but a read-only hint no longer lets a call through.
+    let listed: Vec<String> = srv.tools().into_iter().map(|t| t.name).collect();
+    assert_eq!(listed, ["read", "flip"]);
+    assert_eq!(
+        srv.trust("read"),
+        McpTrust {
+            held: true,
+            read_only: true
+        }
+    );
+    tools.close().await;
+}
+
+#[tokio::test]
 async fn an_installed_plugin_that_moved_is_found_again() {
     let f = fixture().await;
     let old = plugin_dir(f.dir.path(), "forms-1.0", &[]);

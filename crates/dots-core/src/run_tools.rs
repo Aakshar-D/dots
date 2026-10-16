@@ -370,6 +370,9 @@ impl RunTools {
                         if session.is_stopped() {
                             return;
                         }
+                        // A server that announced a change and cannot be listed again is not
+                        // trusted on the old list: it is held for the rest of the run.
+                        live.lock().unwrap().held = true;
                         handled.send_replace(announced);
                         continue;
                     }
