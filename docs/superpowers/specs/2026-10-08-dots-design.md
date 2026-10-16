@@ -288,10 +288,13 @@ the call again. See `2026-10-13-approvals-v2-design.md` §3.
     { "tool": "mcp__salesforce__*", "action": "ask" },
     { "tool": "WebFetch",           "action": "deny" }
   ],
-  "default": "ask"
+  "default": "ask",
+  "mcp_default": "ask"
 }
 ```
 
+- `mcp_default` is the action for an MCP tool that no rule and no read-only flag decides (see
+  `2026-10-15-mcp-skills-plugins-design.md` section 4). A policy without it reads as `ask`.
 - Tool patterns use Claude Code permission-rule syntax so they pass through unchanged to
   `--allowedTools` / `--disallowedTools`. The local engine matches the same syntax against its
   own tools, which are aliased: `read_file`→`Read`, `write_file`→`Write`, `edit_file`→`Edit`,
@@ -302,10 +305,13 @@ the call again. See `2026-10-13-approvals-v2-design.md` §3.
 - From Approvals v2 an approval can save an allow rule to the dot's policy, in one transaction
   with the decision (`decide_approval` with `allow_rule`). Only a pattern that
   `policy::allow_candidates` derives from that very call is accepted, so the caller cannot
-  widen the policy at will; the policy's preset becomes `custom`. The pending approvals of one
+  widen the policy at will; the policy's preset becomes `custom`. For an MCP tool the candidates
+  are `mcp__<server>__<tool>` and `mcp__<server>__*`. The pending approvals of one
   run can also be decided together (`decide_run_approvals`): in the order they were asked,
   with one resume, and without a rule. See `2026-10-13-approvals-v2-design.md` §4 and §5.
 - Presets:
+  - Every preset allows `Skill` (the tool that reads a skill) and sets `mcp_default`: `ask` for
+    all but `read-only`, which sets `deny`.
   - `read-only`: allow Read/LS/Glob/Grep; deny Write/Edit/Bash; default deny.
   - `sandboxed` (default): allow Read/LS/Glob/Grep, `Write(./**)`, `Edit(./**)`,
     `Bash(git status:*)`, `Bash(git diff:*)`, `Bash(git add:*)`; deny
@@ -340,7 +346,9 @@ the call again. See `2026-10-13-approvals-v2-design.md` §3.
     `deny`, a root that is a directory when a deny rule matches it, with an error and no count.
     A rule that names a directory alone (`Read(**/secret)`) does not cover what is below it;
     `Read(secret/**)` does.
-  - `trusted`: allow all; ask for `Bash(git push:*)` and `mcp__*`; default allow.
+  - `trusted`: allow all; ask for `Bash(git push:*)`; default allow. An MCP tool that is not
+    read-only still asks, through `mcp_default`; there is no `mcp__*` rule, which would make
+    read-only tools ask too.
 
 ### Claude engine
 

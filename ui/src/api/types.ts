@@ -36,6 +36,7 @@ export const Policy = z.strictObject({
   preset: Preset,
   rules: z.array(Rule),
   default: Action,
+  mcp_default: Action,
 });
 
 // A dot's schedule (Scheduler v2 spec §2). Times are "HH:MM" and date-times

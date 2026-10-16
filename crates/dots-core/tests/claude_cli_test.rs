@@ -151,7 +151,7 @@ fn argv_contains_required_flags_in_order() {
         joined.starts_with(
             "-p --output-format stream-json --verbose --model haiku --max-turns 12 \
          --permission-prompt-tool mcp__dots__approve --mcp-config C:/data/mcp-RUN1.json \
-         --strict-mcp-config --setting-sources  --allowedTools Read LS Glob Grep \
+         --strict-mcp-config --setting-sources  --allowedTools Read LS Glob Grep Skill \
          --disallowedTools Write Edit NotebookEdit Bash PowerShell"
         ),
         "{joined}"

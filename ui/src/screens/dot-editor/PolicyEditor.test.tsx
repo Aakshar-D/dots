@@ -14,11 +14,13 @@ const sandboxed: Policy = {
     { tool: "Write(./**)", action: "allow" },
   ],
   default: "ask",
+  mcp_default: "ask",
 };
 const readOnly: Policy = {
   preset: "read-only",
   rules: [{ tool: "Read", action: "allow" }],
   default: "deny",
+  mcp_default: "deny",
 };
 
 function setup(initial: Policy = sandboxed) {
