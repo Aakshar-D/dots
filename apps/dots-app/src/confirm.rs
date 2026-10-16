@@ -76,7 +76,9 @@ where
 /// - An http MCP server whose `url` or header values name `${VAR}`: Dots would send the values of
 ///   those variables to the URL's origin. It asks when the origin or the set of variable names is
 ///   new or changed (a stored stdio server or other kind counts as new). Names, never values.
-/// - A plugin that starts stdio servers: `plugin_starts` holds their (quoted) command lines, which
+/// - A plugin that starts stdio servers or has http servers that send variables (a plugin author
+///   writes its `.mcp.json`): `plugin_starts` holds their (quoted) command lines and
+///   `the values of A to "origin"` entries, which
 ///   the caller read from the plugin's `.mcp.json` when the plugin is new or its path changed
 ///   (and left empty otherwise). It is combined with
 /// - a plugin whose hooks are newly on: `run_hooks` went from off to on, or is on at a new path
@@ -148,25 +150,34 @@ pub fn library_confirmation(
                 Some(LibraryConfig::Plugin(old)) if old.run_hooks && old.path == p.path
             );
             let hooks = p.run_hooks && !was_on;
-            match (plugin_starts.is_empty(), hooks) {
-                (true, false) => None,
-                (true, true) => Some(
-                    "This plugin's hooks run commands on their own, without approval, and can \
-                     approve tool calls. Run them?"
-                        .to_string(),
-                ),
-                (false, hooks) => {
-                    let mut text = format!("This plugin starts: {}.", plugin_starts.join("; "));
-                    if hooks {
-                        text.push_str(
-                            " Its hooks also run commands on their own, without approval, and \
-                             can approve tool calls.",
-                        );
-                    }
-                    text.push_str(" Add it?");
-                    Some(text)
-                }
+            // An entry `the values of A to "origin"` is an http server that sends variables;
+            // any other is a stdio command line.
+            let (sends, starts): (Vec<&String>, Vec<&String>) = plugin_starts
+                .iter()
+                .partition(|e| e.starts_with(SENDS_PREFIX));
+            if starts.is_empty() && sends.is_empty() {
+                return hooks.then(|| {
+                    "This plugin's hooks run commands on their own, without approval, and can approve tool calls. Run them?"
+                        .to_string()
+                });
             }
+            let join = |v: &[&String]| v.iter().map(|e| e.as_str()).collect::<Vec<_>>().join("; ");
+            let mut text = match (starts.is_empty(), sends.is_empty()) {
+                (false, true) => format!("This plugin starts: {}.", join(&starts)),
+                (true, _) => format!("This plugin sends {}.", join(&sends)),
+                (false, false) => format!(
+                    "This plugin starts: {}. It sends {}.",
+                    join(&starts),
+                    join(&sends)
+                ),
+            };
+            if hooks {
+                text.push_str(
+                    " Its hooks also run commands on their own, without approval, and can approve tool calls.",
+                );
+            }
+            text.push_str(" Add it?");
+            Some(text)
         }
         _ => None,
     }
@@ -212,7 +223,8 @@ fn command_line(command: &str, args: &[String]) -> String {
         .join(" ")
 }
 
-/// The command lines of the stdio servers in the plugin folder `config` names, for the question
+/// The command lines of the stdio servers, and the variables and origin of the http servers that
+/// name `${VAR}`, in the plugin folder `config` names, for the question
 /// of `library_confirmation`. Only when the plugin is new (`stored` is `None`) or its path
 /// changed; a folder that cannot be read gives none, and the core then refuses it.
 fn plugin_starts(stored: Option<&LibraryConfig>, config: &LibraryConfig) -> Vec<String> {
@@ -229,10 +241,23 @@ fn plugin_starts(stored: Option<&LibraryConfig>, config: &LibraryConfig) -> Vec<
         .iter()
         .filter_map(|s| match &s.config {
             McpServerConfig::Stdio { command, args, .. } => Some(command_line(command, args)),
-            McpServerConfig::Http { .. } => None,
+            http @ McpServerConfig::Http { url, .. } => {
+                let variables = http.variables();
+                (!variables.is_empty()).then(|| {
+                    let origin = http_origin(url).unwrap_or_else(|| url.clone());
+                    format!(
+                        "{SENDS_PREFIX}{} to {}",
+                        variables.join(", "),
+                        quoted(&origin)
+                    )
+                })
+            }
         })
         .collect()
 }
+
+/// Starts an entry of `plugin_starts` for an http server that sends variables.
+const SENDS_PREFIX: &str = "the values of ";
 
 /// Asks `library_confirmation`'s question, if there is one. A refusal is `cancelled`, and the
 /// caller then starts and stores nothing.
@@ -762,6 +787,52 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.kind, CmdErrorKind::Cancelled);
         rt.shutdown();
+    }
+
+    #[test]
+    fn a_new_plugin_whose_http_server_sends_variables_asks_and_names_them() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".mcp.json"),
+            r#"{"mcpServers":{"w":{"type":"http","url":"https://H.example:9/${PATH_VAR}","headers":{"A":"Bearer ${TOKEN}"}},"plain":{"type":"http","url":"https://plain.example/mcp"}}}"#,
+        )
+        .unwrap();
+        let config = LibraryConfig::Plugin(dots_core::library::PluginConfig {
+            path: dir.path().to_string_lossy().into_owned(),
+            installed_id: None,
+            run_hooks: false,
+        });
+        let starts = plugin_starts(None, &config);
+        assert_eq!(
+            starts,
+            [r#"the values of PATH_VAR, TOKEN to "https://h.example:9""#]
+        );
+        let asked = library_confirmation(None, &config, &starts).unwrap();
+        assert_eq!(
+            asked,
+            r#"This plugin sends the values of PATH_VAR, TOKEN to "https://h.example:9". Add it?"#
+        );
+        // With stdio servers and hooks the one dialog holds all three.
+        let both = vec![r#""node" "a.js""#.to_string(), starts[0].clone()];
+        let hooks = LibraryConfig::Plugin(dots_core::library::PluginConfig {
+            run_hooks: true,
+            ..match &config {
+                LibraryConfig::Plugin(p) => p.clone(),
+                _ => unreachable!(),
+            }
+        });
+        let asked = library_confirmation(None, &hooks, &both).unwrap();
+        assert!(asked.starts_with(r#"This plugin starts: "node" "a.js". It sends the values of"#));
+        assert!(asked.contains("Its hooks also run commands"), "{asked}");
+        // Only a variable-free http server: nothing to ask.
+        std::fs::write(
+            dir.path().join(".mcp.json"),
+            r#"{"mcpServers":{"plain":{"type":"http","url":"https://plain.example/mcp"}}}"#,
+        )
+        .unwrap();
+        let none = plugin_starts(None, &config);
+        assert!(none.is_empty());
+        assert_eq!(library_confirmation(None, &config, &none), None);
     }
 
     #[test]

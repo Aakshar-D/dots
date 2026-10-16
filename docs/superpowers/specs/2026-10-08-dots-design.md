@@ -795,7 +795,7 @@ dot; a chat or webhook run does not clear it.
   config whose `url` or header values name `${VAR}` asks "Dots will send the values of A, B to
   <origin>. Send them?" (names only) when the origin or the set of variables is new or changed.
   A `library_add` of a plugin, or a `library_update` that changes its path, whose `.mcp.json`
-  has stdio servers asks "This plugin starts: <cmd> <args>; <cmd> <args>. Add it?"; and hooks
+  has stdio servers asks "This plugin starts: <cmd> <args>; <cmd> <args>. Add it?", and "It sends the values of A, B to <origin>." for each http server that names `${VAR}` (an author-written `.mcp.json`); and hooks
   newly on (switched on, or on at a new path) ask "This plugin's hooks run commands on their
   own, without approval, and can approve tool calls. Run them?". When both apply to a plugin,
   one dialog holds both. A refusal answers `cancelled` and nothing is started or stored. A
