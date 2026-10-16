@@ -649,3 +649,135 @@ async fn an_http_server_that_is_not_there_cannot_start() {
         "the URL is not shown: {err}"
     );
 }
+
+// --- Limits and redirects ---
+
+/// A little more than the client accepts as one message.
+const TOO_BIG: u64 = 17 * 1024 * 1024;
+
+fn big_tool() -> Value {
+    let mut big = tool("big", false);
+    big["big_bytes"] = json!(TOO_BIG);
+    big
+}
+
+#[tokio::test]
+async fn an_http_cancel_does_not_wait_for_a_server_that_stalls() {
+    let mut slow = tool("slow", false);
+    slow["delay_ms"] = json!(10_000);
+    let fake = FakeMcp::new(json!({"tools": [slow], "stall_cancelled_ms": 8_000}));
+    let http = fake.serve_http().await;
+    let session = McpSession::open(
+        "web",
+        &http.config(BTreeMap::new()),
+        &no_env,
+        SessionOptions::default(),
+    )
+    .await
+    .unwrap();
+
+    let cancel = CancellationToken::new();
+    let trigger = cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        trigger.cancel();
+    });
+    let begun = Instant::now();
+    let err = session
+        .call_tool("slow", json!({}), CALL_TIMEOUT, &cancel)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, McpError::Cancelled), "{err:?}");
+    assert!(
+        begun.elapsed() < Duration::from_secs(1),
+        "{:?}",
+        begun.elapsed()
+    );
+
+    // A timeout is as quick, and the notice still reaches the server.
+    let begun = Instant::now();
+    let err = session
+        .call_tool(
+            "slow",
+            json!({}),
+            Duration::from_millis(100),
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, McpError::Timeout), "{err:?}");
+    assert!(
+        begun.elapsed() < Duration::from_secs(1),
+        "{:?}",
+        begun.elapsed()
+    );
+    assert!(
+        fake.wait_for(WAIT, |r| r["msg"]["method"] == "notifications/cancelled")
+            .await
+    );
+}
+
+#[tokio::test]
+async fn a_stdio_line_past_the_limit_stops_the_server_instead_of_filling_memory() {
+    let fake = FakeMcp::new(json!({"tools": [big_tool(), tool("a", true)]}));
+    let session = open(&fake).await;
+    let err = call(&session, "big", json!({})).await.unwrap_err();
+    assert!(matches!(err, McpError::Stopped), "{err:?}");
+    assert!(session.is_stopped());
+    assert!(
+        fake.gone_within(WAIT).await,
+        "the server that wrote it is shut down"
+    );
+    session.close().await;
+}
+
+#[tokio::test]
+async fn an_http_body_or_event_past_the_limit_fails_that_request_only() {
+    for sse in [false, true] {
+        let fake = FakeMcp::new(json!({"sse": sse, "tools": [big_tool(), tool("a", true)]}));
+        let http = fake.serve_http().await;
+        let session = McpSession::open(
+            "web",
+            &http.config(BTreeMap::new()),
+            &no_env,
+            SessionOptions::default(),
+        )
+        .await
+        .unwrap();
+        let err = call(&session, "big", json!({})).await.unwrap_err();
+        assert!(
+            matches!(&err, McpError::Protocol(m) if m.contains("too large")),
+            "sse {sse}: {err:?}"
+        );
+        assert!(call(&session, "a", json!({})).await.is_ok(), "sse {sse}");
+        session.close().await;
+    }
+}
+
+#[tokio::test]
+async fn an_http_redirect_is_an_error_and_is_not_followed() {
+    let target = FakeMcp::new(json!({"tools": []}));
+    let target_http = target.serve_http().await;
+    let fake = FakeMcp::new(json!({"tools": [], "redirect_to": target_http.url}));
+    let http = fake.serve_http().await;
+    let headers = BTreeMap::from([("X-Api-Key".to_string(), "${FAKE_TOKEN}".to_string())]);
+    let err = McpSession::open(
+        "web",
+        &http.config(headers),
+        &token_env,
+        SessionOptions::default(),
+    )
+    .await
+    .err()
+    .unwrap();
+    assert!(
+        matches!(&err, McpError::Protocol(m) if m.starts_with("the server answered HTTP 302")),
+        "{err:?}"
+    );
+    assert!(!err.to_string().contains("s3cret"), "{err}");
+    assert!(
+        target.log().iter().all(|r| r.get("http").is_none()),
+        "the target was never contacted: {:?}",
+        target.log()
+    );
+}

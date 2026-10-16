@@ -15,7 +15,7 @@ use serde_json::Value;
 use tokio_util::sync::{CancellationToken, DropGuard};
 
 use super::rpc::{self, Peer};
-use super::{McpError, NOTE_TIMEOUT};
+use super::{McpError, MAX_MESSAGE_BYTES, NOTE_TIMEOUT};
 
 const SESSION_HEADER: &str = "Mcp-Session-Id";
 const VERSION_HEADER: &str = "MCP-Protocol-Version";
@@ -45,7 +45,12 @@ impl Http {
         Self {
             inner: Arc::new(Inner {
                 peer,
-                client: reqwest::Client::new(),
+                // A redirect would carry the expanded headers to another place, and turn the POST into
+                // a GET without its body: a 3xx is an error like any other status.
+                client: reqwest::Client::builder()
+                    .redirect(reqwest::redirect::Policy::none())
+                    .build()
+                    .expect("an http client"),
                 url,
                 headers,
                 session_id: Mutex::new(None),
@@ -62,6 +67,17 @@ impl Http {
         awaiting: Option<u64>,
     ) -> Result<(), McpError> {
         self.inner.send(message, awaiting).await
+    }
+
+    /// Sends a notice in the background; its failure is only logged.
+    pub(super) fn send_detached(&self, message: Value) {
+        let inner = self.inner.clone();
+        tokio::spawn(async move {
+            let sent = tokio::time::timeout(NOTE_TIMEOUT, inner.send(&message, None)).await;
+            if !matches!(sent, Ok(Ok(()))) {
+                tracing::debug!(server = %inner.peer.name(), "a notice to the server failed");
+            }
+        });
     }
 
     /// `initialize` was answered with `version`: it is sent with every later request, a
@@ -152,7 +168,14 @@ impl Inner {
         if kind.starts_with("text/event-stream") {
             self.read_stream(response, awaiting).await
         } else if kind.starts_with("application/json") {
-            let body = response.bytes().await.map_err(|e| self.failed(e))?;
+            let mut response = response;
+            let mut body = Vec::new();
+            while let Some(chunk) = response.chunk().await.map_err(|e| self.failed(e))? {
+                if body.len() + chunk.len() > MAX_MESSAGE_BYTES {
+                    return Err(too_large());
+                }
+                body.extend_from_slice(&chunk);
+            }
             if body.trim_ascii().is_empty() {
                 return Ok(());
             }
@@ -189,7 +212,10 @@ impl Inner {
             let Some(chunk) = response.chunk().await.map_err(|e| self.failed(e))? else {
                 return Ok(());
             };
-            for data in events.push(&chunk) {
+            let Some(datas) = events.push(&chunk) else {
+                return Err(too_large());
+            };
+            for data in datas {
                 let Ok(message) = serde_json::from_str::<Value>(&data) else {
                     tracing::debug!(server = %self.peer.name(), "an event that is not JSON");
                     continue;
@@ -273,6 +299,10 @@ async fn listen(inner: Arc<Inner>, stop: CancellationToken) {
     }
 }
 
+fn too_large() -> McpError {
+    McpError::Protocol("the server sent a message that is too large".into())
+}
+
 fn content_type(response: &Response) -> String {
     response
         .headers()
@@ -296,21 +326,26 @@ fn describe(e: reqwest::Error) -> String {
 }
 
 /// Cuts an event stream into the `data` of its events. `event`, `id`, `retry` and comments
-/// are not needed.
+/// are not needed. An event, or a line, past `MAX_MESSAGE_BYTES` is refused.
 #[derive(Default)]
 struct SseParser {
     buf: Vec<u8>,
+    /// How much of `buf` has no line end in it: the next scan starts here.
+    scanned: usize,
     data: Option<String>,
 }
 
 impl SseParser {
-    fn push(&mut self, bytes: &[u8]) -> Vec<String> {
+    /// The events `bytes` completes; `None` when an event is too large.
+    fn push(&mut self, bytes: &[u8]) -> Option<Vec<String>> {
         self.buf.extend_from_slice(bytes);
         let mut events = Vec::new();
-        while let Some(end) = self.buf.iter().position(|b| *b == b'\n') {
-            let line: Vec<u8> = self.buf.drain(..=end).collect();
-            let line = String::from_utf8_lossy(&line);
-            let line = line.trim_end_matches(['\n', '\r']);
+        let mut from = 0;
+        // Only bytes not yet looked at are scanned for a line end.
+        while let Some(at) = self.buf[self.scanned..].iter().position(|b| *b == b'\n') {
+            let end = self.scanned + at;
+            let line = String::from_utf8_lossy(&self.buf[from..end]);
+            let line = line.trim_end_matches('\r');
             if line.is_empty() {
                 events.extend(self.data.take());
             } else if let Some(rest) = line.strip_prefix("data:") {
@@ -323,7 +358,18 @@ impl SseParser {
                     None => self.data = Some(rest.to_string()),
                 }
             }
+            if self
+                .data
+                .as_ref()
+                .is_some_and(|d| d.len() > MAX_MESSAGE_BYTES)
+            {
+                return None;
+            }
+            from = end + 1;
+            self.scanned = from;
         }
-        events
+        self.buf.drain(..from);
+        self.scanned = self.buf.len();
+        (self.buf.len() <= MAX_MESSAGE_BYTES).then_some(events)
     }
 }

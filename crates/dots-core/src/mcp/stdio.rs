@@ -10,18 +10,21 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::Value;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::{CancellationToken, DropGuard};
 
 use super::rpc::Peer;
-use super::McpError;
+use super::{McpError, MAX_MESSAGE_BYTES};
 use crate::proc::Job;
 
 /// The stderr bytes of one server that reach the log; the rest is read and dropped.
 const STDERR_LOG_CAP: usize = 64 * 1024;
+/// Messages waiting for the server to read them. A server that reads nothing fills it, and
+/// then sending fails instead of growing the queue.
+const OUTBOX_CAP: usize = 1024;
 
 /// What `Stdio::start` runs, with every `${VAR}` already expanded.
 pub(super) struct Launch<'a> {
@@ -33,7 +36,7 @@ pub(super) struct Launch<'a> {
 }
 
 pub(super) struct Stdio {
-    outbox: mpsc::UnboundedSender<String>,
+    outbox: mpsc::Sender<String>,
     /// Fired by `close`, or by dropping this: the server's input closes, and it is stopped.
     shutdown: CancellationToken,
     _on_drop: DropGuard,
@@ -74,9 +77,9 @@ impl Stdio {
         let stdout = child.stdout.take().expect("stdout is piped");
         let stderr = child.stderr.take().expect("stderr is piped");
         let shutdown = CancellationToken::new();
-        let (outbox, inbox) = mpsc::unbounded_channel();
+        let (outbox, inbox) = mpsc::channel(OUTBOX_CAP);
         tokio::spawn(write(stdin, inbox, peer.clone(), shutdown.clone()));
-        tokio::spawn(read(stdout, peer.clone(), outbox.clone()));
+        tokio::spawn(read(stdout, peer.clone(), outbox.clone(), shutdown.clone()));
         tokio::spawn(log_stderr(stderr, peer.name().to_string()));
         let monitor = tokio::spawn(monitor(child, job, peer, shutdown.clone(), launch.grace));
         Ok(Stdio {
@@ -89,8 +92,13 @@ impl Stdio {
 
     pub(super) fn send(&self, message: &Value) -> Result<(), McpError> {
         self.outbox
-            .send(message.to_string())
-            .map_err(|_| McpError::Stopped)
+            .try_send(message.to_string())
+            .map_err(|e| match e {
+                mpsc::error::TrySendError::Full(_) => {
+                    McpError::Protocol("the server does not read what Dots sends".into())
+                }
+                mpsc::error::TrySendError::Closed(_) => McpError::Stopped,
+            })
     }
 
     pub(super) async fn close(&self) {
@@ -104,7 +112,7 @@ impl Stdio {
 /// Writes each message as one line. On shutdown it drops stdin, which ends the server's input.
 async fn write(
     mut stdin: ChildStdin,
-    mut inbox: mpsc::UnboundedReceiver<String>,
+    mut inbox: mpsc::Receiver<String>,
     peer: Arc<Peer>,
     shutdown: CancellationToken,
 ) {
@@ -130,16 +138,61 @@ async fn write(
     }
 }
 
+/// What `read_line_capped` found.
+enum Read {
+    Eof,
+    Got,
+    TooLong,
+}
+
+/// Reads up to the next `\n` into `buf` (cleared first), at most `cap` bytes: a longer line is
+/// not buffered, and `TooLong` is returned. The last line may lack its `\n`.
+async fn read_line_capped<R: AsyncBufRead + Unpin>(
+    reader: &mut R,
+    buf: &mut Vec<u8>,
+    cap: usize,
+) -> std::io::Result<Read> {
+    buf.clear();
+    loop {
+        let chunk = reader.fill_buf().await?;
+        if chunk.is_empty() {
+            return Ok(if buf.is_empty() { Read::Eof } else { Read::Got });
+        }
+        let (take, found) = match chunk.iter().position(|b| *b == b'\n') {
+            Some(at) => (at + 1, true),
+            None => (chunk.len(), false),
+        };
+        if buf.len() + take > cap {
+            return Ok(Read::TooLong);
+        }
+        buf.extend_from_slice(&chunk[..take]);
+        reader.consume(take);
+        if found {
+            return Ok(Read::Got);
+        }
+    }
+}
+
 /// Gives each line to the peer, and sends back its replies to requests. The end of stdout is
-/// the end of the server.
-async fn read(stdout: ChildStdout, peer: Arc<Peer>, outbox: mpsc::UnboundedSender<String>) {
+/// the end of the server, and so is a line longer than `MAX_MESSAGE_BYTES`: the server is
+/// then shut down.
+async fn read(
+    stdout: ChildStdout,
+    peer: Arc<Peer>,
+    outbox: mpsc::Sender<String>,
+    shutdown: CancellationToken,
+) {
     let mut reader = BufReader::new(stdout);
     let mut buf = Vec::new();
     loop {
-        buf.clear();
-        match reader.read_until(b'\n', &mut buf).await {
-            Ok(0) | Err(_) => break,
-            Ok(_) => {}
+        match read_line_capped(&mut reader, &mut buf, MAX_MESSAGE_BYTES).await {
+            Ok(Read::Eof) | Err(_) => break,
+            Ok(Read::TooLong) => {
+                tracing::warn!(server = %peer.name(), "the MCP server wrote a message that is too large; stopping it");
+                shutdown.cancel();
+                break;
+            }
+            Ok(Read::Got) => {}
         }
         let line = buf.trim_ascii();
         if line.is_empty() {
@@ -148,7 +201,7 @@ async fn read(stdout: ChildStdout, peer: Arc<Peer>, outbox: mpsc::UnboundedSende
         match serde_json::from_slice::<Value>(line) {
             Ok(message) => {
                 if let Some(reply) = peer.receive(message) {
-                    let _ = outbox.send(reply.to_string());
+                    let _ = outbox.try_send(reply.to_string());
                 }
             }
             Err(_) => tracing::debug!(server = %peer.name(), "a line that is not JSON on stdout"),
@@ -157,27 +210,42 @@ async fn read(stdout: ChildStdout, peer: Arc<Peer>, outbox: mpsc::UnboundedSende
     peer.stop();
 }
 
-/// Logs stderr line by line, up to `STDERR_LOG_CAP` bytes, and drains the rest so the server
-/// never blocks on a full pipe.
+/// Logs stderr line by line, up to `STDERR_LOG_CAP` bytes, and drains the rest, inside a line
+/// too, so the server never blocks on a full pipe and nothing grows.
 async fn log_stderr(stderr: ChildStderr, name: String) {
     let mut reader = BufReader::new(stderr);
-    let mut buf = Vec::new();
+    let mut line: Vec<u8> = Vec::new();
     let mut logged = 0;
-    loop {
-        buf.clear();
-        match reader.read_until(b'\n', &mut buf).await {
-            Ok(0) | Err(_) => break,
-            Ok(n) if logged < STDERR_LOG_CAP => {
-                logged += n;
-                let text = String::from_utf8_lossy(&buf);
-                tracing::info!(server = %name, "MCP server stderr: {}", text.trim_end());
-                if logged >= STDERR_LOG_CAP {
-                    tracing::warn!(server = %name, "the MCP server writes more to stderr; the rest is not logged");
-                }
-            }
-            Ok(_) => {}
+    let flush = |line: &mut Vec<u8>| {
+        if !line.is_empty() {
+            let text = String::from_utf8_lossy(line);
+            tracing::info!(server = %name, "MCP server stderr: {}", text.trim_end());
+            line.clear();
         }
+    };
+    while let Ok(chunk) = reader.fill_buf().await {
+        if chunk.is_empty() {
+            break;
+        }
+        let n = chunk.len();
+        for &b in chunk {
+            if logged >= STDERR_LOG_CAP {
+                break;
+            }
+            if b == b'\n' {
+                flush(&mut line);
+            } else {
+                line.push(b);
+            }
+            logged += 1;
+            if logged >= STDERR_LOG_CAP {
+                flush(&mut line);
+                tracing::warn!(server = %name, "the MCP server writes more to stderr; the rest is not logged");
+            }
+        }
+        reader.consume(n);
     }
+    flush(&mut line);
 }
 
 /// Owns the process until it has gone. On shutdown the server has `grace` to exit by itself

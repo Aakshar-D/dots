@@ -11,6 +11,7 @@
 //!   answer), `switch` (the list becomes `after_switch`, and `notifications/tools/list_changed`
 //!   is sent before the answer and on GET streams) and `ask_client` (a request with this method
 //!   and the id `s-<method>` is sent to the client before the answer).
+//!   A tool can also have `big_bytes`: its default result text is that many bytes long.
 //! - `after_switch`: the tools after a `switch`.
 //! - `page_size`: tools per `tools/list` page (default: all in one).
 //! - `protocol_version`: the version `initialize` answers (default: the client's).
@@ -27,6 +28,9 @@
 //! - `require_header`: over http, `{name: value}` every POST must carry (401 otherwise).
 //! - `get_stream`: over http, a GET opens an event stream that sends `list_changed` at the
 //!   next `switch` and then ends (default: 405).
+//! - `stall_cancelled_ms`: over http, a `notifications/cancelled` POST is answered only after
+//!   this long.
+//! - `redirect_to`: over http, every POST is answered 302 to this URL.
 
 use std::collections::HashSet;
 use std::fs::File;
@@ -47,7 +51,8 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Notify;
 
 /// Tool fields that script a call; they are not listed.
-const CONTROL: [&str; 6] = [
+const CONTROL: [&str; 7] = [
+    "big_bytes",
     "result",
     "error",
     "delay_ms",
@@ -188,8 +193,11 @@ impl Fake {
                         e["message"].as_str().unwrap_or("error"),
                     )
                 } else {
-                    let default = json!({"content": [{"type": "text",
-                        "text": format!("{name}: {}", params["arguments"])}]});
+                    let text = match tool["big_bytes"].as_u64() {
+                        Some(n) => "x".repeat(n as usize),
+                        None => format!("{name}: {}", params["arguments"]),
+                    };
+                    let default = json!({"content": [{"type": "text", "text": text}]});
                     result(id, tool.get("result").cloned().unwrap_or(default))
                 }
             }
@@ -256,6 +264,16 @@ async fn on_post(State(fake): State<Arc<Fake>>, headers: HeaderMap, body: Bytes)
         "session": header(&headers, "mcp-session-id"),
         "protocol": header(&headers, "mcp-protocol-version"),
         "auth": header(&headers, "authorization")}));
+    if let Some(to) = fake.script["redirect_to"].as_str() {
+        return (
+            StatusCode::FOUND,
+            [(axum::http::header::LOCATION, to.to_string())],
+        )
+            .into_response();
+    }
+    if msg["method"] == "notifications/cancelled" {
+        Fake::sleep(fake.script["stall_cancelled_ms"].as_u64()).await;
+    }
     if let Some(required) = fake.script["require_header"].as_object() {
         for (name, value) in required {
             if header(&headers, name) != *value {

@@ -42,6 +42,10 @@ pub const CALL_TIMEOUT: Duration = Duration::from_secs(300);
 pub const CLOSE_GRACE: Duration = Duration::from_secs(2);
 /// The limit for a notification and for the closing `DELETE` of an http session.
 const NOTE_TIMEOUT: Duration = Duration::from_secs(5);
+/// The most a server may send as one message (a stdio line, an http body, an event of a
+/// stream). More is not an MCP server worth trusting with Dots' memory: stdio is stopped, an
+/// http request fails with `McpError::Protocol`.
+const MAX_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 /// `tools/list` pages read at most: a server that pages forever is not an MCP server.
 const MAX_PAGES: usize = 100;
 
@@ -111,6 +115,17 @@ impl Transport {
         match self {
             Self::Stdio(t) => t.send(message),
             Self::Http(t) => t.send(message, awaiting).await,
+        }
+    }
+
+    /// Sends a notice whose outcome nobody waits for. Over http it goes in the background, so
+    /// that a stuck server cannot delay the caller (a cancel is answered at once).
+    fn notify_detached(&self, message: Value) {
+        match self {
+            Self::Stdio(t) => {
+                let _ = t.send(&message);
+            }
+            Self::Http(t) => t.send_detached(message),
         }
     }
 
@@ -356,9 +371,8 @@ impl McpSession {
                 _ => "cancelled",
             };
             let params = json!({ "requestId": id, "reason": reason });
-            if let Err(e) = self.notify("notifications/cancelled", Some(params)).await {
-                tracing::debug!(server = %self.name, "telling the server of a cancel failed: {e}");
-            }
+            self.transport
+                .notify_detached(rpc::notification("notifications/cancelled", Some(params)));
         }
         outcome
     }
