@@ -1,0 +1,445 @@
+//! The per-run plugin folders (MCP/skills spec section 7).
+
+use std::fs;
+use std::path::Path;
+
+use dots_core::kit::{prepare_run_kit, KitPlugin, KitSkill, MAX_COPY_BYTES};
+use dots_core::library::LibraryKind;
+use serde_json::Value;
+use tempfile::tempdir;
+
+fn write(path: &Path, text: &str) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, text).unwrap();
+}
+
+fn read(path: &Path) -> String {
+    fs::read_to_string(path).unwrap()
+}
+
+fn skill_in(dir: &Path, name: &str) -> KitSkill {
+    let path = dir.join("src-skills").join(name);
+    write(
+        &path.join("SKILL.md"),
+        "---\nname: pdf\nallowed-tools: Bash(rm *)\ndescription: d\n---\nbody\n",
+    );
+    write(&path.join("scripts").join("run.py"), "print(1)\n");
+    KitSkill {
+        name: name.into(),
+        dir: path,
+    }
+}
+
+fn plugin_in(dir: &Path, name: &str, run_hooks: bool) -> KitPlugin {
+    let root = dir.join("src-plugins").join(name);
+    write(
+        &root.join(".claude-plugin").join("plugin.json"),
+        r#"{"name":"pdf-tools","version":"1","mcpServers":{"x":{"command":"x"}},"hooks":{"PreToolUse":[]},"monitors":[]}"#,
+    );
+    write(&root.join(".mcp.json"), r#"{"db":{"command":"db"}}"#);
+    write(&root.join("hooks").join("hooks.json"), "{}");
+    write(&root.join("monitors").join("m.json"), "{}");
+    write(
+        &root.join("skills").join("fill").join("SKILL.md"),
+        "---\nallowed-tools:\n  - Bash\ndescription: fill\n---\nfill\n",
+    );
+    write(
+        &root.join("commands").join("go.md"),
+        "---\nallowed-tools: Bash(curl *)\n---\nGo\n",
+    );
+    write(
+        &root.join("commands").join("sub").join("deep.md"),
+        "---\nallowed-tools: Read\n---\nDeep\n",
+    );
+    write(
+        &root.join("agents").join("helper.md"),
+        "---\ntools: Read\n---\nHelp\n",
+    );
+    write(&root.join("bin").join("tool.cmd"), "echo\n");
+    write(&root.join(".git").join("config"), "x");
+    KitPlugin {
+        name: name.into(),
+        dir: root,
+        run_hooks,
+    }
+}
+
+#[test]
+fn nothing_to_include_creates_nothing() {
+    let tmp = tempdir().unwrap();
+    let plugins = tmp.path().join("plugins");
+    let kit = prepare_run_kit(&plugins, "r1", &[], &[]).unwrap();
+    assert!(kit.plugin_dirs.is_empty() && kit.left_out.is_empty());
+    assert!(!plugins.exists());
+    kit.cleanup();
+}
+
+#[test]
+fn skills_go_into_a_generated_dots_skills_plugin_without_allowed_tools() {
+    let tmp = tempdir().unwrap();
+    let plugins = tmp.path().join("plugins");
+    let skill = skill_in(tmp.path(), "pdf");
+    let kit = prepare_run_kit(&plugins, "r1", &[skill], &[]).unwrap();
+    let dir = plugins.join("run-r1").join("dots-skills");
+    assert_eq!(kit.plugin_dirs, std::slice::from_ref(&dir));
+    let manifest: Value =
+        serde_json::from_str(&read(&dir.join(".claude-plugin").join("plugin.json"))).unwrap();
+    assert_eq!(manifest["name"], "dots-skills");
+    let copy = dir.join("skills").join("pdf");
+    assert_eq!(
+        read(&copy.join("SKILL.md")),
+        "---\nname: pdf\ndescription: d\n---\nbody\n"
+    );
+    assert_eq!(read(&copy.join("scripts").join("run.py")), "print(1)\n");
+    // The original is untouched.
+    assert!(
+        read(&tmp.path().join("src-skills").join("pdf").join("SKILL.md")).contains("allowed-tools")
+    );
+}
+
+#[test]
+fn a_plugin_copy_has_no_servers_monitors_or_hooks_and_no_allowed_tools() {
+    let tmp = tempdir().unwrap();
+    let plugins = tmp.path().join("plugins");
+    let plugin = plugin_in(tmp.path(), "pdf-tools", false);
+    let kit = prepare_run_kit(&plugins, "r1", &[], &[plugin]).unwrap();
+    let copy = plugins.join("run-r1").join("pdf-tools");
+    assert_eq!(kit.plugin_dirs, std::slice::from_ref(&copy));
+    assert!(!copy.join(".mcp.json").exists());
+    assert!(!copy.join("monitors").exists());
+    assert!(!copy.join("hooks").exists());
+    assert!(!copy.join(".git").exists());
+    assert!(copy.join("bin").join("tool.cmd").exists());
+    assert!(copy.join("agents").join("helper.md").exists());
+    assert_eq!(
+        read(&copy.join("skills").join("fill").join("SKILL.md")),
+        "---\ndescription: fill\n---\nfill\n"
+    );
+    assert_eq!(read(&copy.join("commands").join("go.md")), "---\n---\nGo\n");
+    assert_eq!(
+        read(&copy.join("commands").join("sub").join("deep.md")),
+        "---\n---\nDeep\n"
+    );
+    let manifest: Value =
+        serde_json::from_str(&read(&copy.join(".claude-plugin").join("plugin.json"))).unwrap();
+    assert_eq!(manifest["name"], "pdf-tools");
+    assert_eq!(manifest["version"], "1");
+    for gone in ["mcpServers", "hooks", "monitors"] {
+        assert!(manifest.get(gone).is_none(), "{gone}");
+    }
+}
+
+#[test]
+fn run_hooks_keeps_the_hooks_and_nothing_else_changes() {
+    let tmp = tempdir().unwrap();
+    let plugins = tmp.path().join("plugins");
+    let plugin = plugin_in(tmp.path(), "pdf-tools", true);
+    prepare_run_kit(&plugins, "r1", &[], &[plugin]).unwrap();
+    let copy = plugins.join("run-r1").join("pdf-tools");
+    assert!(copy.join("hooks").join("hooks.json").exists());
+    assert!(!copy.join(".mcp.json").exists());
+    assert!(!copy.join("monitors").exists());
+    let manifest: Value =
+        serde_json::from_str(&read(&copy.join(".claude-plugin").join("plugin.json"))).unwrap();
+    assert!(manifest.get("hooks").is_some());
+    assert!(manifest.get("mcpServers").is_none() && manifest.get("monitors").is_none());
+}
+
+#[test]
+fn a_nested_mcp_json_or_hooks_folder_is_not_special() {
+    let tmp = tempdir().unwrap();
+    let plugins = tmp.path().join("plugins");
+    let plugin = plugin_in(tmp.path(), "p", false);
+    write(
+        &plugin.dir.join("skills").join("fill").join(".mcp.json"),
+        "{}",
+    );
+    write(
+        &plugin
+            .dir
+            .join("skills")
+            .join("fill")
+            .join("hooks")
+            .join("h.txt"),
+        "h",
+    );
+    prepare_run_kit(&plugins, "r1", &[], &[plugin]).unwrap();
+    let fill = plugins.join("run-r1").join("p").join("skills").join("fill");
+    assert!(fill.join(".mcp.json").exists());
+    assert!(fill.join("hooks").join("h.txt").exists());
+}
+
+#[test]
+fn dots_skills_comes_first_and_plugins_keep_their_order() {
+    let tmp = tempdir().unwrap();
+    let plugins = tmp.path().join("plugins");
+    let kit = prepare_run_kit(
+        &plugins,
+        "r1",
+        &[skill_in(tmp.path(), "pdf")],
+        &[
+            plugin_in(tmp.path(), "zeta", false),
+            plugin_in(tmp.path(), "alpha", false),
+        ],
+    )
+    .unwrap();
+    let names: Vec<_> = kit
+        .plugin_dirs
+        .iter()
+        .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, ["dots-skills", "zeta", "alpha"]);
+}
+
+#[test]
+fn what_is_missing_is_left_out_with_a_reason_and_the_rest_goes_in() {
+    let tmp = tempdir().unwrap();
+    let plugins = tmp.path().join("plugins");
+    fs::create_dir_all(tmp.path().join("no-skill-file")).unwrap();
+    let skills = [
+        KitSkill {
+            name: "gone".into(),
+            dir: tmp.path().join("nope"),
+        },
+        KitSkill {
+            name: "bare".into(),
+            dir: tmp.path().join("no-skill-file"),
+        },
+        skill_in(tmp.path(), "pdf"),
+    ];
+    let plugin_list = [
+        KitPlugin {
+            name: "lost".into(),
+            dir: tmp.path().join("nope"),
+            run_hooks: false,
+        },
+        plugin_in(tmp.path(), "ok", false),
+    ];
+    let kit = prepare_run_kit(&plugins, "r1", &skills, &plugin_list).unwrap();
+    let left: Vec<_> = kit
+        .left_out
+        .iter()
+        .map(|l| (l.kind, l.name.as_str(), l.reason.as_str()))
+        .collect();
+    assert_eq!(
+        left,
+        [
+            (LibraryKind::Skill, "gone", "folder not found"),
+            (LibraryKind::Skill, "bare", "SKILL.md not found"),
+            (LibraryKind::Plugin, "lost", "folder not found"),
+        ]
+    );
+    assert_eq!(kit.plugin_dirs.len(), 2);
+    assert!(!plugins.join("run-r1").join("lost").exists());
+}
+
+#[test]
+fn only_skills_that_are_left_out_make_no_dots_skills_plugin() {
+    let tmp = tempdir().unwrap();
+    let plugins = tmp.path().join("plugins");
+    let skills = [KitSkill {
+        name: "gone".into(),
+        dir: tmp.path().join("nope"),
+    }];
+    let kit = prepare_run_kit(&plugins, "r1", &skills, &[]).unwrap();
+    assert!(kit.plugin_dirs.is_empty());
+    assert!(!plugins.join("run-r1").join("dots-skills").exists());
+    kit.cleanup();
+    assert!(!plugins.join("run-r1").exists());
+}
+
+#[test]
+fn a_copy_over_the_cap_is_left_out_whole() {
+    let tmp = tempdir().unwrap();
+    let plugins = tmp.path().join("plugins");
+    let big = plugin_in(tmp.path(), "big", false);
+    let file = fs::File::create(big.dir.join("blob.bin")).unwrap();
+    file.set_len(MAX_COPY_BYTES + 1).unwrap();
+    drop(file);
+    // Excluded parts do not count: the same blob under `monitors/` is fine.
+    let fine = plugin_in(tmp.path(), "fine", false);
+    let file = fs::File::create(fine.dir.join("monitors").join("blob.bin")).unwrap();
+    file.set_len(MAX_COPY_BYTES + 1).unwrap();
+    drop(file);
+    let kit = prepare_run_kit(&plugins, "r1", &[], &[big, fine]).unwrap();
+    assert_eq!(kit.left_out.len(), 1);
+    assert_eq!(kit.left_out[0].name, "big");
+    assert_eq!(kit.left_out[0].reason, "larger than 50 MB");
+    assert!(!plugins.join("run-r1").join("big").exists());
+    assert_eq!(kit.plugin_dirs.len(), 1);
+}
+
+#[test]
+fn cleanup_deletes_the_run_folder_and_only_that() {
+    let tmp = tempdir().unwrap();
+    let plugins = tmp.path().join("plugins");
+    let other = prepare_run_kit(&plugins, "r2", &[skill_in(tmp.path(), "a")], &[]).unwrap();
+    let kit = prepare_run_kit(&plugins, "r1", &[skill_in(tmp.path(), "b")], &[]).unwrap();
+    kit.cleanup();
+    kit.cleanup();
+    assert!(!plugins.join("run-r1").exists());
+    assert!(plugins.join("run-r2").exists());
+    other.cleanup();
+}
+
+#[test]
+fn an_old_folder_of_the_same_run_is_replaced() {
+    let tmp = tempdir().unwrap();
+    let plugins = tmp.path().join("plugins");
+    write(&plugins.join("run-r1").join("stale").join("x"), "x");
+    prepare_run_kit(&plugins, "r1", &[skill_in(tmp.path(), "a")], &[]).unwrap();
+    assert!(!plugins.join("run-r1").join("stale").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symbolic_link_is_not_followed() {
+    let tmp = tempdir().unwrap();
+    let plugins = tmp.path().join("plugins");
+    let plugin = plugin_in(tmp.path(), "p", false);
+    let secret = tmp.path().join("secret.txt");
+    write(&secret, "secret");
+    std::os::unix::fs::symlink(&secret, plugin.dir.join("link.txt")).unwrap();
+    prepare_run_kit(&plugins, "r1", &[], &[plugin]).unwrap();
+    assert!(!plugins.join("run-r1").join("p").join("link.txt").exists());
+}
+
+fn hooky_plugin(dir: &Path, name: &str, run_hooks: bool) -> KitPlugin {
+    let plugin = plugin_in(dir, name, run_hooks);
+    let hooks = "hooks:\n  PreToolUse:\n    - command: evil\n";
+    write(
+        &plugin.dir.join("skills").join("fill").join("SKILL.md"),
+        &format!("---\ndescription: fill\n{hooks}---\nfill\n"),
+    );
+    write(
+        &plugin.dir.join("commands").join("go.md"),
+        &format!("---\ndescription: go\n{hooks}---\nGo\n"),
+    );
+    write(
+        &plugin.dir.join("agents").join("helper.md"),
+        &format!(
+            "---\nname: helper\ntools: Read\npermissionMode: bypassPermissions\nmcpServers:\n  x:\n    command: x\n{hooks}---\nHelp\n"
+        ),
+    );
+    plugin
+}
+
+#[test]
+fn frontmatter_hooks_are_removed_from_a_plugin_unless_it_runs_hooks() {
+    let tmp = tempdir().unwrap();
+    let plugins = tmp.path().join("plugins");
+    prepare_run_kit(
+        &plugins,
+        "off",
+        &[],
+        &[hooky_plugin(tmp.path(), "p", false)],
+    )
+    .unwrap();
+    prepare_run_kit(&plugins, "on", &[], &[hooky_plugin(tmp.path(), "p", true)]).unwrap();
+    let files = [
+        ["skills", "fill", "SKILL.md"],
+        ["commands", "go.md", ""],
+        ["agents", "helper.md", ""],
+    ];
+    for file in files {
+        let rel: std::path::PathBuf = file.iter().filter(|p| !p.is_empty()).collect();
+        let off = read(&plugins.join("run-off").join("p").join(&rel));
+        let on = read(&plugins.join("run-on").join("p").join(&rel));
+        assert!(
+            !off.contains("hooks:") && !off.contains("evil"),
+            "{rel:?}: {off}"
+        );
+        assert!(
+            on.contains("hooks:") && on.contains("evil"),
+            "{rel:?}: {on}"
+        );
+    }
+}
+
+#[test]
+fn agents_lose_permission_mode_and_mcp_servers_even_with_hooks_on() {
+    let tmp = tempdir().unwrap();
+    let plugins = tmp.path().join("plugins");
+    prepare_run_kit(&plugins, "on", &[], &[hooky_plugin(tmp.path(), "p", true)]).unwrap();
+    let agent = read(
+        &plugins
+            .join("run-on")
+            .join("p")
+            .join("agents")
+            .join("helper.md"),
+    );
+    assert!(
+        !agent.contains("permissionMode") && !agent.contains("mcpServers"),
+        "{agent}"
+    );
+    assert!(
+        agent.contains("name: helper") && agent.contains("tools: Read"),
+        "{agent}"
+    );
+    assert!(agent.ends_with("---\nHelp\n"));
+}
+
+#[test]
+fn a_standalone_skill_never_keeps_hooks() {
+    let tmp = tempdir().unwrap();
+    let plugins = tmp.path().join("plugins");
+    let skill = skill_in(tmp.path(), "pdf");
+    write(
+        &skill.dir.join("SKILL.md"),
+        "---\ndescription: d\nhooks:\n  Stop:\n    - command: evil\n---\nbody\n",
+    );
+    prepare_run_kit(&plugins, "r1", &[skill], &[]).unwrap();
+    let copy = read(
+        &plugins
+            .join("run-r1")
+            .join("dots-skills")
+            .join("skills")
+            .join("pdf")
+            .join("SKILL.md"),
+    );
+    assert_eq!(copy, "---\ndescription: d\n---\nbody\n");
+}
+
+#[test]
+fn the_copied_manifest_is_named_after_the_library_item() {
+    let tmp = tempdir().unwrap();
+    let plugins = tmp.path().join("plugins");
+    // The manifest says pdf-tools; the Library item is called docs.
+    let named = plugin_in(tmp.path(), "docs", false);
+    // No manifest at all.
+    let bare = KitPlugin {
+        name: "bare".into(),
+        dir: tmp.path().join("src-plugins").join("bare-src"),
+        run_hooks: false,
+    };
+    write(&bare.dir.join("skills").join("s").join("SKILL.md"), "s\n");
+    // A manifest that is not JSON.
+    let broken = KitPlugin {
+        name: "broken".into(),
+        dir: tmp.path().join("src-plugins").join("broken-src"),
+        run_hooks: false,
+    };
+    write(
+        &broken.dir.join(".claude-plugin").join("plugin.json"),
+        "{nope",
+    );
+    prepare_run_kit(&plugins, "r1", &[], &[named, bare, broken]).unwrap();
+    for name in ["docs", "bare", "broken"] {
+        let path = plugins
+            .join("run-r1")
+            .join(name)
+            .join(".claude-plugin")
+            .join("plugin.json");
+        let manifest: Value = serde_json::from_str(&read(&path)).unwrap();
+        assert_eq!(manifest["name"], name);
+    }
+    let docs = plugins
+        .join("run-r1")
+        .join("docs")
+        .join(".claude-plugin")
+        .join("plugin.json");
+    assert_eq!(
+        serde_json::from_str::<Value>(&read(&docs)).unwrap()["version"],
+        "1"
+    );
+}

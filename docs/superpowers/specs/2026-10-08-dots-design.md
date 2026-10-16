@@ -62,6 +62,10 @@ dots/
     src/mcp/                 MCP client: one session per Library MCP server for a run (a stdio
                              child process in a Job Object, or Streamable HTTP), `${VAR}`
                              expansion, tool-list fingerprints (MCP/skills spec §5)
+    src/kit/                 skills and plugins on disk: `SKILL.md` frontmatter, skill and plugin
+                             reading, Claude Code's installed plugins, and a Claude-engine run's
+                             plugin folders (copies without `.mcp.json`, `monitors/`, hooks
+                             unless allowed, or `allowed-tools`; MCP/skills spec §7)
     src/runner/              queue, concurrency, timeouts, cancellation, restart recovery
     src/engine/mod.rs        Engine trait + EngineEvent
     src/engine/claude.rs     drives `claude -p` with stream-json I/O

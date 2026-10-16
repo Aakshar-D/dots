@@ -5,6 +5,7 @@ pub mod approvals;
 pub mod engine;
 pub mod error;
 pub mod events;
+pub mod kit;
 pub mod library;
 pub mod mcp;
 pub mod model;
