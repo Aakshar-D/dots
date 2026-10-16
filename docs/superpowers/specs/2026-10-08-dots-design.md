@@ -228,9 +228,11 @@ that table: each old server becomes an MCP server item (`unchecked`) ticked in t
 under a valid name made from the old one; dots with a server of the same name and config share
 one item, another config gets `<name>-2`, `-3`, ...; the dot's rules naming `mcp__<old>` are
 renamed; a secret-looking inline value becomes a variable (an env value `${<KEY>}`, an
-`Authorization` header `Bearer ${<NAME>_TOKEN}`, another header `${<HEADER>}`); a server Dots
+`Authorization` header `<scheme> ${<NAME>_TOKEN}` with the old value's scheme word, `Bearer`
+when it had none, another header `${<HEADER>}`); a server Dots
 cannot read is left out with a log line. Every stored policy without `mcp_default` gets it
-(`deny` for Read-only, else `ask`), and a Trusted policy loses the preset's old `mcp__*` ask rule.
+(`deny` for Read-only or a `deny` default, else `ask`), every stored policy gets a `Skill` allow
+rule when no rule names `Skill`, and a Trusted policy loses the preset's old `mcp__*` ask rule.
 
 All timestamps are RFC 3339 UTC strings.
 

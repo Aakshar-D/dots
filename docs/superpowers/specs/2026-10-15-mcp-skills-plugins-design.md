@@ -220,9 +220,9 @@ For each run Dots writes plugin folders under `<data_dir>/plugins/run-<run_id>/`
 
 - Creates `library_items`, `mcp_catalogs` and `approvals.mcp_fingerprint`, and adds the column `dots.uses` (JSON, default `{"mcp_servers":[],"skills":[],"plugins":[]}`).
 - Each server in a dot's `mcp_servers` JSON becomes an MCP server item (status `unchecked`), ticked in that dot's `uses`. Two dots with a server of the same name and the same config share one item; different configs get the names `<name>`, `<name>-2`, …, and the dot's rules naming `mcp__<name>__` are rewritten to the new name.
-- Inline values are not copied when their key looks like a secret (section 2): an env value becomes `${<KEY>}`, an `Authorization` header becomes `Bearer ${<SERVER>_TOKEN}` (upper case, `-` as `_`). The dot then lists the variables to set (section 8). Other values are copied.
+- Inline values are not copied when their key looks like a secret (section 2): an env value becomes `${<KEY>}`, an `Authorization` header becomes `<scheme> ${<SERVER>_TOKEN}` (upper case, `-` as `_`), where the scheme is the old value's first word when the value has more than one and that word reads as a scheme (a letter, then up to 23 letters, digits or `-`: `Basic`, `token`), else `Bearer`. The dot then lists the variables to set (section 8). Other values are copied.
 - The column `dots.mcp_servers` is dropped.
-- The Trusted preset rule `mcp__*` ask is removed from stored policies whose preset is `trusted`, and every stored policy gets `mcp_default: "ask"` (`"deny"` for `read_only`).
+- The Trusted preset rule `mcp__*` ask is removed from stored policies whose preset is `trusted`; every stored policy gets `mcp_default: "ask"` (`"deny"` for `read_only` and for a policy whose `default` is `deny`), and a `Skill` allow rule at the end when no rule of it names `Skill` (`Skill` or `Skill(...)`), as every preset has (section 7).
 
 ## 11. Testing
 

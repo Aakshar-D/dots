@@ -155,8 +155,8 @@ fn var_name(s: &str) -> String {
 
 /// A server of a Claude Code `mcpServers` block as a Library config for the server `name`. A
 /// secret-looking value that is not a `${VAR}` reference is not copied: an env value becomes
-/// `${<KEY>}`, an `Authorization` header `Bearer ${<NAME>_TOKEN}`, another header
-/// `${<HEADER>}`. An `sse` server is read as `http`.
+/// `${<KEY>}`, an `Authorization` header `<scheme> ${<NAME>_TOKEN}` (`auth_scheme`), another
+/// header `${<HEADER>}`. An `sse` server is read as `http`.
 fn converted(name: &str, raw: &Value) -> Option<McpServerConfig> {
     let obj = raw.as_object()?;
     let text = |v: &Value| match v {
@@ -211,7 +211,7 @@ fn converted(name: &str, raw: &Value) -> Option<McpServerConfig> {
                     let v = if !hidden(&k, &v) {
                         v
                     } else if k.eq_ignore_ascii_case("authorization") {
-                        format!("Bearer ${{{}_TOKEN}}", var_name(name))
+                        format!("{} ${{{}_TOKEN}}", auth_scheme(&v), var_name(name))
                     } else {
                         format!("${{{}}}", var_name(&k))
                     };
@@ -225,6 +225,23 @@ fn converted(name: &str, raw: &Value) -> Option<McpServerConfig> {
         .validate()
         .ok()
         .map(|_| config)
+}
+
+/// The scheme of an `Authorization` value: its first word when the value has more than one
+/// and that word reads as a scheme (a letter, then up to 23 letters, digits or `-`), else
+/// `Bearer`. A first word that does not read as one may be part of the secret: it is not kept.
+fn auth_scheme(value: &str) -> &str {
+    let mut words = value.split_whitespace();
+    match (words.next(), words.next()) {
+        (Some(first), Some(_))
+            if first.len() <= 24
+                && first.starts_with(|c: char| c.is_ascii_alphabetic())
+                && first.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') =>
+        {
+            first
+        }
+        _ => "Bearer",
+    }
 }
 
 /// `tool` with the server renamed, when it names one of `renames` (`mcp__<old>` or
@@ -257,8 +274,10 @@ fn renamed(tool: &str, renames: &[(String, String)]) -> Option<String> {
 }
 
 /// The stored policy brought up to date: the Trusted preset's old `mcp__*` ask rule removed,
-/// rules that name a renamed server renamed, and `mcp_default` set when it is missing (`deny`
-/// for Read-only, else `ask`). `None` when the stored JSON is not a policy.
+/// rules that name a renamed server renamed, a `Skill` allow rule added when no rule names
+/// `Skill` (every preset allows it), and `mcp_default` set when it is missing (`deny` for
+/// Read-only or a policy whose `default` is `deny`, else `ask`). `None` when the stored JSON is
+/// not a policy.
 fn converted_policy(stored: &str, renames: &[(String, String)]) -> Option<String> {
     let mut value: Value = serde_json::from_str(stored).ok()?;
     let obj = value.as_object_mut()?;
@@ -272,9 +291,19 @@ fn converted_policy(stored: &str, renames: &[(String, String)]) -> Option<String
                 rule["tool"] = Value::String(tool);
             }
         }
+        let names_skill = |rule: &Value| {
+            rule["tool"].as_str().is_some_and(|t| {
+                let t = t.trim();
+                t == "Skill" || t.starts_with("Skill(")
+            })
+        };
+        if !rules.iter().any(names_skill) {
+            rules.push(json!({"tool": "Skill", "action": Action::Allow.as_str()}));
+        }
     }
     if !obj.contains_key("mcp_default") {
-        let action = if preset.as_deref() == Some(Preset::ReadOnly.as_str()) {
+        let denies = obj.get("default").and_then(Value::as_str) == Some(Action::Deny.as_str());
+        let action = if denies || preset.as_deref() == Some(Preset::ReadOnly.as_str()) {
             Action::Deny
         } else {
             Action::Ask

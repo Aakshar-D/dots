@@ -560,7 +560,10 @@ async fn migration_0006_moves_each_dots_servers_into_the_library() {
     assert_eq!(d1.uses, uses(&["sf"], &[], &[]));
     assert_eq!(
         d1.policy.rules,
-        [Rule::new("mcp__sf__query", Action::Allow)]
+        [
+            Rule::new("mcp__sf__query", Action::Allow),
+            Rule::new("Skill", Action::Allow)
+        ]
     );
     assert_eq!(d1.policy.mcp_default, Action::Ask);
     assert_eq!(dot("D2").await.uses, uses(&["sf"], &[], &[]));
@@ -572,6 +575,7 @@ async fn migration_0006_moves_each_dots_servers_into_the_library() {
             Rule::new("mcp__sf-2__*", Action::Ask),
             Rule::new("mcp__sfx__run", Action::Deny),
             Rule::new("mcp__sf-2", Action::Deny),
+            Rule::new("Skill", Action::Allow),
         ]
     );
     let d4 = dot("D4").await;
@@ -583,6 +587,7 @@ async fn migration_0006_moves_each_dots_servers_into_the_library() {
             Rule::new("Bash(git push:*)", Action::Ask),
             Rule::new("mcp__github_com__list", Action::Allow),
             Rule::new("mcp__github_com__get", Action::Deny),
+            Rule::new("Skill", Action::Allow),
         ]
     );
     assert_eq!(d4.policy.mcp_default, Action::Ask);
@@ -590,7 +595,13 @@ async fn migration_0006_moves_each_dots_servers_into_the_library() {
     assert_eq!(d5.uses, Uses::default());
     assert_eq!(d5.policy.mcp_default, Action::Deny);
     let d6 = dot("D6").await;
-    assert_eq!(d6.policy.rules, [Rule::new("mcp__*", Action::Ask)]);
+    assert_eq!(
+        d6.policy.rules,
+        [
+            Rule::new("mcp__*", Action::Ask),
+            Rule::new("Skill", Action::Allow)
+        ]
+    );
     assert_eq!(d6.uses, Uses::default());
     store.close().await;
 
@@ -631,7 +642,10 @@ async fn migration_0006_moves_each_dots_servers_into_the_library() {
     assert_eq!(store.list_library_items().await.unwrap().len(), 3);
     assert_eq!(
         store.get_dot("D6").await.unwrap().spec.policy.rules,
-        [Rule::new("mcp__*", Action::Ask)]
+        [
+            Rule::new("mcp__*", Action::Ask),
+            Rule::new("Skill", Action::Allow)
+        ]
     );
 }
 
@@ -684,8 +698,15 @@ async fn migration_0006_keeps_credentials_apart_and_erases_them_from_the_file() 
     let b = store.get_dot("DB").await.unwrap().spec;
     assert_eq!(a.uses, uses(&["gh", "sf"], &[], &[]));
     assert_eq!(b.uses, uses(&["gh-2", "sf-2"], &[], &[]));
-    assert_eq!(a.policy.rules, [Rule::new("mcp__gh__*", Action::Deny)]);
-    assert_eq!(b.policy.rules, [Rule::new("mcp__gh-2__*", Action::Deny)]);
+    let skill = Rule::new("Skill", Action::Allow);
+    assert_eq!(
+        a.policy.rules,
+        [Rule::new("mcp__gh__*", Action::Deny), skill.clone()]
+    );
+    assert_eq!(
+        b.policy.rules,
+        [Rule::new("mcp__gh-2__*", Action::Deny), skill]
+    );
     store.close().await;
 
     for file in [path.clone(), dir.path().join("dots.db-wal")] {
@@ -715,6 +736,125 @@ async fn migration_0006_keeps_a_stored_mcp_default() {
     .await;
     let store = Store::open(&path).await.unwrap();
     assert_eq!(store.get_dot("D1").await.unwrap().spec.policy, policy);
+}
+
+/// Every stored policy gets the `Skill` allow rule every preset has, unless a rule of its own
+/// already names `Skill`.
+#[tokio::test]
+async fn migration_0006_allows_skill_unless_a_rule_names_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("dots.db");
+    database_0005(
+        &path,
+        &[
+            ("D1", "one", old_policy("trusted", json!([]), "allow"), None),
+            (
+                "D2",
+                "two",
+                old_policy(
+                    "custom",
+                    json!([{"tool": "Skill", "action": "deny"}]),
+                    "ask",
+                ),
+                None,
+            ),
+            (
+                "D3",
+                "three",
+                old_policy(
+                    "custom",
+                    json!([{"tool": "Skill(pdf)", "action": "ask"}]),
+                    "ask",
+                ),
+                None,
+            ),
+        ],
+    )
+    .await;
+    let store = Store::open(&path).await.unwrap();
+    let rules = |id: &'static str| {
+        let store = store.clone();
+        async move { store.get_dot(id).await.unwrap().spec.policy.rules }
+    };
+    assert_eq!(rules("D1").await, [Rule::new("Skill", Action::Allow)]);
+    assert_eq!(rules("D2").await, [Rule::new("Skill", Action::Deny)]);
+    assert_eq!(rules("D3").await, [Rule::new("Skill(pdf)", Action::Ask)]);
+}
+
+/// A stored policy whose `default` is `deny` denies MCP tools too, whatever its preset.
+#[tokio::test]
+async fn migration_0006_gives_a_policy_that_denies_by_default_a_deny_mcp_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("dots.db");
+    database_0005(
+        &path,
+        &[
+            ("D1", "one", old_policy("custom", json!([]), "deny"), None),
+            (
+                "D2",
+                "two",
+                old_policy("sandboxed", json!([]), "deny"),
+                None,
+            ),
+            ("D3", "three", old_policy("custom", json!([]), "ask"), None),
+            (
+                "D4",
+                "four",
+                old_policy("trusted", json!([]), "allow"),
+                None,
+            ),
+        ],
+    )
+    .await;
+    let store = Store::open(&path).await.unwrap();
+    for (id, want) in [
+        ("D1", Action::Deny),
+        ("D2", Action::Deny),
+        ("D3", Action::Ask),
+        ("D4", Action::Ask),
+    ] {
+        let policy = store.get_dot(id).await.unwrap().spec.policy;
+        assert_eq!(policy.mcp_default, want, "{id}");
+    }
+}
+
+/// An inline `Authorization` value keeps its scheme word; only the credential becomes the
+/// variable. A value without a scheme word, or with a first word that is not one, gets `Bearer`.
+#[tokio::test]
+async fn migration_0006_keeps_the_scheme_of_an_authorization_header() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("dots.db");
+    let server = |auth: &str| json!({"url": "https://api.example.com/mcp", "headers": {"Authorization": auth}});
+    database_0005(
+        &path,
+        &[(
+            "D1",
+            "one",
+            old_policy("custom", json!([]), "ask"),
+            Some(json!({
+                "basic": server("Basic dXNlcjpwYXNz"),
+                "token": server("token ghp_Zq81xyz"),
+                "bearer": server("Bearer Zq81xyz"),
+                "bare": server("Zq81xyz"),
+                "odd": server("Zq81/xyz= more"),
+            })),
+        )],
+    )
+    .await;
+    let store = Store::open(&path).await.unwrap();
+    let items = store.list_library_items().await.unwrap();
+    let auth = |name: &str| -> String {
+        let item = items.iter().find(|i| i.name == name).unwrap();
+        let LibraryConfig::McpServer(McpServerConfig::Http { headers, .. }) = &item.config else {
+            panic!("{:?}", item.config)
+        };
+        headers["Authorization"].clone()
+    };
+    assert_eq!(auth("basic"), "Basic ${BASIC_TOKEN}");
+    assert_eq!(auth("token"), "token ${TOKEN_TOKEN}");
+    assert_eq!(auth("bearer"), "Bearer ${BEARER_TOKEN}");
+    assert_eq!(auth("bare"), "Bearer ${BARE_TOKEN}");
+    assert_eq!(auth("odd"), "Bearer ${ODD_TOKEN}");
 }
 
 fn http(url: &str, header: &str) -> LibraryConfig {
