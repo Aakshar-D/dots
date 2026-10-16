@@ -29,6 +29,9 @@ pub enum DecideEffect {
     Parked(Approval),
 }
 
+/// Why an approved MCP call is not performed after its server's accepted tool list changed.
+pub const TOOL_CHANGED: &str = "the tool changed since it was approved";
+
 pub fn parked_message(id: &str) -> String {
     format!(
         "Queued for human approval #{id}. Do not retry this action. \
@@ -273,8 +276,9 @@ impl PermissionGate for ApprovalHub {
         self.act(action, run_id, &dot, tool, input, None).await
     }
 
-    /// No one-shot grant is taken here: the local engine never gets one, and a grant for an
-    /// MCP call must also match the server's fingerprint (the Claude engine's gateway).
+    /// A one-shot grant (the Claude engine's retry of a call approved after it parked; the local
+    /// engine never gets one) is used up first, and allows the call only while the server's
+    /// accepted fingerprint is still the one the call was approved under (spec section 4).
     async fn check_mcp(
         &self,
         run_id: &str,
@@ -285,6 +289,20 @@ impl PermissionGate for ApprovalHub {
     ) -> Result<PermissionOutcome> {
         let run = self.store.get_run(run_id).await?;
         let dot = self.store.get_dot(&run.dot_id).await?;
+        let key = grant_key(tool, &input);
+        if let Some(granted) = self
+            .store
+            .take_mcp_grant(&run.root_run_id, tool, &key)
+            .await?
+        {
+            return Ok(if granted == fingerprint {
+                PermissionOutcome::Allow { input }
+            } else {
+                PermissionOutcome::Deny {
+                    message: format!("{tool}: not performed, because {TOOL_CHANGED}."),
+                }
+            });
+        }
         let action = dot.spec.policy.resolve_mcp(tool, &input, trust);
         self.act(action, run_id, &dot, tool, input, fingerprint.as_deref())
             .await

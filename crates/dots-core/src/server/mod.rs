@@ -19,6 +19,7 @@ use crate::runner::Runner;
 use crate::store::Store;
 use crate::Result;
 
+pub mod gateway;
 pub mod mcp;
 pub mod webhook;
 
@@ -43,6 +44,13 @@ pub fn router(state: ServerState) -> Router {
         .route(
             "/mcp",
             post(mcp::handle)
+                .get(|| async { StatusCode::METHOD_NOT_ALLOWED })
+                .layer(DefaultBodyLimit::max(MAX_MCP_BODY)),
+        )
+        // The gateway to a run's MCP server: Dots checks each call (MCP/skills spec §5).
+        .route(
+            "/mcp/s/{server}",
+            post(gateway::handle)
                 .get(|| async { StatusCode::METHOD_NOT_ALLOWED })
                 .layer(DefaultBodyLimit::max(MAX_MCP_BODY)),
         )

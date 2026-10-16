@@ -58,7 +58,8 @@ dots/
     src/schedule.rs          schedules (once, every, daily, weekly, cron) and their slots in local time
     src/scheduler.rs         the loop: a pass over the schedule rows (fire, catch up, skip,
                              complete), sleeping on a clock that tests move by hand
-    src/server/              axum on 127.0.0.1:<port>: webhooks + MCP permission endpoint
+    src/server/              axum on 127.0.0.1:<port>: webhooks + MCP permission endpoint + the
+                             MCP gateway of Claude runs (`/mcp/s/<server>`, MCP/skills spec §5)
     src/mcp/                 MCP client: one session per Library MCP server for a run (a stdio
                              child process in a Job Object, or Streamable HTTP), `${VAR}`
                              expansion, tool-list fingerprints (MCP/skills spec §5)
@@ -74,7 +75,8 @@ dots/
                              list changed), skills, plugin folders, items left out as run events
     src/runner/              queue, concurrency, timeouts, cancellation, restart recovery
     src/engine/mod.rs        Engine trait + EngineEvent
-    src/engine/claude.rs     drives `claude -p` with stream-json I/O
+    src/engine/claude.rs     drives `claude -p` with stream-json I/O; the run's MCP servers
+                             through the gateway, its skills and plugins with `--plugin-dir`
     src/engine/local.rs      own tool-use loop over OpenAI-compatible chat completions, with
                              the run's MCP tools and the `skill` tool (MCP/skills spec §5, §7)
     src/tools/               built-in tools for the local engine
@@ -217,7 +219,8 @@ Migrations: `0002` adds `runs.reviewed_at`; `0003` adds the index
 columns; `0005` converts each cron string in `dots.schedule` to
 `{"rule":{"kind":"cron","expr":...},"catch_up":false,"until":null}` (no catch-up, so an upgraded
 schedule behaves as before), adds `runs.retry_of` and creates `schedule_state`; `0006` creates
-`library_items` and `mcp_catalogs`, adds `approvals.mcp_fingerprint` and `dots.uses`, and drops
+`library_items` and `mcp_catalogs`, adds `approvals.mcp_fingerprint`, `grants.mcp_fingerprint`
+and `dots.uses`, and drops
 `dots.mcp_servers`. Its conversion needs code, so the SQL keeps each dot's old servers in a
 table `upgrade_0006` and the store finishes it when it opens, in one transaction, then drops
 that table: each old server becomes an MCP server item (`unchecked`) ticked in the dot's `uses`,
@@ -252,7 +255,8 @@ other engine a one-shot grant is written and the child run's prompt asks the mod
 the call again. See `2026-10-13-approvals-v2-design.md` §3. From MCP/skills an approved call of
 an MCP tool is performed only while the server's accepted fingerprint is the one stored with the
 approval (`approvals.mcp_fingerprint`); otherwise it is skipped with "the tool changed since it
-was approved" (MCP/skills spec §4).
+was approved" (MCP/skills spec §4). On the Claude engine the grant carries that fingerprint
+(`grants.mcp_fingerprint`), and the retried call is checked against it (§5).
 
 ### Steps
 
@@ -359,8 +363,11 @@ was approved" (MCP/skills spec §4).
   (`Policy::resolve_mcp`: `deny` rules → held server or a tool not in the accepted list asks →
   `allow` rules → `ask` rules → the accepted list's `readOnlyHint` allows → `mcp_default`),
   through the same approval queue (`PermissionGate::check_mcp`). Its approval stores the
-  server's accepted fingerprint (`approvals.mcp_fingerprint`). The local engine takes no grant
-  for it.
+  server's accepted fingerprint (`approvals.mcp_fingerprint`). The local engine never gets a
+  grant for it. The Claude engine's retry does: `check_mcp` uses up a grant of the call first
+  and allows it only while the server's accepted fingerprint is the one the grant carries
+  (`grants.mcp_fingerprint`, the approval's); otherwise the call is not performed, with "the tool
+  changed since it was approved".
 - From Approvals v2 an approval can save an allow rule to the dot's policy, in one transaction
   with the decision (`decide_approval` with `allow_rule`). Only a pattern that
   `policy::allow_candidates` derives from that very call is accepted, so the caller cannot
@@ -416,19 +423,27 @@ Spawn per run:
 ```
 claude -p --output-format stream-json --input-format stream-json --verbose
   --model <model> --max-turns <n>
-  --allowedTools <allow patterns> --disallowedTools <deny patterns>
+  --allowedTools <allow patterns> [mcp__<server>__* ...] --disallowedTools <deny patterns>
   --permission-prompt-tool mcp__dots__approve
   --mcp-config <per-run temp json> --strict-mcp-config
   --setting-sources ""                 ("user,project,local" when use_user_settings = 1)
+  [--plugin-dir <run plugin folder> ...]
   [--resume <session_id>]
 ```
 
 Working directory = run workspace. Env: `MCP_TOOL_TIMEOUT` set to
 `(approval_wait_secs + 30) * 1000` on a best-effort basis; CLI 2.1.295 ignores it for the
 permission-prompt tool (observed hard cap of about 300 s; CLI 2.1.295 observed 2026-10-09). The per-run MCP config contains the dots MCP server
-(`http://127.0.0.1:<port>/mcp`, header `Authorization: Bearer <per-run secret>`) plus the Library
-MCP servers the dot uses, its plugins' included, with `${VAR}` read from Dots' environment (a
-server whose variable is not set is left out). An empty `--setting-sources ""` keeps every settings file out of headless
+(`http://127.0.0.1:<port>/mcp`, header `Authorization: Bearer <per-run secret>`) plus, from
+MCP/skills (spec §5), one entry per MCP session the run has open (`RunTools`: the Library servers
+the dot uses, its plugins' included), named as the server and pointing at the gateway
+(`http://127.0.0.1:<port>/mcp/s/<server>`, the same secret). The CLI never starts or reaches a
+server itself, and no `${VAR}` value is written to the file. `--allowedTools` gets
+`mcp__<server>__*` for each of them, so the CLI does not ask `approve` for these calls: the
+gateway checks each one (§6), and the `approve` tool answers allow for a gateway tool in case it
+is asked. Each of the run's plugin folders (MCP/skills spec §7: `dots-skills` with the dot's
+skills, then a copy of each plugin) is passed with `--plugin-dir`; each entry of the
+`system/init` event's `plugin_errors` becomes a `notice` run event and a log line. An empty `--setting-sources ""` keeps every settings file out of headless
 runs: the user's global hooks (GateGuard, caveman, memory hooks) and a repo's committed
 `.claude/settings.json`, which could otherwise widen the CLI's own allow list beyond the dot
 policy. CLI 2.1.295 accepts the empty value (probed 2026-10-09: init event emitted, only builtin
@@ -526,6 +541,13 @@ Bound to `127.0.0.1:<port>` only; requests whose peer address is not loopback ar
   `409`. Bad token → `401`.
 - `POST /mcp` — MCP streamable-HTTP endpoint served with `rmcp`, exposing the single tool
   `approve`. Requires the per-run secret; the secret identifies the run.
+- `POST /mcp/s/{server}` — from MCP/skills (spec §5), the gateway to the run's open MCP session
+  `server` (`404` when the run has none of that name). Requires the per-run secret. It answers
+  `initialize`, `tools/list` (the session's current list) and `tools/call`: the call is checked
+  by `check_mcp` with what the run knows of the server, waits for an approval when it asks, and
+  is then sent to the server, whose result is returned as it came. A denied, parked or failed
+  call is a tool result with `isError: true` and the text the local engine gives; the call's
+  limit is what is left of `MCP_TOOL_TIMEOUT`.
 - `GET /health` — `200`.
 
 Exposing webhooks beyond localhost (e.g. tunnels) is the user's choice and out of scope.
@@ -600,6 +622,8 @@ Window close hides to tray. Tray menu: Open, Inbox (n), Pause all schedules, Qui
 - **fake-claude:** binary accepting the same flags, replaying a scripted transcript, and calling
   the MCP `approve` endpoint at scripted points. Drives end-to-end tests of runner + approval
   flow (approve in window, deny, timeout → park → resume) with no network or subscription use.
+  From MCP/skills it also records the `--mcp-config` it was given and the files of each
+  `--plugin-dir`, and lists or calls a gateway tool at scripted points.
 - **fake-mcp:** a scripted MCP server over stdio or Streamable HTTP (tools, read-only hints,
   results, errors, delays, a list change with `notifications/tools/list_changed`, a call log);
   drives the MCP client's tests with no network.

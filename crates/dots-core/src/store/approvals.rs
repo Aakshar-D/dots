@@ -358,14 +358,28 @@ impl Store {
         tool: &str,
         input_hash: &str,
     ) -> Result<()> {
+        self.create_mcp_grant(root_run_id, tool, input_hash, None)
+            .await
+    }
+
+    /// A one-shot grant of an approved MCP call, which holds only while the server's accepted
+    /// fingerprint is `mcp_fingerprint` (the approval's).
+    pub async fn create_mcp_grant(
+        &self,
+        root_run_id: &str,
+        tool: &str,
+        input_hash: &str,
+        mcp_fingerprint: Option<&str>,
+    ) -> Result<()> {
         sqlx::query(
-            "INSERT INTO grants (id, root_run_id, tool, input_hash, created_at) \
-             VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO grants (id, root_run_id, tool, input_hash, mcp_fingerprint, created_at) \
+             VALUES (?, ?, ?, ?, ?, ?)",
         )
         .bind(new_id())
         .bind(root_run_id)
         .bind(tool)
         .bind(input_hash)
+        .bind(mcp_fingerprint)
         .bind(now())
         .execute(&self.pool)
         .await?;
@@ -389,5 +403,25 @@ impl Store {
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected() == 1)
+    }
+
+    /// Consumes one unused grant of an MCP call. `None` when there is none; otherwise the
+    /// fingerprint it was approved under, which the caller compares with the server's.
+    pub async fn take_mcp_grant(
+        &self,
+        root_run_id: &str,
+        tool: &str,
+        input_hash: &str,
+    ) -> Result<Option<Option<String>>> {
+        let taken: Option<(Option<String>,)> = sqlx::query_as(
+            "UPDATE grants SET used = 1 WHERE id = (SELECT id FROM grants WHERE root_run_id = ? \
+             AND tool = ? AND input_hash = ? AND used = 0 LIMIT 1) RETURNING mcp_fingerprint",
+        )
+        .bind(root_run_id)
+        .bind(tool)
+        .bind(input_hash)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(taken.map(|(fingerprint,)| fingerprint))
     }
 }

@@ -499,56 +499,6 @@ impl Engine for CapturingEngine {
 }
 
 #[tokio::test]
-async fn a_run_is_given_the_library_servers_its_dot_uses() {
-    use dots_core::library::{LibraryConfig, PluginConfig};
-    let (dir, store) = temp_store().await;
-    let bus = new_bus();
-    let engine = Arc::new(CapturingEngine::default());
-    let runner = runner_with(&store, &bus, &dir, engine.clone(), 1);
-    runner.spawn_dispatcher(CancellationToken::new());
-    let server = |command: &str| {
-        LibraryConfig::McpServer(
-            serde_json::from_value(json!({"transport": "stdio", "command": command})).unwrap(),
-        )
-    };
-    let plugin = store
-        .add_library_item(
-            "tools",
-            &LibraryConfig::Plugin(PluginConfig {
-                path: "C:/p".into(),
-                installed_id: None,
-                run_hooks: false,
-            }),
-            None,
-        )
-        .await
-        .unwrap();
-    let owned = store
-        .add_library_item("plugin_tools_files", &server("f"), Some(&plugin.id))
-        .await
-        .unwrap();
-    let sf = store
-        .add_library_item("sf", &server("sf-mcp"), None)
-        .await
-        .unwrap();
-    store
-        .add_library_item("gh", &server("gh-mcp"), None)
-        .await
-        .unwrap();
-    let mut s = spec("uses");
-    s.workdir = dir.path().to_string_lossy().to_string();
-    s.workspace_mode = WorkspaceMode::Folder;
-    s.uses.mcp_servers = vec!["sf".into()];
-    s.uses.plugins = vec!["tools".into()];
-    let dot = store.create_dot(&s).await.unwrap();
-    let id = manual(&runner, &dot).await;
-    wait_status(&store, &id, RunStatus::Succeeded, 5).await;
-    let started = engine.0.lock().unwrap();
-    assert_eq!(started.len(), 1);
-    assert_eq!(started[0].mcp_servers, vec![owned, sf]);
-}
-
-#[tokio::test]
 async fn a_run_gets_its_tools_records_what_was_left_out_and_closes_them_at_the_end() {
     use common::fake_mcp::{tool, FakeMcp};
     use dots_core::library::{LibraryConfig, SkillConfig};

@@ -27,7 +27,7 @@ pub const MAX_NAME: usize = 64;
 const KEPT: usize = 55;
 
 /// What the model is told about an approved call whose server changed its accepted list.
-pub(super) const CHANGED: &str = "the tool changed since it was approved";
+pub(super) use crate::approvals::TOOL_CHANGED as CHANGED;
 
 /// The function name of the MCP tool `qualified` (`mcp__<server>__<tool>`): the name itself
 /// when it fits `^[A-Za-z0-9_-]{1,64}$`; otherwise its first 55 characters (each other

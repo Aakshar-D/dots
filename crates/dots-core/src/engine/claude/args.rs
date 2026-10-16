@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Value};
 
 use crate::engine::RunContext;
-use crate::library::{LibraryConfig, McpServerConfig};
 
 pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
     let spec = &ctx.dot.spec;
@@ -31,7 +30,15 @@ pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
     } else {
         String::new()
     });
-    let (allow, deny) = spec.policy.cli_lists();
+    let (mut allow, deny) = spec.policy.cli_lists();
+    // The gateway checks every call of a run's MCP server (spec section 4), so the CLI does not
+    // ask the `approve` tool for them first.
+    allow.extend(
+        ctx.tools
+            .servers()
+            .iter()
+            .map(|s| format!("mcp__{}__*", s.name())),
+    );
     if !allow.is_empty() {
         a.push("--allowedTools".into());
         a.extend(allow);
@@ -40,6 +47,10 @@ pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
         a.push("--disallowedTools".into());
         a.extend(deny);
     }
+    for dir in ctx.tools.plugin_dirs() {
+        a.push("--plugin-dir".into());
+        a.push(dir.to_string_lossy().to_string());
+    }
     if let Some(session) = &ctx.session_id {
         a.push("--resume".into());
         a.push(session.clone());
@@ -47,22 +58,16 @@ pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
     a
 }
 
-/// The run's `--mcp-config`: the Library's MCP servers the dot uses, with `${VAR}` read from
-/// `env`, and Dots' own `dots` server. A server whose variable is not set is left out.
-pub fn mcp_config(ctx: &RunContext, env: &dyn Fn(&str) -> Option<String>) -> Value {
+/// The run's `--mcp-config`: Dots' own `dots` server and, for each MCP session the run has open,
+/// an entry of the same name that reaches it through the gateway. The CLI never starts or
+/// reaches a server itself, and no `${VAR}` value is written to the file.
+pub fn mcp_config(ctx: &RunContext) -> Value {
     let mut servers = serde_json::Map::new();
-    for item in &ctx.mcp_servers {
-        let LibraryConfig::McpServer(config) = &item.config else {
-            continue;
-        };
-        match config.expanded(env) {
-            Ok(config) => {
-                servers.insert(item.name.clone(), claude_entry(&config));
-            }
-            Err(e) => {
-                tracing::warn!(run = %ctx.run_id, "MCP server {} left out: {e}", item.name)
-            }
-        }
+    for server in ctx.tools.servers() {
+        servers.insert(
+            server.name().to_string(),
+            gateway_entry(&ctx.mcp_url, &ctx.mcp_secret, server.name()),
+        );
     }
     servers.insert(
         "dots".into(),
@@ -75,26 +80,14 @@ pub fn mcp_config(ctx: &RunContext, env: &dyn Fn(&str) -> Option<String>) -> Val
     json!({ "mcpServers": servers })
 }
 
-/// A server as an entry of Claude Code's `mcpServers`.
-fn claude_entry(config: &McpServerConfig) -> Value {
-    match config {
-        McpServerConfig::Stdio {
-            command,
-            args,
-            cwd,
-            env,
-        } => {
-            let mut entry =
-                json!({ "type": "stdio", "command": command, "args": args, "env": env });
-            if let Some(cwd) = cwd {
-                entry["cwd"] = json!(cwd);
-            }
-            entry
-        }
-        McpServerConfig::Http { url, headers } => {
-            json!({ "type": "http", "url": url, "headers": headers })
-        }
-    }
+/// The `mcpServers` entry of the run's open session `server`: the gateway route
+/// `<mcp_url>/s/<server>` with the run's secret (spec section 5).
+pub fn gateway_entry(mcp_url: &str, secret: &str, server: &str) -> Value {
+    json!({
+        "type": "http",
+        "url": format!("{}/s/{server}", mcp_url.trim_end_matches('/')),
+        "headers": { "Authorization": format!("Bearer {secret}") },
+    })
 }
 
 /// The configured path if it is a file; otherwise search PATH.

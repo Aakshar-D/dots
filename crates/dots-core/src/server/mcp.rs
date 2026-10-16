@@ -11,9 +11,40 @@ use crate::engine::{PermissionGate, PermissionOutcome};
 
 const DEFAULT_PROTOCOL: &str = "2025-06-18";
 
-fn rpc_error(id: Value, code: i64, message: &str) -> Response {
+pub(super) fn rpc_error(id: Value, code: i64, message: &str) -> Response {
     Json(json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } }))
         .into_response()
+}
+
+/// The JSON-RPC request in `body` and its id. `Err` is the answer when there is nothing to
+/// answer with a result: `202` for a notification, an error for a body that is not one request.
+pub(super) fn read_request(body: &[u8]) -> Result<(Value, Value), Box<Response>> {
+    let req: Value = serde_json::from_slice(body)
+        .map_err(|e| Box::new(rpc_error(Value::Null, -32700, &format!("parse error: {e}"))))?;
+    if req.is_array() {
+        return Err(Box::new(rpc_error(
+            Value::Null,
+            -32600,
+            "batch requests are not supported",
+        )));
+    }
+    match req.get("id").cloned() {
+        Some(id) => Ok((id, req)),
+        None => Err(Box::new(StatusCode::ACCEPTED.into_response())),
+    }
+}
+
+/// The `initialize` result of a tools-only server named `name`, in the client's protocol
+/// version.
+pub(super) fn initialize_result(req: &Value, name: &str) -> Value {
+    json!({
+        "protocolVersion": req
+            .pointer("/params/protocolVersion")
+            .and_then(Value::as_str)
+            .unwrap_or(DEFAULT_PROTOCOL),
+        "capabilities": { "tools": {} },
+        "serverInfo": { "name": name, "version": env!("CARGO_PKG_VERSION") }
+    })
 }
 
 fn approve_tool() -> Value {
@@ -36,29 +67,16 @@ pub async fn handle(State(s): State<ServerState>, headers: HeaderMap, body: Byte
     let Some(run_id) = bearer(&headers).and_then(|t| s.runner.run_for_secret(&t)) else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
-    let req: Value = match serde_json::from_slice(&body) {
-        Ok(v) => v,
-        Err(e) => return rpc_error(Value::Null, -32700, &format!("parse error: {e}")),
-    };
-    if req.is_array() {
-        return rpc_error(Value::Null, -32600, "batch requests are not supported");
-    }
-    let Some(id) = req.get("id").cloned() else {
-        return StatusCode::ACCEPTED.into_response();
+    let (id, req) = match read_request(&body) {
+        Ok(read) => read,
+        Err(answer) => return *answer,
     };
     let method = req
         .get("method")
         .and_then(Value::as_str)
         .unwrap_or_default();
     let result = match method {
-        "initialize" => json!({
-            "protocolVersion": req
-                .pointer("/params/protocolVersion")
-                .and_then(Value::as_str)
-                .unwrap_or(DEFAULT_PROTOCOL),
-            "capabilities": { "tools": {} },
-            "serverInfo": { "name": "dots", "version": env!("CARGO_PKG_VERSION") }
-        }),
+        "initialize" => initialize_result(&req, "dots"),
         "ping" => json!({}),
         "tools/list" => json!({ "tools": [approve_tool()] }),
         "tools/call" => match call_approve(&s, &run_id, &req).await {
@@ -83,6 +101,16 @@ async fn call_approve(s: &ServerState, run_id: &str, req: &Value) -> Result<Valu
         .and_then(Value::as_str)
         .ok_or((-32602, "arguments.tool_name is required".to_string()))?;
     let input = args.get("input").cloned().unwrap_or_else(|| json!({}));
+    // A tool of the run's open sessions goes through the gateway, which checks every call
+    // (`gateway.rs`): checking it here as well would ask twice.
+    let gateway = s
+        .runner
+        .run_tools(run_id)
+        .is_some_and(|tools| tools.resolve(tool).is_some());
+    if gateway {
+        let allow = json!({ "behavior": "allow", "updatedInput": input });
+        return Ok(json!({ "content": [{ "type": "text", "text": allow.to_string() }] }));
+    }
     let decision = match s.hub.check(run_id, tool, input).await {
         Ok(PermissionOutcome::Allow { input }) => {
             json!({ "behavior": "allow", "updatedInput": input })

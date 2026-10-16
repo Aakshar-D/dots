@@ -29,6 +29,9 @@ CREATE TABLE mcp_catalogs (
 -- The server's accepted fingerprint when an MCP call was asked; NULL for other tools.
 ALTER TABLE approvals ADD COLUMN mcp_fingerprint TEXT;
 
+-- A one-shot grant of an approved MCP call holds only under this fingerprint (the approval's).
+ALTER TABLE grants ADD COLUMN mcp_fingerprint TEXT;
+
 -- The Library items each dot uses, by name.
 ALTER TABLE dots ADD COLUMN uses TEXT NOT NULL
     DEFAULT '{"mcp_servers":[],"skills":[],"plugins":[]}';

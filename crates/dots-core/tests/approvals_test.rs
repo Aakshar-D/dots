@@ -487,3 +487,71 @@ async fn claiming_settling_and_skipping_a_call_are_each_announced_once() {
     assert!(!hub.claim_apply(&second).await.unwrap());
     assert!(updates().is_empty());
 }
+
+/// A Claude-engine retry of an approved MCP call takes its one-shot grant only under the
+/// server's accepted fingerprint it was approved with (MCP/skills spec section 4).
+#[tokio::test]
+async fn an_mcp_grant_allows_only_under_the_fingerprint_it_was_approved_with() {
+    use dots_core::policy::McpTrust;
+    let (_d, store, hub, run, _bus) = setup(Preset::Sandboxed, 0).await;
+    let tool = "mcp__files__write";
+    let input = json!({"path": "a.txt"});
+    let writes = McpTrust {
+        held: false,
+        read_only: false,
+    };
+    let check = |fingerprint: &str| {
+        hub.check_mcp(
+            &run.id,
+            tool,
+            input.clone(),
+            writes,
+            Some(fingerprint.to_string()),
+        )
+    };
+    store
+        .create_mcp_grant(
+            &run.root_run_id,
+            tool,
+            &grant_key(tool, &input),
+            Some("fp1"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        check("fp1").await.unwrap(),
+        PermissionOutcome::Allow {
+            input: input.clone()
+        }
+    );
+    // Used up: the next call asks, and asking parks at once.
+    assert!(matches!(
+        check("fp1").await.unwrap(),
+        PermissionOutcome::Deny { .. }
+    ));
+    assert_eq!(store.approvals_for_run(&run.id).await.unwrap().len(), 1);
+
+    store
+        .create_mcp_grant(
+            &run.root_run_id,
+            tool,
+            &grant_key(tool, &input),
+            Some("fp1"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        check("fp2").await.unwrap(),
+        PermissionOutcome::Deny {
+            message: "mcp__files__write: not performed, because the tool changed since it was \
+                      approved."
+                .into()
+        }
+    );
+    // That grant is used up too, and no approval was asked for.
+    assert!(!store
+        .take_grant(&run.root_run_id, tool, &grant_key(tool, &input))
+        .await
+        .unwrap());
+    assert_eq!(store.approvals_for_run(&run.id).await.unwrap().len(), 1);
+}

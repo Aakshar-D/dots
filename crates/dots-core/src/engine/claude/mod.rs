@@ -83,7 +83,7 @@ impl Engine for ClaudeEngine {
         let mcp_path = self.scratch_dir.join(format!("mcp-{}.json", ctx.run_id));
         write_private(
             &mcp_path,
-            &serde_json::to_vec_pretty(&args::mcp_config(&ctx, &|k| std::env::var(k).ok()))?,
+            &serde_json::to_vec_pretty(&args::mcp_config(&ctx))?,
         )
         .await?;
 
@@ -126,6 +126,7 @@ impl Engine for ClaudeEngine {
             let out_tx = tx.clone();
             let saw_terminal = Arc::new(AtomicBool::new(false));
             let flag = saw_terminal.clone();
+            let run_id = ctx.run_id.clone();
             let mut stdout_task = tokio::spawn(async move {
                 let mut reader = BufReader::new(stdout);
                 let mut buf: Vec<u8> = Vec::new();
@@ -138,6 +139,10 @@ impl Engine for ClaudeEngine {
                     let text = String::from_utf8_lossy(&buf);
                     let line = text.trim_end_matches(['\r', '\n']);
                     for ev in parse::parse_line(line) {
+                        // A plugin the CLI could not load (`system/init`'s `plugin_errors`).
+                        if let EngineEvent::Notice { text } = &ev {
+                            tracing::warn!(run = %run_id, "claude: {text}");
+                        }
                         let terminal = matches!(
                             ev,
                             EngineEvent::Finished { .. } | EngineEvent::Failed { .. }

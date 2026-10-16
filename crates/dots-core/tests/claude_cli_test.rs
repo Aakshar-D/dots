@@ -5,13 +5,14 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use common::fake_dot;
-use dots_core::engine::claude::args::{build_args, mcp_config, resolve_claude, resolve_in_dirs};
+use dots_core::engine::claude::args::{
+    build_args, gateway_entry, mcp_config, resolve_claude, resolve_in_dirs,
+};
 use dots_core::engine::claude::parse::parse_line;
 use dots_core::engine::{EngineEvent, RunContext};
-use dots_core::library::{LibraryConfig, LibraryItem};
 use dots_core::model::WorkspaceMode;
 use dots_core::policy::{Policy, Preset};
-use serde_json::{json, Value};
+use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
 const INIT: &str = r#"{"type":"system","subtype":"init","cwd":"C:\\x","session_id":"84fee880-875a-47ff-835e-60eba6825534","tools":["Bash"],"model":"claude-haiku-5-5","permissionMode":"default"}"#;
@@ -130,15 +131,6 @@ fn ctx(session: Option<&str>) -> RunContext {
     dot.spec.model = "haiku".into();
     dot.spec.max_turns = 12;
     dot.spec.policy = Policy::preset(Preset::ReadOnly);
-    dot.spec.uses.mcp_servers = vec!["sf".into(), "gh".into()];
-    let item = |name: &str, config: Value| LibraryItem {
-        id: format!("ID-{name}"),
-        name: name.into(),
-        config: LibraryConfig::McpServer(serde_json::from_value(config).unwrap()),
-        owner_id: None,
-        created_at: "t".into(),
-        updated_at: "t".into(),
-    };
     RunContext {
         run_id: "RUN1".into(),
         dot,
@@ -149,32 +141,7 @@ fn ctx(session: Option<&str>) -> RunContext {
         mcp_secret: "SECRET".into(),
         cancel: CancellationToken::new(),
         approved_calls: Vec::new(),
-        mcp_servers: vec![
-            item(
-                "sf",
-                json!({"transport": "stdio", "command": "sf-mcp", "args": ["--org", "${SF_ORG}"],
-                       "env": {"SF_TOKEN": "${SF_TOKEN}", "MODE": "readonly"}}),
-            ),
-            item(
-                "gh",
-                json!({"transport": "http", "url": "https://gh.example.com/mcp",
-                       "headers": {"Authorization": "Bearer ${GH_TOKEN}"}}),
-            ),
-            item(
-                "lost",
-                json!({"transport": "stdio", "command": "lost", "env": {"K": "${NOT_SET}"}}),
-            ),
-        ],
         tools: Default::default(),
-    }
-}
-
-fn test_env(name: &str) -> Option<String> {
-    match name {
-        "SF_ORG" => Some("acme".into()),
-        "SF_TOKEN" => Some("sf-secret".into()),
-        "GH_TOKEN" => Some("gh-secret".into()),
-        _ => None,
     }
 }
 
@@ -212,30 +179,45 @@ fn argv_resume_and_user_settings() {
 }
 
 #[test]
-fn mcp_config_lists_the_library_servers_with_their_variables_and_adds_dots() {
-    let cfg = mcp_config(&ctx(None), &test_env);
+fn mcp_config_lists_dots_and_a_gateway_entry_per_open_server() {
+    // No open session: Dots' own server only.
     assert_eq!(
-        cfg["mcpServers"]["sf"],
-        json!({"type": "stdio", "command": "sf-mcp", "args": ["--org", "acme"],
-               "env": {"MODE": "readonly", "SF_TOKEN": "sf-secret"}})
+        mcp_config(&ctx(None)),
+        json!({"mcpServers": {"dots": {"type": "http", "url": "http://127.0.0.1:47321/mcp",
+               "headers": {"Authorization": "Bearer SECRET"}}}})
     );
+    // An open session is reached through the gateway with the run's secret, never directly.
     assert_eq!(
-        cfg["mcpServers"]["gh"],
-        json!({"type": "http", "url": "https://gh.example.com/mcp",
-               "headers": {"Authorization": "Bearer gh-secret"}})
+        gateway_entry("http://127.0.0.1:47321/mcp", "SECRET", "sf"),
+        json!({"type": "http", "url": "http://127.0.0.1:47321/mcp/s/sf",
+               "headers": {"Authorization": "Bearer SECRET"}})
     );
-    // A server whose variable is not set is left out.
-    assert!(cfg["mcpServers"].get("lost").is_none(), "{cfg}");
-    assert_eq!(cfg["mcpServers"].as_object().unwrap().len(), 3);
-    assert_eq!(cfg["mcpServers"]["dots"]["type"], "http");
+}
+
+#[test]
+fn init_plugin_errors_become_notices() {
+    let line = json!({"type": "system", "subtype": "init", "session_id": "s1", "plugin_errors": [
+        {"plugin": "forms", "error": "manifest is not valid JSON"},
+        {"message": "no plugin.json"},
+        "dots-skills: skills/pdf has no SKILL.md",
+        {"code": 7}
+    ]})
+    .to_string();
+    let notice = |text: &str| EngineEvent::Notice { text: text.into() };
     assert_eq!(
-        cfg["mcpServers"]["dots"]["url"],
-        "http://127.0.0.1:47321/mcp"
+        parse_line(&line),
+        vec![
+            EngineEvent::SessionStarted {
+                session_id: "s1".into()
+            },
+            notice("plugin forms: manifest is not valid JSON"),
+            notice("plugin error: no plugin.json"),
+            notice("plugin error: dots-skills: skills/pdf has no SKILL.md"),
+            notice(r#"plugin error: {"code":7}"#),
+        ]
     );
-    assert_eq!(
-        cfg["mcpServers"]["dots"]["headers"]["Authorization"],
-        "Bearer SECRET"
-    );
+    // An init without errors is the session alone, as before.
+    assert_eq!(parse_line(INIT).len(), 1);
 }
 
 #[test]
