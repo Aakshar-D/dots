@@ -483,7 +483,8 @@ async fn migration_0006_moves_each_dots_servers_into_the_library() {
                     json!([
                         {"tool": "Bash(git push:*)", "action": "ask"},
                         {"tool": "mcp__*", "action": "ask"},
-                        {"tool": "mcp__GitHub.com__list", "action": "allow"}
+                        {"tool": "mcp__GitHub_com__list", "action": "allow"},
+                        {"tool": "mcp__GitHub.com__get", "action": "deny"}
                     ]),
                     "allow",
                 ),
@@ -581,6 +582,7 @@ async fn migration_0006_moves_each_dots_servers_into_the_library() {
         [
             Rule::new("Bash(git push:*)", Action::Ask),
             Rule::new("mcp__github_com__list", Action::Allow),
+            Rule::new("mcp__github_com__get", Action::Deny),
         ]
     );
     assert_eq!(d4.policy.mcp_default, Action::Ask);
@@ -631,6 +633,72 @@ async fn migration_0006_moves_each_dots_servers_into_the_library() {
         store.get_dot("D6").await.unwrap().spec.policy.rules,
         [Rule::new("mcp__*", Action::Ask)]
     );
+}
+
+/// Equal names with different inline credentials are different items, and no secret value is
+/// left in the database file.
+#[tokio::test]
+async fn migration_0006_keeps_credentials_apart_and_erases_them_from_the_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("dots.db");
+    let policy = || {
+        old_policy(
+            "sandboxed",
+            json!([{"tool": "mcp__gh__*", "action": "deny"}]),
+            "ask",
+        )
+    };
+    let gh = |token: &str| {
+        json!({"gh": {"url": "https://gh.example.com/mcp",
+                      "headers": {"Authorization": format!("Bearer {token}")}}})
+    };
+    let sf = |token: &str| json!({"sf": {"command": "sf-mcp", "env": {"SF_TOKEN": token}}});
+    let mut both_a = gh("tokA-Zq81xyzAAA");
+    both_a
+        .as_object_mut()
+        .unwrap()
+        .extend(sf("sfA-Zq81xyzAAA").as_object().unwrap().clone());
+    let mut both_b = gh("tokB-Zq81xyzBBB");
+    both_b
+        .as_object_mut()
+        .unwrap()
+        .extend(sf("sfB-Zq81xyzBBB").as_object().unwrap().clone());
+    database_0005(
+        &path,
+        &[
+            ("DA", "a", policy(), Some(both_a)),
+            ("DB", "b", policy(), Some(both_b)),
+        ],
+    )
+    .await;
+    let store = Store::open(&path).await.unwrap();
+    let names: Vec<String> = store
+        .list_library_items()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|i| i.name)
+        .collect();
+    assert_eq!(names, ["gh", "gh-2", "sf", "sf-2"]);
+    let a = store.get_dot("DA").await.unwrap().spec;
+    let b = store.get_dot("DB").await.unwrap().spec;
+    assert_eq!(a.uses, uses(&["gh", "sf"], &[], &[]));
+    assert_eq!(b.uses, uses(&["gh-2", "sf-2"], &[], &[]));
+    assert_eq!(a.policy.rules, [Rule::new("mcp__gh__*", Action::Deny)]);
+    assert_eq!(b.policy.rules, [Rule::new("mcp__gh-2__*", Action::Deny)]);
+    store.close().await;
+
+    for file in [path.clone(), dir.path().join("dots.db-wal")] {
+        let Ok(bytes) = std::fs::read(&file) else {
+            continue;
+        };
+        let secret = "Zq81xyz";
+        assert!(
+            !bytes.windows(secret.len()).any(|w| w == secret.as_bytes()),
+            "{} still holds {secret}",
+            file.display()
+        );
+    }
 }
 
 /// A policy stored with `mcp_default` (written by a build that already had it) keeps its own.

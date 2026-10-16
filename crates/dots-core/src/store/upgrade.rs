@@ -34,7 +34,8 @@ pub(super) async fn finish_0006(pool: &SqlitePool) -> Result<()> {
     .fetch_all(&mut *tx)
     .await?;
     // The items in the order they are made: the oldest dot's servers keep their names.
-    let mut items: Vec<(String, McpServerConfig)> = Vec::new();
+    let had_rows = !rows.is_empty();
+    let mut items: Vec<Placed> = Vec::new();
     let mut dots: Vec<(String, Uses, String)> = Vec::new();
     for (dot_id, servers, policy) in rows {
         let servers = servers
@@ -63,7 +64,7 @@ pub(super) async fn finish_0006(pool: &SqlitePool) -> Result<()> {
         dots.push((dot_id, uses, policy));
     }
     let ts = now();
-    for (name, config) in &items {
+    for (name, config, _) in &items {
         let id = new_id();
         sqlx::query(
             "INSERT INTO library_items (id, kind, name, config, owner_id, created_at, \
@@ -95,13 +96,23 @@ pub(super) async fn finish_0006(pool: &SqlitePool) -> Result<()> {
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
+    if had_rows {
+        // Freed pages keep the old JSON, with its inline secrets, until they are rewritten.
+        sqlx::query("VACUUM").execute(pool).await?;
+        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+            .execute(pool)
+            .await?;
+    }
     Ok(())
 }
 
+/// An item made so far: its name, its config, and the old JSON it was made from.
+type Placed = (String, McpServerConfig, Value);
+
 /// The item that the old server `old` with config `raw` becomes: one of `items` with the same
-/// name and config, or a new one added to them. A name that is taken by another config gets
+/// name and the same old JSON (so other credentials are never shared), or a new one added. A name that is taken by another config gets
 /// `-2`, `-3`, ... `None` when `raw` is not a server config Dots can read.
-fn place(old: &str, raw: &Value, items: &mut Vec<(String, McpServerConfig)>) -> Option<String> {
+fn place(old: &str, raw: &Value, items: &mut Vec<Placed>) -> Option<String> {
     let base = mcp_server_name(old);
     converted(&base, raw)?;
     for n in 1.. {
@@ -117,11 +128,11 @@ fn place(old: &str, raw: &Value, items: &mut Vec<(String, McpServerConfig)>) -> 
         }
         // The config depends on the name: an Authorization header reads `<NAME>_TOKEN`.
         let config = converted(&name, raw)?;
-        match items.iter().find(|(taken, _)| *taken == name) {
-            Some((_, existing)) if *existing == config => return Some(name),
+        match items.iter().find(|(taken, _, _)| *taken == name) {
+            Some((_, _, existing)) if existing == raw => return Some(name),
             Some(_) => continue,
             None => {
-                items.push((name.clone(), config));
+                items.push((name.clone(), config, raw.clone()));
                 return Some(name);
             }
         }
@@ -223,9 +234,23 @@ fn renamed(tool: &str, renames: &[(String, String)]) -> Option<String> {
         .iter()
         .filter(|(old, new)| old != new)
         .filter_map(|(old, new)| {
-            let rest = tool.strip_prefix(&format!("mcp__{old}"))?;
-            (rest.is_empty() || rest.starts_with("__"))
-                .then(|| (old.len(), format!("mcp__{new}{rest}")))
+            // Claude Code writes a server's name in a tool name with every character outside
+            // `[A-Za-z0-9_-]` replaced by `_`; a rule may hold either form.
+            let tool_form: String = old
+                .chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .collect();
+            [old.clone(), tool_form].into_iter().find_map(|form| {
+                let rest = tool.strip_prefix(&format!("mcp__{form}"))?;
+                (rest.is_empty() || rest.starts_with("__"))
+                    .then(|| (form.len(), format!("mcp__{new}{rest}")))
+            })
         })
         .max_by_key(|(len, _)| *len)
         .map(|(_, tool)| tool)
