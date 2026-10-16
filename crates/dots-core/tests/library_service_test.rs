@@ -603,3 +603,71 @@ async fn starting_dots_removes_plugin_folders_a_crash_left_behind() {
     assert!(keep.exists());
     rt.shutdown();
 }
+
+#[tokio::test]
+async fn runs_opening_one_plugin_together_after_its_servers_changed_all_succeed() {
+    use dots_core::library::Uses;
+    use dots_core::run_tools::{OpenRequest, RunTools};
+    use tokio_util::sync::CancellationToken;
+
+    let (dir, store) = temp_store().await;
+    let bus = new_bus();
+    let lib = service(&store, &bus);
+    let a = FakeMcp::new(json!({"tools": [tool("a", true)]}));
+    let b = FakeMcp::new(json!({"tools": [tool("b", true)]}));
+    let path = plugin_dir(dir.path(), "forms", &[("alpha", &a), ("beta", &b)]);
+    let item = lib.add("forms", plugin(&path), None).await.unwrap();
+
+    // The servers cannot start (a second copy of one fake server would wait for the first), which
+    // leaves them out of the run with their own notice, never a "left out" one from the sync.
+    // The folder now lists beta (changed) and gamma (new) but no alpha.
+    let mut servers = serde_json::Map::new();
+    servers.insert(
+        "beta".into(),
+        json!({"command": env!("CARGO_BIN_EXE_fake-mcp"), "args": ["${DOTS_T5_NEVER_SET_SYNC}"]}),
+    );
+    servers.insert(
+        "gamma".into(),
+        json!({"command": env!("CARGO_BIN_EXE_fake-mcp"), "args": ["${DOTS_T5_NEVER_SET_SYNC}", "gamma"]}),
+    );
+    write(
+        &Path::new(&path).join(".mcp.json"),
+        &json!({ "mcpServers": servers }).to_string(),
+    );
+
+    let uses = Uses {
+        plugins: vec!["forms".into()],
+        ..Default::default()
+    };
+    let open = || {
+        let (store, bus, uses, ws) = (&store, &bus, &uses, dir.path());
+        async move {
+            RunTools::open(OpenRequest {
+                store,
+                bus,
+                run_id: "01RUN",
+                uses,
+                workspace: ws,
+                plugins_dir: None,
+                cancel: &CancellationToken::new(),
+            })
+            .await
+        }
+    };
+    let (one, two) = tokio::join!(open(), open());
+    let (one, notices_one) = one.unwrap();
+    let (two, notices_two) = two.unwrap();
+    for notice in notices_one.iter().chain(&notices_two) {
+        assert!(!notice.contains("left out"), "{notice}");
+    }
+    one.close().await;
+    two.close().await;
+    let owned: Vec<String> = store
+        .owned_library_items(&item.id)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|i| i.name)
+        .collect();
+    assert_eq!(owned, ["plugin_forms_beta", "plugin_forms_gamma"]);
+}

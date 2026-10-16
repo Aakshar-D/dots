@@ -171,6 +171,12 @@ fn plugin_config(item: &LibraryItem) -> Result<&PluginConfig> {
     }
 }
 
+/// Serialises `sync_plugin_servers` (one lock for all plugins, which are few and synced rarely).
+static PLUGIN_SYNC: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// The reason given when a plugin leaves the Library while a run is opening it.
+const GONE: &str = "removed from the Library";
+
 /// Brings the plugin's MCP server items in line with what its folder lists (spec section 2):
 /// new servers are added, changed ones updated (their catalog goes back to `unchecked`),
 /// servers no longer listed removed. A server whose item name the Library already has for a
@@ -181,32 +187,46 @@ pub(crate) async fn sync_plugin_servers(
     plugin: &LibraryItem,
     info: &PluginInfo,
 ) -> Result<Vec<String>> {
+    // One sync at a time for all plugins: two runs opening the same plugin must not both act on
+    // the same stale list of owned items.
+    let _turn = PLUGIN_SYNC.lock().await;
+    // The plugin may have been removed since it was read: then there is nothing to keep in line.
+    store.get_library_item(&plugin.id).await?;
     let mut warnings = Vec::new();
     let wanted = info.server_items(&plugin.name);
     let existing = store.owned_library_items(&plugin.id).await?;
     for old in &existing {
         if !wanted.iter().any(|(name, _)| *name == old.name) {
-            store.remove_library_item(&old.id).await?;
-            publish(bus, &old.id);
+            match store.remove_library_item(&old.id).await {
+                Ok(()) | Err(Error::NotFound(_)) => publish(bus, &old.id),
+                Err(e) => return Err(e),
+            }
         }
     }
     for (name, config) in wanted {
         let config = LibraryConfig::McpServer(config);
         match existing.iter().find(|i| i.name == name) {
             Some(old) if old.config == config => {}
-            Some(old) => {
-                store.update_library_item(&old.id, &config).await?;
-                publish(bus, &old.id);
-            }
+            Some(old) => match store.update_library_item(&old.id, &config).await {
+                Ok(_) | Err(Error::NotFound(_)) => publish(bus, &old.id),
+                Err(e) => return Err(e),
+            },
             None => match store
                 .add_library_item(&name, &config, Some(&plugin.id))
                 .await
             {
                 Ok(item) => publish(bus, &item.id),
-                Err(Error::Conflict(_)) => warnings.push(format!(
-                    "its MCP server {name} is left out: the Library already has an MCP server \
-                     of that name"
-                )),
+                Err(Error::Conflict(_)) => {
+                    let ours = store
+                        .find_library_item(LibraryKind::McpServer, &name)
+                        .await?
+                        .is_some_and(|i| i.owner_id.as_deref() == Some(plugin.id.as_str()));
+                    if !ours {
+                        warnings.push(format!(
+                            "its MCP server {name} is left out: the Library already has an MCP                              server of that name"
+                        ));
+                    }
+                }
                 Err(e) => return Err(e),
             },
         }
@@ -232,10 +252,14 @@ pub(crate) async fn refresh_plugin(
         });
         if let Some(path) = moved {
             config.path = path.to_string_lossy().into_owned();
-            store
+            match store
                 .update_library_item(&item.id, &LibraryConfig::Plugin(config.clone()))
-                .await?;
-            publish(bus, &item.id);
+                .await
+            {
+                Ok(_) => publish(bus, &item.id),
+                Err(Error::NotFound(_)) => return Ok(Err(GONE.into())),
+                Err(e) => return Err(e),
+            }
         }
     }
     let root = PathBuf::from(&config.path);
@@ -249,7 +273,11 @@ pub(crate) async fn refresh_plugin(
         Err(reason) => return Ok(Err(reason)),
     };
     let mut warnings = info.warnings.clone();
-    warnings.extend(sync_plugin_servers(store, bus, item, &info).await?);
+    match sync_plugin_servers(store, bus, item, &info).await {
+        Ok(more) => warnings.extend(more),
+        Err(Error::NotFound(_)) => return Ok(Err(GONE.into())),
+        Err(e) => return Err(e),
+    }
     Ok(Ok((info, warnings)))
 }
 
@@ -583,5 +611,38 @@ impl LibraryService {
             }
             LibraryConfig::McpServer(_) => Ok(None),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::events::new_bus;
+
+    #[tokio::test]
+    async fn a_plugin_removed_while_a_run_reads_it_is_left_out_not_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("dots.db")).await.unwrap();
+        let bus = new_bus();
+        let root = dir.path().join("forms");
+        std::fs::create_dir_all(root.join(".claude-plugin")).unwrap();
+        std::fs::write(
+            root.join(".claude-plugin").join("plugin.json"),
+            r#"{"name":"forms"}"#,
+        )
+        .unwrap();
+        let config = LibraryConfig::Plugin(PluginConfig {
+            path: root.to_string_lossy().into_owned(),
+            installed_id: None,
+            run_hooks: false,
+        });
+        let item = store
+            .add_library_item("forms", &config, None)
+            .await
+            .unwrap();
+        // The person removes it after the run read the item.
+        store.remove_library_item(&item.id).await.unwrap();
+        let out = refresh_plugin(&store, &bus, &item).await.unwrap();
+        assert_eq!(out.unwrap_err(), GONE);
     }
 }
