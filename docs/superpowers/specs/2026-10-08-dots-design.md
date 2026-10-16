@@ -59,6 +59,9 @@ dots/
     src/scheduler.rs         the loop: a pass over the schedule rows (fire, catch up, skip,
                              complete), sleeping on a clock that tests move by hand
     src/server/              axum on 127.0.0.1:<port>: webhooks + MCP permission endpoint
+    src/mcp/                 MCP client: one session per Library MCP server for a run (a stdio
+                             child process in a Job Object, or Streamable HTTP), `${VAR}`
+                             expansion, tool-list fingerprints (MCP/skills spec §5)
     src/runner/              queue, concurrency, timeouts, cancellation, restart recovery
     src/engine/mod.rs        Engine trait + EngineEvent
     src/engine/claude.rs     drives `claude -p` with stream-json I/O
@@ -66,6 +69,7 @@ dots/
     src/tools/               built-in tools for the local engine
     src/policy/              allow/ask/deny resolution, one-shot grants
     src/workspace/           git worktree or plain folder per run
+    src/bin/fake-mcp.rs      test MCP server (stdio and http) scripted by a JSON file
   crates/fake-claude/        test binary that mimics `claude -p` stream-json output
   apps/dots-app/             Tauri 2 shell: starts runtime, tray, autostart, commands, events
   ui/                        React + Vite + TypeScript
@@ -549,6 +553,9 @@ Window close hides to tray. Tray menu: Open, Inbox (n), Pause all schedules, Qui
 - **fake-claude:** binary accepting the same flags, replaying a scripted transcript, and calling
   the MCP `approve` endpoint at scripted points. Drives end-to-end tests of runner + approval
   flow (approve in window, deny, timeout → park → resume) with no network or subscription use.
+- **fake-mcp:** a scripted MCP server over stdio or Streamable HTTP (tools, read-only hints,
+  results, errors, delays, a list change with `notifications/tools/list_changed`, a call log);
+  drives the MCP client's tests with no network.
 - **Local engine:** `wiremock` OpenAI-compatible server returning scripted tool calls; verifies
   the loop, policy gate, and park/resume conversation rebuild.
 - **HTTP:** webhook token auth, payload limit, disabled dot, MCP secret validation.

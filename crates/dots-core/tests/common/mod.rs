@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 pub mod clock;
+pub mod fake_mcp;
 pub mod tz;
 
 use std::path::Path;

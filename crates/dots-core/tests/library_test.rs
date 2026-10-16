@@ -1,5 +1,5 @@
-//! The Library's model: item names, configs, `${VAR}` references and a dot's uses (MCP/skills
-//! spec sections 2 and 10).
+//! The Library's model: item names, configs and a dot's uses (MCP/skills spec sections 2 and
+//! 10). `${VAR}` references are tested with the MCP client (`mcp_test.rs`).
 
 use std::collections::BTreeMap;
 
@@ -195,59 +195,6 @@ fn configs_are_checked() {
         })
         .validate()
     ));
-}
-
-#[test]
-fn variables_are_found_and_expanded_from_the_environment() {
-    let cfg: McpServerConfig = serde_json::from_value(json!({
-        "transport": "stdio", "command": "${TOOLS}/srv", "args": ["--org", "${ORG}", "${ORG}"],
-        "cwd": "${HOME_DIR}", "env": { "SF_TOKEN": "${SF_TOKEN}", "MODE": "readonly", "X": "${" }
-    }))
-    .unwrap();
-    assert_eq!(
-        cfg.variables(),
-        ["HOME_DIR", "ORG", "SF_TOKEN"].map(String::from)
-    );
-    let env = |k: &str| match k {
-        "TOOLS" => Some("C:/t".to_string()),
-        "ORG" => Some("acme".to_string()),
-        "HOME_DIR" => Some("C:/h".to_string()),
-        "SF_TOKEN" => Some("s3cret".to_string()),
-        _ => None,
-    };
-    let McpServerConfig::Stdio {
-        command,
-        args,
-        cwd,
-        env: vars,
-    } = cfg.expanded(&env).unwrap()
-    else {
-        panic!()
-    };
-    // The spec reads variables in env values, args, cwd, url and headers: not in the command.
-    assert_eq!(command, "${TOOLS}/srv");
-    assert_eq!(args, ["--org", "acme", "acme"]);
-    assert_eq!(cwd.as_deref(), Some("C:/h"));
-    assert_eq!(vars["SF_TOKEN"], "s3cret");
-    assert_eq!(vars["MODE"], "readonly");
-    assert_eq!(vars["X"], "${", "an unclosed reference stays as written");
-
-    let http: McpServerConfig = serde_json::from_value(json!({
-        "transport": "http", "url": "https://${HOST}/mcp",
-        "headers": { "Authorization": "Bearer ${EXAMPLE_TOKEN}" }
-    }))
-    .unwrap();
-    assert_eq!(
-        http.variables(),
-        ["EXAMPLE_TOKEN", "HOST"].map(String::from)
-    );
-    let err = http
-        .expanded(&|k| (k == "HOST").then(|| "h".into()))
-        .unwrap_err();
-    assert!(
-        matches!(&err, Error::Invalid(m) if m == "EXAMPLE_TOKEN is not set"),
-        "{err:?}"
-    );
 }
 
 #[test]

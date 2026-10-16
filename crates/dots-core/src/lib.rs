@@ -6,6 +6,7 @@ pub mod engine;
 pub mod error;
 pub mod events;
 pub mod library;
+pub mod mcp;
 pub mod model;
 pub mod policy;
 pub mod proc;
