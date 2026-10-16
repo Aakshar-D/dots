@@ -272,33 +272,72 @@ fn control_and_direction_characters_are_refused_in_what_a_dialog_shows() {
         });
         assert!(invalid(header.validate()), "header {bad:?}");
     }
-    assert_eq!(
-        dots_core::library::http_origin("HTTPS://user:p@Host.example:8443/a?b#c").as_deref(),
-        Some("https://host.example:8443")
-    );
-    assert_eq!(dots_core::library::http_origin("ftp://h/"), None);
 }
 
 #[test]
-fn the_origin_is_the_one_the_http_client_uses() {
-    let o = |u: &str| dots_core::library::http_origin(u);
-    // A backslash ends the authority for http(s): the host is evil.example.
+fn the_origin_is_the_one_the_http_client_reaches_after_expanding() {
+    let env = |k: &str| match k {
+        "BACK" => Some("\\".to_string()),
+        "SLASH" => Some("/".to_string()),
+        "IDN" => Some("bücher.de".to_string()),
+        _ => None,
+    };
+    let o = |u: &str| dots_core::library::http_origin(u, &env).map(|o| o.ascii);
     assert_eq!(
-        o(r"https://evil.example\@api.github.com/mcp").as_deref(),
-        Some("https://evil.example")
+        o("HTTPS://user:p@Host.example:8443/a?b#c").as_deref(),
+        Ok("https://host.example:8443")
     );
-    // Default port, host case and a trailing dot's absence do not make another origin.
+    assert!(o("ftp://h/").is_err());
+    // Default port and host case do not make another origin.
     assert_eq!(o("https://h.example:443/a"), o("HTTPS://H.Example/b"));
     assert_ne!(o("https://h.example:444/"), o("https://h.example/"));
-    assert_eq!(o("http://h.example:80/"), o("http://h.example/"));
-    // A variable in the host is only known at start: no origin, the raw url is compared.
-    assert_eq!(o("https://${HOST}/mcp"), None);
-    assert_eq!(o("https://x.${Domain}:8443/mcp"), None);
-    // A variable in the path leaves the origin.
+    // A variable that holds `\` or `/` moves the host after expansion.
     assert_eq!(
-        o("https://h.example/${P}").as_deref(),
-        Some("https://h.example")
+        o("https://evil.example${BACK}@api.github.com/mcp").as_deref(),
+        Ok("https://evil.example")
     );
+    assert_eq!(
+        o("https:${SLASH}${SLASH}${SLASH}evil.example${BACK}@api.github.com").as_deref(),
+        Ok("https://evil.example")
+    );
+    // A variable in the path leaves the origin; one that is not set says so.
+    assert_eq!(
+        o("https://h.example/${SLASH}").as_deref(),
+        Ok("https://h.example")
+    );
+    assert_eq!(o("https://${HOST}/mcp"), Err("HOST is not set".to_string()));
+    // A host in Unicode shows both forms.
+    let idn = dots_core::library::http_origin("https://${IDN}/", &env).unwrap();
+    assert_eq!(idn.ascii, "https://xn--bcher-kva.de");
+    assert_eq!(idn.unicode.as_deref(), Some("bücher.de"));
+    // Changed or not: an origin that cannot be computed counts as a move unless the text is equal.
+    let changed = |a: &str, b: &str| dots_core::library::origin_changed(a, b, &env);
+    assert!(!changed("https://h/a", "https://H:443/b"));
+    assert!(changed("https://h/", "https://i/"));
+    assert!(!changed("https://${HOST}/a", "https://${HOST}/a"));
+    assert!(changed("https://${HOST}/a", "https://${HOST}/b"));
+}
+
+#[test]
+fn a_url_the_parser_would_read_differently_is_refused() {
+    let http = |url: &str| {
+        LibraryConfig::McpServer(McpServerConfig::Http {
+            url: url.into(),
+            headers: BTreeMap::new(),
+        })
+    };
+    for bad in [
+        "https:///evil.example${HOMEPATH}@api.github.com/mcp",
+        r"https://\evil.example${HOMEPATH}@api.github.com/mcp",
+        r"https://evil.example\@api.github.com/mcp",
+        "http:////h/mcp",
+        r"https://h/a\b",
+    ] {
+        assert!(invalid(http(bad).validate()), "{bad}");
+    }
+    assert!(http("https://user@h.example:8443/a/b?c=d#e")
+        .validate()
+        .is_ok());
 }
 
 #[test]

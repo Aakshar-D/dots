@@ -771,7 +771,7 @@ async fn moving_an_http_server_to_another_origin_drops_what_was_accepted() {
 }
 
 #[tokio::test]
-async fn a_backslash_url_moves_the_origin_to_the_host_the_client_uses() {
+async fn a_url_moves_the_origin_to_the_host_the_client_reaches_after_expanding() {
     let (_d, store) = temp_store().await;
     let tools = json!([{"name": "t"}]);
     let item = store
@@ -790,11 +790,16 @@ async fn a_backslash_url_moves_the_origin_to_the_host_the_client_uses() {
         .unwrap();
     let c = store.get_catalog(&item.id).await.unwrap();
     assert_eq!(c.accepted_fingerprint.as_deref(), Some("f1"));
-    // To the client this is evil.example.
+    // A variable that holds a backslash makes this url reach evil.example, though the raw text
+    // reads like the trusted host.
+    std::env::set_var("DOTS_TEST_BACKSLASH", "\\");
     store
         .update_library_item(
             &item.id,
-            &http(r"https://evil.example\@api.github.com/mcp", "1"),
+            &http(
+                "https://evil.example${DOTS_TEST_BACKSLASH}@api.github.com/mcp",
+                "1",
+            ),
         )
         .await
         .unwrap();

@@ -278,6 +278,15 @@ impl LibraryConfig {
                         "MCP server URL must start with http:// or https://: {url}"
                     ));
                 }
+                // The URL parser takes `\` for `/` and skips every `/` after `scheme:`, so the host
+                // it reaches is not the one that reads first. No http(s) URL needs either.
+                let after = url.split_once("://").map_or("", |(_, rest)| rest);
+                if url.contains('\\') || after.starts_with('/') {
+                    return invalid(
+                        "MCP server URL: no backslash, and no '/' right after 'http://' or \
+                         'https://'",
+                    );
+                }
                 for part in std::iter::once(url).chain(headers.keys()) {
                     check_plain(part)?;
                 }
@@ -307,18 +316,118 @@ fn check_plain(text: &str) -> Result<()> {
     }
 }
 
-/// The origin of an http(s) URL as the HTTP client (`reqwest::Url`, the WHATWG parser) sees it:
-/// `scheme://host[:port]`, lower case, the default port left out. `None` when the text does not
-/// parse, or names a `${VAR}` in the host (which is only known when the server starts): the
-/// caller then shows and compares the raw URL. A change of origin sends the requests elsewhere.
-pub fn http_origin(url: &str) -> Option<String> {
-    let rest = url.split_once("://")?.1;
-    let authority = rest.split(['/', '?', '#', '\\']).next().unwrap_or("");
-    if authority.contains("${") {
+/// Where an http MCP server's requests go: its origin as the HTTP client sees it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpOrigin {
+    /// `scheme://host[:port]` as `reqwest::Url` (the WHATWG parser) serializes it: lower case,
+    /// the host in ASCII, the default port left out.
+    pub ascii: String,
+    /// The host in Unicode, when that differs from the ASCII one.
+    pub unicode: Option<String>,
+}
+
+/// The origin the HTTP client will use for `url` once `${VAR}` is read from `env`, which is the
+/// text it is started with: the URL is expanded first and then parsed, so a variable that holds
+/// a `/` or `\` moves the host as it does at start. `Err` says why there is none: a variable
+/// that is not set ("X is not set"), or text that is not an http(s) URL. A change of origin
+/// sends the requests elsewhere.
+pub fn http_origin(
+    url: &str,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> std::result::Result<HttpOrigin, String> {
+    let probe = McpServerConfig::Http {
+        url: url.to_string(),
+        headers: BTreeMap::new(),
+    };
+    let McpServerConfig::Http { url: expanded, .. } = probe.expanded(env).map_err(|e| match e {
+        Error::Invalid(m) => m,
+        e => e.to_string(),
+    })?
+    else {
+        unreachable!("expanding keeps the transport")
+    };
+    let parsed = reqwest::Url::parse(&expanded).map_err(|_| "not a valid URL".to_string())?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        return Err("not an http(s) URL".into());
+    }
+    let ascii = parsed.origin().ascii_serialization();
+    let host = parsed.host_str().unwrap_or_default();
+    let unicode = punycode_host(host).filter(|u| u != host);
+    Ok(HttpOrigin { ascii, unicode })
+}
+
+/// Whether the origin differs between two URLs under `env`. An origin that cannot be computed
+/// for one of them counts as a move unless the two texts are equal.
+pub fn origin_changed(old: &str, new: &str, env: &dyn Fn(&str) -> Option<String>) -> bool {
+    match (http_origin(old, env), http_origin(new, env)) {
+        (Ok(a), Ok(b)) => a.ascii != b.ascii,
+        _ => old != new,
+    }
+}
+
+/// A host with its `xn--` labels decoded (RFC 3492), or `None` when it has none or one is bad.
+fn punycode_host(host: &str) -> Option<String> {
+    if !host.split('.').any(|l| l.starts_with("xn--")) {
         return None;
     }
-    let parsed = reqwest::Url::parse(url).ok()?;
-    matches!(parsed.scheme(), "http" | "https").then(|| parsed.origin().ascii_serialization())
+    host.split('.')
+        .map(|label| match label.strip_prefix("xn--") {
+            Some(rest) => punycode_decode(rest),
+            None => Some(label.to_string()),
+        })
+        .collect::<Option<Vec<_>>>()
+        .map(|labels| labels.join("."))
+}
+
+fn punycode_decode(input: &str) -> Option<String> {
+    const BASE: u32 = 36;
+    const TMIN: u32 = 1;
+    const TMAX: u32 = 26;
+    let (basic, extended) = match input.rfind('-') {
+        Some(i) => (&input[..i], &input[i + 1..]),
+        None => ("", input),
+    };
+    let mut out: Vec<char> = basic.chars().collect();
+    let (mut n, mut i, mut bias) = (128u32, 0u32, 72u32);
+    let mut digits = extended.chars().peekable();
+    while digits.peek().is_some() {
+        let old_i = i;
+        let (mut w, mut k) = (1u32, BASE);
+        loop {
+            let d = match digits.next()? {
+                c @ 'a'..='z' => c as u32 - 'a' as u32,
+                c @ '0'..='9' => c as u32 - '0' as u32 + 26,
+                _ => return None,
+            };
+            i = i.checked_add(d.checked_mul(w)?)?;
+            let t = if k <= bias {
+                TMIN
+            } else if k >= bias + TMAX {
+                TMAX
+            } else {
+                k - bias
+            };
+            if d < t {
+                break;
+            }
+            w = w.checked_mul(BASE - t)?;
+            k += BASE;
+        }
+        let len = out.len() as u32 + 1;
+        let mut delta = (i - old_i) / if old_i == 0 { 700 } else { 2 };
+        delta += delta / len;
+        let mut k2 = 0;
+        while delta > ((BASE - TMIN) * TMAX) / 2 {
+            delta /= BASE - TMIN;
+            k2 += BASE;
+        }
+        bias = k2 + (BASE - TMIN + 1) * delta / (delta + 38);
+        n = n.checked_add(i / len)?;
+        i %= len;
+        out.insert(i as usize, char::from_u32(n)?);
+        i += 1;
+    }
+    Some(out.into_iter().collect())
 }
 
 /// Whether a key names a secret: `TOKEN`, `KEY`, `SECRET`, `PASSWORD` or `AUTH` in it, in any

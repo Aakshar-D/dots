@@ -203,7 +203,7 @@ impl Store {
             return Err(Error::NotFound(format!("library item {id}")));
         }
         if config.kind() == LibraryKind::McpServer {
-            if moved_origin(&old.config, config) {
+            if moved_origin(&old.config, config, &|k| std::env::var(k).ok()) {
                 sqlx::query(
                     "UPDATE mcp_catalogs SET accepted_fingerprint = NULL, accepted_tools = NULL \
                      WHERE server_id = ?",
@@ -439,16 +439,25 @@ impl Store {
     }
 }
 
-/// Whether the origin of an http MCP server differs between two configs (a stdio server has none,
-/// so a move between stdio and http counts as moved).
-fn moved_origin(old: &LibraryConfig, new: &LibraryConfig) -> bool {
-    use crate::library::{http_origin, McpServerConfig};
-    let origin = |c: &LibraryConfig| match c {
-        LibraryConfig::McpServer(McpServerConfig::Http { url, .. }) => {
-            Some(http_origin(url).unwrap_or_else(|| url.clone()))
-        }
-        _ => None,
-    };
-    let (a, b) = (origin(old), origin(new));
-    a != b
+/// Whether the origin of an http MCP server differs between two configs, as the client will
+/// compute it with `env` (a stdio server has none, so a move between stdio and http counts as
+/// moved).
+fn moved_origin(
+    old: &LibraryConfig,
+    new: &LibraryConfig,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> bool {
+    use crate::library::{origin_changed, McpServerConfig};
+    match (old, new) {
+        (
+            LibraryConfig::McpServer(McpServerConfig::Http { url: a, .. }),
+            LibraryConfig::McpServer(McpServerConfig::Http { url: b, .. }),
+        ) => origin_changed(a, b, env),
+        (LibraryConfig::McpServer(McpServerConfig::Http { .. }), LibraryConfig::McpServer(_))
+        | (
+            LibraryConfig::McpServer(McpServerConfig::Stdio { .. }),
+            LibraryConfig::McpServer(McpServerConfig::Http { .. }),
+        ) => true,
+        _ => false,
+    }
 }

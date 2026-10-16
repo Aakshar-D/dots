@@ -209,6 +209,9 @@ pub(crate) async fn sync_plugin_servers(
             Some(old) if old.config == config => {}
             Some(old) => match store.update_library_item(&old.id, &config).await {
                 Ok(_) | Err(Error::NotFound(_)) => publish(bus, &old.id),
+                Err(Error::Invalid(m)) => {
+                    warnings.push(format!("its MCP server {name} is left out: {m}"))
+                }
                 Err(e) => return Err(e),
             },
             None => match store
@@ -227,6 +230,11 @@ pub(crate) async fn sync_plugin_servers(
                              server of that name"
                         ));
                     }
+                }
+                // A server the Library refuses (a URL the parser would read differently) leaves
+                // that server out, not the plugin.
+                Err(Error::Invalid(m)) => {
+                    warnings.push(format!("its MCP server {name} is left out: {m}"))
                 }
                 Err(e) => return Err(e),
             },

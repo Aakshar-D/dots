@@ -793,7 +793,7 @@ dot; a chat or webhook run does not clear it.
   the `${VAR}` text) differ from the stored ones (a new server differs) ask "Dots will run:
   <command> <args> in <cwd> with env KEY1, KEY2. Run it?" (keys only, never values). An http
   config whose `url` or header values name `${VAR}` asks "Dots will send the values of A, B to
-  <origin>. Send them?" (names only) when the origin or the set of variables is new or changed.
+  <origin>. Send them?" (names only) when the origin or the set of variables is new or changed. The origin is the one the HTTP client reaches after `${VAR}` in the URL is read from Dots' environment (an unset variable shows the quoted URL and that the server cannot start; a Unicode host shows both forms); the core refuses an http URL with a backslash or a `/` right after `://`.
   A `library_add` of a plugin, or a `library_update` that changes its path, whose `.mcp.json`
   has stdio servers asks "This plugin starts: <cmd> <args>; <cmd> <args>. Add it?", and "It sends the values of A, B to <origin>." for each http server that names `${VAR}` (an author-written `.mcp.json`); and hooks
   newly on (switched on, or on at a new path) ask "This plugin's hooks run commands on their
