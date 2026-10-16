@@ -771,3 +771,39 @@ describe("a schedule that needs attention", () => {
     expect(await item()).toBeVisible();
   });
 });
+
+describe("the Inbox, tools changed", () => {
+  const [changed] = sample.inbox.tools_changed;
+
+  it("lists a server whose tools changed with the dots that use it and a link to its review", async () => {
+    inbox({ approvals: [], review_runs: [], attention: [], tools_changed: [changed!] });
+    renderApp("/inbox");
+    const group = await screen.findByRole("region", { name: "Tools changed" });
+    const row = within(group).getByRole("listitem", { name: `${changed!.name} tools changed` });
+    expect(row).toHaveTextContent(changed!.dots.map((d) => d.name).join(", "));
+    expect(within(row).getByRole("link", { name: "Review" })).toHaveAttribute(
+      "href",
+      `/library?review=${changed!.server_id}`,
+    );
+    expect(screen.queryByText(/Nothing waits for you/)).toBeNull();
+  });
+
+  it("says when no dot uses the server", async () => {
+    inbox({
+      approvals: [],
+      review_runs: [],
+      attention: [],
+      tools_changed: [{ ...changed!, dots: [] }],
+    });
+    renderApp("/inbox");
+    expect(await screen.findByText("No dot uses it yet.")).toBeVisible();
+  });
+
+  it("opens the review in the Library", async () => {
+    inbox({ approvals: [], review_runs: [], attention: [], tools_changed: [changed!] });
+    backend.on("library_list", () => sample.library);
+    const { user } = renderApp("/inbox");
+    await user.click(await screen.findByRole("link", { name: "Review" }));
+    expect(await screen.findByRole("dialog", { name: /Tools changed: github/ })).toBeVisible();
+  });
+});

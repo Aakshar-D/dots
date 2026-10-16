@@ -586,9 +586,19 @@ React + Vite + TypeScript inside Tauri 2. Screens:
   runs, after a date), both hidden for Once; the next 3 fire times from `preview_schedule`, and
   the core's objection under the fields); webhook URL + token (copy, regenerate);
   policy editor (preset picker + rule table); limits; use-user-settings toggle (Claude only).
-  The dot's `uses` (Library items) is kept as stored when the form is saved.
+  From MCP/skills a section "Tools and skills" (`screens/dot-editor/ToolsAndSkills.tsx`) edits
+  the dot's `uses` as three checklists from the Library (MCP servers, skills, plugins; a
+  plugin's own servers are not listed: they come with the plugin). A server whose tools changed
+  or that was unreachable says so on its row. A name the Library no longer has stays ticked,
+  marked, so that it can be unticked. For a local dot, a ticked plugin that has commands,
+  agents or hooks says that they do not apply (only its skills and servers do). A note lists
+  the `${VAR}` that the ticked servers, and the servers of ticked plugins, need and the
+  environment of Dots does not set (the Library list's `missing_variables`).
 - **Run view** — live transcript (assistant text, collapsible tool calls/results), worktree diff,
-  summary, status, tokens; cancel, discard worktree, open folder. From Scheduler v2 a
+  summary, status, tokens; cancel, discard worktree, open folder. From MCP/skills an MCP call
+  shows its server and tool ("salesforce › query" for `mcp__salesforce__query`; a server that
+  comes with a plugin shows as the plugin, found through the Library list), and a `notice`
+  run event reads as a note line, not as a collapsed raw item. From Scheduler v2 a
   scheduled run's trigger has a line under it: "Scheduled for <slot>", "…, caught up after
   the PC was off", "Scheduled for <slot> · attempt 3 of 6" for a slot's run that carries the
   attempt of a retry it dropped, or "Retry 2 of 6 of the failed run" with a link to that run

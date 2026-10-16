@@ -13,6 +13,7 @@ import type { SpecErrors } from "@/lib/dot-rules";
 import { notifyError } from "@/lib/notify";
 import { PolicyEditor } from "@/screens/dot-editor/PolicyEditor";
 import { ScheduleEditor, type SchedulePreview } from "@/screens/dot-editor/ScheduleEditor";
+import { ToolsAndSkills } from "@/screens/dot-editor/ToolsAndSkills";
 import { WebhookPanel } from "@/screens/dot-editor/WebhookPanel";
 
 /// What the editor holds. The Library items the dot uses (`spec.uses`) are kept as they are.
@@ -201,6 +202,14 @@ export function DotForm(props: {
           policy={spec.policy}
           onChange={(policy) => set("policy", policy)}
           error={errors.policy}
+        />
+      </Section>
+
+      <Section title="Tools and skills">
+        <ToolsAndSkills
+          uses={spec.uses}
+          engine={spec.engine}
+          onChange={(uses) => set("uses", uses)}
         />
       </Section>
 

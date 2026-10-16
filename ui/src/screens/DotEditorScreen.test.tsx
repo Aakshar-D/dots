@@ -342,6 +342,23 @@ describe("the dot editor, stored dot", () => {
     expect(backend.callsTo("update_dot")[0]).toMatchObject({ spec: { uses: dot.uses } });
   });
 
+  it("shows what the dot uses in Tools and skills and saves what was changed there", async () => {
+    stored();
+    backend.on("library_list", () => sample.library);
+    const { user } = renderApp(path);
+    const section = await screen.findByRole("group", { name: "Tools and skills" });
+    const ticked = (name: string) => within(section).findByLabelText(name);
+    for (const name of [...dot.uses.mcp_servers, ...dot.uses.skills, ...dot.uses.plugins]) {
+      expect(await ticked(name)).toBeChecked();
+    }
+    await user.click(await ticked("pdf"));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("Saved")).toBeVisible();
+    expect(backend.callsTo("update_dot")[0]).toMatchObject({
+      spec: { uses: { ...dot.uses, skills: dot.uses.skills.filter((n) => n !== "pdf") } },
+    });
+  });
+
   it("deletes the dot only after a confirmation", async () => {
     stored();
     backend.on("delete_dot", () => null);
