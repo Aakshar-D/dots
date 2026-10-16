@@ -457,14 +457,33 @@ pub struct NeedsAttention {
     pub failed_at: String,
 }
 
-/// Pending approvals, finished runs awaiting review and schedules that need attention (spec
-/// §12 Inbox; Scheduler v2 spec §8).
+/// A dot named in a list: its id and its name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DotRef {
+    pub id: String,
+    pub name: String,
+}
+
+/// An MCP server whose tool list changed since it was accepted, or was never accepted: its
+/// tools ask until the person reviews and accepts the list (MCP/skills spec section 8).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolsChanged {
+    pub server_id: String,
+    pub name: String,
+    /// The dots that use it (through its plugin, for a plugin's server), by name.
+    pub dots: Vec<DotRef>,
+}
+
+/// Pending approvals, finished runs awaiting review, schedules that need attention and MCP
+/// servers whose tools changed (spec §12 Inbox; Scheduler v2 spec §8; MCP/skills spec §8).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Inbox {
     pub approvals: Vec<PendingApproval>,
     pub review_runs: Vec<ReviewRun>,
     /// Newest failure first.
     pub attention: Vec<NeedsAttention>,
+    /// By server name.
+    pub tools_changed: Vec<ToolsChanged>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

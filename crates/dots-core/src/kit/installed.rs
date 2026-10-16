@@ -4,9 +4,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use serde::Serialize;
 use serde_json::Value;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct InstalledPlugin {
     /// `<name>@<marketplace>`
     pub id: String,

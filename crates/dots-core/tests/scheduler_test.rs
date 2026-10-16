@@ -84,6 +84,7 @@ fn idle_runner(store: &Store, dir: &TempDir, bus: Bus) -> Arc<Runner> {
             mcp_url: String::new(),
             worktrees_dir: dir.path().join("wt"),
             cancel_grace: Duration::from_millis(100),
+            plugins_dir: dir.path().join("plugins"),
         },
     )
 }

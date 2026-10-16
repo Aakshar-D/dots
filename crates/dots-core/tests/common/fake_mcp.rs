@@ -38,6 +38,14 @@ impl FakeMcp {
         Self { dir }
     }
 
+    /// Replaces the script, keeping its log and lock files: a server started after this lists
+    /// what `script` says.
+    pub fn rewrite(&self, mut script: Value) {
+        script["log"] = json!(self.dir.path().join("log.jsonl"));
+        script["alive"] = json!(self.dir.path().join("alive"));
+        std::fs::write(self.script(), script.to_string()).unwrap();
+    }
+
     pub fn script(&self) -> PathBuf {
         self.dir.path().join("script.json")
     }

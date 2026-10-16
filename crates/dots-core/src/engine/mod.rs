@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -8,6 +9,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::library::LibraryItem;
 use crate::model::{ApplyState, Approval, Dot};
+use crate::run_tools::RunTools;
 use crate::Result;
 
 pub mod claude;
@@ -51,6 +53,12 @@ pub enum EngineEvent {
     Failed {
         error: String,
     },
+    /// Something the person should know about the run that is not the model's doing, such as
+    /// a Library item left out of it ("skill pdf: folder not found") or an MCP server's
+    /// problem ("salesforce: could not start: SF_TOKEN is not set").
+    Notice {
+        text: String,
+    },
 }
 
 impl EngineEvent {
@@ -65,6 +73,7 @@ impl EngineEvent {
             Self::Message { .. } => "message",
             Self::Finished { .. } => "finished",
             Self::Failed { .. } => "failed",
+            Self::Notice { .. } => "notice",
         }
     }
 }
@@ -86,6 +95,9 @@ pub struct RunContext {
     /// The Library's MCP servers the dot uses, its plugins' included, as stored: `${VAR}` not
     /// expanded (`Store::used_mcp_servers`).
     pub mcp_servers: Vec<LibraryItem>,
+    /// The run's MCP sessions, skills and plugin folders, opened by the runner before the
+    /// engine starts and closed when the run ends (`RunTools`).
+    pub tools: Arc<RunTools>,
 }
 
 #[async_trait]

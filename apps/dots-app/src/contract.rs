@@ -130,8 +130,8 @@ fn status() -> Status {
 /// The sample of `e`'s own variant. The match has no wildcard arm and the array's length is
 /// part of its type, so a new `EngineEvent` variant does not compile until it has a name
 /// here and a sample in `engine_events`.
-fn engine_event_sample<'a>(samples: &'a [EngineEvent; 9], e: &EngineEvent) -> &'a EngineEvent {
-    let [started, text, call, result, usage, raw, message, finished, failed] = samples;
+fn engine_event_sample<'a>(samples: &'a [EngineEvent; 10], e: &EngineEvent) -> &'a EngineEvent {
+    let [started, text, call, result, usage, raw, message, finished, failed, notice] = samples;
     match e {
         EngineEvent::SessionStarted { .. } => started,
         EngineEvent::AssistantText { .. } => text,
@@ -142,6 +142,7 @@ fn engine_event_sample<'a>(samples: &'a [EngineEvent; 9], e: &EngineEvent) -> &'
         EngineEvent::Message { .. } => message,
         EngineEvent::Finished { .. } => finished,
         EngineEvent::Failed { .. } => failed,
+        EngineEvent::Notice { .. } => notice,
     }
 }
 
@@ -180,6 +181,9 @@ fn engine_events() -> Value {
         },
         EngineEvent::Failed {
             error: "timeout".into(),
+        },
+        EngineEvent::Notice {
+            text: "skill pdf: folder not found".into(),
         },
     ];
     for sample in &samples {
@@ -329,6 +333,14 @@ pub fn samples() -> Value {
                 run_id: "01J0RUN".into(),
                 error: Some("model server unreachable".into()),
                 failed_at: TS.into(),
+            }],
+            tools_changed: vec![ToolsChanged {
+                server_id: "01J0SRV".into(),
+                name: "github".into(),
+                dots: vec![DotRef {
+                    id: "01J0DOT".into(),
+                    name: "nightly-tests".into(),
+                }],
             }],
         }),
         "WorktreeDiff": to(WorktreeDiff {

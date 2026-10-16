@@ -165,6 +165,7 @@ fn ctx(session: Option<&str>) -> RunContext {
                 json!({"transport": "stdio", "command": "lost", "env": {"K": "${NOT_SET}"}}),
             ),
         ],
+        tools: Default::default(),
     }
 }
 

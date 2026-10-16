@@ -525,6 +525,18 @@
         "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN",
         "worktree_exists": true
       }
+    ],
+    "tools_changed": [
+      {
+        "dots": [
+          {
+            "id": "01J0DOT",
+            "name": "nightly-tests"
+          }
+        ],
+        "name": "github",
+        "server_id": "01J0SRV"
+      }
     ]
   },
   "Limits": {
@@ -716,6 +728,10 @@
     {
       "error": "timeout",
       "kind": "failed"
+    },
+    {
+      "kind": "notice",
+      "text": "skill pdf: folder not found"
     }
   ],
   "RunEventRecord": {

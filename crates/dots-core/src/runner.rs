@@ -18,6 +18,7 @@ use crate::model::{
     ApprovalStatus, EngineKind, NewRun, Run, RunStatus, TriggerKind, WorkspaceMode,
 };
 use crate::prompt::build_prompt;
+use crate::run_tools::{CloseOnDrop, OpenRequest, RunTools};
 use crate::store::Store;
 use crate::util::{ct_eq, new_token};
 use crate::workspace::{Prepared, WorkspaceManager};
@@ -32,6 +33,8 @@ pub struct RunnerConfig {
     pub mcp_url: String,
     pub worktrees_dir: PathBuf,
     pub cancel_grace: Duration,
+    /// Where a Claude-engine run's plugin folders go (`<data_dir>/plugins`).
+    pub plugins_dir: PathBuf,
 }
 
 struct Active {
@@ -497,11 +500,29 @@ impl Runner {
                 p
             }
         };
+        // The run's MCP sessions, skills and plugin folders (MCP/skills spec section 5).
+        let (tools, notices) = RunTools::open(OpenRequest {
+            store: &self.store,
+            bus: &self.bus,
+            run_id: &run.id,
+            uses: &dot.spec.uses,
+            workspace: &prepared.path,
+            plugins_dir: (dot.spec.engine == EngineKind::Claude)
+                .then_some(self.cfg.plugins_dir.as_path()),
+            cancel: &cancel,
+        })
+        .await?;
+        let tools = Arc::new(tools);
+        let _closer = CloseOnDrop(tools.clone());
         if cancel.is_cancelled() {
+            tools.close().await;
             if let Err(e) = self.workspaces.cleanup_if_unchanged(&dot, &prepared).await {
                 tracing::warn!(run = %run.id, "workspace cleanup failed: {e}");
             }
             return self.finish_cancelled_before_start(&run.id).await;
+        }
+        for text in notices {
+            self.record(&run.id, &EngineEvent::Notice { text }).await?;
         }
         // A resume run on an engine that performs approved calls itself is handed the calls
         // its parent queued. The engine claims each one before it runs it.
@@ -526,6 +547,7 @@ impl Runner {
             cancel: cancel.clone(),
             approved_calls,
             mcp_servers,
+            tools: tools.clone(),
         };
         let mut rx = engine.start(ctx).await?;
 
@@ -560,6 +582,7 @@ impl Runner {
                 }
             }
         }
+        tools.close().await;
 
         let user_cancelled = by_user.load(Ordering::SeqCst);
         let waiting = self.store.has_pending_for_run(&run.id).await?

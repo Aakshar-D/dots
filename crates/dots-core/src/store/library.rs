@@ -339,6 +339,73 @@ impl Store {
         Ok(())
     }
 
+    /// Records a check that listed the server's tools (spec section 3): they become the seen
+    /// list, and the status is `accepted` when their fingerprint is the accepted one, else
+    /// `changed`. One statement, so a check never undoes an accept that lands meanwhile.
+    pub async fn record_catalog_seen(
+        &self,
+        server_id: &str,
+        fingerprint: &str,
+        tools: &Value,
+    ) -> Result<McpCatalog> {
+        let row = sqlx::query(&format!(
+            "UPDATE mcp_catalogs SET seen_fingerprint = ?, seen_tools = ?, checked_at = ?, \
+             error = NULL, status = CASE WHEN accepted_fingerprint = ? THEN ? ELSE ? END \
+             WHERE server_id = ? RETURNING {CATALOG_COLUMNS}"
+        ))
+        .bind(fingerprint)
+        .bind(tools.to_string())
+        .bind(now())
+        .bind(fingerprint)
+        .bind(CatalogStatus::Accepted.as_str())
+        .bind(CatalogStatus::Changed.as_str())
+        .bind(server_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| Error::NotFound(format!("catalog of MCP server {server_id}")))?;
+        catalog_from_row(&row)
+    }
+
+    /// Records a check that failed: status `unreachable` with the error. The accepted and the
+    /// seen lists stay.
+    pub async fn record_catalog_failure(&self, server_id: &str, error: &str) -> Result<McpCatalog> {
+        let row = sqlx::query(&format!(
+            "UPDATE mcp_catalogs SET status = ?, error = ?, checked_at = ? WHERE server_id = ? \
+             RETURNING {CATALOG_COLUMNS}"
+        ))
+        .bind(CatalogStatus::Unreachable.as_str())
+        .bind(error)
+        .bind(now())
+        .bind(server_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| Error::NotFound(format!("catalog of MCP server {server_id}")))?;
+        catalog_from_row(&row)
+    }
+
+    /// The MCP servers that belong to the plugin `owner_id`, by name.
+    pub async fn owned_library_items(&self, owner_id: &str) -> Result<Vec<LibraryItem>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {ITEM_COLUMNS} FROM library_items WHERE owner_id = ? ORDER BY name"
+        ))
+        .bind(owner_id)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(item_from_row).collect()
+    }
+
+    /// The MCP servers whose catalog is `changed`: their tool list waits to be reviewed.
+    pub async fn changed_mcp_servers(&self) -> Result<Vec<LibraryItem>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {ITEM_COLUMNS} FROM library_items WHERE id IN \
+             (SELECT server_id FROM mcp_catalogs WHERE status = ?) ORDER BY name"
+        ))
+        .bind(CatalogStatus::Changed.as_str())
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(item_from_row).collect()
+    }
+
     /// Accepts the tool list last seen, if its fingerprint is still `fingerprint`: the seen
     /// list becomes the accepted one and the status `accepted`. A list seen since is a
     /// `Conflict`: the person accepts only what was shown.

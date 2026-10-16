@@ -66,6 +66,7 @@ async fn build_env(steps: Vec<Step>, resume_steps: Option<Vec<Step>>, dispatch: 
             mcp_url: "http://127.0.0.1:1/mcp".into(),
             worktrees_dir: dir.path().join("wt"),
             cancel_grace: Duration::from_millis(200),
+            plugins_dir: dir.path().join("plugins"),
         },
     );
     if dispatch {

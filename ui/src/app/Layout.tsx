@@ -23,7 +23,10 @@ export function Layout() {
   const inbox = useQuery({ queryKey: keys.inbox, queryFn: commands.inbox }).data;
   // The same count as the tray's (`inbox_count`).
   const waiting = inbox
-    ? inbox.approvals.length + inbox.review_runs.length + inbox.attention.length
+    ? inbox.approvals.length +
+      inbox.review_runs.length +
+      inbox.attention.length +
+      inbox.tools_changed.length
     : 0;
   return (
     <div className="flex h-screen bg-background text-sm text-foreground">

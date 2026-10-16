@@ -43,6 +43,13 @@ describe("the transcript", () => {
     expect(items).toEqual([{ type: "error", seq: expect.any(Number), text: "timeout" }]);
   });
 
+  it("shows a notice about the run as a note", () => {
+    const items = transcriptItems([ev({ kind: "notice", text: "skill pdf: folder not found" })]);
+    expect(items).toEqual([
+      { type: "raw", seq: expect.any(Number), label: "Note", text: "skill pdf: folder not found" },
+    ]);
+  });
+
   it("keeps what it cannot read as raw instead of dropping it", () => {
     const items = transcriptItems([
       ev({ kind: "raw", line: '{"type":"future"}' }),

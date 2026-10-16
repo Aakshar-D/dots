@@ -157,6 +157,8 @@ export const RunEventData = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("message"), message: z.unknown() }),
   z.strictObject({ kind: z.literal("finished"), summary: z.string() }),
   z.strictObject({ kind: z.literal("failed"), error: z.string() }),
+  // Something about the run that is not the model's doing: an item left out, a server problem.
+  z.strictObject({ kind: z.literal("notice"), text: z.string() }),
 ]);
 
 const approvalShape = {
@@ -265,11 +267,20 @@ export const NeedsAttention = z.strictObject({
   error: nullable(z.string()),
   failed_at: z.string(),
 });
+export const DotRef = z.strictObject({ id: z.string(), name: z.string() });
+// An MCP server whose tool list waits for review; its tools ask until it is accepted.
+export const ToolsChanged = z.strictObject({
+  server_id: z.string(),
+  name: z.string(),
+  dots: z.array(DotRef),
+});
 export const Inbox = z.strictObject({
   approvals: z.array(PendingApproval),
   review_runs: z.array(ReviewRun),
   // Newest failure first.
   attention: z.array(NeedsAttention),
+  // By server name.
+  tools_changed: z.array(ToolsChanged),
 });
 
 export const FileDiff = z.strictObject({
@@ -333,6 +344,8 @@ export type DotOverview = z.infer<typeof DotOverview>;
 export type PendingApproval = z.infer<typeof PendingApproval>;
 export type ReviewRun = z.infer<typeof ReviewRun>;
 export type NeedsAttention = z.infer<typeof NeedsAttention>;
+export type DotRef = z.infer<typeof DotRef>;
+export type ToolsChanged = z.infer<typeof ToolsChanged>;
 export type Inbox = z.infer<typeof Inbox>;
 export type FileDiff = z.infer<typeof FileDiff>;
 export type WorktreeDiff = z.infer<typeof WorktreeDiff>;

@@ -64,6 +64,7 @@ async fn build_env(dispatch: bool) -> Env {
             mcp_url: "http://127.0.0.1:1/mcp".into(),
             worktrees_dir: dir.path().join("wt"),
             cancel_grace: Duration::from_millis(500),
+            plugins_dir: dir.path().join("plugins"),
         },
     );
     if dispatch {
@@ -733,6 +734,7 @@ async fn start_by_hand(
         cancel,
         approved_calls: approvals,
         mcp_servers: Vec::new(),
+        tools: Default::default(),
     };
     let mut rx = engine.start(ctx).await.unwrap();
     while rx.recv().await.is_some() {}

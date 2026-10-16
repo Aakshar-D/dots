@@ -66,6 +66,12 @@ dots/
                              reading, Claude Code's installed plugins, and a Claude-engine run's
                              plugin folders (copies without `.mcp.json`, `monitors/`, hooks
                              unless allowed, or `allowed-tools`; MCP/skills spec §7)
+    src/library_service.rs   the Library at runtime: add, change, remove (asking first when dots
+                             use an item), probe, check and accept a server's tool list, a
+                             plugin's own MCP server items, `LibraryUpdated` (MCP/skills spec §9)
+    src/run_tools.rs         a run's tools, opened before its engine starts and closed when it
+                             ends: MCP sessions checked against their catalogs (held when the
+                             list changed), skills, plugin folders, items left out as run events
     src/runner/              queue, concurrency, timeouts, cancellation, restart recovery
     src/engine/mod.rs        Engine trait + EngineEvent
     src/engine/claude.rs     drives `claude -p` with stream-json I/O
@@ -107,6 +113,9 @@ pub enum EngineEvent {
     Usage { tokens_in: u64, tokens_out: u64 },
     Finished { summary: String },
     Failed { error: String },
+    // From MCP/skills: something about the run that is not the model's doing, recorded by
+    // the runner (a Library item left out, an MCP server that could not start or is held).
+    Notice { text: String },
 }
 ```
 
@@ -513,8 +522,10 @@ React + Vite + TypeScript inside Tauri 2. Screens:
   attempt of a retry it dropped, or "Retry 2 of 6 of the failed run" with a link to that run
   for a retry (`retry_of`).
 - **Inbox** — pending approvals (tool, pretty-printed input, approve / deny with note),
-  schedules that need attention (from Scheduler v2) and finished runs awaiting review
-  (definition in §12). Unread count mirrored in the tray tooltip and the sidebar.
+  schedules that need attention (from Scheduler v2), finished runs awaiting review
+  (definition in §12) and, from MCP/skills, "Tools changed": the MCP servers whose tool list
+  changed since it was accepted, or was never accepted, with the dots that use them and
+  "Review" (MCP/skills spec §8). Unread count mirrored in the tray tooltip and the sidebar.
   From Approvals v2 an approval card, wherever it shows (Inbox, run view, chat), also offers
   "Approve and always allow": the allow rules the core derived for that call, the narrowest
   preselected, one of which is saved to the dot's policy with the approval. The control is not
@@ -611,7 +622,9 @@ In task order:
    oldest first), `list_run_events(run_id, after_seq)`, `approvals_for_run`,
    `inbox() -> { approvals, review_runs, attention }` (from Scheduler v2, `attention`
    lists the schedules that need attention: `dot_id, dot_name, run_id, error, failed_at`,
-   newest first), `inbox_count()` (counts all three), and
+   newest first; from MCP/skills, `tools_changed` lists the MCP servers whose catalog is
+   `changed`: `server_id, name, dots: [{id, name}]`, by name), `inbox_count()` (counts all
+   four), and
    `preview_schedule(schedule, n) -> next n slots` (from Scheduler v2 it takes the schedule
    object, validates it like `DotSpec::validate`, refuses one with no slot left as a create or
    a change does (`invalid`, "this schedule would never run"), and previews an `every` rule
@@ -645,6 +658,9 @@ The Inbox lists:
 
 - pending approvals;
 - from Scheduler v2, schedules that need attention (an occurrence failed in the end);
+- from MCP/skills, MCP servers whose tools changed: the catalog's status is `changed` (a check
+  found a list that is not the accepted one, or a server's first list waits to be accepted).
+  The server leaves the Inbox when its list is accepted;
 - runs awaiting review: the latest run of each lineage that is terminal, has `reviewed_at`
   NULL, and either kept its worktree (worktree mode, worktree still on disk) or `failed`.
   From Scheduler v2 the scheduler sets `reviewed_at` on a failed run with trigger `schedule`
@@ -659,7 +675,7 @@ The Inbox lists:
 
 A run leaves the Inbox through "Discard worktree" or "Mark reviewed". Folder-mode successes only
 notify. Unread count = pending approvals + runs awaiting review + schedules that need
-attention; the sidebar's Inbox badge shows the same count.
+attention + MCP servers whose tools changed; the sidebar's Inbox badge shows the same count.
 
 The "Needs attention" group stands between the approvals and the runs to review. Each item
 names the dot (a link to its editor), when the run failed and its error, a link to the failed

@@ -74,6 +74,9 @@ export function transcriptItems(events: RunEventRecord[]): TranscriptItem[] {
       case "raw":
         items.push({ type: "raw", seq: record.seq, label: "Unparsed output", text: event.line });
         break;
+      case "notice":
+        items.push({ type: "raw", seq: record.seq, label: "Note", text: event.text });
+        break;
       case "session_started":
       case "usage":
       case "message":
