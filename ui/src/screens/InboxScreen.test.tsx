@@ -32,7 +32,12 @@ function inbox(initial: Inbox) {
 
 describe("the Inbox", () => {
   it("lists what waits: approvals with their dot, and runs to review", async () => {
-    inbox({ approvals: [approval], review_runs: [worktreeRun, failedRun], attention: [] });
+    inbox({
+      approvals: [approval],
+      review_runs: [worktreeRun, failedRun],
+      attention: [],
+      tools_changed: [],
+    });
     renderApp("/inbox");
     const approvals = await screen.findByRole("region", { name: "Approvals" });
     expect(within(approvals).getByRole("link", { name: approval.dot_name })).toHaveAttribute(
@@ -65,6 +70,7 @@ describe("the Inbox", () => {
       approvals: [],
       review_runs: [{ ...failedRun, branch: "dots/gone" }],
       attention: [],
+      tools_changed: [],
     });
     renderApp("/inbox");
     expect(await screen.findByRole("button", { name: "Mark reviewed" })).toBeVisible();
@@ -72,9 +78,9 @@ describe("the Inbox", () => {
   });
 
   it("approves a tool call and drops it from the list", async () => {
-    const box = inbox({ approvals: [approval], review_runs: [], attention: [] });
+    const box = inbox({ approvals: [approval], review_runs: [], attention: [], tools_changed: [] });
     backend.on("decide_approval", () => {
-      box.set({ approvals: [], review_runs: [], attention: [] });
+      box.set({ approvals: [], review_runs: [], attention: [], tools_changed: [] });
       return { ...sample.approval, status: "approved" };
     });
     const { user } = renderApp("/inbox");
@@ -89,7 +95,7 @@ describe("the Inbox", () => {
   const settle = () => act(() => new Promise<void>((resolve) => setTimeout(resolve, 20)));
 
   it("keeps both buttons of a decided approval off until the list has reloaded", async () => {
-    inbox({ approvals: [approval], review_runs: [], attention: [] });
+    inbox({ approvals: [approval], review_runs: [], attention: [], tools_changed: [] });
     backend.on("decide_approval", () => ({ ...sample.approval, status: "approved" }));
     const { user } = renderApp("/inbox");
     const approve = await screen.findByRole("button", { name: "Approve" });
@@ -102,7 +108,7 @@ describe("the Inbox", () => {
     const loads = backend.callsTo("inbox").length;
     backend.on("inbox", async () => {
       await held;
-      return { approvals: [], review_runs: [], attention: [] };
+      return { approvals: [], review_runs: [], attention: [], tools_changed: [] };
     });
 
     await user.click(approve);
@@ -123,9 +129,14 @@ describe("the Inbox", () => {
     "decides one approval when %s is double-clicked and the next card moves up",
     async (button) => {
       const next = { ...approval, id: "apr-next", tool: "Write", input: { file_path: "a.txt" } };
-      const box = inbox({ approvals: [approval, next], review_runs: [], attention: [] });
+      const box = inbox({
+        approvals: [approval, next],
+        review_runs: [],
+        attention: [],
+        tools_changed: [],
+      });
       backend.on("decide_approval", (args) => {
-        box.set({ approvals: [next], review_runs: [], attention: [] });
+        box.set({ approvals: [next], review_runs: [], attention: [], tools_changed: [] });
         return { ...sample.approval, id: args.id, status: "approved" };
       });
       const { user } = renderApp("/inbox");
@@ -149,9 +160,14 @@ describe("the Inbox", () => {
   );
 
   it("marks a run as reviewed and drops it from the list", async () => {
-    const box = inbox({ approvals: [], review_runs: [failedRun], attention: [] });
+    const box = inbox({
+      approvals: [],
+      review_runs: [failedRun],
+      attention: [],
+      tools_changed: [],
+    });
     backend.on("mark_reviewed", () => {
-      box.set({ approvals: [], review_runs: [], attention: [] });
+      box.set({ approvals: [], review_runs: [], attention: [], tools_changed: [] });
       return { ...sample.run, id: failedRun.id, reviewed_at: sample.run.ended_at };
     });
     const { user } = renderApp("/inbox");
@@ -163,9 +179,14 @@ describe("the Inbox", () => {
 
   it("marks one run as reviewed when the button is double-clicked and the next row moves up", async () => {
     const next = { ...failedRun, id: "run-next" };
-    const box = inbox({ approvals: [], review_runs: [failedRun, next], attention: [] });
+    const box = inbox({
+      approvals: [],
+      review_runs: [failedRun, next],
+      attention: [],
+      tools_changed: [],
+    });
     backend.on("mark_reviewed", (args) => {
-      box.set({ approvals: [], review_runs: [next], attention: [] });
+      box.set({ approvals: [], review_runs: [next], attention: [], tools_changed: [] });
       return { ...sample.run, id: args.runId, reviewed_at: sample.run.ended_at };
     });
     renderApp("/inbox");
@@ -180,9 +201,14 @@ describe("the Inbox", () => {
   });
 
   it("discards a worktree only after a confirmation", async () => {
-    const box = inbox({ approvals: [], review_runs: [worktreeRun], attention: [] });
+    const box = inbox({
+      approvals: [],
+      review_runs: [worktreeRun],
+      attention: [],
+      tools_changed: [],
+    });
     backend.on("discard_worktree", () => {
-      box.set({ approvals: [], review_runs: [], attention: [] });
+      box.set({ approvals: [], review_runs: [], attention: [], tools_changed: [] });
       return { ...sample.run, reviewed_at: sample.run.ended_at };
     });
     const { user } = renderApp("/inbox");
@@ -199,7 +225,7 @@ describe("the Inbox", () => {
   });
 
   it("shows a refused action and keeps the run in the list", async () => {
-    inbox({ approvals: [], review_runs: [worktreeRun], attention: [] });
+    inbox({ approvals: [], review_runs: [worktreeRun], attention: [], tools_changed: [] });
     backend.on("mark_reviewed", () => {
       throw { kind: "conflict", message: "the thread is still running" };
     });
@@ -212,9 +238,14 @@ describe("the Inbox", () => {
   it("drops a run whose review was refused once the Inbox has reloaded without it", async () => {
     // The run is gone (its dot was deleted elsewhere): the core refuses, and the Inbox it
     // answers next no longer holds the run.
-    const box = inbox({ approvals: [], review_runs: [failedRun], attention: [] });
+    const box = inbox({
+      approvals: [],
+      review_runs: [failedRun],
+      attention: [],
+      tools_changed: [],
+    });
     backend.on("mark_reviewed", () => {
-      box.set({ approvals: [], review_runs: [], attention: [] });
+      box.set({ approvals: [], review_runs: [], attention: [], tools_changed: [] });
       throw { kind: "not_found", message: `run ${failedRun.id}` };
     });
     const { user } = renderApp("/inbox");
@@ -224,9 +255,14 @@ describe("the Inbox", () => {
   });
 
   it("drops a run whose discard was refused once the Inbox has reloaded without it", async () => {
-    const box = inbox({ approvals: [], review_runs: [worktreeRun], attention: [] });
+    const box = inbox({
+      approvals: [],
+      review_runs: [worktreeRun],
+      attention: [],
+      tools_changed: [],
+    });
     backend.on("discard_worktree", () => {
-      box.set({ approvals: [], review_runs: [], attention: [] });
+      box.set({ approvals: [], review_runs: [], attention: [], tools_changed: [] });
       throw { kind: "not_found", message: `run ${worktreeRun.id}` };
     });
     const { user } = renderApp("/inbox");
@@ -240,7 +276,12 @@ describe("the Inbox", () => {
   // before. No screen shows the run by then, so nothing restarts that load: its answer has to
   // count as stale, or the run view would show it as it is.
   it("loads a run's changes again when its worktree was discarded while they were loading", async () => {
-    const box = inbox({ approvals: [], review_runs: [worktreeRun], attention: [] });
+    const box = inbox({
+      approvals: [],
+      review_runs: [worktreeRun],
+      attention: [],
+      tools_changed: [],
+    });
     backend.on("run_thread", () => [sample.run]);
     backend.on("get_dot", () => sample.dot);
     backend.on("list_run_events", () => []);
@@ -248,7 +289,7 @@ describe("the Inbox", () => {
     const before = later<WorktreeDiff>();
     backend.on("worktree_diff", () => before.answer);
     backend.on("discard_worktree", () => {
-      box.set({ approvals: [], review_runs: [], attention: [] });
+      box.set({ approvals: [], review_runs: [], attention: [], tools_changed: [] });
       backend.on("worktree_diff", () => ({ files: [], truncated: false, exists: false }));
       return { ...sample.run, reviewed_at: sample.run.ended_at };
     });
@@ -271,7 +312,7 @@ describe("the Inbox", () => {
   });
 
   it("loads a run's approvals again when one was decided while they were loading", async () => {
-    const box = inbox({ approvals: [approval], review_runs: [], attention: [] });
+    const box = inbox({ approvals: [approval], review_runs: [], attention: [], tools_changed: [] });
     const waiting: Run = {
       ...sample.run,
       branch: null,
@@ -286,7 +327,7 @@ describe("the Inbox", () => {
     backend.on("approvals_for_run", () => before.answer);
     backend.on("decide_approval", () => {
       const approved: Approval = { ...sample.approval, status: "approved" };
-      box.set({ approvals: [], review_runs: [], attention: [] });
+      box.set({ approvals: [], review_runs: [], attention: [], tools_changed: [] });
       backend.on("approvals_for_run", () => [approved]);
       return approved;
     });
@@ -308,11 +349,11 @@ describe("the Inbox", () => {
   });
 
   it("shows a new approval as soon as the dot asks", async () => {
-    const box = inbox({ approvals: [], review_runs: [], attention: [] });
+    const box = inbox({ approvals: [], review_runs: [], attention: [], tools_changed: [] });
     renderApp("/inbox");
     expect(await screen.findByText(/Nothing waits for you/)).toBeVisible();
     await waitFor(() => expect(backend.callsTo("inbox").length).toBeGreaterThan(0));
-    box.set({ approvals: [approval], review_runs: [], attention: [] });
+    box.set({ approvals: [approval], review_runs: [], attention: [], tools_changed: [] });
     act(() => backend.emit("runtime", { type: "approval_requested", approval: sample.approval }));
     expect(await screen.findByRole("article", { name: "Approval for Bash" })).toBeVisible();
   });
@@ -322,10 +363,10 @@ describe("saving a rule with an approval", () => {
   const dotKey = keys.dot(approval.dot_id);
   /// An Inbox with the one approval, whose decision empties it, and the rules the core offers.
   function waiting(rules: RuleCandidate[] = sample.rules) {
-    const box = inbox({ approvals: [approval], review_runs: [], attention: [] });
+    const box = inbox({ approvals: [approval], review_runs: [], attention: [], tools_changed: [] });
     backend.on("approval_rule_candidates", () => rules);
     backend.on("decide_approval", () => {
-      box.set({ approvals: [], review_runs: [], attention: [] });
+      box.set({ approvals: [], review_runs: [], attention: [], tools_changed: [] });
       return { ...sample.approval, status: "approved" };
     });
   }
@@ -453,12 +494,17 @@ describe("the approvals of one run", () => {
     input: { file_path: "b.txt" },
   };
   const mine = { name: `Approvals asked by ${approval.dot_name}` };
-  const empty: Inbox = { approvals: [], review_runs: [], attention: [] };
+  const empty: Inbox = { approvals: [], review_runs: [], attention: [], tools_changed: [] };
   const answered = [approval, second].map((a) => ({ ...sample.approval, id: a.id }));
 
   it("stand together under their dot, and a single one has no batch buttons", async () => {
     // The core lists approvals in the order asked; a call of another run came in between.
-    inbox({ approvals: [approval, elsewhere, second], review_runs: [], attention: [] });
+    inbox({
+      approvals: [approval, elsewhere, second],
+      review_runs: [],
+      attention: [],
+      tools_changed: [],
+    });
     renderApp("/inbox");
     const group = await screen.findByRole("group", mine);
     const cards = within(group).getAllByRole("article");
@@ -489,7 +535,12 @@ describe("the approvals of one run", () => {
     ["Approve all (2)", "Approve all", true],
     ["Deny all (2)", "Deny all", false],
   ])("are answered together by %s, after a confirmation that lists them", async (open, confirm, approved) => {
-    const box = inbox({ approvals: [approval, second], review_runs: [], attention: [] });
+    const box = inbox({
+      approvals: [approval, second],
+      review_runs: [],
+      attention: [],
+      tools_changed: [],
+    });
     backend.on("decide_run_approvals", () => {
       box.set(empty);
       return answered.map((a) => ({ ...a, status: approved ? "approved" : "denied" }));
@@ -514,7 +565,7 @@ describe("the approvals of one run", () => {
   });
 
   it("stay, with their buttons, when the core refuses the batch", async () => {
-    inbox({ approvals: [approval, second], review_runs: [], attention: [] });
+    inbox({ approvals: [approval, second], review_runs: [], attention: [], tools_changed: [] });
     backend.on("decide_run_approvals", () => {
       throw { kind: "internal", message: "database is locked" };
     });
@@ -528,12 +579,17 @@ describe("the approvals of one run", () => {
   });
 
   it("can be answered together again when the run asks for more after a batch", async () => {
-    const box = inbox({ approvals: [approval, second], review_runs: [], attention: [] });
+    const box = inbox({
+      approvals: [approval, second],
+      review_runs: [],
+      attention: [],
+      tools_changed: [],
+    });
     const later1 = { ...approval, id: "apr-4", tool: "Edit", input: { file_path: "c.txt" } };
     const later2 = { ...approval, id: "apr-5", tool: "Read", input: { file_path: "d.txt" } };
     backend.on("decide_run_approvals", () => {
       // The run went on and asked for two more calls before the Inbox reloaded.
-      box.set({ approvals: [later1, later2], review_runs: [], attention: [] });
+      box.set({ approvals: [later1, later2], review_runs: [], attention: [], tools_changed: [] });
       return answered.map((a) => ({ ...a, status: "approved" }));
     });
     const { user } = renderApp("/inbox");
@@ -547,9 +603,14 @@ describe("the approvals of one run", () => {
   });
 
   it("can still be answered one at a time", async () => {
-    const box = inbox({ approvals: [approval, second], review_runs: [], attention: [] });
+    const box = inbox({
+      approvals: [approval, second],
+      review_runs: [],
+      attention: [],
+      tools_changed: [],
+    });
     backend.on("decide_approval", (args) => {
-      box.set({ approvals: [second], review_runs: [], attention: [] });
+      box.set({ approvals: [second], review_runs: [], attention: [], tools_changed: [] });
       return { ...sample.approval, id: args.id, status: "approved" };
     });
     const { user } = renderApp("/inbox");
@@ -576,6 +637,7 @@ describe("a parked approval", () => {
       ],
       review_runs: [],
       attention: [],
+      tools_changed: [],
     });
     renderApp("/inbox");
     const own = await screen.findByRole("article", { name: "Approval for Bash" });
@@ -598,14 +660,19 @@ describe("a parked approval", () => {
 
 describe("a schedule that needs attention", () => {
   const [flagged] = sample.inbox.attention;
-  const empty: Inbox = { approvals: [], review_runs: [], attention: [] };
+  const empty: Inbox = { approvals: [], review_runs: [], attention: [], tools_changed: [] };
   const only = (attention: Inbox["attention"]): Inbox => ({ ...empty, attention });
   const item = () => screen.findByRole("listitem", { name: `${flagged.dot_name} needs attention` });
   /// Lets what a command's answer set off reach the screen.
   const settle = () => act(() => new Promise<void>((resolve) => setTimeout(resolve, 20)));
 
   it("names the dot, the run that failed and why, and offers Run now and Dismiss", async () => {
-    inbox({ approvals: [approval], review_runs: [failedRun], attention: [flagged] });
+    inbox({
+      approvals: [approval],
+      review_runs: [failedRun],
+      attention: [flagged],
+      tools_changed: [],
+    });
     renderApp("/inbox");
     const group = await screen.findByRole("region", { name: "Needs attention" });
     const shown = within(await item());
@@ -702,5 +769,41 @@ describe("a schedule that needs attention", () => {
     await user.click(within(await item()).getByRole("button", { name: "Run now" }));
     expect(await screen.findByText("the dot is disabled")).toBeVisible();
     expect(await item()).toBeVisible();
+  });
+});
+
+describe("the Inbox, tools changed", () => {
+  const [changed] = sample.inbox.tools_changed;
+
+  it("lists a server whose tools changed with the dots that use it and a link to its review", async () => {
+    inbox({ approvals: [], review_runs: [], attention: [], tools_changed: [changed!] });
+    renderApp("/inbox");
+    const group = await screen.findByRole("region", { name: "Tools changed" });
+    const row = within(group).getByRole("listitem", { name: `${changed!.name} tools changed` });
+    expect(row).toHaveTextContent(changed!.dots.map((d) => d.name).join(", "));
+    expect(within(row).getByRole("link", { name: "Review" })).toHaveAttribute(
+      "href",
+      `/library?review=${changed!.server_id}`,
+    );
+    expect(screen.queryByText(/Nothing waits for you/)).toBeNull();
+  });
+
+  it("says when no dot uses the server", async () => {
+    inbox({
+      approvals: [],
+      review_runs: [],
+      attention: [],
+      tools_changed: [{ ...changed!, dots: [] }],
+    });
+    renderApp("/inbox");
+    expect(await screen.findByText("No dot uses it yet.")).toBeVisible();
+  });
+
+  it("opens the review in the Library", async () => {
+    inbox({ approvals: [], review_runs: [], attention: [], tools_changed: [changed!] });
+    backend.on("library_list", () => sample.library);
+    const { user } = renderApp("/inbox");
+    await user.click(await screen.findByRole("link", { name: "Review" }));
+    expect(await screen.findByRole("dialog", { name: /Tools changed: github/ })).toBeVisible();
   });
 });

@@ -285,6 +285,7 @@ mod tests {
                 self_apply: false,
                 apply_state: None,
                 applied_at: None,
+                mcp_fingerprint: None,
             },
         }
     }
@@ -391,6 +392,17 @@ mod tests {
         let ev = RuntimeEvent::ScheduleUpdated { dot_id: "d".into() };
         assert_eq!(n.decide(&ev), None);
         // The row holds "Needs attention", which the Inbox lists.
+        assert!(affects_inbox(&ev));
+    }
+
+    #[test]
+    fn a_library_update_does_not_notify_but_may_change_the_inbox() {
+        let mut n = Notifier::default();
+        let ev = RuntimeEvent::LibraryUpdated {
+            item_id: "i".into(),
+        };
+        assert_eq!(n.decide(&ev), None);
+        // A server whose tool list changed waits in the Inbox, and the tray counts it.
         assert!(affects_inbox(&ev));
     }
 

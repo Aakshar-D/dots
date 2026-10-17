@@ -1,4 +1,4 @@
-use dots_core::policy::{allow_candidates, Action, Policy, Preset, Rule, RuleCandidate};
+use dots_core::policy::{allow_candidates, Action, McpTrust, Policy, Preset, Rule, RuleCandidate};
 use serde_json::json;
 
 fn bash(cmd: &str) -> serde_json::Value {
@@ -39,7 +39,7 @@ fn read_only_denies_writes_by_default() {
 }
 
 #[test]
-fn trusted_allows_by_default_but_asks_for_push_and_mcp() {
+fn trusted_allows_by_default_but_asks_for_push_and_for_a_writing_mcp_tool() {
     let p = Policy::preset(Preset::Trusted);
     assert_eq!(p.resolve("Bash", &bash("cargo test")), Action::Allow);
     assert_eq!(p.resolve("Bash", &bash("git push")), Action::Ask);
@@ -47,8 +47,12 @@ fn trusted_allows_by_default_but_asks_for_push_and_mcp() {
         p.resolve("PowerShell", &bash("git push --force")),
         Action::Ask
     );
+    let writes = McpTrust {
+        held: false,
+        read_only: false,
+    };
     assert_eq!(
-        p.resolve("mcp__salesforce__update", &json!({})),
+        p.resolve_mcp("mcp__salesforce__update", &json!({}), writes),
         Action::Ask
     );
 }
@@ -63,6 +67,7 @@ fn deny_beats_allow_beats_ask() {
             Rule::new("Bash(rm -i:*)", Action::Allow),
         ],
         default: Action::Allow,
+        mcp_default: Action::Ask,
     };
     assert_eq!(p.resolve("Bash", &bash("rm -i x")), Action::Deny);
     assert_eq!(p.resolve("Bash", &bash("echo hi")), Action::Ask);
@@ -89,6 +94,7 @@ fn deny_matches_any_segment() {
         preset: Preset::Custom,
         rules: vec![Rule::new("Bash(rm:*)", Action::Deny)],
         default: Action::Allow,
+        mcp_default: Action::Ask,
     };
     assert_eq!(p.resolve("Bash", &bash("ls; rm -rf x")), Action::Deny);
     assert_eq!(p.resolve("Bash", &bash("ls && echo ok")), Action::Allow);
@@ -103,6 +109,7 @@ fn wildcards() {
             Rule::new("*", Action::Ask),
         ],
         default: Action::Allow,
+        mcp_default: Action::Ask,
     };
     assert_eq!(p.resolve("mcp__sf__query", &json!({})), Action::Deny);
     assert_eq!(p.resolve("Read", &json!({})), Action::Ask);
@@ -115,6 +122,7 @@ fn validate_rejects_bad_patterns() {
             preset: Preset::Custom,
             rules: vec![Rule::new(bad, Action::Allow)],
             default: Action::Ask,
+            mcp_default: Action::Ask,
         };
         assert!(p.validate().is_err(), "{bad:?} should be invalid");
     }
@@ -143,6 +151,7 @@ fn custom(rules: Vec<Rule>, default: Action) -> Policy {
         preset: Preset::Custom,
         rules,
         default,
+        mcp_default: Action::Ask,
     }
 }
 
@@ -1054,10 +1063,16 @@ fn a_fetch_offers_its_host_and_any_other_tool_its_name() {
 
     assert_eq!(
         allow_candidates("mcp__github__create_issue", &json!({"title": "x"}), ws()),
-        vec![RuleCandidate {
-            pattern: "mcp__github__create_issue".into(),
-            label: "every call of this tool".into(),
-        }]
+        vec![
+            RuleCandidate {
+                pattern: "mcp__github__create_issue".into(),
+                label: "every call of this tool".into(),
+            },
+            RuleCandidate {
+                pattern: "mcp__github__*".into(),
+                label: "every tool of the server github".into(),
+            },
+        ]
     );
     assert_eq!(
         offered("WebSearch", json!({"query": "x"})),
@@ -1112,7 +1127,7 @@ fn every_candidate_is_a_valid_rule_that_allows_its_call_and_no_deny_rule_yields_
             assert_eq!(denied.resolve_in(tool, input, ws()), Action::Deny, "{case}");
         }
     }
-    assert_eq!(seen, 17);
+    assert_eq!(seen, 18);
 }
 
 #[test]

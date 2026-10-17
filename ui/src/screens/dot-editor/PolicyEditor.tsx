@@ -11,7 +11,7 @@ import { notifyError } from "@/lib/notify";
 const PRESETS: Record<Preset, string> = {
   "read-only": "Read-only: may read, never writes or runs commands",
   sandboxed: "Sandboxed: may edit inside its folder, asks for the rest",
-  trusted: "Trusted: may do anything, asks before git push and MCP tools",
+  trusted: "Trusted: may do anything, asks before git push and MCP writes",
   custom: "Custom: the rules below",
 };
 

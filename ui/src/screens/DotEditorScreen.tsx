@@ -11,19 +11,12 @@ import { ErrorNote } from "@/components/ErrorNote";
 import { Page } from "@/components/Page";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { mcpOf, scheduleError, scheduleOf, specErrors, specOf } from "@/lib/dot-rules";
+import { scheduleError, scheduleOf, specErrors, specOf } from "@/lib/dot-rules";
 import { errorMessage, notifyError } from "@/lib/notify";
 import { invalidateDots, keys, useSwitchingDot } from "@/lib/query";
 import { useDebounced } from "@/lib/use-debounced";
 import { DotForm, type Draft } from "@/screens/dot-editor/DotForm";
 import { RunsList } from "@/screens/dot-editor/RunsList";
-
-function draftOf(spec: DotSpec): Draft {
-  return {
-    spec,
-    mcpText: spec.mcp_servers ? JSON.stringify(spec.mcp_servers, null, 2) : "",
-  };
-}
 
 /// The form with its Save button. `onSave` stores the spec; its rejection is shown above the
 /// form (the core's answer when it refuses what the form let through).
@@ -36,7 +29,7 @@ function Editor(props: {
   actions?: ReactNode;
   children?: (form: ReactNode) => ReactNode;
 }) {
-  const [draft, setDraft] = useState(() => draftOf(props.initial));
+  const [draft, setDraft] = useState<Draft>(() => ({ spec: props.initial }));
   const [tried, setTried] = useState(false);
   const settings = useQuery({ queryKey: keys.settings, queryFn: commands.getSettings }).data;
   const save = useMutation({ mutationFn: props.onSave });
@@ -57,18 +50,16 @@ function Editor(props: {
   const changed = hashKey([schedule]) !== hashKey([scheduleOf(stored)]);
   const objection = sendable && preview.isError ? errorMessage(preview.error) : undefined;
 
-  const errors = specErrors(draft.spec, draft.mcpText);
+  const errors = specErrors(draft.spec);
   if (objection && changed) errors.schedule ??= objection;
 
   function submit() {
     setTried(true);
     if (Object.keys(errors).length > 0) return;
-    const mcp = mcpOf(draft.spec, draft.mcpText);
     save.mutate({
       ...draft.spec,
       schedule: scheduleOf(draft.spec.schedule),
       endpoint_url: draft.spec.endpoint_url?.trim() || null,
-      mcp_servers: "value" in mcp ? mcp.value : null,
     });
   }
 

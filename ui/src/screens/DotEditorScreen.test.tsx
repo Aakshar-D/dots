@@ -54,11 +54,10 @@ describe("the dot editor, new dot", () => {
 
   it("asks a local dot for its endpoint and hides what only Claude dots have", async () => {
     const { user } = renderApp("/dots/new");
-    expect(await screen.findByLabelText("MCP servers")).toBeVisible();
+    expect(await screen.findByLabelText("Load my Claude Code user settings")).toBeVisible();
     expect(screen.queryByLabelText("Endpoint")).toBeNull();
 
     await user.selectOptions(screen.getByLabelText("Engine"), "local");
-    expect(screen.queryByLabelText("MCP servers")).toBeNull();
     expect(screen.queryByLabelText("Load my Claude Code user settings")).toBeNull();
     await user.click(screen.getByRole("button", { name: "Create dot" }));
     expect(screen.getByText("A local dot needs its endpoint, starting with http://.")).toBeVisible();
@@ -200,12 +199,10 @@ describe("the dot editor, new dot", () => {
     }
   });
 
-  it("refuses MCP servers that are not a JSON object", async () => {
-    const { user } = renderApp("/dots/new");
-    // user-event reads "{{" as one typed "{".
-    await user.type(await screen.findByLabelText("MCP servers"), "{{nope");
-    await user.click(screen.getByRole("button", { name: "Create dot" }));
-    expect(screen.getByText("This is not valid JSON.")).toBeVisible();
+  it("has no MCP JSON box: MCP servers come from the Library", async () => {
+    renderApp("/dots/new");
+    await screen.findByLabelText("Name");
+    expect(screen.queryByLabelText("MCP servers")).toBeNull();
   });
 });
 
@@ -228,10 +225,6 @@ describe("the dot editor, stored dot", () => {
     expect(screen.getByLabelText("Name")).toHaveValue(dot.name);
     expect(dot.schedule?.rule.kind).toBe("cron");
     expect(screen.getByLabelText("Cron expression")).toHaveValue(cron("0 0 2 * * *").rule.expr);
-    expect(screen.getByLabelText("MCP servers")).toHaveValue(
-      JSON.stringify(dot.mcp_servers, null, 2),
-    );
-
     const instructions = screen.getByLabelText("Instructions");
     await user.clear(instructions);
     await user.type(instructions, "Only summarize.");
@@ -334,40 +327,35 @@ describe("the dot editor, stored dot", () => {
 
   const endpoint = "http://127.0.0.1:1234";
 
-  it("saves a dot switched to the local engine without its MCP servers", async () => {
+  it("keeps the Library items a dot uses when it is switched to the local engine", async () => {
     stored();
     const { user } = renderApp(path);
     await user.selectOptions(await screen.findByLabelText("Engine"), "local");
     await user.type(screen.getByLabelText("Endpoint"), endpoint);
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByText("Saved")).toBeVisible();
-    // The dot was stored with MCP servers, which only the Claude engine has.
-    expect(dot.mcp_servers).not.toBeNull();
+    // Both engines use MCP servers, skills and plugins.
+    expect(dot.uses.mcp_servers).not.toEqual([]);
     expect(backend.callsTo("update_dot")).toEqual([
-      {
-        id: dot.id,
-        spec: { ...specOf(dot), engine: "local", endpoint_url: endpoint, mcp_servers: null },
-      },
+      { id: dot.id, spec: { ...specOf(dot), engine: "local", endpoint_url: endpoint } },
     ]);
+    expect(backend.callsTo("update_dot")[0]).toMatchObject({ spec: { uses: dot.uses } });
   });
 
-  it("does not hold a local dot back for MCP text its form no longer shows", async () => {
+  it("shows what the dot uses in Tools and skills and saves what was changed there", async () => {
     stored();
+    backend.on("library_list", () => sample.library);
     const { user } = renderApp(path);
-    // user-event reads "{{" as one typed "{". Added to the stored servers, it is not JSON.
-    await user.type(await screen.findByLabelText("MCP servers"), "{{nope");
-    await user.click(screen.getByRole("button", { name: "Save" }));
-    expect(screen.getByRole("alert")).toHaveTextContent("Fix the marked fields");
-    expect(screen.getByText("This is not valid JSON.")).toBeVisible();
-
-    await user.selectOptions(screen.getByLabelText("Engine"), "local");
-    await user.type(screen.getByLabelText("Endpoint"), endpoint);
-    expect(screen.queryByRole("alert")).toBeNull();
+    const section = await screen.findByRole("group", { name: "Tools and skills" });
+    const ticked = (name: string) => within(section).findByLabelText(name);
+    for (const name of [...dot.uses.mcp_servers, ...dot.uses.skills, ...dot.uses.plugins]) {
+      expect(await ticked(name)).toBeChecked();
+    }
+    await user.click(await ticked("pdf"));
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByText("Saved")).toBeVisible();
-    expect(backend.callsTo("update_dot")).toHaveLength(1);
     expect(backend.callsTo("update_dot")[0]).toMatchObject({
-      spec: { engine: "local", mcp_servers: null },
+      spec: { uses: { ...dot.uses, skills: dot.uses.skills.filter((n) => n !== "pdf") } },
     });
   });
 
@@ -497,10 +485,15 @@ describe("the dot editor, stored dot", () => {
 
   it("drops the deleted dot's runs from the Inbox and its count", async () => {
     stored();
-    let waiting: Inbox = { approvals: [], review_runs: sample.inbox.review_runs, attention: [] };
+    let waiting: Inbox = {
+      approvals: [],
+      review_runs: sample.inbox.review_runs,
+      attention: [],
+      tools_changed: [],
+    };
     backend.on("inbox", () => waiting);
     backend.on("delete_dot", () => {
-      waiting = { approvals: [], review_runs: [], attention: [] };
+      waiting = { approvals: [], review_runs: [], attention: [], tools_changed: [] };
       return null;
     });
     const { user, router } = renderApp(path);

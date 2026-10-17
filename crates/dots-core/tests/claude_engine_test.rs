@@ -53,6 +53,7 @@ async fn e2e(script: Value, program: Option<PathBuf>) -> E2e {
             mcp_url: format!("http://127.0.0.1:{port}/mcp"),
             worktrees_dir: dir.path().join("wt"),
             cancel_grace: Duration::from_secs(2),
+            plugins_dir: dir.path().join("plugins"),
         },
     );
     serve(

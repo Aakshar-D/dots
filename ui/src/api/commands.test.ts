@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import fixture from "./__fixtures__/contract.json";
+import * as T from "./types";
 
 // A plain stub, not vi.fn: the mock's result tracking can report a rejection it saw as
 // unhandled even though the code under test caught it.
@@ -55,6 +56,62 @@ describe("commands", () => {
     reply = async () => null;
     expect(await commands.dismissScheduleAttention("d1")).toBeNull();
     expect(calls).toEqual([["dismiss_schedule_attention", { dotId: "d1" }]]);
+  });
+
+  it("sends the Library's arguments as the core names them", async () => {
+    const config = T.LibraryConfig.parse(fixture.LibraryConfig[0]);
+    const server = T.McpServerConfig.parse(fixture.McpServerConfig[0]);
+    reply = async () => fixture.LibraryEntry;
+    expect(await commands.libraryList()).toEqual(fixture.LibraryEntry);
+    reply = async () => fixture.LibraryItem[0];
+    await commands.libraryAdd("github", config, "fp1");
+    await commands.libraryAdd("github", config, null);
+    await commands.libraryUpdate("i1", config);
+    reply = async () => null;
+    expect(await commands.libraryRemove("i1", true)).toBeNull();
+    reply = async () => fixture.McpProbe;
+    expect(await commands.libraryProbe(server)).toEqual(fixture.McpProbe);
+    reply = async () => fixture.McpCatalog;
+    expect(await commands.libraryCheck("i1")).toEqual(fixture.McpCatalog);
+    expect(await commands.libraryAccept("i1", "fp2")).toEqual(fixture.McpCatalog);
+    reply = async () => fixture.ScannedSkill;
+    expect(await commands.libraryScanSkills("C:/skills")).toEqual(fixture.ScannedSkill);
+    reply = async () => fixture.InstalledPlugin;
+    expect(await commands.installedClaudePlugins()).toEqual(fixture.InstalledPlugin);
+    reply = async () => fixture.EnvVariable;
+    expect(await commands.environmentVariables(["GITHUB_TOKEN"])).toEqual(fixture.EnvVariable);
+    expect(calls).toEqual([
+      ["library_list", undefined],
+      ["library_add", { name: "github", config, accept: "fp1" }],
+      ["library_add", { name: "github", config, accept: null }],
+      ["library_update", { id: "i1", config }],
+      ["library_remove", { id: "i1", confirm: true }],
+      ["library_probe", { config: server }],
+      ["library_check", { id: "i1" }],
+      ["library_accept", { id: "i1", fingerprint: "fp2" }],
+      ["library_scan_skills", { path: "C:/skills" }],
+      ["installed_claude_plugins", undefined],
+      ["environment_variables", { names: ["GITHUB_TOKEN"] }],
+    ]);
+  });
+
+  it("refuses to remove a used Library item without a yes, with the dots named", async () => {
+    reply = async () => {
+      throw {
+        kind: "conflict",
+        message: 'the skill "pdf" is used by audit; removing it takes it out of them',
+      };
+    };
+    const { kind, message } = await failure(commands.libraryRemove("i1", false));
+    expect(kind).toBe("conflict");
+    expect(message).toContain("audit");
+  });
+
+  it("refuses a Library answer in a shape it does not know", async () => {
+    reply = async () => [{ ...fixture.LibraryEntry[0], extra: 1 }];
+    expect((await failure(commands.libraryList())).kind).toBe("internal");
+    reply = async () => fixture.EnvVariable.map((v) => ({ ...v, value: "secret" }));
+    expect((await failure(commands.environmentVariables(["A"]))).kind).toBe("internal");
   });
 
   it("invokes exactly the commands the app registers", async () => {

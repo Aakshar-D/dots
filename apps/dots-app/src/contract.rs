@@ -5,6 +5,15 @@
 
 use dots_core::engine::EngineEvent;
 use dots_core::events::RuntimeEvent;
+use dots_core::kit::InstalledPlugin;
+use dots_core::library::{
+    CatalogStatus, LibraryConfig, LibraryItem, LibraryKind, McpCatalog, McpServerConfig,
+    PluginConfig, SkillConfig, Uses,
+};
+use dots_core::library_service::{
+    EnvVariable, LibraryEntry, McpProbe, PluginDetail, ScannedSkill, SkillDetail,
+};
+use dots_core::mcp::McpTool;
 use dots_core::model::*;
 use dots_core::policy::{allow_candidates, Action, Policy, Preset};
 use dots_core::schedule::Schedule;
@@ -28,7 +37,11 @@ fn spec() -> DotSpec {
         "C:/dev/app",
     );
     s.schedule = Some(Schedule::cron("0 0 2 * * *"));
-    s.mcp_servers = Some(json!({"github": {"type": "http", "url": "http://127.0.0.1:9000/mcp"}}));
+    s.uses = Uses {
+        mcp_servers: vec!["github".into()],
+        skills: vec!["pdf".into()],
+        plugins: vec!["pdf-tools".into()],
+    };
     s
 }
 
@@ -50,6 +63,147 @@ fn dot() -> Dot {
         updated_at: TS.into(),
         spec: spec(),
     }
+}
+
+fn stdio_server() -> McpServerConfig {
+    McpServerConfig::Stdio {
+        command: "npx".into(),
+        args: vec!["-y".into(), "@modelcontextprotocol/server-github".into()],
+        cwd: None,
+        env: [("GITHUB_TOKEN".to_string(), "${GITHUB_TOKEN}".to_string())].into(),
+    }
+}
+
+fn http_server() -> McpServerConfig {
+    McpServerConfig::Http {
+        url: "https://mcp.example.com/mcp".into(),
+        headers: [(
+            "Authorization".to_string(),
+            "Bearer ${EXAMPLE_TOKEN}".to_string(),
+        )]
+        .into(),
+    }
+}
+
+fn skill_config() -> LibraryConfig {
+    LibraryConfig::Skill(SkillConfig {
+        path: "C:/skills/pdf".into(),
+    })
+}
+
+fn plugin_config() -> LibraryConfig {
+    LibraryConfig::Plugin(PluginConfig {
+        path: "C:/plugins/pdf-tools".into(),
+        installed_id: Some("pdf-tools@market".into()),
+        run_hooks: false,
+    })
+}
+
+/// A config of every kind and transport, as `library_add` takes them.
+fn library_configs() -> Vec<LibraryConfig> {
+    vec![
+        LibraryConfig::McpServer(stdio_server()),
+        LibraryConfig::McpServer(http_server()),
+        skill_config(),
+        plugin_config(),
+    ]
+}
+
+fn library_item(id: &str, name: &str, config: LibraryConfig) -> LibraryItem {
+    LibraryItem {
+        id: id.into(),
+        name: name.into(),
+        config,
+        owner_id: None,
+        created_at: TS.into(),
+        updated_at: TS.into(),
+    }
+}
+
+fn tool() -> McpTool {
+    McpTool {
+        name: "search_issues".into(),
+        title: Some("Search issues".into()),
+        description: Some("Search the issues of a repository.".into()),
+        input_schema: json!({"type": "object", "properties": {"query": {"type": "string"}}}),
+        annotations: Some(json!({"readOnlyHint": true})),
+    }
+}
+
+fn catalog(status: CatalogStatus) -> McpCatalog {
+    let tools = to([tool()]);
+    McpCatalog {
+        server_id: "01J0SRV".into(),
+        status,
+        accepted_fingerprint: Some("fp-accepted".into()),
+        accepted_tools: Some(tools.clone()),
+        seen_fingerprint: Some("fp-seen".into()),
+        seen_tools: Some(tools),
+        checked_at: Some(TS.into()),
+        error: None,
+    }
+}
+
+/// An entry of every kind: a server whose list changed, a plugin's own server, a skill that
+/// could not be read, and a plugin with every part.
+fn library_entries() -> Vec<LibraryEntry> {
+    let users = vec![DotRef {
+        id: "01J0DOT".into(),
+        name: "nightly-tests".into(),
+    }];
+    let bare = |item: LibraryItem, used_by: Vec<DotRef>| LibraryEntry {
+        item,
+        used_by,
+        catalog: None,
+        missing_variables: vec![],
+        skill: None,
+        plugin: None,
+        problem: None,
+    };
+    let github = library_item(
+        "01J0SRV",
+        "github",
+        LibraryConfig::McpServer(stdio_server()),
+    );
+    let mut owned = library_item(
+        "01J0SRV2",
+        "plugin-pdf-tools-render",
+        LibraryConfig::McpServer(http_server()),
+    );
+    owned.owner_id = Some("01J0PLG".into());
+    let skill = library_item("01J0SKL", "pdf", skill_config());
+    let plugin = library_item("01J0PLG", "pdf-tools", plugin_config());
+    vec![
+        LibraryEntry {
+            catalog: Some(catalog(CatalogStatus::Changed)),
+            missing_variables: vec!["GITHUB_TOKEN".into()],
+            ..bare(github, users.clone())
+        },
+        LibraryEntry {
+            catalog: Some(catalog(CatalogStatus::Accepted)),
+            ..bare(owned, users.clone())
+        },
+        LibraryEntry {
+            skill: Some(SkillDetail {
+                description: "Fill and read PDF forms.".into(),
+            }),
+            problem: Some("SKILL.md not found".into()),
+            ..bare(skill, vec![])
+        },
+        LibraryEntry {
+            plugin: Some(PluginDetail {
+                version: Some("1.2.0".into()),
+                description: Some("PDF tools.".into()),
+                skills: vec!["pdf-tools:merge".into()],
+                commands: vec!["split".into()],
+                agents: vec!["reviewer".into()],
+                servers: vec!["plugin-pdf-tools-render".into()],
+                has_hooks: true,
+                warnings: vec!["agents/broken.md: could not be read".into()],
+            }),
+            ..bare(plugin, users)
+        },
+    ]
 }
 
 fn run() -> Run {
@@ -93,6 +247,7 @@ fn approval() -> Approval {
         self_apply: false,
         apply_state: None,
         applied_at: None,
+        mcp_fingerprint: None,
     }
 }
 
@@ -125,8 +280,8 @@ fn status() -> Status {
 /// The sample of `e`'s own variant. The match has no wildcard arm and the array's length is
 /// part of its type, so a new `EngineEvent` variant does not compile until it has a name
 /// here and a sample in `engine_events`.
-fn engine_event_sample<'a>(samples: &'a [EngineEvent; 9], e: &EngineEvent) -> &'a EngineEvent {
-    let [started, text, call, result, usage, raw, message, finished, failed] = samples;
+fn engine_event_sample<'a>(samples: &'a [EngineEvent; 10], e: &EngineEvent) -> &'a EngineEvent {
+    let [started, text, call, result, usage, raw, message, finished, failed, notice] = samples;
     match e {
         EngineEvent::SessionStarted { .. } => started,
         EngineEvent::AssistantText { .. } => text,
@@ -137,6 +292,7 @@ fn engine_event_sample<'a>(samples: &'a [EngineEvent; 9], e: &EngineEvent) -> &'
         EngineEvent::Message { .. } => message,
         EngineEvent::Finished { .. } => finished,
         EngineEvent::Failed { .. } => failed,
+        EngineEvent::Notice { .. } => notice,
     }
 }
 
@@ -175,6 +331,9 @@ fn engine_events() -> Value {
         },
         EngineEvent::Failed {
             error: "timeout".into(),
+        },
+        EngineEvent::Notice {
+            text: "skill pdf: folder not found".into(),
         },
     ];
     for sample in &samples {
@@ -275,6 +434,7 @@ pub fn samples() -> Value {
                 ..approval()
             }}),
             to(RuntimeEvent::ScheduleUpdated { dot_id: "01J0DOT".into() }),
+            to(RuntimeEvent::LibraryUpdated { item_id: "01J0SRV".into() }),
             to(RuntimeEvent::ScheduleAttention {
                 dot_id: "01J0DOT".into(),
                 run_id: "01J0RUN".into(),
@@ -325,7 +485,53 @@ pub fn samples() -> Value {
                 error: Some("model server unreachable".into()),
                 failed_at: TS.into(),
             }],
+            tools_changed: vec![ToolsChanged {
+                server_id: "01J0SRV".into(),
+                name: "github".into(),
+                dots: vec![DotRef {
+                    id: "01J0DOT".into(),
+                    name: "nightly-tests".into(),
+                }],
+            }],
         }),
+        // What `library_add` takes and the Library commands answer: a config of every kind and
+        // transport, and entries of every kind (a plugin's own server among them).
+        "LibraryConfig": to(library_configs()),
+        "McpServerConfig": to([stdio_server(), http_server()]),
+        "LibraryItem": to([
+            library_item("01J0SRV", "github", LibraryConfig::McpServer(stdio_server())),
+            library_item("01J0SKL", "pdf", skill_config()),
+        ]),
+        "LibraryEntry": to(library_entries()),
+        "McpCatalog": to(catalog(CatalogStatus::Changed)),
+        "McpProbe": to(McpProbe { tools: vec![tool()], fingerprint: "fp-seen".into() }),
+        "ScannedSkill": to([
+            ScannedSkill {
+                name: "pdf".into(),
+                description: "Fill and read PDF forms.".into(),
+                path: "C:/skills/pdf".into(),
+                name_error: None,
+            },
+            ScannedSkill {
+                name: "bad name".into(),
+                description: String::new(),
+                path: "C:/skills/bad".into(),
+                name_error: Some("skill name \"bad name\": use A-Z, a-z, 0-9".into()),
+            },
+        ]),
+        "InstalledPlugin": to([InstalledPlugin {
+            id: "pdf-tools@market".into(),
+            name: "pdf-tools".into(),
+            marketplace: Some("market".into()),
+            scope: Some("user".into()),
+            install_path: "C:/Users/u/.claude/plugins/cache/market/pdf-tools/1.2.0".into(),
+            version: Some("1.2.0".into()),
+            exists: true,
+        }]),
+        "EnvVariable": to([
+            EnvVariable { name: "GITHUB_TOKEN".into(), set: false },
+            EnvVariable { name: "PATH".into(), set: true },
+        ]),
         "WorktreeDiff": to(WorktreeDiff {
             files: vec![
                 FileDiff {
@@ -360,6 +566,8 @@ pub fn samples() -> Value {
             "FileStatus": FileStatus::ALL,
             "ScheduleStatus": ScheduleStatus::ALL,
             "CmdErrorKind": CmdErrorKind::ALL,
+            "LibraryKind": LibraryKind::ALL,
+            "CatalogStatus": CatalogStatus::ALL,
         },
         "Limits": {
             "max_timeout_secs": MAX_TIMEOUT_SECS,

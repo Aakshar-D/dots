@@ -2,6 +2,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::library::Uses;
 use crate::policy::{Policy, Preset};
 use crate::schedule::{next_slot, Schedule, Until};
 use crate::{Error, Result};
@@ -74,7 +75,9 @@ pub struct DotSpec {
     pub workspace_mode: WorkspaceMode,
     pub schedule: Option<Schedule>,
     pub policy: Policy,
-    pub mcp_servers: Option<Value>,
+    /// The Library items the dot uses (MCP/skills spec section 2).
+    #[serde(default)]
+    pub uses: Uses,
     pub use_user_settings: bool,
     pub max_turns: u32,
     pub timeout_secs: u64,
@@ -94,7 +97,7 @@ impl DotSpec {
             workspace_mode: WorkspaceMode::Worktree,
             schedule: None,
             policy: Policy::preset(Preset::Sandboxed),
-            mcp_servers: None,
+            uses: Uses::default(),
             use_user_settings: false,
             max_turns: 40,
             timeout_secs: 1800,
@@ -148,14 +151,8 @@ impl DotSpec {
             return invalid("approval_wait_secs must be at most 280");
         }
         self.policy.validate()?;
-        if let Some(servers) = &self.mcp_servers {
-            let Some(obj) = servers.as_object() else {
-                return invalid("mcp_servers must be a JSON object of name -> server config");
-            };
-            if obj.contains_key("dots") {
-                return invalid("mcp server name 'dots' is reserved");
-            }
-        }
+        // Whether the Library has each item is checked by the store when the dot is saved.
+        self.uses.validate()?;
         Ok(())
     }
 }
@@ -460,14 +457,33 @@ pub struct NeedsAttention {
     pub failed_at: String,
 }
 
-/// Pending approvals, finished runs awaiting review and schedules that need attention (spec
-/// §12 Inbox; Scheduler v2 spec §8).
+/// A dot named in a list: its id and its name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DotRef {
+    pub id: String,
+    pub name: String,
+}
+
+/// An MCP server whose tool list changed since it was accepted, or was never accepted: its
+/// tools ask until the person reviews and accepts the list (MCP/skills spec section 8).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolsChanged {
+    pub server_id: String,
+    pub name: String,
+    /// The dots that use it (through its plugin, for a plugin's server), by name.
+    pub dots: Vec<DotRef>,
+}
+
+/// Pending approvals, finished runs awaiting review, schedules that need attention and MCP
+/// servers whose tools changed (spec §12 Inbox; Scheduler v2 spec §8; MCP/skills spec §8).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Inbox {
     pub approvals: Vec<PendingApproval>,
     pub review_runs: Vec<ReviewRun>,
     /// Newest failure first.
     pub attention: Vec<NeedsAttention>,
+    /// By server name.
+    pub tools_changed: Vec<ToolsChanged>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -495,4 +511,8 @@ pub struct Approval {
     pub apply_state: Option<ApplyState>,
     /// When the call ended `applied` or `failed`.
     pub applied_at: Option<String>,
+    /// For an MCP tool (`mcp__<server>__<tool>`): the server's accepted fingerprint when the
+    /// call asked, `None` when it had no accepted list. A decided call goes through later only
+    /// while the server's accepted fingerprint is still this one (MCP/skills spec section 4).
+    pub mcp_fingerprint: Option<String>,
 }

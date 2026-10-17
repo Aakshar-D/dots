@@ -34,6 +34,12 @@ pub enum RuntimeEvent {
         run_id: String,
         error: Option<String>,
     },
+    /// A Library item was added, changed or removed, or an MCP server's catalog changed (a
+    /// check, an accept, a list that changed during a run). `item_id` names the item; the
+    /// Library and the Inbox read it again.
+    LibraryUpdated {
+        item_id: String,
+    },
 }
 
 pub type Bus = broadcast::Sender<RuntimeEvent>;

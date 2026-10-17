@@ -73,6 +73,33 @@ describe("the run view", () => {
     expect(screen.getByText("Unparsed output").closest("details")).not.toHaveAttribute("open");
   });
 
+  it("names an MCP call by its server and tool, a plugin's server by its plugin", async () => {
+    backend.on("library_list", () => sample.library);
+    const [, pluginServer] = sample.library;
+    thread(
+      [run],
+      [
+        ev({ kind: "tool_call", id: "m1", tool: "mcp__github__search_issues", input: { query: "bug" } }),
+        ev({ kind: "tool_result", id: "m1", output: "3 issues", is_error: false }),
+        ev({ kind: "tool_call", id: "m2", tool: `mcp__${pluginServer!.name}__page`, input: { n: 1 } }),
+        ev({ kind: "tool_call", id: "m3", tool: "mcp__unknown__ping", input: {} }),
+      ],
+    );
+    renderApp(`/runs/${run.id}`);
+    expect(await screen.findByText("github › search_issues")).toBeVisible();
+    expect(await screen.findByText("pdf-tools › page")).toBeVisible();
+    expect(screen.getByText("unknown › ping")).toBeVisible();
+    expect(screen.queryByText("mcp__github__search_issues")).toBeNull();
+  });
+
+  it("reads a notice as a note, not as a raw item", async () => {
+    thread([run], [ev({ kind: "notice", text: "MCP server github: its tools changed, they ask first" })]);
+    renderApp(`/runs/${run.id}`);
+    const note = await screen.findByRole("note");
+    expect(note).toHaveTextContent("MCP server github: its tools changed, they ask first");
+    expect(screen.queryByText("Note")?.closest("details")).toBeFalsy();
+  });
+
   it("says that a tool call without a result is running only while its run is going", async () => {
     // The first run was stopped in the middle of a call; the second is in the middle of one.
     const stopped: Run = { ...folderRun, id: "run-a", status: "failed", error: "timeout after 5s" };

@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "cn";
-import { Bot, Inbox as InboxIcon, MessageSquare, Settings as SettingsIcon } from "lucide-react";
+import { Bot, Inbox as InboxIcon, Library as LibraryIcon, MessageSquare, Settings as SettingsIcon } from "lucide-react";
 import { NavLink, Outlet } from "react-router";
 
 import { commands } from "@/api/commands";
@@ -12,6 +12,7 @@ import { useRuntimeEvents } from "@/lib/runtime-events";
 
 const LINKS = [
   { to: "/dots", label: "Dots", icon: Bot },
+  { to: "/library", label: "Library", icon: LibraryIcon },
   { to: "/inbox", label: "Inbox", icon: InboxIcon },
   { to: "/chat", label: "Chat", icon: MessageSquare },
   { to: "/settings", label: "Settings", icon: SettingsIcon },
@@ -23,7 +24,10 @@ export function Layout() {
   const inbox = useQuery({ queryKey: keys.inbox, queryFn: commands.inbox }).data;
   // The same count as the tray's (`inbox_count`).
   const waiting = inbox
-    ? inbox.approvals.length + inbox.review_runs.length + inbox.attention.length
+    ? inbox.approvals.length +
+      inbox.review_runs.length +
+      inbox.attention.length +
+      inbox.tools_changed.length
     : 0;
   return (
     <div className="flex h-screen bg-background text-sm text-foreground">

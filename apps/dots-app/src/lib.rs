@@ -65,6 +65,16 @@ command_list![
     discard_worktree,
     mark_reviewed,
     open_run_folder,
+    library_list,
+    library_add,
+    library_update,
+    library_remove,
+    library_probe,
+    library_check,
+    library_accept,
+    library_scan_skills,
+    installed_claude_plugins,
+    environment_variables,
 ];
 
 /// Keeps the log writer flushing until the app exits.

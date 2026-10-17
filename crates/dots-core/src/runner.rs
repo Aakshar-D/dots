@@ -18,6 +18,7 @@ use crate::model::{
     ApprovalStatus, EngineKind, NewRun, Run, RunStatus, TriggerKind, WorkspaceMode,
 };
 use crate::prompt::build_prompt;
+use crate::run_tools::{CloseOnDrop, OpenRequest, RunTools};
 use crate::store::Store;
 use crate::util::{ct_eq, new_token};
 use crate::workspace::{Prepared, WorkspaceManager};
@@ -32,6 +33,8 @@ pub struct RunnerConfig {
     pub mcp_url: String,
     pub worktrees_dir: PathBuf,
     pub cancel_grace: Duration,
+    /// Where a Claude-engine run's plugin folders go (`<data_dir>/plugins`).
+    pub plugins_dir: PathBuf,
 }
 
 struct Active {
@@ -48,6 +51,8 @@ pub struct Runner {
     cfg: RunnerConfig,
     active: Mutex<HashMap<String, Active>>,
     secrets: Mutex<HashMap<String, String>>,
+    /// Each running run's open tools, by run id, for the MCP gateway.
+    tools: Mutex<HashMap<String, Arc<RunTools>>>,
     wake: Notify,
     resume_lock: tokio::sync::Mutex<()>,
 }
@@ -67,6 +72,7 @@ impl Runner {
             cfg,
             active: Mutex::new(HashMap::new()),
             secrets: Mutex::new(HashMap::new()),
+            tools: Mutex::new(HashMap::new()),
             wake: Notify::new(),
             resume_lock: tokio::sync::Mutex::new(()),
         })
@@ -92,6 +98,33 @@ impl Runner {
             .iter()
             .find(|(s, _)| ct_eq(s, secret))
             .map(|(_, run)| run.clone())
+    }
+
+    /// Makes the run's open tools reachable through the MCP gateway (`POST /mcp/s/<server>`,
+    /// spec section 5) until the run ends.
+    pub fn register_tools(&self, run_id: &str, tools: Arc<RunTools>) {
+        self.tools.lock().unwrap().insert(run_id.to_string(), tools);
+    }
+
+    /// The open tools of a running run (found by its secret, `run_for_secret`).
+    pub fn run_tools(&self, run_id: &str) -> Option<Arc<RunTools>> {
+        self.tools.lock().unwrap().get(run_id).cloned()
+    }
+
+    /// The cancel token of a run the runner holds: a call the gateway sends for the run stops
+    /// when it fires.
+    pub fn run_cancel(&self, run_id: &str) -> Option<CancellationToken> {
+        self.active
+            .lock()
+            .unwrap()
+            .get(run_id)
+            .map(|a| a.cancel.clone())
+    }
+
+    /// Forgets what the MCP endpoints know of a run that no longer runs.
+    fn forget_run(&self, run_id: &str) {
+        self.secrets.lock().unwrap().retain(|_, r| r != run_id);
+        self.tools.lock().unwrap().remove(run_id);
     }
 
     pub async fn enqueue(&self, new: NewRun) -> Result<Run> {
@@ -196,7 +229,7 @@ impl Runner {
         tracing::error!(run = %run_id, "engine task panicked");
         cancel.cancel();
         self.active.lock().unwrap().remove(run_id);
-        self.secrets.lock().unwrap().retain(|_, r| r != run_id);
+        self.forget_run(run_id);
         match self
             .store
             .fail_if_running(run_id, "internal error: engine task panicked")
@@ -243,7 +276,7 @@ impl Runner {
                 self.emit_run(&r);
             }
         }
-        self.secrets.lock().unwrap().retain(|_, r| r != &run_id);
+        self.forget_run(&run_id);
         self.close_applies(&run_id).await;
         // A cancel that arrived after the final status was computed (the run parked) is
         // applied now, before the resume check could act on the parked decisions.
@@ -318,7 +351,11 @@ impl Runner {
                     needs_child = true;
                 }
                 (ApprovalStatus::Approved, _) => {
-                    grants.push((a.tool.clone(), grant_key(&a.tool, &a.input)));
+                    grants.push((
+                        a.tool.clone(),
+                        grant_key(&a.tool, &a.input),
+                        a.mcp_fingerprint.clone(),
+                    ));
                     lines.push(format!(
                         "- Approval #{} granted: you may now use {} with the same input. Perform that action now.",
                         a.id, a.tool
@@ -497,11 +534,29 @@ impl Runner {
                 p
             }
         };
+        // The run's MCP sessions, skills and plugin folders (MCP/skills spec section 5).
+        let (tools, notices) = RunTools::open(OpenRequest {
+            store: &self.store,
+            bus: &self.bus,
+            run_id: &run.id,
+            uses: &dot.spec.uses,
+            workspace: &prepared.path,
+            plugins_dir: (dot.spec.engine == EngineKind::Claude)
+                .then_some(self.cfg.plugins_dir.as_path()),
+            cancel: &cancel,
+        })
+        .await?;
+        let tools = Arc::new(tools);
+        let _closer = CloseOnDrop(tools.clone());
         if cancel.is_cancelled() {
+            tools.close().await;
             if let Err(e) = self.workspaces.cleanup_if_unchanged(&dot, &prepared).await {
                 tracing::warn!(run = %run.id, "workspace cleanup failed: {e}");
             }
             return self.finish_cancelled_before_start(&run.id).await;
+        }
+        for text in notices {
+            self.record(&run.id, &EngineEvent::Notice { text }).await?;
         }
         // A resume run on an engine that performs approved calls itself is handed the calls
         // its parent queued. The engine claims each one before it runs it.
@@ -514,6 +569,7 @@ impl Runner {
             _ => Vec::new(),
         };
         let secret = self.register_secret(&run.id);
+        self.register_tools(&run.id, tools.clone());
         let ctx = RunContext {
             run_id: run.id.clone(),
             dot: dot.clone(),
@@ -524,6 +580,7 @@ impl Runner {
             mcp_secret: secret,
             cancel: cancel.clone(),
             approved_calls,
+            tools: tools.clone(),
         };
         let mut rx = engine.start(ctx).await?;
 
@@ -558,6 +615,7 @@ impl Runner {
                 }
             }
         }
+        tools.close().await;
 
         let user_cancelled = by_user.load(Ordering::SeqCst);
         let waiting = self.store.has_pending_for_run(&run.id).await?

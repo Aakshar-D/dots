@@ -152,9 +152,10 @@ fn prepare_validates_calls_before_the_policy() {
     let err = tools::prepare("read_file", &json!({"file_path": "../x"}), p).unwrap_err();
     assert!(err.contains(".."), "{err}");
     assert_eq!(tools::alias("grep"), Some("Grep"));
+    // Every local tool but `skill`, which a run gets only with skills (`skill::schema`).
     assert_eq!(
         tools::schemas().as_array().unwrap().len(),
-        tools::TOOLS.len()
+        tools::TOOLS.len() - 1
     );
 }
 
@@ -192,6 +193,8 @@ fn a_prepared_input_passes_prepare_again_unchanged() {
         ),
         ("shell", json!({"command": "git status", "timeout": 30})),
         ("shell", json!("{\"command\": \"git log -1\"}")),
+        ("skill", json!({"name": "pdf", "file": "ref/a.md"})),
+        ("skill", json!({"name": "forms:fill", "file": ""})),
     ];
     let mut tools_seen = std::collections::BTreeSet::new();
     for (name, args) in &calls {
@@ -757,6 +760,7 @@ async fn walking_tools_leave_out_what_the_policy_denies() {
         preset: Preset::Custom,
         rules: vec![Rule::new("Read(secret/**)", Action::Deny)],
         default: Action::Allow,
+        mcp_default: Action::Ask,
     };
 
     let out = run_filtered(p, &policy, "grep", json!({"pattern": "hello"})).await;
@@ -811,6 +815,7 @@ fn walking_policy(rules: Vec<Rule>, default: Action) -> Policy {
         preset: Preset::Custom,
         rules: all,
         default,
+        mcp_default: Action::Ask,
     }
 }
 
@@ -1117,6 +1122,7 @@ async fn walking_tools_refuse_a_directory_root_a_deny_rule_matches() {
             preset: Preset::Custom,
             rules: vec![Rule::new(&format!("{alias}(secret/**)"), Action::Deny)],
             default: Action::Allow,
+            mcp_default: Action::Ask,
         };
         assert_eq!(
             policy.resolve_in("Read", &json!({"file_path": "secret/key.txt"}), Some(p)),
@@ -1185,6 +1191,7 @@ async fn a_deny_rule_elsewhere_leaves_the_search_root_alone() {
         preset: Preset::Custom,
         rules: vec![Rule::new("Read(secret/**)", Action::Deny)],
         default: Action::Allow,
+        mcp_default: Action::Ask,
     };
     // The workspace root, named or left out, is walked as before: `secret` is the hidden entry.
     for args in [

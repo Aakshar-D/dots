@@ -38,6 +38,7 @@ async fn start() -> Srv {
             mcp_url: String::new(),
             worktrees_dir: dir.path().join("wt"),
             cancel_grace: Duration::from_millis(100),
+            plugins_dir: dir.path().join("plugins"),
         },
     );
     let listener = bind(0).await.unwrap();

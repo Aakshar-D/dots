@@ -14,10 +14,12 @@ use crate::store::Store;
 use crate::{Error, Result};
 
 use self::client::{ChatClient, ToolCallRequest, DEFAULT_RETRY_DELAYS};
+use self::mcp_tools::{ToolNames, CHANGED};
 use self::tools::{PathFilter, PreparedCall, ToolOutput};
 
 pub mod client;
 pub mod history;
+pub mod mcp_tools;
 pub mod tools;
 
 const SYSTEM_PROMPT: &str = "You are a dot: an autonomous agent working unattended in a \
@@ -151,6 +153,7 @@ impl Engine for LocalEngine {
             ctx,
             tx,
             messages,
+            mcp_names: ToolNames::default(),
         };
         tokio::spawn(session.run());
         Ok(rx)
@@ -172,6 +175,7 @@ struct Session {
     ctx: RunContext,
     tx: mpsc::Sender<EngineEvent>,
     messages: Vec<Value>,
+    mcp_names: ToolNames,
 }
 
 impl Session {
@@ -195,9 +199,14 @@ impl Session {
         if !self.emit(EngineEvent::SessionStarted { session_id }).await {
             return;
         }
+        let skills = tools::skill::prompt_section(self.ctx.tools.skills());
+        let system = match skills.as_str() {
+            "" => SYSTEM_PROMPT.to_string(),
+            skills => format!("{SYSTEM_PROMPT}\n\n{skills}"),
+        };
         if self.messages.is_empty()
             && !self
-                .push(json!({"role": "system", "content": SYSTEM_PROMPT}))
+                .push(json!({"role": "system", "content": system}))
                 .await
         {
             return;
@@ -216,9 +225,9 @@ impl Session {
         if !self.push(json!({"role": "user", "content": prompt})).await {
             return;
         }
-        let tools = tools::schemas();
         let max_turns = self.ctx.dot.spec.max_turns;
         for turn in 1..=max_turns {
+            let tools = self.tool_schemas().await;
             let body = json!({
                 "model": self.ctx.dot.spec.model,
                 "messages": self.messages,
@@ -306,6 +315,15 @@ impl Session {
                 }
                 continue;
             }
+            if self.changed_since(approval) {
+                match self.gate.skip_apply(&approval.id).await {
+                    Ok(true) => lines.push(format!("- {what}: not performed, because {CHANGED}.")),
+                    Ok(false) => continue,
+                    Err(e) => tracing::warn!(approval = %approval.id, "skipping failed: {e}"),
+                }
+                stopped = true;
+                continue;
+            }
             match self.gate.claim_apply(&approval.id).await {
                 Ok(true) => {}
                 // Not this run's to perform: it is not run and not reported.
@@ -327,19 +345,16 @@ impl Session {
             if !self.emit(shown).await {
                 return None;
             }
-            let prepared = tools::local_name(&approval.tool)
-                .ok_or_else(|| format!("unknown tool '{}'", approval.tool))
-                .and_then(|name| tools::prepare(name, &approval.input, &self.ctx.workspace));
-            let output = match prepared {
-                // Nothing ran. The refusal is the call's outcome.
-                Err(e) => ToolOutput::err(e),
-                Ok(call) => {
-                    let filter = PathFilter::from_policy(
-                        &self.ctx.dot.spec.policy,
-                        call.alias,
-                        &self.ctx.workspace,
-                    );
-                    tools::run_with(&call, &self.ctx.workspace, &self.ctx.cancel, &filter).await
+            let output = if approval.tool.starts_with("mcp__") {
+                self.perform_mcp(&approval.tool, &approval.input).await
+            } else {
+                let prepared = tools::local_name(&approval.tool)
+                    .ok_or_else(|| format!("unknown tool '{}'", approval.tool))
+                    .and_then(|name| tools::prepare(name, &approval.input, &self.ctx.workspace));
+                match prepared {
+                    // Nothing ran. The refusal is the call's outcome.
+                    Err(e) => ToolOutput::err(e),
+                    Ok(call) => self.run_allowed(&call).await,
                 }
             };
             // A cancel that stopped the tool leaves the call claimed and without an outcome:
@@ -379,11 +394,19 @@ impl Session {
         Some(lines)
     }
 
-    /// Checks, gates and runs one tool call, then records its result.
-    async fn handle(&mut self, call: &ToolCallRequest) -> bool {
-        if self.ctx.cancel.is_cancelled() {
-            return false;
+    /// Runs a built-in call the gate allowed: `skill` reads the run's skills; every other tool
+    /// works in the workspace, the walking tools leaving out what the policy denies.
+    async fn run_allowed(&self, call: &PreparedCall) -> ToolOutput {
+        if call.name == "skill" {
+            return tools::skill::run(self.ctx.tools.skills(), &call.input).await;
         }
+        let filter =
+            PathFilter::from_policy(&self.ctx.dot.spec.policy, call.alias, &self.ctx.workspace);
+        tools::run_with(call, &self.ctx.workspace, &self.ctx.cancel, &filter).await
+    }
+
+    /// Shows, checks and runs a model's call of a built-in tool. `None` when the run must stop.
+    async fn builtin_output(&self, call: &ToolCallRequest) -> Option<ToolOutput> {
         let prepared = tools::prepare(&call.name, &call.arguments, &self.ctx.workspace);
         let (tool, input) = match &prepared {
             Ok(p) => (p.alias.to_string(), p.input.clone()),
@@ -395,30 +418,36 @@ impl Session {
             input,
         };
         if !self.emit(shown).await {
+            return None;
+        }
+        let p = match prepared {
+            Err(e) => return Some(ToolOutput::err(e)),
+            Ok(p) => p,
+        };
+        let checked = tokio::select! {
+            r = self.gate.check(&self.ctx.run_id, p.alias, p.input.clone()) => r,
+            _ = self.ctx.cancel.cancelled() => return None,
+        };
+        Some(match checked {
+            Ok(PermissionOutcome::Allow { input }) => {
+                self.run_allowed(&PreparedCall { input, ..p }).await
+            }
+            Ok(PermissionOutcome::Deny { message }) => ToolOutput::err(message),
+            Err(e) => ToolOutput::err(format!("permission check failed: {e}")),
+        })
+    }
+
+    /// Checks, gates and runs one tool call, then records its result.
+    async fn handle(&mut self, call: &ToolCallRequest) -> bool {
+        if self.ctx.cancel.is_cancelled() {
             return false;
         }
-        let output = match prepared {
-            Err(e) => ToolOutput::err(e),
-            Ok(p) => {
-                let checked = tokio::select! {
-                    r = self.gate.check(&self.ctx.run_id, p.alias, p.input.clone()) => r,
-                    _ = self.ctx.cancel.cancelled() => return false,
-                };
-                match checked {
-                    Ok(PermissionOutcome::Allow { input }) => {
-                        let filter = PathFilter::from_policy(
-                            &self.ctx.dot.spec.policy,
-                            p.alias,
-                            &self.ctx.workspace,
-                        );
-                        let allowed = PreparedCall { input, ..p };
-                        tools::run_with(&allowed, &self.ctx.workspace, &self.ctx.cancel, &filter)
-                            .await
-                    }
-                    Ok(PermissionOutcome::Deny { message }) => ToolOutput::err(message),
-                    Err(e) => ToolOutput::err(format!("permission check failed: {e}")),
-                }
-            }
+        let output = match self.mcp_tool(&call.name) {
+            Some(qualified) => self.mcp_output(call, &qualified).await,
+            None => self.builtin_output(call).await,
+        };
+        let Some(output) = output else {
+            return false;
         };
         // A cancel that stopped the tool leaves the call unanswered; `history::repair` fills it.
         if self.ctx.cancel.is_cancelled() {

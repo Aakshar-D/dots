@@ -28,32 +28,8 @@ const Fields = z.object({
   ),
 });
 
-/// The MCP servers a text field holds. An empty field is "none".
-export function parseMcp(
-  text: string,
-): { value: Record<string, unknown> | null } | { error: string } {
-  if (text.trim() === "") return { value: null };
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return { error: "This is not valid JSON." };
-  }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    return { error: "Write a JSON object: server name, then its configuration." };
-  }
-  if ("dots" in parsed) return { error: "The server name 'dots' is reserved." };
-  return { value: parsed as Record<string, unknown> };
-}
-
-/// The MCP servers a draft saves. Only a Claude dot has them: a local dot's form hides the
-/// field, so what it still holds is neither checked nor saved.
-export function mcpOf(spec: DotSpec, mcpText: string): ReturnType<typeof parseMcp> {
-  return spec.engine === "claude" ? parseMcp(mcpText) : { value: null };
-}
-
 /// What is wrong with a draft, by field. Empty when it can be saved.
-export function specErrors(spec: DotSpec, mcpText: string): SpecErrors {
+export function specErrors(spec: DotSpec): SpecErrors {
   const errors: SpecErrors = {};
   const fields = Fields.safeParse(spec);
   if (!fields.success) {
@@ -72,8 +48,6 @@ export function specErrors(spec: DotSpec, mcpText: string): SpecErrors {
   if (spec.policy.rules.some((r) => r.tool.trim() === "")) {
     errors.policy = "Every rule needs a tool pattern.";
   }
-  const mcp = mcpOf(spec, mcpText);
-  if ("error" in mcp) errors.mcp_servers = mcp.error;
   const schedule = scheduleError(spec.schedule);
   if (schedule) errors.schedule = schedule;
   return errors;
@@ -204,7 +178,7 @@ export function specOf(dot: DotSpec): DotSpec {
     workspace_mode: dot.workspace_mode,
     schedule: dot.schedule,
     policy: dot.policy,
-    mcp_servers: dot.mcp_servers,
+    uses: dot.uses,
     use_user_settings: dot.use_user_settings,
     max_turns: dot.max_turns,
     timeout_secs: dot.timeout_secs,
