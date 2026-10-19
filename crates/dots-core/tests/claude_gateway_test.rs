@@ -20,7 +20,8 @@ use dots_core::library::{
 };
 use dots_core::library_service::LibraryService;
 use dots_core::model::{
-    Dot, DotSpec, EngineKind, NewRun, Run, RunEventRecord, RunStatus, TriggerKind, WorkspaceMode,
+    ApprovalStatus, Dot, DotSpec, EngineKind, NewRun, Run, RunEventRecord, RunStatus, TriggerKind,
+    WorkspaceMode,
 };
 use dots_core::policy::{Action, Policy, Preset, Rule};
 use dots_core::run_tools::{OpenRequest, RunTools};
@@ -966,13 +967,12 @@ async fn dots_own_server_offers_context_only_with_collections_and_checks_each_ca
     .await
     .unwrap();
     assert_eq!(denied["result"]["isError"], true, "{denied}");
+    let text = denied["result"]["content"][0]["text"].as_str().unwrap();
     assert!(
-        !denied["result"]["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("style.md"),
+        text.contains("Denied by the policy of dot 'denying'"),
         "{denied}"
     );
+    assert!(!text.contains("style.md"), "{denied}");
     let unknown: Value = rpc(
         &e,
         "/mcp",
@@ -1003,4 +1003,87 @@ async fn dots_own_server_offers_context_only_with_collections_and_checks_each_ca
     .await
     .unwrap();
     assert_eq!(none["error"]["code"], -32602, "{none}");
+}
+
+#[tokio::test]
+async fn a_context_call_that_asks_waits_for_the_decision_and_parks_when_none_comes() {
+    let e = env(json!([]), false).await;
+    add_company(&e).await;
+    let dot = claude_dot(&e, |s| {
+        s.uses.context = vec!["company".into()];
+        s.approval_wait_secs = 1;
+        // deny > allow > ask: the preset's bare `Context` allow would win over an ask rule.
+        s.policy.rules.retain(|r| r.tool != "Context");
+        s.policy.rules.push(Rule::new("Context", Action::Ask));
+    })
+    .await;
+    let run = e
+        .store
+        .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    let cancel = CancellationToken::new();
+    let (tools, _) = RunTools::open(OpenRequest {
+        store: &e.store,
+        bus: &e.bus,
+        run_id: &run.id,
+        uses: &dot.spec.uses,
+        workspace: e.dir.path(),
+        plugins_dir: None,
+        cancel: &cancel,
+    })
+    .await
+    .unwrap();
+    let secret = e.runner.register_secret(&run.id);
+    e.runner.register_tools(&run.id, Arc::new(tools));
+    let call = |id: u64| {
+        json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
+               "params": {"name": "context",
+                          "arguments": {"collection": "company", "path": "style.md"}}})
+    };
+
+    // A live approval reads the collection and returns it.
+    let approver = async {
+        loop {
+            let pending = e.store.approvals_for_run(&run.id).await.unwrap();
+            if let Some(a) = pending.iter().find(|a| a.status == ApprovalStatus::Pending) {
+                assert_eq!(a.tool, "Context");
+                assert_eq!(
+                    a.input,
+                    json!({"collection": "company", "path": "style.md"})
+                );
+                let id = a.id.clone();
+                let DecideEffect::Live(_) = e.hub.decide(&id, true, None).await.unwrap() else {
+                    panic!("expected a live decision")
+                };
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    };
+    let (granted, ()) = tokio::join!(rpc(&e, "/mcp", Some(&secret), call(1)), approver);
+    let granted: Value = granted.json().await.unwrap();
+    assert!(granted["result"].get("isError").is_none(), "{granted}");
+    assert_eq!(
+        granted["result"]["content"][0]["text"],
+        "# House style
+Short sentences."
+    );
+
+    // With no decision inside the wait, the call is parked and the document stays unread.
+    let parked: Value = rpc(&e, "/mcp", Some(&secret), call(2))
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(parked["result"]["isError"], true, "{parked}");
+    let text = parked["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(text.starts_with("Queued for human approval #"), "{parked}");
+    assert!(!text.contains("Short sentences"), "{parked}");
+    let approvals = e.store.approvals_for_run(&run.id).await.unwrap();
+    let last = approvals.last().unwrap();
+    assert_eq!(last.tool, "Context");
+    assert!(last.parked, "{last:?}");
+    assert_eq!(last.input["collection"], "company");
+    assert_eq!(text, parked_message(&last.id));
 }

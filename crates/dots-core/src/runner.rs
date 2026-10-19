@@ -17,7 +17,7 @@ use crate::events::{Bus, RuntimeEvent};
 use crate::model::{
     ApprovalStatus, EngineKind, NewRun, Run, RunStatus, TriggerKind, WorkspaceMode,
 };
-use crate::prompt::build_prompt;
+use crate::prompt::{build_prompt, context_tool_name};
 use crate::run_tools::{CloseOnDrop, OpenRequest, RunTools};
 use crate::store::Store;
 use crate::util::{ct_eq, new_token};
@@ -25,6 +25,16 @@ use crate::workspace::{Prepared, WorkspaceManager};
 use crate::{Error, Result};
 
 /// How every resume prompt ends.
+/// The name the run's model knows a policy tool by: the `Context` tool is `mcp__dots__context`
+/// on the Claude engine, `context` on the local one; every other tool keeps its name.
+fn model_tool_name(tool: &str, engine: EngineKind) -> &str {
+    if tool == "Context" {
+        context_tool_name(engine)
+    } else {
+        tool
+    }
+}
+
 const CONTINUE: &str = "Continue the task, then end with your summary.";
 
 #[derive(Debug, Clone)]
@@ -337,6 +347,7 @@ impl Runner {
             return Ok(None);
         }
         let decided = self.store.unresolved_parked_decisions(run_id).await?;
+        let engine = self.store.get_dot(&run.dot_id).await?.spec.engine;
         let mut lines = Vec::new();
         let mut grants = Vec::new();
         let mut queued = Vec::new();
@@ -358,20 +369,23 @@ impl Runner {
                     ));
                     lines.push(format!(
                         "- Approval #{} granted: you may now use {} with the same input. Perform that action now.",
-                        a.id, a.tool
+                        a.id,
+                        model_tool_name(&a.tool, engine)
                     ));
                     needs_child = true;
                 }
                 (_, Some(note)) => {
                     lines.push(format!(
                         "- Approval #{} for {} was denied. Reviewer note: {note}",
-                        a.id, a.tool
+                        a.id,
+                        model_tool_name(&a.tool, engine)
                     ));
                     needs_child = true;
                 }
                 _ => lines.push(format!(
                     "- Approval #{} for {} was denied. Do not attempt it again.",
-                    a.id, a.tool
+                    a.id,
+                    model_tool_name(&a.tool, engine)
                 )),
             }
         }
