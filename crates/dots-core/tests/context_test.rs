@@ -33,6 +33,7 @@ fn company(root: &Path) -> Vec<Collection> {
         dir: root.to_path_buf(),
         description: "How we work".into(),
         documents: 0,
+        complete: true,
     }]
 }
 
@@ -414,12 +415,14 @@ fn the_prompt_section_lists_the_collections() {
             dir: "C:/kb".into(),
             description: "How we work".into(),
             documents: 42,
+            complete: true,
         },
         Collection {
             name: "clients".into(),
             dir: "C:/clients".into(),
             description: " ".into(),
             documents: 1,
+            complete: true,
         },
     ];
     let section = context::prompt_section(&collections, "mcp__dots__context");
@@ -437,6 +440,25 @@ fn the_prompt_section_lists_the_collections() {
             dir: "C:/x".into(),
             description: String::new(),
             documents: 0,
+            complete: true,
+        });
+    }
+    collections.truncate(2);
+    collections[0].complete = false;
+    let section = context::prompt_section(&collections, "context");
+    assert!(
+        section.contains("- company: How we work (at least 42 documents)"),
+        "{section}"
+    );
+    assert!(section.contains("(1 document)"), "{section}");
+    collections[0].complete = true;
+    for i in 0..60 {
+        collections.push(Collection {
+            name: format!("c{i}"),
+            dir: "C:/x".into(),
+            description: String::new(),
+            documents: 0,
+            complete: true,
         });
     }
     let section = context::prompt_section(&collections, "context");
@@ -508,6 +530,21 @@ fn a_walk_stops_at_its_entry_bound_and_says_the_count_is_a_lower_bound() {
     assert_eq!(full.total, 60);
     let list = context::list_bounded(dir.path(), 50).unwrap();
     assert!(list.contains("at least"), "{list}");
+}
+
+#[test]
+fn the_documents_of_a_bounded_walk_say_the_total_is_a_lower_bound() {
+    let dir = tempfile::tempdir().unwrap();
+    for i in 0..60 {
+        write(dir.path(), &format!("d{i:02}.md"), "x");
+    }
+    let (docs, total, complete) = context::documents_bounded(dir.path(), 5, 50).unwrap();
+    assert_eq!(docs.len(), 5);
+    assert!(total > 0 && total <= 50, "{total}");
+    assert!(!complete);
+    let (_, total, complete) = context::documents(dir.path(), 5).unwrap();
+    assert_eq!(total, 60);
+    assert!(complete);
 }
 
 #[test]

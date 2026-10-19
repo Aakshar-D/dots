@@ -388,7 +388,11 @@ export const McpCatalog = z.strictObject({
   error: nullable(z.string()),
 });
 export const SkillDetail = z.strictObject({ description: z.string() });
-export const ContextDetail = z.strictObject({ documents: z.number().int() });
+export const ContextDetail = z.strictObject({
+  documents: z.number().int(),
+  // False when the walk stopped at its bound: `documents` is a lower bound.
+  complete: z.boolean(),
+});
 export const PluginDetail = z.strictObject({
   version: nullable(z.string()),
   description: nullable(z.string()),
@@ -423,6 +427,8 @@ export const ContextDocuments = z.strictObject({
   documents: z.array(ContextDocument),
   total: z.number().int(),
   truncated: z.boolean(),
+  // False when the walk stopped at its bound: `total` is a lower bound.
+  complete: z.boolean(),
 });
 export const McpProbe = z.strictObject({ tools: z.array(McpTool), fingerprint: z.string() });
 export const ScannedSkill = z.strictObject({

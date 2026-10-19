@@ -74,6 +74,7 @@
     "environment_variables"
   ],
   "ContextDocuments": {
+    "complete": true,
     "documents": [
       {
         "path": "people/ana.md",
@@ -887,6 +888,7 @@
         "path": "C:/notes/company"
       },
       "context": {
+        "complete": true,
         "documents": 42
       },
       "created_at": "2026-10-09T12:00:00.000Z",

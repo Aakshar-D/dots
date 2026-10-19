@@ -390,6 +390,7 @@ impl RunTools {
                     dir,
                     description: config.description.clone(),
                     documents: walk.total,
+                    complete: walk.complete,
                 }),
                 Err(_) if !is_dir => {
                     notices.push(format!("context {}: folder not found", item.name))

@@ -51,6 +51,8 @@ pub struct LibraryEntry {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ContextDetail {
     pub documents: usize,
+    /// False when the walk stopped at its bound: `documents` is a lower bound.
+    pub complete: bool,
 }
 
 /// The first documents of a collection (`context_documents`).
@@ -59,8 +61,21 @@ pub struct ContextDocuments {
     pub documents: Vec<Document>,
     /// All documents found, up to `context::MAX_DOCUMENTS` and past it.
     pub total: usize,
-    /// More documents than are listed here.
+    /// More documents than are listed here, or the walk stopped at its bound.
     pub truncated: bool,
+    /// False when the walk stopped at its bound: `total` is a lower bound.
+    pub complete: bool,
+}
+
+impl ContextDocuments {
+    fn new(documents: Vec<Document>, total: usize, complete: bool) -> Self {
+        Self {
+            truncated: total > documents.len() || !complete,
+            documents,
+            total,
+            complete,
+        }
+    }
 }
 
 /// How many documents `context_documents` describes.
@@ -395,7 +410,7 @@ impl LibraryService {
                         ),
                         LibraryKind::Context => Some(
                             context::walk(&dir)
-                                .map(|w| (None, None, Some(w.total)))
+                                .map(|w| (None, None, Some((w.total, w.complete))))
                                 .map_err(|e| context_problem(&dir, &e)),
                         ),
                         LibraryKind::McpServer => None,
@@ -435,7 +450,10 @@ impl LibraryService {
             }
             match read {
                 Some(Ok((skill, plugin, documents))) => {
-                    entry.context = documents.map(|documents| ContextDetail { documents });
+                    entry.context = documents.map(|(documents, complete)| ContextDetail {
+                        documents,
+                        complete,
+                    });
                     entry.skill = skill.map(|s| SkillDetail {
                         description: s.description,
                     });
@@ -710,14 +728,11 @@ impl LibraryService {
             )));
         };
         let dir = PathBuf::from(&config.path);
-        let (documents, total) = blocking(move || context::documents(&dir, SHOWN_DOCUMENTS))
-            .await?
-            .map_err(Error::NotFound)?;
-        Ok(ContextDocuments {
-            truncated: total > documents.len(),
-            documents,
-            total,
-        })
+        let (documents, total, complete) =
+            blocking(move || context::documents(&dir, SHOWN_DOCUMENTS))
+                .await?
+                .map_err(Error::NotFound)?;
+        Ok(ContextDocuments::new(documents, total, complete))
     }
 }
 
@@ -725,6 +740,21 @@ impl LibraryService {
 mod tests {
     use super::*;
     use crate::events::new_bus;
+
+    #[test]
+    fn a_count_that_is_only_a_lower_bound_is_marked_truncated() {
+        let doc = || Document {
+            path: "a.md".into(),
+            title: "A".into(),
+            summary: String::new(),
+        };
+        let all = ContextDocuments::new(vec![doc()], 1, true);
+        assert!(!all.truncated && all.complete);
+        let more = ContextDocuments::new(vec![doc()], 2, true);
+        assert!(more.truncated);
+        let bound = ContextDocuments::new(vec![doc()], 1, false);
+        assert!(bound.truncated && !bound.complete);
+    }
 
     #[tokio::test]
     async fn a_plugin_removed_while_a_run_reads_it_is_left_out_not_an_error() {

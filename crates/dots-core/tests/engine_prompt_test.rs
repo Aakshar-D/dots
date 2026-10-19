@@ -257,6 +257,7 @@ fn collections() -> Vec<Collection> {
         dir: "C:/kb".into(),
         description: "How we work".into(),
         documents: 3,
+        complete: true,
     }]
 }
 

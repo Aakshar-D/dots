@@ -60,6 +60,8 @@ pub struct Collection {
     pub dir: PathBuf,
     pub description: String,
     pub documents: usize,
+    /// False when the walk stopped at `MAX_WALK_ENTRIES`: `documents` is a lower bound.
+    pub complete: bool,
 }
 
 /// A document as the list shows it.
@@ -209,10 +211,20 @@ fn read_head(path: &Path, limit: u64) -> std::io::Result<String> {
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
-/// The documents of `root`, described from the first 8 KB of each, with the walk's total.
-pub fn documents(root: &Path, limit: usize) -> Result<(Vec<Document>, usize), String> {
-    let walk = walk(root)?;
-    Ok((describe_walk(root, &walk, limit), walk.total))
+/// The documents of `root`, described from the first 8 KB of each, with the walk's total and
+/// whether the walk was complete (otherwise the total is a lower bound).
+pub fn documents(root: &Path, limit: usize) -> Result<(Vec<Document>, usize, bool), String> {
+    documents_bounded(root, limit, MAX_WALK_ENTRIES)
+}
+
+/// `documents` with a walk that visits at most `max_entries` entries.
+pub fn documents_bounded(
+    root: &Path,
+    limit: usize,
+    max_entries: usize,
+) -> Result<(Vec<Document>, usize, bool), String> {
+    let walk = walk_bounded(root, max_entries)?;
+    Ok((describe_walk(root, &walk, limit), walk.total, walk.complete))
 }
 
 /// The first `limit` documents of `walk`, described from their heads.
@@ -533,9 +545,10 @@ pub fn prompt_section(collections: &[Collection], tool: &str) -> String {
             "" => "(no description)",
             d => d,
         };
-        let count = match c.documents {
-            1 => "1 document".to_string(),
-            n => format!("{n} documents"),
+        let count = match (c.documents, c.complete) {
+            (1, true) => "1 document".to_string(),
+            (n, true) => format!("{n} documents"),
+            (n, false) => format!("at least {n} documents"),
         };
         out.push_str(&format!("\n- {}: {description} ({count})", c.name));
     }

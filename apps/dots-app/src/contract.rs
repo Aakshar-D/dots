@@ -218,7 +218,10 @@ fn library_entries() -> Vec<LibraryEntry> {
             ..bare(plugin, users.clone())
         },
         LibraryEntry {
-            context: Some(ContextDetail { documents: 42 }),
+            context: Some(ContextDetail {
+                documents: 42,
+                complete: true,
+            }),
             ..bare(company, users)
         },
     ]
@@ -234,6 +237,7 @@ fn context_documents() -> ContextDocuments {
         }],
         total: 42,
         truncated: true,
+        complete: true,
     }
 }
 

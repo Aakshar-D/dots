@@ -781,7 +781,7 @@ describe("the Context tab's other paths", () => {
     const dialog = await screen.findByRole("dialog", { name: "Documents of company" });
     expect(await within(dialog).findByText(/the folder is gone/)).toBeVisible();
     await user.keyboard("{Escape}");
-    backend.on("context_documents", () => ({ documents: [], total: 0, truncated: false }));
+    backend.on("context_documents", () => ({ documents: [], total: 0, truncated: false, complete: true }));
     await user.click(within(row).getByRole("button", { name: "Documents" }));
     const again = await screen.findByRole("dialog", { name: "Documents of company" });
     expect(await within(again).findByText("No documents in that folder.")).toBeVisible();
@@ -825,6 +825,28 @@ describe("the Context tab's other paths", () => {
     expect(dialog).toHaveTextContent("Every dot reads it.");
     expect(dialog).toHaveTextContent(dot.name);
     expect(dialog).not.toHaveTextContent("No dot uses it.");
+  });
+});
+
+describe("a document count that is only a lower bound", () => {
+  it("says at least in the row and in the Documents dialog", async () => {
+    const bounded = { ...company, context: { documents: 100000, complete: false } };
+    listing([bounded]);
+    backend.on("context_documents", () => ({
+      ...sample.contextDocuments,
+      total: 100000,
+      truncated: true,
+      complete: false,
+    }));
+    const { user } = renderApp("/library");
+    await user.click(await screen.findByRole("tab", { name: "Context" }));
+    const row = await screen.findByRole("listitem", { name: "company" });
+    expect(within(row).getByText("at least 100000 documents")).toBeVisible();
+    await user.click(within(row).getByRole("button", { name: "Documents" }));
+    const dialog = await screen.findByRole("dialog", { name: "Documents of company" });
+    expect(
+      await within(dialog).findByText("The first 1 of at least 100000 documents."),
+    ).toBeVisible();
   });
 });
 
