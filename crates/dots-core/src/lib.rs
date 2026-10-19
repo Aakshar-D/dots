@@ -2,6 +2,7 @@
 mod macros;
 
 pub mod approvals;
+pub mod context;
 pub mod engine;
 pub mod error;
 pub mod events;
