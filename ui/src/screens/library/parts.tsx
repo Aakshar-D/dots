@@ -84,15 +84,17 @@ export function RemoveButton({ entry }: { entry: LibraryEntry }) {
     onError: notifyError,
   });
   const word = KIND_WORD[entry.kind];
+  const everyDot = entry.kind === "context" && entry.config.every_dot;
   const users = entry.used_by.map((d) => d.name).join(", ");
   return (
     <ConfirmButton
       title={`Remove ${entry.name}?`}
       description={
         <>
+          {everyDot && "Every dot reads it. "}
           {entry.used_by.length > 0
             ? `Used by ${users}. Removing it takes it out of them.`
-            : "No dot uses it."}
+            : !everyDot && "No dot uses it."}
           {entry.kind === "plugin" && " Its MCP servers go with it."}
         </>
       }

@@ -33,14 +33,16 @@ const NAME_RULE = "Use 1 to 40 of a-z, 0-9, _ and -, starting with a letter or d
 
 export const validName = (name: string) => /^[a-z0-9][a-z0-9_-]{0,39}$/.test(name);
 
-/// A name for a collection from its folder: lower case, other characters as `-`, cut at 40.
+/// A name for a collection from its folder: lower case, other characters as `-`, cut at 40, no
+/// `-` or `_` at either end.
 export function nameFromFolder(path: string): string {
   const folder = path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "";
   return folder
     .toLowerCase()
     .replace(/[^a-z0-9_-]+/g, "-")
     .replace(/^[-_]+/, "")
-    .slice(0, MAX_NAME);
+    .slice(0, MAX_NAME)
+    .replace(/[-_]+$/, "");
 }
 
 type Form = { name: string; path: string; description: string; every_dot: boolean };
@@ -61,7 +63,7 @@ function CollectionDialog(props: { entry: ContextEntry | null; path: string; onC
   const errors = {
     name: validName(form.name) ? undefined : NAME_RULE,
     description:
-      [...form.description].length > MAX_DESCRIPTION
+      [...form.description.trim()].length > MAX_DESCRIPTION
         ? `At most ${MAX_DESCRIPTION} characters.`
         : undefined,
   };
