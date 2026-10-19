@@ -81,8 +81,8 @@ impl Store {
     }
 
     /// Atomically turns the decided parked approvals of `parent_id` into a resume:
-    /// inserts the one-shot `grants` (`(tool, grant_key)`, scoped to the parent's
-    /// `root_run_id`, read inside the transaction), marks `resolved_ids` resolved, queues
+    /// inserts the one-shot `grants` (`(tool, grant_key, mcp_fingerprint)`, scoped to the
+    /// parent's `root_run_id`, read inside the transaction), marks `resolved_ids` resolved, queues
     /// `queued_ids` (approved calls that Dots performs itself in the child run, which get no
     /// grant), inserts the optional `child` run, and closes the parent as `succeeded`.
     /// The parent must still be `awaiting_approval` (e.g. not cancelled concurrently), and each
@@ -91,7 +91,7 @@ impl Store {
     pub async fn resume_parked(
         &self,
         parent_id: &str,
-        grants: &[(String, String)],
+        grants: &[(String, String, Option<String>)],
         resolved_ids: &[String],
         queued_ids: &[String],
         child: Option<&NewRun>,
@@ -115,15 +115,16 @@ impl Store {
             .bind(parent_id)
             .fetch_one(&mut *tx)
             .await?;
-        for (tool, key) in grants {
+        for (tool, key, mcp_fingerprint) in grants {
             sqlx::query(
-                "INSERT INTO grants (id, root_run_id, tool, input_hash, created_at) \
-                 VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO grants (id, root_run_id, tool, input_hash, mcp_fingerprint, \
+                 created_at) VALUES (?, ?, ?, ?, ?, ?)",
             )
             .bind(new_id())
             .bind(&root)
             .bind(tool)
             .bind(key)
+            .bind(mcp_fingerprint)
             .bind(now())
             .execute(&mut *tx)
             .await?;

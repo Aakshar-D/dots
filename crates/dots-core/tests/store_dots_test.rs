@@ -2,6 +2,7 @@ mod common;
 
 use chrono::{Local, TimeDelta, TimeZone, Utc};
 use common::{spec, temp_store};
+use dots_core::library::LibraryConfig;
 use dots_core::model::{Dot, EngineKind};
 use dots_core::policy::{Policy, Preset};
 use dots_core::schedule::{next_slot, Rule, Schedule};
@@ -33,7 +34,11 @@ async fn create_and_get_round_trip() {
     let (_d, store) = temp_store().await;
     let mut s = spec("triage");
     s.schedule = Some(Schedule::cron("0 0 8 * * Mon-Fri"));
-    s.mcp_servers = Some(json!({"sf": {"type": "stdio", "command": "sf-mcp"}}));
+    let sf = LibraryConfig::McpServer(
+        serde_json::from_value(json!({"transport": "stdio", "command": "sf-mcp"})).unwrap(),
+    );
+    store.add_library_item("sf", &sf, None).await.unwrap();
+    s.uses.mcp_servers = vec!["sf".into()];
     let dot = store.create_dot(&s).await.unwrap();
     assert_eq!(dot.spec, s);
     assert_eq!(dot.id.len(), 26);
@@ -75,8 +80,10 @@ async fn invalid_specs_are_rejected() {
         "rule": {"kind": "daily", "time": "09:00"},
         "until": {"count": 0}
     })));
-    let mut reserved_mcp = spec("mcp");
-    reserved_mcp.mcp_servers = Some(json!({"dots": {}}));
+    let mut unknown_server = spec("mcp");
+    unknown_server.uses.mcp_servers = vec!["sf".into()];
+    let mut empty_skill = spec("skill");
+    empty_skill.uses.skills = vec!["".into()];
     let mut zero_turns = spec("zero");
     zero_turns.max_turns = 0;
     let mut local_https = spec("https");
@@ -95,7 +102,8 @@ async fn invalid_specs_are_rejected() {
         weekly_no_day,
         once_bounded,
         count_zero,
-        reserved_mcp,
+        unknown_server,
+        empty_skill,
         zero_turns,
     ] {
         let err = store.create_dot(&s).await.unwrap_err();

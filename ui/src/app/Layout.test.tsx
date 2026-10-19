@@ -33,8 +33,9 @@ describe("the app frame", () => {
     for (const name of ["Dots", "Chat", "Settings"]) {
       expect(within(nav).getByRole("link", { name })).toBeVisible();
     }
-    // One pending approval, one run to review and one schedule that needs attention.
-    expect(await within(nav).findByRole("link", { name: /^Inbox\s*3$/ })).toBeVisible();
+    // One pending approval, one run to review, one schedule that needs attention and one MCP
+    // server whose tools changed.
+    expect(await within(nav).findByRole("link", { name: /^Inbox\s*4$/ })).toBeVisible();
   });
 
   it("shows why Dots could not start instead of the app", async () => {
@@ -347,6 +348,6 @@ describe("the app frame", () => {
     await listening();
     backend.on("inbox", () => sample.inbox);
     act(() => backend.emit("runtime", { type: "approval_requested", approval: sample.approval }));
-    expect(await within(nav).findByRole("link", { name: /^Inbox\s*3$/ })).toBeVisible();
+    expect(await within(nav).findByRole("link", { name: /^Inbox\s*4$/ })).toBeVisible();
   });
 });

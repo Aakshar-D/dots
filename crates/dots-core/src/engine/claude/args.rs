@@ -30,7 +30,15 @@ pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
     } else {
         String::new()
     });
-    let (allow, deny) = spec.policy.cli_lists();
+    let (mut allow, deny) = spec.policy.cli_lists();
+    // The gateway checks every call of a run's MCP server (spec section 4), so the CLI does not
+    // ask the `approve` tool for them first.
+    allow.extend(
+        ctx.tools
+            .servers()
+            .iter()
+            .map(|s| format!("mcp__{}__*", s.name())),
+    );
     if !allow.is_empty() {
         a.push("--allowedTools".into());
         a.extend(allow);
@@ -39,6 +47,10 @@ pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
         a.push("--disallowedTools".into());
         a.extend(deny);
     }
+    for dir in ctx.tools.plugin_dirs() {
+        a.push("--plugin-dir".into());
+        a.push(dir.to_string_lossy().to_string());
+    }
     if let Some(session) = &ctx.session_id {
         a.push("--resume".into());
         a.push(session.clone());
@@ -46,12 +58,16 @@ pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
     a
 }
 
+/// The run's `--mcp-config`: Dots' own `dots` server and, for each MCP session the run has open,
+/// an entry of the same name that reaches it through the gateway. The CLI never starts or
+/// reaches a server itself, and no `${VAR}` value is written to the file.
 pub fn mcp_config(ctx: &RunContext) -> Value {
     let mut servers = serde_json::Map::new();
-    if let Some(Value::Object(extra)) = &ctx.dot.spec.mcp_servers {
-        for (name, cfg) in extra {
-            servers.insert(name.clone(), cfg.clone());
-        }
+    for server in ctx.tools.servers() {
+        servers.insert(
+            server.name().to_string(),
+            gateway_entry(&ctx.mcp_url, &ctx.mcp_secret, server.name()),
+        );
     }
     servers.insert(
         "dots".into(),
@@ -62,6 +78,16 @@ pub fn mcp_config(ctx: &RunContext) -> Value {
         }),
     );
     json!({ "mcpServers": servers })
+}
+
+/// The `mcpServers` entry of the run's open session `server`: the gateway route
+/// `<mcp_url>/s/<server>` with the run's secret (spec section 5).
+pub fn gateway_entry(mcp_url: &str, secret: &str, server: &str) -> Value {
+    json!({
+        "type": "http",
+        "url": format!("{}/s/{server}", mcp_url.trim_end_matches('/')),
+        "headers": { "Authorization": format!("Bearer {secret}") },
+    })
 }
 
 /// The configured path if it is a file; otherwise search PATH.

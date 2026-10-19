@@ -3,7 +3,7 @@ import { Play } from "lucide-react";
 import { Link, useNavigate } from "react-router";
 
 import { commands } from "@/api/commands";
-import type { NeedsAttention, ReviewRun } from "@/api/types";
+import type { NeedsAttention, ReviewRun, ToolsChanged } from "@/api/types";
 import { ApprovalCard } from "@/components/ApprovalCard";
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { ErrorNote } from "@/components/ErrorNote";
@@ -100,6 +100,28 @@ function AttentionRow({ item }: { item: NeedsAttention }) {
         onClick={onSingleClick(() => dismiss.mutate())}
       >
         Dismiss
+      </Button>
+    </li>
+  );
+}
+
+/// An MCP server whose tool list changed since it was accepted: its tools ask until a review.
+function ToolsChangedRow({ item }: { item: ToolsChanged }) {
+  return (
+    <li
+      aria-label={`${item.name} tools changed`}
+      className="flex items-center gap-3 rounded-lg border p-3"
+    >
+      <div className="flex min-w-0 flex-1 flex-col">
+        <span className="font-medium">{item.name}</span>
+        <span className="truncate text-xs text-muted-foreground">
+          {item.dots.length === 0
+            ? "No dot uses it yet."
+            : `Used by ${item.dots.map((dot) => dot.name).join(", ")}`}
+        </span>
+      </div>
+      <Button asChild size="sm" variant="outline">
+        <Link to={`/library?review=${encodeURIComponent(item.server_id)}`}>Review</Link>
       </Button>
     </li>
   );
@@ -204,8 +226,13 @@ export function InboxScreen() {
       </Page>
     );
   }
-  const { approvals, review_runs: runs, attention } = inbox.data;
-  if (approvals.length === 0 && runs.length === 0 && attention.length === 0) {
+  const { approvals, review_runs: runs, attention, tools_changed: tools } = inbox.data;
+  if (
+    approvals.length === 0 &&
+    runs.length === 0 &&
+    attention.length === 0 &&
+    tools.length === 0
+  ) {
     return (
       <Page title="Inbox">
         <p className="text-muted-foreground">
@@ -235,6 +262,18 @@ export function InboxScreen() {
           <ul className="flex flex-col gap-2">
             {attention.map((item) => (
               <AttentionRow key={item.dot_id} item={item} />
+            ))}
+          </ul>
+        </section>
+      )}
+      {tools.length > 0 && (
+        <section aria-labelledby="inbox-tools" className="flex flex-col gap-2">
+          <h2 id="inbox-tools" className="font-semibold">
+            Tools changed
+          </h2>
+          <ul className="flex flex-col gap-2">
+            {tools.map((item) => (
+              <ToolsChangedRow key={item.server_id} item={item} />
             ))}
           </ul>
         </section>

@@ -9,7 +9,7 @@ use crate::util::{json_hash, new_id, now};
 use crate::{Error, Result};
 
 const APPROVAL_COLUMNS: &str = "id, run_id, tool, input, input_hash, status, note, parked, \
-    resolved, created_at, decided_at, self_apply, apply_state, applied_at";
+    resolved, created_at, decided_at, self_apply, apply_state, applied_at, mcp_fingerprint";
 
 fn approval_from_row(row: &SqliteRow) -> Result<Approval> {
     Ok(Approval {
@@ -31,6 +31,7 @@ fn approval_from_row(row: &SqliteRow) -> Result<Approval> {
             .map(ApplyState::parse)
             .transpose()?,
         applied_at: row.try_get("applied_at")?,
+        mcp_fingerprint: row.try_get("mcp_fingerprint")?,
     })
 }
 
@@ -53,10 +54,24 @@ impl Store {
         input: &Value,
         self_apply: bool,
     ) -> Result<Approval> {
+        self.create_mcp_approval(run_id, tool, input, self_apply, None)
+            .await
+    }
+
+    /// Like `create_approval_with`, for a call of an MCP tool: `mcp_fingerprint` is the
+    /// server's accepted fingerprint as the call asks (`None` when it has no accepted list).
+    pub async fn create_mcp_approval(
+        &self,
+        run_id: &str,
+        tool: &str,
+        input: &Value,
+        self_apply: bool,
+        mcp_fingerprint: Option<&str>,
+    ) -> Result<Approval> {
         let id = new_id();
         sqlx::query(
             "INSERT INTO approvals (id, run_id, tool, input, input_hash, status, created_at, \
-             self_apply) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)",
+             self_apply, mcp_fingerprint) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)",
         )
         .bind(&id)
         .bind(run_id)
@@ -65,6 +80,7 @@ impl Store {
         .bind(json_hash(input))
         .bind(now())
         .bind(i64::from(self_apply))
+        .bind(mcp_fingerprint)
         .execute(&self.pool)
         .await?;
         self.get_approval(&id).await
@@ -342,14 +358,28 @@ impl Store {
         tool: &str,
         input_hash: &str,
     ) -> Result<()> {
+        self.create_mcp_grant(root_run_id, tool, input_hash, None)
+            .await
+    }
+
+    /// A one-shot grant of an approved MCP call, which holds only while the server's accepted
+    /// fingerprint is `mcp_fingerprint` (the approval's).
+    pub async fn create_mcp_grant(
+        &self,
+        root_run_id: &str,
+        tool: &str,
+        input_hash: &str,
+        mcp_fingerprint: Option<&str>,
+    ) -> Result<()> {
         sqlx::query(
-            "INSERT INTO grants (id, root_run_id, tool, input_hash, created_at) \
-             VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO grants (id, root_run_id, tool, input_hash, mcp_fingerprint, created_at) \
+             VALUES (?, ?, ?, ?, ?, ?)",
         )
         .bind(new_id())
         .bind(root_run_id)
         .bind(tool)
         .bind(input_hash)
+        .bind(mcp_fingerprint)
         .bind(now())
         .execute(&self.pool)
         .await?;
@@ -373,5 +403,25 @@ impl Store {
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected() == 1)
+    }
+
+    /// Consumes one unused grant of an MCP call. `None` when there is none; otherwise the
+    /// fingerprint it was approved under, which the caller compares with the server's.
+    pub async fn take_mcp_grant(
+        &self,
+        root_run_id: &str,
+        tool: &str,
+        input_hash: &str,
+    ) -> Result<Option<Option<String>>> {
+        let taken: Option<(Option<String>,)> = sqlx::query_as(
+            "UPDATE grants SET used = 1 WHERE id = (SELECT id FROM grants WHERE root_run_id = ? \
+             AND tool = ? AND input_hash = ? AND used = 0 LIMIT 1) RETURNING mcp_fingerprint",
+        )
+        .bind(root_run_id)
+        .bind(tool)
+        .bind(input_hash)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(taken.map(|(fingerprint,)| fingerprint))
     }
 }

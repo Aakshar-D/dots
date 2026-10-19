@@ -140,19 +140,27 @@ async fn main() {
     }
     let mut prompt = String::new();
     std::io::stdin().read_to_string(&mut prompt).ok();
+    let mcp: Option<Value> = flag(&args, "--mcp-config")
+        .map(|p| serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap());
     if let Ok(out) = std::env::var("FAKE_CLAUDE_ARGS_OUT") {
+        // What the CLI would load: the config and the plugin folders are gone after the run.
+        let plugin_dirs: Vec<Value> = args
+            .windows(2)
+            .filter(|w| w[0] == "--plugin-dir")
+            .map(|w| json!({"path": w[1], "files": files_below(Path::new(&w[1]))}))
+            .collect();
         let record = json!({
             "args": args,
             "pid": std::process::id(),
             "prompt": prompt,
             "cwd": std::env::current_dir().unwrap().to_string_lossy(),
             "mcp_tool_timeout": std::env::var("MCP_TOOL_TIMEOUT").ok(),
+            "mcp_config": mcp,
+            "plugin_dirs": plugin_dirs,
         });
         std::fs::write(out, record.to_string()).unwrap();
     }
     let session = flag(&args, "--resume").unwrap_or_else(|| "fake-session".to_string());
-    let mcp: Option<Value> = flag(&args, "--mcp-config")
-        .map(|p| serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap());
     let script: Vec<Value> = match std::env::var("FAKE_CLAUDE_SCRIPT") {
         Ok(p) => serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap(),
         Err(_) => default_script(),
@@ -190,6 +198,99 @@ async fn main() {
                 "content": content, "is_error": !allowed}]}});
             writeln!(stdout, "{line}").unwrap();
             stdout.flush().unwrap();
+        } else if let Some(server) = step.get("mcp_list").and_then(Value::as_str) {
+            let mcp = mcp.as_ref().expect("--mcp-config is required");
+            let listed = gateway(mcp, server, "tools/list", json!({})).await;
+            let names: Vec<Value> = listed["result"]["tools"]
+                .as_array()
+                .expect("a tool list")
+                .iter()
+                .map(|t| t["name"].clone())
+                .collect();
+            let line = json!({"type": "fake_mcp_tools", "server": server, "tools": names});
+            writeln!(stdout, "{line}").unwrap();
+            stdout.flush().unwrap();
+        } else if let Some(call) = step.get("mcp_call") {
+            let mcp = mcp.as_ref().expect("--mcp-config is required");
+            let server = call["server"].as_str().expect("mcp_call.server");
+            let tool = call["tool"].as_str().expect("mcp_call.tool");
+            let id = format!("toolu_{i}");
+            let use_line = json!({"type": "assistant", "message": {"content": [{
+                "type": "tool_use", "id": id, "name": format!("mcp__{server}__{tool}"),
+                "input": call["arguments"]}]}});
+            writeln!(stdout, "{use_line}").unwrap();
+            stdout.flush().unwrap();
+            let params = json!({"name": tool, "arguments": call["arguments"]});
+            let answer = gateway(mcp, server, "tools/call", params).await;
+            let result = &answer["result"];
+            let text: Vec<&str> = result["content"]
+                .as_array()
+                .map(|parts| parts.iter().filter_map(|p| p["text"].as_str()).collect())
+                .unwrap_or_default();
+            let line = json!({"type": "user", "message": {"role": "user", "content": [{
+                "type": "tool_result", "tool_use_id": id, "content": text.join("\n"),
+                "is_error": result["isError"].as_bool().unwrap_or(false)}]}});
+            writeln!(stdout, "{line}").unwrap();
+            stdout.flush().unwrap();
         }
     }
+}
+
+/// Every file below `dir`, as paths relative to it with `/`, sorted.
+fn files_below(dir: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(next) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&next) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+            } else {
+                let rel = path.strip_prefix(dir).unwrap();
+                let parts: Vec<String> = rel
+                    .components()
+                    .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                    .collect();
+                out.push(parts.join("/"));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// Sends `method` to the `--mcp-config` entry `server`, after `initialize`, as the CLI reaches
+/// an MCP server over http. Returns the JSON-RPC answer.
+async fn gateway(mcp: &Value, server: &str, method: &str, params: Value) -> Value {
+    let entry = &mcp["mcpServers"][server];
+    let url = entry["url"].as_str().expect("an http entry");
+    let auth = entry["headers"]["Authorization"]
+        .as_str()
+        .expect("an auth header");
+    let client = reqwest::Client::new();
+    let post = |body: Value| {
+        client
+            .post(url)
+            .header("Authorization", auth)
+            .header("Accept", "application/json, text/event-stream")
+            .json(&body)
+            .send()
+    };
+    post(json!({"jsonrpc": "2.0", "id": 0, "method": "initialize",
+        "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                   "clientInfo": {"name": "fake-claude", "version": "0"}}}))
+    .await
+    .expect("initialize");
+    post(json!({"jsonrpc": "2.0", "method": "notifications/initialized"}))
+        .await
+        .expect("initialized");
+    post(json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}))
+        .await
+        .expect(method)
+        .json()
+        .await
+        .expect("a JSON answer")
 }

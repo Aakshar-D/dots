@@ -20,18 +20,55 @@ pub fn parse_line(line: &str) -> Vec<EngineEvent> {
     };
     match v.get("type").and_then(Value::as_str) {
         Some("system") if v.get("subtype").and_then(Value::as_str) == Some("init") => {
-            match v.get("session_id").and_then(Value::as_str) {
-                Some(s) => vec![EngineEvent::SessionStarted {
+            let mut out: Vec<EngineEvent> = v
+                .get("session_id")
+                .and_then(Value::as_str)
+                .map(|s| EngineEvent::SessionStarted {
                     session_id: s.to_string(),
-                }],
-                None => raw(),
+                })
+                .into_iter()
+                .collect();
+            out.extend(plugin_errors(&v));
+            if out.is_empty() {
+                return raw();
             }
+            out
         }
         Some("assistant") => blocks(&v).iter().filter_map(assistant_block).collect(),
         Some("user") => blocks(&v).iter().filter_map(tool_result_block).collect(),
         Some("result") => result_events(&v),
         _ => raw(),
     }
+}
+
+/// The plugins the CLI could not load, from `system/init`'s `plugin_errors` (MCP/skills spec
+/// section 7), each as a notice. Its entries' shape is not documented, so an object is read for
+/// a plugin name (`plugin`, `name` or `source`) and an error (`error` or `message`), a string
+/// is the error, and anything else is shown as JSON.
+fn plugin_errors(init: &Value) -> Vec<EngineEvent> {
+    let Some(errors) = init.get("plugin_errors").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let field = |e: &Value, keys: &[&str]| {
+        keys.iter()
+            .find_map(|k| e.get(*k).and_then(Value::as_str))
+            .map(str::to_string)
+    };
+    errors
+        .iter()
+        .map(|e| {
+            let error = match e {
+                Value::String(s) => Some(s.clone()),
+                _ => field(e, &["error", "message"]),
+            };
+            let text = match (field(e, &["plugin", "name", "source"]), error) {
+                (Some(plugin), Some(error)) => format!("plugin {plugin}: {error}"),
+                (None, Some(error)) => format!("plugin error: {error}"),
+                _ => format!("plugin error: {e}"),
+            };
+            EngineEvent::Notice { text }
+        })
+        .collect()
 }
 
 fn blocks(v: &Value) -> Vec<Value> {

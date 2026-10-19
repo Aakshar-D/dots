@@ -5,7 +5,9 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use common::fake_dot;
-use dots_core::engine::claude::args::{build_args, mcp_config, resolve_claude, resolve_in_dirs};
+use dots_core::engine::claude::args::{
+    build_args, gateway_entry, mcp_config, resolve_claude, resolve_in_dirs,
+};
 use dots_core::engine::claude::parse::parse_line;
 use dots_core::engine::{EngineEvent, RunContext};
 use dots_core::model::WorkspaceMode;
@@ -129,7 +131,6 @@ fn ctx(session: Option<&str>) -> RunContext {
     dot.spec.model = "haiku".into();
     dot.spec.max_turns = 12;
     dot.spec.policy = Policy::preset(Preset::ReadOnly);
-    dot.spec.mcp_servers = Some(json!({"sf": {"type": "stdio", "command": "sf-mcp"}}));
     RunContext {
         run_id: "RUN1".into(),
         dot,
@@ -140,6 +141,7 @@ fn ctx(session: Option<&str>) -> RunContext {
         mcp_secret: "SECRET".into(),
         cancel: CancellationToken::new(),
         approved_calls: Vec::new(),
+        tools: Default::default(),
     }
 }
 
@@ -151,7 +153,7 @@ fn argv_contains_required_flags_in_order() {
         joined.starts_with(
             "-p --output-format stream-json --verbose --model haiku --max-turns 12 \
          --permission-prompt-tool mcp__dots__approve --mcp-config C:/data/mcp-RUN1.json \
-         --strict-mcp-config --setting-sources  --allowedTools Read LS Glob Grep \
+         --strict-mcp-config --setting-sources  --allowedTools Read LS Glob Grep Skill \
          --disallowedTools Write Edit NotebookEdit Bash PowerShell"
         ),
         "{joined}"
@@ -177,18 +179,45 @@ fn argv_resume_and_user_settings() {
 }
 
 #[test]
-fn mcp_config_merges_dot_servers_and_adds_dots() {
-    let cfg = mcp_config(&ctx(None));
-    assert_eq!(cfg["mcpServers"]["sf"]["command"], "sf-mcp");
-    assert_eq!(cfg["mcpServers"]["dots"]["type"], "http");
+fn mcp_config_lists_dots_and_a_gateway_entry_per_open_server() {
+    // No open session: Dots' own server only.
     assert_eq!(
-        cfg["mcpServers"]["dots"]["url"],
-        "http://127.0.0.1:47321/mcp"
+        mcp_config(&ctx(None)),
+        json!({"mcpServers": {"dots": {"type": "http", "url": "http://127.0.0.1:47321/mcp",
+               "headers": {"Authorization": "Bearer SECRET"}}}})
     );
+    // An open session is reached through the gateway with the run's secret, never directly.
     assert_eq!(
-        cfg["mcpServers"]["dots"]["headers"]["Authorization"],
-        "Bearer SECRET"
+        gateway_entry("http://127.0.0.1:47321/mcp", "SECRET", "sf"),
+        json!({"type": "http", "url": "http://127.0.0.1:47321/mcp/s/sf",
+               "headers": {"Authorization": "Bearer SECRET"}})
     );
+}
+
+#[test]
+fn init_plugin_errors_become_notices() {
+    let line = json!({"type": "system", "subtype": "init", "session_id": "s1", "plugin_errors": [
+        {"plugin": "forms", "error": "manifest is not valid JSON"},
+        {"message": "no plugin.json"},
+        "dots-skills: skills/pdf has no SKILL.md",
+        {"code": 7}
+    ]})
+    .to_string();
+    let notice = |text: &str| EngineEvent::Notice { text: text.into() };
+    assert_eq!(
+        parse_line(&line),
+        vec![
+            EngineEvent::SessionStarted {
+                session_id: "s1".into()
+            },
+            notice("plugin forms: manifest is not valid JSON"),
+            notice("plugin error: no plugin.json"),
+            notice("plugin error: dots-skills: skills/pdf has no SKILL.md"),
+            notice(r#"plugin error: {"code":7}"#),
+        ]
+    );
+    // An init without errors is the session alone, as before.
+    assert_eq!(parse_line(INIT).len(), 1);
 }
 
 #[test]

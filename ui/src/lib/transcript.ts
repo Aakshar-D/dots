@@ -12,6 +12,8 @@ export type TranscriptItem =
       result: { output: string; isError: boolean } | null;
     }
   | { type: "error"; seq: number; text: string }
+  /// What Dots says about the run itself: an item left out, a server held.
+  | { type: "note"; seq: number; text: string }
   /// Something the transcript does not render as conversation; shown collapsed.
   | { type: "raw"; seq: number; label: string; text: string };
 
@@ -73,6 +75,9 @@ export function transcriptItems(events: RunEventRecord[]): TranscriptItem[] {
         break;
       case "raw":
         items.push({ type: "raw", seq: record.seq, label: "Unparsed output", text: event.line });
+        break;
+      case "notice":
+        items.push({ type: "note", seq: record.seq, text: event.text });
         break;
       case "session_started":
       case "usage":

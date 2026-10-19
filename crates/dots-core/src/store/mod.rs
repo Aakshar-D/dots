@@ -8,9 +8,11 @@ use crate::Result;
 
 mod approvals;
 mod dots;
+mod library;
 mod runs;
 mod schedules;
 mod settings;
+mod upgrade;
 
 /// The database file inside the data directory.
 pub const DB_FILE: &str = "dots.db";
@@ -21,7 +23,8 @@ pub struct Store {
 }
 
 impl Store {
-    /// Opens (creating if needed) the database file and applies migrations.
+    /// Opens (creating if needed) the database file and applies migrations, with the part of
+    /// migration 0006 that needs code (`upgrade.rs`).
     pub async fn open(path: &Path) -> Result<Store> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -37,6 +40,7 @@ impl Store {
             .connect_with(opts)
             .await?;
         sqlx::migrate!("./migrations").run(&pool).await?;
+        upgrade::finish_0006(&pool).await?;
         Ok(Store { pool })
     }
 

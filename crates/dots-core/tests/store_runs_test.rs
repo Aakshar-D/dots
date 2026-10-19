@@ -936,7 +936,7 @@ async fn resume_parked_refuses_to_queue_a_call_dots_is_not_to_perform() {
         let err = store
             .resume_parked(
                 &parent.id,
-                &[("Bash".into(), "k".into())],
+                &[("Bash".into(), "k".into(), None)],
                 &all,
                 &[own.id.clone(), bad.clone()],
                 Some(&new),

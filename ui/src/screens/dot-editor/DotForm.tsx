@@ -13,10 +13,11 @@ import type { SpecErrors } from "@/lib/dot-rules";
 import { notifyError } from "@/lib/notify";
 import { PolicyEditor } from "@/screens/dot-editor/PolicyEditor";
 import { ScheduleEditor, type SchedulePreview } from "@/screens/dot-editor/ScheduleEditor";
+import { ToolsAndSkills } from "@/screens/dot-editor/ToolsAndSkills";
 import { WebhookPanel } from "@/screens/dot-editor/WebhookPanel";
 
-/// What the editor holds: the spec, and the MCP servers as the text being typed.
-export type Draft = { spec: DotSpec; mcpText: string };
+/// What the editor holds. The Library items the dot uses (`spec.uses`) are kept as they are.
+export type Draft = { spec: DotSpec };
 
 function Section(props: { title: string; children: ReactNode }) {
   return (
@@ -204,6 +205,14 @@ export function DotForm(props: {
         />
       </Section>
 
+      <Section title="Tools and skills">
+        <ToolsAndSkills
+          uses={spec.uses}
+          engine={spec.engine}
+          onChange={(uses) => set("uses", uses)}
+        />
+      </Section>
+
       <Section title="Limits">
         <NumberField
           id="dot-max-turns"
@@ -231,20 +240,6 @@ export function DotForm(props: {
 
       {spec.engine === "claude" && (
         <Section title="Claude Code">
-          <Field
-            label="MCP servers"
-            htmlFor="dot-mcp"
-            error={errors.mcp_servers}
-            hint='A JSON object, as in a Claude Code "mcpServers" block. Empty: none.'
-          >
-            <Textarea
-              id="dot-mcp"
-              rows={5}
-              className="font-mono"
-              value={draft.mcpText}
-              onChange={(e) => props.onChange({ ...draft, mcpText: e.target.value })}
-            />
-          </Field>
           <div className="flex items-center gap-2">
             <Switch
               id="dot-user-settings"

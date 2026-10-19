@@ -9,6 +9,7 @@
       "command": "git push origin main"
     },
     "input_hash": "h1",
+    "mcp_fingerprint": null,
     "note": null,
     "parked": false,
     "resolved": false,
@@ -59,7 +60,17 @@
     "worktree_diff",
     "discard_worktree",
     "mark_reviewed",
-    "open_run_folder"
+    "open_run_folder",
+    "library_list",
+    "library_add",
+    "library_update",
+    "library_remove",
+    "library_probe",
+    "library_check",
+    "library_accept",
+    "library_scan_skills",
+    "installed_claude_plugins",
+    "environment_variables"
   ],
   "Dot": {
     "approval_wait_secs": 240,
@@ -70,16 +81,11 @@
     "id": "01J0DOT",
     "instructions": "Run the tests and summarize failures.",
     "max_turns": 40,
-    "mcp_servers": {
-      "github": {
-        "type": "http",
-        "url": "http://127.0.0.1:9000/mcp"
-      }
-    },
     "model": "sonnet",
     "name": "nightly-tests",
     "policy": {
       "default": "ask",
+      "mcp_default": "ask",
       "preset": "sandboxed",
       "rules": [
         {
@@ -149,6 +155,10 @@
         {
           "action": "deny",
           "tool": "Edit(**/.claude)"
+        },
+        {
+          "action": "allow",
+          "tool": "Skill"
         }
       ]
     },
@@ -163,6 +173,17 @@
     "timeout_secs": 1800,
     "updated_at": "2026-10-09T12:00:00.000Z",
     "use_user_settings": false,
+    "uses": {
+      "mcp_servers": [
+        "github"
+      ],
+      "plugins": [
+        "pdf-tools"
+      ],
+      "skills": [
+        "pdf"
+      ]
+    },
     "webhook_token": "tok_abc",
     "workdir": "C:/dev/app",
     "workspace_mode": "worktree"
@@ -178,16 +199,11 @@
       "id": "01J0DOT",
       "instructions": "Run the tests and summarize failures.",
       "max_turns": 40,
-      "mcp_servers": {
-        "github": {
-          "type": "http",
-          "url": "http://127.0.0.1:9000/mcp"
-        }
-      },
       "model": "sonnet",
       "name": "nightly-tests",
       "policy": {
         "default": "ask",
+        "mcp_default": "ask",
         "preset": "sandboxed",
         "rules": [
           {
@@ -257,6 +273,10 @@
           {
             "action": "deny",
             "tool": "Edit(**/.claude)"
+          },
+          {
+            "action": "allow",
+            "tool": "Skill"
           }
         ]
       },
@@ -271,6 +291,17 @@
       "timeout_secs": 1800,
       "updated_at": "2026-10-09T12:00:00.000Z",
       "use_user_settings": false,
+      "uses": {
+        "mcp_servers": [
+          "github"
+        ],
+        "plugins": [
+          "pdf-tools"
+        ],
+        "skills": [
+          "pdf"
+        ]
+      },
       "webhook_token": "tok_abc",
       "workdir": "C:/dev/app",
       "workspace_mode": "worktree"
@@ -318,11 +349,11 @@
     "engine": "local",
     "instructions": "Tidy the notes folder.",
     "max_turns": 40,
-    "mcp_servers": null,
     "model": "google/gemma-4-12b-qat",
     "name": "notes",
     "policy": {
       "default": "deny",
+      "mcp_default": "deny",
       "preset": "read-only",
       "rules": [
         {
@@ -360,12 +391,21 @@
         {
           "action": "deny",
           "tool": "PowerShell"
+        },
+        {
+          "action": "allow",
+          "tool": "Skill"
         }
       ]
     },
     "schedule": null,
     "timeout_secs": 1800,
     "use_user_settings": false,
+    "uses": {
+      "mcp_servers": [],
+      "plugins": [],
+      "skills": []
+    },
     "workdir": "C:/notes",
     "workspace_mode": "folder"
   },
@@ -389,6 +429,12 @@
       "denied",
       "expired"
     ],
+    "CatalogStatus": [
+      "accepted",
+      "changed",
+      "unreachable",
+      "unchecked"
+    ],
     "CmdErrorKind": [
       "not_found",
       "invalid",
@@ -405,6 +451,11 @@
       "modified",
       "deleted",
       "renamed"
+    ],
+    "LibraryKind": [
+      "mcp_server",
+      "skill",
+      "plugin"
     ],
     "Preset": [
       "read-only",
@@ -437,6 +488,16 @@
       "folder"
     ]
   },
+  "EnvVariable": [
+    {
+      "name": "GITHUB_TOKEN",
+      "set": false
+    },
+    {
+      "name": "PATH",
+      "set": true
+    }
+  ],
   "Inbox": {
     "approvals": [
       {
@@ -451,6 +512,7 @@
           "command": "git push origin main"
         },
         "input_hash": "h1",
+        "mcp_fingerprint": null,
         "note": null,
         "parked": false,
         "resolved": false,
@@ -496,14 +558,406 @@
         "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN",
         "worktree_exists": true
       }
+    ],
+    "tools_changed": [
+      {
+        "dots": [
+          {
+            "id": "01J0DOT",
+            "name": "nightly-tests"
+          }
+        ],
+        "name": "github",
+        "server_id": "01J0SRV"
+      }
     ]
   },
+  "InstalledPlugin": [
+    {
+      "exists": true,
+      "id": "pdf-tools@market",
+      "install_path": "C:/Users/u/.claude/plugins/cache/market/pdf-tools/1.2.0",
+      "marketplace": "market",
+      "name": "pdf-tools",
+      "scope": "user",
+      "version": "1.2.0"
+    }
+  ],
+  "LibraryConfig": [
+    {
+      "config": {
+        "args": [
+          "-y",
+          "@modelcontextprotocol/server-github"
+        ],
+        "command": "npx",
+        "cwd": null,
+        "env": {
+          "GITHUB_TOKEN": "${GITHUB_TOKEN}"
+        },
+        "transport": "stdio"
+      },
+      "kind": "mcp_server"
+    },
+    {
+      "config": {
+        "headers": {
+          "Authorization": "Bearer ${EXAMPLE_TOKEN}"
+        },
+        "transport": "http",
+        "url": "https://mcp.example.com/mcp"
+      },
+      "kind": "mcp_server"
+    },
+    {
+      "config": {
+        "path": "C:/skills/pdf"
+      },
+      "kind": "skill"
+    },
+    {
+      "config": {
+        "installed_id": "pdf-tools@market",
+        "path": "C:/plugins/pdf-tools",
+        "run_hooks": false
+      },
+      "kind": "plugin"
+    }
+  ],
+  "LibraryEntry": [
+    {
+      "catalog": {
+        "accepted_fingerprint": "fp-accepted",
+        "accepted_tools": [
+          {
+            "annotations": {
+              "readOnlyHint": true
+            },
+            "description": "Search the issues of a repository.",
+            "inputSchema": {
+              "properties": {
+                "query": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "name": "search_issues",
+            "title": "Search issues"
+          }
+        ],
+        "checked_at": "2026-10-09T12:00:00.000Z",
+        "error": null,
+        "seen_fingerprint": "fp-seen",
+        "seen_tools": [
+          {
+            "annotations": {
+              "readOnlyHint": true
+            },
+            "description": "Search the issues of a repository.",
+            "inputSchema": {
+              "properties": {
+                "query": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "name": "search_issues",
+            "title": "Search issues"
+          }
+        ],
+        "server_id": "01J0SRV",
+        "status": "changed"
+      },
+      "config": {
+        "args": [
+          "-y",
+          "@modelcontextprotocol/server-github"
+        ],
+        "command": "npx",
+        "cwd": null,
+        "env": {
+          "GITHUB_TOKEN": "${GITHUB_TOKEN}"
+        },
+        "transport": "stdio"
+      },
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "id": "01J0SRV",
+      "kind": "mcp_server",
+      "missing_variables": [
+        "GITHUB_TOKEN"
+      ],
+      "name": "github",
+      "owner_id": null,
+      "plugin": null,
+      "problem": null,
+      "skill": null,
+      "updated_at": "2026-10-09T12:00:00.000Z",
+      "used_by": [
+        {
+          "id": "01J0DOT",
+          "name": "nightly-tests"
+        }
+      ]
+    },
+    {
+      "catalog": {
+        "accepted_fingerprint": "fp-accepted",
+        "accepted_tools": [
+          {
+            "annotations": {
+              "readOnlyHint": true
+            },
+            "description": "Search the issues of a repository.",
+            "inputSchema": {
+              "properties": {
+                "query": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "name": "search_issues",
+            "title": "Search issues"
+          }
+        ],
+        "checked_at": "2026-10-09T12:00:00.000Z",
+        "error": null,
+        "seen_fingerprint": "fp-seen",
+        "seen_tools": [
+          {
+            "annotations": {
+              "readOnlyHint": true
+            },
+            "description": "Search the issues of a repository.",
+            "inputSchema": {
+              "properties": {
+                "query": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "name": "search_issues",
+            "title": "Search issues"
+          }
+        ],
+        "server_id": "01J0SRV",
+        "status": "accepted"
+      },
+      "config": {
+        "headers": {
+          "Authorization": "Bearer ${EXAMPLE_TOKEN}"
+        },
+        "transport": "http",
+        "url": "https://mcp.example.com/mcp"
+      },
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "id": "01J0SRV2",
+      "kind": "mcp_server",
+      "missing_variables": [],
+      "name": "plugin-pdf-tools-render",
+      "owner_id": "01J0PLG",
+      "plugin": null,
+      "problem": null,
+      "skill": null,
+      "updated_at": "2026-10-09T12:00:00.000Z",
+      "used_by": [
+        {
+          "id": "01J0DOT",
+          "name": "nightly-tests"
+        }
+      ]
+    },
+    {
+      "catalog": null,
+      "config": {
+        "path": "C:/skills/pdf"
+      },
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "id": "01J0SKL",
+      "kind": "skill",
+      "missing_variables": [],
+      "name": "pdf",
+      "owner_id": null,
+      "plugin": null,
+      "problem": "SKILL.md not found",
+      "skill": {
+        "description": "Fill and read PDF forms."
+      },
+      "updated_at": "2026-10-09T12:00:00.000Z",
+      "used_by": []
+    },
+    {
+      "catalog": null,
+      "config": {
+        "installed_id": "pdf-tools@market",
+        "path": "C:/plugins/pdf-tools",
+        "run_hooks": false
+      },
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "id": "01J0PLG",
+      "kind": "plugin",
+      "missing_variables": [],
+      "name": "pdf-tools",
+      "owner_id": null,
+      "plugin": {
+        "agents": [
+          "reviewer"
+        ],
+        "commands": [
+          "split"
+        ],
+        "description": "PDF tools.",
+        "has_hooks": true,
+        "servers": [
+          "plugin-pdf-tools-render"
+        ],
+        "skills": [
+          "pdf-tools:merge"
+        ],
+        "version": "1.2.0",
+        "warnings": [
+          "agents/broken.md: could not be read"
+        ]
+      },
+      "problem": null,
+      "skill": null,
+      "updated_at": "2026-10-09T12:00:00.000Z",
+      "used_by": [
+        {
+          "id": "01J0DOT",
+          "name": "nightly-tests"
+        }
+      ]
+    }
+  ],
+  "LibraryItem": [
+    {
+      "config": {
+        "args": [
+          "-y",
+          "@modelcontextprotocol/server-github"
+        ],
+        "command": "npx",
+        "cwd": null,
+        "env": {
+          "GITHUB_TOKEN": "${GITHUB_TOKEN}"
+        },
+        "transport": "stdio"
+      },
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "id": "01J0SRV",
+      "kind": "mcp_server",
+      "name": "github",
+      "owner_id": null,
+      "updated_at": "2026-10-09T12:00:00.000Z"
+    },
+    {
+      "config": {
+        "path": "C:/skills/pdf"
+      },
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "id": "01J0SKL",
+      "kind": "skill",
+      "name": "pdf",
+      "owner_id": null,
+      "updated_at": "2026-10-09T12:00:00.000Z"
+    }
+  ],
   "Limits": {
     "max_approval_wait_secs": 280,
     "max_concurrent_runs": 16,
     "max_schedule_attempts": 6,
     "max_timeout_secs": 604800
   },
+  "McpCatalog": {
+    "accepted_fingerprint": "fp-accepted",
+    "accepted_tools": [
+      {
+        "annotations": {
+          "readOnlyHint": true
+        },
+        "description": "Search the issues of a repository.",
+        "inputSchema": {
+          "properties": {
+            "query": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "name": "search_issues",
+        "title": "Search issues"
+      }
+    ],
+    "checked_at": "2026-10-09T12:00:00.000Z",
+    "error": null,
+    "seen_fingerprint": "fp-seen",
+    "seen_tools": [
+      {
+        "annotations": {
+          "readOnlyHint": true
+        },
+        "description": "Search the issues of a repository.",
+        "inputSchema": {
+          "properties": {
+            "query": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "name": "search_issues",
+        "title": "Search issues"
+      }
+    ],
+    "server_id": "01J0SRV",
+    "status": "changed"
+  },
+  "McpProbe": {
+    "fingerprint": "fp-seen",
+    "tools": [
+      {
+        "annotations": {
+          "readOnlyHint": true
+        },
+        "description": "Search the issues of a repository.",
+        "inputSchema": {
+          "properties": {
+            "query": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "name": "search_issues",
+        "title": "Search issues"
+      }
+    ]
+  },
+  "McpServerConfig": [
+    {
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-github"
+      ],
+      "command": "npx",
+      "cwd": null,
+      "env": {
+        "GITHUB_TOKEN": "${GITHUB_TOKEN}"
+      },
+      "transport": "stdio"
+    },
+    {
+      "headers": {
+        "Authorization": "Bearer ${EXAMPLE_TOKEN}"
+      },
+      "transport": "http",
+      "url": "https://mcp.example.com/mcp"
+    }
+  ],
   "NewDotSpec": {
     "approval_wait_secs": 240,
     "enabled": true,
@@ -511,11 +965,11 @@
     "engine": "claude",
     "instructions": "",
     "max_turns": 40,
-    "mcp_servers": null,
     "model": "sonnet",
     "name": "",
     "policy": {
       "default": "ask",
+      "mcp_default": "ask",
       "preset": "sandboxed",
       "rules": [
         {
@@ -585,12 +1039,21 @@
         {
           "action": "deny",
           "tool": "Edit(**/.claude)"
+        },
+        {
+          "action": "allow",
+          "tool": "Skill"
         }
       ]
     },
     "schedule": null,
     "timeout_secs": 1800,
     "use_user_settings": false,
+    "uses": {
+      "mcp_servers": [],
+      "plugins": [],
+      "skills": []
+    },
     "workdir": "",
     "workspace_mode": "worktree"
   },
@@ -678,6 +1141,10 @@
     {
       "error": "timeout",
       "kind": "failed"
+    },
+    {
+      "kind": "notice",
+      "text": "skill pdf: folder not found"
     }
   ],
   "RunEventRecord": {
@@ -751,6 +1218,7 @@
           "command": "git push origin main"
         },
         "input_hash": "h1",
+        "mcp_fingerprint": null,
         "note": null,
         "parked": false,
         "resolved": false,
@@ -772,6 +1240,7 @@
           "command": "git push origin main"
         },
         "input_hash": "h1",
+        "mcp_fingerprint": null,
         "note": "not on main",
         "parked": true,
         "resolved": false,
@@ -793,6 +1262,7 @@
           "command": "git push origin main"
         },
         "input_hash": "h1",
+        "mcp_fingerprint": null,
         "note": null,
         "parked": true,
         "resolved": true,
@@ -808,10 +1278,28 @@
       "type": "schedule_updated"
     },
     {
+      "item_id": "01J0SRV",
+      "type": "library_updated"
+    },
+    {
       "dot_id": "01J0DOT",
       "error": "model server unreachable",
       "run_id": "01J0RUN",
       "type": "schedule_attention"
+    }
+  ],
+  "ScannedSkill": [
+    {
+      "description": "Fill and read PDF forms.",
+      "name": "pdf",
+      "name_error": null,
+      "path": "C:/skills/pdf"
+    },
+    {
+      "description": "",
+      "name": "bad name",
+      "name_error": "skill name \"bad name\": use A-Z, a-z, 0-9",
+      "path": "C:/skills/bad"
     }
   ],
   "Schedule": [

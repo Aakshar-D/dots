@@ -40,6 +40,7 @@ fn runner_with(
             mcp_url: "http://127.0.0.1:1/mcp".into(),
             worktrees_dir: dir.path().join("wt"),
             cancel_grace: Duration::from_millis(200),
+            plugins_dir: dir.path().join("plugins"),
         },
     )
 }
@@ -474,4 +475,85 @@ async fn panicking_engine_fails_the_run_and_frees_the_slot() {
         );
     }
     assert!(!runner.is_active("anything"));
+}
+
+/// Keeps the context of each run it is started with, and finishes it.
+#[derive(Default)]
+struct CapturingEngine(std::sync::Mutex<Vec<dots_core::engine::RunContext>>);
+
+#[async_trait::async_trait]
+impl Engine for CapturingEngine {
+    async fn start(
+        &self,
+        ctx: dots_core::engine::RunContext,
+    ) -> dots_core::Result<tokio::sync::mpsc::Receiver<EngineEvent>> {
+        self.0.lock().unwrap().push(ctx);
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        tx.send(EngineEvent::Finished {
+            summary: "done".into(),
+        })
+        .await
+        .unwrap();
+        Ok(rx)
+    }
+}
+
+#[tokio::test]
+async fn a_run_gets_its_tools_records_what_was_left_out_and_closes_them_at_the_end() {
+    use common::fake_mcp::{tool, FakeMcp};
+    use dots_core::library::{LibraryConfig, SkillConfig};
+    use dots_core::library_service::LibraryService;
+    let (dir, store) = temp_store().await;
+    let bus = new_bus();
+    let engine = Arc::new(CapturingEngine::default());
+    let runner = runner_with(&store, &bus, &dir, engine.clone(), 1);
+    runner.spawn_dispatcher(CancellationToken::new());
+    let lib = LibraryService::new(store.clone(), bus.clone());
+    let fake = FakeMcp::new(json!({"tools": [tool("read", true)]}));
+    let probe = lib.probe(&fake.stdio()).await.unwrap();
+    lib.add(
+        "files",
+        LibraryConfig::McpServer(fake.stdio()),
+        Some(&probe.fingerprint),
+    )
+    .await
+    .unwrap();
+    let gone = dir.path().join("gone");
+    std::fs::create_dir_all(&gone).unwrap();
+    std::fs::write(gone.join("SKILL.md"), "---\nname: gone\n---\nBody.\n").unwrap();
+    lib.add(
+        "gone",
+        LibraryConfig::Skill(SkillConfig {
+            path: gone.to_string_lossy().into_owned(),
+        }),
+        None,
+    )
+    .await
+    .unwrap();
+    std::fs::remove_dir_all(&gone).unwrap();
+    let mut s = spec("tools");
+    s.workdir = dir.path().to_string_lossy().to_string();
+    s.workspace_mode = WorkspaceMode::Folder;
+    s.uses.mcp_servers = vec!["files".into()];
+    s.uses.skills = vec!["gone".into()];
+    let dot = store.create_dot(&s).await.unwrap();
+    let id = manual(&runner, &dot).await;
+    wait_status(&store, &id, RunStatus::Succeeded, 15).await;
+    {
+        let started = engine.0.lock().unwrap();
+        let tools = &started[0].tools;
+        let srv = tools
+            .server("files")
+            .expect("the engine got the open session");
+        assert!(!srv.held());
+        assert!(srv.session().is_stopped(), "closed when the run ended");
+    }
+    assert!(fake.gone_within(Duration::from_secs(10)).await);
+    let events = store.list_events(&id, 0).await.unwrap();
+    let kinds: Vec<&str> = events.iter().map(|e| e.kind.as_str()).collect();
+    assert_eq!(kinds, ["notice", "finished"]);
+    assert_eq!(
+        events[0].data,
+        json!({"kind": "notice", "text": "skill gone: folder not found"})
+    );
 }

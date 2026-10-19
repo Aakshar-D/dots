@@ -15,6 +15,7 @@ use crate::engine::local::client::DEFAULT_RETRY_DELAYS;
 use crate::engine::local::{self, LocalEngine};
 use crate::engine::{Engine, UnavailableEngine};
 use crate::events::{new_bus, Bus, RuntimeEvent};
+use crate::library_service::LibraryService;
 use crate::model::{
     Approval, AttentionRun, ClaudeStatus, Dot, DotOverview, DotSpec, EngineKind, Inbox, NewRun,
     PendingApproval, ReviewRun, Run, RunEventRecord, RunStatus, ScheduleChange, ScheduleView,
@@ -76,6 +77,7 @@ pub struct Runtime {
     hub: Arc<ApprovalHub>,
     runner: Arc<Runner>,
     scheduler: Arc<Scheduler>,
+    library: LibraryService,
     clock: Arc<dyn Clock>,
     port: u16,
     server_error: Option<String>,
@@ -118,6 +120,8 @@ impl Runtime {
         if !recovered.is_empty() {
             tracing::warn!("marked {} interrupted run(s) as failed", recovered.len());
         }
+        // No run is running yet: plugin folders of runs are what a crash left behind.
+        crate::run_tools::sweep_plugin_folders(&cfg.data_dir.join("plugins"));
         // Every schedule has its row before the scheduler's first pass: a dot upgraded by
         // migration 0005 gets one now, and a row a failed change left stale is reset.
         for dot in store.list_dots().await? {
@@ -179,6 +183,7 @@ impl Runtime {
                 mcp_url: format!("http://127.0.0.1:{port}/mcp"),
                 worktrees_dir: cfg.data_dir.join("worktrees"),
                 cancel_grace: Duration::from_secs(10),
+                plugins_dir: cfg.data_dir.join("plugins"),
             },
         );
         // Decisions parked before a restart (decided, but the resume never happened) are
@@ -215,6 +220,7 @@ impl Runtime {
         scheduler.set_paused(settings.schedules_paused);
         scheduler.spawn(shutdown.clone());
         Ok(Runtime {
+            library: LibraryService::new(store.clone(), bus.clone()),
             store,
             bus,
             hub,
@@ -409,7 +415,8 @@ impl Runtime {
     }
 
     /// Pending approvals, the finished, unreviewed thread ends that failed or kept a worktree
-    /// with changes, and the schedules that need attention.
+    /// with changes, the schedules that need attention, and the MCP servers whose tool list
+    /// waits for review.
     pub async fn inbox(&self) -> Result<Inbox> {
         let mut names = std::collections::HashMap::new();
         for dot in self.store.list_dots().await? {
@@ -447,12 +454,16 @@ impl Runtime {
             approvals,
             review_runs,
             attention: self.store.list_schedule_attention().await?,
+            tools_changed: self.library.tools_changed().await?,
         })
     }
 
     pub async fn inbox_count(&self) -> Result<usize> {
         let inbox = self.inbox().await?;
-        Ok(inbox.approvals.len() + inbox.review_runs.len() + inbox.attention.len())
+        Ok(inbox.approvals.len()
+            + inbox.review_runs.len()
+            + inbox.attention.len()
+            + inbox.tools_changed.len())
     }
 
     /// Clears the dot's "Needs attention" (Scheduler v2 spec §8); the schedule is not
@@ -570,6 +581,11 @@ impl Runtime {
 
     pub fn store(&self) -> &Store {
         &self.store
+    }
+
+    /// The Library: what the `library_*` commands call (MCP/skills spec section 9).
+    pub fn library(&self) -> &LibraryService {
+        &self.library
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<RuntimeEvent> {

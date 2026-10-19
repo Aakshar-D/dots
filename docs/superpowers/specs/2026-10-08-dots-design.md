@@ -40,7 +40,7 @@ user's approval.
 ### Out of scope for v1
 
 Watchers (polling GitHub/SF/folders), connecting remote machines, multi-user, cloud hosting,
-MCP servers for local-engine dots, a CLI client, a separate daemon process.
+a CLI client, a separate daemon process.
 
 ### Constraint: subscription use
 
@@ -58,14 +58,32 @@ dots/
     src/schedule.rs          schedules (once, every, daily, weekly, cron) and their slots in local time
     src/scheduler.rs         the loop: a pass over the schedule rows (fire, catch up, skip,
                              complete), sleeping on a clock that tests move by hand
-    src/server/              axum on 127.0.0.1:<port>: webhooks + MCP permission endpoint
+    src/server/              axum on 127.0.0.1:<port>: webhooks + MCP permission endpoint + the
+                             MCP gateway of Claude runs (`/mcp/s/<server>`, MCP/skills spec §5)
+    src/mcp/                 MCP client: one session per Library MCP server for a run (a stdio
+                             child process in a Job Object, or Streamable HTTP), `${VAR}`
+                             expansion, tool-list fingerprints (MCP/skills spec §5)
+    src/kit/                 skills and plugins on disk: `SKILL.md` frontmatter, skill and plugin
+                             reading, Claude Code's installed plugins, and a Claude-engine run's
+                             plugin folders (copies without `.mcp.json`, `monitors/`, hooks
+                             unless allowed, `allowed-tools`, or names Windows reads as
+                             another file's; MCP/skills spec §7)
+    src/library_service.rs   the Library at runtime: add, change, remove (asking first when dots
+                             use an item), probe, check and accept a server's tool list, a
+                             plugin's own MCP server items, `LibraryUpdated` (MCP/skills spec §9)
+    src/run_tools.rs         a run's tools, opened before its engine starts and closed when it
+                             ends: MCP sessions checked against their catalogs (held when the
+                             list changed), skills, plugin folders, items left out as run events
     src/runner/              queue, concurrency, timeouts, cancellation, restart recovery
     src/engine/mod.rs        Engine trait + EngineEvent
-    src/engine/claude.rs     drives `claude -p` with stream-json I/O
-    src/engine/local.rs      own tool-use loop over OpenAI-compatible chat completions
+    src/engine/claude.rs     drives `claude -p` with stream-json I/O; the run's MCP servers
+                             through the gateway, its skills and plugins with `--plugin-dir`
+    src/engine/local.rs      own tool-use loop over OpenAI-compatible chat completions, with
+                             the run's MCP tools and the `skill` tool (MCP/skills spec §5, §7)
     src/tools/               built-in tools for the local engine
     src/policy/              allow/ask/deny resolution, one-shot grants
     src/workspace/           git worktree or plain folder per run
+    src/bin/fake-mcp.rs      test MCP server (stdio and http) scripted by a JSON file
   crates/fake-claude/        test binary that mimics `claude -p` stream-json output
   apps/dots-app/             Tauri 2 shell: starts runtime, tray, autostart, commands, events
   ui/                        React + Vite + TypeScript
@@ -99,6 +117,9 @@ pub enum EngineEvent {
     Usage { tokens_in: u64, tokens_out: u64 },
     Finished { summary: String },
     Failed { error: String },
+    // From MCP/skills: something about the run that is not the model's doing, recorded by
+    // the runner (a Library item left out, an MCP server that could not start or is held).
+    Notice { text: String },
 }
 ```
 
@@ -120,7 +141,12 @@ Stored at `%LOCALAPPDATA%\dots\dots.db`. Worktrees at `%LOCALAPPDATA%\dots\workt
   its schedule changes, not when it is loaded. The core sets an `every` rule's `anchor`.
   `timezone` TEXT (default local, unused: schedules use the PC's local time)
 - `webhook_token` TEXT (random 32 bytes, base64url)
-- `policy` TEXT (JSON, see §5), `mcp_servers` TEXT NULL (JSON, Claude only)
+- `policy` TEXT (JSON, see §5)
+- `uses` TEXT (JSON, migration 0006): the Library items the dot uses, by name,
+  `{"mcp_servers": [...], "skills": [...], "plugins": [...]}`; both engines. Saving a dot refuses
+  a name the Library does not have (a plugin's MCP server is not named: it comes with the
+  plugin); removing a Library item removes its name here. It replaces `mcp_servers` (the old
+  per-dot JSON, Claude only), which 0006 drops.
 - `use_user_settings` INTEGER (0/1, default 0)
 - `max_turns` INTEGER (default 40), `timeout_secs` INTEGER (default 1800, max 604800),
   `approval_wait_secs` INTEGER (default 240, max 280)
@@ -154,6 +180,23 @@ Stored at `%LOCALAPPDATA%\dots\dots.db`. Worktrees at `%LOCALAPPDATA%\dots\workt
 - `self_apply` INTEGER (0/1), `apply_state` TEXT NULL (`queued` | `applying` | `applied` |
   `failed` | `unknown` | `skipped`), `applied_at` TEXT NULL (migration 0004; see
   `2026-10-13-approvals-v2-design.md` §3.4)
+- `mcp_fingerprint` TEXT NULL (migration 0006): for an MCP call, the server's accepted
+  fingerprint when it was asked (`2026-10-15-mcp-skills-plugins-design.md` §4)
+
+**library_items** (migration 0006; MCP/skills spec §2) — the Library: `id` PK (ULID), `kind`
+(`mcp_server` | `skill` | `plugin`), `name` (UNIQUE with `kind`; an MCP server's matches
+`^[a-z0-9_-]{1,40}$`, without `__`, neither starting nor ending with `_`, not `dots`; a skill's or plugin's is 1-64 of `A-Za-z0-9._-`
+starting with a letter or digit), `config` (JSON of the kind: an MCP server's
+`{"transport": "stdio", "command", "args", "cwd", "env"}` or `{"transport": "http", "url",
+"headers"}` with `${VAR}` references, a skill's `{"path"}`, a plugin's `{"path", "installed_id",
+"run_hooks"}`), `owner_id` (FK `library_items`, ON DELETE CASCADE: the plugin an MCP server comes
+from), `created_at`, `updated_at`.
+
+**mcp_catalogs** (migration 0006; MCP/skills spec §3) — one row per MCP server: `server_id` PK
+(FK `library_items`, ON DELETE CASCADE), `accepted_fingerprint`, `accepted_tools`,
+`seen_fingerprint`, `seen_tools` (JSON tool lists), `status` (`accepted` | `changed` |
+`unreachable` | `unchecked`; a new server and a server whose config changed are `unchecked`),
+`checked_at`, `error`.
 
 **schedule_state** (migration 0005; Scheduler v2 spec §4) — one row per dot with a schedule:
 `dot_id` PK (FK `dots`, ON DELETE CASCADE), `rule_key` (the schedule's JSON when the row was
@@ -176,7 +219,20 @@ Migrations: `0002` adds `runs.reviewed_at`; `0003` adds the index
 `runs(root_run_id, queued_at, id)` that the Inbox query needs; `0004` adds the approval apply
 columns; `0005` converts each cron string in `dots.schedule` to
 `{"rule":{"kind":"cron","expr":...},"catch_up":false,"until":null}` (no catch-up, so an upgraded
-schedule behaves as before), adds `runs.retry_of` and creates `schedule_state`.
+schedule behaves as before), adds `runs.retry_of` and creates `schedule_state`; `0006` creates
+`library_items` and `mcp_catalogs`, adds `approvals.mcp_fingerprint`, `grants.mcp_fingerprint`
+and `dots.uses`, and drops
+`dots.mcp_servers`. Its conversion needs code, so the SQL keeps each dot's old servers in a
+table `upgrade_0006` and the store finishes it when it opens, in one transaction, then drops
+that table: each old server becomes an MCP server item (`unchecked`) ticked in the dot's `uses`,
+under a valid name made from the old one; dots with a server of the same name and config share
+one item, another config gets `<name>-2`, `-3`, ...; the dot's rules naming `mcp__<old>` are
+renamed; a secret-looking inline value becomes a variable (an env value `${<KEY>}`, an
+`Authorization` header `<scheme> ${<NAME>_TOKEN}` with the old value's scheme word, `Bearer`
+when it had none, another header `${<HEADER>}`); a server Dots
+cannot read is left out with a log line. Every stored policy without `mcp_default` gets it
+(`deny` for Read-only or a `deny` default, else `ask`), every stored policy gets a `Skill` allow
+rule when no rule names `Skill`, and a Trusted policy loses the preset's old `mcp__*` ask rule.
 
 All timestamps are RFC 3339 UTC strings.
 
@@ -199,7 +255,11 @@ From Approvals v2 an approved, parked approval is resolved in one of two ways, w
 approval itself records (`self_apply`): on an engine that performs approved calls itself (the
 local engine) the call is queued and the child run performs it before anything else; on every
 other engine a one-shot grant is written and the child run's prompt asks the model to issue
-the call again. See `2026-10-13-approvals-v2-design.md` §3.
+the call again. See `2026-10-13-approvals-v2-design.md` §3. From MCP/skills an approved call of
+an MCP tool is performed only while the server's accepted fingerprint is the one stored with the
+approval (`approvals.mcp_fingerprint`); otherwise it is skipped with "the tool changed since it
+was approved" (MCP/skills spec §4). On the Claude engine the grant carries that fingerprint
+(`grants.mcp_fingerprint`), and the retried call is checked against it (§5).
 
 ### Steps
 
@@ -288,10 +348,13 @@ the call again. See `2026-10-13-approvals-v2-design.md` §3.
     { "tool": "mcp__salesforce__*", "action": "ask" },
     { "tool": "WebFetch",           "action": "deny" }
   ],
-  "default": "ask"
+  "default": "ask",
+  "mcp_default": "ask"
 }
 ```
 
+- `mcp_default` is the action for an MCP tool that no rule and no read-only flag decides (see
+  `2026-10-15-mcp-skills-plugins-design.md` section 4). A policy without it reads as `ask`.
 - Tool patterns use Claude Code permission-rule syntax so they pass through unchanged to
   `--allowedTools` / `--disallowedTools`. The local engine matches the same syntax against its
   own tools, which are aliased: `read_file`→`Read`, `write_file`→`Write`, `edit_file`→`Edit`,
@@ -299,13 +362,25 @@ the call again. See `2026-10-13-approvals-v2-design.md` §3.
 - Resolution order: one-shot grant for (run lineage, tool, `input_hash`) → `deny` rules →
   `allow` rules → `ask` rules → `default`. From Approvals v2 a grant is written only for a
   dot whose engine does not perform approved calls itself, which is the Claude engine.
+- An MCP tool (`mcp__<server>__<tool>`) is resolved by the check of MCP/skills spec §4 instead
+  (`Policy::resolve_mcp`: `deny` rules → held server or a tool not in the accepted list asks →
+  `allow` rules → `ask` rules → the accepted list's `readOnlyHint` allows → `mcp_default`),
+  through the same approval queue (`PermissionGate::check_mcp`). Its approval stores the
+  server's accepted fingerprint (`approvals.mcp_fingerprint`). The local engine never gets a
+  grant for it. The Claude engine's retry does: `check_mcp` uses up a grant of the call first
+  and allows it only while the server's accepted fingerprint is the one the grant carries
+  (`grants.mcp_fingerprint`, the approval's); otherwise the call is not performed, with "the tool
+  changed since it was approved".
 - From Approvals v2 an approval can save an allow rule to the dot's policy, in one transaction
   with the decision (`decide_approval` with `allow_rule`). Only a pattern that
   `policy::allow_candidates` derives from that very call is accepted, so the caller cannot
-  widen the policy at will; the policy's preset becomes `custom`. The pending approvals of one
+  widen the policy at will; the policy's preset becomes `custom`. For an MCP tool the candidates
+  are `mcp__<server>__<tool>` and `mcp__<server>__*`. The pending approvals of one
   run can also be decided together (`decide_run_approvals`): in the order they were asked,
   with one resume, and without a rule. See `2026-10-13-approvals-v2-design.md` §4 and §5.
 - Presets:
+  - Every preset allows `Skill` (the tool that reads a skill) and sets `mcp_default`: `ask` for
+    all but `read-only`, which sets `deny`.
   - `read-only`: allow Read/LS/Glob/Grep; deny Write/Edit/Bash; default deny.
   - `sandboxed` (default): allow Read/LS/Glob/Grep, `Write(./**)`, `Edit(./**)`,
     `Bash(git status:*)`, `Bash(git diff:*)`, `Bash(git add:*)`; deny
@@ -340,7 +415,9 @@ the call again. See `2026-10-13-approvals-v2-design.md` §3.
     `deny`, a root that is a directory when a deny rule matches it, with an error and no count.
     A rule that names a directory alone (`Read(**/secret)`) does not cover what is below it;
     `Read(secret/**)` does.
-  - `trusted`: allow all; ask for `Bash(git push:*)` and `mcp__*`; default allow.
+  - `trusted`: allow all; ask for `Bash(git push:*)`; default allow. An MCP tool that is not
+    read-only still asks, through `mcp_default`; there is no `mcp__*` rule, which would make
+    read-only tools ask too.
 
 ### Claude engine
 
@@ -349,18 +426,29 @@ Spawn per run:
 ```
 claude -p --output-format stream-json --input-format stream-json --verbose
   --model <model> --max-turns <n>
-  --allowedTools <allow patterns> --disallowedTools <deny patterns>
+  --allowedTools <allow patterns> [mcp__<server>__* ...] --disallowedTools <deny patterns>
   --permission-prompt-tool mcp__dots__approve
   --mcp-config <per-run temp json> --strict-mcp-config
   --setting-sources ""                 ("user,project,local" when use_user_settings = 1)
+  [--plugin-dir <run plugin folder> ...]
   [--resume <session_id>]
 ```
 
 Working directory = run workspace. Env: `MCP_TOOL_TIMEOUT` set to
 `(approval_wait_secs + 30) * 1000` on a best-effort basis; CLI 2.1.295 ignores it for the
 permission-prompt tool (observed hard cap of about 300 s; CLI 2.1.295 observed 2026-10-09). The per-run MCP config contains the dots MCP server
-(`http://127.0.0.1:<port>/mcp`, header `Authorization: Bearer <per-run secret>`) plus the dot's
-own `mcp_servers`. An empty `--setting-sources ""` keeps every settings file out of headless
+(`http://127.0.0.1:<port>/mcp`, header `Authorization: Bearer <per-run secret>`) plus, from
+MCP/skills (spec §5), one entry per MCP session the run has open (`RunTools`: the Library servers
+the dot uses, its plugins' included), named as the server and pointing at the gateway
+(`http://127.0.0.1:<port>/mcp/s/<server>`, the same secret). The CLI never starts or reaches a
+server itself, and no `${VAR}` value is written to the file. `--allowedTools` gets
+`mcp__<server>__*` for each of them, so the CLI does not ask `approve` for these calls: the
+gateway checks each one (§6), and the `approve` tool answers allow for a gateway tool in case it
+is asked. Any other `mcp__*` tool it is asked about (not `mcp__dots__*`: a server the CLI reached
+by itself) is decided by the policy's MCP check with no trust, so deny and allow rules apply and
+anything else falls to `mcp_default`, never to `default`. Each of the run's plugin folders (MCP/skills spec §7: `dots-skills` with the dot's
+skills, then a copy of each plugin) is passed with `--plugin-dir`; each entry of the
+`system/init` event's `plugin_errors` becomes a `notice` run event and a log line. An empty `--setting-sources ""` keeps every settings file out of headless
 runs: the user's global hooks (GateGuard, caveman, memory hooks) and a repo's committed
 `.claude/settings.json`, which could otherwise widen the CLI's own allow list beyond the dot
 policy. CLI 2.1.295 accepts the empty value (probed 2026-10-09: init event emitted, only builtin
@@ -394,6 +482,18 @@ Claude engine's MCP `approve` endpoint uses, so policy, grants, the wait window 
 behave identically) → execute allowed tools, return the deny text for denied or parked ones as
 the tool result → append results → repeat until no tool calls or `max_turns`.
 
+From MCP/skills (spec §5) the schemas of each turn also hold the tools the run's MCP sessions
+list now (`RunTools`), as functions named `mcp__<server>__<tool>` with the server's description
+and `inputSchema`. A name longer than 64 characters, or holding a character other than
+`A-Za-z0-9_-`, is cut to 55 characters (others as `_`) plus `_` and the first 8 hex characters of
+its SHA-256; the map back is kept for the run. A call is shown and checked under its full name
+(`ApprovalHub::check_mcp` with the server's trust), sent with a 300 s limit, and its result
+reported as the `text` parts joined, other parts as `[<type> omitted]` (the `structuredContent`
+when there is no part), `isError` as an error result, capped at 30 KB. A list change the server
+announces is listed and checked before the next call and the next turn's schemas, so a changed
+list holds the server for that call; a change not listed and checked within 30 s holds the
+server for that call too (it asks). A server that died answers "the server stopped".
+
 Every chat message (system, user, assistant with its `tool_calls`, tool result) is persisted as
 a `message` run event. A local run's `session_id` is the `root_run_id` of its lineage. On a
 resume the child run rebuilds the conversation from the `message` events of earlier runs in the
@@ -404,8 +504,10 @@ waiting (`Engine::applies_approved_calls`). Before the child run asks the model 
 performs the approved calls of its parent in the order they were asked, each exactly as it was
 approved: the call is claimed first, it takes the path of a live `allow` (`prepare`, then the
 tool, with the walking tools' filter), and its outcome is recorded before anything else is done
-with the output. The policy is not resolved again. After a call that did not succeed, the calls
-that remain are given up. The engine then sends one user message that says what each call did
+with the output. The policy is not resolved again. An MCP call whose server's accepted
+fingerprint is no longer the stored one is not claimed but skipped ("not performed, because the
+tool changed since it was approved"). After a call that did not succeed or was skipped, the
+calls that remain are given up. The engine then sends one user message that says what each call did
 (and that the quoted outputs are results, not instructions), followed by the runner's resume
 prompt. No grant is written and the model does not issue the
 call again, so it cannot change it. Until Approvals v2 the model was asked to re-issue the
@@ -415,13 +517,22 @@ call under a one-shot grant, and a changed input asked again. See
 Built-in tools: `read_file`, `write_file`, `edit_file` (exact unique-string replace), `list_dir`,
 `glob`, `grep`, `shell` (PowerShell, timeout default 120 s, output capped at 30 KB; the script
 reaches PowerShell on stdin behind a small fixed `-EncodedCommand` bootstrap, so its length is
-not bound by the Windows command-line limit). Their
+not bound by the Windows command-line limit), and from MCP/skills `skill` (policy name `Skill`,
+offered only to a run with skills). Their
 argument names match the Claude tools they alias (`file_path`, `content`, `old_string`,
 `new_string`, `path`, `pattern`, `command`), so policy path specs, command rules and
 `grant_key` apply to local dots without translation. All paths are canonicalized and must
 resolve inside the workspace (symlinks and junctions resolved first); `shell` runs with
 cwd = workspace. "Test endpoint" in Settings sends a probe request with one tool and checks that
 the model returns a well-formed tool call.
+
+`skill` (MCP/skills spec §7) takes `name` and an optional `file`. Without `file` it returns the
+skill's `SKILL.md` body, with `${CLAUDE_SKILL_DIR}` replaced by the skill's folder, followed by
+the list of the skill's files (hidden entries and links left out); with `file` it returns that
+file, refused when the path is absolute, holds `..` or resolves outside the skill folder. Results
+are capped at 30 KB. The system message of a run with skills ends with "Skills you can use. Call
+the tool `skill` with a name to read one before you follow it." and one `name: description` line
+per skill (standalone skills by their Library name, a plugin's as `<plugin>:<skill>`).
 
 Tests drive the loop against a `wiremock` OpenAI-compatible server returning scripted
 responses; no real model is called. Manual smoke target: LM Studio at `http://127.0.0.1:1234`
@@ -436,6 +547,13 @@ Bound to `127.0.0.1:<port>` only; requests whose peer address is not loopback ar
   `409`. Bad token → `401`.
 - `POST /mcp` — MCP streamable-HTTP endpoint served with `rmcp`, exposing the single tool
   `approve`. Requires the per-run secret; the secret identifies the run.
+- `POST /mcp/s/{server}` — from MCP/skills (spec §5), the gateway to the run's open MCP session
+  `server` (`404` when the run has none of that name). Requires the per-run secret. It answers
+  `initialize`, `tools/list` (the session's current list) and `tools/call`: the call is checked
+  by `check_mcp` with what the run knows of the server, waits for an approval when it asks, and
+  is then sent to the server, whose result is returned as it came. A denied, parked or failed
+  call is a tool result with `isError: true` and the text the local engine gives; the call's
+  limit is what is left of `MCP_TOOL_TIMEOUT`.
 - `GET /health` — `200`.
 
 Exposing webhooks beyond localhost (e.g. tunnels) is the user's choice and out of scope.
@@ -449,23 +567,51 @@ React + Vite + TypeScript inside Tauri 2. Screens:
   ("Completed", "Completed (missed)" when it completed without firing, "Expired"), and
   "Retrying at 09:04 (attempt 2 of 6)" under it while a retry waits; a dot whose schedule
   needs attention carries a "Needs attention" badge.
+- **Library** — (MCP/skills spec §8) between Dots and Inbox, with three tabs. MCP servers:
+  name, transport, a status badge (Accepted, Tools changed, Unreachable, Unchecked) and, apart
+  from it, the `${VAR}` the environment of Dots does not set; the dots that use it; "Check
+  now", "Edit", "Remove"; "Review" for a changed tool list (also reached by
+  `/library?review=<server id>`, which the Inbox links to) showing the tools added, removed and
+  changed, with "Accept". "Add server" is a form (name; stdio: command, arguments, working
+  folder, env; http: URL, headers) with the `${VAR}` hint, the variables that are not set, a
+  warning for a pasted secret and "Test connection", which lists the tools with a "read-only"
+  badge; saving after a test accepts the list that was shown, and a server that could not be
+  tested is saved unchecked. A plugin's own servers are listed with their plugin and have no
+  Edit or Remove. Skills: name, description, folder, dots; "Add skill" picks a folder, scans it
+  and lists every `SKILL.md` below it to tick. Plugins: name, folder, parts, the dots that use
+  it, the switch "Run this plugin's hooks"; "Add plugin" picks one of the installed Claude
+  Code plugins or a folder. Removing asks first and names the dots. The screen never asks a
+  second time for what the core confirms in a native dialog (a program to run, env changes, a
+  plugin's servers and hooks); a refusal (`cancelled`) shows as a calm note, not as an error.
 - **Dot editor** — name; instructions (markdown); engine, model, endpoint; workdir + mode;
   schedule (from Scheduler v2: a kind picker None / Once / Every / Daily / Weekly / Cron with
   the kind's fields — a date and time; minutes, typed in minutes or hours; a time; seven day
   toggles and a time; the cron text — then "Catch up a missed run" and "Stop" (never, after N
   runs, after a date), both hidden for Once; the next 3 fire times from `preview_schedule`, and
   the core's objection under the fields); webhook URL + token (copy, regenerate);
-  policy editor (preset picker + rule table); limits; MCP servers (Claude only);
-  use-user-settings toggle.
+  policy editor (preset picker + rule table); limits; use-user-settings toggle (Claude only).
+  From MCP/skills a section "Tools and skills" (`screens/dot-editor/ToolsAndSkills.tsx`) edits
+  the dot's `uses` as three checklists from the Library (MCP servers, skills, plugins; a
+  plugin's own servers are not listed: they come with the plugin). A server whose tools changed
+  or that was unreachable says so on its row. A name the Library no longer has stays ticked,
+  marked, so that it can be unticked. For a local dot, a ticked plugin that has commands,
+  agents or hooks says that they do not apply (only its skills and servers do). A note lists
+  the `${VAR}` that the ticked servers, and the servers of ticked plugins, need and the
+  environment of Dots does not set (the Library list's `missing_variables`).
 - **Run view** — live transcript (assistant text, collapsible tool calls/results), worktree diff,
-  summary, status, tokens; cancel, discard worktree, open folder. From Scheduler v2 a
+  summary, status, tokens; cancel, discard worktree, open folder. From MCP/skills an MCP call
+  shows its server and tool ("salesforce › query" for `mcp__salesforce__query`; a server that
+  comes with a plugin shows as the plugin, found through the Library list), and a `notice`
+  run event reads as a note line, not as a collapsed raw item. From Scheduler v2 a
   scheduled run's trigger has a line under it: "Scheduled for <slot>", "…, caught up after
   the PC was off", "Scheduled for <slot> · attempt 3 of 6" for a slot's run that carries the
   attempt of a retry it dropped, or "Retry 2 of 6 of the failed run" with a link to that run
   for a retry (`retry_of`).
 - **Inbox** — pending approvals (tool, pretty-printed input, approve / deny with note),
-  schedules that need attention (from Scheduler v2) and finished runs awaiting review
-  (definition in §12). Unread count mirrored in the tray tooltip and the sidebar.
+  schedules that need attention (from Scheduler v2), finished runs awaiting review
+  (definition in §12) and, from MCP/skills, "Tools changed": the MCP servers whose tool list
+  changed since it was accepted, or was never accepted, with the dots that use them and
+  "Review" (MCP/skills spec §8). Unread count mirrored in the tray tooltip and the sidebar.
   From Approvals v2 an approval card, wherever it shows (Inbox, run view, chat), also offers
   "Approve and always allow": the allow rules the core derived for that call, the narrowest
   preselected, one of which is saved to the dot's policy with the approval. The control is not
@@ -508,6 +654,11 @@ Window close hides to tray. Tray menu: Open, Inbox (n), Pause all schedules, Qui
 - **fake-claude:** binary accepting the same flags, replaying a scripted transcript, and calling
   the MCP `approve` endpoint at scripted points. Drives end-to-end tests of runner + approval
   flow (approve in window, deny, timeout → park → resume) with no network or subscription use.
+  From MCP/skills it also records the `--mcp-config` it was given and the files of each
+  `--plugin-dir`, and lists or calls a gateway tool at scripted points.
+- **fake-mcp:** a scripted MCP server over stdio or Streamable HTTP (tools, read-only hints,
+  results, errors, delays, a list change with `notifications/tools/list_changed`, a call log);
+  drives the MCP client's tests with no network.
 - **Local engine:** `wiremock` OpenAI-compatible server returning scripted tool calls; verifies
   the loop, policy gate, and park/resume conversation rebuild.
 - **HTTP:** webhook token auth, payload limit, disabled dot, MCP secret validation.
@@ -559,7 +710,9 @@ In task order:
    oldest first), `list_run_events(run_id, after_seq)`, `approvals_for_run`,
    `inbox() -> { approvals, review_runs, attention }` (from Scheduler v2, `attention`
    lists the schedules that need attention: `dot_id, dot_name, run_id, error, failed_at`,
-   newest first), `inbox_count()` (counts all three), and
+   newest first; from MCP/skills, `tools_changed` lists the MCP servers whose catalog is
+   `changed`: `server_id, name, dots: [{id, name}]`, by name), `inbox_count()` (counts all
+   four), and
    `preview_schedule(schedule, n) -> next n slots` (from Scheduler v2 it takes the schedule
    object, validates it like `DotSpec::validate`, refuses one with no slot left as a create or
    a change does (`invalid`, "this schedule would never run"), and previews an `every` rule
@@ -593,6 +746,9 @@ The Inbox lists:
 
 - pending approvals;
 - from Scheduler v2, schedules that need attention (an occurrence failed in the end);
+- from MCP/skills, MCP servers whose tools changed: the catalog's status is `changed` (a check
+  found a list that is not the accepted one, or a server's first list waits to be accepted).
+  The server leaves the Inbox when its list is accepted;
 - runs awaiting review: the latest run of each lineage that is terminal, has `reviewed_at`
   NULL, and either kept its worktree (worktree mode, worktree still on disk) or `failed`.
   From Scheduler v2 the scheduler sets `reviewed_at` on a failed run with trigger `schedule`
@@ -607,7 +763,7 @@ The Inbox lists:
 
 A run leaves the Inbox through "Discard worktree" or "Mark reviewed". Folder-mode successes only
 notify. Unread count = pending approvals + runs awaiting review + schedules that need
-attention; the sidebar's Inbox badge shows the same count.
+attention + MCP servers whose tools changed; the sidebar's Inbox badge shows the same count.
 
 The "Needs attention" group stands between the approvals and the runs to review. Each item
 names the dot (a link to its editor), when the run failed and its error, a link to the failed
@@ -650,6 +806,30 @@ dot; a chat or webhook run does not clear it.
   attention: { run_id, error } | null }`, times in RFC 3339 local. `next_fire` is the first
   slot after now, null while the dot is disabled, when the schedule is not `active`, or when
   no slot or count is left; `retry_at` and `retry_attempt` are set while a retry waits.
+- The MCP/skills feature adds ten commands, each a one-line wrapper over `Runtime::library()`:
+  `library_list`, `library_add(name, config, accept)`, `library_update(id, config)`,
+  `library_remove(id, confirm)`, `library_probe(config)`, `library_check(id)`,
+  `library_accept(id, fingerprint)`, `library_scan_skills(path)`, `installed_claude_plugins()`
+  and `environment_variables(names)`. `config` carries its kind (`{kind, config}`); `accept` is
+  the fingerprint `library_probe` answered. `library_remove` answers `conflict`, naming the
+  dots, while dots use the item and `confirm` is false. A command the web UI names is
+  confirmed in a native dialog from Rust, like `claude_path`, before Dots runs or stores it
+  (the same `DOTS_CONFIRM=yes` seam in debug builds). The config, the name and the kind are
+  checked first, so the person is never asked about what the core refuses; the core refuses
+  control and bidirectional format characters in a stdio command, argument, folder and env key (values are never shown), and
+  in an http URL and header names. The dialog shows each part in double quotes (`"` and `\`
+  escaped), so where one ends is visible. `library_probe` with a stdio config, and
+  `library_add` / `library_update` whose stdio `command`, `args`, `cwd` or `env` (as stored,
+  the `${VAR}` text) differ from the stored ones (a new server differs) ask "Dots will run:
+  <command> <args> in <cwd> with env KEY1, KEY2. Run it?" (keys only, never values). An http
+  config whose `url` or header values name `${VAR}` asks "Dots will send the values of A, B to
+  <origin>. Send them?" (names only) when the origin or the set of variables is new or changed. The origin is the one the HTTP client reaches after `${VAR}` in the URL is read from Dots' environment (an unset variable shows the quoted URL and that the server cannot start; a Unicode host shows both forms); the core refuses an http URL with a backslash or a `/` right after `://`.
+  A `library_add` of a plugin, or a `library_update` that changes its path, whose `.mcp.json`
+  has stdio servers asks "This plugin starts: <cmd> <args>; <cmd> <args>. Add it?", and "It sends the values of A, B to <origin>." for each http server that names `${VAR}` (an author-written `.mcp.json`); and hooks
+  newly on (switched on, or on at a new path) ask "This plugin's hooks run commands on their
+  own, without approval, and can approve tool calls. Run them?". When both apply to a plugin,
+  one dialog holds both. A refusal answers `cancelled` and nothing is started or stored. A
+  skill or plugin folder is only read.
 - **Runs, dots and approvals are addressed by id.** `open_run_folder(run_id)` resolves the path
   in core; the UI cannot make the backend open, read or delete an arbitrary path. Two values
   from the UI are paths:
@@ -683,6 +863,9 @@ dot; a chat or webhook run does not clear it.
   - And a seventh, `ScheduleAttention { dot_id, run_id, error }`: the dot's schedule needs
     attention now. The core sends it once, when the flag goes from clear to set, together
     with a `ScheduleUpdated`. Only the notifier uses it.
+  - And an eighth, `LibraryUpdated { item_id }`: a Library item was added, changed, removed or
+    checked. It never notifies; it updates the tray's Inbox count (a server whose tool list
+    changed is an Inbox group).
 - Notifications fire on `ApprovalRequested`, and on `RunUpdated` into `succeeded`, `failed` or
   `awaiting_approval`, once per (run, status), and only for a run this process saw queued or
   running. Chat runs do not notify; neither does a parked run closed by its decision, nor a run
@@ -709,7 +892,7 @@ dot; a chat or webhook run does not clear it.
   - TanStack Query v5 and the `react-router` hash router.
   - Bun as package manager; `@tauri-apps/cli` as a dev dependency.
 - Look: one dark theme (no light mode), shadcn/ui's neutral palette, compact desktop-tool
-  density, a left sidebar for Dots, Inbox (with its count), Chat and Settings.
+  density, a left sidebar for Dots, Library, Inbox (with its count), Chat and Settings.
 - Data layer:
   - `ui/src/api/types.ts` (strict zod schemas mirroring the Rust JSON), `commands.ts` (typed
     `invoke` wrappers that throw `CommandError`), `events.ts` (one `listen("runtime")`).
@@ -722,7 +905,8 @@ dot; a chat or webhook run does not clear it.
     `approvals` of the approval's own run, which is the parent of the run that performs the
     call: that run's own `RunUpdated` does not reach those approvals. `ScheduleUpdated`
     invalidates `dots`, `overview` and `inbox`; `ScheduleAttention` invalidates nothing (the
-    `ScheduleUpdated` sent with it does).
+    `ScheduleUpdated` sent with it does). `LibraryUpdated` invalidates `library`, `inbox`,
+    `dots`, every `dot` and `overview` (removing an item takes it out of the dots that use it).
   - From Plan 3c an invalidation that arrives while its query is being fetched is kept (the
     query is marked stale again when that fetch has settled), and the app refetches everything
     once when its listeners are attached, so the first screen's data is asked for twice.
@@ -738,7 +922,10 @@ dot; a chat or webhook run does not clear it.
   `ScheduleStatus`, a queued retry (the `RunUpdated` sample, with `retry_of`), and a
   `DotOverview` sample that sets every field of `schedule_state`; `Limits` gains
   `max_schedule_attempts` (the core's `MAX_ATTEMPTS`, 6), which the Dots list and the run view
-  name.
+  name. From the MCP/skills feature it also holds the Library samples (a config of every kind
+  and transport, `LibraryEntry` of every kind, a catalog, a probe, scanned skills, installed
+  plugins, environment variables), a `LibraryUpdated` event, and every `LibraryKind` and
+  `CatalogStatus`.
 - Shell around the screens:
   - Banners: `server_error` (links to Settings), CLI version mismatch ("Mark as tested"),
     restart required ("Restart Dots"), schedules paused.

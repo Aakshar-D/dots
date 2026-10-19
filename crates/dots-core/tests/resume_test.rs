@@ -66,6 +66,7 @@ async fn build_env(steps: Vec<Step>, resume_steps: Option<Vec<Step>>, dispatch: 
             mcp_url: "http://127.0.0.1:1/mcp".into(),
             worktrees_dir: dir.path().join("wt"),
             cancel_grace: Duration::from_millis(200),
+            plugins_dir: dir.path().join("plugins"),
         },
     );
     if dispatch {
@@ -383,7 +384,7 @@ async fn resume_parked_on_non_awaiting_parent_conflicts_and_changes_nothing() {
     let err = store
         .resume_parked(
             &parent.id,
-            &[("Bash".into(), "k".into())],
+            &[("Bash".into(), "k".into(), None)],
             std::slice::from_ref(&a.id),
             std::slice::from_ref(&a.id),
             Some(&child),

@@ -56,6 +56,13 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
       // Dots list and the Inbox show.
       for (const queryKey of [keys.dots, keys.overview, keys.inbox]) invalidate(qc, queryKey);
       break;
+    case "library_updated":
+      // The Library lists, the Inbox group of a changed tool list, and what shows the dots that
+      // use the item: removing it takes it out of them, and no dot event says so.
+      for (const queryKey of [keys.library, keys.inbox, keys.dots, ["dot"], keys.overview]) {
+        invalidate(qc, queryKey);
+      }
+      break;
     case "schedule_attention":
       // For the notification; the `schedule_updated` sent with it refreshes the screens.
       break;

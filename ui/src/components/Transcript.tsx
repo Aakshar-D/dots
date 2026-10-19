@@ -1,12 +1,17 @@
 import type { ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { Info } from "lucide-react";
 import { Link } from "react-router";
 import { z } from "zod";
 
-import { LIMITS, type Run, type RunEventRecord } from "@/api/types";
+import { commands } from "@/api/commands";
+import { LIMITS, type LibraryEntry, type Run, type RunEventRecord } from "@/api/types";
 import { Markdown } from "@/components/Markdown";
 import { StatusBadge } from "@/components/StatusBadge";
 import { isActive } from "@/lib/chat-threads";
 import { localDateTime } from "@/lib/format";
+import { mcpToolLabel } from "@/lib/mcp-tool";
+import { keys } from "@/lib/query";
 import { toolPreview, transcriptItems, type TranscriptItem } from "@/lib/transcript";
 
 const TRIGGER: Record<Run["trigger"], string> = {
@@ -64,13 +69,26 @@ function ScheduleLine({ run }: { run: Run }) {
 
 /// `active`: the item's run is still going. Only then can a tool call without a result be one
 /// that runs; in a run that has ended, the result never came.
-function Item({ item, active }: { item: TranscriptItem; active: boolean }) {
+function Item(props: {
+  item: TranscriptItem;
+  active: boolean;
+  /// MCP server name to the plugin it comes with.
+  owners: ReadonlyMap<string, string>;
+}) {
+  const { item, active, owners } = props;
   switch (item.type) {
     case "text":
       return <Markdown text={item.text} />;
     case "error":
       return (
         <p role="alert" className="rounded-md border border-destructive/50 p-2 text-destructive">
+          {item.text}
+        </p>
+      );
+    case "note":
+      return (
+        <p role="note" className="flex items-start gap-1.5 text-xs text-muted-foreground">
+          <Info aria-hidden className="mt-0.5 size-3.5 shrink-0" />
           {item.text}
         </p>
       );
@@ -85,7 +103,9 @@ function Item({ item, active }: { item: TranscriptItem; active: boolean }) {
       return (
         <details className="rounded-md border px-2 py-1">
           <summary className="flex cursor-pointer items-center gap-2 text-xs">
-            <span className="font-semibold">{item.tool}</span>
+            <span className="font-semibold" title={item.tool}>
+              {mcpToolLabel(item.tool, owners)}
+            </span>
             <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground">
               {toolPreview(item.input)}
             </span>
@@ -116,6 +136,17 @@ function Item({ item, active }: { item: TranscriptItem; active: boolean }) {
   }
 }
 
+/// Server name to plugin name, for the servers that come with a plugin.
+function pluginOwners(entries: LibraryEntry[]): Map<string, string> {
+  const names = new Map(entries.filter((e) => e.kind === "plugin").map((e) => [e.id, e.name]));
+  const owners = new Map<string, string>();
+  for (const entry of entries) {
+    const plugin = entry.owner_id === null ? undefined : names.get(entry.owner_id);
+    if (entry.kind === "mcp_server" && plugin) owners.set(entry.name, plugin);
+  }
+  return owners;
+}
+
 /// A thread as one conversation: each run of the lineage in order, with its events.
 export function Transcript(props: {
   runs: Run[];
@@ -126,6 +157,9 @@ export function Transcript(props: {
   shownError?: string | null;
 }) {
   const many = props.runs.length > 1;
+  // A plugin's MCP server shows as its plugin; the Library tells which server comes from which.
+  const library = useQuery({ queryKey: keys.library, queryFn: commands.libraryList });
+  const owners = pluginOwners(library.data ?? []);
   return (
     <div className="flex flex-col gap-4">
       {props.runs.map((run, i) => {
@@ -149,7 +183,7 @@ export function Transcript(props: {
                 </p>
               )}
               {items.map((item) => (
-                <Item key={item.seq} item={item} active={isActive(run)} />
+                <Item key={item.seq} item={item} active={isActive(run)} owners={owners} />
               ))}
               {items.length === 0 && message === null && run.status === "queued" && (
                 <p className="text-muted-foreground">Waiting to start.</p>

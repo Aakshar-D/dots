@@ -15,6 +15,14 @@ export const sample = {
   status: T.Status.parse(contract.Status),
   settings: T.Settings.parse(contract.Settings),
   overview: T.DotOverview.parse(contract.DotOverview),
+  /// A stdio server with a changed tool list and a missing variable; a plugin's HTTP server; a
+  /// skill with a problem; a plugin with every part.
+  library: T.LibraryEntry.array().parse(contract.LibraryEntry),
+  /// The same items without the extras of a list entry: what `library_add` answers.
+  libraryItems: T.LibraryItem.array().parse(contract.LibraryItem),
+  scannedSkills: T.ScannedSkill.array().parse(contract.ScannedSkill),
+  installedPlugins: T.InstalledPlugin.array().parse(contract.InstalledPlugin),
+  probe: T.McpProbe.parse(contract.McpProbe),
   inbox: T.Inbox.parse(contract.Inbox),
   diff: T.WorktreeDiff.parse(contract.WorktreeDiff),
   startupError: T.StartupError.parse(contract.StartupError),
@@ -37,12 +45,17 @@ export const quietStatus: T.Status = {
 export function installDefaults(): void {
   backend.on("startup_error", () => null);
   backend.on("status", () => quietStatus);
-  backend.on("inbox", () => ({ approvals: [], review_runs: [], attention: [] }));
+  backend.on("inbox", () => ({ approvals: [], review_runs: [], attention: [], tools_changed: [] }));
   // An approval card asks for these when it shows; by default the core offers no rule.
   backend.on("approval_rule_candidates", () => []);
   backend.on("dot_overview", () => []);
   backend.on("list_dots", () => []);
   backend.on("get_settings", () => sample.settings);
+  backend.on("library_list", () => []);
+  backend.on("installed_claude_plugins", () => []);
+  backend.on("environment_variables", (args) =>
+    (args.names as string[]).map((name) => ({ name, set: true })),
+  );
   backend.on("new_dot_spec", () => blankSpec);
   backend.on("list_runs", () => []);
   backend.on("webhook_url", (args) => `http://127.0.0.1:47321/dots/${String(args.id)}/trigger`);

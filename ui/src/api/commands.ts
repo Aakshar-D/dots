@@ -5,7 +5,15 @@ import { invoke, type InvokeArgs } from "@tauri-apps/api/core";
 import { z } from "zod";
 
 import * as T from "./types";
-import type { CmdErrorKind, DotSpec, Preset, Schedule, Settings } from "./types";
+import type {
+  CmdErrorKind,
+  DotSpec,
+  LibraryConfig,
+  McpServerConfig,
+  Preset,
+  Schedule,
+  Settings,
+} from "./types";
 
 /// A command failure. `kind` mirrors the Rust `CmdError`.
 export class CommandError extends Error {
@@ -122,4 +130,27 @@ export const commands = {
   discardWorktree: (runId: string) => call(T.Run, "discard_worktree", { runId }),
   markReviewed: (runId: string) => call(T.Run, "mark_reviewed", { runId }),
   openRunFolder: (runId: string) => call(nothing, "open_run_folder", { runId }),
+
+  libraryList: () => call(T.LibraryEntry.array(), "library_list"),
+  /// `accept`: the fingerprint `libraryProbe` answered. The list the server gives now is accepted
+  /// only when it has that fingerprint; with `null` a server is saved unchecked and not started.
+  libraryAdd: (name: string, config: LibraryConfig, accept: string | null) =>
+    call(T.LibraryItem, "library_add", { name, config, accept }),
+  libraryUpdate: (id: string, config: LibraryConfig) =>
+    call(T.LibraryItem, "library_update", { id, config }),
+  /// Rejects with kind `conflict`, naming the dots, while dots use the item and `confirm` is
+  /// false. With `confirm` the item also leaves those dots.
+  libraryRemove: (id: string, confirm: boolean) =>
+    call(nothing, "library_remove", { id, confirm }),
+  /// Starts the server, lists its tools and stops it; nothing is saved.
+  libraryProbe: (config: McpServerConfig) => call(T.McpProbe, "library_probe", { config }),
+  libraryCheck: (id: string) => call(T.McpCatalog, "library_check", { id }),
+  /// Rejects with kind `conflict` when the list moved since `fingerprint` was seen.
+  libraryAccept: (id: string, fingerprint: string) =>
+    call(T.McpCatalog, "library_accept", { id, fingerprint }),
+  libraryScanSkills: (path: string) =>
+    call(T.ScannedSkill.array(), "library_scan_skills", { path }),
+  installedClaudePlugins: () => call(T.InstalledPlugin.array(), "installed_claude_plugins"),
+  environmentVariables: (names: string[]) =>
+    call(T.EnvVariable.array(), "environment_variables", { names }),
 };

@@ -41,6 +41,23 @@ pub struct Policy {
     pub preset: Preset,
     pub rules: Vec<Rule>,
     pub default: Action,
+    /// What an MCP tool gets when no rule and no read-only flag decides (`resolve_mcp`, step 6).
+    /// A policy stored before it existed reads as `ask`.
+    #[serde(default = "default_mcp_action")]
+    pub mcp_default: Action,
+}
+
+fn default_mcp_action() -> Action {
+    Action::Ask
+}
+
+/// What the Library knows about the server and the tool of an MCP call, for `resolve_mcp`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct McpTrust {
+    /// The server is held (its status is not `accepted`) or the tool is not in its accepted list.
+    pub held: bool,
+    /// The accepted list gives the tool `annotations.readOnlyHint: true`.
+    pub read_only: bool,
 }
 
 const READ_TOOLS: &[&str] = &["Read", "LS", "Glob", "Grep"];
@@ -99,12 +116,14 @@ const FILE_TOOLS: &[&str] = &[
 impl Policy {
     pub fn preset(preset: Preset) -> Policy {
         let mut rules: Vec<Rule> = Vec::new();
+        let mut mcp_default = Action::Ask;
         let default = match preset {
             Preset::ReadOnly => {
                 rules.extend(READ_TOOLS.iter().map(|t| Rule::new(t, Action::Allow)));
                 for t in ["Write", "Edit", "NotebookEdit", "Bash", "PowerShell"] {
                     rules.push(Rule::new(t, Action::Deny));
                 }
+                mcp_default = Action::Deny;
                 Action::Deny
             }
             // `Custom` starts from the Sandboxed rules for the user to edit.
@@ -129,14 +148,16 @@ impl Policy {
             Preset::Trusted => {
                 rules.push(Rule::new("Bash(git push:*)", Action::Ask));
                 rules.push(Rule::new("PowerShell(git push:*)", Action::Ask));
-                rules.push(Rule::new("mcp__*", Action::Ask));
                 Action::Allow
             }
         };
+        // Every preset lets the model read the skills the dot uses.
+        rules.push(Rule::new("Skill", Action::Allow));
         Policy {
             preset,
             rules,
             default,
+            mcp_default,
         }
     }
 
@@ -154,6 +175,28 @@ impl Policy {
             }
         }
         self.default
+    }
+
+    /// The check of an MCP tool call (`tool` is `mcp__<server>__<tool>`). The first match wins:
+    /// a deny rule; a held server or an unlisted tool (ask); an allow rule; an ask rule; the
+    /// accepted `readOnlyHint` (allow); `mcp_default`. MCP tools never fall to `default`.
+    pub fn resolve_mcp(&self, tool: &str, input: &Value, trust: McpTrust) -> Action {
+        if self.rule_matches(Action::Deny, tool, input, None) {
+            return Action::Deny;
+        }
+        if trust.held {
+            return Action::Ask;
+        }
+        if self.rule_matches(Action::Allow, tool, input, None) {
+            return Action::Allow;
+        }
+        if self.rule_matches(Action::Ask, tool, input, None) {
+            return Action::Ask;
+        }
+        if trust.read_only {
+            return Action::Allow;
+        }
+        self.mcp_default
     }
 
     /// True when a deny rule matches the call, so `resolve_in` returns `deny` whatever the
@@ -618,6 +661,7 @@ fn tidy_path(raw: &str) -> (bool, String) {
 ///   written relative to it. Not for the workspace root or a drive root as the directory, and
 ///   not at all for a UNC, device or drive-relative path.
 /// - `WebFetch`: the host.
+/// - An MCP tool (`mcp__<server>__<tool>`): its name, and `mcp__<server>__*` for the server.
 /// - Any other tool: its name.
 ///
 /// A bare command or file tool (`Bash`, `Write`) and a one-token command prefix (`Bash(git:*)`)
@@ -706,6 +750,17 @@ pub fn allow_candidates(tool: &str, input: &Value, workspace: Option<&Path>) -> 
     } else if !tool.contains('*') {
         // A name that ends in `*` would be read as a prefix of other tools' names.
         found.push((tool.to_string(), "every call of this tool".into()));
+        // An MCP tool also offers its whole server. The server name ends at the first `__`.
+        let server = tool
+            .strip_prefix("mcp__")
+            .and_then(|rest| rest.split_once("__"))
+            .filter(|(server, name)| !server.is_empty() && !name.is_empty());
+        if let Some((server, _)) = server {
+            found.push((
+                format!("mcp__{server}__*"),
+                format!("every tool of the server {server}"),
+            ));
+        }
     }
     let mut out: Vec<RuleCandidate> = Vec::new();
     for (pattern, label) in found {
@@ -713,6 +768,7 @@ pub fn allow_candidates(tool: &str, input: &Value, workspace: Option<&Path>) -> 
             preset: Preset::Custom,
             rules: vec![Rule::new(&pattern, Action::Allow)],
             default: Action::Ask,
+            mcp_default: Action::Ask,
         };
         if rule.validate().is_ok()
             && pattern_matches(&pattern, tool, input, Action::Allow, ws.as_deref())

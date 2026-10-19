@@ -2,17 +2,18 @@ use chrono::{Local, SubsecRound, Utc};
 use sqlx::sqlite::SqliteRow;
 use sqlx::Row;
 
-use super::{opt_json, Store};
+use super::library::check_uses;
+use super::Store;
 use crate::model::{Dot, DotSpec, EngineKind, WorkspaceMode};
 use crate::schedule::Schedule;
 use crate::util::{new_id, new_token, now};
 use crate::{Error, Result};
 
-const DOT_COLUMNS: &str = "id, name, instructions, engine, model, endpoint_url, workdir, \
-    workspace_mode, schedule, webhook_token, policy, mcp_servers, use_user_settings, max_turns, \
+pub(super) const DOT_COLUMNS: &str = "id, name, instructions, engine, model, endpoint_url, \
+    workdir, workspace_mode, schedule, webhook_token, policy, uses, use_user_settings, max_turns, \
     timeout_secs, approval_wait_secs, enabled, created_at, updated_at";
 
-fn dot_from_row(row: &SqliteRow) -> Result<Dot> {
+pub(super) fn dot_from_row(row: &SqliteRow) -> Result<Dot> {
     Ok(Dot {
         id: row.try_get("id")?,
         webhook_token: row.try_get("webhook_token")?,
@@ -31,7 +32,7 @@ fn dot_from_row(row: &SqliteRow) -> Result<Dot> {
                 .map(|s| serde_json::from_str(&s))
                 .transpose()?,
             policy: serde_json::from_str(&row.try_get::<String, _>("policy")?)?,
-            mcp_servers: opt_json(row.try_get("mcp_servers")?)?,
+            uses: serde_json::from_str(&row.try_get::<String, _>("uses")?)?,
             use_user_settings: row.try_get::<i64, _>("use_user_settings")? != 0,
             max_turns: row.try_get::<i64, _>("max_turns")? as u32,
             timeout_secs: row.try_get::<i64, _>("timeout_secs")? as u64,
@@ -72,13 +73,15 @@ fn map_unique(e: sqlx::Error, name: &str) -> Error {
 }
 
 impl Store {
+    /// Creates a dot. Every item its `uses` names must be in the Library (`Invalid`).
     pub async fn create_dot(&self, spec: &DotSpec) -> Result<Dot> {
         let spec = &prepared(spec, None)?;
         let id = new_id();
         let ts = now();
+        let mut tx = self.pool.begin().await?;
         sqlx::query(
             "INSERT INTO dots (id, name, instructions, engine, model, endpoint_url, workdir, \
-             workspace_mode, schedule, webhook_token, policy, mcp_servers, use_user_settings, \
+             workspace_mode, schedule, webhook_token, policy, uses, use_user_settings, \
              max_turns, timeout_secs, approval_wait_secs, enabled, created_at, updated_at) \
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
@@ -93,7 +96,7 @@ impl Store {
         .bind(schedule_json(spec)?)
         .bind(new_token())
         .bind(serde_json::to_string(&spec.policy)?)
-        .bind(spec.mcp_servers.as_ref().map(|v| v.to_string()))
+        .bind(serde_json::to_string(&spec.uses)?)
         .bind(spec.use_user_settings as i64)
         .bind(spec.max_turns as i64)
         .bind(spec.timeout_secs as i64)
@@ -101,9 +104,11 @@ impl Store {
         .bind(spec.enabled as i64)
         .bind(&ts)
         .bind(&ts)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| map_unique(e, &spec.name))?;
+        check_uses(&mut tx, &spec.uses).await?;
+        tx.commit().await?;
         self.get_dot(&id).await
     }
 
@@ -126,13 +131,15 @@ impl Store {
     /// Updates a dot. `workdir`/`workspace_mode` may only change while the dot has no
     /// queued, running or awaiting runs (their workspaces were derived from the old values);
     /// otherwise nothing changes and `Error::Conflict` is returned. The check is atomic. The
-    /// schedule is prepared against the stored one (`prepared`).
+    /// schedule is prepared against the stored one (`prepared`). Every item its `uses` names
+    /// must be in the Library (`Invalid`).
     pub async fn update_dot(&self, id: &str, spec: &DotSpec) -> Result<Dot> {
         let previous = self.get_dot(id).await?.spec.schedule;
         let spec = &prepared(spec, previous.as_ref())?;
+        let mut tx = self.pool.begin().await?;
         let res = sqlx::query(
             "UPDATE dots SET name = ?, instructions = ?, engine = ?, model = ?, endpoint_url = ?, \
-             workdir = ?, workspace_mode = ?, schedule = ?, policy = ?, mcp_servers = ?, \
+             workdir = ?, workspace_mode = ?, schedule = ?, policy = ?, uses = ?, \
              use_user_settings = ?, max_turns = ?, timeout_secs = ?, approval_wait_secs = ?, \
              enabled = ?, updated_at = ? WHERE id = ? \
              AND ((workdir = ? AND workspace_mode = ?) OR NOT EXISTS (SELECT 1 FROM runs \
@@ -147,7 +154,7 @@ impl Store {
         .bind(spec.workspace_mode.as_str())
         .bind(schedule_json(spec)?)
         .bind(serde_json::to_string(&spec.policy)?)
-        .bind(spec.mcp_servers.as_ref().map(|v| v.to_string()))
+        .bind(serde_json::to_string(&spec.uses)?)
         .bind(spec.use_user_settings as i64)
         .bind(spec.max_turns as i64)
         .bind(spec.timeout_secs as i64)
@@ -158,10 +165,11 @@ impl Store {
         .bind(&spec.workdir)
         .bind(spec.workspace_mode.as_str())
         .bind(id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| map_unique(e, &spec.name))?;
         if res.rows_affected() == 0 {
+            tx.rollback().await?;
             self.get_dot(id).await?;
             return Err(Error::Conflict(
                 "workdir and workspace_mode cannot change while the dot has queued, running or \
@@ -169,6 +177,8 @@ impl Store {
                     .into(),
             ));
         }
+        check_uses(&mut tx, &spec.uses).await?;
+        tx.commit().await?;
         self.get_dot(id).await
     }
 
