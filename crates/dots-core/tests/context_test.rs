@@ -451,6 +451,10 @@ fn the_prompt_section_lists_the_collections() {
         "{section}"
     );
     assert!(section.contains("(1 document)"), "{section}");
+    collections[1].complete = false;
+    let section = context::prompt_section(&collections, "context");
+    assert!(section.contains("(at least 1 document)"), "{section}");
+    collections[1].complete = true;
     collections[0].complete = true;
     for i in 0..60 {
         collections.push(Collection {

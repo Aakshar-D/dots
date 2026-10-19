@@ -548,6 +548,7 @@ pub fn prompt_section(collections: &[Collection], tool: &str) -> String {
         let count = match (c.documents, c.complete) {
             (1, true) => "1 document".to_string(),
             (n, true) => format!("{n} documents"),
+            (1, false) => "at least 1 document".to_string(),
             (n, false) => format!("at least {n} documents"),
         };
         out.push_str(&format!("\n- {}: {description} ({count})", c.name));
