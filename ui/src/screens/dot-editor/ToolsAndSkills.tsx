@@ -11,7 +11,11 @@ const GROUPS: { kind: LibraryKind; key: keyof Uses; title: string }[] = [
   { kind: "mcp_server", key: "mcp_servers", title: "MCP servers" },
   { kind: "skill", key: "skills", title: "Skills" },
   { kind: "plugin", key: "plugins", title: "Plugins" },
+  { kind: "context", key: "context", title: "Context" },
 ];
+
+/// A context collection every dot reads, ticked or not.
+const everyDot = (entry: LibraryEntry) => entry.kind === "context" && entry.config.every_dot;
 
 /// The parts of a plugin that a local dot does not use, as a phrase ("1 command, 2 agents and
 /// its hooks"), or null when it has none.
@@ -34,7 +38,15 @@ function Detail({ entry }: { entry: LibraryEntry }) {
       ? entry.skill?.description
       : entry.kind === "plugin"
         ? entry.plugin?.description
-        : null;
+        : entry.kind === "context"
+          ? [
+              entry.config.description,
+              entry.context && plural(entry.context.documents, "document"),
+              entry.config.every_dot && "every dot",
+            ]
+              .filter(Boolean)
+              .join(" · ")
+          : null;
   const status = entry.catalog?.status;
   return (
     <>
@@ -54,8 +66,9 @@ function Detail({ entry }: { entry: LibraryEntry }) {
   );
 }
 
-/// The dot editor's "Tools and skills" section: which Library items the dot uses, as three
-/// checklists. A plugin's own MCP servers are not listed: they come with the plugin.
+/// The dot editor's "Tools and skills" section: which Library items the dot uses, as four
+/// checklists. A plugin's own MCP servers are not listed: they come with the plugin. A context
+/// collection for every dot shows ticked and cannot be unticked here.
 export function ToolsAndSkills(props: {
   uses: Uses;
   engine: EngineKind;
@@ -120,7 +133,8 @@ export function ToolsAndSkills(props: {
                     type="checkbox"
                     className="mt-1"
                     aria-label={entry.name}
-                    checked={uses[key].includes(entry.name)}
+                    checked={everyDot(entry) || uses[key].includes(entry.name)}
+                    disabled={everyDot(entry)}
                     onChange={(e) => toggle(key, entry.name, e.target.checked)}
                   />
                   <div className="flex min-w-0 flex-col">

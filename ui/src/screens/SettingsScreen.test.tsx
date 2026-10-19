@@ -57,6 +57,26 @@ describe("the Settings screen", () => {
     expect(await screen.findByRole("button", { name: "Restart Dots" })).toBeVisible();
   });
 
+  it("saves the global instructions, up to 32 KB", async () => {
+    saving();
+    const { user } = renderApp("/settings");
+    const text = await screen.findByLabelText("Global instructions");
+    expect(text).toHaveValue(stored.global_instructions);
+    await user.clear(text);
+    await user.type(text, "Sign off as the team.");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("Saved")).toBeVisible();
+    expect(backend.callsTo("update_settings")).toEqual([
+      { settings: { ...stored, global_instructions: "Sign off as the team." } },
+    ]);
+    const limit = { port: 1, max_concurrent_runs: 1 };
+    expect(settingsErrors({ ...limit, global_instructions: "x".repeat(32768) })).toEqual({});
+    // Bytes, as the core counts: "é" is two.
+    expect(settingsErrors({ ...limit, global_instructions: "é".repeat(16385) })).toEqual({
+      global: "The global instructions are at most 32 KB.",
+    });
+  });
+
   it("keeps numbers inside the core's bounds", async () => {
     expect(settingsErrors({ port: 47321, max_concurrent_runs: 16 })).toEqual({});
     expect(Object.keys(settingsErrors({ port: 0, max_concurrent_runs: 17 }))).toEqual([

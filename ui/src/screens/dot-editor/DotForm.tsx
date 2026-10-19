@@ -99,6 +99,17 @@ export function DotForm(props: {
           />
           <Label htmlFor="dot-enabled">Enabled</Label>
         </div>
+        <div className="flex items-center gap-2">
+          <Switch
+            id="dot-global-instructions"
+            checked={spec.use_global_instructions}
+            onCheckedChange={(v) => set("use_global_instructions", v)}
+          />
+          <Label htmlFor="dot-global-instructions">Start with the global instructions</Label>
+        </div>
+        <p className="-mt-2 text-xs text-muted-foreground">
+          The global instructions are set in Settings. A blank text adds nothing.
+        </p>
       </Section>
 
       <Section title="Engine">
