@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
+use crate::context::{self, Document};
 use crate::events::{Bus, RuntimeEvent};
 use crate::kit::{self, InstalledPlugin, PluginInfo};
 use crate::library::{
@@ -40,9 +41,30 @@ pub struct LibraryEntry {
     pub skill: Option<SkillDetail>,
     /// A plugin read from its folder.
     pub plugin: Option<PluginDetail>,
-    /// Why a skill or plugin folder could not be read ("folder not found").
+    /// A context collection read from its folder.
+    pub context: Option<ContextDetail>,
+    /// Why a skill, plugin or context folder could not be read ("folder not found").
     pub problem: Option<String>,
 }
+
+/// What a context collection's folder holds.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ContextDetail {
+    pub documents: usize,
+}
+
+/// The first documents of a collection (`context_documents`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ContextDocuments {
+    pub documents: Vec<Document>,
+    /// All documents found, up to `context::MAX_DOCUMENTS` and past it.
+    pub total: usize,
+    /// More documents than are listed here.
+    pub truncated: bool,
+}
+
+/// How many documents `context_documents` describes.
+pub const SHOWN_DOCUMENTS: usize = 200;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SkillDetail {
@@ -147,6 +169,14 @@ pub(crate) fn skill_problem(dir: &Path, e: &Error) -> String {
         "SKILL.md not found".into()
     } else {
         format!("could not be read: {e}")
+    }
+}
+
+fn context_problem(dir: &Path, e: &str) -> String {
+    if !dir.is_dir() {
+        "folder not found".into()
+    } else {
+        e.to_string()
     }
 }
 
@@ -344,6 +374,7 @@ impl LibraryService {
                 LibraryConfig::Skill(c) => (LibraryKind::Skill, c.path.clone()),
                 LibraryConfig::Plugin(c) => (LibraryKind::Plugin, c.path.clone()),
                 LibraryConfig::McpServer(_) => (LibraryKind::McpServer, String::new()),
+                LibraryConfig::Context(c) => (LibraryKind::Context, c.path.clone()),
             })
             .collect();
         let read = blocking(move || {
@@ -354,13 +385,18 @@ impl LibraryService {
                     match kind {
                         LibraryKind::Skill => Some(
                             kit::read_skill(&dir)
-                                .map(|s| (Some(s), None))
+                                .map(|s| (Some(s), None, None))
                                 .map_err(|e| skill_problem(&dir, &e)),
                         ),
                         LibraryKind::Plugin => Some(
                             kit::read_plugin(&dir)
-                                .map(|p| (None, Some(p)))
+                                .map(|p| (None, Some(p), None))
                                 .map_err(|e| plugin_problem(&dir, &e)),
+                        ),
+                        LibraryKind::Context => Some(
+                            context::walk(&dir)
+                                .map(|w| (None, None, Some(w.total)))
+                                .map_err(|e| context_problem(&dir, &e)),
                         ),
                         LibraryKind::McpServer => None,
                     }
@@ -387,6 +423,7 @@ impl LibraryService {
                 missing_variables: Vec::new(),
                 skill: None,
                 plugin: None,
+                context: None,
                 problem: None,
             };
             if let LibraryConfig::McpServer(config) = &item.config {
@@ -397,7 +434,8 @@ impl LibraryService {
                     .collect();
             }
             match read {
-                Some(Ok((skill, plugin))) => {
+                Some(Ok((skill, plugin, documents))) => {
+                    entry.context = documents.map(|documents| ContextDetail { documents });
                     entry.skill = skill.map(|s| SkillDetail {
                         description: s.description,
                     });
@@ -645,8 +683,39 @@ impl LibraryService {
                 let dir = PathBuf::from(&c.path);
                 Ok(Some(blocking(move || kit::read_plugin(&dir)).await??))
             }
+            LibraryConfig::Context(c) => {
+                if !Path::new(&c.path).is_dir() {
+                    return Err(Error::NotFound(format!(
+                        "the folder {} was not found",
+                        c.path
+                    )));
+                }
+                Ok(None)
+            }
             LibraryConfig::McpServer(_) => Ok(None),
         }
+    }
+
+    /// The first `SHOWN_DOCUMENTS` documents of the context collection `id`, each with its
+    /// title and summary (`context_documents`).
+    pub async fn context_documents(&self, id: &str) -> Result<ContextDocuments> {
+        let item = self.store.get_library_item(id).await?;
+        let LibraryConfig::Context(config) = &item.config else {
+            return Err(Error::Invalid(format!(
+                "the {} {:?} is not a context collection",
+                item.kind().label(),
+                item.name
+            )));
+        };
+        let dir = PathBuf::from(&config.path);
+        let (documents, total) = blocking(move || context::documents(&dir, SHOWN_DOCUMENTS))
+            .await?
+            .map_err(Error::NotFound)?;
+        Ok(ContextDocuments {
+            truncated: total > documents.len(),
+            documents,
+            total,
+        })
     }
 }
 

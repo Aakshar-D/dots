@@ -4,8 +4,9 @@
 use std::collections::BTreeMap;
 
 use dots_core::library::{
-    check_name, looks_secret, mcp_server_name, plugin_server_name, CatalogStatus, LibraryConfig,
-    LibraryItem, LibraryKind, McpCatalog, McpServerConfig, PluginConfig, SkillConfig, Uses,
+    check_name, looks_secret, mcp_server_name, plugin_server_name, CatalogStatus, ContextConfig,
+    LibraryConfig, LibraryItem, LibraryKind, McpCatalog, McpServerConfig, PluginConfig,
+    SkillConfig, Uses,
 };
 use dots_core::Error;
 use serde_json::json;
@@ -214,8 +215,13 @@ fn uses_default_to_nothing() {
     assert!(uses.is_empty());
     assert_eq!(
         serde_json::to_value(&uses).unwrap(),
-        json!({"mcp_servers": [], "skills": [], "plugins": []})
+        json!({"mcp_servers": [], "skills": [], "plugins": [], "context": []})
     );
+    // A dot stored before collections existed reads with none.
+    let old: Uses =
+        serde_json::from_value(json!({"mcp_servers": ["sf"], "skills": [], "plugins": []}))
+            .unwrap();
+    assert!(old.context.is_empty());
 }
 
 #[test]
@@ -354,4 +360,75 @@ fn an_env_value_may_hold_any_text_but_a_key_may_not() {
         .validate()
         .is_ok());
     assert!(invalid(env("A\nB", "v").validate()));
+}
+
+#[test]
+fn a_context_collection_name_is_short_and_lower_case() {
+    for good in ["company", "a", "kb-2", "on_call", "9lives", &"x".repeat(40)] {
+        assert!(check_name(LibraryKind::Context, good).is_ok(), "{good}");
+    }
+    for bad in [
+        "",
+        "Company",
+        "-kb",
+        "_kb",
+        "kb.notes",
+        "kb notes",
+        "kb/x",
+        &"x".repeat(41),
+    ] {
+        assert!(invalid(check_name(LibraryKind::Context, bad)), "{bad:?}");
+    }
+    assert_eq!(LibraryKind::Context.as_str(), "context");
+    assert_eq!(LibraryKind::Context.uses_key(), "context");
+    assert_eq!(LibraryKind::Context.label(), "context collection");
+}
+
+#[test]
+fn a_context_config_reads_as_the_spec_writes_it_and_is_checked() {
+    let item: LibraryItem = serde_json::from_value(json!({
+        "id": "01", "name": "company", "kind": "context",
+        "config": {"path": "C:/notes/company"},
+        "owner_id": null, "created_at": "t", "updated_at": "t"
+    }))
+    .unwrap();
+    assert_eq!(item.kind(), LibraryKind::Context);
+    assert_eq!(
+        item.config,
+        LibraryConfig::Context(ContextConfig {
+            path: "C:/notes/company".into(),
+            description: String::new(),
+            every_dot: false,
+        })
+    );
+    let with = |path: &str, description: String| {
+        LibraryConfig::Context(ContextConfig {
+            path: path.into(),
+            description,
+            every_dot: true,
+        })
+        .validate()
+    };
+    assert!(with("C:/kb", "é".repeat(300)).is_ok());
+    assert!(invalid(with("  ", String::new())));
+    assert!(invalid(with("C:/kb", "é".repeat(301))));
+}
+
+#[test]
+fn uses_name_each_collection_once() {
+    let uses = Uses {
+        context: vec!["company".into(), "company".into()],
+        ..Uses::default()
+    };
+    assert!(invalid(uses.validate()));
+    let bad = Uses {
+        context: vec!["Company".into()],
+        ..Uses::default()
+    };
+    assert!(invalid(bad.validate()));
+    assert!(!Uses {
+        context: vec!["company".into()],
+        ..Uses::default()
+    }
+    .is_empty());
 }

@@ -76,6 +76,8 @@ describe("commands", () => {
     expect(await commands.libraryAccept("i1", "fp2")).toEqual(fixture.McpCatalog);
     reply = async () => fixture.ScannedSkill;
     expect(await commands.libraryScanSkills("C:/skills")).toEqual(fixture.ScannedSkill);
+    reply = async () => fixture.ContextDocuments;
+    expect(await commands.contextDocuments("i1")).toEqual(fixture.ContextDocuments);
     reply = async () => fixture.InstalledPlugin;
     expect(await commands.installedClaudePlugins()).toEqual(fixture.InstalledPlugin);
     reply = async () => fixture.EnvVariable;
@@ -90,6 +92,7 @@ describe("commands", () => {
       ["library_check", { id: "i1" }],
       ["library_accept", { id: "i1", fingerprint: "fp2" }],
       ["library_scan_skills", { path: "C:/skills" }],
+      ["context_documents", { id: "i1" }],
       ["installed_claude_plugins", undefined],
       ["environment_variables", { names: ["GITHUB_TOKEN"] }],
     ]);

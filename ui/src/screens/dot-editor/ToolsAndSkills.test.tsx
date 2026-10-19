@@ -12,7 +12,7 @@ import { backend } from "@/test/backend";
 import { sample } from "@/test/fixtures";
 
 const [github, pluginServer, pdf, pdfTools] = sample.library;
-const none: Uses = { mcp_servers: [], skills: [], plugins: [] };
+const none: Uses = { mcp_servers: [], skills: [], plugins: [], context: [] };
 
 function setup(opts: { uses?: Uses; engine?: EngineKind; library?: LibraryEntry[] } = {}) {
   backend.on("library_list", () => opts.library ?? sample.library);
@@ -49,7 +49,12 @@ describe("the editor's Tools and skills section", () => {
     await user.click(screen.getByLabelText(github!.name));
     await user.click(screen.getByLabelText("pdf-tools"));
     await user.click(screen.getByLabelText("pdf"));
-    expect(uses()).toEqual({ mcp_servers: ["github"], skills: [], plugins: ["pdf-tools"] });
+    expect(uses()).toEqual({
+      mcp_servers: ["github"],
+      skills: [],
+      plugins: ["pdf-tools"],
+      context: [],
+    });
   });
 
   it("keeps a name the Library no longer has, so that it can be unticked", async () => {

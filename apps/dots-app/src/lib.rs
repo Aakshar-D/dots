@@ -73,6 +73,7 @@ command_list![
     library_check,
     library_accept,
     library_scan_skills,
+    context_documents,
     installed_claude_plugins,
     environment_variables,
 ];

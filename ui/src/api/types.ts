@@ -30,7 +30,7 @@ export const Action = z.enum(["allow", "ask", "deny"]);
 export const Preset = z.enum(["read-only", "sandboxed", "trusted", "custom"]);
 export const FileStatus = z.enum(["added", "modified", "deleted", "renamed"]);
 export const ScheduleStatus = z.enum(["active", "completed", "expired"]);
-export const LibraryKind = z.enum(["mcp_server", "skill", "plugin"]);
+export const LibraryKind = z.enum(["mcp_server", "skill", "plugin", "context"]);
 // Where an MCP server's tool list stands: accepted, changed since, last check failed, or never
 // accepted.
 export const CatalogStatus = z.enum(["accepted", "changed", "unreachable", "unchecked"]);
@@ -73,6 +73,7 @@ export const Uses = z.strictObject({
   mcp_servers: z.array(z.string()),
   skills: z.array(z.string()),
   plugins: z.array(z.string()),
+  context: z.array(z.string()),
 });
 
 const dotSpecShape = {
@@ -316,11 +317,19 @@ export const PluginConfig = z.strictObject({
   installed_id: nullable(z.string()),
   run_hooks: z.boolean(),
 });
+// A folder of documents dots read with the `context` tool (context library spec section 3).
+export const ContextConfig = z.strictObject({
+  path: z.string(),
+  description: z.string(),
+  // Every dot uses it, ticked or not.
+  every_dot: z.boolean(),
+});
 // An item's config with its kind: what `library_add` and `library_update` take.
 export const LibraryConfig = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("mcp_server"), config: McpServerConfig }),
   z.strictObject({ kind: z.literal("skill"), config: SkillConfig }),
   z.strictObject({ kind: z.literal("plugin"), config: PluginConfig }),
+  z.strictObject({ kind: z.literal("context"), config: ContextConfig }),
 ]);
 const libraryItemShape = {
   id: z.string(),
@@ -351,6 +360,12 @@ const libraryItemOf = <E extends z.ZodRawShape>(extra: E) =>
       ...libraryItemShape,
       ...extra,
     }),
+    z.strictObject({
+      kind: z.literal("context"),
+      config: ContextConfig,
+      ...libraryItemShape,
+      ...extra,
+    }),
   ]);
 export const LibraryItem = libraryItemOf({});
 // A tool of `tools/list` as the server sent it (camelCase, optional fields left out).
@@ -373,6 +388,7 @@ export const McpCatalog = z.strictObject({
   error: nullable(z.string()),
 });
 export const SkillDetail = z.strictObject({ description: z.string() });
+export const ContextDetail = z.strictObject({ documents: z.number().int() });
 export const PluginDetail = z.strictObject({
   version: nullable(z.string()),
   description: nullable(z.string()),
@@ -393,8 +409,20 @@ export const LibraryEntry = libraryItemOf({
   missing_variables: z.array(z.string()),
   skill: nullable(SkillDetail),
   plugin: nullable(PluginDetail),
-  // Why a skill or plugin folder could not be read.
+  context: nullable(ContextDetail),
+  // Why a skill, plugin or context folder could not be read.
   problem: nullable(z.string()),
+});
+export const ContextDocument = z.strictObject({
+  path: z.string(),
+  title: z.string(),
+  summary: z.string(),
+});
+// A collection's first documents (`context_documents`); `total` counts them all.
+export const ContextDocuments = z.strictObject({
+  documents: z.array(ContextDocument),
+  total: z.number().int(),
+  truncated: z.boolean(),
 });
 export const McpProbe = z.strictObject({ tools: z.array(McpTool), fingerprint: z.string() });
 export const ScannedSkill = z.strictObject({
@@ -493,6 +521,8 @@ export type McpCatalog = z.infer<typeof McpCatalog>;
 export type SkillDetail = z.infer<typeof SkillDetail>;
 export type PluginDetail = z.infer<typeof PluginDetail>;
 export type LibraryEntry = z.infer<typeof LibraryEntry>;
+export type ContextConfig = z.infer<typeof ContextConfig>;
+export type ContextDocuments = z.infer<typeof ContextDocuments>;
 export type McpProbe = z.infer<typeof McpProbe>;
 export type ScannedSkill = z.infer<typeof ScannedSkill>;
 export type InstalledPlugin = z.infer<typeof InstalledPlugin>;

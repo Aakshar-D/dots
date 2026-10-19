@@ -69,9 +69,21 @@
     "library_check",
     "library_accept",
     "library_scan_skills",
+    "context_documents",
     "installed_claude_plugins",
     "environment_variables"
   ],
+  "ContextDocuments": {
+    "documents": [
+      {
+        "path": "people/ana.md",
+        "summary": "Owns billing",
+        "title": "Ana Lima"
+      }
+    ],
+    "total": 42,
+    "truncated": true
+  },
   "Dot": {
     "approval_wait_secs": 240,
     "created_at": "2026-10-09T12:00:00.000Z",
@@ -175,6 +187,9 @@
     "use_global_instructions": true,
     "use_user_settings": false,
     "uses": {
+      "context": [
+        "company"
+      ],
       "mcp_servers": [
         "github"
       ],
@@ -294,6 +309,9 @@
       "use_global_instructions": true,
       "use_user_settings": false,
       "uses": {
+        "context": [
+          "company"
+        ],
         "mcp_servers": [
           "github"
         ],
@@ -405,6 +423,7 @@
     "use_global_instructions": true,
     "use_user_settings": false,
     "uses": {
+      "context": [],
       "mcp_servers": [],
       "plugins": [],
       "skills": []
@@ -458,7 +477,8 @@
     "LibraryKind": [
       "mcp_server",
       "skill",
-      "plugin"
+      "plugin",
+      "context"
     ],
     "Preset": [
       "read-only",
@@ -625,6 +645,14 @@
         "run_hooks": false
       },
       "kind": "plugin"
+    },
+    {
+      "config": {
+        "description": "How we work: style, people, runbooks",
+        "every_dot": true,
+        "path": "C:/notes/company"
+      },
+      "kind": "context"
     }
   ],
   "LibraryEntry": [
@@ -685,6 +713,7 @@
         },
         "transport": "stdio"
       },
+      "context": null,
       "created_at": "2026-10-09T12:00:00.000Z",
       "id": "01J0SRV",
       "kind": "mcp_server",
@@ -756,6 +785,7 @@
         "transport": "http",
         "url": "https://mcp.example.com/mcp"
       },
+      "context": null,
       "created_at": "2026-10-09T12:00:00.000Z",
       "id": "01J0SRV2",
       "kind": "mcp_server",
@@ -778,6 +808,7 @@
       "config": {
         "path": "C:/skills/pdf"
       },
+      "context": null,
       "created_at": "2026-10-09T12:00:00.000Z",
       "id": "01J0SKL",
       "kind": "skill",
@@ -799,6 +830,7 @@
         "path": "C:/plugins/pdf-tools",
         "run_hooks": false
       },
+      "context": null,
       "created_at": "2026-10-09T12:00:00.000Z",
       "id": "01J0PLG",
       "kind": "plugin",
@@ -825,6 +857,33 @@
           "agents/broken.md: could not be read"
         ]
       },
+      "problem": null,
+      "skill": null,
+      "updated_at": "2026-10-09T12:00:00.000Z",
+      "used_by": [
+        {
+          "id": "01J0DOT",
+          "name": "nightly-tests"
+        }
+      ]
+    },
+    {
+      "catalog": null,
+      "config": {
+        "description": "How we work: style, people, runbooks",
+        "every_dot": true,
+        "path": "C:/notes/company"
+      },
+      "context": {
+        "documents": 42
+      },
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "id": "01J0CTX",
+      "kind": "context",
+      "missing_variables": [],
+      "name": "company",
+      "owner_id": null,
+      "plugin": null,
       "problem": null,
       "skill": null,
       "updated_at": "2026-10-09T12:00:00.000Z",
@@ -1055,6 +1114,7 @@
     "use_global_instructions": true,
     "use_user_settings": false,
     "uses": {
+      "context": [],
       "mcp_servers": [],
       "plugins": [],
       "skills": []

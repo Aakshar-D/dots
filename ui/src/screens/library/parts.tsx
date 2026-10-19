@@ -63,7 +63,12 @@ export function ToolList({ tools }: { tools: McpTool[] }) {
   );
 }
 
-const KIND_WORD = { mcp_server: "server", skill: "skill", plugin: "plugin" } as const;
+const KIND_WORD = {
+  mcp_server: "server",
+  skill: "skill",
+  plugin: "plugin",
+  context: "collection",
+} as const;
 
 /// "Remove": asks first and names the dots that use the item, then removes it and takes it out
 /// of them (`confirm` is true only when dots use it).

@@ -11,7 +11,9 @@
 
 use dots_core::kit::InstalledPlugin;
 use dots_core::library::{LibraryConfig, LibraryItem, McpCatalog, McpServerConfig};
-use dots_core::library_service::{EnvVariable, LibraryEntry, McpProbe, ScannedSkill};
+use dots_core::library_service::{
+    ContextDocuments, EnvVariable, LibraryEntry, McpProbe, ScannedSkill,
+};
 use dots_core::model::{
     Approval, Dot, DotOverview, DotSpec, Inbox, Run, RunEventRecord, SettingsSaved, Status,
     WorktreeDiff,
@@ -391,6 +393,12 @@ pub async fn library_scan_skills(
     path: String,
 ) -> Res<Vec<ScannedSkill>> {
     Ok(state.rt()?.library().scan_skills(&path).await?)
+}
+
+/// The first documents of a context collection, with their titles and summaries.
+#[tauri::command]
+pub async fn context_documents(state: State<'_, AppState>, id: String) -> Res<ContextDocuments> {
+    Ok(state.rt()?.library().context_documents(&id).await?)
 }
 
 #[tauri::command]

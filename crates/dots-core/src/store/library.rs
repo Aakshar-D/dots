@@ -14,8 +14,9 @@ use crate::util::{new_id, now};
 use crate::{Error, Result};
 
 const ITEM_COLUMNS: &str = "id, kind, name, config, owner_id, created_at, updated_at";
-/// Servers, then skills, then plugins; by name within a kind.
-const ITEM_ORDER: &str = "CASE kind WHEN 'mcp_server' THEN 0 WHEN 'skill' THEN 1 ELSE 2 END, name";
+/// Servers, then skills, then plugins, then context collections; by name within a kind.
+const ITEM_ORDER: &str = "CASE kind WHEN 'mcp_server' THEN 0 WHEN 'skill' THEN 1 \
+    WHEN 'plugin' THEN 2 ELSE 3 END, name";
 const CATALOG_COLUMNS: &str = "server_id, status, accepted_fingerprint, accepted_tools, \
     seen_fingerprint, seen_tools, checked_at, error";
 
@@ -25,6 +26,7 @@ fn config_json(config: &LibraryConfig) -> Result<String> {
         LibraryConfig::McpServer(c) => serde_json::to_string(c)?,
         LibraryConfig::Skill(c) => serde_json::to_string(c)?,
         LibraryConfig::Plugin(c) => serde_json::to_string(c)?,
+        LibraryConfig::Context(c) => serde_json::to_string(c)?,
     })
 }
 
@@ -255,6 +257,7 @@ impl Store {
                 LibraryKind::McpServer => &mut uses.mcp_servers,
                 LibraryKind::Skill => &mut uses.skills,
                 LibraryKind::Plugin => &mut uses.plugins,
+                LibraryKind::Context => &mut uses.context,
             };
             list.retain(|n| *n != name);
             sqlx::query("UPDATE dots SET uses = ?, updated_at = ? WHERE id = ?")

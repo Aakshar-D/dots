@@ -43,6 +43,7 @@ fn uses(mcp: &[&str], skills: &[&str], plugins: &[&str]) -> Uses {
         mcp_servers: v(mcp),
         skills: v(skills),
         plugins: v(plugins),
+        context: Vec::new(),
     }
 }
 

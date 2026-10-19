@@ -26,6 +26,7 @@ const schemas: Record<SampleName, { parse: (v: unknown) => unknown }> = {
   McpServerConfig: T.McpServerConfig.array(),
   LibraryItem: T.LibraryItem.array(),
   LibraryEntry: T.LibraryEntry.array(),
+  ContextDocuments: T.ContextDocuments,
   McpCatalog: T.McpCatalog,
   McpProbe: T.McpProbe,
   ScannedSkill: T.ScannedSkill.array(),
