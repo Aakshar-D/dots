@@ -377,9 +377,13 @@ impl RunTools {
             };
             let dir = PathBuf::from(&config.path);
             let walk_dir = dir.clone();
-            let walked = tokio::task::spawn_blocking(move || context::walk(&walk_dir))
-                .await
-                .map_err(|e| crate::Error::Other(format!("reading a collection failed: {e}")))?;
+            let (walked, is_dir) = tokio::task::spawn_blocking(move || {
+                let walked = context::walk(&walk_dir);
+                let is_dir = walked.is_err() && walk_dir.is_dir();
+                (walked, is_dir)
+            })
+            .await
+            .map_err(|e| crate::Error::Other(format!("reading a collection failed: {e}")))?;
             match walked {
                 Ok(walk) => tools.contexts.push(Collection {
                     name: item.name,
@@ -387,7 +391,7 @@ impl RunTools {
                     description: config.description.clone(),
                     documents: walk.total,
                 }),
-                Err(_) if !dir.is_dir() => {
+                Err(_) if !is_dir => {
                     notices.push(format!("context {}: folder not found", item.name))
                 }
                 Err(e) => notices.push(format!("context {}: {e}", item.name)),

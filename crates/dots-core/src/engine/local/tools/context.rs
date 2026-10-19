@@ -4,7 +4,7 @@
 
 use serde_json::Value;
 
-use super::{tool, ToolOutput};
+use super::{cap_head, tool, ToolOutput};
 use crate::context::{self, Collection, DESCRIPTION};
 
 /// The function definition, offered to a run that has context collections.
@@ -22,8 +22,8 @@ pub fn schema() -> Value {
 pub async fn run(collections: &[Collection], input: &Value) -> ToolOutput {
     let (collections, input) = (collections.to_vec(), input.clone());
     match tokio::task::spawn_blocking(move || context::call(&collections, &input)).await {
-        Ok(Ok(text)) => ToolOutput::ok(text),
-        Ok(Err(e)) => ToolOutput::err(e),
+        Ok(Ok(text)) => ToolOutput::ok(cap_head(text)),
+        Ok(Err(e)) => ToolOutput::err(cap_head(e)),
         Err(e) => ToolOutput::err(format!("reading the collection failed: {e}")),
     }
 }

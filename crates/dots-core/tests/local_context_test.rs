@@ -252,6 +252,41 @@ async fn a_dots_own_context_rule_still_decides() {
     assert!(result.to_lowercase().contains("denied"), "{result}");
 }
 
+#[tokio::test]
+async fn a_context_rule_naming_a_collection_refuses_only_that_collection() {
+    let t = setup().await;
+    t.collection("company", "kb", false).await;
+    t.collection("secret", "sec", false).await;
+    write(&t.dir.path().join("kb/a.md"), "open plans");
+    write(&t.dir.path().join("sec/b.md"), "hidden plans");
+    let llm = Llm::start(vec![
+        call(
+            "c1",
+            "context",
+            json!({"collection": "secret", "path": "b.md"}),
+        ),
+        call(
+            "c2",
+            "context",
+            json!({"collection": "company", "path": "a.md"}),
+        ),
+        text("Done."),
+    ])
+    .await;
+    let mut s = t.spec(&llm);
+    s.policy = Policy::preset(Preset::Sandboxed);
+    s.policy
+        .rules
+        .insert(0, Rule::new("Context(secret)", Action::Deny));
+    s.uses.context = vec!["company".into(), "secret".into()];
+    t.run(&s, RunStatus::Succeeded).await;
+    let reqs = llm.requests();
+    let denied = tool_result(&reqs[1], "c1");
+    assert!(!denied.contains("hidden plans"), "{denied}");
+    assert!(denied.to_lowercase().contains("denied"), "{denied}");
+    assert_eq!(tool_result(&reqs[2], "c2"), "open plans");
+}
+
 #[test]
 fn context_is_a_local_tool_with_the_policy_name_context() {
     assert_eq!(tools::alias("context"), Some("Context"));

@@ -1303,3 +1303,51 @@ fn every_preset_allows_reading_context_and_a_rule_still_wins() {
     assert_eq!(p.resolve("Context", &json!({})), Action::Deny);
     assert!(!p.cli_lists().1.iter().any(|t| t == "Context"));
 }
+
+#[test]
+fn a_context_rule_with_an_argument_names_a_collection() {
+    let call = |name: &str| json!({"collection": name, "query": "x"});
+    // Deny: refuses that collection and leaves the other to the next rule (the preset's allow).
+    let mut p = Policy::preset(Preset::Sandboxed);
+    p.rules
+        .insert(0, Rule::new("Context(secret)", Action::Deny));
+    assert_eq!(p.resolve("Context", &call("secret")), Action::Deny);
+    assert_eq!(p.resolve("Context", &call(" secret ")), Action::Deny);
+    assert_eq!(p.resolve("Context", &call("public")), Action::Allow);
+    // Ask works the same way (an allow rule outranks an ask rule, so the allow names `public`).
+    let mut p = Policy::preset(Preset::Sandboxed);
+    p.default = Action::Deny;
+    p.rules.retain(|r| r.tool != "Context");
+    p.rules.push(Rule::new("Context(secret)", Action::Ask));
+    p.rules.push(Rule::new("Context(public)", Action::Allow));
+    assert_eq!(p.resolve("Context", &call("secret")), Action::Ask);
+    assert_eq!(p.resolve("Context", &call("public")), Action::Allow);
+    assert_eq!(p.resolve("Context", &call("other")), Action::Deny);
+    // Allow: allows that collection only.
+    let mut p = Policy::preset(Preset::Sandboxed);
+    p.rules.retain(|r| r.tool != "Context");
+    p.rules
+        .insert(0, Rule::new("Context(public)", Action::Allow));
+    assert_eq!(p.resolve("Context", &call("public")), Action::Allow);
+    assert_ne!(p.resolve("Context", &call("secret")), Action::Allow);
+    // A call without a `collection` is denied by a deny rule and never allowed by an allow rule.
+    let mut deny = Policy::preset(Preset::Sandboxed);
+    deny.rules.insert(0, Rule::new("Context(x)", Action::Deny));
+    assert_eq!(
+        deny.resolve("Context", &json!({"query": "q"})),
+        Action::Deny
+    );
+    assert_eq!(
+        deny.resolve("Context", &json!({"collection": 3})),
+        Action::Deny
+    );
+    let mut allow = Policy::preset(Preset::Sandboxed);
+    allow.rules.retain(|r| r.tool != "Context");
+    allow
+        .rules
+        .insert(0, Rule::new("Context(x)", Action::Allow));
+    assert_ne!(
+        allow.resolve("Context", &json!({"query": "q"})),
+        Action::Allow
+    );
+}

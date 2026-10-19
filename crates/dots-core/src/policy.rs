@@ -819,6 +819,13 @@ fn pattern_matches(
                 spec.trim_start().strip_prefix("domain:"),
             ) {
                 webfetch_domain_matches(domain, input, action)
+            } else if name == "Context" {
+                // The argument names a collection. The CLI never sees `Context` rules, so this
+                // is the only check: a call without a `collection` matches deny and ask rules.
+                match input.get("collection").and_then(Value::as_str) {
+                    Some(collection) => collection.trim() == spec.trim(),
+                    None => action != Action::Allow,
+                }
             } else {
                 // Unknown spec: the CLI enforces it; fail closed on deny/ask, never allow.
                 action != Action::Allow
