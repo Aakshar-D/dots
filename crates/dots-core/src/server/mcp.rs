@@ -5,8 +5,10 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::{json, Value};
 
+use super::gateway::not_performed;
 use super::webhook::bearer;
 use super::ServerState;
+use crate::context;
 use crate::engine::{PermissionGate, PermissionOutcome};
 
 const DEFAULT_PROTOCOL: &str = "2025-06-18";
@@ -63,6 +65,20 @@ fn approve_tool() -> Value {
     })
 }
 
+/// The `context` tool of a run that has context collections (context library spec section 4):
+/// the same arguments as the local engine's.
+fn context_tool() -> Value {
+    json!({
+        "name": "context",
+        "description": context::DESCRIPTION,
+        "inputSchema": {
+            "type": "object",
+            "properties": context::properties(),
+            "required": ["collection"]
+        }
+    })
+}
+
 pub async fn handle(State(s): State<ServerState>, headers: HeaderMap, body: Bytes) -> Response {
     let Some(run_id) = bearer(&headers).and_then(|t| s.runner.run_for_secret(&t)) else {
         return StatusCode::UNAUTHORIZED.into_response();
@@ -78,14 +94,66 @@ pub async fn handle(State(s): State<ServerState>, headers: HeaderMap, body: Byte
     let result = match method {
         "initialize" => initialize_result(&req, "dots"),
         "ping" => json!({}),
-        "tools/list" => json!({ "tools": [approve_tool()] }),
-        "tools/call" => match call_approve(&s, &run_id, &req).await {
-            Ok(v) => v,
-            Err((code, msg)) => return rpc_error(id, code, &msg),
-        },
+        "tools/list" => {
+            let mut tools = vec![approve_tool()];
+            if has_contexts(&s, &run_id) {
+                tools.push(context_tool());
+            }
+            json!({ "tools": tools })
+        }
+        "tools/call" => {
+            let answer = match req.pointer("/params/name").and_then(Value::as_str) {
+                Some("context") => call_context(&s, &run_id, &req).await,
+                _ => call_approve(&s, &run_id, &req).await,
+            };
+            match answer {
+                Ok(v) => v,
+                Err((code, msg)) => return rpc_error(id, code, &msg),
+            }
+        }
         other => return rpc_error(id, -32601, &format!("method not found: {other}")),
     };
     Json(json!({ "jsonrpc": "2.0", "id": id, "result": result })).into_response()
+}
+
+/// The run has context collections open, so `context` is one of its tools.
+fn has_contexts(s: &ServerState, run_id: &str) -> bool {
+    s.runner
+        .run_tools(run_id)
+        .is_some_and(|tools| !tools.contexts().is_empty())
+}
+
+/// Checks a `context` call against the dot's policy as the tool `Context`, waiting for an
+/// approval when a rule asks, and reads the run's collections. A call that is not performed is
+/// a tool result with `isError`, as the gateway answers.
+async fn call_context(s: &ServerState, run_id: &str, req: &Value) -> Result<Value, (i64, String)> {
+    let params = req
+        .get("params")
+        .ok_or((-32602, "missing params".to_string()))?;
+    let input = match params.get("arguments") {
+        None | Some(Value::Null) => json!({}),
+        Some(args @ Value::Object(_)) => args.clone(),
+        Some(_) => return Err((-32602, "params.arguments must be an object".to_string())),
+    };
+    let Some(tools) = s
+        .runner
+        .run_tools(run_id)
+        .filter(|tools| !tools.contexts().is_empty())
+    else {
+        return Err((-32602, "unknown tool".to_string()));
+    };
+    let input = match s.hub.check(run_id, "Context", input).await {
+        Ok(PermissionOutcome::Allow { input }) => input,
+        Ok(PermissionOutcome::Deny { message }) => return Ok(not_performed(&message)),
+        Err(e) => return Ok(not_performed(&format!("permission check failed: {e}"))),
+    };
+    let collections = tools.contexts().to_vec();
+    let read = tokio::task::spawn_blocking(move || context::call(&collections, &input)).await;
+    Ok(match read {
+        Ok(Ok(text)) => json!({ "content": [{ "type": "text", "text": text }] }),
+        Ok(Err(e)) => not_performed(&e),
+        Err(e) => not_performed(&format!("reading the collection failed: {e}")),
+    })
 }
 
 async fn call_approve(s: &ServerState, run_id: &str, req: &Value) -> Result<Value, (i64, String)> {
