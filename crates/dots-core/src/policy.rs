@@ -11,6 +11,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::library::{check_name, LibraryKind};
 use crate::{Error, Result};
 
 str_enum!(Action { Allow => "allow", Ask => "ask", Deny => "deny" });
@@ -246,6 +247,11 @@ impl Policy {
                 return Err(invalid("tool name must not contain whitespace"));
             }
             if let Pattern::WithSpec { tool, spec } = pattern {
+                if tool == "Context" && check_name(LibraryKind::Context, spec.trim()).is_err() {
+                    return Err(invalid(
+                        "a Context rule names one collection: lower-case letters, digits, '-'                          and '_'",
+                    ));
+                }
                 if COMMAND_TOOLS.contains(&tool) {
                     let body = spec.strip_suffix(":*");
                     if body.unwrap_or(spec).contains('*') {

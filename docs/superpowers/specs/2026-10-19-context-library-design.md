@@ -94,7 +94,7 @@ One tool, the same for both engines:
 - Policy name `Context`. Every preset gains a `Context` **allow** rule next to `Skill`: it reads only folders the person chose in the Library.
 - The upgrade (migration 0007) adds a `Context` allow rule at the end of every stored policy that has no rule naming `Context` (`Context` or `Context(...)`).
 - The check is the normal one (`PermissionGate::check`, tool `Context`), so a dot's `Context` ask or deny rule works as for any built-in tool, approvals included.
-- A rule `Context(<name>)` applies only to calls whose `collection` is that name; a call without a `collection` is matched by `Context(...)` deny and ask rules and never by an allow rule.
+- A rule `Context(<name>)` applies only to calls whose `collection` is that name; a call without a `collection` is matched by `Context(...)` deny and ask rules and never by an allow rule; the name follows the collection name rule, and a rule with any other argument is refused.
 
 ## 4. The two engines
 

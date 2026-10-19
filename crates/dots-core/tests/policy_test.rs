@@ -1351,3 +1351,32 @@ fn a_context_rule_with_an_argument_names_a_collection() {
         Action::Allow
     );
 }
+
+#[test]
+fn a_context_rule_must_name_one_collection() {
+    let with = |tool: &str| {
+        let mut p = Policy::preset(Preset::Sandboxed);
+        p.rules.insert(0, Rule::new(tool, Action::Deny));
+        p.validate()
+    };
+    // `Context()` is refused already as an empty spec.
+    assert!(with("Context()").is_err());
+    for bad in ["Context(*)", "Context(comp*)", "Context(Kb)"] {
+        let err = with(bad).unwrap_err().to_string();
+        assert!(
+            err.contains("a Context rule names one collection"),
+            "{bad}: {err}"
+        );
+    }
+    for good in ["Context", "Context(kb)", "Context( kb )"] {
+        with(good).unwrap_or_else(|e| panic!("{good}: {e}"));
+    }
+    for preset in [
+        Preset::ReadOnly,
+        Preset::Sandboxed,
+        Preset::Trusted,
+        Preset::Custom,
+    ] {
+        Policy::preset(preset).validate().unwrap();
+    }
+}
