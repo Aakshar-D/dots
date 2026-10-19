@@ -145,6 +145,20 @@ impl Store {
         item_from_row(&row)
     }
 
+    /// The context collections a run of a dot with `uses` reads: those it names and every one
+    /// whose `every_dot` is on, by name.
+    pub async fn used_collections(&self, uses: &Uses) -> Result<Vec<LibraryItem>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {ITEM_COLUMNS} FROM library_items WHERE kind = 'context' AND (\
+             name IN (SELECT value FROM json_each(?)) \
+             OR json_extract(config, '$.every_dot') = 1) ORDER BY name"
+        ))
+        .bind(serde_json::to_string(&uses.context)?)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(item_from_row).collect()
+    }
+
     pub async fn find_library_item(
         &self,
         kind: LibraryKind,

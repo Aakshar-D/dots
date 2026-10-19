@@ -1279,3 +1279,27 @@ fn a_deny_rule_still_wins_over_a_candidate() {
     );
     assert_eq!(p.resolve_in("Write", &write, ws()), Action::Deny);
 }
+
+#[test]
+fn every_preset_allows_reading_context_and_a_rule_still_wins() {
+    for preset in [
+        Preset::ReadOnly,
+        Preset::Sandboxed,
+        Preset::Trusted,
+        Preset::Custom,
+    ] {
+        let p = Policy::preset(preset);
+        assert_eq!(
+            p.resolve("Context", &json!({"collection": "kb"})),
+            Action::Allow,
+            "{preset:?}"
+        );
+        // The CLI has no `Context` tool: the rule stays out of its lists.
+        let (allow, deny) = p.cli_lists();
+        assert!(!allow.iter().chain(&deny).any(|t| t.starts_with("Context")));
+    }
+    let mut p = Policy::preset(Preset::Sandboxed);
+    p.rules.insert(0, Rule::new("Context", Action::Deny));
+    assert_eq!(p.resolve("Context", &json!({})), Action::Deny);
+    assert!(!p.cli_lists().1.iter().any(|t| t == "Context"));
+}

@@ -151,8 +151,9 @@ impl Policy {
                 Action::Allow
             }
         };
-        // Every preset lets the model read the skills the dot uses.
+        // Every preset lets the model read the skills and the context collections the dot uses.
         rules.push(Rule::new("Skill", Action::Allow));
+        rules.push(Rule::new("Context", Action::Allow));
         Policy {
             preset,
             rules,
@@ -214,12 +215,18 @@ impl Policy {
             .any(|r| r.action == action && pattern_matches(&r.tool, tool, input, action, ws))
     }
 
-    /// (allow patterns, deny patterns) for `--allowedTools` / `--disallowedTools`.
+    /// (allow patterns, deny patterns) for `--allowedTools` / `--disallowedTools`. A rule of
+    /// `Context` is left out: the CLI has no such tool, and Dots' own `dots` server checks each
+    /// call of its `context` tool against these rules itself (context library spec section 4).
     pub fn cli_lists(&self) -> (Vec<String>, Vec<String>) {
+        let dots_only = |tool: &str| {
+            let tool = tool.trim();
+            tool == "Context" || tool.starts_with("Context(")
+        };
         let pick = |a: Action| -> Vec<String> {
             self.rules
                 .iter()
-                .filter(|r| r.action == a)
+                .filter(|r| r.action == a && !dots_only(&r.tool))
                 .map(|r| r.tool.trim().to_string())
                 .collect()
         };

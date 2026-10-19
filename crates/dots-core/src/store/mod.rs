@@ -23,8 +23,8 @@ pub struct Store {
 }
 
 impl Store {
-    /// Opens (creating if needed) the database file and applies migrations, with the part of
-    /// migration 0006 that needs code (`upgrade.rs`).
+    /// Opens (creating if needed) the database file and applies migrations, with the parts of
+    /// migrations 0006 and 0007 that need code (`upgrade.rs`).
     pub async fn open(path: &Path) -> Result<Store> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -41,6 +41,7 @@ impl Store {
             .await?;
         sqlx::migrate!("./migrations").run(&pool).await?;
         upgrade::finish_0006(&pool).await?;
+        upgrade::finish_0007(&pool).await?;
         Ok(Store { pool })
     }
 

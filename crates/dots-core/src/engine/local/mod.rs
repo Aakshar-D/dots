@@ -394,11 +394,15 @@ impl Session {
         Some(lines)
     }
 
-    /// Runs a built-in call the gate allowed: `skill` reads the run's skills; every other tool
-    /// works in the workspace, the walking tools leaving out what the policy denies.
+    /// Runs a built-in call the gate allowed: `skill` reads the run's skills and `context` its
+    /// context collections; every other tool works in the workspace, the walking tools leaving
+    /// out what the policy denies.
     async fn run_allowed(&self, call: &PreparedCall) -> ToolOutput {
         if call.name == "skill" {
             return tools::skill::run(self.ctx.tools.skills(), &call.input).await;
+        }
+        if call.name == "context" {
+            return tools::context::run(self.ctx.tools.contexts(), &call.input).await;
         }
         let filter =
             PathFilter::from_policy(&self.ctx.dot.spec.policy, call.alias, &self.ctx.workspace);

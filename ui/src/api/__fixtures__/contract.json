@@ -171,6 +171,10 @@
         {
           "action": "allow",
           "tool": "Skill"
+        },
+        {
+          "action": "allow",
+          "tool": "Context"
         }
       ]
     },
@@ -293,6 +297,10 @@
           {
             "action": "allow",
             "tool": "Skill"
+          },
+          {
+            "action": "allow",
+            "tool": "Context"
           }
         ]
       },
@@ -415,6 +423,10 @@
         {
           "action": "allow",
           "tool": "Skill"
+        },
+        {
+          "action": "allow",
+          "tool": "Context"
         }
       ]
     },
@@ -1106,6 +1118,10 @@
         {
           "action": "allow",
           "tool": "Skill"
+        },
+        {
+          "action": "allow",
+          "tool": "Context"
         }
       ]
     },
