@@ -442,3 +442,87 @@ fn the_prompt_section_lists_the_collections() {
     let section = context::prompt_section(&collections, "context");
     assert_eq!(section.lines().count(), 1 + context::MAX_PROMPT_COLLECTIONS);
 }
+
+/// The 8.3 short name of `path`, or None when the volume has none or this is not Windows.
+fn short_name(path: &Path) -> Option<String> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let out = std::process::Command::new("cmd")
+            .arg("/C")
+            .raw_arg(format!("for %I in (\"{}\") do @echo %~sI", path.display()))
+            .output()
+            .ok()?;
+        let full = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        let name = full.rsplit(['\\', '/']).next()?.to_string();
+        let long = path.file_name()?.to_string_lossy().into_owned();
+        (!name.is_empty() && !name.eq_ignore_ascii_case(&long)).then_some(name)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        None
+    }
+}
+
+#[test]
+fn a_hidden_document_is_refused_by_its_short_name() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), ".secret-notes.md", "hidden text");
+    write(dir.path(), ".hiddenfolder/config.md", "hidden config");
+    for hidden in [".secret-notes.md", ".hiddenfolder"] {
+        let Some(short) = short_name(&dir.path().join(hidden)) else {
+            continue;
+        };
+        let rel = if hidden == ".hiddenfolder" {
+            format!("{short}/config.md")
+        } else {
+            short
+        };
+        let err = context::read(dir.path(), &rel, 1).unwrap_err();
+        assert!(err.contains("is not inside the collection"), "{rel}: {err}");
+        assert!(!err.contains("hidden"), "{err}");
+    }
+}
+
+#[test]
+fn a_link_to_a_hidden_item_inside_the_folder_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), ".hidden/x.md", "hidden text");
+    dir_link(&dir.path().join(".hidden"), &dir.path().join("vis"));
+    let err = context::read(dir.path(), "vis/x.md", 1).unwrap_err();
+    assert!(err.contains("is not inside the collection"), "{err}");
+}
+
+#[test]
+fn a_walk_stops_at_its_entry_bound_and_says_the_count_is_a_lower_bound() {
+    let dir = tempfile::tempdir().unwrap();
+    for i in 0..60 {
+        write(dir.path(), &format!("d{i:02}.md"), "x");
+    }
+    let walk = context::walk_bounded(dir.path(), 50).unwrap();
+    assert!(!walk.complete);
+    assert!(walk.total <= 50 && walk.total > 0, "{}", walk.total);
+    let full = context::walk(dir.path()).unwrap();
+    assert!(full.complete);
+    assert_eq!(full.total, 60);
+    let list = context::list_bounded(dir.path(), 50).unwrap();
+    assert!(list.contains("at least"), "{list}");
+}
+
+#[test]
+fn echoed_arguments_are_cut() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "a.md", "alpha");
+    let query = "z".repeat(100_000);
+    let out = context::search(dir.path(), &query).unwrap();
+    assert!(out.len() <= MAX_OUTPUT, "{}", out.len());
+    let rel = "q".repeat(100_000);
+    let err = context::read(dir.path(), &rel, 1).unwrap_err();
+    assert!(err.len() < 1_000, "{}", err.len());
+    let err = context::read(dir.path(), &format!("{rel}.md"), 1).unwrap_err();
+    assert!(err.len() < 1_000, "{}", err.len());
+    let c = company(dir.path());
+    let err = context::call(&c, &json!({"collection": rel})).unwrap_err();
+    assert!(err.len() < 1_000, "{}", err.len());
+}

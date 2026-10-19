@@ -24,6 +24,8 @@ pub const MAX_DOCUMENT_BYTES: u64 = 10 * 1024 * 1024;
 pub const MAX_SEARCH_BYTES: u64 = 64 * 1024 * 1024;
 /// A tool result is capped at this many bytes.
 pub const MAX_OUTPUT: usize = 30 * 1024;
+/// The walk stops after visiting this many directory entries, files and folders together.
+pub const MAX_WALK_ENTRIES: usize = 100_000;
 /// The most collections the prompt lists.
 pub const MAX_PROMPT_COLLECTIONS: usize = 50;
 /// The longest summary and matching line shown, in characters.
@@ -70,11 +72,13 @@ pub struct Document {
 }
 
 /// The documents below a folder: the first `MAX_DOCUMENTS` paths in sorted order, and how many
-/// there are.
+/// there are. `complete` is false when the walk stopped at `MAX_WALK_ENTRIES`: `total` is then
+/// a lower bound.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Walk {
     pub paths: Vec<String>,
     pub total: usize,
+    pub complete: bool,
 }
 
 /// Whether `name` (a file name) has a document's extension.
@@ -86,12 +90,22 @@ fn is_document_name(name: &str) -> bool {
 }
 
 /// The documents below `root`. Names starting with `.` and links are left out, files and
-/// folders alike. `Err` when `root` cannot be read as a folder.
+/// folders alike. The walk visits at most `MAX_WALK_ENTRIES` entries. `Err` when `root` cannot
+/// be read as a folder.
 pub fn walk(root: &Path) -> Result<Walk, String> {
-    let mut found = Vec::new();
+    walk_bounded(root, MAX_WALK_ENTRIES)
+}
+
+/// `walk` with its own bound on the entries visited.
+pub fn walk_bounded(root: &Path, max_entries: usize) -> Result<Walk, String> {
+    // Only the smallest `MAX_DOCUMENTS` paths are kept, so memory stays bounded.
+    let mut kept = BTreeSet::new();
+    let mut total = 0;
+    let mut visited = 0;
+    let mut complete = true;
     let mut folders = vec![(root.to_path_buf(), String::new())];
     let mut first = true;
-    while let Some((folder, prefix)) = folders.pop() {
+    'walk: while let Some((folder, prefix)) = folders.pop() {
         let entries = match std::fs::read_dir(&folder) {
             Ok(entries) => entries,
             Err(e) if first => return Err(format!("the folder cannot be read: {e}")),
@@ -99,6 +113,11 @@ pub fn walk(root: &Path) -> Result<Walk, String> {
         };
         first = false;
         for entry in entries.flatten() {
+            visited += 1;
+            if visited > max_entries {
+                complete = false;
+                break 'walk;
+            }
             let name = entry.file_name().to_string_lossy().into_owned();
             let Ok(kind) = entry.file_type() else {
                 continue;
@@ -110,16 +129,18 @@ pub fn walk(root: &Path) -> Result<Walk, String> {
             if kind.is_dir() {
                 folders.push((entry.path(), format!("{rel}/")));
             } else if kind.is_file() && is_document_name(&name) {
-                found.push(rel);
+                total += 1;
+                kept.insert(rel);
+                if kept.len() > MAX_DOCUMENTS {
+                    kept.pop_last();
+                }
             }
         }
     }
-    found.sort();
-    let total = found.len();
-    found.truncate(MAX_DOCUMENTS);
     Ok(Walk {
-        paths: found,
+        paths: kept.into_iter().collect(),
         total,
+        complete,
     })
 }
 
@@ -191,16 +212,19 @@ fn read_head(path: &Path, limit: u64) -> std::io::Result<String> {
 /// The documents of `root`, described from the first 8 KB of each, with the walk's total.
 pub fn documents(root: &Path, limit: usize) -> Result<(Vec<Document>, usize), String> {
     let walk = walk(root)?;
-    let docs = walk
-        .paths
+    Ok((describe_walk(root, &walk, limit), walk.total))
+}
+
+/// The first `limit` documents of `walk`, described from their heads.
+fn describe_walk(root: &Path, walk: &Walk, limit: usize) -> Vec<Document> {
+    walk.paths
         .iter()
         .take(limit)
         .map(|rel| {
             let text = read_head(&joined(root, rel), HEAD_BYTES).unwrap_or_default();
             describe(rel, &text)
         })
-        .collect();
-    Ok((docs, walk.total))
+        .collect()
 }
 
 /// Adds `line` to `out` unless it would pass `MAX_OUTPUT`; false when it did not fit.
@@ -217,8 +241,16 @@ fn push_line(out: &mut String, line: &str) -> bool {
 
 /// The list of the collection's documents, one `path — title: summary` line each.
 pub fn list(root: &Path) -> Result<String, String> {
-    let (docs, total) = documents(root, MAX_DOCUMENTS)?;
-    if docs.is_empty() {
+    list_bounded(root, MAX_WALK_ENTRIES)
+}
+
+/// `list` with its own bound on the entries the walk visits.
+pub fn list_bounded(root: &Path, max_entries: usize) -> Result<String, String> {
+    let walk = walk_bounded(root, max_entries)?;
+    let total = walk.total;
+    let complete = walk.complete;
+    let docs = describe_walk(root, &walk, MAX_DOCUMENTS);
+    if docs.is_empty() && complete {
         return Ok("The collection has no documents.".into());
     }
     let mut out = String::new();
@@ -241,7 +273,12 @@ pub fn list(root: &Path) -> Result<String, String> {
             docs.len() - shown
         ));
     }
-    if total > docs.len() {
+    if !complete {
+        out.push_str(&format!(
+            "\n[the folder is too large to walk completely: at least {total} documents; only \
+             the first {MAX_DOCUMENTS} found are listed and searched]"
+        ));
+    } else if total > docs.len() {
         out.push_str(&format!(
             "\n[the collection has {total} documents; only the first {MAX_DOCUMENTS} are \
              listed and searched]"
@@ -320,6 +357,7 @@ pub fn search(root: &Path, query: &str) -> Result<String, String> {
         hits.push(Hit { doc, count, lines });
     }
     hits.sort_by(|a, b| b.count.cmp(&a.count).then(a.doc.path.cmp(&b.doc.path)));
+    let query = clip(query, MAX_LINE);
     let mut out = if hits.is_empty() {
         format!("No document matches {query:?}.")
     } else if hits.len() > MAX_RESULTS {
@@ -343,6 +381,9 @@ pub fn search(root: &Path, query: &str) -> Result<String, String> {
     if stopped {
         out.push_str("\n[the search stopped after 64 MB; results may be incomplete]");
     }
+    if !walk.complete {
+        out.push_str("\n[the folder is too large to walk completely; results may be incomplete]");
+    }
     Ok(out)
 }
 
@@ -351,7 +392,8 @@ pub fn search(root: &Path, query: &str) -> Result<String, String> {
 /// `..` or a `:`, leads out of the folder through a link, or is hidden is refused, and so is a
 /// file that is not a document.
 pub fn read(root: &Path, rel: &str, offset: usize) -> Result<String, String> {
-    let outside = || format!("{rel} is not inside the collection");
+    let shown = clip(rel, MAX_LINE);
+    let outside = || format!("{shown} is not inside the collection");
     let given = Path::new(rel);
     let plain = given.components().all(|c| match c {
         Component::Normal(n) => {
@@ -367,29 +409,36 @@ pub fn read(root: &Path, rel: &str, offset: usize) -> Result<String, String> {
     let canonical_root =
         std::fs::canonicalize(root).map_err(|e| format!("the folder cannot be read: {e}"))?;
     let path = std::fs::canonicalize(canonical_root.join(given))
-        .map_err(|_| format!("{rel} was not found in the collection"))?;
-    if !path.starts_with(&canonical_root) {
+        .map_err(|_| format!("{shown} was not found in the collection"))?;
+    let Ok(below) = path.strip_prefix(&canonical_root) else {
+        return Err(outside());
+    };
+    // A short name or a link can reach a hidden item that the given path does not name.
+    if below
+        .components()
+        .any(|c| c.as_os_str().to_string_lossy().starts_with('.'))
+    {
         return Err(outside());
     }
     if path.is_dir() {
-        return Err(format!("{rel} is a folder; name a document in it"));
+        return Err(format!("{shown} is a folder; name a document in it"));
     }
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
     if !name.as_deref().is_some_and(is_document_name) {
-        return Err(format!("{rel} is not a document of the collection"));
+        return Err(format!("{shown} is not a document of the collection"));
     }
     let size = std::fs::metadata(&path)
-        .map_err(|e| format!("{rel} could not be read: {e}"))?
+        .map_err(|e| format!("{shown} could not be read: {e}"))?
         .len();
     if size > MAX_DOCUMENT_BYTES {
-        return Err(format!("{rel} is larger than 10 MB"));
+        return Err(format!("{shown} is larger than 10 MB"));
     }
     let text = read_head(&path, MAX_DOCUMENT_BYTES)
-        .map_err(|e| format!("{rel} could not be read: {e}"))?;
+        .map_err(|e| format!("{shown} could not be read: {e}"))?;
     let lines: Vec<&str> = text.lines().collect();
     if offset > 1 && offset > lines.len() {
         return Err(format!(
-            "{rel} has {} lines; offset {offset} is past the end",
+            "{shown} has {} lines; offset {offset} is past the end",
             lines.len()
         ));
     }
@@ -437,6 +486,7 @@ pub fn call(collections: &[Collection], input: &Value) -> Result<String, String>
     };
     let name = text("collection").ok_or("collection is required")?;
     let Some(collection) = collections.iter().find(|c| c.name == name) else {
+        let name = clip(name, MAX_LINE);
         let names: Vec<&str> = collections.iter().map(|c| c.name.as_str()).collect();
         return Err(if names.is_empty() {
             format!("unknown collection {name:?}. This run has no collections.")

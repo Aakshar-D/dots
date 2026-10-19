@@ -66,6 +66,7 @@ A new Library kind `context`:
 
 - A document is a file below the folder (any depth) whose extension, without regard to case, is one of `md`, `markdown`, `txt`, `rst`, `adoc`, `org`, `json`, `yaml`, `yml`, `toml`, `csv`.
 - Left out: names starting with `.` (so `.git`), links (files and folders), and anything above the bounds: 2,000 documents per collection, 10 MB per document (the existing `MAX_READ_BYTES`), 64 MB read per search.
+- The walk visits at most 100,000 entries, and the count of a larger folder is reported as a lower bound; a path whose resolved form has a hidden name below the folder (through a short name or a link) is refused; arguments echoed in a result are cut to 200 characters.
 - A document's path is relative to the folder with `/`. Its title is the frontmatter `title`, else the first `# ` heading, else the file name without extension. Its summary is the frontmatter `description`, else the first non-empty body line that is not a heading, cut at 200 characters. Frontmatter is read with the existing `kit::parse_frontmatter`; one that does not parse gives no fields. Non-UTF-8 bytes are replaced.
 - Folder walking is done in `spawn_blocking`, in a sorted order (paths compared as strings), so the same folder lists the same way every time.
 
