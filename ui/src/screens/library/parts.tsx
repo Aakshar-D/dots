@@ -19,6 +19,7 @@ export function isDeclined(e: unknown): boolean {
 export type ServerEntry = Extract<LibraryEntry, { kind: "mcp_server" }>;
 export type SkillEntry = Extract<LibraryEntry, { kind: "skill" }>;
 export type PluginEntry = Extract<LibraryEntry, { kind: "plugin" }>;
+export type ContextEntry = Extract<LibraryEntry, { kind: "context" }>;
 
 export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
