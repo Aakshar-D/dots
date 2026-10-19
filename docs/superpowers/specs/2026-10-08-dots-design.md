@@ -233,6 +233,11 @@ when it had none, another header `${<HEADER>}`); a server Dots
 cannot read is left out with a log line. Every stored policy without `mcp_default` gets it
 (`deny` for Read-only or a `deny` default, else `ask`), every stored policy gets a `Skill` allow
 rule when no rule names `Skill`, and a Trusted policy loses the preset's old `mcp__*` ask rule.
+From the context library (`2026-10-19-context-library-design.md` §8), migration 0007 adds
+`dots.use_global_instructions` (default 1), and its code step (`finish_0007`, after
+`finish_0006`) gives every stored policy a `Context` allow rule at the end when no rule names
+`Context`. `settings` gains `global_instructions` (default empty, at most 32 KB) and `dots.uses`
+gains `context` (a missing key reads as none).
 
 All timestamps are RFC 3339 UTC strings.
 
@@ -303,7 +308,12 @@ was approved" (MCP/skills spec §4). On the Claude engine the grant carries that
      recreated from the stored base commit.
 4. **Prompt.** Dot `instructions` + a trigger block (trigger kind, payload JSON, local time) +
    standing rules: work only inside the workspace; when done, end with a summary listing what
-   changed and what needs human review.
+   changed and what needs human review. From the context library: when the global instructions
+   of Settings are not blank and the dot uses them, the prompt starts with
+   `## Instructions for every dot`, the text, and `## Instructions for this dot`; a run with
+   context collections ends the prompt with a `## Shared context` section that lists them and
+   names the tool (`context` on local dots, `mcp__dots__context` on Claude dots). Resumes and
+   chat follow-ups still send only their message.
 5. **Execute.** Engine events are appended to `run_events` and broadcast to the UI.
 6. **Finish.** Final assistant text becomes `summary`. The app notifies on `failed`,
    `awaiting_approval`, and `succeeded` (§12); from Scheduler v2 not on a failed `schedule`
@@ -379,8 +389,11 @@ was approved" (MCP/skills spec §4). On the Claude engine the grant carries that
   run can also be decided together (`decide_run_approvals`): in the order they were asked,
   with one resume, and without a rule. See `2026-10-13-approvals-v2-design.md` §4 and §5.
 - Presets:
-  - Every preset allows `Skill` (the tool that reads a skill) and sets `mcp_default`: `ask` for
-    all but `read-only`, which sets `deny`.
+  - Every preset allows `Skill` (the tool that reads a skill) and, from the context library,
+    `Context` (the tool that reads the dot's context collections), and sets `mcp_default`:
+    `ask` for all but `read-only`, which sets `deny`. A rule of `Context` is not passed to the
+    CLI's `--allowedTools` / `--disallowedTools`: the CLI has no such tool, and Dots' own
+    server checks each call against it.
   - `read-only`: allow Read/LS/Glob/Grep; deny Write/Edit/Bash; default deny.
   - `sandboxed` (default): allow Read/LS/Glob/Grep, `Write(./**)`, `Edit(./**)`,
     `Bash(git status:*)`, `Bash(git diff:*)`, `Bash(git add:*)`; deny
@@ -517,8 +530,10 @@ call under a one-shot grant, and a changed input asked again. See
 Built-in tools: `read_file`, `write_file`, `edit_file` (exact unique-string replace), `list_dir`,
 `glob`, `grep`, `shell` (PowerShell, timeout default 120 s, output capped at 30 KB; the script
 reaches PowerShell on stdin behind a small fixed `-EncodedCommand` bootstrap, so its length is
-not bound by the Windows command-line limit), and from MCP/skills `skill` (policy name `Skill`,
-offered only to a run with skills). Their
+not bound by the Windows command-line limit), from MCP/skills `skill` (policy name `Skill`,
+offered only to a run with skills), and from the context library `context` (policy name
+`Context`, offered only to a run with context collections; arguments `collection`, `query`,
+`path`, `offset`; context library spec §3). Their
 argument names match the Claude tools they alias (`file_path`, `content`, `old_string`,
 `new_string`, `path`, `pattern`, `command`), so policy path specs, command rules and
 `grant_key` apply to local dots without translation. All paths are canonicalized and must
@@ -580,7 +595,10 @@ React + Vite + TypeScript inside Tauri 2. Screens:
   Edit or Remove. Skills: name, description, folder, dots; "Add skill" picks a folder, scans it
   and lists every `SKILL.md` below it to tick. Plugins: name, folder, parts, the dots that use
   it, the switch "Run this plugin's hooks"; "Add plugin" picks one of the installed Claude
-  Code plugins or a folder. Removing asks first and names the dots. The screen never asks a
+  Code plugins or a folder. From the context library, Context: name, "every dot" badge,
+  document count, description, folder, the dots that tick it; "Add collection" picks a folder
+  and asks for name, description and "Every dot reads it"; "Documents" lists the first 200
+  documents; "Edit" changes all but the name. Removing asks first and names the dots. The screen never asks a
   second time for what the core confirms in a native dialog (a program to run, env changes, a
   plugin's servers and hooks); a refusal (`cancelled`) shows as a calm note, not as an error.
 - **Dot editor** — name; instructions (markdown); engine, model, endpoint; workdir + mode;
@@ -591,8 +609,10 @@ React + Vite + TypeScript inside Tauri 2. Screens:
   the core's objection under the fields); webhook URL + token (copy, regenerate);
   policy editor (preset picker + rule table); limits; use-user-settings toggle (Claude only).
   From MCP/skills a section "Tools and skills" (`screens/dot-editor/ToolsAndSkills.tsx`) edits
-  the dot's `uses` as three checklists from the Library (MCP servers, skills, plugins; a
-  plugin's own servers are not listed: they come with the plugin). A server whose tools changed
+  the dot's `uses` as checklists from the Library (MCP servers, skills, plugins and, from the
+  context library, Context, where a collection for every dot shows ticked and disabled; a
+  plugin's own servers are not listed: they come with the plugin). From the context library,
+  Basics has the switch "Start with the global instructions". A server whose tools changed
   or that was unreachable says so on its row. A name the Library no longer has stays ticked,
   marked, so that it can be unticked. For a local dot, a ticked plugin that has commands,
   agents or hooks says that they do not apply (only its skills and servers do). A note lists

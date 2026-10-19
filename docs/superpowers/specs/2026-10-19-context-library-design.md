@@ -1,6 +1,6 @@
 # Shared context library for dots
 
-Date: 2026-10-19. Status: written without a question round (the person said "go"); every decision below is the writer's call unless marked otherwise, for the person to check while reading.
+Date: 2026-10-19. Status: written without a question round (the person said "go"); every decision below is the writer's call unless marked otherwise, for the person to check while reading. Brought in line with what the plan's prototype built (section 13).
 Extends the main spec `docs/superpowers/specs/2026-10-08-dots-design.md` and the MCP/skills spec `docs/superpowers/specs/2026-10-15-mcp-skills-plugins-design.md` (section 12 lists the passages it changes). Source of the idea: Approvals v2 spec section 14 ("a shared context library that many dots read") and the review of Cloudflare OS (`packages/gatekeeper-context`, `AdminConfig.instanceInstructions`).
 
 ## 1. Why
@@ -100,9 +100,11 @@ One tool, the same for both engines:
 
 ### Prompt section (both engines)
 
-A run with collections gets, after the standing rules of the first prompt (Claude engine) or in the system prompt after the skills section (local engine):
+A run with collections gets, on both engines, a section at the end of its first prompt, after the standing rules (the local engine sends that prompt as its first user message):
 
 ```
+## Shared context
+
 Shared context you can read. Call the tool `context` with a collection name to list its documents, `query` to search it, or `path` to read one. Look here before you guess how the person works.
 - company: How we work: style, people, runbooks (42 documents)
 - clients: (no description) (7 documents)
@@ -120,31 +122,33 @@ At most 50 collections are listed; the line count is computed when the run opens
 - Dots' own MCP server (`server/mcp.rs`, entry `dots`) lists, for a run with collections, a second tool `context` with the same arguments and description, besides `approve`.
 - Its `tools/call` checks the call with `hub.check(run_id, "Context", input)` (waiting for an approval if a rule asks), then runs the same reader as the local engine and returns its text as a tool result; a denied call returns `isError: true` with the message, as the gateway does.
 - `--allowedTools` gains `mcp__dots__context` for a run with collections, so the CLI does not first ask `approve` (the server checks it instead, as the gateway does for MCP servers).
-- The prompt section of this section names the tool `context`; the CLI shows it as `mcp__dots__context`, and the section says so in its first line for the Claude engine: "Call the tool `mcp__dots__context` …".
+- The prompt section names the tool as the engine's model sees it: `mcp__dots__context` on the Claude engine, `context` on the local engine (`prompt::context_tool_name`).
+- A rule of `Context` is left out of `--allowedTools` and `--disallowedTools` (`Policy::cli_lists`): the CLI has no such tool, and the `dots` server checks each call against the rule itself.
 
 ## 5. Run tools
 
-- `RunTools::open` resolves the run's collections (section 3), checks each folder exists, and counts its documents (bounded walk). `RunTools` gains `contexts() -> &[RunContext…]` with name, folder, description and count. Nothing is opened or held: each call reads the folder afresh.
-- `OpenRequest` is unchanged; the store gives the `every_dot` collections.
+- `RunTools::open` resolves the run's collections (section 3) with `Store::used_collections(uses)` (the ticked ones and every `every_dot` one, by name), walks each folder and counts its documents. `RunTools::contexts() -> &[context::Collection]` gives name, folder, description and count. Nothing is opened or held: each call reads the folder afresh.
+- `OpenRequest` is unchanged.
 
 ## 6. Screens
 
 - **Settings:** a "Global instructions" text area (with the 32 KB limit shown), saved with the other settings, and a line: "Every dot's first prompt starts with these. A dot can switch them off in its editor."
-- **Library:** a fourth tab **Context** (after Plugins): name, description, folder, document count, "Every dot" badge, the dots that tick it. "Add collection" picks a folder, then name (default: the folder name, made valid), description, "Every dot" switch. Each row has "Open folder" and "Documents" (a list of the first 200 documents with title and summary, from a new command). Edit and delete as for other kinds.
-- **Dot editor:** in "Tools and skills", a fourth checklist **Context** (an `every_dot` collection shows ticked and disabled, with "every dot"), and a switch "Start with the global instructions" (shown when the setting is not blank; its state is saved either way).
+- **Library:** a fourth tab **Context** (after Plugins): name, description, folder, document count, "Every dot" badge, the dots that tick it (an `every_dot` collection says "Every dot reads it" instead). "Add collection" picks a folder, then name (default: the folder name, lower case, other characters as `-`), description, "Every dot reads it" switch, with the line "Dots read these files as guidance. Only add folders whose writers you trust." Each row has "Documents" (a list of the first 200 documents with title and summary, from a new command), "Edit" (all but the name) and "Remove". There is no "Open folder": no command opens an arbitrary folder, and the plan adds no plugin; the row shows the path.
+- **Dot editor:** in "Tools and skills", a fourth checklist **Context** (an `every_dot` collection shows ticked and disabled, with "every dot"), and in Basics a switch "Start with the global instructions", always shown, with the note that the text is set in Settings and a blank text adds nothing.
 - **Run view:** `context` calls show as other tool calls (`context` on local dots, `dots › context` on Claude dots).
 
 ## 7. Commands, events and contract
 
 - `library_add` / `library_update` / `library_remove` / `library_list` accept the new kind; `LibraryItem` JSON gains `kind: "context"` with its config.
-- New: `context_documents(id)` returns `{ documents: [{path, title, summary}], total, truncated }` for the Library's "Documents" view (first 200).
+- New: `context_documents(id)` returns `{ documents: [{path, title, summary}], total, truncated, complete }` for the Library's "Documents" view (first 200). `truncated` is also true when `complete` is false.
 - `Settings` gains `global_instructions`; `DotSpec` gains `use_global_instructions`; `Uses` gains `context`. The contract fixture is regenerated by its command.
 - `RuntimeEvent::LibraryUpdated` is sent on collection changes as for other kinds.
 
 ## 8. Upgrade (migration 0007)
 
+- The SQL adds `dots.use_global_instructions INTEGER NOT NULL DEFAULT 1` and lists every dot in a table `upgrade_0007`.
+- When the store opens, `upgrade::finish_0007` runs after `finish_0006`: each listed dot's policy gets the `Context` allow rule at the end unless a rule names `Context` (`Context` or `Context(...)`), written through `Policy`, and the table is dropped. Running after `finish_0006` keeps the rules in the presets' order (`Skill`, then `Context`) when a database from before 0006 is opened.
 - `dots.uses` rows gain `"context": []` lazily: `Uses` reads a missing key as empty, so no SQL rewrite is needed.
-- Stored policies gain the `Context` allow rule (section 3), done where 0006 added `Skill` (`store/upgrade.rs` pattern), once, recorded by the migration.
 - `use_global_instructions` defaults to `true` through serde; `global_instructions` defaults to empty through `Settings`' `#[serde(default)]`.
 
 ## 9. Errors and edge cases
@@ -180,3 +184,21 @@ At most 50 collections are listed; the line count is computed when the run opens
 - Main spec section 4, prompt assembly: the global instructions head (section 2).
 - Main spec section 5 and MCP/skills spec section 7: every preset's `Context` allow.
 - MCP/skills spec section 2: the Library kind `context` and `uses.context`; section 5: the `dots` server's `context` tool and `--allowedTools mcp__dots__context`; section 8: the Context tab and checklist.
+
+## 13. Changes made while building
+
+The plan's prototype changed these from the first version of this spec:
+
+- The prompt section is part of the first prompt on both engines, not the local engine's system prompt, so one function (`build_prompt`) writes it for both.
+- `Context` rules stay out of the CLI's tool lists (section 4).
+- Migration 0007's policy step is code that runs after 0006's (section 8): as SQL it ran before `finish_0006` and put `Context` ahead of `Skill`.
+- The Library row has no "Open folder" and the editor's switch is always shown (section 6).
+
+From the task reviews:
+
+- The walk visits at most 100,000 entries (`context::MAX_WALK_ENTRIES`) and keeps the first 2,000 paths; a folder walked only in part reports its count as a lower bound ("at least N documents" in the prompt, the Library row and the Documents list; `complete` in `ContextDetail`, `ContextDocuments` and `Collection`).
+- A path whose resolved form has a hidden name below the folder (a Windows short name such as `SECRET~1.MD`, or a link) is refused; echoed arguments in results are cut to 200 characters.
+- A rule `Context(<name>)` applies only to calls whose `collection` is that name; `Policy::validate` refuses any other argument.
+- The local tool's error text is bounded like its results; folder checks run off the async runtime.
+- After a parked `Context` approval, the resume prompt names the tool as the run's model knows it (`mcp__dots__context` on Claude runs).
+- Removing an every-dot collection says "Every dot reads it." in its confirmation.
