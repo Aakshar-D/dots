@@ -5,7 +5,16 @@ use serde_json::Value;
 
 use crate::model::{Dot, Run, TriggerKind};
 
-pub fn build_prompt(dot: &Dot, run: &Run, workspace: &Path, now: DateTime<Local>) -> String {
+/// The prompt of `run`. A thread's first prompt starts with `global` (the global instructions of
+/// Settings) when it is not blank and the dot uses it; resumes and chat follow-ups send only
+/// their message.
+pub fn build_prompt(
+    dot: &Dot,
+    run: &Run,
+    workspace: &Path,
+    now: DateTime<Local>,
+    global: &str,
+) -> String {
     let message = run
         .payload
         .as_ref()
@@ -19,6 +28,12 @@ pub fn build_prompt(dot: &Dot, run: &Run, workspace: &Path, now: DateTime<Local>
     }
 
     let mut out = String::new();
+    let global = global.trim();
+    if dot.spec.use_global_instructions && !global.is_empty() {
+        out.push_str("## Instructions for every dot\n\n");
+        out.push_str(global);
+        out.push_str("\n\n## Instructions for this dot\n\n");
+    }
     out.push_str(dot.spec.instructions.trim());
     out.push_str("\n\n---\n\n");
     if run.trigger == TriggerKind::Chat {

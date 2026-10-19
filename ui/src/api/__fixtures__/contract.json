@@ -172,6 +172,7 @@
     },
     "timeout_secs": 1800,
     "updated_at": "2026-10-09T12:00:00.000Z",
+    "use_global_instructions": true,
     "use_user_settings": false,
     "uses": {
       "mcp_servers": [
@@ -290,6 +291,7 @@
       },
       "timeout_secs": 1800,
       "updated_at": "2026-10-09T12:00:00.000Z",
+      "use_global_instructions": true,
       "use_user_settings": false,
       "uses": {
         "mcp_servers": [
@@ -400,6 +402,7 @@
     },
     "schedule": null,
     "timeout_secs": 1800,
+    "use_global_instructions": true,
     "use_user_settings": false,
     "uses": {
       "mcp_servers": [],
@@ -869,6 +872,7 @@
   "Limits": {
     "max_approval_wait_secs": 280,
     "max_concurrent_runs": 16,
+    "max_global_instructions": 32768,
     "max_schedule_attempts": 6,
     "max_timeout_secs": 604800
   },
@@ -1048,6 +1052,7 @@
     },
     "schedule": null,
     "timeout_secs": 1800,
+    "use_global_instructions": true,
     "use_user_settings": false,
     "uses": {
       "mcp_servers": [],
@@ -1365,6 +1370,7 @@
   "Settings": {
     "autostart": true,
     "claude_path": null,
+    "global_instructions": "Use British spelling.",
     "local_endpoints": [
       "http://127.0.0.1:1234"
     ],
@@ -1378,6 +1384,7 @@
     "settings": {
       "autostart": true,
       "claude_path": null,
+      "global_instructions": "Use British spelling.",
       "local_endpoints": [
         "http://127.0.0.1:1234"
       ],

@@ -12,6 +12,8 @@ use crate::{Error, Result};
 /// against. A different installed version shows a warning until it is marked as tested.
 pub const TESTED_CLAUDE_VERSION: &str = "2.1.295";
 pub const MAX_CONCURRENT_RUNS: usize = 16;
+/// The longest global instructions, in bytes (context library spec section 2).
+pub const MAX_GLOBAL_INSTRUCTIONS: usize = 32 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -24,6 +26,8 @@ pub struct Settings {
     pub local_endpoints: Vec<String>,
     pub autostart: bool,
     pub schedules_paused: bool,
+    /// The text every dot's first prompt starts with, unless the dot switches it off.
+    pub global_instructions: String,
 }
 
 impl Default for Settings {
@@ -36,6 +40,7 @@ impl Default for Settings {
             local_endpoints: Vec::new(),
             autostart: true,
             schedules_paused: false,
+            global_instructions: String::new(),
         }
     }
 }
@@ -60,6 +65,9 @@ impl Settings {
         }
         for url in &self.local_endpoints {
             check_endpoint_url(url)?;
+        }
+        if self.global_instructions.len() > MAX_GLOBAL_INSTRUCTIONS {
+            return invalid("global_instructions must be at most 32 KB");
         }
         Ok(())
     }

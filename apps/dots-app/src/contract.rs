@@ -18,7 +18,7 @@ use dots_core::model::*;
 use dots_core::policy::{allow_candidates, Action, Policy, Preset};
 use dots_core::schedule::Schedule;
 use dots_core::scheduler::MAX_ATTEMPTS;
-use dots_core::settings::{Settings, MAX_CONCURRENT_RUNS};
+use dots_core::settings::{Settings, MAX_CONCURRENT_RUNS, MAX_GLOBAL_INSTRUCTIONS};
 use serde_json::{json, Value};
 
 use crate::error::{CmdError, CmdErrorKind};
@@ -386,6 +386,7 @@ fn schedules() -> Value {
 pub fn samples() -> Value {
     let settings = Settings {
         local_endpoints: vec!["http://127.0.0.1:1234".into()],
+        global_instructions: "Use British spelling.".into(),
         ..Settings::default()
     };
     json!({
@@ -574,6 +575,7 @@ pub fn samples() -> Value {
             "max_approval_wait_secs": MAX_APPROVAL_WAIT_SECS,
             "max_concurrent_runs": MAX_CONCURRENT_RUNS,
             "max_schedule_attempts": MAX_ATTEMPTS,
+            "max_global_instructions": MAX_GLOBAL_INSTRUCTIONS,
         },
         "StartupError": to(StartupError {
             message: "Dots could not start: database disk image is malformed".into(),

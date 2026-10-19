@@ -120,9 +120,13 @@ async fn update_changes_fields_and_timestamp() {
     let mut s = dot.spec.clone();
     s.instructions = "New instructions".into();
     s.max_turns = 7;
+    assert!(s.use_global_instructions);
+    s.use_global_instructions = false;
     let updated = store.update_dot(&dot.id, &s).await.unwrap();
     assert_eq!(updated.spec.instructions, "New instructions");
     assert_eq!(updated.spec.max_turns, 7);
+    assert!(!updated.spec.use_global_instructions);
+    assert_eq!(store.get_dot(&dot.id).await.unwrap().spec, s);
     assert_eq!(updated.webhook_token, dot.webhook_token);
     assert!(updated.updated_at > dot.updated_at);
     assert!(matches!(

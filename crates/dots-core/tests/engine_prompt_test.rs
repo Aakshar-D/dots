@@ -141,7 +141,7 @@ fn at() -> chrono::DateTime<Local> {
 fn manual_prompt_has_instructions_trigger_and_rules() {
     let dot = fake_dot("d", Path::new("C:/repo"), WorkspaceMode::Folder);
     let run = fake_run(TriggerKind::Manual, None, None);
-    let p = build_prompt(&dot, &run, Path::new("C:/ws/RUN1"), at());
+    let p = build_prompt(&dot, &run, Path::new("C:/ws/RUN1"), at(), "");
     assert!(p.starts_with("Do the thing."));
     assert!(p.contains("- kind: manual"));
     assert!(p.contains("2026-10-08 09:30:00"));
@@ -154,7 +154,7 @@ fn manual_prompt_has_instructions_trigger_and_rules() {
 fn webhook_prompt_includes_pretty_payload() {
     let dot = fake_dot("d", Path::new("C:/repo"), WorkspaceMode::Folder);
     let run = fake_run(TriggerKind::Webhook, Some(json!({"case": 42})), None);
-    let p = build_prompt(&dot, &run, Path::new("C:/ws"), at());
+    let p = build_prompt(&dot, &run, Path::new("C:/ws"), at(), "");
     assert!(p.contains("```json\n{\n  \"case\": 42\n}\n```"));
 }
 
@@ -167,7 +167,7 @@ fn resume_and_chat_follow_up_send_only_the_message() {
         Some("s"),
     );
     assert_eq!(
-        build_prompt(&dot, &resume, Path::new("C:/ws"), at()),
+        build_prompt(&dot, &resume, Path::new("C:/ws"), at(), ""),
         "Approval granted."
     );
     let follow = fake_run(
@@ -176,16 +176,74 @@ fn resume_and_chat_follow_up_send_only_the_message() {
         Some("s"),
     );
     assert_eq!(
-        build_prompt(&dot, &follow, Path::new("C:/ws"), at()),
+        build_prompt(&dot, &follow, Path::new("C:/ws"), at(), ""),
         "and now?"
     );
+}
+
+#[test]
+fn a_first_prompt_starts_with_the_global_instructions() {
+    let dot = fake_dot("d", Path::new("C:/repo"), WorkspaceMode::Folder);
+    let run = fake_run(TriggerKind::Manual, None, None);
+    let p = build_prompt(
+        &dot,
+        &run,
+        Path::new("C:/ws"),
+        at(),
+        "\n  Use British spelling.  \n",
+    );
+    assert!(p.starts_with(
+        "## Instructions for every dot\n\nUse British spelling.\n\n\
+         ## Instructions for this dot\n\nDo the thing."
+    ));
+    let chat = fake_run(TriggerKind::Chat, Some(json!({"message": "hi"})), None);
+    let p = build_prompt(&dot, &chat, Path::new("C:/ws"), at(), "Be brief.");
+    assert!(p.starts_with("## Instructions for every dot\n\nBe brief.\n\n"));
+}
+
+#[test]
+fn blank_or_switched_off_global_instructions_leave_the_prompt_as_it_was() {
+    let mut dot = fake_dot("d", Path::new("C:/repo"), WorkspaceMode::Folder);
+    let run = fake_run(TriggerKind::Manual, None, None);
+    let plain = build_prompt(&dot, &run, Path::new("C:/ws"), at(), "");
+    assert_eq!(
+        build_prompt(&dot, &run, Path::new("C:/ws"), at(), " \n\t "),
+        plain
+    );
+    dot.spec.use_global_instructions = false;
+    assert_eq!(
+        build_prompt(&dot, &run, Path::new("C:/ws"), at(), "Be brief."),
+        plain
+    );
+    assert!(plain.starts_with("Do the thing."));
+}
+
+#[test]
+fn resumes_and_follow_ups_do_not_repeat_the_global_instructions() {
+    let dot = fake_dot("d", Path::new("C:/repo"), WorkspaceMode::Folder);
+    let resume = fake_run(
+        TriggerKind::Resume,
+        Some(json!({"message": "go"})),
+        Some("s"),
+    );
+    let follow = fake_run(
+        TriggerKind::Chat,
+        Some(json!({"message": "more"})),
+        Some("s"),
+    );
+    for (run, message) in [(resume, "go"), (follow, "more")] {
+        assert_eq!(
+            build_prompt(&dot, &run, Path::new("C:/ws"), at(), "Be brief."),
+            message
+        );
+    }
 }
 
 #[test]
 fn first_chat_message_includes_instructions() {
     let dot = fake_dot("d", Path::new("C:/repo"), WorkspaceMode::Folder);
     let run = fake_run(TriggerKind::Chat, Some(json!({"message": "status?"})), None);
-    let p = build_prompt(&dot, &run, Path::new("C:/ws"), at());
+    let p = build_prompt(&dot, &run, Path::new("C:/ws"), at(), "");
     assert!(p.starts_with("Do the thing."));
     assert!(p.contains("## Message from the user\n\nstatus?"));
     assert!(!p.contains("## Trigger"));

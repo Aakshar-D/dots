@@ -568,13 +568,14 @@ impl Runner {
             }
             _ => Vec::new(),
         };
+        let global = self.store.get_settings().await?.global_instructions;
         let secret = self.register_secret(&run.id);
         self.register_tools(&run.id, tools.clone());
         let ctx = RunContext {
             run_id: run.id.clone(),
             dot: dot.clone(),
             workspace: prepared.path.clone(),
-            prompt: build_prompt(&dot, run, &prepared.path, chrono::Local::now()),
+            prompt: build_prompt(&dot, run, &prepared.path, chrono::Local::now(), &global),
             session_id: run.session_id.clone(),
             mcp_url: self.cfg.mcp_url.clone(),
             mcp_secret: secret,

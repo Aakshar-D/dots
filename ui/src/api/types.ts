@@ -86,6 +86,7 @@ const dotSpecShape = {
   schedule: nullable(Schedule),
   policy: Policy,
   uses: Uses,
+  use_global_instructions: z.boolean(),
   use_user_settings: z.boolean(),
   max_turns: z.number().int(),
   timeout_secs: z.number().int(),
@@ -231,6 +232,7 @@ export const Settings = z.strictObject({
   local_endpoints: z.array(z.string()),
   autostart: z.boolean(),
   schedules_paused: z.boolean(),
+  global_instructions: z.string(),
 });
 export const SettingsSaved = z.strictObject({
   settings: Settings,
@@ -439,6 +441,7 @@ export const LIMITS = {
   max_approval_wait_secs: 280,
   max_concurrent_runs: 16,
   max_schedule_attempts: 6,
+  max_global_instructions: 32768,
 } as const;
 
 export type EngineKind = z.infer<typeof EngineKind>;
