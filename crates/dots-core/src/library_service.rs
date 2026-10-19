@@ -670,7 +670,8 @@ impl LibraryService {
         Ok(())
     }
 
-    /// Reads a skill's or plugin's folder before it is stored: `NotFound` when it is missing.
+    /// Reads a skill's, plugin's or context collection's folder before it is stored: `NotFound`
+    /// when it is missing.
     /// A plugin's reading is returned, for its MCP servers.
     async fn read_folder(&self, config: &LibraryConfig) -> Result<Option<PluginInfo>> {
         match config {
@@ -684,7 +685,8 @@ impl LibraryService {
                 Ok(Some(blocking(move || kit::read_plugin(&dir)).await??))
             }
             LibraryConfig::Context(c) => {
-                if !Path::new(&c.path).is_dir() {
+                let dir = PathBuf::from(&c.path);
+                if !blocking(move || dir.is_dir()).await? {
                     return Err(Error::NotFound(format!(
                         "the folder {} was not found",
                         c.path
