@@ -591,3 +591,41 @@ async fn a_rule_can_be_saved_with_the_approval_of_a_claude_dot() {
     }
     panic!("no resume run");
 }
+
+#[tokio::test]
+async fn a_held_queue_starts_no_run_and_working_dots_name_the_running_ones() {
+    let t = start(Some(json!([{"sleep_ms": 3000}])), None).await;
+    let busy = t.rt.create_dot(folder_spec(&t.dir, "busy")).await.unwrap();
+    let idle = t.rt.create_dot(folder_spec(&t.dir, "idle")).await.unwrap();
+    assert!(t.rt.working_dots().await.unwrap().is_empty());
+    let first = t.rt.run_now(&busy.id).await.unwrap();
+    wait_status(t.rt.store(), &first.id, RunStatus::Running, 15).await;
+    t.rt.hold_runs(true);
+    // A run asked for while the queue is held is queued, and stays queued.
+    let second = t.rt.run_now(&idle.id).await.unwrap();
+    assert_eq!(t.rt.working_dots().await.unwrap(), vec!["busy".to_string()]);
+    tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+    assert_eq!(
+        t.rt.get_run(&second.id).await.unwrap().status,
+        RunStatus::Queued
+    );
+    t.rt.hold_runs(false);
+    wait_status(t.rt.store(), &second.id, RunStatus::Running, 15).await;
+    for run in [&first, &second] {
+        t.rt.cancel_run(&run.id).await.unwrap();
+    }
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn close_ends_the_runtime_and_leaves_a_database_to_back_up() {
+    let t = start(None, None).await;
+    let dot = t.rt.create_dot(folder_spec(&t.dir, "kept")).await.unwrap();
+    assert!(t.rt.close(std::time::Duration::from_secs(5)).await);
+    assert!(t.rt.list_dots().await.is_err());
+    let db = t.dir.path().join("data").join("dots.db");
+    let dest = t.dir.path().join("copy.db");
+    dots_core::store::backup_database(&db, &dest).await.unwrap();
+    let copy = Store::open(&dest).await.unwrap();
+    assert_eq!(copy.list_dots().await.unwrap()[0].id, dot.id);
+}
