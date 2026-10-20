@@ -46,6 +46,7 @@ export const quietStatus: T.Status = {
 export function installDefaults(): void {
   backend.on("startup_error", () => null);
   backend.on("status", () => quietStatus);
+  backend.on("update_note", () => ({ state: "none" }));
   backend.on("inbox", () => ({ approvals: [], review_runs: [], attention: [], tools_changed: [] }));
   // An approval card asks for these when it shows; by default the core offers no rule.
   backend.on("approval_rule_candidates", () => []);

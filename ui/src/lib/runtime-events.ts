@@ -2,7 +2,7 @@ import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { useNavigate } from "react-router";
 
-import { onLagged, onNavigate, onRuntimeEvent, onStatus } from "@/api/events";
+import { onLagged, onNavigate, onRuntimeEvent, onStatus, onUpdate } from "@/api/events";
 import type { RunEventRecord, RuntimeEvent } from "@/api/types";
 import { invalidate, keys, mergeEvents, takeStatus } from "@/lib/query";
 
@@ -70,7 +70,8 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
 }
 
 /// Subscribes the app to the backend: runtime events patch the caches, a lagged or unreadable
-/// stream refetches everything, the tray navigates, and a status changed elsewhere is taken.
+/// stream refetches everything, the tray navigates, and a status or an update note changed
+/// elsewhere is taken.
 export function useRuntimeEvents(): void {
   const qc = useQueryClient();
   const navigate = useNavigate();
@@ -86,6 +87,7 @@ export function useRuntimeEvents(): void {
         // A pause or a resume moves every schedule's next run, which the overview holds.
         invalidate(qc, keys.overview);
       }),
+      onUpdate((note) => qc.setQueryData(keys.update, note)),
     ];
     // The backend attaches a listener some time after it was asked to, and what it emits until
     // then is lost. Anything loaded so far may be older than such an event, so once every

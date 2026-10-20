@@ -1,7 +1,7 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { Dot, DotOverview, Run, Status } from "@/api/types";
+import type { Dot, DotOverview, Run, Status, UpdateNote } from "@/api/types";
 import { localDateTime } from "@/lib/format";
 import { keys } from "@/lib/query";
 import { backend, later } from "@/test/backend";
@@ -44,6 +44,9 @@ describe("the app frame", () => {
     expect(await screen.findByRole("heading", { name: "Dots could not start" })).toBeVisible();
     expect(screen.getByRole("alert")).toHaveTextContent(sample.startupError.message);
     expect(screen.getByText(sample.startupError.log_dir)).toBeVisible();
+    // The newest backup an update made, and where the previous installer is.
+    expect(screen.getByText(sample.startupError.backup)).toBeVisible();
+    expect(screen.getByText("https://github.com/Aakshar-D/dots/releases")).toBeVisible();
     expect(screen.queryByRole("navigation")).toBeNull();
   });
 
@@ -349,5 +352,83 @@ describe("the app frame", () => {
     backend.on("inbox", () => sample.inbox);
     act(() => backend.emit("runtime", { type: "approval_requested", approval: sample.approval }));
     expect(await within(nav).findByRole("link", { name: /^Inbox\s*4$/ })).toBeVisible();
+  });
+});
+
+describe("the update strip", () => {
+  const ready = (working: string[], error: string | null = null): UpdateNote => ({
+    state: "ready",
+    version: "0.2.0",
+    working,
+    error,
+  });
+  const waiting: UpdateNote = { state: "waiting", version: "0.2.0", waiting_for: ["triage"] };
+  const installing: UpdateNote = { state: "installing", version: "0.2.0" };
+  const strip = () => screen.findByText(/Dots 0\.2\.0 is ready/);
+
+  it("shows nothing until an update is ready, then what the core announces", async () => {
+    const { listening } = renderApp("/dots");
+    await screen.findByRole("navigation", { name: "Main" });
+    await listening();
+    expect(screen.queryByText(/is ready/)).toBeNull();
+    act(() => backend.emit("update", ready([], "The backup failed: disk full")));
+    expect(await strip()).toBeVisible();
+    expect(screen.getByText("The backup failed: disk full")).toBeVisible();
+  });
+
+  it("opens what's new and hides on Later", async () => {
+    backend.on("update_note", () => ready([]));
+    backend.on("update_open_notes", () => null);
+    backend.on("update_later", () => ({ state: "none" }));
+    const { user } = renderApp("/dots");
+    await strip();
+    await user.click(screen.getByRole("button", { name: "What's new" }));
+    await waitFor(() => expect(backend.callsTo("update_open_notes")).toHaveLength(1));
+    await user.click(screen.getByRole("button", { name: "Later" }));
+    await waitFor(() => expect(screen.queryByText(/is ready/)).toBeNull());
+  });
+
+  it("restarts into the update at once when nothing is working", async () => {
+    backend.on("update_note", () => ready([]));
+    backend.on("update_restart", () => installing);
+    const { user } = renderApp("/dots");
+    await user.click(await screen.findByRole("button", { name: "Restart to update" }));
+    expect(await screen.findByText(/Installing Dots 0\.2\.0/)).toBeVisible();
+    expect(backend.callsTo("update_restart")).toHaveLength(1);
+  });
+
+  it("waits for the dots that are working, and Cancel stops waiting", async () => {
+    backend.on("update_note", () => ready(["triage"]));
+    backend.on("update_restart", () => waiting);
+    backend.on("update_cancel_wait", () => ready(["triage"]));
+    const { user } = renderApp("/dots");
+    expect(await screen.findByText(/triage is still running/)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Restart to update" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Restart when it's done" }));
+    const waitingFor = /Will restart into Dots 0\.2\.0 when triage finishes/;
+    expect(await screen.findByText(waitingFor)).toBeVisible();
+    expect(screen.getByText(/New runs wait until after the update/)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(await screen.findByText(/triage is still running/)).toBeVisible();
+    expect(backend.callsTo("update_cancel_wait")).toHaveLength(1);
+  });
+
+  it("asks before it stops the runs that are working", async () => {
+    backend.on("update_note", () => ready(["triage", "digest"]));
+    backend.on("update_stop_and_restart", () => installing);
+    const { user } = renderApp("/dots");
+    expect(await screen.findByText(/triage, digest are still running/)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Stop them and restart" }));
+    const asked = await screen.findByRole("alertdialog", { name: "Stop and restart now?" });
+    const dialog = within(asked);
+    expect(dialog.getByText(/triage, digest have runs that are working/)).toBeVisible();
+    expect(dialog.getByText(/ends as failed/)).toBeVisible();
+    await user.click(dialog.getByRole("button", { name: "Cancel" }));
+    expect(backend.callsTo("update_stop_and_restart")).toEqual([]);
+
+    await user.click(screen.getByRole("button", { name: "Stop them and restart" }));
+    await user.click(await screen.findByRole("button", { name: "Stop and restart" }));
+    expect(await screen.findByText(/Installing Dots 0\.2\.0/)).toBeVisible();
+    expect(backend.callsTo("update_stop_and_restart")).toHaveLength(1);
   });
 });
