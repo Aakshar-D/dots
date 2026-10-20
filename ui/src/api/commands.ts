@@ -79,7 +79,10 @@ export const commands = {
   updateOpenNotes: () => call(nothing, "update_open_notes"),
   updateLater: () => call(T.UpdateNote, "update_later"),
   updateRestart: () => call(T.UpdateNote, "update_restart"),
-  updateStopAndRestart: () => call(T.UpdateNote, "update_stop_and_restart"),
+  /// `working`: the dots the confirm named. When another dot is working now, nothing is
+  /// installed and the note names the dots working now.
+  updateStopAndRestart: (working: string[]) =>
+    call(T.UpdateNote, "update_stop_and_restart", { working }),
   updateCancelWait: () => call(T.UpdateNote, "update_cancel_wait"),
 
   dotOverview: () => call(T.DotOverview.array(), "dot_overview"),

@@ -117,7 +117,12 @@ function UpdateBanner() {
         Dots {note.version} is ready.
         {working.length > 0 &&
           ` ${dotNames(working)} ${many ? "are" : "is"} still running.`}{" "}
-        <button type="button" className="underline" onClick={() => whatsNew.mutate()}>
+        <button
+          type="button"
+          className="underline"
+          disabled={whatsNew.isPending}
+          onClick={() => whatsNew.mutate()}
+        >
           What's new
         </button>
         {note.error && <span className="block text-red-600 dark:text-red-400">{note.error}</span>}
@@ -151,11 +156,20 @@ function UpdateBanner() {
               </>
             }
             confirmLabel="Stop and restart"
-            onConfirm={() => press.mutate(commands.updateStopAndRestart)}
+            // The dots the confirm names: the core stops nothing while another one works.
+            onConfirm={() => press.mutate(() => commands.updateStopAndRestart(working))}
             disabled={busy}
           >
             Stop {many ? "them" : "it"} and restart
           </ConfirmButton>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={busy}
+            onClick={() => press.mutate(commands.updateLater)}
+          >
+            Later
+          </Button>
         </>
       )}
     </Banner>

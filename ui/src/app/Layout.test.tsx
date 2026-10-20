@@ -429,6 +429,31 @@ describe("the update strip", () => {
     await user.click(screen.getByRole("button", { name: "Stop them and restart" }));
     await user.click(await screen.findByRole("button", { name: "Stop and restart" }));
     expect(await screen.findByText(/Installing Dots 0\.2\.0/)).toBeVisible();
-    expect(backend.callsTo("update_stop_and_restart")).toHaveLength(1);
+    // It names the dots the confirm showed, so the core stops no other.
+    expect(backend.callsTo("update_stop_and_restart")).toEqual([
+      { working: ["triage", "digest"] },
+    ]);
+  });
+
+  it("shows the new names when another dot started before the stop", async () => {
+    backend.on("update_note", () => ready(["triage"]));
+    backend.on("update_stop_and_restart", () => ready(["digest", "triage"]));
+    const { user } = renderApp("/dots");
+    expect(await screen.findByText(/triage is still running/)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Stop it and restart" }));
+    await user.click(await screen.findByRole("button", { name: "Stop and restart" }));
+    expect(await screen.findByText(/digest, triage are still running/)).toBeVisible();
+    expect(backend.callsTo("update_stop_and_restart")).toEqual([{ working: ["triage"] }]);
+    expect(screen.getByRole("button", { name: "Stop them and restart" })).toBeVisible();
+  });
+
+  it("offers Later while a dot is working", async () => {
+    backend.on("update_note", () => ready(["triage"]));
+    backend.on("update_later", () => ({ state: "none" }));
+    const { user } = renderApp("/dots");
+    expect(await screen.findByText(/triage is still running/)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Later" }));
+    await waitFor(() => expect(screen.queryByText(/is ready/)).toBeNull());
+    expect(backend.callsTo("update_later")).toHaveLength(1);
   });
 });
