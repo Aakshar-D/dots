@@ -259,15 +259,25 @@ pub fn list(root: &Path) -> Result<String, String> {
 /// `list` with its own bound on the entries the walk visits.
 pub fn list_bounded(root: &Path, max_entries: usize) -> Result<String, String> {
     let walk = walk_bounded(root, max_entries)?;
+    Ok(render_list(&walk, |rel| {
+        let text = read_head(&joined(root, rel), HEAD_BYTES).unwrap_or_default();
+        describe(rel, &text)
+    }))
+}
+
+/// The list for `walk`. `describe_path` reads a document's head, and is called only for the
+/// documents that are shown: the rest are counted from the walk.
+fn render_list(walk: &Walk, mut describe_path: impl FnMut(&str) -> Document) -> String {
     let total = walk.total;
     let complete = walk.complete;
-    let docs = describe_walk(root, &walk, MAX_DOCUMENTS);
-    if docs.is_empty() && complete {
-        return Ok("The collection has no documents.".into());
+    let listed = walk.paths.len().min(MAX_DOCUMENTS);
+    if listed == 0 && complete {
+        return "The collection has no documents.".into();
     }
     let mut out = String::new();
     let mut shown = 0;
-    for doc in &docs {
+    for rel in walk.paths.iter().take(listed) {
+        let doc = describe_path(rel);
         let line = match doc.summary.as_str() {
             "" => format!("- {} — {}", doc.path, doc.title),
             summary => format!("- {} — {}: {summary}", doc.path, doc.title),
@@ -279,24 +289,25 @@ pub fn list_bounded(root: &Path, max_entries: usize) -> Result<String, String> {
         push_line(&mut out, &line);
         shown += 1;
     }
-    if shown < docs.len() {
+    if shown < listed {
         out.push_str(&format!(
-            "\n[{} more documents are not listed; use query to search them]",
-            docs.len() - shown
+            "
+[{} more documents are not listed; use query to search them]",
+            listed - shown
         ));
     }
     if !complete {
         out.push_str(&format!(
-            "\n[the folder is too large to walk completely: at least {total} documents; only \
-             the first {MAX_DOCUMENTS} found are listed and searched]"
+            "
+[the folder is too large to walk completely: at least {total} documents; only              the first {MAX_DOCUMENTS} found are listed and searched]"
         ));
-    } else if total > docs.len() {
+    } else if total > listed {
         out.push_str(&format!(
-            "\n[the collection has {total} documents; only the first {MAX_DOCUMENTS} are \
-             listed and searched]"
+            "
+[the collection has {total} documents; only the first {MAX_DOCUMENTS} are              listed and searched]"
         ));
     }
-    Ok(out)
+    out
 }
 
 /// The search terms of `query`: lower case, at least 2 characters, each once, at most 10.
@@ -541,7 +552,13 @@ pub fn prompt_section(collections: &[Collection], tool: &str) -> String {
          how the person works."
     );
     for c in collections.iter().take(MAX_PROMPT_COLLECTIONS) {
-        let description = match c.description.trim() {
+        // One line per collection, however many lines the description was typed on.
+        let description = c
+            .description
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let description = match description.as_str() {
             "" => "(no description)",
             d => d,
         };
@@ -554,4 +571,39 @@ pub fn prompt_section(collections: &[Collection], tool: &str) -> String {
         out.push_str(&format!("\n- {}: {description} ({count})", c.name));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_list_reads_only_the_documents_it_shows() {
+        let walk = Walk {
+            paths: (0..2000).map(|i| format!("doc{i:04}.md")).collect(),
+            total: 2000,
+            complete: true,
+        };
+        let mut read = 0;
+        let out = render_list(&walk, |rel| {
+            read += 1;
+            describe(
+                rel,
+                &format!(
+                    "# Title
+{}",
+                    "word ".repeat(40)
+                ),
+            )
+        });
+        assert!(out.len() <= MAX_OUTPUT, "{}", out.len());
+        let shown = out.lines().filter(|l| l.starts_with("- ")).count();
+        assert!(shown > 50 && shown < 1000, "{shown}");
+        // One more is read than is shown: the one that did not fit.
+        assert_eq!(read, shown + 1);
+        assert!(
+            out.contains(&format!("[{} more documents are not listed", 2000 - shown)),
+            "{out}"
+        );
+    }
 }

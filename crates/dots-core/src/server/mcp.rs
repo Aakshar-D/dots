@@ -9,6 +9,7 @@ use super::gateway::not_performed;
 use super::webhook::bearer;
 use super::ServerState;
 use crate::context;
+use crate::engine::local::tools::cap_head;
 use crate::engine::{PermissionGate, PermissionOutcome};
 
 const DEFAULT_PROTOCOL: &str = "2025-06-18";
@@ -150,8 +151,10 @@ async fn call_context(s: &ServerState, run_id: &str, req: &Value) -> Result<Valu
     let collections = tools.contexts().to_vec();
     let read = tokio::task::spawn_blocking(move || context::call(&collections, &input)).await;
     Ok(match read {
-        Ok(Ok(text)) => json!({ "content": [{ "type": "text", "text": text }] }),
-        Ok(Err(e)) => not_performed(&e),
+        Ok(Ok(text)) => {
+            json!({ "content": [{ "type": "text", "text": cap_head(text) }] })
+        }
+        Ok(Err(e)) => not_performed(&cap_head(e)),
         Err(e) => not_performed(&format!("reading the collection failed: {e}")),
     })
 }

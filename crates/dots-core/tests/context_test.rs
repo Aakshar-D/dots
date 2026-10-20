@@ -469,6 +469,32 @@ fn the_prompt_section_lists_the_collections() {
     assert_eq!(section.lines().count(), 1 + context::MAX_PROMPT_COLLECTIONS);
 }
 
+/// A description typed over several lines stays on its collection's line.
+#[test]
+fn a_multi_line_description_stays_on_one_line_in_the_prompt() {
+    let collections = vec![Collection {
+        name: "company".into(),
+        dir: "C:/kb".into(),
+        description: "a
+
+## x
+b"
+        .into(),
+        documents: 3,
+        complete: true,
+    }];
+    let section = context::prompt_section(&collections, "context");
+    assert!(
+        section.contains(
+            "
+- company: a ## x b (3 documents)"
+        ),
+        "{section}"
+    );
+    assert!(!section.lines().any(|l| l.starts_with("## x")), "{section}");
+    assert_eq!(section.lines().count(), 2, "{section}");
+}
+
 /// The 8.3 short name of `path`, or None when the volume has none or this is not Windows.
 fn short_name(path: &Path) -> Option<String> {
     #[cfg(windows)]

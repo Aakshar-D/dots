@@ -81,7 +81,7 @@ One tool, the same for both engines:
 | `path` (optional) | Read this document |
 | `offset` (optional, integer ≥ 1) | With `path`: the first line to return |
 
-- **Neither `query` nor `path`:** the list of documents, one line each, `path — title: summary`, sorted by path; capped at 30 KB with a closing line saying how many were left out and to use `query`.
+- **Neither `query` nor `path`:** the list of documents, one line each, `path — title: summary`, sorted by path; capped at 30 KB with a closing line saying how many were left out and to use `query`. Only the documents shown are opened; the rest are counted from the walk.
 - **`query`:** case-insensitive search. The query is split on white space into terms (at most 10, each at least 2 characters). A document matches when it has every term, in its path, title or text. Results are ranked by the count of term hits, then by path; at most 10 documents, each with its path, title and up to 3 matching lines (`line N: text`, each cut at 200 characters). No match says so and lists nothing.
 - **`path`:** the document's text from `offset` (default 1), capped at 30 KB. A cut result ends with `[truncated: continue with offset=<next line>]`. The path is resolved as the `skill` tool resolves `file`: no absolute path, no `..`, no drive or stream `:`, canonicalized and required to stay inside the canonical folder; it must be a document (extension list above) and not hidden.
 - Both `query` and `path` given: an error that names the two forms.
@@ -200,5 +200,8 @@ From the task reviews:
 - A path whose resolved form has a hidden name below the folder (a Windows short name such as `SECRET~1.MD`, or a link) is refused; echoed arguments in results are cut to 200 characters.
 - A rule `Context(<name>)` applies only to calls whose `collection` is that name; `Policy::validate` refuses any other argument.
 - The local tool's error text is bounded like its results; folder checks run off the async runtime.
+- The `dots` MCP server bounds the text of a `context` result and of its errors to 30 KB, as the local tool does.
+- A collection's description is collapsed to one line in the prompt (its whitespace becomes single spaces); the Library field and the stored text are unchanged.
+- The dot editor's Context row says "at least" before a count that is only a lower bound, as the Library tab does.
 - After a parked `Context` approval, the resume prompt names the tool as the run's model knows it (`mcp__dots__context` on Claude runs).
 - Removing an every-dot collection says "Every dot reads it." in its confirmation.
