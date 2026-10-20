@@ -469,6 +469,32 @@ fn the_prompt_section_lists_the_collections() {
     assert_eq!(section.lines().count(), 1 + context::MAX_PROMPT_COLLECTIONS);
 }
 
+#[test]
+fn the_closing_lines_of_a_list_are_single_spaced_sentences() {
+    let dir = tempfile::tempdir().unwrap();
+    for i in 0..2001 {
+        write(dir.path(), &format!("d{i:04}.md"), "x");
+    }
+    let list = context::list(dir.path()).unwrap();
+    let last = list.lines().last().unwrap();
+    assert_eq!(
+        last,
+        "[the collection has 2001 documents; only the first 2000 are listed and searched]"
+    );
+    let small = tempfile::tempdir().unwrap();
+    for i in 0..60 {
+        write(small.path(), &format!("d{i:02}.md"), "x");
+    }
+    let total = context::walk_bounded(small.path(), 50).unwrap().total;
+    let list = context::list_bounded(small.path(), 50).unwrap();
+    assert_eq!(
+        list.lines().last().unwrap(),
+        format!(
+            "[the folder is too large to walk completely: at least {total} documents; only the first 2000 found are listed and searched]"
+        )
+    );
+}
+
 /// A description typed over several lines stays on its collection's line.
 #[test]
 fn a_multi_line_description_stays_on_one_line_in_the_prompt() {

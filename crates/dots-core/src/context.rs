@@ -291,20 +291,19 @@ fn render_list(walk: &Walk, mut describe_path: impl FnMut(&str) -> Document) -> 
     }
     if shown < listed {
         out.push_str(&format!(
-            "
-[{} more documents are not listed; use query to search them]",
+            "\n[{} more documents are not listed; use query to search them]",
             listed - shown
         ));
     }
     if !complete {
         out.push_str(&format!(
-            "
-[the folder is too large to walk completely: at least {total} documents; only              the first {MAX_DOCUMENTS} found are listed and searched]"
+            "\n[the folder is too large to walk completely: at least {total} documents; only \
+             the first {MAX_DOCUMENTS} found are listed and searched]"
         ));
     } else if total > listed {
         out.push_str(&format!(
-            "
-[the collection has {total} documents; only the first {MAX_DOCUMENTS} are              listed and searched]"
+            "\n[the collection has {total} documents; only the first {MAX_DOCUMENTS} are \
+             listed and searched]"
         ));
     }
     out
