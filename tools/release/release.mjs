@@ -10,7 +10,7 @@
 //       signature is <installer>.sig, to <out>.
 
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /// Where the release's files are downloaded from.
@@ -85,6 +85,15 @@ function main([command, tag, installer, out]) {
   }
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+/// Whether `script`, the path node was started with, is this file. Both sides are resolved,
+/// and on Windows compared without case: a drive letter or a folder's case may differ there,
+/// and a check that did not run must not pass for one that did.
+export function isThisFile(script, platform = process.platform) {
+  if (!script) return false;
+  const norm = (path) => (platform === "win32" ? resolve(path).toLowerCase() : resolve(path));
+  return norm(fileURLToPath(import.meta.url)) === norm(script);
+}
+
+if (isThisFile(process.argv[1])) {
   main(process.argv.slice(2));
 }

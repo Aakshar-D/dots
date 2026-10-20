@@ -1,10 +1,16 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 
-import { checkTag, manifest } from "./release.mjs";
+import { checkTag, isThisFile, manifest } from "./release.mjs";
+
+const script = fileURLToPath(new URL("./release.mjs", import.meta.url));
+/// The script's path with its folders in another case, as Windows may spell it.
+const shouted = join(dirname(script).toUpperCase(), "release.mjs");
 
 /// A checkout whose version fields read `version`, except those in `except`.
 function checkout(version, except = {}) {
@@ -77,4 +83,23 @@ test("the manifest points the updater at the release's installer and its signatu
       },
     },
   });
+});
+
+test("the script knows itself by any spelling of its path", () => {
+  assert.ok(isThisFile(script));
+  assert.ok(isThisFile(relative(process.cwd(), script)));
+  assert.ok(isThisFile(shouted, "win32"));
+  assert.ok(!isThisFile(shouted, "linux"));
+  assert.ok(!isThisFile(join(script, "..", "release.test.mjs")));
+  assert.ok(!isThisFile(undefined));
+});
+
+test("the command line runs the check, so a bad tag fails it", () => {
+  const spellings = [script, relative(process.cwd(), script)];
+  if (process.platform === "win32") spellings.push(shouted);
+  for (const path of spellings) {
+    const ran = spawnSync(process.execPath, [path, "check", "vnext"], { encoding: "utf8" });
+    assert.equal(ran.status, 1, path);
+    assert.match(ran.stderr, /the tag vnext is not v<version>/, path);
+  }
 });
