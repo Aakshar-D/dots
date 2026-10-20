@@ -69,7 +69,7 @@ The owner decided: GitHub builds and publishes on its own when a version is mark
 
 **The endpoint.** Dots reads `https://github.com/Aakshar-D/dots/releases/latest/download/latest.json`. GitHub's "latest" is the newest published, non-prerelease release.
 
-**Prereleases** *(my call)*. A tag that is not a plain `vMAJOR.MINOR.PATCH` (for example `v0.2.0-rc1`) is published as a prerelease, which "latest" skips, so it reaches nobody. The version check is the same for it: the version fields must read `0.2.0-rc1`. A prerelease tag may therefore sit on any branch, for example the version pull request's branch before its version is set to the final `0.2.0`. Only plain version tags belong on `master`. The builder confirms that Tauri's NSIS bundle accepts a prerelease version; if it does not, the prerelease form is changed to one it accepts and the doc (§10) says which.
+**Prereleases** *(my call)*. A tag that is not a plain `vMAJOR.MINOR.PATCH` (for example `v0.2.0-rc.1`) is published as a prerelease, which "latest" skips, so it reaches nobody. The version check is the same for it: the version fields must read `0.2.0-rc.1`. A prerelease tag may therefore sit on any branch, for example the version pull request's branch before its version is set to the final `0.2.0`. Only plain version tags belong on `master`. Tauri's NSIS bundle accepts a prerelease version: it keeps `0.2.0-rc.1` as the product version and writes `0.2.0.0` where Windows needs four numbers (tauri-bundler 2.12, `try_add_numeric_build_number`).
 
 **Testing an update before it reaches everyone** *(my call)*. A release build reads the environment variable `DOTS_UPDATE_ENDPOINT`. When it is set, Dots checks that URL instead of the GitHub "latest" one, for example a prerelease's `latest.json`. The signature check is unchanged, so this can only point Dots at a build signed with the owner's key. This lets the owner run the whole path (check, download, note, backup, install, restart) on their own machine with two prereleases before a plain tag reaches every machine. It is never set by Dots itself, and `DOTS_DATA_DIR` still turns checks off (§5).
 
@@ -85,15 +85,15 @@ The owner decided: GitHub builds and publishes on its own when a version is mark
 
 The owner chose a strip across the top, where Dots' other notes are (mockup A, kept in `.superpowers/brainstorm/`). It uses the existing `Banner` in `ui/src/app/Banners.tsx`, tone `info`.
 
-**Nothing running.** Text: "Dots <version> is ready." Then a "What's new" link to the GitHub release page, a **Restart to update** button, and a **Later** button.
+**Nothing running.** Text: "Dots <version> is ready." Then a "What's new" button, which opens the version's GitHub release page in the browser (Dots opens it; the webview opens no address of its own), a **Restart to update** button, and a **Later** button.
 
 - Restart to update installs the update and starts the new Dots with its window shown.
 - Later hides the note until Dots next starts. *(my call)* The next start checks and downloads again before the note returns. Tauri's updater keeps a download only in memory and checks its signature when it downloads; keeping the bytes on disk would need Dots to check the signature again itself, which is not worth it for a file of about 6 MB.
 
 **A dot has a run working.** The text names the dots that have a run with status `running`: "Dots 0.2.0 is ready. Daily digest is still running." This needs its own query: `dot_overview`, which `RestartButton` uses, gives each dot's newest run that is queued, running or awaiting approval, and cannot tell those apart. The owner decided the two choices:
 
-- **Restart when it's done.** The note changes to "Will restart when Daily digest finishes." with a **Cancel** link. Dots restarts into the new version as soon as no run is working.
-- **Stop it and restart.** Asks once, with the wording `RestartButton` uses today: a run that is working ends as failed ("interrupted"); runs waiting in the queue or for an approval continue after the restart. Then it restarts as above.
+- **Restart when it's done** ("when they're done" for more than one dot). The note changes to "Will restart into Dots 0.2.0 when Daily digest finishes. New runs wait until after the update." with a **Cancel** button. Dots restarts into the new version as soon as no run is working.
+- **Stop it and restart** ("Stop them" for more than one dot). Asks once, with the wording `RestartButton` uses today: a run that is working ends as failed ("interrupted"); runs waiting in the queue or for an approval continue after the restart. Then the install begins at once, as "Restart Dots" does: the working runs are not cancelled first (that would end them as cancelled, not as the dialog says), and the next start marks them interrupted.
 
 **Which runs block.** Only runs with status `running` make Dots wait. Queued runs and runs awaiting an approval survive a restart already, so they do not block it. *(my call)*
 
@@ -103,9 +103,9 @@ The owner chose a strip across the top, where Dots' other notes are (mockup A, k
 
 ## 7. Installing
 
-On Windows, Tauri's `Update::install` starts the NSIS installer and then ends the process (`std::process::exit`). The installer, not `app.restart()`, starts the new Dots, and `RunEvent::Exit` does not fire. So everything Dots must do happens before `install`. When no run is working any more (after the wait, or after "Stop it and restart" and the stopped runs have ended), in this order:
+On Windows, Tauri's `Update::install` starts the NSIS installer and then ends the process (`std::process::exit`). The installer, not `app.restart()`, starts the new Dots, and `RunEvent::Exit` does not fire. So everything Dots must do happens before `install`. When no run is working any more (after the wait), or at once after "Stop it and restart", in this order:
 
-1. Shut the runtime down and **wait** until its tasks have stopped writing to `dots.db`, with a time limit *(the builder picks it)*. `shutdown()` alone does not wait.
+1. Shut the runtime down and **wait** until its tasks have stopped writing to `dots.db`, at most 10 seconds (`Runtime::close`, which closes the database). `shutdown()` alone does not wait. If the database has not closed in time, no backup is made: as in step 3, Dots restarts into the current version, with the reason.
 2. Back up the database (below).
 3. If the backup fails, do not install. Restart into the current version with `app.restart()`, as "Restart Dots" does; no run is working by then, so this costs nothing. The new process shows the note again with an error line naming the reason. *(my call: a shut-down runtime cannot be started again in the same process.)*
 4. Write the restart mark (`startup::mark_restart`) so the new Dots shows its window, like after "Restart Dots".
