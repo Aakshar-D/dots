@@ -860,11 +860,15 @@ impl Runtime {
     /// The names of the dots with a run whose status is `running`, sorted: the runs an update
     /// waits for (updates spec §6). Queued runs and runs awaiting an approval survive a
     /// restart, so they are left out. A run is no longer counted once the `RunUpdated` event
-    /// of its end is out.
+    /// of its end is out. A dot deleted between the two reads is left out.
     pub async fn working_dots(&self) -> Result<Vec<String>> {
         let mut names = Vec::new();
         for id in self.store.running_dot_ids().await? {
-            names.push(self.store.get_dot(&id).await?.spec.name);
+            match self.store.get_dot(&id).await {
+                Ok(dot) => names.push(dot.spec.name),
+                Err(Error::NotFound(_)) => {}
+                Err(e) => return Err(e),
+            }
         }
         names.sort();
         Ok(names)
