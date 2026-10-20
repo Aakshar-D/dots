@@ -1,0 +1,59 @@
+# Builds, signs and publishes a release when a version tag is pushed (updates spec §4). The
+# tag must be v<version> and agree with every version field (tools/release/release.mjs). A
+# tag with a suffix, such as v0.2.0-rc.1, is published as a prerelease, which no installed
+# Dots takes on its own. The person steps are in docs/releasing.md.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the tag against the version fields
+        id: version
+        shell: bash
+        run: |
+          node --test tools/release/release.test.mjs
+          node tools/release/release.mjs check "$GITHUB_REF_NAME"
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install the UI's packages
+        run: bun install --frozen-lockfile
+
+      # The updater files (the installer's .sig) are made here only: a build on a PC has no
+      # key, so `tauri.conf.json` leaves them off.
+      - name: Build and sign the installer
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: bun run tauri build --config '{"bundle":{"createUpdaterArtifacts":true}}' -- --locked
+
+      - name: Publish the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          installer="target/release/bundle/nsis/Dots_${version}_x64-setup.exe"
+          node tools/release/release.mjs manifest "$GITHUB_REF_NAME" "$installer" latest.json
+          flags=()
+          if [ "$PRERELEASE" = "true" ]; then flags+=(--prerelease); fi
+          gh release create "$GITHUB_REF_NAME" --title "Dots $version" --generate-notes \
+            "${flags[@]}" "$installer" "$installer.sig" latest.json
