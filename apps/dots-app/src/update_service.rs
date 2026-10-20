@@ -27,6 +27,8 @@ pub struct Updates {
     state: Mutex<UpdateState>,
     downloaded: Mutex<Option<Downloaded>>,
     data_dir: PathBuf,
+    /// One button or run change at a time, so the hold always matches the state.
+    turn: tokio::sync::Mutex<()>,
 }
 
 impl Updates {
@@ -36,6 +38,7 @@ impl Updates {
             state: Mutex::new(UpdateState::new(error)),
             downloaded: Mutex::new(None),
             data_dir,
+            turn: tokio::sync::Mutex::new(()),
         }
     }
 }
@@ -65,12 +68,15 @@ pub fn release_page(app: &AppHandle) -> Result<String, CmdError> {
 /// note and, when the install begins, starts it. Returns the note. The queue is held first:
 /// once the hold returns no run can start, so the working dots the button decides on are
 /// all there are. It stays held when the install begins, and follows the state otherwise.
+/// Buttons are applied one at a time (and not during a run change), so the hold applied last
+/// is the one the state asks for.
 pub async fn act(
     app: &AppHandle,
     rt: &Arc<Runtime>,
     button: impl FnOnce(&mut UpdateState, &[String]) -> dots_core::Result<Next>,
 ) -> Result<UpdateNote, CmdError> {
     let updates = updates(app)?;
+    let _turn = updates.turn.lock().await;
     rt.hold_runs(true).await;
     let working = match rt.working_dots().await {
         Ok(working) => working,
@@ -99,6 +105,9 @@ pub async fn act(
     announce(app, &note);
     if next == Next::Install {
         start_install(app, rt);
+    } else if updates.state.lock().unwrap().holds_runs() {
+        // A wait whose runs ended meanwhile begins the install at once.
+        settle(app, rt, &updates).await;
     }
     Ok(note)
 }
@@ -157,6 +166,17 @@ async fn runs_changed(app: &AppHandle, rt: &Arc<Runtime>) {
     let Some(updates) = app.try_state::<Updates>() else {
         return;
     };
+    let _turn = updates.turn.lock().await;
+    settle(app, rt, &updates).await;
+}
+
+/// The shared step of a run change and of a button that leaves a wait: when an update is
+/// ready, reads the working dots, lets the state follow them, announces the note and begins
+/// the install if the wait has nothing left to wait for. The caller holds the turn.
+async fn settle(app: &AppHandle, rt: &Arc<Runtime>, updates: &Updates) {
+    if updates.state.lock().unwrap().ready_version().is_none() {
+        return;
+    }
     // Fails once an install has closed the database; there is nothing left to show then.
     let Ok(working) = rt.working_dots().await else {
         return;
@@ -192,14 +212,27 @@ async fn check(app: &AppHandle, rt: &Runtime, url: &Url) -> Result<(), String> {
         .await
         .map_err(|e| e.to_string())?;
     let version = found.version.clone();
-    *updates.downloaded.lock().unwrap() = Some(Downloaded {
-        update: found,
-        bytes,
-    });
-    let shown = updates.state.lock().unwrap().offer(&version);
+    // The offer is taken or refused under one lock: a wait may have begun during the download.
+    let shown = {
+        let mut state = updates.state.lock().unwrap();
+        if !state.wants(&version) {
+            return Ok(());
+        }
+        *updates.downloaded.lock().unwrap() = Some(Downloaded {
+            update: found,
+            bytes,
+        });
+        state.offer(&version)
+    };
     tracing::info!("Dots {version} is downloaded and ready to install");
     if shown {
-        let working = rt.working_dots().await.unwrap_or_default();
+        let working = match rt.working_dots().await {
+            Ok(working) => working,
+            Err(e) => {
+                tracing::warn!("reading the working dots failed: {e}");
+                Vec::new()
+            }
+        };
         let note = updates.state.lock().unwrap().note(&working);
         announce(app, &note);
     }
