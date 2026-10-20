@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions};
+use sqlx::{ConnectOptions, Connection};
 
 use crate::Result;
 
@@ -49,6 +50,24 @@ impl Store {
     pub async fn close(&self) {
         self.pool.close().await;
     }
+}
+
+/// Writes a consistent copy of the database `db` to `dest` with `VACUUM INTO`, through a
+/// connection of its own, so it works after the store has closed (updates spec §7). The
+/// database is in WAL mode: a copy of the file alone could miss what the WAL still holds.
+/// Fails when `db` does not exist or `dest` does, and creates neither.
+pub async fn backup_database(db: &Path, dest: &Path) -> Result<()> {
+    let opts = SqliteConnectOptions::new()
+        .filename(db)
+        .busy_timeout(Duration::from_secs(5));
+    let mut conn = opts.connect().await?;
+    let done = sqlx::query("VACUUM INTO ?")
+        .bind(dest.to_string_lossy().into_owned())
+        .execute(&mut conn)
+        .await;
+    conn.close().await?;
+    done?;
+    Ok(())
 }
 
 pub(crate) fn opt_json(s: Option<String>) -> Result<Option<Value>> {
