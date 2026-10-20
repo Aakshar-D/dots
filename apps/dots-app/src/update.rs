@@ -238,8 +238,9 @@ pub fn newest_backup(data_dir: &Path) -> Option<PathBuf> {
 }
 
 /// Backs up `dots.db` of `data_dir` into its backups folder under `backup_file_name`, then
-/// deletes all but the `KEEP_BACKUPS` newest backups. Returns the new backup's path. A backup
-/// that could not be pruned after is logged, not an error.
+/// deletes the older backups, keeping the new backup always and the `KEEP_BACKUPS - 1` newest
+/// others. Returns the new backup's path. A backup that could not be pruned after is logged,
+/// not an error.
 pub async fn back_up(
     data_dir: &Path,
     version: &str,
@@ -253,7 +254,7 @@ pub async fn back_up(
         .map_err(|e| e.to_string())?;
     match backups(&dir) {
         Ok(all) => {
-            for old in all.iter().skip(KEEP_BACKUPS) {
+            for old in all.iter().filter(|p| **p != dest).skip(KEEP_BACKUPS - 1) {
                 if let Err(e) = std::fs::remove_file(old) {
                     tracing::warn!("could not delete the old backup {}: {e}", old.display());
                 }
@@ -507,6 +508,36 @@ mod tests {
             ]
         );
         assert_eq!(newest_backup(dir.path()), Some(made));
+    }
+
+    #[tokio::test]
+    async fn a_backup_is_kept_even_when_others_have_later_stamps() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = dots_core::store::Store::open(&dir.path().join("dots.db"))
+            .await
+            .unwrap();
+        store.close().await;
+        let backups_dir = dir.path().join(BACKUPS_DIR);
+        std::fs::create_dir_all(&backups_dir).unwrap();
+        // Three backups stamped after the new one, as after a clock that ran ahead.
+        for hour in [20, 21, 22] {
+            std::fs::write(backups_dir.join(backup_file_name("0.1.0", at(hour))), "").unwrap();
+        }
+        let made = back_up(dir.path(), "0.1.0", at(9)).await.unwrap();
+        assert!(made.exists(), "the backup just made is never pruned");
+        let mut left: Vec<String> = std::fs::read_dir(&backups_dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        assert_eq!(
+            left,
+            [
+                "dots-0.1.0-2026-10-20-090509.db",
+                "dots-0.1.0-2026-10-20-210509.db",
+                "dots-0.1.0-2026-10-20-220509.db",
+            ]
+        );
     }
 
     #[tokio::test]
