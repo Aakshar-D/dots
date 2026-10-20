@@ -249,7 +249,7 @@ impl Policy {
             if let Pattern::WithSpec { tool, spec } = pattern {
                 if tool == "Context" && check_name(LibraryKind::Context, spec.trim()).is_err() {
                     return Err(invalid(
-                        "a Context rule names one collection: lower-case letters, digits, '-'                          and '_'",
+                        "a Context rule names one collection: lower-case letters, digits, '-' and '_'",
                     ));
                 }
                 if COMMAND_TOOLS.contains(&tool) {

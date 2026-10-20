@@ -59,6 +59,14 @@ describe("the editor's Tools and skills section", () => {
     expect(uses().context).toEqual(["clients"]);
   });
 
+  it("says \"at least\" when a collection's count is only a lower bound", async () => {
+    if (company!.kind !== "context" || !company!.context) throw new Error("not a collection");
+    const partial = { ...company!, context: { ...company!.context, complete: false } } as LibraryEntry;
+    setup({ library: [partial] });
+    const group = await screen.findByRole("group", { name: "Context" });
+    expect(within(group).getByText(/at least 42 documents · every dot/)).toBeVisible();
+  });
+
   it("ticks and unticks, and hands back the names", async () => {
     const { user, uses } = setup({ uses: { ...none, skills: ["pdf"] } });
     expect(await screen.findByLabelText("pdf")).toBeChecked();

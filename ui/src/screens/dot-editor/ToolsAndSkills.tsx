@@ -41,7 +41,8 @@ function Detail({ entry }: { entry: LibraryEntry }) {
         : entry.kind === "context"
           ? [
               entry.config.description,
-              entry.context && plural(entry.context.documents, "document"),
+              entry.context &&
+                `${entry.context.complete ? "" : "at least "}${plural(entry.context.documents, "document")}`,
               entry.config.every_dot && "every dot",
             ]
               .filter(Boolean)

@@ -1006,6 +1006,67 @@ async fn dots_own_server_offers_context_only_with_collections_and_checks_each_ca
 }
 
 #[tokio::test]
+async fn dots_own_server_caps_the_text_of_an_error_like_the_local_tool() {
+    let e = env(json!([]), false).await;
+    let kb = e.dir.path().join("kb");
+    write_file(
+        &kb.join("style.md"),
+        "# House style
+",
+    );
+    let names: Vec<String> = (0..900)
+        .map(|i| format!("{}-{i:03}", "c".repeat(34)))
+        .collect();
+    for name in &names {
+        e.lib
+            .add(
+                name,
+                LibraryConfig::Context(ContextConfig {
+                    path: kb.to_string_lossy().into_owned(),
+                    description: String::new(),
+                    every_dot: false,
+                }),
+                None,
+            )
+            .await
+            .unwrap();
+    }
+    let dot = claude_dot(&e, |s| s.uses.context = names.clone()).await;
+    let run = e
+        .store
+        .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    let cancel = CancellationToken::new();
+    let (tools, _) = RunTools::open(OpenRequest {
+        store: &e.store,
+        bus: &e.bus,
+        run_id: &run.id,
+        uses: &dot.spec.uses,
+        workspace: e.dir.path(),
+        plugins_dir: None,
+        cancel: &cancel,
+    })
+    .await
+    .unwrap();
+    let secret = e.runner.register_secret(&run.id);
+    e.runner.register_tools(&run.id, Arc::new(tools));
+    let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                      "params": {"name": "context", "arguments": {"collection": "nope"}}});
+    let reply: Value = rpc(&e, "/mcp", Some(&secret), body)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(reply["result"]["isError"], true, "{reply}");
+    let text = reply["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(text.starts_with("unknown collection"), "{text}");
+    // The same cap as the local tool: 30 KB, then its "[truncated: n more bytes]" note.
+    assert!(text.contains("[truncated: "), "{}", text.len());
+    assert!(text.len() <= 30 * 1024 + 64, "{}", text.len());
+}
+
+#[tokio::test]
 async fn a_context_call_that_asks_waits_for_the_decision_and_parks_when_none_comes() {
     let e = env(json!([]), false).await;
     add_company(&e).await;
@@ -1044,22 +1105,28 @@ async fn a_context_call_that_asks_waits_for_the_decision_and_parks_when_none_com
 
     // A live approval reads the collection and returns it.
     let approver = async {
-        loop {
-            let pending = e.store.approvals_for_run(&run.id).await.unwrap();
-            if let Some(a) = pending.iter().find(|a| a.status == ApprovalStatus::Pending) {
-                assert_eq!(a.tool, "Context");
-                assert_eq!(
-                    a.input,
-                    json!({"collection": "company", "path": "style.md"})
-                );
-                let id = a.id.clone();
-                let DecideEffect::Live(_) = e.hub.decide(&id, true, None).await.unwrap() else {
-                    panic!("expected a live decision")
-                };
-                return;
+        let found = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let pending = e.store.approvals_for_run(&run.id).await.unwrap();
+                // The waiter is inserted after the row, so wait for both.
+                if let Some(a) = pending.iter().find(|a| a.status == ApprovalStatus::Pending) {
+                    if e.hub.waiter_count() > 0 {
+                        return a.clone();
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
+        })
+        .await
+        .expect("the approval row and its waiter never appeared");
+        assert_eq!(found.tool, "Context");
+        assert_eq!(
+            found.input,
+            json!({"collection": "company", "path": "style.md"})
+        );
+        let DecideEffect::Live(_) = e.hub.decide(&found.id, true, None).await.unwrap() else {
+            panic!("expected a live decision")
+        };
     };
     let (granted, ()) = tokio::join!(rpc(&e, "/mcp", Some(&secret), call(1)), approver);
     let granted: Value = granted.json().await.unwrap();

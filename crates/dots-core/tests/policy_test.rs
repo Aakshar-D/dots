@@ -1364,7 +1364,9 @@ fn a_context_rule_must_name_one_collection() {
     for bad in ["Context(*)", "Context(comp*)", "Context(Kb)"] {
         let err = with(bad).unwrap_err().to_string();
         assert!(
-            err.contains("a Context rule names one collection"),
+            err.contains(
+                "a Context rule names one collection: lower-case letters, digits, '-' and '_'"
+            ),
             "{bad}: {err}"
         );
     }

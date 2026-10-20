@@ -24,7 +24,6 @@ use crate::util::{ct_eq, new_token};
 use crate::workspace::{Prepared, WorkspaceManager};
 use crate::{Error, Result};
 
-/// How every resume prompt ends.
 /// The name the run's model knows a policy tool by: the `Context` tool is `mcp__dots__context`
 /// on the Claude engine, `context` on the local one; every other tool keeps its name.
 fn model_tool_name(tool: &str, engine: EngineKind) -> &str {
@@ -35,6 +34,7 @@ fn model_tool_name(tool: &str, engine: EngineKind) -> &str {
     }
 }
 
+/// How every resume prompt ends.
 const CONTINUE: &str = "Continue the task, then end with your summary.";
 
 #[derive(Debug, Clone)]
