@@ -124,7 +124,7 @@ pub fn update_open_notes(app: AppHandle) -> Res<()> {
 /// "Later": the note is hidden until Dots next starts.
 #[tauri::command]
 pub async fn update_later(app: AppHandle, state: State<'_, AppState>) -> Res<UpdateNote> {
-    update_service::act(&app, &state.rt()?, |s, _| {
+    update_service::press(&app, &state.rt()?, |s, _| {
         s.later();
         Ok(Next::Nothing)
     })
@@ -135,23 +135,29 @@ pub async fn update_later(app: AppHandle, state: State<'_, AppState>) -> Res<Upd
 /// working, else once the last of them has ended; no queued run starts meanwhile.
 #[tauri::command]
 pub async fn update_restart(app: AppHandle, state: State<'_, AppState>) -> Res<UpdateNote> {
-    update_service::act(&app, &state.rt()?, |s, working| s.restart(working)).await
+    update_service::press(&app, &state.rt()?, |s, working| s.restart(working)).await
 }
 
 /// "Stop it and restart": installs now. A run that is working ends as failed ("interrupted")
-/// at the next start, as after "Restart Dots"; the UI asks first.
+/// at the next start, as after "Restart Dots"; the UI asks first. `working`: the dots the
+/// confirm named. When another dot is working now, nothing is installed and the note that
+/// follows names the dots working now.
 #[tauri::command]
 pub async fn update_stop_and_restart(
     app: AppHandle,
     state: State<'_, AppState>,
+    working: Vec<String>,
 ) -> Res<UpdateNote> {
-    update_service::act(&app, &state.rt()?, |s, _| s.stop_and_restart()).await
+    update_service::press(&app, &state.rt()?, |s, now| {
+        s.stop_and_restart(&working, now)
+    })
+    .await
 }
 
 /// "Cancel" of a waiting install: the queue starts again.
 #[tauri::command]
 pub async fn update_cancel_wait(app: AppHandle, state: State<'_, AppState>) -> Res<UpdateNote> {
-    update_service::act(&app, &state.rt()?, |s, _| {
+    update_service::press(&app, &state.rt()?, |s, _| {
         s.cancel_wait();
         Ok(Next::Nothing)
     })

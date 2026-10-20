@@ -119,9 +119,10 @@ impl UpdateState {
         self.ready.as_deref()
     }
 
-    /// Whether the run queue is held: while an install waits (spec §6).
+    /// Whether the run queue is held: while an install waits (spec §6), and once it has begun,
+    /// so a stale button cannot let a run start under the install.
     pub fn holds_runs(&self) -> bool {
-        self.waiting
+        self.waiting || self.installing
     }
 
     pub fn later(&mut self) {
@@ -139,10 +140,19 @@ impl UpdateState {
         Ok(Next::Nothing)
     }
 
-    /// "Stop it and restart": installs whatever is working. Those runs end as failed
-    /// ("interrupted") at the next start, as after "Restart Dots".
-    pub fn stop_and_restart(&mut self) -> dots_core::Result<Next> {
+    /// "Stop it and restart": installs, stopping the runs that are working. Those runs end as
+    /// failed ("interrupted") at the next start, as after "Restart Dots". `seen`: the dots the
+    /// confirm named. When a dot it did not name is working now, nothing is installed, and the
+    /// note that follows names the dots working now.
+    pub fn stop_and_restart(
+        &mut self,
+        seen: &[String],
+        working: &[String],
+    ) -> dots_core::Result<Next> {
         self.check_ready()?;
+        if working.iter().any(|dot| !seen.contains(dot)) {
+            return Ok(Next::Nothing);
+        }
         Ok(self.begin())
     }
 
@@ -240,7 +250,8 @@ pub fn newest_backup(data_dir: &Path) -> Option<PathBuf> {
 /// Backs up `dots.db` of `data_dir` into its backups folder under `backup_file_name`, then
 /// deletes the older backups, keeping the new backup always and the `KEEP_BACKUPS - 1` newest
 /// others. Returns the new backup's path. A backup that could not be pruned after is logged,
-/// not an error.
+/// not an error. A backup that fails leaves no file behind it, so a part copy is never taken
+/// for a backup.
 pub async fn back_up(
     data_dir: &Path,
     version: &str,
@@ -249,9 +260,20 @@ pub async fn back_up(
     let dir = data_dir.join(BACKUPS_DIR);
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let dest = dir.join(backup_file_name(version, at));
-    dots_core::store::backup_database(&data_dir.join(dots_core::store::DB_FILE), &dest)
-        .await
-        .map_err(|e| e.to_string())?;
+    let existed = dest.exists();
+    let made =
+        dots_core::store::backup_database(&data_dir.join(dots_core::store::DB_FILE), &dest).await;
+    if let Err(e) = made {
+        if !existed && dest.exists() {
+            if let Err(gone) = std::fs::remove_file(&dest) {
+                tracing::warn!(
+                    "could not delete the part backup {}: {gone}",
+                    dest.display()
+                );
+            }
+        }
+        return Err(e.to_string());
+    }
     match backups(&dir) {
         Ok(all) => {
             for old in all.iter().filter(|p| **p != dest).skip(KEEP_BACKUPS - 1) {
@@ -419,12 +441,67 @@ mod tests {
     }
 
     #[test]
-    fn stop_and_restart_installs_whatever_works() {
+    fn stop_and_restart_installs_when_only_the_dots_it_named_work() {
         let mut s = UpdateState::new(None);
-        assert!(s.stop_and_restart().is_err());
+        assert!(s.stop_and_restart(&[], &[]).is_err());
+        s.offer("0.2.0");
+        let seen = names(&["a", "b"]);
+        // A dot the confirm did not name started meanwhile: nothing is stopped.
+        let now = names(&["a", "c"]);
+        assert_eq!(s.stop_and_restart(&seen, &now).unwrap(), Next::Nothing);
+        assert!(!s.holds_runs());
+        assert_eq!(s.note(&now), ready(&["a", "c"], None));
+        // Fewer dots than it named, or none, is fine.
+        assert_eq!(
+            s.stop_and_restart(&seen, &names(&["b"])).unwrap(),
+            Next::Install
+        );
+
+        let mut s = UpdateState::new(None);
         s.offer("0.2.0");
         s.restart(&names(&["a"])).unwrap();
-        assert_eq!(s.stop_and_restart().unwrap(), Next::Install);
+        assert_eq!(
+            s.stop_and_restart(&names(&["a"]), &[]).unwrap(),
+            Next::Install
+        );
+        assert!(
+            s.stop_and_restart(&[], &[]).is_err(),
+            "an install begins once"
+        );
+    }
+
+    #[test]
+    fn the_queue_is_held_while_an_install_waits_and_once_it_has_begun() {
+        let mut s = UpdateState::new(None);
+        assert!(!s.holds_runs());
+        s.offer("0.2.0");
+        assert!(!s.holds_runs(), "a ready update holds nothing");
+        s.restart(&names(&["a"])).unwrap();
+        assert!(s.holds_runs(), "waiting");
+        s.cancel_wait();
+        assert!(!s.holds_runs(), "cancelled");
+        s.restart(&[]).unwrap();
+        assert!(s.holds_runs(), "installing");
+        // A stale Cancel or Later, sent before the strip showed the install, lifts nothing.
+        s.cancel_wait();
+        s.later();
+        assert!(s.holds_runs(), "still installing");
+    }
+
+    #[test]
+    fn a_check_downloads_a_version_only_when_none_waits_or_installs() {
+        let mut s = UpdateState::new(None);
+        assert!(s.wants("0.2.0"), "nothing is ready");
+        s.offer("0.2.0");
+        assert!(!s.wants("0.2.0"), "already downloaded");
+        assert!(s.wants("0.3.0"), "a newer one replaces it");
+        s.restart(&names(&["a"])).unwrap();
+        assert!(!s.wants("0.3.0"), "waiting");
+        s.cancel_wait();
+        s.restart(&[]).unwrap();
+        assert!(!s.wants("0.3.0"), "installing");
+        assert!(!s.offer("0.3.0"));
+        assert_eq!(s.ready_version(), Some("0.2.0"));
     }
 
     #[test]
@@ -545,6 +622,55 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         assert!(back_up(dir.path(), "0.1.0", at(9)).await.is_err());
         assert_eq!(newest_backup(dir.path()), None);
+    }
+
+    fn backups_left(data_dir: &Path) -> Vec<String> {
+        std::fs::read_dir(data_dir.join(BACKUPS_DIR))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_backup_of_a_file_that_is_not_a_database_leaves_no_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("dots.db"), "not a database ".repeat(1000)).unwrap();
+        assert!(back_up(dir.path(), "0.1.0", at(9)).await.is_err());
+        assert_eq!(backups_left(dir.path()), Vec::<String>::new());
+    }
+
+    #[tokio::test]
+    async fn a_backup_that_fails_part_way_leaves_no_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("dots.db");
+        let made = dir.path().join("made.db");
+        let store = dots_core::store::Store::open(&made).await.unwrap();
+        store.close().await;
+        // One file with no WAL beside it.
+        dots_core::store::backup_database(&made, &db).await.unwrap();
+        // The schema on the first page reads, the second page does not: SQLite has begun the
+        // copy when it finds that out (without the clean-up, the part copy was left).
+        let mut bytes = std::fs::read(&db).unwrap();
+        bytes[4096..8192].fill(0xA5);
+        std::fs::write(&db, bytes).unwrap();
+        let err = back_up(dir.path(), "0.1.0", at(9)).await.unwrap_err();
+        assert!(err.contains("malformed"), "{err}");
+        assert_eq!(backups_left(dir.path()), Vec::<String>::new());
+    }
+
+    #[tokio::test]
+    async fn a_failed_backup_keeps_a_file_that_was_there_before() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = dots_core::store::Store::open(&dir.path().join("dots.db"))
+            .await
+            .unwrap();
+        store.close().await;
+        let backups_dir = dir.path().join(BACKUPS_DIR);
+        std::fs::create_dir_all(&backups_dir).unwrap();
+        let there = backups_dir.join(backup_file_name("0.1.0", at(9)));
+        std::fs::write(&there, "mine").unwrap();
+        assert!(back_up(dir.path(), "0.1.0", at(9)).await.is_err());
+        assert_eq!(std::fs::read_to_string(&there).unwrap(), "mine");
     }
 
     #[test]

@@ -64,6 +64,57 @@ pub fn release_page(app: &AppHandle) -> Result<String, CmdError> {
     }
 }
 
+/// What a button and a run change do to the rest of Dots, so `act` and `settle` are tested
+/// without the app. Only this crate implements it, so the futures need no `Send` bound in the
+/// signature.
+#[allow(async_fn_in_trait)]
+pub trait Controls {
+    /// Holds (`true`) or releases the run queue; holding waits for a dispatch pass in flight.
+    async fn hold_runs(&self, held: bool);
+    /// The dots with a run working now (`Runtime::working_dots`).
+    async fn working_dots(&self) -> dots_core::Result<Vec<String>>;
+    /// Tells the window the note that follows.
+    fn announce(&self, note: &UpdateNote);
+    /// Begins the install of the downloaded update.
+    fn start_install(&self);
+}
+
+/// The app's `Controls`: the runtime and the window.
+struct AppControls<'a> {
+    app: &'a AppHandle,
+    rt: &'a Arc<Runtime>,
+}
+
+impl Controls for AppControls<'_> {
+    async fn hold_runs(&self, held: bool) {
+        self.rt.hold_runs(held).await;
+    }
+
+    async fn working_dots(&self) -> dots_core::Result<Vec<String>> {
+        self.rt.working_dots().await
+    }
+
+    fn announce(&self, note: &UpdateNote) {
+        if let Err(e) = self.app.emit(UPDATE_EVENT, note) {
+            tracing::warn!("emitting the update note failed: {e}");
+        }
+    }
+
+    fn start_install(&self) {
+        start_install(self.app, self.rt);
+    }
+}
+
+/// A button of the strip, applied by `act` with the app's controls.
+pub async fn press(
+    app: &AppHandle,
+    rt: &Arc<Runtime>,
+    button: impl FnOnce(&mut UpdateState, &[String]) -> dots_core::Result<Next>,
+) -> Result<UpdateNote, CmdError> {
+    let updates = updates(app)?;
+    act(&AppControls { app, rt }, &updates, button).await
+}
+
 /// Applies a button of the strip, holds or releases the run queue to match, announces the
 /// note and, when the install begins, starts it. Returns the note. The queue is held first:
 /// once the hold returns no run can start, so the working dots the button decides on are
@@ -71,18 +122,17 @@ pub fn release_page(app: &AppHandle) -> Result<String, CmdError> {
 /// Buttons are applied one at a time (and not during a run change), so the hold applied last
 /// is the one the state asks for.
 pub async fn act(
-    app: &AppHandle,
-    rt: &Arc<Runtime>,
+    controls: &impl Controls,
+    updates: &Updates,
     button: impl FnOnce(&mut UpdateState, &[String]) -> dots_core::Result<Next>,
 ) -> Result<UpdateNote, CmdError> {
-    let updates = updates(app)?;
     let _turn = updates.turn.lock().await;
-    rt.hold_runs(true).await;
-    let working = match rt.working_dots().await {
+    controls.hold_runs(true).await;
+    let working = match controls.working_dots().await {
         Ok(working) => working,
         Err(e) => {
             let held = updates.state.lock().unwrap().holds_runs();
-            rt.hold_runs(held).await;
+            controls.hold_runs(held).await;
             return Err(e.into());
         }
     };
@@ -97,25 +147,19 @@ pub async fn act(
         Ok(decided) => decided,
         Err(e) => {
             let held = updates.state.lock().unwrap().holds_runs();
-            rt.hold_runs(held).await;
+            controls.hold_runs(held).await;
             return Err(e.into());
         }
     };
-    rt.hold_runs(held).await;
-    announce(app, &note);
+    controls.hold_runs(held).await;
+    controls.announce(&note);
     if next == Next::Install {
-        start_install(app, rt);
+        controls.start_install();
     } else if updates.state.lock().unwrap().holds_runs() {
         // A wait whose runs ended meanwhile begins the install at once.
-        settle(app, rt, &updates).await;
+        settle(controls, updates).await;
     }
     Ok(note)
-}
-
-fn announce(app: &AppHandle, note: &UpdateNote) {
-    if let Err(e) = app.emit(UPDATE_EVENT, note) {
-        tracing::warn!("emitting the update note failed: {e}");
-    }
 }
 
 /// Starts the watch on runs and, unless this Dots does not check (`update::checks_enabled`),
@@ -167,18 +211,18 @@ async fn runs_changed(app: &AppHandle, rt: &Arc<Runtime>) {
         return;
     };
     let _turn = updates.turn.lock().await;
-    settle(app, rt, &updates).await;
+    settle(&AppControls { app, rt }, &updates).await;
 }
 
 /// The shared step of a run change and of a button that leaves a wait: when an update is
 /// ready, reads the working dots, lets the state follow them, announces the note and begins
 /// the install if the wait has nothing left to wait for. The caller holds the turn.
-async fn settle(app: &AppHandle, rt: &Arc<Runtime>, updates: &Updates) {
+async fn settle(controls: &impl Controls, updates: &Updates) {
     if updates.state.lock().unwrap().ready_version().is_none() {
         return;
     }
     // Fails once an install has closed the database; there is nothing left to show then.
-    let Ok(working) = rt.working_dots().await else {
+    let Ok(working) = controls.working_dots().await else {
         return;
     };
     let (next, note) = {
@@ -186,15 +230,17 @@ async fn settle(app: &AppHandle, rt: &Arc<Runtime>, updates: &Updates) {
         (state.runs_changed(&working), state.note(&working))
     };
     if note != UpdateNote::None {
-        announce(app, &note);
+        controls.announce(&note);
     }
     if next == Next::Install {
-        start_install(app, rt);
+        controls.start_install();
     }
 }
 
-/// One check: a newer version is downloaded, its signature checked, and offered.
-async fn check(app: &AppHandle, rt: &Runtime, url: &Url) -> Result<(), String> {
+/// One check: a newer version is downloaded, its signature checked, and offered. Whether a
+/// found version is kept is `UpdateState::wants`, tested in `update.rs`; the rest needs the
+/// updater.
+async fn check(app: &AppHandle, rt: &Arc<Runtime>, url: &Url) -> Result<(), String> {
     let updater = app
         .updater_builder()
         .endpoints(vec![url.clone()])
@@ -234,7 +280,7 @@ async fn check(app: &AppHandle, rt: &Runtime, url: &Url) -> Result<(), String> {
             }
         };
         let note = updates.state.lock().unwrap().note(&working);
-        announce(app, &note);
+        AppControls { app, rt }.announce(&note);
     }
     Ok(())
 }
@@ -291,5 +337,228 @@ impl InstallSteps for AppSteps {
             .update
             .install(&self.downloaded.bytes)
             .map_err(|e| e.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+
+    use super::*;
+    use crate::error::CmdErrorKind;
+
+    /// Records what `act` and `settle` do. `working`: the answers of `working_dots`, in turn;
+    /// the last one repeats.
+    struct Fake {
+        working: RefCell<Vec<Vec<String>>>,
+        log: RefCell<Vec<String>>,
+    }
+
+    impl Fake {
+        fn answering(working: &[&[&str]]) -> Self {
+            Self {
+                working: RefCell::new(working.iter().map(|w| names(w)).collect()),
+                log: RefCell::new(Vec::new()),
+            }
+        }
+        fn log(&self, entry: &str) {
+            self.log.borrow_mut().push(entry.to_string());
+        }
+        /// The log since the last call.
+        fn take(&self) -> Vec<String> {
+            self.log.take()
+        }
+    }
+
+    impl Controls for Fake {
+        async fn hold_runs(&self, held: bool) {
+            self.log(if held { "hold" } else { "release" });
+        }
+        async fn working_dots(&self) -> dots_core::Result<Vec<String>> {
+            self.log("working");
+            let mut working = self.working.borrow_mut();
+            Ok(if working.len() > 1 {
+                working.remove(0)
+            } else {
+                working[0].clone()
+            })
+        }
+        fn announce(&self, note: &UpdateNote) {
+            self.log(match note {
+                UpdateNote::None => "announce none",
+                UpdateNote::Ready { .. } => "announce ready",
+                UpdateNote::Waiting { .. } => "announce waiting",
+                UpdateNote::Installing { .. } => "announce installing",
+            });
+        }
+        fn start_install(&self) {
+            self.log("install");
+        }
+    }
+
+    fn names(n: &[&str]) -> Vec<String> {
+        n.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// Updates with version 0.2.0 ready.
+    fn ready() -> Updates {
+        let updates = Updates::new(PathBuf::new(), None);
+        updates.state.lock().unwrap().offer("0.2.0");
+        updates
+    }
+
+    fn restart(s: &mut UpdateState, working: &[String]) -> dots_core::Result<Next> {
+        s.restart(working)
+    }
+
+    fn cancel(s: &mut UpdateState, _: &[String]) -> dots_core::Result<Next> {
+        s.cancel_wait();
+        Ok(Next::Nothing)
+    }
+
+    fn later(s: &mut UpdateState, _: &[String]) -> dots_core::Result<Next> {
+        s.later();
+        Ok(Next::Nothing)
+    }
+
+    fn ready_note(working: &[&str]) -> UpdateNote {
+        UpdateNote::Ready {
+            version: "0.2.0".into(),
+            working: names(working),
+            error: None,
+        }
+    }
+
+    fn installing() -> UpdateNote {
+        UpdateNote::Installing {
+            version: "0.2.0".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_wait_whose_last_run_ended_meanwhile_installs_once_with_the_queue_held() {
+        let updates = ready();
+        // The run ends between the button's read and the settle after it.
+        let fake = Fake::answering(&[&["triage"], &[]]);
+        let note = act(&fake, &updates, restart).await.unwrap();
+        assert_eq!(
+            note,
+            UpdateNote::Waiting {
+                version: "0.2.0".into(),
+                waiting_for: names(&["triage"]),
+            }
+        );
+        assert_eq!(
+            fake.take(),
+            [
+                "hold",
+                "working",
+                "hold",
+                "announce waiting",
+                "working",
+                "announce installing",
+                "install"
+            ]
+        );
+        // The watcher sees the run's end too: the install is not begun again, and the queue
+        // stays held.
+        settle(&fake, &updates).await;
+        assert_eq!(fake.take(), ["working", "announce installing"]);
+        assert!(updates.state.lock().unwrap().holds_runs());
+    }
+
+    #[tokio::test]
+    async fn cancel_after_a_wait_releases_the_queue() {
+        let updates = ready();
+        let fake = Fake::answering(&[&["triage"]]);
+        act(&fake, &updates, restart).await.unwrap();
+        // The wait settles at once: the run still works, so it waits on.
+        assert_eq!(
+            fake.take(),
+            [
+                "hold",
+                "working",
+                "hold",
+                "announce waiting",
+                "working",
+                "announce waiting"
+            ]
+        );
+        let note = act(&fake, &updates, cancel).await.unwrap();
+        assert_eq!(note, ready_note(&["triage"]));
+        assert_eq!(
+            fake.take(),
+            ["hold", "working", "release", "announce ready"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_stale_cancel_or_later_after_the_install_began_keeps_the_queue_held() {
+        let updates = ready();
+        let fake = Fake::answering(&[&[]]);
+        act(&fake, &updates, restart).await.unwrap();
+        fake.take();
+        for button in [cancel, later] {
+            let note = act(&fake, &updates, button).await.unwrap();
+            assert_eq!(note, installing());
+            let log = fake.take();
+            assert_eq!(log[..4], ["hold", "working", "hold", "announce installing"]);
+            let holds: Vec<&String> = log.iter().filter(|e| e.contains("hold")).collect();
+            assert!(!log.iter().any(|e| e == "release"), "{log:?}");
+            assert!(!log.iter().any(|e| e == "install"), "{log:?}");
+            assert_eq!(holds.len(), 2, "{log:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn restart_with_nothing_working_installs_with_the_queue_held() {
+        let updates = ready();
+        let fake = Fake::answering(&[&[]]);
+        let note = act(&fake, &updates, restart).await.unwrap();
+        assert_eq!(note, installing());
+        assert_eq!(
+            fake.take(),
+            ["hold", "working", "hold", "announce installing", "install"]
+        );
+    }
+
+    #[tokio::test]
+    async fn stop_and_restart_installs_nothing_while_a_dot_the_confirm_did_not_name_works() {
+        let updates = ready();
+        let fake = Fake::answering(&[&["digest", "triage"]]);
+        let seen = names(&["triage"]);
+        let stop = |s: &mut UpdateState, working: &[String]| s.stop_and_restart(&seen, working);
+        let note = act(&fake, &updates, stop).await.unwrap();
+        assert_eq!(note, ready_note(&["digest", "triage"]));
+        assert_eq!(
+            fake.take(),
+            ["hold", "working", "release", "announce ready"]
+        );
+
+        let seen = names(&["digest", "triage"]);
+        let stop = |s: &mut UpdateState, working: &[String]| s.stop_and_restart(&seen, working);
+        let note = act(&fake, &updates, stop).await.unwrap();
+        assert_eq!(note, installing());
+        assert_eq!(
+            fake.take(),
+            ["hold", "working", "hold", "announce installing", "install"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_button_with_no_update_ready_is_a_conflict_and_the_hold_follows_the_state() {
+        let updates = Updates::new(PathBuf::new(), None);
+        let fake = Fake::answering(&[&[]]);
+        let err = act(&fake, &updates, restart).await.unwrap_err();
+        assert_eq!(err.kind, CmdErrorKind::Conflict);
+        assert_eq!(fake.take(), ["hold", "working", "release"]);
+
+        // Once the install began, a second Restart is refused and the queue stays held.
+        let updates = ready();
+        act(&fake, &updates, restart).await.unwrap();
+        fake.take();
+        let err = act(&fake, &updates, restart).await.unwrap_err();
+        assert_eq!(err.kind, CmdErrorKind::Conflict);
+        assert_eq!(fake.take(), ["hold", "working", "hold"]);
     }
 }
