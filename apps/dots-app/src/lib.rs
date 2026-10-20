@@ -7,6 +7,7 @@ pub mod events;
 pub mod startup;
 pub mod state;
 pub mod tray;
+pub mod update;
 
 use tauri::{AppHandle, Manager, RunEvent, WindowEvent};
 
