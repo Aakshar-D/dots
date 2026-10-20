@@ -75,6 +75,12 @@ export const commands = {
   updateSettings: (settings: Settings) => call(T.SettingsSaved, "update_settings", { settings }),
   setSchedulesPaused: (paused: boolean) => call(T.Status, "set_schedules_paused", { paused }),
   restartApp: () => call(nothing, "restart_app"),
+  updateNote: () => call(T.UpdateNote, "update_note"),
+  updateOpenNotes: () => call(nothing, "update_open_notes"),
+  updateLater: () => call(T.UpdateNote, "update_later"),
+  updateRestart: () => call(T.UpdateNote, "update_restart"),
+  updateStopAndRestart: () => call(T.UpdateNote, "update_stop_and_restart"),
+  updateCancelWait: () => call(T.UpdateNote, "update_cancel_wait"),
 
   dotOverview: () => call(T.DotOverview.array(), "dot_overview"),
   listDots: () => call(T.Dot.array(), "list_dots"),

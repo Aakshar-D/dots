@@ -30,6 +30,12 @@
     "update_settings",
     "set_schedules_paused",
     "restart_app",
+    "update_note",
+    "update_open_notes",
+    "update_later",
+    "update_restart",
+    "update_stop_and_restart",
+    "update_cancel_wait",
     "dot_overview",
     "list_dots",
     "get_dot",
@@ -1473,6 +1479,7 @@
     }
   },
   "StartupError": {
+    "backup": "C:/Users/u/AppData/Local/dots/backups/dots-0.1.0-2026-10-20-091700.db",
     "log_dir": "C:/Users/u/AppData/Local/dots/logs",
     "message": "Dots could not start: database disk image is malformed"
   },
@@ -1489,6 +1496,30 @@
     "schedules_paused": false,
     "server_error": null
   },
+  "UpdateNote": [
+    {
+      "state": "none"
+    },
+    {
+      "error": "The backup failed: disk full",
+      "state": "ready",
+      "version": "0.2.0",
+      "working": [
+        "Daily digest"
+      ]
+    },
+    {
+      "state": "waiting",
+      "version": "0.2.0",
+      "waiting_for": [
+        "Daily digest"
+      ]
+    },
+    {
+      "state": "installing",
+      "version": "0.2.0"
+    }
+  ],
   "WorktreeDiff": {
     "exists": true,
     "files": [

@@ -25,6 +25,7 @@ use serde_json::{json, Value};
 
 use crate::error::{CmdError, CmdErrorKind};
 use crate::state::StartupError;
+use crate::update::UpdateNote;
 
 const TS: &str = "2026-10-09T12:00:00.000Z";
 
@@ -412,6 +413,25 @@ fn schedules() -> Value {
     to(read)
 }
 
+/// One note of each state (`UpdateNote`).
+fn update_notes() -> Vec<UpdateNote> {
+    vec![
+        UpdateNote::None,
+        UpdateNote::Ready {
+            version: "0.2.0".into(),
+            working: vec!["Daily digest".into()],
+            error: Some("The backup failed: disk full".into()),
+        },
+        UpdateNote::Waiting {
+            version: "0.2.0".into(),
+            waiting_for: vec!["Daily digest".into()],
+        },
+        UpdateNote::Installing {
+            version: "0.2.0".into(),
+        },
+    ]
+}
+
 /// The samples, keyed by the UI schema that parses them. `Enums` lists every variant of every
 /// shared enum and `Limits` the validation limits the editor mirrors, with the attempts of a
 /// scheduled occurrence that the Dots list and the run view name: the UI parses live data
@@ -615,10 +635,12 @@ pub fn samples() -> Value {
         "StartupError": to(StartupError {
             message: "Dots could not start: database disk image is malformed".into(),
             log_dir: "C:/Users/u/AppData/Local/dots/logs".into(),
+            backup: "C:/Users/u/AppData/Local/dots/backups/dots-0.1.0-2026-10-20-091700.db".into(),
         }),
     });
     // Past the `json!` macro's recursion limit, so added here.
     samples["ContextDocuments"] = to(context_documents());
+    samples["UpdateNote"] = to(update_notes());
     samples
 }
 

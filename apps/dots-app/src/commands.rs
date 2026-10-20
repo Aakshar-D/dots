@@ -29,6 +29,8 @@ use crate::confirm;
 use crate::error::CmdError;
 use crate::state::{AppState, StartupError};
 use crate::tray::Tray;
+use crate::update::{Next, UpdateNote};
+use crate::update_service;
 
 type Res<T> = Result<T, CmdError>;
 
@@ -102,6 +104,58 @@ pub fn restart_app(app: AppHandle, state: State<'_, AppState>) {
         crate::startup::mark_restart(data_dir);
     }
     app.restart();
+}
+
+#[tauri::command]
+pub async fn update_note(app: AppHandle, state: State<'_, AppState>) -> Res<UpdateNote> {
+    update_service::note(&app, &state.rt()?).await
+}
+
+/// "What's new": opens the release page of the update that is ready. The page is the core's
+/// choice, so the webview cannot open an address of its own.
+#[tauri::command]
+pub fn update_open_notes(app: AppHandle) -> Res<()> {
+    let page = update_service::release_page(&app)?;
+    app.opener()
+        .open_url(&page, None::<&str>)
+        .map_err(|e| CmdError::internal(format!("could not open {page}: {e}")))
+}
+
+/// "Later": the note is hidden until Dots next starts.
+#[tauri::command]
+pub async fn update_later(app: AppHandle, state: State<'_, AppState>) -> Res<UpdateNote> {
+    update_service::act(&app, &state.rt()?, |s, _| {
+        s.later();
+        Ok(Next::Nothing)
+    })
+    .await
+}
+
+/// "Restart to update" and "Restart when it's done": installs now when no dot has a run
+/// working, else once the last of them has ended; no queued run starts meanwhile.
+#[tauri::command]
+pub async fn update_restart(app: AppHandle, state: State<'_, AppState>) -> Res<UpdateNote> {
+    update_service::act(&app, &state.rt()?, |s, working| s.restart(working)).await
+}
+
+/// "Stop it and restart": installs now. A run that is working ends as failed ("interrupted")
+/// at the next start, as after "Restart Dots"; the UI asks first.
+#[tauri::command]
+pub async fn update_stop_and_restart(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Res<UpdateNote> {
+    update_service::act(&app, &state.rt()?, |s, _| s.stop_and_restart()).await
+}
+
+/// "Cancel" of a waiting install: the queue starts again.
+#[tauri::command]
+pub async fn update_cancel_wait(app: AppHandle, state: State<'_, AppState>) -> Res<UpdateNote> {
+    update_service::act(&app, &state.rt()?, |s, _| {
+        s.cancel_wait();
+        Ok(Next::Nothing)
+    })
+    .await
 }
 
 #[tauri::command]

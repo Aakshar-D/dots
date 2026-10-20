@@ -21,6 +21,8 @@ pub const LAGGED_EVENT: &str = "runtime-lagged";
 pub const NAVIGATE_EVENT: &str = "navigate";
 /// The status changed outside the UI (the tray paused schedules); payload is the `Status`.
 pub const STATUS_EVENT: &str = "status";
+/// The update strip changed (updates spec §6); payload is the `UpdateNote`.
+pub const UPDATE_EVENT: &str = "update";
 
 /// Something worth an OS notification.
 #[derive(Debug, Clone, PartialEq)]

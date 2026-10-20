@@ -465,7 +465,28 @@ export const WorktreeDiff = z.strictObject({
 // `cancelled`: the user declined a native confirmation; nothing was changed.
 export const CmdErrorKind = z.enum(["not_found", "invalid", "conflict", "internal", "cancelled"]);
 export const CmdError = z.strictObject({ kind: CmdErrorKind, message: z.string() });
-export const StartupError = z.strictObject({ message: z.string(), log_dir: z.string() });
+export const StartupError = z.strictObject({
+  message: z.string(),
+  log_dir: z.string(),
+  backup: z.string(),
+});
+
+/// What the update strip shows (apps/dots-app/src/update.rs).
+export const UpdateNote = z.discriminatedUnion("state", [
+  z.strictObject({ state: z.literal("none") }),
+  z.strictObject({
+    state: z.literal("ready"),
+    version: z.string(),
+    working: z.array(z.string()),
+    error: nullable(z.string()),
+  }),
+  z.strictObject({
+    state: z.literal("waiting"),
+    version: z.string(),
+    waiting_for: z.array(z.string()),
+  }),
+  z.strictObject({ state: z.literal("installing"), version: z.string() }),
+]);
 
 /// Validation limits of the core that the dot editor and Settings mirror, and the attempts a
 /// scheduled occurrence has at most, which the Dots list and the run view name. The contract
@@ -538,3 +559,4 @@ export type WorktreeDiff = z.infer<typeof WorktreeDiff>;
 export type CmdErrorKind = z.infer<typeof CmdErrorKind>;
 export type CmdError = z.infer<typeof CmdError>;
 export type StartupError = z.infer<typeof StartupError>;
+export type UpdateNote = z.infer<typeof UpdateNote>;

@@ -38,5 +38,11 @@
       "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true },
       "nsis": { "installMode": "currentUser" }
     }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI2NTAyQ0VBNUM4N0VCOEEKUldTSzY0ZGM2aXhRdHUxQ0RJcGRmRGZTeVlqcUZJZzIzaEQ2NGxYOHNPUlpwL1lWdCtkTXVFY2MK",
+      "windows": { "installMode": "passive" }
+    }
   }
 }

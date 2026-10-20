@@ -11,6 +11,8 @@ use crate::error::CmdError;
 pub struct StartupError {
     pub message: String,
     pub log_dir: String,
+    /// The newest backup an update made, empty when there is none (updates spec §8).
+    pub backup: String,
 }
 
 /// Tauri-managed state: the runtime, or why it is missing, and the folders `setup` found.
@@ -69,6 +71,12 @@ impl AppState {
                 .as_ref()
                 .map(|dir| dir.to_string_lossy().into_owned())
                 .unwrap_or_default(),
+            backup: self
+                .data_dir
+                .as_deref()
+                .and_then(crate::update::newest_backup)
+                .map(|path| path.to_string_lossy().into_owned())
+                .unwrap_or_default(),
         })
     }
 }
@@ -95,6 +103,7 @@ mod tests {
             Some(StartupError {
                 message: "no local data folder".into(),
                 log_dir: "".into(),
+                backup: "".into(),
             })
         );
     }
@@ -126,7 +135,22 @@ mod tests {
             Some(StartupError {
                 message: "disk full".into(),
                 log_dir: "C:/logs".into(),
+                backup: "".into(),
             })
         );
+    }
+
+    #[test]
+    fn a_failed_start_names_the_newest_backup_of_an_update() {
+        let dir = tempfile::tempdir().unwrap();
+        let backups = dir.path().join(crate::update::BACKUPS_DIR);
+        std::fs::create_dir_all(&backups).unwrap();
+        let newest = backups.join("dots-0.1.0-2026-10-20-091700.db");
+        std::fs::write(backups.join("dots-0.1.0-2026-10-19-091700.db"), "").unwrap();
+        std::fs::write(&newest, "").unwrap();
+        let state = AppState::new(Err("migration 8 failed".into()), None)
+            .with_data_dir(Some(dir.path().to_path_buf()));
+        let shown = state.startup_error().unwrap();
+        assert_eq!(shown.backup, newest.to_string_lossy());
     }
 }
