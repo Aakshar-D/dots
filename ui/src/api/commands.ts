@@ -150,6 +150,7 @@ export const commands = {
     call(T.McpCatalog, "library_accept", { id, fingerprint }),
   libraryScanSkills: (path: string) =>
     call(T.ScannedSkill.array(), "library_scan_skills", { path }),
+  contextDocuments: (id: string) => call(T.ContextDocuments, "context_documents", { id }),
   installedClaudePlugins: () => call(T.InstalledPlugin.array(), "installed_claude_plugins"),
   environmentVariables: (names: string[]) =>
     call(T.EnvVariable.array(), "environment_variables", { names }),

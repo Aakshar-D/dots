@@ -17,6 +17,7 @@ async fn an_empty_table_gives_the_defaults() {
     assert!(s.local_endpoints.is_empty());
     assert!(s.autostart);
     assert!(!s.schedules_paused);
+    assert_eq!(s.global_instructions, "");
 }
 
 #[tokio::test]
@@ -30,6 +31,7 @@ async fn settings_round_trip() {
         local_endpoints: vec!["http://127.0.0.1:1234".into()],
         autostart: false,
         schedules_paused: true,
+        global_instructions: "Use British spelling.\nSign off as the team.".into(),
     };
     store.put_settings(&s).await.unwrap();
     assert_eq!(store.get_settings().await.unwrap(), s);
@@ -90,6 +92,10 @@ async fn invalid_settings_are_rejected_and_not_stored() {
             |s| s.local_endpoints = vec!["https://example.com".into()],
             "https",
         ),
+        (
+            |s| s.global_instructions = "x".repeat(settings::MAX_GLOBAL_INSTRUCTIONS + 1),
+            "32 KB",
+        ),
     ];
     for (mutate, needle) in cases {
         let mut s = Settings::default();
@@ -98,6 +104,13 @@ async fn invalid_settings_are_rejected_and_not_stored() {
         assert!(err.contains(needle), "{err}");
     }
     assert_eq!(store.get_settings().await.unwrap(), Settings::default());
+    // 32 KB exactly is allowed.
+    let s = Settings {
+        global_instructions: "x".repeat(settings::MAX_GLOBAL_INSTRUCTIONS),
+        ..Settings::default()
+    };
+    store.put_settings(&s).await.unwrap();
+    assert_eq!(store.get_settings().await.unwrap(), s);
 }
 
 fn with_claude_path(path: &str) -> Settings {

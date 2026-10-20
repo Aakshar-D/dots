@@ -3,9 +3,29 @@ use std::path::Path;
 use chrono::{DateTime, Local};
 use serde_json::Value;
 
-use crate::model::{Dot, Run, TriggerKind};
+use crate::context::{self, Collection};
+use crate::model::{Dot, EngineKind, Run, TriggerKind};
 
-pub fn build_prompt(dot: &Dot, run: &Run, workspace: &Path, now: DateTime<Local>) -> String {
+/// The name a run's model calls the `context` tool by: Dots' own MCP server's tool on the
+/// Claude engine, a built-in tool on the local engine.
+pub fn context_tool_name(engine: EngineKind) -> &'static str {
+    match engine {
+        EngineKind::Claude => "mcp__dots__context",
+        EngineKind::Local => "context",
+    }
+}
+
+/// The prompt of `run`. A thread's first prompt starts with `global` (the global instructions of
+/// Settings) when it is not blank and the dot uses it, and ends with the run's context
+/// collections; resumes and chat follow-ups send only their message.
+pub fn build_prompt(
+    dot: &Dot,
+    run: &Run,
+    workspace: &Path,
+    now: DateTime<Local>,
+    global: &str,
+    contexts: &[Collection],
+) -> String {
     let message = run
         .payload
         .as_ref()
@@ -19,6 +39,12 @@ pub fn build_prompt(dot: &Dot, run: &Run, workspace: &Path, now: DateTime<Local>
     }
 
     let mut out = String::new();
+    let global = global.trim();
+    if dot.spec.use_global_instructions && !global.is_empty() {
+        out.push_str("## Instructions for every dot\n\n");
+        out.push_str(global);
+        out.push_str("\n\n## Instructions for this dot\n\n");
+    }
     out.push_str(dot.spec.instructions.trim());
     out.push_str("\n\n---\n\n");
     if run.trigger == TriggerKind::Chat {
@@ -51,5 +77,11 @@ pub fn build_prompt(dot: &Dot, run: &Run, workspace: &Path, now: DateTime<Local>
     out.push_str(
         "- End with a short summary: what you did, what changed, and what needs human review.\n",
     );
+    let section = context::prompt_section(contexts, context_tool_name(dot.spec.engine));
+    if !section.is_empty() {
+        out.push_str("\n## Shared context\n\n");
+        out.push_str(&section);
+        out.push('\n');
+    }
     out
 }

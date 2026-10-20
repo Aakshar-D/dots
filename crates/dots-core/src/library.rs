@@ -14,6 +14,7 @@ str_enum!(LibraryKind {
     McpServer => "mcp_server",
     Skill => "skill",
     Plugin => "plugin",
+    Context => "context",
 });
 // Where a server's tool list stands (spec section 3): the person accepted the list last seen;
 // the list changed since; the last check failed; or no list was accepted yet.
@@ -31,6 +32,7 @@ impl LibraryKind {
             Self::McpServer => "MCP server",
             Self::Skill => "skill",
             Self::Plugin => "plugin",
+            Self::Context => "context collection",
         }
     }
 
@@ -40,6 +42,7 @@ impl LibraryKind {
             Self::McpServer => "mcp_servers",
             Self::Skill => "skills",
             Self::Plugin => "plugins",
+            Self::Context => "context",
         }
     }
 }
@@ -48,6 +51,10 @@ impl LibraryKind {
 pub const MAX_SERVER_NAME: usize = 40;
 /// The longest skill or plugin name.
 pub const MAX_ITEM_NAME: usize = 64;
+/// The longest context collection name: the model passes it to the `context` tool.
+pub const MAX_COLLECTION_NAME: usize = 40;
+/// The longest description of a context collection, in characters.
+pub const MAX_COLLECTION_DESCRIPTION: usize = 300;
 
 /// How Dots starts or reaches an MCP server. `${VAR}` in `env` values, `args`, `cwd`, `url` and
 /// `headers` reads Dots' environment when the server starts (`expanded`, in `mcp::vars`); the
@@ -90,6 +97,18 @@ pub struct PluginConfig {
     pub run_hooks: bool,
 }
 
+/// A folder of documents that dots read with the `context` tool (context library spec
+/// section 3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContextConfig {
+    pub path: String,
+    #[serde(default)]
+    pub description: String,
+    /// Every dot uses the collection, ticked or not.
+    #[serde(default)]
+    pub every_dot: bool,
+}
+
 /// An item's config, with its kind: `{"kind": "mcp_server", "config": {...}}`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "config", rename_all = "snake_case")]
@@ -97,6 +116,7 @@ pub enum LibraryConfig {
     McpServer(McpServerConfig),
     Skill(SkillConfig),
     Plugin(PluginConfig),
+    Context(ContextConfig),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -125,11 +145,16 @@ pub struct Uses {
     pub mcp_servers: Vec<String>,
     pub skills: Vec<String>,
     pub plugins: Vec<String>,
+    /// Context collections; one whose `every_dot` is on is used without being named.
+    pub context: Vec<String>,
 }
 
 impl Uses {
     pub fn is_empty(&self) -> bool {
-        self.mcp_servers.is_empty() && self.skills.is_empty() && self.plugins.is_empty()
+        self.mcp_servers.is_empty()
+            && self.skills.is_empty()
+            && self.plugins.is_empty()
+            && self.context.is_empty()
     }
 
     /// The names of the items of `kind`.
@@ -138,6 +163,7 @@ impl Uses {
             LibraryKind::McpServer => &self.mcp_servers,
             LibraryKind::Skill => &self.skills,
             LibraryKind::Plugin => &self.plugins,
+            LibraryKind::Context => &self.context,
         }
     }
 
@@ -236,6 +262,20 @@ pub fn check_name(kind: LibraryKind, name: &str) -> Result<()> {
                 ));
             }
         }
+        LibraryKind::Context => {
+            let mut chars = name.chars();
+            let first_ok = chars
+                .next()
+                .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
+            let rest_ok =
+                chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-');
+            if !first_ok || !rest_ok || name.len() > MAX_COLLECTION_NAME {
+                return invalid(format!(
+                    "context collection name {name:?}: use 1 to {MAX_COLLECTION_NAME} characters \
+                     of a-z, 0-9, '-' or '_', starting with a letter or digit"
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -246,6 +286,7 @@ impl LibraryConfig {
             Self::McpServer(_) => LibraryKind::McpServer,
             Self::Skill(_) => LibraryKind::Skill,
             Self::Plugin(_) => LibraryKind::Plugin,
+            Self::Context(_) => LibraryKind::Context,
         }
     }
 
@@ -294,6 +335,15 @@ impl LibraryConfig {
             }
             Self::Skill(c) if c.path.trim().is_empty() => invalid("a skill needs its folder"),
             Self::Plugin(c) if c.path.trim().is_empty() => invalid("a plugin needs its folder"),
+            Self::Context(c) if c.path.trim().is_empty() => {
+                invalid("a context collection needs its folder")
+            }
+            Self::Context(c) if c.description.chars().count() > MAX_COLLECTION_DESCRIPTION => {
+                invalid(format!(
+                    "a context collection's description is at most {MAX_COLLECTION_DESCRIPTION} \
+                     characters"
+                ))
+            }
             _ => Ok(()),
         }
     }

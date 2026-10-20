@@ -10,7 +10,8 @@ use common::fake_mcp::{tool, FakeMcp};
 use common::{spec, temp_store};
 use dots_core::events::{new_bus, Bus, RuntimeEvent};
 use dots_core::library::{
-    CatalogStatus, LibraryConfig, LibraryKind, McpServerConfig, PluginConfig, SkillConfig,
+    CatalogStatus, ContextConfig, LibraryConfig, LibraryKind, McpServerConfig, PluginConfig,
+    SkillConfig,
 };
 use dots_core::library_service::LibraryService;
 use dots_core::mcp::fingerprint;
@@ -765,4 +766,148 @@ async fn an_installed_plugin_that_moved_has_its_hooks_switched_off() {
     std::env::remove_var("CLAUDE_CODE_PLUGIN_CACHE_DIR");
     assert!(notices.is_empty(), "{notices:?}");
     tools.close().await;
+}
+
+fn collection(path: &str, every_dot: bool) -> LibraryConfig {
+    LibraryConfig::Context(ContextConfig {
+        path: path.into(),
+        description: "How we work".into(),
+        every_dot,
+    })
+}
+
+#[tokio::test]
+async fn a_collection_needs_a_folder_and_lists_its_document_count() {
+    let (dir, store) = temp_store().await;
+    let bus = new_bus();
+    let lib = service(&store, &bus);
+    let missing = dir.path().join("nope").to_string_lossy().into_owned();
+    let err = lib
+        .add("company", collection(&missing, false), None)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::NotFound(_)), "{err}");
+    let kb = dir.path().join("kb");
+    write(
+        &kb.join("style.md"),
+        "# Style
+Short sentences.",
+    );
+    write(&kb.join("people/ana.md"), "# Ana");
+    write(&kb.join("logo.png"), "png");
+    let path = kb.to_string_lossy().into_owned();
+    let item = lib
+        .add("company", collection(&path, false), None)
+        .await
+        .unwrap();
+    let mut s = spec("nightly");
+    s.uses.context = vec!["company".into()];
+    store.create_dot(&s).await.unwrap();
+    let entry = lib
+        .list()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|e| e.item.id == item.id)
+        .unwrap();
+    assert_eq!(entry.context.unwrap().documents, 2);
+    assert_eq!(entry.used_by.len(), 1);
+    assert_eq!(entry.problem, None);
+    // The folder goes away: the list says so.
+    std::fs::remove_dir_all(&kb).unwrap();
+    let entry = lib
+        .list()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|e| e.item.id == item.id)
+        .unwrap();
+    assert_eq!(entry.context, None);
+    assert_eq!(entry.problem.as_deref(), Some("folder not found"));
+    // An update to a folder that does not exist is refused.
+    let err = lib
+        .update(&item.id, collection(&missing, true))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::NotFound(_)), "{err}");
+}
+
+#[tokio::test]
+async fn removing_a_collection_takes_it_out_of_the_dots_that_tick_it() {
+    let (dir, store) = temp_store().await;
+    let bus = new_bus();
+    let lib = service(&store, &bus);
+    let kb = dir.path().join("kb");
+    std::fs::create_dir_all(&kb).unwrap();
+    let item = lib
+        .add("company", collection(&kb.to_string_lossy(), false), None)
+        .await
+        .unwrap();
+    let mut s = spec("nightly");
+    s.uses.context = vec!["company".into()];
+    s.uses.skills = Vec::new();
+    store.create_dot(&s).await.unwrap();
+    let mut unknown = spec("audit");
+    unknown.uses.context = vec!["clients".into()];
+    let err = store.create_dot(&unknown).await.unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("the Library has no context collection named \"clients\""),
+        "{err}"
+    );
+    assert!(matches!(
+        lib.remove(&item.id, false).await,
+        Err(Error::Conflict(_))
+    ));
+    lib.remove(&item.id, true).await.unwrap();
+    let dots = store.list_dots().await.unwrap();
+    assert!(dots[0].spec.uses.context.is_empty());
+}
+
+#[tokio::test]
+async fn the_documents_of_a_collection_are_described_up_to_200() {
+    let (dir, store) = temp_store().await;
+    let bus = new_bus();
+    let lib = service(&store, &bus);
+    let kb = dir.path().join("kb");
+    for i in 0..205 {
+        write(
+            &kb.join(format!("d{i:03}.md")),
+            &format!(
+                "---
+title: Doc {i}
+---
+About {i}."
+            ),
+        );
+    }
+    let item = lib
+        .add("company", collection(&kb.to_string_lossy(), false), None)
+        .await
+        .unwrap();
+    let docs = lib.context_documents(&item.id).await.unwrap();
+    assert_eq!(docs.documents.len(), 200);
+    assert_eq!(docs.total, 205);
+    assert!(docs.truncated);
+    assert_eq!(docs.documents[0].path, "d000.md");
+    assert_eq!(docs.documents[0].title, "Doc 0");
+    assert_eq!(docs.documents[0].summary, "About 0.");
+    let skill_path = skill_dir(dir.path(), "pdf", "Reads PDFs.");
+    let skill = lib
+        .add(
+            "pdf",
+            LibraryConfig::Skill(SkillConfig { path: skill_path }),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        lib.context_documents(&skill.id).await,
+        Err(Error::Invalid(_))
+    ));
+    std::fs::remove_dir_all(&kb).unwrap();
+    assert!(matches!(
+        lib.context_documents(&item.id).await,
+        Err(Error::NotFound(_))
+    ));
 }

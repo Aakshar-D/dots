@@ -129,6 +129,7 @@ async fn a_run_opens_its_servers_and_its_plugins_servers() {
         mcp_servers: vec!["files".into()],
         skills: vec![],
         plugins: vec!["forms".into()],
+        context: vec![],
     };
     let (tools, notices) = f.open(&uses, None).await;
 
@@ -292,6 +293,7 @@ async fn a_claude_run_gets_plugin_folders_that_go_at_close() {
         mcp_servers: vec![],
         skills: vec!["csv".into(), "pdf".into()],
         plugins: vec!["forms".into()],
+        context: vec![],
     };
     let plugins_dir = f.dir.path().join("plugins");
     let (tools, notices) = f.open(&uses, Some(&plugins_dir)).await;

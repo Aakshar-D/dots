@@ -67,7 +67,7 @@ pub async fn handle(
 
 /// A tool result that says why the call was not performed (or how it failed), in the words the
 /// local engine gives its model.
-fn not_performed(text: &str) -> Value {
+pub(super) fn not_performed(text: &str) -> Value {
     json!({ "content": [{ "type": "text", "text": text }], "isError": true })
 }
 

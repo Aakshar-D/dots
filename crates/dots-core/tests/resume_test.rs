@@ -12,6 +12,7 @@ use dots_core::events::{new_bus, Bus, RuntimeEvent};
 use dots_core::model::{
     ApplyState, Approval, Dot, EngineKind, NewRun, Run, RunStatus, TriggerKind, WorkspaceMode,
 };
+use dots_core::policy::{Action, Rule};
 use dots_core::runner::{Runner, RunnerConfig};
 use dots_core::store::Store;
 use serde_json::{json, Value};
@@ -850,5 +851,46 @@ async fn cancel_of_awaiting_run_publishes_cancelled_after_the_worktree_is_gone()
     assert!(
         !still_there,
         "cancelled was published while the unchanged worktree was still on disk"
+    );
+}
+
+#[tokio::test]
+async fn a_granted_context_approval_names_the_tool_the_model_knows() {
+    let e = env(vec![
+        Step::Ask {
+            tool: "Context".into(),
+            input: json!({"collection": "company"}),
+        },
+        finished(),
+    ])
+    .await;
+    let mut s = spec("reader");
+    s.workdir = e.dir.path().to_string_lossy().to_string();
+    s.workspace_mode = WorkspaceMode::Folder;
+    s.engine = EngineKind::Claude;
+    s.approval_wait_secs = 0;
+    s.policy.rules.retain(|r| r.tool != "Context");
+    s.policy.rules.push(Rule::new("Context", Action::Ask));
+    let dot = e.store.create_dot(&s).await.unwrap();
+    let parent = e
+        .runner
+        .enqueue(NewRun::new(&dot.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    parked(&e, &parent.id).await;
+    let approval = e
+        .store
+        .approvals_for_run(&parent.id)
+        .await
+        .unwrap()
+        .remove(0);
+    assert_eq!(approval.tool, "Context");
+    let child = decide(&e, &approval.id, true, None)
+        .await
+        .expect("child run");
+    assert!(
+        message(&child).contains("you may now use mcp__dots__context with the same input"),
+        "{}",
+        message(&child)
     );
 }

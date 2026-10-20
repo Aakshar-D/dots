@@ -120,9 +120,13 @@ async fn update_changes_fields_and_timestamp() {
     let mut s = dot.spec.clone();
     s.instructions = "New instructions".into();
     s.max_turns = 7;
+    assert!(s.use_global_instructions);
+    s.use_global_instructions = false;
     let updated = store.update_dot(&dot.id, &s).await.unwrap();
     assert_eq!(updated.spec.instructions, "New instructions");
     assert_eq!(updated.spec.max_turns, 7);
+    assert!(!updated.spec.use_global_instructions);
+    assert_eq!(store.get_dot(&dot.id).await.unwrap().spec, s);
     assert_eq!(updated.webhook_token, dot.webhook_token);
     assert!(updated.updated_at > dot.updated_at);
     assert!(matches!(
@@ -278,6 +282,68 @@ async fn the_core_sets_the_anchor_of_an_every_schedule() {
     s.schedule = Some(schedule(json!({"rule": {"kind": "every", "minutes": 60}})));
     let changed = store.update_dot(&dot.id, &s).await.unwrap();
     assert!(anchor(&changed) > first);
+}
+
+/// Migration 0007 on a database Dots left at 0006: every stored policy gets a `Context` allow
+/// rule unless a rule names `Context`, and every dot starts with the global instructions.
+#[tokio::test]
+async fn migration_0007_lets_every_stored_policy_read_context() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("dots.db");
+    let opts = SqliteConnectOptions::new()
+        .filename(&path)
+        .create_if_missing(true);
+    let pool = SqlitePool::connect_with(opts).await.unwrap();
+    let mut before = sqlx::migrate!("./migrations");
+    before.migrations = before
+        .migrations
+        .iter()
+        .filter(|m| m.version < 7)
+        .cloned()
+        .collect::<Vec<_>>()
+        .into();
+    before.run(&pool).await.unwrap();
+    // A policy as 0006 left it: the preset's rules without `Context`.
+    let old = |preset: Preset| {
+        let mut p = Policy::preset(preset);
+        p.rules.retain(|r| r.tool != "Context");
+        p
+    };
+    let mut denies = old(Preset::Custom);
+    denies.rules.push(dots_core::policy::Rule::new(
+        "Context(kb)",
+        dots_core::policy::Action::Deny,
+    ));
+    for (id, name, policy) in [
+        ("D1", "sandboxed", old(Preset::Sandboxed)),
+        ("D2", "read-only", old(Preset::ReadOnly)),
+        ("D3", "denies", denies.clone()),
+    ] {
+        sqlx::query(
+            "INSERT INTO dots (id, name, instructions, engine, model, workdir, workspace_mode, \
+             webhook_token, policy, max_turns, timeout_secs, approval_wait_secs, \
+             created_at, updated_at) VALUES (?, ?, 'Do it.', 'claude', 'sonnet', 'C:/tmp/repo', \
+             'worktree', 't', ?, 40, 1800, 240, '2026-10-01T00:00:00.000Z', \
+             '2026-10-01T00:00:00.000Z')",
+        )
+        .bind(id)
+        .bind(name)
+        .bind(serde_json::to_string(&policy).unwrap())
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    pool.close().await;
+
+    let store = Store::open(&path).await.unwrap();
+    for (id, preset) in [("D1", Preset::Sandboxed), ("D2", Preset::ReadOnly)] {
+        let dot = store.get_dot(id).await.unwrap();
+        assert_eq!(dot.spec.policy, Policy::preset(preset), "{id}");
+        assert!(dot.spec.use_global_instructions);
+        assert!(dot.spec.uses.context.is_empty());
+    }
+    // A rule that names `Context` already is the person's: nothing is added.
+    assert_eq!(store.get_dot("D3").await.unwrap().spec.policy, denies);
 }
 
 /// Migration 0005 on a database that Dots left with a cron string (Scheduler v2 spec §4).

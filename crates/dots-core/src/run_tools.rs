@@ -5,7 +5,9 @@
 //!   checked against its catalog at the start: a list that is not the accepted one holds the
 //!   server for the run, and so does a `notifications/tools/list_changed` that brings one;
 //! - the skills it reads, standalone (`pdf`) and from its plugins (`forms:fill`);
-//! - for a Claude-engine run, the plugin folders it passes with `--plugin-dir`.
+//! - for a Claude-engine run, the plugin folders it passes with `--plugin-dir`;
+//! - the context collections it reads (context library spec section 5), ticked or for every
+//!   dot, each with the count of its documents. Nothing is held open for them.
 //!
 //! What cannot be used is left out, and `open` says so in run events: a server that cannot
 //! start, a folder that is missing.
@@ -19,6 +21,7 @@ use tokio::sync::watch;
 use tokio::task::{JoinHandle, JoinSet};
 use tokio_util::sync::CancellationToken;
 
+use crate::context::{self, Collection};
 use crate::events::Bus;
 use crate::kit::{self, KitPlugin, KitSkill, PluginInfo, RunKit, SkillInfo};
 use crate::library::{CatalogStatus, LibraryConfig, LibraryItem, LibraryKind, McpCatalog, Uses};
@@ -156,6 +159,7 @@ impl RunServer {
 pub struct RunTools {
     servers: Vec<RunServer>,
     skills: Vec<RunSkill>,
+    contexts: Vec<Collection>,
     kit: Option<Arc<RunKit>>,
     stop: CancellationToken,
     watchers: Mutex<Vec<JoinHandle<()>>>,
@@ -171,6 +175,10 @@ impl fmt::Debug for RunTools {
             .field(
                 "skills",
                 &self.skills.iter().map(|s| &s.name).collect::<Vec<_>>(),
+            )
+            .field(
+                "contexts",
+                &self.contexts.iter().map(|c| &c.name).collect::<Vec<_>>(),
             )
             .field("plugin_dirs", &self.plugin_dirs())
             .finish()
@@ -206,6 +214,11 @@ impl RunTools {
 
     pub fn skill(&self, name: &str) -> Option<&RunSkill> {
         self.skills.iter().find(|s| s.name == name)
+    }
+
+    /// The context collections, by name.
+    pub fn contexts(&self) -> &[Collection] {
+        &self.contexts
     }
 
     /// A Claude-engine run's folders for `--plugin-dir`; empty for a local-engine run.
@@ -355,6 +368,34 @@ impl RunTools {
                     tools.kit = Some(Arc::new(kit));
                 }
                 Err(e) => notices.push(format!("the plugin folders could not be made: {e}")),
+            }
+        }
+
+        for item in store.used_collections(uses).await? {
+            let LibraryConfig::Context(config) = &item.config else {
+                continue;
+            };
+            let dir = PathBuf::from(&config.path);
+            let walk_dir = dir.clone();
+            let (walked, is_dir) = tokio::task::spawn_blocking(move || {
+                let walked = context::walk(&walk_dir);
+                let is_dir = walked.is_err() && walk_dir.is_dir();
+                (walked, is_dir)
+            })
+            .await
+            .map_err(|e| crate::Error::Other(format!("reading a collection failed: {e}")))?;
+            match walked {
+                Ok(walk) => tools.contexts.push(Collection {
+                    name: item.name,
+                    dir,
+                    description: config.description.clone(),
+                    documents: walk.total,
+                    complete: walk.complete,
+                }),
+                Err(_) if !is_dir => {
+                    notices.push(format!("context {}: folder not found", item.name))
+                }
+                Err(e) => notices.push(format!("context {}: {e}", item.name)),
             }
         }
         Ok((tools, notices))

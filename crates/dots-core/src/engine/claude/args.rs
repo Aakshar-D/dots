@@ -39,6 +39,11 @@ pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
             .iter()
             .map(|s| format!("mcp__{}__*", s.name())),
     );
+    // Dots' own `dots` server checks each `context` call against the policy itself (context
+    // library spec section 4).
+    if !ctx.tools.contexts().is_empty() {
+        allow.push("mcp__dots__context".into());
+    }
     if !allow.is_empty() {
         a.push("--allowedTools".into());
         a.extend(allow);

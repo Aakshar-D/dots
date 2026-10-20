@@ -69,9 +69,22 @@
     "library_check",
     "library_accept",
     "library_scan_skills",
+    "context_documents",
     "installed_claude_plugins",
     "environment_variables"
   ],
+  "ContextDocuments": {
+    "complete": true,
+    "documents": [
+      {
+        "path": "people/ana.md",
+        "summary": "Owns billing",
+        "title": "Ana Lima"
+      }
+    ],
+    "total": 42,
+    "truncated": true
+  },
   "Dot": {
     "approval_wait_secs": 240,
     "created_at": "2026-10-09T12:00:00.000Z",
@@ -159,6 +172,10 @@
         {
           "action": "allow",
           "tool": "Skill"
+        },
+        {
+          "action": "allow",
+          "tool": "Context"
         }
       ]
     },
@@ -172,8 +189,12 @@
     },
     "timeout_secs": 1800,
     "updated_at": "2026-10-09T12:00:00.000Z",
+    "use_global_instructions": true,
     "use_user_settings": false,
     "uses": {
+      "context": [
+        "company"
+      ],
       "mcp_servers": [
         "github"
       ],
@@ -277,6 +298,10 @@
           {
             "action": "allow",
             "tool": "Skill"
+          },
+          {
+            "action": "allow",
+            "tool": "Context"
           }
         ]
       },
@@ -290,8 +315,12 @@
       },
       "timeout_secs": 1800,
       "updated_at": "2026-10-09T12:00:00.000Z",
+      "use_global_instructions": true,
       "use_user_settings": false,
       "uses": {
+        "context": [
+          "company"
+        ],
         "mcp_servers": [
           "github"
         ],
@@ -395,13 +424,19 @@
         {
           "action": "allow",
           "tool": "Skill"
+        },
+        {
+          "action": "allow",
+          "tool": "Context"
         }
       ]
     },
     "schedule": null,
     "timeout_secs": 1800,
+    "use_global_instructions": true,
     "use_user_settings": false,
     "uses": {
+      "context": [],
       "mcp_servers": [],
       "plugins": [],
       "skills": []
@@ -455,7 +490,8 @@
     "LibraryKind": [
       "mcp_server",
       "skill",
-      "plugin"
+      "plugin",
+      "context"
     ],
     "Preset": [
       "read-only",
@@ -622,6 +658,14 @@
         "run_hooks": false
       },
       "kind": "plugin"
+    },
+    {
+      "config": {
+        "description": "How we work: style, people, runbooks",
+        "every_dot": true,
+        "path": "C:/notes/company"
+      },
+      "kind": "context"
     }
   ],
   "LibraryEntry": [
@@ -682,6 +726,7 @@
         },
         "transport": "stdio"
       },
+      "context": null,
       "created_at": "2026-10-09T12:00:00.000Z",
       "id": "01J0SRV",
       "kind": "mcp_server",
@@ -753,6 +798,7 @@
         "transport": "http",
         "url": "https://mcp.example.com/mcp"
       },
+      "context": null,
       "created_at": "2026-10-09T12:00:00.000Z",
       "id": "01J0SRV2",
       "kind": "mcp_server",
@@ -775,6 +821,7 @@
       "config": {
         "path": "C:/skills/pdf"
       },
+      "context": null,
       "created_at": "2026-10-09T12:00:00.000Z",
       "id": "01J0SKL",
       "kind": "skill",
@@ -796,6 +843,7 @@
         "path": "C:/plugins/pdf-tools",
         "run_hooks": false
       },
+      "context": null,
       "created_at": "2026-10-09T12:00:00.000Z",
       "id": "01J0PLG",
       "kind": "plugin",
@@ -822,6 +870,34 @@
           "agents/broken.md: could not be read"
         ]
       },
+      "problem": null,
+      "skill": null,
+      "updated_at": "2026-10-09T12:00:00.000Z",
+      "used_by": [
+        {
+          "id": "01J0DOT",
+          "name": "nightly-tests"
+        }
+      ]
+    },
+    {
+      "catalog": null,
+      "config": {
+        "description": "How we work: style, people, runbooks",
+        "every_dot": true,
+        "path": "C:/notes/company"
+      },
+      "context": {
+        "complete": true,
+        "documents": 42
+      },
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "id": "01J0CTX",
+      "kind": "context",
+      "missing_variables": [],
+      "name": "company",
+      "owner_id": null,
+      "plugin": null,
       "problem": null,
       "skill": null,
       "updated_at": "2026-10-09T12:00:00.000Z",
@@ -869,6 +945,7 @@
   "Limits": {
     "max_approval_wait_secs": 280,
     "max_concurrent_runs": 16,
+    "max_global_instructions": 32768,
     "max_schedule_attempts": 6,
     "max_timeout_secs": 604800
   },
@@ -1043,13 +1120,19 @@
         {
           "action": "allow",
           "tool": "Skill"
+        },
+        {
+          "action": "allow",
+          "tool": "Context"
         }
       ]
     },
     "schedule": null,
     "timeout_secs": 1800,
+    "use_global_instructions": true,
     "use_user_settings": false,
     "uses": {
+      "context": [],
       "mcp_servers": [],
       "plugins": [],
       "skills": []
@@ -1365,6 +1448,7 @@
   "Settings": {
     "autostart": true,
     "claude_path": null,
+    "global_instructions": "Use British spelling.",
     "local_endpoints": [
       "http://127.0.0.1:1234"
     ],
@@ -1378,6 +1462,7 @@
     "settings": {
       "autostart": true,
       "claude_path": null,
+      "global_instructions": "Use British spelling.",
       "local_endpoints": [
         "http://127.0.0.1:1234"
       ],

@@ -43,6 +43,7 @@ fn uses(mcp: &[&str], skills: &[&str], plugins: &[&str]) -> Uses {
         mcp_servers: v(mcp),
         skills: v(skills),
         plugins: v(plugins),
+        context: Vec::new(),
     }
 }
 
@@ -562,7 +563,8 @@ async fn migration_0006_moves_each_dots_servers_into_the_library() {
         d1.policy.rules,
         [
             Rule::new("mcp__sf__query", Action::Allow),
-            Rule::new("Skill", Action::Allow)
+            Rule::new("Skill", Action::Allow),
+            Rule::new("Context", Action::Allow),
         ]
     );
     assert_eq!(d1.policy.mcp_default, Action::Ask);
@@ -576,6 +578,7 @@ async fn migration_0006_moves_each_dots_servers_into_the_library() {
             Rule::new("mcp__sfx__run", Action::Deny),
             Rule::new("mcp__sf-2", Action::Deny),
             Rule::new("Skill", Action::Allow),
+            Rule::new("Context", Action::Allow),
         ]
     );
     let d4 = dot("D4").await;
@@ -588,6 +591,7 @@ async fn migration_0006_moves_each_dots_servers_into_the_library() {
             Rule::new("mcp__github_com__list", Action::Allow),
             Rule::new("mcp__github_com__get", Action::Deny),
             Rule::new("Skill", Action::Allow),
+            Rule::new("Context", Action::Allow),
         ]
     );
     assert_eq!(d4.policy.mcp_default, Action::Ask);
@@ -599,7 +603,8 @@ async fn migration_0006_moves_each_dots_servers_into_the_library() {
         d6.policy.rules,
         [
             Rule::new("mcp__*", Action::Ask),
-            Rule::new("Skill", Action::Allow)
+            Rule::new("Skill", Action::Allow),
+            Rule::new("Context", Action::Allow),
         ]
     );
     assert_eq!(d6.uses, Uses::default());
@@ -644,7 +649,8 @@ async fn migration_0006_moves_each_dots_servers_into_the_library() {
         store.get_dot("D6").await.unwrap().spec.policy.rules,
         [
             Rule::new("mcp__*", Action::Ask),
-            Rule::new("Skill", Action::Allow)
+            Rule::new("Skill", Action::Allow),
+            Rule::new("Context", Action::Allow),
         ]
     );
 }
@@ -698,14 +704,20 @@ async fn migration_0006_keeps_credentials_apart_and_erases_them_from_the_file() 
     let b = store.get_dot("DB").await.unwrap().spec;
     assert_eq!(a.uses, uses(&["gh", "sf"], &[], &[]));
     assert_eq!(b.uses, uses(&["gh-2", "sf-2"], &[], &[]));
+    // Migration 0007 adds `Context` after the `Skill` that 0006 adds.
     let skill = Rule::new("Skill", Action::Allow);
+    let context = Rule::new("Context", Action::Allow);
     assert_eq!(
         a.policy.rules,
-        [Rule::new("mcp__gh__*", Action::Deny), skill.clone()]
+        [
+            Rule::new("mcp__gh__*", Action::Deny),
+            skill.clone(),
+            context.clone()
+        ]
     );
     assert_eq!(
         b.policy.rules,
-        [Rule::new("mcp__gh-2__*", Action::Deny), skill]
+        [Rule::new("mcp__gh-2__*", Action::Deny), skill, context]
     );
     store.close().await;
 
@@ -776,9 +788,19 @@ async fn migration_0006_allows_skill_unless_a_rule_names_it() {
         let store = store.clone();
         async move { store.get_dot(id).await.unwrap().spec.policy.rules }
     };
-    assert_eq!(rules("D1").await, [Rule::new("Skill", Action::Allow)]);
-    assert_eq!(rules("D2").await, [Rule::new("Skill", Action::Deny)]);
-    assert_eq!(rules("D3").await, [Rule::new("Skill(pdf)", Action::Ask)]);
+    let context = Rule::new("Context", Action::Allow);
+    assert_eq!(
+        rules("D1").await,
+        [Rule::new("Skill", Action::Allow), context.clone()]
+    );
+    assert_eq!(
+        rules("D2").await,
+        [Rule::new("Skill", Action::Deny), context.clone()]
+    );
+    assert_eq!(
+        rules("D3").await,
+        [Rule::new("Skill(pdf)", Action::Ask), context]
+    );
 }
 
 /// A stored policy whose `default` is `deny` denies MCP tools too, whatever its preset.

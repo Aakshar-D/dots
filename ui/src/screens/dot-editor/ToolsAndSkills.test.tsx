@@ -11,8 +11,8 @@ import { ToolsAndSkills } from "@/screens/dot-editor/ToolsAndSkills";
 import { backend } from "@/test/backend";
 import { sample } from "@/test/fixtures";
 
-const [github, pluginServer, pdf, pdfTools] = sample.library;
-const none: Uses = { mcp_servers: [], skills: [], plugins: [] };
+const [github, pluginServer, pdf, pdfTools, company] = sample.library;
+const none: Uses = { mcp_servers: [], skills: [], plugins: [], context: [] };
 
 function setup(opts: { uses?: Uses; engine?: EngineKind; library?: LibraryEntry[] } = {}) {
   backend.on("library_list", () => opts.library ?? sample.library);
@@ -33,7 +33,7 @@ function setup(opts: { uses?: Uses; engine?: EngineKind; library?: LibraryEntry[
 }
 
 describe("the editor's Tools and skills section", () => {
-  it("lists the Library in three checklists, without the servers a plugin brings", async () => {
+  it("lists the Library in four checklists, without the servers a plugin brings", async () => {
     setup();
     const servers = await screen.findByRole("group", { name: "MCP servers" });
     expect(within(servers).getAllByRole("checkbox").map((c) => c.getAttribute("aria-label"))).toEqual([
@@ -43,13 +43,42 @@ describe("the editor's Tools and skills section", () => {
     expect(within(screen.getByRole("group", { name: "Plugins" })).getByLabelText("pdf-tools")).not.toBeChecked();
   });
 
+  it("lists the context collections, one for every dot ticked and fixed", async () => {
+    const own = { ...company!, id: "01J0CTX2", name: "clients" } as LibraryEntry;
+    if (own.kind !== "context") throw new Error("the sample is a context collection");
+    own.config = { ...own.config, every_dot: false, description: "Who they are" };
+    const { user, uses } = setup({ library: [company!, own] });
+    const group = await screen.findByRole("group", { name: "Context" });
+    const every = within(group).getByLabelText("company");
+    expect(every).toBeChecked();
+    expect(every).toBeDisabled();
+    expect(within(group).getByText(/42 documents · every dot/)).toBeVisible();
+    const box = within(group).getByLabelText("clients");
+    expect(box).not.toBeChecked();
+    await user.click(box);
+    expect(uses().context).toEqual(["clients"]);
+  });
+
+  it("says \"at least\" when a collection's count is only a lower bound", async () => {
+    if (company!.kind !== "context" || !company!.context) throw new Error("not a collection");
+    const partial = { ...company!, context: { ...company!.context, complete: false } } as LibraryEntry;
+    setup({ library: [partial] });
+    const group = await screen.findByRole("group", { name: "Context" });
+    expect(within(group).getByText(/at least 42 documents · every dot/)).toBeVisible();
+  });
+
   it("ticks and unticks, and hands back the names", async () => {
     const { user, uses } = setup({ uses: { ...none, skills: ["pdf"] } });
     expect(await screen.findByLabelText("pdf")).toBeChecked();
     await user.click(screen.getByLabelText(github!.name));
     await user.click(screen.getByLabelText("pdf-tools"));
     await user.click(screen.getByLabelText("pdf"));
-    expect(uses()).toEqual({ mcp_servers: ["github"], skills: [], plugins: ["pdf-tools"] });
+    expect(uses()).toEqual({
+      mcp_servers: ["github"],
+      skills: [],
+      plugins: ["pdf-tools"],
+      context: [],
+    });
   });
 
   it("keeps a name the Library no longer has, so that it can be unticked", async () => {
@@ -63,7 +92,7 @@ describe("the editor's Tools and skills section", () => {
 
   it("says where the Library is empty", async () => {
     setup({ library: [] });
-    expect(await screen.findAllByText(/Nothing here yet/)).toHaveLength(3);
+    expect(await screen.findAllByText(/Nothing here yet/)).toHaveLength(4);
     expect(screen.getAllByRole("link", { name: "Library" })[0]).toHaveAttribute("href", "/library");
   });
 

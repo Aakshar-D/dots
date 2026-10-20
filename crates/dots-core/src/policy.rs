@@ -11,6 +11,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::library::{check_name, LibraryKind};
 use crate::{Error, Result};
 
 str_enum!(Action { Allow => "allow", Ask => "ask", Deny => "deny" });
@@ -151,8 +152,9 @@ impl Policy {
                 Action::Allow
             }
         };
-        // Every preset lets the model read the skills the dot uses.
+        // Every preset lets the model read the skills and the context collections the dot uses.
         rules.push(Rule::new("Skill", Action::Allow));
+        rules.push(Rule::new("Context", Action::Allow));
         Policy {
             preset,
             rules,
@@ -214,12 +216,18 @@ impl Policy {
             .any(|r| r.action == action && pattern_matches(&r.tool, tool, input, action, ws))
     }
 
-    /// (allow patterns, deny patterns) for `--allowedTools` / `--disallowedTools`.
+    /// (allow patterns, deny patterns) for `--allowedTools` / `--disallowedTools`. A rule of
+    /// `Context` is left out: the CLI has no such tool, and Dots' own `dots` server checks each
+    /// call of its `context` tool against these rules itself (context library spec section 4).
     pub fn cli_lists(&self) -> (Vec<String>, Vec<String>) {
+        let dots_only = |tool: &str| {
+            let tool = tool.trim();
+            tool == "Context" || tool.starts_with("Context(")
+        };
         let pick = |a: Action| -> Vec<String> {
             self.rules
                 .iter()
-                .filter(|r| r.action == a)
+                .filter(|r| r.action == a && !dots_only(&r.tool))
                 .map(|r| r.tool.trim().to_string())
                 .collect()
         };
@@ -239,6 +247,11 @@ impl Policy {
                 return Err(invalid("tool name must not contain whitespace"));
             }
             if let Pattern::WithSpec { tool, spec } = pattern {
+                if tool == "Context" && check_name(LibraryKind::Context, spec.trim()).is_err() {
+                    return Err(invalid(
+                        "a Context rule names one collection: lower-case letters, digits, '-' and '_'",
+                    ));
+                }
                 if COMMAND_TOOLS.contains(&tool) {
                     let body = spec.strip_suffix(":*");
                     if body.unwrap_or(spec).contains('*') {
@@ -812,6 +825,13 @@ fn pattern_matches(
                 spec.trim_start().strip_prefix("domain:"),
             ) {
                 webfetch_domain_matches(domain, input, action)
+            } else if name == "Context" {
+                // The argument names a collection. The CLI never sees `Context` rules, so this
+                // is the only check: a call without a `collection` matches deny and ask rules.
+                match input.get("collection").and_then(Value::as_str) {
+                    Some(collection) => collection.trim() == spec.trim(),
+                    None => action != Action::Allow,
+                }
             } else {
                 // Unknown spec: the CLI enforces it; fail closed on deny/ask, never allow.
                 action != Action::Allow

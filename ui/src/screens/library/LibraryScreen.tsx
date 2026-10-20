@@ -8,13 +8,14 @@ import { Page } from "@/components/Page";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { keys } from "@/lib/query";
 
+import { ContextTab } from "./ContextTab";
 import { McpServersTab, serverStatus } from "./McpServersTab";
-import type { PluginEntry, ServerEntry, SkillEntry } from "./parts";
+import type { ContextEntry, PluginEntry, ServerEntry, SkillEntry } from "./parts";
 import { PluginsTab } from "./PluginsTab";
 import { SkillsTab } from "./SkillsTab";
 import { ToolsReview } from "./ToolsReview";
 
-/// The Library: the MCP servers, skills and plugins that dots can use. `?review=<server id>`
+/// The Library: the MCP servers, skills, plugins and context collections that dots can use. `?review=<server id>`
 /// opens the review of that server's changed tool list (the Inbox links to it).
 export function LibraryScreen() {
   const library = useQuery({ queryKey: keys.library, queryFn: commands.libraryList });
@@ -34,6 +35,7 @@ export function LibraryScreen() {
   const servers = entries.filter((e): e is ServerEntry => e.kind === "mcp_server");
   const skills = entries.filter((e): e is SkillEntry => e.kind === "skill");
   const plugins = entries.filter((e): e is PluginEntry => e.kind === "plugin");
+  const contexts = entries.filter((e): e is ContextEntry => e.kind === "context");
 
   const reviewId = params.get("review");
   const reviewing = servers.find((s) => s.id === reviewId && serverStatus(s) === "changed");
@@ -48,6 +50,7 @@ export function LibraryScreen() {
           <TabsTrigger value="servers">MCP servers</TabsTrigger>
           <TabsTrigger value="skills">Skills</TabsTrigger>
           <TabsTrigger value="plugins">Plugins</TabsTrigger>
+          <TabsTrigger value="context">Context</TabsTrigger>
         </TabsList>
         <TabsContent value="servers">
           <McpServersTab entries={servers} plugins={plugins} onReview={review} />
@@ -57,6 +60,9 @@ export function LibraryScreen() {
         </TabsContent>
         <TabsContent value="plugins">
           <PluginsTab entries={plugins} />
+        </TabsContent>
+        <TabsContent value="context">
+          <ContextTab entries={contexts} />
         </TabsContent>
       </Tabs>
       {reviewing && <ToolsReview entry={reviewing} onClose={() => review(null)} />}

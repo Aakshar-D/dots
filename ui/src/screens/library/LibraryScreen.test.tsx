@@ -6,7 +6,10 @@ import { backend } from "@/test/backend";
 import { sample } from "@/test/fixtures";
 import { renderApp } from "@/test/render";
 
-const [github, owned, skill, plugin] = sample.library as [
+import { nameFromFolder, validName } from "./ContextTab";
+
+const [github, owned, skill, plugin, company] = sample.library as [
+  LibraryEntry,
   LibraryEntry,
   LibraryEntry,
   LibraryEntry,
@@ -610,5 +613,259 @@ describe("the server form's checks", () => {
     expect(await screen.findByText("no database")).toBeVisible();
     expect(screen.getByRole("dialog", { name: "Edit github" })).toBeVisible();
     expect(within(dialog).getByLabelText("Working folder")).toHaveValue("C:\\work");
+  });
+});
+
+describe("the Library's Context tab", () => {
+  it("lists a collection with its description, documents, folder and every-dot badge", async () => {
+    listing([company]);
+    const { user } = renderApp("/library");
+    await user.click(await screen.findByRole("tab", { name: "Context" }));
+    const row = await screen.findByRole("listitem", { name: "company" });
+    expect(within(row).getByText("How we work: style, people, runbooks")).toBeVisible();
+    expect(within(row).getByText("42 documents")).toBeVisible();
+    expect(within(row).getByText("every dot")).toBeVisible();
+    expect(within(row).getByText("Every dot reads it")).toBeVisible();
+    expect(within(row).getByText("C:/notes/company")).toBeVisible();
+  });
+
+  it("adds a collection from a folder under a name made from it", async () => {
+    listing([]);
+    backend.on("dialog_open", () => "C:\\Notes\\Company Wiki");
+    backend.on("library_add", () => sample.libraryItems[0]);
+    const { user } = renderApp("/library");
+    await user.click(await screen.findByRole("tab", { name: "Context" }));
+    await user.click(screen.getByRole("button", { name: "Add collection" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add context collection" });
+    expect(within(dialog).getByText(/Only add folders whose writers you trust/)).toBeVisible();
+    expect(within(dialog).getByLabelText("Name")).toHaveValue("company-wiki");
+    await user.type(within(dialog).getByLabelText("Description"), "How we work");
+    await user.click(within(dialog).getByLabelText("Every dot reads it"));
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(backend.callsTo("library_add")).toEqual([
+        {
+          name: "company-wiki",
+          config: {
+            kind: "context",
+            config: { path: "C:\\Notes\\Company Wiki", description: "How we work", every_dot: true },
+          },
+          accept: null,
+        },
+      ]),
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("checks the name and the description before it asks the core", async () => {
+    listing([]);
+    backend.on("dialog_open", () => "C:/kb");
+    const { user } = renderApp("/library");
+    await user.click(await screen.findByRole("tab", { name: "Context" }));
+    await user.click(screen.getByRole("button", { name: "Add collection" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add context collection" });
+    const name = within(dialog).getByLabelText("Name");
+    await user.clear(name);
+    await user.type(name, "Bad Name");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    expect(
+      within(dialog).getByText("Use 1 to 40 of a-z, 0-9, _ and -, starting with a letter or digit."),
+    ).toBeVisible();
+    expect(backend.callsTo("library_add")).toEqual([]);
+  });
+
+  it("edits a collection: the name stays, the config goes to the core", async () => {
+    listing([company]);
+    backend.on("library_update", () => company);
+    const { user } = renderApp("/library");
+    await user.click(await screen.findByRole("tab", { name: "Context" }));
+    const row = await screen.findByRole("listitem", { name: "company" });
+    await user.click(within(row).getByRole("button", { name: "Edit" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edit company" });
+    expect(within(dialog).getByLabelText("Name")).toBeDisabled();
+    await user.click(within(dialog).getByLabelText("Every dot reads it"));
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(backend.callsTo("library_update")).toEqual([
+        {
+          id: company.id,
+          config: {
+            kind: "context",
+            config: {
+              path: "C:/notes/company",
+              description: "How we work: style, people, runbooks",
+              every_dot: false,
+            },
+          },
+        },
+      ]),
+    );
+  });
+
+  it("shows a collection's first documents and says how many there are", async () => {
+    listing([company]);
+    backend.on("context_documents", () => sample.contextDocuments);
+    const { user } = renderApp("/library");
+    await user.click(await screen.findByRole("tab", { name: "Context" }));
+    const row = await screen.findByRole("listitem", { name: "company" });
+    await user.click(within(row).getByRole("button", { name: "Documents" }));
+    const dialog = await screen.findByRole("dialog", { name: "Documents of company" });
+    expect(await within(dialog).findByText("Ana Lima")).toBeVisible();
+    expect(within(dialog).getByText("Owns billing")).toBeVisible();
+    expect(within(dialog).getByText("The first 1 of 42 documents.")).toBeVisible();
+    expect(backend.callsTo("context_documents")).toEqual([{ id: company.id }]);
+  });
+});
+
+describe("the Context tab's other paths", () => {
+  const context = async (entries: LibraryEntry[]) => {
+    listing(entries);
+    const view = renderApp("/library");
+    await view.user.click(await screen.findByRole("tab", { name: "Context" }));
+    return view;
+  };
+
+  it("does nothing when the folder dialog is cancelled", async () => {
+    backend.on("dialog_open", () => null);
+    const { user } = await context([]);
+    await user.click(screen.getByRole("button", { name: "Add collection" }));
+    await waitFor(() => expect(backend.callsTo("dialog_open")).toHaveLength(1));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(backend.callsTo("library_add")).toEqual([]);
+  });
+
+  it("shows a refused add in the dialog and lets Save be pressed again", async () => {
+    backend.on("dialog_open", () => "C:/kb");
+    backend.on("library_add", () => {
+      throw { kind: "conflict", message: 'the context collection "kb" already exists' };
+    });
+    const { user } = await context([]);
+    await user.click(screen.getByRole("button", { name: "Add collection" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add context collection" });
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("already exists");
+    expect(within(dialog).getByRole("button", { name: "Save" })).toBeEnabled();
+  });
+
+  it("refuses a description over 300 characters before it asks the core", async () => {
+    backend.on("dialog_open", () => "C:/kb");
+    const { user } = await context([]);
+    await user.click(screen.getByRole("button", { name: "Add collection" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add context collection" });
+    await user.click(within(dialog).getByLabelText("Description"));
+    await user.paste("x".repeat(301));
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    expect(within(dialog).getByText("At most 300 characters.")).toBeVisible();
+    expect(backend.callsTo("library_add")).toEqual([]);
+  });
+
+  it("counts a description as it is saved, without its edge spaces", async () => {
+    backend.on("dialog_open", () => "C:/kb");
+    backend.on("library_add", () => sample.libraryItems[0]);
+    const { user } = await context([]);
+    await user.click(screen.getByRole("button", { name: "Add collection" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add context collection" });
+    await user.click(within(dialog).getByLabelText("Description"));
+    await user.paste(`${"x".repeat(300)}   `);
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(backend.callsTo("library_add")).toHaveLength(1));
+  });
+
+  it("says why the documents cannot be read, and when there are none", async () => {
+    backend.on("context_documents", () => {
+      throw { kind: "internal", message: "the folder is gone" };
+    });
+    const { user } = await context([company]);
+    const row = await screen.findByRole("listitem", { name: "company" });
+    await user.click(within(row).getByRole("button", { name: "Documents" }));
+    const dialog = await screen.findByRole("dialog", { name: "Documents of company" });
+    expect(await within(dialog).findByText(/the folder is gone/)).toBeVisible();
+    await user.keyboard("{Escape}");
+    backend.on("context_documents", () => ({ documents: [], total: 0, truncated: false, complete: true }));
+    await user.click(within(row).getByRole("button", { name: "Documents" }));
+    const again = await screen.findByRole("dialog", { name: "Documents of company" });
+    expect(await within(again).findByText("No documents in that folder.")).toBeVisible();
+  });
+
+  it("shows why a collection cannot be read", async () => {
+    await context([{ ...company, problem: "the folder C:/notes/company is missing" }]);
+    const row = await screen.findByRole("listitem", { name: "company" });
+    expect(within(row).getByText("the folder C:/notes/company is missing")).toBeVisible();
+  });
+
+  it("removes a collection", async () => {
+    backend.on("library_remove", () => null);
+    const { user } = await context([{ ...company, used_by: [] }]);
+    const row = await screen.findByRole("listitem", { name: "company" });
+    await user.click(within(row).getByRole("button", { name: "Remove" }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: "Remove collection" }));
+    await waitFor(() =>
+      expect(backend.callsTo("library_remove")).toEqual([{ id: company.id, confirm: false }]),
+    );
+  });
+
+  it("says every dot reads an every-dot collection, never that no dot uses it", async () => {
+    const everyDot = { ...company, used_by: [] };
+    expect(everyDot.kind === "context" && everyDot.config.every_dot).toBe(true);
+    const { user } = await context([everyDot]);
+    const row = await screen.findByRole("listitem", { name: "company" });
+    await user.click(within(row).getByRole("button", { name: "Remove" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveTextContent("Every dot reads it.");
+    expect(dialog).not.toHaveTextContent("No dot uses it.");
+  });
+
+  it("names the dots that tick an every-dot collection too", async () => {
+    const dot = github.used_by[0]!;
+    const { user } = await context([{ ...company, used_by: [dot] }]);
+    const row = await screen.findByRole("listitem", { name: "company" });
+    await user.click(within(row).getByRole("button", { name: "Remove" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveTextContent("Every dot reads it.");
+    expect(dialog).toHaveTextContent(dot.name);
+    expect(dialog).not.toHaveTextContent("No dot uses it.");
+  });
+});
+
+describe("a document count that is only a lower bound", () => {
+  it("says at least in the row and in the Documents dialog", async () => {
+    const bounded = { ...company, context: { documents: 100000, complete: false } };
+    listing([bounded]);
+    backend.on("context_documents", () => ({
+      ...sample.contextDocuments,
+      total: 100000,
+      truncated: true,
+      complete: false,
+    }));
+    const { user } = renderApp("/library");
+    await user.click(await screen.findByRole("tab", { name: "Context" }));
+    const row = await screen.findByRole("listitem", { name: "company" });
+    expect(within(row).getByText("at least 100000 documents")).toBeVisible();
+    await user.click(within(row).getByRole("button", { name: "Documents" }));
+    const dialog = await screen.findByRole("dialog", { name: "Documents of company" });
+    expect(
+      await within(dialog).findByText("The first 1 of at least 100000 documents."),
+    ).toBeVisible();
+  });
+});
+
+describe("nameFromFolder", () => {
+  it.each([
+    ["C:\\Users\\me\\Notes", "notes"],
+    ["C:\\Users\\me\\My Notes\\", "my-notes"],
+    ["\\srv\\share", "share"],
+    ["C:\\", "c"],
+    ["Notes (old)", "notes-old"],
+    ["文档", ""],
+  ])("makes %j into %j", (folder, name) => {
+    expect(nameFromFolder(folder)).toBe(name);
+  });
+
+  it("cuts a long folder name to a valid name of at most 40 characters", () => {
+    const name = nameFromFolder(`C:/${"ab-".repeat(20)}`);
+    expect(name.length).toBeLessThanOrEqual(40);
+    expect(validName(name)).toBe(true);
+    expect(name).not.toMatch(/[-_]$/);
   });
 });

@@ -144,6 +144,7 @@ async fn send(
 
 impl Session {
     /// The functions offered this turn: the built-in tools, `skill` when the run has skills,
+    /// `context` when it has context collections,
     /// and the tools the run's servers list now. A list change a server announced is listed
     /// first, so a new tool is offered on the next turn.
     pub(super) async fn tool_schemas(&mut self) -> Vec<Value> {
@@ -153,6 +154,9 @@ impl Session {
         };
         if !self.ctx.tools.skills().is_empty() {
             out.push(tools::skill::schema());
+        }
+        if !self.ctx.tools.contexts().is_empty() {
+            out.push(tools::context::schema());
         }
         let mut given = HashSet::new();
         for server in self.ctx.tools.servers() {

@@ -3,22 +3,24 @@
 //! schema, so a field renamed or added on one side fails the other side's tests.
 //! Regenerate after changing a type: `UPDATE_CONTRACT=1 cargo test -p dots-app contract`.
 
+use dots_core::context::Document;
 use dots_core::engine::EngineEvent;
 use dots_core::events::RuntimeEvent;
 use dots_core::kit::InstalledPlugin;
 use dots_core::library::{
-    CatalogStatus, LibraryConfig, LibraryItem, LibraryKind, McpCatalog, McpServerConfig,
-    PluginConfig, SkillConfig, Uses,
+    CatalogStatus, ContextConfig, LibraryConfig, LibraryItem, LibraryKind, McpCatalog,
+    McpServerConfig, PluginConfig, SkillConfig, Uses,
 };
 use dots_core::library_service::{
-    EnvVariable, LibraryEntry, McpProbe, PluginDetail, ScannedSkill, SkillDetail,
+    ContextDetail, ContextDocuments, EnvVariable, LibraryEntry, McpProbe, PluginDetail,
+    ScannedSkill, SkillDetail,
 };
 use dots_core::mcp::McpTool;
 use dots_core::model::*;
 use dots_core::policy::{allow_candidates, Action, Policy, Preset};
 use dots_core::schedule::Schedule;
 use dots_core::scheduler::MAX_ATTEMPTS;
-use dots_core::settings::{Settings, MAX_CONCURRENT_RUNS};
+use dots_core::settings::{Settings, MAX_CONCURRENT_RUNS, MAX_GLOBAL_INSTRUCTIONS};
 use serde_json::{json, Value};
 
 use crate::error::{CmdError, CmdErrorKind};
@@ -41,6 +43,7 @@ fn spec() -> DotSpec {
         mcp_servers: vec!["github".into()],
         skills: vec!["pdf".into()],
         plugins: vec!["pdf-tools".into()],
+        context: vec!["company".into()],
     };
     s
 }
@@ -99,6 +102,14 @@ fn plugin_config() -> LibraryConfig {
     })
 }
 
+fn context_config() -> LibraryConfig {
+    LibraryConfig::Context(ContextConfig {
+        path: "C:/notes/company".into(),
+        description: "How we work: style, people, runbooks".into(),
+        every_dot: true,
+    })
+}
+
 /// A config of every kind and transport, as `library_add` takes them.
 fn library_configs() -> Vec<LibraryConfig> {
     vec![
@@ -106,6 +117,7 @@ fn library_configs() -> Vec<LibraryConfig> {
         LibraryConfig::McpServer(http_server()),
         skill_config(),
         plugin_config(),
+        context_config(),
     ]
 }
 
@@ -158,6 +170,7 @@ fn library_entries() -> Vec<LibraryEntry> {
         missing_variables: vec![],
         skill: None,
         plugin: None,
+        context: None,
         problem: None,
     };
     let github = library_item(
@@ -173,6 +186,7 @@ fn library_entries() -> Vec<LibraryEntry> {
     owned.owner_id = Some("01J0PLG".into());
     let skill = library_item("01J0SKL", "pdf", skill_config());
     let plugin = library_item("01J0PLG", "pdf-tools", plugin_config());
+    let company = library_item("01J0CTX", "company", context_config());
     vec![
         LibraryEntry {
             catalog: Some(catalog(CatalogStatus::Changed)),
@@ -201,9 +215,30 @@ fn library_entries() -> Vec<LibraryEntry> {
                 has_hooks: true,
                 warnings: vec!["agents/broken.md: could not be read".into()],
             }),
-            ..bare(plugin, users)
+            ..bare(plugin, users.clone())
+        },
+        LibraryEntry {
+            context: Some(ContextDetail {
+                documents: 42,
+                complete: true,
+            }),
+            ..bare(company, users)
         },
     ]
+}
+
+/// A collection's first documents, more of them left out.
+fn context_documents() -> ContextDocuments {
+    ContextDocuments {
+        documents: vec![Document {
+            path: "people/ana.md".into(),
+            title: "Ana Lima".into(),
+            summary: "Owns billing".into(),
+        }],
+        total: 42,
+        truncated: true,
+        complete: true,
+    }
 }
 
 fn run() -> Run {
@@ -386,9 +421,10 @@ fn schedules() -> Value {
 pub fn samples() -> Value {
     let settings = Settings {
         local_endpoints: vec!["http://127.0.0.1:1234".into()],
+        global_instructions: "Use British spelling.".into(),
         ..Settings::default()
     };
-    json!({
+    let mut samples = json!({
         "DotSpec": to(local_spec()),
         "Schedule": schedules(),
         "Dot": to(dot()),
@@ -574,12 +610,16 @@ pub fn samples() -> Value {
             "max_approval_wait_secs": MAX_APPROVAL_WAIT_SECS,
             "max_concurrent_runs": MAX_CONCURRENT_RUNS,
             "max_schedule_attempts": MAX_ATTEMPTS,
+            "max_global_instructions": MAX_GLOBAL_INSTRUCTIONS,
         },
         "StartupError": to(StartupError {
             message: "Dots could not start: database disk image is malformed".into(),
             log_dir: "C:/Users/u/AppData/Local/dots/logs".into(),
         }),
-    })
+    });
+    // Past the `json!` macro's recursion limit, so added here.
+    samples["ContextDocuments"] = to(context_documents());
+    samples
 }
 
 #[cfg(test)]

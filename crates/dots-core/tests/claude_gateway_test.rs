@@ -15,10 +15,13 @@ use dots_core::approvals::{parked_message, ApprovalHub, DecideEffect};
 use dots_core::engine::claude::ClaudeEngine;
 use dots_core::engine::Engine;
 use dots_core::events::{new_bus, Bus};
-use dots_core::library::{LibraryConfig, LibraryItem, McpServerConfig, PluginConfig, SkillConfig};
+use dots_core::library::{
+    ContextConfig, LibraryConfig, LibraryItem, McpServerConfig, PluginConfig, SkillConfig,
+};
 use dots_core::library_service::LibraryService;
 use dots_core::model::{
-    Dot, DotSpec, EngineKind, NewRun, Run, RunEventRecord, RunStatus, TriggerKind, WorkspaceMode,
+    ApprovalStatus, Dot, DotSpec, EngineKind, NewRun, Run, RunEventRecord, RunStatus, TriggerKind,
+    WorkspaceMode,
 };
 use dots_core::policy::{Action, Policy, Preset, Rule};
 use dots_core::run_tools::{OpenRequest, RunTools};
@@ -816,4 +819,338 @@ async fn a_plugin_server_under_claude_codes_own_name_is_checked_by_approve() {
     assert_eq!(approvals.len(), 1);
     assert_eq!(approvals[0].tool, "mcp__plugin_forms_files__fill");
     e.runner.run_tools(&run.id).unwrap().close().await;
+}
+
+/// Adds the context collection `company`: a folder with `style.md`.
+async fn add_company(e: &Env) {
+    let kb = e.dir.path().join("kb");
+    write_file(&kb.join("style.md"), "# House style\nShort sentences.\n");
+    e.lib
+        .add(
+            "company",
+            LibraryConfig::Context(ContextConfig {
+                path: kb.to_string_lossy().into_owned(),
+                description: "How we work".into(),
+                every_dot: false,
+            }),
+            None,
+        )
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_claude_run_reads_its_collections_through_dots_own_server() {
+    let e = env(
+        json!([init(),
+               {"mcp_list": "dots"},
+               mcp_call("dots", "context", json!({"collection": "company", "path": "style.md"})),
+               success()]),
+        true,
+    )
+    .await;
+    add_company(&e).await;
+    let dot = claude_dot(&e, |s| {
+        s.policy = Policy::preset(Preset::ReadOnly);
+        s.uses.context = vec!["company".into()];
+    })
+    .await;
+    let run = start(&e, &dot).await;
+    wait_status(&e.store, &run.id, RunStatus::Succeeded, 20).await;
+
+    let args: Vec<String> = serde_json::from_value(recorded(&e)["args"].clone()).unwrap();
+    let allowed = values_of(&args, "--allowedTools");
+    assert!(
+        allowed.contains(&"mcp__dots__context".to_string()),
+        "{args:?}"
+    );
+    assert!(!allowed.contains(&"Context".to_string()), "{args:?}");
+    let listed = events(&e, &run.id, "raw").await;
+    let listed: Value = serde_json::from_str(listed[0].data["line"].as_str().unwrap()).unwrap();
+    assert_eq!(listed["tools"], json!(["approve", "context"]));
+    let calls = events(&e, &run.id, "tool_call").await;
+    assert_eq!(calls[0].data["tool"], "mcp__dots__context");
+    let result = &events(&e, &run.id, "tool_result").await[0].data;
+    assert_eq!(result["is_error"], false, "{result}");
+    assert_eq!(result["output"], "# House style\nShort sentences.");
+}
+
+#[tokio::test]
+async fn dots_own_server_offers_context_only_with_collections_and_checks_each_call() {
+    let e = env(json!([]), false).await;
+    add_company(&e).await;
+    let dot = claude_dot(&e, |s| s.uses.context = vec!["company".into()]).await;
+    let bare = claude_dot(&e, |s| s.name = "bare".into()).await;
+    let denying = claude_dot(&e, |s| {
+        s.name = "denying".into();
+        s.uses.context = vec!["company".into()];
+        s.policy.rules.insert(0, Rule::new("Context", Action::Deny));
+    })
+    .await;
+    let mut secrets = Vec::new();
+    for d in [&dot, &bare, &denying] {
+        let run = e
+            .store
+            .create_run(&NewRun::new(&d.id, TriggerKind::Manual))
+            .await
+            .unwrap();
+        let cancel = CancellationToken::new();
+        let (tools, _) = RunTools::open(OpenRequest {
+            store: &e.store,
+            bus: &e.bus,
+            run_id: &run.id,
+            uses: &d.spec.uses,
+            workspace: e.dir.path(),
+            plugins_dir: None,
+            cancel: &cancel,
+        })
+        .await
+        .unwrap();
+        let secret = e.runner.register_secret(&run.id);
+        e.runner.register_tools(&run.id, Arc::new(tools));
+        secrets.push(secret);
+    }
+    let list = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"});
+    let names = |v: Value| -> Vec<String> {
+        v["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let with: Value = rpc(&e, "/mcp", Some(&secrets[0]), list.clone())
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(names(with.clone()), ["approve", "context"]);
+    assert_eq!(
+        with["result"]["tools"][1]["inputSchema"]["required"],
+        json!(["collection"])
+    );
+    let without: Value = rpc(&e, "/mcp", Some(&secrets[1]), list)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(names(without), ["approve"]);
+
+    let context = |args: Value| {
+        json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+               "params": {"name": "context", "arguments": args}})
+    };
+    let ok: Value = rpc(
+        &e,
+        "/mcp",
+        Some(&secrets[0]),
+        context(json!({"collection": "company"})),
+    )
+    .await
+    .json()
+    .await
+    .unwrap();
+    assert_eq!(
+        ok["result"]["content"][0]["text"],
+        "- style.md — House style: Short sentences."
+    );
+    assert!(ok["result"].get("isError").is_none(), "{ok}");
+    // The dot's own rule decides: a `Context` deny rule denies the call.
+    let denied: Value = rpc(
+        &e,
+        "/mcp",
+        Some(&secrets[2]),
+        context(json!({"collection": "company"})),
+    )
+    .await
+    .json()
+    .await
+    .unwrap();
+    assert_eq!(denied["result"]["isError"], true, "{denied}");
+    let text = denied["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("Denied by the policy of dot 'denying'"),
+        "{denied}"
+    );
+    assert!(!text.contains("style.md"), "{denied}");
+    let unknown: Value = rpc(
+        &e,
+        "/mcp",
+        Some(&secrets[0]),
+        context(json!({"collection": "x"})),
+    )
+    .await
+    .json()
+    .await
+    .unwrap();
+    assert_eq!(unknown["result"]["isError"], true);
+    assert!(
+        unknown["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Collections: company"),
+        "{unknown}"
+    );
+    // A run without collections has no `context` tool.
+    let none: Value = rpc(
+        &e,
+        "/mcp",
+        Some(&secrets[1]),
+        context(json!({"collection": "company"})),
+    )
+    .await
+    .json()
+    .await
+    .unwrap();
+    assert_eq!(none["error"]["code"], -32602, "{none}");
+}
+
+#[tokio::test]
+async fn dots_own_server_caps_the_text_of_an_error_like_the_local_tool() {
+    let e = env(json!([]), false).await;
+    let kb = e.dir.path().join("kb");
+    write_file(
+        &kb.join("style.md"),
+        "# House style
+",
+    );
+    let names: Vec<String> = (0..900)
+        .map(|i| format!("{}-{i:03}", "c".repeat(34)))
+        .collect();
+    for name in &names {
+        e.lib
+            .add(
+                name,
+                LibraryConfig::Context(ContextConfig {
+                    path: kb.to_string_lossy().into_owned(),
+                    description: String::new(),
+                    every_dot: false,
+                }),
+                None,
+            )
+            .await
+            .unwrap();
+    }
+    let dot = claude_dot(&e, |s| s.uses.context = names.clone()).await;
+    let run = e
+        .store
+        .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    let cancel = CancellationToken::new();
+    let (tools, _) = RunTools::open(OpenRequest {
+        store: &e.store,
+        bus: &e.bus,
+        run_id: &run.id,
+        uses: &dot.spec.uses,
+        workspace: e.dir.path(),
+        plugins_dir: None,
+        cancel: &cancel,
+    })
+    .await
+    .unwrap();
+    let secret = e.runner.register_secret(&run.id);
+    e.runner.register_tools(&run.id, Arc::new(tools));
+    let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                      "params": {"name": "context", "arguments": {"collection": "nope"}}});
+    let reply: Value = rpc(&e, "/mcp", Some(&secret), body)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(reply["result"]["isError"], true, "{reply}");
+    let text = reply["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(text.starts_with("unknown collection"), "{text}");
+    // The same cap as the local tool: 30 KB, then its "[truncated: n more bytes]" note.
+    assert!(text.contains("[truncated: "), "{}", text.len());
+    assert!(text.len() <= 30 * 1024 + 64, "{}", text.len());
+}
+
+#[tokio::test]
+async fn a_context_call_that_asks_waits_for_the_decision_and_parks_when_none_comes() {
+    let e = env(json!([]), false).await;
+    add_company(&e).await;
+    let dot = claude_dot(&e, |s| {
+        s.uses.context = vec!["company".into()];
+        s.approval_wait_secs = 1;
+        // deny > allow > ask: the preset's bare `Context` allow would win over an ask rule.
+        s.policy.rules.retain(|r| r.tool != "Context");
+        s.policy.rules.push(Rule::new("Context", Action::Ask));
+    })
+    .await;
+    let run = e
+        .store
+        .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    let cancel = CancellationToken::new();
+    let (tools, _) = RunTools::open(OpenRequest {
+        store: &e.store,
+        bus: &e.bus,
+        run_id: &run.id,
+        uses: &dot.spec.uses,
+        workspace: e.dir.path(),
+        plugins_dir: None,
+        cancel: &cancel,
+    })
+    .await
+    .unwrap();
+    let secret = e.runner.register_secret(&run.id);
+    e.runner.register_tools(&run.id, Arc::new(tools));
+    let call = |id: u64| {
+        json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
+               "params": {"name": "context",
+                          "arguments": {"collection": "company", "path": "style.md"}}})
+    };
+
+    // A live approval reads the collection and returns it.
+    let approver = async {
+        let found = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let pending = e.store.approvals_for_run(&run.id).await.unwrap();
+                // The waiter is inserted after the row, so wait for both.
+                if let Some(a) = pending.iter().find(|a| a.status == ApprovalStatus::Pending) {
+                    if e.hub.waiter_count() > 0 {
+                        return a.clone();
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the approval row and its waiter never appeared");
+        assert_eq!(found.tool, "Context");
+        assert_eq!(
+            found.input,
+            json!({"collection": "company", "path": "style.md"})
+        );
+        let DecideEffect::Live(_) = e.hub.decide(&found.id, true, None).await.unwrap() else {
+            panic!("expected a live decision")
+        };
+    };
+    let (granted, ()) = tokio::join!(rpc(&e, "/mcp", Some(&secret), call(1)), approver);
+    let granted: Value = granted.json().await.unwrap();
+    assert!(granted["result"].get("isError").is_none(), "{granted}");
+    assert_eq!(
+        granted["result"]["content"][0]["text"],
+        "# House style
+Short sentences."
+    );
+
+    // With no decision inside the wait, the call is parked and the document stays unread.
+    let parked: Value = rpc(&e, "/mcp", Some(&secret), call(2))
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(parked["result"]["isError"], true, "{parked}");
+    let text = parked["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(text.starts_with("Queued for human approval #"), "{parked}");
+    assert!(!text.contains("Short sentences"), "{parked}");
+    let approvals = e.store.approvals_for_run(&run.id).await.unwrap();
+    let last = approvals.last().unwrap();
+    assert_eq!(last.tool, "Context");
+    assert!(last.parked, "{last:?}");
+    assert_eq!(last.input["collection"], "company");
+    assert_eq!(text, parked_message(&last.id));
 }

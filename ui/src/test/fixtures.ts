@@ -21,6 +21,7 @@ export const sample = {
   /// The same items without the extras of a list entry: what `library_add` answers.
   libraryItems: T.LibraryItem.array().parse(contract.LibraryItem),
   scannedSkills: T.ScannedSkill.array().parse(contract.ScannedSkill),
+  contextDocuments: T.ContextDocuments.parse(contract.ContextDocuments),
   installedPlugins: T.InstalledPlugin.array().parse(contract.InstalledPlugin),
   probe: T.McpProbe.parse(contract.McpProbe),
   inbox: T.Inbox.parse(contract.Inbox),

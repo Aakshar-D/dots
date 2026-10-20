@@ -61,6 +61,10 @@ pub fn check_endpoint_url(url: &str) -> Result<()> {
     Ok(())
 }
 
+fn yes() -> bool {
+    true
+}
+
 pub const MAX_TIMEOUT_SECS: u64 = 7 * 24 * 60 * 60;
 pub const MAX_APPROVAL_WAIT_SECS: u64 = 280;
 
@@ -78,6 +82,10 @@ pub struct DotSpec {
     /// The Library items the dot uses (MCP/skills spec section 2).
     #[serde(default)]
     pub uses: Uses,
+    /// The first prompt starts with the global instructions of Settings (context library spec
+    /// section 2).
+    #[serde(default = "yes")]
+    pub use_global_instructions: bool,
     pub use_user_settings: bool,
     pub max_turns: u32,
     pub timeout_secs: u64,
@@ -98,6 +106,7 @@ impl DotSpec {
             schedule: None,
             policy: Policy::preset(Preset::Sandboxed),
             uses: Uses::default(),
+            use_global_instructions: true,
             use_user_settings: false,
             max_turns: 40,
             timeout_secs: 1800,

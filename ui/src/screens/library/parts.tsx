@@ -19,6 +19,7 @@ export function isDeclined(e: unknown): boolean {
 export type ServerEntry = Extract<LibraryEntry, { kind: "mcp_server" }>;
 export type SkillEntry = Extract<LibraryEntry, { kind: "skill" }>;
 export type PluginEntry = Extract<LibraryEntry, { kind: "plugin" }>;
+export type ContextEntry = Extract<LibraryEntry, { kind: "context" }>;
 
 export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
@@ -63,7 +64,12 @@ export function ToolList({ tools }: { tools: McpTool[] }) {
   );
 }
 
-const KIND_WORD = { mcp_server: "server", skill: "skill", plugin: "plugin" } as const;
+const KIND_WORD = {
+  mcp_server: "server",
+  skill: "skill",
+  plugin: "plugin",
+  context: "collection",
+} as const;
 
 /// "Remove": asks first and names the dots that use the item, then removes it and takes it out
 /// of them (`confirm` is true only when dots use it).
@@ -78,15 +84,17 @@ export function RemoveButton({ entry }: { entry: LibraryEntry }) {
     onError: notifyError,
   });
   const word = KIND_WORD[entry.kind];
+  const everyDot = entry.kind === "context" && entry.config.every_dot;
   const users = entry.used_by.map((d) => d.name).join(", ");
   return (
     <ConfirmButton
       title={`Remove ${entry.name}?`}
       description={
         <>
+          {everyDot && "Every dot reads it. "}
           {entry.used_by.length > 0
             ? `Used by ${users}. Removing it takes it out of them.`
-            : "No dot uses it."}
+            : !everyDot && "No dot uses it."}
           {entry.kind === "plugin" && " Its MCP servers go with it."}
         </>
       }

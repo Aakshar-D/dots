@@ -1279,3 +1279,106 @@ fn a_deny_rule_still_wins_over_a_candidate() {
     );
     assert_eq!(p.resolve_in("Write", &write, ws()), Action::Deny);
 }
+
+#[test]
+fn every_preset_allows_reading_context_and_a_rule_still_wins() {
+    for preset in [
+        Preset::ReadOnly,
+        Preset::Sandboxed,
+        Preset::Trusted,
+        Preset::Custom,
+    ] {
+        let p = Policy::preset(preset);
+        assert_eq!(
+            p.resolve("Context", &json!({"collection": "kb"})),
+            Action::Allow,
+            "{preset:?}"
+        );
+        // The CLI has no `Context` tool: the rule stays out of its lists.
+        let (allow, deny) = p.cli_lists();
+        assert!(!allow.iter().chain(&deny).any(|t| t.starts_with("Context")));
+    }
+    let mut p = Policy::preset(Preset::Sandboxed);
+    p.rules.insert(0, Rule::new("Context", Action::Deny));
+    assert_eq!(p.resolve("Context", &json!({})), Action::Deny);
+    assert!(!p.cli_lists().1.iter().any(|t| t == "Context"));
+}
+
+#[test]
+fn a_context_rule_with_an_argument_names_a_collection() {
+    let call = |name: &str| json!({"collection": name, "query": "x"});
+    // Deny: refuses that collection and leaves the other to the next rule (the preset's allow).
+    let mut p = Policy::preset(Preset::Sandboxed);
+    p.rules
+        .insert(0, Rule::new("Context(secret)", Action::Deny));
+    assert_eq!(p.resolve("Context", &call("secret")), Action::Deny);
+    assert_eq!(p.resolve("Context", &call(" secret ")), Action::Deny);
+    assert_eq!(p.resolve("Context", &call("public")), Action::Allow);
+    // Ask works the same way (an allow rule outranks an ask rule, so the allow names `public`).
+    let mut p = Policy::preset(Preset::Sandboxed);
+    p.default = Action::Deny;
+    p.rules.retain(|r| r.tool != "Context");
+    p.rules.push(Rule::new("Context(secret)", Action::Ask));
+    p.rules.push(Rule::new("Context(public)", Action::Allow));
+    assert_eq!(p.resolve("Context", &call("secret")), Action::Ask);
+    assert_eq!(p.resolve("Context", &call("public")), Action::Allow);
+    assert_eq!(p.resolve("Context", &call("other")), Action::Deny);
+    // Allow: allows that collection only.
+    let mut p = Policy::preset(Preset::Sandboxed);
+    p.rules.retain(|r| r.tool != "Context");
+    p.rules
+        .insert(0, Rule::new("Context(public)", Action::Allow));
+    assert_eq!(p.resolve("Context", &call("public")), Action::Allow);
+    assert_ne!(p.resolve("Context", &call("secret")), Action::Allow);
+    // A call without a `collection` is denied by a deny rule and never allowed by an allow rule.
+    let mut deny = Policy::preset(Preset::Sandboxed);
+    deny.rules.insert(0, Rule::new("Context(x)", Action::Deny));
+    assert_eq!(
+        deny.resolve("Context", &json!({"query": "q"})),
+        Action::Deny
+    );
+    assert_eq!(
+        deny.resolve("Context", &json!({"collection": 3})),
+        Action::Deny
+    );
+    let mut allow = Policy::preset(Preset::Sandboxed);
+    allow.rules.retain(|r| r.tool != "Context");
+    allow
+        .rules
+        .insert(0, Rule::new("Context(x)", Action::Allow));
+    assert_ne!(
+        allow.resolve("Context", &json!({"query": "q"})),
+        Action::Allow
+    );
+}
+
+#[test]
+fn a_context_rule_must_name_one_collection() {
+    let with = |tool: &str| {
+        let mut p = Policy::preset(Preset::Sandboxed);
+        p.rules.insert(0, Rule::new(tool, Action::Deny));
+        p.validate()
+    };
+    // `Context()` is refused already as an empty spec.
+    assert!(with("Context()").is_err());
+    for bad in ["Context(*)", "Context(comp*)", "Context(Kb)"] {
+        let err = with(bad).unwrap_err().to_string();
+        assert!(
+            err.contains(
+                "a Context rule names one collection: lower-case letters, digits, '-' and '_'"
+            ),
+            "{bad}: {err}"
+        );
+    }
+    for good in ["Context", "Context(kb)", "Context( kb )"] {
+        with(good).unwrap_or_else(|e| panic!("{good}: {e}"));
+    }
+    for preset in [
+        Preset::ReadOnly,
+        Preset::Sandboxed,
+        Preset::Trusted,
+        Preset::Custom,
+    ] {
+        Policy::preset(preset).validate().unwrap();
+    }
+}

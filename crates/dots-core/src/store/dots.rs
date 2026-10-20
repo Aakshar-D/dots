@@ -10,7 +10,8 @@ use crate::util::{new_id, new_token, now};
 use crate::{Error, Result};
 
 pub(super) const DOT_COLUMNS: &str = "id, name, instructions, engine, model, endpoint_url, \
-    workdir, workspace_mode, schedule, webhook_token, policy, uses, use_user_settings, max_turns, \
+    workdir, workspace_mode, schedule, webhook_token, policy, uses, use_global_instructions, \
+    use_user_settings, max_turns, \
     timeout_secs, approval_wait_secs, enabled, created_at, updated_at";
 
 pub(super) fn dot_from_row(row: &SqliteRow) -> Result<Dot> {
@@ -33,6 +34,7 @@ pub(super) fn dot_from_row(row: &SqliteRow) -> Result<Dot> {
                 .transpose()?,
             policy: serde_json::from_str(&row.try_get::<String, _>("policy")?)?,
             uses: serde_json::from_str(&row.try_get::<String, _>("uses")?)?,
+            use_global_instructions: row.try_get::<i64, _>("use_global_instructions")? != 0,
             use_user_settings: row.try_get::<i64, _>("use_user_settings")? != 0,
             max_turns: row.try_get::<i64, _>("max_turns")? as u32,
             timeout_secs: row.try_get::<i64, _>("timeout_secs")? as u64,
@@ -81,9 +83,10 @@ impl Store {
         let mut tx = self.pool.begin().await?;
         sqlx::query(
             "INSERT INTO dots (id, name, instructions, engine, model, endpoint_url, workdir, \
-             workspace_mode, schedule, webhook_token, policy, uses, use_user_settings, \
-             max_turns, timeout_secs, approval_wait_secs, enabled, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             workspace_mode, schedule, webhook_token, policy, uses, use_global_instructions, \
+             use_user_settings, max_turns, timeout_secs, approval_wait_secs, enabled, \
+             created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&spec.name)
@@ -97,6 +100,7 @@ impl Store {
         .bind(new_token())
         .bind(serde_json::to_string(&spec.policy)?)
         .bind(serde_json::to_string(&spec.uses)?)
+        .bind(spec.use_global_instructions as i64)
         .bind(spec.use_user_settings as i64)
         .bind(spec.max_turns as i64)
         .bind(spec.timeout_secs as i64)
@@ -140,7 +144,7 @@ impl Store {
         let res = sqlx::query(
             "UPDATE dots SET name = ?, instructions = ?, engine = ?, model = ?, endpoint_url = ?, \
              workdir = ?, workspace_mode = ?, schedule = ?, policy = ?, uses = ?, \
-             use_user_settings = ?, max_turns = ?, timeout_secs = ?, approval_wait_secs = ?, \
+             use_global_instructions = ?, use_user_settings = ?, max_turns = ?, timeout_secs = ?, approval_wait_secs = ?, \
              enabled = ?, updated_at = ? WHERE id = ? \
              AND ((workdir = ? AND workspace_mode = ?) OR NOT EXISTS (SELECT 1 FROM runs \
              WHERE dot_id = ? AND status IN ('queued','running','awaiting_approval')))",
@@ -155,6 +159,7 @@ impl Store {
         .bind(schedule_json(spec)?)
         .bind(serde_json::to_string(&spec.policy)?)
         .bind(serde_json::to_string(&spec.uses)?)
+        .bind(spec.use_global_instructions as i64)
         .bind(spec.use_user_settings as i64)
         .bind(spec.max_turns as i64)
         .bind(spec.timeout_secs as i64)

@@ -99,6 +99,36 @@ fn success(text: &str) -> Value {
 }
 
 #[tokio::test]
+async fn the_runner_starts_the_prompt_with_the_global_instructions_of_settings() {
+    let e = e2e(
+        json!([init(),
+               {"emit": {"type": "assistant", "message": {"content": [{"type": "text", "text": "$PROMPT"}]}}},
+               success("fake done")]),
+        None,
+    )
+    .await;
+    let mut settings = e.store.get_settings().await.unwrap();
+    settings.global_instructions = "Use British spelling.".into();
+    e.store.put_settings(&settings).await.unwrap();
+    let dot = folder_dot(&e, 280).await;
+    let run = e
+        .runner
+        .enqueue(NewRun::new(&dot.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    wait_status(&e.store, &run.id, RunStatus::Succeeded, 15).await;
+    let events = e.store.list_events(&run.id, 0).await.unwrap();
+    let text = events
+        .iter()
+        .find(|ev| ev.kind == "assistant_text")
+        .unwrap();
+    assert!(text.data["text"].as_str().unwrap().starts_with(
+        "## Instructions for every dot\n\nUse British spelling.\n\n\
+         ## Instructions for this dot\n\nDo the thing."
+    ));
+}
+
+#[tokio::test]
 async fn happy_path_streams_events_and_passes_prompt_on_stdin() {
     let e = e2e(
         json!([init(),

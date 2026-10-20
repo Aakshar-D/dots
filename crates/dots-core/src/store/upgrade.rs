@@ -1,7 +1,9 @@
-//! The part of migration 0006 that needs code (MCP/skills spec section 10). The SQL migration
-//! moves each dot's old `mcp_servers` JSON into the table `upgrade_0006`; when the store opens,
-//! `finish_0006` turns those servers into Library items ticked in the dots' `uses`, brings each
-//! dot's policy up to date, and drops the table, in one transaction.
+//! The parts of migrations 0006 and 0007 that need code. 0006 (MCP/skills spec section 10):
+//! the SQL migration moves each dot's old `mcp_servers` JSON into the table `upgrade_0006`;
+//! when the store opens, `finish_0006` turns those servers into Library items ticked in the
+//! dots' `uses`, brings each dot's policy up to date, and drops the table, in one transaction.
+//! 0007 (context library spec section 8): `finish_0007` then gives each dot listed in
+//! `upgrade_0007` a `Context` allow rule unless a rule names `Context`, and drops that table.
 
 use std::collections::BTreeMap;
 
@@ -309,6 +311,59 @@ fn converted_policy(stored: &str, renames: &[(String, String)]) -> Option<String
             Action::Ask
         };
         obj.insert("mcp_default".into(), json!(action.as_str()));
+    }
+    // Through `Policy`, so the JSON is written as Dots writes a policy.
+    let policy: Policy = serde_json::from_value(value).ok()?;
+    serde_json::to_string(&policy).ok()
+}
+
+/// Gives the policy of each dot that migration 0007 listed a `Context` allow rule at the end,
+/// unless a rule names `Context` (`Context` or `Context(...)`), and drops the list.
+pub(super) async fn finish_0007(pool: &SqlitePool) -> Result<()> {
+    let waiting: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'upgrade_0007'",
+    )
+    .fetch_one(pool)
+    .await?;
+    if waiting == 0 {
+        return Ok(());
+    }
+    let mut tx = pool.begin().await?;
+    let rows: Vec<(String, String)> =
+        sqlx::query_as("SELECT d.id, d.policy FROM upgrade_0007 u JOIN dots d ON d.id = u.dot_id")
+            .fetch_all(&mut *tx)
+            .await?;
+    for (dot_id, stored) in rows {
+        let Some(policy) = with_context(&stored) else {
+            tracing::warn!(dot = %dot_id, "migration 0007: the policy could not be read");
+            continue;
+        };
+        sqlx::query("UPDATE dots SET policy = ? WHERE id = ?")
+            .bind(policy)
+            .bind(&dot_id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    sqlx::query("DROP TABLE upgrade_0007")
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// The stored policy with a `Context` allow rule at the end when no rule names `Context`;
+/// `None` when the stored JSON is not a policy.
+fn with_context(stored: &str) -> Option<String> {
+    let mut value: Value = serde_json::from_str(stored).ok()?;
+    let rules = value.get_mut("rules")?.as_array_mut()?;
+    let names_context = |rule: &Value| {
+        rule["tool"].as_str().is_some_and(|t| {
+            let t = t.trim();
+            t == "Context" || t.starts_with("Context(")
+        })
+    };
+    if !rules.iter().any(names_context) {
+        rules.push(json!({"tool": "Context", "action": Action::Allow.as_str()}));
     }
     // Through `Policy`, so the JSON is written as Dots writes a policy.
     let policy: Policy = serde_json::from_value(value).ok()?;

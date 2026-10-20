@@ -12,14 +12,25 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import { errorMessage, notifyError } from "@/lib/notify";
 import { invalidate, keys, takeStatus } from "@/lib/query";
 
-type Errors = { port?: string; max?: string };
+type Errors = { port?: string; max?: string; global?: string };
 
-/// What is wrong with the numbers, mirroring `Settings::validate` in the core.
-export function settingsErrors(draft: Pick<Settings, "port" | "max_concurrent_runs">): Errors {
+/// The size of `text` in UTF-8 bytes, as the core counts it.
+export const utf8Bytes = (text: string) => new TextEncoder().encode(text).length;
+
+/// What is wrong with the numbers and the global instructions, mirroring `Settings::validate`
+/// in the core.
+export function settingsErrors(
+  draft: Pick<Settings, "port" | "max_concurrent_runs"> &
+    Partial<Pick<Settings, "global_instructions">>,
+): Errors {
   const errors: Errors = {};
+  if (utf8Bytes(draft.global_instructions ?? "") > LIMITS.max_global_instructions) {
+    errors.global = "The global instructions are at most 32 KB.";
+  }
   const whole = (n: number, min: number, max: number) => Number.isInteger(n) && n >= min && n <= max;
   if (!whole(draft.port, 1, 65535)) errors.port = "The port must be a whole number, 1 to 65535.";
   if (!whole(draft.max_concurrent_runs, 1, LIMITS.max_concurrent_runs)) {
@@ -184,6 +195,22 @@ function Form({ stored, status }: { stored: Settings; status: Status | undefined
             readOnly
             className="font-mono"
             value={status?.data_dir ?? ""}
+          />
+        </Field>
+      </Section>
+
+      <Section title="Global instructions">
+        <Field
+          label="Global instructions"
+          htmlFor="settings-global"
+          error={tried ? errors.global : undefined}
+          hint={`Every dot's first prompt starts with these. A dot can switch them off in its editor. ${utf8Bytes(draft.global_instructions)} of ${LIMITS.max_global_instructions} bytes.`}
+        >
+          <Textarea
+            id="settings-global"
+            rows={6}
+            value={draft.global_instructions}
+            onChange={(e) => set({ global_instructions: e.target.value })}
           />
         </Field>
       </Section>
