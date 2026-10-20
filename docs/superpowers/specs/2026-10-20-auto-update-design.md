@@ -58,8 +58,8 @@ The owner decided: GitHub builds and publishes on its own when a version is mark
 2. The owner marks the version by pushing a tag `v<version>` (for example `v0.2.0`) on the merged `master` commit.
 3. A GitHub Actions workflow runs on tags matching `v*`, on a Windows runner. It:
    - fails at once if the tag, without its `v`, differs from any of the version fields;
-   - builds the NSIS installer the way `bun run tauri build` does today;
-   - signs the update artifacts with the private key from the repo secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`;
+   - builds the NSIS installer the way `bun run tauri build` does today, with no signing key in the build's environment;
+   - then, in a step of its own and the only one that gets the key, signs the installer (`tauri signer sign`) with the private key from the repo secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`;
    - publishes (not as a draft) a GitHub Release named after the tag. The release holds the installer, its `.sig` signature and a `latest.json` manifest in the format Tauri's updater reads.
 4. Release notes are the release's body. They default to GitHub's generated notes; the owner can edit them on GitHub afterwards.
 
@@ -90,10 +90,10 @@ The owner chose a strip across the top, where Dots' other notes are (mockup A, k
 - Restart to update installs the update and starts the new Dots with its window shown.
 - Later hides the note until Dots next starts. *(my call)* The next start checks and downloads again before the note returns. Tauri's updater keeps a download only in memory and checks its signature when it downloads; keeping the bytes on disk would need Dots to check the signature again itself, which is not worth it for a file of about 6 MB.
 
-**A dot has a run working.** The text names the dots that have a run with status `running`: "Dots 0.2.0 is ready. Daily digest is still running." This needs its own query: `dot_overview`, which `RestartButton` uses, gives each dot's newest run that is queued, running or awaiting approval, and cannot tell those apart. The owner decided the two choices:
+**A dot has a run working.** The text names the dots that have a run with status `running`: "Dots 0.2.0 is ready. Daily digest is still running." This needs its own query: `dot_overview`, which `RestartButton` uses, gives each dot's newest run that is queued, running or awaiting approval, and cannot tell those apart. The owner decided the two choices; **Later** is offered after them, as when nothing is running:
 
 - **Restart when it's done** ("when they're done" for more than one dot). The note changes to "Will restart into Dots 0.2.0 when Daily digest finishes. New runs wait until after the update." with a **Cancel** button. Dots restarts into the new version as soon as no run is working.
-- **Stop it and restart** ("Stop them" for more than one dot). Asks once, with the wording `RestartButton` uses today: a run that is working ends as failed ("interrupted"); runs waiting in the queue or for an approval continue after the restart. Then the install begins at once, as "Restart Dots" does: the working runs are not cancelled first (that would end them as cancelled, not as the dialog says), and the next start marks them interrupted.
+- **Stop it and restart** ("Stop them" for more than one dot). Asks once, with the wording `RestartButton` uses today: a run that is working ends as failed ("interrupted"); runs waiting in the queue or for an approval continue after the restart. Then the install begins at once, as "Restart Dots" does: the working runs are not cancelled first (that would end them as cancelled, not as the dialog says), and the next start marks them interrupted. It stops only the dots the dialog named: if another dot has started a run meanwhile, nothing is installed and the note names the dots working now.
 
 **Which runs block.** Only runs with status `running` make Dots wait. Queued runs and runs awaiting an approval survive a restart already, so they do not block it. *(my call)*
 
