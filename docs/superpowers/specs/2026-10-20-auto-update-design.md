@@ -42,10 +42,10 @@ Success means that after a version is marked on GitHub, every installed Dots sho
 ## 3. Facts the design rests on
 
 - The Tauri app is `apps/dots-app`. `tauri.conf.json` has `"version": "0.1.0"`, `"identifier": "dev.dots.app"`, bundle target `nsis` with `installMode: "currentUser"`. It has no updater plugin.
-- The version also appears in `apps/dots-app/Cargo.toml`, `crates/dots-core/Cargo.toml` and `ui/package.json` (all `0.1.0`).
+- The version also appears in `apps/dots-app/Cargo.toml`, `crates/dots-core/Cargo.toml` and `ui/package.json` (all `0.1.0`), and `Cargo.lock` records it for `dots-app` and `dots-core`. "The version fields" below means these five places.
 - The repo `Aakshar-D/dots` is public on GitHub. It has no releases and no `.github/workflows`.
-- The NSIS install folder `%LOCALAPPDATA%\Dots` is the same folder as the data folder `%LOCALAPPDATA%\dots` (Windows ignores case). The uninstaller keeps the data. The data folder holds `dots.db` (WAL mode), `logs/`, `mcp/`, and can hold `worktrees/` and `plugins/`.
-- `restart_app` (`apps/dots-app/src/commands.rs`) shuts the runtime down, marks the restart so the new process shows its window, and calls `app.restart()`. On the next start, `recover_interrupted` marks runs left `running` as failed with error `interrupted`. Runs that are `queued` or awaiting an approval carry on.
+- The NSIS install folder `%LOCALAPPDATA%\Dots` is the same folder as the data folder `%LOCALAPPDATA%\dots` (Windows ignores case). A reinstall over it with `/S` kept the data on 2026-10-20 (the new build applied its migrations to the existing `dots.db`); nothing in the repo shows what the updater's install mode does to that folder (§7). The data folder holds `dots.db` (WAL mode), `logs/`, `mcp/`, and can hold `worktrees/` and `plugins/`.
+- `restart_app` (`apps/dots-app/src/commands.rs`) shuts the runtime down, marks the restart so the new process shows its window, and calls `app.restart()`. `Runtime::shutdown()` only cancels a token; it does not wait for the runtime's tasks to stop writing. On the next start, `recover_interrupted` marks runs left `running` as failed with error `interrupted`. Runs that are `queued` or awaiting an approval carry on.
 - `ui/src/app/Banners.tsx` already shows strips across the top (`Banner`, tones error, warning, info). Its `RestartButton` already asks before a restart while a dot has a run that has not ended, and names those dots.
 - A failed start shows a fatal-error page (`apps/dots-app/src/lib.rs`), for example when a migration fails.
 - Runs start from four triggers: `schedule`, `webhook`, `manual`, `chat`.
@@ -54,10 +54,10 @@ Success means that after a version is marked on GitHub, every installed Dots sho
 
 The owner decided: GitHub builds and publishes on its own when a version is marked.
 
-1. The owner raises the version in a pull request, in the four places listed in §3, and merges it.
+1. The owner raises the version in a pull request, in the version fields listed in §3, and merges it.
 2. The owner marks the version by pushing a tag `v<version>` (for example `v0.2.0`) on the merged `master` commit.
 3. A GitHub Actions workflow runs on tags matching `v*`, on a Windows runner. It:
-   - fails at once if the tag, without its `v`, differs from any of the four version fields;
+   - fails at once if the tag, without its `v`, differs from any of the version fields;
    - builds the NSIS installer the way `bun run tauri build` does today;
    - signs the update artifacts with the private key from the repo secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`;
    - publishes (not as a draft) a GitHub Release named after the tag. The release holds the installer, its `.sig` signature and a `latest.json` manifest in the format Tauri's updater reads.
@@ -69,7 +69,9 @@ The owner decided: GitHub builds and publishes on its own when a version is mark
 
 **The endpoint.** Dots reads `https://github.com/Aakshar-D/dots/releases/latest/download/latest.json`. GitHub's "latest" is the newest published, non-prerelease release.
 
-**My call:** a tag that is not a plain `vMAJOR.MINOR.PATCH` (for example `v0.2.0-rc1`) is published as a prerelease, which "latest" skips. This gives the owner a way to test the workflow without reaching anyone.
+**Prereleases** *(my call)*. A tag that is not a plain `vMAJOR.MINOR.PATCH` (for example `v0.2.0-rc1`) is published as a prerelease, which "latest" skips, so it reaches nobody. The version check is the same for it: the version fields must read `0.2.0-rc1`. A prerelease tag may therefore sit on any branch, for example the version pull request's branch before its version is set to the final `0.2.0`. Only plain version tags belong on `master`. The builder confirms that Tauri's NSIS bundle accepts a prerelease version; if it does not, the prerelease form is changed to one it accepts and the doc (§10) says which.
+
+**Testing an update before it reaches everyone** *(my call)*. A release build reads the environment variable `DOTS_UPDATE_ENDPOINT`. When it is set, Dots checks that URL instead of the GitHub "latest" one, for example a prerelease's `latest.json`. The signature check is unchanged, so this can only point Dots at a build signed with the owner's key. This lets the owner run the whole path (check, download, note, backup, install, restart) on their own machine with two prereleases before a plain tag reaches every machine. It is never set by Dots itself, and `DOTS_DATA_DIR` still turns checks off (§5).
 
 ## 5. Checking and downloading
 
@@ -86,9 +88,9 @@ The owner chose a strip across the top, where Dots' other notes are (mockup A, k
 **Nothing running.** Text: "Dots <version> is ready." Then a "What's new" link to the GitHub release page, a **Restart to update** button, and a **Later** button.
 
 - Restart to update installs the update and starts the new Dots with its window shown.
-- Later hides the note until Dots next starts. *(my call)* The download is kept, so the note comes back at the next start without a new download.
+- Later hides the note until Dots next starts. *(my call)* The next start checks and downloads again before the note returns. Tauri's updater keeps a download only in memory and checks its signature when it downloads; keeping the bytes on disk would need Dots to check the signature again itself, which is not worth it for a file of about 6 MB.
 
-**A dot has a run that has not ended** (`queued`, `running` or awaiting approval as `RestartButton` counts them today, but see the rule below). The text names the dots that have a run working, as `RestartButton` does: "Dots 0.2.0 is ready. Daily digest is still running." The owner decided the two choices:
+**A dot has a run working.** The text names the dots that have a run with status `running`: "Dots 0.2.0 is ready. Daily digest is still running." This needs its own query: `dot_overview`, which `RestartButton` uses, gives each dot's newest run that is queued, running or awaiting approval, and cannot tell those apart. The owner decided the two choices:
 
 - **Restart when it's done.** The note changes to "Will restart when Daily digest finishes." with a **Cancel** link. Dots restarts into the new version as soon as no run is working.
 - **Stop it and restart.** Asks once, with the wording `RestartButton` uses today: a run that is working ends as failed ("interrupted"); runs waiting in the queue or for an approval continue after the restart. Then it restarts as above.
@@ -97,15 +99,19 @@ The owner chose a strip across the top, where Dots' other notes are (mockup A, k
 
 **While waiting.** No queued run is started, whatever its trigger. New schedule, webhook, manual and chat runs are still accepted and queued; they start after the restart. *(my call: otherwise a busy schedule could keep Dots from ever restarting.)* Cancel lifts the hold and the queue starts again. A person who starts a manual run while waiting should see that it is queued until after the update; the builder picks the wording.
 
-**Quitting instead.** If the person quits Dots from the tray while an update is ready, Dots does not install it then. The note shows at the next start. *(my call)*
+**Quitting instead.** If the person quits Dots from the tray while an update is ready, Dots does not install it then. The note shows after the next start's check. *(my call)*
 
 ## 7. Installing
 
-At restart, in this order:
+On Windows, Tauri's `Update::install` starts the NSIS installer and then ends the process (`std::process::exit`). The installer, not `app.restart()`, starts the new Dots, and `RunEvent::Exit` does not fire. So everything Dots must do happens before `install`. When no run is working any more (after the wait, or after "Stop it and restart" and the stopped runs have ended), in this order:
 
-1. Shut the runtime down as `restart_app` does.
-2. Back up the database (below). If the backup fails, do not install. Show the note again with an error line naming the reason, and leave the person on the current version.
-3. Hand over to Tauri's updater, which runs the NSIS installer without questions (passive or quiet mode) and starts the new Dots. The new Dots shows its window, like after "Restart Dots".
+1. Shut the runtime down and **wait** until its tasks have stopped writing to `dots.db`, with a time limit *(the builder picks it)*. `shutdown()` alone does not wait.
+2. Back up the database (below).
+3. If the backup fails, do not install. Restart into the current version with `app.restart()`, as "Restart Dots" does; no run is working by then, so this costs nothing. The new process shows the note again with an error line naming the reason. *(my call: a shut-down runtime cannot be started again in the same process.)*
+4. Write the restart mark (`startup::mark_restart`) so the new Dots shows its window, like after "Restart Dots".
+5. Hand over to `Update::install`, with the NSIS installer in passive or quiet mode so it asks nothing and starts the new Dots.
+
+**The data folder is the install folder** (§3). Before this ships, the builder checks the tauri-bundler NSIS script of the version in use, in the mode the updater runs it, and confirms it leaves `dots.db`, `backups/`, `worktrees/`, `plugins/`, `mcp/` and `logs/` in place. If it does not, that is a stop: the plan says what it found before any further task.
 
 **Backup.** *(my call on the details; the owner agreed to backing up)*
 
@@ -132,15 +138,16 @@ A short doc, `docs/releasing.md` *(my call on the name)*:
 
 - the warning that a lost private key ends updates for every installed copy;
 - generating the key pair and adding the two secrets;
-- raising the version in its four places, then tagging;
-- testing the workflow with a prerelease tag;
+- raising the version in its five places, then tagging;
+- testing with prerelease tags: the workflow first, then the whole update path on the owner's machine with `DOTS_UPDATE_ENDPOINT` (§4);
 - going back to an older version by hand (§8).
 
 ## 11. Testing
 
 - The Rust logic that decides what the note shows (no update, ready, waiting, error), when Dots may restart while waiting, the hold on queued runs, the backup and its pruning, and the "no check under `DOTS_DATA_DIR` or in debug builds" rule are tested without the network and without the real updater.
 - The UI strip is tested the way `Banners` is today: each state, each button, the confirm on "Stop it and restart", Cancel.
-- The workflow is checked with a prerelease tag before the first real release. That step needs the owner's secrets and is the owner's to run.
+- The order in §7 (wait, backup, restart on a failed backup, mark, install) is tested with the updater behind a seam, so no test installs anything.
+- The workflow, and then the update path with `DOTS_UPDATE_ENDPOINT`, are checked with prerelease tags before the first plain release. These steps need the owner's secrets and machine and are the owner's to run.
 - Agents never install, uninstall or run an installer, and never touch the installed Dots or `%LOCALAPPDATA%\dots`. Installing a real update on the owner's machine is a person step in the smoke doc.
 
 ## 12. Left to the builder
