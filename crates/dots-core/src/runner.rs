@@ -67,6 +67,8 @@ pub struct Runner {
     resume_lock: tokio::sync::Mutex<()>,
     /// While set, the dispatcher starts no queued run (`set_held`).
     held: AtomicBool,
+    /// Held for each dispatch pass, so `set_held` can wait for a pass in flight.
+    pass: tokio::sync::Mutex<()>,
 }
 
 impl Runner {
@@ -88,6 +90,7 @@ impl Runner {
             wake: Notify::new(),
             resume_lock: tokio::sync::Mutex::new(()),
             held: AtomicBool::new(false),
+            pass: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -181,14 +184,19 @@ impl Runner {
 
     /// Holds or releases the queue. While held, no queued run starts, whatever its trigger;
     /// new runs are still queued and start once the queue is released (updates spec §6).
-    pub fn set_held(&self, held: bool) {
+    /// When holding, it returns only once no dispatch pass is in flight, so no queued run is
+    /// claimed after it returns.
+    pub async fn set_held(&self, held: bool) {
         self.held.store(held, Ordering::SeqCst);
-        if !held {
+        if held {
+            drop(self.pass.lock().await);
+        } else {
             self.wake.notify_one();
         }
     }
 
     pub async fn dispatch_once(self: &Arc<Self>) -> Result<usize> {
+        let _pass = self.pass.lock().await;
         if self.held.load(Ordering::SeqCst) {
             return Ok(0);
         }

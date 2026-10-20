@@ -851,9 +851,10 @@ impl Runtime {
     }
 
     /// Holds or releases the run queue (`Runner::set_held`): while an update waits for the
-    /// runs that are working, no queued run starts (updates spec §6).
-    pub fn hold_runs(&self, held: bool) {
-        self.runner.set_held(held);
+    /// runs that are working, no queued run starts (updates spec §6). Holding returns once no
+    /// run can be claimed any more.
+    pub async fn hold_runs(&self, held: bool) {
+        self.runner.set_held(held).await;
     }
 
     /// The names of the dots with a run whose status is `running`, sorted: the runs an update

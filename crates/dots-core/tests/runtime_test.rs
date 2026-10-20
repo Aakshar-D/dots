@@ -600,7 +600,7 @@ async fn a_held_queue_starts_no_run_and_working_dots_name_the_running_ones() {
     assert!(t.rt.working_dots().await.unwrap().is_empty());
     let first = t.rt.run_now(&busy.id).await.unwrap();
     wait_status(t.rt.store(), &first.id, RunStatus::Running, 15).await;
-    t.rt.hold_runs(true);
+    t.rt.hold_runs(true).await;
     // A run asked for while the queue is held is queued, and stays queued.
     let second = t.rt.run_now(&idle.id).await.unwrap();
     assert_eq!(t.rt.working_dots().await.unwrap(), vec!["busy".to_string()]);
@@ -609,7 +609,7 @@ async fn a_held_queue_starts_no_run_and_working_dots_name_the_running_ones() {
         t.rt.get_run(&second.id).await.unwrap().status,
         RunStatus::Queued
     );
-    t.rt.hold_runs(false);
+    t.rt.hold_runs(false).await;
     wait_status(t.rt.store(), &second.id, RunStatus::Running, 15).await;
     for run in [&first, &second] {
         t.rt.cancel_run(&run.id).await.unwrap();
