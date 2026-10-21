@@ -11,11 +11,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use common::fake_browser::{cart_script, exe, playwright_command, FakeEdges, CART};
+use common::fake_browser::{cart_script, exe, host, playwright_command, FakeEdges, CART};
 use common::fake_mcp::{tool, FakeMcp};
 use common::{spec, temp_store, wait_status};
 use dots_core::approvals::{grant_key, ApprovalHub, DecideEffect};
-use dots_core::browser::host::EdgeHost;
 use dots_core::browser::{Browsers, LATE_APPROVAL};
 use dots_core::engine::claude::ClaudeEngine;
 use dots_core::engine::Engine;
@@ -64,7 +63,8 @@ async fn env(script: Value) -> Env {
     .with_env("FAKE_CLAUDE_SCRIPT", &script_path.to_string_lossy())
     .with_env("FAKE_CLAUDE_ARGS_OUT", &args_out.to_string_lossy());
     let listener = bind(0).await.unwrap();
-    let base = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let port = listener.local_addr().unwrap().port();
+    let base = format!("http://127.0.0.1:{port}");
     let mut engines: HashMap<EngineKind, Arc<dyn Engine>> = HashMap::new();
     engines.insert(EngineKind::Claude, Arc::new(engine));
     let runner = Runner::new(
@@ -90,8 +90,9 @@ async fn env(script: Value) -> Env {
     let playwright = FakeMcp::new(cart_script());
     runner.set_browsers(Browsers::new(
         store.clone(),
-        Arc::new(EdgeHost::new(&root)),
+        Arc::new(host(&root)),
         playwright_command(&playwright),
+        port,
     ));
     serve(
         listener,
@@ -360,4 +361,22 @@ async fn a_library_server_named_browser_leaves_the_built_in_out() {
         "{notices:?}"
     );
     assert!(e.edges.starts(&dot.id).is_empty());
+}
+
+/// Browser spec section 14: Dots' server has the doors' route, and a secret that opens no door
+/// is refused with 404, WebSocket or not.
+#[tokio::test]
+async fn the_server_refuses_a_door_without_its_secret() {
+    let e = env(json!([init(), success()])).await;
+    let ws = e.base.replace("http://", "ws://");
+    match tokio_tungstenite::connect_async(format!("{ws}/cdp/not-a-secret")).await {
+        Err(tokio_tungstenite::tungstenite::Error::Http(answer)) => {
+            assert_eq!(answer.status().as_u16(), 404)
+        }
+        other => panic!("{:?}", other.map(|_| ())),
+    }
+    let plain = reqwest::get(format!("{}/cdp/not-a-secret", e.base))
+        .await
+        .unwrap();
+    assert_eq!(plain.status().as_u16(), 404);
 }

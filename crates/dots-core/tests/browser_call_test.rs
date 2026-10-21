@@ -12,15 +12,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use common::fake_browser::{cart_script, exe, playwright_command, FakeEdges, CART};
+use common::fake_browser::{cart_script, exe, host, playwright_command, FakeEdges, CART};
 use common::fake_mcp::FakeMcp;
 use common::{spec, temp_store};
 use dots_core::approvals::{parked_message, ApprovalHub};
 use dots_core::browser::gate::{classify, Ask, Danger, Kind, ASK_KEY, PASSWORD_REFUSAL};
-use dots_core::browser::host::EdgeHost;
 use dots_core::browser::{
-    function_schemas, tools, Browsers, CallLimit, PlaywrightCommand, RunBrowser, NO_NODE,
-    PAGE_MOVED, PLAYWRIGHT_MCP, TOO_LATE,
+    function_schemas, tools, Browsers, CallLimit, PlaywrightCommand, RunBrowser, CDP_ENDPOINT_VAR,
+    NO_NODE, PAGE_MOVED, PLAYWRIGHT_MCP, TOO_LATE,
 };
 use dots_core::events::new_bus;
 use dots_core::model::{Approval, Dot, NewRun, Run, TriggerKind, WorkspaceMode};
@@ -30,6 +29,10 @@ use dots_core::store::Store;
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
+
+/// The port the runs' Playwright servers are told Dots' server is on. No server listens in
+/// these tests: `fake-mcp` never connects.
+const DOTS_PORT: u16 = 47_210;
 
 /// Dropped in this order: the fakes quit, then the rest, then the folder.
 struct Env {
@@ -57,8 +60,9 @@ async fn env() -> Env {
     let playwright = FakeMcp::new(cart_script());
     let browsers = Browsers::new(
         store.clone(),
-        Arc::new(EdgeHost::new(&root)),
+        Arc::new(host(&root)),
         playwright_command(&playwright),
+        DOTS_PORT,
     );
     Env {
         edges: FakeEdges::new(&root),
@@ -219,7 +223,6 @@ async fn the_first_call_starts_edge_and_playwright_and_reading_is_free() {
         text(&result)
     );
     assert_eq!(e.edges.starts(&dot.id).len(), 1);
-    let port = e.edges.port(&dot.id).unwrap();
     let start = e
         .playwright
         .log()
@@ -230,14 +233,20 @@ async fn the_first_call_starts_edge_and_playwright_and_reading_is_free() {
     assert_eq!(
         args[1..],
         [
-            s("--cdp-endpoint"),
-            format!("http://127.0.0.1:{port}"),
             s("--output-dir"),
             e.ws.join("downloads").to_string_lossy().into_owned(),
             s("--snapshot-mode"),
             s("none"),
         ]
     );
+    // Its Edge is its door on Dots' own server, with a secret of 128 bits, named in a
+    // variable: no command line shows the secret.
+    let endpoint = start["env"][CDP_ENDPOINT_VAR].as_str().unwrap();
+    let secret = endpoint
+        .strip_prefix(&format!("ws://127.0.0.1:{DOTS_PORT}/cdp/"))
+        .unwrap_or_else(|| panic!("{start}"));
+    assert_eq!(secret.len(), 22, "{start}");
+    assert!(args.iter().all(|a| !a.contains(secret)), "{args:?}");
     // Review fix: the server starts in a folder of Dots' own, not in the workspace, where a
     // dot could plant a `node_modules` or an `.npmrc` that npx would follow.
     let cwd = start["cwd"].as_str().unwrap();
@@ -622,11 +631,12 @@ async fn edge_is_held_while_a_run_uses_it_and_closes_after_the_last() {
     std::fs::write(&script, cart_script().to_string()).unwrap();
     let browsers = Browsers::new(
         e.store.clone(),
-        Arc::new(EdgeHost::new(e.dir.path().join("browser"))),
+        Arc::new(host(e.dir.path().join("browser"))),
         PlaywrightCommand {
             program: env!("CARGO_BIN_EXE_fake-mcp").to_string(),
             args: vec![script.to_string_lossy().into_owned()],
         },
+        DOTS_PORT,
     );
     let run_of = |run: &Run| browsers.for_run(&dot, &run.id, &e.ws);
     let (r1, _) = run(&e, &dot).await;
@@ -689,11 +699,12 @@ async fn a_missing_edge_or_node_and_a_stopped_server_fail_the_call_only() {
     // Without Node.js.
     let no_node = Browsers::new(
         e.store.clone(),
-        Arc::new(EdgeHost::new(e.dir.path().join("browser"))),
+        Arc::new(host(e.dir.path().join("browser"))),
         PlaywrightCommand {
             program: s("dots-no-such-npx"),
             args: vec![],
         },
+        DOTS_PORT,
     );
     let nodeless = no_node.for_run(&dot, &run.id, &e.ws);
     let result = nodeless

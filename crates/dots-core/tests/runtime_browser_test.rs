@@ -1,5 +1,6 @@
-//! The runtime's browser commands (browser spec sections 6 to 8), with `fake-browser` as Edge:
-//! "Open the browser" opens the dot's Edge on its profile and a second click finds it; the
+//! The runtime's browser commands (browser spec sections 6 to 8), with `fake-browser` as Edge,
+//! started through the helper and Node.js (`node` on PATH) as Dots starts Edge: "Open the
+//! browser" opens the dot's Edge on its pipe and profile, and a second click finds it; the
 //! status names Edge; a deleted dot's Edge closes and its profile goes; a run's screenshot is
 //! read back as a `data:` URL, only under the name Playwright gives one.
 
@@ -46,8 +47,9 @@ async fn open_the_browser_opens_the_dots_edge_and_deleting_the_dot_removes_it() 
     assert!(edges.running(&dot.id));
     let args: Vec<String> =
         serde_json::from_value(edges.starts(&dot.id)[0]["args"].clone()).unwrap();
+    assert_eq!(args[..2], dots_core::browser::host::PIPE_FLAGS);
     assert_eq!(
-        args[0],
+        args[2],
         format!("--user-data-dir={}", edges.profile(&dot.id).display())
     );
     rt.browser_open(&dot.id).await.unwrap();

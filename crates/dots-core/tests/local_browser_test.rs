@@ -11,12 +11,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use common::fake_browser::{cart_script, exe, playwright_command, FakeEdges, CART};
+use common::fake_browser::{cart_script, exe, host, playwright_command, FakeEdges, CART};
 use common::fake_mcp::FakeMcp;
 use common::{spec, temp_store, wait_status};
 use dots_core::approvals::{ApprovalHub, DecideEffect};
 use dots_core::browser::gate::PASSWORD_REFUSAL;
-use dots_core::browser::host::EdgeHost;
 use dots_core::browser::{Browsers, LATE_APPROVAL};
 use dots_core::engine::local::LocalEngine;
 use dots_core::engine::Engine;
@@ -76,10 +75,12 @@ async fn env() -> Env {
         .unwrap();
     let root = dir.path().join("browser");
     let playwright = FakeMcp::new(cart_script());
+    // No server listens on port 1: `fake-mcp` never connects to its door.
     runner.set_browsers(Browsers::new(
         store.clone(),
-        Arc::new(EdgeHost::new(&root)),
+        Arc::new(host(&root)),
         playwright_command(&playwright),
+        1,
     ));
     runner.spawn_dispatcher(CancellationToken::new());
     Env {

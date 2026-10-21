@@ -1,23 +1,27 @@
-//! Microsoft Edge for dots (browser spec section 2.1): one visible window per dot, on the dot's
-//! own profile (`<root>/<dot_id>/profile`), with its debugging port on 127.0.0.1. Dots reads the
-//! addresses of its pages from `GET /json/list` and closes it with `PUT /json/close/<id>`, over
-//! plain HTTP; it never clicks or types through that connection. Edge's own `msedge.exe` hands
-//! over to the browser process and exits at once, so an Edge is followed by its port, not by a
-//! process: the port is kept in `<root>/<dot_id>/port`, so a Dots that starts again finds an
-//! Edge that is still open.
+//! Microsoft Edge for dots (browser spec sections 2.1 and 14): one visible window per dot, on
+//! the dot's own profile (`<root>/<dot_id>/profile`), with no debugging port. Dots starts Edge
+//! through the helper `browser-pipe.mjs` (written into `<root>`), which gives Edge its
+//! debugging pipe and relays it to the helper's stdin and stdout: Dots holds the only
+//! connection (`pipe.rs`). Dots reads Edge's pages over it and closes Edge with
+//! `Browser.close`; Playwright reaches Edge through its door (`door.rs`). An Edge lives at
+//! most as long as the Dots that started it: when Dots stops, the helper's stdin ends and it
+//! closes Edge.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use tokio::io::AsyncBufReadExt;
 
-/// The switches every dot's Edge starts with after its profile and port: no first-run pages,
-/// no sign-in or sync of the person's account into the dot's profile, and pages that keep
-/// running while the window is behind others (measured: without them every click timed out).
+use super::pipe::Pipe;
+
+/// The switches every dot's Edge starts with after its profile: no first-run pages, no sign-in
+/// or sync of the person's account into the dot's profile, and pages that keep running while
+/// the window is behind others (measured: without them every click timed out).
 pub const EDGE_FLAGS: [&str; 7] = [
     "--no-first-run",
     "--no-default-browser-check",
@@ -27,12 +31,20 @@ pub const EDGE_FLAGS: [&str; 7] = [
     "--disable-background-timer-throttling",
     "--disable-features=CalculateNativeWinOcclusion",
 ];
-/// How long a started Edge has to open its debugging port.
+/// The switches the helper puts first: the debugging pipe, and no hand-over to another
+/// process, which would lose the pipe.
+pub const PIPE_FLAGS: [&str; 2] = [
+    "--remote-debugging-pipe",
+    "--edge-skip-compat-layer-relaunch",
+];
+/// The helper, as Dots writes it into `<root>` before each start.
+pub const HELPER: &str = include_str!("browser-pipe.mjs");
+/// Its file name.
+pub const HELPER_FILE: &str = "browser-pipe.mjs";
+/// How long a started Edge has to answer on its pipe.
 pub const START_WAIT: Duration = Duration::from_secs(20);
 /// How long a closed Edge has to go.
 pub const CLOSE_WAIT: Duration = Duration::from_secs(5);
-/// How long one request to an Edge may take.
-const ASK_WAIT: Duration = Duration::from_secs(2);
 
 /// Why a dot's Edge cannot be used.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -43,6 +55,8 @@ pub enum HostError {
         "This dot's browser profile is in use by another Edge window; close it and try again."
     )]
     ProfileInUse,
+    #[error("Browser use needs Node.js (npx).")]
+    NoNode,
     #[error("Microsoft Edge could not start: {0}")]
     Start(String),
     #[error("Microsoft Edge did not answer: {0}")]
@@ -50,9 +64,10 @@ pub enum HostError {
 }
 
 /// A dot's Edge as `BrowserHost::open` found or started it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct Opened {
-    pub port: u16,
+    /// The connection to it.
+    pub edge: Arc<Pipe>,
     /// It did not run: it was started now.
     pub started: bool,
 }
@@ -62,8 +77,6 @@ pub struct Opened {
 pub trait BrowserHost: Send + Sync {
     /// The dot's Edge: the one running on its profile, or `exe` started on it.
     async fn open(&self, dot_id: &str, exe: &Path) -> Result<Opened, HostError>;
-    /// The address of every page of the Edge on `port`, the one last in front first.
-    async fn pages(&self, port: u16) -> Result<Vec<String>, HostError>;
     /// Closes the dot's Edge if it runs; returns once it is gone, or after `CLOSE_WAIT`.
     async fn close(&self, dot_id: &str);
     /// Where the dot's Edge saves downloads.
@@ -71,35 +84,51 @@ pub trait BrowserHost: Send + Sync {
     /// The folder Playwright servers start in: Dots' own, never a workspace, where a dot could
     /// plant a `node_modules` or an `.npmrc` for npx to follow.
     fn server_dir(&self) -> PathBuf;
-    /// Closes the dot's Edge and removes its folder: profile, downloads, port (its dot was
+    /// Closes the dot's Edge and removes its folder: profile and downloads (its dot was
     /// deleted).
     async fn remove(&self, dot_id: &str);
+}
+
+/// How a dot's Edge is started.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Launcher {
+    /// `<node> <root>/browser-pipe.mjs <msedge.exe> <switches>`: the helper gives Edge its
+    /// pipe. `node` is found on `PATH` when it is a bare name.
+    Node(String),
+    /// The program speaks the pipe itself on its stdin and stdout (`fake-browser` in tests).
+    Direct,
+}
+
+/// A dot's running Edge: its pipe, and the helper's process.
+struct Running {
+    pipe: Arc<Pipe>,
+    child: tokio::process::Child,
 }
 
 /// Microsoft Edge, one per dot, each with a folder under `root` (`<data_dir>/browser`).
 pub struct EdgeHost {
     root: PathBuf,
-    http: reqwest::Client,
-    ports: Mutex<HashMap<String, u16>>,
-    /// One start or close at a time: two runs of a dot must not start two Edges on its profile.
-    starting: tokio::sync::Mutex<()>,
+    launcher: Launcher,
+    /// The running Edges. Held through a start or a close: two runs of a dot must not start
+    /// two Edges on its profile.
+    edges: tokio::sync::Mutex<HashMap<String, Running>>,
 }
 
 impl EdgeHost {
+    /// Edges started through the helper, with `node`.
     pub fn new(root: impl Into<PathBuf>) -> EdgeHost {
+        EdgeHost::with_launcher(root, Launcher::Node("node".to_string()))
+    }
+
+    pub fn with_launcher(root: impl Into<PathBuf>, launcher: Launcher) -> EdgeHost {
         EdgeHost {
             root: root.into(),
-            http: reqwest::Client::builder()
-                .no_proxy()
-                .timeout(ASK_WAIT)
-                .build()
-                .expect("an HTTP client"),
-            ports: Mutex::new(HashMap::new()),
-            starting: tokio::sync::Mutex::new(()),
+            launcher,
+            edges: tokio::sync::Mutex::new(HashMap::new()),
         }
     }
 
-    /// The dot's folder: its profile, downloads and port.
+    /// The dot's folder: its profile and downloads.
     pub fn dot_dir(&self, dot_id: &str) -> PathBuf {
         self.root.join(dot_id)
     }
@@ -108,63 +137,25 @@ impl EdgeHost {
         self.dot_dir(dot_id).join("profile")
     }
 
-    fn port_file(&self, dot_id: &str) -> PathBuf {
-        self.dot_dir(dot_id).join("port")
-    }
-
-    /// The port of the dot's Edge as last seen, by this Dots or an earlier one.
-    fn known_port(&self, dot_id: &str) -> Option<u16> {
-        if let Some(port) = self.ports.lock().unwrap().get(dot_id) {
-            return Some(*port);
-        }
-        std::fs::read_to_string(self.port_file(dot_id))
-            .ok()?
-            .trim()
-            .parse()
-            .ok()
-    }
-
-    /// Keeps (or forgets) the port of the dot's Edge.
-    fn remember(&self, dot_id: &str, port: Option<u16>) {
-        let mut ports = self.ports.lock().unwrap();
-        match port {
-            Some(port) => {
-                ports.insert(dot_id.to_string(), port);
-                if let Err(e) = std::fs::write(self.port_file(dot_id), port.to_string()) {
-                    tracing::warn!("could not keep the port of {dot_id}'s Edge: {e}");
-                }
+    /// The command that starts `exe` with `args` on a pipe.
+    fn command(&self, exe: &Path, args: &[String]) -> Result<tokio::process::Command, HostError> {
+        match &self.launcher {
+            Launcher::Direct => {
+                let mut command = tokio::process::Command::new(exe);
+                command.args(args);
+                Ok(command)
             }
-            None => {
-                ports.remove(dot_id);
-                let _ = std::fs::remove_file(self.port_file(dot_id));
+            Launcher::Node(node) => {
+                let node = find_program(node).ok_or(HostError::NoNode)?;
+                let helper = self.root.join(HELPER_FILE);
+                std::fs::create_dir_all(&self.root)
+                    .and_then(|()| std::fs::write(&helper, HELPER))
+                    .map_err(|e| HostError::Start(format!("{}: {e}", helper.display())))?;
+                let mut command = tokio::process::Command::new(node);
+                command.arg(helper).arg(exe).args(args);
+                Ok(command)
             }
         }
-    }
-
-    /// Whether an Edge answers on `port`.
-    async fn alive(&self, port: u16) -> bool {
-        let url = format!("http://127.0.0.1:{port}/json/version");
-        match self.http.get(url).send().await {
-            Ok(answer) if answer.status().is_success() => answer
-                .json::<Value>()
-                .await
-                .is_ok_and(|v| v.get("Browser").is_some()),
-            _ => false,
-        }
-    }
-
-    /// Every target of the Edge on `port`: pages, extensions' pages, workers.
-    async fn targets(&self, port: u16) -> Result<Vec<Value>, HostError> {
-        let url = format!("http://127.0.0.1:{port}/json/list");
-        let unreachable = |e: &dyn std::fmt::Display| HostError::Unreachable(e.to_string());
-        let answer = self
-            .http
-            .get(url)
-            .send()
-            .await
-            .map_err(|e| unreachable(&e))?;
-        let text = answer.text().await.map_err(|e| unreachable(&e))?;
-        serde_json::from_str(&text).map_err(|e| unreachable(&e))
     }
 }
 
@@ -175,16 +166,25 @@ impl BrowserHost for EdgeHost {
     }
 
     async fn open(&self, dot_id: &str, exe: &Path) -> Result<Opened, HostError> {
-        let _one = self.starting.lock().await;
-        if let Some(port) = self.known_port(dot_id) {
-            if self.alive(port).await {
-                self.remember(dot_id, Some(port));
+        let mut edges = self.edges.lock().await;
+        if let Some(running) = edges.get(dot_id).filter(|r| !r.pipe.is_closed()) {
+            // Only while it answers: the person may have closed the window a moment ago, before
+            // its pipe's end was read.
+            if running
+                .pipe
+                .ask("Browser.getVersion", json!({}))
+                .await
+                .is_ok()
+            {
                 return Ok(Opened {
-                    port,
+                    edge: running.pipe.clone(),
                     started: false,
                 });
             }
-            self.remember(dot_id, None);
+        }
+        // The person closed the window, or the helper ended.
+        if let Some(gone) = edges.remove(dot_id) {
+            reap(gone.child).await;
         }
         if !exe.is_file() {
             return Err(HostError::NotFound);
@@ -195,59 +195,56 @@ impl BrowserHost for EdgeHost {
         }
         prepare_profile(&profile, &self.downloads(dot_id))
             .map_err(|e| HostError::Start(format!("its profile could not be prepared: {e}")))?;
-        let port = free_port().map_err(|e| HostError::Start(format!("no free port: {e}")))?;
-        let mut command = tokio::process::Command::new(exe);
+        let mut command = self.command(exe, &edge_args(&profile))?;
         command
-            .args(edge_args(&profile, port))
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         crate::proc::hide_window(&mut command);
-        // Not waited for: Edge's own program hands over to the browser and exits.
-        command
+        let mut child = command
             .spawn()
             .map_err(|e| HostError::Start(e.to_string()))?;
-        let deadline = Instant::now() + START_WAIT;
-        while Instant::now() < deadline {
-            // Ours only once it holds the profile: another Edge may have taken the port.
-            if self.alive(port).await && profile_in_use(&profile) {
-                self.remember(dot_id, Some(port));
-                return Ok(Opened {
-                    port,
-                    started: true,
-                });
+        let (Some(stdout), Some(stdin)) = (child.stdout.take(), child.stdin.take()) else {
+            return Err(HostError::Start("its pipe could not be opened".to_string()));
+        };
+        log_errors(child.stderr.take(), dot_id);
+        let pipe = Pipe::new(stdout, stdin);
+        if let Err(e) = pipe
+            .ask_within("Browser.getVersion", json!({}), START_WAIT)
+            .await
+        {
+            let _ = child.start_kill();
+            reap(child).await;
+            // Edge hands over to the Edge that holds the profile, and closes its pipe.
+            if profile_in_use(&profile) {
+                return Err(HostError::ProfileInUse);
             }
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            return Err(HostError::Start(format!(
+                "it did not answer on its pipe: {e}"
+            )));
         }
-        Err(HostError::Start(format!(
-            "it did not open its debugging port within {} s",
-            START_WAIT.as_secs()
-        )))
-    }
-
-    async fn pages(&self, port: u16) -> Result<Vec<String>, HostError> {
-        Ok(page_urls(&self.targets(port).await?))
+        edges.insert(
+            dot_id.to_string(),
+            Running {
+                pipe: pipe.clone(),
+                child,
+            },
+        );
+        Ok(Opened {
+            edge: pipe,
+            started: true,
+        })
     }
 
     async fn close(&self, dot_id: &str) {
-        let _one = self.starting.lock().await;
-        let Some(port) = self.known_port(dot_id) else {
+        let mut edges = self.edges.lock().await;
+        let Some(running) = edges.remove(dot_id) else {
             return;
         };
-        // Edge ends once its last page is closed.
-        if let Ok(targets) = self.targets(port).await {
-            for target in targets.iter().filter(|t| is_page(t)) {
-                if let Some(id) = target.get("id").and_then(Value::as_str) {
-                    let url = format!("http://127.0.0.1:{port}/json/close/{id}");
-                    let _ = self.http.put(url).send().await;
-                }
-            }
+        if !running.pipe.is_closed() {
+            let _ = running.pipe.ask("Browser.close", json!({})).await;
         }
-        let deadline = Instant::now() + CLOSE_WAIT;
-        while Instant::now() < deadline && self.alive(port).await {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-        self.remember(dot_id, None);
+        reap(running.child).await;
     }
 
     fn downloads(&self, dot_id: &str) -> PathBuf {
@@ -257,7 +254,7 @@ impl BrowserHost for EdgeHost {
     async fn remove(&self, dot_id: &str) {
         self.close(dot_id).await;
         let dir = self.dot_dir(dot_id);
-        // Edge lets go of its profile a moment after its port closes.
+        // Edge lets go of its profile a moment after it ends.
         for _ in 0..20 {
             match std::fs::remove_dir_all(&dir) {
                 Ok(()) => return,
@@ -269,14 +266,34 @@ impl BrowserHost for EdgeHost {
     }
 }
 
-/// The arguments of a dot's Edge: its profile, its port on 127.0.0.1, `EDGE_FLAGS`, and a blank
-/// page.
-pub fn edge_args(profile: &Path, port: u16) -> Vec<String> {
-    let mut args = vec![
-        format!("--user-data-dir={}", profile.display()),
-        "--remote-debugging-address=127.0.0.1".to_string(),
-        format!("--remote-debugging-port={port}"),
-    ];
+/// Waits up to `CLOSE_WAIT` for the helper (and its Edge) to end, then ends it.
+async fn reap(mut child: tokio::process::Child) {
+    if tokio::time::timeout(CLOSE_WAIT, child.wait())
+        .await
+        .is_err()
+    {
+        let _ = child.kill().await;
+    }
+}
+
+/// The helper's own errors go to the app log.
+fn log_errors(stderr: Option<tokio::process::ChildStderr>, dot_id: &str) {
+    let Some(stderr) = stderr else {
+        return;
+    };
+    let dot_id = dot_id.to_string();
+    tokio::spawn(async move {
+        let mut lines = tokio::io::BufReader::new(stderr).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            tracing::warn!(dot = %dot_id, "{line}");
+        }
+    });
+}
+
+/// The arguments of a dot's Edge: its profile, `EDGE_FLAGS`, and a blank page. The helper puts
+/// `PIPE_FLAGS` before them.
+pub fn edge_args(profile: &Path) -> Vec<String> {
+    let mut args = vec![format!("--user-data-dir={}", profile.display())];
     args.extend(EDGE_FLAGS.iter().map(|flag| flag.to_string()));
     args.push("about:blank".to_string());
     args
@@ -286,7 +303,8 @@ fn is_page(target: &Value) -> bool {
     target.get("type").and_then(Value::as_str) == Some("page")
 }
 
-/// The address of every `page` target of a `/json/list` answer, in its order.
+/// The address of every `page` target of a list of targets (`Target.getTargets`' `targetInfos`,
+/// or a `/json/list` answer), in its order.
 pub fn page_urls(targets: &[Value]) -> Vec<String> {
     targets
         .iter()
@@ -375,13 +393,6 @@ fn prepare_profile(profile: &Path, downloads: &Path) -> std::io::Result<()> {
     value["download"]["prompt_for_download"] = json!(false);
     value["download"]["directory_upgrade"] = json!(true);
     std::fs::write(&prefs, value.to_string())
-}
-
-/// A port on 127.0.0.1 that is free now.
-fn free_port() -> std::io::Result<u16> {
-    Ok(std::net::TcpListener::bind(("127.0.0.1", 0))?
-        .local_addr()?
-        .port())
 }
 
 /// Moves every finished download in `from` into `to` (made when needed); a name taken there

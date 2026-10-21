@@ -55,6 +55,8 @@ pub fn router(state: ServerState) -> Router {
                 .get(|| async { StatusCode::METHOD_NOT_ALLOWED })
                 .layer(DefaultBodyLimit::max(MAX_MCP_BODY)),
         )
+        // The door of a run's Playwright to its dot's Edge (browser spec section 14).
+        .route("/cdp/{secret}", get(browser::door))
         .layer(middleware::from_fn(loopback_only))
         .with_state(state)
 }

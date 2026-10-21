@@ -211,6 +211,7 @@ impl Runtime {
                 cfg.data_dir.join("browser"),
             )),
             crate::browser::PlaywrightCommand::default(),
+            port,
         );
         runner.set_browsers(browsers.clone());
         // Decisions parked before a restart (decided, but the resume never happened) are

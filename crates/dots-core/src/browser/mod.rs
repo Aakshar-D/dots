@@ -19,8 +19,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
+use self::door::Doors;
 use self::gate::{SiteRules, Verdict, ASK_KEY};
 use self::host::{find_edge, find_program, move_downloads, BrowserHost, HostError};
+use self::pipe::Pipe;
 use self::snapshot::PageMemory;
 use crate::engine::{PermissionGate, PermissionOutcome};
 use crate::library::McpServerConfig;
@@ -139,14 +141,17 @@ impl Default for PlaywrightCommand {
     }
 }
 
+/// The variable that tells a Playwright server where its Edge is: its door,
+/// `ws://127.0.0.1:<dots port>/cdp/<secret>` (section 14). A variable rather than
+/// `--cdp-endpoint`, so that the secret is on no command line that any program can list.
+pub const CDP_ENDPOINT_VAR: &str = "PLAYWRIGHT_MCP_CDP_ENDPOINT";
+
 impl PlaywrightCommand {
-    /// Its arguments for a run: drive the Edge on `port`, write files into `output`, and put
-    /// no page snapshot into an act's result (section 2.2; no `--caps`).
-    pub fn args_for(&self, port: u16, output: &Path) -> Vec<String> {
+    /// Its arguments for a run: write files into `output`, and put no page snapshot into an
+    /// act's result (section 2.2; no `--caps`). Its Edge is named by `CDP_ENDPOINT_VAR`.
+    pub fn args_for(&self, output: &Path) -> Vec<String> {
         let mut args = self.args.clone();
         args.extend([
-            "--cdp-endpoint".to_string(),
-            format!("http://127.0.0.1:{port}"),
             "--output-dir".to_string(),
             output.to_string_lossy().into_owned(),
             "--snapshot-mode".to_string(),
@@ -176,6 +181,9 @@ pub struct Browsers {
     store: Store,
     host: Arc<dyn BrowserHost>,
     playwright: PlaywrightCommand,
+    /// The port of Dots' own server, where Playwright servers find their doors.
+    port: u16,
+    doors: Arc<Doors>,
     users: tokio::sync::Mutex<HashMap<String, Users>>,
 }
 
@@ -184,13 +192,27 @@ impl Browsers {
         store: Store,
         host: Arc<dyn BrowserHost>,
         playwright: PlaywrightCommand,
+        port: u16,
     ) -> Arc<Browsers> {
         Arc::new(Browsers {
             store,
             host,
             playwright,
+            port,
+            doors: Arc::new(Doors::default()),
             users: tokio::sync::Mutex::new(HashMap::new()),
         })
+    }
+
+    /// The doors of the runs' Playwright servers to their dots' Edges (section 14), which
+    /// Dots' server serves at `/cdp/<secret>`.
+    pub fn doors(&self) -> &Arc<Doors> {
+        &self.doors
+    }
+
+    /// Where the Playwright server behind the door of `secret` connects.
+    fn endpoint(&self, secret: &str) -> String {
+        format!("ws://127.0.0.1:{}/cdp/{secret}", self.port)
     }
 
     /// Edge as Settings name it, or as it is installed.
@@ -206,7 +228,7 @@ impl Browsers {
 
     /// The dot's Edge for a run: found, or started. `hold` counts the run in (its first call);
     /// a later call only finds it again, or starts it after the person closed it.
-    async fn open(&self, dot_id: &str, hold: bool) -> Result<u16, HostError> {
+    async fn open(&self, dot_id: &str, hold: bool) -> Result<Arc<Pipe>, HostError> {
         let exe = self.edge().await?;
         let mut users = self.users.lock().await;
         let opened = self.host.open(dot_id, &exe).await?;
@@ -217,7 +239,7 @@ impl Browsers {
         if hold {
             user.runs += 1;
         }
-        Ok(opened.port)
+        Ok(opened.edge)
     }
 
     /// A run is done with the dot's Edge: the last one closes it, unless the person opened it.
@@ -278,8 +300,10 @@ struct Live {
     /// The run counts as a user of the dot's Edge.
     held: bool,
     closed: bool,
-    /// The port of the Edge the session drives.
-    port: Option<u16>,
+    /// The Edge the session drives.
+    edge: Option<Arc<Pipe>>,
+    /// The secret of the session's door to it.
+    secret: Option<String>,
     session: Option<Arc<McpSession>>,
 }
 
@@ -296,40 +320,53 @@ pub struct RunBrowser {
 
 impl RunBrowser {
     /// The Playwright session of the next call: Edge found or started, and the server started at
-    /// the first call, again after the person closed Edge (a new port), and again after it
-    /// stopped.
+    /// the first call, again after the person closed Edge (another Edge), and again after it
+    /// stopped. Each server gets a door of its own to the Edge.
     async fn ready(&self) -> Result<Arc<McpSession>, String> {
         let mut live = self.live.lock().await;
         if live.closed {
             return Err("The run has ended.".to_string());
         }
-        let port = self
+        let edge = self
             .browsers
             .open(&self.dot_id, !live.held)
             .await
             .map_err(|e| e.to_string())?;
         live.held = true;
-        if live.port != Some(port) {
+        if !live
+            .edge
+            .as_ref()
+            .is_some_and(|known| Arc::ptr_eq(known, &edge))
+        {
             // Another Edge: what the run knew of its pages is gone.
             *self.memory.lock().unwrap() = PageMemory::default();
-            if let Some(old) = live.session.take() {
-                old.close().await;
-            }
-            live.port = Some(port);
+            self.stop_server(&mut live).await;
+            live.edge = Some(edge.clone());
         }
         if let Some(session) = live.session.clone().filter(|s| !s.is_stopped()) {
             return Ok(session);
         }
-        if let Some(old) = live.session.take() {
-            old.close().await;
-        }
-        let session = Arc::new(self.start_server(port).await?);
+        self.stop_server(&mut live).await;
+        let secret = self.browsers.doors.open(edge);
+        live.secret = Some(secret.clone());
+        let session = Arc::new(self.start_server(&secret).await?);
         live.session = Some(session.clone());
         Ok(session)
     }
 
-    /// Starts the Playwright server on the Edge on `port`, in Dots' own folder for it.
-    async fn start_server(&self, port: u16) -> Result<McpSession, String> {
+    /// Stops the run's Playwright server, if one runs, and shuts its door.
+    async fn stop_server(&self, live: &mut Live) {
+        if let Some(old) = live.session.take() {
+            old.close().await;
+        }
+        if let Some(secret) = live.secret.take() {
+            self.browsers.doors.shut(&secret);
+        }
+    }
+
+    /// Starts the Playwright server on the Edge behind the door of `secret`, in Dots' own
+    /// folder for it.
+    async fn start_server(&self, secret: &str) -> Result<McpSession, String> {
         let command = &self.browsers.playwright;
         let Some(program) = find_program(&command.program) else {
             return Err(NO_NODE.to_string());
@@ -339,9 +376,9 @@ impl RunBrowser {
             .map_err(|e| format!("The browser could not start: {}: {e}", dir.display()))?;
         let config = McpServerConfig::Stdio {
             command: program.to_string_lossy().into_owned(),
-            args: command.args_for(port, &self.workspace.join("downloads")),
+            args: command.args_for(&self.workspace.join("downloads")),
             cwd: Some(dir.to_string_lossy().into_owned()),
-            env: BTreeMap::new(),
+            env: BTreeMap::from([(CDP_ENDPOINT_VAR.to_string(), self.browsers.endpoint(secret))]),
         };
         let options = SessionOptions {
             cwd: Some(dir),
@@ -357,8 +394,8 @@ impl RunBrowser {
     /// last, while Edge still has a page at exactly that address; before any report, Edge's
     /// only page. `None` otherwise: the act is then on no site.
     async fn page_now(&self) -> Option<String> {
-        let port = self.live.lock().await.port?;
-        let pages = self.browsers.host.pages(port).await.ok()?;
+        let edge = self.live.lock().await.edge.clone()?;
+        let pages = edge.pages().await.ok()?;
         let reported = self.memory.lock().unwrap().current().map(str::to_string);
         match reported {
             Some(url) => pages.contains(&url).then_some(url),
@@ -496,9 +533,7 @@ impl RunBrowser {
             return;
         }
         live.closed = true;
-        if let Some(session) = live.session.take() {
-            session.close().await;
-        }
+        self.stop_server(&mut live).await;
         if live.held {
             let _ = self.collect_downloads();
             live.held = false;

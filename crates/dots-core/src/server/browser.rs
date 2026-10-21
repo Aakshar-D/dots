@@ -5,6 +5,10 @@
 
 use std::time::Instant;
 
+use axum::extract::ws::rejection::WebSocketUpgradeRejection;
+use axum::extract::ws::WebSocketUpgrade;
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::{json, Value};
@@ -56,4 +60,17 @@ pub(super) async fn handle(
         other => return rpc_error(id, -32601, &format!("method not found: {other}")),
     };
     Json(json!({ "jsonrpc": "2.0", "id": id, "result": result })).into_response()
+}
+
+/// `GET /cdp/<secret>`: the door of a run's Playwright server to its dot's Edge (browser spec
+/// section 14). Without the dots' browsers, every secret is wrong.
+pub(super) async fn door(
+    State(s): State<ServerState>,
+    Path(secret): Path<String>,
+    upgrade: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
+) -> Response {
+    let Some(browsers) = s.runner.browsers() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    crate::browser::door::connect(browsers.doors().clone(), secret, upgrade).await
 }

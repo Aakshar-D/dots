@@ -1,13 +1,15 @@
 //! The test stand-in for Microsoft Edge, `fake-browser` (`src/bin/fake-browser.rs`): its path,
-//! for `Settings.edge_path` or `EdgeHost::open`; what each start on a dot's profile recorded;
-//! and its controls. Every fake running on a profile under `root` is told to quit when this is
-//! dropped, so a failed test leaves no Edge behind.
+//! for `Settings.edge_path` or `EdgeHost::open`; a host that starts it without the helper; what
+//! each start on a dot's profile recorded, and what it read on its pipe; and its controls.
+//! Every fake running on a profile under `root` is told to quit when this is dropped, so a
+//! failed test leaves no Edge behind.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use dots_core::browser::host::{EdgeHost, Launcher};
 use dots_core::browser::PlaywrightCommand;
 use serde_json::{json, Value};
 
@@ -17,6 +19,11 @@ use super::playwright::{on, CLICK, NAVIGATE, SCREENSHOT, SNAPSHOT};
 /// The program `fake-browser`.
 pub fn exe() -> String {
     env!("CARGO_BIN_EXE_fake-browser").to_string()
+}
+
+/// A host that starts `fake-browser` on its stdin and stdout, without the helper and Node.js.
+pub fn host(root: impl Into<PathBuf>) -> EdgeHost {
+    EdgeHost::with_launcher(root, Launcher::Direct)
 }
 
 /// The fakes on the profiles under `root` (`<data_dir>/browser`).
@@ -33,7 +40,8 @@ impl FakeEdges {
         self.root.join(dot_id).join("profile")
     }
 
-    /// Every start on the dot's profile, oldest first: `{"args": [...], "port": n, "pid": n}`.
+    /// Every start on the dot's profile, oldest first: `{"args": [...], "control": n, "pid":
+    /// n}`.
     pub fn starts(&self, dot_id: &str) -> Vec<Value> {
         match std::fs::read_to_string(self.profile(dot_id).join("fake-browser.jsonl")) {
             Ok(text) => text
@@ -44,12 +52,31 @@ impl FakeEdges {
         }
     }
 
-    /// The port of the newest start.
-    pub fn port(&self, dot_id: &str) -> Option<u16> {
+    /// The control port of the newest start.
+    pub fn control(&self, dot_id: &str) -> Option<u16> {
         self.starts(dot_id)
             .last()
-            .and_then(|start| start["port"].as_u64())
+            .and_then(|start| start["control"].as_u64())
             .map(|port| port as u16)
+    }
+
+    /// Every message the fakes on the dot's profile read on their pipes, oldest first.
+    pub fn received(&self, dot_id: &str) -> Vec<Value> {
+        match std::fs::read_to_string(self.profile(dot_id).join("fake-cdp.jsonl")) {
+            Ok(text) => text
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    /// The methods of `received`, in order.
+    pub fn methods(&self, dot_id: &str) -> Vec<String> {
+        self.received(dot_id)
+            .iter()
+            .map(|m| m["method"].as_str().unwrap_or_default().to_string())
+            .collect()
     }
 
     /// Whether a fake holds the dot's profile.
@@ -69,7 +96,7 @@ impl FakeEdges {
 
     /// Makes `urls` the pages of the running fake, most recent first.
     pub fn set_pages(&self, dot_id: &str, urls: &[&str]) {
-        let port = self.port(dot_id).expect("a started fake");
+        let port = self.control(dot_id).expect("a started fake");
         assert!(
             post(port, "/fake/pages", &serde_json::to_string(urls).unwrap()),
             "the fake did not take its pages"
@@ -78,7 +105,7 @@ impl FakeEdges {
 
     /// Ends the running fake at once, as when the person closes the window.
     pub fn quit(&self, dot_id: &str) {
-        if let Some(port) = self.port(dot_id) {
+        if let Some(port) = self.control(dot_id) {
             post(port, "/fake/quit", "");
         }
     }
