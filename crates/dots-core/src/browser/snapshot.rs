@@ -191,12 +191,19 @@ fn read_quoted(s: &str) -> Option<(String, &str)> {
 pub struct PageMemory {
     current: Option<String>,
     maps: Vec<(String, RefMap)>,
+    /// The element an act last landed on, where a pressed key goes.
+    focus: Option<Element>,
 }
 
 impl PageMemory {
     /// The page Playwright reported as current last.
     pub fn current(&self) -> Option<&str> {
         self.current.as_deref()
+    }
+
+    /// The element an act last landed on, while the run stays on its page.
+    pub fn focus(&self) -> Option<&Element> {
+        self.focus.as_ref()
     }
 
     /// The references known on the page `url`.
@@ -251,6 +258,36 @@ impl PageMemory {
             Some(at) => &text[..at],
             None => text,
         };
+        // The element the act lands on, by its reference on the page it was taken on.
+        let target = match tool {
+            "browser_click" | "browser_type" | "browser_select_option" => {
+                input.get("target").and_then(Value::as_str)
+            }
+            "browser_fill_form" => input
+                .get("fields")
+                .and_then(Value::as_array)
+                .and_then(|fields| fields.last())
+                .and_then(|field| field.get("target"))
+                .and_then(Value::as_str),
+            "browser_press_key"
+            | "browser_snapshot"
+            | "browser_find"
+            | "browser_take_screenshot"
+            | "browser_wait_for"
+            | "browser_hover" => None,
+            _ => {
+                self.focus = None;
+                None
+            }
+        };
+        if let Some(target) = target {
+            self.focus = self
+                .current
+                .as_deref()
+                .and_then(|url| self.refs(url))
+                .and_then(|map| map.get(target))
+                .cloned();
+        }
         if REPORTS_PAGE.contains(&tool) {
             if let Some(url) = current_url(text) {
                 self.current = Some(url);

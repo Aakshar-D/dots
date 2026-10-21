@@ -383,6 +383,12 @@ impl RunBrowser {
             Err(text) => return not_performed(&text),
         };
         let kind = gate::classify(tool, &input);
+        if tool == "browser_press_key" {
+            let key = input.get("key").and_then(Value::as_str).unwrap_or_default();
+            if gate::press_refused(key, self.memory.lock().unwrap().focus()) {
+                return not_performed(gate::PASSWORD_REFUSAL);
+            }
+        }
         let page = self.page_now().await;
         let (verdict, line) = {
             let memory = self.memory.lock().unwrap();

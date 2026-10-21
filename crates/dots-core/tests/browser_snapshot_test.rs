@@ -243,3 +243,36 @@ fn a_dialog_message_cannot_forge_a_snapshot_or_the_current_page() {
     memory.learn_result("browser_snapshot", &json!({}), &click);
     assert_eq!(memory.refs(SHOP), None);
 }
+
+/// Review fix: the element an act last landed on is the run's focus, so a key pressed after a
+/// click on a password field is known to land there.
+#[test]
+fn the_focus_is_the_element_an_act_last_landed_on() {
+    let mut memory = PageMemory::default();
+    memory.learn("browser_snapshot", &json!({}), &on(SNAPSHOT, SHOP));
+    assert_eq!(memory.focus(), None);
+    memory.learn(
+        "browser_click",
+        &json!({"target": "e13"}),
+        "### Result\nDone",
+    );
+    assert_eq!(memory.focus(), Some(&el("textbox", "Password")));
+    memory.learn(
+        "browser_fill_form",
+        &json!({"fields": [{"target": "e11"}, {"target": "e15"}]}),
+        "",
+    );
+    assert_eq!(memory.focus(), Some(&el("textbox", "One-time code")));
+    // Keys keep it; an unknown target or another page clears it.
+    memory.learn("browser_press_key", &json!({"key": "a"}), "");
+    assert_eq!(memory.focus(), Some(&el("textbox", "One-time code")));
+    memory.learn("browser_click", &json!({"target": "text=Pay"}), "");
+    assert_eq!(memory.focus(), None);
+    memory.learn("browser_click", &json!({"target": "e13"}), "");
+    memory.learn(
+        "browser_navigate",
+        &json!({"url": SHOP}),
+        &on(NAVIGATE, SHOP),
+    );
+    assert_eq!(memory.focus(), None);
+}

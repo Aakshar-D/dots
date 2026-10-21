@@ -454,6 +454,23 @@ pub fn judge(
     }
 }
 
+/// A key pressed while a password or code field is in focus (`focus`, the element an act last
+/// landed on) is refused unless it only moves or leaves the field: a key that types or pastes
+/// into it would type a secret.
+pub fn press_refused(key: &str, focus: Option<&Element>) -> bool {
+    const MOVES: [&str; 8] = [
+        "Tab",
+        "Shift+Tab",
+        "Enter",
+        "Escape",
+        "ArrowUp",
+        "ArrowDown",
+        "ArrowLeft",
+        "ArrowRight",
+    ];
+    focus.is_some_and(is_secret) && !MOVES.contains(&key.trim())
+}
+
 /// `text` as words: lower case, every run of characters that are not letters or digits one
 /// space, with a space at each end.
 fn words_of(text: &str) -> String {

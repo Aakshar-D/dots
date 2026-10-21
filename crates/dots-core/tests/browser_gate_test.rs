@@ -7,8 +7,9 @@ mod common;
 
 use common::playwright::{on, SNAPSHOT};
 use dots_core::browser::gate::{
-    classify, has_word, is_risky, is_secret, judge, line, rule_candidates, Act, Ask, Danger, Kind,
-    SiteRules, Verdict, ASK_KEY, PASSWORD_REFUSAL, RISKY_WORDS, RUN_CODE_REFUSAL, SECRET_WORDS,
+    classify, has_word, is_risky, is_secret, judge, line, press_refused, rule_candidates, Act, Ask,
+    Danger, Kind, SiteRules, Verdict, ASK_KEY, PASSWORD_REFUSAL, RISKY_WORDS, RUN_CODE_REFUSAL,
+    SECRET_WORDS,
 };
 use dots_core::browser::snapshot::{read_snapshot, Element, RefMap};
 use dots_core::policy::{allow_candidates, Action, Policy, Preset, Rule, RuleCandidate};
@@ -774,4 +775,29 @@ fn running_code_outside_the_page_is_refused() {
         asks(&verdict("browser_evaluate", json!({}), &EVERYTHING)).action,
         "run_code"
     );
+}
+
+/// Review fix: with a password or code field in focus, only keys that move or leave it are
+/// pressed; a key that types (or pastes) is refused as typing is.
+#[test]
+fn keys_that_type_into_a_password_field_are_refused() {
+    let password = Element::new("textbox", "Password");
+    for key in [
+        "h",
+        "H",
+        "Shift+A",
+        "1",
+        "Space",
+        "Control+V",
+        "Backspace",
+        "Numpad5",
+    ] {
+        assert!(press_refused(key, Some(&password)), "{key}");
+    }
+    for key in ["Tab", "Shift+Tab", "Enter", "Escape", "ArrowDown"] {
+        assert!(!press_refused(key, Some(&password)), "{key}");
+    }
+    let search = Element::new("textbox", "Search");
+    assert!(!press_refused("h", Some(&search)));
+    assert!(!press_refused("h", None));
 }
