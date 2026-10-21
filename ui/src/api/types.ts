@@ -7,7 +7,15 @@ const nullable = <T extends z.ZodType>(t: T) => t.nullable();
 
 export const EngineKind = z.enum(["claude", "local"]);
 export const WorkspaceMode = z.enum(["worktree", "folder"]);
-export const TriggerKind = z.enum(["schedule", "webhook", "manual", "chat", "resume"]);
+export const TriggerKind = z.enum([
+  "schedule",
+  "webhook",
+  "manual",
+  "chat",
+  "resume",
+  // A run a dot scheduled for itself (check-ins spec section 6).
+  "follow_up",
+]);
 export const RunStatus = z.enum([
   "queued",
   "running",

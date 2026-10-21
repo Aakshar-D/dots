@@ -523,7 +523,8 @@
       "webhook",
       "manual",
       "chat",
-      "resume"
+      "resume",
+      "follow_up"
     ],
     "WorkspaceMode": [
       "worktree",

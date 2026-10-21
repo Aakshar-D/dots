@@ -20,6 +20,7 @@ const TRIGGER: Record<Run["trigger"], string> = {
   manual: "Manual run",
   chat: "Chat message",
   resume: "Continued after approval",
+  follow_up: "Follow-up the dot scheduled",
 };
 
 /// What the person wrote, for a chat run.
