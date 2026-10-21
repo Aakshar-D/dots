@@ -9,6 +9,7 @@
 //! a native dialog from Rust before it is run or stored (`confirm.rs`). The UI is first-party
 //! code under a `default-src 'self'` policy.
 
+use dots_core::browser::BrowserStatus;
 use dots_core::kit::InstalledPlugin;
 use dots_core::library::{LibraryConfig, LibraryItem, McpCatalog, McpServerConfig};
 use dots_core::library_service::{
@@ -63,8 +64,8 @@ pub async fn update_settings(
     let rt = state.rt()?;
     // Pointing Dots at another program needs the user's own yes, in a dialog the webview
     // cannot answer.
-    let saved = confirm::save_settings_confirmed(&rt, settings, |message| {
-        confirm::ask(&app, "Change the Claude program?", message)
+    let saved = confirm::save_settings_confirmed(&rt, settings, |title, message| {
+        confirm::ask(&app, title, message)
     })
     .await?;
     crate::autostart::apply(
@@ -517,4 +518,28 @@ pub async fn follow_ups_list(
 #[tauri::command]
 pub async fn follow_up_cancel(state: State<'_, AppState>, id: String) -> Res<FollowUp> {
     Ok(state.rt()?.follow_ups().cancel(&id).await?)
+}
+
+/// "Open the browser" (browser spec section 7): the dot's Edge, for the person to log in ahead
+/// of time. It stays open until they close it.
+#[tauri::command]
+pub async fn browser_open(state: State<'_, AppState>, dot_id: String) -> Res<()> {
+    Ok(state.rt()?.browser_open(&dot_id).await?)
+}
+
+/// Where Microsoft Edge and Node.js (`npx`) were found, for Settings.
+#[tauri::command]
+pub async fn browser_status(state: State<'_, AppState>) -> Res<BrowserStatus> {
+    Ok(state.rt()?.browser_status().await)
+}
+
+/// A screenshot of a run's browser as a `data:` URL: only a file Playwright named in the run's
+/// `downloads/` folder (`page-<time>.png`), so the UI cannot read any other file.
+#[tauri::command]
+pub async fn browser_screenshot(
+    state: State<'_, AppState>,
+    run_id: String,
+    name: String,
+) -> Res<String> {
+    Ok(state.rt()?.browser_screenshot(&run_id, &name).await?)
 }

@@ -38,6 +38,7 @@ const schemas: Record<SampleName, { parse: (v: unknown) => unknown }> = {
   UpdateNote: T.UpdateNote.array(),
   Message: T.Message.array(),
   FollowUp: T.FollowUp.array(),
+  BrowserStatus: T.BrowserStatus,
 };
 
 // The UI parses live data with these schemas, so it must know every variant the core has.

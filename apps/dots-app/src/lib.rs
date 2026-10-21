@@ -90,6 +90,9 @@ command_list![
     message_mark_read,
     follow_ups_list,
     follow_up_cancel,
+    browser_open,
+    browser_status,
+    browser_screenshot,
 ];
 
 /// Keeps the log writer flushing until the app exits.

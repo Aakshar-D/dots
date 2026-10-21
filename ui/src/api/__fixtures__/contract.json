@@ -18,6 +18,10 @@
     "status": "pending",
     "tool": "Bash"
   },
+  "BrowserStatus": {
+    "edge": "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
+    "npx": "C:/Program Files/nodejs/npx.cmd"
+  },
   "CmdError": {
     "kind": "conflict",
     "message": "run 01J0RUN is already succeeded"
@@ -83,7 +87,10 @@
     "message_dismiss",
     "message_mark_read",
     "follow_ups_list",
-    "follow_up_cancel"
+    "follow_up_cancel",
+    "browser_open",
+    "browser_status",
+    "browser_screenshot"
   ],
   "ContextDocuments": {
     "complete": true,

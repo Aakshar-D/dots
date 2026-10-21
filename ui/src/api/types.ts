@@ -292,6 +292,11 @@ export const SettingsSaved = z.strictObject({
   settings: Settings,
   restart_required: z.boolean(),
 });
+// Where Microsoft Edge and Node.js (npx) were found (browser spec section 7).
+export const BrowserStatus = z.strictObject({
+  edge: nullable(z.string()),
+  npx: nullable(z.string()),
+});
 
 // Where a dot's schedule stands (Scheduler v2 spec §8). Times are RFC 3339 local.
 // `next_fire` is null when nothing more fires (disabled, not active, nothing left);
@@ -583,6 +588,7 @@ export type ClaudeStatus = z.infer<typeof ClaudeStatus>;
 export type Status = z.infer<typeof Status>;
 export type Settings = z.infer<typeof Settings>;
 export type SettingsSaved = z.infer<typeof SettingsSaved>;
+export type BrowserStatus = z.infer<typeof BrowserStatus>;
 export type ScheduleView = z.infer<typeof ScheduleView>;
 export type DotOverview = z.infer<typeof DotOverview>;
 export type PendingApproval = z.infer<typeof PendingApproval>;

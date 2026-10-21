@@ -524,3 +524,48 @@ references in it. Opening a site you have not used before, and actions such as p
 sending, deleting or submitting, wait for the person's approval. Never type a password or a\n\
 code: when a page needs a login, 2FA or a CAPTCHA, call ask with \"Please <do it> in the browser\n\
 window, then answer done.\" Files you download land in downloads/ in your workspace.\n";
+
+/// The largest screenshot the run view shows.
+pub const MAX_SCREENSHOT_BYTES: u64 = 16 * 1024 * 1024;
+
+/// A screenshot the run's browser saved into `workspace/downloads` under the name Playwright
+/// gives one (`page-2026-10-21T12-16-35-575Z.png`), as a `data:` URL (browser spec section 7).
+/// Any other name is `Invalid`: no other file can be read through it.
+pub fn screenshot(workspace: &Path, name: &str) -> crate::Result<String> {
+    use base64::Engine as _;
+    let kind = screenshot_kind(name).ok_or_else(|| {
+        crate::Error::Invalid(format!("{name:?} is not a screenshot of the browser"))
+    })?;
+    let path = workspace.join("downloads").join(name);
+    let size = std::fs::metadata(&path)
+        .map_err(|_| crate::Error::NotFound(format!("screenshot {name}")))?
+        .len();
+    if size > MAX_SCREENSHOT_BYTES {
+        return Err(crate::Error::Invalid(format!(
+            "screenshot {name} is too large to show"
+        )));
+    }
+    let bytes = std::fs::read(&path)?;
+    Ok(format!(
+        "data:image/{kind};base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    ))
+}
+
+/// The image type of a name Playwright gives a screenshot: `page-<digits, '-', 'T', 'Z'>`
+/// and `.png`, `.jpeg` or `.webp`.
+fn screenshot_kind(name: &str) -> Option<&'static str> {
+    let (stem, ext) = name.rsplit_once('.')?;
+    let kind = match ext {
+        "png" => "png",
+        "jpeg" => "jpeg",
+        "webp" => "webp",
+        _ => return None,
+    };
+    let time = stem.strip_prefix("page-")?;
+    let plain = !time.is_empty()
+        && time
+            .chars()
+            .all(|c| c.is_ascii_digit() || c == '-' || c == 'T' || c == 'Z');
+    plain.then_some(kind)
+}
