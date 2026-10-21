@@ -1,12 +1,19 @@
 //! Check-ins (check-ins spec sections 2, 3 and 5): a dot tells the person something with
 //! `notify`, asks them with `ask`, and schedules a run of its own with `follow_up`. The tools
 //! are the same on both engines: built in on the local engine, tools of Dots' own `dots` MCP
-//! server on the Claude engine. This module holds their names, descriptions and input rules.
+//! server on the Claude engine. This module holds their names, descriptions and input rules,
+//! and `CheckIns`, which performs an allowed call.
+
+use std::sync::Arc;
 
 use chrono::{DateTime, Local, TimeDelta, Utc};
 use serde_json::{json, Value};
 
-use crate::model::EngineKind;
+use crate::events::{Bus, RuntimeEvent};
+use crate::followups::{parse_time, FollowUps};
+use crate::model::{EngineKind, Message};
+use crate::store::Store;
+use crate::{Error, Result};
 
 /// The longest note, question or follow-up note, in characters after trimming.
 pub const MAX_TEXT: usize = 2_000;
@@ -267,4 +274,83 @@ pub fn local_label(t: DateTime<Utc>) -> String {
     t.with_timezone(&Local)
         .format("%a %-d %b %H:%M")
         .to_string()
+}
+
+/// Performs the check-in tools' calls for both engines (spec sections 2 and 3). Cheap to clone.
+#[derive(Clone)]
+pub struct CheckIns {
+    store: Store,
+    bus: Bus,
+    follow_ups: Arc<FollowUps>,
+}
+
+impl CheckIns {
+    pub fn new(store: Store, bus: Bus, follow_ups: Arc<FollowUps>) -> Self {
+        Self {
+            store,
+            bus,
+            follow_ups,
+        }
+    }
+
+    /// Performs an allowed call of `tool` by the run `run_id`. `Ok` is the text the model gets;
+    /// `Err` a tool error: the input rule or the limit the call breaks, in one sentence, or
+    /// "Not delivered: <reason>." when it could not be stored (logged). The run goes on either
+    /// way.
+    pub async fn call(
+        &self,
+        run_id: &str,
+        tool: Tool,
+        input: &Value,
+    ) -> std::result::Result<String, String> {
+        let request = check(tool, input)?;
+        match self.perform(run_id, request).await {
+            Ok(text) => Ok(text),
+            Err(Error::Invalid(rule)) => Err(rule),
+            Err(e) => {
+                tracing::warn!(run = %run_id, tool = tool.name(), "check-in not delivered: {e}");
+                Err(format!("Not delivered: {e}."))
+            }
+        }
+    }
+
+    async fn perform(&self, run_id: &str, request: Request) -> Result<String> {
+        let run = self.store.get_run(run_id).await?;
+        match request {
+            Request::Notify { text } => {
+                let message = self
+                    .store
+                    .add_note(&run.dot_id, Some(&run.id), &text)
+                    .await?;
+                self.posted(message);
+                Ok(SENT.to_string())
+            }
+            Request::Ask { question, choices } => {
+                let asked = self
+                    .store
+                    .add_question(&run.dot_id, &run.id, &question, choices.as_deref())
+                    .await?;
+                match asked {
+                    Some(message) => {
+                        self.posted(message);
+                        Ok(ASKED.to_string())
+                    }
+                    None => Err(Error::Invalid(ASKED_ALREADY.to_string())),
+                }
+            }
+            Request::FollowUp { note, when } => {
+                let row = self.follow_ups.schedule(&run, &note, when).await?;
+                let due = parse_time(&row.due_at)?;
+                Ok(format!(
+                    "Follow-up {} scheduled for {}.",
+                    row.id,
+                    local_label(due)
+                ))
+            }
+        }
+    }
+
+    fn posted(&self, message: Message) {
+        let _ = self.bus.send(RuntimeEvent::MessagePosted { message });
+    }
 }
