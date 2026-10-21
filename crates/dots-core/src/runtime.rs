@@ -29,12 +29,16 @@ use crate::schedule::{upcoming, Schedule};
 use crate::scheduler::{Clock, Scheduler, SystemClock};
 use crate::server::{self, ServerState};
 use crate::settings::Settings;
+use crate::skill_creator::SkillDrafts;
 use crate::store::Store;
 use crate::workspace::{Prepared, WorkspaceManager};
 use crate::{Error, Result};
 
 /// The data folder's folder of the skills the skill creator saves (skill creator spec §6).
 pub const SKILLS_DIR: &str = "skills";
+
+/// The data folder's folder where each skill draft's CLI starts (skill creator spec §5).
+pub const DRAFTS_DIR: &str = "drafts";
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -50,6 +54,8 @@ pub struct Config {
     pub local_retry_delays: Vec<Duration>,
     /// Where the scheduler and the schedule rows get the time. Tests move a fake one by hand.
     pub clock: Arc<dyn Clock>,
+    /// How long a skill draft may take (skill creator spec §5). A test shortens it.
+    pub draft_limit: Duration,
 }
 
 impl Config {
@@ -63,6 +69,7 @@ impl Config {
             claude_env: Vec::new(),
             local_retry_delays: DEFAULT_RETRY_DELAYS.to_vec(),
             clock: Arc::new(SystemClock),
+            draft_limit: crate::skill_creator::DRAFT_LIMIT,
         }
     }
 
@@ -83,6 +90,7 @@ pub struct Runtime {
     runner: Arc<Runner>,
     scheduler: Arc<Scheduler>,
     library: LibraryService,
+    skill_drafts: SkillDrafts,
     clock: Arc<dyn Clock>,
     port: u16,
     server_error: Option<String>,
@@ -137,6 +145,8 @@ impl Runtime {
         crate::run_tools::sweep_plugin_folders(&cfg.data_dir.join("plugins"));
         // No skill is being saved yet: hidden folders are saves a crash cut short.
         crate::skill_creator::sweep_unfinished(&cfg.data_dir.join(SKILLS_DIR));
+        // Nor is a draft being written: the drafts' folders are what a crash left behind.
+        let _ = std::fs::remove_dir_all(cfg.data_dir.join(DRAFTS_DIR));
         // Every schedule has its row before the scheduler's first pass: a dot upgraded by
         // migration 0005 gets one now, and a row a failed change left stale is reset.
         for dot in store.list_dots().await? {
@@ -253,6 +263,14 @@ impl Runtime {
             clock: cfg.clock.clone(),
             port,
             server_error,
+            // Drafts need the CLI, not the local server: they work while its port is taken.
+            skill_drafts: SkillDrafts::new(
+                claude_program.clone(),
+                cfg.claude_env.clone(),
+                cfg.data_dir.join(DRAFTS_DIR),
+                cfg.draft_limit,
+                shutdown.clone(),
+            ),
             claude_program,
             claude_version,
             data_dir: cfg.data_dir.clone(),
@@ -615,6 +633,12 @@ impl Runtime {
     /// The Library: what the `library_*` commands call (MCP/skills spec section 9).
     pub fn library(&self) -> &LibraryService {
         &self.library
+    }
+
+    /// The skill creator's drafts: what `skill_draft` and `skill_draft_cancel` call (skill
+    /// creator spec §5).
+    pub fn skill_drafts(&self) -> &SkillDrafts {
+        &self.skill_drafts
     }
 
     /// The dots' notes and questions: what the `message_*` commands call (check-ins spec
