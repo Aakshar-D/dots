@@ -17,7 +17,8 @@ pub fn context_tool_name(engine: EngineKind) -> &'static str {
 
 /// The prompt of `run`. A thread's first prompt starts with `global` (the global instructions of
 /// Settings) when it is not blank and the dot uses it, and ends with the run's context
-/// collections; resumes and chat follow-ups send only their message.
+/// collections; resumes, chat follow-ups and follow-up runs that resume a session send only
+/// their message.
 pub fn build_prompt(
     dot: &Dot,
     run: &Run,
@@ -34,7 +35,9 @@ pub fn build_prompt(
         .unwrap_or_default();
     match run.trigger {
         TriggerKind::Resume => return message.to_string(),
-        TriggerKind::Chat if run.session_id.is_some() => return message.to_string(),
+        TriggerKind::Chat | TriggerKind::FollowUp if run.session_id.is_some() => {
+            return message.to_string()
+        }
         _ => {}
     }
 
@@ -49,6 +52,11 @@ pub fn build_prompt(
     out.push_str("\n\n---\n\n");
     if run.trigger == TriggerKind::Chat {
         out.push_str("## Message from the user\n\n");
+        out.push_str(message);
+        out.push_str("\n\n");
+    } else if run.trigger == TriggerKind::FollowUp {
+        // A follow-up whose thread could not be resumed (check-ins spec section 6).
+        out.push_str("## Follow-up\n\n");
         out.push_str(message);
         out.push_str("\n\n");
     } else {

@@ -229,6 +229,9 @@ impl Runtime {
         );
         scheduler.set_paused(settings.schedules_paused);
         scheduler.spawn(shutdown.clone());
+        // Follow-ups wait while schedules are paused (check-ins spec section 6).
+        follow_ups.set_paused(settings.schedules_paused);
+        follow_ups.spawn(runner.clone(), shutdown.clone());
         Ok(Runtime {
             library: LibraryService::new(store.clone(), bus.clone()),
             store,
@@ -323,6 +326,7 @@ impl Runtime {
         change(&mut next);
         self.store.put_settings(&next).await?;
         self.scheduler.set_paused(next.schedules_paused);
+        self.follow_ups.set_paused(next.schedules_paused);
         *current = next.clone();
         Ok(next)
     }
@@ -676,6 +680,7 @@ impl Runtime {
         self.sync_schedule(&dot, dot.spec.enabled && !was_enabled)
             .await?;
         self.scheduler.reload();
+        self.follow_ups.wake();
         Ok(dot)
     }
 
@@ -687,6 +692,7 @@ impl Runtime {
             self.schedule_updated(id);
         }
         self.scheduler.reload();
+        self.follow_ups.wake();
         Ok(())
     }
 
@@ -695,6 +701,7 @@ impl Runtime {
         let dot = self.store.set_dot_enabled(id, enabled).await?;
         self.sync_schedule(&dot, enabled && !was_enabled).await?;
         self.scheduler.reload();
+        self.follow_ups.wake();
         Ok(dot)
     }
 
