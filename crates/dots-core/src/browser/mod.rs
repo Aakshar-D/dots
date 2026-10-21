@@ -514,3 +514,13 @@ pub fn attach(
     notices.extend(notice);
     tools
 }
+
+/// The section a thread's first prompt gains when the dot's `browser` is on (browser spec
+/// section 4).
+pub const PROMPT: &str = "## Browser\n\n\
+You have a browser (tools named browser_*). It is a visible Microsoft Edge window with your\n\
+own profile; logins you were given stay there. Take a snapshot before you act, and act on the\n\
+references in it. Opening a site you have not used before, and actions such as paying,\n\
+sending, deleting or submitting, wait for the person's approval. Never type a password or a\n\
+code: when a page needs a login, 2FA or a CAPTCHA, call ask with \"Please <do it> in the browser\n\
+window, then answer done.\" Files you download land in downloads/ in your workspace.\n";
