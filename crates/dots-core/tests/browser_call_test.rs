@@ -19,8 +19,8 @@ use dots_core::approvals::{parked_message, ApprovalHub};
 use dots_core::browser::gate::{classify, Ask, Danger, Kind, ASK_KEY, PASSWORD_REFUSAL};
 use dots_core::browser::host::EdgeHost;
 use dots_core::browser::{
-    function_schemas, tools, Browsers, PlaywrightCommand, RunBrowser, NO_NODE, PAGE_MOVED,
-    PLAYWRIGHT_MCP,
+    function_schemas, tools, Browsers, CallLimit, PlaywrightCommand, RunBrowser, NO_NODE,
+    PAGE_MOVED, PLAYWRIGHT_MCP, TOO_LATE,
 };
 use dots_core::events::new_bus;
 use dots_core::model::{Approval, Dot, NewRun, Run, TriggerKind, WorkspaceMode};
@@ -103,7 +103,7 @@ async fn call(e: &Env, browser: &RunBrowser, tool: &str, input: Value) -> Value 
             e.hub.as_ref(),
             tool,
             input,
-            Duration::from_secs(30),
+            CallLimit::PerformWithin(Duration::from_secs(30)),
             &CancellationToken::new(),
         )
         .await
@@ -701,7 +701,7 @@ async fn a_missing_edge_or_node_and_a_stopped_server_fail_the_call_only() {
             e.hub.as_ref(),
             "browser_snapshot",
             json!({}),
-            Duration::from_secs(5),
+            CallLimit::PerformWithin(Duration::from_secs(5)),
             &CancellationToken::new(),
         )
         .await;
@@ -724,4 +724,26 @@ async fn a_missing_edge_or_node_and_a_stopped_server_fail_the_call_only() {
         .filter(|r| r.get("start").is_some())
         .count();
     assert_eq!(starts, 2);
+}
+
+/// Review fix: on the Claude engine the CLI waits for a call only so long. A call whose time ran
+/// out (Edge and the server starting, an approval) is not performed: the model would retry it,
+/// and an "Add to cart" would happen twice.
+#[tokio::test]
+async fn a_call_whose_time_ran_out_is_not_performed() {
+    let e = env().await;
+    let dot = dot(&e, &[], 0).await;
+    let (_run, browser) = run(&e, &dot).await;
+    let result = browser
+        .call(
+            e.hub.as_ref(),
+            "browser_snapshot",
+            json!({}),
+            CallLimit::FinishBy(std::time::Instant::now()),
+            &CancellationToken::new(),
+        )
+        .await;
+    assert!(failed(&result), "{result}");
+    assert_eq!(text(&result), TOO_LATE);
+    browser.close().await;
 }

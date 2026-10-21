@@ -3,7 +3,7 @@
 //! starting anything, and hands each call to the run's browser, whose gate decides it
 //! (`RunBrowser::call`). A call that is not performed is a tool result with `isError`.
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -45,10 +45,9 @@ pub(super) async fn handle(
                 Some(args @ Value::Object(_)) => args.clone(),
                 Some(_) => return rpc_error(id, -32602, "params.arguments must be an object"),
             };
-            let limit = cli_limit(s, run_id)
-                .await
-                .saturating_sub(started.elapsed())
-                .max(Duration::from_secs(1));
+            // The CLI stops waiting this long after it called: whatever the call waits for
+            // (Edge, the server, an approval) counts against it.
+            let limit = browser::CallLimit::FinishBy(started + cli_limit(s, run_id).await);
             let cancel = s.runner.run_cancel(run_id).unwrap_or_default();
             browser
                 .call(s.hub.as_ref(), tool, input, limit, &cancel)

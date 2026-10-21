@@ -55,6 +55,18 @@ pub fn drop_card(input: &mut Value) {
     }
 }
 
+/// How long a call may take. The local engine gives the call itself a fixed time; the Claude
+/// engine's CLI waits for the whole call (Edge and the server starting, an approval) only until
+/// a moment, after which the call is not performed.
+#[derive(Debug, Clone, Copy)]
+pub enum CallLimit {
+    PerformWithin(Duration),
+    FinishBy(std::time::Instant),
+}
+
+/// The answer to a call whose time ran out before it could be performed.
+pub const TOO_LATE: &str = "Not performed: the time for this call ran out before it could be performed (the browser was starting or an approval took long). Take a snapshot, then try again if it is still right.";
+
 /// The pinned Playwright MCP server (browser spec section 2.2). A new version comes with
 /// captures of its output and the gate's tests on them (section 11).
 pub const PLAYWRIGHT_MCP: &str = "@playwright/mcp@0.0.83";
@@ -372,7 +384,7 @@ impl RunBrowser {
         gate: &dyn PermissionGate,
         tool: &str,
         input: Value,
-        limit: Duration,
+        limit: CallLimit,
         cancel: &CancellationToken,
     ) -> Value {
         let mut input = match input {
@@ -443,6 +455,16 @@ impl RunBrowser {
                 }
             }
         }
+        let limit = match limit {
+            CallLimit::PerformWithin(limit) => limit,
+            CallLimit::FinishBy(deadline) => {
+                let left = deadline.saturating_duration_since(std::time::Instant::now());
+                if left < Duration::from_secs(1) {
+                    return not_performed(TOO_LATE);
+                }
+                left
+            }
+        };
         let result = match session.call_tool(tool, input.clone(), limit, cancel).await {
             Ok(result) => result,
             Err(e) => return not_performed(&e.to_string()),

@@ -223,7 +223,7 @@ impl Session {
             qualified.strip_prefix(crate::browser::PREFIX),
         ) {
             let result = tokio::select! {
-                r = browser.call(self.gate.as_ref(), tool, input, CALL_TIMEOUT, &self.ctx.cancel) => r,
+                r = browser.call(self.gate.as_ref(), tool, input, crate::browser::CallLimit::PerformWithin(CALL_TIMEOUT), &self.ctx.cancel) => r,
                 _ = self.ctx.cancel.cancelled() => return None,
             };
             return Some(format_result(&result));
