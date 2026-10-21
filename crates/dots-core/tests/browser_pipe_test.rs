@@ -138,7 +138,10 @@ async fn what_edge_attached_for_a_playwright_is_undone_when_it_goes() {
     assert!(edge
         .pipe
         .relay(second, r#"{"id":1,"method":"Target.setAutoAttach"}"#));
-    let undone: Vec<Value> = vec![edge.next().await, edge.next().await, edge.next().await];
+    let mut undone: Vec<Value> = Vec::new();
+    for _ in 0..5 {
+        undone.push(edge.next().await);
+    }
     assert_eq!(undone[0]["method"], "Target.detachFromTarget");
     assert_eq!(undone[0]["params"]["sessionId"], "S1");
     assert_eq!(undone[1]["params"]["sessionId"], "S3");
@@ -147,6 +150,10 @@ async fn what_edge_attached_for_a_playwright_is_undone_when_it_goes() {
         undone[2]["params"],
         json!({"autoAttach": false, "waitForDebuggerOnStart": false})
     );
+    assert_eq!(undone[3]["method"], "Target.setDiscoverTargets");
+    assert_eq!(undone[3]["params"], json!({"discover": false}));
+    assert_eq!(undone[4]["method"], "Browser.setDownloadBehavior");
+    assert_eq!(undone[4]["params"], json!({"behavior": "default"}));
     // Their answers go nowhere.
     for message in &undone {
         edge.send(&json!({"id": message["id"], "result": {}})).await;
@@ -158,8 +165,70 @@ async fn what_edge_attached_for_a_playwright_is_undone_when_it_goes() {
     // The one that went is undone once; a stale serial changes nothing.
     edge.pipe.disconnect(first);
     edge.pipe.disconnect(second);
-    let last = edge.next().await;
-    assert_eq!(last["params"]["autoAttach"], false);
+    let last = [edge.next().await, edge.next().await, edge.next().await];
+    assert_eq!(last[0]["params"]["autoAttach"], false);
+    assert_eq!(last[2]["method"], "Browser.setDownloadBehavior");
+    assert!(edge.next_within(Duration::from_millis(200)).await.is_none());
+}
+
+/// Browser spec section 14: what Edge attaches or creates for a Playwright after it went (a
+/// popup Edge paused for a debugger, an answer still on its way) is undone, so that no page
+/// stays paused or hidden from the next Playwright.
+#[tokio::test]
+async fn what_edge_sets_up_for_a_playwright_that_went_is_undone() {
+    let mut edge = TestEdge::start();
+    let (serial, _playwright) = edge.pipe.connect().unwrap();
+    // A context it made while connected is disposed when it goes.
+    assert!(edge
+        .pipe
+        .relay(serial, r#"{"id":1,"method":"Target.createBrowserContext"}"#));
+    let create = edge.next().await;
+    edge.send(&json!({"id": create["id"], "result": {"browserContextId": "C1"}}))
+        .await;
+    // Two requests still in flight when it goes.
+    assert!(edge.pipe.relay(
+        serial,
+        r#"{"id":2,"method":"Target.attachToTarget","params":{"targetId":"P1","flatten":true}}"#
+    ));
+    assert!(edge
+        .pipe
+        .relay(serial, r#"{"id":3,"method":"Target.createBrowserContext"}"#));
+    let attach = edge.next().await;
+    let second = edge.next().await;
+    edge.pipe.disconnect(serial);
+    let reset: Vec<Value> = vec![
+        edge.next().await,
+        edge.next().await,
+        edge.next().await,
+        edge.next().await,
+    ];
+    assert_eq!(reset[0]["method"], "Target.disposeBrowserContext");
+    assert_eq!(reset[0]["params"]["browserContextId"], "C1");
+    assert_eq!(reset[1]["method"], "Target.setAutoAttach");
+    // Their answers arrive after it went: what they made is undone.
+    edge.send(&json!({"id": attach["id"], "result": {"sessionId": "S7"}}))
+        .await;
+    edge.send(&json!({"id": second["id"], "result": {"browserContextId": "C2"}}))
+        .await;
+    let detach = edge.next().await;
+    assert_eq!(detach["method"], "Target.detachFromTarget");
+    assert_eq!(detach["params"]["sessionId"], "S7");
+    let dispose = edge.next().await;
+    assert_eq!(dispose["method"], "Target.disposeBrowserContext");
+    assert_eq!(dispose["params"]["browserContextId"], "C2");
+    // A page Edge attaches with nobody connected (a popup, before auto-attach was off).
+    edge.send(&json!({"method": "Target.attachedToTarget",
+                      "params": {"sessionId": "S9", "waitingForDebugger": true}}))
+        .await;
+    let late = edge.next().await;
+    assert_eq!(late["method"], "Target.detachFromTarget");
+    assert_eq!(late["params"]["sessionId"], "S9");
+    // One inside a page's session is that session's: nothing to do.
+    edge.send(
+        &json!({"method": "Target.attachedToTarget", "sessionId": "S9",
+                      "params": {"sessionId": "W1"}}),
+    )
+    .await;
     assert!(edge.next_within(Duration::from_millis(200)).await.is_none());
 }
 

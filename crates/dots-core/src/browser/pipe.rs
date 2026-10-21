@@ -78,10 +78,12 @@ impl Frames {
 struct Client {
     serial: u64,
     to: mpsc::UnboundedSender<String>,
-    /// The pipe's id of each of its requests in flight, and the id it gave.
-    ids: HashMap<u64, Value>,
+    /// The pipe's id of each of its requests in flight: the id it gave, and the method.
+    ids: HashMap<u64, (Value, String)>,
     /// The sessions Edge attached for it at the top level (`Target.attachedToTarget`).
     sessions: BTreeSet<String>,
+    /// The browser contexts it made (`Target.createBrowserContext`).
+    contexts: BTreeSet<String>,
 }
 
 #[derive(Default)]
@@ -90,6 +92,8 @@ struct Waiting {
     ended: bool,
     own: HashMap<u64, oneshot::Sender<Value>>,
     client: Option<Client>,
+    /// The requests in flight of Playwrights that went, by the pipe's id: their methods.
+    orphans: HashMap<u64, String>,
 }
 
 /// The connection to one Edge.
@@ -206,7 +210,7 @@ impl Pipe {
             return None;
         }
         if let Some(old) = waiting.client.take() {
-            self.forget(old);
+            self.forget(old, &mut waiting);
         }
         let (tx, rx) = mpsc::unbounded_channel();
         let serial = self.id();
@@ -215,6 +219,7 @@ impl Pipe {
             to: tx,
             ids: HashMap::new(),
             sessions: BTreeSet::new(),
+            contexts: BTreeSet::new(),
         });
         Some((serial, rx))
     }
@@ -238,8 +243,13 @@ impl Pipe {
         let Some(client) = waiting.client.as_mut().filter(|c| c.serial == serial) else {
             return false;
         };
+        let method = message
+            .get("method")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
         let id = self.id();
-        client.ids.insert(id, theirs);
+        client.ids.insert(id, (theirs, method));
         message["id"] = json!(id);
         self.send(&message);
         true
@@ -252,24 +262,61 @@ impl Pipe {
         let mut waiting = self.waiting.lock().unwrap();
         if waiting.client.as_ref().is_some_and(|c| c.serial == serial) {
             let old = waiting.client.take().expect("a client");
-            self.forget(old);
+            self.forget(old, &mut waiting);
         }
     }
 
-    /// Undoes what a Playwright set up on the pipe. The answers are not waited for.
-    fn forget(&self, client: Client) {
+    /// Sends Edge a request of Dots' own whose answer is not waited for.
+    fn tell(&self, method: &str, params: Value) {
+        self.send(&json!({ "id": self.id(), "method": method, "params": params }));
+    }
+
+    /// Undoes what a Playwright set up on the pipe: over a WebSocket, Edge would have undone it
+    /// when the connection ended, but the pipe is one connection for Edge's whole life. Its
+    /// requests still in flight become orphans, whose answers are undone as they come
+    /// (`undo_answer`). The answers are not waited for.
+    fn forget(&self, client: Client, waiting: &mut Waiting) {
         for session in client.sessions {
-            self.send(&json!({
-                "id": self.id(),
-                "method": "Target.detachFromTarget",
-                "params": { "sessionId": session }
-            }));
+            self.tell("Target.detachFromTarget", json!({ "sessionId": session }));
         }
-        self.send(&json!({
-            "id": self.id(),
-            "method": "Target.setAutoAttach",
-            "params": { "autoAttach": false, "waitForDebuggerOnStart": false }
-        }));
+        for context in client.contexts {
+            self.tell(
+                "Target.disposeBrowserContext",
+                json!({ "browserContextId": context }),
+            );
+        }
+        self.tell(
+            "Target.setAutoAttach",
+            json!({ "autoAttach": false, "waitForDebuggerOnStart": false }),
+        );
+        self.tell("Target.setDiscoverTargets", json!({ "discover": false }));
+        // Downloads go where the profile's preferences say, not to the server's own folder.
+        self.tell(
+            "Browser.setDownloadBehavior",
+            json!({ "behavior": "default" }),
+        );
+        waiting
+            .orphans
+            .extend(client.ids.into_iter().map(|(id, (_, method))| (id, method)));
+    }
+
+    /// The answer to a request of a Playwright that went: a session it attached is detached,
+    /// and a context it made is disposed.
+    fn undo_answer(&self, method: &str, answer: &Value) {
+        if let Some(session) = answer.pointer("/result/sessionId").and_then(Value::as_str) {
+            self.tell("Target.detachFromTarget", json!({ "sessionId": session }));
+        }
+        if method == "Target.createBrowserContext" {
+            if let Some(context) = answer
+                .pointer("/result/browserContextId")
+                .and_then(Value::as_str)
+            {
+                self.tell(
+                    "Target.disposeBrowserContext",
+                    json!({ "browserContextId": context }),
+                );
+            }
+        }
     }
 
     /// One message from Edge: an answer to Dots or to Playwright, or an event for Playwright.
@@ -288,17 +335,40 @@ impl Pipe {
                 let _ = own.send(message);
                 return;
             }
+            if let Some(method) = id.and_then(|id| waiting.orphans.remove(&id)) {
+                self.undo_answer(&method, &message);
+                return;
+            }
             let Some(client) = waiting.client.as_mut() else {
                 return;
             };
-            let Some(theirs) = id.and_then(|id| client.ids.remove(&id)) else {
+            let Some((theirs, method)) = id.and_then(|id| client.ids.remove(&id)) else {
                 return;
             };
+            if method == "Target.createBrowserContext" {
+                if let Some(context) = message
+                    .pointer("/result/browserContextId")
+                    .and_then(Value::as_str)
+                {
+                    client.contexts.insert(context.to_string());
+                }
+            }
             message["id"] = theirs;
             let _ = client.to.send(message.to_string());
             return;
         }
         let Some(client) = waiting.client.as_mut() else {
+            // Nobody is connected: a page Edge attached anyway (auto-attach was still on, and
+            // the page may be paused waiting for a debugger) is detached at once.
+            let top_level = message.get("sessionId").is_none();
+            let method = message.get("method").and_then(Value::as_str);
+            if let (true, Some("Target.attachedToTarget"), Some(session)) = (
+                top_level,
+                method,
+                message.pointer("/params/sessionId").and_then(Value::as_str),
+            ) {
+                self.tell("Target.detachFromTarget", json!({ "sessionId": session }));
+            }
             return;
         };
         if message.get("sessionId").is_none() {
@@ -327,6 +397,7 @@ impl Pipe {
         waiting.ended = true;
         waiting.own.clear();
         waiting.client = None;
+        waiting.orphans.clear();
     }
 }
 
