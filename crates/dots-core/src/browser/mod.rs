@@ -426,7 +426,7 @@ impl RunBrowser {
         self.memory
             .lock()
             .unwrap()
-            .learn(tool, &input, &result_text(&result));
+            .learn_result(tool, &input, &result);
         let mut lines: Vec<String> = Vec::new();
         if result.get("isError") != Some(&Value::Bool(true)) {
             lines.extend(line);
@@ -462,20 +462,6 @@ impl RunBrowser {
 /// No `${VAR}` in the server's command line is expanded.
 fn no_variables(_: &str) -> Option<String> {
     None
-}
-
-/// The text parts of a `tools/call` result, joined by new lines.
-fn result_text(result: &Value) -> String {
-    result["content"]
-        .as_array()
-        .map(|parts| {
-            parts
-                .iter()
-                .filter_map(|part| part["text"].as_str())
-                .collect::<Vec<_>>()
-                .join("\n")
-        })
-        .unwrap_or_default()
 }
 
 /// `result` with one text part in front: each of `lines` as `Dots: <line>`.

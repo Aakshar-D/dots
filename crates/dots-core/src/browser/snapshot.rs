@@ -207,24 +207,50 @@ impl PageMemory {
             .map(|(_, map)| map)
     }
 
-    /// Records `map` for the page `url`: in place of what it had, or added to it (`partial`).
-    pub fn store(&mut self, url: &str, map: RefMap, partial: bool) {
-        let mut kept = match self.maps.iter().position(|(page, _)| page == url) {
-            Some(i) => self.maps.remove(i).1,
-            None => RefMap::new(),
-        };
-        if !partial {
-            kept.clear();
-        }
-        kept.extend(map);
-        self.maps.push((url.to_string(), kept));
+    /// Records `map` for the page `url`, in place of what it had: Playwright numbers references
+    /// afresh for each document, so an older map may name other elements.
+    pub fn store(&mut self, url: &str, map: RefMap) {
+        self.forget(url);
+        self.maps.push((url.to_string(), map));
         if self.maps.len() > KEPT_PAGES {
             self.maps.remove(0);
         }
     }
 
-    /// Learns from the result `text` of `tool` called with `input`.
+    /// Forgets the references of the page `url`.
+    pub fn forget(&mut self, url: &str) {
+        self.maps.retain(|(page, _)| page != url);
+    }
+
+    /// Learns from the `tools/call` result `result` of `tool` called with `input`: nothing from
+    /// an error, whose text may be a page's dialog message with no real snapshot.
+    pub fn learn_result(&mut self, tool: &str, input: &Value, result: &Value) {
+        if result.get("isError") == Some(&Value::Bool(true)) {
+            return;
+        }
+        let text = result["content"]
+            .as_array()
+            .map(|parts| {
+                parts
+                    .iter()
+                    .filter_map(|part| part["text"].as_str())
+                    .collect::<Vec<_>>()
+                    .join(
+                        "
+",
+                    )
+            })
+            .unwrap_or_default();
+        self.learn(tool, input, &text);
+    }
+
+    /// Learns from the result `text` of `tool` called with `input`. What follows `### Modal
+    /// state` is a page's dialog message, written unescaped, and is not read.
     pub fn learn(&mut self, tool: &str, input: &Value, text: &str) {
+        let text = match text.find("### Modal state") {
+            Some(at) => &text[..at],
+            None => text,
+        };
         if REPORTS_PAGE.contains(&tool) {
             if let Some(url) = current_url(text) {
                 self.current = Some(url);
@@ -238,20 +264,14 @@ impl PageMemory {
             return;
         };
         match tool {
-            "browser_snapshot" if !to_file => {
-                if let Some(map) = read_snapshot(text) {
-                    let part = ["target", "depth"]
-                        .iter()
-                        .any(|key| input.get(*key).is_some_and(|v| !v.is_null()));
-                    self.store(&url, map, part);
-                }
-            }
-            "browser_find" if !to_file => {
-                let found = read_found(text);
-                if !found.is_empty() {
-                    self.store(&url, found, true);
-                }
-            }
+            // A snapshot or a find saved to a file teaches nothing, and the page may have loaded
+            // a new document since the last one: its references are forgotten.
+            "browser_snapshot" | "browser_find" if to_file => self.forget(&url),
+            "browser_snapshot" => match read_snapshot(text) {
+                Some(map) => self.store(&url, map),
+                None => self.forget(&url),
+            },
+            "browser_find" => self.store(&url, read_found(text)),
             _ => {}
         }
     }

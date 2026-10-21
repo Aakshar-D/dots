@@ -52,6 +52,9 @@ pub const SECRET_WORDS: [&str; 7] = [
 ];
 
 /// The answer to typing a password or a code. No rule allows it.
+/// The answer to `browser_run_code_unsafe`, which no rule allows.
+pub const RUN_CODE_REFUSAL: &str = "Dots does not run code outside the page. Use the page's own controls, or browser_evaluate for code in the page.";
+
 pub const PASSWORD_REFUSAL: &str = "Dots does not type passwords or codes. Ask the person to enter it in the browser window, with your ask tool.";
 
 /// The key under which an approval's input carries its card (`Ask`). Dots writes it; a key of
@@ -202,13 +205,15 @@ pub fn classify(tool: &str, input: &Value) -> Kind {
                     .unwrap_or_default()
                     .to_string()
             };
-            // A field without a type is taken as one typed into.
+            // Every field that can take text is typed into: Playwright fills a `slider` as it
+            // fills a `textbox`. Only a checkbox or a radio takes true or false.
             let typed = fields
                 .iter()
                 .filter(|f| {
-                    f.get("type")
-                        .and_then(Value::as_str)
-                        .is_none_or(|t| t == "textbox")
+                    !matches!(
+                        f.get("type").and_then(Value::as_str),
+                        Some("checkbox" | "radio")
+                    )
                 })
                 .map(target)
                 .collect();
@@ -362,6 +367,10 @@ pub fn judge(
     rules: &SiteRules,
     dot_name: &str,
 ) -> Verdict {
+    // It runs a program in Playwright's own process, outside the page and the workspace.
+    if tool == "browser_run_code_unsafe" {
+        return Verdict::Refuse(RUN_CODE_REFUSAL.to_string());
+    }
     let current = page.and_then(site_of);
     let refused = |site: &str| {
         Verdict::Refuse(format!(

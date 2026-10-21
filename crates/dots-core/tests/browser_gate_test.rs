@@ -8,7 +8,7 @@ mod common;
 use common::playwright::{on, SNAPSHOT};
 use dots_core::browser::gate::{
     classify, has_word, is_risky, is_secret, judge, line, rule_candidates, Act, Ask, Danger, Kind,
-    SiteRules, Verdict, ASK_KEY, PASSWORD_REFUSAL, RISKY_WORDS, SECRET_WORDS,
+    SiteRules, Verdict, ASK_KEY, PASSWORD_REFUSAL, RISKY_WORDS, RUN_CODE_REFUSAL, SECRET_WORDS,
 };
 use dots_core::browser::snapshot::{read_snapshot, Element, RefMap};
 use dots_core::policy::{allow_candidates, Action, Policy, Preset, Rule, RuleCandidate};
@@ -586,7 +586,6 @@ fn typing_a_password_or_code_is_refused_whatever_the_rules() {
 fn a_dangerous_tool_always_asks_and_offers_no_rule() {
     for (tool, action) in [
         ("browser_evaluate", "run_code"),
-        ("browser_run_code_unsafe", "run_code"),
         ("browser_file_upload", "upload"),
         ("browser_network_requests", "network"),
         ("browser_network_request", "network"),
@@ -735,4 +734,44 @@ fn the_run_view_line_says_what_was_done() {
     for (tool, input, want) in cases {
         assert_eq!(line_of(tool, input).as_deref(), want, "{tool}");
     }
+}
+
+/// Review fix: Playwright fills `textbox` and `slider` fields alike, so every form field that
+/// can take text is checked for a secret; only a checkbox or a radio, which takes true or
+/// false, is not.
+#[test]
+fn a_password_is_refused_in_any_form_field_that_takes_text() {
+    for kind in ["slider", "combobox", "textbox", "", "something"] {
+        let input =
+            json!({"fields": [{"target": "e13", "name": "x", "type": kind, "value": "hunter2"}]});
+        assert_eq!(
+            verdict("browser_fill_form", input, &EVERYTHING),
+            Verdict::Refuse(PASSWORD_REFUSAL.to_string()),
+            "{kind}"
+        );
+    }
+    for kind in ["checkbox", "radio"] {
+        let input =
+            json!({"fields": [{"target": "e13", "name": "x", "type": kind, "value": "true"}]});
+        assert_eq!(
+            verdict("browser_fill_form", input, &EVERYTHING),
+            Verdict::Allow,
+            "{kind}"
+        );
+    }
+}
+
+/// Review fix: `browser_run_code_unsafe` runs a program in Playwright's own process on this
+/// computer, outside the page and the workspace, so no approval can allow it.
+#[test]
+fn running_code_outside_the_page_is_refused() {
+    assert_eq!(
+        verdict("browser_run_code_unsafe", json!({"code": "1"}), &EVERYTHING),
+        Verdict::Refuse(RUN_CODE_REFUSAL.to_string())
+    );
+    // Code in the page still asks.
+    assert_eq!(
+        asks(&verdict("browser_evaluate", json!({}), &EVERYTHING)).action,
+        "run_code"
+    );
 }
