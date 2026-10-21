@@ -58,6 +58,8 @@ export function installDefaults(): void {
   backend.on("dot_overview", () => []);
   backend.on("list_dots", () => []);
   backend.on("get_settings", () => sample.settings);
+  // Neither Microsoft Edge nor Node.js was found.
+  backend.on("browser_status", () => ({ edge: null, npx: null }));
   backend.on("library_list", () => []);
   backend.on("installed_claude_plugins", () => []);
   backend.on("environment_variables", (args) =>

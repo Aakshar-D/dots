@@ -11,6 +11,7 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import type { SpecErrors } from "@/lib/dot-rules";
 import { notifyError } from "@/lib/notify";
+import { BrowserSection } from "@/screens/dot-editor/BrowserSection";
 import { PolicyEditor } from "@/screens/dot-editor/PolicyEditor";
 import { ScheduleEditor, type SchedulePreview } from "@/screens/dot-editor/ScheduleEditor";
 import { ToolsAndSkills } from "@/screens/dot-editor/ToolsAndSkills";
@@ -221,6 +222,14 @@ export function DotForm(props: {
           uses={spec.uses}
           engine={spec.engine}
           onChange={(uses) => set("uses", uses)}
+        />
+      </Section>
+
+      <Section title="Browser">
+        <BrowserSection
+          spec={spec}
+          existing={props.existing}
+          onChange={(next) => props.onChange({ ...draft, spec: next })}
         />
       </Section>
 
