@@ -18,7 +18,12 @@ import { isActive } from "@/lib/chat-threads";
 import { localDateTime } from "@/lib/format";
 import { mcpToolLabel } from "@/lib/mcp-tool";
 import { keys } from "@/lib/query";
-import { toolPreview, transcriptItems, type TranscriptItem } from "@/lib/transcript";
+import {
+  checkInLine,
+  toolPreview,
+  transcriptItems,
+  type TranscriptItem,
+} from "@/lib/transcript";
 
 const TRIGGER: Record<Run["trigger"], string> = {
   schedule: "Scheduled run",
@@ -74,6 +79,22 @@ function ScheduleLine({ run }: { run: Run }) {
   return <p className="mb-2 text-xs text-muted-foreground">{line}</p>;
 }
 
+/// The message a follow-up run carries: what the dot scheduled itself to do.
+function FollowUpLine({ run }: { run: Run }) {
+  if (run.trigger !== "follow_up" || typeof run.payload !== "object" || run.payload === null) {
+    return null;
+  }
+  const message = (run.payload as Record<string, unknown>).message;
+  if (typeof message !== "string") return null;
+  return <p className="mb-2 text-xs whitespace-pre-wrap text-muted-foreground">{message}</p>;
+}
+
+/// What became of a call: running, done, failed, or no result in a run that has ended.
+function outcome(result: { isError: boolean } | null, active: boolean): string {
+  if (result === null) return active ? "running" : "no result";
+  return result.isError ? "failed" : "done";
+}
+
 /// `active`: the item's run is still going. Only then can a tool call without a result be one
 /// that runs; in a run that has ended, the result never came.
 function Item(props: {
@@ -98,6 +119,28 @@ function Item(props: {
           <Info aria-hidden className="mt-0.5 size-3.5 shrink-0" />
           {item.text}
         </p>
+      );
+    case "checkin":
+      return (
+        <details className="rounded-md border px-2 py-1">
+          <summary className="flex cursor-pointer items-center gap-2 text-xs">
+            <span className="min-w-0 flex-1 truncate">
+              {checkInLine(item.kind, item.input, item.result)}
+            </span>
+            <span className={item.result?.isError ? "text-destructive" : "text-muted-foreground"}>
+              {outcome(item.result, active)}
+            </span>
+          </summary>
+          {item.result && (
+            <pre
+              className={`mt-1 max-h-80 overflow-auto text-xs whitespace-pre-wrap ${
+                item.result.isError ? "text-destructive" : "text-muted-foreground"
+              }`}
+            >
+              {item.result.output}
+            </pre>
+          )}
+        </details>
       );
     case "raw":
       return (
@@ -208,6 +251,7 @@ export function Transcript(props: {
               {many && <StatusBadge status={run.status} />}
             </header>
             <ScheduleLine run={run} />
+            <FollowUpLine run={run} />
             <div className="flex flex-col gap-2">
               {message !== null && (
                 <p className="self-end rounded-lg bg-primary px-3 py-1.5 whitespace-pre-wrap text-primary-foreground">

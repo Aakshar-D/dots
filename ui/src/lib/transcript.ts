@@ -11,11 +11,63 @@ export type TranscriptItem =
       /// `null` until the result arrives.
       result: { output: string; isError: boolean } | null;
     }
+  /// A call of a check-in tool (`notify`, `ask`, `follow_up`), shown as one line.
+  | {
+      type: "checkin";
+      seq: number;
+      kind: CheckInKind;
+      input: unknown;
+      /// `null` until the result arrives.
+      result: { output: string; isError: boolean } | null;
+    }
   | { type: "error"; seq: number; text: string }
   /// What Dots says about the run itself: an item left out, a server held.
   | { type: "note"; seq: number; text: string }
   /// Something the transcript does not render as conversation; shown collapsed.
   | { type: "raw"; seq: number; label: string; text: string };
+
+export type CheckInKind = "notify" | "ask" | "follow_up";
+
+/// The check-in tools by the names their calls are stored under: the policy name on the local
+/// engine, Dots' own MCP server's tool on the Claude engine.
+const CHECK_INS = new Map<string, CheckInKind>([
+  ["Notify", "notify"],
+  ["mcp__dots__notify", "notify"],
+  ["Ask", "ask"],
+  ["mcp__dots__ask", "ask"],
+  ["FollowUp", "follow_up"],
+  ["mcp__dots__follow_up", "follow_up"],
+]);
+
+/// The trimmed string argument `key` of a call, or "".
+function field(input: unknown, key: string): string {
+  const value =
+    typeof input === "object" && input !== null
+      ? (input as Record<string, unknown>)[key]
+      : undefined;
+  return typeof value === "string" ? value.trim() : "";
+}
+
+/// The line a check-in call shows as (check-ins spec section 9). A follow-up names its time
+/// once the core's answer has it: the core writes it in local time.
+export function checkInLine(
+  kind: CheckInKind,
+  input: unknown,
+  result: { output: string; isError: boolean } | null,
+): string {
+  switch (kind) {
+    case "notify":
+      return `Sent a note: ${field(input, "text")}`;
+    case "ask":
+      return `Asked: ${field(input, "question")}`;
+    case "follow_up": {
+      const when =
+        result && !result.isError ? /scheduled for (.+)\.$/.exec(result.output)?.[1] : undefined;
+      const note = field(input, "note");
+      return when ? `Scheduled a follow-up for ${when}: ${note}` : `Scheduled a follow-up: ${note}`;
+    }
+  }
+}
 
 /// One line that says what a tool call is about.
 export function toolPreview(input: unknown): string {
@@ -34,7 +86,7 @@ export function toolPreview(input: unknown): string {
 /// summary) are left out. An event from a newer core that does not parse is kept as raw.
 export function transcriptItems(events: RunEventRecord[]): TranscriptItem[] {
   const items: TranscriptItem[] = [];
-  const calls = new Map<string, Extract<TranscriptItem, { type: "tool" }>>();
+  const calls = new Map<string, Extract<TranscriptItem, { type: "tool" | "checkin" }>>();
   for (const record of events) {
     const parsed = RunEventData.safeParse(record.data);
     if (!parsed.success) {
@@ -52,13 +104,23 @@ export function transcriptItems(events: RunEventRecord[]): TranscriptItem[] {
         items.push({ type: "text", seq: record.seq, text: event.text });
         break;
       case "tool_call": {
-        const call = {
-          type: "tool" as const,
-          seq: record.seq,
-          tool: event.tool,
-          input: event.input,
-          result: null,
-        };
+        const kind = CHECK_INS.get(event.tool);
+        const call =
+          kind === undefined
+            ? {
+                type: "tool" as const,
+                seq: record.seq,
+                tool: event.tool,
+                input: event.input,
+                result: null,
+              }
+            : {
+                type: "checkin" as const,
+                seq: record.seq,
+                kind,
+                input: event.input,
+                result: null,
+              };
         calls.set(event.id, call);
         items.push(call);
         break;

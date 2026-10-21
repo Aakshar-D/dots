@@ -3,7 +3,7 @@ import { Play, Plus } from "lucide-react";
 import { Link, useNavigate } from "react-router";
 
 import { commands } from "@/api/commands";
-import { LIMITS, type DotOverview } from "@/api/types";
+import { LIMITS, type DotOverview, type FollowUp } from "@/api/types";
 import { ErrorNote } from "@/components/ErrorNote";
 import { Page } from "@/components/Page";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -56,6 +56,13 @@ export function DotsScreen() {
   const navigate = useNavigate();
   const overview = useQuery({ queryKey: keys.overview, queryFn: commands.dotOverview });
   const status = useQuery({ queryKey: keys.status, queryFn: commands.status }).data;
+  // Every dot's pending follow-ups, soonest first: a row says when its dot's next one fires.
+  const followUps = useQuery({
+    queryKey: keys.followUps(null),
+    queryFn: () => commands.followUpsList(null),
+  }).data;
+  const nextFollowUp = (dotId: string): FollowUp | undefined =>
+    followUps?.find((followUp) => followUp.dot_id === dotId);
   const runNow = useMutation({
     mutationKey: RUN_NOW,
     mutationFn: commands.runNow,
@@ -130,6 +137,7 @@ export function DotsScreen() {
             const paused = status?.schedules_paused ?? false;
             const attention = row.schedule_state?.attention;
             const retry = retrying(row, paused);
+            const followUp = nextFollowUp(dot.id);
             return (
               <TableRow key={dot.id}>
                 <TableCell>
@@ -161,6 +169,11 @@ export function DotsScreen() {
                   <div className="flex flex-col">
                     <span>{nextRun(row, paused)}</span>
                     {retry && <span className="text-xs text-muted-foreground">{retry}</span>}
+                    {followUp && (
+                      <span className="text-xs text-muted-foreground">
+                        Next follow-up {relativeTime(followUp.due_at)}
+                      </span>
+                    )}
                   </div>
                 </TableCell>
                 <TableCell>

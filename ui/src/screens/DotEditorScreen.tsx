@@ -8,6 +8,7 @@ import { commands } from "@/api/commands";
 import type { Dot, DotSpec } from "@/api/types";
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { ErrorNote } from "@/components/ErrorNote";
+import { FollowUpsList } from "@/components/FollowUpsList";
 import { Page } from "@/components/Page";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -212,10 +213,14 @@ function ExistingDot({ dotId }: { dotId: string }) {
             <TabsList>
               <TabsTrigger value="settings">Settings</TabsTrigger>
               <TabsTrigger value="runs">Runs</TabsTrigger>
+              <TabsTrigger value="follow-ups">Follow-ups</TabsTrigger>
             </TabsList>
             <TabsContent value="settings">{form}</TabsContent>
             <TabsContent value="runs">
               <RunsList dotId={dotId} />
+            </TabsContent>
+            <TabsContent value="follow-ups">
+              <FollowUpsList dotId={dotId} />
             </TabsContent>
           </Tabs>
         </>

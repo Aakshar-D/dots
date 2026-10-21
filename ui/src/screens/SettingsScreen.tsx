@@ -178,6 +178,15 @@ function Form({ stored, status }: { stored: Settings; status: Status | undefined
         </div>
         <div className="flex items-center gap-2">
           <Switch
+            id="settings-notify-notes"
+            checked={draft.notify_on_notes}
+            onCheckedChange={(notify_on_notes) => set({ notify_on_notes })}
+          />
+          <Label htmlFor="settings-notify-notes">Notify on dot notes</Label>
+        </div>
+        <p className="text-xs text-muted-foreground">Questions from dots always notify.</p>
+        <div className="flex items-center gap-2">
+          <Switch
             id="settings-paused"
             checked={status?.schedules_paused ?? false}
             disabled={!status || pause.isPending}
