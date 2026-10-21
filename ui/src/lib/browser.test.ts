@@ -4,6 +4,7 @@ import type { Action, Approval, Policy } from "@/api/types";
 import { sample } from "@/test/fixtures";
 
 import {
+  askDetails,
   askText,
   browserAsk,
   browserLine,
@@ -145,5 +146,41 @@ describe("a browser call in the run view", () => {
     ).toBe("page-2026-10-21T12-16-35-575Z.png");
     expect(screenshotName("- [Snapshot](./snap.md)")).toBeNull();
     expect(screenshotName("(downloads/../secret.png)")).toBeNull();
+  });
+});
+
+// Review fix: the card shows what the call will really send, not only where.
+describe("askDetails", () => {
+  it("shows the full address, the text, the fields, the files and the code", () => {
+    expect(askDetails("mcp__browser__browser_navigate", { url: "https://shop.com/pay?to=me&sum=900" })).toEqual([
+      "Address: https://shop.com/pay?to=me&sum=900",
+    ]);
+    expect(askDetails("mcp__browser__browser_type", { target: "e5", text: "hats" })).toEqual(["Text: hats"]);
+    expect(
+      askDetails("mcp__browser__browser_fill_form", {
+        fields: [
+          { target: "e1", name: "Email", type: "textbox", value: "me@example.com" },
+          { target: "e2", name: "Remember", type: "checkbox", value: "true" },
+        ],
+      }),
+    ).toEqual(["Email: me@example.com", "Remember: true"]);
+    expect(
+      askDetails("mcp__browser__browser_file_upload", { paths: ["C:\Users\me\.ssh\id_ed25519"] }),
+    ).toEqual(["File: C:\Users\me\.ssh\id_ed25519"]);
+    expect(askDetails("mcp__browser__browser_drop", { target: "e3", paths: ["a.txt"], data: { "text/plain": "x" } })).toEqual([
+      "File: a.txt",
+      "Data: {\"text/plain\":\"x\"}",
+    ]);
+    expect(askDetails("mcp__browser__browser_evaluate", { function: "() => document.cookie" })).toEqual([
+      "Code: () => document.cookie",
+    ]);
+    expect(askDetails("mcp__browser__browser_select_option", { target: "e4", values: ["Large"] })).toEqual([
+      "Choice: Large",
+    ]);
+    expect(askDetails("mcp__browser__browser_click", { target: "e16" })).toEqual([]);
+    // Long values are cut.
+    const long = askDetails("mcp__browser__browser_type", { text: "x".repeat(500) })[0];
+    expect(long.length).toBeLessThan(320);
+    expect(long.endsWith("…")).toBe(true);
   });
 });

@@ -114,6 +114,38 @@ export function askParts(ask: BrowserAsk): Part[] {
   }
 }
 
+/// The longest value a card shows in full.
+const DETAIL_MAX = 300;
+
+/// `text` cut to `DETAIL_MAX` characters.
+function cut(text: string): string {
+  return text.length > DETAIL_MAX ? `${text.slice(0, DETAIL_MAX - 1)}…` : text;
+}
+
+/// What a browser call would send, one line each, for its card: the full address, the text
+/// typed, the fields filled, the files and data dropped or uploaded, the code run. Empty for a
+/// call that sends nothing of its own (a click).
+export function askDetails(tool: string, input: unknown): string[] {
+  const args = typeof input === "object" && input !== null ? (input as Record<string, unknown>) : {};
+  const text = (value: unknown) => (typeof value === "string" ? value : JSON.stringify(value));
+  const list = (value: unknown) => (Array.isArray(value) ? value : []);
+  const lines: string[] = [];
+  const name = tool.startsWith(BROWSER_PREFIX) ? tool.slice(BROWSER_PREFIX.length) : tool;
+  if (typeof args.url === "string") lines.push(`Address: ${args.url}`);
+  if (name === "browser_type" && args.text !== undefined) lines.push(`Text: ${text(args.text)}`);
+  for (const f of list(args.fields)) {
+    const fieldArgs = typeof f === "object" && f !== null ? (f as Record<string, unknown>) : {};
+    lines.push(`${text(fieldArgs.name ?? fieldArgs.target ?? "field")}: ${text(fieldArgs.value ?? "")}`);
+  }
+  for (const v of list(args.values)) lines.push(`Choice: ${text(v)}`);
+  for (const path of list(args.paths)) lines.push(`File: ${text(path)}`);
+  if (args.data !== undefined) lines.push(`Data: ${text(args.data)}`);
+  for (const key of ["function", "code"]) {
+    if (args[key] !== undefined) lines.push(`Code: ${text(args[key])}`);
+  }
+  return lines.map(cut);
+}
+
 /// The card's sentence as plain text.
 export function askText(ask: BrowserAsk): string {
   return askParts(ask)

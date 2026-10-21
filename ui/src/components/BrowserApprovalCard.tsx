@@ -4,7 +4,7 @@ import { Globe } from "lucide-react";
 import { commands } from "@/api/commands";
 import type { Approval } from "@/api/types";
 import { Button } from "@/components/ui/button";
-import { askParts, type BrowserAsk } from "@/lib/browser";
+import { askDetails, askParts, type BrowserAsk } from "@/lib/browser";
 import { notifyError } from "@/lib/notify";
 import { invalidate, invalidateDots, keys } from "@/lib/query";
 import { onSingleClick } from "@/lib/single-click";
@@ -66,6 +66,15 @@ export function BrowserApprovalCard({
           )}
         </span>
       </p>
+      {askDetails(approval.tool, approval.input).length > 0 && (
+        <ul aria-label="What it sends" className="flex flex-col gap-0.5 text-xs">
+          {askDetails(approval.tool, approval.input).map((line, i) => (
+            <li key={i}>
+              <code className="break-all whitespace-pre-wrap">{line}</code>
+            </li>
+          ))}
+        </ul>
+      )}
       {ask.dangerous && (
         <p className="text-xs text-muted-foreground">No rule can allow this: it asks every time.</p>
       )}

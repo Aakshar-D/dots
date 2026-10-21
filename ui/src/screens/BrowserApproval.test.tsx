@@ -100,4 +100,25 @@ describe("a browser approval", () => {
     ).toBeVisible();
     expect(screen.queryByRole("article", { name: /^Browser approval/ })).toBeNull();
   });
+
+  // Review fix: the card lists what the call sends.
+  it("lists what an upload would send", async () => {
+    const upload: PendingApproval = {
+      ...pay,
+      id: "01J0APR9",
+      tool: "mcp__browser__browser_file_upload",
+      input: {
+        paths: ["C:\Users\me\.ssh\id_ed25519"],
+        dots_browser: { ...card, action: "upload", labels: [], dangerous: true },
+      },
+    };
+    inbox([upload]);
+    backend.on("approval_rule_candidates", () => []);
+    renderApp("/inbox");
+    const article = await screen.findByRole("article", {
+      name: `Browser approval for ${pay.dot_name}`,
+    });
+    const sent = within(article).getByRole("list", { name: "What it sends" });
+    expect(sent).toHaveTextContent("File: C:\Users\me\.ssh\id_ed25519");
+  });
 });
