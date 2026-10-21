@@ -96,7 +96,7 @@ pub fn check_draft(text: &str) -> Result<DraftSummary> {
 pub(crate) fn write_skill_folder(root: &Path, name: &str, text: &str) -> Result<PathBuf> {
     std::fs::create_dir_all(root)?;
     let dir = root.join(name);
-    if dir.exists() {
+    if std::fs::symlink_metadata(&dir).is_ok() {
         return Err(Error::Conflict(format!(
             "{name} already exists in Dots' skills folder ({}).",
             dir.display()
@@ -114,12 +114,43 @@ pub(crate) fn write_skill_folder(root: &Path, name: &str, text: &str) -> Result<
 }
 
 /// True when `dir` is a folder inside `root`, compared after resolving both: a skill there is
-/// Dots' own, and removing it deletes its folder (spec §7). False when either cannot be resolved.
+/// Dots' own, and removing it deletes its folder (spec §7). False when either cannot be resolved,
+/// and when `dir` itself is a symlink or junction: a link is never deleted through.
 pub(crate) fn is_inside(dir: &Path, root: &Path) -> bool {
+    if is_link(dir) {
+        return false;
+    }
     match (dir.canonicalize(), root.canonicalize()) {
         (Ok(dir), Ok(root)) => dir != root && dir.starts_with(&root),
         _ => false,
     }
+}
+
+/// Whether `path` is a symlink, or on Windows a junction or other reparse point.
+fn is_link(path: &Path) -> bool {
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        return false;
+    };
+    #[cfg(windows)]
+    let reparse = std::os::windows::fs::MetadataExt::file_attributes(&meta) & 0x400 != 0;
+    #[cfg(not(windows))]
+    let reparse = false;
+    meta.file_type().is_symlink() || reparse
+}
+
+/// Whether `name` is what `write_skill_folder` gives its hidden folder: `.<skill name>.<ULID>`.
+fn is_unfinished_name(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix('.') else {
+        return false;
+    };
+    let Some((skill, id)) = rest.rsplit_once('.') else {
+        return false;
+    };
+    id.len() == 26
+        && id
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'A'..=b'H' | b'J' | b'K' | b'M' | b'N' | b'P'..=b'T' | b'V'..=b'Z'))
+        && check_name(LibraryKind::Skill, skill).is_ok()
 }
 
 /// Deletes the folder of one of Dots' own skills. The error names the folder (spec §7).
@@ -134,14 +165,16 @@ pub(crate) fn delete_skill_folder(dir: &Path) -> Result<()> {
     }
 }
 
-/// Removes what a save that never finished left in `root`: its hidden folders. For startup,
+/// Removes what a save that never finished left in `root`: the hidden folders named as
+/// `write_skill_folder` names them, and no other (a person may keep a `.git` there). For startup,
 /// when no save is running.
 pub fn sweep_unfinished(root: &Path) {
     let Ok(entries) = std::fs::read_dir(root) else {
         return;
     };
     for entry in entries.flatten() {
-        if entry.file_name().to_string_lossy().starts_with('.') {
+        let is_dir = entry.file_type().is_ok_and(|t| t.is_dir()) && !is_link(&entry.path());
+        if is_dir && is_unfinished_name(&entry.file_name().to_string_lossy()) {
             let _ = std::fs::remove_dir_all(entry.path());
         }
     }

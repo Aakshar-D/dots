@@ -255,11 +255,58 @@ async fn starting_dots_removes_saves_a_crash_cut_short() {
     let dir = tempfile::tempdir().unwrap();
     let data: PathBuf = dir.path().join("data");
     let skills = data.join("skills");
-    std::fs::create_dir_all(skills.join(".pr-tests.01J0X")).unwrap();
+    let cut_short = skills.join(".pr-tests.01J0X0000000000000000000AB");
+    std::fs::create_dir_all(&cut_short).unwrap();
+    std::fs::write(cut_short.join("SKILL.md"), "half").unwrap();
     std::fs::create_dir_all(skills.join("csv")).unwrap();
+    // A person's own hidden folders, and one that only looks like a save, are kept.
+    std::fs::create_dir_all(skills.join(".git")).unwrap();
+    std::fs::write(skills.join(".git").join("HEAD"), "ref").unwrap();
+    std::fs::create_dir_all(skills.join(".notes")).unwrap();
+    std::fs::create_dir_all(skills.join(".pr-tests.01J0X")).unwrap();
     let mut cfg = Config::new(&data);
     cfg.port = 0;
     let _rt = Runtime::start(cfg).await.unwrap();
-    assert!(!skills.join(".pr-tests.01J0X").exists());
+    assert!(!cut_short.exists());
     assert!(skills.join("csv").exists());
+    assert!(skills.join(".git").join("HEAD").exists());
+    assert!(skills.join(".notes").exists());
+    assert!(skills.join(".pr-tests.01J0X").exists());
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn a_junction_into_the_skills_folder_is_not_deleted_through() {
+    let (dir, store) = temp_store().await;
+    let skills = dir.path().join("skills");
+    let lib = service(&store, &new_bus(), &skills);
+    lib.create_skill(DRAFT).await.unwrap();
+    let link = dir.path().join("link");
+    let made = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(&link)
+        .arg(skills.join("pr-tests"))
+        .output()
+        .unwrap();
+    assert!(made.status.success());
+    let item = lib
+        .add(
+            "linked",
+            LibraryConfig::Skill(SkillConfig {
+                path: link.to_string_lossy().into_owned(),
+            }),
+            None,
+        )
+        .await
+        .unwrap();
+    let list = lib.list().await.unwrap();
+    assert!(
+        !list
+            .iter()
+            .find(|e| e.item.name == "linked")
+            .unwrap()
+            .dots_folder
+    );
+    lib.remove(&item.id, false).await.unwrap();
+    assert!(skills.join("pr-tests").join("SKILL.md").exists());
 }

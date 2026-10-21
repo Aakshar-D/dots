@@ -390,8 +390,8 @@ impl LibraryService {
     }
 
     /// Whether the skill folder `path` is in Dots' skills folder.
-    fn is_own_folder(skills_dir: Option<&Path>, path: &str) -> bool {
-        skills_dir.is_some_and(|root| skill_creator::is_inside(Path::new(path), root))
+    fn is_own_folder(skills_dir: Option<&Path>, path: &Path) -> bool {
+        skills_dir.is_some_and(|root| skill_creator::is_inside(path, root))
     }
 
     /// Every item, with the dots that use it, a server's catalog and missing variables, and
@@ -420,7 +420,7 @@ impl LibraryService {
                 .into_iter()
                 .map(|(kind, path)| {
                     let own = kind == LibraryKind::Skill
-                        && Self::is_own_folder(skills_dir.as_deref(), &path);
+                        && Self::is_own_folder(skills_dir.as_deref(), Path::new(&path));
                     let dir = PathBuf::from(&path);
                     let read = match kind {
                         LibraryKind::Skill => Some(
@@ -586,7 +586,7 @@ impl LibraryService {
             let skills_dir = self.skills_dir.clone();
             let dir = PathBuf::from(&c.path);
             blocking(move || {
-                if Self::is_own_folder(skills_dir.as_deref(), &dir.to_string_lossy()) {
+                if Self::is_own_folder(skills_dir.as_deref(), &dir) {
                     skill_creator::delete_skill_folder(&dir)
                 } else {
                     Ok(())
