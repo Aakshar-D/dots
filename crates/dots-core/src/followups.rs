@@ -357,7 +357,8 @@ pub fn late_words(due: DateTime<Utc>, now: DateTime<Utc>) -> String {
     }
     let hours = ((late.num_minutes() + 30) / 60).max(1);
     let unit = if hours == 1 { "hour" } else { "hours" };
-    format!(" (this is {hours} {unit} late; Dots was not running at the time)")
+    // No cause is named: a pause, a busy thread or a retry make a follow-up late while Dots runs.
+    format!(" (this is {hours} {unit} later than you asked)")
 }
 
 /// When `row` was due, as the person reads it.

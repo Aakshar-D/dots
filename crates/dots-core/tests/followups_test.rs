@@ -334,8 +334,7 @@ async fn a_follow_up_missed_while_dots_was_closed_fires_once_with_the_late_words
     assert_eq!(
         run.payload.unwrap()["message"],
         format!(
-            "Follow-up you scheduled on {}: check CI (this is 2 hours late; Dots was not running \
-             at the time)",
+            "Follow-up you scheduled on {}: check CI (this is 2 hours later than you asked)",
             local_label(t0())
         )
     );
@@ -354,11 +353,11 @@ fn a_late_follow_up_says_how_many_hours_late_it_is() {
     assert_eq!(late_words(due, due + LATE_AFTER), "");
     assert_eq!(
         late_words(due, due + TimeDelta::minutes(16)),
-        " (this is 1 hour late; Dots was not running at the time)"
+        " (this is 1 hour later than you asked)"
     );
     assert_eq!(
         late_words(due, due + TimeDelta::minutes(150)),
-        " (this is 3 hours late; Dots was not running at the time)"
+        " (this is 3 hours later than you asked)"
     );
 }
 
