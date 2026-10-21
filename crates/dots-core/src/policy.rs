@@ -231,18 +231,22 @@ impl Policy {
     }
 
     /// (allow patterns, deny patterns) for `--allowedTools` / `--disallowedTools`. A rule of
-    /// `Context` or of a check-in tool (`CHECK_IN_TOOLS`) is left out: the CLI has no such tool,
-    /// and Dots' own `dots` server checks each call of its tools against these rules itself
-    /// (context library spec section 4, check-ins spec section 4).
+    /// `Context`, of a check-in tool (`CHECK_IN_TOOLS`) or of the browser (`Browser`,
+    /// `BrowserRisky`) is left out: the CLI has no such tool, and Dots checks each call of its
+    /// tools against these rules itself (context library spec section 4, check-ins spec
+    /// section 4, browser spec section 6).
     pub fn cli_lists(&self) -> (Vec<String>, Vec<String>) {
         let dots_only = |tool: &str| {
             let tool = tool.trim();
-            ["Context"].iter().chain(CHECK_IN_TOOLS.iter()).any(|name| {
-                tool == *name
-                    || tool
-                        .strip_prefix(name)
-                        .is_some_and(|rest| rest.starts_with('('))
-            })
+            ["Context", "Browser", "BrowserRisky"]
+                .iter()
+                .chain(CHECK_IN_TOOLS.iter())
+                .any(|name| {
+                    tool == *name
+                        || tool
+                            .strip_prefix(name)
+                            .is_some_and(|rest| rest.starts_with('('))
+                })
         };
         let pick = |a: Action| -> Vec<String> {
             self.rules
@@ -266,7 +270,14 @@ impl Policy {
             if name.chars().any(char::is_whitespace) {
                 return Err(invalid("tool name must not contain whitespace"));
             }
+            // The browser's rules name one site each (browser spec section 6).
+            if matches!(pattern, Pattern::Exact("Browser" | "BrowserRisky")) {
+                return Err(invalid(crate::browser::sites::BARE_RULE));
+            }
             if let Pattern::WithSpec { tool, spec } = pattern {
+                if matches!(tool, "Browser" | "BrowserRisky") {
+                    crate::browser::sites::check_site(spec).map_err(|e| invalid(&e))?;
+                }
                 if tool == "Context" && check_name(LibraryKind::Context, spec.trim()).is_err() {
                     return Err(invalid(
                         "a Context rule names one collection: lower-case letters, digits, '-' and '_'",
