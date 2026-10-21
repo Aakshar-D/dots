@@ -81,6 +81,24 @@ describe("check-ins in a chat", () => {
     expect(backend.callsTo("message_mark_read")).toEqual([{ id: asked.id }]);
   });
 
+  // The chat shows what the person typed, not the words Dots wraps it in for the dot.
+  it("shows an answer as the person wrote it", async () => {
+    const answered: Message = { ...asked, answered_at: asked.created_at, answer_run_id: "b" };
+    thread(
+      [
+        run("a", "10:00"),
+        run("b", "11:00", {
+          parent_run_id: "a",
+          payload: { message: `Answer to your question "${asked.text}": Friday`, answer: "Friday" },
+        }),
+      ],
+      [answered],
+    );
+    renderApp(`/chat/${dot.id}/b`);
+    expect(await screen.findByText("Friday")).toBeVisible();
+    expect(screen.queryByText(/Answer to your question/)).toBeNull();
+  });
+
   it("answers the open question with one of its choices", async () => {
     thread([run("a", "10:00")], [asked]);
     backend.on("message_reply", () => run("c", "12:00", { parent_run_id: "a", status: "queued" }));

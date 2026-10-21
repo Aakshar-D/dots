@@ -34,12 +34,14 @@ const TRIGGER: Record<Run["trigger"], string> = {
   follow_up: "Follow-up the dot scheduled",
 };
 
-/// What the person wrote, for a chat run.
+/// What the person wrote, for a chat run: an answer to a question as they typed it, not the
+/// words Dots wraps it in for the dot.
 function chatMessage(run: Run): string | null {
   if (run.trigger !== "chat" || typeof run.payload !== "object" || run.payload === null) {
     return null;
   }
-  const message = (run.payload as Record<string, unknown>).message;
+  const { answer, message } = run.payload as Record<string, unknown>;
+  if (typeof answer === "string") return answer;
   return typeof message === "string" ? message : null;
 }
 

@@ -106,7 +106,7 @@ async fn a_reply_continues_a_quiet_thread_from_its_end() {
     assert_eq!(reply.session_id.as_deref(), Some("s1"));
     assert_eq!(
         reply.payload,
-        Some(json!({"message": "Answer to your question \"Ship it?\": yes"}))
+        Some(json!({"message": "Answer to your question \"Ship it?\": yes", "answer": "yes"}))
     );
     let answered = t.store().get_message(&question.id).await.unwrap();
     assert_eq!(answered.answer_run_id.as_deref(), Some(reply.id.as_str()));
@@ -155,7 +155,8 @@ async fn a_reply_to_a_thread_whose_end_has_no_session_starts_afresh() {
     assert_eq!(
         reply.payload,
         Some(json!({
-            "message": "Earlier you asked the person: \"Which branch?\"\nTheir answer: main"
+            "message": "Earlier you asked the person: \"Which branch?\"\nTheir answer: main",
+            "answer": "main"
         }))
     );
 }

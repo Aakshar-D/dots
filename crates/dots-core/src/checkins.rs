@@ -446,7 +446,8 @@ impl CheckIns {
                 question.text
             )
         };
-        new.payload = Some(json!({ "message": message }));
+        // `answer` is what the person typed, which the chat shows in place of the message.
+        new.payload = Some(json!({ "message": message, "answer": text }));
         let (answered, run) = self.store.answer_question(id, &new).await?;
         runner.enqueued(&run);
         self.updated(answered);
