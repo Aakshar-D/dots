@@ -238,7 +238,11 @@ async fn the_first_call_starts_edge_and_playwright_and_reading_is_free() {
             s("none"),
         ]
     );
-    assert!(start["cwd"].as_str().unwrap().ends_with("ws"), "{start}");
+    // Review fix: the server starts in a folder of Dots' own, not in the workspace, where a
+    // dot could plant a `node_modules` or an `.npmrc` that npx would follow.
+    let cwd = start["cwd"].as_str().unwrap();
+    assert!(cwd.ends_with("playwright"), "{start}");
+    assert!(!cwd.starts_with(&*e.ws.to_string_lossy()), "{start}");
     // The next call uses both as they are.
     assert!(!failed(
         &call(

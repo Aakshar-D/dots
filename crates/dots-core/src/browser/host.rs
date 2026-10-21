@@ -68,6 +68,9 @@ pub trait BrowserHost: Send + Sync {
     async fn close(&self, dot_id: &str);
     /// Where the dot's Edge saves downloads.
     fn downloads(&self, dot_id: &str) -> PathBuf;
+    /// The folder Playwright servers start in: Dots' own, never a workspace, where a dot could
+    /// plant a `node_modules` or an `.npmrc` for npx to follow.
+    fn server_dir(&self) -> PathBuf;
     /// Closes the dot's Edge and removes its folder: profile, downloads, port (its dot was
     /// deleted).
     async fn remove(&self, dot_id: &str);
@@ -167,6 +170,10 @@ impl EdgeHost {
 
 #[async_trait]
 impl BrowserHost for EdgeHost {
+    fn server_dir(&self) -> PathBuf {
+        self.root.join("playwright")
+    }
+
     async fn open(&self, dot_id: &str, exe: &Path) -> Result<Opened, HostError> {
         let _one = self.starting.lock().await;
         if let Some(port) = self.known_port(dot_id) {

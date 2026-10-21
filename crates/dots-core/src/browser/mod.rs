@@ -299,20 +299,23 @@ impl RunBrowser {
         Ok(session)
     }
 
-    /// Starts the Playwright server on the Edge on `port`, in the run's workspace.
+    /// Starts the Playwright server on the Edge on `port`, in Dots' own folder for it.
     async fn start_server(&self, port: u16) -> Result<McpSession, String> {
         let command = &self.browsers.playwright;
         let Some(program) = find_program(&command.program) else {
             return Err(NO_NODE.to_string());
         };
+        let dir = self.browsers.host.server_dir();
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| format!("The browser could not start: {}: {e}", dir.display()))?;
         let config = McpServerConfig::Stdio {
             command: program.to_string_lossy().into_owned(),
             args: command.args_for(port, &self.workspace.join("downloads")),
-            cwd: Some(self.workspace.to_string_lossy().into_owned()),
+            cwd: Some(dir.to_string_lossy().into_owned()),
             env: BTreeMap::new(),
         };
         let options = SessionOptions {
-            cwd: Some(self.workspace.clone()),
+            cwd: Some(dir),
             answer_timeout: START_TIMEOUT,
             ..SessionOptions::default()
         };
