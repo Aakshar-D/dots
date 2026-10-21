@@ -8,7 +8,11 @@ use std::net::TcpStream;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use serde_json::Value;
+use dots_core::browser::PlaywrightCommand;
+use serde_json::{json, Value};
+
+use super::fake_mcp::FakeMcp;
+use super::playwright::{on, CLICK, NAVIGATE, SCREENSHOT, SNAPSHOT};
 
 /// The program `fake-browser`.
 pub fn exe() -> String {
@@ -134,4 +138,36 @@ fn post(port: u16, path: &str, body: &str) -> bool {
     let mut answer = String::new();
     let _ = stream.read_to_string(&mut answer);
     answer.starts_with("HTTP/1.1 200")
+}
+
+/// The address the captured cart page is served at in the browser's tests.
+pub const CART: &str = "https://shop.com/cart";
+
+/// A `fake-mcp` script that answers as Playwright 0.0.83 answered on the cart page, served as
+/// `CART`: a snapshot, a navigation, acts, code and a screenshot with its image.
+/// `browser_wait_for` makes the server exit without an answer.
+pub fn cart_script() -> Value {
+    let reply = |text: String| json!({"content": [{"type": "text", "text": text}]});
+    let tool = |name: &str, result: Value| json!({"name": name, "inputSchema": {"type": "object"}, "result": result});
+    json!({"tools": [
+        tool("browser_snapshot", reply(on(SNAPSHOT, CART))),
+        tool("browser_navigate", reply(on(NAVIGATE, CART))),
+        tool("browser_click", reply(on(CLICK, CART))),
+        tool("browser_type", reply(on(CLICK, CART))),
+        tool("browser_fill_form", reply(on(CLICK, CART))),
+        tool("browser_evaluate", reply("### Result\n1".to_string())),
+        tool("browser_take_screenshot", json!({"content": [
+            {"type": "text", "text": SCREENSHOT},
+            {"type": "image", "mimeType": "image/png", "data": "iVBORw0KGgo="}
+        ]})),
+        {"name": "browser_wait_for", "inputSchema": {"type": "object"}, "exit": true}
+    ]})
+}
+
+/// The Playwright command that starts `fake-mcp` on `fake`'s script.
+pub fn playwright_command(fake: &FakeMcp) -> PlaywrightCommand {
+    PlaywrightCommand {
+        program: env!("CARGO_BIN_EXE_fake-mcp").to_string(),
+        args: vec![fake.script().to_string_lossy().into_owned()],
+    }
 }
