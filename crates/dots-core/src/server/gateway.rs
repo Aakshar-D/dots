@@ -100,6 +100,8 @@ async fn call(
     // A list change announced with an earlier result holds the server before this check; one
     // not listed in time holds it for this call.
     let trust = server.settled_trust(tool).await;
+    let mut input = input;
+    crate::browser::drop_card(&mut input);
     let checked = s
         .hub
         .check_mcp(

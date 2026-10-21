@@ -40,6 +40,21 @@ pub fn is_browser_tool(qualified: &str) -> bool {
     qualified.len() > PREFIX.len() && qualified.starts_with(PREFIX)
 }
 
+/// Whether an approval of `tool` with `input` is one the built-in browser asked for: it carries
+/// Dots' own card (`gate::ASK_KEY`). A Library server named `browser` shares the tool names, and
+/// its inputs never carry the card (`drop_card`).
+pub fn is_browser_approval(tool: &str, input: &Value) -> bool {
+    is_browser_tool(tool) && input.get(gate::ASK_KEY).is_some()
+}
+
+/// Drops a card of Dots' own from the input of a call to a Library server, where only the model
+/// could have put it.
+pub fn drop_card(input: &mut Value) {
+    if let Some(object) = input.as_object_mut() {
+        object.remove(gate::ASK_KEY);
+    }
+}
+
 /// The pinned Playwright MCP server (browser spec section 2.2). A new version comes with
 /// captures of its output and the gate's tests on them (section 11).
 pub const PLAYWRIGHT_MCP: &str = "@playwright/mcp@0.0.83";

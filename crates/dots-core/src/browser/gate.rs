@@ -509,7 +509,7 @@ pub fn is_secret(element: &Element) -> bool {
 /// call, a page with no site, or an input without Dots' card. `None` for a tool that is not
 /// the browser's.
 pub fn rule_candidates(tool: &str, input: &Value) -> Option<Vec<RuleCandidate>> {
-    if !super::is_browser_tool(tool) {
+    if !super::is_browser_approval(tool, input) {
         return None;
     }
     let card = input

@@ -415,7 +415,9 @@ impl Runner {
                 // A browser call approved after its run parked is not performed: the page may
                 // have moved on (browser spec section 3.6). No grant and no queued call; the
                 // dot is told, and a rule chosen with it was saved with the decision.
-                (ApprovalStatus::Approved, _) if crate::browser::is_browser_tool(&a.tool) => {
+                (ApprovalStatus::Approved, _)
+                    if crate::browser::is_browser_approval(&a.tool, &a.input) =>
+                {
                     if self.store.skip_late_browser_call(&a.id).await? {
                         let approval = self.store.get_approval(&a.id).await?;
                         let _ = self.bus.send(RuntimeEvent::ApprovalUpdated { approval });

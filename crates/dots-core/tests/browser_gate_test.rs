@@ -660,12 +660,12 @@ fn a_card_offers_the_rules_of_its_site() {
         )
         .is_empty());
     }
-    assert!(allow_candidates(
-        "mcp__browser__browser_click",
-        &json!({"target": "e6"}),
+    // Without Dots' card it is not the built-in browser's approval (a Library server named
+    // `browser`): the browser offers nothing, and the ordinary rules apply.
+    assert_eq!(
+        rule_candidates("mcp__browser__browser_click", &json!({"target": "e6"})),
         None
-    )
-    .is_empty());
+    );
     // Other tools keep their own rules.
     assert_eq!(rule_candidates("mcp__files__read", &json!({})), None);
     assert_eq!(

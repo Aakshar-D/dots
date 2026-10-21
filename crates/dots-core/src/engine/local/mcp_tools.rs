@@ -237,6 +237,8 @@ impl Session {
             trust = server.settled_trust(tool) => trust,
             _ = self.ctx.cancel.cancelled() => return None,
         };
+        let mut input = input;
+        crate::browser::drop_card(&mut input);
         let checked = tokio::select! {
             r = self.gate.check_mcp(
                 &self.ctx.run_id,
