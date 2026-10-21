@@ -196,6 +196,8 @@ impl Runtime {
                 plugins_dir: cfg.data_dir.join("plugins"),
             },
         );
+        // Dots' own `dots` MCP server serves the check-in tools to Claude runs.
+        runner.set_checkins(checkins.clone());
         // Decisions parked before a restart (decided, but the resume never happened) are
         // turned into resume runs now; failures are logged and never block startup.
         match store.list_runs_by_status(RunStatus::AwaitingApproval).await {

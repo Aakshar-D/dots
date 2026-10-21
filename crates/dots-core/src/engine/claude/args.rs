@@ -2,7 +2,9 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
+use crate::checkins::Tool;
 use crate::engine::RunContext;
+use crate::model::EngineKind;
 
 pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
     let spec = &ctx.dot.spec;
@@ -44,6 +46,8 @@ pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
     if !ctx.tools.contexts().is_empty() {
         allow.push("mcp__dots__context".into());
     }
+    // It checks each call of its check-in tools too (check-ins spec section 2).
+    allow.extend(Tool::ALL.map(|t| t.model_name(EngineKind::Claude).to_string()));
     if !allow.is_empty() {
         a.push("--allowedTools".into());
         a.extend(allow);
