@@ -5,6 +5,7 @@
 
 pub mod gate;
 pub mod host;
+pub mod pipe;
 pub mod sites;
 pub mod snapshot;
 
