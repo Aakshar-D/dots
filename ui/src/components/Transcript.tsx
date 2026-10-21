@@ -5,7 +5,13 @@ import { Link } from "react-router";
 import { z } from "zod";
 
 import { commands } from "@/api/commands";
-import { LIMITS, type LibraryEntry, type Run, type RunEventRecord } from "@/api/types";
+import {
+  LIMITS,
+  type LibraryEntry,
+  type Message,
+  type Run,
+  type RunEventRecord,
+} from "@/api/types";
 import { Markdown } from "@/components/Markdown";
 import { StatusBadge } from "@/components/StatusBadge";
 import { isActive } from "@/lib/chat-threads";
@@ -148,10 +154,35 @@ function pluginOwners(entries: LibraryEntry[]): Map<string, string> {
   return owners;
 }
 
+/// A note or a question the dot posted during a run, as a message from the dot (check-ins spec
+/// section 9).
+function CheckIn({ message }: { message: Message }) {
+  const question = message.kind === "question";
+  const state = !question
+    ? null
+    : message.answered_at
+      ? "answered"
+      : message.dismissed_at
+        ? "dismissed"
+        : "waiting for your answer";
+  return (
+    <div
+      role="group"
+      aria-label={question ? "Question from the dot" : "Note from the dot"}
+      className="flex max-w-prose flex-col gap-1 self-start rounded-lg bg-muted px-3 py-1.5"
+    >
+      <p className="whitespace-pre-wrap">{message.text}</p>
+      {state && <span className="text-xs text-muted-foreground">Question · {state}</span>}
+    </div>
+  );
+}
+
 /// A thread as one conversation: each run of the lineage in order, with its events.
 export function Transcript(props: {
   runs: Run[];
   events: Map<string, RunEventRecord[]>;
+  /// The dot's notes and questions of these runs, oldest first; each shows after its run.
+  messages?: Message[];
   /// The last run's error, when the screen shows it by itself. A failed run stores its error as
   /// an event too: the one of the last run that says the same is left out, so that the error is
   /// on screen once.
@@ -189,6 +220,11 @@ export function Transcript(props: {
               {items.length === 0 && message === null && run.status === "queued" && (
                 <p className="text-muted-foreground">Waiting to start.</p>
               )}
+              {(props.messages ?? [])
+                .filter((checkIn) => checkIn.run_id === run.id)
+                .map((checkIn) => (
+                  <CheckIn key={checkIn.id} message={checkIn} />
+                ))}
             </div>
           </section>
         );
