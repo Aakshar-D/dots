@@ -30,6 +30,10 @@ pub const ASKED: &str = "Your question was sent. Finish your turn now; the perso
     arrive as your next message.";
 /// What a second `ask` in one run answers.
 pub const ASKED_ALREADY: &str = "You already asked a question in this run; finish your turn now.";
+/// The most notes one run may send, so a dot in a loop cannot flood the Inbox (spec section 1).
+pub const MAX_NOTES: usize = 10;
+/// The answer to a note past `MAX_NOTES`.
+pub const NOTES_SPENT: &str = "This run has sent 10 notes; that is the most it may send.";
 
 const CHOICES_RULE: &str = "`choices` must be a list of 1 to 5 strings.";
 const CHOICE_RULE: &str = "Each choice must be 1 to 80 characters.";
@@ -319,12 +323,17 @@ impl CheckIns {
         let run = self.store.get_run(run_id).await?;
         match request {
             Request::Notify { text } => {
-                let message = self
+                let sent = self
                     .store
-                    .add_note(&run.dot_id, Some(&run.id), &text)
+                    .add_run_note(&run.dot_id, &run.id, &text, MAX_NOTES)
                     .await?;
-                self.posted(message);
-                Ok(SENT.to_string())
+                match sent {
+                    Some(message) => {
+                        self.posted(message);
+                        Ok(SENT.to_string())
+                    }
+                    None => Err(Error::Invalid(NOTES_SPENT.to_string())),
+                }
             }
             Request::Ask { question, choices } => {
                 let asked = self

@@ -248,3 +248,50 @@ async fn a_call_that_cannot_be_stored_is_not_delivered() {
         .unwrap_err();
     assert_eq!(unknown, "Not delivered: not found: run no-such-run.");
 }
+
+/// A dot in a loop cannot flood the Inbox (spec section 1, anti-goals): a run sends at most
+/// `MAX_NOTES` notes, even when it sends them all at once; Dots' own notes and another run's
+/// notes do not count.
+#[tokio::test]
+async fn a_run_sends_at_most_ten_notes_even_at_once() {
+    use dots_core::checkins::{MAX_NOTES, NOTES_SPENT};
+    let s = setup().await;
+    assert_eq!(MAX_NOTES, 10);
+    let calls: Vec<_> = (0..12)
+        .map(|i| {
+            let (checkins, run_id) = (s.checkins.clone(), s.run.id.clone());
+            tokio::spawn(async move {
+                checkins
+                    .call(&run_id, Tool::Notify, &json!({"text": format!("note {i}")}))
+                    .await
+            })
+        })
+        .collect();
+    let mut answers = Vec::new();
+    for call in calls {
+        answers.push(call.await.unwrap());
+    }
+    let sent = answers.iter().filter(|a| a.as_deref() == Ok(SENT)).count();
+    let refused = answers
+        .iter()
+        .filter(|a| a.as_ref().err().map(String::as_str) == Some(NOTES_SPENT))
+        .count();
+    assert_eq!((sent, refused), (10, 2), "{answers:?}");
+    assert_eq!(s.store.list_messages(None).await.unwrap().len(), 10);
+    // Dots' own notes and another run's are not this run's.
+    s.store
+        .add_note(&s.run.dot_id, None, "A follow-up was skipped.")
+        .await
+        .unwrap();
+    let other = s
+        .store
+        .create_run(&NewRun::new(&s.run.dot_id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    assert_eq!(
+        s.checkins
+            .call(&other.id, Tool::Notify, &json!({"text": "fresh"}))
+            .await,
+        Ok(SENT.to_string())
+    );
+}

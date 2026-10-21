@@ -67,6 +67,34 @@ impl Store {
         self.get_message(&id).await
     }
 
+    /// Stores a note of the run `run_id`; `None` when the run sent `max` notes already. The
+    /// count and the insert are one statement, so notes sent at once cannot pass the limit.
+    pub async fn add_run_note(
+        &self,
+        dot_id: &str,
+        run_id: &str,
+        text: &str,
+        max: usize,
+    ) -> Result<Option<Message>> {
+        let id = new_id();
+        let res = sqlx::query(
+            "INSERT INTO messages (id, dot_id, run_id, kind, text, created_at)              SELECT ?, ?, ?, 'note', ?, ? WHERE              (SELECT COUNT(*) FROM messages WHERE run_id = ? AND kind = 'note') < ?",
+        )
+        .bind(&id)
+        .bind(dot_id)
+        .bind(run_id)
+        .bind(text)
+        .bind(now())
+        .bind(run_id)
+        .bind(max as i64)
+        .execute(&self.pool)
+        .await?;
+        if res.rows_affected() == 0 {
+            return Ok(None);
+        }
+        self.get_message(&id).await.map(Some)
+    }
+
     /// Stores the question of the run `run_id`; `None` when the run asked one already. The
     /// check and the insert are one statement.
     pub async fn add_question(

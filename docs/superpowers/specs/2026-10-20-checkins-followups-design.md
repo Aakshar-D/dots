@@ -215,7 +215,7 @@ The plan (`docs/superpowers/plans/2026-10-20-checkins-followups.md`) changed the
 
 - Every preset allows `Notify`, `Ask` and `FollowUp`, Read-only included, as every preset allows `Skill` and `Context`; migration 0008 adds them to every stored policy whose preset is not Custom (section 4).
 - A follow-up whose run cannot be stored is tried again after 1, 5 and 30 minutes; the fourth failed start skips it with the note "A follow-up was skipped because its run could not be started (<error>). It was due <time>: <note>". Any error while firing one follow-up (reading its thread, storing its run) counts as a failed start (section 6).
-- The late words say `hour` for one hour; the hours are the lateness rounded, at least 1, and they end the message's first line (section 6).
+- The late words are ` (this is <n> hours later than you asked)`, `hour` for one hour; the hours are the lateness rounded, at least 1, and they end the message's first line. They name no cause: a pause, a busy thread or a retry also make a follow-up late while Dots runs, so "Dots was not running at the time" would be false (section 6; from the final review).
 - A disabled dot's follow-up posts "A follow-up was skipped because the dot is off. It was due <time>: <note>" (section 6).
 - The first prompt of a follow-up run that cannot resume its thread has a `## Follow-up` section with the message; a follow-up run's payload also holds `follow_up_id` (section 6).
 - `Message` carries `dot_name`, read from the dot (section 7).
@@ -226,3 +226,4 @@ The plan (`docs/superpowers/plans/2026-10-20-checkins-followups.md`) changed the
 - Migration 0007's test (`store_dots_test`) builds its pre-0007 policy without the check-in rules too, since 0008 now appends them after `Context`; behaviour is unchanged.
 - The `Runner`'s `checkins` field sits after the `held` and `pass` fields that the auto-update work added; behaviour is unchanged.
 - `local_tools_test` counts the three check-in tools among those a run gets only on request (`checkins::schemas`), and round-trips their input through `prepare`.
+- A run sends at most 10 notes (`checkins::MAX_NOTES`); the eleventh `notify` is answered "This run has sent 10 notes; that is the most it may send." The count and the insert are one statement, so notes sent at once cannot pass it. Dots' own notes do not count (section 2; from the final review, for the anti-goal of section 1).
