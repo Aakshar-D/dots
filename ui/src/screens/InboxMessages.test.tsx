@@ -72,7 +72,7 @@ describe("the Inbox's messages", () => {
   it("answers a question with typed text", async () => {
     holding([{ ...open, choices: null }]);
     const { user } = renderApp("/inbox");
-    const box = await screen.findByLabelText(`Answer to ${open.dot_name}`);
+    const box = await screen.findByLabelText(`Answer to ${open.dot_name}: ${open.text}`);
     expect(screen.getByRole("button", { name: "Reply" })).toBeDisabled();
     await user.type(box, "  Ship it on Friday.  ");
     await user.click(screen.getByRole("button", { name: "Reply" }));
@@ -81,6 +81,15 @@ describe("the Inbox's messages", () => {
         { id: open.id, text: "Ship it on Friday." },
       ]),
     );
+  });
+
+  // Each reply box says which question it answers, so two questions of one dot differ.
+  it("labels each reply box with its question", async () => {
+    const other = { ...open, id: `${open.id}-2`, text: "Which branch?", choices: null };
+    holding([{ ...open, choices: null }, other]);
+    renderApp("/inbox");
+    expect(await screen.findByLabelText(`Answer to ${open.dot_name}: ${open.text}`)).toBeVisible();
+    expect(screen.getByLabelText(`Answer to ${open.dot_name}: Which branch?`)).toBeVisible();
   });
 
   // Review Focus 3.

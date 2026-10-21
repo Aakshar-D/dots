@@ -87,7 +87,7 @@ export function MessageCard({ message }: { message: Message }) {
           )}
           <div className="flex items-end gap-2">
             <label htmlFor={`answer-${message.id}`} className="sr-only">
-              Answer to {message.dot_name}
+              Answer to {message.dot_name}: {message.text}
             </label>
             <Textarea
               id={`answer-${message.id}`}

@@ -228,3 +228,5 @@ The plan (`docs/superpowers/plans/2026-10-20-checkins-followups.md`) changed the
 - `local_tools_test` counts the three check-in tools among those a run gets only on request (`checkins::schemas`), and round-trips their input through `prepare`.
 - A run sends at most 10 notes (`checkins::MAX_NOTES`); the eleventh `notify` is answered "This run has sent 10 notes; that is the most it may send." The count and the insert are one statement, so notes sent at once cannot pass it. Dots' own notes do not count (section 2; from the final review, for the anti-goal of section 1).
 - For `Notify`, `Ask` and `FollowUp` an ask rule wins over the preset's allow (deny > ask > allow); every other tool keeps deny > allow > ask (section 4; asked for by the person after the smoke).
+- An answer's run payload also holds `answer`, the person's trimmed text; the chat shows it in place of the wrapped message (section 5; from the self-QA).
+- Each Inbox reply box is labelled "Answer to <dot>: <question>", so two open questions of one dot have distinct boxes (section 9; from the self-QA).
