@@ -551,6 +551,38 @@ describe("creating a skill", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 
+  it("closes while Claude writes and ends the draft", async () => {
+    const pending = later<string>();
+    backend.on("skill_draft", () => pending.answer);
+    backend.on("skill_draft_cancel", () => null);
+    const { user, dialog } = await describeIdea();
+    await user.click(within(dialog).getByRole("button", { name: "Write it" }));
+    expect(await within(dialog).findByRole("status")).toHaveTextContent(
+      "Claude is writing the skill…",
+    );
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const [{ dialog: id }] = backend.callsTo("skill_draft") as [{ dialog: string }];
+    expect(backend.callsTo("skill_draft_cancel")).toContainEqual({ dialog: id });
+  });
+
+  it("goes back from Start over with the idea kept and the draft dropped", async () => {
+    backend.on("skill_draft", () => DRAFT);
+    backend.on("skill_check", () => summary);
+    const { user, dialog } = await describeIdea();
+    await user.click(within(dialog).getByRole("button", { name: "Write it" }));
+    await within(dialog).findByLabelText("SKILL.md");
+    await user.click(within(dialog).getByRole("button", { name: "Start over" }));
+    expect(within(dialog).getByLabelText("What should the skill do?")).toHaveValue(
+      "Check a PR for missing tests",
+    );
+    expect(within(dialog).queryByLabelText("SKILL.md")).toBeNull();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
   it("says that removing a skill Dots made deletes its folder", async () => {
     listing([{ ...skill, dots_folder: true }]);
     const { user } = renderApp("/library");
