@@ -161,6 +161,11 @@ impl Session {
         if self.checkins.is_some() {
             out.extend(tools::checkins::schemas());
         }
+        // The built-in browser's tools (browser spec section 2.2); their names fit as they are,
+        // so `ToolNames` finds them by their `mcp__` name.
+        if self.ctx.tools.browser().is_some() {
+            out.extend(crate::browser::function_schemas());
+        }
         let mut given = HashSet::new();
         for server in self.ctx.tools.servers() {
             // Not settled in time: the list may be the old one; each call is checked anyway.
@@ -212,6 +217,17 @@ impl Session {
             Ok(input) => input,
             Err(e) => return Some(ToolOutput::err(format!("{qualified}: {e}"))),
         };
+        // A call of the built-in browser goes to its gate (browser spec section 3).
+        if let (Some(browser), Some(tool)) = (
+            self.ctx.tools.browser(),
+            qualified.strip_prefix(crate::browser::PREFIX),
+        ) {
+            let result = tokio::select! {
+                r = browser.call(self.gate.as_ref(), tool, input, CALL_TIMEOUT, &self.ctx.cancel) => r,
+                _ = self.ctx.cancel.cancelled() => return None,
+            };
+            return Some(format_result(&result));
+        }
         let Some((server, tool)) = self.ctx.tools.resolve(qualified) else {
             return Some(ToolOutput::err(not_open(qualified)));
         };

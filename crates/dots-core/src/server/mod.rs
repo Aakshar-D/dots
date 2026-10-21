@@ -19,6 +19,7 @@ use crate::runner::Runner;
 use crate::store::Store;
 use crate::Result;
 
+mod browser;
 pub mod gateway;
 pub mod mcp;
 pub mod webhook;

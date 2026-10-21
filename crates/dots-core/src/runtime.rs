@@ -95,6 +95,9 @@ pub struct Runtime {
     chat_lock: Arc<Mutex<()>>,
     checkins: CheckIns,
     follow_ups: Arc<FollowUps>,
+    /// The dots' browsers (browser spec section 2). Read from Task 9 on.
+    #[allow(dead_code)]
+    browsers: Arc<crate::browser::Browsers>,
     shutdown: CancellationToken,
 }
 
@@ -201,6 +204,16 @@ impl Runtime {
         );
         // Dots' own `dots` MCP server serves the check-in tools to Claude runs.
         runner.set_checkins(checkins.clone());
+        // The dots' browsers: Edge on each dot's own profile, Playwright MCP per run (browser
+        // spec section 2).
+        let browsers = crate::browser::Browsers::new(
+            store.clone(),
+            Arc::new(crate::browser::host::EdgeHost::new(
+                cfg.data_dir.join("browser"),
+            )),
+            crate::browser::PlaywrightCommand::default(),
+        );
+        runner.set_browsers(browsers.clone());
         // Decisions parked before a restart (decided, but the resume never happened) are
         // turned into resume runs now; failures are logged and never block startup.
         match store.list_runs_by_status(RunStatus::AwaitingApproval).await {
@@ -255,6 +268,7 @@ impl Runtime {
             chat_lock: follow_ups.thread_lock(),
             checkins,
             follow_ups,
+            browsers,
             shutdown,
         })
     }
