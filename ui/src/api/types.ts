@@ -489,6 +489,19 @@ export const ScannedSkill = z.strictObject({
   // Why `name` cannot be a Library name.
   name_error: nullable(z.string()),
 });
+// What the Create skill dialog asks for: a first draft of `idea`, or `current` changed as
+// `change` says.
+export const DraftRequest = z.strictObject({
+  idea: z.string(),
+  model: z.string(),
+  current: nullable(z.string()),
+  change: nullable(z.string()),
+});
+// The name and description the Library will show for a draft that can be saved.
+export const DraftSummary = z.strictObject({
+  name: z.string(),
+  description: z.string(),
+});
 export const InstalledPlugin = z.strictObject({
   id: z.string(),
   name: z.string(),
@@ -603,6 +616,8 @@ export type ContextConfig = z.infer<typeof ContextConfig>;
 export type ContextDocuments = z.infer<typeof ContextDocuments>;
 export type McpProbe = z.infer<typeof McpProbe>;
 export type ScannedSkill = z.infer<typeof ScannedSkill>;
+export type DraftRequest = z.infer<typeof DraftRequest>;
+export type DraftSummary = z.infer<typeof DraftSummary>;
 export type InstalledPlugin = z.infer<typeof InstalledPlugin>;
 export type EnvVariable = z.infer<typeof EnvVariable>;
 export type FileDiff = z.infer<typeof FileDiff>;

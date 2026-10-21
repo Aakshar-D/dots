@@ -8,6 +8,7 @@ import * as T from "./types";
 import type {
   CmdErrorKind,
   DotSpec,
+  DraftRequest,
   LibraryConfig,
   McpServerConfig,
   Preset,
@@ -159,6 +160,15 @@ export const commands = {
     call(T.McpCatalog, "library_accept", { id, fingerprint }),
   libraryScanSkills: (path: string) =>
     call(T.ScannedSkill.array(), "library_scan_skills", { path }),
+  /// Drafts a skill with the claude CLI for the dialog `dialog`, cancelling the dialog's
+  /// draft before; answers the SKILL.md text.
+  skillDraft: (dialog: string, request: DraftRequest) =>
+    call(z.string(), "skill_draft", { dialog, request }),
+  skillDraftCancel: (dialog: string) => call(nothing, "skill_draft_cancel", { dialog }),
+  /// Rejects with kind `invalid`, saying what to change, when the text cannot be saved.
+  skillCheck: (text: string) => call(T.DraftSummary, "skill_check", { text }),
+  /// Rejects with kind `conflict` when the name is in the Library or its folder exists.
+  skillCreate: (text: string) => call(T.LibraryItem, "skill_create", { text }),
   contextDocuments: (id: string) => call(T.ContextDocuments, "context_documents", { id }),
   installedClaudePlugins: () => call(T.InstalledPlugin.array(), "installed_claude_plugins"),
   environmentVariables: (names: string[]) =>

@@ -49,7 +49,7 @@ pub const DEFAULT_MODEL: &str = "sonnet";
 
 /// What the dialog asks for (`skill_draft`): a first draft of `idea`, or, with `current` and
 /// `change`, the current text changed as asked.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DraftRequest {
     pub idea: String,
     pub model: String,
