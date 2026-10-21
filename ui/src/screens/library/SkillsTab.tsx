@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Plus } from "lucide-react";
+import { Plus, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { commands } from "@/api/commands";
@@ -17,6 +17,7 @@ import {
 import { errorMessage, notifyError } from "@/lib/notify";
 import { invalidate, keys } from "@/lib/query";
 
+import { CreateSkillDialog } from "./CreateSkillDialog";
 import { isDeclined, ItemRow, plural, RemoveButton, UsedBy, type SkillEntry } from "./parts";
 
 type Scan = { folder: string; skills: ScannedSkill[] };
@@ -129,8 +130,10 @@ function AddSkillsDialog(props: {
 }
 
 /// The skills tab. "Add skill" picks a folder: one skill, or a folder with several below it.
+/// "Create skill" has Claude write one from an idea.
 export function SkillsTab({ entries }: { entries: SkillEntry[] }) {
   const [scan, setScan] = useState<Scan | null>(null);
+  const [creating, setCreating] = useState(false);
 
   async function choose() {
     try {
@@ -148,6 +151,9 @@ export function SkillsTab({ entries }: { entries: SkillEntry[] }) {
         <p className="flex-1 text-xs text-muted-foreground">
           Folders with a SKILL.md. A dot that uses a skill can read it when the task calls for it.
         </p>
+        <Button size="sm" variant="outline" onClick={() => setCreating(true)}>
+          <Sparkles aria-hidden /> Create skill
+        </Button>
         <Button size="sm" onClick={() => void choose()}>
           <Plus aria-hidden /> Add skill
         </Button>
@@ -171,6 +177,7 @@ export function SkillsTab({ entries }: { entries: SkillEntry[] }) {
           ))}
         </ul>
       )}
+      {creating && <CreateSkillDialog onClose={() => setCreating(false)} />}
       {scan && (
         <AddSkillsDialog
           scan={scan}

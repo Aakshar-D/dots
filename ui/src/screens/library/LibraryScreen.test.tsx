@@ -2,7 +2,7 @@ import { act, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import type { LibraryEntry } from "@/api/types";
-import { backend } from "@/test/backend";
+import { backend, later } from "@/test/backend";
 import { sample } from "@/test/fixtures";
 import { renderApp } from "@/test/render";
 
@@ -422,6 +422,144 @@ describe("skills", () => {
     await user.click(within(dialog).getByRole("button", { name: "Choose another folder" }));
     await user.click(await within(dialog).findByRole("button", { name: "Add 1 skill" }));
     expect(await within(dialog).findByRole("alert")).toHaveTextContent("already exists");
+  });
+});
+
+describe("creating a skill", () => {
+  const DRAFT = "---\nname: pr-tests\ndescription: Checks a PR for missing tests.\n---\nList them.\n";
+  const summary = { name: "pr-tests", description: "Checks a PR for missing tests." };
+
+  /// Opens the dialog and describes `idea`.
+  async function describeIdea(idea = "Check a PR for missing tests") {
+    const view = renderApp("/library");
+    await view.user.click(await screen.findByRole("tab", { name: "Skills" }));
+    await view.user.click(screen.getByRole("button", { name: "Create skill" }));
+    const dialog = await screen.findByRole("dialog", { name: "Create skill" });
+    expect(within(dialog).getByRole("button", { name: "Write it" })).toBeDisabled();
+    await view.user.type(within(dialog).getByLabelText("What should the skill do?"), idea);
+    return { ...view, dialog };
+  }
+
+  it("writes a draft from an idea, shows what the Library will show, and saves it", async () => {
+    backend.on("skill_draft", () => DRAFT);
+    backend.on("skill_check", () => summary);
+    backend.on("skill_create", () => sample.libraryItems[1]);
+    const { user, dialog } = await describeIdea();
+    await user.clear(within(dialog).getByLabelText("Model"));
+    await user.type(within(dialog).getByLabelText("Model"), "haiku");
+    await user.click(within(dialog).getByRole("button", { name: "Write it" }));
+    expect(await within(dialog).findByLabelText("SKILL.md")).toHaveValue(DRAFT);
+    expect(backend.callsTo("skill_draft")).toEqual([
+      {
+        dialog: expect.stringMatching(/^create-skill-/),
+        request: { idea: "Check a PR for missing tests", model: "haiku", current: null, change: null },
+      },
+    ]);
+    expect(
+      await within(dialog).findByText("The Library will show pr-tests: Checks a PR for missing tests."),
+    ).toBeVisible();
+    await user.click(within(dialog).getByRole("button", { name: "Save to Library" }));
+    await waitFor(() => expect(backend.callsTo("skill_create")).toEqual([{ text: DRAFT }]));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("asks for changes with the text as edited, and keeps it when the request fails", async () => {
+    backend.on("skill_draft", () => DRAFT);
+    backend.on("skill_check", () => summary);
+    const { user, dialog } = await describeIdea();
+    await user.click(within(dialog).getByRole("button", { name: "Write it" }));
+    const text = await within(dialog).findByLabelText("SKILL.md");
+    await user.type(text, "Mine.");
+    expect(within(dialog).getByRole("button", { name: "Ask for changes" })).toBeDisabled();
+    await user.type(within(dialog).getByLabelText("What should change?"), "Name the tests");
+    backend.on("skill_draft", () => {
+      throw { kind: "internal", message: "Claude could not write the skill: not logged in" };
+    });
+    await user.click(within(dialog).getByRole("button", { name: "Ask for changes" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("not logged in");
+    expect(within(dialog).getByLabelText("SKILL.md")).toHaveValue(`${DRAFT}Mine.`);
+    expect(backend.callsTo("skill_draft")[1]).toMatchObject({
+      request: {
+        idea: "Check a PR for missing tests",
+        model: "sonnet",
+        current: `${DRAFT}Mine.`,
+        change: "Name the tests",
+      },
+    });
+  });
+
+  it("says why a draft cannot be saved and keeps Save off", async () => {
+    backend.on("skill_draft", () => "Just some text\n");
+    backend.on("skill_check", () => {
+      throw { kind: "invalid", message: "The skill must start with a --- line." };
+    });
+    const { user, dialog } = await describeIdea();
+    await user.click(within(dialog).getByRole("button", { name: "Write it" }));
+    expect(
+      await within(dialog).findByText("The skill must start with a --- line."),
+    ).toBeVisible();
+    expect(within(dialog).getByRole("button", { name: "Save to Library" })).toBeDisabled();
+    expect(backend.callsTo("skill_create")).toEqual([]);
+  });
+
+  it("cancels a draft being written, goes back with the idea kept, and drops its answer", async () => {
+    const pending = later<string>();
+    backend.on("skill_draft", () => pending.answer);
+    backend.on("skill_draft_cancel", () => null);
+    const { user, dialog } = await describeIdea("Sort my notes");
+    await user.click(within(dialog).getByRole("button", { name: "Write it" }));
+    expect(await within(dialog).findByRole("status")).toHaveTextContent(
+      "Claude is writing the skill…",
+    );
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    const [{ dialog: id }] = backend.callsTo("skill_draft") as [{ dialog: string }];
+    expect(backend.callsTo("skill_draft_cancel")).toEqual([{ dialog: id }]);
+    expect(within(dialog).getByLabelText("What should the skill do?")).toHaveValue("Sort my notes");
+    await act(async () => pending.give(DRAFT));
+    expect(within(dialog).queryByLabelText("SKILL.md")).toBeNull();
+  });
+
+  it("shows a failed draft where it happened", async () => {
+    backend.on("skill_draft", () => {
+      throw { kind: "internal", message: "claude CLI not found: install Claude Code" };
+    });
+    const { user, dialog } = await describeIdea();
+    await user.click(within(dialog).getByRole("button", { name: "Write it" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("claude CLI not found");
+    expect(within(dialog).getByRole("button", { name: "Write it" })).toBeEnabled();
+  });
+
+  it("asks before it discards an unsaved draft, and shows a refused save", async () => {
+    backend.on("skill_draft", () => DRAFT);
+    backend.on("skill_check", () => summary);
+    backend.on("skill_create", () => {
+      throw { kind: "conflict", message: "A skill named pr-tests is already in the Library." };
+    });
+    const { user, dialog } = await describeIdea();
+    await user.click(within(dialog).getByRole("button", { name: "Write it" }));
+    await within(dialog).findByLabelText("SKILL.md");
+    await within(dialog).findByText(/The Library will show/);
+    await user.click(within(dialog).getByRole("button", { name: "Save to Library" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("already in the Library");
+    await user.keyboard("{Escape}");
+    const ask = await screen.findByRole("alertdialog", { name: "Discard this draft?" });
+    await user.click(within(ask).getByRole("button", { name: "Keep editing" }));
+    expect(screen.getByRole("dialog", { name: "Create skill" })).toBeVisible();
+    await user.keyboard("{Escape}");
+    const again = await screen.findByRole("alertdialog", { name: "Discard this draft?" });
+    await user.click(within(again).getByRole("button", { name: "Discard" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("says that removing a skill Dots made deletes its folder", async () => {
+    listing([{ ...skill, dots_folder: true }]);
+    const { user } = renderApp("/library");
+    await user.click(await screen.findByRole("tab", { name: "Skills" }));
+    const row = await screen.findByRole("listitem", { name: "pdf" });
+    await user.click(within(row).getByRole("button", { name: "Remove" }));
+    expect(await screen.findByRole("alertdialog")).toHaveTextContent(
+      "Its folder in Dots' skills folder is deleted too.",
+    );
   });
 });
 
