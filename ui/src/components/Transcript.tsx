@@ -12,6 +12,7 @@ import {
   type Run,
   type RunEventRecord,
 } from "@/api/types";
+import { BrowserCall } from "@/components/BrowserCall";
 import { Markdown } from "@/components/Markdown";
 import { StatusBadge } from "@/components/StatusBadge";
 import { isActive } from "@/lib/chat-threads";
@@ -104,8 +105,10 @@ function Item(props: {
   active: boolean;
   /// MCP server name to the plugin it comes with.
   owners: ReadonlyMap<string, string>;
+  /// The item's run, whose browser screenshots a browser call shows.
+  runId: string;
 }) {
-  const { item, active, owners } = props;
+  const { item, active, owners, runId } = props;
   switch (item.type) {
     case "text":
       return <Markdown text={item.text} />;
@@ -143,6 +146,16 @@ function Item(props: {
             </pre>
           )}
         </details>
+      );
+    case "browser":
+      return (
+        <BrowserCall
+          runId={runId}
+          tool={item.tool}
+          input={item.input}
+          result={item.result}
+          active={active}
+        />
       );
     case "raw":
       return (
@@ -261,7 +274,13 @@ export function Transcript(props: {
                 </p>
               )}
               {items.map((item) => (
-                <Item key={item.seq} item={item} active={isActive(run)} owners={owners} />
+                <Item
+                  key={item.seq}
+                  item={item}
+                  active={isActive(run)}
+                  owners={owners}
+                  runId={run.id}
+                />
               ))}
               {items.length === 0 && message === null && run.status === "queued" && (
                 <p className="text-muted-foreground">Waiting to start.</p>
