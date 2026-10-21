@@ -114,9 +114,12 @@ The plan's prototype settled these:
 
 - Names: the core module is `skill_creator` (`check_draft`, `DraftRequest`, `DraftSummary`, `SkillDrafts`), the one-off CLI call is `engine::claude::once::ask_once`, and the commands are `skill_draft`, `skill_draft_cancel`, `skill_check` and `skill_create`. The library entry's field is `dots_folder`.
 - Limits: an idea or a change request holds at most 4,000 characters, and a draft at most 64 KB, both for a change request and for saving (§5, §6).
-- A name that the Library takes but Windows cannot use for a folder is refused at the draft check: a device name (`con`, `nul`, `com1`, also with an extension) or a name ending in `.` (§6, step 1).
+- A name that the Library takes but Windows cannot use for a folder is refused at the draft check: a device name (`con`, `nul`, `com0`, `com1`, `lpt0`, also with an extension) or a name ending in `.` (§6, step 1).
 - A save writes into a hidden folder `.<name>.<id>` in `<data>/skills` and renames it. Startup removes only such folders (a real folder, not a link, named `.`, a valid skill name, `.` and a 26-character id), never other hidden folders a person keeps there, and the whole `<data>/drafts` folder (§5, §6).
 - A skill whose folder path is a link (a symlink or a Windows junction) is never Dots' own: removing it removes only the Library row (§7).
+- A save tries the rename of the hidden folder up to 5 times, 100 ms apart: on Windows a just-written file can be held for a moment, and the rename is then refused (§6, step 3).
+- Removing a skill whose folder another Library row also resolves to removes only the row and keeps the folder, so the other row is not left empty; the last row to go deletes it (§7).
+- While a save is on its way, closing the dialog does nothing (§4).
 - **Start over** also clears the draft, so closing the dialog after it does not ask "Discard this draft?" (§4).
 - The commands are one-line wrappers, as the others are: the per-dialog cancel and the error texts are tested in the core, the arguments in the UI's command test (§8).
 
