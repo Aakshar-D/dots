@@ -465,6 +465,8 @@ export const LibraryEntry = libraryItemOf({
   context: nullable(ContextDetail),
   // Why a skill, plugin or context folder could not be read.
   problem: nullable(z.string()),
+  // A skill whose folder is in Dots' skills folder: removing it deletes the folder too.
+  dots_folder: z.boolean(),
 });
 export const ContextDocument = z.strictObject({
   path: z.string(),

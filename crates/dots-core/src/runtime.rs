@@ -33,6 +33,9 @@ use crate::store::Store;
 use crate::workspace::{Prepared, WorkspaceManager};
 use crate::{Error, Result};
 
+/// The data folder's folder of the skills the skill creator saves (skill creator spec §6).
+pub const SKILLS_DIR: &str = "skills";
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub data_dir: PathBuf,
@@ -132,6 +135,8 @@ impl Runtime {
         }
         // No run is running yet: plugin folders of runs are what a crash left behind.
         crate::run_tools::sweep_plugin_folders(&cfg.data_dir.join("plugins"));
+        // No skill is being saved yet: hidden folders are saves a crash cut short.
+        crate::skill_creator::sweep_unfinished(&cfg.data_dir.join(SKILLS_DIR));
         // Every schedule has its row before the scheduler's first pass: a dot upgraded by
         // migration 0005 gets one now, and a row a failed change left stale is reset.
         for dot in store.list_dots().await? {
@@ -238,7 +243,8 @@ impl Runtime {
         follow_ups.set_paused(settings.schedules_paused);
         follow_ups.spawn(runner.clone(), shutdown.clone());
         Ok(Runtime {
-            library: LibraryService::new(store.clone(), bus.clone()),
+            library: LibraryService::new(store.clone(), bus.clone())
+                .with_skills_dir(cfg.data_dir.join(SKILLS_DIR)),
             store,
             bus,
             hub,

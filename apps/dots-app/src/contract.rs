@@ -173,6 +173,7 @@ fn library_entries() -> Vec<LibraryEntry> {
         plugin: None,
         context: None,
         problem: None,
+        dots_folder: false,
     };
     let github = library_item(
         "01J0SRV",
@@ -203,6 +204,7 @@ fn library_entries() -> Vec<LibraryEntry> {
                 description: "Fill and read PDF forms.".into(),
             }),
             problem: Some("SKILL.md not found".into()),
+            dots_folder: true,
             ..bare(skill, vec![])
         },
         LibraryEntry {

@@ -15,9 +15,11 @@ use crate::events::{Bus, RuntimeEvent};
 use crate::kit::{self, InstalledPlugin, PluginInfo};
 use crate::library::{
     check_name, LibraryConfig, LibraryItem, LibraryKind, McpCatalog, McpServerConfig, PluginConfig,
+    SkillConfig,
 };
 use crate::mcp::{fingerprint, McpError, McpSession, McpTool, SessionOptions};
 use crate::model::{DotRef, ToolsChanged};
+use crate::skill_creator::{self, check_draft};
 use crate::store::Store;
 use crate::{Error, Result};
 
@@ -45,6 +47,9 @@ pub struct LibraryEntry {
     pub context: Option<ContextDetail>,
     /// Why a skill, plugin or context folder could not be read ("folder not found").
     pub problem: Option<String>,
+    /// A skill whose folder is in Dots' skills folder: removing it deletes the folder too
+    /// (skill creator spec §7).
+    pub dots_folder: bool,
 }
 
 /// What a context collection's folder holds.
@@ -365,11 +370,28 @@ pub(crate) async fn refresh_plugin(
 pub struct LibraryService {
     store: Store,
     bus: Bus,
+    skills_dir: Option<PathBuf>,
 }
 
 impl LibraryService {
     pub fn new(store: Store, bus: Bus) -> LibraryService {
-        LibraryService { store, bus }
+        LibraryService {
+            store,
+            bus,
+            skills_dir: None,
+        }
+    }
+
+    /// Where the skill creator saves skills (`<data>/skills`, skill creator spec §6). Without
+    /// it, `create_skill` fails and no skill is Dots' own.
+    pub fn with_skills_dir(mut self, dir: PathBuf) -> LibraryService {
+        self.skills_dir = Some(dir);
+        self
+    }
+
+    /// Whether the skill folder `path` is in Dots' skills folder.
+    fn is_own_folder(skills_dir: Option<&Path>, path: &str) -> bool {
+        skills_dir.is_some_and(|root| skill_creator::is_inside(Path::new(path), root))
     }
 
     /// Every item, with the dots that use it, a server's catalog and missing variables, and
@@ -392,12 +414,15 @@ impl LibraryService {
                 LibraryConfig::Context(c) => (LibraryKind::Context, c.path.clone()),
             })
             .collect();
+        let skills_dir = self.skills_dir.clone();
         let read = blocking(move || {
             folders
                 .into_iter()
                 .map(|(kind, path)| {
+                    let own = kind == LibraryKind::Skill
+                        && Self::is_own_folder(skills_dir.as_deref(), &path);
                     let dir = PathBuf::from(&path);
-                    match kind {
+                    let read = match kind {
                         LibraryKind::Skill => Some(
                             kit::read_skill(&dir)
                                 .map(|s| (Some(s), None, None))
@@ -414,13 +439,14 @@ impl LibraryService {
                                 .map_err(|e| context_problem(&dir, &e)),
                         ),
                         LibraryKind::McpServer => None,
-                    }
+                    };
+                    (read, own)
                 })
                 .collect::<Vec<_>>()
         })
         .await?;
         let mut entries = Vec::new();
-        for (item, read) in items.iter().zip(read) {
+        for (item, (read, dots_folder)) in items.iter().zip(read) {
             let used_by = self
                 .store
                 .dots_using(item)
@@ -440,6 +466,7 @@ impl LibraryService {
                 plugin: None,
                 context: None,
                 problem: None,
+                dots_folder,
             };
             if let LibraryConfig::McpServer(config) = &item.config {
                 entry.missing_variables = config
@@ -553,6 +580,20 @@ impl LibraryService {
                 names.join(", ")
             )));
         }
+        // Dots' own skill takes its folder with it, first: a folder that cannot be deleted
+        // keeps the row, so its name is never left taken by a folder (skill creator spec §7).
+        if let LibraryConfig::Skill(c) = &item.config {
+            let skills_dir = self.skills_dir.clone();
+            let dir = PathBuf::from(&c.path);
+            blocking(move || {
+                if Self::is_own_folder(skills_dir.as_deref(), &dir.to_string_lossy()) {
+                    skill_creator::delete_skill_folder(&dir)
+                } else {
+                    Ok(())
+                }
+            })
+            .await??;
+        }
         let owned = self.store.owned_library_items(id).await?;
         self.store.remove_library_item(id).await?;
         publish(&self.bus, id);
@@ -588,6 +629,41 @@ impl LibraryService {
         let catalog = self.store.accept_catalog(id, fingerprint).await?;
         publish(&self.bus, id);
         Ok(catalog)
+    }
+
+    /// Saves a drafted `SKILL.md` as a new skill (`skill_create`, skill creator spec §6): to
+    /// `<skills folder>/<name>/SKILL.md`, then into the Library. A name the Library has for a
+    /// skill, or a folder of that name, is refused, so nothing is overwritten; a failed add
+    /// removes the folder again.
+    pub async fn create_skill(&self, text: &str) -> Result<LibraryItem> {
+        let summary = check_draft(text)?;
+        let Some(root) = self.skills_dir.clone() else {
+            return Err(Error::Other("Dots has no skills folder".into()));
+        };
+        let name = summary.name;
+        if self
+            .store
+            .find_library_item(LibraryKind::Skill, &name)
+            .await?
+            .is_some()
+        {
+            return Err(Error::Conflict(format!(
+                "A skill named {name} is already in the Library."
+            )));
+        }
+        let (folder_name, body) = (name.clone(), text.to_string());
+        let dir = blocking(move || skill_creator::write_skill_folder(&root, &folder_name, &body))
+            .await??;
+        let config = LibraryConfig::Skill(SkillConfig {
+            path: dir.to_string_lossy().into_owned(),
+        });
+        match self.add(&name, config, None).await {
+            Ok(item) => Ok(item),
+            Err(e) => {
+                let _ = blocking(move || std::fs::remove_dir_all(&dir)).await;
+                Err(e)
+            }
+        }
     }
 
     /// The skills under `path` (`library_scan_skills`).
