@@ -30,3 +30,12 @@ CREATE TABLE follow_ups (
     created_at   TEXT NOT NULL
 );
 CREATE INDEX follow_ups_due ON follow_ups(status, due_at);
+
+-- Every preset allows `Notify`, `Ask` and `FollowUp` (section 4). The policy of each dot whose
+-- preset is not Custom gets the missing rules when the store opens (`store/upgrade.rs`,
+-- `finish_0008`), after 0007's `Context`. The rows wait here, and the table is dropped once
+-- they are done.
+CREATE TABLE upgrade_0008 (
+    dot_id TEXT PRIMARY KEY REFERENCES dots(id) ON DELETE CASCADE
+);
+INSERT INTO upgrade_0008 (dot_id) SELECT id FROM dots;

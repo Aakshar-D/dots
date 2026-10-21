@@ -61,6 +61,10 @@ pub struct McpTrust {
     pub read_only: bool,
 }
 
+/// Dots' own check-in tools by policy name (check-ins spec section 4): every preset allows
+/// them, and the CLI never sees their rules.
+pub const CHECK_IN_TOOLS: [&str; 3] = ["Notify", "Ask", "FollowUp"];
+
 const READ_TOOLS: &[&str] = &["Read", "LS", "Glob", "Grep"];
 const COMMAND_TOOLS: &[&str] = &["Bash", "PowerShell"];
 /// Commands that run whatever follows them: a prefix rule through one would allow any command.
@@ -152,9 +156,11 @@ impl Policy {
                 Action::Allow
             }
         };
-        // Every preset lets the model read the skills and the context collections the dot uses.
+        // Every preset lets the model read the skills and the context collections the dot uses,
+        // and check in with the person: notes, a question, follow-ups within their limits.
         rules.push(Rule::new("Skill", Action::Allow));
         rules.push(Rule::new("Context", Action::Allow));
+        rules.extend(CHECK_IN_TOOLS.map(|tool| Rule::new(tool, Action::Allow)));
         Policy {
             preset,
             rules,
@@ -217,12 +223,18 @@ impl Policy {
     }
 
     /// (allow patterns, deny patterns) for `--allowedTools` / `--disallowedTools`. A rule of
-    /// `Context` is left out: the CLI has no such tool, and Dots' own `dots` server checks each
-    /// call of its `context` tool against these rules itself (context library spec section 4).
+    /// `Context` or of a check-in tool (`CHECK_IN_TOOLS`) is left out: the CLI has no such tool,
+    /// and Dots' own `dots` server checks each call of its tools against these rules itself
+    /// (context library spec section 4, check-ins spec section 4).
     pub fn cli_lists(&self) -> (Vec<String>, Vec<String>) {
         let dots_only = |tool: &str| {
             let tool = tool.trim();
-            tool == "Context" || tool.starts_with("Context(")
+            ["Context"].iter().chain(CHECK_IN_TOOLS.iter()).any(|name| {
+                tool == *name
+                    || tool
+                        .strip_prefix(name)
+                        .is_some_and(|rest| rest.starts_with('('))
+            })
         };
         let pick = |a: Action| -> Vec<String> {
             self.rules

@@ -182,6 +182,18 @@
         {
           "action": "allow",
           "tool": "Context"
+        },
+        {
+          "action": "allow",
+          "tool": "Notify"
+        },
+        {
+          "action": "allow",
+          "tool": "Ask"
+        },
+        {
+          "action": "allow",
+          "tool": "FollowUp"
         }
       ]
     },
@@ -308,6 +320,18 @@
           {
             "action": "allow",
             "tool": "Context"
+          },
+          {
+            "action": "allow",
+            "tool": "Notify"
+          },
+          {
+            "action": "allow",
+            "tool": "Ask"
+          },
+          {
+            "action": "allow",
+            "tool": "FollowUp"
           }
         ]
       },
@@ -434,6 +458,18 @@
         {
           "action": "allow",
           "tool": "Context"
+        },
+        {
+          "action": "allow",
+          "tool": "Notify"
+        },
+        {
+          "action": "allow",
+          "tool": "Ask"
+        },
+        {
+          "action": "allow",
+          "tool": "FollowUp"
         }
       ]
     },
@@ -1131,6 +1167,18 @@
         {
           "action": "allow",
           "tool": "Context"
+        },
+        {
+          "action": "allow",
+          "tool": "Notify"
+        },
+        {
+          "action": "allow",
+          "tool": "Ask"
+        },
+        {
+          "action": "allow",
+          "tool": "FollowUp"
         }
       ]
     },

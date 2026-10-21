@@ -4,6 +4,9 @@
 //! dots' `uses`, brings each dot's policy up to date, and drops the table, in one transaction.
 //! 0007 (context library spec section 8): `finish_0007` then gives each dot listed in
 //! `upgrade_0007` a `Context` allow rule unless a rule names `Context`, and drops that table.
+//! 0008 (check-ins spec section 8): `finish_0008` last gives each dot listed in `upgrade_0008`
+//! whose preset is not Custom an allow rule for each check-in tool that no rule names, and
+//! drops that table.
 
 use std::collections::BTreeMap;
 
@@ -14,7 +17,7 @@ use crate::library::{
     check_name, looks_secret, mcp_server_name, CatalogStatus, LibraryConfig, LibraryKind,
     McpServerConfig, Uses, MAX_SERVER_NAME,
 };
-use crate::policy::{Action, Policy, Preset};
+use crate::policy::{Action, Policy, Preset, CHECK_IN_TOOLS};
 use crate::util::{new_id, now};
 use crate::Result;
 
@@ -364,6 +367,67 @@ fn with_context(stored: &str) -> Option<String> {
     };
     if !rules.iter().any(names_context) {
         rules.push(json!({"tool": "Context", "action": Action::Allow.as_str()}));
+    }
+    // Through `Policy`, so the JSON is written as Dots writes a policy.
+    let policy: Policy = serde_json::from_value(value).ok()?;
+    serde_json::to_string(&policy).ok()
+}
+
+/// Gives the policy of each dot that migration 0008 listed the check-in tools' allow rules
+/// (`with_checkins`), and drops the list.
+pub(super) async fn finish_0008(pool: &SqlitePool) -> Result<()> {
+    let waiting: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'upgrade_0008'",
+    )
+    .fetch_one(pool)
+    .await?;
+    if waiting == 0 {
+        return Ok(());
+    }
+    let mut tx = pool.begin().await?;
+    let rows: Vec<(String, String)> =
+        sqlx::query_as("SELECT d.id, d.policy FROM upgrade_0008 u JOIN dots d ON d.id = u.dot_id")
+            .fetch_all(&mut *tx)
+            .await?;
+    for (dot_id, stored) in rows {
+        let Some(policy) = with_checkins(&stored) else {
+            tracing::warn!(dot = %dot_id, "migration 0008: the policy could not be read");
+            continue;
+        };
+        sqlx::query("UPDATE dots SET policy = ? WHERE id = ?")
+            .bind(policy)
+            .bind(&dot_id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    sqlx::query("DROP TABLE upgrade_0008")
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// The stored policy with an allow rule at the end for each check-in tool (`CHECK_IN_TOOLS`, in
+/// that order) that no rule names (`Notify` or `Notify(...)`); a Custom policy is left as it
+/// is, as the person made it. `None` when the stored JSON is not a policy.
+fn with_checkins(stored: &str) -> Option<String> {
+    let mut value: Value = serde_json::from_str(stored).ok()?;
+    let custom = value.get("preset").and_then(Value::as_str) == Some(Preset::Custom.as_str());
+    let rules = value.get_mut("rules")?.as_array_mut()?;
+    if !custom {
+        for tool in CHECK_IN_TOOLS {
+            let names_tool = |rule: &Value| {
+                rule["tool"].as_str().is_some_and(|t| {
+                    let t = t.trim();
+                    t == tool
+                        || t.strip_prefix(tool)
+                            .is_some_and(|rest| rest.starts_with('('))
+                })
+            };
+            if !rules.iter().any(names_tool) {
+                rules.push(json!({"tool": tool, "action": Action::Allow.as_str()}));
+            }
+        }
     }
     // Through `Policy`, so the JSON is written as Dots writes a policy.
     let policy: Policy = serde_json::from_value(value).ok()?;
