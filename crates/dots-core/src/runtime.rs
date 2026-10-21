@@ -168,11 +168,14 @@ impl Runtime {
         engines.insert(EngineKind::Claude, claude);
         engines.insert(
             EngineKind::Local,
-            Arc::new(LocalEngine::with_retry_delays(
-                store.clone(),
-                hub.clone(),
-                cfg.local_retry_delays.clone(),
-            )),
+            Arc::new(
+                LocalEngine::with_retry_delays(
+                    store.clone(),
+                    hub.clone(),
+                    cfg.local_retry_delays.clone(),
+                )
+                .with_checkins(checkins.clone()),
+            ),
         );
 
         // From here on a new approval records whether Dots performs its call after a late

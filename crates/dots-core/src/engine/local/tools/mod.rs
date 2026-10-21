@@ -9,6 +9,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::policy::{Action, Policy};
 
+pub mod checkins;
 pub mod context;
 mod fs;
 mod search;
@@ -25,7 +26,8 @@ pub const MAX_ENTRIES: usize = 500;
 /// (local tool name, policy alias). The policy, grants and approvals only see the alias.
 /// `skill` reads the run's skills, not the workspace: the engine runs it (`skill::run`) and
 /// offers it only to a run that has skills. `context` reads the run's context collections in
-/// the same way (`context::run`).
+/// the same way (`context::run`). The check-in tools tell and ask the person and schedule a
+/// follow-up (`checkins::run`), offered to every run of an engine that has check-ins.
 pub const TOOLS: &[(&str, &str)] = &[
     ("read_file", "Read"),
     ("write_file", "Write"),
@@ -36,6 +38,9 @@ pub const TOOLS: &[(&str, &str)] = &[
     ("shell", "Bash"),
     ("skill", "Skill"),
     ("context", "Context"),
+    ("notify", "Notify"),
+    ("ask", "Ask"),
+    ("follow_up", "FollowUp"),
 ];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -85,9 +90,11 @@ enum Arg {
     /// A non-negative integer.
     Count,
     Bool,
+    /// An array; the tool checks its items.
+    List,
 }
 
-use Arg::{Bool, Count, PathStr, Str};
+use Arg::{Bool, Count, List, PathStr, Str};
 
 /// (argument, type, required)
 type Params = &'static [(&'static str, Arg, bool)];
@@ -139,6 +146,12 @@ const ARGS: &[(&str, Params)] = &[
             ("path", Str, false),
             ("offset", Count, false),
         ],
+    ),
+    ("notify", &[("text", Str, true)]),
+    ("ask", &[("question", Str, true), ("choices", List, false)]),
+    (
+        "follow_up",
+        &[("note", Str, true), ("at", Str, false), ("in", Str, false)],
     ),
 ];
 
@@ -200,12 +213,14 @@ pub fn prepare(
             Str | PathStr => value.is_string(),
             Count => value.is_u64(),
             Bool => value.is_boolean(),
+            List => value.is_array(),
         };
         if !ok {
             let expected = match kind {
                 Str | PathStr => "a string",
                 Count => "a non-negative integer",
                 Bool => "a boolean",
+                List => "an array",
             };
             return Err(format!("{name}: '{key}' must be {expected}"));
         }
@@ -451,8 +466,8 @@ const SHELL_DESCRIPTION: &str = "Run a PowerShell command in the workspace direc
 const SHELL_DESCRIPTION: &str = "Run a sh command in the workspace directory and return its \
     output. Default timeout 120 seconds, maximum 600.";
 
-/// OpenAI `tools` array for every built-in tool but `skill` (`skill::schema`) and `context`
-/// (`context::schema`).
+/// OpenAI `tools` array for every built-in tool but `skill` (`skill::schema`), `context`
+/// (`context::schema`) and the check-in tools (`checkins::schemas`).
 pub fn schemas() -> Value {
     let s = |d: &str| json!({"type": "string", "description": d});
     let path = s("File path relative to the workspace root");
