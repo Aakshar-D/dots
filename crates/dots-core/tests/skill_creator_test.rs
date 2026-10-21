@@ -59,7 +59,7 @@ fn a_draft_says_what_to_change_when_it_cannot_be_saved() {
 
 #[test]
 fn a_name_windows_cannot_use_for_a_folder_is_refused() {
-    for name in ["con", "NUL", "com1.md", "lpt9", "notes."] {
+    for name in ["con", "NUL", "com0", "com1.md", "lpt9", "notes."] {
         let text = format!("---\nname: {name}\ndescription: d\n---\nBody\n");
         assert!(invalid(&text).contains("cannot be a folder name"), "{name}");
     }
@@ -204,6 +204,63 @@ async fn removing_dots_own_skill_deletes_its_folder_and_no_other() {
     assert!(theirs_dir.join("SKILL.md").exists());
     // The name can be made again.
     lib.create_skill(DRAFT).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_skill_on_the_skills_folder_itself_is_not_dots_own() {
+    let (dir, store) = temp_store().await;
+    let skills = dir.path().join("skills");
+    let lib = service(&store, &new_bus(), &skills);
+    lib.create_skill(DRAFT).await.unwrap();
+    std::fs::write(
+        skills.join("SKILL.md"),
+        "---\nname: root\ndescription: d\n---\nBody\n",
+    )
+    .unwrap();
+    let root = lib
+        .add(
+            "root",
+            LibraryConfig::Skill(SkillConfig {
+                path: skills.to_string_lossy().into_owned(),
+            }),
+            None,
+        )
+        .await
+        .unwrap();
+    let list = lib.list().await.unwrap();
+    assert!(
+        !list
+            .iter()
+            .find(|e| e.item.name == "root")
+            .unwrap()
+            .dots_folder
+    );
+    lib.remove(&root.id, false).await.unwrap();
+    assert!(skills.join("SKILL.md").exists());
+    assert!(skills.join("pr-tests").join("SKILL.md").exists());
+}
+
+#[tokio::test]
+async fn a_folder_another_row_uses_is_kept_until_the_last_row_goes() {
+    let (dir, store) = temp_store().await;
+    let skills = dir.path().join("skills");
+    let lib = service(&store, &new_bus(), &skills);
+    let first = lib.create_skill(DRAFT).await.unwrap();
+    let second = lib
+        .add(
+            "pr-tests-copy",
+            LibraryConfig::Skill(SkillConfig {
+                path: skills.join("pr-tests").to_string_lossy().into_owned(),
+            }),
+            None,
+        )
+        .await
+        .unwrap();
+    lib.remove(&first.id, false).await.unwrap();
+    assert!(skills.join("pr-tests").join("SKILL.md").exists());
+    assert!(store.get_library_item(&second.id).await.is_ok());
+    lib.remove(&second.id, false).await.unwrap();
+    assert!(!skills.join("pr-tests").exists());
 }
 
 #[tokio::test]

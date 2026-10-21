@@ -585,8 +585,25 @@ impl LibraryService {
         if let LibraryConfig::Skill(c) = &item.config {
             let skills_dir = self.skills_dir.clone();
             let dir = PathBuf::from(&c.path);
+            // Another row on the same folder keeps it: only this row goes.
+            let others: Vec<PathBuf> = self
+                .store
+                .list_library_items()
+                .await?
+                .into_iter()
+                .filter(|i| i.id != item.id)
+                .filter_map(|i| match i.config {
+                    LibraryConfig::Skill(c) => Some(PathBuf::from(c.path)),
+                    _ => None,
+                })
+                .collect();
             blocking(move || {
-                if Self::is_own_folder(skills_dir.as_deref(), &dir) {
+                let shared = dir.canonicalize().is_ok_and(|mine| {
+                    others
+                        .iter()
+                        .any(|o| o.canonicalize().is_ok_and(|o| o == mine))
+                });
+                if !shared && Self::is_own_folder(skills_dir.as_deref(), &dir) {
                     skill_creator::delete_skill_folder(&dir)
                 } else {
                     Ok(())

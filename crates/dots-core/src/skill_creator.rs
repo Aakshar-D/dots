@@ -203,10 +203,16 @@ impl SkillDrafts {
             }
         }
         match asked {
-            Ok(answer) if answer.trim().is_empty() => Err(Error::Other(
-                "Claude answered with no text; try again.".into(),
-            )),
-            Ok(answer) => Ok(unwrap_fence(&answer)),
+            Ok(answer) => {
+                let text = unwrap_fence(&answer);
+                if text.trim().is_empty() {
+                    Err(Error::Other(
+                        "Claude answered with no text; try again.".into(),
+                    ))
+                } else {
+                    Ok(text)
+                }
+            }
             Err(OnceFailure::Cancelled) => Err(Error::Other("The draft was cancelled.".into())),
             Err(OnceFailure::TimedOut) => Err(Error::Other(
                 "Claude took too long to write the skill.".into(),
@@ -236,9 +242,9 @@ pub struct DraftSummary {
 }
 
 /// Names Windows keeps for devices, also with an extension: no folder can have them.
-const RESERVED: [&str; 22] = [
-    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
-    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+const RESERVED: [&str; 24] = [
+    "CON", "PRN", "AUX", "NUL", "COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
+    "COM8", "COM9", "LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
 ];
 
 fn invalid<T>(message: impl Into<String>) -> Result<T> {
@@ -306,9 +312,13 @@ pub fn check_draft(text: &str) -> Result<DraftSummary> {
     })
 }
 
+const RENAME_ATTEMPTS: u32 = 5;
+const RENAME_PAUSE: std::time::Duration = std::time::Duration::from_millis(100);
+
 /// Writes `text` to `<root>/<name>/SKILL.md` (spec §6, step 3): into a hidden folder beside it
-/// first, then renamed into place, so a failed write leaves no half-written skill. `Conflict`
-/// when `<root>/<name>` exists; nothing is overwritten.
+/// first, then renamed into place (tried up to 5 times, 100 ms apart), so a failed write leaves
+/// no half-written skill. `Conflict` when `<root>/<name>` exists, also when it appeared during
+/// the write; nothing is overwritten. Blocks: call it from `spawn_blocking`.
 pub(crate) fn write_skill_folder(root: &Path, name: &str, text: &str) -> Result<PathBuf> {
     std::fs::create_dir_all(root)?;
     let dir = root.join(name);
@@ -320,11 +330,35 @@ pub(crate) fn write_skill_folder(root: &Path, name: &str, text: &str) -> Result<
     }
     let tmp = root.join(format!(".{name}.{}", crate::util::new_id()));
     std::fs::create_dir(&tmp)?;
-    let written =
-        std::fs::write(tmp.join("SKILL.md"), text).and_then(|()| std::fs::rename(&tmp, &dir));
+    let written = std::fs::write(tmp.join("SKILL.md"), text).and_then(|()| {
+        // A just-written file may be held for a moment (antivirus, the indexer), and Windows
+        // then refuses the rename: try again a few times.
+        let mut attempt = 1;
+        loop {
+            match std::fs::rename(&tmp, &dir) {
+                Err(e) if attempt < RENAME_ATTEMPTS => {
+                    if std::fs::symlink_metadata(&dir).is_ok() {
+                        return Err(e);
+                    }
+                    attempt += 1;
+                    std::thread::sleep(RENAME_PAUSE);
+                }
+                other => return other,
+            }
+        }
+    });
     if let Err(e) = written {
         let _ = std::fs::remove_dir_all(&tmp);
-        return Err(e.into());
+        if std::fs::symlink_metadata(&dir).is_ok() {
+            return Err(Error::Conflict(format!(
+                "{name} already exists in Dots' skills folder ({}).",
+                dir.display()
+            )));
+        }
+        return Err(Error::Other(format!(
+            "Could not save the skill to {}: {e}",
+            dir.display()
+        )));
     }
     Ok(dir)
 }

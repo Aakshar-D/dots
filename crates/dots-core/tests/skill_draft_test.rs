@@ -209,6 +209,16 @@ async fn an_error_an_exit_or_an_empty_answer_fails_the_draft() {
             .unwrap_err(),
     );
     assert!(err.contains("no text"), "{err}");
+
+    // A fence with nothing inside is an empty answer too.
+    let t = start(answering("```\n```")).await;
+    let err = message(
+        t.rt.skill_drafts()
+            .draft("d1", &idea("x"))
+            .await
+            .unwrap_err(),
+    );
+    assert!(err.contains("no text"), "{err}");
 }
 
 /// Waits until the fake CLI has recorded its start.
