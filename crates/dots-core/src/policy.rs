@@ -712,6 +712,10 @@ fn tidy_path(raw: &str) -> (bool, String) {
 /// are never offered. Every candidate returned is a valid rule that, as an allow rule, matches
 /// this call: one that is not is left out, so the caller can save any of them unchecked.
 pub fn allow_candidates(tool: &str, input: &Value, workspace: Option<&Path>) -> Vec<RuleCandidate> {
+    // A browser call offers its site's rules and nothing else (browser spec section 3.6).
+    if let Some(candidates) = crate::browser::gate::rule_candidates(tool, input) {
+        return candidates;
+    }
     let ws = workspace_key(workspace);
     let mut found: Vec<(String, String)> = Vec::new();
     if COMMAND_TOOLS.contains(&tool) {
