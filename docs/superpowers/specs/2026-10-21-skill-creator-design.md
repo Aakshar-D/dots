@@ -108,7 +108,19 @@ A skill whose folder is inside `<data>/skills` (compared after resolving both pa
 - UI: the three states, Ask for changes sending the edited text, Save enabled only for a draft that passes, errors shown in the dialog, the discard question, the Create skill button.
 - Smoke (agents: `fake-claude`, temp `DOTS_DATA_DIR`): create, ask for a change, save, see the row, pick it in a dot, remove it. Part B for the owner: the same with the real `claude` CLI, plus a check that the draft ignores the person's `~/.claude/CLAUDE.md` (for example, a rule there to write in a set style is not followed).
 
-## 9. Left to the builder
+## 9. Changes made while building
+
+The plan's prototype settled these:
+
+- Names: the core module is `skill_creator` (`check_draft`, `DraftRequest`, `DraftSummary`, `SkillDrafts`), the one-off CLI call is `engine::claude::once::ask_once`, and the commands are `skill_draft`, `skill_draft_cancel`, `skill_check` and `skill_create`. The library entry's field is `dots_folder`.
+- Limits: an idea or a change request holds at most 4,000 characters, and a draft at most 64 KB, both for a change request and for saving (§5, §6).
+- A name that the Library takes but Windows cannot use for a folder is refused at the draft check: a device name (`con`, `nul`, `com1`, also with an extension) or a name ending in `.` (§6, step 1).
+- A save writes into a hidden folder `.<name>.<id>` in `<data>/skills` and renames it. Startup removes only such folders (a real folder, not a link, named `.`, a valid skill name, `.` and a 26-character id), never other hidden folders a person keeps there, and the whole `<data>/drafts` folder (§5, §6).
+- A skill whose folder path is a link (a symlink or a Windows junction) is never Dots' own: removing it removes only the Library row (§7).
+- **Start over** also clears the draft, so closing the dialog after it does not ask "Discard this draft?" (§4).
+- The commands are one-line wrappers, as the others are: the per-dialog cancel and the error texts are tested in the core, the arguments in the UI's command test (§8).
+
+## 10. Left to the builder
 
 - The wording of the drafting instructions and of the dialog's copy, within §4–§5.
 - How the dialog id and the cancel are carried between UI and app (an id passed with the draft call and a cancel command, as for follow-ups, is expected).
