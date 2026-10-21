@@ -127,6 +127,8 @@ One function decides every MCP tool call, for both engines. The first match wins
 - **A decided call carried out later** (the local engine's approved calls on resume) or **retried** (the Claude engine after a one-shot grant) goes through only if the server's accepted fingerprint still equals the stored one; otherwise it is skipped with "the tool changed since it was approved".
 - `allow_candidates` offers, for an MCP tool, the rule `mcp__<server>__<tool>` (every call of this tool) and `mcp__<server>__*` (every tool of this server).
 
+- Dots' own `dots` MCP server serves `approve` and, from the context library and the check-ins spec, `context`, `notify`, `ask` and `follow_up`; it checks each call of its own tools against the dot's policy (`2026-10-20-checkins-followups-design.md` section 2).
+
 ## 5. The gateway
 
 ### MCP client

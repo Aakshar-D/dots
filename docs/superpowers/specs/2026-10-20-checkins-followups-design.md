@@ -208,3 +208,21 @@ Tests, written first, in the repo's patterns:
 - Main spec §5, policy: Dots' own tools are `Context`, `Notify`, `Ask`, `FollowUp`, checked by the `dots` server on the Claude engine.
 - Main spec §12 notifications: add dot questions and notes.
 - MCP/skills spec §4 and context library spec §4: the `dots` MCP server serves `approve`, `context`, `notify`, `ask` and `follow_up`.
+
+## 13. Changes made while building
+
+The plan (`docs/superpowers/plans/2026-10-20-checkins-followups.md`) changed these from the first version of this spec:
+
+- Every preset allows `Notify`, `Ask` and `FollowUp`, Read-only included, as every preset allows `Skill` and `Context`; migration 0008 adds them to every stored policy whose preset is not Custom (section 4).
+- A follow-up whose run cannot be stored is tried again after 1, 5 and 30 minutes; the fourth failed start skips it with the note "A follow-up was skipped because its run could not be started (<error>). It was due <time>: <note>". Any error while firing one follow-up (reading its thread, storing its run) counts as a failed start (section 6).
+- The late words say `hour` for one hour; the hours are the lateness rounded, at least 1, and they end the message's first line (section 6).
+- A disabled dot's follow-up posts "A follow-up was skipped because the dot is off. It was due <time>: <note>" (section 6).
+- The first prompt of a follow-up run that cannot resume its thread has a `## Follow-up` section with the message; a follow-up run's payload also holds `follow_up_id` (section 6).
+- `Message` carries `dot_name`, read from the dot (section 7).
+- `messages_list` answers every message that waits (open questions, unread notes) and the 200 newest others, newest first; `follow_ups_list` answers the pending follow-ups, soonest first (section 10).
+- Dismissing a dismissed question changes nothing; an answered one is refused with "this question has already been answered"; a note cannot be dismissed (section 5).
+- A blank `at` or `in` counts as absent (section 2).
+- The chat's bar also offers the question's choices; an answer in a thread whose end has no session opens the new chat (section 9).
+- Migration 0007's test (`store_dots_test`) builds its pre-0007 policy without the check-in rules too, since 0008 now appends them after `Context`; behaviour is unchanged.
+- The `Runner`'s `checkins` field sits after the `held` and `pass` fields that the auto-update work added; behaviour is unchanged.
+- `local_tools_test` counts the three check-in tools among those a run gets only on request (`checkins::schemas`), and round-trips their input through `prepare`.
