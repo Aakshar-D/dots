@@ -3,6 +3,7 @@
 //! Playwright MCP server, behind Dots' gate, which judges each call by the address of the page
 //! it acts on (`sites`) and the labels in Playwright's own snapshots.
 
+pub mod door;
 pub mod gate;
 pub mod host;
 pub mod pipe;
