@@ -4,7 +4,7 @@
 - Build: debug (`bun run tauri build --debug --no-bundle`), branch `feat/checkins-followups` at commit `b8dd878` (Tasks 1 to 13 and the two review fixes). Windows 11 on ARM (`aarch64-pc-windows-msvc`), Bun 1.4.3, LLVM for `ring`.
 - Model: `qwen2.5:7b` (Q4_K_M) in Ollama 0.40.7, at `http://127.0.0.1:11434`, CPU only (`size_vram` 0), context 4096.
 - Part A (agent steps): 3 steps (A1 to A3, A3 in five parts). A1, A2 and A3a to A3d as expected in what Dots did. A3e (notifications) was not observed: the agent cannot see Windows notifications. 2 findings, neither a Dots defect.
-- Part B (person steps): 1 step, open. Nothing in Part B was run; the agent never runs the real `claude` CLI.
+- Part B: 1 step (B1), run by the agent at the person's request with the real `claude` CLI 2.1.306 (Dots has tested 2.1.295; the app showed the version notice), model `sonnet`. As expected.
 - Screenshots: not in the repository; in the scratchpad folder of the run (`.../scratchpad/smoke/shots`): `01-inbox-messages.png`, `02-dots-list.png`.
 
 ## What this covers
@@ -74,11 +74,24 @@ Result: pass. 15 s after the start: one `follow_up` run, parent `01M5F1B7P5J5W95
 
 **A3e. Notifications and the "Notify on dot notes" switch.** Not observed: Windows notifications cannot be read from the terminal. The choice (a question always, a note only while the setting is on) is covered by the app's `events` tests and the switch by `SettingsNotes.test.tsx`.
 
-## Part B: person steps
+## Part B: a real `claude` dot
 
-- [ ] **B1.** With a real `claude` CLI, a Claude dot with the instructions "Ask me whether to ship (choices yes, no), then finish." Expect: `--allowedTools` holds `mcp__dots__notify mcp__dots__ask mcp__dots__follow_up`; the transcript shows "Asked: …" without an approval; answering from the chat's bar resumes the session. Then "Schedule a follow-up in 5m to check the build, then finish": it fires 5 minutes later and resumes the same session.
+The person asked the agent to run this step. The app was started again with the real `PATH` (the CLI at `~/.local/bin/claude.exe`) and fresh `DOTS_DATA_DIR` and webview folders. The dot `shipper` is a Claude dot (`model: 'sonnet'`, `workspace_mode: 'folder'` on an empty folder, preset `sandboxed`) with the instructions "Ask me whether to ship, with the choices yes and no, using your ask tool. Then finish your turn."
+
+### B1. A Claude dot asks, is answered from the chat's bar, and schedules a follow-up
+
+Expect: `mcp__dots__ask` runs without an approval; answering from the chat's bar resumes the session; a follow-up 5 minutes ahead fires and resumes the same session.
+
+Result: pass.
+
+- Run `01M5F31YQ8HBWFVJ7VGT2J79N4` succeeded: `ToolSearch {"query": "select:mcp__dots__ask"}`, then `mcp__dots__ask {"question": "Ship it?", "choices": ["yes", "no"]}` → the `ASKED` sentence. `approvals_for_run`: 0, so `--allowedTools` let it through. The chat (`chat/<dot>/<run>`) showed "Asked: Ship it?", "Question · waiting for your answer" and the bar "shipper asked: Ship it?" with "yes", "no" and "Reply to question".
+- Clicking "yes" in the bar made run `01M5F32S951B1YXCY168NW24CC`: trigger `chat`, parent the first run, message `Answer to your question "Ship it?": yes`, and the CLI session `75d2d63a-f250-495a-9829-2bf7365fcbb1` of the first run. The model answered in context ("You answered yes, but there's nothing for me to ship…").
+- "Schedule a follow-up with your follow_up tool in 5m to check the build, then finish your turn.", sent from the chat's composer, made run `01M5F337H365B53DNG4RX8BRR4`: `mcp__dots__follow_up {"in": "5m", "note": "Check the build status. …"}` → "Follow-up 01M5F33HJNBM33QHDC107E5SHS scheduled for Wed 21 Oct 16:56." (due `11:26:22.773Z`), no approval.
+- The person then sent a chat message of their own in the thread (run `01M5F38ECZ53VANH52S5GDAARM`), which ended before the follow-up was due.
+- Run `01M5F3CPHSP282ZK82DTPMGZ8M` was queued at `11:26:22.777Z`: trigger `follow_up`, parent `01M5F38ECZ53VANH52S5GDAARM` (the thread's end), message "Follow-up you scheduled on Wed 21 Oct 16:51: Check the build status. …", the same session `75d2d63a-…`; it succeeded (a `Glob` of the empty folder, then "I couldn't check the build, because there's nothing here to check…"). No follow-up was left pending.
 
 ## Findings
 
 1. The local model is slow on this machine (CPU only, about 40 s for a small tool call; a run with five tool calls in one turn timed out after 30 minutes). Model speed, not Dots: every run that reached a tool call got the expected answer from Dots. A GPU-backed server would make local dots usable for real work here.
 2. Ollama's default context is 4096 tokens; a dot's first prompt with its tool schemas uses about 1,500 of them (`usage` of the follow-up run: 1509 in). Longer local runs will need a larger context (`OLLAMA_CONTEXT_LENGTH`).
+3. The person asked whether `mcp__dots__ask` should run without an approval. It should, as every preset allows the check-in tools; but an ask rule the person adds did not win over the preset's allow (deny > allow > ask). Fixed after this smoke: for `Notify`, `Ask` and `FollowUp` an ask rule now wins (`policy_checkins_test::an_ask_rule_on_a_check_in_tool_wins_over_the_presets_allow`).
