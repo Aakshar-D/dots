@@ -17,6 +17,7 @@ use common::fake_mcp::FakeMcp;
 use common::{spec, temp_store};
 use dots_core::approvals::{parked_message, ApprovalHub};
 use dots_core::browser::gate::{classify, Ask, Danger, Kind, ASK_KEY, PASSWORD_REFUSAL};
+use dots_core::browser::host::HostError;
 use dots_core::browser::{
     function_schemas, tools, Browsers, CallLimit, PlaywrightCommand, RunBrowser, CDP_ENDPOINT_VAR,
     NO_NODE, PAGE_MOVED, PLAYWRIGHT_MCP, TOO_LATE,
@@ -622,10 +623,10 @@ async fn downloads_move_into_the_workspace_and_the_result_says_so() {
 }
 
 #[tokio::test]
-async fn edge_is_held_while_a_run_uses_it_and_closes_after_the_last() {
+async fn a_dots_browser_serves_one_run_at_a_time() {
     let e = env().await;
     let dot = dot(&e, &[], 0).await;
-    // Two Playwright servers at once: a script without the `alive` lock, which a second
+    // Playwright servers of several runs: a script without the `alive` lock, which a second
     // `fake-mcp` of the same script would wait for.
     let script = e.dir.path().join("two-runs.json");
     std::fs::write(&script, cart_script().to_string()).unwrap();
@@ -642,30 +643,42 @@ async fn edge_is_held_while_a_run_uses_it_and_closes_after_the_last() {
     let (r1, _) = run(&e, &dot).await;
     let (r2, _) = run(&e, &dot).await;
     let (first, second) = (run_of(&r1), run_of(&r2));
-    call(&e, &first, "browser_snapshot", json!({})).await;
-    call(&e, &second, "browser_snapshot", json!({})).await;
+    assert!(!failed(
+        &call(&e, &first, "browser_snapshot", json!({})).await
+    ));
+    // A second run of the dot is refused while the first holds its browser.
+    let refused = call(&e, &second, "browser_snapshot", json!({})).await;
+    assert!(failed(&refused));
     assert_eq!(
-        e.edges.starts(&dot.id).len(),
-        1,
-        "the second run uses the same Edge"
+        text(&refused),
+        "This dot's browser is in use by another run; try again when it ends."
     );
-    first.close().await;
-    assert!(e.edges.running(&dot.id), "the other run still holds it");
+    assert_eq!(text(&refused), HostError::InUse.to_string());
+    assert_eq!(e.edges.starts(&dot.id).len(), 1);
+    // A refused run held nothing: its end leaves the first run's Edge open.
     second.close().await;
+    assert!(e.edges.running(&dot.id), "the first run still holds it");
+    first.close().await;
     assert!(e.edges.gone_within(&dot.id, Duration::from_secs(10)).await);
-    // Opened by the person, it stays open after the runs that used it.
-    browsers.open_for_person(&dot.id).await.unwrap();
+    // Once the holder ended, another run gets the browser.
     let (r3, _) = run(&e, &dot).await;
     let third = run_of(&r3);
-    call(&e, &third, "browser_snapshot", json!({})).await;
+    assert!(!failed(
+        &call(&e, &third, "browser_snapshot", json!({})).await
+    ));
+    assert_eq!(e.edges.starts(&dot.id).len(), 2);
+    // Opened by the person meanwhile, it stays open after the run that held it.
+    browsers.open_for_person(&dot.id).await.unwrap();
     third.close().await;
     assert!(e.edges.running(&dot.id));
-    assert_eq!(e.edges.starts(&dot.id).len(), 2);
-    // A run that never called its browser holds nothing.
     let (r4, _) = run(&e, &dot).await;
-    let idle = run_of(&r4);
-    idle.close().await;
+    let fourth = run_of(&r4);
+    assert!(!failed(
+        &call(&e, &fourth, "browser_snapshot", json!({})).await
+    ));
+    fourth.close().await;
     assert!(e.edges.running(&dot.id));
+    assert_eq!(e.edges.starts(&dot.id).len(), 2);
     // After the end, a call does nothing.
     assert!(failed(
         &call(&e, &third, "browser_snapshot", json!({})).await

@@ -15,12 +15,21 @@ use axum::extract::Path;
 use axum::routing::get;
 use axum::Router;
 use common::edge_pipe::TestEdge;
+use common::fake_browser::{cart_script, exe, host, playwright_command, FakeEdges, CART};
+use common::fake_mcp::FakeMcp;
+use common::{spec, temp_store};
+use dots_core::approvals::ApprovalHub;
 use dots_core::browser::door::{self, new_secret, Doors};
 use dots_core::browser::pipe::MAX_MESSAGE;
+use dots_core::browser::{Browsers, CallLimit, CDP_ENDPOINT_VAR};
+use dots_core::events::new_bus;
+use dots_core::model::{NewRun, TriggerKind, WorkspaceMode};
+use dots_core::settings::Settings;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::{Error as WsError, Message};
+use tokio_util::sync::CancellationToken;
 
 /// A server with the door's route on `listener`, as Dots' own server has it.
 fn serve_on(listener: tokio::net::TcpListener, doors: Arc<Doors>) {
@@ -213,4 +222,92 @@ async fn edge_closing_mid_relay_ends_the_connection() {
             Ok(Some(Ok(Message::Close(_))) | None | Some(Err(_)))
         ));
     }
+}
+
+/// Playwright's connection dropped and it would come back with the same secret: the door is
+/// spent, so the run's next browser call starts a new Playwright server with a new door.
+#[tokio::test]
+async fn a_run_whose_playwright_lost_its_door_gets_a_new_one() {
+    let (dir, store) = temp_store().await;
+    store
+        .put_settings(&Settings {
+            edge_path: Some(exe()),
+            ..Settings::default()
+        })
+        .await
+        .unwrap();
+    let root = dir.path().join("browser");
+    let edges = FakeEdges::new(&root);
+    let playwright = FakeMcp::new(cart_script());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let browsers = Browsers::new(
+        store.clone(),
+        Arc::new(host(&root)),
+        playwright_command(&playwright),
+        port,
+    );
+    serve_on(listener, browsers.doors().clone());
+    let mut s = spec("shopper");
+    s.workdir = dir.path().to_string_lossy().into_owned();
+    s.workspace_mode = WorkspaceMode::Folder;
+    s.browser = true;
+    let dot = store.create_dot(&s).await.unwrap();
+    edges.first_pages(&dot.id, &[CART]);
+    let run = store
+        .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    let browser = browsers.for_run(&dot, &run.id, dir.path());
+    let hub = ApprovalHub::new(store.clone(), new_bus());
+    let snapshot = || async {
+        browser
+            .call(
+                &hub,
+                "browser_snapshot",
+                json!({}),
+                CallLimit::PerformWithin(Duration::from_secs(30)),
+                &CancellationToken::new(),
+            )
+            .await
+    };
+    let endpoints = || -> Vec<String> {
+        playwright
+            .log()
+            .iter()
+            .filter_map(|r| r.get("start"))
+            .map(|start| start["env"][CDP_ENDPOINT_VAR].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_ne!(snapshot().await["isError"], true);
+    let first = endpoints().pop().unwrap();
+    let secret = first.rsplit('/').next().unwrap().to_string();
+    // Playwright comes in through its door, and its connection drops.
+    let (mut socket, _) = tokio_tungstenite::connect_async(&first).await.unwrap();
+    socket.close(None).await.unwrap();
+    assert!(spent_within(browsers.doors(), &secret).await);
+    assert_eq!(enter(port, &secret).await.err(), Some(404));
+    // The next call starts a new server, with a door of its own; the old secret stays out.
+    assert_ne!(snapshot().await["isError"], true);
+    let now = endpoints();
+    assert_eq!(now.len(), 2);
+    assert_ne!(now[1], first);
+    assert_eq!(enter(port, &secret).await.err(), Some(404));
+    let mut again = enter(port, now[1].rsplit('/').next().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(edges.starts(&dot.id).len(), 1, "the same Edge");
+    // The run ends: its Edge closes, and with it the connection.
+    browser.close().await;
+    assert!(edges.gone_within(&dot.id, Duration::from_secs(10)).await);
+    let closed = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match again.next().await {
+                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => return,
+                Some(Ok(_)) => {}
+            }
+        }
+    })
+    .await;
+    assert!(closed.is_ok());
 }

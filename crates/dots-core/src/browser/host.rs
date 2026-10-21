@@ -57,6 +57,8 @@ pub enum HostError {
     ProfileInUse,
     #[error("Browser use needs Node.js (npx).")]
     NoNode,
+    #[error("This dot's browser is in use by another run; try again when it ends.")]
+    InUse,
     #[error("Microsoft Edge could not start: {0}")]
     Start(String),
     #[error("Microsoft Edge did not answer: {0}")]

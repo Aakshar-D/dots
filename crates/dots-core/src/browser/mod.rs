@@ -168,15 +168,16 @@ pub struct BrowserStatus {
     pub npx: Option<String>,
 }
 
-/// Who uses a dot's Edge: its runs that called the browser, and the person.
+/// Who uses a dot's Edge: the run that holds it, and the person.
 #[derive(Debug, Default)]
 struct Users {
-    runs: usize,
+    /// The run that holds the browser, from its first browser call until it ends.
+    run: Option<String>,
     person: bool,
 }
 
-/// The dots' browsers (section 2.1): one Edge per dot, shared by the dot's runs, closed when the
-/// last run that used it ends, unless the person opened it ("Open the browser").
+/// The dots' browsers (sections 2.1 and 14): one Edge per dot, serving one run of the dot at a
+/// time, closed when that run ends, unless the person opened it ("Open the browser").
 pub struct Browsers {
     store: Store,
     host: Arc<dyn BrowserHost>,
@@ -226,30 +227,35 @@ impl Browsers {
         find_edge(configured.as_deref(), &process_env).ok_or(HostError::NotFound)
     }
 
-    /// The dot's Edge for a run: found, or started. `hold` counts the run in (its first call);
-    /// a later call only finds it again, or starts it after the person closed it.
-    async fn open(&self, dot_id: &str, hold: bool) -> Result<Arc<Pipe>, HostError> {
+    /// The dot's Edge for the run `run_id`: found, or started, again after the person closed
+    /// it. The run holds the browser from then on; while another run holds it, `InUse`.
+    async fn open(&self, dot_id: &str, run_id: &str) -> Result<Arc<Pipe>, HostError> {
         let exe = self.edge().await?;
         let mut users = self.users.lock().await;
+        let user = users.entry(dot_id.to_string()).or_default();
+        if user.run.as_deref().is_some_and(|holder| holder != run_id) {
+            return Err(HostError::InUse);
+        }
         let opened = self.host.open(dot_id, &exe).await?;
         let user = users.entry(dot_id.to_string()).or_default();
         if opened.started {
             user.person = false;
         }
-        if hold {
-            user.runs += 1;
-        }
+        user.run = Some(run_id.to_string());
         Ok(opened.edge)
     }
 
-    /// A run is done with the dot's Edge: the last one closes it, unless the person opened it.
-    async fn release(&self, dot_id: &str) {
+    /// The run `run_id` is done with the dot's Edge: it closes, unless the person opened it.
+    async fn release(&self, dot_id: &str, run_id: &str) {
         let mut users = self.users.lock().await;
         let Some(user) = users.get_mut(dot_id) else {
             return;
         };
-        user.runs = user.runs.saturating_sub(1);
-        if user.runs == 0 && !user.person {
+        if user.run.as_deref() != Some(run_id) {
+            return;
+        }
+        user.run = None;
+        if !user.person {
             users.remove(dot_id);
             self.host.close(dot_id).await;
         }
@@ -329,7 +335,7 @@ impl RunBrowser {
         }
         let edge = self
             .browsers
-            .open(&self.dot_id, !live.held)
+            .open(&self.dot_id, &self.run_id)
             .await
             .map_err(|e| e.to_string())?;
         live.held = true;
@@ -343,7 +349,12 @@ impl RunBrowser {
             self.stop_server(&mut live).await;
             live.edge = Some(edge.clone());
         }
-        if let Some(session) = live.session.clone().filter(|s| !s.is_stopped()) {
+        // A Playwright whose connection ended cannot come in again: its secret is spent.
+        let spent = live
+            .secret
+            .as_deref()
+            .is_some_and(|secret| self.browsers.doors.spent(secret));
+        if let Some(session) = live.session.clone().filter(|s| !s.is_stopped() && !spent) {
             return Ok(session);
         }
         self.stop_server(&mut live).await;
@@ -537,7 +548,7 @@ impl RunBrowser {
         if live.held {
             let _ = self.collect_downloads();
             live.held = false;
-            self.browsers.release(&self.dot_id).await;
+            self.browsers.release(&self.dot_id, &self.run_id).await;
         }
     }
 }
