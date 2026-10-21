@@ -103,6 +103,15 @@ impl FakeEdges {
         );
     }
 
+    /// Makes the running fake answer `Browser.getVersion` only after `millis`, as a busy Edge.
+    pub fn stall(&self, dot_id: &str, millis: u64) {
+        let port = self.control(dot_id).expect("a started fake");
+        assert!(
+            post(port, "/fake/stall", &millis.to_string()),
+            "the fake did not take its stall"
+        );
+    }
+
     /// Ends the running fake at once, as when the person closes the window.
     pub fn quit(&self, dot_id: &str) {
         if let Some(port) = self.control(dot_id) {

@@ -125,6 +125,26 @@ async fn closing_ends_it_over_its_pipe_and_a_closed_window_starts_again() {
     e.host.close("D9").await;
 }
 
+/// A busy Edge that answers late is kept: the call fails, the window and its tabs stay, and the
+/// next open finds the same Edge.
+#[tokio::test]
+async fn a_slow_edge_is_kept_not_started_again() {
+    let e = env();
+    let first = e.host.open("D1", &edge()).await.unwrap();
+    e.edges.stall("D1", 7_000);
+    assert!(matches!(
+        e.host.open("D1", &edge()).await,
+        Err(HostError::Unreachable(_))
+    ));
+    assert!(e.edges.running("D1"));
+    assert_eq!(e.edges.starts("D1").len(), 1);
+    // Once it answers again, it is the same Edge.
+    e.edges.stall("D1", 0);
+    let again = e.host.open("D1", &edge()).await.unwrap();
+    assert!(!again.started);
+    assert!(Arc::ptr_eq(&first.edge, &again.edge));
+}
+
 #[tokio::test]
 async fn its_pages_are_the_page_targets_of_its_list() {
     let targets: Vec<Value> = serde_json::from_str(JSON_LIST).unwrap();

@@ -19,7 +19,9 @@
 //!   `{"invalid": "<text>"}`, unanswered.
 //! - Test controls, over HTTP on a port of its own on 127.0.0.1 that Dots never uses: `POST
 //!   /fake/pages` with a JSON array of addresses makes those its pages, most recent first;
-//!   `POST /fake/quit` exits at once, as when the person closes the window.
+//!   `POST /fake/stall` with a number of milliseconds makes `Browser.getVersion` answer that
+//!   late, as a busy Edge; `POST /fake/quit` exits at once, as when the person closes the
+//!   window.
 //! - Its first pages are `<dir>/fake-pages.json` (a JSON array) when that file exists, else the
 //!   address it was given, else `about:blank`.
 //! - Each start appends `{"args": [...], "control": <port>, "pid": <pid>}` to
@@ -45,6 +47,8 @@ struct Fake {
     /// `(id, address)`, most recent first.
     pages: Mutex<Vec<(String, String)>>,
     received: Mutex<File>,
+    /// How long `Browser.getVersion` waits before it is answered, in milliseconds.
+    stall: AtomicU64,
 }
 
 impl Fake {
@@ -147,6 +151,7 @@ fn answer(fake: &Fake, frame: &[u8], output: &Output) {
     let mut result = json!({});
     match method {
         "Browser.getVersion" => {
+            std::thread::sleep(Duration::from_millis(fake.stall.load(Ordering::Relaxed)));
             result = json!({"product": "Edg/0.0.0.0 (fake)", "protocolVersion": "1.3"});
         }
         "Target.getTargets" => {
@@ -222,6 +227,16 @@ async fn set_pages(State(fake): State<Arc<Fake>>, Json(urls): Json<Vec<String>>)
     StatusCode::OK
 }
 
+async fn stall(State(fake): State<Arc<Fake>>, body: String) -> StatusCode {
+    match body.trim().parse() {
+        Ok(millis) => {
+            fake.stall.store(millis, Ordering::Relaxed);
+            StatusCode::OK
+        }
+        Err(_) => StatusCode::BAD_REQUEST,
+    }
+}
+
 async fn quit() -> StatusCode {
     exit_soon();
     StatusCode::OK
@@ -271,6 +286,7 @@ async fn main() {
         next: AtomicU64::new(0),
         pages: Mutex::new(Vec::new()),
         received: Mutex::new(received),
+        stall: AtomicU64::new(0),
     });
     let pages: Vec<(String, String)> = first.into_iter().map(|url| fake.page(url)).collect();
     *fake.pages.lock().unwrap() = pages;
@@ -288,6 +304,7 @@ async fn main() {
     std::thread::spawn(move || serve_pipe(piped, input, Mutex::new(output)));
     let app = Router::new()
         .route("/fake/pages", post(set_pages))
+        .route("/fake/stall", post(stall))
         .route("/fake/quit", post(quit))
         .with_state(fake);
     axum::serve(listener, app).await.unwrap();

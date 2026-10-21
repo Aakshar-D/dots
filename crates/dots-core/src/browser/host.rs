@@ -169,19 +169,25 @@ impl BrowserHost for EdgeHost {
 
     async fn open(&self, dot_id: &str, exe: &Path) -> Result<Opened, HostError> {
         let mut edges = self.edges.lock().await;
-        if let Some(running) = edges.get(dot_id).filter(|r| !r.pipe.is_closed()) {
+        if let Some(running) = edges.get_mut(dot_id).filter(|r| !r.pipe.is_closed()) {
             // Only while it answers: the person may have closed the window a moment ago, before
             // its pipe's end was read.
-            if running
-                .pipe
-                .ask("Browser.getVersion", json!({}))
-                .await
-                .is_ok()
-            {
-                return Ok(Opened {
-                    edge: running.pipe.clone(),
-                    started: false,
-                });
+            match running.pipe.ask("Browser.getVersion", json!({})).await {
+                Ok(_) => {
+                    return Ok(Opened {
+                        edge: running.pipe.clone(),
+                        started: false,
+                    })
+                }
+                // A busy Edge that answers late is kept, with its window and tabs: only an Edge
+                // whose pipe closed, or whose helper ended, is started again.
+                Err(e)
+                    if !running.pipe.is_closed()
+                        && matches!(running.child.try_wait(), Ok(None)) =>
+                {
+                    return Err(e);
+                }
+                Err(_) => {}
             }
         }
         // The person closed the window, or the helper ended.
