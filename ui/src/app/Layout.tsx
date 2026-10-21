@@ -7,6 +7,7 @@ import { commands } from "@/api/commands";
 import { Banners } from "@/app/Banners";
 import { Badge } from "@/components/ui/badge";
 import { Toaster } from "@/components/ui/sonner";
+import { waits } from "@/lib/messages";
 import { keys } from "@/lib/query";
 import { useRuntimeEvents } from "@/lib/runtime-events";
 
@@ -22,13 +23,18 @@ const LINKS = [
 export function Layout() {
   useRuntimeEvents();
   const inbox = useQuery({ queryKey: keys.inbox, queryFn: commands.inbox }).data;
-  // The same count as the tray's (`inbox_count`).
-  const waiting = inbox
-    ? inbox.approvals.length +
-      inbox.review_runs.length +
-      inbox.attention.length +
-      inbox.tools_changed.length
-    : 0;
+  const messages = useQuery({
+    queryKey: keys.messages(null),
+    queryFn: () => commands.messagesList(null),
+  }).data;
+  // The same count as the tray's (`inbox_count`), the open questions and unread notes included.
+  const waiting =
+    (inbox
+      ? inbox.approvals.length +
+        inbox.review_runs.length +
+        inbox.attention.length +
+        inbox.tools_changed.length
+      : 0) + (messages ?? []).filter(waits).length;
   return (
     <div className="flex h-screen bg-background text-sm text-foreground">
       <nav

@@ -7,12 +7,14 @@ import type { NeedsAttention, ReviewRun, ToolsChanged } from "@/api/types";
 import { ApprovalCard } from "@/components/ApprovalCard";
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { ErrorNote } from "@/components/ErrorNote";
+import { MessageCard } from "@/components/MessageCard";
 import { Page } from "@/components/Page";
 import { ReviewActions } from "@/components/ReviewActions";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { byRun, type RunApprovals } from "@/lib/approvals";
 import { relativeTime } from "@/lib/format";
+import { waits } from "@/lib/messages";
 import { notifyError } from "@/lib/notify";
 import { invalidate, keys } from "@/lib/query";
 import { onSingleClick } from "@/lib/single-click";
@@ -218,7 +220,12 @@ function RunApprovalsGroup({ group }: { group: RunApprovals }) {
 /// and finished runs to review.
 export function InboxScreen() {
   const inbox = useQuery({ queryKey: keys.inbox, queryFn: commands.inbox });
-  if (inbox.isPending) return <Page title="Inbox" />;
+  // The dots' open questions and unread notes come first (check-ins spec section 9).
+  const messages = useQuery({
+    queryKey: keys.messages(null),
+    queryFn: () => commands.messagesList(null),
+  });
+  if (inbox.isPending || messages.isPending) return <Page title="Inbox" />;
   if (inbox.isError) {
     return (
       <Page title="Inbox">
@@ -227,7 +234,10 @@ export function InboxScreen() {
     );
   }
   const { approvals, review_runs: runs, attention, tools_changed: tools } = inbox.data;
+  const waiting = (messages.data ?? []).filter(waits);
   if (
+    !messages.isError &&
+    waiting.length === 0 &&
     approvals.length === 0 &&
     runs.length === 0 &&
     attention.length === 0 &&
@@ -236,14 +246,27 @@ export function InboxScreen() {
     return (
       <Page title="Inbox">
         <p className="text-muted-foreground">
-          Nothing waits for you. Approvals a dot asks for, schedules that need attention and
-          finished runs to review show up here.
+          Nothing waits for you. Questions and notes from dots, approvals a dot asks for,
+          schedules that need attention and finished runs to review show up here.
         </p>
       </Page>
     );
   }
   return (
     <Page title="Inbox">
+      {messages.isError && <ErrorNote error={messages.error} />}
+      {waiting.length > 0 && (
+        <section aria-labelledby="inbox-messages" className="flex flex-col gap-2">
+          <h2 id="inbox-messages" className="font-semibold">
+            Messages
+          </h2>
+          <ul className="flex flex-col gap-2">
+            {waiting.map((message) => (
+              <MessageCard key={message.id} message={message} />
+            ))}
+          </ul>
+        </section>
+      )}
       {approvals.length > 0 && (
         <section aria-labelledby="inbox-approvals" className="flex flex-col gap-2">
           <h2 id="inbox-approvals" className="font-semibold">
