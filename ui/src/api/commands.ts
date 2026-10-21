@@ -75,6 +75,15 @@ export const commands = {
   updateSettings: (settings: Settings) => call(T.SettingsSaved, "update_settings", { settings }),
   setSchedulesPaused: (paused: boolean) => call(T.Status, "set_schedules_paused", { paused }),
   restartApp: () => call(nothing, "restart_app"),
+  updateNote: () => call(T.UpdateNote, "update_note"),
+  updateOpenNotes: () => call(nothing, "update_open_notes"),
+  updateLater: () => call(T.UpdateNote, "update_later"),
+  updateRestart: () => call(T.UpdateNote, "update_restart"),
+  /// `working`: the dots the confirm named. When another dot is working now, nothing is
+  /// installed and the note names the dots working now.
+  updateStopAndRestart: (working: string[]) =>
+    call(T.UpdateNote, "update_stop_and_restart", { working }),
+  updateCancelWait: () => call(T.UpdateNote, "update_cancel_wait"),
 
   dotOverview: () => call(T.DotOverview.array(), "dot_overview"),
   listDots: () => call(T.Dot.array(), "list_dots"),

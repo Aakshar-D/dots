@@ -4,7 +4,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { z } from "zod";
 
 import * as T from "./types";
-import type { RuntimeEvent, Status } from "./types";
+import type { RuntimeEvent, Status, UpdateNote } from "./types";
 
 const Typed = z.object({ type: z.string() });
 
@@ -50,5 +50,13 @@ export function onStatus(handler: (status: Status) => void): Promise<UnlistenFn>
   return listen("status", (e) => {
     const status = parse("status", T.Status, e.payload);
     if (status) handler(status);
+  });
+}
+
+/// The update strip changed: an update is ready, a wait began or ended, an install began.
+export function onUpdate(handler: (note: UpdateNote) => void): Promise<UnlistenFn> {
+  return listen("update", (e) => {
+    const note = parse("update", T.UpdateNote, e.payload);
+    if (note) handler(note);
   });
 }

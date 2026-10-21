@@ -11,7 +11,7 @@ vi.mock("@tauri-apps/api/event", () => ({
   },
 }));
 
-const { onLagged, onNavigate, onRuntimeEvent, onStatus } = await import("./events");
+const { onLagged, onNavigate, onRuntimeEvent, onStatus, onUpdate } = await import("./events");
 
 describe("events", () => {
   afterEach(() => vi.restoreAllMocks());
@@ -25,11 +25,13 @@ describe("events", () => {
     await onLagged(() => seen.push("lagged"));
     await onNavigate((p) => seen.push(p));
     await onStatus((s) => seen.push(s.port));
+    await onUpdate((n) => seen.push(n.state));
     handlers.get("runtime")!({ payload: fixture.RuntimeEvent[0] });
     handlers.get("runtime-lagged")!({ payload: null });
     handlers.get("navigate")!({ payload: "/inbox" });
     handlers.get("status")!({ payload: fixture.Status });
-    expect(seen).toEqual(["run_updated", "lagged", "/inbox", 47321]);
+    handlers.get("update")!({ payload: fixture.UpdateNote[1] });
+    expect(seen).toEqual(["run_updated", "lagged", "/inbox", 47321, "ready"]);
   });
 
   it("asks for a refetch when a runtime event is in a shape it does not know", async () => {

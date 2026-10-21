@@ -10,9 +10,17 @@ import { keys } from "@/lib/query";
 export function Root() {
   const startup = useQuery({ queryKey: keys.startupError, queryFn: commands.startupError });
   if (startup.isPending) return null;
-  if (startup.isError) return <FatalPage message={errorMessage(startup.error)} logDir={null} />;
+  if (startup.isError) {
+    return <FatalPage message={errorMessage(startup.error)} logDir={null} backup={null} />;
+  }
   if (startup.data) {
-    return <FatalPage message={startup.data.message} logDir={startup.data.log_dir} />;
+    return (
+      <FatalPage
+        message={startup.data.message}
+        logDir={startup.data.log_dir}
+        backup={startup.data.backup}
+      />
+    );
   }
   return <Layout />;
 }

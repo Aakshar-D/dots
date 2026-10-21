@@ -7,6 +7,8 @@ pub mod events;
 pub mod startup;
 pub mod state;
 pub mod tray;
+pub mod update;
+pub mod update_service;
 
 use tauri::{AppHandle, Manager, RunEvent, WindowEvent};
 
@@ -34,6 +36,12 @@ command_list![
     update_settings,
     set_schedules_paused,
     restart_app,
+    update_note,
+    update_open_notes,
+    update_later,
+    update_restart,
+    update_stop_and_restart,
+    update_cancel_wait,
     dot_overview,
     list_dots,
     get_dot,
@@ -139,6 +147,14 @@ fn setup(app: &AppHandle, panics_logged: bool) -> Result<(), Box<dyn std::error:
             !startup::single_instance(std::env::var_os(startup::DATA_DIR_ENV)),
         );
         events::spawn_forwarder(app.clone(), rt.clone());
+        if let Ok(dir) = &data_dir {
+            // What a failed install left is read while Dots holds the data folder.
+            app.manage(update_service::Updates::new(
+                dir.clone(),
+                update::take_error(dir),
+            ));
+            update_service::spawn(app.clone(), rt.clone());
+        }
     }
     app.manage(AppState::new(runtime.map(|(rt, _)| rt), log_dir).with_data_dir(data_dir.ok()));
     // A failed start always shows its error page, even when launched hidden; so does a start
@@ -177,6 +193,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(move |app| {
             setup(app.handle(), panics_logged)?;
             Ok(())

@@ -282,6 +282,15 @@ impl Store {
         Ok(res.rows_affected() == 1)
     }
 
+    /// The dots with a run whose status is `running`, each once, by id.
+    pub async fn running_dot_ids(&self) -> Result<Vec<String>> {
+        Ok(sqlx::query_scalar(
+            "SELECT DISTINCT dot_id FROM runs WHERE status = 'running' ORDER BY dot_id",
+        )
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
     pub async fn has_queued_run(&self, dot_id: &str) -> Result<bool> {
         let n: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE dot_id = ? AND status = 'queued'")

@@ -35,6 +35,7 @@ const schemas: Record<SampleName, { parse: (v: unknown) => unknown }> = {
   WorktreeDiff: T.WorktreeDiff,
   CmdError: T.CmdError,
   StartupError: T.StartupError,
+  UpdateNote: T.UpdateNote.array(),
 };
 
 // The UI parses live data with these schemas, so it must know every variant the core has.
@@ -109,6 +110,11 @@ describe("Rust/TypeScript contract", () => {
     expect(fixture.Schedule.map((s) => s.until && Object.keys(s.until)[0])).toEqual(
       expect.arrayContaining([null, "count", "date"]),
     );
+  });
+
+  it("has a sample of every update state", () => {
+    const states = T.UpdateNote.options.map((o) => o.shape.state.value);
+    expect(fixture.UpdateNote.map((n) => n.state).sort()).toEqual([...states].sort());
   });
 
   it("mirrors the core's limits", () => {

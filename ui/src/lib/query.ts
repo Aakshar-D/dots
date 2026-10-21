@@ -23,6 +23,7 @@ export function createQueryClient(): QueryClient {
 export const keys = {
   startupError: ["startup-error"] as const,
   status: ["status"] as const,
+  update: ["update"] as const,
   settings: ["settings"] as const,
   overview: ["overview"] as const,
   inbox: ["inbox"] as const,
