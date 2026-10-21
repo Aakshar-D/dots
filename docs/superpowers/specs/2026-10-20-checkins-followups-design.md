@@ -59,7 +59,7 @@ The limits are constants in `followups.rs`, not settings.
 
 ## 4. Policy
 
-`Policy::preset` adds `Notify`, `Ask` and `FollowUp` allow rules to every preset (Sandboxed, Trusted, and Custom, which starts from Sandboxed), after `Skill` and `Context`. Stored dots keep their stored policy; the tools are judged by the dot's rules and, with no matching rule, by the default action of the policy, as any tool. Migration 0008 (section 8) adds the three allow rules to the stored policy of every dot whose preset is not Custom, as the person would get by choosing the preset again.
+`Policy::preset` adds `Notify`, `Ask` and `FollowUp` allow rules to every preset (Sandboxed, Trusted, and Custom, which starts from Sandboxed), after `Skill` and `Context`. Stored dots keep their stored policy; the tools are judged by the dot's rules and, with no matching rule, by the default action of the policy. Unlike other tools, whose order is deny > allow > ask, for these three an ask rule wins over an allow rule (deny > ask > allow), so a person who sets one to ask is asked even though the preset allows it. Migration 0008 (section 8) adds the three allow rules to the stored policy of every dot whose preset is not Custom, as the person would get by choosing the preset again.
 
 The three names, like `Context`, are left out of what the Claude CLI is told (`claude_rules`): the CLI has no such tools, and Dots' `dots` server checks each call.
 
@@ -227,3 +227,4 @@ The plan (`docs/superpowers/plans/2026-10-20-checkins-followups.md`) changed the
 - The `Runner`'s `checkins` field sits after the `held` and `pass` fields that the auto-update work added; behaviour is unchanged.
 - `local_tools_test` counts the three check-in tools among those a run gets only on request (`checkins::schemas`), and round-trips their input through `prepare`.
 - A run sends at most 10 notes (`checkins::MAX_NOTES`); the eleventh `notify` is answered "This run has sent 10 notes; that is the most it may send." The count and the insert are one statement, so notes sent at once cannot pass it. Dots' own notes do not count (section 2; from the final review, for the anti-goal of section 1).
+- For `Notify`, `Ask` and `FollowUp` an ask rule wins over the preset's allow (deny > ask > allow); every other tool keeps deny > allow > ask (section 4; asked for by the person after the smoke).

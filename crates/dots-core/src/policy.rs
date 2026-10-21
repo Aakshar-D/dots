@@ -177,7 +177,15 @@ impl Policy {
     /// Like `resolve`, but absolute file paths inside `workspace` are treated as relative to it.
     pub fn resolve_in(&self, tool: &str, input: &Value, workspace: Option<&Path>) -> Action {
         let ws = workspace_key(workspace);
-        for action in [Action::Deny, Action::Allow, Action::Ask] {
+        // A check-in tool set to ask means it, even under the preset's allow (check-ins spec
+        // section 4); every other tool keeps deny > allow > ask, where a narrow allow beats a
+        // broad ask.
+        let order = if CHECK_IN_TOOLS.contains(&tool.trim()) {
+            [Action::Deny, Action::Ask, Action::Allow]
+        } else {
+            [Action::Deny, Action::Allow, Action::Ask]
+        };
+        for action in order {
             if self.rule_matches(action, tool, input, ws.as_deref()) {
                 return action;
             }

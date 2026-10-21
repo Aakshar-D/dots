@@ -46,7 +46,7 @@ fn a_dots_own_check_in_rule_still_decides_and_stays_out_of_the_cli_lists() {
     let mut p = Policy::preset(Preset::Sandboxed);
     p.rules.insert(0, Rule::new("Notify", Action::Deny));
     assert_eq!(p.resolve("Notify", &json!({"text": "x"})), Action::Deny);
-    // deny > allow > ask: an ask rule decides once the preset's allow is gone.
+    // An ask rule decides, with or without the preset's allow.
     p.rules.retain(|r| r.tool != "FollowUp");
     p.rules.push(Rule::new("FollowUp", Action::Ask));
     assert_eq!(
@@ -138,5 +138,35 @@ async fn migration_0008_lets_every_policy_that_is_not_custom_check_in() {
     assert_eq!(
         store.get_dot("D1").await.unwrap().spec.policy,
         Policy::preset(Preset::Sandboxed)
+    );
+}
+
+/// A person who sets a check-in tool to ask means it (check-ins spec section 4): for `Notify`,
+/// `Ask` and `FollowUp` an ask rule wins over the preset's allow, while every other tool keeps
+/// deny > allow > ask, where a narrow allow beats a broad ask.
+#[test]
+fn an_ask_rule_on_a_check_in_tool_wins_over_the_presets_allow() {
+    for preset in Preset::ALL {
+        let mut p = Policy::preset(*preset);
+        for tool in CHECK_IN_TOOLS {
+            p.rules.push(Rule::new(tool, Action::Ask));
+            assert_eq!(
+                p.resolve(tool, &json!({"text": "x"})),
+                Action::Ask,
+                "{preset:?} {tool}"
+            );
+        }
+        // A deny rule still wins over both.
+        p.rules.push(Rule::new("Ask", Action::Deny));
+        assert_eq!(p.resolve("Ask", &json!({"question": "x"})), Action::Deny);
+    }
+    // Other tools are unchanged: an allow rule wins over an ask rule.
+    let mut p = Policy::preset(Preset::Sandboxed);
+    p.rules.push(Rule::new("Read", Action::Ask));
+    p.rules.push(Rule::new("Context", Action::Ask));
+    assert_eq!(p.resolve("Read", &json!({"file_path": "a"})), Action::Allow);
+    assert_eq!(
+        p.resolve("Context", &json!({"collection": "kb"})),
+        Action::Allow
     );
 }
