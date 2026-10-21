@@ -28,6 +28,8 @@ pub struct Settings {
     pub schedules_paused: bool,
     /// The text every dot's first prompt starts with, unless the dot switches it off.
     pub global_instructions: String,
+    /// A dot's note shows a notification (check-ins spec section 10). A question always does.
+    pub notify_on_notes: bool,
 }
 
 impl Default for Settings {
@@ -41,6 +43,7 @@ impl Default for Settings {
             autostart: true,
             schedules_paused: false,
             global_instructions: String::new(),
+            notify_on_notes: true,
         }
     }
 }

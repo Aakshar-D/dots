@@ -1,7 +1,7 @@
 use serde::Serialize;
 use tokio::sync::broadcast;
 
-use crate::model::{Approval, Run, RunEventRecord};
+use crate::model::{Approval, Message, Run, RunEventRecord};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -39,6 +39,18 @@ pub enum RuntimeEvent {
     /// Library and the Inbox read it again.
     LibraryUpdated {
         item_id: String,
+    },
+    /// A dot posted a note or asked a question (check-ins spec section 5). The app notifies.
+    MessagePosted {
+        message: Message,
+    },
+    /// A message was read, answered or dismissed.
+    MessageUpdated {
+        message: Message,
+    },
+    /// A follow-up of the dot was scheduled, fired, cancelled or skipped.
+    FollowUpsUpdated {
+        dot_id: String,
     },
 }
 

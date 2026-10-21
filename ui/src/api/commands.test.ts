@@ -52,6 +52,30 @@ describe("commands", () => {
     ]);
   });
 
+  it("sends the check-in commands as the core names them", async () => {
+    reply = async () => fixture.Message;
+    expect(await commands.messagesList(null)).toEqual(fixture.Message);
+    await commands.messagesList("d1");
+    reply = async () => fixture.Run;
+    await commands.messageReply("m1", "yes");
+    reply = async () => fixture.Message[0];
+    await commands.messageDismiss("m1");
+    await commands.messageMarkRead("m1");
+    reply = async () => fixture.FollowUp;
+    expect(await commands.followUpsList(null)).toEqual(fixture.FollowUp);
+    reply = async () => fixture.FollowUp[0];
+    await commands.followUpCancel("f1");
+    expect(calls).toEqual([
+      ["messages_list", { dotId: null }],
+      ["messages_list", { dotId: "d1" }],
+      ["message_reply", { id: "m1", text: "yes" }],
+      ["message_dismiss", { id: "m1" }],
+      ["message_mark_read", { id: "m1" }],
+      ["follow_ups_list", { dotId: null }],
+      ["follow_up_cancel", { id: "f1" }],
+    ]);
+  });
+
   it("dismisses a schedule's attention by its dot", async () => {
     reply = async () => null;
     expect(await commands.dismissScheduleAttention("d1")).toBeNull();

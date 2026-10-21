@@ -7,7 +7,15 @@ const nullable = <T extends z.ZodType>(t: T) => t.nullable();
 
 export const EngineKind = z.enum(["claude", "local"]);
 export const WorkspaceMode = z.enum(["worktree", "folder"]);
-export const TriggerKind = z.enum(["schedule", "webhook", "manual", "chat", "resume"]);
+export const TriggerKind = z.enum([
+  "schedule",
+  "webhook",
+  "manual",
+  "chat",
+  "resume",
+  // A run a dot scheduled for itself (check-ins spec section 6).
+  "follow_up",
+]);
 export const RunStatus = z.enum([
   "queued",
   "running",
@@ -191,6 +199,39 @@ export const Approval = z.strictObject(approvalShape);
 // covers in words.
 export const RuleCandidate = z.strictObject({ pattern: z.string(), label: z.string() });
 
+export const MessageKind = z.enum(["note", "question"]);
+export const FollowUpStatus = z.enum(["pending", "fired", "cancelled", "skipped"]);
+// A dot's note or question (check-ins spec section 7). Times are RFC 3339 UTC.
+export const Message = z.strictObject({
+  id: z.string(),
+  dot_id: z.string(),
+  dot_name: z.string(),
+  // Null for a note of Dots' own (a skipped follow-up).
+  run_id: nullable(z.string()),
+  kind: MessageKind,
+  text: z.string(),
+  choices: nullable(z.array(z.string())),
+  created_at: z.string(),
+  read_at: nullable(z.string()),
+  answered_at: nullable(z.string()),
+  // The run the answer started.
+  answer_run_id: nullable(z.string()),
+  dismissed_at: nullable(z.string()),
+});
+// A run a dot scheduled for itself (check-ins spec section 6). Times are RFC 3339 UTC.
+export const FollowUp = z.strictObject({
+  id: z.string(),
+  dot_id: z.string(),
+  from_run_id: z.string(),
+  due_at: z.string(),
+  note: z.string(),
+  status: FollowUpStatus,
+  fired_run_id: nullable(z.string()),
+  attempts: z.number().int(),
+  retry_at: nullable(z.string()),
+  created_at: z.string(),
+});
+
 export const RuntimeEvent = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("run_updated"), run: Run }),
   z.strictObject({ type: z.literal("run_event"), event: RunEventRecord }),
@@ -208,6 +249,12 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
     run_id: z.string(),
     error: nullable(z.string()),
   }),
+  // A dot posted a note or asked a question.
+  z.strictObject({ type: z.literal("message_posted"), message: Message }),
+  // A message was read, answered or dismissed.
+  z.strictObject({ type: z.literal("message_updated"), message: Message }),
+  // A follow-up of the dot was scheduled, fired, cancelled or skipped.
+  z.strictObject({ type: z.literal("follow_ups_updated"), dot_id: z.string() }),
 ]);
 
 export const ClaudeStatus = z.strictObject({
@@ -234,6 +281,8 @@ export const Settings = z.strictObject({
   autostart: z.boolean(),
   schedules_paused: z.boolean(),
   global_instructions: z.string(),
+  // A dot's note notifies; a question always does.
+  notify_on_notes: z.boolean(),
 });
 export const SettingsSaved = z.strictObject({
   settings: Settings,
@@ -559,4 +608,8 @@ export type WorktreeDiff = z.infer<typeof WorktreeDiff>;
 export type CmdErrorKind = z.infer<typeof CmdErrorKind>;
 export type CmdError = z.infer<typeof CmdError>;
 export type StartupError = z.infer<typeof StartupError>;
+export type MessageKind = z.infer<typeof MessageKind>;
+export type FollowUpStatus = z.infer<typeof FollowUpStatus>;
+export type Message = z.infer<typeof Message>;
+export type FollowUp = z.infer<typeof FollowUp>;
 export type UpdateNote = z.infer<typeof UpdateNote>;

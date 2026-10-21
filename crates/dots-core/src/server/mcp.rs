@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 use super::gateway::not_performed;
 use super::webhook::bearer;
 use super::ServerState;
+use crate::checkins::Tool;
 use crate::context;
 use crate::engine::local::tools::cap_head;
 use crate::engine::{PermissionGate, PermissionOutcome};
@@ -100,11 +101,18 @@ pub async fn handle(State(s): State<ServerState>, headers: HeaderMap, body: Byte
             if has_contexts(&s, &run_id) {
                 tools.push(context_tool());
             }
+            // Every run checks in (check-ins spec section 2), once the runtime has given the
+            // runner the check-ins.
+            if s.runner.checkins().is_some() {
+                tools.extend(Tool::ALL.map(Tool::mcp_schema));
+            }
             json!({ "tools": tools })
         }
         "tools/call" => {
-            let answer = match req.pointer("/params/name").and_then(Value::as_str) {
-                Some("context") => call_context(&s, &run_id, &req).await,
+            let name = req.pointer("/params/name").and_then(Value::as_str);
+            let answer = match (name, name.and_then(Tool::from_name)) {
+                (Some("context"), _) => call_context(&s, &run_id, &req).await,
+                (_, Some(tool)) => call_check_in(&s, &run_id, &req, tool).await,
                 _ => call_approve(&s, &run_id, &req).await,
             };
             match answer {
@@ -156,6 +164,38 @@ async fn call_context(s: &ServerState, run_id: &str, req: &Value) -> Result<Valu
         }
         Ok(Err(e)) => not_performed(&cap_head(e)),
         Err(e) => not_performed(&format!("reading the collection failed: {e}")),
+    })
+}
+
+/// Checks a call of a check-in tool against the dot's policy under its policy name (`Notify`,
+/// `Ask`, `FollowUp`), waiting for an approval when a rule asks, and performs it (check-ins
+/// spec section 2). A call that is not performed is a tool result with `isError`, as for
+/// `context`.
+async fn call_check_in(
+    s: &ServerState,
+    run_id: &str,
+    req: &Value,
+    tool: Tool,
+) -> Result<Value, (i64, String)> {
+    let Some(checkins) = s.runner.checkins() else {
+        return Err((-32602, "unknown tool".to_string()));
+    };
+    let params = req
+        .get("params")
+        .ok_or((-32602, "missing params".to_string()))?;
+    let input = match params.get("arguments") {
+        None | Some(Value::Null) => json!({}),
+        Some(args @ Value::Object(_)) => args.clone(),
+        Some(_) => return Err((-32602, "params.arguments must be an object".to_string())),
+    };
+    let input = match s.hub.check(run_id, tool.policy_name(), input).await {
+        Ok(PermissionOutcome::Allow { input }) => input,
+        Ok(PermissionOutcome::Deny { message }) => return Ok(not_performed(&message)),
+        Err(e) => return Ok(not_performed(&format!("permission check failed: {e}"))),
+    };
+    Ok(match checkins.call(run_id, tool, &input).await {
+        Ok(text) => json!({ "content": [{ "type": "text", "text": text }] }),
+        Err(text) => not_performed(&text),
     })
 }
 

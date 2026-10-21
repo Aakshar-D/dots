@@ -30,7 +30,7 @@ user's approval.
 | Scope | General platform: many dots, each with its own job, tools, schedule |
 | Hosting | Local Windows machine |
 | Model backends | Hybrid: Claude via `claude` CLI (subscription); local models via own tool loop over OpenAI-compatible API |
-| Triggers (v1) | Schedule (once, every, daily, weekly, cron; Scheduler v2), webhook, manual (Run now + chat) |
+| Triggers (v1) | Schedule (once, every, daily, weekly, cron; Scheduler v2), webhook, manual (Run now + chat), follow-up (a run a dot scheduled for itself; `2026-10-20-checkins-followups-design.md`) |
 | Autonomy | Per-dot policy: each tool is `allow`, `ask`, or `deny`; new dots default to "sandboxed" preset |
 | Language | Rust |
 | UI | Tauri 2 desktop app, React + Vite frontend |
@@ -156,7 +156,7 @@ Stored at `%LOCALAPPDATA%\dots\dots.db`. Worktrees at `%LOCALAPPDATA%\dots\workt
 
 **runs**
 - `id` TEXT PK (ULID), `dot_id` FK
-- `trigger` TEXT (`schedule` | `webhook` | `manual` | `chat`), `payload` TEXT NULL (JSON)
+- `trigger` TEXT (`schedule` | `webhook` | `manual` | `chat` | `resume` | `follow_up`), `payload` TEXT NULL (JSON)
 - `status` TEXT (`queued` | `running` | `awaiting_approval` | `succeeded` | `failed` | `cancelled`)
 - `session_id` TEXT NULL (Claude session id, or local conversation key)
 - `workspace_path` TEXT NULL, `branch` TEXT NULL
@@ -389,11 +389,13 @@ was approved" (MCP/skills spec §4). On the Claude engine the grant carries that
   run can also be decided together (`decide_run_approvals`): in the order they were asked,
   with one resume, and without a rule. See `2026-10-13-approvals-v2-design.md` §4 and §5.
 - Presets:
-  - Every preset allows `Skill` (the tool that reads a skill) and, from the context library,
-    `Context` (the tool that reads the dot's context collections), and sets `mcp_default`:
-    `ask` for all but `read-only`, which sets `deny`. A rule of `Context` is not passed to the
-    CLI's `--allowedTools` / `--disallowedTools`: the CLI has no such tool, and Dots' own
-    server checks each call against it.
+  - Every preset allows `Skill` (the tool that reads a skill), from the context library
+    `Context` (the tool that reads the dot's context collections), and from the check-ins spec
+    `Notify`, `Ask` and `FollowUp` (a dot's note, question and follow-up), and sets
+    `mcp_default`: `ask` for all but `read-only`, which sets `deny`. Dots' own tools are
+    `Context`, `Notify`, `Ask` and `FollowUp`: their rules are not passed to the CLI's
+    `--allowedTools` / `--disallowedTools`, because the CLI has no such tools, and Dots' own
+    `dots` server checks each call against them on the Claude engine.
   - `read-only`: allow Read/LS/Glob/Grep; deny Write/Edit/Bash; default deny.
   - `sandboxed` (default): allow Read/LS/Glob/Grep, `Write(./**)`, `Edit(./**)`,
     `Bash(git status:*)`, `Bash(git diff:*)`, `Bash(git add:*)`; deny
@@ -893,6 +895,8 @@ dot; a chat or webhook run does not clear it.
   update into `awaiting_approval` does not notify when the approval request of that run was
   already announced. From Scheduler v2 a failed run with trigger `schedule` does not notify;
   `ScheduleAttention` does, once: "<dot>: scheduled run failed" with the error's first line.
+  From the check-ins spec, `MessagePosted` notifies: a dot's question always ("<dot> asks:
+  <question>"), a note while the setting `notify_on_notes` is on ("Note from <dot>").
 - After each relevant event, `inbox_count()` updates the tray tooltip ("Dots: n to review") and
   the "Inbox (n)" menu item.
 - Tray:

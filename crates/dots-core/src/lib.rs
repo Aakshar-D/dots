@@ -2,10 +2,12 @@
 mod macros;
 
 pub mod approvals;
+pub mod checkins;
 pub mod context;
 pub mod engine;
 pub mod error;
 pub mod events;
+pub mod followups;
 pub mod kit;
 pub mod library;
 pub mod library_service;

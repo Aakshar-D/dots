@@ -119,7 +119,7 @@ At most 50 collections are listed; the line count is computed when the run opens
 
 ### Claude engine
 
-- Dots' own MCP server (`server/mcp.rs`, entry `dots`) lists, for a run with collections, a second tool `context` with the same arguments and description, besides `approve`.
+- Dots' own MCP server (`server/mcp.rs`, entry `dots`) lists, for a run with collections, a second tool `context` with the same arguments and description, besides `approve`. From the check-ins spec it also lists `notify`, `ask` and `follow_up` for every run (`2026-10-20-checkins-followups-design.md` section 2).
 - Its `tools/call` checks the call with `hub.check(run_id, "Context", input)` (waiting for an approval if a rule asks), then runs the same reader as the local engine and returns its text as a tool result; a denied call returns `isError: true` with the message, as the gateway does.
 - `--allowedTools` gains `mcp__dots__context` for a run with collections, so the CLI does not first ask `approve` (the server checks it instead, as the gateway does for MCP servers).
 - The prompt section names the tool as the engine's model sees it: `mcp__dots__context` on the Claude engine, `context` on the local engine (`prompt::context_tool_name`).

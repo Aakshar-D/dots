@@ -242,6 +242,79 @@ fn context_documents() -> ContextDocuments {
     }
 }
 
+/// A question that waits, an answered one, a dismissed one, and a note of Dots' own that was
+/// read: every optional field of a message is set in one of them.
+fn messages() -> Vec<Message> {
+    let open = Message {
+        id: "01J0MSG1".into(),
+        dot_id: "01J0DOT".into(),
+        dot_name: "nightly-tests".into(),
+        run_id: Some("01J0RUN".into()),
+        kind: MessageKind::Question,
+        text: "Ship the release?".into(),
+        choices: Some(vec!["yes".into(), "no".into()]),
+        created_at: TS.into(),
+        read_at: None,
+        answered_at: None,
+        answer_run_id: None,
+        dismissed_at: None,
+    };
+    vec![
+        open.clone(),
+        Message {
+            id: "01J0MSG2".into(),
+            read_at: Some(TS.into()),
+            answered_at: Some(TS.into()),
+            answer_run_id: Some("01J0RUN3".into()),
+            ..open.clone()
+        },
+        Message {
+            id: "01J0MSG3".into(),
+            choices: None,
+            dismissed_at: Some(TS.into()),
+            ..open.clone()
+        },
+        Message {
+            id: "01J0MSG4".into(),
+            run_id: None,
+            kind: MessageKind::Note,
+            text: "A follow-up was skipped because the dot is off. It was due Tue 21 Oct 09:00: \
+                   check CI"
+                .into(),
+            choices: None,
+            read_at: Some(TS.into()),
+            ..open
+        },
+    ]
+}
+
+/// A pending follow-up that failed to start once, and one that fired.
+fn follow_ups() -> Vec<FollowUp> {
+    let pending = FollowUp {
+        id: "01J0FUP1".into(),
+        dot_id: "01J0DOT".into(),
+        from_run_id: "01J0RUN".into(),
+        due_at: "2026-10-21T08:00:00.000Z".into(),
+        note: "Check the build.".into(),
+        status: FollowUpStatus::Pending,
+        fired_run_id: None,
+        attempts: 1,
+        retry_at: Some("2026-10-21T08:01:00.000Z".into()),
+        created_at: TS.into(),
+    };
+    vec![
+        pending.clone(),
+        FollowUp {
+            id: "01J0FUP2".into(),
+            status: FollowUpStatus::Fired,
+            fired_run_id: Some("01J0RUN4".into()),
+            attempts: 0,
+            retry_at: None,
+            ..pending
+        },
+    ]
+}
+
 fn run() -> Run {
     Run {
         id: "01J0RUN".into(),
@@ -640,6 +713,24 @@ pub fn samples() -> Value {
     });
     // Past the `json!` macro's recursion limit, so added here.
     samples["ContextDocuments"] = to(context_documents());
+    samples["Message"] = to(messages());
+    samples["FollowUp"] = to(follow_ups());
+    samples["Enums"]["MessageKind"] = to(MessageKind::ALL);
+    samples["Enums"]["FollowUpStatus"] = to(FollowUpStatus::ALL);
+    samples["RuntimeEvent"]
+        .as_array_mut()
+        .expect("the RuntimeEvent samples")
+        .extend([
+            to(RuntimeEvent::MessagePosted {
+                message: messages()[0].clone(),
+            }),
+            to(RuntimeEvent::MessageUpdated {
+                message: messages()[1].clone(),
+            }),
+            to(RuntimeEvent::FollowUpsUpdated {
+                dot_id: "01J0DOT".into(),
+            }),
+        ]);
     samples["UpdateNote"] = to(update_notes());
     samples
 }

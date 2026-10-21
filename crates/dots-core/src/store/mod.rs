@@ -9,7 +9,9 @@ use crate::Result;
 
 mod approvals;
 mod dots;
+mod follow_ups;
 mod library;
+mod messages;
 mod runs;
 mod schedules;
 mod settings;
@@ -25,7 +27,7 @@ pub struct Store {
 
 impl Store {
     /// Opens (creating if needed) the database file and applies migrations, with the parts of
-    /// migrations 0006 and 0007 that need code (`upgrade.rs`).
+    /// migrations 0006, 0007 and 0008 that need code (`upgrade.rs`).
     pub async fn open(path: &Path) -> Result<Store> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -43,6 +45,7 @@ impl Store {
         sqlx::migrate!("./migrations").run(&pool).await?;
         upgrade::finish_0006(&pool).await?;
         upgrade::finish_0007(&pool).await?;
+        upgrade::finish_0008(&pool).await?;
         Ok(Store { pool })
     }
 

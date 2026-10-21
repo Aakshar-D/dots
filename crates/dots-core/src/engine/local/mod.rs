@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use crate::checkins::{CheckIns, Tool as CheckInTool};
 use crate::engine::{Engine, EngineEvent, PermissionGate, PermissionOutcome, RunContext};
 use crate::model::ApplyState;
 use crate::store::Store;
@@ -111,6 +112,8 @@ pub struct LocalEngine {
     store: Store,
     gate: Arc<dyn PermissionGate>,
     client: ChatClient,
+    /// The check-in tools, offered to every run when set (`with_checkins`).
+    checkins: Option<CheckIns>,
 }
 
 impl LocalEngine {
@@ -127,7 +130,15 @@ impl LocalEngine {
             store,
             gate,
             client: ChatClient::new(retry_delays),
+            checkins: None,
         }
+    }
+
+    /// Offers the check-in tools (`notify`, `ask`, `follow_up`) to every run (check-ins spec
+    /// section 2).
+    pub fn with_checkins(mut self, checkins: CheckIns) -> Self {
+        self.checkins = Some(checkins);
+        self
     }
 }
 
@@ -154,6 +165,7 @@ impl Engine for LocalEngine {
             tx,
             messages,
             mcp_names: ToolNames::default(),
+            checkins: self.checkins.clone(),
         };
         tokio::spawn(session.run());
         Ok(rx)
@@ -176,6 +188,7 @@ struct Session {
     tx: mpsc::Sender<EngineEvent>,
     messages: Vec<Value>,
     mcp_names: ToolNames,
+    checkins: Option<CheckIns>,
 }
 
 impl Session {
@@ -403,6 +416,14 @@ impl Session {
         }
         if call.name == "context" {
             return tools::context::run(self.ctx.tools.contexts(), &call.input).await;
+        }
+        if CheckInTool::from_name(call.name).is_some() {
+            return match &self.checkins {
+                Some(checkins) => {
+                    tools::checkins::run(checkins, &self.ctx.run_id, call.name, &call.input).await
+                }
+                None => ToolOutput::err(format!("{} is not available in this run", call.name)),
+            };
         }
         let filter =
             PathFilter::from_policy(&self.ctx.dot.spec.policy, call.alias, &self.ctx.workspace);

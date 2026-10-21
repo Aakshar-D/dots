@@ -158,6 +158,9 @@ impl Session {
         if !self.ctx.tools.contexts().is_empty() {
             out.push(tools::context::schema());
         }
+        if self.checkins.is_some() {
+            out.extend(tools::checkins::schemas());
+        }
         let mut given = HashSet::new();
         for server in self.ctx.tools.servers() {
             // Not settled in time: the list may be the old one; each call is checked anyway.

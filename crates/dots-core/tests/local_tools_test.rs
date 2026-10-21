@@ -153,10 +153,11 @@ fn prepare_validates_calls_before_the_policy() {
     assert!(err.contains(".."), "{err}");
     assert_eq!(tools::alias("grep"), Some("Grep"));
     // Every local tool but `skill` and `context`, which a run gets only with skills
-    // (`skill::schema`) and context collections (`context::schema`).
+    // (`skill::schema`) and context collections (`context::schema`), and the three check-in
+    // tools, which an engine with check-ins adds (`checkins::schemas`).
     assert_eq!(
         tools::schemas().as_array().unwrap().len(),
-        tools::TOOLS.len() - 2
+        tools::TOOLS.len() - 5
     );
 }
 
@@ -201,6 +202,12 @@ fn a_prepared_input_passes_prepare_again_unchanged() {
             "context",
             json!({"collection": "kb", "path": "a.md", "offset": 2}),
         ),
+        ("notify", json!({"text": "Half way there."})),
+        (
+            "ask",
+            json!({"question": "Ship it?", "choices": ["yes", "no"]}),
+        ),
+        ("follow_up", json!({"note": "Check again.", "in": "2h"})),
     ];
     let mut tools_seen = std::collections::BTreeSet::new();
     for (name, args) in &calls {

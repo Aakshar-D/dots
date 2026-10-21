@@ -66,6 +66,16 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
     case "schedule_attention":
       // For the notification; the `schedule_updated` sent with it refreshes the screens.
       break;
+    case "message_posted":
+    case "message_updated":
+      // The Inbox's Messages group and its count, and the chat the message belongs to. An
+      // answer's run comes with its own `run_updated`.
+      invalidate(qc, ["messages"]);
+      break;
+    case "follow_ups_updated":
+      // The pending follow-ups in the Dots list and the dot's editor.
+      invalidate(qc, ["follow-ups"]);
+      break;
   }
 }
 

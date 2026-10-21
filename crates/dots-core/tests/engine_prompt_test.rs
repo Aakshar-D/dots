@@ -292,3 +292,35 @@ fn a_first_prompt_ends_with_the_collections_under_the_engines_tool_name() {
     let none = build_prompt(&dot, &run, Path::new("C:/ws"), at(), "", &[]);
     assert!(!none.contains("Shared context"), "{none}");
 }
+
+#[test]
+fn a_follow_up_run_sends_its_message_or_starts_afresh_with_it() {
+    let dot = fake_dot("d", Path::new("C:/repo"), WorkspaceMode::Folder);
+    let message = "Follow-up you scheduled on Mon 7 Jan 10:00: check CI";
+    let resumed = fake_run(
+        TriggerKind::FollowUp,
+        Some(json!({"message": message, "follow_up_id": "F1"})),
+        Some("s"),
+    );
+    assert_eq!(
+        build_prompt(&dot, &resumed, Path::new("C:/ws"), at(), "Be brief.", &[]),
+        message
+    );
+    let fresh = fake_run(
+        TriggerKind::FollowUp,
+        Some(json!({
+            "message": format!("{message}\nWhat the earlier run reported: nothing"),
+            "follow_up_id": "F1"
+        })),
+        None,
+    );
+    let p = build_prompt(&dot, &fresh, Path::new("C:/ws"), at(), "", &[]);
+    assert!(
+        p.starts_with(
+            "Do the thing.\n\n---\n\n## Follow-up\n\nFollow-up you scheduled on Mon 7 Jan 10:00: \
+             check CI\nWhat the earlier run reported: nothing\n\n## Standing rules\n\n"
+        ),
+        "{p}"
+    );
+    assert!(!p.contains("## Trigger"), "{p}");
+}

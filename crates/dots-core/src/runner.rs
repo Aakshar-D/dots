@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use tokio::sync::Notify;
@@ -12,6 +12,7 @@ use tokio_util::sync::CancellationToken;
 use serde_json::json;
 
 use crate::approvals::grant_key;
+use crate::checkins::{CheckIns, Tool as CheckInTool};
 use crate::engine::{Engine, EngineEvent, RunContext};
 use crate::events::{Bus, RuntimeEvent};
 use crate::model::{
@@ -25,10 +26,13 @@ use crate::workspace::{Prepared, WorkspaceManager};
 use crate::{Error, Result};
 
 /// The name the run's model knows a policy tool by: the `Context` tool is `mcp__dots__context`
-/// on the Claude engine, `context` on the local one; every other tool keeps its name.
+/// on the Claude engine, `context` on the local one, and the check-in tools likewise
+/// (`checkins::Tool::model_name`); every other tool keeps its name.
 fn model_tool_name(tool: &str, engine: EngineKind) -> &str {
     if tool == "Context" {
         context_tool_name(engine)
+    } else if let Some(check_in) = CheckInTool::from_policy_name(tool) {
+        check_in.model_name(engine)
     } else {
         tool
     }
@@ -69,6 +73,9 @@ pub struct Runner {
     held: AtomicBool,
     /// Held for each dispatch pass, so `set_held` can wait for a pass in flight.
     pass: tokio::sync::Mutex<()>,
+    /// The check-in tools Dots' own `dots` MCP server serves (check-ins spec section 2), set
+    /// once by the runtime before any run starts (`set_checkins`).
+    checkins: OnceLock<CheckIns>,
 }
 
 impl Runner {
@@ -91,6 +98,7 @@ impl Runner {
             resume_lock: tokio::sync::Mutex::new(()),
             held: AtomicBool::new(false),
             pass: tokio::sync::Mutex::new(()),
+            checkins: OnceLock::new(),
         })
     }
 
@@ -125,6 +133,17 @@ impl Runner {
     /// The open tools of a running run (found by its secret, `run_for_secret`).
     pub fn run_tools(&self, run_id: &str) -> Option<Arc<RunTools>> {
         self.tools.lock().unwrap().get(run_id).cloned()
+    }
+
+    /// Gives Dots' own `dots` MCP server the check-in tools. The runtime calls it once, at
+    /// start; a second call changes nothing.
+    pub fn set_checkins(&self, checkins: CheckIns) {
+        let _ = self.checkins.set(checkins);
+    }
+
+    /// The check-in tools, once the runtime has set them.
+    pub fn checkins(&self) -> Option<&CheckIns> {
+        self.checkins.get()
     }
 
     /// The cancel token of a run the runner holds: a call the gateway sends for the run stops

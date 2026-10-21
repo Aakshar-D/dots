@@ -18,6 +18,7 @@ async fn an_empty_table_gives_the_defaults() {
     assert!(s.autostart);
     assert!(!s.schedules_paused);
     assert_eq!(s.global_instructions, "");
+    assert!(s.notify_on_notes);
 }
 
 #[tokio::test]
@@ -32,6 +33,7 @@ async fn settings_round_trip() {
         autostart: false,
         schedules_paused: true,
         global_instructions: "Use British spelling.\nSign off as the team.".into(),
+        notify_on_notes: false,
     };
     store.put_settings(&s).await.unwrap();
     assert_eq!(store.get_settings().await.unwrap(), s);

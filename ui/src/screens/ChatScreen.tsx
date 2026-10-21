@@ -17,8 +17,10 @@ import { NativeSelect } from "@/components/ui/native-select";
 import { Textarea } from "@/components/ui/textarea";
 import { chatThreads, isActive } from "@/lib/chat-threads";
 import { relativeTime } from "@/lib/format";
+import { isOpenQuestion } from "@/lib/messages";
 import { notifyError } from "@/lib/notify";
 import { eventsQuery, invalidate, keys } from "@/lib/query";
+import { onSingleClick } from "@/lib/single-click";
 
 /// Where a message is typed. Enter sends; Shift+Enter starts a new line. The text is cleared
 /// once the send has succeeded; a refused message stays for another try.
@@ -81,6 +83,7 @@ function Composer(props: {
 function Conversation(props: { dotId: string; dotName?: string; rootId: string }) {
   const { dotId, dotName, rootId } = props;
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const thread = useQuery({
     queryKey: keys.thread(rootId),
     queryFn: () => commands.runThread(rootId),
@@ -94,6 +97,18 @@ function Conversation(props: { dotId: string; dotName?: string; rootId: string }
     })),
   });
   const latest = runs.at(-1);
+  // The dot's notes and questions of this thread, oldest first (check-ins spec section 9).
+  const messages = useQuery({
+    queryKey: keys.messages(dotId),
+    queryFn: () => commands.messagesList(dotId),
+  });
+  const checkIns = (messages.data ?? [])
+    .filter((m) => runs.some((run) => run.id === m.run_id))
+    .sort((a, b) => a.created_at.localeCompare(b.created_at));
+  const question = checkIns.filter(isOpenQuestion).at(-1);
+  // "Reply to question" pressed: the composer sends the answer to the open question.
+  const [replying, setReplying] = useState(false);
+  const answering = replying && question !== undefined;
   // A follow-up continues from the thread's last run, so it has to have ended.
   const busy = runs.some(isActive);
   // And it resumes that run's session. A run that ended before its engine had one (a failed
@@ -121,6 +136,32 @@ function Conversation(props: { dotId: string; dotName?: string; rootId: string }
       return reload();
     },
   });
+  // Answers the open question. The core refuses a closed question or a busy thread, in words
+  // shown as they are; the thread and the messages are loaded again either way.
+  const answer = useMutation({
+    mutationFn: (text: string) => commands.messageReply(question!.id, text),
+    onSuccess: (run) => {
+      setReplying(false);
+      invalidate(qc, ["messages"]);
+      // A thread whose end has no session is answered in a new chat, which opens.
+      if (run.root_run_id !== rootId) void navigate(`/chat/${dotId}/${run.root_run_id}`);
+      return reload();
+    },
+    onError: (error) => {
+      notifyError(error);
+      invalidate(qc, ["messages"]);
+      return reload();
+    },
+  });
+  // Opening the chat marks its open question read; it stays open until it is answered.
+  const unread = question !== undefined && question.read_at === null ? question.id : null;
+  useEffect(() => {
+    if (unread === null) return;
+    void commands.messageMarkRead(unread).then(
+      () => invalidate(qc, ["messages"]),
+      () => {},
+    );
+  }, [unread, qc]);
   if (thread.isPending) return null;
   if (thread.isError) return <ErrorNote error={thread.error} />;
   const eventsByRun = new Map<string, RunEventRecord[]>(
@@ -133,7 +174,7 @@ function Conversation(props: { dotId: string; dotName?: string; rootId: string }
   return (
     <>
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto p-4">
-        <Transcript runs={runs} events={eventsByRun} shownError={failure} />
+        <Transcript runs={runs} events={eventsByRun} shownError={failure} messages={checkIns} />
         <LoadErrors queries={[...events, ...approvals]} />
         <AppliedCalls approvals={asked} />
         {pending.map((approval) => (
@@ -155,16 +196,53 @@ function Conversation(props: { dotId: string; dotName?: string; rootId: string }
           </p>
         )}
       </div>
+      {question && (
+        <div
+          role="region"
+          aria-label="Open question"
+          className="flex flex-wrap items-center gap-2 border-t px-3 py-2"
+        >
+          <p className="min-w-0 flex-1 whitespace-pre-wrap">
+            {dotName ?? "The dot"} asked: {question.text}
+          </p>
+          {question.choices?.map((choice) => (
+            <Button
+              key={choice}
+              size="sm"
+              variant="outline"
+              disabled={busy || answer.isPending}
+              onClick={onSingleClick(() => answer.mutate(choice))}
+            >
+              {choice}
+            </Button>
+          ))}
+          <Button
+            size="sm"
+            variant={answering ? "default" : "outline"}
+            aria-pressed={answering}
+            disabled={busy}
+            onClick={() => setReplying(!replying)}
+          >
+            Reply to question
+          </Button>
+        </div>
+      )}
       <Composer
-        disabled={busy || send.isPending || !latest || closed}
-        hint={
-          busy
-            ? "The dot is working…"
-            : closed
-              ? "This chat cannot be continued"
-              : "Reply to continue this chat"
+        disabled={
+          answering ? busy || answer.isPending : busy || send.isPending || !latest || closed
         }
-        onSend={(message) => send.mutateAsync(message)}
+        hint={
+          answering
+            ? "Your answer to the question"
+            : busy
+              ? "The dot is working…"
+              : closed
+                ? "This chat cannot be continued"
+                : "Reply to continue this chat"
+        }
+        onSend={(message) =>
+          answering ? answer.mutateAsync(message) : send.mutateAsync(message)
+        }
       />
     </>
   );

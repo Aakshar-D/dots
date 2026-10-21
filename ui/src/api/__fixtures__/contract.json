@@ -77,7 +77,13 @@
     "library_scan_skills",
     "context_documents",
     "installed_claude_plugins",
-    "environment_variables"
+    "environment_variables",
+    "messages_list",
+    "message_reply",
+    "message_dismiss",
+    "message_mark_read",
+    "follow_ups_list",
+    "follow_up_cancel"
   ],
   "ContextDocuments": {
     "complete": true,
@@ -182,6 +188,18 @@
         {
           "action": "allow",
           "tool": "Context"
+        },
+        {
+          "action": "allow",
+          "tool": "Notify"
+        },
+        {
+          "action": "allow",
+          "tool": "Ask"
+        },
+        {
+          "action": "allow",
+          "tool": "FollowUp"
         }
       ]
     },
@@ -308,6 +326,18 @@
           {
             "action": "allow",
             "tool": "Context"
+          },
+          {
+            "action": "allow",
+            "tool": "Notify"
+          },
+          {
+            "action": "allow",
+            "tool": "Ask"
+          },
+          {
+            "action": "allow",
+            "tool": "FollowUp"
           }
         ]
       },
@@ -434,6 +464,18 @@
         {
           "action": "allow",
           "tool": "Context"
+        },
+        {
+          "action": "allow",
+          "tool": "Notify"
+        },
+        {
+          "action": "allow",
+          "tool": "Ask"
+        },
+        {
+          "action": "allow",
+          "tool": "FollowUp"
         }
       ]
     },
@@ -493,11 +535,21 @@
       "deleted",
       "renamed"
     ],
+    "FollowUpStatus": [
+      "pending",
+      "fired",
+      "cancelled",
+      "skipped"
+    ],
     "LibraryKind": [
       "mcp_server",
       "skill",
       "plugin",
       "context"
+    ],
+    "MessageKind": [
+      "note",
+      "question"
     ],
     "Preset": [
       "read-only",
@@ -523,7 +575,8 @@
       "webhook",
       "manual",
       "chat",
-      "resume"
+      "resume",
+      "follow_up"
     ],
     "WorkspaceMode": [
       "worktree",
@@ -538,6 +591,32 @@
     {
       "name": "PATH",
       "set": true
+    }
+  ],
+  "FollowUp": [
+    {
+      "attempts": 1,
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "dot_id": "01J0DOT",
+      "due_at": "2026-10-21T08:00:00.000Z",
+      "fired_run_id": null,
+      "from_run_id": "01J0RUN",
+      "id": "01J0FUP1",
+      "note": "Check the build.",
+      "retry_at": "2026-10-21T08:01:00.000Z",
+      "status": "pending"
+    },
+    {
+      "attempts": 0,
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "dot_id": "01J0DOT",
+      "due_at": "2026-10-21T08:00:00.000Z",
+      "fired_run_id": "01J0RUN4",
+      "from_run_id": "01J0RUN",
+      "id": "01J0FUP2",
+      "note": "Check the build.",
+      "retry_at": null,
+      "status": "fired"
     }
   ],
   "Inbox": {
@@ -1041,6 +1120,70 @@
       "url": "https://mcp.example.com/mcp"
     }
   ],
+  "Message": [
+    {
+      "answer_run_id": null,
+      "answered_at": null,
+      "choices": [
+        "yes",
+        "no"
+      ],
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "dismissed_at": null,
+      "dot_id": "01J0DOT",
+      "dot_name": "nightly-tests",
+      "id": "01J0MSG1",
+      "kind": "question",
+      "read_at": null,
+      "run_id": "01J0RUN",
+      "text": "Ship the release?"
+    },
+    {
+      "answer_run_id": "01J0RUN3",
+      "answered_at": "2026-10-09T12:00:00.000Z",
+      "choices": [
+        "yes",
+        "no"
+      ],
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "dismissed_at": null,
+      "dot_id": "01J0DOT",
+      "dot_name": "nightly-tests",
+      "id": "01J0MSG2",
+      "kind": "question",
+      "read_at": "2026-10-09T12:00:00.000Z",
+      "run_id": "01J0RUN",
+      "text": "Ship the release?"
+    },
+    {
+      "answer_run_id": null,
+      "answered_at": null,
+      "choices": null,
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "dismissed_at": "2026-10-09T12:00:00.000Z",
+      "dot_id": "01J0DOT",
+      "dot_name": "nightly-tests",
+      "id": "01J0MSG3",
+      "kind": "question",
+      "read_at": null,
+      "run_id": "01J0RUN",
+      "text": "Ship the release?"
+    },
+    {
+      "answer_run_id": null,
+      "answered_at": null,
+      "choices": null,
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "dismissed_at": null,
+      "dot_id": "01J0DOT",
+      "dot_name": "nightly-tests",
+      "id": "01J0MSG4",
+      "kind": "note",
+      "read_at": "2026-10-09T12:00:00.000Z",
+      "run_id": null,
+      "text": "A follow-up was skipped because the dot is off. It was due Tue 21 Oct 09:00: check CI"
+    }
+  ],
   "NewDotSpec": {
     "approval_wait_secs": 240,
     "enabled": true,
@@ -1130,6 +1273,18 @@
         {
           "action": "allow",
           "tool": "Context"
+        },
+        {
+          "action": "allow",
+          "tool": "Notify"
+        },
+        {
+          "action": "allow",
+          "tool": "Ask"
+        },
+        {
+          "action": "allow",
+          "tool": "FollowUp"
         }
       ]
     },
@@ -1375,6 +1530,50 @@
       "error": "model server unreachable",
       "run_id": "01J0RUN",
       "type": "schedule_attention"
+    },
+    {
+      "message": {
+        "answer_run_id": null,
+        "answered_at": null,
+        "choices": [
+          "yes",
+          "no"
+        ],
+        "created_at": "2026-10-09T12:00:00.000Z",
+        "dismissed_at": null,
+        "dot_id": "01J0DOT",
+        "dot_name": "nightly-tests",
+        "id": "01J0MSG1",
+        "kind": "question",
+        "read_at": null,
+        "run_id": "01J0RUN",
+        "text": "Ship the release?"
+      },
+      "type": "message_posted"
+    },
+    {
+      "message": {
+        "answer_run_id": "01J0RUN3",
+        "answered_at": "2026-10-09T12:00:00.000Z",
+        "choices": [
+          "yes",
+          "no"
+        ],
+        "created_at": "2026-10-09T12:00:00.000Z",
+        "dismissed_at": null,
+        "dot_id": "01J0DOT",
+        "dot_name": "nightly-tests",
+        "id": "01J0MSG2",
+        "kind": "question",
+        "read_at": "2026-10-09T12:00:00.000Z",
+        "run_id": "01J0RUN",
+        "text": "Ship the release?"
+      },
+      "type": "message_updated"
+    },
+    {
+      "dot_id": "01J0DOT",
+      "type": "follow_ups_updated"
     }
   ],
   "ScannedSkill": [
@@ -1459,6 +1658,7 @@
       "http://127.0.0.1:1234"
     ],
     "max_concurrent_runs": 2,
+    "notify_on_notes": true,
     "port": 47321,
     "schedules_paused": false,
     "tested_claude_version": "2.1.295"
@@ -1473,6 +1673,7 @@
         "http://127.0.0.1:1234"
       ],
       "max_concurrent_runs": 2,
+      "notify_on_notes": true,
       "port": 47321,
       "schedules_paused": false,
       "tested_claude_version": "2.1.295"

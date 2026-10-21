@@ -84,6 +84,12 @@ command_list![
     context_documents,
     installed_claude_plugins,
     environment_variables,
+    messages_list,
+    message_reply,
+    message_dismiss,
+    message_mark_read,
+    follow_ups_list,
+    follow_up_cancel,
 ];
 
 /// Keeps the log writer flushing until the app exits.

@@ -15,6 +15,7 @@ str_enum!(TriggerKind {
     Manual => "manual",
     Chat => "chat",
     Resume => "resume",
+    FollowUp => "follow_up",
 });
 str_enum!(RunStatus {
     Queued => "queued",
@@ -524,4 +525,84 @@ pub struct Approval {
     /// call asked, `None` when it had no accepted list. A decided call goes through later only
     /// while the server's accepted fingerprint is still this one (MCP/skills spec section 4).
     pub mcp_fingerprint: Option<String>,
+}
+
+str_enum!(MessageKind { Note => "note", Question => "question" });
+str_enum!(FollowUpStatus {
+    Pending => "pending",
+    Fired => "fired",
+    Cancelled => "cancelled",
+    Skipped => "skipped",
+});
+
+/// What `reply` answers about a question that was answered already (check-ins spec section 5).
+pub const QUESTION_ANSWERED: &str = "this question has already been answered";
+/// What `reply` answers about a question the person dismissed.
+pub const QUESTION_DISMISSED: &str = "this question was dismissed";
+
+/// A dot's check-in (check-ins spec sections 5 and 7): a note that needs no answer, or a
+/// question the person answers or dismisses. Times are RFC 3339 UTC.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Message {
+    pub id: String,
+    pub dot_id: String,
+    /// The dot's name, for the Inbox and the notification.
+    pub dot_name: String,
+    /// The run that posted it; `None` for a note of Dots' own (a skipped follow-up).
+    pub run_id: Option<String>,
+    pub kind: MessageKind,
+    pub text: String,
+    /// The answers a question offers as buttons.
+    pub choices: Option<Vec<String>>,
+    pub created_at: String,
+    pub read_at: Option<String>,
+    pub answered_at: Option<String>,
+    /// The run the answer started.
+    pub answer_run_id: Option<String>,
+    pub dismissed_at: Option<String>,
+}
+
+impl Message {
+    /// It waits for the person: a question neither answered nor dismissed, or a note not read
+    /// yet. The Inbox and its count show these.
+    pub fn waits(&self) -> bool {
+        match self.kind {
+            MessageKind::Question => self.answered_at.is_none() && self.dismissed_at.is_none(),
+            MessageKind::Note => self.read_at.is_none(),
+        }
+    }
+
+    /// Why the message cannot be answered: `None` for an open question.
+    pub fn refusal(&self) -> Option<Error> {
+        match self.kind {
+            MessageKind::Note => Some(Error::Invalid("a note cannot be answered".into())),
+            MessageKind::Question if self.dismissed_at.is_some() => {
+                Some(Error::Conflict(QUESTION_DISMISSED.into()))
+            }
+            MessageKind::Question if self.answered_at.is_some() => {
+                Some(Error::Conflict(QUESTION_ANSWERED.into()))
+            }
+            MessageKind::Question => None,
+        }
+    }
+}
+
+/// A run a dot scheduled for itself (check-ins spec sections 6 and 7). Times are RFC 3339 UTC
+/// (`util::timestamp`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FollowUp {
+    pub id: String,
+    pub dot_id: String,
+    /// The run that called `follow_up`; the follow-up continues its thread.
+    pub from_run_id: String,
+    pub due_at: String,
+    /// What the dot told itself to do then.
+    pub note: String,
+    pub status: FollowUpStatus,
+    pub fired_run_id: Option<String>,
+    /// Starts that failed.
+    pub attempts: u32,
+    /// When a start that failed is tried again.
+    pub retry_at: Option<String>,
+    pub created_at: String,
 }
