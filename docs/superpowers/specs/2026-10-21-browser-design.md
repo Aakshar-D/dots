@@ -168,6 +168,8 @@ Branch `feat/browser`. New code in `crates/dots-core/src/browser/` and new UI fi
 - **`Enter` submits forms.** `browser_press_key` with `Enter` is an act, not a risky one, so on an approved site a dot can submit a focused form with it. A person who wants that to ask sets the site to ask (`Browser(<site>)` not allowed).
 - **Labels can mislead.** A button whose name says nothing risky ("Continue") can still place an order. Site approval is the main boundary; the risky words are a second one.
 - **Visible windows.** A dot's Edge window appears while the person works; the person chose this.
+- **The debugging port has no password.** Edge listens on `127.0.0.1:<port>` with no authentication, so any program on this computer, including a shell tool of any dot, can drive a dot's logged-in Edge and read its cookies, around the gate. Until Dots holds the connection itself (a pipe with an authenticating proxy), a dot whose policy lets it run commands should not be given the browser of a dot whose logins matter.
+- **Keys that activate.** `Tab` then `Enter` or `Space` can activate a focused risky button without a click the gate judges; site approval is the boundary for it.
 
 ## 12. Changes to the other specs
 
@@ -195,3 +197,9 @@ The plan (`docs/superpowers/plans/2026-10-21-browser.md`) changed these from the
 - A package that cannot be fetched fails with "The browser could not start: <MCP error>"; npm's own text goes to the app log (section 5).
 - A Library MCP server the dot uses under the name `browser` keeps it; the built-in browser is then left out of the run, with a notice (section 2.2).
 - The fake Playwright server of the tests is `fake-mcp` with a script; `fake-browser` stands in for Edge (section 9).
+- After the final review: every form field that can take text (all but `checkbox` and `radio`) is checked for a password, since Playwright fills a `slider` as a `textbox`; nothing is learned from an error result or from text after `### Modal state`, where a page's dialog message is written unescaped; every snapshot or find replaces the page's references and one saved to a file forgets them (Playwright numbers references per document); the element an act last landed on is remembered, and while it is a password or code field only `Tab`, `Shift+Tab`, `Enter`, `Escape` and the arrow keys are pressed (section 3.5).
+- `browser_run_code_unsafe` is refused, not asked: it runs a program in Playwright's own process, outside the page and the workspace (section 3.1).
+- The Playwright server starts in `<data_dir>/browser/playwright`, not in the workspace, where a dot could plant a `node_modules` or an `.npmrc` for `npx` (section 2.2).
+- A browser approval is one whose input carries Dots' card (`dots_browser`); the card is dropped from every Library server's input, so a Library server named `browser` cannot show a browser card, and its late approvals are not skipped (section 3.6).
+- On the Claude engine a call must finish by the time the CLI stops waiting; the time left is reckoned just before the call is performed, and a call with none left is not performed (section 3.6).
+- The approval card lists what the call sends: the full address, the text typed, the fields filled, files and data, and code, each cut at 300 characters (section 7).
