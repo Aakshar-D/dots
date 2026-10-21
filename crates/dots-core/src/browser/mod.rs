@@ -4,3 +4,4 @@
 //! it acts on (`sites`) and the labels in Playwright's own snapshots.
 
 pub mod sites;
+pub mod snapshot;
