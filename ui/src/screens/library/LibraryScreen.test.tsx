@@ -567,6 +567,38 @@ describe("creating a skill", () => {
     expect(backend.callsTo("skill_draft_cancel")).toContainEqual({ dialog: id });
   });
 
+  it("does not close while the save is on its way", async () => {
+    const pending = later<unknown>();
+    backend.on("skill_draft", () => DRAFT);
+    backend.on("skill_check", () => summary);
+    backend.on("skill_create", () => pending.answer);
+    const { user, dialog } = await describeIdea();
+    await user.click(within(dialog).getByRole("button", { name: "Write it" }));
+    await within(dialog).findByText(/The Library will show/);
+    await user.click(within(dialog).getByRole("button", { name: "Save to Library" }));
+    await waitFor(() => expect(backend.callsTo("skill_create")).toHaveLength(1));
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.getByRole("dialog", { name: "Create skill" })).toBeVisible();
+    await act(async () => pending.give(sample.libraryItems[1]));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(backend.callsTo("skill_create")).toHaveLength(1);
+  });
+
+  it("replaces the text with Claude's change and empties the change box", async () => {
+    backend.on("skill_draft", () => DRAFT);
+    backend.on("skill_check", () => summary);
+    const { user, dialog } = await describeIdea();
+    await user.click(within(dialog).getByRole("button", { name: "Write it" }));
+    await within(dialog).findByLabelText("SKILL.md");
+    await user.type(within(dialog).getByLabelText("What should change?"), "Name the tests");
+    const changed = DRAFT.replace("List them.", "Name them.");
+    backend.on("skill_draft", () => changed);
+    await user.click(within(dialog).getByRole("button", { name: "Ask for changes" }));
+    await waitFor(() => expect(within(dialog).getByLabelText("SKILL.md")).toHaveValue(changed));
+    expect(within(dialog).getByLabelText("What should change?")).toHaveValue("");
+  });
+
   it("goes back from Start over with the idea kept and the draft dropped", async () => {
     backend.on("skill_draft", () => DRAFT);
     backend.on("skill_check", () => summary);

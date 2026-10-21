@@ -124,6 +124,8 @@ export function CreateSkillDialog({ onClose }: { onClose: () => void }) {
   }
 
   function close() {
+    // A save on its way ends the dialog itself (its answer closes it, or shows its error).
+    if (saving) return;
     if (text.trim() !== "") setDiscarding(true);
     else leave();
   }
