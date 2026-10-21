@@ -95,6 +95,8 @@ const dotSpecShape = {
   schedule: nullable(Schedule),
   policy: Policy,
   uses: Uses,
+  // A visible Microsoft Edge with the dot's own profile (browser spec section 2.4).
+  browser: z.boolean(),
   use_global_instructions: z.boolean(),
   use_user_settings: z.boolean(),
   max_turns: z.number().int(),
@@ -283,6 +285,8 @@ export const Settings = z.strictObject({
   global_instructions: z.string(),
   // A dot's note notifies; a question always does.
   notify_on_notes: z.boolean(),
+  // The Edge program dots browse with; null uses the installed one.
+  edge_path: nullable(z.string()),
 });
 export const SettingsSaved = z.strictObject({
   settings: Settings,
