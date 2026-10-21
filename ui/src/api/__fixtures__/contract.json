@@ -75,6 +75,10 @@
     "library_check",
     "library_accept",
     "library_scan_skills",
+    "skill_draft",
+    "skill_draft_cancel",
+    "skill_check",
+    "skill_create",
     "context_documents",
     "installed_claude_plugins",
     "environment_variables",
@@ -492,6 +496,24 @@
     "workdir": "C:/notes",
     "workspace_mode": "folder"
   },
+  "DraftRequest": [
+    {
+      "change": null,
+      "current": null,
+      "idea": "Check a PR for missing tests",
+      "model": "sonnet"
+    },
+    {
+      "change": "Mention snapshot tests",
+      "current": "---\nname: pr-tests\n---\nList the changed functions.\n",
+      "idea": "Check a PR for missing tests",
+      "model": "sonnet"
+    }
+  ],
+  "DraftSummary": {
+    "description": "Checks a PR for missing tests.",
+    "name": "pr-tests"
+  },
   "Enums": {
     "Action": [
       "allow",
@@ -813,6 +835,7 @@
       },
       "context": null,
       "created_at": "2026-10-09T12:00:00.000Z",
+      "dots_folder": false,
       "id": "01J0SRV",
       "kind": "mcp_server",
       "missing_variables": [
@@ -885,6 +908,7 @@
       },
       "context": null,
       "created_at": "2026-10-09T12:00:00.000Z",
+      "dots_folder": false,
       "id": "01J0SRV2",
       "kind": "mcp_server",
       "missing_variables": [],
@@ -908,6 +932,7 @@
       },
       "context": null,
       "created_at": "2026-10-09T12:00:00.000Z",
+      "dots_folder": true,
       "id": "01J0SKL",
       "kind": "skill",
       "missing_variables": [],
@@ -930,6 +955,7 @@
       },
       "context": null,
       "created_at": "2026-10-09T12:00:00.000Z",
+      "dots_folder": false,
       "id": "01J0PLG",
       "kind": "plugin",
       "missing_variables": [],
@@ -977,6 +1003,7 @@
         "documents": 42
       },
       "created_at": "2026-10-09T12:00:00.000Z",
+      "dots_folder": false,
       "id": "01J0CTX",
       "kind": "context",
       "missing_variables": [],

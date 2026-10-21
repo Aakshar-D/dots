@@ -21,6 +21,7 @@ use dots_core::policy::{allow_candidates, Action, Policy, Preset};
 use dots_core::schedule::Schedule;
 use dots_core::scheduler::MAX_ATTEMPTS;
 use dots_core::settings::{Settings, MAX_CONCURRENT_RUNS, MAX_GLOBAL_INSTRUCTIONS};
+use dots_core::skill_creator::{DraftRequest, DraftSummary};
 use serde_json::{json, Value};
 
 use crate::error::{CmdError, CmdErrorKind};
@@ -173,6 +174,7 @@ fn library_entries() -> Vec<LibraryEntry> {
         plugin: None,
         context: None,
         problem: None,
+        dots_folder: false,
     };
     let github = library_item(
         "01J0SRV",
@@ -203,6 +205,7 @@ fn library_entries() -> Vec<LibraryEntry> {
                 description: "Fill and read PDF forms.".into(),
             }),
             problem: Some("SKILL.md not found".into()),
+            dots_folder: true,
             ..bare(skill, vec![])
         },
         LibraryEntry {
@@ -732,6 +735,24 @@ pub fn samples() -> Value {
             }),
         ]);
     samples["UpdateNote"] = to(update_notes());
+    samples["DraftRequest"] = to([
+        DraftRequest {
+            idea: "Check a PR for missing tests".into(),
+            model: "sonnet".into(),
+            current: None,
+            change: None,
+        },
+        DraftRequest {
+            idea: "Check a PR for missing tests".into(),
+            model: "sonnet".into(),
+            current: Some("---\nname: pr-tests\n---\nList the changed functions.\n".into()),
+            change: Some("Mention snapshot tests".into()),
+        },
+    ]);
+    samples["DraftSummary"] = to(DraftSummary {
+        name: "pr-tests".into(),
+        description: "Checks a PR for missing tests.".into(),
+    });
     samples
 }
 

@@ -134,6 +134,35 @@ describe("commands", () => {
     expect(message).toContain("audit");
   });
 
+  it("drafts, checks and saves a skill with the arguments the core names", async () => {
+    const [first, change] = fixture.DraftRequest;
+    reply = async () => "---\nname: pr-tests\n---\nBody\n";
+    expect(await commands.skillDraft("dialog-1", first!)).toContain("pr-tests");
+    await commands.skillDraft("dialog-1", change!);
+    reply = async () => null;
+    await commands.skillDraftCancel("dialog-1");
+    reply = async () => fixture.DraftSummary;
+    expect(await commands.skillCheck("text")).toEqual(fixture.DraftSummary);
+    reply = async () => fixture.LibraryItem[1];
+    expect(await commands.skillCreate("text")).toEqual(fixture.LibraryItem[1]);
+    expect(calls).toEqual([
+      ["skill_draft", { dialog: "dialog-1", request: first }],
+      ["skill_draft", { dialog: "dialog-1", request: change }],
+      ["skill_draft_cancel", { dialog: "dialog-1" }],
+      ["skill_check", { text: "text" }],
+      ["skill_create", { text: "text" }],
+    ]);
+  });
+
+  it("says what to change in a draft that cannot be saved", async () => {
+    reply = async () => {
+      throw { kind: "invalid", message: "Add a description: line between the --- lines." };
+    };
+    const { kind, message } = await failure(commands.skillCheck("---\nname: a\n---\nB\n"));
+    expect(kind).toBe("invalid");
+    expect(message).toContain("description");
+  });
+
   it("refuses a Library answer in a shape it does not know", async () => {
     reply = async () => [{ ...fixture.LibraryEntry[0], extra: 1 }];
     expect((await failure(commands.libraryList())).kind).toBe("internal");
