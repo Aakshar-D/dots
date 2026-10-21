@@ -36,6 +36,8 @@ const schemas: Record<SampleName, { parse: (v: unknown) => unknown }> = {
   CmdError: T.CmdError,
   StartupError: T.StartupError,
   UpdateNote: T.UpdateNote.array(),
+  Message: T.Message.array(),
+  FollowUp: T.FollowUp.array(),
 };
 
 // The UI parses live data with these schemas, so it must know every variant the core has.
@@ -53,6 +55,8 @@ const enums: Record<keyof typeof fixture.Enums, { options: readonly string[] }> 
   CmdErrorKind: T.CmdErrorKind,
   LibraryKind: T.LibraryKind,
   CatalogStatus: T.CatalogStatus,
+  MessageKind: T.MessageKind,
+  FollowUpStatus: T.FollowUpStatus,
 };
 
 describe("Rust/TypeScript contract", () => {

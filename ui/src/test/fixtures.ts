@@ -30,6 +30,11 @@ export const sample = {
   /// One schedule of each kind: once; every with an anchor and a count; every without an
   /// anchor; daily until a date; weekly; cron.
   schedules: T.Schedule.array().parse(contract.Schedule),
+  /// An open question with the choices "yes" and "no", an answered one, a dismissed one, and a
+  /// read note of Dots' own.
+  messages: T.Message.array().parse(contract.Message),
+  /// A pending follow-up and a fired one.
+  followUps: T.FollowUp.array().parse(contract.FollowUp),
 };
 
 /// What `new_dot_spec` answers: the core's defaults with nothing filled in.
@@ -60,6 +65,14 @@ export function installDefaults(): void {
   );
   backend.on("new_dot_spec", () => blankSpec);
   backend.on("list_runs", () => []);
+  // No dot has checked in or scheduled anything. A question on screen is marked read.
+  backend.on("messages_list", () => []);
+  backend.on("follow_ups_list", () => []);
+  backend.on("message_mark_read", (args) => ({
+    ...sample.messages[0],
+    id: String(args.id),
+    read_at: sample.run.queued_at,
+  }));
   backend.on("webhook_url", (args) => `http://127.0.0.1:47321/dots/${String(args.id)}/trigger`);
   backend.on("preview_schedule", () => [
     "2026-10-13T02:00:00+01:00",

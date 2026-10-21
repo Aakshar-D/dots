@@ -41,6 +41,8 @@ export const keys = {
   approvals: (runId: string) => ["approvals", runId] as const,
   approvalRules: (approvalId: string) => ["approval-rules", approvalId] as const,
   diff: (runId: string) => ["diff", runId] as const,
+  messages: (dotId: string | null) => ["messages", dotId] as const,
+  followUps: (dotId: string | null) => ["follow-ups", dotId] as const,
 };
 
 type DotSwitch = { id: string; enabled: boolean };

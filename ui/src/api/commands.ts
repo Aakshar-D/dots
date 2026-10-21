@@ -163,4 +163,18 @@ export const commands = {
   installedClaudePlugins: () => call(T.InstalledPlugin.array(), "installed_claude_plugins"),
   environmentVariables: (names: string[]) =>
     call(T.EnvVariable.array(), "environment_variables", { names }),
+
+  /// Every message that waits (open questions, unread notes) and the newest others, newest
+  /// first; of one dot with `dotId`.
+  messagesList: (dotId: string | null) => call(T.Message.array(), "messages_list", { dotId }),
+  /// Answers a dot's question; the run that continues its thread. Rejects with kind `conflict`
+  /// when the question is closed or its thread is still busy, in words to show as they are.
+  messageReply: (id: string, text: string) => call(T.Run, "message_reply", { id, text }),
+  messageDismiss: (id: string) => call(T.Message, "message_dismiss", { id }),
+  messageMarkRead: (id: string) => call(T.Message, "message_mark_read", { id }),
+  /// The pending follow-ups, soonest first; of one dot with `dotId`.
+  followUpsList: (dotId: string | null) =>
+    call(T.FollowUp.array(), "follow_ups_list", { dotId }),
+  /// Rejects with kind `conflict` once the follow-up fired, was skipped or was cancelled.
+  followUpCancel: (id: string) => call(T.FollowUp, "follow_up_cancel", { id }),
 };

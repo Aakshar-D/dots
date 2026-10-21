@@ -15,8 +15,8 @@ use dots_core::library_service::{
     ContextDocuments, EnvVariable, LibraryEntry, McpProbe, ScannedSkill,
 };
 use dots_core::model::{
-    Approval, Dot, DotOverview, DotSpec, Inbox, Run, RunEventRecord, SettingsSaved, Status,
-    WorktreeDiff,
+    Approval, Dot, DotOverview, DotSpec, FollowUp, Inbox, Message, Run, RunEventRecord,
+    SettingsSaved, Status, WorktreeDiff,
 };
 use dots_core::policy::{Policy, Preset, RuleCandidate};
 use dots_core::schedule::Schedule;
@@ -473,4 +473,48 @@ pub fn environment_variables(
     names: Vec<String>,
 ) -> Res<Vec<EnvVariable>> {
     Ok(state.rt()?.library().environment_variables(&names))
+}
+
+/// Every message that waits for the person and the newest others, newest first; of one dot
+/// with `dot_id` (check-ins spec section 10).
+#[tauri::command]
+pub async fn messages_list(
+    state: State<'_, AppState>,
+    dot_id: Option<String>,
+) -> Res<Vec<Message>> {
+    Ok(state
+        .rt()?
+        .checkins()
+        .list_messages(dot_id.as_deref())
+        .await?)
+}
+
+/// Answers a dot's question: a run continues the question's thread.
+#[tauri::command]
+pub async fn message_reply(state: State<'_, AppState>, id: String, text: String) -> Res<Run> {
+    Ok(state.rt()?.reply(&id, &text).await?)
+}
+
+#[tauri::command]
+pub async fn message_dismiss(state: State<'_, AppState>, id: String) -> Res<Message> {
+    Ok(state.rt()?.checkins().dismiss(&id).await?)
+}
+
+#[tauri::command]
+pub async fn message_mark_read(state: State<'_, AppState>, id: String) -> Res<Message> {
+    Ok(state.rt()?.checkins().mark_read(&id).await?)
+}
+
+/// The pending follow-ups, soonest first; of one dot with `dot_id`.
+#[tauri::command]
+pub async fn follow_ups_list(
+    state: State<'_, AppState>,
+    dot_id: Option<String>,
+) -> Res<Vec<FollowUp>> {
+    Ok(state.rt()?.follow_ups().list(dot_id.as_deref()).await?)
+}
+
+#[tauri::command]
+pub async fn follow_up_cancel(state: State<'_, AppState>, id: String) -> Res<FollowUp> {
+    Ok(state.rt()?.follow_ups().cancel(&id).await?)
 }

@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use dots_core::events::RuntimeEvent;
-use dots_core::model::{Run, RunStatus, TriggerKind};
+use dots_core::model::{Message, MessageKind, Run, RunStatus, TriggerKind};
 use dots_core::Runtime;
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_notification::NotificationExt;
@@ -38,6 +38,11 @@ pub enum Notice {
     ScheduleFailed {
         dot_id: String,
         error: Option<String>,
+    },
+    /// A dot posted a note or asked a question (check-ins spec section 10). A question always
+    /// notifies; a note only while Settings say so (`message_notifies`).
+    MessagePosted {
+        message: Box<Message>,
     },
 }
 
@@ -101,6 +106,9 @@ impl Notifier {
                 dot_id: dot_id.clone(),
                 error: error.clone(),
             }),
+            RuntimeEvent::MessagePosted { message } => Some(Notice::MessagePosted {
+                message: Box::new(message.clone()),
+            }),
             _ => None,
         }
     }
@@ -143,7 +151,26 @@ pub fn notice_text(notice: &Notice, dot_name: &str) -> (String, String) {
             format!("{dot_name}: scheduled run failed"),
             first_line(error.as_deref(), "The run failed."),
         ),
+        Notice::MessagePosted { message } => match message.kind {
+            MessageKind::Question => (
+                format!(
+                    "{dot_name} asks: {}",
+                    first_line(Some(message.text.as_str()), "a question")
+                ),
+                "Answer it in the Inbox.".to_string(),
+            ),
+            MessageKind::Note => (
+                format!("Note from {dot_name}"),
+                first_line(Some(message.text.as_str()), "A note."),
+            ),
+        },
     }
+}
+
+/// Whether a posted message shows a notification: a question always, a note while the setting
+/// `notify_on_notes` is on.
+pub fn message_notifies(message: &Message, notify_on_notes: bool) -> bool {
+    message.kind == MessageKind::Question || notify_on_notes
 }
 
 /// Whether the Inbox count may have changed.
@@ -182,10 +209,16 @@ pub fn spawn_forwarder(app: AppHandle, rt: Arc<Runtime>) {
 }
 
 async fn notify(app: &AppHandle, rt: &Runtime, notice: &Notice) {
+    if let Notice::MessagePosted { message } = notice {
+        if !message_notifies(message, rt.settings().await.notify_on_notes) {
+            return;
+        }
+    }
     let dot_id = match notice {
         Notice::ApprovalNeeded { run_id, .. } => rt.get_run(run_id).await.map(|r| r.dot_id).ok(),
         Notice::RunEnded { run } => Some(run.dot_id.clone()),
         Notice::ScheduleFailed { dot_id, .. } => Some(dot_id.clone()),
+        Notice::MessagePosted { message } => Some(message.dot_id.clone()),
     };
     let name = match dot_id {
         Some(id) => rt.get_dot(&id).await.map(|d| d.spec.name).ok(),
@@ -508,6 +541,69 @@ mod tests {
                 &[Queued, Running, AwaitingApproval]
             ),
             [false, false, true]
+        );
+    }
+
+    fn posted(kind: MessageKind) -> Message {
+        Message {
+            id: "m1".into(),
+            dot_id: "d".into(),
+            dot_name: "nightly".into(),
+            run_id: Some("r".into()),
+            kind,
+            text: "\n  Ship the release?\nmore".into(),
+            choices: None,
+            created_at: "t".into(),
+            read_at: None,
+            answered_at: None,
+            answer_run_id: None,
+            dismissed_at: None,
+        }
+    }
+
+    #[test]
+    fn a_question_always_notifies_and_a_note_only_when_switched_on() {
+        let mut n = Notifier::default();
+        let question = posted(MessageKind::Question);
+        let event = RuntimeEvent::MessagePosted {
+            message: question.clone(),
+        };
+        assert_eq!(
+            n.decide(&event),
+            Some(Notice::MessagePosted {
+                message: Box::new(question.clone())
+            })
+        );
+        assert!(message_notifies(&question, false));
+        let note = posted(MessageKind::Note);
+        assert!(message_notifies(&note, true));
+        assert!(!message_notifies(&note, false));
+        // An answer or a read changes the Inbox and notifies nothing.
+        let updated = RuntimeEvent::MessageUpdated {
+            message: note.clone(),
+        };
+        assert!(n.decide(&updated).is_none());
+        assert!(affects_inbox(&updated));
+        assert_eq!(
+            notice_text(
+                &Notice::MessagePosted {
+                    message: Box::new(question)
+                },
+                "nightly"
+            ),
+            (
+                "nightly asks: Ship the release?".into(),
+                "Answer it in the Inbox.".into()
+            )
+        );
+        assert_eq!(
+            notice_text(
+                &Notice::MessagePosted {
+                    message: Box::new(note)
+                },
+                "nightly"
+            ),
+            ("Note from nightly".into(), "Ship the release?".into())
         );
     }
 }
