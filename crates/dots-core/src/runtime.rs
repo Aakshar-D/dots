@@ -9,12 +9,14 @@ use tokio::sync::{broadcast, Mutex};
 use tokio_util::sync::CancellationToken;
 
 use crate::approvals::{ApprovalHub, DecideEffect};
+use crate::checkins::CheckIns;
 use crate::engine::claude::args::resolve_claude;
 use crate::engine::claude::{cli_version, ClaudeEngine};
 use crate::engine::local::client::DEFAULT_RETRY_DELAYS;
 use crate::engine::local::{self, LocalEngine};
 use crate::engine::{Engine, UnavailableEngine};
 use crate::events::{new_bus, Bus, RuntimeEvent};
+use crate::followups::FollowUps;
 use crate::library_service::LibraryService;
 use crate::model::{
     Approval, AttentionRun, ClaudeStatus, Dot, DotOverview, DotSpec, EngineKind, Inbox, NewRun,
@@ -87,8 +89,12 @@ pub struct Runtime {
     /// The stored settings when the runtime started, and now.
     started: Settings,
     settings: Mutex<Settings>,
-    /// Makes `chat` check a thread and add to it in one step.
-    chat_lock: Mutex<()>,
+    /// Makes `chat` check a thread and add to it in one step. It is the follow-ups' thread lock
+    /// (`FollowUps::thread_lock`), which `reply` and the follow-up loop hold too, so no two of
+    /// them give one run two children.
+    chat_lock: Arc<Mutex<()>>,
+    checkins: CheckIns,
+    follow_ups: Arc<FollowUps>,
     shutdown: CancellationToken,
 }
 
@@ -99,6 +105,10 @@ impl Runtime {
         let settings = store.get_settings().await?;
         let bus = new_bus();
         let hub = Arc::new(ApprovalHub::new(store.clone(), bus.clone()));
+        // Check-ins and follow-ups (check-ins spec): made before the engines, which offer the
+        // check-in tools, and before the runner, which the follow-up loop starts runs on.
+        let follow_ups = FollowUps::new(store.clone(), bus.clone(), cfg.clock.clone());
+        let checkins = CheckIns::new(store.clone(), bus.clone(), follow_ups.clone());
         // A taken port must not keep the app from starting (spec §8): run without the server.
         // The bind waits a moment for a port in use, which after "Restart Dots" is the old
         // process on its way out.
@@ -234,7 +244,9 @@ impl Runtime {
             data_dir: cfg.data_dir.clone(),
             started: settings.clone(),
             settings: Mutex::new(settings),
-            chat_lock: Mutex::new(()),
+            chat_lock: follow_ups.thread_lock(),
+            checkins,
+            follow_ups,
             shutdown,
         })
     }
@@ -460,10 +472,12 @@ impl Runtime {
 
     pub async fn inbox_count(&self) -> Result<usize> {
         let inbox = self.inbox().await?;
+        // Open questions and unread notes wait too (check-ins spec section 9).
         Ok(inbox.approvals.len()
             + inbox.review_runs.len()
             + inbox.attention.len()
-            + inbox.tools_changed.len())
+            + inbox.tools_changed.len()
+            + self.store.count_waiting_messages().await?)
     }
 
     /// Clears the dot's "Needs attention" (Scheduler v2 spec §8); the schedule is not
@@ -586,6 +600,23 @@ impl Runtime {
     /// The Library: what the `library_*` commands call (MCP/skills spec section 9).
     pub fn library(&self) -> &LibraryService {
         &self.library
+    }
+
+    /// The dots' notes and questions: what the `message_*` commands call (check-ins spec
+    /// section 10). Answering a question is `reply`.
+    pub fn checkins(&self) -> &CheckIns {
+        &self.checkins
+    }
+
+    /// The follow-ups dots scheduled: what the `follow_up*` commands call.
+    pub fn follow_ups(&self) -> &Arc<FollowUps> {
+        &self.follow_ups
+    }
+
+    /// Answers the open question `message_id` with `text` (check-ins spec section 5): a run
+    /// continues the question's thread, or starts afresh when its end has no session.
+    pub async fn reply(&self, message_id: &str, text: &str) -> Result<Run> {
+        self.checkins.reply(&self.runner, message_id, text).await
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<RuntimeEvent> {

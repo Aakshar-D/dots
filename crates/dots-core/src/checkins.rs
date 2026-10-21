@@ -11,7 +11,8 @@ use serde_json::{json, Value};
 
 use crate::events::{Bus, RuntimeEvent};
 use crate::followups::{parse_time, FollowUps};
-use crate::model::{EngineKind, Message};
+use crate::model::{EngineKind, Message, NewRun, Run, RunStatus, TriggerKind};
+use crate::runner::Runner;
 use crate::store::Store;
 use crate::{Error, Result};
 
@@ -352,5 +353,98 @@ impl CheckIns {
 
     fn posted(&self, message: Message) {
         let _ = self.bus.send(RuntimeEvent::MessagePosted { message });
+    }
+}
+
+/// The refusal of a reply to a thread that has not ended, in the words `Runtime::chat` gives.
+pub fn thread_busy(status: RunStatus) -> Error {
+    Error::Conflict(
+        match status {
+            RunStatus::AwaitingApproval => {
+                "this chat is waiting for an approval; answer it, then send your message again"
+            }
+            _ => {
+                "the dot is still working on this chat; wait until it has finished, then send \
+                 your message again"
+            }
+        }
+        .into(),
+    )
+}
+
+/// The person's side (spec section 5): the messages, and the answer to a question.
+impl CheckIns {
+    /// Every message that waits for the person and the newest others, of one dot or of all,
+    /// newest first.
+    pub async fn list_messages(&self, dot_id: Option<&str>) -> Result<Vec<Message>> {
+        self.store.list_messages(dot_id).await
+    }
+
+    /// Marks a message read; a question stays open.
+    pub async fn mark_read(&self, id: &str) -> Result<Message> {
+        let message = self.store.mark_message_read(id).await?;
+        self.updated(message.clone());
+        Ok(message)
+    }
+
+    /// Dismisses an open question: it leaves the Inbox unanswered, and cannot be answered.
+    pub async fn dismiss(&self, id: &str) -> Result<Message> {
+        let message = self.store.dismiss_question(id).await?;
+        self.updated(message.clone());
+        Ok(message)
+    }
+
+    /// Answers the open question `id` with `text` (spec section 5). Under the thread lock the
+    /// end of the question's thread is read as `Runtime::chat` reads it: a thread that has not
+    /// ended is refused with `chat`'s sentences (`thread_busy`); a quiet end with a session is
+    /// continued by a chat run; an end without one gets a chat run of its own. The question is
+    /// closed and the run stored in one transaction, so a second answer is refused.
+    pub async fn reply(&self, runner: &Runner, id: &str, text: &str) -> Result<Run> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err(Error::Invalid("the answer must not be empty".into()));
+        }
+        let question = self.store.get_message(id).await?;
+        if let Some(refusal) = question.refusal() {
+            return Err(refusal);
+        }
+        let Some(asked_in) = &question.run_id else {
+            return Err(Error::Invalid(format!(
+                "message {id} was not asked by a run"
+            )));
+        };
+        let asked = self.store.get_run(asked_in).await?;
+        // Held until the new run is stored, as `Runtime::chat` holds it.
+        let lock = self.follow_ups.thread_lock();
+        let _one_at_a_time = lock.lock().await;
+        let thread = self.store.list_thread(&asked.root_run_id).await?;
+        if let Some(active) = thread.iter().find(|r| !r.status.is_terminal()) {
+            return Err(thread_busy(active.status));
+        }
+        let end = thread.last().unwrap_or(&asked);
+        let mut new = NewRun::new(&asked.dot_id, TriggerKind::Chat);
+        let message = if end.session_id.is_some() {
+            new.parent_run_id = Some(end.id.clone());
+            new.root_run_id = Some(end.root_run_id.clone());
+            new.session_id = end.session_id.clone();
+            new.workspace_path = end.workspace_path.clone();
+            new.branch = end.branch.clone();
+            new.base_commit = end.base_commit.clone();
+            format!("Answer to your question \"{}\": {text}", question.text)
+        } else {
+            format!(
+                "Earlier you asked the person: \"{}\"\nTheir answer: {text}",
+                question.text
+            )
+        };
+        new.payload = Some(json!({ "message": message }));
+        let (answered, run) = self.store.answer_question(id, &new).await?;
+        runner.enqueued(&run);
+        self.updated(answered);
+        Ok(run)
+    }
+
+    fn updated(&self, message: Message) {
+        let _ = self.bus.send(RuntimeEvent::MessageUpdated { message });
     }
 }
