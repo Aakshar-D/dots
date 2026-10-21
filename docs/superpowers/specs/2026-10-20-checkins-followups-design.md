@@ -45,6 +45,8 @@ A call that breaks a rule is answered with a tool error (`isError`) saying which
 
 The tool descriptions (shared by both engines in `checkins.rs`, as `context::DESCRIPTION` is) say when to use each: `notify` for progress the person would want to know now, sparingly; `ask` only when the dot cannot go on well without the person's judgement; `follow_up` for work that has to wait (a build, a reply, a date).
 
+From the browser spec (`2026-10-21-browser-design.md` section 4), a dot that browses hands over to the person with `ask` when a page needs a login, a code or a CAPTCHA ("Please <do it> in the browser window, then answer done."): the person does it in the dot's visible Edge window and answers, the answer resumes the run, and the login stays in the dot's profile.
+
 ## 3. Follow-up limits
 
 Checked in core when the tool is called, in this order, against the clock of the follow-up loop:

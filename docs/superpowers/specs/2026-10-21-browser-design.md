@@ -175,3 +175,23 @@ Branch `feat/browser`. New code in `crates/dots-core/src/browser/` and new UI fi
 - Main spec §5, policy: rule kinds `Browser(<site>)` and `BrowserRisky(<site>)`, decided by Dots' browser gate before the dot's other rules for `browser` tools.
 - MCP/skills spec §2: a built-in MCP server, `browser`, is started by Dots for dots with `browser` on; it is not a Library item and its catalog is not fingerprinted.
 - Check-ins spec §2: a dot's handover for logins, 2FA and CAPTCHAs uses `ask`.
+
+## 13. Changes made while building
+
+The plan (`docs/superpowers/plans/2026-10-21-browser.md`) changed these from the first version of this spec, after measuring Edge 155 and `@playwright/mcp@0.0.83` on this PC:
+
+- Edge also starts with `--disable-sync`, `--disable-backgrounding-occluded-windows`, `--disable-renderer-backgrounding`, `--disable-background-timer-throttling` and `--disable-features=CalculateNativeWinOcclusion`, and opens `about:blank`. A fresh profile signed in to the person's Microsoft account and synced their extensions into the dot's profile; behind other windows, every click timed out (section 2.1).
+- Edge's `msedge.exe` hands over to the browser and exits at once, so Dots follows a dot's Edge by its port, kept in `<data_dir>/browser/<dot_id>/port` (a Dots that starts again finds an open Edge), and closes it with `PUT /json/close/<id>` for each page. A profile is in use when its `lockfile` cannot be opened for writing (section 2.1).
+- The Playwright server also gets `--snapshot-mode none`, so acts do not write snapshot files into `downloads/`; the model takes snapshots with `browser_snapshot`, which still answers inline. Its tool list is the captured one (`browser/tools.json`), served without starting the server; its `list_changed` is not followed (section 2.2).
+- Acts name their element with `target`, a snapshot reference or a selector; `ref` does not exist in 0.0.83. A password field shows as `textbox "Password"`, so the name decides (section 3.5).
+- The page an act lands on is the one Playwright reported as current last (its `### Page` section or `(current)` tab), counted only while Edge's `/json/list` has exactly that address; otherwise the act is on no site and asks. `/json/list` is ordered by what was last in front, not by Playwright's tab. Only Playwright's own result sections move the current page: console messages, found text and the results of code cannot (section 3.2).
+- `browser_drop` with `paths` is dangerous, as an upload; `browser_handle_dialog` with `accept: false` is a read (section 3.1).
+- "Always allow risky actions on <site>" saves `BrowserRisky(<site>)` alone, and an allow `BrowserRisky(<site>)` also approves the site. For browser calls a deny rule wins, then an ask rule (a `Browser(<site>)` ask keeps that site asking under `Browser(*)`), then an allow rule. A deny rule on the tool's own name (`mcp__browser__*`) refuses it too (sections 3.6 and 6).
+- A live approval whose page changed while it waited is not performed either: "The page changed while your browser action waited for approval, so it was not performed. Take a snapshot and do it again if it is still right." (section 3.6).
+- The card's data (`action`, `site`, `page`, `labels`, `risky`, `dangerous`) is stored in the approval's input under `dots_browser`; a key of that name in the model's input is dropped first. A card offers no rule for a page with no site or a dangerous call (section 3.6).
+- Edge saves downloads to `<data_dir>/browser/<dot_id>/downloads` (written into the profile's `Default/Preferences`); Dots moves each finished file into the run's `downloads/` after each browser call and when the run ends. Over CDP, Playwright's output folder does not catch downloads (section 4).
+- A performed call's result starts with `Dots: <line>` (`Opened shop.com/cart`, `Clicked "Add to cart"`, `Typed into "Search"`, `Took a screenshot`, `Downloaded statement.pdf`); the run view shows those lines. A screenshot is read back with the command `browser_screenshot(run_id, name)`, only under the name Playwright gives one (sections 7 and 8).
+- A new `Settings.edge_path` is confirmed in a native dialog ("Change the Edge program?"), as a new Claude program is (section 6).
+- A package that cannot be fetched fails with "The browser could not start: <MCP error>"; npm's own text goes to the app log (section 5).
+- A Library MCP server the dot uses under the name `browser` keeps it; the built-in browser is then left out of the run, with a notice (section 2.2).
+- The fake Playwright server of the tests is `fake-mcp` with a script; `fake-browser` stands in for Edge (section 9).

@@ -88,6 +88,10 @@ The folder holds `SKILL.md`. Dots reads its YAML frontmatter as Claude Code does
 
 Names refer to Library items. A plugin's MCP servers come with the plugin; they are not ticked separately. `validate()` refuses a name that is not in the Library. Deleting a Library item that dots use asks first and names those dots; on delete, the name is removed from their `uses`.
 
+### The built-in browser
+
+From the browser spec (`2026-10-21-browser-design.md` section 2.2), a run of a dot with `browser` on has one more MCP server, started by Dots at the run's first browser call: the built-in `browser` (`@playwright/mcp@0.0.83`). Its tools are `mcp__browser__<tool>`, reached through the gateway route `/mcp/s/browser` on the Claude engine and bridged on the local engine. It is not a Library item: its tool list is the pinned one, not fingerprinted, and Dots' browser gate decides each call instead of section 4. A Library server the dot uses under the name `browser` keeps the name, and the built-in browser is left out of that run.
+
 ## 3. Catalogs and fingerprints
 
 ```sql
