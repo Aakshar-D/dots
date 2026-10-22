@@ -7,7 +7,8 @@
 use super::entries::{check_value, check_variable_name, EntryKind};
 use super::secrets::MAX_SECRET_BYTES;
 use super::service::Vault;
-use crate::library::{looks_secret, McpServerConfig};
+use crate::library::{looks_secret, LibraryConfig, McpServerConfig};
+use crate::mcp::vars::is_var_name;
 use crate::store::{auth_scheme, var_name};
 use crate::vault::redact;
 use crate::Result;
@@ -159,6 +160,45 @@ impl Found {
     }
 }
 
+/// What a config that is being moved replaces: it decides the name a value moves under.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Prior<'a> {
+    /// Nothing: a new server, or one a version before the vault stored.
+    New,
+    /// A plugin's server as the Library stores it. A key it reads as `${NAME}` keeps the name,
+    /// and Personal keeps its value: the plugin's file differing is only logged.
+    Plugin(&'a McpServerConfig),
+    /// A server the person changes in the form, as stored, and its item id. A key that read
+    /// `${NAME}` keeps the name, and the new value replaces NAME's in Personal, when nothing
+    /// else in the Library reads `${NAME}`.
+    Edit {
+        id: &'a str,
+        config: &'a McpServerConfig,
+    },
+}
+
+/// The name `value` reads as a whole: `${NAME}`, or `<scheme> ${NAME}` for a header.
+fn read_name(value: &str) -> Option<String> {
+    let value = value.trim();
+    let start = value.rfind("${")?;
+    let name = value[start + 2..].strip_suffix('}')?;
+    (is_var_name(name) && !value[..start].contains('$')).then(|| name.to_string())
+}
+
+/// The name the stored `config` reads at `place`, if it reads one there as a whole.
+fn stored_name(config: &McpServerConfig, place: &Place) -> Option<String> {
+    match (config, place) {
+        (McpServerConfig::Stdio { env, .. }, Place::Env(key)) => {
+            env.get(key).and_then(|v| read_name(v))
+        }
+        (McpServerConfig::Http { headers, .. }, Place::Header(key)) => headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .and_then(|(_, v)| read_name(v)),
+        _ => None,
+    }
+}
+
 /// Whether `config` holds a secret-looking value that is not `${…}` and can move to Personal.
 pub fn has_movable_literals(server: &str, config: &McpServerConfig) -> bool {
     found(server, config)
@@ -186,6 +226,18 @@ impl Vault {
         server: &str,
         config: &McpServerConfig,
     ) -> Result<(McpServerConfig, Vec<String>)> {
+        self.move_literals_over(server, config, Prior::New).await
+    }
+
+    /// `move_literals` for a config that replaces `prior`: a key the stored config read as
+    /// `${NAME}` may keep that name (`Prior`).
+    pub(crate) async fn move_literals_over(
+        &self,
+        server: &str,
+        config: &McpServerConfig,
+        prior: Prior<'_>,
+    ) -> Result<(McpServerConfig, Vec<String>)> {
+        let incoming = config;
         let mut config = config.clone();
         let mut moved = Vec::new();
         for f in found(server, &config) {
@@ -193,18 +245,26 @@ impl Vault {
                 f.stay(server, why);
                 continue;
             }
-            let mut name = f.name.clone();
-            for n in 2.. {
-                // A name whose row exists but whose secret is gone counts as taken.
-                if self.store().find_env_entry(&name).await?.is_none() {
-                    self.add(&name, EntryKind::Secret, &f.value).await?;
-                    break;
-                }
-                match self.personal_value(&name).await? {
-                    Some(v) if *v == f.value => break,
-                    _ => name = suffixed(&f.name, n),
-                }
-            }
+            let kept = match prior {
+                Prior::New => None,
+                Prior::Plugin(stored) => match stored_name(stored, &f.place) {
+                    Some(name) => {
+                        self.keep_personal(server, &name, &f.value).await?;
+                        Some(name)
+                    }
+                    None => None,
+                },
+                Prior::Edit { id, config: stored } => match stored_name(stored, &f.place) {
+                    Some(name) if self.only_reader(id, incoming, &name).await? => {
+                        self.replace_personal(&name, &f.value).await?
+                    }
+                    _ => None,
+                },
+            };
+            let name = match kept {
+                Some(name) => name,
+                None => self.free_name(&f).await?,
+            };
             let text = format!("{}${{{name}}}", f.prefix);
             match (&mut config, &f.place) {
                 (McpServerConfig::Stdio { env, .. }, Place::Env(key)) => {
@@ -218,5 +278,79 @@ impl Vault {
             moved.push(name);
         }
         Ok((config, moved))
+    }
+
+    /// The name `f` moves under when it keeps none: its own, or one Personal has with the same
+    /// value, or the first free one of `_2`, `_3`, … The value is added when the name is new.
+    async fn free_name(&self, f: &Found) -> Result<String> {
+        let mut name = f.name.clone();
+        for n in 2.. {
+            // A name whose row exists but whose secret is gone counts as taken.
+            if self.store().find_env_entry(&name).await?.is_none() {
+                self.add(&name, EntryKind::Secret, &f.value).await?;
+                break;
+            }
+            match self.personal_value(&name).await? {
+                Some(v) if *v == f.value => break,
+                _ => name = suffixed(&f.name, n),
+            }
+        }
+        Ok(name)
+    }
+
+    /// A plugin's re-synced value for the name `name` its server already reads: Personal wins
+    /// and keeps its value. A differing value is logged, by name only, and scrubbed.
+    async fn keep_personal(&self, server: &str, name: &str, value: &str) -> Result<()> {
+        if self
+            .personal_value(name)
+            .await?
+            .is_some_and(|v| *v == value)
+        {
+            return Ok(());
+        }
+        tracing::warn!(
+            "{server}: the plugin's file has another value for {name}; Personal's is kept"
+        );
+        redact::global().add(name, value);
+        Ok(())
+    }
+
+    /// Whether the server `id`, as `incoming` will store it, is the only Library item that
+    /// reads `${name}`: `incoming` no longer reads it, and no other server does.
+    async fn only_reader(&self, id: &str, incoming: &McpServerConfig, name: &str) -> Result<bool> {
+        let reads =
+            |c: &McpServerConfig| c.variables().iter().any(|v| v.eq_ignore_ascii_case(name));
+        if reads(incoming) {
+            return Ok(false);
+        }
+        for item in self.store().list_library_items().await? {
+            if let LibraryConfig::McpServer(config) = &item.config {
+                if item.id != id && reads(config) {
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    /// Replaces the value of the secret `name` with `value`, adding it when Personal lacks the
+    /// name. A plain variable is not replaced (`None`): the value moves under another name.
+    async fn replace_personal(&self, name: &str, value: &str) -> Result<Option<String>> {
+        match self.store().find_env_entry(name).await? {
+            None => {
+                self.add(name, EntryKind::Secret, value).await?;
+            }
+            Some(entry) if entry.kind == EntryKind::Secret => {
+                if self
+                    .personal_value(&entry.name)
+                    .await?
+                    .is_none_or(|v| *v != value)
+                {
+                    self.set_value(&entry.name, value).await?;
+                }
+            }
+            Some(_) => return Ok(None),
+        }
+        Ok(Some(name.to_string()))
     }
 }

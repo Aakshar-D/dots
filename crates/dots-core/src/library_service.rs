@@ -21,6 +21,7 @@ use crate::mcp::{fingerprint, McpError, McpSession, McpTool, SessionOptions};
 use crate::model::{DotRef, ToolsChanged};
 use crate::skill_creator::{self, check_draft};
 use crate::store::Store;
+use crate::vault::literals::Prior;
 use crate::vault::{Resolved, Vault};
 use crate::{Error, Result};
 
@@ -258,10 +259,17 @@ pub(crate) async fn sync_plugin_servers(
         }
     }
     for (name, config) in wanted {
+        let old = existing.iter().find(|i| i.name == name);
         // A secret written into the plugin's `.mcp.json` moves into Personal; the Library keeps
-        // `${NAME}` (env vault spec §11). It stays in the plugin's own folder.
-        let config = LibraryConfig::McpServer(vault.move_literals(&name, &config).await?.0);
-        match existing.iter().find(|i| i.name == name) {
+        // `${NAME}` (env vault spec §11). It stays in the plugin's own folder. A key the stored
+        // server already reads as `${NAME}` keeps it, and Personal keeps its value.
+        let prior = match old.map(|i| &i.config) {
+            Some(LibraryConfig::McpServer(stored)) => Prior::Plugin(stored),
+            _ => Prior::New,
+        };
+        let moved = vault.move_literals_over(&name, &config, prior).await?.0;
+        let config = LibraryConfig::McpServer(moved);
+        match old {
             Some(old) if old.config == config => {}
             Some(old) => match store.update_library_item(&old.id, &config).await {
                 Ok(_) | Err(Error::NotFound(_)) => publish(bus, &old.id),
@@ -545,7 +553,7 @@ impl LibraryService {
             ));
         }
         let plugin = self.read_folder(&config).await?;
-        let config = self.without_literals(name, config).await?;
+        let config = self.without_literals(name, config, None).await?;
         let item = self.store.add_library_item(name, &config, None).await?;
         publish(&self.bus, &item.id);
         if let Some(info) = plugin {
@@ -571,7 +579,7 @@ impl LibraryService {
         let old = self.store.get_library_item(id).await?;
         self.refuse_owned(&old, "change")?;
         let plugin = self.read_folder(&config).await?;
-        let config = self.without_literals(&old.name, config).await?;
+        let config = self.without_literals(&old.name, config, Some(&old)).await?;
         let item = self.store.update_library_item(id, &config).await?;
         if item.config != old.config {
             publish(&self.bus, id);
@@ -797,14 +805,28 @@ impl LibraryService {
     }
 
     /// An MCP server's config with its secret-looking values moved into Personal (env vault
-    /// spec §11): the Library never stores them.
-    async fn without_literals(&self, name: &str, config: LibraryConfig) -> Result<LibraryConfig> {
-        match config {
-            LibraryConfig::McpServer(server) => Ok(LibraryConfig::McpServer(
-                self.vault.move_literals(name, &server).await?.0,
-            )),
-            other => Ok(other),
-        }
+    /// spec §11): the Library never stores them. `old` is the item being changed: a key it
+    /// read as `${NAME}` keeps the name when nothing else reads it, and the typed value
+    /// replaces NAME's in Personal.
+    async fn without_literals(
+        &self,
+        name: &str,
+        config: LibraryConfig,
+        old: Option<&LibraryItem>,
+    ) -> Result<LibraryConfig> {
+        let LibraryConfig::McpServer(server) = config else {
+            return Ok(config);
+        };
+        let prior = match old {
+            Some(LibraryItem {
+                id,
+                config: LibraryConfig::McpServer(stored),
+                ..
+            }) => Prior::Edit { id, config: stored },
+            _ => Prior::New,
+        };
+        let moved = self.vault.move_literals_over(name, &server, prior).await?.0;
+        Ok(LibraryConfig::McpServer(moved))
     }
 
     fn refuse_owned(&self, item: &LibraryItem, verb: &str) -> Result<()> {

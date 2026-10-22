@@ -169,9 +169,156 @@ async fn the_library_never_stores_a_typed_secret() {
         .unwrap();
     assert_eq!(
         updated.config,
-        LibraryConfig::McpServer(stdio(&[("SF_TOKEN", "${SF_TOKEN_2}")]))
+        LibraryConfig::McpServer(stdio(&[("SF_TOKEN", "${SF_TOKEN}")]))
     );
     assert!(!db_holds(dir.path(), "typed-secret-value"));
+}
+
+#[tokio::test]
+async fn a_form_edit_of_a_name_only_its_server_reads_replaces_the_value() {
+    let (_dir, store) = temp_store().await;
+    let vault = Vault::in_memory(store.clone());
+    let lib = LibraryService::new(store.clone(), new_bus()).with_vault(vault.clone());
+    let item = lib
+        .add(
+            "sf",
+            LibraryConfig::McpServer(stdio(&[("SF_TOKEN", "old-rotated-value-23")])),
+            None,
+        )
+        .await
+        .unwrap();
+    let mut s = spec("rotates");
+    s.uses.mcp_servers = vec!["sf".into()];
+    let dot = store.create_dot(&s).await.unwrap();
+    let updated = lib
+        .update(
+            &item.id,
+            LibraryConfig::McpServer(stdio(&[("SF_TOKEN", "new-rotated-value-24")])),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        updated.config,
+        LibraryConfig::McpServer(stdio(&[("SF_TOKEN", "${SF_TOKEN}")]))
+    );
+    let names: Vec<String> = vault
+        .list()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|e| e.name)
+        .collect();
+    assert_eq!(names, ["SF_TOKEN"]);
+    let values = vault.personal_values(&["SF_TOKEN".into()]).await.unwrap();
+    assert_eq!(
+        values.get("SF_TOKEN").as_deref(),
+        Some("new-rotated-value-24")
+    );
+    assert_eq!(
+        store.get_dot(&dot.id).await.unwrap().spec.variables.0["mcp:sf"],
+        ["SF_TOKEN"]
+    );
+}
+
+#[tokio::test]
+async fn a_form_edit_of_a_shared_name_moves_under_a_new_one() {
+    let (_dir, store) = temp_store().await;
+    let vault = Vault::in_memory(store.clone());
+    let lib = LibraryService::new(store.clone(), new_bus()).with_vault(vault.clone());
+    let item = lib
+        .add(
+            "sf",
+            LibraryConfig::McpServer(stdio(&[("SF_TOKEN", "shared-value-25")])),
+            None,
+        )
+        .await
+        .unwrap();
+    lib.add(
+        "sf-reports",
+        LibraryConfig::McpServer(stdio(&[("SF_TOKEN", "${SF_TOKEN}")])),
+        None,
+    )
+    .await
+    .unwrap();
+    let updated = lib
+        .update(
+            &item.id,
+            LibraryConfig::McpServer(stdio(&[("SF_TOKEN", "edited-value-26")])),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        updated.config,
+        LibraryConfig::McpServer(stdio(&[("SF_TOKEN", "${SF_TOKEN_2}")]))
+    );
+    let values = vault
+        .personal_values(&["SF_TOKEN".into(), "SF_TOKEN_2".into()])
+        .await
+        .unwrap();
+    assert_eq!(values.get("SF_TOKEN").as_deref(), Some("shared-value-25"));
+    assert_eq!(values.get("SF_TOKEN_2").as_deref(), Some("edited-value-26"));
+}
+
+#[tokio::test]
+async fn a_plugin_resync_with_another_value_keeps_the_name_and_the_grant() {
+    let (dir, store) = temp_store().await;
+    let vault = Vault::in_memory(store.clone());
+    let lib = LibraryService::new(store.clone(), new_bus()).with_vault(vault.clone());
+    let root = dir.path().join("forms");
+    std::fs::create_dir_all(root.join(".claude-plugin")).unwrap();
+    std::fs::write(
+        root.join(".claude-plugin").join("plugin.json"),
+        r#"{"name":"forms"}"#,
+    )
+    .unwrap();
+    let mcp = |value: &str| {
+        json!({"mcpServers": {"db": {"command": "node", "env": {"SF_TOKEN": value}}}}).to_string()
+    };
+    std::fs::write(root.join(".mcp.json"), mcp("plugin-first-value-21")).unwrap();
+    let plugin = LibraryConfig::Plugin(PluginConfig {
+        path: root.to_string_lossy().into_owned(),
+        installed_id: None,
+        run_hooks: false,
+    });
+    let item = lib.add("forms", plugin.clone(), None).await.unwrap();
+    let mut s = spec("forms-user");
+    s.uses.plugins = vec!["forms".into()];
+    let dot = store.create_dot(&s).await.unwrap();
+    assert_eq!(dot.spec.variables.0["mcp:plugin-forms-db"], ["SF_TOKEN"]);
+    // The plugin's file now has another value; the plugin is synced again.
+    std::fs::write(root.join(".mcp.json"), mcp("plugin-second-value-22")).unwrap();
+    lib.update(&item.id, plugin).await.unwrap();
+    let server = store
+        .find_library_item(LibraryKind::McpServer, "plugin-forms-db")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        server.config,
+        LibraryConfig::McpServer(stdio(&[("SF_TOKEN", "${SF_TOKEN}")]))
+    );
+    // Personal wins: its value stays, and no other name is made.
+    let names: Vec<String> = vault
+        .list()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|e| e.name)
+        .collect();
+    assert_eq!(names, ["SF_TOKEN"]);
+    let values = vault.personal_values(&["SF_TOKEN".into()]).await.unwrap();
+    assert_eq!(
+        values.get("SF_TOKEN").as_deref(),
+        Some("plugin-first-value-21")
+    );
+    // The dot is still granted every name the server reads.
+    let grants = store.get_dot(&dot.id).await.unwrap().spec.variables;
+    assert_eq!(grants.0["mcp:plugin-forms-db"], ["SF_TOKEN"]);
+    // The plugin's other value is still scrubbed.
+    assert_eq!(
+        redact::global().scrub("plugin-second-value-22").as_ref(),
+        "[secret:SF_TOKEN]"
+    );
 }
 
 #[tokio::test]
