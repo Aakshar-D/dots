@@ -85,3 +85,17 @@ Shared files get small additions: in the core, a migration, `store/dots.rs` (the
 ## 9. Out of scope
 
 Per-topic unread counts; marking unread by hand; an approve button on a notification (a decision stays in the app, where the call is shown whole); badges on the taskbar icon; sounds; the visual design (C).
+
+## 10. As built
+
+The plan (`docs/superpowers/plans/2026-10-22-needs-you.md`) built sections 1 to 8 with these choices where the spec left room or said otherwise:
+
+- **The Home link's total** (section 5) comes from a third command, `unread_total` (the sum of every dot's `unread`), not from the overview: the frame shows the rail on every screen and does not load every dot's overview there. The UI keeps it under the overview's query key, so whatever refreshes the overview refreshes it.
+- **What refreshes the counts** (section 5): `dot_seen`, and also every approval and message event (before, those refreshed only the Inbox and the messages); a run's events already refreshed the overview.
+- **Viewing marks seen** (section 3) through a watcher on the core's event bus: a `run_updated` of a run that ended and a `message_posted` of a note, for the dot being viewed, call `mark_dot_seen`; a lag of the bus marks the viewed dot seen. Deleting the viewed dot clears the viewing.
+- **The approval's preview** (section 4.2) is `call_preview`, the Rust twin of the UI's `toolPreview`: the input's `command`, `file_path`, `path`, `pattern` or `url` (its first line that is not blank), else the input as compact JSON cut to 80 characters (keys sorted); none for an empty input, and then the body is the tool alone. A body is cut to 200 characters as before.
+- **A notice whose dot is unknown** (its run is gone) opens `/home` and is never quiet.
+- **The tray** (section 4.3) keeps "Pause all schedules" as today; Needs you is rebuilt only when its items changed, so an open menu does not flicker with every event.
+- **Badges** (section 5): the number is hidden from assistive technology, which reads "3 unread" instead; "99+" above 99 applies to the Inbox's count too.
+- **The contract sample** of `DotOverview` has both counts at 0, so the tests that render it show no badge.
+- **Tests** are in `crates/dots-core/tests/runtime_seen_test.rs`, the tests of `apps/dots-app/src/{events,notify_routes,tray}.rs`, and `ui/src/screens/home/{NeedsYou,Viewing}.test.tsx` with `ui/src/api/needs-you.test.ts`.
