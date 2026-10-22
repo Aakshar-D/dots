@@ -4,6 +4,7 @@ pub mod confirm;
 pub mod contract;
 pub mod error;
 pub mod events;
+pub mod notify_routes;
 pub mod startup;
 pub mod state;
 pub mod tray;
@@ -162,6 +163,8 @@ fn setup(app: &AppHandle, panics_logged: bool) -> Result<(), Box<dyn std::error:
             settings.autostart,
             !startup::single_instance(std::env::var_os(startup::DATA_DIR_ENV)),
         );
+        // A click on a notification opens what it is about (needs-you spec section 4.2).
+        notify_routes::listen(app);
         events::spawn_forwarder(app.clone(), rt.clone());
         if let Ok(dir) = &data_dir {
             // What a failed install left is read while Dots holds the data folder.
