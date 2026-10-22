@@ -469,6 +469,58 @@ async fn the_cli_gets_the_shell_grants_and_not_the_rest_of_dots_environment() {
     assert!(!upper.contains(&"DOTS_TEST_CLI_LEAK".to_string()));
 }
 
+/// The gateway file the CLI is given (`--mcp-config`) holds a bearer secret: while the run is
+/// on, its DACL has one entry, full access for the signed-in user, and nothing inherited (env
+/// vault spec §11).
+#[cfg(windows)]
+#[tokio::test]
+async fn the_gateway_file_is_owner_only_while_the_run_is_on() {
+    let script = json!([init(), {"sleep_ms": 3000}, success("fake done")]);
+    let e = e2e(script, None).await;
+    let mut s = spec("dacl");
+    s.workdir = e.dir.path().to_string_lossy().to_string();
+    s.workspace_mode = WorkspaceMode::Folder;
+    let dot = e.store.create_dot(&s).await.unwrap();
+    let run = e
+        .runner
+        .enqueue(NewRun::new(&dot.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    let path = e
+        .dir
+        .path()
+        .join("scratch")
+        .join(format!("mcp-{}.json", run.id));
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    // The CLI has started once it wrote what it was given.
+    while !(path.exists() && e.args_out.exists()) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the run did not start"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let out = std::process::Command::new("icacls")
+        .arg(&path)
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let user = std::env::var("USERNAME").unwrap();
+    let entries: Vec<&str> = text
+        .lines()
+        .filter(|l| l.contains(":(") && !l.contains("Successfully"))
+        .collect();
+    assert_eq!(entries.len(), 1, "{text}");
+    assert!(
+        entries[0].contains(&user) && entries[0].contains("(F)"),
+        "{text}"
+    );
+    assert!(!text.contains("(I)"), "{text}");
+    wait_status(&e.store, &run.id, RunStatus::Succeeded, 15).await;
+    // The file is gone with the run.
+    assert!(!path.exists());
+}
+
 /// A shell grant never sets the CLI's own variables: it keeps what Dots' environment passed
 /// through (the subscription rule), and the run says what was left out.
 #[tokio::test]

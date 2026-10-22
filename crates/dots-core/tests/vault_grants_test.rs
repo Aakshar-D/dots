@@ -14,7 +14,7 @@ use dots_core::run_tools::{OpenRequest, RunTools};
 use dots_core::store::Store;
 use dots_core::vault::{Consumer, EntryKind, Grants, Missing, Unresolved, Vault};
 use dots_core::Error;
-use serde_json::json;
+use serde_json::{json, Value};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 use tokio_util::sync::CancellationToken;
 
@@ -196,6 +196,60 @@ async fn ticking_a_plugin_grants_the_variables_of_its_servers() {
         dot.spec.variables,
         grants(&[("mcp:plugin-forms-db", &["DB_TOKEN"])])
     );
+}
+
+/// A plugin update that adds a `${VAR}` to a server of a plugin the dot already ticks does not
+/// grant it (env vault spec §13): the dot is asked first.
+#[tokio::test]
+async fn a_plugin_update_adding_a_variable_does_not_grant_it() {
+    let (dir, store) = temp_store().await;
+    let root = dir.path().join("forms");
+    std::fs::create_dir_all(root.join(".claude-plugin")).unwrap();
+    std::fs::write(
+        root.join(".claude-plugin").join("plugin.json"),
+        r#"{"name":"forms"}"#,
+    )
+    .unwrap();
+    let mcp = |env: Value| json!({"mcpServers": {"db": {"command": "node", "env": env}}});
+    std::fs::write(
+        root.join(".mcp.json"),
+        mcp(json!({"T": "${DB_TOKEN}"})).to_string(),
+    )
+    .unwrap();
+    let lib = dots_core::library_service::LibraryService::new(store.clone(), new_bus());
+    let plugin = LibraryConfig::Plugin(PluginConfig {
+        path: root.to_string_lossy().into_owned(),
+        installed_id: None,
+        run_hooks: false,
+    });
+    let item = lib.add("forms", plugin.clone(), None).await.unwrap();
+    let mut s = spec("filler");
+    s.uses.plugins = names(&["forms"]);
+    let dot = store.create_dot(&s).await.unwrap();
+    // The plugin's update reads one more variable, and the plugin is synced again.
+    std::fs::write(
+        root.join(".mcp.json"),
+        mcp(json!({"T": "${DB_TOKEN}", "U": "${DB_ADMIN_TOKEN}"})).to_string(),
+    )
+    .unwrap();
+    lib.update(&item.id, plugin).await.unwrap();
+    let server = store
+        .find_library_item(
+            dots_core::library::LibraryKind::McpServer,
+            "plugin-forms-db",
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let LibraryConfig::McpServer(config) = &server.config else {
+        panic!("not a server");
+    };
+    assert_eq!(config.variables(), ["DB_ADMIN_TOKEN", "DB_TOKEN"]);
+    let want = grants(&[("mcp:plugin-forms-db", &["DB_TOKEN"])]);
+    assert_eq!(store.get_dot(&dot.id).await.unwrap().spec.variables, want);
+    // Nor does saving the dot again.
+    let saved = store.update_dot(&dot.id, &dot.spec).await.unwrap();
+    assert_eq!(saved.spec.variables, want);
 }
 
 #[tokio::test]
@@ -497,9 +551,19 @@ async fn a_start_with_old_webhook_tokens_vacuums_their_clear_values_away() {
         std::sync::Arc::new(dots_core::vault::MemorySecrets::new()),
     );
     vault.move_stored_literals().await.unwrap();
+    // The vacuum ran: the marker is cleared, not left for the next start.
+    assert_eq!(
+        store
+            .marker(dots_core::vault::upgrade::VACUUM_PENDING)
+            .await
+            .unwrap(),
+        Some(json!(false))
+    );
     assert!(store.check_webhook_token("D1", token).await.unwrap());
     store.close().await;
 
+    // The marker says the vacuum ran; the byte scan says it worked. It guards against a SQLite
+    // build that keeps freed pages through a vacuum, and against a WAL left holding them.
     for name in ["dots.db", "dots.db-wal"] {
         let Ok(bytes) = std::fs::read(dir.path().join(name)) else {
             continue;
