@@ -3,9 +3,11 @@ import { useState } from "react";
 
 import { commands } from "@/api/commands";
 import type { Approval } from "@/api/types";
+import { BrowserApprovalCard } from "@/components/BrowserApprovalCard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { parkedNote } from "@/lib/approvals";
+import { browserAsk } from "@/lib/browser";
 import { notifyError } from "@/lib/notify";
 import { invalidate, invalidateDots, keys } from "@/lib/query";
 import { onSingleClick } from "@/lib/single-click";
@@ -13,10 +15,21 @@ import { toolPreview } from "@/lib/transcript";
 
 type Decision = { approved: boolean; allowRule: string | null };
 
+/// A call that waits for the user. A call of the built-in browser that Dots asked about has a
+/// card of its own (`BrowserApprovalCard`); every other call has the tool card.
+export function ApprovalCard(props: { approval: Approval; dotName?: string }) {
+  const ask = browserAsk(props.approval);
+  return ask ? (
+    <BrowserApprovalCard approval={props.approval} ask={ask} dotName={props.dotName} />
+  ) : (
+    <ToolApprovalCard approval={props.approval} dotName={props.dotName} />
+  );
+}
+
 /// A tool call that waits for the user: what the dot wants to do, and Approve or Deny with an
 /// optional note the dot gets to read. Where the core offers rules for the call, an approval
 /// can also save one of them to the dot's policy, so the same call is not asked again.
-export function ApprovalCard({ approval, dotName }: { approval: Approval; dotName?: string }) {
+function ToolApprovalCard({ approval, dotName }: { approval: Approval; dotName?: string }) {
   const qc = useQueryClient();
   const [note, setNote] = useState("");
   const [choosing, setChoosing] = useState(false);

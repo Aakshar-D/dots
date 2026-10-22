@@ -324,3 +324,41 @@ fn a_follow_up_run_sends_its_message_or_starts_afresh_with_it() {
     );
     assert!(!p.contains("## Trigger"), "{p}");
 }
+
+#[test]
+fn a_dot_with_the_browser_is_told_how_to_use_it() {
+    use dots_core::browser::PROMPT;
+    assert_eq!(
+        PROMPT,
+        "## Browser\n\n\
+         You have a browser (tools named browser_*). It is a visible Microsoft Edge window with your\n\
+         own profile; logins you were given stay there. Take a snapshot before you act, and act on the\n\
+         references in it. Opening a site you have not used before, and actions such as paying,\n\
+         sending, deleting or submitting, wait for the person's approval. Never type a password or a\n\
+         code: when a page needs a login, 2FA or a CAPTCHA, call ask with \"Please <do it> in the browser\n\
+         window, then answer done.\" Files you download land in downloads/ in your workspace.\n"
+    );
+    let mut dot = fake_dot("d", Path::new("C:/repo"), WorkspaceMode::Folder);
+    let run = fake_run(TriggerKind::Manual, None, None);
+    let ws = Path::new("C:/ws");
+    assert!(!build_prompt(&dot, &run, ws, at(), "", &[]).contains("## Browser"));
+    dot.spec.browser = true;
+    let p = build_prompt(&dot, &run, ws, at(), "", &[]);
+    assert!(
+        p.ends_with(&format!("and what needs human review.\n\n{PROMPT}")),
+        "{p}"
+    );
+    // Before the shared context.
+    let p = build_prompt(&dot, &run, ws, at(), "", &collections());
+    let browser = p.find("## Browser").unwrap();
+    let shared = p.find("## Shared context").unwrap();
+    assert!(browser < shared, "{p}");
+    assert!(p.contains(&format!("{PROMPT}\n## Shared context")), "{p}");
+    // A resume sends only its message.
+    let resume = fake_run(
+        TriggerKind::Resume,
+        Some(json!({"message": "Go on."})),
+        Some("s1"),
+    );
+    assert_eq!(build_prompt(&dot, &resume, ws, at(), "", &[]), "Go on.");
+}

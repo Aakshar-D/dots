@@ -66,6 +66,17 @@ export function MessageCard({ message }: { message: Message }) {
             Open the run
           </Link>
         )}
+        {/* The old chat address of the run opens its topic, in the conversation or alone. */}
+        <Link
+          to={
+            message.run_id
+              ? `/chat/${message.dot_id}/${message.run_id}`
+              : `/home/${message.dot_id}`
+          }
+          className="hover:underline"
+        >
+          Open conversation
+        </Link>
       </p>
       <p className="whitespace-pre-wrap">{message.text}</p>
       {question ? (

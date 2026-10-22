@@ -41,6 +41,10 @@ pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
             .iter()
             .map(|s| format!("mcp__{}__*", s.name())),
     );
+    // The built-in browser's gate decides each of its calls (browser spec section 3).
+    if ctx.tools.browser().is_some() {
+        allow.push(format!("{}*", crate::browser::PREFIX));
+    }
     // Dots' own `dots` server checks each `context` call against the policy itself (context
     // library spec section 4).
     if !ctx.tools.contexts().is_empty() {
@@ -76,6 +80,12 @@ pub fn mcp_config(ctx: &RunContext) -> Value {
         servers.insert(
             server.name().to_string(),
             gateway_entry(&ctx.mcp_url, &ctx.mcp_secret, server.name()),
+        );
+    }
+    if ctx.tools.browser().is_some() {
+        servers.insert(
+            crate::browser::SERVER.to_string(),
+            gateway_entry(&ctx.mcp_url, &ctx.mcp_secret, crate::browser::SERVER),
         );
     }
     servers.insert(

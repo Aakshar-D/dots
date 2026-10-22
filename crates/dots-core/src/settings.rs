@@ -30,6 +30,9 @@ pub struct Settings {
     pub global_instructions: String,
     /// A dot's note shows a notification (check-ins spec section 10). A question always does.
     pub notify_on_notes: bool,
+    /// The Microsoft Edge that dots browse with (browser spec section 6). `None` uses the one
+    /// installed under Program Files.
+    pub edge_path: Option<String>,
 }
 
 impl Default for Settings {
@@ -44,6 +47,7 @@ impl Default for Settings {
             schedules_paused: false,
             global_instructions: String::new(),
             notify_on_notes: true,
+            edge_path: None,
         }
     }
 }
@@ -62,6 +66,15 @@ impl Settings {
                 return invalid("claude_path must not be empty (leave it unset to search PATH)");
             }
             check_plain_text("claude_path", path)?;
+        }
+        // Dots runs this program too, so it is confirmed and shown as `claude_path` is.
+        if let Some(path) = &self.edge_path {
+            if path.trim().is_empty() {
+                return invalid(
+                    "edge_path must not be empty (leave it unset to use the installed Microsoft Edge)",
+                );
+            }
+            check_plain_text("edge_path", path)?;
         }
         if self.tested_claude_version.trim().is_empty() {
             return invalid("tested_claude_version must not be empty");

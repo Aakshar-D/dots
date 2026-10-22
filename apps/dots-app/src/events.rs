@@ -7,11 +7,12 @@ use std::sync::Arc;
 use dots_core::events::RuntimeEvent;
 use dots_core::model::{Message, MessageKind, Run, RunStatus, TriggerKind};
 use dots_core::Runtime;
+use serde_json::Value;
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_notification::NotificationExt;
 use tokio::sync::broadcast::error::RecvError;
 
-use crate::tray;
+use crate::{notify_routes, tray};
 
 /// Every `RuntimeEvent`, as the same JSON (`{"type": "run_updated", ...}`).
 pub const RUNTIME_EVENT: &str = "runtime";
@@ -30,6 +31,8 @@ pub enum Notice {
     ApprovalNeeded {
         run_id: String,
         tool: String,
+        /// The call's input, previewed in the body (`call_preview`).
+        input: Value,
     },
     RunEnded {
         run: Box<Run>,
@@ -76,6 +79,7 @@ impl Notifier {
                 Some(Notice::ApprovalNeeded {
                     run_id: approval.run_id.clone(),
                     tool: approval.tool.clone(),
+                    input: approval.input.clone(),
                 })
             }
             RuntimeEvent::RunUpdated { run } => {
@@ -126,12 +130,45 @@ fn first_line(text: Option<&str>, fallback: &str) -> String {
     }
 }
 
-/// (title, body) of the notification.
+/// A one-line preview of a call's input, as the UI's `toolPreview` shows it: its `command`,
+/// `file_path`, `path`, `pattern` or `url` (the first line that is not blank), else the input
+/// as compact JSON cut to 80 characters. `None` when there is nothing to show.
+pub fn call_preview(input: &Value) -> Option<String> {
+    if let Some(fields) = input.as_object() {
+        for key in ["command", "file_path", "path", "pattern", "url"] {
+            if let Some(Value::String(text)) = fields.get(key) {
+                return text
+                    .lines()
+                    .map(str::trim)
+                    .find(|l| !l.is_empty())
+                    .map(str::to_string);
+            }
+        }
+        if fields.is_empty() {
+            return None;
+        }
+    }
+    if input.is_null() {
+        return None;
+    }
+    let text = input.to_string();
+    Some(if text.chars().count() > 80 {
+        text.chars().take(80).collect::<String>() + "…"
+    } else {
+        text
+    })
+}
+
+/// (title, body) of the notification (needs-you spec section 4.2). None sends the person to
+/// the Inbox: a click on the notification opens what it is about (`notice_route`).
 pub fn notice_text(notice: &Notice, dot_name: &str) -> (String, String) {
     match notice {
-        Notice::ApprovalNeeded { tool, .. } => (
-            format!("{dot_name} needs approval"),
-            format!("{tool} is waiting in the Inbox."),
+        Notice::ApprovalNeeded { tool, input, .. } => (
+            format!("{dot_name} needs your approval"),
+            match call_preview(input) {
+                Some(preview) => first_line(Some(format!("{tool}: {preview}").as_str()), tool),
+                None => first_line(Some(tool.as_str()), "A call"),
+            },
         ),
         Notice::RunEnded { run } => match run.status {
             RunStatus::Succeeded => (
@@ -143,28 +180,42 @@ pub fn notice_text(notice: &Notice, dot_name: &str) -> (String, String) {
                 first_line(run.error.as_deref(), "The run failed."),
             ),
             _ => (
-                format!("{dot_name} is waiting for approval"),
-                "Open the Inbox to decide.".to_string(),
+                format!("{dot_name} is waiting for your approval"),
+                first_line(run.summary.as_deref(), "A call waits for your decision."),
             ),
         },
         Notice::ScheduleFailed { error, .. } => (
-            format!("{dot_name}: scheduled run failed"),
-            first_line(error.as_deref(), "The run failed."),
+            format!("{dot_name}'s schedule needs attention"),
+            first_line(error.as_deref(), "Its run failed."),
         ),
         Notice::MessagePosted { message } => match message.kind {
             MessageKind::Question => (
-                format!(
-                    "{dot_name} asks: {}",
-                    first_line(Some(message.text.as_str()), "a question")
-                ),
-                "Answer it in the Inbox.".to_string(),
+                format!("{dot_name} asks"),
+                first_line(Some(message.text.as_str()), "A question."),
             ),
             MessageKind::Note => (
-                format!("Note from {dot_name}"),
+                format!("{dot_name} says"),
                 first_line(Some(message.text.as_str()), "A note."),
             ),
         },
     }
+}
+
+/// Where a click on the notice goes: the conversation of the run (`/chat/<dot>/<run>`, which
+/// the home opens on the run's topic) for a run or an approval, the dot's conversation
+/// (`/home/<dot>`) for a question, a note or a schedule.
+pub fn notice_route(notice: &Notice, dot_id: &str) -> String {
+    match notice {
+        Notice::ApprovalNeeded { run_id, .. } => format!("/chat/{dot_id}/{run_id}"),
+        Notice::RunEnded { run } => format!("/chat/{dot_id}/{}", run.id),
+        Notice::ScheduleFailed { .. } | Notice::MessagePosted { .. } => format!("/home/{dot_id}"),
+    }
+}
+
+/// Whether a notice about the dot `dot_id` stays quiet because the person is reading that
+/// dot's conversation (`viewing`). A notice whose dot is unknown is never quiet.
+pub fn quiet(dot_id: Option<&str>, viewing: Option<&str>) -> bool {
+    dot_id.is_some() && dot_id == viewing
 }
 
 /// Whether a posted message shows a notification: a question always, a note while the setting
@@ -220,12 +271,29 @@ async fn notify(app: &AppHandle, rt: &Runtime, notice: &Notice) {
         Notice::ScheduleFailed { dot_id, .. } => Some(dot_id.clone()),
         Notice::MessagePosted { message } => Some(message.dot_id.clone()),
     };
-    let name = match dot_id {
-        Some(id) => rt.get_dot(&id).await.map(|d| d.spec.name).ok(),
+    // Nothing for the dot whose conversation the person is reading (needs-you spec 4.2).
+    if quiet(dot_id.as_deref(), rt.viewing().as_deref()) {
+        return;
+    }
+    let name = match &dot_id {
+        Some(id) => rt.get_dot(id).await.map(|d| d.spec.name).ok(),
         None => None,
     };
     let (title, body) = notice_text(notice, name.as_deref().unwrap_or("A dot"));
-    if let Err(e) = app.notification().builder().title(title).body(body).show() {
+    // A click opens what the notice is about; without its dot, the home.
+    let route = match &dot_id {
+        Some(id) => notice_route(notice, id),
+        None => "/home".to_string(),
+    };
+    let id = notify_routes::remember(app, route);
+    let shown = app
+        .notification()
+        .builder()
+        .id(id)
+        .title(title)
+        .body(body)
+        .show();
+    if let Err(e) = shown {
         tracing::warn!("showing a notification failed: {e}");
     }
 }
@@ -405,7 +473,8 @@ mod tests {
             n.decide(&asked("r1")),
             Some(Notice::ApprovalNeeded {
                 run_id: "r1".into(),
-                tool: "Bash".into()
+                tool: "Bash".into(),
+                input: json!({}),
             })
         );
         let ev = RuntimeEvent::RunEvent {
@@ -477,7 +546,7 @@ mod tests {
         assert_eq!(
             notice_text(&notice, "nightly"),
             (
-                "nightly: scheduled run failed".into(),
+                "nightly's schedule needs attention".into(),
                 "model server down".into()
             )
         );
@@ -485,7 +554,7 @@ mod tests {
             dot_id: "d".into(),
             error: None,
         };
-        assert_eq!(notice_text(&unknown, "nightly").1, "The run failed.");
+        assert_eq!(notice_text(&unknown, "nightly").1, "Its run failed.");
         assert!(affects_inbox(&ev));
     }
 
@@ -503,18 +572,22 @@ mod tests {
             ("nightly failed".into(), "exit 3".into())
         );
         assert_eq!(
-            notice_text(&ended(AwaitingApproval), "nightly").0,
-            "nightly is waiting for approval"
+            notice_text(&ended(AwaitingApproval), "nightly"),
+            (
+                "nightly is waiting for your approval".into(),
+                "All green.".into()
+            )
         );
         let ask = Notice::ApprovalNeeded {
             run_id: "r".into(),
             tool: "Bash".into(),
+            input: json!({"command": "cargo test\n--all"}),
         };
         assert_eq!(
             notice_text(&ask, "nightly"),
             (
-                "nightly needs approval".into(),
-                "Bash is waiting in the Inbox.".into()
+                "nightly needs your approval".into(),
+                "Bash: cargo test".into()
             )
         );
         let long = "x".repeat(300);
@@ -591,10 +664,7 @@ mod tests {
                 },
                 "nightly"
             ),
-            (
-                "nightly asks: Ship the release?".into(),
-                "Answer it in the Inbox.".into()
-            )
+            ("nightly asks".into(), "Ship the release?".into())
         );
         assert_eq!(
             notice_text(
@@ -603,7 +673,148 @@ mod tests {
                 },
                 "nightly"
             ),
-            ("Note from nightly".into(), "Ship the release?".into())
+            ("nightly says".into(), "Ship the release?".into())
         );
+    }
+
+    #[test]
+    fn every_notice_says_what_it_is_about_and_none_sends_to_the_inbox() {
+        let m = TriggerKind::Manual;
+        let ended = |status| Notice::RunEnded {
+            run: Box::new(run("r", status, m)),
+        };
+        let bare = |status| Notice::RunEnded {
+            run: Box::new(Run {
+                summary: None,
+                error: None,
+                ..run("r", status, m)
+            }),
+        };
+        let approval = |input| Notice::ApprovalNeeded {
+            run_id: "r".into(),
+            tool: "Bash".into(),
+            input,
+        };
+        let schedule = |error: Option<&str>| Notice::ScheduleFailed {
+            dot_id: "d".into(),
+            error: error.map(str::to_string),
+        };
+        let message = |kind| Notice::MessagePosted {
+            message: Box::new(posted(kind)),
+        };
+        let cases = [
+            (
+                message(MessageKind::Question),
+                "nightly asks",
+                "Ship the release?",
+            ),
+            (
+                approval(json!({"command": "cargo test\n--all"})),
+                "nightly needs your approval",
+                "Bash: cargo test",
+            ),
+            (approval(json!({})), "nightly needs your approval", "Bash"),
+            (
+                ended(AwaitingApproval),
+                "nightly is waiting for your approval",
+                "All green.",
+            ),
+            (
+                bare(AwaitingApproval),
+                "nightly is waiting for your approval",
+                "A call waits for your decision.",
+            ),
+            (ended(Succeeded), "nightly finished", "All green."),
+            (bare(Succeeded), "nightly finished", "The run succeeded."),
+            (ended(Failed), "nightly failed", "exit 3"),
+            (bare(Failed), "nightly failed", "The run failed."),
+            (
+                schedule(Some("model server down\nat 09:00")),
+                "nightly's schedule needs attention",
+                "model server down",
+            ),
+            (
+                schedule(None),
+                "nightly's schedule needs attention",
+                "Its run failed.",
+            ),
+            (
+                message(MessageKind::Note),
+                "nightly says",
+                "Ship the release?",
+            ),
+        ];
+        for (notice, title, body) in cases {
+            let (t, b) = notice_text(&notice, "nightly");
+            assert_eq!((t.as_str(), b.as_str()), (title, body), "{notice:?}");
+            assert!(!t.contains("Inbox") && !b.contains("Inbox"), "{t} / {b}");
+        }
+    }
+
+    #[test]
+    fn a_call_is_previewed_on_one_line() {
+        let preview = |input: Value| call_preview(&input);
+        assert_eq!(
+            preview(json!({"command": "\n  ls -la\nmore"})).as_deref(),
+            Some("ls -la")
+        );
+        assert_eq!(
+            preview(json!({"file_path": "C:/src/main.rs", "content": "x"})).as_deref(),
+            Some("C:/src/main.rs")
+        );
+        assert_eq!(
+            preview(json!({"url": "https://example.com/a"})).as_deref(),
+            Some("https://example.com/a")
+        );
+        // Without one of those keys, the input itself, cut to 80 characters.
+        assert_eq!(
+            preview(json!({"query": "rust"})).as_deref(),
+            Some(r#"{"query":"rust"}"#)
+        );
+        let long = preview(json!({"text": "x".repeat(200)})).unwrap();
+        assert_eq!(long.chars().count(), 81);
+        assert!(long.ends_with('…'));
+        // Nothing to show: the tool alone.
+        assert_eq!(preview(json!({})), None);
+        assert_eq!(preview(Value::Null), None);
+        assert_eq!(preview(json!({"command": "  \n "})), None);
+    }
+
+    #[test]
+    fn a_notice_opens_the_conversation_it_is_about() {
+        let ended = Notice::RunEnded {
+            run: Box::new(run("r1", Succeeded, TriggerKind::Schedule)),
+        };
+        assert_eq!(notice_route(&ended, "d"), "/chat/d/r1");
+        let RuntimeEvent::ApprovalRequested { approval } = asked("r2") else {
+            unreachable!()
+        };
+        let ask = Notice::ApprovalNeeded {
+            run_id: approval.run_id,
+            tool: approval.tool,
+            input: approval.input,
+        };
+        assert_eq!(notice_route(&ask, "d"), "/chat/d/r2");
+        let failed = Notice::ScheduleFailed {
+            dot_id: "d".into(),
+            error: None,
+        };
+        assert_eq!(notice_route(&failed, "d"), "/home/d");
+        for kind in [MessageKind::Question, MessageKind::Note] {
+            let message = Notice::MessagePosted {
+                message: Box::new(posted(kind)),
+            };
+            assert_eq!(notice_route(&message, "d"), "/home/d");
+        }
+    }
+
+    #[test]
+    fn nothing_notifies_about_the_dot_being_viewed() {
+        assert!(quiet(Some("d"), Some("d")));
+        assert!(!quiet(Some("d"), Some("other")));
+        assert!(!quiet(Some("d"), None));
+        // A notice whose dot is unknown (its run is gone) is not about the viewed dot.
+        assert!(!quiet(None, Some("d")));
+        assert!(!quiet(None, None));
     }
 }

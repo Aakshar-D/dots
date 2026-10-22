@@ -36,8 +36,22 @@ pub fn claude_program_message(program: &str) -> String {
     )
 }
 
-/// Saves `settings`, after the user's yes when they name a new Claude program. `ask` is given
-/// the question and answers whether the user allowed it; the app passes the native dialog.
+/// The title of the question about a new Claude program.
+pub const CLAUDE_TITLE: &str = "Change the Claude program?";
+/// The title of the question about a new Edge program (browser spec section 6).
+pub const EDGE_TITLE: &str = "Change the Edge program?";
+
+/// The question about a new Edge program: Dots starts it for every dot that uses the browser.
+pub fn edge_program_message(program: &str) -> String {
+    format!(
+        "Dots will run this program as Microsoft Edge for the dots that use the browser:\n\n\
+         {program}\n\nAllow this only for a program you trust."
+    )
+}
+
+/// Saves `settings`, after the user's yes when they name a new Claude program or a new Edge
+/// program (browser spec section 6), asked in that order. `ask` is given the title and the
+/// question and answers whether the user allowed it; the app passes the native dialog.
 ///
 /// The order is the point of this function. The path is trimmed once, so the string compared,
 /// shown and saved is the same one. Invalid settings are refused before anything is asked, so
@@ -46,21 +60,30 @@ pub fn claude_program_message(program: &str) -> String {
 pub async fn save_settings_confirmed<F, Fut>(
     rt: &Runtime,
     mut settings: Settings,
-    ask: F,
+    mut ask: F,
 ) -> Result<SettingsSaved, CmdError>
 where
-    F: FnOnce(String) -> Fut,
+    F: FnMut(&'static str, String) -> Fut,
     Fut: Future<Output = bool>,
 {
     settings.claude_path = settings.claude_path.map(|p| p.trim().to_string());
+    settings.edge_path = settings.edge_path.map(|p| p.trim().to_string());
     settings.validate()?;
     let stored = rt.settings().await;
     if let Some(program) = claude_program_to_confirm(
         stored.claude_path.as_deref(),
         settings.claude_path.as_deref(),
     ) {
-        if !ask(claude_program_message(&program)).await {
+        if !ask(CLAUDE_TITLE, claude_program_message(&program)).await {
             return Err(CmdError::cancelled("the Claude program was not changed"));
+        }
+    }
+    // The same rule for the Edge program: only a new, non-empty path asks.
+    if let Some(program) =
+        claude_program_to_confirm(stored.edge_path.as_deref(), settings.edge_path.as_deref())
+    {
+        if !ask(EDGE_TITLE, edge_program_message(&program)).await {
+            return Err(CmdError::cancelled("the Edge program was not changed"));
         }
     }
     Ok(rt.update_settings(settings).await?)
@@ -1025,7 +1048,7 @@ mod tests {
         answer: bool,
     ) -> (Result<SettingsSaved, CmdError>, Vec<String>) {
         let mut asked = Vec::new();
-        let result = save_settings_confirmed(rt, settings, |message| {
+        let result = save_settings_confirmed(rt, settings, |_title, message| {
             asked.push(message);
             std::future::ready(answer)
         })
@@ -1163,6 +1186,43 @@ mod tests {
             Some(PROGRAM)
         );
         assert_eq!(asked, [claude_program_message(PROGRAM)]);
+        rt.shutdown();
+    }
+
+    #[tokio::test]
+    async fn a_new_edge_program_is_confirmed_and_a_declined_one_is_not_saved() {
+        const EDGE: &str = "D:/Apps/Edge/msedge.exe";
+        let dir = tempfile::tempdir().unwrap();
+        let rt = runtime(&dir).await;
+        let before = rt.settings().await;
+        let edge = |path: Option<&str>| Settings {
+            edge_path: path.map(str::to_string),
+            ..before.clone()
+        };
+
+        let (result, asked) = save(&rt, edge(Some(EDGE)), false).await;
+        assert_eq!(
+            result,
+            Err(CmdError::cancelled("the Edge program was not changed"))
+        );
+        assert_eq!(asked, [edge_program_message(EDGE)]);
+        assert_eq!(rt.settings().await, before);
+
+        // Allowed: trimmed once, saved as shown, and used from the next start of an Edge.
+        let typed = format!(" {EDGE} ");
+        let (result, asked) = save(&rt, edge(Some(typed.as_str())), true).await;
+        let saved = result.unwrap();
+        assert_eq!(asked, [edge_program_message(EDGE)]);
+        assert_eq!(saved.settings.edge_path.as_deref(), Some(EDGE));
+        assert!(!saved.restart_required);
+
+        // The same program, or none: no question.
+        let (result, asked) = save(&rt, saved.settings.clone(), false).await;
+        assert!(result.is_ok());
+        assert_eq!(asked, [] as [String; 0]);
+        let (result, asked) = save(&rt, edge(None), false).await;
+        assert_eq!(result.unwrap().settings.edge_path, None);
+        assert_eq!(asked, [] as [String; 0]);
         rt.shutdown();
     }
 }

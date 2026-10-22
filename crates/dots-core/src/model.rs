@@ -83,6 +83,11 @@ pub struct DotSpec {
     /// The Library items the dot uses (MCP/skills spec section 2).
     #[serde(default)]
     pub uses: Uses,
+    /// The dot has a browser: a visible Microsoft Edge with its own profile, driven through
+    /// Playwright MCP behind Dots' gate (browser spec section 2.4). A spec written before it
+    /// existed reads as off.
+    #[serde(default)]
+    pub browser: bool,
     /// The first prompt starts with the global instructions of Settings (context library spec
     /// section 2).
     #[serde(default = "yes")]
@@ -107,6 +112,7 @@ impl DotSpec {
             schedule: None,
             policy: Policy::preset(Preset::Sandboxed),
             uses: Uses::default(),
+            browser: false,
             use_global_instructions: true,
             use_user_settings: false,
             max_turns: 40,
@@ -173,6 +179,10 @@ pub struct Dot {
     pub webhook_token: String,
     pub created_at: String,
     pub updated_at: String,
+    /// When the person last looked at the dot's conversation, RFC 3339 UTC; `None` before the
+    /// first time (needs-you spec section 2).
+    #[serde(default)]
+    pub seen_at: Option<String>,
     #[serde(flatten)]
     pub spec: DotSpec,
 }
@@ -435,6 +445,10 @@ pub struct DotOverview {
     pub last_run: Option<Run>,
     /// `None` without a schedule.
     pub schedule_state: Option<ScheduleView>,
+    /// Its open questions and pending approvals (needs-you spec section 2).
+    pub needs_you: u32,
+    /// `needs_you`, plus its runs that ended and its notes posted after `dot.seen_at`.
+    pub unread: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

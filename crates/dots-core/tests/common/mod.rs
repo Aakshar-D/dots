@@ -1,7 +1,10 @@
 #![allow(dead_code)]
 
 pub mod clock;
+pub mod edge_pipe;
+pub mod fake_browser;
 pub mod fake_mcp;
+pub mod playwright;
 pub mod tz;
 
 use std::path::Path;
@@ -63,6 +66,7 @@ pub fn fake_dot(name: &str, workdir: &Path, mode: WorkspaceMode) -> Dot {
         webhook_token: "t".into(),
         created_at: "2026-10-08T00:00:00.000Z".into(),
         updated_at: "2026-10-08T00:00:00.000Z".into(),
+        seen_at: None,
         spec: s,
     }
 }

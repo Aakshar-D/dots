@@ -2,6 +2,7 @@
 mod macros;
 
 pub mod approvals;
+pub mod browser;
 pub mod chatgpt;
 pub mod checkins;
 pub mod context;

@@ -42,6 +42,9 @@ user's approval.
 Watchers (polling GitHub/SF/folders), connecting remote machines, multi-user, cloud hosting,
 a CLI client, a separate daemon process.
 
+Browser use is in scope from `2026-10-21-browser-design.md`: a dot with `browser` on drives a
+visible Microsoft Edge with its own profile through Playwright MCP, behind Dots' browser gate.
+
 ### Constraint: subscription use
 
 A Claude subscription is used only through the official `claude` CLI, logged in as the user,
@@ -396,6 +399,10 @@ was approved" (MCP/skills spec §4). On the Claude engine the grant carries that
     `Context`, `Notify`, `Ask` and `FollowUp`: their rules are not passed to the CLI's
     `--allowedTools` / `--disallowedTools`, because the CLI has no such tools, and Dots' own
     `dots` server checks each call against them on the Claude engine.
+  - From the browser spec, the rule kinds `Browser(<site>)` and `BrowserRisky(<site>)` (`allow`,
+    `ask` or `deny`; `<site>` a lower-case host or `*`). Dots' browser gate reads them for the
+    `browser` tools before the dot's other rules (deny, then ask, then allow); no preset carries
+    them and the CLI never sees them (`2026-10-21-browser-design.md` sections 3 and 6).
   - `read-only`: allow Read/LS/Glob/Grep; deny Write/Edit/Bash; default deny.
   - `sandboxed` (default): allow Read/LS/Glob/Grep, `Write(./**)`, `Edit(./**)`,
     `Bash(git status:*)`, `Bash(git diff:*)`, `Bash(git add:*)`; deny

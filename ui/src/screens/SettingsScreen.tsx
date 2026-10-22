@@ -5,6 +5,7 @@ import { toast } from "sonner";
 
 import { CommandError, commands } from "@/api/commands";
 import { LIMITS, type Settings, type Status } from "@/api/types";
+import { BrowserSettings } from "@/components/BrowserSettings";
 import { ErrorNote } from "@/components/ErrorNote";
 import { Field } from "@/components/Field";
 import { Page } from "@/components/Page";
@@ -121,8 +122,11 @@ function Form({ stored, status }: { stored: Settings; status: Status | undefined
       toast.success(saved.restart_required ? "Saved. Restart Dots to apply." : "Saved");
     },
   });
-  // Declining the native confirmation is the user's own answer, not a failure.
-  const declined = save.error instanceof CommandError && save.error.kind === "cancelled";
+  // Declining a native confirmation is the user's own answer, not a failure. The answer names
+  // the program that was not changed.
+  const cancelled = save.error instanceof CommandError && save.error.kind === "cancelled";
+  const declined = cancelled && save.error?.message === "the Claude program was not changed";
+  const edgeDeclined = cancelled && save.error?.message === "the Edge program was not changed";
   const pause = useMutation({
     mutationFn: commands.setSchedulesPaused,
     onSuccess: (next) => {
@@ -142,7 +146,11 @@ function Form({ stored, status }: { stored: Settings; status: Status | undefined
   function submit() {
     setTried(true);
     if (Object.keys(errors).length > 0) return;
-    save.mutate({ ...draft, claude_path: claudePath.trim() || null });
+    save.mutate({
+      ...draft,
+      claude_path: claudePath.trim() || null,
+      edge_path: draft.edge_path?.trim() || null,
+    });
   }
   function addEndpoint() {
     const url = newEndpoint.trim();
@@ -167,7 +175,7 @@ function Form({ stored, status }: { stored: Settings; status: Status | undefined
         </Button>
       }
     >
-      {save.isError && !declined && <ErrorNote error={save.error} />}
+      {save.isError && !cancelled && <ErrorNote error={save.error} />}
 
       <ChatGptAccount />
 
@@ -302,6 +310,18 @@ function Form({ stored, status }: { stored: Settings; status: Status | undefined
             }}
           />
         </Field>
+      </Section>
+
+      <Section title="Browser">
+        <BrowserSettings
+          edgePath={draft.edge_path ?? ""}
+          declined={edgeDeclined}
+          onEdgePath={(edge_path) => {
+            set({ edge_path });
+            // "Not saved" is about the path that was declined, not about this one.
+            if (edgeDeclined) save.reset();
+          }}
+        />
       </Section>
 
       <Section title="Local endpoints">

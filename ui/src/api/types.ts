@@ -104,6 +104,8 @@ const dotSpecShape = {
   schedule: nullable(Schedule),
   policy: Policy,
   uses: Uses,
+  // A visible Microsoft Edge with the dot's own profile (browser spec section 2.4).
+  browser: z.boolean(),
   use_global_instructions: z.boolean(),
   use_user_settings: z.boolean(),
   max_turns: z.number().int(),
@@ -117,6 +119,8 @@ export const Dot = z.strictObject({
   webhook_token: z.string(),
   created_at: z.string(),
   updated_at: z.string(),
+  // When the person last looked at its conversation (RFC 3339 UTC); null before the first time.
+  seen_at: nullable(z.string()),
   ...dotSpecShape,
 });
 
@@ -264,6 +268,8 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("message_updated"), message: Message }),
   // A follow-up of the dot was scheduled, fired, cancelled or skipped.
   z.strictObject({ type: z.literal("follow_ups_updated"), dot_id: z.string() }),
+  // The person looked at the dot's conversation, or the core marked the viewed dot seen.
+  z.strictObject({ type: z.literal("dot_seen"), dot_id: z.string() }),
 ]);
 
 export const ClaudeStatus = z.strictObject({
@@ -292,10 +298,17 @@ export const Settings = z.strictObject({
   global_instructions: z.string(),
   // A dot's note notifies; a question always does.
   notify_on_notes: z.boolean(),
+  // The Edge program dots browse with; null uses the installed one.
+  edge_path: nullable(z.string()),
 });
 export const SettingsSaved = z.strictObject({
   settings: Settings,
   restart_required: z.boolean(),
+});
+// Where Microsoft Edge and Node.js (npx) were found (browser spec section 7).
+export const BrowserStatus = z.strictObject({
+  edge: nullable(z.string()),
+  npx: nullable(z.string()),
 });
 
 // Where a dot's schedule stands (Scheduler v2 spec §8). Times are RFC 3339 local.
@@ -316,6 +329,10 @@ export const DotOverview = z.strictObject({
   last_run: nullable(Run),
   // Null without a schedule.
   schedule_state: nullable(ScheduleView),
+  // Its open questions and pending approvals.
+  needs_you: z.number().int(),
+  // `needs_you`, plus its runs that ended and its notes posted since it was last seen.
+  unread: z.number().int(),
 });
 
 export const PendingApproval = z.strictObject({
@@ -603,6 +620,7 @@ export type ClaudeStatus = z.infer<typeof ClaudeStatus>;
 export type Status = z.infer<typeof Status>;
 export type Settings = z.infer<typeof Settings>;
 export type SettingsSaved = z.infer<typeof SettingsSaved>;
+export type BrowserStatus = z.infer<typeof BrowserStatus>;
 export type ScheduleView = z.infer<typeof ScheduleView>;
 export type DotOverview = z.infer<typeof DotOverview>;
 export type PendingApproval = z.infer<typeof PendingApproval>;

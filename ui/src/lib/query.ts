@@ -27,6 +27,9 @@ export const keys = {
   settings: ["settings"] as const,
   chatGptAccount: ["chatgpt-account"] as const,
   overview: ["overview"] as const,
+  /// The sum of the dots' unread counts (the Home link). Under the overview's key, so that
+  /// whatever marks the overview stale marks it too.
+  unreadTotal: ["overview", "unread"] as const,
   inbox: ["inbox"] as const,
   library: ["library"] as const,
   installedPlugins: ["installed-plugins"] as const,
