@@ -19,6 +19,7 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 use super::rpc::Peer;
 use super::{McpError, MAX_MESSAGE_BYTES};
 use crate::proc::Job;
+use crate::vault::redact::global;
 
 /// The stderr bytes of one server that reach the log; the rest is read and dropped.
 const STDERR_LOG_CAP: usize = 64 * 1024;
@@ -212,17 +213,78 @@ async fn read(
     peer.stop();
 }
 
+/// Cuts a server's stderr into the lines that reach the log, up to a cap. A line is scrubbed of
+/// secret values before it is logged. Where the cap cuts a line in two, the cut is made after
+/// the scrub, from text read past the cap by the length of the longest secret: a secret across
+/// the cap would otherwise leave a piece that no scrub matches.
+struct StderrLines {
+    cap: usize,
+    line: Vec<u8>,
+    seen: usize,
+    capped: bool,
+}
+
+impl StderrLines {
+    fn new(cap: usize) -> StderrLines {
+        StderrLines {
+            cap,
+            line: Vec::new(),
+            seen: 0,
+            capped: false,
+        }
+    }
+
+    fn flush(&mut self, out: &mut Vec<String>) {
+        if !self.line.is_empty() {
+            let text = String::from_utf8_lossy(&self.line);
+            out.push(global().scrub(&text).trim_end().to_string());
+            self.line.clear();
+        }
+    }
+
+    /// The lines that `bytes` completes.
+    fn feed(&mut self, bytes: &[u8]) -> Vec<String> {
+        let mut out = Vec::new();
+        let limit = self.cap + global().longest();
+        for &b in bytes {
+            if self.capped {
+                break;
+            }
+            if b == b'\n' {
+                self.flush(&mut out);
+            } else {
+                self.line.push(b);
+            }
+            self.seen += 1;
+            if self.seen >= limit {
+                self.capped = true;
+                if !self.line.is_empty() {
+                    let text = String::from_utf8_lossy(&self.line);
+                    out.push(global().scrub_clipped_tail(&text).trim_end().to_string());
+                    self.line.clear();
+                }
+            }
+        }
+        out
+    }
+
+    /// The last line, when the stream ends inside it.
+    fn finish(&mut self) -> Vec<String> {
+        let mut out = Vec::new();
+        self.flush(&mut out);
+        out
+    }
+}
+
 /// Logs stderr line by line, up to `STDERR_LOG_CAP` bytes, and drains the rest, inside a line
 /// too, so the server never blocks on a full pipe and nothing grows.
 async fn log_stderr(stderr: ChildStderr, name: String) {
     let mut reader = BufReader::new(stderr);
-    let mut line: Vec<u8> = Vec::new();
-    let mut logged = 0;
-    let flush = |line: &mut Vec<u8>| {
-        if !line.is_empty() {
-            let text = String::from_utf8_lossy(line);
-            tracing::info!(server = %name, "MCP server stderr: {}", text.trim_end());
-            line.clear();
+    let mut lines = StderrLines::new(STDERR_LOG_CAP);
+    let mut warned = false;
+    let log = |lines: Vec<String>| {
+        for text in lines {
+            tracing::info!(server = %name, "MCP server stderr: {text}");
         }
     };
     while let Ok(chunk) = reader.fill_buf().await {
@@ -230,24 +292,14 @@ async fn log_stderr(stderr: ChildStderr, name: String) {
             break;
         }
         let n = chunk.len();
-        for &b in chunk {
-            if logged >= STDERR_LOG_CAP {
-                break;
-            }
-            if b == b'\n' {
-                flush(&mut line);
-            } else {
-                line.push(b);
-            }
-            logged += 1;
-            if logged >= STDERR_LOG_CAP {
-                flush(&mut line);
-                tracing::warn!(server = %name, "the MCP server writes more to stderr; the rest is not logged");
-            }
+        log(lines.feed(chunk));
+        if lines.capped && !warned {
+            warned = true;
+            tracing::warn!(server = %name, "the MCP server writes more to stderr; the rest is not logged");
         }
         reader.consume(n);
     }
-    flush(&mut line);
+    log(lines.finish());
 }
 
 /// Owns the process until it has gone. On shutdown the server has `grace` to exit by itself
@@ -306,4 +358,44 @@ pub fn resolve_program(command: &str, path: Option<&OsStr>, pathext: Option<&OsS
     #[cfg(not(windows))]
     let _ = (path, pathext);
     PathBuf::from(command)
+}
+
+#[cfg(test)]
+mod stderr_tests {
+    use super::*;
+
+    /// Whether `text` holds any 8 bytes of `secret` in a row.
+    fn holds_piece(text: &str, secret: &str) -> bool {
+        secret
+            .as_bytes()
+            .windows(8)
+            .any(|w| text.contains(std::str::from_utf8(w).unwrap()))
+    }
+
+    #[test]
+    fn a_secret_across_the_cap_leaves_no_piece_in_the_log() {
+        let secret = "stderr-cap-secret-0123456789";
+        global().add("DOTS_STDERR_CAP", secret);
+        for pad in 0..secret.len() {
+            let mut lines = StderrLines::new(40);
+            // The log stops `longest()` bytes past the cap; the secret straddles that point.
+            let limit = 40 + global().longest();
+            let input = format!("{}{secret}{}", "x".repeat(limit - pad), "z".repeat(200));
+            let mut out = lines.feed(input.as_bytes());
+            out.extend(lines.finish());
+            let all = out.join("\n");
+            assert!(!holds_piece(&all, secret), "pad {pad}: {all}");
+            assert!(lines.capped);
+        }
+    }
+
+    #[test]
+    fn whole_lines_are_scrubbed_and_the_last_one_is_kept() {
+        let secret = "stderr-line-secret-9876543210";
+        global().add("DOTS_STDERR_LINE", secret);
+        let mut lines = StderrLines::new(4096);
+        let mut out = lines.feed(format!("a {secret}\nb").as_bytes());
+        out.extend(lines.finish());
+        assert_eq!(out, ["a [secret:DOTS_STDERR_LINE]", "b"]);
+    }
 }

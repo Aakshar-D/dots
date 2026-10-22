@@ -130,7 +130,7 @@ pub async fn ask_once(req: &Once<'_>, cancel: &CancellationToken) -> Result<Stri
         }
         read
     });
-    let mut stderr_task = tokio::spawn(crate::proc::read_tail(stderr, STDERR_TAIL));
+    let mut stderr_task = tokio::spawn(crate::proc::read_scrubbed_tail(stderr, STDERR_TAIL));
 
     let end = tokio::select! {
         s = child.wait() => End::Exited(s.ok()),

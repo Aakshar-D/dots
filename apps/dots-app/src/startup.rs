@@ -199,6 +199,9 @@ pub fn record_panic(
         thread.unwrap_or("<unnamed>"),
         message.unwrap_or("(no message)"),
     );
+    // A secret in the message is scrubbed here, as the logger's writer would. `try_scrub` never
+    // waits: the panic may have happened while the redactor was being written.
+    let line = dots_core::vault::redact::global().try_scrub(&line);
     if let Some(mut log) = appender(log_dir) {
         let _ = log.write_all(line.as_bytes());
     }
@@ -479,6 +482,22 @@ mod tests {
         std::fs::write(&file, "x").unwrap();
         record_panic(&file.join("logs"), Some("main"), Some(here), Some("boom"));
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "x");
+    }
+
+    #[test]
+    fn a_panic_message_is_scrubbed_of_secret_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let logs = dir.path().join("logs");
+        dots_core::vault::redact::global().add("DOTS_PANIC_TOKEN", "ghp_panic_value_0123456789");
+        record_panic(
+            &logs,
+            Some("main"),
+            None,
+            Some("bad token ghp_panic_value_0123456789"),
+        );
+        let text = only_log_file(&logs);
+        assert!(!text.contains("ghp_panic"), "{text}");
+        assert!(text.contains("[secret:DOTS_PANIC_TOKEN]"), "{text}");
     }
 
     #[test]

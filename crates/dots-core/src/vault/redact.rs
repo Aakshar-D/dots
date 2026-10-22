@@ -21,7 +21,7 @@ pub struct Redactor {
 
 impl std::fmt::Debug for Redactor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let count = self.spellings.read().map(|s| s.len()).unwrap_or(0);
+        let count = self.spellings.read().map_or(0, |s| s.len());
         f.debug_struct("Redactor")
             .field("spellings", &count)
             .finish()
@@ -52,12 +52,38 @@ fn url_encoded(value: &str, plus: bool, lower: bool) -> String {
     out
 }
 
+/// The base64 text that stays the same wherever `value` sits in a longer encoded text: a value
+/// at offset 1 or 2 of a three-byte group (`base64("user:" + token)`), or followed by more
+/// data (`echo $T | base64` adds a newline), encodes differently at its edges. For each of the
+/// three offsets, the characters that lie wholly inside the value, in both alphabets. A core
+/// shorter than `MIN_REDACT_BYTES` characters is left out.
+fn base64_cores(value: &str) -> Vec<String> {
+    use base64::engine::general_purpose::{STANDARD_NO_PAD, URL_SAFE_NO_PAD};
+    let n = value.len();
+    let mut out = Vec::new();
+    for offset in 0..3usize {
+        let mut bytes = vec![0u8; offset];
+        bytes.extend_from_slice(value.as_bytes());
+        // Character j holds bits 6j..6j+6; the value holds bits 8*offset..8*(offset+n).
+        let first = (8 * offset).div_ceil(6);
+        let end = 8 * (offset + n) / 6;
+        for engine in [&STANDARD_NO_PAD, &URL_SAFE_NO_PAD] {
+            let encoded = engine.encode(&bytes);
+            if end > first && end - first >= MIN_REDACT_BYTES {
+                out.push(encoded[first..end].to_string());
+            }
+        }
+    }
+    out
+}
+
 /// The spellings of `value` that text may carry: as it is, URL-encoded (`%20` and `+` for a
 /// space, upper and lower case hex), inside a JSON string, and in standard and URL-safe base64.
 pub fn spellings(value: &str) -> Vec<String> {
     use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD};
     let json = serde_json::to_string(value).unwrap_or_default();
-    let mut out = vec![
+    let mut out = base64_cores(value);
+    out.extend([
         value.to_string(),
         url_encoded(value, false, false),
         url_encoded(value, true, false),
@@ -67,7 +93,7 @@ pub fn spellings(value: &str) -> Vec<String> {
         STANDARD_NO_PAD.encode(value),
         URL_SAFE.encode(value),
         URL_SAFE_NO_PAD.encode(value),
-    ];
+    ]);
     out.retain(|s| !s.is_empty());
     out.sort();
     out.dedup();
@@ -75,13 +101,67 @@ pub fn spellings(value: &str) -> Vec<String> {
 }
 
 impl Redactor {
+    /// The lock, whether or not a panic poisoned it: the list is only ever appended to whole.
+    fn read(&self) -> std::sync::RwLockReadGuard<'_, Vec<(String, String)>> {
+        self.spellings
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn write(&self) -> std::sync::RwLockWriteGuard<'_, Vec<(String, String)>> {
+        self.spellings
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// The length of the longest spelling registered: how many bytes of a secret a cut can
+    /// leave behind. A text is scrubbed before it is cut, and a buffer that keeps only a tail
+    /// keeps this much more, so that a secret across the cut is whole when it is scrubbed.
+    pub fn longest(&self) -> usize {
+        self.read().first().map_or(0, |(s, _)| s.len())
+    }
+
+    /// Like `scrub`, for a caller that must not block (a panic hook): text is returned as it is
+    /// when the list is being written.
+    pub fn try_scrub<'a>(&self, text: &'a str) -> Cow<'a, str> {
+        match self.spellings.try_read() {
+            Ok(all) => Self::scrub_with(&all, text),
+            Err(std::sync::TryLockError::Poisoned(p)) => Self::scrub_with(&p.into_inner(), text),
+            Err(std::sync::TryLockError::WouldBlock) => Cow::Borrowed(text),
+        }
+    }
+
+    /// Scrubs `text`, the end of a stream whose head was cut off, and drops the first bytes
+    /// where a secret cut in two may have left its end.
+    pub fn scrub_clipped_head(&self, text: &str) -> String {
+        let scrubbed = self.scrub(text);
+        let mut start = self.longest().saturating_sub(1).min(scrubbed.len());
+        while !scrubbed.is_char_boundary(start) {
+            start += 1;
+        }
+        scrubbed[start..].to_string()
+    }
+
+    /// Scrubs `text`, the start of a stream cut off after it, and drops the last bytes where a
+    /// secret cut in two may have left its start.
+    pub fn scrub_clipped_tail(&self, text: &str) -> String {
+        let scrubbed = self.scrub(text);
+        let mut end = scrubbed
+            .len()
+            .saturating_sub(self.longest().saturating_sub(1));
+        while !scrubbed.is_char_boundary(end) {
+            end -= 1;
+        }
+        scrubbed[..end].to_string()
+    }
+
     /// Scrubs `value` as the secret `name` from now on. A value shorter than
     /// `MIN_REDACT_BYTES` is left alone.
     pub fn add(&self, name: &str, value: &str) {
         if value.len() < MIN_REDACT_BYTES {
             return;
         }
-        let mut all = self.spellings.write().unwrap();
+        let mut all = self.write();
         for spelling in spellings(value) {
             if !all.iter().any(|(s, _)| *s == spelling) {
                 all.push((spelling, name.to_string()));
@@ -92,12 +172,15 @@ impl Redactor {
 
     /// `text` with every spelling of every secret replaced by `[secret:NAME]`, longest first.
     pub fn scrub<'a>(&self, text: &'a str) -> Cow<'a, str> {
-        let all = self.spellings.read().unwrap();
+        Self::scrub_with(&self.read(), text)
+    }
+
+    fn scrub_with<'a>(all: &[(String, String)], text: &'a str) -> Cow<'a, str> {
         if !all.iter().any(|(s, _)| text.contains(s.as_str())) {
             return Cow::Borrowed(text);
         }
         let mut out = text.to_string();
-        for (spelling, name) in all.iter() {
+        for (spelling, name) in all {
             if out.contains(spelling.as_str()) {
                 out = out.replace(spelling.as_str(), &format!("[secret:{name}]"));
             }
@@ -145,5 +228,39 @@ impl<W: Write> Write for RedactWriter<W> {
 
     fn flush(&mut self) -> std::io::Result<()> {
         self.inner.flush()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+
+    #[test]
+    fn a_poisoned_lock_does_not_stop_the_scrub() {
+        let r = Arc::new(Redactor::default());
+        r.add("POISON", "poison-value-12345");
+        let r2 = r.clone();
+        let _ = std::thread::spawn(move || {
+            let _held = r2.spellings.write().unwrap();
+            panic!("poisons the lock");
+        })
+        .join();
+        r.add("AFTER", "after-poison-value-1");
+        assert_eq!(r.scrub("poison-value-12345").as_ref(), "[secret:POISON]");
+        assert_eq!(
+            r.try_scrub("after-poison-value-1").as_ref(),
+            "[secret:AFTER]"
+        );
+        assert!(r.longest() > 0);
+    }
+
+    #[test]
+    fn try_scrub_never_waits_for_a_writer() {
+        let r = Redactor::default();
+        r.add("HELD", "held-value-12345");
+        let _writer = r.spellings.write().unwrap();
+        assert_eq!(r.try_scrub("held-value-12345").as_ref(), "held-value-12345");
     }
 }

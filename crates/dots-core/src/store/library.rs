@@ -11,6 +11,7 @@ use crate::library::{
 };
 use crate::model::Dot;
 use crate::util::{new_id, now};
+use crate::vault::redact::global;
 use crate::{Error, Result};
 
 const ITEM_COLUMNS: &str = "id, kind, name, config, owner_id, created_at, updated_at";
@@ -402,7 +403,7 @@ impl Store {
              RETURNING {CATALOG_COLUMNS}"
         ))
         .bind(CatalogStatus::Unreachable.as_str())
-        .bind(error)
+        .bind(global().scrub(error).as_ref())
         .bind(now())
         .bind(server_id)
         .fetch_optional(&self.pool)

@@ -186,7 +186,7 @@ impl Store {
              parked = COALESCE(?, parked) WHERE id = ? AND status = 'pending'",
         )
         .bind(status.as_str())
-        .bind(note)
+        .bind(note.map(|n| global().scrub(n).into_owned()))
         .bind(now())
         .bind(parked.map(i64::from))
         .bind(id)

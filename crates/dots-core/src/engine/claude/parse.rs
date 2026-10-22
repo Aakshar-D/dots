@@ -120,7 +120,10 @@ fn tool_result_block(b: &Value) -> Option<EngineEvent> {
     })
 }
 
-fn truncate(mut s: String) -> String {
+/// Keeps the first `MAX_OUTPUT` bytes. Secrets are scrubbed first: a cut inside one would leave
+/// a piece that no scrub matches.
+fn truncate(s: String) -> String {
+    let mut s = crate::vault::redact::global().scrub(&s).into_owned();
     if s.len() > MAX_OUTPUT {
         let mut cut = MAX_OUTPUT;
         while !s.is_char_boundary(cut) {
@@ -164,4 +167,19 @@ fn result_events(v: &Value) -> Vec<EngineEvent> {
         });
     }
     out
+}
+
+#[cfg(test)]
+mod redact_tests {
+    use super::*;
+
+    #[test]
+    fn a_tool_output_is_scrubbed_before_it_is_cut() {
+        let secret = "ghp_parse_cut_value_0123456789";
+        crate::vault::redact::global().add("DOTS_PARSE_CUT", secret);
+        // The cut falls 12 bytes into the secret.
+        let output = format!("{}{secret}tail", "o".repeat(MAX_OUTPUT - 12));
+        let out = truncate(output);
+        assert!(!out.contains(&secret[..8]), "{}", &out[MAX_OUTPUT - 40..]);
+    }
 }

@@ -162,6 +162,27 @@ mod job_object {
     }
 }
 
+/// Reads `r` to the end and returns its last `max` bytes, lossily decoded as UTF-8, with the
+/// secret values scrubbed out. The tail is cut after the scrub: a secret across the cut would
+/// leave a piece that no scrub matches.
+pub async fn read_scrubbed_tail(r: impl AsyncRead + Unpin, max: usize) -> String {
+    let keep = max + crate::vault::redact::global().longest();
+    let text = read_tail(r, keep).await;
+    let mut text = if text.len() >= keep {
+        crate::vault::redact::global().scrub_clipped_head(&text)
+    } else {
+        crate::vault::redact::global().scrub(&text).into_owned()
+    };
+    if text.len() > max {
+        let mut start = text.len() - max;
+        while !text.is_char_boundary(start) {
+            start += 1;
+        }
+        text.drain(..start);
+    }
+    text
+}
+
 /// Reads `r` to the end and returns its last `max` bytes, lossily decoded as UTF-8.
 pub async fn read_tail(mut r: impl AsyncRead + Unpin, max: usize) -> String {
     let mut buf: Vec<u8> = Vec::new();

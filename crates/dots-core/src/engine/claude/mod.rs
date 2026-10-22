@@ -176,7 +176,8 @@ impl Engine for ClaudeEngine {
                     }
                 }
             });
-            let mut stderr_task = tokio::spawn(crate::proc::read_tail(stderr, STDERR_TAIL));
+            let mut stderr_task =
+                tokio::spawn(crate::proc::read_scrubbed_tail(stderr, STDERR_TAIL));
 
             let prompt = ctx.prompt.clone();
             let run_id = ctx.run_id.clone();

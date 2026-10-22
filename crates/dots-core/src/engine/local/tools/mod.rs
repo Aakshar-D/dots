@@ -420,8 +420,10 @@ pub fn display(root: &Path, path: &Path) -> String {
     }
 }
 
-/// Keeps the first `MAX_OUTPUT` bytes.
-pub fn cap_head(mut s: String) -> String {
+/// Keeps the first `MAX_OUTPUT` bytes. Secrets are scrubbed first: a cut inside one would leave
+/// a piece that no scrub matches.
+pub fn cap_head(s: String) -> String {
+    let mut s = crate::vault::redact::global().scrub(&s).into_owned();
     if s.len() <= MAX_OUTPUT {
         return s;
     }
@@ -435,8 +437,10 @@ pub fn cap_head(mut s: String) -> String {
     s
 }
 
-/// Keeps the last `MAX_OUTPUT` bytes (the end of command output usually matters most).
+/// Keeps the last `MAX_OUTPUT` bytes (the end of command output usually matters most). Secrets
+/// are scrubbed first, as in `cap_head`.
 pub fn cap_tail(s: String) -> String {
+    let s = crate::vault::redact::global().scrub(&s).into_owned();
     if s.len() <= MAX_OUTPUT {
         return s;
     }
