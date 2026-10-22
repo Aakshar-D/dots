@@ -484,10 +484,11 @@ async fn the_clis_own_and_the_base_variables_are_never_offered_or_imported() {
     let (_dir, store) = temp_store().await;
     let vault = Vault::in_memory(store.clone());
     // A prefix of the CLI's own, a name in CLI_ENV and a name in BASE_ENV, all set for Dots.
+    // Names no other test reads, as the process environment is shared.
     let own = [
         "ANTHROPIC_DOTS_TEST_KEY",
-        "CLAUDE_CONFIG_DIR",
-        "USERPROFILE",
+        "MAX_MCP_OUTPUT_TOKENS",
+        "PUBLIC",
     ];
     let before: Vec<_> = own.iter().map(std::env::var_os).collect();
     for n in own {
@@ -499,8 +500,8 @@ async fn the_clis_own_and_the_base_variables_are_never_offered_or_imported() {
             "reads",
             &LibraryConfig::McpServer(stdio(&[
                 ("A", "${ANTHROPIC_DOTS_TEST_KEY}"),
-                ("B", "${CLAUDE_CONFIG_DIR}"),
-                ("C", "${USERPROFILE}"),
+                ("B", "${MAX_MCP_OUTPUT_TOKENS}"),
+                ("C", "${PUBLIC}"),
                 ("D", "${DOTS_IMPORT_TEST_OTHER}"),
             ])),
             None,
