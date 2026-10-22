@@ -13,6 +13,7 @@ use tokio::process::Command;
 use tokio::sync::mpsc;
 
 use crate::engine::{Engine, EngineEvent, RunContext};
+use crate::vault::child_env::{start_clean, Child};
 use crate::{Error, Result};
 
 pub mod args;
@@ -23,6 +24,7 @@ pub mod parse;
 /// `2.1.295`). `None` when it fails or takes longer than 5 s.
 pub async fn cli_version(program: &Path, env: &[(String, String)]) -> Option<String> {
     let mut cmd = Command::new(program);
+    start_clean(&mut cmd, Child::Cli);
     cmd.arg("--version")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -89,6 +91,14 @@ impl Engine for ClaudeEngine {
         .await?;
 
         let mut cmd = Command::new(&self.program);
+        // Dots' environment stays out; the dot's shell grants go in (env vault spec §8).
+        start_clean(&mut cmd, Child::Cli);
+        cmd.envs(
+            ctx.tools
+                .shell_env()
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str())),
+        );
         cmd.args(args::build_args(&ctx, &mcp_path))
             .current_dir(&ctx.workspace)
             .env(

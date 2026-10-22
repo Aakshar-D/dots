@@ -52,6 +52,8 @@ impl Stdio {
             std::env::var_os("PATHEXT").as_deref(),
         );
         let mut cmd = Command::new(&program);
+        // Only the base of Dots' environment, then the server's own (env vault spec §8).
+        crate::vault::child_env::start_clean(&mut cmd, crate::vault::child_env::Child::Other);
         cmd.args(launch.args)
             .envs(launch.env)
             .stdin(Piped::piped())

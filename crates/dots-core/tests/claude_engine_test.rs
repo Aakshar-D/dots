@@ -14,6 +14,7 @@ use dots_core::model::{Dot, EngineKind, NewRun, RunStatus, TriggerKind, Workspac
 use dots_core::runner::{Runner, RunnerConfig};
 use dots_core::server::{bind, serve, ServerState};
 use dots_core::store::Store;
+use dots_core::vault::{EntryKind, Grants, Vault};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
@@ -417,4 +418,50 @@ async fn missing_program_fails_the_run() {
         .unwrap();
     let failed = wait_status(&e.store, &run.id, RunStatus::Failed, 15).await;
     assert!(failed.error.unwrap().contains("failed to start"));
+}
+
+/// The CLI starts with the base of Dots' environment and the dot's shell grants, nothing else
+/// (env vault spec §8).
+#[tokio::test]
+async fn the_cli_gets_the_shell_grants_and_not_the_rest_of_dots_environment() {
+    std::env::set_var("DOTS_TEST_CLI_LEAK", "from-dots");
+    let e = e2e(json!([init(), success("fake done")]), None).await;
+    let vault = Vault::in_memory(e.store.clone());
+    vault
+        .add("DOTS_TEST_CLI_GRANTED", EntryKind::Secret, "granted-value")
+        .await
+        .unwrap();
+    vault
+        .add("DOTS_TEST_CLI_UNGRANTED", EntryKind::Plain, "not-for-it")
+        .await
+        .unwrap();
+    e.runner.set_vault(vault);
+    let mut s = spec("cli-env");
+    s.workdir = e.dir.path().to_string_lossy().to_string();
+    s.workspace_mode = WorkspaceMode::Folder;
+    s.variables = Grants(
+        [(
+            "shell".to_string(),
+            vec!["DOTS_TEST_CLI_GRANTED".to_string()],
+        )]
+        .into(),
+    );
+    let dot = e.store.create_dot(&s).await.unwrap();
+    let run = e
+        .runner
+        .enqueue(NewRun::new(&dot.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    wait_status(&e.store, &run.id, RunStatus::Succeeded, 15).await;
+    let args = recorded_args(&e);
+    assert_eq!(
+        args["env"],
+        json!({"DOTS_TEST_CLI_GRANTED": "granted-value"})
+    );
+    let names: Vec<String> = serde_json::from_value(args["env_names"].clone()).unwrap();
+    let upper: Vec<String> = names.iter().map(|n| n.to_ascii_uppercase()).collect();
+    assert!(upper.contains(&"PATH".to_string()));
+    assert!(upper.contains(&"MCP_TOOL_TIMEOUT".to_string()));
+    assert!(upper.contains(&"FAKE_CLAUDE_SCRIPT".to_string()));
+    assert!(!upper.contains(&"DOTS_TEST_CLI_LEAK".to_string()));
 }

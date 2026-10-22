@@ -7,6 +7,7 @@ use serde_json::Value;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
+use zeroize::Zeroizing;
 
 use super::{cap_tail, str_arg, ToolOutput, MAX_OUTPUT};
 
@@ -146,7 +147,14 @@ enum End {
     Cancelled,
 }
 
-pub(super) async fn shell(root: &Path, input: &Value, cancel: &CancellationToken) -> ToolOutput {
+/// Runs the call's script in `root`, with the base of Dots' environment and `env`, the values
+/// the dot grants its shell (env vault spec §8).
+pub(super) async fn shell(
+    root: &Path,
+    input: &Value,
+    cancel: &CancellationToken,
+    env: &[(String, Zeroizing<String>)],
+) -> ToolOutput {
     let script = str_arg(input, "command");
     let secs = input
         .get("timeout")
@@ -154,6 +162,8 @@ pub(super) async fn shell(root: &Path, input: &Value, cancel: &CancellationToken
         .unwrap_or(DEFAULT_TIMEOUT_SECS)
         .clamp(1, MAX_TIMEOUT_SECS);
     let (mut cmd, stdin) = command_for(script);
+    crate::vault::child_env::start_clean(&mut cmd, crate::vault::child_env::Child::Other);
+    cmd.envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
     cmd.current_dir(root)
         .stdin(if stdin.is_some() {
             Stdio::piped()

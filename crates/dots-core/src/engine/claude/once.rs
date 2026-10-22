@@ -80,6 +80,7 @@ struct Read {
 /// Cancelling `cancel`, or `limit` passing, ends the CLI and everything it started.
 pub async fn ask_once(req: &Once<'_>, cancel: &CancellationToken) -> Result<String, OnceFailure> {
     let mut cmd = Command::new(req.program);
+    crate::vault::child_env::start_clean(&mut cmd, crate::vault::child_env::Child::Cli);
     cmd.args(once_args(req.model, req.system_prompt))
         .current_dir(req.cwd)
         .stdin(Stdio::piped())
