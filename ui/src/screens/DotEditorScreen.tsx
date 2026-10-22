@@ -159,7 +159,7 @@ function ExistingDot({ dotId }: { dotId: string }) {
       qc.removeQueries({ queryKey: keys.dot(dotId) });
       invalidateDots(qc);
       toast.success("Dot deleted");
-      void navigate("/dots");
+      void navigate("/home");
     },
     onError: notifyError,
   });

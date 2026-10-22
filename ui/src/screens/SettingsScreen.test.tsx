@@ -245,7 +245,7 @@ describe("the Settings screen", () => {
     expect(backend.callsTo("status")).toHaveLength(asked + 2);
   });
 
-  it("makes the Dots list load again after a pause that came during its first load", async () => {
+  it("makes the dots column load again after a pause that came during its first load", async () => {
     let paused = false;
     backend.on("status", () => ({ ...quietStatus, schedules_paused: paused }));
     backend.on("set_schedules_paused", (args) => {
@@ -256,14 +256,14 @@ describe("the Settings screen", () => {
     await screen.findByLabelText("Pause all schedules");
     await listening();
 
-    // The Dots list is read, and left for Settings before its answer is here.
+    // The dots column is read, and left for Settings before its answer is here.
     const before: DotOverview = sample.overview;
     const after: DotOverview = { ...before, dot: { ...before.dot, name: "read-after-the-pause" } };
     const read = later<DotOverview[]>();
     backend.on("dot_overview", () =>
       backend.callsTo("dot_overview").length === 1 ? read.answer : [after],
     );
-    await user.click(screen.getByRole("link", { name: "Dots" }));
+    await user.click(screen.getByRole("link", { name: "Home" }));
     await waitFor(() => expect(backend.callsTo("dot_overview")).toHaveLength(1));
     await user.click(screen.getByRole("link", { name: "Settings" }));
     await user.click(await screen.findByLabelText("Pause all schedules"));
@@ -271,8 +271,8 @@ describe("the Settings screen", () => {
     await act(async () => read.give([before]));
 
     // The answer was read before the pause, so the list is asked for again when it is shown.
-    await user.click(screen.getByRole("link", { name: "Dots" }));
-    expect(await screen.findByRole("link", { name: "read-after-the-pause" })).toBeVisible();
+    await user.click(screen.getByRole("link", { name: "Home" }));
+    expect(await screen.findByRole("listitem", { name: "read-after-the-pause" })).toBeVisible();
     expect(backend.callsTo("dot_overview")).toHaveLength(2);
   });
 
