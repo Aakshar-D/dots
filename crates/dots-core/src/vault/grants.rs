@@ -104,7 +104,8 @@ impl Grants {
             let mut names = self.0.get(&key).cloned().unwrap_or_default();
             if !had.contains(server) {
                 for variable in variables {
-                    if !contains(&names, variable) {
+                    // A name Personal cannot hold never resolves, and `validate` would refuse it.
+                    if check_variable_name(variable).is_ok() && !contains(&names, variable) {
                         names.push(variable.clone());
                     }
                 }

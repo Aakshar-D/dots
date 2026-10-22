@@ -39,9 +39,17 @@ impl Missing {
     }
 }
 
-/// Resolved values by the name they were asked for.
-#[derive(Debug, Clone, Default)]
+/// Resolved values by the name they were asked for. Its `Debug` shows the names only.
+#[derive(Clone, Default)]
 pub struct Resolved(BTreeMap<String, Zeroizing<String>>);
+
+impl std::fmt::Debug for Resolved {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Resolved")
+            .field("names", &self.0.keys().collect::<Vec<_>>())
+            .finish()
+    }
+}
 
 impl Resolved {
     /// The value of `name`, for `McpServerConfig::expanded`.

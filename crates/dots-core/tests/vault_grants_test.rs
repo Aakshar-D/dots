@@ -379,3 +379,49 @@ async fn migration_0009_grants_each_dot_the_variables_of_its_servers() {
     let store = Store::open(&path).await.unwrap();
     assert_eq!(store.get_dot("D1").await.unwrap().spec.variables, want);
 }
+
+#[tokio::test]
+async fn a_name_personal_cannot_hold_is_not_auto_granted_and_the_dot_still_saves() {
+    let (_dir, store) = temp_store().await;
+    let long = "A".repeat(129);
+    store
+        .add_library_item(
+            "wide",
+            &server_with(&[("LONG", &format!("${{{long}}}")), ("OK", "${GOOD}")]),
+            None,
+        )
+        .await
+        .unwrap();
+    let mut s = spec("wide-dot");
+    s.uses.mcp_servers = names(&["wide"]);
+    let dot = store.create_dot(&s).await.unwrap();
+    assert_eq!(dot.spec.variables, grants(&[("mcp:wide", &["GOOD"])]));
+    store.update_dot(&dot.id, &dot.spec).await.unwrap();
+}
+
+#[tokio::test]
+async fn resolved_values_never_print() {
+    let (_dir, store) = temp_store().await;
+    let vault = Vault::in_memory(store);
+    vault
+        .add("DEMO_TOKEN", EntryKind::Secret, "s3cret-made-up-value")
+        .await
+        .unwrap();
+    let github = Consumer::Mcp("github".into());
+    let g = grants(&[("mcp:github", &["DEMO_TOKEN"])]);
+    let resolved = vault
+        .resolve(&g, &github, &names(&["DEMO_TOKEN"]))
+        .await
+        .unwrap()
+        .unwrap();
+    let shown = format!("{resolved:?}");
+    assert!(shown.contains("DEMO_TOKEN"), "{shown}");
+    assert!(!shown.contains("s3cret-made-up-value"), "{shown}");
+    // What does not resolve holds names and a consumer only.
+    let missing = vault
+        .resolve(&g, &github, &names(&["OTHER"]))
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert!(!format!("{missing:?}").contains("s3cret-made-up-value"));
+}
