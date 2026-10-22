@@ -2,7 +2,7 @@ import { act, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { Dot, DotOverview, Run, Status, UpdateNote } from "@/api/types";
-import { localDateTime } from "@/lib/format";
+import { localTime } from "@/lib/format";
 import { keys } from "@/lib/query";
 import { backend, later } from "@/test/backend";
 import { quietStatus, sample } from "@/test/fixtures";
@@ -30,12 +30,12 @@ describe("the app frame", () => {
     backend.on("inbox", () => sample.inbox);
     renderApp("/dots");
     const nav = await screen.findByRole("navigation", { name: "Main" });
-    for (const name of ["Dots", "Chat", "Settings"]) {
-      expect(within(nav).getByRole("link", { name })).toBeVisible();
+    for (const name of ["Home", "Library", "Settings"]) {
+      expect(within(nav).getByRole("link", { name })).toHaveAttribute("title", name);
     }
     // One pending approval, one run to review, one schedule that needs attention and one MCP
     // server whose tools changed.
-    expect(await within(nav).findByRole("link", { name: /^Inbox\s*4$/ })).toBeVisible();
+    expect(await within(nav).findByRole("link", { name: "Inbox, 4 waiting" })).toBeVisible();
   });
 
   it("shows why Dots could not start instead of the app", async () => {
@@ -208,7 +208,7 @@ describe("the app frame", () => {
     expect(backend.callsTo("dot_overview")).toEqual([]);
   });
 
-  it("loads the Dots list again when schedules were resumed during its first load", async () => {
+  it("loads the dots column again when schedules were resumed during its first load", async () => {
     let paused = true;
     backend.on("status", () => ({ ...quietStatus, schedules_paused: paused }));
     backend.on("set_schedules_paused", () => {
@@ -220,7 +220,7 @@ describe("the app frame", () => {
     await listening();
 
     // While paused the core holds the time the dot would have run; a resume moves it on.
-    const next = "2026-10-20T01:00:00.000Z";
+    const next = "2026-10-20T03:30:00.000Z";
     const read = later<DotOverview[]>();
     const moved: DotOverview = {
       ...idle,
@@ -229,14 +229,14 @@ describe("the app frame", () => {
     backend.on("dot_overview", () =>
       backend.callsTo("dot_overview").length === 1 ? read.answer : [moved],
     );
-    await user.click(screen.getByRole("link", { name: "Dots" }));
+    await user.click(screen.getByRole("link", { name: "Home" }));
     await waitFor(() => expect(backend.callsTo("dot_overview")).toHaveLength(1));
     await user.click(screen.getByRole("button", { name: "Resume schedules" }));
     await waitFor(() => expect(screen.queryByText(/Schedules are paused/)).toBeNull());
     // The list was read before the resume.
     await act(async () => read.give([idle]));
 
-    expect(await screen.findByText(localDateTime(next))).toBeVisible();
+    expect(await screen.findByText(`next ${localTime(next)}`)).toBeVisible();
     expect(backend.callsTo("dot_overview")).toHaveLength(2);
   });
 
@@ -313,15 +313,15 @@ describe("the app frame", () => {
     backend.on("dot_overview", () =>
       backend.callsTo("dot_overview").length === 1 ? read.answer : [running],
     );
-    await user.click(screen.getByRole("link", { name: "Dots" }));
+    await user.click(screen.getByRole("link", { name: "Home" }));
     await waitFor(() => expect(backend.callsTo("dot_overview")).toHaveLength(1));
 
     // The first load read an idle dot. Its run starts, and the event that says so is dropped.
     act(() => backend.emit("runtime-lagged", null));
     await act(async () => read.give([idle]));
 
-    const name = `Open the active run of ${idle.dot.name}`;
-    expect(await screen.findByRole("link", { name })).toHaveTextContent("Running");
+    const row = await screen.findByRole("listitem", { name: idle.dot.name });
+    expect(await within(row).findByRole("img", { name: "running" })).toBeVisible();
     expect(backend.callsTo("dot_overview")).toHaveLength(2);
   });
 
@@ -351,7 +351,7 @@ describe("the app frame", () => {
     await listening();
     backend.on("inbox", () => sample.inbox);
     act(() => backend.emit("runtime", { type: "approval_requested", approval: sample.approval }));
-    expect(await within(nav).findByRole("link", { name: /^Inbox\s*4$/ })).toBeVisible();
+    expect(await within(nav).findByRole("link", { name: "Inbox, 4 waiting" })).toBeVisible();
   });
 });
 

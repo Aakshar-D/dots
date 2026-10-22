@@ -205,6 +205,11 @@ function RunApprovalsGroup({ group }: { group: RunApprovals }) {
           asked {relativeTime(group.approvals[0].created_at)} ·{" "}
           <Link to={`/runs/${group.runId}`} className="hover:underline">
             Open the run
+          </Link>{" "}
+          ·{" "}
+          {/* The old chat address of the run opens its topic, in the conversation or alone. */}
+          <Link to={`/chat/${group.dotId}/${group.runId}`} className="hover:underline">
+            Open conversation
           </Link>
         </p>
         {group.approvals.length > 1 && <RunBatch key={batchKey} group={group} />}

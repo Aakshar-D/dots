@@ -15,7 +15,7 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { Transcript } from "@/components/Transcript";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { isActive } from "@/lib/chat-threads";
+import { isActive } from "@/lib/home-topics";
 import { duration, localDateTime } from "@/lib/format";
 import { notifyError } from "@/lib/notify";
 import { eventsQuery, keys } from "@/lib/query";

@@ -10,7 +10,7 @@ import { createQueryClient } from "@/lib/query";
 import { backend } from "./backend";
 
 /// Renders the whole app at `path`, against the fake backend.
-export function renderApp(path = "/dots") {
+export function renderApp(path = "/home") {
   const queryClient = createQueryClient();
   const router = createMemoryRouter(routes, { initialEntries: [path] });
   const view = render(
