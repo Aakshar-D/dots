@@ -164,6 +164,7 @@ async fn the_runtime_keeps_a_tests_secrets_in_memory() {
     let dir = tempfile::tempdir().unwrap();
     let cfg = dots_core::Config::new(dir.path().join("data"));
     assert!(cfg.secrets.is_some());
+    assert!(format!("{:?}", cfg.secrets).contains("MemorySecrets"));
     let settings = dots_core::settings::Settings::default();
     assert!(dots_core::Config::from_settings(dir.path(), &settings)
         .secrets
@@ -175,4 +176,14 @@ async fn the_runtime_keeps_a_tests_secrets_in_memory() {
         .unwrap();
     assert_eq!(rt.vault().list().await.unwrap().len(), 1);
     rt.shutdown();
+}
+
+#[tokio::test]
+async fn a_secret_row_with_a_value_is_refused_by_the_database() {
+    let (_dir, store) = temp_store().await;
+    let refused = store
+        .add_env_entry("LEAK", EntryKind::Secret, Some("ghp_s3cret"))
+        .await;
+    assert!(refused.is_err());
+    assert!(store.list_env_entries().await.unwrap().is_empty());
 }

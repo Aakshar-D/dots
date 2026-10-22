@@ -7,5 +7,7 @@ CREATE TABLE env_entries (
     kind       TEXT NOT NULL,
     value      TEXT,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    CHECK (kind IN ('plain', 'secret')),
+    CHECK (kind = 'plain' OR value IS NULL)
 );

@@ -27,12 +27,7 @@ pub struct EnvEntry {
 
 /// A variable name: a letter or `_`, then letters, digits or `_`, at most 128 characters.
 pub fn check_variable_name(name: &str) -> Result<()> {
-    let mut chars = name.chars();
-    let first_ok = chars
-        .next()
-        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_');
-    let rest_ok = chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
-    if !first_ok || !rest_ok || name.len() > MAX_VARIABLE_NAME {
+    if !crate::mcp::vars::is_var_name(name) || name.len() > MAX_VARIABLE_NAME {
         return Err(Error::Invalid(format!(
             "variable name {name:?}: use 1 to {MAX_VARIABLE_NAME} characters of A-Z, a-z, 0-9 \
              or '_', starting with a letter or '_'"

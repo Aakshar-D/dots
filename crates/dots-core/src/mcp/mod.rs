@@ -13,7 +13,7 @@ mod http;
 mod rpc;
 mod stdio;
 mod tools;
-mod vars;
+pub(crate) mod vars;
 
 use std::collections::HashSet;
 use std::path::PathBuf;

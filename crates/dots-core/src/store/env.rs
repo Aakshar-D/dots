@@ -11,10 +11,15 @@ use crate::{Error, Result};
 const ENTRY_COLUMNS: &str = "name, kind, value, created_at, updated_at";
 
 fn entry_from_row(row: &SqliteRow) -> Result<EnvEntry> {
+    let kind = EntryKind::parse(&row.try_get::<String, _>("kind")?)?;
     Ok(EnvEntry {
         name: row.try_get("name")?,
-        kind: EntryKind::parse(&row.try_get::<String, _>("kind")?)?,
-        value: row.try_get("value")?,
+        kind,
+        // A secret's row holds no value; never hand one out even if a row did.
+        value: match kind {
+            EntryKind::Secret => None,
+            EntryKind::Plain => row.try_get("value")?,
+        },
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })
