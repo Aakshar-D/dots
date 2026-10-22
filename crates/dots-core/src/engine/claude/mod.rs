@@ -68,13 +68,16 @@ impl ClaudeEngine {
     }
 }
 
-/// Writes a file readable only by the owner on unix (it holds a bearer secret).
+/// Writes a file readable only by the owner (it holds a bearer secret): mode 0600 on unix; on
+/// Windows its DACL is set to the owner alone before the secret is written.
 async fn write_private(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
     let mut opts = tokio::fs::OpenOptions::new();
     opts.write(true).create(true).truncate(true);
     #[cfg(unix)]
     opts.mode(0o600);
     let mut f = opts.open(path).await?;
+    #[cfg(windows)]
+    crate::proc::owner_only(path)?;
     f.write_all(data).await?;
     f.flush().await
 }

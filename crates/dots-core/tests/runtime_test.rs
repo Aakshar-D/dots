@@ -48,10 +48,11 @@ async fn webhook_to_success_end_to_end() {
     let t = start(None, None).await;
     let dot = t.rt.create_dot(folder_spec(&t.dir, "hook")).await.unwrap();
     let url = t.rt.webhook_url(&dot).unwrap();
+    let token = t.rt.regenerate_webhook_token(&dot.id).await.unwrap();
     assert!(url.starts_with(&format!("http://127.0.0.1:{}/dots/", t.rt.port())));
     let resp: Value = reqwest::Client::new()
         .post(&url)
-        .bearer_auth(&dot.webhook_token)
+        .bearer_auth(&token)
         .json(&json!({"event": "build_failed"}))
         .send()
         .await

@@ -201,3 +201,94 @@ pub async fn read_tail(mut r: impl AsyncRead + Unpin, max: usize) -> String {
     }
     String::from_utf8_lossy(&buf).to_string()
 }
+
+/// Gives the file at `path` a DACL with one entry, full access for the signed-in user, and no
+/// inherited ones (env vault spec §11: the gateway file holds a run's bearer secret).
+#[cfg(windows)]
+pub fn owner_only(path: &std::path::Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::{CloseHandle, LocalFree, GENERIC_ALL, HANDLE};
+    use windows_sys::Win32::Security::Authorization::{
+        SetEntriesInAclW, SetNamedSecurityInfoW, EXPLICIT_ACCESS_W, SET_ACCESS, SE_FILE_OBJECT,
+        TRUSTEE_IS_SID, TRUSTEE_IS_USER, TRUSTEE_W,
+    };
+    use windows_sys::Win32::Security::{
+        GetTokenInformation, TokenUser, ACL, DACL_SECURITY_INFORMATION, NO_INHERITANCE,
+        PROTECTED_DACL_SECURITY_INFORMATION, TOKEN_QUERY, TOKEN_USER,
+    };
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+    let fail = |code: u32| std::io::Error::from_raw_os_error(code as i32);
+    let mut token: HANDLE = std::ptr::null_mut();
+    // SAFETY: the pseudo handle of this process; `token` receives a handle closed below.
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let mut buf = vec![0u8; 256];
+    let mut len = 0u32;
+    // SAFETY: `buf` is `buf.len()` bytes; a larger need is reported in `len` and retried.
+    let mut ok = unsafe {
+        GetTokenInformation(
+            token,
+            TokenUser,
+            buf.as_mut_ptr().cast(),
+            buf.len() as u32,
+            &mut len,
+        )
+    };
+    if ok == 0 && len as usize > buf.len() {
+        buf = vec![0u8; len as usize];
+        // SAFETY: as above, with the size asked for.
+        ok = unsafe {
+            GetTokenInformation(token, TokenUser, buf.as_mut_ptr().cast(), len, &mut len)
+        };
+    }
+    let err = std::io::Error::last_os_error();
+    // SAFETY: `token` came from OpenProcessToken.
+    unsafe { CloseHandle(token) };
+    if ok == 0 {
+        return Err(err);
+    }
+    // SAFETY: GetTokenInformation filled `buf` with a TOKEN_USER whose SID points into `buf`.
+    let sid = unsafe { (*(buf.as_ptr() as *const TOKEN_USER)).User.Sid };
+    let access = EXPLICIT_ACCESS_W {
+        grfAccessPermissions: GENERIC_ALL,
+        grfAccessMode: SET_ACCESS,
+        grfInheritance: NO_INHERITANCE,
+        Trustee: TRUSTEE_W {
+            TrusteeForm: TRUSTEE_IS_SID,
+            TrusteeType: TRUSTEE_IS_USER,
+            ptstrName: sid.cast(),
+            ..Default::default()
+        },
+    };
+    let mut acl: *mut ACL = std::ptr::null_mut();
+    // SAFETY: one entry, no old ACL; `acl` receives a LocalAlloc'd ACL freed below.
+    let code = unsafe { SetEntriesInAclW(1, &access, std::ptr::null(), &mut acl) };
+    if code != 0 {
+        return Err(fail(code));
+    }
+    let wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    // SAFETY: `wide` is NUL-terminated and `acl` valid until it is freed after the call.
+    let code = unsafe {
+        SetNamedSecurityInfoW(
+            wide.as_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            acl,
+            std::ptr::null(),
+        )
+    };
+    // SAFETY: `acl` came from SetEntriesInAclW.
+    unsafe { LocalFree(acl.cast()) };
+    if code != 0 {
+        return Err(fail(code));
+    }
+    Ok(())
+}

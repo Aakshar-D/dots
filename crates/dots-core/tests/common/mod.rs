@@ -60,7 +60,7 @@ pub fn fake_dot(name: &str, workdir: &Path, mode: WorkspaceMode) -> Dot {
     s.workspace_mode = mode;
     Dot {
         id: format!("dot-{name}"),
-        webhook_token: "t".into(),
+        has_webhook_token: true,
         created_at: "2026-10-08T00:00:00.000Z".into(),
         updated_at: "2026-10-08T00:00:00.000Z".into(),
         spec: s,

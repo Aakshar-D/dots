@@ -435,7 +435,7 @@ fn with_checkins(stored: &str) -> Option<String> {
 }
 
 /// Grants each dot listed in `upgrade_0009` the variables of the servers it uses, as ticking
-/// them would (env vault spec §11 step 2), then drops the table. After 0006, so the servers it
+/// them would (env vault spec §11 step 2), hashes its webhook token, then drops the table. After 0006, so the servers it
 /// made are there.
 pub(super) async fn finish_0009(store: &super::Store) -> Result<()> {
     let waiting: i64 = sqlx::query_scalar(
@@ -458,6 +458,18 @@ pub(super) async fn finish_0009(store: &super::Store) -> Result<()> {
             .bind(&id)
             .execute(&mut *tx)
             .await?;
+        // The token in clear becomes its hash: it keeps working, and is never shown again.
+        let token: String = sqlx::query_scalar("SELECT webhook_token FROM dots WHERE id = ?")
+            .bind(&id)
+            .fetch_one(&mut *tx)
+            .await?;
+        if !token.is_empty() && !token.starts_with("sha256:") {
+            sqlx::query("UPDATE dots SET webhook_token = ? WHERE id = ?")
+                .bind(crate::util::token_hash(&token))
+                .bind(&id)
+                .execute(&mut *tx)
+                .await?;
+        }
     }
     sqlx::query("DROP TABLE upgrade_0009")
         .execute(&mut *tx)

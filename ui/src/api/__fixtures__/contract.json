@@ -116,6 +116,7 @@
     "enabled": true,
     "endpoint_url": null,
     "engine": "claude",
+    "has_webhook_token": true,
     "id": "01J0DOT",
     "instructions": "Run the tests and summarize failures.",
     "max_turns": 40,
@@ -243,7 +244,6 @@
       ]
     },
     "variables": {},
-    "webhook_token": "tok_abc",
     "workdir": "C:/dev/app",
     "workspace_mode": "worktree"
   },
@@ -255,6 +255,7 @@
       "enabled": true,
       "endpoint_url": null,
       "engine": "claude",
+      "has_webhook_token": true,
       "id": "01J0DOT",
       "instructions": "Run the tests and summarize failures.",
       "max_turns": 40,
@@ -382,7 +383,6 @@
         ]
       },
       "variables": {},
-      "webhook_token": "tok_abc",
       "workdir": "C:/dev/app",
       "workspace_mode": "worktree"
     },

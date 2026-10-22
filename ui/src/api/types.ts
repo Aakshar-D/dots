@@ -107,7 +107,8 @@ const dotSpecShape = {
 export const DotSpec = z.strictObject(dotSpecShape);
 export const Dot = z.strictObject({
   id: z.string(),
-  webhook_token: z.string(),
+  // The token itself is shown once, when it is made.
+  has_webhook_token: z.boolean(),
   created_at: z.string(),
   updated_at: z.string(),
   ...dotSpecShape,

@@ -64,7 +64,7 @@ fn local_spec() -> DotSpec {
 fn dot() -> Dot {
     Dot {
         id: "01J0DOT".into(),
-        webhook_token: "tok_abc".into(),
+        has_webhook_token: true,
         created_at: TS.into(),
         updated_at: TS.into(),
         spec: spec(),

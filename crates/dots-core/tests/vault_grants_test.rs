@@ -374,7 +374,11 @@ async fn migration_0009_grants_each_dot_the_variables_of_its_servers() {
 
     let store = Store::open(&path).await.unwrap();
     let want = grants(&[("mcp:github", &["GITHUB_TOKEN"])]);
-    assert_eq!(store.get_dot("D1").await.unwrap().spec.variables, want);
+    let dot = store.get_dot("D1").await.unwrap();
+    assert_eq!(dot.spec.variables, want);
+    // Its webhook token is kept as a hash, and still works.
+    assert!(dot.has_webhook_token);
+    assert!(store.check_webhook_token("D1", "t").await.unwrap());
     store.close().await;
     let store = Store::open(&path).await.unwrap();
     assert_eq!(store.get_dot("D1").await.unwrap().spec.variables, want);

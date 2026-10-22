@@ -7,7 +7,7 @@ use super::Store;
 use crate::library::{LibraryConfig, Uses};
 use crate::model::{Dot, DotSpec, EngineKind, WorkspaceMode};
 use crate::schedule::Schedule;
-use crate::util::{new_id, new_token, now};
+use crate::util::{ct_eq, new_id, new_token, now, token_hash};
 use crate::vault::Grants;
 use crate::{Error, Result};
 
@@ -19,7 +19,7 @@ pub(super) const DOT_COLUMNS: &str = "id, name, instructions, engine, model, end
 pub(super) fn dot_from_row(row: &SqliteRow) -> Result<Dot> {
     Ok(Dot {
         id: row.try_get("id")?,
-        webhook_token: row.try_get("webhook_token")?,
+        has_webhook_token: !row.try_get::<String, _>("webhook_token")?.is_empty(),
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
         spec: DotSpec {
@@ -131,7 +131,8 @@ impl Store {
         .bind(&spec.workdir)
         .bind(spec.workspace_mode.as_str())
         .bind(schedule_json(spec)?)
-        .bind(new_token())
+        // No token until one is made, which shows it once.
+        .bind("")
         .bind(serde_json::to_string(&spec.policy)?)
         .bind(serde_json::to_string(&spec.uses)?)
         .bind(serde_json::to_string(&spec.variables)?)
@@ -278,10 +279,23 @@ impl Store {
         self.get_dot(id).await
     }
 
+    /// Makes the dot a new webhook token and returns it: the only time it is shown. Only its
+    /// hash is kept.
+    /// Whether `token` is the dot's webhook token. A dot without one takes none.
+    pub async fn check_webhook_token(&self, id: &str, token: &str) -> Result<bool> {
+        let stored: Option<String> =
+            sqlx::query_scalar("SELECT webhook_token FROM dots WHERE id = ?")
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await?;
+        let stored = stored.ok_or_else(|| Error::NotFound(format!("dot {id}")))?;
+        Ok(!stored.is_empty() && ct_eq(&token_hash(token), &stored))
+    }
+
     pub async fn regenerate_webhook_token(&self, id: &str) -> Result<String> {
         let token = new_token();
         let res = sqlx::query("UPDATE dots SET webhook_token = ?, updated_at = ? WHERE id = ?")
-            .bind(&token)
+            .bind(token_hash(&token))
             .bind(now())
             .bind(id)
             .execute(&self.pool)

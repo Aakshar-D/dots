@@ -176,7 +176,9 @@ impl DotSpec {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Dot {
     pub id: String,
-    pub webhook_token: String,
+    /// Whether the dot has a webhook token. The token is shown once, when it is made; Dots
+    /// keeps only its hash (env vault spec §11).
+    pub has_webhook_token: bool,
     pub created_at: String,
     pub updated_at: String,
     #[serde(flatten)]
