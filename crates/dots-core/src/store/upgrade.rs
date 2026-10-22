@@ -146,7 +146,7 @@ fn place(old: &str, raw: &Value, items: &mut Vec<Placed>) -> Option<String> {
 }
 
 /// An upper-case variable name made from `s`: `-` and other characters become `_`.
-fn var_name(s: &str) -> String {
+pub(crate) fn var_name(s: &str) -> String {
     s.chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() {
@@ -235,7 +235,7 @@ fn converted(name: &str, raw: &Value) -> Option<McpServerConfig> {
 /// The scheme of an `Authorization` value: its first word when the value has more than one
 /// and that word reads as a scheme (a letter, then up to 23 letters, digits or `-`), else
 /// `Bearer`. A first word that does not read as one may be part of the secret: it is not kept.
-fn auth_scheme(value: &str) -> &str {
+pub(crate) fn auth_scheme(value: &str) -> &str {
     let mut words = value.split_whitespace();
     match (words.next(), words.next()) {
         (Some(first), Some(_))

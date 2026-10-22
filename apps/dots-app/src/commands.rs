@@ -536,6 +536,36 @@ pub async fn env_remove(state: State<'_, AppState>, name: String) -> Res<()> {
     Ok(state.rt()?.vault().remove(&name).await?)
 }
 
+/// The names Library servers read that Dots' Windows environment sets and Personal lacks,
+/// until the offer is answered. Never a value.
+#[tauri::command]
+pub async fn env_import_candidates(state: State<'_, AppState>) -> Res<Vec<String>> {
+    Ok(state.rt()?.vault().import_candidates().await?)
+}
+
+/// Copies the names from Dots' Windows environment into Personal as secrets; answers the offer.
+#[tauri::command]
+pub async fn env_import(state: State<'_, AppState>, names: Vec<String>) -> Res<Vec<String>> {
+    Ok(state.rt()?.vault().import(&names).await?)
+}
+
+#[tauri::command]
+pub async fn env_import_dismiss(state: State<'_, AppState>) -> Res<()> {
+    Ok(state.rt()?.vault().dismiss_import().await?)
+}
+
+/// The update backups made before the vault, by file name, until the offer is answered.
+#[tauri::command]
+pub async fn env_old_backups(state: State<'_, AppState>) -> Res<Vec<String>> {
+    Ok(state.rt()?.old_backups().await?)
+}
+
+/// Deletes them when `delete`; answers the offer either way.
+#[tauri::command]
+pub async fn env_old_backups_answer(state: State<'_, AppState>, delete: bool) -> Res<()> {
+    Ok(state.rt()?.answer_old_backups(delete).await?)
+}
+
 /// Every message that waits for the person and the newest others, newest first; of one dot
 /// with `dot_id` (check-ins spec section 10).
 #[tauri::command]

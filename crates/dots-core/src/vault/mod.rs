@@ -4,10 +4,12 @@
 pub mod child_env;
 pub mod entries;
 pub mod grants;
+pub mod literals;
 pub mod redact;
 pub mod resolve;
 pub mod secrets;
 pub mod service;
+pub mod upgrade;
 
 pub use entries::{EntryKind, EnvEntry};
 pub use grants::{Consumer, Grants};

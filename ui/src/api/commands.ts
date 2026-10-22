@@ -182,6 +182,16 @@ export const commands = {
   /// Edits a plain value, or replaces a secret's.
   envSet: (name: string, value: string) => call(T.EnvEntry, "env_set", { name, value }),
   envRemove: (name: string) => call(nothing, "env_remove", { name }),
+  /// Names Library servers read that Windows sets and Personal lacks; never a value. Empty once
+  /// the offer is answered.
+  envImportCandidates: () => call(z.string().array(), "env_import_candidates"),
+  /// Copies them into Personal as secrets and answers the offer; answers the names imported.
+  envImport: (names: string[]) => call(z.string().array(), "env_import", { names }),
+  envImportDismiss: () => call(nothing, "env_import_dismiss"),
+  /// Update backups made before the vault, by file name; empty once the offer is answered.
+  envOldBackups: () => call(z.string().array(), "env_old_backups"),
+  envOldBackupsAnswer: (deleteThem: boolean) =>
+    call(nothing, "env_old_backups_answer", { delete: deleteThem }),
 
   /// Every message that waits (open questions, unread notes) and the newest others, newest
   /// first; of one dot with `dotId`.

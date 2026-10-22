@@ -255,6 +255,16 @@ impl Store {
         Ok(())
     }
 
+    /// Sets a dot's grants as they are, for a change Dots makes itself (env vault spec §11).
+    pub(crate) async fn set_dot_variables(&self, id: &str, grants: &Grants) -> Result<()> {
+        sqlx::query("UPDATE dots SET variables = ? WHERE id = ?")
+            .bind(serde_json::to_string(grants)?)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn set_dot_enabled(&self, id: &str, enabled: bool) -> Result<Dot> {
         let res = sqlx::query("UPDATE dots SET enabled = ?, updated_at = ? WHERE id = ?")
             .bind(enabled as i64)

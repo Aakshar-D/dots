@@ -237,6 +237,7 @@ const GONE: &str = "removed from the Library";
 pub(crate) async fn sync_plugin_servers(
     store: &Store,
     bus: &Bus,
+    vault: &Vault,
     plugin: &LibraryItem,
     info: &PluginInfo,
 ) -> Result<Vec<String>> {
@@ -257,7 +258,9 @@ pub(crate) async fn sync_plugin_servers(
         }
     }
     for (name, config) in wanted {
-        let config = LibraryConfig::McpServer(config);
+        // A secret written into the plugin's `.mcp.json` moves into Personal; the Library keeps
+        // `${NAME}` (env vault spec §11). It stays in the plugin's own folder.
+        let config = LibraryConfig::McpServer(vault.move_literals(&name, &config).await?.0);
         match existing.iter().find(|i| i.name == name) {
             Some(old) if old.config == config => {}
             Some(old) => match store.update_library_item(&old.id, &config).await {
@@ -316,6 +319,7 @@ pub(crate) struct RefreshedPlugin {
 pub(crate) async fn refresh_plugin(
     store: &Store,
     bus: &Bus,
+    vault: &Vault,
     item: &LibraryItem,
 ) -> Result<std::result::Result<RefreshedPlugin, String>> {
     let mut config = plugin_config(item)?.clone();
@@ -357,7 +361,7 @@ pub(crate) async fn refresh_plugin(
         Err(reason) => return Ok(Err(reason)),
     };
     let mut warnings = info.warnings.clone();
-    match sync_plugin_servers(store, bus, item, &info).await {
+    match sync_plugin_servers(store, bus, vault, item, &info).await {
         Ok(more) => warnings.extend(more),
         Err(Error::NotFound(_)) => return Ok(Err(GONE.into())),
         Err(e) => return Err(e),
@@ -541,10 +545,12 @@ impl LibraryService {
             ));
         }
         let plugin = self.read_folder(&config).await?;
+        let config = self.without_literals(name, config).await?;
         let item = self.store.add_library_item(name, &config, None).await?;
         publish(&self.bus, &item.id);
         if let Some(info) = plugin {
-            for warning in sync_plugin_servers(&self.store, &self.bus, &item, &info).await? {
+            let synced = sync_plugin_servers(&self.store, &self.bus, &self.vault, &item, &info);
+            for warning in synced.await? {
                 tracing::warn!("plugin {name}: {warning}");
             }
         }
@@ -565,12 +571,14 @@ impl LibraryService {
         let old = self.store.get_library_item(id).await?;
         self.refuse_owned(&old, "change")?;
         let plugin = self.read_folder(&config).await?;
+        let config = self.without_literals(&old.name, config).await?;
         let item = self.store.update_library_item(id, &config).await?;
         if item.config != old.config {
             publish(&self.bus, id);
         }
         if let Some(info) = plugin {
-            for warning in sync_plugin_servers(&self.store, &self.bus, &item, &info).await? {
+            let synced = sync_plugin_servers(&self.store, &self.bus, &self.vault, &item, &info);
+            for warning in synced.await? {
                 tracing::warn!("plugin {}: {warning}", item.name);
             }
         }
@@ -788,6 +796,17 @@ impl LibraryService {
         }
     }
 
+    /// An MCP server's config with its secret-looking values moved into Personal (env vault
+    /// spec §11): the Library never stores them.
+    async fn without_literals(&self, name: &str, config: LibraryConfig) -> Result<LibraryConfig> {
+        match config {
+            LibraryConfig::McpServer(server) => Ok(LibraryConfig::McpServer(
+                self.vault.move_literals(name, &server).await?.0,
+            )),
+            other => Ok(other),
+        }
+    }
+
     fn refuse_owned(&self, item: &LibraryItem, verb: &str) -> Result<()> {
         if item.owner_id.is_some() {
             return Err(Error::Invalid(format!(
@@ -889,7 +908,8 @@ mod tests {
             .unwrap();
         // The person removes it after the run read the item.
         store.remove_library_item(&item.id).await.unwrap();
-        let out = refresh_plugin(&store, &bus, &item).await.unwrap();
+        let vault = Vault::in_memory(store.clone());
+        let out = refresh_plugin(&store, &bus, &vault, &item).await.unwrap();
         assert_eq!(out.unwrap_err(), GONE);
     }
 }

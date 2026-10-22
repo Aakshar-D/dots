@@ -24,6 +24,32 @@ impl Store {
         }
     }
 
+    /// A marker Dots keeps in the `settings` table outside `Settings` (`key` is none of its
+    /// fields), as JSON.
+    pub async fn marker(&self, key: &str) -> Result<Option<Value>> {
+        let raw: Option<String> = sqlx::query_scalar("SELECT value FROM settings WHERE key = ?")
+            .bind(key)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(raw.map(|r| serde_json::from_str(&r)).transpose()?)
+    }
+
+    /// Sets a marker; with `keep` an existing one is left as it is.
+    pub async fn set_marker(&self, key: &str, value: &Value, keep: bool) -> Result<()> {
+        let sql = if keep {
+            "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)"
+        } else {
+            "INSERT INTO settings (key, value) VALUES (?, ?) \
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+        };
+        sqlx::query(sql)
+            .bind(key)
+            .bind(value.to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     /// The stored settings, with defaults for missing keys. Unknown keys are ignored, and so is
     /// a stored value that does not fit its field (logged), so one bad row never hides the rest.
     pub async fn get_settings(&self) -> Result<Settings> {

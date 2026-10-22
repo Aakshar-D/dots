@@ -127,6 +127,14 @@ impl Runtime {
             None => os_secrets(&store.install_id().await?),
         };
         let vault = Vault::new(store.clone(), secrets);
+        // A setup from before the vault: its stored secret values move into Personal (env
+        // vault spec §11). A failure is logged and the app starts anyway.
+        vault.mark_vault_since().await?;
+        match vault.move_stored_literals().await {
+            Ok(0) => {}
+            Ok(n) => tracing::info!("moved the secret values of {n} MCP server(s) to the vault"),
+            Err(e) => tracing::error!("moving stored secret values to the vault failed: {e}"),
+        }
         let bus = new_bus();
         let hub = Arc::new(ApprovalHub::new(store.clone(), bus.clone()));
         // Check-ins and follow-ups (check-ins spec): made before the engines, which offer the
@@ -654,6 +662,17 @@ impl Runtime {
     /// The personal variables of the Env tab (env vault spec §5).
     pub fn vault(&self) -> &Vault {
         &self.vault
+    }
+
+    /// The update backups made before this data folder first ran with the vault, until the
+    /// offer is answered (env vault spec §11).
+    pub async fn old_backups(&self) -> Result<Vec<String>> {
+        self.vault.old_backups(&self.data_dir).await
+    }
+
+    /// Deletes the old backups when `delete`, and answers the offer.
+    pub async fn answer_old_backups(&self, delete: bool) -> Result<()> {
+        self.vault.answer_old_backups(&self.data_dir, delete).await
     }
 
     /// The skill creator's drafts: what `skill_draft` and `skill_draft_cancel` call (skill

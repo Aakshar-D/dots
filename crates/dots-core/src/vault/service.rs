@@ -26,6 +26,10 @@ impl Vault {
         Vault { store, secrets }
     }
 
+    pub(crate) fn store(&self) -> &Store {
+        &self.store
+    }
+
     /// A vault whose secrets live in memory: for a Library or a runner made without the
     /// runtime's (tests).
     pub fn in_memory(store: Store) -> Vault {

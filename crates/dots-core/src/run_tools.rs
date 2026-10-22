@@ -270,7 +270,7 @@ impl RunTools {
             let Some(item) = store.find_library_item(LibraryKind::Plugin, name).await? else {
                 continue;
             };
-            match refresh_plugin(store, bus, &item).await? {
+            match refresh_plugin(store, bus, vault, &item).await? {
                 Ok(read) => {
                     notices.extend(read.notice);
                     notices.extend(read.warnings.iter().map(|w| format!("plugin {name}: {w}")));

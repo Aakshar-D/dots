@@ -18,6 +18,8 @@ mod schedules;
 mod settings;
 mod upgrade;
 
+pub(crate) use upgrade::{auth_scheme, var_name};
+
 /// The database file inside the data directory.
 pub const DB_FILE: &str = "dots.db";
 
@@ -50,6 +52,15 @@ impl Store {
         let store = Store { pool };
         upgrade::finish_0009(&store).await?;
         Ok(store)
+    }
+
+    /// Rewrites the database so freed pages lose what they held, and empties the WAL.
+    pub(crate) async fn vacuum(&self) -> Result<()> {
+        sqlx::query("VACUUM").execute(&self.pool).await?;
+        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 
     /// Closes every connection of this store.

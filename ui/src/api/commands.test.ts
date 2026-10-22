@@ -181,6 +181,24 @@ describe("commands", () => {
     expect((await failure(commands.envList())).kind).toBe("internal");
   });
 
+  it("sends the vault's one-time offers as the core names them", async () => {
+    reply = async () => ["GITHUB_TOKEN"];
+    expect(await commands.envImportCandidates()).toEqual(["GITHUB_TOKEN"]);
+    expect(await commands.envImport(["GITHUB_TOKEN"])).toEqual(["GITHUB_TOKEN"]);
+    reply = async () => ["dots-0.1.0-2026-10-20-091700.db"];
+    expect(await commands.envOldBackups()).toEqual(["dots-0.1.0-2026-10-20-091700.db"]);
+    reply = async () => null;
+    await commands.envImportDismiss();
+    await commands.envOldBackupsAnswer(true);
+    expect(calls.slice(-5)).toEqual([
+      ["env_import_candidates", undefined],
+      ["env_import", { names: ["GITHUB_TOKEN"] }],
+      ["env_old_backups", undefined],
+      ["env_import_dismiss", undefined],
+      ["env_old_backups_answer", { delete: true }],
+    ]);
+  });
+
   it("refuses a Library answer in a shape it does not know", async () => {
     reply = async () => [{ ...fixture.LibraryEntry[0], extra: 1 }];
     expect((await failure(commands.libraryList())).kind).toBe("internal");
