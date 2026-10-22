@@ -7,7 +7,7 @@
 use super::entries::{check_value, check_variable_name, EntryKind};
 use super::secrets::MAX_SECRET_BYTES;
 use super::service::Vault;
-use crate::library::{looks_secret, LibraryConfig, McpServerConfig};
+use crate::library::{key_words, looks_secret, LibraryConfig, McpServerConfig};
 use crate::mcp::vars::is_var_name;
 use crate::store::{auth_scheme, var_name};
 use crate::vault::redact;
@@ -52,7 +52,7 @@ struct Found {
     prefix: String,
 }
 
-/// An `http(s)` URL with no user or password in it: where a secret is, not one.
+/// An `http(s)` URL with no user or password and no query in it: where a secret is, not one.
 fn plain_url(value: &str) -> bool {
     let lower = value.to_ascii_lowercase();
     let Some(rest) = lower
@@ -62,7 +62,19 @@ fn plain_url(value: &str) -> bool {
         return false;
     };
     let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    !authority.is_empty() && !authority.contains('@')
+    !authority.is_empty() && !authority.contains('@') && !rest.contains('?')
+}
+
+/// Whether a key's secret words are only `AUTH`, `AUTHORIZATION`, `CREDENTIAL(S)`: such a key
+/// holds an address or a path, not a secret, when its value is a plain URL. `SLACK_TOKEN` or
+/// `WEBHOOK_SECRET` does not: a webhook URL is the secret.
+fn names_a_place(key: &str) -> bool {
+    const SECRET_ONLY: &[&str] = &[
+        "TOKEN", "KEY", "SECRET", "PASSWORD", "PASSWD", "PWD", "APIKEY",
+    ];
+    !key_words(key)
+        .iter()
+        .any(|w| SECRET_ONLY.contains(&w.as_str()))
 }
 
 /// A filesystem path: `C:\…`, `\\server\…`, `~/…`, `./…`, `../…`, or `/a/b` with no `+`
@@ -80,13 +92,13 @@ fn looks_like_path(value: &str) -> bool {
 }
 
 /// Whether the value under `key` moves to Personal: a secret-looking key, a value that is not
-/// empty, not `${…}`, and not a plain URL or a path.
+/// empty, not `${…}`, and not a plain URL under an `AUTH`-like key, or a path.
 fn hidden(key: &str, value: &str) -> bool {
     let trimmed = value.trim();
     looks_secret(key)
         && !value.contains("${")
         && !trimmed.is_empty()
-        && !plain_url(trimmed)
+        && (!plain_url(trimmed) || !names_a_place(key))
         && !looks_like_path(trimmed)
 }
 

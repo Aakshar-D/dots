@@ -99,6 +99,13 @@ describe("the text of the server form", () => {
       "AWS.CREDENTIALS",
       "GOOGLE_APPLICATION_CREDENTIAL",
       "OPENAI_APIKEY",
+      "accessToken",
+      "clientSecret",
+      "authToken",
+      "OAuthToken",
+      "MyKey",
+      "apiKey",
+      "APIKey",
     ];
     for (const key of secret) expect(looksSecret(key), key).toBe(true);
     const plain = [
@@ -106,7 +113,6 @@ describe("the text of the server form", () => {
       "PATH",
       "Accept",
       "region",
-      "MyKey",
       "TOKEN_URL",
       "AUTH_URL",
       "OAUTH_ISSUER",
@@ -118,6 +124,10 @@ describe("the text of the server form", () => {
       "TOKEN_ENDPOINT",
       "AUTH_MODE",
       "PSModulePath",
+      "keyName",
+      "authorName",
+      "tokenUrl",
+      "clientId",
     ];
     for (const key of plain) expect(looksSecret(key), key).toBe(false);
   });
@@ -133,5 +143,19 @@ describe("the text of the server form", () => {
     expect(movesToVault("AWS_CREDENTIALS", "/home/me/.aws/credentials")).toBe(false);
     expect(movesToVault("DB_PASSWORD", "https://admin:pw@db.example.com")).toBe(true);
     expect(movesToVault("API_KEY", "/aB3dE+fG7hI/jK9lM=")).toBe(true);
+    const moves = [
+      ["SLACK_TOKEN", "https://hooks.slack.com/services/T0/B0/abc123"],
+      ["WEBHOOK_SECRET", "https://example.invalid/hook/abc123"],
+      ["API_KEY", "https://example.invalid/v1"],
+      ["AUTH_SERVER", "https://example.invalid/login?token=abc123"],
+      ["DB_PASSWORD", "https://user:pw@db.invalid"],
+    ] as const;
+    for (const [key, value] of moves) expect(movesToVault(key, value), key).toBe(true);
+    const stays = [
+      ["AUTH_SERVER", "https://auth.example.invalid/realms/x"],
+      ["GOOGLE_APPLICATION_CREDENTIALS", String.raw`C:\keys\sa.json`],
+      ["GITHUB_TOKEN", "./token.txt"],
+    ] as const;
+    for (const [key, value] of stays) expect(movesToVault(key, value), key).toBe(false);
   });
 });

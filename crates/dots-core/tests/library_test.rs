@@ -102,7 +102,8 @@ fn a_generated_server_name_is_always_a_valid_one() {
 
 #[test]
 fn secret_looking_keys() {
-    // A word of the key, split on `_`, `-` and `.`, in any case.
+    // A word of the key, split on `_`, `-` and `.` and at a lower-case to upper-case boundary,
+    // in any case.
     for key in [
         "SF_TOKEN",
         "api_key",
@@ -119,6 +120,13 @@ fn secret_looking_keys() {
         "AWS.CREDENTIALS",
         "GOOGLE_APPLICATION_CREDENTIAL",
         "OPENAI_APIKEY",
+        "accessToken",
+        "clientSecret",
+        "authToken",
+        "OAuthToken",
+        "MyKey",
+        "apiKey",
+        "APIKey",
     ] {
         assert!(looks_secret(key), "{key}");
     }
@@ -139,6 +147,10 @@ fn secret_looking_keys() {
         "TOKEN_ENDPOINT",
         "AUTH_MODE",
         "PSModulePath",
+        "keyName",
+        "authorName",
+        "tokenUrl",
+        "clientId",
     ] {
         assert!(!looks_secret(key), "{key}");
     }

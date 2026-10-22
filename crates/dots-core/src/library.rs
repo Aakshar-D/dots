@@ -501,20 +501,40 @@ const NOT_SECRET_LAST_WORDS: &[&str] = &[
     "REGION", "PORT", "ISSUER", "REALM", "SCOPE", "MODE",
 ];
 
-/// Whether a key names a secret: one of its words, split on `_`, `-` and `.`, is `TOKEN`,
-/// `KEY`, `SECRET`, `PASSWORD`, `PASSWD`, `PWD`, `AUTH`, `AUTHORIZATION`, `CREDENTIAL(S)` or
-/// `APIKEY`, in any case (so also the header `Authorization`), and its last word is not one
-/// such as `URL`, `ID` or `HEADER` (`TOKEN_URL`, `KEY_ID`). Such a value is better given as
-/// `${VAR}`; the vault moves it there.
+/// The upper-case words of a key: split on `_`, `-` and `.`, and at a lower-case to upper-case
+/// boundary (`accessToken` is `ACCESS`, `TOKEN`). A run of capitals stays one word, so `APIKey`
+/// is `APIKEY` and `Authorization` is one word.
+pub(crate) fn key_words(key: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut prev_lower = false;
+    for c in key.chars() {
+        let split = matches!(c, '_' | '-' | '.') || (prev_lower && c.is_ascii_uppercase());
+        if split && !word.is_empty() {
+            words.push(std::mem::take(&mut word));
+        }
+        if !matches!(c, '_' | '-' | '.') {
+            word.push(c.to_ascii_uppercase());
+        }
+        prev_lower = c.is_ascii_lowercase();
+    }
+    if !word.is_empty() {
+        words.push(word);
+    }
+    words
+}
+
+/// Whether a key names a secret: one of its words (see `key_words`: split on `_`, `-` and `.`
+/// and at a lower-case to upper-case boundary, so `accessToken` counts) is `TOKEN`, `KEY`,
+/// `SECRET`, `PASSWORD`, `PASSWD`, `PWD`, `AUTH`, `AUTHORIZATION`, `CREDENTIAL(S)` or `APIKEY`,
+/// in any case (so also the header `Authorization`), and its last word is not one such as
+/// `URL`, `ID` or `HEADER` (`TOKEN_URL`, `KEY_ID`). Such a value is better given as `${VAR}`;
+/// the vault moves it there.
 pub fn looks_secret(key: &str) -> bool {
-    let key = key.to_ascii_uppercase();
-    let words: Vec<&str> = key
-        .split(['_', '-', '.'])
-        .filter(|w| !w.is_empty())
-        .collect();
+    let words = key_words(key);
     match words.last() {
-        Some(last) if !NOT_SECRET_LAST_WORDS.contains(last) => {
-            words.iter().any(|w| SECRET_WORDS.contains(w))
+        Some(last) if !NOT_SECRET_LAST_WORDS.contains(&last.as_str()) => {
+            words.iter().any(|w| SECRET_WORDS.contains(&w.as_str()))
         }
         _ => false,
     }

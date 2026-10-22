@@ -743,6 +743,42 @@ async fn a_plain_url_or_a_path_stays_where_it_is() {
 }
 
 #[tokio::test]
+async fn a_url_moves_unless_its_key_only_names_a_place() {
+    let (_dir, store) = temp_store().await;
+    let vault = Vault::in_memory(store);
+    let moves = [
+        (
+            "SLACK_TOKEN",
+            "https://hooks.slack.com/services/T0/B0/abc123",
+        ),
+        ("WEBHOOK_SECRET", "https://example.invalid/hook/abc123"),
+        ("API_KEY", "https://example.invalid/v1"),
+        ("AUTH_SERVER", "https://example.invalid/login?token=abc123"),
+        ("DB_PASSWORD", "https://user:pw@db.invalid"),
+    ];
+    for (key, value) in moves {
+        let (_, moved) = vault
+            .move_literals("m", &stdio(&[(key, value)]))
+            .await
+            .unwrap();
+        assert_eq!(moved, [key], "{key}");
+    }
+    let stays = [
+        ("AUTH_SERVER", "https://auth.example.invalid/realms/x"),
+        ("GOOGLE_APPLICATION_CREDENTIALS", r"C:\keys\sa.json"),
+        ("GITHUB_TOKEN", "./token.txt"),
+    ];
+    for (key, value) in stays {
+        let (kept, moved) = vault
+            .move_literals("s", &stdio(&[(key, value)]))
+            .await
+            .unwrap();
+        assert!(moved.is_empty(), "{key}");
+        assert_eq!(kept, stdio(&[(key, value)]), "{key}");
+    }
+}
+
+#[tokio::test]
 async fn a_value_that_cannot_move_never_sets_the_vacuum_marker() {
     let (_dir, store) = temp_store().await;
     let long = format!("unmovable-{}", "u".repeat(3000));
