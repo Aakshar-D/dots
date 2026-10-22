@@ -193,15 +193,15 @@ pub fn record_panic(
     message: Option<&str>,
 ) {
     let place = location.map_or_else(|| "an unknown place".to_string(), Location::to_string);
+    // A secret in the message is scrubbed here, as the logger's writer would. `try_scrub` never
+    // waits: the panic may have happened while the redactor was being written, and then the
+    // message is withheld.
+    let message = dots_core::vault::redact::global().try_scrub(message.unwrap_or("(no message)"));
     let line = format!(
-        "{} ERROR dots_app: thread '{}' panicked at {place}: {}\n",
+        "{} ERROR dots_app: thread '{}' panicked at {place}: {message}\n",
         dots_core::util::now(),
         thread.unwrap_or("<unnamed>"),
-        message.unwrap_or("(no message)"),
     );
-    // A secret in the message is scrubbed here, as the logger's writer would. `try_scrub` never
-    // waits: the panic may have happened while the redactor was being written.
-    let line = dots_core::vault::redact::global().try_scrub(&line);
     if let Some(mut log) = appender(log_dir) {
         let _ = log.write_all(line.as_bytes());
     }

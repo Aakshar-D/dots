@@ -12,6 +12,8 @@ use serde_json::Value;
 
 /// Values shorter than this are not scrubbed: too likely to match ordinary text.
 pub const MIN_REDACT_BYTES: usize = 8;
+/// What `try_scrub` gives in place of a text it cannot scrub without waiting.
+pub const WITHHELD: &str = "(message withheld: redactor busy)";
 
 /// The secret values to scrub, each spelling with the name it stands for, longest first.
 #[derive(Default)]
@@ -121,13 +123,13 @@ impl Redactor {
         self.read().first().map_or(0, |(s, _)| s.len())
     }
 
-    /// Like `scrub`, for a caller that must not block (a panic hook): text is returned as it is
-    /// when the list is being written.
+    /// Like `scrub`, for a caller that must not block (a panic hook). When the list is being
+    /// written, the text is withheld: `WITHHELD` takes its place.
     pub fn try_scrub<'a>(&self, text: &'a str) -> Cow<'a, str> {
         match self.spellings.try_read() {
             Ok(all) => Self::scrub_with(&all, text),
             Err(std::sync::TryLockError::Poisoned(p)) => Self::scrub_with(&p.into_inner(), text),
-            Err(std::sync::TryLockError::WouldBlock) => Cow::Borrowed(text),
+            Err(std::sync::TryLockError::WouldBlock) => Cow::Borrowed(WITHHELD),
         }
     }
 
@@ -257,10 +259,13 @@ mod tests {
     }
 
     #[test]
-    fn try_scrub_never_waits_for_a_writer() {
+    fn try_scrub_never_waits_for_a_writer_and_never_shows_the_text() {
         let r = Redactor::default();
         r.add("HELD", "held-value-12345");
         let _writer = r.spellings.write().unwrap();
-        assert_eq!(r.try_scrub("held-value-12345").as_ref(), "held-value-12345");
+        assert_eq!(
+            r.try_scrub("held-value-12345").as_ref(),
+            "(message withheld: redactor busy)"
+        );
     }
 }
