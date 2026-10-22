@@ -6,6 +6,7 @@ use super::Store;
 use crate::model::{ApplyState, Approval, ApprovalStatus};
 use crate::policy::{Policy, Preset, Rule};
 use crate::util::{json_hash, new_id, now};
+use crate::vault::redact::global;
 use crate::{Error, Result};
 
 const APPROVAL_COLUMNS: &str = "id, run_id, tool, input, input_hash, status, note, parked, \
@@ -76,7 +77,7 @@ impl Store {
         .bind(&id)
         .bind(run_id)
         .bind(tool)
-        .bind(input.to_string())
+        .bind(global().scrub_json(input).to_string())
         .bind(json_hash(input))
         .bind(now())
         .bind(i64::from(self_apply))

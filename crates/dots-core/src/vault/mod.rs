@@ -4,6 +4,7 @@
 pub mod child_env;
 pub mod entries;
 pub mod grants;
+pub mod redact;
 pub mod resolve;
 pub mod secrets;
 pub mod service;

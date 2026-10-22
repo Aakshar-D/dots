@@ -171,7 +171,9 @@ fn appender(log_dir: &Path) -> Option<RollingFileAppender> {
 /// the app runs without a log then. Keep the guard alive for the whole run.
 pub fn init_logging(log_dir: &Path) -> Option<WorkerGuard> {
     let appender = appender(log_dir)?;
-    let (writer, guard) = tracing_appender::non_blocking(appender);
+    // Every line is scrubbed of the secrets Dots has read (env vault spec §10).
+    let (writer, guard) =
+        tracing_appender::non_blocking(dots_core::vault::redact::RedactWriter::new(appender));
     tracing_subscriber::fmt()
         .with_writer(writer)
         .with_ansi(false)

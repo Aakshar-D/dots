@@ -50,6 +50,7 @@ impl Vault {
                     self.store.remove_env_entry(&entry.name).await?;
                     return Err(e);
                 }
+                super::redact::global().add(&entry.name, value);
                 Ok(entry)
             }
         }
@@ -64,6 +65,7 @@ impl Vault {
             EntryKind::Plain => self.store.set_env_value(&entry.name, Some(value)).await,
             EntryKind::Secret => {
                 self.secrets.put(&personal_key(&entry.name), value)?;
+                super::redact::global().add(&entry.name, value);
                 self.store.set_env_value(&entry.name, None).await
             }
         }
@@ -86,7 +88,13 @@ impl Vault {
         };
         match entry.kind {
             EntryKind::Plain => Ok(entry.value.map(Zeroizing::new)),
-            EntryKind::Secret => self.secrets.get(&personal_key(&entry.name)),
+            EntryKind::Secret => {
+                let value = self.secrets.get(&personal_key(&entry.name))?;
+                if let Some(value) = &value {
+                    super::redact::global().add(&entry.name, value);
+                }
+                Ok(value)
+            }
         }
     }
 

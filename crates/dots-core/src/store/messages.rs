@@ -9,6 +9,7 @@ use super::runs::insert_run;
 use super::Store;
 use crate::model::{Message, MessageKind, NewRun, Run};
 use crate::util::{new_id, now};
+use crate::vault::redact::global;
 use crate::{Error, Result};
 
 /// The messages `list_messages` gives besides those that wait.
@@ -60,7 +61,7 @@ impl Store {
         .bind(dot_id)
         .bind(run_id)
         .bind(MessageKind::Note.as_str())
-        .bind(text)
+        .bind(global().scrub(text).as_ref())
         .bind(now())
         .execute(&self.pool)
         .await?;
@@ -83,7 +84,7 @@ impl Store {
         .bind(&id)
         .bind(dot_id)
         .bind(run_id)
-        .bind(text)
+        .bind(global().scrub(text).as_ref())
         .bind(now())
         .bind(run_id)
         .bind(max as i64)
@@ -117,8 +118,8 @@ impl Store {
         .bind(&id)
         .bind(dot_id)
         .bind(run_id)
-        .bind(text)
-        .bind(choices)
+        .bind(global().scrub(text).as_ref())
+        .bind(choices.map(|c| global().scrub(&c).into_owned()))
         .bind(now())
         .bind(run_id)
         .execute(&self.pool)
