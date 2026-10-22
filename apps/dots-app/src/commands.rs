@@ -586,8 +586,14 @@ pub async fn mark_dot_seen(state: State<'_, AppState>, dot_id: String) -> Res<()
 /// The dot whose conversation is open in the focused window, or none: nothing notifies about
 /// it, and what it does while viewed is not new.
 #[tauri::command]
-pub async fn set_viewing(state: State<'_, AppState>, dot_id: Option<String>) -> Res<()> {
-    state.rt()?.set_viewing(dot_id.as_deref());
+pub async fn set_viewing(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    dot_id: Option<String>,
+) -> Res<()> {
+    state.rt()?;
+    // Held while the window is really in front (`viewing`): a minimized window is not.
+    crate::viewing::report(&app, dot_id);
     Ok(())
 }
 
