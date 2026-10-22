@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
+use super::child_env::{is_cli_own, BASE_ENV};
 use super::entries::EntryKind;
 use super::grants::Consumer;
 use super::literals::has_literals;
@@ -21,47 +22,88 @@ pub const VAULT_SINCE: &str = "vault_since";
 pub const IMPORT_ANSWERED: &str = "vault_import_answered";
 /// The old backups offer was answered.
 pub const BACKUPS_ANSWERED: &str = "vault_backups_answered";
+/// Set while a move of stored secret values may have left old values in freed pages; cleared
+/// once the database is vacuumed.
+pub const VACUUM_PENDING: &str = "vault_vacuum_pending";
 /// The data folder's backups folder (the app's `update::BACKUPS_DIR`).
 pub const BACKUPS_DIR: &str = "backups";
 
 impl Vault {
     /// Moves every secret value stored in a Library server's config into Personal, and
     /// grants the dots that use the server the names it moved under. The database is vacuumed
-    /// after a move, so its freed pages lose the old values. Returns how many servers changed.
+    /// afterwards, so its freed pages lose the old values; a marker kept until then makes the
+    /// next start vacuum if this one fails half way. A server that fails is logged by name and
+    /// left for the next start: its dots are granted before its config is rewritten, so the
+    /// retry finds the same names. Returns how many servers changed.
     pub async fn move_stored_literals(&self) -> Result<usize> {
         let store = self.store();
-        let mut changed = 0;
+        let mut todo = Vec::new();
         for item in store.list_library_items().await? {
-            let LibraryConfig::McpServer(config) = &item.config else {
-                continue;
-            };
-            if !has_literals(&item.name, config) {
-                continue;
-            }
-            let (moved_config, names) = self.move_literals(&item.name, config).await?;
-            if names.is_empty() {
-                continue;
-            }
-            store
-                .update_library_item(&item.id, &LibraryConfig::McpServer(moved_config))
-                .await?;
-            let key = Consumer::Mcp(item.name.clone()).key();
-            for dot in store.dots_using(&item).await? {
-                let mut grants = dot.spec.variables.clone();
-                let list = grants.0.entry(key.clone()).or_default();
-                for name in &names {
-                    if !list.iter().any(|n| n.eq_ignore_ascii_case(name)) {
-                        list.push(name.clone());
-                    }
+            if let LibraryConfig::McpServer(config) = &item.config {
+                if has_literals(&item.name, config) {
+                    todo.push(item);
                 }
-                store.set_dot_variables(&dot.id, &grants).await?;
             }
-            changed += 1;
         }
-        if changed > 0 {
+        if !todo.is_empty() {
+            store
+                .set_marker(VACUUM_PENDING, &json!(true), false)
+                .await?;
+        }
+        let mut changed = 0;
+        let mut failed = false;
+        for item in todo {
+            match self.move_stored(&item).await {
+                Ok(true) => changed += 1,
+                Ok(false) => {}
+                Err(e) => {
+                    failed = true;
+                    tracing::error!(
+                        "moving the secret values of server {:?} failed: {e}",
+                        item.name
+                    );
+                }
+            }
+        }
+        if store.marker(VACUUM_PENDING).await? == Some(json!(true)) {
             store.vacuum().await?;
+            store
+                .set_marker(VACUUM_PENDING, &json!(false), false)
+                .await?;
+        }
+        if failed {
+            return Err(Error::Other(
+                "some stored secret values could not be moved to the vault".into(),
+            ));
         }
         Ok(changed)
+    }
+
+    /// One server: its dots are granted the names, then its config is rewritten.
+    async fn move_stored(&self, item: &crate::library::LibraryItem) -> Result<bool> {
+        let store = self.store();
+        let LibraryConfig::McpServer(config) = &item.config else {
+            return Ok(false);
+        };
+        let (moved_config, names) = self.move_literals(&item.name, config).await?;
+        if names.is_empty() {
+            return Ok(false);
+        }
+        let key = Consumer::Mcp(item.name.clone()).key();
+        for dot in store.dots_using(item).await? {
+            let mut grants = dot.spec.variables.clone();
+            let list = grants.0.entry(key.clone()).or_default();
+            for name in &names {
+                if !list.iter().any(|n| n.eq_ignore_ascii_case(name)) {
+                    list.push(name.clone());
+                }
+            }
+            store.set_dot_variables(&dot.id, &grants).await?;
+        }
+        store
+            .update_library_item(&item.id, &LibraryConfig::McpServer(moved_config))
+            .await?;
+        Ok(true)
     }
 
     /// Records when this data folder first ran with the vault, once.
@@ -82,6 +124,11 @@ impl Vault {
         for item in store.list_library_items().await? {
             if let LibraryConfig::McpServer(config) = &item.config {
                 for name in config.variables() {
+                    // The claude CLI's own variables and the base environment are never offered,
+                    // and their values are never read.
+                    if is_cli_own(&name) || BASE_ENV.iter().any(|k| k.eq_ignore_ascii_case(&name)) {
+                        continue;
+                    }
                     let new = !names.iter().any(|n| n.eq_ignore_ascii_case(&name));
                     if new && process_env(&name).is_some() {
                         names.push(name);
@@ -134,9 +181,9 @@ impl Vault {
     pub async fn answer_old_backups(&self, data_dir: &Path, delete: bool) -> Result<()> {
         if delete {
             for path in self.old_backup_paths(data_dir).await? {
-                std::fs::remove_file(&path).map_err(|e| {
-                    Error::Other(format!("could not delete {}: {e}", path.display()))
-                })?;
+                if let Err(e) = std::fs::remove_file(&path) {
+                    tracing::warn!("could not delete {}: {e}", path.display());
+                }
             }
         }
         self.answer(BACKUPS_ANSWERED).await

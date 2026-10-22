@@ -608,6 +608,16 @@ mod tests {
             })
             .await
             .unwrap();
+        // A test install id, so that nothing the runtime keeps reaches a real Credential
+        // Manager target.
+        store
+            .set_marker(
+                "install_id",
+                &serde_json::json!(format!("test-{}", dots_core::util::new_id())),
+                true,
+            )
+            .await
+            .unwrap();
         store.close().await;
 
         let (rt, settings) = start_runtime(&data).await.unwrap();

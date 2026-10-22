@@ -57,10 +57,19 @@ impl Store {
     /// Rewrites the database so freed pages lose what they held, and empties the WAL.
     pub(crate) async fn vacuum(&self) -> Result<()> {
         sqlx::query("VACUUM").execute(&self.pool).await?;
-        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-            .execute(&self.pool)
-            .await?;
-        Ok(())
+        // The result row is (busy, log, checkpointed); busy is 1 when a reader kept the WAL.
+        for _ in 0..20 {
+            let row = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+                .fetch_one(&self.pool)
+                .await?;
+            if sqlx::Row::try_get::<i64, _>(&row, 0)? == 0 {
+                return Ok(());
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        Err(crate::Error::Other(
+            "the database's write-ahead log could not be emptied".into(),
+        ))
     }
 
     /// Closes every connection of this store.

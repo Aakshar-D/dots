@@ -129,10 +129,14 @@ impl Runtime {
         let vault = Vault::new(store.clone(), secrets);
         // A setup from before the vault: its stored secret values move into Personal (env
         // vault spec §11). A failure is logged and the app starts anyway.
-        vault.mark_vault_since().await?;
+        // The old-backups cut-off is set only once the move finished without error.
         match vault.move_stored_literals().await {
-            Ok(0) => {}
-            Ok(n) => tracing::info!("moved the secret values of {n} MCP server(s) to the vault"),
+            Ok(n) => {
+                if n > 0 {
+                    tracing::info!("moved the secret values of {n} MCP server(s) to the vault");
+                }
+                vault.mark_vault_since().await?;
+            }
             Err(e) => tracing::error!("moving stored secret values to the vault failed: {e}"),
         }
         let bus = new_bus();

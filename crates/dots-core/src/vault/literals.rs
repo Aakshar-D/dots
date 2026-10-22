@@ -9,7 +9,30 @@ use super::secrets::MAX_SECRET_BYTES;
 use super::service::Vault;
 use crate::library::{looks_secret, McpServerConfig};
 use crate::store::{auth_scheme, var_name};
+use crate::vault::redact;
 use crate::Result;
+
+/// The longest variable name Personal holds.
+const MAX_NAME: usize = 128;
+
+/// A valid variable name for `raw` (already `A-Z`, `0-9`, `_`): a digit at the start gets a
+/// leading `_`, and the name is cut to 128 characters. The same input gives the same name.
+fn valid_name(raw: &str) -> String {
+    let mut name = String::new();
+    if raw.is_empty() || raw.starts_with(|c: char| c.is_ascii_digit()) {
+        name.push('_');
+    }
+    name.push_str(raw);
+    name.truncate(MAX_NAME);
+    name
+}
+
+/// `base` with `_n` after it, the base cut so that the whole stays within 128 characters.
+fn suffixed(base: &str, n: usize) -> String {
+    let suffix = format!("_{n}");
+    let keep = MAX_NAME.saturating_sub(suffix.len()).min(base.len());
+    format!("{}{suffix}", &base[..keep])
+}
 
 /// Where a value sits in a config.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,7 +64,7 @@ fn found(server: &str, config: &McpServerConfig) -> Vec<Found> {
                 if hidden(key, value) {
                     out.push(Found {
                         place: Place::Env(key.clone()),
-                        name: var_name(key),
+                        name: valid_name(&var_name(key)),
                         value: value.clone(),
                         prefix: String::new(),
                     });
@@ -54,18 +77,23 @@ fn found(server: &str, config: &McpServerConfig) -> Vec<Found> {
                     continue;
                 }
                 let (prefix, secret) = if key.eq_ignore_ascii_case("authorization") {
-                    let scheme = auth_scheme(value);
-                    let secret = match value.trim_start().strip_prefix(scheme) {
-                        Some(rest) if value.split_whitespace().count() > 1 => rest.trim(),
-                        _ => value.trim(),
-                    };
-                    (format!("{scheme} "), secret.to_string())
+                    if value.split_whitespace().count() > 1 {
+                        let scheme = auth_scheme(value);
+                        let secret = match value.trim_start().strip_prefix(scheme) {
+                            Some(rest) => rest.trim(),
+                            None => value.trim(),
+                        };
+                        (format!("{scheme} "), secret.to_string())
+                    } else {
+                        // One word is the whole secret: no scheme is added that it never had.
+                        (String::new(), value.trim().to_string())
+                    }
                 } else {
                     (String::new(), value.clone())
                 };
                 out.push(Found {
                     place: Place::Header(key.clone()),
-                    name: format!("{}_{}", var_name(server), var_name(key)),
+                    name: valid_name(&format!("{}_{}", var_name(server), var_name(key))),
                     value: secret,
                     prefix,
                 });
@@ -92,22 +120,30 @@ impl Vault {
         let mut config = config.clone();
         let mut moved = Vec::new();
         for f in found(server, &config) {
-            if f.value.len() > MAX_SECRET_BYTES || check_variable_name(&f.name).is_err() {
+            // A value that stays where it is is at least scrubbed from what Dots keeps and logs.
+            if f.value.len() > MAX_SECRET_BYTES {
                 tracing::warn!(
                     "{server}: a value of {:?} is too long to move to the vault",
                     f.name
                 );
+                redact::global().add(&f.name, &f.value);
+                continue;
+            }
+            if check_variable_name(&f.name).is_err() {
+                tracing::warn!("{server}: a value of {:?} has no valid name", f.name);
+                redact::global().add(&f.name, &f.value);
                 continue;
             }
             let mut name = f.name.clone();
             for n in 2.. {
+                // A name whose row exists but whose secret is gone counts as taken.
+                if self.store().find_env_entry(&name).await?.is_none() {
+                    self.add(&name, EntryKind::Secret, &f.value).await?;
+                    break;
+                }
                 match self.personal_value(&name).await? {
-                    None => {
-                        self.add(&name, EntryKind::Secret, &f.value).await?;
-                        break;
-                    }
                     Some(v) if *v == f.value => break,
-                    Some(_) => name = format!("{}_{n}", f.name),
+                    _ => name = suffixed(&f.name, n),
                 }
             }
             let text = format!("{}${{{name}}}", f.prefix);

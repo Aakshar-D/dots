@@ -11,7 +11,7 @@ use dots_core::events::new_bus;
 use dots_core::library::{LibraryConfig, LibraryKind, McpServerConfig, PluginConfig};
 use dots_core::library_service::LibraryService;
 use dots_core::store::Store;
-use dots_core::vault::{EntryKind, Vault};
+use dots_core::vault::{redact, EntryKind, Vault};
 use dots_core::Error;
 use serde_json::json;
 
@@ -288,6 +288,7 @@ async fn the_import_offers_what_windows_sets_once() {
         Some("from-windows")
     );
     assert!(vault.import_candidates().await.unwrap().is_empty());
+    std::env::remove_var("DOTS_IMPORT_TEST_TOKEN");
 }
 
 #[tokio::test]
@@ -321,5 +322,218 @@ async fn keeping_the_old_backups_answers_the_offer_too() {
     vault.mark_vault_since().await.unwrap();
     vault.answer_old_backups(dir.path(), false).await.unwrap();
     assert!(old.exists());
+    assert!(vault.old_backups(dir.path()).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn the_clis_own_and_the_base_variables_are_never_offered_or_imported() {
+    let (_dir, store) = temp_store().await;
+    let vault = Vault::in_memory(store.clone());
+    // A prefix of the CLI's own, a name in CLI_ENV and a name in BASE_ENV, all set for Dots.
+    let own = [
+        "ANTHROPIC_DOTS_TEST_KEY",
+        "CLAUDE_CONFIG_DIR",
+        "USERPROFILE",
+    ];
+    let before: Vec<_> = own.iter().map(std::env::var_os).collect();
+    for n in own {
+        std::env::set_var(n, "made-up-value-for-the-test");
+    }
+    std::env::set_var("DOTS_IMPORT_TEST_OTHER", "made-up-value-for-the-test");
+    store
+        .add_library_item(
+            "reads",
+            &LibraryConfig::McpServer(stdio(&[
+                ("A", "${ANTHROPIC_DOTS_TEST_KEY}"),
+                ("B", "${CLAUDE_CONFIG_DIR}"),
+                ("C", "${USERPROFILE}"),
+                ("D", "${DOTS_IMPORT_TEST_OTHER}"),
+            ])),
+            None,
+        )
+        .await
+        .unwrap();
+    let offered = vault.import_candidates().await;
+    let mut refused = Vec::new();
+    for n in own {
+        refused.push(vault.import(&[n.to_string()]).await);
+    }
+    let names: Vec<String> = own.iter().map(|n| n.to_string()).collect();
+    let personal = vault.personal_values(&names).await;
+    std::env::remove_var("DOTS_IMPORT_TEST_OTHER");
+    for (n, old) in own.iter().zip(before) {
+        match old {
+            Some(v) => std::env::set_var(n, v),
+            None => std::env::remove_var(n),
+        }
+    }
+    assert_eq!(offered.unwrap(), ["DOTS_IMPORT_TEST_OTHER"]);
+    assert!(refused.iter().all(|r| matches!(r, Err(Error::Invalid(_)))));
+    let personal = personal.unwrap();
+    assert!(own.iter().all(|n| personal.get(n).is_none()));
+}
+
+#[tokio::test]
+async fn one_failing_server_does_not_stop_the_others_or_the_vacuum() {
+    let (dir, store) = temp_store().await;
+    // A value the vault refuses (a NUL), listed before the good one.
+    store
+        .add_library_item(
+            "aa-bad",
+            &LibraryConfig::McpServer(stdio(&[("BAD_TOKEN", "bad\0value-secret-9")])),
+            None,
+        )
+        .await
+        .unwrap();
+    let good = store
+        .add_library_item(
+            "zz-good",
+            &LibraryConfig::McpServer(stdio(&[("GOOD_TOKEN", "good-secret-value-10")])),
+            None,
+        )
+        .await
+        .unwrap();
+    let vault = Vault::in_memory(store.clone());
+    assert!(vault.move_stored_literals().await.is_err());
+    assert_eq!(
+        store.get_library_item(&good.id).await.unwrap().config,
+        LibraryConfig::McpServer(stdio(&[("GOOD_TOKEN", "${GOOD_TOKEN}")]))
+    );
+    assert!(!db_holds(dir.path(), "good-secret-value-10"));
+    // The pending marker is cleared once the vacuum ran.
+    assert_eq!(
+        store.marker("vault_vacuum_pending").await.unwrap(),
+        Some(json!(false))
+    );
+}
+
+#[tokio::test]
+async fn a_pending_vacuum_runs_at_the_next_start() {
+    let (dir, store) = temp_store().await;
+    let item = store
+        .add_library_item(
+            "sf",
+            &LibraryConfig::McpServer(stdio(&[("SF_TOKEN", "pending-secret-value-11")])),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(db_holds(dir.path(), "pending-secret-value-11"));
+    // As a start that moved the server and stopped before the vacuum left it.
+    let moved = LibraryConfig::McpServer(stdio(&[("SF_TOKEN", "${SF_TOKEN}")]));
+    store.update_library_item(&item.id, &moved).await.unwrap();
+    store
+        .set_marker("vault_vacuum_pending", &json!(true), false)
+        .await
+        .unwrap();
+    let vault = Vault::in_memory(store.clone());
+    assert_eq!(vault.move_stored_literals().await.unwrap(), 0);
+    assert!(!db_holds(dir.path(), "pending-secret-value-11"));
+    assert_eq!(
+        store.marker("vault_vacuum_pending").await.unwrap(),
+        Some(json!(false))
+    );
+}
+
+#[tokio::test]
+async fn a_key_with_no_valid_name_moves_under_a_derived_one() {
+    let (_dir, store) = temp_store().await;
+    let vault = Vault::in_memory(store);
+    let (config, moved) = vault
+        .move_literals("p", &stdio(&[("1PASSWORD_TOKEN", "digit-secret-12")]))
+        .await
+        .unwrap();
+    assert_eq!(moved, ["_1PASSWORD_TOKEN"]);
+    assert_eq!(config, stdio(&[("1PASSWORD_TOKEN", "${_1PASSWORD_TOKEN}")]));
+    // The same value finds the same name again.
+    let (_, again) = vault
+        .move_literals("q", &stdio(&[("1PASSWORD_TOKEN", "digit-secret-12")]))
+        .await
+        .unwrap();
+    assert_eq!(again, moved);
+}
+
+#[tokio::test]
+async fn a_value_too_long_to_move_stays_but_is_scrubbed() {
+    let (_dir, store) = temp_store().await;
+    let vault = Vault::in_memory(store);
+    let long = format!("oversize-{}", "z".repeat(3000));
+    let config = stdio(&[("BIG_TOKEN", &long)]);
+    let (kept, moved) = vault.move_literals("big", &config).await.unwrap();
+    assert!(moved.is_empty());
+    assert_eq!(kept, config);
+    let text = format!("log: {long}");
+    let scrubbed = redact::global().scrub(&text);
+    assert!(!scrubbed.contains("zzzzzzzz"), "value was not scrubbed");
+}
+
+#[tokio::test]
+async fn a_taken_name_gets_a_suffix_within_128_characters() {
+    let (_dir, store) = temp_store().await;
+    let vault = Vault::in_memory(store);
+    let key = format!("{}_TOKEN", "A".repeat(122));
+    assert_eq!(key.len(), 128);
+    vault
+        .add(&key, EntryKind::Secret, "first-value-13")
+        .await
+        .unwrap();
+    let (_, moved) = vault
+        .move_literals("s", &stdio(&[(&key, "second-value-14")]))
+        .await
+        .unwrap();
+    assert_eq!(moved.len(), 1);
+    assert_eq!(moved[0].len(), 128);
+    assert!(moved[0].ends_with("_2"));
+}
+
+#[tokio::test]
+async fn a_name_whose_secret_is_missing_counts_as_taken() {
+    let (_dir, store) = temp_store().await;
+    store
+        .add_env_entry("SF_TOKEN", EntryKind::Secret, None)
+        .await
+        .unwrap();
+    let vault = Vault::in_memory(store);
+    let (_, moved) = vault
+        .move_literals("s", &stdio(&[("SF_TOKEN", "fresh-value-15")]))
+        .await
+        .unwrap();
+    assert_eq!(moved, ["SF_TOKEN_2"]);
+}
+
+#[tokio::test]
+async fn a_one_word_authorization_keeps_its_shape() {
+    let (_dir, store) = temp_store().await;
+    let vault = Vault::in_memory(store);
+    let (config, moved) = vault
+        .move_literals("api", &http(&[("Authorization", "bare-token-value-16")]))
+        .await
+        .unwrap();
+    assert_eq!(moved, ["API_AUTHORIZATION"]);
+    assert_eq!(config, http(&[("Authorization", "${API_AUTHORIZATION}")]));
+}
+
+#[tokio::test]
+async fn an_old_backup_that_cannot_be_deleted_does_not_stop_the_answer() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("dots.db")).await.unwrap();
+    let old = old_backup(dir.path());
+    let vault = Vault::in_memory(store);
+    vault.mark_vault_since().await.unwrap();
+    // A backup another process holds open (no delete sharing) cannot be removed.
+    let stuck = dir.path().join("backups").join("dots-0.0.9-stuck.db");
+    std::fs::write(&stuck, b"held").unwrap();
+    let held = {
+        use std::os::windows::fs::OpenOptionsExt;
+        std::fs::File::options()
+            .write(true)
+            .share_mode(3)
+            .open(&stuck)
+            .unwrap()
+    };
+    held.set_modified(SystemTime::now() - Duration::from_secs(3600))
+        .unwrap();
+    vault.answer_old_backups(dir.path(), true).await.unwrap();
+    assert!(!old.exists() && stuck.exists());
     assert!(vault.old_backups(dir.path()).await.unwrap().is_empty());
 }
