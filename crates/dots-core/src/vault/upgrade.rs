@@ -11,6 +11,7 @@ use super::child_env::{is_cli_own, BASE_ENV};
 use super::entries::EntryKind;
 use super::grants::Consumer;
 use super::literals::{has_movable_literals, scrub_unmovable};
+use super::secrets::MAX_SECRET_BYTES;
 use super::service::Vault;
 use crate::library::LibraryConfig;
 use crate::library_service::process_env;
@@ -145,17 +146,28 @@ impl Vault {
     }
 
     /// Copies `names` from Dots' Windows environment into Personal as secrets and answers the
-    /// offer (`env_import`). Only names `import_candidates` offers are taken.
+    /// offer (`env_import`). Only names `import_candidates` offers are taken. Returns the names
+    /// imported: a value over `MAX_SECRET_BYTES`, or one the vault refuses or cannot store, is
+    /// skipped and logged by name, and the others are still imported.
     pub async fn import(&self, names: &[String]) -> Result<Vec<String>> {
         let offered = self.import_candidates().await?;
+        if let Some(name) = names.iter().find(|n| !offered.contains(n)) {
+            return Err(Error::Invalid(format!("{name} is not offered for import")));
+        }
         let mut imported = Vec::new();
         for name in names {
-            if !offered.contains(name) {
-                return Err(Error::Invalid(format!("{name} is not offered for import")));
+            let Some(value) = process_env(name) else {
+                continue;
+            };
+            if value.len() > MAX_SECRET_BYTES {
+                tracing::warn!(
+                    "{name} is not imported: its value is over {MAX_SECRET_BYTES} bytes"
+                );
+                continue;
             }
-            if let Some(value) = process_env(name) {
-                self.add(name, EntryKind::Secret, &value).await?;
-                imported.push(name.clone());
+            match self.add(name, EntryKind::Secret, &value).await {
+                Ok(_) => imported.push(name.clone()),
+                Err(e) => tracing::warn!("{name} is not imported: {e}"),
             }
         }
         self.answer(IMPORT_ANSWERED).await?;

@@ -1250,6 +1250,23 @@ describe("the Library's Env tab", () => {
     expect(screen.getByRole("listitem", { name: "GITHUB_TOKEN" })).toBeVisible();
   });
 
+  it("names what an import could not take", async () => {
+    let offered = ["GITHUB_TOKEN", "HUGE_TOKEN"];
+    backend.on("env_import_candidates", () => offered);
+    backend.on("env_import", () => {
+      offered = [];
+      return ["GITHUB_TOKEN"];
+    });
+    const { user } = await openTab([]);
+    const offer = await screen.findByRole("region", { name: "Import" });
+    await user.click(within(offer).getByRole("button", { name: "Import" }));
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Import" })).toBeNull());
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Not imported: HUGE_TOKEN. Its value is too long for a secret or could not be stored; " +
+        "add it by hand.",
+    );
+  });
+
   it("dismisses the import offer for good", async () => {
     let offered = ["SF_TOKEN"];
     backend.on("env_import_candidates", () => offered);

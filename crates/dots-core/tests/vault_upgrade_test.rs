@@ -485,11 +485,7 @@ async fn the_clis_own_and_the_base_variables_are_never_offered_or_imported() {
     let vault = Vault::in_memory(store.clone());
     // A prefix of the CLI's own, a name in CLI_ENV and a name in BASE_ENV, all set for Dots.
     // Names no other test reads, as the process environment is shared.
-    let own = [
-        "ANTHROPIC_DOTS_TEST_KEY",
-        "MAX_MCP_OUTPUT_TOKENS",
-        "PUBLIC",
-    ];
+    let own = ["ANTHROPIC_DOTS_TEST_KEY", "MAX_MCP_OUTPUT_TOKENS", "PUBLIC"];
     let before: Vec<_> = own.iter().map(std::env::var_os).collect();
     for n in own {
         std::env::set_var(n, "made-up-value-for-the-test");
@@ -829,4 +825,53 @@ async fn the_vault_since_mark_is_written_despite_a_failing_server() {
         LibraryConfig::McpServer(stdio(&[("GOOD_TOKEN", "${GOOD_TOKEN}")]))
     );
     rt.shutdown();
+}
+
+#[tokio::test]
+async fn an_import_skips_a_value_it_cannot_keep_and_takes_the_rest() {
+    let (_dir, store) = temp_store().await;
+    let vault = Vault::new(
+        store.clone(),
+        Arc::new(FailingSecrets::new("DOTS_IMPORT_SKIP_FAILS")),
+    );
+    let big = format!("big-import-value-{}", "b".repeat(3000));
+    std::env::set_var("DOTS_IMPORT_SKIP_BIG", &big);
+    std::env::set_var("DOTS_IMPORT_SKIP_FAILS", "fails-import-value-27");
+    std::env::set_var("DOTS_IMPORT_SKIP_OK", "ok-import-value-28");
+    store
+        .add_library_item(
+            "skips",
+            &LibraryConfig::McpServer(stdio(&[
+                ("A", "${DOTS_IMPORT_SKIP_BIG}"),
+                ("B", "${DOTS_IMPORT_SKIP_FAILS}"),
+                ("C", "${DOTS_IMPORT_SKIP_OK}"),
+            ])),
+            None,
+        )
+        .await
+        .unwrap();
+    let names: Vec<String> = [
+        "DOTS_IMPORT_SKIP_BIG",
+        "DOTS_IMPORT_SKIP_FAILS",
+        "DOTS_IMPORT_SKIP_OK",
+    ]
+    .iter()
+    .map(|n| n.to_string())
+    .collect();
+    let imported = vault.import(&names).await;
+    let left = vault.import_candidates().await;
+    for n in &names {
+        std::env::remove_var(n);
+    }
+    // Only what was kept is answered as imported; the offer is answered.
+    assert_eq!(imported.unwrap(), ["DOTS_IMPORT_SKIP_OK"]);
+    assert!(left.unwrap().is_empty());
+    let listed: Vec<String> = vault
+        .list()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|e| e.name)
+        .collect();
+    assert_eq!(listed, ["DOTS_IMPORT_SKIP_OK"]);
 }

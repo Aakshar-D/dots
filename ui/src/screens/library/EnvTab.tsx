@@ -145,10 +145,21 @@ function RemoveVariable({ entry }: { entry: EnvEntry }) {
 
 /// The one-time offer to copy the variables Library servers read from Dots' Windows
 /// environment, which Dots no longer reads.
-function ImportOffer({ names }: { names: string[] }) {
+/// `onSkipped` gets the names an import could not take.
+function ImportOffer({
+  names,
+  onSkipped,
+}: {
+  names: string[];
+  onSkipped: (names: string[]) => void;
+}) {
   const qc = useQueryClient();
   const answer = useMutation({
-    mutationFn: (take: boolean) => (take ? commands.envImport(names) : commands.envImportDismiss()),
+    mutationFn: async (take: boolean) => {
+      if (!take) return commands.envImportDismiss();
+      const imported = await commands.envImport(names);
+      onSkipped(names.filter((n) => !imported.includes(n)));
+    },
     onSuccess: () => {
       invalidate(qc, keys.env);
       invalidate(qc, keys.envImport);
@@ -248,6 +259,8 @@ export function EnvTab() {
   const imports = useQuery({ queryKey: keys.envImport, queryFn: commands.envImportCandidates });
   const backups = useQuery({ queryKey: keys.envBackups, queryFn: commands.envOldBackups });
   const [editing, setEditing] = useState<EnvEntry | null | undefined>(undefined);
+  // The names the import offer could not take: shown once the offer is gone.
+  const [skipped, setSkipped] = useState<string[]>([]);
 
   return (
     <div className="flex flex-col gap-4">
@@ -260,7 +273,15 @@ export function EnvTab() {
           <Plus aria-hidden /> Add variable
         </Button>
       </div>
-      {imports.data && imports.data.length > 0 && <ImportOffer names={imports.data} />}
+      {imports.data && imports.data.length > 0 && (
+        <ImportOffer names={imports.data} onSkipped={setSkipped} />
+      )}
+      {skipped.length > 0 && (
+        <p role="alert" className="text-sm text-destructive">
+          Not imported: {skipped.join(", ")}. Its value is too long for a secret or could not be
+          stored; add it by hand.
+        </p>
+      )}
       {backups.data && backups.data.length > 0 && <BackupsOffer files={backups.data} />}
       <section aria-label="Personal" className="flex flex-col gap-2">
         <h2 className="text-sm font-medium">Personal</h2>
