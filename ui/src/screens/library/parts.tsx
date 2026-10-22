@@ -96,6 +96,7 @@ export function RemoveButton({ entry }: { entry: LibraryEntry }) {
             ? `Used by ${users}. Removing it takes it out of them.`
             : !everyDot && "No dot uses it."}
           {entry.kind === "plugin" && " Its MCP servers go with it."}
+          {entry.dots_folder && " Its folder in Dots' skills folder is deleted too."}
         </>
       }
       confirmLabel={`Remove ${word}`}

@@ -22,6 +22,7 @@ use dots_core::model::{
 use dots_core::policy::{Policy, Preset, RuleCandidate};
 use dots_core::schedule::Schedule;
 use dots_core::settings::Settings;
+use dots_core::skill_creator::{check_draft, DraftRequest, DraftSummary};
 use dots_core::Runtime;
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_opener::OpenerExt;
@@ -454,6 +455,37 @@ pub async fn library_scan_skills(
     path: String,
 ) -> Res<Vec<ScannedSkill>> {
     Ok(state.rt()?.library().scan_skills(&path).await?)
+}
+
+/// Drafts a skill with the `claude` CLI for the Create skill dialog `dialog` (skill creator
+/// spec §5): no tools, no MCP servers, none of the person's settings. A draft the same dialog
+/// asked for before is cancelled.
+#[tauri::command]
+pub async fn skill_draft(
+    state: State<'_, AppState>,
+    dialog: String,
+    request: DraftRequest,
+) -> Res<String> {
+    Ok(state.rt()?.skill_drafts().draft(&dialog, &request).await?)
+}
+
+/// Ends the dialog's draft, if one is being written; its `skill_draft` then fails.
+#[tauri::command]
+pub fn skill_draft_cancel(state: State<'_, AppState>, dialog: String) -> Res<()> {
+    state.rt()?.skill_drafts().cancel(&dialog);
+    Ok(())
+}
+
+/// The name and description a draft would be saved with, or, as `invalid`, what to change.
+#[tauri::command]
+pub fn skill_check(text: String) -> Res<DraftSummary> {
+    Ok(check_draft(&text)?)
+}
+
+/// Saves a draft as a new skill in Dots' skills folder and the Library (skill creator spec §6).
+#[tauri::command]
+pub async fn skill_create(state: State<'_, AppState>, text: String) -> Res<LibraryItem> {
+    Ok(state.rt()?.library().create_skill(&text).await?)
 }
 
 /// The first documents of a context collection, with their titles and summaries.

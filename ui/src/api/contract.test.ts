@@ -30,6 +30,8 @@ const schemas: Record<SampleName, { parse: (v: unknown) => unknown }> = {
   McpCatalog: T.McpCatalog,
   McpProbe: T.McpProbe,
   ScannedSkill: T.ScannedSkill.array(),
+  DraftRequest: T.DraftRequest.array(),
+  DraftSummary: T.DraftSummary,
   InstalledPlugin: T.InstalledPlugin.array(),
   EnvVariable: T.EnvVariable.array(),
   WorktreeDiff: T.WorktreeDiff,

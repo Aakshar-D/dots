@@ -16,6 +16,7 @@ use crate::engine::{Engine, EngineEvent, RunContext};
 use crate::{Error, Result};
 
 pub mod args;
+pub mod once;
 pub mod parse;
 
 /// The installed CLI's version from `claude --version` (`2.1.295 (Claude Code)` gives
