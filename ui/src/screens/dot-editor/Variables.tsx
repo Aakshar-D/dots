@@ -75,7 +75,8 @@ export function Variables(props: {
         const key = `mcp:${server.name}`;
         const granted = props.variables[key] ?? [];
         const fresh = !had.includes(server.name);
-        const names = wants(server);
+        // A name Personal could never hold is not offered.
+        const names = wants(server).filter(validVariableName);
         if (names.length === 0 && granted.length === 0) return null;
         return (
           <div key={server.id} role="group" aria-label={server.name} className="flex flex-col gap-1">
@@ -95,7 +96,13 @@ export function Variables(props: {
                   <span className="text-xs text-amber-700 dark:text-amber-400">
                     {server.name} now also wants <code>{name}</code>
                   </span>
-                  <Button type="button" variant="outline" size="sm" onClick={() => grant(key, name)}>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    aria-label={`Grant ${name} to ${server.name}`}
+                    onClick={() => grant(key, name)}
+                  >
                     Grant
                   </Button>
                 </div>

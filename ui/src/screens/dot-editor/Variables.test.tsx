@@ -21,8 +21,13 @@ const token = {
   updated_at: "2026-10-21T12:00:00.000Z",
 };
 
-function setup(opts: { uses: Uses; before: Uses | null; variables?: Grants }) {
-  backend.on("library_list", () => sample.library);
+function setup(opts: {
+  uses: Uses;
+  before: Uses | null;
+  variables?: Grants;
+  library?: typeof sample.library;
+}) {
+  backend.on("library_list", () => opts.library ?? sample.library);
   backend.on("env_list", () => [token]);
   let latest = opts.variables ?? {};
   function Host() {
@@ -62,12 +67,31 @@ describe("the editor's Variables section", () => {
     expect(within(render).getByText(/now also wants/)).toHaveTextContent(
       "plugin-pdf-tools-render now also wants EXAMPLE_TOKEN",
     );
-    await user.click(within(render).getByRole("button", { name: "Grant" }));
+    await user.click(
+      within(render).getByRole("button", {
+        name: "Grant EXAMPLE_TOKEN to plugin-pdf-tools-render",
+      }),
+    );
     expect(variables()).toEqual({
       "mcp:github": ["GITHUB_TOKEN"],
       "mcp:plugin-pdf-tools-render": ["EXAMPLE_TOKEN"],
     });
     expect(within(render).getByText(/not in Personal/)).toBeVisible();
+  });
+
+  it("lists only the valid variable names a server reads", async () => {
+    const long = `A${"B".repeat(128)}`;
+    const library = sample.library.map((e) =>
+      e.kind === "mcp_server" && e.name === "github" && e.config.transport === "stdio"
+        ? { ...e, config: { ...e.config, env: { ...e.config.env, LONG: `\${${long}}` } } }
+        : e,
+    );
+    const variables = { "mcp:github": ["GITHUB_TOKEN"] };
+    setup({ uses: { ...none, mcp_servers: ["github"] }, before: both, variables, library });
+    const github = await screen.findByRole("group", { name: "github" });
+    expect(within(github).getByText("GITHUB_TOKEN")).toBeVisible();
+    expect(within(github).queryByText(/now also wants/)).toBeNull();
+    expect(within(github).queryByRole("button")).toBeNull();
   });
 
   it("grants a variable to the shell with a warning, and takes it back", async () => {
