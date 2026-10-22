@@ -457,7 +457,8 @@ async fn backups_made_before_the_vault_are_offered_once_and_deleted_on_yes() {
         vault.old_backups(dir.path()).await.unwrap(),
         ["dots-0.1.0-2026-10-01-090000.db"]
     );
-    vault.answer_old_backups(dir.path(), true).await.unwrap();
+    let failed = vault.answer_old_backups(dir.path(), true).await.unwrap();
+    assert!(failed.is_empty(), "{failed:?}");
     assert!(!old.exists() && new.exists());
     assert!(vault.old_backups(dir.path()).await.unwrap().is_empty());
 }
@@ -469,7 +470,11 @@ async fn keeping_the_old_backups_answers_the_offer_too() {
     let old = old_backup(dir.path());
     let vault = Vault::in_memory(store);
     vault.mark_vault_since().await.unwrap();
-    vault.answer_old_backups(dir.path(), false).await.unwrap();
+    assert!(vault
+        .answer_old_backups(dir.path(), false)
+        .await
+        .unwrap()
+        .is_empty());
     assert!(old.exists());
     assert!(vault.old_backups(dir.path()).await.unwrap().is_empty());
 }
@@ -667,12 +672,13 @@ async fn a_one_word_authorization_keeps_its_shape() {
     assert_eq!(config, http(&[("Authorization", "${API_AUTHORIZATION}")]));
 }
 
+#[cfg(windows)]
 #[tokio::test]
-async fn an_old_backup_that_cannot_be_deleted_does_not_stop_the_answer() {
+async fn an_old_backup_that_cannot_be_deleted_is_named_and_keeps_the_offer() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(&dir.path().join("dots.db")).await.unwrap();
     let old = old_backup(dir.path());
-    let vault = Vault::in_memory(store);
+    let vault = Vault::in_memory(store.clone());
     vault.mark_vault_since().await.unwrap();
     // A backup another process holds open (no delete sharing) cannot be removed.
     let stuck = dir.path().join("backups").join("dots-0.0.9-stuck.db");
@@ -687,9 +693,17 @@ async fn an_old_backup_that_cannot_be_deleted_does_not_stop_the_answer() {
     };
     held.set_modified(SystemTime::now() - Duration::from_secs(3600))
         .unwrap();
-    vault.answer_old_backups(dir.path(), true).await.unwrap();
+    // The others are deleted; the one that is not is named, by its file name only.
+    let failed = vault.answer_old_backups(dir.path(), true).await.unwrap();
+    assert_eq!(failed, ["dots-0.0.9-stuck.db"]);
     assert!(!old.exists() && stuck.exists());
-    assert!(vault.old_backups(dir.path()).await.unwrap().is_empty());
+    // The answer is not recorded, so the offer stays with what is left.
+    assert_eq!(
+        vault.old_backups(dir.path()).await.unwrap(),
+        ["dots-0.0.9-stuck.db"]
+    );
+    assert_eq!(store.marker("vault_backups_answered").await.unwrap(), None);
+    drop(held);
 }
 
 #[tokio::test]

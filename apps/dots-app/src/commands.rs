@@ -560,9 +560,10 @@ pub async fn env_old_backups(state: State<'_, AppState>) -> Res<Vec<String>> {
     Ok(state.rt()?.old_backups().await?)
 }
 
-/// Deletes them when `delete`; answers the offer either way.
+/// Deletes them when `delete`, and answers the offer. Returns the file names that could not be
+/// deleted: then the offer stays.
 #[tauri::command]
-pub async fn env_old_backups_answer(state: State<'_, AppState>, delete: bool) -> Res<()> {
+pub async fn env_old_backups_answer(state: State<'_, AppState>, delete: bool) -> Res<Vec<String>> {
     Ok(state.rt()?.answer_old_backups(delete).await?)
 }
 

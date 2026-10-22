@@ -190,9 +190,14 @@ function ImportOffer({ names }: { names: string[] }) {
 /// in plain text. Dots never deletes them on its own.
 function BackupsOffer({ files }: { files: string[] }) {
   const qc = useQueryClient();
+  // The backups the last "Delete backups" could not delete: the offer stays for them.
+  const [stuck, setStuck] = useState<string[]>([]);
   const answer = useMutation({
     mutationFn: (remove: boolean) => commands.envOldBackupsAnswer(remove),
-    onSuccess: () => invalidate(qc, keys.envBackups),
+    onSuccess: (failed) => {
+      setStuck(failed);
+      invalidate(qc, keys.envBackups);
+    },
     onError: notifyError,
   });
   return (
@@ -205,6 +210,12 @@ function BackupsOffer({ files }: { files: string[] }) {
         These update backups were made before the vault and may hold keys in plain text:{" "}
         <span className="font-mono">{files.join(", ")}</span>. Delete them?
       </p>
+      {stuck.length > 0 && (
+        <p role="alert" className="text-sm text-destructive">
+          Could not delete {stuck.join(", ")}. Close any program that has it open, then try
+          again.
+        </p>
+      )}
       <div className="flex gap-2">
         <ConfirmButton
           title="Delete the old backups?"

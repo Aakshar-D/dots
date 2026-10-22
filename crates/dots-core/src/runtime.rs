@@ -677,8 +677,9 @@ impl Runtime {
         self.vault.old_backups(&self.data_dir).await
     }
 
-    /// Deletes the old backups when `delete`, and answers the offer.
-    pub async fn answer_old_backups(&self, delete: bool) -> Result<()> {
+    /// Deletes the old backups when `delete`, and answers the offer. Returns the file names of
+    /// the backups that could not be deleted; then the offer stays.
+    pub async fn answer_old_backups(&self, delete: bool) -> Result<Vec<String>> {
         self.vault.answer_old_backups(&self.data_dir, delete).await
     }
 

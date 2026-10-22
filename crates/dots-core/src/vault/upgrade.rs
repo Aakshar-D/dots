@@ -178,17 +178,25 @@ impl Vault {
             .collect())
     }
 
-    /// Deletes the old backups when `delete`, and answers the offer either way
-    /// (`env_old_backups_answer`).
-    pub async fn answer_old_backups(&self, data_dir: &Path, delete: bool) -> Result<()> {
+    /// Deletes the old backups when `delete`, and answers the offer (`env_old_backups_answer`).
+    /// Returns the file names of the backups that could not be deleted: then the answer is not
+    /// recorded, and the offer stays with what is left.
+    pub async fn answer_old_backups(&self, data_dir: &Path, delete: bool) -> Result<Vec<String>> {
+        let mut failed = Vec::new();
         if delete {
             for path in self.old_backup_paths(data_dir).await? {
                 if let Err(e) = std::fs::remove_file(&path) {
                     tracing::warn!("could not delete {}: {e}", path.display());
+                    if let Some(name) = path.file_name() {
+                        failed.push(name.to_string_lossy().into_owned());
+                    }
                 }
             }
         }
-        self.answer(BACKUPS_ANSWERED).await
+        if failed.is_empty() {
+            self.answer(BACKUPS_ANSWERED).await?;
+        }
+        Ok(failed)
     }
 
     async fn old_backup_paths(&self, data_dir: &Path) -> Result<Vec<PathBuf>> {

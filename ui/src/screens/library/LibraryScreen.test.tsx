@@ -1184,7 +1184,7 @@ describe("the Library's Env tab", () => {
     backend.on("env_old_backups", () => files);
     backend.on("env_old_backups_answer", () => {
       files = [];
-      return null;
+      return [];
     });
     const { user } = await openTab([]);
     const offer = await screen.findByRole("region", { name: "Import" });
@@ -1204,7 +1204,7 @@ describe("the Library's Env tab", () => {
     backend.on("env_old_backups", () => files);
     backend.on("env_old_backups_answer", () => {
       files = [];
-      return null;
+      return [];
     });
     const { user } = await openTab([]);
     const offer = await screen.findByRole("region", { name: "Old backups" });
@@ -1218,6 +1218,24 @@ describe("the Library's Env tab", () => {
     const dialog = await screen.findByRole("alertdialog");
     await user.click(within(dialog).getByRole("button", { name: "Delete backups" }));
     await waitFor(() => expect(screen.queryByRole("region", { name: "Old backups" })).toBeNull());
+    expect(backend.callsTo("env_old_backups_answer")).toEqual([{ delete: true }]);
+  });
+
+  it("names the old backups it could not delete, and keeps the offer", async () => {
+    let files = ["dots-0.0.9-stuck.db", "dots-0.1.0-2026-10-20-091700.db"];
+    backend.on("env_old_backups", () => files);
+    backend.on("env_old_backups_answer", () => {
+      files = ["dots-0.0.9-stuck.db"];
+      return ["dots-0.0.9-stuck.db"];
+    });
+    const { user } = await openTab([]);
+    const offer = await screen.findByRole("region", { name: "Old backups" });
+    await user.click(within(offer).getByRole("button", { name: "Delete backups" }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: "Delete backups" }));
+    const alert = await within(offer).findByRole("alert");
+    expect(alert).toHaveTextContent(/could not delete dots-0\.0\.9-stuck\.db/i);
+    expect(screen.getByRole("region", { name: "Old backups" })).toBeVisible();
     expect(backend.callsTo("env_old_backups_answer")).toEqual([{ delete: true }]);
   });
 

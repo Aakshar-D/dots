@@ -190,8 +190,10 @@ export const commands = {
   envImportDismiss: () => call(nothing, "env_import_dismiss"),
   /// Update backups made before the vault, by file name; empty once the offer is answered.
   envOldBackups: () => call(z.string().array(), "env_old_backups"),
+  /// Deletes them when `deleteThem`, and answers the offer; answers the file names that could
+  /// not be deleted, and then the offer stays.
   envOldBackupsAnswer: (deleteThem: boolean) =>
-    call(nothing, "env_old_backups_answer", { delete: deleteThem }),
+    call(z.string().array(), "env_old_backups_answer", { delete: deleteThem }),
 
   /// Every message that waits (open questions, unread notes) and the newest others, newest
   /// first; of one dot with `dotId`.
