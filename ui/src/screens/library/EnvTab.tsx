@@ -164,7 +164,12 @@ function ImportOffer({ names }: { names: string[] }) {
         into Personal as secrets?
       </p>
       <div className="flex gap-2">
-        <Button type="button" size="sm" disabled={answer.isPending} onClick={() => answer.mutate(true)}>
+        <Button
+          type="button"
+          size="sm"
+          disabled={answer.isPending}
+          onClick={() => answer.mutate(true)}
+        >
           Import
         </Button>
         <Button
@@ -191,21 +196,26 @@ function BackupsOffer({ files }: { files: string[] }) {
     onError: notifyError,
   });
   return (
-    <div role="region" aria-label="Old backups" className="flex flex-col gap-2 rounded-lg border p-3">
+    <div
+      role="region"
+      aria-label="Old backups"
+      className="flex flex-col gap-2 rounded-lg border p-3"
+    >
       <p className="text-sm">
         These update backups were made before the vault and may hold keys in plain text:{" "}
         <span className="font-mono">{files.join(", ")}</span>. Delete them?
       </p>
       <div className="flex gap-2">
-        <Button
-          type="button"
-          size="sm"
+        <ConfirmButton
+          title="Delete the old backups?"
+          description="They cannot be brought back."
+          confirmLabel="Delete backups"
           variant="destructive"
           disabled={answer.isPending}
-          onClick={() => answer.mutate(true)}
+          onConfirm={() => answer.mutate(true)}
         >
           Delete backups
-        </Button>
+        </ConfirmButton>
         <Button
           type="button"
           size="sm"
@@ -254,7 +264,12 @@ export function EnvTab() {
               label={entry.name}
               actions={
                 <>
-                  <Button type="button" variant="outline" size="sm" onClick={() => setEditing(entry)}>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setEditing(entry)}
+                  >
                     {entry.kind === "secret" ? "Replace value" : "Edit"}
                   </Button>
                   <RemoveVariable entry={entry} />
@@ -268,7 +283,9 @@ export function EnvTab() {
               {entry.kind === "secret" ? (
                 <span className="text-xs text-muted-foreground">Kept in Credential Manager</span>
               ) : (
-                <span className="truncate font-mono text-xs text-muted-foreground">{entry.value}</span>
+                <span className="truncate font-mono text-xs text-muted-foreground">
+                  {entry.value}
+                </span>
               )}
             </ItemRow>
           ))}

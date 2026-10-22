@@ -1199,6 +1199,39 @@ describe("the Library's Env tab", () => {
     expect(backend.callsTo("env_old_backups_answer")).toEqual([{ delete: false }]);
   });
 
+  it("deletes the old backups only after asking", async () => {
+    let files = ["dots-0.1.0-2026-10-20-091700.db"];
+    backend.on("env_old_backups", () => files);
+    backend.on("env_old_backups_answer", () => {
+      files = [];
+      return null;
+    });
+    const { user } = await openTab([]);
+    const offer = await screen.findByRole("region", { name: "Old backups" });
+    await user.click(within(offer).getByRole("button", { name: "Delete backups" }));
+    expect(backend.callsTo("env_old_backups_answer")).toEqual([]);
+    await user.click(await screen.findByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(backend.callsTo("env_old_backups_answer")).toEqual([]);
+    expect(screen.getByRole("region", { name: "Old backups" })).toBeVisible();
+    await user.click(within(offer).getByRole("button", { name: "Delete backups" }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: "Delete backups" }));
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Old backups" })).toBeNull());
+    expect(backend.callsTo("env_old_backups_answer")).toEqual([{ delete: true }]);
+  });
+
+  it("keeps a variable when the removal is cancelled", async () => {
+    backend.on("env_remove", () => null);
+    const { user } = await openTab();
+    const row = await screen.findByRole("listitem", { name: "GITHUB_TOKEN" });
+    await user.click(within(row).getByRole("button", { name: "Remove" }));
+    await user.click(await screen.findByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(backend.callsTo("env_remove")).toEqual([]);
+    expect(screen.getByRole("listitem", { name: "GITHUB_TOKEN" })).toBeVisible();
+  });
+
   it("dismisses the import offer for good", async () => {
     let offered = ["SF_TOKEN"];
     backend.on("env_import_candidates", () => offered);
