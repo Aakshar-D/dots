@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { dotStatus } from "@/lib/dot-status";
 import { keys } from "@/lib/query";
 import { DotHeader } from "@/screens/home/DotHeader";
+import { DotMenu } from "@/screens/home/DotMenu";
 import { HistoryMenu } from "@/screens/home/HistoryMenu";
 import { rememberDot } from "@/screens/home/last-dot";
 import { ReplyArea, type ReplyPick } from "@/screens/home/ReplyArea";
@@ -28,6 +29,7 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
   return (
     <div className="flex min-w-0 flex-1 flex-col">
       <DotHeader name={dot.name} status={dotStatus(row, allMessages)}>
+        <DotMenu dot={dot} />
         <HistoryMenu dotId={dot.id} topics={view.older} />
         <Button size="sm" variant="ghost" onClick={() => setPick({ kind: "new" })}>
           New topic
