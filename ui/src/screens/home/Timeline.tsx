@@ -14,6 +14,8 @@ export function Timeline(props: {
   topics: Topic[];
   checkIns: Message[];
   dotName: string;
+  /// Reply on a run card: makes its topic the reply target.
+  onReply: (topic: Topic) => void;
   /// Shown above the topics: a failed load, or what to do when there is none.
   children?: ReactNode;
 }) {
@@ -38,7 +40,12 @@ export function Timeline(props: {
             />
           ) : (
             <div key={topic.rootId} className="flex flex-col gap-4">
-              <RunCard topic={topic} checkIns={checkIns} dotName={dotName} />
+              <RunCard
+                topic={topic}
+                checkIns={checkIns}
+                dotName={dotName}
+                onReply={() => props.onReply(topic)}
+              />
               {topic.runs.length > 1 && (
                 <TopicRuns runs={topic.runs.slice(1)} checkIns={checkIns} dotName={dotName} />
               )}

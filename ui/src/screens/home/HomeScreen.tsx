@@ -46,7 +46,8 @@ export function HomeScreen() {
   } else if (overview.isSuccess) {
     const row = rows.find((r) => r.dot.id === dotId);
     pane = row ? (
-      <DotPane key={row.dot.id} row={row} rootRunId={rootRunId} />
+      // An older topic, or the conversation again, opens with its own reply target and scroll.
+      <DotPane key={`${row.dot.id}/${rootRunId ?? ""}`} row={row} rootRunId={rootRunId} />
     ) : (
       <Navigate to="/home" replace />
     );

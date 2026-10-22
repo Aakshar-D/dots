@@ -1,19 +1,22 @@
 import { useQuery } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router";
 
 import { commands } from "@/api/commands";
 import type { DotOverview } from "@/api/types";
 import { LoadErrors } from "@/components/ErrorNote";
+import { Button } from "@/components/ui/button";
 import { dotStatus } from "@/lib/dot-status";
 import { keys } from "@/lib/query";
 import { DotHeader } from "@/screens/home/DotHeader";
+import { HistoryMenu } from "@/screens/home/HistoryMenu";
 import { rememberDot } from "@/screens/home/last-dot";
+import { ReplyArea, type ReplyPick } from "@/screens/home/ReplyArea";
 import { Timeline } from "@/screens/home/Timeline";
 import { useConversation } from "@/screens/home/use-conversation";
 
 /// One dot's side of the home: its header and its conversation, or one older topic of it
-/// (`rootRunId`). Mounted per dot.
+/// (`rootRunId`). Mounted per dot and topic.
 export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: string }) {
   const dot = row.dot;
   const allMessages =
@@ -21,9 +24,15 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
     [];
   useEffect(() => rememberDot(dot.id), [dot.id]);
   const view = useConversation(dot.id, rootRunId);
+  const [pick, setPick] = useState<ReplyPick>({ kind: "default" });
   return (
     <div className="flex min-w-0 flex-1 flex-col">
-      <DotHeader name={dot.name} status={dotStatus(row, allMessages)} />
+      <DotHeader name={dot.name} status={dotStatus(row, allMessages)}>
+        <HistoryMenu dotId={dot.id} topics={view.older} />
+        <Button size="sm" variant="ghost" onClick={() => setPick({ kind: "new" })}>
+          New topic
+        </Button>
+      </DotHeader>
       {rootRunId !== undefined && (
         <p className="border-b px-4 py-1.5 text-xs text-muted-foreground">
           Older topic ·{" "}
@@ -36,6 +45,7 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
         topics={view.pending ? [] : view.shown}
         checkIns={view.checkIns}
         dotName={dot.name}
+        onReply={(topic) => setPick({ kind: "topic", rootId: topic.rootId })}
       >
         <LoadErrors queries={[view.list, ...view.threads]} />
         {!view.pending && view.shown.length === 0 && view.list.isSuccess && (
@@ -45,6 +55,17 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
           </p>
         )}
       </Timeline>
+      {!view.pending && (
+        <ReplyArea
+          dotId={dot.id}
+          dotName={dot.name}
+          shown={view.shown}
+          checkIns={view.checkIns}
+          pick={pick}
+          onPick={setPick}
+          olderRoot={rootRunId}
+        />
+      )}
     </div>
   );
 }

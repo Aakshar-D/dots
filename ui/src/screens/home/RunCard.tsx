@@ -12,10 +12,16 @@ import { isOpenQuestion } from "@/lib/messages";
 import { keys } from "@/lib/query";
 
 /// A topic that a schedule, a webhook, Run now or a follow-up started, as one card: its trigger
-/// and time, its status, the first line of its summary or error, and Details. While its run
+/// and time, its status, the first line of its summary or error, Details and Reply. While its run
 /// waits for an approval or has an open question the card is open and shows them; closed, it
 /// loads nothing (chat-first home spec, section 4.2).
-export function RunCard(props: { topic: Topic; checkIns: Message[]; dotName: string }) {
+export function RunCard(props: {
+  topic: Topic;
+  checkIns: Message[];
+  dotName: string;
+  /// Makes this topic the reply target.
+  onReply: () => void;
+}) {
   const { topic, dotName } = props;
   const run = topic.root;
   const waiting = run.status === "awaiting_approval";
@@ -39,6 +45,9 @@ export function RunCard(props: { topic: Topic; checkIns: Message[]; dotName: str
         <span className="flex-1" />
         <Button asChild size="xs" variant="ghost">
           <Link to={`/runs/${run.id}`}>Details</Link>
+        </Button>
+        <Button size="xs" variant="ghost" onClick={props.onReply}>
+          Reply
         </Button>
       </div>
       {summary && <p className="text-muted-foreground">{summary}</p>}
