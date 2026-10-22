@@ -381,7 +381,7 @@ describe("sending on the home", () => {
     const off = { ...dot, enabled: false };
     home([chat("a", "10:00")]);
     backend.on("dot_overview", () => [
-      { dot: off, active_run: null, last_run: null, schedule_state: null },
+      { dot: off, active_run: null, last_run: null, schedule_state: null, needs_you: 0, unread: 0 },
     ]);
     const { user } = renderApp(`/home/${dot.id}`);
     expect(await screen.findByText("question a")).toBeVisible();

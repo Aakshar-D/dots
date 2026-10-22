@@ -14,6 +14,8 @@ const row = (name: string, over: Partial<DotOverview> = {}): DotOverview => ({
   active_run: null,
   last_run: null,
   schedule_state: null,
+  needs_you: 0,
+  unread: 0,
   ...over,
 });
 const ran = (h: number, over: Partial<Run> = {}): Run => ({
