@@ -13,7 +13,7 @@ use tokio::process::Command;
 use tokio::sync::mpsc;
 
 use crate::engine::{Engine, EngineEvent, RunContext};
-use crate::vault::child_env::{is_cli_own, start_clean, Child};
+use crate::vault::child_env::{cli_refuses_grant, start_clean, Child};
 use crate::{Error, Result};
 
 pub mod args;
@@ -96,11 +96,11 @@ impl Engine for ClaudeEngine {
         let mut cmd = Command::new(&self.program);
         // Dots' environment stays out; the dot's shell grants go in (env vault spec §8).
         start_clean(&mut cmd, Child::Cli);
-        // The CLI's own variables (its login, its endpoint) are never set from Personal: it keeps
-        // what Dots' environment passed through.
+        // The CLI's own variables (its login, its endpoint), its proxy and what loads code into
+        // it are never set from Personal: it keeps what Dots' environment passed through.
         let mut notices = Vec::new();
         for (k, v) in ctx.tools.shell_env() {
-            if is_cli_own(k) {
+            if cli_refuses_grant(k) {
                 notices.push(format!(
                     "{k}: the claude CLI's own variable, not set from Personal"
                 ));

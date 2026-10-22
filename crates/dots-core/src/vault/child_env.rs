@@ -80,6 +80,18 @@ pub const CLI_ENV: &[&str] = &[
 /// Prefixes of the `claude` CLI's own variables.
 pub const CLI_PREFIXES: &[&str] = &["ANTHROPIC_", "CLAUDE_CODE_"];
 
+/// What a shell grant never sets for the `claude` CLI, besides its own variables: names that
+/// would point it at another endpoint or load code into it. The CLI keeps what Dots'
+/// environment passed through (`BASE_ENV`); other children may be granted them.
+pub const CLI_GRANT_REFUSED: &[&str] = &[
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "NO_PROXY",
+    "NODE_EXTRA_CA_CERTS",
+    "NODE_OPTIONS",
+];
+
 /// Which kind of child the environment is for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Child {
@@ -95,6 +107,15 @@ pub fn is_cli_own(name: &str) -> bool {
     let upper = name.to_ascii_uppercase();
     CLI_ENV.iter().any(|k| k.eq_ignore_ascii_case(name))
         || CLI_PREFIXES.iter().any(|p| upper.starts_with(p))
+}
+
+/// Whether a shell grant of `name` is left out of the `claude` CLI's environment: one of its
+/// own variables or of `CLI_GRANT_REFUSED`, in any case.
+pub fn cli_refuses_grant(name: &str) -> bool {
+    is_cli_own(name)
+        || CLI_GRANT_REFUSED
+            .iter()
+            .any(|k| k.eq_ignore_ascii_case(name))
 }
 
 fn kept(name: &str, child: Child) -> bool {

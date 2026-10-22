@@ -501,3 +501,58 @@ async fn a_shell_grant_cannot_set_the_clis_own_variables() {
     let args = recorded_args(&e);
     assert_eq!(args["env"], json!({"ANTHROPIC_DOTS_TEST_X": "from-dots"}));
 }
+
+/// Nor the variables that point the CLI at another endpoint or load code into it: the proxy
+/// names, `NODE_EXTRA_CA_CERTS` and `NODE_OPTIONS`, in any case.
+#[tokio::test]
+async fn a_shell_grant_cannot_redirect_the_cli_or_load_code_into_it() {
+    let e = e2e(json!([init(), success("fake done")]), None).await;
+    let vault = Vault::in_memory(e.store.clone());
+    let refused = [
+        "NODE_OPTIONS",
+        "https_proxy",
+        "HTTP_PROXY",
+        "all_proxy",
+        "NO_PROXY",
+        "NODE_EXTRA_CA_CERTS",
+    ];
+    for name in refused.iter().chain(["DOTS_TEST_GRANTED"].iter()) {
+        vault
+            .add(name, EntryKind::Plain, "--require=C:/evil.js")
+            .await
+            .unwrap();
+    }
+    e.runner.set_vault(vault);
+    let mut s = spec("cli-redirect");
+    s.workdir = e.dir.path().to_string_lossy().to_string();
+    s.workspace_mode = WorkspaceMode::Folder;
+    let mut granted: Vec<String> = refused.iter().map(|n| n.to_string()).collect();
+    granted.push("DOTS_TEST_GRANTED".into());
+    s.variables = Grants([("shell".to_string(), granted)].into());
+    let dot = e.store.create_dot(&s).await.unwrap();
+    let run = e
+        .runner
+        .enqueue(NewRun::new(&dot.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    wait_status(&e.store, &run.id, RunStatus::Succeeded, 15).await;
+    let args = recorded_args(&e);
+    // Another test sets an `ANTHROPIC_DOTS_TEST_` name for Dots, which the CLI keeps.
+    assert_eq!(args["env"]["DOTS_TEST_GRANTED"], "--require=C:/evil.js");
+    let names: Vec<String> = args["env_names"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n.as_str().unwrap().to_ascii_uppercase())
+        .collect();
+    assert!(!names.contains(&"NODE_OPTIONS".to_string()), "{names:?}");
+    let events = serde_json::to_string(&e.store.list_events(&run.id, 0).await.unwrap()).unwrap();
+    for name in refused {
+        assert!(
+            events.contains(&format!(
+                "{name}: the claude CLI's own variable, not set from Personal"
+            )),
+            "{name}: {events}"
+        );
+    }
+}

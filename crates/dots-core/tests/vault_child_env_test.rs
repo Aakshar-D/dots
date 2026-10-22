@@ -7,7 +7,9 @@ use std::collections::BTreeMap;
 
 use common::fake_mcp::{tool, FakeMcp};
 use dots_core::mcp::{McpSession, SessionOptions};
-use dots_core::vault::child_env::{base_env, Child, BASE_ENV, CLI_ENV, CLI_PREFIXES};
+use dots_core::vault::child_env::{
+    base_env, Child, BASE_ENV, CLI_ENV, CLI_GRANT_REFUSED, CLI_PREFIXES,
+};
 use serde_json::json;
 
 fn names(child: Child) -> Vec<String> {
@@ -134,6 +136,17 @@ fn the_lists_are_pinned() {
             "BASH_DEFAULT_TIMEOUT_MS",
             "BASH_MAX_TIMEOUT_MS",
             "MAX_MCP_OUTPUT_TOKENS",
+        ]
+    );
+    assert_eq!(
+        CLI_GRANT_REFUSED,
+        [
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "NO_PROXY",
+            "NODE_EXTRA_CA_CERTS",
+            "NODE_OPTIONS",
         ]
     );
     assert_eq!(CLI_PREFIXES, ["ANTHROPIC_", "CLAUDE_CODE_"]);
