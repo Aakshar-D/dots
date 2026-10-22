@@ -123,3 +123,18 @@ Most UI files were written by Aakshar; the person tells him before work starts. 
 ## 10. Out of scope (B and C)
 
 Unread counts per dot or topic, notifications that open the right conversation, tray links, notification wording (B). Brand colors, light theme and a theme switch, typography, restyled components (C): the new screens use today's components and styles. Renaming or merging topics, search, pinning dots, drag to reorder.
+
+## 11. As built
+
+The plan (`docs/superpowers/plans/2026-10-22-chat-home.md`) built sections 1 to 9 with these choices where the spec left room or said otherwise:
+
+- **Open conversation** (section 6) links to the run's old chat address `/chat/:dotId/:runId`; the redirect of section 3 opens the dot's conversation when the run's topic is in it, else the older topic alone. A note of Dots' own links to `/home/:dotId`.
+- **The rail** (section 3): each link's tooltip is its `title`; the Inbox's count is in its name too ("Inbox, 4 waiting").
+- **Run now** in the header's ⚙ stays on the home: the run shows up at the end of the conversation as a card, whose Details opens the run.
+- **The column's next line** is `schedule_state.next_fire` ("next 02:00") also while schedules are paused, which the banner says; the Dots list's "Paused", "Completed", "Expired" and "Retrying at …" are not carried over.
+- **A run card** shows today's status badge; open, it shows the root run's pending approvals and its newest open question, not its notes (the Inbox has them).
+- **Questions**: opening a conversation marks every unread open question of its runs read; the bar shows the newest open one.
+- **The chip's ✕** shows only after Reply or New topic. A default target that is a run topic reads "Replying to: Scheduled · 08:00".
+- **An older topic** is loaded with `run_thread(rootRunId)`, so any run of the topic names it; the conversation and an older topic each open with their own reply target and scroll.
+- **Tests** are in `ui/src/screens/home/*.test.tsx` and `ui/src/lib/{home-topics,dot-status}.test.ts`, with the fake dot and runs they share in `ui/src/test/home.ts`.
+- **The smoke** adds: no request to the old `/dots` or `/chat` screens is left (each redirects); a dot with no run shows "Ask <dot> something"; History lists the older chat and run topics and opens one with "Older topic · Back to the current conversation".
