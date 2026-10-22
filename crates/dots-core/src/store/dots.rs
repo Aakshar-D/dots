@@ -279,8 +279,6 @@ impl Store {
         self.get_dot(id).await
     }
 
-    /// Makes the dot a new webhook token and returns it: the only time it is shown. Only its
-    /// hash is kept.
     /// Whether `token` is the dot's webhook token. A dot without one takes none.
     pub async fn check_webhook_token(&self, id: &str, token: &str) -> Result<bool> {
         let stored: Option<String> =
@@ -292,6 +290,8 @@ impl Store {
         Ok(!stored.is_empty() && ct_eq(&token_hash(token), &stored))
     }
 
+    /// Makes the dot a new webhook token and returns it: the only time it is shown. Only its
+    /// hash is kept.
     pub async fn regenerate_webhook_token(&self, id: &str) -> Result<String> {
         let token = new_token();
         let res = sqlx::query("UPDATE dots SET webhook_token = ?, updated_at = ? WHERE id = ?")

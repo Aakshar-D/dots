@@ -429,3 +429,103 @@ async fn resolved_values_never_print() {
         .unwrap_err();
     assert!(!format!("{missing:?}").contains("s3cret-made-up-value"));
 }
+
+/// A database left at 0008 with one dot, `D1`, whose webhook token column holds `token`.
+async fn db_at_0008_with_token(path: &std::path::Path, token: &str) {
+    let opts = SqliteConnectOptions::new()
+        .filename(path)
+        .create_if_missing(true);
+    let pool = SqlitePool::connect_with(opts).await.unwrap();
+    let mut before = sqlx::migrate!("./migrations");
+    before.migrations = before
+        .migrations
+        .iter()
+        .filter(|m| m.version < 9)
+        .cloned()
+        .collect::<Vec<_>>()
+        .into();
+    before.run(&pool).await.unwrap();
+    let policy = serde_json::to_string(&dots_core::policy::Policy::preset(
+        dots_core::policy::Preset::Sandboxed,
+    ))
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO dots (id, name, instructions, engine, model, workdir, workspace_mode, \
+         webhook_token, policy, uses, max_turns, timeout_secs, approval_wait_secs, \
+         created_at, updated_at) VALUES ('D1', 'triage', 'Do it.', 'claude', 'sonnet', \
+         'C:/tmp/repo', 'worktree', ?, ?, '{}', 40, 1800, 240, '2026-10-01T00:00:00.000Z', \
+         '2026-10-01T00:00:00.000Z')",
+    )
+    .bind(token)
+    .bind(&policy)
+    .execute(&pool)
+    .await
+    .unwrap();
+    pool.close().await;
+}
+
+/// A webhook token stored in clear is hashed, and the start-up vacuum leaves no copy of it in
+/// the database file or its WAL, though no server has a stored secret value (env vault spec
+/// §11). The old token still works.
+#[tokio::test]
+async fn a_start_with_old_webhook_tokens_vacuums_their_clear_values_away() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("dots.db");
+    // Made up, and distinctive enough to find in raw bytes.
+    let token = "wHkTokenForTheVacuumTest0123456789ABCdefGH";
+    db_at_0008_with_token(&path, token).await;
+
+    assert!(
+        std::fs::read(&path)
+            .unwrap()
+            .windows(token.len())
+            .any(|w| w == token.as_bytes()),
+        "the seed holds the token"
+    );
+    let store = Store::open(&path).await.unwrap();
+    // Hashing a token leaves its old value in freed pages: the next vacuum is asked for.
+    assert_eq!(
+        store
+            .marker(dots_core::vault::upgrade::VACUUM_PENDING)
+            .await
+            .unwrap(),
+        Some(json!(true))
+    );
+    // What Runtime::start does next.
+    let vault = Vault::new(
+        store.clone(),
+        std::sync::Arc::new(dots_core::vault::MemorySecrets::new()),
+    );
+    vault.move_stored_literals().await.unwrap();
+    assert!(store.check_webhook_token("D1", token).await.unwrap());
+    store.close().await;
+
+    for name in ["dots.db", "dots.db-wal"] {
+        let Ok(bytes) = std::fs::read(dir.path().join(name)) else {
+            continue;
+        };
+        assert!(
+            !bytes.windows(token.len()).any(|w| w == token.as_bytes()),
+            "{name} still holds the old token"
+        );
+    }
+}
+
+/// A value that already is a hash is left as it is: it is not hashed twice.
+#[tokio::test]
+async fn a_token_that_is_already_a_hash_is_not_hashed_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("dots.db");
+    db_at_0008_with_token(&path, &dots_core::util::token_hash("kept")).await;
+    let store = Store::open(&path).await.unwrap();
+    assert!(store.check_webhook_token("D1", "kept").await.unwrap());
+    // Nothing was hashed, so no vacuum is asked for.
+    assert_eq!(
+        store
+            .marker(dots_core::vault::upgrade::VACUUM_PENDING)
+            .await
+            .unwrap(),
+        None
+    );
+    store.close().await;
+}

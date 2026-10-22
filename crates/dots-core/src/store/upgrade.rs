@@ -435,8 +435,9 @@ fn with_checkins(stored: &str) -> Option<String> {
 }
 
 /// Grants each dot listed in `upgrade_0009` the variables of the servers it uses, as ticking
-/// them would (env vault spec §11 step 2), hashes its webhook token, then drops the table. After 0006, so the servers it
-/// made are there.
+/// them would (env vault spec §11 step 2), hashes its webhook token, then drops the table. After
+/// 0006, so the servers it made are there. A token that was hashed leaves its old value in freed
+/// page space, so the vacuum marker is set and the next start vacuums.
 pub(super) async fn finish_0009(store: &super::Store) -> Result<()> {
     let waiting: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'upgrade_0009'",
@@ -450,6 +451,7 @@ pub(super) async fn finish_0009(store: &super::Store) -> Result<()> {
         .fetch_all(&store.pool)
         .await?;
     let mut tx = store.pool.begin().await?;
+    let mut hashed = false;
     for id in ids {
         let spec = store.get_dot(&id).await?.spec;
         let grants = store.synced_grants(None, &spec).await?;
@@ -469,7 +471,16 @@ pub(super) async fn finish_0009(store: &super::Store) -> Result<()> {
                 .bind(&id)
                 .execute(&mut *tx)
                 .await?;
+            hashed = true;
         }
+    }
+    if hashed {
+        sqlx::query(
+            "INSERT INTO settings (key, value) VALUES (?, 'true')              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        )
+        .bind(crate::vault::upgrade::VACUUM_PENDING)
+        .execute(&mut *tx)
+        .await?;
     }
     sqlx::query("DROP TABLE upgrade_0009")
         .execute(&mut *tx)

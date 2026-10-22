@@ -250,7 +250,12 @@ pub fn owner_only(path: &std::path::Path) -> std::io::Result<()> {
         return Err(err);
     }
     // SAFETY: GetTokenInformation filled `buf` with a TOKEN_USER whose SID points into `buf`.
-    let sid = unsafe { (*(buf.as_ptr() as *const TOKEN_USER)).User.Sid };
+    // `buf` is a byte vector, so the struct is read without assuming alignment.
+    let sid = unsafe {
+        std::ptr::read_unaligned(buf.as_ptr() as *const TOKEN_USER)
+            .User
+            .Sid
+    };
     let access = EXPLICIT_ACCESS_W {
         grfAccessPermissions: GENERIC_ALL,
         grfAccessMode: SET_ACCESS,
