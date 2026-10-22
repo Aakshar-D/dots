@@ -69,6 +69,9 @@ const text = z.string();
 export const commands = {
   startupError: () => call(T.StartupError.nullable(), "startup_error"),
   status: () => call(T.Status, "status"),
+  chatGptAccount: () => call(T.ChatGptStatus, "chatgpt_account"),
+  chatGptSignIn: () => call(T.ChatGptStatus, "chatgpt_sign_in"),
+  chatGptSignOut: () => call(T.ChatGptStatus, "chatgpt_sign_out"),
   markClaudeTested: () => call(T.Status, "mark_claude_tested"),
   getSettings: () => call(T.Settings, "get_settings"),
   /// Rejects with kind `cancelled` when the user declines the native confirmation of a new

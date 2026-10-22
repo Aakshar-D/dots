@@ -19,6 +19,7 @@ const schemas: Record<SampleName, { parse: (v: unknown) => unknown }> = {
   RuntimeEvent: T.RuntimeEvent.array(),
   Status: T.Status,
   Settings: T.Settings,
+  ChatGptStatus: T.ChatGptStatus.array(),
   SettingsSaved: T.SettingsSaved,
   DotOverview: T.DotOverview,
   Inbox: T.Inbox,

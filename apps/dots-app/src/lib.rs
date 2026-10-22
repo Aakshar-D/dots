@@ -33,6 +33,9 @@ command_list![
     status,
     mark_claude_tested,
     get_settings,
+    chatgpt_account,
+    chatgpt_sign_in,
+    chatgpt_sign_out,
     update_settings,
     set_schedules_paused,
     restart_app,
@@ -166,6 +169,7 @@ fn setup(app: &AppHandle, panics_logged: bool) -> Result<(), Box<dyn std::error:
             update_service::spawn(app.clone(), rt.clone());
         }
     }
+    app.manage(dots_core::chatgpt::ChatGptAuth::from_env());
     app.manage(AppState::new(runtime.map(|(rt, _)| rt), log_dir).with_data_dir(data_dir.ok()));
     // A failed start always shows its error page, even when launched hidden; so does a start
     // that "Restart Dots" asked for.

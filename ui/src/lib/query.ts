@@ -25,6 +25,7 @@ export const keys = {
   status: ["status"] as const,
   update: ["update"] as const,
   settings: ["settings"] as const,
+  chatGptAccount: ["chatgpt-account"] as const,
   overview: ["overview"] as const,
   inbox: ["inbox"] as const,
   library: ["library"] as const,

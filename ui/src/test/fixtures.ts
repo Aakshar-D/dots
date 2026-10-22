@@ -58,6 +58,10 @@ export function installDefaults(): void {
   backend.on("dot_overview", () => []);
   backend.on("list_dots", () => []);
   backend.on("get_settings", () => sample.settings);
+  backend.on("chatgpt_account", () => ({
+    configured: false, signing_in: false, account: null, expires_at: null,
+    setup_error: "ChatGPT sign-in needs a registered OpenAI client for Dots.",
+  }));
   backend.on("library_list", () => []);
   backend.on("installed_claude_plugins", () => []);
   backend.on("environment_variables", (args) =>

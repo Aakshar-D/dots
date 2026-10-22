@@ -16,6 +16,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { errorMessage, notifyError } from "@/lib/notify";
 import { invalidate, keys, takeStatus } from "@/lib/query";
 
+import { ChatGptAccount } from "./ChatGptAccount";
+
 type Errors = { port?: string; max?: string; global?: string };
 
 /// The size of `text` in UTF-8 bytes, as the core counts it.
@@ -166,6 +168,8 @@ function Form({ stored, status }: { stored: Settings; status: Status | undefined
       }
     >
       {save.isError && !declined && <ErrorNote error={save.error} />}
+
+      <ChatGptAccount />
 
       <Section title="General">
         <div className="flex items-center gap-2">

@@ -51,6 +51,41 @@ pub async fn mark_claude_tested(state: State<'_, AppState>) -> Res<Status> {
 }
 
 #[tauri::command]
+pub fn chatgpt_account(
+    auth: State<'_, dots_core::chatgpt::ChatGptAuth>,
+) -> dots_core::chatgpt::ChatGptStatus {
+    auth.status()
+}
+
+#[tauri::command]
+pub async fn chatgpt_sign_in(
+    app: AppHandle,
+    auth: State<'_, dots_core::chatgpt::ChatGptAuth>,
+) -> Res<dots_core::chatgpt::ChatGptStatus> {
+    auth.sign_in(|url| {
+        app.opener().open_url(url, None::<&str>).map_err(|_| {
+            dots_core::Error::Other(
+                "Could not open your browser. Check your default browser and try again.".into(),
+            )
+        })
+    })
+    .await
+    .map_err(|error| match error {
+        dots_core::Error::Conflict(message) if message == "ChatGPT sign-in cancelled." => {
+            CmdError::cancelled(message)
+        }
+        other => other.into(),
+    })
+}
+
+#[tauri::command]
+pub async fn chatgpt_sign_out(
+    auth: State<'_, dots_core::chatgpt::ChatGptAuth>,
+) -> Res<dots_core::chatgpt::ChatGptStatus> {
+    Ok(auth.sign_out().await)
+}
+
+#[tauri::command]
 pub async fn get_settings(state: State<'_, AppState>) -> Res<Settings> {
     Ok(state.rt()?.settings().await)
 }

@@ -3,6 +3,15 @@
 // (apps/dots-app/src/contract.rs), so the two cannot drift apart silently.
 import { z } from "zod";
 
+export const ChatGptStatus = z.strictObject({
+  configured: z.boolean(),
+  signing_in: z.boolean(),
+  account: z.strictObject({ name: z.string().nullable(), email: z.string().nullable() }).nullable(),
+  setup_error: z.string().nullable(),
+  expires_at: z.iso.datetime({ offset: true }).nullable(),
+});
+export type ChatGptStatus = z.infer<typeof ChatGptStatus>;
+
 const nullable = <T extends z.ZodType>(t: T) => t.nullable();
 
 export const EngineKind = z.enum(["claude", "local"]);
