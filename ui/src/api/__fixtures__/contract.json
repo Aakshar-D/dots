@@ -237,6 +237,7 @@
         "pdf"
       ]
     },
+    "variables": {},
     "webhook_token": "tok_abc",
     "workdir": "C:/dev/app",
     "workspace_mode": "worktree"
@@ -375,6 +376,7 @@
           "pdf"
         ]
       },
+      "variables": {},
       "webhook_token": "tok_abc",
       "workdir": "C:/dev/app",
       "workspace_mode": "worktree"
@@ -497,6 +499,7 @@
       "plugins": [],
       "skills": []
     },
+    "variables": {},
     "workdir": "C:/notes",
     "workspace_mode": "folder"
   },
@@ -1349,6 +1352,7 @@
       "plugins": [],
       "skills": []
     },
+    "variables": {},
     "workdir": "",
     "workspace_mode": "worktree"
   },

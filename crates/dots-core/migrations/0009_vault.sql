@@ -11,3 +11,14 @@ CREATE TABLE env_entries (
     CHECK (kind IN ('plain', 'secret')),
     CHECK (kind = 'plain' OR value IS NULL)
 );
+
+-- What each dot's consumers may resolve (section 7): `{"mcp:<server>": [names], "shell": [...]}`.
+ALTER TABLE dots ADD COLUMN variables TEXT NOT NULL DEFAULT '{}';
+
+-- Each dot is granted the variables of the servers it uses when the store opens
+-- (`store/upgrade.rs`, `finish_0009`), as ticking them would. The rows wait here, and the table
+-- is dropped once they are done.
+CREATE TABLE upgrade_0009 (
+    dot_id TEXT PRIMARY KEY REFERENCES dots(id) ON DELETE CASCADE
+);
+INSERT INTO upgrade_0009 (dot_id) SELECT id FROM dots;

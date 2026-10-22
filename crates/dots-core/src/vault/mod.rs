@@ -2,10 +2,14 @@
 //! kept, and how a run gets them.
 
 pub mod entries;
+pub mod grants;
+pub mod resolve;
 pub mod secrets;
 pub mod service;
 
 pub use entries::{EntryKind, EnvEntry};
+pub use grants::{Consumer, Grants};
+pub use resolve::{Missing, Resolved, Unresolved};
 #[cfg(windows)]
 pub use secrets::WindowsCredentials;
 pub use secrets::{os_secrets, MemorySecrets, SecretStore, MAX_SECRET_BYTES};

@@ -5,6 +5,7 @@ use serde_json::Value;
 use crate::library::Uses;
 use crate::policy::{Policy, Preset};
 use crate::schedule::{next_slot, Schedule, Until};
+use crate::vault::Grants;
 use crate::{Error, Result};
 
 str_enum!(EngineKind { Claude => "claude", Local => "local" });
@@ -83,6 +84,9 @@ pub struct DotSpec {
     /// The Library items the dot uses (MCP/skills spec section 2).
     #[serde(default)]
     pub uses: Uses,
+    /// The variables each of its consumers may resolve (env vault spec §7).
+    #[serde(default)]
+    pub variables: Grants,
     /// The first prompt starts with the global instructions of Settings (context library spec
     /// section 2).
     #[serde(default = "yes")]
@@ -107,6 +111,7 @@ impl DotSpec {
             schedule: None,
             policy: Policy::preset(Preset::Sandboxed),
             uses: Uses::default(),
+            variables: Grants::default(),
             use_global_instructions: true,
             use_user_settings: false,
             max_turns: 40,
@@ -163,6 +168,7 @@ impl DotSpec {
         self.policy.validate()?;
         // Whether the Library has each item is checked by the store when the dot is saved.
         self.uses.validate()?;
+        self.variables.validate()?;
         Ok(())
     }
 }

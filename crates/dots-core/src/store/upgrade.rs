@@ -433,3 +433,35 @@ fn with_checkins(stored: &str) -> Option<String> {
     let policy: Policy = serde_json::from_value(value).ok()?;
     serde_json::to_string(&policy).ok()
 }
+
+/// Grants each dot listed in `upgrade_0009` the variables of the servers it uses, as ticking
+/// them would (env vault spec §11 step 2), then drops the table. After 0006, so the servers it
+/// made are there.
+pub(super) async fn finish_0009(store: &super::Store) -> Result<()> {
+    let waiting: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'upgrade_0009'",
+    )
+    .fetch_one(&store.pool)
+    .await?;
+    if waiting == 0 {
+        return Ok(());
+    }
+    let ids: Vec<String> = sqlx::query_scalar("SELECT dot_id FROM upgrade_0009")
+        .fetch_all(&store.pool)
+        .await?;
+    let mut tx = store.pool.begin().await?;
+    for id in ids {
+        let spec = store.get_dot(&id).await?.spec;
+        let grants = store.synced_grants(None, &spec).await?;
+        sqlx::query("UPDATE dots SET variables = ? WHERE id = ?")
+            .bind(serde_json::to_string(&grants)?)
+            .bind(&id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    sqlx::query("DROP TABLE upgrade_0009")
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
+}

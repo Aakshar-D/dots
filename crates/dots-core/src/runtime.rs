@@ -229,6 +229,7 @@ impl Runtime {
         );
         // Dots' own `dots` MCP server serves the check-in tools to Claude runs.
         runner.set_checkins(checkins.clone());
+        runner.set_vault(vault.clone());
         // Decisions parked before a restart (decided, but the resume never happened) are
         // turned into resume runs now; failures are logged and never block startup.
         match store.list_runs_by_status(RunStatus::AwaitingApproval).await {
@@ -267,7 +268,8 @@ impl Runtime {
         follow_ups.spawn(runner.clone(), shutdown.clone());
         Ok(Runtime {
             library: LibraryService::new(store.clone(), bus.clone())
-                .with_skills_dir(cfg.data_dir.join(SKILLS_DIR)),
+                .with_skills_dir(cfg.data_dir.join(SKILLS_DIR))
+                .with_vault(vault.clone()),
             vault,
             store,
             bus,

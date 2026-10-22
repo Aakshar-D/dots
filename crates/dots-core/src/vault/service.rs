@@ -3,6 +3,8 @@
 
 use std::sync::Arc;
 
+use zeroize::Zeroizing;
+
 use super::entries::{check_value, check_variable_name, EntryKind, EnvEntry};
 use super::secrets::SecretStore;
 use crate::store::Store;
@@ -22,6 +24,12 @@ pub struct Vault {
 impl Vault {
     pub fn new(store: Store, secrets: Arc<dyn SecretStore>) -> Vault {
         Vault { store, secrets }
+    }
+
+    /// A vault whose secrets live in memory: for a Library or a runner made without the
+    /// runtime's (tests).
+    pub fn in_memory(store: Store) -> Vault {
+        Vault::new(store, Arc::new(super::MemorySecrets::new()))
     }
 
     /// Every personal variable (`env_list`). A secret's `value` is `None`.
@@ -69,6 +77,17 @@ impl Vault {
             self.secrets.delete(&personal_key(&entry.name))?;
         }
         self.store.remove_env_entry(&entry.name).await
+    }
+
+    /// The value of the personal variable `name`, in any case, if there is one.
+    pub(crate) async fn personal_value(&self, name: &str) -> Result<Option<Zeroizing<String>>> {
+        let Some(entry) = self.store.find_env_entry(name).await? else {
+            return Ok(None);
+        };
+        match entry.kind {
+            EntryKind::Plain => Ok(entry.value.map(Zeroizing::new)),
+            EntryKind::Secret => self.secrets.get(&personal_key(&entry.name)),
+        }
     }
 
     async fn get(&self, name: &str) -> Result<EnvEntry> {

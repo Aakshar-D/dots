@@ -95,6 +95,8 @@ const dotSpecShape = {
   schedule: nullable(Schedule),
   policy: Policy,
   uses: Uses,
+  // Consumer (`mcp:<server>` or `shell`) to the variable names it may resolve.
+  variables: z.record(z.string(), z.array(z.string())),
   use_global_instructions: z.boolean(),
   use_user_settings: z.boolean(),
   max_turns: z.number().int(),

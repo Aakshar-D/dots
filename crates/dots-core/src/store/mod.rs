@@ -28,7 +28,7 @@ pub struct Store {
 
 impl Store {
     /// Opens (creating if needed) the database file and applies migrations, with the parts of
-    /// migrations 0006, 0007 and 0008 that need code (`upgrade.rs`).
+    /// migrations 0006 to 0009 that need code (`upgrade.rs`).
     pub async fn open(path: &Path) -> Result<Store> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -47,7 +47,9 @@ impl Store {
         upgrade::finish_0006(&pool).await?;
         upgrade::finish_0007(&pool).await?;
         upgrade::finish_0008(&pool).await?;
-        Ok(Store { pool })
+        let store = Store { pool };
+        upgrade::finish_0009(&store).await?;
+        Ok(store)
     }
 
     /// Closes every connection of this store.

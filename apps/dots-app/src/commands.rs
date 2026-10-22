@@ -499,13 +499,13 @@ pub fn installed_claude_plugins(state: State<'_, AppState>) -> Res<Vec<Installed
     Ok(state.rt()?.library().installed_plugins())
 }
 
-/// Which of the names Dots' environment sets. Never a value.
+/// Which of the names Personal has. Never a value.
 #[tauri::command]
-pub fn environment_variables(
+pub async fn environment_variables(
     state: State<'_, AppState>,
     names: Vec<String>,
 ) -> Res<Vec<EnvVariable>> {
-    Ok(state.rt()?.library().environment_variables(&names))
+    Ok(state.rt()?.library().environment_variables(&names).await?)
 }
 
 /// The personal variables of the Env tab. A secret's value is never in the answer.

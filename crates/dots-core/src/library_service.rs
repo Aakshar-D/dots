@@ -21,9 +21,11 @@ use crate::mcp::{fingerprint, McpError, McpSession, McpTool, SessionOptions};
 use crate::model::{DotRef, ToolsChanged};
 use crate::skill_creator::{self, check_draft};
 use crate::store::Store;
+use crate::vault::{Resolved, Vault};
 use crate::{Error, Result};
 
-/// Dots' own environment, where `${VAR}` is read.
+/// Dots' own environment, where Claude Code's plugin list is looked up (`kit::installed`).
+/// `${VAR}` is never read here: it resolves from the vault (env vault spec §8).
 pub(crate) fn process_env(key: &str) -> Option<String> {
     std::env::var(key).ok()
 }
@@ -124,7 +126,7 @@ pub struct ScannedSkill {
     pub name_error: Option<String>,
 }
 
-/// Whether a variable is set in Dots' environment. Never its value.
+/// Whether Personal has a variable. Never its value.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct EnvVariable {
     pub name: String,
@@ -142,9 +144,10 @@ pub(crate) fn publish(bus: &Bus, item_id: &str) {
 pub(crate) async fn open_and_list(
     name: &str,
     config: &McpServerConfig,
+    env: &Resolved,
     options: SessionOptions,
 ) -> std::result::Result<(McpSession, Vec<McpTool>), McpError> {
-    let session = McpSession::open(name, config, &process_env, options).await?;
+    let session = McpSession::open(name, config, &|k| env.get(k), options).await?;
     match session.list_tools().await {
         Ok(tools) => Ok((session, tools)),
         Err(e) => {
@@ -371,15 +374,24 @@ pub struct LibraryService {
     store: Store,
     bus: Bus,
     skills_dir: Option<PathBuf>,
+    /// Where a probe, a check and the missing variables read `${VAR}`: Personal.
+    vault: Vault,
 }
 
 impl LibraryService {
     pub fn new(store: Store, bus: Bus) -> LibraryService {
         LibraryService {
+            vault: Vault::in_memory(store.clone()),
             store,
             bus,
             skills_dir: None,
         }
+    }
+
+    /// The vault whose Personal variables `${VAR}` reads (env vault spec §8).
+    pub fn with_vault(mut self, vault: Vault) -> LibraryService {
+        self.vault = vault;
+        self
     }
 
     /// Where the skill creator saves skills (`<data>/skills`, skill creator spec §6). Without
@@ -469,10 +481,11 @@ impl LibraryService {
                 dots_folder,
             };
             if let LibraryConfig::McpServer(config) = &item.config {
-                entry.missing_variables = config
-                    .variables()
+                let variables = config.variables();
+                let personal = self.vault.personal_values(&variables).await?;
+                entry.missing_variables = variables
                     .into_iter()
-                    .filter(|v| process_env(v).is_none())
+                    .filter(|v| !personal.contains(v))
                     .collect();
             }
             match read {
@@ -624,7 +637,9 @@ impl LibraryService {
     /// (`library_probe`). The error is the text the person sees ("could not start: SF_TOKEN is
     /// not set").
     pub async fn probe(&self, config: &McpServerConfig) -> Result<McpProbe> {
-        let (session, tools) = open_and_list("probe", config, SessionOptions::default()).await?;
+        let env = self.vault.personal_values(&config.variables()).await?;
+        let (session, tools) =
+            open_and_list("probe", config, &env, SessionOptions::default()).await?;
         session.close().await;
         Ok(McpProbe {
             fingerprint: fingerprint(&tools),
@@ -708,15 +723,16 @@ impl LibraryService {
         kit::installed_plugins(&process_env)
     }
 
-    /// Which of `names` Dots' environment sets (`environment_variables`).
-    pub fn environment_variables(&self, names: &[String]) -> Vec<EnvVariable> {
-        names
+    /// Which of `names` Personal has (`environment_variables`).
+    pub async fn environment_variables(&self, names: &[String]) -> Result<Vec<EnvVariable>> {
+        let personal = self.vault.personal_values(names).await?;
+        Ok(names
             .iter()
             .map(|name| EnvVariable {
                 name: name.clone(),
-                set: process_env(name).is_some(),
+                set: personal.contains(name),
             })
-            .collect()
+            .collect())
     }
 
     /// The MCP servers whose tool list waits for review, with the dots that use them (the
@@ -762,7 +778,8 @@ impl LibraryService {
                 item.name
             )));
         };
-        match open_and_list(&item.name, config, SessionOptions::default()).await {
+        let env = self.vault.personal_values(&config.variables()).await?;
+        match open_and_list(&item.name, config, &env, SessionOptions::default()).await {
             Ok((session, tools)) => {
                 session.close().await;
                 record_check(&self.store, &self.bus, &item.id, Ok(&tools)).await

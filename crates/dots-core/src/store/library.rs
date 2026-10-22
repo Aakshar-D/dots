@@ -219,7 +219,8 @@ impl Store {
             return Err(Error::NotFound(format!("library item {id}")));
         }
         if config.kind() == LibraryKind::McpServer {
-            if moved_origin(&old.config, config, &|k| std::env::var(k).ok()) {
+            // Without values: a URL whose text changed counts as moved (`origin_changed`).
+            if moved_origin(&old.config, config, &|_| None) {
                 sqlx::query(
                     "UPDATE mcp_catalogs SET accepted_fingerprint = NULL, accepted_tools = NULL \
                      WHERE server_id = ?",
