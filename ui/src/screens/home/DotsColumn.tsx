@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { dotStatus, lastLine, nextLine } from "@/lib/dot-status";
 import { keys } from "@/lib/query";
 import { StatusMark } from "@/screens/home/StatusMark";
+import { UnreadBadge } from "@/screens/home/UnreadBadge";
 
 /// The home's list of dots, like a list of chat contacts (chat-first home spec, section 3).
 /// `rows` come sorted; `openId` is the dot whose conversation is open.
@@ -68,6 +69,7 @@ export function DotsColumn({ rows, openId }: { rows: DotOverview[]; openId: stri
                 <span className="flex items-center gap-2">
                   <StatusMark status={dotStatus(row, messages)} />
                   <span className="truncate font-medium">{row.dot.name}</span>
+                  <UnreadBadge row={row} />
                 </span>
                 <span className="truncate pl-4.5 text-xs text-muted-foreground">
                   {lastLine(row)}

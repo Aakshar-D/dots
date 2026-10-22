@@ -26,6 +26,8 @@ export function Layout() {
     queryKey: keys.messages(null),
     queryFn: () => commands.messagesList(null),
   }).data;
+  // What the dots have for the person, read or not (needs-you spec section 5).
+  const unread = useQuery({ queryKey: keys.unreadTotal, queryFn: commands.unreadTotal }).data ?? 0;
   // The same count as the tray's (`inbox_count`), the open questions and unread notes included.
   const waiting =
     (inbox
@@ -41,9 +43,9 @@ export function Layout() {
         className="flex w-14 shrink-0 flex-col items-center gap-1 border-r bg-sidebar py-2 text-sidebar-foreground"
       >
         {LINKS.map(({ to, label, icon: Icon }) => {
-          const count = to === "/inbox" ? waiting : 0;
+          const count = to === "/inbox" ? waiting : to === "/home" ? unread : 0;
           // The name says the count too, and the tooltip shows it.
-          const name = count > 0 ? `${label}, ${count} waiting` : label;
+          const name = count > 0 ? `${label}, ${count} ${to === "/home" ? "unread" : "waiting"}` : label;
           return (
             <NavLink
               key={to}
@@ -60,7 +62,7 @@ export function Layout() {
               <Icon className="size-5" aria-hidden />
               {count > 0 && (
                 <Badge className="absolute -top-1 -right-1 h-4 min-w-4 px-1 text-[10px]">
-                  {count}
+                  {count > 99 ? "99+" : count}
                 </Badge>
               )}
             </NavLink>

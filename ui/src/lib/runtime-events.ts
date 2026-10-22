@@ -50,6 +50,8 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
     case "approval_updated":
       invalidate(qc, keys.inbox);
       invalidate(qc, keys.approvals(event.approval.run_id));
+      // A pending approval needs the person: the dots' counts.
+      invalidate(qc, keys.overview);
       break;
     case "schedule_updated":
       // Where the dot's schedule stands: its next run, retry and "Needs attention", which the
@@ -71,6 +73,12 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
       // The Inbox's Messages group and its count, and the chat the message belongs to. An
       // answer's run comes with its own `run_updated`.
       invalidate(qc, ["messages"]);
+      // An open question needs the person, and a note is new: the dots' counts.
+      invalidate(qc, keys.overview);
+      break;
+    case "dot_seen":
+      // What is unread on the dot, and the Home link's total.
+      invalidate(qc, keys.overview);
       break;
     case "follow_ups_updated":
       // The pending follow-ups in the Dots list and the dot's editor.
