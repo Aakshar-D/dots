@@ -5,6 +5,25 @@ use crate::settings::Settings;
 use crate::Result;
 
 impl Store {
+    /// This data folder's install id: a ULID made the first time it is asked for and kept in the
+    /// `settings` table under `install_id`, outside `Settings` (env vault spec §5.2). It names
+    /// the folder's secrets in Credential Manager.
+    pub async fn install_id(&self) -> Result<String> {
+        sqlx::query("INSERT OR IGNORE INTO settings (key, value) VALUES ('install_id', ?)")
+            .bind(Value::String(crate::util::new_id()).to_string())
+            .execute(&self.pool)
+            .await?;
+        let raw: String = sqlx::query_scalar("SELECT value FROM settings WHERE key = 'install_id'")
+            .fetch_one(&self.pool)
+            .await?;
+        match serde_json::from_str::<Value>(&raw)? {
+            Value::String(id) => Ok(id),
+            _ => Err(crate::Error::Other(
+                "the stored install id is not text".into(),
+            )),
+        }
+    }
+
     /// The stored settings, with defaults for missing keys. Unknown keys are ignored, and so is
     /// a stored value that does not fit its field (logged), so one bad row never hides the rest.
     pub async fn get_settings(&self) -> Result<Settings> {
