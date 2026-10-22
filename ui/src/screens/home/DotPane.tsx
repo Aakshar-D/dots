@@ -15,6 +15,7 @@ import { rememberDot } from "@/screens/home/last-dot";
 import { ReplyArea, type ReplyPick } from "@/screens/home/ReplyArea";
 import { Timeline } from "@/screens/home/Timeline";
 import { useConversation } from "@/screens/home/use-conversation";
+import { useViewing } from "@/screens/home/use-viewing";
 
 /// One dot's side of the home: its header and its conversation, or one older topic of it
 /// (`rootRunId`). Mounted per dot and topic.
@@ -24,6 +25,7 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
     useQuery({ queryKey: keys.messages(null), queryFn: () => commands.messagesList(null) }).data ??
     [];
   useEffect(() => rememberDot(dot.id), [dot.id]);
+  useViewing(dot.id);
   const view = useConversation(dot.id, rootRunId);
   // An older topic whose run is gone (deleted, or a stale link) leaves nothing to show.
   const older = rootRunId !== undefined ? view.threads[0] : undefined;
