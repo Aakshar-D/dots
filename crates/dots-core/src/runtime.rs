@@ -130,8 +130,9 @@ impl Runtime {
         // spec §10).
         let vault = Vault::open(store.clone(), secrets).await?;
         // A setup from before the vault: its stored secret values move into Personal (env
-        // vault spec §11). A failure is logged and the app starts anyway.
-        // The old-backups cut-off is set only once the move finished without error.
+        // vault spec §11). A failure is logged and the app starts anyway. The old-backups
+        // cut-off is set once the move has run, even when a server failed: that server is
+        // logged by name and tried again at the next start.
         match vault.move_stored_literals().await {
             Ok(n) => {
                 if n > 0 {

@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use super::child_env::{is_cli_own, BASE_ENV};
 use super::entries::EntryKind;
 use super::grants::Consumer;
-use super::literals::has_literals;
+use super::literals::{has_movable_literals, scrub_unmovable};
 use super::service::Vault;
 use crate::library::LibraryConfig;
 use crate::library_service::process_env;
@@ -30,39 +30,35 @@ pub const BACKUPS_DIR: &str = "backups";
 
 impl Vault {
     /// Moves every secret value stored in a Library server's config into Personal, and
-    /// grants the dots that use the server the names it moved under. The database is vacuumed
-    /// afterwards, so its freed pages lose the old values; a marker kept until then makes the
-    /// next start vacuum if this one fails half way. A server that fails is logged by name and
-    /// left for the next start: its dots are granted before its config is rewritten, so the
-    /// retry finds the same names. Returns how many servers changed.
+    /// grants the dots that use the server the names it moved under. A value that cannot move
+    /// (too long, or refused) stays and is scrubbed from what Dots keeps and logs. The database
+    /// is vacuumed afterwards, so its freed pages lose the old values; a marker, set just
+    /// before the first config is rewritten and kept until then, makes the next start vacuum
+    /// if this one fails half way. A server that fails is logged by name and left for the next
+    /// start: its dots are granted before its config is rewritten, so the retry finds the same
+    /// names. Returns how many servers changed.
     pub async fn move_stored_literals(&self) -> Result<usize> {
         let store = self.store();
         let mut todo = Vec::new();
         for item in store.list_library_items().await? {
             if let LibraryConfig::McpServer(config) = &item.config {
-                if has_literals(&item.name, config) {
+                if has_movable_literals(&item.name, config) {
                     todo.push(item);
+                } else {
+                    scrub_unmovable(&item.name, config);
                 }
             }
         }
-        if !todo.is_empty() {
-            store
-                .set_marker(VACUUM_PENDING, &json!(true), false)
-                .await?;
-        }
         let mut changed = 0;
-        let mut failed = false;
+        let mut marked = false;
         for item in todo {
-            match self.move_stored(&item).await {
+            match self.move_stored(&item, &mut marked).await {
                 Ok(true) => changed += 1,
                 Ok(false) => {}
-                Err(e) => {
-                    failed = true;
-                    tracing::error!(
-                        "moving the secret values of server {:?} failed: {e}",
-                        item.name
-                    );
-                }
+                Err(e) => tracing::error!(
+                    "moving the secret values of server {:?} failed: {e}",
+                    item.name
+                ),
             }
         }
         if store.marker(VACUUM_PENDING).await? == Some(json!(true)) {
@@ -71,16 +67,16 @@ impl Vault {
                 .set_marker(VACUUM_PENDING, &json!(false), false)
                 .await?;
         }
-        if failed {
-            return Err(Error::Other(
-                "some stored secret values could not be moved to the vault".into(),
-            ));
-        }
         Ok(changed)
     }
 
-    /// One server: its dots are granted the names, then its config is rewritten.
-    async fn move_stored(&self, item: &crate::library::LibraryItem) -> Result<bool> {
+    /// One server: its dots are granted the names, then its config is rewritten. The vacuum
+    /// marker is set just before the first rewrite of this start (`marked`).
+    async fn move_stored(
+        &self,
+        item: &crate::library::LibraryItem,
+        marked: &mut bool,
+    ) -> Result<bool> {
         let store = self.store();
         let LibraryConfig::McpServer(config) = &item.config else {
             return Ok(false);
@@ -99,6 +95,12 @@ impl Vault {
                 }
             }
             store.set_dot_variables(&dot.id, &grants).await?;
+        }
+        if !*marked {
+            store
+                .set_marker(VACUUM_PENDING, &json!(true), false)
+                .await?;
+            *marked = true;
         }
         store
             .update_library_item(&item.id, &LibraryConfig::McpServer(moved_config))

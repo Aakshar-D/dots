@@ -4,7 +4,7 @@
 //! (`SF_TOKEN`), an `Authorization` header under `<SERVER>_AUTHORIZATION` with its scheme
 //! kept, another header under `<SERVER>_<HEADER>`.
 
-use super::entries::{check_variable_name, EntryKind};
+use super::entries::{check_value, check_variable_name, EntryKind};
 use super::secrets::MAX_SECRET_BYTES;
 use super::service::Vault;
 use crate::library::{looks_secret, McpServerConfig};
@@ -137,15 +137,50 @@ fn found(server: &str, config: &McpServerConfig) -> Vec<Found> {
     out
 }
 
-/// Whether `config` holds a secret-looking value that is not `${…}`.
-pub fn has_literals(server: &str, config: &McpServerConfig) -> bool {
-    !found(server, config).is_empty()
+impl Found {
+    /// Why this value cannot move to Personal, if it cannot: too long for the secret store, a
+    /// name that is not valid, or a value the vault refuses (a NUL).
+    fn unmovable(&self) -> Option<&'static str> {
+        if self.value.len() > MAX_SECRET_BYTES {
+            Some("is too long to move to the vault")
+        } else if check_variable_name(&self.name).is_err() {
+            Some("has no valid name")
+        } else if check_value(EntryKind::Secret, &self.value).is_err() {
+            Some("is refused by the vault")
+        } else {
+            None
+        }
+    }
+
+    /// A value that stays where it is is at least scrubbed from what Dots keeps and logs.
+    fn stay(&self, server: &str, why: &str) {
+        tracing::warn!("{server}: a value of {:?} {why}", self.name);
+        redact::global().add(&self.name, &self.value);
+    }
+}
+
+/// Whether `config` holds a secret-looking value that is not `${…}` and can move to Personal.
+pub fn has_movable_literals(server: &str, config: &McpServerConfig) -> bool {
+    found(server, config)
+        .iter()
+        .any(|f| f.unmovable().is_none())
+}
+
+/// Logs each secret-looking value of `config` that cannot move to Personal, by name, and
+/// scrubs it from what Dots keeps and logs from now on.
+pub fn scrub_unmovable(server: &str, config: &McpServerConfig) {
+    for f in found(server, config) {
+        if let Some(why) = f.unmovable() {
+            f.stay(server, why);
+        }
+    }
 }
 
 impl Vault {
     /// `config` with each secret-looking value moved into Personal as a secret, and the names
     /// it moved under. A name Personal has with the same value is reused; one it has with
-    /// another value gets `_2`, `_3`, … A value too long for the secret store stays where it is.
+    /// another value gets `_2`, `_3`, … A value that cannot move (too long for the secret
+    /// store, or refused) stays where it is and is scrubbed.
     pub async fn move_literals(
         &self,
         server: &str,
@@ -154,18 +189,8 @@ impl Vault {
         let mut config = config.clone();
         let mut moved = Vec::new();
         for f in found(server, &config) {
-            // A value that stays where it is is at least scrubbed from what Dots keeps and logs.
-            if f.value.len() > MAX_SECRET_BYTES {
-                tracing::warn!(
-                    "{server}: a value of {:?} is too long to move to the vault",
-                    f.name
-                );
-                redact::global().add(&f.name, &f.value);
-                continue;
-            }
-            if check_variable_name(&f.name).is_err() {
-                tracing::warn!("{server}: a value of {:?} has no valid name", f.name);
-                redact::global().add(&f.name, &f.value);
+            if let Some(why) = f.unmovable() {
+                f.stay(server, why);
                 continue;
             }
             let mut name = f.name.clone();

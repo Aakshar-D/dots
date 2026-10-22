@@ -4,8 +4,10 @@
 mod common;
 
 use std::path::Path;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
+use common::secrets::FailingSecrets;
 use common::{spec, temp_store};
 use dots_core::events::new_bus;
 use dots_core::library::{LibraryConfig, LibraryKind, McpServerConfig, PluginConfig};
@@ -376,11 +378,11 @@ async fn the_clis_own_and_the_base_variables_are_never_offered_or_imported() {
 #[tokio::test]
 async fn one_failing_server_does_not_stop_the_others_or_the_vacuum() {
     let (dir, store) = temp_store().await;
-    // A value the vault refuses (a NUL), listed before the good one.
-    store
+    // A value the secret store fails to keep, listed before the good one.
+    let bad = store
         .add_library_item(
             "aa-bad",
-            &LibraryConfig::McpServer(stdio(&[("BAD_TOKEN", "bad\0value-secret-9")])),
+            &LibraryConfig::McpServer(stdio(&[("BAD_TOKEN", "bad-value-secret-9")])),
             None,
         )
         .await
@@ -393,8 +395,13 @@ async fn one_failing_server_does_not_stop_the_others_or_the_vacuum() {
         )
         .await
         .unwrap();
-    let vault = Vault::in_memory(store.clone());
-    assert!(vault.move_stored_literals().await.is_err());
+    let vault = Vault::new(store.clone(), Arc::new(FailingSecrets::new("BAD_TOKEN")));
+    // The failing server is logged by name and left for the next start.
+    assert_eq!(vault.move_stored_literals().await.unwrap(), 1);
+    assert_eq!(
+        store.get_library_item(&bad.id).await.unwrap().config,
+        LibraryConfig::McpServer(stdio(&[("BAD_TOKEN", "bad-value-secret-9")]))
+    );
     assert_eq!(
         store.get_library_item(&good.id).await.unwrap().config,
         LibraryConfig::McpServer(stdio(&[("GOOD_TOKEN", "${GOOD_TOKEN}")]))
@@ -575,4 +582,89 @@ async fn a_plain_url_or_a_path_stays_where_it_is() {
         .await
         .unwrap();
     assert_eq!(moved, ["API_KEY"]);
+}
+
+#[tokio::test]
+async fn a_value_that_cannot_move_never_sets_the_vacuum_marker() {
+    let (_dir, store) = temp_store().await;
+    let long = format!("unmovable-{}", "u".repeat(3000));
+    let item = store
+        .add_library_item(
+            "big",
+            &LibraryConfig::McpServer(stdio(&[("BIG_TOKEN", &long)])),
+            None,
+        )
+        .await
+        .unwrap();
+    // Two starts: nothing can move, so neither rewrites a config or vacuums.
+    for _ in 0..2 {
+        let vault = Vault::in_memory(store.clone());
+        assert_eq!(vault.move_stored_literals().await.unwrap(), 0);
+        assert_eq!(store.marker("vault_vacuum_pending").await.unwrap(), None);
+    }
+    assert_eq!(
+        store.get_library_item(&item.id).await.unwrap().config,
+        LibraryConfig::McpServer(stdio(&[("BIG_TOKEN", &long)]))
+    );
+}
+
+#[tokio::test]
+async fn a_value_the_vault_refuses_stays_but_is_scrubbed() {
+    let (_dir, store) = temp_store().await;
+    let refused = "refused\0value-secret-18";
+    let item = store
+        .add_library_item(
+            "nul",
+            &LibraryConfig::McpServer(stdio(&[("NUL_TOKEN", refused)])),
+            None,
+        )
+        .await
+        .unwrap();
+    let vault = Vault::in_memory(store.clone());
+    assert_eq!(vault.move_stored_literals().await.unwrap(), 0);
+    assert_eq!(
+        store.get_library_item(&item.id).await.unwrap().config,
+        LibraryConfig::McpServer(stdio(&[("NUL_TOKEN", refused)]))
+    );
+    assert_eq!(store.marker("vault_vacuum_pending").await.unwrap(), None);
+    assert_eq!(
+        redact::global().scrub(&format!("log: {refused}")).as_ref(),
+        "log: [secret:NUL_TOKEN]"
+    );
+}
+
+#[tokio::test]
+async fn the_vault_since_mark_is_written_despite_a_failing_server() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("data");
+    std::fs::create_dir_all(&data).unwrap();
+    let good = {
+        let store = Store::open(&data.join("dots.db")).await.unwrap();
+        store
+            .add_library_item(
+                "aa-bad",
+                &LibraryConfig::McpServer(stdio(&[("BAD_TOKEN", "bad-start-secret-19")])),
+                None,
+            )
+            .await
+            .unwrap();
+        store
+            .add_library_item(
+                "zz-good",
+                &LibraryConfig::McpServer(stdio(&[("GOOD_TOKEN", "good-start-secret-20")])),
+                None,
+            )
+            .await
+            .unwrap()
+    };
+    let mut cfg = dots_core::Config::new(&data);
+    cfg.port = 0;
+    cfg.secrets = Some(Arc::new(FailingSecrets::new("BAD_TOKEN")));
+    let rt = dots_core::Runtime::start(cfg).await.unwrap();
+    assert!(rt.store().marker("vault_since").await.unwrap().is_some());
+    assert_eq!(
+        rt.store().get_library_item(&good.id).await.unwrap().config,
+        LibraryConfig::McpServer(stdio(&[("GOOD_TOKEN", "${GOOD_TOKEN}")]))
+    );
+    rt.shutdown();
 }
