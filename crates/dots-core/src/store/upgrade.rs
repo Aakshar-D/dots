@@ -475,12 +475,12 @@ pub(super) async fn finish_0009(store: &super::Store) -> Result<()> {
         }
     }
     if hashed {
-        sqlx::query(
-            "INSERT INTO settings (key, value) VALUES (?, 'true')              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        )
-        .bind(crate::vault::upgrade::VACUUM_PENDING)
-        .execute(&mut *tx)
-        .await?;
+        // The marker `Store::set_marker` sets, written in this transaction.
+        sqlx::query(super::settings::SET_SETTING_SQL)
+            .bind(crate::vault::upgrade::VACUUM_PENDING)
+            .bind(json!(true).to_string())
+            .execute(&mut *tx)
+            .await?;
     }
     sqlx::query("DROP TABLE upgrade_0009")
         .execute(&mut *tx)

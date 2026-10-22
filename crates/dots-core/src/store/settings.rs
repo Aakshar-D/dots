@@ -4,6 +4,10 @@ use super::Store;
 use crate::settings::Settings;
 use crate::Result;
 
+/// Sets the `settings` row of a key (`?` one) to a value (`?` two), replacing what was there.
+pub(crate) const SET_SETTING_SQL: &str = "INSERT INTO settings (key, value) VALUES (?, ?) \
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value";
+
 impl Store {
     /// This data folder's install id: a ULID made the first time it is asked for and kept in the
     /// `settings` table under `install_id`, outside `Settings` (env vault spec §5.2). It names
@@ -39,8 +43,7 @@ impl Store {
         let sql = if keep {
             "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)"
         } else {
-            "INSERT INTO settings (key, value) VALUES (?, ?) \
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+            SET_SETTING_SQL
         };
         sqlx::query(sql)
             .bind(key)
