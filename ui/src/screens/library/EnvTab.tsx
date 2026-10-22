@@ -278,8 +278,8 @@ export function EnvTab() {
       )}
       {skipped.length > 0 && (
         <p role="alert" className="text-sm text-destructive">
-          Not imported: {skipped.join(", ")}. Its value is too long for a secret or could not be
-          stored; add it by hand.
+          Not imported: {skipped.join(", ")}. Their values could not be imported (too long for a
+          secret, refused, or no longer set); add them by hand.
         </p>
       )}
       {backups.data && backups.data.length > 0 && <BackupsOffer files={backups.data} />}

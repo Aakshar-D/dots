@@ -1262,8 +1262,8 @@ describe("the Library's Env tab", () => {
     await user.click(within(offer).getByRole("button", { name: "Import" }));
     await waitFor(() => expect(screen.queryByRole("region", { name: "Import" })).toBeNull());
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Not imported: HUGE_TOKEN. Its value is too long for a secret or could not be stored; " +
-        "add it by hand.",
+      "Not imported: HUGE_TOKEN. Their values could not be imported (too long for a secret, " +
+        "refused, or no longer set); add them by hand.",
     );
   });
 
