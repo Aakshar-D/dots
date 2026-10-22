@@ -17,7 +17,7 @@ Success: a person can do a day's work with their dots from the home alone (start
 
 - **Topic**: one line of runs, a root run and the runs that continued it (`root_run_id`). Every run already belongs to one. A topic whose root is a chat run is a **chat topic**; one whose root is a scheduled, webhook or manual run is a **run topic**.
 - **Current topic** of a dot: its newest chat topic (by the root's `queued_at`). A dot with no chat topic has none.
-- **Conversation** of a dot: the current topic and every run topic whose root was queued after the current topic's root, in time order. With no current topic, the dot's last 20 run topics.
+- **Conversation** of a dot: the current topic and the last 20 run topics whose roots were queued after the current topic's root, in time order; earlier ones are in History. With no current topic, the dot's last 20 run topics.
 - **Reply target**: the topic your next message continues (section 5).
 
 ## 3. Layout and routes
@@ -77,7 +77,7 @@ A run topic is a **run card**: its trigger and time ("Scheduled · 08:00", "Webh
 ## 5. Sending
 
 - **Reply target**, shown in a chip above the composer: "Replying to: current topic" or "Replying to: Scheduled · 08:00 ✕".
-  - By default: of the topics in the conversation, the one with the newest run.
+  - By default: the current topic, whatever ran after it; with only run topics shown, a new chat topic. The default never moves while the person types: a run topic gets a message only through its **Reply** (or when it is the older topic shown alone). The chip is announced politely (`aria-live`).
   - **Reply** on a run card makes that topic the target; ✕ returns to the default.
   - In an older topic (4.4), that topic.
 - **Send**: `chat(dotId, message, <the target topic's last run>)`. With no target (a dot with no topic, or after **New topic**), `chat(dotId, message, null)`, which starts a new chat topic; it becomes the current topic.
@@ -138,3 +138,9 @@ The plan (`docs/superpowers/plans/2026-10-22-chat-home.md`) built sections 1 to 
 - **An older topic** is loaded with `run_thread(rootRunId)`, so any run of the topic names it; the conversation and an older topic each open with their own reply target and scroll.
 - **Tests** are in `ui/src/screens/home/*.test.tsx` and `ui/src/lib/{home-topics,dot-status}.test.ts`, with the fake dot and runs they share in `ui/src/test/home.ts`.
 - **The smoke** adds: no request to the old `/dots` or `/chat` screens is left (each redirects); a dot with no run shows "Ask <dot> something"; History lists the older chat and run topics and opens one with "Older topic · Back to the current conversation".
+
+### After the final review (2026-10-22)
+
+- The default reply target is the current chat topic, not the topic with the newest run: with a schedule, every message had gone to the newest scheduled run, and the target could change while the person typed. A run card gets a message only through **Reply**. Decided by the person.
+- The conversation shows at most the last 20 run topics after the current topic; the rest are in History. A dot on a short schedule had loaded and reloaded a thread for each of up to 200 run topics.
+- A failed reload of the dots keeps the open conversation, its reply target and the text being typed, and shows the error over the screen; only a first load that failed shows the error alone.

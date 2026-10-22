@@ -58,16 +58,17 @@ export function currentTopic(topics: Topic[]): Topic | undefined {
   return topics.filter((topic) => topic.kind === "chat").at(-1);
 }
 
-/// The topics of the conversation, oldest first: the current topic and every run topic whose
-/// root was queued after its root; with no chat topic, the last `RUN_TOPICS` run topics.
+/// The topics of the conversation, oldest first: the current topic and the last `RUN_TOPICS`
+/// run topics whose roots were queued after its root; with no chat topic, the last
+/// `RUN_TOPICS` run topics. The rest are in History.
 export function conversation(topics: Topic[]): Topic[] {
   const current = currentTopic(topics);
   if (current === undefined) return topics.slice(-RUN_TOPICS);
-  return topics.filter(
+  const after = topics.filter(
     (topic) =>
-      topic === current ||
-      (topic.kind === "run" && topic.root.queued_at.localeCompare(current.root.queued_at) > 0),
+      topic.kind === "run" && topic.root.queued_at.localeCompare(current.root.queued_at) > 0,
   );
+  return [current, ...after.slice(-RUN_TOPICS)];
 }
 
 /// The topics History lists: those not in the conversation, newest first, `HISTORY` at most.
@@ -84,13 +85,11 @@ export function lastRun(topic: Topic): Run {
   return topic.runs.at(-1)!;
 }
 
-/// The topic a message goes to by default: of the topics shown, the one with the newest run.
+/// The topic a message goes to by default: the current chat topic of those shown, whatever ran
+/// after it; none (a new chat topic) when only run topics are shown. A run topic gets a message
+/// only through its Reply, so the target never moves while the person types.
 export function defaultTarget(shown: Topic[]): Topic | undefined {
-  let target: Topic | undefined;
-  for (const topic of shown) {
-    if (target === undefined || byQueued(lastRun(target), lastRun(topic)) <= 0) target = topic;
-  }
-  return target;
+  return currentTopic(shown);
 }
 
 const TRIGGER: Record<Run["trigger"], string> = {

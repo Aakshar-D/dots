@@ -23,12 +23,18 @@ import { Composer } from "@/screens/home/Composer";
 /// new topic (chat-first home spec, section 5).
 export type ReplyPick = { kind: "default" } | { kind: "topic"; rootId: string } | { kind: "new" };
 
-/// The topic `pick` names among `shown`; undefined for a new topic. A chosen topic that is no
-/// longer shown falls back to the default.
-export function replyTarget(pick: ReplyPick, shown: Topic[]): Topic | undefined {
+/// The topic `pick` names among `shown`; undefined for a new topic. By default an older topic
+/// shown alone (`olderRoot`), else the current chat topic. A chosen topic that is no longer
+/// shown falls back to the default.
+export function replyTarget(
+  pick: ReplyPick,
+  shown: Topic[],
+  olderRoot?: string,
+): Topic | undefined {
   if (pick.kind === "new") return undefined;
   const chosen = pick.kind === "topic" ? shown.find((t) => t.rootId === pick.rootId) : undefined;
-  return chosen ?? defaultTarget(shown);
+  const older = olderRoot !== undefined ? shown.find((t) => t.rootId === olderRoot) : undefined;
+  return chosen ?? older ?? defaultTarget(shown);
 }
 
 /// Below the conversation: why the target cannot be continued, the open question, the reply
@@ -47,7 +53,7 @@ export function ReplyArea(props: {
   const { dotId, dotName, shown, pick, onPick, olderRoot } = props;
   const qc = useQueryClient();
   const navigate = useNavigate();
-  const target = replyTarget(pick, shown);
+  const target = replyTarget(pick, shown, olderRoot);
   const busy = target?.runs.some(isActive) ?? false;
   const approving = target?.runs.some((run) => run.status === "awaiting_approval") ?? false;
   // A reply resumes the last run's session. A run that ended before its engine had one (a
@@ -182,6 +188,7 @@ export function ReplyArea(props: {
       <div
         role="group"
         aria-label="Reply target"
+        aria-live="polite"
         className="flex items-center gap-1 px-3 text-xs text-muted-foreground"
       >
         <span>{chip}</span>

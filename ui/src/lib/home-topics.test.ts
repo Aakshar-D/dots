@@ -85,15 +85,30 @@ describe("topics", () => {
     expect(older[0].rootId).toBe("c58");
   });
 
-  it("replies by default to the shown topic with the newest run", () => {
+  it("replies by default to the current chat topic, whatever ran after it", () => {
     const current = root("current", 0);
     const cron = root("cron", 10, { trigger: "schedule" });
-    expect(defaultTarget(topicsOf([current, cron]))?.rootId).toBe("cron");
-    // A reply in the current topic after the scheduled run makes it the newest again.
+    expect(defaultTarget(topicsOf([current, cron]))?.rootId).toBe("current");
     expect(defaultTarget(topicsOf([current, cron, reply("c2", current, 20)]))?.rootId).toBe(
       "current",
     );
+    // Only run topics: a message starts a new chat topic.
+    expect(defaultTarget(topicsOf([cron]))).toBeUndefined();
     expect(defaultTarget([])).toBeUndefined();
+  });
+
+  it("shows the current topic with the last 20 run topics after it; the rest go to History", () => {
+    const current = root("current", 0);
+    const after = Array.from({ length: 25 }, (_, i) =>
+      root(`s${String(i).padStart(2, "0")}`, i + 1, { trigger: "schedule" }),
+    );
+    const topics = topicsOf([current, ...after]);
+    const shown = conversation(topics);
+    expect(shown).toHaveLength(21);
+    expect(shown[0].rootId).toBe("current");
+    expect(shown[1].rootId).toBe("s05");
+    expect(shown.at(-1)!.rootId).toBe("s24");
+    expect(ids(olderTopics(topics, shown))).toEqual(["s04", "s03", "s02", "s01", "s00"]);
   });
 
   it("names a chat topic by its first line and a run topic by its trigger and time", () => {

@@ -62,15 +62,45 @@ describe("sending on the home", () => {
     expect(box()).toHaveAttribute("placeholder", `${dot.name} is working on this…`);
   });
 
-  it("replies by default to a scheduled run that came after the current topic", async () => {
-    const cron = scheduled("cron", "11:00");
-    home([chat("a", "10:00"), cron]);
+  it("replies by default to the current topic, not a scheduled run that came after it", async () => {
+    home([chat("a", "10:00"), scheduled("cron", "11:00")]);
     const { user } = renderApp(`/home/${dot.id}`);
     await user.type(await readyBox(), "Thanks{Enter}");
-    expect(target()).toHaveTextContent(`Replying to: Scheduled · ${localTime(cron.queued_at)}`);
+    expect(target()).toHaveTextContent("Replying to: current topic");
     await waitFor(() =>
       expect(backend.callsTo("chat")).toEqual([
-        { dotId: dot.id, message: "Thanks", parentRunId: "cron" },
+        { dotId: dot.id, message: "Thanks", parentRunId: "a" },
+      ]),
+    );
+  });
+
+  it("keeps the reply on the current topic when a scheduled run arrives while typing", async () => {
+    const runs = home([chat("a", "10:00")]);
+    const { user } = renderApp(`/home/${dot.id}`);
+    await user.type(await readyBox(), "Half a sen");
+    const cron = { ...scheduled("cron", "11:00"), status: "succeeded" as const };
+    runs.push(cron);
+    act(() => backend.emit("runtime", { type: "run_updated", run: cron }));
+    expect(
+      await screen.findByRole("article", { name: `Scheduled · ${localTime(cron.queued_at)}` }),
+    ).toBeVisible();
+    expect(target()).toHaveTextContent("Replying to: current topic");
+    expect(target()).toHaveAttribute("aria-live", "polite");
+    await user.type(box(), "tence{Enter}");
+    await waitFor(() =>
+      expect(backend.callsTo("chat")).toEqual([
+        { dotId: dot.id, message: "Half a sentence", parentRunId: "a" },
+      ]),
+    );
+  });
+
+  it("continues an older run topic opened from History", async () => {
+    home([scheduled("old", "09:00"), chat("a", "10:00")]);
+    const { user } = renderApp(`/home/${dot.id}/old`);
+    await user.type(await readyBox(), "About this run{Enter}");
+    await waitFor(() =>
+      expect(backend.callsTo("chat")).toEqual([
+        { dotId: dot.id, message: "About this run", parentRunId: "old" },
       ]),
     );
   });
@@ -98,10 +128,8 @@ describe("sending on the home", () => {
         { dotId: dot.id, message: "Why that one?", parentRunId: "one" },
       ]),
     );
-    // Sent: the target is the default again, which is now the topic just replied to.
-    await waitFor(() =>
-      expect(target()).toHaveTextContent(`Replying to: Scheduled · ${localTime(one.queued_at)}`),
-    );
+    // Sent: the target is the default again, the current chat topic.
+    await waitFor(() => expect(target()).toHaveTextContent("Replying to: current topic"));
     expect(within(target()).queryByRole("button")).toBeNull();
   });
 
@@ -211,8 +239,14 @@ describe("sending on the home", () => {
   it("says that the topic waits for an approval above", async () => {
     const waiting = scheduled("cron", "09:00", { status: "awaiting_approval", ended_at: null });
     home([waiting], [], [{ ...sample.approval, run_id: "cron" }]);
-    renderApp(`/home/${dot.id}`);
+    const { user } = renderApp(`/home/${dot.id}`);
     const found = await screen.findByLabelText("Message");
+    // A new topic can start meanwhile; a reply to the waiting run cannot.
+    await waitFor(() => expect(found).toBeEnabled());
+    const card = await screen.findByRole("article", {
+      name: `Scheduled · ${localTime(waiting.queued_at)}`,
+    });
+    await user.click(within(card).getByRole("button", { name: "Reply" }));
     await waitFor(() =>
       expect(found).toHaveAttribute("placeholder", "Waiting for your approval above"),
     );
@@ -353,5 +387,20 @@ describe("sending on the home", () => {
     expect(await screen.findByText("question a")).toBeVisible();
     await user.type(await readyBox(), "Still there?{Enter}");
     await waitFor(() => expect(backend.callsTo("chat")).toHaveLength(1));
+  });
+});
+
+describe("a failed reload of the dots while a conversation is open", () => {
+  it("keeps the conversation and the text being typed, and says the load failed", async () => {
+    const runs = home([chat("a", "10:00")]);
+    const { user } = renderApp(`/home/${dot.id}`);
+    await user.type(await readyBox(), "Draft that must survive");
+    backend.on("dot_overview", () => {
+      throw { kind: "internal", message: "database is locked" };
+    });
+    act(() => backend.emit("runtime", { type: "run_updated", run: runs[0] }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("database is locked");
+    expect(box()).toHaveValue("Draft that must survive");
+    expect(screen.getByRole("region", { name: "Conversation" })).toBeVisible();
   });
 });

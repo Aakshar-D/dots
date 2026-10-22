@@ -32,18 +32,21 @@ export function HomeScreen() {
   const { dotId, rootRunId } = useParams();
   const overview = useQuery({ queryKey: keys.overview, queryFn: commands.dotOverview });
   const rows = sortDots(overview.data ?? []);
+  // A failed reload keeps what was loaded, and the open conversation with what is being typed;
+  // only a first load that failed has nothing to show but the error.
+  const loaded = overview.data !== undefined;
   let pane = null;
-  if (overview.isError) {
+  if (!loaded && overview.isError) {
     pane = (
       <div className="flex-1 p-4">
         <ErrorNote error={overview.error} />
       </div>
     );
-  } else if (overview.isSuccess && dotId === undefined) {
+  } else if (loaded && dotId === undefined) {
     const remembered = lastDot();
     const open = rows.find((row) => row.dot.id === remembered) ?? rows[0];
     pane = open ? <Navigate to={`/home/${open.dot.id}`} replace /> : <EmptyHome />;
-  } else if (overview.isSuccess) {
+  } else if (loaded) {
     const row = rows.find((r) => r.dot.id === dotId);
     pane = row ? (
       // An older topic, or the conversation again, opens with its own reply target and scroll.
@@ -53,8 +56,14 @@ export function HomeScreen() {
     );
   }
   return (
-    <div className="flex h-full min-h-0">
+    <div className="relative flex h-full min-h-0">
       <DotsColumn rows={rows} openId={dotId} />
+      {/* Its own slot, so that the conversation is not mounted again when it comes and goes. */}
+      {loaded && overview.isError ? (
+        <div className="absolute top-2 right-4 z-10 max-w-sm">
+          <ErrorNote error={overview.error} />
+        </div>
+      ) : null}
       {pane}
     </div>
   );
