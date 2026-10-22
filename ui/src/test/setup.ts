@@ -52,6 +52,8 @@ Element.prototype.releasePointerCapture ??= () => {};
 
 beforeEach(() => {
   backend.reset();
+  // The home remembers the dot last opened; every test starts without one.
+  window.localStorage.clear();
   installDefaults();
 });
 afterEach(() => {
