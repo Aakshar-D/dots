@@ -59,3 +59,10 @@ Right-click the tray icon with `asker` waiting: "Needs you ▸ asker (1)" opens 
 ## Findings
 
 None about Dots. Notifications of a debug build show under PowerShell's name and icon (the plugin's choice for builds under `target`); an installed build shows them as Dots.
+
+## Self-QA after the smoke (commit `17782e3`)
+
+- **Found:** a minimized window could keep the focus (Windows left it the foreground window), so neither the window's focus event nor the webview's `blur` or `visibilitychange` fired: `asker`, open when minimized, stayed viewed; a run of it gave no toast and did not count as new.
+- **Fixed** in `apps/dots-app/src/viewing.rs`: the app keeps the dot the webview reports and tells the core it is viewed only while the main window is visible, not minimized and focused, checking again on focus changes, resizes (minimize, restore), hiding and showing; a dot that comes back into view is marked seen.
+- **Checked again:** with `asker` open, Dots minimized (`IsIconic` true): Run now on `asker` gave two toasts ("asker asks · Ship it?", "asker finished · …") and `asker`'s unread went from 4 to 5 (4 needing you, 1 new). Restored to the front: `asker` was marked seen, unread 4.
+- **Also checked:** focusing the window marks the open dot seen (unread 2 → 1); answering a question from the bar updates the dot's badge and the Home total at once (2 → 1); no console errors on any route; axe-core 4.10.2 (WCAG 2.2 A/AA and best practices): no violations on the home with both badge tones and on the Inbox; no overflow at 800 and 1440 px.
