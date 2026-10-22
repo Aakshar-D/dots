@@ -246,7 +246,9 @@ impl RunTools {
 
     /// Opens the run's tools for a dot with `uses`. Returns them with the run events to record:
     /// items left out and servers held. A cancel while opening closes what was opened and
-    /// returns no tools. Only a database failure is an error.
+    /// returns no tools. A database failure is an error, and so is a Credential Manager
+    /// failure: reading a granted secret, or storing one that a plugin's file moves to
+    /// Personal. A secret that is not there is a run event instead.
     pub async fn open(req: OpenRequest<'_>) -> Result<(RunTools, Vec<String>)> {
         let OpenRequest {
             store,
