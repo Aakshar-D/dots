@@ -96,7 +96,8 @@ function looksLikePath(value: string): boolean {
 }
 
 /// Whether saving moves the value under `key` to Personal (the core's `hidden`): a
-/// secret-looking key and a value that is not empty, not `${…}`, and not a plain URL under an `AUTH`-like key, or a path.
+/// secret-looking key and a value that is not empty, not `${…}`, and not a plain URL under an
+/// `AUTH`-like key, or a path.
 export function movesToVault(key: string, value: string): boolean {
   const trimmed = value.trim();
   return (
