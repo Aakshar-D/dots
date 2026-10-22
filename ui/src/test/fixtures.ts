@@ -58,6 +58,10 @@ export function installDefaults(): void {
   backend.on("dot_overview", () => []);
   backend.on("list_dots", () => []);
   backend.on("get_settings", () => sample.settings);
+  backend.on("chatgpt_account", () => ({
+    configured: false, signing_in: false, account: null, expires_at: null,
+    setup_error: "ChatGPT sign-in needs a registered OpenAI client for Dots.",
+  }));
   // Neither Microsoft Edge nor Node.js was found.
   backend.on("browser_status", () => ({ edge: null, npx: null }));
   backend.on("library_list", () => []);
