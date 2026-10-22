@@ -70,6 +70,10 @@ export function installDefaults(): void {
   // No dot has checked in or scheduled anything. A question on screen is marked read.
   backend.on("messages_list", () => []);
   backend.on("follow_ups_list", () => []);
+  // Nothing is unread; looking at a dot and saying which one is viewed are taken.
+  backend.on("unread_total", () => 0);
+  backend.on("mark_dot_seen", () => null);
+  backend.on("set_viewing", () => null);
   backend.on("message_mark_read", (args) => ({
     ...sample.messages[0],
     id: String(args.id),

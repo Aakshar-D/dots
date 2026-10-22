@@ -94,7 +94,10 @@
     "follow_up_cancel",
     "browser_open",
     "browser_status",
-    "browser_screenshot"
+    "browser_screenshot",
+    "mark_dot_seen",
+    "set_viewing",
+    "unread_total"
   ],
   "ContextDocuments": {
     "complete": true,

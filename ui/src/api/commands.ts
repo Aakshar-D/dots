@@ -196,4 +196,13 @@ export const commands = {
   /// A screenshot of a run's browser as a `data:` URL, by the name Playwright gave its file.
   browserScreenshot: (runId: string, name: string) =>
     call(text, "browser_screenshot", { runId, name }),
+
+  /// The person looked at the dot's conversation: its unread count drops to what needs them.
+  /// Rejects with kind `not_found` for a dot that is gone.
+  markDotSeen: (dotId: string) => call(nothing, "mark_dot_seen", { dotId }),
+  /// The dot whose conversation is open in the focused window, or null: nothing notifies about
+  /// it, and what it does meanwhile is not new.
+  setViewing: (dotId: string | null) => call(nothing, "set_viewing", { dotId }),
+  /// The sum of every dot's unread count, for the Home link.
+  unreadTotal: () => call(z.number().int(), "unread_total"),
 };

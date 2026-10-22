@@ -97,6 +97,9 @@ command_list![
     browser_open,
     browser_status,
     browser_screenshot,
+    mark_dot_seen,
+    set_viewing,
+    unread_total,
 ];
 
 /// Keeps the log writer flushing until the app exits.
