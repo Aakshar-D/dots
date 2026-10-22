@@ -189,7 +189,9 @@ describe("commands", () => {
     expect(await commands.envOldBackups()).toEqual(["dots-0.1.0-2026-10-20-091700.db"]);
     reply = async () => null;
     await commands.envImportDismiss();
-    await commands.envOldBackupsAnswer(true);
+    // The backups that could not be deleted, by file name.
+    reply = async () => ["dots-0.0.9-stuck.db"];
+    expect(await commands.envOldBackupsAnswer(true)).toEqual(["dots-0.0.9-stuck.db"]);
     expect(calls.slice(-5)).toEqual([
       ["env_import_candidates", undefined],
       ["env_import", { names: ["GITHUB_TOKEN"] }],
