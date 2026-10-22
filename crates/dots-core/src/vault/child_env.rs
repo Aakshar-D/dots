@@ -1,6 +1,8 @@
 //! What a child process starts with (env vault spec §8): not Dots' whole environment, only a
-//! base it needs to run, and then what it is given. So a secret set for Dots never reaches the
-//! `claude` CLI, an MCP server or the shell, and `printenv` shows nothing that was not granted.
+//! base it needs to run, and then what it is given. So a secret set for Dots never reaches an
+//! MCP server or the shell, and `printenv` there shows nothing that was not granted. The `claude`
+//! CLI also keeps its own pass-through variables (`ANTHROPIC_*`, `CLAUDE_CODE_*` and the `CLI_ENV`
+//! names), which its tools can see.
 
 use std::ffi::OsString;
 
@@ -42,11 +44,26 @@ pub const BASE_ENV: &[&str] = &[
     "NO_PROXY",
     "NODE_EXTRA_CA_CERTS",
     "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "REQUESTS_CA_BUNDLE",
+    "CURL_CA_BUNDLE",
+    "ALL_PROXY",
+    "ALLUSERSPROFILE",
+    "PUBLIC",
 ];
 
 /// What the `claude` CLI also keeps: its own configuration and login, passed through unread
 /// (the subscription rule).
-pub const CLI_ENV: &[&str] = &["CLAUDE_CONFIG_DIR"];
+pub const CLI_ENV: &[&str] = &[
+    "CLAUDE_CONFIG_DIR",
+    "DISABLE_TELEMETRY",
+    "DISABLE_AUTOUPDATER",
+    "DISABLE_ERROR_REPORTING",
+    "MCP_TIMEOUT",
+    "BASH_DEFAULT_TIMEOUT_MS",
+    "BASH_MAX_TIMEOUT_MS",
+    "MAX_MCP_OUTPUT_TOKENS",
+];
 /// Prefixes of the `claude` CLI's own variables.
 pub const CLI_PREFIXES: &[&str] = &["ANTHROPIC_", "CLAUDE_CODE_"];
 
@@ -59,12 +76,17 @@ pub enum Child {
     Other,
 }
 
-fn kept(name: &str, child: Child) -> bool {
+/// Whether `name` is one of the `claude` CLI's own variables (its login, its endpoint, its
+/// settings). Dots passes these through from its environment and never sets them from Personal.
+pub fn is_cli_own(name: &str) -> bool {
     let upper = name.to_ascii_uppercase();
+    CLI_ENV.iter().any(|k| k.eq_ignore_ascii_case(name))
+        || CLI_PREFIXES.iter().any(|p| upper.starts_with(p))
+}
+
+fn kept(name: &str, child: Child) -> bool {
     BASE_ENV.iter().any(|k| k.eq_ignore_ascii_case(name))
-        || (child == Child::Cli
-            && (CLI_ENV.iter().any(|k| k.eq_ignore_ascii_case(name))
-                || CLI_PREFIXES.iter().any(|p| upper.starts_with(p))))
+        || (child == Child::Cli && is_cli_own(name))
 }
 
 /// The variables of Dots' environment that a `child` keeps.

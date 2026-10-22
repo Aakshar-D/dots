@@ -156,10 +156,12 @@ async fn main() {
             "cwd": std::env::current_dir().unwrap().to_string_lossy(),
             "mcp_tool_timeout": std::env::var("MCP_TOOL_TIMEOUT").ok(),
             // Every variable the CLI was started with, by name, and the values of those whose
-            // name starts with `DOTS_TEST_`.
+            // name starts with `DOTS_TEST_` or `ANTHROPIC_DOTS_TEST_`.
             "env_names": std::env::vars().map(|(k, _)| k).collect::<Vec<_>>(),
             "env": std::env::vars()
-                .filter(|(k, _)| k.starts_with("DOTS_TEST_"))
+                .filter(|(k, _)| {
+                    k.starts_with("DOTS_TEST_") || k.starts_with("ANTHROPIC_DOTS_TEST_")
+                })
                 .collect::<std::collections::BTreeMap<_, _>>(),
             "mcp_config": mcp,
             "plugin_dirs": plugin_dirs,

@@ -454,8 +454,11 @@ async fn the_cli_gets_the_shell_grants_and_not_the_rest_of_dots_environment() {
         .unwrap();
     wait_status(&e.store, &run.id, RunStatus::Succeeded, 15).await;
     let args = recorded_args(&e);
+    // Tests share one process environment: look only at this test's own names.
+    let mut seen = args["env"].as_object().unwrap().clone();
+    seen.retain(|k, _| k.starts_with("DOTS_TEST_"));
     assert_eq!(
-        args["env"],
+        Value::Object(seen),
         json!({"DOTS_TEST_CLI_GRANTED": "granted-value"})
     );
     let names: Vec<String> = serde_json::from_value(args["env_names"].clone()).unwrap();
@@ -464,4 +467,37 @@ async fn the_cli_gets_the_shell_grants_and_not_the_rest_of_dots_environment() {
     assert!(upper.contains(&"MCP_TOOL_TIMEOUT".to_string()));
     assert!(upper.contains(&"FAKE_CLAUDE_SCRIPT".to_string()));
     assert!(!upper.contains(&"DOTS_TEST_CLI_LEAK".to_string()));
+}
+
+/// A shell grant never sets the CLI's own variables: it keeps what Dots' environment passed
+/// through (the subscription rule), and the run says what was left out.
+#[tokio::test]
+async fn a_shell_grant_cannot_set_the_clis_own_variables() {
+    std::env::set_var("ANTHROPIC_DOTS_TEST_X", "from-dots");
+    let e = e2e(json!([init(), success("fake done")]), None).await;
+    let vault = Vault::in_memory(e.store.clone());
+    vault
+        .add("ANTHROPIC_DOTS_TEST_X", EntryKind::Secret, "from-personal")
+        .await
+        .unwrap();
+    e.runner.set_vault(vault);
+    let mut s = spec("cli-own");
+    s.workdir = e.dir.path().to_string_lossy().to_string();
+    s.workspace_mode = WorkspaceMode::Folder;
+    s.variables = Grants(
+        [(
+            "shell".to_string(),
+            vec!["ANTHROPIC_DOTS_TEST_X".to_string()],
+        )]
+        .into(),
+    );
+    let dot = e.store.create_dot(&s).await.unwrap();
+    let run = e
+        .runner
+        .enqueue(NewRun::new(&dot.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    wait_status(&e.store, &run.id, RunStatus::Succeeded, 15).await;
+    let args = recorded_args(&e);
+    assert_eq!(args["env"], json!({"ANTHROPIC_DOTS_TEST_X": "from-dots"}));
 }

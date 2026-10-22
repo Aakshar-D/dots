@@ -13,7 +13,7 @@ use tokio::process::Command;
 use tokio::sync::mpsc;
 
 use crate::engine::{Engine, EngineEvent, RunContext};
-use crate::vault::child_env::{start_clean, Child};
+use crate::vault::child_env::{is_cli_own, start_clean, Child};
 use crate::{Error, Result};
 
 pub mod args;
@@ -93,12 +93,18 @@ impl Engine for ClaudeEngine {
         let mut cmd = Command::new(&self.program);
         // Dots' environment stays out; the dot's shell grants go in (env vault spec §8).
         start_clean(&mut cmd, Child::Cli);
-        cmd.envs(
-            ctx.tools
-                .shell_env()
-                .iter()
-                .map(|(k, v)| (k.as_str(), v.as_str())),
-        );
+        // The CLI's own variables (its login, its endpoint) are never set from Personal: it keeps
+        // what Dots' environment passed through.
+        let mut notices = Vec::new();
+        for (k, v) in ctx.tools.shell_env() {
+            if is_cli_own(k) {
+                notices.push(format!(
+                    "{k}: the claude CLI's own variable, not set from Personal"
+                ));
+            } else {
+                cmd.env(k.as_str(), v.as_str());
+            }
+        }
         cmd.args(args::build_args(&ctx, &mcp_path))
             .current_dir(&ctx.workspace)
             .env(
@@ -132,6 +138,9 @@ impl Engine for ClaudeEngine {
         let stdout = child.stdout.take().expect("stdout is piped");
         let stderr = child.stderr.take().expect("stderr is piped");
         let (tx, rx) = mpsc::channel(256);
+        for text in notices {
+            let _ = tx.try_send(EngineEvent::Notice { text });
+        }
 
         tokio::spawn(async move {
             let out_tx = tx.clone();

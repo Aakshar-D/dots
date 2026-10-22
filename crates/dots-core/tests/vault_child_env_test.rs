@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 use common::fake_mcp::{tool, FakeMcp};
 use dots_core::mcp::{McpSession, SessionOptions};
-use dots_core::vault::child_env::{base_env, Child, BASE_ENV};
+use dots_core::vault::child_env::{base_env, Child, BASE_ENV, CLI_ENV, CLI_PREFIXES};
 use serde_json::json;
 
 fn names(child: Child) -> Vec<String> {
@@ -62,4 +62,67 @@ async fn an_mcp_server_gets_its_own_env_but_not_dots_environment() {
         .find_map(|r| r.get("start").cloned())
         .unwrap();
     assert_eq!(start["env"], json!({"FAKE_MCP_TOKEN": "given"}));
+}
+
+#[test]
+fn the_lists_are_pinned() {
+    assert_eq!(
+        BASE_ENV,
+        [
+            "SystemRoot",
+            "SystemDrive",
+            "windir",
+            "ComSpec",
+            "PATH",
+            "PATHEXT",
+            "PSModulePath",
+            "TEMP",
+            "TMP",
+            "HOME",
+            "USERPROFILE",
+            "HOMEDRIVE",
+            "HOMEPATH",
+            "APPDATA",
+            "LOCALAPPDATA",
+            "ProgramData",
+            "ProgramFiles",
+            "ProgramFiles(x86)",
+            "ProgramW6432",
+            "CommonProgramFiles",
+            "CommonProgramFiles(x86)",
+            "CommonProgramW6432",
+            "NUMBER_OF_PROCESSORS",
+            "PROCESSOR_ARCHITECTURE",
+            "OS",
+            "USERNAME",
+            "USERDOMAIN",
+            "COMPUTERNAME",
+            "LANG",
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "NO_PROXY",
+            "NODE_EXTRA_CA_CERTS",
+            "SSL_CERT_FILE",
+            "SSL_CERT_DIR",
+            "REQUESTS_CA_BUNDLE",
+            "CURL_CA_BUNDLE",
+            "ALL_PROXY",
+            "ALLUSERSPROFILE",
+            "PUBLIC",
+        ]
+    );
+    assert_eq!(
+        CLI_ENV,
+        [
+            "CLAUDE_CONFIG_DIR",
+            "DISABLE_TELEMETRY",
+            "DISABLE_AUTOUPDATER",
+            "DISABLE_ERROR_REPORTING",
+            "MCP_TIMEOUT",
+            "BASH_DEFAULT_TIMEOUT_MS",
+            "BASH_MAX_TIMEOUT_MS",
+            "MAX_MCP_OUTPUT_TOKENS",
+        ]
+    );
+    assert_eq!(CLI_PREFIXES, ["ANTHROPIC_", "CLAUDE_CODE_"]);
 }
