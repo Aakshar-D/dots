@@ -3,6 +3,7 @@
 //! schema, so a field renamed or added on one side fails the other side's tests.
 //! Regenerate after changing a type: `UPDATE_CONTRACT=1 cargo test -p dots-app contract`.
 
+use dots_core::browser::BrowserStatus;
 use dots_core::context::Document;
 use dots_core::engine::EngineEvent;
 use dots_core::events::RuntimeEvent;
@@ -735,6 +736,10 @@ pub fn samples() -> Value {
             }),
         ]);
     samples["UpdateNote"] = to(update_notes());
+    samples["BrowserStatus"] = to(BrowserStatus {
+        edge: Some("C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe".into()),
+        npx: Some("C:/Program Files/nodejs/npx.cmd".into()),
+    });
     samples["DraftRequest"] = to([
         DraftRequest {
             idea: "Check a PR for missing tests".into(),

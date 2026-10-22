@@ -217,7 +217,7 @@ async fn call_approve(s: &ServerState, run_id: &str, req: &Value) -> Result<Valu
     let gateway = s
         .runner
         .run_tools(run_id)
-        .is_some_and(|tools| tools.resolve(tool).is_some());
+        .is_some_and(|tools| tools.checks_itself(tool));
     if gateway {
         let allow = json!({ "behavior": "allow", "updatedInput": input });
         return Ok(json!({ "content": [{ "type": "text", "text": allow.to_string() }] }));

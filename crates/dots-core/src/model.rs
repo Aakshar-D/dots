@@ -83,6 +83,11 @@ pub struct DotSpec {
     /// The Library items the dot uses (MCP/skills spec section 2).
     #[serde(default)]
     pub uses: Uses,
+    /// The dot has a browser: a visible Microsoft Edge with its own profile, driven through
+    /// Playwright MCP behind Dots' gate (browser spec section 2.4). A spec written before it
+    /// existed reads as off.
+    #[serde(default)]
+    pub browser: bool,
     /// The first prompt starts with the global instructions of Settings (context library spec
     /// section 2).
     #[serde(default = "yes")]
@@ -107,6 +112,7 @@ impl DotSpec {
             schedule: None,
             policy: Policy::preset(Preset::Sandboxed),
             uses: Uses::default(),
+            browser: false,
             use_global_instructions: true,
             use_user_settings: false,
             max_turns: 40,

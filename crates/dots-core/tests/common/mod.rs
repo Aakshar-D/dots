@@ -1,7 +1,10 @@
 #![allow(dead_code)]
 
 pub mod clock;
+pub mod edge_pipe;
+pub mod fake_browser;
 pub mod fake_mcp;
+pub mod playwright;
 pub mod tz;
 
 use std::path::Path;

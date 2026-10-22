@@ -187,4 +187,13 @@ export const commands = {
     call(T.FollowUp.array(), "follow_ups_list", { dotId }),
   /// Rejects with kind `conflict` once the follow-up fired, was skipped or was cancelled.
   followUpCancel: (id: string) => call(T.FollowUp, "follow_up_cancel", { id }),
+
+  /// "Open the browser": the dot's Edge, for the person to log in ahead of time. Rejects with
+  /// the reason when Edge cannot be opened.
+  browserOpen: (dotId: string) => call(nothing, "browser_open", { dotId }),
+  /// Where Microsoft Edge and Node.js (npx) were found.
+  browserStatus: () => call(T.BrowserStatus, "browser_status"),
+  /// A screenshot of a run's browser as a `data:` URL, by the name Playwright gave its file.
+  browserScreenshot: (runId: string, name: string) =>
+    call(text, "browser_screenshot", { runId, name }),
 };

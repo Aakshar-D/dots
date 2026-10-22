@@ -34,6 +34,7 @@ async fn settings_round_trip() {
         schedules_paused: true,
         global_instructions: "Use British spelling.\nSign off as the team.".into(),
         notify_on_notes: false,
+        edge_path: Some("D:/Apps/Edge/msedge.exe".into()),
     };
     store.put_settings(&s).await.unwrap();
     assert_eq!(store.get_settings().await.unwrap(), s);

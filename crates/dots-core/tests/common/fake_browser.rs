@@ -1,0 +1,209 @@
+//! The test stand-in for Microsoft Edge, `fake-browser` (`src/bin/fake-browser.rs`): its path,
+//! for `Settings.edge_path` or `EdgeHost::open`; a host that starts it without the helper; what
+//! each start on a dot's profile recorded, and what it read on its pipe; and its controls.
+//! Every fake running on a profile under `root` is told to quit when this is dropped, so a
+//! failed test leaves no Edge behind.
+
+use std::io::{Read, Write};
+use std::net::TcpStream;
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
+
+use dots_core::browser::host::{EdgeHost, Launcher};
+use dots_core::browser::PlaywrightCommand;
+use serde_json::{json, Value};
+
+use super::fake_mcp::FakeMcp;
+use super::playwright::{on, CLICK, NAVIGATE, SCREENSHOT, SNAPSHOT};
+
+/// The program `fake-browser`.
+pub fn exe() -> String {
+    env!("CARGO_BIN_EXE_fake-browser").to_string()
+}
+
+/// A host that starts `fake-browser` on its stdin and stdout, without the helper and Node.js.
+pub fn host(root: impl Into<PathBuf>) -> EdgeHost {
+    EdgeHost::with_launcher(root, Launcher::Direct)
+}
+
+/// The fakes on the profiles under `root` (`<data_dir>/browser`).
+pub struct FakeEdges {
+    pub root: PathBuf,
+}
+
+impl FakeEdges {
+    pub fn new(root: impl Into<PathBuf>) -> Self {
+        Self { root: root.into() }
+    }
+
+    pub fn profile(&self, dot_id: &str) -> PathBuf {
+        self.root.join(dot_id).join("profile")
+    }
+
+    /// Every start on the dot's profile, oldest first: `{"args": [...], "control": n, "pid":
+    /// n}`.
+    pub fn starts(&self, dot_id: &str) -> Vec<Value> {
+        match std::fs::read_to_string(self.profile(dot_id).join("fake-browser.jsonl")) {
+            Ok(text) => text
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    /// The control port of the newest start.
+    pub fn control(&self, dot_id: &str) -> Option<u16> {
+        self.starts(dot_id)
+            .last()
+            .and_then(|start| start["control"].as_u64())
+            .map(|port| port as u16)
+    }
+
+    /// Every message the fakes on the dot's profile read on their pipes, oldest first.
+    pub fn received(&self, dot_id: &str) -> Vec<Value> {
+        match std::fs::read_to_string(self.profile(dot_id).join("fake-cdp.jsonl")) {
+            Ok(text) => text
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    /// The methods of `received`, in order.
+    pub fn methods(&self, dot_id: &str) -> Vec<String> {
+        self.received(dot_id)
+            .iter()
+            .map(|m| m["method"].as_str().unwrap_or_default().to_string())
+            .collect()
+    }
+
+    /// Whether a fake holds the dot's profile.
+    pub fn running(&self, dot_id: &str) -> bool {
+        dots_core::browser::host::profile_in_use(&self.profile(dot_id))
+    }
+
+    /// The pages the next start opens with, most recent first.
+    pub fn first_pages(&self, dot_id: &str, urls: &[&str]) {
+        std::fs::create_dir_all(self.profile(dot_id)).unwrap();
+        std::fs::write(
+            self.profile(dot_id).join("fake-pages.json"),
+            serde_json::to_string(urls).unwrap(),
+        )
+        .unwrap();
+    }
+
+    /// Makes `urls` the pages of the running fake, most recent first.
+    pub fn set_pages(&self, dot_id: &str, urls: &[&str]) {
+        let port = self.control(dot_id).expect("a started fake");
+        assert!(
+            post(port, "/fake/pages", &serde_json::to_string(urls).unwrap()),
+            "the fake did not take its pages"
+        );
+    }
+
+    /// Makes the running fake answer `Browser.getVersion` only after `millis`, as a busy Edge.
+    pub fn stall(&self, dot_id: &str, millis: u64) {
+        let port = self.control(dot_id).expect("a started fake");
+        assert!(
+            post(port, "/fake/stall", &millis.to_string()),
+            "the fake did not take its stall"
+        );
+    }
+
+    /// Ends the running fake at once, as when the person closes the window.
+    pub fn quit(&self, dot_id: &str) {
+        if let Some(port) = self.control(dot_id) {
+            post(port, "/fake/quit", "");
+        }
+    }
+
+    /// Whether no fake holds the dot's profile within `limit`.
+    pub async fn gone_within(&self, dot_id: &str, limit: Duration) -> bool {
+        let deadline = Instant::now() + limit;
+        while self.running(dot_id) {
+            if Instant::now() > deadline {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        true
+    }
+}
+
+impl Drop for FakeEdges {
+    fn drop(&mut self) {
+        let Ok(dots) = std::fs::read_dir(&self.root) else {
+            return;
+        };
+        for dot in dots.flatten() {
+            let id = dot.file_name().to_string_lossy().into_owned();
+            if self.running(&id) {
+                self.quit(&id);
+            }
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline
+            && std::fs::read_dir(&self.root)
+                .map(|dots| {
+                    dots.flatten()
+                        .any(|d| self.running(&d.file_name().to_string_lossy()))
+                })
+                .unwrap_or(false)
+        {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
+/// A plain HTTP POST to the fake on `port`. True when it answered 200.
+fn post(port: u16, path: &str, body: &str) -> bool {
+    let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+    let request = format!(
+        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+    let mut answer = String::new();
+    let _ = stream.read_to_string(&mut answer);
+    answer.starts_with("HTTP/1.1 200")
+}
+
+/// The address the captured cart page is served at in the browser's tests.
+pub const CART: &str = "https://shop.com/cart";
+
+/// A `fake-mcp` script that answers as Playwright 0.0.83 answered on the cart page, served as
+/// `CART`: a snapshot, a navigation, acts, code and a screenshot with its image.
+/// `browser_wait_for` makes the server exit without an answer.
+pub fn cart_script() -> Value {
+    let reply = |text: String| json!({"content": [{"type": "text", "text": text}]});
+    let tool = |name: &str, result: Value| json!({"name": name, "inputSchema": {"type": "object"}, "result": result});
+    json!({"tools": [
+        tool("browser_snapshot", reply(on(SNAPSHOT, CART))),
+        tool("browser_navigate", reply(on(NAVIGATE, CART))),
+        tool("browser_click", reply(on(CLICK, CART))),
+        tool("browser_type", reply(on(CLICK, CART))),
+        tool("browser_fill_form", reply(on(CLICK, CART))),
+        tool("browser_evaluate", reply("### Result\n1".to_string())),
+        tool("browser_take_screenshot", json!({"content": [
+            {"type": "text", "text": SCREENSHOT},
+            {"type": "image", "mimeType": "image/png", "data": "iVBORw0KGgo="}
+        ]})),
+        {"name": "browser_wait_for", "inputSchema": {"type": "object"}, "exit": true}
+    ]})
+}
+
+/// The Playwright command that starts `fake-mcp` on `fake`'s script.
+pub fn playwright_command(fake: &FakeMcp) -> PlaywrightCommand {
+    PlaywrightCommand {
+        program: env!("CARGO_BIN_EXE_fake-mcp").to_string(),
+        args: vec![fake.script().to_string_lossy().into_owned()],
+    }
+}

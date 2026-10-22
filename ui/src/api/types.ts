@@ -95,6 +95,8 @@ const dotSpecShape = {
   schedule: nullable(Schedule),
   policy: Policy,
   uses: Uses,
+  // A visible Microsoft Edge with the dot's own profile (browser spec section 2.4).
+  browser: z.boolean(),
   use_global_instructions: z.boolean(),
   use_user_settings: z.boolean(),
   max_turns: z.number().int(),
@@ -283,10 +285,17 @@ export const Settings = z.strictObject({
   global_instructions: z.string(),
   // A dot's note notifies; a question always does.
   notify_on_notes: z.boolean(),
+  // The Edge program dots browse with; null uses the installed one.
+  edge_path: nullable(z.string()),
 });
 export const SettingsSaved = z.strictObject({
   settings: Settings,
   restart_required: z.boolean(),
+});
+// Where Microsoft Edge and Node.js (npx) were found (browser spec section 7).
+export const BrowserStatus = z.strictObject({
+  edge: nullable(z.string()),
+  npx: nullable(z.string()),
 });
 
 // Where a dot's schedule stands (Scheduler v2 spec §8). Times are RFC 3339 local.
@@ -594,6 +603,7 @@ export type ClaudeStatus = z.infer<typeof ClaudeStatus>;
 export type Status = z.infer<typeof Status>;
 export type Settings = z.infer<typeof Settings>;
 export type SettingsSaved = z.infer<typeof SettingsSaved>;
+export type BrowserStatus = z.infer<typeof BrowserStatus>;
 export type ScheduleView = z.infer<typeof ScheduleView>;
 export type DotOverview = z.infer<typeof DotOverview>;
 export type PendingApproval = z.infer<typeof PendingApproval>;

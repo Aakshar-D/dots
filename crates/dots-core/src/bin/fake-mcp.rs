@@ -18,9 +18,9 @@
 //! - `protocol_version`: the version `initialize` answers (default: the client's).
 //! - `init_delay_ms`, `exit_at_initialize`: a slow or dying `initialize`.
 //! - `log`: a file that gets one JSON line per record: `{"start": {pid, args, cwd, env}}` (env:
-//!   the variables whose names start with `FAKE_MCP_`), `{"msg": <message received>}` (over
-//!   http with `"http": "POST"` and the `session`, `protocol` and `auth` headers), and
-//!   `{"http": "GET" | "DELETE", "session": ...}`.
+//!   the variables whose names start with `FAKE_MCP_` or `PLAYWRIGHT_MCP_`), `{"msg": <message
+//!   received>}` (over http with `"http": "POST"` and the `session`, `protocol` and `auth`
+//!   headers), and `{"http": "GET" | "DELETE", "session": ...}`.
 //! - `alive`: a file locked for as long as the process runs.
 //! - `stderr_bytes`: written to stderr at start, before anything is read.
 //! - `ignore_eof`: over stdio, keep running for 60 s after stdin ends instead of exiting.
@@ -377,7 +377,7 @@ async fn main() {
         next_session: AtomicU64::new(1),
     });
     let env: Map<String, Value> = std::env::vars()
-        .filter(|(k, _)| k.starts_with("FAKE_MCP_"))
+        .filter(|(k, _)| k.starts_with("FAKE_MCP_") || k.starts_with("PLAYWRIGHT_MCP_"))
         .map(|(k, v)| (k, json!(v)))
         .collect();
     fake.record(json!({"start": {

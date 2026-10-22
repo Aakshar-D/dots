@@ -76,6 +76,22 @@ describe("commands", () => {
     ]);
   });
 
+  it("sends the browser commands as the core names them", async () => {
+    reply = async () => null;
+    expect(await commands.browserOpen("d1")).toBeNull();
+    reply = async () => fixture.BrowserStatus;
+    expect(await commands.browserStatus()).toEqual(fixture.BrowserStatus);
+    reply = async () => "data:image/png;base64,iVBORw==";
+    expect(await commands.browserScreenshot("r1", "page-1.png")).toBe(
+      "data:image/png;base64,iVBORw==",
+    );
+    expect(calls).toEqual([
+      ["browser_open", { dotId: "d1" }],
+      ["browser_status", undefined],
+      ["browser_screenshot", { runId: "r1", name: "page-1.png" }],
+    ]);
+  });
+
   it("dismisses a schedule's attention by its dot", async () => {
     reply = async () => null;
     expect(await commands.dismissScheduleAttention("d1")).toBeNull();

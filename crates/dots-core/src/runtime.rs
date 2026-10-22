@@ -106,6 +106,8 @@ pub struct Runtime {
     chat_lock: Arc<Mutex<()>>,
     checkins: CheckIns,
     follow_ups: Arc<FollowUps>,
+    /// The dots' browsers (browser spec section 2).
+    browsers: Arc<crate::browser::Browsers>,
     shutdown: CancellationToken,
 }
 
@@ -216,6 +218,17 @@ impl Runtime {
         );
         // Dots' own `dots` MCP server serves the check-in tools to Claude runs.
         runner.set_checkins(checkins.clone());
+        // The dots' browsers: Edge on each dot's own profile, Playwright MCP per run (browser
+        // spec section 2).
+        let browsers = crate::browser::Browsers::new(
+            store.clone(),
+            Arc::new(crate::browser::host::EdgeHost::new(
+                cfg.data_dir.join("browser"),
+            )),
+            crate::browser::PlaywrightCommand::default(),
+            port,
+        );
+        runner.set_browsers(browsers.clone());
         // Decisions parked before a restart (decided, but the resume never happened) are
         // turned into resume runs now; failures are logged and never block startup.
         match store.list_runs_by_status(RunStatus::AwaitingApproval).await {
@@ -279,6 +292,7 @@ impl Runtime {
             chat_lock: follow_ups.thread_lock(),
             checkins,
             follow_ups,
+            browsers,
             shutdown,
         })
     }
@@ -723,6 +737,8 @@ impl Runtime {
     pub async fn delete_dot(&self, id: &str) -> Result<()> {
         let had_row = self.store.get_schedule_state(id).await?.is_some();
         self.store.delete_dot_if_idle(id).await?;
+        // Its Edge closes and its profile goes with it (browser spec section 6).
+        self.browsers.forget(id).await;
         if had_row {
             self.schedule_updated(id);
         }
@@ -955,5 +971,30 @@ impl Runtime {
         tokio::time::timeout(limit, self.store.close())
             .await
             .is_ok()
+    }
+}
+
+/// Browser use (browser spec sections 7 and 8).
+impl Runtime {
+    /// "Open the browser": the dot's Edge, for the person to log in ahead of time. It stays open
+    /// until they close it, and the dot's runs use it meanwhile.
+    pub async fn browser_open(&self, dot_id: &str) -> Result<()> {
+        self.store.get_dot(dot_id).await?;
+        self.browsers
+            .open_for_person(dot_id)
+            .await
+            .map_err(|e| Error::Other(e.to_string()))
+    }
+
+    /// Where Microsoft Edge and Node.js (`npx`) were found, as a run would start them.
+    pub async fn browser_status(&self) -> crate::browser::BrowserStatus {
+        self.browsers.status().await
+    }
+
+    /// A screenshot the run's browser saved in its workspace's `downloads/`, by the name
+    /// Playwright gave it, as a `data:` URL.
+    pub async fn browser_screenshot(&self, run_id: &str, name: &str) -> Result<String> {
+        let folder = self.run_folder(run_id).await?;
+        crate::browser::screenshot(&folder, name)
     }
 }

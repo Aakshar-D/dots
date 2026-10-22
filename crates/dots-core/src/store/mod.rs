@@ -8,6 +8,7 @@ use sqlx::{ConnectOptions, Connection};
 use crate::Result;
 
 mod approvals;
+mod browser;
 mod dots;
 mod follow_ups;
 mod library;
