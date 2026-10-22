@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { cn } from "cn";
 import { Plus } from "lucide-react";
 import type { KeyboardEvent } from "react";
-import { Link, useNavigate } from "react-router";
+import { Link } from "react-router";
 
 import { commands } from "@/api/commands";
 import type { DotOverview } from "@/api/types";
@@ -14,7 +14,6 @@ import { StatusMark } from "@/screens/home/StatusMark";
 /// The home's list of dots, like a list of chat contacts (chat-first home spec, section 3).
 /// `rows` come sorted; `openId` is the dot whose conversation is open.
 export function DotsColumn({ rows, openId }: { rows: DotOverview[]; openId: string | undefined }) {
-  const navigate = useNavigate();
   // Every dot's open questions mark it as waiting; the frame loads the same list for its count.
   const messages =
     useQuery({ queryKey: keys.messages(null), queryFn: () => commands.messagesList(null) }).data ??
@@ -24,16 +23,22 @@ export function DotsColumn({ rows, openId }: { rows: DotOverview[]; openId: stri
       queryKey: keys.followUps(null),
       queryFn: () => commands.followUpsList(null),
     }).data ?? [];
-  // Up and Down open the dot above or below the one in focus, or the open one.
+  // Up and Down move the focus to the dot above or below, Home and End to the first and the
+  // last; Enter (the link's own) opens the dot in focus. Moving opens nothing, so that passing
+  // over dots neither loads them nor marks their questions read.
   function onKeyDown(e: KeyboardEvent<HTMLUListElement>) {
-    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
     e.preventDefault();
     const links = [...e.currentTarget.querySelectorAll<HTMLAnchorElement>("a[data-dot]")];
     const focused = links.indexOf(document.activeElement as HTMLAnchorElement);
     const from = focused !== -1 ? focused : rows.findIndex((row) => row.dot.id === openId);
-    const to = Math.min(rows.length - 1, Math.max(0, from + (e.key === "ArrowDown" ? 1 : -1)));
+    const to =
+      e.key === "Home"
+        ? 0
+        : e.key === "End"
+          ? links.length - 1
+          : Math.min(links.length - 1, Math.max(0, from + (e.key === "ArrowDown" ? 1 : -1)));
     links[to]?.focus();
-    if (rows[to] && rows[to].dot.id !== openId) void navigate(`/home/${rows[to].dot.id}`);
   }
   return (
     <nav aria-label="Dots" className="flex w-64 shrink-0 flex-col border-r">

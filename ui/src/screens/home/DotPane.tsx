@@ -1,8 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { Link } from "react-router";
+import { Link, Navigate } from "react-router";
 
-import { commands } from "@/api/commands";
+import { CommandError, commands } from "@/api/commands";
 import type { DotOverview } from "@/api/types";
 import { LoadErrors } from "@/components/ErrorNote";
 import { Button } from "@/components/ui/button";
@@ -25,7 +25,14 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
     [];
   useEffect(() => rememberDot(dot.id), [dot.id]);
   const view = useConversation(dot.id, rootRunId);
+  // An older topic whose run is gone (deleted, or a stale link) leaves nothing to show.
+  const older = rootRunId !== undefined ? view.threads[0] : undefined;
+  const gone =
+    older !== undefined &&
+    ((older.error instanceof CommandError && older.error.kind === "not_found") ||
+      (older.isSuccess && older.data.length === 0));
   const [pick, setPick] = useState<ReplyPick>({ kind: "default" });
+  if (gone) return <Navigate to={`/home/${dot.id}`} replace />;
   return (
     <div className="flex min-w-0 flex-1 flex-col">
       <DotHeader name={dot.name} status={dotStatus(row, allMessages)}>

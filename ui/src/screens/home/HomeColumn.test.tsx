@@ -117,20 +117,28 @@ describe("the home's dots column", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe(`/home/${reader.dot.id}`));
   });
 
-  it("moves through the dots with the arrow keys", async () => {
+  it("moves the focus through the dots with the arrow keys, Home and End; Enter opens one", async () => {
     backend.on("dot_overview", () => [shopper, reader, nightly]);
     const { user, router } = renderApp(`/home/${reader.dot.id}`);
     const link = within(await screen.findByRole("listitem", { name: "reader" })).getByRole("link");
     act(() => link.focus());
+    const before = router.state.location.key;
     await user.keyboard("{ArrowDown}");
-    await waitFor(() => expect(router.state.location.pathname).toBe(`/home/${nightly.dot.id}`));
     expect(within(item("nightly")).getByRole("link")).toHaveFocus();
+    // Moving the focus opens nothing.
+    expect(router.state.location.pathname).toBe(`/home/${reader.dot.id}`);
+    expect(router.state.location.key).toBe(before);
     // The last stays the last.
     await user.keyboard("{ArrowDown}");
-    expect(router.state.location.pathname).toBe(`/home/${nightly.dot.id}`);
-    await user.keyboard("{ArrowUp}{ArrowUp}");
-    await waitFor(() => expect(router.state.location.pathname).toBe(`/home/${shopper.dot.id}`));
+    expect(within(item("nightly")).getByRole("link")).toHaveFocus();
+    await user.keyboard("{Home}");
     expect(within(item("shopper")).getByRole("link")).toHaveFocus();
+    await user.keyboard("{End}");
+    expect(within(item("nightly")).getByRole("link")).toHaveFocus();
+    await user.keyboard("{ArrowUp}{ArrowUp}");
+    expect(within(item("shopper")).getByRole("link")).toHaveFocus();
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(router.state.location.pathname).toBe(`/home/${shopper.dot.id}`));
   });
 
   it("offers to create the first dot when there is none", async () => {

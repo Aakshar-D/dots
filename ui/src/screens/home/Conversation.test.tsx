@@ -287,3 +287,57 @@ describe("a dot's conversation", () => {
     expect(await screen.findByText("Opened shop.com/cart")).toBeVisible();
   });
 });
+
+describe("what the self-QA found", () => {
+  const event = (runId: string, seq: number, data: Record<string, unknown>): RunEventRecord => ({
+    run_id: runId,
+    seq,
+    ts: sample.run.queued_at,
+    kind: String(data.kind),
+    data,
+  });
+
+  it("says a call parked for approval was sent for approval, not that it failed", async () => {
+    home(
+      [chat("a", "10:00", { status: "awaiting_approval", ended_at: null })],
+      [
+        event("a", 1, { kind: "tool_call", id: "t", tool: "Bash", input: { command: "echo hi" } }),
+        event("a", 2, {
+          kind: "tool_result",
+          id: "t",
+          output:
+            "Queued for human approval #01APPROVAL. Do not retry this action. Finish any other work and end with your summary.",
+          is_error: true,
+        }),
+      ],
+    );
+    renderApp(`/home/${dot.id}`);
+    const view = within(await screen.findByRole("region", { name: "Conversation" }));
+    expect(await view.findByText("sent for approval")).toBeVisible();
+    expect(view.queryByText("failed")).toBeNull();
+  });
+
+  it("names each run of a topic apart, even two queued in the same minute", async () => {
+    const a = chat("a", "10:00");
+    home([a, reply("a2", a, "10:00"), reply("a3", a, "10:01")]);
+    renderApp(`/home/${dot.id}`);
+    await screen.findByText("question a");
+    const names = [...conversation().querySelectorAll("section[aria-label]")].map((s) =>
+      s.getAttribute("aria-label"),
+    );
+    expect(names).toHaveLength(3);
+    expect(new Set(names).size).toBe(3);
+  });
+
+  it("goes back to the dot's conversation when an older topic is gone", async () => {
+    home([chat("current", "10:00")]);
+    backend.on("run_thread", (args) => {
+      if (args.runId === "gone") throw { kind: "not_found", message: "run gone" };
+      return [chat("current", "10:00")];
+    });
+    const { router } = renderApp(`/home/${dot.id}/gone`);
+    await waitFor(() => expect(router.state.location.pathname).toBe(`/home/${dot.id}`));
+    expect(await screen.findByText("question current")).toBeVisible();
+    expect(screen.queryByText("run gone")).toBeNull();
+  });
+});
