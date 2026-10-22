@@ -179,6 +179,10 @@ pub struct Dot {
     pub webhook_token: String,
     pub created_at: String,
     pub updated_at: String,
+    /// When the person last looked at the dot's conversation, RFC 3339 UTC; `None` before the
+    /// first time (needs-you spec section 2).
+    #[serde(default)]
+    pub seen_at: Option<String>,
     #[serde(flatten)]
     pub spec: DotSpec,
 }
@@ -441,6 +445,10 @@ pub struct DotOverview {
     pub last_run: Option<Run>,
     /// `None` without a schedule.
     pub schedule_state: Option<ScheduleView>,
+    /// Its open questions and pending approvals (needs-you spec section 2).
+    pub needs_you: u32,
+    /// `needs_you`, plus its runs that ended and its notes posted after `dot.seen_at`.
+    pub unread: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

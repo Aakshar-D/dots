@@ -12,7 +12,7 @@ use crate::{Error, Result};
 pub(super) const DOT_COLUMNS: &str = "id, name, instructions, engine, model, endpoint_url, \
     workdir, workspace_mode, schedule, webhook_token, policy, uses, browser, \
     use_global_instructions, use_user_settings, max_turns, \
-    timeout_secs, approval_wait_secs, enabled, created_at, updated_at";
+    timeout_secs, approval_wait_secs, enabled, created_at, updated_at, seen_at";
 
 pub(super) fn dot_from_row(row: &SqliteRow) -> Result<Dot> {
     Ok(Dot {
@@ -20,6 +20,7 @@ pub(super) fn dot_from_row(row: &SqliteRow) -> Result<Dot> {
         webhook_token: row.try_get("webhook_token")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
+        seen_at: row.try_get("seen_at")?,
         spec: DotSpec {
             name: row.try_get("name")?,
             instructions: row.try_get("instructions")?,
@@ -230,6 +231,46 @@ impl Store {
             return Err(Error::NotFound(format!("dot {id}")));
         }
         self.get_dot(id).await
+    }
+
+    /// Marks the dot seen now (needs-you spec section 3). `updated_at` stays: looking at a dot
+    /// does not change it. `NotFound` for an unknown dot.
+    pub async fn mark_dot_seen(&self, id: &str) -> Result<Dot> {
+        let res = sqlx::query("UPDATE dots SET seen_at = ? WHERE id = ?")
+            .bind(now())
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        if res.rows_affected() == 0 {
+            return Err(Error::NotFound(format!("dot {id}")));
+        }
+        self.get_dot(id).await
+    }
+
+    /// What the dot has for the person (needs-you spec section 2), as `(needs_you, unread)`:
+    /// its open questions and pending approvals; and those plus its runs that ended and its
+    /// notes posted after its `seen_at` (none without one). `NotFound` for an unknown dot.
+    pub async fn dot_counts(&self, id: &str) -> Result<(u32, u32)> {
+        let row = sqlx::query(
+            "SELECT \
+             (SELECT COUNT(*) FROM messages m WHERE m.dot_id = d.id AND m.kind = 'question' \
+              AND m.answered_at IS NULL AND m.dismissed_at IS NULL) \
+             + (SELECT COUNT(*) FROM approvals a JOIN runs r ON r.id = a.run_id \
+              WHERE r.dot_id = d.id AND a.status = 'pending') AS needs_you, \
+             CASE WHEN d.seen_at IS NULL THEN 0 ELSE \
+             (SELECT COUNT(*) FROM runs r WHERE r.dot_id = d.id \
+              AND r.status IN ('succeeded', 'failed', 'cancelled') AND r.ended_at > d.seen_at) \
+             + (SELECT COUNT(*) FROM messages m WHERE m.dot_id = d.id AND m.kind = 'note' \
+              AND m.created_at > d.seen_at) END AS fresh \
+             FROM dots d WHERE d.id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| Error::NotFound(format!("dot {id}")))?;
+        let needs_you = row.try_get::<i64, _>("needs_you")? as u32;
+        let fresh = row.try_get::<i64, _>("fresh")? as u32;
+        Ok((needs_you, needs_you + fresh))
     }
 
     pub async fn regenerate_webhook_token(&self, id: &str) -> Result<String> {

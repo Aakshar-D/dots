@@ -67,6 +67,7 @@ fn dot() -> Dot {
         webhook_token: "tok_abc".into(),
         created_at: TS.into(),
         updated_at: TS.into(),
+        seen_at: Some(TS.into()),
         spec: spec(),
     }
 }
@@ -599,6 +600,8 @@ pub fn samples() -> Value {
                     error: Some("model server unreachable".into()),
                 }),
             }),
+            needs_you: 0,
+            unread: 0,
         }),
         "Inbox": to(Inbox {
             approvals: vec![PendingApproval {
@@ -732,6 +735,9 @@ pub fn samples() -> Value {
                 message: messages()[1].clone(),
             }),
             to(RuntimeEvent::FollowUpsUpdated {
+                dot_id: "01J0DOT".into(),
+            }),
+            to(RuntimeEvent::DotSeen {
                 dot_id: "01J0DOT".into(),
             }),
         ]);

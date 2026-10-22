@@ -66,6 +66,7 @@ pub fn fake_dot(name: &str, workdir: &Path, mode: WorkspaceMode) -> Dot {
         webhook_token: "t".into(),
         created_at: "2026-10-08T00:00:00.000Z".into(),
         updated_at: "2026-10-08T00:00:00.000Z".into(),
+        seen_at: None,
         spec: s,
     }
 }

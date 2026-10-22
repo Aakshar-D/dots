@@ -19,9 +19,9 @@ use crate::events::{new_bus, Bus, RuntimeEvent};
 use crate::followups::FollowUps;
 use crate::library_service::LibraryService;
 use crate::model::{
-    Approval, AttentionRun, ClaudeStatus, Dot, DotOverview, DotSpec, EngineKind, Inbox, NewRun,
-    PendingApproval, ReviewRun, Run, RunEventRecord, RunStatus, ScheduleChange, ScheduleView,
-    SettingsSaved, Status, TriggerKind, WorktreeDiff,
+    Approval, AttentionRun, ClaudeStatus, Dot, DotOverview, DotSpec, EngineKind, Inbox,
+    MessageKind, NewRun, PendingApproval, ReviewRun, Run, RunEventRecord, RunStatus,
+    ScheduleChange, ScheduleView, SettingsSaved, Status, TriggerKind, WorktreeDiff,
 };
 use crate::policy::{allow_candidates, Action, Rule, RuleCandidate};
 use crate::runner::{Runner, RunnerConfig};
@@ -108,6 +108,9 @@ pub struct Runtime {
     follow_ups: Arc<FollowUps>,
     /// The dots' browsers (browser spec section 2).
     browsers: Arc<crate::browser::Browsers>,
+    /// The dot whose conversation the person has open in the focused window (needs-you spec
+    /// section 3).
+    viewing: Viewing,
     shutdown: CancellationToken,
 }
 
@@ -265,6 +268,13 @@ impl Runtime {
         // Follow-ups wait while schedules are paused (check-ins spec section 6).
         follow_ups.set_paused(settings.schedules_paused);
         follow_ups.spawn(runner.clone(), shutdown.clone());
+        let viewing = Viewing::default();
+        watch_viewing(
+            store.clone(),
+            bus.clone(),
+            viewing.clone(),
+            shutdown.clone(),
+        );
         Ok(Runtime {
             library: LibraryService::new(store.clone(), bus.clone())
                 .with_skills_dir(cfg.data_dir.join(SKILLS_DIR)),
@@ -293,6 +303,7 @@ impl Runtime {
             checkins,
             follow_ups,
             browsers,
+            viewing,
             shutdown,
         })
     }
@@ -382,15 +393,23 @@ impl Runtime {
         self.store.get_dot(id).await
     }
 
-    /// Every dot with its active and last run and where its schedule stands.
+    /// Every dot with its active and last run, where its schedule stands, and what it has for
+    /// the person (needs-you spec section 3). A dot deleted meanwhile is left out.
     pub async fn dot_overview(&self) -> Result<Vec<DotOverview>> {
         let now = self.clock.now();
         let mut rows = Vec::new();
         for dot in self.store.list_dots().await? {
+            let (needs_you, unread) = match self.store.dot_counts(&dot.id).await {
+                Ok(counts) => counts,
+                Err(Error::NotFound(_)) => continue,
+                Err(e) => return Err(e),
+            };
             rows.push(DotOverview {
                 active_run: self.store.latest_run(&dot.id, true).await?,
                 last_run: self.store.latest_run(&dot.id, false).await?,
                 schedule_state: self.schedule_view(&dot, now).await?,
+                needs_you,
+                unread,
                 dot,
             });
         }
@@ -737,6 +756,13 @@ impl Runtime {
     pub async fn delete_dot(&self, id: &str) -> Result<()> {
         let had_row = self.store.get_schedule_state(id).await?.is_some();
         self.store.delete_dot_if_idle(id).await?;
+        // It can no longer be viewed (needs-you spec section 7).
+        {
+            let mut viewing = lock(&self.viewing);
+            if viewing.as_deref() == Some(id) {
+                *viewing = None;
+            }
+        }
         // Its Edge closes and its profile goes with it (browser spec section 6).
         self.browsers.forget(id).await;
         if had_row {
@@ -997,4 +1023,90 @@ impl Runtime {
         let folder = self.run_folder(run_id).await?;
         crate::browser::screenshot(&folder, name)
     }
+}
+
+/// What needs the person (needs-you spec section 3).
+impl Runtime {
+    /// The person looked at the dot's conversation: its `seen_at` is now, and `DotSeen` tells
+    /// the app (the tray, the other windows). `NotFound` for an unknown dot.
+    pub async fn mark_dot_seen(&self, dot_id: &str) -> Result<()> {
+        mark_seen(&self.store, &self.bus, dot_id).await
+    }
+
+    /// The dot whose conversation is open in the focused window, or none. Held in memory, not
+    /// stored; the last call wins. While a dot is viewed, a run of it that ends and a note it
+    /// posts mark it seen.
+    pub fn set_viewing(&self, dot_id: Option<&str>) {
+        *lock(&self.viewing) = dot_id.map(str::to_string);
+    }
+
+    /// The dot being viewed (`set_viewing`).
+    pub fn viewing(&self) -> Option<String> {
+        lock(&self.viewing).clone()
+    }
+
+    /// The sum of every dot's `unread`: the count of the Home link (needs-you spec section 5).
+    pub async fn unread_total(&self) -> Result<u32> {
+        let mut total = 0;
+        for dot in self.store.list_dots().await? {
+            match self.store.dot_counts(&dot.id).await {
+                Ok((_, unread)) => total += unread,
+                Err(Error::NotFound(_)) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(total)
+    }
+}
+
+/// The dot being viewed (`Runtime::set_viewing`), shared with `watch_viewing`.
+type Viewing = Arc<std::sync::Mutex<Option<String>>>;
+
+fn lock(viewing: &Viewing) -> std::sync::MutexGuard<'_, Option<String>> {
+    viewing
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+async fn mark_seen(store: &Store, bus: &Bus, dot_id: &str) -> Result<()> {
+    store.mark_dot_seen(dot_id).await?;
+    let _ = bus.send(RuntimeEvent::DotSeen {
+        dot_id: dot_id.to_string(),
+    });
+    Ok(())
+}
+
+/// Marks the viewed dot seen when a run of it ends or it posts a note, so that what the person
+/// is reading never counts as new. Missed events may have held such a change, so a lag marks
+/// the viewed dot seen too.
+fn watch_viewing(store: Store, bus: Bus, viewing: Viewing, shutdown: CancellationToken) {
+    let mut events = bus.subscribe();
+    tokio::spawn(async move {
+        loop {
+            let event = tokio::select! {
+                _ = shutdown.cancelled() => break,
+                event = events.recv() => event,
+            };
+            let dot_id = match event {
+                Ok(RuntimeEvent::RunUpdated { run }) if run.status.is_terminal() => run.dot_id,
+                Ok(RuntimeEvent::MessagePosted { message })
+                    if message.kind == MessageKind::Note =>
+                {
+                    message.dot_id
+                }
+                Ok(_) => continue,
+                Err(broadcast::error::RecvError::Lagged(_)) => match lock(&viewing).clone() {
+                    Some(dot_id) => dot_id,
+                    None => continue,
+                },
+                Err(broadcast::error::RecvError::Closed) => break,
+            };
+            let viewed = lock(&viewing).as_deref() == Some(dot_id.as_str());
+            if viewed {
+                if let Err(e) = mark_seen(&store, &bus, &dot_id).await {
+                    tracing::warn!(dot = %dot_id, "marking the viewed dot seen failed: {e}");
+                }
+            }
+        }
+    });
 }

@@ -40,9 +40,12 @@ function activity(row: DotOverview): string | null {
   return times.length === 0 ? null : times.sort().at(-1)!;
 }
 
-/// The column's order: newest activity first; the dots that never ran after them, by name.
+/// The column's order: the dots that need the person first (needs-you spec section 5); then
+/// newest activity first; the dots that never ran after them, by name.
 export function sortDots(rows: DotOverview[]): DotOverview[] {
   return [...rows].sort((a, b) => {
+    const needs = Number(b.needs_you > 0) - Number(a.needs_you > 0);
+    if (needs !== 0) return needs;
     const [x, y] = [activity(a), activity(b)];
     if (x !== null && y !== null) return y.localeCompare(x);
     if (x !== null) return -1;

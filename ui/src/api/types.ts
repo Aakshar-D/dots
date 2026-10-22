@@ -110,6 +110,8 @@ export const Dot = z.strictObject({
   webhook_token: z.string(),
   created_at: z.string(),
   updated_at: z.string(),
+  // When the person last looked at its conversation (RFC 3339 UTC); null before the first time.
+  seen_at: nullable(z.string()),
   ...dotSpecShape,
 });
 
@@ -257,6 +259,8 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("message_updated"), message: Message }),
   // A follow-up of the dot was scheduled, fired, cancelled or skipped.
   z.strictObject({ type: z.literal("follow_ups_updated"), dot_id: z.string() }),
+  // The person looked at the dot's conversation, or the core marked the viewed dot seen.
+  z.strictObject({ type: z.literal("dot_seen"), dot_id: z.string() }),
 ]);
 
 export const ClaudeStatus = z.strictObject({
@@ -316,6 +320,10 @@ export const DotOverview = z.strictObject({
   last_run: nullable(Run),
   // Null without a schedule.
   schedule_state: nullable(ScheduleView),
+  // Its open questions and pending approvals.
+  needs_you: z.number().int(),
+  // `needs_you`, plus its runs that ended and its notes posted since it was last seen.
+  unread: z.number().int(),
 });
 
 export const PendingApproval = z.strictObject({

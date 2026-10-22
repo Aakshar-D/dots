@@ -575,3 +575,30 @@ pub async fn browser_screenshot(
 ) -> Res<String> {
     Ok(state.rt()?.browser_screenshot(&run_id, &name).await?)
 }
+
+/// The person looked at the dot's conversation (needs-you spec section 4.1): its `unread` drops
+/// to what needs them.
+#[tauri::command]
+pub async fn mark_dot_seen(state: State<'_, AppState>, dot_id: String) -> Res<()> {
+    Ok(state.rt()?.mark_dot_seen(&dot_id).await?)
+}
+
+/// The dot whose conversation is open in the focused window, or none: nothing notifies about
+/// it, and what it does while viewed is not new.
+#[tauri::command]
+pub async fn set_viewing(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    dot_id: Option<String>,
+) -> Res<()> {
+    state.rt()?;
+    // Held while the window is really in front (`viewing`): a minimized window is not.
+    crate::viewing::report(&app, dot_id);
+    Ok(())
+}
+
+/// The sum of every dot's `unread`, for the Home link of the rail.
+#[tauri::command]
+pub async fn unread_total(state: State<'_, AppState>) -> Res<u32> {
+    Ok(state.rt()?.unread_total().await?)
+}
