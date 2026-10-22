@@ -50,6 +50,19 @@ pub const BASE_ENV: &[&str] = &[
     "ALL_PROXY",
     "ALLUSERSPROFILE",
     "PUBLIC",
+    // Where toolchains are: an agent's build finds its JDK, Go, Rust, .NET, Node or Python.
+    "JAVA_HOME",
+    "GOROOT",
+    "GOPATH",
+    "CARGO_HOME",
+    "RUSTUP_HOME",
+    "DOTNET_ROOT",
+    "PNPM_HOME",
+    "NVM_HOME",
+    "NVM_SYMLINK",
+    "VIRTUAL_ENV",
+    "CONDA_PREFIX",
+    "ANDROID_HOME",
 ];
 
 /// What the `claude` CLI also keeps: its own configuration and login, passed through unread

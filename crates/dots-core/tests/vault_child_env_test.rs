@@ -109,6 +109,18 @@ fn the_lists_are_pinned() {
             "ALL_PROXY",
             "ALLUSERSPROFILE",
             "PUBLIC",
+            "JAVA_HOME",
+            "GOROOT",
+            "GOPATH",
+            "CARGO_HOME",
+            "RUSTUP_HOME",
+            "DOTNET_ROOT",
+            "PNPM_HOME",
+            "NVM_HOME",
+            "NVM_SYMLINK",
+            "VIRTUAL_ENV",
+            "CONDA_PREFIX",
+            "ANDROID_HOME",
         ]
     );
     assert_eq!(
