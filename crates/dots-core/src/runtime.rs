@@ -126,7 +126,9 @@ impl Runtime {
             Some(secrets) => secrets.clone(),
             None => os_secrets(&store.install_id().await?),
         };
-        let vault = Vault::new(store.clone(), secrets);
+        // Every Personal secret is in the redactor before any run or Library call (env vault
+        // spec §10).
+        let vault = Vault::open(store.clone(), secrets).await?;
         // A setup from before the vault: its stored secret values move into Personal (env
         // vault spec §11). A failure is logged and the app starts anyway.
         // The old-backups cut-off is set only once the move finished without error.

@@ -2,6 +2,7 @@
 
 pub mod clock;
 pub mod fake_mcp;
+pub mod secrets;
 pub mod tz;
 
 use std::path::Path;

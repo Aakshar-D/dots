@@ -26,6 +26,24 @@ impl Vault {
         Vault { store, secrets }
     }
 
+    /// The vault of a start: every Personal secret is read once and added to the redactor, so
+    /// a value is scrubbed from what Dots writes before any run or Library call reads it. A
+    /// secret that cannot be read is logged by name and skipped.
+    pub async fn open(store: Store, secrets: Arc<dyn SecretStore>) -> Result<Vault> {
+        let vault = Vault::new(store, secrets);
+        for entry in vault.store.list_env_entries().await? {
+            if entry.kind != EntryKind::Secret {
+                continue;
+            }
+            match vault.secrets.get(&personal_key(&entry.name)) {
+                Ok(Some(value)) => super::redact::global().add(&entry.name, &value),
+                Ok(None) => {}
+                Err(e) => tracing::warn!("could not read the secret {:?}: {e}", entry.name),
+            }
+        }
+        Ok(vault)
+    }
+
     pub(crate) fn store(&self) -> &Store {
         &self.store
     }

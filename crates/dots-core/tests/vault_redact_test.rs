@@ -293,3 +293,66 @@ async fn a_streamed_tail_never_leaves_a_piece_of_a_secret() {
         "q".repeat(max)
     );
 }
+
+#[tokio::test]
+async fn a_vault_opened_over_kept_secrets_scrubs_them_before_any_read() {
+    let (_dir, store) = temp_store().await;
+    // Secrets kept from an earlier start: their rows and values exist, and nothing read them.
+    store
+        .add_env_entry("P1_KEPT_TOKEN", EntryKind::Secret, None)
+        .await
+        .unwrap();
+    store
+        .add_env_entry("P1_BROKEN_TOKEN", EntryKind::Secret, None)
+        .await
+        .unwrap();
+    store
+        .add_env_entry(
+            "P1_PLAIN",
+            EntryKind::Plain,
+            Some("plain-is-not-a-secret-p1"),
+        )
+        .await
+        .unwrap();
+    let secrets = common::secrets::FailingSecrets::new("P1_BROKEN");
+    secrets.preload("personal/P1_KEPT_TOKEN", "kept-secret-value-p1");
+    // A read error for one name is logged and skipped: the others still load.
+    let _vault = Vault::open(store, Arc::new(secrets)).await.unwrap();
+    assert_eq!(
+        global().scrub("log: kept-secret-value-p1").as_ref(),
+        "log: [secret:P1_KEPT_TOKEN]"
+    );
+    assert_eq!(
+        global().scrub("plain-is-not-a-secret-p1").as_ref(),
+        "plain-is-not-a-secret-p1"
+    );
+}
+
+#[tokio::test]
+async fn the_runtime_loads_personal_secrets_into_the_redactor_at_start() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("data");
+    std::fs::create_dir_all(&data).unwrap();
+    {
+        let store = dots_core::store::Store::open(&data.join("dots.db"))
+            .await
+            .unwrap();
+        store
+            .add_env_entry("P1_START_TOKEN", EntryKind::Secret, None)
+            .await
+            .unwrap();
+    }
+    let secrets = MemorySecrets::new();
+    secrets
+        .put("personal/P1_START_TOKEN", "start-secret-value-p1")
+        .unwrap();
+    let mut cfg = dots_core::Config::new(&data);
+    cfg.port = 0;
+    cfg.secrets = Some(Arc::new(secrets));
+    let rt = dots_core::Runtime::start(cfg).await.unwrap();
+    assert_eq!(
+        global().scrub("start-secret-value-p1").as_ref(),
+        "[secret:P1_START_TOKEN]"
+    );
+    rt.shutdown();
+}
