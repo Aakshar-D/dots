@@ -21,7 +21,7 @@ import { errorMessage, notifyError } from "@/lib/notify";
 import { invalidate, keys } from "@/lib/query";
 
 import { isDeclined, ToolList, type ServerEntry } from "./parts";
-import { joinLines, looksSecret, parseLines, variablesIn } from "./text";
+import { joinLines, movesToVault, parseLines, variablesIn } from "./text";
 import { parseTools } from "./tools";
 
 type Draft = {
@@ -147,7 +147,7 @@ function secretKeys(draft: Draft): string[] {
     draft.transport === "stdio" ? parseLines(draft.env, "=") : parseLines(draft.headers, ":");
   if (!parsed.ok) return [];
   return Object.entries(parsed.entries)
-    .filter(([key, value]) => looksSecret(key) && !value.includes("${"))
+    .filter(([key, value]) => movesToVault(key, value))
     .map(([key]) => key);
 }
 

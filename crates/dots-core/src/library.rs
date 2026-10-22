@@ -480,13 +480,44 @@ fn punycode_decode(input: &str) -> Option<String> {
     Some(out.into_iter().collect())
 }
 
-/// Whether a key names a secret: `TOKEN`, `KEY`, `SECRET`, `PASSWORD` or `AUTH` in it, in any
-/// case (so also the header `Authorization`). Such a value is better given as `${VAR}`.
+/// The words that make a key name a secret, as whole words of the key.
+const SECRET_WORDS: &[&str] = &[
+    "TOKEN",
+    "KEY",
+    "SECRET",
+    "PASSWORD",
+    "PASSWD",
+    "PWD",
+    "AUTH",
+    "AUTHORIZATION",
+    "CREDENTIAL",
+    "CREDENTIALS",
+    "APIKEY",
+];
+
+/// The last words of a key that names where or what a secret is, not the secret itself.
+const NOT_SECRET_LAST_WORDS: &[&str] = &[
+    "URL", "URI", "HOST", "ENDPOINT", "ID", "NAME", "TYPE", "PATH", "FILE", "DIR", "HEADER",
+    "REGION", "PORT", "ISSUER", "REALM", "SCOPE", "MODE",
+];
+
+/// Whether a key names a secret: one of its words, split on `_`, `-` and `.`, is `TOKEN`,
+/// `KEY`, `SECRET`, `PASSWORD`, `PASSWD`, `PWD`, `AUTH`, `AUTHORIZATION`, `CREDENTIAL(S)` or
+/// `APIKEY`, in any case (so also the header `Authorization`), and its last word is not one
+/// such as `URL`, `ID` or `HEADER` (`TOKEN_URL`, `KEY_ID`). Such a value is better given as
+/// `${VAR}`; the vault moves it there.
 pub fn looks_secret(key: &str) -> bool {
     let key = key.to_ascii_uppercase();
-    ["TOKEN", "KEY", "SECRET", "PASSWORD", "AUTH"]
-        .iter()
-        .any(|word| key.contains(word))
+    let words: Vec<&str> = key
+        .split(['_', '-', '.'])
+        .filter(|w| !w.is_empty())
+        .collect();
+    match words.last() {
+        Some(last) if !NOT_SECRET_LAST_WORDS.contains(last) => {
+            words.iter().any(|w| SECRET_WORDS.contains(w))
+        }
+        _ => false,
+    }
 }
 
 /// A valid MCP server name made from `raw`: lower case; any other character than a-z, 0-9 and

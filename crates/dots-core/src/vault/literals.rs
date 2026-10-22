@@ -51,8 +51,42 @@ struct Found {
     prefix: String,
 }
 
+/// An `http(s)` URL with no user or password in it: where a secret is, not one.
+fn plain_url(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    let Some(rest) = lower
+        .strip_prefix("https://")
+        .or_else(|| lower.strip_prefix("http://"))
+    else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    !authority.is_empty() && !authority.contains('@')
+}
+
+/// A filesystem path: `C:\…`, `\\server\…`, `~/…`, `./…`, `../…`, or `/a/b` with no `+`
+/// or `=` (which a base64 value starting with `/` would have) and no space.
+fn looks_like_path(value: &str) -> bool {
+    let b = value.as_bytes();
+    let sep = |c: u8| c == b'/' || c == b'\\';
+    let drive = b.len() > 2 && b[0].is_ascii_alphabetic() && b[1] == b':' && sep(b[2]);
+    let relative = ["~/", "~\\", "./", ".\\", "../", "..\\"]
+        .iter()
+        .any(|p| value.starts_with(p));
+    let posix =
+        value.starts_with('/') && value[1..].contains('/') && !value.contains(['+', '=', ' ']);
+    drive || value.starts_with("\\\\") || relative || posix
+}
+
+/// Whether the value under `key` moves to Personal: a secret-looking key, a value that is not
+/// empty, not `${…}`, and not a plain URL or a path.
 fn hidden(key: &str, value: &str) -> bool {
-    looks_secret(key) && !value.contains("${") && !value.trim().is_empty()
+    let trimmed = value.trim();
+    looks_secret(key)
+        && !value.contains("${")
+        && !trimmed.is_empty()
+        && !plain_url(trimmed)
+        && !looks_like_path(trimmed)
 }
 
 /// The secret-looking values of the server `server`'s config.

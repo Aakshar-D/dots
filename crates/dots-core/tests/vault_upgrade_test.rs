@@ -537,3 +537,42 @@ async fn an_old_backup_that_cannot_be_deleted_does_not_stop_the_answer() {
     assert!(!old.exists() && stuck.exists());
     assert!(vault.old_backups(dir.path()).await.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn a_plain_url_or_a_path_stays_where_it_is() {
+    let (_dir, store) = temp_store().await;
+    let vault = Vault::in_memory(store);
+    let config = stdio(&[
+        ("AUTH", "https://login.example.com/realms/acme"),
+        (
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            r"C:\keys\service-account.json",
+        ),
+        ("SSH_KEY", "~/.ssh/id_ed25519"),
+        ("AWS_CREDENTIALS", "/home/me/.aws/credentials"),
+        ("TOKEN_URL", "https://login.example.com/token"),
+        ("DB_PASSWORD", "https://admin:url-secret-17@db.example.com"),
+    ]);
+    let (kept, moved) = vault.move_literals("u", &config).await.unwrap();
+    assert_eq!(moved, ["DB_PASSWORD"]);
+    assert_eq!(
+        kept,
+        stdio(&[
+            ("AUTH", "https://login.example.com/realms/acme"),
+            (
+                "GOOGLE_APPLICATION_CREDENTIALS",
+                r"C:\keys\service-account.json"
+            ),
+            ("SSH_KEY", "~/.ssh/id_ed25519"),
+            ("AWS_CREDENTIALS", "/home/me/.aws/credentials"),
+            ("TOKEN_URL", "https://login.example.com/token"),
+            ("DB_PASSWORD", "${DB_PASSWORD}"),
+        ])
+    );
+    // A base64 secret that starts with `/` is not a path.
+    let (_, moved) = vault
+        .move_literals("b", &stdio(&[("API_KEY", "/aB3dE+fG7hI/jK9lM=")]))
+        .await
+        .unwrap();
+    assert_eq!(moved, ["API_KEY"]);
+}
