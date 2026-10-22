@@ -383,7 +383,7 @@ The plan is split into three: **A** Personal (§5), grants (§7), resolution and
 - **The moved-origin check compares URL text.** When a server's URL changes, the accepted tool list is reset by comparing the text, since values are no longer read for it. A URL whose text changed counts as moved (§8; origin pinning per scope is plan B).
 - **What a variable that does not resolve says.** The server is left out of the run with a run event "`NAME`: not granted to `mcp:<server>` in dot '`<dot>`'" or "`NAME`: not in Personal (dot '`<dot>`', `<consumer>`)". The server's Library catalog is not marked: the failure is the dot's (§8).
 - **The base environment also keeps** `PSModulePath` (the local engine's PowerShell), `HOME`, `ProgramW6432`, `CommonProgramFiles(x86)` and `CommonProgramW6432` (§8).
-- **Redaction uses one redactor for the whole process.** It holds every secret Dots has read since it started, not one list per run. The store scrubs as it writes: run events (so the live view too), approval inputs, run payloads, summaries and errors, and the text of notes and questions. The log file is scrubbed line by line (§10).
+- **Redaction uses one redactor for the whole process.** It holds every Personal secret, each read once when the vault opens at start, and every secret Dots reads after that; not one list per run. A secret that Credential Manager fails to read at start is logged by name and skipped. The store scrubs as it writes: run events (so the live view too), approval inputs, run payloads, summaries and errors, and the text of notes and questions. The log file is scrubbed line by line (§10).
 - **An approval keeps the scrubbed input.** When Dots itself performs an approved call (the local engine after a late decision), it performs it with `[secret:NAME]` where a secret value was. The input hash is still the one of the call as asked (§10).
 - **Secret-looking values move to Personal automatically**, with no "held" state and no button:
   - when a server is added or changed
@@ -391,7 +391,13 @@ The plan is split into three: **A** Personal (§5), grants (§7), resolution and
   - at every start, for values a version before the vault stored; the dots that use such a server are granted the names
 
   A name Personal has with the same value is reused; another value gets `_2`, `_3`, … A value over 2,560 bytes stays where it is, is logged and is scrubbed (see below). The server form says this happens instead of offering "Move to vault" (§9, §11).
-- **The import offer** lists the `${VAR}` names that Library servers read, that Dots' Windows environment sets, and that Personal lacks. They are imported as secrets. Importing or dismissing answers the offer for good: the `settings` row `vault_import_answered` (§11 step 3).
+
+  A key looks secret when one of its words, split on `_`, `-` and `.`, in any case, is `TOKEN`, `KEY`, `SECRET`, `PASSWORD`, `PASSWD`, `PWD`, `AUTH`, `AUTHORIZATION`, `CREDENTIAL`, `CREDENTIALS` or `APIKEY`. A key whose last word is `URL`, `URI`, `HOST`, `ENDPOINT`, `ID`, `NAME`, `TYPE`, `PATH`, `FILE`, `DIR`, `HEADER`, `REGION`, `PORT`, `ISSUER`, `REALM`, `SCOPE` or `MODE` never does (`TOKEN_URL`, `KEY_ID`, `API_KEY_HEADER`). A value that is an `http(s)` URL with no user or password in it, or a filesystem path, does not move. The UI's `looksSecret` and the server form's notice follow the same rule (§9, §11).
+
+  A server already stored keeps its names:
+  - A plugin's re-sync whose file has another value for a key the stored server reads as `${NAME}` keeps `${NAME}`. Personal wins: its value stays, no `NAME_2` is made, and the difference is logged by name only. So the dots that use the server stay granted.
+  - A form edit that types a new value into a key that read `${NAME}` replaces NAME's value in Personal, when no other Library item reads `${NAME}`. Otherwise the value gets a name of its own, `NAME_2`, `NAME_3`, …
+- **The import offer** lists the `${VAR}` names that Library servers read, that Dots' Windows environment sets, and that Personal lacks. They are imported as secrets. Importing or dismissing answers the offer for good: the `settings` row `vault_import_answered` (§11 step 3). A value over 2,560 bytes, or one the vault refuses or cannot store, is skipped and logged by name; the others are still imported, and the Env tab names what was not.
 - **"Made before this release"** means older than the `settings` row `vault_since`, written the first time the data folder runs with the vault. Deleting or keeping the backups answers the offer for good: `vault_backups_answered` (§11 step 4).
 - **A new dot has no webhook token.** Its webhook refuses every request until **Make a token**. A token is stored as `sha256:<hex>` and shown once; tokens from before are hashed when the store opens (§11).
 - **The gateway file's DACL** is set before its secret is written: one entry, full access for the signed-in user, nothing inherited (§11).
@@ -400,18 +406,19 @@ The plan is split into three: **A** Personal (§5), grants (§7), resolution and
   - every name that starts with `ANTHROPIC_` or `CLAUDE_CODE_`
   - `CLI_ENV`: `CLAUDE_CONFIG_DIR`, `DISABLE_TELEMETRY`, `DISABLE_AUTOUPDATER`, `DISABLE_ERROR_REPORTING`, `MCP_TIMEOUT`, `BASH_DEFAULT_TIMEOUT_MS`, `BASH_MAX_TIMEOUT_MS` and `MAX_MCP_OUTPUT_TOKENS`
 
-  A shell grant of one of these names is skipped, with the run notice "`NAME`: the claude CLI's own variable, not set from Personal". Bedrock's and Vertex's `AWS_*` and `GOOGLE_*` names are not passed through (§8).
-- **The base environment also keeps** `SSL_CERT_DIR`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `ALL_PROXY`, `ALLUSERSPROFILE` and `PUBLIC` (§8).
+  A shell grant of one of these names is skipped, with the run notice "`NAME`: the claude CLI's own variable, not set from Personal". So is a shell grant, for the CLI only, of a name that would point it at another endpoint or load code into it: `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`, `NODE_EXTRA_CA_CERTS` and `NODE_OPTIONS`, in any case, with the same notice. The CLI keeps what Dots' environment passed through for them; other children may be granted them. Bedrock's and Vertex's `AWS_*` and `GOOGLE_*` names are not passed through (§8).
+- **The base environment also keeps** `SSL_CERT_DIR`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `ALL_PROXY`, `ALLUSERSPROFILE` and `PUBLIC`, and where toolchains are, so an agent's build still finds them: `JAVA_HOME`, `GOROOT`, `GOPATH`, `CARGO_HOME`, `RUSTUP_HOME`, `DOTNET_ROOT`, `PNPM_HOME`, `NVM_HOME`, `NVM_SYMLINK`, `VIRTUAL_ENV`, `CONDA_PREFIX` and `ANDROID_HOME` (§8).
 - **Redaction covers more spellings and more places** (§10):
   - A value is matched raw, URL-encoded, JSON-escaped and base64-encoded. Base64 is matched at all three byte alignments, so a secret inside a longer encoded value is caught too. Values under 8 bytes are not matched.
-  - Text is scrubbed before it is cut to a size limit, so no piece of a secret survives at the cut.
-  - Also scrubbed: an MCP server's catalog error, the reviewer notes of approvals and follow-ups, and the panic line. The panic line is written as it is only if the redactor is busy at that moment.
-  - An "Always allow" grant and a parked approval are keyed by the scrubbed input, so they still match after Dots restarts.
-- **A value that cannot move to Personal is scrubbed.** A value over 2,560 bytes stays in the Library config, but Dots scrubs it from everything it writes. A key that does not make a variable name gets a derived one: a leading `_` before a digit, cut to 128 characters. A suffix `_2`, `_3`, … keeps the name within 128 (§11).
+  - Text is scrubbed before it is cut to a size limit, so no piece of a secret survives at the cut. This holds for the context library's tool too: a document's head, a summary, a matching line and an echoed argument.
+  - Also scrubbed: an MCP server's catalog error, the reviewer notes of approvals and follow-ups, the panic line's message, and a command's error message to the UI. If the redactor is busy when a panic is written, the message is withheld: the line says `(message withheld: redactor busy)`.
+  - An "Always allow" grant and a parked approval are keyed by the scrubbed input. Every Personal secret is in the redactor from the start, so they still match after Dots restarts.
+- **A value that cannot move to Personal is scrubbed.** A value over 2,560 bytes, or one the vault refuses (one holding a NUL), stays in the Library config, but Dots scrubs it from everything it writes and logs its name (§11).
+- **A key that does not make a variable name gets a derived one.** A digit at the start gets a leading `_`, and the name is cut to 128 characters. A suffix `_2`, `_3`, … keeps the name within 128 (§11).
 - **A one-word `Authorization` value** becomes `${NAME}`, with no scheme added (§11).
-- **The move at start survives a failing server.** The `settings` row `vault_vacuum_pending` is set before the first config is rewritten and when tokens from before are hashed. Every start vacuums while it is set. A server that fails is logged by name, and the others still move. `vault_since` is written only once the move has finished without error (§11).
+- **The move at start survives a failing server.** Only a server with a value that can move is moved; a value that cannot is scrubbed and never makes a start vacuum. The `settings` row `vault_vacuum_pending` is set just before the first config is really rewritten, and when tokens from before are hashed. Every start vacuums while it is set. A server that fails is logged by name and tried again at the next start, and the others still move. `vault_since` is written once the move has run, even when a server failed (§11).
 - **The import offer never lists the claude CLI's own names or the base environment's names**, and import refuses them. Their values are never read (§11 step 3).
-- **Deleting the old backups asks first.** A backup that cannot be deleted is skipped and logged, and the answer is still recorded (§11 step 4).
+- **Deleting the old backups asks first.** A backup that cannot be deleted is logged and named in the Env tab, by its file name. The answer is then not recorded, so the offer stays with what is left (§11 step 4).
 - **Not in plan A:**
   - the Env tab's "used by" (§9)
   - org sections, the org picker and the Organisations page (plan B)
