@@ -110,6 +110,19 @@ struct LogGuard(#[allow(dead_code)] tracing_appender::non_blocking::WorkerGuard)
 struct DataDirLock(#[allow(dead_code)] std::fs::File);
 
 /// Shows and focuses the main window.
+/// Whether a window event means the window is no longer in front: it lost the focus (another
+/// window, minimized, hidden to the tray).
+fn ends_viewing(event: &WindowEvent) -> bool {
+    matches!(event, WindowEvent::Focused(false))
+}
+
+/// Nothing is viewed now; the webview names the dot again when the window comes back in front.
+fn forget_viewing(app: &AppHandle) {
+    if let Some(rt) = state::runtime_of(app.try_state::<AppState>().as_deref()) {
+        rt.set_viewing(None);
+    }
+}
+
 pub fn show_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.unminimize();
@@ -218,6 +231,11 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            // The window behind, minimized or hidden: no conversation is in front, so nothing is
+            // viewed, whatever the webview has said (needs-you spec section 2).
+            if ends_viewing(event) {
+                forget_viewing(window.app_handle());
+            }
             // After a normal start, closing the window keeps Dots running in the tray. After a
             // failed start there is no tray, so closing the window is the only way out: exit.
             // `try_state`, because the state may not be managed yet.
@@ -229,6 +247,7 @@ pub fn run() {
                 {
                     api.prevent_close();
                     let _ = window.hide();
+                    forget_viewing(app);
                 } else {
                     app.exit(1);
                 }
@@ -260,6 +279,15 @@ mod tests {
                 &name[..name.find('(').expect("a function has parameters")]
             })
             .collect()
+    }
+
+    /// Needs-you spec section 2: the window losing the focus (behind another, minimized, hidden
+    /// to the tray) ends the viewing on the app's side, whatever the webview reports.
+    #[test]
+    fn the_window_losing_the_focus_ends_the_viewing() {
+        assert!(super::ends_viewing(&tauri::WindowEvent::Focused(false)));
+        assert!(!super::ends_viewing(&tauri::WindowEvent::Focused(true)));
+        assert!(!super::ends_viewing(&tauri::WindowEvent::Destroyed));
     }
 
     #[test]
