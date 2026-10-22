@@ -513,6 +513,15 @@ export const InstalledPlugin = z.strictObject({
 });
 // Whether the environment of Dots sets a variable. Never its value.
 export const EnvVariable = z.strictObject({ name: z.string(), set: z.boolean() });
+export const EntryKind = z.enum(["plain", "secret"]);
+// A personal variable of the Env tab. A secret's value never leaves the core: it is null.
+export const EnvEntry = z.strictObject({
+  name: z.string(),
+  kind: EntryKind,
+  value: nullable(z.string()),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
 
 export const FileDiff = z.strictObject({
   path: z.string(),
@@ -620,6 +629,8 @@ export type DraftRequest = z.infer<typeof DraftRequest>;
 export type DraftSummary = z.infer<typeof DraftSummary>;
 export type InstalledPlugin = z.infer<typeof InstalledPlugin>;
 export type EnvVariable = z.infer<typeof EnvVariable>;
+export type EntryKind = z.infer<typeof EntryKind>;
+export type EnvEntry = z.infer<typeof EnvEntry>;
 export type FileDiff = z.infer<typeof FileDiff>;
 export type WorktreeDiff = z.infer<typeof WorktreeDiff>;
 export type CmdErrorKind = z.infer<typeof CmdErrorKind>;

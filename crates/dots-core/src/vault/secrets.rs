@@ -12,8 +12,9 @@ use crate::{Error, Result};
 /// The longest value Credential Manager holds (`CRED_MAX_CREDENTIAL_BLOB_SIZE`), in bytes.
 pub const MAX_SECRET_BYTES: usize = 2560;
 
-/// A store of secret values by key (`personal/<NAME>`). A key is ASCII without `*`.
-pub trait SecretStore: Send + Sync {
+/// A store of secret values by key (`personal/<NAME>`). A key is ASCII without `*`. Its
+/// `Debug` never shows a value.
+pub trait SecretStore: Send + Sync + std::fmt::Debug {
     /// Stores `value` under `key`, replacing what was there.
     fn put(&self, key: &str, value: &str) -> Result<()>;
     /// The value under `key`, if any.
@@ -40,6 +41,15 @@ fn check(key: &str, value: Option<&str>) -> Result<()> {
 #[derive(Default)]
 pub struct MemorySecrets {
     values: Mutex<BTreeMap<String, Zeroizing<String>>>,
+}
+
+impl std::fmt::Debug for MemorySecrets {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let count = self.values.lock().map(|v| v.len()).unwrap_or(0);
+        f.debug_struct("MemorySecrets")
+            .field("count", &count)
+            .finish()
+    }
 }
 
 impl MemorySecrets {
@@ -84,6 +94,7 @@ impl SecretStore for MemorySecrets {
 /// Windows Credential Manager, for the signed-in Windows user. Each value is a generic
 /// credential that persists on this machine only (`CRED_PERSIST_LOCAL_MACHINE`).
 #[cfg(windows)]
+#[derive(Debug)]
 pub struct WindowsCredentials {
     /// `Dots/<install_id>/`.
     prefix: String,
@@ -99,6 +110,20 @@ impl WindowsCredentials {
 
     fn target(&self, key: &str) -> Vec<u16> {
         wide(&format!("{}{key}", self.prefix))
+    }
+}
+
+/// The secret store of the signed-in user for the data folder `install_id`: Credential Manager
+/// on Windows, memory elsewhere (Dots ships on Windows; a keychain is later).
+pub fn os_secrets(install_id: &str) -> std::sync::Arc<dyn SecretStore> {
+    #[cfg(windows)]
+    {
+        std::sync::Arc::new(WindowsCredentials::new(install_id))
+    }
+    #[cfg(not(windows))]
+    {
+        tracing::warn!("no keychain on this system: secrets of {install_id} last until Dots ends");
+        std::sync::Arc::new(MemorySecrets::new())
     }
 }
 

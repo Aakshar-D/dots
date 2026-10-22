@@ -9,6 +9,7 @@ import type {
   CmdErrorKind,
   DotSpec,
   DraftRequest,
+  EntryKind,
   LibraryConfig,
   McpServerConfig,
   Preset,
@@ -173,6 +174,14 @@ export const commands = {
   installedClaudePlugins: () => call(T.InstalledPlugin.array(), "installed_claude_plugins"),
   environmentVariables: (names: string[]) =>
     call(T.EnvVariable.array(), "environment_variables", { names }),
+  /// The personal variables; a secret's value is never in the answer.
+  envList: () => call(T.EnvEntry.array(), "env_list"),
+  /// Rejects with kind `conflict` when the name is taken in any case.
+  envAdd: (name: string, kind: EntryKind, value: string) =>
+    call(T.EnvEntry, "env_add", { name, kind, value }),
+  /// Edits a plain value, or replaces a secret's.
+  envSet: (name: string, value: string) => call(T.EnvEntry, "env_set", { name, value }),
+  envRemove: (name: string) => call(nothing, "env_remove", { name }),
 
   /// Every message that waits (open questions, unread notes) and the newest others, newest
   /// first; of one dot with `dotId`.

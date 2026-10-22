@@ -31,6 +31,7 @@ use crate::server::{self, ServerState};
 use crate::settings::Settings;
 use crate::skill_creator::SkillDrafts;
 use crate::store::Store;
+use crate::vault::{os_secrets, MemorySecrets, SecretStore, Vault};
 use crate::workspace::{Prepared, WorkspaceManager};
 use crate::{Error, Result};
 
@@ -56,6 +57,10 @@ pub struct Config {
     pub clock: Arc<dyn Clock>,
     /// How long a skill draft may take (skill creator spec §5). A test shortens it.
     pub draft_limit: Duration,
+    /// Where secret values are kept (env vault spec §5.2). `None`: the signed-in user's
+    /// Credential Manager under this data folder's install id, which is what the app uses.
+    /// `Config::new` keeps them in memory, so a test never writes to Credential Manager.
+    pub secrets: Option<Arc<dyn SecretStore>>,
 }
 
 impl Config {
@@ -70,6 +75,7 @@ impl Config {
             local_retry_delays: DEFAULT_RETRY_DELAYS.to_vec(),
             clock: Arc::new(SystemClock),
             draft_limit: crate::skill_creator::DRAFT_LIMIT,
+            secrets: Some(Arc::new(MemorySecrets::new())),
         }
     }
 
@@ -79,6 +85,7 @@ impl Config {
         cfg.port = settings.port;
         cfg.max_concurrent_runs = settings.max_concurrent_runs;
         cfg.claude_path = settings.claude_path.as_ref().map(PathBuf::from);
+        cfg.secrets = None;
         cfg
     }
 }
@@ -90,6 +97,7 @@ pub struct Runtime {
     runner: Arc<Runner>,
     scheduler: Arc<Scheduler>,
     library: LibraryService,
+    vault: Vault,
     skill_drafts: SkillDrafts,
     clock: Arc<dyn Clock>,
     port: u16,
@@ -114,6 +122,11 @@ impl Runtime {
         std::fs::create_dir_all(&cfg.data_dir)?;
         let store = Store::open(&cfg.data_dir.join(crate::store::DB_FILE)).await?;
         let settings = store.get_settings().await?;
+        let secrets = match &cfg.secrets {
+            Some(secrets) => secrets.clone(),
+            None => os_secrets(&store.install_id().await?),
+        };
+        let vault = Vault::new(store.clone(), secrets);
         let bus = new_bus();
         let hub = Arc::new(ApprovalHub::new(store.clone(), bus.clone()));
         // Check-ins and follow-ups (check-ins spec): made before the engines, which offer the
@@ -255,6 +268,7 @@ impl Runtime {
         Ok(Runtime {
             library: LibraryService::new(store.clone(), bus.clone())
                 .with_skills_dir(cfg.data_dir.join(SKILLS_DIR)),
+            vault,
             store,
             bus,
             hub,
@@ -633,6 +647,11 @@ impl Runtime {
     /// The Library: what the `library_*` commands call (MCP/skills spec section 9).
     pub fn library(&self) -> &LibraryService {
         &self.library
+    }
+
+    /// The personal variables of the Env tab (env vault spec §5).
+    pub fn vault(&self) -> &Vault {
+        &self.vault
     }
 
     /// The skill creator's drafts: what `skill_draft` and `skill_draft_cancel` call (skill

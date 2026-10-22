@@ -22,6 +22,7 @@ use dots_core::policy::{Policy, Preset, RuleCandidate};
 use dots_core::schedule::Schedule;
 use dots_core::settings::Settings;
 use dots_core::skill_creator::{check_draft, DraftRequest, DraftSummary};
+use dots_core::vault::{EntryKind, EnvEntry};
 use dots_core::Runtime;
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_opener::OpenerExt;
@@ -505,6 +506,34 @@ pub fn environment_variables(
     names: Vec<String>,
 ) -> Res<Vec<EnvVariable>> {
     Ok(state.rt()?.library().environment_variables(&names))
+}
+
+/// The personal variables of the Env tab. A secret's value is never in the answer.
+#[tauri::command]
+pub async fn env_list(state: State<'_, AppState>) -> Res<Vec<EnvEntry>> {
+    Ok(state.rt()?.vault().list().await?)
+}
+
+/// Adds a personal variable; a secret's value goes to Credential Manager.
+#[tauri::command]
+pub async fn env_add(
+    state: State<'_, AppState>,
+    name: String,
+    kind: EntryKind,
+    value: String,
+) -> Res<EnvEntry> {
+    Ok(state.rt()?.vault().add(&name, kind, &value).await?)
+}
+
+/// Edits a plain value, or replaces a secret's without showing it.
+#[tauri::command]
+pub async fn env_set(state: State<'_, AppState>, name: String, value: String) -> Res<EnvEntry> {
+    Ok(state.rt()?.vault().set_value(&name, &value).await?)
+}
+
+#[tauri::command]
+pub async fn env_remove(state: State<'_, AppState>, name: String) -> Res<()> {
+    Ok(state.rt()?.vault().remove(&name).await?)
 }
 
 /// Every message that waits for the person and the newest others, newest first; of one dot

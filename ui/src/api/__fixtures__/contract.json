@@ -82,6 +82,10 @@
     "context_documents",
     "installed_claude_plugins",
     "environment_variables",
+    "env_list",
+    "env_add",
+    "env_set",
+    "env_remove",
     "messages_list",
     "message_reply",
     "message_dismiss",
@@ -551,6 +555,10 @@
       "claude",
       "local"
     ],
+    "EntryKind": [
+      "plain",
+      "secret"
+    ],
     "FileStatus": [
       "added",
       "modified",
@@ -605,6 +613,22 @@
       "folder"
     ]
   },
+  "EnvEntry": [
+    {
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "kind": "secret",
+      "name": "GITHUB_TOKEN",
+      "updated_at": "2026-10-09T12:00:00.000Z",
+      "value": null
+    },
+    {
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "kind": "plain",
+      "name": "LOG_LEVEL",
+      "updated_at": "2026-10-09T12:00:00.000Z",
+      "value": "debug"
+    }
+  ],
   "EnvVariable": [
     {
       "name": "GITHUB_TOKEN",

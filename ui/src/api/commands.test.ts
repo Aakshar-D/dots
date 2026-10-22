@@ -163,6 +163,24 @@ describe("commands", () => {
     expect(message).toContain("description");
   });
 
+  it("sends the Env tab's commands as the core names them, and never takes a secret back", async () => {
+    reply = async () => fixture.EnvEntry;
+    expect(await commands.envList()).toEqual(fixture.EnvEntry);
+    reply = async () => fixture.EnvEntry[0];
+    await commands.envAdd("GITHUB_TOKEN", "secret", "ghp_x");
+    await commands.envSet("GITHUB_TOKEN", "ghp_y");
+    reply = async () => null;
+    expect(await commands.envRemove("GITHUB_TOKEN")).toBeNull();
+    expect(calls).toEqual([
+      ["env_list", undefined],
+      ["env_add", { name: "GITHUB_TOKEN", kind: "secret", value: "ghp_x" }],
+      ["env_set", { name: "GITHUB_TOKEN", value: "ghp_y" }],
+      ["env_remove", { name: "GITHUB_TOKEN" }],
+    ]);
+    reply = async () => [{ ...fixture.EnvEntry[0], secret: "ghp_x" }];
+    expect((await failure(commands.envList())).kind).toBe("internal");
+  });
+
   it("refuses a Library answer in a shape it does not know", async () => {
     reply = async () => [{ ...fixture.LibraryEntry[0], extra: 1 }];
     expect((await failure(commands.libraryList())).kind).toBe("internal");
