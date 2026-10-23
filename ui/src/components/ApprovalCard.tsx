@@ -62,10 +62,10 @@ function ToolApprovalCard({ approval, dotName }: { approval: Approval; dotName?:
   return (
     <article
       aria-label={`Approval for ${approval.tool}`}
-      className="flex flex-col gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3"
+      className="flex flex-col gap-2 rounded-xl border border-needs-border bg-needs-surface p-3"
     >
       <header className="flex items-baseline gap-2">
-        <span className="font-semibold">{approval.tool}</span>
+        <span className="font-semibold text-needs">{approval.tool}</span>
         <span className="min-w-0 flex-1 truncate font-mono text-xs">
           {toolPreview(approval.input)}
         </span>
