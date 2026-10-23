@@ -75,8 +75,8 @@ pub trait Controls {
     async fn working_dots(&self) -> dots_core::Result<Vec<String>>;
     /// Tells the window the note that follows.
     fn announce(&self, note: &UpdateNote);
-    /// Begins the install of the downloaded update.
-    fn start_install(&self);
+    /// Begins the install of the downloaded update. False when there is none to install.
+    fn start_install(&self) -> bool;
 }
 
 /// The app's `Controls`: the runtime and the window.
@@ -100,8 +100,8 @@ impl Controls for AppControls<'_> {
         }
     }
 
-    fn start_install(&self) {
-        start_install(self.app, self.rt);
+    fn start_install(&self) -> bool {
+        start_install(self.app, self.rt)
     }
 }
 
@@ -154,12 +154,32 @@ pub async fn act(
     controls.hold_runs(held).await;
     controls.announce(&note);
     if next == Next::Install {
-        controls.start_install();
+        if !controls.start_install() {
+            return Ok(abandon(controls, updates, &working).await);
+        }
     } else if updates.state.lock().unwrap().holds_runs() {
         // A wait whose runs ended meanwhile begins the install at once.
         settle(controls, updates).await;
     }
     Ok(note)
+}
+
+/// Why an install with no downloaded update did not begin.
+const NO_DOWNLOAD: &str =
+    "The downloaded update was lost, so it was not installed. Dots downloads it again.";
+
+/// An install that could not begin: the state lets go of it, the queue is released and the
+/// note says why. Returns the note. The caller holds the turn.
+async fn abandon(controls: &impl Controls, updates: &Updates, working: &[String]) -> UpdateNote {
+    tracing::error!("an install began without a downloaded update");
+    let note = {
+        let mut state = updates.state.lock().unwrap();
+        state.abandon(NO_DOWNLOAD);
+        state.note(working)
+    };
+    controls.hold_runs(false).await;
+    controls.announce(&note);
+    note
 }
 
 /// Starts the watch on runs and, unless this Dots does not check (`update::checks_enabled`),
@@ -232,8 +252,8 @@ async fn settle(controls: &impl Controls, updates: &Updates) {
     if note != UpdateNote::None {
         controls.announce(&note);
     }
-    if next == Next::Install {
-        controls.start_install();
+    if next == Next::Install && !controls.start_install() {
+        abandon(controls, updates, &working).await;
     }
 }
 
@@ -285,13 +305,13 @@ async fn check(app: &AppHandle, rt: &Arc<Runtime>, url: &Url) -> Result<(), Stri
     Ok(())
 }
 
-fn start_install(app: &AppHandle, rt: &Arc<Runtime>) {
+/// Spawns the install of the downloaded update. False when there is none.
+fn start_install(app: &AppHandle, rt: &Arc<Runtime>) -> bool {
     let Ok(updates) = updates(app) else {
-        return;
+        return false;
     };
     let Some(downloaded) = updates.downloaded.lock().unwrap().take() else {
-        tracing::error!("an install began without a downloaded update");
-        return;
+        return false;
     };
     let steps = AppSteps {
         app: app.clone(),
@@ -300,6 +320,7 @@ fn start_install(app: &AppHandle, rt: &Arc<Runtime>) {
         downloaded,
     };
     tauri::async_runtime::spawn(async move { update::install(&steps).await });
+    true
 }
 
 struct AppSteps {
@@ -331,6 +352,12 @@ impl InstallSteps for AppSteps {
         crate::startup::mark_restart(&self.data_dir);
     }
 
+    fn discard_backup(&self, backup: &std::path::Path) {
+        if let Err(e) = std::fs::remove_file(backup) {
+            tracing::warn!("could not delete the backup {}: {e}", backup.display());
+        }
+    }
+
     fn install(&self) -> Result<(), String> {
         tracing::info!("installing Dots {}", self.downloaded.update.version);
         self.downloaded
@@ -352,6 +379,8 @@ mod tests {
     struct Fake {
         working: RefCell<Vec<Vec<String>>>,
         log: RefCell<Vec<String>>,
+        /// Whether `start_install` finds a downloaded update.
+        downloaded: bool,
     }
 
     impl Fake {
@@ -359,6 +388,7 @@ mod tests {
             Self {
                 working: RefCell::new(working.iter().map(|w| names(w)).collect()),
                 log: RefCell::new(Vec::new()),
+                downloaded: true,
             }
         }
         fn log(&self, entry: &str) {
@@ -389,10 +419,12 @@ mod tests {
                 UpdateNote::Ready { .. } => "announce ready",
                 UpdateNote::Waiting { .. } => "announce waiting",
                 UpdateNote::Installing { .. } => "announce installing",
+                UpdateNote::Failed { .. } => "announce failed",
             });
         }
-        fn start_install(&self) {
+        fn start_install(&self) -> bool {
             self.log("install");
+            self.downloaded
         }
     }
 
@@ -520,6 +552,52 @@ mod tests {
             fake.take(),
             ["hold", "working", "hold", "announce installing", "install"]
         );
+    }
+
+    #[tokio::test]
+    async fn an_install_with_no_download_releases_the_queue_and_says_why() {
+        let updates = ready();
+        let fake = Fake {
+            downloaded: false,
+            ..Fake::answering(&[&[]])
+        };
+        let note = act(&fake, &updates, restart).await.unwrap();
+        assert!(matches!(note, UpdateNote::Failed { .. }), "{note:?}");
+        assert_eq!(
+            fake.take(),
+            [
+                "hold",
+                "working",
+                "hold",
+                "announce installing",
+                "install",
+                "release",
+                "announce failed"
+            ]
+        );
+        assert!(!updates.state.lock().unwrap().holds_runs());
+
+        // The same from a wait whose last run ended.
+        let updates = ready();
+        let fake = Fake {
+            downloaded: false,
+            ..Fake::answering(&[&["triage"]])
+        };
+        act(&fake, &updates, restart).await.unwrap();
+        fake.take();
+        *fake.working.borrow_mut() = vec![Vec::new()];
+        settle(&fake, &updates).await;
+        assert_eq!(
+            fake.take(),
+            [
+                "working",
+                "announce installing",
+                "install",
+                "release",
+                "announce failed"
+            ]
+        );
+        assert!(!updates.state.lock().unwrap().holds_runs());
     }
 
     #[tokio::test]

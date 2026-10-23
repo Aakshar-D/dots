@@ -48,6 +48,9 @@ pub enum UpdateNote {
     },
     /// The install has begun; Dots is about to close.
     Installing { version: String },
+    /// The last install did not happen and no update is ready (yet) to try again: why, until
+    /// the person dismisses it ("Later") or the update is downloaded again (spec §7).
+    Failed { error: String },
 }
 
 /// What the app does after a change of `UpdateState`.
@@ -94,7 +97,12 @@ impl UpdateState {
 
     pub fn note(&self, working: &[String]) -> UpdateNote {
         let Some(version) = self.ready.clone() else {
-            return UpdateNote::None;
+            return match &self.error {
+                Some(error) => UpdateNote::Failed {
+                    error: error.clone(),
+                },
+                None => UpdateNote::None,
+            };
         };
         if self.installing {
             UpdateNote::Installing { version }
@@ -125,14 +133,29 @@ impl UpdateState {
         self.waiting || self.installing
     }
 
+    /// "Later" hides a ready update until the next start. It also dismisses the last error;
+    /// with no update ready that is all it does, so the next update still shows.
     pub fn later(&mut self) {
-        self.later = true;
+        self.error = None;
+        if self.ready.is_some() {
+            self.later = true;
+        }
+    }
+
+    /// An install that could not begin (its download is gone): the queue goes, the update is
+    /// downloaded again at the next check, and the note says why.
+    pub fn abandon(&mut self, error: &str) {
+        self.ready = None;
+        self.waiting = false;
+        self.installing = false;
+        self.error = Some(error.to_string());
     }
 
     /// "Restart to update" and "Restart when it's done": installs at once when no dot has a
     /// run working, else waits for those runs.
     pub fn restart(&mut self, working: &[String]) -> dots_core::Result<Next> {
         self.check_ready()?;
+        self.error = None;
         if working.is_empty() {
             return Ok(self.begin());
         }
@@ -150,6 +173,7 @@ impl UpdateState {
         working: &[String],
     ) -> dots_core::Result<Next> {
         self.check_ready()?;
+        self.error = None;
         if working.iter().any(|dot| !seen.contains(dot)) {
             return Ok(Next::Nothing);
         }
@@ -321,21 +345,29 @@ pub trait InstallSteps {
     fn mark_restart(&self);
     /// Starts the installer and ends the process. Returns only when it could not start.
     fn install(&self) -> Result<(), String>;
+    /// Deletes a backup that no install followed. A failure is logged.
+    fn discard_backup(&self, backup: &Path);
 }
 
 /// An install, in the order of spec §7. Every failure restarts into this version with the
-/// reason, which the strip shows after that start.
+/// reason, which the strip shows after that start. A backup no install followed is deleted:
+/// the database is the same, and each retry would otherwise prune an older backup, until the
+/// one from before the last real update is gone.
 pub async fn install(steps: &impl InstallSteps) {
     if !steps.close_runtime().await {
         steps.restart_current("Dots could not close its database in time, so no backup was made.");
         return;
     }
-    if let Err(e) = steps.back_up().await {
-        steps.restart_current(&format!("The backup failed: {e}"));
-        return;
-    }
+    let backup = match steps.back_up().await {
+        Ok(backup) => backup,
+        Err(e) => {
+            steps.restart_current(&format!("The backup failed: {e}"));
+            return;
+        }
+    };
     steps.mark_restart();
     if let Err(e) = steps.install() {
+        steps.discard_backup(&backup);
         steps.restart_current(&format!("The update could not start: {e}"));
     }
 }
@@ -384,6 +416,66 @@ mod tests {
         assert_eq!(
             s.note(&names(&["Daily digest"])),
             ready(&["Daily digest"], Some("The backup failed: disk full"))
+        );
+    }
+
+    #[test]
+    fn the_last_error_shows_with_no_update_ready_until_it_is_dismissed() {
+        let mut s = UpdateState::new(Some("The backup failed: disk full".into()));
+        assert_eq!(
+            s.note(&[]),
+            UpdateNote::Failed {
+                error: "The backup failed: disk full".into()
+            }
+        );
+        assert!(s.restart(&[]).is_err(), "nothing is ready to install");
+        // "Dismiss" is Later: with nothing ready it hides only the error, not the next update.
+        s.later();
+        assert_eq!(s.note(&[]), UpdateNote::None);
+        assert!(s.offer("0.2.0"));
+        assert_eq!(s.note(&[]), ready(&[], None));
+    }
+
+    #[test]
+    fn the_last_error_goes_once_the_person_acts_on_the_update() {
+        let mut s = UpdateState::new(Some("The backup failed: disk full".into()));
+        s.offer("0.2.0");
+        s.restart(&names(&["a"])).unwrap();
+        s.cancel_wait();
+        assert_eq!(
+            s.note(&[]),
+            ready(&[], None),
+            "the reason is not shown again"
+        );
+
+        let mut s = UpdateState::new(Some("The backup failed: disk full".into()));
+        s.offer("0.2.0");
+        s.later();
+        assert_eq!(s.note(&[]), UpdateNote::None);
+    }
+
+    #[test]
+    fn an_install_that_cannot_begin_lets_the_queue_go_and_says_why() {
+        let mut s = UpdateState::new(None);
+        s.offer("0.2.0");
+        assert_eq!(s.restart(&[]).unwrap(), Next::Install);
+        s.abandon("The downloaded update was lost; Dots downloads it again.");
+        assert!(!s.holds_runs());
+        assert_eq!(s.ready_version(), None);
+        assert_eq!(
+            s.note(&[]),
+            UpdateNote::Failed {
+                error: "The downloaded update was lost; Dots downloads it again.".into()
+            }
+        );
+        assert!(s.wants("0.2.0"), "the next check downloads it again");
+        assert!(s.offer("0.2.0"));
+        assert_eq!(
+            s.note(&[]),
+            ready(
+                &[],
+                Some("The downloaded update was lost; Dots downloads it again.")
+            )
         );
     }
 
@@ -722,6 +814,9 @@ mod tests {
         fn mark_restart(&self) {
             self.log("mark");
         }
+        fn discard_backup(&self, backup: &Path) {
+            self.log(&format!("discard {}", backup.display()));
+        }
         fn install(&self) -> Result<(), String> {
             self.log("install")
                 .then_some(())
@@ -762,6 +857,8 @@ mod tests {
                 "back up",
                 "mark",
                 "install",
+                // Nothing changed since the backup: kept, a retry could prune an older one.
+                "discard b.db",
                 "restart: The update could not start: access denied"
             ]
         );

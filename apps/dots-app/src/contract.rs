@@ -507,6 +507,9 @@ fn update_notes() -> Vec<UpdateNote> {
         UpdateNote::Installing {
             version: "0.2.0".into(),
         },
+        UpdateNote::Failed {
+            error: "The backup failed: disk full".into(),
+        },
     ]
 }
 

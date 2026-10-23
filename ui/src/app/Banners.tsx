@@ -70,7 +70,7 @@ function dotNames(names: string[]): string {
 }
 
 /// The update strip (updates spec §6): a version is ready, Dots waits for the runs that are
-/// working, or the install has begun. The core decides what it shows; each button answers
+/// working, the install has begun, or the last install did not happen. The core decides what it shows; each button answers
 /// with the note that follows.
 function UpdateBanner() {
   const qc = useQueryClient();
@@ -90,6 +90,24 @@ function UpdateBanner() {
     );
   }
   const busy = press.isPending;
+  if (note.state === "failed") {
+    return (
+      <Banner tone="warning">
+        <span className="flex-1">
+          The update was not installed. Dots offers it again once it is downloaded.
+          <span className="block text-destructive">{note.error}</span>
+        </span>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={busy}
+          onClick={() => press.mutate(commands.updateLater)}
+        >
+          Dismiss
+        </Button>
+      </Banner>
+    );
+  }
   if (note.state === "waiting") {
     const many = note.waiting_for.length > 1;
     return (

@@ -576,6 +576,7 @@ export const UpdateNote = z.discriminatedUnion("state", [
     waiting_for: z.array(z.string()),
   }),
   z.strictObject({ state: z.literal("installing"), version: z.string() }),
+  z.strictObject({ state: z.literal("failed"), error: z.string() }),
 ]);
 
 /// Validation limits of the core that the dot editor and Settings mirror, and the attempts a
