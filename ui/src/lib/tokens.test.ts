@@ -9,7 +9,7 @@ const css = readFileSync(path.resolve(import.meta.dirname, "../index.css"), "utf
 
 /// The declarations of the block that starts with `selector {` at the start of a line.
 function block(selector: string): Map<string, string> {
-  const start = css.search(new RegExp(`^${selector.replace(".", "\.")} \{`, "m"));
+  const start = css.search(new RegExp(String.raw`^${selector.replace(".", "\\.")} \{`, "m"));
   expect(start, `${selector} block`).toBeGreaterThanOrEqual(0);
   const body = css.slice(start, css.indexOf("}", start));
   return new Map(
@@ -26,6 +26,16 @@ describe("the Deep Teal tokens", () => {
       for (const [name, value] of Object.entries(THEMES[theme])) {
         expect(declared.get(name), `${theme} --${name}`).toBe(value);
       }
+    }
+  });
+
+  it("lists in the table every colour index.css declares, so none escapes the contrast test", () => {
+    for (const theme of ["light", "dark"] as const) {
+      const declared = [...block(SELECTOR[theme]).keys()].filter(
+        (name) => !name.startsWith("chart-") && name !== "radius",
+      );
+      const listed = Object.keys(THEMES[theme]);
+      expect(declared.filter((name) => !listed.includes(name)), theme).toEqual([]);
     }
   });
 

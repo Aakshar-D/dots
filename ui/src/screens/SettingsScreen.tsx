@@ -90,7 +90,7 @@ function Endpoint(props: { url: string; onRemove: () => void }) {
         </Button>
       </div>
       {test.isSuccess && (
-        <p role="status" className="text-xs text-emerald-300">
+        <p role="status" className="text-xs text-success">
           {test.data}
         </p>
       )}
@@ -276,7 +276,7 @@ function Form({ stored, status }: { stored: Settings; status: Status | undefined
         </dl>
         {claude?.mismatch && (
           <div className="flex items-center gap-3">
-            <p className="flex-1 text-xs text-amber-300">
+            <p className="flex-1 text-xs text-needs">
               This version has not been tested with Dots. If your dots run as expected, mark it
               as tested.
             </p>

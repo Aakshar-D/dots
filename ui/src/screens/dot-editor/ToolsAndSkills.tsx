@@ -54,12 +54,12 @@ function Detail({ entry }: { entry: LibraryEntry }) {
       {text && <span className="text-xs text-muted-foreground">{text}</span>}
       {entry.problem && <span className="text-xs text-destructive">{entry.problem}</span>}
       {status === "changed" && (
-        <span className="text-xs text-amber-700 dark:text-amber-400">
+        <span className="text-xs text-needs">
           Tools changed: they ask first until you review them.
         </span>
       )}
       {status === "unreachable" && (
-        <span className="text-xs text-amber-700 dark:text-amber-400">
+        <span className="text-xs text-needs">
           Unreachable at the last check.
         </span>
       )}
@@ -173,7 +173,7 @@ export function ToolsAndSkills(props: {
         </p>
       ))}
       {missing.length > 0 && (
-        <p role="status" className="text-xs text-amber-700 dark:text-amber-400">
+        <p role="status" className="text-xs text-needs">
           Not set in Dots' environment: {missing.join(", ")}. A server that needs one cannot start
           until it is set.
         </p>

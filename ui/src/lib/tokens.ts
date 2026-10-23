@@ -97,7 +97,7 @@ export const THEMES: Record<ThemeName, Record<TokenName, string>> = {
     "muted-foreground": "#8fa9a9",
     accent: "#1a2a2c",
     "accent-foreground": "#d5e6e5",
-    destructive: "#f07171",
+    destructive: "#f78e8e",
     border: "#1f3133",
     input: "#1f3133",
     ring: "#22c3a6",
@@ -187,11 +187,29 @@ export const CONTRAST_PAIRS: ContrastPair[] = [
     4.5,
     "light",
   ),
+  // Hovered (`hover:bg-destructive/15`).
   ...pairs(
     "destructive",
-    [tint("destructive", 0.2, "background"), tint("destructive", 0.2, "card")],
+    [tint("destructive", 0.15, "background"), tint("destructive", 0.15, "card")],
+    4.5,
+    "light",
+  ),
+  // Dark: at rest `/15`, hovered `/20`, on every surface a destructive button sits on.
+  ...pairs(
+    "destructive",
+    [0.15, 0.2].flatMap((alpha) =>
+      (["background", "card", "muted", "needs-surface"] as const).map((over) =>
+        tint("destructive", alpha, over),
+      ),
+    ),
     4.5,
     "dark",
+  ),
+  // Inactive tabs.
+  ...pairs("muted-foreground", ["muted"]),
+  // Status marks and counts are not text: 3:1 against the column and the rail.
+  ...(["muted-foreground", "needs", "primary", "destructive"] as const).flatMap((mark) =>
+    pairs(mark, ["sidebar", "sidebar-accent", "background"], 3),
   ),
   // The approval card's title, a call sent for approval, a warning line.
   ...pairs("needs", ["background", "card", "muted", "sidebar", "needs-surface"]),

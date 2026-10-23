@@ -7,7 +7,7 @@ const LOOK: Record<DotStatus, string> = {
   running: "animate-pulse bg-primary motion-reduce:animate-none",
   attention: "bg-destructive",
   off: "border border-muted-foreground bg-transparent",
-  idle: "bg-muted-foreground/40",
+  idle: "bg-muted-foreground",
 };
 
 /// A dot's status as a coloured dot, named for assistive technology and in its tooltip.
