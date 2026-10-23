@@ -22,6 +22,32 @@
     "edge": "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
     "npx": "C:/Program Files/nodejs/npx.cmd"
   },
+  "ChatGptStatus": [
+    {
+      "account": null,
+      "configured": false,
+      "expires_at": null,
+      "setup_error": "ChatGPT sign-in needs a registered OpenAI client for Dots.",
+      "signing_in": false
+    },
+    {
+      "account": null,
+      "configured": true,
+      "expires_at": null,
+      "setup_error": null,
+      "signing_in": true
+    },
+    {
+      "account": {
+        "email": "alex@example.com",
+        "name": "Alex"
+      },
+      "configured": true,
+      "expires_at": "2026-10-23T00:00:00Z",
+      "setup_error": null,
+      "signing_in": false
+    }
+  ],
   "CmdError": {
     "kind": "conflict",
     "message": "run 01J0RUN is already succeeded"
@@ -31,6 +57,9 @@
     "status",
     "mark_claude_tested",
     "get_settings",
+    "chatgpt_account",
+    "chatgpt_sign_in",
+    "chatgpt_sign_out",
     "update_settings",
     "set_schedules_paused",
     "restart_app",

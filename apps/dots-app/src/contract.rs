@@ -741,6 +741,32 @@ pub fn samples() -> Value {
                 dot_id: "01J0DOT".into(),
             }),
         ]);
+    samples["ChatGptStatus"] = to([
+        dots_core::chatgpt::ChatGptStatus {
+            configured: false,
+            signing_in: false,
+            account: None,
+            expires_at: None,
+            setup_error: Some("ChatGPT sign-in needs a registered OpenAI client for Dots.".into()),
+        },
+        dots_core::chatgpt::ChatGptStatus {
+            configured: true,
+            signing_in: true,
+            account: None,
+            expires_at: None,
+            setup_error: None,
+        },
+        dots_core::chatgpt::ChatGptStatus {
+            configured: true,
+            signing_in: false,
+            account: Some(dots_core::chatgpt::ChatGptAccount {
+                name: Some("Alex".into()),
+                email: Some("alex@example.com".into()),
+            }),
+            expires_at: Some("2026-10-23T00:00:00Z".into()),
+            setup_error: None,
+        },
+    ]);
     samples["UpdateNote"] = to(update_notes());
     samples["BrowserStatus"] = to(BrowserStatus {
         edge: Some("C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe".into()),
