@@ -312,3 +312,36 @@ async fn a_claude_run_may_call_the_memory_tools_without_asking_the_cli() {
     assert_eq!(list[0].text, "Prefers invoices as PDF.");
     assert_eq!(list[0].run_id.as_deref(), Some(run.id.as_str()));
 }
+
+/// The final review: Dots' server keeps only the called tool's own argument, so the person
+/// approves exactly the tool that will run, and an approval for one memory tool cannot be
+/// redeemed by another with the same arguments.
+#[tokio::test]
+async fn a_memory_call_is_checked_with_its_own_argument_only() {
+    let e = env(json!([])).await;
+    let asking = claude_dot(&e, "asking", |s| {
+        s.policy.rules.push(Rule::new("Memory", Action::Ask));
+    })
+    .await;
+    let (run, secret) = registered(&e, &asking).await;
+    let mixed = json!({"text": "Prefers PDF", "id": "01HXAAAAAAAAAAAAAAAAAAAAAA", "query": "x"});
+    call(&e, &secret, "remember", mixed.clone()).await;
+    call(&e, &secret, "forget", mixed.clone()).await;
+    call(&e, &secret, "recall", mixed).await;
+    let inputs: Vec<Value> = e
+        .store
+        .approvals_for_run(&run.id)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|a| a.input)
+        .collect();
+    assert_eq!(
+        inputs,
+        [
+            json!({"text": "Prefers PDF"}),
+            json!({"id": "01HXAAAAAAAAAAAAAAAAAAAAAA"}),
+            json!({"query": "x"}),
+        ]
+    );
+}

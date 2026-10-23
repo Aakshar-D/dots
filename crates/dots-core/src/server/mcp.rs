@@ -225,6 +225,13 @@ async fn call_memory(
         Some(args @ Value::Object(_)) => args.clone(),
         Some(_) => return Err((-32602, "params.arguments must be an object".to_string())),
     };
+    // Only the tool's own argument, as the local engine's `prepare` keeps: the approval then
+    // names exactly the tool that will run, and one tool's grant cannot be redeemed by another.
+    let mut input = input;
+    let own = tool.properties();
+    if let (Value::Object(args), Value::Object(own)) = (&mut input, &own) {
+        args.retain(|key, _| own.contains_key(key));
+    }
     let input = match s.hub.check(run_id, memory::POLICY_NAME, input).await {
         Ok(PermissionOutcome::Allow { input }) => input,
         Ok(PermissionOutcome::Deny { message }) => return Ok(not_performed(&message)),
