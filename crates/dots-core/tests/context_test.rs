@@ -619,3 +619,53 @@ fn echoed_arguments_are_cut() {
     let err = context::call(&c, &json!({"collection": rel})).unwrap_err();
     assert!(err.len() < 1_000, "{}", err.len());
 }
+
+/// Whether `text` holds 8 or more bytes of `secret` in a row.
+fn holds_piece(text: &str, secret: &str) -> bool {
+    (0..=secret.len() - 8).any(|i| text.contains(&secret[i..i + 8]))
+}
+
+#[test]
+fn a_secret_across_a_cut_leaves_no_piece_of_itself() {
+    use dots_core::vault::redact::global;
+    let summary = "ctx-summary-secret-value-0123456789";
+    let line = "ctx-long-line-secret-value-0123456789";
+    let head = "ctx-head-secret-value-0123456789";
+    let query = "ctx-query-secret-value-0123456789";
+    global().add("CTX_SUMMARY_TOKEN", summary);
+    global().add("CTX_LINE_TOKEN", line);
+    global().add("CTX_HEAD_TOKEN", head);
+    global().add("CTX_QUERY_TOKEN", query);
+    let dir = tempfile::tempdir().unwrap();
+    // The summary is cut at 200 characters, 12 bytes into the secret.
+    write(
+        dir.path(),
+        "a.md",
+        &format!("# A\n{}{summary} tail\n", "s".repeat(188)),
+    );
+    // The list reads the first 8 KB of a document, which ends 12 bytes into the secret.
+    write(
+        dir.path(),
+        "b.md",
+        &format!("# B\n{}{head} tail\n", "\n".repeat(8 * 1024 - 4 - 12)),
+    );
+    // A line longer than a result is cut 12 bytes into the secret.
+    write(
+        dir.path(),
+        "c.md",
+        &format!(
+            "{}{line}{}",
+            "l".repeat(MAX_OUTPUT - 80 - 12),
+            "m".repeat(100)
+        ),
+    );
+    let list = context::list(dir.path()).unwrap();
+    assert!(!holds_piece(&list, summary), "{list}");
+    assert!(!holds_piece(&list, head), "{list}");
+    let found = context::search(dir.path(), "tail").unwrap();
+    assert!(!holds_piece(&found, summary), "{found}");
+    let read = context::read(dir.path(), "c.md", 1).unwrap();
+    assert!(!holds_piece(&read, line));
+    let echoed = context::search(dir.path(), &format!("{}{query}", "q ".repeat(94))).unwrap();
+    assert!(!holds_piece(&echoed, query), "{echoed}");
+}

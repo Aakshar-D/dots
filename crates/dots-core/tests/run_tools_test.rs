@@ -12,12 +12,13 @@ use common::fake_mcp::{tool, FakeMcp};
 use common::temp_store;
 use dots_core::events::{new_bus, Bus, RuntimeEvent};
 use dots_core::library::{
-    CatalogStatus, LibraryConfig, LibraryKind, PluginConfig, SkillConfig, Uses,
+    CatalogStatus, LibraryConfig, LibraryKind, McpServerConfig, PluginConfig, SkillConfig, Uses,
 };
 use dots_core::library_service::LibraryService;
 use dots_core::policy::McpTrust;
 use dots_core::run_tools::{OpenRequest, RunTools};
 use dots_core::store::Store;
+use dots_core::vault::{Grants, Vault};
 use serde_json::json;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
@@ -111,6 +112,9 @@ impl Fixture {
             workspace: self.dir.path(),
             plugins_dir,
             cancel: &CancellationToken::new(),
+            vault: &Vault::in_memory(self.store.clone()),
+            grants: &Grants::default(),
+            dot_name: "tools",
         })
         .await
         .unwrap()
@@ -244,10 +248,14 @@ async fn a_server_that_cannot_start_is_left_out_with_a_run_event() {
     let f = fixture().await;
     let good = FakeMcp::new(json!({"tools": [tool("read", true)]}));
     f.accepted_server("good", &good).await;
-    let bad = FakeMcp::new(json!({"tools": [tool("read", true)]}));
-    let bad_cfg = LibraryConfig::McpServer(
-        bad.stdio_with(vec!["${DOTS_T5_NEVER_SET_RUN}".into()], Default::default()),
-    );
+    // A program that is not there: a variable that does not resolve is the dot's grants'
+    // business (`vault_grants_test`), not the server's.
+    let bad_cfg = LibraryConfig::McpServer(McpServerConfig::Stdio {
+        command: "dots-t5-no-such-program".into(),
+        args: Vec::new(),
+        cwd: None,
+        env: Default::default(),
+    });
     let bad_id = f.lib.add("bad", bad_cfg, None).await.unwrap().id;
     let uses = Uses {
         mcp_servers: vec!["bad".into(), "good".into()],
@@ -258,13 +266,13 @@ async fn a_server_that_cannot_start_is_left_out_with_a_run_event() {
     assert_eq!(names, ["good"]);
     assert_eq!(
         notices,
-        ["bad: could not start: DOTS_T5_NEVER_SET_RUN is not set"]
+        ["bad: could not start: dots-t5-no-such-program was not found"]
     );
     let catalog = f.store.get_catalog(&bad_id).await.unwrap();
     assert_eq!(catalog.status, CatalogStatus::Unreachable);
     assert_eq!(
         catalog.error.as_deref(),
-        Some("could not start: DOTS_T5_NEVER_SET_RUN is not set")
+        Some("could not start: dots-t5-no-such-program was not found")
     );
     tools.close().await;
 }
@@ -475,6 +483,9 @@ async fn a_cancelled_run_stops_opening_its_servers() {
         workspace: f.dir.path(),
         plugins_dir: None,
         cancel: &cancel,
+        vault: &Vault::in_memory(f.store.clone()),
+        grants: &Grants::default(),
+        dot_name: "tools",
     })
     .await
     .unwrap();

@@ -114,12 +114,7 @@ pub fn library_confirmation(
     next: &LibraryConfig,
     plugin_starts: &[String],
 ) -> Option<String> {
-    library_confirmation_in(stored, next, plugin_starts, &process_env)
-}
-
-/// Dots' own environment, where the server's `${VAR}` is read when it starts.
-fn process_env(key: &str) -> Option<String> {
-    std::env::var(key).ok()
+    library_confirmation_in(stored, next, plugin_starts, &|_| None)
 }
 
 /// `library_confirmation` with the environment the origin is computed from. The origin shown is
@@ -281,16 +276,13 @@ fn command_line(command: &str, args: &[String]) -> String {
 
 /// The command lines of the stdio servers, and the variables and origin of the http servers that
 /// name `${VAR}`, in the plugin folder `config` names, for the question
-/// of `library_confirmation`. Only when the plugin is new (`stored` is `None`) or its path
-/// changed; a folder that cannot be read gives none, and the core then refuses it.
-fn plugin_starts(stored: Option<&LibraryConfig>, config: &LibraryConfig) -> Vec<String> {
-    let LibraryConfig::Plugin(next) = config else {
-        return Vec::new();
-    };
-    if matches!(stored, Some(LibraryConfig::Plugin(old)) if old.path == next.path) {
-        return Vec::new();
-    }
-    let Ok(info) = dots_core::kit::read_plugin(std::path::Path::new(&next.path)) else {
+/// of `library_confirmation`, read from `info` (`plugin_info`), each origin with `${VAR}` read
+/// through `env`.
+fn plugin_starts(
+    info: Option<&dots_core::kit::PluginInfo>,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Vec<String> {
+    let Some(info) = info else {
         return Vec::new();
     };
     info.servers
@@ -303,7 +295,7 @@ fn plugin_starts(stored: Option<&LibraryConfig>, config: &LibraryConfig) -> Vec<
                     format!(
                         "{SENDS_PREFIX}{} to {}",
                         variables.join(", "),
-                        origin_text(url, &process_env)
+                        origin_text(url, env)
                     )
                 })
             }
@@ -314,9 +306,27 @@ fn plugin_starts(stored: Option<&LibraryConfig>, config: &LibraryConfig) -> Vec<
 /// Starts an entry of `plugin_starts` for an http server that sends variables.
 const SENDS_PREFIX: &str = "the values of ";
 
-/// Asks `library_confirmation`'s question, if there is one. A refusal is `cancelled`, and the
+/// The plugin folder `config` names, read for the question of `library_confirmation`: only
+/// when the plugin is new (`stored` is `None`) or its path changed. A folder that cannot be
+/// read gives none, and the core then refuses it.
+fn plugin_info(
+    stored: Option<&LibraryConfig>,
+    config: &LibraryConfig,
+) -> Option<dots_core::kit::PluginInfo> {
+    let LibraryConfig::Plugin(next) = config else {
+        return None;
+    };
+    if matches!(stored, Some(LibraryConfig::Plugin(old)) if old.path == next.path) {
+        return None;
+    }
+    dots_core::kit::read_plugin(std::path::Path::new(&next.path)).ok()
+}
+
+/// Asks `library_confirmation`'s question, if there is one, with each origin computed from
+/// Personal's values, where the server's `${VAR}` resolve. A refusal is `cancelled`, and the
 /// caller then starts and stores nothing.
 async fn confirm_library<F, Fut>(
+    rt: &Runtime,
     stored: Option<&LibraryConfig>,
     next: &LibraryConfig,
     ask: F,
@@ -325,7 +335,20 @@ where
     F: FnOnce(String) -> Fut,
     Fut: Future<Output = bool>,
 {
-    if let Some(question) = library_confirmation(stored, next, &plugin_starts(stored, next)) {
+    let info = plugin_info(stored, next);
+    let mut names = Vec::new();
+    for config in [stored, Some(next)].into_iter().flatten() {
+        if let LibraryConfig::McpServer(server) = config {
+            names.extend(server.variables());
+        }
+    }
+    for server in info.iter().flat_map(|i| &i.servers) {
+        names.extend(server.config.variables());
+    }
+    let personal = rt.vault().personal_values(&names).await?;
+    let env = |k: &str| personal.get(k);
+    let starts = plugin_starts(info.as_ref(), &env);
+    if let Some(question) = library_confirmation_in(stored, next, &starts, &env) {
         if !ask(question).await {
             return Err(CmdError::cancelled("declined: nothing was run or saved"));
         }
@@ -346,7 +369,7 @@ where
     let next = LibraryConfig::McpServer(config);
     // Refused before it is asked: the person never allows what the core would refuse.
     next.validate()?;
-    confirm_library(None, &next, ask).await?;
+    confirm_library(rt, None, &next, ask).await?;
     let LibraryConfig::McpServer(config) = next else {
         unreachable!("wrapped above")
     };
@@ -373,7 +396,7 @@ where
         )
         .into());
     }
-    confirm_library(None, &config, ask).await?;
+    confirm_library(rt, None, &config, ask).await?;
     Ok(rt.library().add(name, config, accept).await?)
 }
 
@@ -416,7 +439,7 @@ where
             ))
             .into());
         }
-        confirm_library(Some(&stored.config), &config, ask).await?;
+        confirm_library(rt, Some(&stored.config), &config, ask).await?;
     }
     Ok(rt.library().update(id, config).await?)
 }
@@ -455,6 +478,11 @@ pub async fn ask(app: &AppHandle, title: &str, message: String) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `plugin_starts` of the plugin `config` names, with no variable set.
+    fn starts_of(stored: Option<&LibraryConfig>, config: &LibraryConfig) -> Vec<String> {
+        plugin_starts(plugin_info(stored, config).as_ref(), &|_| None)
+    }
     use crate::error::CmdErrorKind;
 
     #[test]
@@ -635,19 +663,16 @@ mod tests {
         };
         let config = at(dir.path());
         // New: the stdio server's command line; the HTTP one starts nothing.
-        assert_eq!(plugin_starts(None, &config), [r#""node" "a.js""#]);
+        assert_eq!(starts_of(None, &config), [r#""node" "a.js""#]);
         // Same path: not read, not asked again.
-        assert!(plugin_starts(Some(&config), &config).is_empty());
+        assert!(starts_of(Some(&config), &config).is_empty());
         // Another path: read again.
         let elsewhere = at(std::path::Path::new("C:/no/such/plugin"));
-        assert_eq!(
-            plugin_starts(Some(&elsewhere), &config),
-            [r#""node" "a.js""#]
-        );
+        assert_eq!(starts_of(Some(&elsewhere), &config), [r#""node" "a.js""#]);
         // Unreadable: nothing here; the core refuses the folder.
-        assert!(plugin_starts(None, &elsewhere).is_empty());
+        assert!(starts_of(None, &elsewhere).is_empty());
         // Not a plugin.
-        assert!(plugin_starts(None, &stdio("x", &[], None)).is_empty());
+        assert!(starts_of(None, &stdio("x", &[], None)).is_empty());
     }
 
     #[test]
@@ -857,7 +882,7 @@ mod tests {
             installed_id: None,
             run_hooks: false,
         });
-        let starts = plugin_starts(None, &config);
+        let starts = starts_of(None, &config);
         assert_eq!(starts, [r#"the values of TOKEN to "https://h.example:9""#]);
         let asked = library_confirmation(None, &config, &starts).unwrap();
         assert_eq!(
@@ -882,7 +907,7 @@ mod tests {
             r#"{"mcpServers":{"plain":{"type":"http","url":"https://plain.example/mcp"}}}"#,
         )
         .unwrap();
-        let none = plugin_starts(None, &config);
+        let none = starts_of(None, &config);
         assert!(none.is_empty());
         assert_eq!(library_confirmation(None, &config, &none), None);
     }

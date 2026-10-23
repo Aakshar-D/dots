@@ -351,9 +351,11 @@ async fn callback_handler(
         Err(Error::Invalid(
             "ChatGPT sign-in was declined or could not be completed. Try again.".into(),
         ))
-    } else if issuer.len() > 1 || issuer.first().is_some_and(|iss| *iss != state.issuer) {
-        Err(verification_error())
-    } else if code.len() != 1 || code[0].is_empty() {
+    } else if issuer.len() > 1
+        || issuer.first().is_some_and(|iss| *iss != state.issuer)
+        || code.len() != 1
+        || code[0].is_empty()
+    {
         Err(verification_error())
     } else {
         Ok(code[0].to_owned())

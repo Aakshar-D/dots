@@ -16,7 +16,7 @@ enum Piece<'a> {
     Var(&'a str),
 }
 
-fn is_var_name(s: &str) -> bool {
+pub(crate) fn is_var_name(s: &str) -> bool {
     let mut chars = s.chars();
     chars
         .next()

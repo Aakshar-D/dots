@@ -16,6 +16,7 @@ use dots_core::library::{
 use dots_core::library_service::LibraryService;
 use dots_core::mcp::fingerprint;
 use dots_core::store::Store;
+use dots_core::vault::{EntryKind, Grants, Vault};
 use dots_core::Error;
 use serde_json::{json, Value};
 use tempfile::TempDir;
@@ -512,15 +513,24 @@ async fn scanning_a_folder_lists_its_skills_and_flags_bad_names() {
 }
 
 #[tokio::test]
-async fn environment_variables_say_which_are_set_and_never_their_values() {
+async fn environment_variables_say_which_personal_has_and_never_their_values() {
     let (_dir, store) = temp_store().await;
     let bus = new_bus();
-    let lib = service(&store, &bus);
-    std::env::set_var("DOTS_T5_SET_VAR", "secret-value");
-    let vars = lib.environment_variables(&[
-        "DOTS_T5_SET_VAR".to_string(),
-        "DOTS_T5_NEVER_SET_ENV".to_string(),
-    ]);
+    let vault = Vault::in_memory(store.clone());
+    vault
+        .add("DOTS_T5_SET_VAR", EntryKind::Secret, "secret-value")
+        .await
+        .unwrap();
+    // Dots' own environment no longer counts (env vault spec §8).
+    std::env::set_var("DOTS_T5_NEVER_SET_ENV", "from-the-environment");
+    let lib = service(&store, &bus).with_vault(vault);
+    let vars = lib
+        .environment_variables(&[
+            "DOTS_T5_SET_VAR".to_string(),
+            "DOTS_T5_NEVER_SET_ENV".to_string(),
+        ])
+        .await
+        .unwrap();
     let v = serde_json::to_value(&vars).unwrap();
     assert_eq!(
         v,
@@ -655,6 +665,9 @@ async fn runs_opening_one_plugin_together_after_its_servers_changed_all_succeed(
                 workspace: ws,
                 plugins_dir: None,
                 cancel: &CancellationToken::new(),
+                vault: &Vault::in_memory(store.clone()),
+                grants: &Grants::default(),
+                dot_name: "forms",
             })
             .await
         }
@@ -731,6 +744,9 @@ async fn an_installed_plugin_that_moved_has_its_hooks_switched_off() {
                 workspace: ws,
                 plugins_dir: Some(plugins_dir),
                 cancel: &CancellationToken::new(),
+                vault: &Vault::in_memory(store.clone()),
+                grants: &Grants::default(),
+                dot_name: "forms",
             })
             .await
             .unwrap()

@@ -13,6 +13,7 @@ use tokio::process::Command;
 use tokio::sync::mpsc;
 
 use crate::engine::{Engine, EngineEvent, RunContext};
+use crate::vault::child_env::{cli_refuses_grant, start_clean, Child};
 use crate::{Error, Result};
 
 pub mod args;
@@ -23,6 +24,7 @@ pub mod parse;
 /// `2.1.295`). `None` when it fails or takes longer than 5 s.
 pub async fn cli_version(program: &Path, env: &[(String, String)]) -> Option<String> {
     let mut cmd = Command::new(program);
+    start_clean(&mut cmd, Child::Cli);
     cmd.arg("--version")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -66,13 +68,16 @@ impl ClaudeEngine {
     }
 }
 
-/// Writes a file readable only by the owner on unix (it holds a bearer secret).
+/// Writes a file readable only by the owner (it holds a bearer secret): mode 0600 on unix; on
+/// Windows its DACL is set to the owner alone before the secret is written.
 async fn write_private(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
     let mut opts = tokio::fs::OpenOptions::new();
     opts.write(true).create(true).truncate(true);
     #[cfg(unix)]
     opts.mode(0o600);
     let mut f = opts.open(path).await?;
+    #[cfg(windows)]
+    crate::proc::owner_only(path)?;
     f.write_all(data).await?;
     f.flush().await
 }
@@ -89,6 +94,20 @@ impl Engine for ClaudeEngine {
         .await?;
 
         let mut cmd = Command::new(&self.program);
+        // Dots' environment stays out; the dot's shell grants go in (env vault spec §8).
+        start_clean(&mut cmd, Child::Cli);
+        // The CLI's own variables (its login, its endpoint), its proxy and what loads code into
+        // it are never set from Personal: it keeps what Dots' environment passed through.
+        let mut notices = Vec::new();
+        for (k, v) in ctx.tools.shell_env() {
+            if cli_refuses_grant(k) {
+                notices.push(format!(
+                    "{k}: the claude CLI's own variable, not set from Personal"
+                ));
+            } else {
+                cmd.env(k.as_str(), v.as_str());
+            }
+        }
         cmd.args(args::build_args(&ctx, &mcp_path))
             .current_dir(&ctx.workspace)
             .env(
@@ -122,6 +141,9 @@ impl Engine for ClaudeEngine {
         let stdout = child.stdout.take().expect("stdout is piped");
         let stderr = child.stderr.take().expect("stderr is piped");
         let (tx, rx) = mpsc::channel(256);
+        for text in notices {
+            let _ = tx.try_send(EngineEvent::Notice { text });
+        }
 
         tokio::spawn(async move {
             let out_tx = tx.clone();
@@ -157,7 +179,8 @@ impl Engine for ClaudeEngine {
                     }
                 }
             });
-            let mut stderr_task = tokio::spawn(crate::proc::read_tail(stderr, STDERR_TAIL));
+            let mut stderr_task =
+                tokio::spawn(crate::proc::read_scrubbed_tail(stderr, STDERR_TAIL));
 
             let prompt = ctx.prompt.clone();
             let run_id = ctx.run_id.clone();

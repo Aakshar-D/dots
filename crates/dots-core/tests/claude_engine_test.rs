@@ -14,6 +14,7 @@ use dots_core::model::{Dot, EngineKind, NewRun, RunStatus, TriggerKind, Workspac
 use dots_core::runner::{Runner, RunnerConfig};
 use dots_core::server::{bind, serve, ServerState};
 use dots_core::store::Store;
+use dots_core::vault::{EntryKind, Grants, Vault};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
@@ -417,4 +418,193 @@ async fn missing_program_fails_the_run() {
         .unwrap();
     let failed = wait_status(&e.store, &run.id, RunStatus::Failed, 15).await;
     assert!(failed.error.unwrap().contains("failed to start"));
+}
+
+/// The CLI starts with the base of Dots' environment and the dot's shell grants, nothing else
+/// (env vault spec §8).
+#[tokio::test]
+async fn the_cli_gets_the_shell_grants_and_not_the_rest_of_dots_environment() {
+    std::env::set_var("DOTS_TEST_CLI_LEAK", "from-dots");
+    let e = e2e(json!([init(), success("fake done")]), None).await;
+    let vault = Vault::in_memory(e.store.clone());
+    vault
+        .add("DOTS_TEST_CLI_GRANTED", EntryKind::Secret, "granted-value")
+        .await
+        .unwrap();
+    vault
+        .add("DOTS_TEST_CLI_UNGRANTED", EntryKind::Plain, "not-for-it")
+        .await
+        .unwrap();
+    e.runner.set_vault(vault);
+    let mut s = spec("cli-env");
+    s.workdir = e.dir.path().to_string_lossy().to_string();
+    s.workspace_mode = WorkspaceMode::Folder;
+    s.variables = Grants(
+        [(
+            "shell".to_string(),
+            vec!["DOTS_TEST_CLI_GRANTED".to_string()],
+        )]
+        .into(),
+    );
+    let dot = e.store.create_dot(&s).await.unwrap();
+    let run = e
+        .runner
+        .enqueue(NewRun::new(&dot.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    wait_status(&e.store, &run.id, RunStatus::Succeeded, 15).await;
+    let args = recorded_args(&e);
+    // Tests share one process environment: look only at this test's own names.
+    let mut seen = args["env"].as_object().unwrap().clone();
+    seen.retain(|k, _| k.starts_with("DOTS_TEST_"));
+    assert_eq!(
+        Value::Object(seen),
+        json!({"DOTS_TEST_CLI_GRANTED": "granted-value"})
+    );
+    let names: Vec<String> = serde_json::from_value(args["env_names"].clone()).unwrap();
+    let upper: Vec<String> = names.iter().map(|n| n.to_ascii_uppercase()).collect();
+    assert!(upper.contains(&"PATH".to_string()));
+    assert!(upper.contains(&"MCP_TOOL_TIMEOUT".to_string()));
+    assert!(upper.contains(&"FAKE_CLAUDE_SCRIPT".to_string()));
+    assert!(!upper.contains(&"DOTS_TEST_CLI_LEAK".to_string()));
+}
+
+/// The gateway file the CLI is given (`--mcp-config`) holds a bearer secret: while the run is
+/// on, its DACL has one entry, full access for the signed-in user, and nothing inherited (env
+/// vault spec §11).
+#[cfg(windows)]
+#[tokio::test]
+async fn the_gateway_file_is_owner_only_while_the_run_is_on() {
+    let script = json!([init(), {"sleep_ms": 3000}, success("fake done")]);
+    let e = e2e(script, None).await;
+    let mut s = spec("dacl");
+    s.workdir = e.dir.path().to_string_lossy().to_string();
+    s.workspace_mode = WorkspaceMode::Folder;
+    let dot = e.store.create_dot(&s).await.unwrap();
+    let run = e
+        .runner
+        .enqueue(NewRun::new(&dot.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    let path = e
+        .dir
+        .path()
+        .join("scratch")
+        .join(format!("mcp-{}.json", run.id));
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    // The CLI has started once it wrote what it was given.
+    while !(path.exists() && e.args_out.exists()) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the run did not start"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let out = std::process::Command::new("icacls")
+        .arg(&path)
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let user = std::env::var("USERNAME").unwrap();
+    let entries: Vec<&str> = text
+        .lines()
+        .filter(|l| l.contains(":(") && !l.contains("Successfully"))
+        .collect();
+    assert_eq!(entries.len(), 1, "{text}");
+    assert!(
+        entries[0].contains(&user) && entries[0].contains("(F)"),
+        "{text}"
+    );
+    assert!(!text.contains("(I)"), "{text}");
+    wait_status(&e.store, &run.id, RunStatus::Succeeded, 15).await;
+    // The file is gone with the run.
+    assert!(!path.exists());
+}
+
+/// A shell grant never sets the CLI's own variables: it keeps what Dots' environment passed
+/// through (the subscription rule), and the run says what was left out.
+#[tokio::test]
+async fn a_shell_grant_cannot_set_the_clis_own_variables() {
+    std::env::set_var("ANTHROPIC_DOTS_TEST_X", "from-dots");
+    let e = e2e(json!([init(), success("fake done")]), None).await;
+    let vault = Vault::in_memory(e.store.clone());
+    vault
+        .add("ANTHROPIC_DOTS_TEST_X", EntryKind::Secret, "from-personal")
+        .await
+        .unwrap();
+    e.runner.set_vault(vault);
+    let mut s = spec("cli-own");
+    s.workdir = e.dir.path().to_string_lossy().to_string();
+    s.workspace_mode = WorkspaceMode::Folder;
+    s.variables = Grants(
+        [(
+            "shell".to_string(),
+            vec!["ANTHROPIC_DOTS_TEST_X".to_string()],
+        )]
+        .into(),
+    );
+    let dot = e.store.create_dot(&s).await.unwrap();
+    let run = e
+        .runner
+        .enqueue(NewRun::new(&dot.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    wait_status(&e.store, &run.id, RunStatus::Succeeded, 15).await;
+    let args = recorded_args(&e);
+    assert_eq!(args["env"], json!({"ANTHROPIC_DOTS_TEST_X": "from-dots"}));
+}
+
+/// Nor the variables that point the CLI at another endpoint or load code into it: the proxy
+/// names, `NODE_EXTRA_CA_CERTS` and `NODE_OPTIONS`, in any case.
+#[tokio::test]
+async fn a_shell_grant_cannot_redirect_the_cli_or_load_code_into_it() {
+    let e = e2e(json!([init(), success("fake done")]), None).await;
+    let vault = Vault::in_memory(e.store.clone());
+    let refused = [
+        "NODE_OPTIONS",
+        "https_proxy",
+        "HTTP_PROXY",
+        "all_proxy",
+        "NO_PROXY",
+        "NODE_EXTRA_CA_CERTS",
+    ];
+    for name in refused.iter().chain(["DOTS_TEST_GRANTED"].iter()) {
+        vault
+            .add(name, EntryKind::Plain, "--require=C:/evil.js")
+            .await
+            .unwrap();
+    }
+    e.runner.set_vault(vault);
+    let mut s = spec("cli-redirect");
+    s.workdir = e.dir.path().to_string_lossy().to_string();
+    s.workspace_mode = WorkspaceMode::Folder;
+    let mut granted: Vec<String> = refused.iter().map(|n| n.to_string()).collect();
+    granted.push("DOTS_TEST_GRANTED".into());
+    s.variables = Grants([("shell".to_string(), granted)].into());
+    let dot = e.store.create_dot(&s).await.unwrap();
+    let run = e
+        .runner
+        .enqueue(NewRun::new(&dot.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    wait_status(&e.store, &run.id, RunStatus::Succeeded, 15).await;
+    let args = recorded_args(&e);
+    // Another test sets an `ANTHROPIC_DOTS_TEST_` name for Dots, which the CLI keeps.
+    assert_eq!(args["env"]["DOTS_TEST_GRANTED"], "--require=C:/evil.js");
+    let names: Vec<String> = args["env_names"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n.as_str().unwrap().to_ascii_uppercase())
+        .collect();
+    assert!(!names.contains(&"NODE_OPTIONS".to_string()), "{names:?}");
+    let events = serde_json::to_string(&e.store.list_events(&run.id, 0).await.unwrap()).unwrap();
+    for name in refused {
+        assert!(
+            events.contains(&format!(
+                "{name}: the claude CLI's own variable, not set from Personal"
+            )),
+            "{name}: {events}"
+        );
+    }
 }

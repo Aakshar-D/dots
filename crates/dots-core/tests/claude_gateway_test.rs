@@ -28,6 +28,7 @@ use dots_core::run_tools::{OpenRequest, RunTools};
 use dots_core::runner::{Runner, RunnerConfig};
 use dots_core::server::{bind, serve, ServerState};
 use dots_core::store::Store;
+use dots_core::vault::{Grants, Vault};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
@@ -517,6 +518,9 @@ async fn the_gateway_answers_a_running_runs_open_servers_and_checks_each_call() 
         workspace: e.dir.path(),
         plugins_dir: None,
         cancel: &cancel,
+        vault: &Vault::in_memory(e.store.clone()),
+        grants: &Grants::default(),
+        dot_name: "gateway",
     })
     .await
     .unwrap();
@@ -720,6 +724,9 @@ async fn under_trusted_a_writing_gateway_tool_asks_and_so_does_a_tool_outside_th
         workspace: e.dir.path(),
         plugins_dir: None,
         cancel: &cancel,
+        vault: &Vault::in_memory(e.store.clone()),
+        grants: &Grants::default(),
+        dot_name: "gateway",
     })
     .await
     .unwrap();
@@ -803,6 +810,9 @@ async fn a_plugin_server_under_claude_codes_own_name_is_checked_by_approve() {
         workspace: e.dir.path(),
         plugins_dir: None,
         cancel: &cancel,
+        vault: &Vault::in_memory(e.store.clone()),
+        grants: &Grants::default(),
+        dot_name: "gateway",
     })
     .await
     .unwrap();
@@ -903,6 +913,9 @@ async fn dots_own_server_offers_context_only_with_collections_and_checks_each_ca
             workspace: e.dir.path(),
             plugins_dir: None,
             cancel: &cancel,
+            vault: &Vault::in_memory(e.store.clone()),
+            grants: &Grants::default(),
+            dot_name: "gateway",
         })
         .await
         .unwrap();
@@ -1046,6 +1059,9 @@ async fn dots_own_server_caps_the_text_of_an_error_like_the_local_tool() {
         workspace: e.dir.path(),
         plugins_dir: None,
         cancel: &cancel,
+        vault: &Vault::in_memory(e.store.clone()),
+        grants: &Grants::default(),
+        dot_name: "gateway",
     })
     .await
     .unwrap();
@@ -1092,6 +1108,9 @@ async fn a_context_call_that_asks_waits_for_the_decision_and_parks_when_none_com
         workspace: e.dir.path(),
         plugins_dir: None,
         cancel: &cancel,
+        vault: &Vault::in_memory(e.store.clone()),
+        grants: &Grants::default(),
+        dot_name: "gateway",
     })
     .await
     .unwrap();

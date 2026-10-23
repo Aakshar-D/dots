@@ -65,6 +65,10 @@ impl From<dots_core::Error> for CmdError {
             | dots_core::Error::Conflict(m) => m,
             other => other.to_string(),
         };
+        // An error can quote what it failed on; the UI shows it and may log it.
+        let message = dots_core::vault::redact::global()
+            .scrub(&message)
+            .into_owned();
         Self { kind, message }
     }
 }
@@ -115,6 +119,27 @@ mod tests {
     fn every_listed_kind_is_produced_by_something() {
         for &kind in CmdErrorKind::ALL {
             assert_eq!(produced(kind).kind, kind);
+        }
+    }
+
+    #[test]
+    fn a_core_error_message_is_scrubbed_of_secret_values() {
+        dots_core::vault::redact::global().add("DOTS_CMD_ERROR_TOKEN", "cmd-error-secret-value");
+        for e in [
+            Error::Invalid("bad value cmd-error-secret-value".into()),
+            Error::Other("boom cmd-error-secret-value".into()),
+        ] {
+            let c = CmdError::from(e);
+            assert!(
+                !c.message.contains("cmd-error-secret-value"),
+                "{}",
+                c.message
+            );
+            assert!(
+                c.message.contains("[secret:DOTS_CMD_ERROR_TOKEN]"),
+                "{}",
+                c.message
+            );
         }
     }
 

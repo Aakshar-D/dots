@@ -23,6 +23,7 @@ use dots_core::schedule::Schedule;
 use dots_core::scheduler::MAX_ATTEMPTS;
 use dots_core::settings::{Settings, MAX_CONCURRENT_RUNS, MAX_GLOBAL_INSTRUCTIONS};
 use dots_core::skill_creator::{DraftRequest, DraftSummary};
+use dots_core::vault::{EntryKind, EnvEntry};
 use serde_json::{json, Value};
 
 use crate::error::{CmdError, CmdErrorKind};
@@ -64,7 +65,7 @@ fn local_spec() -> DotSpec {
 fn dot() -> Dot {
     Dot {
         id: "01J0DOT".into(),
-        webhook_token: "tok_abc".into(),
+        has_webhook_token: true,
         created_at: TS.into(),
         updated_at: TS.into(),
         seen_at: Some(TS.into()),
@@ -786,6 +787,23 @@ pub fn samples() -> Value {
             change: Some("Mention snapshot tests".into()),
         },
     ]);
+    samples["EnvEntry"] = to([
+        EnvEntry {
+            name: "GITHUB_TOKEN".into(),
+            kind: EntryKind::Secret,
+            value: None,
+            created_at: TS.into(),
+            updated_at: TS.into(),
+        },
+        EnvEntry {
+            name: "LOG_LEVEL".into(),
+            kind: EntryKind::Plain,
+            value: Some("debug".into()),
+            created_at: TS.into(),
+            updated_at: TS.into(),
+        },
+    ]);
+    samples["Enums"]["EntryKind"] = to(EntryKind::ALL);
     samples["DraftSummary"] = to(DraftSummary {
         name: "pr-tests".into(),
         description: "Checks a PR for missing tests.".into(),

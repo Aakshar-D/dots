@@ -4,20 +4,22 @@ use sqlx::Row;
 
 use super::library::check_uses;
 use super::Store;
+use crate::library::{LibraryConfig, Uses};
 use crate::model::{Dot, DotSpec, EngineKind, WorkspaceMode};
 use crate::schedule::Schedule;
-use crate::util::{new_id, new_token, now};
+use crate::util::{ct_eq, new_id, new_token, now, token_hash};
+use crate::vault::Grants;
 use crate::{Error, Result};
 
 pub(super) const DOT_COLUMNS: &str = "id, name, instructions, engine, model, endpoint_url, \
-    workdir, workspace_mode, schedule, webhook_token, policy, uses, browser, \
+    workdir, workspace_mode, schedule, webhook_token, policy, uses, variables, browser, \
     use_global_instructions, use_user_settings, max_turns, \
     timeout_secs, approval_wait_secs, enabled, created_at, updated_at, seen_at";
 
 pub(super) fn dot_from_row(row: &SqliteRow) -> Result<Dot> {
     Ok(Dot {
         id: row.try_get("id")?,
-        webhook_token: row.try_get("webhook_token")?,
+        has_webhook_token: !row.try_get::<String, _>("webhook_token")?.is_empty(),
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
         seen_at: row.try_get("seen_at")?,
@@ -35,6 +37,7 @@ pub(super) fn dot_from_row(row: &SqliteRow) -> Result<Dot> {
                 .transpose()?,
             policy: serde_json::from_str(&row.try_get::<String, _>("policy")?)?,
             uses: serde_json::from_str(&row.try_get::<String, _>("uses")?)?,
+            variables: serde_json::from_str(&row.try_get::<String, _>("variables")?)?,
             browser: row.try_get::<i64, _>("browser")? != 0,
             use_global_instructions: row.try_get::<i64, _>("use_global_instructions")? != 0,
             use_user_settings: row.try_get::<i64, _>("use_user_settings")? != 0,
@@ -77,18 +80,49 @@ fn map_unique(e: sqlx::Error, name: &str) -> Error {
 }
 
 impl Store {
-    /// Creates a dot. Every item its `uses` names must be in the Library (`Invalid`).
+    /// `spec`'s grants as a save stores them (`Grants::synced`): a server newly used, alone or
+    /// with its plugin, is granted the variables of its config; `before` is what the dot used.
+    pub(crate) async fn synced_grants(
+        &self,
+        before: Option<&Uses>,
+        spec: &DotSpec,
+    ) -> Result<Grants> {
+        let had: Vec<String> = match before {
+            Some(uses) => self
+                .used_mcp_servers(uses)
+                .await?
+                .into_iter()
+                .map(|i| i.name)
+                .collect(),
+            None => Vec::new(),
+        };
+        let using: Vec<(String, Vec<String>)> = self
+            .used_mcp_servers(&spec.uses)
+            .await?
+            .into_iter()
+            .filter_map(|i| match i.config {
+                LibraryConfig::McpServer(c) => Some((i.name, c.variables())),
+                _ => None,
+            })
+            .collect();
+        Ok(spec.variables.synced(&had, &using))
+    }
+
+    /// Creates a dot. Every item its `uses` names must be in the Library (`Invalid`). The
+    /// servers it uses are granted their variables.
     pub async fn create_dot(&self, spec: &DotSpec) -> Result<Dot> {
-        let spec = &prepared(spec, None)?;
+        let mut spec = prepared(spec, None)?;
+        spec.variables = self.synced_grants(None, &spec).await?;
+        let spec = &spec;
         let id = new_id();
         let ts = now();
         let mut tx = self.pool.begin().await?;
         sqlx::query(
             "INSERT INTO dots (id, name, instructions, engine, model, endpoint_url, workdir, \
-             workspace_mode, schedule, webhook_token, policy, uses, browser, \
+             workspace_mode, schedule, webhook_token, policy, uses, variables, browser, \
              use_global_instructions, use_user_settings, max_turns, timeout_secs, \
              approval_wait_secs, enabled, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&spec.name)
@@ -99,9 +133,11 @@ impl Store {
         .bind(&spec.workdir)
         .bind(spec.workspace_mode.as_str())
         .bind(schedule_json(spec)?)
-        .bind(new_token())
+        // No token until one is made, which shows it once.
+        .bind("")
         .bind(serde_json::to_string(&spec.policy)?)
         .bind(serde_json::to_string(&spec.uses)?)
+        .bind(serde_json::to_string(&spec.variables)?)
         .bind(spec.browser as i64)
         .bind(spec.use_global_instructions as i64)
         .bind(spec.use_user_settings as i64)
@@ -139,14 +175,18 @@ impl Store {
     /// queued, running or awaiting runs (their workspaces were derived from the old values);
     /// otherwise nothing changes and `Error::Conflict` is returned. The check is atomic. The
     /// schedule is prepared against the stored one (`prepared`). Every item its `uses` names
-    /// must be in the Library (`Invalid`).
+    /// must be in the Library (`Invalid`). A server it uses now and did not before is granted
+    /// its variables; one it no longer uses loses its grants.
     pub async fn update_dot(&self, id: &str, spec: &DotSpec) -> Result<Dot> {
-        let previous = self.get_dot(id).await?.spec.schedule;
-        let spec = &prepared(spec, previous.as_ref())?;
+        let stored = self.get_dot(id).await?.spec;
+        let mut spec = prepared(spec, stored.schedule.as_ref())?;
+        spec.variables = self.synced_grants(Some(&stored.uses), &spec).await?;
+        let spec = &spec;
         let mut tx = self.pool.begin().await?;
         let res = sqlx::query(
             "UPDATE dots SET name = ?, instructions = ?, engine = ?, model = ?, endpoint_url = ?, \
-             workdir = ?, workspace_mode = ?, schedule = ?, policy = ?, uses = ?, browser = ?, \
+             workdir = ?, workspace_mode = ?, schedule = ?, policy = ?, uses = ?, variables = ?, \
+             browser = ?, \
              use_global_instructions = ?, use_user_settings = ?, max_turns = ?, timeout_secs = ?, approval_wait_secs = ?, \
              enabled = ?, updated_at = ? WHERE id = ? \
              AND ((workdir = ? AND workspace_mode = ?) OR NOT EXISTS (SELECT 1 FROM runs \
@@ -162,6 +202,7 @@ impl Store {
         .bind(schedule_json(spec)?)
         .bind(serde_json::to_string(&spec.policy)?)
         .bind(serde_json::to_string(&spec.uses)?)
+        .bind(serde_json::to_string(&spec.variables)?)
         .bind(spec.browser as i64)
         .bind(spec.use_global_instructions as i64)
         .bind(spec.use_user_settings as i64)
@@ -220,6 +261,16 @@ impl Store {
         Ok(())
     }
 
+    /// Sets a dot's grants as they are, for a change Dots makes itself (env vault spec §11).
+    pub(crate) async fn set_dot_variables(&self, id: &str, grants: &Grants) -> Result<()> {
+        sqlx::query("UPDATE dots SET variables = ? WHERE id = ?")
+            .bind(serde_json::to_string(grants)?)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn set_dot_enabled(&self, id: &str, enabled: bool) -> Result<Dot> {
         let res = sqlx::query("UPDATE dots SET enabled = ?, updated_at = ? WHERE id = ?")
             .bind(enabled as i64)
@@ -273,10 +324,23 @@ impl Store {
         Ok((needs_you, needs_you + fresh))
     }
 
+    /// Whether `token` is the dot's webhook token. A dot without one takes none.
+    pub async fn check_webhook_token(&self, id: &str, token: &str) -> Result<bool> {
+        let stored: Option<String> =
+            sqlx::query_scalar("SELECT webhook_token FROM dots WHERE id = ?")
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await?;
+        let stored = stored.ok_or_else(|| Error::NotFound(format!("dot {id}")))?;
+        Ok(!stored.is_empty() && ct_eq(&token_hash(token), &stored))
+    }
+
+    /// Makes the dot a new webhook token and returns it: the only time it is shown. Only its
+    /// hash is kept.
     pub async fn regenerate_webhook_token(&self, id: &str) -> Result<String> {
         let token = new_token();
         let res = sqlx::query("UPDATE dots SET webhook_token = ?, updated_at = ? WHERE id = ?")
-            .bind(&token)
+            .bind(token_hash(&token))
             .bind(now())
             .bind(id)
             .execute(&self.pool)

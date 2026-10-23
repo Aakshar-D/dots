@@ -208,7 +208,7 @@ describe("adding a server", () => {
     );
   });
 
-  it("names the variables that Dots' environment does not set, and warns about a pasted secret", async () => {
+  it("names the variables that Personal does not have, and says a pasted secret moves there", async () => {
     backend.on("environment_variables", (args) =>
       (args.names as string[]).map((name) => ({ name, set: name !== "NOT_SET" })),
     );
@@ -218,9 +218,11 @@ describe("adding a server", () => {
       within(dialog).getByLabelText("Environment"),
       "A=${{NOT_SET}{Enter}B=${{IS_SET}{Enter}API_TOKEN=abc123",
     );
-    expect(await within(dialog).findByText("Not set in Dots' environment: NOT_SET")).toBeVisible();
-    expect(within(dialog).getByText(/API_TOKEN looks like a secret.*\$\{VAR\}/)).toBeVisible();
-    expect(within(dialog).getByText(/reads the variable from Dots' environment/)).toBeVisible();
+    expect(
+      await within(dialog).findByText("Not in Personal: NOT_SET. Add it in the Env tab."),
+    ).toBeVisible();
+    expect(within(dialog).getByText(/API_TOKEN looks like a secret.*moves its value to Personal/)).toBeVisible();
+    expect(within(dialog).getByText(/reads the variable from Personal/)).toBeVisible();
   });
 
   it("checks the form before it asks the core", async () => {
@@ -1069,5 +1071,213 @@ describe("nameFromFolder", () => {
     expect(name.length).toBeLessThanOrEqual(40);
     expect(validName(name)).toBe(true);
     expect(name).not.toMatch(/[-_]$/);
+  });
+});
+
+describe("the Library's Env tab", () => {
+  const secret = {
+    name: "GITHUB_TOKEN",
+    kind: "secret" as const,
+    value: null,
+    created_at: "2026-10-21T12:00:00.000Z",
+    updated_at: "2026-10-21T12:00:00.000Z",
+  };
+  const plain = { ...secret, name: "LOG_LEVEL", kind: "plain" as const, value: "debug" };
+
+  async function openTab(entries: unknown[] = [secret, plain]) {
+    backend.on("env_list", () => entries);
+    const rendered = renderApp("/library");
+    await rendered.user.click(await screen.findByRole("tab", { name: "Env" }));
+    return rendered;
+  }
+
+  it("lists the personal variables and never a secret's value", async () => {
+    await openTab();
+    const row = await screen.findByRole("listitem", { name: "GITHUB_TOKEN" });
+    expect(within(row).getByText("secret")).toBeVisible();
+    expect(within(row).getByText("Kept in Credential Manager")).toBeVisible();
+    expect(within(row).getByRole("button", { name: "Replace value" })).toBeVisible();
+    const config = screen.getByRole("listitem", { name: "LOG_LEVEL" });
+    expect(within(config).getByText("debug")).toBeVisible();
+    expect(within(config).getByRole("button", { name: "Edit" })).toBeVisible();
+  });
+
+  it("adds a secret through a password field, and checks the name first", async () => {
+    backend.on("env_add", () => secret);
+    const { user } = await openTab([]);
+    expect(await screen.findByText("No variables yet.")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Add variable" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add variable" });
+    expect(within(dialog).getByLabelText("Value")).toHaveAttribute("type", "password");
+    await user.type(within(dialog).getByLabelText("Name"), "1BAD");
+    await user.type(within(dialog).getByLabelText("Value"), "ghp_x");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    expect(within(dialog).getByText(/Use a letter or _/)).toBeVisible();
+    expect(backend.callsTo("env_add")).toEqual([]);
+    await user.clear(within(dialog).getByLabelText("Name"));
+    await user.type(within(dialog).getByLabelText("Name"), "GITHUB_TOKEN");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(backend.callsTo("env_add")).toEqual([
+      { name: "GITHUB_TOKEN", kind: "secret", value: "ghp_x" },
+    ]);
+  });
+
+  it("adds plain config as text, and shows a refusal in the dialog", async () => {
+    backend.on("env_add", () => {
+      throw { kind: "conflict", message: "A variable named log_level is already in Personal." };
+    });
+    const { user } = await openTab();
+    await user.click(await screen.findByRole("button", { name: "Add variable" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add variable" });
+    await user.click(within(dialog).getByLabelText("Secret"));
+    expect(within(dialog).getByLabelText("Value")).toHaveAttribute("type", "text");
+    await user.type(within(dialog).getByLabelText("Name"), "log_level");
+    await user.type(within(dialog).getByLabelText("Value"), "info");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    expect(await within(dialog).findByText(/already in Personal/)).toBeVisible();
+    expect(backend.callsTo("env_add")).toEqual([{ name: "log_level", kind: "plain", value: "info" }]);
+  });
+
+  it("replaces a secret's value without showing either, and edits plain config", async () => {
+    backend.on("env_set", () => secret);
+    const { user } = await openTab();
+    const row = await screen.findByRole("listitem", { name: "GITHUB_TOKEN" });
+    await user.click(within(row).getByRole("button", { name: "Replace value" }));
+    const dialog = await screen.findByRole("dialog", { name: "Replace GITHUB_TOKEN" });
+    expect(within(dialog).getByLabelText("Value")).toHaveValue("");
+    expect(within(dialog).getByLabelText("Value")).toHaveAttribute("type", "password");
+    await user.type(within(dialog).getByLabelText("Value"), "ghp_new");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const config = screen.getByRole("listitem", { name: "LOG_LEVEL" });
+    await user.click(within(config).getByRole("button", { name: "Edit" }));
+    const edit = await screen.findByRole("dialog", { name: "Edit LOG_LEVEL" });
+    expect(within(edit).getByLabelText("Value")).toHaveValue("debug");
+    await user.clear(within(edit).getByLabelText("Value"));
+    await user.type(within(edit).getByLabelText("Value"), "warn");
+    await user.click(within(edit).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(backend.callsTo("env_set")).toEqual([
+      { name: "GITHUB_TOKEN", value: "ghp_new" },
+      { name: "LOG_LEVEL", value: "warn" },
+    ]);
+  });
+
+  it("removes a variable after asking", async () => {
+    backend.on("env_remove", () => null);
+    const { user } = await openTab();
+    const row = await screen.findByRole("listitem", { name: "GITHUB_TOKEN" });
+    await user.click(within(row).getByRole("button", { name: "Remove" }));
+    await user.click(await screen.findByRole("button", { name: "Remove variable" }));
+    await waitFor(() => expect(backend.callsTo("env_remove")).toEqual([{ name: "GITHUB_TOKEN" }]));
+  });
+
+  it("offers once to import what Windows sets, and to delete old backups", async () => {
+    let offered = ["GITHUB_TOKEN"];
+    backend.on("env_import_candidates", () => offered);
+    backend.on("env_import", () => {
+      offered = [];
+      return ["GITHUB_TOKEN"];
+    });
+    let files = ["dots-0.1.0-2026-10-20-091700.db"];
+    backend.on("env_old_backups", () => files);
+    backend.on("env_old_backups_answer", () => {
+      files = [];
+      return [];
+    });
+    const { user } = await openTab([]);
+    const offer = await screen.findByRole("region", { name: "Import" });
+    expect(within(offer).getByText("GITHUB_TOKEN")).toBeVisible();
+    await user.click(within(offer).getByRole("button", { name: "Import" }));
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Import" })).toBeNull());
+    expect(backend.callsTo("env_import")).toEqual([{ names: ["GITHUB_TOKEN"] }]);
+    const backups = screen.getByRole("region", { name: "Old backups" });
+    expect(within(backups).getByText("dots-0.1.0-2026-10-20-091700.db")).toBeVisible();
+    await user.click(within(backups).getByRole("button", { name: "Keep them" }));
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Old backups" })).toBeNull());
+    expect(backend.callsTo("env_old_backups_answer")).toEqual([{ delete: false }]);
+  });
+
+  it("deletes the old backups only after asking", async () => {
+    let files = ["dots-0.1.0-2026-10-20-091700.db"];
+    backend.on("env_old_backups", () => files);
+    backend.on("env_old_backups_answer", () => {
+      files = [];
+      return [];
+    });
+    const { user } = await openTab([]);
+    const offer = await screen.findByRole("region", { name: "Old backups" });
+    await user.click(within(offer).getByRole("button", { name: "Delete backups" }));
+    expect(backend.callsTo("env_old_backups_answer")).toEqual([]);
+    await user.click(await screen.findByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(backend.callsTo("env_old_backups_answer")).toEqual([]);
+    expect(screen.getByRole("region", { name: "Old backups" })).toBeVisible();
+    await user.click(within(offer).getByRole("button", { name: "Delete backups" }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: "Delete backups" }));
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Old backups" })).toBeNull());
+    expect(backend.callsTo("env_old_backups_answer")).toEqual([{ delete: true }]);
+  });
+
+  it("names the old backups it could not delete, and keeps the offer", async () => {
+    let files = ["dots-0.0.9-stuck.db", "dots-0.1.0-2026-10-20-091700.db"];
+    backend.on("env_old_backups", () => files);
+    backend.on("env_old_backups_answer", () => {
+      files = ["dots-0.0.9-stuck.db"];
+      return ["dots-0.0.9-stuck.db"];
+    });
+    const { user } = await openTab([]);
+    const offer = await screen.findByRole("region", { name: "Old backups" });
+    await user.click(within(offer).getByRole("button", { name: "Delete backups" }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: "Delete backups" }));
+    const alert = await within(offer).findByRole("alert");
+    expect(alert).toHaveTextContent(/could not delete dots-0\.0\.9-stuck\.db/i);
+    expect(screen.getByRole("region", { name: "Old backups" })).toBeVisible();
+    expect(backend.callsTo("env_old_backups_answer")).toEqual([{ delete: true }]);
+  });
+
+  it("keeps a variable when the removal is cancelled", async () => {
+    backend.on("env_remove", () => null);
+    const { user } = await openTab();
+    const row = await screen.findByRole("listitem", { name: "GITHUB_TOKEN" });
+    await user.click(within(row).getByRole("button", { name: "Remove" }));
+    await user.click(await screen.findByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(backend.callsTo("env_remove")).toEqual([]);
+    expect(screen.getByRole("listitem", { name: "GITHUB_TOKEN" })).toBeVisible();
+  });
+
+  it("names what an import could not take", async () => {
+    let offered = ["GITHUB_TOKEN", "HUGE_TOKEN"];
+    backend.on("env_import_candidates", () => offered);
+    backend.on("env_import", () => {
+      offered = [];
+      return ["GITHUB_TOKEN"];
+    });
+    const { user } = await openTab([]);
+    const offer = await screen.findByRole("region", { name: "Import" });
+    await user.click(within(offer).getByRole("button", { name: "Import" }));
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Import" })).toBeNull());
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Not imported: HUGE_TOKEN. Their values could not be imported (too long for a secret, " +
+        "refused, or no longer set); add them by hand.",
+    );
+  });
+
+  it("dismisses the import offer for good", async () => {
+    let offered = ["SF_TOKEN"];
+    backend.on("env_import_candidates", () => offered);
+    backend.on("env_import_dismiss", () => {
+      offered = [];
+      return null;
+    });
+    const { user } = await openTab([]);
+    const offer = await screen.findByRole("region", { name: "Import" });
+    await user.click(within(offer).getByRole("button", { name: "Don't import" }));
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Import" })).toBeNull());
+    expect(backend.callsTo("env_import_dismiss")).toEqual([{}]);
   });
 });

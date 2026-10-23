@@ -35,6 +35,7 @@ const schemas: Record<SampleName, { parse: (v: unknown) => unknown }> = {
   DraftSummary: T.DraftSummary,
   InstalledPlugin: T.InstalledPlugin.array(),
   EnvVariable: T.EnvVariable.array(),
+  EnvEntry: T.EnvEntry.array(),
   WorktreeDiff: T.WorktreeDiff,
   CmdError: T.CmdError,
   StartupError: T.StartupError,
@@ -61,6 +62,7 @@ const enums: Record<keyof typeof fixture.Enums, { options: readonly string[] }> 
   CatalogStatus: T.CatalogStatus,
   MessageKind: T.MessageKind,
   FollowUpStatus: T.FollowUpStatus,
+  EntryKind: T.EntryKind,
 };
 
 describe("Rust/TypeScript contract", () => {

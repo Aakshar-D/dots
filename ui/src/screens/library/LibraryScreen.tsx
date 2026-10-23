@@ -9,13 +9,15 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { keys } from "@/lib/query";
 
 import { ContextTab } from "./ContextTab";
+import { EnvTab } from "./EnvTab";
 import { McpServersTab, serverStatus } from "./McpServersTab";
 import type { ContextEntry, PluginEntry, ServerEntry, SkillEntry } from "./parts";
 import { PluginsTab } from "./PluginsTab";
 import { SkillsTab } from "./SkillsTab";
 import { ToolsReview } from "./ToolsReview";
 
-/// The Library: the MCP servers, skills, plugins and context collections that dots can use. `?review=<server id>`
+/// The Library: the MCP servers, skills, plugins, context collections and variables that dots
+/// can use. `?review=<server id>`
 /// opens the review of that server's changed tool list (the Inbox links to it).
 export function LibraryScreen() {
   const library = useQuery({ queryKey: keys.library, queryFn: commands.libraryList });
@@ -51,6 +53,7 @@ export function LibraryScreen() {
           <TabsTrigger value="skills">Skills</TabsTrigger>
           <TabsTrigger value="plugins">Plugins</TabsTrigger>
           <TabsTrigger value="context">Context</TabsTrigger>
+          <TabsTrigger value="env">Env</TabsTrigger>
         </TabsList>
         <TabsContent value="servers">
           <McpServersTab entries={servers} plugins={plugins} onReview={review} />
@@ -63,6 +66,9 @@ export function LibraryScreen() {
         </TabsContent>
         <TabsContent value="context">
           <ContextTab entries={contexts} />
+        </TabsContent>
+        <TabsContent value="env">
+          <EnvTab />
         </TabsContent>
       </Tabs>
       {reviewing && <ToolsReview entry={reviewing} onClose={() => review(null)} />}

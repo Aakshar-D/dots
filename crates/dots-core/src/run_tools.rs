@@ -20,15 +20,17 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::watch;
 use tokio::task::{JoinHandle, JoinSet};
 use tokio_util::sync::CancellationToken;
+use zeroize::Zeroizing;
 
 use crate::context::{self, Collection};
 use crate::events::Bus;
 use crate::kit::{self, KitPlugin, KitSkill, PluginInfo, RunKit, SkillInfo};
 use crate::library::{CatalogStatus, LibraryConfig, LibraryItem, LibraryKind, McpCatalog, Uses};
-use crate::library_service::{process_env, record_check, refresh_plugin, skill_problem};
+use crate::library_service::{record_check, refresh_plugin, skill_problem};
 use crate::mcp::{McpError, McpSession, McpTool, SessionOptions};
 use crate::policy::McpTrust;
 use crate::store::Store;
+use crate::vault::{Consumer, Grants, Resolved, Vault};
 use crate::Result;
 
 /// What `RunTools::open` needs.
@@ -43,6 +45,11 @@ pub struct OpenRequest<'a> {
     pub plugins_dir: Option<&'a Path>,
     /// The run's cancel token: opening stops when it fires.
     pub cancel: &'a CancellationToken,
+    /// Where the dot's variables resolve, its grants, and its name for the run events
+    /// (env vault spec §8).
+    pub vault: &'a Vault,
+    pub grants: &'a Grants,
+    pub dot_name: &'a str,
 }
 
 /// A skill of the run, with the name the model calls it by.
@@ -163,6 +170,8 @@ pub struct RunTools {
     kit: Option<Arc<RunKit>>,
     stop: CancellationToken,
     watchers: Mutex<Vec<JoinHandle<()>>>,
+    /// The values the dot grants its shell (env vault spec §7), for the engine to set.
+    shell_env: Vec<(String, Zeroizing<String>)>,
     /// The built-in browser of a dot with `browser` on (browser spec section 2.2).
     browser: Option<Arc<crate::browser::RunBrowser>>,
 }
@@ -223,6 +232,12 @@ impl RunTools {
         &self.contexts
     }
 
+    /// The variables granted to the dot's shell, with their values: the `claude` CLI's
+    /// environment, or the local engine's shell tool's.
+    pub fn shell_env(&self) -> &[(String, Zeroizing<String>)] {
+        &self.shell_env
+    }
+
     /// The run's built-in browser (browser spec section 2.2), for a dot with `browser` on.
     pub fn browser(&self) -> Option<&Arc<crate::browser::RunBrowser>> {
         self.browser.as_ref()
@@ -267,7 +282,9 @@ impl RunTools {
 
     /// Opens the run's tools for a dot with `uses`. Returns them with the run events to record:
     /// items left out and servers held. A cancel while opening closes what was opened and
-    /// returns no tools. Only a database failure is an error.
+    /// returns no tools. A database failure is an error, and so is a Credential Manager
+    /// failure: reading a granted secret, or storing one that a plugin's file moves to
+    /// Personal. A secret that is not there is a run event instead.
     pub async fn open(req: OpenRequest<'_>) -> Result<(RunTools, Vec<String>)> {
         let OpenRequest {
             store,
@@ -277,6 +294,9 @@ impl RunTools {
             workspace,
             plugins_dir,
             cancel,
+            vault,
+            grants,
+            dot_name,
         } = req;
         let mut notices = Vec::new();
 
@@ -288,7 +308,7 @@ impl RunTools {
             let Some(item) = store.find_library_item(LibraryKind::Plugin, name).await? else {
                 continue;
             };
-            match refresh_plugin(store, bus, &item).await? {
+            match refresh_plugin(store, bus, vault, &item).await? {
                 Ok(read) => {
                     notices.extend(read.notice);
                     notices.extend(read.warnings.iter().map(|w| format!("plugin {name}: {w}")));
@@ -301,17 +321,35 @@ impl RunTools {
             }
         }
 
-        let items: Vec<LibraryItem> = store
+        let used: Vec<LibraryItem> = store
             .used_mcp_servers(uses)
             .await?
             .into_iter()
             .filter(|s| s.owner_id.as_ref().is_none_or(|o| !left_out.contains(o)))
             .collect();
+        // A server whose variables do not all resolve for it is left out, with the reason; its
+        // catalog is the Library's and does not record a dot's grants.
+        let mut items = Vec::new();
+        for item in used {
+            let LibraryConfig::McpServer(config) = &item.config else {
+                continue;
+            };
+            let consumer = Consumer::Mcp(item.name.clone());
+            match vault
+                .resolve(grants, &consumer, &config.variables())
+                .await?
+            {
+                Ok(env) => items.push((item, env)),
+                Err(missing) => notices.push(missing.text(dot_name)),
+            }
+        }
+        let shell_env = shell_env(vault, grants, dot_name, &mut notices).await?;
         let Some(opened) = open_sessions(&items, workspace, cancel).await else {
             return Ok((RunTools::default(), Vec::new()));
         };
         let mut tools = RunTools::default();
-        for (item, outcome) in items.into_iter().zip(opened) {
+        tools.shell_env = shell_env;
+        for ((item, _), outcome) in items.into_iter().zip(opened) {
             match outcome {
                 Ok((session, listed, changes)) => {
                     let catalog = record_check(store, bus, &item.id, Ok(&listed)).await?;
@@ -544,18 +582,43 @@ impl Drop for CloseOnDrop {
 
 type Opened = std::result::Result<(McpSession, Vec<McpTool>, watch::Receiver<u64>), McpError>;
 
-/// Opens a session with each server at once and lists its tools; one outcome per server, in
-/// order. `None` when `cancel` fires first: what was opened is closed.
+/// The values granted to the dot's shell; one that does not resolve is left out, with a run
+/// event saying why.
+async fn shell_env(
+    vault: &Vault,
+    grants: &Grants,
+    dot_name: &str,
+    notices: &mut Vec<String>,
+) -> Result<Vec<(String, Zeroizing<String>)>> {
+    let mut out = Vec::new();
+    for name in grants.names(&Consumer::Shell) {
+        let names = std::slice::from_ref(name);
+        match vault.resolve(grants, &Consumer::Shell, names).await? {
+            Ok(env) => {
+                if let Some(value) = env.get(name) {
+                    out.push((name.clone(), Zeroizing::new(value)));
+                }
+            }
+            Err(missing) => notices.push(missing.text(dot_name)),
+        }
+    }
+    Ok(out)
+}
+
+/// Opens a session with each server at once, its `${VAR}` read from its resolved values, and
+/// lists its tools; one outcome per server, in order. `None` when `cancel` fires first: what
+/// was opened is closed.
 async fn open_sessions(
-    items: &[LibraryItem],
+    items: &[(LibraryItem, Resolved)],
     workspace: &Path,
     cancel: &CancellationToken,
 ) -> Option<Vec<Opened>> {
     let mut set = JoinSet::new();
-    for (i, item) in items.iter().enumerate() {
+    for (i, (item, env)) in items.iter().enumerate() {
         let LibraryConfig::McpServer(config) = item.config.clone() else {
             continue;
         };
+        let env = env.clone();
         let name = item.name.clone();
         let options = SessionOptions {
             cwd: Some(workspace.to_path_buf()),
@@ -564,7 +627,7 @@ async fn open_sessions(
         let cancel = cancel.clone();
         set.spawn(async move {
             let open = async {
-                let session = McpSession::open(&name, &config, &process_env, options).await?;
+                let session = McpSession::open(&name, &config, &|k| env.get(k), options).await?;
                 let changes = session.list_changed();
                 match session.list_tools().await {
                     Ok(listed) => Ok((session, listed, changes)),

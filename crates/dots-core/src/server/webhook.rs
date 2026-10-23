@@ -1,21 +1,14 @@
 use axum::body::Bytes;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, State};
 use axum::http::header::AUTHORIZATION;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::ServerState;
 use crate::model::{NewRun, TriggerKind};
-use crate::util::ct_eq;
 use crate::Error;
-
-#[derive(Deserialize)]
-pub struct TokenQuery {
-    token: Option<String>,
-}
 
 pub fn bearer(headers: &HeaderMap) -> Option<String> {
     let value = headers.get(AUTHORIZATION)?.to_str().ok()?;
@@ -29,7 +22,6 @@ fn error(status: StatusCode, message: &str) -> Response {
 pub async fn trigger(
     State(s): State<ServerState>,
     Path(id): Path<String>,
-    Query(q): Query<TokenQuery>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
@@ -38,11 +30,15 @@ pub async fn trigger(
         Err(Error::NotFound(_)) => return error(StatusCode::NOT_FOUND, "unknown dot"),
         Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     };
-    let token = bearer(&headers).or(q.token);
-    if !token
-        .as_deref()
-        .is_some_and(|t| ct_eq(t, &dot.webhook_token))
-    {
+    // A bearer header only: a token in the URL ends up in proxy logs (env vault spec §11).
+    let valid = match bearer(&headers) {
+        Some(token) => match s.store.check_webhook_token(&dot.id, &token).await {
+            Ok(valid) => valid,
+            Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        },
+        None => false,
+    };
+    if !valid {
         return error(StatusCode::UNAUTHORIZED, "invalid token");
     }
     if !dot.spec.enabled {

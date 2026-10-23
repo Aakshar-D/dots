@@ -22,6 +22,7 @@ use crate::prompt::{build_prompt, context_tool_name};
 use crate::run_tools::{CloseOnDrop, OpenRequest, RunTools};
 use crate::store::Store;
 use crate::util::{ct_eq, new_token};
+use crate::vault::Vault;
 use crate::workspace::{Prepared, WorkspaceManager};
 use crate::{Error, Result};
 
@@ -76,6 +77,9 @@ pub struct Runner {
     /// The check-in tools Dots' own `dots` MCP server serves (check-ins spec section 2), set
     /// once by the runtime before any run starts (`set_checkins`).
     checkins: OnceLock<CheckIns>,
+    /// Where runs resolve their dots' variables, set once by the runtime (`set_vault`). A
+    /// runner without one resolves from an empty vault in memory.
+    vault: OnceLock<Vault>,
     /// The dots' browsers (browser spec section 2), set once by the runtime before any run
     /// starts (`set_browsers`).
     browsers: OnceLock<Arc<crate::browser::Browsers>>,
@@ -102,8 +106,15 @@ impl Runner {
             held: AtomicBool::new(false),
             pass: tokio::sync::Mutex::new(()),
             checkins: OnceLock::new(),
+            vault: OnceLock::new(),
             browsers: OnceLock::new(),
         })
+    }
+
+    /// The vault runs resolve their dots' variables from (env vault spec §8). Set once, before
+    /// any run starts.
+    pub fn set_vault(&self, vault: Vault) {
+        let _ = self.vault.set(vault);
     }
 
     fn emit_run(&self, run: &Run) {
@@ -618,7 +629,13 @@ impl Runner {
                 p
             }
         };
-        // The run's MCP sessions, skills and plugin folders (MCP/skills spec section 5).
+        // The run's MCP sessions, skills and plugin folders (MCP/skills spec section 5), each
+        // server with the variables its dot grants it (env vault spec §8).
+        let vault = self
+            .vault
+            .get()
+            .cloned()
+            .unwrap_or_else(|| Vault::in_memory(self.store.clone()));
         let (tools, mut notices) = RunTools::open(OpenRequest {
             store: &self.store,
             bus: &self.bus,
@@ -628,6 +645,9 @@ impl Runner {
             plugins_dir: (dot.spec.engine == EngineKind::Claude)
                 .then_some(self.cfg.plugins_dir.as_path()),
             cancel: &cancel,
+            vault: &vault,
+            grants: &dot.spec.variables,
+            dot_name: &dot.spec.name,
         })
         .await?;
         // The built-in browser of a dot with `browser` on (browser spec section 2.2).

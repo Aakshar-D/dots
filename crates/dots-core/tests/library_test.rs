@@ -102,17 +102,56 @@ fn a_generated_server_name_is_always_a_valid_one() {
 
 #[test]
 fn secret_looking_keys() {
+    // A word of the key, split on `_`, `-` and `.` and at a lower-case to upper-case boundary,
+    // in any case.
     for key in [
         "SF_TOKEN",
         "api_key",
+        "API_KEY",
+        "GITHUB_TOKEN",
         "CLIENT_SECRET",
+        "DB_PASSWORD",
         "Password",
         "Authorization",
         "X-Auth",
+        "x-api-key",
+        "MYSQL_PWD",
+        "LDAP_PASSWD",
+        "AWS.CREDENTIALS",
+        "GOOGLE_APPLICATION_CREDENTIAL",
+        "OPENAI_APIKEY",
+        "accessToken",
+        "clientSecret",
+        "authToken",
+        "OAuthToken",
+        "MyKey",
+        "apiKey",
+        "APIKey",
     ] {
         assert!(looks_secret(key), "{key}");
     }
-    for key in ["MODE", "PATH", "Accept", "region"] {
+    // A word inside another word, or a key that names where or what a secret is.
+    for key in [
+        "MODE",
+        "PATH",
+        "Accept",
+        "region",
+        "TOKEN_URL",
+        "AUTH_URL",
+        "OAUTH_ISSUER",
+        "KEYCLOAK_REALM",
+        "API_KEY_HEADER",
+        "AUTHOR",
+        "KEY_ID",
+        "SECRET_NAME",
+        "TOKEN_ENDPOINT",
+        "AUTH_MODE",
+        "PSModulePath",
+        "keyName",
+        "authorName",
+        "tokenUrl",
+        "clientId",
+    ] {
         assert!(!looks_secret(key), "{key}");
     }
 }

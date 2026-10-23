@@ -234,7 +234,7 @@ mod tests {
         DotOverview {
             dot: Dot {
                 id: format!("id-{name}"),
-                webhook_token: "t".into(),
+                has_webhook_token: true,
                 created_at: "t".into(),
                 updated_at: "t".into(),
                 seen_at: None,
