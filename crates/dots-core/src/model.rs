@@ -5,6 +5,7 @@ use serde_json::Value;
 use crate::library::Uses;
 use crate::policy::{Policy, Preset};
 use crate::schedule::{next_slot, Schedule, Until};
+use crate::vault::Grants;
 use crate::{Error, Result};
 
 str_enum!(EngineKind { Claude => "claude", Local => "local" });
@@ -83,6 +84,9 @@ pub struct DotSpec {
     /// The Library items the dot uses (MCP/skills spec section 2).
     #[serde(default)]
     pub uses: Uses,
+    /// The variables each of its consumers may resolve (env vault spec §7).
+    #[serde(default)]
+    pub variables: Grants,
     /// The dot has a browser: a visible Microsoft Edge with its own profile, driven through
     /// Playwright MCP behind Dots' gate (browser spec section 2.4). A spec written before it
     /// existed reads as off.
@@ -112,6 +116,7 @@ impl DotSpec {
             schedule: None,
             policy: Policy::preset(Preset::Sandboxed),
             uses: Uses::default(),
+            variables: Grants::default(),
             browser: false,
             use_global_instructions: true,
             use_user_settings: false,
@@ -169,6 +174,7 @@ impl DotSpec {
         self.policy.validate()?;
         // Whether the Library has each item is checked by the store when the dot is saved.
         self.uses.validate()?;
+        self.variables.validate()?;
         Ok(())
     }
 }
@@ -176,7 +182,9 @@ impl DotSpec {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Dot {
     pub id: String,
-    pub webhook_token: String,
+    /// Whether the dot has a webhook token. The token is shown once, when it is made; Dots
+    /// keeps only its hash (env vault spec §11).
+    pub has_webhook_token: bool,
     pub created_at: String,
     pub updated_at: String,
     /// When the person last looked at the dot's conversation, RFC 3339 UTC; `None` before the

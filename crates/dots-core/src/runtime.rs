@@ -31,6 +31,7 @@ use crate::server::{self, ServerState};
 use crate::settings::Settings;
 use crate::skill_creator::SkillDrafts;
 use crate::store::Store;
+use crate::vault::{os_secrets, MemorySecrets, SecretStore, Vault};
 use crate::workspace::{Prepared, WorkspaceManager};
 use crate::{Error, Result};
 
@@ -56,6 +57,10 @@ pub struct Config {
     pub clock: Arc<dyn Clock>,
     /// How long a skill draft may take (skill creator spec §5). A test shortens it.
     pub draft_limit: Duration,
+    /// Where secret values are kept (env vault spec §5.2). `None`: the signed-in user's
+    /// Credential Manager under this data folder's install id, which is what the app uses.
+    /// `Config::new` keeps them in memory, so a test never writes to Credential Manager.
+    pub secrets: Option<Arc<dyn SecretStore>>,
 }
 
 impl Config {
@@ -70,6 +75,7 @@ impl Config {
             local_retry_delays: DEFAULT_RETRY_DELAYS.to_vec(),
             clock: Arc::new(SystemClock),
             draft_limit: crate::skill_creator::DRAFT_LIMIT,
+            secrets: Some(Arc::new(MemorySecrets::new())),
         }
     }
 
@@ -79,6 +85,7 @@ impl Config {
         cfg.port = settings.port;
         cfg.max_concurrent_runs = settings.max_concurrent_runs;
         cfg.claude_path = settings.claude_path.as_ref().map(PathBuf::from);
+        cfg.secrets = None;
         cfg
     }
 }
@@ -90,6 +97,7 @@ pub struct Runtime {
     runner: Arc<Runner>,
     scheduler: Arc<Scheduler>,
     library: LibraryService,
+    vault: Vault,
     skill_drafts: SkillDrafts,
     clock: Arc<dyn Clock>,
     port: u16,
@@ -119,6 +127,26 @@ impl Runtime {
         std::fs::create_dir_all(&cfg.data_dir)?;
         let store = Store::open(&cfg.data_dir.join(crate::store::DB_FILE)).await?;
         let settings = store.get_settings().await?;
+        let secrets = match &cfg.secrets {
+            Some(secrets) => secrets.clone(),
+            None => os_secrets(&store.install_id().await?),
+        };
+        // Every Personal secret is in the redactor before any run or Library call (env vault
+        // spec §10).
+        let vault = Vault::open(store.clone(), secrets).await?;
+        // A setup from before the vault: its stored secret values move into Personal (env
+        // vault spec §11). A failure is logged and the app starts anyway. The old-backups
+        // cut-off is set once the move has run, even when a server failed: that server is
+        // logged by name and tried again at the next start.
+        match vault.move_stored_literals().await {
+            Ok(n) => {
+                if n > 0 {
+                    tracing::info!("moved the secret values of {n} MCP server(s) to the vault");
+                }
+                vault.mark_vault_since().await?;
+            }
+            Err(e) => tracing::error!("moving stored secret values to the vault failed: {e}"),
+        }
         let bus = new_bus();
         let hub = Arc::new(ApprovalHub::new(store.clone(), bus.clone()));
         // Check-ins and follow-ups (check-ins spec): made before the engines, which offer the
@@ -221,6 +249,7 @@ impl Runtime {
         );
         // Dots' own `dots` MCP server serves the check-in tools to Claude runs.
         runner.set_checkins(checkins.clone());
+        runner.set_vault(vault.clone());
         // The dots' browsers: Edge on each dot's own profile, Playwright MCP per run (browser
         // spec section 2).
         let browsers = crate::browser::Browsers::new(
@@ -277,7 +306,9 @@ impl Runtime {
         );
         Ok(Runtime {
             library: LibraryService::new(store.clone(), bus.clone())
-                .with_skills_dir(cfg.data_dir.join(SKILLS_DIR)),
+                .with_skills_dir(cfg.data_dir.join(SKILLS_DIR))
+                .with_vault(vault.clone()),
+            vault,
             store,
             bus,
             hub,
@@ -666,6 +697,23 @@ impl Runtime {
     /// The Library: what the `library_*` commands call (MCP/skills spec section 9).
     pub fn library(&self) -> &LibraryService {
         &self.library
+    }
+
+    /// The personal variables of the Env tab (env vault spec §5).
+    pub fn vault(&self) -> &Vault {
+        &self.vault
+    }
+
+    /// The update backups made before this data folder first ran with the vault, until the
+    /// offer is answered (env vault spec §11).
+    pub async fn old_backups(&self) -> Result<Vec<String>> {
+        self.vault.old_backups(&self.data_dir).await
+    }
+
+    /// Deletes the old backups when `delete`, and answers the offer. Returns the file names of
+    /// the backups that could not be deleted; then the offer stays.
+    pub async fn answer_old_backups(&self, delete: bool) -> Result<Vec<String>> {
+        self.vault.answer_old_backups(&self.data_dir, delete).await
     }
 
     /// The skill creator's drafts: what `skill_draft` and `skill_draft_cancel` call (skill

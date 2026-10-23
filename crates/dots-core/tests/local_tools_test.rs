@@ -758,7 +758,7 @@ async fn shell_timeout_kills_the_whole_process_group() {
 async fn run_filtered(ws: &Path, policy: &Policy, name: &str, args: Value) -> ToolOutput {
     let call = tools::prepare(name, &args, ws).unwrap_or_else(|e| panic!("prepare: {e}"));
     let filter = tools::PathFilter::from_policy(policy, call.alias, ws);
-    tools::run_with(&call, ws, &CancellationToken::new(), &filter).await
+    tools::run_with(&call, ws, &CancellationToken::new(), &filter, &[]).await
 }
 
 #[tokio::test]
@@ -1260,4 +1260,33 @@ async fn shell_runs_scripts_longer_than_the_command_line_limit() {
     let out = run(ws.path(), "shell", json!({ "command": script })).await;
     assert!(!out.is_error, "{out:?}");
     assert_eq!(out.output.trim(), "done: héllo ✓");
+}
+
+/// The shell gets the base of Dots' environment and what the dot grants it (env vault spec §8).
+#[tokio::test]
+async fn the_shell_gets_its_grants_and_not_the_rest_of_dots_environment() {
+    std::env::set_var("DOTS_TEST_SHELL_LEAK", "from-dots");
+    let dir = tempfile::tempdir().unwrap();
+    let script = if cfg!(windows) {
+        "Write-Output \"granted=$env:DOTS_TEST_SHELL_GRANTED leak=$env:DOTS_TEST_SHELL_LEAK\""
+    } else {
+        "echo \"granted=$DOTS_TEST_SHELL_GRANTED leak=$DOTS_TEST_SHELL_LEAK\""
+    };
+    let args = json!({ "command": script });
+    let call = tools::prepare("shell", &args, dir.path()).unwrap();
+    let env = [(
+        "DOTS_TEST_SHELL_GRANTED".to_string(),
+        zeroize::Zeroizing::new("yes".to_string()),
+    )];
+    let out = tools::run_with(
+        &call,
+        dir.path(),
+        &CancellationToken::new(),
+        &Default::default(),
+        &env,
+    )
+    .await;
+    assert!(!out.is_error, "{out:?}");
+    assert!(out.output.contains("granted=yes leak="), "{out:?}");
+    assert!(!out.output.contains("from-dots"), "{out:?}");
 }

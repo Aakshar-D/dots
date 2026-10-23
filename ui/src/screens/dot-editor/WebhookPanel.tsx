@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 import { Copy } from "lucide-react";
 import { toast } from "sonner";
 
@@ -27,9 +28,11 @@ function CopyButton({ what, text }: { what: string; text: string }) {
   );
 }
 
-/// How another program starts this dot: its trigger URL and bearer token.
+/// How another program starts this dot: its trigger URL and bearer token. Dots keeps only the
+/// token's hash, so a token is shown once, when it is made.
 export function WebhookPanel({ dot }: { dot: Dot }) {
   const qc = useQueryClient();
+  const [shown, setShown] = useState<string | null>(null);
   const url = useQuery({
     queryKey: keys.webhookUrl(dot.id),
     queryFn: () => commands.webhookUrl(dot.id),
@@ -37,9 +40,12 @@ export function WebhookPanel({ dot }: { dot: Dot }) {
   const regenerate = useMutation({
     mutationFn: () => commands.regenerateWebhookToken(dot.id),
     onSuccess: (token) => {
+      setShown(token);
       invalidateDots(qc);
-      qc.setQueryData(keys.dot(dot.id), { ...dot, webhook_token: token });
-      toast.success("New token. The old one no longer works.");
+      qc.setQueryData(keys.dot(dot.id), { ...dot, has_webhook_token: true });
+      toast.success(
+        dot.has_webhook_token ? "New token. The old one no longer works." : "Token made.",
+      );
     },
     onError: notifyError,
   });
@@ -60,10 +66,26 @@ export function WebhookPanel({ dot }: { dot: Dot }) {
           {url.data && <CopyButton what="webhook URL" text={url.data} />}
         </div>
       </Field>
-      <Field label="Token" htmlFor="webhook-token">
-        <div className="flex gap-2">
-          <Input id="webhook-token" readOnly className="font-mono" value={dot.webhook_token} />
-          <CopyButton what="token" text={dot.webhook_token} />
+      {shown !== null ? (
+        <Field
+          label="Token"
+          htmlFor="webhook-token"
+          hint="Copy it now: you won't see this again."
+        >
+          <div className="flex gap-2">
+            <Input id="webhook-token" readOnly className="font-mono" value={shown} />
+            <CopyButton what="token" text={shown} />
+          </div>
+        </Field>
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          {dot.has_webhook_token
+            ? "This dot has a token. It was shown once, when it was made."
+            : "This dot has no token yet, so its webhook refuses every request."}
+        </p>
+      )}
+      <div>
+        {dot.has_webhook_token ? (
           <ConfirmButton
             title="Make a new token?"
             description="Anything that still sends the old token will be refused."
@@ -73,8 +95,18 @@ export function WebhookPanel({ dot }: { dot: Dot }) {
           >
             Regenerate
           </ConfirmButton>
-        </div>
-      </Field>
+        ) : (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => regenerate.mutate()}
+            disabled={regenerate.isPending}
+          >
+            Make a token
+          </Button>
+        )}
+      </div>
     </div>
   );
 }

@@ -13,6 +13,7 @@ use crate::model::{ApplyState, Approval, ApprovalStatus, Dot, EngineKind};
 use crate::policy::{Action, McpTrust, Rule};
 use crate::store::Store;
 use crate::util::json_hash;
+use crate::vault::redact::global;
 use crate::{Error, Result};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -41,8 +42,11 @@ pub fn parked_message(id: &str) -> String {
 
 /// Key for one-shot grants. Only the shell tools (`Bash`, `PowerShell`) are keyed by the command
 /// alone, because the model rewrites free-text fields such as `description` when it retries.
-/// Every other tool is keyed by its full input.
+/// Every other tool is keyed by its full input. The input is keyed as the store keeps it,
+/// scrubbed of secret values: a parked call's stored input and the raw input of its retry
+/// give the same key.
 pub fn grant_key(tool: &str, input: &Value) -> String {
+    let input = &global().scrub_json(input);
     let command = matches!(tool, "Bash" | "PowerShell")
         .then(|| input.get("command").and_then(Value::as_str))
         .flatten();

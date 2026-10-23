@@ -427,7 +427,14 @@ impl Session {
         }
         let filter =
             PathFilter::from_policy(&self.ctx.dot.spec.policy, call.alias, &self.ctx.workspace);
-        tools::run_with(call, &self.ctx.workspace, &self.ctx.cancel, &filter).await
+        tools::run_with(
+            call,
+            &self.ctx.workspace,
+            &self.ctx.cancel,
+            &filter,
+            self.ctx.tools.shell_env(),
+        )
+        .await
     }
 
     /// Shows, checks and runs a model's call of a built-in tool. `None` when the run must stop.

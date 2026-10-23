@@ -7,8 +7,10 @@ use serde_json::Value;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
+use zeroize::Zeroizing;
 
 use super::{cap_tail, str_arg, ToolOutput, MAX_OUTPUT};
+use crate::vault::redact::global;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
 const MAX_TIMEOUT_SECS: u64 = 600;
@@ -100,20 +102,30 @@ async fn stop(job: &crate::proc::Job, pid: Option<u32>) {
 
 type Tail = Arc<Mutex<Vec<u8>>>;
 
-/// Appends what `r` yields to `tail`, keeping the last `2 * MAX_OUTPUT` bytes. The buffer is
+/// Appends what `r` yields to `tail`, keeping the last `2 * MAX_OUTPUT` bytes and room for the
+/// longest secret: `take` scrubs the head of a clipped buffer away. The buffer is
 /// shared so that what was read survives when the reader is abandoned before EOF.
 async fn pump(mut r: impl AsyncRead + Unpin, tail: Tail) {
     let mut chunk = [0u8; 4096];
     while let Ok(n @ 1..) = r.read(&mut chunk).await {
         let mut buf = tail.lock().unwrap();
         buf.extend_from_slice(&chunk[..n]);
-        let excess = buf.len().saturating_sub(2 * MAX_OUTPUT);
+        let keep = 2 * MAX_OUTPUT + global().longest();
+        let excess = buf.len().saturating_sub(keep);
         buf.drain(..excess);
     }
 }
 
+/// The text in `tail`, scrubbed of secret values. A buffer longer than `2 * MAX_OUTPUT` may
+/// have lost its head, so the first bytes, where a secret cut in two leaves its end, go too.
 fn take(tail: &Tail) -> String {
-    String::from_utf8_lossy(&std::mem::take(&mut *tail.lock().unwrap())).into_owned()
+    let buf = std::mem::take(&mut *tail.lock().unwrap());
+    let text = String::from_utf8_lossy(&buf);
+    if buf.len() > 2 * MAX_OUTPUT {
+        global().scrub_clipped_head(&text)
+    } else {
+        global().scrub(&text).into_owned()
+    }
 }
 
 /// Waits up to `limit` for the reader tasks to finish; says whether they all did. A task is
@@ -146,7 +158,14 @@ enum End {
     Cancelled,
 }
 
-pub(super) async fn shell(root: &Path, input: &Value, cancel: &CancellationToken) -> ToolOutput {
+/// Runs the call's script in `root`, with the base of Dots' environment and `env`, the values
+/// the dot grants its shell (env vault spec §8).
+pub(super) async fn shell(
+    root: &Path,
+    input: &Value,
+    cancel: &CancellationToken,
+    env: &[(String, Zeroizing<String>)],
+) -> ToolOutput {
     let script = str_arg(input, "command");
     let secs = input
         .get("timeout")
@@ -154,6 +173,8 @@ pub(super) async fn shell(root: &Path, input: &Value, cancel: &CancellationToken
         .unwrap_or(DEFAULT_TIMEOUT_SECS)
         .clamp(1, MAX_TIMEOUT_SECS);
     let (mut cmd, stdin) = command_for(script);
+    crate::vault::child_env::start_clean(&mut cmd, crate::vault::child_env::Child::Other);
+    cmd.envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
     cmd.current_dir(root)
         .stdin(if stdin.is_some() {
             Stdio::piped()
@@ -235,5 +256,25 @@ pub(super) async fn shell(root: &Path, input: &Value, cancel: &CancellationToken
             ToolOutput::err(format!("timed out after {secs}s and was stopped\n{text}"))
         }
         End::Cancelled => ToolOutput::err("cancelled"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_clipped_tail_holds_no_piece_of_a_secret_cut_in_two() {
+        let secret = "ghp_shell_tail_value_0123456789";
+        global().add("DOTS_SHELL_TAIL", secret);
+        // The buffer keeps `keep` bytes, and its first 12 bytes are the end of the secret.
+        let keep = 2 * MAX_OUTPUT + global().longest();
+        let data = format!("{}{secret}{}", "h".repeat(1000), "t".repeat(keep - 12));
+        let tail: Tail = Arc::default();
+        pump(data.as_bytes(), tail.clone()).await;
+        let text = take(&tail);
+        let piece = &secret[secret.len() - 12..];
+        assert!(!text.contains(&piece[..8]), "{}", &text[..60]);
+        assert!(text.ends_with('t'));
     }
 }

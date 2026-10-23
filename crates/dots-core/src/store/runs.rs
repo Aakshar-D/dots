@@ -5,6 +5,7 @@ use sqlx::Row;
 use super::{opt_json, Store};
 use crate::model::{NewRun, Run, RunEventRecord, RunStatus, TriggerKind};
 use crate::util::{new_id, now};
+use crate::vault::redact::global;
 use crate::{Error, Result};
 
 const RUN_COLUMNS: &str = "id, dot_id, root_run_id, parent_run_id, trigger_kind, payload, status, \
@@ -59,7 +60,11 @@ pub(super) async fn insert_run(conn: &mut SqliteConnection, new: &NewRun) -> Res
     .bind(&root)
     .bind(&new.parent_run_id)
     .bind(new.trigger.as_str())
-    .bind(new.payload.as_ref().map(|v| v.to_string()))
+    .bind(
+        new.payload
+            .as_ref()
+            .map(|v| global().scrub_json(v).to_string()),
+    )
     .bind(RunStatus::Queued.as_str())
     .bind(&new.session_id)
     .bind(&new.workspace_path)
@@ -350,8 +355,8 @@ impl Store {
              WHERE id = ?",
         )
         .bind(status.as_str())
-        .bind(summary)
-        .bind(error)
+        .bind(summary.map(|s| global().scrub(s).into_owned()))
+        .bind(error.map(|e| global().scrub(e).into_owned()))
         .bind(now())
         .bind(id)
         .execute(&self.pool)
@@ -472,6 +477,8 @@ impl Store {
         data: &Value,
     ) -> Result<RunEventRecord> {
         let ts = now();
+        // What the run event shows, the live view included: no secret value (env vault §10).
+        let data = &global().scrub_json(data);
         let seq: i64 = sqlx::query_scalar(
             "INSERT INTO run_events (run_id, seq, ts, kind, data) \
              SELECT ?, COALESCE(MAX(seq), 0) + 1, ?, ?, ? FROM run_events WHERE run_id = ? \

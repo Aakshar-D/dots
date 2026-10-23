@@ -9,6 +9,7 @@ import type {
   CmdErrorKind,
   DotSpec,
   DraftRequest,
+  EntryKind,
   LibraryConfig,
   McpServerConfig,
   Preset,
@@ -176,6 +177,26 @@ export const commands = {
   installedClaudePlugins: () => call(T.InstalledPlugin.array(), "installed_claude_plugins"),
   environmentVariables: (names: string[]) =>
     call(T.EnvVariable.array(), "environment_variables", { names }),
+  /// The personal variables; a secret's value is never in the answer.
+  envList: () => call(T.EnvEntry.array(), "env_list"),
+  /// Rejects with kind `conflict` when the name is taken in any case.
+  envAdd: (name: string, kind: EntryKind, value: string) =>
+    call(T.EnvEntry, "env_add", { name, kind, value }),
+  /// Edits a plain value, or replaces a secret's.
+  envSet: (name: string, value: string) => call(T.EnvEntry, "env_set", { name, value }),
+  envRemove: (name: string) => call(nothing, "env_remove", { name }),
+  /// Names Library servers read that Windows sets and Personal lacks; never a value. Empty once
+  /// the offer is answered.
+  envImportCandidates: () => call(z.string().array(), "env_import_candidates"),
+  /// Copies them into Personal as secrets and answers the offer; answers the names imported.
+  envImport: (names: string[]) => call(z.string().array(), "env_import", { names }),
+  envImportDismiss: () => call(nothing, "env_import_dismiss"),
+  /// Update backups made before the vault, by file name; empty once the offer is answered.
+  envOldBackups: () => call(z.string().array(), "env_old_backups"),
+  /// Deletes them when `deleteThem`, and answers the offer; answers the file names that could
+  /// not be deleted, and then the offer stays.
+  envOldBackupsAnswer: (deleteThem: boolean) =>
+    call(z.string().array(), "env_old_backups_answer", { delete: deleteThem }),
 
   /// Every message that waits (open questions, unread notes) and the newest others, newest
   /// first; of one dot with `dotId`.

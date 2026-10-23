@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use serde_json::{json, Map, Value};
 use tokio_util::sync::CancellationToken;
+use zeroize::Zeroizing;
 
 use crate::policy::{Action, Policy};
 
@@ -312,17 +313,20 @@ fn hidden_note(n: usize) -> String {
     }
 }
 
-/// Runs an allowed call with nothing hidden. Every failure becomes an error result for the model.
+/// Runs an allowed call with nothing hidden and nothing granted to the shell. Every failure
+/// becomes an error result for the model.
 pub async fn run(call: &PreparedCall, workspace: &Path, cancel: &CancellationToken) -> ToolOutput {
-    run_with(call, workspace, cancel, &PathFilter::default()).await
+    run_with(call, workspace, cancel, &PathFilter::default(), &[]).await
 }
 
-/// Runs an allowed call; the walking tools leave out what `filter` hides.
+/// Runs an allowed call; the walking tools leave out what `filter` hides, and the shell gets
+/// `shell_env`, the values the dot grants it.
 pub async fn run_with(
     call: &PreparedCall,
     workspace: &Path,
     cancel: &CancellationToken,
     filter: &PathFilter,
+    shell_env: &[(String, Zeroizing<String>)],
 ) -> ToolOutput {
     let root = match std::fs::canonicalize(workspace) {
         Ok(r) => r,
@@ -336,7 +340,7 @@ pub async fn run_with(
         "list_dir" => fs::list_dir(&root, input, filter).await,
         "glob" => search::glob(&root, input, filter).await,
         "grep" => search::grep(&root, input, filter).await,
-        "shell" => shell::shell(&root, input, cancel).await,
+        "shell" => shell::shell(&root, input, cancel, shell_env).await,
         other => ToolOutput::err(format!("unknown tool '{other}'")),
     }
 }
@@ -416,8 +420,10 @@ pub fn display(root: &Path, path: &Path) -> String {
     }
 }
 
-/// Keeps the first `MAX_OUTPUT` bytes.
-pub fn cap_head(mut s: String) -> String {
+/// Keeps the first `MAX_OUTPUT` bytes. Secrets are scrubbed first: a cut inside one would leave
+/// a piece that no scrub matches.
+pub fn cap_head(s: String) -> String {
+    let mut s = crate::vault::redact::global().scrub(&s).into_owned();
     if s.len() <= MAX_OUTPUT {
         return s;
     }
@@ -431,8 +437,10 @@ pub fn cap_head(mut s: String) -> String {
     s
 }
 
-/// Keeps the last `MAX_OUTPUT` bytes (the end of command output usually matters most).
+/// Keeps the last `MAX_OUTPUT` bytes (the end of command output usually matters most). Secrets
+/// are scrubbed first, as in `cap_head`.
 pub fn cap_tail(s: String) -> String {
+    let s = crate::vault::redact::global().scrub(&s).into_owned();
     if s.len() <= MAX_OUTPUT {
         return s;
     }

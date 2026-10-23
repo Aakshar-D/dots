@@ -11,6 +11,7 @@ use crate::library::{
 };
 use crate::model::Dot;
 use crate::util::{new_id, now};
+use crate::vault::redact::global;
 use crate::{Error, Result};
 
 const ITEM_COLUMNS: &str = "id, kind, name, config, owner_id, created_at, updated_at";
@@ -219,7 +220,8 @@ impl Store {
             return Err(Error::NotFound(format!("library item {id}")));
         }
         if config.kind() == LibraryKind::McpServer {
-            if moved_origin(&old.config, config, &|k| std::env::var(k).ok()) {
+            // Without values: a URL whose text changed counts as moved (`origin_changed`).
+            if moved_origin(&old.config, config, &|_| None) {
                 sqlx::query(
                     "UPDATE mcp_catalogs SET accepted_fingerprint = NULL, accepted_tools = NULL \
                      WHERE server_id = ?",
@@ -401,7 +403,7 @@ impl Store {
              RETURNING {CATALOG_COLUMNS}"
         ))
         .bind(CatalogStatus::Unreachable.as_str())
-        .bind(error)
+        .bind(global().scrub(error).as_ref())
         .bind(now())
         .bind(server_id)
         .fetch_optional(&self.pool)
