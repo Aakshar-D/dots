@@ -1832,6 +1832,10 @@
     {
       "state": "installing",
       "version": "0.2.0"
+    },
+    {
+      "error": "The backup failed: disk full",
+      "state": "failed"
     }
   ],
   "WorktreeDiff": {

@@ -15,7 +15,7 @@ Once, before the first release:
    `bun run tauri signer generate -w "$env:USERPROFILE\.tauri\dots-updates.key"`.
    In Git Bash: `mkdir -p "$HOME/.tauri"` and `bun run tauri signer generate -w "$HOME/.tauri/dots-updates.key"`.
    It writes `dots-updates.key` (private) and `dots-updates.key.pub` (public).
-2. Put the text of `dots-updates.key.pub` in `plugins.updater.pubkey`, through a pull request.
+2. Put the text of `dots-updates.key.pub` in `plugins.updater.pubkey`, through a pull request. Until then `plugins.updater.pubkey` holds the prototype's throwaway key, and the release check (below) refuses every tag, prereleases too.
 3. In the repo's GitHub settings, under Secrets and variables, then Actions, add two repository secrets: `TAURI_SIGNING_PRIVATE_KEY` (the text of `dots-updates.key`) and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (its password).
 
 ## A release

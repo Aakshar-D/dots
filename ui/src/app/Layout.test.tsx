@@ -447,6 +447,18 @@ describe("the update strip", () => {
     expect(screen.getByRole("button", { name: "Stop them and restart" })).toBeVisible();
   });
 
+  it("says why the last update was not installed, even with no update ready, until dismissed", async () => {
+    backend.on("update_note", () => ({ state: "failed", error: "The backup failed: disk full" }));
+    backend.on("update_later", () => ({ state: "none" }));
+    const { user } = renderApp("/dots");
+    expect(await screen.findByText(/The update was not installed/)).toBeVisible();
+    expect(screen.getByText(/The backup failed: disk full/)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Restart to update" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Dismiss" }));
+    await waitFor(() => expect(screen.queryByText(/was not installed/)).toBeNull());
+    expect(backend.callsTo("update_later")).toHaveLength(1);
+  });
+
   it("offers Later while a dot is working", async () => {
     backend.on("update_note", () => ready(["triage"]));
     backend.on("update_later", () => ({ state: "none" }));
