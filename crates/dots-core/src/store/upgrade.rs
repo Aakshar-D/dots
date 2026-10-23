@@ -434,20 +434,20 @@ fn with_checkins(stored: &str) -> Option<String> {
     serde_json::to_string(&policy).ok()
 }
 
-/// Grants each dot listed in `upgrade_0009` the variables of the servers it uses, as ticking
+/// Grants each dot listed in `upgrade_0011` the variables of the servers it uses, as ticking
 /// them would (env vault spec §11 step 2), hashes its webhook token, then drops the table. After
 /// 0006, so the servers it made are there. A token that was hashed leaves its old value in freed
 /// page space, so the vacuum marker is set and the next start vacuums.
-pub(super) async fn finish_0009(store: &super::Store) -> Result<()> {
+pub(super) async fn finish_0011(store: &super::Store) -> Result<()> {
     let waiting: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'upgrade_0009'",
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'upgrade_0011'",
     )
     .fetch_one(&store.pool)
     .await?;
     if waiting == 0 {
         return Ok(());
     }
-    let ids: Vec<String> = sqlx::query_scalar("SELECT dot_id FROM upgrade_0009")
+    let ids: Vec<String> = sqlx::query_scalar("SELECT dot_id FROM upgrade_0011")
         .fetch_all(&store.pool)
         .await?;
     let mut tx = store.pool.begin().await?;
@@ -482,7 +482,7 @@ pub(super) async fn finish_0009(store: &super::Store) -> Result<()> {
             .execute(&mut *tx)
             .await?;
     }
-    sqlx::query("DROP TABLE upgrade_0009")
+    sqlx::query("DROP TABLE upgrade_0011")
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;

@@ -376,10 +376,10 @@ async fn a_run_starts_a_server_with_its_granted_values_and_leaves_out_one_withou
     tools.close().await;
 }
 
-/// Migration 0009 on a database Dots left at 0008: each dot is granted the variables of the
-/// servers it uses.
+/// Migration 0011 on a database Dots left before the vault: each dot is granted the variables
+/// of the servers it uses.
 #[tokio::test]
-async fn migration_0009_grants_each_dot_the_variables_of_its_servers() {
+async fn migration_0011_grants_each_dot_the_variables_of_its_servers() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("dots.db");
     let opts = SqliteConnectOptions::new()
@@ -390,7 +390,7 @@ async fn migration_0009_grants_each_dot_the_variables_of_its_servers() {
     before.migrations = before
         .migrations
         .iter()
-        .filter(|m| m.version < 9)
+        .filter(|m| m.version < 11)
         .cloned()
         .collect::<Vec<_>>()
         .into();
@@ -484,8 +484,9 @@ async fn resolved_values_never_print() {
     assert!(!format!("{missing:?}").contains("s3cret-made-up-value"));
 }
 
-/// A database left at 0008 with one dot, `D1`, whose webhook token column holds `token`.
-async fn db_at_0008_with_token(path: &std::path::Path, token: &str) {
+/// A database left before the vault (0011) with one dot, `D1`, whose webhook token column
+/// holds `token`.
+async fn db_before_0011_with_token(path: &std::path::Path, token: &str) {
     let opts = SqliteConnectOptions::new()
         .filename(path)
         .create_if_missing(true);
@@ -494,7 +495,7 @@ async fn db_at_0008_with_token(path: &std::path::Path, token: &str) {
     before.migrations = before
         .migrations
         .iter()
-        .filter(|m| m.version < 9)
+        .filter(|m| m.version < 11)
         .cloned()
         .collect::<Vec<_>>()
         .into();
@@ -527,7 +528,7 @@ async fn a_start_with_old_webhook_tokens_vacuums_their_clear_values_away() {
     let path = dir.path().join("dots.db");
     // Made up, and distinctive enough to find in raw bytes.
     let token = "wHkTokenForTheVacuumTest0123456789ABCdefGH";
-    db_at_0008_with_token(&path, token).await;
+    db_before_0011_with_token(&path, token).await;
 
     assert!(
         std::fs::read(&path)
@@ -580,7 +581,7 @@ async fn a_start_with_old_webhook_tokens_vacuums_their_clear_values_away() {
 async fn a_token_that_is_already_a_hash_is_not_hashed_again() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("dots.db");
-    db_at_0008_with_token(&path, &dots_core::util::token_hash("kept")).await;
+    db_before_0011_with_token(&path, &dots_core::util::token_hash("kept")).await;
     let store = Store::open(&path).await.unwrap();
     assert!(store.check_webhook_token("D1", "kept").await.unwrap());
     // Nothing was hashed, so no vacuum is asked for.

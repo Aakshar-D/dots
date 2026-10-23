@@ -44,7 +44,7 @@ At the last task, clippy runs without warnings, and `cargo fmt --check` and `tsc
   - The only new Cargo dependency is `zeroize = "1"`, already in `Cargo.lock` through other crates.
   - `windows-sys` gains the features `Win32_Foundation`, `Win32_Security_Credentials` (Task 1) and `Win32_Security_Authorization` (Task 7).
   - No npm dependency, no new Tauri capability or plugin.
-  - One migration: `0009_vault.sql`, made in Task 2 and extended in Tasks 3 and 7. Dots has no release with it yet.
+  - One migration: `0011_vault.sql`, made in Task 2 and extended in Tasks 3 and 7. Dots has no release with it yet.
 - The subscription rule: Dots only spawns the official `claude` CLI and never reads, copies or sends its credentials or calls an Anthropic API. The CLI's own variables (`CLAUDE_CONFIG_DIR`, `ANTHROPIC_*`, `CLAUDE_CODE_*`) are passed through unread (Task 4). No agent runs the real `claude` CLI; tests and smokes use `fake-claude`.
 - **No secret in clear on disk or in a test's output.** Tests use made-up values. A test that touches Credential Manager uses an install id `test-<ULID>` and deletes what it wrote. `Config::new` keeps secrets in memory, and only the app's `Config::from_settings` uses Credential Manager.
 - Values the spec fixes:
@@ -97,7 +97,7 @@ The spec leaves these to the builder, and the plan settles them:
 - **The module layout.** `vault/{secrets,entries,service,grants,resolve,child_env,redact,literals,upgrade}.rs`.
 - **The upgrade markers.** The `settings` rows `install_id`, `vault_since`, `vault_import_answered` and `vault_backups_answered`, kept outside `Settings`.
 - **Where scrubbing happens.** In the store's writers, so every caller is covered: run events, payloads, summaries, errors, approvals, notes and questions.
-- **The grant sync.** It lives in `Store::create_dot` and `update_dot` (`synced_grants`), and migration 0009 backfills existing dots through `finish_0009`. The UI shows the same rule ("granted when you save") in the dot's Variables section.
+- **The grant sync.** It lives in `Store::create_dot` and `update_dot` (`synced_grants`), and migration 0011 backfills existing dots through `finish_0011`. The UI shows the same rule ("granted when you save") in the dot's Variables section.
 
 ## Review Focus
 
@@ -131,7 +131,7 @@ These are the inputs and conditions most likely to bite a person that the spec i
   - `child_env.rs` (Task 4)
   - `redact.rs` (Task 5)
   - `literals.rs`, `upgrade.rs` (Task 6)
-- `crates/dots-core/migrations/0009_vault.sql` (new in Task 2; Tasks 3 and 7).
+- `crates/dots-core/migrations/0011_vault.sql` (new in Task 2; Tasks 3 and 7).
 - `crates/dots-core/src/store/`:
   - `env.rs` (new, Task 2)
   - `settings.rs` (Tasks 1 and 6)
@@ -635,7 +635,7 @@ Personal entries (spec §5.1 and §5.2): plain values in the new table `env_entr
 
 **Files:**
 
-- Create: `crates/dots-core/migrations/0009_vault.sql`, `crates/dots-core/src/vault/entries.rs`, `crates/dots-core/src/vault/service.rs`, `crates/dots-core/src/store/env.rs`
+- Create: `crates/dots-core/migrations/0011_vault.sql`, `crates/dots-core/src/vault/entries.rs`, `crates/dots-core/src/vault/service.rs`, `crates/dots-core/src/store/env.rs`
 - Modify: `crates/dots-core/src/vault/mod.rs`, `crates/dots-core/src/vault/secrets.rs`, `crates/dots-core/src/store/mod.rs`, `crates/dots-core/src/runtime.rs`, `apps/dots-app/src/{commands,lib,contract}.rs`, `ui/src/api/{types,commands}.ts`
 - Regenerate: `ui/src/api/__fixtures__/contract.json`
 - Tests: `crates/dots-core/tests/vault_entries_test.rs` (new), `ui/src/api/{contract,commands}.test.ts`
@@ -1032,7 +1032,7 @@ use serde_json::{json, Value};
     messages_list,
 ```
 
-**Create `crates/dots-core/migrations/0009_vault.sql`:**
+**Create `crates/dots-core/migrations/0011_vault.sql`:**
 
 ```sql
 -- The env vault (spec 2026-10-21-env-vault-design.md, section 5).
@@ -1664,19 +1664,19 @@ Run: `cargo clippy --workspace --all-targets`, `cargo fmt --check`, `cargo test 
 Expected: no warnings; every test passes.
 
 ```bash
-git add crates/dots-core/migrations/0009_vault.sql crates/dots-core/src/vault crates/dots-core/src/store/env.rs crates/dots-core/src/store/mod.rs crates/dots-core/src/runtime.rs crates/dots-core/tests/vault_entries_test.rs apps/dots-app/src/commands.rs apps/dots-app/src/lib.rs apps/dots-app/src/contract.rs ui/src/api/types.ts ui/src/api/commands.ts ui/src/api/contract.test.ts ui/src/api/commands.test.ts ui/src/api/__fixtures__/contract.json
+git add crates/dots-core/migrations/0011_vault.sql crates/dots-core/src/vault crates/dots-core/src/store/env.rs crates/dots-core/src/store/mod.rs crates/dots-core/src/runtime.rs crates/dots-core/tests/vault_entries_test.rs apps/dots-app/src/commands.rs apps/dots-app/src/lib.rs apps/dots-app/src/contract.rs ui/src/api/types.ts ui/src/api/commands.ts ui/src/api/contract.test.ts ui/src/api/commands.test.ts ui/src/api/__fixtures__/contract.json
 git commit -m "feat: personal variables in the vault, with the Env commands"
 ```
 
 ### Task 3: Grants, and `${VAR}` resolved from Personal
 
-A dot's grants (spec §7) and the resolver (spec §8). A run's MCP servers and its shell resolve only what is granted to them, and only from Personal; what does not resolve leaves the server out, with a run event naming the variable. The Library's probe, check, missing variables and `environment_variables` read Personal, and so does the native confirmation's origin. Migration 0009 grants every existing dot the variables of the servers it uses.
+A dot's grants (spec §7) and the resolver (spec §8). A run's MCP servers and its shell resolve only what is granted to them, and only from Personal; what does not resolve leaves the server out, with a run event naming the variable. The Library's probe, check, missing variables and `environment_variables` read Personal, and so does the native confirmation's origin. Migration 0011 grants every existing dot the variables of the servers it uses.
 
 **Files:**
 
 - Create: `crates/dots-core/src/vault/grants.rs`, `crates/dots-core/src/vault/resolve.rs`
 - Modify:
-  - `crates/dots-core/migrations/0009_vault.sql`
+  - `crates/dots-core/migrations/0011_vault.sql`
   - `crates/dots-core/src/{model,library_service,run_tools,runner,runtime}.rs`
   - `crates/dots-core/src/store/{dots,library,mod,upgrade}.rs`
   - `crates/dots-core/src/vault/{mod,service}.rs`
@@ -2442,10 +2442,10 @@ async fn a_run_starts_a_server_with_its_granted_values_and_leaves_out_one_withou
     tools.close().await;
 }
 
-/// Migration 0009 on a database Dots left at 0008: each dot is granted the variables of the
-/// servers it uses.
+/// Migration 0011 on a database Dots left before the vault: each dot is granted the variables
+/// of the servers it uses.
 #[tokio::test]
-async fn migration_0009_grants_each_dot_the_variables_of_its_servers() {
+async fn migration_0011_grants_each_dot_the_variables_of_its_servers() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("dots.db");
     let opts = SqliteConnectOptions::new()
@@ -2456,7 +2456,7 @@ async fn migration_0009_grants_each_dot_the_variables_of_its_servers() {
     before.migrations = before
         .migrations
         .iter()
-        .filter(|m| m.version < 9)
+        .filter(|m| m.version < 11)
         .cloned()
         .collect::<Vec<_>>()
         .into();
@@ -2835,7 +2835,7 @@ async fn confirm_library<F, Fut>(
         assert!(none.is_empty());
 ```
 
-**In `crates/dots-core/migrations/0009_vault.sql`, replace:**
+**In `crates/dots-core/migrations/0011_vault.sql`, replace:**
 
 ```sql
 );
@@ -2850,12 +2850,12 @@ async fn confirm_library<F, Fut>(
 ALTER TABLE dots ADD COLUMN variables TEXT NOT NULL DEFAULT '{}';
 
 -- Each dot is granted the variables of the servers it uses when the store opens
--- (`store/upgrade.rs`, `finish_0009`), as ticking them would. The rows wait here, and the table
+-- (`store/upgrade.rs`, `finish_0011`), as ticking them would. The rows wait here, and the table
 -- is dropped once they are done.
-CREATE TABLE upgrade_0009 (
+CREATE TABLE upgrade_0011 (
     dot_id TEXT PRIMARY KEY REFERENCES dots(id) ON DELETE CASCADE
 );
-INSERT INTO upgrade_0009 (dot_id) SELECT id FROM dots;
+INSERT INTO upgrade_0011 (dot_id) SELECT id FROM dots;
 ```
 
 **In `crates/dots-core/src/library_service.rs`, replace:**
@@ -3798,7 +3798,7 @@ impl Store {
 
 ```rust
     /// Opens (creating if needed) the database file and applies migrations, with the parts of
-    /// migrations 0006 to 0009 that need code (`upgrade.rs`).
+    /// migrations 0006 to 0008 and 0011 that need code (`upgrade.rs`).
     pub async fn open(path: &Path) -> Result<Store> {
 ```
 
@@ -3815,7 +3815,7 @@ impl Store {
 ```rust
         upgrade::finish_0008(&pool).await?;
         let store = Store { pool };
-        upgrade::finish_0009(&store).await?;
+        upgrade::finish_0011(&store).await?;
         Ok(store)
     }
 ```
@@ -3841,19 +3841,19 @@ impl Store {
     serde_json::to_string(&policy).ok()
 }
 
-/// Grants each dot listed in `upgrade_0009` the variables of the servers it uses, as ticking
+/// Grants each dot listed in `upgrade_0011` the variables of the servers it uses, as ticking
 /// them would (env vault spec §11 step 2), then drops the table. After 0006, so the servers it
 /// made are there.
-pub(super) async fn finish_0009(store: &super::Store) -> Result<()> {
+pub(super) async fn finish_0011(store: &super::Store) -> Result<()> {
     let waiting: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'upgrade_0009'",
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'upgrade_0011'",
     )
     .fetch_one(&store.pool)
     .await?;
     if waiting == 0 {
         return Ok(());
     }
-    let ids: Vec<String> = sqlx::query_scalar("SELECT dot_id FROM upgrade_0009")
+    let ids: Vec<String> = sqlx::query_scalar("SELECT dot_id FROM upgrade_0011")
         .fetch_all(&store.pool)
         .await?;
     let mut tx = store.pool.begin().await?;
@@ -3866,7 +3866,7 @@ pub(super) async fn finish_0009(store: &super::Store) -> Result<()> {
             .execute(&mut *tx)
             .await?;
     }
-    sqlx::query("DROP TABLE upgrade_0009")
+    sqlx::query("DROP TABLE upgrade_0011")
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
@@ -4239,7 +4239,7 @@ Run: `cargo clippy --workspace --all-targets`, `cargo fmt --check`, `cargo test 
 Expected: no warnings; core 757 passed.
 
 ```bash
-git add apps/dots-app/src/commands.rs apps/dots-app/src/confirm.rs crates/dots-core/migrations/0009_vault.sql crates/dots-core/src/library_service.rs crates/dots-core/src/model.rs crates/dots-core/src/run_tools.rs crates/dots-core/src/runner.rs crates/dots-core/src/runtime.rs crates/dots-core/src/store/dots.rs crates/dots-core/src/store/library.rs crates/dots-core/src/store/mod.rs crates/dots-core/src/store/upgrade.rs crates/dots-core/src/vault crates/dots-core/tests/claude_gateway_test.rs crates/dots-core/tests/library_service_test.rs crates/dots-core/tests/run_tools_test.rs crates/dots-core/tests/vault_grants_test.rs ui/src/api/__fixtures__/contract.json ui/src/api/types.ts ui/src/lib/dot-rules.ts
+git add apps/dots-app/src/commands.rs apps/dots-app/src/confirm.rs crates/dots-core/migrations/0011_vault.sql crates/dots-core/src/library_service.rs crates/dots-core/src/model.rs crates/dots-core/src/run_tools.rs crates/dots-core/src/runner.rs crates/dots-core/src/runtime.rs crates/dots-core/src/store/dots.rs crates/dots-core/src/store/library.rs crates/dots-core/src/store/mod.rs crates/dots-core/src/store/upgrade.rs crates/dots-core/src/vault crates/dots-core/tests/claude_gateway_test.rs crates/dots-core/tests/library_service_test.rs crates/dots-core/tests/run_tools_test.rs crates/dots-core/tests/vault_grants_test.rs ui/src/api/__fixtures__/contract.json ui/src/api/types.ts ui/src/lib/dot-rules.ts
 git commit -m 'feat(core): dots are granted variables, and ${VAR} resolves from Personal'
 ```
 
@@ -6663,13 +6663,13 @@ git commit -m "feat: secret values typed into the Library move into Personal; im
 
 Spec §11:
 
-- **Webhook tokens.** A dot's token is stored as `sha256:<hex>`, and `finish_0009` hashes the ones stored before. A new dot has none. A token is shown once, when it is made, and is accepted only as `Authorization: Bearer`, so `?token=` is refused. `Dot` carries `has_webhook_token` in place of the token.
+- **Webhook tokens.** A dot's token is stored as `sha256:<hex>`, and `finish_0011` hashes the ones stored before. A new dot has none. A token is shown once, when it is made, and is accepted only as `Authorization: Bearer`, so `?token=` is refused. `Dot` carries `has_webhook_token` in place of the token.
 - **The gateway file.** On Windows, `write_private` gives the per-run file a DACL with only the signed-in user, before its secret is written.
 
 **Files:**
 
 - Modify:
-  - `crates/dots-core/Cargo.toml`, `crates/dots-core/migrations/0009_vault.sql`
+  - `crates/dots-core/Cargo.toml`, `crates/dots-core/migrations/0011_vault.sql`
   - `crates/dots-core/src/{model,proc,util}.rs`, `crates/dots-core/src/engine/claude/mod.rs`, `crates/dots-core/src/server/webhook.rs`, `crates/dots-core/src/store/{dots,upgrade}.rs`
   - `apps/dots-app/src/contract.rs`
   - `ui/src/api/types.ts`, `ui/src/screens/dot-editor/WebhookPanel.tsx`
@@ -6678,7 +6678,7 @@ Spec §11:
 
 **Interfaces:**
 
-- Consumes: Task 3's `finish_0009`.
+- Consumes: Task 3's `finish_0011`.
 - Produces:
   - `util::token_hash(&str) -> String`.
   - `Store::check_webhook_token(id, token) -> Result<bool>`.
@@ -7240,7 +7240,7 @@ windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Secu
 
 ```
 
-**In `crates/dots-core/migrations/0009_vault.sql`, replace:**
+**In `crates/dots-core/migrations/0011_vault.sql`, replace:**
 
 ```sql
 
@@ -7251,7 +7251,7 @@ windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Secu
 
 ```sql
 
--- Webhook tokens are kept as their hash (`sha256:<hex>`, section 11); `finish_0009` hashes the
+-- Webhook tokens are kept as their hash (`sha256:<hex>`, section 11); `finish_0011` hashes the
 -- stored ones. An empty token is none.
 
 -- Each dot is granted the variables of the servers it uses when the store opens
@@ -7604,7 +7604,7 @@ use crate::vault::Grants;
 **In `crates/dots-core/src/store/upgrade.rs`, replace:**
 
 ```rust
-/// Grants each dot listed in `upgrade_0009` the variables of the servers it uses, as ticking
+/// Grants each dot listed in `upgrade_0011` the variables of the servers it uses, as ticking
 /// them would (env vault spec §11 step 2), then drops the table. After 0006, so the servers it
 /// made are there.
 ```
@@ -7612,7 +7612,7 @@ use crate::vault::Grants;
 **with:**
 
 ```rust
-/// Grants each dot listed in `upgrade_0009` the variables of the servers it uses, as ticking
+/// Grants each dot listed in `upgrade_0011` the variables of the servers it uses, as ticking
 /// them would (env vault spec §11 step 2), hashes its webhook token, then drops the table. After 0006, so the servers it
 /// made are there.
 ```
@@ -7623,7 +7623,7 @@ use crate::vault::Grants;
             .execute(&mut *tx)
             .await?;
     }
-    sqlx::query("DROP TABLE upgrade_0009")
+    sqlx::query("DROP TABLE upgrade_0011")
 ```
 
 **with:**
@@ -7644,7 +7644,7 @@ use crate::vault::Grants;
                 .await?;
         }
     }
-    sqlx::query("DROP TABLE upgrade_0009")
+    sqlx::query("DROP TABLE upgrade_0011")
 ```
 
 **In `crates/dots-core/src/util.rs`, replace:**
@@ -7834,7 +7834,7 @@ Run: `cargo clippy --workspace --all-targets`, `cargo fmt --check`, `cargo test 
 Expected: no warnings; core 774, app 94 passed.
 
 ```bash
-git add apps/dots-app/src/contract.rs crates/dots-core/Cargo.toml crates/dots-core/migrations/0009_vault.sql crates/dots-core/src/engine/claude/mod.rs crates/dots-core/src/model.rs crates/dots-core/src/proc.rs crates/dots-core/src/server/webhook.rs crates/dots-core/src/store/dots.rs crates/dots-core/src/store/upgrade.rs crates/dots-core/src/util.rs crates/dots-core/tests/common/mod.rs crates/dots-core/tests/proc_test.rs crates/dots-core/tests/runtime_test.rs crates/dots-core/tests/server_test.rs crates/dots-core/tests/store_dots_test.rs crates/dots-core/tests/vault_grants_test.rs ui/src/api/__fixtures__/contract.json ui/src/api/types.ts ui/src/lib/dot-rules.test.ts ui/src/screens/DotEditorScreen.test.tsx ui/src/screens/dot-editor/WebhookPanel.tsx
+git add apps/dots-app/src/contract.rs crates/dots-core/Cargo.toml crates/dots-core/migrations/0011_vault.sql crates/dots-core/src/engine/claude/mod.rs crates/dots-core/src/model.rs crates/dots-core/src/proc.rs crates/dots-core/src/server/webhook.rs crates/dots-core/src/store/dots.rs crates/dots-core/src/store/upgrade.rs crates/dots-core/src/util.rs crates/dots-core/tests/common/mod.rs crates/dots-core/tests/proc_test.rs crates/dots-core/tests/runtime_test.rs crates/dots-core/tests/server_test.rs crates/dots-core/tests/store_dots_test.rs crates/dots-core/tests/vault_grants_test.rs ui/src/api/__fixtures__/contract.json ui/src/api/types.ts ui/src/lib/dot-rules.test.ts ui/src/screens/DotEditorScreen.test.tsx ui/src/screens/dot-editor/WebhookPanel.tsx
 git commit -m "fix: webhook tokens are kept hashed and shown once; the gateway file is owner-only"
 ```
 

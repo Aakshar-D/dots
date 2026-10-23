@@ -306,7 +306,7 @@ A failed resolution stops that consumer from starting, as "X is not set" does to
 
 ## 11. Migration and related fixes
 
-On the first start after upgrade (in `store/upgrade.rs`, after a new migration `0009_vault.sql`):
+On the first start after upgrade (in `store/upgrade.rs`, after a new migration `0011_vault.sql`):
 
 1. **Literal secrets** in `library_items.config` (`looks_secret` keys or `Authorization` headers with no `${…}`) move into personal secrets named after the key (`SF_TOKEN`, or `<SERVER>_AUTHORIZATION` for a header). They become `${NAME}`, then the DB is VACUUMed, as `finish_0006` did.
    - **Plugin servers** are re-synced from the plugin's `.mcp.json` on every run, so a rewrite of the stored config wouldn't stick. Instead, each plugin server item gets an `overrides` map (key → `${NAME}`). `sync_plugin_servers` applies it after reading the file and before storing, so the literal never reaches the DB (my call).
@@ -419,6 +419,7 @@ The plan is split into three: **A** Personal (§5), grants (§7), resolution and
 - **The move at start survives a failing server.** Only a server with a value that can move is moved; a value that cannot is scrubbed and never makes a start vacuum. The `settings` row `vault_vacuum_pending` is set just before the first config is really rewritten, and when tokens from before are hashed. Every start vacuums while it is set. A server that fails is logged by name and tried again at the next start, and the others still move. `vault_since` is written once the move has run, even when a server failed (§11).
 - **The import offer never lists the claude CLI's own names or the base environment's names**, and import refuses them. Their values are never read (§11 step 3).
 - **Deleting the old backups asks first.** A backup that cannot be deleted is logged and named in the Env tab, by its file name. The answer is then not recorded, so the offer stays with what is left (§11 step 4).
+- The migration is 0011, after master's 0009 (browser) and 0010 (seen).
 - **Not in plan A:**
   - the Env tab's "used by" (§9)
   - org sections, the org picker and the Organisations page (plan B)

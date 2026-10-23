@@ -15,13 +15,13 @@ CREATE TABLE env_entries (
 -- What each dot's consumers may resolve (section 7): `{"mcp:<server>": [names], "shell": [...]}`.
 ALTER TABLE dots ADD COLUMN variables TEXT NOT NULL DEFAULT '{}';
 
--- Webhook tokens are kept as their hash (`sha256:<hex>`, section 11); `finish_0009` hashes the
+-- Webhook tokens are kept as their hash (`sha256:<hex>`, section 11); `finish_0011` hashes the
 -- stored ones. An empty token is none.
 
 -- Each dot is granted the variables of the servers it uses when the store opens
--- (`store/upgrade.rs`, `finish_0009`), as ticking them would. The rows wait here, and the table
+-- (`store/upgrade.rs`, `finish_0011`), as ticking them would. The rows wait here, and the table
 -- is dropped once they are done.
-CREATE TABLE upgrade_0009 (
+CREATE TABLE upgrade_0011 (
     dot_id TEXT PRIMARY KEY REFERENCES dots(id) ON DELETE CASCADE
 );
-INSERT INTO upgrade_0009 (dot_id) SELECT id FROM dots;
+INSERT INTO upgrade_0011 (dot_id) SELECT id FROM dots;
