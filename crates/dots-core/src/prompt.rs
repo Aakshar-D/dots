@@ -6,6 +6,7 @@ use serde_json::Value;
 use crate::context::{self, Collection};
 use crate::memory;
 use crate::model::{Dot, EngineKind, Memory, Run, TriggerKind};
+use crate::policy::Action;
 
 /// The name a run's model calls the `context` tool by: Dots' own MCP server's tool on the
 /// Claude engine, a built-in tool on the local engine.
@@ -30,7 +31,8 @@ pub fn build_prompt(
 
 /// The prompt of `run`. A thread's first prompt starts with `global` (the global instructions of
 /// Settings) when it is not blank and the dot uses it, has the dot's `memories` after its
-/// instructions (`memory::prompt_section`, dot memory spec section 3), and ends with the run's
+/// instructions (`memory::prompt_section`, dot memory spec section 3) unless its policy denies
+/// `Memory` (the person turned memory off), and ends with the run's
 /// context collections; resumes, chat follow-ups and follow-up runs that resume a session send
 /// only their message.
 pub fn build_prompt_with_memories(
@@ -64,7 +66,12 @@ pub fn build_prompt_with_memories(
         out.push_str("\n\n## Instructions for this dot\n\n");
     }
     out.push_str(dot.spec.instructions.trim());
-    let remembered = memory::prompt_section(memories);
+    let memory_off = dot.spec.policy.resolve(memory::POLICY_NAME, &Value::Null) == Action::Deny;
+    let remembered = if memory_off {
+        String::new()
+    } else {
+        memory::prompt_section(memories)
+    };
     if !remembered.is_empty() {
         out.push_str("\n\n");
         out.push_str(remembered.trim_end());

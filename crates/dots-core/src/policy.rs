@@ -77,7 +77,7 @@ fn ask_wins(tool: &str) -> bool {
 
 /// The refusal of a rule `Memory(...)`.
 pub const MEMORY_RULE: &str =
-    "a Memory rule names no argument: `Memory` covers remember, forget and recall";
+    "a Memory rule takes no argument: the rule Memory covers remember, forget and recall";
 
 const READ_TOOLS: &[&str] = &["Read", "LS", "Glob", "Grep"];
 const COMMAND_TOOLS: &[&str] = &["Bash", "PowerShell"];

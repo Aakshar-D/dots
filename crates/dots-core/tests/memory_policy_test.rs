@@ -57,6 +57,8 @@ fn an_ask_or_deny_rule_on_memory_wins_over_the_presets_allow() {
     p.rules.push(Rule::new("Memory(remember)", Action::Deny));
     let e = p.validate().unwrap_err().to_string();
     assert!(e.contains(MEMORY_RULE), "{e}");
+    // The person reads it as it is: no Markdown.
+    assert!(!e.contains('`'), "{e}");
     // A tool whose name only starts like it stays the CLI's.
     let mut p = Policy::preset(Preset::Sandboxed);
     p.rules.push(Rule::new("Memoryless", Action::Deny));

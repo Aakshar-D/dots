@@ -10,6 +10,7 @@ use chrono::{Local, TimeZone};
 use common::{fake_dot, fake_run};
 use dots_core::memory::{prompt_section, PROMPT_BUDGET};
 use dots_core::model::{Memory, MemorySource, TriggerKind, WorkspaceMode};
+use dots_core::policy::{Action, Rule};
 use dots_core::prompt::{build_prompt, build_prompt_with_memories};
 use serde_json::json;
 
@@ -136,4 +137,23 @@ fn the_memories_follow_the_dots_instructions_in_a_first_prompt_only() {
         build_prompt_with_memories(&dot, &first, Path::new("C:/ws"), at(), "", &[], &memories)
             .contains("## What you remember")
     );
+}
+
+/// The second self-QA: a dot whose policy denies `Memory` has its memory off. The prompt does
+/// not carry what it remembers (nor point it at a `recall` it may not call); an ask rule keeps
+/// the section, as recall stays possible once approved.
+#[test]
+fn a_dot_whose_policy_denies_memory_gets_no_memories_in_its_prompt() {
+    let memories = [memory("01HX", "Prefers invoices as PDF.", false)];
+    let run = fake_run(TriggerKind::Manual, None, None);
+    let prompt_under = |action: Action| {
+        let mut dot = fake_dot("d", Path::new("C:/ws"), WorkspaceMode::Folder);
+        dot.spec.policy.rules.retain(|r| r.tool != "Memory");
+        dot.spec.policy.rules.push(Rule::new("Memory", action));
+        build_prompt_with_memories(&dot, &run, Path::new("C:/ws"), at(), "", &[], &memories)
+    };
+    assert!(!prompt_under(Action::Deny).contains("What you remember"));
+    assert!(!prompt_under(Action::Deny).contains("Prefers invoices as PDF."));
+    assert!(prompt_under(Action::Ask).contains("- [01HX] Prefers invoices as PDF."));
+    assert!(prompt_under(Action::Allow).contains("- [01HX] Prefers invoices as PDF."));
 }
