@@ -21,7 +21,7 @@ import { errorMessage, notifyError } from "@/lib/notify";
 import { invalidate, keys } from "@/lib/query";
 
 import { isDeclined, ToolList, type ServerEntry } from "./parts";
-import { joinLines, looksSecret, parseLines, variablesIn } from "./text";
+import { joinLines, movesToVault, parseLines, variablesIn } from "./text";
 import { parseTools } from "./tools";
 
 type Draft = {
@@ -147,7 +147,7 @@ function secretKeys(draft: Draft): string[] {
     draft.transport === "stdio" ? parseLines(draft.env, "=") : parseLines(draft.headers, ":");
   if (!parsed.ok) return [];
   return Object.entries(parsed.entries)
-    .filter(([key, value]) => looksSecret(key) && !value.includes("${"))
+    .filter(([key, value]) => movesToVault(key, value))
     .map(([key]) => key);
 }
 
@@ -237,8 +237,8 @@ export function ServerForm(props: { entry: ServerEntry | null; onClose: () => vo
           </Field>
           <p className="text-xs text-muted-foreground">
             Write <code>{"${VAR}"}</code> where a value should come from a variable: {stdio
-              ? "Dots reads the variable from Dots' environment when the server starts, and never stores its value."
-              : "Dots reads the variable from Dots' environment and sends its value to the server. It asks first when the host is new, and never stores the value."}
+              ? "Dots reads the variable from Personal (the Env tab) when the server starts, for the dots granted it."
+              : "Dots reads the variable from Personal (the Env tab) and sends its value to the server, for the dots granted it. It asks first when the host is new."}
           </p>
           {stdio ? (
             <>
@@ -326,13 +326,13 @@ export function ServerForm(props: { entry: ServerEntry | null; onClose: () => vo
           )}
           {notSet.length > 0 && (
             <p className="text-xs text-needs">
-              Not set in Dots' environment: {notSet.join(", ")}
+              Not in Personal: {notSet.join(", ")}. Add it in the Env tab.
             </p>
           )}
           {secretKeys(draft).map((key) => (
             <p key={key} className="text-xs text-needs">
-              {key} looks like a secret. Write {"${VAR}"} instead of the value, so that the value
-              is not stored.
+              {key} looks like a secret. When you save, Dots moves its value to Personal as a
+              secret and the server reads it from there.
             </p>
           ))}
 

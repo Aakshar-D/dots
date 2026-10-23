@@ -204,6 +204,9 @@ impl BrowserHost for EdgeHost {
         prepare_profile(&profile, &self.downloads(dot_id))
             .map_err(|e| HostError::Start(format!("its profile could not be prepared: {e}")))?;
         let mut command = self.command(exe, &edge_args(&profile))?;
+        // Only the base of Dots' environment (env vault spec §8): a secret set for Dots never
+        // reaches the helper, Edge or the pages it opens.
+        crate::vault::child_env::start_clean(&mut command, crate::vault::child_env::Child::Other);
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

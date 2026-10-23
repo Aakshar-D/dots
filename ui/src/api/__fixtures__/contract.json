@@ -115,6 +115,15 @@
     "context_documents",
     "installed_claude_plugins",
     "environment_variables",
+    "env_list",
+    "env_add",
+    "env_set",
+    "env_remove",
+    "env_import_candidates",
+    "env_import",
+    "env_import_dismiss",
+    "env_old_backups",
+    "env_old_backups_answer",
     "messages_list",
     "message_reply",
     "message_dismiss",
@@ -151,6 +160,7 @@
     "enabled": true,
     "endpoint_url": null,
     "engine": "claude",
+    "has_webhook_token": true,
     "id": "01J0DOT",
     "instructions": "Run the tests and summarize failures.",
     "max_turns": 40,
@@ -282,7 +292,7 @@
         "pdf"
       ]
     },
-    "webhook_token": "tok_abc",
+    "variables": {},
     "workdir": "C:/dev/app",
     "workspace_mode": "worktree"
   },
@@ -295,6 +305,7 @@
       "enabled": true,
       "endpoint_url": null,
       "engine": "claude",
+      "has_webhook_token": true,
       "id": "01J0DOT",
       "instructions": "Run the tests and summarize failures.",
       "max_turns": 40,
@@ -426,7 +437,7 @@
           "pdf"
         ]
       },
-      "webhook_token": "tok_abc",
+      "variables": {},
       "workdir": "C:/dev/app",
       "workspace_mode": "worktree"
     },
@@ -555,6 +566,7 @@
       "plugins": [],
       "skills": []
     },
+    "variables": {},
     "workdir": "C:/notes",
     "workspace_mode": "folder"
   },
@@ -612,6 +624,10 @@
     "EngineKind": [
       "claude",
       "local"
+    ],
+    "EntryKind": [
+      "plain",
+      "secret"
     ],
     "FileStatus": [
       "added",
@@ -671,6 +687,22 @@
       "folder"
     ]
   },
+  "EnvEntry": [
+    {
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "kind": "secret",
+      "name": "GITHUB_TOKEN",
+      "updated_at": "2026-10-09T12:00:00.000Z",
+      "value": null
+    },
+    {
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "kind": "plain",
+      "name": "LOG_LEVEL",
+      "updated_at": "2026-10-09T12:00:00.000Z",
+      "value": "debug"
+    }
+  ],
   "EnvVariable": [
     {
       "name": "GITHUB_TOKEN",
@@ -1420,6 +1452,7 @@
       "plugins": [],
       "skills": []
     },
+    "variables": {},
     "workdir": "",
     "workspace_mode": "worktree"
   },
@@ -1851,6 +1884,10 @@
     {
       "state": "installing",
       "version": "0.2.0"
+    },
+    {
+      "error": "The backup failed: disk full",
+      "state": "failed"
     }
   ],
   "WorktreeDiff": {

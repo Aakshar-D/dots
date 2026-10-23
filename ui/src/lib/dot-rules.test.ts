@@ -64,7 +64,7 @@ describe("dot editor rules", () => {
   it("takes the editable fields of a stored dot, with the Library items it uses", () => {
     const spec = specOf(sample.dot);
     expect(spec).not.toHaveProperty("id");
-    expect(spec).not.toHaveProperty("webhook_token");
+    expect(spec).not.toHaveProperty("has_webhook_token");
     expect(spec.name).toBe(sample.dot.name);
     expect(sample.dot.uses.mcp_servers).not.toEqual([]);
     expect(spec.uses).toEqual(sample.dot.uses);

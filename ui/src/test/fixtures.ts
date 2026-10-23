@@ -71,6 +71,10 @@ export function installDefaults(): void {
   backend.on("environment_variables", (args) =>
     (args.names as string[]).map((name) => ({ name, set: true })),
   );
+  // Personal is empty, and the vault has no one-time offer to make.
+  backend.on("env_list", () => []);
+  backend.on("env_import_candidates", () => []);
+  backend.on("env_old_backups", () => []);
   backend.on("new_dot_spec", () => blankSpec);
   backend.on("list_runs", () => []);
   // No dot has checked in or scheduled anything. A question on screen is marked read.

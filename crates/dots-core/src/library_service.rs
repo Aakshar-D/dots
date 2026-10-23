@@ -21,9 +21,12 @@ use crate::mcp::{fingerprint, McpError, McpSession, McpTool, SessionOptions};
 use crate::model::{DotRef, ToolsChanged};
 use crate::skill_creator::{self, check_draft};
 use crate::store::Store;
+use crate::vault::literals::Prior;
+use crate::vault::{Resolved, Vault};
 use crate::{Error, Result};
 
-/// Dots' own environment, where `${VAR}` is read.
+/// Dots' own environment, where Claude Code's plugin list is looked up (`kit::installed`).
+/// `${VAR}` is never read here: it resolves from the vault (env vault spec §8).
 pub(crate) fn process_env(key: &str) -> Option<String> {
     std::env::var(key).ok()
 }
@@ -124,7 +127,7 @@ pub struct ScannedSkill {
     pub name_error: Option<String>,
 }
 
-/// Whether a variable is set in Dots' environment. Never its value.
+/// Whether Personal has a variable. Never its value.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct EnvVariable {
     pub name: String,
@@ -142,9 +145,10 @@ pub(crate) fn publish(bus: &Bus, item_id: &str) {
 pub(crate) async fn open_and_list(
     name: &str,
     config: &McpServerConfig,
+    env: &Resolved,
     options: SessionOptions,
 ) -> std::result::Result<(McpSession, Vec<McpTool>), McpError> {
-    let session = McpSession::open(name, config, &process_env, options).await?;
+    let session = McpSession::open(name, config, &|k| env.get(k), options).await?;
     match session.list_tools().await {
         Ok(tools) => Ok((session, tools)),
         Err(e) => {
@@ -234,6 +238,7 @@ const GONE: &str = "removed from the Library";
 pub(crate) async fn sync_plugin_servers(
     store: &Store,
     bus: &Bus,
+    vault: &Vault,
     plugin: &LibraryItem,
     info: &PluginInfo,
 ) -> Result<Vec<String>> {
@@ -254,8 +259,17 @@ pub(crate) async fn sync_plugin_servers(
         }
     }
     for (name, config) in wanted {
-        let config = LibraryConfig::McpServer(config);
-        match existing.iter().find(|i| i.name == name) {
+        let old = existing.iter().find(|i| i.name == name);
+        // A secret written into the plugin's `.mcp.json` moves into Personal; the Library keeps
+        // `${NAME}` (env vault spec §11). It stays in the plugin's own folder. A key the stored
+        // server already reads as `${NAME}` keeps it, and Personal keeps its value.
+        let prior = match old.map(|i| &i.config) {
+            Some(LibraryConfig::McpServer(stored)) => Prior::Plugin(stored),
+            _ => Prior::New,
+        };
+        let moved = vault.move_literals_over(&name, &config, prior).await?.0;
+        let config = LibraryConfig::McpServer(moved);
+        match old {
             Some(old) if old.config == config => {}
             Some(old) => match store.update_library_item(&old.id, &config).await {
                 Ok(_) | Err(Error::NotFound(_)) => publish(bus, &old.id),
@@ -313,6 +327,7 @@ pub(crate) struct RefreshedPlugin {
 pub(crate) async fn refresh_plugin(
     store: &Store,
     bus: &Bus,
+    vault: &Vault,
     item: &LibraryItem,
 ) -> Result<std::result::Result<RefreshedPlugin, String>> {
     let mut config = plugin_config(item)?.clone();
@@ -354,7 +369,7 @@ pub(crate) async fn refresh_plugin(
         Err(reason) => return Ok(Err(reason)),
     };
     let mut warnings = info.warnings.clone();
-    match sync_plugin_servers(store, bus, item, &info).await {
+    match sync_plugin_servers(store, bus, vault, item, &info).await {
         Ok(more) => warnings.extend(more),
         Err(Error::NotFound(_)) => return Ok(Err(GONE.into())),
         Err(e) => return Err(e),
@@ -371,15 +386,24 @@ pub struct LibraryService {
     store: Store,
     bus: Bus,
     skills_dir: Option<PathBuf>,
+    /// Where a probe, a check and the missing variables read `${VAR}`: Personal.
+    vault: Vault,
 }
 
 impl LibraryService {
     pub fn new(store: Store, bus: Bus) -> LibraryService {
         LibraryService {
+            vault: Vault::in_memory(store.clone()),
             store,
             bus,
             skills_dir: None,
         }
+    }
+
+    /// The vault whose Personal variables `${VAR}` reads (env vault spec §8).
+    pub fn with_vault(mut self, vault: Vault) -> LibraryService {
+        self.vault = vault;
+        self
     }
 
     /// Where the skill creator saves skills (`<data>/skills`, skill creator spec §6). Without
@@ -469,10 +493,11 @@ impl LibraryService {
                 dots_folder,
             };
             if let LibraryConfig::McpServer(config) = &item.config {
-                entry.missing_variables = config
-                    .variables()
+                let variables = config.variables();
+                let personal = self.vault.personal_values(&variables).await?;
+                entry.missing_variables = variables
                     .into_iter()
-                    .filter(|v| process_env(v).is_none())
+                    .filter(|v| !personal.contains(v))
                     .collect();
             }
             match read {
@@ -528,10 +553,12 @@ impl LibraryService {
             ));
         }
         let plugin = self.read_folder(&config).await?;
+        let config = self.without_literals(name, config, None).await?;
         let item = self.store.add_library_item(name, &config, None).await?;
         publish(&self.bus, &item.id);
         if let Some(info) = plugin {
-            for warning in sync_plugin_servers(&self.store, &self.bus, &item, &info).await? {
+            let synced = sync_plugin_servers(&self.store, &self.bus, &self.vault, &item, &info);
+            for warning in synced.await? {
                 tracing::warn!("plugin {name}: {warning}");
             }
         }
@@ -552,12 +579,14 @@ impl LibraryService {
         let old = self.store.get_library_item(id).await?;
         self.refuse_owned(&old, "change")?;
         let plugin = self.read_folder(&config).await?;
+        let config = self.without_literals(&old.name, config, Some(&old)).await?;
         let item = self.store.update_library_item(id, &config).await?;
         if item.config != old.config {
             publish(&self.bus, id);
         }
         if let Some(info) = plugin {
-            for warning in sync_plugin_servers(&self.store, &self.bus, &item, &info).await? {
+            let synced = sync_plugin_servers(&self.store, &self.bus, &self.vault, &item, &info);
+            for warning in synced.await? {
                 tracing::warn!("plugin {}: {warning}", item.name);
             }
         }
@@ -624,7 +653,9 @@ impl LibraryService {
     /// (`library_probe`). The error is the text the person sees ("could not start: SF_TOKEN is
     /// not set").
     pub async fn probe(&self, config: &McpServerConfig) -> Result<McpProbe> {
-        let (session, tools) = open_and_list("probe", config, SessionOptions::default()).await?;
+        let env = self.vault.personal_values(&config.variables()).await?;
+        let (session, tools) =
+            open_and_list("probe", config, &env, SessionOptions::default()).await?;
         session.close().await;
         Ok(McpProbe {
             fingerprint: fingerprint(&tools),
@@ -708,15 +739,16 @@ impl LibraryService {
         kit::installed_plugins(&process_env)
     }
 
-    /// Which of `names` Dots' environment sets (`environment_variables`).
-    pub fn environment_variables(&self, names: &[String]) -> Vec<EnvVariable> {
-        names
+    /// Which of `names` Personal has (`environment_variables`).
+    pub async fn environment_variables(&self, names: &[String]) -> Result<Vec<EnvVariable>> {
+        let personal = self.vault.personal_values(names).await?;
+        Ok(names
             .iter()
             .map(|name| EnvVariable {
                 name: name.clone(),
-                set: process_env(name).is_some(),
+                set: personal.contains(name),
             })
-            .collect()
+            .collect())
     }
 
     /// The MCP servers whose tool list waits for review, with the dots that use them (the
@@ -762,13 +794,39 @@ impl LibraryService {
                 item.name
             )));
         };
-        match open_and_list(&item.name, config, SessionOptions::default()).await {
+        let env = self.vault.personal_values(&config.variables()).await?;
+        match open_and_list(&item.name, config, &env, SessionOptions::default()).await {
             Ok((session, tools)) => {
                 session.close().await;
                 record_check(&self.store, &self.bus, &item.id, Ok(&tools)).await
             }
             Err(e) => record_check(&self.store, &self.bus, &item.id, Err(&e)).await,
         }
+    }
+
+    /// An MCP server's config with its secret-looking values moved into Personal (env vault
+    /// spec §11): the Library never stores them. `old` is the item being changed: a key it
+    /// read as `${NAME}` keeps the name when nothing else reads it, and the typed value
+    /// replaces NAME's in Personal.
+    async fn without_literals(
+        &self,
+        name: &str,
+        config: LibraryConfig,
+        old: Option<&LibraryItem>,
+    ) -> Result<LibraryConfig> {
+        let LibraryConfig::McpServer(server) = config else {
+            return Ok(config);
+        };
+        let prior = match old {
+            Some(LibraryItem {
+                id,
+                config: LibraryConfig::McpServer(stored),
+                ..
+            }) => Prior::Edit { id, config: stored },
+            _ => Prior::New,
+        };
+        let moved = self.vault.move_literals_over(name, &server, prior).await?.0;
+        Ok(LibraryConfig::McpServer(moved))
     }
 
     fn refuse_owned(&self, item: &LibraryItem, verb: &str) -> Result<()> {
@@ -872,7 +930,8 @@ mod tests {
             .unwrap();
         // The person removes it after the run read the item.
         store.remove_library_item(&item.id).await.unwrap();
-        let out = refresh_plugin(&store, &bus, &item).await.unwrap();
+        let vault = Vault::in_memory(store.clone());
+        let out = refresh_plugin(&store, &bus, &vault, &item).await.unwrap();
         assert_eq!(out.unwrap_err(), GONE);
     }
 }

@@ -50,6 +50,15 @@ fn canonical(v: &Value) -> Value {
     }
 }
 
+/// How a webhook token is stored (env vault spec §11): `sha256:` and the hex SHA-256 of it.
+pub fn token_hash(token: &str) -> String {
+    let hex: String = Sha256::digest(token.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    format!("sha256:{hex}")
+}
+
 /// Constant-time string comparison for secrets.
 pub fn ct_eq(a: &str, b: &str) -> bool {
     let (a, b) = (a.as_bytes(), b.as_bytes());

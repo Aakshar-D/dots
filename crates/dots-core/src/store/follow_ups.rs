@@ -11,6 +11,7 @@ use super::runs::insert_run;
 use super::Store;
 use crate::model::{FollowUp, FollowUpStatus, NewRun, Run};
 use crate::util::{new_id, timestamp};
+use crate::vault::redact::global;
 use crate::{Error, Result};
 
 const FOLLOW_UP_COLUMNS: &str =
@@ -54,7 +55,7 @@ impl Store {
         .bind(dot_id)
         .bind(from_run_id)
         .bind(timestamp(due_at))
-        .bind(note)
+        .bind(global().scrub(note).as_ref())
         .bind(timestamp(now))
         .bind(dot_id)
         .bind(max_pending as i64)

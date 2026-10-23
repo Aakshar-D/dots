@@ -23,6 +23,7 @@ use dots_core::policy::{Policy, Preset, RuleCandidate};
 use dots_core::schedule::Schedule;
 use dots_core::settings::Settings;
 use dots_core::skill_creator::{check_draft, DraftRequest, DraftSummary};
+use dots_core::vault::{EntryKind, EnvEntry};
 use dots_core::Runtime;
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_opener::OpenerExt;
@@ -534,13 +535,72 @@ pub fn installed_claude_plugins(state: State<'_, AppState>) -> Res<Vec<Installed
     Ok(state.rt()?.library().installed_plugins())
 }
 
-/// Which of the names Dots' environment sets. Never a value.
+/// Which of the names Personal has. Never a value.
 #[tauri::command]
-pub fn environment_variables(
+pub async fn environment_variables(
     state: State<'_, AppState>,
     names: Vec<String>,
 ) -> Res<Vec<EnvVariable>> {
-    Ok(state.rt()?.library().environment_variables(&names))
+    Ok(state.rt()?.library().environment_variables(&names).await?)
+}
+
+/// The personal variables of the Env tab. A secret's value is never in the answer.
+#[tauri::command]
+pub async fn env_list(state: State<'_, AppState>) -> Res<Vec<EnvEntry>> {
+    Ok(state.rt()?.vault().list().await?)
+}
+
+/// Adds a personal variable; a secret's value goes to Credential Manager.
+#[tauri::command]
+pub async fn env_add(
+    state: State<'_, AppState>,
+    name: String,
+    kind: EntryKind,
+    value: String,
+) -> Res<EnvEntry> {
+    Ok(state.rt()?.vault().add(&name, kind, &value).await?)
+}
+
+/// Edits a plain value, or replaces a secret's without showing it.
+#[tauri::command]
+pub async fn env_set(state: State<'_, AppState>, name: String, value: String) -> Res<EnvEntry> {
+    Ok(state.rt()?.vault().set_value(&name, &value).await?)
+}
+
+#[tauri::command]
+pub async fn env_remove(state: State<'_, AppState>, name: String) -> Res<()> {
+    Ok(state.rt()?.vault().remove(&name).await?)
+}
+
+/// The names Library servers read that Dots' Windows environment sets and Personal lacks,
+/// until the offer is answered. Never a value.
+#[tauri::command]
+pub async fn env_import_candidates(state: State<'_, AppState>) -> Res<Vec<String>> {
+    Ok(state.rt()?.vault().import_candidates().await?)
+}
+
+/// Copies the names from Dots' Windows environment into Personal as secrets; answers the offer.
+#[tauri::command]
+pub async fn env_import(state: State<'_, AppState>, names: Vec<String>) -> Res<Vec<String>> {
+    Ok(state.rt()?.vault().import(&names).await?)
+}
+
+#[tauri::command]
+pub async fn env_import_dismiss(state: State<'_, AppState>) -> Res<()> {
+    Ok(state.rt()?.vault().dismiss_import().await?)
+}
+
+/// The update backups made before the vault, by file name, until the offer is answered.
+#[tauri::command]
+pub async fn env_old_backups(state: State<'_, AppState>) -> Res<Vec<String>> {
+    Ok(state.rt()?.old_backups().await?)
+}
+
+/// Deletes them when `delete`, and answers the offer. Returns the file names that could not be
+/// deleted: then the offer stays.
+#[tauri::command]
+pub async fn env_old_backups_answer(state: State<'_, AppState>, delete: bool) -> Res<Vec<String>> {
+    Ok(state.rt()?.answer_old_backups(delete).await?)
 }
 
 /// Every message that waits for the person and the newest others, newest first; of one dot

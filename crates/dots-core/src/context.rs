@@ -11,6 +11,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::kit::parse_frontmatter;
+use crate::vault::redact::global;
 
 /// The extensions of a document, compared without regard to case.
 pub const EXTENSIONS: &[&str] = &[
@@ -146,8 +147,10 @@ pub fn walk_bounded(root: &Path, max_entries: usize) -> Result<Walk, String> {
     })
 }
 
-/// `text` cut at `max` characters, with `…` when it was cut.
+/// `text` cut at `max` characters, with `…` when it was cut. Secrets are scrubbed first, as
+/// in `cap_head`: a cut inside one would leave a piece that no scrub matches.
 fn clip(text: &str, max: usize) -> String {
+    let text = global().scrub(text);
     match text.char_indices().nth(max) {
         Some((at, _)) => format!("{}…", &text[..at]),
         None => text.to_string(),
@@ -202,13 +205,22 @@ fn joined(root: &Path, rel: &str) -> PathBuf {
         .fold(root.to_path_buf(), |p, part| p.join(part))
 }
 
-/// At most `limit` bytes of the file at `path`, with bytes that are not UTF-8 replaced.
+/// At most `limit` bytes of the file at `path`, with bytes that are not UTF-8 replaced, and
+/// secrets scrubbed before anything is cut from it. When the file is longer, the last bytes,
+/// where a secret cut in two may have left its start, are dropped.
 fn read_head(path: &Path, limit: u64) -> std::io::Result<String> {
     let mut bytes = Vec::new();
     std::fs::File::open(path)?
-        .take(limit)
+        .take(limit.saturating_add(1))
         .read_to_end(&mut bytes)?;
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
+    let cut = bytes.len() as u64 > limit;
+    bytes.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+    let text = String::from_utf8_lossy(&bytes);
+    Ok(if cut {
+        global().scrub_clipped_tail(&text)
+    } else {
+        global().scrub(&text).into_owned()
+    })
 }
 
 /// The documents of `root`, described from the first 8 KB of each, with the walk's total and

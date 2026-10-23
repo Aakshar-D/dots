@@ -67,6 +67,13 @@ async fn dot(srv: &Srv, name: &str, wait: u64) -> Dot {
     srv.store.create_dot(&s).await.unwrap()
 }
 
+/// A dot with a webhook token, and the token.
+async fn hooked(srv: &Srv, name: &str) -> (Dot, String) {
+    let d = dot(srv, name, 5).await;
+    let token = srv.store.regenerate_webhook_token(&d.id).await.unwrap();
+    (d, token)
+}
+
 #[tokio::test]
 async fn health() {
     let srv = start().await;
@@ -83,12 +90,12 @@ async fn health() {
 #[tokio::test]
 async fn webhook_accepts_valid_requests() {
     let srv = start().await;
-    let d = dot(&srv, "hook", 5).await;
+    let (d, token) = hooked(&srv, "hook").await;
     let url = format!("{}/dots/{}/trigger", srv.base, d.id);
     let r = srv
         .http
         .post(&url)
-        .bearer_auth(&d.webhook_token)
+        .bearer_auth(&token)
         .json(&json!({"case": 7}))
         .send()
         .await
@@ -105,7 +112,8 @@ async fn webhook_accepts_valid_requests() {
 
     let r = srv
         .http
-        .post(format!("{url}?token={}", d.webhook_token))
+        .post(&url)
+        .bearer_auth(&token)
         .send()
         .await
         .unwrap();
@@ -119,18 +127,30 @@ async fn webhook_accepts_valid_requests() {
             .payload,
         None
     );
+    // A token in the URL is refused: it would end up in proxy logs (env vault spec §11).
+    let r = srv
+        .http
+        .post(format!("{url}?token={token}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 401);
 }
 
 #[tokio::test]
 async fn webhook_rejects_bad_requests_without_creating_runs() {
     let srv = start().await;
-    let d = dot(&srv, "hook", 5).await;
+    let fresh = dot(&srv, "fresh", 5).await;
+    let (d, token) = hooked(&srv, "hook").await;
     let url = format!("{}/dots/{}/trigger", srv.base, d.id);
     let post =
         |b: reqwest::RequestBuilder| async move { b.send().await.unwrap().status().as_u16() };
 
     assert_eq!(post(srv.http.post(&url)).await, 401);
     assert_eq!(post(srv.http.post(&url).bearer_auth("wrong")).await, 401);
+    // A dot without a token takes none.
+    let fresh_url = format!("{}/dots/{}/trigger", srv.base, fresh.id);
+    assert_eq!(post(srv.http.post(&fresh_url).bearer_auth("")).await, 401);
     assert_eq!(
         post(
             srv.http
@@ -141,13 +161,7 @@ async fn webhook_rejects_bad_requests_without_creating_runs() {
         404
     );
     assert_eq!(
-        post(
-            srv.http
-                .post(&url)
-                .bearer_auth(&d.webhook_token)
-                .body("not json")
-        )
-        .await,
+        post(srv.http.post(&url).bearer_auth(&token).body("not json")).await,
         400
     );
     let big = "x".repeat(300 * 1024);
@@ -155,17 +169,14 @@ async fn webhook_rejects_bad_requests_without_creating_runs() {
         post(
             srv.http
                 .post(&url)
-                .bearer_auth(&d.webhook_token)
+                .bearer_auth(&token)
                 .body(format!("\"{big}\""))
         )
         .await,
         413
     );
     srv.store.set_dot_enabled(&d.id, false).await.unwrap();
-    assert_eq!(
-        post(srv.http.post(&url).bearer_auth(&d.webhook_token)).await,
-        409
-    );
+    assert_eq!(post(srv.http.post(&url).bearer_auth(&token)).await, 409);
     assert!(srv
         .store
         .list_runs(Some(&d.id), 10)

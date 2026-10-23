@@ -1009,3 +1009,24 @@ async fn a_url_moves_the_origin_to_the_host_the_client_reaches_after_expanding()
     let c = store.get_catalog(&item.id).await.unwrap();
     assert_eq!(c.accepted_fingerprint, None);
 }
+
+#[tokio::test]
+async fn a_catalog_failure_holds_no_secret_the_vault_has_read() {
+    let secret = "ghp_catalog_failure_value_42";
+    dots_core::vault::redact::global().add("DOTS_CATALOG_TOKEN", secret);
+    let (_d, store) = temp_store().await;
+    let sf = store
+        .add_library_item("sf", &server("sf-mcp"), None)
+        .await
+        .unwrap();
+    let c = store
+        .record_catalog_failure(&sf.id, &format!("invalid token {secret}"))
+        .await
+        .unwrap();
+    assert_eq!(
+        c.error.as_deref(),
+        Some("invalid token [secret:DOTS_CATALOG_TOKEN]")
+    );
+    let stored = store.get_catalog(&sf.id).await.unwrap();
+    assert!(!format!("{stored:?}").contains(secret));
+}

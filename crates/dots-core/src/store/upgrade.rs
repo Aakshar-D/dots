@@ -147,7 +147,7 @@ fn place(old: &str, raw: &Value, items: &mut Vec<Placed>) -> Option<String> {
 }
 
 /// An upper-case variable name made from `s`: `-` and other characters become `_`.
-fn var_name(s: &str) -> String {
+pub(crate) fn var_name(s: &str) -> String {
     s.chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() {
@@ -236,7 +236,7 @@ fn converted(name: &str, raw: &Value) -> Option<McpServerConfig> {
 /// The scheme of an `Authorization` value: its first word when the value has more than one
 /// and that word reads as a scheme (a letter, then up to 23 letters, digits or `-`), else
 /// `Bearer`. A first word that does not read as one may be part of the secret: it is not kept.
-fn auth_scheme(value: &str) -> &str {
+pub(crate) fn auth_scheme(value: &str) -> &str {
     let mut words = value.split_whitespace();
     match (words.next(), words.next()) {
         (Some(first), Some(_))
@@ -447,4 +447,59 @@ fn with_allow_rules(stored: &str, tools: &[&str]) -> Option<String> {
     // Through `Policy`, so the JSON is written as Dots writes a policy.
     let policy: Policy = serde_json::from_value(value).ok()?;
     serde_json::to_string(&policy).ok()
+}
+
+/// Grants each dot listed in `upgrade_0011` the variables of the servers it uses, as ticking
+/// them would (env vault spec §11 step 2), hashes its webhook token, then drops the table. After
+/// 0006, so the servers it made are there. A token that was hashed leaves its old value in freed
+/// page space, so the vacuum marker is set and the next start vacuums.
+pub(super) async fn finish_0011(store: &super::Store) -> Result<()> {
+    let waiting: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'upgrade_0011'",
+    )
+    .fetch_one(&store.pool)
+    .await?;
+    if waiting == 0 {
+        return Ok(());
+    }
+    let ids: Vec<String> = sqlx::query_scalar("SELECT dot_id FROM upgrade_0011")
+        .fetch_all(&store.pool)
+        .await?;
+    let mut tx = store.pool.begin().await?;
+    let mut hashed = false;
+    for id in ids {
+        let spec = store.get_dot(&id).await?.spec;
+        let grants = store.synced_grants(None, &spec).await?;
+        sqlx::query("UPDATE dots SET variables = ? WHERE id = ?")
+            .bind(serde_json::to_string(&grants)?)
+            .bind(&id)
+            .execute(&mut *tx)
+            .await?;
+        // The token in clear becomes its hash: it keeps working, and is never shown again.
+        let token: String = sqlx::query_scalar("SELECT webhook_token FROM dots WHERE id = ?")
+            .bind(&id)
+            .fetch_one(&mut *tx)
+            .await?;
+        if !token.is_empty() && !token.starts_with("sha256:") {
+            sqlx::query("UPDATE dots SET webhook_token = ? WHERE id = ?")
+                .bind(crate::util::token_hash(&token))
+                .bind(&id)
+                .execute(&mut *tx)
+                .await?;
+            hashed = true;
+        }
+    }
+    if hashed {
+        // The marker `Store::set_marker` sets, written in this transaction.
+        sqlx::query(super::settings::SET_SETTING_SQL)
+            .bind(crate::vault::upgrade::VACUUM_PENDING)
+            .bind(json!(true).to_string())
+            .execute(&mut *tx)
+            .await?;
+    }
+    sqlx::query("DROP TABLE upgrade_0011")
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
 }

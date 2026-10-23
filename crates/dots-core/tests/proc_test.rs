@@ -96,3 +96,30 @@ async fn the_fallback_kills_a_tree_that_is_still_linked() {
         "the grandchild is still running after terminate"
     );
 }
+
+/// The gateway file's DACL: one entry, the signed-in user's, nothing inherited (env vault spec
+/// §11).
+#[cfg(windows)]
+#[test]
+fn an_owner_only_file_has_one_entry_for_its_owner() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("mcp-run.json");
+    std::fs::write(&path, "{}").unwrap();
+    dots_core::proc::owner_only(&path).unwrap();
+    let out = std::process::Command::new("icacls")
+        .arg(&path)
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let user = std::env::var("USERNAME").unwrap();
+    let entries: Vec<&str> = text
+        .lines()
+        .filter(|l| l.contains(":(") && !l.contains("Successfully"))
+        .collect();
+    assert_eq!(entries.len(), 1, "{text}");
+    assert!(
+        entries[0].contains(&user) && entries[0].contains("(F)"),
+        "{text}"
+    );
+    assert!(!text.contains("(I)"), "{text}");
+}

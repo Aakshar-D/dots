@@ -171,7 +171,9 @@ fn appender(log_dir: &Path) -> Option<RollingFileAppender> {
 /// the app runs without a log then. Keep the guard alive for the whole run.
 pub fn init_logging(log_dir: &Path) -> Option<WorkerGuard> {
     let appender = appender(log_dir)?;
-    let (writer, guard) = tracing_appender::non_blocking(appender);
+    // Every line is scrubbed of the secrets Dots has read (env vault spec §10).
+    let (writer, guard) =
+        tracing_appender::non_blocking(dots_core::vault::redact::RedactWriter::new(appender));
     tracing_subscriber::fmt()
         .with_writer(writer)
         .with_ansi(false)
@@ -191,11 +193,14 @@ pub fn record_panic(
     message: Option<&str>,
 ) {
     let place = location.map_or_else(|| "an unknown place".to_string(), Location::to_string);
+    // A secret in the message is scrubbed here, as the logger's writer would. `try_scrub` never
+    // waits: the panic may have happened while the redactor was being written, and then the
+    // message is withheld.
+    let message = dots_core::vault::redact::global().try_scrub(message.unwrap_or("(no message)"));
     let line = format!(
-        "{} ERROR dots_app: thread '{}' panicked at {place}: {}\n",
+        "{} ERROR dots_app: thread '{}' panicked at {place}: {message}\n",
         dots_core::util::now(),
         thread.unwrap_or("<unnamed>"),
-        message.unwrap_or("(no message)"),
     );
     if let Some(mut log) = appender(log_dir) {
         let _ = log.write_all(line.as_bytes());
@@ -480,6 +485,22 @@ mod tests {
     }
 
     #[test]
+    fn a_panic_message_is_scrubbed_of_secret_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let logs = dir.path().join("logs");
+        dots_core::vault::redact::global().add("DOTS_PANIC_TOKEN", "ghp_panic_value_0123456789");
+        record_panic(
+            &logs,
+            Some("main"),
+            None,
+            Some("bad token ghp_panic_value_0123456789"),
+        );
+        let text = only_log_file(&logs);
+        assert!(!text.contains("ghp_panic"), "{text}");
+        assert!(text.contains("[secret:DOTS_PANIC_TOKEN]"), "{text}");
+    }
+
+    #[test]
     fn the_early_log_folder_comes_from_the_environment_alone() {
         let local = || Some(OsString::from("C:/Users/u/AppData/Local"));
         let cwd = std::env::current_dir().unwrap();
@@ -585,6 +606,16 @@ mod tests {
                 port,
                 ..Settings::default()
             })
+            .await
+            .unwrap();
+        // A test install id, so that nothing the runtime keeps reaches a real Credential
+        // Manager target.
+        store
+            .set_marker(
+                "install_id",
+                &serde_json::json!(format!("test-{}", dots_core::util::new_id())),
+                true,
+            )
             .await
             .unwrap();
         store.close().await;

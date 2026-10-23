@@ -10,6 +10,7 @@ use crate::Result;
 mod approvals;
 mod browser;
 mod dots;
+mod env;
 mod follow_ups;
 mod library;
 mod memories;
@@ -18,6 +19,8 @@ mod runs;
 mod schedules;
 mod settings;
 mod upgrade;
+
+pub(crate) use upgrade::{auth_scheme, var_name};
 
 /// The database file inside the data directory.
 pub const DB_FILE: &str = "dots.db";
@@ -31,7 +34,7 @@ pub use memories::Added;
 
 impl Store {
     /// Opens (creating if needed) the database file and applies migrations, with the parts of
-    /// migrations 0006, 0007 and 0008 that need code (`upgrade.rs`).
+    /// migrations 0006 to 0008 and 0011 that need code (`upgrade.rs`).
     pub async fn open(path: &Path) -> Result<Store> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -50,8 +53,28 @@ impl Store {
         upgrade::finish_0006(&pool).await?;
         upgrade::finish_0007(&pool).await?;
         upgrade::finish_0008(&pool).await?;
-        upgrade::finish_0012(&pool).await?;
-        Ok(Store { pool })
+        let store = Store { pool };
+        upgrade::finish_0011(&store).await?;
+        upgrade::finish_0012(&store.pool).await?;
+        Ok(store)
+    }
+
+    /// Rewrites the database so freed pages lose what they held, and empties the WAL.
+    pub(crate) async fn vacuum(&self) -> Result<()> {
+        sqlx::query("VACUUM").execute(&self.pool).await?;
+        // The result row is (busy, log, checkpointed); busy is 1 when a reader kept the WAL.
+        for _ in 0..20 {
+            let row = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+                .fetch_one(&self.pool)
+                .await?;
+            if sqlx::Row::try_get::<i64, _>(&row, 0)? == 0 {
+                return Ok(());
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        Err(crate::Error::Other(
+            "the database's write-ahead log could not be emptied".into(),
+        ))
     }
 
     /// Closes every connection of this store.

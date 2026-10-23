@@ -42,7 +42,8 @@ async fn create_and_get_round_trip() {
     let dot = store.create_dot(&s).await.unwrap();
     assert_eq!(dot.spec, s);
     assert_eq!(dot.id.len(), 26);
-    assert_eq!(dot.webhook_token.len(), 43);
+    // No webhook token until one is made (env vault spec §11).
+    assert!(!dot.has_webhook_token);
     assert_eq!(dot.created_at, dot.updated_at);
     assert_eq!(store.get_dot(&dot.id).await.unwrap(), dot);
     assert_eq!(dot.spec.policy.preset, Preset::Sandboxed);
@@ -127,7 +128,7 @@ async fn update_changes_fields_and_timestamp() {
     assert_eq!(updated.spec.max_turns, 7);
     assert!(!updated.spec.use_global_instructions);
     assert_eq!(store.get_dot(&dot.id).await.unwrap().spec, s);
-    assert_eq!(updated.webhook_token, dot.webhook_token);
+    assert_eq!(updated.has_webhook_token, dot.has_webhook_token);
     assert!(updated.updated_at > dot.updated_at);
     assert!(matches!(
         store.update_dot("missing", &s).await,
@@ -157,9 +158,28 @@ async fn delete_enable_and_token_regeneration() {
     let dot = store.create_dot(&spec("a")).await.unwrap();
     let disabled = store.set_dot_enabled(&dot.id, false).await.unwrap();
     assert!(!disabled.spec.enabled);
+    assert!(!store.check_webhook_token(&dot.id, "").await.unwrap());
+    let first = store.regenerate_webhook_token(&dot.id).await.unwrap();
+    assert_eq!(first.len(), 43);
+    assert!(store.get_dot(&dot.id).await.unwrap().has_webhook_token);
+    assert!(store.check_webhook_token(&dot.id, &first).await.unwrap());
     let token = store.regenerate_webhook_token(&dot.id).await.unwrap();
-    assert_ne!(token, dot.webhook_token);
-    assert_eq!(store.get_dot(&dot.id).await.unwrap().webhook_token, token);
+    assert_ne!(token, first);
+    assert!(!store.check_webhook_token(&dot.id, &first).await.unwrap());
+    assert!(store.check_webhook_token(&dot.id, &token).await.unwrap());
+    // Only its hash is stored.
+    let stored: String = sqlx::query_scalar("SELECT webhook_token FROM dots WHERE id = ?")
+        .bind(&dot.id)
+        .fetch_one(
+            &sqlx::SqlitePool::connect_with(
+                sqlx::sqlite::SqliteConnectOptions::new().filename(_d.path().join("dots.db")),
+            )
+            .await
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(stored.starts_with("sha256:") && !stored.contains(&token));
     store.delete_dot(&dot.id).await.unwrap();
     assert!(matches!(
         store.get_dot(&dot.id).await,

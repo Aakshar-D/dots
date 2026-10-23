@@ -389,16 +389,18 @@ describe("the dot editor, stored dot", () => {
     expect(backend.callsTo("delete_dot")).toEqual([{ id: dot.id }]);
   });
 
-  it("shows the webhook, copies it, and makes a new token after a confirmation", async () => {
+  it("shows the webhook, and a new token once, after a confirmation", async () => {
     const held = stored();
     backend.on("regenerate_webhook_token", () => {
-      held.dot = { ...held.dot, webhook_token: "tok-new" };
+      held.dot = { ...held.dot, has_webhook_token: true };
       return "tok-new";
     });
     const { user } = renderApp(path);
     const url = `http://127.0.0.1:47321/dots/${dot.id}/trigger`;
     await waitFor(() => expect(screen.getByLabelText("Webhook URL")).toHaveValue(url));
-    expect(screen.getByLabelText("Token")).toHaveValue(dot.webhook_token);
+    // The token is kept as a hash: it is not shown again.
+    expect(screen.getByText(/This dot has a token\. It was shown once/)).toBeVisible();
+    expect(screen.queryByLabelText("Token")).toBeNull();
 
     await user.click(screen.getByRole("button", { name: "Copy the webhook URL" }));
     expect(await navigator.clipboard.readText()).toBe(url);
@@ -406,7 +408,23 @@ describe("the dot editor, stored dot", () => {
     await user.click(screen.getByRole("button", { name: "Regenerate" }));
     await user.click(await screen.findByRole("button", { name: "Make a new token" }));
     await waitFor(() => expect(screen.getByLabelText("Token")).toHaveValue("tok-new"));
+    expect(screen.getByText("Copy it now: you won't see this again.")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Copy the token" }));
+    expect(await navigator.clipboard.readText()).toBe("tok-new");
     expect(backend.callsTo("regenerate_webhook_token")).toEqual([{ id: dot.id }]);
+  });
+
+  it("makes a dot's first token without asking", async () => {
+    const held = stored();
+    held.dot = { ...held.dot, has_webhook_token: false };
+    backend.on("regenerate_webhook_token", () => {
+      held.dot = { ...held.dot, has_webhook_token: true };
+      return "tok-first";
+    });
+    const { user } = renderApp(path);
+    expect(await screen.findByText(/no token yet/)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Make a token" }));
+    await waitFor(() => expect(screen.getByLabelText("Token")).toHaveValue("tok-first"));
   });
 
   /// Types new instructions and leaves them unsaved.
@@ -424,7 +442,7 @@ describe("the dot editor, stored dot", () => {
     const held = stored();
     // The copy loaded after the new token differs from the form in more than the token.
     backend.on("regenerate_webhook_token", () => {
-      held.dot = { ...held.dot, name: "renamed", instructions: "Stored.", webhook_token: "tok-new" };
+      held.dot = { ...held.dot, name: "renamed", instructions: "Stored.", has_webhook_token: true };
       return "tok-new";
     });
     const { user } = renderApp(path);
@@ -441,7 +459,7 @@ describe("the dot editor, stored dot", () => {
   it("keeps the editor and its unsaved edits when loading the dot again fails", async () => {
     const held = stored();
     backend.on("regenerate_webhook_token", () => {
-      held.dot = { ...held.dot, webhook_token: "tok-new" };
+      held.dot = { ...held.dot, has_webhook_token: true };
       backend.on("get_dot", () => {
         throw { kind: "internal", message: "database is locked" };
       });

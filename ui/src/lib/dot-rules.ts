@@ -179,6 +179,7 @@ export function specOf(dot: DotSpec): DotSpec {
     schedule: dot.schedule,
     policy: dot.policy,
     uses: dot.uses,
+    variables: dot.variables,
     browser: dot.browser,
     use_global_instructions: dot.use_global_instructions,
     use_user_settings: dot.use_user_settings,
