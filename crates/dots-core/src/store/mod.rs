@@ -12,6 +12,7 @@ mod browser;
 mod dots;
 mod follow_ups;
 mod library;
+mod memories;
 mod messages;
 mod runs;
 mod schedules;
@@ -25,6 +26,8 @@ pub const DB_FILE: &str = "dots.db";
 pub struct Store {
     pub(crate) pool: SqlitePool,
 }
+
+pub use memories::Added;
 
 impl Store {
     /// Opens (creating if needed) the database file and applies migrations, with the parts of
