@@ -12,8 +12,9 @@ import { invalidate, invalidateDots, keys, setDotEnabledMutation, useSwitchingDo
 const ITEM =
   "flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 outline-none select-none data-[disabled]:text-muted-foreground data-[highlighted]:bg-accent";
 
-/// The header's ⚙: what the Dots list offered for a dot. Edit opens its editor, Run now starts
-/// a run (it shows up in the conversation as a card), Enabled switches it on or off.
+/// The header's ⚙: what the Dots list offered for a dot. Edit opens its editor, Memory… its
+/// editor's Memory tab, Run now starts a run (it shows up in the conversation as a card),
+/// Enabled switches it on or off.
 export function DotMenu({ dot }: { dot: Dot }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
@@ -48,6 +49,12 @@ export function DotMenu({ dot }: { dot: Dot }) {
         >
           <DropdownMenu.Item className={ITEM} onSelect={() => void navigate(`/dots/${dot.id}`)}>
             Edit
+          </DropdownMenu.Item>
+          <DropdownMenu.Item
+            className={ITEM}
+            onSelect={() => void navigate(`/dots/${dot.id}?tab=memory`)}
+          >
+            Memory…
           </DropdownMenu.Item>
           <DropdownMenu.Item
             className={ITEM}

@@ -1,7 +1,7 @@
 import { hashKey, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Play } from "lucide-react";
 import { useState, type ReactNode } from "react";
-import { useNavigate, useParams } from "react-router";
+import { useNavigate, useParams, useSearchParams } from "react-router";
 import { toast } from "sonner";
 
 import { commands } from "@/api/commands";
@@ -17,7 +17,11 @@ import { errorMessage, notifyError } from "@/lib/notify";
 import { invalidateDots, keys, useSwitchingDot } from "@/lib/query";
 import { useDebounced } from "@/lib/use-debounced";
 import { DotForm, type Draft } from "@/screens/dot-editor/DotForm";
+import { MemoryTab } from "@/screens/dot-editor/MemoryTab";
 import { RunsList } from "@/screens/dot-editor/RunsList";
+
+/// The tabs of a dot's editor; `?tab=` opens one (the ⚙ menu's Memory… opens `memory`).
+const TABS = ["settings", "runs", "follow-ups", "memory"];
 
 /// The form with its Save button. `onSave` stores the spec; its rejection is shown above the
 /// form (the core's answer when it refuses what the form let through).
@@ -137,6 +141,9 @@ function NewDot() {
 function ExistingDot({ dotId }: { dotId: string }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
+  const [params, setParams] = useSearchParams();
+  const asked = params.get("tab");
+  const tab = asked !== null && TABS.includes(asked) ? asked : "settings";
   // The form below is filled once, from the first copy of the dot that is here. While the Dots
   // list's switch of this dot is on its way to the core, the core may still answer with the
   // copy from before it, so the dot is not asked for: the switch's answer is the copy (it is
@@ -209,11 +216,17 @@ function ExistingDot({ dotId }: { dotId: string }) {
       {(form) => (
         <>
           {dot.isError && <ErrorNote error={dot.error} />}
-          <Tabs defaultValue="settings">
+          <Tabs
+            value={tab}
+            onValueChange={(next) =>
+              setParams(next === "settings" ? {} : { tab: next }, { replace: true })
+            }
+          >
             <TabsList>
               <TabsTrigger value="settings">Settings</TabsTrigger>
               <TabsTrigger value="runs">Runs</TabsTrigger>
               <TabsTrigger value="follow-ups">Follow-ups</TabsTrigger>
+              <TabsTrigger value="memory">Memory</TabsTrigger>
             </TabsList>
             <TabsContent value="settings">{form}</TabsContent>
             <TabsContent value="runs">
@@ -221,6 +234,9 @@ function ExistingDot({ dotId }: { dotId: string }) {
             </TabsContent>
             <TabsContent value="follow-ups">
               <FollowUpsList dotId={dotId} />
+            </TabsContent>
+            <TabsContent value="memory">
+              <MemoryTab dotId={dotId} />
             </TabsContent>
           </Tabs>
         </>

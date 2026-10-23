@@ -84,6 +84,10 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
       // The pending follow-ups in the Dots list and the dot's editor.
       invalidate(qc, ["follow-ups"]);
       break;
+    case "memories_updated":
+      // The dot's Memory tab.
+      invalidate(qc, keys.memories(event.dot_id));
+      break;
   }
 }
 
