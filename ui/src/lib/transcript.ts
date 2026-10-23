@@ -154,3 +154,26 @@ export function transcriptItems(events: RunEventRecord[]): TranscriptItem[] {
   }
   return items;
 }
+
+/// What a call of a memory tool did, for the line under its chip (dot memory spec section 5):
+/// `remember` the text it saved, `forget` that it forgot one. Nothing for `recall`, for another
+/// tool, or for a call that has no result yet, failed or waits for approval. The local engine
+/// stores the three calls under their policy name `Memory`, so its input tells them apart, as
+/// the core does (`memory::Tool::for_input`).
+export function memoryNote(
+  tool: string,
+  input: unknown,
+  result: { output: string; isError: boolean } | null,
+): { kind: "remembered"; text: string } | { kind: "forgot" } | null {
+  const has = (key: string) => typeof input === "object" && input !== null && key in input;
+  const which =
+    tool === "mcp__dots__remember" || (tool === "Memory" && has("text"))
+      ? "remember"
+      : tool === "mcp__dots__forget" || (tool === "Memory" && has("id"))
+        ? "forget"
+        : null;
+  if (which === null || result === null || result.isError) return null;
+  return which === "remember"
+    ? { kind: "remembered", text: field(input, "text") }
+    : { kind: "forgot" };
+}
