@@ -8,10 +8,12 @@ import {
 import type { CSSProperties } from "react";
 import { Toaster as Sonner, type ToasterProps } from "sonner";
 
-// Dots has one dark theme, so the toaster does not follow a theme provider.
+import { useResolvedTheme } from "@/lib/theme";
+
+// The toasts follow the theme on screen (deep-teal spec section 3).
 const Toaster = (props: ToasterProps) => (
   <Sonner
-    theme="dark"
+    theme={useResolvedTheme()}
     className="toaster group"
     icons={{
       success: <CircleCheckIcon className="size-4" />,

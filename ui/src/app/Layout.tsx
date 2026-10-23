@@ -7,7 +7,7 @@ import { commands } from "@/api/commands";
 import { Banners } from "@/app/Banners";
 import { Badge } from "@/components/ui/badge";
 import { Toaster } from "@/components/ui/sonner";
-import { waits } from "@/lib/messages";
+import { isOpenQuestion, waits } from "@/lib/messages";
 import { keys } from "@/lib/query";
 import { useRuntimeEvents } from "@/lib/runtime-events";
 
@@ -36,11 +36,14 @@ export function Layout() {
         inbox.attention.length +
         inbox.tools_changed.length
       : 0) + (messages ?? []).filter(waits).length;
+  // A pending approval or an open question needs the person: the counts take the needs colour
+  // (deep-teal spec section 4).
+  const needs = (inbox?.approvals.length ?? 0) > 0 || (messages ?? []).some(isOpenQuestion);
   return (
     <div className="flex h-screen bg-background text-sm text-foreground">
       <nav
         aria-label="Main"
-        className="flex w-14 shrink-0 flex-col items-center gap-1 border-r bg-sidebar py-2 text-sidebar-foreground"
+        className="flex w-[46px] shrink-0 flex-col items-center gap-1 border-r bg-sidebar py-2 text-sidebar-foreground"
       >
         {LINKS.map(({ to, label, icon: Icon }) => {
           const count = to === "/inbox" ? waiting : to === "/home" ? unread : 0;
@@ -54,14 +57,20 @@ export function Layout() {
               title={name}
               className={({ isActive }) =>
                 cn(
-                  "relative flex size-10 items-center justify-center rounded-md hover:bg-sidebar-accent",
-                  isActive && "bg-sidebar-accent",
+                  "relative flex size-9 items-center justify-center rounded-lg text-muted-foreground hover:bg-sidebar-accent hover:text-foreground",
+                  isActive && "bg-sidebar-accent text-primary hover:text-primary",
                 )
               }
             >
               <Icon className="size-5" aria-hidden />
               {count > 0 && (
-                <Badge className="absolute -top-1 -right-1 h-4 min-w-4 px-1 text-[10px]">
+                <Badge
+                  data-tone={needs ? "needs" : "muted"}
+                  className={cn(
+                    "absolute -top-1 -right-1 h-4 min-w-4 px-1 text-[10px]",
+                    needs ? "bg-needs text-needs-foreground" : "bg-muted text-muted-foreground",
+                  )}
+                >
                   {count > 99 ? "99+" : count}
                 </Badge>
               )}

@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Plus } from "lucide-react";
+import { Plus, Puzzle } from "lucide-react";
 import { useState } from "react";
 
 import { commands } from "@/api/commands";
+import { EmptyState } from "@/components/EmptyState";
 import { Field } from "@/components/Field";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -67,7 +68,7 @@ function PluginRow({ entry }: { entry: PluginEntry }) {
       <span className="truncate font-mono text-xs text-muted-foreground">{entry.config.path}</span>
       {entry.problem && <span className="text-xs text-destructive">{entry.problem}</span>}
       {detail?.warnings.map((w) => (
-        <span key={w} className="text-xs text-amber-300">
+        <span key={w} className="text-xs text-needs">
           {w}
         </span>
       ))}
@@ -242,7 +243,7 @@ export function PluginsTab({ entries }: { entries: PluginEntry[] }) {
         </Button>
       </div>
       {entries.length === 0 ? (
-        <p className="text-muted-foreground">No plugins yet.</p>
+        <EmptyState icon={Puzzle}>No plugins yet.</EmptyState>
       ) : (
         <ul className="flex flex-col gap-2">
           {entries.map((entry) => (

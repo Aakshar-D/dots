@@ -7,7 +7,10 @@ import { createHashRouter, RouterProvider } from "react-router";
 
 import { routes } from "@/app/routes";
 import { createQueryClient } from "@/lib/query";
+import { startTheme } from "@/lib/theme";
 
+// public/theme-boot.js themed the page before it was drawn; this keeps it in step.
+startTheme();
 const queryClient = createQueryClient();
 // Hash routes: the app is loaded from a file-like origin, not from a server that could
 // answer deep links.

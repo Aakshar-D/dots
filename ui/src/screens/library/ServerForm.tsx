@@ -325,12 +325,12 @@ export function ServerForm(props: { entry: ServerEntry | null; onClose: () => vo
             </>
           )}
           {notSet.length > 0 && (
-            <p className="text-xs text-amber-300">
+            <p className="text-xs text-needs">
               Not set in Dots' environment: {notSet.join(", ")}
             </p>
           )}
           {secretKeys(draft).map((key) => (
-            <p key={key} className="text-xs text-amber-300">
+            <p key={key} className="text-xs text-needs">
               {key} looks like a secret. Write {"${VAR}"} instead of the value, so that the value
               is not stored.
             </p>

@@ -11,8 +11,8 @@ import { invalidate, keys, takeStatus } from "@/lib/query";
 
 function Banner(props: { tone: "error" | "warning" | "info"; children: ReactNode }) {
   const tone = {
-    error: "border-red-500/40 bg-red-500/15",
-    warning: "border-amber-500/40 bg-amber-500/15",
+    error: "border-destructive/40 bg-destructive/10",
+    warning: "border-needs-border bg-needs-surface",
     info: "border-border bg-muted",
   }[props.tone];
   return (
@@ -125,7 +125,7 @@ function UpdateBanner() {
         >
           What's new
         </button>
-        {note.error && <span className="block text-red-600 dark:text-red-400">{note.error}</span>}
+        {note.error && <span className="block text-destructive">{note.error}</span>}
       </span>
       {working.length === 0 ? (
         <>
