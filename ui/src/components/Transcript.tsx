@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { cn } from "cn";
 import { Info } from "lucide-react";
 import { Link } from "react-router";
 import { z } from "zod";
@@ -16,7 +17,7 @@ import { BrowserCall } from "@/components/BrowserCall";
 import { Markdown } from "@/components/Markdown";
 import { StatusBadge } from "@/components/StatusBadge";
 import { isActive } from "@/lib/home-topics";
-import { localDateTime } from "@/lib/format";
+import { localDateTime, localTime } from "@/lib/format";
 import { mcpToolLabel } from "@/lib/mcp-tool";
 import { keys } from "@/lib/query";
 import {
@@ -113,6 +114,98 @@ function outcomeColour(result: { output: string; isError: boolean } | null): str
   return result?.isError && !parked(result) ? "text-destructive" : "text-muted-foreground";
 }
 
+/// A failure in the conversation (deep-teal spec section 4): soft red text with a rule on its
+/// left, not a filled box, and still read out at once.
+export function Failure({ children }: { children: ReactNode }) {
+  return (
+    <p
+      role="alert"
+      data-slot="failure"
+      className="border-l-2 border-destructive py-0.5 pl-3 whitespace-pre-wrap text-destructive"
+    >
+      {children}
+    </p>
+  );
+}
+
+type ToolItem = Extract<TranscriptItem, { type: "tool" }>;
+
+/// The mark at the end of a tool step's chip; the outcome's word is there for assistive
+/// technology.
+const GLYPH: Record<string, string> = {
+  done: "✓",
+  failed: "✕",
+  running: "…",
+  "no result": "–",
+  "sent for approval": "!",
+};
+
+/// One tool step as a small rounded chip (its tool, then a mark) that opens to the call and its
+/// result. A call sent for approval has its chip in the needs colour.
+function ToolChip(props: { item: ToolItem; active: boolean; owners: ReadonlyMap<string, string> }) {
+  const { item, active, owners } = props;
+  const said = outcome(item.result, active);
+  const tone = parked(item.result) ? "needs" : item.result?.isError ? "failed" : "plain";
+  const mark =
+    tone === "failed"
+      ? "text-destructive"
+      : tone === "needs"
+        ? undefined
+        : said === "done"
+          ? "text-success"
+          : "text-muted-foreground";
+  return (
+    <details data-tone={tone} className="open:basis-full">
+      <summary
+        className={cn(
+          "inline-flex cursor-pointer list-none items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs [&::-webkit-details-marker]:hidden",
+          tone === "needs" ? "border-needs-border bg-needs-surface text-needs" : "bg-muted",
+        )}
+      >
+        <span className="font-medium" title={item.tool}>
+          {mcpToolLabel(item.tool, owners)}
+        </span>
+        <span aria-hidden className={mark}>
+          {GLYPH[said]}
+        </span>
+        <span className="sr-only">{said}</span>
+      </summary>
+      <div className="mt-1.5 flex flex-col gap-1 rounded-lg border p-2">
+        <p className="truncate font-mono text-xs text-muted-foreground">{toolPreview(item.input)}</p>
+        <pre className="overflow-x-auto text-xs whitespace-pre-wrap">
+          {JSON.stringify(item.input, null, 2)}
+        </pre>
+        {item.result && (
+          <pre
+            className={`max-h-80 overflow-auto border-t pt-1 text-xs whitespace-pre-wrap ${outcomeColour(
+              item.result,
+            )}`}
+          >
+            {item.result.output}
+          </pre>
+        )}
+      </div>
+    </details>
+  );
+}
+
+/// What a run's section shows, in order: consecutive tool steps as one row of chips, every
+/// other item by itself.
+type Block =
+  | { kind: "tools"; seq: number; items: ToolItem[] }
+  | { kind: "item"; item: TranscriptItem };
+
+function blocks(items: TranscriptItem[]): Block[] {
+  const out: Block[] = [];
+  for (const item of items) {
+    const last = out.at(-1);
+    if (item.type === "tool" && last?.kind === "tools") last.items.push(item);
+    else if (item.type === "tool") out.push({ kind: "tools", seq: item.seq, items: [item] });
+    else out.push({ kind: "item", item });
+  }
+  return out;
+}
+
 /// `active`: the item's run is still going. Only then can a tool call without a result be one
 /// that runs; in a run that has ended, the result never came.
 function Item(props: {
@@ -128,11 +221,7 @@ function Item(props: {
     case "text":
       return <Markdown text={item.text} />;
     case "error":
-      return (
-        <p role="alert" className="rounded-md border border-destructive/50 p-2 text-destructive">
-          {item.text}
-        </p>
-      );
+      return <Failure>{item.text}</Failure>;
     case "note":
       return (
         <p role="note" className="flex items-start gap-1.5 text-xs text-muted-foreground">
@@ -178,31 +267,7 @@ function Item(props: {
         </details>
       );
     case "tool":
-      return (
-        <details className="rounded-md border px-2 py-1">
-          <summary className="flex cursor-pointer items-center gap-2 text-xs">
-            <span className="font-semibold" title={item.tool}>
-              {mcpToolLabel(item.tool, owners)}
-            </span>
-            <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground">
-              {toolPreview(item.input)}
-            </span>
-            <span className={outcomeColour(item.result)}>{outcome(item.result, active)}</span>
-          </summary>
-          <pre className="mt-1 overflow-x-auto text-xs whitespace-pre-wrap">
-            {JSON.stringify(item.input, null, 2)}
-          </pre>
-          {item.result && (
-            <pre
-              className={`mt-1 max-h-80 overflow-auto border-t pt-1 text-xs whitespace-pre-wrap ${outcomeColour(
-                item.result,
-              )}`}
-            >
-              {item.result.output}
-            </pre>
-          )}
-        </details>
-      );
+      return <ToolChip item={item} active={active} owners={owners} />;
   }
 }
 
@@ -218,7 +283,7 @@ function pluginOwners(entries: LibraryEntry[]): Map<string, string> {
 }
 
 /// A note or a question the dot posted during a run, as a message from the dot (check-ins spec
-/// section 9).
+/// section 9): a soft card, with its kind and a question's state in its meta line.
 function CheckIn({ message }: { message: Message }) {
   const question = message.kind === "question";
   const state = !question
@@ -232,10 +297,12 @@ function CheckIn({ message }: { message: Message }) {
     <div
       role="group"
       aria-label={question ? "Question from the dot" : "Note from the dot"}
-      className="flex max-w-prose flex-col gap-1 self-start rounded-lg bg-muted px-3 py-1.5"
+      className="flex max-w-prose flex-col gap-1 self-start rounded-xl bg-muted px-3.5 py-2.5"
     >
+      <span className="text-xs text-muted-foreground">
+        {state ? `Question · ${state}` : "Note"}
+      </span>
       <p className="whitespace-pre-wrap">{message.text}</p>
-      {state && <span className="text-xs text-muted-foreground">Question · {state}</span>}
     </div>
   );
 }
@@ -250,6 +317,8 @@ export function Transcript(props: {
   /// an event too: the one of the last run that says the same is left out, so that the error is
   /// on screen once.
   shownError?: string | null;
+  /// The dot's name, for the meta line above its words.
+  dotName?: string;
 }) {
   const many = props.runs.length > 1;
   // A plugin's MCP server shows as its plugin; the Library tells which server comes from which.
@@ -272,6 +341,7 @@ export function Transcript(props: {
         const items = transcriptItems(props.events.get(run.id) ?? []).filter(
           (item) => !(last && item.type === "error" && item.text === props.shownError),
         );
+        const checkIns = (props.messages ?? []).filter((checkIn) => checkIn.run_id === run.id);
         return (
           <section key={run.id} aria-label={names[i]}>
             <header className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
@@ -283,27 +353,47 @@ export function Transcript(props: {
             <FollowUpLine run={run} />
             <div className="flex flex-col gap-2">
               {message !== null && (
-                <p className="self-end rounded-lg bg-primary px-3 py-1.5 whitespace-pre-wrap text-primary-foreground">
+                <p
+                  data-from="person"
+                  className="max-w-[80%] self-end rounded-2xl rounded-br-sm bg-bubble px-3.5 py-2 whitespace-pre-wrap text-bubble-foreground"
+                >
                   {message}
                 </p>
               )}
-              {items.map((item) => (
-                <Item
-                  key={item.seq}
-                  item={item}
-                  active={isActive(run)}
-                  owners={owners}
-                  runId={run.id}
-                />
-              ))}
+              {(items.length > 0 || checkIns.length > 0) && (
+                <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <span aria-hidden className="size-1.5 rounded-full bg-primary" />
+                  {props.dotName ?? "The dot"} · {localTime(run.queued_at)}
+                </p>
+              )}
+              {blocks(items).map((block) =>
+                block.kind === "tools" ? (
+                  <div
+                    key={block.seq}
+                    role="group"
+                    aria-label="Tool steps"
+                    className="flex flex-wrap items-start gap-1.5"
+                  >
+                    {block.items.map((item) => (
+                      <ToolChip key={item.seq} item={item} active={isActive(run)} owners={owners} />
+                    ))}
+                  </div>
+                ) : (
+                  <Item
+                    key={block.item.seq}
+                    item={block.item}
+                    active={isActive(run)}
+                    owners={owners}
+                    runId={run.id}
+                  />
+                ),
+              )}
               {items.length === 0 && message === null && run.status === "queued" && (
                 <p className="text-muted-foreground">Waiting to start.</p>
               )}
-              {(props.messages ?? [])
-                .filter((checkIn) => checkIn.run_id === run.id)
-                .map((checkIn) => (
-                  <CheckIn key={checkIn.id} message={checkIn} />
-                ))}
+              {checkIns.map((checkIn) => (
+                <CheckIn key={checkIn.id} message={checkIn} />
+              ))}
             </div>
           </section>
         );

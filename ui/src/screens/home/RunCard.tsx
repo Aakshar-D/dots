@@ -37,7 +37,7 @@ export function RunCard(props: {
   return (
     <article
       aria-label={topicTitle(topic)}
-      className="flex flex-col gap-2 rounded-lg border bg-card p-3"
+      className="flex flex-col gap-2 border-l-2 border-border py-1 pl-3"
     >
       <div className="flex items-center gap-2">
         <span className="font-medium">{topicTitle(topic)}</span>
@@ -60,12 +60,12 @@ export function RunCard(props: {
         <div
           role="group"
           aria-label="Question from the dot"
-          className="flex flex-col gap-1 rounded-lg bg-muted px-3 py-1.5"
+          className="flex flex-col gap-1 rounded-xl bg-muted px-3.5 py-2.5"
         >
-          <p className="whitespace-pre-wrap">{question.text}</p>
           <span className="text-xs text-muted-foreground">
             Question · waiting for your answer
           </span>
+          <p className="whitespace-pre-wrap">{question.text}</p>
         </div>
       )}
     </article>

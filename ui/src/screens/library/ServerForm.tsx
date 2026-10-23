@@ -325,12 +325,12 @@ export function ServerForm(props: { entry: ServerEntry | null; onClose: () => vo
             </>
           )}
           {notSet.length > 0 && (
-            <p className="text-xs text-amber-300">
+            <p className="text-xs text-needs">
               Not in Personal: {notSet.join(", ")}. Add it in the Env tab.
             </p>
           )}
           {secretKeys(draft).map((key) => (
-            <p key={key} className="text-xs text-amber-300">
+            <p key={key} className="text-xs text-needs">
               {key} looks like a secret. When you save, Dots moves its value to Personal as a
               secret and the server reads it from there.
             </p>

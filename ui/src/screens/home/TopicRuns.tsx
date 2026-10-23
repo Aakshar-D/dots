@@ -5,7 +5,7 @@ import type { Message, Run, RunEventRecord } from "@/api/types";
 import { AppliedCalls } from "@/components/AppliedCalls";
 import { ApprovalCard } from "@/components/ApprovalCard";
 import { LoadErrors } from "@/components/ErrorNote";
-import { Transcript } from "@/components/Transcript";
+import { Failure, Transcript } from "@/components/Transcript";
 import { eventsQuery, keys } from "@/lib/query";
 
 /// Runs of one topic as the chat shows a thread: each run's message, the dot's text, its tool
@@ -32,17 +32,19 @@ export function TopicRuns(props: { runs: Run[]; checkIns: Message[]; dotName: st
   const checkIns = props.checkIns.filter((m) => runs.some((run) => run.id === m.run_id));
   return (
     <div className="flex flex-col gap-4">
-      <Transcript runs={runs} events={eventsByRun} shownError={failure} messages={checkIns} />
+      <Transcript
+        runs={runs}
+        events={eventsByRun}
+        shownError={failure}
+        messages={checkIns}
+        dotName={dotName}
+      />
       <LoadErrors queries={[...events, ...approvals]} />
       <AppliedCalls approvals={asked} />
       {pending.map((approval) => (
         <ApprovalCard key={approval.id} approval={approval} dotName={dotName} />
       ))}
-      {failure && (
-        <p role="alert" className="rounded-md border border-destructive/50 p-2 text-destructive">
-          {failure}
-        </p>
-      )}
+      {failure && <Failure>{failure}</Failure>}
     </div>
   );
 }

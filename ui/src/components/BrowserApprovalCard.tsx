@@ -55,12 +55,12 @@ export function BrowserApprovalCard({
   return (
     <article
       aria-label={`Browser approval for ${who}`}
-      className="flex flex-col gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3"
+      className="flex flex-col gap-2 rounded-xl border border-needs-border bg-needs-surface p-3"
     >
       <p className="flex items-start gap-1.5">
-        <Globe aria-hidden className="mt-1 size-3.5 shrink-0" />
+        <Globe aria-hidden className="mt-1 size-3.5 shrink-0 text-needs" />
         <span>
-          <span className="font-semibold">{who}</span>{" "}
+          <span className="font-semibold text-needs">{who}</span>{" "}
           {askParts(ask).map((part, i) =>
             part.strong ? <strong key={i}>{part.text}</strong> : <span key={i}>{part.text}</span>,
           )}

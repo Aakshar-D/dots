@@ -42,7 +42,7 @@ export function DotsColumn({ rows, openId }: { rows: DotOverview[]; openId: stri
     links[to]?.focus();
   }
   return (
-    <nav aria-label="Dots" className="flex w-64 shrink-0 flex-col border-r">
+    <nav aria-label="Dots" className="flex w-64 shrink-0 flex-col border-r bg-sidebar">
       <div className="flex items-center gap-2 px-3 py-2">
         <h2 className="flex-1 font-semibold">Dots</h2>
         <Button asChild size="icon-sm" variant="ghost">
@@ -51,7 +51,7 @@ export function DotsColumn({ rows, openId }: { rows: DotOverview[]; openId: stri
           </Link>
         </Button>
       </div>
-      <ul className="flex min-h-0 flex-1 flex-col overflow-auto" onKeyDown={onKeyDown}>
+      <ul className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-auto px-2 pb-2" onKeyDown={onKeyDown}>
         {rows.map((row) => {
           const open = row.dot.id === openId;
           const next = nextLine(row, followUps);
@@ -62,8 +62,8 @@ export function DotsColumn({ rows, openId }: { rows: DotOverview[]; openId: stri
                 data-dot={row.dot.id}
                 aria-current={open ? "page" : undefined}
                 className={cn(
-                  "flex flex-col gap-0.5 px-3 py-2 hover:bg-accent",
-                  open && "bg-accent",
+                  "flex flex-col gap-0.5 rounded-[10px] p-2.5 hover:bg-sidebar-accent/60",
+                  open && "bg-sidebar-accent hover:bg-sidebar-accent",
                 )}
               >
                 <span className="flex items-center gap-2">

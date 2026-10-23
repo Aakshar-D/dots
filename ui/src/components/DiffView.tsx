@@ -2,9 +2,9 @@ import type { FileDiff, WorktreeDiff } from "@/api/types";
 import { Badge } from "@/components/ui/badge";
 
 function lineClass(line: string): string {
-  if (line.startsWith("@@")) return "text-sky-300";
-  if (line.startsWith("+")) return "bg-emerald-500/15 text-emerald-200";
-  if (line.startsWith("-")) return "bg-red-500/15 text-red-200";
+  if (line.startsWith("@@")) return "text-primary";
+  if (line.startsWith("+")) return "bg-success/10 text-foreground";
+  if (line.startsWith("-")) return "bg-destructive/10 text-foreground";
   if (line.startsWith("\\")) return "text-muted-foreground italic";
   return "";
 }
@@ -53,7 +53,7 @@ export function DiffView({ diff }: { diff: WorktreeDiff }) {
   return (
     <div className="flex flex-col gap-2">
       {diff.truncated && (
-        <p role="status" className="rounded-md border border-amber-500/40 bg-amber-500/15 p-2">
+        <p role="status" className="rounded-md border border-needs-border bg-needs-surface p-2">
           This diff is larger than 1 MiB. Every changed file is listed, but some are shown
           without their changes. Open the folder to see them.
         </p>

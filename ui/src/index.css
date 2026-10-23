@@ -39,6 +39,14 @@
     --color-card: var(--card);
     --color-foreground: var(--foreground);
     --color-background: var(--background);
+    --color-needs: var(--needs);
+    --color-needs-foreground: var(--needs-foreground);
+    --color-needs-surface: var(--needs-surface);
+    --color-needs-border: var(--needs-border);
+    --color-bubble: var(--bubble);
+    --color-bubble-foreground: var(--bubble-foreground);
+    --color-success: var(--success);
+    --text-sm--line-height: 1.55;
     --radius-sm: calc(var(--radius) * 0.6);
     --radius-md: calc(var(--radius) * 0.8);
     --radius-lg: var(--radius);
@@ -48,83 +56,125 @@
     --radius-4xl: calc(var(--radius) * 2.6);
 }
 
+/* Deep Teal (deep-teal spec section 2). `src/lib/tokens.ts` mirrors these values and its test
+   holds the two together and measures the contrast of every pair. */
 :root {
-    --background: oklch(1 0 0);
-    --foreground: oklch(0.145 0 0);
-    --card: oklch(1 0 0);
-    --card-foreground: oklch(0.145 0 0);
-    --popover: oklch(1 0 0);
-    --popover-foreground: oklch(0.145 0 0);
-    --primary: oklch(0.205 0 0);
-    --primary-foreground: oklch(0.985 0 0);
-    --secondary: oklch(0.97 0 0);
-    --secondary-foreground: oklch(0.205 0 0);
-    --muted: oklch(0.97 0 0);
-    --muted-foreground: oklch(0.556 0 0);
-    --accent: oklch(0.97 0 0);
-    --accent-foreground: oklch(0.205 0 0);
-    --destructive: oklch(0.577 0.245 27.325);
-    --border: oklch(0.922 0 0);
-    --input: oklch(0.922 0 0);
-    --ring: oklch(0.708 0 0);
+    --background: #f7fbfb;
+    --foreground: #11201f;
+    --card: #ffffff;
+    --card-foreground: #11201f;
+    --popover: #ffffff;
+    --popover-foreground: #11201f;
+    --primary: #0c7765;
+    --primary-foreground: #ffffff;
+    --secondary: #e3eceb;
+    --secondary-foreground: #1d3332;
+    --muted: #e9f2f1;
+    --muted-foreground: #4f6867;
+    --accent: #e3eceb;
+    --accent-foreground: #1d3332;
+    --destructive: #b23838;
+    --border: #d3e3e1;
+    --input: #d3e3e1;
+    --ring: #0e9780;
     --chart-1: oklch(0.87 0 0);
     --chart-2: oklch(0.556 0 0);
     --chart-3: oklch(0.439 0 0);
     --chart-4: oklch(0.371 0 0);
     --chart-5: oklch(0.269 0 0);
-    --radius: 0.625rem;
-    --sidebar: oklch(0.985 0 0);
-    --sidebar-foreground: oklch(0.145 0 0);
-    --sidebar-primary: oklch(0.205 0 0);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.97 0 0);
-    --sidebar-accent-foreground: oklch(0.205 0 0);
-    --sidebar-border: oklch(0.922 0 0);
-    --sidebar-ring: oklch(0.708 0 0);
+    --radius: 0.75rem;
+    --sidebar: #eef5f4;
+    --sidebar-foreground: #11201f;
+    --sidebar-primary: #0c7765;
+    --sidebar-primary-foreground: #ffffff;
+    --sidebar-accent: #dcefec;
+    --sidebar-accent-foreground: #11201f;
+    --sidebar-border: #d3e3e1;
+    --sidebar-ring: #0e9780;
+    --needs: #8f6000;
+    --needs-foreground: #ffffff;
+    --needs-surface: #fff8e5;
+    --needs-border: #ecd28c;
+    --bubble: #0c7765;
+    --bubble-foreground: #ffffff;
+    --success: #0c7765;
 }
 
 .dark {
-    --background: oklch(0.145 0 0);
-    --foreground: oklch(0.985 0 0);
-    --card: oklch(0.205 0 0);
-    --card-foreground: oklch(0.985 0 0);
-    --popover: oklch(0.205 0 0);
-    --popover-foreground: oklch(0.985 0 0);
-    --primary: oklch(0.922 0 0);
-    --primary-foreground: oklch(0.205 0 0);
-    --secondary: oklch(0.269 0 0);
-    --secondary-foreground: oklch(0.985 0 0);
-    --muted: oklch(0.269 0 0);
-    --muted-foreground: oklch(0.708 0 0);
-    --accent: oklch(0.269 0 0);
-    --accent-foreground: oklch(0.985 0 0);
-    --destructive: oklch(0.704 0.191 22.216);
-    --border: oklch(1 0 0 / 10%);
-    --input: oklch(1 0 0 / 15%);
-    --ring: oklch(0.556 0 0);
+    --background: #0c1416;
+    --foreground: #e2eeee;
+    --card: #0f1a1c;
+    --card-foreground: #e2eeee;
+    --popover: #0f1a1c;
+    --popover-foreground: #e2eeee;
+    --primary: #22c3a6;
+    --primary-foreground: #03211c;
+    --secondary: #1a2a2c;
+    --secondary-foreground: #d5e6e5;
+    --muted: #132325;
+    --muted-foreground: #8fa9a9;
+    --accent: #1a2a2c;
+    --accent-foreground: #d5e6e5;
+    --destructive: #f78e8e;
+    --border: #1f3133;
+    --input: #1f3133;
+    --ring: #22c3a6;
     --chart-1: oklch(0.87 0 0);
     --chart-2: oklch(0.556 0 0);
     --chart-3: oklch(0.439 0 0);
     --chart-4: oklch(0.371 0 0);
     --chart-5: oklch(0.269 0 0);
-    --sidebar: oklch(0.205 0 0);
-    --sidebar-foreground: oklch(0.985 0 0);
-    --sidebar-primary: oklch(0.488 0.243 264.376);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.269 0 0);
-    --sidebar-accent-foreground: oklch(0.985 0 0);
-    --sidebar-border: oklch(1 0 0 / 10%);
-    --sidebar-ring: oklch(0.556 0 0);
+    --sidebar: #0f1a1c;
+    --sidebar-foreground: #e2eeee;
+    --sidebar-primary: #22c3a6;
+    --sidebar-primary-foreground: #03211c;
+    --sidebar-accent: #123033;
+    --sidebar-accent-foreground: #e2eeee;
+    --sidebar-border: #1f3133;
+    --sidebar-ring: #22c3a6;
+    --needs: #ffc247;
+    --needs-foreground: #231800;
+    --needs-surface: #1b1a0e;
+    --needs-border: #4a3d16;
+    --bubble: #1a4a48;
+    --bubble-foreground: #e2fffa;
+    --success: #22c3a6;
 }
 
 @layer base {
   * {
-    @apply border-border outline-ring/50;
+    @apply border-border;
     }
   body {
     @apply bg-background text-foreground;
+    font-size: 14px;
+    line-height: 1.55;
     }
   html {
     @apply font-sans;
+    }
+  h1 {
+    font-size: 18px;
+    font-weight: 600;
+    }
+  h2 {
+    font-size: 15px;
+    font-weight: 600;
+    }
+  /* Every control shows the ring on keyboard focus (spec section 4). */
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+    }
+}
+
+/* Reduced motion: the running pulse and every transition stop (spec section 6). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
     }
 }

@@ -1,9 +1,10 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus } from "lucide-react";
+import { Plus, Server } from "lucide-react";
 import { useState } from "react";
 
 import { commands } from "@/api/commands";
 import type { CatalogStatus } from "@/api/types";
+import { EmptyState } from "@/components/EmptyState";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { notifyError } from "@/lib/notify";
@@ -13,9 +14,12 @@ import { ItemRow, RemoveButton, UsedBy, type PluginEntry, type ServerEntry } fro
 import { ServerForm } from "./ServerForm";
 
 const STATUS: Record<CatalogStatus, { label: string; className: string }> = {
-  accepted: { label: "Accepted", className: "bg-emerald-500/20 text-emerald-300" },
-  changed: { label: "Tools changed", className: "bg-amber-500/20 text-amber-300" },
-  unreachable: { label: "Unreachable", className: "bg-red-500/20 text-red-300" },
+  accepted: { label: "Accepted", className: "border-success/40 bg-transparent text-success" },
+  changed: { label: "Tools changed", className: "border-needs-border bg-transparent text-needs" },
+  unreachable: {
+    label: "Unreachable",
+    className: "border-destructive/40 bg-transparent text-destructive",
+  },
   unchecked: { label: "Unchecked", className: "bg-muted text-muted-foreground" },
 };
 
@@ -76,7 +80,7 @@ function ServerRow(props: {
           {label}
         </Badge>
         {entry.missing_variables.length > 0 && (
-          <Badge variant="secondary" className="bg-amber-500/20 text-amber-300">
+          <Badge variant="secondary" className="border-needs-border bg-transparent text-needs">
             {`Missing variable: ${entry.missing_variables.join(", ")}`}
           </Badge>
         )}
@@ -115,7 +119,7 @@ export function McpServersTab(props: {
         </Button>
       </div>
       {props.entries.length === 0 ? (
-        <p className="text-muted-foreground">No MCP servers yet.</p>
+        <EmptyState icon={Server}>No MCP servers yet.</EmptyState>
       ) : (
         <ul className="flex flex-col gap-2">
           {props.entries.map((entry) => (

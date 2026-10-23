@@ -93,7 +93,7 @@ export function Variables(props: {
                 </span>
               ) : (
                 <div key={name} className="flex items-center gap-2">
-                  <span className="text-xs text-amber-700 dark:text-amber-400">
+                  <span className="text-xs text-needs">
                     {server.name} now also wants <code>{name}</code>
                   </span>
                   <Button

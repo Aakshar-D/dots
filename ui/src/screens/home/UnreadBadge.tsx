@@ -13,7 +13,7 @@ export function UnreadBadge({ row }: { row: DotOverview }) {
       data-tone={waiting ? "waiting" : "muted"}
       className={cn(
         "ml-auto inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full px-1 text-[10px] font-medium",
-        waiting ? "bg-amber-400 text-amber-950" : "bg-muted text-muted-foreground",
+        waiting ? "bg-needs text-needs-foreground" : "bg-muted text-muted-foreground",
       )}
     >
       <span aria-hidden>{row.unread}</span>

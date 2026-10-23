@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 
 import { commands } from "@/api/commands";
 import type { ScannedSkill } from "@/api/types";
+import { EmptyState } from "@/components/EmptyState";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -159,7 +160,7 @@ export function SkillsTab({ entries }: { entries: SkillEntry[] }) {
         </Button>
       </div>
       {entries.length === 0 ? (
-        <p className="text-muted-foreground">No skills yet.</p>
+        <EmptyState icon={Sparkles}>No skills yet.</EmptyState>
       ) : (
         <ul className="flex flex-col gap-2">
           {entries.map((entry) => (

@@ -115,7 +115,12 @@ function Thread({ runId, runs }: { runId: string; runs: Run[] }) {
       ))}
       <AppliedCalls approvals={asked} />
       {/* The run's error stands above, so the transcript does not repeat it. */}
-      <Transcript runs={runs} events={eventsByRun} shownError={latest.error} />
+      <Transcript
+        runs={runs}
+        events={eventsByRun}
+        shownError={latest.error}
+        dotName={dot.data?.name}
+      />
     </div>
   );
 
