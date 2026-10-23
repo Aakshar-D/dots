@@ -12,6 +12,7 @@ use crate::checkins::Tool;
 use crate::context;
 use crate::engine::local::tools::cap_head;
 use crate::engine::{PermissionGate, PermissionOutcome};
+use crate::memory::{self, Tool as MemoryTool};
 
 const DEFAULT_PROTOCOL: &str = "2025-06-18";
 
@@ -105,6 +106,7 @@ pub async fn handle(State(s): State<ServerState>, headers: HeaderMap, body: Byte
             // runner the check-ins.
             if s.runner.checkins().is_some() {
                 tools.extend(Tool::ALL.map(Tool::mcp_schema));
+                tools.extend(MemoryTool::ALL.map(MemoryTool::mcp_schema));
             }
             json!({ "tools": tools })
         }
@@ -113,6 +115,10 @@ pub async fn handle(State(s): State<ServerState>, headers: HeaderMap, body: Byte
             let answer = match (name, name.and_then(Tool::from_name)) {
                 (Some("context"), _) => call_context(&s, &run_id, &req).await,
                 (_, Some(tool)) => call_check_in(&s, &run_id, &req, tool).await,
+                (Some(n), None) if MemoryTool::from_name(n).is_some() => {
+                    let tool = MemoryTool::from_name(n).expect("a memory tool");
+                    call_memory(&s, &run_id, &req, tool).await
+                }
                 _ => call_approve(&s, &run_id, &req).await,
             };
             match answer {
@@ -194,6 +200,44 @@ async fn call_check_in(
         Err(e) => return Ok(not_performed(&format!("permission check failed: {e}"))),
     };
     Ok(match checkins.call(run_id, tool, &input).await {
+        Ok(text) => json!({ "content": [{ "type": "text", "text": text }] }),
+        Err(text) => not_performed(&text),
+    })
+}
+
+/// Checks a call of a memory tool against the dot's policy under `Memory`, waiting for an
+/// approval when a rule asks, and performs it for the run's dot (dot memory spec section 3). A
+/// call that is not performed is a tool result with `isError`, as for the check-in tools.
+async fn call_memory(
+    s: &ServerState,
+    run_id: &str,
+    req: &Value,
+    tool: MemoryTool,
+) -> Result<Value, (i64, String)> {
+    let Some(checkins) = s.runner.checkins() else {
+        return Err((-32602, "unknown tool".to_string()));
+    };
+    let params = req
+        .get("params")
+        .ok_or((-32602, "missing params".to_string()))?;
+    let input = match params.get("arguments") {
+        None | Some(Value::Null) => json!({}),
+        Some(args @ Value::Object(_)) => args.clone(),
+        Some(_) => return Err((-32602, "params.arguments must be an object".to_string())),
+    };
+    // Only the tool's own argument, as the local engine's `prepare` keeps: the approval then
+    // names exactly the tool that will run, and one tool's grant cannot be redeemed by another.
+    let mut input = input;
+    let own = tool.properties();
+    if let (Value::Object(args), Value::Object(own)) = (&mut input, &own) {
+        args.retain(|key, _| own.contains_key(key));
+    }
+    let input = match s.hub.check(run_id, memory::POLICY_NAME, input).await {
+        Ok(PermissionOutcome::Allow { input }) => input,
+        Ok(PermissionOutcome::Deny { message }) => return Ok(not_performed(&message)),
+        Err(e) => return Ok(not_performed(&format!("permission check failed: {e}"))),
+    };
+    Ok(match checkins.memories().call(run_id, tool, &input).await {
         Ok(text) => json!({ "content": [{ "type": "text", "text": text }] }),
         Err(text) => not_performed(&text),
     })

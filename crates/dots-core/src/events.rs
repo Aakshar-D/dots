@@ -57,6 +57,11 @@ pub enum RuntimeEvent {
     DotSeen {
         dot_id: String,
     },
+    /// A memory of the dot was saved, changed or deleted, by a run or by the person (dot
+    /// memory spec section 3).
+    MemoriesUpdated {
+        dot_id: String,
+    },
 }
 
 pub type Bus = broadcast::Sender<RuntimeEvent>;

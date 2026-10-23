@@ -35,6 +35,8 @@ export const sample = {
   messages: T.Message.array().parse(contract.Message),
   /// A pending follow-up and a fired one.
   followUps: T.FollowUp.array().parse(contract.FollowUp),
+  /// A pinned memory the dot saved in a run, and one the person wrote.
+  memories: T.Memory.array().parse(contract.Memory),
 };
 
 /// What `new_dot_spec` answers: the core's defaults with nothing filled in.
@@ -78,6 +80,8 @@ export function installDefaults(): void {
   // No dot has checked in or scheduled anything. A question on screen is marked read.
   backend.on("messages_list", () => []);
   backend.on("follow_ups_list", () => []);
+  // No dot remembers anything.
+  backend.on("memories_list", () => []);
   // Nothing is unread; looking at a dot and saying which one is viewed are taken.
   backend.on("unread_total", () => 0);
   backend.on("mark_dot_seen", () => null);

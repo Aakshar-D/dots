@@ -50,6 +50,7 @@ export const keys = {
   diff: (runId: string) => ["diff", runId] as const,
   messages: (dotId: string | null) => ["messages", dotId] as const,
   followUps: (dotId: string | null) => ["follow-ups", dotId] as const,
+  memories: (dotId: string) => ["memories", dotId] as const,
 };
 
 type DotSwitch = { id: string; enabled: boolean };

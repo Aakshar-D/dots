@@ -378,6 +378,8 @@ describe("the dot editor, stored dot", () => {
     const { user, router } = renderApp(path);
     await user.click(await screen.findByRole("button", { name: "Delete" }));
     const dialog = await screen.findByRole("alertdialog", { name: `Delete ${dot.name}?` });
+    // Its memories go with it (dot memory spec section 6).
+    expect(dialog).toHaveTextContent("The dot, its runs, their transcripts and its memories are deleted.");
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
     expect(backend.callsTo("delete_dot")).toEqual([]);
 

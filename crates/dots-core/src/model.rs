@@ -628,3 +628,22 @@ pub struct FollowUp {
     pub retry_at: Option<String>,
     pub created_at: String,
 }
+
+str_enum!(MemorySource { Dot => "dot", Person => "person" });
+
+/// One thing a dot remembers across runs (dot memory spec section 2): one fact, 1 to 500
+/// characters. Times are RFC 3339 UTC (`util::now`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Memory {
+    pub id: String,
+    pub dot_id: String,
+    pub text: String,
+    /// Shown first, in the prompt and the Memory tab.
+    pub pinned: bool,
+    /// Who wrote it: a run of the dot (`remember`) or the person (the Memory tab).
+    pub source: MemorySource,
+    /// The run that saved it; `None` for the person's own.
+    pub run_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}

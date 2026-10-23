@@ -13,6 +13,7 @@ mod dots;
 mod env;
 mod follow_ups;
 mod library;
+mod memories;
 mod messages;
 mod runs;
 mod schedules;
@@ -28,6 +29,8 @@ pub const DB_FILE: &str = "dots.db";
 pub struct Store {
     pub(crate) pool: SqlitePool,
 }
+
+pub use memories::Added;
 
 impl Store {
     /// Opens (creating if needed) the database file and applies migrations, with the parts of
@@ -52,6 +55,7 @@ impl Store {
         upgrade::finish_0008(&pool).await?;
         let store = Store { pool };
         upgrade::finish_0011(&store).await?;
+        upgrade::finish_0012(&store.pool).await?;
         Ok(store)
     }
 

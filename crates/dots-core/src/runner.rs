@@ -9,7 +9,7 @@ use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::approvals::grant_key;
 use crate::checkins::{CheckIns, Tool as CheckInTool};
@@ -18,7 +18,7 @@ use crate::events::{Bus, RuntimeEvent};
 use crate::model::{
     ApprovalStatus, EngineKind, NewRun, Run, RunStatus, TriggerKind, WorkspaceMode,
 };
-use crate::prompt::{build_prompt, context_tool_name};
+use crate::prompt::{build_prompt_with_memories, context_tool_name};
 use crate::run_tools::{CloseOnDrop, OpenRequest, RunTools};
 use crate::store::Store;
 use crate::util::{ct_eq, new_token};
@@ -28,12 +28,15 @@ use crate::{Error, Result};
 
 /// The name the run's model knows a policy tool by: the `Context` tool is `mcp__dots__context`
 /// on the Claude engine, `context` on the local one, and the check-in tools likewise
-/// (`checkins::Tool::model_name`); every other tool keeps its name.
-fn model_tool_name(tool: &str, engine: EngineKind) -> &str {
+/// (`checkins::Tool::model_name`); a `Memory` call is the memory tool its `input` is for
+/// (`memory::Tool::for_input`); every other tool keeps its name.
+fn model_tool_name<'a>(tool: &'a str, input: &Value, engine: EngineKind) -> &'a str {
     if tool == "Context" {
         context_tool_name(engine)
     } else if let Some(check_in) = CheckInTool::from_policy_name(tool) {
         check_in.model_name(engine)
+    } else if tool == crate::memory::POLICY_NAME {
+        crate::memory::Tool::for_input(input).model_name(engine)
     } else {
         tool
     }
@@ -451,7 +454,7 @@ impl Runner {
                     lines.push(format!(
                         "- Approval #{} granted: you may now use {} with the same input. Perform that action now.",
                         a.id,
-                        model_tool_name(&a.tool, engine)
+                        model_tool_name(&a.tool, &a.input, engine)
                     ));
                     needs_child = true;
                 }
@@ -459,14 +462,14 @@ impl Runner {
                     lines.push(format!(
                         "- Approval #{} for {} was denied. Reviewer note: {note}",
                         a.id,
-                        model_tool_name(&a.tool, engine)
+                        model_tool_name(&a.tool, &a.input, engine)
                     ));
                     needs_child = true;
                 }
                 _ => lines.push(format!(
                     "- Approval #{} for {} was denied. Do not attempt it again.",
                     a.id,
-                    model_tool_name(&a.tool, engine)
+                    model_tool_name(&a.tool, &a.input, engine)
                 )),
             }
         }
@@ -682,19 +685,22 @@ impl Runner {
             _ => Vec::new(),
         };
         let global = self.store.get_settings().await?.global_instructions;
+        // The memories as they are now: a run's prompt does not change while it runs.
+        let memories = self.store.list_memories(&dot.id).await?;
         let secret = self.register_secret(&run.id);
         self.register_tools(&run.id, tools.clone());
         let ctx = RunContext {
             run_id: run.id.clone(),
             dot: dot.clone(),
             workspace: prepared.path.clone(),
-            prompt: build_prompt(
+            prompt: build_prompt_with_memories(
                 &dot,
                 run,
                 &prepared.path,
                 chrono::Local::now(),
                 &global,
                 tools.contexts(),
+                &memories,
             ),
             session_id: run.session_id.clone(),
             mcp_url: self.cfg.mcp_url.clone(),

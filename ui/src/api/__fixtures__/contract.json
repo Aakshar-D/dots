@@ -135,7 +135,11 @@
     "browser_screenshot",
     "mark_dot_seen",
     "set_viewing",
-    "unread_total"
+    "unread_total",
+    "memories_list",
+    "memory_add",
+    "memory_update",
+    "memory_delete"
   ],
   "ContextDocuments": {
     "complete": true,
@@ -254,6 +258,10 @@
         {
           "action": "allow",
           "tool": "FollowUp"
+        },
+        {
+          "action": "allow",
+          "tool": "Memory"
         }
       ]
     },
@@ -395,6 +403,10 @@
           {
             "action": "allow",
             "tool": "FollowUp"
+          },
+          {
+            "action": "allow",
+            "tool": "Memory"
           }
         ]
       },
@@ -537,6 +549,10 @@
         {
           "action": "allow",
           "tool": "FollowUp"
+        },
+        {
+          "action": "allow",
+          "tool": "Memory"
         }
       ]
     },
@@ -630,6 +646,10 @@
       "skill",
       "plugin",
       "context"
+    ],
+    "MemorySource": [
+      "dot",
+      "person"
     ],
     "MessageKind": [
       "note",
@@ -1136,6 +1156,8 @@
     "max_approval_wait_secs": 280,
     "max_concurrent_runs": 16,
     "max_global_instructions": 32768,
+    "max_memories": 200,
+    "max_memory_text": 500,
     "max_schedule_attempts": 6,
     "max_timeout_secs": 604800
   },
@@ -1223,6 +1245,28 @@
       },
       "transport": "http",
       "url": "https://mcp.example.com/mcp"
+    }
+  ],
+  "Memory": [
+    {
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "dot_id": "01J0DOT",
+      "id": "01J0MEM1",
+      "pinned": true,
+      "run_id": "01J0RUN",
+      "source": "dot",
+      "text": "Prefers invoices as PDF.",
+      "updated_at": "2026-10-09T12:00:00.000Z"
+    },
+    {
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "dot_id": "01J0DOT",
+      "id": "01J0MEM2",
+      "pinned": false,
+      "run_id": null,
+      "source": "person",
+      "text": "The staging server is staging.example.com.",
+      "updated_at": "2026-10-09T12:00:00.000Z"
     }
   ],
   "Message": [
@@ -1391,6 +1435,10 @@
         {
           "action": "allow",
           "tool": "FollowUp"
+        },
+        {
+          "action": "allow",
+          "tool": "Memory"
         }
       ]
     },
@@ -1685,6 +1733,10 @@
     {
       "dot_id": "01J0DOT",
       "type": "dot_seen"
+    },
+    {
+      "dot_id": "01J0DOT",
+      "type": "memories_updated"
     }
   ],
   "ScannedSkill": [

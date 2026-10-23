@@ -114,6 +114,10 @@ command_list![
     mark_dot_seen,
     set_viewing,
     unread_total,
+    memories_list,
+    memory_add,
+    memory_update,
+    memory_delete,
 ];
 
 /// Keeps the log writer flushing until the app exits.

@@ -294,6 +294,31 @@ fn messages() -> Vec<Message> {
     ]
 }
 
+/// A pinned memory the dot saved in a run, and one the person wrote.
+fn memories() -> Vec<Memory> {
+    let dots = Memory {
+        id: "01J0MEM1".into(),
+        dot_id: "01J0DOT".into(),
+        text: "Prefers invoices as PDF.".into(),
+        pinned: true,
+        source: MemorySource::Dot,
+        run_id: Some("01J0RUN".into()),
+        created_at: TS.into(),
+        updated_at: TS.into(),
+    };
+    vec![
+        dots.clone(),
+        Memory {
+            id: "01J0MEM2".into(),
+            text: "The staging server is staging.example.com.".into(),
+            pinned: false,
+            source: MemorySource::Person,
+            run_id: None,
+            ..dots
+        },
+    ]
+}
+
 /// A pending follow-up that failed to start once, and one that fired.
 fn follow_ups() -> Vec<FollowUp> {
     let pending = FollowUp {
@@ -715,6 +740,8 @@ pub fn samples() -> Value {
             "max_concurrent_runs": MAX_CONCURRENT_RUNS,
             "max_schedule_attempts": MAX_ATTEMPTS,
             "max_global_instructions": MAX_GLOBAL_INSTRUCTIONS,
+            "max_memories": dots_core::memory::MAX_PER_DOT,
+            "max_memory_text": dots_core::memory::MAX_TEXT,
         },
         "StartupError": to(StartupError {
             message: "Dots could not start: database disk image is malformed".into(),
@@ -726,8 +753,10 @@ pub fn samples() -> Value {
     samples["ContextDocuments"] = to(context_documents());
     samples["Message"] = to(messages());
     samples["FollowUp"] = to(follow_ups());
+    samples["Memory"] = to(memories());
     samples["Enums"]["MessageKind"] = to(MessageKind::ALL);
     samples["Enums"]["FollowUpStatus"] = to(FollowUpStatus::ALL);
+    samples["Enums"]["MemorySource"] = to(MemorySource::ALL);
     samples["RuntimeEvent"]
         .as_array_mut()
         .expect("the RuntimeEvent samples")
@@ -742,6 +771,9 @@ pub fn samples() -> Value {
                 dot_id: "01J0DOT".into(),
             }),
             to(RuntimeEvent::DotSeen {
+                dot_id: "01J0DOT".into(),
+            }),
+            to(RuntimeEvent::MemoriesUpdated {
                 dot_id: "01J0DOT".into(),
             }),
         ]);

@@ -14,6 +14,7 @@ pub mod kit;
 pub mod library;
 pub mod library_service;
 pub mod mcp;
+pub mod memory;
 pub mod model;
 pub mod policy;
 pub mod proc;

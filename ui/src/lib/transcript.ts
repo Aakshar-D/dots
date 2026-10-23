@@ -154,3 +154,35 @@ export function transcriptItems(events: RunEventRecord[]): TranscriptItem[] {
   }
   return items;
 }
+
+/// The memory tool a call ran: Dots' own server names it, and the local engine stores the three
+/// calls under their policy name `Memory`, so its input tells them apart, as the core does
+/// (`memory::Tool::for_input`). Null for any other tool.
+export function memoryTool(tool: string, input: unknown): "remember" | "forget" | "recall" | null {
+  const has = (key: string) => typeof input === "object" && input !== null && key in input;
+  if (tool === "mcp__dots__remember" || (tool === "Memory" && has("text"))) return "remember";
+  if (tool === "mcp__dots__forget" || (tool === "Memory" && has("id"))) return "forget";
+  if (tool === "mcp__dots__recall" || tool === "Memory") return "recall";
+  return null;
+}
+
+/// The name a person reads for a call of `tool`: a local memory call (policy name `Memory`) as
+/// `Memory › remember`, `forget` or `recall`; any other tool as it is.
+export function callLabel(tool: string, input: unknown): string {
+  return tool === "Memory" ? `Memory › ${memoryTool(tool, input)}` : tool;
+}
+
+/// What a call of a memory tool did, for the line under its chip (dot memory spec section 5):
+/// `remember` the text it saved, `forget` that it forgot one. Nothing for `recall`, for another
+/// tool, or for a call that has no result yet, failed or waits for approval.
+export function memoryNote(
+  tool: string,
+  input: unknown,
+  result: { output: string; isError: boolean } | null,
+): { kind: "remembered"; text: string } | { kind: "forgot" } | null {
+  const which = memoryTool(tool, input);
+  if (which === null || which === "recall" || result === null || result.isError) return null;
+  return which === "remember"
+    ? { kind: "remembered", text: field(input, "text") }
+    : { kind: "forgot" };
+}

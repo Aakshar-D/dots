@@ -42,6 +42,7 @@ const schemas: Record<SampleName, { parse: (v: unknown) => unknown }> = {
   UpdateNote: T.UpdateNote.array(),
   Message: T.Message.array(),
   FollowUp: T.FollowUp.array(),
+  Memory: T.Memory.array(),
   BrowserStatus: T.BrowserStatus,
 };
 
@@ -63,6 +64,7 @@ const enums: Record<keyof typeof fixture.Enums, { options: readonly string[] }> 
   MessageKind: T.MessageKind,
   FollowUpStatus: T.FollowUpStatus,
   EntryKind: T.EntryKind,
+  MemorySource: T.MemorySource,
 };
 
 describe("Rust/TypeScript contract", () => {

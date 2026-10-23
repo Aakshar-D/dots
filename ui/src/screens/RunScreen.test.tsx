@@ -650,6 +650,15 @@ describe("the calls Dots performed in a thread", () => {
     expect(screen.queryByRole("article", { name: "Approval for Bash" })).toBeNull();
   });
 
+  it("names a memory call Dots performed by its memory tool", async () => {
+    thread([folderRun], [], [{ ...decided("m", "applied"), tool: "Memory", input: { query: "pdf" } }]);
+    renderApp(`/runs/${run.id}`);
+    const rows = within(await screen.findByRole("list", { name: "Approved calls" })).getAllByRole(
+      "listitem",
+    );
+    expect(within(rows[0]!).getByText("Memory › recall")).toBeVisible();
+  });
+
   it("shows no such list for a thread without one", async () => {
     thread([folderRun], [], [decided("repeated", null)]);
     renderApp(`/runs/${run.id}`);

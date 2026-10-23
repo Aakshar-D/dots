@@ -245,7 +245,15 @@ async fn a_claude_run_checks_in_through_dots_own_server() {
     let listed: Value = serde_json::from_str(listed[0].data["line"].as_str().unwrap()).unwrap();
     assert_eq!(
         listed["tools"],
-        json!(["approve", "notify", "ask", "follow_up"])
+        json!([
+            "approve",
+            "notify",
+            "ask",
+            "follow_up",
+            "remember",
+            "forget",
+            "recall"
+        ])
     );
     let calls: Vec<Value> = events(&e, &run.id, "tool_call")
         .await
@@ -342,7 +350,18 @@ async fn dots_own_server_checks_each_check_in_against_the_dots_policy() {
         .iter()
         .map(|t| t["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["approve", "notify", "ask", "follow_up"]);
+    assert_eq!(
+        names,
+        [
+            "approve",
+            "notify",
+            "ask",
+            "follow_up",
+            "remember",
+            "forget",
+            "recall"
+        ]
+    );
     assert_eq!(
         listed["result"]["tools"][3]["inputSchema"]["required"],
         json!(["note"])

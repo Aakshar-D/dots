@@ -1,7 +1,7 @@
-import type { ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "cn";
-import { Info } from "lucide-react";
+import { Brain, Info } from "lucide-react";
 import { Link } from "react-router";
 import { z } from "zod";
 
@@ -22,6 +22,8 @@ import { mcpToolLabel } from "@/lib/mcp-tool";
 import { keys } from "@/lib/query";
 import {
   checkInLine,
+  callLabel,
+  memoryNote,
   toolPreview,
   transcriptItems,
   type TranscriptItem,
@@ -163,7 +165,7 @@ function ToolChip(props: { item: ToolItem; active: boolean; owners: ReadonlyMap<
         )}
       >
         <span className="font-medium" title={item.tool}>
-          {mcpToolLabel(item.tool, owners)}
+          {mcpToolLabel(callLabel(item.tool, item.input), owners)}
         </span>
         <span aria-hidden className={mark}>
           {GLYPH[said]}
@@ -186,6 +188,24 @@ function ToolChip(props: { item: ToolItem; active: boolean; owners: ReadonlyMap<
         )}
       </div>
     </details>
+  );
+}
+
+/// The line under the chip of a `remember` or `forget` that was done (dot memory spec section
+/// 5): what the dot remembered, or that it forgot one, and a link to the dot's Memory tab.
+function MemoryNote({ item, dotId }: { item: ToolItem; dotId: string }) {
+  const note = memoryNote(item.tool, item.input, item.result);
+  if (note === null) return null;
+  return (
+    <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+      <Brain aria-hidden className="size-3.5 shrink-0" />
+      <span className="min-w-0 truncate">
+        {note.kind === "remembered" ? `Remembered: ${note.text}` : "Forgot a memory"}
+      </span>
+      <Link to={`/dots/${dotId}?tab=memory`} className="text-foreground hover:underline">
+        Memory
+      </Link>
+    </p>
   );
 }
 
@@ -368,16 +388,25 @@ export function Transcript(props: {
               )}
               {blocks(items).map((block) =>
                 block.kind === "tools" ? (
-                  <div
-                    key={block.seq}
-                    role="group"
-                    aria-label="Tool steps"
-                    className="flex flex-wrap items-start gap-1.5"
-                  >
+                  <Fragment key={block.seq}>
+                    <div
+                      role="group"
+                      aria-label="Tool steps"
+                      className="flex flex-wrap items-start gap-1.5"
+                    >
+                      {block.items.map((item) => (
+                        <ToolChip
+                          key={item.seq}
+                          item={item}
+                          active={isActive(run)}
+                          owners={owners}
+                        />
+                      ))}
+                    </div>
                     {block.items.map((item) => (
-                      <ToolChip key={item.seq} item={item} active={isActive(run)} owners={owners} />
+                      <MemoryNote key={item.seq} item={item} dotId={run.dot_id} />
                     ))}
-                  </div>
+                  </Fragment>
                 ) : (
                   <Item
                     key={block.item.seq}

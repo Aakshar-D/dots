@@ -11,6 +11,7 @@ use serde_json::{json, Value};
 
 use crate::events::{Bus, RuntimeEvent};
 use crate::followups::{parse_time, FollowUps};
+use crate::memory::Memories;
 use crate::model::{EngineKind, Message, NewRun, Run, RunStatus, TriggerKind};
 use crate::runner::Runner;
 use crate::store::Store;
@@ -281,21 +282,30 @@ pub fn local_label(t: DateTime<Utc>) -> String {
         .to_string()
 }
 
-/// Performs the check-in tools' calls for both engines (spec sections 2 and 3). Cheap to clone.
+/// Performs the check-in tools' calls for both engines (spec sections 2 and 3), and holds the
+/// dots' memories, whose tools are served wherever the check-in tools are (dot memory spec
+/// section 3). Cheap to clone.
 #[derive(Clone)]
 pub struct CheckIns {
     store: Store,
     bus: Bus,
     follow_ups: Arc<FollowUps>,
+    memories: Memories,
 }
 
 impl CheckIns {
     pub fn new(store: Store, bus: Bus, follow_ups: Arc<FollowUps>) -> Self {
         Self {
+            memories: Memories::new(store.clone(), bus.clone()),
             store,
             bus,
             follow_ups,
         }
+    }
+
+    /// The dots' memories: the person's commands and the memory tools go through them.
+    pub fn memories(&self) -> &Memories {
+        &self.memories
     }
 
     /// Performs an allowed call of `tool` by the run `run_id`. `Ok` is the text the model gets;

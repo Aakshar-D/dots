@@ -65,6 +65,24 @@ describe("the Inbox", () => {
     expect(within(runs[1]).queryByRole("button", { name: "Discard worktree" })).toBeNull();
   });
 
+  it("names a memory call by the memory tool it would run", async () => {
+    inbox({
+      approvals: [
+        { ...approval, id: "m1", tool: "Memory", input: { text: "Invoices on the 1st." } },
+        { ...approval, id: "m2", tool: "Memory", input: { id: "01J0MEM1" } },
+      ],
+      review_runs: [],
+      attention: [],
+      tools_changed: [],
+    });
+    renderApp("/inbox");
+    const approvals = await screen.findByRole("region", { name: "Approvals" });
+    for (const name of ["Memory › remember", "Memory › forget"]) {
+      const card = within(approvals).getByRole("article", { name: `Approval for ${name}` });
+      expect(within(card).getByText(name)).toBeVisible();
+    }
+  });
+
   it("offers no discard for a failed run whose worktree is already gone", async () => {
     inbox({
       approvals: [],
