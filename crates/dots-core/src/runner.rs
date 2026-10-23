@@ -18,7 +18,7 @@ use crate::events::{Bus, RuntimeEvent};
 use crate::model::{
     ApprovalStatus, EngineKind, NewRun, Run, RunStatus, TriggerKind, WorkspaceMode,
 };
-use crate::prompt::{build_prompt, context_tool_name};
+use crate::prompt::{build_prompt_with_memories, context_tool_name};
 use crate::run_tools::{CloseOnDrop, OpenRequest, RunTools};
 use crate::store::Store;
 use crate::util::{ct_eq, new_token};
@@ -662,19 +662,22 @@ impl Runner {
             _ => Vec::new(),
         };
         let global = self.store.get_settings().await?.global_instructions;
+        // The memories as they are now: a run's prompt does not change while it runs.
+        let memories = self.store.list_memories(&dot.id).await?;
         let secret = self.register_secret(&run.id);
         self.register_tools(&run.id, tools.clone());
         let ctx = RunContext {
             run_id: run.id.clone(),
             dot: dot.clone(),
             workspace: prepared.path.clone(),
-            prompt: build_prompt(
+            prompt: build_prompt_with_memories(
                 &dot,
                 run,
                 &prepared.path,
                 chrono::Local::now(),
                 &global,
                 tools.contexts(),
+                &memories,
             ),
             session_id: run.session_id.clone(),
             mcp_url: self.cfg.mcp_url.clone(),
