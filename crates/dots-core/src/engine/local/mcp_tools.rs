@@ -160,6 +160,7 @@ impl Session {
         }
         if self.checkins.is_some() {
             out.extend(tools::checkins::schemas());
+            out.extend(tools::memory::schemas());
         }
         // The built-in browser's tools (browser spec section 2.2); their names fit as they are,
         // so `ToolNames` finds them by their `mcp__` name.

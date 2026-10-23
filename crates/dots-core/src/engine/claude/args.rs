@@ -52,6 +52,8 @@ pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
     }
     // It checks each call of its check-in tools too (check-ins spec section 2).
     allow.extend(Tool::ALL.map(|t| t.model_name(EngineKind::Claude).to_string()));
+    // And of its memory tools (dot memory spec section 3).
+    allow.extend(crate::memory::Tool::ALL.map(|t| t.model_name(EngineKind::Claude).to_string()));
     if !allow.is_empty() {
         a.push("--allowedTools".into());
         a.extend(allow);

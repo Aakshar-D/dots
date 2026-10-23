@@ -65,6 +65,20 @@ pub struct McpTrust {
 /// them, and the CLI never sees their rules.
 pub const CHECK_IN_TOOLS: [&str; 3] = ["Notify", "Ask", "FollowUp"];
 
+/// Dots' own memory tools (`remember`, `forget`, `recall`) by their one policy name (dot memory
+/// spec section 3): treated as the check-in tools are. A rule names it alone: `Memory(...)` is
+/// refused.
+pub const MEMORY_TOOL: &str = crate::memory::POLICY_NAME;
+
+/// A tool whose ask rule wins over an allow rule: the check-in tools and `Memory`.
+fn ask_wins(tool: &str) -> bool {
+    CHECK_IN_TOOLS.contains(&tool) || tool == MEMORY_TOOL
+}
+
+/// The refusal of a rule `Memory(...)`.
+pub const MEMORY_RULE: &str =
+    "a Memory rule names no argument: `Memory` covers remember, forget and recall";
+
 const READ_TOOLS: &[&str] = &["Read", "LS", "Glob", "Grep"];
 const COMMAND_TOOLS: &[&str] = &["Bash", "PowerShell"];
 /// Commands that run whatever follows them: a prefix rule through one would allow any command.
@@ -157,10 +171,12 @@ impl Policy {
             }
         };
         // Every preset lets the model read the skills and the context collections the dot uses,
-        // and check in with the person: notes, a question, follow-ups within their limits.
+        // check in with the person (notes, a question, follow-ups within their limits) and
+        // keep its memory.
         rules.push(Rule::new("Skill", Action::Allow));
         rules.push(Rule::new("Context", Action::Allow));
         rules.extend(CHECK_IN_TOOLS.map(|tool| Rule::new(tool, Action::Allow)));
+        rules.push(Rule::new(MEMORY_TOOL, Action::Allow));
         Policy {
             preset,
             rules,
@@ -177,10 +193,10 @@ impl Policy {
     /// Like `resolve`, but absolute file paths inside `workspace` are treated as relative to it.
     pub fn resolve_in(&self, tool: &str, input: &Value, workspace: Option<&Path>) -> Action {
         let ws = workspace_key(workspace);
-        // A check-in tool set to ask means it, even under the preset's allow (check-ins spec
-        // section 4); every other tool keeps deny > allow > ask, where a narrow allow beats a
-        // broad ask.
-        let order = if CHECK_IN_TOOLS.contains(&tool.trim()) {
+        // A check-in tool or `Memory` set to ask means it, even under the preset's allow
+        // (check-ins spec section 4, dot memory spec section 3); every other tool keeps
+        // deny > allow > ask, where a narrow allow beats a broad ask.
+        let order = if ask_wins(tool.trim()) {
             [Action::Deny, Action::Ask, Action::Allow]
         } else {
             [Action::Deny, Action::Allow, Action::Ask]
@@ -238,7 +254,7 @@ impl Policy {
     pub fn cli_lists(&self) -> (Vec<String>, Vec<String>) {
         let dots_only = |tool: &str| {
             let tool = tool.trim();
-            ["Context", "Browser", "BrowserRisky"]
+            ["Context", "Browser", "BrowserRisky", MEMORY_TOOL]
                 .iter()
                 .chain(CHECK_IN_TOOLS.iter())
                 .any(|name| {
@@ -275,6 +291,9 @@ impl Policy {
                 return Err(invalid(crate::browser::sites::BARE_RULE));
             }
             if let Pattern::WithSpec { tool, spec } = pattern {
+                if tool == MEMORY_TOOL {
+                    return Err(invalid(MEMORY_RULE));
+                }
                 if matches!(tool, "Browser" | "BrowserRisky") {
                     crate::browser::sites::check_site(spec).map_err(|e| invalid(&e))?;
                 }

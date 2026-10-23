@@ -361,7 +361,7 @@ impl Session {
             let output = if approval.tool.starts_with("mcp__") {
                 self.perform_mcp(&approval.tool, &approval.input).await
             } else {
-                let prepared = tools::local_name(&approval.tool)
+                let prepared = tools::local_name_for(&approval.tool, &approval.input)
                     .ok_or_else(|| format!("unknown tool '{}'", approval.tool))
                     .and_then(|name| tools::prepare(name, &approval.input, &self.ctx.workspace));
                 match prepared {
@@ -421,6 +421,20 @@ impl Session {
             return match &self.checkins {
                 Some(checkins) => {
                     tools::checkins::run(checkins, &self.ctx.run_id, call.name, &call.input).await
+                }
+                None => ToolOutput::err(format!("{} is not available in this run", call.name)),
+            };
+        }
+        if crate::memory::Tool::from_name(call.name).is_some() {
+            return match &self.checkins {
+                Some(checkins) => {
+                    tools::memory::run(
+                        checkins.memories(),
+                        &self.ctx.run_id,
+                        call.name,
+                        &call.input,
+                    )
+                    .await
                 }
                 None => ToolOutput::err(format!("{} is not available in this run", call.name)),
             };

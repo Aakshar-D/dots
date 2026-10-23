@@ -154,7 +154,8 @@ fn argv_contains_required_flags_in_order() {
             "-p --output-format stream-json --verbose --model haiku --max-turns 12 \
          --permission-prompt-tool mcp__dots__approve --mcp-config C:/data/mcp-RUN1.json \
          --strict-mcp-config --setting-sources  --allowedTools Read LS Glob Grep Skill \
-         mcp__dots__notify mcp__dots__ask mcp__dots__follow_up \
+         mcp__dots__notify mcp__dots__ask mcp__dots__follow_up mcp__dots__remember \
+         mcp__dots__forget mcp__dots__recall \
          --disallowedTools Write Edit NotebookEdit Bash PowerShell"
         ),
         "{joined}"

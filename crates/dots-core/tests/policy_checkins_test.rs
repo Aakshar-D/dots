@@ -13,13 +13,14 @@ fn every_preset_allows_the_check_in_tools_after_skill_and_context() {
     assert_eq!(CHECK_IN_TOOLS, ["Notify", "Ask", "FollowUp"]);
     for preset in Preset::ALL {
         let p = Policy::preset(*preset);
-        let tail: Vec<&str> = p.rules[p.rules.len() - 5..]
+        // `Memory` follows them (dot memory spec section 3).
+        let tail: Vec<&str> = p.rules[p.rules.len() - 6..]
             .iter()
             .map(|r| r.tool.as_str())
             .collect();
         assert_eq!(
             tail,
-            ["Skill", "Context", "Notify", "Ask", "FollowUp"],
+            ["Skill", "Context", "Notify", "Ask", "FollowUp", "Memory"],
             "{preset:?}"
         );
         for tool in CHECK_IN_TOOLS {
@@ -85,11 +86,12 @@ async fn migration_0008_lets_every_policy_that_is_not_custom_check_in() {
         .collect::<Vec<_>>()
         .into();
     before.run(&pool).await.unwrap();
-    // A policy as 0007 left it: the preset's rules without the check-in tools.
+    // A policy as 0007 left it: the preset's rules without the check-in tools and without
+    // `Memory`, which 0012 adds after them.
     let old = |preset: Preset| {
         let mut p = Policy::preset(preset);
         p.rules
-            .retain(|r| !CHECK_IN_TOOLS.contains(&r.tool.as_str()));
+            .retain(|r| !CHECK_IN_TOOLS.contains(&r.tool.as_str()) && r.tool != "Memory");
         p
     };
     let mut asks = old(Preset::Trusted);
@@ -129,6 +131,7 @@ async fn migration_0008_lets_every_policy_that_is_not_custom_check_in() {
     let mut want = asks;
     want.rules.push(Rule::new("Notify", Action::Allow));
     want.rules.push(Rule::new("FollowUp", Action::Allow));
+    want.rules.push(Rule::new("Memory", Action::Allow));
     assert_eq!(store.get_dot("D3").await.unwrap().spec.policy, want);
     // A Custom policy is the person's own: it is left as it was.
     assert_eq!(store.get_dot("D4").await.unwrap().spec.policy, custom);

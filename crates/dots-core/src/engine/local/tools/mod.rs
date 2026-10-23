@@ -12,6 +12,7 @@ use crate::policy::{Action, Policy};
 pub mod checkins;
 pub mod context;
 mod fs;
+pub mod memory;
 mod search;
 mod shell;
 pub mod skill;
@@ -27,7 +28,8 @@ pub const MAX_ENTRIES: usize = 500;
 /// `skill` reads the run's skills, not the workspace: the engine runs it (`skill::run`) and
 /// offers it only to a run that has skills. `context` reads the run's context collections in
 /// the same way (`context::run`). The check-in tools tell and ask the person and schedule a
-/// follow-up (`checkins::run`), offered to every run of an engine that has check-ins.
+/// follow-up (`checkins::run`), offered to every run of an engine that has check-ins, as are
+/// the memory tools (`memory::run`), which share one alias.
 pub const TOOLS: &[(&str, &str)] = &[
     ("read_file", "Read"),
     ("write_file", "Write"),
@@ -41,6 +43,9 @@ pub const TOOLS: &[(&str, &str)] = &[
     ("notify", "Notify"),
     ("ask", "Ask"),
     ("follow_up", "FollowUp"),
+    ("remember", "Memory"),
+    ("forget", "Memory"),
+    ("recall", "Memory"),
 ];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -78,8 +83,18 @@ pub fn alias(name: &str) -> Option<&'static str> {
 }
 
 /// The local tool behind a policy alias (`Bash` is `shell`): what an approval's `tool` names.
+/// The memory tools share `Memory`: `local_name_for` tells them apart by the call's input.
 pub fn local_name(alias: &str) -> Option<&'static str> {
     TOOLS.iter().find(|(_, a)| *a == alias).map(|(n, _)| *n)
+}
+
+/// The local tool of an approval's call: `local_name`, or for `Memory` the memory tool whose
+/// argument the input holds (`memory::Tool::for_input`).
+pub fn local_name_for(alias: &str, input: &Value) -> Option<&'static str> {
+    if alias == crate::memory::POLICY_NAME {
+        return Some(crate::memory::Tool::for_input(input).name());
+    }
+    local_name(alias)
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -153,6 +168,9 @@ const ARGS: &[(&str, Params)] = &[
         "follow_up",
         &[("note", Str, true), ("at", Str, false), ("in", Str, false)],
     ),
+    ("remember", &[("text", Str, true)]),
+    ("forget", &[("id", Str, true)]),
+    ("recall", &[("query", Str, false)]),
 ];
 
 /// Checks a model tool call before the policy sees it: a known tool, arguments that form a

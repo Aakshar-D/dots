@@ -50,6 +50,7 @@ impl Store {
         upgrade::finish_0006(&pool).await?;
         upgrade::finish_0007(&pool).await?;
         upgrade::finish_0008(&pool).await?;
+        upgrade::finish_0012(&pool).await?;
         Ok(Store { pool })
     }
 

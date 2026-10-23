@@ -154,10 +154,11 @@ fn prepare_validates_calls_before_the_policy() {
     assert_eq!(tools::alias("grep"), Some("Grep"));
     // Every local tool but `skill` and `context`, which a run gets only with skills
     // (`skill::schema`) and context collections (`context::schema`), and the three check-in
-    // tools, which an engine with check-ins adds (`checkins::schemas`).
+    // tools and the three memory tools, which an engine with check-ins adds
+    // (`checkins::schemas`, `memory::schemas`).
     assert_eq!(
         tools::schemas().as_array().unwrap().len(),
-        tools::TOOLS.len() - 5
+        tools::TOOLS.len() - 8
     );
 }
 
@@ -208,11 +209,16 @@ fn a_prepared_input_passes_prepare_again_unchanged() {
             json!({"question": "Ship it?", "choices": ["yes", "no"]}),
         ),
         ("follow_up", json!({"note": "Check again.", "in": "2h"})),
+        ("remember", json!({"text": "Prefers PDF."})),
+        ("forget", json!({"id": "01HX"})),
+        ("recall", json!({"query": "pdf"})),
+        ("recall", json!({})),
     ];
     let mut tools_seen = std::collections::BTreeSet::new();
     for (name, args) in &calls {
         let first = tools::prepare(name, args, ws.path()).unwrap_or_else(|e| panic!("{name}: {e}"));
-        let stored_as = tools::local_name(first.alias).expect("an alias names a local tool");
+        let stored_as =
+            tools::local_name_for(first.alias, &first.input).expect("an alias names a local tool");
         assert_eq!(stored_as, *name);
         let again = tools::prepare(stored_as, &first.input, ws.path())
             .unwrap_or_else(|e| panic!("{name} again: {e}"));
@@ -222,9 +228,13 @@ fn a_prepared_input_passes_prepare_again_unchanged() {
     // Every local tool was checked, and the two name maps are each other's inverse.
     let all: std::collections::BTreeSet<&str> = tools::TOOLS.iter().map(|(n, _)| *n).collect();
     assert_eq!(tools_seen, all);
+    // The memory tools share `Memory`, which names the first of them (`local_name_for` tells
+    // them apart by the call's input, checked above).
     for (name, alias) in tools::TOOLS {
         assert_eq!(tools::alias(name), Some(*alias));
-        assert_eq!(tools::local_name(alias), Some(*name));
+        if *alias != "Memory" || *name == "remember" {
+            assert_eq!(tools::local_name(alias), Some(*name));
+        }
     }
     for unknown in ["shell", "bash", "WebFetch", "mcp__x__y", ""] {
         assert_eq!(tools::local_name(unknown), None, "{unknown:?}");
