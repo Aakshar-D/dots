@@ -11,7 +11,7 @@ import { browserAsk } from "@/lib/browser";
 import { notifyError } from "@/lib/notify";
 import { invalidate, invalidateDots, keys } from "@/lib/query";
 import { onSingleClick } from "@/lib/single-click";
-import { toolPreview } from "@/lib/transcript";
+import { callLabel, toolPreview } from "@/lib/transcript";
 
 type Decision = { approved: boolean; allowRule: string | null };
 
@@ -59,13 +59,14 @@ function ToolApprovalCard({ approval, dotName }: { approval: Approval; dotName?:
   const decided = decide.isPending || decide.isSuccess;
   const noteId = `approval-note-${approval.id}`;
   const rulesId = `approval-rules-${approval.id}`;
+  const tool = callLabel(approval.tool, approval.input);
   return (
     <article
-      aria-label={`Approval for ${approval.tool}`}
+      aria-label={`Approval for ${tool}`}
       className="flex flex-col gap-2 rounded-xl border border-needs-border bg-needs-surface p-3"
     >
       <header className="flex items-baseline gap-2">
-        <span className="font-semibold text-needs">{approval.tool}</span>
+        <span className="font-semibold text-needs">{tool}</span>
         <span className="min-w-0 flex-1 truncate font-mono text-xs">
           {toolPreview(approval.input)}
         </span>

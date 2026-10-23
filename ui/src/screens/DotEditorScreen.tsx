@@ -195,7 +195,7 @@ function ExistingDot({ dotId }: { dotId: string }) {
         <>
           <ConfirmButton
             title={`Delete ${dot.data.name}?`}
-            description="The dot, its runs and their transcripts are deleted. Worktrees and branches its runs left behind stay in your repository."
+            description="The dot, its runs, their transcripts and its memories are deleted. Worktrees and branches its runs left behind stay in your repository."
             confirmLabel="Delete the dot"
             onConfirm={() => remove.mutate()}
             disabled={remove.isPending}
