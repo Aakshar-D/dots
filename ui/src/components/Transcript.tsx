@@ -23,6 +23,7 @@ import { keys } from "@/lib/query";
 import {
   checkInLine,
   memoryNote,
+  memoryTool,
   toolPreview,
   transcriptItems,
   type TranscriptItem,
@@ -164,7 +165,9 @@ function ToolChip(props: { item: ToolItem; active: boolean; owners: ReadonlyMap<
         )}
       >
         <span className="font-medium" title={item.tool}>
-          {mcpToolLabel(item.tool, owners)}
+          {item.tool === "Memory"
+            ? `Memory › ${memoryTool(item.tool, item.input)}`
+            : mcpToolLabel(item.tool, owners)}
         </span>
         <span aria-hidden className={mark}>
           {GLYPH[said]}

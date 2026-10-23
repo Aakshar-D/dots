@@ -132,12 +132,12 @@ describe("a dot's Memory tab", () => {
     const { user } = await openTab();
     const item = await screen.findByRole("listitem", { name: persons.text });
     await user.click(within(item).getByRole("button", { name: "Edit" }));
-    const box = screen.getByRole("textbox", { name: "Memory" });
+    const box = screen.getByRole("textbox", { name: "Edit memory" });
     expect(box).toHaveValue(persons.text);
     await user.clear(box);
     await user.type(box, "Staging moved to staging2.example.com.");
     await user.click(
-      within(screen.getByRole("group", { name: "Memory" })).getByRole("button", { name: "Save" }),
+      within(screen.getByRole("group", { name: "Edit memory" })).getByRole("button", { name: "Save" }),
     );
     const edited = await screen.findByRole("listitem", {
       name: "Staging moved to staging2.example.com.",
@@ -190,6 +190,103 @@ describe("a dot's Memory tab", () => {
     act(() => applyRuntimeEvent(queryClient, { type: "memories_updated", dot_id: "other" }));
     await new Promise((r) => setTimeout(r, 50));
     expect(backend.callsTo("memories_list")).toHaveLength(asked);
+  });
+
+  it("gives focus back where the person was after a save, a cancel or a delete", async () => {
+    const held = holding([dots, persons]);
+    backend.on("memory_add", (args) => {
+      const saved = { ...persons, id: "01J0NEW", text: String(args.text).trim() };
+      held.memories = [...held.memories, saved];
+      return saved;
+    });
+    backend.on("memory_update", (args) => {
+      held.memories = held.memories.map((m) =>
+        m.id === args.id ? { ...m, text: String(args.text) } : m,
+      );
+      return held.memories.find((m) => m.id === args.id)!;
+    });
+    backend.on("memory_delete", (args) => {
+      held.memories = held.memories.filter((m) => m.id !== args.id);
+      return null;
+    });
+    const { user } = await openTab();
+    const addButton = await screen.findByRole("button", { name: "Add memory" });
+
+    // Add: Cancel, Escape and Save each return to Add memory.
+    await user.click(addButton);
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(addButton).toHaveFocus());
+    await user.click(addButton);
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("textbox", { name: "New memory" })).toBeNull();
+    await waitFor(() => expect(addButton).toHaveFocus());
+    await user.click(addButton);
+    await user.type(screen.getByRole("textbox", { name: "New memory" }), "Sends on Fridays.");
+    await user.click(
+      within(screen.getByRole("group", { name: "New memory" })).getByRole("button", { name: "Save" }),
+    );
+    await waitFor(() => expect(screen.queryByRole("textbox", { name: "New memory" })).toBeNull());
+    await waitFor(() => expect(addButton).toHaveFocus());
+
+    // Edit: Escape and Save each return to the row's Edit.
+    const editOf = (name: string) =>
+      within(screen.getByRole("listitem", { name })).getByRole("button", { name: "Edit" });
+    await user.click(editOf(persons.text));
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(editOf(persons.text)).toHaveFocus());
+    await user.click(editOf(persons.text));
+    const box = screen.getByRole("textbox", { name: "Edit memory" });
+    await user.clear(box);
+    await user.type(box, "Staging moved.");
+    await user.click(
+      within(screen.getByRole("group", { name: "Edit memory" })).getByRole("button", { name: "Save" }),
+    );
+    await waitFor(() => expect(editOf("Staging moved.")).toHaveFocus());
+
+    // Delete: the next memory's Edit, or Add memory when none is left.
+    await user.click(
+      within(screen.getByRole("listitem", { name: dots.text })).getByRole("button", { name: "Delete" }),
+    );
+    await user.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Delete" }),
+    );
+    await waitFor(() => expect(editOf("Staging moved.")).toHaveFocus());
+    for (const name of ["Staging moved.", "Sends on Fridays."]) {
+      await user.click(
+        within(screen.getByRole("listitem", { name })).getByRole("button", { name: "Delete" }),
+      );
+      await user.click(
+        within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Delete" }),
+      );
+      await waitFor(() => expect(screen.queryByRole("listitem", { name })).toBeNull());
+    }
+    await waitFor(() => expect(addButton).toHaveFocus());
+  });
+
+  it("ties the counter and a refusal to the box", async () => {
+    holding([persons]);
+    backend.on("memory_add", () => {
+      throw { kind: "conflict", message: "This dot already remembers that." };
+    });
+    const { user } = await openTab();
+    await user.click(await screen.findByRole("button", { name: "Add memory" }));
+    const box = screen.getByRole("textbox", { name: "New memory" });
+    await user.type(box, "Again.");
+    expect(box).toHaveAccessibleDescription("6 / 500");
+    expect(box).not.toHaveAttribute("aria-invalid");
+    await user.click(
+      within(screen.getByRole("group", { name: "New memory" })).getByRole("button", { name: "Save" }),
+    );
+    await screen.findByRole("alert");
+    expect(box).toHaveAttribute("aria-invalid", "true");
+    expect(box).toHaveAccessibleDescription("6 / 500 This dot already remembers that.");
+  });
+
+  it("offers no Add memory once the dot remembers 200 things", async () => {
+    holding(Array.from({ length: 200 }, (_, i) => ({ ...persons, id: `01J0M${i}`, text: `Fact ${i}.` })));
+    await openTab();
+    expect(await screen.findByText("200 of 200")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Add memory" })).toBeDisabled();
   });
 
   it("opens from the dot's ⚙ menu", async () => {

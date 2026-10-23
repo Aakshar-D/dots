@@ -74,4 +74,20 @@ describe("a memory tool step in the conversation", () => {
       memoryNote("Memory", { text: "x" }, { output: "Queued for human approval #1.", isError: true }),
     ).toBeNull();
   });
+  it("names a local memory call's chip by the tool it ran", async () => {
+    home(
+      [chat("a", "10:00")],
+      [
+        ...step(1, "Memory", { text: "Prefers PDF." }, "Remembered 01J0MEM1."),
+        ...step(3, "Memory", { id: "01J0MEM1" }, "Forgot 01J0MEM1."),
+        ...step(5, "Memory", { query: "pdf" }, "Nothing remembered about that."),
+      ],
+    );
+    renderApp(`/home/${dot.id}`);
+    const view = within(await screen.findByRole("region", { name: "Conversation" }));
+    const chips = await view.findByRole("group", { name: "Tool steps" });
+    for (const name of ["Memory › remember", "Memory › forget", "Memory › recall"]) {
+      expect(within(chips).getByText(name)).toBeVisible();
+    }
+  });
 });

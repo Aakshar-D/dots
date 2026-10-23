@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Brain, Pin } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Link } from "react-router";
 
 import { commands } from "@/api/commands";
@@ -32,7 +32,8 @@ function matches(memory: Memory, query: string): boolean {
 }
 
 /// The box a memory is written in (Add memory, Edit): its text, a counter of the 500
-/// characters, Save and Cancel. The core's refusal shows under it, in its words.
+/// characters, Save and Cancel; Escape cancels. The counter and the core's refusal, in its
+/// words, describe the text box.
 function MemoryBox(props: {
   label: string;
   initial: string;
@@ -45,21 +46,31 @@ function MemoryBox(props: {
   const used = length(text);
   const max = LIMITS.max_memory_text;
   const over = used > max;
+  const refused = props.error !== null;
+  const counterId = useId();
+  const errorId = useId();
   return (
     <div
       role="group"
       aria-label={props.label}
       className="flex flex-col gap-2 rounded-lg border p-3"
+      onKeyDown={(e) => {
+        if (e.key !== "Escape") return;
+        e.preventDefault();
+        props.onCancel();
+      }}
     >
       <Textarea
         aria-label={props.label}
         value={text}
         autoFocus
-        aria-invalid={over || undefined}
+        aria-invalid={over || refused || undefined}
+        aria-describedby={refused ? `${counterId} ${errorId}` : counterId}
         onChange={(e) => setText(e.target.value)}
       />
       <div className="flex items-center gap-2">
         <span
+          id={counterId}
           aria-live="polite"
           className={over ? "text-xs text-destructive" : "text-xs text-muted-foreground"}
         >
@@ -78,7 +89,7 @@ function MemoryBox(props: {
         </Button>
       </div>
       {props.error !== null && (
-        <p role="alert" className="text-sm text-destructive">
+        <p id={errorId} role="alert" className="text-sm text-destructive">
           {errorMessage(props.error)}
         </p>
       )}
@@ -104,6 +115,8 @@ function Byline({ memory }: { memory: Memory }) {
 /// The dot's Memory tab (dot memory spec section 5): what the dot remembers, pinned first, then
 /// newest, with a search, the count, and Add memory; each memory can be pinned, edited and
 /// deleted. The core announces every change (`memories_updated`), so the list refreshes itself.
+/// After a save, a cancel or a delete, focus goes back where the person was: Add memory, the
+/// memory's Edit, or after a delete the next memory's Edit.
 export function MemoryTab({ dotId }: { dotId: string }) {
   const qc = useQueryClient();
   const list = useQuery({
@@ -113,15 +126,26 @@ export function MemoryTab({ dotId }: { dotId: string }) {
   const [query, setQuery] = useState("");
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
+  // Where focus goes once the list shows it: "add" (Add memory) or a memory's id (its Edit).
+  const [focusTo, setFocusTo] = useState<string | null>(null);
+  const addButton = useRef<HTMLButtonElement>(null);
+  const searchBox = useRef<HTMLInputElement>(null);
+  const editButtons = useRef(new Map<string, HTMLButtonElement>());
   const refresh = () => invalidate(qc, keys.memories(dotId));
   const add = useMutation({
     mutationFn: (text: string) => commands.memoryAdd(dotId, text),
-    onSuccess: () => setAdding(false),
+    onSuccess: () => {
+      setAdding(false);
+      setFocusTo("add");
+    },
     onSettled: refresh,
   });
   const edit = useMutation({
     mutationFn: (v: { id: string; text: string }) => commands.memoryUpdate(v.id, v.text, null),
-    onSuccess: () => setEditing(null),
+    onSuccess: (_, v) => {
+      setEditing(null);
+      setFocusTo(v.id);
+    },
     onSettled: refresh,
   });
   const pin = useMutation({
@@ -131,9 +155,24 @@ export function MemoryTab({ dotId }: { dotId: string }) {
     onSettled: refresh,
   });
   const remove = useMutation({
-    mutationFn: (id: string) => commands.memoryDelete(id),
+    mutationFn: (v: { id: string; then: string }) => commands.memoryDelete(v.id),
+    onSuccess: (_, v) => setFocusTo(v.then),
     onError: notifyError,
     onSettled: refresh,
+  });
+
+  useEffect(() => {
+    if (focusTo === null) return;
+    const add = addButton.current;
+    const target =
+      focusTo === "add"
+        ? add && !add.disabled
+          ? add
+          : searchBox.current
+        : editButtons.current.get(focusTo);
+    if (!target) return;
+    target.focus();
+    setFocusTo(null);
   });
 
   if (list.isPending) return null;
@@ -144,6 +183,7 @@ export function MemoryTab({ dotId }: { dotId: string }) {
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-2">
         <Input
+          ref={searchBox}
           type="search"
           aria-label="Search memories"
           placeholder="Search"
@@ -155,8 +195,9 @@ export function MemoryTab({ dotId }: { dotId: string }) {
           {memories.length} of {LIMITS.max_memories}
         </span>
         <Button
+          ref={addButton}
           size="sm"
-          disabled={adding}
+          disabled={adding || memories.length >= LIMITS.max_memories}
           onClick={() => {
             add.reset();
             setAdding(true);
@@ -172,7 +213,10 @@ export function MemoryTab({ dotId }: { dotId: string }) {
           pending={add.isPending}
           error={add.error}
           onSave={(text) => add.mutate(text)}
-          onCancel={() => setAdding(false)}
+          onCancel={() => {
+            setAdding(false);
+            setFocusTo("add");
+          }}
         />
       )}
       {memories.length === 0 ? (
@@ -183,16 +227,19 @@ export function MemoryTab({ dotId }: { dotId: string }) {
         <p className="text-muted-foreground">No memory has those words.</p>
       ) : (
         <ul aria-label="Memories" className="flex flex-col gap-2">
-          {shown.map((memory) =>
+          {shown.map((memory, i) =>
             editing === memory.id ? (
               <li key={memory.id}>
                 <MemoryBox
-                  label="Memory"
+                  label="Edit memory"
                   initial={memory.text}
                   pending={edit.isPending}
                   error={edit.error}
                   onSave={(text) => edit.mutate({ id: memory.id, text })}
-                  onCancel={() => setEditing(null)}
+                  onCancel={() => {
+                    setEditing(null);
+                    setFocusTo(memory.id);
+                  }}
                 />
               </li>
             ) : (
@@ -220,6 +267,10 @@ export function MemoryTab({ dotId }: { dotId: string }) {
                   />
                 </Button>
                 <Button
+                  ref={(el) => {
+                    if (el) editButtons.current.set(memory.id, el);
+                    else editButtons.current.delete(memory.id);
+                  }}
                   size="sm"
                   variant="outline"
                   onClick={() => {
@@ -234,7 +285,12 @@ export function MemoryTab({ dotId }: { dotId: string }) {
                   description={memory.text}
                   confirmLabel="Delete"
                   disabled={remove.isPending}
-                  onConfirm={() => remove.mutate(memory.id)}
+                  onConfirm={() =>
+                    remove.mutate({
+                      id: memory.id,
+                      then: (shown[i + 1] ?? shown[i - 1])?.id ?? "add",
+                    })
+                  }
                 >
                   Delete
                 </ConfirmButton>
