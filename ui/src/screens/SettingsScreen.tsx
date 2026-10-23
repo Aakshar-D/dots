@@ -5,6 +5,7 @@ import { toast } from "sonner";
 
 import { CommandError, commands } from "@/api/commands";
 import { LIMITS, type Settings, type Status } from "@/api/types";
+import { AppearanceSetting } from "@/components/AppearanceSetting";
 import { BrowserSettings } from "@/components/BrowserSettings";
 import { ErrorNote } from "@/components/ErrorNote";
 import { Field } from "@/components/Field";
@@ -174,6 +175,7 @@ function Form({ stored, status }: { stored: Settings; status: Status | undefined
       }
     >
       {save.isError && !cancelled && <ErrorNote error={save.error} />}
+      <AppearanceSetting />
 
       <Section title="General">
         <div className="flex items-center gap-2">
