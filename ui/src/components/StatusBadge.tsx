@@ -3,10 +3,13 @@ import { Badge } from "@/components/ui/badge";
 
 const LOOK: Record<RunStatus, { label: string; className: string }> = {
   queued: { label: "Queued", className: "bg-muted text-muted-foreground" },
-  running: { label: "Running", className: "bg-sky-500/20 text-sky-300" },
-  awaiting_approval: { label: "Needs approval", className: "bg-amber-500/20 text-amber-300" },
-  succeeded: { label: "Succeeded", className: "bg-emerald-500/20 text-emerald-300" },
-  failed: { label: "Failed", className: "bg-red-500/20 text-red-300" },
+  running: { label: "Running", className: "border-primary/40 bg-transparent text-primary" },
+  awaiting_approval: {
+    label: "Needs approval",
+    className: "border-needs-border bg-transparent text-needs",
+  },
+  succeeded: { label: "Succeeded", className: "border-success/40 bg-transparent text-success" },
+  failed: { label: "Failed", className: "border-destructive/40 bg-transparent text-destructive" },
   cancelled: { label: "Cancelled", className: "bg-muted text-muted-foreground" },
 };
 

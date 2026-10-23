@@ -1,11 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Play } from "lucide-react";
+import { Inbox as InboxIcon, Play } from "lucide-react";
 import { Link, useNavigate } from "react-router";
 
 import { commands } from "@/api/commands";
 import type { NeedsAttention, ReviewRun, ToolsChanged } from "@/api/types";
 import { ApprovalCard } from "@/components/ApprovalCard";
 import { ConfirmButton } from "@/components/ConfirmButton";
+import { EmptyState } from "@/components/EmptyState";
 import { ErrorNote } from "@/components/ErrorNote";
 import { MessageCard } from "@/components/MessageCard";
 import { Page } from "@/components/Page";
@@ -250,10 +251,10 @@ export function InboxScreen() {
   ) {
     return (
       <Page title="Inbox">
-        <p className="text-muted-foreground">
+        <EmptyState icon={InboxIcon}>
           Nothing waits for you. Questions and notes from dots, approvals a dot asks for,
           schedules that need attention and finished runs to review show up here.
-        </p>
+        </EmptyState>
       </Page>
     );
   }

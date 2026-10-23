@@ -1,9 +1,10 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Plus } from "lucide-react";
+import { FolderOpen, Plus } from "lucide-react";
 import { useState } from "react";
 
 import { commands } from "@/api/commands";
+import { EmptyState } from "@/components/EmptyState";
 import { ErrorNote } from "@/components/ErrorNote";
 import { Field } from "@/components/Field";
 import { Badge } from "@/components/ui/badge";
@@ -230,7 +231,7 @@ export function ContextTab({ entries }: { entries: ContextEntry[] }) {
         </Button>
       </div>
       {entries.length === 0 ? (
-        <p className="text-muted-foreground">No context collections yet.</p>
+        <EmptyState icon={FolderOpen}>No context collections yet.</EmptyState>
       ) : (
         <ul className="flex flex-col gap-2">
           {entries.map((entry) => (
