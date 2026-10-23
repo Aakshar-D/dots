@@ -93,4 +93,20 @@ Layout changes, new screens, a logo or custom icons, illustrations, animations o
 
 ## 9. As built
 
-(Filled in by the plan's last task: any colour adjusted for contrast, and any other change from this document.)
+The plan (`docs/superpowers/plans/2026-10-22-deep-teal.md`) built sections 1 to 7 with these changes:
+
+- **Colours darkened for AA** (light theme only; every dark value passed): `--primary`, `--bubble` and `--success` `#0f8f7a` to `#0c7765` (white on it was 4.02:1); `--needs` `#b37800` to `#8f6000` (3.54:1 on `--needs-surface`, 3.75:1 under white); `--ring` `#0f9f87` to `#0e9780` (3.00:1 on `--sidebar`); `--destructive` `#c43d3d` to `#b23838` (4.28:1 on its own 10% tint, the destructive button). `ui/src/lib/tokens.ts` mirrors `index.css`; its test holds the two together and measures every pair of text (4.5:1) and the focus ring (3:1) on the surfaces the components use, tints included.
+- **The variables the table leaves out** take their pair's value: `--card-foreground`, `--popover-foreground`, `--sidebar-foreground` and `--sidebar-accent-foreground` are `--foreground`; `--sidebar-primary(-foreground)` are `--primary(-foreground)`; `--sidebar-border` is `--border`; `--sidebar-ring` is `--ring`. The chart colours are kept.
+- **Before the first paint** (section 3): not an inline script but `ui/public/theme-boot.js`, loaded by a classic `<script src>` in `index.html`'s `<head>`: the app's content security policy (`default-src 'self'`) runs only the app's own scripts. It still runs before the page is drawn; its test runs the file itself against `resolvedTheme` for every choice and preference.
+- **Storage**: one that cannot be read gives System, or the choice made in this session; one that can be read but not written keeps the choice on screen until the next start.
+- **The rail** (section 4): "something needs the person" is a pending approval or an open question (the rail does not load each dot's counts); both counts carry `data-tone` (`needs` or `muted`).
+- **Tool steps** (section 4): the chips are the plain tool calls; check-ins, browser calls and unparsed lines keep their rows. A chip ends with ✓, ✕, … (running), – (no result) or ! (sent for approval, in `--needs`), and keeps the outcome's word for assistive technology; it opens to the call's one-line preview, its input and its result.
+- **The meta line** shows the run's queued time; the run's header (trigger, time) stays above it. The run screen passes the dot's name too.
+- **The composer** needed no edit of its own: its 12px corners, `--input` border, ring and primary Send come from `textarea.tsx`, `button.tsx` and the tokens.
+- **Focus**: one base rule (`:focus-visible`, 2px `--ring`, 2px offset); the buttons, badges, inputs and text areas drop shadcn's blurred halo for it.
+- **Type**: `body` 14px at 1.55 (Tailwind's `text-sm` line height too), `h1` 18px and `h2` 15px semibold in the base layer.
+- **Reduced motion**: one rule stops every animation and transition; the running mark also has `motion-reduce:animate-none`.
+- **Colours that assumed a dark page** now use the tokens: the run status badges, the diff view, the banners, the Library's status badges and warnings. Two lines of `SettingsScreen.tsx` (a tested endpoint's answer in `text-emerald-300`, an untested Claude version in `text-amber-300`) are left as they are while the parallel developer's PR #17 changes that file; they read poorly on the light theme until then.
+- **Empty states**: the Inbox and the four Library tabs (an icon, one muted line); the home's first-dot screen keeps its call to action.
+- **Settings** gained two lines: the import and the section.
+- **Tests** are in `ui/src/lib/{tokens,theme}.test.ts(x)`, `ui/src/components/{AppearanceSetting,EmptyState}.test.tsx`, `ui/src/app/Look.test.tsx` and `ui/src/screens/home/Document.test.tsx`. The real-app checks of section 7 (axe-core in both themes, screenshots, the title bar) are run separately.
