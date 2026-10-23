@@ -245,6 +245,21 @@ export const FollowUp = z.strictObject({
   created_at: z.string(),
 });
 
+export const MemorySource = z.enum(["dot", "person"]);
+// One thing a dot remembers across runs (dot memory spec section 2). Times are RFC 3339 UTC.
+export const Memory = z.strictObject({
+  id: z.string(),
+  dot_id: z.string(),
+  text: z.string(),
+  pinned: z.boolean(),
+  // Who wrote it: a run of the dot, or the person in the Memory tab.
+  source: MemorySource,
+  // The run that saved it; null for the person's own.
+  run_id: nullable(z.string()),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
 export const RuntimeEvent = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("run_updated"), run: Run }),
   z.strictObject({ type: z.literal("run_event"), event: RunEventRecord }),
@@ -270,6 +285,8 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("follow_ups_updated"), dot_id: z.string() }),
   // The person looked at the dot's conversation, or the core marked the viewed dot seen.
   z.strictObject({ type: z.literal("dot_seen"), dot_id: z.string() }),
+  // A memory of the dot was saved, changed or deleted, by a run or by the person.
+  z.strictObject({ type: z.literal("memories_updated"), dot_id: z.string() }),
 ]);
 
 export const ClaudeStatus = z.strictObject({
@@ -587,6 +604,8 @@ export const LIMITS = {
   max_concurrent_runs: 16,
   max_schedule_attempts: 6,
   max_global_instructions: 32768,
+  max_memories: 200,
+  max_memory_text: 500,
 } as const;
 
 export type EngineKind = z.infer<typeof EngineKind>;
@@ -656,4 +675,6 @@ export type MessageKind = z.infer<typeof MessageKind>;
 export type FollowUpStatus = z.infer<typeof FollowUpStatus>;
 export type Message = z.infer<typeof Message>;
 export type FollowUp = z.infer<typeof FollowUp>;
+export type MemorySource = z.infer<typeof MemorySource>;
+export type Memory = z.infer<typeof Memory>;
 export type UpdateNote = z.infer<typeof UpdateNote>;

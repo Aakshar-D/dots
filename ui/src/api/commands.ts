@@ -208,4 +208,14 @@ export const commands = {
   setViewing: (dotId: string | null) => call(nothing, "set_viewing", { dotId }),
   /// The sum of every dot's unread count, for the Home link.
   unreadTotal: () => call(z.number().int(), "unread_total"),
+
+  /// What the dot remembers, pinned first, then newest.
+  memoriesList: (dotId: string) => call(T.Memory.array(), "memories_list", { dotId }),
+  /// The person's memory of the dot. Rejects with the core's sentence (kind `invalid` for a
+  /// blank, too long or secret text, `conflict` for a duplicate or the 200th).
+  memoryAdd: (dotId: string, text: string) => call(T.Memory, "memory_add", { dotId, text }),
+  /// Changes a memory's text and/or its pin; null leaves it as it is.
+  memoryUpdate: (id: string, text: string | null, pinned: boolean | null) =>
+    call(T.Memory, "memory_update", { id, text, pinned }),
+  memoryDelete: (id: string) => call(nothing, "memory_delete", { id }),
 };

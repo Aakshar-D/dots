@@ -16,7 +16,7 @@ use dots_core::library_service::{
     ContextDocuments, EnvVariable, LibraryEntry, McpProbe, ScannedSkill,
 };
 use dots_core::model::{
-    Approval, Dot, DotOverview, DotSpec, FollowUp, Inbox, Message, Run, RunEventRecord,
+    Approval, Dot, DotOverview, DotSpec, FollowUp, Inbox, Memory, Message, Run, RunEventRecord,
     SettingsSaved, Status, WorktreeDiff,
 };
 use dots_core::policy::{Policy, Preset, RuleCandidate};
@@ -636,4 +636,36 @@ pub async fn set_viewing(
 #[tauri::command]
 pub async fn unread_total(state: State<'_, AppState>) -> Res<u32> {
     Ok(state.rt()?.unread_total().await?)
+}
+
+/// What the dot remembers, pinned first, then newest (dot memory spec section 4).
+#[tauri::command]
+pub async fn memories_list(state: State<'_, AppState>, dot_id: String) -> Res<Vec<Memory>> {
+    Ok(state.rt()?.memories_list(&dot_id).await?)
+}
+
+/// The person's memory of the dot. Refused, with the core's sentence, when the text is blank,
+/// longer than 500 characters, a duplicate, past the 200 or a secret.
+#[tauri::command]
+pub async fn memory_add(state: State<'_, AppState>, dot_id: String, text: String) -> Res<Memory> {
+    Ok(state.rt()?.memory_add(&dot_id, &text).await?)
+}
+
+/// Changes any memory's text and/or its pin; the text rules of `memory_add` apply.
+#[tauri::command]
+pub async fn memory_update(
+    state: State<'_, AppState>,
+    id: String,
+    text: Option<String>,
+    pinned: Option<bool>,
+) -> Res<Memory> {
+    Ok(state
+        .rt()?
+        .memory_update(&id, text.as_deref(), pinned)
+        .await?)
+}
+
+#[tauri::command]
+pub async fn memory_delete(state: State<'_, AppState>, id: String) -> Res<()> {
+    Ok(state.rt()?.memory_delete(&id).await?)
 }

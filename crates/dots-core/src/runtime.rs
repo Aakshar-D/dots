@@ -1110,3 +1110,32 @@ fn watch_viewing(store: Store, bus: Bus, viewing: Viewing, shutdown: Cancellatio
         }
     });
 }
+
+/// What each dot remembers, the person's side (dot memory spec section 4). The text rules of
+/// section 3 apply; their refusals keep the core's sentences.
+impl Runtime {
+    /// The dot's memories, pinned first, then newest. `NotFound` for an unknown dot.
+    pub async fn memories_list(&self, dot_id: &str) -> Result<Vec<crate::model::Memory>> {
+        self.checkins.memories().list(dot_id).await
+    }
+
+    /// The person's memory of the dot (source `person`).
+    pub async fn memory_add(&self, dot_id: &str, text: &str) -> Result<crate::model::Memory> {
+        self.checkins.memories().add(dot_id, text).await
+    }
+
+    /// Changes any memory's text and/or its pin.
+    pub async fn memory_update(
+        &self,
+        id: &str,
+        text: Option<&str>,
+        pinned: Option<bool>,
+    ) -> Result<crate::model::Memory> {
+        self.checkins.memories().update(id, text, pinned).await
+    }
+
+    /// Deletes any memory. `NotFound` for an unknown id.
+    pub async fn memory_delete(&self, id: &str) -> Result<()> {
+        self.checkins.memories().delete(id).await
+    }
+}
