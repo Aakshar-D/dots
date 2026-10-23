@@ -74,3 +74,22 @@ New files: `crates/dots-core/src/memory.rs` (rules, the prompt section, the tool
 ## 9. Out of scope
 
 Automatic extraction of memories after each run; memories shared between dots (the context library does that); embeddings or semantic search; importing or exporting memories; memory for a single topic only; editing memories from the conversation.
+
+## 10. As built
+
+The plan (`docs/superpowers/plans/2026-10-23-dot-memory.md`) built sections 1 to 8 with these choices where the spec left room or said otherwise:
+
+- **Existing dots get `Memory`** (section 3, "every preset allows it") through migration 0012 as check-ins got theirs through 0008: `upgrade_0012` lists every dot, and when the store opens `finish_0012` adds a `Memory` allow rule to each policy that is not Custom and has no rule naming `Memory`. `finish_0008` and `finish_0012` share one helper.
+- **`--allowedTools` always names** `mcp__dots__remember`, `mcp__dots__forget` and `mcp__dots__recall`, as it names the check-in tools: Dots' own server checks each call against the policy under `Memory` itself (a deny rule denies, an ask rule parks the call on an approval named `Memory`). Left out of the list, the CLI would ask `approve` under the MCP name, which no rule names.
+- **A rule names `Memory` alone**: `Memory(...)` is refused when a policy is saved (`policy::MEMORY_RULE`). `Memory` joins the check-in tools' order (deny > ask > allow) and stays out of the CLI's lists.
+- **One policy name, three tools**: an approval stores `Memory` and the call's input. The input tells the tool (`text` is `remember`, `id` is `forget`, anything else `recall`; `memory::Tool::for_input`), for the local engine's replay of an approved call (`tools::local_name_for`) and for the name the resume message gives the model.
+- **The duplicate check** compares texts without spaces, tabs and line ends, ASCII letters in any case (SQLite's `lower` is ASCII only), inside the statement that inserts or changes the memory; the 200 limit is in the insert's statement too.
+- **The secret patterns** (section 6): a key prefix (`sk-`, `sk_live_`, `ghp_`, `gho_`, `github_pat_`, `xoxb-`, `xoxp-`, `AKIA`) counts at the start of a word only, so `task-management…` is not `sk-…`; key characters are letters, digits, `-` and `_`; `Bearer`, `password`, `passwd`, `secret` and `token` match in any case, with spaces allowed around `=` or `:`.
+- **On one line**: the prompt and `recall` show a memory's text with its whitespace runs as one space; the stored text keeps its lines.
+- **The prompt's count line** says "use recall" on both engines (the Claude engine's tool is `mcp__dots__recall`). A run reads its dot's memories when its prompt is built (`prompt::build_prompt_with_memories`; `build_prompt` is the same without memories).
+- **Served where check-ins are**: `CheckIns` holds `Memories`, so every engine that has the check-in tools has the memory tools, and the person's commands go through the same `Memories`.
+- **The person's commands** answer a text rule with kind `invalid` and a duplicate or the 200th with kind `conflict`, in the spec's sentences; `forget` answers "Not done: <reason>." when the store fails.
+- **The contract's limits** carry `max_memories` (200) and `max_memory_text` (500), which the Memory tab's count and counter read.
+- **The Memory tab**: "from run <time>" is the time the run saved the memory, and links to the run; a search with no match says "No memory has those words."; the count is of every memory, not of those found; a refused pin or delete shows as a toast, a refused add or edit under its box.
+- **The conversation's note** shows under the row of tool chips for a `remember` or `forget` that was done; a call refused, parked or still running has none.
+- **Tests** are in `crates/dots-core/tests/{memory,memory_prompt,memory_tools,memory_server,memory_policy,runtime_memory}_test.rs`, `ui/src/api/memory.test.ts`, `ui/src/screens/dot-editor/MemoryTab.test.tsx` and `ui/src/screens/home/MemoryNote.test.tsx`; the tests that list Dots' tools or a migrated policy (`claude_checkins_test`, `claude_cli_test`, `local_tools_test`, `policy_checkins_test`, `store_dots_test`, `store_library_test`) know the memory tools and `Memory`.
