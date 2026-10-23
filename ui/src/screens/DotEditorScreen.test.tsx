@@ -383,7 +383,7 @@ describe("the dot editor, stored dot", () => {
 
     await user.click(screen.getByRole("button", { name: "Delete" }));
     await user.click(await screen.findByRole("button", { name: "Delete the dot" }));
-    await waitFor(() => expect(router.state.location.pathname).toBe("/dots"));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/home"));
     expect(backend.callsTo("delete_dot")).toEqual([{ id: dot.id }]);
   });
 
@@ -496,12 +496,12 @@ describe("the dot editor, stored dot", () => {
     expect(backend.callsTo("update_dot")).toEqual([{ id: dot.id, spec: specOf(held.dot) }]);
   });
 
-  it("takes a new name to Chat's dot picker", async () => {
+  it("takes a new name to the home's dots column", async () => {
     const held = stored();
-    backend.on("list_dots", () => [held.dot]);
-    // Chat is opened first, so it holds the dot under its old name.
-    const { user, router } = renderApp("/chat");
-    expect(await screen.findByRole("option", { name: dot.name })).toBeInTheDocument();
+    backend.on("dot_overview", () => [{ ...sample.overview, dot: held.dot }]);
+    // The home is opened first, so it holds the dot under its old name.
+    const { user, router } = renderApp(`/home/${dot.id}`);
+    expect(await screen.findByRole("listitem", { name: dot.name })).toBeVisible();
 
     await act(() => router.navigate(path));
     const name = await screen.findByLabelText("Name");
@@ -510,8 +510,8 @@ describe("the dot editor, stored dot", () => {
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByText("Saved")).toBeVisible();
 
-    await user.click(screen.getByRole("link", { name: "Chat" }));
-    expect(await screen.findByRole("option", { name: "renamed" })).toBeInTheDocument();
+    await user.click(screen.getByRole("link", { name: "Home" }));
+    expect(await screen.findByRole("listitem", { name: "renamed" })).toBeVisible();
   });
 
   it("drops the deleted dot's runs from the Inbox and its count", async () => {
@@ -529,12 +529,12 @@ describe("the dot editor, stored dot", () => {
     });
     const { user, router } = renderApp(path);
     const inboxLink = await screen.findByRole("link", { name: /^Inbox/ });
-    await waitFor(() => expect(inboxLink).toHaveTextContent(/^Inbox1$/));
+    await waitFor(() => expect(inboxLink).toHaveAccessibleName("Inbox, 1 waiting"));
 
     await user.click(await screen.findByRole("button", { name: "Delete" }));
     await user.click(await screen.findByRole("button", { name: "Delete the dot" }));
-    await waitFor(() => expect(router.state.location.pathname).toBe("/dots"));
-    await waitFor(() => expect(inboxLink).toHaveTextContent(/^Inbox$/));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/home"));
+    await waitFor(() => expect(inboxLink).toHaveAccessibleName("Inbox"));
     await user.click(inboxLink);
     expect(await screen.findByText(/Nothing waits for you/)).toBeVisible();
   });

@@ -1,10 +1,21 @@
 // Turns a run's stored events into what the transcript shows.
 import { RunEventData, type RunEventRecord } from "@/api/types";
+import { BROWSER_PREFIX } from "@/lib/browser";
 
 export type TranscriptItem =
   | { type: "text"; seq: number; text: string }
   | {
       type: "tool";
+      seq: number;
+      tool: string;
+      input: unknown;
+      /// `null` until the result arrives.
+      result: { output: string; isError: boolean } | null;
+    }
+  /// A call of the built-in browser (`mcp__browser__*`), shown as one line (browser spec
+  /// section 7).
+  | {
+      type: "browser";
       seq: number;
       tool: string;
       input: unknown;
@@ -86,7 +97,10 @@ export function toolPreview(input: unknown): string {
 /// summary) are left out. An event from a newer core that does not parse is kept as raw.
 export function transcriptItems(events: RunEventRecord[]): TranscriptItem[] {
   const items: TranscriptItem[] = [];
-  const calls = new Map<string, Extract<TranscriptItem, { type: "tool" | "checkin" }>>();
+  const calls = new Map<
+    string,
+    Extract<TranscriptItem, { type: "tool" | "checkin" | "browser" }>
+  >();
   for (const record of events) {
     const parsed = RunEventData.safeParse(record.data);
     if (!parsed.success) {
@@ -105,22 +119,12 @@ export function transcriptItems(events: RunEventRecord[]): TranscriptItem[] {
         break;
       case "tool_call": {
         const kind = CHECK_INS.get(event.tool);
-        const call =
-          kind === undefined
-            ? {
-                type: "tool" as const,
-                seq: record.seq,
-                tool: event.tool,
-                input: event.input,
-                result: null,
-              }
-            : {
-                type: "checkin" as const,
-                seq: record.seq,
-                kind,
-                input: event.input,
-                result: null,
-              };
+        const call: Extract<TranscriptItem, { type: "tool" | "checkin" | "browser" }> =
+          kind !== undefined
+            ? { type: "checkin", seq: record.seq, kind, input: event.input, result: null }
+            : event.tool.startsWith(BROWSER_PREFIX)
+              ? { type: "browser", seq: record.seq, tool: event.tool, input: event.input, result: null }
+              : { type: "tool", seq: record.seq, tool: event.tool, input: event.input, result: null };
         calls.set(event.id, call);
         items.push(call);
         break;

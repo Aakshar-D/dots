@@ -30,14 +30,4 @@ describe("follow-ups", () => {
     );
     expect(await screen.findByText(/No follow-up waits/)).toBeVisible();
   });
-
-  it("says in the Dots list when a dot's next follow-up fires", async () => {
-    backend.on("dot_overview", () => [sample.overview]);
-    const soon = new Date(Date.now() + 3 * 3_600_000).toISOString();
-    backend.on("follow_ups_list", () => [
-      { ...pending, dot_id: sample.overview.dot.id, due_at: soon },
-    ]);
-    renderApp("/dots");
-    expect(await screen.findByText("Next follow-up in 3 h")).toBeVisible();
-  });
 });

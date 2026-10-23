@@ -3,6 +3,7 @@
 //! schema, so a field renamed or added on one side fails the other side's tests.
 //! Regenerate after changing a type: `UPDATE_CONTRACT=1 cargo test -p dots-app contract`.
 
+use dots_core::browser::BrowserStatus;
 use dots_core::context::Document;
 use dots_core::engine::EngineEvent;
 use dots_core::events::RuntimeEvent;
@@ -67,6 +68,7 @@ fn dot() -> Dot {
         has_webhook_token: true,
         created_at: TS.into(),
         updated_at: TS.into(),
+        seen_at: Some(TS.into()),
         spec: spec(),
     }
 }
@@ -599,6 +601,8 @@ pub fn samples() -> Value {
                     error: Some("model server unreachable".into()),
                 }),
             }),
+            needs_you: 0,
+            unread: 0,
         }),
         "Inbox": to(Inbox {
             approvals: vec![PendingApproval {
@@ -734,8 +738,41 @@ pub fn samples() -> Value {
             to(RuntimeEvent::FollowUpsUpdated {
                 dot_id: "01J0DOT".into(),
             }),
+            to(RuntimeEvent::DotSeen {
+                dot_id: "01J0DOT".into(),
+            }),
         ]);
+    samples["ChatGptStatus"] = to([
+        dots_core::chatgpt::ChatGptStatus {
+            configured: false,
+            signing_in: false,
+            account: None,
+            expires_at: None,
+            setup_error: Some("ChatGPT sign-in needs a registered OpenAI client for Dots.".into()),
+        },
+        dots_core::chatgpt::ChatGptStatus {
+            configured: true,
+            signing_in: true,
+            account: None,
+            expires_at: None,
+            setup_error: None,
+        },
+        dots_core::chatgpt::ChatGptStatus {
+            configured: true,
+            signing_in: false,
+            account: Some(dots_core::chatgpt::ChatGptAccount {
+                name: Some("Alex".into()),
+                email: Some("alex@example.com".into()),
+            }),
+            expires_at: Some("2026-10-23T00:00:00Z".into()),
+            setup_error: None,
+        },
+    ]);
     samples["UpdateNote"] = to(update_notes());
+    samples["BrowserStatus"] = to(BrowserStatus {
+        edge: Some("C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe".into()),
+        npx: Some("C:/Program Files/nodejs/npx.cmd".into()),
+    });
     samples["DraftRequest"] = to([
         DraftRequest {
             idea: "Check a PR for missing tests".into(),

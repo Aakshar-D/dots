@@ -52,6 +52,11 @@ pub enum RuntimeEvent {
     FollowUpsUpdated {
         dot_id: String,
     },
+    /// The person looked at the dot's conversation, or the core marked the dot being viewed
+    /// seen: its `seen_at` moved, and its `unread` with it (needs-you spec section 3).
+    DotSeen {
+        dot_id: String,
+    },
 }
 
 pub type Bus = broadcast::Sender<RuntimeEvent>;

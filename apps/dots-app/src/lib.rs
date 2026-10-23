@@ -4,11 +4,13 @@ pub mod confirm;
 pub mod contract;
 pub mod error;
 pub mod events;
+pub mod notify_routes;
 pub mod startup;
 pub mod state;
 pub mod tray;
 pub mod update;
 pub mod update_service;
+pub mod viewing;
 
 use tauri::{AppHandle, Manager, RunEvent, WindowEvent};
 
@@ -33,6 +35,9 @@ command_list![
     status,
     mark_claude_tested,
     get_settings,
+    chatgpt_account,
+    chatgpt_sign_in,
+    chatgpt_sign_out,
     update_settings,
     set_schedules_paused,
     restart_app,
@@ -103,6 +108,12 @@ command_list![
     message_mark_read,
     follow_ups_list,
     follow_up_cancel,
+    browser_open,
+    browser_status,
+    browser_screenshot,
+    mark_dot_seen,
+    set_viewing,
+    unread_total,
 ];
 
 /// Keeps the log writer flushing until the app exits.
@@ -118,6 +129,7 @@ pub fn show_main(app: &AppHandle) {
         let _ = w.show();
         let _ = w.set_focus();
     }
+    viewing::apply(app);
 }
 
 /// `panics_logged`: `run` has installed the panic hook already, so `setup` must not chain a
@@ -165,6 +177,8 @@ fn setup(app: &AppHandle, panics_logged: bool) -> Result<(), Box<dyn std::error:
             settings.autostart,
             !startup::single_instance(std::env::var_os(startup::DATA_DIR_ENV)),
         );
+        // A click on a notification opens what it is about (needs-you spec section 4.2).
+        notify_routes::listen(app);
         events::spawn_forwarder(app.clone(), rt.clone());
         if let Ok(dir) = &data_dir {
             // What a failed install left is read while Dots holds the data folder.
@@ -175,6 +189,7 @@ fn setup(app: &AppHandle, panics_logged: bool) -> Result<(), Box<dyn std::error:
             update_service::spawn(app.clone(), rt.clone());
         }
     }
+    app.manage(dots_core::chatgpt::ChatGptAuth::from_env());
     app.manage(AppState::new(runtime.map(|(rt, _)| rt), log_dir).with_data_dir(data_dir.ok()));
     // A failed start always shows its error page, even when launched hidden; so does a start
     // that "Restart Dots" asked for.
@@ -196,7 +211,8 @@ pub fn run() {
     if let Some(log_dir) = early {
         startup::log_panics(log_dir);
     }
-    let mut builder = tauri::Builder::default();
+    // The dot the webview reports as open (needs-you spec section 5), for `viewing::apply`.
+    let mut builder = tauri::Builder::default().manage(viewing::Reported::default());
     // Must be registered first: a second launch only focuses the running app. An instance
     // with its own data folder does not take part (`startup::single_instance`).
     if startup::single_instance(std::env::var_os(startup::DATA_DIR_ENV)) {
@@ -218,6 +234,11 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            // The window behind, minimized or hidden: no conversation is in front, so nothing is
+            // viewed, whatever the webview has said (needs-you spec section 2).
+            if viewing::rechecks(event) {
+                viewing::apply(window.app_handle());
+            }
             // After a normal start, closing the window keeps Dots running in the tray. After a
             // failed start there is no tray, so closing the window is the only way out: exit.
             // `try_state`, because the state may not be managed yet.
@@ -229,6 +250,7 @@ pub fn run() {
                 {
                     api.prevent_close();
                     let _ = window.hide();
+                    viewing::apply(app);
                 } else {
                     app.exit(1);
                 }

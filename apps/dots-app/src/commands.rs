@@ -9,6 +9,7 @@
 //! a native dialog from Rust before it is run or stored (`confirm.rs`). The UI is first-party
 //! code under a `default-src 'self'` policy.
 
+use dots_core::browser::BrowserStatus;
 use dots_core::kit::InstalledPlugin;
 use dots_core::library::{LibraryConfig, LibraryItem, McpCatalog, McpServerConfig};
 use dots_core::library_service::{
@@ -52,6 +53,41 @@ pub async fn mark_claude_tested(state: State<'_, AppState>) -> Res<Status> {
 }
 
 #[tauri::command]
+pub fn chatgpt_account(
+    auth: State<'_, dots_core::chatgpt::ChatGptAuth>,
+) -> dots_core::chatgpt::ChatGptStatus {
+    auth.status()
+}
+
+#[tauri::command]
+pub async fn chatgpt_sign_in(
+    app: AppHandle,
+    auth: State<'_, dots_core::chatgpt::ChatGptAuth>,
+) -> Res<dots_core::chatgpt::ChatGptStatus> {
+    auth.sign_in(|url| {
+        app.opener().open_url(url, None::<&str>).map_err(|_| {
+            dots_core::Error::Other(
+                "Could not open your browser. Check your default browser and try again.".into(),
+            )
+        })
+    })
+    .await
+    .map_err(|error| match error {
+        dots_core::Error::Conflict(message) if message == "ChatGPT sign-in cancelled." => {
+            CmdError::cancelled(message)
+        }
+        other => other.into(),
+    })
+}
+
+#[tauri::command]
+pub async fn chatgpt_sign_out(
+    auth: State<'_, dots_core::chatgpt::ChatGptAuth>,
+) -> Res<dots_core::chatgpt::ChatGptStatus> {
+    Ok(auth.sign_out().await)
+}
+
+#[tauri::command]
 pub async fn get_settings(state: State<'_, AppState>) -> Res<Settings> {
     Ok(state.rt()?.settings().await)
 }
@@ -65,8 +101,8 @@ pub async fn update_settings(
     let rt = state.rt()?;
     // Pointing Dots at another program needs the user's own yes, in a dialog the webview
     // cannot answer.
-    let saved = confirm::save_settings_confirmed(&rt, settings, |message| {
-        confirm::ask(&app, "Change the Claude program?", message)
+    let saved = confirm::save_settings_confirmed(&rt, settings, |title, message| {
+        confirm::ask(&app, title, message)
     })
     .await?;
     crate::autostart::apply(
@@ -609,4 +645,55 @@ pub async fn follow_ups_list(
 #[tauri::command]
 pub async fn follow_up_cancel(state: State<'_, AppState>, id: String) -> Res<FollowUp> {
     Ok(state.rt()?.follow_ups().cancel(&id).await?)
+}
+
+/// "Open the browser" (browser spec section 7): the dot's Edge, for the person to log in ahead
+/// of time. It stays open until they close it.
+#[tauri::command]
+pub async fn browser_open(state: State<'_, AppState>, dot_id: String) -> Res<()> {
+    Ok(state.rt()?.browser_open(&dot_id).await?)
+}
+
+/// Where Microsoft Edge and Node.js (`npx`) were found, for Settings.
+#[tauri::command]
+pub async fn browser_status(state: State<'_, AppState>) -> Res<BrowserStatus> {
+    Ok(state.rt()?.browser_status().await)
+}
+
+/// A screenshot of a run's browser as a `data:` URL: only a file Playwright named in the run's
+/// `downloads/` folder (`page-<time>.png`), so the UI cannot read any other file.
+#[tauri::command]
+pub async fn browser_screenshot(
+    state: State<'_, AppState>,
+    run_id: String,
+    name: String,
+) -> Res<String> {
+    Ok(state.rt()?.browser_screenshot(&run_id, &name).await?)
+}
+
+/// The person looked at the dot's conversation (needs-you spec section 4.1): its `unread` drops
+/// to what needs them.
+#[tauri::command]
+pub async fn mark_dot_seen(state: State<'_, AppState>, dot_id: String) -> Res<()> {
+    Ok(state.rt()?.mark_dot_seen(&dot_id).await?)
+}
+
+/// The dot whose conversation is open in the focused window, or none: nothing notifies about
+/// it, and what it does while viewed is not new.
+#[tauri::command]
+pub async fn set_viewing(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    dot_id: Option<String>,
+) -> Res<()> {
+    state.rt()?;
+    // Held while the window is really in front (`viewing`): a minimized window is not.
+    crate::viewing::report(&app, dot_id);
+    Ok(())
+}
+
+/// The sum of every dot's `unread`, for the Home link of the rail.
+#[tauri::command]
+pub async fn unread_total(state: State<'_, AppState>) -> Res<u32> {
+    Ok(state.rt()?.unread_total().await?)
 }

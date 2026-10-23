@@ -80,6 +80,9 @@ pub struct Runner {
     /// Where runs resolve their dots' variables, set once by the runtime (`set_vault`). A
     /// runner without one resolves from an empty vault in memory.
     vault: OnceLock<Vault>,
+    /// The dots' browsers (browser spec section 2), set once by the runtime before any run
+    /// starts (`set_browsers`).
+    browsers: OnceLock<Arc<crate::browser::Browsers>>,
 }
 
 impl Runner {
@@ -104,6 +107,7 @@ impl Runner {
             pass: tokio::sync::Mutex::new(()),
             checkins: OnceLock::new(),
             vault: OnceLock::new(),
+            browsers: OnceLock::new(),
         })
     }
 
@@ -155,6 +159,17 @@ impl Runner {
     /// The check-in tools, once the runtime has set them.
     pub fn checkins(&self) -> Option<&CheckIns> {
         self.checkins.get()
+    }
+
+    /// Gives the runs of dots with `browser` on their browser. The runtime calls it once, at
+    /// start; a second call changes nothing.
+    pub fn set_browsers(&self, browsers: Arc<crate::browser::Browsers>) {
+        let _ = self.browsers.set(browsers);
+    }
+
+    /// The dots' browsers, once the runtime has set them.
+    pub fn browsers(&self) -> Option<&Arc<crate::browser::Browsers>> {
+        self.browsers.get()
     }
 
     /// The cancel token of a run the runner holds: a call the gateway sends for the run stops
@@ -408,6 +423,19 @@ impl Runner {
         for a in &decided {
             let note = a.note.as_deref().map(str::trim).filter(|n| !n.is_empty());
             match (a.status, note) {
+                // A browser call approved after its run parked is not performed: the page may
+                // have moved on (browser spec section 3.6). No grant and no queued call; the
+                // dot is told, and a rule chosen with it was saved with the decision.
+                (ApprovalStatus::Approved, _)
+                    if crate::browser::is_browser_approval(&a.tool, &a.input) =>
+                {
+                    if self.store.skip_late_browser_call(&a.id).await? {
+                        let approval = self.store.get_approval(&a.id).await?;
+                        let _ = self.bus.send(RuntimeEvent::ApprovalUpdated { approval });
+                    }
+                    lines.push(crate::browser::late_line(&a.id));
+                    needs_child = true;
+                }
                 // Dots performs this call itself, as the first thing the child run does: no
                 // grant, and nothing to tell the model until the call has a result.
                 (ApprovalStatus::Approved, _) if a.self_apply => {
@@ -608,7 +636,7 @@ impl Runner {
             .get()
             .cloned()
             .unwrap_or_else(|| Vault::in_memory(self.store.clone()));
-        let (tools, notices) = RunTools::open(OpenRequest {
+        let (tools, mut notices) = RunTools::open(OpenRequest {
             store: &self.store,
             bus: &self.bus,
             run_id: &run.id,
@@ -622,6 +650,15 @@ impl Runner {
             dot_name: &dot.spec.name,
         })
         .await?;
+        // The built-in browser of a dot with `browser` on (browser spec section 2.2).
+        let tools = crate::browser::attach(
+            self.browsers.get(),
+            &dot,
+            &run.id,
+            &prepared.path,
+            tools,
+            &mut notices,
+        );
         let tools = Arc::new(tools);
         let _closer = CloseOnDrop(tools.clone());
         if cancel.is_cancelled() {

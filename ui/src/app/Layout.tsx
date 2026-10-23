@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "cn";
-import { Bot, Inbox as InboxIcon, Library as LibraryIcon, MessageSquare, Settings as SettingsIcon } from "lucide-react";
+import { House, Inbox as InboxIcon, Library as LibraryIcon, Settings as SettingsIcon } from "lucide-react";
 import { NavLink, Outlet } from "react-router";
 
 import { commands } from "@/api/commands";
@@ -12,14 +12,13 @@ import { keys } from "@/lib/query";
 import { useRuntimeEvents } from "@/lib/runtime-events";
 
 const LINKS = [
-  { to: "/dots", label: "Dots", icon: Bot },
-  { to: "/library", label: "Library", icon: LibraryIcon },
+  { to: "/home", label: "Home", icon: House },
   { to: "/inbox", label: "Inbox", icon: InboxIcon },
-  { to: "/chat", label: "Chat", icon: MessageSquare },
+  { to: "/library", label: "Library", icon: LibraryIcon },
   { to: "/settings", label: "Settings", icon: SettingsIcon },
 ];
 
-/// The frame around every screen: the sidebar, the banners, the screen, the toasts.
+/// The frame around every screen: the icon rail, the banners, the screen, the toasts.
 export function Layout() {
   useRuntimeEvents();
   const inbox = useQuery({ queryKey: keys.inbox, queryFn: commands.inbox }).data;
@@ -27,6 +26,8 @@ export function Layout() {
     queryKey: keys.messages(null),
     queryFn: () => commands.messagesList(null),
   }).data;
+  // What the dots have for the person, read or not (needs-you spec section 5).
+  const unread = useQuery({ queryKey: keys.unreadTotal, queryFn: commands.unreadTotal }).data ?? 0;
   // The same count as the tray's (`inbox_count`), the open questions and unread notes included.
   const waiting =
     (inbox
@@ -39,25 +40,34 @@ export function Layout() {
     <div className="flex h-screen bg-background text-sm text-foreground">
       <nav
         aria-label="Main"
-        className="flex w-44 shrink-0 flex-col gap-1 border-r bg-sidebar p-2 text-sidebar-foreground"
+        className="flex w-14 shrink-0 flex-col items-center gap-1 border-r bg-sidebar py-2 text-sidebar-foreground"
       >
-        <div className="px-2 py-3 text-base font-semibold">Dots</div>
-        {LINKS.map(({ to, label, icon: Icon }) => (
-          <NavLink
-            key={to}
-            to={to}
-            className={({ isActive }) =>
-              cn(
-                "flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-sidebar-accent",
-                isActive && "bg-sidebar-accent font-medium",
-              )
-            }
-          >
-            <Icon className="size-4" aria-hidden />
-            <span className="flex-1">{label}</span>
-            {to === "/inbox" && waiting > 0 && <Badge>{waiting}</Badge>}
-          </NavLink>
-        ))}
+        {LINKS.map(({ to, label, icon: Icon }) => {
+          const count = to === "/inbox" ? waiting : to === "/home" ? unread : 0;
+          // The name says the count too, and the tooltip shows it.
+          const name = count > 0 ? `${label}, ${count} ${to === "/home" ? "unread" : "waiting"}` : label;
+          return (
+            <NavLink
+              key={to}
+              to={to}
+              aria-label={name}
+              title={name}
+              className={({ isActive }) =>
+                cn(
+                  "relative flex size-10 items-center justify-center rounded-md hover:bg-sidebar-accent",
+                  isActive && "bg-sidebar-accent",
+                )
+              }
+            >
+              <Icon className="size-5" aria-hidden />
+              {count > 0 && (
+                <Badge className="absolute -top-1 -right-1 h-4 min-w-4 px-1 text-[10px]">
+                  {count > 99 ? "99+" : count}
+                </Badge>
+              )}
+            </NavLink>
+          );
+        })}
       </nav>
       <div className="flex min-w-0 flex-1 flex-col">
         <Banners />

@@ -85,6 +85,11 @@ pub fn build_prompt(
     out.push_str(
         "- End with a short summary: what you did, what changed, and what needs human review.\n",
     );
+    // A dot with a browser is told how to use it (browser spec section 4).
+    if dot.spec.browser {
+        out.push('\n');
+        out.push_str(crate::browser::PROMPT);
+    }
     let section = context::prompt_section(contexts, context_tool_name(dot.spec.engine));
     if !section.is_empty() {
         out.push_str("\n## Shared context\n\n");

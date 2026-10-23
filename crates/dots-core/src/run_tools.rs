@@ -172,6 +172,8 @@ pub struct RunTools {
     watchers: Mutex<Vec<JoinHandle<()>>>,
     /// The values the dot grants its shell (env vault spec §7), for the engine to set.
     shell_env: Vec<(String, Zeroizing<String>)>,
+    /// The built-in browser of a dot with `browser` on (browser spec section 2.2).
+    browser: Option<Arc<crate::browser::RunBrowser>>,
 }
 
 impl fmt::Debug for RunTools {
@@ -234,6 +236,40 @@ impl RunTools {
     /// environment, or the local engine's shell tool's.
     pub fn shell_env(&self) -> &[(String, Zeroizing<String>)] {
         &self.shell_env
+    }
+
+    /// The run's built-in browser (browser spec section 2.2), for a dot with `browser` on.
+    pub fn browser(&self) -> Option<&Arc<crate::browser::RunBrowser>> {
+        self.browser.as_ref()
+    }
+
+    /// The run's tools with the built-in browser. A Library server the run opened under the
+    /// name `browser` keeps that name: the built-in browser is left out, and the notice says so.
+    pub fn with_browser(
+        mut self,
+        browser: crate::browser::RunBrowser,
+    ) -> (RunTools, Option<String>) {
+        if self.server(crate::browser::SERVER).is_some() {
+            return (
+                self,
+                Some(
+                    "browser: an MCP server this dot uses is named browser, so the built-in \
+                     browser is left out of this run; rename that server in the Library to use \
+                     both"
+                        .to_string(),
+                ),
+            );
+        }
+        self.browser = Some(Arc::new(browser));
+        (self, None)
+    }
+
+    /// Whether Dots checks every call of the tool `qualified` itself: a tool of an open session
+    /// (at the gateway) or of the built-in browser (at its gate). The CLI's permission prompt
+    /// must not ask about these again.
+    pub fn checks_itself(&self, qualified: &str) -> bool {
+        self.resolve(qualified).is_some()
+            || (self.browser.is_some() && crate::browser::is_browser_tool(qualified))
     }
 
     /// A Claude-engine run's folders for `--plugin-dir`; empty for a local-engine run.
@@ -497,6 +533,10 @@ impl RunTools {
     /// Ends the run's tools: stops following list changes, closes every session (stdio servers
     /// are stopped) and deletes the plugin folders. Calling it twice does nothing more.
     pub async fn close(&self) {
+        // The browser first: the dot's Edge closes once the last run using it is done.
+        if let Some(browser) = &self.browser {
+            browser.close().await;
+        }
         self.stop.cancel();
         for handle in std::mem::take(&mut *self.watchers.lock().unwrap()) {
             handle.abort();

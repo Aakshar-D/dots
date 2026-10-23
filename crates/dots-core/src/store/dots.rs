@@ -12,9 +12,9 @@ use crate::vault::Grants;
 use crate::{Error, Result};
 
 pub(super) const DOT_COLUMNS: &str = "id, name, instructions, engine, model, endpoint_url, \
-    workdir, workspace_mode, schedule, webhook_token, policy, uses, variables, \
+    workdir, workspace_mode, schedule, webhook_token, policy, uses, variables, browser, \
     use_global_instructions, use_user_settings, max_turns, \
-    timeout_secs, approval_wait_secs, enabled, created_at, updated_at";
+    timeout_secs, approval_wait_secs, enabled, created_at, updated_at, seen_at";
 
 pub(super) fn dot_from_row(row: &SqliteRow) -> Result<Dot> {
     Ok(Dot {
@@ -22,6 +22,7 @@ pub(super) fn dot_from_row(row: &SqliteRow) -> Result<Dot> {
         has_webhook_token: !row.try_get::<String, _>("webhook_token")?.is_empty(),
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
+        seen_at: row.try_get("seen_at")?,
         spec: DotSpec {
             name: row.try_get("name")?,
             instructions: row.try_get("instructions")?,
@@ -37,6 +38,7 @@ pub(super) fn dot_from_row(row: &SqliteRow) -> Result<Dot> {
             policy: serde_json::from_str(&row.try_get::<String, _>("policy")?)?,
             uses: serde_json::from_str(&row.try_get::<String, _>("uses")?)?,
             variables: serde_json::from_str(&row.try_get::<String, _>("variables")?)?,
+            browser: row.try_get::<i64, _>("browser")? != 0,
             use_global_instructions: row.try_get::<i64, _>("use_global_instructions")? != 0,
             use_user_settings: row.try_get::<i64, _>("use_user_settings")? != 0,
             max_turns: row.try_get::<i64, _>("max_turns")? as u32,
@@ -117,10 +119,10 @@ impl Store {
         let mut tx = self.pool.begin().await?;
         sqlx::query(
             "INSERT INTO dots (id, name, instructions, engine, model, endpoint_url, workdir, \
-             workspace_mode, schedule, webhook_token, policy, uses, variables, \
+             workspace_mode, schedule, webhook_token, policy, uses, variables, browser, \
              use_global_instructions, use_user_settings, max_turns, timeout_secs, \
              approval_wait_secs, enabled, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&spec.name)
@@ -136,6 +138,7 @@ impl Store {
         .bind(serde_json::to_string(&spec.policy)?)
         .bind(serde_json::to_string(&spec.uses)?)
         .bind(serde_json::to_string(&spec.variables)?)
+        .bind(spec.browser as i64)
         .bind(spec.use_global_instructions as i64)
         .bind(spec.use_user_settings as i64)
         .bind(spec.max_turns as i64)
@@ -183,6 +186,7 @@ impl Store {
         let res = sqlx::query(
             "UPDATE dots SET name = ?, instructions = ?, engine = ?, model = ?, endpoint_url = ?, \
              workdir = ?, workspace_mode = ?, schedule = ?, policy = ?, uses = ?, variables = ?, \
+             browser = ?, \
              use_global_instructions = ?, use_user_settings = ?, max_turns = ?, timeout_secs = ?, approval_wait_secs = ?, \
              enabled = ?, updated_at = ? WHERE id = ? \
              AND ((workdir = ? AND workspace_mode = ?) OR NOT EXISTS (SELECT 1 FROM runs \
@@ -199,6 +203,7 @@ impl Store {
         .bind(serde_json::to_string(&spec.policy)?)
         .bind(serde_json::to_string(&spec.uses)?)
         .bind(serde_json::to_string(&spec.variables)?)
+        .bind(spec.browser as i64)
         .bind(spec.use_global_instructions as i64)
         .bind(spec.use_user_settings as i64)
         .bind(spec.max_turns as i64)
@@ -277,6 +282,46 @@ impl Store {
             return Err(Error::NotFound(format!("dot {id}")));
         }
         self.get_dot(id).await
+    }
+
+    /// Marks the dot seen now (needs-you spec section 3). `updated_at` stays: looking at a dot
+    /// does not change it. `NotFound` for an unknown dot.
+    pub async fn mark_dot_seen(&self, id: &str) -> Result<Dot> {
+        let res = sqlx::query("UPDATE dots SET seen_at = ? WHERE id = ?")
+            .bind(now())
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        if res.rows_affected() == 0 {
+            return Err(Error::NotFound(format!("dot {id}")));
+        }
+        self.get_dot(id).await
+    }
+
+    /// What the dot has for the person (needs-you spec section 2), as `(needs_you, unread)`:
+    /// its open questions and pending approvals; and those plus its runs that ended and its
+    /// notes posted after its `seen_at` (none without one). `NotFound` for an unknown dot.
+    pub async fn dot_counts(&self, id: &str) -> Result<(u32, u32)> {
+        let row = sqlx::query(
+            "SELECT \
+             (SELECT COUNT(*) FROM messages m WHERE m.dot_id = d.id AND m.kind = 'question' \
+              AND m.answered_at IS NULL AND m.dismissed_at IS NULL) \
+             + (SELECT COUNT(*) FROM approvals a JOIN runs r ON r.id = a.run_id \
+              WHERE r.dot_id = d.id AND a.status = 'pending') AS needs_you, \
+             CASE WHEN d.seen_at IS NULL THEN 0 ELSE \
+             (SELECT COUNT(*) FROM runs r WHERE r.dot_id = d.id \
+              AND r.status IN ('succeeded', 'failed', 'cancelled') AND r.ended_at > d.seen_at) \
+             + (SELECT COUNT(*) FROM messages m WHERE m.dot_id = d.id AND m.kind = 'note' \
+              AND m.created_at > d.seen_at) END AS fresh \
+             FROM dots d WHERE d.id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| Error::NotFound(format!("dot {id}")))?;
+        let needs_you = row.try_get::<i64, _>("needs_you")? as u32;
+        let fresh = row.try_get::<i64, _>("fresh")? as u32;
+        Ok((needs_you, needs_you + fresh))
     }
 
     /// Whether `token` is the dot's webhook token. A dot without one takes none.

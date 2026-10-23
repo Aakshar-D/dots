@@ -36,6 +36,10 @@ pub async fn handle(
     let Some(tools) = s.runner.run_tools(&run_id) else {
         return StatusCode::NOT_FOUND.into_response();
     };
+    // The built-in browser is not one of the run's sessions (browser spec section 2.2).
+    if let Some(browser) = tools.browser().filter(|_| server == crate::browser::SERVER) {
+        return super::browser::handle(&s, &run_id, browser, &body).await;
+    }
     let Some(open) = tools.server(&server) else {
         return StatusCode::NOT_FOUND.into_response();
     };
@@ -96,6 +100,8 @@ async fn call(
     // A list change announced with an earlier result holds the server before this check; one
     // not listed in time holds it for this call.
     let trust = server.settled_trust(tool).await;
+    let mut input = input;
+    crate::browser::drop_card(&mut input);
     let checked = s
         .hub
         .check_mcp(
@@ -131,7 +137,7 @@ async fn call(
 /// How long the CLI waits for a call of this run: `MCP_TOOL_TIMEOUT`, which is the dot's
 /// `approval_wait_secs` + 30 s, less the margin; the local engine's limit when the dot cannot
 /// be read.
-async fn cli_limit(s: &ServerState, run_id: &str) -> Duration {
+pub(super) async fn cli_limit(s: &ServerState, run_id: &str) -> Duration {
     let wait = match s.store.get_run(run_id).await {
         Ok(run) => s
             .store

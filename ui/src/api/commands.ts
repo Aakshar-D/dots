@@ -70,6 +70,9 @@ const text = z.string();
 export const commands = {
   startupError: () => call(T.StartupError.nullable(), "startup_error"),
   status: () => call(T.Status, "status"),
+  chatGptAccount: () => call(T.ChatGptStatus, "chatgpt_account"),
+  chatGptSignIn: () => call(T.ChatGptStatus, "chatgpt_sign_in"),
+  chatGptSignOut: () => call(T.ChatGptStatus, "chatgpt_sign_out"),
   markClaudeTested: () => call(T.Status, "mark_claude_tested"),
   getSettings: () => call(T.Settings, "get_settings"),
   /// Rejects with kind `cancelled` when the user declines the native confirmation of a new
@@ -208,4 +211,22 @@ export const commands = {
     call(T.FollowUp.array(), "follow_ups_list", { dotId }),
   /// Rejects with kind `conflict` once the follow-up fired, was skipped or was cancelled.
   followUpCancel: (id: string) => call(T.FollowUp, "follow_up_cancel", { id }),
+
+  /// "Open the browser": the dot's Edge, for the person to log in ahead of time. Rejects with
+  /// the reason when Edge cannot be opened.
+  browserOpen: (dotId: string) => call(nothing, "browser_open", { dotId }),
+  /// Where Microsoft Edge and Node.js (npx) were found.
+  browserStatus: () => call(T.BrowserStatus, "browser_status"),
+  /// A screenshot of a run's browser as a `data:` URL, by the name Playwright gave its file.
+  browserScreenshot: (runId: string, name: string) =>
+    call(text, "browser_screenshot", { runId, name }),
+
+  /// The person looked at the dot's conversation: its unread count drops to what needs them.
+  /// Rejects with kind `not_found` for a dot that is gone.
+  markDotSeen: (dotId: string) => call(nothing, "mark_dot_seen", { dotId }),
+  /// The dot whose conversation is open in the focused window, or null: nothing notifies about
+  /// it, and what it does meanwhile is not new.
+  setViewing: (dotId: string | null) => call(nothing, "set_viewing", { dotId }),
+  /// The sum of every dot's unread count, for the Home link.
+  unreadTotal: () => call(z.number().int(), "unread_total"),
 };

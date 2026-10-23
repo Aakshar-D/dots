@@ -1,7 +1,10 @@
 #![allow(dead_code)]
 
 pub mod clock;
+pub mod edge_pipe;
+pub mod fake_browser;
 pub mod fake_mcp;
+pub mod playwright;
 pub mod secrets;
 pub mod tz;
 
@@ -64,6 +67,7 @@ pub fn fake_dot(name: &str, workdir: &Path, mode: WorkspaceMode) -> Dot {
         has_webhook_token: true,
         created_at: "2026-10-08T00:00:00.000Z".into(),
         updated_at: "2026-10-08T00:00:00.000Z".into(),
+        seen_at: None,
         spec: s,
     }
 }

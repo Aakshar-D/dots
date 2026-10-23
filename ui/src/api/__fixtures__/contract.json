@@ -18,6 +18,36 @@
     "status": "pending",
     "tool": "Bash"
   },
+  "BrowserStatus": {
+    "edge": "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
+    "npx": "C:/Program Files/nodejs/npx.cmd"
+  },
+  "ChatGptStatus": [
+    {
+      "account": null,
+      "configured": false,
+      "expires_at": null,
+      "setup_error": "ChatGPT sign-in needs a registered OpenAI client for Dots.",
+      "signing_in": false
+    },
+    {
+      "account": null,
+      "configured": true,
+      "expires_at": null,
+      "setup_error": null,
+      "signing_in": true
+    },
+    {
+      "account": {
+        "email": "alex@example.com",
+        "name": "Alex"
+      },
+      "configured": true,
+      "expires_at": "2026-10-23T00:00:00Z",
+      "setup_error": null,
+      "signing_in": false
+    }
+  ],
   "CmdError": {
     "kind": "conflict",
     "message": "run 01J0RUN is already succeeded"
@@ -27,6 +57,9 @@
     "status",
     "mark_claude_tested",
     "get_settings",
+    "chatgpt_account",
+    "chatgpt_sign_in",
+    "chatgpt_sign_out",
     "update_settings",
     "set_schedules_paused",
     "restart_app",
@@ -96,7 +129,13 @@
     "message_dismiss",
     "message_mark_read",
     "follow_ups_list",
-    "follow_up_cancel"
+    "follow_up_cancel",
+    "browser_open",
+    "browser_status",
+    "browser_screenshot",
+    "mark_dot_seen",
+    "set_viewing",
+    "unread_total"
   ],
   "ContextDocuments": {
     "complete": true,
@@ -112,6 +151,7 @@
   },
   "Dot": {
     "approval_wait_secs": 240,
+    "browser": false,
     "created_at": "2026-10-09T12:00:00.000Z",
     "enabled": true,
     "endpoint_url": null,
@@ -225,6 +265,7 @@
       },
       "until": null
     },
+    "seen_at": "2026-10-09T12:00:00.000Z",
     "timeout_secs": 1800,
     "updated_at": "2026-10-09T12:00:00.000Z",
     "use_global_instructions": true,
@@ -251,6 +292,7 @@
     "active_run": null,
     "dot": {
       "approval_wait_secs": 240,
+      "browser": false,
       "created_at": "2026-10-09T12:00:00.000Z",
       "enabled": true,
       "endpoint_url": null,
@@ -364,6 +406,7 @@
         },
         "until": null
       },
+      "seen_at": "2026-10-09T12:00:00.000Z",
       "timeout_secs": 1800,
       "updated_at": "2026-10-09T12:00:00.000Z",
       "use_global_instructions": true,
@@ -410,6 +453,7 @@
       "trigger": "schedule",
       "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
     },
+    "needs_you": 0,
     "schedule_state": {
       "attention": {
         "error": "model server unreachable",
@@ -420,10 +464,12 @@
       "retry_at": "2026-10-09T13:02:00+01:00",
       "retry_attempt": 2,
       "status": "active"
-    }
+    },
+    "unread": 0
   },
   "DotSpec": {
     "approval_wait_secs": 240,
+    "browser": false,
     "enabled": true,
     "endpoint_url": "http://127.0.0.1:1234",
     "engine": "local",
@@ -1245,6 +1291,7 @@
   ],
   "NewDotSpec": {
     "approval_wait_secs": 240,
+    "browser": false,
     "enabled": true,
     "endpoint_url": null,
     "engine": "claude",
@@ -1634,6 +1681,10 @@
     {
       "dot_id": "01J0DOT",
       "type": "follow_ups_updated"
+    },
+    {
+      "dot_id": "01J0DOT",
+      "type": "dot_seen"
     }
   ],
   "ScannedSkill": [
@@ -1713,6 +1764,7 @@
   "Settings": {
     "autostart": true,
     "claude_path": null,
+    "edge_path": null,
     "global_instructions": "Use British spelling.",
     "local_endpoints": [
       "http://127.0.0.1:1234"
@@ -1728,6 +1780,7 @@
     "settings": {
       "autostart": true,
       "claude_path": null,
+      "edge_path": null,
       "global_instructions": "Use British spelling.",
       "local_endpoints": [
         "http://127.0.0.1:1234"

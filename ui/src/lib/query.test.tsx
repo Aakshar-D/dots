@@ -21,21 +21,22 @@ describe("while the webview reports offline", () => {
     const { dot } = sample.overview;
     backend.on("dot_overview", () => [sample.overview]);
     backend.on("run_now", () => ({ ...sample.run, id: "run-new", status: "queued" }));
-    const { user } = renderApp("/dots");
-    const runNow = await screen.findByRole("button", { name: `Run ${dot.name} now` });
+    const { user } = renderApp(`/home/${dot.id}`);
+    const settings = await screen.findByRole("button", { name: "Dot settings" });
 
     report("offline");
-    await user.click(runNow);
+    await user.click(settings);
+    await user.click(await screen.findByRole("menuitem", { name: "Run now" }));
     await waitFor(() => expect(backend.callsTo("run_now")).toEqual([{ dotId: dot.id }]));
   });
 
   it("loads the data of a screen opened meanwhile", async () => {
-    backend.on("list_dots", () => [sample.dot]);
-    const { user } = renderApp("/dots");
-    await screen.findByText(/No dots yet/);
+    const { user } = renderApp("/settings");
+    await screen.findByRole("heading", { name: "Settings" });
 
     report("offline");
-    await user.click(screen.getByRole("link", { name: "Chat" }));
-    expect(await screen.findByRole("option", { name: sample.dot.name })).toBeInTheDocument();
+    backend.on("dot_overview", () => [sample.overview]);
+    await user.click(screen.getByRole("link", { name: "Home" }));
+    expect(await screen.findByRole("listitem", { name: sample.dot.name })).toBeVisible();
   });
 });

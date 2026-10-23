@@ -12,9 +12,10 @@ import {
   type Run,
   type RunEventRecord,
 } from "@/api/types";
+import { BrowserCall } from "@/components/BrowserCall";
 import { Markdown } from "@/components/Markdown";
 import { StatusBadge } from "@/components/StatusBadge";
-import { isActive } from "@/lib/chat-threads";
+import { isActive } from "@/lib/home-topics";
 import { localDateTime } from "@/lib/format";
 import { mcpToolLabel } from "@/lib/mcp-tool";
 import { keys } from "@/lib/query";
@@ -91,10 +92,25 @@ function FollowUpLine({ run }: { run: Run }) {
   return <p className="mb-2 text-xs whitespace-pre-wrap text-muted-foreground">{message}</p>;
 }
 
-/// What became of a call: running, done, failed, or no result in a run that has ended.
-function outcome(result: { isError: boolean } | null, active: boolean): string {
+/// The result Dots gives a call it parked for a person's approval (`approvals::parked_message`).
+const PARKED = "Queued for human approval #";
+
+/// Whether a call's result says it was parked for approval: not a failure.
+function parked(result: { output: string; isError: boolean } | null): boolean {
+  return result !== null && result.output.startsWith(PARKED);
+}
+
+/// What became of a call: running, done, sent for approval, failed, or no result in a run that
+/// has ended.
+function outcome(result: { output: string; isError: boolean } | null, active: boolean): string {
   if (result === null) return active ? "running" : "no result";
+  if (parked(result)) return "sent for approval";
   return result.isError ? "failed" : "done";
+}
+
+/// The colour of a call's outcome: a failure in the destructive colour, anything else muted.
+function outcomeColour(result: { output: string; isError: boolean } | null): string {
+  return result?.isError && !parked(result) ? "text-destructive" : "text-muted-foreground";
 }
 
 /// `active`: the item's run is still going. Only then can a tool call without a result be one
@@ -104,8 +120,10 @@ function Item(props: {
   active: boolean;
   /// MCP server name to the plugin it comes with.
   owners: ReadonlyMap<string, string>;
+  /// The item's run, whose browser screenshots a browser call shows.
+  runId: string;
 }) {
-  const { item, active, owners } = props;
+  const { item, active, owners, runId } = props;
   switch (item.type) {
     case "text":
       return <Markdown text={item.text} />;
@@ -129,9 +147,7 @@ function Item(props: {
             <span className="min-w-0 flex-1 truncate">
               {checkInLine(item.kind, item.input, item.result)}
             </span>
-            <span className={item.result?.isError ? "text-destructive" : "text-muted-foreground"}>
-              {outcome(item.result, active)}
-            </span>
+            <span className={outcomeColour(item.result)}>{outcome(item.result, active)}</span>
           </summary>
           {item.result && (
             <pre
@@ -143,6 +159,16 @@ function Item(props: {
             </pre>
           )}
         </details>
+      );
+    case "browser":
+      return (
+        <BrowserCall
+          runId={runId}
+          tool={item.tool}
+          input={item.input}
+          result={item.result}
+          active={active}
+        />
       );
     case "raw":
       return (
@@ -161,24 +187,16 @@ function Item(props: {
             <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground">
               {toolPreview(item.input)}
             </span>
-            <span className={item.result?.isError ? "text-destructive" : "text-muted-foreground"}>
-              {item.result === null
-                ? active
-                  ? "running"
-                  : "no result"
-                : item.result.isError
-                  ? "failed"
-                  : "done"}
-            </span>
+            <span className={outcomeColour(item.result)}>{outcome(item.result, active)}</span>
           </summary>
           <pre className="mt-1 overflow-x-auto text-xs whitespace-pre-wrap">
             {JSON.stringify(item.input, null, 2)}
           </pre>
           {item.result && (
             <pre
-              className={`mt-1 max-h-80 overflow-auto border-t pt-1 text-xs whitespace-pre-wrap ${
-                item.result.isError ? "text-destructive" : "text-muted-foreground"
-              }`}
+              className={`mt-1 max-h-80 overflow-auto border-t pt-1 text-xs whitespace-pre-wrap ${outcomeColour(
+                item.result,
+              )}`}
             >
               {item.result.output}
             </pre>
@@ -237,6 +255,15 @@ export function Transcript(props: {
   // A plugin's MCP server shows as its plugin; the Library tells which server comes from which.
   const library = useQuery({ queryKey: keys.library, queryFn: commands.libraryList });
   const owners = pluginOwners(library.data ?? []);
+  // Each run's section is a region named by its trigger and time; two runs in the same minute
+  // get "(2)", "(3)" so that their names differ.
+  const seen = new Map<string, number>();
+  const names = props.runs.map((run) => {
+    const name = `${TRIGGER[run.trigger]}, ${localDateTime(run.queued_at)}`;
+    const n = (seen.get(name) ?? 0) + 1;
+    seen.set(name, n);
+    return n === 1 ? name : `${name} (${n})`;
+  });
   return (
     <div className="flex flex-col gap-4">
       {props.runs.map((run, i) => {
@@ -246,7 +273,7 @@ export function Transcript(props: {
           (item) => !(last && item.type === "error" && item.text === props.shownError),
         );
         return (
-          <section key={run.id} aria-label={`${TRIGGER[run.trigger]}, ${localDateTime(run.queued_at)}`}>
+          <section key={run.id} aria-label={names[i]}>
             <header className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
               <span>{TRIGGER[run.trigger]}</span>
               <span>{localDateTime(run.queued_at)}</span>
@@ -261,7 +288,13 @@ export function Transcript(props: {
                 </p>
               )}
               {items.map((item) => (
-                <Item key={item.seq} item={item} active={isActive(run)} owners={owners} />
+                <Item
+                  key={item.seq}
+                  item={item}
+                  active={isActive(run)}
+                  owners={owners}
+                  runId={run.id}
+                />
               ))}
               {items.length === 0 && message === null && run.status === "queued" && (
                 <p className="text-muted-foreground">Waiting to start.</p>
