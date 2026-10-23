@@ -240,7 +240,7 @@ The person's anti-goal, and the guards, each read and let stand by the person:
 
 ## 14. Notes from the builder check
 
-- `App` ask and deny rules must beat the presets' broad `App` allow: use the deny > ask > allow order the check-in tools use (`policy.rs:183`).
+- `App` ask and deny rules must beat the presets' broad `App` allow: `App` and `ProposeApp` join the treatment the check-in tools and `Memory` get (deny > ask > allow, `policy.rs`; memory spec `2026-10-23-dot-memory-design.md`).
 - Dots' own CSP (`default-src 'self'`, `apps/dots-app/tauri.conf.json`) is inherited by a `srcdoc` frame; how `ui/` files reach the frame has to account for it.
 
 ## 15. What is left to the builder
