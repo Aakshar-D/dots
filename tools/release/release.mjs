@@ -34,9 +34,30 @@ export function versionFields(root) {
   };
 }
 
+/// The public key of the prototype's throwaway signing key (minisign B6502CEA5C87EB8A),
+/// which the plan left in tauri.conf.json until the owner's replaces it. A release signed
+/// with the owner's key would reach no copy that carries this one.
+export const PROTOTYPE_PUBKEY =
+  "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI2NTAyQ0VBNUM4N0VCOEEKUldTSzY0ZGM2aXhRdHUxQ0RJcGRmRGZTeVlqcUZJZzIzaEQ2NGxYOHNPUlpwL1lWdCtkTXVFY2MK";
+
+/// Why the updater key in tauri.conf.json cannot be released with, or nothing.
+function pubkeyError(root) {
+  const where = "apps/dots-app/tauri.conf.json";
+  const conf = JSON.parse(readFileSync(join(root, where), "utf8"));
+  const pubkey = conf.plugins?.updater?.pubkey;
+  if (!pubkey) return `${where} has no plugins.updater.pubkey (docs/releasing.md)`;
+  if (pubkey.trim() === PROTOTYPE_PUBKEY) {
+    return (
+      `${where} has the prototype's updater key; put the owner's public key in ` +
+      "plugins.updater.pubkey first (docs/releasing.md)"
+    );
+  }
+  return null;
+}
+
 /// The tag's version and whether it is a prerelease, or the reasons the tag cannot be
 /// released. Only a plain `vMAJOR.MINOR.PATCH` tag is a release; any other is a prerelease,
-/// which GitHub's "latest" skips.
+/// which GitHub's "latest" skips. No tag is released with the prototype's updater key.
 export function checkTag(root, tag) {
   if (!/^v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(tag)) {
     return { errors: [`the tag ${tag} is not v<version>, such as v0.2.0 or v0.2.0-rc.1`] };
@@ -45,6 +66,8 @@ export function checkTag(root, tag) {
   const errors = Object.entries(versionFields(root))
     .filter(([, found]) => found !== version)
     .map(([where, found]) => `${where} has ${found ?? "no version"}, the tag ${tag}`);
+  const key = pubkeyError(root);
+  if (key) errors.push(key);
   return { version, prerelease: version.includes("-"), errors };
 }
 

@@ -6,7 +6,7 @@ import { dirname, join, relative } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { checkTag, isThisFile, manifest } from "./release.mjs";
+import { checkTag, isThisFile, manifest, PROTOTYPE_PUBKEY } from "./release.mjs";
 
 const script = fileURLToPath(new URL("./release.mjs", import.meta.url));
 /// The script's path with its folders in another case, as Windows may spell it.
@@ -20,7 +20,11 @@ function checkout(version, except = {}) {
     mkdirSync(join(root, path, ".."), { recursive: true });
     writeFileSync(join(root, path), text);
   };
-  write("apps/dots-app/tauri.conf.json", JSON.stringify({ version: v("tauri") }));
+  const pubkey = "pubkey" in except ? except.pubkey : "b3duZXIncyBrZXk=";
+  write(
+    "apps/dots-app/tauri.conf.json",
+    JSON.stringify({ version: v("tauri"), plugins: { updater: { pubkey } } }),
+  );
   write(
     "apps/dots-app/Cargo.toml",
     // CRLF, as a Windows checkout has it; a `version` in a later table is not the package's.
@@ -56,6 +60,19 @@ test("every field that disagrees with the tag is named", () => {
   assert.deepEqual(checked.errors, [
     "crates/dots-core/Cargo.toml has 0.1.0, the tag v0.2.0",
     "Cargo.lock (dots-app) has 0.1.0, the tag v0.2.0",
+  ]);
+});
+
+test("no tag is released with the prototype's updater key or with none", () => {
+  // Installed copies would refuse every update signed with the owner's key.
+  const prototype = checkTag(checkout("0.2.0", { pubkey: PROTOTYPE_PUBKEY }), "v0.2.0-rc.1");
+  assert.deepEqual(prototype.errors.slice(-1), [
+    "apps/dots-app/tauri.conf.json has the prototype's updater key; put the owner's public " +
+      "key in plugins.updater.pubkey first (docs/releasing.md)",
+  ]);
+  const none = checkTag(checkout("0.2.0", { pubkey: undefined }), "v0.2.0");
+  assert.deepEqual(none.errors, [
+    "apps/dots-app/tauri.conf.json has no plugins.updater.pubkey (docs/releasing.md)",
   ]);
 });
 
