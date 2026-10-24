@@ -970,3 +970,14 @@ pub struct StepRunChange {
     pub decision: Option<Option<Value>>,
     pub error: Option<Option<String>>,
 }
+
+/// A workflow a member may start from a chat (`start_workflow`, teams spec section 7): turned
+/// on, without a problem, with a chat trigger that names the member.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StartableWorkflow {
+    pub workflow_id: String,
+    pub workflow: String,
+    pub team: String,
+    /// The team's projects, by name.
+    pub projects: Vec<String>,
+}

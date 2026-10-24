@@ -312,6 +312,9 @@ impl Runtime {
             cfg.clock.clone(),
         );
         workflows.spawn(shutdown.clone());
+        // The workflow tools reach the workflow runs through the check-ins (teams spec
+        // section 7).
+        checkins.set_workflows(&workflows);
         watch_viewing(
             store.clone(),
             bus.clone(),

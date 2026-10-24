@@ -93,3 +93,11 @@ ALTER TABLE runs ADD COLUMN workflow_step_run_id TEXT
     REFERENCES workflow_step_runs(id) ON DELETE SET NULL;
 ALTER TABLE runs ADD COLUMN tokens_cache_read INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX runs_workflow_step ON runs(workflow_step_run_id);
+
+-- Every preset allows `Workflow` (section 7). The policy of each dot whose preset is not
+-- Custom gets the rule when the store opens (`store/upgrade.rs`, `finish_0013`), after 0012's
+-- `Memory`. The rows wait here, and the table is dropped once they are done.
+CREATE TABLE upgrade_0013 (
+    dot_id TEXT PRIMARY KEY REFERENCES dots(id) ON DELETE CASCADE
+);
+INSERT INTO upgrade_0013 (dot_id) SELECT id FROM dots;

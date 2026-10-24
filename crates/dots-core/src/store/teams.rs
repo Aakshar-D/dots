@@ -5,7 +5,8 @@ use sqlx::Row;
 
 use super::Store;
 use crate::model::{
-    MemberSpec, Project, ProjectSpec, Team, TeamMember, TeamSpec, Workflow, WorkflowSpec,
+    MemberSpec, Project, ProjectSpec, StartableWorkflow, Team, TeamMember, TeamSpec, Workflow,
+    WorkflowSpec,
 };
 use crate::util::{new_id, now};
 use crate::{Error, Result};
@@ -365,6 +366,54 @@ impl Store {
         .ok_or_else(|| Error::NotFound(format!("workflow {id}")))?;
         let team_id: String = row.try_get("team_id")?;
         workflow_from_row(&row, &self.team_member_ids(&team_id).await?)
+    }
+
+    /// The workflows `dot_id` may start from a chat (teams spec section 7), by team and name.
+    pub async fn startable_workflows(&self, dot_id: &str) -> Result<Vec<StartableWorkflow>> {
+        let mut out = Vec::new();
+        for team_id in self.teams_of_dot(dot_id).await? {
+            let team = self.get_team(&team_id).await?;
+            for w in self.list_workflows(&team_id).await? {
+                if w.spec.enabled
+                    && w.problem.is_none()
+                    && w.spec.definition.started_from_chat_by(dot_id)
+                {
+                    out.push(StartableWorkflow {
+                        workflow_id: w.id,
+                        workflow: w.spec.name,
+                        team: team.name.clone(),
+                        projects: team.projects.iter().map(|p| p.spec.name.clone()).collect(),
+                    });
+                }
+            }
+        }
+        out.sort_by(|a, b| (&a.team, &a.workflow).cmp(&(&b.team, &b.workflow)));
+        Ok(out)
+    }
+
+    /// The id of the project named `project` of the team of the workflow `workflow_id`.
+    pub async fn get_team_project_id(&self, workflow_id: &str, project: &str) -> Result<String> {
+        sqlx::query_scalar(
+            "SELECT p.id FROM team_projects p JOIN workflows w ON w.team_id = p.team_id \
+             WHERE w.id = ? AND p.name = ?",
+        )
+        .bind(workflow_id)
+        .bind(project)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| Error::NotFound(format!("project {project}")))
+    }
+
+    /// The teams `dot_id` is a member of, by id.
+    pub async fn teams_of_dot(&self, dot_id: &str) -> Result<Vec<String>> {
+        Ok(
+            sqlx::query_scalar(
+                "SELECT team_id FROM team_members WHERE dot_id = ? ORDER BY team_id",
+            )
+            .bind(dot_id)
+            .fetch_all(&self.pool)
+            .await?,
+        )
     }
 
     /// The team's workflows, by name.

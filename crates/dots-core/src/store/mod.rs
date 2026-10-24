@@ -58,6 +58,7 @@ impl Store {
         let store = Store { pool };
         upgrade::finish_0011(&store).await?;
         upgrade::finish_0012(&store.pool).await?;
+        upgrade::finish_0013(&store.pool).await?;
         Ok(store)
     }
 

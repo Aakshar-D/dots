@@ -18,7 +18,7 @@ use crate::library::{
     check_name, looks_secret, mcp_server_name, CatalogStatus, LibraryConfig, LibraryKind,
     McpServerConfig, Uses, MAX_SERVER_NAME,
 };
-use crate::policy::{Action, Policy, Preset, CHECK_IN_TOOLS, MEMORY_TOOL};
+use crate::policy::{Action, Policy, Preset, CHECK_IN_TOOLS, MEMORY_TOOL, WORKFLOW_TOOL};
 use crate::util::{new_id, now};
 use crate::Result;
 
@@ -384,6 +384,12 @@ pub(super) async fn finish_0008(pool: &SqlitePool) -> Result<()> {
 /// the list.
 pub(super) async fn finish_0012(pool: &SqlitePool) -> Result<()> {
     give_allow_rules(pool, "0012", &[MEMORY_TOOL]).await
+}
+
+/// Gives the policy of each dot that migration 0013 listed the `Workflow` allow rule, and drops
+/// the list (teams spec section 7).
+pub(super) async fn finish_0013(pool: &SqlitePool) -> Result<()> {
+    give_allow_rules(pool, "0013", &[WORKFLOW_TOOL]).await
 }
 
 /// Gives the policy of each dot listed in `upgrade_<migration>` an allow rule for each of

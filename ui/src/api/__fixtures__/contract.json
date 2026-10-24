@@ -262,6 +262,10 @@
         {
           "action": "allow",
           "tool": "Memory"
+        },
+        {
+          "action": "allow",
+          "tool": "Workflow"
         }
       ]
     },
@@ -407,6 +411,10 @@
           {
             "action": "allow",
             "tool": "Memory"
+          },
+          {
+            "action": "allow",
+            "tool": "Workflow"
           }
         ]
       },
@@ -555,6 +563,10 @@
         {
           "action": "allow",
           "tool": "Memory"
+        },
+        {
+          "action": "allow",
+          "tool": "Workflow"
         }
       ]
     },
@@ -1444,6 +1456,10 @@
         {
           "action": "allow",
           "tool": "Memory"
+        },
+        {
+          "action": "allow",
+          "tool": "Workflow"
         }
       ]
     },

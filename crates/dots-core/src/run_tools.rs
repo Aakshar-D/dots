@@ -174,6 +174,8 @@ pub struct RunTools {
     shell_env: Vec<(String, Zeroizing<String>)>,
     /// The built-in browser of a dot with `browser` on (browser spec section 2.2).
     browser: Option<Arc<crate::browser::RunBrowser>>,
+    /// The workflows a chat run may start (teams spec section 7); none for other runs.
+    startable: Vec<crate::model::StartableWorkflow>,
 }
 
 impl fmt::Debug for RunTools {
@@ -241,6 +243,17 @@ impl RunTools {
     /// The run's built-in browser (browser spec section 2.2), for a dot with `browser` on.
     pub fn browser(&self) -> Option<&Arc<crate::browser::RunBrowser>> {
         self.browser.as_ref()
+    }
+
+    /// The workflows the run may start with `start_workflow` (teams spec section 7).
+    pub fn startable(&self) -> &[crate::model::StartableWorkflow] {
+        &self.startable
+    }
+
+    /// The run's tools with the workflows it may start.
+    pub fn with_startable(mut self, startable: Vec<crate::model::StartableWorkflow>) -> RunTools {
+        self.startable = startable;
+        self
     }
 
     /// The run's tools with the built-in browser. A Library server the run opened under the

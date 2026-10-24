@@ -37,6 +37,8 @@ fn model_tool_name<'a>(tool: &'a str, input: &Value, engine: EngineKind) -> &'a 
         check_in.model_name(engine)
     } else if tool == crate::memory::POLICY_NAME {
         crate::memory::Tool::for_input(input).model_name(engine)
+    } else if tool == crate::team_tools::POLICY_NAME {
+        crate::team_tools::Tool::for_input(input).model_name(engine)
     } else {
         tool
     }
@@ -783,6 +785,12 @@ impl Runner {
             tools,
             &mut notices,
         );
+        // A chat run may start its dot's team workflows (teams spec section 7).
+        let tools = if run.trigger == TriggerKind::Chat {
+            tools.with_startable(self.store.startable_workflows(&dot.id).await?)
+        } else {
+            tools
+        };
         let tools = Arc::new(tools);
         let _closer = CloseOnDrop(tools.clone());
         if cancel.is_cancelled() {
@@ -814,19 +822,26 @@ impl Runner {
         let memories = self.store.list_memories(&dot.id).await?;
         let secret = self.register_secret(&run.id);
         self.register_tools(&run.id, tools.clone());
+        let mut prompt = build_prompt_with_memories(
+            &dot,
+            run,
+            &prepared.path,
+            chrono::Local::now(),
+            &global,
+            tools.contexts(),
+            &memories,
+        );
+        // A chat's first prompt lists the workflows it may start (teams spec section 7).
+        let startable = crate::team_tools::prompt_section(tools.startable(), dot.spec.engine);
+        if run.session_id.is_none() && !startable.is_empty() {
+            prompt.push_str("\n## Workflows you can start\n\n");
+            prompt.push_str(&startable);
+        }
         let ctx = RunContext {
             run_id: run.id.clone(),
             dot: dot.clone(),
             workspace: prepared.path.clone(),
-            prompt: build_prompt_with_memories(
-                &dot,
-                run,
-                &prepared.path,
-                chrono::Local::now(),
-                &global,
-                tools.contexts(),
-                &memories,
-            ),
+            prompt,
             session_id: run.session_id.clone(),
             mcp_url: self.cfg.mcp_url.clone(),
             mcp_secret: secret,

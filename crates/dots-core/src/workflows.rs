@@ -18,9 +18,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::events::{Bus, RuntimeEvent};
 use crate::model::{
-    BranchRef, Handoff, NewRun, NewWorkflowRun, Run, RunStatus, StepRun, StepRunChange,
-    StepRunStatus, TriggerKind, WaitingOn, WorkflowRun, WorkflowRunChange, WorkflowRunStatus,
-    WorkflowTrigger,
+    BranchRef, Handoff, NewRun, NewWorkflowRun, Run, RunStatus, StartableWorkflow, StepRun,
+    StepRunChange, StepRunStatus, TriggerKind, WaitingOn, WorkflowRun, WorkflowRunChange,
+    WorkflowRunStatus, WorkflowTrigger,
 };
 use crate::runner::Runner;
 use crate::scheduler::Clock;
@@ -306,6 +306,88 @@ impl Workflows {
                 },
             )
             .await
+    }
+
+    /// Performs an allowed `start_workflow` call of the chat run `run_id`, which may start the
+    /// workflows `startable` (section 7). `Ok` is the text the model gets; `Err` a tool error,
+    /// in one sentence, and the run goes on.
+    pub async fn call_start(
+        &self,
+        run_id: &str,
+        startable: &[StartableWorkflow],
+        input: &serde_json::Value,
+    ) -> std::result::Result<String, String> {
+        let arg = |key: &str| {
+            input
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .unwrap_or_default()
+                .to_string()
+        };
+        let (name, project, task) = (arg("workflow"), arg("project"), arg("task"));
+        if name.is_empty() || project.is_empty() {
+            return Err("Give `workflow` and `project` by their names as listed.".into());
+        }
+        let found: Vec<&StartableWorkflow> = startable
+            .iter()
+            .filter(|w| {
+                w.workflow.eq_ignore_ascii_case(&name)
+                    || format!("{}/{}", w.team, w.workflow).eq_ignore_ascii_case(&name)
+            })
+            .collect();
+        let workflow = match found.as_slice() {
+            [one] => *one,
+            [] => {
+                return Err(format!(
+                    "There is no workflow named \"{name}\" that you may start."
+                ))
+            }
+            _ => {
+                return Err(format!(
+                "Several teams have a workflow named \"{name}\"; give it as \"<team>/<workflow>\"."
+            ))
+            }
+        };
+        let Some(project) = workflow
+            .projects
+            .iter()
+            .find(|p| p.eq_ignore_ascii_case(&project))
+        else {
+            return Err(format!(
+                "The team \"{}\" has no project named \"{project}\".",
+                workflow.team
+            ));
+        };
+        let project_id = match self
+            .store
+            .get_team_project_id(&workflow.workflow_id, project)
+            .await
+        {
+            Ok(id) => id,
+            Err(e) => return Err(format!("Not started: {e}.")),
+        };
+        let started = self
+            .start(StartRequest {
+                workflow_id: workflow.workflow_id.clone(),
+                project_id,
+                task,
+                trigger: WorkflowTrigger::Chat,
+                origin_run_id: Some(run_id.to_string()),
+                test: false,
+            })
+            .await;
+        match started {
+            Ok(_) => Ok(format!(
+                "Workflow \"{}\" started on \"{project}\".",
+                workflow.workflow
+            )),
+            Err(Error::Invalid(m)) | Err(Error::Conflict(m)) => Err(format!("Not started: {m}.")),
+            Err(e) => {
+                tracing::warn!(run = %run_id, "starting a workflow failed: {e}");
+                Err(format!("Not started: {e}."))
+            }
+        }
     }
 
     /// Approves the check the workflow run waits on (section 5.4): the check passes the hand-off
