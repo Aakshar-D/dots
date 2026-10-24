@@ -274,10 +274,14 @@ impl Store {
         Ok(runs)
     }
 
+    /// The queued runs that may start, oldest first: a dot runs one ordinary run at a time, and
+    /// a run of a workflow step whenever a slot is free (teams spec section 8).
     pub async fn dispatchable_runs(&self) -> Result<Vec<Run>> {
         let rows = sqlx::query(&format!(
-            "SELECT {RUN_COLUMNS} FROM runs r WHERE r.status = 'queued' AND NOT EXISTS \
-             (SELECT 1 FROM runs x WHERE x.dot_id = r.dot_id AND x.status = 'running') \
+            "SELECT {RUN_COLUMNS} FROM runs r WHERE r.status = 'queued' AND \
+             (r.workflow_step_run_id IS NOT NULL OR NOT EXISTS \
+             (SELECT 1 FROM runs x WHERE x.dot_id = r.dot_id AND x.status = 'running' \
+             AND x.workflow_step_run_id IS NULL)) \
              ORDER BY r.queued_at, r.id"
         ))
         .fetch_all(&self.pool)
@@ -340,12 +344,22 @@ impl Store {
         Ok(())
     }
 
-    pub async fn add_usage(&self, id: &str, tokens_in: i64, tokens_out: i64) -> Result<()> {
+    /// Adds a usage report to the run; `cache_read` is the part of `tokens_in` read from the
+    /// prompt cache.
+    pub async fn add_usage(
+        &self,
+        id: &str,
+        tokens_in: i64,
+        tokens_out: i64,
+        cache_read: i64,
+    ) -> Result<()> {
         sqlx::query(
-            "UPDATE runs SET tokens_in = tokens_in + ?, tokens_out = tokens_out + ? WHERE id = ?",
+            "UPDATE runs SET tokens_in = tokens_in + ?, tokens_out = tokens_out + ?, \
+             tokens_cache_read = tokens_cache_read + ? WHERE id = ?",
         )
         .bind(tokens_in)
         .bind(tokens_out)
+        .bind(cache_read)
         .bind(id)
         .execute(&self.pool)
         .await?;

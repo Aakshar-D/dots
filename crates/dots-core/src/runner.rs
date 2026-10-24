@@ -57,6 +57,9 @@ pub struct RunnerConfig {
 
 struct Active {
     dot_id: String,
+    /// A run of a workflow step: it does not keep its dot's other runs waiting, nor waits for
+    /// them (teams spec section 8).
+    workflow: bool,
     cancel: CancellationToken,
     cancelled_by_user: Arc<AtomicBool>,
 }
@@ -260,13 +263,19 @@ impl Runner {
                 if active.len() >= self.cfg.max_concurrent {
                     break;
                 }
-                if active.contains_key(&run.id) || active.values().any(|a| a.dot_id == run.dot_id) {
+                let workflow = run.workflow_step_run_id.is_some();
+                let dot_busy = !workflow
+                    && active
+                        .values()
+                        .any(|a| a.dot_id == run.dot_id && !a.workflow);
+                if active.contains_key(&run.id) || dot_busy {
                     continue;
                 }
                 active.insert(
                     run.id.clone(),
                     Active {
                         dot_id: run.dot_id.clone(),
+                        workflow,
                         cancel: cancel.clone(),
                         cancelled_by_user: by_user.clone(),
                     },
@@ -546,9 +555,15 @@ impl Runner {
             EngineEvent::Usage {
                 tokens_in,
                 tokens_out,
+                cache_read,
             } => {
                 self.store
-                    .add_usage(run_id, *tokens_in as i64, *tokens_out as i64)
+                    .add_usage(
+                        run_id,
+                        *tokens_in as i64,
+                        *tokens_out as i64,
+                        *cache_read as i64,
+                    )
                     .await?
             }
             _ => {}

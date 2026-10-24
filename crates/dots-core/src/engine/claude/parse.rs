@@ -148,6 +148,7 @@ fn result_events(v: &Value) -> Vec<EngineEvent> {
             + n("cache_creation_input_tokens")
             + n("cache_read_input_tokens"),
         tokens_out: n("output_tokens"),
+        cache_read: n("cache_read_input_tokens"),
     }];
     let subtype = v
         .get("subtype")

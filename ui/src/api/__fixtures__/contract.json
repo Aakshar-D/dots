@@ -1525,6 +1525,7 @@
       "output": "test result: ok"
     },
     {
+      "cache_read": 900,
       "kind": "usage",
       "tokens_in": 1200,
       "tokens_out": 340

@@ -241,11 +241,15 @@ async fn a_continuing_run_keeps_its_parents_step_and_spend_is_summed() {
         .unwrap();
     assert_eq!(plain.workflow_step_run_id, None);
 
-    f.store.add_usage(&first.id, 1000, 50).await.unwrap();
-    f.store.add_usage(&child.id, 200, 10).await.unwrap();
-    f.store.add_usage(&plain.id, 99, 99).await.unwrap();
+    f.store.add_usage(&first.id, 1000, 50, 800).await.unwrap();
+    f.store.add_usage(&child.id, 200, 10, 0).await.unwrap();
+    f.store.add_usage(&plain.id, 99, 99, 0).await.unwrap();
     let wr = f.store.get_workflow_run(&wr.id).await.unwrap();
-    assert_eq!((wr.spent_runs, wr.spent_tokens), (2, 1260));
+    // New input plus output: (1000 - 800 + 50) + (200 + 10); the cache reads apart.
+    assert_eq!(
+        (wr.spent_runs, wr.spent_tokens, wr.spent_cache_read),
+        (2, 460, 800)
+    );
     let ids: Vec<_> = f
         .store
         .runs_of_step_run(&step.id)

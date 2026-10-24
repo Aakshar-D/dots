@@ -188,6 +188,8 @@ export const RunEventData = z.discriminatedUnion("kind", [
     kind: z.literal("usage"),
     tokens_in: z.number().int(),
     tokens_out: z.number().int(),
+    // The part of tokens_in read from the prompt cache; absent from older events.
+    cache_read: z.number().int().optional(),
   }),
   z.strictObject({ kind: z.literal("raw"), line: z.string() }),
   z.strictObject({ kind: z.literal("message"), message: z.unknown() }),
