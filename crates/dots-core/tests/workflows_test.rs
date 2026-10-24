@@ -15,7 +15,7 @@ use dots_core::model::{
     WorkflowRun, WorkflowRunStatus, WorkflowSpec, WorkflowTrigger, WorkspaceMode,
 };
 use dots_core::runner::{Runner, RunnerConfig};
-use dots_core::scheduler::SystemClock;
+use dots_core::scheduler::{Clock, SystemClock};
 use dots_core::store::Store;
 use dots_core::workflow::{Budget, Definition, Step, StepKind, Trigger};
 use dots_core::workflows::{StartRequest, Workflows};
@@ -37,6 +37,10 @@ enum Act {
     Ask(&'static str),
     /// Runs until it is cancelled.
     Hold,
+    /// Reports this usage (in, out, cache read), then finishes.
+    Use(u64, u64, u64),
+    /// Waits until the test opens the gate, then finishes.
+    Gate,
 }
 
 /// Plays each dot's acts in order, one per run (the last one again once they run out), and
@@ -45,6 +49,7 @@ struct Team {
     store: Store,
     acts: Mutex<HashMap<String, VecDeque<Act>>>,
     prompts: Mutex<Vec<(String, String)>>,
+    gate: Arc<tokio::sync::Notify>,
 }
 
 impl Team {
@@ -86,6 +91,7 @@ impl Engine for Team {
             .push((name.clone(), ctx.prompt.clone()));
         let act = self.act(&name);
         let store = self.store.clone();
+        let gate = self.gate.clone();
         let (tx, rx) = mpsc::channel(8);
         tokio::spawn(async move {
             let session = format!("session-{}", ctx.run_id);
@@ -114,6 +120,23 @@ impl Engine for Team {
                     ctx.cancel.cancelled().await;
                     return;
                 }
+                Act::Use(tokens_in, tokens_out, cache_read) => {
+                    let usage = EngineEvent::Usage {
+                        tokens_in,
+                        tokens_out,
+                        cache_read,
+                    };
+                    let _ = tx.send(usage).await;
+                    EngineEvent::Finished {
+                        summary: "used".into(),
+                    }
+                }
+                Act::Gate => {
+                    gate.notified().await;
+                    EngineEvent::Finished {
+                        summary: "through".into(),
+                    }
+                }
             };
             let _ = tx.send(end).await;
         });
@@ -123,6 +146,8 @@ impl Engine for Team {
 
 struct World {
     dir: TempDir,
+    /// The budget of the workflows `World::workflow` makes.
+    budget: Budget,
     store: Store,
     bus: Bus,
     runner: Arc<Runner>,
@@ -145,12 +170,17 @@ async fn worktree_dot(store: &Store, dir: &Path, name: &str) -> Dot {
 }
 
 async fn world() -> World {
+    world_with(Arc::new(SystemClock), Budget::default()).await
+}
+
+async fn world_with(clock: Arc<dyn Clock>, budget: Budget) -> World {
     let (dir, store) = temp_store().await;
     let bus = new_bus();
     let engine = Arc::new(Team {
         store: store.clone(),
         acts: Mutex::new(HashMap::new()),
         prompts: Mutex::new(Vec::new()),
+        gate: Arc::new(tokio::sync::Notify::new()),
     });
     let mut engines: HashMap<EngineKind, Arc<dyn Engine>> = HashMap::new();
     engines.insert(EngineKind::Claude, engine.clone());
@@ -167,12 +197,7 @@ async fn world() -> World {
         },
     );
     runner.spawn_dispatcher(CancellationToken::new());
-    let workflows = Workflows::new(
-        store.clone(),
-        bus.clone(),
-        runner.clone(),
-        Arc::new(SystemClock),
-    );
+    let workflows = Workflows::new(store.clone(), bus.clone(), runner.clone(), clock);
     workflows.spawn(CancellationToken::new());
     let repo = dir.path().join("project");
     init_repo(&repo);
@@ -211,6 +236,7 @@ async fn world() -> World {
         .id;
     World {
         dir,
+        budget,
         store,
         bus,
         runner,
@@ -253,7 +279,7 @@ impl World {
                     definition: Definition {
                         trigger: Trigger::Manual,
                         steps,
-                        budget: Budget::default(),
+                        budget: self.budget,
                     },
                     enabled: true,
                 },
@@ -734,6 +760,152 @@ async fn every_move_is_announced() {
         ]
     );
     let _ = &w.dir;
+}
+
+#[tokio::test]
+async fn the_runs_limit_holds_the_next_step_until_more_budget_is_added() {
+    let w = world_with(
+        Arc::new(SystemClock),
+        Budget {
+            max_runs: 1,
+            ..Budget::default()
+        },
+    )
+    .await;
+    let flow = w
+        .workflow(
+            "Two",
+            vec![
+                agent("one", "First", &w.dev, "Start."),
+                agent("two", "Second", &w.dev, "Go on."),
+            ],
+        )
+        .await;
+    let wr = w.start(&flow).await;
+    let wr = w.until(&wr.id, waits_on(WaitingOn::Budget)).await;
+    assert_eq!(wr.error.as_deref(), Some("Budget reached: runs, 1 of 1"));
+    assert_eq!(wr.current_step.as_deref(), Some("one"));
+    assert_eq!(wr.steps.len(), 1);
+    assert!(matches!(
+        w.workflows.retry_step(&wr.id).await,
+        Err(Error::Conflict(_))
+    ));
+    let more = w.workflows.add_budget(&wr.id).await.unwrap();
+    assert_eq!(more.budget.max_runs, 11);
+    assert_eq!(more.error, None);
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    assert_eq!(wr.spent_runs, 2);
+    assert!(matches!(
+        w.workflows.add_budget(&wr.id).await,
+        Err(Error::Conflict(m)) if m.ends_with("is not waiting for budget")
+    ));
+}
+
+#[tokio::test]
+async fn the_token_limit_counts_new_input_and_output_but_not_cache_reads() {
+    let w = world_with(
+        Arc::new(SystemClock),
+        Budget {
+            max_tokens: 1_000,
+            ..Budget::default()
+        },
+    )
+    .await;
+    // 5,000 in, of which 4,500 from the cache, and 400 out: 900 counted, under the limit.
+    w.engine.set(
+        &w.dev.spec.name,
+        vec![
+            Act::Use(5_000, 400, 4_500),
+            Act::Use(200, 0, 0),
+            Act::Finish("never"),
+        ],
+    );
+    let flow = w
+        .workflow(
+            "Three",
+            vec![
+                agent("one", "First", &w.dev, "Start."),
+                agent("two", "Second", &w.dev, "Go on."),
+                agent("three", "Third", &w.dev, "End."),
+            ],
+        )
+        .await;
+    let wr = w.start(&flow).await;
+    let wr = w.until(&wr.id, waits_on(WaitingOn::Budget)).await;
+    // The second step ran (900 < 1,000) and passed the limit; the third waits.
+    assert_eq!((wr.spent_tokens, wr.spent_cache_read), (1_100, 4_500));
+    assert_eq!(
+        wr.error.as_deref(),
+        Some("Budget reached: tokens, 1100 of 1000")
+    );
+    assert_eq!(wr.current_step.as_deref(), Some("two"));
+    let more = w.workflows.add_budget(&wr.id).await.unwrap();
+    assert_eq!(more.budget.max_tokens, 1_501_000);
+}
+
+#[tokio::test]
+async fn the_clock_counts_only_while_nobody_waits_on_the_person() {
+    let start = chrono::Utc::now();
+    let clock = common::clock::FakeClock::new(start);
+    let w = world_with(
+        clock.clone(),
+        Budget {
+            max_minutes: 10,
+            ..Budget::default()
+        },
+    )
+    .await;
+    w.engine
+        .set(&w.dev.spec.name, vec![Act::Gate, Act::Finish("Fixed.")]);
+    let flow = w
+        .workflow(
+            "Fix",
+            vec![
+                agent("one", "First", &w.dev, "Start."),
+                check("check"),
+                agent("two", "Second", &w.dev, "Go on."),
+            ],
+        )
+        .await;
+    let wr = w.start(&flow).await;
+    w.until(&wr.id, |wr| !wr.steps.is_empty()).await;
+    // Four minutes of work count.
+    clock.set(start + chrono::TimeDelta::minutes(4));
+    w.workflows.pass().await.unwrap();
+    assert_eq!(
+        w.store.get_workflow_run(&wr.id).await.unwrap().active_ms,
+        240_000
+    );
+    w.engine.gate.notify_one();
+    let wr = w.until(&wr.id, waits_on(WaitingOn::Check)).await;
+    // An hour at the check counts nothing.
+    clock.set(start + chrono::TimeDelta::minutes(64));
+    w.workflows.pass().await.unwrap();
+    assert_eq!(
+        w.store.get_workflow_run(&wr.id).await.unwrap().active_ms,
+        240_000
+    );
+    w.workflows.approve_check(&wr.id, None).await.unwrap();
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    assert_eq!(wr.active_ms, 240_000);
+
+    // Past the minutes limit, the next step waits.
+    let second = w.start(&flow).await;
+    w.until(&second.id, |wr| !wr.steps.is_empty()).await;
+    clock.set(start + chrono::TimeDelta::minutes(80));
+    w.workflows.pass().await.unwrap();
+    w.engine.gate.notify_one();
+    let second = w.until(&second.id, waits_on(WaitingOn::Check)).await;
+    w.workflows.approve_check(&second.id, None).await.unwrap();
+    let second = w.until(&second.id, waits_on(WaitingOn::Budget)).await;
+    assert_eq!(
+        second.error.as_deref(),
+        Some("Budget reached: minutes, 16 of 10")
+    );
 }
 
 #[tokio::test]

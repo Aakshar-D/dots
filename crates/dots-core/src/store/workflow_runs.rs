@@ -176,6 +176,23 @@ impl Store {
         Ok(n > 0)
     }
 
+    /// Whether the workflow run waits on the person through one of its dot runs: a run parked
+    /// on an approval, an approval asked live, or a question not answered or dismissed. Its clock
+    /// stands still meanwhile (teams spec section 9).
+    pub async fn workflow_waits_on_person(&self, workflow_run_id: &str) -> Result<bool> {
+        let n: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM runs r JOIN workflow_step_runs s ON s.id = r.workflow_step_run_id \
+             WHERE s.workflow_run_id = ? AND (r.status = 'awaiting_approval' \
+             OR EXISTS (SELECT 1 FROM approvals a WHERE a.run_id = r.id AND a.status = 'pending') \
+             OR EXISTS (SELECT 1 FROM messages m WHERE m.run_id = r.id AND m.kind = 'question' \
+             AND m.answered_at IS NULL AND m.dismissed_at IS NULL))",
+        )
+        .bind(workflow_run_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(n > 0)
+    }
+
     /// When the workflow run's clock last counted (`WorkflowRunChange::clock_at`).
     pub async fn workflow_run_clock(&self, id: &str) -> Result<Option<String>> {
         Ok(

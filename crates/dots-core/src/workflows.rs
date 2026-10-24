@@ -25,7 +25,8 @@ use crate::model::{
 use crate::runner::Runner;
 use crate::scheduler::Clock;
 use crate::store::Store;
-use crate::workflow::{Step, StepKind};
+use crate::util::timestamp;
+use crate::workflow::{Budget, Step, StepKind};
 use crate::workspace::git;
 use crate::{Error, Result};
 
@@ -92,6 +93,40 @@ fn start_branch(wr: &WorkflowRun, index: usize) -> Option<String> {
         [only] => Some(only.branch.clone()),
         _ => None,
     }
+}
+
+/// The limit the workflow run has reached, if any (section 9), as the person reads it: a new
+/// dot run of it may start only while none is reached.
+pub fn budget_reached(wr: &WorkflowRun) -> Option<String> {
+    let b = &wr.budget;
+    if wr.spent_runs >= b.max_runs {
+        return Some(format!("runs, {} of {}", wr.spent_runs, b.max_runs));
+    }
+    if wr.spent_tokens >= b.max_tokens {
+        return Some(format!("tokens, {} of {}", wr.spent_tokens, b.max_tokens));
+    }
+    let minutes = wr.active_ms / 60_000;
+    if wr.active_ms >= u64::from(b.max_minutes) * 60_000 {
+        return Some(format!("minutes, {minutes} of {}", b.max_minutes));
+    }
+    None
+}
+
+/// `budget` with each limit `wr` has reached raised by that limit's default amount (section 9,
+/// "Add budget").
+fn raised(wr: &WorkflowRun) -> Budget {
+    let mut b = wr.budget;
+    let more = Budget::default();
+    if wr.spent_runs >= b.max_runs {
+        b.max_runs = b.max_runs.saturating_add(more.max_runs);
+    }
+    if wr.spent_tokens >= b.max_tokens {
+        b.max_tokens = b.max_tokens.saturating_add(more.max_tokens);
+    }
+    if wr.active_ms >= u64::from(b.max_minutes) * 60_000 {
+        b.max_minutes = b.max_minutes.saturating_add(more.max_minutes);
+    }
+    b
 }
 
 fn cut(text: &str, max: usize) -> String {
@@ -177,16 +212,87 @@ impl Workflows {
                 test: req.test,
             })
             .await?;
+        // Its clock starts on the clock it is counted with.
+        let wr = self
+            .store
+            .set_workflow_run(
+                &wr.id,
+                &WorkflowRunChange {
+                    clock_at: Some(Some(timestamp(self.clock.now()))),
+                    ..Default::default()
+                },
+            )
+            .await?;
         self.updated(&wr);
         self.wake();
         Ok(wr)
+    }
+
+    /// Raises each limit the waiting workflow run has reached by its default amount, once, and
+    /// lets it go on (section 9).
+    pub async fn add_budget(&self, id: &str) -> Result<WorkflowRun> {
+        let _one = self.lock.lock().await;
+        let wr = self.tick(&self.store.get_workflow_run(id).await?).await?;
+        if !(wr.status == WorkflowRunStatus::Waiting && wr.waiting_on == Some(WaitingOn::Budget)) {
+            return Err(Error::Conflict(format!(
+                "workflow run {id} is not waiting for budget"
+            )));
+        }
+        self.store
+            .set_workflow_run(
+                id,
+                &WorkflowRunChange {
+                    status: Some(WorkflowRunStatus::Running),
+                    waiting_on: Some(None),
+                    budget: Some(raised(&wr)),
+                    error: Some(None),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        self.advance(id).await?;
+        let wr = self.store.get_workflow_run(id).await?;
+        self.updated(&wr);
+        Ok(wr)
+    }
+
+    /// Counts the time since the workflow run's clock last counted into `active_ms`, unless it
+    /// waited on the person (section 9): a check, a limit, a failed step, or a question or an
+    /// approval of one of its runs. Reads the time from the clock the runtime was given.
+    async fn tick(&self, wr: &WorkflowRun) -> Result<WorkflowRun> {
+        if wr.status.is_terminal() {
+            return Ok(wr.clone());
+        }
+        let now = self.clock.now();
+        let last = self
+            .store
+            .workflow_run_clock(&wr.id)
+            .await?
+            .and_then(|t| chrono::DateTime::parse_from_rfc3339(&t).ok())
+            .map(|t| t.with_timezone(&chrono::Utc));
+        let active = wr.status == WorkflowRunStatus::Running
+            && !self.store.workflow_waits_on_person(&wr.id).await?;
+        let gained = match (active, last) {
+            (true, Some(last)) if now > last => (now - last).num_milliseconds().max(0) as u64,
+            _ => 0,
+        };
+        self.store
+            .set_workflow_run(
+                &wr.id,
+                &WorkflowRunChange {
+                    active_ms: Some(wr.active_ms + gained),
+                    clock_at: Some(Some(timestamp(now))),
+                    ..Default::default()
+                },
+            )
+            .await
     }
 
     /// Approves the check the workflow run waits on (section 5.4): the check passes the hand-off
     /// it was shown on, and the workflow goes on.
     pub async fn approve_check(&self, id: &str, note: Option<&str>) -> Result<WorkflowRun> {
         let _one = self.lock.lock().await;
-        let wr = self.store.get_workflow_run(id).await?;
+        let wr = self.tick(&self.store.get_workflow_run(id).await?).await?;
         let step_run = match (&wr.status, &wr.waiting_on, &wr.current_step) {
             (WorkflowRunStatus::Waiting, Some(WaitingOn::Check), Some(current)) => {
                 latest(&wr, current).cloned()
@@ -234,7 +340,7 @@ impl Workflows {
     /// Runs the failed step again, as a new attempt (sections 8 and 10.3).
     pub async fn retry_step(&self, id: &str) -> Result<WorkflowRun> {
         let _one = self.lock.lock().await;
-        let wr = self.store.get_workflow_run(id).await?;
+        let wr = self.tick(&self.store.get_workflow_run(id).await?).await?;
         let index = match (&wr.status, &wr.waiting_on, &wr.current_step) {
             (WorkflowRunStatus::Waiting, Some(WaitingOn::StepFailed), Some(current)) => {
                 wr.definition.step(current).map(|(i, _)| i)
@@ -367,7 +473,7 @@ impl Workflows {
     /// Does what the workflow run's state calls for: start its first step, watch the step that
     /// runs, or start the step after one that succeeded. A waiting run waits for the person.
     async fn advance(&self, id: &str) -> Result<()> {
-        let wr = self.store.get_workflow_run(id).await?;
+        let wr = self.tick(&self.store.get_workflow_run(id).await?).await?;
         if wr.status != WorkflowRunStatus::Running {
             return Ok(());
         }
@@ -467,6 +573,23 @@ impl Workflows {
                 self.updated(&waiting);
             }
             StepKind::Agent { member, .. } => {
+                // No new dot run past a limit: the workflow waits for the person (section 9).
+                if let Some(limit) = budget_reached(wr) {
+                    let waiting = self
+                        .store
+                        .set_workflow_run(
+                            &wr.id,
+                            &WorkflowRunChange {
+                                status: Some(WorkflowRunStatus::Waiting),
+                                waiting_on: Some(Some(WaitingOn::Budget)),
+                                error: Some(Some(format!("Budget reached: {limit}"))),
+                                ..Default::default()
+                            },
+                        )
+                        .await?;
+                    self.updated(&waiting);
+                    return Ok(());
+                }
                 let refusal = match self.store.get_dot(member).await {
                     Ok(dot) if dot.spec.enabled => None,
                     Ok(dot) => Some(format!("{} is disabled", dot.spec.name)),
@@ -705,11 +828,6 @@ impl Workflows {
             branches,
             outcome: None,
         }
-    }
-
-    /// The time now, from the clock the workflow runs count with.
-    pub fn now(&self) -> chrono::DateTime<chrono::Utc> {
-        self.clock.now()
     }
 }
 
