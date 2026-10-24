@@ -20,6 +20,7 @@ use dots_core::store::Store;
 use dots_core::workflow::{Budget, Definition, Step, StepKind, Trigger};
 use dots_core::workflows::{StartRequest, Workflows};
 use dots_core::Error;
+use serde_json::json;
 use tempfile::TempDir;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -41,6 +42,9 @@ enum Act {
     Use(u64, u64, u64),
     /// Waits until the test opens the gate, then finishes.
     Gate,
+    /// Writes a file into its workspace, asks an approval, and finishes with this summary:
+    /// the run parks on the approval.
+    Park(&'static str, &'static str),
 }
 
 /// Plays each dot's acts in order, one per run (the last one again once they run out), and
@@ -136,6 +140,14 @@ impl Engine for Team {
                     EngineEvent::Finished {
                         summary: "through".into(),
                     }
+                }
+                Act::Park(file, s) => {
+                    std::fs::write(ctx.workspace.join(file), s).unwrap();
+                    store
+                        .create_approval(&ctx.run_id, "Bash", &json!({"command": "git push"}))
+                        .await
+                        .unwrap();
+                    EngineEvent::Finished { summary: s.into() }
                 }
             };
             let _ = tx.send(end).await;
@@ -1028,4 +1040,98 @@ async fn a_pass_puts_a_run_cut_off_behind_a_waiting_check_back_to_waiting() {
     assert_eq!(fixed.waiting_on, Some(WaitingOn::Check));
     let done = w.workflows.approve_check(&wr.id, None).await.unwrap();
     assert_eq!(done.status, WorkflowRunStatus::Succeeded);
+}
+
+impl World {
+    /// The first run of the workflow run's first step once it has parked on its approval and
+    /// the runner has let it go, with that approval denied without a note.
+    async fn parked_and_denied(&self, id: &str) -> (dots_core::model::Run, String) {
+        let step = self.until(id, |wr| !wr.steps.is_empty()).await.steps[0]
+            .id
+            .clone();
+        let run = loop {
+            let runs = self.store.runs_of_step_run(&step).await.unwrap();
+            if let Some(r) = runs.first().filter(|r| {
+                r.status == RunStatus::AwaitingApproval && !self.runner.is_active(&r.id)
+            }) {
+                break r.clone();
+            }
+            tokio::time::sleep(Duration::from_millis(30)).await;
+        };
+        let approval = self
+            .store
+            .approvals_for_run(&run.id)
+            .await
+            .unwrap()
+            .remove(0);
+        self.store
+            .decide_approval_with_parked(&approval.id, false, None, true)
+            .await
+            .unwrap();
+        (run, approval.id)
+    }
+
+    /// Asserts that the first step handed on a branch with `park.txt` committed, and that the
+    /// second step's worktree started from it.
+    async fn second_step_has_the_parked_work(&self, wr: &WorkflowRun) {
+        let first = &wr.steps[0].handoff.as_ref().unwrap().branches[0].branch;
+        assert_eq!(
+            git_out(&self.repo, &["show", &format!("{first}:park.txt")]),
+            "Parked."
+        );
+        let second = self.store.runs_of_step_run(&wr.steps[1].id).await.unwrap();
+        let base = second[0].base_commit.clone().unwrap();
+        assert_eq!(
+            git_out(&self.repo, &["show", &format!("{base}:park.txt")]),
+            "Parked."
+        );
+    }
+
+    async fn parking_flow(&self) -> String {
+        self.engine.set(
+            &self.dev.spec.name,
+            vec![Act::Park("park.txt", "Parked."), Act::Finish("Went on.")],
+        );
+        self.workflow(
+            "Park",
+            vec![
+                agent("one", "First", &self.dev, "Start."),
+                agent("two", "Second", &self.dev, "Go on."),
+            ],
+        )
+        .await
+    }
+}
+
+#[tokio::test]
+async fn a_parked_step_run_denied_without_a_note_hands_on_its_work_committed() {
+    let w = world().await;
+    let flow = w.parking_flow().await;
+    let wr = w.start(&flow).await;
+    let (run, _) = w.parked_and_denied(&wr.id).await;
+    // No resume: the run ends here, and its work is committed before it reads as ended.
+    assert!(w.runner.maybe_resume(&run.id).await.unwrap().is_none());
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    w.second_step_has_the_parked_work(&wr).await;
+}
+
+#[tokio::test]
+async fn the_hand_off_commits_what_a_run_left_uncommitted() {
+    let w = world().await;
+    let flow = w.parking_flow().await;
+    let wr = w.start(&flow).await;
+    let (run, approval) = w.parked_and_denied(&wr.id).await;
+    // As if Dots stopped between closing the run and committing its work: the run reads as
+    // ended, its work is still uncommitted in its worktree.
+    w.store
+        .resume_parked(&run.id, &[], &[approval], &[], None)
+        .await
+        .unwrap();
+    w.workflows.pass().await.unwrap();
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    w.second_step_has_the_parked_work(&wr).await;
 }

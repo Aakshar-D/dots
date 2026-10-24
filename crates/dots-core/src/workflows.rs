@@ -908,12 +908,15 @@ impl Workflows {
 
     /// What a finished agent step hands on (section 6): its newest run's summary, and the
     /// branch of its thread when the branch still exists (a worktree with no change was
-    /// removed with its branch).
+    /// removed with its branch). What the thread left uncommitted is committed first.
     async fn handoff_of(&self, wr: &WorkflowRun, runs: &[Run]) -> Handoff {
         let last = runs.last();
         let summary = last.and_then(|r| r.summary.clone()).unwrap_or_default();
         let mut branches = Vec::new();
         if let Some(run) = runs.iter().rev().find(|r| r.branch.is_some()) {
+            // Dots' commit, should the run's end not have made it (section 6.1): the next step
+            // starts from this branch's tip.
+            self.runner.commit_step_work(run).await;
             let branch = run.branch.clone().unwrap_or_default();
             let exists = git(
                 Path::new(&wr.project.repo_path),

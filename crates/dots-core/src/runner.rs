@@ -556,6 +556,12 @@ impl Runner {
             new.base_commit = run.base_commit.clone();
             new
         });
+        // Closed without a follow-up: nothing will use the workspace again. Cleaned up before
+        // the parent reads as ended, so a step's hand-off, built once every run of the step has
+        // ended, finds Dots' commit of what the run left (teams spec section 6.1).
+        if child.is_none() {
+            self.cleanup_workspace(&run).await;
+        }
         // One transaction: grants, resolved flags, queued calls, child run and closing the
         // parent either all happen or none do, so a failure never loses a decision.
         let resolved: Vec<String> = decided.iter().map(|a| a.id.clone()).collect();
@@ -569,13 +575,9 @@ impl Runner {
             Err(Error::Conflict(_)) => return Ok(None),
             Err(e) => return Err(e),
         };
-        match &child {
-            Some(c) => {
-                self.emit_run(c);
-                self.wake.notify_one();
-            }
-            // Closed without a follow-up: nothing will use the workspace again.
-            None => self.cleanup_workspace(&run).await,
+        if let Some(c) = &child {
+            self.emit_run(c);
+            self.wake.notify_one();
         }
         self.emit_run(&self.store.get_run(run_id).await?);
         Ok(child)
@@ -638,24 +640,58 @@ impl Runner {
         summary: Option<&str>,
     ) {
         if let Some(step) = step {
-            if prepared.branch.is_some() && prepared.path.is_dir() {
-                let no_hooks = self.cfg.worktrees_dir.join(".no-hooks");
-                let message = commit_message(step, summary);
-                let committed = self
-                    .workspaces
-                    .commit_leftovers(prepared, &message, &no_hooks)
-                    .await;
-                if let Err(e) = committed {
-                    tracing::warn!(run = %run.id, "committing the step's work failed: {e}");
-                    let text = format!("Dots could not commit the changes: {e}");
-                    if let Err(e) = self.record(&run.id, &EngineEvent::Notice { text }).await {
-                        tracing::warn!(run = %run.id, "recording the notice failed: {e}");
-                    }
+            if let Err(e) = self.commit_step(step, prepared, summary).await {
+                tracing::warn!(run = %run.id, "committing the step's work failed: {e}");
+                let text = format!("Dots could not commit the changes: {e}");
+                if let Err(e) = self.record(&run.id, &EngineEvent::Notice { text }).await {
+                    tracing::warn!(run = %run.id, "recording the notice failed: {e}");
                 }
             }
         }
         if let Err(e) = self.workspaces.cleanup_if_unchanged(ws_dot, prepared).await {
             tracing::warn!(run = %run.id, "workspace cleanup failed: {e}");
+        }
+    }
+
+    /// Dots' commit of what a run of a workflow step left uncommitted in its worktree (teams
+    /// spec section 6.1). A worktree that is gone, or has nothing left to commit, is left as
+    /// it is.
+    async fn commit_step(
+        &self,
+        step: &StepContext,
+        prepared: &Prepared,
+        summary: Option<&str>,
+    ) -> Result<()> {
+        if prepared.branch.is_none() || !prepared.path.is_dir() {
+            return Ok(());
+        }
+        let no_hooks = self.cfg.worktrees_dir.join(".no-hooks");
+        let message = commit_message(step, summary);
+        self.workspaces
+            .commit_leftovers(prepared, &message, &no_hooks)
+            .await?;
+        Ok(())
+    }
+
+    /// Commits what the run of a workflow step left uncommitted, as the run's end does. A
+    /// step's hand-off calls it before it reads the step's branch, so the next step never
+    /// starts from a tip without that work, even when the run's end did not get to commit it.
+    /// A worktree already clean or gone is left as it is. Errors are logged, never returned:
+    /// the run's end has already put its own failure on the run as a notice.
+    pub async fn commit_step_work(&self, run: &Run) {
+        let Some(prepared) = Prepared::from_run(run) else {
+            return;
+        };
+        let committed = match self.step_context(run).await {
+            Ok(Some(step)) => {
+                self.commit_step(&step, &prepared, run.summary.as_deref())
+                    .await
+            }
+            Ok(None) => Ok(()),
+            Err(e) => Err(e),
+        };
+        if let Err(e) = committed {
+            tracing::warn!(run = %run.id, "committing the step's work failed: {e}");
         }
     }
 
