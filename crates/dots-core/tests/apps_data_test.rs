@@ -184,3 +184,130 @@ fn the_database_is_bounded() {
         .unwrap();
     assert_eq!(pages * 4096, data::MAX_DB_BYTES);
 }
+
+#[test]
+fn the_apps_sql_cannot_make_temp_objects_or_draw_random_numbers() {
+    let conn = expenses_db();
+    for sql in [
+        "CREATE TEMP TABLE t (x)",
+        "CREATE TABLE temp.t (x)",
+        "CREATE VIEW temp.v AS SELECT 1",
+        "CREATE TEMP VIEW v AS SELECT 1",
+        "CREATE TEMP TRIGGER g AFTER INSERT ON expenses BEGIN SELECT 1; END",
+        "SELECT random()",
+        "SELECT randomblob(4)",
+        "DETACH DATABASE main",
+    ] {
+        let err = guarded(&conn, |c| data::exec(c, sql, &[])).expect_err(sql);
+        assert!(err.contains("not authorized"), "{sql}: {err}");
+    }
+}
+
+#[test]
+fn vacuum_cannot_copy_the_database_out() {
+    let conn = expenses_db();
+    let dir = tempfile::tempdir().unwrap();
+    let copy = dir.path().join("copy.db");
+    for sql in [
+        "VACUUM".to_string(),
+        format!("VACUUM INTO '{}'", copy.display()),
+    ] {
+        let err = guarded(&conn, |c| data::exec(c, &sql, &[])).unwrap_err();
+        assert!(err.contains("authoriz"), "{sql}: {err}");
+    }
+    assert!(!copy.exists());
+}
+
+#[test]
+fn query_and_exec_take_one_statement() {
+    let conn = expenses_db();
+    assert_eq!(
+        data::exec(&conn, "DELETE FROM expenses; DROP TABLE expenses", &[]).unwrap_err(),
+        "only one SQL statement at a time"
+    );
+    assert_eq!(
+        data::query(&conn, "SELECT 1; DROP TABLE expenses", &[]).unwrap_err(),
+        "only one SQL statement at a time"
+    );
+    assert_eq!(
+        data::exec(&conn, " ; ", &[]).unwrap_err(),
+        "no SQL statement"
+    );
+    // A trailing semicolon or comment is not a second statement.
+    assert_eq!(
+        data::query(&conn, "SELECT 1 AS one; -- done", &[]).unwrap(),
+        vec![json!({"one": 1})]
+    );
+    // The table is still there.
+    assert!(data::query(&conn, "SELECT id FROM expenses", &[])
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn exec_counts_the_rows_its_statement_changed() {
+    let conn = expenses_db();
+    let row = |id: &str| format!("('{id}', 'Coffee', 4.5, '2026-10-22', 't', 'you')");
+    let sql = format!("INSERT INTO expenses VALUES {}, {}", row("e1"), row("e2"));
+    assert_eq!(data::exec(&conn, &sql, &[]).unwrap(), 2);
+    assert_eq!(data::exec(&conn, "CREATE TABLE more (x)", &[]).unwrap(), 0);
+}
+
+#[test]
+fn a_query_returns_at_most_64_mb() {
+    let conn = expenses_db();
+    assert_eq!(
+        data::query(&conn, "SELECT zeroblob(50331648) AS b", &[]).unwrap_err(),
+        "the rows are over 64 MB"
+    );
+}
+
+#[test]
+fn runaway_sql_stops_at_its_deadline() {
+    let mut conn = data::open_in_memory().unwrap();
+    let started = std::time::Instant::now();
+    let err = data::migrate_within(
+        &mut conn,
+        &[migration(
+            1,
+            "0001_loop.sql",
+            "CREATE TABLE a AS WITH RECURSIVE c(n) AS \
+             (SELECT 1 UNION ALL SELECT n + 1 FROM c) SELECT count(*) AS n FROM c;",
+        )],
+        std::time::Duration::from_millis(200),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        err.starts_with("invalid input: migrations/0001_loop.sql: ") && err.contains("interrupted"),
+        "{err}"
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
+    assert_eq!(data::schema_version(&conn).unwrap(), 0);
+    // The deadline is lifted after: the next migration runs.
+    data::migrate(
+        &mut conn,
+        &[migration(1, "0001_a.sql", "CREATE TABLE a (x);")],
+    )
+    .unwrap();
+}
+
+#[test]
+fn the_bound_counts_the_files_own_page_size() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("data.db");
+    {
+        let c = rusqlite::Connection::open(&path).unwrap();
+        c.execute_batch("PRAGMA page_size = 65536; CREATE TABLE a (x);")
+            .unwrap();
+    }
+    let conn = data::open(&path).unwrap();
+    let size: u64 = conn
+        .query_row("PRAGMA page_size", [], |r| r.get(0))
+        .unwrap();
+    let pages: u64 = conn
+        .query_row("PRAGMA max_page_count", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(size, 65536);
+    assert_eq!(pages * size, data::MAX_DB_BYTES);
+}
