@@ -217,7 +217,8 @@ pub fn parse_join_code(text: &str) -> Result<JoinCode> {
 }
 
 /// An org id: 1 to 63 characters of `a-z`, `0-9` and `-`, starting with a letter or digit. It
-/// appears in file names and Credential Manager targets.
+/// appears in file names and Credential Manager targets. `personal` is refused: it is the key
+/// of the Personal scope (`PERSONAL_SCOPE`), so an org of that id would share its catalogs.
 pub fn check_org_id(org_id: &str) -> Result<()> {
     org_id_rule(org_id).map_err(Error::Invalid)
 }
@@ -236,6 +237,9 @@ pub(crate) fn org_id_rule(org_id: &str) -> std::result::Result<(), String> {
             "org id '{org_id}': use 1 to {MAX_ORG_ID} characters of a-z, 0-9 or '-', starting \
              with a letter or digit"
         ));
+    }
+    if org_id == crate::library::PERSONAL_SCOPE {
+        return Err("'personal' is reserved for your own keys; choose another org id".into());
     }
     Ok(())
 }

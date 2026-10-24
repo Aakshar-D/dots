@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use common::fake_mcp::{tool, FakeMcp};
 use common::{spec, temp_store};
 use dots_core::events::new_bus;
-use dots_core::library::{LibraryConfig, McpServerConfig, PluginConfig, Uses};
+use dots_core::library::{LibraryConfig, McpServerConfig, PluginConfig, Uses, PERSONAL_SCOPE};
 use dots_core::run_tools::{OpenRequest, RunTools};
 use dots_core::store::Store;
 use dots_core::vault::{Consumer, DotScope, EntryKind, Grants, Missing, Unresolved, Vault};
@@ -366,7 +366,7 @@ async fn a_run_starts_a_server_with_its_granted_values_and_leaves_out_one_withou
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
     assert_eq!(shell, [("LOG_LEVEL", "debug")]);
-    let catalog = store.get_catalog(&item.id).await.unwrap();
+    let catalog = store.get_catalog(&item.id, PERSONAL_SCOPE).await.unwrap();
     assert_eq!(catalog.error, None);
     tools.close().await;
 

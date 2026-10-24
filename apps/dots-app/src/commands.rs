@@ -23,7 +23,7 @@ use dots_core::policy::{Policy, Preset, RuleCandidate};
 use dots_core::schedule::Schedule;
 use dots_core::settings::Settings;
 use dots_core::skill_creator::{check_draft, DraftRequest, DraftSummary};
-use dots_core::vault::{EntryKind, EnvEntry};
+use dots_core::vault::{DotScope, EntryKind, EnvEntry};
 use dots_core::Runtime;
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_opener::OpenerExt;
@@ -477,7 +477,11 @@ pub async fn library_probe(
 
 #[tauri::command]
 pub async fn library_check(state: State<'_, AppState>, id: String) -> Res<McpCatalog> {
-    Ok(state.rt()?.library().check(&id).await?)
+    Ok(state
+        .rt()?
+        .library()
+        .check(&id, &DotScope::Personal)
+        .await?)
 }
 
 /// Refused with kind `conflict` when the fingerprint is no longer the one last seen.
@@ -487,7 +491,11 @@ pub async fn library_accept(
     id: String,
     fingerprint: String,
 ) -> Res<McpCatalog> {
-    Ok(state.rt()?.library().accept(&id, &fingerprint).await?)
+    Ok(state
+        .rt()?
+        .library()
+        .accept(&id, &DotScope::Personal, &fingerprint)
+        .await?)
 }
 
 #[tauri::command]

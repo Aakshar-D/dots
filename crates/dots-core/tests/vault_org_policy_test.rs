@@ -6,9 +6,9 @@ use std::io::Cursor;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine;
 use dots_core::vault::org::{
-    envelope, key_fingerprint, parse_join_code, parse_policy, verify_policy, AuditTarget, BaoAuth,
-    InfisicalSettings, JoinCode, OpenBaoSettings, OrgPolicy, PersonalMode, PolicyError,
-    SopsSettings, SourceSettings, UseRules,
+    check_org_id, envelope, key_fingerprint, parse_join_code, parse_policy, verify_policy,
+    AuditTarget, BaoAuth, InfisicalSettings, JoinCode, OpenBaoSettings, OrgPolicy, PersonalMode,
+    PolicyError, SopsSettings, SourceSettings, UseRules,
 };
 use dots_core::Error;
 use minisign::KeyPair;
@@ -657,6 +657,32 @@ fn a_join_code_with_a_bad_org_id_is_refused() {
         );
         value["org_id"] = json!(good);
         assert_eq!(parse_join_code(&code_for(&value)).unwrap().org_id, good);
+    }
+}
+
+/// `personal` is the Personal scope's key, so no org may take it: not in a join code, not in a
+/// policy, not anywhere an org id is checked.
+#[test]
+fn the_org_id_personal_is_reserved() {
+    const RESERVED: &str = "'personal' is reserved for your own keys; choose another org id";
+    match check_org_id("personal") {
+        Err(Error::Invalid(why)) => assert_eq!(why, RESERVED),
+        other => panic!("expected the id refused, got {other:?}"),
+    }
+    let key = keys().pk.to_base64();
+    let mut value = join_value(
+        &key,
+        json!({"kind": "sops", "location": "https://a.example/f"}),
+    );
+    value["org_id"] = json!("personal");
+    assert_eq!(refused(&code_for(&value)), RESERVED);
+    assert_eq!(
+        invalid(&policy_with(json!({"org_id": "personal"}))),
+        RESERVED
+    );
+    // Only the exact id: one that holds the word is an id like any other.
+    for good in ["personal-2", "my-personal", "personals"] {
+        check_org_id(good).unwrap();
     }
 }
 

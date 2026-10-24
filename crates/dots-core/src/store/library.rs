@@ -8,9 +8,11 @@ use super::dots::{dot_from_row, DOT_COLUMNS};
 use super::{opt_json, Store};
 use crate::library::{
     check_name, CatalogStatus, LibraryConfig, LibraryItem, LibraryKind, McpCatalog, Uses,
+    PERSONAL_SCOPE,
 };
 use crate::model::Dot;
 use crate::util::{new_id, now};
+use crate::vault::org::check_org_id;
 use crate::vault::redact::global;
 use crate::{Error, Result};
 
@@ -57,6 +59,20 @@ fn catalog_from_row(row: &SqliteRow) -> Result<McpCatalog> {
     })
 }
 
+/// Refuses a catalog scope that is neither `personal` nor an org id.
+fn check_scope(scope: &str) -> Result<()> {
+    if scope == PERSONAL_SCOPE || check_org_id(scope).is_ok() {
+        return Ok(());
+    }
+    Err(Error::Invalid(format!(
+        "{scope:?} is not a scope: it is \"personal\" or an org id"
+    )))
+}
+
+fn no_catalog(server_id: &str, scope: &str) -> Error {
+    Error::NotFound(format!("catalog of MCP server {server_id} in {scope}"))
+}
+
 /// Refuses a name of `uses` that the Library does not have: an MCP server, skill or plugin of
 /// that name. A plugin's MCP server is not one: it comes with the plugin. Run inside the
 /// transaction that writes the dot, after its write, so that no removal of an item slips in
@@ -83,7 +99,8 @@ pub(super) async fn check_uses(conn: &mut SqliteConnection, uses: &Uses) -> Resu
 
 impl Store {
     /// Adds an item. `owner_id` names the plugin an MCP server comes from. A new MCP server
-    /// gets an `unchecked` catalog. A name its kind already has is a `Conflict`.
+    /// gets an `unchecked` Personal catalog; one in an org is made when it is first needed. A
+    /// name its kind already has is a `Conflict`.
     pub async fn add_library_item(
         &self,
         name: &str,
@@ -125,8 +142,9 @@ impl Store {
             _ => e.into(),
         })?;
         if kind == LibraryKind::McpServer {
-            sqlx::query("INSERT INTO mcp_catalogs (server_id, status) VALUES (?, ?)")
+            sqlx::query("INSERT INTO mcp_catalogs (server_id, scope, status) VALUES (?, ?, ?)")
                 .bind(&id)
+                .bind(PERSONAL_SCOPE)
                 .bind(CatalogStatus::Unchecked.as_str())
                 .execute(&mut *tx)
                 .await?;
@@ -188,9 +206,10 @@ impl Store {
     }
 
     /// Changes an item's config; its kind and name stay. A changed MCP server config resets
-    /// the server's catalog to `unchecked` (spec section 6): what it lists must be checked and
-    /// accepted again. The accepted list stays for that review, except when an http server
-    /// moves to another origin: then nothing accepted for the old host carries over.
+    /// the server's catalog in every scope to `unchecked` (spec section 6): what it lists must
+    /// be checked and accepted again. The accepted list stays for that review, except when an
+    /// http server moves to another origin: then nothing accepted for the old host carries
+    /// over.
     pub async fn update_library_item(
         &self,
         id: &str,
@@ -220,7 +239,8 @@ impl Store {
             return Err(Error::NotFound(format!("library item {id}")));
         }
         if config.kind() == LibraryKind::McpServer {
-            // Without values: a URL whose text changed counts as moved (`origin_changed`).
+            // Without values: a URL whose text changed counts as moved (`origin_changed`). Both
+            // statements change the server's catalog in every scope.
             if moved_origin(&old.config, config, &|_| None) {
                 sqlx::query(
                     "UPDATE mcp_catalogs SET accepted_fingerprint = NULL, accepted_tools = NULL \
@@ -243,8 +263,8 @@ impl Store {
         self.get_library_item(id).await
     }
 
-    /// Deletes an item, a plugin's MCP servers and every catalog with it, and removes its name
-    /// from the `uses` of the dots that name it, in one transaction. Asking first is the
+    /// Deletes an item, a plugin's MCP servers and their catalogs in every scope, and removes its
+    /// name from the `uses` of the dots that name it, in one transaction. Asking first is the
     /// caller's (`dots_using`).
     pub async fn remove_library_item(&self, id: &str) -> Result<()> {
         let mut tx = self.pool.begin().await?;
@@ -324,37 +344,58 @@ impl Store {
         rows.iter().map(item_from_row).collect()
     }
 
-    pub async fn get_catalog(&self, server_id: &str) -> Result<McpCatalog> {
+    /// The server's catalog in `scope` (`personal`, or an org id). A server never checked or
+    /// run in an org has none stored there yet: it reads as `unchecked`. `NotFound` when there
+    /// is no such MCP server.
+    pub async fn get_catalog(&self, server_id: &str, scope: &str) -> Result<McpCatalog> {
+        check_scope(scope)?;
         let row = sqlx::query(&format!(
-            "SELECT {CATALOG_COLUMNS} FROM mcp_catalogs WHERE server_id = ?"
+            "SELECT {CATALOG_COLUMNS} FROM mcp_catalogs WHERE server_id = ? AND scope = ?"
         ))
         .bind(server_id)
+        .bind(scope)
         .fetch_optional(&self.pool)
-        .await?
-        .ok_or_else(|| Error::NotFound(format!("catalog of MCP server {server_id}")))?;
-        catalog_from_row(&row)
+        .await?;
+        if let Some(row) = row {
+            return catalog_from_row(&row);
+        }
+        let server: Option<i64> =
+            sqlx::query_scalar("SELECT 1 FROM library_items WHERE id = ? AND kind = 'mcp_server'")
+                .bind(server_id)
+                .fetch_optional(&self.pool)
+                .await?;
+        match server {
+            Some(_) => Ok(McpCatalog::unchecked(server_id)),
+            None => Err(no_catalog(server_id, scope)),
+        }
     }
 
-    pub async fn list_catalogs(&self) -> Result<Vec<McpCatalog>> {
+    /// Every stored catalog with its scope, in every scope: by server, then scope.
+    pub async fn list_catalogs(&self) -> Result<Vec<(String, McpCatalog)>> {
         let rows = sqlx::query(&format!(
-            "SELECT {CATALOG_COLUMNS} FROM mcp_catalogs ORDER BY server_id"
+            "SELECT scope, {CATALOG_COLUMNS} FROM mcp_catalogs ORDER BY server_id, scope"
         ))
         .fetch_all(&self.pool)
         .await?;
-        rows.iter().map(catalog_from_row).collect()
+        rows.iter()
+            .map(|row| Ok((row.try_get("scope")?, catalog_from_row(row)?)))
+            .collect()
     }
 
-    /// Writes a server's catalog as it is given.
-    pub async fn put_catalog(&self, catalog: &McpCatalog) -> Result<()> {
+    /// Writes a server's catalog in `scope` as it is given.
+    pub async fn put_catalog(&self, scope: &str, catalog: &McpCatalog) -> Result<()> {
+        check_scope(scope)?;
         let tools = |t: &Option<Value>| t.as_ref().map(Value::to_string);
         sqlx::query(&format!(
-            "INSERT INTO mcp_catalogs ({CATALOG_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
-             ON CONFLICT (server_id) DO UPDATE SET status = excluded.status, \
+            "INSERT INTO mcp_catalogs (scope, {CATALOG_COLUMNS}) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
+             ON CONFLICT (server_id, scope) DO UPDATE SET status = excluded.status, \
              accepted_fingerprint = excluded.accepted_fingerprint, \
              accepted_tools = excluded.accepted_tools, \
              seen_fingerprint = excluded.seen_fingerprint, seen_tools = excluded.seen_tools, \
              checked_at = excluded.checked_at, error = excluded.error"
         ))
+        .bind(scope)
         .bind(&catalog.server_id)
         .bind(catalog.status.as_str())
         .bind(&catalog.accepted_fingerprint)
@@ -368,19 +409,39 @@ impl Store {
         Ok(())
     }
 
-    /// Records a check that listed the server's tools (spec section 3): they become the seen
-    /// list, and the status is `accepted` when their fingerprint is the accepted one, else
-    /// `changed`. One statement, so a check never undoes an accept that lands meanwhile.
+    /// Makes the server's `unchecked` catalog in `scope` if it has none there yet: at the first
+    /// check or run of the server in an org. Nothing for a server that is not in the Library.
+    async fn ensure_catalog(&self, server_id: &str, scope: &str) -> Result<()> {
+        check_scope(scope)?;
+        sqlx::query(
+            "INSERT INTO mcp_catalogs (server_id, scope, status) SELECT id, ?, ? \
+             FROM library_items WHERE id = ? AND kind = 'mcp_server' \
+             ON CONFLICT (server_id, scope) DO NOTHING",
+        )
+        .bind(scope)
+        .bind(CatalogStatus::Unchecked.as_str())
+        .bind(server_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Records a check in `scope` that listed the server's tools (spec section 3): they become
+    /// the seen list there, and the status is `accepted` when their fingerprint is the one
+    /// accepted in that scope, else `changed`. The update is one statement, so a check never
+    /// undoes an accept that lands meanwhile.
     pub async fn record_catalog_seen(
         &self,
         server_id: &str,
+        scope: &str,
         fingerprint: &str,
         tools: &Value,
     ) -> Result<McpCatalog> {
+        self.ensure_catalog(server_id, scope).await?;
         let row = sqlx::query(&format!(
             "UPDATE mcp_catalogs SET seen_fingerprint = ?, seen_tools = ?, checked_at = ?, \
              error = NULL, status = CASE WHEN accepted_fingerprint = ? THEN ? ELSE ? END \
-             WHERE server_id = ? RETURNING {CATALOG_COLUMNS}"
+             WHERE server_id = ? AND scope = ? RETURNING {CATALOG_COLUMNS}"
         ))
         .bind(fingerprint)
         .bind(tools.to_string())
@@ -389,26 +450,34 @@ impl Store {
         .bind(CatalogStatus::Accepted.as_str())
         .bind(CatalogStatus::Changed.as_str())
         .bind(server_id)
+        .bind(scope)
         .fetch_optional(&self.pool)
         .await?
-        .ok_or_else(|| Error::NotFound(format!("catalog of MCP server {server_id}")))?;
+        .ok_or_else(|| no_catalog(server_id, scope))?;
         catalog_from_row(&row)
     }
 
-    /// Records a check that failed: status `unreachable` with the error. The accepted and the
-    /// seen lists stay.
-    pub async fn record_catalog_failure(&self, server_id: &str, error: &str) -> Result<McpCatalog> {
+    /// Records a check in `scope` that failed: status `unreachable` with the error. The
+    /// accepted and the seen lists stay.
+    pub async fn record_catalog_failure(
+        &self,
+        server_id: &str,
+        scope: &str,
+        error: &str,
+    ) -> Result<McpCatalog> {
+        self.ensure_catalog(server_id, scope).await?;
         let row = sqlx::query(&format!(
-            "UPDATE mcp_catalogs SET status = ?, error = ?, checked_at = ? WHERE server_id = ? \
-             RETURNING {CATALOG_COLUMNS}"
+            "UPDATE mcp_catalogs SET status = ?, error = ?, checked_at = ? \
+             WHERE server_id = ? AND scope = ? RETURNING {CATALOG_COLUMNS}"
         ))
         .bind(CatalogStatus::Unreachable.as_str())
         .bind(global().scrub(error).as_ref())
         .bind(now())
         .bind(server_id)
+        .bind(scope)
         .fetch_optional(&self.pool)
         .await?
-        .ok_or_else(|| Error::NotFound(format!("catalog of MCP server {server_id}")))?;
+        .ok_or_else(|| no_catalog(server_id, scope))?;
         catalog_from_row(&row)
     }
 
@@ -423,38 +492,49 @@ impl Store {
         rows.iter().map(item_from_row).collect()
     }
 
-    /// The MCP servers whose catalog is `changed`: their tool list waits to be reviewed.
-    pub async fn changed_mcp_servers(&self) -> Result<Vec<LibraryItem>> {
+    /// The MCP servers whose catalog in `scope` is `changed`: their tool list waits to be
+    /// reviewed.
+    pub async fn changed_mcp_servers(&self, scope: &str) -> Result<Vec<LibraryItem>> {
         let rows = sqlx::query(&format!(
             "SELECT {ITEM_COLUMNS} FROM library_items WHERE id IN \
-             (SELECT server_id FROM mcp_catalogs WHERE status = ?) ORDER BY name"
+             (SELECT server_id FROM mcp_catalogs WHERE status = ? AND scope = ?) ORDER BY name"
         ))
         .bind(CatalogStatus::Changed.as_str())
+        .bind(scope)
         .fetch_all(&self.pool)
         .await?;
         rows.iter().map(item_from_row).collect()
     }
 
-    /// Accepts the tool list last seen, if its fingerprint is still `fingerprint`: the seen
-    /// list becomes the accepted one and the status `accepted`. A list seen since is a
-    /// `Conflict`: the person accepts only what was shown.
-    pub async fn accept_catalog(&self, server_id: &str, fingerprint: &str) -> Result<McpCatalog> {
+    /// Accepts the tool list last seen in `scope`, if its fingerprint is still `fingerprint`:
+    /// the seen list becomes the accepted one there and the status `accepted`. A list seen
+    /// since, or none seen in that scope, is a `Conflict`: the person accepts only what was
+    /// shown.
+    pub async fn accept_catalog(
+        &self,
+        server_id: &str,
+        scope: &str,
+        fingerprint: &str,
+    ) -> Result<McpCatalog> {
+        check_scope(scope)?;
         let res = sqlx::query(
             "UPDATE mcp_catalogs SET accepted_fingerprint = seen_fingerprint, \
-             accepted_tools = seen_tools, status = ? WHERE server_id = ? AND seen_fingerprint = ?",
+             accepted_tools = seen_tools, status = ? \
+             WHERE server_id = ? AND scope = ? AND seen_fingerprint = ?",
         )
         .bind(CatalogStatus::Accepted.as_str())
         .bind(server_id)
+        .bind(scope)
         .bind(fingerprint)
         .execute(&self.pool)
         .await?;
         if res.rows_affected() == 0 {
-            self.get_catalog(server_id).await?;
+            self.get_catalog(server_id, scope).await?;
             return Err(Error::Conflict(
                 "the server's tool list changed since it was shown; review it again".into(),
             ));
         }
-        self.get_catalog(server_id).await
+        self.get_catalog(server_id, scope).await
     }
 }
 

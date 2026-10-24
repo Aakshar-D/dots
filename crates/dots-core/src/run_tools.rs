@@ -330,7 +330,9 @@ impl RunTools {
             .filter(|s| s.owner_id.as_ref().is_none_or(|o| !left_out.contains(o)))
             .collect();
         // A server whose variables do not all resolve for it is left out, with the reason; its
-        // catalog is the Library's and does not record a dot's grants.
+        // catalog is the Library's and does not record a dot's grants. A server that starts
+        // records what it lists in its catalog of the dot's scope, Personal's or the org's: a
+        // server never seen in that scope is held, as an unchecked one is.
         let mut items = Vec::new();
         for item in used {
             let LibraryConfig::McpServer(config) = &item.config else {
@@ -354,7 +356,8 @@ impl RunTools {
         for ((item, _), outcome) in items.into_iter().zip(opened) {
             match outcome {
                 Ok((session, listed, changes)) => {
-                    let catalog = record_check(store, bus, &item.id, Ok(&listed)).await?;
+                    let catalog =
+                        record_check(store, bus, &item.id, scope.key(), Ok(&listed)).await?;
                     if let Some(notice) = held_notice(&item.name, &catalog) {
                         notices.push(notice);
                     }
@@ -371,11 +374,11 @@ impl RunTools {
                         name: item.name,
                         handled,
                     };
-                    tools.watch(&server, changes, handled_tx, store, bus);
+                    tools.watch(&server, scope.key(), changes, handled_tx, store, bus);
                     tools.servers.push(server);
                 }
                 Err(e) => {
-                    record_check(store, bus, &item.id, Err(&e)).await?;
+                    record_check(store, bus, &item.id, scope.key(), Err(&e)).await?;
                     notices.push(format!("{}: {e}", item.name));
                 }
             }
@@ -478,11 +481,12 @@ impl RunTools {
     }
 
     /// Follows the server's `notifications/tools/list_changed` for the run: each one lists the
-    /// tools again and records them in the catalog; a list that is not the accepted one holds
-    /// the server at once (spec section 6).
+    /// tools again and records them in the catalog of the dot's `scope`; a list that is not the
+    /// accepted one holds the server at once (spec section 6).
     fn watch(
         &self,
         server: &RunServer,
+        scope: &str,
         mut changes: watch::Receiver<u64>,
         handled: watch::Sender<u64>,
         store: &Store,
@@ -492,6 +496,7 @@ impl RunTools {
         let live = server.live.clone();
         let (store, bus) = (store.clone(), bus.clone());
         let (id, name) = (server.item_id.clone(), server.name.clone());
+        let scope = scope.to_string();
         let stop = self.stop.clone();
         let handle = tokio::spawn(async move {
             loop {
@@ -514,7 +519,7 @@ impl RunTools {
                         continue;
                     }
                 };
-                let accepted = match record_check(&store, &bus, &id, Ok(&listed)).await {
+                let accepted = match record_check(&store, &bus, &id, &scope, Ok(&listed)).await {
                     Ok(catalog) => catalog.status == CatalogStatus::Accepted,
                     Err(e) => {
                         tracing::warn!("{name}: recording its changed tools failed: {e}");

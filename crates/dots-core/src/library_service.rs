@@ -15,14 +15,14 @@ use crate::events::{Bus, RuntimeEvent};
 use crate::kit::{self, InstalledPlugin, PluginInfo};
 use crate::library::{
     check_name, LibraryConfig, LibraryItem, LibraryKind, McpCatalog, McpServerConfig, PluginConfig,
-    SkillConfig,
+    SkillConfig, PERSONAL_SCOPE,
 };
 use crate::mcp::{fingerprint, McpError, McpSession, McpTool, SessionOptions};
 use crate::model::{DotRef, ToolsChanged};
 use crate::skill_creator::{self, check_draft};
 use crate::store::Store;
 use crate::vault::literals::Prior;
-use crate::vault::{Resolved, Vault};
+use crate::vault::{Consumer, DotScope, Resolved, Vault};
 use crate::{Error, Result};
 
 /// Dots' own environment, where Claude Code's plugin list is looked up (`kit::installed`).
@@ -38,7 +38,7 @@ pub struct LibraryEntry {
     pub item: LibraryItem,
     /// The dots that use it; for a plugin's MCP server, the dots that use the plugin.
     pub used_by: Vec<DotRef>,
-    /// An MCP server's catalog.
+    /// An MCP server's Personal catalog.
     pub catalog: Option<McpCatalog>,
     /// The `${VAR}` of an MCP server's config that Dots' environment does not set.
     pub missing_variables: Vec<String>,
@@ -158,26 +158,25 @@ pub(crate) async fn open_and_list(
     }
 }
 
-/// Writes the outcome of a check to the server's catalog and publishes the change.
+/// Writes the outcome of a check to the server's catalog in `scope` (`personal`, or the org id
+/// of the dot or the Check) and publishes the change.
 pub(crate) async fn record_check(
     store: &Store,
     bus: &Bus,
     server_id: &str,
+    scope: &str,
     outcome: std::result::Result<&[McpTool], &McpError>,
 ) -> Result<McpCatalog> {
     let catalog = match outcome {
         Ok(tools) => {
+            let listed = serde_json::to_value(tools)?;
             store
-                .record_catalog_seen(
-                    server_id,
-                    &fingerprint(tools),
-                    &serde_json::to_value(tools)?,
-                )
+                .record_catalog_seen(server_id, scope, &fingerprint(tools), &listed)
                 .await?
         }
         Err(e) => {
             store
-                .record_catalog_failure(server_id, &e.to_string())
+                .record_catalog_failure(server_id, scope, &e.to_string())
                 .await?
         }
     };
@@ -418,8 +417,8 @@ impl LibraryService {
         skills_dir.is_some_and(|root| skill_creator::is_inside(path, root))
     }
 
-    /// Every item, with the dots that use it, a server's catalog and missing variables, and
-    /// what a skill's or plugin's folder holds (`library_list`).
+    /// Every item, with the dots that use it, a server's Personal catalog and missing
+    /// variables, and what a skill's or plugin's folder holds (`library_list`).
     pub async fn list(&self) -> Result<Vec<LibraryEntry>> {
         let items = self.store.list_library_items().await?;
         let mut catalogs: HashMap<String, McpCatalog> = self
@@ -427,7 +426,8 @@ impl LibraryService {
             .list_catalogs()
             .await?
             .into_iter()
-            .map(|c| (c.server_id.clone(), c))
+            .filter(|(scope, _)| scope == PERSONAL_SCOPE)
+            .map(|(_, c)| (c.server_id.clone(), c))
             .collect();
         let folders: Vec<(LibraryKind, String)> = items
             .iter()
@@ -563,9 +563,11 @@ impl LibraryService {
             }
         }
         if let Some(fp) = accept {
-            let catalog = self.check_item(&item).await?;
+            let catalog = self.check_item(&item, &DotScope::Personal).await?;
             if catalog.seen_fingerprint.as_deref() == Some(fp) {
-                self.store.accept_catalog(&item.id, fp).await?;
+                self.store
+                    .accept_catalog(&item.id, PERSONAL_SCOPE, fp)
+                    .await?;
                 publish(&self.bus, &item.id);
             }
         }
@@ -663,18 +665,30 @@ impl LibraryService {
         })
     }
 
-    /// Checks the MCP server `id` now (`library_check`, "Check now"): its list is recorded as
-    /// seen, and the status is `accepted`, `changed` or `unreachable`.
-    pub async fn check(&self, id: &str) -> Result<McpCatalog> {
+    /// Checks the MCP server `id` now in `scope` (`library_check`, "Check now", "Check as"):
+    /// its list is recorded as seen in that scope's catalog, and the status is `accepted`,
+    /// `changed` or `unreachable`. Personal starts the server with Personal's values. An org
+    /// resolves each of its variables as a run in that org would, as if all were granted
+    /// (env vault spec §8); one that does not resolve fails the check, and the catalog's error
+    /// names the variable and the org. An org not joined on this PC is `NotFound`.
+    pub async fn check(&self, id: &str, scope: &DotScope) -> Result<McpCatalog> {
         let item = self.server(id).await?;
-        self.check_item(&item).await
+        self.check_item(&item, scope).await
     }
 
-    /// Accepts the list last seen of the MCP server `id`, if its fingerprint is still
-    /// `fingerprint` (`library_accept`); a newer list is a `Conflict`.
-    pub async fn accept(&self, id: &str, fingerprint: &str) -> Result<McpCatalog> {
+    /// Accepts the list last seen in `scope` of the MCP server `id`, if its fingerprint is
+    /// still `fingerprint` (`library_accept`); a newer list is a `Conflict`.
+    pub async fn accept(
+        &self,
+        id: &str,
+        scope: &DotScope,
+        fingerprint: &str,
+    ) -> Result<McpCatalog> {
         self.server(id).await?;
-        let catalog = self.store.accept_catalog(id, fingerprint).await?;
+        let catalog = self
+            .store
+            .accept_catalog(id, scope.key(), fingerprint)
+            .await?;
         publish(&self.bus, id);
         Ok(catalog)
     }
@@ -755,7 +769,7 @@ impl LibraryService {
     /// Inbox's "Tools changed").
     pub async fn tools_changed(&self) -> Result<Vec<ToolsChanged>> {
         let mut out = Vec::new();
-        for item in self.store.changed_mcp_servers().await? {
+        for item in self.store.changed_mcp_servers(PERSONAL_SCOPE).await? {
             let dots = self
                 .store
                 .dots_using(&item)
@@ -787,20 +801,36 @@ impl LibraryService {
         Ok(item)
     }
 
-    async fn check_item(&self, item: &LibraryItem) -> Result<McpCatalog> {
+    async fn check_item(&self, item: &LibraryItem, scope: &DotScope) -> Result<McpCatalog> {
         let LibraryConfig::McpServer(config) = &item.config else {
             return Err(Error::Invalid(format!(
                 "{:?} is not an MCP server",
                 item.name
             )));
         };
-        let env = self.vault.personal_values(&config.variables()).await?;
+        let consumer = Consumer::Mcp(item.name.clone());
+        let resolved = self
+            .vault
+            .check_values(scope, &consumer, &config.variables())
+            .await?;
+        let env = match resolved {
+            Ok(env) => env,
+            Err(missing) => {
+                let catalog = self
+                    .store
+                    .record_catalog_failure(&item.id, scope.key(), &missing.check_text())
+                    .await?;
+                publish(&self.bus, &item.id);
+                return Ok(catalog);
+            }
+        };
+        let key = scope.key();
         match open_and_list(&item.name, config, &env, SessionOptions::default()).await {
             Ok((session, tools)) => {
                 session.close().await;
-                record_check(&self.store, &self.bus, &item.id, Ok(&tools)).await
+                record_check(&self.store, &self.bus, &item.id, key, Ok(&tools)).await
             }
-            Err(e) => record_check(&self.store, &self.bus, &item.id, Err(&e)).await,
+            Err(e) => record_check(&self.store, &self.bus, &item.id, key, Err(&e)).await,
         }
     }
 

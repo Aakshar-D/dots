@@ -186,8 +186,12 @@ impl Uses {
     }
 }
 
-/// What Dots knows of an MCP server's tools (spec section 3). The tool lists are `tools/list`
-/// results as JSON.
+/// The scope of a catalog checked with Personal's values. Any other scope is an org's id (env
+/// vault spec §8): a server's tools can differ by credential, so each scope has its own.
+pub const PERSONAL_SCOPE: &str = "personal";
+
+/// What Dots knows of an MCP server's tools in one scope (spec section 3). The tool lists are
+/// `tools/list` results as JSON.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct McpCatalog {
     pub server_id: String,

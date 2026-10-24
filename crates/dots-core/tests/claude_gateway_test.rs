@@ -322,9 +322,13 @@ async fn a_grant_does_not_hold_once_the_servers_accepted_list_changed() {
     let mut write = tool("write", false);
     write["description"] = json!("Writes, and also deletes.");
     fake.rewrite(json!({"tools": [tool("read", true), write]}));
-    let seen = e.lib.check(&item.id).await.unwrap();
+    let seen = e.lib.check(&item.id, &DotScope::Personal).await.unwrap();
     e.lib
-        .accept(&item.id, seen.seen_fingerprint.as_deref().unwrap())
+        .accept(
+            &item.id,
+            &DotScope::Personal,
+            seen.seen_fingerprint.as_deref().unwrap(),
+        )
         .await
         .unwrap();
     e.hub.decide(&approval, true, None).await.unwrap();

@@ -11,6 +11,7 @@ use zeroize::Zeroizing;
 use super::grants::{Consumer, Grants};
 use super::org::{OrgLookup, OrgPolicy, PersonalMode};
 use super::service::Vault;
+use crate::library::PERSONAL_SCOPE;
 use crate::model::Dot;
 use crate::{Error, Result};
 
@@ -28,6 +29,14 @@ impl DotScope {
         match &dot.org_id {
             Some(org_id) => DotScope::Org(org_id.clone()),
             None => DotScope::Personal,
+        }
+    }
+
+    /// The scope's key in the store, for its MCP catalogs: `personal`, or the org's id.
+    pub fn key(&self) -> &str {
+        match self {
+            DotScope::Personal => PERSONAL_SCOPE,
+            DotScope::Org(org_id) => org_id,
         }
     }
 }
@@ -96,6 +105,28 @@ impl Missing {
             Unresolved::OrgRemoved => org_removed_text(dot, org),
         }
     }
+
+    /// The words stored on a server's catalog when its Check in an org's scope fails
+    /// (`Vault::check_values`): the variable, the scope and why, and never a dot.
+    pub fn check_text(&self) -> String {
+        let name = &self.name;
+        let org = self.org.as_deref().unwrap_or("Personal");
+        match &self.why {
+            Unresolved::NotGranted => format!("{name}: not granted"),
+            Unresolved::NotDefined => format!("{name}: not in {org}"),
+            Unresolved::DeniedByPolicy => format!("{name}: {org}'s policy does not allow it"),
+            Unresolved::ShellSecretsForbidden => {
+                format!("{name}: {org} does not allow secrets in the shell")
+            }
+            Unresolved::OrgExpired => {
+                format!("{name}: {org}: secrets expired offline; reconnect to refresh")
+            }
+            Unresolved::OrgRevoked => format!("{name}: {org}: access revoked"),
+            Unresolved::PolicyInvalid(error) => format!("{name}: {org}: policy invalid: {error}"),
+            Unresolved::OrgOffline => format!("{name}: {org}: offline, with no saved copy"),
+            Unresolved::OrgRemoved => format!("{name}: no org '{org}' is joined on this PC"),
+        }
+    }
 }
 
 /// Resolved values by the name they were asked for. Its `Debug` shows the names only.
@@ -138,6 +169,41 @@ impl Vault {
         consumer: &Consumer,
         names: &[String],
     ) -> Result<std::result::Result<Resolved, Missing>> {
+        let granted = |name: &str| grants.allows(consumer, name);
+        self.resolve_where(scope, &granted, consumer, names).await
+    }
+
+    /// The values of `names` for the Library's Check of an MCP server in `scope` (§8), as if
+    /// all were granted to `consumer`. Personal gives what Personal has, as `personal_values`
+    /// does: a name it lacks is left out, and the server says so when it starts. An org
+    /// resolves each name as a run in it would: its state, its `use` rules, then its
+    /// `personal` mode; the first that does not resolve is the answer. An org not joined on
+    /// this PC is `NotFound`.
+    pub async fn check_values(
+        &self,
+        scope: &DotScope,
+        consumer: &Consumer,
+        names: &[String],
+    ) -> Result<std::result::Result<Resolved, Missing>> {
+        let DotScope::Org(org_id) = scope else {
+            return Ok(Ok(self.personal_values(names).await?));
+        };
+        if !self.orgs().is_some_and(|orgs| orgs.is_joined(org_id)) {
+            return Err(Error::NotFound(format!(
+                "no org '{org_id}' is joined on this PC"
+            )));
+        }
+        self.resolve_where(scope, &|_| true, consumer, names).await
+    }
+
+    /// `resolve`, with `granted` saying which names are granted to `consumer`.
+    async fn resolve_where(
+        &self,
+        scope: &DotScope,
+        granted: &(dyn Fn(&str) -> bool + Sync),
+        consumer: &Consumer,
+        names: &[String],
+    ) -> Result<std::result::Result<Resolved, Missing>> {
         let org = match scope {
             DotScope::Personal => None,
             DotScope::Org(org_id) => Some((org_id.as_str(), self.org_name(org_id).await)),
@@ -158,7 +224,7 @@ impl Vault {
                 }),
                 why,
             };
-            if !grants.allows(consumer, name) {
+            if !granted(name) {
                 return Ok(Err(missing(Unresolved::NotGranted)));
             }
             let value = match &org {
