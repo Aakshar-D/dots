@@ -8,6 +8,7 @@
 //! 403 are `Denied`; any other status, or an answer that doesn't parse, is `Invalid`, with the
 //! status. No message ever quotes an answer's body, since it could hold a value.
 
+pub mod infisical;
 pub mod openbao;
 
 use std::collections::{BTreeMap, HashMap};
@@ -19,6 +20,7 @@ use serde::de::{self, DeserializeOwned, Deserializer, IgnoredAny, MapAccess, Seq
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
+pub use infisical::Infisical;
 pub use openbao::OpenBao;
 
 use super::{check_org_id, SourceSettings};
@@ -180,7 +182,7 @@ impl std::io::Write for Bounded<'_> {
 pub fn source_for(settings: &SourceSettings, http: reqwest::Client) -> Box<dyn Source> {
     match settings {
         SourceSettings::OpenBao(s) => Box::new(OpenBao::new(s.clone(), http)),
-        SourceSettings::Infisical(_) => Box::new(NotBuilt("reading from Infisical")),
+        SourceSettings::Infisical(s) => Box::new(Infisical::new(s.clone(), http)),
         SourceSettings::Sops(_) => Box::new(NotBuilt("reading a SOPS file")),
     }
 }
