@@ -7,7 +7,8 @@
 //! 0008 (check-ins spec section 8): `finish_0008` last gives each dot listed in `upgrade_0008`
 //! whose preset is not Custom an allow rule for each check-in tool that no rule names, and
 //! drops that table. 0012 (dot memory spec section 3): `finish_0012` does the same for
-//! `Memory` with `upgrade_0012`.
+//! `Memory` with `upgrade_0012`, and 0013 (teams spec section 7) `finish_0013` for `Workflow`,
+//! with the rule the dot's preset has (Sandboxed asks, ReadOnly and Trusted allow).
 
 use std::collections::BTreeMap;
 
@@ -18,7 +19,7 @@ use crate::library::{
     check_name, looks_secret, mcp_server_name, CatalogStatus, LibraryConfig, LibraryKind,
     McpServerConfig, Uses, MAX_SERVER_NAME,
 };
-use crate::policy::{Action, Policy, Preset, CHECK_IN_TOOLS, MEMORY_TOOL};
+use crate::policy::{Action, Policy, Preset, CHECK_IN_TOOLS, MEMORY_TOOL, WORKFLOW_TOOL};
 use crate::util::{new_id, now};
 use crate::Result;
 
@@ -374,21 +375,27 @@ fn with_context(stored: &str) -> Option<String> {
     serde_json::to_string(&policy).ok()
 }
 
-/// Gives the policy of each dot that migration 0008 listed the check-in tools' allow rules
-/// (`with_allow_rules`), and drops the list.
+/// Gives the policy of each dot that migration 0008 listed the check-in tools' rules
+/// (`with_preset_rules`), and drops the list.
 pub(super) async fn finish_0008(pool: &SqlitePool) -> Result<()> {
-    give_allow_rules(pool, "0008", &CHECK_IN_TOOLS).await
+    give_preset_rules(pool, "0008", &CHECK_IN_TOOLS).await
 }
 
-/// Gives the policy of each dot that migration 0012 listed the `Memory` allow rule, and drops
+/// Gives the policy of each dot that migration 0012 listed the `Memory` rule, and drops
 /// the list.
 pub(super) async fn finish_0012(pool: &SqlitePool) -> Result<()> {
-    give_allow_rules(pool, "0012", &[MEMORY_TOOL]).await
+    give_preset_rules(pool, "0012", &[MEMORY_TOOL]).await
 }
 
-/// Gives the policy of each dot listed in `upgrade_<migration>` an allow rule for each of
-/// `tools` (`with_allow_rules`), and drops the list, in one transaction.
-async fn give_allow_rules(pool: &SqlitePool, migration: &str, tools: &[&str]) -> Result<()> {
+/// Gives the policy of each dot that migration 0013 listed the `Workflow` rule its preset has
+/// (Sandboxed asks, ReadOnly and Trusted allow), and drops the list (teams spec section 7).
+pub(super) async fn finish_0013(pool: &SqlitePool) -> Result<()> {
+    give_preset_rules(pool, "0013", &[WORKFLOW_TOOL]).await
+}
+
+/// Gives the policy of each dot listed in `upgrade_<migration>` the rule its preset has for each
+/// of `tools` (`with_preset_rules`), and drops the list, in one transaction.
+async fn give_preset_rules(pool: &SqlitePool, migration: &str, tools: &[&str]) -> Result<()> {
     let table = format!("upgrade_{migration}");
     let waiting: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?")
@@ -405,7 +412,7 @@ async fn give_allow_rules(pool: &SqlitePool, migration: &str, tools: &[&str]) ->
     .fetch_all(&mut *tx)
     .await?;
     for (dot_id, stored) in rows {
-        let Some(policy) = with_allow_rules(&stored, tools) else {
+        let Some(policy) = with_preset_rules(&stored, tools) else {
             tracing::warn!(dot = %dot_id, "migration {migration}: the policy could not be read");
             continue;
         };
@@ -422,15 +429,22 @@ async fn give_allow_rules(pool: &SqlitePool, migration: &str, tools: &[&str]) ->
     Ok(())
 }
 
-/// The stored policy with an allow rule at the end for each of `tools` (in that order) that no
-/// rule names (`Notify` or `Notify(...)`); a Custom policy is left as it is, as the person made
-/// it. `None` when the stored JSON is not a policy.
-fn with_allow_rules(stored: &str, tools: &[&str]) -> Option<String> {
+/// The stored policy with, at the end, the rule its preset has for each of `tools` (in that
+/// order) that no rule names (`Notify` or `Notify(...)`); a Custom policy is left as it is, as
+/// the person made it. `None` when the stored JSON is not a policy.
+fn with_preset_rules(stored: &str, tools: &[&str]) -> Option<String> {
     let mut value: Value = serde_json::from_str(stored).ok()?;
     let custom = value.get("preset").and_then(Value::as_str) == Some(Preset::Custom.as_str());
+    let preset = Preset::parse(value.get("preset")?.as_str()?).ok()?;
+    let given = Policy::preset(preset);
     let rules = value.get_mut("rules")?.as_array_mut()?;
     if !custom {
         for &tool in tools {
+            let action = given
+                .rules
+                .iter()
+                .find(|r| r.tool == tool)
+                .map_or(Action::Allow, |r| r.action);
             let names_tool = |rule: &Value| {
                 rule["tool"].as_str().is_some_and(|t| {
                     let t = t.trim();
@@ -440,7 +454,7 @@ fn with_allow_rules(stored: &str, tools: &[&str]) -> Option<String> {
                 })
             };
             if !rules.iter().any(names_tool) {
-                rules.push(json!({"tool": tool, "action": Action::Allow.as_str()}));
+                rules.push(json!({"tool": tool, "action": action.as_str()}));
             }
         }
     }

@@ -28,8 +28,12 @@ pub mod server;
 pub mod settings;
 pub mod skill_creator;
 pub mod store;
+pub mod team_tools;
+pub mod teams;
 pub mod util;
 pub mod vault;
+pub mod workflow;
+pub mod workflows;
 pub mod workspace;
 
 pub use error::{Error, Result};

@@ -99,6 +99,7 @@ const TRIGGER: Record<Run["trigger"], string> = {
   chat: "Chat",
   resume: "Continued",
   follow_up: "Follow-up",
+  workflow: "Workflow",
 };
 
 /// What started a run, in a word or two: "Scheduled", "Webhook", "Run now".

@@ -17,6 +17,7 @@ pub mod memory;
 mod search;
 mod shell;
 pub mod skill;
+pub mod team;
 
 /// Tool output sent back to the model is capped at this many bytes.
 pub const MAX_OUTPUT: usize = 30 * 1024;
@@ -47,6 +48,7 @@ pub const TOOLS: &[(&str, &str)] = &[
     ("remember", "Memory"),
     ("forget", "Memory"),
     ("recall", "Memory"),
+    ("start_workflow", "Workflow"),
 ];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -172,6 +174,14 @@ const ARGS: &[(&str, Params)] = &[
     ("remember", &[("text", Str, true)]),
     ("forget", &[("id", Str, true)]),
     ("recall", &[("query", Str, false)]),
+    (
+        "start_workflow",
+        &[
+            ("workflow", Str, true),
+            ("project", Str, true),
+            ("task", Str, true),
+        ],
+    ),
 ];
 
 /// Checks a model tool call before the policy sees it: a known tool, arguments that form a

@@ -732,3 +732,84 @@ async fn restore_refuses_a_forged_row_before_it_touches_the_disk_or_git() {
     assert_eq!(wm.restore(&dot, &p).await.unwrap(), p);
     assert!(p.path.join("README.md").is_file());
 }
+
+#[tokio::test]
+async fn leftovers_are_committed_on_the_runs_branch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    init_repo(&repo);
+    let dot = fake_dot("c", &repo, WorkspaceMode::Worktree);
+    let wm = WorkspaceManager::new(tmp.path().join("wt"));
+    let p = wm.prepare(&dot, "R1").await.unwrap();
+    std::fs::write(p.path.join("a.txt"), "a").unwrap();
+    let hooks = tmp.path().join("hooks");
+    assert!(wm.commit_leftovers(&p, "msg", &hooks).await.unwrap());
+    let branch = p.branch.clone().unwrap();
+    assert_eq!(
+        git_out(&repo, &["log", "-1", "--format=%s", &branch]),
+        "msg"
+    );
+}
+
+#[tokio::test]
+async fn leftovers_are_not_committed_outside_a_worktree_of_dots() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    init_repo(&repo);
+    std::fs::write(repo.join("mine.txt"), "mine").unwrap();
+    let wm = WorkspaceManager::new(tmp.path().join("wt"));
+    // A tampered row naming the person's own checkout.
+    let p = Prepared {
+        path: repo.clone(),
+        branch: Some("main".into()),
+        base_commit: None,
+    };
+    wm.commit_leftovers(&p, "msg", &tmp.path().join("hooks"))
+        .await
+        .unwrap_err();
+    assert_eq!(git_out(&repo, &["status", "--porcelain"]), "?? mine.txt");
+    assert_eq!(git_out(&repo, &["log", "-1", "--format=%s"]), "init");
+}
+
+#[tokio::test]
+async fn leftovers_are_not_committed_in_a_parent_repo_when_the_worktree_has_no_git() {
+    let tmp = tempfile::tempdir().unwrap();
+    let parent = tmp.path().join("parent");
+    init_repo(&parent);
+    let wm = WorkspaceManager::new(parent.join("wt"));
+    // The folder is where a worktree would be, but git removed its `.git`.
+    let folder = parent.join("wt").join("R1");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("a.txt"), "a").unwrap();
+    let p = Prepared {
+        path: folder,
+        branch: Some("dots/d/R1".into()),
+        base_commit: None,
+    };
+    wm.commit_leftovers(&p, "msg", &tmp.path().join("hooks"))
+        .await
+        .unwrap_err();
+    assert_eq!(git_out(&parent, &["log", "-1", "--format=%s"]), "init");
+    assert!(git_out(&parent, &["status", "--porcelain"]).contains("wt/"));
+}
+
+#[tokio::test]
+async fn leftovers_are_not_committed_when_the_worktree_left_the_runs_branch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    init_repo(&repo);
+    git_out(&repo, &["branch", "feature"]);
+    let dot = fake_dot("s", &repo, WorkspaceMode::Worktree);
+    let wm = WorkspaceManager::new(tmp.path().join("wt"));
+    let p = wm.prepare(&dot, "R1").await.unwrap();
+    git_out(&p.path, &["checkout", "-q", "feature"]);
+    std::fs::write(p.path.join("a.txt"), "a").unwrap();
+    wm.commit_leftovers(&p, "msg", &tmp.path().join("hooks"))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        git_out(&repo, &["log", "-1", "--format=%s", "feature"]),
+        "init"
+    );
+    assert_eq!(git_out(&p.path, &["status", "--porcelain"]), "?? a.txt");
+}

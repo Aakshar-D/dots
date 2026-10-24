@@ -262,6 +262,10 @@
         {
           "action": "allow",
           "tool": "Memory"
+        },
+        {
+          "action": "ask",
+          "tool": "Workflow"
         }
       ]
     },
@@ -407,6 +411,10 @@
           {
             "action": "allow",
             "tool": "Memory"
+          },
+          {
+            "action": "ask",
+            "tool": "Workflow"
           }
         ]
       },
@@ -460,9 +468,11 @@
       "started_at": "2026-10-09T12:00:00.000Z",
       "status": "succeeded",
       "summary": "All tests pass.",
+      "tokens_cache_read": 0,
       "tokens_in": 1200,
       "tokens_out": 340,
       "trigger": "schedule",
+      "workflow_step_run_id": null,
       "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
     },
     "needs_you": 0,
@@ -553,6 +563,10 @@
         {
           "action": "allow",
           "tool": "Memory"
+        },
+        {
+          "action": "allow",
+          "tool": "Workflow"
         }
       ]
     },
@@ -680,7 +694,8 @@
       "manual",
       "chat",
       "resume",
-      "follow_up"
+      "follow_up",
+      "workflow"
     ],
     "WorkspaceMode": [
       "worktree",
@@ -793,9 +808,11 @@
         "started_at": "2026-10-09T12:00:00.000Z",
         "status": "succeeded",
         "summary": "All tests pass.",
+        "tokens_cache_read": 0,
         "tokens_in": 1200,
         "tokens_out": 340,
         "trigger": "schedule",
+        "workflow_step_run_id": null,
         "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN",
         "worktree_exists": true
       }
@@ -1439,6 +1456,10 @@
         {
           "action": "allow",
           "tool": "Memory"
+        },
+        {
+          "action": "ask",
+          "tool": "Workflow"
         }
       ]
     },
@@ -1489,9 +1510,11 @@
     "started_at": "2026-10-09T12:00:00.000Z",
     "status": "succeeded",
     "summary": "All tests pass.",
+    "tokens_cache_read": 0,
     "tokens_in": 1200,
     "tokens_out": 340,
     "trigger": "schedule",
+    "workflow_step_run_id": null,
     "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
   },
   "RunEventData": [
@@ -1518,6 +1541,7 @@
       "output": "test result: ok"
     },
     {
+      "cache_read": 900,
       "kind": "usage",
       "tokens_in": 1200,
       "tokens_out": 340
@@ -1582,9 +1606,11 @@
         "started_at": null,
         "status": "queued",
         "summary": null,
+        "tokens_cache_read": 0,
         "tokens_in": 0,
         "tokens_out": 0,
         "trigger": "schedule",
+        "workflow_step_run_id": null,
         "workspace_path": null
       },
       "type": "run_updated"

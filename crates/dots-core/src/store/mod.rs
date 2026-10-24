@@ -18,7 +18,9 @@ mod messages;
 mod runs;
 mod schedules;
 mod settings;
+mod teams;
 mod upgrade;
+mod workflow_runs;
 
 pub(crate) use upgrade::{auth_scheme, var_name};
 
@@ -56,6 +58,7 @@ impl Store {
         let store = Store { pool };
         upgrade::finish_0011(&store).await?;
         upgrade::finish_0012(&store.pool).await?;
+        upgrade::finish_0013(&store.pool).await?;
         Ok(store)
     }
 
