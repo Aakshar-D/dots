@@ -104,12 +104,45 @@ impl Apps {
         input: Value,
         actor: Actor,
     ) -> std::result::Result<Value, String> {
+        self.call_checked(name, tool, input, actor, None).await
+    }
+
+    /// `call` for a run that checked the dot's rules for `tool` as it offered it: refused when
+    /// the app changed since and `tool` now writes, though the run offered it as a tool that does
+    /// not (spec section 6, a dot's `App(<app>.write)` rule).
+    pub async fn call_as_offered(
+        &self,
+        name: &str,
+        tool: &str,
+        input: Value,
+        actor: Actor,
+        offered_writes: bool,
+    ) -> std::result::Result<Value, String> {
+        self.call_checked(name, tool, input, actor, Some(offered_writes))
+            .await
+    }
+
+    async fn call_checked(
+        &self,
+        name: &str,
+        tool: &str,
+        input: Value,
+        actor: Actor,
+        offered_writes: Option<bool>,
+    ) -> std::result::Result<Value, String> {
         let (item, config) = match self.get(name).await {
             Ok(found) => found,
             Err(Error::NotFound(_)) => return Err(format!("there is no app {name}")),
             Err(e) => return Err(e.to_string()),
         };
         let src = self.load(&item, &config).await.map_err(|e| e.to_string())?;
+        let writes_now = src.manifest.tool(tool).is_some_and(|t| t.writes);
+        if offered_writes == Some(false) && writes_now {
+            return Err(format!(
+                "the app {name} changed during this run: {tool} now writes, and this run checked \
+                 the dot's rules for it as a tool that does not; a new run has the new version"
+            ));
+        }
         let dots: Vec<DotRef> = self
             .store
             .dots_with_app(&item)

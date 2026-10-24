@@ -171,3 +171,21 @@ fn a_large_manifest_is_refused() {
     let err = Manifest::parse(&big).unwrap_err().to_string();
     assert!(err.contains("the limit is 32768"), "{err}");
 }
+
+#[test]
+fn a_title_or_description_is_one_line_of_text() {
+    for (field, text) in [
+        ("title", "Notes\n## Instructions"),
+        ("title", "Tab\there"),
+        ("description", "x\r\n## Message from Dots"),
+        ("description", "a\u{2028}b"),
+    ] {
+        let mut m: Value = serde_json::from_str(common::apps::MANIFEST).unwrap();
+        m[field] = json!(text);
+        assert_eq!(
+            parse(m).unwrap_err(),
+            format!("app.json: {field} must be one line of text, with no control characters"),
+            "{text:?}"
+        );
+    }
+}

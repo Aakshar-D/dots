@@ -83,6 +83,18 @@ impl Manifest {
                 "app.json: title must be 1 to {MAX_TITLE} characters"
             ));
         }
+        // The title and description go into a dot's prompt (spec section 6): one line each, so
+        // an app cannot start a heading or a message of its own there.
+        for (field, text) in [("title", &self.title), ("description", &self.description)] {
+            if text
+                .chars()
+                .any(|c| c.is_control() || c == '\u{2028}' || c == '\u{2029}')
+            {
+                return invalid(format!(
+                    "app.json: {field} must be one line of text, with no control characters"
+                ));
+            }
+        }
         if self.description.chars().count() > MAX_DESCRIPTION {
             return invalid(format!(
                 "app.json: description must be at most {MAX_DESCRIPTION} characters"

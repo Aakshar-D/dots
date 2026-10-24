@@ -488,3 +488,110 @@ async fn changes_at_once_do_not_undo_each_other() {
     assert!(c.every_dot);
     f.apps.load(&item, &c).await.unwrap();
 }
+
+#[tokio::test]
+async fn a_run_refuses_a_tool_that_began_to_write_after_it_started() {
+    use dots_core::apps::RunApps;
+    use dots_core::policy::{Action, Rule};
+    let f = fixture().await;
+    f.apps
+        .install(source(&expenses()), AppOrigin::Proposed)
+        .await
+        .unwrap();
+    let mut spec = common::spec("reader");
+    spec.uses = Uses {
+        apps: vec!["expenses".into()],
+        ..Uses::default()
+    };
+    spec.policy
+        .rules
+        .push(Rule::new("App(expenses.write)", Action::Deny));
+    let dot = f.store.create_dot(&spec).await.unwrap();
+    let (run, _) = RunApps::open(&f.apps, &dot, "r1").await.unwrap();
+    let run = run.unwrap();
+    // The deny rule hides add_expense; month_total does not write, so the run offers it.
+    assert!(run.resolve("expenses__add_expense").is_none());
+    let checked = run
+        .policy_input(
+            "expenses__month_total",
+            &serde_json::json!({"month": "2026-10"}),
+        )
+        .unwrap();
+    assert!(run.call(&checked).await.is_ok());
+    // The person accepts a version in which month_total writes.
+    let mut files = expenses();
+    files.retain(|(p, _)| *p != "app.json");
+    files.push((
+        "app.json",
+        common::apps::MANIFEST.replace(
+            "\"description\": \"The total of a month\",",
+            "\"description\": \"The total of a month\",\n      \"writes\": true,",
+        ),
+    ));
+    f.apps
+        .update("expenses", source(&files), true)
+        .await
+        .unwrap();
+    let err = run.call(&checked).await.unwrap_err();
+    assert_eq!(
+        err,
+        "expenses__month_total: the app expenses changed during this run: month_total now \
+         writes, and this run checked the dot's rules for it as a tool that does not; a new run \
+         has the new version"
+    );
+}
+
+#[tokio::test]
+async fn a_claude_run_offers_at_most_its_bound_of_app_tools() {
+    use dots_core::apps::run::MAX_CLAUDE_APP_TOOLS;
+    use dots_core::apps::RunApps;
+    let f = fixture().await;
+    let big = |name: &str| {
+        let tools: Vec<serde_json::Value> = (0..200)
+            .map(|i| {
+                serde_json::json!({
+                    "name": format!("t{i}"), "description": "A tool", "input": {"type": "object"}
+                })
+            })
+            .collect();
+        let manifest = serde_json::json!({
+            "name": name, "title": name, "description": "Many tools", "tools": tools
+        });
+        let logic: String = (0..200)
+            .map(|i| format!("export function t{i}() {{ return {i}; }}\n"))
+            .collect();
+        source(&[
+            ("app.json", manifest.to_string()),
+            ("logic.js", logic),
+            (
+                "ui/index.html",
+                "<!doctype html><title>x</title>".to_string(),
+            ),
+        ])
+    };
+    f.apps
+        .install(big("alpha"), AppOrigin::Proposed)
+        .await
+        .unwrap();
+    f.apps
+        .install(big("beta"), AppOrigin::Proposed)
+        .await
+        .unwrap();
+    let mut spec = common::spec("many");
+    spec.engine = dots_core::model::EngineKind::Claude;
+    spec.uses = Uses {
+        apps: vec!["alpha".into(), "beta".into()],
+        ..Uses::default()
+    };
+    let dot = f.store.create_dot(&spec).await.unwrap();
+    let (run, notices) = RunApps::open(&f.apps, &dot, "r1").await.unwrap();
+    let run = run.unwrap();
+    assert_eq!(run.apps().len(), 1);
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert!(
+        notices[0].ends_with(&format!(
+            "left out of this run: a Claude run offers at most {MAX_CLAUDE_APP_TOOLS} app tools"
+        )),
+        "{notices:?}"
+    );
+}
