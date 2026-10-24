@@ -279,6 +279,9 @@
     "use_global_instructions": true,
     "use_user_settings": false,
     "uses": {
+      "apps": [
+        "projects"
+      ],
       "context": [
         "company"
       ],
@@ -424,6 +427,9 @@
       "use_global_instructions": true,
       "use_user_settings": false,
       "uses": {
+        "apps": [
+          "projects"
+        ],
         "context": [
           "company"
         ],
@@ -561,6 +567,7 @@
     "use_global_instructions": true,
     "use_user_settings": false,
     "uses": {
+      "apps": [],
       "context": [],
       "mcp_servers": [],
       "plugins": [],
@@ -645,7 +652,8 @@
       "mcp_server",
       "skill",
       "plugin",
-      "context"
+      "context",
+      "app"
     ],
     "MemorySource": [
       "dot",
@@ -871,6 +879,37 @@
         "path": "C:/notes/company"
       },
       "kind": "context"
+    },
+    {
+      "config": {
+        "can_start_dots": true,
+        "changed": false,
+        "description": "Projects, tasks and to-dos, shared by you and your dots",
+        "every_dot": true,
+        "origin": {
+          "kind": "bundled",
+          "release": "0.4.0"
+        },
+        "previous_version": 2,
+        "title": "Projects",
+        "version": 3
+      },
+      "kind": "app"
+    },
+    {
+      "config": {
+        "can_start_dots": true,
+        "changed": false,
+        "description": "Projects, tasks and to-dos, shared by you and your dots",
+        "every_dot": true,
+        "origin": {
+          "kind": "proposed"
+        },
+        "previous_version": null,
+        "title": "Projects",
+        "version": 3
+      },
+      "kind": "app"
     }
   ],
   "LibraryEntry": [
@@ -1106,6 +1145,40 @@
       "kind": "context",
       "missing_variables": [],
       "name": "company",
+      "owner_id": null,
+      "plugin": null,
+      "problem": null,
+      "skill": null,
+      "updated_at": "2026-10-09T12:00:00.000Z",
+      "used_by": [
+        {
+          "id": "01J0DOT",
+          "name": "nightly-tests"
+        }
+      ]
+    },
+    {
+      "catalog": null,
+      "config": {
+        "can_start_dots": true,
+        "changed": false,
+        "description": "Projects, tasks and to-dos, shared by you and your dots",
+        "every_dot": true,
+        "origin": {
+          "kind": "bundled",
+          "release": "0.4.0"
+        },
+        "previous_version": 2,
+        "title": "Projects",
+        "version": 3
+      },
+      "context": null,
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "dots_folder": false,
+      "id": "01J0APP",
+      "kind": "app",
+      "missing_variables": [],
+      "name": "projects",
       "owner_id": null,
       "plugin": null,
       "problem": null,
@@ -1447,6 +1520,7 @@
     "use_global_instructions": true,
     "use_user_settings": false,
     "uses": {
+      "apps": [],
       "context": [],
       "mcp_servers": [],
       "plugins": [],

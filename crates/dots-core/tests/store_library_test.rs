@@ -44,6 +44,7 @@ fn uses(mcp: &[&str], skills: &[&str], plugins: &[&str]) -> Uses {
         skills: v(skills),
         plugins: v(plugins),
         context: Vec::new(),
+        apps: Vec::new(),
     }
 }
 

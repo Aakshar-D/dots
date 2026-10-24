@@ -119,6 +119,8 @@ pub struct Runtime {
     /// The dot whose conversation the person has open in the focused window (needs-you spec
     /// section 3).
     viewing: Viewing,
+    /// The installed apps (app library spec).
+    apps: crate::apps::Apps,
     shutdown: CancellationToken,
 }
 
@@ -297,6 +299,11 @@ impl Runtime {
         // Follow-ups wait while schedules are paused (check-ins spec section 6).
         follow_ups.set_paused(settings.schedules_paused);
         follow_ups.spawn(runner.clone(), shutdown.clone());
+        let apps = crate::apps::Apps::new(
+            store.clone(),
+            bus.clone(),
+            cfg.data_dir.join(crate::apps::APPS_DIR),
+        );
         let viewing = Viewing::default();
         watch_viewing(
             store.clone(),
@@ -335,6 +342,7 @@ impl Runtime {
             follow_ups,
             browsers,
             viewing,
+            apps,
             shutdown,
         })
     }
@@ -697,6 +705,11 @@ impl Runtime {
     /// The Library: what the `library_*` commands call (MCP/skills spec section 9).
     pub fn library(&self) -> &LibraryService {
         &self.library
+    }
+
+    /// The installed apps (app library spec).
+    pub fn apps(&self) -> &crate::apps::Apps {
+        &self.apps
     }
 
     /// The personal variables of the Env tab (env vault spec §5).

@@ -5,5 +5,8 @@ pub mod call;
 pub mod data;
 pub mod engine;
 pub mod manifest;
+mod registry;
 pub mod schema;
 pub mod source;
+
+pub use registry::{Apps, APPS_DIR};

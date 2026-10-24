@@ -15,6 +15,7 @@ str_enum!(LibraryKind {
     Skill => "skill",
     Plugin => "plugin",
     Context => "context",
+    App => "app",
 });
 // Where a server's tool list stands (spec section 3): the person accepted the list last seen;
 // the list changed since; the last check failed; or no list was accepted yet.
@@ -33,6 +34,7 @@ impl LibraryKind {
             Self::Skill => "skill",
             Self::Plugin => "plugin",
             Self::Context => "context collection",
+            Self::App => "app",
         }
     }
 
@@ -43,6 +45,7 @@ impl LibraryKind {
             Self::Skill => "skills",
             Self::Plugin => "plugins",
             Self::Context => "context",
+            Self::App => "apps",
         }
     }
 }
@@ -109,6 +112,41 @@ pub struct ContextConfig {
     pub every_dot: bool,
 }
 
+/// An app in the Library (app library spec sections 4 and 6): Dots keeps its code and data in
+/// the data folder (`apps::Apps`); the row says which version is active and how dots may use it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppConfig {
+    pub title: String,
+    #[serde(default)]
+    pub description: String,
+    /// The active version: a counter Dots raises on each accepted version, from 1.
+    pub version: u32,
+    /// The version before it, kept for "Roll back" while the update that replaced it ran no
+    /// migrations.
+    #[serde(default)]
+    pub previous_version: Option<u32>,
+    /// Every dot uses the app, ticked or not.
+    #[serde(default)]
+    pub every_dot: bool,
+    /// "Can start dots": off until the person switches it on (spec section 7).
+    #[serde(default)]
+    pub can_start_dots: bool,
+    pub origin: AppOrigin,
+    /// A bundled app the person changed through a dot's proposal: Dots no longer updates it.
+    #[serde(default)]
+    pub changed: bool,
+}
+
+/// Where an app came from (spec section 8).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AppOrigin {
+    /// Shipped with Dots: the release it came from.
+    Bundled { release: String },
+    /// Proposed by a dot and accepted by the person.
+    Proposed,
+}
+
 /// An item's config, with its kind: `{"kind": "mcp_server", "config": {...}}`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "config", rename_all = "snake_case")]
@@ -117,6 +155,7 @@ pub enum LibraryConfig {
     Skill(SkillConfig),
     Plugin(PluginConfig),
     Context(ContextConfig),
+    App(AppConfig),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -147,6 +186,9 @@ pub struct Uses {
     pub plugins: Vec<String>,
     /// Context collections; one whose `every_dot` is on is used without being named.
     pub context: Vec<String>,
+    /// Apps (app library spec section 6); one whose `every_dot` is on is used without being
+    /// named.
+    pub apps: Vec<String>,
 }
 
 impl Uses {
@@ -155,6 +197,7 @@ impl Uses {
             && self.skills.is_empty()
             && self.plugins.is_empty()
             && self.context.is_empty()
+            && self.apps.is_empty()
     }
 
     /// The names of the items of `kind`.
@@ -164,6 +207,7 @@ impl Uses {
             LibraryKind::Skill => &self.skills,
             LibraryKind::Plugin => &self.plugins,
             LibraryKind::Context => &self.context,
+            LibraryKind::App => &self.apps,
         }
     }
 
@@ -276,6 +320,7 @@ pub fn check_name(kind: LibraryKind, name: &str) -> Result<()> {
                 ));
             }
         }
+        LibraryKind::App => crate::apps::manifest::check_app_name(name)?,
     }
     Ok(())
 }
@@ -287,6 +332,7 @@ impl LibraryConfig {
             Self::Skill(_) => LibraryKind::Skill,
             Self::Plugin(_) => LibraryKind::Plugin,
             Self::Context(_) => LibraryKind::Context,
+            Self::App(_) => LibraryKind::App,
         }
     }
 

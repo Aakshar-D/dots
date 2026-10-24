@@ -47,7 +47,7 @@ export const Action = z.enum(["allow", "ask", "deny"]);
 export const Preset = z.enum(["read-only", "sandboxed", "trusted", "custom"]);
 export const FileStatus = z.enum(["added", "modified", "deleted", "renamed"]);
 export const ScheduleStatus = z.enum(["active", "completed", "expired"]);
-export const LibraryKind = z.enum(["mcp_server", "skill", "plugin", "context"]);
+export const LibraryKind = z.enum(["mcp_server", "skill", "plugin", "context", "app"]);
 // Where an MCP server's tool list stands: accepted, changed since, last check failed, or never
 // accepted.
 export const CatalogStatus = z.enum(["accepted", "changed", "unreachable", "unchecked"]);
@@ -91,6 +91,7 @@ export const Uses = z.strictObject({
   skills: z.array(z.string()),
   plugins: z.array(z.string()),
   context: z.array(z.string()),
+  apps: z.array(z.string()),
 });
 
 const dotSpecShape = {
@@ -419,12 +420,32 @@ export const ContextConfig = z.strictObject({
   // Every dot uses it, ticked or not.
   every_dot: z.boolean(),
 });
+// Where an app came from (app library spec section 8).
+export const AppOrigin = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("bundled"), release: z.string() }),
+  z.strictObject({ kind: z.literal("proposed") }),
+]);
+// An app in the Library (app library spec sections 4 and 6); Dots keeps its code and data.
+export const AppConfig = z.strictObject({
+  title: z.string(),
+  description: z.string(),
+  version: z.number(),
+  // Kept for "Roll back" while the update after it ran no migrations.
+  previous_version: nullable(z.number()),
+  every_dot: z.boolean(),
+  // "Can start dots": off until the person switches it on.
+  can_start_dots: z.boolean(),
+  origin: AppOrigin,
+  // A bundled app the person changed: Dots no longer updates it.
+  changed: z.boolean(),
+});
 // An item's config with its kind: what `library_add` and `library_update` take.
 export const LibraryConfig = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("mcp_server"), config: McpServerConfig }),
   z.strictObject({ kind: z.literal("skill"), config: SkillConfig }),
   z.strictObject({ kind: z.literal("plugin"), config: PluginConfig }),
   z.strictObject({ kind: z.literal("context"), config: ContextConfig }),
+  z.strictObject({ kind: z.literal("app"), config: AppConfig }),
 ]);
 const libraryItemShape = {
   id: z.string(),
@@ -458,6 +479,12 @@ const libraryItemOf = <E extends z.ZodRawShape>(extra: E) =>
     z.strictObject({
       kind: z.literal("context"),
       config: ContextConfig,
+      ...libraryItemShape,
+      ...extra,
+    }),
+    z.strictObject({
+      kind: z.literal("app"),
+      config: AppConfig,
       ...libraryItemShape,
       ...extra,
     }),
@@ -672,6 +699,8 @@ export type SkillDetail = z.infer<typeof SkillDetail>;
 export type PluginDetail = z.infer<typeof PluginDetail>;
 export type LibraryEntry = z.infer<typeof LibraryEntry>;
 export type ContextConfig = z.infer<typeof ContextConfig>;
+export type AppConfig = z.infer<typeof AppConfig>;
+export type AppOrigin = z.infer<typeof AppOrigin>;
 export type ContextDocuments = z.infer<typeof ContextDocuments>;
 export type McpProbe = z.infer<typeof McpProbe>;
 export type ScannedSkill = z.infer<typeof ScannedSkill>;

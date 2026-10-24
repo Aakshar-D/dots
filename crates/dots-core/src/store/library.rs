@@ -15,9 +15,10 @@ use crate::vault::redact::global;
 use crate::{Error, Result};
 
 const ITEM_COLUMNS: &str = "id, kind, name, config, owner_id, created_at, updated_at";
-/// Servers, then skills, then plugins, then context collections; by name within a kind.
+/// Servers, then skills, then plugins, then context collections, then apps; by name within a
+/// kind.
 const ITEM_ORDER: &str = "CASE kind WHEN 'mcp_server' THEN 0 WHEN 'skill' THEN 1 \
-    WHEN 'plugin' THEN 2 ELSE 3 END, name";
+    WHEN 'plugin' THEN 2 WHEN 'context' THEN 3 ELSE 4 END, name";
 const CATALOG_COLUMNS: &str = "server_id, status, accepted_fingerprint, accepted_tools, \
     seen_fingerprint, seen_tools, checked_at, error";
 
@@ -28,6 +29,7 @@ fn config_json(config: &LibraryConfig) -> Result<String> {
         LibraryConfig::Skill(c) => serde_json::to_string(c)?,
         LibraryConfig::Plugin(c) => serde_json::to_string(c)?,
         LibraryConfig::Context(c) => serde_json::to_string(c)?,
+        LibraryConfig::App(c) => serde_json::to_string(c)?,
     })
 }
 
@@ -160,6 +162,29 @@ impl Store {
         rows.iter().map(item_from_row).collect()
     }
 
+    /// The apps a run of a dot with `uses` has (app library spec section 6): those it names and
+    /// every one whose `every_dot` is on, by name.
+    pub async fn used_apps(&self, uses: &Uses) -> Result<Vec<LibraryItem>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {ITEM_COLUMNS} FROM library_items WHERE kind = 'app' AND (\
+             name IN (SELECT value FROM json_each(?)) \
+             OR json_extract(config, '$.every_dot') = 1) ORDER BY name"
+        ))
+        .bind(serde_json::to_string(&uses.apps)?)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(item_from_row).collect()
+    }
+
+    /// The dots that have the app `item`: every dot when its `every_dot` is on, else those that
+    /// name it; by name.
+    pub async fn dots_with_app(&self, item: &LibraryItem) -> Result<Vec<Dot>> {
+        match &item.config {
+            LibraryConfig::App(c) if c.every_dot => self.list_dots().await,
+            _ => self.dots_using(item).await,
+        }
+    }
+
     pub async fn find_library_item(
         &self,
         kind: LibraryKind,
@@ -274,6 +299,7 @@ impl Store {
                 LibraryKind::Skill => &mut uses.skills,
                 LibraryKind::Plugin => &mut uses.plugins,
                 LibraryKind::Context => &mut uses.context,
+                LibraryKind::App => &mut uses.apps,
             };
             list.retain(|n| *n != name);
             sqlx::query("UPDATE dots SET uses = ?, updated_at = ? WHERE id = ?")

@@ -9,8 +9,8 @@ use dots_core::engine::EngineEvent;
 use dots_core::events::RuntimeEvent;
 use dots_core::kit::InstalledPlugin;
 use dots_core::library::{
-    CatalogStatus, ContextConfig, LibraryConfig, LibraryItem, LibraryKind, McpCatalog,
-    McpServerConfig, PluginConfig, SkillConfig, Uses,
+    AppConfig, AppOrigin, CatalogStatus, ContextConfig, LibraryConfig, LibraryItem, LibraryKind,
+    McpCatalog, McpServerConfig, PluginConfig, SkillConfig, Uses,
 };
 use dots_core::library_service::{
     ContextDetail, ContextDocuments, EnvVariable, LibraryEntry, McpProbe, PluginDetail,
@@ -48,6 +48,7 @@ fn spec() -> DotSpec {
         skills: vec!["pdf".into()],
         plugins: vec!["pdf-tools".into()],
         context: vec!["company".into()],
+        apps: vec!["projects".into()],
     };
     s
 }
@@ -115,6 +116,21 @@ fn context_config() -> LibraryConfig {
     })
 }
 
+fn app_config() -> LibraryConfig {
+    LibraryConfig::App(AppConfig {
+        title: "Projects".into(),
+        description: "Projects, tasks and to-dos, shared by you and your dots".into(),
+        version: 3,
+        previous_version: Some(2),
+        every_dot: true,
+        can_start_dots: true,
+        origin: AppOrigin::Bundled {
+            release: "0.4.0".into(),
+        },
+        changed: false,
+    })
+}
+
 /// A config of every kind and transport, as `library_add` takes them.
 fn library_configs() -> Vec<LibraryConfig> {
     vec![
@@ -123,6 +139,15 @@ fn library_configs() -> Vec<LibraryConfig> {
         skill_config(),
         plugin_config(),
         context_config(),
+        app_config(),
+        LibraryConfig::App(AppConfig {
+            origin: AppOrigin::Proposed,
+            previous_version: None,
+            ..match app_config() {
+                LibraryConfig::App(c) => c,
+                _ => unreachable!(),
+            }
+        }),
     ]
 }
 
@@ -193,6 +218,7 @@ fn library_entries() -> Vec<LibraryEntry> {
     let skill = library_item("01J0SKL", "pdf", skill_config());
     let plugin = library_item("01J0PLG", "pdf-tools", plugin_config());
     let company = library_item("01J0CTX", "company", context_config());
+    let projects = library_item("01J0APP", "projects", app_config());
     vec![
         LibraryEntry {
             catalog: Some(catalog(CatalogStatus::Changed)),
@@ -229,8 +255,9 @@ fn library_entries() -> Vec<LibraryEntry> {
                 documents: 42,
                 complete: true,
             }),
-            ..bare(company, users)
+            ..bare(company, users.clone())
         },
+        bare(projects, users),
     ]
 }
 
