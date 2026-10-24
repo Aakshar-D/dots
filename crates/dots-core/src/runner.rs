@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -18,7 +19,7 @@ use crate::events::{Bus, RuntimeEvent};
 use crate::model::{
     ApprovalStatus, EngineKind, NewRun, Run, RunStatus, TriggerKind, WorkspaceMode,
 };
-use crate::prompt::{build_prompt_with_memories, context_tool_name};
+use crate::prompt::{build_prompt_full, context_tool_name, PromptParts};
 use crate::run_tools::{CloseOnDrop, OpenRequest, RunTools};
 use crate::store::Store;
 use crate::util::{ct_eq, new_token};
@@ -29,16 +30,21 @@ use crate::{Error, Result};
 /// The name the run's model knows a policy tool by: the `Context` tool is `mcp__dots__context`
 /// on the Claude engine, `context` on the local one, and the check-in tools likewise
 /// (`checkins::Tool::model_name`); a `Memory` call is the memory tool its `input` is for
-/// (`memory::Tool::for_input`); every other tool keeps its name.
-fn model_tool_name<'a>(tool: &'a str, input: &Value, engine: EngineKind) -> &'a str {
+/// (`memory::Tool::for_input`) and an `App` call the app tool its input names
+/// (`apps::run::model_name`); every other tool keeps its name.
+fn model_tool_name<'a>(tool: &'a str, input: &Value, engine: EngineKind) -> Cow<'a, str> {
     if tool == "Context" {
-        context_tool_name(engine)
+        Cow::Borrowed(context_tool_name(engine))
     } else if let Some(check_in) = CheckInTool::from_policy_name(tool) {
-        check_in.model_name(engine)
+        Cow::Borrowed(check_in.model_name(engine))
     } else if tool == crate::memory::POLICY_NAME {
-        crate::memory::Tool::for_input(input).model_name(engine)
+        Cow::Borrowed(crate::memory::Tool::for_input(input).model_name(engine))
+    } else if tool == crate::apps::APP_POLICY {
+        let part = |key: &str| input[key].as_str().unwrap_or_default().to_string();
+        let key = crate::apps::manifest::tool_key(&part("app"), &part("tool"));
+        Cow::Owned(crate::apps::run::model_name(&key, engine))
     } else {
-        tool
+        Cow::Borrowed(tool)
     }
 }
 
@@ -86,6 +92,9 @@ pub struct Runner {
     /// The dots' browsers (browser spec section 2), set once by the runtime before any run
     /// starts (`set_browsers`).
     browsers: OnceLock<Arc<crate::browser::Browsers>>,
+    /// The installed apps (app library spec section 6), set once by the runtime before any run
+    /// starts (`set_apps`).
+    apps: OnceLock<crate::apps::Apps>,
 }
 
 impl Runner {
@@ -111,6 +120,7 @@ impl Runner {
             checkins: OnceLock::new(),
             vault: OnceLock::new(),
             browsers: OnceLock::new(),
+            apps: OnceLock::new(),
         })
     }
 
@@ -168,6 +178,12 @@ impl Runner {
     /// start; a second call changes nothing.
     pub fn set_browsers(&self, browsers: Arc<crate::browser::Browsers>) {
         let _ = self.browsers.set(browsers);
+    }
+
+    /// Gives the runs of dots with apps their apps. The runtime calls it once, at start; a
+    /// second call changes nothing.
+    pub fn set_apps(&self, apps: crate::apps::Apps) {
+        let _ = self.apps.set(apps);
     }
 
     /// The dots' browsers, once the runtime has set them.
@@ -662,6 +678,9 @@ impl Runner {
             tools,
             &mut notices,
         );
+        // The run's apps (app library spec section 6).
+        let tools =
+            crate::apps::run::attach(self.apps.get(), &dot, &run.id, tools, &mut notices).await?;
         let tools = Arc::new(tools);
         let _closer = CloseOnDrop(tools.clone());
         if cancel.is_cancelled() {
@@ -693,14 +712,17 @@ impl Runner {
             run_id: run.id.clone(),
             dot: dot.clone(),
             workspace: prepared.path.clone(),
-            prompt: build_prompt_with_memories(
+            prompt: build_prompt_full(
                 &dot,
                 run,
                 &prepared.path,
                 chrono::Local::now(),
                 &global,
-                tools.contexts(),
-                &memories,
+                PromptParts {
+                    contexts: tools.contexts(),
+                    memories: &memories,
+                    apps: tools.apps().map(|apps| apps.as_ref()),
+                },
             ),
             session_id: run.session_id.clone(),
             mcp_url: self.cfg.mcp_url.clone(),

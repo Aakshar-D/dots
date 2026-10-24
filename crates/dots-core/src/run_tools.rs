@@ -174,6 +174,8 @@ pub struct RunTools {
     shell_env: Vec<(String, Zeroizing<String>)>,
     /// The built-in browser of a dot with `browser` on (browser spec section 2.2).
     browser: Option<Arc<crate::browser::RunBrowser>>,
+    /// The run's apps (app library spec section 6), for a dot that has any.
+    apps: Option<Arc<crate::apps::RunApps>>,
 }
 
 impl fmt::Debug for RunTools {
@@ -262,6 +264,17 @@ impl RunTools {
         }
         self.browser = Some(Arc::new(browser));
         (self, None)
+    }
+
+    /// The run's apps (app library spec section 6), for a dot that has any.
+    pub fn apps(&self) -> Option<&Arc<crate::apps::RunApps>> {
+        self.apps.as_ref()
+    }
+
+    /// The run's tools with its apps.
+    pub fn with_apps(mut self, apps: crate::apps::RunApps) -> RunTools {
+        self.apps = Some(Arc::new(apps));
+        self
     }
 
     /// Whether Dots checks every call of the tool `qualified` itself: a tool of an open session

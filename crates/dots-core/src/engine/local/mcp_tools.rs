@@ -94,8 +94,9 @@ impl ToolNames {
     }
 }
 
-/// The arguments of an MCP call: a JSON object, sent as one or as a JSON string.
-fn arguments(raw: &Value) -> Result<Value, String> {
+/// The arguments of an MCP call (or an app call): a JSON object, sent as one or as a JSON
+/// string.
+pub(super) fn arguments(raw: &Value) -> Result<Value, String> {
     match raw {
         Value::Object(_) => Ok(raw.clone()),
         Value::Null => Ok(json!({})),
@@ -161,6 +162,10 @@ impl Session {
         if self.checkins.is_some() {
             out.extend(tools::checkins::schemas());
             out.extend(tools::memory::schemas());
+        }
+        // The run's app tools (app library spec section 6), by their own names.
+        if let Some(apps) = self.ctx.tools.apps() {
+            out.extend(apps.function_schemas());
         }
         // The built-in browser's tools (browser spec section 2.2); their names fit as they are,
         // so `ToolNames` finds them by their `mcp__` name.

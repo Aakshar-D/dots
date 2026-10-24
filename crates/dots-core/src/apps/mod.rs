@@ -6,10 +6,12 @@ pub mod data;
 pub mod engine;
 pub mod manifest;
 mod registry;
+pub mod run;
 pub mod schema;
 pub mod source;
 
 pub use registry::{AppCall, Apps, APPS_DIR};
+pub use run::{RunApp, RunApps};
 
 /// The policy name of every app tool (spec section 6): a rule `App`, `App(<app>)`,
 /// `App(<app>.<tool>)` or `App(<app>.write)`.

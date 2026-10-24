@@ -18,6 +18,7 @@ use self::client::{ChatClient, ToolCallRequest, DEFAULT_RETRY_DELAYS};
 use self::mcp_tools::{ToolNames, CHANGED};
 use self::tools::{PathFilter, PreparedCall, ToolOutput};
 
+mod app_tools;
 pub mod client;
 pub mod history;
 pub mod mcp_tools;
@@ -358,7 +359,9 @@ impl Session {
             if !self.emit(shown).await {
                 return None;
             }
-            let output = if approval.tool.starts_with("mcp__") {
+            let output = if approval.tool == crate::apps::APP_POLICY {
+                self.perform_app(&approval.input).await
+            } else if approval.tool.starts_with("mcp__") {
                 self.perform_mcp(&approval.tool, &approval.input).await
             } else {
                 let prepared = tools::local_name_for(&approval.tool, &approval.input)
@@ -488,9 +491,13 @@ impl Session {
         if self.ctx.cancel.is_cancelled() {
             return false;
         }
-        let output = match self.mcp_tool(&call.name) {
-            Some(qualified) => self.mcp_output(call, &qualified).await,
-            None => self.builtin_output(call).await,
+        let output = if self.app_tool(&call.name) {
+            self.app_output(call).await
+        } else {
+            match self.mcp_tool(&call.name) {
+                Some(qualified) => self.mcp_output(call, &qualified).await,
+                None => self.builtin_output(call).await,
+            }
         };
         let Some(output) = output else {
             return false;

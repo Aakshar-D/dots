@@ -263,6 +263,14 @@ impl Runtime {
             port,
         );
         runner.set_browsers(browsers.clone());
+        // The installed apps (app library spec), which runs call as their dots.
+        let apps = crate::apps::Apps::new(
+            store.clone(),
+            bus.clone(),
+            cfg.data_dir.join(crate::apps::APPS_DIR),
+        )
+        .with_clock(cfg.clock.clone());
+        runner.set_apps(apps.clone());
         // Decisions parked before a restart (decided, but the resume never happened) are
         // turned into resume runs now; failures are logged and never block startup.
         match store.list_runs_by_status(RunStatus::AwaitingApproval).await {
@@ -299,11 +307,6 @@ impl Runtime {
         // Follow-ups wait while schedules are paused (check-ins spec section 6).
         follow_ups.set_paused(settings.schedules_paused);
         follow_ups.spawn(runner.clone(), shutdown.clone());
-        let apps = crate::apps::Apps::new(
-            store.clone(),
-            bus.clone(),
-            cfg.data_dir.join(crate::apps::APPS_DIR),
-        );
         let viewing = Viewing::default();
         watch_viewing(
             store.clone(),

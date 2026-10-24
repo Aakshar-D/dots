@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 use super::gateway::not_performed;
 use super::webhook::bearer;
 use super::ServerState;
+use crate::apps::{RunApps, APP_POLICY};
 use crate::checkins::Tool;
 use crate::context;
 use crate::engine::local::tools::cap_head;
@@ -108,6 +109,10 @@ pub async fn handle(State(s): State<ServerState>, headers: HeaderMap, body: Byte
                 tools.extend(Tool::ALL.map(Tool::mcp_schema));
                 tools.extend(MemoryTool::ALL.map(MemoryTool::mcp_schema));
             }
+            // The run's app tools (app library spec section 6).
+            if let Some(apps) = run_apps(&s, &run_id) {
+                tools.extend(apps.mcp_schemas());
+            }
             json!({ "tools": tools })
         }
         "tools/call" => {
@@ -118,6 +123,11 @@ pub async fn handle(State(s): State<ServerState>, headers: HeaderMap, body: Byte
                 (Some(n), None) if MemoryTool::from_name(n).is_some() => {
                     let tool = MemoryTool::from_name(n).expect("a memory tool");
                     call_memory(&s, &run_id, &req, tool).await
+                }
+                (Some(n), None)
+                    if run_apps(&s, &run_id).is_some_and(|a| a.resolve(n).is_some()) =>
+                {
+                    call_app(&s, &run_id, &req, n).await
                 }
                 _ => call_approve(&s, &run_id, &req).await,
             };
@@ -136,6 +146,48 @@ fn has_contexts(s: &ServerState, run_id: &str) -> bool {
     s.runner
         .run_tools(run_id)
         .is_some_and(|tools| !tools.contexts().is_empty())
+}
+
+/// The run's apps, when it has any.
+fn run_apps(s: &ServerState, run_id: &str) -> Option<std::sync::Arc<RunApps>> {
+    s.runner
+        .run_tools(run_id)
+        .and_then(|tools| tools.apps().cloned())
+}
+
+/// Checks a call of the app tool `key` (`<app>__<tool>`) against the dot's policy under `App`,
+/// waiting for an approval when a rule asks, and calls the app as the run's dot (app library
+/// spec section 6). A call that is not performed, or that the app refuses, is a tool result
+/// with `isError`, as for the memory tools.
+async fn call_app(
+    s: &ServerState,
+    run_id: &str,
+    req: &Value,
+    key: &str,
+) -> Result<Value, (i64, String)> {
+    let Some(apps) = run_apps(s, run_id) else {
+        return Err((-32602, "unknown tool".to_string()));
+    };
+    let params = req
+        .get("params")
+        .ok_or((-32602, "missing params".to_string()))?;
+    let input = match params.get("arguments") {
+        None | Some(Value::Null) => json!({}),
+        Some(args @ Value::Object(_)) => args.clone(),
+        Some(_) => return Err((-32602, "params.arguments must be an object".to_string())),
+    };
+    let Some(checked) = apps.policy_input(key, &input) else {
+        return Err((-32602, "unknown tool".to_string()));
+    };
+    let checked = match s.hub.check(run_id, APP_POLICY, checked).await {
+        Ok(PermissionOutcome::Allow { input }) => input,
+        Ok(PermissionOutcome::Deny { message }) => return Ok(not_performed(&message)),
+        Err(e) => return Ok(not_performed(&format!("permission check failed: {e}"))),
+    };
+    Ok(match apps.call(&checked).await {
+        Ok(text) => json!({ "content": [{ "type": "text", "text": text }] }),
+        Err(text) => not_performed(&text),
+    })
 }
 
 /// Checks a `context` call against the dot's policy as the tool `Context`, waiting for an

@@ -3,6 +3,7 @@ use std::path::Path;
 use chrono::{DateTime, Local};
 use serde_json::Value;
 
+use crate::apps::RunApps;
 use crate::context::{self, Collection};
 use crate::memory;
 use crate::model::{Dot, EngineKind, Memory, Run, TriggerKind};
@@ -17,6 +18,15 @@ pub fn context_tool_name(engine: EngineKind) -> &'static str {
     }
 }
 
+/// What a run's prompt names beyond the dot and the run: its context collections, the dot's
+/// memories and the run's apps.
+#[derive(Default, Clone, Copy)]
+pub struct PromptParts<'a> {
+    pub contexts: &'a [Collection],
+    pub memories: &'a [Memory],
+    pub apps: Option<&'a RunApps>,
+}
+
 /// The prompt of `run` for a dot without memories (`build_prompt_with_memories`).
 pub fn build_prompt(
     dot: &Dot,
@@ -29,12 +39,7 @@ pub fn build_prompt(
     build_prompt_with_memories(dot, run, workspace, now, global, contexts, &[])
 }
 
-/// The prompt of `run`. A thread's first prompt starts with `global` (the global instructions of
-/// Settings) when it is not blank and the dot uses it, has the dot's `memories` after its
-/// instructions (`memory::prompt_section`, dot memory spec section 3) unless its policy denies
-/// `Memory` (the person turned memory off), and ends with the run's
-/// context collections; resumes, chat follow-ups and follow-up runs that resume a session send
-/// only their message.
+/// The prompt of `run` for a dot without apps (`build_prompt_full`).
 pub fn build_prompt_with_memories(
     dot: &Dot,
     run: &Run,
@@ -44,6 +49,33 @@ pub fn build_prompt_with_memories(
     contexts: &[Collection],
     memories: &[Memory],
 ) -> String {
+    let parts = PromptParts {
+        contexts,
+        memories,
+        apps: None,
+    };
+    build_prompt_full(dot, run, workspace, now, global, parts)
+}
+
+/// The prompt of `run`. A thread's first prompt starts with `global` (the global instructions of
+/// Settings) when it is not blank and the dot uses it, has the dot's memories after its
+/// instructions (`memory::prompt_section`, dot memory spec section 3) unless its policy denies
+/// `Memory` (the person turned memory off), names the run's apps (app library spec section 6)
+/// and ends with the run's context collections; resumes, chat follow-ups and follow-up runs
+/// that resume a session send only their message.
+pub fn build_prompt_full(
+    dot: &Dot,
+    run: &Run,
+    workspace: &Path,
+    now: DateTime<Local>,
+    global: &str,
+    parts: PromptParts<'_>,
+) -> String {
+    let PromptParts {
+        contexts,
+        memories,
+        apps,
+    } = parts;
     let message = run
         .payload
         .as_ref()
@@ -116,6 +148,10 @@ pub fn build_prompt_with_memories(
     if dot.spec.browser {
         out.push('\n');
         out.push_str(crate::browser::PROMPT);
+    }
+    if let Some(apps) = apps {
+        out.push_str("\n## Apps\n\n");
+        out.push_str(&apps.prompt_section(dot.spec.engine));
     }
     let section = context::prompt_section(contexts, context_tool_name(dot.spec.engine));
     if !section.is_empty() {
