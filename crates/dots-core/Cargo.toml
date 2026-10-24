@@ -16,6 +16,7 @@ ignore = "0.4"
 openidconnect = { version = "4.0.1", default-features = false, features = ["reqwest"] }
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rquickjs = { version = "0.14", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
