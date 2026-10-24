@@ -127,10 +127,19 @@ fn authorize(ctx: AuthContext<'_>) -> Authorization {
 
 /// Runs `f` with the app's SQL rules on, and takes them off after.
 pub fn guarded<T>(conn: &Connection, f: impl FnOnce(&Connection) -> T) -> T {
-    conn.authorizer(Some(authorize));
+    guard(conn);
     let out = f(conn);
-    conn.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
+    unguard(conn);
     out
+}
+
+/// Turns the app's SQL rules on, for a call's code (`unguard` turns them off).
+pub fn guard(conn: &Connection) {
+    conn.authorizer(Some(authorize));
+}
+
+pub fn unguard(conn: &Connection) {
+    conn.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
 }
 
 /// Stops the SQL running on `conn` once `deadline` passes (the statement fails with
