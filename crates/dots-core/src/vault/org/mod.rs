@@ -6,6 +6,7 @@ pub mod offline;
 pub mod policy;
 pub mod row;
 pub mod signed;
+pub mod sources;
 
 pub use join::{
     check_org_id, key_fingerprint, parse_join_code, BaoAuth, InfisicalSettings, JoinCode,
@@ -20,3 +21,7 @@ pub use offline::{
 pub use policy::{parse_policy, AuditTarget, OrgPolicy, PersonalMode, PolicyError, UseRules};
 pub use row::OrgRow;
 pub use signed::{envelope, verify_policy};
+pub use sources::{
+    http_client, http_client_with_timeout, source_for, Fetched, OpenBao, Source, SourceCreds,
+    SourceError, POLICY_ENTRY,
+};

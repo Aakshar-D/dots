@@ -16,7 +16,13 @@ ignore = "0.4"
 minisign-verify = "0.3"
 openidconnect = { version = "4.0.1", default-features = false, features = ["reqwest"] }
 regex = "1"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# TLS trusts the public roots and this machine's own (the Windows certificate store), so a
+# service behind a company CA connects.
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "rustls-tls-webpki-roots",
+    "rustls-tls-native-roots",
+] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
