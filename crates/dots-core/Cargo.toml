@@ -13,6 +13,7 @@ cron = "0.15"
 getrandom = "0.3"
 globset = "0.4"
 ignore = "0.4"
+minisign-verify = "0.3"
 openidconnect = { version = "4.0.1", default-features = false, features = ["reqwest"] }
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
@@ -32,6 +33,7 @@ windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Secu
 
 [dev-dependencies]
 futures-util = "0.3"
+minisign = "0.10"
 tempfile = "3"
 tokio-tungstenite = "0.29"
 wiremock = "0.6"
