@@ -24,6 +24,8 @@ pub const MAX_SCREEN_RESULT: usize = 1024 * 1024;
 /// Bounds of `ctx.dots.start`'s arguments.
 pub const MAX_START_MESSAGE: usize = 4000;
 pub const MAX_START_TAG: usize = 200;
+/// The most starts an app may ask for in an hour (spec section 7).
+pub const STARTS_PER_HOUR: u32 = 20;
 
 /// Who is calling: set by Dots, never by the caller (spec section 5).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

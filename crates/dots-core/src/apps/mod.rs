@@ -9,6 +9,7 @@ mod registry;
 pub mod run;
 pub mod schema;
 pub mod source;
+pub mod tests;
 
 pub use registry::{AppCall, Apps, APPS_DIR};
 pub use run::{RunApp, RunApps};
