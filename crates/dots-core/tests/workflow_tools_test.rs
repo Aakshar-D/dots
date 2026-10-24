@@ -147,6 +147,16 @@ async fn start(script: Value) -> Rt {
 /// A team with `helper`, a project, and a workflow "Fix" whose chat trigger names the helper
 /// and whose one step is the person's check.
 async fn team_of(t: &Rt, helper: &Dot) -> String {
+    let check = Step {
+        id: "check".into(),
+        name: "Your check".into(),
+        kind: StepKind::Check {},
+    };
+    team_with(t, helper, vec![check]).await.0
+}
+
+/// `team_of` with the workflow's own steps; gives the team's and the workflow's ids.
+async fn team_with(t: &Rt, helper: &Dot, steps: Vec<Step>) -> (String, String) {
     let team =
         t.rt.teams()
             .create(&TeamSpec {
@@ -173,28 +183,25 @@ async fn team_of(t: &Rt, helper: &Dot) -> String {
         )
         .await
         .unwrap();
-    t.rt.teams()
-        .create_workflow(
-            &team.id,
-            &WorkflowSpec {
-                name: "Fix".into(),
-                definition: Definition {
-                    trigger: Trigger::Chat {
-                        starters: vec![helper.id.clone()],
+    let flow =
+        t.rt.teams()
+            .create_workflow(
+                &team.id,
+                &WorkflowSpec {
+                    name: "Fix".into(),
+                    definition: Definition {
+                        trigger: Trigger::Chat {
+                            starters: vec![helper.id.clone()],
+                        },
+                        steps,
+                        budget: Budget::default(),
                     },
-                    steps: vec![Step {
-                        id: "check".into(),
-                        name: "Your check".into(),
-                        kind: StepKind::Check {},
-                    }],
-                    budget: Budget::default(),
+                    enabled: true,
                 },
-                enabled: true,
-            },
-        )
-        .await
-        .unwrap();
-    team.id
+            )
+            .await
+            .unwrap();
+    (team.id, flow.id)
 }
 
 fn local_spec(t: &Rt, endpoint: &str, name: &str) -> DotSpec {
@@ -343,6 +350,193 @@ async fn a_claude_helper_starts_it_through_dots_own_server() {
     let runs = t.rt.workflows().list(None, 10).await.unwrap();
     assert_eq!(runs.len(), 1, "{runs:#?}");
     assert_eq!(runs[0].origin_run_id.as_deref(), Some(chat.id.as_str()));
+    assert_eq!(runs[0].task, "Fix the icon.");
+    t.rt.shutdown();
+}
+
+fn workflow_spec(name: &str, trigger: Trigger) -> WorkflowSpec {
+    WorkflowSpec {
+        name: name.into(),
+        definition: Definition {
+            trigger,
+            steps: vec![Step {
+                id: "check".into(),
+                name: "Your check".into(),
+                kind: StepKind::Check {},
+            }],
+            budget: Budget::default(),
+        },
+        enabled: true,
+    }
+}
+
+#[tokio::test]
+async fn the_answer_to_a_workflow_steps_question_may_not_start_a_workflow() {
+    let t = start(json!([])).await;
+    let llm = Llm::start(vec![
+        call("c1", "ask", json!({"question": "Which icon set?"})),
+        text("Asked."),
+        text("Thanks."),
+    ])
+    .await;
+    let helper =
+        t.rt.create_dot(local_spec(&t, &llm.endpoint(), "helper"))
+            .await
+            .unwrap();
+    let (_, flow) = team_with(
+        &t,
+        &helper,
+        vec![Step {
+            id: "dev".into(),
+            name: "Fix it".into(),
+            kind: StepKind::Agent {
+                member: helper.id.clone(),
+                job: "Fix.".into(),
+            },
+        }],
+    )
+    .await;
+    let project =
+        t.rt.store()
+            .get_team_project_id(&flow, "Dots")
+            .await
+            .unwrap();
+    t.rt.workflows()
+        .start(dots_core::workflows::StartRequest {
+            workflow_id: flow,
+            project_id: project,
+            task: "Fix the icon.".into(),
+            trigger: WorkflowTrigger::Manual,
+            origin_run_id: None,
+            test: false,
+        })
+        .await
+        .unwrap();
+    let question = loop {
+        let open =
+            t.rt.store()
+                .list_messages(Some(&helper.id))
+                .await
+                .unwrap()
+                .into_iter()
+                .find(|m| m.answered_at.is_none());
+        if let Some(q) = open {
+            break q;
+        }
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    };
+    // The step's own run has no such tool, though the helper is a starter.
+    let first = llm.wait_requests(1, 30).await;
+    assert!(!tool_names(&first[0]).contains(&"start_workflow".to_string()));
+    wait_status(
+        t.rt.store(),
+        question.run_id.as_deref().unwrap(),
+        RunStatus::Succeeded,
+        30,
+    )
+    .await;
+    let answer = t.rt.reply(&question.id, "The light one.").await.unwrap();
+    assert!(answer.workflow_step_run_id.is_some());
+    wait_status(t.rt.store(), &answer.id, RunStatus::Succeeded, 30).await;
+    let last = llm.requests().last().unwrap().clone();
+    assert!(!tool_names(&last).contains(&"start_workflow".to_string()));
+    assert!(!prompt(&last).contains("## Workflows you can start"));
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn a_call_held_for_approval_is_refused_once_the_member_stops_being_a_starter() {
+    let t = start(json!([])).await;
+    let llm = Llm::start(vec![
+        call(
+            "c1",
+            "start_workflow",
+            json!({"workflow": "Fix", "project": "Dots", "task": "Fix the icon."}),
+        ),
+        text("Done."),
+    ])
+    .await;
+    let mut s = local_spec(&t, &llm.endpoint(), "helper");
+    s.policy.rules.push(Rule::new("Workflow", Action::Ask));
+    s.approval_wait_secs = 30;
+    let helper = t.rt.create_dot(s).await.unwrap();
+    let team = team_of(&t, &helper).await;
+    let mut events = t.rt.subscribe();
+    let chat =
+        t.rt.chat(&helper.id, "Please fix the icon.", None)
+            .await
+            .unwrap();
+    let approval = loop {
+        if let dots_core::events::RuntimeEvent::ApprovalRequested { approval } =
+            events.recv().await.unwrap()
+        {
+            break approval;
+        }
+    };
+    assert_eq!(approval.tool, "Workflow");
+    // While it waits, the workflow stops naming the helper.
+    let flow = t.rt.teams().list_workflows(&team).await.unwrap().remove(0);
+    t.rt.teams()
+        .update_workflow(&flow.id, &workflow_spec("Fix", Trigger::Manual))
+        .await
+        .unwrap();
+    t.rt.decide_approval(&approval.id, true, None, None)
+        .await
+        .unwrap();
+    wait_status(t.rt.store(), &chat.id, RunStatus::Succeeded, 30).await;
+    assert_eq!(
+        tool_result(&llm.requests()[1], "c1"),
+        "There is no workflow named \"Fix\" that you may start."
+    );
+    assert!(t.rt.workflows().list(None, 10).await.unwrap().is_empty());
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn an_approval_that_outlives_the_wait_still_starts_the_workflow_on_the_resume_run() {
+    let t = start(json!([])).await;
+    let llm = Llm::start(vec![
+        call(
+            "c1",
+            "start_workflow",
+            json!({"workflow": "Fix", "project": "Dots", "task": "Fix the icon."}),
+        ),
+        text("Queued."),
+        text("Done after approval."),
+    ])
+    .await;
+    let mut s = local_spec(&t, &llm.endpoint(), "helper");
+    s.policy.rules.push(Rule::new("Workflow", Action::Ask));
+    s.approval_wait_secs = 0;
+    let helper = t.rt.create_dot(s).await.unwrap();
+    team_of(&t, &helper).await;
+    let chat =
+        t.rt.chat(&helper.id, "Please fix the icon.", None)
+            .await
+            .unwrap();
+    wait_status(t.rt.store(), &chat.id, RunStatus::AwaitingApproval, 30).await;
+    let approval =
+        t.rt.store()
+            .list_pending_approvals()
+            .await
+            .unwrap()
+            .remove(0);
+    t.rt.decide_approval(&approval.id, true, None, None)
+        .await
+        .unwrap();
+    let child = loop {
+        let runs = t.rt.store().list_runs(Some(&helper.id), 10).await.unwrap();
+        if let Some(c) = runs
+            .into_iter()
+            .find(|r| r.trigger == dots_core::model::TriggerKind::Resume)
+        {
+            break c;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    wait_status(t.rt.store(), &child.id, RunStatus::Succeeded, 30).await;
+    let runs = t.rt.workflows().list(None, 10).await.unwrap();
+    assert_eq!(runs.len(), 1, "{runs:#?}");
     assert_eq!(runs[0].task, "Fix the icon.");
     t.rt.shutdown();
 }

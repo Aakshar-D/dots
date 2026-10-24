@@ -178,6 +178,25 @@ impl Runner {
             .map(|(_, run)| run.clone())
     }
 
+    /// Whether `run` may start workflows: it is no step of a workflow, and the person's chat is
+    /// at the root of its resumes (a follow-up, scheduled, webhook or manual run is not).
+    async fn may_start_workflows(&self, run: &Run) -> bool {
+        if run.workflow_step_run_id.is_some() {
+            return false;
+        }
+        let mut cur = run.clone();
+        while cur.trigger == TriggerKind::Resume {
+            let Some(parent) = cur.parent_run_id.clone() else {
+                return false;
+            };
+            match self.store.get_run(&parent).await {
+                Ok(p) => cur = p,
+                Err(_) => return false,
+            }
+        }
+        cur.trigger == TriggerKind::Chat
+    }
+
     /// Makes the run's open tools reachable through the MCP gateway (`POST /mcp/s/<server>`,
     /// spec section 5) until the run ends.
     pub fn register_tools(&self, run_id: &str, tools: Arc<RunTools>) {
@@ -786,7 +805,7 @@ impl Runner {
             &mut notices,
         );
         // A chat run may start its dot's team workflows (teams spec section 7).
-        let tools = if run.trigger == TriggerKind::Chat {
+        let tools = if self.may_start_workflows(run).await {
             tools.with_startable(self.store.startable_workflows(&dot.id).await?)
         } else {
             tools

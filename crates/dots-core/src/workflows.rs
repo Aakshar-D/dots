@@ -349,6 +349,17 @@ impl Workflows {
             ))
             }
         };
+        // The list was taken when the run was prepared: the workflow may since have stopped
+        // naming the member, or the member left the team.
+        let still = match self.store.get_run(run_id).await {
+            Ok(run) => self.store.startable_workflows(&run.dot_id).await.ok(),
+            Err(_) => None,
+        };
+        if !still.is_some_and(|l| l.iter().any(|w| w.workflow_id == workflow.workflow_id)) {
+            return Err(format!(
+                "There is no workflow named \"{name}\" that you may start."
+            ));
+        }
         let Some(project) = workflow
             .projects
             .iter()
