@@ -430,8 +430,8 @@ async fn give_preset_rules(pool: &SqlitePool, migration: &str, tools: &[&str]) -
 }
 
 /// The stored policy with, at the end, the rule its preset has for each of `tools` (in that
-/// order) that no rule names (`Notify` or `Notify(...)`); a Custom policy is left as it is, as the person made
-/// it. `None` when the stored JSON is not a policy.
+/// order) that no rule names (`Notify` or `Notify(...)`); a Custom policy is left as it is, as
+/// the person made it. `None` when the stored JSON is not a policy.
 fn with_preset_rules(stored: &str, tools: &[&str]) -> Option<String> {
     let mut value: Value = serde_json::from_str(stored).ok()?;
     let custom = value.get("preset").and_then(Value::as_str) == Some(Preset::Custom.as_str());

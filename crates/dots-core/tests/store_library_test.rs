@@ -712,8 +712,8 @@ async fn migration_0006_keeps_credentials_apart_and_erases_them_from_the_file() 
     assert_eq!(a.uses, uses(&["gh", "sf"], &[], &[]));
     assert_eq!(b.uses, uses(&["gh-2", "sf-2"], &[], &[]));
     // Migration 0007 adds `Context` after the `Skill` that 0006 adds, and 0008 the check-in
-    // tools after it, 0012 `Memory` and 0013 `Workflow`
-    // (Sandboxed asks): both dots are Sandboxed.
+    // tools after it, 0012 `Memory` and 0013 `Workflow` (Sandboxed asks): both dots are
+    // Sandboxed.
     let tail = [
         Rule::new("Skill", Action::Allow),
         Rule::new("Context", Action::Allow),
