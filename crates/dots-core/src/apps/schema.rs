@@ -28,8 +28,8 @@ const KEYWORDS: &[&str] = &[
     "title",
     "default",
 ];
-/// How deep a schema may nest.
-const MAX_DEPTH: usize = 8;
+/// How many levels a schema may nest, the top-level schema being the first.
+const MAX_DEPTH: usize = 16;
 
 /// Checks that `schema` is a tool's input schema: an object schema in the subset above. `Err`
 /// names the place and the problem.
@@ -45,7 +45,7 @@ fn check(schema: &Value, at: &str, depth: usize) -> Result<(), String> {
     let Some(map) = schema.as_object() else {
         return Err(format!("{at}: a schema must be an object"));
     };
-    if depth > MAX_DEPTH {
+    if depth >= MAX_DEPTH {
         return Err(format!("{at}: schemas nest at most {MAX_DEPTH} deep"));
     }
     if let Some(key) = map.keys().find(|k| !KEYWORDS.contains(&k.as_str())) {

@@ -141,3 +141,21 @@ fn a_schema_outside_the_subset_is_refused() {
         );
     }
 }
+
+/// A schema of `levels` levels: each level but the last is an object whose `a` is the next level.
+fn nested(levels: usize) -> Value {
+    let mut schema = json!({"type": "string"});
+    for _ in 1..levels {
+        schema = json!({"type": "object", "properties": {"a": schema}});
+    }
+    schema
+}
+
+#[test]
+fn schemas_nest_at_most_16_deep() {
+    check_input_schema(&nested(16)).unwrap();
+    assert_eq!(
+        check_input_schema(&nested(17)),
+        Err("input.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a: schemas nest at most 16 deep".to_string())
+    );
+}
