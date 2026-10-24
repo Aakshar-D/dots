@@ -10,7 +10,8 @@ use crate::{Error, Result};
 
 const RUN_COLUMNS: &str = "id, dot_id, root_run_id, parent_run_id, trigger_kind, payload, status, \
     session_id, workspace_path, branch, base_commit, summary, error, tokens_in, tokens_out, \
-    queued_at, started_at, ended_at, reviewed_at, retry_of";
+    queued_at, started_at, ended_at, reviewed_at, retry_of, workflow_step_run_id, \
+    tokens_cache_read";
 
 fn run_from_row(row: &SqliteRow) -> Result<Run> {
     Ok(Run {
@@ -34,6 +35,8 @@ fn run_from_row(row: &SqliteRow) -> Result<Run> {
         ended_at: row.try_get("ended_at")?,
         reviewed_at: row.try_get("reviewed_at")?,
         retry_of: row.try_get("retry_of")?,
+        workflow_step_run_id: row.try_get("workflow_step_run_id")?,
+        tokens_cache_read: row.try_get("tokens_cache_read")?,
     })
 }
 
@@ -50,10 +53,14 @@ fn event_from_row(row: &SqliteRow) -> Result<RunEventRecord> {
 pub(super) async fn insert_run(conn: &mut SqliteConnection, new: &NewRun) -> Result<String> {
     let id = new_id();
     let root = new.root_run_id.clone().unwrap_or_else(|| id.clone());
+    // A run that continues another (a resume, a chat reply, an answer, a follow-up) works for
+    // the same workflow step as its parent, unless it names one (teams spec section 4).
     sqlx::query(
         "INSERT INTO runs (id, dot_id, root_run_id, parent_run_id, trigger_kind, payload, \
-         status, session_id, workspace_path, branch, base_commit, queued_at, retry_of) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         status, session_id, workspace_path, branch, base_commit, queued_at, retry_of, \
+         workflow_step_run_id) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
+         COALESCE(?, (SELECT workflow_step_run_id FROM runs WHERE id = ?)))",
     )
     .bind(&id)
     .bind(&new.dot_id)
@@ -72,6 +79,8 @@ pub(super) async fn insert_run(conn: &mut SqliteConnection, new: &NewRun) -> Res
     .bind(&new.base_commit)
     .bind(now())
     .bind(&new.retry_of)
+    .bind(&new.workflow_step_run_id)
+    .bind(&new.parent_run_id)
     .execute(conn)
     .await?;
     Ok(id)

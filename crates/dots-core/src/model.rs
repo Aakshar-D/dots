@@ -17,6 +17,7 @@ str_enum!(TriggerKind {
     Chat => "chat",
     Resume => "resume",
     FollowUp => "follow_up",
+    Workflow => "workflow",
 });
 str_enum!(RunStatus {
     Queued => "queued",
@@ -219,6 +220,11 @@ pub struct Run {
     pub reviewed_at: Option<String>,
     /// The failed scheduled run that this run retries.
     pub retry_of: Option<String>,
+    /// The workflow step this run works for (teams spec section 4); a resume or a chat that
+    /// continues the run's thread keeps it.
+    pub workflow_step_run_id: Option<String>,
+    /// The part of `tokens_in` read from the prompt cache (teams spec section 9).
+    pub tokens_cache_read: i64,
 }
 
 /// Input for `Store::create_run`. `root_run_id: None` makes the run its own root.
@@ -234,6 +240,8 @@ pub struct NewRun {
     pub branch: Option<String>,
     pub base_commit: Option<String>,
     pub retry_of: Option<String>,
+    /// `None` keeps the parent's (`parent_run_id`), if it has one.
+    pub workflow_step_run_id: Option<String>,
 }
 
 impl NewRun {
@@ -249,6 +257,7 @@ impl NewRun {
             branch: None,
             base_commit: None,
             retry_of: None,
+            workflow_step_run_id: None,
         }
     }
 }
@@ -810,4 +819,154 @@ pub struct Workflow {
     pub problem: Option<String>,
     #[serde(flatten)]
     pub spec: WorkflowSpec,
+}
+
+str_enum!(WorkflowTrigger {
+    Chat => "chat",
+    Manual => "manual",
+    Schedule => "schedule",
+    Webhook => "webhook",
+});
+str_enum!(WorkflowRunStatus {
+    Running => "running",
+    Waiting => "waiting",
+    Succeeded => "succeeded",
+    Failed => "failed",
+    Cancelled => "cancelled",
+});
+// What a waiting workflow run waits for: the person's check, more budget, a send-back past the
+// cap, or a decision about a failed step (retry or stop).
+str_enum!(WaitingOn {
+    Check => "check",
+    Budget => "budget",
+    SendBacks => "send_backs",
+    StepFailed => "step_failed",
+});
+str_enum!(StepRunStatus {
+    Running => "running",
+    Waiting => "waiting",
+    Succeeded => "succeeded",
+    Failed => "failed",
+    Cancelled => "cancelled",
+    Skipped => "skipped",
+});
+
+impl WorkflowRunStatus {
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, Self::Succeeded | Self::Failed | Self::Cancelled)
+    }
+}
+
+impl StepRunStatus {
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self,
+            Self::Succeeded | Self::Failed | Self::Cancelled | Self::Skipped
+        )
+    }
+}
+
+/// A branch a step produced (teams spec section 6).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BranchRef {
+    pub run_id: String,
+    pub branch: String,
+    pub worktree_path: String,
+    pub base_commit: Option<String>,
+}
+
+/// What a finished step passes to the next ones (teams spec section 6).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Handoff {
+    pub summary: String,
+    pub branches: Vec<BranchRef>,
+    pub outcome: Option<String>,
+}
+
+/// One step's execution inside a workflow run. Times are RFC 3339 UTC.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StepRun {
+    pub id: String,
+    pub workflow_run_id: String,
+    pub step_id: String,
+    pub attempt: u32,
+    pub status: StepRunStatus,
+    pub handoff: Option<Handoff>,
+    /// A check's decision: `{"decision": "approved" | "sent_back", "note": ...}`.
+    pub decision: Option<Value>,
+    pub error: Option<String>,
+    pub started_at: String,
+    pub ended_at: Option<String>,
+}
+
+/// One execution of a workflow (teams spec section 4), with its step runs, oldest first, and
+/// what it has spent (section 9). Times are RFC 3339 UTC.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowRun {
+    pub id: String,
+    pub workflow_id: Option<String>,
+    pub team_id: String,
+    pub definition: crate::workflow::Definition,
+    pub project_id: Option<String>,
+    pub project: ProjectSpec,
+    pub task: String,
+    pub trigger: WorkflowTrigger,
+    pub origin_run_id: Option<String>,
+    /// A test run: its deploy steps push nothing (section 5.1).
+    pub test: bool,
+    pub status: WorkflowRunStatus,
+    pub waiting_on: Option<WaitingOn>,
+    pub current_step: Option<String>,
+    /// The limits now: the definition's, raised by "Add budget".
+    pub budget: crate::workflow::Budget,
+    pub send_backs: u32,
+    /// Dot runs of the workflow run, resume children included.
+    pub spent_runs: u32,
+    /// New input plus output tokens of those runs: `tokens_in - tokens_cache_read + tokens_out`.
+    pub spent_tokens: u64,
+    /// Their tokens read from the prompt cache, shown beside the budget, not counted in it.
+    pub spent_cache_read: u64,
+    /// Time spent not waiting on the person, in milliseconds.
+    pub active_ms: u64,
+    pub error: Option<String>,
+    pub started_at: String,
+    pub ended_at: Option<String>,
+    pub steps: Vec<StepRun>,
+}
+
+/// Input for `Store::create_workflow_run`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewWorkflowRun {
+    pub workflow_id: String,
+    pub team_id: String,
+    pub definition: crate::workflow::Definition,
+    pub project_id: String,
+    pub project: ProjectSpec,
+    pub task: String,
+    pub trigger: WorkflowTrigger,
+    pub origin_run_id: Option<String>,
+    pub test: bool,
+}
+
+/// The fields `Store::set_workflow_run` writes: `None` leaves one as it is, `Some(None)` clears
+/// it. A terminal status also sets `ended_at`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct WorkflowRunChange {
+    pub status: Option<WorkflowRunStatus>,
+    pub waiting_on: Option<Option<WaitingOn>>,
+    pub current_step: Option<Option<String>>,
+    pub budget: Option<crate::workflow::Budget>,
+    pub send_backs: Option<u32>,
+    pub active_ms: Option<u64>,
+    pub clock_at: Option<Option<String>>,
+    pub error: Option<Option<String>>,
+}
+
+/// The fields `Store::set_step_run` writes, as `WorkflowRunChange`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct StepRunChange {
+    pub status: Option<StepRunStatus>,
+    pub handoff: Option<Option<Handoff>>,
+    pub decision: Option<Option<Value>>,
+    pub error: Option<Option<String>>,
 }

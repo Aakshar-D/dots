@@ -20,6 +20,7 @@ mod schedules;
 mod settings;
 mod teams;
 mod upgrade;
+mod workflow_runs;
 
 pub(crate) use upgrade::{auth_scheme, var_name};
 

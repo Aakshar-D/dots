@@ -36,6 +36,7 @@ const TRIGGER: Record<Run["trigger"], string> = {
   chat: "Chat message",
   resume: "Continued after approval",
   follow_up: "Follow-up the dot scheduled",
+  workflow: "Workflow step",
 };
 
 /// What the person wrote, for a chat run: an answer to a question as they typed it, not the

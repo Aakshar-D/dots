@@ -368,6 +368,8 @@ fn run() -> Run {
         ended_at: Some(TS.into()),
         reviewed_at: None,
         retry_of: None,
+        workflow_step_run_id: None,
+        tokens_cache_read: 0,
     }
 }
 

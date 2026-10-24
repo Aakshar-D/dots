@@ -327,6 +327,8 @@ mod tests {
             ended_at: None,
             reviewed_at: None,
             retry_of: None,
+            workflow_step_run_id: None,
+            tokens_cache_read: 0,
         }
     }
 

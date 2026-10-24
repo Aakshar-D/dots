@@ -24,6 +24,8 @@ export const TriggerKind = z.enum([
   "resume",
   // A run a dot scheduled for itself (check-ins spec section 6).
   "follow_up",
+  // A step of a team's workflow (teams spec section 5).
+  "workflow",
 ]);
 export const RunStatus = z.enum([
   "queued",
@@ -149,6 +151,10 @@ const runShape = {
   reviewed_at: nullable(z.string()),
   // The failed scheduled run that this run retries.
   retry_of: nullable(z.string()),
+  // The workflow step the run works for (teams spec section 4).
+  workflow_step_run_id: nullable(z.string()),
+  // The part of tokens_in read from the prompt cache.
+  tokens_cache_read: z.number().int(),
 };
 export const Run = z.strictObject(runShape);
 
