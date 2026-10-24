@@ -51,6 +51,8 @@ enum Act {
     /// Writes a file into its workspace and tags the commit its branch is on with the
     /// branch's own name, then finishes with this summary.
     WriteAndTag(&'static str, &'static str),
+    /// Finishes with this summary, made at run time.
+    Say(String),
 }
 
 /// Plays each dot's acts in order, one per run (the last one again once they run out), and
@@ -161,6 +163,7 @@ impl Engine for Team {
                     git_out(&ctx.workspace, &["tag", &branch]);
                     EngineEvent::Finished { summary: s.into() }
                 }
+                Act::Say(s) => EngineEvent::Finished { summary: s },
                 Act::Schedule(s) => {
                     let now = chrono::Utc::now();
                     let due = now + chrono::TimeDelta::hours(1);
@@ -1309,4 +1312,63 @@ async fn a_tag_named_like_the_earlier_steps_branch_does_not_move_the_next_steps_
     let tip = git_out(&w.repo, &["rev-parse", &format!("refs/heads/{first}")]);
     let second = w.store.runs_of_step_run(&wr.steps[1].id).await.unwrap();
     assert_eq!(second[0].base_commit.as_deref(), Some(tip.as_str()));
+}
+
+#[tokio::test]
+async fn a_step_whose_member_was_deleted_fails_instead_of_queueing_again() {
+    let w = world().await;
+    w.engine
+        .set(&w.dev.spec.name, vec![Act::Ask("Which icon set?")]);
+    let flow = w
+        .workflow("Fix", vec![agent("dev", "Fix it", &w.dev, "Fix.")])
+        .await;
+    let wr = w.start(&flow).await;
+    let question = loop {
+        let open = w
+            .store
+            .list_messages(Some(&w.dev.id))
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|m| m.answered_at.is_none());
+        if let Some(q) = open {
+            break q;
+        }
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    };
+    common::wait_status(
+        &w.store,
+        question.run_id.as_deref().unwrap(),
+        RunStatus::Succeeded,
+        60,
+    )
+    .await;
+    // While the step waits on the question, the person deletes its member: the step's runs and
+    // the question go with it.
+    w.store.delete_dot_if_idle(&w.dev.id).await.unwrap();
+    w.workflows.pass().await.unwrap();
+    let wr = w.until(&wr.id, waits_on(WaitingOn::StepFailed)).await;
+    assert_eq!(
+        wr.error.as_deref(),
+        Some("Fix it: its member is no longer a dot")
+    );
+    assert_eq!(wr.steps[0].status, StepRunStatus::Failed);
+}
+
+#[tokio::test]
+async fn a_long_summary_is_cut_to_the_hand_off_limit_mark_included() {
+    let w = world().await;
+    let long = "\u{e9}".repeat(4_100);
+    w.engine.set(&w.dev.spec.name, vec![Act::Say(long.clone())]);
+    let flow = w
+        .workflow("Fix", vec![agent("dev", "Fix it", &w.dev, "Fix.")])
+        .await;
+    let wr = w.start(&flow).await;
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    let summary = wr.steps[0].handoff.as_ref().unwrap().summary.clone();
+    assert_eq!(summary.chars().count(), 4_000);
+    assert!(summary.ends_with(" [cut]"), "{summary}");
+    assert!(long.starts_with(summary.trim_end_matches(" [cut]")));
 }

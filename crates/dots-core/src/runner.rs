@@ -859,9 +859,23 @@ impl Runner {
             tools,
             &mut notices,
         );
-        // A chat run may start its dot's team workflows (teams spec section 7).
-        let tools = if self.may_start_workflows(run).await {
-            tools.with_startable(self.store.startable_workflows(&dot.id).await?)
+        // A chat run may start its dot's team workflows (teams spec section 7), unless its
+        // policy denies `Workflow` outright: the tool is then neither offered nor listed. A list
+        // that cannot be read is logged and left empty; the person's chat goes on without it.
+        let workflow_off = dot
+            .spec
+            .policy
+            .resolve(crate::policy::WORKFLOW_TOOL, &Value::Null)
+            == crate::policy::Action::Deny;
+        let tools = if !workflow_off && self.may_start_workflows(run).await {
+            let startable = match self.store.startable_workflows(&dot.id).await {
+                Ok(startable) => startable,
+                Err(e) => {
+                    tracing::warn!(run = %run.id, "listing the workflows it may start failed: {e}");
+                    Vec::new()
+                }
+            };
+            tools.with_startable(startable)
         } else {
             tools
         };

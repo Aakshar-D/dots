@@ -141,12 +141,15 @@ fn raised(wr: &WorkflowRun) -> Budget {
     b
 }
 
+/// `text` in at most `max` characters: a longer one is cut short and ends with " [cut]".
 fn cut(text: &str, max: usize) -> String {
+    const MARK: &str = " [cut]";
     if text.chars().count() <= max {
         return text.to_string();
     }
-    let mut out: String = text.chars().take(max).collect();
-    out.push_str(" [cut]");
+    let keep = max.saturating_sub(MARK.chars().count());
+    let mut out: String = text.chars().take(keep).collect();
+    out.push_str(MARK);
     out
 }
 
@@ -736,27 +739,9 @@ impl Workflows {
             StepKind::Agent { member, .. } => {
                 // No new dot run past a limit: the workflow waits for the person (section 9).
                 if let Some(limit) = budget_reached(wr) {
-                    let waiting = self
-                        .store
-                        .set_workflow_run(
-                            &wr.id,
-                            &WorkflowRunChange {
-                                status: Some(WorkflowRunStatus::Waiting),
-                                waiting_on: Some(Some(WaitingOn::Budget)),
-                                error: Some(Some(format!("Budget reached: {limit}"))),
-                                ..Default::default()
-                            },
-                        )
-                        .await?;
-                    self.updated(&waiting);
-                    return Ok(());
+                    return self.wait_on_budget(wr, &limit).await;
                 }
-                let refusal = match self.store.get_dot(member).await {
-                    Ok(dot) if dot.spec.enabled => None,
-                    Ok(dot) => Some(format!("{} is disabled", dot.spec.name)),
-                    Err(Error::NotFound(_)) => Some("its member is no longer a dot".to_string()),
-                    Err(e) => return Err(e),
-                };
+                let refusal = self.member_refusal(member).await?;
                 let status = if refusal.is_some() {
                     StepRunStatus::Failed
                 } else {
@@ -786,6 +771,35 @@ impl Workflows {
             }
         }
         Ok(())
+    }
+
+    /// Puts the workflow run in wait for the person to add budget, past `limit` (section 9).
+    async fn wait_on_budget(&self, wr: &WorkflowRun, limit: &str) -> Result<()> {
+        let waiting = self
+            .store
+            .set_workflow_run(
+                &wr.id,
+                &WorkflowRunChange {
+                    status: Some(WorkflowRunStatus::Waiting),
+                    waiting_on: Some(Some(WaitingOn::Budget)),
+                    error: Some(Some(format!("Budget reached: {limit}"))),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        self.updated(&waiting);
+        Ok(())
+    }
+
+    /// Why the member of an agent step may not get a run, if it may not: it is disabled, or no
+    /// longer a dot.
+    async fn member_refusal(&self, member: &str) -> Result<Option<String>> {
+        match self.store.get_dot(member).await {
+            Ok(dot) if dot.spec.enabled => Ok(None),
+            Ok(dot) => Ok(Some(format!("{} is disabled", dot.spec.name))),
+            Err(Error::NotFound(_)) => Ok(Some("its member is no longer a dot".to_string())),
+            Err(e) => Err(e),
+        }
     }
 
     /// Queues the run of an agent step's member, with the `## Workflow` section and the branch
@@ -882,22 +896,32 @@ impl Workflows {
     }
 
     /// Watches an agent step's runs: it ends when its newest run's thread has ended and no
-    /// question of it waits for the person. A step whose run is gone gets one again.
+    /// question of it waits for the person. A step whose run is gone gets one again, as a step
+    /// that begins does: unless its member may not run, which fails it, or a limit is reached,
+    /// which waits for the person.
     async fn watch_agent(&self, wr: &WorkflowRun, index: usize, step_run: &StepRun) -> Result<()> {
         // The question first: an answer closes it and stores the run that continues the thread
         // in one transaction, so once it reads as closed, the runs read next include that run.
         if self.store.step_has_open_question(&step_run.id).await? {
             return Ok(());
         }
+        let step = &wr.definition.steps[index];
         let runs = self.store.runs_of_step_run(&step_run.id).await?;
         let Some(last) = runs.last() else {
+            if let StepKind::Agent { member, .. } = &step.kind {
+                if let Some(error) = self.member_refusal(member).await? {
+                    return self.fail_step(wr, step, step_run, &error).await;
+                }
+            }
+            if let Some(limit) = budget_reached(wr) {
+                return self.wait_on_budget(wr, &limit).await;
+            }
             self.queue_agent_run(wr, index, step_run).await?;
             return Ok(());
         };
         if runs.iter().any(|r| !r.status.is_terminal()) {
             return Ok(());
         }
-        let step = &wr.definition.steps[index];
         if last.status != RunStatus::Succeeded {
             let error = last.error.clone().unwrap_or_else(|| match last.status {
                 RunStatus::Cancelled => "the run was cancelled".to_string(),

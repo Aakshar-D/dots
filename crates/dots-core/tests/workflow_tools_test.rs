@@ -658,3 +658,19 @@ async fn a_chat_starts_a_workflow_on_a_project_once_until_that_run_ends() {
     assert_eq!(t.rt.workflows().list(None, 10).await.unwrap().len(), 2);
     t.rt.shutdown();
 }
+
+#[tokio::test]
+async fn a_chat_of_a_dot_whose_policy_denies_workflow_is_not_offered_the_tool() {
+    let t = start(json!([])).await;
+    let llm = Llm::start(vec![text("Hello.")]).await;
+    let mut s = local_spec(&t, &llm.endpoint(), "helper");
+    s.policy.rules.push(Rule::new("Workflow", Action::Deny));
+    let helper = t.rt.create_dot(s).await.unwrap();
+    team_of(&t, &helper).await;
+    let chat = t.rt.chat(&helper.id, "Hi.", None).await.unwrap();
+    wait_status(t.rt.store(), &chat.id, RunStatus::Succeeded, 30).await;
+    let first = llm.requests()[0].clone();
+    assert!(!tool_names(&first).contains(&"start_workflow".to_string()));
+    assert!(!prompt(&first).contains("## Workflows you can start"));
+    t.rt.shutdown();
+}

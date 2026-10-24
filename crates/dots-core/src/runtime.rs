@@ -747,7 +747,6 @@ impl Runtime {
         &self.checkins
     }
 
-    /// The follow-ups dots scheduled: what the `follow_up*` commands call.
     /// Teams, their projects and workflows.
     pub fn teams(&self) -> &crate::teams::Teams {
         &self.teams
@@ -758,6 +757,7 @@ impl Runtime {
         &self.workflows
     }
 
+    /// The follow-ups dots scheduled: what the `follow_up*` commands call.
     pub fn follow_ups(&self) -> &Arc<FollowUps> {
         &self.follow_ups
     }
