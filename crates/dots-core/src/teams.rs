@@ -17,7 +17,7 @@ pub struct Teams {
 }
 
 /// Refuses a project folder that is not a git repo.
-async fn check_repo(repo_path: &str) -> Result<()> {
+pub(crate) async fn check_repo(repo_path: &str) -> Result<()> {
     let path = Path::new(repo_path.trim());
     let inside = if path.is_dir() {
         git(path, &["rev-parse", "--is-inside-work-tree"])
@@ -75,7 +75,14 @@ impl Teams {
         Ok(team)
     }
 
+    /// Deletes the team, its projects and workflows. Refused while it has workflow runs in
+    /// flight: `Workflows::delete_team` stops them first.
     pub async fn delete(&self, id: &str) -> Result<()> {
+        if self.store.team_has_runs_in_flight(id).await? {
+            return Err(Error::Conflict(
+                "the team has workflow runs in flight; stop them first".into(),
+            ));
+        }
         self.store.delete_team(id).await?;
         self.team_updated(id);
         Ok(())

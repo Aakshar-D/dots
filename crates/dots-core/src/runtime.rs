@@ -121,6 +121,8 @@ pub struct Runtime {
     viewing: Viewing,
     /// Teams, their projects and workflows (teams spec section 11).
     teams: crate::teams::Teams,
+    /// The workflow runs and their loop (teams spec sections 5 to 8).
+    workflows: Arc<crate::workflows::Workflows>,
     shutdown: CancellationToken,
 }
 
@@ -301,6 +303,15 @@ impl Runtime {
         follow_ups.spawn(runner.clone(), shutdown.clone());
         let viewing = Viewing::default();
         let teams = crate::teams::Teams::new(store.clone(), bus.clone());
+        // Started after the dispatcher and after interrupted runs were failed, so its first
+        // pass sees each workflow's runs as they are.
+        let workflows = crate::workflows::Workflows::new(
+            store.clone(),
+            bus.clone(),
+            runner.clone(),
+            cfg.clock.clone(),
+        );
+        workflows.spawn(shutdown.clone());
         watch_viewing(
             store.clone(),
             bus.clone(),
@@ -339,6 +350,7 @@ impl Runtime {
             browsers,
             viewing,
             teams,
+            workflows,
             shutdown,
         })
     }
@@ -736,6 +748,11 @@ impl Runtime {
     /// Teams, their projects and workflows.
     pub fn teams(&self) -> &crate::teams::Teams {
         &self.teams
+    }
+
+    /// The workflow runs: start, approve a check, retry a step, stop.
+    pub fn workflows(&self) -> &Arc<crate::workflows::Workflows> {
+        &self.workflows
     }
 
     pub fn follow_ups(&self) -> &Arc<FollowUps> {

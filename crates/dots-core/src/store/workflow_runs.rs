@@ -150,6 +150,32 @@ impl Store {
         .await?)
     }
 
+    /// Whether the team has workflow runs that have not ended.
+    pub async fn team_has_runs_in_flight(&self, team_id: &str) -> Result<bool> {
+        let n: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM workflow_runs WHERE team_id = ? \
+             AND status IN ('running', 'waiting')",
+        )
+        .bind(team_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(n > 0)
+    }
+
+    /// Whether a run of the step asked a question the person has neither answered nor
+    /// dismissed: the step waits for the answer (teams spec section 13).
+    pub async fn step_has_open_question(&self, step_run_id: &str) -> Result<bool> {
+        let n: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM messages m JOIN runs r ON r.id = m.run_id \
+             WHERE r.workflow_step_run_id = ? AND m.kind = 'question' \
+             AND m.answered_at IS NULL AND m.dismissed_at IS NULL",
+        )
+        .bind(step_run_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(n > 0)
+    }
+
     /// When the workflow run's clock last counted (`WorkflowRunChange::clock_at`).
     pub async fn workflow_run_clock(&self, id: &str) -> Result<Option<String>> {
         Ok(

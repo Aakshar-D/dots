@@ -1,7 +1,7 @@
 use serde::Serialize;
 use tokio::sync::broadcast;
 
-use crate::model::{Approval, Message, Run, RunEventRecord};
+use crate::model::{Approval, Message, Run, RunEventRecord, WorkflowRun};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -71,6 +71,11 @@ pub enum RuntimeEvent {
     WorkflowUpdated {
         team_id: String,
         workflow_id: String,
+    },
+    /// A workflow run started, moved to another step, waited, or ended (teams spec section
+    /// 11): the run page, the chat card, Needs you and the Inbox read it.
+    WorkflowRunUpdated {
+        run: WorkflowRun,
     },
 }
 

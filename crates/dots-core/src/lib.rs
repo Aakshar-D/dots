@@ -32,6 +32,7 @@ pub mod teams;
 pub mod util;
 pub mod vault;
 pub mod workflow;
+pub mod workflows;
 pub mod workspace;
 
 pub use error::{Error, Result};
