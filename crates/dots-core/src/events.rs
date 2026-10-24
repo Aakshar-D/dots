@@ -62,6 +62,16 @@ pub enum RuntimeEvent {
     MemoriesUpdated {
         dot_id: String,
     },
+    /// A team, its members or its projects were made, changed or deleted (teams spec
+    /// section 11).
+    TeamUpdated {
+        team_id: String,
+    },
+    /// A workflow of the team was made, changed or deleted.
+    WorkflowUpdated {
+        team_id: String,
+        workflow_id: String,
+    },
 }
 
 pub type Bus = broadcast::Sender<RuntimeEvent>;

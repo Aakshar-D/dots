@@ -647,3 +647,167 @@ pub struct Memory {
     pub created_at: String,
     pub updated_at: String,
 }
+
+/// The longest team, project or workflow name, in characters after trimming.
+pub const MAX_TEAM_NAME: usize = 64;
+/// The longest team description, in characters after trimming.
+pub const MAX_DESCRIPTION: usize = 2_000;
+/// The longest member role, in characters after trimming.
+pub const MAX_ROLE: usize = 80;
+
+fn check_name(what: &str, name: &str) -> Result<()> {
+    let n = name.trim().chars().count();
+    if n == 0 || n > MAX_TEAM_NAME {
+        return Err(Error::Invalid(format!(
+            "a {what} name must be 1 to {MAX_TEAM_NAME} characters"
+        )));
+    }
+    Ok(())
+}
+
+/// A git name Dots passes on a command line (a remote or a branch): no leading `-`, so it can
+/// never be read as an option, and only `A-Z a-z 0-9 . _ / -`.
+fn check_git_name(what: &str, name: &str) -> Result<()> {
+    let ok = !name.is_empty()
+        && !name.starts_with('-')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '-'));
+    if !ok {
+        return Err(Error::Invalid(format!(
+            "{what} must be letters, digits, '.', '_', '/' or '-', not starting with '-'"
+        )));
+    }
+    Ok(())
+}
+
+/// A member of a team as it is saved: a dot and its role (teams spec section 3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemberSpec {
+    pub dot_id: String,
+    #[serde(default)]
+    pub role: String,
+}
+
+/// A team as it is saved: its name, description and members, in order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamSpec {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub members: Vec<MemberSpec>,
+}
+
+impl TeamSpec {
+    pub fn validate(&self) -> Result<()> {
+        check_name("team", &self.name)?;
+        if self.description.trim().chars().count() > MAX_DESCRIPTION {
+            return Err(Error::Invalid(
+                "a team description must be at most 2,000 characters".into(),
+            ));
+        }
+        let mut seen = std::collections::HashSet::new();
+        for m in &self.members {
+            if !seen.insert(m.dot_id.as_str()) {
+                return Err(Error::Invalid(format!("{} is in the team twice", m.dot_id)));
+            }
+            if m.role.trim().chars().count() > MAX_ROLE {
+                return Err(Error::Invalid(
+                    "a role must be at most 80 characters".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A member of a team as it is read: the dot's name comes with it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamMember {
+    pub dot_id: String,
+    pub dot_name: String,
+    pub role: String,
+}
+
+/// A team's project: a local git repo a workflow run works on (teams spec section 3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectSpec {
+    pub name: String,
+    pub repo_path: String,
+    /// `None`: found as worktrees find it (`origin/HEAD`, else `HEAD`).
+    #[serde(default)]
+    pub default_branch: Option<String>,
+    #[serde(default = "origin")]
+    pub remote: String,
+}
+
+fn origin() -> String {
+    "origin".into()
+}
+
+impl ProjectSpec {
+    /// The rules that need no disk; that `repo_path` is a git repo is checked when it is saved.
+    pub fn validate(&self) -> Result<()> {
+        check_name("project", &self.name)?;
+        if self.repo_path.trim().is_empty() {
+            return Err(Error::Invalid("a project needs its repo folder".into()));
+        }
+        check_git_name("the remote", &self.remote)?;
+        if let Some(branch) = &self.default_branch {
+            check_git_name("the default branch", branch)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Project {
+    pub id: String,
+    pub team_id: String,
+    pub created_at: String,
+    pub updated_at: String,
+    #[serde(flatten)]
+    pub spec: ProjectSpec,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Team {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub members: Vec<TeamMember>,
+    pub projects: Vec<Project>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// A workflow as it is saved (teams spec section 4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkflowSpec {
+    pub name: String,
+    pub definition: crate::workflow::Definition,
+    #[serde(default = "yes")]
+    pub enabled: bool,
+}
+
+impl WorkflowSpec {
+    /// Its name and its definition against the team's `members` (dot ids).
+    pub fn validate(&self, members: &[String]) -> Result<()> {
+        check_name("workflow", &self.name)?;
+        self.definition.validate(members)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Workflow {
+    pub id: String,
+    pub team_id: String,
+    pub created_at: String,
+    pub updated_at: String,
+    /// Why it cannot start now, when the team changed under it (a member it names was deleted
+    /// or removed): the refusal its definition would get if it were saved now.
+    pub problem: Option<String>,
+    #[serde(flatten)]
+    pub spec: WorkflowSpec,
+}

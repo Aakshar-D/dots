@@ -119,6 +119,8 @@ pub struct Runtime {
     /// The dot whose conversation the person has open in the focused window (needs-you spec
     /// section 3).
     viewing: Viewing,
+    /// Teams, their projects and workflows (teams spec section 11).
+    teams: crate::teams::Teams,
     shutdown: CancellationToken,
 }
 
@@ -298,6 +300,7 @@ impl Runtime {
         follow_ups.set_paused(settings.schedules_paused);
         follow_ups.spawn(runner.clone(), shutdown.clone());
         let viewing = Viewing::default();
+        let teams = crate::teams::Teams::new(store.clone(), bus.clone());
         watch_viewing(
             store.clone(),
             bus.clone(),
@@ -335,6 +338,7 @@ impl Runtime {
             follow_ups,
             browsers,
             viewing,
+            teams,
             shutdown,
         })
     }
@@ -729,6 +733,11 @@ impl Runtime {
     }
 
     /// The follow-ups dots scheduled: what the `follow_up*` commands call.
+    /// Teams, their projects and workflows.
+    pub fn teams(&self) -> &crate::teams::Teams {
+        &self.teams
+    }
+
     pub fn follow_ups(&self) -> &Arc<FollowUps> {
         &self.follow_ups
     }

@@ -18,6 +18,7 @@ mod messages;
 mod runs;
 mod schedules;
 mod settings;
+mod teams;
 mod upgrade;
 
 pub(crate) use upgrade::{auth_scheme, var_name};
