@@ -655,6 +655,86 @@ async fn a_downloaded_file_over_1_mib_or_not_json_is_invalid() {
     );
 }
 
+// Plain values outside the MAC.
+
+/// `name` with `from` replaced by `to` (each once), opened.
+async fn open_fixture_changed(
+    name: &str,
+    changes: &[(&str, &str)],
+) -> Result<Fetched, SourceError> {
+    let mut text = fixture_text(name);
+    for (from, to) in changes {
+        assert_eq!(text.matches(from).count(), 1, "{from:?}");
+        text = text.replace(from, to);
+    }
+    let dir = tempfile::tempdir().unwrap();
+    local(&write(&dir, &text)).fetch(&mine()).await
+}
+
+#[tokio::test]
+async fn a_plain_env_entry_added_to_a_mac_only_file_is_refused() {
+    // `mac_only_encrypted` leaves plain values out of the MAC, so this one changes nothing the
+    // MAC covers; it still must not become an org secret.
+    let e = open_fixture_changed(
+        "mac-only.enc.json",
+        &[(
+            "\"env\": {\n",
+            "\"env\": {\n\t\t\"EVIL_unencrypted\": \"x-evil-1\",\n",
+        )],
+    )
+    .await
+    .unwrap_err();
+    let text = format!("{e} {e:?}");
+    assert!(!text.contains("x-evil-1"), "{text}");
+    assert_eq!(
+        invalid(e),
+        "the file's value at env:EVIL_unencrypted is not encrypted"
+    );
+}
+
+#[tokio::test]
+async fn a_rule_rewritten_to_leave_a_new_env_entry_plain_is_refused() {
+    let e = open_fixture_changed(
+        "mac-only.enc.json",
+        &[
+            (
+                "\"unencrypted_suffix\": \"_unencrypted\"",
+                "\"unencrypted_regex\": \"^(GITHUB_TOKEN|note_unencrypted)$\"",
+            ),
+            (
+                "\"env\": {\n",
+                "\"env\": {\n\t\t\"GITHUB_TOKEN\": \"x-evil-2\",\n",
+            ),
+        ],
+    )
+    .await
+    .unwrap_err();
+    let text = format!("{e} {e:?}");
+    assert!(!text.contains("x-evil-2"), "{text}");
+    assert_eq!(
+        invalid(e),
+        "the file's value at env:GITHUB_TOKEN is not encrypted"
+    );
+}
+
+#[tokio::test]
+async fn an_empty_env_value_is_skipped_and_never_an_entry() {
+    // An empty text is never encrypted, so a file may carry one that its MAC does not cover.
+    let fetched = open_fixture_changed(
+        "mac-only.enc.json",
+        &[(
+            "\"env\": {\n",
+            "\"env\": {\n\t\t\"EVIL_unencrypted\": \"\",\n",
+        )],
+    )
+    .await
+    .unwrap();
+    assert_eq!(entries(&fetched), good_entries());
+    assert!(!entries(&fetched)
+        .iter()
+        .any(|(name, _)| name.contains("EVIL")));
+}
+
 // This PC's identity for an org.
 
 #[test]

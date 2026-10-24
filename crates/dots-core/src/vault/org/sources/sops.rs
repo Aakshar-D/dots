@@ -19,6 +19,11 @@
 //!    the file says `mac_only_encrypted`.
 //! 5. The MAC in the file, decrypted with `lastmodified` as its AAD, must match, compared in
 //!    constant time. Nothing is read from the values before it does.
+//! 6. Only values the file encrypted are taken. SOPS does not authenticate its metadata (the
+//!    rule for which keys are encrypted), and a `mac_only_encrypted` MAC does not cover plain
+//!    values, so a plain value in `env` or `policy` could have been added by anyone who can
+//!    write the file. A non-empty one is refused. An empty text is skipped, since SOPS never
+//!    encrypts one and the MAC gains nothing from it.
 //!
 //! A file that can't be read, or a server error, is `Unreachable`, since a synced file may not
 //! have arrived yet. A key that is not a recipient, a value that does not decrypt and a MAC that
@@ -189,7 +194,7 @@ async fn read_file(path: &str) -> std::result::Result<Node, SourceError> {
     let unreadable =
         |e: std::io::Error| SourceError::Unreachable(format!("cannot read {path}: {e}"));
     let file = tokio::fs::File::open(path).await.map_err(unreadable)?;
-    let mut bytes = Vec::new();
+    let mut bytes = Zeroizing::new(Vec::new());
     file.take(MAX_ANSWER_BYTES as u64 + 1)
         .read_to_end(&mut bytes)
         .await
@@ -257,9 +262,16 @@ fn open(file: &Node, identity: &x25519::Identity) -> std::result::Result<Fetched
     run.check_mac(&metadata)?;
 
     // The MAC matches: only now is anything read from the values.
+    let not_encrypted = |path: &[&str]| {
+        SourceError::Invalid(format!(
+            "the file's value at {} is not encrypted",
+            shown_path(path)
+        ))
+    };
     let policy = match policy {
         Part::Missing => return Err(SourceError::Invalid("the file has no policy".into())),
         Part::NotItsShape => None,
+        Part::Found(Plain::Unencrypted) => return Err(not_encrypted(&["policy"])),
         Part::Found(plain) => plain.into_text(),
     };
     let policy =
@@ -273,16 +285,23 @@ fn open(file: &Node, identity: &x25519::Identity) -> std::result::Result<Fetched
         }
         Part::Found(env) => env,
     };
-    let raw: BTreeMap<String, Field> = env
-        .into_iter()
-        .map(|(name, plain)| {
-            let field = match plain.and_then(Plain::into_text) {
+    let mut raw: BTreeMap<String, Field> = BTreeMap::new();
+    for (name, plain) in env {
+        let field = match plain {
+            Some(Plain::Unencrypted) => return Err(not_encrypted(&["env", name])),
+            Some(Plain::Empty) => {
+                // SOPS never encrypts an empty text and the MAC gains nothing from it, so it
+                // is no secret: skipped. The name is logged, never a value.
+                tracing::warn!(name = %name.escape_debug(), "a SOPS file's env has an empty value, skipped");
+                continue;
+            }
+            other => match other.and_then(Plain::into_text) {
                 Some(text) => Field::Text(text),
                 None => Field::NotText,
-            };
-            (name.to_string(), field)
-        })
-        .collect();
+            },
+        };
+        raw.insert(name.to_string(), field);
+    }
     Ok(Fetched {
         entries: collect_entries(raw)?,
         policy: policy.to_string(),
@@ -554,10 +573,15 @@ fn shown_path(path: &[&str]) -> String {
     path.join(":").escape_debug().to_string()
 }
 
-/// One plain leaf, kept only as far as the layout needs: text, or something else.
+/// One plain leaf, kept only as far as the layout needs: encrypted text, encrypted something
+/// else, an empty text (which SOPS never encrypts), or a non-empty value the file left in the
+/// clear. The last is dropped at once: with `mac_only_encrypted` the MAC does not cover it, and
+/// in any mode it is not a secret the admin encrypted for this org.
 enum Plain {
     Text(Zeroizing<Vec<u8>>),
     Other,
+    Empty,
+    Unencrypted,
 }
 
 impl Plain {
@@ -751,6 +775,8 @@ impl<'m> Decrypting<'m> {
             self.hash.update(&*mac_bytes(&value));
         }
         Ok(match value {
+            Value::Str(bytes) if bytes.is_empty() => Plain::Empty,
+            _ if !encrypted => Plain::Unencrypted,
             Value::Str(bytes) => Plain::Text(bytes),
             _ => Plain::Other,
         })
