@@ -1598,3 +1598,40 @@ async fn an_unreachable_refresh_keeps_a_revoked_org_revoked() {
     assert_eq!(summary.status_text, revoked.status_text);
     assert_eq!(h.orgs.lookup(ACME, "API_KEY").await, OrgLookup::Revoked);
 }
+
+/// A lookup that finds the copy due while a refresh holds the org's lock must not lose the
+/// delete: the refresh's failed fetch deletes the copy.
+#[tokio::test]
+async fn an_expiry_met_during_a_refresh_still_deletes_the_copy() {
+    let h = OrgsHarness::new().await;
+    let scripted = Scripted::new();
+    let orgs = h.service().with_sources(scripted.factory());
+    let signed = sign(&h.keys, &policy(ACME, ISSUED, acme_policy()));
+    scripted.serve(&[("API_KEY", API_KEY)], &signed);
+    orgs.join(&h.acme_code(), Some(token())).await.unwrap();
+    scripted.entered().await;
+    assert!(h.copy_path(ACME).exists());
+
+    // Offline first (a connected org keeps its values), then a refresh that waits.
+    scripted.answer(Err(SourceError::Unreachable("down".into())));
+    let offline = orgs.refresh(ACME).await.unwrap();
+    assert!(matches!(status(&offline), OrgStatus::Offline { .. }));
+    scripted.entered().await;
+    let gate = scripted.hold();
+    let refreshing = tokio::spawn({
+        let orgs = orgs.clone();
+        async move { orgs.refresh(ACME).await }
+    });
+    scripted.entered().await;
+
+    h.advance(Duration::hours(24));
+    assert_eq!(orgs.lookup(ACME, "API_KEY").await, OrgLookup::Expired);
+    assert_eq!(orgs.summary(ACME).await.unwrap().copy_until, None);
+    assert!(h.copy_path(ACME).exists(), "the lock holder deletes it");
+
+    gate.add_permits(1);
+    let summary = refreshing.await.unwrap().unwrap();
+    assert_eq!(status(&summary), OrgStatus::Expired);
+    assert!(!h.copy_path(ACME).exists());
+    assert_eq!(orgs.lookup(ACME, "API_KEY").await, OrgLookup::Expired);
+}

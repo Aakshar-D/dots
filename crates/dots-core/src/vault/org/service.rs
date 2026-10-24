@@ -794,21 +794,25 @@ impl Orgs {
         if !matches!(self.read().get(org_id), Some(Slot::Joined(j)) if due(j)) {
             return;
         }
-        // A change to the org holds its lock and settles the org itself; the file is only
-        // deleted by whoever has the lock, so a fresh copy is never taken for an old one.
+        // The file is only deleted by whoever has the org's lock, so a fresh copy is never
+        // taken for an old one. Without the lock the values are dropped now but `copy_until`
+        // stays: the holder's `fall_back` deletes the due copy, or the next call retries.
         let guard = self.try_lock(org_id);
+        let locked = guard.is_some();
         let expired = self.with_joined(org_id, |joined| {
             if !due(joined) {
                 return false;
             }
             joined.entries = None;
-            joined.copy_until = None;
+            if locked {
+                joined.copy_until = None;
+            }
             if matches!(joined.status, OrgStatus::Offline { .. }) {
                 joined.status = OrgStatus::Expired;
             }
             true
         });
-        if expired == Some(true) && guard.is_some() {
+        if expired == Some(true) && locked {
             self.delete_copy(org_id).await;
         }
     }
@@ -1107,7 +1111,10 @@ impl Joined {
             Some(reason) => format!("{text} ({reason})"),
             None => text.to_string(),
         };
-        let copy = self.copy_until.map(stamp);
+        let copy = self
+            .copy_until
+            .filter(|_| self.entries.is_some())
+            .map(stamp);
         match (&self.status, copy) {
             (OrgStatus::Connected, _) => "connected".into(),
             (OrgStatus::Offline { until: Some(until) }, _) => {
@@ -1141,7 +1148,10 @@ fn summary_of(id: &str, slot: &Slot) -> OrgSummary {
             status_text: joined.status_text(),
             status: joined.status.clone(),
             last_fetch_at: joined.row.last_fetch_at.clone(),
-            copy_until: joined.copy_until.map(stamp),
+            copy_until: joined
+                .copy_until
+                .filter(|_| joined.entries.is_some())
+                .map(stamp),
             policy_summary: joined
                 .policy
                 .as_ref()
