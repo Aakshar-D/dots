@@ -264,7 +264,7 @@
           "tool": "Memory"
         },
         {
-          "action": "allow",
+          "action": "ask",
           "tool": "Workflow"
         }
       ]
@@ -413,7 +413,7 @@
             "tool": "Memory"
           },
           {
-            "action": "allow",
+            "action": "ask",
             "tool": "Workflow"
           }
         ]
@@ -1458,7 +1458,7 @@
           "tool": "Memory"
         },
         {
-          "action": "allow",
+          "action": "ask",
           "tool": "Workflow"
         }
       ]

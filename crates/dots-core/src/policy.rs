@@ -185,8 +185,13 @@ impl Policy {
         rules.push(Rule::new("Context", Action::Allow));
         rules.extend(CHECK_IN_TOOLS.map(|tool| Rule::new(tool, Action::Allow)));
         rules.push(Rule::new(MEMORY_TOOL, Action::Allow));
-        // And start its team's workflows from a chat (teams spec section 7).
-        rules.push(Rule::new(WORKFLOW_TOOL, Action::Allow));
+        // And start its team's workflows from a chat, which Sandboxed and Custom ask before
+        // (teams spec section 7, as decided by the person).
+        let workflow = match preset {
+            Preset::Sandboxed | Preset::Custom => Action::Ask,
+            Preset::ReadOnly | Preset::Trusted => Action::Allow,
+        };
+        rules.push(Rule::new(WORKFLOW_TOOL, workflow));
         Policy {
             preset,
             rules,

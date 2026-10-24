@@ -23,7 +23,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 use tempfile::TempDir;
 
 #[test]
-fn every_preset_allows_workflow_last_and_the_cli_never_sees_it() {
+fn workflow_is_last_asked_by_sandboxed_and_custom_and_the_cli_never_sees_it() {
     assert_eq!(WORKFLOW_TOOL, "Workflow");
     for preset in Preset::ALL {
         let p = Policy::preset(*preset);
@@ -32,11 +32,11 @@ fn every_preset_allows_workflow_last_and_the_cli_never_sees_it() {
             .map(|r| r.tool.as_str())
             .collect();
         assert_eq!(tail, ["Memory", "Workflow"], "{preset:?}");
-        assert_eq!(
-            p.resolve("Workflow", &json!({})),
-            Action::Allow,
-            "{preset:?}"
-        );
+        let want = match preset {
+            Preset::Sandboxed | Preset::Custom => Action::Ask,
+            Preset::ReadOnly | Preset::Trusted => Action::Allow,
+        };
+        assert_eq!(p.resolve("Workflow", &json!({})), want, "{preset:?}");
         let (allow, deny) = p.cli_lists();
         assert!(
             !allow.iter().chain(&deny).any(|t| t == "Workflow"),
@@ -53,7 +53,8 @@ fn every_preset_allows_workflow_last_and_the_cli_never_sees_it() {
 }
 
 /// Migration 0013 on a database Dots left at 0012: every stored policy whose preset is not
-/// Custom gets a `Workflow` allow rule unless a rule names it, after `Memory`.
+/// Custom gets the `Workflow` rule its preset has (Sandboxed asks, the others allow) unless a
+/// rule names it, after `Memory`.
 #[tokio::test]
 async fn migration_0013_gives_every_policy_that_is_not_custom_its_workflow_rule() {
     let dir = tempfile::tempdir().unwrap();
@@ -101,10 +102,9 @@ async fn migration_0013_gives_every_policy_that_is_not_custom_its_workflow_rule(
     }
     pool.close().await;
     let store = Store::open(&path).await.unwrap();
-    assert_eq!(
-        store.get_dot("D1").await.unwrap().spec.policy,
-        Policy::preset(Preset::Sandboxed)
-    );
+    let d1 = store.get_dot("D1").await.unwrap().spec.policy;
+    assert_eq!(d1, Policy::preset(Preset::Sandboxed));
+    assert_eq!(d1.rules.last(), Some(&Rule::new("Workflow", Action::Ask)));
     assert_eq!(
         store.get_dot("D2").await.unwrap().spec.policy,
         Policy::preset(Preset::Trusted)
@@ -211,6 +211,8 @@ fn local_spec(t: &Rt, endpoint: &str, name: &str) -> DotSpec {
     s.engine = EngineKind::Local;
     s.endpoint_url = Some(format!("{endpoint}/v1"));
     s.model = "test-model".into();
+    // Trusted allows `start_workflow`; the Sandboxed preset asks (see the test of that).
+    s.policy = Policy::preset(Preset::Trusted);
     s
 }
 
@@ -333,6 +335,7 @@ async fn a_claude_helper_starts_it_through_dots_own_server() {
     let mut s = spec("helper");
     s.workdir = t.dir.path().to_string_lossy().to_string();
     s.workspace_mode = WorkspaceMode::Folder;
+    s.policy = Policy::preset(Preset::Trusted);
     let helper = t.rt.create_dot(s).await.unwrap();
     team_of(&t, &helper).await;
     let chat =
@@ -672,5 +675,46 @@ async fn a_chat_of_a_dot_whose_policy_denies_workflow_is_not_offered_the_tool() 
     let first = llm.requests()[0].clone();
     assert!(!tool_names(&first).contains(&"start_workflow".to_string()));
     assert!(!prompt(&first).contains("## Workflows you can start"));
+    t.rt.shutdown();
+}
+
+/// The plain Sandboxed preset asks before a chat starts a workflow, and still offers the tool.
+#[tokio::test]
+async fn a_sandboxed_dot_is_offered_start_workflow_and_asks_before_it_starts_one() {
+    let t = start(json!([])).await;
+    let llm = Llm::start(vec![
+        call(
+            "c1",
+            "start_workflow",
+            json!({"workflow": "Fix", "project": "Dots", "task": "Fix the icon."}),
+        ),
+        text("Done."),
+    ])
+    .await;
+    let mut s = local_spec(&t, &llm.endpoint(), "helper");
+    s.policy = Policy::preset(Preset::Sandboxed);
+    s.approval_wait_secs = 30;
+    let helper = t.rt.create_dot(s).await.unwrap();
+    team_of(&t, &helper).await;
+    let mut events = t.rt.subscribe();
+    let chat =
+        t.rt.chat(&helper.id, "Please fix the icon.", None)
+            .await
+            .unwrap();
+    let approval = loop {
+        if let dots_core::events::RuntimeEvent::ApprovalRequested { approval } =
+            events.recv().await.unwrap()
+        {
+            break approval;
+        }
+    };
+    assert_eq!(approval.tool, "Workflow");
+    assert!(tool_names(&llm.requests()[0]).contains(&"start_workflow".to_string()));
+    assert!(t.rt.workflows().list(None, 10).await.unwrap().is_empty());
+    t.rt.decide_approval(&approval.id, true, None, None)
+        .await
+        .unwrap();
+    wait_status(t.rt.store(), &chat.id, RunStatus::Succeeded, 30).await;
+    assert_eq!(t.rt.workflows().list(None, 10).await.unwrap().len(), 1);
     t.rt.shutdown();
 }
