@@ -164,7 +164,7 @@ Served like `notify`, `ask` and `follow_up`: built in on the local engine, tools
 | `report_outcome` | `Workflow` | runs of agent steps that declare `outcomes` | `outcome` (one of the declared labels) | "Outcome recorded." The last call wins |
 | `send_back` | `Workflow` | runs of agent steps with `can_send_back_to` | `to_step` (step name), `note` | "Sent back to <step>." The run should then finish its turn; the send-back happens when it ends |
 
-Every new and stored policy preset gets a `Workflow` allow rule (a code step after the migration, as `finish_0007` did for `Context`). A dot's own `Workflow` rule (`ask`, `deny`) still wins. A rule of `ask` makes each call an approval as usual.
+Every new and stored policy preset gets a `Workflow` rule (a code step after the migration, as `finish_0007` did for `Context`): Sandboxed and Custom ask, so each call is an approval before the workflow starts, and ReadOnly and Trusted allow (the person's decision, 2026-10-24). A stored Sandboxed policy gets `ask`; a stored Custom policy gets nothing, as before. A dot's own `Workflow` rule (`ask`, `deny`) still wins. A rule of `ask` makes each call an approval as usual, and the tool is still offered to the chat.
 
 A refused call is a tool error naming the rule, in one sentence, and the run goes on, as with `follow_up`.
 
