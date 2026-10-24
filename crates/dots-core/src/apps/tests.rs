@@ -11,7 +11,7 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rquickjs::{Ctx, Function, Value as JsValue};
 use rusqlite::Connection;
@@ -30,25 +30,43 @@ pub const FILE_TIME_LIMIT: Duration = Duration::from_secs(10);
 pub const MAX_TESTS: usize = 500;
 /// `ctx.now` of a call whose options name none.
 pub const DEFAULT_NOW: &str = "2026-01-01T09:00:00+00:00";
+/// The longest test name and error a report keeps, in characters.
+pub const MAX_NAME: usize = 200;
+pub const MAX_ERROR: usize = 1000;
+/// The most failures `TestReport::problem` names.
+const MAX_SHOWN: usize = 20;
 /// What a proposal without a test is told (spec section 9, item 4).
 pub const NO_TESTS: &str = "the app has no tests: add tests/<name>.test.js with at least one \
     test(name, fn)";
 
-/// The test API, defined before a test file runs.
+/// The test API, defined before a test file runs. It evaluates to `[tests, describe]`, which Rust
+/// holds: the tests registered, each `[name, fn]`, and the text of a thrown value. The globals
+/// are fixed, `assert` is frozen, and `__call` and `__started` are taken away, so a test file
+/// cannot reach the runner or replace what it judges by (spec section 9, item 4).
 const PRELUDE: &str = r#"
 (() => {
   const tests = [];
-  const show = (v) => { try { return JSON.stringify(v) ?? String(v); } catch { return String(v); } };
+  const native_call = globalThis.__call, native_started = globalThis.__started;
+  delete globalThis.__call;
+  delete globalThis.__started;
+  const Str = String, stringify = JSON.stringify, parse = JSON.parse;
+  const show = (v) => { try { return stringify(v) ?? Str(v); } catch { return Str(v); } };
   const canon = (v) => Array.isArray(v) ? v.map(canon)
     : v && typeof v === "object" ? Object.fromEntries(Object.keys(v).sort().map(k => [k, canon(v[k])]))
     : v;
   const fail = (message, fallback) => { throw new Error(message ?? fallback); };
-  const text = (e) => e && e.message !== undefined ? (e.name && e.name !== "Error" ? `${e.name}: ${e.message}` : e.message) : String(e);
-  globalThis.test = (name, fn) => {
-    if (typeof name !== "string" || typeof fn !== "function") throw new Error("test(name, fn) takes a name and a function");
-    tests.push([name, fn]);
+  const text = (e) => e && e.message !== undefined ? (e.name && e.name !== "Error" ? `${e.name}: ${e.message}` : e.message) : Str(e);
+  const describe = (e) => {
+    try { const said = text(e); return typeof said === "string" ? said : Str(said); }
+    catch { return "the test failed"; }
   };
-  globalThis.assert = {
+  const fixed = (name, value) =>
+    Object.defineProperty(globalThis, name, { value, writable: false, configurable: false });
+  fixed("test", (name, fn) => {
+    if (typeof name !== "string" || typeof fn !== "function") throw new Error("test(name, fn) takes a name and a function");
+    tests[tests.length] = [name, fn];
+  });
+  fixed("assert", Object.freeze({
     ok: (value, message) => { if (!value) fail(message, `expected a true value, got ${show(value)}`); },
     equal: (actual, expected, message) => {
       if (actual !== expected) fail(message, `expected ${show(expected)}, got ${show(actual)}`);
@@ -58,28 +76,19 @@ const PRELUDE: &str = r#"
     },
     throws: (fn, expected, message) => {
       try { fn(); } catch (e) {
-        const said = text(e);
+        const said = describe(e);
         if (expected === undefined) return;
         if (expected instanceof RegExp ? expected.test(said) : said.includes(String(expected))) return;
         fail(message, `expected an error with ${show(String(expected))}, got ${show(said)}`);
       }
       fail(message, "expected the call to throw");
     },
-  };
-  globalThis.call = (tool, input, options) =>
-    JSON.parse(__call(String(tool), JSON.stringify(input ?? {}), JSON.stringify(options ?? {})));
-  globalThis.started = () => JSON.parse(__started());
-  globalThis.__names = () => JSON.stringify(tests.map(t => t[0]));
-  globalThis.__run = (i) => {
-    try {
-      const r = tests[i][1]();
-      if (r && typeof r.then === "function") return r.then(() => null, text);
-      return null;
-    } catch (e) {
-      return text(e);
-    }
-  };
-})();
+  }));
+  fixed("call", (tool, input, options) =>
+    parse(native_call(Str(tool), stringify(input ?? {}), stringify(options ?? {}))));
+  fixed("started", () => parse(native_started()));
+  return [tests, describe];
+})()
 "#;
 
 /// One test's outcome.
@@ -114,6 +123,7 @@ impl TestReport {
             .results
             .iter()
             .filter(|r| !r.passed)
+            .take(MAX_SHOWN)
             .map(|r| {
                 let what = if r.name.is_empty() {
                     r.file.clone()
@@ -123,10 +133,15 @@ impl TestReport {
                 format!("- {what}: {}", r.error.as_deref().unwrap_or("failed"))
             })
             .collect();
-        (!failed.is_empty()).then(|| {
+        let count = self.results.iter().filter(|r| !r.passed).count();
+        (count > 0).then(|| {
+            let more = if count > MAX_SHOWN {
+                format!("\n… and {} more", count - MAX_SHOWN)
+            } else {
+                String::new()
+            };
             format!(
-                "{} of {} tests failed:\n{}",
-                failed.len(),
+                "{count} of {} tests failed:\n{}{more}",
                 self.results.len(),
                 failed.join("\n")
             )
@@ -161,9 +176,9 @@ struct Bench {
 fn run_file(src: &AppSource, file: &str, code: &str, limit: Duration) -> Vec<TestResult> {
     let failed = |name: &str, error: String| TestResult {
         file: file.to_string(),
-        name: name.to_string(),
+        name: bounded(name.to_string(), MAX_NAME),
         passed: false,
-        error: Some(error),
+        error: Some(bounded(error, MAX_ERROR)),
     };
     let bench = Rc::new(RefCell::new(Bench::default()));
     let manifest = Rc::new(src.manifest.clone());
@@ -175,20 +190,29 @@ fn run_file(src: &AppSource, file: &str, code: &str, limit: Duration) -> Vec<Tes
     let mut results = Vec::new();
     let ran = engine::with_sandbox(limits, |ctx, judge| {
         let load = |e| judge.failure(ctx, e, Failure::Load);
-        ctx.eval::<(), _>(PRELUDE).map_err(load)?;
+        // `__call` and `__started` first: the prelude takes them into its closure.
         define_call(ctx, &bench, &manifest, &logic).map_err(load)?;
+        let held: rquickjs::Array = ctx.eval(PRELUDE).map_err(load)?;
+        let tests: rquickjs::Array = held.get(0).map_err(load)?;
+        let describe: Function = held.get(1).map_err(load)?;
         ctx.eval::<(), _>(code).map_err(load)?;
-        let names: String = global(ctx, "__names")
-            .and_then(|f| f.call(()))
-            .map_err(load)?;
-        let names: Vec<String> = serde_json::from_str(&names).unwrap_or_default();
-        if names.len() > MAX_TESTS {
+        if tests.len() > MAX_TESTS {
             return Err(Failure::Load(format!(
                 "a file may hold at most {MAX_TESTS} tests"
             )));
         }
-        for (i, name) in names.iter().enumerate() {
-            match fresh_database(&src.migrations) {
+        let began = Instant::now();
+        let mut names = Vec::new();
+        for i in 0..tests.len() {
+            let entry: rquickjs::Array = tests.get(i).map_err(load)?;
+            let name: String = entry.get(0).map_err(load)?;
+            let test: Function = entry.get(1).map_err(load)?;
+            let name = bounded(name, MAX_NAME);
+            // The file's time covers each test's migrations too.
+            let left = limit
+                .checked_sub(began.elapsed())
+                .ok_or(Failure::TimedOut)?;
+            match fresh_database(&src.migrations, left) {
                 Ok(conn) => {
                     *bench.borrow_mut() = Bench {
                         conn: Some(Rc::new(RefCell::new(conn))),
@@ -196,31 +220,33 @@ fn run_file(src: &AppSource, file: &str, code: &str, limit: Duration) -> Vec<Tes
                     };
                 }
                 Err(e) => {
-                    results.push(failed(name, format!("the migrations failed: {e}")));
+                    results.push(failed(&name, format!("the migrations failed: {e}")));
+                    names.push(name);
                     continue;
                 }
             }
-            let thrown = |e| judge.failure(ctx, e, Failure::Thrown);
-            let mut outcome: JsValue = global(ctx, "__run")
-                .and_then(|f| f.call((i,)))
-                .map_err(thrown)?;
-            if let Some(promise) = outcome.as_promise().cloned() {
-                outcome = match promise.finish::<JsValue>() {
-                    Ok(v) => v,
-                    Err(rquickjs::Error::WouldBlock) => {
-                        results.push(failed(name, "the test's promise never settled".into()));
-                        continue;
-                    }
-                    Err(e) => return Err(thrown(e)),
-                };
-            }
-            let error = outcome.as_string().and_then(|s| s.to_string().ok());
+            // The verdict is Rust's: a test passes when its function returns, or the promise it
+            // returns resolves; whatever it throws or rejects with fails it.
+            let error = match test.call::<_, JsValue>(()) {
+                Ok(value) => match value.as_promise().cloned() {
+                    None => None,
+                    Some(promise) => match promise.finish::<JsValue>() {
+                        Ok(_) => None,
+                        Err(rquickjs::Error::WouldBlock) => {
+                            Some("the test's promise never settled".to_string())
+                        }
+                        Err(e) => Some(said(&describe, judge.caught(ctx, e)?)),
+                    },
+                },
+                Err(e) => Some(said(&describe, judge.caught(ctx, e)?)),
+            };
             results.push(TestResult {
                 file: file.to_string(),
                 name: name.clone(),
                 passed: error.is_none(),
-                error,
+                error: error.map(|e| bounded(e, MAX_ERROR)),
             });
+            names.push(name);
         }
         Ok(names)
     });
@@ -247,13 +273,25 @@ fn run_file(src: &AppSource, file: &str, code: &str, limit: Duration) -> Vec<Tes
     }
 }
 
-fn global<'js>(ctx: &Ctx<'js>, name: &str) -> rquickjs::Result<Function<'js>> {
-    ctx.globals().get(name)
+/// What a failed test says: the prelude's text of what it threw, or "the test failed".
+fn said<'js>(describe: &Function<'js>, thrown: JsValue<'js>) -> String {
+    describe
+        .call::<_, String>((thrown,))
+        .unwrap_or_else(|_| "the test failed".to_string())
 }
 
-fn fresh_database(migrations: &[Migration]) -> crate::Result<Connection> {
+/// `text` cut to `max` characters, the cut marked.
+fn bounded(text: String, max: usize) -> String {
+    match text.char_indices().nth(max) {
+        Some((at, _)) => format!("{}…", &text[..at]),
+        None => text,
+    }
+}
+
+/// A database with the migrations applied, within `time`.
+fn fresh_database(migrations: &[Migration], time: Duration) -> crate::Result<Connection> {
     let mut conn = data::open_in_memory()?;
-    data::migrate(&mut conn, migrations)?;
+    data::migrate_within(&mut conn, migrations, time.min(data::SETUP_TIME))?;
     Ok(conn)
 }
 

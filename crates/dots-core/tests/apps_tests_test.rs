@@ -217,3 +217,39 @@ test("a bad actor is refused", () => {
     assert!(report.passed(), "{report:?}");
     assert_eq!(report.results.len(), 4);
 }
+
+#[test]
+fn a_test_file_cannot_fake_a_pass() {
+    for code in [
+        // Replacing the runner's hooks and the API does nothing.
+        "globalThis.__names = () => '[\"fake\"]'; globalThis.__run = () => null;\n\
+         test(\"real\", () => assert.equal(1, 2));",
+        "try { assert.equal = () => {}; } catch {}\ntest(\"real\", () => assert.equal(1, 2));",
+        "try { globalThis.assert = { equal() {} }; } catch {}\n\
+         test(\"real\", () => assert.equal(1, 2));",
+        // A throw that is not an error still fails.
+        "test(\"real\", () => { throw { message: null }; });",
+        "test(\"real\", () => { throw 5; });",
+        // So does a rejected promise.
+        "test(\"real\", async () => { throw new Error(\"no\"); });",
+    ] {
+        let report = run_tests(&expenses_tested(code));
+        assert_eq!(report.results.len(), 1, "{code}: {report:?}");
+        assert!(!report.passed(), "{code}: {report:?}");
+        assert_eq!(report.results[0].name, "real", "{code}");
+    }
+}
+
+#[test]
+fn a_report_says_a_bounded_amount() {
+    let report = run_tests(&expenses_tested(
+        "for (let i = 0; i < 30; i++) \
+         test(\"t\" + i + \"x\".repeat(500), () => { throw new Error(\"e\".repeat(100000)); });",
+    ));
+    assert_eq!(report.results.len(), 30);
+    for r in &report.results {
+        assert!(r.name.chars().count() <= dots_core::apps::tests::MAX_NAME + 1);
+        assert!(r.error.as_ref().unwrap().chars().count() <= dots_core::apps::tests::MAX_ERROR + 1);
+    }
+    assert!(report.problem().unwrap().ends_with("… and 10 more"));
+}

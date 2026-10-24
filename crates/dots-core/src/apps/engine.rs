@@ -152,6 +152,30 @@ impl Judge {
             wrap(text)
         }
     }
+
+    /// The value the code threw, for a caller that judges it itself; `Err` when the error is a
+    /// timeout, a full memory, or not a throw.
+    pub fn caught<'js>(
+        &self,
+        ctx: &Ctx<'js>,
+        error: rquickjs::Error,
+    ) -> Result<Value<'js>, Failure> {
+        if self.timed_out.get() {
+            return Err(Failure::TimedOut);
+        }
+        match error {
+            rquickjs::Error::Exception => {
+                let thrown = ctx.catch();
+                if describe(&thrown).contains("out of memory") {
+                    Err(Failure::OutOfMemory)
+                } else {
+                    Ok(thrown)
+                }
+            }
+            rquickjs::Error::Allocation => Err(Failure::OutOfMemory),
+            other => Err(Failure::Thrown(other.to_string())),
+        }
+    }
 }
 
 /// The text of a thrown value: `Name: message` for an error, else the value as a string.
