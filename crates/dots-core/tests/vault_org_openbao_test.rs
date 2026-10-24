@@ -342,6 +342,49 @@ async fn a_bad_password_is_denied() {
 }
 
 #[tokio::test]
+async fn a_login_400_is_denied_only_when_it_says_the_details_were_refused() {
+    let fake = seeded().await;
+    let source = bao(login_settings(&fake, BaoAuth::Ldap));
+    for message in [
+        "Invalid Credentials",
+        "ldap operation failed: failed to bind as user",
+    ] {
+        fake.fail_logins(400, message);
+        let e = source.fetch(&login("alice", PASSWORD)).await.unwrap_err();
+        assert!(matches!(e, SourceError::Denied(_)), "{message}: {e:?}");
+    }
+    for message in ["ldap operation failed: unable to connect", "something else"] {
+        fake.fail_logins(400, message);
+        let e = source.fetch(&login("alice", PASSWORD)).await.unwrap_err();
+        assert_eq!(
+            e,
+            SourceError::Unreachable(format!("{} is not available (HTTP 400)", fake.address()))
+        );
+        assert_clean(&e);
+    }
+}
+
+#[tokio::test]
+async fn a_huge_lease_does_not_panic() {
+    let fake = seeded().await;
+    fake.add_user("userpass", "dave", PASSWORD, u64::MAX);
+    let source = bao(login_settings(&fake, BaoAuth::Userpass));
+    source.fetch(&login("dave", PASSWORD)).await.unwrap();
+    source.fetch(&login("dave", PASSWORD)).await.unwrap();
+    assert_eq!(fake.logins(), 1);
+}
+
+#[tokio::test]
+async fn an_answer_over_1_mib_is_too_large() {
+    let fake = seeded().await;
+    for failure in [Failure::TooLarge, Failure::TooLargeChunked] {
+        fake.fail_next(failure, 1);
+        let why = invalid(bao(settings(&fake)).fetch(&token()).await.unwrap_err());
+        assert!(why.ends_with("is too large"), "{failure:?}: {why}");
+    }
+}
+
+#[tokio::test]
 async fn a_bad_token_is_denied() {
     let fake = seeded().await;
     fake.revoke_token(TOKEN);

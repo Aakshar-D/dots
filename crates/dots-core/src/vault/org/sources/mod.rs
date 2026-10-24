@@ -206,11 +206,17 @@ pub fn http_client() -> reqwest::Client {
 
 /// `http_client` with another limit per request, for tests.
 pub fn http_client_with_timeout(timeout: Duration) -> reqwest::Client {
-    reqwest::Client::builder()
-        .timeout(timeout)
-        .redirect(reqwest::redirect::Policy::none())
+    let builder = || {
+        reqwest::Client::builder()
+            .timeout(timeout)
+            .redirect(reqwest::redirect::Policy::none())
+    };
+    // The machine's certificate store can fail to load (it holds only invalid certificates, say).
+    // Then the public roots alone are trusted, rather than the whole app panicking.
+    builder()
         .build()
-        .expect("an http client")
+        .or_else(|_| builder().tls_built_in_native_certs(false).build())
+        .expect("an http client with the public roots")
 }
 
 /// The segments of a mount or path setting: `team/dots` is `["team", "dots"]`. A slash at
@@ -412,7 +418,11 @@ fn collect_entries(
             continue;
         }
         if check_variable_name(&name).is_err() {
-            tracing::warn!("an org entry {name:?} is skipped: it is not a variable name");
+            // Only the length: a value pasted into a key position must not reach the logs.
+            tracing::warn!(
+                "an org entry whose name is {} characters long is skipped: it is not a variable name",
+                name.chars().count()
+            );
             continue;
         }
         let Field::Text(value) = field else {

@@ -27,6 +27,23 @@ const RENEW_EVERY: Duration = Duration::from_secs(60 * 60);
 /// A login token this close to its expiry is not used: the next fetch logs in again.
 const EXPIRY_MARGIN: Duration = Duration::from_secs(10);
 
+/// The longest lease believed from a login answer: one year.
+const MAX_LEASE_SECONDS: u64 = 365 * 24 * 60 * 60;
+
+/// The texts, lowercase, of a login's `errors` that mean the username or password was refused: a
+/// wrong password on `userpass` or `ldap`, or a failed bind as the user. Any other HTTP 400 from a
+/// login, such as an ldap directory that cannot be reached, is not a refusal.
+const LOGIN_REFUSED: [&str; 3] = [
+    "invalid username or password",
+    "invalid credentials",
+    "failed to bind as user",
+];
+
+#[derive(Deserialize)]
+struct LoginErrors {
+    errors: Option<Vec<String>>,
+}
+
 /// An org's OpenBao or Vault source. It keeps, in memory only, the token a login gave and when a
 /// token was last checked for renewal.
 pub struct OpenBao {
@@ -256,7 +273,33 @@ impl OpenBao {
         let what = format!("the login at auth/{mount}");
         match response.status().as_u16() {
             200..=299 => {}
-            400 | 401 | 403 => {
+            // OpenBao and Vault answer HTTP 400 both for a wrong password and when the directory
+            // behind an ldap mount cannot be reached or bound. Denied wipes the org's offline
+            // copy, so a 400 is a refusal only when its `errors` say so (one of the texts in
+            // `LOGIN_REFUSED`); any other 400 is trouble on the server's side, `Unreachable`.
+            400 => {
+                let code = response.status().as_u16();
+                let errors: Option<LoginErrors> =
+                    read_json(response, self.address(), &what).await.ok();
+                let refused = errors.is_some_and(|e| {
+                    e.errors.unwrap_or_default().iter().any(|text| {
+                        let text = text.to_lowercase();
+                        LOGIN_REFUSED.iter().any(|known| text.contains(known))
+                    })
+                });
+                return Err(if refused {
+                    SourceError::Denied(format!(
+                        "{} refused the username or password (HTTP {code})",
+                        self.address()
+                    ))
+                } else {
+                    SourceError::Unreachable(format!(
+                        "{} is not available (HTTP {code})",
+                        self.address()
+                    ))
+                });
+            }
+            401 | 403 => {
                 return Err(SourceError::Denied(format!(
                     "{} refused the username or password (HTTP {})",
                     self.address(),
@@ -282,7 +325,13 @@ impl OpenBao {
         })?;
         let expires = match auth.lease_duration.unwrap_or(0) {
             0 => None,
-            seconds => Some(Instant::now() + Duration::from_secs(seconds)),
+            seconds => {
+                // The lease is the server's number: cap it, and never overflow an `Instant`.
+                let lease = Duration::from_secs(seconds.min(MAX_LEASE_SECONDS));
+                Instant::now()
+                    .checked_add(lease)
+                    .or_else(|| Instant::now().checked_add(Duration::from_secs(3600)))
+            }
         };
         Ok(CachedToken {
             token,

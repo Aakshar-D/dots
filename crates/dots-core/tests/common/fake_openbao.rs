@@ -23,6 +23,10 @@ pub enum Failure {
     NotJson,
     /// No answer for a minute, so the client's timeout fires first.
     Hang,
+    /// A 200 with more than 1 MiB of JSON text and a `Content-Length`.
+    TooLarge,
+    /// The same, chunked: no `Content-Length`.
+    TooLargeChunked,
 }
 
 /// One request the fake saw.
@@ -54,6 +58,8 @@ struct Fake {
     users: HashMap<(String, String), User>,
     failures: VecDeque<Failure>,
     refuse_renewals: bool,
+    /// What every login answers instead, as a status and one `errors` text.
+    login_error: Option<(u16, String)>,
     issued: usize,
     seen: Vec<Seen>,
 }
@@ -154,6 +160,11 @@ impl FakeOpenBao {
         for _ in 0..count {
             fake.failures.push_back(failure);
         }
+    }
+
+    /// Every login answers `status` with `{"errors":[message]}` from now on.
+    pub fn fail_logins(&self, status: u16, message: &str) {
+        self.fake().login_error = Some((status, message.to_string()));
     }
 
     /// Makes `renew-self` fail with a 500 even for a renewable token.
@@ -298,6 +309,30 @@ async fn handle(
             tokio::time::sleep(Duration::from_secs(60)).await;
             return errors(503, &["Vault is sealed"]);
         }
+        Some(Failure::TooLarge) => {
+            let filler = "x".repeat(1024 * 1024 + 16);
+            return Json(json!({ "data": { "data": { "FILLER": filler } } })).into_response();
+        }
+        Some(Failure::TooLargeChunked) => {
+            let chunks = (0..70).map(|i| {
+                let head = if i == 0 {
+                    "{\"data\":{\"data\":{\"FILLER\":\""
+                } else {
+                    ""
+                };
+                Ok::<_, std::convert::Infallible>(Bytes::from(format!(
+                    "{head}{}",
+                    "x".repeat(16 * 1024)
+                )))
+            });
+            return Response::builder()
+                .status(StatusCode::OK)
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from_stream(futures_util::stream::iter(
+                    chunks,
+                )))
+                .unwrap();
+        }
         Some(Failure::NotJson) => {
             return (StatusCode::OK, "<html>a proxy page</html>").into_response()
         }
@@ -324,6 +359,9 @@ async fn handle(
     {
         if method != Method::POST {
             return errors(405, &[]);
+        }
+        if let Some((status, message)) = fake.login_error.clone() {
+            return errors(status, &[message.as_str()]);
         }
         let (mount, username) = (login.0.to_string(), login.1.to_string());
         let password = serde_json::from_slice::<Value>(&body)
