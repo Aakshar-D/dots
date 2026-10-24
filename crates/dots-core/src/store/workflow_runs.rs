@@ -150,6 +150,27 @@ impl Store {
         .await?)
     }
 
+    /// Whether a workflow run of `workflow_id` on `project_id` that a run of the thread
+    /// `root_run_id` started (`start_workflow`) has not ended.
+    pub async fn workflow_in_flight_from_thread(
+        &self,
+        workflow_id: &str,
+        project_id: &str,
+        root_run_id: &str,
+    ) -> Result<bool> {
+        let n: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM workflow_runs w JOIN runs r ON r.id = w.origin_run_id \
+             WHERE w.workflow_id = ? AND w.project_id = ? AND r.root_run_id = ? \
+             AND w.status IN ('running', 'waiting')",
+        )
+        .bind(workflow_id)
+        .bind(project_id)
+        .bind(root_run_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(n > 0)
+    }
+
     /// Whether the team has workflow runs that have not ended.
     pub async fn team_has_runs_in_flight(&self, team_id: &str) -> Result<bool> {
         let n: i64 = sqlx::query_scalar(

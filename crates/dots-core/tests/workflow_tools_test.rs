@@ -603,3 +603,58 @@ async fn a_reply_in_the_chat_of_a_step_that_has_ended_is_refused() {
     );
     t.rt.shutdown();
 }
+
+#[tokio::test]
+async fn a_chat_starts_a_workflow_on_a_project_once_until_that_run_ends() {
+    let t = start(json!([])).await;
+    let start_call = |id: &str| {
+        call(
+            id,
+            "start_workflow",
+            json!({"workflow": "Fix", "project": "Dots", "task": "Fix the icon."}),
+        )
+    };
+    let llm = Llm::start(vec![
+        start_call("c1"),
+        start_call("c2"),
+        text("Started once."),
+        start_call("c3"),
+        text("Started again."),
+    ])
+    .await;
+    let helper =
+        t.rt.create_dot(local_spec(&t, &llm.endpoint(), "helper"))
+            .await
+            .unwrap();
+    team_of(&t, &helper).await;
+    let chat =
+        t.rt.chat(&helper.id, "Please fix the icon.", None)
+            .await
+            .unwrap();
+    wait_status(t.rt.store(), &chat.id, RunStatus::Succeeded, 30).await;
+    let reqs = llm.requests();
+    assert_eq!(
+        tool_result(&reqs[1], "c1"),
+        "Workflow \"Fix\" started on \"Dots\"."
+    );
+    assert_eq!(
+        tool_result(&reqs[2], "c2"),
+        "Not started: \"Fix\" is already running on \"Dots\" from this chat."
+    );
+    let runs = t.rt.workflows().list(None, 10).await.unwrap();
+    assert_eq!(runs.len(), 1, "{runs:#?}");
+    // Once that run has ended, the same chat starts it again.
+    t.rt.workflows().stop(&runs[0].id).await.unwrap();
+    let reply =
+        t.rt.chat(&helper.id, "Again, please.", Some(&chat.id))
+            .await
+            .unwrap();
+    wait_status(t.rt.store(), &reply.id, RunStatus::Succeeded, 30).await;
+    let reqs = llm.requests();
+    assert_eq!(
+        tool_result(reqs.last().unwrap(), "c3"),
+        "Workflow \"Fix\" started on \"Dots\"."
+    );
+    assert_eq!(t.rt.workflows().list(None, 10).await.unwrap().len(), 2);
+    t.rt.shutdown();
+}

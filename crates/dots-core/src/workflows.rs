@@ -66,6 +66,9 @@ pub struct Workflows {
     wake: Notify,
     /// Held by each pass and each of the person's actions, so no two move one run at once.
     lock: Mutex<()>,
+    /// Held by `call_start` from its check that the chat has no such run in flight to the start,
+    /// so two calls made at once cannot both pass it.
+    start_lock: Mutex<()>,
 }
 
 /// The newest step run of `step_id`.
@@ -156,6 +159,7 @@ impl Workflows {
             clock,
             wake: Notify::new(),
             lock: Mutex::new(()),
+            start_lock: Mutex::new(()),
         })
     }
 
@@ -368,15 +372,17 @@ impl Workflows {
         };
         // The list was taken when the run was prepared: the workflow may since have stopped
         // naming the member, or the member left the team.
-        let still = match self.store.get_run(run_id).await {
-            Ok(run) => self.store.startable_workflows(&run.dot_id).await.ok(),
-            Err(_) => None,
+        let caller = self.store.get_run(run_id).await.ok();
+        let still = match &caller {
+            Some(run) => self.store.startable_workflows(&run.dot_id).await.ok(),
+            None => None,
         };
-        if !still.is_some_and(|l| l.iter().any(|w| w.workflow_id == workflow.workflow_id)) {
+        let may = still.is_some_and(|l| l.iter().any(|w| w.workflow_id == workflow.workflow_id));
+        let Some(caller) = caller.filter(|_| may) else {
             return Err(format!(
                 "There is no workflow named \"{name}\" that you may start."
             ));
-        }
+        };
         let Some(project) = workflow
             .projects
             .iter()
@@ -395,6 +401,23 @@ impl Workflows {
             Ok(id) => id,
             Err(e) => return Err(format!("Not started: {e}.")),
         };
+        // One run of a workflow on a project per chat at a time: a model that calls again, in a
+        // loop or in parallel, does not start the same work twice and spend its budget twice.
+        let _one_start = self.start_lock.lock().await;
+        match self
+            .store
+            .workflow_in_flight_from_thread(&workflow.workflow_id, &project_id, &caller.root_run_id)
+            .await
+        {
+            Ok(false) => {}
+            Ok(true) => {
+                return Err(format!(
+                    "Not started: \"{}\" is already running on \"{project}\" from this chat.",
+                    workflow.workflow
+                ))
+            }
+            Err(e) => return Err(format!("Not started: {e}.")),
+        }
         let started = self
             .start(StartRequest {
                 workflow_id: workflow.workflow_id.clone(),
