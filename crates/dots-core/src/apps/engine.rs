@@ -16,11 +16,16 @@ pub const MEMORY_LIMIT: usize = 64 * 1024 * 1024;
 /// The module name errors and stacks show for an app's logic.
 pub const LOGIC_FILE: &str = "logic.js";
 
-/// Takes the clock and random numbers out of the engine (spec section 9, item 1): `Date.now`,
-/// `Date()`, `new Date()` without a value and `Math.random` throw, naming what to use instead.
-/// `new Date(value)`, `Date.UTC` and `Date.parse` stay.
+/// Takes the clock, random numbers and garbage-collection timing out of the engine (spec section
+/// 9, item 1): `Date.now`, `Date()`, `new Date()` without a value and `Math.random` throw,
+/// naming what to use instead. `new Date(value)`, `Date.UTC` and `Date.parse` stay. `performance`
+/// (a clock), `WeakRef` and `FinalizationRegistry` (whose results follow garbage collection) are
+/// deleted.
 const LOCKDOWN: &str = r#"
 (() => {
+  delete globalThis.performance;
+  delete globalThis.WeakRef;
+  delete globalThis.FinalizationRegistry;
   const RealDate = Date;
   const refuse = (what, instead) => () => {
     throw new Error(`${what} is not available in an app: ${instead}`);
@@ -100,7 +105,8 @@ pub fn with_sandbox<R>(
 ) -> Result<R, Failure> {
     let runtime = Runtime::new().map_err(|e| Failure::Load(e.to_string()))?;
     runtime.set_memory_limit(limits.memory);
-    runtime.set_max_stack_size(1024 * 1024);
+    // 256 KB, not more: a call must fit any caller's thread, not only spawn_blocking's 2 MB.
+    runtime.set_max_stack_size(256 * 1024);
     let timed_out = Rc::new(Cell::new(false));
     let deadline = Instant::now() + limits.time;
     let flag = timed_out.clone();

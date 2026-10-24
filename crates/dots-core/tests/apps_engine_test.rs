@@ -91,6 +91,28 @@ fn a_date_from_a_value_still_works() {
 }
 
 #[test]
+fn no_performance_clock_or_gc_timing_is_reachable() {
+    let source = r#"export function f() {
+        return [typeof performance, typeof WeakRef, typeof FinalizationRegistry];
+    }"#;
+    assert_eq!(
+        call(source, "f", json!({})).unwrap(),
+        json!(["undefined", "undefined", "undefined"])
+    );
+}
+
+#[test]
+fn deep_recursion_is_a_thrown_error_not_a_crash() {
+    let source = "export function f() { function r(n) { return r(n + 1) + 1; } return r(0); }";
+    match call(source, "f", json!({})) {
+        Err(Failure::Thrown(text)) => {
+            assert!(text.contains("Maximum call stack size exceeded"), "{text}")
+        }
+        other => panic!("expected a thrown stack overflow, got {other:?}"),
+    }
+}
+
+#[test]
 fn nothing_outside_is_reachable() {
     let source = r#"export function f() {
         return [typeof fetch, typeof require, typeof std, typeof os, typeof process,
