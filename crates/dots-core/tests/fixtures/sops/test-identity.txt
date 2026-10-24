@@ -1,0 +1,4 @@
+# For tests only: a throwaway key that protects no real secret. Never use it elsewhere.
+# created: 2026-10-23T14:51:59-04:00
+# public key: age1a03d7rmd3zc7lpcxldf24f2g2gyhgphdwesczxmtf0vfvcjtcshseuswgt
+AGE-SECRET-KEY-1XG9UKRX2PLPTVJDV2N25F38GE8X8F80204YS73ZNVT4F7WQKJJHS0506ST

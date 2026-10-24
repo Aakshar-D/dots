@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use common::fake_openbao::{Failure, FakeOpenBao};
 use dots_core::vault::org::{
     http_client, http_client_with_timeout, source_for, BaoAuth, Fetched, OpenBao, OpenBaoSettings,
-    SopsSettings, Source, SourceCreds, SourceError, SourceSettings,
+    Source, SourceCreds, SourceError, SourceSettings,
 };
 use dots_core::vault::{MemorySecrets, SecretStore, MAX_SECRET_BYTES};
 use dots_core::Error;
@@ -720,22 +720,11 @@ async fn a_path_leaving_its_mount_is_refused_before_any_request() {
 // The source for a join code's settings.
 
 #[tokio::test]
-async fn source_for_gives_openbao_and_says_sops_is_not_built() {
+async fn source_for_gives_openbao() {
     let fake = seeded().await;
     let source = source_for(&SourceSettings::OpenBao(settings(&fake)), http_client());
     let fetched = source.fetch(&token()).await.unwrap();
     assert_eq!(fetched.policy, POLICY);
-
-    let sops = SourceSettings::Sops(SopsSettings {
-        location: "https://example.com/org.sops.json".into(),
-    });
-    let why = invalid(
-        source_for(&sops, http_client())
-            .fetch(&token())
-            .await
-            .unwrap_err(),
-    );
-    assert_eq!(why, "reading a SOPS file is not built yet");
 }
 
 #[test]

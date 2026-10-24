@@ -22,6 +22,6 @@ pub use policy::{parse_policy, AuditTarget, OrgPolicy, PersonalMode, PolicyError
 pub use row::OrgRow;
 pub use signed::{envelope, verify_policy};
 pub use sources::{
-    http_client, http_client_with_timeout, source_for, Fetched, Infisical, OpenBao, Source,
+    http_client, http_client_with_timeout, source_for, Fetched, Infisical, OpenBao, Sops, Source,
     SourceCreds, SourceError, POLICY_ENTRY,
 };

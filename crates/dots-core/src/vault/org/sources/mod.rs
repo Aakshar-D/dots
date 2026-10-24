@@ -10,6 +10,7 @@
 
 pub mod infisical;
 pub mod openbao;
+pub mod sops;
 
 use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
@@ -22,6 +23,7 @@ use zeroize::Zeroizing;
 
 pub use infisical::Infisical;
 pub use openbao::OpenBao;
+pub use sops::Sops;
 
 use super::{check_org_id, SourceSettings};
 use crate::vault::entries::check_variable_name;
@@ -183,17 +185,7 @@ pub fn source_for(settings: &SourceSettings, http: reqwest::Client) -> Box<dyn S
     match settings {
         SourceSettings::OpenBao(s) => Box::new(OpenBao::new(s.clone(), http)),
         SourceSettings::Infisical(s) => Box::new(Infisical::new(s.clone(), http)),
-        SourceSettings::Sops(_) => Box::new(NotBuilt("reading a SOPS file")),
-    }
-}
-
-/// A kind of source whose adapter is not built yet.
-struct NotBuilt(&'static str);
-
-#[async_trait]
-impl Source for NotBuilt {
-    async fn fetch(&self, _creds: &SourceCreds) -> std::result::Result<Fetched, SourceError> {
-        Err(SourceError::Invalid(format!("{} is not built yet", self.0)))
+        SourceSettings::Sops(s) => Box::new(Sops::new(s.clone(), http)),
     }
 }
 
