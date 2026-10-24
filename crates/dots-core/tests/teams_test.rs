@@ -89,6 +89,10 @@ async fn team_rules_and_conflicts() {
         Err(Error::Conflict(m)) if m == "a team named \"A\" already exists"
     ));
     assert!(matches!(
+        teams.create(&team("a", &[])).await,
+        Err(Error::Conflict(m)) if m == "a team named \"a\" already exists"
+    ));
+    assert!(matches!(
         teams.create(&team(" ", &[])).await,
         Err(Error::Invalid(m)) if m == "a team name must be 1 to 64 characters"
     ));
@@ -228,4 +232,30 @@ async fn each_change_is_announced() {
         seen,
         ["team true", "workflow true", "workflow true", "team true"]
     );
+}
+
+#[tokio::test]
+async fn project_and_workflow_names_are_unique_without_case() {
+    let (dir, store) = temp_store().await;
+    let helper = dot(&store, "helper").await;
+    let teams = Teams::new(store.clone(), new_bus());
+    let t = teams.create(&team("T", &[&helper])).await.unwrap();
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    teams
+        .add_project(&t.id, &project("Dots", &repo))
+        .await
+        .unwrap();
+    assert!(matches!(
+        teams.add_project(&t.id, &project("dots", &repo)).await,
+        Err(Error::Conflict(m)) if m == "the team has a project named \"dots\""
+    ));
+    teams
+        .create_workflow(&t.id, &flow("Fix", &helper))
+        .await
+        .unwrap();
+    assert!(matches!(
+        teams.create_workflow(&t.id, &flow("fix", &helper)).await,
+        Err(Error::Conflict(m)) if m == "the team has a workflow named \"fix\""
+    ));
 }
