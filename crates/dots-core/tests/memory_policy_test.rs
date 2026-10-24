@@ -137,7 +137,12 @@ async fn migration_0012_gives_every_policy_that_is_not_custom_its_memory() {
     want.rules
         .extend(APP_TOOLS.map(|tool| Rule::new(tool, Action::Allow)));
     assert_eq!(store.get_dot("D3").await.unwrap().spec.policy, want);
-    assert_eq!(store.get_dot("D4").await.unwrap().spec.policy, custom);
+    // 0013 gives Custom policies `App` and `ProposeApp` too, as 0007 did `Context`.
+    let mut custom_then = custom.clone();
+    custom_then
+        .rules
+        .extend(APP_TOOLS.map(|tool| Rule::new(tool, Action::Allow)));
+    assert_eq!(store.get_dot("D4").await.unwrap().spec.policy, custom_then);
     assert!(CHECK_IN_TOOLS
         .iter()
         .all(|t| custom.rules.iter().any(|r| r.tool == *t)));

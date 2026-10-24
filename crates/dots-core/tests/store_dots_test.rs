@@ -369,7 +369,12 @@ async fn migration_0007_lets_every_stored_policy_read_context() {
         assert!(dot.spec.use_global_instructions);
         assert!(dot.spec.uses.context.is_empty());
     }
-    // A rule that names `Context` already is the person's: nothing is added.
+    // A rule that names `Context` already is the person's: no `Context` rule is added. 0013 adds
+    // `App` and `ProposeApp`, to a Custom policy too.
+    denies.rules.extend(
+        dots_core::policy::APP_TOOLS
+            .map(|tool| dots_core::policy::Rule::new(tool, dots_core::policy::Action::Allow)),
+    );
     assert_eq!(store.get_dot("D3").await.unwrap().spec.policy, denies);
 }
 

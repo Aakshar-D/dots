@@ -146,6 +146,21 @@ fn a_tool_named_write_is_refused() {
     );
 }
 
+#[test]
+fn a_call_without_its_tool_or_writes_flag_matches_no_allow_rule() {
+    use dots_core::apps::rule_spec_matches;
+    let no_tool = json!({"app": "projects", "writes": false});
+    let no_writes = json!({"app": "projects", "tool": "get_task"});
+    assert_eq!(rule_spec_matches("projects.get_task", &no_tool), None);
+    assert_eq!(rule_spec_matches("projects.write", &no_writes), None);
+    let p = with_rules(Preset::Trusted, &[("App(projects.get_task)", Action::Deny)]);
+    assert_eq!(p.resolve("App", &no_tool), Action::Deny);
+    assert_eq!(
+        rule_spec_matches("projects", &call("projects", "get_task", false)),
+        Some(true)
+    );
+}
+
 #[tokio::test]
 async fn stored_dots_get_the_app_rules_once() {
     let (dir, store) = common::temp_store().await;

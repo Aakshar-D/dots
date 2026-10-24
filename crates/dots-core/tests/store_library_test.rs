@@ -566,6 +566,8 @@ async fn migration_0006_moves_each_dots_servers_into_the_library() {
             Rule::new("mcp__sf__query", Action::Allow),
             Rule::new("Skill", Action::Allow),
             Rule::new("Context", Action::Allow),
+            Rule::new("App", Action::Allow),
+            Rule::new("ProposeApp", Action::Allow),
         ]
     );
     assert_eq!(d1.policy.mcp_default, Action::Ask);
@@ -580,6 +582,8 @@ async fn migration_0006_moves_each_dots_servers_into_the_library() {
             Rule::new("mcp__sf-2", Action::Deny),
             Rule::new("Skill", Action::Allow),
             Rule::new("Context", Action::Allow),
+            Rule::new("App", Action::Allow),
+            Rule::new("ProposeApp", Action::Allow),
         ]
     );
     let d4 = dot("D4").await;
@@ -614,6 +618,8 @@ async fn migration_0006_moves_each_dots_servers_into_the_library() {
             Rule::new("mcp__*", Action::Ask),
             Rule::new("Skill", Action::Allow),
             Rule::new("Context", Action::Allow),
+            Rule::new("App", Action::Allow),
+            Rule::new("ProposeApp", Action::Allow),
         ]
     );
     assert_eq!(d6.uses, Uses::default());
@@ -660,6 +666,8 @@ async fn migration_0006_moves_each_dots_servers_into_the_library() {
             Rule::new("mcp__*", Action::Ask),
             Rule::new("Skill", Action::Allow),
             Rule::new("Context", Action::Allow),
+            Rule::new("App", Action::Allow),
+            Rule::new("ProposeApp", Action::Allow),
         ]
     );
 }
@@ -821,11 +829,21 @@ async fn migration_0006_allows_skill_unless_a_rule_names_it() {
     );
     assert_eq!(
         rules("D2").await,
-        [Rule::new("Skill", Action::Deny), context.clone()]
+        [
+            Rule::new("Skill", Action::Deny),
+            context.clone(),
+            Rule::new("App", Action::Allow),
+            Rule::new("ProposeApp", Action::Allow),
+        ]
     );
     assert_eq!(
         rules("D3").await,
-        [Rule::new("Skill(pdf)", Action::Ask), context]
+        [
+            Rule::new("Skill(pdf)", Action::Ask),
+            context,
+            Rule::new("App", Action::Allow),
+            Rule::new("ProposeApp", Action::Allow),
+        ]
     );
 }
 

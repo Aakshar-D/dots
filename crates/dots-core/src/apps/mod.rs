@@ -52,17 +52,12 @@ pub fn check_rule_spec(spec: &str) -> std::result::Result<(), String> {
 }
 
 /// Whether the rule argument `spec` covers the app call whose policy input is `input`; `None`
-/// for a call without an `app`.
+/// for a call without its `app`, `tool` or `writes` (deny and ask rules then match, allow rules
+/// do not).
 pub fn rule_spec_matches(spec: &str, input: &serde_json::Value) -> Option<bool> {
     let app = input.get("app")?.as_str()?;
-    let tool = input
-        .get("tool")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default();
-    let writes = input
-        .get("writes")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(true);
+    let tool = input.get("tool")?.as_str()?;
+    let writes = input.get("writes")?.as_bool()?;
     Some(match spec.trim().split_once('.') {
         None => spec.trim() == app,
         Some((a, WRITES)) => a == app && writes,

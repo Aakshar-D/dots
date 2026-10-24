@@ -148,7 +148,12 @@ async fn migration_0008_lets_every_policy_that_is_not_custom_check_in() {
     want.rules
         .extend(APP_TOOLS.map(|tool| Rule::new(tool, Action::Allow)));
     assert_eq!(store.get_dot("D3").await.unwrap().spec.policy, want);
-    // A Custom policy is the person's own: it is left as it was.
+    // A Custom policy is the person's own: no check-in rule is added. 0013 gives it `App` and
+    // `ProposeApp`, as 0007 did `Context`.
+    let mut custom = custom;
+    custom
+        .rules
+        .extend(APP_TOOLS.map(|tool| Rule::new(tool, Action::Allow)));
     assert_eq!(store.get_dot("D4").await.unwrap().spec.policy, custom);
     store.close().await;
     // Opening again adds nothing twice.
