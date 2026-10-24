@@ -37,8 +37,9 @@ pub const MAX_HANDOFF_SUMMARY: usize = 4_000;
 /// How often the loop passes while nothing wakes it.
 pub const TICK: Duration = Duration::from_secs(30);
 /// The most one tick counts into a run's `active_ms`. The loop passes at least every `TICK`, so
-/// a longer gap (the app was closed, the machine slept) is time nobody was counting.
-const MAX_TICK_GAIN: Duration = Duration::from_secs(60);
+/// a longer gap (the app was closed, the machine slept) is time nobody was counting. A pass that
+/// really took longer than about `TICK` drops the excess: an undercount, never an overcount.
+const MAX_TICK_GAIN: Duration = Duration::from_secs(2 * TICK.as_secs());
 
 /// What starts a workflow run.
 #[derive(Debug, Clone, PartialEq)]

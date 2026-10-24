@@ -905,6 +905,9 @@ async fn the_clock_counts_only_while_nobody_waits_on_the_person() {
     assert_eq!(wr.active_ms, 240_000);
 
     // Past the minutes limit, the next step waits.
+    // The engine repeats its last act: set the gate again for the second run's step.
+    w.engine
+        .set(&w.dev.spec.name, vec![Act::Gate, Act::Finish("Fixed.")]);
     let second = w.start(&flow).await;
     w.until(&second.id, |wr| !wr.steps.is_empty()).await;
     w.run_clock(&clock, start + chrono::TimeDelta::minutes(80))
