@@ -153,8 +153,7 @@ pub fn call(conn: &Rc<RefCell<Connection>>, call: Call<'_>) -> Result<Outcome, C
         c.execute_batch("BEGIN IMMEDIATE").map_err(db)?;
         // Set after BEGIN, since SQLite will not begin a write transaction under query_only.
         if let Err(e) = c.pragma_update(None, "query_only", read_only) {
-            let _ = c.execute_batch("ROLLBACK");
-            return Err(db(e));
+            return Err(end(&c, db(e)));
         }
         c.total_changes()
     };
@@ -163,7 +162,8 @@ pub fn call(conn: &Rc<RefCell<Connection>>, call: Call<'_>) -> Result<Outcome, C
         ids: Vec::new(),
         starts: Vec::new(),
         dots: call.dots.clone(),
-        gate: call.start.clone(),
+        // Starting a dot is a write: a tool that does not write gets no `dots.start`.
+        gate: call.start.clone().filter(|_| !read_only),
     }));
     let actor = serde_json::to_value(&call.actor).unwrap_or(Value::Null);
     let now = call.now.clone();
@@ -183,6 +183,8 @@ pub fn call(conn: &Rc<RefCell<Connection>>, call: Call<'_>) -> Result<Outcome, C
     } else {
         result
     };
+    // The code's error text reaches the caller and the call log: bound it like a result.
+    let result = result.map_err(|e| bounded(e, limit));
     let reset = conn.borrow().pragma_update(None, "query_only", false);
     let checked = result.map_err(CallError::Failed).and_then(|value| {
         reset.map_err(db)?;
@@ -197,7 +199,11 @@ pub fn call(conn: &Rc<RefCell<Connection>>, call: Call<'_>) -> Result<Outcome, C
     match checked {
         Ok(result) => {
             let changes = c.total_changes() - before;
-            c.execute_batch("COMMIT").map_err(db)?;
+            if let Err(e) = c.execute_batch("COMMIT") {
+                // A COMMIT that fails (a deferred constraint, a busy database) leaves the
+                // transaction open: end it, or a later call would publish these writes.
+                return Err(end(&c, db(e)));
+            }
             let state = state.borrow();
             Ok(Outcome {
                 result,
@@ -206,10 +212,41 @@ pub fn call(conn: &Rc<RefCell<Connection>>, call: Call<'_>) -> Result<Outcome, C
                 changes,
             })
         }
-        Err(e) => {
-            let _ = c.execute_batch("ROLLBACK");
-            Err(e)
+        Err(e) => Err(end(&c, e)),
+    }
+}
+
+/// Ends the call's transaction after `e` with a ROLLBACK. When SQLite has ended it already, `e`
+/// stands. When the rollback fails or leaves it open, the error says so, and the connection's
+/// next BEGIN fails rather than publish these writes.
+fn end(c: &Connection, e: CallError) -> CallError {
+    if c.is_autocommit() {
+        return e;
+    }
+    match c.execute_batch("ROLLBACK") {
+        Ok(()) if c.is_autocommit() => e,
+        Ok(()) => CallError::Db(format!("{e}; the transaction is still open")),
+        Err(r) => CallError::Db(format!("{e}; the rollback failed: {r}")),
+    }
+}
+
+/// `failure` with the text the app's code chose (a thrown error, a load error) cut to `limit`
+/// bytes and its full length said.
+fn bounded(failure: Failure, limit: usize) -> Failure {
+    let cut = |text: String| {
+        if text.len() <= limit {
+            return text;
         }
+        let mut at = limit;
+        while !text.is_char_boundary(at) {
+            at -= 1;
+        }
+        format!("{}… ({} bytes)", &text[..at], text.len())
+    };
+    match failure {
+        Failure::Thrown(text) => Failure::Thrown(cut(text)),
+        Failure::Load(text) => Failure::Load(cut(text)),
+        other => other,
     }
 }
 
@@ -329,12 +366,14 @@ fn start(
     if !state.dots.iter().any(|d| d.id == dot_id) {
         return Err(format!("no dot {dot_id} uses this app"));
     }
-    let len = message.trim().chars().count();
+    let message = message.trim().to_string();
+    let len = message.chars().count();
     if len == 0 || len > MAX_START_MESSAGE {
         return Err(format!(
             "the message must be 1 to {MAX_START_MESSAGE} characters"
         ));
     }
+    let tag = tag.trim().to_string();
     let tag_len = tag.chars().count();
     if tag_len == 0 || tag_len > MAX_START_TAG {
         return Err(format!("the tag must be 1 to {MAX_START_TAG} characters"));

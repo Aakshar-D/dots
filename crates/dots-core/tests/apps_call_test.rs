@@ -502,3 +502,94 @@ fn runaway_sql_stops_at_the_calls_time_limit() {
     .unwrap();
     assert_eq!(count(&app), 1);
 }
+
+#[test]
+fn a_commit_that_fails_ends_the_transaction() {
+    let app = with_tool(
+        app("export function dangle(input, ctx) { \
+             ctx.db.exec(\"INSERT INTO child VALUES ('nobody')\"); return 1; }"),
+        "dangle",
+        true,
+    );
+    app.conn
+        .borrow()
+        .execute_batch(
+            "CREATE TABLE parent (id TEXT PRIMARY KEY); \
+             CREATE TABLE child (parent TEXT REFERENCES parent(id) DEFERRABLE INITIALLY DEFERRED);",
+        )
+        .unwrap();
+    let err = run(&app, "dangle", json!({}), dot()).unwrap_err();
+    assert_eq!(err, CallError::Db("FOREIGN KEY constraint failed".into()));
+    assert!(app.conn.borrow().is_autocommit());
+    assert!(
+        data::query(&app.conn.borrow(), "SELECT parent FROM child", &[])
+            .unwrap()
+            .is_empty()
+    );
+    // The app is not stuck: the next call runs and commits.
+    run(
+        &app,
+        "add_expense",
+        json!({"item": "Coffee", "amount": 4.5, "on": "2026-10-22"}),
+        dot(),
+    )
+    .unwrap();
+    assert_eq!(count(&app), 1);
+}
+
+#[test]
+fn a_start_keeps_its_message_and_tag_trimmed() {
+    let app = app("export function f(input, ctx) { \
+                   return ctx.dots.start('d1', ' '.repeat(100000) + 'Check the books. ', ' books '); }");
+    let gate = StartGate {
+        budget: 5,
+        ..StartGate::default()
+    };
+    let out = run_with(&app, "f", json!({}), dot(), Some(gate), Limits::default()).unwrap();
+    assert_eq!(out.starts.len(), 1);
+    assert_eq!(out.starts[0].message, "Check the books.");
+    assert_eq!(out.starts[0].tag, "books");
+}
+
+#[test]
+fn a_tool_that_does_not_write_cannot_start_a_dot() {
+    let app = with_tool(
+        app(
+            "export function peek(input, ctx) { return typeof ctx.dots.start; } \
+             export function f(input, ctx) { return typeof ctx.dots.start; }",
+        ),
+        "peek",
+        false,
+    );
+    let gate = StartGate {
+        budget: 5,
+        ..StartGate::default()
+    };
+    let read = run_with(
+        &app,
+        "peek",
+        json!({}),
+        dot(),
+        Some(gate.clone()),
+        Limits::default(),
+    );
+    assert_eq!(read.unwrap().result, json!("undefined"));
+    // A tool that writes, with the same gate, has it.
+    let write = run_with(&app, "f", json!({}), dot(), Some(gate), Limits::default());
+    assert_eq!(write.unwrap().result, json!("function"));
+}
+
+#[test]
+fn a_thrown_error_is_bounded_like_a_result() {
+    let app = app("export function f() { throw new Error('x'.repeat(5000000)); }");
+    let err = run(&app, "f", json!({}), dot()).unwrap_err();
+    let CallError::Failed(Failure::Thrown(text)) = err else {
+        panic!("not a thrown error");
+    };
+    assert!(text.len() < MAX_DOT_RESULT + 64, "{}", text.len());
+    assert!(
+        text.ends_with("… (5000007 bytes)"),
+        "{}",
+        &text[text.len() - 40..]
+    );
+}
