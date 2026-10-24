@@ -94,6 +94,14 @@ impl Manifest {
         let mut seen = std::collections::BTreeSet::new();
         for tool in &self.tools {
             check_tool_name(&tool.name)?;
+            if tool.name == super::WRITES {
+                return invalid(format!(
+                    "app.json: the tool name {:?} is taken: App({}.{}) names the tools that write",
+                    super::WRITES,
+                    self.name,
+                    super::WRITES
+                ));
+            }
             if !seen.insert(tool.name.as_str()) {
                 return invalid(format!("app.json: the tool {} is listed twice", tool.name));
             }

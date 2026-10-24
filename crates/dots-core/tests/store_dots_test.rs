@@ -324,13 +324,15 @@ async fn migration_0007_lets_every_stored_policy_read_context() {
         .into();
     before.run(&pool).await.unwrap();
     // A policy as 0006 left it: the preset's rules without `Context`, without the check-in
-    // tools, which 0008 adds after it, and without `Memory`, which 0012 adds after them.
+    // tools, which 0008 adds after it, without `Memory`, which 0012 adds after them, and
+    // without `App` and `ProposeApp`, which 0013 adds after that.
     let old = |preset: Preset| {
         let mut p = Policy::preset(preset);
         p.rules.retain(|r| {
             r.tool != "Context"
                 && r.tool != "Memory"
                 && !dots_core::policy::CHECK_IN_TOOLS.contains(&r.tool.as_str())
+                && !dots_core::policy::APP_TOOLS.contains(&r.tool.as_str())
         });
         p
     };

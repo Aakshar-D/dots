@@ -19,3 +19,11 @@ CREATE TABLE app_calls (
     at       TEXT NOT NULL
 );
 CREATE INDEX app_calls_app ON app_calls(app_id, at);
+
+-- Every preset allows `App` and `ProposeApp` (section 6). The policy of each dot whose preset
+-- is not Custom gets the rules when the store opens (`store/upgrade.rs`, `finish_0013`), after
+-- 0012's `Memory`. The rows wait here, and the table is dropped once they are done.
+CREATE TABLE upgrade_0013 (
+    dot_id TEXT PRIMARY KEY REFERENCES dots(id) ON DELETE CASCADE
+);
+INSERT INTO upgrade_0013 (dot_id) SELECT id FROM dots;

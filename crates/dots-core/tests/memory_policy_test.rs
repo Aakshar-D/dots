@@ -3,7 +3,9 @@
 //! alone, the CLI never sees its rules, and migration 0012 gives it to stored policies that are
 //! not Custom.
 
-use dots_core::policy::{Action, Policy, Preset, Rule, CHECK_IN_TOOLS, MEMORY_RULE, MEMORY_TOOL};
+use dots_core::policy::{
+    Action, Policy, Preset, Rule, APP_TOOLS, CHECK_IN_TOOLS, MEMORY_RULE, MEMORY_TOOL,
+};
 use dots_core::store::Store;
 use serde_json::json;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
@@ -13,11 +15,16 @@ fn every_preset_allows_memory_after_the_check_in_tools() {
     assert_eq!(MEMORY_TOOL, "Memory");
     for preset in Preset::ALL {
         let p = Policy::preset(*preset);
-        let tail: Vec<&str> = p.rules[p.rules.len() - 4..]
+        // `App` and `ProposeApp` follow it (app library spec section 6).
+        let tail: Vec<&str> = p.rules[p.rules.len() - 6..]
             .iter()
             .map(|r| r.tool.as_str())
             .collect();
-        assert_eq!(tail, ["Notify", "Ask", "FollowUp", "Memory"], "{preset:?}");
+        assert_eq!(
+            tail,
+            ["Notify", "Ask", "FollowUp", "Memory", "App", "ProposeApp"],
+            "{preset:?}"
+        );
         for input in [json!({"text": "x"}), json!({"id": "x"}), json!({})] {
             assert_eq!(p.resolve("Memory", &input), Action::Allow, "{preset:?}");
         }
@@ -84,10 +91,12 @@ async fn migration_0012_gives_every_policy_that_is_not_custom_its_memory() {
         .collect::<Vec<_>>()
         .into();
     before.run(&pool).await.unwrap();
-    // A policy as 0010 left it: the preset's rules without `Memory`.
+    // A policy as 0010 left it: the preset's rules without `Memory`, and without `App` and
+    // `ProposeApp`, which 0013 adds after it.
     let old = |preset: Preset| {
         let mut p = Policy::preset(preset);
-        p.rules.retain(|r| r.tool != "Memory");
+        p.rules
+            .retain(|r| r.tool != "Memory" && !APP_TOOLS.contains(&r.tool.as_str()));
         p
     };
     let mut asks = old(Preset::Trusted);
@@ -123,8 +132,11 @@ async fn migration_0012_gives_every_policy_that_is_not_custom_its_memory() {
             "{id}"
         );
     }
-    // The person's own rule is kept, and no allow is added.
-    assert_eq!(store.get_dot("D3").await.unwrap().spec.policy, asks);
+    // The person's own rule is kept, and no `Memory` allow is added; 0013 adds its own.
+    let mut want = asks;
+    want.rules
+        .extend(APP_TOOLS.map(|tool| Rule::new(tool, Action::Allow)));
+    assert_eq!(store.get_dot("D3").await.unwrap().spec.policy, want);
     assert_eq!(store.get_dot("D4").await.unwrap().spec.policy, custom);
     assert!(CHECK_IN_TOOLS
         .iter()

@@ -7,7 +7,8 @@
 //! 0008 (check-ins spec section 8): `finish_0008` last gives each dot listed in `upgrade_0008`
 //! whose preset is not Custom an allow rule for each check-in tool that no rule names, and
 //! drops that table. 0012 (dot memory spec section 3): `finish_0012` does the same for
-//! `Memory` with `upgrade_0012`.
+//! `Memory` with `upgrade_0012`. 0013 (app library spec section 6): `finish_0013` for `App` and
+//! `ProposeApp` with `upgrade_0013`.
 
 use std::collections::BTreeMap;
 
@@ -384,6 +385,12 @@ pub(super) async fn finish_0008(pool: &SqlitePool) -> Result<()> {
 /// the list.
 pub(super) async fn finish_0012(pool: &SqlitePool) -> Result<()> {
     give_allow_rules(pool, "0012", &[MEMORY_TOOL]).await
+}
+
+/// Gives the policy of each dot that migration 0013 listed the `App` and `ProposeApp` allow
+/// rules (app library spec section 6), and drops the list.
+pub(super) async fn finish_0013(pool: &SqlitePool) -> Result<()> {
+    give_allow_rules(pool, "0013", &crate::policy::APP_TOOLS).await
 }
 
 /// Gives the policy of each dot listed in `upgrade_<migration>` an allow rule for each of

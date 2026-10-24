@@ -262,6 +262,14 @@
         {
           "action": "allow",
           "tool": "Memory"
+        },
+        {
+          "action": "allow",
+          "tool": "App"
+        },
+        {
+          "action": "allow",
+          "tool": "ProposeApp"
         }
       ]
     },
@@ -410,6 +418,14 @@
           {
             "action": "allow",
             "tool": "Memory"
+          },
+          {
+            "action": "allow",
+            "tool": "App"
+          },
+          {
+            "action": "allow",
+            "tool": "ProposeApp"
           }
         ]
       },
@@ -559,6 +575,14 @@
         {
           "action": "allow",
           "tool": "Memory"
+        },
+        {
+          "action": "allow",
+          "tool": "App"
+        },
+        {
+          "action": "allow",
+          "tool": "ProposeApp"
         }
       ]
     },
@@ -1512,6 +1536,14 @@
         {
           "action": "allow",
           "tool": "Memory"
+        },
+        {
+          "action": "allow",
+          "tool": "App"
+        },
+        {
+          "action": "allow",
+          "tool": "ProposeApp"
         }
       ]
     },
