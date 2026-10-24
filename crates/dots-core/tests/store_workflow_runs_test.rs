@@ -2,8 +2,9 @@ mod common;
 
 use common::{init_repo, spec, temp_store};
 use dots_core::model::{
-    Handoff, MemberSpec, NewRun, NewWorkflowRun, ProjectSpec, StepRunChange, StepRunStatus,
-    TeamSpec, TriggerKind, WaitingOn, WorkflowRunChange, WorkflowRunStatus, WorkflowTrigger,
+    Handoff, MemberSpec, NewRun, NewWorkflowRun, ProjectSpec, RunStatus, StepRunChange,
+    StepRunStatus, TeamSpec, TriggerKind, WaitingOn, WorkflowRunChange, WorkflowRunStatus,
+    WorkflowTrigger,
 };
 use dots_core::store::Store;
 use dots_core::workflow::{Budget, Definition, Step, StepKind, Trigger};
@@ -298,4 +299,53 @@ async fn a_run_continuing_a_step_that_has_ended_gets_no_step() {
         .await
         .unwrap();
     assert!(!f.store.in_ended_step_thread(&plain).await.unwrap());
+}
+
+#[tokio::test]
+async fn a_workflow_run_waits_on_the_person_through_a_parked_run_an_approval_or_a_question() {
+    let f = fixture().await;
+    let wr = f.store.create_workflow_run(&f.new).await.unwrap();
+    let step = f
+        .store
+        .create_step_run(&wr.id, "a", 1, StepRunStatus::Running)
+        .await
+        .unwrap();
+    let mut new = NewRun::new(&f.dot, TriggerKind::Workflow);
+    new.workflow_step_run_id = Some(step.id.clone());
+    let run = f.store.create_run(&new).await.unwrap();
+    let waits = || f.store.workflow_waits_on_person(&wr.id);
+    assert!(!waits().await.unwrap());
+    // A run parked on an approval.
+    f.store
+        .finish_run(&run.id, RunStatus::AwaitingApproval, None, None)
+        .await
+        .unwrap();
+    assert!(waits().await.unwrap());
+    f.store
+        .finish_run(&run.id, RunStatus::Succeeded, Some("done"), None)
+        .await
+        .unwrap();
+    assert!(!waits().await.unwrap());
+    // An approval asked and not yet decided.
+    let approval = f
+        .store
+        .create_approval(&run.id, "Bash", &json!({"command": "git push"}))
+        .await
+        .unwrap();
+    assert!(waits().await.unwrap());
+    f.store
+        .decide_approval(&approval.id, false, None)
+        .await
+        .unwrap();
+    assert!(!waits().await.unwrap());
+    // A question neither answered nor dismissed.
+    let question = f
+        .store
+        .add_question(&f.dot, &run.id, "Which icon set?", None)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(waits().await.unwrap());
+    f.store.dismiss_question(&question.id).await.unwrap();
+    assert!(!waits().await.unwrap());
 }

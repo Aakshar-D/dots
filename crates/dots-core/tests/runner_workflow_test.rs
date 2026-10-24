@@ -185,6 +185,26 @@ async fn ordinary_runs_wait_only_for_ordinary_runs() {
 }
 
 #[tokio::test]
+async fn an_ordinary_run_does_not_wait_for_a_running_workflow_run() {
+    let (dir, store) = temp_store().await;
+    let runner = runner_with(&store, &dir, slow(), 4);
+    runner.spawn_dispatcher(CancellationToken::new());
+    let dev = folder_dot(&store, &dir, "dev").await;
+    let step = step_run(&store, &dir, &dev).await;
+    let flow = queue(&runner, &dev, Some(&step)).await;
+    wait_status(&store, &flow.id, RunStatus::Running, 5).await;
+    let plain = queue(&runner, &dev, None).await;
+    wait_status(&store, &plain.id, RunStatus::Running, 5).await;
+    // Both at once: the workflow run is still running when the ordinary one starts.
+    assert_eq!(
+        store.get_run(&flow.id).await.unwrap().status,
+        RunStatus::Running
+    );
+    wait_status(&store, &flow.id, RunStatus::Succeeded, 5).await;
+    wait_status(&store, &plain.id, RunStatus::Succeeded, 5).await;
+}
+
+#[tokio::test]
 async fn the_concurrency_limit_still_holds_for_workflow_runs() {
     let (dir, store) = temp_store().await;
     let runner = runner_with(&store, &dir, slow(), 1);

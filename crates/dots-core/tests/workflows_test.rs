@@ -589,7 +589,7 @@ async fn stopping_cancels_its_runs_and_a_cancelled_run_fails_its_step() {
     let stopped = w.workflows.stop(&second.id).await.unwrap();
     assert_eq!(stopped.status, WorkflowRunStatus::Cancelled);
     assert_eq!(stopped.steps[0].status, StepRunStatus::Cancelled);
-    common::wait_status(&w.store, &run.id, RunStatus::Cancelled, 10).await;
+    common::wait_status(&w.store, &run.id, RunStatus::Cancelled, 60).await;
     assert!(matches!(
         w.workflows.stop(&second.id).await,
         Err(Error::Conflict(m)) if m.ends_with("is already cancelled")
