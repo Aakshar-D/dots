@@ -51,6 +51,11 @@ const PENDING_TEXT: &str = "waiting for the admin to add this PC's key";
 /// timers do not wait.
 pub const RETRY_AFTER: Duration = Duration::minutes(5);
 
+/// How far ahead of the clock a saved copy's fetch time may be at load. Further ahead, the clock
+/// was wrong when the copy was written (or has been put back since), so `offline_hours` can't be
+/// counted from it and the copy is treated as expired.
+const COPY_CLOCK_SKEW: Duration = Duration::minutes(5);
+
 /// Where an org stands. It is tagged `status`, so an `OrgSummary` reads
 /// `"status": "offline", "until": "…"`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -511,14 +516,15 @@ impl Orgs {
         if !has_row && !has_creds && !self.read().contains_key(org_id) {
             return Err(not_joined(org_id));
         }
+        // The values go first: a step below that fails must not leave them served.
+        self.write().remove(org_id);
+        self.failed_at().remove(org_id);
         let (dir, id) = (self.inner.dir.clone(), org_id.to_string());
         blocking(move || delete_offline(&dir, &id)).await?;
         SourceCreds::forget(self.inner.secrets.as_ref(), org_id)?;
         if has_row {
             self.inner.store.remove_org(org_id).await?;
         }
-        self.write().remove(org_id);
-        self.failed_at().remove(org_id);
         Ok(())
     }
 
@@ -713,15 +719,20 @@ impl Orgs {
                 joined.copy_until = None;
             }
             let was_expired = joined.status == OrgStatus::Expired;
+            let was_revoked = joined.status == OrgStatus::Revoked;
             joined.status = match error {
                 Some(error) => OrgStatus::PolicyInvalid { error },
+                None if was_revoked => OrgStatus::Revoked,
                 None if kept.is_some() => OrgStatus::Offline {
                     until: kept.map(stamp),
                 },
                 None if expired || was_expired => OrgStatus::Expired,
                 None => OrgStatus::Offline { until: None },
             };
-            joined.reason = reason;
+            // An unreachable source says nothing new about a revocation: keep its reason.
+            if !was_revoked || joined.status != OrgStatus::Revoked {
+                joined.reason = reason;
+            }
             expired
         });
         if expired == Some(true) {
@@ -740,6 +751,9 @@ impl Orgs {
         if !matches!(self.read().get(org_id), Some(Slot::Joined(j)) if due(j)) {
             return;
         }
+        // A change to the org holds its lock and settles the org itself; the file is only
+        // deleted by whoever has the lock, so a fresh copy is never taken for an old one.
+        let guard = self.try_lock(org_id);
         let expired = self.with_joined(org_id, |joined| {
             if !due(joined) {
                 return false;
@@ -751,7 +765,7 @@ impl Orgs {
             }
             true
         });
-        if expired == Some(true) {
+        if expired == Some(true) && guard.is_some() {
             self.delete_copy(org_id).await;
         }
     }
@@ -846,6 +860,8 @@ impl Orgs {
             Ok(copy) => copy,
             Err(e) => {
                 tracing::warn!("org {:?}: its offline copy is not used: {e}", row.id);
+                let id = row.id.clone();
+                self.delete_copy(&id).await;
                 None
             }
         };
@@ -858,6 +874,8 @@ impl Orgs {
         {
             Ok(policy) => policy,
             Err(e) => {
+                let id = row.id.clone();
+                self.delete_copy(&id).await;
                 joined.status = OrgStatus::PolicyInvalid {
                     error: format!("its offline copy was refused: {e}"),
                 };
@@ -866,7 +884,8 @@ impl Orgs {
         };
         let fetched_at = parse_time(&copy.fetched_at).unwrap_or(DateTime::<Utc>::MIN_UTC);
         let until = copy_end(fetched_at, policy.offline_hours);
-        if policy.offline_hours == 0 || self.inner.clock.now() >= until {
+        let now = self.inner.clock.now();
+        if policy.offline_hours == 0 || now >= until || fetched_at > now + COPY_CLOCK_SKEW {
             let id = row.id.clone();
             self.delete_copy(&id).await;
             joined.policy = Some(policy);
@@ -951,7 +970,6 @@ impl Orgs {
         }
     }
 
-    /// The lock for changes to `org_id`.
     fn failed_at(&self) -> std::sync::MutexGuard<'_, HashMap<String, DateTime<Utc>>> {
         self.inner
             .failed_at
@@ -959,16 +977,24 @@ impl Orgs {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// The lock for changes to `org_id`.
     async fn lock(&self, org_id: &str) -> tokio::sync::OwnedMutexGuard<()> {
-        let lock = self
-            .inner
+        self.org_lock(org_id).lock_owned().await
+    }
+
+    /// The lock for changes to `org_id`, if nothing holds it now.
+    fn try_lock(&self, org_id: &str) -> Option<tokio::sync::OwnedMutexGuard<()>> {
+        self.org_lock(org_id).try_lock_owned().ok()
+    }
+
+    fn org_lock(&self, org_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+        self.inner
             .locks
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .entry(org_id.to_string())
             .or_default()
-            .clone();
-        lock.lock_owned().await
+            .clone()
     }
 
     /// The orgs, whether or not a panic poisoned the lock: each change is made whole.

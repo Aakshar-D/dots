@@ -1404,3 +1404,90 @@ async fn a_lookup_runs_while_a_refresh_waits_on_the_network() {
     assert_eq!(status(&summary), OrgStatus::Connected);
     assert_eq!(orgs.lookup(ACME, "API_KEY").await, value(ROTATED, false));
 }
+
+// Fix round 1
+
+/// Rewrites the saved copy of Acme as if it were fetched at `fetched_at`.
+fn date_copy(h: &OrgsHarness, fetched_at: String) {
+    let mut copy = copy_of(h, ACME).unwrap();
+    copy.fetched_at = fetched_at;
+    write_offline(&h.vault_dir(), &TestProtector, ACME, &copy).unwrap();
+}
+
+#[tokio::test]
+async fn load_drops_a_copy_dated_more_than_5_minutes_ahead() {
+    let h = OrgsHarness::new().await;
+    h.join_acme(entries(), acme_policy()).await;
+
+    // A little ahead of the clock is skew, and the copy still serves.
+    date_copy(&h, stamp(at(START) + Duration::minutes(2)));
+    let restarted = h.service();
+    restarted.load().await.unwrap();
+    assert!(matches!(
+        status_of(&restarted, ACME).await,
+        OrgStatus::Offline { .. }
+    ));
+    assert_eq!(
+        restarted.lookup(ACME, "API_KEY").await,
+        value(API_KEY, false)
+    );
+
+    // A month ahead can't be counted from: the copy is expired, and gone.
+    date_copy(&h, stamp(at(START) + Duration::days(30)));
+    let restarted = h.service();
+    restarted.load().await.unwrap();
+    assert_eq!(status_of(&restarted, ACME).await, OrgStatus::Expired);
+    assert!(!h.copy_path(ACME).exists());
+    assert_eq!(restarted.lookup(ACME, "API_KEY").await, OrgLookup::Expired);
+    let summary = restarted.summary(ACME).await.unwrap();
+    assert_eq!(summary.copy_until, None);
+}
+
+#[tokio::test]
+async fn load_deletes_a_copy_it_refuses_or_cannot_read() {
+    let h = OrgsHarness::new().await;
+    h.join_acme(entries(), acme_policy()).await;
+
+    // Signed by another key.
+    let mut copy = copy_of(&h, ACME).unwrap();
+    copy.policy = sign(&keys(), &policy(ACME, ISSUED, acme_policy()));
+    write_offline(&h.vault_dir(), &TestProtector, ACME, &copy).unwrap();
+    let restarted = h.service();
+    restarted.load().await.unwrap();
+    assert!(matches!(
+        status_of(&restarted, ACME).await,
+        OrgStatus::PolicyInvalid { .. }
+    ));
+    assert!(!h.copy_path(ACME).exists());
+    assert!(matches!(
+        restarted.lookup(ACME, "API_KEY").await,
+        OrgLookup::PolicyInvalid(_)
+    ));
+
+    // Bytes that are no copy.
+    h.orgs.refresh(ACME).await.unwrap();
+    assert!(h.copy_path(ACME).exists());
+    std::fs::write(h.copy_path(ACME), b"not a copy").unwrap();
+    let restarted = h.service();
+    restarted.load().await.unwrap();
+    assert!(!h.copy_path(ACME).exists());
+    assert_eq!(
+        status_of(&restarted, ACME).await,
+        OrgStatus::Offline { until: None }
+    );
+}
+
+#[tokio::test]
+async fn an_unreachable_refresh_keeps_a_revoked_org_revoked() {
+    let h = OrgsHarness::new().await;
+    h.join_acme(entries(), acme_policy()).await;
+    h.bao.revoke_token(TOKEN);
+    let revoked = h.orgs.refresh(ACME).await.unwrap();
+    assert_eq!(status(&revoked), OrgStatus::Revoked);
+
+    h.bao.fail_next(Failure::Status(503), 1);
+    let summary = h.orgs.refresh(ACME).await.unwrap();
+    assert_eq!(status(&summary), OrgStatus::Revoked);
+    assert_eq!(summary.status_text, revoked.status_text);
+    assert_eq!(h.orgs.lookup(ACME, "API_KEY").await, OrgLookup::Revoked);
+}
