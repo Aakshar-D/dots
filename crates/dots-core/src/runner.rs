@@ -16,14 +16,14 @@ use crate::checkins::{CheckIns, Tool as CheckInTool};
 use crate::engine::{Engine, EngineEvent, RunContext};
 use crate::events::{Bus, RuntimeEvent};
 use crate::model::{
-    ApprovalStatus, EngineKind, NewRun, Run, RunStatus, TriggerKind, WorkspaceMode,
+    ApprovalStatus, Dot, EngineKind, NewRun, Run, RunStatus, TriggerKind, WorkspaceMode,
 };
 use crate::prompt::{build_prompt_with_memories, context_tool_name};
 use crate::run_tools::{CloseOnDrop, OpenRequest, RunTools};
 use crate::store::Store;
 use crate::util::{ct_eq, new_token};
 use crate::vault::Vault;
-use crate::workspace::{Prepared, WorkspaceManager};
+use crate::workspace::{commit_all, Prepared, WorkspaceManager};
 use crate::{Error, Result};
 
 /// The name the run's model knows a policy tool by: the `Context` tool is `mcp__dots__context`
@@ -44,6 +44,37 @@ fn model_tool_name<'a>(tool: &'a str, input: &Value, engine: EngineKind) -> &'a 
 
 /// How every resume prompt ends.
 const CONTINUE: &str = "Continue the task, then end with your summary.";
+
+/// The longest summary line a commit message of Dots takes, in characters.
+const COMMIT_LINE: usize = 72;
+
+/// What a run of a workflow step takes from its workflow run (teams spec sections 6.1 and 8):
+/// the project's repo, where its worktree is made; the project's default branch, if it names
+/// one; and the step's name, for the commit Dots makes.
+struct StepContext {
+    repo: String,
+    default_branch: Option<String>,
+    step_name: String,
+}
+
+/// The dot as its run's workspace sees it: a run of a workflow step works in the project's
+/// repo, not in its dot's folder.
+fn workspace_dot(dot: &Dot, step: Option<&StepContext>) -> Dot {
+    let mut dot = dot.clone();
+    if let Some(step) = step {
+        dot.spec.workdir = step.repo.clone();
+    }
+    dot
+}
+
+/// The commit message of a step's leftover work: `<step name>: <first line of the summary>`.
+fn commit_message(step: &StepContext, summary: Option<&str>) -> String {
+    let line = summary
+        .and_then(|s| s.lines().map(str::trim).find(|l| !l.is_empty()))
+        .unwrap_or("work in progress");
+    let line: String = line.chars().take(COMMIT_LINE).collect();
+    format!("{}: {line}", step.step_name)
+}
 
 #[derive(Debug, Clone)]
 pub struct RunnerConfig {
@@ -529,20 +560,76 @@ impl Runner {
         Ok(child)
     }
 
-    /// Removes the run's worktree if it is unchanged; errors are logged, never returned.
+    /// Removes the run's worktree if it is unchanged; errors are logged, never returned. A run
+    /// of a workflow step first has its leftover work committed (`finish_workspace`).
     async fn cleanup_workspace(&self, run: &Run) {
         let Some(prepared) = Prepared::from_run(run) else {
             return;
         };
-        let result = match self.store.get_dot(&run.dot_id).await {
-            Ok(dot) => self
-                .workspaces
-                .cleanup_if_unchanged(&dot, &prepared)
-                .await
-                .map(|_| ()),
-            Err(e) => Err(e),
-        };
+        let result = async {
+            let dot = self.store.get_dot(&run.dot_id).await?;
+            let step = self.step_context(run).await?;
+            let ws_dot = workspace_dot(&dot, step.as_ref());
+            self.finish_workspace(
+                run,
+                &ws_dot,
+                step.as_ref(),
+                &prepared,
+                run.summary.as_deref(),
+            )
+            .await;
+            Ok::<_, Error>(())
+        }
+        .await;
         if let Err(e) = result {
+            tracing::warn!(run = %run.id, "workspace cleanup failed: {e}");
+        }
+    }
+
+    /// The workflow step a run works for, as its workspace needs it; `None` for an ordinary run.
+    async fn step_context(&self, run: &Run) -> Result<Option<StepContext>> {
+        let Some(step_run_id) = &run.workflow_step_run_id else {
+            return Ok(None);
+        };
+        let step = self.store.get_step_run(step_run_id).await?;
+        let workflow_run = self.store.get_workflow_run(&step.workflow_run_id).await?;
+        let step_name = workflow_run
+            .definition
+            .step(&step.step_id)
+            .map(|(_, s)| s.name.clone())
+            .unwrap_or(step.step_id);
+        Ok(Some(StepContext {
+            repo: workflow_run.project.repo_path,
+            default_branch: workflow_run.project.default_branch,
+            step_name,
+        }))
+    }
+
+    /// What happens to a run's worktree when the run stops for good: a run of a workflow step has
+    /// what it left uncommitted committed by Dots (teams spec section 6.1; a failure is a notice
+    /// on the run), then an unchanged worktree is removed. Errors are logged, never returned.
+    async fn finish_workspace(
+        &self,
+        run: &Run,
+        ws_dot: &Dot,
+        step: Option<&StepContext>,
+        prepared: &Prepared,
+        summary: Option<&str>,
+    ) {
+        if let Some(step) = step {
+            if prepared.branch.is_some() && prepared.path.is_dir() {
+                let no_hooks = self.cfg.worktrees_dir.join(".no-hooks");
+                let message = commit_message(step, summary);
+                if let Err(e) = commit_all(&prepared.path, &message, &no_hooks).await {
+                    tracing::warn!(run = %run.id, "committing the step's work failed: {e}");
+                    let text = format!("Dots could not commit the changes: {e}");
+                    if let Err(e) = self.record(&run.id, &EngineEvent::Notice { text }).await {
+                        tracing::warn!(run = %run.id, "recording the notice failed: {e}");
+                    }
+                }
+            }
+        }
+        if let Err(e) = self.workspaces.cleanup_if_unchanged(ws_dot, prepared).await {
             tracing::warn!(run = %run.id, "workspace cleanup failed: {e}");
         }
     }
@@ -604,6 +691,9 @@ impl Runner {
         if let Some(reason) = engine.unavailable() {
             return Err(Error::Other(reason));
         }
+        // A run of a workflow step works in the project's repo (teams spec section 8).
+        let step = self.step_context(run).await?;
+        let ws_dot = workspace_dot(&dot, step.as_ref());
         let prepared = match Prepared::from_run(run) {
             Some(p) if p.path.is_dir() => {
                 // A resumed or follow-up run works in the folder its row names, and the
@@ -623,10 +713,22 @@ impl Runner {
                     && p.branch.is_some()
                     && p.base_commit.is_some() =>
             {
-                self.workspaces.restore(&dot, &p).await?
+                self.workspaces.restore(&ws_dot, &p).await?
             }
             _ => {
-                let p = self.workspaces.prepare(&dot, &run.id).await?;
+                // A step's first run starts where the workflow says: an earlier step's branch,
+                // else the project's default branch, else the repo's.
+                let start = run
+                    .payload
+                    .as_ref()
+                    .and_then(|p| p.pointer("/workflow/start"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .or_else(|| step.as_ref().and_then(|s| s.default_branch.clone()));
+                let p = self
+                    .workspaces
+                    .prepare_from(&ws_dot, &run.id, start.as_deref())
+                    .await?;
                 self.store
                     .set_workspace(
                         &run.id,
@@ -681,7 +783,11 @@ impl Runner {
         let _closer = CloseOnDrop(tools.clone());
         if cancel.is_cancelled() {
             tools.close().await;
-            if let Err(e) = self.workspaces.cleanup_if_unchanged(&dot, &prepared).await {
+            if let Err(e) = self
+                .workspaces
+                .cleanup_if_unchanged(&ws_dot, &prepared)
+                .await
+            {
                 tracing::warn!(run = %run.id, "workspace cleanup failed: {e}");
             }
             return self.finish_cancelled_before_start(&run.id).await;
@@ -789,11 +895,11 @@ impl Runner {
             self.store.expire_pending_for_run(&run.id).await?;
         }
         // Clean up before publishing the terminal status so observers that see
-        // `succeeded`/`failed` never find a leftover unchanged worktree.
+        // `succeeded`/`failed` never find a leftover unchanged worktree, nor a step's work left
+        // uncommitted.
         if status != RunStatus::AwaitingApproval {
-            if let Err(e) = self.workspaces.cleanup_if_unchanged(&dot, &prepared).await {
-                tracing::warn!(run = %run.id, "workspace cleanup failed: {e}");
-            }
+            self.finish_workspace(run, &ws_dot, step.as_ref(), &prepared, summary.as_deref())
+                .await;
         }
         let finished = self
             .store

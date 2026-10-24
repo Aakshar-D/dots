@@ -254,6 +254,18 @@ impl WorkspaceManager {
     }
 
     pub async fn prepare(&self, dot: &Dot, run_id: &str) -> Result<Prepared> {
+        self.prepare_from(dot, run_id, None).await
+    }
+
+    /// Like `prepare`, with the worktree's branch starting at `start` (a branch or a commit of
+    /// the repo) instead of the default branch: a workflow step that continues an earlier
+    /// step's branch, or a project with its own default branch (teams spec section 6).
+    pub async fn prepare_from(
+        &self,
+        dot: &Dot,
+        run_id: &str,
+        start: Option<&str>,
+    ) -> Result<Prepared> {
         let workdir = PathBuf::from(&dot.spec.workdir);
         if !workdir.is_dir() {
             return Err(Error::Invalid(format!(
@@ -277,21 +289,36 @@ impl WorkspaceManager {
                 workdir.display()
             )));
         }
-        let start = match git(
+        let start = match start {
+            Some(start) => start.to_string(),
+            None => match git(
+                &workdir,
+                &[
+                    "symbolic-ref",
+                    "--quiet",
+                    "--short",
+                    "refs/remotes/origin/HEAD",
+                ],
+            )
+            .await
+            {
+                Ok(r) if !r.is_empty() => r,
+                _ => "HEAD".to_string(),
+            },
+        };
+        let commit = format!("{start}^{{commit}}");
+        let base = git(
             &workdir,
             &[
-                "symbolic-ref",
+                "rev-parse",
+                "--verify",
                 "--quiet",
-                "--short",
-                "refs/remotes/origin/HEAD",
+                "--end-of-options",
+                &commit,
             ],
         )
         .await
-        {
-            Ok(r) if !r.is_empty() => r,
-            _ => "HEAD".to_string(),
-        };
-        let base = git(&workdir, &["rev-parse", &start]).await?;
+        .map_err(|_| Error::Invalid(format!("{start} is not a branch or commit of the repo")))?;
         tokio::fs::create_dir_all(&self.root).await?;
         let path = self.root.join(run_id);
         let branch = format!("dots/{}/{}", dot.spec.name, run_id);
@@ -508,4 +535,23 @@ impl WorkspaceManager {
         self.remove(Path::new(&dot.spec.workdir), prepared).await?;
         Ok(true)
     }
+}
+
+/// Commits everything left uncommitted in the worktree at `path` (teams spec section 6.1), as
+/// the person's git identity from their config, with hooks off: `core.hooksPath` points at
+/// `no_hooks`, an empty folder, and `--no-verify` skips the commit hooks. `Ok(false)` when there
+/// was nothing to commit.
+pub async fn commit_all(path: &Path, message: &str, no_hooks: &Path) -> Result<bool> {
+    if git(path, &["status", "--porcelain"]).await?.is_empty() {
+        return Ok(false);
+    }
+    git(path, &["add", "-A"]).await?;
+    tokio::fs::create_dir_all(no_hooks).await?;
+    let hooks = format!("core.hooksPath={}", no_hooks.display());
+    git(
+        path,
+        &["-c", &hooks, "commit", "--no-verify", "-q", "-m", message],
+    )
+    .await?;
+    Ok(true)
 }
