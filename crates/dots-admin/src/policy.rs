@@ -9,8 +9,7 @@ use std::ops::Range;
 use chrono::{DateTime, SecondsFormat, Utc};
 use dots_core::vault::org::policy::POLICY_VERSION;
 use dots_core::vault::org::{
-    check_org_id, envelope, key_fingerprint, parse_policy, verify_policy, OrgPolicy, PersonalMode,
-    PolicyError,
+    check_org_id, envelope, key_fingerprint, parse_policy, verify_policy, OrgPolicy, PolicyError,
 };
 use minisign::PublicKey;
 use serde_json::Value;
@@ -48,67 +47,6 @@ pub fn new_policy(org_id: &str, now: DateTime<Utc>) -> Result<String> {
         org_id = json_string(org_id),
         issued_at = json_string(&timestamp(now)),
     ))
-}
-
-/// The policy in plain words, one line per field.
-pub fn summary(policy: &OrgPolicy) -> Vec<String> {
-    let rules = &policy.use_rules;
-    let plain = if policy.plain.is_empty() {
-        "plain entries: none; every org entry is a secret".to_string()
-    } else {
-        format!(
-            "plain entries, shown with their values: {}; every other org entry is a secret",
-            policy.plain.join(", ")
-        )
-    };
-    let granted = match (rules.allow.as_slice(), rules.deny.as_slice()) {
-        ([], _) => "no org entry (use.allow is empty)".to_string(),
-        ([all], []) if all == "*" => "every org entry".to_string(),
-        ([all], deny) if all == "*" => {
-            format!("every org entry except names matching {}", deny.join(", "))
-        }
-        (allow, []) => format!("names matching {}", allow.join(", ")),
-        (allow, deny) => format!(
-            "names matching {}, except names matching {}",
-            allow.join(", "),
-            deny.join(", ")
-        ),
-    };
-    let personal = match policy.personal {
-        PersonalMode::Deny => "personal entries: not used; only the org's entries resolve",
-        PersonalMode::Fallback => "personal entries: used when the org has no entry of that name",
-        PersonalMode::Override => "personal entries: win over the org's entry of the same name",
-    };
-    let shell = if policy.shell_secrets {
-        "secrets in the shell: allowed"
-    } else {
-        "secrets in the shell: not allowed"
-    };
-    let offline = match policy.offline_hours {
-        0 => "offline copy: none; offline, the org's entries are not available".to_string(),
-        hours => format!(
-            "offline copy: kept for {} after the last good fetch",
-            count(hours, "hour")
-        ),
-    };
-    let audit = match &policy.audit {
-        None => "audit: off".to_string(),
-        Some(audit) => format!(
-            "audit: records go to {}, with the token in entry {}",
-            audit.endpoint, audit.token_entry
-        ),
-    };
-    vec![
-        format!("org: {}", policy.org_id),
-        format!("issued at: {}", policy.issued_at),
-        plain,
-        format!("dots may be granted: {granted}"),
-        personal.to_string(),
-        shell.to_string(),
-        format!("refresh: every {}", count(policy.refresh_minutes, "minute")),
-        offline,
-        audit,
-    ]
 }
 
 /// The policy text signed: the envelope to store as `DOTS_POLICY`, and the policy in it.
@@ -210,7 +148,7 @@ pub(crate) fn check_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
     let path = args.one("the policy file")?;
     let policy = parse_policy(&read_file(path, "the policy")?).map_err(refused)?;
     say(io.out, "ok")?;
-    for line in summary(&policy) {
+    for line in policy.summary() {
         say(io.out, &format!("  {line}"))?;
     }
     Ok(())
@@ -259,7 +197,7 @@ pub(crate) fn verify_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
             policy.org_id
         ),
     )?;
-    for line in summary(&policy) {
+    for line in policy.summary() {
         say(io.out, &format!("  {line}"))?;
     }
     say(
@@ -279,13 +217,6 @@ fn write_all(to: &mut dyn Write, text: &str) -> Result<()> {
 
 fn json_string(text: &str) -> String {
     Value::String(text.to_string()).to_string()
-}
-
-fn count(n: u32, unit: &str) -> String {
-    match n {
-        1 => format!("1 {unit}"),
-        n => format!("{n} {unit}s"),
-    }
 }
 
 /// The org a signed text's policy names, read without any check, to verify it against.

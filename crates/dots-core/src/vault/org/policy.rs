@@ -240,6 +240,78 @@ impl OrgPolicy {
         }
         Ok(())
     }
+
+    /// The policy in plain words, one line per field: what `dots-admin policy check` prints and
+    /// what the app shows for a joined org, so the admin and the person read the same words.
+    pub fn summary(&self) -> Vec<String> {
+        let rules = &self.use_rules;
+        let plain = if self.plain.is_empty() {
+            "plain entries: none; every org entry is a secret".to_string()
+        } else {
+            format!(
+                "plain entries, shown with their values: {}; every other org entry is a secret",
+                self.plain.join(", ")
+            )
+        };
+        let granted = match (rules.allow.as_slice(), rules.deny.as_slice()) {
+            ([], _) => "no org entry (use.allow is empty)".to_string(),
+            ([all], []) if all == "*" => "every org entry".to_string(),
+            ([all], deny) if all == "*" => {
+                format!("every org entry except names matching {}", deny.join(", "))
+            }
+            (allow, []) => format!("names matching {}", allow.join(", ")),
+            (allow, deny) => format!(
+                "names matching {}, except names matching {}",
+                allow.join(", "),
+                deny.join(", ")
+            ),
+        };
+        let personal = match self.personal {
+            PersonalMode::Deny => "personal entries: not used; only the org's entries resolve",
+            PersonalMode::Fallback => {
+                "personal entries: used when the org has no entry of that name"
+            }
+            PersonalMode::Override => "personal entries: win over the org's entry of the same name",
+        };
+        let shell = if self.shell_secrets {
+            "secrets in the shell: allowed"
+        } else {
+            "secrets in the shell: not allowed"
+        };
+        let offline = match self.offline_hours {
+            0 => "offline copy: none; offline, the org's entries are not available".to_string(),
+            hours => format!(
+                "offline copy: kept for {} after the last good fetch",
+                count(hours, "hour")
+            ),
+        };
+        let audit = match &self.audit {
+            None => "audit: off".to_string(),
+            Some(audit) => format!(
+                "audit: records go to {}, with the token in entry {}",
+                audit.endpoint, audit.token_entry
+            ),
+        };
+        vec![
+            format!("org: {}", self.org_id),
+            format!("issued at: {}", self.issued_at),
+            plain,
+            format!("dots may be granted: {granted}"),
+            personal.to_string(),
+            shell.to_string(),
+            format!("refresh: every {}", count(self.refresh_minutes, "minute")),
+            offline,
+            audit,
+        ]
+    }
+}
+
+/// `n` of `unit`, "1 hour" or "24 hours".
+fn count(n: u32, unit: &str) -> String {
+    match n {
+        1 => format!("1 {unit}"),
+        n => format!("{n} {unit}s"),
+    }
 }
 
 fn check_audit(audit: &AuditTarget) -> Result<(), PolicyError> {

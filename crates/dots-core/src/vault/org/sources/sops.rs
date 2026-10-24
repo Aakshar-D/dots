@@ -79,8 +79,9 @@ const RULES: [&str; 6] = [
     "encrypted_comment_regex",
 ];
 
-/// What `fetch` says when this PC's key opens none of the file's age entries.
-const NOT_A_RECIPIENT: &str = "this PC's key is not a recipient of the file";
+/// What `fetch` says when this PC's key opens none of the file's age entries. A join that gets
+/// it waits for the admin to add the key, rather than failing for good.
+pub const NOT_A_RECIPIENT: &str = "this PC's key is not a recipient of the file";
 
 /// What `fetch` says when the MAC is missing, does not decrypt, or does not match.
 const MAC_MISMATCH: &str = "the file's MAC does not match";

@@ -80,6 +80,18 @@ impl Store {
         rows.iter().map(org_from_row).collect()
     }
 
+    /// The id and name of every joined org, in `list_orgs`' order. It does not read the source
+    /// settings, so one damaged row does not hide the others: the `Orgs` service reads each row
+    /// on its own with `get_org`.
+    pub async fn list_org_names(&self) -> Result<Vec<(String, String)>> {
+        let rows = sqlx::query("SELECT id, name FROM orgs ORDER BY name COLLATE NOCASE, id")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter()
+            .map(|row| Ok((row.try_get("id")?, row.try_get("name")?)))
+            .collect()
+    }
+
     /// Replaces the org's settings with those of a new join code for the same id (§6.4,
     /// **Update**). What the last fetch accepted stays.
     pub async fn update_org_settings(

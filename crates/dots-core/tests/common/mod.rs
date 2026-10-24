@@ -7,6 +7,7 @@ pub mod fake_files;
 pub mod fake_infisical;
 pub mod fake_mcp;
 pub mod fake_openbao;
+pub mod orgs;
 pub mod playwright;
 pub mod secrets;
 pub mod tz;

@@ -5,6 +5,7 @@ pub mod join;
 pub mod offline;
 pub mod policy;
 pub mod row;
+pub mod service;
 pub mod signed;
 pub mod sources;
 
@@ -20,6 +21,9 @@ pub use offline::{
 };
 pub use policy::{parse_policy, AuditTarget, OrgPolicy, PersonalMode, PolicyError, UseRules};
 pub use row::OrgRow;
+pub use service::{
+    JoinPreview, OrgEntry, OrgLookup, OrgStatus, OrgSummary, Orgs, SourceFactory, RETRY_AFTER,
+};
 pub use signed::{envelope, verify_policy};
 pub use sources::{
     http_client, http_client_with_timeout, source_for, Fetched, Infisical, OpenBao, Sops, Source,
