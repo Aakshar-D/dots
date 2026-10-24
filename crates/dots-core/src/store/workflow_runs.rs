@@ -7,7 +7,7 @@ use sqlx::Row;
 
 use super::{opt_json, Store};
 use crate::model::{
-    NewWorkflowRun, Run, StepRun, StepRunChange, StepRunStatus, WaitingOn, WorkflowRun,
+    Message, NewWorkflowRun, Run, StepRun, StepRunChange, StepRunStatus, WaitingOn, WorkflowRun,
     WorkflowRunChange, WorkflowRunStatus, WorkflowTrigger,
 };
 use crate::util::{new_id, now};
@@ -312,6 +312,18 @@ impl Store {
             .bind(id)
             .execute(&mut *tx)
             .await?;
+            // A step that ends takes its threads' later work with it: the follow-ups its runs
+            // scheduled are cancelled (teams spec section 8).
+            if status.is_terminal() {
+                sqlx::query(
+                    "UPDATE follow_ups SET status = 'cancelled', retry_at = NULL \
+                     WHERE status = 'pending' \
+                     AND from_run_id IN (SELECT id FROM runs WHERE workflow_step_run_id = ?)",
+                )
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+            }
         }
         if let Some(h) = &change.handoff {
             let text = h.as_ref().map(serde_json::to_string).transpose()?;
@@ -338,6 +350,46 @@ impl Store {
         }
         tx.commit().await?;
         self.get_step_run(id).await
+    }
+
+    /// Dismisses the questions the step's runs asked that are still open (a stopped workflow
+    /// run's, teams spec section 8) and gives them as they are now. A question answered
+    /// meanwhile is left as it is.
+    pub async fn dismiss_step_questions(&self, step_run_id: &str) -> Result<Vec<Message>> {
+        let ids: Vec<String> = sqlx::query_scalar(
+            "SELECT m.id FROM messages m JOIN runs r ON r.id = m.run_id \
+             WHERE r.workflow_step_run_id = ? AND m.kind = 'question' \
+             AND m.answered_at IS NULL AND m.dismissed_at IS NULL",
+        )
+        .bind(step_run_id)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut out = Vec::new();
+        for id in ids {
+            match self.dismiss_question(&id).await {
+                Ok(message) => out.push(message),
+                Err(Error::Conflict(_)) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(out)
+    }
+
+    /// Whether `run` belongs to the thread of a workflow step that has ended: the thread's root
+    /// run is a step's, and `run` works for no step that is still open. A run continuing such a
+    /// run gets no step (`insert_run`) and must not work in the step's worktree.
+    pub async fn in_ended_step_thread(&self, run: &Run) -> Result<bool> {
+        let ended: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM runs WHERE id = ?1 \
+             AND workflow_step_run_id IS NOT NULL) \
+             AND NOT EXISTS (SELECT 1 FROM workflow_step_runs WHERE id = ?2 \
+             AND status IN ('running', 'waiting'))",
+        )
+        .bind(&run.root_run_id)
+        .bind(&run.workflow_step_run_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(ended)
     }
 
     /// The dot runs of a step run, resume children included, oldest first.

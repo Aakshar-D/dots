@@ -540,3 +540,66 @@ async fn an_approval_that_outlives_the_wait_still_starts_the_workflow_on_the_res
     assert_eq!(runs[0].task, "Fix the icon.");
     t.rt.shutdown();
 }
+
+#[tokio::test]
+async fn a_reply_in_the_chat_of_a_step_that_has_ended_is_refused() {
+    let t = start(json!([])).await;
+    let llm = Llm::start(vec![text("Fixed.")]).await;
+    let helper =
+        t.rt.create_dot(local_spec(&t, &llm.endpoint(), "helper"))
+            .await
+            .unwrap();
+    let (_, flow) = team_with(
+        &t,
+        &helper,
+        vec![Step {
+            id: "dev".into(),
+            name: "Fix it".into(),
+            kind: StepKind::Agent {
+                member: helper.id.clone(),
+                job: "Fix.".into(),
+            },
+        }],
+    )
+    .await;
+    let project =
+        t.rt.store()
+            .get_team_project_id(&flow, "Dots")
+            .await
+            .unwrap();
+    let wr =
+        t.rt.workflows()
+            .start(dots_core::workflows::StartRequest {
+                workflow_id: flow,
+                project_id: project,
+                task: "Fix the icon.".into(),
+                trigger: WorkflowTrigger::Manual,
+                origin_run_id: None,
+                test: false,
+            })
+            .await
+            .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let wr = loop {
+        let wr = t.rt.workflows().get(&wr.id).await.unwrap();
+        if wr.status == WorkflowRunStatus::Succeeded {
+            break wr;
+        }
+        assert!(std::time::Instant::now() < deadline, "{wr:#?}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    let run =
+        t.rt.store()
+            .runs_of_step_run(&wr.steps[0].id)
+            .await
+            .unwrap()
+            .remove(0);
+    let refused =
+        t.rt.chat(&helper.id, "And the tooltip?", Some(&run.id))
+            .await;
+    assert!(
+        matches!(&refused, Err(dots_core::Error::Conflict(m)) if m == dots_core::workflows::ENDED_STEP_THREAD),
+        "{refused:?}"
+    );
+    t.rt.shutdown();
+}

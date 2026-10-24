@@ -260,3 +260,42 @@ async fn a_continuing_run_keeps_its_parents_step_and_spend_is_summed() {
         .collect();
     assert_eq!(ids, [first.id, child.id]);
 }
+
+#[tokio::test]
+async fn a_run_continuing_a_step_that_has_ended_gets_no_step() {
+    let f = fixture().await;
+    let wr = f.store.create_workflow_run(&f.new).await.unwrap();
+    let step = f
+        .store
+        .create_step_run(&wr.id, "a", 1, StepRunStatus::Running)
+        .await
+        .unwrap();
+    let mut first = NewRun::new(&f.dot, TriggerKind::Workflow);
+    first.workflow_step_run_id = Some(step.id.clone());
+    let first = f.store.create_run(&first).await.unwrap();
+    assert!(!f.store.in_ended_step_thread(&first).await.unwrap());
+    f.store
+        .set_step_run(
+            &step.id,
+            &StepRunChange {
+                status: Some(StepRunStatus::Succeeded),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(f.store.in_ended_step_thread(&first).await.unwrap());
+    let mut reply = NewRun::new(&f.dot, TriggerKind::Chat);
+    reply.parent_run_id = Some(first.id.clone());
+    reply.root_run_id = Some(first.root_run_id.clone());
+    let reply = f.store.create_run(&reply).await.unwrap();
+    assert_eq!(reply.workflow_step_run_id, None);
+    assert!(f.store.in_ended_step_thread(&reply).await.unwrap());
+    // An ordinary thread is no step's.
+    let plain = f
+        .store
+        .create_run(&NewRun::new(&f.dot, TriggerKind::Chat))
+        .await
+        .unwrap();
+    assert!(!f.store.in_ended_step_thread(&plain).await.unwrap());
+}

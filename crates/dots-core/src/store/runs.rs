@@ -54,13 +54,16 @@ pub(super) async fn insert_run(conn: &mut SqliteConnection, new: &NewRun) -> Res
     let id = new_id();
     let root = new.root_run_id.clone().unwrap_or_else(|| id.clone());
     // A run that continues another (a resume, a chat reply, an answer, a follow-up) works for
-    // the same workflow step as its parent, unless it names one (teams spec section 4).
+    // the same workflow step as its parent, unless it names one (teams spec section 4); only
+    // while that step is open, so a step that has ended takes in no more runs.
     sqlx::query(
         "INSERT INTO runs (id, dot_id, root_run_id, parent_run_id, trigger_kind, payload, \
          status, session_id, workspace_path, branch, base_commit, queued_at, retry_of, \
          workflow_step_run_id) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
-         COALESCE(?, (SELECT workflow_step_run_id FROM runs WHERE id = ?)))",
+         COALESCE(?, (SELECT r.workflow_step_run_id FROM runs r \
+         JOIN workflow_step_runs s ON s.id = r.workflow_step_run_id \
+         WHERE r.id = ? AND s.status IN ('running', 'waiting'))))",
     )
     .bind(&id)
     .bind(&new.dot_id)

@@ -11,14 +11,15 @@ use dots_core::engine::{Engine, EngineEvent, RunContext};
 use dots_core::events::{new_bus, Bus, RuntimeEvent};
 use dots_core::followups::FollowUps;
 use dots_core::model::{
-    Dot, EngineKind, MemberSpec, ProjectSpec, RunStatus, StepRunStatus, TeamSpec, WaitingOn,
-    WorkflowRun, WorkflowRunStatus, WorkflowSpec, WorkflowTrigger, WorkspaceMode,
+    Dot, EngineKind, FollowUpStatus, MemberSpec, NewRun, ProjectSpec, RunStatus, StepRunStatus,
+    TeamSpec, TriggerKind, WaitingOn, WorkflowRun, WorkflowRunStatus, WorkflowSpec,
+    WorkflowTrigger, WorkspaceMode,
 };
 use dots_core::runner::{Runner, RunnerConfig};
 use dots_core::scheduler::{Clock, SystemClock};
 use dots_core::store::Store;
 use dots_core::workflow::{Budget, Definition, Step, StepKind, Trigger};
-use dots_core::workflows::{StartRequest, Workflows};
+use dots_core::workflows::{StartRequest, Workflows, ENDED_STEP_THREAD};
 use dots_core::Error;
 use serde_json::json;
 use tempfile::TempDir;
@@ -45,6 +46,8 @@ enum Act {
     /// Writes a file into its workspace, asks an approval, and finishes with this summary:
     /// the run parks on the approval.
     Park(&'static str, &'static str),
+    /// Schedules a follow-up in an hour, then finishes with this summary.
+    Schedule(&'static str),
 }
 
 /// Plays each dot's acts in order, one per run (the last one again once they run out), and
@@ -146,6 +149,16 @@ impl Engine for Team {
                     store
                         .create_approval(&ctx.run_id, "Bash", &json!({"command": "git push"}))
                         .await
+                        .unwrap();
+                    EngineEvent::Finished { summary: s.into() }
+                }
+                Act::Schedule(s) => {
+                    let now = chrono::Utc::now();
+                    let due = now + chrono::TimeDelta::hours(1);
+                    store
+                        .add_follow_up(&ctx.dot.id, &ctx.run_id, due, "Look again.", 10, now)
+                        .await
+                        .unwrap()
                         .unwrap();
                     EngineEvent::Finished { summary: s.into() }
                 }
@@ -1134,4 +1147,128 @@ async fn the_hand_off_commits_what_a_run_left_uncommitted() {
         .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
         .await;
     w.second_step_has_the_parked_work(&wr).await;
+}
+
+#[tokio::test]
+async fn stopping_dismisses_its_steps_questions_and_cancels_their_follow_ups() {
+    let w = world().await;
+    w.engine
+        .set(&w.dev.spec.name, vec![Act::Ask("Which icon set?")]);
+    let flow = w
+        .workflow("Fix", vec![agent("dev", "Fix it", &w.dev, "Fix.")])
+        .await;
+    let wr = w.start(&flow).await;
+    let question = loop {
+        let open = w
+            .store
+            .list_messages(Some(&w.dev.id))
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|m| m.answered_at.is_none());
+        if let Some(q) = open {
+            break q;
+        }
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    };
+    let asked = question.run_id.clone().unwrap();
+    common::wait_status(&w.store, &asked, RunStatus::Succeeded, 60).await;
+    let now = chrono::Utc::now();
+    let follow_up = w
+        .store
+        .add_follow_up(
+            &w.dev.id,
+            &asked,
+            now + chrono::TimeDelta::hours(1),
+            "Look again.",
+            10,
+            now,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let stopped = w.workflows.stop(&wr.id).await.unwrap();
+    assert_eq!(stopped.status, WorkflowRunStatus::Cancelled);
+    let question = w.store.get_message(&question.id).await.unwrap();
+    assert!(question.dismissed_at.is_some());
+    assert_eq!(
+        w.store.get_follow_up(&follow_up.id).await.unwrap().status,
+        FollowUpStatus::Cancelled
+    );
+    // Answering the question starts nothing.
+    let follow_ups = FollowUps::new(w.store.clone(), w.bus.clone(), Arc::new(SystemClock));
+    let checkins = CheckIns::new(w.store.clone(), w.bus.clone(), follow_ups);
+    assert!(checkins
+        .reply(&w.runner, &question.id, "The light one.")
+        .await
+        .is_err());
+    assert_eq!(
+        w.store.list_runs(Some(&w.dev.id), 10).await.unwrap().len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn a_follow_up_scheduled_in_a_step_is_cancelled_when_the_step_ends() {
+    let w = world().await;
+    w.engine
+        .set(&w.dev.spec.name, vec![Act::Schedule("Fixed.")]);
+    let flow = w
+        .workflow("Fix", vec![agent("dev", "Fix it", &w.dev, "Fix.")])
+        .await;
+    let wr = w.start(&flow).await;
+    w.until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    assert!(w
+        .store
+        .list_pending_follow_ups(Some(&w.dev.id))
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn a_reply_in_an_ended_steps_thread_gets_no_step_and_leaves_its_worktree() {
+    let w = world().await;
+    w.engine
+        .set(&w.dev.spec.name, vec![Act::Write("fix.txt", "Fixed.")]);
+    let flow = w
+        .workflow("Fix", vec![agent("dev", "Fix it", &w.dev, "Fix.")])
+        .await;
+    let wr = w.start(&flow).await;
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    let run = w
+        .store
+        .runs_of_step_run(&wr.steps[0].id)
+        .await
+        .unwrap()
+        .remove(0);
+    let worktree = PathBuf::from(run.workspace_path.clone().unwrap());
+    let branch = run.branch.clone().unwrap();
+    let tip = git_out(&w.repo, &["rev-parse", &branch]);
+    // A reply as `Runtime::chat` makes it, which refuses it first.
+    assert!(w.store.in_ended_step_thread(&run).await.unwrap());
+    let mut new = NewRun::new(&w.dev.id, TriggerKind::Chat);
+    new.payload = Some(json!({"message": "And the tooltip?"}));
+    new.parent_run_id = Some(run.id.clone());
+    new.root_run_id = Some(run.root_run_id.clone());
+    new.session_id = run.session_id.clone();
+    new.workspace_path = run.workspace_path.clone();
+    new.branch = run.branch.clone();
+    new.base_commit = run.base_commit.clone();
+    let reply = w.runner.enqueue(new).await.unwrap();
+    assert_eq!(reply.workflow_step_run_id, None);
+    let reply = common::wait_status(&w.store, &reply.id, RunStatus::Failed, 60).await;
+    assert_eq!(reply.error.as_deref(), Some(ENDED_STEP_THREAD));
+    // The step's worktree and branch are as the step left them, and the dot never ran.
+    assert_eq!(git_out(&w.repo, &["rev-parse", &branch]), tip);
+    assert!(worktree.is_dir());
+    assert_eq!(git_out(&worktree, &["status", "--porcelain"]), "");
+    assert_eq!(w.engine.prompts_of("dev").len(), 1);
+    assert_eq!(
+        w.store.get_workflow_run(&wr.id).await.unwrap().spent_runs,
+        1
+    );
 }

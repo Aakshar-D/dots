@@ -923,6 +923,10 @@ impl Runtime {
                         .into(),
                 ));
             };
+            // A step's chat ends with the step (teams spec section 8).
+            if self.store.in_ended_step_thread(parent).await? {
+                return Err(Error::Conflict(crate::workflows::ENDED_STEP_THREAD.into()));
+            }
             if parent.session_id.is_none() {
                 return Err(Error::Conflict(
                     "this chat cannot be continued because its last run ended before the dot \

@@ -752,7 +752,14 @@ impl Runner {
         if let Some(reason) = engine.unavailable() {
             return Err(Error::Other(reason));
         }
-        // A run of a workflow step works in the project's repo (teams spec section 8).
+        // A run of a workflow step works in the project's repo (teams spec section 8). One that
+        // continues the thread of a step that has ended works there no more, nor for the
+        // workflow: it fails before its workspace is touched.
+        if self.store.in_ended_step_thread(run).await? {
+            return Err(Error::Other(
+                crate::workflows::ENDED_STEP_THREAD.to_string(),
+            ));
+        }
         let step = self.step_context(run).await?;
         let ws_dot = workspace_dot(&dot, step.as_ref());
         let prepared = match Prepared::from_run(run) {

@@ -34,6 +34,10 @@ use crate::{Error, Result};
 pub const MAX_TASK: usize = 8_000;
 /// The longest summary of an earlier step a prompt carries, in characters.
 pub const MAX_HANDOFF_SUMMARY: usize = 4_000;
+/// Why a run may not continue the thread of a workflow step that has ended (section 8): it
+/// would work in the project's worktree outside the workflow.
+pub const ENDED_STEP_THREAD: &str =
+    "this chat was a step of a workflow, and the step has ended; start a new chat";
 /// How often the loop passes while nothing wakes it.
 pub const TICK: Duration = Duration::from_secs(30);
 /// The most one tick counts into a run's `active_ms`. The loop passes at least every `TICK`, so
@@ -158,6 +162,18 @@ impl Workflows {
         let _ = self
             .bus
             .send(RuntimeEvent::WorkflowRunUpdated { run: wr.clone() });
+    }
+
+    /// Announces what a step that ended changed beyond its row: the follow-ups its runs
+    /// scheduled are cancelled with it (`Store::set_step_run`).
+    fn step_ended(&self, wr: &WorkflowRun, step_id: &str) {
+        if let Some((_, step)) = wr.definition.step(step_id) {
+            if let StepKind::Agent { member, .. } = &step.kind {
+                let _ = self.bus.send(RuntimeEvent::FollowUpsUpdated {
+                    dot_id: member.clone(),
+                });
+            }
+        }
     }
 
     /// Makes the loop pass now.
@@ -483,8 +499,9 @@ impl Workflows {
         Ok(wr)
     }
 
-    /// Stops the workflow run (section 8): its queued and running dot runs are cancelled, its
-    /// open steps and a waiting check are closed as cancelled.
+    /// Stops the workflow run (section 8): its queued and running dot runs are cancelled, the
+    /// questions they left open are dismissed, its open steps and a waiting check are closed as
+    /// cancelled, and with them the follow-ups their runs scheduled.
     pub async fn stop(&self, id: &str) -> Result<WorkflowRun> {
         let _one = self.lock.lock().await;
         self.stop_locked(id).await
@@ -499,13 +516,12 @@ impl Workflows {
             )));
         }
         for step_run in wr.steps.iter().filter(|s| !s.status.is_terminal()) {
-            for run in self.store.runs_of_step_run(&step_run.id).await? {
-                if !run.status.is_terminal() {
-                    if let Err(e) = self.runner.cancel(&run.id).await {
-                        tracing::warn!(run = %run.id, "cancelling a workflow's run failed: {e}");
-                    }
-                }
+            // The questions first: an answer given before is a run of the step, cancelled
+            // below; one given after is refused.
+            for message in self.store.dismiss_step_questions(&step_run.id).await? {
+                let _ = self.bus.send(RuntimeEvent::MessageUpdated { message });
             }
+            // Then the step, which closes it to new runs of its threads (`insert_run`).
             self.store
                 .set_step_run(
                     &step_run.id,
@@ -515,6 +531,14 @@ impl Workflows {
                     },
                 )
                 .await?;
+            self.step_ended(&wr, &step_run.step_id);
+            for run in self.store.runs_of_step_run(&step_run.id).await? {
+                if !run.status.is_terminal() {
+                    if let Err(e) = self.runner.cancel(&run.id).await {
+                        tracing::warn!(run = %run.id, "cancelling a workflow's run failed: {e}");
+                    }
+                }
+            }
         }
         let wr = self
             .store
@@ -868,6 +892,7 @@ impl Workflows {
                 },
             )
             .await?;
+        self.step_ended(wr, &step.id);
         let wr = self.store.get_workflow_run(&wr.id).await?;
         self.begin_step(&wr, index + 1).await
     }
@@ -890,6 +915,7 @@ impl Workflows {
                 },
             )
             .await?;
+        self.step_ended(wr, &step.id);
         let waiting = self
             .store
             .set_workflow_run(
