@@ -44,7 +44,7 @@ async fn setup() -> Setup {
     let bus = new_bus();
     let follow_ups = FollowUps::new(store.clone(), bus.clone(), FakeClock::new(t0()));
     let checkins = CheckIns::new(store.clone(), bus.clone(), follow_ups.clone());
-    let dot = store.create_dot(&spec("checker")).await.unwrap();
+    let dot = store.create_dot(&spec("checker"), None).await.unwrap();
     let run = store
         .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
         .await

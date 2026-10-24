@@ -69,6 +69,7 @@ fn dot() -> Dot {
         created_at: TS.into(),
         updated_at: TS.into(),
         seen_at: Some(TS.into()),
+        org_id: None,
         spec: spec(),
     }
 }

@@ -58,7 +58,7 @@ async fn live_approval_lets_the_command_run() {
     .await;
     let mut s = local_spec(&t, &llm, "live");
     s.approval_wait_secs = 30;
-    let dot = t.rt.create_dot(s).await.unwrap();
+    let dot = t.rt.create_dot(s, None).await.unwrap();
     let mut events = t.rt.subscribe();
     let r = t.rt.run_now(&dot.id).await.unwrap();
     let approval = loop {
@@ -139,7 +139,7 @@ async fn a_late_approval_is_performed_once_by_dots_and_the_model_gets_the_result
     .await;
     let mut s = local_spec(&t, &llm, "parked");
     s.approval_wait_secs = 0;
-    let dot = t.rt.create_dot(s).await.unwrap();
+    let dot = t.rt.create_dot(s, None).await.unwrap();
     let (parent, approval, child) = park_and_approve(&t, &dot.id).await;
     assert!(approval.self_apply);
 
@@ -223,7 +223,7 @@ async fn cancelling_while_dots_performs_a_call_leaves_its_outcome_unknown() {
     .await;
     let mut s = local_spec(&t, &llm, "slow");
     s.approval_wait_secs = 0;
-    let dot = t.rt.create_dot(s).await.unwrap();
+    let dot = t.rt.create_dot(s, None).await.unwrap();
     let (_parent, approval, child) = park_and_approve(&t, &dot.id).await;
     wait_apply(&t, &approval.id, ApplyState::Applying).await;
 
@@ -250,7 +250,7 @@ async fn a_resume_run_that_cannot_start_performs_nothing() {
     let mut s = local_spec(&t, &llm, "gone");
     s.workdir = workdir.to_string_lossy().to_string();
     s.approval_wait_secs = 0;
-    let dot = t.rt.create_dot(s).await.unwrap();
+    let dot = t.rt.create_dot(s, None).await.unwrap();
     let parent = t.rt.run_now(&dot.id).await.unwrap();
     wait_status(t.rt.store(), &parent.id, RunStatus::AwaitingApproval, 10).await;
     let approval =
@@ -281,7 +281,7 @@ async fn chat_follow_up_continues_the_conversation() {
     let t = start().await;
     let llm = Llm::start(vec![text("hello there"), text("still here")]).await;
     let dot =
-        t.rt.create_dot(local_spec(&t, &llm, "chatty"))
+        t.rt.create_dot(local_spec(&t, &llm, "chatty"), None)
             .await
             .unwrap();
     let first = t.rt.chat(&dot.id, "hi", None).await.unwrap();
@@ -415,7 +415,7 @@ async fn approving_with_a_rule_saves_it_and_the_same_call_is_not_asked_again() {
     .await;
     let mut s = local_spec(&t, &llm, "ruled");
     s.approval_wait_secs = 30;
-    let dot = t.rt.create_dot(s).await.unwrap();
+    let dot = t.rt.create_dot(s, None).await.unwrap();
     let mut events = t.rt.subscribe();
     let first = t.rt.run_now(&dot.id).await.unwrap();
     let approval = loop {
@@ -482,7 +482,7 @@ async fn a_rule_that_was_not_offered_is_refused_and_nothing_is_decided() {
     .await;
     let mut s = local_spec(&t, &llm, "strict");
     s.approval_wait_secs = 0;
-    let dot = t.rt.create_dot(s).await.unwrap();
+    let dot = t.rt.create_dot(s, None).await.unwrap();
     let (parent, pending) = park(&t, &dot.id).await;
     let id = pending[0].id.clone();
     let before = dot.spec.policy.clone();
@@ -562,7 +562,7 @@ async fn the_same_rule_saved_with_two_approvals_is_in_the_policy_once() {
     .await;
     let mut s = local_spec(&t, &llm, "twice");
     s.approval_wait_secs = 0;
-    let dot = t.rt.create_dot(s).await.unwrap();
+    let dot = t.rt.create_dot(s, None).await.unwrap();
     let (_parent, pending) = park(&t, &dot.id).await;
     assert_eq!(pending.len(), 2);
     for approval in &pending {
@@ -593,7 +593,7 @@ async fn deciding_a_runs_approvals_together_performs_them_in_order_and_resumes_o
     .await;
     let mut s = local_spec(&t, &llm, "batch");
     s.approval_wait_secs = 0;
-    let dot = t.rt.create_dot(s).await.unwrap();
+    let dot = t.rt.create_dot(s, None).await.unwrap();
     let (parent, pending) = park(&t, &dot.id).await;
     assert_eq!(pending.len(), 3);
 
@@ -639,7 +639,7 @@ async fn a_batch_given_while_the_run_still_works_is_carried_out_when_it_ends() {
     .await;
     let mut s = local_spec(&t, &llm, "busy");
     s.approval_wait_secs = 0;
-    let dot = t.rt.create_dot(s).await.unwrap();
+    let dot = t.rt.create_dot(s, None).await.unwrap();
     let parent = t.rt.run_now(&dot.id).await.unwrap();
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     loop {
@@ -692,7 +692,7 @@ async fn a_batch_leaves_out_what_was_decided_meanwhile() {
     .await;
     let mut s = local_spec(&t, &llm, "partly");
     s.approval_wait_secs = 0;
-    let dot = t.rt.create_dot(s).await.unwrap();
+    let dot = t.rt.create_dot(s, None).await.unwrap();
     let (parent, pending) = park(&t, &dot.id).await;
     // The middle call is denied on its own first. Two are still pending, so nothing resumes.
     t.rt.decide_approval(&pending[1].id, false, None, None)
@@ -733,7 +733,7 @@ async fn denying_a_runs_approvals_together_closes_the_run_or_resumes_it_once() {
     .await;
     let mut s = local_spec(&t, &llm, "refused");
     s.approval_wait_secs = 0;
-    let dot = t.rt.create_dot(s).await.unwrap();
+    let dot = t.rt.create_dot(s, None).await.unwrap();
     let (parent, pending) = park(&t, &dot.id).await;
     let decided =
         t.rt.decide_run_approvals(&parent.id, false, None)
@@ -760,7 +760,7 @@ async fn denying_a_runs_approvals_together_closes_the_run_or_resumes_it_once() {
     .await;
     let mut s = local_spec(&t, &llm, "noted");
     s.approval_wait_secs = 0;
-    let dot = t.rt.create_dot(s).await.unwrap();
+    let dot = t.rt.create_dot(s, None).await.unwrap();
     let (parent, _pending) = park(&t, &dot.id).await;
     t.rt.decide_run_approvals(&parent.id, false, Some("not now".into()))
         .await
@@ -796,7 +796,7 @@ async fn a_batch_answers_a_run_that_still_waits_and_changes_nothing_else() {
     .await;
     let mut s = local_spec(&t, &llm, "waiting");
     s.approval_wait_secs = 30;
-    let dot = t.rt.create_dot(s).await.unwrap();
+    let dot = t.rt.create_dot(s, None).await.unwrap();
     let mut events = t.rt.subscribe();
     let run = t.rt.run_now(&dot.id).await.unwrap();
     loop {

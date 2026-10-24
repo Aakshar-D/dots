@@ -86,7 +86,7 @@ async fn load_follows_the_parent_chain_in_order() {
     let mut s = spec("hist");
     s.engine = EngineKind::Local;
     s.endpoint_url = Some("http://127.0.0.1:1".into());
-    let dot = store.create_dot(&s).await.unwrap();
+    let dot = store.create_dot(&s, None).await.unwrap();
     let root = store
         .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
         .await

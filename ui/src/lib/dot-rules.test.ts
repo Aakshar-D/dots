@@ -65,6 +65,7 @@ describe("dot editor rules", () => {
     const spec = specOf(sample.dot);
     expect(spec).not.toHaveProperty("id");
     expect(spec).not.toHaveProperty("has_webhook_token");
+    expect(spec).not.toHaveProperty("org_id");
     expect(spec.name).toBe(sample.dot.name);
     expect(sample.dot.uses.mcp_servers).not.toEqual([]);
     expect(spec.uses).toEqual(sample.dot.uses);

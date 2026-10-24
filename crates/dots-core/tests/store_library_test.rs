@@ -264,7 +264,7 @@ async fn a_dot_uses_only_what_the_library_has() {
 
     let mut s = spec("triage");
     s.uses = uses(&["sf"], &["pdf"], &["tools"]);
-    let dot = store.create_dot(&s).await.unwrap();
+    let dot = store.create_dot(&s, None).await.unwrap();
     assert_eq!(dot.spec.uses, s.uses);
 
     for (name, bad) in [
@@ -277,7 +277,7 @@ async fn a_dot_uses_only_what_the_library_has() {
     ] {
         let mut s = spec(name);
         s.uses = bad;
-        let err = store.create_dot(&s).await.unwrap_err();
+        let err = store.create_dot(&s, None).await.unwrap_err();
         assert!(matches!(err, Error::Invalid(_)), "{name}: {err:?}");
         let mut changed = dot.spec.clone();
         changed.uses = s.uses.clone();
@@ -350,11 +350,11 @@ async fn removing_an_item_unticks_it_and_takes_a_plugins_servers_along() {
         .unwrap();
     let mut a = spec("a");
     a.uses = uses(&["sf"], &[], &["tools"]);
-    let a = store.create_dot(&a).await.unwrap();
+    let a = store.create_dot(&a, None).await.unwrap();
     let mut b = spec("b");
     b.uses = uses(&["sf"], &[], &[]);
-    let b = store.create_dot(&b).await.unwrap();
-    let c = store.create_dot(&spec("c")).await.unwrap();
+    let b = store.create_dot(&b, None).await.unwrap();
+    let c = store.create_dot(&spec("c"), None).await.unwrap();
 
     let names = |dots: Vec<dots_core::model::Dot>| -> Vec<String> {
         dots.into_iter().map(|d| d.spec.name).collect()

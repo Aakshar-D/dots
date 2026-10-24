@@ -86,7 +86,7 @@ async fn local_dot(e: &Env, llm: &Llm, preset: Preset) -> Dot {
     s.endpoint_url = Some(llm.endpoint());
     s.model = "test-model".into();
     s.policy = Policy::preset(preset);
-    e.store.create_dot(&s).await.unwrap()
+    e.store.create_dot(&s, None).await.unwrap()
 }
 
 async fn run(e: &Env, dot: &Dot) -> Run {

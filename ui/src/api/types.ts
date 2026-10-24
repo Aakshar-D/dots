@@ -124,6 +124,9 @@ export const Dot = z.strictObject({
   updated_at: z.string(),
   // When the person last looked at its conversation (RFC 3339 UTC); null before the first time.
   seen_at: nullable(z.string()),
+  // The org the dot belongs to, fixed when it is made; null is Personal. The org may have been
+  // removed since, and the dot keeps its id.
+  org_id: nullable(z.string()),
   ...dotSpecShape,
 });
 

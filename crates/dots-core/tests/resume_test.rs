@@ -87,7 +87,7 @@ async fn parking_dot(e: &Env) -> Dot {
     s.workdir = e.dir.path().to_string_lossy().to_string();
     s.workspace_mode = WorkspaceMode::Folder;
     s.approval_wait_secs = 0;
-    e.store.create_dot(&s).await.unwrap()
+    e.store.create_dot(&s, None).await.unwrap()
 }
 
 /// What Runtime::decide_approval does (Task 14).
@@ -366,7 +366,7 @@ async fn cancel_before_resume_leaves_parent_cancelled_and_no_child() {
 #[tokio::test]
 async fn resume_parked_on_non_awaiting_parent_conflicts_and_changes_nothing() {
     let (_dir, store) = temp_store().await;
-    let dot = store.create_dot(&spec("conflicted")).await.unwrap();
+    let dot = store.create_dot(&spec("conflicted"), None).await.unwrap();
     let parent = store
         .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
         .await
@@ -728,7 +728,7 @@ async fn worktree_parking_dot(e: &Env) -> Dot {
     s.workdir = repo.to_string_lossy().to_string();
     s.workspace_mode = WorkspaceMode::Worktree;
     s.approval_wait_secs = 0;
-    e.store.create_dot(&s).await.unwrap()
+    e.store.create_dot(&s, None).await.unwrap()
 }
 
 async fn parked_worktree_run(e: &Env) -> (Run, String) {
@@ -871,7 +871,7 @@ async fn a_granted_context_approval_names_the_tool_the_model_knows() {
     s.approval_wait_secs = 0;
     s.policy.rules.retain(|r| r.tool != "Context");
     s.policy.rules.push(Rule::new("Context", Action::Ask));
-    let dot = e.store.create_dot(&s).await.unwrap();
+    let dot = e.store.create_dot(&s, None).await.unwrap();
     let parent = e
         .runner
         .enqueue(NewRun::new(&dot.id, TriggerKind::Manual))

@@ -166,6 +166,7 @@
     "max_turns": 40,
     "model": "sonnet",
     "name": "nightly-tests",
+    "org_id": null,
     "policy": {
       "default": "ask",
       "mcp_default": "ask",
@@ -311,6 +312,7 @@
       "max_turns": 40,
       "model": "sonnet",
       "name": "nightly-tests",
+      "org_id": null,
       "policy": {
         "default": "ask",
         "mcp_default": "ask",

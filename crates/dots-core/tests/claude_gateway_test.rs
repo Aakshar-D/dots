@@ -123,7 +123,7 @@ async fn claude_dot(e: &Env, edit: impl FnOnce(&mut DotSpec)) -> Dot {
     s.policy = Policy::preset(Preset::Sandboxed);
     s.approval_wait_secs = 0;
     edit(&mut s);
-    e.store.create_dot(&s).await.unwrap()
+    e.store.create_dot(&s, None).await.unwrap()
 }
 
 async fn start(e: &Env, dot: &Dot) -> Run {

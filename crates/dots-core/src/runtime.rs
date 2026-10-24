@@ -783,8 +783,17 @@ impl Runtime {
         });
     }
 
-    pub async fn create_dot(&self, spec: DotSpec) -> Result<Dot> {
-        let dot = self.store.create_dot(&spec).await?;
+    /// Creates a dot, in the org `org_id` or, with `None`, in Personal. The org must be joined
+    /// on this PC; it is fixed from then on (env vault spec §5.2).
+    pub async fn create_dot(&self, spec: DotSpec, org_id: Option<String>) -> Result<Dot> {
+        if let Some(org) = &org_id {
+            if self.store.get_org(org).await?.is_none() {
+                return Err(Error::Invalid(format!(
+                    "no org '{org}' is joined on this PC"
+                )));
+            }
+        }
+        let dot = self.store.create_dot(&spec, org_id.as_deref()).await?;
         self.sync_schedule(&dot, false).await?;
         self.scheduler.reload();
         Ok(dot)

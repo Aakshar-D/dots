@@ -277,7 +277,7 @@ async fn removing_an_item_that_dots_use_asks_first_and_names_them() {
     for name in ["nightly", "audit"] {
         let mut s = spec(name);
         s.uses.skills = vec!["pdf".into()];
-        store.create_dot(&s).await.unwrap();
+        store.create_dot(&s, None).await.unwrap();
     }
     let err = lib.remove(&skill.id, false).await.unwrap_err();
     match &err {
@@ -441,7 +441,7 @@ async fn the_list_says_who_uses_an_item_and_what_it_holds() {
     let mut s = spec("nightly");
     s.uses.mcp_servers = vec!["files".into()];
     s.uses.plugins = vec!["forms".into()];
-    let dot = store.create_dot(&s).await.unwrap();
+    let dot = store.create_dot(&s, None).await.unwrap();
     // The skill's folder goes away after it was added.
     std::fs::remove_dir_all(&skill_path).unwrap();
 
@@ -583,7 +583,7 @@ async fn the_inbox_lists_servers_whose_tools_changed_and_counts_them() {
         .unwrap();
     let mut s = spec("nightly");
     s.uses.mcp_servers = vec!["files".into()];
-    rt.create_dot(s).await.unwrap();
+    rt.create_dot(s, None).await.unwrap();
     let inbox = rt.inbox().await.unwrap();
     assert_eq!(inbox.tools_changed.len(), 1);
     let changed = &inbox.tools_changed[0];
@@ -818,7 +818,7 @@ Short sentences.",
         .unwrap();
     let mut s = spec("nightly");
     s.uses.context = vec!["company".into()];
-    store.create_dot(&s).await.unwrap();
+    store.create_dot(&s, None).await.unwrap();
     let entry = lib
         .list()
         .await
@@ -862,10 +862,10 @@ async fn removing_a_collection_takes_it_out_of_the_dots_that_tick_it() {
     let mut s = spec("nightly");
     s.uses.context = vec!["company".into()];
     s.uses.skills = Vec::new();
-    store.create_dot(&s).await.unwrap();
+    store.create_dot(&s, None).await.unwrap();
     let mut unknown = spec("audit");
     unknown.uses.context = vec!["clients".into()];
-    let err = store.create_dot(&unknown).await.unwrap_err();
+    let err = store.create_dot(&unknown, None).await.unwrap_err();
     assert!(
         err.to_string()
             .contains("the Library has no context collection named \"clients\""),

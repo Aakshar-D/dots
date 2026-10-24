@@ -271,7 +271,7 @@ async fn a_used_skill_is_not_deleted_until_the_person_confirms() {
     let own = lib.create_skill(DRAFT).await.unwrap();
     let mut s = spec("reviewer");
     s.uses.skills = vec!["pr-tests".into()];
-    store.create_dot(&s).await.unwrap();
+    store.create_dot(&s, None).await.unwrap();
     assert!(matches!(
         lib.remove(&own.id, false).await,
         Err(Error::Conflict(_))

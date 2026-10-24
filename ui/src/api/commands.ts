@@ -93,7 +93,9 @@ export const commands = {
   dotOverview: () => call(T.DotOverview.array(), "dot_overview"),
   listDots: () => call(T.Dot.array(), "list_dots"),
   getDot: (id: string) => call(T.Dot, "get_dot", { id }),
-  createDot: (spec: DotSpec) => call(T.Dot, "create_dot", { spec }),
+  /// `orgId`: the joined org the dot belongs to, fixed from then on; null for Personal.
+  createDot: (spec: DotSpec, orgId: string | null = null) =>
+    call(T.Dot, "create_dot", { spec, orgId }),
   updateDot: (id: string, spec: DotSpec) => call(T.Dot, "update_dot", { id, spec }),
   deleteDot: (id: string) => call(nothing, "delete_dot", { id }),
   setDotEnabled: (id: string, enabled: boolean) =>

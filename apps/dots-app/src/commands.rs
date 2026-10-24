@@ -217,9 +217,14 @@ pub async fn get_dot(state: State<'_, AppState>, id: String) -> Res<Dot> {
     Ok(state.rt()?.get_dot(&id).await?)
 }
 
+/// `org_id`, the UI's `orgId`: the org the new dot belongs to, `None` for Personal.
 #[tauri::command]
-pub async fn create_dot(state: State<'_, AppState>, spec: DotSpec) -> Res<Dot> {
-    Ok(state.rt()?.create_dot(spec).await?)
+pub async fn create_dot(
+    state: State<'_, AppState>,
+    spec: DotSpec,
+    org_id: Option<String>,
+) -> Res<Dot> {
+    Ok(state.rt()?.create_dot(spec, org_id).await?)
 }
 
 #[tauri::command]

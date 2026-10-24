@@ -3,6 +3,7 @@
 
 pub mod join;
 pub mod policy;
+pub mod row;
 pub mod signed;
 
 pub use join::{
@@ -10,4 +11,5 @@ pub use join::{
     OpenBaoSettings, SopsSettings, SourceSettings,
 };
 pub use policy::{parse_policy, AuditTarget, OrgPolicy, PersonalMode, PolicyError, UseRules};
+pub use row::OrgRow;
 pub use signed::{envelope, verify_policy};

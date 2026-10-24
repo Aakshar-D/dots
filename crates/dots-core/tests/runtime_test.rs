@@ -46,7 +46,10 @@ fn folder_spec(dir: &TempDir, name: &str) -> DotSpec {
 #[tokio::test]
 async fn webhook_to_success_end_to_end() {
     let t = start(None, None).await;
-    let dot = t.rt.create_dot(folder_spec(&t.dir, "hook")).await.unwrap();
+    let dot =
+        t.rt.create_dot(folder_spec(&t.dir, "hook"), None)
+            .await
+            .unwrap();
     let url = t.rt.webhook_url(&dot).unwrap();
     let token = t.rt.regenerate_webhook_token(&dot.id).await.unwrap();
     assert!(url.starts_with(&format!("http://127.0.0.1:{}/dots/", t.rt.port())));
@@ -77,7 +80,7 @@ async fn webhook_to_success_end_to_end() {
 async fn run_now_then_chat_follow_up_resumes_session() {
     let t = start(None, None).await;
     let dot =
-        t.rt.create_dot(folder_spec(&t.dir, "chatty"))
+        t.rt.create_dot(folder_spec(&t.dir, "chatty"), None)
             .await
             .unwrap();
     let manual = t.rt.run_now(&dot.id).await.unwrap();
@@ -99,7 +102,10 @@ async fn run_now_then_chat_follow_up_resumes_session() {
         t.rt.chat(&dot.id, "  ", None).await,
         Err(Error::Invalid(_))
     ));
-    let other = t.rt.create_dot(folder_spec(&t.dir, "other")).await.unwrap();
+    let other =
+        t.rt.create_dot(folder_spec(&t.dir, "other"), None)
+            .await
+            .unwrap();
     assert!(matches!(
         t.rt.chat(&other.id, "x", Some(&first.id)).await,
         Err(Error::Invalid(_))
@@ -118,7 +124,7 @@ async fn decide_approval_resumes_parked_run() {
     let t = start(Some(script), None).await;
     let mut s = folder_spec(&t.dir, "gated");
     s.approval_wait_secs = 0;
-    let dot = t.rt.create_dot(s).await.unwrap();
+    let dot = t.rt.create_dot(s, None).await.unwrap();
     let parent = t.rt.run_now(&dot.id).await.unwrap();
     wait_status(t.rt.store(), &parent.id, RunStatus::AwaitingApproval, 15).await;
     let approval =
@@ -158,7 +164,7 @@ async fn start_recovers_interrupted_runs() {
     let data = dir.path().join("data");
     let run_id = {
         let store = Store::open(&data.join("dots.db")).await.unwrap();
-        let dot = store.create_dot(&spec("crashy")).await.unwrap();
+        let dot = store.create_dot(&spec("crashy"), None).await.unwrap();
         let run = store
             .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
             .await
@@ -179,7 +185,10 @@ async fn start_recovers_interrupted_runs() {
 async fn delete_with_active_runs_conflicts() {
     let script = json!([{"sleep_ms": 3000}]);
     let t = start(Some(script), None).await;
-    let dot = t.rt.create_dot(folder_spec(&t.dir, "busy")).await.unwrap();
+    let dot =
+        t.rt.create_dot(folder_spec(&t.dir, "busy"), None)
+            .await
+            .unwrap();
     let run = t.rt.run_now(&dot.id).await.unwrap();
     assert!(matches!(
         t.rt.delete_dot(&dot.id).await,
@@ -195,7 +204,10 @@ async fn delete_with_active_runs_conflicts() {
 async fn missing_claude_fails_runs_cleanly() {
     let t = start(None, Some(PathBuf::from("Z:/nope/claude.exe"))).await;
     assert!(t.rt.claude_program().is_none());
-    let dot = t.rt.create_dot(folder_spec(&t.dir, "nocli")).await.unwrap();
+    let dot =
+        t.rt.create_dot(folder_spec(&t.dir, "nocli"), None)
+            .await
+            .unwrap();
     let run = t.rt.run_now(&dot.id).await.unwrap();
     let failed = wait_status(t.rt.store(), &run.id, RunStatus::Failed, 15).await;
     assert_eq!(
@@ -209,7 +221,7 @@ async fn missing_claude_fails_runs_cleanly() {
 async fn delete_with_awaiting_run_conflicts_and_keeps_rows() {
     let t = start(None, None).await;
     let dot =
-        t.rt.create_dot(folder_spec(&t.dir, "waiting"))
+        t.rt.create_dot(folder_spec(&t.dir, "waiting"), None)
             .await
             .unwrap();
     let store = t.rt.store();
@@ -242,7 +254,10 @@ async fn delete_with_awaiting_run_conflicts_and_keeps_rows() {
 #[tokio::test]
 async fn chat_follow_up_requires_finished_parent_with_session() {
     let t = start(None, None).await;
-    let dot = t.rt.create_dot(folder_spec(&t.dir, "ghost")).await.unwrap();
+    let dot =
+        t.rt.create_dot(folder_spec(&t.dir, "ghost"), None)
+            .await
+            .unwrap();
     let queued =
         t.rt.store()
             .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
@@ -294,7 +309,10 @@ fn refusal<T: std::fmt::Debug>(res: Result<T, Error>) -> String {
 #[tokio::test]
 async fn chat_follow_up_must_continue_the_latest_run_of_its_thread() {
     let t = start(None, None).await;
-    let dot = t.rt.create_dot(folder_spec(&t.dir, "line")).await.unwrap();
+    let dot =
+        t.rt.create_dot(folder_spec(&t.dir, "line"), None)
+            .await
+            .unwrap();
     let first = t.rt.chat(&dot.id, "one", None).await.unwrap();
     wait_status(t.rt.store(), &first.id, RunStatus::Succeeded, 15).await;
     let second = t.rt.chat(&dot.id, "two", Some(&first.id)).await.unwrap();
@@ -328,7 +346,10 @@ async fn chat_follow_up_is_refused_while_its_thread_waits_for_an_approval() {
     let data = dir.path().join("data");
     let (dot, first, parked) = {
         let store = Store::open(&data.join("dots.db")).await.unwrap();
-        let dot = store.create_dot(&folder_spec(&dir, "asks")).await.unwrap();
+        let dot = store
+            .create_dot(&folder_spec(&dir, "asks"), None)
+            .await
+            .unwrap();
         let first = store
             .create_run(&NewRun::new(&dot.id, TriggerKind::Chat))
             .await
@@ -377,7 +398,10 @@ async fn chat_follow_up_is_refused_while_its_thread_waits_for_an_approval() {
 #[tokio::test]
 async fn two_follow_ups_sent_at_once_do_not_fork_the_thread() {
     let t = start(None, None).await;
-    let dot = t.rt.create_dot(folder_spec(&t.dir, "twice")).await.unwrap();
+    let dot =
+        t.rt.create_dot(folder_spec(&t.dir, "twice"), None)
+            .await
+            .unwrap();
     let first = t.rt.chat(&dot.id, "one", None).await.unwrap();
     wait_status(t.rt.store(), &first.id, RunStatus::Succeeded, 15).await;
 
@@ -405,7 +429,7 @@ async fn update_dot_workspace_change_conflicts_while_runs_are_active() {
     let (dot, run) = {
         let store = Store::open(&data.join("dots.db")).await.unwrap();
         let dot = store
-            .create_dot(&folder_spec(&dir, "moving"))
+            .create_dot(&folder_spec(&dir, "moving"), None)
             .await
             .unwrap();
         let run = store
@@ -468,7 +492,7 @@ async fn start_resumes_awaiting_runs_with_parked_decisions() {
         let mut s = spec("restarted");
         s.workdir = dir.path().to_string_lossy().to_string();
         s.workspace_mode = WorkspaceMode::Folder;
-        let dot = store.create_dot(&s).await.unwrap();
+        let dot = store.create_dot(&s, None).await.unwrap();
         let run = store
             .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
             .await
@@ -516,7 +540,7 @@ async fn chat_follow_up_restores_a_removed_worktree_at_the_same_path() {
     let mut s = spec("wt-chat");
     s.workdir = repo.to_string_lossy().to_string();
     s.workspace_mode = WorkspaceMode::Worktree;
-    let dot = t.rt.create_dot(s).await.unwrap();
+    let dot = t.rt.create_dot(s, None).await.unwrap();
 
     let first = t.rt.chat(&dot.id, "look around", None).await.unwrap();
     let first = wait_status(t.rt.store(), &first.id, RunStatus::Succeeded, 15).await;
@@ -552,7 +576,7 @@ async fn a_rule_can_be_saved_with_the_approval_of_a_claude_dot() {
     let t = start(Some(script), None).await;
     let mut s = folder_spec(&t.dir, "ruled");
     s.approval_wait_secs = 0;
-    let dot = t.rt.create_dot(s).await.unwrap();
+    let dot = t.rt.create_dot(s, None).await.unwrap();
     let parent = t.rt.run_now(&dot.id).await.unwrap();
     wait_status(t.rt.store(), &parent.id, RunStatus::AwaitingApproval, 15).await;
     let approval =
@@ -596,8 +620,14 @@ async fn a_rule_can_be_saved_with_the_approval_of_a_claude_dot() {
 #[tokio::test]
 async fn a_held_queue_starts_no_run_and_working_dots_name_the_running_ones() {
     let t = start(Some(json!([{"sleep_ms": 3000}])), None).await;
-    let busy = t.rt.create_dot(folder_spec(&t.dir, "busy")).await.unwrap();
-    let idle = t.rt.create_dot(folder_spec(&t.dir, "idle")).await.unwrap();
+    let busy =
+        t.rt.create_dot(folder_spec(&t.dir, "busy"), None)
+            .await
+            .unwrap();
+    let idle =
+        t.rt.create_dot(folder_spec(&t.dir, "idle"), None)
+            .await
+            .unwrap();
     assert!(t.rt.working_dots().await.unwrap().is_empty());
     let first = t.rt.run_now(&busy.id).await.unwrap();
     wait_status(t.rt.store(), &first.id, RunStatus::Running, 15).await;
@@ -621,7 +651,10 @@ async fn a_held_queue_starts_no_run_and_working_dots_name_the_running_ones() {
 #[tokio::test]
 async fn close_ends_the_runtime_and_leaves_a_database_to_back_up() {
     let t = start(None, None).await;
-    let dot = t.rt.create_dot(folder_spec(&t.dir, "kept")).await.unwrap();
+    let dot =
+        t.rt.create_dot(folder_spec(&t.dir, "kept"), None)
+            .await
+            .unwrap();
     assert!(t.rt.close(std::time::Duration::from_secs(5)).await);
     assert!(t.rt.list_dots().await.is_err());
     let db = t.dir.path().join("data").join("dots.db");

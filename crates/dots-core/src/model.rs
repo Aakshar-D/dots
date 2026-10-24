@@ -191,6 +191,10 @@ pub struct Dot {
     /// first time (needs-you spec section 2).
     #[serde(default)]
     pub seen_at: Option<String>,
+    /// The org the dot belongs to, fixed when it is created; `None` is Personal (env vault spec
+    /// §5.2). The org may have been removed since, and the dot keeps its id (§6.4).
+    #[serde(default)]
+    pub org_id: Option<String>,
     #[serde(flatten)]
     pub spec: DotSpec,
 }

@@ -189,7 +189,7 @@ async fn a_form_edit_of_a_name_only_its_server_reads_replaces_the_value() {
         .unwrap();
     let mut s = spec("rotates");
     s.uses.mcp_servers = vec!["sf".into()];
-    let dot = store.create_dot(&s).await.unwrap();
+    let dot = store.create_dot(&s, None).await.unwrap();
     let updated = lib
         .update(
             &item.id,
@@ -283,7 +283,7 @@ async fn a_plugin_resync_with_another_value_keeps_the_name_and_the_grant() {
     let item = lib.add("forms", plugin.clone(), None).await.unwrap();
     let mut s = spec("forms-user");
     s.uses.plugins = vec!["forms".into()];
-    let dot = store.create_dot(&s).await.unwrap();
+    let dot = store.create_dot(&s, None).await.unwrap();
     assert_eq!(dot.spec.variables.0["mcp:plugin-forms-db"], ["SF_TOKEN"]);
     // The plugin's file now has another value; the plugin is synced again.
     std::fs::write(root.join(".mcp.json"), mcp("plugin-second-value-22")).unwrap();
@@ -362,7 +362,7 @@ async fn a_plugins_written_secret_moves_into_personal_as_it_is_synced() {
     assert!(!db_holds(dir.path(), "plugin-secret-6"));
     let mut s = spec("filler");
     s.uses.plugins = vec!["forms".into()];
-    let dot = store.create_dot(&s).await.unwrap();
+    let dot = store.create_dot(&s, None).await.unwrap();
     assert_eq!(dot.spec.variables.0["mcp:plugin-forms-db"], ["DB_TOKEN"]);
 }
 
@@ -380,7 +380,7 @@ async fn stored_secrets_move_at_start_and_their_dots_are_granted_the_names() {
         .unwrap();
     let mut s = spec("salesforce");
     s.uses.mcp_servers = vec!["sf".into()];
-    let dot = store.create_dot(&s).await.unwrap();
+    let dot = store.create_dot(&s, None).await.unwrap();
     assert!(dot.spec.variables.0.is_empty());
     let vault = Vault::in_memory(store.clone());
     assert_eq!(vault.move_stored_literals().await.unwrap(), 1);
