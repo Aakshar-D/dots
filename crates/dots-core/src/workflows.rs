@@ -385,6 +385,45 @@ impl Workflows {
                 self.watch_agent(&wr, index, &step_run).await
             }
             Some((StepRunStatus::Succeeded, _)) => self.begin_step(&wr, index + 1).await,
+            // A move cut off between its two writes (a crash, a store error) leaves the run
+            // `Running` behind a step that is failed or waiting for the person: put the run
+            // where the person can act on it.
+            Some((StepRunStatus::Failed, step_run)) => {
+                let error = step_run
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| "the step failed".to_string());
+                let name = wr.definition.steps[index].name.clone();
+                let waiting = self
+                    .store
+                    .set_workflow_run(
+                        &wr.id,
+                        &WorkflowRunChange {
+                            status: Some(WorkflowRunStatus::Waiting),
+                            waiting_on: Some(Some(WaitingOn::StepFailed)),
+                            error: Some(Some(format!("{name}: {error}"))),
+                            ..Default::default()
+                        },
+                    )
+                    .await?;
+                self.updated(&waiting);
+                Ok(())
+            }
+            Some((StepRunStatus::Waiting, _)) => {
+                let waiting = self
+                    .store
+                    .set_workflow_run(
+                        &wr.id,
+                        &WorkflowRunChange {
+                            status: Some(WorkflowRunStatus::Waiting),
+                            waiting_on: Some(Some(WaitingOn::Check)),
+                            ..Default::default()
+                        },
+                    )
+                    .await?;
+                self.updated(&waiting);
+                Ok(())
+            }
             Some(_) => Ok(()),
         }
     }

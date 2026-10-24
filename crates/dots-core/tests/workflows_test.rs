@@ -735,3 +735,62 @@ async fn every_move_is_announced() {
     );
     let _ = &w.dir;
 }
+
+#[tokio::test]
+async fn a_pass_puts_a_run_cut_off_behind_a_failed_step_back_to_waiting() {
+    let w = world().await;
+    w.engine.set(&w.dev.spec.name, vec![Act::Finish("Fixed.")]);
+    let flow = w
+        .workflow("Fix", vec![agent("dev", "Fix it", &w.dev, "Fix.")])
+        .await;
+    w.store.set_dot_enabled(&w.dev.id, false).await.unwrap();
+    let wr = w.start(&flow).await;
+    let wr = w.until(&wr.id, waits_on(WaitingOn::StepFailed)).await;
+    // The move was cut off after the step was failed: the run is left running.
+    w.store
+        .set_workflow_run(
+            &wr.id,
+            &dots_core::model::WorkflowRunChange {
+                status: Some(WorkflowRunStatus::Running),
+                waiting_on: Some(None),
+                error: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    w.workflows.pass().await.unwrap();
+    let fixed = w.store.get_workflow_run(&wr.id).await.unwrap();
+    assert_eq!(fixed.status, WorkflowRunStatus::Waiting);
+    assert_eq!(fixed.waiting_on, Some(WaitingOn::StepFailed));
+    assert_eq!(fixed.error.as_deref(), Some("Fix it: dev is disabled"));
+    w.store.set_dot_enabled(&w.dev.id, true).await.unwrap();
+    w.workflows.retry_step(&wr.id).await.unwrap();
+    w.until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+}
+
+#[tokio::test]
+async fn a_pass_puts_a_run_cut_off_behind_a_waiting_check_back_to_waiting() {
+    let w = world().await;
+    let flow = w.workflow("Check", vec![check("check")]).await;
+    let wr = w.start(&flow).await;
+    let wr = w.until(&wr.id, waits_on(WaitingOn::Check)).await;
+    w.store
+        .set_workflow_run(
+            &wr.id,
+            &dots_core::model::WorkflowRunChange {
+                status: Some(WorkflowRunStatus::Running),
+                waiting_on: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    w.workflows.pass().await.unwrap();
+    let fixed = w.store.get_workflow_run(&wr.id).await.unwrap();
+    assert_eq!(fixed.status, WorkflowRunStatus::Waiting);
+    assert_eq!(fixed.waiting_on, Some(WaitingOn::Check));
+    let done = w.workflows.approve_check(&wr.id, None).await.unwrap();
+    assert_eq!(done.status, WorkflowRunStatus::Succeeded);
+}
