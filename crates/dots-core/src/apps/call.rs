@@ -145,9 +145,17 @@ pub fn call(conn: &Rc<RefCell<Connection>>, call: Call<'_>) -> Result<Outcome, C
         _ => MAX_DOT_RESULT,
     };
     let db = |e: rusqlite::Error| CallError::Db(e.to_string());
+    // A tool that says it does not write cannot: policy rules and the call log go by `writes`
+    // (spec sections 4 to 6). `on_run_end` is not a tool, and may write.
+    let read_only = call.manifest.tool(call.function).is_some_and(|t| !t.writes);
     let before = {
         let c = conn.borrow();
         c.execute_batch("BEGIN IMMEDIATE").map_err(db)?;
+        // Set after BEGIN, since SQLite will not begin a write transaction under query_only.
+        if let Err(e) = c.pragma_update(None, "query_only", read_only) {
+            let _ = c.execute_batch("ROLLBACK");
+            return Err(db(e));
+        }
         c.total_changes()
     };
     let state = Rc::new(RefCell::new(State {
@@ -159,12 +167,25 @@ pub fn call(conn: &Rc<RefCell<Connection>>, call: Call<'_>) -> Result<Outcome, C
     }));
     let actor = serde_json::to_value(&call.actor).unwrap_or(Value::Null);
     let now = call.now.clone();
+    // The engine's limit cannot stop a statement inside SQLite; the deadline can.
+    let deadline = std::time::Instant::now() + call.limits.time;
+    data::set_deadline(&conn.borrow(), Some(deadline));
     data::guard(&conn.borrow());
     let result = engine::run(call.logic, call.function, call.input, call.limits, |ctx| {
         make_ctx(ctx, &state, &actor, &now)
     });
     data::unguard(&conn.borrow());
+    data::set_deadline(&conn.borrow(), None);
+    // The code may have caught the SQL the deadline interrupted: a call over its time is a
+    // timeout whatever it returned (spec section 11).
+    let result = if std::time::Instant::now() >= deadline {
+        Err(Failure::TimedOut)
+    } else {
+        result
+    };
+    let reset = conn.borrow().pragma_update(None, "query_only", false);
     let checked = result.map_err(CallError::Failed).and_then(|value| {
+        reset.map_err(db)?;
         let bytes = value.to_string().len();
         if bytes > limit {
             Err(CallError::TooLarge { bytes, limit })
@@ -190,6 +211,16 @@ pub fn call(conn: &Rc<RefCell<Connection>>, call: Call<'_>) -> Result<Outcome, C
             Err(e)
         }
     }
+}
+
+/// The app's SQL runs only inside the call's transaction. SQLite ends that transaction by
+/// itself after some errors (an interrupted write, a full disk), and code that caught the error
+/// would otherwise write outside it, each statement committed at once.
+fn in_transaction(ctx: &Ctx<'_>, conn: &Connection) -> rquickjs::Result<()> {
+    if conn.is_autocommit() {
+        return Err(engine::throw(ctx, "SQL: the call's transaction has ended"));
+    }
+    Ok(())
 }
 
 /// The `ctx` object (spec section 5): `now`, `actor`, `id()`, `db.query`, `db.exec`,
@@ -224,6 +255,7 @@ fn make_ctx<'js>(
                   params: rquickjs::function::Opt<rquickjs::Value<'js>>| {
                 let params = params_of(&ctx, params.0)?;
                 let conn = s.borrow().conn.clone();
+                in_transaction(&ctx, &conn.borrow())?;
                 let rows = data::query(&conn.borrow(), &sql, &params)
                     .map_err(|e| engine::throw(&ctx, &format!("SQL: {e}")))?;
                 engine::to_js(&ctx, &Value::Array(rows))
@@ -240,6 +272,7 @@ fn make_ctx<'js>(
                   params: rquickjs::function::Opt<rquickjs::Value<'js>>| {
                 let params = params_of(&ctx, params.0)?;
                 let conn = s.borrow().conn.clone();
+                in_transaction(&ctx, &conn.borrow())?;
                 let changes = data::exec(&conn.borrow(), &sql, &params)
                     .map_err(|e| engine::throw(&ctx, &format!("SQL: {e}")))?;
                 engine::to_js(&ctx, &json!({ "changes": changes }))

@@ -433,3 +433,72 @@ fn a_rolled_back_call_starts_nothing() {
     )
     .is_err());
 }
+
+/// `app(extra)` with one more tool, `name`, listed with `writes`.
+fn with_tool(mut app: App, name: &str, writes: bool) -> App {
+    let mut tool = app.manifest.tool("f").unwrap().clone();
+    tool.name = name.into();
+    tool.writes = writes;
+    app.manifest.tools.push(tool);
+    app
+}
+
+#[test]
+fn a_tool_that_does_not_write_cannot_write() {
+    let app = with_tool(
+        app("export function sneak(input, ctx) { \
+             ctx.db.exec(\"INSERT INTO expenses VALUES ('x', 'Tea', 1, '2026-10-22', ?, 'me')\", \
+             [ctx.now]); return 1; }"),
+        "sneak",
+        false,
+    );
+    let err = run(&app, "sneak", json!({}), dot()).unwrap_err();
+    assert!(err.to_string().contains("readonly"), "{err}");
+    assert_eq!(count(&app), 0);
+    // The next call, from a tool that writes, still can.
+    run(
+        &app,
+        "add_expense",
+        json!({"item": "Coffee", "amount": 4.5, "on": "2026-10-22"}),
+        dot(),
+    )
+    .unwrap();
+    assert_eq!(count(&app), 1);
+}
+
+#[test]
+fn runaway_sql_stops_at_the_calls_time_limit() {
+    let app = with_tool(
+        app("export function spin(input, ctx) { \
+             try { return ctx.db.query('WITH RECURSIVE c(n) AS \
+             (SELECT 1 UNION ALL SELECT n + 1 FROM c) SELECT count(*) AS n FROM c'); } \
+             catch (e) { return 'caught'; } }"),
+        "spin",
+        false,
+    );
+    let started = std::time::Instant::now();
+    let err = run_with(
+        &app,
+        "spin",
+        json!({}),
+        dot(),
+        None,
+        Limits {
+            time: Duration::from_millis(300),
+            ..Limits::default()
+        },
+    )
+    .unwrap_err();
+    // The code caught the interrupted query, but the call still ran over its time.
+    assert_eq!(err, CallError::Failed(Failure::TimedOut));
+    assert!(started.elapsed() < Duration::from_secs(5));
+    // The app is not stuck: the next call runs and commits.
+    run(
+        &app,
+        "add_expense",
+        json!({"item": "Coffee", "amount": 4.5, "on": "2026-10-22"}),
+        dot(),
+    )
+    .unwrap();
+    assert_eq!(count(&app), 1);
+}
