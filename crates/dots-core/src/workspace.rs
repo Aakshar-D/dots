@@ -535,6 +535,37 @@ impl WorkspaceManager {
         self.remove(Path::new(&dot.spec.workdir), prepared).await?;
         Ok(true)
     }
+
+    /// `commit_all` in the run's own worktree, and nowhere else: the row must pass `check_owned`,
+    /// the folder must hold its own `.git` (git would otherwise search the parent folders for a
+    /// repo), and HEAD must still be the run's branch (the agent may have switched it). A refusal
+    /// is an error and leaves the work uncommitted.
+    pub async fn commit_leftovers(
+        &self,
+        prepared: &Prepared,
+        message: &str,
+        no_hooks: &Path,
+    ) -> Result<bool> {
+        self.check_owned(prepared)?;
+        let Some(branch) = &prepared.branch else {
+            return Ok(false);
+        };
+        if !prepared.path.join(".git").exists() {
+            return Err(Error::Invalid(format!(
+                "{} is not a git worktree",
+                prepared.path.display()
+            )));
+        }
+        let head = git(&prepared.path, &["symbolic-ref", "--quiet", "HEAD"])
+            .await
+            .unwrap_or_default();
+        if head != format!("refs/heads/{branch}") {
+            return Err(Error::Invalid(format!(
+                "the worktree is no longer on {branch}"
+            )));
+        }
+        commit_all(&prepared.path, message, no_hooks).await
+    }
 }
 
 /// Commits everything left uncommitted in the worktree at `path` (teams spec section 6.1), as

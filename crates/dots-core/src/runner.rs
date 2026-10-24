@@ -23,7 +23,7 @@ use crate::run_tools::{CloseOnDrop, OpenRequest, RunTools};
 use crate::store::Store;
 use crate::util::{ct_eq, new_token};
 use crate::vault::Vault;
-use crate::workspace::{commit_all, Prepared, WorkspaceManager};
+use crate::workspace::{Prepared, WorkspaceManager};
 use crate::{Error, Result};
 
 /// The name the run's model knows a policy tool by: the `Context` tool is `mcp__dots__context`
@@ -620,7 +620,11 @@ impl Runner {
             if prepared.branch.is_some() && prepared.path.is_dir() {
                 let no_hooks = self.cfg.worktrees_dir.join(".no-hooks");
                 let message = commit_message(step, summary);
-                if let Err(e) = commit_all(&prepared.path, &message, &no_hooks).await {
+                let committed = self
+                    .workspaces
+                    .commit_leftovers(prepared, &message, &no_hooks)
+                    .await;
+                if let Err(e) = committed {
                     tracing::warn!(run = %run.id, "committing the step's work failed: {e}");
                     let text = format!("Dots could not commit the changes: {e}");
                     if let Err(e) = self.record(&run.id, &EngineEvent::Notice { text }).await {
