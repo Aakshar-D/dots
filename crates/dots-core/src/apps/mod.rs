@@ -2,3 +2,6 @@
 //! uses and tools a dot calls.
 
 pub mod engine;
+pub mod manifest;
+pub mod schema;
+pub mod source;
