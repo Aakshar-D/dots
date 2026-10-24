@@ -12,7 +12,7 @@ use dots_core::events::new_bus;
 use dots_core::library::{LibraryConfig, McpServerConfig, PluginConfig, Uses};
 use dots_core::run_tools::{OpenRequest, RunTools};
 use dots_core::store::Store;
-use dots_core::vault::{Consumer, EntryKind, Grants, Missing, Unresolved, Vault};
+use dots_core::vault::{Consumer, DotScope, EntryKind, Grants, Missing, Unresolved, Vault};
 use dots_core::Error;
 use serde_json::{json, Value};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
@@ -265,7 +265,7 @@ async fn a_name_resolves_only_when_granted_and_only_from_personal() {
     let g = grants(&[("mcp:github", &["github_token", "DOTS_VAULT_ONLY_IN_ENV"])]);
 
     let ok = vault
-        .resolve(&g, &github, &names(&["GITHUB_TOKEN"]))
+        .resolve(&DotScope::Personal, &g, &github, &names(&["GITHUB_TOKEN"]))
         .await
         .unwrap()
         .unwrap();
@@ -273,6 +273,7 @@ async fn a_name_resolves_only_when_granted_and_only_from_personal() {
 
     let missing = vault
         .resolve(
+            &DotScope::Personal,
             &g,
             &github,
             &names(&["GITHUB_TOKEN", "DOTS_VAULT_ONLY_IN_ENV"]),
@@ -287,7 +288,12 @@ async fn a_name_resolves_only_when_granted_and_only_from_personal() {
     );
 
     let refused: Missing = vault
-        .resolve(&g, &Consumer::Shell, &names(&["GITHUB_TOKEN"]))
+        .resolve(
+            &DotScope::Personal,
+            &g,
+            &Consumer::Shell,
+            &names(&["GITHUB_TOKEN"]),
+        )
         .await
         .unwrap()
         .unwrap_err();
@@ -313,6 +319,7 @@ async fn open(
         plugins_dir: None,
         cancel: &CancellationToken::new(),
         vault,
+        scope: &DotScope::Personal,
         grants,
         dot_name: "triage",
     })
@@ -468,7 +475,7 @@ async fn resolved_values_never_print() {
     let github = Consumer::Mcp("github".into());
     let g = grants(&[("mcp:github", &["DEMO_TOKEN"])]);
     let resolved = vault
-        .resolve(&g, &github, &names(&["DEMO_TOKEN"]))
+        .resolve(&DotScope::Personal, &g, &github, &names(&["DEMO_TOKEN"]))
         .await
         .unwrap()
         .unwrap();
@@ -477,7 +484,7 @@ async fn resolved_values_never_print() {
     assert!(!shown.contains("s3cret-made-up-value"), "{shown}");
     // What does not resolve holds names and a consumer only.
     let missing = vault
-        .resolve(&g, &github, &names(&["OTHER"]))
+        .resolve(&DotScope::Personal, &g, &github, &names(&["OTHER"]))
         .await
         .unwrap()
         .unwrap_err();

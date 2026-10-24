@@ -31,6 +31,7 @@ use crate::server::{self, ServerState};
 use crate::settings::Settings;
 use crate::skill_creator::SkillDrafts;
 use crate::store::Store;
+use crate::vault::org::{http_client, os_protector, Orgs, OFFLINE_DIR};
 use crate::vault::{os_secrets, MemorySecrets, SecretStore, Vault};
 use crate::workspace::{Prepared, WorkspaceManager};
 use crate::{Error, Result};
@@ -131,9 +132,23 @@ impl Runtime {
             Some(secrets) => secrets.clone(),
             None => os_secrets(&store.install_id().await?),
         };
+        // The orgs joined on this PC, each with its offline copy if it has one, and every org
+        // secret in the redactor (env vault spec §6.4). They are fetched in the background
+        // once the runtime is up.
+        let orgs = Orgs::new(
+            store.clone(),
+            secrets.clone(),
+            os_protector(),
+            cfg.data_dir.join(OFFLINE_DIR),
+            http_client(),
+            cfg.clock.clone(),
+        );
+        orgs.load().await?;
         // Every Personal secret is in the redactor before any run or Library call (env vault
         // spec §10).
-        let vault = Vault::open(store.clone(), secrets).await?;
+        let vault = Vault::open(store.clone(), secrets)
+            .await?
+            .with_orgs(orgs.clone());
         // A setup from before the vault: its stored secret values move into Personal (env
         // vault spec §11). A failure is logged and the app starts anyway. The old-backups
         // cut-off is set once the move has run, even when a server failed: that server is
@@ -274,6 +289,18 @@ impl Runtime {
             Err(e) => tracing::error!("listing awaiting runs failed: {e}"),
         }
         let shutdown = CancellationToken::new();
+        // Every org is fetched once now, without holding the start up: a source that is slow
+        // or down must not keep the app from opening. Until it answers, an org resolves from
+        // its offline copy.
+        {
+            let stop = shutdown.clone();
+            tokio::spawn(async move {
+                tokio::select! {
+                    _ = orgs.refresh_all() => {}
+                    _ = stop.cancelled() => {}
+                }
+            });
+        }
         if let Some(listener) = listener {
             server::serve(
                 listener,
@@ -799,8 +826,14 @@ impl Runtime {
         Ok(dot)
     }
 
+    /// Saves a dot's spec. A dot whose org is no longer joined on this PC is refused: it can't
+    /// run until the org is joined again or the dot is deleted (env vault spec §6.4).
     pub async fn update_dot(&self, id: &str, spec: DotSpec) -> Result<Dot> {
-        let was_enabled = self.store.get_dot(id).await?.spec.enabled;
+        let old = self.store.get_dot(id).await?;
+        if let Some(text) = self.vault.org_removed(&old) {
+            return Err(Error::Conflict(text));
+        }
+        let was_enabled = old.spec.enabled;
         let dot = self.store.update_dot(id, &spec).await?;
         self.sync_schedule(&dot, dot.spec.enabled && !was_enabled)
             .await?;

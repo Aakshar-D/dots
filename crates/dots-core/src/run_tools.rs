@@ -30,7 +30,7 @@ use crate::library_service::{record_check, refresh_plugin, skill_problem};
 use crate::mcp::{McpError, McpSession, McpTool, SessionOptions};
 use crate::policy::McpTrust;
 use crate::store::Store;
-use crate::vault::{Consumer, Grants, Resolved, Vault};
+use crate::vault::{Consumer, DotScope, Grants, Resolved, Vault};
 use crate::Result;
 
 /// What `RunTools::open` needs.
@@ -45,9 +45,10 @@ pub struct OpenRequest<'a> {
     pub plugins_dir: Option<&'a Path>,
     /// The run's cancel token: opening stops when it fires.
     pub cancel: &'a CancellationToken,
-    /// Where the dot's variables resolve, its grants, and its name for the run events
-    /// (env vault spec §8).
+    /// Where the dot's variables resolve, its scope (Personal or its org), its grants, and its
+    /// name for the run events (env vault spec §8).
     pub vault: &'a Vault,
+    pub scope: &'a DotScope,
     pub grants: &'a Grants,
     pub dot_name: &'a str,
 }
@@ -295,6 +296,7 @@ impl RunTools {
             plugins_dir,
             cancel,
             vault,
+            scope,
             grants,
             dot_name,
         } = req;
@@ -336,14 +338,14 @@ impl RunTools {
             };
             let consumer = Consumer::Mcp(item.name.clone());
             match vault
-                .resolve(grants, &consumer, &config.variables())
+                .resolve(scope, grants, &consumer, &config.variables())
                 .await?
             {
                 Ok(env) => items.push((item, env)),
                 Err(missing) => notices.push(missing.text(dot_name)),
             }
         }
-        let shell_env = shell_env(vault, grants, dot_name, &mut notices).await?;
+        let shell_env = shell_env(vault, scope, grants, dot_name, &mut notices).await?;
         let Some(opened) = open_sessions(&items, workspace, cancel).await else {
             return Ok((RunTools::default(), Vec::new()));
         };
@@ -586,6 +588,7 @@ type Opened = std::result::Result<(McpSession, Vec<McpTool>, watch::Receiver<u64
 /// event saying why.
 async fn shell_env(
     vault: &Vault,
+    scope: &DotScope,
     grants: &Grants,
     dot_name: &str,
     notices: &mut Vec<String>,
@@ -593,7 +596,10 @@ async fn shell_env(
     let mut out = Vec::new();
     for name in grants.names(&Consumer::Shell) {
         let names = std::slice::from_ref(name);
-        match vault.resolve(grants, &Consumer::Shell, names).await? {
+        match vault
+            .resolve(scope, grants, &Consumer::Shell, names)
+            .await?
+        {
             Ok(env) => {
                 if let Some(value) = env.get(name) {
                     out.push((name.clone(), Zeroizing::new(value)));

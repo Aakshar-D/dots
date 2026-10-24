@@ -1,7 +1,8 @@
 //! A harness for the `Orgs` service (env vault spec §6): a store and secrets in memory, the test
 //! protector, a clock the test moves by hand, a fake OpenBao, and an org key that signs real
 //! policies with minisign. `Scripted` is a source that answers what a test tells it to, for
-//! the cases a real server can't be made to give.
+//! the cases a real server can't be made to give. `vault` gives a `Vault` that resolves from the
+//! service, for the resolver's tests.
 
 use std::io::Cursor;
 use std::path::PathBuf;
@@ -16,7 +17,7 @@ use dots_core::vault::org::{
     Orgs, Protector, SopsSettings, Source, SourceCreds, SourceError, SourceFactory, SourceSettings,
     TestProtector, OFFLINE_DIR,
 };
-use dots_core::vault::MemorySecrets;
+use dots_core::vault::{MemorySecrets, Vault};
 use minisign::KeyPair;
 use serde_json::{json, Value};
 use tempfile::TempDir;
@@ -211,6 +212,11 @@ impl OrgsHarness {
     /// How many times the fake was asked for `secret/<path>/env`.
     pub fn env_reads(&self, path: &str) -> usize {
         self.bao.count(&format!("/v1/secret/data/{path}/env"))
+    }
+
+    /// A vault on the harness's store and secrets that reads its orgs from the service.
+    pub fn vault(&self) -> Vault {
+        Vault::new(self.store.clone(), self.secrets.clone()).with_orgs(self.orgs.clone())
     }
 }
 

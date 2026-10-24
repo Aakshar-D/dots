@@ -18,7 +18,7 @@ use dots_core::library_service::LibraryService;
 use dots_core::policy::McpTrust;
 use dots_core::run_tools::{OpenRequest, RunTools};
 use dots_core::store::Store;
-use dots_core::vault::{Grants, Vault};
+use dots_core::vault::{DotScope, Grants, Vault};
 use serde_json::json;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
@@ -113,6 +113,7 @@ impl Fixture {
             plugins_dir,
             cancel: &CancellationToken::new(),
             vault: &Vault::in_memory(self.store.clone()),
+            scope: &DotScope::Personal,
             grants: &Grants::default(),
             dot_name: "tools",
         })
@@ -484,6 +485,7 @@ async fn a_cancelled_run_stops_opening_its_servers() {
         plugins_dir: None,
         cancel: &cancel,
         vault: &Vault::in_memory(f.store.clone()),
+        scope: &DotScope::Personal,
         grants: &Grants::default(),
         dot_name: "tools",
     })

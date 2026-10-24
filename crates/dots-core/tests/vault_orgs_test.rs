@@ -23,8 +23,8 @@ use dots_core::vault::entries::EntryKind;
 use dots_core::vault::org::sources::sops::public_key as age_public_key;
 use dots_core::vault::org::{
     key_fingerprint, parse_policy, read_offline, verify_policy, write_offline, OfflineCopy,
-    OrgEntry, OrgLookup, OrgRow, OrgStatus, OrgSummary, Orgs, Protector, SourceCreds, SourceError,
-    TestProtector, RETRY_AFTER,
+    OrgEntry, OrgLookup, OrgRow, OrgStatus, OrgSummary, OrgView, Orgs, PersonalMode, Protector,
+    SourceCreds, SourceError, TestProtector, RETRY_AFTER,
 };
 use dots_core::vault::{redact, Grants};
 use dots_core::{Error, Result};
@@ -1403,6 +1403,113 @@ async fn a_lookup_runs_while_a_refresh_waits_on_the_network() {
     let summary = refreshing.await.unwrap().unwrap();
     assert_eq!(status(&summary), OrgStatus::Connected);
     assert_eq!(orgs.lookup(ACME, "API_KEY").await, value(ROTATED, false));
+}
+
+// One view: the policy and the values of the same fetch
+
+fn asked(list: &[&str]) -> Vec<String> {
+    list.iter().map(|n| n.to_string()).collect()
+}
+
+/// `view` answers from one read of the org: while a refresh that brings a new policy and new
+/// values waits on the network, the view is the old fetch's policy with the old values; once it
+/// lands, the new policy with the new values. Never one fetch's values with another's policy.
+#[tokio::test]
+async fn a_view_gives_the_policy_and_the_values_of_one_fetch() {
+    let h = OrgsHarness::new().await;
+    let scripted = Scripted::new();
+    let orgs = h.service().with_sources(scripted.factory());
+    let first = sign(&h.keys, &policy(ACME, ISSUED, acme_policy()));
+    scripted.serve(&[("API_KEY", API_KEY), ("LOG_LEVEL", LOG_LEVEL)], &first);
+    orgs.join(&h.acme_code(), Some(token())).await.unwrap();
+    scripted.entered().await;
+    let asked = asked(&["api_key", "LOG_LEVEL", "NOT_THERE"]);
+
+    let view = orgs.view(ACME, &asked).await;
+    let policy_of = |view: &OrgView| view.policy.clone().expect("a policy");
+    assert_eq!(policy_of(&view).issued_at, ISSUED);
+    assert_eq!(policy_of(&view).personal, PersonalMode::Fallback);
+    assert_eq!(
+        view.lookups,
+        [
+            value(API_KEY, false),
+            value(LOG_LEVEL, true),
+            OrgLookup::NotDefined
+        ]
+    );
+
+    // The next fetch makes API_KEY plain, LOG_LEVEL gone, and Personal denied.
+    const LATER: &str = "2026-10-22T08:30:00Z";
+    let gate = scripted.hold();
+    let second = json!({"plain": ["API_KEY"], "personal": "deny"});
+    scripted.serve(
+        &[("API_KEY", ROTATED)],
+        &sign(&h.keys, &policy(ACME, LATER, second)),
+    );
+    let refreshing = tokio::spawn({
+        let orgs = orgs.clone();
+        async move { orgs.refresh(ACME).await }
+    });
+    scripted.entered().await;
+    assert_eq!(
+        orgs.view(ACME, &asked).await,
+        view,
+        "the fetch has not landed"
+    );
+
+    gate.add_permits(1);
+    refreshing.await.unwrap().unwrap();
+    let view = orgs.view(ACME, &asked).await;
+    assert_eq!(policy_of(&view).issued_at, LATER);
+    assert_eq!(policy_of(&view).personal, PersonalMode::Deny);
+    assert_eq!(
+        view.lookups,
+        [
+            value(ROTATED, true),
+            OrgLookup::NotDefined,
+            OrgLookup::NotDefined
+        ]
+    );
+    assert!(!format!("{view:?}").contains(ROTATED));
+}
+
+/// `view` expires a copy that ran out, as `lookup` does, and answers `Removed` for an org that
+/// is not joined.
+#[tokio::test]
+async fn a_view_expires_as_lookup_does_and_names_why_there_are_no_values() {
+    let h = OrgsHarness::new().await;
+    let extra = json!({"plain": ["LOG_LEVEL"], "offline_hours": 2});
+    h.join_acme(entries(), extra).await;
+    let asked = asked(&["API_KEY", "LOG_LEVEL"]);
+    h.advance(Duration::hours(1));
+    h.bao.fail_next(Failure::Status(503), 1);
+    h.orgs.refresh(ACME).await.unwrap();
+
+    h.advance(Duration::minutes(59));
+    let view = h.orgs.view(ACME, &asked).await;
+    assert_eq!(
+        view.lookups,
+        [value(API_KEY, false), value(LOG_LEVEL, true)]
+    );
+    h.advance(Duration::minutes(1));
+    let view = h.orgs.view(ACME, &asked).await;
+    assert_eq!(view.lookups, [OrgLookup::Expired, OrgLookup::Expired]);
+    assert!(!h.copy_path(ACME).exists(), "the view deleted the copy");
+    assert_eq!(
+        status_of(&h.orgs, ACME).await,
+        OrgStatus::Expired,
+        "as lookup would have left it"
+    );
+
+    let view = h.orgs.view("beta", &asked).await;
+    assert_eq!(
+        view,
+        OrgView {
+            policy: None,
+            lookups: vec![OrgLookup::Removed, OrgLookup::Removed],
+        }
+    );
+    assert!(h.orgs.view(ACME, &[]).await.lookups.is_empty());
 }
 
 // Fix round 1

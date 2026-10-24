@@ -1,7 +1,7 @@
 //! The orgs joined on this PC, held in memory (env vault spec §6.1, §6.2 and §6.4): joining one
 //! with a join code, changing its settings, leaving it, and fetching its entries and policy,
 //! with what each outcome of a fetch does to the offline copy. The resolver reads org values
-//! from here with `lookup`.
+//! from here with `view`: the policy and the values of one fetch, together.
 //!
 //! Each org has a status. A fetch that works makes it `Connected`. A source that refuses the
 //! person's sign-in details makes it `Revoked`, and wipes its values. A source that cannot be
@@ -164,6 +164,17 @@ impl std::fmt::Debug for OrgLookup {
             Self::Removed => f.write_str("Removed"),
         }
     }
+}
+
+/// An org's accepted policy and its answers for some names, read together (`Orgs::view`), so
+/// a refresh can't pair a value of one fetch with the policy of another.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrgView {
+    /// The policy accepted with the values; `None` when the org has none (not joined, or its
+    /// settings are damaged).
+    pub policy: Option<OrgPolicy>,
+    /// One answer per name asked, in the order asked, as `lookup` gives it.
+    pub lookups: Vec<OrgLookup>,
 }
 
 /// The orgs joined on this PC. Cheap to clone: every clone shares one state.
@@ -607,6 +618,15 @@ impl Orgs {
         }
     }
 
+    /// Whether `org_id` is joined on this PC: its row was loaded, even a damaged one. A SOPS
+    /// join that waits for the admin is not joined yet.
+    pub fn is_joined(&self, org_id: &str) -> bool {
+        matches!(
+            self.read().get(org_id),
+            Some(Slot::Joined(_) | Slot::Damaged { .. })
+        )
+    }
+
     /// The org's accepted policy, if one was.
     pub fn policy(&self, org_id: &str) -> Option<OrgPolicy> {
         match self.read().get(org_id) {
@@ -622,6 +642,29 @@ impl Orgs {
             Some(Slot::Joined(joined)) => joined.lookup(name),
             Some(Slot::Damaged { error, .. }) => OrgLookup::PolicyInvalid(error.clone()),
             Some(Slot::Pending(_)) | None => OrgLookup::Removed,
+        }
+    }
+
+    /// The org's accepted policy and its answer for each of `names`, from one read of the org:
+    /// for the resolver, which applies the policy to the values it was accepted with. The
+    /// expiry is that of `lookup`.
+    pub async fn view(&self, org_id: &str, names: &[String]) -> OrgView {
+        self.expire_if_due(org_id).await;
+        let orgs = self.read();
+        let each = |answer: &dyn Fn(&str) -> OrgLookup| names.iter().map(|n| answer(n)).collect();
+        match orgs.get(org_id) {
+            Some(Slot::Joined(joined)) => OrgView {
+                policy: joined.policy.clone(),
+                lookups: each(&|name| joined.lookup(name)),
+            },
+            Some(Slot::Damaged { error, .. }) => OrgView {
+                policy: None,
+                lookups: each(&|_| OrgLookup::PolicyInvalid(error.clone())),
+            },
+            Some(Slot::Pending(_)) | None => OrgView {
+                policy: None,
+                lookups: each(&|_| OrgLookup::Removed),
+            },
         }
     }
 

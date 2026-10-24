@@ -22,7 +22,8 @@ pub use offline::{
 pub use policy::{parse_policy, AuditTarget, OrgPolicy, PersonalMode, PolicyError, UseRules};
 pub use row::OrgRow;
 pub use service::{
-    JoinPreview, OrgEntry, OrgLookup, OrgStatus, OrgSummary, Orgs, SourceFactory, RETRY_AFTER,
+    JoinPreview, OrgEntry, OrgLookup, OrgStatus, OrgSummary, OrgView, Orgs, SourceFactory,
+    RETRY_AFTER,
 };
 pub use signed::{envelope, verify_policy};
 pub use sources::{

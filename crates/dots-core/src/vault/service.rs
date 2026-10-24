@@ -6,6 +6,7 @@ use std::sync::Arc;
 use zeroize::Zeroizing;
 
 use super::entries::{check_value, check_variable_name, EntryKind, EnvEntry};
+use super::org::Orgs;
 use super::secrets::SecretStore;
 use crate::store::Store;
 use crate::Result;
@@ -19,11 +20,32 @@ fn personal_key(name: &str) -> String {
 pub struct Vault {
     store: Store,
     secrets: Arc<dyn SecretStore>,
+    /// The orgs joined on this PC, where a dot in an org resolves (env vault spec §6, §8).
+    /// `None` resolves every org as not joined.
+    orgs: Option<Orgs>,
 }
 
 impl Vault {
     pub fn new(store: Store, secrets: Arc<dyn SecretStore>) -> Vault {
-        Vault { store, secrets }
+        Vault {
+            store,
+            secrets,
+            orgs: None,
+        }
+    }
+
+    /// The vault, with the orgs a dot in an org resolves from. The runtime gives it the
+    /// service it loaded at start.
+    pub fn with_orgs(self, orgs: Orgs) -> Vault {
+        Vault {
+            orgs: Some(orgs),
+            ..self
+        }
+    }
+
+    /// The orgs joined on this PC, if the vault has them.
+    pub fn orgs(&self) -> Option<&Orgs> {
+        self.orgs.as_ref()
     }
 
     /// The vault of a start: every Personal secret is read once and added to the redactor, so
@@ -105,17 +127,25 @@ impl Vault {
 
     /// The value of the personal variable `name`, in any case, if there is one.
     pub(crate) async fn personal_value(&self, name: &str) -> Result<Option<Zeroizing<String>>> {
+        Ok(self.personal_entry(name).await?.map(|(value, _)| value))
+    }
+
+    /// The value of the personal variable `name`, in any case, and whether it is a secret.
+    pub(crate) async fn personal_entry(
+        &self,
+        name: &str,
+    ) -> Result<Option<(Zeroizing<String>, bool)>> {
         let Some(entry) = self.store.find_env_entry(name).await? else {
             return Ok(None);
         };
         match entry.kind {
-            EntryKind::Plain => Ok(entry.value.map(Zeroizing::new)),
+            EntryKind::Plain => Ok(entry.value.map(|value| (Zeroizing::new(value), false))),
             EntryKind::Secret => {
                 let value = self.secrets.get(&personal_key(&entry.name))?;
                 if let Some(value) = &value {
                     super::redact::global().add(&entry.name, value);
                 }
-                Ok(value)
+                Ok(value.map(|value| (value, true)))
             }
         }
     }

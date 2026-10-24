@@ -16,7 +16,7 @@ use dots_core::library::{
 use dots_core::library_service::LibraryService;
 use dots_core::mcp::fingerprint;
 use dots_core::store::Store;
-use dots_core::vault::{EntryKind, Grants, Vault};
+use dots_core::vault::{DotScope, EntryKind, Grants, Vault};
 use dots_core::Error;
 use serde_json::{json, Value};
 use tempfile::TempDir;
@@ -666,6 +666,7 @@ async fn runs_opening_one_plugin_together_after_its_servers_changed_all_succeed(
                 plugins_dir: None,
                 cancel: &CancellationToken::new(),
                 vault: &Vault::in_memory(store.clone()),
+                scope: &DotScope::Personal,
                 grants: &Grants::default(),
                 dot_name: "forms",
             })
@@ -745,6 +746,7 @@ async fn an_installed_plugin_that_moved_has_its_hooks_switched_off() {
                 plugins_dir: Some(plugins_dir),
                 cancel: &CancellationToken::new(),
                 vault: &Vault::in_memory(store.clone()),
+                scope: &DotScope::Personal,
                 grants: &Grants::default(),
                 dot_name: "forms",
             })
