@@ -62,6 +62,10 @@ pub enum RuntimeEvent {
     MemoriesUpdated {
         dot_id: String,
     },
+    /// A call changed the app's data (app library spec section 5): its screen reads again.
+    AppDataChanged {
+        app: String,
+    },
 }
 
 pub type Bus = broadcast::Sender<RuntimeEvent>;

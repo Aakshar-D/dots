@@ -9,4 +9,4 @@ mod registry;
 pub mod schema;
 pub mod source;
 
-pub use registry::{Apps, APPS_DIR};
+pub use registry::{AppCall, Apps, APPS_DIR};

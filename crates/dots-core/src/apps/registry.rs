@@ -7,14 +7,23 @@
 //! <data>/apps/<app id>/data.db           the app's database
 //! ```
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
+use chrono::{Local, SecondsFormat};
+use serde::Serialize;
+use serde_json::Value;
+
+use crate::apps::call::{self, Actor, Call, CallError, DotRef};
 use crate::apps::data;
+use crate::apps::engine::Limits;
 use crate::apps::source::{self, AppSource};
 use crate::events::{Bus, RuntimeEvent};
 use crate::library::{AppConfig, AppOrigin, LibraryConfig, LibraryItem, LibraryKind};
+use crate::scheduler::{Clock, SystemClock};
 use crate::store::Store;
 use crate::{Error, Result};
 
@@ -35,6 +44,28 @@ pub struct Apps {
     locks: Arc<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
     /// Each loaded version's files, by (app id, version).
     cache: Arc<Mutex<HashMap<VersionKey, Arc<AppSource>>>>,
+    /// What `ctx.now` reads.
+    clock: Arc<dyn Clock>,
+}
+
+/// A logged call (spec section 5): every call of a tool that writes, and of `on_run_end`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct AppCall {
+    pub id: String,
+    pub app_id: String,
+    pub tool: String,
+    pub actor: Actor,
+    pub run_id: Option<String>,
+    pub input: Value,
+    /// The call's `ctx.now`.
+    pub now: String,
+    /// The ids `ctx.id()` gave.
+    pub ids: Vec<String>,
+    pub result: Option<Value>,
+    pub error: Option<String>,
+    pub changes: u64,
+    pub took_ms: u64,
+    pub at: String,
 }
 
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Result<T> {
@@ -52,6 +83,116 @@ impl Apps {
             root,
             locks: Arc::default(),
             cache: Arc::default(),
+            clock: Arc::new(SystemClock),
+        }
+    }
+
+    /// `ctx.now` reads `clock` (tests).
+    pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Apps {
+        self.clock = clock;
+        self
+    }
+
+    /// Calls `tool` of the app `name` with `input` as `actor` (spec section 5): one call at a
+    /// time per app, all or nothing. A call of a tool that writes is logged, and a call that
+    /// changed data sends `AppDataChanged`. `Err` is the sentence the caller gets: the rule the
+    /// input breaks, the error the code threw, a bound.
+    pub async fn call(
+        &self,
+        name: &str,
+        tool: &str,
+        input: Value,
+        actor: Actor,
+    ) -> std::result::Result<Value, String> {
+        let (item, config) = match self.get(name).await {
+            Ok(found) => found,
+            Err(Error::NotFound(_)) => return Err(format!("there is no app {name}")),
+            Err(e) => return Err(e.to_string()),
+        };
+        let src = self.load(&item, &config).await.map_err(|e| e.to_string())?;
+        let dots: Vec<DotRef> = self
+            .store
+            .dots_with_app(&item)
+            .await
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(|d| DotRef {
+                id: d.id,
+                name: d.spec.name,
+            })
+            .collect();
+        let logged =
+            matches!(actor, Actor::Dots) || src.manifest.tool(tool).is_some_and(|t| t.writes);
+        let now = self
+            .clock
+            .now()
+            .with_timezone(&Local)
+            .to_rfc3339_opts(SecondsFormat::Secs, false);
+        let lock = self.lock(&item.id);
+        let _held = lock.lock().await;
+        let path = self.data_path(&item.id);
+        let started = std::time::Instant::now();
+        let (function, call_input, call_actor, call_now) =
+            (tool.to_string(), input.clone(), actor.clone(), now.clone());
+        let ran = blocking(move || {
+            let conn = data::open(&path).map_err(|e| CallError::Db(e.to_string()))?;
+            let conn = Rc::new(RefCell::new(conn));
+            call::call(
+                &conn,
+                Call {
+                    manifest: &src.manifest,
+                    logic: &src.logic,
+                    function: &function,
+                    input: &call_input,
+                    actor: call_actor,
+                    now: call_now,
+                    dots,
+                    start: None,
+                    limits: Limits::default(),
+                },
+            )
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+        let took_ms = started.elapsed().as_millis() as u64;
+        if logged {
+            let run_id = match &actor {
+                Actor::Dot { run_id, .. } => Some(run_id.clone()),
+                _ => None,
+            };
+            let (result, error, ids, changes) = match &ran {
+                Ok(out) => (Some(out.result.clone()), None, out.ids.clone(), out.changes),
+                Err(e) => (None, Some(e.to_string()), Vec::new(), 0),
+            };
+            let record = AppCall {
+                id: crate::util::new_id(),
+                app_id: item.id.clone(),
+                tool: tool.to_string(),
+                actor: actor.clone(),
+                run_id,
+                input,
+                now,
+                ids,
+                result,
+                error,
+                changes,
+                took_ms,
+                at: crate::util::now(),
+            };
+            if let Err(e) = self.store.record_app_call(&record).await {
+                tracing::warn!(app = %name, tool, "the app call could not be logged: {e}");
+            }
+        }
+        match ran {
+            Ok(out) => {
+                if out.changes > 0 {
+                    let _ = self.bus.send(RuntimeEvent::AppDataChanged {
+                        app: name.to_string(),
+                    });
+                }
+                Ok(out.result)
+            }
+            Err(e) => Err(e.to_string()),
         }
     }
 

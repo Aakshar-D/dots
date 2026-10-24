@@ -9,7 +9,7 @@ use std::rc::Rc;
 
 use rquickjs::{Ctx, Object};
 use rusqlite::Connection;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::data;
@@ -26,7 +26,7 @@ pub const MAX_START_MESSAGE: usize = 4000;
 pub const MAX_START_TAG: usize = 200;
 
 /// Who is calling: set by Dots, never by the caller (spec section 5).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Actor {
     /// The person, through the app's screen.

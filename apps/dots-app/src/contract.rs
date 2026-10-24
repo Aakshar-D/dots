@@ -803,6 +803,9 @@ pub fn samples() -> Value {
             to(RuntimeEvent::MemoriesUpdated {
                 dot_id: "01J0DOT".into(),
             }),
+            to(RuntimeEvent::AppDataChanged {
+                app: "projects".into(),
+            }),
         ]);
     samples["ChatGptStatus"] = to([
         dots_core::chatgpt::ChatGptStatus {

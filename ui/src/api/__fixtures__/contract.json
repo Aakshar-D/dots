@@ -1811,6 +1811,10 @@
     {
       "dot_id": "01J0DOT",
       "type": "memories_updated"
+    },
+    {
+      "app": "projects",
+      "type": "app_data_changed"
     }
   ],
   "ScannedSkill": [

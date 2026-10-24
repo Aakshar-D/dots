@@ -291,6 +291,8 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("dot_seen"), dot_id: z.string() }),
   // A memory of the dot was saved, changed or deleted, by a run or by the person.
   z.strictObject({ type: z.literal("memories_updated"), dot_id: z.string() }),
+  // A call changed the app's data: its screen reads again.
+  z.strictObject({ type: z.literal("app_data_changed"), app: z.string() }),
 ]);
 
 export const ClaudeStatus = z.strictObject({
