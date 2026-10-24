@@ -95,6 +95,23 @@ impl Apps {
         Ok((item, config))
     }
 
+    /// The app `name` read again under its lock, which the returned guard holds: a change
+    /// computed from a read taken before the lock could undo a change made meanwhile.
+    async fn get_locked(
+        &self,
+        name: &str,
+    ) -> Result<(tokio::sync::OwnedMutexGuard<()>, LibraryItem, AppConfig)> {
+        let (first, _) = self.get(name).await?;
+        let held = self.lock(&first.id).lock_owned().await;
+        let (item, config) = self.get(name).await?;
+        if item.id != first.id {
+            return Err(Error::Conflict(format!(
+                "the app {name} was replaced meanwhile; try again"
+            )));
+        }
+        Ok((held, item, config))
+    }
+
     /// Every installed app, by name.
     pub async fn list(&self) -> Result<Vec<(LibraryItem, AppConfig)>> {
         Ok(self
@@ -132,8 +149,8 @@ impl Apps {
     }
 
     /// Adds a new app at version 1 (spec section 6.2, "Add to library"; section 8, a bundled app):
-    /// its code is written, its migrations run on a new database, then its row is stored with
-    /// both switches off. A name the Library has is a `Conflict`. On a failure nothing stays.
+    /// its row is stored with both switches off, then its code is written and its migrations run
+    /// on a new database. A name the Library has is a `Conflict`. On a failure nothing stays.
     pub async fn install(&self, src: AppSource, origin: AppOrigin) -> Result<LibraryItem> {
         let name = src.manifest.name.clone();
         if self
@@ -179,8 +196,9 @@ impl Apps {
         Ok(item)
     }
 
-    /// Makes `src` the app `name`'s next version (spec sections 5 and 6.2, "Update"): the
-    /// migrations newer than its data run first, in one transaction; if one fails, nothing
+    /// Makes `src` the app `name`'s next version (spec sections 5 and 6.2, "Update"): its code
+    /// is written, then the migrations newer than its data run, in one transaction; if either
+    /// fails, nothing
     /// changes. The version before is kept for "Roll back" only when no migration ran (spec
     /// section 4). `by_proposal` marks a bundled app as the person's (spec section 8). "Can
     /// start dots" goes off when the new code no longer asks for it.
@@ -196,18 +214,21 @@ impl Apps {
                 src.manifest.name
             )));
         }
-        let (item, old) = self.get(name).await?;
-        let lock = self.lock(&item.id);
-        let _held = lock.lock().await;
+        let (_held, item, old) = self.get_locked(name).await?;
         let next = old.version + 1;
         let code = self.code_dir(&item.id, next);
         let data_path = self.data_path(&item.id);
         let keep = src.clone();
+        // The code first, then the data: a write that fails leaves the data as it was, and a
+        // migration that fails takes the new folder away again.
         let ran = blocking(move || -> Result<usize> {
-            let mut conn = data::open(&data_path)?;
-            let ran = data::migrate(&mut conn, &keep.migrations)?;
             write_version(&code, &keep)?;
-            Ok(ran)
+            let migrated = data::open(&data_path)
+                .and_then(|mut conn| data::migrate(&mut conn, &keep.migrations));
+            if migrated.is_err() {
+                let _ = std::fs::remove_dir_all(&code);
+            }
+            migrated
         })
         .await??;
         let config = AppConfig {
@@ -232,9 +253,7 @@ impl Apps {
     /// Goes back to the version before (spec section 10, "Roll back"), offered only while the
     /// update that replaced it ran no migrations.
     pub async fn roll_back(&self, name: &str) -> Result<LibraryItem> {
-        let (item, old) = self.get(name).await?;
-        let lock = self.lock(&item.id);
-        let _held = lock.lock().await;
+        let (_held, item, old) = self.get_locked(name).await?;
         let Some(previous) = old.previous_version else {
             return Err(Error::Invalid(format!(
                 "the app {name} has no version to roll back to: roll back is offered only when \
@@ -295,7 +314,7 @@ impl Apps {
 
     /// Switches "Every dot" (spec section 6).
     pub async fn set_every_dot(&self, name: &str, on: bool) -> Result<LibraryItem> {
-        let (item, config) = self.get(name).await?;
+        let (_held, item, config) = self.get_locked(name).await?;
         self.store_config(
             &item,
             AppConfig {
@@ -308,7 +327,7 @@ impl Apps {
 
     /// Switches "Can start dots" (spec section 7): on only for an app whose code asks for it.
     pub async fn set_can_start_dots(&self, name: &str, on: bool) -> Result<LibraryItem> {
-        let (item, config) = self.get(name).await?;
+        let (_held, item, config) = self.get_locked(name).await?;
         if on && !self.load(&item, &config).await?.manifest.can_start_dots() {
             return Err(Error::Invalid(format!(
                 "the app {name} does not ask to start dots"
@@ -337,8 +356,9 @@ impl Apps {
     /// tick it, unless `confirm`; its code goes, and its data too when `delete_data` (the second
     /// confirmation). Kept data is found again by nothing: a new app gets a new id.
     pub async fn remove(&self, name: &str, confirm: bool, delete_data: bool) -> Result<()> {
-        let (item, _) = self.get(name).await?;
-        let users = self.store.dots_using(&item).await?;
+        let (_held, item, _) = self.get_locked(name).await?;
+        // "Every dot" gives the app to dots that do not name it: they use it too.
+        let users = self.store.dots_with_app(&item).await?;
         if !users.is_empty() && !confirm {
             let names: Vec<String> = users.into_iter().map(|d| d.spec.name).collect();
             return Err(Error::Conflict(format!(
@@ -346,23 +366,31 @@ impl Apps {
                 names.join(", ")
             )));
         }
-        let lock = self.lock(&item.id);
-        let _held = lock.lock().await;
-        self.store.remove_library_item(&item.id).await?;
+        // The files first: when one cannot be deleted the row stays, and removing again retries.
         let dir = self.app_dir(&item.id);
-        blocking(move || {
-            let _ = std::fs::remove_dir_all(dir.join("code"));
+        blocking(move || -> Result<()> {
+            remove_all(&dir.join("code"))?;
             if delete_data {
-                let _ = std::fs::remove_dir_all(&dir);
+                remove_all(&dir)?;
             }
+            Ok(())
         })
-        .await?;
+        .await??;
+        self.store.remove_library_item(&item.id).await?;
         self.cache
             .lock()
             .expect("app cache")
             .retain(|(id, _), _| *id != item.id);
         self.changed(&item.id);
         Ok(())
+    }
+}
+
+/// Deletes `path` and all under it; one already gone is not an error.
+fn remove_all(path: &Path) -> Result<()> {
+    match std::fs::remove_dir_all(path) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+        _ => Ok(()),
     }
 }
 

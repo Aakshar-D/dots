@@ -407,3 +407,84 @@ async fn the_library_commands_leave_apps_to_the_apps_screen() {
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].item.name, "expenses");
 }
+
+#[cfg(windows)]
+#[tokio::test]
+async fn an_update_whose_code_cannot_be_written_leaves_the_data_alone() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let f = fixture().await;
+    let item = f
+        .apps
+        .install(source(&expenses()), AppOrigin::Proposed)
+        .await
+        .unwrap();
+    // A file in the new version's folder held open with no sharing: the write cannot finish.
+    let tmp = f.apps.code_dir(&item.id, 2).with_extension("tmp");
+    std::fs::create_dir_all(&tmp).unwrap();
+    let _held = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .share_mode(0)
+        .open(tmp.join("app.json"))
+        .unwrap();
+    let updated = f
+        .apps
+        .update("expenses", expenses_v2("Expenses", true), true)
+        .await;
+    assert!(updated.is_err());
+    let (item, c) = f.apps.get("expenses").await.unwrap();
+    assert_eq!(c.version, 1);
+    let conn = data::open(&f.apps.data_path(&item.id)).unwrap();
+    assert_eq!(data::schema_version(&conn).unwrap(), 1);
+    // The version before still loads.
+    f.apps.load(&item, &c).await.unwrap();
+}
+
+#[tokio::test]
+async fn removing_asks_while_every_dot_gives_the_app_to_dots() {
+    let f = fixture().await;
+    f.apps
+        .install(source(&expenses()), AppOrigin::Proposed)
+        .await
+        .unwrap();
+    f.store.create_dot(&common::spec("a")).await.unwrap();
+    f.apps.set_every_dot("expenses", true).await.unwrap();
+    let err = f.apps.remove("expenses", false, false).await.unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "conflict: the app \"expenses\" is used by a; removing it takes it out of them"
+    );
+    f.apps.remove("expenses", true, false).await.unwrap();
+    assert!(f.apps.get("expenses").await.is_err());
+}
+
+#[tokio::test]
+async fn changes_at_once_do_not_undo_each_other() {
+    let f = fixture().await;
+    f.apps
+        .install(source(&expenses()), AppOrigin::Proposed)
+        .await
+        .unwrap();
+    let (update, switch) = tokio::join!(
+        f.apps
+            .update("expenses", expenses_v2("Expenses 2", false), true),
+        f.apps.set_every_dot("expenses", true),
+    );
+    update.unwrap();
+    switch.unwrap();
+    let (item, c) = f.apps.get("expenses").await.unwrap();
+    assert_eq!(c.version, 2);
+    assert!(c.every_dot);
+    f.apps.load(&item, &c).await.unwrap();
+    let (a, b) = tokio::join!(
+        f.apps.update("expenses", expenses_v2("A", false), true),
+        f.apps.update("expenses", expenses_v2("B", false), true),
+    );
+    a.unwrap();
+    b.unwrap();
+    let (item, c) = f.apps.get("expenses").await.unwrap();
+    assert_eq!(c.version, 4);
+    assert!(c.every_dot);
+    f.apps.load(&item, &c).await.unwrap();
+}
