@@ -91,14 +91,15 @@ fn handoffs_before(wr: &WorkflowRun, index: usize) -> Vec<(&Step, &Handoff)> {
 }
 
 /// The branch a step at `index` starts from (section 6): the newest earlier hand-off that has
-/// branches, when it has exactly one. `None` starts from the project's default branch.
+/// branches, when it has exactly one, as its full ref (a tag of the same name must not stand
+/// in for it). `None` starts from the project's default branch.
 fn start_branch(wr: &WorkflowRun, index: usize) -> Option<String> {
     let newest = handoffs_before(wr, index)
         .into_iter()
         .rev()
         .find(|(_, h)| !h.branches.is_empty())?;
     match newest.1.branches.as_slice() {
-        [only] => Some(only.branch.clone()),
+        [only] => Some(format!("refs/heads/{}", only.branch)),
         _ => None,
     }
 }

@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
+use std::time::Duration;
 
 use tokio::process::Command;
 
@@ -56,6 +57,10 @@ async fn repository_of(worktree: &Path) -> Option<PathBuf> {
     let dir = git(worktree, &args).await.ok()?;
     (!dir.is_empty()).then(|| PathBuf::from(dir))
 }
+
+/// The longest Dots' commit of a step's work may take (git waiting on a lock, a filter or a
+/// prompt): past it the commit fails, and git is stopped (`kill_on_drop`).
+pub const COMMIT_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Total patch text a diff returns; later files are listed without their patch.
 pub const MAX_DIFF_BYTES: usize = 1024 * 1024;
@@ -293,12 +298,7 @@ impl WorkspaceManager {
             Some(start) => start.to_string(),
             None => match git(
                 &workdir,
-                &[
-                    "symbolic-ref",
-                    "--quiet",
-                    "--short",
-                    "refs/remotes/origin/HEAD",
-                ],
+                &["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
             )
             .await
             {
@@ -539,7 +539,8 @@ impl WorkspaceManager {
     /// `commit_all` in the run's own worktree, and nowhere else: the row must pass `check_owned`,
     /// the folder must hold its own `.git` (git would otherwise search the parent folders for a
     /// repo), and HEAD must still be the run's branch (the agent may have switched it). A refusal
-    /// is an error and leaves the work uncommitted.
+    /// is an error and leaves the work uncommitted, and so is git taking longer than
+    /// `COMMIT_TIMEOUT`.
     pub async fn commit_leftovers(
         &self,
         prepared: &Prepared,
@@ -550,39 +551,79 @@ impl WorkspaceManager {
         let Some(branch) = &prepared.branch else {
             return Ok(false);
         };
-        if !prepared.path.join(".git").exists() {
+        // The entry itself, as `repository_of` looks at it: a link is not followed.
+        if std::fs::symlink_metadata(prepared.path.join(".git")).is_err() {
             return Err(Error::Invalid(format!(
                 "{} is not a git worktree",
                 prepared.path.display()
             )));
         }
-        let head = git(&prepared.path, &["symbolic-ref", "--quiet", "HEAD"])
+        let commit = async {
+            let head = git(&prepared.path, &["symbolic-ref", "--quiet", "HEAD"])
+                .await
+                .unwrap_or_default();
+            if head != format!("refs/heads/{branch}") {
+                return Err(Error::Invalid(format!(
+                    "the worktree is no longer on {branch}"
+                )));
+            }
+            commit_all(&prepared.path, message, no_hooks).await
+        };
+        tokio::time::timeout(COMMIT_TIMEOUT, commit)
             .await
-            .unwrap_or_default();
-        if head != format!("refs/heads/{branch}") {
-            return Err(Error::Invalid(format!(
-                "the worktree is no longer on {branch}"
-            )));
-        }
-        commit_all(&prepared.path, message, no_hooks).await
+            .map_err(|_| {
+                Error::Other(format!(
+                    "git did not finish within {} seconds",
+                    COMMIT_TIMEOUT.as_secs()
+                ))
+            })?
+    }
+}
+
+/// The start of a worktree on the project's default branch `branch`: the branch itself when
+/// the repo has it, else `remote`'s copy of it. Always a full ref, so a tag of the same name
+/// never stands in for the branch.
+pub async fn default_branch_ref(repo: &Path, branch: &str, remote: &str) -> String {
+    let local = format!("refs/heads/{branch}");
+    let commit = format!("{local}^{{commit}}");
+    let args = [
+        "rev-parse",
+        "--verify",
+        "--quiet",
+        "--end-of-options",
+        &commit,
+    ];
+    if git(repo, &args).await.is_ok() {
+        local
+    } else {
+        format!("refs/remotes/{remote}/{branch}")
     }
 }
 
 /// Commits everything left uncommitted in the worktree at `path` (teams spec section 6.1), as
-/// the person's git identity from their config, with hooks off: `core.hooksPath` points at
-/// `no_hooks`, an empty folder, and `--no-verify` skips the commit hooks. `Ok(false)` when there
-/// was nothing to commit.
+/// the person's git identity from their config, with no hook and nothing that could wait on
+/// the person: `core.hooksPath` points at `no_hooks`, a path that does not exist, `--no-verify`
+/// skips the commit hooks, the commit is not signed, and no automatic gc runs. `Ok(false)` when
+/// there was nothing to commit.
 pub async fn commit_all(path: &Path, message: &str, no_hooks: &Path) -> Result<bool> {
     if git(path, &["status", "--porcelain"]).await?.is_empty() {
         return Ok(false);
     }
     git(path, &["add", "-A"]).await?;
-    tokio::fs::create_dir_all(no_hooks).await?;
     let hooks = format!("core.hooksPath={}", no_hooks.display());
-    git(
-        path,
-        &["-c", &hooks, "commit", "--no-verify", "-q", "-m", message],
-    )
-    .await?;
+    let args = [
+        "-c",
+        &hooks,
+        "-c",
+        "commit.gpgsign=false",
+        "-c",
+        "gc.auto=0",
+        "commit",
+        "--no-verify",
+        "-q",
+        "-m",
+        message,
+    ];
+    git(path, &args).await?;
     Ok(true)
 }

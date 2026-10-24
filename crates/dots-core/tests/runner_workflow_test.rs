@@ -297,15 +297,26 @@ async fn the_commit_skips_the_repos_hooks() {
     let (dir, store) = temp_store().await;
     let project = dir.path().join("project");
     init_repo(&project);
-    // A hook that would refuse every commit.
+    // Hooks that would refuse every commit, and one that would leave a mark after it.
     let hooks = dir.path().join("hooks");
     std::fs::create_dir_all(&hooks).unwrap();
     std::fs::write(hooks.join("pre-commit"), "#!/bin/sh\nexit 1\n").unwrap();
     std::fs::write(hooks.join("commit-msg"), "#!/bin/sh\nexit 1\n").unwrap();
+    std::fs::write(hooks.join("prepare-commit-msg"), "#!/bin/sh\nexit 1\n").unwrap();
+    let marker = dir.path().join("post-commit-ran");
+    let marker_sh = marker.to_string_lossy().replace('\\', "/");
+    std::fs::write(
+        hooks.join("post-commit"),
+        format!("#!/bin/sh\necho ran > '{marker_sh}'\n"),
+    )
+    .unwrap();
     git_out(
         &project,
         &["config", "core.hooksPath", &hooks.to_string_lossy()],
     );
+    // Signing that could only fail.
+    git_out(&project, &["config", "commit.gpgsign", "true"]);
+    git_out(&project, &["config", "gpg.program", "dots-no-such-gpg"]);
     let runner = runner_with(&store, &dir, writer(Some(("fix.txt", "fixed"))), 2);
     runner.spawn_dispatcher(CancellationToken::new());
     let dev = worktree_dot(&store, &dir, "dev").await;
@@ -317,6 +328,41 @@ async fn the_commit_skips_the_repos_hooks() {
         git_out(&project, &["show", &format!("{branch}:fix.txt")]),
         "fixed"
     );
+    assert!(!marker.exists());
+    // The hooks path Dots gives git is made nowhere, least of all beside the workspaces.
+    assert!(!dir.path().join("wt").join(".no-hooks").exists());
+    assert!(!dir.path().join("no-hooks").exists());
+}
+
+#[tokio::test]
+async fn a_projects_default_branch_is_its_branch_before_a_tag_and_else_the_remotes() {
+    let (dir, store) = temp_store().await;
+    let project = dir.path().join("project");
+    init_repo(&project);
+    let first = git_out(&project, &["rev-parse", "HEAD"]);
+    std::fs::write(project.join("second.txt"), "x").unwrap();
+    git_out(&project, &["add", "."]);
+    git_out(&project, &["commit", "-q", "-m", "second"]);
+    let tip = git_out(&project, &["rev-parse", "refs/heads/main"]);
+    // A tag named like the branch, at an older commit.
+    git_out(&project, &["tag", "main", &first]);
+    // A branch only the remote has.
+    git_out(
+        &project,
+        &["update-ref", "refs/remotes/origin/release", &first],
+    );
+    let runner = runner_with(&store, &dir, writer(None), 2);
+    runner.spawn_dispatcher(CancellationToken::new());
+    let dev = worktree_dot(&store, &dir, "dev").await;
+    let step = step_run_in(&store, &dev, &project, Some("main")).await;
+    let run = queue_with(&runner, &dev, &step, json!({})).await;
+    let run = wait_status(&store, &run.id, RunStatus::Succeeded, 10).await;
+    assert_eq!(run.base_commit.as_deref(), Some(tip.as_str()));
+    let other = worktree_dot(&store, &dir, "other").await;
+    let step = step_run_in(&store, &other, &project, Some("release")).await;
+    let run = queue_with(&runner, &other, &step, json!({})).await;
+    let run = wait_status(&store, &run.id, RunStatus::Succeeded, 10).await;
+    assert_eq!(run.base_commit.as_deref(), Some(first.as_str()));
 }
 
 #[tokio::test]

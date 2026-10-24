@@ -23,7 +23,7 @@ use crate::run_tools::{CloseOnDrop, OpenRequest, RunTools};
 use crate::store::Store;
 use crate::util::{ct_eq, new_token};
 use crate::vault::Vault;
-use crate::workspace::{Prepared, WorkspaceManager};
+use crate::workspace::{default_branch_ref, Prepared, WorkspaceManager};
 use crate::{Error, Result};
 
 /// The name the run's model knows a policy tool by: the `Context` tool is `mcp__dots__context`
@@ -52,10 +52,11 @@ const COMMIT_LINE: usize = 72;
 
 /// What a run of a workflow step takes from its workflow run (teams spec sections 6.1 and 8):
 /// the project's repo, where its worktree is made; the project's default branch, if it names
-/// one; and the step's name, for the commit Dots makes.
+/// one, and its remote; and the step's name, for the commit Dots makes.
 struct StepContext {
     repo: String,
     default_branch: Option<String>,
+    remote: String,
     step_name: String,
 }
 
@@ -624,6 +625,7 @@ impl Runner {
         Ok(Some(StepContext {
             repo: workflow_run.project.repo_path,
             default_branch: workflow_run.project.default_branch,
+            remote: workflow_run.project.remote,
             step_name,
         }))
     }
@@ -665,7 +667,10 @@ impl Runner {
         if prepared.branch.is_none() || !prepared.path.is_dir() {
             return Ok(());
         }
-        let no_hooks = self.cfg.worktrees_dir.join(".no-hooks");
+        // A path that does not exist, beside the worktrees folder in Dots' data folder
+        // (`<data>/worktrees`), so no agent's workspace (`<data>/worktrees/<run>`) has it at
+        // `../`: git finds no hook there.
+        let no_hooks = self.cfg.worktrees_dir.with_file_name("no-hooks");
         let message = commit_message(step, summary);
         self.workspaces
             .commit_leftovers(prepared, &message, &no_hooks)
@@ -786,13 +791,20 @@ impl Runner {
             _ => {
                 // A step's first run starts where the workflow says: an earlier step's branch,
                 // else the project's default branch, else the repo's.
-                let start = run
+                let mut start = run
                     .payload
                     .as_ref()
                     .and_then(|p| p.pointer("/workflow/start"))
                     .and_then(Value::as_str)
-                    .map(str::to_string)
-                    .or_else(|| step.as_ref().and_then(|s| s.default_branch.clone()));
+                    .map(str::to_string);
+                if start.is_none() {
+                    if let Some(s) = &step {
+                        if let Some(branch) = &s.default_branch {
+                            let repo = std::path::Path::new(&s.repo);
+                            start = Some(default_branch_ref(repo, branch, &s.remote).await);
+                        }
+                    }
+                }
                 let p = self
                     .workspaces
                     .prepare_from(&ws_dot, &run.id, start.as_deref())

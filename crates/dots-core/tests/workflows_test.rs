@@ -48,6 +48,9 @@ enum Act {
     Park(&'static str, &'static str),
     /// Schedules a follow-up in an hour, then finishes with this summary.
     Schedule(&'static str),
+    /// Writes a file into its workspace and tags the commit its branch is on with the
+    /// branch's own name, then finishes with this summary.
+    WriteAndTag(&'static str, &'static str),
 }
 
 /// Plays each dot's acts in order, one per run (the last one again once they run out), and
@@ -150,6 +153,12 @@ impl Engine for Team {
                         .create_approval(&ctx.run_id, "Bash", &json!({"command": "git push"}))
                         .await
                         .unwrap();
+                    EngineEvent::Finished { summary: s.into() }
+                }
+                Act::WriteAndTag(file, s) => {
+                    std::fs::write(ctx.workspace.join(file), s).unwrap();
+                    let branch = format!("dots/{name}/{}", ctx.run_id);
+                    git_out(&ctx.workspace, &["tag", &branch]);
                     EngineEvent::Finished { summary: s.into() }
                 }
                 Act::Schedule(s) => {
@@ -1271,4 +1280,33 @@ async fn a_reply_in_an_ended_steps_thread_gets_no_step_and_leaves_its_worktree()
         w.store.get_workflow_run(&wr.id).await.unwrap().spent_runs,
         1
     );
+}
+
+#[tokio::test]
+async fn a_tag_named_like_the_earlier_steps_branch_does_not_move_the_next_steps_start() {
+    let w = world().await;
+    w.engine.set(
+        &w.dev.spec.name,
+        vec![
+            Act::WriteAndTag("one.txt", "First."),
+            Act::Write("two.txt", "Second."),
+        ],
+    );
+    let flow = w
+        .workflow(
+            "Two",
+            vec![
+                agent("one", "First", &w.dev, "Start."),
+                agent("two", "Second", &w.dev, "Go on."),
+            ],
+        )
+        .await;
+    let wr = w.start(&flow).await;
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    let first = &wr.steps[0].handoff.as_ref().unwrap().branches[0].branch;
+    let tip = git_out(&w.repo, &["rev-parse", &format!("refs/heads/{first}")]);
+    let second = w.store.runs_of_step_run(&wr.steps[1].id).await.unwrap();
+    assert_eq!(second[0].base_commit.as_deref(), Some(tip.as_str()));
 }
