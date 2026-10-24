@@ -1,0 +1,25 @@
+[package]
+name = "dots-admin"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "dots_admin"
+path = "src/lib.rs"
+
+[[bin]]
+name = "dots-admin"
+path = "src/main.rs"
+
+[dependencies]
+dots-core = { path = "../dots-core" }
+base64 = "0.22"
+chrono = "0.4"
+minisign = "0.10"
+rpassword = "7.5"
+serde_json = "1"
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"
