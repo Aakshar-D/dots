@@ -36,6 +36,9 @@ pub const MAX_TASK: usize = 8_000;
 pub const MAX_HANDOFF_SUMMARY: usize = 4_000;
 /// How often the loop passes while nothing wakes it.
 pub const TICK: Duration = Duration::from_secs(30);
+/// The most one tick counts into a run's `active_ms`. The loop passes at least every `TICK`, so
+/// a longer gap (the app was closed, the machine slept) is time nobody was counting.
+const MAX_TICK_GAIN: Duration = Duration::from_secs(60);
 
 /// What starts a workflow run.
 #[derive(Debug, Clone, PartialEq)]
@@ -238,7 +241,8 @@ impl Workflows {
                 "workflow run {id} is not waiting for budget"
             )));
         }
-        self.store
+        let running = self
+            .store
             .set_workflow_run(
                 id,
                 &WorkflowRunChange {
@@ -250,7 +254,19 @@ impl Workflows {
                 },
             )
             .await?;
-        self.advance(id).await?;
+        // A retry the limit held: its step failed, so it starts again here, as `retry_step`
+        // does, instead of failing the run back to the failed step.
+        let held_retry = running.current_step.as_deref().and_then(|current| {
+            let failed =
+                latest(&running, current).is_some_and(|s| s.status == StepRunStatus::Failed);
+            failed
+                .then(|| running.definition.step(current).map(|(i, _)| i))
+                .flatten()
+        });
+        match held_retry {
+            Some(index) => self.begin_step(&running, index).await?,
+            None => self.advance(id).await?,
+        }
         let wr = self.store.get_workflow_run(id).await?;
         self.updated(&wr);
         Ok(wr)
@@ -273,7 +289,10 @@ impl Workflows {
         let active = wr.status == WorkflowRunStatus::Running
             && !self.store.workflow_waits_on_person(&wr.id).await?;
         let gained = match (active, last) {
-            (true, Some(last)) if now > last => (now - last).num_milliseconds().max(0) as u64,
+            (true, Some(last)) if now > last => {
+                let gap = (now - last).num_milliseconds().max(0) as u64;
+                gap.min(MAX_TICK_GAIN.as_millis() as u64)
+            }
             _ => 0,
         };
         self.store

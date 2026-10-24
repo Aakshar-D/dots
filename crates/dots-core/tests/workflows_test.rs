@@ -322,6 +322,17 @@ impl World {
     }
 
     /// Waits until the workflow run satisfies `done`, or panics with its last state.
+    /// Moves `clock` to `to` in steps of 30 s (the loop's tick), with a pass after each, as the
+    /// loop would meanwhile.
+    async fn run_clock(&self, clock: &common::clock::FakeClock, to: chrono::DateTime<chrono::Utc>) {
+        let mut at = clock.now();
+        while at < to {
+            at = (at + chrono::TimeDelta::seconds(30)).min(to);
+            clock.set(at);
+            self.workflows.pass().await.unwrap();
+        }
+    }
+
     async fn until(&self, id: &str, done: impl Fn(&WorkflowRun) -> bool) -> WorkflowRun {
         // Generous: under a full test run, git on Windows makes each step take seconds.
         let deadline = std::time::Instant::now() + Duration::from_secs(60);
@@ -872,8 +883,8 @@ async fn the_clock_counts_only_while_nobody_waits_on_the_person() {
     let wr = w.start(&flow).await;
     w.until(&wr.id, |wr| !wr.steps.is_empty()).await;
     // Four minutes of work count.
-    clock.set(start + chrono::TimeDelta::minutes(4));
-    w.workflows.pass().await.unwrap();
+    w.run_clock(&clock, start + chrono::TimeDelta::minutes(4))
+        .await;
     assert_eq!(
         w.store.get_workflow_run(&wr.id).await.unwrap().active_ms,
         240_000
@@ -896,8 +907,8 @@ async fn the_clock_counts_only_while_nobody_waits_on_the_person() {
     // Past the minutes limit, the next step waits.
     let second = w.start(&flow).await;
     w.until(&second.id, |wr| !wr.steps.is_empty()).await;
-    clock.set(start + chrono::TimeDelta::minutes(80));
-    w.workflows.pass().await.unwrap();
+    w.run_clock(&clock, start + chrono::TimeDelta::minutes(80))
+        .await;
     w.engine.gate.notify_one();
     let second = w.until(&second.id, waits_on(WaitingOn::Check)).await;
     w.workflows.approve_check(&second.id, None).await.unwrap();
@@ -906,6 +917,55 @@ async fn the_clock_counts_only_while_nobody_waits_on_the_person() {
         second.error.as_deref(),
         Some("Budget reached: minutes, 16 of 10")
     );
+}
+
+#[tokio::test]
+async fn a_gap_in_the_clock_counts_at_most_a_minute() {
+    let start = chrono::Utc::now();
+    let clock = common::clock::FakeClock::new(start);
+    let w = world_with(clock.clone(), Budget::default()).await;
+    w.engine.set(&w.dev.spec.name, vec![Act::Hold]);
+    let flow = w
+        .workflow("Hold", vec![agent("one", "First", &w.dev, "Start.")])
+        .await;
+    let wr = w.start(&flow).await;
+    w.until(&wr.id, |wr| !wr.steps.is_empty()).await;
+    // The app was closed, or the machine slept, for three hours.
+    clock.set(start + chrono::TimeDelta::hours(3));
+    w.workflows.pass().await.unwrap();
+    let wr = w.store.get_workflow_run(&wr.id).await.unwrap();
+    assert_eq!(wr.active_ms, 60_000);
+    w.workflows.stop(&wr.id).await.unwrap();
+}
+
+#[tokio::test]
+async fn add_budget_after_a_held_retry_starts_the_failed_step() {
+    let w = world_with(
+        Arc::new(SystemClock),
+        Budget {
+            max_runs: 1,
+            ..Budget::default()
+        },
+    )
+    .await;
+    w.engine.set(
+        &w.dev.spec.name,
+        vec![Act::Fail("compiler exploded"), Act::Finish("Fixed.")],
+    );
+    let flow = w
+        .workflow("Fix", vec![agent("dev", "Fix it", &w.dev, "Fix.")])
+        .await;
+    let wr = w.start(&flow).await;
+    let wr = w.until(&wr.id, waits_on(WaitingOn::StepFailed)).await;
+    // The limit holds the retry.
+    w.workflows.retry_step(&wr.id).await.unwrap();
+    let wr = w.until(&wr.id, waits_on(WaitingOn::Budget)).await;
+    assert_eq!(wr.spent_runs, 1);
+    w.workflows.add_budget(&wr.id).await.unwrap();
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    assert_eq!(wr.spent_runs, 2);
 }
 
 #[tokio::test]
