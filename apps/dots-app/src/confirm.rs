@@ -654,26 +654,23 @@ where
     Fut: Future<Output = bool>,
 {
     let preview = rt.preview_org(code)?;
-    // The key decides, not the words of a line: ask whenever the code's key is not the one the
-    // org is joined with. A code for another org, or an org not joined, is the core's refusal.
-    if preview.org_id == org_id {
-        if let Some(current) = rt.orgs().summary(org_id).await {
-            if current.key_fingerprint != preview.key_fingerprint {
-                let warning = preview
-                    .changes
-                    .iter()
-                    .find(|c| c.starts_with(KEY_CHANGE))
-                    .cloned()
-                    .unwrap_or_else(|| {
-                        format!(
-                            "{KEY_CHANGE} from {} to {}",
-                            current.key_fingerprint, preview.key_fingerprint
-                        )
-                    });
-                if !ask(key_question(&preview.name, &warning)).await {
-                    return Err(CmdError::cancelled("the org was not updated"));
-                }
-            }
+    // The core's comparison of the whole policy keys decides, never the key id (which whoever
+    // makes a key can set) or the words of a line. A code for another org, or an org not
+    // joined, is the core's refusal, unasked.
+    if preview.org_id == org_id && preview.key_changed {
+        let warning = preview
+            .changes
+            .iter()
+            .find(|c| c.starts_with(KEY_CHANGE))
+            .cloned()
+            .unwrap_or_else(|| {
+                format!(
+                    "{KEY_CHANGE} to {}: the key that signs the org's policy is new, so accept                      this code only if your admin told you the key changed",
+                    preview.key_fingerprint
+                )
+            });
+        if !ask(key_question(&preview.name, &warning)).await {
+            return Err(CmdError::cancelled("the org was not updated"));
         }
     }
     Ok(rt.update_org(org_id, code, creds).await?)
@@ -1946,6 +1943,50 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.kind, CmdErrorKind::Invalid);
         assert_eq!(asked.borrow().len(), 2);
+        rt.shutdown();
+    }
+
+    /// A key made with the id of `KEY_A` but other bytes after it: the same fingerprint, not the
+    /// same key.
+    const KEY_A_LOOKALIKE: &str = "RWQBAQEBAQEBASIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIi";
+
+    #[tokio::test]
+    async fn a_key_with_the_same_id_is_still_a_new_key_and_asks() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        let store = dots_core::store::Store::open(&data.join(dots_core::store::DB_FILE))
+            .await
+            .unwrap();
+        let code =
+            dots_core::vault::org::parse_join_code(&org_code("acme-eng", "dots", KEY_A)).unwrap();
+        store
+            .add_org(&dots_core::vault::org::OrgRow {
+                id: code.org_id,
+                name: code.name,
+                source: code.source,
+                policy_key: code.policy_key,
+                last_issued_at: None,
+                last_fetch_at: None,
+                joined_at: "2026-10-22T09:00:00.000Z".into(),
+            })
+            .await
+            .unwrap();
+        store.close().await;
+        let rt = runtime(&dir).await;
+        let lookalike = org_code("acme-eng", "dots", KEY_A_LOOKALIKE);
+        let preview = rt.preview_org(&lookalike).unwrap();
+        assert_eq!(preview.key_fingerprint, "0101010101010101");
+        assert!(preview.key_changed);
+        let asked = std::cell::RefCell::new(Vec::new());
+        let err = update_org_confirmed(&rt, "acme-eng", &lookalike, None, answering(&asked, false))
+            .await
+            .unwrap_err();
+        assert_eq!(err, CmdError::cancelled("the org was not updated"));
+        assert_eq!(asked.borrow().len(), 1);
+        assert!(asked.borrow()[0].starts_with("Acme Engineering: the policy key changes"));
+        let policy_key = rt.orgs().summary("acme-eng").await.unwrap().key_fingerprint;
+        assert_eq!(policy_key, "0101010101010101");
         rt.shutdown();
     }
 }
