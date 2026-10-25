@@ -16,9 +16,11 @@ pub use join::{
 };
 #[cfg(windows)]
 pub use offline::Dpapi;
+#[cfg(feature = "test-support")]
+pub use offline::TestProtector;
 pub use offline::{
     delete_offline, offline_path, os_protector, read_offline, write_offline, NoProtector,
-    OfflineCopy, Protector, TestProtector, OFFLINE_DIR,
+    OfflineCopy, Protector, OFFLINE_DIR,
 };
 pub use policy::{
     parse_policy, AuditTarget, OrgPolicy, PersonalMode, PolicyError, UseRules,

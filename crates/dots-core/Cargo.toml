@@ -3,6 +3,11 @@ name = "dots-core"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+# Helpers for tests only (`TestProtector`, which hides nothing). Enabled for dots-core's own tests
+# through its dev-dependency on itself; no build that ships has it.
+test-support = []
+
 [dependencies]
 aes-gcm = { version = "0.10.3", features = ["zeroize"] }
 age = { version = "0.12.1", features = ["armor"] }
@@ -41,6 +46,7 @@ zeroize = { version = "1", features = ["serde"] }
 windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Credentials", "Win32_Security_Cryptography", "Win32_System_JobObjects", "Win32_System_Threading"] }
 
 [dev-dependencies]
+dots-core = { path = ".", features = ["test-support"] }
 futures-util = "0.3"
 minisign = "0.10"
 tempfile = "3"

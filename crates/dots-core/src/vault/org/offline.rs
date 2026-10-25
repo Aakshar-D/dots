@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "test-support")]
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
@@ -148,17 +149,23 @@ mod dpapi {
 
 /// For tests only: it hides nothing from anyone. It XORs with a fixed key behind a `DOTSTEST`
 /// prefix and the SHA-256 of the entropy, so a test can check that a file holds no plain value
-/// and that one org's copy does not open as another's, as under DPAPI.
+/// and that one org's copy does not open as another's, as under DPAPI. It exists only with the
+/// `test-support` feature, which only dots-core's own tests enable.
+#[cfg(feature = "test-support")]
 #[derive(Debug, Default, Clone, Copy)]
 pub struct TestProtector;
 
+#[cfg(feature = "test-support")]
 const TEST_MAGIC: &[u8] = b"DOTSTEST";
+#[cfg(feature = "test-support")]
 const TEST_KEY: &[u8] = b"dots-test-protector-key";
 
+#[cfg(feature = "test-support")]
 fn xor(data: &[u8]) -> impl Iterator<Item = u8> + '_ {
     data.iter().zip(TEST_KEY.iter().cycle()).map(|(b, k)| b ^ k)
 }
 
+#[cfg(feature = "test-support")]
 impl Protector for TestProtector {
     fn protect(&self, data: &[u8], entropy: &[u8]) -> Result<Vec<u8>> {
         let mut out = Vec::with_capacity(TEST_MAGIC.len() + 32 + data.len());
@@ -221,7 +228,9 @@ pub fn os_protector() -> Arc<dyn Protector> {
 }
 
 /// An org's last good fetch, as kept on disk. Its JSON carries `"v": 1`, and another version is
-/// refused. Its `Debug` shows only `fetched_at` and the names.
+/// refused. Its `Debug` shows only `fetched_at` and the names. It has no public `Serialize`, which
+/// would write its values in the clear: only `write_offline` turns it into JSON, and protects
+/// that at once.
 #[derive(Clone, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "Stored")]
 pub struct OfflineCopy {
@@ -252,13 +261,24 @@ struct Stored {
     policy: String,
 }
 
-/// The JSON form, written.
+/// The JSON form, written: only by `write_offline`, which protects it at once.
 #[derive(Serialize)]
 struct StoredRef<'a> {
     v: u32,
     fetched_at: &'a str,
     entries: &'a BTreeMap<String, Zeroizing<String>>,
     policy: &'a str,
+}
+
+impl<'a> StoredRef<'a> {
+    fn of(copy: &'a OfflineCopy) -> StoredRef<'a> {
+        StoredRef {
+            v: FORMAT,
+            fetched_at: &copy.fetched_at,
+            entries: &copy.entries,
+            policy: &copy.policy,
+        }
+    }
 }
 
 /// Only the version, read first so a copy of a later format says so rather than naming a field.
@@ -297,18 +317,6 @@ impl TryFrom<Stored> for OfflineCopy {
     }
 }
 
-impl Serialize for OfflineCopy {
-    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
-        StoredRef {
-            v: FORMAT,
-            fetched_at: &self.fetched_at,
-            entries: &self.entries,
-            policy: &self.policy,
-        }
-        .serialize(s)
-    }
-}
-
 /// Where the offline copy of `org_id` lives in `dir`: `dir/<org_id>.bin`. The id must be a valid
 /// org id, since it names a file.
 pub fn offline_path(dir: &Path, org_id: &str) -> Result<PathBuf> {
@@ -342,10 +350,11 @@ pub fn write_offline(
     let path = offline_path(dir, org_id)?;
     copy.check()
         .map_err(|why| Error::Invalid(format!("org '{org_id}': an offline copy: {why}")))?;
+    let stored = StoredRef::of(copy);
     let mut count = Count(0);
-    serde_json::to_writer(&mut count, copy)?;
+    serde_json::to_writer(&mut count, &stored)?;
     let mut plain = Zeroizing::new(Vec::with_capacity(count.0));
-    serde_json::to_writer(&mut *plain, copy)?;
+    serde_json::to_writer(&mut *plain, &stored)?;
     let sealed = protector.protect(&plain, org_id.as_bytes())?;
     drop(plain);
 

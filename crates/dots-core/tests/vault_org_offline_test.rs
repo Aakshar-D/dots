@@ -228,17 +228,33 @@ fn an_unknown_format_version_is_refused() {
     }
 }
 
+/// The JSON form is only ever written by `write_offline`, protected: read it back through the
+/// file.
 #[test]
 fn the_json_form_carries_its_version() {
-    let json = serde_json::to_value(copy(VALUE)).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    write_offline(dir.path(), &TestProtector, "acme", &copy(VALUE)).unwrap();
+    let path = offline_path(dir.path(), "acme").unwrap();
+    let sealed = std::fs::read(&path).unwrap();
+    let plain = TestProtector.unprotect(&sealed, b"acme").unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&plain).unwrap();
     assert_eq!(json["v"], 1);
     assert_eq!(json["fetched_at"], FETCHED);
     assert_eq!(json["entries"][NAME], VALUE);
-    let back: OfflineCopy = serde_json::from_value(json.clone()).unwrap();
-    assert_eq!(back, copy(VALUE));
+    assert_eq!(
+        read_offline(dir.path(), &TestProtector, "acme").unwrap(),
+        Some(copy(VALUE))
+    );
     let mut later = json;
     later["v"] = 2.into();
-    assert!(serde_json::from_value::<OfflineCopy>(later).is_err());
+    let text = later.to_string();
+    std::fs::write(
+        &path,
+        TestProtector.protect(text.as_bytes(), b"acme").unwrap(),
+    )
+    .unwrap();
+    let err = message(read_offline(dir.path(), &TestProtector, "acme").unwrap_err());
+    assert!(err.contains("format v2"), "{err}");
 }
 
 #[test]
