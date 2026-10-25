@@ -24,7 +24,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use zeroize::Zeroizing;
 
-use super::join::{check_org_id, key_fingerprint, parse_join_code, BaoAuth, JoinCode};
+use super::join::{
+    check_org_id, key_fingerprint, parse_join_code, same_policy_key, BaoAuth, JoinCode,
+};
 use super::offline::{delete_offline, read_offline, write_offline, OfflineCopy, Protector};
 use super::policy::{OrgPolicy, PersonalMode, PolicyError, UseRules};
 use super::row::OrgRow;
@@ -94,7 +96,8 @@ pub struct OrgSummary {
     pub source_kind: String,
     /// The address, the site or the file location.
     pub address: String,
-    /// The policy key's id, 16 upper-case hex digits.
+    /// The policy key's fingerprint (`key_fingerprint`): a digest of the whole key, 32
+    /// upper-case hex digits in groups of 4.
     pub key_fingerprint: String,
     #[serde(flatten)]
     pub status: OrgStatus,
@@ -343,7 +346,7 @@ impl Orgs {
             Some(Slot::Joined(joined)) => (
                 true,
                 changes(&joined.row, &code),
-                joined.row.policy_key != code.policy_key,
+                !same_policy_key(&joined.row.policy_key, &code.policy_key),
                 source_changed(&joined.row.source, &code.source),
             ),
             Some(Slot::Damaged { .. }) => (true, vec![damaged_text(&code.org_id)], false, false),
@@ -1366,7 +1369,7 @@ fn changes(old: &OrgRow, code: &JoinCode) -> Vec<String> {
             }
         }
     }
-    if old.policy_key != code.policy_key {
+    if !same_policy_key(&old.policy_key, &code.policy_key) {
         let fingerprint = |key: &str| key_fingerprint(key).unwrap_or_default();
         out.push(format!(
             "{KEY_CHANGE} from {} to {}: the key that signs the org's policy is new, so accept \

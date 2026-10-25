@@ -8,6 +8,7 @@ use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use super::policy::plain_serde;
 use crate::{Error, Result};
@@ -278,18 +279,46 @@ pub(crate) fn org_id_rule(org_id: &str) -> std::result::Result<(), String> {
     Ok(())
 }
 
-/// The policy key's minisign key id, as 16 upper-case hex digits: what `minisign` prints in the
-/// `.pub` file's comment, and what the UI shows so the person can compare it with the admin's.
+/// What the fingerprint's digest starts with, before the key's bytes.
+const FINGERPRINT_CONTEXT: &[u8] = b"dots policy key v1\0";
+
+/// The policy key's fingerprint, which the UI shows so the person can compare it with the one
+/// their admin read from `dots-admin`: the first 128 bits of SHA-256 over
+/// `"dots policy key v1\0"` and the key's 42 bytes, as 32 upper-case hex digits in groups of 4
+/// (`1A2B 3C4D …`). It covers the whole key: the minisign key id in the `.pub` file's comment is
+/// whatever the key's maker chose, so two keys can share one, and it proves nothing.
 pub fn key_fingerprint(policy_key: &str) -> Result<String> {
+    let digest = Sha256::new()
+        .chain_update(FINGERPRINT_CONTEXT)
+        .chain_update(policy_key_bytes(policy_key)?)
+        .finalize();
+    let hex: Vec<String> = digest[..16].iter().map(|b| format!("{b:02X}")).collect();
+    Ok(hex
+        .chunks(2)
+        .map(|pair| pair.concat())
+        .collect::<Vec<_>>()
+        .join(" "))
+}
+
+/// Whether two policy keys are one key: their decoded bytes are compared. A text that is not a
+/// key is the same only as the same text.
+pub fn same_policy_key(a: &str, b: &str) -> bool {
+    match (policy_key_bytes(a), policy_key_bytes(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
+}
+
+/// A minisign public key's 42 bytes: `Ed` (2 bytes), the key id (8 bytes) and the Ed25519 key
+/// (32 bytes).
+fn policy_key_bytes(policy_key: &str) -> Result<Vec<u8>> {
     let not_a_key = || Error::Invalid("the policy key is not a minisign public key".into());
     minisign_verify::PublicKey::from_base64(policy_key).map_err(|_| not_a_key())?;
-    // `Ed` (2 bytes), the key id (8 bytes, little-endian), the Ed25519 key (32 bytes).
     let bytes = STANDARD.decode(policy_key).map_err(|_| not_a_key())?;
-    let id: [u8; 8] = bytes
-        .get(2..10)
-        .and_then(|b| b.try_into().ok())
-        .ok_or_else(not_a_key)?;
-    Ok(format!("{:016X}", u64::from_le_bytes(id)))
+    if bytes.len() != 42 || !bytes.starts_with(b"Ed") {
+        return Err(not_a_key());
+    }
+    Ok(bytes)
 }
 
 /// A source address: `https://`, or `http://` only to `localhost` or `127.0.0.1`, for test

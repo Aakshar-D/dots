@@ -1825,9 +1825,12 @@ mod tests {
         );
     }
 
-    /// Two policy keys, `0101010101010101` and `0202020202020202` by fingerprint.
+    /// Two policy keys, with the key ids 0101010101010101 and 0202020202020202. Their
+    /// fingerprints are `FINGERPRINT_A` and `FINGERPRINT_B`.
     const KEY_A: &str = "RWQBAQEBAQEBARERERERERERERERERERERERERERERERERERERERERER";
     const KEY_B: &str = "RWQCAgICAgICAhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhIS";
+    const FINGERPRINT_A: &str = "B255 6546 5BDA 78EE 6896 66BA A32B 8C2C";
+    const FINGERPRINT_B: &str = "C71A EB03 11E4 4506 B223 5F88 006F 1976";
 
     /// The join code of `org_id` signed with `key`, its OpenBao on a port nothing listens on.
     fn org_code(org_id: &str, path: &str, key: &str) -> String {
@@ -1894,14 +1897,16 @@ mod tests {
             *asked.borrow(),
             [key_question(
                 "Acme Engineering",
-                "the policy key changes from 0101010101010101 to 0202020202020202: the key that \
-                 signs the org's policy is new, so accept this code only if your admin told you \
-                 the key changed"
+                &format!(
+                    "the policy key changes from {FINGERPRINT_A} to {FINGERPRINT_B}: the key \
+                     that signs the org's policy is new, so accept this code only if your admin \
+                     told you the key changed"
+                )
             )]
         );
         assert!(asked.borrow()[0].starts_with("Acme Engineering: the policy key changes from"));
         let summary = rt.orgs().summary("acme-eng").await.unwrap();
-        assert_eq!(summary.key_fingerprint, "0101010101010101");
+        assert_eq!(summary.key_fingerprint, FINGERPRINT_A);
 
         // A yes goes on to the Update, which fetches with the new settings (and fails here).
         let err = update_org_confirmed(
@@ -1947,8 +1952,8 @@ mod tests {
         rt.shutdown();
     }
 
-    /// A key made with the id of `KEY_A` but other bytes after it: the same fingerprint, not the
-    /// same key.
+    /// A key made with the id of `KEY_A` but other bytes after it: the same key id, which
+    /// whoever makes a key chooses, but not the same key.
     const KEY_A_LOOKALIKE: &str = "RWQBAQEBAQEBASIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIi";
 
     #[tokio::test]
@@ -1977,7 +1982,12 @@ mod tests {
         let rt = runtime(&dir).await;
         let lookalike = org_code("acme-eng", "dots", KEY_A_LOOKALIKE);
         let preview = rt.preview_org(&lookalike).unwrap();
-        assert_eq!(preview.key_fingerprint, "0101010101010101");
+        // The fingerprint covers the whole key, so the person sees that it differs.
+        assert_eq!(
+            preview.key_fingerprint,
+            "D5D8 218B 3A8A 6F28 5454 4026 AC2F CE07"
+        );
+        assert_ne!(preview.key_fingerprint, FINGERPRINT_A);
         assert!(preview.key_changed);
         let asked = std::cell::RefCell::new(Vec::new());
         let err = update_org_confirmed(&rt, "acme-eng", &lookalike, None, answering(&asked, false))
@@ -1986,8 +1996,11 @@ mod tests {
         assert_eq!(err, CmdError::cancelled("the org was not updated"));
         assert_eq!(asked.borrow().len(), 1);
         assert!(asked.borrow()[0].starts_with("Acme Engineering: the policy key changes"));
-        let policy_key = rt.orgs().summary("acme-eng").await.unwrap().key_fingerprint;
-        assert_eq!(policy_key, "0101010101010101");
+        // The no kept the key the org was joined with.
+        let row = rt.store().get_org("acme-eng").await.unwrap().unwrap();
+        assert_eq!(row.policy_key, KEY_A);
+        let summary = rt.orgs().summary("acme-eng").await.unwrap();
+        assert_eq!(summary.key_fingerprint, FINGERPRINT_A);
         rt.shutdown();
     }
 }

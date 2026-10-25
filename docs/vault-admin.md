@@ -59,8 +59,8 @@ It asks for a password twice and writes `keys/policy.key` (secret) and `keys/pol
 
 ```text
 public key: RW...
-key fingerprint: F6A6F69F7ACCC1C6
-Keep policy.key offline. Join codes carry policy.pub; Dots shows the fingerprint.
+key fingerprint: 3F9A 1C2B 77D2 0E4C 8C41 E56D 0F51 C2E0
+Keep policy.key offline. Join codes carry policy.pub; Dots shows the fingerprint above, not the key id in policy.pub's comment.
 ```
 
 - **Keep `policy.key` offline**, for example in your password manager or on an encrypted drive.
@@ -69,7 +69,11 @@ Keep policy.key offline. Join codes carry policy.pub; Dots shows the fingerprint
 - **The password.** `dots-admin` reads it from the `DOTS_ADMIN_PASSWORD` environment variable
   when that is set, and from the terminal otherwise. Use the variable only in scripts you trust.
 - `--no-password` writes an unprotected key, with a warning. Don't use it outside tests.
-- **The fingerprint** is what a person sees when they join. Tell them to expect it.
+- **The fingerprint** is what a person sees when they join. Tell them to expect it. It is a
+  digest of the whole public key: 32 hex digits in groups of 4. Read it from what `dots-admin`
+  prints (`keygen`, `join-code`, `policy sign`), never from the comment line of `policy.pub`:
+  that line shows minisign's key id, which whoever makes a key can set to anything, so it proves
+  nothing.
 
 When the key changes, a person who uses **Update** with the new join code sees the line "the
 policy key changes from ... to ..." highlighted in the list of changes. Dots then asks in a
@@ -209,7 +213,7 @@ value changes, so your layout stays. It then checks the result as a Dots client 
 it. The input file is not changed. The output says:
 
 ```text
-signed the policy for org 'acme-eng', issued_at 2026-10-24T05:16:09Z, with key F6A6F69F7ACCC1C6
+signed the policy for org 'acme-eng', issued_at 2026-10-24T05:16:09Z, with key 3F9A 1C2B 77D2 0E4C 8C41 E56D 0F51 C2E0
 wrote policy.signed.json; store its text as DOTS_POLICY
 ```
 
@@ -474,7 +478,7 @@ This prints the code on one line, and notes on standard error:
 ```text
 org: Acme Engineering (acme-eng)
 source: openbao at https://bao.example.invalid
-policy key fingerprint: F6A6F69F7ACCC1C6; Dots shows it on joining, so tell people to expect it
+policy key fingerprint: 3F9A 1C2B 77D2 0E4C 8C41 E56D 0F51 C2E0; Dots shows it on joining, so tell people to expect it
 ```
 
 The source options, by `--source`:

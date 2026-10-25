@@ -11,8 +11,8 @@ pub mod sources;
 pub mod timers;
 
 pub use join::{
-    check_org_id, key_fingerprint, parse_join_code, BaoAuth, InfisicalSettings, JoinCode,
-    OpenBaoSettings, SopsSettings, SourceSettings,
+    check_org_id, key_fingerprint, parse_join_code, same_policy_key, BaoAuth, InfisicalSettings,
+    JoinCode, OpenBaoSettings, SopsSettings, SourceSettings,
 };
 #[cfg(windows)]
 pub use offline::Dpapi;

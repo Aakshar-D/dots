@@ -6,9 +6,9 @@ use std::io::Cursor;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine;
 use dots_core::vault::org::{
-    check_org_id, envelope, key_fingerprint, parse_join_code, parse_policy, verify_policy,
-    AuditTarget, BaoAuth, InfisicalSettings, JoinCode, OpenBaoSettings, OrgPolicy, PersonalMode,
-    PolicyError, SopsSettings, SourceSettings, UseRules,
+    check_org_id, envelope, key_fingerprint, parse_join_code, parse_policy, same_policy_key,
+    verify_policy, AuditTarget, BaoAuth, InfisicalSettings, JoinCode, OpenBaoSettings, OrgPolicy,
+    PersonalMode, PolicyError, SopsSettings, SourceSettings, UseRules,
 };
 use dots_core::Error;
 use minisign::KeyPair;
@@ -879,21 +879,50 @@ fn text_that_is_not_a_join_code_is_refused() {
     );
 }
 
+/// `Ed`, the key id 0101010101010101 and the key 11…11.
+const FIXED_KEY: &str = "RWQBAQEBAQEBARERERERERERERERERERERERERERERERERERERERERER";
+/// The same key id as `FIXED_KEY`, and the key 22…22.
+const SAME_ID: &str = "RWQBAQEBAQEBASIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIi";
+
 #[test]
-fn the_key_fingerprint_is_the_minisign_key_id() {
+fn the_key_fingerprint_is_a_digest_of_the_whole_key() {
+    // SHA-256 over "dots policy key v1\0" and the key's 42 bytes: its first 128 bits.
+    assert_eq!(
+        key_fingerprint(FIXED_KEY).unwrap(),
+        "B255 6546 5BDA 78EE 6896 66BA A32B 8C2C"
+    );
+    // Whoever makes a key chooses its id: two keys with one id still differ.
+    assert_eq!(
+        key_fingerprint(SAME_ID).unwrap(),
+        "D5D8 218B 3A8A 6F28 5454 4026 AC2F CE07"
+    );
+    assert!(!same_policy_key(FIXED_KEY, SAME_ID));
+    assert!(same_policy_key(FIXED_KEY, FIXED_KEY));
+
     let keys = keys();
     let fingerprint = key_fingerprint(&keys.pk.to_base64()).unwrap();
+    let groups: Vec<&str> = fingerprint.split(' ').collect();
+    assert_eq!(groups.len(), 8, "{fingerprint}");
+    for group in groups {
+        assert_eq!(group.len(), 4, "{fingerprint}");
+        assert!(
+            group
+                .chars()
+                .all(|c| c.is_ascii_digit() || c.is_ascii_uppercase()),
+            "{fingerprint}"
+        );
+    }
+    // The id `minisign` writes in the .pub file's comment is not the fingerprint.
     let keynum: [u8; 8] = keys.pk.keynum().try_into().unwrap();
-    assert_eq!(fingerprint, format!("{:016X}", u64::from_le_bytes(keynum)));
-    assert_eq!(fingerprint.len(), 16);
-    // The id `minisign` writes in the .pub file's comment.
+    let key_id = format!("{:016X}", u64::from_le_bytes(keynum));
     let pub_file = keys.pk.to_box().unwrap().into_string();
     assert!(
         pub_file.starts_with(&format!(
-            "untrusted comment: minisign public key: {fingerprint}\n"
+            "untrusted comment: minisign public key: {key_id}\n"
         )),
         "{pub_file}"
     );
+    assert!(!fingerprint.replace(' ', "").contains(&key_id));
     assert!(matches!(
         key_fingerprint("RWQ-not-a-key"),
         Err(Error::Invalid(_))

@@ -26,7 +26,8 @@ pub struct NewKeys {
     pub public_path: PathBuf,
     /// The bare `RW…` public key, as a join code holds it.
     pub public_key: String,
-    /// The key id as Dots shows it when someone joins.
+    /// The key's fingerprint as Dots shows it when someone joins (`key_fingerprint`, a digest
+    /// of the whole key). It is not the key id in `policy.pub`'s comment.
     pub fingerprint: String,
 }
 
@@ -108,7 +109,8 @@ pub(crate) fn keygen_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
     say(io.out, &format!("key fingerprint: {}", keys.fingerprint))?;
     say(
         io.out,
-        "Keep policy.key offline. Join codes carry policy.pub; Dots shows the fingerprint.",
+        "Keep policy.key offline. Join codes carry policy.pub; Dots shows the fingerprint above, \
+         not the key id in policy.pub's comment.",
     )
 }
 

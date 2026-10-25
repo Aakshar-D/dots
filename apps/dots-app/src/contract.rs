@@ -1033,7 +1033,7 @@ fn org_summaries() -> Vec<OrgSummary> {
         name: "Acme Engineering".into(),
         source_kind: "openbao".into(),
         address: "https://bao.acme.internal".into(),
-        key_fingerprint: "6E2F0A1B9C3D4E5F".into(),
+        key_fingerprint: "6E2F 0A1B 9C3D 4E5F 7A81 B2C3 D4E5 F607".into(),
         status: OrgStatus::Connected,
         status_text: "connected".into(),
         last_fetch_at: Some(TS.into()),
@@ -1112,7 +1112,7 @@ fn join_previews() -> Vec<JoinPreview> {
         name: "Acme Engineering".into(),
         source_kind: "openbao".into(),
         address: "https://bao.acme.internal".into(),
-        key_fingerprint: "6E2F0A1B9C3D4E5F".into(),
+        key_fingerprint: "6E2F 0A1B 9C3D 4E5F 7A81 B2C3 D4E5 F607".into(),
         auth: Some(BaoAuth::Token),
         existing: false,
         changes: vec![],
@@ -1123,12 +1123,12 @@ fn join_previews() -> Vec<JoinPreview> {
         new.clone(),
         JoinPreview {
             existing: true,
-            key_fingerprint: "0A1B2C3D4E5F6071".into(),
+            key_fingerprint: "0A1B 2C3D 4E5F 6071 8293 A4B5 C6D7 E8F9".into(),
             changes: vec![
                 "path changes from dots to dots2".into(),
-                "the policy key changes from 6E2F0A1B9C3D4E5F to 0A1B2C3D4E5F6071: the key that \
-                 signs the org's policy is new, so accept this code only if your admin told you \
-                 the key changed"
+                "the policy key changes from 6E2F 0A1B 9C3D 4E5F 7A81 B2C3 D4E5 F607 to 0A1B \
+                 2C3D 4E5F 6071 8293 A4B5 C6D7 E8F9: the key that signs the org's policy is new, \
+                 so accept this code only if your admin told you the key changed"
                     .into(),
             ],
             key_changed: true,

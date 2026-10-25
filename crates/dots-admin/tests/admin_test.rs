@@ -5,13 +5,14 @@ use std::cell::RefCell;
 use std::path::Path;
 use std::process::Command;
 
+use base64::Engine;
 use chrono::{DateTime, Utc};
 use dots_admin::keys::{keygen, read_public_key};
 use dots_admin::policy::{new_policy, sign_policy, verify_signed};
 use dots_admin::{run, AdminError, Ask, Io};
 use dots_core::vault::org::{
-    parse_join_code, parse_policy, verify_policy, BaoAuth, InfisicalSettings, JoinCode,
-    OpenBaoSettings, PersonalMode, PolicyError, SopsSettings, SourceSettings, UseRules,
+    key_fingerprint, parse_join_code, parse_policy, verify_policy, BaoAuth, InfisicalSettings,
+    JoinCode, OpenBaoSettings, PersonalMode, PolicyError, SopsSettings, SourceSettings, UseRules,
 };
 use serde_json::Value;
 use tempfile::TempDir;
@@ -799,13 +800,21 @@ fn keygen_writes_a_minisign_key_pair() {
     let dir = TempDir::new().unwrap();
     let keys = keygen(&dir.path().join("new-folder"), None).unwrap();
     let public = std::fs::read_to_string(&keys.public_path).unwrap();
+    // minisign's own comment names the key id, which is not the fingerprint Dots shows.
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&keys.public_key)
+        .unwrap();
+    let key_id = u64::from_le_bytes(bytes[2..10].try_into().unwrap());
     assert_eq!(
         public,
         format!(
-            "untrusted comment: minisign public key: {}\n{}\n",
-            keys.fingerprint, keys.public_key
+            "untrusted comment: minisign public key: {key_id:016X}\n{}\n",
+            keys.public_key
         )
     );
+    assert_eq!(keys.fingerprint, key_fingerprint(&keys.public_key).unwrap());
+    assert_eq!(keys.fingerprint.len(), 39, "{}", keys.fingerprint);
+    assert!(!keys.fingerprint.contains(&format!("{key_id:016X}")));
     let secret = std::fs::read_to_string(&keys.secret_path).unwrap();
     assert!(secret.starts_with("untrusted comment: dots-admin policy secret key"));
     assert_eq!(read_public_key(&keys.public_key).unwrap(), keys.public_key);
