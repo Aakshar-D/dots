@@ -712,7 +712,8 @@
       "manual",
       "chat",
       "resume",
-      "follow_up"
+      "follow_up",
+      "app"
     ],
     "WorkspaceMode": [
       "worktree",

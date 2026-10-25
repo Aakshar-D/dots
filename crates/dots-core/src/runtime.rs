@@ -297,6 +297,15 @@ impl Runtime {
             );
         }
         runner.spawn_dispatcher(shutdown.clone());
+        // The runs apps start are queued as the runner's, and apps hear when a run of a topic
+        // they started ends (app library spec section 7).
+        let starting = Arc::downgrade(&runner);
+        apps.set_starter(move |run| {
+            if let Some(runner) = starting.upgrade() {
+                runner.enqueued(run);
+            }
+        });
+        crate::apps::wake::spawn_run_ends(apps.clone(), &bus, shutdown.clone());
         let scheduler = Scheduler::new(
             store.clone(),
             runner.clone(),

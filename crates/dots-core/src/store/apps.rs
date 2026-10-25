@@ -6,12 +6,36 @@ use sqlx::Row;
 use super::runs::insert_run;
 use super::Store;
 use crate::apps::propose::{AppProposal, ProposalStatus};
+use crate::apps::wake::AppTopic;
 use crate::apps::AppCall;
 use crate::model::{NewRun, Run};
 use crate::{Error, Result};
 
 const PROPOSAL_COLUMNS: &str = "id, dot_id, run_id, root_run_id, app_name, app_id, base_version, \
     note, summary, status, answer, answer_run_id, created_at, decided_at";
+
+/// A topic is busy while a run of it works or is parked, a question of it is open or a review
+/// card of it waits (app library spec section 7). `t` is the `app_topics` row.
+const TOPIC_BUSY: &str = "(EXISTS (SELECT 1 FROM runs r WHERE r.root_run_id = t.root_run_id \
+    AND r.status IN ('queued', 'running', 'awaiting_approval')) \
+    OR EXISTS (SELECT 1 FROM messages m JOIN runs r ON r.id = m.run_id \
+    WHERE r.root_run_id = t.root_run_id AND m.kind = 'question' AND m.answered_at IS NULL \
+    AND m.dismissed_at IS NULL) \
+    OR EXISTS (SELECT 1 FROM app_proposals p WHERE p.root_run_id = t.root_run_id \
+    AND p.status = 'pending'))";
+
+const TOPIC_COLUMNS: &str = "t.root_run_id, t.app_id, t.dot_id, t.tag, t.created_at, t.told_run_id";
+
+fn topic_from_row(row: &SqliteRow) -> Result<AppTopic> {
+    Ok(AppTopic {
+        root_run_id: row.try_get("root_run_id")?,
+        app_id: row.try_get("app_id")?,
+        dot_id: row.try_get("dot_id")?,
+        tag: row.try_get("tag")?,
+        created_at: row.try_get("created_at")?,
+        told_run_id: row.try_get("told_run_id")?,
+    })
+}
 
 fn proposal_from_row(row: &SqliteRow) -> Result<AppProposal> {
     Ok(AppProposal {
@@ -159,6 +183,94 @@ impl Store {
             self.get_app_proposal(id).await?,
             self.get_run(&run_id).await?,
         ))
+    }
+
+    /// Stores the run an app's start asked for and its topic, in one transaction (app library
+    /// spec section 7). `at` is when the app started it.
+    pub async fn start_app_run(
+        &self,
+        app_id: &str,
+        tag: &str,
+        new: &NewRun,
+        at: &str,
+    ) -> Result<Run> {
+        let mut tx = self.pool.begin().await?;
+        let run_id = insert_run(&mut tx, new).await?;
+        sqlx::query(
+            "INSERT INTO app_topics (root_run_id, app_id, dot_id, tag, created_at) \
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(&run_id)
+        .bind(app_id)
+        .bind(&new.dot_id)
+        .bind(tag)
+        .bind(at)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        self.get_run(&run_id).await
+    }
+
+    /// The topics the app `app_id` started that still work or wait.
+    pub async fn open_app_topics(&self, app_id: &str) -> Result<Vec<AppTopic>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {TOPIC_COLUMNS} FROM app_topics t WHERE t.app_id = ? AND {TOPIC_BUSY}"
+        ))
+        .bind(app_id)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(topic_from_row).collect()
+    }
+
+    /// How many topics the app `app_id` started at `since` or later.
+    pub async fn app_starts_since(&self, app_id: &str, since: &str) -> Result<u32> {
+        let n: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM app_topics WHERE app_id = ? AND created_at >= ?",
+        )
+        .bind(app_id)
+        .bind(since)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(n as u32)
+    }
+
+    /// The topic an app started whose first run is `root_run_id`, if an app started it.
+    pub async fn app_topic(&self, root_run_id: &str) -> Result<Option<AppTopic>> {
+        sqlx::query(&format!(
+            "SELECT {TOPIC_COLUMNS} FROM app_topics t WHERE t.root_run_id = ?"
+        ))
+        .bind(root_run_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .as_ref()
+        .map(topic_from_row)
+        .transpose()
+    }
+
+    /// Whether the topic of `root_run_id` still works or waits (`TOPIC_BUSY`).
+    pub async fn topic_busy(&self, root_run_id: &str) -> Result<bool> {
+        let busy: bool = sqlx::query_scalar(&format!(
+            "SELECT {TOPIC_BUSY} FROM app_topics t WHERE t.root_run_id = ?"
+        ))
+        .bind(root_run_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .unwrap_or(false);
+        Ok(busy)
+    }
+
+    /// Records that the app was told of `run_id`'s end; `false` when it was already.
+    pub async fn mark_topic_told(&self, root_run_id: &str, run_id: &str) -> Result<bool> {
+        let res = sqlx::query(
+            "UPDATE app_topics SET told_run_id = ? WHERE root_run_id = ? \
+             AND (told_run_id IS NULL OR told_run_id <> ?)",
+        )
+        .bind(run_id)
+        .bind(root_run_id)
+        .bind(run_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() == 1)
     }
 
     /// The newest `limit` logged calls of the app `app_id`, newest first.

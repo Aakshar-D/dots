@@ -17,12 +17,13 @@ use chrono::{Local, SecondsFormat};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::apps::call::{self, Actor, Call, CallError, DotRef};
+use crate::apps::call::{self, Actor, Call, CallError, DotRef, Start, StartGate, STARTS_PER_HOUR};
 use crate::apps::data;
 use crate::apps::engine::Limits;
 use crate::apps::source::{self, AppSource};
 use crate::events::{Bus, RuntimeEvent};
 use crate::library::{AppConfig, AppOrigin, LibraryConfig, LibraryItem, LibraryKind};
+use crate::model::{NewRun, Run, TriggerKind};
 use crate::scheduler::{Clock, SystemClock};
 use crate::store::Store;
 use crate::{Error, Result};
@@ -46,7 +47,11 @@ pub struct Apps {
     cache: Arc<Mutex<HashMap<VersionKey, Arc<AppSource>>>>,
     /// What `ctx.now` reads.
     clock: Arc<dyn Clock>,
+    /// Announces a run an app started, so the runner starts it (`set_starter`).
+    starter: Arc<std::sync::OnceLock<Starter>>,
 }
+
+type Starter = Box<dyn Fn(&Run) + Send + Sync>;
 
 /// A logged call (spec section 5): every call of a tool that writes, and of `on_run_end`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -86,7 +91,62 @@ impl Apps {
             locks: Arc::default(),
             cache: Arc::default(),
             clock: Arc::new(SystemClock),
+            starter: Arc::default(),
         }
+    }
+
+    /// Gives the apps what announces a run they started (the runtime: the runner's
+    /// `enqueued`). Set once; a second call changes nothing.
+    pub fn set_starter(&self, starter: impl Fn(&Run) + Send + Sync + 'static) {
+        let _ = self.starter.set(Box::new(starter));
+    }
+
+    /// `ctx.dots.start` of the app `app_id` (spec section 7): the topics it started that are
+    /// still working or waiting, by (dot, tag), what is left of the hour's 20 starts, and
+    /// whether schedules are paused.
+    async fn start_gate(&self, app_id: &str) -> Result<StartGate> {
+        let paused = self.store.get_settings().await?.schedules_paused;
+        let open = self
+            .store
+            .open_app_topics(app_id)
+            .await?
+            .into_iter()
+            .map(|t| ((t.dot_id, t.tag), t.root_run_id))
+            .collect();
+        let since = crate::util::timestamp(self.clock.now() - chrono::Duration::hours(1));
+        let made = self.store.app_starts_since(app_id, &since).await?;
+        Ok(StartGate {
+            open,
+            budget: STARTS_PER_HOUR.saturating_sub(made),
+            paused,
+        })
+    }
+
+    /// Queues the run a committed call's start asked for (spec section 7): a new topic of the
+    /// dot, triggered by the app, under the id `start` returned to the app.
+    async fn queue_start(
+        &self,
+        item: &LibraryItem,
+        config: &AppConfig,
+        start: &Start,
+    ) -> Result<Run> {
+        let mut new = NewRun::new(&start.dot_id, TriggerKind::App);
+        new.id = Some(start.run_id.clone());
+        new.payload = Some(serde_json::json!({
+            "message": start.message,
+            "app": item.name,
+            "app_title": config.title,
+            "tag": start.tag,
+        }));
+        let at = crate::util::timestamp(self.clock.now());
+        let run = self
+            .store
+            .start_app_run(&item.id, &start.tag, &new, &at)
+            .await?;
+        if let Some(starter) = self.starter.get() {
+            starter(&run);
+        }
+        Ok(run)
     }
 
     /// `ctx.now` reads `clock` (tests).
@@ -165,6 +225,12 @@ impl Apps {
             .to_rfc3339_opts(SecondsFormat::Secs, false);
         let lock = self.lock(&item.id);
         let _held = lock.lock().await;
+        // Read under the lock, so two calls cannot both spend the hour's last start.
+        let start = if config.can_start_dots && src.manifest.can_start_dots() {
+            Some(self.start_gate(&item.id).await.map_err(|e| e.to_string())?)
+        } else {
+            None
+        };
         let path = self.data_path(&item.id);
         let started = std::time::Instant::now();
         let (function, call_input, call_actor, call_now) =
@@ -182,7 +248,7 @@ impl Apps {
                     actor: call_actor,
                     now: call_now,
                     dots,
-                    start: None,
+                    start,
                     limits: Limits::default(),
                 },
             )
@@ -220,6 +286,12 @@ impl Apps {
         }
         match ran {
             Ok(out) => {
+                // The starts are queued only now that the call has committed (spec section 5).
+                for start in &out.starts {
+                    if let Err(e) = self.queue_start(&item, &config, start).await {
+                        tracing::error!(app = %name, dot = %start.dot_id, "the start could not be queued: {e}");
+                    }
+                }
                 if out.changes > 0 {
                     let _ = self.bus.send(RuntimeEvent::AppDataChanged {
                         app: name.to_string(),

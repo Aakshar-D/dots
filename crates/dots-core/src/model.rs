@@ -17,6 +17,7 @@ str_enum!(TriggerKind {
     Chat => "chat",
     Resume => "resume",
     FollowUp => "follow_up",
+    App => "app",
 });
 str_enum!(RunStatus {
     Queued => "queued",
@@ -224,6 +225,9 @@ pub struct Run {
 /// Input for `Store::create_run`. `root_run_id: None` makes the run its own root.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewRun {
+    /// The run's id when the caller chose it: an app's start returned it already (app library
+    /// spec section 7). `None` gets a new one.
+    pub id: Option<String>,
     pub dot_id: String,
     pub trigger: TriggerKind,
     pub payload: Option<Value>,
@@ -239,6 +243,7 @@ pub struct NewRun {
 impl NewRun {
     pub fn new(dot_id: &str, trigger: TriggerKind) -> Self {
         Self {
+            id: None,
             dot_id: dot_id.to_string(),
             trigger,
             payload: None,

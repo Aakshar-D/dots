@@ -44,6 +44,18 @@ CREATE INDEX app_proposals_root ON app_proposals(root_run_id);
 -- One proposal waits per run.
 CREATE UNIQUE INDEX app_proposals_pending_run ON app_proposals(run_id) WHERE status = 'pending';
 
+-- A topic an app started (section 7): its first run, the app and the dot, the app's tag, and
+-- the last of its runs whose end the app was told of (`on_run_end`).
+CREATE TABLE app_topics (
+    root_run_id TEXT PRIMARY KEY,
+    app_id      TEXT NOT NULL,
+    dot_id      TEXT NOT NULL,
+    tag         TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    told_run_id TEXT
+);
+CREATE INDEX app_topics_app ON app_topics(app_id, created_at);
+
 -- Every preset allows `App` and `ProposeApp` (section 6). The policy of each dot whose preset
 -- is any, Custom too as 0007 did for `Context`, gets the rules when the store opens
 -- (`store/upgrade.rs`, `finish_0013`), after

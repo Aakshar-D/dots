@@ -310,6 +310,7 @@ fn dots_are_listed_but_start_needs_the_grant() {
         json!([[{"id": "d1", "name": "builder"}], "undefined"])
     );
     let gate = StartGate {
+        paused: false,
         open: BTreeMap::new(),
         budget: 20,
     };
@@ -334,6 +335,7 @@ fn a_start_is_recorded_and_its_run_id_returned() {
         return [ctx.dots.start("d1", "Work on " + tag, tag), ctx.dots.start("d1", "again", tag)];
     }"#);
     let gate = StartGate {
+        paused: false,
         open: BTreeMap::new(),
         budget: 20,
     };
@@ -359,6 +361,7 @@ fn a_start_is_recorded_and_its_run_id_returned() {
 fn an_open_topic_is_returned_instead_of_a_new_start() {
     let app = app(r#"export function f(_, ctx) { return ctx.dots.start("d1", "go", "t1"); }"#);
     let gate = StartGate {
+        paused: false,
         open: BTreeMap::from([(("d1".to_string(), "t1".to_string()), "root9".to_string())]),
         budget: 20,
     };
@@ -382,6 +385,7 @@ fn a_start_breaking_a_rule_throws() {
     }"#);
     let go = |input: Value, budget: u32| {
         let gate = StartGate {
+            paused: false,
             open: BTreeMap::new(),
             budget,
         };
@@ -420,6 +424,7 @@ fn a_rolled_back_call_starts_nothing() {
         r#"export function f(_, ctx) { ctx.dots.start("d1", "go", "t1"); throw new Error("no"); }"#,
     );
     let gate = StartGate {
+        paused: false,
         open: BTreeMap::new(),
         budget: 20,
     };

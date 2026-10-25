@@ -24,6 +24,8 @@ export const TriggerKind = z.enum([
   "resume",
   // A run a dot scheduled for itself (check-ins spec section 6).
   "follow_up",
+  // A run an app started (app library spec section 7).
+  "app",
 ]);
 export const RunStatus = z.enum([
   "queued",

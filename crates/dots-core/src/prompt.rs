@@ -113,6 +113,17 @@ pub fn build_prompt_full(
         out.push_str("## Message from the user\n\n");
         out.push_str(message);
         out.push_str("\n\n");
+    } else if run.trigger == TriggerKind::App {
+        // A run an app started (app library spec section 7): the app's message, by its title.
+        let app = run
+            .payload
+            .as_ref()
+            .and_then(|p| p.get("app_title"))
+            .and_then(Value::as_str)
+            .unwrap_or("an app");
+        out.push_str(&format!("## Message from the app {app}\n\n"));
+        out.push_str(message);
+        out.push_str("\n\n");
     } else if run.trigger == TriggerKind::FollowUp {
         // A follow-up whose thread could not be resumed (check-ins spec section 6).
         out.push_str("## Follow-up\n\n");

@@ -48,7 +48,7 @@ fn event_from_row(row: &SqliteRow) -> Result<RunEventRecord> {
 }
 
 pub(super) async fn insert_run(conn: &mut SqliteConnection, new: &NewRun) -> Result<String> {
-    let id = new_id();
+    let id = new.id.clone().unwrap_or_else(new_id);
     let root = new.root_run_id.clone().unwrap_or_else(|| id.clone());
     sqlx::query(
         "INSERT INTO runs (id, dot_id, root_run_id, parent_run_id, trigger_kind, payload, \

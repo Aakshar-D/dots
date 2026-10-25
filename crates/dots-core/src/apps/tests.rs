@@ -348,6 +348,7 @@ fn define_call<'js>(
                         .map(|s| ((s.dot_id.clone(), s.tag.clone()), s.run_id.clone()))
                         .collect::<BTreeMap<_, _>>(),
                     budget: STARTS_PER_HOUR.saturating_sub(made.len() as u32),
+                    paused: false,
                 }
             });
             let Some(conn) = b.borrow().conn.clone() else {
