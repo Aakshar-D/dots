@@ -336,9 +336,9 @@ impl RunTools {
         // catalog is the Library's and does not record a dot's grants. So is an http server whose
         // URL reaches an origin not confirmed for the dot's scope (env vault spec §8),
         // computed with the values this run resolved: an org's value, or a Personal one that
-        // changed, may move the host. A server that starts
-        // records what it lists in its catalog of the dot's scope, Personal's or the org's: a
-        // server never seen in that scope is held, as an unchecked one is.
+        // changed, may move the host. A server that starts records what it lists in its
+        // catalog of the dot's scope, Personal's or the org's: a server never seen in that
+        // scope is held, as an unchecked one is.
         let mut items = Vec::new();
         for item in used {
             let LibraryConfig::McpServer(config) = &item.config else {
@@ -625,9 +625,6 @@ async fn shell_env(
     Ok(out)
 }
 
-/// Opens a session with each server at once, its `${VAR}` read from its resolved values, and
-/// lists its tools; one outcome per server, in order. `None` when `cancel` fires first: what
-/// was opened is closed.
 /// Why the server `item` does not start in `scope` with the values `env`: its origin is pinned
 /// (`McpServerConfig::origin_pinned`) and the origin its URL reaches with them is not confirmed
 /// there, or it reaches none. `None` when it may start. The notice names the server and the
@@ -662,6 +659,9 @@ async fn unconfirmed_origin(
     )))
 }
 
+/// Opens a session with each server at once, its `${VAR}` read from its resolved values, and
+/// lists its tools; one outcome per server, in order. `None` when `cancel` fires first: what
+/// was opened is closed.
 async fn open_sessions(
     items: &[(LibraryItem, Resolved)],
     workspace: &Path,
