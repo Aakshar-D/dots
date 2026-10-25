@@ -253,3 +253,33 @@ fn a_report_says_a_bounded_amount() {
     }
     assert!(report.problem().unwrap().ends_with("… and 10 more"));
 }
+
+#[test]
+fn an_error_that_runs_over_stops_the_file() {
+    let report = run_tests_within(
+        &expenses_tested(
+            "test(\"a\", () => { throw { get message() { while (true) {} } }; });\n\
+             test(\"b\", () => {});",
+        ),
+        std::time::Duration::from_millis(500),
+    );
+    assert!(!report.passed());
+    assert!(
+        report.results.iter().all(|r| r.name != "b" || !r.passed),
+        "{report:?}"
+    );
+    let last = report.results.last().unwrap().error.as_deref().unwrap();
+    assert!(last.contains("ran over"), "{report:?}");
+}
+
+#[test]
+fn a_test_added_while_the_tests_run_fails_the_file() {
+    let report = run_tests(&expenses_tested(
+        "test(\"a\", () => { test(\"b\", () => {}); });",
+    ));
+    assert!(!report.passed(), "{report:?}");
+    assert_eq!(
+        report.results.last().unwrap().error.as_deref(),
+        Some("test() was called while the tests ran: call it at the top of the file")
+    );
+}

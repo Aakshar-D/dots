@@ -235,10 +235,10 @@ fn run_file(src: &AppSource, file: &str, code: &str, limit: Duration) -> Vec<Tes
                         Err(rquickjs::Error::WouldBlock) => {
                             Some("the test's promise never settled".to_string())
                         }
-                        Err(e) => Some(said(&describe, judge.caught(ctx, e)?)),
+                        Err(e) => Some(said(ctx, judge, &describe, judge.caught(ctx, e)?)?),
                     },
                 },
-                Err(e) => Some(said(&describe, judge.caught(ctx, e)?)),
+                Err(e) => Some(said(ctx, judge, &describe, judge.caught(ctx, e)?)?),
             };
             results.push(TestResult {
                 file: file.to_string(),
@@ -247,6 +247,13 @@ fn run_file(src: &AppSource, file: &str, code: &str, limit: Duration) -> Vec<Tes
                 error: error.map(|e| bounded(e, MAX_ERROR)),
             });
             names.push(name);
+        }
+        // A `test()` called while the tests ran registers a test that would never run.
+        if tests.len() != names.len() {
+            results.push(failed(
+                "",
+                "test() was called while the tests ran: call it at the top of the file".into(),
+            ));
         }
         Ok(names)
     });
@@ -274,10 +281,20 @@ fn run_file(src: &AppSource, file: &str, code: &str, limit: Duration) -> Vec<Tes
 }
 
 /// What a failed test says: the prelude's text of what it threw, or "the test failed".
-fn said<'js>(describe: &Function<'js>, thrown: JsValue<'js>) -> String {
-    describe
-        .call::<_, String>((thrown,))
-        .unwrap_or_else(|_| "the test failed".to_string())
+/// A timeout or a full memory while describing it stops the file, as anywhere else.
+fn said<'js>(
+    ctx: &Ctx<'js>,
+    judge: &engine::Judge,
+    describe: &Function<'js>,
+    thrown: JsValue<'js>,
+) -> Result<String, Failure> {
+    match describe.call::<_, String>((thrown,)) {
+        Ok(text) => Ok(text),
+        Err(e) => match judge.caught(ctx, e) {
+            Err(stop @ (Failure::TimedOut | Failure::OutOfMemory)) => Err(stop),
+            _ => Ok("the test failed".to_string()),
+        },
+    }
 }
 
 /// `text` cut to `max` characters, the cut marked.
