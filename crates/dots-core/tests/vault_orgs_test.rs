@@ -787,6 +787,29 @@ async fn a_sops_file_that_moves_keeps_this_pcs_key_and_another_kind_asks_again()
     assert_eq!(stored_creds(&h, ACME), Some(stored));
 }
 
+/// No SOPS details exist for an org that was OpenBao, so no creds make the move work.
+#[tokio::test]
+async fn an_openbao_org_moved_to_sops_is_refused_whatever_the_creds() {
+    let h = OrgsHarness::new().await;
+    h.join_acme(entries(), acme_policy()).await;
+    let calls = h.bao.calls().len();
+    let to_sops = code(
+        ACME,
+        ACME_NAME,
+        sops_at("https://files.acme.example/env.json"),
+        &h.keys,
+    );
+    for creds in [None, Some(token())] {
+        let e = h.orgs.update(ACME, &to_sops, creds).await.unwrap_err();
+        assert_eq!(
+            invalid(e),
+            "Acme Engineering: the source moved to a SOPS file; remove the org and join it \
+             again"
+        );
+    }
+    assert_eq!(h.bao.calls().len(), calls, "the fake sees no request");
+}
+
 /// A signed URL's query is a token: the row keeps it, to fetch with, and nothing shows it.
 #[tokio::test]
 async fn a_sops_urls_query_is_kept_but_never_shown() {

@@ -724,7 +724,7 @@ fn join_code_refuses_what_dots_would_refuse() {
                 "--pub",
                 &pub_file,
             ],
-            "join code: the source's location 'relative/eng.json' must be a full path",
+            "join code: the source's location must be a full path",
         ),
         (
             &[

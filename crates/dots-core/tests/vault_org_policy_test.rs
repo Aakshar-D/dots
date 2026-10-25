@@ -732,7 +732,7 @@ fn a_source_address_that_is_not_https_is_refused() {
     }
     assert_eq!(
         refused(&bao("bao.acme.internal")),
-        "join code: the source's address 'bao.acme.internal' is not a URL"
+        format!("join code: the source's address {not_https}")
     );
     // A refusal never quotes a user name and password, a query or a fragment.
     assert_eq!(
@@ -865,8 +865,7 @@ fn a_join_code_missing_what_a_fetch_needs_is_refused() {
     let refused_for = |source: Value| refused(&code_for(&join_value(&key, source)));
     assert_eq!(
         refused_for(json!({"kind": "sops", "location": r"shared\dots.json"})),
-        "join code: the source's location 'shared\\dots.json' must be a full path or an \
-         https:// URL"
+        "join code: the source's location must be a full path or an https:// URL"
     );
     assert_eq!(
         refused_for(json!({"kind": "openbao", "address": "https://b.example", "path": " "})),
@@ -933,7 +932,9 @@ fn a_join_code_field_with_a_control_or_bidi_character_is_refused_by_name() {
         ),
         (&sops, &["location"]),
     ];
-    for bad in ["\u{202E}", "\n", "\u{200E}", "\u{2067}", "\u{7}"] {
+    for bad in [
+        "\u{202E}", "\n", "\u{200E}", "\u{2067}", "\u{7}", "\u{61C}", "\u{2028}", "\u{2029}",
+    ] {
         let mut cases = Vec::new();
         for (field, named) in [("org_id", "the org's id"), ("name", "the org's name")] {
             let mut value = join_value(&key, sops.clone());
@@ -958,6 +959,79 @@ fn a_join_code_field_with_a_control_or_bidi_character_is_refused_by_name() {
             assert!(!why.contains(bad), "{why:?}");
         }
     }
+}
+
+/// serde's own refusal quotes an unknown variant or field: a hidden character there is named
+/// by its field, and never shown.
+#[test]
+fn a_hidden_character_in_a_value_serde_would_quote_is_refused_without_it() {
+    let key = keys().pk.to_base64();
+    let kind = join_value(
+        &key,
+        json!({"kind": "open\u{202E}bao", "address": "https://b.example"}),
+    );
+    let why = refused(&code_for(&kind));
+    assert_eq!(why, "join code: the field 'kind' holds a control character");
+    assert!(!why.contains('\u{202E}'), "{why:?}");
+
+    let auth = join_value(
+        &key,
+        json!({"kind": "openbao", "address": "https://b.example", "path": "dots",
+               "auth": "ld\nap"}),
+    );
+    let why = refused(&code_for(&auth));
+    assert_eq!(why, "join code: the field 'auth' holds a control character");
+    assert!(!why.contains('\n'), "{why:?}");
+
+    let field = join_value(
+        &key,
+        json!({"kind": "sops", "location": "https://d.example", "ke\u{202E}y": "x"}),
+    );
+    let why = refused(&code_for(&field));
+    assert_eq!(
+        why,
+        "join code: the field 'a field name' holds a control character"
+    );
+    assert!(!why.contains('\u{202E}'), "{why:?}");
+}
+
+#[test]
+fn an_address_needs_its_slashes_and_an_openbao_or_infisical_one_holds_no_query() {
+    let key = keys().pk.to_base64();
+    let refused_for = |source: Value| refused(&code_for(&join_value(&key, source)));
+    let bao =
+        |address: &str| refused_for(json!({"kind": "openbao", "address": address, "path": "dots"}));
+    let not_https = "must start with https:// (http:// only for localhost or 127.0.0.1)";
+    let why = bao("https:user:pw@host/x");
+    assert_eq!(why, format!("join code: the source's address {not_https}"));
+    assert!(!why.contains("pw") && !why.contains("user"), "{why}");
+
+    let why = refused_for(json!({"kind": "sops", "location": "https:host/f?sig=SECRETSIG"}));
+    assert_eq!(
+        why,
+        "join code: the source's location must be a full path or an https:// URL"
+    );
+    assert!(!why.contains("SECRETSIG"), "{why}");
+
+    assert_eq!(
+        bao("https://bao.example?x=1"),
+        "join code: the source's address 'https://bao.example' must not hold a query or a \
+         fragment"
+    );
+    assert_eq!(
+        refused_for(
+            json!({"kind": "infisical", "site_url": "https://app.example#f",
+                           "project_id": "p", "environment": "prod"})
+        ),
+        "join code: the source's site_url 'https://app.example' must not hold a query or a \
+         fragment"
+    );
+    // A signed URL needs its query.
+    parse_join_code(&code_for(&join_value(
+        &key,
+        json!({"kind": "sops", "location": "https://host.example/f.json?sig=abc"}),
+    )))
+    .unwrap();
 }
 
 #[test]

@@ -178,7 +178,7 @@ impl SourceSettings {
         }
         match self {
             Self::OpenBao(s) => {
-                check_address("address", &s.address)?;
+                check_address("address", &s.address, false)?;
                 check_not_blank("mount", &s.mount)?;
                 check_not_blank("path", &s.path)?;
                 if let Some(mount) = &s.auth_mount {
@@ -190,7 +190,7 @@ impl SourceSettings {
                 Ok(())
             }
             Self::Infisical(s) => {
-                check_address("site_url", &s.site_url)?;
+                check_address("site_url", &s.site_url, false)?;
                 check_not_blank("project_id", &s.project_id)?;
                 check_not_blank("environment", &s.environment)?;
                 if !s.secret_path.starts_with('/') {
@@ -201,7 +201,9 @@ impl SourceSettings {
                 }
                 Ok(())
             }
-            Self::Sops(s) if s.location.contains("://") => check_address("location", &s.location),
+            Self::Sops(s) if s.location.contains("://") => {
+                check_address("location", &s.location, true)
+            }
             Self::Sops(s) => {
                 if is_network_path(&s.location) {
                     return Err(refused(
@@ -210,10 +212,9 @@ impl SourceSettings {
                     ));
                 }
                 if !Path::new(&s.location).is_absolute() {
-                    return Err(refused(format!(
-                        "the source's location '{}' must be a full path or an https:// URL",
-                        s.location
-                    )));
+                    return Err(refused(
+                        "the source's location must be a full path or an https:// URL",
+                    ));
                 }
                 Ok(())
             }
@@ -248,7 +249,15 @@ pub fn parse_join_code(text: &str) -> Result<JoinCode> {
         }
         _ => return Err(refused("no version 'v'")),
     }
-    let code: JoinCode = serde_json::from_slice(&bytes).map_err(|e| refused(plain_serde(&e)))?;
+    let code: JoinCode = match serde_json::from_slice(&bytes) {
+        Ok(code) => code,
+        Err(e) => {
+            // serde quotes an unknown variant or field: a hidden character in one is named by
+            // its field instead, and never quoted.
+            check_value_plain(&value, None)?;
+            return Err(refused(plain_serde(&e)));
+        }
+    };
     // First, so that no refusal below quotes a text that reads as something else.
     check_plain("the org's id", &code.org_id)?;
     check_plain("the org's name", &code.name)?;
@@ -263,6 +272,30 @@ pub fn parse_join_code(text: &str) -> Result<JoinCode> {
     }
     code.source.check()?;
     Ok(code)
+}
+
+/// Walks the JSON of a join code: every object key and every string, at any depth, must be free
+/// of a hidden character. `key` is the nearest object key above `value` that is itself clean.
+fn check_value_plain(value: &Value, key: Option<&str>) -> Result<()> {
+    let hit = |key: Option<&str>| {
+        refused(format!(
+            "the field '{}' holds a control character",
+            key.unwrap_or("a field name")
+        ))
+    };
+    match value {
+        Value::String(text) if text.chars().any(is_hidden_control) => Err(hit(key)),
+        Value::Array(items) => items
+            .iter()
+            .try_for_each(|item| check_value_plain(item, key)),
+        Value::Object(fields) => fields.iter().try_for_each(|(name, item)| {
+            if name.chars().any(is_hidden_control) {
+                return Err(hit(None));
+            }
+            check_value_plain(item, Some(name))
+        }),
+        _ => Ok(()),
+    }
 }
 
 /// An org id: 1 to 63 characters of `a-z`, `0-9` and `-`, starting with a letter or digit. It
@@ -359,10 +392,22 @@ pub fn shown_address(address: &str) -> String {
 }
 
 /// A source address: `https://`, or `http://` only to `localhost` or `127.0.0.1`, for test
-/// servers. It must name a host and hold no user name or password. A refusal quotes it as
-/// `shown_address` shows it. A text with an `@` that is not a URL with a host is not quoted at
-/// all: where its user name and password would end can't be told.
-fn check_address(field: &str, address: &str) -> Result<()> {
+/// servers. It is written with `://`: `https:host` parses as a URL, but `shown_address` could not
+/// cut it, and that refusal quotes nothing. It must name a host and hold no user name or
+/// password, and, unless `allow_query` (a signed SOPS URL), no query or fragment. A refusal
+/// quotes it as `shown_address` shows it. A text with an `@` that is not a URL with a host is not
+/// quoted at all: where its user name and password would end can't be told.
+fn check_address(field: &str, address: &str, allow_query: bool) -> Result<()> {
+    let not_https = "must start with https:// (http:// only for localhost or 127.0.0.1)";
+    let scheme_first = address.split_once("://").is_some_and(|(scheme, _)| {
+        scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+            && scheme
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+    });
+    if !scheme_first {
+        return Err(refused(format!("the source's {field} {not_https}")));
+    }
     let parsed = reqwest::Url::parse(address);
     let cut = parsed.as_ref().is_ok_and(|url| url.has_host());
     let quoted = if address.contains('@') && !cut {
@@ -378,12 +423,13 @@ fn check_address(field: &str, address: &str) -> Result<()> {
     }
     let local = matches!(host, "localhost" | "127.0.0.1");
     if !(url.scheme() == "https" || url.scheme() == "http" && local) {
-        return Err(refuse(
-            "must start with https:// (http:// only for localhost or 127.0.0.1)",
-        ));
+        return Err(refuse(not_https));
     }
     if !url.username().is_empty() || url.password().is_some() {
         return Err(refuse("must not hold a user name or password"));
+    }
+    if !allow_query && address.contains(['?', '#']) {
+        return Err(refuse("must not hold a query or a fragment"));
     }
     Ok(())
 }
@@ -409,13 +455,20 @@ fn is_network_path(location: &str) -> bool {
 }
 
 /// Whether `c` could hide what a text says: a control character (a line break, an escape) or a
-/// bidi control (the marks, embeddings, overrides and isolates), which can make a name or an
-/// address read in another order than it is.
+/// bidi control (the marks, the Arabic letter mark U+061C, embeddings, overrides and isolates),
+/// or a line or paragraph separator (U+2028, U+2029), which can make a name or an address read
+/// in another order or on another line than it is.
 fn is_hidden_control(c: char) -> bool {
     c.is_control()
         || matches!(
             c,
-            '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
+            '\u{061C}'
+                | '\u{200E}'
+                | '\u{200F}'
+                | '\u{2028}'
+                | '\u{2029}'
+                | '\u{202A}'..='\u{202E}'
+                | '\u{2066}'..='\u{2069}'
         )
 }
 

@@ -500,6 +500,13 @@ impl Orgs {
             Some(Slot::Damaged { .. }) => return Err(Error::Invalid(damaged_text(org_id))),
             Some(Slot::Pending(_)) | None => return Err(not_joined(org_id)),
         };
+        // No SOPS details exist for an org that was OpenBao or Infisical, whatever `creds` say.
+        if old.source.kind() != "sops" && code.source.kind() == "sops" {
+            return Err(Error::Invalid(format!(
+                "{}: the source moved to a SOPS file; remove the org and join it again",
+                old.name
+            )));
+        }
         // The saved details were given for the old source: a new address (or anything else
         // about where and how they are sent) must not receive them before the policy's
         // signature is checked.
