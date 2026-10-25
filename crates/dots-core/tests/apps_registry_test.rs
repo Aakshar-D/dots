@@ -595,3 +595,54 @@ async fn a_claude_run_offers_at_most_its_bound_of_app_tools() {
         "{notices:?}"
     );
 }
+
+#[tokio::test]
+async fn a_call_that_waited_on_a_remove_leaves_no_folder_behind() {
+    let f = fixture().await;
+    for _ in 0..5 {
+        let item = f
+            .apps
+            .install(source(&expenses()), AppOrigin::Proposed)
+            .await
+            .unwrap();
+        let input = serde_json::json!({"item": "Tea", "amount": 1, "on": "2026-10-22"});
+        let (_, removed) = tokio::join!(
+            f.apps.call(
+                "expenses",
+                "add_expense",
+                input,
+                dots_core::apps::call::Actor::Person
+            ),
+            f.apps.remove("expenses", true, true),
+        );
+        removed.unwrap();
+        assert!(!f.apps.app_dir(&item.id).exists());
+    }
+}
+
+#[tokio::test]
+async fn the_call_log_keeps_a_bounded_input() {
+    let f = fixture().await;
+    let item = f
+        .apps
+        .install(source(&expenses()), AppOrigin::Proposed)
+        .await
+        .unwrap();
+    let input = serde_json::json!({"item": "x".repeat(100_000), "amount": 1, "on": "2026-10-22"});
+    // Refused by the schema, and logged: add_expense writes.
+    assert!(f
+        .apps
+        .call(
+            "expenses",
+            "add_expense",
+            input,
+            dots_core::apps::call::Actor::Person
+        )
+        .await
+        .is_err());
+    let calls = f.store.app_calls(&item.id, 10).await.unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].input["truncated"], true);
+    assert!(calls[0].input["bytes"].as_u64().unwrap() > 100_000);
+    assert!(calls[0].input["head"].as_str().unwrap().len() <= 30 * 1024);
+}

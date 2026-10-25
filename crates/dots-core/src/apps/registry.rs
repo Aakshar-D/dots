@@ -192,8 +192,22 @@ impl Apps {
         actor: Actor,
         offered_writes: Option<bool>,
     ) -> std::result::Result<Value, String> {
+        let first = match self.get(name).await {
+            Ok((item, _)) => item,
+            Err(Error::NotFound(_)) => return Err(format!("there is no app {name}")),
+            Err(e) => return Err(e.to_string()),
+        };
+        // One call at a time per app, and all it runs by is read under the lock: an update, roll
+        // back or remove that finished while the call waited is seen (spec section 5).
+        let lock = self.lock(&first.id);
+        let _held = lock.lock().await;
         let (item, config) = match self.get(name).await {
-            Ok(found) => found,
+            Ok(found) if found.0.id == first.id => found,
+            Ok(_) => {
+                return Err(format!(
+                    "the app {name} was replaced while this call waited; call it again"
+                ))
+            }
             Err(Error::NotFound(_)) => return Err(format!("there is no app {name}")),
             Err(e) => return Err(e.to_string()),
         };
@@ -223,8 +237,6 @@ impl Apps {
             .now()
             .with_timezone(&Local)
             .to_rfc3339_opts(SecondsFormat::Secs, false);
-        let lock = self.lock(&item.id);
-        let _held = lock.lock().await;
         // Read under the lock, so two calls cannot both spend the hour's last start.
         let start = if config.can_start_dots && src.manifest.can_start_dots() {
             Some(self.start_gate(&item.id).await.map_err(|e| e.to_string())?)
@@ -254,7 +266,8 @@ impl Apps {
             )
         })
         .await
-        .map_err(|e| e.to_string())?;
+        // A call that panicked is a failed call, logged like any other.
+        .unwrap_or_else(|e| Err(CallError::Db(e.to_string())));
         let took_ms = started.elapsed().as_millis() as u64;
         if logged {
             let run_id = match &actor {
@@ -271,7 +284,7 @@ impl Apps {
                 tool: tool.to_string(),
                 actor: actor.clone(),
                 run_id,
-                input,
+                input: logged_input(input),
                 now,
                 ids,
                 result,
@@ -665,6 +678,23 @@ impl Apps {
         self.changed(&item.id);
         Ok(())
     }
+}
+
+/// The most of a call's input the call log keeps, as JSON text.
+const MAX_LOGGED_INPUT: usize = 30 * 1024;
+
+/// A call's input as the call log keeps it: whole, or past `MAX_LOGGED_INPUT` its size and its
+/// start.
+fn logged_input(input: Value) -> Value {
+    let text = input.to_string();
+    if text.len() <= MAX_LOGGED_INPUT {
+        return input;
+    }
+    let mut at = MAX_LOGGED_INPUT;
+    while !text.is_char_boundary(at) {
+        at -= 1;
+    }
+    serde_json::json!({ "truncated": true, "bytes": text.len(), "head": &text[..at] })
 }
 
 /// Deletes `path` and all under it; one already gone is not an error.
