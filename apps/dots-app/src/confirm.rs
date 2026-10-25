@@ -665,7 +665,8 @@ where
             .cloned()
             .unwrap_or_else(|| {
                 format!(
-                    "{KEY_CHANGE} to {}: the key that signs the org's policy is new, so accept                      this code only if your admin told you the key changed",
+                    "{KEY_CHANGE} to {}: the key that signs the org's policy is new, so accept \
+                     this code only if your admin told you the key changed",
                     preview.key_fingerprint
                 )
             });
