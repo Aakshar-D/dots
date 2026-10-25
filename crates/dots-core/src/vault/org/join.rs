@@ -134,8 +134,39 @@ impl SourceSettings {
         }
     }
 
-    /// Checks the addresses and the fields a fetch needs.
+    /// Every text field of the settings, by the name the join code gives it.
+    fn texts(&self) -> Vec<(&'static str, &str)> {
+        match self {
+            Self::OpenBao(s) => {
+                let mut texts = vec![
+                    ("address", s.address.as_str()),
+                    ("mount", s.mount.as_str()),
+                    ("path", s.path.as_str()),
+                ];
+                if let Some(mount) = &s.auth_mount {
+                    texts.push(("auth_mount", mount));
+                }
+                if let Some(namespace) = &s.namespace {
+                    texts.push(("namespace", namespace));
+                }
+                texts
+            }
+            Self::Infisical(s) => vec![
+                ("site_url", s.site_url.as_str()),
+                ("project_id", s.project_id.as_str()),
+                ("environment", s.environment.as_str()),
+                ("secret_path", s.secret_path.as_str()),
+            ],
+            Self::Sops(s) => vec![("location", s.location.as_str())],
+        }
+    }
+
+    /// Checks the addresses and the fields a fetch needs. No field may hold a control or bidi
+    /// character, which could make it read as something else where it is shown.
     pub fn check(&self) -> Result<()> {
+        for (field, text) in self.texts() {
+            check_plain(&format!("the source's {field}"), text)?;
+        }
         match self {
             Self::OpenBao(s) => {
                 check_address("address", &s.address)?;
@@ -185,8 +216,8 @@ impl JoinCode {
 
 /// Reads a join code as pasted or read from a `.dotsorg` file. Whitespace anywhere is ignored,
 /// so a code wrapped in an email still reads, and `=` padding is optional. Every field is
-/// checked: an unknown version, a bad org id, a policy key that is not a minisign public key, or
-/// a source that is not `https://` is refused.
+/// checked: an unknown version, a bad org id, a policy key that is not a minisign public key, a
+/// source that is not `https://`, or a text field with a control or bidi character is refused.
 pub fn parse_join_code(text: &str) -> Result<JoinCode> {
     let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
     let bytes = URL_SAFE_NO_PAD
@@ -203,6 +234,9 @@ pub fn parse_join_code(text: &str) -> Result<JoinCode> {
         _ => return Err(refused("no version 'v'")),
     }
     let code: JoinCode = serde_json::from_slice(&bytes).map_err(|e| refused(plain_serde(&e)))?;
+    // First, so that no refusal below quotes a text that reads as something else.
+    check_plain("the org's id", &code.org_id)?;
+    check_plain("the org's name", &code.name)?;
     check_org_id(&code.org_id)?;
     if code.name.trim().is_empty() {
         return Err(refused("the org's name is empty"));
@@ -275,6 +309,26 @@ fn check_address(field: &str, address: &str) -> Result<()> {
     }
     if !url.username().is_empty() || url.password().is_some() {
         return Err(refuse("must not hold a user name or password"));
+    }
+    Ok(())
+}
+
+/// Whether `c` could hide what a text says: a control character (a line break, an escape) or a
+/// bidi control (the marks, embeddings, overrides and isolates), which can make a name or an
+/// address read in another order than it is.
+fn is_hidden_control(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
+        )
+}
+
+/// Refuses a field that holds a control or bidi character. The refusal names the field, never
+/// its text.
+fn check_plain(field: &str, value: &str) -> Result<()> {
+    if value.chars().any(is_hidden_control) {
+        return Err(refused(format!("{field} holds a control character")));
     }
     Ok(())
 }

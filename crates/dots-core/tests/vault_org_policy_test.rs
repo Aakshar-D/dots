@@ -818,6 +818,57 @@ fn a_join_code_missing_what_a_fetch_needs_is_refused() {
     assert!(refused(&code_for(&value)).contains("unknown field 'admin'"));
 }
 
+/// A control or bidi character could make a name or an address read as another where Dots
+/// shows it: every text field refuses one, by the field's name and never with its text.
+#[test]
+fn a_join_code_field_with_a_control_or_bidi_character_is_refused_by_name() {
+    let key = keys().pk.to_base64();
+    let bao = json!({"kind": "openbao", "address": "https://b.example", "mount": "secret",
+                     "path": "dots", "auth": "ldap", "auth_mount": "corp", "namespace": "eng"});
+    let infisical = json!({"kind": "infisical", "site_url": "https://i.example",
+                           "project_id": "p1", "environment": "prod", "secret_path": "/dots"});
+    let sops = json!({"kind": "sops", "location": "https://f.example/dots.json"});
+    for source in [&bao, &infisical, &sops] {
+        parse_join_code(&code_for(&join_value(&key, source.clone()))).unwrap();
+    }
+    let sources: [(&Value, &[&str]); 3] = [
+        (
+            &bao,
+            &["address", "mount", "path", "auth_mount", "namespace"],
+        ),
+        (
+            &infisical,
+            &["site_url", "project_id", "environment", "secret_path"],
+        ),
+        (&sops, &["location"]),
+    ];
+    for bad in ["\u{202E}", "\n", "\u{200E}", "\u{2067}", "\u{7}"] {
+        let mut cases = Vec::new();
+        for (field, named) in [("org_id", "the org's id"), ("name", "the org's name")] {
+            let mut value = join_value(&key, sops.clone());
+            value[field] = json!(format!("acme{bad}eng"));
+            cases.push((value, named.to_string()));
+        }
+        for (source, fields) in sources {
+            for field in fields {
+                let mut source = source.clone();
+                let text = source[field].as_str().unwrap().to_string();
+                source[field] = json!(format!("{text}{bad}x"));
+                cases.push((join_value(&key, source), format!("the source's {field}")));
+            }
+        }
+        for (value, named) in cases {
+            let why = refused(&code_for(&value));
+            assert_eq!(
+                why,
+                format!("join code: {named} holds a control character"),
+                "{bad:?}"
+            );
+            assert!(!why.contains(bad), "{why:?}");
+        }
+    }
+}
+
 #[test]
 fn text_that_is_not_a_join_code_is_refused() {
     assert_eq!(refused("not a join code!"), "join code: not base64url text");
