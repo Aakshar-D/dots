@@ -348,6 +348,8 @@ async fn the_runtime_loads_personal_secrets_into_the_redactor_at_start() {
         .unwrap();
     let mut cfg = dots_core::Config::new(&data);
     cfg.port = 0;
+    // A missing program: no test may run a `claude` found on the PATH.
+    cfg.claude_path = Some(dir.path().join("no-claude.exe"));
     cfg.secrets = Some(Arc::new(secrets));
     let rt = dots_core::Runtime::start(cfg).await.unwrap();
     assert_eq!(

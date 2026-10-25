@@ -321,6 +321,8 @@ async fn runtime() -> (TempDir, Runtime) {
     let dir = tempfile::tempdir().unwrap();
     let mut cfg = Config::new(dir.path().join("data"));
     cfg.port = 0;
+    // A missing program: no test may run a `claude` found on the PATH.
+    cfg.claude_path = Some(dir.path().join("no-claude.exe"));
     let rt = Runtime::start(cfg).await.unwrap();
     (dir, rt)
 }

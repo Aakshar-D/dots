@@ -174,6 +174,8 @@ async fn start_recovers_interrupted_runs() {
     };
     let mut cfg = Config::new(data);
     cfg.port = 0;
+    // A missing program: no test may run a `claude` found on the PATH.
+    cfg.claude_path = Some(dir.path().join("no-claude.exe"));
     let rt = Runtime::start(cfg).await.unwrap();
     let run = rt.store().get_run(&run_id).await.unwrap();
     assert_eq!(run.status, RunStatus::Failed);

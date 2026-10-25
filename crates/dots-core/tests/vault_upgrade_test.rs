@@ -853,6 +853,8 @@ async fn the_vault_since_mark_is_written_despite_a_failing_server() {
     };
     let mut cfg = dots_core::Config::new(&data);
     cfg.port = 0;
+    // A missing program: no test may run a `claude` found on the PATH.
+    cfg.claude_path = Some(dir.path().join("no-claude.exe"));
     cfg.secrets = Some(Arc::new(FailingSecrets::new("BAD_TOKEN")));
     let rt = dots_core::Runtime::start(cfg).await.unwrap();
     assert!(rt.store().marker("vault_since").await.unwrap().is_some());
