@@ -31,6 +31,11 @@ pub const DECIDED_ALREADY: &str = "this app proposal has already been decided";
 /// What the dot reads when the person discards its app (spec section 11).
 pub const DISCARDED: &str = "The person discarded the app.";
 pub const MAX_NOTE: usize = 2_000;
+/// The most proposals one dot may have waiting for the person.
+pub const MAX_PENDING: usize = 5;
+/// What a dot with `MAX_PENDING` proposals waiting is told.
+pub const TOO_MANY_PENDING: &str =
+    "five of your proposals already wait for the person: wait until they decide one";
 
 pub const DESCRIPTION: &str = "Send an app you wrote in your workspace to the person for \
     review. The folder holds app.json (name, title, description, tools: each with name, \
@@ -216,6 +221,17 @@ impl Apps {
         {
             return Err(PROPOSED_ALREADY.to_string());
         }
+        let waiting = self
+            .store
+            .list_app_proposals(Some(&run.dot_id))
+            .await
+            .map_err(said)?
+            .into_iter()
+            .filter(|p| p.status == ProposalStatus::Pending)
+            .count();
+        if waiting >= MAX_PENDING {
+            return Err(TOO_MANY_PENDING.to_string());
+        }
         let src = blocking(move || source::read_folder(&folder))
             .await
             .map_err(said)?
@@ -301,6 +317,10 @@ impl Apps {
         };
         if let Err(e) = self.store.add_app_proposal(&proposal).await {
             let _ = blocking(move || std::fs::remove_dir_all(dir)).await;
+            // Two proposals at once in one run: the index keeps the first.
+            if e.to_string().contains("app_proposals.run_id") {
+                return Err(PROPOSED_ALREADY.to_string());
+            }
             return Err(said(e));
         }
         self.proposal_changed(&proposal);
@@ -316,25 +336,24 @@ impl Apps {
         let Some(base) = p.base_version else {
             return self.install(src, AppOrigin::Proposed).await;
         };
-        let config = match self.get(&p.app_name).await {
-            Ok((_, config)) => config,
-            Err(Error::NotFound(_)) => {
-                return Err(Error::Conflict(format!(
-                    "the app {} was removed after this change was proposed; ask the dot to \
-                     propose it again",
-                    p.app_name
-                )))
-            }
-            Err(e) => return Err(e),
-        };
-        if config.version != base {
-            return Err(Error::Conflict(format!(
-                "the app {} changed after this was proposed (version {base}, now {}); ask the \
-                 dot to propose again",
-                p.app_name, config.version
+        let Some(app_id) = p.app_id.as_deref() else {
+            return Err(Error::Other(format!(
+                "the change to {} names no app",
+                p.app_name
             )));
+        };
+        // Checked under the app's lock: the same app, at the version the change was checked on.
+        match self
+            .update_checked(&p.app_name, src, true, Some((app_id, base)))
+            .await
+        {
+            Err(Error::NotFound(_)) => Err(Error::Conflict(format!(
+                "the app {} was removed after this change was proposed; ask the dot to propose \
+                 it again",
+                p.app_name
+            ))),
+            other => other,
         }
-        self.update(&p.app_name, src, true).await
     }
 
     /// Deletes a decided proposal's files.

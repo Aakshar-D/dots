@@ -41,6 +41,8 @@ CREATE TABLE app_proposals (
 );
 CREATE INDEX app_proposals_dot ON app_proposals(dot_id, created_at);
 CREATE INDEX app_proposals_root ON app_proposals(root_run_id);
+-- One proposal waits per run.
+CREATE UNIQUE INDEX app_proposals_pending_run ON app_proposals(run_id) WHERE status = 'pending';
 
 -- Every preset allows `App` and `ProposeApp` (section 6). The policy of each dot whose preset
 -- is any, Custom too as 0007 did for `Context`, gets the rules when the store opens

@@ -389,6 +389,19 @@ impl Apps {
         src: AppSource,
         by_proposal: bool,
     ) -> Result<LibraryItem> {
+        self.update_checked(name, src, by_proposal, None).await
+    }
+
+    /// `update`, refused (`Conflict`) under the lock when the app is no longer the one `expect`
+    /// names (its id) at that version: a change is applied only to what it was checked against
+    /// (spec section 6.2).
+    pub async fn update_checked(
+        &self,
+        name: &str,
+        src: AppSource,
+        by_proposal: bool,
+        expect: Option<(&str, u32)>,
+    ) -> Result<LibraryItem> {
         if src.manifest.name != name {
             return Err(Error::Invalid(format!(
                 "the new code names the app {}, not {name}",
@@ -396,6 +409,21 @@ impl Apps {
             )));
         }
         let (_held, item, old) = self.get_locked(name).await?;
+        if let Some((id, version)) = expect {
+            if item.id != id {
+                return Err(Error::Conflict(format!(
+                    "the app {name} was replaced after this change was proposed; ask the dot to \
+                     propose it again"
+                )));
+            }
+            if old.version != version {
+                return Err(Error::Conflict(format!(
+                    "the app {name} changed after this was proposed (version {version}, now {}); \
+                     ask the dot to propose again",
+                    old.version
+                )));
+            }
+        }
         let next = old.version + 1;
         let code = self.code_dir(&item.id, next);
         let data_path = self.data_path(&item.id);

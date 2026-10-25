@@ -820,7 +820,12 @@ impl Runtime {
     /// Deletes the dot; its schedule row goes with it (`ON DELETE CASCADE`).
     pub async fn delete_dot(&self, id: &str) -> Result<()> {
         let had_row = self.store.get_schedule_state(id).await?.is_some();
+        let proposals = self.store.list_app_proposals(Some(id)).await?;
         self.store.delete_dot_if_idle(id).await?;
+        // Its proposals' rows went with it; their files go too (app library spec section 6.2).
+        for p in &proposals {
+            self.apps.drop_proposed(&p.id).await;
+        }
         // It can no longer be viewed (needs-you spec section 7).
         {
             let mut viewing = lock(&self.viewing);
@@ -969,6 +974,12 @@ impl Runtime {
                 let text = text.trim();
                 if text.is_empty() {
                     return Err(Error::Invalid("say what to change".into()));
+                }
+                if text.chars().count() > crate::apps::propose::MAX_NOTE {
+                    return Err(Error::Invalid(format!(
+                        "say what to change in at most {} characters",
+                        crate::apps::propose::MAX_NOTE
+                    )));
                 }
                 let said = format!(
                     "The person asked for changes to the app {}: {text}",

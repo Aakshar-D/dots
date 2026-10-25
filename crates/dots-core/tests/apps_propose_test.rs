@@ -469,3 +469,76 @@ async fn a_claude_dot_proposes_through_dots_own_server_under_its_policy() {
     assert!(proposals(&t, &denying.id).await.is_empty());
     t.rt.shutdown();
 }
+
+#[tokio::test]
+async fn a_change_is_refused_for_an_app_replaced_since_it_was_checked() {
+    let t = start().await;
+    let apps = t.rt.apps();
+    let first = in_workspace(&t, "v1", &expenses());
+    apps.install(read_folder(&first).unwrap(), AppOrigin::Proposed)
+        .await
+        .unwrap();
+    let llm = Llm::start(dones(2)).await;
+    let run = finished_run(&t, &llm, "builder").await;
+    let next = in_workspace(&t, "v2", &expenses());
+    apps.propose(&run.id, next, "Same again.").await.unwrap();
+    let p = proposals(&t, &run.dot_id).await.remove(0);
+    // The app is removed and another of the same name installed: version 1 again, a new id.
+    apps.remove("expenses", true, true).await.unwrap();
+    apps.install(read_folder(&first).unwrap(), AppOrigin::Proposed)
+        .await
+        .unwrap();
+    match t.rt.decide_app_proposal(&p.id, Decision::Add).await {
+        Err(Error::Conflict(m)) => {
+            assert!(
+                m.contains("was replaced after this change was proposed"),
+                "{m}"
+            )
+        }
+        other => panic!("expected a conflict, got {other:?}"),
+    }
+    let still = t.rt.store().get_app_proposal(&p.id).await.unwrap();
+    assert_eq!(still.status, ProposalStatus::Pending);
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn deleting_a_dot_deletes_its_proposals_files() {
+    let t = start().await;
+    let apps = t.rt.apps();
+    let llm = Llm::start(dones(1)).await;
+    let run = finished_run(&t, &llm, "builder").await;
+    let folder = in_workspace(&t, "app", &expenses());
+    apps.propose(&run.id, folder, "An app.").await.unwrap();
+    let p = proposals(&t, &run.dot_id).await.remove(0);
+    assert!(apps.proposed_dir(&p.id).exists());
+    t.rt.delete_dot(&run.dot_id).await.unwrap();
+    assert!(!apps.proposed_dir(&p.id).exists());
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn a_dot_has_at_most_five_proposals_waiting() {
+    let t = start().await;
+    let apps = t.rt.apps();
+    let llm = Llm::start(dones(6)).await;
+    let first = finished_run(&t, &llm, "builder").await;
+    let mut runs = vec![first.clone()];
+    for _ in 0..5 {
+        let run = t.rt.run_now(&first.dot_id).await.unwrap();
+        runs.push(wait_status(t.rt.store(), &run.id, RunStatus::Succeeded, 30).await);
+    }
+    for (i, run) in runs.iter().enumerate() {
+        let folder = in_workspace(&t, &format!("app{i}"), &expenses());
+        let sent = apps.propose(&run.id, folder, "An app.").await;
+        if i < 5 {
+            sent.unwrap();
+        } else {
+            assert_eq!(
+                sent.unwrap_err(),
+                dots_core::apps::propose::TOO_MANY_PENDING
+            );
+        }
+    }
+    t.rt.shutdown();
+}
