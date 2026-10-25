@@ -7,8 +7,8 @@ use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine;
 use dots_core::vault::org::{
     check_org_id, envelope, key_fingerprint, parse_join_code, parse_policy, same_policy_key,
-    verify_policy, AuditTarget, BaoAuth, InfisicalSettings, JoinCode, OpenBaoSettings, OrgPolicy,
-    PersonalMode, PolicyError, SopsSettings, SourceSettings, UseRules,
+    shown_address, verify_policy, AuditTarget, BaoAuth, InfisicalSettings, JoinCode,
+    OpenBaoSettings, OrgPolicy, PersonalMode, PolicyError, SopsSettings, SourceSettings, UseRules,
 };
 use dots_core::Error;
 use minisign::KeyPair;
@@ -734,11 +734,30 @@ fn a_source_address_that_is_not_https_is_refused() {
         refused(&bao("bao.acme.internal")),
         "join code: the source's address 'bao.acme.internal' is not a URL"
     );
+    // A refusal never quotes a user name and password, a query or a fragment.
     assert_eq!(
         refused(&bao("https://admin:hunter2@bao.acme.internal")),
-        "join code: the source's address 'https://admin:hunter2@bao.acme.internal' must not \
-         hold a user name or password"
+        "join code: the source's address 'https://bao.acme.internal' must not hold a user name \
+         or password"
     );
+    assert_eq!(
+        refused(&bao("https://admin:hunter2@bao.acme.internal:8200/v1?x=1")),
+        "join code: the source's address 'https://bao.acme.internal:8200/v1' must not hold a \
+         user name or password"
+    );
+    assert_eq!(
+        refused(&bao("http://bao.acme.internal/?token=hunter2#frag")),
+        format!("join code: the source's address 'http://bao.acme.internal/' {not_https}")
+    );
+    // Not a URL with a host: where the password ends can't be told, so nothing is quoted.
+    for text in [
+        "admin:hunter2@bao.acme.internal",
+        "https://admin:hun ter2@bao",
+    ] {
+        let why = refused(&bao(text));
+        assert!(!why.contains("hunter2") && !why.contains("ter2"), "{why}");
+        assert!(why.starts_with("join code: the source's address "), "{why}");
+    }
     for local in [
         "http://localhost:8200",
         "http://127.0.0.1:8200",
@@ -766,6 +785,45 @@ fn a_source_address_that_is_not_https_is_refused() {
             "join code: the source's location 'http://files.acme.example/dots.json' {not_https}"
         )
     );
+}
+
+#[test]
+fn a_shown_address_has_no_user_name_password_query_or_fragment() {
+    for (address, shown) in [
+        ("https://bao.acme.internal", "https://bao.acme.internal"),
+        ("https://bao.acme.internal/", "https://bao.acme.internal/"),
+        (
+            "https://files.example/dots/acme.enc.json?sig=s3cret&se=2026",
+            "https://files.example/dots/acme.enc.json",
+        ),
+        (
+            "https://files.example/f.json#s3cret",
+            "https://files.example/f.json",
+        ),
+        (
+            "https://u:s3cret@bao.example:8200/v1",
+            "https://bao.example:8200/v1",
+        ),
+        ("https://a@b:s3cret@bao.example", "https://bao.example"),
+        ("https://bao.example?s3cret", "https://bao.example"),
+        // A path keeps an `@` of its own.
+        (
+            "https://files.example/@team/f.json",
+            "https://files.example/@team/f.json",
+        ),
+        // A local path is shown as it is.
+        (r"C:\Sync\acme-eng.enc.json", r"C:\Sync\acme-eng.enc.json"),
+    ] {
+        assert_eq!(shown_address(address), shown, "{address}");
+    }
+    let settings = SourceSettings::Sops(SopsSettings {
+        location: "https://files.example/f.json?sig=s3cret".into(),
+    });
+    assert_eq!(
+        settings.address(),
+        "https://files.example/f.json?sig=s3cret"
+    );
+    assert_eq!(settings.shown_address(), "https://files.example/f.json");
 }
 
 #[test]

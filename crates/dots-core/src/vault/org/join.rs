@@ -126,13 +126,21 @@ impl SourceSettings {
         }
     }
 
-    /// Where the source is, for the UI: the address, the site or the file location.
+    /// Where the source is: the address, the site or the file location, as the code gives it
+    /// and the `orgs` row keeps it, for fetching. A text, summary or preview shows
+    /// `shown_address` instead.
     pub fn address(&self) -> &str {
         match self {
             Self::OpenBao(s) => &s.address,
             Self::Infisical(s) => &s.site_url,
             Self::Sops(s) => &s.location,
         }
+    }
+
+    /// Where the source is, as the UI and every message show it: `address` without a URL's
+    /// user name, password, query or fragment, which may carry a token.
+    pub fn shown_address(&self) -> String {
+        shown_address(self.address())
     }
 
     /// Every text field of the settings, by the name the join code gives it.
@@ -321,11 +329,43 @@ fn policy_key_bytes(policy_key: &str) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+/// An address or location as Dots shows it: a URL (a text with `://`) loses its user name and
+/// password, its query and its fragment, which a signed URL or a pasted address may carry a
+/// secret in; anything else, a local path, is shown as it is. The text is cut by hand rather
+/// than parsed and printed again, so what is left reads exactly as the admin wrote it.
+pub fn shown_address(address: &str) -> String {
+    let Some((scheme, rest)) = address.split_once("://") else {
+        return address.to_string();
+    };
+    let rest = match rest.find(['?', '#']) {
+        Some(end) => &rest[..end],
+        None => rest,
+    };
+    let (authority, path) = match rest.find(['/', '\\']) {
+        Some(start) => rest.split_at(start),
+        None => (rest, ""),
+    };
+    let host = match authority.rfind('@') {
+        Some(at) => &authority[at + 1..],
+        None => authority,
+    };
+    format!("{scheme}://{host}{path}")
+}
+
 /// A source address: `https://`, or `http://` only to `localhost` or `127.0.0.1`, for test
-/// servers. It must name a host and hold no user name or password.
+/// servers. It must name a host and hold no user name or password. A refusal quotes it as
+/// `shown_address` shows it. A text with an `@` that is not a URL with a host is not quoted at
+/// all: where its user name and password would end can't be told.
 fn check_address(field: &str, address: &str) -> Result<()> {
-    let refuse = |why: &str| refused(format!("the source's {field} '{address}' {why}"));
-    let url = reqwest::Url::parse(address).map_err(|_| refuse("is not a URL"))?;
+    let parsed = reqwest::Url::parse(address);
+    let cut = parsed.as_ref().is_ok_and(|url| url.has_host());
+    let quoted = if address.contains('@') && !cut {
+        String::new()
+    } else {
+        format!(" '{}'", shown_address(address))
+    };
+    let refuse = |why: &str| refused(format!("the source's {field}{quoted} {why}"));
+    let url = parsed.map_err(|_| refuse("is not a URL"))?;
     let host = url.host_str().unwrap_or_default();
     if host.is_empty() {
         return Err(refuse("names no host"));

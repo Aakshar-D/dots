@@ -25,7 +25,8 @@ use serde_json::Value;
 use zeroize::Zeroizing;
 
 use super::join::{
-    check_org_id, key_fingerprint, parse_join_code, same_policy_key, BaoAuth, JoinCode,
+    check_org_id, key_fingerprint, parse_join_code, same_policy_key, shown_address, BaoAuth,
+    JoinCode,
 };
 use super::offline::{delete_offline, read_offline, write_offline, OfflineCopy, Protector};
 use super::policy::{OrgPolicy, PersonalMode, PolicyError, UseRules};
@@ -94,7 +95,8 @@ pub struct OrgSummary {
     pub name: String,
     /// `openbao`, `infisical` or `sops`; empty when the org's settings are damaged.
     pub source_kind: String,
-    /// The address, the site or the file location.
+    /// The address, the site or the file location, as `shown_address` shows it: no URL's user
+    /// name, password, query or fragment.
     pub address: String,
     /// The policy key's fingerprint (`key_fingerprint`): a digest of the whole key, 32
     /// upper-case hex digits in groups of 4.
@@ -355,7 +357,7 @@ impl Orgs {
         Ok(JoinPreview {
             key_fingerprint: key_fingerprint(&code.policy_key)?,
             source_kind: code.source.kind().to_string(),
-            address: code.source.address().to_string(),
+            address: code.source.shown_address(),
             auth: match &code.source {
                 SourceSettings::OpenBao(s) => Some(s.auth),
                 _ => None,
@@ -1206,7 +1208,7 @@ fn summary_of(id: &str, slot: &Slot) -> OrgSummary {
             id: id.to_string(),
             name: joined.row.name.clone(),
             source_kind: joined.row.source.kind().to_string(),
-            address: joined.row.source.address().to_string(),
+            address: joined.row.source.shown_address(),
             key_fingerprint: key_fingerprint(&joined.row.policy_key).unwrap_or_default(),
             status_text: joined.status_text(),
             status: joined.status.clone(),
@@ -1245,7 +1247,7 @@ fn summary_of(id: &str, slot: &Slot) -> OrgSummary {
             id: id.to_string(),
             name: code.name.clone(),
             source_kind: code.source.kind().to_string(),
-            address: code.source.address().to_string(),
+            address: code.source.shown_address(),
             key_fingerprint: key_fingerprint(&code.policy_key).unwrap_or_default(),
             status: OrgStatus::Pending,
             status_text: PENDING_TEXT.into(),
@@ -1351,9 +1353,9 @@ fn changes(old: &OrgRow, code: &JoinCode) -> Vec<String> {
         out.push(format!(
             "source changes from {} at {} to {} at {}",
             kind_name(&old.source),
-            old.source.address(),
+            old.source.shown_address(),
             kind_name(&code.source),
-            code.source.address()
+            code.source.shown_address()
         ));
     } else {
         let (before, after) = (fields(&old.source), fields(&code.source));
@@ -1363,8 +1365,8 @@ fn changes(old: &OrgRow, code: &JoinCode) -> Vec<String> {
             if was != will {
                 out.push(format!(
                     "{key} changes from {} to {}",
-                    shown(was),
-                    shown(will)
+                    shown(key, was),
+                    shown(key, will)
                 ));
             }
         }
@@ -1389,9 +1391,14 @@ fn fields(source: &SourceSettings) -> serde_json::Map<String, Value> {
     }
 }
 
-fn shown(value: Option<&Value>) -> String {
+/// A setting's value as a line of `changes` shows it. An address, a site or a location is shown
+/// as `shown_address` shows it: a URL's query may carry a token.
+fn shown(key: &str, value: Option<&Value>) -> String {
     match value {
         None | Some(Value::Null) => "(none)".into(),
+        Some(Value::String(text)) if matches!(key, "address" | "site_url" | "location") => {
+            shown_address(text)
+        }
         Some(Value::String(text)) => text.clone(),
         Some(other) => other.to_string(),
     }

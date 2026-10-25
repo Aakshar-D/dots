@@ -787,6 +787,77 @@ async fn a_sops_file_that_moves_keeps_this_pcs_key_and_another_kind_asks_again()
     assert_eq!(stored_creds(&h, ACME), Some(stored));
 }
 
+/// A signed URL's query is a token: the row keeps it, to fetch with, and nothing shows it.
+#[tokio::test]
+async fn a_sops_urls_query_is_kept_but_never_shown() {
+    const SIGNED: &str = "https://files.acme.example/env.json?sig=sig-token-4b1e&exp=1";
+    const MOVED: &str = "https://files.acme.example/env2.json?sig=sig-token-9c7d#top";
+    let h = OrgsHarness::new().await;
+    let scripted = Scripted::new();
+    let orgs = h.service().with_sources(scripted.factory());
+    let first = code(ACME, ACME_NAME, sops_at(SIGNED), &h.keys);
+    let mut texts = Vec::new();
+    texts.push(format!("{:?}", orgs.preview_join(&first).unwrap()));
+    orgs.sops_identity(ACME).await.unwrap();
+    scripted.answer(Err(SourceError::Denied(
+        "this PC's key is not a recipient of the file".into(),
+    )));
+    let pending = orgs.join(&first, None).await.unwrap();
+    assert_eq!(pending.address, "https://files.acme.example/env.json");
+    texts.push(serde_json::to_string(&pending).unwrap());
+
+    let signed = sign(&h.keys, &policy(ACME, ISSUED, acme_policy()));
+    scripted.serve(&[("API_KEY", API_KEY)], &signed);
+    let summary = orgs.join(&first, None).await.unwrap();
+    assert_eq!(status(&summary), OrgStatus::Connected);
+    assert_eq!(summary.address, "https://files.acme.example/env.json");
+    texts.push(serde_json::to_string(&summary).unwrap());
+    texts.push(serde_json::to_string(&orgs.summaries().await).unwrap());
+    assert_eq!(
+        h.store.get_org(ACME).await.unwrap().unwrap().source,
+        sops_at(SIGNED),
+        "the row keeps the location as given"
+    );
+
+    let moved = code(ACME, ACME_NAME, sops_at(MOVED), &h.keys);
+    let preview = orgs.preview_join(&moved).unwrap();
+    assert_eq!(preview.address, "https://files.acme.example/env2.json");
+    assert_eq!(
+        preview.changes,
+        vec![
+            "location changes from https://files.acme.example/env.json to \
+             https://files.acme.example/env2.json"
+                .to_string()
+        ]
+    );
+    texts.push(format!("{preview:?}"));
+    let to_bao = h.acme_code();
+    let preview = orgs.preview_join(&to_bao).unwrap();
+    assert_eq!(
+        preview.changes,
+        vec![format!(
+            "source changes from SOPS file at https://files.acme.example/env.json to OpenBao at {}",
+            h.bao.address()
+        )]
+    );
+    let http = code(
+        ACME,
+        ACME_NAME,
+        sops_at("http://files.acme.example/env.json?sig=sig-token-0a2f"),
+        &h.keys,
+    );
+    let e = orgs.preview_join(&http).unwrap_err();
+    assert_eq!(
+        invalid(e),
+        "join code: the source's location 'http://files.acme.example/env.json' must start with \
+         https:// (http:// only for localhost or 127.0.0.1)"
+    );
+    for text in &texts {
+        assert!(!text.contains("sig-token"), "{text}");
+        assert!(!text.contains("exp=1"), "{text}");
+    }
+}
+
 // Refresh
 
 #[tokio::test]

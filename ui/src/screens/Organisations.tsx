@@ -349,7 +349,10 @@ export function JoinDialog(props: { org?: OrgSummary; onClose: () => void }) {
             <Field
               label="Join code"
               htmlFor="org-code"
-              hint="The code holds no secrets: only where the org's variables are."
+              hint={
+                "The code says where the org's variables are. It holds no secret, unless its " +
+                "SOPS file's URL carries a token: then keep it as private as a password."
+              }
             >
               <Textarea
                 id="org-code"

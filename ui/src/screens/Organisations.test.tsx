@@ -393,6 +393,11 @@ describe("Settings, Organisations", () => {
     const { user } = renderApp("/settings");
     await user.click(within(await section()).getByRole("button", { name: "Join an organisation" }));
     const dialog = await screen.findByRole("dialog");
+    // As the admin guide says: a code whose SOPS URL carries a token holds a secret.
+    expect(dialog).toHaveTextContent(
+      "It holds no secret, unless its SOPS file's URL carries a token: then keep it as private " +
+        "as a password.",
+    );
     const text = `${CODE}\n`;
     await user.upload(
       within(dialog).getByLabelText("Or open a .dotsorg file"),

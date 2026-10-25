@@ -82,7 +82,7 @@ pub(crate) fn join_code_command(args: &[String], io: &mut Io<'_>) -> Result<()> 
         format!(
             "source: {} at {}",
             code.source.kind(),
-            code.source.address()
+            code.source.shown_address()
         ),
         format!(
             "policy key fingerprint: {}; Dots shows it on joining, so tell people to expect it",
