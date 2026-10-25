@@ -717,9 +717,41 @@ async fn a_rule_rewritten_to_leave_a_new_env_entry_plain_is_refused() {
     );
 }
 
+/// What the code under test logs, as text, while the guard lives on this thread.
+#[derive(Clone, Default)]
+struct Logs(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for Logs {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Logs {
+    fn capture(&self) -> tracing::subscriber::DefaultGuard {
+        let writer = self.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || writer.clone())
+            .with_ansi(false)
+            .finish();
+        tracing::subscriber::set_default(subscriber)
+    }
+
+    fn text(&self) -> String {
+        String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+    }
+}
+
 #[tokio::test]
 async fn an_empty_env_value_is_skipped_and_never_an_entry() {
     // An empty text is never encrypted, so a file may carry one that its MAC does not cover.
+    let logs = Logs::default();
+    let guard = logs.capture();
     let fetched = open_fixture_changed(
         "mac-only.enc.json",
         &[(
@@ -729,10 +761,18 @@ async fn an_empty_env_value_is_skipped_and_never_an_entry() {
     )
     .await
     .unwrap();
+    drop(guard);
     assert_eq!(entries(&fetched), good_entries());
     assert!(!entries(&fetched)
         .iter()
         .any(|(name, _)| name.contains("EVIL")));
+    // The warning gives the name's length only: a name may be a value pasted in its place.
+    let logged = logs.text();
+    assert!(
+        logged.contains("an empty value under a name 16 characters long, skipped"),
+        "{logged}"
+    );
+    assert!(!logged.contains("EVIL"), "{logged}");
 }
 
 // This PC's identity for an org.

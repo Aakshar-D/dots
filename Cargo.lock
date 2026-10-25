@@ -1411,6 +1411,7 @@ dependencies = [
  "tokio-tungstenite",
  "tokio-util",
  "tracing",
+ "tracing-subscriber",
  "ulid",
  "windows-sys 0.61.2",
  "wiremock",

@@ -358,9 +358,13 @@ fn shared_entries(
                 "a secret at {name} has no name"
             )));
         };
+        // `collect_entries` skips these names whatever their value, and no message names one: a
+        // name that is not a variable name may be a value pasted in the wrong place.
+        if skipped(&key) {
+            raw.insert(key, Field::NotText);
+            continue;
+        }
         let field = match (secret.hidden, secret.value) {
-            // `collect_entries` skips these names whatever their value.
-            _ if skipped(&key) => Field::NotText,
             (Some(true), _) => return Err(hidden(&key)),
             (_, None) => return Err(no_value(&key)),
             (_, Some(field)) => field,

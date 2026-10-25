@@ -310,7 +310,10 @@ async fn bad_names_and_the_policy_key_among_the_entries_are_skipped() {
     ] {
         fake.put_secret(PROJECT, ENV, PATH, name, json!(SECRET));
     }
-    // A skipped name is skipped whatever its value.
+    // A skipped name is skipped whatever its value, and also when it is there twice: no
+    // message names it, since it may be a value pasted in the wrong place.
+    fake.put_secret(PROJECT, ENV, PATH, "has-dash", json!(SECRET));
+    fake.put_secret(PROJECT, ENV, PATH, "DOTS_POLICY", json!(SECRET));
     fake.put_secret(PROJECT, ENV, PATH, "2BAD", json!(NUMBER));
     fake.put_raw(
         PROJECT,

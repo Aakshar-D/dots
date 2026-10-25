@@ -291,8 +291,13 @@ fn open(file: &Node, identity: &x25519::Identity) -> std::result::Result<Fetched
             Some(Plain::Unencrypted) => return Err(not_encrypted(&["env", name])),
             Some(Plain::Empty) => {
                 // SOPS never encrypts an empty text and the MAC gains nothing from it, so it
-                // is no secret: skipped. The name is logged, never a value.
-                tracing::warn!(name = %name.escape_debug(), "a SOPS file's env has an empty value, skipped");
+                // is no secret: skipped. Only the name's length is logged, as `collect_entries`
+                // does: a value pasted into a name's place must not reach the logs.
+                tracing::warn!(
+                    "a SOPS file's env has an empty value under a name {} characters long, \
+                     skipped",
+                    name.chars().count()
+                );
                 continue;
             }
             other => match other.and_then(Plain::into_text) {
