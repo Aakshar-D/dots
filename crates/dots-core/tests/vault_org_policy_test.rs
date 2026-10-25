@@ -788,6 +788,39 @@ fn a_source_address_that_is_not_https_is_refused() {
 }
 
 #[test]
+fn a_sops_location_on_a_network_path_is_refused() {
+    let key = keys().pk.to_base64();
+    let sops = |location: &str| {
+        code_for(&join_value(
+            &key,
+            json!({"kind": "sops", "location": location}),
+        ))
+    };
+    for network in [
+        r"\\files.example.invalid\dots\acme-eng.enc.json",
+        "//files.example.invalid/dots/acme-eng.enc.json",
+        r"\\?\UNC\files.example.invalid\dots\acme-eng.enc.json",
+        r"//?/UNC/files.example.invalid/dots/acme-eng.enc.json",
+        r"\\.\UNC\files.example.invalid\dots\acme-eng.enc.json",
+        r"\/files.example.invalid\dots\acme-eng.enc.json",
+    ] {
+        assert_eq!(
+            refused(&sops(network)),
+            "join code: the file's location is a network path; use a synced folder or a \
+             mapped drive",
+            "{network}"
+        );
+    }
+    for local in [
+        r"C:\Sync\acme-eng.enc.json",
+        "C:/Sync/acme-eng.enc.json",
+        r"\\?\C:\Sync\acme-eng.enc.json",
+    ] {
+        assert!(parse_join_code(&sops(local)).is_ok(), "{local}");
+    }
+}
+
+#[test]
 fn a_shown_address_has_no_user_name_password_query_or_fragment() {
     for (address, shown) in [
         ("https://bao.acme.internal", "https://bao.acme.internal"),

@@ -203,6 +203,12 @@ impl SourceSettings {
             }
             Self::Sops(s) if s.location.contains("://") => check_address("location", &s.location),
             Self::Sops(s) => {
+                if is_network_path(&s.location) {
+                    return Err(refused(
+                        "the file's location is a network path; use a synced folder or a \
+                         mapped drive",
+                    ));
+                }
                 if !Path::new(&s.location).is_absolute() {
                     return Err(refused(format!(
                         "the source's location '{}' must be a full path or an https:// URL",
@@ -380,6 +386,26 @@ fn check_address(field: &str, address: &str) -> Result<()> {
         return Err(refuse("must not hold a user name or password"));
     }
     Ok(())
+}
+
+/// Whether a SOPS location is a network path: a UNC path (`\\host\share\…`, `//host/share/…`,
+/// `\\?\UNC\…`), or any other path that starts with two separators but a local drive's
+/// (`\\?\C:\…`). Opening one would hand this PC's Windows sign-in to whatever host it names.
+fn is_network_path(location: &str) -> bool {
+    let separator = |c: char| c == '\\' || c == '/';
+    let mut chars = location.chars();
+    if !(chars.next().is_some_and(separator) && chars.next().is_some_and(separator)) {
+        return false;
+    }
+    let rest = chars.as_str();
+    let local_drive = rest
+        .strip_prefix(['?', '.'])
+        .and_then(|after| after.strip_prefix(separator))
+        .map(str::as_bytes)
+        .is_some_and(|drive| {
+            drive.len() >= 2 && drive[0].is_ascii_alphabetic() && drive[1] == b':'
+        });
+    !local_drive
 }
 
 /// Whether `c` could hide what a text says: a control character (a line break, an escape) or a

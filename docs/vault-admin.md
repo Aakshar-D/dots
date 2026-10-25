@@ -373,15 +373,20 @@ client secret. They type them as **Client id** and **Client secret** at Join.
 ### SOPS and age
 
 The org's variables live in one JSON file, encrypted with SOPS to the age key of each person's PC.
-The file can sit on a shared drive, in a folder that git or IT keeps in sync, or behind an
-`https://` URL.
+The file can sit on a mapped network drive, in a folder that git or IT keeps in sync, or behind
+an `https://` URL.
 
 **Join code field:** `location`, required. It is either a full local path, or an `https://` URL
 that answers the file to a plain `GET`:
 
 - `C:\Sync\acme-eng.enc.json`
-- `\\files.example.invalid\dots\acme-eng.enc.json`
+- `S:\dots\acme-eng.enc.json`, on a drive mapped to a share
 - `https://files.example.invalid/dots/acme-eng.enc.json`
+
+A network path such as `\\files.example.invalid\dots\acme-eng.enc.json` (also `//host/share/…`
+and `\\?\UNC\…`) is refused: "the file's location is a network path; use a synced folder or a
+mapped drive". Opening one would make Windows sign in to whatever host the path names. Have
+each PC map the share to a drive letter, or sync the folder, and give that path.
 
 **Only you may write the location.** Every recipient's key opens the file's data key, so anyone
 who can write the file can change any `env` value and give the file a valid MAC: only the policy
