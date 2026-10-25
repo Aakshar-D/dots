@@ -20,7 +20,8 @@ you sign. Dots reads both and enforces the policy on each person's PC.
 
 - A source is one of: OpenBao or HashiCorp Vault, Infisical, or a SOPS file encrypted with age.
 - Each person joins with a **join code** that you give them. It says where the source is and which
-  key signs the policy. It holds no secret.
+  key signs the policy. It holds no secret, with one exception: a SOPS `location` URL whose
+  query carries a token (a signed URL) does. Send such a code like a secret.
 - Each person signs in to the source with their own credential: a token, a username and password,
   a machine identity, or their PC's age key. Dots never shows it again after Join.
 
@@ -63,11 +64,11 @@ Keep policy.key offline. Join codes carry policy.pub; Dots shows the fingerprint
 ```
 
 - **Keep `policy.key` offline**, for example in your password manager or on an encrypted drive.
-  On Windows the file gets its folder's permissions and nothing more.
+  On Windows a key file gets its folder's permissions and nothing more, so keep it in a folder
+  only you can read.
 - **The password.** `dots-admin` reads it from the `DOTS_ADMIN_PASSWORD` environment variable
   when that is set, and from the terminal otherwise. Use the variable only in scripts you trust.
 - `--no-password` writes an unprotected key, with a warning. Don't use it outside tests.
-  On Windows the key file gets its folder's permissions, so keep it in a folder only you can read.
 - **The fingerprint** is what a person sees when they join. Tell them to expect it.
 
 When the key changes, a person who uses **Update** with the new join code sees the line "the
@@ -236,6 +237,10 @@ Each Dots remembers the `issued_at` of the last policy it accepted. It refuses a
 before that, with the status `policy invalid: issued before the last accepted policy (...)`, and
 keeps using its saved copy until the copy runs out.
 
+There is no recovery from inside Dots. A policy signed with a far-future `issued_at` (a fast
+clock, or a leaked key) makes every later policy count as older, even one that comes through
+**Update** with a new key. The person must **Remove** the org and **Join** again.
+
 So:
 
 - Never store an older signed policy again. To undo a change, edit the policy and sign it again.
@@ -288,7 +293,10 @@ in case make the fetch invalid, since Dots compares names without regard to case
 is never an entry.
 
 **A read-only ACL policy.** Each person needs `read` on the two paths, and nothing else. In KV v2
-the API path has `data/` after the mount:
+the API path has `data/` after the mount. The token must also keep the `default` policy, since
+Dots calls `auth/token/lookup-self` and `auth/token/renew-self`; or add those two paths to this
+policy. A token made with `-no-default-policy` stops renewing and is then refused, which wipes the
+copy:
 
 ```bash
 bao policy write dots-acme - <<'EOF'
@@ -301,13 +309,14 @@ EOF
 
 - **Token** (`auth: token`). Make a token with the `dots-acme` policy and hand it over in a safe
   channel. The person pastes it as **Token** at Join. Dots renews a renewable token at most once
-  an hour, so a periodic token whose period is longer than that keeps working while the person
-  uses Dots.
+  an hour, and only during a fetch. So a periodic token's period must be longer than both one
+  hour and the policy's `refresh_minutes`. The token lapses if Dots stays closed longer than the
+  period.
 - **userpass** (`auth: userpass`). Make a user with the policy:
 
   ```bash
   bao auth enable userpass
-  bao write auth/userpass/users/jdoe password=<their password> policies=dots-acme
+  bao write auth/userpass/users/jdoe password=- token_policies=dots-acme
   ```
 
   The person types their **Username** and **Password** at Join. Dots logs in at
@@ -315,7 +324,7 @@ EOF
 - **ldap** (`auth: ldap`). Map the person's LDAP user or group to the `dots-acme` policy in your
   ldap auth mount. The person types their directory **Username** and **Password**.
 
-A login that fails because the directory can't be reached shows as not available, and the saved
+A login that fails because the directory can't be reached shows as **offline**, and the saved
 copy is kept; only a refused password counts as access revoked.
 
 **Namespaces.** For Vault Enterprise or HCP Vault, and for OpenBao namespaces, give the namespace
@@ -501,6 +510,8 @@ or `--auth-mount` without `--auth userpass` or `--auth ldap`. `--pub` takes `pol
 **The `.dotsorg` file.** `--file` writes the code to a file, on one line. The person can paste
 the code or choose the file with **Or open a .dotsorg file** in the Join dialog. The code and
 the file hold no secret, but they say where your source is, so send them to your people only.
+The exception is a SOPS `location` URL whose query carries a token (a signed URL): that code
+holds a secret, so send it like one.
 
 **What the person does.** In **Settings → Organisations → Join an organisation**, they paste the
 code and press **Preview**. Dots shows the org, the source and the key fingerprint, and fetches
@@ -512,6 +523,9 @@ Dots fetches once and joins only when the fetch works and the policy's signature
 org id. People use **Update** on the org, not Join. Dots shows what changes and fetches with the
 new settings, and replaces the old ones only when that fetch and the signature check work. Their
 dots and grants stay. A person who leaves the sign-in fields empty keeps their saved details.
+
+**Update sends those saved details to the new code's address before it checks the new policy's
+signature.** Tell people to use Update only with a code that came from you.
 
 ## 6. Day to day
 
@@ -528,15 +542,30 @@ Take away their access at the source:
 
 - **OpenBao or Vault**: revoke their token. For userpass or ldap, delete the user or remove
   their mapping to the policy, and also revoke the tokens they were given: Dots keeps using a
-  login token until it runs out.
+  login token until it runs out. For example:
+
+  ```bash
+  bao token revoke -mode=path auth/userpass/login/jdoe
+  bao token revoke -mode=path auth/ldap/login/jdoe
+  ```
 - **Infisical**: remove their machine identity from the project, or delete it.
-- **SOPS**: remove their PC's key from the recipients, as above, and copy the file out.
+- **SOPS**: removing the key from the recipients is not enough: `sops updatekeys` wraps the
+  same data key again, and the person's old copy of the file still gives them that key. Rotate
+  the data key and remove their key in one step, then copy the file out:
+
+  ```bash
+  sops rotate -i --rm-age <their public key> acme-eng.enc.json
+  ```
+
+  Or run `sops updatekeys -y acme-eng.enc.json` and then `sops rotate -i acme-eng.enc.json`.
+  Also remove their access to the file's location: the repository, the share or the URL.
 
 At their Dots' next fetch the source refuses it. Dots marks the org **access revoked** and wipes
 their saved copy and the values it holds. Their dots stay, but can't run with the org's values.
 
-A PC that stays offline does not fetch, and keeps its copy until `offline_hours` run out. Rotate
-the values the person could read, as you would for any leaver.
+A PC that stays offline does not fetch, and keeps its copy until `offline_hours` run out. After the
+step above, rotate the values the person could read, as you would for any leaver. For SOPS,
+rotate the data key first: values changed with `sops set` before that stay under the old key.
 
 ### Offline
 
