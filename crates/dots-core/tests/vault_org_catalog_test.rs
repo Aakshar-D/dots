@@ -654,3 +654,78 @@ async fn a_run_in_an_org_dot_reads_the_orgs_catalog_not_personals() {
     );
     assert!(fake.gone_within(StdDuration::from_secs(10)).await);
 }
+
+// The Library's listing and the Inbox, per scope
+
+/// The listing gives each server's catalog in Personal and in each joined org, and the Inbox's
+/// "Tools changed" names the scope whose list changed, with the dots of that scope. A removed
+/// org's catalogs are left out of both.
+#[tokio::test]
+async fn the_library_and_the_inbox_show_each_scopes_catalog() {
+    use dots_core::model::{DotRef, ToolsChanged};
+    let (h, _vault, lib) = setup(json!({"personal": "deny"})).await;
+    let (_fake, item) = server_reading(&h.store, "sf", "API_KEY").await;
+    let mut spec = common::spec("mine");
+    spec.uses.mcp_servers = vec!["sf".into()];
+    let mine = h.store.create_dot(&spec, None).await.unwrap();
+    spec.name = "theirs".into();
+    let theirs = h.store.create_dot(&spec, Some(ACME)).await.unwrap();
+    let entry = |entries: Vec<dots_core::library_service::LibraryEntry>| {
+        entries.into_iter().find(|e| e.item.id == item.id).unwrap()
+    };
+    let scopes = |e: &dots_core::library_service::LibraryEntry| -> Vec<(String, CatalogStatus)> {
+        e.catalogs
+            .iter()
+            .map(|c| (c.scope.clone(), c.catalog.status))
+            .collect()
+    };
+
+    let listed = entry(lib.list().await.unwrap());
+    assert_eq!(
+        scopes(&listed),
+        [
+            (PERSONAL_SCOPE.to_string(), CatalogStatus::Unchecked),
+            (ACME.to_string(), CatalogStatus::Unchecked)
+        ]
+    );
+    assert_eq!(listed.catalog, Some(McpCatalog::unchecked(&item.id)));
+    assert!(listed.confirmed_origins.is_empty());
+    assert!(lib.tools_changed().await.unwrap().is_empty());
+
+    let changed = |scope: &str, dot: &dots_core::model::Dot| ToolsChanged {
+        server_id: item.id.clone(),
+        name: "sf".into(),
+        scope: scope.into(),
+        dots: vec![DotRef {
+            id: dot.id.clone(),
+            name: dot.spec.name.clone(),
+        }],
+    };
+    lib.check(&item.id, &acme()).await.unwrap();
+    assert_eq!(lib.tools_changed().await.unwrap(), [changed(ACME, &theirs)]);
+    lib.check(&item.id, &DotScope::Personal).await.unwrap();
+    assert_eq!(
+        lib.tools_changed().await.unwrap(),
+        [changed(PERSONAL_SCOPE, &mine), changed(ACME, &theirs)]
+    );
+    let listed = entry(lib.list().await.unwrap());
+    assert_eq!(
+        scopes(&listed),
+        [
+            (PERSONAL_SCOPE.to_string(), CatalogStatus::Changed),
+            (ACME.to_string(), CatalogStatus::Changed)
+        ]
+    );
+    assert_eq!(listed.catalog.as_ref(), Some(&listed.catalogs[0].catalog));
+
+    h.orgs.remove(ACME).await.unwrap();
+    let listed = entry(lib.list().await.unwrap());
+    assert_eq!(
+        scopes(&listed),
+        [(PERSONAL_SCOPE.to_string(), CatalogStatus::Changed)]
+    );
+    assert_eq!(
+        lib.tools_changed().await.unwrap(),
+        [changed(PERSONAL_SCOPE, &mine)]
+    );
+}

@@ -136,8 +136,12 @@ struct RawPolicy {
     audit: Option<AuditTarget>,
 }
 
+/// `refresh_minutes` when the policy leaves it out. The org timers use it too while an org
+/// has no accepted policy.
+pub const DEFAULT_REFRESH_MINUTES: u32 = 15;
+
 fn default_refresh_minutes() -> u32 {
-    15
+    DEFAULT_REFRESH_MINUTES
 }
 
 fn default_offline_hours() -> u32 {

@@ -44,6 +44,11 @@ const schemas: Record<SampleName, { parse: (v: unknown) => unknown }> = {
   FollowUp: T.FollowUp.array(),
   Memory: T.Memory.array(),
   BrowserStatus: T.BrowserStatus,
+  ToolsChanged: T.ToolsChanged.array(),
+  OrgSummary: T.OrgSummary.array(),
+  JoinPreview: T.JoinPreview.array(),
+  OrgEntry: T.OrgEntry.array(),
+  SourceCreds: T.SourceCreds.array(),
 };
 
 // The UI parses live data with these schemas, so it must know every variant the core has.
@@ -122,6 +127,21 @@ describe("Rust/TypeScript contract", () => {
     expect(fixture.Schedule.map((s) => s.until && Object.keys(s.until)[0])).toEqual(
       expect.arrayContaining([null, "count", "date"]),
     );
+  });
+
+  it("has an org sample of every status, and sign-in details of every kind", () => {
+    const statuses = T.OrgSummary.options.map((o) => o.shape.status.value);
+    expect([...new Set(fixture.OrgSummary.map((o) => o.status))].sort()).toEqual(
+      [...statuses].sort(),
+    );
+    const kinds = T.SourceCreds.options.map((o) => o.shape.kind.value);
+    expect(fixture.SourceCreds.map((c) => c.kind).sort()).toEqual([...kinds].sort());
+  });
+
+  it("has a catalog sample in an org's scope and a changed list of each scope", () => {
+    const scopes = fixture.LibraryEntry.flatMap((e) => e.catalogs.map((c) => c.scope));
+    expect(scopes).toEqual(expect.arrayContaining(["personal", "acme-eng"]));
+    expect(fixture.ToolsChanged.map((t) => t.scope)).toEqual(["personal", "acme-eng"]);
   });
 
   it("has a sample of every update state", () => {

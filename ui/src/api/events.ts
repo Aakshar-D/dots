@@ -19,8 +19,10 @@ function parse<S extends z.ZodType>(event: string, schema: S, payload: unknown) 
   return undefined;
 }
 
-/// Every runtime event. `onInvalid` is called for an event in a shape this UI does not know:
-/// the caller cannot patch its caches from it, so it should refetch, as after `onLagged`.
+/// Every runtime event, among them `org_updated` when an org's status, policy or values may
+/// have changed (a join, an Update, a Refresh, its timer, a remove). `onInvalid` is called for
+/// an event in a shape this UI does not know: the caller cannot patch its caches from it, so it
+/// should refetch, as after `onLagged`.
 export function onRuntimeEvent(
   handler: (event: RuntimeEvent) => void,
   onInvalid: () => void,

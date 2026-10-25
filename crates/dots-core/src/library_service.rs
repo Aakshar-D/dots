@@ -5,7 +5,7 @@
 //! installed Claude Code plugins, and says which variables are set. Every change of an item or
 //! a catalog is published as `RuntimeEvent::LibraryUpdated`.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -40,6 +40,13 @@ pub struct LibraryEntry {
     pub used_by: Vec<DotRef>,
     /// An MCP server's Personal catalog.
     pub catalog: Option<McpCatalog>,
+    /// An MCP server's catalog in each scope (env vault spec §8): Personal first, then each
+    /// org joined on this PC, by name. A scope it was never checked or run in reads
+    /// `unchecked`. Empty for other items.
+    pub catalogs: Vec<ScopedCatalog>,
+    /// The origins confirmed for an http MCP server, by scope (`personal` or an org id), each
+    /// list in the order they were confirmed. Empty for other items.
+    pub confirmed_origins: BTreeMap<String, Vec<String>>,
     /// The `${VAR}` of an MCP server's config that Dots' environment does not set.
     pub missing_variables: Vec<String>,
     /// A skill read from its folder.
@@ -53,6 +60,28 @@ pub struct LibraryEntry {
     /// A skill whose folder is in Dots' skills folder: removing it deletes the folder too
     /// (skill creator spec §7).
     pub dots_folder: bool,
+}
+
+/// An MCP server's catalog in one scope.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ScopedCatalog {
+    /// `personal` or an org id.
+    pub scope: String,
+    pub catalog: McpCatalog,
+}
+
+/// What the person is asked before an http MCP server may send a scope's values to the origin
+/// its URL reaches there (`LibraryService::origin_to_confirm`). It holds no value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OriginToConfirm {
+    /// The server's name.
+    pub server: String,
+    /// Where its URL reaches with the scope's values.
+    pub origin: HttpOrigin,
+    /// Every variable its config sends, sorted.
+    pub variables: Vec<String>,
+    /// "Personal", or the org's name.
+    pub scope_name: String,
 }
 
 /// What a context collection's folder holds.
@@ -417,17 +446,18 @@ impl LibraryService {
         skills_dir.is_some_and(|root| skill_creator::is_inside(path, root))
     }
 
-    /// Every item, with the dots that use it, a server's Personal catalog and missing
-    /// variables, and what a skill's or plugin's folder holds (`library_list`).
+    /// Every item, with the dots that use it, a server's catalog in each scope, its confirmed
+    /// origins and missing variables, and what a skill's or plugin's folder holds
+    /// (`library_list`).
     pub async fn list(&self) -> Result<Vec<LibraryEntry>> {
         let items = self.store.list_library_items().await?;
-        let mut catalogs: HashMap<String, McpCatalog> = self
+        let scopes = self.scopes().await;
+        let mut catalogs: HashMap<(String, String), McpCatalog> = self
             .store
             .list_catalogs()
             .await?
             .into_iter()
-            .filter(|(scope, _)| scope == PERSONAL_SCOPE)
-            .map(|(_, c)| (c.server_id.clone(), c))
+            .map(|(scope, c)| ((c.server_id.clone(), scope), c))
             .collect();
         let folders: Vec<(LibraryKind, String)> = items
             .iter()
@@ -484,7 +514,11 @@ impl LibraryService {
             let mut entry = LibraryEntry {
                 item: item.clone(),
                 used_by,
-                catalog: catalogs.remove(&item.id),
+                catalog: catalogs
+                    .get(&(item.id.clone(), PERSONAL_SCOPE.to_string()))
+                    .cloned(),
+                catalogs: Vec::new(),
+                confirmed_origins: BTreeMap::new(),
                 missing_variables: Vec::new(),
                 skill: None,
                 plugin: None,
@@ -493,6 +527,16 @@ impl LibraryService {
                 dots_folder,
             };
             if let LibraryConfig::McpServer(config) = &item.config {
+                entry.catalogs = scopes
+                    .iter()
+                    .map(|scope| ScopedCatalog {
+                        catalog: catalogs
+                            .remove(&(item.id.clone(), scope.clone()))
+                            .unwrap_or_else(|| McpCatalog::unchecked(&item.id)),
+                        scope: scope.clone(),
+                    })
+                    .collect();
+                entry.confirmed_origins = self.store.confirmed_origins(&item.id).await?;
                 let variables = config.variables();
                 let personal = self.vault.personal_values(&variables).await?;
                 entry.missing_variables = variables
@@ -563,12 +607,15 @@ impl LibraryService {
             }
         }
         if let Some(fp) = accept {
-            let catalog = self.check_item(&item, &DotScope::Personal).await?;
-            if catalog.seen_fingerprint.as_deref() == Some(fp) {
-                self.store
-                    .accept_catalog(&item.id, PERSONAL_SCOPE, fp)
-                    .await?;
-                publish(&self.bus, &item.id);
+            match self
+                .check_and_accept(&item.id, &DotScope::Personal, fp)
+                .await
+            {
+                Ok(_) => {}
+                // An origin not confirmed yet: nothing is sent, and the server stays unchecked
+                // until the person confirms it and checks.
+                Err(Error::Conflict(why)) => tracing::warn!("{why}; it is saved unchecked"),
+                Err(e) => return Err(e),
             }
         }
         Ok(item)
@@ -671,9 +718,71 @@ impl LibraryService {
     /// resolves each of its variables as a run in that org would, as if all were granted
     /// (env vault spec §8); one that does not resolve fails the check, and the catalog's error
     /// names the variable and the org. An org not joined on this PC is `NotFound`.
+    ///
+    /// A server whose origin is pinned is checked only where its URL reaches an origin
+    /// confirmed for that scope, as a run starts it: otherwise it is a `Conflict` ("gh:
+    /// https://x.example is not a confirmed origin in Acme Engineering"), nothing is sent, and
+    /// the catalog is not touched. `origin_to_confirm` says what to ask.
     pub async fn check(&self, id: &str, scope: &DotScope) -> Result<McpCatalog> {
         let item = self.server(id).await?;
         self.check_item(&item, scope).await
+    }
+
+    /// Checks the MCP server `id` in `scope`, as `check` does, and accepts the list it gives
+    /// when its fingerprint is `fingerprint`, the one the person was shown by `probe`
+    /// (`library_add` with `accept`). Otherwise the list waits for review.
+    pub async fn check_and_accept(
+        &self,
+        id: &str,
+        scope: &DotScope,
+        fingerprint: &str,
+    ) -> Result<McpCatalog> {
+        let item = self.server(id).await?;
+        let catalog = self.check_item(&item, scope).await?;
+        if catalog.seen_fingerprint.as_deref() != Some(fingerprint) {
+            return Ok(catalog);
+        }
+        let accepted = self
+            .store
+            .accept_catalog(id, scope.key(), fingerprint)
+            .await?;
+        publish(&self.bus, id);
+        Ok(accepted)
+    }
+
+    /// What to ask before the http MCP server `id` may send `scope`'s values to the origin its
+    /// URL reaches there (`origin_in`): that origin, the variables the server sends and the
+    /// scope's name. `None` when that origin is confirmed for the scope already. `Invalid` for
+    /// a server whose URL reads no variable, or with why no origin can be computed. A plugin's
+    /// own server is asked about too: nothing else can confirm it.
+    pub async fn origin_to_confirm(
+        &self,
+        id: &str,
+        scope: &DotScope,
+    ) -> Result<Option<OriginToConfirm>> {
+        let item = self.server(id).await?;
+        let scope_name = self.scope_name(scope).await;
+        let origin = match self.origin_in(id, scope).await? {
+            Ok(origin) => origin,
+            Err(why) => {
+                return Err(Error::Invalid(format!(
+                    "{}: there is no origin to confirm in {scope_name}: {why}",
+                    item.name
+                )))
+            }
+        };
+        if self.is_confirmed(id, scope, &origin).await? {
+            return Ok(None);
+        }
+        let LibraryConfig::McpServer(config) = &item.config else {
+            unreachable!("origin_in takes only an http MCP server")
+        };
+        Ok(Some(OriginToConfirm {
+            server: item.name.clone(),
+            origin,
+            variables: config.variables(),
+            scope_name,
+        }))
     }
 
     /// The origin the http MCP server `id` reaches in `scope`, as a run in that scope would
@@ -815,28 +924,92 @@ impl LibraryService {
             .collect())
     }
 
-    /// The MCP servers whose tool list waits for review, with the dots that use them (the
-    /// Inbox's "Tools changed").
+    /// The MCP servers whose tool list waits for review in a scope, with the dots of that
+    /// scope that use them (the Inbox's "Tools changed"): Personal's first, then each joined
+    /// org's, by name.
     pub async fn tools_changed(&self) -> Result<Vec<ToolsChanged>> {
         let mut out = Vec::new();
-        for item in self.store.changed_mcp_servers(PERSONAL_SCOPE).await? {
-            let dots = self
-                .store
-                .dots_using(&item)
-                .await?
-                .into_iter()
-                .map(|d| DotRef {
-                    id: d.id,
-                    name: d.spec.name,
-                })
-                .collect();
-            out.push(ToolsChanged {
-                server_id: item.id,
-                name: item.name,
-                dots,
-            });
+        for scope in self.scopes().await {
+            for item in self.store.changed_mcp_servers(&scope).await? {
+                let dots = self
+                    .store
+                    .dots_using(&item)
+                    .await?
+                    .into_iter()
+                    .filter(|d| DotScope::of(d).key() == scope)
+                    .map(|d| DotRef {
+                        id: d.id,
+                        name: d.spec.name,
+                    })
+                    .collect();
+                out.push(ToolsChanged {
+                    server_id: item.id,
+                    name: item.name,
+                    scope: scope.clone(),
+                    dots,
+                });
+            }
         }
         Ok(out)
+    }
+
+    /// The scopes the Library shows a server's catalog in: `personal`, then the id of each org
+    /// joined on this PC, by name.
+    async fn scopes(&self) -> Vec<String> {
+        let mut scopes = vec![PERSONAL_SCOPE.to_string()];
+        if let Some(orgs) = self.vault.orgs() {
+            scopes.extend(orgs.summaries().await.into_iter().map(|s| s.id));
+        }
+        scopes
+    }
+
+    /// "Personal", or the org's name; its id when it is not joined.
+    async fn scope_name(&self, scope: &DotScope) -> String {
+        let DotScope::Org(id) = scope else {
+            return "Personal".into();
+        };
+        match self.vault.orgs() {
+            Some(orgs) => orgs
+                .summary(id)
+                .await
+                .map_or_else(|| id.clone(), |s| s.name),
+            None => id.clone(),
+        }
+    }
+
+    /// Whether `origin` is confirmed for the server `id` in `scope`.
+    async fn is_confirmed(&self, id: &str, scope: &DotScope, origin: &HttpOrigin) -> Result<bool> {
+        let confirmed = self.store.confirmed_origins(id).await?;
+        Ok(confirmed
+            .get(scope.key())
+            .is_some_and(|list| list.contains(&origin.ascii)))
+    }
+
+    /// The origin the pinned http server `item` reaches in `scope`, when it is not confirmed
+    /// there. `None` when it is, when the server is not pinned, or when no origin can be
+    /// computed: the check then fails on its own, for the variable or the URL, and sends
+    /// nothing.
+    async fn unconfirmed(
+        &self,
+        item: &LibraryItem,
+        config: &McpServerConfig,
+        scope: &DotScope,
+    ) -> Result<Option<HttpOrigin>> {
+        let McpServerConfig::Http { url, .. } = config else {
+            return Ok(None);
+        };
+        if !config.origin_pinned() {
+            return Ok(None);
+        }
+        let consumer = Consumer::Mcp(item.name.clone());
+        let names = url_variables(url);
+        let Ok(values) = self.vault.check_values(scope, &consumer, &names).await? else {
+            return Ok(None);
+        };
+        let Ok(origin) = http_origin(url, &|k| values.get(k)) else {
+            return Ok(None);
+        };
+        Ok((!self.is_confirmed(&item.id, scope, &origin).await?).then_some(origin))
     }
 
     async fn server(&self, id: &str) -> Result<LibraryItem> {
@@ -858,6 +1031,14 @@ impl LibraryService {
                 item.name
             )));
         };
+        if let Some(origin) = self.unconfirmed(item, config, scope).await? {
+            return Err(Error::Conflict(format!(
+                "{}: {} is not a confirmed origin in {}",
+                item.name,
+                origin.ascii,
+                self.scope_name(scope).await
+            )));
+        }
         let consumer = Consumer::Mcp(item.name.clone());
         let resolved = self
             .vault

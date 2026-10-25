@@ -51,6 +51,10 @@ const PENDING_TEXT: &str = "waiting for the admin to add this PC's key";
 /// timers do not wait.
 pub const RETRY_AFTER: Duration = Duration::minutes(5);
 
+/// How the line of `JoinPreview::changes` that warns of a new policy key starts. The app asks
+/// the person before an Update that brings one.
+pub const KEY_CHANGE: &str = "the policy key changes";
+
 /// How far ahead of the clock a saved copy's fetch time may be at load. Further ahead, the clock
 /// was wrong when the copy was written (or has been put back since), so `offline_hours` can't be
 /// counted from it and the copy is treated as expired.
@@ -1289,8 +1293,8 @@ fn changes(old: &OrgRow, code: &JoinCode) -> Vec<String> {
     if old.policy_key != code.policy_key {
         let fingerprint = |key: &str| key_fingerprint(key).unwrap_or_default();
         out.push(format!(
-            "the policy key changes from {} to {}: the key that signs the org's policy is new, so \
-             accept this code only if your admin told you the key changed",
+            "{KEY_CHANGE} from {} to {}: the key that signs the org's policy is new, so accept \
+             this code only if your admin told you the key changed",
             fingerprint(&old.policy_key),
             fingerprint(&code.policy_key)
         ));

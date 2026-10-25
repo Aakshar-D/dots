@@ -6,15 +6,18 @@
 mod common;
 
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration as StdDuration;
 
 use chrono::Duration;
 use common::clock::FakeClock;
 use common::fake_openbao::FakeOpenBao;
 use common::orgs::{at, code, keys, openbao, policy, sign, token, ACME, ACME_NAME, START, TOKEN};
 use common::{spec, wait_status};
+use dots_core::events::RuntimeEvent;
 use dots_core::model::{DotSpec, RunStatus, WorkspaceMode};
 use dots_core::vault::org::Orgs;
-use dots_core::vault::Grants;
+use dots_core::vault::{Grants, MemorySecrets};
 use dots_core::{Config, Error, Runtime};
 use minisign::KeyPair;
 use serde_json::{json, Value};
@@ -31,31 +34,39 @@ struct Rt {
     clock: std::sync::Arc<FakeClock>,
     bao: FakeOpenBao,
     keys: KeyPair,
+    secrets: Arc<MemorySecrets>,
 }
 
 impl Rt {
     async fn start() -> Rt {
-        let dir = tempfile::tempdir().unwrap();
+        let bao = FakeOpenBao::start().await;
+        bao.allow_token(TOKEN, false);
+        let secrets = Arc::new(MemorySecrets::new());
+        Rt::on(tempfile::tempdir().unwrap(), secrets, bao, keys()).await
+    }
+
+    /// A runtime on the data folder in `dir`, with `secrets`, as a restart of Dots finds them.
+    async fn on(dir: TempDir, secrets: Arc<MemorySecrets>, bao: FakeOpenBao, keys: KeyPair) -> Rt {
         let args_out = dir.path().join("args.json");
         let clock = FakeClock::new(at(START));
         let mut cfg = Config::new(dir.path().join("data"));
         cfg.port = 0;
         cfg.clock = clock.clone();
+        cfg.secrets = Some(secrets.clone());
         cfg.claude_path = Some(PathBuf::from(env!("CARGO_BIN_EXE_fake-claude")));
         cfg.claude_env.push((
             "FAKE_CLAUDE_ARGS_OUT".into(),
             args_out.to_string_lossy().to_string(),
         ));
         let rt = Runtime::start(cfg).await.unwrap();
-        let bao = FakeOpenBao::start().await;
-        bao.allow_token(TOKEN, false);
         Rt {
             dir,
             rt,
             args_out,
             clock,
             bao,
-            keys: keys(),
+            keys,
+            secrets,
         }
     }
 
@@ -74,13 +85,19 @@ impl Rt {
 
     async fn join_acme(&self) {
         self.serve(LEVEL_ONE);
-        let code = code(
+        self.orgs()
+            .join(&self.acme_code(), Some(token()))
+            .await
+            .unwrap();
+    }
+
+    fn acme_code(&self) -> String {
+        code(
             ACME,
             ACME_NAME,
             openbao(&self.bao.address(), "dots"),
             &self.keys,
-        );
-        self.orgs().join(&code, Some(token())).await.unwrap();
+        )
     }
 
     fn env_reads(&self) -> usize {
@@ -192,5 +209,92 @@ async fn saving_a_dot_whose_org_was_removed_is_refused() {
     mine.name = "mine".into();
     let mine = t.rt.create_dot(mine, None).await.unwrap();
     t.rt.update_dot(&mine.id, mine.spec.clone()).await.unwrap();
+    t.rt.shutdown();
+}
+
+/// Waits (at most 10 real seconds) for `check` to hold.
+async fn eventually(what: &str, check: impl Fn() -> bool) {
+    for _ in 0..1000 {
+        if check() {
+            return;
+        }
+        tokio::time::sleep(StdDuration::from_millis(10)).await;
+    }
+    panic!("{what} did not happen");
+}
+
+/// The runtime's org commands keep one timer per joined org: a join starts it, an Update and a
+/// Refresh keep it, a remove stops it, and the runtime's shutdown stops every one. Each change
+/// is published as `OrgUpdated`.
+#[tokio::test]
+async fn the_runtime_keeps_one_timer_per_joined_org() {
+    let t = Rt::start().await;
+    let mut events = t.rt.subscribe();
+    let timers = t.rt.org_timers();
+    t.serve(LEVEL_ONE);
+    t.rt.join_org(&t.acme_code(), Some(token())).await.unwrap();
+    assert_eq!(timers.running(), [ACME]);
+    assert_eq!(t.env_reads(), 1);
+    let updated = |event: Result<RuntimeEvent, _>| match event {
+        Ok(RuntimeEvent::OrgUpdated { org_id }) => Some(org_id),
+        _ => None,
+    };
+    assert_eq!(updated(events.try_recv()).as_deref(), Some(ACME));
+
+    // Its timer fetches after `refresh_minutes`.
+    t.clock.set(at(START) + Duration::minutes(15));
+    eventually("the timer's fetch", || t.env_reads() == 2).await;
+
+    t.rt.update_org(ACME, &t.acme_code(), None).await.unwrap();
+    t.rt.refresh_org(ACME).await.unwrap();
+    assert_eq!(t.env_reads(), 4);
+    assert_eq!(timers.running(), [ACME]);
+
+    t.rt.remove_org(ACME).await.unwrap();
+    assert!(timers.running().is_empty());
+    let mut said = Vec::new();
+    while let Some(org_id) = updated(events.try_recv()) {
+        said.push(org_id);
+    }
+    assert!(
+        said.len() >= 3 && said.iter().all(|id| id == ACME),
+        "{said:?}"
+    );
+    t.clock.set(at(START) + Duration::hours(2));
+    tokio::time::sleep(StdDuration::from_millis(200)).await;
+    assert_eq!(t.env_reads(), 4, "a removed org is not fetched");
+    assert!(matches!(
+        t.rt.remove_org(ACME).await,
+        Err(Error::NotFound(_))
+    ));
+
+    t.rt.join_org(&t.acme_code(), Some(token())).await.unwrap();
+    assert_eq!(timers.running(), [ACME]);
+    t.rt.shutdown();
+    eventually("the timers' end", || timers.running().is_empty()).await;
+}
+
+/// A restarted runtime fetches every joined org once, and starts its timer.
+#[tokio::test]
+async fn a_restarted_runtime_fetches_each_org_and_starts_its_timer() {
+    let t = Rt::start().await;
+    t.join_acme().await;
+    assert!(t.rt.close(StdDuration::from_secs(10)).await);
+    let Rt {
+        dir,
+        rt,
+        bao,
+        keys,
+        secrets,
+        ..
+    } = t;
+    drop(rt);
+    let t = Rt::on(dir, secrets, bao, keys).await;
+    let timers = t.rt.org_timers();
+    eventually("the start-up fetch", || {
+        t.env_reads() == 2 && !timers.starting_up()
+    })
+    .await;
+    assert_eq!(timers.running(), [ACME]);
     t.rt.shutdown();
 }

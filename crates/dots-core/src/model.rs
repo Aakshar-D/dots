@@ -506,7 +506,10 @@ pub struct DotRef {
 pub struct ToolsChanged {
     pub server_id: String,
     pub name: String,
-    /// The dots that use it (through its plugin, for a plugin's server), by name.
+    /// The scope whose list changed: `personal` or an org id (env vault spec §8). Accepting
+    /// it accepts that scope's list.
+    pub scope: String,
+    /// The dots of that scope that use it (through its plugin, for a plugin's server).
     pub dots: Vec<DotRef>,
 }
 

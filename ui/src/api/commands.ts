@@ -15,6 +15,7 @@ import type {
   Preset,
   Schedule,
   Settings,
+  SourceCreds,
 } from "./types";
 
 /// A command failure. `kind` mirrors the Rust `CmdError`.
@@ -160,10 +161,21 @@ export const commands = {
     call(nothing, "library_remove", { id, confirm }),
   /// Starts the server, lists its tools and stops it; nothing is saved.
   libraryProbe: (config: McpServerConfig) => call(T.McpProbe, "library_probe", { config }),
-  libraryCheck: (id: string) => call(T.McpCatalog, "library_check", { id }),
-  /// Rejects with kind `conflict` when the list moved since `fingerprint` was seen.
-  libraryAccept: (id: string, fingerprint: string) =>
-    call(T.McpCatalog, "library_accept", { id, fingerprint }),
+  /// Checks the server in `scope`, an org id; left out, Personal. A server whose URL reaches
+  /// an origin not confirmed there asks in a native dialog first; rejects with kind
+  /// `cancelled` when the person declines, and nothing is sent.
+  libraryCheck: (id: string, scope?: string) =>
+    call(T.McpCatalog, "library_check", { id, scope }),
+  /// Confirms, in a native dialog, the origin the server reaches in `scope` (left out,
+  /// Personal), for a plugin's own server too; asks nothing when it is confirmed already.
+  /// Rejects with kind `cancelled` when declined, and with `invalid` when there is no origin to
+  /// confirm.
+  confirmOrigin: (serverId: string, scope?: string) =>
+    call(nothing, "confirm_origin", { serverId, scope }),
+  /// Accepts the list seen in `scope` (left out, Personal). Rejects with kind `conflict` when
+  /// the list moved since `fingerprint` was seen.
+  libraryAccept: (id: string, fingerprint: string, scope?: string) =>
+    call(T.McpCatalog, "library_accept", { id, fingerprint, scope }),
   libraryScanSkills: (path: string) =>
     call(T.ScannedSkill.array(), "library_scan_skills", { path }),
   /// Drafts a skill with the claude CLI for the dialog `dialog`, cancelling the dialog's
@@ -199,6 +211,29 @@ export const commands = {
   /// not be deleted, and then the offer stays.
   envOldBackupsAnswer: (deleteThem: boolean) =>
     call(z.string().array(), "env_old_backups_answer", { delete: deleteThem }),
+
+  /// The orgs joined on this PC, by name. Never a value.
+  orgList: () => call(T.OrgSummary.array(), "org_list"),
+  /// What a join code (its text, or a `.dotsorg` file's) would join or change; nothing is
+  /// fetched. Rejects with kind `invalid` for a code Dots cannot read.
+  orgPreview: (code: string) => call(T.JoinPreview, "org_preview", { code }),
+  /// This PC's age public key for a SOPS org, made on the first call, to send to the admin.
+  orgSopsKey: (orgId: string) => call(text, "org_sops_key", { orgId }),
+  /// Joins with the person's sign-in details; null for a SOPS org, which uses this PC's key.
+  /// Rejects with kind `conflict` for an org joined already.
+  orgJoin: (code: string, creds: SourceCreds | null) =>
+    call(T.OrgSummary, "org_join", { code, creds }),
+  /// Replaces the org's settings with a new code's, with new sign-in details or the saved ones
+  /// (null). A new policy key asks in a native dialog first: rejects with kind `cancelled` when
+  /// declined, and nothing changes.
+  orgUpdate: (orgId: string, code: string, creds: SourceCreds | null = null) =>
+    call(T.OrgSummary, "org_update", { orgId, code, creds }),
+  /// Fetches the org now. A failed fetch is not a rejection: the answer's status says it.
+  orgRefresh: (orgId: string) => call(T.OrgSummary, "org_refresh", { orgId }),
+  /// Leaves the org; its dots stay, "org removed". The UI confirms first.
+  orgRemove: (orgId: string) => call(nothing, "org_remove", { orgId }),
+  /// The org's entries for the Env tab; a secret's value is never in the answer.
+  orgEntries: (orgId: string) => call(T.OrgEntry.array(), "org_entries", { orgId }),
 
   /// Every message that waits (open questions, unread notes) and the newest others, newest
   /// first; of one dot with `dotId`.

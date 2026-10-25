@@ -114,6 +114,8 @@ describe("commands", () => {
     reply = async () => fixture.McpCatalog;
     expect(await commands.libraryCheck("i1")).toEqual(fixture.McpCatalog);
     expect(await commands.libraryAccept("i1", "fp2")).toEqual(fixture.McpCatalog);
+    reply = async () => null;
+    expect(await commands.confirmOrigin("i1")).toBeNull();
     reply = async () => fixture.ScannedSkill;
     expect(await commands.libraryScanSkills("C:/skills")).toEqual(fixture.ScannedSkill);
     reply = async () => fixture.ContextDocuments;
@@ -129,13 +131,70 @@ describe("commands", () => {
       ["library_update", { id: "i1", config }],
       ["library_remove", { id: "i1", confirm: true }],
       ["library_probe", { config: server }],
-      ["library_check", { id: "i1" }],
-      ["library_accept", { id: "i1", fingerprint: "fp2" }],
+      // No scope: Personal.
+      ["library_check", { id: "i1", scope: undefined }],
+      ["library_accept", { id: "i1", fingerprint: "fp2", scope: undefined }],
+      ["confirm_origin", { serverId: "i1", scope: undefined }],
       ["library_scan_skills", { path: "C:/skills" }],
       ["context_documents", { id: "i1" }],
       ["installed_claude_plugins", undefined],
       ["environment_variables", { names: ["GITHUB_TOKEN"] }],
     ]);
+  });
+
+  it("checks, accepts and confirms in an org's scope as the core names them", async () => {
+    reply = async () => fixture.McpCatalog;
+    await commands.libraryCheck("i1", "acme-eng");
+    await commands.libraryAccept("i1", "fp2", "acme-eng");
+    reply = async () => null;
+    await commands.confirmOrigin("i1", "acme-eng");
+    expect(calls).toEqual([
+      ["library_check", { id: "i1", scope: "acme-eng" }],
+      ["library_accept", { id: "i1", fingerprint: "fp2", scope: "acme-eng" }],
+      ["confirm_origin", { serverId: "i1", scope: "acme-eng" }],
+    ]);
+    // A declined dialog is a rejection the screen can tell apart.
+    reply = async () => {
+      throw { kind: "cancelled", message: "declined: nothing was sent or saved" };
+    };
+    expect((await failure(commands.libraryCheck("i1", "acme-eng"))).kind).toBe("cancelled");
+  });
+
+  it("sends the org commands as the core names them, never taking sign-in details", async () => {
+    const [token, , , age] = fixture.SourceCreds.map((c) => T.SourceCreds.parse(c));
+    reply = async () => fixture.OrgSummary;
+    expect(await commands.orgList()).toEqual(fixture.OrgSummary);
+    reply = async () => fixture.JoinPreview[1];
+    expect(await commands.orgPreview("code")).toEqual(fixture.JoinPreview[1]);
+    reply = async () => "age1sample";
+    expect(await commands.orgSopsKey("design")).toBe("age1sample");
+    reply = async () => fixture.OrgSummary[0];
+    await commands.orgJoin("code", token!);
+    await commands.orgJoin("sops-code", null);
+    await commands.orgUpdate("acme-eng", "code2");
+    await commands.orgUpdate("design", "code3", age!);
+    await commands.orgRefresh("acme-eng");
+    reply = async () => null;
+    expect(await commands.orgRemove("acme-eng")).toBeNull();
+    reply = async () => fixture.OrgEntry;
+    expect(await commands.orgEntries("acme-eng")).toEqual(fixture.OrgEntry);
+    expect(calls).toEqual([
+      ["org_list", undefined],
+      ["org_preview", { code: "code" }],
+      ["org_sops_key", { orgId: "design" }],
+      ["org_join", { code: "code", creds: token }],
+      ["org_join", { code: "sops-code", creds: null }],
+      ["org_update", { orgId: "acme-eng", code: "code2", creds: null }],
+      ["org_update", { orgId: "design", code: "code3", creds: age }],
+      ["org_refresh", { orgId: "acme-eng" }],
+      ["org_remove", { orgId: "acme-eng" }],
+      ["org_entries", { orgId: "acme-eng" }],
+    ]);
+    // An answer holding a value or the sign-in details is a shape this UI refuses.
+    reply = async () => [{ ...fixture.OrgEntry[1], secret: "x" }];
+    expect((await failure(commands.orgEntries("acme-eng"))).kind).toBe("internal");
+    reply = async () => ({ ...fixture.OrgSummary[0], creds: token });
+    expect((await failure(commands.orgRefresh("acme-eng"))).kind).toBe("internal");
   });
 
   it("refuses to remove a used Library item without a yes, with the dots named", async () => {

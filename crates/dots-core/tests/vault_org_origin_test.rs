@@ -673,3 +673,148 @@ async fn a_typed_secret_that_dots_moves_leaves_a_fixed_url_unpinned() {
         .unwrap()
         .is_empty());
 }
+
+// The Library's Check
+
+/// The refusal of a Check whose origin is not confirmed in the scope named `scope_name`.
+fn check_refused(origin: &str, scope_name: &str) -> String {
+    format!("gh: {origin} is not a confirmed origin in {scope_name}")
+}
+
+/// A Check sends a scope's values only to an origin confirmed for that scope: otherwise it is
+/// refused with the server, the origin and the scope's name, nothing is sent, and the catalog
+/// is not touched. `origin_to_confirm` says what to ask, and nothing once it is confirmed.
+#[tokio::test]
+async fn a_check_is_refused_until_the_origin_is_confirmed_in_its_scope() {
+    let served = Served::start().await;
+    let (h, _vault, lib, item) = setup(&served, org_entries(&served, "localhost")).await;
+    let (here, in_org) = (served.origin("127.0.0.1"), served.origin("localhost"));
+    for (scope, origin, name) in [
+        (DotScope::Personal, &here, "Personal"),
+        (acme(), &in_org, "Acme Engineering"),
+    ] {
+        match lib.check(&item.id, &scope).await {
+            Err(Error::Conflict(why)) => assert_eq!(why, check_refused(origin, name)),
+            other => panic!("expected Conflict, got {other:?}"),
+        }
+        match lib.check_and_accept(&item.id, &scope, "fp").await {
+            Err(Error::Conflict(why)) => assert_eq!(why, check_refused(origin, name)),
+            other => panic!("expected Conflict, got {other:?}"),
+        }
+        let asked = lib.origin_to_confirm(&item.id, &scope).await.unwrap();
+        assert_eq!(
+            asked,
+            Some(dots_core::library_service::OriginToConfirm {
+                server: "gh".into(),
+                origin: HttpOrigin {
+                    ascii: origin.clone(),
+                    unicode: None
+                },
+                variables: vec!["API_KEY".into(), "MCP_HOST".into()],
+                scope_name: name.into(),
+            })
+        );
+    }
+    assert!(served.auths().is_empty(), "nothing was sent");
+    for scope in [PERSONAL_SCOPE, ACME] {
+        let catalog = h.store.get_catalog(&item.id, scope).await.unwrap();
+        assert_eq!(catalog.checked_at, None, "{scope}: {catalog:?}");
+    }
+
+    // Confirmed in Personal: Personal's Check sends Personal's token; the org's is still
+    // refused.
+    lib.add_confirmed_origin(&item.id, &DotScope::Personal, &here)
+        .await
+        .unwrap();
+    assert_eq!(
+        lib.origin_to_confirm(&item.id, &DotScope::Personal)
+            .await
+            .unwrap(),
+        None
+    );
+    let checked = lib.check(&item.id, &DotScope::Personal).await.unwrap();
+    assert!(checked.checked_at.is_some(), "{checked:?}");
+    assert!(matches!(
+        lib.check(&item.id, &acme()).await,
+        Err(Error::Conflict(_))
+    ));
+    lib.add_confirmed_origin(&item.id, &acme(), &in_org)
+        .await
+        .unwrap();
+    let fp = lib
+        .check(&item.id, &acme())
+        .await
+        .unwrap()
+        .seen_fingerprint
+        .unwrap();
+    let accepted = lib.check_and_accept(&item.id, &acme(), &fp).await.unwrap();
+    assert_eq!(accepted.accepted_fingerprint.as_deref(), Some(fp.as_str()));
+    assert_eq!(
+        served.auths(),
+        [
+            format!("Bearer {PERSONAL_KEY}"),
+            format!("Bearer {ORG_KEY}"),
+            format!("Bearer {ORG_KEY}")
+        ]
+    );
+    // The listing shows what is confirmed, by scope.
+    let entry = lib
+        .list()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|e| e.item.id == item.id)
+        .unwrap();
+    assert_eq!(
+        entry.confirmed_origins,
+        origins(&[
+            (ACME, &[in_org.as_str()]),
+            (PERSONAL_SCOPE, &[here.as_str()])
+        ])
+    );
+}
+
+/// With no origin to confirm, `origin_to_confirm` says why, naming the scope and the variable,
+/// and the Check fails on the variable as before, sending nothing.
+#[tokio::test]
+async fn an_origin_that_cannot_be_computed_is_not_asked_about() {
+    let served = Served::start().await;
+    let (h, _vault, lib, item) = setup(&served, json!({"API_KEY": ORG_KEY})).await;
+    match lib.origin_to_confirm(&item.id, &acme()).await {
+        Err(Error::Invalid(why)) => assert_eq!(
+            why,
+            "gh: there is no origin to confirm in Acme Engineering: MCP_HOST: not in Acme \
+             Engineering"
+        ),
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    let catalog = lib.check(&item.id, &acme()).await.unwrap();
+    assert_eq!(
+        catalog.error.as_deref(),
+        Some("MCP_HOST: not in Acme Engineering")
+    );
+    assert!(served.auths().is_empty());
+    // A server that is not pinned has nothing to confirm.
+    let plain = LibraryConfig::McpServer(served.http.config(BTreeMap::new()));
+    let plain = h
+        .store
+        .add_library_item("plain", &plain, None)
+        .await
+        .unwrap();
+    assert!(matches!(
+        lib.origin_to_confirm(&plain.id, &DotScope::Personal).await,
+        Err(Error::Invalid(_))
+    ));
+}
+
+/// `add` with a fingerprint to accept checks the server first. A pinned one whose origin is not
+/// confirmed is saved unchecked, and nothing is sent.
+#[tokio::test]
+async fn adding_a_pinned_server_with_accept_sends_nothing_to_an_unconfirmed_origin() {
+    let served = Served::start().await;
+    let (h, _vault, lib, _) = setup(&served, org_entries(&served, "localhost")).await;
+    let item = lib.add("gh2", pinned_config(), Some("fp")).await.unwrap();
+    let catalog = h.store.get_catalog(&item.id, PERSONAL_SCOPE).await.unwrap();
+    assert_eq!(catalog.checked_at, None, "{catalog:?}");
+    assert!(served.auths().is_empty());
+}
