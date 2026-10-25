@@ -1164,12 +1164,14 @@ async fn entries_show_plain_values_only_and_lock_as_personal_says() {
                 kind: EntryKind::Secret,
                 value: None,
                 locked: true,
+                used_by: vec![],
             },
             OrgEntry {
                 name: "LOG_LEVEL".into(),
                 kind: EntryKind::Plain,
                 value: Some(LOG_LEVEL.into()),
                 locked: true,
+                used_by: vec![],
             },
         ]
     );

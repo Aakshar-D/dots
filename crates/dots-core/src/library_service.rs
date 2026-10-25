@@ -68,6 +68,11 @@ pub struct ScopedCatalog {
     /// `personal` or an org id.
     pub scope: String,
     pub catalog: McpCatalog,
+    /// A catalog row exists in that scope: a Check or a run made it. A scope with none reads
+    /// `unchecked`, as a row that was reset does.
+    pub stored: bool,
+    /// The dots of that scope that use the server, whose runs read this catalog.
+    pub used_by: Vec<DotRef>,
 }
 
 /// What the person is asked before an http MCP server may send a scope's values to the origin
@@ -501,14 +506,12 @@ impl LibraryService {
         .await?;
         let mut entries = Vec::new();
         for (item, (read, dots_folder)) in items.iter().zip(read) {
-            let used_by = self
-                .store
-                .dots_using(item)
-                .await?
-                .into_iter()
+            let users = self.store.dots_using(item).await?;
+            let used_by = users
+                .iter()
                 .map(|d| DotRef {
-                    id: d.id,
-                    name: d.spec.name,
+                    id: d.id.clone(),
+                    name: d.spec.name.clone(),
                 })
                 .collect();
             let mut entry = LibraryEntry {
@@ -529,11 +532,21 @@ impl LibraryService {
             if let LibraryConfig::McpServer(config) = &item.config {
                 entry.catalogs = scopes
                     .iter()
-                    .map(|scope| ScopedCatalog {
-                        catalog: catalogs
-                            .remove(&(item.id.clone(), scope.clone()))
-                            .unwrap_or_else(|| McpCatalog::unchecked(&item.id)),
-                        scope: scope.clone(),
+                    .map(|scope| {
+                        let stored = catalogs.remove(&(item.id.clone(), scope.clone()));
+                        ScopedCatalog {
+                            stored: stored.is_some(),
+                            catalog: stored.unwrap_or_else(|| McpCatalog::unchecked(&item.id)),
+                            used_by: users
+                                .iter()
+                                .filter(|d| DotScope::of(d).key() == scope)
+                                .map(|d| DotRef {
+                                    id: d.id.clone(),
+                                    name: d.spec.name.clone(),
+                                })
+                                .collect(),
+                            scope: scope.clone(),
+                        }
                     })
                     .collect();
                 entry.confirmed_origins = self.store.confirmed_origins(&item.id).await?;

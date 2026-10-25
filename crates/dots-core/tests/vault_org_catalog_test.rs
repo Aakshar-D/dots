@@ -15,7 +15,7 @@ use common::fake_openbao::Failure;
 use common::orgs::{OrgsHarness, ACME, TOKEN};
 use dots_core::events::new_bus;
 use dots_core::library::{
-    CatalogStatus, LibraryConfig, LibraryItem, McpCatalog, Uses, PERSONAL_SCOPE,
+    CatalogStatus, LibraryConfig, LibraryItem, McpCatalog, McpServerConfig, Uses, PERSONAL_SCOPE,
 };
 use dots_core::library_service::LibraryService;
 use dots_core::mcp::fingerprint;
@@ -689,6 +689,19 @@ async fn the_library_and_the_inbox_show_each_scopes_catalog() {
         ]
     );
     assert_eq!(listed.catalog, Some(McpCatalog::unchecked(&item.id)));
+    // Adding the server stored its Personal row; the org has none yet.
+    let stored = |e: &dots_core::library_service::LibraryEntry| -> Vec<bool> {
+        e.catalogs.iter().map(|c| c.stored).collect()
+    };
+    assert_eq!(stored(&listed), [true, false]);
+    // Each scope names its own dots: those whose runs read that catalog.
+    let named = |dot: &dots_core::model::Dot| DotRef {
+        id: dot.id.clone(),
+        name: dot.spec.name.clone(),
+    };
+    assert_eq!(listed.used_by, [named(&mine), named(&theirs)]);
+    assert_eq!(listed.catalogs[0].used_by, [named(&mine)]);
+    assert_eq!(listed.catalogs[1].used_by, [named(&theirs)]);
     assert!(listed.confirmed_origins.is_empty());
     assert!(lib.tools_changed().await.unwrap().is_empty());
 
@@ -717,6 +730,7 @@ async fn the_library_and_the_inbox_show_each_scopes_catalog() {
         ]
     );
     assert_eq!(listed.catalog.as_ref(), Some(&listed.catalogs[0].catalog));
+    assert_eq!(stored(&listed), [true, true]);
 
     h.orgs.remove(ACME).await.unwrap();
     let listed = entry(lib.list().await.unwrap());
@@ -727,5 +741,45 @@ async fn the_library_and_the_inbox_show_each_scopes_catalog() {
     assert_eq!(
         lib.tools_changed().await.unwrap(),
         [changed(PERSONAL_SCOPE, &mine)]
+    );
+}
+
+/// A scope whose catalog row a change of the server reset to `unchecked` still has it stored,
+/// unlike a scope that was never checked or run in: the Library keeps showing that org.
+#[tokio::test]
+async fn a_catalog_reset_by_a_change_is_still_stored_in_its_scope() {
+    let (h, _vault, lib) = setup(json!({"personal": "deny"})).await;
+    let (_fake, item) = server_reading(&h.store, "sf", "API_KEY").await;
+    let acme_catalog = |entries: Vec<dots_core::library_service::LibraryEntry>| {
+        let entry = entries.into_iter().find(|e| e.item.id == item.id).unwrap();
+        let scoped = entry
+            .catalogs
+            .into_iter()
+            .find(|c| c.scope == ACME)
+            .unwrap();
+        (scoped.catalog.status, scoped.stored)
+    };
+    assert_eq!(
+        acme_catalog(lib.list().await.unwrap()),
+        (CatalogStatus::Unchecked, false)
+    );
+
+    lib.check(&item.id, &acme()).await.unwrap();
+    assert_eq!(
+        acme_catalog(lib.list().await.unwrap()),
+        (CatalogStatus::Changed, true)
+    );
+
+    let mut config = h.store.get_library_item(&item.id).await.unwrap().config;
+    if let LibraryConfig::McpServer(McpServerConfig::Stdio { args, .. }) = &mut config {
+        args.push("--changed".into());
+    }
+    h.store
+        .update_library_item(&item.id, &config)
+        .await
+        .unwrap();
+    assert_eq!(
+        acme_catalog(lib.list().await.unwrap()),
+        (CatalogStatus::Unchecked, true)
     );
 }

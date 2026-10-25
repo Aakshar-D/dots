@@ -25,8 +25,8 @@ import { invalidate, keys } from "@/lib/query";
 
 /// How an org's status reads: plain while it works; the attention colour while it works from
 /// its saved copy, has refused a new policy, or waits for the admin; the error colour once its
-/// values are gone.
-const TONE: Record<OrgSummary["status"], string> = {
+/// values are gone. The Library's Env tab shows the status in the same tone.
+export const ORG_TONE: Record<OrgSummary["status"], string> = {
   connected: "",
   offline: "text-needs",
   policy_invalid: "text-needs",
@@ -72,7 +72,7 @@ function OrgRow({ org, onUpdate }: { org: OrgSummary; onUpdate: () => void }) {
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex min-w-0 flex-1 flex-col">
           <span className="font-medium">{org.name}</span>
-          <p className={`text-xs first-letter:uppercase ${TONE[org.status]}`}>
+          <p className={`text-xs first-letter:uppercase ${ORG_TONE[org.status]}`}>
             {org.status_text}
           </p>
         </div>

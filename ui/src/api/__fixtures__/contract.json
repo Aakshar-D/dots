@@ -704,14 +704,32 @@
       "kind": "secret",
       "name": "GITHUB_TOKEN",
       "updated_at": "2026-10-09T12:00:00.000Z",
-      "value": null
+      "used_by": [
+        {
+          "id": "01J0DOT",
+          "name": "nightly-tests"
+        }
+      ],
+      "value": null,
+      "value_missing": false
     },
     {
       "created_at": "2026-10-09T12:00:00.000Z",
       "kind": "plain",
       "name": "LOG_LEVEL",
       "updated_at": "2026-10-09T12:00:00.000Z",
-      "value": "debug"
+      "used_by": [],
+      "value": "debug",
+      "value_missing": false
+    },
+    {
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "kind": "secret",
+      "name": "NPM_TOKEN",
+      "updated_at": "2026-10-09T12:00:00.000Z",
+      "used_by": [],
+      "value": null,
+      "value_missing": true
     }
   ],
   "EnvVariable": [
@@ -1004,7 +1022,14 @@
             "server_id": "01J0SRV",
             "status": "changed"
           },
-          "scope": "personal"
+          "scope": "personal",
+          "stored": true,
+          "used_by": [
+            {
+              "id": "01J0DOT",
+              "name": "nightly-tests"
+            }
+          ]
         },
         {
           "catalog": {
@@ -1051,7 +1076,9 @@
             "server_id": "01J0SRV",
             "status": "accepted"
           },
-          "scope": "acme-eng"
+          "scope": "acme-eng",
+          "stored": true,
+          "used_by": []
         }
       ],
       "config": {
@@ -1179,7 +1206,14 @@
             "server_id": "01J0SRV",
             "status": "accepted"
           },
-          "scope": "personal"
+          "scope": "personal",
+          "stored": true,
+          "used_by": [
+            {
+              "id": "01J0DOT",
+              "name": "nightly-tests"
+            }
+          ]
         }
       ],
       "config": {
@@ -1660,12 +1694,19 @@
       "kind": "plain",
       "locked": true,
       "name": "API_BASE_URL",
+      "used_by": [
+        {
+          "id": "01J0DOTACME",
+          "name": "acme-release"
+        }
+      ],
       "value": "https://api.acme.example"
     },
     {
       "kind": "secret",
       "locked": false,
       "name": "GITHUB_TOKEN",
+      "used_by": [],
       "value": null
     }
   ],

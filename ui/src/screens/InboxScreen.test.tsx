@@ -827,7 +827,13 @@ describe("the Inbox, tools changed", () => {
 
   it("accepts a Personal row's list with the arguments it always had", async () => {
     inbox({ approvals: [], review_runs: [], attention: [], tools_changed: [changed!] });
-    backend.on("library_list", () => sample.library);
+    // Personal's catalogs only: the Library shows an org's line otherwise.
+    backend.on("library_list", () =>
+      sample.library.map((e) => ({
+        ...e,
+        catalogs: e.catalogs.filter((c) => c.scope === "personal"),
+      })),
+    );
     backend.on("library_accept", () => sample.library[0].catalog);
     const { user } = renderApp("/inbox");
     await user.click(await screen.findByRole("link", { name: "Review" }));
@@ -851,7 +857,13 @@ describe("the Inbox, tools changed", () => {
     const acmeCatalog = { ...github.catalog!, seen_fingerprint: "fp-acme" };
     const personalOnly = github.catalogs.filter((c) => c.scope === "personal");
     backend.on("library_list", () => [
-      { ...github, catalogs: [...personalOnly, { scope: "acme-eng", catalog: acmeCatalog }] },
+      {
+        ...github,
+        catalogs: [
+          ...personalOnly,
+          { scope: "acme-eng", catalog: acmeCatalog, stored: true, used_by: [] },
+        ],
+      },
       ...rest,
     ]);
     backend.on("library_accept", () => acmeCatalog);

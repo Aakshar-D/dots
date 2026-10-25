@@ -511,7 +511,14 @@ export const PluginDetail = z.strictObject({
   warnings: z.array(z.string()),
 });
 // An MCP server's catalog in one scope: `personal` or an org id.
-export const ScopedCatalog = z.strictObject({ scope: z.string(), catalog: McpCatalog });
+export const ScopedCatalog = z.strictObject({
+  scope: z.string(),
+  catalog: McpCatalog,
+  // A catalog row exists in that scope (a Check or a run made it); none reads `unchecked`.
+  stored: z.boolean(),
+  // The dots of that scope that use the server, whose runs read this catalog.
+  used_by: z.array(DotRef),
+});
 export const LibraryEntry = libraryItemOf({
   // The dots that use it; for a plugin's server, the dots that use the plugin.
   used_by: z.array(DotRef),
@@ -584,6 +591,10 @@ export const EnvEntry = z.strictObject({
   value: nullable(z.string()),
   created_at: z.string(),
   updated_at: z.string(),
+  // The Personal dots that grant this name.
+  used_by: z.array(DotRef),
+  // A secret whose value is gone from Credential Manager: it must be set again.
+  value_missing: z.boolean(),
 });
 
 // Orgs (env vault spec §6 and §9). No answer ever holds a secret value or sign-in details.
@@ -658,6 +669,8 @@ export const OrgEntry = z.strictObject({
   value: nullable(z.string()),
   // A Personal entry of the same name cannot take its place.
   locked: z.boolean(),
+  // The org's dots that grant this name.
+  used_by: z.array(DotRef),
 });
 
 export const FileDiff = z.strictObject({

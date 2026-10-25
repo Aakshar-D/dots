@@ -44,8 +44,8 @@ export function LibraryScreen() {
   const reviewing = servers.find(
     (s) => s.id === reviewId && catalogIn(s, reviewScope)?.status === "changed",
   );
-  const review = (id: string | null) =>
-    setParams(id ? { review: id } : {}, { replace: true });
+  const review = (id: string | null, scope?: string) =>
+    setParams(id ? { review: id, ...(scope ? { scope } : {}) } : {}, { replace: true });
 
   return (
     <Page title="Library">

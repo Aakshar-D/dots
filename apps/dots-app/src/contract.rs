@@ -205,10 +205,15 @@ fn library_entries() -> Vec<LibraryEntry> {
                 ScopedCatalog {
                     scope: "personal".into(),
                     catalog: catalog(CatalogStatus::Changed),
+                    stored: true,
+                    used_by: users.clone(),
                 },
+                // Checked in the org, and used by none of its dots.
                 ScopedCatalog {
                     scope: "acme-eng".into(),
                     catalog: catalog(CatalogStatus::Accepted),
+                    stored: true,
+                    used_by: vec![],
                 },
             ],
             missing_variables: vec!["GITHUB_TOKEN".into()],
@@ -219,6 +224,8 @@ fn library_entries() -> Vec<LibraryEntry> {
             catalogs: vec![ScopedCatalog {
                 scope: "personal".into(),
                 catalog: catalog(CatalogStatus::Accepted),
+                stored: true,
+                used_by: users.clone(),
             }],
             // The origins confirmed for an http server, by scope.
             confirmed_origins: [
@@ -856,6 +863,11 @@ pub fn samples() -> Value {
             value: None,
             created_at: TS.into(),
             updated_at: TS.into(),
+            used_by: vec![DotRef {
+                id: "01J0DOT".into(),
+                name: "nightly-tests".into(),
+            }],
+            value_missing: false,
         },
         EnvEntry {
             name: "LOG_LEVEL".into(),
@@ -863,6 +875,18 @@ pub fn samples() -> Value {
             value: Some("debug".into()),
             created_at: TS.into(),
             updated_at: TS.into(),
+            used_by: vec![],
+            value_missing: false,
+        },
+        // A secret whose credential was deleted outside Dots.
+        EnvEntry {
+            name: "NPM_TOKEN".into(),
+            kind: EntryKind::Secret,
+            value: None,
+            created_at: TS.into(),
+            updated_at: TS.into(),
+            used_by: vec![],
+            value_missing: true,
         },
     ]);
     samples["Enums"]["EntryKind"] = to(EntryKind::ALL);
@@ -880,12 +904,17 @@ pub fn samples() -> Value {
             kind: EntryKind::Plain,
             value: Some("https://api.acme.example".into()),
             locked: true,
+            used_by: vec![DotRef {
+                id: "01J0DOTACME".into(),
+                name: "acme-release".into(),
+            }],
         },
         OrgEntry {
             name: "GITHUB_TOKEN".into(),
             kind: EntryKind::Secret,
             value: None,
             locked: false,
+            used_by: vec![],
         },
     ]);
     samples["SourceCreds"] = source_creds();

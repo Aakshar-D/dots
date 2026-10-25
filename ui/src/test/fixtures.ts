@@ -43,6 +43,12 @@ export const sample = {
   joinPreviews: T.JoinPreview.array().parse(contract.JoinPreview),
   /// github's changed list in Personal, then in Acme Engineering.
   toolsChanged: T.ToolsChanged.array().parse(contract.ToolsChanged),
+  /// GITHUB_TOKEN (a secret nightly-tests is granted), LOG_LEVEL (plain, not granted), and
+  /// NPM_TOKEN, a secret whose value is gone.
+  env: T.EnvEntry.array().parse(contract.EnvEntry),
+  /// Acme Engineering's API_BASE_URL (plain, locked, granted to acme-release) and GITHUB_TOKEN
+  /// (a secret, not locked, not granted).
+  orgEntries: T.OrgEntry.array().parse(contract.OrgEntry),
 };
 
 /// What `new_dot_spec` answers: the core's defaults with nothing filled in.

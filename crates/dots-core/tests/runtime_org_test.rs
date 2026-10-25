@@ -12,11 +12,13 @@ use std::time::Duration as StdDuration;
 use chrono::Duration;
 use common::clock::FakeClock;
 use common::fake_openbao::FakeOpenBao;
-use common::orgs::{at, code, keys, openbao, policy, sign, token, ACME, ACME_NAME, START, TOKEN};
+use common::orgs::{
+    at, code, keys, openbao, policy, sign, sops_at, token, ACME, ACME_NAME, START, TOKEN,
+};
 use common::{spec, wait_status};
 use dots_core::events::RuntimeEvent;
 use dots_core::model::{DotSpec, RunStatus, WorkspaceMode};
-use dots_core::vault::org::Orgs;
+use dots_core::vault::org::{OrgStatus, Orgs};
 use dots_core::vault::{Grants, MemorySecrets};
 use dots_core::{Config, Error, Runtime};
 use minisign::KeyPair;
@@ -296,5 +298,36 @@ async fn a_restarted_runtime_fetches_each_org_and_starts_its_timer() {
     })
     .await;
     assert_eq!(timers.running(), [ACME]);
+    t.rt.shutdown();
+}
+
+/// A SOPS join that waits for the admin to add this PC's key joins nothing: the runtime starts
+/// no timer for it and says nothing of it.
+#[tokio::test]
+async fn a_join_that_waits_for_the_admin_starts_no_timer_and_sends_no_event() {
+    let t = Rt::start().await;
+    let timers = t.rt.org_timers();
+    eventually("the start-up fetch", || !timers.starting_up()).await;
+    let mut events = t.rt.subscribe();
+    // A file encrypted to other keys: this PC's new key is not among its recipients.
+    let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/sops/good.enc.json")
+        .display()
+        .to_string();
+    let sops_code = code(ACME, ACME_NAME, sops_at(&file), &t.keys);
+    t.rt.orgs().sops_identity(ACME).await.unwrap();
+
+    let waiting = t.rt.join_org(&sops_code, None).await.unwrap();
+    assert_eq!(waiting.status, OrgStatus::Pending);
+    assert!(timers.running().is_empty());
+    tokio::time::sleep(StdDuration::from_millis(200)).await;
+    assert!(events.try_recv().is_err(), "no event for a join that waits");
+    assert!(!t.orgs().is_joined(ACME));
+
+    // Its refresh time comes and goes with nothing fetched or said.
+    t.clock.set(at(START) + Duration::minutes(15));
+    tokio::time::sleep(StdDuration::from_millis(200)).await;
+    assert!(timers.running().is_empty());
+    assert!(events.try_recv().is_err());
     t.rt.shutdown();
 }

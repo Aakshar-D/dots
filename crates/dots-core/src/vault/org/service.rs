@@ -32,10 +32,13 @@ use super::signed::verify_policy;
 use super::sources::sops::{self, NOT_A_RECIPIENT};
 use super::sources::{source_for, Fetched, Source, SourceCreds, SourceError};
 use super::SourceSettings;
+use crate::model::DotRef;
 use crate::scheduler::Clock;
 use crate::store::Store;
 use crate::vault::entries::EntryKind;
+use crate::vault::grants::dots_granting;
 use crate::vault::redact;
+use crate::vault::resolve::DotScope;
 use crate::vault::secrets::SecretStore;
 use crate::{Error, Result};
 
@@ -134,6 +137,8 @@ pub struct OrgEntry {
     /// A Personal entry of the same name can't take its place: the policy's `personal` is
     /// `deny`, or `fallback` (the org has the name).
     pub locked: bool,
+    /// The org's dots that grant this name (the Env tab's "used by").
+    pub used_by: Vec<DotRef>,
 }
 
 /// An org's answer for one name, for the resolver. Every case but `Value` and `NotDefined` is
@@ -626,15 +631,23 @@ impl Orgs {
         self.summary_now(org_id)
     }
 
-    /// The org's entries for the Env tab: plain ones with their values, secrets by name only.
-    /// Empty while the org gives no values.
+    /// The org's entries for the Env tab: plain ones with their values, secrets by name only,
+    /// each with the org's dots that grant it. Empty while the org gives no values.
     pub async fn entries(&self, org_id: &str) -> Result<Vec<OrgEntry>> {
         self.expire_if_due(org_id).await;
-        match self.read().get(org_id) {
-            Some(Slot::Joined(joined)) => Ok(joined.listing()),
-            Some(Slot::Damaged { .. }) => Ok(Vec::new()),
-            Some(Slot::Pending(_)) | None => Err(not_joined(org_id)),
+        let mut entries = match self.read().get(org_id) {
+            Some(Slot::Joined(joined)) => joined.listing(),
+            Some(Slot::Damaged { .. }) => Vec::new(),
+            Some(Slot::Pending(_)) | None => return Err(not_joined(org_id)),
+        };
+        if !entries.is_empty() {
+            let dots = self.inner.store.list_dots().await?;
+            let scope = DotScope::Org(org_id.to_string());
+            for entry in &mut entries {
+                entry.used_by = dots_granting(&dots, &scope, &entry.name);
+            }
         }
+        Ok(entries)
     }
 
     /// Whether `org_id` is joined on this PC: its row was loaded, even a damaged one. A SOPS
@@ -1118,6 +1131,7 @@ impl Joined {
                     },
                     value: plain.then(|| value.to_string()),
                     locked,
+                    used_by: Vec::new(),
                 }
             })
             .collect();

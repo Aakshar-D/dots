@@ -3,17 +3,25 @@ import { Plus, Server } from "lucide-react";
 import { useState } from "react";
 
 import { commands } from "@/api/commands";
-import type { CatalogStatus } from "@/api/types";
+import type { CatalogStatus, ScopedCatalog } from "@/api/types";
 import { EmptyState } from "@/components/EmptyState";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { notifyError } from "@/lib/notify";
 import { invalidate, keys } from "@/lib/query";
 
-import { ItemRow, RemoveButton, UsedBy, type PluginEntry, type ServerEntry } from "./parts";
+import {
+  ItemRow,
+  PERSONAL,
+  RemoveButton,
+  UsedBy,
+  useScopes,
+  type PluginEntry,
+  type ServerEntry,
+} from "./parts";
 import { ServerForm } from "./ServerForm";
 
-const STATUS: Record<CatalogStatus, { label: string; className: string }> = {
+export const STATUS: Record<CatalogStatus, { label: string; className: string }> = {
   accepted: { label: "Accepted", className: "border-success/40 bg-transparent text-success" },
   changed: { label: "Tools changed", className: "border-needs-border bg-transparent text-needs" },
   unreachable: {
@@ -28,11 +36,47 @@ export function serverStatus(entry: ServerEntry): CatalogStatus {
   return entry.catalog?.status ?? "unchecked";
 }
 
+/// The orgs a server is listed in beside Personal: each one where its catalog is stored (a
+/// Check or a run made it, even one reset to unchecked since) or whose dots use the server. An
+/// org that has neither has nothing to show.
+function orgCatalogs(entry: ServerEntry): ScopedCatalog[] {
+  return entry.catalogs.filter((c) => c.scope !== PERSONAL && (c.stored || c.used_by.length > 0));
+}
+
+/// A server's catalog in one org: its status, its Review, its error and the org's dots that use
+/// it. Keyed by (server, scope).
+function ScopeLine(props: { entry: ServerEntry; scoped: ScopedCatalog; onReview: () => void }) {
+  const { entry, scoped } = props;
+  const { nameOf } = useScopes();
+  const name = nameOf(scoped.scope);
+  const { label, className } = STATUS[scoped.catalog.status];
+  return (
+    <li
+      aria-label={`${entry.name} in ${name}`}
+      className="flex flex-wrap items-center gap-2 rounded-md border px-2 py-1.5"
+    >
+      <span className="text-xs">{`In ${name}`}</span>
+      <Badge variant="secondary" className={className}>
+        {label}
+      </Badge>
+      {scoped.used_by.length > 0 && <UsedBy dots={scoped.used_by} />}
+      {scoped.catalog.status === "unreachable" && scoped.catalog.error && (
+        <span className="text-xs text-destructive">{scoped.catalog.error}</span>
+      )}
+      {scoped.catalog.status === "changed" && (
+        <Button size="sm" className="ml-auto" onClick={props.onReview}>
+          Review
+        </Button>
+      )}
+    </li>
+  );
+}
+
 function ServerRow(props: {
   entry: ServerEntry;
   owner: string | undefined;
   onEdit: () => void;
-  onReview: () => void;
+  onReview: (scope?: string) => void;
 }) {
   const { entry } = props;
   const qc = useQueryClient();
@@ -50,7 +94,7 @@ function ServerRow(props: {
       actions={
         <>
           {status === "changed" && (
-            <Button size="sm" onClick={props.onReview}>
+            <Button size="sm" onClick={() => props.onReview()}>
               Review
             </Button>
           )}
@@ -62,7 +106,12 @@ function ServerRow(props: {
           >
             {check.isPending ? "Checking…" : "Check now"}
           </Button>
-          {!props.owner && (
+          {props.owner ? (
+            // Read-only, for Check as and the origins.
+            <Button size="sm" variant="outline" onClick={props.onEdit}>
+              Details
+            </Button>
+          ) : (
             <>
               <Button size="sm" variant="outline" onClick={props.onEdit}>
                 Edit
@@ -95,15 +144,29 @@ function ServerRow(props: {
         <span className="text-xs text-muted-foreground">{`Comes with plugin ${props.owner}`}</span>
       ) : null}
       <UsedBy dots={entry.used_by} />
+      {orgCatalogs(entry).length > 0 && (
+        <ul className="flex flex-col gap-1.5">
+          {orgCatalogs(entry).map((scoped) => (
+            <ScopeLine
+              key={`${entry.id}/${scoped.scope}`}
+              entry={entry}
+              scoped={scoped}
+              onReview={() => props.onReview(scoped.scope)}
+            />
+          ))}
+        </ul>
+      )}
     </ItemRow>
   );
 }
 
-/// The MCP servers tab. `plugins` names the plugin a server comes with.
+/// The MCP servers tab: each server once, with its Personal state, then its state in each org
+/// it is checked or used in. `plugins` names the plugin a server comes with. `onReview` opens
+/// the review of a changed list in `scope`, an org id; left out, Personal's.
 export function McpServersTab(props: {
   entries: ServerEntry[];
   plugins: PluginEntry[];
-  onReview: (id: string) => void;
+  onReview: (id: string, scope?: string) => void;
 }) {
   const [form, setForm] = useState<"new" | ServerEntry | null>(null);
   const owners = new Map(props.plugins.map((p) => [p.id, p.name]));
@@ -128,7 +191,7 @@ export function McpServersTab(props: {
               entry={entry}
               owner={entry.owner_id ? (owners.get(entry.owner_id) ?? "a plugin") : undefined}
               onEdit={() => setForm(entry)}
-              onReview={() => props.onReview(entry.id)}
+              onReview={(scope) => props.onReview(entry.id, scope)}
             />
           ))}
         </ul>
