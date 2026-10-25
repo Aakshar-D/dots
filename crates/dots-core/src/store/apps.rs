@@ -222,6 +222,16 @@ impl Store {
         rows.iter().map(topic_from_row).collect()
     }
 
+    /// The topics nothing works or waits in (not `TOPIC_BUSY`): what `Apps::catch_up` looks at.
+    pub async fn idle_app_topics(&self) -> Result<Vec<AppTopic>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {TOPIC_COLUMNS} FROM app_topics t WHERE NOT {TOPIC_BUSY}"
+        ))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(topic_from_row).collect()
+    }
+
     /// How many topics the app `app_id` started at `since` or later.
     pub async fn app_starts_since(&self, app_id: &str, since: &str) -> Result<u32> {
         let n: i64 = sqlx::query_scalar(

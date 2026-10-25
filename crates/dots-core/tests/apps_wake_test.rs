@@ -287,3 +287,62 @@ async fn the_switch_the_dots_the_pause_and_the_hour_bound_the_starts() {
     assert_eq!(runs_of(&builder).await, 20);
     t.rt.shutdown();
 }
+
+#[tokio::test]
+async fn a_review_of_an_ended_topic_tells_the_app_nothing_again() {
+    let t = start().await;
+    let llm = Llm::start(vec![
+        llm_call("q1", "ask", json!({"question": "Which sink?"})),
+        llm_text("Asked."),
+        llm_text("Both sinks done."),
+    ])
+    .await;
+    let builder = dot(&t, &llm.endpoint(), "builder").await;
+    let id = assign(&t, &builder, "sinks").await.unwrap();
+    wait_status(t.rt.store(), &id, RunStatus::Succeeded, 30).await;
+    let question =
+        t.rt.checkins()
+            .list_messages(Some(&builder.id))
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|m| m.run_id.as_deref() == Some(id.as_str()))
+            .unwrap();
+    let answer = t.rt.reply(&question.id, "Both.").await.unwrap();
+    let answer = wait_status(t.rt.store(), &answer.id, RunStatus::Succeeded, 30).await;
+    assert_eq!(ends_when(&t, 1).await.len(), 1);
+    // A review sends every run of the thread anew: none of them is news to the app.
+    t.rt.mark_reviewed(&answer.id).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let heard = ends(&t).await;
+    assert_eq!(heard.len(), 1, "{heard:?}");
+    assert_eq!(heard[0]["run_id"], answer.id);
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn an_app_cannot_start_a_dot_that_is_off() {
+    let t = start().await;
+    let llm = Llm::start(vec![]).await;
+    let builder = dot(&t, &llm.endpoint(), "builder").await;
+    t.rt.set_dot_enabled(&builder.id, false).await.unwrap();
+    let refused = assign(&t, &builder, "dishes").await.unwrap_err();
+    assert!(
+        refused.contains(&format!("no dot {} uses this app", builder.id)),
+        "{refused}"
+    );
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn catching_up_tells_no_end_twice() {
+    let t = start().await;
+    let llm = Llm::start(vec![llm_text("Dishes done.")]).await;
+    let builder = dot(&t, &llm.endpoint(), "builder").await;
+    let id = assign(&t, &builder, "dishes").await.unwrap();
+    wait_status(t.rt.store(), &id, RunStatus::Succeeded, 30).await;
+    assert_eq!(ends_when(&t, 1).await.len(), 1);
+    t.rt.apps().catch_up().await.unwrap();
+    assert_eq!(ends(&t).await.len(), 1);
+    t.rt.shutdown();
+}

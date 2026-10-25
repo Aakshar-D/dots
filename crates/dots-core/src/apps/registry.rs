@@ -225,6 +225,9 @@ impl Apps {
             .await
             .map_err(|e| e.to_string())?
             .into_iter()
+            // A dot the person switched off is neither listed nor woken (spec section 7), as a
+            // webhook or a follow-up does not run it.
+            .filter(|d| d.spec.enabled)
             .map(|d| DotRef {
                 id: d.id,
                 name: d.spec.name,
