@@ -445,6 +445,85 @@ export const AppConfig = z.strictObject({
   // A bundled app the person changed: Dots no longer updates it.
   changed: z.boolean(),
 });
+// What an app may reach outside its data; v1 has one grant.
+export const Permission = z.enum(["start_dots"]);
+// Who called an app: the person on its screen, a dot in a run, or Dots itself (`on_run_end`).
+export const AppActor = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("person") }),
+  z.strictObject({ kind: z.literal("dot"), id: z.string(), name: z.string(), run_id: z.string() }),
+  z.strictObject({ kind: z.literal("dots") }),
+]);
+// One file of an app: its text when it is UTF-8, else its bytes in base64.
+export const AppFile = z.strictObject({
+  path: z.string(),
+  text: nullable(z.string()),
+  base64: nullable(z.string()),
+});
+// A logged call: every call of a tool that writes, and of `on_run_end`.
+export const AppCall = z.strictObject({
+  id: z.string(),
+  app_id: z.string(),
+  tool: z.string(),
+  actor: AppActor,
+  run_id: nullable(z.string()),
+  input: z.unknown(),
+  // The call's `ctx.now`.
+  now: z.string(),
+  // The ids `ctx.id()` gave.
+  ids: z.array(z.string()),
+  result: z.unknown(),
+  error: nullable(z.string()),
+  changes: z.number(),
+  took_ms: z.number(),
+  at: z.string(),
+});
+export const TestResult = z.strictObject({
+  file: z.string(),
+  // Empty for a file that could not run.
+  name: z.string(),
+  passed: z.boolean(),
+  error: nullable(z.string()),
+});
+export const ProposalStatus = z.enum(["pending", "added", "changes_asked", "discarded"]);
+// What a review card's summary shows.
+export const ProposalSummary = z.strictObject({
+  title: z.string(),
+  description: z.string(),
+  tools: z.array(z.strictObject({ name: z.string(), description: z.string(), writes: z.boolean() })),
+  // Empty for "Nothing".
+  permissions: z.array(Permission),
+  tests: z.strictObject({ results: z.array(TestResult) }),
+  files: z.number(),
+  bytes: z.number(),
+  // The migrations accepting it runs: every one for a new app, the new ones for a change.
+  migrations: z.array(z.string()),
+  // The version a change was checked against; null for a new app.
+  update_from: nullable(z.number()),
+});
+// An app a dot proposed, and what the person decided (app library spec section 6.2).
+export const AppProposal = z.strictObject({
+  id: z.string(),
+  dot_id: z.string(),
+  run_id: z.string(),
+  root_run_id: z.string(),
+  app_name: z.string(),
+  app_id: nullable(z.string()),
+  base_version: nullable(z.number()),
+  note: z.string(),
+  summary: ProposalSummary,
+  status: ProposalStatus,
+  answer: nullable(z.string()),
+  answer_run_id: nullable(z.string()),
+  created_at: z.string(),
+  decided_at: nullable(z.string()),
+});
+// The person's answer on a review card.
+export const ProposalDecision = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("add") }),
+  z.strictObject({ kind: z.literal("ask_for_changes"), text: z.string() }),
+  z.strictObject({ kind: z.literal("discard") }),
+]);
+
 // An item's config with its kind: what `library_add` and `library_update` take.
 export const LibraryConfig = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("mcp_server"), config: McpServerConfig }),
@@ -699,6 +778,19 @@ export type SkillConfig = z.infer<typeof SkillConfig>;
 export type PluginConfig = z.infer<typeof PluginConfig>;
 export type LibraryConfig = z.infer<typeof LibraryConfig>;
 export type LibraryItem = z.infer<typeof LibraryItem>;
+// An installed app as the Apps screen lists it.
+export const AppRow = z.strictObject({
+  item: LibraryItem,
+  // The names of the dots that use it.
+  dots: z.array(z.string()),
+  // Why its code cannot be read: it is left out of runs until it can.
+  error: nullable(z.string()),
+});
+export type AppRow = z.infer<typeof AppRow>;
+export type AppFile = z.infer<typeof AppFile>;
+export type AppCall = z.infer<typeof AppCall>;
+export type AppProposal = z.infer<typeof AppProposal>;
+export type ProposalDecision = z.infer<typeof ProposalDecision>;
 export type McpTool = z.infer<typeof McpTool>;
 export type McpCatalog = z.infer<typeof McpCatalog>;
 export type SkillDetail = z.infer<typeof SkillDetail>;

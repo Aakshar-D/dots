@@ -9,6 +9,9 @@
 //! a native dialog from Rust before it is run or stored (`confirm.rs`). The UI is first-party
 //! code under a `default-src 'self'` policy.
 
+use dots_core::apps::propose::{AppProposal, Decision};
+use dots_core::apps::screen::{AppFile, AppRow};
+use dots_core::apps::AppCall;
 use dots_core::browser::BrowserStatus;
 use dots_core::kit::InstalledPlugin;
 use dots_core::library::{LibraryConfig, LibraryItem, McpCatalog, McpServerConfig};
@@ -728,4 +731,104 @@ pub async fn memory_update(
 #[tauri::command]
 pub async fn memory_delete(state: State<'_, AppState>, id: String) -> Res<()> {
     Ok(state.rt()?.memory_delete(&id).await?)
+}
+
+/// The installed apps, with the dots that use each and the error that keeps one out of runs
+/// (app library spec section 10).
+#[tauri::command]
+pub async fn apps_list(state: State<'_, AppState>) -> Res<Vec<AppRow>> {
+    Ok(state.rt()?.apps().rows().await?)
+}
+
+/// A call from the app's screen, as the person (app library spec section 5).
+#[tauri::command]
+pub async fn app_call(
+    state: State<'_, AppState>,
+    name: String,
+    tool: String,
+    input: serde_json::Value,
+) -> Res<serde_json::Value> {
+    Ok(state.rt()?.apps().screen_call(&name, &tool, input).await?)
+}
+
+/// The active version's files: the frame's `ui/` and the Code view.
+#[tauri::command]
+pub async fn app_files(state: State<'_, AppState>, name: String) -> Res<Vec<AppFile>> {
+    Ok(state.rt()?.apps().files(&name).await?)
+}
+
+/// The newest logged calls of the app (at most 500), newest first.
+#[tauri::command]
+pub async fn app_calls(state: State<'_, AppState>, name: String, limit: u32) -> Res<Vec<AppCall>> {
+    Ok(state.rt()?.apps().calls(&name, limit).await?)
+}
+
+#[tauri::command]
+pub async fn app_set_every_dot(
+    state: State<'_, AppState>,
+    name: String,
+    on: bool,
+) -> Res<LibraryItem> {
+    Ok(state.rt()?.apps().set_every_dot(&name, on).await?)
+}
+
+/// "Can start dots" (app library spec section 7): refused for an app that does not ask for it.
+#[tauri::command]
+pub async fn app_set_can_start_dots(
+    state: State<'_, AppState>,
+    name: String,
+    on: bool,
+) -> Res<LibraryItem> {
+    Ok(state.rt()?.apps().set_can_start_dots(&name, on).await?)
+}
+
+/// Back to the version before, offered while the update after it ran no migrations.
+#[tauri::command]
+pub async fn app_roll_back(state: State<'_, AppState>, name: String) -> Res<LibraryItem> {
+    Ok(state.rt()?.apps().roll_back(&name).await?)
+}
+
+/// Removes the app's code, and its data too with `delete_data`; `confirm` is the person's yes
+/// to "dots use it".
+#[tauri::command]
+pub async fn app_remove(
+    state: State<'_, AppState>,
+    name: String,
+    confirm: bool,
+    delete_data: bool,
+) -> Res<()> {
+    Ok(state
+        .rt()?
+        .apps()
+        .remove(&name, confirm, delete_data)
+        .await?)
+}
+
+/// The apps dots proposed, of one dot or of all, newest first (app library spec section 6.2).
+#[tauri::command]
+pub async fn app_proposals_list(
+    state: State<'_, AppState>,
+    dot_id: Option<String>,
+) -> Res<Vec<AppProposal>> {
+    Ok(state
+        .rt()?
+        .store()
+        .list_app_proposals(dot_id.as_deref())
+        .await?)
+}
+
+/// A waiting proposal's files, for the card's Code tab.
+#[tauri::command]
+pub async fn app_proposal_files(state: State<'_, AppState>, id: String) -> Res<Vec<AppFile>> {
+    Ok(state.rt()?.apps().proposal_files(&id).await?)
+}
+
+/// The person's answer on the card: add (or update), ask for changes, or discard.
+#[tauri::command]
+pub async fn app_proposal_decide(
+    state: State<'_, AppState>,
+    id: String,
+    decision: Decision,
+) -> Res<AppProposal> {
+    Ok(state.rt()?.decide_app_proposal(&id, decision).await?.0)
 }

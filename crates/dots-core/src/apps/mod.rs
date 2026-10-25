@@ -9,6 +9,7 @@ pub mod propose;
 mod registry;
 pub mod run;
 pub mod schema;
+pub mod screen;
 pub mod source;
 pub mod tests;
 pub mod wake;

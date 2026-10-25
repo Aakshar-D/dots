@@ -44,6 +44,10 @@ const schemas: Record<SampleName, { parse: (v: unknown) => unknown }> = {
   FollowUp: T.FollowUp.array(),
   Memory: T.Memory.array(),
   BrowserStatus: T.BrowserStatus,
+  AppRow: T.AppRow.array(),
+  AppFile: T.AppFile.array(),
+  AppCall: T.AppCall.array(),
+  AppProposal: T.AppProposal.array(),
 };
 
 // The UI parses live data with these schemas, so it must know every variant the core has.
@@ -65,6 +69,7 @@ const enums: Record<keyof typeof fixture.Enums, { options: readonly string[] }> 
   FollowUpStatus: T.FollowUpStatus,
   EntryKind: T.EntryKind,
   MemorySource: T.MemorySource,
+  ProposalStatus: T.ProposalStatus,
 };
 
 describe("Rust/TypeScript contract", () => {
