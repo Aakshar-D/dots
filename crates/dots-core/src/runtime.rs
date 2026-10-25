@@ -162,6 +162,12 @@ impl Runtime {
             }
             Err(e) => tracing::error!("moving stored secret values to the vault failed: {e}"),
         }
+        // Migration 0013, after the move, which may have put a variable in a server's URL: each
+        // http server whose URL reads one keeps working where it reaches now (env vault spec
+        // §8). A failure is logged, and the next start tries again.
+        if let Err(e) = store.finish_0013(&vault).await {
+            tracing::error!("confirming the origins of the MCP servers failed: {e}");
+        }
         let bus = new_bus();
         let hub = Arc::new(ApprovalHub::new(store.clone(), bus.clone()));
         // Check-ins and follow-ups (check-ins spec): made before the engines, which offer the

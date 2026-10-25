@@ -1,4 +1,7 @@
-//! The Library's items and MCP catalogs (MCP/skills spec sections 2 and 3).
+//! The Library's items and MCP catalogs (MCP/skills spec sections 2 and 3), and the origins
+//! confirmed for http servers whose URL reads a variable (env vault spec §8).
+
+use std::collections::BTreeMap;
 
 use serde_json::{json, Value};
 use sqlx::sqlite::SqliteRow;
@@ -67,6 +70,66 @@ fn check_scope(scope: &str) -> Result<()> {
     Err(Error::Invalid(format!(
         "{scope:?} is not a scope: it is \"personal\" or an org id"
     )))
+}
+
+/// Refuses text that is not an origin as `http_origin` gives it: `scheme://host[:port]`, lower
+/// case, the host in ASCII, no default port, no path.
+fn check_origin(origin: &str) -> Result<()> {
+    let canonical = reqwest::Url::parse(origin)
+        .ok()
+        .filter(|u| matches!(u.scheme(), "http" | "https") && u.host_str().is_some())
+        .map(|u| u.origin().ascii_serialization());
+    if canonical.as_deref() == Some(origin) {
+        return Ok(());
+    }
+    Err(Error::Invalid(format!(
+        "{origin:?} is not an origin: it reads like https://host or https://host:8443"
+    )))
+}
+
+/// Adds `origin` to the list of `scope` in a server's `confirmed_origins`, unless it is there:
+/// one statement, so two confirmations at once both land. `path` is the scope's JSON path.
+fn add_origin<'q>(
+    server_id: &'q str,
+    path: &'q str,
+    origin: &'q str,
+) -> sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>> {
+    sqlx::query(
+        "UPDATE library_items SET confirmed_origins = json_set(\
+         COALESCE(confirmed_origins, '{}'), ?, json_insert(COALESCE(\
+         json_extract(confirmed_origins, ?), '[]'), '$[#]', ?)) \
+         WHERE id = ? AND kind = 'mcp_server' AND NOT EXISTS (SELECT 1 FROM \
+         json_each(COALESCE(confirmed_origins, '{}'), ?) WHERE value = ?)",
+    )
+    .bind(path)
+    .bind(path)
+    .bind(origin)
+    .bind(server_id)
+    .bind(path)
+    .bind(origin)
+}
+
+/// The JSON path of a scope's list in `confirmed_origins`. A checked scope holds only `a-z`,
+/// `0-9` and `-`, so it needs no escaping.
+fn scope_path(scope: &str) -> String {
+    format!("$.\"{scope}\"")
+}
+
+/// Records, inside the caller's transaction, `origin` as confirmed in `scope` for `server_id`
+/// (`finish_0013`).
+pub(super) async fn add_origin_in(
+    conn: &mut SqliteConnection,
+    server_id: &str,
+    scope: &str,
+    origin: &str,
+) -> Result<()> {
+    check_scope(scope)?;
+    check_origin(origin)?;
+    let path = scope_path(scope);
+    add_origin(server_id, &path, origin)
+        .execute(&mut *conn)
+        .await?;
+    Ok(())
 }
 
 fn no_catalog(server_id: &str, scope: &str) -> Error {
@@ -209,7 +272,9 @@ impl Store {
     /// the server's catalog in every scope to `unchecked` (spec section 6): what it lists must
     /// be checked and accepted again. The accepted list stays for that review, except when an
     /// http server moves to another origin: then nothing accepted for the old host carries
-    /// over.
+    /// over. Its confirmed origins stay as they are: each names where the person allowed the
+    /// values to go, and a run compares the origin it reaches with them, so a change that keeps
+    /// the origin in a scope keeps it confirmed there, and one that moves it does not match.
     pub async fn update_library_item(
         &self,
         id: &str,
@@ -263,7 +328,8 @@ impl Store {
         self.get_library_item(id).await
     }
 
-    /// Deletes an item, a plugin's MCP servers and their catalogs in every scope, and removes its
+    /// Deletes an item, a plugin's MCP servers and their catalogs and confirmed origins in every
+    /// scope, and removes its
     /// name from the `uses` of the dots that name it, in one transaction. Asking first is the
     /// caller's (`dots_using`).
     pub async fn remove_library_item(&self, id: &str) -> Result<()> {
@@ -479,6 +545,57 @@ impl Store {
         .await?
         .ok_or_else(|| no_catalog(server_id, scope))?;
         catalog_from_row(&row)
+    }
+
+    /// The origins confirmed for the http MCP server `server_id`, by scope (env vault spec §8):
+    /// each list in the order the origins were confirmed. Empty when none is. `NotFound` when
+    /// there is no such MCP server.
+    pub async fn confirmed_origins(
+        &self,
+        server_id: &str,
+    ) -> Result<BTreeMap<String, Vec<String>>> {
+        let stored: Option<Option<String>> = sqlx::query_scalar(
+            "SELECT confirmed_origins FROM library_items WHERE id = ? AND kind = 'mcp_server'",
+        )
+        .bind(server_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        match stored {
+            None => Err(Error::NotFound(format!("MCP server {server_id}"))),
+            Some(None) => Ok(BTreeMap::new()),
+            Some(Some(text)) => Ok(serde_json::from_str(&text)?),
+        }
+    }
+
+    /// Records `origin` (`HttpOrigin::ascii`) as confirmed for the http MCP server `server_id`
+    /// in `scope` (`personal`, or an org id): a run of a dot in that scope then starts the
+    /// server when its URL reaches that origin. Recording it again changes nothing. Refused for
+    /// a server whose URL reads no variable: its one origin needs no confirmation.
+    pub async fn add_confirmed_origin(
+        &self,
+        server_id: &str,
+        scope: &str,
+        origin: &str,
+    ) -> Result<()> {
+        check_scope(scope)?;
+        check_origin(origin)?;
+        let item = self.get_library_item(server_id).await.ok();
+        let config = match item.as_ref().map(|i| &i.config) {
+            Some(LibraryConfig::McpServer(config)) => config,
+            _ => return Err(Error::NotFound(format!("MCP server {server_id}"))),
+        };
+        if !config.origin_pinned() {
+            return Err(Error::Invalid(format!(
+                "the MCP server {:?} has no variable in its http URL: its origin needs no \
+                 confirmation",
+                item.map(|i| i.name).unwrap_or_default()
+            )));
+        }
+        let path = scope_path(scope);
+        add_origin(server_id, &path, origin)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 
     /// The MCP servers that belong to the plugin `owner_id`, by name.

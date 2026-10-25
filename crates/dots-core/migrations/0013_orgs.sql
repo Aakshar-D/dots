@@ -42,3 +42,18 @@ SELECT server_id, 'personal', accepted_fingerprint, accepted_tools, seen_fingerp
     seen_tools, status, checked_at, error FROM mcp_catalogs;
 DROP TABLE mcp_catalogs;
 ALTER TABLE mcp_catalogs_0013 RENAME TO mcp_catalogs;
+
+-- The origins each http MCP server that sends variables was confirmed for, per scope (section
+-- 8): `{"personal": ["https://api.github.com"], "acme-eng": [...]}`, each origin in ASCII as the
+-- HTTP client reaches it. NULL is none. At spawn the server starts only when the origin its URL
+-- reaches with the run's values is listed for the dot's scope. Deleting the server deletes them.
+ALTER TABLE library_items ADD COLUMN confirmed_origins TEXT;
+
+-- Each MCP server made before this keeps working where it sends its variables now: when the
+-- runtime starts, `finish_0013` (`store/upgrade.rs`) records each one's origin, computed with
+-- Personal's values, as confirmed in Personal. The rows wait here, and the table is dropped
+-- once they are done.
+CREATE TABLE upgrade_0013 (
+    server_id TEXT PRIMARY KEY REFERENCES library_items(id) ON DELETE CASCADE
+);
+INSERT INTO upgrade_0013 (server_id) SELECT id FROM library_items WHERE kind = 'mcp_server';

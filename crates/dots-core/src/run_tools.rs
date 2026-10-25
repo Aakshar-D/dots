@@ -25,7 +25,10 @@ use zeroize::Zeroizing;
 use crate::context::{self, Collection};
 use crate::events::Bus;
 use crate::kit::{self, KitPlugin, KitSkill, PluginInfo, RunKit, SkillInfo};
-use crate::library::{CatalogStatus, LibraryConfig, LibraryItem, LibraryKind, McpCatalog, Uses};
+use crate::library::{
+    http_origin, CatalogStatus, LibraryConfig, LibraryItem, LibraryKind, McpCatalog,
+    McpServerConfig, Uses,
+};
 use crate::library_service::{record_check, refresh_plugin, skill_problem};
 use crate::mcp::{McpError, McpSession, McpTool, SessionOptions};
 use crate::policy::McpTrust;
@@ -330,7 +333,10 @@ impl RunTools {
             .filter(|s| s.owner_id.as_ref().is_none_or(|o| !left_out.contains(o)))
             .collect();
         // A server whose variables do not all resolve for it is left out, with the reason; its
-        // catalog is the Library's and does not record a dot's grants. A server that starts
+        // catalog is the Library's and does not record a dot's grants. So is an http server whose
+        // URL reaches an origin not confirmed for the dot's scope (env vault spec §8),
+        // computed with the values this run resolved: an org's value, or a Personal one that
+        // changed, may move the host. A server that starts
         // records what it lists in its catalog of the dot's scope, Personal's or the org's: a
         // server never seen in that scope is held, as an unchecked one is.
         let mut items = Vec::new();
@@ -343,7 +349,10 @@ impl RunTools {
                 .resolve(scope, grants, &consumer, &config.variables())
                 .await?
             {
-                Ok(env) => items.push((item, env)),
+                Ok(env) => match unconfirmed_origin(store, &item, config, &env, scope).await? {
+                    Some(notice) => notices.push(notice),
+                    None => items.push((item, env)),
+                },
                 Err(missing) => notices.push(missing.text(dot_name)),
             }
         }
@@ -619,6 +628,40 @@ async fn shell_env(
 /// Opens a session with each server at once, its `${VAR}` read from its resolved values, and
 /// lists its tools; one outcome per server, in order. `None` when `cancel` fires first: what
 /// was opened is closed.
+/// Why the server `item` does not start in `scope` with the values `env`: its origin is pinned
+/// (`McpServerConfig::origin_pinned`) and the origin its URL reaches with them is not confirmed
+/// there, or it reaches none. `None` when it may start. The notice names the server and the
+/// origin in ASCII, never a value.
+async fn unconfirmed_origin(
+    store: &Store,
+    item: &LibraryItem,
+    config: &McpServerConfig,
+    env: &Resolved,
+    scope: &DotScope,
+) -> Result<Option<String>> {
+    let McpServerConfig::Http { url, .. } = config else {
+        return Ok(None);
+    };
+    if !config.origin_pinned() {
+        return Ok(None);
+    }
+    let origin = match http_origin(url, &|k| env.get(k)) {
+        Ok(origin) => origin.ascii,
+        Err(why) => return Ok(Some(format!("{}: could not start: {why}", item.name))),
+    };
+    let confirmed = store.confirmed_origins(&item.id).await?;
+    if confirmed
+        .get(scope.key())
+        .is_some_and(|list| list.contains(&origin))
+    {
+        return Ok(None);
+    }
+    Ok(Some(format!(
+        "{}: {origin} is not a confirmed origin; open the server in the Library to confirm it",
+        item.name
+    )))
+}
+
 async fn open_sessions(
     items: &[(LibraryItem, Resolved)],
     workspace: &Path,

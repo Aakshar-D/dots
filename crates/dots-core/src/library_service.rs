@@ -14,8 +14,8 @@ use crate::context::{self, Document};
 use crate::events::{Bus, RuntimeEvent};
 use crate::kit::{self, InstalledPlugin, PluginInfo};
 use crate::library::{
-    check_name, LibraryConfig, LibraryItem, LibraryKind, McpCatalog, McpServerConfig, PluginConfig,
-    SkillConfig, PERSONAL_SCOPE,
+    check_name, http_origin, url_variables, HttpOrigin, LibraryConfig, LibraryItem, LibraryKind,
+    McpCatalog, McpServerConfig, PluginConfig, SkillConfig, PERSONAL_SCOPE,
 };
 use crate::mcp::{fingerprint, McpError, McpSession, McpTool, SessionOptions};
 use crate::model::{DotRef, ToolsChanged};
@@ -674,6 +674,56 @@ impl LibraryService {
     pub async fn check(&self, id: &str, scope: &DotScope) -> Result<McpCatalog> {
         let item = self.server(id).await?;
         self.check_item(&item, scope).await
+    }
+
+    /// The origin the http MCP server `id` reaches in `scope`, as a run in that scope would
+    /// compute it: its URL's variables resolved there as if all were granted (`check_values`),
+    /// as the Check does. `Ok(Err(why))` when there is none: a variable that does not resolve
+    /// (its check text), or a URL that is no http one. The text never holds a value. A server
+    /// whose URL reads no variable is `Invalid`: its origin is not pinned.
+    pub async fn origin_in(
+        &self,
+        id: &str,
+        scope: &DotScope,
+    ) -> Result<std::result::Result<HttpOrigin, String>> {
+        let item = self.server(id).await?;
+        let url = match &item.config {
+            LibraryConfig::McpServer(c @ McpServerConfig::Http { url, .. })
+                if c.origin_pinned() =>
+            {
+                url
+            }
+            _ => {
+                return Err(Error::Invalid(format!(
+                    "the MCP server {:?} has no variable in its http URL: its origin is not \
+                     pinned",
+                    item.name
+                )))
+            }
+        };
+        let consumer = Consumer::Mcp(item.name.clone());
+        let names = url_variables(url);
+        match self.vault.check_values(scope, &consumer, &names).await? {
+            Ok(values) => Ok(http_origin(url, &|k| values.get(k))),
+            Err(missing) => Ok(Err(missing.check_text())),
+        }
+    }
+
+    /// Records `origin` as confirmed for the http MCP server `id` in `scope`
+    /// (`Store::add_confirmed_origin`), after the person allowed it: the server form's
+    /// confirmation, or the one for an org's scope. A run of a dot in that scope then starts the
+    /// server where its URL reaches that origin.
+    pub async fn add_confirmed_origin(
+        &self,
+        id: &str,
+        scope: &DotScope,
+        origin: &str,
+    ) -> Result<()> {
+        self.store
+            .add_confirmed_origin(id, scope.key(), origin)
+            .await?;
+        publish(&self.bus, id);
+        Ok(())
     }
 
     /// Accepts the list last seen in `scope` of the MCP server `id`, if its fingerprint is
