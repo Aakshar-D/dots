@@ -168,9 +168,11 @@ impl Runtime {
             }
             Err(e) => tracing::error!("moving stored secret values to the vault failed: {e}"),
         }
-        // Migration 0013, after the move, which may have put a variable in a server's URL: each
-        // http server whose URL reads one keeps working where it reaches now (env vault spec
-        // §8). A failure is logged, and the next start tries again.
+        // Migration 0013, here and not in `Store::open`: it needs the vault open, since an
+        // origin is computed from Personal's values, which live in the secret store. (The move
+        // above rewrites only env and header values, never a URL.) Each http server whose URL
+        // reads a variable keeps working where it reaches now (env vault spec §8). A failure is
+        // logged, and the next start tries again.
         if let Err(e) = store.finish_0013(&vault).await {
             tracing::error!("confirming the origins of the MCP servers failed: {e}");
         }
