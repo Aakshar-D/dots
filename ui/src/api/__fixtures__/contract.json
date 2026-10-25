@@ -72,6 +72,7 @@
     "dot_overview",
     "list_dots",
     "get_dot",
+    "dot_variables",
     "create_dot",
     "update_dot",
     "delete_dot",
@@ -652,6 +653,18 @@
       "cancelled",
       "skipped"
     ],
+    "GrantState": [
+      "ok",
+      "not_granted",
+      "not_defined",
+      "denied_by_policy",
+      "shell_secrets_forbidden",
+      "org_offline",
+      "org_expired",
+      "org_revoked",
+      "policy_invalid",
+      "org_removed"
+    ],
     "LibraryKind": [
       "mcp_server",
       "skill",
@@ -665,6 +678,11 @@
     "MessageKind": [
       "note",
       "question"
+    ],
+    "PersonalMode": [
+      "deny",
+      "fallback",
+      "override"
     ],
     "Preset": [
       "read-only",
@@ -692,6 +710,10 @@
       "chat",
       "resume",
       "follow_up"
+    ],
+    "ValueSource": [
+      "org",
+      "personal"
     ],
     "WorkspaceMode": [
       "worktree",
@@ -766,6 +788,56 @@
       "note": "Check the build.",
       "retry_at": null,
       "status": "fired"
+    }
+  ],
+  "GrantStatus": [
+    {
+      "consumer": "mcp:github",
+      "name": "GITHUB_TOKEN",
+      "secret": true,
+      "source": "org",
+      "status": "ok",
+      "text": null
+    },
+    {
+      "consumer": "shell",
+      "name": "LOG_LEVEL",
+      "secret": false,
+      "source": "personal",
+      "status": "ok",
+      "text": null
+    },
+    {
+      "consumer": "mcp:github",
+      "name": "API_KEY",
+      "secret": false,
+      "source": null,
+      "status": "not_defined",
+      "text": "API_KEY: not in Acme Engineering (dot 'acme-release', mcp:github)"
+    },
+    {
+      "consumer": "mcp:github",
+      "name": "PROD_DB_URL",
+      "secret": false,
+      "source": null,
+      "status": "denied_by_policy",
+      "text": "PROD_DB_URL: Acme Engineering's policy does not allow it (dot 'acme-release')"
+    },
+    {
+      "consumer": "shell",
+      "name": "GITHUB_TOKEN",
+      "secret": true,
+      "source": "org",
+      "status": "shell_secrets_forbidden",
+      "text": "GITHUB_TOKEN: Acme Engineering does not allow secrets in the shell (dot 'acme-release')"
+    },
+    {
+      "consumer": "shell",
+      "name": "LOG_LEVEL",
+      "secret": false,
+      "source": null,
+      "status": "org_removed",
+      "text": "dot 'acme-release': its org 'acme-eng' was removed"
     }
   ],
   "Inbox": {
@@ -1718,13 +1790,23 @@
       "key_fingerprint": "6E2F0A1B9C3D4E5F",
       "last_fetch_at": "2026-10-09T12:00:00.000Z",
       "name": "Acme Engineering",
+      "personal_mode": "fallback",
       "policy_summary": [
         "org: acme-eng",
         "personal: fallback (a personal entry is used when the org has none)"
       ],
+      "shell_secrets": false,
       "source_kind": "openbao",
       "status": "connected",
-      "status_text": "connected"
+      "status_text": "connected",
+      "use_rules": {
+        "allow": [
+          "*"
+        ],
+        "deny": [
+          "PROD_*"
+        ]
+      }
     },
     {
       "address": "https://bao.acme.internal",
@@ -1733,14 +1815,24 @@
       "key_fingerprint": "6E2F0A1B9C3D4E5F",
       "last_fetch_at": "2026-10-09T12:00:00.000Z",
       "name": "Acme Engineering",
+      "personal_mode": "fallback",
       "policy_summary": [
         "org: acme-eng",
         "personal: fallback (a personal entry is used when the org has none)"
       ],
+      "shell_secrets": false,
       "source_kind": "openbao",
       "status": "offline",
       "status_text": "offline (connection refused); using the saved copy until 2026-10-10T12:00:00.000Z",
-      "until": "2026-10-10T12:00:00.000Z"
+      "until": "2026-10-10T12:00:00.000Z",
+      "use_rules": {
+        "allow": [
+          "*"
+        ],
+        "deny": [
+          "PROD_*"
+        ]
+      }
     },
     {
       "address": "https://bao.acme.internal",
@@ -1749,14 +1841,24 @@
       "key_fingerprint": "6E2F0A1B9C3D4E5F",
       "last_fetch_at": "2026-10-09T12:00:00.000Z",
       "name": "Acme Engineering",
+      "personal_mode": "fallback",
       "policy_summary": [
         "org: acme-eng",
         "personal: fallback (a personal entry is used when the org has none)"
       ],
+      "shell_secrets": false,
       "source_kind": "openbao",
       "status": "offline",
       "status_text": "offline, with no saved copy",
-      "until": null
+      "until": null,
+      "use_rules": {
+        "allow": [
+          "*"
+        ],
+        "deny": [
+          "PROD_*"
+        ]
+      }
     },
     {
       "address": "https://bao.acme.internal",
@@ -1765,13 +1867,23 @@
       "key_fingerprint": "6E2F0A1B9C3D4E5F",
       "last_fetch_at": "2026-10-09T12:00:00.000Z",
       "name": "Acme Engineering",
+      "personal_mode": "fallback",
       "policy_summary": [
         "org: acme-eng",
         "personal: fallback (a personal entry is used when the org has none)"
       ],
+      "shell_secrets": false,
       "source_kind": "openbao",
       "status": "revoked",
-      "status_text": "access revoked (permission denied)"
+      "status_text": "access revoked (permission denied)",
+      "use_rules": {
+        "allow": [
+          "*"
+        ],
+        "deny": [
+          "PROD_*"
+        ]
+      }
     },
     {
       "address": "https://bao.acme.internal",
@@ -1781,13 +1893,23 @@
       "key_fingerprint": "6E2F0A1B9C3D4E5F",
       "last_fetch_at": "2026-10-09T12:00:00.000Z",
       "name": "Acme Engineering",
+      "personal_mode": "fallback",
       "policy_summary": [
         "org: acme-eng",
         "personal: fallback (a personal entry is used when the org has none)"
       ],
+      "shell_secrets": false,
       "source_kind": "openbao",
       "status": "policy_invalid",
-      "status_text": "policy invalid: signature does not match; using the saved copy until 2026-10-10T12:00:00.000Z"
+      "status_text": "policy invalid: signature does not match; using the saved copy until 2026-10-10T12:00:00.000Z",
+      "use_rules": {
+        "allow": [
+          "*"
+        ],
+        "deny": [
+          "PROD_*"
+        ]
+      }
     },
     {
       "address": "https://bao.acme.internal",
@@ -1796,13 +1918,23 @@
       "key_fingerprint": "6E2F0A1B9C3D4E5F",
       "last_fetch_at": "2026-10-09T12:00:00.000Z",
       "name": "Acme Engineering",
+      "personal_mode": "fallback",
       "policy_summary": [
         "org: acme-eng",
         "personal: fallback (a personal entry is used when the org has none)"
       ],
+      "shell_secrets": false,
       "source_kind": "openbao",
       "status": "expired",
-      "status_text": "secrets expired offline; reconnect to refresh"
+      "status_text": "secrets expired offline; reconnect to refresh",
+      "use_rules": {
+        "allow": [
+          "*"
+        ],
+        "deny": [
+          "PROD_*"
+        ]
+      }
     },
     {
       "address": "C:/Users/u/Sync/acme/design.enc.json",
@@ -1811,10 +1943,13 @@
       "key_fingerprint": "6E2F0A1B9C3D4E5F",
       "last_fetch_at": null,
       "name": "Design",
+      "personal_mode": null,
       "policy_summary": [],
+      "shell_secrets": false,
       "source_kind": "sops",
       "status": "pending",
-      "status_text": "waiting for the admin to add this PC's key"
+      "status_text": "waiting for the admin to add this PC's key",
+      "use_rules": null
     }
   ],
   "RuleCandidate": [

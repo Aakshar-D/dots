@@ -19,7 +19,7 @@ use common::{spec, wait_status};
 use dots_core::events::RuntimeEvent;
 use dots_core::model::{DotSpec, RunStatus, WorkspaceMode};
 use dots_core::vault::org::{OrgStatus, Orgs};
-use dots_core::vault::{Grants, MemorySecrets};
+use dots_core::vault::{GrantState, Grants, MemorySecrets, ValueSource};
 use dots_core::{Config, Error, Runtime};
 use minisign::KeyPair;
 use serde_json::{json, Value};
@@ -330,4 +330,42 @@ async fn a_join_that_waits_for_the_admin_starts_no_timer_and_sends_no_event() {
     assert!(timers.running().is_empty());
     assert!(events.try_recv().is_err());
     t.rt.shutdown();
+}
+
+/// The dot editor's status of a dot's variables (`dot_variables`) is read without the fetch a
+/// run's start makes of a stale org, and holds no value. A dot whose org was removed gets the
+/// reason for each grant.
+#[tokio::test]
+async fn the_status_of_a_dots_variables_fetches_nothing_and_holds_no_value() {
+    let t = Rt::start().await;
+    t.join_acme().await;
+    let dot =
+        t.rt.create_dot(t.triage(), Some(ACME.into()))
+            .await
+            .unwrap();
+    assert_eq!(t.env_reads(), 1);
+    // Stale: a run's start would fetch now.
+    t.clock
+        .set(at(START) + Duration::minutes(15) + Duration::seconds(1));
+    let statuses = t.rt.dot_variables(&dot.id).await.unwrap();
+    assert_eq!(statuses.len(), 1);
+    assert_eq!(
+        (statuses[0].consumer.as_str(), statuses[0].name.as_str()),
+        ("shell", "DOTS_TEST_LEVEL")
+    );
+    assert_eq!(statuses[0].status, GrantState::Ok);
+    assert_eq!(statuses[0].source, Some(ValueSource::Org));
+    assert!(!statuses[0].secret);
+    let json = serde_json::to_string(&statuses).unwrap();
+    assert!(!json.contains(LEVEL_ONE), "{json}");
+    assert_eq!(t.env_reads(), 1, "no fetch");
+
+    t.orgs().remove(ACME).await.unwrap();
+    let statuses = t.rt.dot_variables(&dot.id).await.unwrap();
+    assert_eq!(statuses[0].status, GrantState::OrgRemoved);
+    assert_eq!(statuses[0].text.as_deref(), Some(REMOVED));
+    assert!(matches!(
+        t.rt.dot_variables("01J0NODOT").await,
+        Err(Error::NotFound(_))
+    ));
 }

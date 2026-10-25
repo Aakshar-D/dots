@@ -25,7 +25,7 @@ use dots_core::vault::org::{
     key_fingerprint, parse_policy, read_offline, verify_policy, write_offline, BaoAuth,
     InfisicalSettings, OfflineCopy, OpenBaoSettings, OrgEntry, OrgLookup, OrgRow, OrgStatus,
     OrgSummary, OrgView, Orgs, PersonalMode, Protector, SourceCreds, SourceError, SourceSettings,
-    TestProtector, RETRY_AFTER,
+    TestProtector, UseRules, RETRY_AFTER,
 };
 use dots_core::vault::{redact, Grants};
 use dots_core::{Error, Result};
@@ -160,6 +160,10 @@ async fn a_join_fetches_verifies_and_keeps_the_row_the_copy_and_the_creds() {
         last_fetch_at: Some(start_plus(0)),
         copy_until: Some(start_plus(24)),
         policy_summary: accepted.summary(),
+        personal_mode: Some(PersonalMode::Fallback),
+        shell_secrets: false,
+        // No `use` in the policy: its default, every name.
+        use_rules: Some(UseRules::default()),
     };
     assert_eq!(summary, expected);
     assert_eq!(h.orgs.summaries().await, vec![expected.clone()]);

@@ -35,7 +35,7 @@ use crate::vault::org::{
     http_client, os_protector, JoinPreview, OrgStatus, OrgSummary, OrgTimers, Orgs, SourceCreds,
     OFFLINE_DIR,
 };
-use crate::vault::{os_secrets, MemorySecrets, SecretStore, Vault};
+use crate::vault::{os_secrets, GrantStatus, MemorySecrets, SecretStore, Vault};
 use crate::workspace::{Prepared, WorkspaceManager};
 use crate::{Error, Result};
 
@@ -460,6 +460,14 @@ impl Runtime {
 
     pub async fn get_dot(&self, id: &str) -> Result<Dot> {
         self.store.get_dot(id).await
+    }
+
+    /// The status of each of the dot's stored grants in its scope (the editor's Variables),
+    /// as a run's start would resolve them now, without its fetch of a stale org. It holds no
+    /// value (`Vault::grant_statuses`).
+    pub async fn dot_variables(&self, id: &str) -> Result<Vec<GrantStatus>> {
+        let dot = self.store.get_dot(id).await?;
+        self.vault.grant_statuses(&dot).await
     }
 
     /// Every dot with its active and last run, where its schedule stands, and what it has for

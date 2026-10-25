@@ -94,14 +94,7 @@ impl Vault {
     /// secret is marked missing and the failure is logged.
     async fn listed(&self, mut entries: Vec<EnvEntry>) -> Result<Vec<EnvEntry>> {
         let dots = self.store.list_dots().await?;
-        let stored: Option<HashSet<String>> = match self.secrets.keys(PERSONAL_PREFIX) {
-            // Credential Manager compares targets without regard to case.
-            Ok(keys) => Some(keys.iter().map(|k| k.to_ascii_lowercase()).collect()),
-            Err(e) => {
-                tracing::warn!("could not list the personal secrets: {e}");
-                None
-            }
-        };
+        let stored = self.personal_secret_keys();
         for entry in &mut entries {
             entry.used_by = dots_granting(&dots, &DotScope::Personal, &entry.name);
             entry.value_missing = entry.kind == EntryKind::Secret
@@ -110,6 +103,19 @@ impl Vault {
                 });
         }
         Ok(entries)
+    }
+
+    /// The secret store's keys of the Personal secrets, lower-cased, so whether a secret has
+    /// a value is known without reading it. `None`, logged, when they can't be listed.
+    pub(crate) fn personal_secret_keys(&self) -> Option<HashSet<String>> {
+        match self.secrets.keys(PERSONAL_PREFIX) {
+            // Credential Manager compares targets without regard to case.
+            Ok(keys) => Some(keys.iter().map(|k| k.to_ascii_lowercase()).collect()),
+            Err(e) => {
+                tracing::warn!("could not list the personal secrets: {e}");
+                None
+            }
+        }
     }
 
     /// One entry, as `list` gives it.
@@ -187,6 +193,29 @@ impl Vault {
                 Ok(value.map(|value| (value, true)))
             }
         }
+    }
+
+    /// Whether Personal has a value for `name`, in any case, and whether it is a secret,
+    /// without reading a secret's value: a secret has one when its key is among `stored`
+    /// (`personal_secret_keys`), or always when those could not be listed. `None` when it has
+    /// none, as `personal_entry` would say.
+    pub(crate) async fn personal_kind(
+        &self,
+        name: &str,
+        stored: Option<&HashSet<String>>,
+    ) -> Result<Option<bool>> {
+        let Some(entry) = self.store.find_env_entry(name).await? else {
+            return Ok(None);
+        };
+        Ok(match entry.kind {
+            EntryKind::Plain => entry.value.map(|_| false),
+            EntryKind::Secret => {
+                let key = personal_key(&entry.name).to_ascii_lowercase();
+                stored
+                    .is_none_or(|stored| stored.contains(&key))
+                    .then_some(true)
+            }
+        })
     }
 
     async fn get(&self, name: &str) -> Result<EnvEntry> {

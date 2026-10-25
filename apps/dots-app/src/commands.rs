@@ -24,7 +24,7 @@ use dots_core::schedule::Schedule;
 use dots_core::settings::Settings;
 use dots_core::skill_creator::{check_draft, DraftRequest, DraftSummary};
 use dots_core::vault::org::{JoinPreview, OrgEntry, OrgSummary, SourceCreds};
-use dots_core::vault::{EntryKind, EnvEntry};
+use dots_core::vault::{EntryKind, EnvEntry, GrantStatus};
 use dots_core::Runtime;
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_opener::OpenerExt;
@@ -216,6 +216,13 @@ pub async fn list_dots(state: State<'_, AppState>) -> Res<Vec<Dot>> {
 #[tauri::command]
 pub async fn get_dot(state: State<'_, AppState>, id: String) -> Res<Dot> {
     Ok(state.rt()?.get_dot(&id).await?)
+}
+
+/// The status of each of the dot's grants in its scope, for its editor's Variables: whether
+/// it resolves now, from where, and why not. No value is in it, and no org is fetched.
+#[tauri::command]
+pub async fn dot_variables(state: State<'_, AppState>, dot_id: String) -> Res<Vec<GrantStatus>> {
+    Ok(state.rt()?.dot_variables(&dot_id).await?)
 }
 
 /// `org_id`, the UI's `orgId`: the org the new dot belongs to, `None` for Personal.

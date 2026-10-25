@@ -26,7 +26,7 @@ use zeroize::Zeroizing;
 
 use super::join::{check_org_id, key_fingerprint, parse_join_code, BaoAuth, JoinCode};
 use super::offline::{delete_offline, read_offline, write_offline, OfflineCopy, Protector};
-use super::policy::{OrgPolicy, PersonalMode, PolicyError};
+use super::policy::{OrgPolicy, PersonalMode, PolicyError, UseRules};
 use super::row::OrgRow;
 use super::signed::verify_policy;
 use super::sources::sops::{self, NOT_A_RECIPIENT};
@@ -106,6 +106,15 @@ pub struct OrgSummary {
     pub copy_until: Option<String>,
     /// The accepted policy in plain words (`OrgPolicy::summary`).
     pub policy_summary: Vec<String>,
+    /// The accepted policy's `personal` mode, which says whether a dot of the org may read a
+    /// Personal entry (the dot editor's name pickers); `None` while no policy is accepted.
+    pub personal_mode: Option<PersonalMode>,
+    /// The accepted policy's `shell_secrets`: whether a dot's shell may be given a secret.
+    /// False while no policy is accepted.
+    pub shell_secrets: bool,
+    /// The accepted policy's `use` globs, which say which names a dot of the org may be granted
+    /// (the shell's name picker leaves out the rest); `None` while no policy is accepted.
+    pub use_rules: Option<UseRules>,
 }
 
 /// What a join code would join or change, shown before anything is fetched.
@@ -1190,6 +1199,9 @@ fn summary_of(id: &str, slot: &Slot) -> OrgSummary {
                 .as_ref()
                 .map(OrgPolicy::summary)
                 .unwrap_or_default(),
+            personal_mode: joined.policy.as_ref().map(|p| p.personal),
+            shell_secrets: joined.policy.as_ref().is_some_and(|p| p.shell_secrets),
+            use_rules: joined.policy.as_ref().map(|p| p.use_rules.clone()),
         },
         Slot::Damaged { name, error } => OrgSummary {
             id: id.to_string(),
@@ -1204,6 +1216,9 @@ fn summary_of(id: &str, slot: &Slot) -> OrgSummary {
             last_fetch_at: None,
             copy_until: None,
             policy_summary: Vec::new(),
+            personal_mode: None,
+            shell_secrets: false,
+            use_rules: None,
         },
         Slot::Pending(code) => OrgSummary {
             id: id.to_string(),
@@ -1216,6 +1231,9 @@ fn summary_of(id: &str, slot: &Slot) -> OrgSummary {
             last_fetch_at: None,
             copy_until: None,
             policy_summary: Vec::new(),
+            personal_mode: None,
+            shell_secrets: false,
+            use_rules: None,
         },
     }
 }

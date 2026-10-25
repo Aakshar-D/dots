@@ -3,7 +3,7 @@
 //! field, an unknown version or a value out of range makes the whole policy invalid.
 
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::vault::entries::{check_variable_name, MAX_VARIABLE_NAME};
@@ -62,8 +62,9 @@ pub enum PolicyError {
 }
 
 /// Which org entry names dots may be granted. A name must match an `allow` glob and no `deny`
-/// glob: deny wins.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+/// glob: deny wins. It is also sent to the UI with the org's summary, so the dot editor offers
+/// only names the org lets its dots use.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UseRules {
     #[serde(default = "allow_all")]

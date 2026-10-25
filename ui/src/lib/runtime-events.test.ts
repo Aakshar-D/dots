@@ -129,6 +129,18 @@ describe("runtime events and the query cache", () => {
     for (const key of untouched) expect(stale(qc, key), key.join("/")).toBe(false);
   });
 
+  it("marks each dot's variables stale on an org update, and not the dots", () => {
+    const qc = createQueryClient();
+    // Each dot's variables resolve in its org. An editor fills its form from the dot.
+    const variables = [keys.dotVariables("dot-a"), keys.dotVariables("dot-b")];
+    const dots = [keys.dot("dot-a"), keys.dot("dot-b"), keys.overview];
+    for (const key of [...variables, ...dots]) qc.setQueryData(key, []);
+
+    applyRuntimeEvent(qc, { type: "org_updated", org_id: "acme-eng" });
+    for (const key of variables) expect(stale(qc, key), key.join("/")).toBe(true);
+    for (const key of dots) expect(stale(qc, key), key.join("/")).toBe(false);
+  });
+
   it("leaves the caches to the schedule update that comes with a schedule's attention", () => {
     const qc = createQueryClient();
     const all = [keys.dots, keys.overview, keys.inbox, keys.dot(sample.dot.id)];

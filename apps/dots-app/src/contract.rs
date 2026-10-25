@@ -23,8 +23,12 @@ use dots_core::schedule::Schedule;
 use dots_core::scheduler::MAX_ATTEMPTS;
 use dots_core::settings::{Settings, MAX_CONCURRENT_RUNS, MAX_GLOBAL_INSTRUCTIONS};
 use dots_core::skill_creator::{DraftRequest, DraftSummary};
-use dots_core::vault::org::{BaoAuth, JoinPreview, OrgEntry, OrgStatus, OrgSummary, SourceCreds};
-use dots_core::vault::{EntryKind, EnvEntry};
+use dots_core::vault::org::{
+    BaoAuth, JoinPreview, OrgEntry, OrgStatus, OrgSummary, PersonalMode, SourceCreds, UseRules,
+};
+use dots_core::vault::{
+    Consumer, EntryKind, EnvEntry, GrantState, GrantStatus, Missing, Unresolved, ValueSource,
+};
 use serde_json::{json, Value};
 
 use crate::error::{CmdError, CmdErrorKind};
@@ -918,7 +922,85 @@ pub fn samples() -> Value {
         },
     ]);
     samples["SourceCreds"] = source_creds();
+    samples["GrantStatus"] = to(grant_statuses());
+    samples["Enums"]["GrantState"] = to(GrantState::ALL);
+    samples["Enums"]["ValueSource"] = to(ValueSource::ALL);
+    samples["Enums"]["PersonalMode"] = to(PersonalMode::ALL);
     samples
+}
+
+/// What `dot_variables` answers for acme-release, a dot of Acme Engineering (`personal:
+/// fallback`, `shell_secrets: false`): a secret from the org; a plain value from Personal; a
+/// name the org lacks; a name its `use` rules deny; a secret its shell may not have. Then a
+/// grant of a dot whose org was removed. The texts are the core's own.
+fn grant_statuses() -> Vec<GrantStatus> {
+    let text = |name: &str, consumer: Consumer, why: Unresolved, org: &str| {
+        Missing {
+            name: name.into(),
+            consumer,
+            why,
+            org: Some(org.into()),
+        }
+        .text("acme-release")
+    };
+    let acme = "Acme Engineering";
+    let github = || Consumer::Mcp("github".into());
+    let status = |consumer: &Consumer, name: &str, status: GrantState| GrantStatus {
+        consumer: consumer.key(),
+        name: name.into(),
+        status,
+        text: None,
+        source: None,
+        secret: false,
+    };
+    vec![
+        GrantStatus {
+            source: Some(ValueSource::Org),
+            secret: true,
+            ..status(&github(), "GITHUB_TOKEN", GrantState::Ok)
+        },
+        GrantStatus {
+            source: Some(ValueSource::Personal),
+            ..status(&Consumer::Shell, "LOG_LEVEL", GrantState::Ok)
+        },
+        GrantStatus {
+            text: Some(text("API_KEY", github(), Unresolved::NotDefined, acme)),
+            ..status(&github(), "API_KEY", GrantState::NotDefined)
+        },
+        GrantStatus {
+            text: Some(text(
+                "PROD_DB_URL",
+                github(),
+                Unresolved::DeniedByPolicy,
+                acme,
+            )),
+            ..status(&github(), "PROD_DB_URL", GrantState::DeniedByPolicy)
+        },
+        GrantStatus {
+            text: Some(text(
+                "GITHUB_TOKEN",
+                Consumer::Shell,
+                Unresolved::ShellSecretsForbidden,
+                acme,
+            )),
+            source: Some(ValueSource::Org),
+            secret: true,
+            ..status(
+                &Consumer::Shell,
+                "GITHUB_TOKEN",
+                GrantState::ShellSecretsForbidden,
+            )
+        },
+        GrantStatus {
+            text: Some(text(
+                "LOG_LEVEL",
+                Consumer::Shell,
+                Unresolved::OrgRemoved,
+                "acme-eng",
+            )),
+            ..status(&Consumer::Shell, "LOG_LEVEL", GrantState::OrgRemoved)
+        },
+    ]
 }
 
 /// A changed tool list in Personal, with the dot that uses it, and the same server's in an
@@ -960,6 +1042,12 @@ fn org_summaries() -> Vec<OrgSummary> {
             "org: acme-eng".into(),
             "personal: fallback (a personal entry is used when the org has none)".into(),
         ],
+        personal_mode: Some(PersonalMode::Fallback),
+        shell_secrets: false,
+        use_rules: Some(UseRules {
+            allow: vec!["*".into()],
+            deny: vec!["PROD_*".into()],
+        }),
     };
     let status = |status: OrgStatus, text: &str| OrgSummary {
         status,
@@ -1007,6 +1095,8 @@ fn org_summaries() -> Vec<OrgSummary> {
             last_fetch_at: None,
             copy_until: None,
             policy_summary: vec![],
+            personal_mode: None,
+            use_rules: None,
             ..status(
                 OrgStatus::Pending,
                 "waiting for the admin to add this PC's key",

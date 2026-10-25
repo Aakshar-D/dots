@@ -49,6 +49,10 @@ export const sample = {
   /// Acme Engineering's API_BASE_URL (plain, locked, granted to acme-release) and GITHUB_TOKEN
   /// (a secret, not locked, not granted).
   orgEntries: T.OrgEntry.array().parse(contract.OrgEntry),
+  /// acme-release's grants in Acme Engineering: GITHUB_TOKEN from the org, LOG_LEVEL from
+  /// Personal, API_KEY not in the org, PROD_DB_URL denied, GITHUB_TOKEN refused to the shell;
+  /// then a grant of a dot whose org was removed.
+  grantStatuses: T.GrantStatus.array().parse(contract.GrantStatus),
 };
 
 /// What `new_dot_spec` answers: the core's defaults with nothing filled in.
@@ -89,6 +93,8 @@ export function installDefaults(): void {
   backend.on("env_old_backups", () => []);
   // No org is joined on this PC.
   backend.on("org_list", () => []);
+  // No grant has a status: the editor shows each as it shows a grant not saved yet.
+  backend.on("dot_variables", () => []);
   backend.on("new_dot_spec", () => blankSpec);
   backend.on("list_runs", () => []);
   // No dot has checked in or scheduled anything. A question on screen is marked read.

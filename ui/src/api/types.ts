@@ -613,6 +613,12 @@ export const SourceCreds = z.discriminatedUnion("kind", [
   // This PC's age identity for a SOPS file.
   z.strictObject({ kind: z.literal("age"), identity: z.string() }),
 ]);
+// How an org's dots may read Personal entries: never, when the org lacks the name, or before
+// the org's entry.
+export const PersonalMode = z.enum(["deny", "fallback", "override"]);
+// The names an org's dots may be granted: a name matches an `allow` glob and no `deny` glob
+// (deny wins). A glob's `*` stands for any run of characters, and case does not matter.
+export const UseRules = z.strictObject({ allow: z.array(z.string()), deny: z.array(z.string()) });
 const orgSummaryShape = {
   id: z.string(),
   name: z.string(),
@@ -630,6 +636,13 @@ const orgSummaryShape = {
   copy_until: nullable(z.string()),
   // The accepted policy in plain words, a line per field.
   policy_summary: z.array(z.string()),
+  // The accepted policy's `personal` mode: whether the org's dots may read Personal entries;
+  // null while no policy is accepted.
+  personal_mode: nullable(PersonalMode),
+  // The accepted policy's `shell_secrets`: whether a dot's shell may be given a secret.
+  shell_secrets: z.boolean(),
+  // The accepted policy's `use` globs; null while no policy is accepted.
+  use_rules: nullable(UseRules),
 };
 // An org as Settings shows it, by its status.
 export const OrgSummary = z.discriminatedUnion("status", [
@@ -671,6 +684,34 @@ export const OrgEntry = z.strictObject({
   locked: z.boolean(),
   // The org's dots that grant this name.
   used_by: z.array(DotRef),
+});
+// Whether a dot's grant resolves in its scope now, or why not.
+export const GrantState = z.enum([
+  "ok",
+  "not_granted",
+  "not_defined",
+  "denied_by_policy",
+  "shell_secrets_forbidden",
+  "org_offline",
+  "org_expired",
+  "org_revoked",
+  "policy_invalid",
+  "org_removed",
+]);
+// Where a value comes from: the dot's org, or Personal.
+export const ValueSource = z.enum(["org", "personal"]);
+// One grant of a dot as its editor shows it (`dot_variables`). It never holds a value.
+export const GrantStatus = z.strictObject({
+  // `mcp:<server>` or `shell`.
+  consumer: z.string(),
+  name: z.string(),
+  status: GrantState,
+  // Why it does not resolve, in the words of the run event; null when it resolves.
+  text: nullable(z.string()),
+  // Where its value comes from, or would but for the shell's secrets rule.
+  source: nullable(ValueSource),
+  // The value that resolves, or would but for the shell's secrets rule, is a secret.
+  secret: z.boolean(),
 });
 
 export const FileDiff = z.strictObject({
@@ -791,6 +832,11 @@ export type OrgSummary = z.infer<typeof OrgSummary>;
 export type BaoAuth = z.infer<typeof BaoAuth>;
 export type JoinPreview = z.infer<typeof JoinPreview>;
 export type OrgEntry = z.infer<typeof OrgEntry>;
+export type PersonalMode = z.infer<typeof PersonalMode>;
+export type UseRules = z.infer<typeof UseRules>;
+export type GrantState = z.infer<typeof GrantState>;
+export type ValueSource = z.infer<typeof ValueSource>;
+export type GrantStatus = z.infer<typeof GrantStatus>;
 export type FileDiff = z.infer<typeof FileDiff>;
 export type WorktreeDiff = z.infer<typeof WorktreeDiff>;
 export type CmdErrorKind = z.infer<typeof CmdErrorKind>;

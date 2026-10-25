@@ -94,6 +94,9 @@ export const commands = {
   dotOverview: () => call(T.DotOverview.array(), "dot_overview"),
   listDots: () => call(T.Dot.array(), "list_dots"),
   getDot: (id: string) => call(T.Dot, "get_dot", { id }),
+  /// The status of each of the dot's stored grants in its scope: whether it resolves now, from
+  /// where, and why not. It holds no value, and no org is fetched for it.
+  dotVariables: (dotId: string) => call(T.GrantStatus.array(), "dot_variables", { dotId }),
   /// `orgId`: the joined org the dot belongs to, fixed from then on; null for Personal.
   createDot: (spec: DotSpec, orgId: string | null = null) =>
     call(T.Dot, "create_dot", { spec, orgId }),

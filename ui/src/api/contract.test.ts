@@ -49,6 +49,7 @@ const schemas: Record<SampleName, { parse: (v: unknown) => unknown }> = {
   JoinPreview: T.JoinPreview.array(),
   OrgEntry: T.OrgEntry.array(),
   SourceCreds: T.SourceCreds.array(),
+  GrantStatus: T.GrantStatus.array(),
 };
 
 // The UI parses live data with these schemas, so it must know every variant the core has.
@@ -70,6 +71,9 @@ const enums: Record<keyof typeof fixture.Enums, { options: readonly string[] }> 
   FollowUpStatus: T.FollowUpStatus,
   EntryKind: T.EntryKind,
   MemorySource: T.MemorySource,
+  GrantState: T.GrantState,
+  ValueSource: T.ValueSource,
+  PersonalMode: T.PersonalMode,
 };
 
 describe("Rust/TypeScript contract", () => {
@@ -136,12 +140,30 @@ describe("Rust/TypeScript contract", () => {
     );
     const kinds = T.SourceCreds.options.map((o) => o.shape.kind.value);
     expect(fixture.SourceCreds.map((c) => c.kind).sort()).toEqual([...kinds].sort());
+    // `use` globs with a deny, and none while no policy is accepted.
+    const rules = fixture.OrgSummary.map((o) => o.use_rules);
+    expect(rules).toEqual(expect.arrayContaining([null]));
+    expect(rules.some((r) => r !== null && r.deny.length > 0)).toBe(true);
   });
 
   it("has a catalog sample in an org's scope and a changed list of each scope", () => {
     const scopes = fixture.LibraryEntry.flatMap((e) => e.catalogs.map((c) => c.scope));
     expect(scopes).toEqual(expect.arrayContaining(["personal", "acme-eng"]));
     expect(fixture.ToolsChanged.map((t) => t.scope)).toEqual(["personal", "acme-eng"]);
+  });
+
+  it("has a grant status of each source and of the reasons the editor shows", () => {
+    const statuses = fixture.GrantStatus.map((g) => g.status);
+    expect(statuses).toEqual(
+      expect.arrayContaining([
+        "ok",
+        "denied_by_policy",
+        "shell_secrets_forbidden",
+        "org_removed",
+      ]),
+    );
+    const sources = fixture.GrantStatus.filter((g) => g.status === "ok").map((g) => g.source);
+    expect(sources).toEqual(expect.arrayContaining(["org", "personal"]));
   });
 
   it("has a sample of every update state", () => {

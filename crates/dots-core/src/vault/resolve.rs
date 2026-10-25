@@ -4,12 +4,12 @@
 //! gets no secret unless the org's `shell_secrets` says so. What does not resolve says which
 //! variable and why.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use zeroize::Zeroizing;
 
 use super::grants::{Consumer, Grants};
-use super::org::{OrgLookup, OrgPolicy, PersonalMode};
+use super::org::{OrgLookup, OrgPolicy, OrgView, PersonalMode};
 use super::service::Vault;
 use crate::library::PERSONAL_SCOPE;
 use crate::model::Dot;
@@ -129,6 +129,51 @@ impl Missing {
     }
 }
 
+str_enum!(ValueSource {
+    Org => "org",
+    Personal => "personal",
+});
+
+/// What resolving one name found: its value, where it comes from, and whether it is a secret.
+/// Its `Debug` leaves the value out.
+pub(super) struct Found {
+    /// `None` when only the entries that are there were read (`Reading::Presence`).
+    pub(super) value: Option<Zeroizing<String>>,
+    pub(super) source: ValueSource,
+    pub(super) secret: bool,
+}
+
+impl std::fmt::Debug for Found {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Found")
+            .field("source", &self.source)
+            .field("secret", &self.secret)
+            .finish_non_exhaustive()
+    }
+}
+
+/// One name's answer: what it resolves to, or why it does not, with what was found for it.
+pub(super) type Answer = std::result::Result<Found, (Missing, Option<Found>)>;
+
+/// How resolving reads Personal: its values, for a run or a Check; or only which entries are
+/// there (the status of a dot's grants), so no secret's value is read. `Presence` holds the
+/// secret store's Personal keys, lower-cased; `None` when they could not be listed, and then
+/// every Personal secret counts as there.
+pub(super) enum Reading {
+    Values,
+    Presence(Option<HashSet<String>>),
+}
+
+/// What resolving in a scope reads once for all its names (`Vault::in_scope`).
+pub(super) struct InScope {
+    /// The org's id and its name for the texts (its id when it is not joined); `None` for
+    /// Personal.
+    org: Option<(String, String)>,
+    /// The org's policy and answers for the names, from one read; `None` for Personal, or
+    /// for a vault without orgs.
+    view: Option<OrgView>,
+}
+
 /// Resolved values by the name they were asked for. Its `Debug` shows the names only.
 #[derive(Clone, Default)]
 pub struct Resolved(BTreeMap<String, Zeroizing<String>>);
@@ -204,50 +249,86 @@ impl Vault {
         consumer: &Consumer,
         names: &[String],
     ) -> Result<std::result::Result<Resolved, Missing>> {
-        let org = match scope {
-            DotScope::Personal => None,
-            DotScope::Org(org_id) => Some((org_id.as_str(), self.org_name(org_id).await)),
-        };
-        // The org's policy and values, from one read of the org.
-        let view = match (&org, self.orgs()) {
-            (Some((org_id, _)), Some(orgs)) => Some(orgs.view(org_id, names).await),
-            _ => None,
-        };
+        let read = self.in_scope(scope, names).await;
         let mut out = BTreeMap::new();
         for (i, name) in names.iter().enumerate() {
-            let missing = |why: Unresolved| Missing {
-                name: name.clone(),
-                consumer: consumer.clone(),
-                org: org.as_ref().map(|(id, org_name)| match why {
-                    Unresolved::OrgRemoved => id.to_string(),
-                    _ => org_name.clone(),
-                }),
-                why,
-            };
-            if !granted(name) {
-                return Ok(Err(missing(Unresolved::NotGranted)));
-            }
-            let value = match &org {
-                None => self
-                    .personal_value(name)
-                    .await?
-                    .ok_or(Unresolved::NotDefined),
-                Some(_) => match &view {
-                    Some(view) => {
-                        let (lookup, policy) = (&view.lookups[i], view.policy.as_ref());
-                        self.org_value(lookup, policy, consumer, name).await?
-                    }
-                    None => Err(Unresolved::OrgRemoved),
-                },
-            };
-            match value {
-                Ok(value) => {
+            let answer = self
+                .resolve_one(&read, i, name, granted(name), consumer, &Reading::Values)
+                .await?;
+            match answer {
+                Ok(Found {
+                    value: Some(value), ..
+                }) => {
                     out.insert(name.clone(), value);
                 }
-                Err(why) => return Ok(Err(missing(why))),
+                // `Reading::Values` reads every value it finds.
+                Ok(Found { value: None, .. }) => {}
+                Err((missing, _)) => return Ok(Err(missing)),
             }
         }
         Ok(Ok(Resolved(out)))
+    }
+
+    /// What resolving in `scope` reads once for `names`: the org's name, and its policy and
+    /// answers for those names from one read of the org.
+    pub(super) async fn in_scope(&self, scope: &DotScope, names: &[String]) -> InScope {
+        let DotScope::Org(org_id) = scope else {
+            return InScope {
+                org: None,
+                view: None,
+            };
+        };
+        let name = self.org_name(org_id).await;
+        // The org's policy and values, from one read of the org.
+        let view = match self.orgs() {
+            Some(orgs) => Some(orgs.view(org_id, names).await),
+            None => None,
+        };
+        InScope {
+            org: Some((org_id.clone(), name)),
+            view,
+        }
+    }
+
+    /// The `i`th of the names `read` was made for, for `consumer`, in the spec's order (§8):
+    /// the grant (`granted`); for an org, its state, then its `use` rules, then its `personal`
+    /// mode, then the shell's secrets rule. A Personal scope reads Personal only. What does
+    /// not resolve comes with what was found for it, if anything: a secret the shell may not
+    /// have. `reading` says whether values are read, or only which entries are there.
+    pub(super) async fn resolve_one(
+        &self,
+        read: &InScope,
+        i: usize,
+        name: &str,
+        granted: bool,
+        consumer: &Consumer,
+        reading: &Reading,
+    ) -> Result<Answer> {
+        let missing = |why: Unresolved| Missing {
+            name: name.to_string(),
+            consumer: consumer.clone(),
+            org: read.org.as_ref().map(|(id, org_name)| match why {
+                Unresolved::OrgRemoved => id.clone(),
+                _ => org_name.clone(),
+            }),
+            why,
+        };
+        if !granted {
+            return Ok(Err((missing(Unresolved::NotGranted), None)));
+        }
+        let found = match (&read.org, &read.view) {
+            (None, _) => self
+                .personal_found(reading, name)
+                .await?
+                .ok_or((Unresolved::NotDefined, None)),
+            (Some(_), Some(view)) => {
+                let (lookup, policy) = (&view.lookups[i], view.policy.as_ref());
+                self.org_value(lookup, policy, consumer, name, reading)
+                    .await?
+            }
+            (Some(_), None) => Err((Unresolved::OrgRemoved, None)),
+        };
+        Ok(found.map_err(|(why, found)| (missing(why), found)))
     }
 
     /// The personal values of those of `names` that Personal has, as if all were granted: for
@@ -306,44 +387,72 @@ impl Vault {
         policy: Option<&OrgPolicy>,
         consumer: &Consumer,
         name: &str,
-    ) -> Result<std::result::Result<Zeroizing<String>, Unresolved>> {
+        reading: &Reading,
+    ) -> Result<std::result::Result<Found, (Unresolved, Option<Found>)>> {
+        let refused = |why: Unresolved| Ok(Err((why, None)));
         // The org's value and whether it is a secret, if it has one.
         let in_org = match lookup {
-            OrgLookup::Value { value, is_plain } => Some((value.clone(), !is_plain)),
+            OrgLookup::Value { value, is_plain } => Some(Found {
+                value: match reading {
+                    Reading::Values => Some(value.clone()),
+                    Reading::Presence(_) => None,
+                },
+                source: ValueSource::Org,
+                secret: !is_plain,
+            }),
             OrgLookup::NotDefined => None,
-            OrgLookup::Expired => return Ok(Err(Unresolved::OrgExpired)),
-            OrgLookup::Revoked => return Ok(Err(Unresolved::OrgRevoked)),
+            OrgLookup::Expired => return refused(Unresolved::OrgExpired),
+            OrgLookup::Revoked => return refused(Unresolved::OrgRevoked),
             OrgLookup::PolicyInvalid(error) => {
-                return Ok(Err(Unresolved::PolicyInvalid(error.clone())))
+                return refused(Unresolved::PolicyInvalid(error.clone()))
             }
-            OrgLookup::Offline => return Ok(Err(Unresolved::OrgOffline)),
-            OrgLookup::Removed => return Ok(Err(Unresolved::OrgRemoved)),
+            OrgLookup::Offline => return refused(Unresolved::OrgOffline),
+            OrgLookup::Removed => return refused(Unresolved::OrgRemoved),
         };
         // An org that gives values has an accepted policy. Without one, nothing is guessed.
         let Some(policy) = policy else {
             let error = "no policy has been accepted".to_string();
-            return Ok(Err(Unresolved::PolicyInvalid(error)));
+            return refused(Unresolved::PolicyInvalid(error));
         };
         if !policy.may_use(name) {
-            return Ok(Err(Unresolved::DeniedByPolicy));
+            return refused(Unresolved::DeniedByPolicy);
         }
         let chosen = match policy.personal {
             PersonalMode::Deny => in_org,
             PersonalMode::Fallback => match in_org {
                 Some(found) => Some(found),
-                None => self.personal_entry(name).await?,
+                None => self.personal_found(reading, name).await?,
             },
-            PersonalMode::Override => match self.personal_entry(name).await? {
+            PersonalMode::Override => match self.personal_found(reading, name).await? {
                 Some(found) => Some(found),
                 None => in_org,
             },
         };
-        let Some((value, secret)) = chosen else {
-            return Ok(Err(Unresolved::NotDefined));
+        let Some(found) = chosen else {
+            return refused(Unresolved::NotDefined);
         };
-        if *consumer == Consumer::Shell && secret && !policy.shell_secrets {
-            return Ok(Err(Unresolved::ShellSecretsForbidden));
+        if *consumer == Consumer::Shell && found.secret && !policy.shell_secrets {
+            return Ok(Err((Unresolved::ShellSecretsForbidden, Some(found))));
         }
-        Ok(Ok(value))
+        Ok(Ok(found))
+    }
+
+    /// Personal's entry `name`, as `reading` reads it.
+    async fn personal_found(&self, reading: &Reading, name: &str) -> Result<Option<Found>> {
+        let (value, secret) = match reading {
+            Reading::Values => match self.personal_entry(name).await? {
+                Some((value, secret)) => (Some(value), secret),
+                None => return Ok(None),
+            },
+            Reading::Presence(stored) => match self.personal_kind(name, stored.as_ref()).await? {
+                Some(secret) => (None, secret),
+                None => return Ok(None),
+            },
+        };
+        Ok(Some(Found {
+            value,
+            source: ValueSource::Personal,
+            secret,
+        }))
     }
 }

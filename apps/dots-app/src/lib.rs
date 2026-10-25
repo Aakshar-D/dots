@@ -50,6 +50,7 @@ command_list![
     dot_overview,
     list_dots,
     get_dot,
+    dot_variables,
     create_dot,
     update_dot,
     delete_dot,
