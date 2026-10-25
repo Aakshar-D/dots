@@ -115,6 +115,8 @@ pub struct LocalEngine {
     client: ChatClient,
     /// The check-in tools, offered to every run when set (`with_checkins`).
     checkins: Option<CheckIns>,
+    /// The installed apps, for `propose_app` (`with_apps`).
+    apps: Option<crate::apps::Apps>,
 }
 
 impl LocalEngine {
@@ -132,6 +134,7 @@ impl LocalEngine {
             gate,
             client: ChatClient::new(retry_delays),
             checkins: None,
+            apps: None,
         }
     }
 
@@ -139,6 +142,12 @@ impl LocalEngine {
     /// section 2).
     pub fn with_checkins(mut self, checkins: CheckIns) -> Self {
         self.checkins = Some(checkins);
+        self
+    }
+
+    /// Offers `propose_app` to every run (app library spec section 6.2).
+    pub fn with_apps(mut self, apps: crate::apps::Apps) -> Self {
+        self.apps = Some(apps);
         self
     }
 }
@@ -167,6 +176,7 @@ impl Engine for LocalEngine {
             messages,
             mcp_names: ToolNames::default(),
             checkins: self.checkins.clone(),
+            apps: self.apps.clone(),
         };
         tokio::spawn(session.run());
         Ok(rx)
@@ -190,6 +200,7 @@ struct Session {
     messages: Vec<Value>,
     mcp_names: ToolNames,
     checkins: Option<CheckIns>,
+    apps: Option<crate::apps::Apps>,
 }
 
 impl Session {
@@ -419,6 +430,9 @@ impl Session {
         }
         if call.name == "context" {
             return tools::context::run(self.ctx.tools.contexts(), &call.input).await;
+        }
+        if call.name == crate::apps::propose::TOOL {
+            return self.propose(&call.input).await;
         }
         if CheckInTool::from_name(call.name).is_some() {
             return match &self.checkins {

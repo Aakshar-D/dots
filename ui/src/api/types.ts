@@ -293,6 +293,8 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("memories_updated"), dot_id: z.string() }),
   // A call changed the app's data: its screen reads again.
   z.strictObject({ type: z.literal("app_data_changed"), app: z.string() }),
+  // A dot proposed an app, or the person decided a proposal: the review card reads it again.
+  z.strictObject({ type: z.literal("app_proposal_changed"), id: z.string(), dot_id: z.string() }),
 ]);
 
 export const ClaudeStatus = z.strictObject({

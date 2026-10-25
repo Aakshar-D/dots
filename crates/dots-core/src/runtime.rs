@@ -190,6 +190,13 @@ impl Runtime {
                 .await?;
         }
 
+        // The installed apps (app library spec), which runs call as their dots and propose.
+        let apps = crate::apps::Apps::new(
+            store.clone(),
+            bus.clone(),
+            cfg.data_dir.join(crate::apps::APPS_DIR),
+        )
+        .with_clock(cfg.clock.clone());
         let mut engines: HashMap<EngineKind, Arc<dyn Engine>> = HashMap::new();
         let claude_program = resolve_claude(cfg.claude_path.as_deref());
         let claude_version = match &claude_program {
@@ -224,7 +231,8 @@ impl Runtime {
                     hub.clone(),
                     cfg.local_retry_delays.clone(),
                 )
-                .with_checkins(checkins.clone()),
+                .with_checkins(checkins.clone())
+                .with_apps(apps.clone()),
             ),
         );
 
@@ -263,13 +271,6 @@ impl Runtime {
             port,
         );
         runner.set_browsers(browsers.clone());
-        // The installed apps (app library spec), which runs call as their dots.
-        let apps = crate::apps::Apps::new(
-            store.clone(),
-            bus.clone(),
-            cfg.data_dir.join(crate::apps::APPS_DIR),
-        )
-        .with_clock(cfg.clock.clone());
         runner.set_apps(apps.clone());
         // Decisions parked before a restart (decided, but the resume never happened) are
         // turned into resume runs now; failures are logged and never block startup.
@@ -938,6 +939,77 @@ impl Runtime {
         let run = self.store.get_run(&approval.run_id).await?;
         let workspace = run.workspace_path.as_deref().map(Path::new);
         Ok(allow_candidates(&approval.tool, &approval.input, workspace))
+    }
+
+    /// The person's answer on an app proposal's card (app library spec section 6.2): "Add to
+    /// library" (or "Update") adds the app first, and a failure there leaves the card waiting;
+    /// then the proposal is decided and the dot's thread continues with what the person decided,
+    /// as an answered question does (`CheckIns::reply`). A thread that has not ended is refused,
+    /// as a reply is.
+    pub async fn decide_app_proposal(
+        &self,
+        id: &str,
+        decision: crate::apps::propose::Decision,
+    ) -> Result<(crate::apps::propose::AppProposal, Run)> {
+        use crate::apps::propose::{Decision, ProposalStatus, DECIDED_ALREADY, DISCARDED};
+        let lock = self.follow_ups.thread_lock();
+        let _one_at_a_time = lock.lock().await;
+        let p = self.store.get_app_proposal(id).await?;
+        if p.status != ProposalStatus::Pending {
+            return Err(Error::Conflict(DECIDED_ALREADY.into()));
+        }
+        let asked = self.store.get_run(&p.run_id).await?;
+        let thread = self.store.list_thread(&asked.root_run_id).await?;
+        if let Some(active) = thread.iter().find(|r| !r.status.is_terminal()) {
+            return Err(crate::checkins::thread_busy(active.status));
+        }
+        let end = thread.last().unwrap_or(&asked);
+        let (status, answer, said) = match &decision {
+            Decision::AskForChanges { text } => {
+                let text = text.trim();
+                if text.is_empty() {
+                    return Err(Error::Invalid("say what to change".into()));
+                }
+                let said = format!(
+                    "The person asked for changes to the app {}: {text}",
+                    p.app_name
+                );
+                (ProposalStatus::ChangesAsked, Some(text.to_string()), said)
+            }
+            Decision::Discard => (ProposalStatus::Discarded, None, DISCARDED.to_string()),
+            Decision::Add => {
+                let item = self.apps.accept(&p).await?;
+                let version = match &item.config {
+                    crate::library::LibraryConfig::App(c) => c.version,
+                    _ => 1,
+                };
+                let said = match p.base_version {
+                    Some(_) => format!(
+                        "The person accepted your change to the app {}; it is now version {version}.",
+                        p.app_name
+                    ),
+                    None => format!("The person added the app {} to the Library.", p.app_name),
+                };
+                (ProposalStatus::Added, None, said)
+            }
+        };
+        let message = if end.session_id.is_some() {
+            said
+        } else {
+            format!(
+                "Earlier you sent the app {} for review: \"{}\"\n{said}",
+                p.app_name, p.note
+            )
+        };
+        let new = crate::checkins::continuation(&asked, end, message, answer.as_deref());
+        let (decided, run) = self
+            .store
+            .decide_app_proposal(id, status, answer.as_deref(), &new)
+            .await?;
+        self.runner.enqueued(&run);
+        self.apps.drop_proposed(id).await;
+        self.apps.proposal_changed(&decided);
+        Ok((decided, run))
     }
 
     /// Decides an approval. With `allow_rule`, an approval also saves that allow rule to the

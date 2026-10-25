@@ -68,7 +68,9 @@ pub struct AppCall {
     pub at: String,
 }
 
-async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Result<T> {
+pub(super) async fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> T + Send + 'static,
+) -> Result<T> {
     tokio::task::spawn_blocking(f)
         .await
         .map_err(|e| Error::Other(format!("blocking task failed: {e}")))
@@ -227,6 +229,11 @@ impl Apps {
             }
             Err(e) => Err(e.to_string()),
         }
+    }
+
+    /// The folder that holds the apps (`<data>/apps`).
+    pub(super) fn root(&self) -> &Path {
+        &self.root
     }
 
     pub fn app_dir(&self, app_id: &str) -> PathBuf {
@@ -570,7 +577,7 @@ fn remove_all(path: &Path) -> Result<()> {
 
 /// Writes `src`'s files to `dir`, through a sibling `.tmp` folder renamed at the end, so a version
 /// folder is whole or absent.
-fn write_version(dir: &Path, src: &AppSource) -> Result<()> {
+pub(super) fn write_version(dir: &Path, src: &AppSource) -> Result<()> {
     let tmp = dir.with_extension("tmp");
     let _ = std::fs::remove_dir_all(&tmp);
     for (path, bytes) in src.files() {

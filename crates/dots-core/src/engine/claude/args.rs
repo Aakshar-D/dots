@@ -54,6 +54,8 @@ pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
     allow.extend(Tool::ALL.map(|t| t.model_name(EngineKind::Claude).to_string()));
     // And of its memory tools (dot memory spec section 3).
     allow.extend(crate::memory::Tool::ALL.map(|t| t.model_name(EngineKind::Claude).to_string()));
+    // And of `propose_app` (app library spec section 6.2), which the dot calls by that name.
+    allow.push(format!("mcp__dots__{}", crate::apps::propose::TOOL));
     // And of the run's app tools (app library spec section 6).
     if let Some(apps) = ctx.tools.apps() {
         allow.extend(apps.model_names(EngineKind::Claude));

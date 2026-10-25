@@ -155,10 +155,11 @@ fn prepare_validates_calls_before_the_policy() {
     // Every local tool but `skill` and `context`, which a run gets only with skills
     // (`skill::schema`) and context collections (`context::schema`), and the three check-in
     // tools and the three memory tools, which an engine with check-ins adds
-    // (`checkins::schemas`, `memory::schemas`).
+    // (`checkins::schemas`, `memory::schemas`), and `propose_app`, which an engine with apps
+    // adds.
     assert_eq!(
         tools::schemas().as_array().unwrap().len(),
-        tools::TOOLS.len() - 8
+        tools::TOOLS.len() - 9
     );
 }
 
@@ -210,6 +211,10 @@ fn a_prepared_input_passes_prepare_again_unchanged() {
         ),
         ("follow_up", json!({"note": "Check again.", "in": "2h"})),
         ("remember", json!({"text": "Prefers PDF."})),
+        (
+            "propose_app",
+            json!({"path": "apps//expenses", "note": "Tracks expenses."}),
+        ),
         ("forget", json!({"id": "01HX"})),
         ("recall", json!({"query": "pdf"})),
         ("recall", json!({})),

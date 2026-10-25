@@ -39,6 +39,11 @@ fn model_tool_name<'a>(tool: &'a str, input: &Value, engine: EngineKind) -> Cow<
         Cow::Borrowed(check_in.model_name(engine))
     } else if tool == crate::memory::POLICY_NAME {
         Cow::Borrowed(crate::memory::Tool::for_input(input).model_name(engine))
+    } else if tool == crate::apps::PROPOSE_POLICY {
+        Cow::Owned(match engine {
+            EngineKind::Claude => format!("mcp__dots__{}", crate::apps::propose::TOOL),
+            EngineKind::Local => crate::apps::propose::TOOL.to_string(),
+        })
     } else if tool == crate::apps::APP_POLICY {
         let part = |key: &str| input[key].as_str().unwrap_or_default().to_string();
         let key = crate::apps::manifest::tool_key(&part("app"), &part("tool"));
@@ -184,6 +189,11 @@ impl Runner {
     /// second call changes nothing.
     pub fn set_apps(&self, apps: crate::apps::Apps) {
         let _ = self.apps.set(apps);
+    }
+
+    /// The installed apps, once the runtime has set them.
+    pub fn apps(&self) -> Option<&crate::apps::Apps> {
+        self.apps.get()
     }
 
     /// The dots' browsers, once the runtime has set them.

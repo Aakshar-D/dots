@@ -5,6 +5,7 @@ pub mod call;
 pub mod data;
 pub mod engine;
 pub mod manifest;
+pub mod propose;
 mod registry;
 pub mod run;
 pub mod schema;

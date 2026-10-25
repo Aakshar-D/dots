@@ -806,6 +806,10 @@ pub fn samples() -> Value {
             to(RuntimeEvent::AppDataChanged {
                 app: "projects".into(),
             }),
+            to(RuntimeEvent::AppProposalChanged {
+                id: "01J0PROPOSAL".into(),
+                dot_id: "01J0DOT".into(),
+            }),
         ]);
     samples["ChatGptStatus"] = to([
         dots_core::chatgpt::ChatGptStatus {

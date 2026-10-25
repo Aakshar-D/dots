@@ -1847,6 +1847,11 @@
     {
       "app": "projects",
       "type": "app_data_changed"
+    },
+    {
+      "dot_id": "01J0DOT",
+      "id": "01J0PROPOSAL",
+      "type": "app_proposal_changed"
     }
   ],
   "ScannedSkill": [

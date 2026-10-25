@@ -66,6 +66,12 @@ pub enum RuntimeEvent {
     AppDataChanged {
         app: String,
     },
+    /// A dot proposed an app, or the person decided a proposal (app library spec section 6.2):
+    /// the review card reads it again.
+    AppProposalChanged {
+        id: String,
+        dot_id: String,
+    },
 }
 
 pub type Bus = broadcast::Sender<RuntimeEvent>;
