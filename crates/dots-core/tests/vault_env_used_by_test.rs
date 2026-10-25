@@ -220,7 +220,9 @@ async fn no_listing_holds_a_value() {
 
     let personal = serde_json::to_string(&vault.list().await.unwrap()).unwrap();
     let org = serde_json::to_string(&h.orgs.entries(ACME).await.unwrap()).unwrap();
-    for text in [&personal, &org] {
+    let personal_debug = format!("{:?}", vault.list().await.unwrap());
+    let org_debug = format!("{:?}", h.orgs.entries(ACME).await.unwrap());
+    for text in [&personal, &org, &personal_debug, &org_debug] {
         for value in [PERSONAL_TOKEN, ORG_KEY, TOKEN] {
             assert!(!text.contains(value), "{text} holds {value:?}");
         }

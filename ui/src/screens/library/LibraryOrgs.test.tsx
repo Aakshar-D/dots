@@ -189,6 +189,26 @@ describe("MCP servers in each scope", () => {
     expect(within(server).queryByRole("listitem", { name: "github in Beta Labs" })).toBeNull();
   });
 
+  it("shows only Personal's dots on the server's own line", async () => {
+    const personal = github.catalogs[0]!;
+    const entry = {
+      ...scoped(),
+      used_by: [{ id: "D1", name: "mine-nightly" }, { id: "D2", name: "acme-release" }],
+      catalogs: [
+        { ...personal, used_by: [{ id: "D1", name: "mine-nightly" }] },
+        ...scoped().catalogs.slice(1),
+      ],
+    };
+    backend.on("library_list", () => [entry]);
+    backend.on("org_list", () => [acme, beta, gamma]);
+    renderApp("/library");
+    const server = await screen.findByRole("listitem", { name: "github" });
+    await within(server).findByRole("listitem", { name: "github in Acme Engineering" });
+    const own = within(server).getAllByText("Used by mine-nightly");
+    expect(own).toHaveLength(1);
+    expect(within(server).getAllByText("Used by acme-release")).toHaveLength(1);
+  });
+
   it("keeps an org whose stored list was reset, though no dot of it uses the server", async () => {
     backend.on("library_list", () => [scoped(true)]);
     backend.on("org_list", () => [acme, beta, gamma]);
@@ -327,6 +347,29 @@ describe("the server form's Check as and origins", () => {
         { serverId: pinned.id, scope: "acme-eng" },
       ]),
     );
+  });
+
+  it("shows an origin once it is confirmed, in the open dialog", async () => {
+    let confirmed: Record<string, string[]> = pinned.confirmed_origins;
+    backend.on("library_list", () => [{ ...pinned, confirmed_origins: confirmed }]);
+    backend.on("confirm_origin", () => {
+      confirmed = { ...confirmed, "acme-eng": ["https://tickets.acme.example"] };
+      return null;
+    });
+    const { user, dialog } = await openForm(pinned);
+    backend.on("library_list", () => [{ ...pinned, confirmed_origins: confirmed }]);
+    await user.click(
+      await within(dialog).findByRole("button", { name: "Confirm origin in Acme Engineering" }),
+    );
+    const origins = within(dialog).getByRole("list", { name: "Confirmed origins" });
+    await waitFor(() =>
+      expect(within(origins).getByRole("listitem", { name: "Acme Engineering" })).toHaveTextContent(
+        "https://tickets.acme.example",
+      ),
+    );
+    expect(
+      within(dialog).queryByRole("button", { name: "Confirm origin in Acme Engineering" }),
+    ).toBeNull();
   });
 
   it("offers a plugin's own server the same, with its settings read-only", async () => {

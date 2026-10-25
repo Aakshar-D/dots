@@ -1,7 +1,8 @@
-import { onlineManager } from "@tanstack/react-query";
+import { onlineManager, QueryClient } from "@tanstack/react-query";
 import { act, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { invalidateDots, keys } from "@/lib/query";
 import { backend } from "@/test/backend";
 import { sample } from "@/test/fixtures";
 import { renderApp } from "@/test/render";
@@ -38,5 +39,19 @@ describe("while the webview reports offline", () => {
     backend.on("dot_overview", () => [sample.overview]);
     await user.click(screen.getByRole("link", { name: "Home" }));
     expect(await screen.findByRole("listitem", { name: sample.dot.name })).toBeVisible();
+  });
+});
+
+describe("invalidateDots", () => {
+  it("marks the Library's used-by answers stale, and not the org list", () => {
+    const qc = new QueryClient();
+    const entries = keys.orgEntries("acme-eng");
+    for (const key of [keys.env, keys.library, keys.orgs, entries]) qc.setQueryData(key, []);
+    invalidateDots(qc);
+    const stale = (key: readonly unknown[]) => qc.getQueryState(key)?.isInvalidated;
+    expect(stale(keys.env)).toBe(true);
+    expect(stale(keys.library)).toBe(true);
+    expect(stale(entries)).toBe(true);
+    expect(stale(keys.orgs)).toBe(false);
   });
 });

@@ -118,10 +118,17 @@ impl Vault {
         }
     }
 
-    /// One entry, as `list` gives it.
+    /// One entry, as `list` gives it. The write that made it is done, so if the dots can't be
+    /// listed the failure is logged and the entry comes back with an empty `used_by`: an error
+    /// here would make a retried Add fail with "already exists".
     async fn listed_one(&self, entry: EnvEntry) -> Result<EnvEntry> {
-        let mut listed = self.listed(vec![entry]).await?;
-        Ok(listed.remove(0))
+        match self.listed(vec![entry.clone()]).await {
+            Ok(mut listed) => Ok(listed.remove(0)),
+            Err(e) => {
+                tracing::warn!("could not list the dots for {}: {e}", entry.name);
+                Ok(entry)
+            }
+        }
     }
 
     /// Adds a personal variable (`env_add`). A secret's value goes to the secret store; if it

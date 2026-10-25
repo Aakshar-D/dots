@@ -143,7 +143,8 @@ function ServerRow(props: {
       {props.owner ? (
         <span className="text-xs text-muted-foreground">{`Comes with plugin ${props.owner}`}</span>
       ) : null}
-      <UsedBy dots={entry.used_by} />
+      {/* Personal's own dots: each org's are on its line below. */}
+      <UsedBy dots={entry.catalogs.find((c) => c.scope === PERSONAL)?.used_by ?? []} />
       {orgCatalogs(entry).length > 0 && (
         <ul className="flex flex-col gap-1.5">
           {orgCatalogs(entry).map((scoped) => (
@@ -168,7 +169,10 @@ export function McpServersTab(props: {
   plugins: PluginEntry[];
   onReview: (id: string, scope?: string) => void;
 }) {
-  const [form, setForm] = useState<"new" | ServerEntry | null>(null);
+  // The server being edited is kept by id and looked up in `entries` on each render, so a
+  // refetch (a confirmed origin, a check) shows in the open dialog.
+  const [form, setForm] = useState<"new" | string | null>(null);
+  const editing = form && form !== "new" ? props.entries.find((e) => e.id === form) : undefined;
   const owners = new Map(props.plugins.map((p) => [p.id, p.name]));
   return (
     <div className="flex flex-col gap-3">
@@ -190,16 +194,16 @@ export function McpServersTab(props: {
               key={entry.id}
               entry={entry}
               owner={entry.owner_id ? (owners.get(entry.owner_id) ?? "a plugin") : undefined}
-              onEdit={() => setForm(entry)}
+              onEdit={() => setForm(entry.id)}
               onReview={(scope) => props.onReview(entry.id, scope)}
             />
           ))}
         </ul>
       )}
-      {form && (
+      {form && (form === "new" || editing) && (
         <ServerForm
-          key={form === "new" ? "new" : form.id}
-          entry={form === "new" ? null : form}
+          key={form}
+          entry={editing ?? null}
           onClose={() => setForm(null)}
         />
       )}

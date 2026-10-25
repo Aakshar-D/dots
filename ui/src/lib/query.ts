@@ -116,12 +116,26 @@ export function takeStatus(qc: QueryClient, status: Status): void {
 }
 
 /// Marks stale everything a change to a dot can show up in: the dot lists, every loaded dot,
-/// the Inbox (a deleted dot takes its approvals and runs with it) and every list of runs. No
-/// runtime event announces a dot change, so each command that changes a dot calls this.
+/// the Inbox (a deleted dot takes its approvals and runs with it), every list of runs, and the
+/// Library's "used by": the Personal variables, every org's entries and the servers. No runtime
+/// event announces a dot change, so each command that changes a dot calls this.
 export function invalidateDots(qc: QueryClient): void {
-  for (const queryKey of [keys.dots, ["dot"], keys.overview, keys.inbox, ["runs"]]) {
-    invalidate(qc, queryKey);
-  }
+  const orgEntries = qc
+    .getQueryCache()
+    .findAll({ queryKey: keys.orgs })
+    .map((query) => query.queryKey)
+    .filter((key) => key.length === 3 && key[2] === "entries");
+  const stale: QueryKey[] = [
+    keys.dots,
+    ["dot"],
+    keys.overview,
+    keys.inbox,
+    ["runs"],
+    keys.env,
+    keys.library,
+    ...orgEntries,
+  ];
+  for (const queryKey of stale) invalidate(qc, queryKey);
 }
 
 /// `have` plus the events of `more` it does not hold yet, ordered by `seq`.
