@@ -204,6 +204,30 @@ fn the_apps_sql_cannot_make_temp_objects_or_draw_random_numbers() {
 }
 
 #[test]
+fn a_column_default_cannot_draw_random_numbers() {
+    let mut conn = data::open_in_memory().unwrap();
+    // The authorizer does not see a DEFAULT's functions: the table is made...
+    data::migrate(
+        &mut conn,
+        &[migration(
+            1,
+            "0001_r.sql",
+            "CREATE TABLE r (x INTEGER, n INTEGER DEFAULT (random()), \
+             b BLOB DEFAULT (randomblob(4)))",
+        )],
+    )
+    .unwrap();
+    // ...but a row that would draw the number is refused.
+    for sql in [
+        "INSERT INTO r (x, b) VALUES (1, x'00')",
+        "INSERT INTO r (x, n) VALUES (1, 0)",
+    ] {
+        let err = guarded(&conn, |c| data::exec(c, sql, &[])).expect_err(sql);
+        assert!(err.contains("is not available to apps"), "{sql}: {err}");
+    }
+}
+
+#[test]
 fn vacuum_cannot_copy_the_database_out() {
     let conn = expenses_db();
     let dir = tempfile::tempdir().unwrap();

@@ -438,6 +438,8 @@ export const AppConfig = z.strictObject({
   version: z.number(),
   // Kept for "Roll back" while the update after it ran no migrations.
   previous_version: nullable(z.number()),
+  // The highest version Dots has given it; a roll back keeps it (0: the active version).
+  last_version: z.number(),
   every_dot: z.boolean(),
   // "Can start dots": off until the person switches it on.
   can_start_dots: z.boolean(),

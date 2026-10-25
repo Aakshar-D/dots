@@ -122,6 +122,7 @@ fn app_config() -> LibraryConfig {
         description: "Projects, tasks and to-dos, shared by you and your dots".into(),
         version: 3,
         previous_version: Some(2),
+        last_version: 4,
         every_dot: true,
         can_start_dots: true,
         origin: AppOrigin::Bundled {

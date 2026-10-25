@@ -179,7 +179,7 @@ async fn a_started_dot_works_in_a_topic_of_its_own_and_the_app_hears_its_end() {
         .unwrap_or_default()
         .to_string();
     assert!(
-        prompt.contains("## Message from the app Chores\n\nDo the chore: dishes\n"),
+        prompt.contains("## Message from the app Chores\n\n> Do the chore: dishes\n"),
         "{prompt}"
     );
     assert_eq!(
@@ -344,5 +344,34 @@ async fn catching_up_tells_no_end_twice() {
     assert_eq!(ends_when(&t, 1).await.len(), 1);
     t.rt.apps().catch_up().await.unwrap();
     assert_eq!(ends(&t).await.len(), 1);
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn a_follow_up_keeps_the_topic_waiting_until_it_is_cancelled() {
+    let t = start().await;
+    let llm = Llm::start(vec![
+        llm_call(
+            "f1",
+            "follow_up",
+            json!({"note": "See that the dishes dried.", "in": "2h"}),
+        ),
+        llm_text("I will look again later."),
+    ])
+    .await;
+    let builder = dot(&t, &llm.endpoint(), "builder").await;
+    let id = assign(&t, &builder, "dishes").await.unwrap();
+    wait_status(t.rt.store(), &id, RunStatus::Succeeded, 30).await;
+    let pending = t.rt.follow_ups().list(Some(&builder.id)).await.unwrap();
+    assert_eq!(pending.len(), 1);
+    // The dot means to go on: the app hears no end, and the same chore is the same topic.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(ends(&t).await.is_empty());
+    assert_eq!(assign(&t, &builder, "dishes").await.unwrap(), id);
+    // Cancelled, nothing waits: the app hears the end, though no run of the topic ended.
+    t.rt.follow_ups().cancel(&pending[0].id).await.unwrap();
+    let heard = ends_when(&t, 1).await;
+    assert_eq!(heard.len(), 1, "{heard:?}");
+    assert_eq!(heard[0]["run_id"], id);
     t.rt.shutdown();
 }

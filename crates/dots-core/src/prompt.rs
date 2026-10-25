@@ -122,8 +122,14 @@ pub fn build_prompt_full(
             .and_then(Value::as_str)
             .unwrap_or("an app");
         out.push_str(&format!("## Message from the app {app}\n\n"));
-        out.push_str(message);
-        out.push_str("\n\n");
+        // Quoted: the text an app builds (from task titles a dot may have written) cannot open
+        // a section of its own, such as "## Message from the user".
+        for line in message.lines() {
+            out.push_str("> ");
+            out.push_str(line);
+            out.push('\n');
+        }
+        out.push('\n');
     } else if run.trigger == TriggerKind::FollowUp {
         // A follow-up whose thread could not be resumed (check-ins spec section 6).
         out.push_str("## Follow-up\n\n");

@@ -297,7 +297,7 @@ impl Apps {
                 at: crate::util::now(),
             };
             if let Err(e) = self.store.record_app_call(&record).await {
-                tracing::warn!(app = %name, tool, "the app call could not be logged: {e}");
+                tracing::error!(app = %name, tool, "the app call could not be logged: {e}");
             }
         }
         match ran {
@@ -437,6 +437,7 @@ impl Apps {
             description: src.manifest.description.clone(),
             version: 1,
             previous_version: None,
+            last_version: 1,
             every_dot: false,
             can_start_dots: false,
             origin,
@@ -512,7 +513,8 @@ impl Apps {
                 )));
             }
         }
-        let next = old.version + 1;
+        // Past every number given before, a rolled-back one too: a version names one code.
+        let next = old.version.max(old.last_version) + 1;
         let code = self.code_dir(&item.id, next);
         let data_path = self.data_path(&item.id);
         let keep = src.clone();
@@ -533,6 +535,7 @@ impl Apps {
             description: src.manifest.description.clone(),
             version: next,
             previous_version: (ran == 0).then_some(old.version),
+            last_version: next,
             can_start_dots: old.can_start_dots && src.manifest.can_start_dots(),
             changed: old.changed
                 || (by_proposal && matches!(old.origin, AppOrigin::Bundled { .. })),
@@ -563,6 +566,7 @@ impl Apps {
             description: earlier.manifest.description.clone(),
             version: previous,
             previous_version: None,
+            last_version: old.version.max(old.last_version),
             can_start_dots: old.can_start_dots && earlier.manifest.can_start_dots(),
             ..old
         };

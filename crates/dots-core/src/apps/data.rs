@@ -9,6 +9,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
+use rusqlite::functions::FunctionFlags;
 use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
 use rusqlite::types::{Value as SqlValue, ValueRef};
 use rusqlite::{Batch, Connection, Statement};
@@ -71,6 +72,16 @@ fn configure(conn: &Connection) -> Result<()> {
         MAX_DB_BYTES / page_size
     ))
     .map_err(sql_error)?;
+    // The authorizer sees the functions a statement names, but not those of a column's DEFAULT:
+    // these stand in for SQLite's own, wherever they are called.
+    for (name, args) in [("random", 0), ("randomblob", 1)] {
+        conn.create_scalar_function(name, args, FunctionFlags::SQLITE_UTF8, move |_| {
+            Err::<i64, _>(rusqlite::Error::UserFunctionError(
+                format!("{name}() is not available to apps: use ctx.id()").into(),
+            ))
+        })
+        .map_err(sql_error)?;
+    }
     // WAL lets the screen read while a dot's call writes; an in-memory database keeps its own.
     let _: String = conn
         .query_row("PRAGMA journal_mode = WAL", [], |r| r.get(0))

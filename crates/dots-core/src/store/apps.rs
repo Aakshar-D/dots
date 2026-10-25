@@ -14,15 +14,18 @@ use crate::{Error, Result};
 const PROPOSAL_COLUMNS: &str = "id, dot_id, run_id, root_run_id, app_name, app_id, base_version, \
     note, summary, status, answer, answer_run_id, created_at, decided_at";
 
-/// A topic is busy while a run of it works or is parked, a question of it is open or a review
-/// card of it waits (app library spec section 7). `t` is the `app_topics` row.
+/// A topic is busy while a run of it works or is parked, a question of it is open, a review
+/// card of it waits (app library spec section 7) or a follow-up a run of it scheduled has not
+/// fired: the dot still means to go on. `t` is the `app_topics` row.
 const TOPIC_BUSY: &str = "(EXISTS (SELECT 1 FROM runs r WHERE r.root_run_id = t.root_run_id \
     AND r.status IN ('queued', 'running', 'awaiting_approval')) \
     OR EXISTS (SELECT 1 FROM messages m JOIN runs r ON r.id = m.run_id \
     WHERE r.root_run_id = t.root_run_id AND m.kind = 'question' AND m.answered_at IS NULL \
     AND m.dismissed_at IS NULL) \
     OR EXISTS (SELECT 1 FROM app_proposals p WHERE p.root_run_id = t.root_run_id \
-    AND p.status = 'pending'))";
+    AND p.status = 'pending') \
+    OR EXISTS (SELECT 1 FROM follow_ups f JOIN runs r ON r.id = f.from_run_id \
+    WHERE r.root_run_id = t.root_run_id AND f.status = 'pending'))";
 
 const TOPIC_COLUMNS: &str = "t.root_run_id, t.app_id, t.dot_id, t.tag, t.created_at, t.told_run_id";
 

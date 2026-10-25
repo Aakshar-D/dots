@@ -78,6 +78,7 @@ async fn an_app_installs_at_version_1_with_both_switches_off() {
             description: "Logs expenses and totals them by month".into(),
             version: 1,
             previous_version: None,
+            last_version: 1,
             every_dot: false,
             can_start_dots: false,
             origin: AppOrigin::Proposed,
@@ -163,6 +164,43 @@ async fn an_update_without_migrations_keeps_the_version_before() {
         err.contains("roll back is offered only when the last update changed no data schema"),
         "{err}"
     );
+}
+
+#[tokio::test]
+async fn a_rolled_back_version_number_is_never_given_again() {
+    let f = fixture().await;
+    f.apps
+        .install(source(&expenses()), AppOrigin::Proposed)
+        .await
+        .unwrap();
+    f.apps
+        .update("expenses", expenses_v2("Spending", false), true)
+        .await
+        .unwrap();
+    let item = f.apps.roll_back("expenses").await.unwrap();
+    assert_eq!(config(&item).last_version, 2);
+    // A change checked against the version 2 that was rolled back...
+    let item = f
+        .apps
+        .update("expenses", expenses_v2("Expenses", true), true)
+        .await
+        .unwrap();
+    let c = config(&item);
+    assert_eq!((c.version, c.last_version), (3, 3));
+    // ...cannot be applied to the version that came after it.
+    match f
+        .apps
+        .update_checked(
+            "expenses",
+            expenses_v2("Spending", false),
+            true,
+            Some((&item.id, 2)),
+        )
+        .await
+    {
+        Err(Error::Conflict(m)) => assert!(m.contains("version 2, now 3"), "{m}"),
+        other => panic!("expected a conflict, got {other:?}"),
+    }
 }
 
 #[tokio::test]

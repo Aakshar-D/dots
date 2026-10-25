@@ -134,6 +134,11 @@ pub fn spawn_run_ends(apps: Apps, bus: &Bus, shutdown: CancellationToken) {
                 Ok(RuntimeEvent::RunUpdated { run }) if run.status.is_terminal() => {
                     let _ = tell.send(Some(run));
                 }
+                // A follow-up kept a topic waiting: cancelled, skipped or fired into a thread of
+                // its own, it no longer does, and no run of the topic ends to say so.
+                Ok(RuntimeEvent::FollowUpsUpdated { .. }) => {
+                    let _ = tell.send(None);
+                }
                 Ok(_) => {}
                 Err(RecvError::Lagged(n)) => {
                     tracing::warn!("{n} events were missed; the apps catch up on the runs' ends");

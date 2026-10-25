@@ -125,6 +125,10 @@ pub struct AppConfig {
     /// migrations.
     #[serde(default)]
     pub previous_version: Option<u32>,
+    /// The highest version Dots has given the app: a roll back keeps it, so a number is never
+    /// given twice and a change checked against a version cannot match another (0: `version`).
+    #[serde(default)]
+    pub last_version: u32,
     /// Every dot uses the app, ticked or not.
     #[serde(default)]
     pub every_dot: bool,
