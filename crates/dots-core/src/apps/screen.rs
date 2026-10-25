@@ -90,9 +90,11 @@ impl Apps {
     }
 
     /// A proposal's files, for the card's Code tab (spec section 6.2). A decided proposal has
-    /// none left: `NotFound`.
+    /// none left: `NotFound`. Only a stored proposal's id names a folder: the UI passes ids,
+    /// not paths, so `../<app id>/code/1` is no proposal.
     pub async fn proposal_files(&self, id: &str) -> Result<Vec<AppFile>> {
-        let dir = self.proposed_dir(id);
+        let p = self.store.get_app_proposal(id).await?;
+        let dir = self.proposed_dir(&p.id);
         if !dir.is_dir() {
             return Err(Error::NotFound(format!("the files of app proposal {id}")));
         }
