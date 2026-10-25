@@ -286,7 +286,7 @@ describe("Settings, Organisations", () => {
     expect(await row("Design")).toBeVisible();
   });
 
-  it("updates an org: what changes, a key warning, and the saved sign-in kept", async () => {
+  it("updates an org: what changes, a key warning, and new sign-in for a moved source", async () => {
     orgs([acme]);
     backend.on("org_preview", () => keyChange);
     backend.on("org_update", () => ({ ...acme, key_fingerprint: keyChange.key_fingerprint }));
@@ -302,9 +302,43 @@ describe("Settings, Organisations", () => {
     expect(key).toHaveTextContent(keyChange.changes[1]);
     expect(key).toHaveClass("text-needs");
     expect(keyChange.key_changed).toBe(true);
+    expect(keyChange.source_changed).toBe(true);
+    await user.click(within(dialog).getByRole("button", { name: "Continue" }));
+
+    // The path changed: the saved details are not sent to it, so they are asked as at a Join.
+    expect(dialog).toHaveTextContent(
+      "The source changed, so enter your sign-in details again: Dots does not send the saved " +
+        "ones to it.",
+    );
+    expect(dialog).not.toHaveTextContent("Leave these empty");
+    const update = within(dialog).getByRole("button", { name: "Update" });
+    expect(update).toBeDisabled();
+    await user.type(within(dialog).getByLabelText("Token"), TOKEN);
+    noSecretShown();
+    await user.click(update);
+    expect(backend.callsTo("org_update")).toEqual([
+      { orgId: "acme-eng", code: CODE, creds: { kind: "token", token: TOKEN } },
+    ]);
+    expect(await screen.findByText("Updated Acme Engineering")).toBeVisible();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    noSecretShown();
+  });
+
+  it("keeps the saved sign-in details when the code leaves the source as it is", async () => {
+    orgs([acme]);
+    const keyOnly = {
+      ...keyChange,
+      changes: keyChange.changes.slice(-1),
+      source_changed: false,
+    } satisfies JoinPreview;
+    backend.on("org_preview", () => keyOnly);
+    backend.on("org_update", () => acme);
+    const { user } = renderApp("/settings");
+    const dialog = await preview(user, "Acme Engineering");
     await user.click(within(dialog).getByRole("button", { name: "Continue" }));
 
     expect(dialog).toHaveTextContent("Leave these empty to keep the saved sign-in details.");
+    expect(dialog).not.toHaveTextContent("The source changed");
     await user.click(within(dialog).getByRole("button", { name: "Update" }));
     expect(backend.callsTo("org_update")).toEqual([
       { orgId: "acme-eng", code: CODE, creds: null },

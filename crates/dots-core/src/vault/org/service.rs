@@ -135,6 +135,10 @@ pub struct JoinPreview {
     /// For **Update**, the code brings another policy key: the last line of `changes` warns of
     /// it.
     pub key_changed: bool,
+    /// For **Update**, the code changes an OpenBao or Infisical source's settings, or the kind
+    /// of source: the saved sign-in details are not sent to it, so the person gives them again.
+    /// A SOPS file's new location keeps this PC's key.
+    pub source_changed: bool,
 }
 
 /// One org entry for the Env tab. A secret's `value` is always `None`.
@@ -335,14 +339,15 @@ impl Orgs {
     /// What `code` would join, or change for an org already joined. Nothing is fetched.
     pub fn preview_join(&self, code: &str) -> Result<JoinPreview> {
         let code = parse_join_code(code)?;
-        let (existing, changes, key_changed) = match self.read().get(&code.org_id) {
+        let (existing, changes, key_changed, source_changed) = match self.read().get(&code.org_id) {
             Some(Slot::Joined(joined)) => (
                 true,
                 changes(&joined.row, &code),
                 joined.row.policy_key != code.policy_key,
+                source_changed(&joined.row.source, &code.source),
             ),
-            Some(Slot::Damaged { .. }) => (true, vec![damaged_text(&code.org_id)], false),
-            Some(Slot::Pending(_)) | None => (false, Vec::new(), false),
+            Some(Slot::Damaged { .. }) => (true, vec![damaged_text(&code.org_id)], false, false),
+            Some(Slot::Pending(_)) | None => (false, Vec::new(), false, false),
         };
         Ok(JoinPreview {
             key_fingerprint: key_fingerprint(&code.policy_key)?,
@@ -357,6 +362,7 @@ impl Orgs {
             existing,
             changes,
             key_changed,
+            source_changed,
         })
     }
 
@@ -466,7 +472,10 @@ impl Orgs {
     /// **Update**). It fetches with the new settings first, with `creds`, or the stored details
     /// when `None`, and checks the policy as a refresh does. Only when that works are the
     /// settings and the details replaced. A failure leaves the old ones, and their values,
-    /// working. Dots and grants are not touched.
+    /// working. Dots and grants are not touched. The stored details are never sent to a changed
+    /// source: when the code changes an OpenBao or Infisical source's settings, or the kind of
+    /// source, `creds` must be given, and nothing is sent without them. A SOPS file's new
+    /// location keeps this PC's age key, which goes nowhere.
     pub async fn update(
         &self,
         org_id: &str,
@@ -486,6 +495,15 @@ impl Orgs {
             Some(Slot::Damaged { .. }) => return Err(Error::Invalid(damaged_text(org_id))),
             Some(Slot::Pending(_)) | None => return Err(not_joined(org_id)),
         };
+        // The saved details were given for the old source: a new address (or anything else
+        // about where and how they are sent) must not receive them before the policy's
+        // signature is checked.
+        if creds.is_none() && source_changed(&old.source, &code.source) {
+            return Err(Error::Invalid(format!(
+                "{}: the source changed; enter the sign-in details again",
+                old.name
+            )));
+        }
         let secrets = self.inner.secrets.as_ref();
         let given = creds.is_some();
         // Damaged saved details don't stop an Update that brings new ones.
@@ -1296,6 +1314,17 @@ fn check_creds_fit(source: &SourceSettings, creds: &SourceCreds) -> Result<()> {
         return Err(Error::Invalid(needs.to_string()));
     }
     Ok(())
+}
+
+/// Whether an Update from `old` to `new` needs the sign-in details given again: any change to an
+/// OpenBao or Infisical source's settings (its address or site, auth method, mounts, namespace,
+/// path, project, environment or folder), or a change of kind. A SOPS file's new location
+/// keeps this PC's age key, which is never sent anywhere.
+fn source_changed(old: &SourceSettings, new: &SourceSettings) -> bool {
+    match (old, new) {
+        (SourceSettings::Sops(_), SourceSettings::Sops(_)) => false,
+        _ => old != new,
+    }
 }
 
 /// Puts the sign-in details an Update replaced back; a failure is logged.

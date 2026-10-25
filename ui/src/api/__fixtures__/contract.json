@@ -936,6 +936,7 @@
       "key_fingerprint": "6E2F0A1B9C3D4E5F",
       "name": "Acme Engineering",
       "org_id": "acme-eng",
+      "source_changed": false,
       "source_kind": "openbao"
     },
     {
@@ -950,6 +951,7 @@
       "key_fingerprint": "0A1B2C3D4E5F6071",
       "name": "Acme Engineering",
       "org_id": "acme-eng",
+      "source_changed": true,
       "source_kind": "openbao"
     }
   ],

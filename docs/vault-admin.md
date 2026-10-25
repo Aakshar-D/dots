@@ -522,10 +522,16 @@ Dots fetches once and joins only when the fetch works and the policy's signature
 **Changing the org's settings.** For a new address, path or key, make a new join code for the same
 org id. People use **Update** on the org, not Join. Dots shows what changes and fetches with the
 new settings, and replaces the old ones only when that fetch and the signature check work. Their
-dots and grants stay. A person who leaves the sign-in fields empty keeps their saved details.
+dots and grants stay. While the source stays the same, a person who leaves the sign-in fields
+empty keeps their saved details.
 
-**Update sends those saved details to the new code's address before it checks the new policy's
-signature.** Tell people to use Update only with a code that came from you.
+**Update never sends the saved details to a changed source.** When the new code changes anything
+about an OpenBao or Infisical source (the address or site, the auth method or its mount, the
+namespace, mount, path, project, environment or secret path) or the kind of source, Dots asks
+for the sign-in details again, as at Join, and sends nothing until they are given. A SOPS file's
+new location keeps the PC's age key, which is never sent anywhere. The details a person types go
+to the new source before the new policy's signature is checked, so tell people to use Update
+only with a code that came from you.
 
 ## 6. Day to day
 

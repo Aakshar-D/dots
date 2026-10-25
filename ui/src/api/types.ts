@@ -674,6 +674,9 @@ export const JoinPreview = z.strictObject({
   changes: z.array(z.string()),
   // For Update, the code brings another policy key; the last line of changes warns of it.
   key_changed: z.boolean(),
+  // For Update, the code changes an OpenBao or Infisical source's settings, or the kind of
+  // source: the saved sign-in details are not sent to it, so they must be given again.
+  source_changed: z.boolean(),
 });
 // An org's entry for the Env tab. A secret's value is always null.
 export const OrgEntry = z.strictObject({

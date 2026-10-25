@@ -417,6 +417,7 @@ async fn the_preview_shows_a_new_org_or_what_an_update_changes() {
     assert!(!preview.existing);
     assert!(preview.changes.is_empty());
     assert!(!preview.key_changed);
+    assert!(!preview.source_changed);
 
     // The sign-in the code names, so the UI asks for the right details; none but OpenBao's.
     let SourceSettings::OpenBao(bao) = openbao(&h.bao.address(), "dots") else {
@@ -452,6 +453,7 @@ async fn the_preview_shows_a_new_org_or_what_an_update_changes() {
     assert!(unchanged.existing);
     assert!(unchanged.changes.is_empty(), "{:?}", unchanged.changes);
     assert!(!unchanged.key_changed);
+    assert!(!unchanged.source_changed);
 
     let new_keys = keys();
     let moved = code(
@@ -463,6 +465,7 @@ async fn the_preview_shows_a_new_org_or_what_an_update_changes() {
     let preview = h.orgs.preview_join(&moved).unwrap();
     assert!(preview.existing);
     assert!(preview.key_changed);
+    assert!(preview.source_changed, "a new path");
     assert_eq!(
         preview.changes,
         vec![
@@ -488,6 +491,50 @@ async fn the_preview_shows_a_new_org_or_what_an_update_changes() {
         )]
     );
     assert!(!preview.key_changed, "the same key, another source");
+    assert!(preview.source_changed, "another kind of source");
+
+    // A new name or a new key alone keeps the source.
+    let renamed = code(
+        ACME,
+        "Acme Eng",
+        openbao(&h.bao.address(), "dots"),
+        &new_keys,
+    );
+    let preview = h.orgs.preview_join(&renamed).unwrap();
+    assert!(preview.key_changed);
+    assert!(!preview.source_changed);
+    // Any setting of the source counts, also one that only says how to sign in.
+    let SourceSettings::OpenBao(bao) = openbao(&h.bao.address(), "dots") else {
+        unreachable!()
+    };
+    let settings = [
+        OpenBaoSettings {
+            address: "http://localhost:1".into(),
+            ..bao.clone()
+        },
+        OpenBaoSettings {
+            mount: "kv".into(),
+            ..bao.clone()
+        },
+        OpenBaoSettings {
+            auth: BaoAuth::Userpass,
+            ..bao.clone()
+        },
+        OpenBaoSettings {
+            auth: BaoAuth::Ldap,
+            auth_mount: Some("corp".into()),
+            ..bao.clone()
+        },
+        OpenBaoSettings {
+            namespace: Some("eng".into()),
+            ..bao.clone()
+        },
+    ];
+    for changed in settings {
+        let changed = code(ACME, ACME_NAME, SourceSettings::OpenBao(changed), &h.keys);
+        let preview = h.orgs.preview_join(&changed).unwrap();
+        assert!(preview.source_changed, "{:?}", preview.changes);
+    }
     assert_eq!(h.bao.calls().len(), calls, "a preview fetches nothing");
 }
 
@@ -497,9 +544,13 @@ async fn a_failed_update_leaves_the_old_settings_and_values_working() {
     h.join_acme(entries(), acme_policy()).await;
     let row = h.store.get_org(ACME).await.unwrap().unwrap();
 
-    // Nothing at the new path.
+    // Nothing at the new path. A new path takes the sign-in details again.
     let empty = h.code_at(ACME, ACME_NAME, "nothing");
-    let e = h.orgs.update(ACME, &empty, None).await.unwrap_err();
+    let e = h
+        .orgs
+        .update(ACME, &empty, Some(token()))
+        .await
+        .unwrap_err();
     assert_eq!(
         other(e),
         "could not update Acme Engineering: no secrets at secret/nothing/env"
@@ -509,7 +560,11 @@ async fn a_failed_update_leaves_the_old_settings_and_values_working() {
     let signed = sign(&keys(), &policy(ACME, "2026-10-22T10:00:00Z", json!({})));
     h.serve("dots2", json!({"API_KEY": ROTATED}), &signed);
     let moved = h.code_at(ACME, ACME_NAME, "dots2");
-    let e = h.orgs.update(ACME, &moved, None).await.unwrap_err();
+    let e = h
+        .orgs
+        .update(ACME, &moved, Some(token()))
+        .await
+        .unwrap_err();
     assert_eq!(
         other(e),
         "could not update Acme Engineering: policy invalid: signature does not match"
@@ -518,7 +573,11 @@ async fn a_failed_update_leaves_the_old_settings_and_values_working() {
     // A policy older than the one accepted.
     let signed = sign(&h.keys, &policy(ACME, "2026-10-21T08:00:00Z", json!({})));
     h.serve("dots2", json!({"API_KEY": ROTATED}), &signed);
-    let e = h.orgs.update(ACME, &moved, None).await.unwrap_err();
+    let e = h
+        .orgs
+        .update(ACME, &moved, Some(token()))
+        .await
+        .unwrap_err();
     assert_eq!(
         other(e),
         "could not update Acme Engineering: policy invalid: issued before the last accepted \
@@ -568,7 +627,7 @@ async fn an_update_replaces_the_settings_and_leaves_dots_and_grants_alone() {
         .await
         .unwrap();
 
-    // A new path and a new key, with the stored token.
+    // A new path and a new key, with the token given again.
     let new_keys = keys();
     let issued = "2026-10-22T10:00:00Z";
     let signed = sign(
@@ -583,7 +642,7 @@ async fn an_update_replaces_the_settings_and_leaves_dots_and_grants_alone() {
         &new_keys,
     );
     h.advance(Duration::hours(1));
-    let summary = h.orgs.update(ACME, &moved, None).await.unwrap();
+    let summary = h.orgs.update(ACME, &moved, Some(token())).await.unwrap();
 
     assert_eq!(status(&summary), OrgStatus::Connected);
     assert_eq!(summary.name, "Acme Eng");
@@ -625,6 +684,107 @@ async fn an_update_replaces_the_settings_and_leaves_dots_and_grants_alone() {
     let summary = h.orgs.refresh(ACME).await.unwrap();
     assert_eq!(status(&summary), OrgStatus::Connected);
     assert_eq!(h.env_reads("dots2"), reads + 1);
+}
+
+#[tokio::test]
+async fn an_update_that_changes_the_source_never_sends_the_saved_sign_in_details() {
+    let h = OrgsHarness::new().await;
+    h.join_acme(entries(), acme_policy()).await;
+    let row = h.store.get_org(ACME).await.unwrap().unwrap();
+    let signed = sign(&h.keys, &policy(ACME, "2026-10-22T10:00:00Z", json!({})));
+    h.serve("dots2", json!({"API_KEY": ROTATED}), &signed);
+
+    // Another host: it would get the token before any signature is checked.
+    let elsewhere = FakeOpenBao::start().await;
+    elsewhere.allow_token(TOKEN, false);
+    let moved_host = code(
+        ACME,
+        ACME_NAME,
+        openbao(&elsewhere.address(), "dots"),
+        &h.keys,
+    );
+    // The same host, another path.
+    let moved_path = h.code_at(ACME, ACME_NAME, "dots2");
+    h.bao.clear_requests();
+    for moved in [&moved_host, &moved_path] {
+        let e = h.orgs.update(ACME, moved, None).await.unwrap_err();
+        assert_eq!(
+            invalid(e),
+            "Acme Engineering: the source changed; enter the sign-in details again"
+        );
+    }
+    assert!(elsewhere.calls().is_empty(), "{:?}", elsewhere.calls());
+    assert!(h.bao.calls().is_empty(), "{:?}", h.bao.calls());
+    assert_eq!(h.store.get_org(ACME).await.unwrap().unwrap(), row);
+    assert_eq!(stored_creds(&h, ACME), Some(token()));
+    assert_eq!(h.orgs.lookup(ACME, "API_KEY").await, value(API_KEY, false));
+
+    // With the details given, the Update goes on as before.
+    let summary = h
+        .orgs
+        .update(ACME, &moved_path, Some(token()))
+        .await
+        .unwrap();
+    assert_eq!(status(&summary), OrgStatus::Connected);
+    assert_eq!(h.orgs.lookup(ACME, "API_KEY").await, value(ROTATED, false));
+    assert_eq!(
+        h.store.get_org(ACME).await.unwrap().unwrap().source,
+        openbao(&h.bao.address(), "dots2")
+    );
+    // A code for the same source still uses the saved details.
+    let reads = h.env_reads("dots2");
+    let renamed = code(
+        ACME,
+        "Acme Eng",
+        openbao(&h.bao.address(), "dots2"),
+        &h.keys,
+    );
+    h.orgs.update(ACME, &renamed, None).await.unwrap();
+    assert_eq!(h.env_reads("dots2"), reads + 1);
+}
+
+#[tokio::test]
+async fn a_sops_file_that_moves_keeps_this_pcs_key_and_another_kind_asks_again() {
+    let h = OrgsHarness::new().await;
+    let scripted = Scripted::new();
+    let orgs = h.service().with_sources(scripted.factory());
+    let first = code(
+        ACME,
+        ACME_NAME,
+        sops_at("https://files.acme.example/env.json"),
+        &h.keys,
+    );
+    orgs.sops_identity(ACME).await.unwrap();
+    let stored = stored_creds(&h, ACME).unwrap();
+    let signed = sign(&h.keys, &policy(ACME, ISSUED, acme_policy()));
+    scripted.serve(&[("API_KEY", API_KEY)], &signed);
+    orgs.join(&first, None).await.unwrap();
+
+    let moved = code(
+        ACME,
+        ACME_NAME,
+        sops_at("C:/Sync/acme/env.enc.json"),
+        &h.keys,
+    );
+    let preview = orgs.preview_join(&moved).unwrap();
+    assert!(!preview.source_changed, "{:?}", preview.changes);
+    let summary = orgs.update(ACME, &moved, None).await.unwrap();
+    assert_eq!(status(&summary), OrgStatus::Connected);
+    assert_eq!(summary.address, "C:/Sync/acme/env.enc.json");
+    assert_eq!(scripted.creds(), vec![stored.clone(), stored.clone()]);
+    assert_eq!(stored_creds(&h, ACME), Some(stored.clone()));
+
+    // From SOPS to OpenBao: the age key is no sign-in for it.
+    let to_bao = h.acme_code();
+    assert!(orgs.preview_join(&to_bao).unwrap().source_changed);
+    let e = orgs.update(ACME, &to_bao, None).await.unwrap_err();
+    assert_eq!(
+        invalid(e),
+        "Acme Engineering: the source changed; enter the sign-in details again"
+    );
+    assert_eq!(scripted.creds().len(), 2, "nothing is fetched");
+    assert!(h.bao.calls().is_empty());
+    assert_eq!(stored_creds(&h, ACME), Some(stored));
 }
 
 // Refresh
@@ -1393,7 +1553,11 @@ async fn errors_summaries_and_listings_never_hold_a_value() {
     ));
 
     let empty = h.code_at(ACME, ACME_NAME, "nothing");
-    let e = h.orgs.update(ACME, &empty, None).await.unwrap_err();
+    let e = h
+        .orgs
+        .update(ACME, &empty, Some(token()))
+        .await
+        .unwrap_err();
     texts.push(format!("{e} {e:?}"));
 
     h.bao.fail_next(Failure::Status(503), 1);

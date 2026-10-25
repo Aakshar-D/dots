@@ -321,7 +321,9 @@ export function JoinDialog(props: { org?: OrgSummary; onClose: () => void }) {
         ? `${preview.name} is joined already: use Update on it in the list.`
         : undefined;
   const verb = org ? "Update" : "Join";
-  const required = !org && creds === null && kind !== "age";
+  // An Update to a changed source never reuses the saved details: the core would refuse.
+  const fresh = !org || !!preview?.source_changed;
+  const required = fresh && creds === null && kind !== "age";
 
   return (
     <Dialog open onOpenChange={(next) => !next && props.onClose()}>
@@ -424,9 +426,15 @@ export function JoinDialog(props: { org?: OrgSummary; onClose: () => void }) {
 
             {step === "creds" && (
               <>
-                {org && kind !== "age" && (
+                {org && kind !== "age" && !fresh && (
                   <p className="text-xs text-muted-foreground">
                     Leave these empty to keep the saved sign-in details.
+                  </p>
+                )}
+                {org && kind !== "age" && fresh && (
+                  <p className="text-xs text-needs">
+                    The source changed, so enter your sign-in details again: Dots does not send
+                    the saved ones to it.
                   </p>
                 )}
                 {kind === "token" && (
@@ -495,7 +503,9 @@ export function JoinDialog(props: { org?: OrgSummary; onClose: () => void }) {
                 {kind === "age" && <SopsKey orgId={preview.org_id} verb={verb} />}
                 {creds === "partial" && (
                   <p className="text-xs text-muted-foreground">
-                    {org ? "Give every field, or leave them all empty." : "Give every field."}
+                    {org && !fresh
+                      ? "Give every field, or leave them all empty."
+                      : "Give every field."}
                   </p>
                 )}
                 {waiting && (
