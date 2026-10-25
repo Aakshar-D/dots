@@ -32,7 +32,8 @@ use crate::settings::Settings;
 use crate::skill_creator::SkillDrafts;
 use crate::store::Store;
 use crate::vault::org::{
-    http_client, os_protector, JoinPreview, OrgSummary, OrgTimers, Orgs, SourceCreds, OFFLINE_DIR,
+    http_client, os_protector, JoinPreview, OrgStatus, OrgSummary, OrgTimers, Orgs, SourceCreds,
+    OFFLINE_DIR,
 };
 use crate::vault::{os_secrets, MemorySecrets, SecretStore, Vault};
 use crate::workspace::{Prepared, WorkspaceManager};
@@ -1119,11 +1120,14 @@ impl Runtime {
         self.orgs.preview_join(code)
     }
 
-    /// Joins the org of `code` (**Join**), then starts its timer.
+    /// Joins the org of `code` (**Join**), then starts its timer. A SOPS join that waits for
+    /// the admin (`Pending`) joins nothing, so it has no timer and no event.
     pub async fn join_org(&self, code: &str, creds: Option<SourceCreds>) -> Result<OrgSummary> {
         let summary = self.orgs.join(code, creds).await?;
-        self.org_timers.start(&summary.id);
-        self.org_updated(&summary.id);
+        if summary.status != OrgStatus::Pending {
+            self.org_timers.start(&summary.id);
+            self.org_updated(&summary.id);
+        }
         Ok(summary)
     }
 

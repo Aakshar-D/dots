@@ -37,6 +37,11 @@ export const keys = {
   env: ["env"] as const,
   envImport: ["env-import"] as const,
   envBackups: ["env-backups"] as const,
+  /// The orgs joined on this PC (Settings → Organisations, and the org names other screens
+  /// show). What is read per org belongs under this prefix, so an org event reaches it too.
+  orgs: ["orgs"] as const,
+  /// This PC's age public key for a SOPS org: made once, so no org event asks for it again.
+  orgSopsKey: (orgId: string) => ["org-sops-key", orgId] as const,
   dots: ["dots"] as const,
   dot: (id: string) => ["dot", id] as const,
   newDotSpec: ["new-dot-spec"] as const,

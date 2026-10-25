@@ -23,7 +23,7 @@ use dots_core::schedule::Schedule;
 use dots_core::scheduler::MAX_ATTEMPTS;
 use dots_core::settings::{Settings, MAX_CONCURRENT_RUNS, MAX_GLOBAL_INSTRUCTIONS};
 use dots_core::skill_creator::{DraftRequest, DraftSummary};
-use dots_core::vault::org::{JoinPreview, OrgEntry, OrgStatus, OrgSummary, SourceCreds};
+use dots_core::vault::org::{BaoAuth, JoinPreview, OrgEntry, OrgStatus, OrgSummary, SourceCreds};
 use dots_core::vault::{EntryKind, EnvEntry};
 use serde_json::{json, Value};
 
@@ -994,8 +994,10 @@ fn join_previews() -> Vec<JoinPreview> {
         source_kind: "openbao".into(),
         address: "https://bao.acme.internal".into(),
         key_fingerprint: "6E2F0A1B9C3D4E5F".into(),
+        auth: Some(BaoAuth::Token),
         existing: false,
         changes: vec![],
+        key_changed: false,
     };
     vec![
         new.clone(),
@@ -1009,6 +1011,7 @@ fn join_previews() -> Vec<JoinPreview> {
                  the key changed"
                     .into(),
             ],
+            key_changed: true,
             ..new
         },
     ]

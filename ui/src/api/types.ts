@@ -631,6 +631,9 @@ export const OrgSummary = z.discriminatedUnion("status", [
   // A SOPS join waiting for the admin to add this PC's key.
   z.strictObject({ status: z.literal("pending"), ...orgSummaryShape }),
 ]);
+// How an OpenBao or Vault join code signs in: a token, or a username and password against a
+// `userpass` or `ldap` mount.
+export const BaoAuth = z.enum(["token", "userpass", "ldap"]);
 // What a join code would join, or change for an org joined already (Update). Nothing is
 // fetched for it.
 export const JoinPreview = z.strictObject({
@@ -639,9 +642,14 @@ export const JoinPreview = z.strictObject({
   source_kind: z.string(),
   address: z.string(),
   key_fingerprint: z.string(),
+  // How an OpenBao code signs in, so Join asks for a token or a username and password; null
+  // for Infisical (a machine identity) and SOPS (this PC's key).
+  auth: nullable(BaoAuth),
   existing: z.boolean(),
   // For Update, what the code changes, in plain words; a new policy key gets a warning.
   changes: z.array(z.string()),
+  // For Update, the code brings another policy key; the last line of changes warns of it.
+  key_changed: z.boolean(),
 });
 // An org's entry for the Env tab. A secret's value is always null.
 export const OrgEntry = z.strictObject({
@@ -767,6 +775,7 @@ export type EnvEntry = z.infer<typeof EnvEntry>;
 export type ScopedCatalog = z.infer<typeof ScopedCatalog>;
 export type SourceCreds = z.infer<typeof SourceCreds>;
 export type OrgSummary = z.infer<typeof OrgSummary>;
+export type BaoAuth = z.infer<typeof BaoAuth>;
 export type JoinPreview = z.infer<typeof JoinPreview>;
 export type OrgEntry = z.infer<typeof OrgEntry>;
 export type FileDiff = z.infer<typeof FileDiff>;

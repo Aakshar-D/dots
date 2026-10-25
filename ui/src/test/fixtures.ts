@@ -37,6 +37,12 @@ export const sample = {
   followUps: T.FollowUp.array().parse(contract.FollowUp),
   /// A pinned memory the dot saved in a run, and one the person wrote.
   memories: T.Memory.array().parse(contract.Memory),
+  /// Acme Engineering (OpenBao) in each status but pending, then Design (SOPS), pending.
+  orgs: T.OrgSummary.array().parse(contract.OrgSummary),
+  /// A code for a new org (OpenBao, token), and one that changes Acme's path and policy key.
+  joinPreviews: T.JoinPreview.array().parse(contract.JoinPreview),
+  /// github's changed list in Personal, then in Acme Engineering.
+  toolsChanged: T.ToolsChanged.array().parse(contract.ToolsChanged),
 };
 
 /// What `new_dot_spec` answers: the core's defaults with nothing filled in.
@@ -75,6 +81,8 @@ export function installDefaults(): void {
   backend.on("env_list", () => []);
   backend.on("env_import_candidates", () => []);
   backend.on("env_old_backups", () => []);
+  // No org is joined on this PC.
+  backend.on("org_list", () => []);
   backend.on("new_dot_spec", () => blankSpec);
   backend.on("list_runs", () => []);
   // No dot has checked in or scheduled anything. A question on screen is marked read.

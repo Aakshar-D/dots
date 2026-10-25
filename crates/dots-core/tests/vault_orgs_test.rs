@@ -22,9 +22,10 @@ use dots_core::model::DotSpec;
 use dots_core::vault::entries::EntryKind;
 use dots_core::vault::org::sources::sops::public_key as age_public_key;
 use dots_core::vault::org::{
-    key_fingerprint, parse_policy, read_offline, verify_policy, write_offline, OfflineCopy,
-    OrgEntry, OrgLookup, OrgRow, OrgStatus, OrgSummary, OrgView, Orgs, PersonalMode, Protector,
-    SourceCreds, SourceError, TestProtector, RETRY_AFTER,
+    key_fingerprint, parse_policy, read_offline, verify_policy, write_offline, BaoAuth,
+    InfisicalSettings, OfflineCopy, OpenBaoSettings, OrgEntry, OrgLookup, OrgRow, OrgStatus,
+    OrgSummary, OrgView, Orgs, PersonalMode, Protector, SourceCreds, SourceError, SourceSettings,
+    TestProtector, RETRY_AFTER,
 };
 use dots_core::vault::{redact, Grants};
 use dots_core::{Error, Result};
@@ -408,14 +409,45 @@ async fn the_preview_shows_a_new_org_or_what_an_update_changes() {
         preview.key_fingerprint,
         key_fingerprint(&public_key(&h.keys)).unwrap()
     );
+    assert_eq!(preview.auth, Some(BaoAuth::Token));
     assert!(!preview.existing);
     assert!(preview.changes.is_empty());
+    assert!(!preview.key_changed);
+
+    // The sign-in the code names, so the UI asks for the right details; none but OpenBao's.
+    let SourceSettings::OpenBao(bao) = openbao(&h.bao.address(), "dots") else {
+        unreachable!()
+    };
+    let ldap = SourceSettings::OpenBao(OpenBaoSettings {
+        auth: BaoAuth::Ldap,
+        ..bao
+    });
+    let ldap = code("beta", "Beta", ldap, &h.keys);
+    assert_eq!(
+        h.orgs.preview_join(&ldap).unwrap().auth,
+        Some(BaoAuth::Ldap)
+    );
+    let infisical = SourceSettings::Infisical(InfisicalSettings {
+        site_url: "https://app.infisical.com".into(),
+        project_id: "p1".into(),
+        environment: "dev".into(),
+        secret_path: "/".into(),
+    });
+    let infisical = code("gamma", "Gamma", infisical, &h.keys);
+    let preview = h.orgs.preview_join(&infisical).unwrap();
+    assert_eq!(
+        (preview.source_kind.as_str(), preview.auth),
+        ("infisical", None)
+    );
+    let sops = code("delta", "Delta", sops_at("C:/sync/delta.enc.json"), &h.keys);
+    assert_eq!(h.orgs.preview_join(&sops).unwrap().auth, None);
 
     h.join_acme(entries(), acme_policy()).await;
     let calls = h.bao.calls().len();
     let unchanged = h.orgs.preview_join(&h.acme_code()).unwrap();
     assert!(unchanged.existing);
     assert!(unchanged.changes.is_empty(), "{:?}", unchanged.changes);
+    assert!(!unchanged.key_changed);
 
     let new_keys = keys();
     let moved = code(
@@ -426,6 +458,7 @@ async fn the_preview_shows_a_new_org_or_what_an_update_changes() {
     );
     let preview = h.orgs.preview_join(&moved).unwrap();
     assert!(preview.existing);
+    assert!(preview.key_changed);
     assert_eq!(
         preview.changes,
         vec![
@@ -450,6 +483,7 @@ async fn the_preview_shows_a_new_org_or_what_an_update_changes() {
             h.bao.address()
         )]
     );
+    assert!(!preview.key_changed, "the same key, another source");
     assert_eq!(h.bao.calls().len(), calls, "a preview fetches nothing");
 }
 
@@ -1193,11 +1227,14 @@ async fn a_sops_join_before_the_admin_adds_the_key_waits_and_keeps_the_key() {
     let sops_code = code(ACME, ACME_NAME, sops_at(&file), &h.keys);
     let key = h.orgs.sops_identity(ACME).await.unwrap();
 
-    let e = h.orgs.join(&sops_code, None).await.unwrap_err();
+    // Not an error: the answer says the join waits.
+    let waiting = h.orgs.join(&sops_code, None).await.unwrap();
+    assert_eq!(status(&waiting), OrgStatus::Pending);
+    assert_eq!(waiting.id, ACME);
+    assert_eq!(waiting.name, ACME_NAME);
     assert_eq!(
-        other(e),
-        "could not join Acme Engineering: this PC's key is not a recipient of the file; send \
-         this PC's key to your admin, then try again"
+        waiting.status_text,
+        "waiting for the admin to add this PC's key"
     );
     assert!(h.orgs.summaries().await.is_empty());
     assert_eq!(h.store.get_org(ACME).await.unwrap(), None);

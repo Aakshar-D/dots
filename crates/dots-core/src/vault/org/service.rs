@@ -113,10 +113,16 @@ pub struct JoinPreview {
     pub source_kind: String,
     pub address: String,
     pub key_fingerprint: String,
+    /// How an OpenBao code signs in, so the UI asks for a token or a username and password.
+    /// `None` for Infisical (a machine identity) and SOPS (this PC's key).
+    pub auth: Option<BaoAuth>,
     /// The org is joined already: the code goes through **Update**.
     pub existing: bool,
     /// For **Update**, what the code changes, in plain words. A new policy key gets a warning.
     pub changes: Vec<String>,
+    /// For **Update**, the code brings another policy key: the last line of `changes` warns of
+    /// it.
+    pub key_changed: bool,
 }
 
 /// One org entry for the Env tab. A secret's `value` is always `None`.
@@ -315,19 +321,28 @@ impl Orgs {
     /// What `code` would join, or change for an org already joined. Nothing is fetched.
     pub fn preview_join(&self, code: &str) -> Result<JoinPreview> {
         let code = parse_join_code(code)?;
-        let (existing, changes) = match self.read().get(&code.org_id) {
-            Some(Slot::Joined(joined)) => (true, changes(&joined.row, &code)),
-            Some(Slot::Damaged { .. }) => (true, vec![damaged_text(&code.org_id)]),
-            Some(Slot::Pending(_)) | None => (false, Vec::new()),
+        let (existing, changes, key_changed) = match self.read().get(&code.org_id) {
+            Some(Slot::Joined(joined)) => (
+                true,
+                changes(&joined.row, &code),
+                joined.row.policy_key != code.policy_key,
+            ),
+            Some(Slot::Damaged { .. }) => (true, vec![damaged_text(&code.org_id)], false),
+            Some(Slot::Pending(_)) | None => (false, Vec::new(), false),
         };
         Ok(JoinPreview {
             key_fingerprint: key_fingerprint(&code.policy_key)?,
             source_kind: code.source.kind().to_string(),
             address: code.source.address().to_string(),
+            auth: match &code.source {
+                SourceSettings::OpenBao(s) => Some(s.auth),
+                _ => None,
+            },
             org_id: code.org_id,
             name: code.name,
             existing,
             changes,
+            key_changed,
         })
     }
 
@@ -360,7 +375,9 @@ impl Orgs {
     /// and the row, the copy and the values are kept. If the fetch or the policy fails, the
     /// details are taken out again and nothing is kept, except a SOPS org's age key, which the
     /// person has already sent to the admin. `creds` may be `None` only for a SOPS org, which
-    /// uses its stored key. A dot left by an earlier join of the same id belongs to it again.
+    /// uses its stored key. A SOPS file not yet encrypted to that key is not an error: the
+    /// answer's status is `Pending`, and nothing is joined until a later join opens the file. A
+    /// dot left by an earlier join of the same id belongs to it again.
     pub async fn join(&self, code: &str, creds: Option<SourceCreds>) -> Result<OrgSummary> {
         let code = parse_join_code(code)?;
         let id = code.org_id.clone();
@@ -401,12 +418,10 @@ impl Orgs {
         let fetched = match source.fetch(&creds).await {
             Ok(fetched) => fetched,
             Err(SourceError::Denied(why)) if sops && why == NOT_A_RECIPIENT => {
-                let name = code.name.clone();
-                self.write().insert(id, Slot::Pending(code));
-                return Err(Error::Other(format!(
-                    "could not join {name}: {why}; send this PC's key to your admin, then try \
-                     again"
-                )));
+                let slot = Slot::Pending(code);
+                let summary = summary_of(&id, &slot);
+                self.write().insert(id, slot);
+                return Ok(summary);
             }
             Err(e) => return Err(self.join_failed(&code, e.to_string())),
         };

@@ -19,6 +19,7 @@ import { errorMessage, notifyError } from "@/lib/notify";
 import { invalidate, keys, takeStatus } from "@/lib/query";
 
 import { ChatGptAccount } from "./ChatGptAccount";
+import { Organisations } from "./Organisations";
 
 type Errors = { port?: string; max?: string; global?: string };
 
@@ -180,6 +181,8 @@ function Form({ stored, status }: { stored: Settings; status: Status | undefined
       <AppearanceSetting />
 
       <ChatGptAccount />
+
+      <Organisations />
 
       <Section title="General">
         <div className="flex items-center gap-2">

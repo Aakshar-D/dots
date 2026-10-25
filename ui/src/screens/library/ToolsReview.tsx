@@ -28,16 +28,23 @@ function Group(props: { title: string; children: ReactNode }) {
   );
 }
 
+/// The entry's catalog in `scope`, an org id; Personal's when it is left out.
+export function catalogIn(entry: LibraryEntry, scope?: string) {
+  if (scope === undefined) return entry.catalog;
+  return entry.catalogs.find((c) => c.scope === scope)?.catalog ?? null;
+}
+
 /// The review of a server whose tool list differs from the accepted one: the tools added,
 /// removed and changed (and which part of a changed tool), and "Accept". Accepting names the
-/// list that is shown; the core refuses it if the list moved meanwhile.
-export function ToolsReview(props: { entry: LibraryEntry; onClose: () => void }) {
-  const { entry } = props;
+/// list that is shown; the core refuses it if the list moved meanwhile. `scope` is the org
+/// whose list it is; left out, Personal's.
+export function ToolsReview(props: { entry: LibraryEntry; scope?: string; onClose: () => void }) {
+  const { entry, scope } = props;
   const qc = useQueryClient();
-  const catalog = entry.catalog;
+  const catalog = catalogIn(entry, scope);
   const diff = diffTools(parseTools(catalog?.accepted_tools), parseTools(catalog?.seen_tools));
   const accept = useMutation({
-    mutationFn: () => commands.libraryAccept(entry.id, catalog?.seen_fingerprint ?? ""),
+    mutationFn: () => commands.libraryAccept(entry.id, catalog?.seen_fingerprint ?? "", scope),
     onSuccess: () => {
       invalidate(qc, keys.library);
       props.onClose();
