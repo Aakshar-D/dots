@@ -383,6 +383,13 @@ that answers the file to a plain `GET`:
 - `\\files.example.invalid\dots\acme-eng.enc.json`
 - `https://files.example.invalid/dots/acme-eng.enc.json`
 
+**Only you may write the location.** Every recipient's key opens the file's data key, so anyone
+who can write the file can change any `env` value and give the file a valid MAC: only the policy
+is signed, by you. Keep the location writable by you alone, for example a protected branch that
+only you can push to, a share whose permissions give everyone else read access only, or a URL
+that only serves `GET`. A SOPS file protects the values against outsiders, not against members
+who can write it.
+
 **Layout.** Before encryption, the file is JSON with two fields. `env` holds the variables, each
 value text. `policy` holds the signed policy's text as one JSON string:
 
@@ -545,6 +552,9 @@ Change the value in the source. Each Dots uses the new value from its next fetch
 most `refresh_minutes` away while the PC is online. A run that has already started keeps the
 value it started with. An offline PC keeps the old value in its copy until it reconnects or the
 copy runs out. When the old value must stop working, revoke it where it was issued.
+
+For a SOPS file, check now and then that only you can write its location: any recipient who can
+write it can change the values every other person's Dots reads (see [SOPS and age](#sops-and-age)).
 
 ### Cutting someone off
 
