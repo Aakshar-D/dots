@@ -356,7 +356,8 @@ impl Vault {
     /// Before a run of `dot` starts (§6.4): a dot whose org is not joined does not start, and
     /// an org whose last good fetch is older than its `refresh_minutes` is fetched first. A
     /// fetch that fails leaves the org as the fetch left it: its saved copy, while that holds,
-    /// or the reason it gives nothing, which resolving then names.
+    /// or the reason it gives nothing, which resolving then names. An org removed while the
+    /// refresh waited is checked for again, so its dot does not start either.
     pub async fn before_run(&self, dot: &Dot) -> Result<()> {
         if let Some(text) = self.org_removed(dot) {
             return Err(Error::Other(text));
@@ -364,6 +365,10 @@ impl Vault {
         if let (DotScope::Org(org_id), Some(orgs)) = (DotScope::of(dot), self.orgs()) {
             if let Err(e) = orgs.refresh_if_stale(&org_id).await {
                 tracing::warn!("org {org_id:?} was not refreshed before a run: {e}");
+            }
+            // A Remove may have gone through while the refresh waited for the org's lock.
+            if let Some(text) = self.org_removed(dot) {
+                return Err(Error::Other(text));
             }
         }
         Ok(())

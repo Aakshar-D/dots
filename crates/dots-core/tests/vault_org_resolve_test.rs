@@ -6,10 +6,13 @@ mod common;
 
 use chrono::Duration;
 use common::fake_openbao::Failure;
-use common::orgs::{keys, policy, sign, OrgsHarness, ACME, ACME_NAME, TOKEN};
+use common::orgs::{
+    keys, policy, sign, token, OrgsHarness, Scripted, ACME, ACME_NAME, ISSUED, TOKEN,
+};
 use common::{spec, temp_store};
 use dots_core::vault::org::OrgStatus;
 use dots_core::vault::{Consumer, DotScope, EntryKind, Grants, Missing, Unresolved, Vault};
+use dots_core::Error;
 use serde_json::{json, Value};
 
 const DOT: &str = "triage";
@@ -21,6 +24,10 @@ const ORG_ROTATED: &str = "org-secret-rotated-0e8b37";
 const PERSONAL_BOTH: &str = "personal-secret-both-91d0aa";
 const PERSONAL_ONLY: &str = "personal-secret-only-6c5e12";
 const PERSONAL_PLAIN: &str = "personal-plain-region-2a4f";
+const ACME_SHARED: &str = "acme-secret-shared-71c0d4";
+const ACME_OWN: &str = "acme-secret-own-e93b20";
+const BETA_SHARED: &str = "beta-secret-shared-4a6f81";
+const BETA_OWN: &str = "beta-secret-own-0d52c7";
 
 /// Every value a test serves or stores, which no error or `Debug` may hold.
 const VALUES: &[&str] = &[
@@ -31,6 +38,10 @@ const VALUES: &[&str] = &[
     PERSONAL_BOTH,
     PERSONAL_ONLY,
     PERSONAL_PLAIN,
+    ACME_SHARED,
+    ACME_OWN,
+    BETA_SHARED,
+    BETA_OWN,
     TOKEN,
 ];
 
@@ -515,6 +526,139 @@ async fn a_personal_dot_reads_personal_only() {
     let personal = vault.personal_values(&names).await.unwrap();
     assert!(!personal.contains("IN_ORG"));
     assert_eq!(personal.get("BOTH").as_deref(), Some(PERSONAL_BOTH));
+}
+
+/// Two orgs with the same names and other values, a dot in each and a Personal dot: each sees
+/// its own org's value (or Personal's, where its mode lets Personal win), never the other
+/// org's, under every `personal` mode.
+#[tokio::test]
+async fn two_orgs_with_the_same_names_never_mix_under_any_personal_mode() {
+    for mode in ["deny", "fallback", "override"] {
+        let h = OrgsHarness::new().await;
+        let extra = json!({"personal": mode});
+        let acme_policy = sign(&h.keys, &policy(ACME, ISSUED, extra.clone()));
+        h.serve(
+            "dots",
+            json!({"SHARED": ACME_SHARED, "ACME_OWN": ACME_OWN}),
+            &acme_policy,
+        );
+        h.orgs.join(&h.acme_code(), Some(token())).await.unwrap();
+        let beta_policy = sign(&h.keys, &policy("beta", ISSUED, extra));
+        h.serve(
+            "beta",
+            json!({"SHARED": BETA_SHARED, "BETA_OWN": BETA_OWN}),
+            &beta_policy,
+        );
+        h.orgs
+            .join(&h.code_at("beta", "Beta", "beta"), Some(token()))
+            .await
+            .unwrap();
+        let vault = h.vault();
+        vault
+            .add("SHARED", EntryKind::Secret, PERSONAL_BOTH)
+            .await
+            .unwrap();
+        let store = &h.store;
+        let in_acme = store
+            .create_dot(&spec("in-acme"), Some(ACME))
+            .await
+            .unwrap();
+        let in_beta = store
+            .create_dot(&spec("in-beta"), Some("beta"))
+            .await
+            .unwrap();
+        let mine = store.create_dot(&spec("mine"), None).await.unwrap();
+        let (acme, beta, personal) = (
+            DotScope::of(&in_acme),
+            DotScope::of(&in_beta),
+            DotScope::of(&mine),
+        );
+        // Under `override` Personal's value wins in both orgs; otherwise each org's own.
+        let shared = |own: &'static str| {
+            if mode == "override" {
+                PERSONAL_BOTH
+            } else {
+                own
+            }
+        };
+        let gh = github();
+        assert_eq!(
+            resolve(&vault, &acme, &gh, "SHARED").await.unwrap(),
+            shared(ACME_SHARED),
+            "{mode}"
+        );
+        assert_eq!(
+            resolve(&vault, &beta, &gh, "SHARED").await.unwrap(),
+            shared(BETA_SHARED),
+            "{mode}"
+        );
+        assert_eq!(
+            resolve(&vault, &personal, &gh, "SHARED").await.unwrap(),
+            PERSONAL_BOTH,
+            "{mode}"
+        );
+        assert_eq!(
+            resolve(&vault, &acme, &gh, "ACME_OWN").await.unwrap(),
+            ACME_OWN
+        );
+        assert_eq!(
+            resolve(&vault, &beta, &gh, "BETA_OWN").await.unwrap(),
+            BETA_OWN
+        );
+        // A name only the other org has is in neither this org nor Personal.
+        for (scope, name) in [
+            (&acme, "BETA_OWN"),
+            (&beta, "ACME_OWN"),
+            (&personal, "ACME_OWN"),
+            (&personal, "BETA_OWN"),
+        ] {
+            assert_eq!(
+                missing(&vault, scope, &gh, name).await.0,
+                Unresolved::NotDefined,
+                "{mode}: {name} in {scope:?}"
+            );
+        }
+    }
+}
+
+/// A run's start refreshes a stale org under the org's lock. A Remove that was waiting for
+/// that lock goes through before the refresh gets it, and the run must not start then.
+#[tokio::test]
+async fn a_run_whose_org_is_removed_while_it_waits_to_refresh_does_not_start() {
+    let h = OrgsHarness::new().await;
+    let scripted = Scripted::new();
+    let orgs = h.service().with_sources(scripted.factory());
+    let signed = sign(&h.keys, &policy(ACME, ISSUED, json!({})));
+    scripted.serve(&[("BOTH", ORG_BOTH)], &signed);
+    orgs.join(&h.acme_code(), Some(token())).await.unwrap();
+    scripted.entered().await;
+    let vault = Vault::new(h.store.clone(), h.secrets.clone()).with_orgs(orgs.clone());
+    let dot = h.store.create_dot(&spec(DOT), Some(ACME)).await.unwrap();
+
+    // A Refresh holds the org's lock while its source answers.
+    let gate = scripted.hold();
+    let refreshing = tokio::spawn({
+        let orgs = orgs.clone();
+        async move { orgs.refresh(ACME).await }
+    });
+    scripted.entered().await;
+    // A Remove waits for the lock, then the run's start does: the org is still joined then.
+    let remove = orgs.remove(ACME);
+    tokio::pin!(remove);
+    assert!(futures_util::poll!(&mut remove).is_pending());
+    let start = vault.before_run(&dot);
+    tokio::pin!(start);
+    assert!(futures_util::poll!(&mut start).is_pending());
+
+    gate.add_permits(1);
+    refreshing.await.unwrap().unwrap();
+    remove.await.unwrap();
+    match start.await {
+        Err(Error::Other(text)) => {
+            assert_eq!(text, "dot 'triage': its org 'acme-eng' was removed")
+        }
+        other => panic!("expected the run refused, got {other:?}"),
+    }
 }
 
 #[tokio::test]
