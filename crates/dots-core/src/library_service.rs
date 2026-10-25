@@ -985,33 +985,6 @@ impl LibraryService {
             .is_some_and(|list| list.contains(&origin.ascii)))
     }
 
-    /// The origin the pinned http server `item` reaches in `scope`, when it is not confirmed
-    /// there. `None` when it is, when the server is not pinned, or when no origin can be
-    /// computed: the check then fails on its own, for the variable or the URL, and sends
-    /// nothing.
-    async fn unconfirmed(
-        &self,
-        item: &LibraryItem,
-        config: &McpServerConfig,
-        scope: &DotScope,
-    ) -> Result<Option<HttpOrigin>> {
-        let McpServerConfig::Http { url, .. } = config else {
-            return Ok(None);
-        };
-        if !config.origin_pinned() {
-            return Ok(None);
-        }
-        let consumer = Consumer::Mcp(item.name.clone());
-        let names = url_variables(url);
-        let Ok(values) = self.vault.check_values(scope, &consumer, &names).await? else {
-            return Ok(None);
-        };
-        let Ok(origin) = http_origin(url, &|k| values.get(k)) else {
-            return Ok(None);
-        };
-        Ok((!self.is_confirmed(&item.id, scope, &origin).await?).then_some(origin))
-    }
-
     async fn server(&self, id: &str) -> Result<LibraryItem> {
         let item = self.store.get_library_item(id).await?;
         if item.kind() != LibraryKind::McpServer {
@@ -1031,14 +1004,6 @@ impl LibraryService {
                 item.name
             )));
         };
-        if let Some(origin) = self.unconfirmed(item, config, scope).await? {
-            return Err(Error::Conflict(format!(
-                "{}: {} is not a confirmed origin in {}",
-                item.name,
-                origin.ascii,
-                self.scope_name(scope).await
-            )));
-        }
         let consumer = Consumer::Mcp(item.name.clone());
         let resolved = self
             .vault
@@ -1055,6 +1020,31 @@ impl LibraryService {
                 return Ok(catalog);
             }
         };
+        // The origin is judged on the very values the session opens with.
+        if let McpServerConfig::Http { url, .. } = config {
+            if config.origin_pinned() {
+                match http_origin(url, &|k| env.get(k)) {
+                    Ok(origin) => {
+                        if !self.is_confirmed(&item.id, scope, &origin).await? {
+                            return Err(Error::Conflict(format!(
+                                "{}: {} is not a confirmed origin in {}",
+                                item.name,
+                                origin.ascii,
+                                self.scope_name(scope).await
+                            )));
+                        }
+                    }
+                    Err(why) => {
+                        let catalog = self
+                            .store
+                            .record_catalog_failure(&item.id, scope.key(), &why)
+                            .await?;
+                        publish(&self.bus, &item.id);
+                        return Ok(catalog);
+                    }
+                }
+            }
+        }
         let key = scope.key();
         match open_and_list(&item.name, config, &env, SessionOptions::default()).await {
             Ok((session, tools)) => {

@@ -807,6 +807,23 @@ async fn an_origin_that_cannot_be_computed_is_not_asked_about() {
     ));
 }
 
+/// A pinned server whose resolved URL gives no http origin is not checked: the failure is
+/// recorded for the scope, no session opens, and nothing is sent.
+#[tokio::test]
+async fn a_check_whose_url_gives_no_origin_records_a_failure_and_sends_nothing() {
+    let served = Served::start().await;
+    let (h, _vault, lib, item) = setup(&served, org_entries(&served, "bad host")).await;
+    let catalog = lib.check(&item.id, &acme()).await.unwrap();
+    assert_eq!(
+        catalog.status,
+        dots_core::library::CatalogStatus::Unreachable
+    );
+    assert_eq!(catalog.error.as_deref(), Some("not a valid URL"));
+    assert!(served.auths().is_empty(), "no session was opened");
+    let stored = h.store.get_catalog(&item.id, ACME).await.unwrap();
+    assert_eq!(stored.error.as_deref(), Some("not a valid URL"));
+}
+
 /// `add` with a fingerprint to accept checks the server first. A pinned one whose origin is not
 /// confirmed is saved unchecked, and nothing is sent.
 #[tokio::test]

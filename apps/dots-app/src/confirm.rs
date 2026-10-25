@@ -603,8 +603,8 @@ where
         Err(dots_core::Error::Conflict(why)) => why,
         other => return Ok(other?),
     };
-    // Any other conflict, or one that no longer holds, is answered as it came.
-    let Ok(Some(asked)) = library.origin_to_confirm(id, scope).await else {
+    // A conflict that no longer holds is answered as it came; a failure to ask is its own.
+    let Some(asked) = library.origin_to_confirm(id, scope).await? else {
         return Err(dots_core::Error::Conflict(refused).into());
     };
     confirm_asked(rt, id, scope, &asked, ask).await?;
@@ -654,10 +654,26 @@ where
     Fut: Future<Output = bool>,
 {
     let preview = rt.preview_org(code)?;
-    let warning = preview.changes.iter().find(|c| c.starts_with(KEY_CHANGE));
-    if let Some(warning) = warning.filter(|_| preview.org_id == org_id) {
-        if !ask(key_question(&preview.name, warning)).await {
-            return Err(CmdError::cancelled("the org was not updated"));
+    // The key decides, not the words of a line: ask whenever the code's key is not the one the
+    // org is joined with. A code for another org, or an org not joined, is the core's refusal.
+    if preview.org_id == org_id {
+        if let Some(current) = rt.orgs().summary(org_id).await {
+            if current.key_fingerprint != preview.key_fingerprint {
+                let warning = preview
+                    .changes
+                    .iter()
+                    .find(|c| c.starts_with(KEY_CHANGE))
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        format!(
+                            "{KEY_CHANGE} from {} to {}",
+                            current.key_fingerprint, preview.key_fingerprint
+                        )
+                    });
+                if !ask(key_question(&preview.name, &warning)).await {
+                    return Err(CmdError::cancelled("the org was not updated"));
+                }
+            }
         }
     }
     Ok(rt.update_org(org_id, code, creds).await?)
