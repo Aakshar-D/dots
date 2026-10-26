@@ -206,11 +206,11 @@ function Form({ stored, status }: { stored: Settings; status: Status | undefined
             disabled={!status || pause.isPending}
             onCheckedChange={(paused) => pause.mutate(paused)}
           />
-          <Label htmlFor="settings-paused">Pause all schedules</Label>
+          <Label htmlFor="settings-paused">Pause schedules and watchers</Label>
         </div>
         <p className="text-xs text-muted-foreground">
           Pausing applies at once and is not part of Save. Webhooks, "Run now" and chat still
-          work while schedules are paused.
+          work while schedules and watchers are paused.
         </p>
         <Field label="Data folder" htmlFor="settings-data-dir">
           <Input

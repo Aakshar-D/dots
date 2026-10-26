@@ -2,6 +2,7 @@
 // spec, section 2).
 import type { Run } from "@/api/types";
 import { localTime } from "@/lib/format";
+import { watcherTitle } from "@/lib/watchers";
 
 /// One line of runs: a root run and the runs that continued it (`root_run_id`).
 export type Topic = {
@@ -125,5 +126,10 @@ export function chatText(run: Run): string | null {
 /// the time it was queued ("Scheduled · 08:00").
 export function topicTitle(topic: Topic): string {
   if (topic.kind === "chat") return oneLine(chatText(topic.root), 60) || "Chat";
+  // A watcher's run says what woke the dot (watchers spec section 8).
+  if (topic.root.trigger === "watcher") {
+    const title = watcherTitle(topic.root);
+    if (title) return title;
+  }
   return `${triggerLabel(topic.root)} · ${localTime(topic.root.queued_at)}`;
 }
