@@ -552,12 +552,16 @@ export function WatchersTab({ dotId }: { dotId: string }) {
                     {watcherState(w)}
                   </p>
                 </div>
-                <Switch
-                  aria-label={`${w.name} is on`}
-                  checked={w.enabled && !paused}
-                  disabled={toggle.isPending}
-                  onCheckedChange={(on) => toggle.mutate({ watcher: w, on })}
-                />
+                <div className="flex h-8 items-center gap-2">
+                  <Switch
+                    id={`watcher-on-${w.id}`}
+                    aria-label={`${w.name} is on`}
+                    checked={w.enabled && !paused}
+                    disabled={toggle.isPending}
+                    onCheckedChange={(on) => toggle.mutate({ watcher: w, on })}
+                  />
+                  <Label htmlFor={`watcher-on-${w.id}`}>On</Label>
+                </div>
                 <Button
                   size="sm"
                   variant="outline"

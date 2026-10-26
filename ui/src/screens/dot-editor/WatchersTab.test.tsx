@@ -255,4 +255,20 @@ describe("a dot's Watchers tab", () => {
     await user.click(within(ask).getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(backend.callsTo("watcher_delete")).toEqual([{ id: folder.id }]));
   });
+
+  it("gives each row's switch a visible label beside it, as the app's other switches have", async () => {
+    holding([folder]);
+    await openTab();
+    const row = await screen.findByRole("listitem", { name: "Invoices folder" });
+    const toggle = within(row).getByRole("switch", { name: "Invoices folder is on" });
+    const label = row.querySelector(`label[for="${toggle.id}"]`);
+    expect(label).toHaveTextContent("On");
+  });
+
+  it("keeps its panel out of the tab order, its controls being the stops (WCAG target size)", async () => {
+    holding([folder]);
+    await openTab();
+    await screen.findByRole("listitem", { name: "Invoices folder" });
+    expect(screen.getByRole("tabpanel")).toHaveAttribute("tabindex", "-1");
+  });
 });

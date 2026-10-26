@@ -241,7 +241,9 @@ function ExistingDot({ dotId }: { dotId: string }) {
             <TabsContent value="memory">
               <MemoryTab dotId={dotId} />
             </TabsContent>
-            <TabsContent value="watchers">
+            {/* Its rows' switches and buttons are the tab stops: a focusable panel around them
+                would crowd their touch targets (WCAG 2.5.8). */}
+            <TabsContent value="watchers" tabIndex={-1}>
               <WatchersTab dotId={dotId} />
             </TabsContent>
           </Tabs>
