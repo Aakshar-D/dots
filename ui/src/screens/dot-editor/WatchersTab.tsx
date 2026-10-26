@@ -263,7 +263,8 @@ function WatcherForm(props: {
                   onChange={(e) => setConfig({ ...config, pattern: e.target.value })}
                 />
               </Field>
-              <div className="flex flex-wrap gap-4">
+              <fieldset className="flex flex-wrap gap-4">
+                <legend className="mb-1 w-full text-sm font-medium">Events</legend>
                 {FOLDER_EVENTS.map(([event, label]) => (
                   <label key={event} className="flex items-center gap-2 text-sm">
                     <input
@@ -281,7 +282,7 @@ function WatcherForm(props: {
                     {label}
                   </label>
                 ))}
-              </div>
+              </fieldset>
               <div className="flex items-center gap-2">
                 <Switch
                   id="watcher-recursive"
@@ -374,7 +375,8 @@ function WatcherForm(props: {
                   }}
                 />
               </Field>
-              <div className="flex flex-wrap gap-4">
+              <fieldset className="flex flex-wrap gap-4">
+                <legend className="mb-1 w-full text-sm font-medium">Events</legend>
                 {GITHUB_EVENTS.map(([event, label]) => (
                   <label key={event} className="flex items-center gap-2 text-sm">
                     <input
@@ -392,7 +394,7 @@ function WatcherForm(props: {
                     {label}
                   </label>
                 ))}
-              </div>
+              </fieldset>
               <Field label="Token" htmlFor="watcher-token">
                 <VaultChooser
                   id="watcher-token"

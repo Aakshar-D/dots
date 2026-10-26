@@ -271,4 +271,15 @@ describe("a dot's Watchers tab", () => {
     await screen.findByRole("listitem", { name: "Invoices folder" });
     expect(screen.getByRole("tabpanel")).toHaveAttribute("tabindex", "-1");
   });
+
+  it("names the group of event checkboxes, so each box says what it belongs to", async () => {
+    holding([]);
+    const { user } = await openTab();
+    const folderForm = await add(user, "Folder", "New folder watcher");
+    const events = within(folderForm).getByRole("group", { name: "Events" });
+    expect(within(events).getByRole("checkbox", { name: "Created" })).toBeChecked();
+    await user.click(within(folderForm).getByRole("button", { name: "Cancel" }));
+    const hubForm = await add(user, "GitHub", "New GitHub watcher");
+    expect(within(hubForm).getByRole("group", { name: "Events" })).toBeVisible();
+  });
 });

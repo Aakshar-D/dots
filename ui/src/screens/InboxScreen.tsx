@@ -49,9 +49,6 @@ function ReviewRow({ run }: { run: ReviewRun }) {
   );
 }
 
-/// A schedule whose last occurrence failed in the end: its retries were used up, or its run
-/// had called a tool. The schedule keeps firing; the flag goes when a later run of the dot
-/// succeeds or when it is dismissed here.
 /// A watcher Dots paused (watchers spec section 7): why, since when, Resume, and its dot's tab.
 function PausedWatcherRow({ item }: { item: PausedWatcher }) {
   const qc = useQueryClient();
@@ -88,6 +85,9 @@ function PausedWatcherRow({ item }: { item: PausedWatcher }) {
   );
 }
 
+/// A schedule whose last occurrence failed in the end: its retries were used up, or its run
+/// had called a tool. The schedule keeps firing; the flag goes when a later run of the dot
+/// succeeds or when it is dismissed here.
 function AttentionRow({ item }: { item: NeedsAttention }) {
   const qc = useQueryClient();
   const navigate = useNavigate();

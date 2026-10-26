@@ -87,7 +87,6 @@ function ScheduleLine({ run }: { run: Run }) {
   return <p className="mb-2 text-xs text-muted-foreground">{line}</p>;
 }
 
-/// The message a follow-up run carries: what the dot scheduled itself to do.
 /// What woke the dot, under a watcher run's header (watchers spec section 8).
 function WatcherLine({ run }: { run: Run }) {
   const title = watcherTitle(run);
@@ -95,6 +94,7 @@ function WatcherLine({ run }: { run: Run }) {
   return <p className="mb-2 text-xs text-muted-foreground">{title}</p>;
 }
 
+/// The message a follow-up run carries: what the dot scheduled itself to do.
 function FollowUpLine({ run }: { run: Run }) {
   if (run.trigger !== "follow_up" || typeof run.payload !== "object" || run.payload === null) {
     return null;
