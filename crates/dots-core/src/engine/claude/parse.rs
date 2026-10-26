@@ -37,6 +37,7 @@ pub fn parse_line(line: &str) -> Vec<EngineEvent> {
         Some("assistant") => blocks(&v).iter().filter_map(assistant_block).collect(),
         Some("user") => blocks(&v).iter().filter_map(tool_result_block).collect(),
         Some("result") => result_events(&v),
+        Some("rate_limit_event") => limit_events(&v),
         _ => raw(),
     }
 }
@@ -135,6 +136,54 @@ fn truncate(s: String) -> String {
     s
 }
 
+/// A `rate_limit_event` line (usage and limits spec section 3): its status and a reading for
+/// each window it names, from `unifiedWindows` when the CLI sends it, else the one limiting
+/// window (`rateLimitType`) when it has a utilization. A line whose status cannot be read gives
+/// nothing; it is never a failure of the run.
+fn limit_events(v: &Value) -> Vec<EngineEvent> {
+    let Some(info) = v.get("rate_limit_info").filter(|i| i.is_object()) else {
+        tracing::debug!("unreadable rate_limit_event: {v}");
+        return Vec::new();
+    };
+    let Some(status) = info.get("status").and_then(Value::as_str) else {
+        tracing::debug!("rate_limit_event without a status: {v}");
+        return Vec::new();
+    };
+    let read_at = crate::util::now();
+    let reading = |window: &str, w: &Value, fallback_status: &str| {
+        let utilization = w.get("utilization").and_then(Value::as_f64)?;
+        let resets_at = w.get("resetsAt").and_then(Value::as_i64)?;
+        let resets_at = chrono::DateTime::from_timestamp(resets_at, 0)?;
+        Some(crate::store::LimitReading {
+            window: window.to_string(),
+            utilization,
+            resets_at: crate::util::timestamp(resets_at),
+            status: w
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or(fallback_status)
+                .to_string(),
+            read_at: read_at.clone(),
+        })
+    };
+    let windows = match info.get("unifiedWindows").and_then(Value::as_object) {
+        Some(all) => all
+            .iter()
+            .filter_map(|(name, w)| reading(name, w, status))
+            .collect(),
+        None => info
+            .get("rateLimitType")
+            .and_then(Value::as_str)
+            .and_then(|name| reading(name, info, status))
+            .into_iter()
+            .collect(),
+    };
+    vec![EngineEvent::Limits {
+        status: status.to_string(),
+        windows,
+    }]
+}
+
 fn result_events(v: &Value) -> Vec<EngineEvent> {
     let usage = v.get("usage");
     let n = |k: &str| {
@@ -148,6 +197,7 @@ fn result_events(v: &Value) -> Vec<EngineEvent> {
             + n("cache_creation_input_tokens")
             + n("cache_read_input_tokens"),
         tokens_out: n("output_tokens"),
+        cost_usd: v.get("total_cost_usd").and_then(Value::as_f64),
     }];
     let subtype = v
         .get("subtype")

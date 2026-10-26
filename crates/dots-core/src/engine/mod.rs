@@ -38,6 +38,16 @@ pub enum EngineEvent {
     Usage {
         tokens_in: u64,
         tokens_out: u64,
+        /// What the run so far would cost on the API (the `claude` CLI's `total_cost_usd`);
+        /// `None` when the engine gives none (usage and limits spec section 5).
+        #[serde(default)]
+        cost_usd: Option<f64>,
+    },
+    /// The `claude` CLI's reading of the account's usage limits (usage and limits spec section
+    /// 3): the status (`allowed`, `allowed_warning`, `rejected`) and each window it named.
+    Limits {
+        status: String,
+        windows: Vec<crate::store::LimitReading>,
     },
     Raw {
         line: String,
@@ -69,6 +79,7 @@ impl EngineEvent {
             Self::ToolCall { .. } => "tool_call",
             Self::ToolResult { .. } => "tool_result",
             Self::Usage { .. } => "usage",
+            Self::Limits { .. } => "limits",
             Self::Raw { .. } => "raw",
             Self::Message { .. } => "message",
             Self::Finished { .. } => "finished",

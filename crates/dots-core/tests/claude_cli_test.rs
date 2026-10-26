@@ -77,7 +77,8 @@ fn parses_results() {
         vec![
             EngineEvent::Usage {
                 tokens_in: 26819,
-                tokens_out: 4
+                tokens_out: 4,
+                cost_usd: None,
             },
             EngineEvent::Finished {
                 summary: "pong".into()
@@ -89,7 +90,8 @@ fn parses_results() {
         vec![
             EngineEvent::Usage {
                 tokens_in: 1,
-                tokens_out: 1
+                tokens_out: 1,
+                cost_usd: None,
             },
             EngineEvent::Failed {
                 error: "error_max_turns".into()
@@ -100,9 +102,13 @@ fn parses_results() {
 
 #[test]
 fn unknown_and_invalid_lines_are_raw_and_blank_is_nothing() {
+    // A rate limit line is read, not kept as raw text (usage and limits spec section 3).
     assert_eq!(
         parse_line(RATE),
-        vec![EngineEvent::Raw { line: RATE.into() }]
+        vec![EngineEvent::Limits {
+            status: "allowed".into(),
+            windows: vec![],
+        }]
     );
     assert_eq!(
         parse_line("not json"),

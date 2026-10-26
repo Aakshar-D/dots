@@ -522,14 +522,16 @@ fn status() -> Status {
 /// The sample of `e`'s own variant. The match has no wildcard arm and the array's length is
 /// part of its type, so a new `EngineEvent` variant does not compile until it has a name
 /// here and a sample in `engine_events`.
-fn engine_event_sample<'a>(samples: &'a [EngineEvent; 10], e: &EngineEvent) -> &'a EngineEvent {
-    let [started, text, call, result, usage, raw, message, finished, failed, notice] = samples;
+fn engine_event_sample<'a>(samples: &'a [EngineEvent; 11], e: &EngineEvent) -> &'a EngineEvent {
+    let [started, text, call, result, usage, limits, raw, message, finished, failed, notice] =
+        samples;
     match e {
         EngineEvent::SessionStarted { .. } => started,
         EngineEvent::AssistantText { .. } => text,
         EngineEvent::ToolCall { .. } => call,
         EngineEvent::ToolResult { .. } => result,
         EngineEvent::Usage { .. } => usage,
+        EngineEvent::Limits { .. } => limits,
         EngineEvent::Raw { .. } => raw,
         EngineEvent::Message { .. } => message,
         EngineEvent::Finished { .. } => finished,
@@ -561,6 +563,17 @@ fn engine_events() -> Value {
         EngineEvent::Usage {
             tokens_in: 1200,
             tokens_out: 340,
+            cost_usd: Some(1.32),
+        },
+        EngineEvent::Limits {
+            status: "allowed".into(),
+            windows: vec![dots_core::store::LimitReading {
+                window: "five_hour".into(),
+                utilization: 0.42,
+                resets_at: TS.into(),
+                status: "allowed".into(),
+                read_at: TS.into(),
+            }],
         },
         EngineEvent::Raw {
             line: "{\"type\":\"future\"}".into(),

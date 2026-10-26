@@ -640,9 +640,10 @@ impl Runner {
             EngineEvent::Usage {
                 tokens_in,
                 tokens_out,
+                cost_usd,
             } => {
                 self.store
-                    .add_usage(run_id, *tokens_in as i64, *tokens_out as i64, None)
+                    .add_usage(run_id, *tokens_in as i64, *tokens_out as i64, *cost_usd)
                     .await?
             }
             _ => {}

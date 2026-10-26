@@ -60,6 +60,47 @@ async fn manual(runner: &Runner, dot: &Dot) -> String {
         .id
 }
 
+/// Usage and limits spec sections 3 and 5: the run keeps the CLI's cost, and a limit
+/// reading is stored as a `limits` event of the run, not as transcript text.
+#[tokio::test]
+async fn the_cost_and_the_limit_reading_are_recorded() {
+    let (dir, store) = temp_store().await;
+    let bus = new_bus();
+    let reading = dots_core::store::LimitReading {
+        window: "five_hour".into(),
+        utilization: 0.42,
+        resets_at: "2026-10-26T17:40:00.000Z".into(),
+        status: "allowed".into(),
+        read_at: "2026-10-26T12:00:00.000Z".into(),
+    };
+    let engine = Arc::new(ScriptedEngine::new(vec![
+        Step::Emit(EngineEvent::Limits {
+            status: "allowed".into(),
+            windows: vec![reading],
+        }),
+        Step::Emit(EngineEvent::Usage {
+            tokens_in: 10,
+            tokens_out: 5,
+            cost_usd: Some(1.32),
+        }),
+        finished(),
+    ]));
+    let runner = runner_with(&store, &bus, &dir, engine, 2);
+    runner.spawn_dispatcher(CancellationToken::new());
+    let dot = folder_dot(&store, &dir, "cost").await;
+    let id = manual(&runner, &dot).await;
+    let run = wait_status(&store, &id, RunStatus::Succeeded, 5).await;
+    assert_eq!(run.cost_usd, Some(1.32));
+    let kinds: Vec<String> = store
+        .list_events(&id, 0)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|e| e.kind)
+        .collect();
+    assert_eq!(kinds, ["limits", "usage", "finished"]);
+}
+
 #[tokio::test]
 async fn successful_run_records_events_and_succeeds() {
     let (dir, store) = temp_store().await;
@@ -74,6 +115,7 @@ async fn successful_run_records_events_and_succeeds() {
         Step::Emit(EngineEvent::Usage {
             tokens_in: 10,
             tokens_out: 5,
+            cost_usd: None,
         }),
         finished(),
     ]));
