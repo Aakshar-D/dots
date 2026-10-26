@@ -107,6 +107,12 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
     case "watcher_paused":
       // The app's notification; a `watcher_updated` comes with it.
       break;
+    case "limits_updated":
+      // The rail's bars read the limits; the Inbox's held runs and the Usage page follow.
+      qc.setQueryData(keys.limits, event.limits);
+      invalidate(qc, keys.inbox);
+      invalidate(qc, ["usage"]);
+      break;
   }
 }
 

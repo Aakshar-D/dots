@@ -64,7 +64,8 @@ pub fn percent(utilization: f64) -> u32 {
     (utilization * 100.0).round().clamp(0.0, 100.0) as u32
 }
 
-fn local_time(t: DateTime<Utc>, now: DateTime<Utc>) -> String {
+/// `t` in local time: `15:10` when it is today, `Thu 09:00` otherwise.
+pub fn local_time(t: DateTime<Utc>, now: DateTime<Utc>) -> String {
     let (t, now) = (t.with_timezone(&Local), now.with_timezone(&Local));
     if t.date_naive() == now.date_naive() {
         t.format("%H:%M").to_string()

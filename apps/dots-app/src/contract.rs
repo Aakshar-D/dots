@@ -468,9 +468,114 @@ fn run() -> Run {
         ended_at: Some(TS.into()),
         reviewed_at: None,
         retry_of: None,
-        cost_usd: None,
+        cost_usd: Some(1.32),
         hold_released: false,
     }
+}
+
+/// The Usage page's week: a Claude dot and a local one.
+fn usage_summary() -> UsageSummary {
+    UsageSummary {
+        period: UsagePeriod::Week,
+        since: TS.into(),
+        rows: vec![
+            UsageRow {
+                dot_id: "01J0DOT".into(),
+                dot_name: "nightly-tests".into(),
+                engine: EngineKind::Claude,
+                runs: 14,
+                tokens_in: 2_000_000,
+                tokens_out: 100_000,
+                run_secs: 11_520,
+                cost_usd: Some(18.4),
+                heaviest: vec![UsageRun {
+                    run_id: "01J0RUN".into(),
+                    trigger: TriggerKind::Schedule,
+                    started_at: TS.into(),
+                    tokens_in: 170_000,
+                    tokens_out: 12_000,
+                    run_secs: Some(724),
+                    cost_usd: Some(1.32),
+                }],
+            },
+            UsageRow {
+                dot_id: "01J0DOT2".into(),
+                dot_name: "local-summarizer".into(),
+                engine: EngineKind::Local,
+                runs: 22,
+                tokens_in: 250_000,
+                tokens_out: 50_000,
+                run_secs: 3_900,
+                cost_usd: None,
+                heaviest: vec![UsageRun {
+                    run_id: "01J0RUN2".into(),
+                    trigger: TriggerKind::Watcher,
+                    started_at: TS.into(),
+                    tokens_in: 20_000,
+                    tokens_out: 4_000,
+                    run_secs: None,
+                    cost_usd: None,
+                }],
+            },
+        ],
+    }
+}
+
+/// A schedule run held for Claude usage until 15:10.
+fn held_runs() -> Vec<HeldRun> {
+    vec![HeldRun {
+        run_id: "01J0RUN4".into(),
+        dot_id: "01J0DOT".into(),
+        dot_name: "nightly-tests".into(),
+        trigger: TriggerKind::Schedule,
+        queued_at: TS.into(),
+        starts_after: Some("2026-10-09T15:10:00.000Z".into()),
+    }]
+}
+
+/// A reading of `window` at `u`, resetting at 15:10 (usage and limits spec section 3).
+fn limit_reading(window: &str, u: f64) -> dots_core::limits::LimitReading {
+    dots_core::limits::LimitReading {
+        window: window.into(),
+        utilization: u,
+        resets_at: "2026-10-09T15:10:00.000Z".into(),
+        status: "allowed".into(),
+        read_at: TS.into(),
+    }
+}
+
+/// Holding two runs at 64% of the 5-hour window, then nothing held.
+fn limits_states() -> [dots_core::limits::LimitsState; 2] {
+    use dots_core::limits::{HoldShares, LimitsState};
+    let five = limit_reading("five_hour", 0.64);
+    let week = limit_reading("seven_day", 0.55);
+    let holding = LimitsState {
+        windows: vec![
+            five.clone(),
+            week.clone(),
+            limit_reading("seven_day_opus", 0.2),
+        ],
+        five_hour: Some(five),
+        weekly: Some(week),
+        shares: HoldShares {
+            enabled: true,
+            five_hour: 60,
+            weekly: 70,
+        },
+        holding: true,
+        draining: false,
+        rejected_until: None,
+        held_run_ids: vec!["01J0RUN4".into(), "01J0RUN5".into()],
+        hold_until: Some("2026-10-09T15:10:00.000Z".into()),
+    };
+    let quiet = LimitsState {
+        five_hour: Some(limit_reading("five_hour", 0.12)),
+        holding: false,
+        held_run_ids: vec![],
+        hold_until: None,
+        ..holding.clone()
+    };
+    [holding, quiet]
 }
 
 fn approval() -> Approval {
@@ -779,7 +884,7 @@ pub fn samples() -> Value {
                 ),
                 at: TS.into(),
             }],
-            held: vec![],
+            held: held_runs(),
         }),
         // What `library_add` takes and the Library commands answer: a config of every kind and
         // transport, and entries of every kind (a plugin's own server among them).
@@ -878,11 +983,15 @@ pub fn samples() -> Value {
     samples["FollowUp"] = to(follow_ups());
     samples["Memory"] = to(memories());
     samples["Watcher"] = to(watchers());
+    // Usage and limits (spec sections 5 and 6).
+    samples["LimitsState"] = to(limits_states());
+    samples["UsageSummary"] = to(usage_summary());
     samples["Enums"]["MessageKind"] = to(MessageKind::ALL);
     samples["Enums"]["FollowUpStatus"] = to(FollowUpStatus::ALL);
     samples["Enums"]["MemorySource"] = to(MemorySource::ALL);
     samples["Enums"]["WatcherKind"] = to(WatcherKind::ALL);
     samples["Enums"]["PausedReason"] = to(PausedReason::ALL);
+    samples["Enums"]["UsagePeriod"] = to(UsagePeriod::ALL);
     samples["Enums"]["FolderEvent"] = to(FolderEvent::ALL);
     samples["Enums"]["GithubEvent"] = to(GithubEvent::ALL);
     samples["RuntimeEvent"]
@@ -907,6 +1016,21 @@ pub fn samples() -> Value {
             to(RuntimeEvent::WatcherUpdated {
                 dot_id: "01J0DOT".into(),
                 watcher_id: "01J0WAT1".into(),
+            }),
+            to(RuntimeEvent::LimitsUpdated {
+                limits: limits_states()[0].clone(),
+                change: Some(dots_core::limits::HoldChange::Started {
+                    window: "five_hour".into(),
+                    utilization: 0.64,
+                }),
+            }),
+            to(RuntimeEvent::LimitsUpdated {
+                limits: limits_states()[1].clone(),
+                change: Some(dots_core::limits::HoldChange::Ended),
+            }),
+            to(RuntimeEvent::LimitsUpdated {
+                limits: limits_states()[1].clone(),
+                change: None,
             }),
             to(RuntimeEvent::WatcherPaused {
                 dot_id: "01J0DOT".into(),

@@ -134,6 +134,9 @@ command_list![
     watcher_delete,
     watcher_set_enabled,
     watcher_resume,
+    limits_get,
+    usage_summary,
+    run_release_hold,
 ];
 
 /// Keeps the log writer flushing until the app exits.

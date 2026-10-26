@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use dots_core::events::RuntimeEvent;
+use dots_core::limits::HoldChange;
 use dots_core::model::{Message, MessageKind, PausedReason, Run, RunStatus, TriggerKind};
 use dots_core::Runtime;
 use serde_json::Value;
@@ -54,6 +55,11 @@ pub enum Notice {
         name: String,
         reason: PausedReason,
         error: Option<String>,
+    },
+    /// Background runs started or stopped being held for Claude usage (usage and limits spec
+    /// section 4). The core says so once per change.
+    Hold {
+        change: dots_core::limits::HoldChange,
     },
 }
 
@@ -132,6 +138,12 @@ impl Notifier {
                 name: name.clone(),
                 reason: *reason,
                 error: error.clone(),
+            }),
+            RuntimeEvent::LimitsUpdated {
+                change: Some(change),
+                ..
+            } => Some(Notice::Hold {
+                change: change.clone(),
             }),
             _ => None,
         }
@@ -233,6 +245,16 @@ pub fn notice_text(notice: &Notice, dot_name: &str) -> (String, String) {
                 format!("{name} paused: {why}"),
             )
         }
+        Notice::Hold { change } => (
+            "Claude usage".to_string(),
+            match change {
+                HoldChange::Started {
+                    window,
+                    utilization,
+                } => dots_core::limits::hold_started(window, *utilization),
+                HoldChange::Ended => dots_core::limits::HOLD_ENDED.to_string(),
+            },
+        ),
     }
 }
 
@@ -246,6 +268,7 @@ pub fn notice_route(notice: &Notice, dot_id: &str) -> String {
         Notice::RunEnded { run } => format!("/chat/{dot_id}/{}", run.id),
         Notice::ScheduleFailed { .. } | Notice::MessagePosted { .. } => format!("/home/{dot_id}"),
         Notice::WatcherPaused { .. } => format!("/dots/{dot_id}?tab=watchers"),
+        Notice::Hold { .. } => "/usage".to_string(),
     }
 }
 
@@ -308,6 +331,7 @@ async fn notify(app: &AppHandle, rt: &Runtime, notice: &Notice) {
         Notice::ScheduleFailed { dot_id, .. } => Some(dot_id.clone()),
         Notice::MessagePosted { message } => Some(message.dot_id.clone()),
         Notice::WatcherPaused { dot_id, .. } => Some(dot_id.clone()),
+        Notice::Hold { .. } => None,
     };
     // Nothing for the dot whose conversation the person is reading (needs-you spec 4.2).
     if quiet(dot_id.as_deref(), rt.viewing().as_deref()) {
@@ -319,9 +343,10 @@ async fn notify(app: &AppHandle, rt: &Runtime, notice: &Notice) {
     };
     let (title, body) = notice_text(notice, name.as_deref().unwrap_or("A dot"));
     // A click opens what the notice is about; without its dot, the home.
-    let route = match &dot_id {
-        Some(id) => notice_route(notice, id),
-        None => "/home".to_string(),
+    let route = match (&dot_id, notice) {
+        (_, Notice::Hold { .. }) => notice_route(notice, ""),
+        (Some(id), _) => notice_route(notice, id),
+        (None, _) => "/home".to_string(),
     };
     let id = notify_routes::remember(app, route);
     let shown = app
@@ -818,6 +843,67 @@ mod tests {
         assert_eq!(preview(json!({})), None);
         assert_eq!(preview(Value::Null), None);
         assert_eq!(preview(json!({"command": "  \n "})), None);
+    }
+
+    /// Usage and limits spec section 4: one notice when holding starts, one when it ends,
+    /// and none for a reading that changes neither; each opens the Usage page.
+    #[test]
+    fn a_hold_start_and_end_notify_once_each() {
+        use dots_core::limits::{HoldChange, HoldShares, LimitsState};
+        let mut notifier = Notifier::default();
+        let state = LimitsState {
+            windows: vec![],
+            five_hour: None,
+            weekly: None,
+            shares: HoldShares {
+                enabled: true,
+                five_hour: 60,
+                weekly: 70,
+            },
+            holding: false,
+            draining: false,
+            rejected_until: None,
+            held_run_ids: vec![],
+            hold_until: None,
+        };
+        let update = |change| RuntimeEvent::LimitsUpdated {
+            limits: state.clone(),
+            change,
+        };
+        assert_eq!(notifier.decide(&update(None)), None);
+        let started = notifier
+            .decide(&update(Some(HoldChange::Started {
+                window: "five_hour".into(),
+                utilization: 0.64,
+            })))
+            .unwrap();
+        assert_eq!(
+            notice_text(&started, "A dot"),
+            (
+                "Claude usage".to_string(),
+                "Dots is holding background runs: Claude 5-hour usage is at 64%".to_string()
+            )
+        );
+        assert_eq!(notice_route(&started, ""), "/usage");
+        let weekly = notifier
+            .decide(&update(Some(HoldChange::Started {
+                window: "seven_day".into(),
+                utilization: 0.72,
+            })))
+            .unwrap();
+        assert_eq!(
+            notice_text(&weekly, "A dot").1,
+            "Dots is holding background runs: Claude weekly usage is at 72%"
+        );
+        let ended = notifier.decide(&update(Some(HoldChange::Ended))).unwrap();
+        assert_eq!(
+            notice_text(&ended, "A dot"),
+            (
+                "Claude usage".to_string(),
+                "Held runs are starting".to_string()
+            )
+        );
+        assert_eq!(notice_route(&ended, ""), "/usage");
     }
 
     #[test]

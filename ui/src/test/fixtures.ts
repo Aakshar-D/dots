@@ -25,6 +25,10 @@ export const sample = {
   installedPlugins: T.InstalledPlugin.array().parse(contract.InstalledPlugin),
   probe: T.McpProbe.parse(contract.McpProbe),
   inbox: T.Inbox.parse(contract.Inbox),
+  /// Holding two runs at 64% of the 5-hour window, then nothing held.
+  limits: T.LimitsState.array().parse(contract.LimitsState),
+  /// A week: nightly-tests (Claude, heaviest) and local-summarizer (local, no cost).
+  usage: T.UsageSummary.parse(contract.UsageSummary),
   diff: T.WorktreeDiff.parse(contract.WorktreeDiff),
   startupError: T.StartupError.parse(contract.StartupError),
   /// One schedule of each kind: once; every with an anchor and a count; every without an
@@ -77,7 +81,7 @@ export function installDefaults(): void {
     review_runs: [],
     attention: [],
     tools_changed: [],
-    watchers: [],
+    watchers: [], held: [],
   }));
   // An approval card asks for these when it shows; by default the core offers no rule.
   backend.on("approval_rule_candidates", () => []);

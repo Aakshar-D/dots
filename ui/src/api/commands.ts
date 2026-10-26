@@ -288,4 +288,8 @@ export const commands = {
   watcherSetEnabled: (id: string, enabled: boolean) =>
     call(T.Watcher, "watcher_set_enabled", { id, enabled }),
   watcherResume: (id: string) => call(T.Watcher, "watcher_resume", { id }),
+  // Claude's usage limits and the Usage page (usage and limits spec section 6).
+  limitsGet: () => call(T.LimitsState, "limits_get"),
+  usageSummary: (period: T.UsagePeriod) => call(T.UsageSummary, "usage_summary", { period }),
+  runReleaseHold: (runId: string) => call(T.Run, "run_release_hold", { runId }),
 };

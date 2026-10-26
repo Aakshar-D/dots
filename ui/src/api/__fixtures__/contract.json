@@ -155,7 +155,10 @@
     "watcher_update",
     "watcher_delete",
     "watcher_set_enabled",
-    "watcher_resume"
+    "watcher_resume",
+    "limits_get",
+    "usage_summary",
+    "run_release_hold"
   ],
   "ContextDocuments": {
     "complete": true,
@@ -462,9 +465,11 @@
     "last_run": {
       "base_commit": "0123abcd",
       "branch": "dots/nightly-tests/01J0RUN",
+      "cost_usd": 1.32,
       "dot_id": "01J0DOT",
       "ended_at": "2026-10-09T12:00:00.000Z",
       "error": null,
+      "hold_released": false,
       "id": "01J0RUN",
       "parent_run_id": null,
       "payload": {
@@ -734,6 +739,11 @@
       "follow_up",
       "watcher"
     ],
+    "UsagePeriod": [
+      "five_hours",
+      "week",
+      "month"
+    ],
     "ValueSource": [
       "org",
       "personal"
@@ -901,14 +911,26 @@
         "run_id": "01J0RUN"
       }
     ],
+    "held": [
+      {
+        "dot_id": "01J0DOT",
+        "dot_name": "nightly-tests",
+        "queued_at": "2026-10-09T12:00:00.000Z",
+        "run_id": "01J0RUN4",
+        "starts_after": "2026-10-09T15:10:00.000Z",
+        "trigger": "schedule"
+      }
+    ],
     "review_runs": [
       {
         "base_commit": "0123abcd",
         "branch": "dots/nightly-tests/01J0RUN",
+        "cost_usd": 1.32,
         "dot_id": "01J0DOT",
         "dot_name": "nightly-tests",
         "ended_at": "2026-10-09T12:00:00.000Z",
         "error": null,
+        "hold_released": false,
         "id": "01J0RUN",
         "parent_run_id": null,
         "payload": {
@@ -1509,6 +1531,109 @@
     "max_timeout_secs": 604800,
     "max_watcher_name": 80
   },
+  "LimitsState": [
+    {
+      "draining": false,
+      "five_hour": {
+        "read_at": "2026-10-09T12:00:00.000Z",
+        "resets_at": "2026-10-09T15:10:00.000Z",
+        "status": "allowed",
+        "utilization": 0.64,
+        "window": "five_hour"
+      },
+      "held_run_ids": [
+        "01J0RUN4",
+        "01J0RUN5"
+      ],
+      "hold_until": "2026-10-09T15:10:00.000Z",
+      "holding": true,
+      "rejected_until": null,
+      "shares": {
+        "enabled": true,
+        "five_hour": 60,
+        "weekly": 70
+      },
+      "weekly": {
+        "read_at": "2026-10-09T12:00:00.000Z",
+        "resets_at": "2026-10-09T15:10:00.000Z",
+        "status": "allowed",
+        "utilization": 0.55,
+        "window": "seven_day"
+      },
+      "windows": [
+        {
+          "read_at": "2026-10-09T12:00:00.000Z",
+          "resets_at": "2026-10-09T15:10:00.000Z",
+          "status": "allowed",
+          "utilization": 0.64,
+          "window": "five_hour"
+        },
+        {
+          "read_at": "2026-10-09T12:00:00.000Z",
+          "resets_at": "2026-10-09T15:10:00.000Z",
+          "status": "allowed",
+          "utilization": 0.55,
+          "window": "seven_day"
+        },
+        {
+          "read_at": "2026-10-09T12:00:00.000Z",
+          "resets_at": "2026-10-09T15:10:00.000Z",
+          "status": "allowed",
+          "utilization": 0.2,
+          "window": "seven_day_opus"
+        }
+      ]
+    },
+    {
+      "draining": false,
+      "five_hour": {
+        "read_at": "2026-10-09T12:00:00.000Z",
+        "resets_at": "2026-10-09T15:10:00.000Z",
+        "status": "allowed",
+        "utilization": 0.12,
+        "window": "five_hour"
+      },
+      "held_run_ids": [],
+      "hold_until": null,
+      "holding": false,
+      "rejected_until": null,
+      "shares": {
+        "enabled": true,
+        "five_hour": 60,
+        "weekly": 70
+      },
+      "weekly": {
+        "read_at": "2026-10-09T12:00:00.000Z",
+        "resets_at": "2026-10-09T15:10:00.000Z",
+        "status": "allowed",
+        "utilization": 0.55,
+        "window": "seven_day"
+      },
+      "windows": [
+        {
+          "read_at": "2026-10-09T12:00:00.000Z",
+          "resets_at": "2026-10-09T15:10:00.000Z",
+          "status": "allowed",
+          "utilization": 0.64,
+          "window": "five_hour"
+        },
+        {
+          "read_at": "2026-10-09T12:00:00.000Z",
+          "resets_at": "2026-10-09T15:10:00.000Z",
+          "status": "allowed",
+          "utilization": 0.55,
+          "window": "seven_day"
+        },
+        {
+          "read_at": "2026-10-09T12:00:00.000Z",
+          "resets_at": "2026-10-09T15:10:00.000Z",
+          "status": "allowed",
+          "utilization": 0.2,
+          "window": "seven_day_opus"
+        }
+      ]
+    }
+  ],
   "McpCatalog": {
     "accepted_fingerprint": "fp-accepted",
     "accepted_tools": [
@@ -2012,9 +2137,11 @@
   "Run": {
     "base_commit": "0123abcd",
     "branch": "dots/nightly-tests/01J0RUN",
+    "cost_usd": 1.32,
     "dot_id": "01J0DOT",
     "ended_at": "2026-10-09T12:00:00.000Z",
     "error": null,
+    "hold_released": false,
     "id": "01J0RUN",
     "parent_run_id": null,
     "payload": {
@@ -2057,9 +2184,23 @@
       "output": "test result: ok"
     },
     {
+      "cost_usd": 1.32,
       "kind": "usage",
       "tokens_in": 1200,
       "tokens_out": 340
+    },
+    {
+      "kind": "limits",
+      "status": "allowed",
+      "windows": [
+        {
+          "read_at": "2026-10-09T12:00:00.000Z",
+          "resets_at": "2026-10-09T12:00:00.000Z",
+          "status": "allowed",
+          "utilization": 0.42,
+          "window": "five_hour"
+        }
+      ]
     },
     {
       "kind": "raw",
@@ -2104,9 +2245,11 @@
       "run": {
         "base_commit": null,
         "branch": null,
+        "cost_usd": 1.32,
         "dot_id": "01J0DOT",
         "ended_at": null,
         "error": null,
+        "hold_released": false,
         "id": "01J0RUN2",
         "parent_run_id": null,
         "payload": {
@@ -2283,6 +2426,174 @@
       "watcher_id": "01J0WAT1"
     },
     {
+      "change": {
+        "kind": "started",
+        "utilization": 0.64,
+        "window": "five_hour"
+      },
+      "limits": {
+        "draining": false,
+        "five_hour": {
+          "read_at": "2026-10-09T12:00:00.000Z",
+          "resets_at": "2026-10-09T15:10:00.000Z",
+          "status": "allowed",
+          "utilization": 0.64,
+          "window": "five_hour"
+        },
+        "held_run_ids": [
+          "01J0RUN4",
+          "01J0RUN5"
+        ],
+        "hold_until": "2026-10-09T15:10:00.000Z",
+        "holding": true,
+        "rejected_until": null,
+        "shares": {
+          "enabled": true,
+          "five_hour": 60,
+          "weekly": 70
+        },
+        "weekly": {
+          "read_at": "2026-10-09T12:00:00.000Z",
+          "resets_at": "2026-10-09T15:10:00.000Z",
+          "status": "allowed",
+          "utilization": 0.55,
+          "window": "seven_day"
+        },
+        "windows": [
+          {
+            "read_at": "2026-10-09T12:00:00.000Z",
+            "resets_at": "2026-10-09T15:10:00.000Z",
+            "status": "allowed",
+            "utilization": 0.64,
+            "window": "five_hour"
+          },
+          {
+            "read_at": "2026-10-09T12:00:00.000Z",
+            "resets_at": "2026-10-09T15:10:00.000Z",
+            "status": "allowed",
+            "utilization": 0.55,
+            "window": "seven_day"
+          },
+          {
+            "read_at": "2026-10-09T12:00:00.000Z",
+            "resets_at": "2026-10-09T15:10:00.000Z",
+            "status": "allowed",
+            "utilization": 0.2,
+            "window": "seven_day_opus"
+          }
+        ]
+      },
+      "type": "limits_updated"
+    },
+    {
+      "change": {
+        "kind": "ended"
+      },
+      "limits": {
+        "draining": false,
+        "five_hour": {
+          "read_at": "2026-10-09T12:00:00.000Z",
+          "resets_at": "2026-10-09T15:10:00.000Z",
+          "status": "allowed",
+          "utilization": 0.12,
+          "window": "five_hour"
+        },
+        "held_run_ids": [],
+        "hold_until": null,
+        "holding": false,
+        "rejected_until": null,
+        "shares": {
+          "enabled": true,
+          "five_hour": 60,
+          "weekly": 70
+        },
+        "weekly": {
+          "read_at": "2026-10-09T12:00:00.000Z",
+          "resets_at": "2026-10-09T15:10:00.000Z",
+          "status": "allowed",
+          "utilization": 0.55,
+          "window": "seven_day"
+        },
+        "windows": [
+          {
+            "read_at": "2026-10-09T12:00:00.000Z",
+            "resets_at": "2026-10-09T15:10:00.000Z",
+            "status": "allowed",
+            "utilization": 0.64,
+            "window": "five_hour"
+          },
+          {
+            "read_at": "2026-10-09T12:00:00.000Z",
+            "resets_at": "2026-10-09T15:10:00.000Z",
+            "status": "allowed",
+            "utilization": 0.55,
+            "window": "seven_day"
+          },
+          {
+            "read_at": "2026-10-09T12:00:00.000Z",
+            "resets_at": "2026-10-09T15:10:00.000Z",
+            "status": "allowed",
+            "utilization": 0.2,
+            "window": "seven_day_opus"
+          }
+        ]
+      },
+      "type": "limits_updated"
+    },
+    {
+      "change": null,
+      "limits": {
+        "draining": false,
+        "five_hour": {
+          "read_at": "2026-10-09T12:00:00.000Z",
+          "resets_at": "2026-10-09T15:10:00.000Z",
+          "status": "allowed",
+          "utilization": 0.12,
+          "window": "five_hour"
+        },
+        "held_run_ids": [],
+        "hold_until": null,
+        "holding": false,
+        "rejected_until": null,
+        "shares": {
+          "enabled": true,
+          "five_hour": 60,
+          "weekly": 70
+        },
+        "weekly": {
+          "read_at": "2026-10-09T12:00:00.000Z",
+          "resets_at": "2026-10-09T15:10:00.000Z",
+          "status": "allowed",
+          "utilization": 0.55,
+          "window": "seven_day"
+        },
+        "windows": [
+          {
+            "read_at": "2026-10-09T12:00:00.000Z",
+            "resets_at": "2026-10-09T15:10:00.000Z",
+            "status": "allowed",
+            "utilization": 0.64,
+            "window": "five_hour"
+          },
+          {
+            "read_at": "2026-10-09T12:00:00.000Z",
+            "resets_at": "2026-10-09T15:10:00.000Z",
+            "status": "allowed",
+            "utilization": 0.55,
+            "window": "seven_day"
+          },
+          {
+            "read_at": "2026-10-09T12:00:00.000Z",
+            "resets_at": "2026-10-09T15:10:00.000Z",
+            "status": "allowed",
+            "utilization": 0.2,
+            "window": "seven_day_opus"
+          }
+        ]
+      },
+      "type": "limits_updated"
+    },
+    {
       "dot_id": "01J0DOT",
       "error": null,
       "name": "Repo events",
@@ -2294,9 +2605,11 @@
       "run": {
         "base_commit": "0123abcd",
         "branch": "dots/nightly-tests/01J0RUN",
+        "cost_usd": 1.32,
         "dot_id": "01J0DOT",
         "ended_at": "2026-10-09T12:00:00.000Z",
         "error": null,
+        "hold_released": false,
         "id": "01J0RUN3",
         "parent_run_id": null,
         "payload": {
@@ -2407,6 +2720,9 @@
     "claude_path": null,
     "edge_path": null,
     "global_instructions": "Use British spelling.",
+    "hold_enabled": true,
+    "hold_share_five_hour": 60,
+    "hold_share_weekly": 70,
     "local_endpoints": [
       "http://127.0.0.1:1234"
     ],
@@ -2423,6 +2739,9 @@
       "claude_path": null,
       "edge_path": null,
       "global_instructions": "Use British spelling.",
+      "hold_enabled": true,
+      "hold_share_five_hour": 60,
+      "hold_share_weekly": 70,
       "local_endpoints": [
         "http://127.0.0.1:1234"
       ],
@@ -2518,6 +2837,54 @@
       "state": "failed"
     }
   ],
+  "UsageSummary": {
+    "period": "week",
+    "rows": [
+      {
+        "cost_usd": 18.4,
+        "dot_id": "01J0DOT",
+        "dot_name": "nightly-tests",
+        "engine": "claude",
+        "heaviest": [
+          {
+            "cost_usd": 1.32,
+            "run_id": "01J0RUN",
+            "run_secs": 724,
+            "started_at": "2026-10-09T12:00:00.000Z",
+            "tokens_in": 170000,
+            "tokens_out": 12000,
+            "trigger": "schedule"
+          }
+        ],
+        "run_secs": 11520,
+        "runs": 14,
+        "tokens_in": 2000000,
+        "tokens_out": 100000
+      },
+      {
+        "cost_usd": null,
+        "dot_id": "01J0DOT2",
+        "dot_name": "local-summarizer",
+        "engine": "local",
+        "heaviest": [
+          {
+            "cost_usd": null,
+            "run_id": "01J0RUN2",
+            "run_secs": null,
+            "started_at": "2026-10-09T12:00:00.000Z",
+            "tokens_in": 20000,
+            "tokens_out": 4000,
+            "trigger": "watcher"
+          }
+        ],
+        "run_secs": 3900,
+        "runs": 22,
+        "tokens_in": 250000,
+        "tokens_out": 50000
+      }
+    ],
+    "since": "2026-10-09T12:00:00.000Z"
+  },
   "Watcher": [
     {
       "config": {
