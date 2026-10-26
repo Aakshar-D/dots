@@ -13,6 +13,7 @@ import {
 describe("the usage numbers", () => {
   it("shorten tokens to k and M", () => {
     expect(formatTokens(950)).toBe("950");
+    expect(formatTokens(1540)).toBe("1.5k");
     expect(formatTokens(12_400)).toBe("12k");
     expect(formatTokens(182_000)).toBe("182k");
     expect(formatTokens(2_100_000)).toBe("2.1M");

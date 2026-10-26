@@ -36,7 +36,9 @@ export function Layout() {
         inbox.review_runs.length +
         inbox.attention.length +
         inbox.tools_changed.length +
-        inbox.watchers.length
+        inbox.watchers.length +
+        // Runs held for Claude usage wait as one line, however many.
+        Math.min(inbox.held.length, 1)
       : 0) + (messages ?? []).filter(waits).length;
   // A pending approval or an open question needs the person: the counts take the needs colour
   // (deep-teal spec section 4).

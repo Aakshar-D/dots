@@ -21,7 +21,10 @@ import { invalidate, keys, takeStatus } from "@/lib/query";
 import { ChatGptAccount } from "./ChatGptAccount";
 import { Organisations } from "./Organisations";
 
-type Errors = { port?: string; max?: string; global?: string };
+type Errors = { port?: string; max?: string; global?: string; share?: string };
+
+/// The core's words for a hold share out of bounds (usage and limits spec section 4).
+const SHARE_RULE = "A share is 10 to 100%, in steps of 5.";
 
 /// The size of `text` in UTF-8 bytes, as the core counts it.
 export const utf8Bytes = (text: string) => new TextEncoder().encode(text).length;
@@ -30,7 +33,7 @@ export const utf8Bytes = (text: string) => new TextEncoder().encode(text).length
 /// in the core.
 export function settingsErrors(
   draft: Pick<Settings, "port" | "max_concurrent_runs"> &
-    Partial<Pick<Settings, "global_instructions">>,
+    Partial<Pick<Settings, "global_instructions" | "hold_share_five_hour" | "hold_share_weekly">>,
 ): Errors {
   const errors: Errors = {};
   if (utf8Bytes(draft.global_instructions ?? "") > LIMITS.max_global_instructions) {
@@ -40,6 +43,10 @@ export function settingsErrors(
   if (!whole(draft.port, 1, 65535)) errors.port = "The port must be a whole number, 1 to 65535.";
   if (!whole(draft.max_concurrent_runs, 1, LIMITS.max_concurrent_runs)) {
     errors.max = `Runs at once must be a whole number, 1 to ${LIMITS.max_concurrent_runs}.`;
+  }
+  const share = (n: number | undefined) => n === undefined || (whole(n, 10, 100) && n % 5 === 0);
+  if (!share(draft.hold_share_five_hour) || !share(draft.hold_share_weekly)) {
+    errors.share = SHARE_RULE;
   }
   return errors;
 }
@@ -270,6 +277,48 @@ function Form({ stored, status }: { stored: Settings; status: Status | undefined
             onChange={(e) => set({ max_concurrent_runs: numberOf(e.target.value) })}
           />
         </Field>
+      </Section>
+
+      <Section title="Claude usage">
+        <div className="flex items-center gap-2">
+          <Switch
+            id="settings-hold"
+            checked={draft.hold_enabled}
+            onCheckedChange={(hold_enabled) => set({ hold_enabled })}
+          />
+          <Label htmlFor="settings-hold">Hold background dots when Claude usage is high</Label>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Scheduled, watcher, follow-up and webhook runs wait while your Claude usage is at or
+          above a share; chat and Run now never wait. Usage counts your own Claude use too.
+        </p>
+        <div className="flex flex-wrap gap-4">
+          <Field label="5-hour window share (%)" htmlFor="settings-share-five">
+            <Input
+              id="settings-share-five"
+              type="number"
+              min={10}
+              max={100}
+              step={5}
+              className="w-28"
+              value={shown(draft.hold_share_five_hour)}
+              onChange={(e) => set({ hold_share_five_hour: numberOf(e.target.value) })}
+            />
+          </Field>
+          <Field label="Weekly window share (%)" htmlFor="settings-share-weekly">
+            <Input
+              id="settings-share-weekly"
+              type="number"
+              min={10}
+              max={100}
+              step={5}
+              className="w-28"
+              value={shown(draft.hold_share_weekly)}
+              onChange={(e) => set({ hold_share_weekly: numberOf(e.target.value) })}
+            />
+          </Field>
+        </div>
+        {tried && errors.share && <p className="text-sm text-destructive">{errors.share}</p>}
       </Section>
 
       <Section title="Claude Code CLI">

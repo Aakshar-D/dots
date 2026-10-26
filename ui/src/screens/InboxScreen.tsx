@@ -3,7 +3,13 @@ import { Inbox as InboxIcon, Play } from "lucide-react";
 import { Link, useNavigate } from "react-router";
 
 import { commands } from "@/api/commands";
-import type { NeedsAttention, PausedWatcher, ReviewRun, ToolsChanged } from "@/api/types";
+import type {
+  HeldRun,
+  NeedsAttention,
+  PausedWatcher,
+  ReviewRun,
+  ToolsChanged,
+} from "@/api/types";
 import { ApprovalCard } from "@/components/ApprovalCard";
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { EmptyState } from "@/components/EmptyState";
@@ -15,11 +21,13 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { byRun, type RunApprovals } from "@/lib/approvals";
 import { relativeTime } from "@/lib/format";
+import { triggerLabel } from "@/lib/home-topics";
 import { waits } from "@/lib/messages";
 import { notifyError } from "@/lib/notify";
 import { invalidate, keys } from "@/lib/query";
 import { onSingleClick } from "@/lib/single-click";
 import { toolPreview } from "@/lib/transcript";
+import { resetTime } from "@/lib/usage-format";
 
 /// A finished run that waits for the user: it failed, or it left a worktree to look at.
 function ReviewRow({ run }: { run: ReviewRun }) {
@@ -80,6 +88,40 @@ function PausedWatcherRow({ item }: { item: PausedWatcher }) {
         onClick={onSingleClick(() => resume.mutate())}
       >
         Resume
+      </Button>
+    </li>
+  );
+}
+
+/// A background run held for Claude usage (usage and limits spec section 5): when it starts,
+/// and **Run anyway**.
+function HeldRunRow({ item }: { item: HeldRun }) {
+  const qc = useQueryClient();
+  const release = useMutation({
+    mutationFn: () => commands.runReleaseHold(item.run_id),
+    onError: notifyError,
+    onSettled: () => {
+      for (const queryKey of [keys.inbox, keys.limits]) invalidate(qc, queryKey);
+    },
+  });
+  const when = item.starts_after
+    ? `starts after ${resetTime(item.starts_after)}`
+    : "waiting for the first run after the reset";
+  return (
+    <li
+      aria-label={`${item.dot_name} run held`}
+      className="flex items-center gap-3 rounded-lg border p-3"
+    >
+      <Link to={`/runs/${item.run_id}`} className="min-w-0 flex-1 truncate hover:underline">
+        {item.dot_name} · {triggerLabel(item)} · {when}
+      </Link>
+      <Button
+        size="sm"
+        variant="outline"
+        disabled={release.isPending}
+        onClick={onSingleClick(() => release.mutate())}
+      >
+        Run anyway
       </Button>
     </li>
   );
@@ -284,7 +326,14 @@ export function InboxScreen() {
       </Page>
     );
   }
-  const { approvals, review_runs: runs, attention, tools_changed: tools, watchers } = inbox.data;
+  const {
+    approvals,
+    review_runs: runs,
+    attention,
+    tools_changed: tools,
+    watchers,
+    held,
+  } = inbox.data;
   const waiting = (messages.data ?? []).filter(waits);
   if (
     !messages.isError &&
@@ -293,7 +342,8 @@ export function InboxScreen() {
     runs.length === 0 &&
     attention.length === 0 &&
     tools.length === 0 &&
-    watchers.length === 0
+    watchers.length === 0 &&
+    held.length === 0
   ) {
     return (
       <Page title="Inbox">
@@ -350,6 +400,18 @@ export function InboxScreen() {
           <ul className="flex flex-col gap-2">
             {watchers.map((item) => (
               <PausedWatcherRow key={item.watcher_id} item={item} />
+            ))}
+          </ul>
+        </section>
+      )}
+      {held.length > 0 && (
+        <section aria-labelledby="inbox-held" className="flex flex-col gap-2">
+          <h2 id="inbox-held" className="font-semibold">
+            Held for Claude usage
+          </h2>
+          <ul className="flex flex-col gap-2">
+            {held.map((item) => (
+              <HeldRunRow key={item.run_id} item={item} />
             ))}
           </ul>
         </section>
