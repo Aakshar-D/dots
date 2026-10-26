@@ -38,7 +38,7 @@ fn refusal(e: Error) -> String {
 #[tokio::test]
 async fn the_person_lists_adds_changes_and_deletes_a_dots_memories() {
     let t = start().await;
-    let dot = t.rt.create_dot(spec("invoices")).await.unwrap();
+    let dot = t.rt.create_dot(spec("invoices"), None).await.unwrap();
     let mut events = t.rt.subscribe();
 
     let added =
@@ -99,7 +99,7 @@ async fn the_person_lists_adds_changes_and_deletes_a_dots_memories() {
 #[tokio::test]
 async fn a_deleted_dot_takes_its_memories_with_it() {
     let t = start().await;
-    let dot = t.rt.create_dot(spec("gone")).await.unwrap();
+    let dot = t.rt.create_dot(spec("gone"), None).await.unwrap();
     let memory = t.rt.memory_add(&dot.id, "Remember me.").await.unwrap();
     t.rt.delete_dot(&dot.id).await.unwrap();
     let e =

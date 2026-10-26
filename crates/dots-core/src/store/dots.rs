@@ -14,7 +14,7 @@ use crate::{Error, Result};
 pub(super) const DOT_COLUMNS: &str = "id, name, instructions, engine, model, endpoint_url, \
     workdir, workspace_mode, schedule, webhook_token, policy, uses, variables, browser, \
     use_global_instructions, use_user_settings, max_turns, \
-    timeout_secs, approval_wait_secs, enabled, created_at, updated_at, seen_at";
+    timeout_secs, approval_wait_secs, enabled, created_at, updated_at, seen_at, org_id";
 
 pub(super) fn dot_from_row(row: &SqliteRow) -> Result<Dot> {
     Ok(Dot {
@@ -23,6 +23,7 @@ pub(super) fn dot_from_row(row: &SqliteRow) -> Result<Dot> {
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
         seen_at: row.try_get("seen_at")?,
+        org_id: row.try_get("org_id")?,
         spec: DotSpec {
             name: row.try_get("name")?,
             instructions: row.try_get("instructions")?,
@@ -108,9 +109,11 @@ impl Store {
         Ok(spec.variables.synced(&had, &using))
     }
 
-    /// Creates a dot. Every item its `uses` names must be in the Library (`Invalid`). The
-    /// servers it uses are granted their variables.
-    pub async fn create_dot(&self, spec: &DotSpec) -> Result<Dot> {
+    /// Creates a dot, in the org `org_id` or, with `None`, in Personal. Nothing changes the org
+    /// afterwards (env vault spec §5.2). Whether the org is joined is the caller's check
+    /// (`Runtime::create_dot`). Every item its `uses` names must be in the Library (`Invalid`).
+    /// The servers it uses are granted their variables.
+    pub async fn create_dot(&self, spec: &DotSpec, org_id: Option<&str>) -> Result<Dot> {
         let mut spec = prepared(spec, None)?;
         spec.variables = self.synced_grants(None, &spec).await?;
         let spec = &spec;
@@ -121,8 +124,8 @@ impl Store {
             "INSERT INTO dots (id, name, instructions, engine, model, endpoint_url, workdir, \
              workspace_mode, schedule, webhook_token, policy, uses, variables, browser, \
              use_global_instructions, use_user_settings, max_turns, timeout_secs, \
-             approval_wait_secs, enabled, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             approval_wait_secs, enabled, created_at, updated_at, org_id) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&spec.name)
@@ -147,6 +150,7 @@ impl Store {
         .bind(spec.enabled as i64)
         .bind(&ts)
         .bind(&ts)
+        .bind(org_id)
         .execute(&mut *tx)
         .await
         .map_err(|e| map_unique(e, &spec.name))?;

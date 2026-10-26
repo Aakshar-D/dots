@@ -13,12 +13,13 @@ use common::temp_store;
 use dots_core::events::{new_bus, Bus, RuntimeEvent};
 use dots_core::library::{
     CatalogStatus, LibraryConfig, LibraryKind, McpServerConfig, PluginConfig, SkillConfig, Uses,
+    PERSONAL_SCOPE,
 };
 use dots_core::library_service::LibraryService;
 use dots_core::policy::McpTrust;
 use dots_core::run_tools::{OpenRequest, RunTools};
 use dots_core::store::Store;
-use dots_core::vault::{Grants, Vault};
+use dots_core::vault::{DotScope, Grants, Vault};
 use serde_json::json;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
@@ -113,6 +114,7 @@ impl Fixture {
             plugins_dir,
             cancel: &CancellationToken::new(),
             vault: &Vault::in_memory(self.store.clone()),
+            scope: &DotScope::Personal,
             grants: &Grants::default(),
             dot_name: "tools",
         })
@@ -165,7 +167,7 @@ async fn a_run_opens_its_servers_and_its_plugins_servers() {
     assert_eq!(
         srv.accepted_fingerprint(),
         f.store
-            .get_catalog(&files_id)
+            .get_catalog(&files_id, PERSONAL_SCOPE)
             .await
             .unwrap()
             .accepted_fingerprint
@@ -230,7 +232,7 @@ async fn a_list_that_changed_since_it_was_accepted_holds_the_server() {
             read_only: true
         }
     );
-    let catalog = f.store.get_catalog(&id).await.unwrap();
+    let catalog = f.store.get_catalog(&id, PERSONAL_SCOPE).await.unwrap();
     assert_eq!(catalog.status, CatalogStatus::Changed);
     assert_eq!(notices.len(), 1);
     assert!(notices[0].starts_with("files: "), "{notices:?}");
@@ -269,7 +271,7 @@ async fn a_server_that_cannot_start_is_left_out_with_a_run_event() {
         notices,
         ["bad: could not start: dots-t5-no-such-program was not found"]
     );
-    let catalog = f.store.get_catalog(&bad_id).await.unwrap();
+    let catalog = f.store.get_catalog(&bad_id, PERSONAL_SCOPE).await.unwrap();
     assert_eq!(catalog.status, CatalogStatus::Unreachable);
     assert_eq!(
         catalog.error.as_deref(),
@@ -364,7 +366,11 @@ async fn a_list_change_during_the_run_holds_the_server_at_once() {
         }
     );
     assert_eq!(
-        f.store.get_catalog(&id).await.unwrap().status,
+        f.store
+            .get_catalog(&id, PERSONAL_SCOPE)
+            .await
+            .unwrap()
+            .status,
         CatalogStatus::Changed
     );
     tools.close().await;
@@ -486,6 +492,7 @@ async fn a_cancelled_run_stops_opening_its_servers() {
         plugins_dir: None,
         cancel: &cancel,
         vault: &Vault::in_memory(f.store.clone()),
+        scope: &DotScope::Personal,
         grants: &Grants::default(),
         dot_name: "tools",
     })

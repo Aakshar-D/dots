@@ -190,8 +190,11 @@ async fn the_app_sees_the_time_and_the_dots_that_use_it() {
         apps: vec!["expenses".into()],
         ..Uses::default()
     };
-    let b = f.store.create_dot(&spec).await.unwrap();
-    f.store.create_dot(&common::spec("other")).await.unwrap();
+    let b = f.store.create_dot(&spec, None).await.unwrap();
+    f.store
+        .create_dot(&common::spec("other"), None)
+        .await
+        .unwrap();
     let out = f
         .apps
         .call("expenses", "whoami", json!({}), Actor::Person)

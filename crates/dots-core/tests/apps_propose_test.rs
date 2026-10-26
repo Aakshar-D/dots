@@ -81,7 +81,7 @@ fn message(run: &Run) -> String {
 /// A local dot whose model answers every turn with "Done.", and one finished run of it.
 async fn finished_run(t: &Rt, llm: &Llm, name: &str) -> Run {
     let dot =
-        t.rt.create_dot(local_spec(t, &llm.endpoint(), name))
+        t.rt.create_dot(local_spec(t, &llm.endpoint(), name), None)
             .await
             .unwrap();
     let run = t.rt.run_now(&dot.id).await.unwrap();
@@ -112,7 +112,7 @@ async fn a_local_dot_proposes_an_app_and_the_person_adds_it() {
     ])
     .await;
     let dot =
-        t.rt.create_dot(local_spec(&t, &llm.endpoint(), "builder"))
+        t.rt.create_dot(local_spec(&t, &llm.endpoint(), "builder"), None)
             .await
             .unwrap();
     let run = t.rt.run_now(&dot.id).await.unwrap();
@@ -236,7 +236,7 @@ async fn a_proposal_that_fails_its_checks_goes_back_to_the_dot() {
     ])
     .await;
     let dot =
-        t.rt.create_dot(local_spec(&t, &llm.endpoint(), "builder"))
+        t.rt.create_dot(local_spec(&t, &llm.endpoint(), "builder"), None)
             .await
             .unwrap();
     let run = t.rt.run_now(&dot.id).await.unwrap();
@@ -431,7 +431,7 @@ async fn a_claude_dot_proposes_through_dots_own_server_under_its_policy() {
         s.engine = EngineKind::Claude;
         s
     };
-    let dot = t.rt.create_dot(claude_spec("claude")).await.unwrap();
+    let dot = t.rt.create_dot(claude_spec("claude"), None).await.unwrap();
     let run = t.rt.run_now(&dot.id).await.unwrap();
     wait_status(t.rt.store(), &run.id, RunStatus::Succeeded, 30).await;
     let recorded: Value =
@@ -452,7 +452,7 @@ async fn a_claude_dot_proposes_through_dots_own_server_under_its_policy() {
         .policy
         .rules
         .insert(0, Rule::new("ProposeApp", Action::Deny));
-    let denying = t.rt.create_dot(denying).await.unwrap();
+    let denying = t.rt.create_dot(denying, None).await.unwrap();
     let run = t.rt.run_now(&denying.id).await.unwrap();
     wait_status(t.rt.store(), &run.id, RunStatus::Succeeded, 30).await;
     let results: Vec<Value> =

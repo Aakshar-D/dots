@@ -26,7 +26,8 @@ use dots_core::policy::{Policy, Preset, RuleCandidate};
 use dots_core::schedule::Schedule;
 use dots_core::settings::Settings;
 use dots_core::skill_creator::{check_draft, DraftRequest, DraftSummary};
-use dots_core::vault::{EntryKind, EnvEntry};
+use dots_core::vault::org::{JoinPreview, OrgEntry, OrgSummary, SourceCreds};
+use dots_core::vault::{EntryKind, EnvEntry, GrantStatus};
 use dots_core::Runtime;
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_opener::OpenerExt;
@@ -220,9 +221,21 @@ pub async fn get_dot(state: State<'_, AppState>, id: String) -> Res<Dot> {
     Ok(state.rt()?.get_dot(&id).await?)
 }
 
+/// The status of each of the dot's grants in its scope, for its editor's Variables: whether
+/// it resolves now, from where, and why not. No value is in it, and no org is fetched.
 #[tauri::command]
-pub async fn create_dot(state: State<'_, AppState>, spec: DotSpec) -> Res<Dot> {
-    Ok(state.rt()?.create_dot(spec).await?)
+pub async fn dot_variables(state: State<'_, AppState>, dot_id: String) -> Res<Vec<GrantStatus>> {
+    Ok(state.rt()?.dot_variables(&dot_id).await?)
+}
+
+/// `org_id`, the UI's `orgId`: the org the new dot belongs to, `None` for Personal.
+#[tauri::command]
+pub async fn create_dot(
+    state: State<'_, AppState>,
+    spec: DotSpec,
+    org_id: Option<String>,
+) -> Res<Dot> {
+    Ok(state.rt()?.create_dot(spec, org_id).await?)
 }
 
 #[tauri::command]
@@ -473,19 +486,54 @@ pub async fn library_probe(
     .await
 }
 
+/// Checks the server in `scope`, an org id (none for Personal): "Check now" and "Check as". A
+/// server whose URL reaches an origin not confirmed in that scope asks in a native dialog first
+/// (`confirm::check_confirmed`); a refusal answers `cancelled` and nothing is sent.
 #[tauri::command]
-pub async fn library_check(state: State<'_, AppState>, id: String) -> Res<McpCatalog> {
-    Ok(state.rt()?.library().check(&id).await?)
+pub async fn library_check(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    scope: Option<String>,
+) -> Res<McpCatalog> {
+    let rt = state.rt()?;
+    confirm::check_confirmed(&rt, &id, &confirm::scope_of(scope), |message| {
+        confirm::ask(&app, confirm::library_title(&message), message)
+    })
+    .await
 }
 
-/// Refused with kind `conflict` when the fingerprint is no longer the one last seen.
+/// Confirms, in a native dialog, the origin the http server `server_id` reaches in `scope`, and
+/// records it: a run in that scope then starts the server there. Nothing is asked when it is
+/// confirmed already; a refusal answers `cancelled`. A plugin's own server takes it too.
+#[tauri::command]
+pub async fn confirm_origin(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    server_id: String,
+    scope: Option<String>,
+) -> Res<()> {
+    let rt = state.rt()?;
+    confirm::origin_confirmed(&rt, &server_id, &confirm::scope_of(scope), |message| {
+        confirm::ask(&app, confirm::library_title(&message), message)
+    })
+    .await
+}
+
+/// Accepts the list last seen in `scope` (none for Personal). Refused with kind `conflict` when
+/// the fingerprint is no longer the one last seen there.
 #[tauri::command]
 pub async fn library_accept(
     state: State<'_, AppState>,
     id: String,
     fingerprint: String,
+    scope: Option<String>,
 ) -> Res<McpCatalog> {
-    Ok(state.rt()?.library().accept(&id, &fingerprint).await?)
+    Ok(state
+        .rt()?
+        .library()
+        .accept(&id, &confirm::scope_of(scope), &fingerprint)
+        .await?)
 }
 
 #[tauri::command]
@@ -604,6 +652,77 @@ pub async fn env_old_backups(state: State<'_, AppState>) -> Res<Vec<String>> {
 #[tauri::command]
 pub async fn env_old_backups_answer(state: State<'_, AppState>, delete: bool) -> Res<Vec<String>> {
     Ok(state.rt()?.answer_old_backups(delete).await?)
+}
+
+/// The orgs joined on this PC, for Settings → Organisations (env vault spec §9). Never a value.
+#[tauri::command]
+pub async fn org_list(state: State<'_, AppState>) -> Res<Vec<OrgSummary>> {
+    Ok(state.rt()?.orgs().summaries().await)
+}
+
+/// What the join code `code` (its text, or a `.dotsorg` file's) would join, or change for an
+/// org joined already. Nothing is fetched.
+#[tauri::command]
+pub fn org_preview(state: State<'_, AppState>, code: String) -> Res<JoinPreview> {
+    Ok(state.rt()?.preview_org(&code)?)
+}
+
+/// This PC's age public key for the SOPS org `org_id`, made on the first call, for the person
+/// to send to their admin. Never the private key.
+#[tauri::command]
+pub async fn org_sops_key(state: State<'_, AppState>, org_id: String) -> Res<String> {
+    Ok(state.rt()?.orgs().sops_identity(&org_id).await?)
+}
+
+/// Joins the org of `code` with the person's sign-in details `creds` (`SourceCreds`, tagged
+/// `kind`), none for a SOPS org whose key is made. Answers the org; the details are never
+/// answered or logged.
+#[tauri::command]
+pub async fn org_join(
+    state: State<'_, AppState>,
+    code: String,
+    creds: Option<serde_json::Value>,
+) -> Res<OrgSummary> {
+    let creds = creds_of(creds)?;
+    Ok(state.rt()?.join_org(&code, creds).await?)
+}
+
+/// Replaces the org's settings with those of a new join code, with new sign-in details or the
+/// saved ones. A code that brings a new policy key asks in a native dialog first
+/// (`confirm::update_org_confirmed`); a refusal answers `cancelled` and nothing changes.
+#[tauri::command]
+pub async fn org_update(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    org_id: String,
+    code: String,
+    creds: Option<serde_json::Value>,
+) -> Res<OrgSummary> {
+    let creds = creds_of(creds)?;
+    let rt = state.rt()?;
+    confirm::update_org_confirmed(&rt, &org_id, &code, creds, |message| {
+        confirm::ask(&app, confirm::KEY_TITLE, message)
+    })
+    .await
+}
+
+/// Fetches the org now (**Refresh**). A failed fetch is not an error: the org's status says it.
+#[tauri::command]
+pub async fn org_refresh(state: State<'_, AppState>, org_id: String) -> Res<OrgSummary> {
+    Ok(state.rt()?.refresh_org(&org_id).await?)
+}
+
+/// Leaves the org (**Remove**): its offline copy, sign-in details and row go; its dots stay,
+/// "org removed". The UI confirms first.
+#[tauri::command]
+pub async fn org_remove(state: State<'_, AppState>, org_id: String) -> Res<()> {
+    Ok(state.rt()?.remove_org(&org_id).await?)
+}
+
+/// The org's entries for the Env tab: plain ones with their values, secrets by name only.
+#[tauri::command]
+pub async fn org_entries(state: State<'_, AppState>, org_id: String) -> Res<Vec<OrgEntry>> {
+    Ok(state.rt()?.orgs().entries(&org_id).await?)
 }
 
 /// Every message that waits for the person and the newest others, newest first; of one dot
@@ -831,4 +950,20 @@ pub async fn app_proposal_decide(
     decision: Decision,
 ) -> Res<AppProposal> {
     Ok(state.rt()?.decide_app_proposal(&id, decision).await?.0)
+}
+
+/// The sign-in details a command was given, read as `SourceCreds`. The words of a failure name
+/// no part of them: serde's messages can quote the text they fail on.
+fn creds_of(creds: Option<serde_json::Value>) -> Res<Option<SourceCreds>> {
+    creds
+        .map(|value| {
+            serde_json::from_value(value).map_err(|_| {
+                CmdError::from(dots_core::Error::Invalid(
+                    "these sign-in details are not ones Dots reads: give a token, a username \
+                     and password, a machine identity's client id and secret, or an age key"
+                        .into(),
+                ))
+            })
+        })
+        .transpose()
 }

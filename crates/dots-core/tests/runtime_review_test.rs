@@ -64,7 +64,10 @@ async fn changed_worktree_run(t: &Rt, name: &str) -> dots_core::model::Run {
         text("Wrote new.txt."),
     ])
     .await;
-    let dot = t.rt.create_dot(worktree_spec(t, &llm, name)).await.unwrap();
+    let dot =
+        t.rt.create_dot(worktree_spec(t, &llm, name), None)
+            .await
+            .unwrap();
     let run = t.rt.run_now(&dot.id).await.unwrap();
     wait_status(t.rt.store(), &run.id, RunStatus::Succeeded, 15).await
 }
@@ -75,13 +78,16 @@ async fn dot_overview_shows_active_and_last_runs_and_the_next_fire() {
     let t = start().await;
     let mut s = folder_spec(&t, "sched");
     s.schedule = Some(Schedule::cron("0 0 9 * * *"));
-    let dot = t.rt.create_dot(s).await.unwrap();
+    let dot = t.rt.create_dot(s, None).await.unwrap();
     let mut s = folder_spec(&t, "daily");
     s.schedule = Some(schedule(
         json!({"rule": {"kind": "daily", "time": "07:15"}}),
     ));
-    let daily = t.rt.create_dot(s).await.unwrap();
-    let idle = t.rt.create_dot(folder_spec(&t, "idle")).await.unwrap();
+    let daily = t.rt.create_dot(s, None).await.unwrap();
+    let idle =
+        t.rt.create_dot(folder_spec(&t, "idle"), None)
+            .await
+            .unwrap();
     let run = t.rt.run_now(&dot.id).await.unwrap();
     wait_status(t.rt.store(), &run.id, RunStatus::Succeeded, 15).await;
 
@@ -106,7 +112,7 @@ async fn dot_overview_shows_active_and_last_runs_and_the_next_fire() {
     s.engine = EngineKind::Local;
     s.endpoint_url = Some(llm.endpoint());
     s.model = "m".into();
-    let slow = t.rt.create_dot(s).await.unwrap();
+    let slow = t.rt.create_dot(s, None).await.unwrap();
     let r = t.rt.run_now(&slow.id).await.unwrap();
     let rows = t.rt.dot_overview().await.unwrap();
     let row = rows.iter().find(|x| x.dot.id == slow.id).unwrap();
@@ -171,7 +177,10 @@ fn preview_schedule_lists_the_next_fire_times() {
 #[tokio::test]
 async fn a_thread_and_its_events_can_be_read_from_any_of_its_runs() {
     let t = start().await;
-    let dot = t.rt.create_dot(folder_spec(&t, "chatty")).await.unwrap();
+    let dot =
+        t.rt.create_dot(folder_spec(&t, "chatty"), None)
+            .await
+            .unwrap();
     let first = t.rt.chat(&dot.id, "hi", None).await.unwrap();
     wait_status(t.rt.store(), &first.id, RunStatus::Succeeded, 15).await;
     let second = t.rt.chat(&dot.id, "more", Some(&first.id)).await.unwrap();
@@ -211,13 +220,13 @@ async fn a_thread_and_its_events_can_be_read_from_any_of_its_runs() {
 async fn the_inbox_lists_failures_and_kept_worktrees_until_reviewed() {
     let t = start().await;
     // A plain success in a folder only notifies.
-    let ok = t.rt.create_dot(folder_spec(&t, "ok")).await.unwrap();
+    let ok = t.rt.create_dot(folder_spec(&t, "ok"), None).await.unwrap();
     let r = t.rt.run_now(&ok.id).await.unwrap();
     wait_status(t.rt.store(), &r.id, RunStatus::Succeeded, 15).await;
     // A failure (here: the workdir is gone) is listed.
     let mut s = folder_spec(&t, "bad");
     s.workdir = t.dir.path().join("missing").to_string_lossy().to_string();
-    let bad = t.rt.create_dot(s).await.unwrap();
+    let bad = t.rt.create_dot(s, None).await.unwrap();
     let failed = t.rt.run_now(&bad.id).await.unwrap();
     wait_status(t.rt.store(), &failed.id, RunStatus::Failed, 15).await;
     // A worktree with changes is listed.
@@ -266,7 +275,7 @@ async fn a_pending_approval_is_listed_with_its_dot() {
     .await;
     let mut s = worktree_spec(&t, &llm, "pusher");
     s.approval_wait_secs = 30;
-    let dot = t.rt.create_dot(s).await.unwrap();
+    let dot = t.rt.create_dot(s, None).await.unwrap();
     let run = t.rt.run_now(&dot.id).await.unwrap();
     let deadline = std::time::Instant::now() + Duration::from_secs(15);
     let inbox = loop {

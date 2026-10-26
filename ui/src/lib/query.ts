@@ -37,8 +37,18 @@ export const keys = {
   env: ["env"] as const,
   envImport: ["env-import"] as const,
   envBackups: ["env-backups"] as const,
+  /// The orgs joined on this PC (Settings → Organisations, and the org names other screens
+  /// show). What is read per org belongs under this prefix, so an org event reaches it too.
+  orgs: ["orgs"] as const,
+  /// An org's entries for the Library's Env tab, under the orgs' key.
+  orgEntries: (orgId: string) => ["orgs", orgId, "entries"] as const,
+  /// This PC's age public key for a SOPS org: made once, so no org event asks for it again.
+  orgSopsKey: (orgId: string) => ["org-sops-key", orgId] as const,
   dots: ["dots"] as const,
   dot: (id: string) => ["dot", id] as const,
+  /// The status of a dot's grants, under the dot's key: a change to the dot marks it stale, and
+  /// so does an org event (lib/runtime-events.ts).
+  dotVariables: (id: string) => ["dot", id, "variables"] as const,
   newDotSpec: ["new-dot-spec"] as const,
   schedulePreview: (schedule: Schedule | null) => ["schedule-preview", schedule] as const,
   webhookUrl: (dotId: string) => ["webhook-url", dotId] as const,
@@ -106,12 +116,26 @@ export function takeStatus(qc: QueryClient, status: Status): void {
 }
 
 /// Marks stale everything a change to a dot can show up in: the dot lists, every loaded dot,
-/// the Inbox (a deleted dot takes its approvals and runs with it) and every list of runs. No
-/// runtime event announces a dot change, so each command that changes a dot calls this.
+/// the Inbox (a deleted dot takes its approvals and runs with it), every list of runs, and the
+/// Library's "used by": the Personal variables, every org's entries and the servers. No runtime
+/// event announces a dot change, so each command that changes a dot calls this.
 export function invalidateDots(qc: QueryClient): void {
-  for (const queryKey of [keys.dots, ["dot"], keys.overview, keys.inbox, ["runs"]]) {
-    invalidate(qc, queryKey);
-  }
+  const orgEntries = qc
+    .getQueryCache()
+    .findAll({ queryKey: keys.orgs })
+    .map((query) => query.queryKey)
+    .filter((key) => key.length === 3 && key[2] === "entries");
+  const stale: QueryKey[] = [
+    keys.dots,
+    ["dot"],
+    keys.overview,
+    keys.inbox,
+    ["runs"],
+    keys.env,
+    keys.library,
+    ...orgEntries,
+  ];
+  for (const queryKey of stale) invalidate(qc, queryKey);
 }
 
 /// `have` plus the events of `more` it does not hold yet, ordered by `seq`.

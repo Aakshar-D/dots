@@ -338,13 +338,13 @@ async fn every_dot_gives_the_app_to_every_dot() {
         .install(source(&expenses()), AppOrigin::Proposed)
         .await
         .unwrap();
-    let a = f.store.create_dot(&common::spec("a")).await.unwrap();
+    let a = f.store.create_dot(&common::spec("a"), None).await.unwrap();
     let mut spec = common::spec("b");
     spec.uses = Uses {
         apps: vec!["expenses".into()],
         ..Uses::default()
     };
-    let b = f.store.create_dot(&spec).await.unwrap();
+    let b = f.store.create_dot(&spec, None).await.unwrap();
     assert!(f.store.used_apps(&a.spec.uses).await.unwrap().is_empty());
     assert_eq!(f.store.used_apps(&b.spec.uses).await.unwrap().len(), 1);
     let names = |dots: Vec<dots_core::model::Dot>| {
@@ -367,7 +367,12 @@ async fn a_dot_can_tick_only_an_installed_app() {
         apps: vec!["expenses".into()],
         ..Uses::default()
     };
-    let err = f.store.create_dot(&spec).await.unwrap_err().to_string();
+    let err = f
+        .store
+        .create_dot(&spec, None)
+        .await
+        .unwrap_err()
+        .to_string();
     assert_eq!(
         err,
         "invalid input: the Library has no app named \"expenses\""
@@ -392,7 +397,7 @@ async fn removing_asks_while_dots_use_it_and_keeps_the_data_unless_told() {
         apps: vec!["expenses".into()],
         ..Uses::default()
     };
-    let b = f.store.create_dot(&spec).await.unwrap();
+    let b = f.store.create_dot(&spec, None).await.unwrap();
     let err = f.apps.remove("expenses", false, false).await.unwrap_err();
     assert_eq!(
         err.to_string(),
@@ -486,7 +491,7 @@ async fn removing_asks_while_every_dot_gives_the_app_to_dots() {
         .install(source(&expenses()), AppOrigin::Proposed)
         .await
         .unwrap();
-    f.store.create_dot(&common::spec("a")).await.unwrap();
+    f.store.create_dot(&common::spec("a"), None).await.unwrap();
     f.apps.set_every_dot("expenses", true).await.unwrap();
     let err = f.apps.remove("expenses", false, false).await.unwrap_err();
     assert_eq!(
@@ -544,7 +549,7 @@ async fn a_run_refuses_a_tool_that_began_to_write_after_it_started() {
     spec.policy
         .rules
         .push(Rule::new("App(expenses.write)", Action::Deny));
-    let dot = f.store.create_dot(&spec).await.unwrap();
+    let dot = f.store.create_dot(&spec, None).await.unwrap();
     let (run, _) = RunApps::open(&f.apps, &dot, "r1").await.unwrap();
     let run = run.unwrap();
     // The deny rule hides add_expense; month_total does not write, so the run offers it.
@@ -621,7 +626,7 @@ async fn a_claude_run_offers_at_most_its_bound_of_app_tools() {
         apps: vec!["alpha".into(), "beta".into()],
         ..Uses::default()
     };
-    let dot = f.store.create_dot(&spec).await.unwrap();
+    let dot = f.store.create_dot(&spec, None).await.unwrap();
     let (run, notices) = RunApps::open(&f.apps, &dot, "r1").await.unwrap();
     let run = run.unwrap();
     assert_eq!(run.apps().len(), 1);

@@ -4,7 +4,11 @@ pub mod apps;
 pub mod clock;
 pub mod edge_pipe;
 pub mod fake_browser;
+pub mod fake_files;
+pub mod fake_infisical;
 pub mod fake_mcp;
+pub mod fake_openbao;
+pub mod orgs;
 pub mod playwright;
 pub mod secrets;
 pub mod tz;
@@ -69,6 +73,7 @@ pub fn fake_dot(name: &str, workdir: &Path, mode: WorkspaceMode) -> Dot {
         created_at: "2026-10-08T00:00:00.000Z".into(),
         updated_at: "2026-10-08T00:00:00.000Z".into(),
         seen_at: None,
+        org_id: None,
         spec: s,
     }
 }

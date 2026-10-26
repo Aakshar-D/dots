@@ -12,6 +12,7 @@ import { Textarea } from "@/components/ui/textarea";
 import type { SpecErrors } from "@/lib/dot-rules";
 import { notifyError } from "@/lib/notify";
 import { BrowserSection } from "@/screens/dot-editor/BrowserSection";
+import { OrgLine, OrgPicker } from "@/screens/dot-editor/DotOrg";
 import { PolicyEditor } from "@/screens/dot-editor/PolicyEditor";
 import { ScheduleEditor, type SchedulePreview } from "@/screens/dot-editor/ScheduleEditor";
 import { ToolsAndSkills } from "@/screens/dot-editor/ToolsAndSkills";
@@ -19,7 +20,8 @@ import { Variables } from "@/screens/dot-editor/Variables";
 import { WebhookPanel } from "@/screens/dot-editor/WebhookPanel";
 
 /// What the editor holds. The Library items the dot uses (`spec.uses`) are kept as they are.
-export type Draft = { spec: DotSpec };
+/// `org` is the org a new dot is made in (null for Personal); a stored dot's is its own.
+export type Draft = { spec: DotSpec; org: string | null };
 
 function Section(props: { title: string; children: ReactNode }) {
   return (
@@ -54,7 +56,8 @@ function NumberField(props: {
 }
 
 /// Every field of a dot. `existing` is set once the dot is stored: only then does it have a
-/// webhook.
+/// webhook, and its org is fixed. `onEnabled`, when given, switches the dot on or off at once
+/// instead of with the next save: for a dot that can't be saved.
 export function DotForm(props: {
   draft: Draft;
   onChange: (draft: Draft) => void;
@@ -62,9 +65,11 @@ export function DotForm(props: {
   existing: Dot | null;
   endpoints: string[];
   schedule: SchedulePreview;
+  onEnabled?: (enabled: boolean) => void;
 }) {
   const { draft, errors } = props;
   const { spec } = draft;
+  const orgId = props.existing ? props.existing.org_id : draft.org;
   const set = <K extends keyof DotSpec>(key: K, value: DotSpec[K]) =>
     props.onChange({ ...draft, spec: { ...spec, [key]: value } });
 
@@ -80,6 +85,11 @@ export function DotForm(props: {
         <Field label="Name" htmlFor="dot-name" error={errors.name}>
           <Input id="dot-name" value={spec.name} onChange={(e) => set("name", e.target.value)} />
         </Field>
+        {props.existing ? (
+          props.existing.org_id !== null && <OrgLine orgId={props.existing.org_id} />
+        ) : (
+          <OrgPicker value={draft.org} onChange={(org) => props.onChange({ ...draft, org })} />
+        )}
         <Field
           label="Instructions"
           htmlFor="dot-instructions"
@@ -97,7 +107,7 @@ export function DotForm(props: {
           <Switch
             id="dot-enabled"
             checked={spec.enabled}
-            onCheckedChange={(v) => set("enabled", v)}
+            onCheckedChange={(v) => (props.onEnabled ? props.onEnabled(v) : set("enabled", v))}
           />
           <Label htmlFor="dot-enabled">Enabled</Label>
         </div>
@@ -231,6 +241,8 @@ export function DotForm(props: {
           uses={spec.uses}
           variables={spec.variables}
           before={props.existing?.uses ?? null}
+          orgId={orgId}
+          dotId={props.existing?.id ?? null}
           onChange={(variables) => set("variables", variables)}
         />
       </Section>

@@ -127,6 +127,9 @@ export const Dot = z.strictObject({
   updated_at: z.string(),
   // When the person last looked at its conversation (RFC 3339 UTC); null before the first time.
   seen_at: nullable(z.string()),
+  // The org the dot belongs to, fixed when it is made; null is Personal. The org may have been
+  // removed since, and the dot keeps its id.
+  org_id: nullable(z.string()),
   ...dotSpecShape,
 });
 
@@ -297,6 +300,9 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("app_data_changed"), app: z.string() }),
   // A dot proposed an app, or the person decided a proposal: the review card reads it again.
   z.strictObject({ type: z.literal("app_proposal_changed"), id: z.string(), dot_id: z.string() }),
+  // An org was joined, updated, fetched (by Refresh, its timer or the start-up fetch) or
+  // removed: its status, policy or values may have changed.
+  z.strictObject({ type: z.literal("org_updated"), org_id: z.string() }),
 ]);
 
 export const ClaudeStatus = z.strictObject({
@@ -381,10 +387,14 @@ export const NeedsAttention = z.strictObject({
   failed_at: z.string(),
 });
 export const DotRef = z.strictObject({ id: z.string(), name: z.string() });
-// An MCP server whose tool list waits for review; its tools ask until it is accepted.
+// An MCP server whose tool list waits for review in a scope; its tools ask there until it is
+// accepted. A server can be listed once per scope.
 export const ToolsChanged = z.strictObject({
   server_id: z.string(),
   name: z.string(),
+  // `personal` or an org id: accepting accepts that scope's list.
+  scope: z.string(),
+  // The dots of that scope that use it.
   dots: z.array(DotRef),
 });
 export const Inbox = z.strictObject({
@@ -392,7 +402,7 @@ export const Inbox = z.strictObject({
   review_runs: z.array(ReviewRun),
   // Newest failure first.
   attention: z.array(NeedsAttention),
-  // By server name.
+  // Personal's first, then each joined org's; by server name within a scope.
   tools_changed: z.array(ToolsChanged),
 });
 
@@ -614,10 +624,24 @@ export const PluginDetail = z.strictObject({
   has_hooks: z.boolean(),
   warnings: z.array(z.string()),
 });
+// An MCP server's catalog in one scope: `personal` or an org id.
+export const ScopedCatalog = z.strictObject({
+  scope: z.string(),
+  catalog: McpCatalog,
+  // A catalog row exists in that scope (a Check or a run made it); none reads `unchecked`.
+  stored: z.boolean(),
+  // The dots of that scope that use the server, whose runs read this catalog.
+  used_by: z.array(DotRef),
+});
 export const LibraryEntry = libraryItemOf({
   // The dots that use it; for a plugin's server, the dots that use the plugin.
   used_by: z.array(DotRef),
+  // A server's Personal catalog.
   catalog: nullable(McpCatalog),
+  // A server's catalog in Personal, then in each joined org by name; empty for other items.
+  catalogs: z.array(ScopedCatalog),
+  // The origins confirmed for an http server, by scope; empty for other items.
+  confirmed_origins: z.record(z.string(), z.array(z.string())),
   // The `${VAR}` of a server's config that the environment of Dots does not set.
   missing_variables: z.array(z.string()),
   skill: nullable(SkillDetail),
@@ -681,6 +705,130 @@ export const EnvEntry = z.strictObject({
   value: nullable(z.string()),
   created_at: z.string(),
   updated_at: z.string(),
+  // The Personal dots that grant this name.
+  used_by: z.array(DotRef),
+  // A secret whose value is gone from Credential Manager: it must be set again.
+  value_missing: z.boolean(),
+});
+
+// Orgs (env vault spec §6 and §9). No answer ever holds a secret value or sign-in details.
+// The person's sign-in details for an org's source, sent to `org_join` and `org_update`.
+export const SourceCreds = z.discriminatedUnion("kind", [
+  // An OpenBao or Vault token.
+  z.strictObject({ kind: z.literal("token"), token: z.string() }),
+  // A username and password for a `userpass` or `ldap` mount.
+  z.strictObject({ kind: z.literal("login"), username: z.string(), password: z.string() }),
+  // An Infisical machine identity.
+  z.strictObject({
+    kind: z.literal("machine"),
+    client_id: z.string(),
+    client_secret: z.string(),
+  }),
+  // This PC's age identity for a SOPS file.
+  z.strictObject({ kind: z.literal("age"), identity: z.string() }),
+]);
+// How an org's dots may read Personal entries: never, when the org lacks the name, or before
+// the org's entry.
+export const PersonalMode = z.enum(["deny", "fallback", "override"]);
+// The names an org's dots may be granted: a name matches an `allow` glob and no `deny` glob
+// (deny wins). A glob's `*` stands for any run of characters, and case does not matter.
+export const UseRules = z.strictObject({ allow: z.array(z.string()), deny: z.array(z.string()) });
+const orgSummaryShape = {
+  id: z.string(),
+  name: z.string(),
+  // `openbao`, `infisical` or `sops`; empty when the org's settings are damaged.
+  source_kind: z.string(),
+  // The address, the site or the file location.
+  address: z.string(),
+  // The policy key's id, 16 upper-case hex digits.
+  key_fingerprint: z.string(),
+  // The status in plain words, with why the last fetch failed.
+  status_text: z.string(),
+  // The last good fetch, RFC 3339.
+  last_fetch_at: nullable(z.string()),
+  // Until when the offline copy may be used; null without one.
+  copy_until: nullable(z.string()),
+  // The accepted policy in plain words, a line per field.
+  policy_summary: z.array(z.string()),
+  // The accepted policy's `personal` mode: whether the org's dots may read Personal entries;
+  // null while no policy is accepted.
+  personal_mode: nullable(PersonalMode),
+  // The accepted policy's `shell_secrets`: whether a dot's shell may be given a secret.
+  shell_secrets: z.boolean(),
+  // The accepted policy's `use` globs; null while no policy is accepted.
+  use_rules: nullable(UseRules),
+};
+// An org as Settings shows it, by its status.
+export const OrgSummary = z.discriminatedUnion("status", [
+  z.strictObject({ status: z.literal("connected"), ...orgSummaryShape }),
+  // The source could not be reached; the copy is used until `until`, null without one.
+  z.strictObject({ status: z.literal("offline"), until: nullable(z.string()), ...orgSummaryShape }),
+  z.strictObject({ status: z.literal("revoked"), ...orgSummaryShape }),
+  z.strictObject({ status: z.literal("policy_invalid"), error: z.string(), ...orgSummaryShape }),
+  z.strictObject({ status: z.literal("expired"), ...orgSummaryShape }),
+  // A SOPS join waiting for the admin to add this PC's key.
+  z.strictObject({ status: z.literal("pending"), ...orgSummaryShape }),
+]);
+// How an OpenBao or Vault join code signs in: a token, or a username and password against a
+// `userpass` or `ldap` mount.
+export const BaoAuth = z.enum(["token", "userpass", "ldap"]);
+// What a join code would join, or change for an org joined already (Update). Nothing is
+// fetched for it.
+export const JoinPreview = z.strictObject({
+  org_id: z.string(),
+  name: z.string(),
+  source_kind: z.string(),
+  address: z.string(),
+  key_fingerprint: z.string(),
+  // How an OpenBao code signs in, so Join asks for a token or a username and password; null
+  // for Infisical (a machine identity) and SOPS (this PC's key).
+  auth: nullable(BaoAuth),
+  existing: z.boolean(),
+  // For Update, what the code changes, in plain words; a new policy key gets a warning.
+  changes: z.array(z.string()),
+  // For Update, the code brings another policy key; the last line of changes warns of it.
+  key_changed: z.boolean(),
+  // For Update, the code changes an OpenBao or Infisical source's settings, or the kind of
+  // source: the saved sign-in details are not sent to it, so they must be given again.
+  source_changed: z.boolean(),
+});
+// An org's entry for the Env tab. A secret's value is always null.
+export const OrgEntry = z.strictObject({
+  name: z.string(),
+  kind: EntryKind,
+  value: nullable(z.string()),
+  // A Personal entry of the same name cannot take its place.
+  locked: z.boolean(),
+  // The org's dots that grant this name.
+  used_by: z.array(DotRef),
+});
+// Whether a dot's grant resolves in its scope now, or why not.
+export const GrantState = z.enum([
+  "ok",
+  "not_granted",
+  "not_defined",
+  "denied_by_policy",
+  "shell_secrets_forbidden",
+  "org_offline",
+  "org_expired",
+  "org_revoked",
+  "policy_invalid",
+  "org_removed",
+]);
+// Where a value comes from: the dot's org, or Personal.
+export const ValueSource = z.enum(["org", "personal"]);
+// One grant of a dot as its editor shows it (`dot_variables`). It never holds a value.
+export const GrantStatus = z.strictObject({
+  // `mcp:<server>` or `shell`.
+  consumer: z.string(),
+  name: z.string(),
+  status: GrantState,
+  // Why it does not resolve, in the words of the run event; null when it resolves.
+  text: nullable(z.string()),
+  // Where its value comes from, or would but for the shell's secrets rule.
+  source: nullable(ValueSource),
+  // The value that resolves, or would but for the shell's secrets rule, is a secret.
+  secret: z.boolean(),
 });
 
 export const FileDiff = z.strictObject({
@@ -810,6 +958,17 @@ export type InstalledPlugin = z.infer<typeof InstalledPlugin>;
 export type EnvVariable = z.infer<typeof EnvVariable>;
 export type EntryKind = z.infer<typeof EntryKind>;
 export type EnvEntry = z.infer<typeof EnvEntry>;
+export type ScopedCatalog = z.infer<typeof ScopedCatalog>;
+export type SourceCreds = z.infer<typeof SourceCreds>;
+export type OrgSummary = z.infer<typeof OrgSummary>;
+export type BaoAuth = z.infer<typeof BaoAuth>;
+export type JoinPreview = z.infer<typeof JoinPreview>;
+export type OrgEntry = z.infer<typeof OrgEntry>;
+export type PersonalMode = z.infer<typeof PersonalMode>;
+export type UseRules = z.infer<typeof UseRules>;
+export type GrantState = z.infer<typeof GrantState>;
+export type ValueSource = z.infer<typeof ValueSource>;
+export type GrantStatus = z.infer<typeof GrantStatus>;
 export type FileDiff = z.infer<typeof FileDiff>;
 export type WorktreeDiff = z.infer<typeof WorktreeDiff>;
 export type CmdErrorKind = z.infer<typeof CmdErrorKind>;

@@ -162,7 +162,9 @@ async fn a_value_is_replaced_and_a_removed_secret_leaves_the_store() {
 #[tokio::test]
 async fn the_runtime_keeps_a_tests_secrets_in_memory() {
     let dir = tempfile::tempdir().unwrap();
-    let cfg = dots_core::Config::new(dir.path().join("data"));
+    let mut cfg = dots_core::Config::new(dir.path().join("data"));
+    // A missing program: no test may run a `claude` found on the PATH.
+    cfg.claude_path = Some(dir.path().join("no-claude.exe"));
     assert!(cfg.secrets.is_some());
     assert!(format!("{:?}", cfg.secrets).contains("MemorySecrets"));
     let settings = dots_core::settings::Settings::default();

@@ -1,0 +1,39 @@
+{
+	"env": {
+		"LOG_LEVEL": "ENC[AES256_GCM,data:i0z9zjU=,iv:RNluKCNEyTrgz/5CH9c16/UU3zOQDEDVoZ1cYWmn1pM=,tag:k8BAZWKNe27tb4Zdo/EhJg==,type:str]",
+		"DATABASE_URL": "ENC[AES256_GCM,data:seBMiK/EzUON/4uavvWjXV/tI3e5r7HVhxEFh4FrIS+cchOzXMNrkSTnod0kOe+G/yy5A5DXdtdVDQe9xQ==,iv:AL8YBnIJUa188iZaxUkxFvtH1T6xGMORBaBLREZD72M=,tag:PneTkbZMOQFmEqDnbuynKg==,type:str]",
+		"API_KEY": "ENC[AES256_GCM,data:zujMVkNMGQxa4r5jTgj82M0t6uikgw==,iv:wpBqXsY6gU0aNBnXNnjiD1Mp2VSnU/lDLaxP3eJ8RGY=,tag:NBSvIZURpdiBz3WlsdXYRA==,type:str]"
+	},
+	"policy": "ENC[AES256_GCM,data:lzNVIGsZyb7LVn4ekAUJyy0YICzs+5bc+gLChgE5ly/gnTChiOCKW6MMi87S6o2OFH2YkG8zM0PCEDRG4VXphSw=,iv:rSKeEmETsg/TZZRUyRlZncisHC48FAhpMq6/4lh7230=,tag:SawGd3ALussWSVk6mrpVPA==,type:str]",
+	"extra": {
+		"region": "ENC[AES256_GCM,data:2pJwm2vcKpM7,iv:FAXOqyZMK9/rvyYG1nMJGgOTgRC1gAoRiD8NsaIgRhE=,tag:HYMQAU59uScyQVKlK0dZtA==,type:str]",
+		"replicas": [
+			"ENC[AES256_GCM,data:8Q==,iv:ADZWMh1Ix02xRXY7CmrtSpVc4KwHKtC/SnsUCEEJQwc=,tag:sTCX5s7500DfU5QudoRXjQ==,type:int]",
+			"ENC[AES256_GCM,data:Nw==,iv:E/xO38daqbyHV19rzFNOO+acGNJiErrjcEbVK9iGlbc=,tag:JzvJnLrX2xraJ1jYGYNaEQ==,type:int]",
+			{
+				"name": "ENC[AES256_GCM,data:3E6l1w==,iv:YxJCljrBWIpWjyJAmCUWgbxHo0hL8tdHBP0bDXHyhSY=,tag:Iqq/GZ454apN+28R08qlPQ==,type:str]",
+				"weight": "ENC[AES256_GCM,data:Ih98Og==,iv:+YUa+Rk8z5nkney4aywUG98AL0cF7SB/SBBGuSd2CXA=,tag:qwId0loQrkeMx+y/Ln/0Jg==,type:float]"
+			}
+		],
+		"retries": "ENC[AES256_GCM,data:XA==,iv:OwtXXlegrL9W1jEgM7VdTKiSZciWbawiroXKfU1Jqsw=,tag:4py5cDeZ8fHAjA5C6+f19w==,type:int]",
+		"ratio": "ENC[AES256_GCM,data:0AHP,iv:10uDS4WkTmJXgZdYK9jL6i+qmnFICXMrAGkIO//pgx4=,tag:7xHXmrVRm4815RgcxGN7og==,type:float]",
+		"enabled": "ENC[AES256_GCM,data:DOYFjA==,iv:2RfbT3nr3j8JNoYqoTYQ2cdjUUDgbon8B6b8mprqaKE=,tag:Jg4xkD+GtQcIoKjDrTvqoQ==,type:bool]",
+		"disabled": "ENC[AES256_GCM,data:w2cLhhQ=,iv:ZHfPcWrkumQ4CxhE2g0Gjjn6kH4qQAqezCHZ0eNLDQA=,tag:d4RH6K2I1LGVopWaAr3UtQ==,type:bool]",
+		"blank": "",
+		"nothing": null
+	},
+	"note_unencrypted": "visible text that the MAC still covers",
+	"sops": {
+		"age": [
+			{
+				"enc": "-----BEGIN AGE ENCRYPTED FILE-----\nYWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBsTmhwaW9idDNZUlBlVkxD\nbTJ6WW1Md3R0SHNsY0FyR3ZqZVdldklFdTNjCkRPVXZIam96SEJZTFQ4c25EUnkv\ncjdteTRXMEhKK0lLekQvVVlrQjlMbXMKLS0tIGFubnJQVmphRGxRTzByYUxaRXU0\ncHBDaEs3ZnJpb1BPY0x2ZXhZL1hnaXMK9rU60MAX2Bne1Iz0w01X3T3KyEsIk380\nCgRX1sZdGvw/kW8TPSO24p9bDw5p1UvSPkVT6kuK62Owm7Y01/OF7A==\n-----END AGE ENCRYPTED FILE-----\n",
+				"recipient": "age1a03d7rmd3zc7lpcxldf24f2g2gyhgphdwesczxmtf0vfvcjtcshseuswgt"
+			}
+		],
+		"lastmodified": "2026-10-23T18:52:25Z",
+		"mac": "ENC[AES256_GCM,data:DvHTDf+9dBg/C0ozKQST5v0zYIZbuJp/fZclui2kZ90/hU18Y+uSbPkCmoqdoZmCC4eUDaCgQG3Z7m1zNlGmBZHyrWCo7aiKyeColNSj43MV1SRv9C70OYGVy1Dr0CWXraDV3oWpWEQ52/o0XMzAIZyyi6va2Ls5ihZtq4I976g=,iv:6iR3kQrwpgMmMKLFCVbwlrCIAE2zrRxOTa2JQvBTqtE=,tag:fngl4XVwSfXLLrxNrszz3g==,type:str]",
+		"mac_only_encrypted": true,
+		"unencrypted_suffix": "_unencrypted",
+		"version": "3.13.3"
+	}
+}

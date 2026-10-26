@@ -238,6 +238,7 @@ mod tests {
                 created_at: "t".into(),
                 updated_at: "t".into(),
                 seen_at: None,
+                org_id: None,
                 spec: DotSpec::new(name, "Do it.", "C:/work"),
             },
             active_run: None,

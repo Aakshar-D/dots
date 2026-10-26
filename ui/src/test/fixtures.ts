@@ -37,6 +37,22 @@ export const sample = {
   followUps: T.FollowUp.array().parse(contract.FollowUp),
   /// A pinned memory the dot saved in a run, and one the person wrote.
   memories: T.Memory.array().parse(contract.Memory),
+  /// Acme Engineering (OpenBao) in each status but pending, then Design (SOPS), pending.
+  orgs: T.OrgSummary.array().parse(contract.OrgSummary),
+  /// A code for a new org (OpenBao, token), and one that changes Acme's path and policy key.
+  joinPreviews: T.JoinPreview.array().parse(contract.JoinPreview),
+  /// github's changed list in Personal, then in Acme Engineering.
+  toolsChanged: T.ToolsChanged.array().parse(contract.ToolsChanged),
+  /// GITHUB_TOKEN (a secret nightly-tests is granted), LOG_LEVEL (plain, not granted), and
+  /// NPM_TOKEN, a secret whose value is gone.
+  env: T.EnvEntry.array().parse(contract.EnvEntry),
+  /// Acme Engineering's API_BASE_URL (plain, locked, granted to acme-release) and GITHUB_TOKEN
+  /// (a secret, not locked, not granted).
+  orgEntries: T.OrgEntry.array().parse(contract.OrgEntry),
+  /// acme-release's grants in Acme Engineering: GITHUB_TOKEN from the org, LOG_LEVEL from
+  /// Personal, API_KEY not in the org, PROD_DB_URL denied, GITHUB_TOKEN refused to the shell;
+  /// then a grant of a dot whose org was removed.
+  grantStatuses: T.GrantStatus.array().parse(contract.GrantStatus),
 };
 
 /// What `new_dot_spec` answers: the core's defaults with nothing filled in.
@@ -75,6 +91,10 @@ export function installDefaults(): void {
   backend.on("env_list", () => []);
   backend.on("env_import_candidates", () => []);
   backend.on("env_old_backups", () => []);
+  // No org is joined on this PC.
+  backend.on("org_list", () => []);
+  // No grant has a status: the editor shows each as it shows a grant not saved yet.
+  backend.on("dot_variables", () => []);
   backend.on("new_dot_spec", () => blankSpec);
   backend.on("list_runs", () => []);
   // No dot has checked in or scheduled anything. A question on screen is marked read.

@@ -164,7 +164,7 @@ fn a_call_without_its_tool_or_writes_flag_matches_no_allow_rule() {
 #[tokio::test]
 async fn stored_dots_get_the_app_rules_once() {
     let (dir, store) = common::temp_store().await;
-    let dot = store.create_dot(&common::spec("old")).await.unwrap();
+    let dot = store.create_dot(&common::spec("old"), None).await.unwrap();
     drop(store);
     // Make the dot look stored before apps: no app rules, and listed for the upgrade.
     let db = dir.path().join("dots.db");
@@ -187,11 +187,11 @@ async fn stored_dots_get_the_app_rules_once() {
         .execute(&pool)
         .await
         .unwrap();
-    sqlx::query("CREATE TABLE upgrade_0013 (dot_id TEXT PRIMARY KEY)")
+    sqlx::query("CREATE TABLE upgrade_0014 (dot_id TEXT PRIMARY KEY)")
         .execute(&pool)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO upgrade_0013 VALUES (?)")
+    sqlx::query("INSERT INTO upgrade_0014 VALUES (?)")
         .bind(&dot.id)
         .execute(&pool)
         .await

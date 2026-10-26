@@ -28,7 +28,7 @@ use dots_core::run_tools::{OpenRequest, RunTools};
 use dots_core::runner::{Runner, RunnerConfig};
 use dots_core::server::{bind, serve, ServerState};
 use dots_core::store::Store;
-use dots_core::vault::{Grants, Vault};
+use dots_core::vault::{DotScope, Grants, Vault};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
@@ -123,7 +123,7 @@ async fn claude_dot(e: &Env, edit: impl FnOnce(&mut DotSpec)) -> Dot {
     s.policy = Policy::preset(Preset::Sandboxed);
     s.approval_wait_secs = 0;
     edit(&mut s);
-    e.store.create_dot(&s).await.unwrap()
+    e.store.create_dot(&s, None).await.unwrap()
 }
 
 async fn start(e: &Env, dot: &Dot) -> Run {
@@ -322,9 +322,13 @@ async fn a_grant_does_not_hold_once_the_servers_accepted_list_changed() {
     let mut write = tool("write", false);
     write["description"] = json!("Writes, and also deletes.");
     fake.rewrite(json!({"tools": [tool("read", true), write]}));
-    let seen = e.lib.check(&item.id).await.unwrap();
+    let seen = e.lib.check(&item.id, &DotScope::Personal).await.unwrap();
     e.lib
-        .accept(&item.id, seen.seen_fingerprint.as_deref().unwrap())
+        .accept(
+            &item.id,
+            &DotScope::Personal,
+            seen.seen_fingerprint.as_deref().unwrap(),
+        )
         .await
         .unwrap();
     e.hub.decide(&approval, true, None).await.unwrap();
@@ -519,6 +523,7 @@ async fn the_gateway_answers_a_running_runs_open_servers_and_checks_each_call() 
         plugins_dir: None,
         cancel: &cancel,
         vault: &Vault::in_memory(e.store.clone()),
+        scope: &DotScope::Personal,
         grants: &Grants::default(),
         dot_name: "gateway",
     })
@@ -725,6 +730,7 @@ async fn under_trusted_a_writing_gateway_tool_asks_and_so_does_a_tool_outside_th
         plugins_dir: None,
         cancel: &cancel,
         vault: &Vault::in_memory(e.store.clone()),
+        scope: &DotScope::Personal,
         grants: &Grants::default(),
         dot_name: "gateway",
     })
@@ -811,6 +817,7 @@ async fn a_plugin_server_under_claude_codes_own_name_is_checked_by_approve() {
         plugins_dir: None,
         cancel: &cancel,
         vault: &Vault::in_memory(e.store.clone()),
+        scope: &DotScope::Personal,
         grants: &Grants::default(),
         dot_name: "gateway",
     })
@@ -914,6 +921,7 @@ async fn dots_own_server_offers_context_only_with_collections_and_checks_each_ca
             plugins_dir: None,
             cancel: &cancel,
             vault: &Vault::in_memory(e.store.clone()),
+            scope: &DotScope::Personal,
             grants: &Grants::default(),
             dot_name: "gateway",
         })
@@ -1060,6 +1068,7 @@ async fn dots_own_server_caps_the_text_of_an_error_like_the_local_tool() {
         plugins_dir: None,
         cancel: &cancel,
         vault: &Vault::in_memory(e.store.clone()),
+        scope: &DotScope::Personal,
         grants: &Grants::default(),
         dot_name: "gateway",
     })
@@ -1109,6 +1118,7 @@ async fn a_context_call_that_asks_waits_for_the_decision_and_parks_when_none_com
         plugins_dir: None,
         cancel: &cancel,
         vault: &Vault::in_memory(e.store.clone()),
+        scope: &DotScope::Personal,
         grants: &Grants::default(),
         dot_name: "gateway",
     })

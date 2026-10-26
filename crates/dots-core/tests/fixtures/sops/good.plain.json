@@ -1,0 +1,19 @@
+{
+  "env": {
+    "LOG_LEVEL": "debug",
+    "DATABASE_URL": "postgres://dots:fixture-db-pass-4e1c@db.example.test:5432/app",
+    "API_KEY": "fixture-api-key-9d27b3"
+  },
+  "policy": "placeholder-signed-policy-5a8e: the SOPS source does not check it",
+  "extra": {
+    "region": "eu-west-1",
+    "replicas": [3, 5, {"name": "edge", "weight": 0.25}],
+    "retries": 7,
+    "ratio": 1.5,
+    "enabled": true,
+    "disabled": false,
+    "blank": "",
+    "nothing": null
+  },
+  "note_unencrypted": "visible text that the MAC still covers"
+}

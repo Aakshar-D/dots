@@ -1,0 +1,23 @@
+//! An org joined on this PC, as the `orgs` table keeps it (env vault spec §5.2): the settings of
+//! its join code and what the last good fetch accepted. It holds no secrets.
+
+use super::join::SourceSettings;
+
+/// One row of `orgs`. `store/orgs.rs` reads and writes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrgRow {
+    /// The join code's `org_id`; `join::check_org_id` holds for it.
+    pub id: String,
+    /// The org's name as the person sees it, "Acme Engineering".
+    pub name: String,
+    pub source: SourceSettings,
+    /// The minisign public key the org's policy is signed with, the bare `RW…` base64 line.
+    pub policy_key: String,
+    /// The `issued_at` of the last policy accepted, as its text. A policy issued before it is
+    /// refused (§6.4). `None` before the first.
+    pub last_issued_at: Option<String>,
+    /// When the last good fetch was, RFC 3339 UTC. `None` before the first.
+    pub last_fetch_at: Option<String>,
+    /// When the org was joined, RFC 3339 UTC.
+    pub joined_at: String,
+}

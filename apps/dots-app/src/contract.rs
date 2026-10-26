@@ -14,7 +14,7 @@ use dots_core::library::{
 };
 use dots_core::library_service::{
     ContextDetail, ContextDocuments, EnvVariable, LibraryEntry, McpProbe, PluginDetail,
-    ScannedSkill, SkillDetail,
+    ScannedSkill, ScopedCatalog, SkillDetail,
 };
 use dots_core::mcp::McpTool;
 use dots_core::model::*;
@@ -23,7 +23,12 @@ use dots_core::schedule::Schedule;
 use dots_core::scheduler::MAX_ATTEMPTS;
 use dots_core::settings::{Settings, MAX_CONCURRENT_RUNS, MAX_GLOBAL_INSTRUCTIONS};
 use dots_core::skill_creator::{DraftRequest, DraftSummary};
-use dots_core::vault::{EntryKind, EnvEntry};
+use dots_core::vault::org::{
+    BaoAuth, JoinPreview, OrgEntry, OrgStatus, OrgSummary, PersonalMode, SourceCreds, UseRules,
+};
+use dots_core::vault::{
+    Consumer, EntryKind, EnvEntry, GrantState, GrantStatus, Missing, Unresolved, ValueSource,
+};
 use serde_json::{json, Value};
 
 use crate::error::{CmdError, CmdErrorKind};
@@ -70,6 +75,7 @@ fn dot() -> Dot {
         created_at: TS.into(),
         updated_at: TS.into(),
         seen_at: Some(TS.into()),
+        org_id: None,
         spec: spec(),
     }
 }
@@ -198,6 +204,8 @@ fn library_entries() -> Vec<LibraryEntry> {
         item,
         used_by,
         catalog: None,
+        catalogs: vec![],
+        confirmed_origins: Default::default(),
         missing_variables: vec![],
         skill: None,
         plugin: None,
@@ -223,11 +231,45 @@ fn library_entries() -> Vec<LibraryEntry> {
     vec![
         LibraryEntry {
             catalog: Some(catalog(CatalogStatus::Changed)),
+            // Its catalog in Personal and in the org joined.
+            catalogs: vec![
+                ScopedCatalog {
+                    scope: "personal".into(),
+                    catalog: catalog(CatalogStatus::Changed),
+                    stored: true,
+                    used_by: users.clone(),
+                },
+                // Checked in the org, and used by none of its dots.
+                ScopedCatalog {
+                    scope: "acme-eng".into(),
+                    catalog: catalog(CatalogStatus::Accepted),
+                    stored: true,
+                    used_by: vec![],
+                },
+            ],
             missing_variables: vec!["GITHUB_TOKEN".into()],
             ..bare(github, users.clone())
         },
         LibraryEntry {
             catalog: Some(catalog(CatalogStatus::Accepted)),
+            catalogs: vec![ScopedCatalog {
+                scope: "personal".into(),
+                catalog: catalog(CatalogStatus::Accepted),
+                stored: true,
+                used_by: users.clone(),
+            }],
+            // The origins confirmed for an http server, by scope.
+            confirmed_origins: [
+                (
+                    "acme-eng".to_string(),
+                    vec!["https://mcp.acme.example".to_string()],
+                ),
+                (
+                    "personal".to_string(),
+                    vec!["https://mcp.example.com".to_string()],
+                ),
+            ]
+            .into(),
             ..bare(owned, users.clone())
         },
         LibraryEntry {
@@ -678,14 +720,7 @@ pub fn samples() -> Value {
                 error: Some("model server unreachable".into()),
                 failed_at: TS.into(),
             }],
-            tools_changed: vec![ToolsChanged {
-                server_id: "01J0SRV".into(),
-                name: "github".into(),
-                dots: vec![DotRef {
-                    id: "01J0DOT".into(),
-                    name: "nightly-tests".into(),
-                }],
-            }],
+            tools_changed: tools_changed()[..1].to_vec(),
         }),
         // What `library_add` takes and the Library commands answer: a config of every kind and
         // transport, and entries of every kind (a plugin's own server among them).
@@ -811,6 +846,9 @@ pub fn samples() -> Value {
                 id: "01J0PROPOSAL".into(),
                 dot_id: "01J0DOT".into(),
             }),
+            to(RuntimeEvent::OrgUpdated {
+                org_id: "acme-eng".into(),
+            }),
         ]);
     samples["ChatGptStatus"] = to([
         dots_core::chatgpt::ChatGptStatus {
@@ -864,6 +902,11 @@ pub fn samples() -> Value {
             value: None,
             created_at: TS.into(),
             updated_at: TS.into(),
+            used_by: vec![DotRef {
+                id: "01J0DOT".into(),
+                name: "nightly-tests".into(),
+            }],
+            value_missing: false,
         },
         EnvEntry {
             name: "LOG_LEVEL".into(),
@@ -871,6 +914,18 @@ pub fn samples() -> Value {
             value: Some("debug".into()),
             created_at: TS.into(),
             updated_at: TS.into(),
+            used_by: vec![],
+            value_missing: false,
+        },
+        // A secret whose credential was deleted outside Dots.
+        EnvEntry {
+            name: "NPM_TOKEN".into(),
+            kind: EntryKind::Secret,
+            value: None,
+            created_at: TS.into(),
+            updated_at: TS.into(),
+            used_by: vec![],
+            value_missing: true,
         },
     ]);
     samples["Enums"]["EntryKind"] = to(EntryKind::ALL);
@@ -879,6 +934,34 @@ pub fn samples() -> Value {
         name: "pr-tests".into(),
         description: "Checks a PR for missing tests.".into(),
     });
+    // The Inbox's sample keeps one, Personal's; these are one of each scope.
+    samples["ToolsChanged"] = to(tools_changed());
+    samples["OrgSummary"] = to(org_summaries());
+    samples["JoinPreview"] = to(join_previews());
+    samples["OrgEntry"] = to([
+        OrgEntry {
+            name: "API_BASE_URL".into(),
+            kind: EntryKind::Plain,
+            value: Some("https://api.acme.example".into()),
+            locked: true,
+            used_by: vec![DotRef {
+                id: "01J0DOTACME".into(),
+                name: "acme-release".into(),
+            }],
+        },
+        OrgEntry {
+            name: "GITHUB_TOKEN".into(),
+            kind: EntryKind::Secret,
+            value: None,
+            locked: false,
+            used_by: vec![],
+        },
+    ]);
+    samples["SourceCreds"] = source_creds();
+    samples["GrantStatus"] = to(grant_statuses());
+    samples["Enums"]["GrantState"] = to(GrantState::ALL);
+    samples["Enums"]["ValueSource"] = to(ValueSource::ALL);
+    samples["Enums"]["PersonalMode"] = to(PersonalMode::ALL);
     samples
 }
 
@@ -1001,6 +1084,231 @@ fn apps_samples(samples: &mut Value) {
         ProposalStatus::ChangesAsked,
         ProposalStatus::Discarded,
     ]);
+}
+
+/// What `dot_variables` answers for acme-release, a dot of Acme Engineering (`personal:
+/// fallback`, `shell_secrets: false`): a secret from the org; a plain value from Personal; a
+/// name the org lacks; a name its `use` rules deny; a secret its shell may not have. Then a
+/// grant of a dot whose org was removed. The texts are the core's own.
+fn grant_statuses() -> Vec<GrantStatus> {
+    let text = |name: &str, consumer: Consumer, why: Unresolved, org: &str| {
+        Missing {
+            name: name.into(),
+            consumer,
+            why,
+            org: Some(org.into()),
+        }
+        .text("acme-release")
+    };
+    let acme = "Acme Engineering";
+    let github = || Consumer::Mcp("github".into());
+    let status = |consumer: &Consumer, name: &str, status: GrantState| GrantStatus {
+        consumer: consumer.key(),
+        name: name.into(),
+        status,
+        text: None,
+        source: None,
+        secret: false,
+    };
+    vec![
+        GrantStatus {
+            source: Some(ValueSource::Org),
+            secret: true,
+            ..status(&github(), "GITHUB_TOKEN", GrantState::Ok)
+        },
+        GrantStatus {
+            source: Some(ValueSource::Personal),
+            ..status(&Consumer::Shell, "LOG_LEVEL", GrantState::Ok)
+        },
+        GrantStatus {
+            text: Some(text("API_KEY", github(), Unresolved::NotDefined, acme)),
+            ..status(&github(), "API_KEY", GrantState::NotDefined)
+        },
+        GrantStatus {
+            text: Some(text(
+                "PROD_DB_URL",
+                github(),
+                Unresolved::DeniedByPolicy,
+                acme,
+            )),
+            ..status(&github(), "PROD_DB_URL", GrantState::DeniedByPolicy)
+        },
+        GrantStatus {
+            text: Some(text(
+                "GITHUB_TOKEN",
+                Consumer::Shell,
+                Unresolved::ShellSecretsForbidden,
+                acme,
+            )),
+            source: Some(ValueSource::Org),
+            secret: true,
+            ..status(
+                &Consumer::Shell,
+                "GITHUB_TOKEN",
+                GrantState::ShellSecretsForbidden,
+            )
+        },
+        GrantStatus {
+            text: Some(text(
+                "LOG_LEVEL",
+                Consumer::Shell,
+                Unresolved::OrgRemoved,
+                "acme-eng",
+            )),
+            ..status(&Consumer::Shell, "LOG_LEVEL", GrantState::OrgRemoved)
+        },
+    ]
+}
+
+/// A changed tool list in Personal, with the dot that uses it, and the same server's in an
+/// org, used by no dot of that org.
+fn tools_changed() -> Vec<ToolsChanged> {
+    let personal = ToolsChanged {
+        server_id: "01J0SRV".into(),
+        name: "github".into(),
+        scope: "personal".into(),
+        dots: vec![DotRef {
+            id: "01J0DOT".into(),
+            name: "nightly-tests".into(),
+        }],
+    };
+    vec![
+        personal.clone(),
+        ToolsChanged {
+            scope: "acme-eng".into(),
+            dots: vec![],
+            ..personal
+        },
+    ]
+}
+
+/// An org of every status (`org_list`, and what `org_join`, `org_update` and `org_refresh`
+/// answer): every optional field is set in one of them.
+fn org_summaries() -> Vec<OrgSummary> {
+    let connected = OrgSummary {
+        id: "acme-eng".into(),
+        name: "Acme Engineering".into(),
+        source_kind: "openbao".into(),
+        address: "https://bao.acme.internal".into(),
+        key_fingerprint: "6E2F 0A1B 9C3D 4E5F 7A81 B2C3 D4E5 F607".into(),
+        status: OrgStatus::Connected,
+        status_text: "connected".into(),
+        last_fetch_at: Some(TS.into()),
+        copy_until: Some("2026-10-10T12:00:00.000Z".into()),
+        policy_summary: vec![
+            "org: acme-eng".into(),
+            "personal: fallback (a personal entry is used when the org has none)".into(),
+        ],
+        personal_mode: Some(PersonalMode::Fallback),
+        shell_secrets: false,
+        use_rules: Some(UseRules {
+            allow: vec!["*".into()],
+            deny: vec!["PROD_*".into()],
+        }),
+    };
+    let status = |status: OrgStatus, text: &str| OrgSummary {
+        status,
+        status_text: text.into(),
+        ..connected.clone()
+    };
+    vec![
+        connected.clone(),
+        status(
+            OrgStatus::Offline {
+                until: Some("2026-10-10T12:00:00.000Z".into()),
+            },
+            "offline (connection refused); using the saved copy until 2026-10-10T12:00:00.000Z",
+        ),
+        OrgSummary {
+            copy_until: None,
+            ..status(
+                OrgStatus::Offline { until: None },
+                "offline, with no saved copy",
+            )
+        },
+        OrgSummary {
+            copy_until: None,
+            ..status(OrgStatus::Revoked, "access revoked (permission denied)")
+        },
+        status(
+            OrgStatus::PolicyInvalid {
+                error: "signature does not match".into(),
+            },
+            "policy invalid: signature does not match; using the saved copy until \
+             2026-10-10T12:00:00.000Z",
+        ),
+        OrgSummary {
+            copy_until: None,
+            ..status(
+                OrgStatus::Expired,
+                "secrets expired offline; reconnect to refresh",
+            )
+        },
+        OrgSummary {
+            id: "design".into(),
+            name: "Design".into(),
+            source_kind: "sops".into(),
+            address: "C:/Users/u/Sync/acme/design.enc.json".into(),
+            last_fetch_at: None,
+            copy_until: None,
+            policy_summary: vec![],
+            personal_mode: None,
+            use_rules: None,
+            ..status(
+                OrgStatus::Pending,
+                "waiting for the admin to add this PC's key",
+            )
+        },
+    ]
+}
+
+/// A code for a new org, and one that changes a joined org's path and key (`org_preview`).
+fn join_previews() -> Vec<JoinPreview> {
+    let new = JoinPreview {
+        org_id: "acme-eng".into(),
+        name: "Acme Engineering".into(),
+        source_kind: "openbao".into(),
+        address: "https://bao.acme.internal".into(),
+        key_fingerprint: "6E2F 0A1B 9C3D 4E5F 7A81 B2C3 D4E5 F607".into(),
+        auth: Some(BaoAuth::Token),
+        existing: false,
+        changes: vec![],
+        key_changed: false,
+        source_changed: false,
+    };
+    vec![
+        new.clone(),
+        JoinPreview {
+            existing: true,
+            key_fingerprint: "0A1B 2C3D 4E5F 6071 8293 A4B5 C6D7 E8F9".into(),
+            changes: vec![
+                "path changes from dots to dots2".into(),
+                "the policy key changes from 6E2F 0A1B 9C3D 4E5F 7A81 B2C3 D4E5 F607 to 0A1B \
+                 2C3D 4E5F 6071 8293 A4B5 C6D7 E8F9: the key that signs the org's policy is new, \
+                 so accept this code only if your admin told you the key changed"
+                    .into(),
+            ],
+            key_changed: true,
+            source_changed: true,
+            ..new
+        },
+    ]
+}
+
+/// Sign-in details of every kind, as `org_join` and `org_update` take them. Read through the
+/// core's type, so a sample in a form the core does not accept fails here. No value is real.
+fn source_creds() -> Value {
+    let samples = [
+        json!({"kind": "token", "token": "hvs.sample-token"}),
+        json!({"kind": "login", "username": "jdoe", "password": "sample-password"}),
+        json!({"kind": "machine", "client_id": "sample-id", "client_secret": "sample-secret"}),
+        json!({"kind": "age", "identity": "AGE-SECRET-KEY-1SAMPLE"}),
+    ];
+    let read: Vec<SourceCreds> = samples
+        .into_iter()
+        .map(|v| serde_json::from_value(v).expect("sample sign-in details"))
+        .collect();
+    to(read)
 }
 
 #[cfg(test)]

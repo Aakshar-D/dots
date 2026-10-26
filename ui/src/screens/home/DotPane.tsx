@@ -70,6 +70,7 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
         <ReplyArea
           dotId={dot.id}
           dotName={dot.name}
+          orgId={dot.org_id}
           shown={view.shown}
           checkIns={view.checkIns}
           pick={pick}

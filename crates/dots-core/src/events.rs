@@ -72,6 +72,12 @@ pub enum RuntimeEvent {
         id: String,
         dot_id: String,
     },
+    /// An org was joined, updated, fetched (by **Refresh**, its timer or the start-up fetch) or
+    /// removed (env vault spec §6.4): its status, policy or values may have changed, and so
+    /// what Settings, the Env tab and the Library show of it.
+    OrgUpdated {
+        org_id: String,
+    },
 }
 
 pub type Bus = broadcast::Sender<RuntimeEvent>;

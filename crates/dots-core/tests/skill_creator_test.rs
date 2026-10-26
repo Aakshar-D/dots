@@ -271,7 +271,7 @@ async fn a_used_skill_is_not_deleted_until_the_person_confirms() {
     let own = lib.create_skill(DRAFT).await.unwrap();
     let mut s = spec("reviewer");
     s.uses.skills = vec!["pr-tests".into()];
-    store.create_dot(&s).await.unwrap();
+    store.create_dot(&s, None).await.unwrap();
     assert!(matches!(
         lib.remove(&own.id, false).await,
         Err(Error::Conflict(_))
@@ -323,6 +323,8 @@ async fn starting_dots_removes_saves_a_crash_cut_short() {
     std::fs::create_dir_all(skills.join(".pr-tests.01J0X")).unwrap();
     let mut cfg = Config::new(&data);
     cfg.port = 0;
+    // A missing program: no test may run a `claude` found on the PATH.
+    cfg.claude_path = Some(dir.path().join("no-claude.exe"));
     let _rt = Runtime::start(cfg).await.unwrap();
     assert!(!cut_short.exists());
     assert!(skills.join("csv").exists());

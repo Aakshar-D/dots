@@ -6,7 +6,9 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use super::entries::check_variable_name;
+use super::resolve::DotScope;
 use crate::library::{check_name, LibraryKind};
+use crate::model::{Dot, DotRef};
 use crate::{Error, Result};
 
 /// The key of the shell consumer.
@@ -72,6 +74,11 @@ impl Grants {
         contains(self.names(consumer), name)
     }
 
+    /// Whether `name` is granted to any consumer, in any case.
+    pub fn grants(&self, name: &str) -> bool {
+        self.0.values().any(|names| contains(names, name))
+    }
+
     /// Each key is a consumer, each name a variable name granted once.
     pub fn validate(&self) -> Result<()> {
         for (key, names) in &self.0 {
@@ -116,4 +123,17 @@ impl Grants {
         }
         Grants(out)
     }
+}
+
+/// The dots of `scope` among `dots` that grant `name` to any consumer, in `dots`' order: the
+/// Env tab's "used by". A dot reads only its own scope, so a dot of another scope that grants
+/// the same name is left out.
+pub fn dots_granting(dots: &[Dot], scope: &DotScope, name: &str) -> Vec<DotRef> {
+    dots.iter()
+        .filter(|dot| DotScope::of(dot) == *scope && dot.spec.variables.grants(name))
+        .map(|dot| DotRef {
+            id: dot.id.clone(),
+            name: dot.spec.name.clone(),
+        })
+        .collect()
 }
