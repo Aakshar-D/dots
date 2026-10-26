@@ -10,7 +10,7 @@ use crate::{Error, Result};
 
 const RUN_COLUMNS: &str = "id, dot_id, root_run_id, parent_run_id, trigger_kind, payload, status, \
     session_id, workspace_path, branch, base_commit, summary, error, tokens_in, tokens_out, \
-    queued_at, started_at, ended_at, reviewed_at, retry_of";
+    queued_at, started_at, ended_at, reviewed_at, retry_of, cost_usd, hold_released";
 
 fn run_from_row(row: &SqliteRow) -> Result<Run> {
     Ok(Run {
@@ -34,6 +34,8 @@ fn run_from_row(row: &SqliteRow) -> Result<Run> {
         ended_at: row.try_get("ended_at")?,
         reviewed_at: row.try_get("reviewed_at")?,
         retry_of: row.try_get("retry_of")?,
+        cost_usd: row.try_get("cost_usd")?,
+        hold_released: row.try_get::<i64, _>("hold_released")? != 0,
     })
 }
 
@@ -342,16 +344,55 @@ impl Store {
         Ok(())
     }
 
-    pub async fn add_usage(&self, id: &str, tokens_in: i64, tokens_out: i64) -> Result<()> {
+    /// Adds a usage report to the run's totals. A cost is added to the run's (a run with none
+    /// yet takes it as is); a report without one leaves the cost as it was.
+    pub async fn add_usage(
+        &self,
+        id: &str,
+        tokens_in: i64,
+        tokens_out: i64,
+        cost_usd: Option<f64>,
+    ) -> Result<()> {
         sqlx::query(
-            "UPDATE runs SET tokens_in = tokens_in + ?, tokens_out = tokens_out + ? WHERE id = ?",
+            "UPDATE runs SET tokens_in = tokens_in + ?, tokens_out = tokens_out + ?, \
+             cost_usd = CASE WHEN ? IS NULL THEN cost_usd ELSE COALESCE(cost_usd, 0) + ? END \
+             WHERE id = ?",
         )
         .bind(tokens_in)
         .bind(tokens_out)
+        .bind(cost_usd)
+        .bind(cost_usd)
         .bind(id)
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    /// Puts a `running` run back in the queue as if it had never started (usage and limits spec
+    /// section 4: Claude's limit ended it before it did anything). Its trigger and payload stay;
+    /// its session, workspace and outcome go, so it starts afresh. `Conflict` if not running.
+    pub async fn requeue_run(&self, id: &str) -> Result<Run> {
+        let res = sqlx::query(
+            "UPDATE runs SET status = 'queued', started_at = NULL, session_id = NULL, \
+             workspace_path = NULL, branch = NULL, base_commit = NULL, error = NULL, \
+             summary = NULL WHERE id = ? AND status = 'running'",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        if res.rows_affected() != 1 {
+            return Err(Error::Conflict(format!("run {id} is not running")));
+        }
+        self.get_run(id).await
+    }
+
+    /// Marks a run released from the hold by **Run anyway** (usage and limits spec section 4).
+    pub async fn set_hold_released(&self, id: &str) -> Result<Run> {
+        sqlx::query("UPDATE runs SET hold_released = 1 WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        self.get_run(id).await
     }
 
     pub async fn finish_run(

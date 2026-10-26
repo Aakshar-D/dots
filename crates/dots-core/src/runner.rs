@@ -642,7 +642,7 @@ impl Runner {
                 tokens_out,
             } => {
                 self.store
-                    .add_usage(run_id, *tokens_in as i64, *tokens_out as i64)
+                    .add_usage(run_id, *tokens_in as i64, *tokens_out as i64, None)
                     .await?
             }
             _ => {}

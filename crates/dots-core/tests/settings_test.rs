@@ -35,6 +35,9 @@ async fn settings_round_trip() {
         global_instructions: "Use British spelling.\nSign off as the team.".into(),
         notify_on_notes: false,
         edge_path: Some("D:/Apps/Edge/msedge.exe".into()),
+        hold_enabled: false,
+        hold_share_five_hour: 50,
+        hold_share_weekly: 80,
     };
     store.put_settings(&s).await.unwrap();
     assert_eq!(store.get_settings().await.unwrap(), s);
@@ -394,4 +397,40 @@ fn config_from_settings_takes_port_concurrency_and_claude_path() {
         Some(std::path::Path::new("C:/tools/claude.exe"))
     );
     assert_eq!(cfg.data_dir, std::path::PathBuf::from("C:/data"));
+}
+
+#[tokio::test]
+async fn hold_shares_default_and_bounds() {
+    let (_dir, store) = temp_store().await;
+    let s = store.get_settings().await.unwrap();
+    assert!(s.hold_enabled);
+    assert_eq!(s.hold_share_five_hour, 60);
+    assert_eq!(s.hold_share_weekly, 70);
+    for bad in [5u8, 105, 62] {
+        for weekly in [false, true] {
+            let mut s = Settings::default();
+            if weekly {
+                s.hold_share_weekly = bad;
+            } else {
+                s.hold_share_five_hour = bad;
+            }
+            let err = s.validate().unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                format!("invalid input: {}", settings::SHARE_RULE)
+            );
+        }
+    }
+    assert_eq!(
+        settings::SHARE_RULE,
+        "A share is 10 to 100%, in steps of 5."
+    );
+    for good in [10u8, 100] {
+        let s = Settings {
+            hold_share_five_hour: good,
+            hold_share_weekly: good,
+            ..Settings::default()
+        };
+        s.validate().unwrap();
+    }
 }

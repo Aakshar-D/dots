@@ -365,6 +365,8 @@ mod tests {
             ended_at: None,
             reviewed_at: None,
             retry_of: None,
+            cost_usd: None,
+            hold_released: false,
         }
     }
 

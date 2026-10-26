@@ -224,6 +224,11 @@ pub struct Run {
     pub reviewed_at: Option<String>,
     /// The failed scheduled run that this run retries.
     pub retry_of: Option<String>,
+    /// What the run would cost on the API, as the `claude` CLI reported it; `None` for a local
+    /// run and for a Claude run whose CLI gave none (usage and limits spec section 5).
+    pub cost_usd: Option<f64>,
+    /// The person released this run from the hold with **Run anyway** (spec section 4).
+    pub hold_released: bool,
 }
 
 /// Input for `Store::create_run`. `root_run_id: None` makes the run its own root.

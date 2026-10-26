@@ -468,6 +468,8 @@ fn run() -> Run {
         ended_at: Some(TS.into()),
         reviewed_at: None,
         retry_of: None,
+        cost_usd: None,
+        hold_released: false,
     }
 }
 
