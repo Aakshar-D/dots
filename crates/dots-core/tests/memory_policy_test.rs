@@ -92,7 +92,7 @@ async fn migration_0012_gives_every_policy_that_is_not_custom_its_memory() {
         .into();
     before.run(&pool).await.unwrap();
     // A policy as 0010 left it: the preset's rules without `Memory`, and without `App` and
-    // `ProposeApp`, which 0014 adds after it.
+    // `ProposeApp`, which 0015 adds after it.
     let old = |preset: Preset| {
         let mut p = Policy::preset(preset);
         p.rules
@@ -132,12 +132,12 @@ async fn migration_0012_gives_every_policy_that_is_not_custom_its_memory() {
             "{id}"
         );
     }
-    // The person's own rule is kept, and no `Memory` allow is added; 0014 adds its own.
+    // The person's own rule is kept, and no `Memory` allow is added; 0015 adds its own.
     let mut want = asks;
     want.rules
         .extend(APP_TOOLS.map(|tool| Rule::new(tool, Action::Allow)));
     assert_eq!(store.get_dot("D3").await.unwrap().spec.policy, want);
-    // 0014 gives Custom policies `App` and `ProposeApp` too, as 0007 did `Context`.
+    // 0015 gives Custom policies `App` and `ProposeApp` too, as 0007 did `Context`.
     let mut custom_then = custom.clone();
     custom_then
         .rules

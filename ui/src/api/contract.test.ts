@@ -43,6 +43,7 @@ const schemas: Record<SampleName, { parse: (v: unknown) => unknown }> = {
   Message: T.Message.array(),
   FollowUp: T.FollowUp.array(),
   Memory: T.Memory.array(),
+  Watcher: T.Watcher.array(),
   BrowserStatus: T.BrowserStatus,
   AppRow: T.AppRow.array(),
   AppFile: T.AppFile.array(),
@@ -76,6 +77,10 @@ const enums: Record<keyof typeof fixture.Enums, { options: readonly string[] }> 
   EntryKind: T.EntryKind,
   MemorySource: T.MemorySource,
   ProposalStatus: T.ProposalStatus,
+  WatcherKind: T.WatcherKind,
+  PausedReason: T.PausedReason,
+  FolderEvent: T.FolderEvent,
+  GithubEvent: T.GithubEvent,
   GrantState: T.GrantState,
   ValueSource: T.ValueSource,
   PersonalMode: T.PersonalMode,
@@ -106,7 +111,7 @@ describe("Rust/TypeScript contract", () => {
 
   it("has a sample of every runtime event type", () => {
     const types = T.RuntimeEvent.options.map((o) => o.shape.type.value);
-    expect(fixture.RuntimeEvent.map((e) => e.type).sort()).toEqual([...types].sort());
+    expect([...new Set(fixture.RuntimeEvent.map((e) => e.type))].sort()).toEqual([...types].sort());
   });
 
   it("has a sample of every Library kind and server transport", () => {

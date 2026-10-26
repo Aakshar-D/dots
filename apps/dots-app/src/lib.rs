@@ -139,6 +139,12 @@ command_list![
     app_proposals_list,
     app_proposal_files,
     app_proposal_decide,
+    watchers_list,
+    watcher_add,
+    watcher_update,
+    watcher_delete,
+    watcher_set_enabled,
+    watcher_resume,
 ];
 
 /// Keeps the log writer flushing until the app exits.

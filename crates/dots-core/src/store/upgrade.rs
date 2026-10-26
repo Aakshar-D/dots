@@ -9,9 +9,9 @@
 //! drops that table. 0012 (dot memory spec section 3): `finish_0012` does the same for
 //! `Memory` with `upgrade_0012`. 0011 and 0013 (env vault spec §11, §8): `finish_0011` grants
 //! each dot the variables of its servers, and `finish_0013`, once the vault is open, confirms in
-//! Personal the origin each http server whose URL reads a variable reaches now. 0014 (app
-//! library spec section 6): `finish_0014` does what `finish_0012` does for `App` and
-//! `ProposeApp` with `upgrade_0014`, Custom policies too.
+//! Personal the origin each http server whose URL reads a variable reaches now. 0015 (app
+//! library spec section 6): `finish_0015` does what `finish_0012` does for `App` and
+//! `ProposeApp` with `upgrade_0015`, Custom policies too.
 
 use std::collections::BTreeMap;
 
@@ -391,11 +391,11 @@ pub(super) async fn finish_0012(pool: &SqlitePool) -> Result<()> {
     give_allow_rules(pool, "0012", &[MEMORY_TOOL], false).await
 }
 
-/// Gives the policy of each dot that migration 0014 listed the `App` and `ProposeApp` allow
+/// Gives the policy of each dot that migration 0015 listed the `App` and `ProposeApp` allow
 /// rules, a Custom policy included, as 0007 did for `Context` (app library spec section 6), and
 /// drops the list.
-pub(super) async fn finish_0014(pool: &SqlitePool) -> Result<()> {
-    give_allow_rules(pool, "0014", &crate::policy::APP_TOOLS, true).await
+pub(super) async fn finish_0015(pool: &SqlitePool) -> Result<()> {
+    give_allow_rules(pool, "0015", &crate::policy::APP_TOOLS, true).await
 }
 
 /// Gives the policy of each dot listed in `upgrade_<migration>` an allow rule for each of

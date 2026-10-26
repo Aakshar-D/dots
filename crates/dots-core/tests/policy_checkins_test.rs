@@ -97,7 +97,7 @@ async fn migration_0008_lets_every_policy_that_is_not_custom_check_in() {
         .into();
     before.run(&pool).await.unwrap();
     // A policy as 0007 left it: the preset's rules without the check-in tools, without
-    // `Memory`, which 0012 adds after them, and without `App` and `ProposeApp`, which 0014 adds
+    // `Memory`, which 0012 adds after them, and without `App` and `ProposeApp`, which 0015 adds
     // after that.
     let old = |preset: Preset| {
         let mut p = Policy::preset(preset);
@@ -148,7 +148,7 @@ async fn migration_0008_lets_every_policy_that_is_not_custom_check_in() {
     want.rules
         .extend(APP_TOOLS.map(|tool| Rule::new(tool, Action::Allow)));
     assert_eq!(store.get_dot("D3").await.unwrap().spec.policy, want);
-    // A Custom policy is the person's own: no check-in rule is added. 0014 gives it `App` and
+    // A Custom policy is the person's own: no check-in rule is added. 0015 gives it `App` and
     // `ProposeApp`, as 0007 did `Context`.
     let mut custom = custom;
     custom

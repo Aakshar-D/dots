@@ -3,7 +3,7 @@ import { Inbox as InboxIcon, Play } from "lucide-react";
 import { Link, useNavigate } from "react-router";
 
 import { commands } from "@/api/commands";
-import type { NeedsAttention, ReviewRun, ToolsChanged } from "@/api/types";
+import type { NeedsAttention, PausedWatcher, ReviewRun, ToolsChanged } from "@/api/types";
 import { ApprovalCard } from "@/components/ApprovalCard";
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { EmptyState } from "@/components/EmptyState";
@@ -45,6 +45,42 @@ function ReviewRow({ run }: { run: ReviewRun }) {
         canReview
         canDiscard={run.worktree_exists}
       />
+    </li>
+  );
+}
+
+/// A watcher Dots paused (watchers spec section 7): why, since when, Resume, and its dot's tab.
+function PausedWatcherRow({ item }: { item: PausedWatcher }) {
+  const qc = useQueryClient();
+  const resume = useMutation({
+    mutationFn: () => commands.watcherResume(item.watcher_id),
+    onError: notifyError,
+    onSettled: () => {
+      for (const queryKey of [keys.inbox, keys.overview, keys.watchers(item.dot_id)]) {
+        invalidate(qc, queryKey);
+      }
+    },
+  });
+  const why =
+    item.reason === "flood" ? "paused: too many runs" : `paused: ${item.error ?? "an error"}`;
+  return (
+    <li aria-label={`${item.name} paused`} className="flex items-center gap-3 rounded-lg border p-3">
+      <div className="flex min-w-0 flex-1 flex-col">
+        <span className="font-medium">{item.name}</span>
+        <span className="truncate text-xs text-muted-foreground">
+          {item.dot_name} · {why} · {relativeTime(item.at)}
+        </span>
+      </div>
+      <Button asChild size="sm" variant="outline">
+        <Link to={`/dots/${item.dot_id}?tab=watchers`}>Open the dot's watchers</Link>
+      </Button>
+      <Button
+        size="sm"
+        disabled={resume.isPending}
+        onClick={onSingleClick(() => resume.mutate())}
+      >
+        Resume
+      </Button>
     </li>
   );
 }
@@ -248,7 +284,7 @@ export function InboxScreen() {
       </Page>
     );
   }
-  const { approvals, review_runs: runs, attention, tools_changed: tools } = inbox.data;
+  const { approvals, review_runs: runs, attention, tools_changed: tools, watchers } = inbox.data;
   const waiting = (messages.data ?? []).filter(waits);
   if (
     !messages.isError &&
@@ -256,13 +292,15 @@ export function InboxScreen() {
     approvals.length === 0 &&
     runs.length === 0 &&
     attention.length === 0 &&
-    tools.length === 0
+    tools.length === 0 &&
+    watchers.length === 0
   ) {
     return (
       <Page title="Inbox">
         <EmptyState icon={InboxIcon}>
           Nothing waits for you. Questions and notes from dots, approvals a dot asks for,
-          schedules that need attention and finished runs to review show up here.
+          schedules that need attention, paused watchers and finished runs to review show up
+          here.
         </EmptyState>
       </Page>
     );
@@ -300,6 +338,18 @@ export function InboxScreen() {
           <ul className="flex flex-col gap-2">
             {attention.map((item) => (
               <AttentionRow key={item.dot_id} item={item} />
+            ))}
+          </ul>
+        </section>
+      )}
+      {watchers.length > 0 && (
+        <section aria-labelledby="inbox-watchers" className="flex flex-col gap-2">
+          <h2 id="inbox-watchers" className="font-semibold">
+            Paused watchers
+          </h2>
+          <ul className="flex flex-col gap-2">
+            {watchers.map((item) => (
+              <PausedWatcherRow key={item.watcher_id} item={item} />
             ))}
           </ul>
         </section>

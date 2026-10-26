@@ -187,11 +187,11 @@ async fn stored_dots_get_the_app_rules_once() {
         .execute(&pool)
         .await
         .unwrap();
-    sqlx::query("CREATE TABLE upgrade_0014 (dot_id TEXT PRIMARY KEY)")
+    sqlx::query("CREATE TABLE upgrade_0015 (dot_id TEXT PRIMARY KEY)")
         .execute(&pool)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO upgrade_0014 VALUES (?)")
+    sqlx::query("INSERT INTO upgrade_0015 VALUES (?)")
         .bind(&dot.id)
         .execute(&pool)
         .await

@@ -165,6 +165,7 @@ async fn main() {
                 .collect::<std::collections::BTreeMap<_, _>>(),
             "mcp_config": mcp,
             "plugin_dirs": plugin_dirs,
+            "attachments": files_below(&std::env::current_dir().unwrap().join("attachments")),
         });
         std::fs::write(out, record.to_string()).unwrap();
     }
@@ -192,6 +193,12 @@ async fn main() {
         } else if let Some(dir) = step.get("orphan").and_then(Value::as_str) {
             // Done once the child has exited and has left its own child lingering in `dir`.
             assert!(helper("--orphan", dir).status().await.unwrap().success());
+        } else if let Some(write) = step.get("write") {
+            std::fs::write(
+                write["path"].as_str().expect("write.path"),
+                write["text"].as_str().unwrap_or_default(),
+            )
+            .unwrap();
         } else if let Some(req) = step.get("approve") {
             let text = approve(mcp.as_ref().expect("--mcp-config is required"), req, i).await;
             let decision: Value = serde_json::from_str(&text).unwrap();

@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use dots_core::events::RuntimeEvent;
-use dots_core::model::{Message, MessageKind, Run, RunStatus, TriggerKind};
+use dots_core::model::{Message, MessageKind, PausedReason, Run, RunStatus, TriggerKind};
 use dots_core::Runtime;
 use serde_json::Value;
 use tauri::{AppHandle, Emitter};
@@ -46,6 +46,14 @@ pub enum Notice {
     /// notifies; a note only while Settings say so (`message_notifies`).
     MessagePosted {
         message: Box<Message>,
+    },
+    /// Dots paused a watcher: too many runs in an hour, or an error it cannot get past
+    /// (watchers spec section 7). The core publishes it once per pause.
+    WatcherPaused {
+        dot_id: String,
+        name: String,
+        reason: PausedReason,
+        error: Option<String>,
     },
 }
 
@@ -112,6 +120,18 @@ impl Notifier {
             }),
             RuntimeEvent::MessagePosted { message } => Some(Notice::MessagePosted {
                 message: Box::new(message.clone()),
+            }),
+            RuntimeEvent::WatcherPaused {
+                dot_id,
+                name,
+                reason,
+                error,
+                ..
+            } => Some(Notice::WatcherPaused {
+                dot_id: dot_id.clone(),
+                name: name.clone(),
+                reason: *reason,
+                error: error.clone(),
             }),
             _ => None,
         }
@@ -198,17 +218,34 @@ pub fn notice_text(notice: &Notice, dot_name: &str) -> (String, String) {
                 first_line(Some(message.text.as_str()), "A note."),
             ),
         },
+        Notice::WatcherPaused {
+            name,
+            reason,
+            error,
+            ..
+        } => {
+            let why = match reason {
+                PausedReason::Flood => dots_core::watchers::FLOOD_TEXT.to_string(),
+                PausedReason::Error => first_line(error.as_deref(), "an error"),
+            };
+            (
+                format!("{dot_name}'s watcher paused"),
+                format!("{name} paused: {why}"),
+            )
+        }
     }
 }
 
 /// Where a click on the notice goes: the conversation of the run (`/chat/<dot>/<run>`, which
 /// the home opens on the run's topic) for a run or an approval, the dot's conversation
-/// (`/home/<dot>`) for a question, a note or a schedule.
+/// (`/home/<dot>`) for a question, a note or a schedule, and the dot's Watchers tab for a
+/// watcher Dots paused.
 pub fn notice_route(notice: &Notice, dot_id: &str) -> String {
     match notice {
         Notice::ApprovalNeeded { run_id, .. } => format!("/chat/{dot_id}/{run_id}"),
         Notice::RunEnded { run } => format!("/chat/{dot_id}/{}", run.id),
         Notice::ScheduleFailed { .. } | Notice::MessagePosted { .. } => format!("/home/{dot_id}"),
+        Notice::WatcherPaused { .. } => format!("/dots/{dot_id}?tab=watchers"),
     }
 }
 
@@ -270,6 +307,7 @@ async fn notify(app: &AppHandle, rt: &Runtime, notice: &Notice) {
         Notice::RunEnded { run } => Some(run.dot_id.clone()),
         Notice::ScheduleFailed { dot_id, .. } => Some(dot_id.clone()),
         Notice::MessagePosted { message } => Some(message.dot_id.clone()),
+        Notice::WatcherPaused { dot_id, .. } => Some(dot_id.clone()),
     };
     // Nothing for the dot whose conversation the person is reading (needs-you spec 4.2).
     if quiet(dot_id.as_deref(), rt.viewing().as_deref()) {
@@ -778,6 +816,43 @@ mod tests {
         assert_eq!(preview(json!({})), None);
         assert_eq!(preview(Value::Null), None);
         assert_eq!(preview(json!({"command": "  \n "})), None);
+    }
+
+    #[test]
+    fn a_watcher_dots_paused_notifies_once_and_opens_the_dots_watchers() {
+        use dots_core::model::PausedReason;
+        let mut notifier = Notifier::default();
+        let paused = |reason, error: Option<&str>| RuntimeEvent::WatcherPaused {
+            dot_id: "d".into(),
+            watcher_id: "w".into(),
+            name: "Invoices folder".into(),
+            reason,
+            error: error.map(str::to_string),
+        };
+        let flood = notifier.decide(&paused(PausedReason::Flood, None)).unwrap();
+        assert_eq!(
+            notice_text(&flood, "filer"),
+            (
+                "filer's watcher paused".to_string(),
+                "Invoices folder paused: 20 runs in an hour".to_string()
+            )
+        );
+        assert_eq!(notice_route(&flood, "d"), "/dots/d?tab=watchers");
+        let error = notifier
+            .decide(&paused(
+                PausedReason::Error,
+                Some("The folder C:/in no longer exists.\nmore"),
+            ))
+            .unwrap();
+        assert_eq!(
+            notice_text(&error, "filer").1,
+            "Invoices folder paused: The folder C:/in no longer exists."
+        );
+        let updated = RuntimeEvent::WatcherUpdated {
+            dot_id: "d".into(),
+            watcher_id: "w".into(),
+        };
+        assert_eq!(notifier.decide(&updated), None);
     }
 
     #[test]

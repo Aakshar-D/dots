@@ -19,6 +19,12 @@ chrono = { version = "0.4", features = ["serde"] }
 cron = "0.15"
 getrandom = "0.3"
 globset = "0.4"
+notify = "8"
+async-imap = { version = "0.10", default-features = false, features = ["runtime-tokio"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+webpki-roots = "1"
+mail-parser = "0.11"
+futures-util = "0.3"
 ignore = "0.4"
 minisign-verify = "0.3"
 openidconnect = { version = "4.0.1", default-features = false, features = ["reqwest"] }

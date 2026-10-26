@@ -358,7 +358,7 @@ async fn migration_0007_lets_every_stored_policy_read_context() {
     before.run(&pool).await.unwrap();
     // A policy as 0006 left it: the preset's rules without `Context`, without the check-in
     // tools, which 0008 adds after it, without `Memory`, which 0012 adds after them, and
-    // without `App` and `ProposeApp`, which 0014 adds after that.
+    // without `App` and `ProposeApp`, which 0015 adds after that.
     let old = |preset: Preset| {
         let mut p = Policy::preset(preset);
         p.rules.retain(|r| {
@@ -402,7 +402,7 @@ async fn migration_0007_lets_every_stored_policy_read_context() {
         assert!(dot.spec.use_global_instructions);
         assert!(dot.spec.uses.context.is_empty());
     }
-    // A rule that names `Context` already is the person's: no `Context` rule is added. 0014 adds
+    // A rule that names `Context` already is the person's: no `Context` rule is added. 0015 adds
     // `App` and `ProposeApp`, to a Custom policy too.
     denies.rules.extend(
         dots_core::policy::APP_TOOLS
