@@ -37,6 +37,8 @@ export const sample = {
   followUps: T.FollowUp.array().parse(contract.FollowUp),
   /// A pinned memory the dot saved in a run, and one the person wrote.
   memories: T.Memory.array().parse(contract.Memory),
+  /// A folder watcher that is on, an email one paused on an error, a GitHub one paused on a flood.
+  watchers: T.Watcher.array().parse(contract.Watcher),
   /// Acme Engineering (OpenBao) in each status but pending, then Design (SOPS), pending.
   orgs: T.OrgSummary.array().parse(contract.OrgSummary),
   /// A code for a new org (OpenBao, token), and one that changes Acme's path and policy key.
@@ -70,7 +72,13 @@ export function installDefaults(): void {
   backend.on("startup_error", () => null);
   backend.on("status", () => quietStatus);
   backend.on("update_note", () => ({ state: "none" }));
-  backend.on("inbox", () => ({ approvals: [], review_runs: [], attention: [], tools_changed: [] }));
+  backend.on("inbox", () => ({
+    approvals: [],
+    review_runs: [],
+    attention: [],
+    tools_changed: [],
+    watchers: [],
+  }));
   // An approval card asks for these when it shows; by default the core offers no rule.
   backend.on("approval_rule_candidates", () => []);
   backend.on("dot_overview", () => []);
@@ -102,6 +110,7 @@ export function installDefaults(): void {
   backend.on("follow_ups_list", () => []);
   // No dot remembers anything.
   backend.on("memories_list", () => []);
+  backend.on("watchers_list", () => []);
   // Nothing is unread; looking at a dot and saying which one is viewed are taken.
   backend.on("unread_total", () => 0);
   backend.on("mark_dot_seen", () => null);

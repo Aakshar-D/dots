@@ -93,6 +93,12 @@ pub fn build_prompt_with_memories(
         out.push_str("## Follow-up\n\n");
         out.push_str(message);
         out.push_str("\n\n");
+    } else if run.trigger == TriggerKind::Watcher {
+        // What woke the dot, and the outside text apart from it (watchers spec section 5).
+        out.push_str(&crate::watchers::describe::section(
+            run.payload.as_ref().unwrap_or(&Value::Null),
+            now,
+        ));
     } else {
         out.push_str("## Trigger\n\n");
         out.push_str(&format!("- kind: {}\n", run.trigger.as_str()));

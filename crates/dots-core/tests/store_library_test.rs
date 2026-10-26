@@ -614,7 +614,7 @@ async fn migration_0006_moves_each_dots_servers_into_the_library() {
             Rule::new("mcp__github_com__get", Action::Deny),
             Rule::new("Skill", Action::Allow),
             Rule::new("Context", Action::Allow),
-            // D4 is Trusted: migration 0008 adds the check-in tools, 0012 `Memory` and 0014
+            // D4 is Trusted: migration 0008 adds the check-in tools, 0012 `Memory` and 0015
             // `Workflow`.
             Rule::new("Notify", Action::Allow),
             Rule::new("Ask", Action::Allow),
@@ -734,7 +734,7 @@ async fn migration_0006_keeps_credentials_apart_and_erases_them_from_the_file() 
     assert_eq!(a.uses, uses(&["gh", "sf"], &[], &[]));
     assert_eq!(b.uses, uses(&["gh-2", "sf-2"], &[], &[]));
     // Migration 0007 adds `Context` after the `Skill` that 0006 adds, and 0008 the check-in
-    // tools after it, 0012 `Memory` and 0014 `Workflow` (Sandboxed asks): both dots are
+    // tools after it, 0012 `Memory` and 0015 `Workflow` (Sandboxed asks): both dots are
     // Sandboxed.
     let tail = [
         Rule::new("Skill", Action::Allow),
@@ -824,7 +824,7 @@ async fn migration_0006_allows_skill_unless_a_rule_names_it() {
         async move { store.get_dot(id).await.unwrap().spec.policy.rules }
     };
     let context = Rule::new("Context", Action::Allow);
-    // D1 is Trusted: migration 0008 adds the check-in tools, 0012 `Memory` and 0014 `Workflow`.
+    // D1 is Trusted: migration 0008 adds the check-in tools, 0012 `Memory` and 0015 `Workflow`.
     // D2 and D3 are Custom.
     assert_eq!(
         rules("D1").await,

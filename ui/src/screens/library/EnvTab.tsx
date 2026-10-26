@@ -33,10 +33,17 @@ const NAME_RULE = "Use a letter or _, then letters, digits or _ (at most 128).";
 /// Add a variable (`entry` null), or edit a plain one's value or replace a secret's (or set it
 /// again when it is missing). A secret's value is typed into a password field and never shown,
 /// before or after it is saved.
-function VariableDialog(props: { entry: EnvEntry | null; onClose: () => void }) {
+export function VariableDialog(props: {
+  entry: EnvEntry | null;
+  onClose: () => void;
+  /// The name a new variable starts with (a watcher's form offers one).
+  initialName?: string;
+  /// Gets what the core saved.
+  onSaved?: (entry: EnvEntry) => void;
+}) {
   const qc = useQueryClient();
   const { entry } = props;
-  const [name, setName] = useState(entry?.name ?? "");
+  const [name, setName] = useState(entry?.name ?? props.initialName ?? "");
   const [secret, setSecret] = useState(entry ? entry.kind === "secret" : true);
   const [value, setValue] = useState(entry?.kind === "plain" ? (entry.value ?? "") : "");
   const [tried, setTried] = useState(false);
@@ -51,10 +58,12 @@ function VariableDialog(props: { entry: EnvEntry | null; onClose: () => void }) 
     if (errors.name || errors.value) return;
     setState({ busy: true });
     try {
-      if (entry) await commands.envSet(entry.name, value);
-      else await commands.envAdd(name, secret ? "secret" : "plain", value);
+      const saved = entry
+        ? await commands.envSet(entry.name, value)
+        : await commands.envAdd(name, secret ? "secret" : "plain", value);
       invalidate(qc, keys.env);
       invalidate(qc, keys.library);
+      props.onSaved?.(saved);
       props.onClose();
     } catch (e) {
       setState({ busy: false, error: errorMessage(e) });

@@ -279,4 +279,13 @@ export const commands = {
   memoryUpdate: (id: string, text: string | null, pinned: boolean | null) =>
     call(T.Memory, "memory_update", { id, text, pinned }),
   memoryDelete: (id: string) => call(nothing, "memory_delete", { id }),
+  watchersList: (dotId: string) => call(T.Watcher.array(), "watchers_list", { dotId }),
+  watcherAdd: (dotId: string, name: string, config: T.WatcherConfig) =>
+    call(T.Watcher, "watcher_add", { dotId, name, config }),
+  watcherUpdate: (id: string, name: string, config: T.WatcherConfig) =>
+    call(T.Watcher, "watcher_update", { id, name, config }),
+  watcherDelete: (id: string) => call(nothing, "watcher_delete", { id }),
+  watcherSetEnabled: (id: string, enabled: boolean) =>
+    call(T.Watcher, "watcher_set_enabled", { id, enabled }),
+  watcherResume: (id: string) => call(T.Watcher, "watcher_resume", { id }),
 };

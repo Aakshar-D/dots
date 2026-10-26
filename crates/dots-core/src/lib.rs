@@ -32,6 +32,7 @@ pub mod team_tools;
 pub mod teams;
 pub mod util;
 pub mod vault;
+pub mod watchers;
 pub mod workflow;
 pub mod workflows;
 pub mod workspace;

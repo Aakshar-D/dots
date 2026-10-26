@@ -128,6 +128,12 @@ command_list![
     memory_add,
     memory_update,
     memory_delete,
+    watchers_list,
+    watcher_add,
+    watcher_update,
+    watcher_delete,
+    watcher_set_enabled,
+    watcher_resume,
 ];
 
 /// Keeps the log writer flushing until the app exits.

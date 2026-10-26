@@ -3,7 +3,9 @@
 //! from the UI are paths, both checked in the core and never opened here: a dot's `workdir`
 //! (`DotSpec::validate`, then the runner requires an existing folder) and the `claude_path`
 //! setting (`Settings::validate`; the runtime runs that program as the Claude CLI from the
-//! next start). The Library commands take more: a skill or plugin folder, a folder to scan for
+//! next start). A folder watcher's `path` is checked in the core (`watchers::check_config`:
+//! absolute, an existing folder) and only watched; its files are opened by the dot's run under
+//! the dot's policy. The Library commands take more: a skill or plugin folder, a folder to scan for
 //! skills, and the command of an MCP server, which `library_probe` starts and a dot's runs
 //! start. Like `claude_path`, a new command line or env (and a plugin's servers and hooks) is confirmed in
 //! a native dialog from Rust before it is run or stored (`confirm.rs`). The UI is first-party
@@ -17,7 +19,7 @@ use dots_core::library_service::{
 };
 use dots_core::model::{
     Approval, Dot, DotOverview, DotSpec, FollowUp, Inbox, Memory, Message, Run, RunEventRecord,
-    SettingsSaved, Status, WorktreeDiff,
+    SettingsSaved, Status, Watcher, WatcherConfig, WorktreeDiff,
 };
 use dots_core::policy::{Policy, Preset, RuleCandidate};
 use dots_core::schedule::Schedule;
@@ -847,6 +849,55 @@ pub async fn memory_update(
 #[tauri::command]
 pub async fn memory_delete(state: State<'_, AppState>, id: String) -> Res<()> {
     Ok(state.rt()?.memory_delete(&id).await?)
+}
+
+/// The dot's watchers, oldest first (watchers spec section 8).
+#[tauri::command]
+pub async fn watchers_list(state: State<'_, AppState>, dot_id: String) -> Res<Vec<Watcher>> {
+    Ok(state.rt()?.watchers_list(&dot_id).await?)
+}
+
+/// Adds a watcher to the dot; the core checks its name and config.
+#[tauri::command]
+pub async fn watcher_add(
+    state: State<'_, AppState>,
+    dot_id: String,
+    name: String,
+    config: WatcherConfig,
+) -> Res<Watcher> {
+    Ok(state.rt()?.watcher_add(&dot_id, &name, config).await?)
+}
+
+/// Changes a watcher's name and config; a new config starts it again from now.
+#[tauri::command]
+pub async fn watcher_update(
+    state: State<'_, AppState>,
+    id: String,
+    name: String,
+    config: WatcherConfig,
+) -> Res<Watcher> {
+    Ok(state.rt()?.watcher_update(&id, &name, config).await?)
+}
+
+#[tauri::command]
+pub async fn watcher_delete(state: State<'_, AppState>, id: String) -> Res<()> {
+    Ok(state.rt()?.watcher_delete(&id).await?)
+}
+
+/// The person's pause switch of a watcher.
+#[tauri::command]
+pub async fn watcher_set_enabled(
+    state: State<'_, AppState>,
+    id: String,
+    enabled: bool,
+) -> Res<Watcher> {
+    Ok(state.rt()?.watcher_set_enabled(&id, enabled).await?)
+}
+
+/// Resumes a watcher Dots paused (too many runs, or an error).
+#[tauri::command]
+pub async fn watcher_resume(state: State<'_, AppState>, id: String) -> Res<Watcher> {
+    Ok(state.rt()?.watcher_resume(&id).await?)
 }
 
 /// The sign-in details a command was given, read as `SourceCreds`. The words of a failure name

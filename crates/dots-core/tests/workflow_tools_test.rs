@@ -1,5 +1,5 @@
 //! `start_workflow` (teams spec section 7): every preset allows `Workflow`, a rule names it
-//! alone, migration 0014 gives it to stored policies; a chat run of a member that a chat
+//! alone, migration 0015 gives it to stored policies; a chat run of a member that a chat
 //! trigger names lists the workflows it may start and starts one, on both engines.
 
 mod common;
@@ -52,11 +52,11 @@ fn workflow_is_last_asked_by_sandboxed_and_custom_and_the_cli_never_sees_it() {
     assert!(e.contains(WORKFLOW_RULE), "{e}");
 }
 
-/// Migration 0014 on a database Dots left at 0013: every stored policy whose preset is not
+/// Migration 0015 on a database Dots left at 0014: every stored policy whose preset is not
 /// Custom gets the `Workflow` rule its preset has (Sandboxed asks, the others allow) unless a
 /// rule names it, after `Memory`.
 #[tokio::test]
-async fn migration_0014_gives_every_policy_that_is_not_custom_its_workflow_rule() {
+async fn migration_0015_gives_every_policy_that_is_not_custom_its_workflow_rule() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("dots.db");
     let opts = SqliteConnectOptions::new()
@@ -67,7 +67,7 @@ async fn migration_0014_gives_every_policy_that_is_not_custom_its_workflow_rule(
     before.migrations = before
         .migrations
         .iter()
-        .filter(|m| m.version < 14)
+        .filter(|m| m.version < 15)
         .cloned()
         .collect::<Vec<_>>()
         .into();

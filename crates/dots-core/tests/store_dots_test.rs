@@ -358,7 +358,7 @@ async fn migration_0007_lets_every_stored_policy_read_context() {
     before.run(&pool).await.unwrap();
     // A policy as 0006 left it: the preset's rules without `Context`, without the check-in
     // tools, which 0008 adds after it, without `Memory`, which 0012 adds after them, and without
-    // `Workflow`, which 0014 adds last.
+    // `Workflow`, which 0015 adds last.
     let old = |preset: Preset| {
         let mut p = Policy::preset(preset);
         p.rules.retain(|r| {

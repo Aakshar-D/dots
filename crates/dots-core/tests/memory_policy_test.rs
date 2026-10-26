@@ -90,7 +90,7 @@ async fn migration_0012_gives_every_policy_that_is_not_custom_its_memory() {
         .into();
     before.run(&pool).await.unwrap();
     // A policy as 0010 left it: the preset's rules without `Memory`, and without `Workflow`,
-    // which 0014 adds after it.
+    // which 0015 adds after it.
     let old = |preset: Preset| {
         let mut p = Policy::preset(preset);
         p.rules
@@ -130,7 +130,7 @@ async fn migration_0012_gives_every_policy_that_is_not_custom_its_memory() {
             "{id}"
         );
     }
-    // The person's own rule is kept, and no allow is added for it (0014 adds `Workflow`).
+    // The person's own rule is kept, and no allow is added for it (0015 adds `Workflow`).
     let mut kept = asks;
     kept.rules.push(Rule::new("Workflow", Action::Allow));
     assert_eq!(store.get_dot("D3").await.unwrap().spec.policy, kept);

@@ -88,7 +88,7 @@ async fn migration_0008_lets_every_policy_that_is_not_custom_check_in() {
         .into();
     before.run(&pool).await.unwrap();
     // A policy as 0007 left it: the preset's rules without the check-in tools, without
-    // `Memory`, which 0012 adds after them, and without `Workflow`, which 0014 adds last.
+    // `Memory`, which 0012 adds after them, and without `Workflow`, which 0015 adds last.
     let old = |preset: Preset| {
         let mut p = Policy::preset(preset);
         p.rules.retain(|r| {

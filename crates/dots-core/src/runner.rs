@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -123,6 +123,12 @@ pub struct Runner {
     /// The dots' browsers (browser spec section 2), set once by the runtime before any run
     /// starts (`set_browsers`).
     browsers: OnceLock<Arc<crate::browser::Browsers>>,
+    /// Which dots are acting, for the watchers (watchers spec section 4.1), set once by the
+    /// runtime (`set_acting`). The runner tells it when it takes a run and lets it go.
+    acting: OnceLock<Arc<crate::watchers::ActingTracker>>,
+    /// Where watchers staged their runs' files (watchers spec section 4.2), set once by the
+    /// runtime (`set_watcher_files`).
+    watcher_files: OnceLock<crate::watchers::files::WatcherFiles>,
 }
 
 impl Runner {
@@ -148,6 +154,8 @@ impl Runner {
             checkins: OnceLock::new(),
             vault: OnceLock::new(),
             browsers: OnceLock::new(),
+            acting: OnceLock::new(),
+            watcher_files: OnceLock::new(),
         })
     }
 
@@ -155,6 +163,75 @@ impl Runner {
     /// any run starts.
     pub fn set_vault(&self, vault: Vault) {
         let _ = self.vault.set(vault);
+    }
+
+    /// The tracker of acting dots the watchers read. Set once, before any run starts.
+    pub fn set_acting(&self, acting: Arc<crate::watchers::ActingTracker>) {
+        let _ = self.acting.set(acting);
+    }
+
+    /// Where watchers staged their runs' files. Set once, before any run starts.
+    pub fn set_watcher_files(&self, files: crate::watchers::files::WatcherFiles) {
+        let _ = self.watcher_files.set(files);
+    }
+
+    /// Copies a watcher thread's staged attachments into the run's workspace; for the thread's
+    /// root, stores and announces the payload with their paths, and answers the stored run.
+    async fn copy_attachments(&self, run: &Run, workspace: &Path) -> Option<Run> {
+        let files = self.watcher_files.get()?;
+        let root = if run.id == run.root_run_id {
+            run.clone()
+        } else {
+            self.store.get_run(&run.root_run_id).await.ok()?
+        };
+        if root.trigger != TriggerKind::Watcher {
+            return None;
+        }
+        match files.copy_into(&root, workspace) {
+            Ok(Some(payload)) if run.id == root.id => {
+                match self.store.set_run_payload(&run.id, &payload).await {
+                    Ok(stored) => {
+                        self.emit_run(&stored);
+                        Some(stored)
+                    }
+                    Err(e) => {
+                        tracing::warn!(run = %run.id, "saving attachment paths failed: {e}");
+                        None
+                    }
+                }
+            }
+            Ok(_) => None,
+            Err(e) => {
+                tracing::warn!(run = %run.id, "copying attachments failed: {e}");
+                None
+            }
+        }
+    }
+
+    /// Removes a watcher run's attachments from its workspace.
+    fn remove_attachments(&self, workspace: &Path, root_run_id: &str) {
+        if self.watcher_files.get().is_some() {
+            crate::watchers::files::WatcherFiles::remove_copy(workspace, root_run_id);
+        }
+    }
+
+    /// Lets go of a watcher thread's staged files once no run of it is left to come.
+    async fn release_attachments(&self, run_id: &str) {
+        if let Some(files) = self.watcher_files.get() {
+            files.release(&self.store, run_id).await;
+        }
+    }
+
+    fn acting_begin(&self, dot_id: &str) {
+        if let Some(acting) = self.acting.get() {
+            acting.begin(dot_id);
+        }
+    }
+
+    fn acting_end(&self, dot_id: &str) {
+        if let Some(acting) = self.acting.get() {
+            acting.end(dot_id);
+        }
     }
 
     fn emit_run(&self, run: &Run) {
@@ -334,14 +411,17 @@ impl Runner {
                     },
                 );
             }
+            self.acting_begin(&run.dot_id);
             match self.store.claim_run(&run.id).await {
                 Ok(true) => {}
                 Ok(false) => {
                     self.active.lock().unwrap().remove(&run.id);
+                    self.acting_end(&run.dot_id);
                     continue;
                 }
                 Err(e) => {
                     self.active.lock().unwrap().remove(&run.id);
+                    self.acting_end(&run.dot_id);
                     return Err(e);
                 }
             }
@@ -371,7 +451,11 @@ impl Runner {
     async fn recover_panicked(&self, run_id: &str, cancel: &CancellationToken) {
         tracing::error!(run = %run_id, "engine task panicked");
         cancel.cancel();
-        self.active.lock().unwrap().remove(run_id);
+        let released = self.active.lock().unwrap().remove(run_id);
+        if let Some(active) = released {
+            self.acting_end(&active.dot_id);
+        }
+        self.release_attachments(run_id).await;
         self.forget_run(run_id);
         match self
             .store
@@ -419,15 +503,25 @@ impl Runner {
                 self.emit_run(&r);
             }
         }
+        // An error path may have left a watcher run's attachments in its workspace.
+        if let Ok(stored) = self.store.get_run(&run_id).await {
+            if let Some(path) = &stored.workspace_path {
+                self.remove_attachments(Path::new(path), &stored.root_run_id);
+            }
+        }
         self.forget_run(&run_id);
         self.close_applies(&run_id).await;
         // A cancel that arrived after the final status was computed (the run parked) is
         // applied now, before the resume check could act on the parked decisions.
         self.apply_late_cancel(&run_id, &by_user).await;
         self.after_finish(&run_id).await;
+        self.release_attachments(&run_id).await;
         // Released only after the resume check, so `is_active` going false means the
         // runner is completely done with the run.
-        self.active.lock().unwrap().remove(&run_id);
+        let released = self.active.lock().unwrap().remove(&run_id);
+        if let Some(active) = released {
+            self.acting_end(&active.dot_id);
+        }
         self.apply_late_cancel(&run_id, &by_user).await;
         self.wake.notify_one();
     }
@@ -837,6 +931,9 @@ impl Runner {
                 p
             }
         };
+        // A watcher run's attachments, in its workspace for the run (watchers spec §4.2).
+        let refreshed = self.copy_attachments(run, &prepared.path).await;
+        let run = refreshed.as_ref().unwrap_or(run);
         // The run's MCP sessions, skills and plugin folders (MCP/skills spec section 5), each
         // server with the variables its dot grants it, in the dot's scope (env vault spec §8).
         let (tools, mut notices) = RunTools::open(OpenRequest {
@@ -887,6 +984,7 @@ impl Runner {
         let _closer = CloseOnDrop(tools.clone());
         if cancel.is_cancelled() {
             tools.close().await;
+            self.remove_attachments(&prepared.path, &run.root_run_id);
             if let Err(e) = self
                 .workspaces
                 .cleanup_if_unchanged(&ws_dot, &prepared)
@@ -975,6 +1073,8 @@ impl Runner {
             }
         }
         tools.close().await;
+        // Gone before the worktree's "unchanged" check: they are never a run's changes.
+        self.remove_attachments(&prepared.path, &run.root_run_id);
 
         let user_cancelled = by_user.load(Ordering::SeqCst);
         let waiting = self.store.has_pending_for_run(&run.id).await?
@@ -1086,6 +1186,7 @@ impl Runner {
         if prior.status == RunStatus::AwaitingApproval {
             self.cleanup_workspace(&run).await;
         }
+        self.release_attachments(run_id).await;
         self.emit_run(&run);
         Ok(Some(run))
     }

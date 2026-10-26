@@ -18,6 +18,7 @@ str_enum!(TriggerKind {
     Resume => "resume",
     FollowUp => "follow_up",
     Workflow => "workflow",
+    Watcher => "watcher",
 });
 str_enum!(RunStatus {
     Queued => "queued",
@@ -234,6 +235,9 @@ pub struct Run {
 /// Input for `Store::create_run`. `root_run_id: None` makes the run its own root.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewRun {
+    /// The run's id when the caller made it beforehand (a watcher stages files under it);
+    /// `None`: the store makes one.
+    pub id: Option<String>,
     pub dot_id: String,
     pub trigger: TriggerKind,
     pub payload: Option<Value>,
@@ -251,6 +255,7 @@ pub struct NewRun {
 impl NewRun {
     pub fn new(dot_id: &str, trigger: TriggerKind) -> Self {
         Self {
+            id: None,
             dot_id: dot_id.to_string(),
             trigger,
             payload: None,
@@ -532,6 +537,8 @@ pub struct Inbox {
     pub attention: Vec<NeedsAttention>,
     /// By server name.
     pub tools_changed: Vec<ToolsChanged>,
+    /// Watchers Dots paused (too many runs, or an error), newest first (watchers spec §7).
+    pub watchers: Vec<PausedWatcher>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -987,4 +994,176 @@ pub struct StartableWorkflow {
     pub team: String,
     /// The team's projects, by name.
     pub projects: Vec<String>,
+}
+
+str_enum!(WatcherKind { Folder => "folder", Email => "email", Github => "github" });
+// Why Dots paused a watcher (watchers spec sections 5 and 7); the person's pause is `enabled`.
+str_enum!(PausedReason { Flood => "flood", Error => "error" });
+str_enum!(FolderEvent { Created => "created", Changed => "changed", Deleted => "deleted" });
+str_enum!(GithubEvent {
+    Issue => "issue",
+    PullRequest => "pull_request",
+    Comment => "comment",
+    Push => "push",
+    Ci => "ci",
+});
+
+fn all_folder_events() -> Vec<FolderEvent> {
+    FolderEvent::ALL.to_vec()
+}
+
+fn inbox_label() -> String {
+    "INBOX".to_string()
+}
+
+fn on_by_default() -> bool {
+    true
+}
+
+/// A folder watcher (watchers spec section 4.1): files matching `pattern` (empty: every file)
+/// that are created, changed or deleted in `path`, and in its subfolders when `recursive`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FolderConfig {
+    pub path: String,
+    #[serde(default)]
+    pub pattern: String,
+    #[serde(default = "all_folder_events")]
+    pub events: Vec<FolderEvent>,
+    #[serde(default = "on_by_default")]
+    pub recursive: bool,
+}
+
+impl FolderConfig {
+    pub fn new(path: &str) -> Self {
+        Self {
+            path: path.to_string(),
+            pattern: String::new(),
+            events: all_folder_events(),
+            recursive: true,
+        }
+    }
+}
+
+/// An email watcher (watchers spec section 4.2): Gmail over IMAP, read-only. `secret` names
+/// the vault entry holding the app password; the filters that are set must all match.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EmailConfig {
+    pub address: String,
+    pub secret: String,
+    #[serde(default = "inbox_label")]
+    pub label: String,
+    #[serde(default)]
+    pub from: Option<String>,
+    #[serde(default)]
+    pub subject: Option<String>,
+    #[serde(default)]
+    pub has_attachment: Option<bool>,
+}
+
+impl EmailConfig {
+    pub fn new(address: &str, secret: &str) -> Self {
+        Self {
+            address: address.to_string(),
+            secret: secret.to_string(),
+            label: inbox_label(),
+            from: None,
+            subject: None,
+            has_attachment: None,
+        }
+    }
+}
+
+/// A GitHub watcher (watchers spec section 4.3): `repos` polled with the token in the vault
+/// entry `secret`; the filters that are set must all match.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GithubConfig {
+    pub repos: Vec<String>,
+    pub events: Vec<GithubEvent>,
+    pub secret: String,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub authors: Vec<String>,
+    #[serde(default = "on_by_default")]
+    pub skip_bots: bool,
+    #[serde(default)]
+    pub branches: Vec<String>,
+}
+
+impl GithubConfig {
+    pub fn new(repos: &[&str], secret: &str) -> Self {
+        Self {
+            repos: repos.iter().map(|r| r.to_string()).collect(),
+            events: vec![GithubEvent::Issue, GithubEvent::PullRequest],
+            secret: secret.to_string(),
+            label: None,
+            authors: Vec::new(),
+            skip_bots: true,
+            branches: Vec::new(),
+        }
+    }
+}
+
+/// What a watcher watches, tagged by its kind (watchers spec section 3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WatcherConfig {
+    Folder(FolderConfig),
+    Email(EmailConfig),
+    Github(GithubConfig),
+}
+
+impl WatcherConfig {
+    pub fn kind(&self) -> WatcherKind {
+        match self {
+            WatcherConfig::Folder(_) => WatcherKind::Folder,
+            WatcherConfig::Email(_) => WatcherKind::Email,
+            WatcherConfig::Github(_) => WatcherKind::Github,
+        }
+    }
+
+    /// The vault entry the watcher reads its password or token from.
+    pub fn secret(&self) -> Option<&str> {
+        match self {
+            WatcherConfig::Folder(_) => None,
+            WatcherConfig::Email(c) => Some(&c.secret),
+            WatcherConfig::Github(c) => Some(&c.secret),
+        }
+    }
+}
+
+/// A watcher of a dot (watchers spec section 3). `enabled` is the person's switch;
+/// `paused_reason` is set when Dots paused it. Times are RFC 3339 UTC (`util::now`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Watcher {
+    pub id: String,
+    pub dot_id: String,
+    pub name: String,
+    pub config: WatcherConfig,
+    pub enabled: bool,
+    pub paused_reason: Option<PausedReason>,
+    pub last_error: Option<String>,
+    pub last_event_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl Watcher {
+    pub fn kind(&self) -> WatcherKind {
+        self.config.kind()
+    }
+}
+
+/// A watcher Dots paused, as the Inbox lists it (watchers spec section 7).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PausedWatcher {
+    pub watcher_id: String,
+    pub dot_id: String,
+    pub dot_name: String,
+    pub kind: WatcherKind,
+    pub name: String,
+    pub reason: PausedReason,
+    pub error: Option<String>,
+    /// When Dots paused it.
+    pub at: String,
 }

@@ -7,7 +7,7 @@
 //! 0008 (check-ins spec section 8): `finish_0008` last gives each dot listed in `upgrade_0008`
 //! whose preset is not Custom an allow rule for each check-in tool that no rule names, and
 //! drops that table. 0012 (dot memory spec section 3): `finish_0012` does the same for
-//! `Memory` with `upgrade_0012`, and 0014 (teams spec section 7) `finish_0014` for `Workflow`,
+//! `Memory` with `upgrade_0012`, and 0015 (teams spec section 7) `finish_0015` for `Workflow`,
 //! with the rule the dot's preset has (Sandboxed asks, ReadOnly and Trusted allow). 0011 and
 //! 0013 (env vault spec §11, §8): `finish_0011` grants each dot the variables of its servers,
 //! and `finish_0013`, once the vault is open, confirms in Personal the origin each http server
@@ -391,10 +391,10 @@ pub(super) async fn finish_0012(pool: &SqlitePool) -> Result<()> {
     give_preset_rules(pool, "0012", &[MEMORY_TOOL]).await
 }
 
-/// Gives the policy of each dot that migration 0014 listed the `Workflow` rule its preset has
+/// Gives the policy of each dot that migration 0015 listed the `Workflow` rule its preset has
 /// (Sandboxed asks, ReadOnly and Trusted allow), and drops the list (teams spec section 7).
-pub(super) async fn finish_0014(pool: &SqlitePool) -> Result<()> {
-    give_preset_rules(pool, "0014", &[WORKFLOW_TOOL]).await
+pub(super) async fn finish_0015(pool: &SqlitePool) -> Result<()> {
+    give_preset_rules(pool, "0015", &[WORKFLOW_TOOL]).await
 }
 
 /// Gives the policy of each dot listed in `upgrade_<migration>` the rule its preset has for each
