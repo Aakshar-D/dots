@@ -568,10 +568,19 @@ impl Watchers {
     /// Checks a polling watcher once and says when to check next.
     pub async fn poll_now(&self, watcher_id: &str) -> Result<Poll> {
         let watcher = self.deps.store.get_watcher(watcher_id).await?;
-        match &watcher.config {
+        let polled = match &watcher.config {
             WatcherConfig::Email(config) => email::poll(self, &watcher, config).await,
             WatcherConfig::Github(config) => github::poll(self, &watcher, config).await,
-            WatcherConfig::Folder(_) => Ok(Poll::Stopped),
+            WatcherConfig::Folder(_) => return Ok(Poll::Stopped),
+        };
+        match polled {
+            Ok(poll) => Ok(poll),
+            // A failure of Dots' own (the database, the vault, a full disk) is retried with the
+            // backoff, as a source's is; the poll does not end silently.
+            Err(e) => {
+                self.note_failure(watcher_id, Failure::Transient(e.to_string()))
+                    .await
+            }
         }
     }
 
@@ -697,6 +706,12 @@ impl Watchers {
                         break;
                     }
                 }
+            }
+            // Ended on its own (its token is still live, so the entry is still this task's):
+            // forget it, so a watcher that should still run is started again by the reload.
+            if !token.is_cancelled() {
+                this.tasks.lock().unwrap().remove(&id);
+                this.reload();
             }
         });
     }

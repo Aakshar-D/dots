@@ -348,3 +348,31 @@ fn imap_names_use_modified_utf7() {
     assert_eq!(imap_folder_name("日本"), "&ZeVnLA-");
     assert_eq!(imap_folder_name("a&b"), "a&-b");
 }
+
+/// The final review: a failure of Dots' own (here the attachments cannot be staged) is retried
+/// with the backoff, as a source's would be; the poll does not end and the mail is not skipped.
+#[tokio::test]
+async fn a_failure_of_dots_own_backs_off_and_the_mail_is_tried_again() {
+    let (h, fake, dot, w) = setup(|_| {}).await;
+    h.watchers.poll_now(&w.id).await.unwrap();
+    std::fs::create_dir_all(h.dir.path().join("data")).unwrap();
+    std::fs::write(h.dir.path().join("data").join("watchers"), b"in the way").unwrap();
+    let mut spec = MailSpec::new("a@x", "a@acme.com", "Files");
+    spec.attachments = vec![("a.pdf", b"%PDF".to_vec())];
+    fake.deliver("INBOX", mail(spec));
+    assert_eq!(
+        h.watchers.poll_now(&w.id).await.unwrap(),
+        Poll::Next(t0() + TimeDelta::minutes(1))
+    );
+    assert!(h
+        .store
+        .get_watcher(&w.id)
+        .await
+        .unwrap()
+        .last_error
+        .is_some());
+    assert!(h.runs(&dot.id).await.is_empty());
+    std::fs::remove_file(h.dir.path().join("data").join("watchers")).unwrap();
+    h.watchers.poll_now(&w.id).await.unwrap();
+    assert_eq!(h.runs(&dot.id).await.len(), 1);
+}

@@ -216,7 +216,8 @@ async fn a_push_lists_its_newest_20_commits_and_completed_ci_runs_on_the_branche
     let run = |id: u64, branch: &str, conclusion: &str| {
         json!({"id": id, "name": "CI",
         "display_title": "Fix crash", "head_branch": branch, "conclusion": conclusion,
-        "html_url": format!("https://github.com/owner/repo/actions/runs/{id}"), "triggering_actor": user("alice")})
+        "html_url": format!("https://github.com/owner/repo/actions/runs/{id}"), "triggering_actor": user("alice"),
+        "updated_at": "2026-10-23T09:05:00Z"})
     };
     serve(
         &server,
@@ -485,5 +486,118 @@ async fn a_server_error_is_retried_with_backoff() {
     assert_eq!(
         (now.paused_reason, now.last_error),
         (None, Some(server_error("502", "owner/repo")))
+    );
+}
+
+/// The final review: the event the cap stopped at is not marked handled, so a resume continues
+/// from it (spec section 5), as email does.
+#[tokio::test]
+async fn the_cap_stops_at_the_first_dropped_issue_and_a_resume_continues_from_it() {
+    let (h, server, dot, w) = setup(|c| c.events = vec![GithubEvent::Issue]).await;
+    serve(&server, &[("/repos/owner/repo/issues", json!([]))]).await;
+    h.watchers.poll_now(&w.id).await.unwrap();
+    let issues: Vec<Value> = (1..=22u64)
+        .rev()
+        .map(|n| issue(n, n, &format!("Issue {n}"), "alice", &[]))
+        .collect();
+    serve(&server, &[("/repos/owner/repo/issues", json!(issues))]).await;
+    assert_eq!(h.watchers.poll_now(&w.id).await.unwrap(), Poll::Stopped);
+    assert_eq!(h.runs(&dot.id).await.len(), 20);
+    assert_eq!(
+        h.store.get_watcher(&w.id).await.unwrap().paused_reason,
+        Some(PausedReason::Flood)
+    );
+    h.watchers.resume(&w.id).await.unwrap();
+    h.watchers.poll_now(&w.id).await.unwrap();
+    let runs = h.runs(&dot.id).await;
+    assert_eq!(runs.len(), 22);
+    assert_eq!(runs[20].payload.as_ref().unwrap()["title"], "Issue 21");
+}
+
+/// The final review: workflows of one push finish in any order; a run with a lower id that
+/// finishes later still wakes the dot.
+#[tokio::test]
+async fn ci_runs_that_finish_out_of_id_order_each_wake_it() {
+    let (h, server, dot, w) = setup(|c| c.events = vec![GithubEvent::Ci]).await;
+    let run = |id: u64, name: &str, updated: &str| {
+        json!({"id": id, "name": name,
+        "display_title": "Fix crash", "head_branch": "main", "conclusion": "failure",
+        "html_url": format!("https://github.com/owner/repo/actions/runs/{id}"),
+        "triggering_actor": user("alice"), "updated_at": updated})
+    };
+    serve(
+        &server,
+        &[(
+            "/repos/owner/repo/actions/runs",
+            json!({"workflow_runs": []}),
+        )],
+    )
+    .await;
+    h.watchers.poll_now(&w.id).await.unwrap();
+    serve(
+        &server,
+        &[(
+            "/repos/owner/repo/actions/runs",
+            json!({"workflow_runs": [run(101, "Lint", "2026-10-23T09:01:00Z")]}),
+        )],
+    )
+    .await;
+    h.watchers.poll_now(&w.id).await.unwrap();
+    serve(
+        &server,
+        &[(
+            "/repos/owner/repo/actions/runs",
+            json!({"workflow_runs": [
+        run(100, "Tests", "2026-10-23T09:10:00Z"), run(101, "Lint", "2026-10-23T09:01:00Z")]}),
+        )],
+    )
+    .await;
+    h.watchers.poll_now(&w.id).await.unwrap();
+    assert_eq!(
+        subjects(&h.runs(&dot.id).await),
+        [("ci".into(), "Lint".into()), ("ci".into(), "Tests".into())]
+    );
+}
+
+/// The final review: a repository the token cannot see does not keep the ones after it from
+/// being read; the watcher pauses once every repository was tried.
+#[tokio::test]
+async fn a_repo_the_token_cannot_see_first_does_not_hide_the_others() {
+    let (h, server, dot, w) = setup(|c| {
+        c.repos = vec!["owner/private".into(), "owner/repo".into()];
+        c.events = vec![GithubEvent::Issue];
+    })
+    .await;
+    serve(
+        &server,
+        &[
+            ("/repos/owner/private/issues", json!([])),
+            (
+                "/repos/owner/repo/issues",
+                json!([issue(11, 11, "Old", "alice", &[])]),
+            ),
+        ],
+    )
+    .await;
+    h.watchers.poll_now(&w.id).await.unwrap();
+    serve(
+        &server,
+        &[(
+            "/repos/owner/repo/issues",
+            json!([
+                issue(12, 12, "New", "alice", &[]),
+                issue(11, 11, "Old", "alice", &[])
+            ]),
+        )],
+    )
+    .await;
+    assert_eq!(h.watchers.poll_now(&w.id).await.unwrap(), Poll::Stopped);
+    assert_eq!(
+        subjects(&h.runs(&dot.id).await),
+        [("issue".into(), "New".into())]
+    );
+    assert_eq!(
+        h.store.get_watcher(&w.id).await.unwrap().last_error,
+        Some(cannot_see("GITHUB_TOKEN", "owner/private"))
     );
 }

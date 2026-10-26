@@ -277,3 +277,25 @@ fn the_skip_list_and_the_pattern() {
     assert!(matches_pattern("invoice-*.*", "invoice-12.pdf"));
     assert!(!matches_pattern("invoice-*.*", "bill-12.pdf"));
 }
+
+/// The final review: a sync engine that replaces a settled file by renaming a temporary copy
+/// onto it (same bytes, same modified time) wakes nothing (Review Focus 1).
+#[tokio::test]
+async fn a_file_replaced_in_place_with_the_same_content_wakes_the_dot_once() {
+    let (h, dot, root) = started().await;
+    watch(&h, &dot, &root, |_| {}).await;
+    let path = root.join("a.pdf");
+    std::fs::write(&path, b"abc").unwrap();
+    h.wait_runs(&dot.id, 1, 10).await;
+    let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+    let temp = root.join("a.pdf.tmp");
+    std::fs::write(&temp, b"abc").unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&temp)
+        .unwrap()
+        .set_modified(modified)
+        .unwrap();
+    std::fs::rename(&temp, &path).unwrap();
+    h.still(&dot.id, 1, 4).await;
+}

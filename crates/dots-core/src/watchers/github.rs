@@ -67,8 +67,12 @@ pub struct RepoCursor {
     pub review_since: Option<String>,
     #[serde(default)]
     pub heads: BTreeMap<String, String>,
+    /// The completion time of the newest CI run handled, and the ids of the runs handled
+    /// lately: workflows finish in any order, so an id says nothing of when.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ci: Option<u64>,
+    pub ci_since: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ci_seen: Vec<u64>,
 }
 
 /// Why a poll ends early.
@@ -260,12 +264,12 @@ impl Poller<'_> {
         true
     }
 
-    /// Fires one event; the cursor is saved first, so a stop keeps what was handled.
+    /// Fires one event. The cursor saved first is the one before this event: the caller moves
+    /// it past the event only once it fired, so the event the cap stopped at, or one that hit a
+    /// failure of Dots' own, is fired again on the next poll (spec section 5).
     async fn fire(&mut self, payload: Value) -> Step<()> {
-        if let Err(e) = self.save().await {
-            tracing::warn!(watcher = %self.watcher.id, "saving a GitHub cursor failed: {e}");
-            return Err(Stop::Halt);
-        }
+        let own = |e: crate::Error| Stop::Failed(Failure::Transient(e.to_string()));
+        self.save().await.map_err(own)?;
         match self
             .service
             .fire(&self.watcher.id, SourceEvent::new(payload))
@@ -273,10 +277,21 @@ impl Poller<'_> {
         {
             Ok(Fired::Run(_)) => Ok(()),
             Ok(Fired::Capped) | Ok(Fired::Off) => Err(Stop::Halt),
-            Err(e) => {
-                tracing::warn!(watcher = %self.watcher.id, "a GitHub event was lost: {e}");
-                Err(Stop::Halt)
-            }
+            Err(e) => Err(own(e)),
+        }
+    }
+
+    /// Notes a CI run as handled: its completion time and its id (the last 200 are kept).
+    fn ci_handled(&mut self, repo: &str, run: &Value, at: DateTime<Utc>) {
+        let cursor = self.repo_cursor(repo);
+        if let Some(id) = run["id"].as_u64() {
+            cursor.ci_seen.push(id);
+            let extra = cursor.ci_seen.len().saturating_sub(200);
+            cursor.ci_seen.drain(..extra);
+        }
+        let since = cursor.ci_since.as_deref().and_then(|s| time(&json!(s)));
+        if since.is_none_or(|s| at > s) {
+            cursor.ci_since = Some(crate::util::timestamp(at));
         }
     }
 
@@ -307,11 +322,11 @@ impl Poller<'_> {
             return Ok(());
         };
         for item in ids_above(&items, after) {
-            self.repo_cursor(repo).issue = item["id"].as_u64();
             if self.passes(&item["user"], Some(&item["labels"])) {
                 let payload = self.item_payload(repo, "issue", item, &item["user"]);
                 self.fire(payload).await?;
             }
+            self.repo_cursor(repo).issue = item["id"].as_u64();
         }
         Ok(())
     }
@@ -324,11 +339,11 @@ impl Poller<'_> {
             None => self.repo_cursor(repo).pull = Some(newest_id(&pulls)),
             Some(after) => {
                 for pr in ids_above(&pulls, after) {
-                    self.repo_cursor(repo).pull = pr["id"].as_u64();
                     if pr["draft"] != true && self.passes(&pr["user"], Some(&pr["labels"])) {
                         let payload = self.item_payload(repo, "pull_request", pr, &pr["user"]);
                         self.fire(payload).await?;
                     }
+                    self.repo_cursor(repo).pull = pr["id"].as_u64();
                 }
             }
         }
@@ -344,12 +359,12 @@ impl Poller<'_> {
             return Ok(());
         };
         for event in ids_above(&ready, after) {
-            self.repo_cursor(repo).ready = event["id"].as_u64();
             let pr = &event["issue"];
             if self.passes(&event["actor"], Some(&pr["labels"])) {
                 let payload = self.item_payload(repo, "pull_request", pr, &event["actor"]);
                 self.fire(payload).await?;
             }
+            self.repo_cursor(repo).ready = event["id"].as_u64();
         }
         Ok(())
     }
@@ -361,15 +376,14 @@ impl Poller<'_> {
             None => self.repo_cursor(repo).comment = Some(newest_id(&comments)),
             Some(after) => {
                 for comment in ids_above(&comments, after) {
-                    self.repo_cursor(repo).comment = comment["id"].as_u64();
-                    if !self.passes(&comment["user"], None) {
-                        continue;
-                    }
+                    let id = comment["id"].as_u64();
                     let number = comment["issue_url"]
                         .as_str()
                         .and_then(|u| u.rsplit('/').next())
                         .and_then(|n| n.parse::<u64>().ok());
-                    let Some(number) = number else {
+                    let Some(number) = number.filter(|_| self.passes(&comment["user"], None))
+                    else {
+                        self.repo_cursor(repo).comment = id;
                         continue;
                     };
                     let issue = self
@@ -386,6 +400,7 @@ impl Poller<'_> {
                         "number": number,
                     });
                     self.fire(payload).await?;
+                    self.repo_cursor(repo).comment = id;
                 }
             }
         }
@@ -421,9 +436,9 @@ impl Poller<'_> {
         }
         found.sort_by_key(|(at, _, _)| *at);
         for (at, review, pr) in found {
-            self.repo_cursor(repo).review_since = Some(crate::util::timestamp(at));
             let said = review["body"].as_str().unwrap_or_default();
             if said.trim().is_empty() || !self.passes(&review["user"], None) {
+                self.repo_cursor(repo).review_since = Some(crate::util::timestamp(at));
                 continue;
             }
             let payload = json!({
@@ -437,6 +452,7 @@ impl Poller<'_> {
                 "number": pr["number"],
             });
             self.fire(payload).await?;
+            self.repo_cursor(repo).review_since = Some(crate::util::timestamp(at));
         }
         Ok(())
     }
@@ -454,10 +470,8 @@ impl Poller<'_> {
                 .await?;
             let head = text(&info["commit"]["sha"]);
             let old = self.repo_cursor(repo).heads.get(&branch).cloned();
-            self.repo_cursor(repo)
-                .heads
-                .insert(branch.clone(), head.clone());
             let Some(old) = old.filter(|o| *o != head) else {
+                self.repo_cursor(repo).heads.insert(branch, head);
                 continue;
             };
             let compare = self
@@ -465,10 +479,12 @@ impl Poller<'_> {
                 .await?;
             let commits = compare["commits"].as_array().cloned().unwrap_or_default();
             let Some(last) = commits.last() else {
+                self.repo_cursor(repo).heads.insert(branch, head);
                 continue;
             };
             let author = last["author"].clone();
             if !self.passes(&author, None) {
+                self.repo_cursor(repo).heads.insert(branch, head);
                 continue;
             }
             let n = commits.len();
@@ -504,6 +520,7 @@ impl Poller<'_> {
                 "branch": branch,
             });
             self.fire(payload).await?;
+            self.repo_cursor(repo).heads.insert(branch, head);
         }
         Ok(())
     }
@@ -519,21 +536,31 @@ impl Poller<'_> {
             .as_array()
             .cloned()
             .unwrap_or_default();
-        let Some(after) = self.repo_cursor(repo).ci else {
-            self.repo_cursor(repo).ci = Some(newest_id(&runs));
+        let Some(since) = self.repo_cursor(repo).ci_since.clone() else {
+            let now = self.service.deps.clock.now();
+            let cursor = self.repo_cursor(repo);
+            cursor.ci_since = Some(crate::util::timestamp(now));
+            cursor.ci_seen = runs.iter().filter_map(|r| r["id"].as_u64()).collect();
             return Ok(());
         };
-        for run in ids_above(&runs, after) {
-            self.repo_cursor(repo).ci = run["id"].as_u64();
+        let since = time(&json!(since)).unwrap_or_default();
+        let seen = self.repo_cursor(repo).ci_seen.clone();
+        let mut new: Vec<(DateTime<Utc>, &Value)> = runs
+            .iter()
+            .filter_map(|r| Some((time(&r["updated_at"])?, r)))
+            .filter(|(at, r)| {
+                *at >= since && !r["id"].as_u64().is_some_and(|id| seen.contains(&id))
+            })
+            .collect();
+        new.sort_by_key(|(at, r)| (*at, r["id"].as_u64()));
+        for (at, run) in new {
             let conclusion = text(&run["conclusion"]);
             let branch = text(&run["head_branch"]);
-            if conclusion != "success" && conclusion != "failure" {
-                continue;
-            }
-            if !self.config.branches.is_empty() && !self.config.branches.contains(&branch) {
-                continue;
-            }
-            if !self.passes(&run["triggering_actor"], None) {
+            let wanted = (conclusion == "success" || conclusion == "failure")
+                && (self.config.branches.is_empty() || self.config.branches.contains(&branch))
+                && self.passes(&run["triggering_actor"], None);
+            if !wanted {
+                self.ci_handled(repo, run, at);
                 continue;
             }
             let payload = json!({
@@ -548,26 +575,43 @@ impl Poller<'_> {
                 "conclusion": conclusion,
             });
             self.fire(payload).await?;
+            self.ci_handled(repo, run, at);
         }
         Ok(())
     }
 
-    async fn run(&mut self) -> Step<()> {
-        for repo in self.config.repos.clone() {
-            for kind in GithubEvent::ALL {
-                if !self.config.events.contains(kind) {
-                    continue;
-                }
-                match kind {
-                    GithubEvent::Issue => self.issues(&repo).await?,
-                    GithubEvent::PullRequest => self.pulls(&repo).await?,
-                    GithubEvent::Comment => self.comments(&repo).await?,
-                    GithubEvent::Push => self.pushes(&repo).await?,
-                    GithubEvent::Ci => self.ci(&repo).await?,
-                }
+    async fn repo(&mut self, repo: &str) -> Step<()> {
+        for kind in GithubEvent::ALL {
+            if !self.config.events.contains(kind) {
+                continue;
+            }
+            match kind {
+                GithubEvent::Issue => self.issues(repo).await?,
+                GithubEvent::PullRequest => self.pulls(repo).await?,
+                GithubEvent::Comment => self.comments(repo).await?,
+                GithubEvent::Push => self.pushes(repo).await?,
+                GithubEvent::Ci => self.ci(repo).await?,
             }
         }
         Ok(())
+    }
+
+    /// Every repository in order. One the token cannot read does not keep the others from
+    /// being read: its refusal is reported once all were tried (Review Focus 5).
+    async fn run(&mut self) -> Step<()> {
+        let mut refused = None;
+        for repo in self.config.repos.clone() {
+            match self.repo(&repo).await {
+                Err(Stop::Failed(Failure::Permanent(text))) => {
+                    refused.get_or_insert(text);
+                }
+                other => other?,
+            }
+        }
+        match refused {
+            Some(text) => Err(Stop::Failed(Failure::Permanent(text))),
+            None => Ok(()),
+        }
     }
 }
 
