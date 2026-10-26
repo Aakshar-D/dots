@@ -14,6 +14,7 @@ use crate::context;
 use crate::engine::local::tools::cap_head;
 use crate::engine::{PermissionGate, PermissionOutcome};
 use crate::memory::{self, Tool as MemoryTool};
+use crate::team_tools::{self, Tool as TeamTool};
 
 const DEFAULT_PROTOCOL: &str = "2025-06-18";
 
@@ -118,6 +119,10 @@ pub async fn handle(State(s): State<ServerState>, headers: HeaderMap, body: Byte
             if let Some(apps) = run_apps(&s, &run_id) {
                 tools.extend(apps.mcp_schemas());
             }
+            // A chat run of a member that may start a workflow (teams spec section 7).
+            if has_startable(&s, &run_id) {
+                tools.push(TeamTool::StartWorkflow.mcp_schema());
+            }
             json!({ "tools": tools })
         }
         "tools/call" => {
@@ -126,6 +131,9 @@ pub async fn handle(State(s): State<ServerState>, headers: HeaderMap, body: Byte
                 (Some("context"), _) => call_context(&s, &run_id, &req).await,
                 (Some(crate::apps::propose::TOOL), _) => call_propose(&s, &run_id, &req).await,
                 (_, Some(tool)) => call_check_in(&s, &run_id, &req, tool).await,
+                (Some(n), None) if TeamTool::from_name(n).is_some() => {
+                    call_workflow(&s, &run_id, &req).await
+                }
                 (Some(n), None) if MemoryTool::from_name(n).is_some() => {
                     let tool = MemoryTool::from_name(n).expect("a memory tool");
                     call_memory(&s, &run_id, &req, tool).await
@@ -145,6 +153,57 @@ pub async fn handle(State(s): State<ServerState>, headers: HeaderMap, body: Byte
         other => return rpc_error(id, -32601, &format!("method not found: {other}")),
     };
     Json(json!({ "jsonrpc": "2.0", "id": id, "result": result })).into_response()
+}
+
+/// The run may start a team workflow, so `start_workflow` is one of its tools.
+fn has_startable(s: &ServerState, run_id: &str) -> bool {
+    s.runner
+        .run_tools(run_id)
+        .is_some_and(|tools| !tools.startable().is_empty())
+}
+
+/// Checks a `start_workflow` call against the dot's policy under `Workflow`, waiting for an
+/// approval when a rule asks, and starts the workflow (teams spec section 7). A call that is not
+/// performed is a tool result with `isError`, as for the check-in tools.
+async fn call_workflow(s: &ServerState, run_id: &str, req: &Value) -> Result<Value, (i64, String)> {
+    let (Some(checkins), Some(tools)) = (
+        s.runner.checkins(),
+        s.runner
+            .run_tools(run_id)
+            .filter(|tools| !tools.startable().is_empty()),
+    ) else {
+        return Err((-32602, "unknown tool".to_string()));
+    };
+    let Some(workflows) = checkins.workflows() else {
+        return Err((-32602, "unknown tool".to_string()));
+    };
+    let params = req
+        .get("params")
+        .ok_or((-32602, "missing params".to_string()))?;
+    let mut input = match params.get("arguments") {
+        None | Some(Value::Null) => json!({}),
+        Some(args @ Value::Object(_)) => args.clone(),
+        Some(_) => return Err((-32602, "params.arguments must be an object".to_string())),
+    };
+    // Only the tool's own arguments, as the local engine's `prepare` keeps.
+    let own = TeamTool::StartWorkflow.properties();
+    if let (Value::Object(args), Value::Object(own)) = (&mut input, &own) {
+        args.retain(|key, _| own.contains_key(key));
+    }
+    let input = match s.hub.check(run_id, team_tools::POLICY_NAME, input).await {
+        Ok(PermissionOutcome::Allow { input }) => input,
+        Ok(PermissionOutcome::Deny { message }) => return Ok(not_performed(&message)),
+        Err(e) => return Ok(not_performed(&format!("permission check failed: {e}"))),
+    };
+    Ok(
+        match workflows
+            .call_start(run_id, tools.startable(), &input)
+            .await
+        {
+            Ok(text) => json!({ "content": [{ "type": "text", "text": text }] }),
+            Err(text) => not_performed(&text),
+        },
+    )
 }
 
 /// The run has context collections open, so `context` is one of its tools.

@@ -171,6 +171,10 @@ impl Session {
         if let Some(apps) = self.ctx.tools.apps() {
             out.extend(apps.function_schemas());
         }
+        // A chat run of a member that may start a workflow (teams spec section 7).
+        if !self.ctx.tools.startable().is_empty() {
+            out.push(tools::team::start_schema());
+        }
         // The built-in browser's tools (browser spec section 2.2); their names fit as they are,
         // so `ToolNames` finds them by their `mcp__` name.
         if self.ctx.tools.browser().is_some() {

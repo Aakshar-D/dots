@@ -18,6 +18,7 @@ str_enum!(TriggerKind {
     Resume => "resume",
     FollowUp => "follow_up",
     App => "app",
+    Workflow => "workflow",
     Watcher => "watcher",
 });
 str_enum!(RunStatus {
@@ -225,6 +226,11 @@ pub struct Run {
     pub reviewed_at: Option<String>,
     /// The failed scheduled run that this run retries.
     pub retry_of: Option<String>,
+    /// The workflow step this run works for (teams spec section 4); a resume or a chat that
+    /// continues the run's thread keeps it.
+    pub workflow_step_run_id: Option<String>,
+    /// The part of `tokens_in` read from the prompt cache (teams spec section 9).
+    pub tokens_cache_read: i64,
 }
 
 /// Input for `Store::create_run`. `root_run_id: None` makes the run its own root.
@@ -243,6 +249,8 @@ pub struct NewRun {
     pub branch: Option<String>,
     pub base_commit: Option<String>,
     pub retry_of: Option<String>,
+    /// `None` keeps the parent's (`parent_run_id`), if it has one.
+    pub workflow_step_run_id: Option<String>,
 }
 
 impl NewRun {
@@ -259,6 +267,7 @@ impl NewRun {
             branch: None,
             base_commit: None,
             retry_of: None,
+            workflow_step_run_id: None,
         }
     }
 }
@@ -661,6 +670,331 @@ pub struct Memory {
     pub run_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+/// The longest team, project or workflow name, in characters after trimming.
+pub const MAX_TEAM_NAME: usize = 64;
+/// The longest team description, in characters after trimming.
+pub const MAX_DESCRIPTION: usize = 2_000;
+/// The longest member role, in characters after trimming.
+pub const MAX_ROLE: usize = 80;
+
+fn check_name(what: &str, name: &str) -> Result<()> {
+    let n = name.trim().chars().count();
+    if n == 0 || n > MAX_TEAM_NAME {
+        return Err(Error::Invalid(format!(
+            "a {what} name must be 1 to {MAX_TEAM_NAME} characters"
+        )));
+    }
+    Ok(())
+}
+
+/// A git name Dots passes on a command line (a remote or a branch): no leading `-`, so it can
+/// never be read as an option, and only `A-Z a-z 0-9 . _ / -`.
+fn check_git_name(what: &str, name: &str) -> Result<()> {
+    let ok = !name.is_empty()
+        && !name.starts_with('-')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '-'));
+    if !ok {
+        return Err(Error::Invalid(format!(
+            "{what} must be letters, digits, '.', '_', '/' or '-', not starting with '-'"
+        )));
+    }
+    Ok(())
+}
+
+/// A member of a team as it is saved: a dot and its role (teams spec section 3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemberSpec {
+    pub dot_id: String,
+    #[serde(default)]
+    pub role: String,
+}
+
+/// A team as it is saved: its name, description and members, in order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamSpec {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub members: Vec<MemberSpec>,
+}
+
+impl TeamSpec {
+    pub fn validate(&self) -> Result<()> {
+        check_name("team", &self.name)?;
+        if self.description.trim().chars().count() > MAX_DESCRIPTION {
+            return Err(Error::Invalid(
+                "a team description must be at most 2,000 characters".into(),
+            ));
+        }
+        let mut seen = std::collections::HashSet::new();
+        for m in &self.members {
+            if !seen.insert(m.dot_id.as_str()) {
+                return Err(Error::Invalid(format!("{} is in the team twice", m.dot_id)));
+            }
+            if m.role.trim().chars().count() > MAX_ROLE {
+                return Err(Error::Invalid(
+                    "a role must be at most 80 characters".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A member of a team as it is read: the dot's name comes with it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamMember {
+    pub dot_id: String,
+    pub dot_name: String,
+    pub role: String,
+}
+
+/// A team's project: a local git repo a workflow run works on (teams spec section 3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectSpec {
+    pub name: String,
+    pub repo_path: String,
+    /// `None`: found as worktrees find it (`origin/HEAD`, else `HEAD`).
+    #[serde(default)]
+    pub default_branch: Option<String>,
+    #[serde(default = "origin")]
+    pub remote: String,
+}
+
+fn origin() -> String {
+    "origin".into()
+}
+
+impl ProjectSpec {
+    /// The rules that need no disk; that `repo_path` is a git repo is checked when it is saved.
+    pub fn validate(&self) -> Result<()> {
+        check_name("project", &self.name)?;
+        if self.repo_path.trim().is_empty() {
+            return Err(Error::Invalid("a project needs its repo folder".into()));
+        }
+        check_git_name("the remote", &self.remote)?;
+        if let Some(branch) = &self.default_branch {
+            check_git_name("the default branch", branch)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Project {
+    pub id: String,
+    pub team_id: String,
+    pub created_at: String,
+    pub updated_at: String,
+    #[serde(flatten)]
+    pub spec: ProjectSpec,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Team {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub members: Vec<TeamMember>,
+    pub projects: Vec<Project>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// A workflow as it is saved (teams spec section 4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkflowSpec {
+    pub name: String,
+    pub definition: crate::workflow::Definition,
+    #[serde(default = "yes")]
+    pub enabled: bool,
+}
+
+impl WorkflowSpec {
+    /// Its name and its definition against the team's `members` (dot ids).
+    pub fn validate(&self, members: &[String]) -> Result<()> {
+        check_name("workflow", &self.name)?;
+        self.definition.validate(members)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Workflow {
+    pub id: String,
+    pub team_id: String,
+    pub created_at: String,
+    pub updated_at: String,
+    /// Why it cannot start now, when the team changed under it (a member it names was deleted
+    /// or removed): the refusal its definition would get if it were saved now.
+    pub problem: Option<String>,
+    #[serde(flatten)]
+    pub spec: WorkflowSpec,
+}
+
+str_enum!(WorkflowTrigger {
+    Chat => "chat",
+    Manual => "manual",
+    Schedule => "schedule",
+    Webhook => "webhook",
+});
+str_enum!(WorkflowRunStatus {
+    Running => "running",
+    Waiting => "waiting",
+    Succeeded => "succeeded",
+    Failed => "failed",
+    Cancelled => "cancelled",
+});
+// What a waiting workflow run waits for: the person's check, more budget, a send-back past the
+// cap, or a decision about a failed step (retry or stop).
+str_enum!(WaitingOn {
+    Check => "check",
+    Budget => "budget",
+    SendBacks => "send_backs",
+    StepFailed => "step_failed",
+});
+str_enum!(StepRunStatus {
+    Running => "running",
+    Waiting => "waiting",
+    Succeeded => "succeeded",
+    Failed => "failed",
+    Cancelled => "cancelled",
+    Skipped => "skipped",
+});
+
+impl WorkflowRunStatus {
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, Self::Succeeded | Self::Failed | Self::Cancelled)
+    }
+}
+
+impl StepRunStatus {
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self,
+            Self::Succeeded | Self::Failed | Self::Cancelled | Self::Skipped
+        )
+    }
+}
+
+/// A branch a step produced (teams spec section 6).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BranchRef {
+    pub run_id: String,
+    pub branch: String,
+    pub worktree_path: String,
+    pub base_commit: Option<String>,
+}
+
+/// What a finished step passes to the next ones (teams spec section 6).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Handoff {
+    pub summary: String,
+    pub branches: Vec<BranchRef>,
+    pub outcome: Option<String>,
+}
+
+/// One step's execution inside a workflow run. Times are RFC 3339 UTC.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StepRun {
+    pub id: String,
+    pub workflow_run_id: String,
+    pub step_id: String,
+    pub attempt: u32,
+    pub status: StepRunStatus,
+    pub handoff: Option<Handoff>,
+    /// A check's decision: `{"decision": "approved" | "sent_back", "note": ...}`.
+    pub decision: Option<Value>,
+    pub error: Option<String>,
+    pub started_at: String,
+    pub ended_at: Option<String>,
+}
+
+/// One execution of a workflow (teams spec section 4), with its step runs, oldest first, and
+/// what it has spent (section 9). Times are RFC 3339 UTC.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowRun {
+    pub id: String,
+    pub workflow_id: Option<String>,
+    pub team_id: String,
+    pub definition: crate::workflow::Definition,
+    pub project_id: Option<String>,
+    pub project: ProjectSpec,
+    pub task: String,
+    pub trigger: WorkflowTrigger,
+    pub origin_run_id: Option<String>,
+    /// A test run: its deploy steps push nothing (section 5.1).
+    pub test: bool,
+    pub status: WorkflowRunStatus,
+    pub waiting_on: Option<WaitingOn>,
+    pub current_step: Option<String>,
+    /// The limits now: the definition's, raised by "Add budget".
+    pub budget: crate::workflow::Budget,
+    pub send_backs: u32,
+    /// Dot runs of the workflow run, resume children included.
+    pub spent_runs: u32,
+    /// New input plus output tokens of those runs: `tokens_in - tokens_cache_read + tokens_out`.
+    pub spent_tokens: u64,
+    /// Their tokens read from the prompt cache, shown beside the budget, not counted in it.
+    pub spent_cache_read: u64,
+    /// Time spent not waiting on the person, in milliseconds.
+    pub active_ms: u64,
+    pub error: Option<String>,
+    pub started_at: String,
+    pub ended_at: Option<String>,
+    pub steps: Vec<StepRun>,
+}
+
+/// Input for `Store::create_workflow_run`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewWorkflowRun {
+    pub workflow_id: String,
+    pub team_id: String,
+    pub definition: crate::workflow::Definition,
+    pub project_id: String,
+    pub project: ProjectSpec,
+    pub task: String,
+    pub trigger: WorkflowTrigger,
+    pub origin_run_id: Option<String>,
+    pub test: bool,
+}
+
+/// The fields `Store::set_workflow_run` writes: `None` leaves one as it is, `Some(None)` clears
+/// it. A terminal status also sets `ended_at`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct WorkflowRunChange {
+    pub status: Option<WorkflowRunStatus>,
+    pub waiting_on: Option<Option<WaitingOn>>,
+    pub current_step: Option<Option<String>>,
+    pub budget: Option<crate::workflow::Budget>,
+    pub send_backs: Option<u32>,
+    pub active_ms: Option<u64>,
+    pub clock_at: Option<Option<String>>,
+    pub error: Option<Option<String>>,
+}
+
+/// The fields `Store::set_step_run` writes, as `WorkflowRunChange`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct StepRunChange {
+    pub status: Option<StepRunStatus>,
+    pub handoff: Option<Option<Handoff>>,
+    pub decision: Option<Option<Value>>,
+    pub error: Option<Option<String>>,
+}
+
+/// A workflow a member may start from a chat (`start_workflow`, teams spec section 7): turned
+/// on, without a problem, with a chat trigger that names the member.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StartableWorkflow {
+    pub workflow_id: String,
+    pub workflow: String,
+    pub team: String,
+    /// The team's projects, by name.
+    pub projects: Vec<String>,
 }
 
 str_enum!(WatcherKind { Folder => "folder", Email => "email", Github => "github" });

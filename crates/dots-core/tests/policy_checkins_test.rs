@@ -13,9 +13,9 @@ fn every_preset_allows_the_check_in_tools_after_skill_and_context() {
     assert_eq!(CHECK_IN_TOOLS, ["Notify", "Ask", "FollowUp"]);
     for preset in Preset::ALL {
         let p = Policy::preset(*preset);
-        // `Memory` follows them (dot memory spec section 3), then `App` and `ProposeApp` (app
-        // library spec section 6).
-        let tail: Vec<&str> = p.rules[p.rules.len() - 8..]
+        // `Memory` follows them (dot memory spec section 3), then `Workflow` (teams spec section
+        // 7), then `App` and `ProposeApp` (app library spec section 6).
+        let tail: Vec<&str> = p.rules[p.rules.len() - 9..]
             .iter()
             .map(|r| r.tool.as_str())
             .collect();
@@ -28,6 +28,7 @@ fn every_preset_allows_the_check_in_tools_after_skill_and_context() {
                 "Ask",
                 "FollowUp",
                 "Memory",
+                "Workflow",
                 "App",
                 "ProposeApp"
             ],
@@ -97,13 +98,16 @@ async fn migration_0008_lets_every_policy_that_is_not_custom_check_in() {
         .into();
     before.run(&pool).await.unwrap();
     // A policy as 0007 left it: the preset's rules without the check-in tools, without
-    // `Memory`, which 0012 adds after them, and without `App` and `ProposeApp`, which 0015 adds
-    // after that.
+    // `Memory`, which 0012 adds after them, without `Workflow`, which 0015 adds after that, and
+    // without `App` and `ProposeApp`, which 0016 adds last.
     let old = |preset: Preset| {
         let mut p = Policy::preset(preset);
         p.rules.retain(|r| {
             let tool = r.tool.as_str();
-            !CHECK_IN_TOOLS.contains(&tool) && tool != "Memory" && !APP_TOOLS.contains(&tool)
+            !CHECK_IN_TOOLS.contains(&tool)
+                && tool != "Memory"
+                && tool != "Workflow"
+                && !APP_TOOLS.contains(&tool)
         });
         p
     };
@@ -145,10 +149,11 @@ async fn migration_0008_lets_every_policy_that_is_not_custom_check_in() {
     want.rules.push(Rule::new("Notify", Action::Allow));
     want.rules.push(Rule::new("FollowUp", Action::Allow));
     want.rules.push(Rule::new("Memory", Action::Allow));
+    want.rules.push(Rule::new("Workflow", Action::Allow));
     want.rules
         .extend(APP_TOOLS.map(|tool| Rule::new(tool, Action::Allow)));
     assert_eq!(store.get_dot("D3").await.unwrap().spec.policy, want);
-    // A Custom policy is the person's own: no check-in rule is added. 0015 gives it `App` and
+    // A Custom policy is the person's own: no check-in rule is added. 0016 gives it `App` and
     // `ProposeApp`, as 0007 did `Context`.
     let mut custom = custom;
     custom

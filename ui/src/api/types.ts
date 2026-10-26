@@ -26,6 +26,8 @@ export const TriggerKind = z.enum([
   "follow_up",
   // A run an app started (app library spec section 7).
   "app",
+  // A step of a team's workflow (teams spec section 5).
+  "workflow",
   // A run a watcher started: a file, an email or a GitHub event (watchers spec section 5).
   "watcher",
 ]);
@@ -157,6 +159,10 @@ const runShape = {
   reviewed_at: nullable(z.string()),
   // The failed scheduled run that this run retries.
   retry_of: nullable(z.string()),
+  // The workflow step the run works for (teams spec section 4).
+  workflow_step_run_id: nullable(z.string()),
+  // The part of tokens_in read from the prompt cache.
+  tokens_cache_read: z.number().int(),
 };
 export const Run = z.strictObject(runShape);
 
@@ -190,6 +196,8 @@ export const RunEventData = z.discriminatedUnion("kind", [
     kind: z.literal("usage"),
     tokens_in: z.number().int(),
     tokens_out: z.number().int(),
+    // The part of tokens_in read from the prompt cache; absent from older events.
+    cache_read: z.number().int().optional(),
   }),
   z.strictObject({ kind: z.literal("raw"), line: z.string() }),
   z.strictObject({ kind: z.literal("message"), message: z.unknown() }),

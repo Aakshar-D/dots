@@ -84,7 +84,9 @@ pub fn build_prompt_full(
         .unwrap_or_default();
     match run.trigger {
         TriggerKind::Resume => return message.to_string(),
-        TriggerKind::Chat | TriggerKind::FollowUp if run.session_id.is_some() => {
+        TriggerKind::Chat | TriggerKind::FollowUp | TriggerKind::Workflow
+            if run.session_id.is_some() =>
+        {
             return message.to_string()
         }
         _ => {}
@@ -130,6 +132,11 @@ pub fn build_prompt_full(
             out.push('\n');
         }
         out.push('\n');
+    } else if let Some(section) = workflow_section(run) {
+        // A workflow step (teams spec section 5.2): the workflow, the task and the hand-offs,
+        // written by the workflow run.
+        out.push_str(section.trim());
+        out.push_str("\n\n");
     } else if run.trigger == TriggerKind::FollowUp {
         // A follow-up whose thread could not be resumed (check-ins spec section 6).
         out.push_str("## Follow-up\n\n");
@@ -183,4 +190,16 @@ pub fn build_prompt_full(
         out.push('\n');
     }
     out
+}
+
+/// The `## Workflow` section a workflow run wrote into the payload of a step's run.
+fn workflow_section(run: &Run) -> Option<&str> {
+    if run.trigger != TriggerKind::Workflow {
+        return None;
+    }
+    run.payload
+        .as_ref()?
+        .pointer("/workflow/section")?
+        .as_str()
+        .filter(|s| !s.trim().is_empty())
 }

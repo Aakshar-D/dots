@@ -277,6 +277,7 @@ impl Session {
             let usage = EngineEvent::Usage {
                 tokens_in: completion.tokens_in,
                 tokens_out: completion.tokens_out,
+                cache_read: 0,
             };
             if !self.emit(usage).await || !self.push(completion.message.clone()).await {
                 return;
@@ -440,6 +441,21 @@ impl Session {
                     tools::checkins::run(checkins, &self.ctx.run_id, call.name, &call.input).await
                 }
                 None => ToolOutput::err(format!("{} is not available in this run", call.name)),
+            };
+        }
+        if crate::team_tools::Tool::from_name(call.name).is_some() {
+            let workflows = self.checkins.as_ref().and_then(CheckIns::workflows);
+            return match workflows {
+                Some(workflows) if !self.ctx.tools.startable().is_empty() => {
+                    tools::team::run(
+                        &workflows,
+                        &self.ctx.run_id,
+                        self.ctx.tools.startable(),
+                        &call.input,
+                    )
+                    .await
+                }
+                _ => ToolOutput::err(format!("{} is not available in this run", call.name)),
             };
         }
         if crate::memory::Tool::from_name(call.name).is_some() {

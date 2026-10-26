@@ -60,6 +60,14 @@ pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
     if let Some(apps) = ctx.tools.apps() {
         allow.extend(apps.model_names(EngineKind::Claude));
     }
+    // And of `start_workflow`, for a run that may start a workflow (teams spec section 7).
+    if !ctx.tools.startable().is_empty() {
+        allow.push(
+            crate::team_tools::Tool::StartWorkflow
+                .model_name(EngineKind::Claude)
+                .to_string(),
+        );
+    }
     if !allow.is_empty() {
         a.push("--allowedTools".into());
         a.extend(allow);

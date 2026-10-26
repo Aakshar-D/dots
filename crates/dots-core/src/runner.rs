@@ -17,14 +17,14 @@ use crate::checkins::{CheckIns, Tool as CheckInTool};
 use crate::engine::{Engine, EngineEvent, RunContext};
 use crate::events::{Bus, RuntimeEvent};
 use crate::model::{
-    ApprovalStatus, EngineKind, NewRun, Run, RunStatus, TriggerKind, WorkspaceMode,
+    ApprovalStatus, Dot, EngineKind, NewRun, Run, RunStatus, TriggerKind, WorkspaceMode,
 };
 use crate::prompt::{build_prompt_full, context_tool_name, PromptParts};
 use crate::run_tools::{CloseOnDrop, OpenRequest, RunTools};
 use crate::store::Store;
 use crate::util::{ct_eq, new_token};
 use crate::vault::{DotScope, Vault};
-use crate::workspace::{Prepared, WorkspaceManager};
+use crate::workspace::{default_branch_ref, Prepared, WorkspaceManager};
 use crate::{Error, Result};
 
 /// The name the run's model knows a policy tool by: the `Context` tool is `mcp__dots__context`
@@ -39,6 +39,8 @@ fn model_tool_name<'a>(tool: &'a str, input: &Value, engine: EngineKind) -> Cow<
         Cow::Borrowed(check_in.model_name(engine))
     } else if tool == crate::memory::POLICY_NAME {
         Cow::Borrowed(crate::memory::Tool::for_input(input).model_name(engine))
+    } else if tool == crate::team_tools::POLICY_NAME {
+        Cow::Borrowed(crate::team_tools::Tool::for_input(input).model_name(engine))
     } else if tool == crate::apps::PROPOSE_POLICY {
         Cow::Owned(match engine {
             EngineKind::Claude => format!("mcp__dots__{}", crate::apps::propose::TOOL),
@@ -56,6 +58,38 @@ fn model_tool_name<'a>(tool: &'a str, input: &Value, engine: EngineKind) -> Cow<
 /// How every resume prompt ends.
 const CONTINUE: &str = "Continue the task, then end with your summary.";
 
+/// The longest summary line a commit message of Dots takes, in characters.
+const COMMIT_LINE: usize = 72;
+
+/// What a run of a workflow step takes from its workflow run (teams spec sections 6.1 and 8):
+/// the project's repo, where its worktree is made; the project's default branch, if it names
+/// one, and its remote; and the step's name, for the commit Dots makes.
+struct StepContext {
+    repo: String,
+    default_branch: Option<String>,
+    remote: String,
+    step_name: String,
+}
+
+/// The dot as its run's workspace sees it: a run of a workflow step works in the project's
+/// repo, not in its dot's folder.
+fn workspace_dot(dot: &Dot, step: Option<&StepContext>) -> Dot {
+    let mut dot = dot.clone();
+    if let Some(step) = step {
+        dot.spec.workdir = step.repo.clone();
+    }
+    dot
+}
+
+/// The commit message of a step's leftover work: `<step name>: <first line of the summary>`.
+fn commit_message(step: &StepContext, summary: Option<&str>) -> String {
+    let line = summary
+        .and_then(|s| s.lines().map(str::trim).find(|l| !l.is_empty()))
+        .unwrap_or("work in progress");
+    let line: String = line.chars().take(COMMIT_LINE).collect();
+    format!("{}: {line}", step.step_name)
+}
+
 #[derive(Debug, Clone)]
 pub struct RunnerConfig {
     pub max_concurrent: usize,
@@ -68,6 +102,9 @@ pub struct RunnerConfig {
 
 struct Active {
     dot_id: String,
+    /// A run of a workflow step: it does not keep its dot's other runs waiting, nor waits for
+    /// them (teams spec section 8).
+    workflow: bool,
     cancel: CancellationToken,
     cancelled_by_user: Arc<AtomicBool>,
 }
@@ -234,6 +271,25 @@ impl Runner {
             .map(|(_, run)| run.clone())
     }
 
+    /// Whether `run` may start workflows: it is no step of a workflow, and the person's chat is
+    /// at the root of its resumes (a follow-up, scheduled, webhook or manual run is not).
+    async fn may_start_workflows(&self, run: &Run) -> bool {
+        if run.workflow_step_run_id.is_some() {
+            return false;
+        }
+        let mut cur = run.clone();
+        while cur.trigger == TriggerKind::Resume {
+            let Some(parent) = cur.parent_run_id.clone() else {
+                return false;
+            };
+            match self.store.get_run(&parent).await {
+                Ok(p) => cur = p,
+                Err(_) => return false,
+            }
+        }
+        cur.trigger == TriggerKind::Chat
+    }
+
     /// Makes the run's open tools reachable through the MCP gateway (`POST /mcp/s/<server>`,
     /// spec section 5) until the run ends.
     pub fn register_tools(&self, run_id: &str, tools: Arc<RunTools>) {
@@ -363,13 +419,19 @@ impl Runner {
                 if active.len() >= self.cfg.max_concurrent {
                     break;
                 }
-                if active.contains_key(&run.id) || active.values().any(|a| a.dot_id == run.dot_id) {
+                let workflow = run.workflow_step_run_id.is_some();
+                let dot_busy = !workflow
+                    && active
+                        .values()
+                        .any(|a| a.dot_id == run.dot_id && !a.workflow);
+                if active.contains_key(&run.id) || dot_busy {
                     continue;
                 }
                 active.insert(
                     run.id.clone(),
                     Active {
                         dot_id: run.dot_id.clone(),
+                        workflow,
                         cancel: cancel.clone(),
                         cancelled_by_user: by_user.clone(),
                     },
@@ -615,6 +677,12 @@ impl Runner {
             new.base_commit = run.base_commit.clone();
             new
         });
+        // Closed without a follow-up: nothing will use the workspace again. Cleaned up before
+        // the parent reads as ended, so a step's hand-off, built once every run of the step has
+        // ended, finds Dots' commit of what the run left (teams spec section 6.1).
+        if child.is_none() {
+            self.cleanup_workspace(&run).await;
+        }
         // One transaction: grants, resolved flags, queued calls, child run and closing the
         // parent either all happen or none do, so a failure never loses a decision.
         let resolved: Vec<String> = decided.iter().map(|a| a.id.clone()).collect();
@@ -628,33 +696,127 @@ impl Runner {
             Err(Error::Conflict(_)) => return Ok(None),
             Err(e) => return Err(e),
         };
-        match &child {
-            Some(c) => {
-                self.emit_run(c);
-                self.wake.notify_one();
-            }
-            // Closed without a follow-up: nothing will use the workspace again.
-            None => self.cleanup_workspace(&run).await,
+        if let Some(c) = &child {
+            self.emit_run(c);
+            self.wake.notify_one();
         }
         self.emit_run(&self.store.get_run(run_id).await?);
         Ok(child)
     }
 
-    /// Removes the run's worktree if it is unchanged; errors are logged, never returned.
+    /// Removes the run's worktree if it is unchanged; errors are logged, never returned. A run
+    /// of a workflow step first has its leftover work committed (`finish_workspace`).
     async fn cleanup_workspace(&self, run: &Run) {
         let Some(prepared) = Prepared::from_run(run) else {
             return;
         };
-        let result = match self.store.get_dot(&run.dot_id).await {
-            Ok(dot) => self
-                .workspaces
-                .cleanup_if_unchanged(&dot, &prepared)
-                .await
-                .map(|_| ()),
-            Err(e) => Err(e),
-        };
+        let result = async {
+            let dot = self.store.get_dot(&run.dot_id).await?;
+            let step = self.step_context(run).await?;
+            let ws_dot = workspace_dot(&dot, step.as_ref());
+            self.finish_workspace(
+                run,
+                &ws_dot,
+                step.as_ref(),
+                &prepared,
+                run.summary.as_deref(),
+            )
+            .await;
+            Ok::<_, Error>(())
+        }
+        .await;
         if let Err(e) = result {
             tracing::warn!(run = %run.id, "workspace cleanup failed: {e}");
+        }
+    }
+
+    /// The workflow step a run works for, as its workspace needs it; `None` for an ordinary run.
+    async fn step_context(&self, run: &Run) -> Result<Option<StepContext>> {
+        let Some(step_run_id) = &run.workflow_step_run_id else {
+            return Ok(None);
+        };
+        let step = self.store.get_step_run(step_run_id).await?;
+        let workflow_run = self.store.get_workflow_run(&step.workflow_run_id).await?;
+        let step_name = workflow_run
+            .definition
+            .step(&step.step_id)
+            .map(|(_, s)| s.name.clone())
+            .unwrap_or(step.step_id);
+        Ok(Some(StepContext {
+            repo: workflow_run.project.repo_path,
+            default_branch: workflow_run.project.default_branch,
+            remote: workflow_run.project.remote,
+            step_name,
+        }))
+    }
+
+    /// What happens to a run's worktree when the run stops for good: a run of a workflow step has
+    /// what it left uncommitted committed by Dots (teams spec section 6.1; a failure is a notice
+    /// on the run), then an unchanged worktree is removed. Errors are logged, never returned.
+    async fn finish_workspace(
+        &self,
+        run: &Run,
+        ws_dot: &Dot,
+        step: Option<&StepContext>,
+        prepared: &Prepared,
+        summary: Option<&str>,
+    ) {
+        if let Some(step) = step {
+            if let Err(e) = self.commit_step(step, prepared, summary).await {
+                tracing::warn!(run = %run.id, "committing the step's work failed: {e}");
+                let text = format!("Dots could not commit the changes: {e}");
+                if let Err(e) = self.record(&run.id, &EngineEvent::Notice { text }).await {
+                    tracing::warn!(run = %run.id, "recording the notice failed: {e}");
+                }
+            }
+        }
+        if let Err(e) = self.workspaces.cleanup_if_unchanged(ws_dot, prepared).await {
+            tracing::warn!(run = %run.id, "workspace cleanup failed: {e}");
+        }
+    }
+
+    /// Dots' commit of what a run of a workflow step left uncommitted in its worktree (teams
+    /// spec section 6.1). A worktree that is gone, or has nothing left to commit, is left as
+    /// it is.
+    async fn commit_step(
+        &self,
+        step: &StepContext,
+        prepared: &Prepared,
+        summary: Option<&str>,
+    ) -> Result<()> {
+        if prepared.branch.is_none() || !prepared.path.is_dir() {
+            return Ok(());
+        }
+        // A path that does not exist, beside the worktrees folder in Dots' data folder
+        // (`<data>/worktrees`), so no agent's workspace (`<data>/worktrees/<run>`) has it at
+        // `../`: git finds no hook there.
+        let no_hooks = self.cfg.worktrees_dir.with_file_name("no-hooks");
+        let message = commit_message(step, summary);
+        self.workspaces
+            .commit_leftovers(prepared, &message, &no_hooks)
+            .await?;
+        Ok(())
+    }
+
+    /// Commits what the run of a workflow step left uncommitted, as the run's end does. A
+    /// step's hand-off calls it before it reads the step's branch, so the next step never
+    /// starts from a tip without that work, even when the run's end did not get to commit it.
+    /// A worktree already clean or gone is left as it is. Errors are logged, never returned:
+    /// the run's end has already put its own failure on the run as a notice.
+    pub async fn commit_step_work(&self, run: &Run) {
+        let Some(prepared) = Prepared::from_run(run) else {
+            return;
+        };
+        let committed = match self.step_context(run).await {
+            Ok(Some(step)) => {
+                self.commit_step(&step, &prepared, run.summary.as_deref())
+                    .await
+            }
+            Ok(None) => Ok(()),
+            Err(e) => Err(e),
+        };
+        if let Err(e) = committed {
+            tracing::warn!(run = %run.id, "committing the step's work failed: {e}");
         }
     }
 
@@ -666,9 +828,15 @@ impl Runner {
             EngineEvent::Usage {
                 tokens_in,
                 tokens_out,
+                cache_read,
             } => {
                 self.store
-                    .add_usage(run_id, *tokens_in as i64, *tokens_out as i64)
+                    .add_usage(
+                        run_id,
+                        *tokens_in as i64,
+                        *tokens_out as i64,
+                        *cache_read as i64,
+                    )
                     .await?
             }
             _ => {}
@@ -709,6 +877,14 @@ impl Runner {
         if let Some(reason) = engine.unavailable() {
             return Err(Error::Other(reason));
         }
+        // A run of a workflow step works in the project's repo (teams spec section 8). One that
+        // continues the thread of a step that has ended works there no more, nor for the
+        // workflow: it fails before its workspace is touched.
+        if self.store.in_ended_step_thread(run).await? {
+            return Err(Error::Other(
+                crate::workflows::ENDED_STEP_THREAD.to_string(),
+            ));
+        }
         // A dot whose org is no longer joined does not start, and a stale org is fetched
         // before its variables resolve (env vault spec §6.4), before any folder is made.
         let vault = self
@@ -717,6 +893,8 @@ impl Runner {
             .cloned()
             .unwrap_or_else(|| Vault::in_memory(self.store.clone()));
         vault.before_run(&dot).await?;
+        let step = self.step_context(run).await?;
+        let ws_dot = workspace_dot(&dot, step.as_ref());
         let prepared = match Prepared::from_run(run) {
             Some(p) if p.path.is_dir() => {
                 // A resumed or follow-up run works in the folder its row names, and the
@@ -736,10 +914,29 @@ impl Runner {
                     && p.branch.is_some()
                     && p.base_commit.is_some() =>
             {
-                self.workspaces.restore(&dot, &p).await?
+                self.workspaces.restore(&ws_dot, &p).await?
             }
             _ => {
-                let p = self.workspaces.prepare(&dot, &run.id).await?;
+                // A step's first run starts where the workflow says: an earlier step's branch,
+                // else the project's default branch, else the repo's.
+                let mut start = run
+                    .payload
+                    .as_ref()
+                    .and_then(|p| p.pointer("/workflow/start"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                if start.is_none() {
+                    if let Some(s) = &step {
+                        if let Some(branch) = &s.default_branch {
+                            let repo = std::path::Path::new(&s.repo);
+                            start = Some(default_branch_ref(repo, branch, &s.remote).await);
+                        }
+                    }
+                }
+                let p = self
+                    .workspaces
+                    .prepare_from(&ws_dot, &run.id, start.as_deref())
+                    .await?;
                 self.store
                     .set_workspace(
                         &run.id,
@@ -792,12 +989,36 @@ impl Runner {
         // The run's apps (app library spec section 6).
         let tools =
             crate::apps::run::attach(self.apps.get(), &dot, &run.id, tools, &mut notices).await?;
+        // A chat run may start its dot's team workflows (teams spec section 7), unless its
+        // policy denies `Workflow` outright: the tool is then neither offered nor listed. A list
+        // that cannot be read is logged and left empty; the person's chat goes on without it.
+        let workflow_off = dot
+            .spec
+            .policy
+            .resolve(crate::policy::WORKFLOW_TOOL, &Value::Null)
+            == crate::policy::Action::Deny;
+        let tools = if !workflow_off && self.may_start_workflows(run).await {
+            let startable = match self.store.startable_workflows(&dot.id).await {
+                Ok(startable) => startable,
+                Err(e) => {
+                    tracing::warn!(run = %run.id, "listing the workflows it may start failed: {e}");
+                    Vec::new()
+                }
+            };
+            tools.with_startable(startable)
+        } else {
+            tools
+        };
         let tools = Arc::new(tools);
         let _closer = CloseOnDrop(tools.clone());
         if cancel.is_cancelled() {
             tools.close().await;
             self.remove_attachments(&prepared.path, &run.root_run_id);
-            if let Err(e) = self.workspaces.cleanup_if_unchanged(&dot, &prepared).await {
+            if let Err(e) = self
+                .workspaces
+                .cleanup_if_unchanged(&ws_dot, &prepared)
+                .await
+            {
                 tracing::warn!(run = %run.id, "workspace cleanup failed: {e}");
             }
             return self.finish_cancelled_before_start(&run.id).await;
@@ -820,22 +1041,29 @@ impl Runner {
         let memories = self.store.list_memories(&dot.id).await?;
         let secret = self.register_secret(&run.id);
         self.register_tools(&run.id, tools.clone());
+        let mut prompt = build_prompt_full(
+            &dot,
+            run,
+            &prepared.path,
+            chrono::Local::now(),
+            &global,
+            PromptParts {
+                contexts: tools.contexts(),
+                memories: &memories,
+                apps: tools.apps().map(|apps| apps.as_ref()),
+            },
+        );
+        // A chat's first prompt lists the workflows it may start (teams spec section 7).
+        let startable = crate::team_tools::prompt_section(tools.startable(), dot.spec.engine);
+        if run.session_id.is_none() && !startable.is_empty() {
+            prompt.push_str("\n## Workflows you can start\n\n");
+            prompt.push_str(&startable);
+        }
         let ctx = RunContext {
             run_id: run.id.clone(),
             dot: dot.clone(),
             workspace: prepared.path.clone(),
-            prompt: build_prompt_full(
-                &dot,
-                run,
-                &prepared.path,
-                chrono::Local::now(),
-                &global,
-                PromptParts {
-                    contexts: tools.contexts(),
-                    memories: &memories,
-                    apps: tools.apps().map(|apps| apps.as_ref()),
-                },
-            ),
+            prompt,
             session_id: run.session_id.clone(),
             mcp_url: self.cfg.mcp_url.clone(),
             mcp_secret: secret,
@@ -910,11 +1138,11 @@ impl Runner {
             self.store.expire_pending_for_run(&run.id).await?;
         }
         // Clean up before publishing the terminal status so observers that see
-        // `succeeded`/`failed` never find a leftover unchanged worktree.
+        // `succeeded`/`failed` never find a leftover unchanged worktree, nor a step's work left
+        // uncommitted.
         if status != RunStatus::AwaitingApproval {
-            if let Err(e) = self.workspaces.cleanup_if_unchanged(&dot, &prepared).await {
-                tracing::warn!(run = %run.id, "workspace cleanup failed: {e}");
-            }
+            self.finish_workspace(run, &ws_dot, step.as_ref(), &prepared, summary.as_deref())
+                .await;
         }
         let finished = self
             .store

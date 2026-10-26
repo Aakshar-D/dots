@@ -20,8 +20,10 @@ mod orgs;
 mod runs;
 mod schedules;
 mod settings;
+mod teams;
 mod upgrade;
 mod watchers;
+mod workflow_runs;
 
 pub(crate) use upgrade::{auth_scheme, var_name};
 
@@ -60,6 +62,7 @@ impl Store {
         upgrade::finish_0011(&store).await?;
         upgrade::finish_0012(&store.pool).await?;
         upgrade::finish_0015(&store.pool).await?;
+        upgrade::finish_0016(&store.pool).await?;
         Ok(store)
     }
 

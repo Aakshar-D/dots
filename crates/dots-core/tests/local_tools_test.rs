@@ -153,13 +153,14 @@ fn prepare_validates_calls_before_the_policy() {
     assert!(err.contains(".."), "{err}");
     assert_eq!(tools::alias("grep"), Some("Grep"));
     // Every local tool but `skill` and `context`, which a run gets only with skills
-    // (`skill::schema`) and context collections (`context::schema`), and the three check-in
+    // (`skill::schema`) and context collections (`context::schema`), the three check-in
     // tools and the three memory tools, which an engine with check-ins adds
-    // (`checkins::schemas`, `memory::schemas`), and `propose_app`, which an engine with apps
-    // adds.
+    // (`checkins::schemas`, `memory::schemas`), `propose_app`, which an engine with apps
+    // adds, and `start_workflow`, which a chat run that may start a workflow gets
+    // (`team::start_schema`).
     assert_eq!(
         tools::schemas().as_array().unwrap().len(),
-        tools::TOOLS.len() - 9
+        tools::TOOLS.len() - 10
     );
 }
 
@@ -218,6 +219,10 @@ fn a_prepared_input_passes_prepare_again_unchanged() {
         ("forget", json!({"id": "01HX"})),
         ("recall", json!({"query": "pdf"})),
         ("recall", json!({})),
+        (
+            "start_workflow",
+            json!({"workflow": "Fix", "project": "Dots", "task": "Fix the icon."}),
+        ),
     ];
     let mut tools_seen = std::collections::BTreeSet::new();
     for (name, args) in &calls {

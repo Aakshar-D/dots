@@ -101,6 +101,7 @@ const TRIGGER: Record<Run["trigger"], string> = {
   resume: "Continued",
   follow_up: "Follow-up",
   app: "App",
+  workflow: "Workflow",
   watcher: "Watcher",
 };
 
