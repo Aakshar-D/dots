@@ -5,6 +5,8 @@
 
 pub mod acting;
 pub mod cap;
+pub mod email;
+pub mod files;
 pub mod folder;
 
 use std::collections::HashMap;
@@ -281,16 +283,26 @@ pub enum Poll {
 }
 
 /// Where email and GitHub watchers read; tests point them at fakes.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Sources {
     pub github_api: String,
+    pub mail: Arc<dyn email::MailSource>,
 }
 
 impl Default for Sources {
     fn default() -> Self {
         Sources {
             github_api: "https://api.github.com".to_string(),
+            mail: Arc::new(email::ImapMailSource::gmail()),
         }
+    }
+}
+
+impl std::fmt::Debug for Sources {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Sources")
+            .field("github_api", &self.github_api)
+            .finish_non_exhaustive()
     }
 }
 
@@ -313,11 +325,13 @@ pub struct Watchers {
     reload: Notify,
     tasks: Mutex<HashMap<String, (WatcherConfig, CancellationToken)>>,
     backoffs: Mutex<HashMap<String, Backoff>>,
+    files: files::WatcherFiles,
 }
 
 impl Watchers {
     pub fn new(deps: WatcherDeps) -> Arc<Watchers> {
         Arc::new(Watchers {
+            files: files::WatcherFiles::new(deps.data_dir.join("watchers")),
             deps,
             paused: AtomicBool::new(false),
             reload: Notify::new(),
@@ -365,6 +379,11 @@ impl Watchers {
         &self.deps.acting
     }
 
+    /// Where watchers stage files for their runs (`<data_dir>/watchers`).
+    pub fn files(&self) -> &files::WatcherFiles {
+        &self.files
+    }
+
     fn updated(&self, watcher: &Watcher) {
         let _ = self.deps.bus.send(RuntimeEvent::WatcherUpdated {
             dot_id: watcher.dot_id.clone(),
@@ -402,6 +421,7 @@ impl Watchers {
 
     pub async fn delete(&self, id: &str) -> Result<()> {
         let watcher = self.deps.store.delete_watcher(id).await?;
+        self.files.forget_watcher(id);
         self.backoffs.lock().unwrap().remove(id);
         self.stop_task(id);
         self.changed(&watcher);
@@ -471,8 +491,10 @@ impl Watchers {
             map.insert("watcher_id".into(), Value::String(watcher.id.clone()));
             map.insert("watcher_name".into(), Value::String(watcher.name.clone()));
         }
+        let run_id = new_id();
+        self.files.stage(&watcher.id, &run_id, &event.files)?;
         let mut new = NewRun::new(&watcher.dot_id, TriggerKind::Watcher);
-        new.id = Some(new_id());
+        new.id = Some(run_id);
         new.payload = Some(payload);
         let run = self.deps.runner.enqueue(new).await?;
         self.deps
@@ -536,8 +558,9 @@ impl Watchers {
     /// Checks a polling watcher once and says when to check next.
     pub async fn poll_now(&self, watcher_id: &str) -> Result<Poll> {
         let watcher = self.deps.store.get_watcher(watcher_id).await?;
-        match watcher.kind() {
-            WatcherKind::Folder | WatcherKind::Email | WatcherKind::Github => Ok(Poll::Stopped),
+        match &watcher.config {
+            WatcherConfig::Email(config) => email::poll(self, &watcher, config).await,
+            WatcherConfig::Folder(_) | WatcherConfig::Github(_) => Ok(Poll::Stopped),
         }
     }
 
