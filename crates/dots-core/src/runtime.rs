@@ -254,6 +254,11 @@ impl Runtime {
         // Dots' own `dots` MCP server serves the check-in tools to Claude runs.
         runner.set_checkins(checkins.clone());
         runner.set_vault(vault.clone());
+        // What watchers staged for their runs; a crash's leftovers go (watchers spec §4.2).
+        let watcher_files =
+            crate::watchers::files::WatcherFiles::new(cfg.data_dir.join("watchers"));
+        watcher_files.sweep(&store).await;
+        runner.set_watcher_files(watcher_files);
         // Which dots are acting, for the folder watchers (watchers spec section 4.1).
         let acting = crate::watchers::ActingTracker::new(cfg.clock.clone());
         runner.set_acting(acting.clone());

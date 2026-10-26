@@ -165,6 +165,7 @@ async fn main() {
                 .collect::<std::collections::BTreeMap<_, _>>(),
             "mcp_config": mcp,
             "plugin_dirs": plugin_dirs,
+            "attachments": files_below(&std::env::current_dir().unwrap().join("attachments")),
         });
         std::fs::write(out, record.to_string()).unwrap();
     }

@@ -168,6 +168,17 @@ impl Store {
         }
     }
 
+    /// Replaces the run's payload (scrubbed, as `insert_run` stores it): a watcher run's
+    /// attachment paths, once they are in its workspace (watchers spec section 4.2).
+    pub async fn set_run_payload(&self, id: &str, payload: &Value) -> Result<Run> {
+        sqlx::query("UPDATE runs SET payload = ? WHERE id = ?")
+            .bind(global().scrub_json(payload).to_string())
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        self.get_run(id).await
+    }
+
     pub async fn get_run(&self, id: &str) -> Result<Run> {
         let row = sqlx::query(&format!("SELECT {RUN_COLUMNS} FROM runs WHERE id = ?"))
             .bind(id)

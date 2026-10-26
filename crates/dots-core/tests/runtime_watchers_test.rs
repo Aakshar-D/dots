@@ -285,3 +285,122 @@ async fn a_dot_that_writes_into_its_watched_folder_does_not_wake_itself() {
     tokio::time::sleep(Duration::from_secs(9)).await;
     assert_eq!(watcher_runs().await.len(), 1);
 }
+
+const PASS: &str = "app-pass-1234567890";
+
+/// A runtime whose email watchers read `mail`, with the app password in its vault.
+async fn start_mail(mail: common::fake_mail::FakeMail) -> Rt {
+    let dir = tempfile::tempdir().unwrap();
+    let args_out = dir.path().join("args.json");
+    let mut cfg = Config::new(dir.path().join("data"));
+    cfg.port = 0;
+    cfg.claude_path = Some(PathBuf::from(env!("CARGO_BIN_EXE_fake-claude")));
+    cfg.claude_env.push((
+        "FAKE_CLAUDE_ARGS_OUT".into(),
+        args_out.to_string_lossy().to_string(),
+    ));
+    cfg.watcher_sources.mail = std::sync::Arc::new(mail);
+    let rt = Runtime::start(cfg).await.unwrap();
+    rt.vault()
+        .add(
+            "GMAIL_APP_PASSWORD",
+            dots_core::vault::EntryKind::Secret,
+            PASS,
+        )
+        .await
+        .unwrap();
+    Rt { dir, rt, args_out }
+}
+
+fn invoice_event() -> dots_core::watchers::SourceEvent {
+    dots_core::watchers::SourceEvent {
+        payload: json!({"source": "email", "from": "billing@acme.com", "to": "me@gmail.com",
+            "subject": "Invoice 12", "date": "", "message_id": "12@acme.com", "body": "Attached.",
+            "attachments": [{"name": "invoice.pdf", "size": 4, "path": null},
+                            {"name": "huge.bin", "size": 30000000, "skipped": "too large"}]}),
+        files: vec![("invoice.pdf".into(), b"%PDF".to_vec())],
+    }
+}
+
+async fn email_watcher(t: &Rt, dot: &dots_core::model::Dot) -> dots_core::model::Watcher {
+    let config = dots_core::model::EmailConfig::new("me@gmail.com", "GMAIL_APP_PASSWORD");
+    t.rt.watcher_add(&dot.id, "Billing mail", WatcherConfig::Email(config))
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_watcher_runs_attachments_are_in_its_workspace_while_it_runs_and_gone_after() {
+    let t = start_mail(common::fake_mail::FakeMail::new(PASS)).await;
+    let dot = folder_dot(&t, "filer").await;
+    let w = email_watcher(&t, &dot).await;
+    let dots_core::watchers::Fired::Run(run) =
+        t.rt.watchers().fire(&w.id, invoice_event()).await.unwrap()
+    else {
+        panic!("a run")
+    };
+    let staged = t
+        .dir
+        .path()
+        .join("data")
+        .join("watchers")
+        .join(&w.id)
+        .join(&run.id);
+    assert!(staged.join("invoice.pdf").is_file());
+    let done = common::wait_status(
+        t.rt.store(),
+        &run.id,
+        dots_core::model::RunStatus::Succeeded,
+        30,
+    )
+    .await;
+    let work = t.dir.path().join("work");
+    let copy = work.join("attachments").join(&run.id).join("invoice.pdf");
+    assert_eq!(
+        done.payload.unwrap()["attachments"],
+        json!([{"name": "invoice.pdf", "size": 4, "path": copy.to_string_lossy()},
+               {"name": "huge.bin", "size": 30000000, "skipped": "too large"}])
+    );
+    // The CLI found the copy when it started.
+    let record: Value =
+        serde_json::from_str(&std::fs::read_to_string(&t.args_out).unwrap()).unwrap();
+    assert_eq!(
+        record["attachments"],
+        json!([format!("{}/invoice.pdf", run.id)])
+    );
+    assert!(!work.join("attachments").exists());
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while staged.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the staged copy stayed"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[tokio::test]
+async fn attachments_never_show_as_a_worktree_runs_changes() {
+    let t = start_mail(common::fake_mail::FakeMail::new(PASS)).await;
+    let repo = t.dir.path().join("repo");
+    common::init_repo(&repo);
+    let mut s = spec("tree");
+    s.workdir = repo.to_string_lossy().to_string();
+    let dot = t.rt.create_dot(s).await.unwrap();
+    let w = email_watcher(&t, &dot).await;
+    let dots_core::watchers::Fired::Run(run) =
+        t.rt.watchers().fire(&w.id, invoice_event()).await.unwrap()
+    else {
+        panic!("a run")
+    };
+    let done = common::wait_status(
+        t.rt.store(),
+        &run.id,
+        dots_core::model::RunStatus::Succeeded,
+        30,
+    )
+    .await;
+    assert!(done.branch.is_some());
+    // Unchanged once its attachments went: the worktree was removed.
+    assert!(!std::path::Path::new(done.workspace_path.as_deref().unwrap()).exists());
+}
