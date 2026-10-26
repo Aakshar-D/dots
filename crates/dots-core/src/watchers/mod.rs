@@ -8,6 +8,7 @@ pub mod cap;
 pub mod email;
 pub mod files;
 pub mod folder;
+pub mod github;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -326,6 +327,10 @@ pub struct Watchers {
     tasks: Mutex<HashMap<String, (WatcherConfig, CancellationToken)>>,
     backoffs: Mutex<HashMap<String, Backoff>>,
     files: files::WatcherFiles,
+    /// The GitHub login behind each watcher's token, asked once.
+    logins: Mutex<HashMap<String, String>>,
+    /// The last ETag and answer of each (watcher, URL) GitHub answered.
+    etags: Mutex<HashMap<(String, String), (String, Value)>>,
 }
 
 impl Watchers {
@@ -337,6 +342,8 @@ impl Watchers {
             reload: Notify::new(),
             tasks: Mutex::new(HashMap::new()),
             backoffs: Mutex::new(HashMap::new()),
+            logins: Mutex::new(HashMap::new()),
+            etags: Mutex::new(HashMap::new()),
         })
     }
 
@@ -415,6 +422,7 @@ impl Watchers {
         let config = check_config(&self.deps.store, &config).await?;
         let watcher = self.deps.store.update_watcher(id, &name, &config).await?;
         self.backoffs.lock().unwrap().remove(id);
+        self.forget_remote(id);
         self.changed(&watcher);
         Ok(watcher)
     }
@@ -423,6 +431,7 @@ impl Watchers {
         let watcher = self.deps.store.delete_watcher(id).await?;
         self.files.forget_watcher(id);
         self.backoffs.lock().unwrap().remove(id);
+        self.forget_remote(id);
         self.stop_task(id);
         self.changed(&watcher);
         Ok(())
@@ -560,8 +569,15 @@ impl Watchers {
         let watcher = self.deps.store.get_watcher(watcher_id).await?;
         match &watcher.config {
             WatcherConfig::Email(config) => email::poll(self, &watcher, config).await,
-            WatcherConfig::Folder(_) | WatcherConfig::Github(_) => Ok(Poll::Stopped),
+            WatcherConfig::Github(config) => github::poll(self, &watcher, config).await,
+            WatcherConfig::Folder(_) => Ok(Poll::Stopped),
         }
+    }
+
+    /// Forgets what a GitHub watcher knew of its token and answers.
+    fn forget_remote(&self, id: &str) {
+        self.logins.lock().unwrap().remove(id);
+        self.etags.lock().unwrap().retain(|(w, _), _| w != id);
     }
 
     fn stop_task(&self, id: &str) {
