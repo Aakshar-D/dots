@@ -10,7 +10,8 @@ use crate::{Error, Result};
 
 const RUN_COLUMNS: &str = "id, dot_id, root_run_id, parent_run_id, trigger_kind, payload, status, \
     session_id, workspace_path, branch, base_commit, summary, error, tokens_in, tokens_out, \
-    queued_at, started_at, ended_at, reviewed_at, retry_of";
+    queued_at, started_at, ended_at, reviewed_at, retry_of, workflow_step_run_id, \
+    tokens_cache_read";
 
 fn run_from_row(row: &SqliteRow) -> Result<Run> {
     Ok(Run {
@@ -34,6 +35,8 @@ fn run_from_row(row: &SqliteRow) -> Result<Run> {
         ended_at: row.try_get("ended_at")?,
         reviewed_at: row.try_get("reviewed_at")?,
         retry_of: row.try_get("retry_of")?,
+        workflow_step_run_id: row.try_get("workflow_step_run_id")?,
+        tokens_cache_read: row.try_get("tokens_cache_read")?,
     })
 }
 
@@ -50,10 +53,17 @@ fn event_from_row(row: &SqliteRow) -> Result<RunEventRecord> {
 pub(super) async fn insert_run(conn: &mut SqliteConnection, new: &NewRun) -> Result<String> {
     let id = new.id.clone().unwrap_or_else(new_id);
     let root = new.root_run_id.clone().unwrap_or_else(|| id.clone());
+    // A run that continues another (a resume, a chat reply, an answer, a follow-up) works for
+    // the same workflow step as its parent, unless it names one (teams spec section 4); only
+    // while that step is open, so a step that has ended takes in no more runs.
     sqlx::query(
         "INSERT INTO runs (id, dot_id, root_run_id, parent_run_id, trigger_kind, payload, \
-         status, session_id, workspace_path, branch, base_commit, queued_at, retry_of) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         status, session_id, workspace_path, branch, base_commit, queued_at, retry_of, \
+         workflow_step_run_id) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
+         COALESCE(?, (SELECT r.workflow_step_run_id FROM runs r \
+         JOIN workflow_step_runs s ON s.id = r.workflow_step_run_id \
+         WHERE r.id = ? AND s.status IN ('running', 'waiting'))))",
     )
     .bind(&id)
     .bind(&new.dot_id)
@@ -72,6 +82,8 @@ pub(super) async fn insert_run(conn: &mut SqliteConnection, new: &NewRun) -> Res
     .bind(&new.base_commit)
     .bind(now())
     .bind(&new.retry_of)
+    .bind(&new.workflow_step_run_id)
+    .bind(&new.parent_run_id)
     .execute(conn)
     .await?;
     Ok(id)
@@ -276,10 +288,14 @@ impl Store {
         Ok(runs)
     }
 
+    /// The queued runs that may start, oldest first: a dot runs one ordinary run at a time, and
+    /// a run of a workflow step whenever a slot is free (teams spec section 8).
     pub async fn dispatchable_runs(&self) -> Result<Vec<Run>> {
         let rows = sqlx::query(&format!(
-            "SELECT {RUN_COLUMNS} FROM runs r WHERE r.status = 'queued' AND NOT EXISTS \
-             (SELECT 1 FROM runs x WHERE x.dot_id = r.dot_id AND x.status = 'running') \
+            "SELECT {RUN_COLUMNS} FROM runs r WHERE r.status = 'queued' AND \
+             (r.workflow_step_run_id IS NOT NULL OR NOT EXISTS \
+             (SELECT 1 FROM runs x WHERE x.dot_id = r.dot_id AND x.status = 'running' \
+             AND x.workflow_step_run_id IS NULL)) \
              ORDER BY r.queued_at, r.id"
         ))
         .fetch_all(&self.pool)
@@ -342,12 +358,22 @@ impl Store {
         Ok(())
     }
 
-    pub async fn add_usage(&self, id: &str, tokens_in: i64, tokens_out: i64) -> Result<()> {
+    /// Adds a usage report to the run; `cache_read` is the part of `tokens_in` read from the
+    /// prompt cache.
+    pub async fn add_usage(
+        &self,
+        id: &str,
+        tokens_in: i64,
+        tokens_out: i64,
+        cache_read: i64,
+    ) -> Result<()> {
         sqlx::query(
-            "UPDATE runs SET tokens_in = tokens_in + ?, tokens_out = tokens_out + ? WHERE id = ?",
+            "UPDATE runs SET tokens_in = tokens_in + ?, tokens_out = tokens_out + ?, \
+             tokens_cache_read = tokens_cache_read + ? WHERE id = ?",
         )
         .bind(tokens_in)
         .bind(tokens_out)
+        .bind(cache_read)
         .bind(id)
         .execute(&self.pool)
         .await?;

@@ -100,6 +100,7 @@ const TRIGGER: Record<Run["trigger"], string> = {
   chat: "Chat",
   resume: "Continued",
   follow_up: "Follow-up",
+  workflow: "Workflow",
   watcher: "Watcher",
 };
 

@@ -127,6 +127,10 @@ pub struct Runtime {
     /// The dot whose conversation the person has open in the focused window (needs-you spec
     /// section 3).
     viewing: Viewing,
+    /// Teams, their projects and workflows (teams spec section 11).
+    teams: crate::teams::Teams,
+    /// The workflow runs and their loop (teams spec sections 5 to 8).
+    workflows: Arc<crate::workflows::Workflows>,
     /// The orgs joined on this PC (env vault spec §6), the vault's, and their timers.
     orgs: Orgs,
     org_timers: OrgTimers,
@@ -361,6 +365,19 @@ impl Runtime {
         follow_ups.set_paused(settings.schedules_paused);
         follow_ups.spawn(runner.clone(), shutdown.clone());
         let viewing = Viewing::default();
+        let teams = crate::teams::Teams::new(store.clone(), bus.clone());
+        // Started after the dispatcher and after interrupted runs were failed, so its first
+        // pass sees each workflow's runs as they are.
+        let workflows = crate::workflows::Workflows::new(
+            store.clone(),
+            bus.clone(),
+            runner.clone(),
+            cfg.clock.clone(),
+        );
+        workflows.spawn(shutdown.clone());
+        // The workflow tools reach the workflow runs through the check-ins (teams spec
+        // section 7).
+        checkins.set_workflows(&workflows);
         watch_viewing(
             store.clone(),
             bus.clone(),
@@ -399,6 +416,8 @@ impl Runtime {
             follow_ups,
             browsers,
             viewing,
+            teams,
+            workflows,
             orgs,
             org_timers,
             shutdown,
@@ -805,6 +824,16 @@ impl Runtime {
         &self.checkins
     }
 
+    /// Teams, their projects and workflows.
+    pub fn teams(&self) -> &crate::teams::Teams {
+        &self.teams
+    }
+
+    /// The workflow runs: start, approve a check, retry a step, stop.
+    pub fn workflows(&self) -> &Arc<crate::workflows::Workflows> {
+        &self.workflows
+    }
+
     /// The follow-ups dots scheduled: what the `follow_up*` commands call.
     pub fn follow_ups(&self) -> &Arc<FollowUps> {
         &self.follow_ups
@@ -999,6 +1028,10 @@ impl Runtime {
                         .into(),
                 ));
             };
+            // A step's chat ends with the step (teams spec section 8).
+            if self.store.in_ended_step_thread(parent).await? {
+                return Err(Error::Conflict(crate::workflows::ENDED_STEP_THREAD.into()));
+            }
             if parent.session_id.is_none() {
                 return Err(Error::Conflict(
                     "this chat cannot be continued because its last run ended before the dot \

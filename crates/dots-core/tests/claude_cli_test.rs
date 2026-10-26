@@ -77,7 +77,8 @@ fn parses_results() {
         vec![
             EngineEvent::Usage {
                 tokens_in: 26819,
-                tokens_out: 4
+                tokens_out: 4,
+                cache_read: 10,
             },
             EngineEvent::Finished {
                 summary: "pong".into()
@@ -89,7 +90,8 @@ fn parses_results() {
         vec![
             EngineEvent::Usage {
                 tokens_in: 1,
-                tokens_out: 1
+                tokens_out: 1,
+                cache_read: 0,
             },
             EngineEvent::Failed {
                 error: "error_max_turns".into()

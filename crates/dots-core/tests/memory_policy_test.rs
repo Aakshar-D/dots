@@ -13,11 +13,16 @@ fn every_preset_allows_memory_after_the_check_in_tools() {
     assert_eq!(MEMORY_TOOL, "Memory");
     for preset in Preset::ALL {
         let p = Policy::preset(*preset);
-        let tail: Vec<&str> = p.rules[p.rules.len() - 4..]
+        // `Workflow` follows it (teams spec section 7).
+        let tail: Vec<&str> = p.rules[p.rules.len() - 5..]
             .iter()
             .map(|r| r.tool.as_str())
             .collect();
-        assert_eq!(tail, ["Notify", "Ask", "FollowUp", "Memory"], "{preset:?}");
+        assert_eq!(
+            tail,
+            ["Notify", "Ask", "FollowUp", "Memory", "Workflow"],
+            "{preset:?}"
+        );
         for input in [json!({"text": "x"}), json!({"id": "x"}), json!({})] {
             assert_eq!(p.resolve("Memory", &input), Action::Allow, "{preset:?}");
         }
@@ -84,10 +89,12 @@ async fn migration_0012_gives_every_policy_that_is_not_custom_its_memory() {
         .collect::<Vec<_>>()
         .into();
     before.run(&pool).await.unwrap();
-    // A policy as 0010 left it: the preset's rules without `Memory`.
+    // A policy as 0010 left it: the preset's rules without `Memory`, and without `Workflow`,
+    // which 0015 adds after it.
     let old = |preset: Preset| {
         let mut p = Policy::preset(preset);
-        p.rules.retain(|r| r.tool != "Memory");
+        p.rules
+            .retain(|r| r.tool != "Memory" && r.tool != "Workflow");
         p
     };
     let mut asks = old(Preset::Trusted);
@@ -123,8 +130,10 @@ async fn migration_0012_gives_every_policy_that_is_not_custom_its_memory() {
             "{id}"
         );
     }
-    // The person's own rule is kept, and no allow is added.
-    assert_eq!(store.get_dot("D3").await.unwrap().spec.policy, asks);
+    // The person's own rule is kept, and no allow is added for it (0015 adds `Workflow`).
+    let mut kept = asks;
+    kept.rules.push(Rule::new("Workflow", Action::Allow));
+    assert_eq!(store.get_dot("D3").await.unwrap().spec.policy, kept);
     assert_eq!(store.get_dot("D4").await.unwrap().spec.policy, custom);
     assert!(CHECK_IN_TOOLS
         .iter()

@@ -4,7 +4,7 @@
 //! server on the Claude engine. This module holds their names, descriptions and input rules,
 //! and `CheckIns`, which performs an allowed call.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock, Weak};
 
 use chrono::{DateTime, Local, TimeDelta, Utc};
 use serde_json::{json, Value};
@@ -284,13 +284,16 @@ pub fn local_label(t: DateTime<Utc>) -> String {
 
 /// Performs the check-in tools' calls for both engines (spec sections 2 and 3), and holds the
 /// dots' memories, whose tools are served wherever the check-in tools are (dot memory spec
-/// section 3). Cheap to clone.
+/// section 3), and the workflow runs, for the workflow tools (teams spec section 7). Cheap to
+/// clone; the clones share the workflow runs once they are set.
 #[derive(Clone)]
 pub struct CheckIns {
     store: Store,
     bus: Bus,
     follow_ups: Arc<FollowUps>,
     memories: Memories,
+    /// Weak: the workflow runs hold the runner, which holds these.
+    workflows: Arc<OnceLock<Weak<crate::workflows::Workflows>>>,
 }
 
 impl CheckIns {
@@ -300,7 +303,18 @@ impl CheckIns {
             store,
             bus,
             follow_ups,
+            workflows: Arc::new(OnceLock::new()),
         }
+    }
+
+    /// Gives the workflow tools the workflow runs. The runtime calls it once, at start.
+    pub fn set_workflows(&self, workflows: &Arc<crate::workflows::Workflows>) {
+        let _ = self.workflows.set(Arc::downgrade(workflows));
+    }
+
+    /// The workflow runs, once the runtime has set them and while they exist.
+    pub fn workflows(&self) -> Option<Arc<crate::workflows::Workflows>> {
+        self.workflows.get().and_then(Weak::upgrade)
     }
 
     /// The dots' memories: the person's commands and the memory tools go through them.

@@ -38,6 +38,10 @@ pub enum EngineEvent {
     Usage {
         tokens_in: u64,
         tokens_out: u64,
+        /// The part of `tokens_in` read from the prompt cache (teams spec section 9). An event
+        /// recorded before it existed reads as 0.
+        #[serde(default)]
+        cache_read: u64,
     },
     Raw {
         line: String,

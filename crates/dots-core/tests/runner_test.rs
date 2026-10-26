@@ -74,6 +74,7 @@ async fn successful_run_records_events_and_succeeds() {
         Step::Emit(EngineEvent::Usage {
             tokens_in: 10,
             tokens_out: 5,
+            cache_read: 4,
         }),
         finished(),
     ]));
@@ -86,6 +87,7 @@ async fn successful_run_records_events_and_succeeds() {
     assert_eq!(run.summary.as_deref(), Some("done"));
     assert_eq!(run.session_id.as_deref(), Some("s1"));
     assert_eq!((run.tokens_in, run.tokens_out), (10, 5));
+    assert_eq!(run.tokens_cache_read, 4);
     assert_eq!(
         run.workspace_path.as_deref(),
         Some(dot.spec.workdir.as_str())

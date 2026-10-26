@@ -468,6 +468,8 @@ fn run() -> Run {
         ended_at: Some(TS.into()),
         reviewed_at: None,
         retry_of: None,
+        workflow_step_run_id: None,
+        tokens_cache_read: 0,
     }
 }
 
@@ -559,6 +561,7 @@ fn engine_events() -> Value {
         EngineEvent::Usage {
             tokens_in: 1200,
             tokens_out: 340,
+            cache_read: 900,
         },
         EngineEvent::Raw {
             line: "{\"type\":\"future\"}".into(),
