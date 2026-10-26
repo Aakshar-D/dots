@@ -39,6 +39,15 @@ fn run_from_row(row: &SqliteRow) -> Result<Run> {
     })
 }
 
+/// A run's time from start to end, in whole seconds; `None` until it has both.
+fn run_seconds(run: &Run) -> Option<i64> {
+    let at = |t: &Option<String>| {
+        t.as_deref()
+            .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+    };
+    Some((at(&run.ended_at)? - at(&run.started_at)?).num_seconds())
+}
+
 fn event_from_row(row: &SqliteRow) -> Result<RunEventRecord> {
     Ok(RunEventRecord {
         run_id: row.try_get("run_id")?,
@@ -408,6 +417,84 @@ impl Store {
             return Err(Error::Conflict(format!("run {id} is not running")));
         }
         self.get_run(id).await
+    }
+
+    /// Sets a run's start and end, for tests of the Usage page's periods.
+    #[doc(hidden)]
+    pub async fn set_run_times(&self, id: &str, started: &str, ended: Option<&str>) -> Result<()> {
+        sqlx::query("UPDATE runs SET started_at = ?, ended_at = ? WHERE id = ?")
+            .bind(started)
+            .bind(ended)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Each dot's runs started at or after `since` (usage and limits spec section 5), heaviest
+    /// dot first, then by name.
+    pub async fn usage_rows(&self, since: &str) -> Result<Vec<crate::model::UsageRow>> {
+        use crate::model::{UsageRow, UsageRun};
+        let rows = sqlx::query(&format!(
+            "SELECT {RUN_COLUMNS}, \
+             (SELECT d.name FROM dots d WHERE d.id = runs.dot_id) AS dot_name, \
+             (SELECT d.engine FROM dots d WHERE d.id = runs.dot_id) AS dot_engine \
+             FROM runs WHERE started_at >= ? ORDER BY started_at, id"
+        ))
+        .bind(since)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut by_dot: Vec<UsageRow> = Vec::new();
+        for row in &rows {
+            let run = run_from_row(row)?;
+            let secs = run_seconds(&run);
+            let at = match by_dot.iter().position(|r| r.dot_id == run.dot_id) {
+                Some(i) => i,
+                None => {
+                    by_dot.push(UsageRow {
+                        dot_id: run.dot_id.clone(),
+                        dot_name: row.try_get("dot_name")?,
+                        engine: EngineKind::parse(&row.try_get::<String, _>("dot_engine")?)?,
+                        runs: 0,
+                        tokens_in: 0,
+                        tokens_out: 0,
+                        run_secs: 0,
+                        cost_usd: None,
+                        heaviest: Vec::new(),
+                    });
+                    by_dot.len() - 1
+                }
+            };
+            let entry = &mut by_dot[at];
+            entry.runs += 1;
+            entry.tokens_in += run.tokens_in;
+            entry.tokens_out += run.tokens_out;
+            entry.run_secs += secs.unwrap_or(0);
+            if let Some(cost) = run.cost_usd {
+                entry.cost_usd = Some(entry.cost_usd.unwrap_or(0.0) + cost);
+            }
+            entry.heaviest.push(UsageRun {
+                run_id: run.id,
+                trigger: run.trigger,
+                started_at: run.started_at.unwrap_or_default(),
+                tokens_in: run.tokens_in,
+                tokens_out: run.tokens_out,
+                run_secs: secs,
+                cost_usd: run.cost_usd,
+            });
+        }
+        for entry in &mut by_dot {
+            entry
+                .heaviest
+                .sort_by_key(|r| std::cmp::Reverse(r.tokens_in + r.tokens_out));
+            entry.heaviest.truncate(crate::limits::HEAVIEST);
+        }
+        by_dot.sort_by(|a, b| {
+            (b.tokens_in + b.tokens_out)
+                .cmp(&(a.tokens_in + a.tokens_out))
+                .then_with(|| a.dot_name.cmp(&b.dot_name))
+        });
+        Ok(by_dot)
     }
 
     /// Marks a run released from the hold by **Run anyway** (usage and limits spec section 4).

@@ -155,6 +155,9 @@ struct Inner {
     rejected_until: Option<DateTime<Utc>>,
     /// What the last `publish` said of holding.
     holding: bool,
+    /// What the last `publish` sent: the dispatcher publishes on every pass, and only a change
+    /// is sent again.
+    sent: Option<LimitsState>,
 }
 
 pub struct Limits {
@@ -295,17 +298,21 @@ impl Limits {
             .into_iter()
             .map(|r| (r.window.clone(), r))
             .collect();
+        let mut inner = Inner {
+            readings,
+            shares,
+            draining: false,
+            rejected_until: None,
+            holding: false,
+            sent: None,
+        };
+        // What the UI reads when it opens (`limits_get`) is not news: only a change is sent.
+        inner.sent = Some(inner.state(&[], 0, clock.now()));
         Ok(Arc::new(Self {
             store,
             bus,
             clock,
-            inner: Mutex::new(Inner {
-                readings,
-                shares,
-                draining: false,
-                rejected_until: None,
-                holding: false,
-            }),
+            inner: Mutex::new(inner),
         }))
     }
 
@@ -391,7 +398,12 @@ impl Limits {
                 inner.draining = false;
             }
             inner.holding = holding;
-            (inner.state(queued, running_background_claude, now), change)
+            let limits = inner.state(queued, running_background_claude, now);
+            if change.is_none() && inner.sent.as_ref() == Some(&limits) {
+                return;
+            }
+            inner.sent = Some(limits.clone());
+            (limits, change)
         };
         let _ = self
             .bus

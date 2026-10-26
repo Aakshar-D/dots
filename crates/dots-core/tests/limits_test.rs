@@ -243,6 +243,36 @@ async fn holding_start_and_end_are_published_once() {
     );
 }
 
+/// Nothing is sent until something changes: the dispatcher publishes on its first pass, and a
+/// runtime with nothing to say says nothing.
+#[tokio::test]
+async fn the_state_at_load_is_not_published() {
+    let e = env(SHARES).await;
+    let mut rx = e.bus.subscribe();
+    e.limits.publish(&[], 0);
+    assert!(rx.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn an_unchanged_state_is_published_once() {
+    let e = env(SHARES).await;
+    let mut rx = e.bus.subscribe();
+    let queued = [q("a", TriggerKind::Schedule)];
+    e.limits.record("allowed", vec![five(0.2)]).await.unwrap();
+    for _ in 0..3 {
+        e.limits.publish(&queued, 0);
+    }
+    e.limits.record("allowed", vec![five(0.3)]).await.unwrap();
+    e.limits.publish(&queued, 0);
+    let mut sent = 0;
+    while let Ok(ev) = rx.try_recv() {
+        if matches!(ev, RuntimeEvent::LimitsUpdated { .. }) {
+            sent += 1;
+        }
+    }
+    assert_eq!(sent, 2);
+}
+
 #[tokio::test]
 async fn readings_survive_a_reload() {
     let e = env(SHARES).await;
