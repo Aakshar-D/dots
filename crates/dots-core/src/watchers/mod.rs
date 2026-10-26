@@ -5,6 +5,7 @@
 
 pub mod acting;
 pub mod cap;
+pub mod describe;
 pub mod email;
 pub mod files;
 pub mod folder;
