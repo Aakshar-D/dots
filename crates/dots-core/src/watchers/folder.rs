@@ -239,7 +239,9 @@ fn settle(
             } else {
                 FolderEvent::Changed
             };
-            if event == FolderEvent::Changed && reported.get(path) == Some(&now) {
+            // Unchanged since it was last reported, whatever the OS called the event: a sync
+            // engine's touch or replace (Review Focus 1).
+            if reported.get(path) == Some(&now) {
                 return None;
             }
             reported.insert(path.to_path_buf(), now);
@@ -281,4 +283,31 @@ fn payload(
         "relative": relative.to_string_lossy(),
         "size": size,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Deferred minor: a settled file reported again unchanged is dropped whatever the OS
+    /// called it (a sync engine's replace can read as a creation).
+    #[test]
+    fn a_settled_file_reported_again_unchanged_is_dropped_whatever_the_os_called_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.pdf");
+        std::fs::write(&path, b"abc").unwrap();
+        let mut folders = HashSet::new();
+        let mut reported = HashMap::new();
+        assert!(settle(&path, Seen::Created, &mut folders, &mut reported).is_some());
+        assert_eq!(
+            settle(&path, Seen::Created, &mut folders, &mut reported),
+            None
+        );
+        assert_eq!(
+            settle(&path, Seen::Changed, &mut folders, &mut reported),
+            None
+        );
+        std::fs::write(&path, b"abcd").unwrap();
+        assert!(settle(&path, Seen::Created, &mut folders, &mut reported).is_some());
+    }
 }

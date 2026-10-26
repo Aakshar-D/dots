@@ -404,3 +404,28 @@ async fn attachments_never_show_as_a_worktree_runs_changes() {
     // Unchanged once its attachments went: the worktree was removed.
     assert!(!std::path::Path::new(done.workspace_path.as_deref().unwrap()).exists());
 }
+
+/// Deferred minor: deleting a dot removes what its watchers staged.
+#[tokio::test]
+async fn deleting_a_dot_removes_what_its_watchers_staged() {
+    let t = start_mail(common::fake_mail::FakeMail::new(PASS)).await;
+    let dot = folder_dot(&t, "gone").await;
+    let w = email_watcher(&t, &dot).await;
+    let staged = t
+        .dir
+        .path()
+        .join("data")
+        .join("watchers")
+        .join(&w.id)
+        .join("R1");
+    std::fs::create_dir_all(&staged).unwrap();
+    std::fs::write(staged.join("a.pdf"), b"%PDF").unwrap();
+    t.rt.delete_dot(&dot.id).await.unwrap();
+    assert!(!t
+        .dir
+        .path()
+        .join("data")
+        .join("watchers")
+        .join(&w.id)
+        .exists());
+}

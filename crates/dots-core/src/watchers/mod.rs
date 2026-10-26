@@ -332,6 +332,9 @@ pub struct Watchers {
     logins: Mutex<HashMap<String, String>>,
     /// The last ETag and answer of each (watcher, URL) GitHub answered.
     etags: Mutex<HashMap<(String, String), (String, Value)>>,
+    /// One lock per watcher: two checks of it never run at once, and a change of its config
+    /// waits for the check in flight (whose cursor would otherwise be written back).
+    checks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl Watchers {
@@ -345,6 +348,7 @@ impl Watchers {
             backoffs: Mutex::new(HashMap::new()),
             logins: Mutex::new(HashMap::new()),
             etags: Mutex::new(HashMap::new()),
+            checks: Mutex::new(HashMap::new()),
         })
     }
 
@@ -417,7 +421,20 @@ impl Watchers {
         Ok(watcher)
     }
 
+    /// The lock of the watcher's checks.
+    fn check_lock(&self, id: &str) -> Arc<tokio::sync::Mutex<()>> {
+        self.checks
+            .lock()
+            .unwrap()
+            .entry(id.to_string())
+            .or_default()
+            .clone()
+    }
+
     pub async fn update(&self, id: &str, name: &str, config: WatcherConfig) -> Result<Watcher> {
+        // A check in flight finishes first: its cursor is then cleared, not written back.
+        let check = self.check_lock(id);
+        let _no_check = check.lock().await;
         self.deps.store.get_watcher(id).await?;
         let name = check_name(name)?;
         let config = check_config(&self.deps.store, &config).await?;
@@ -504,9 +521,19 @@ impl Watchers {
         let run_id = new_id();
         self.files.stage(&watcher.id, &run_id, &event.files)?;
         let mut new = NewRun::new(&watcher.dot_id, TriggerKind::Watcher);
-        new.id = Some(run_id);
+        new.id = Some(run_id.clone());
         new.payload = Some(payload);
-        let run = self.deps.runner.enqueue(new).await?;
+        let run = match self.deps.runner.enqueue(new).await {
+            Ok(run) => run,
+            Err(e) => {
+                // No run will copy or release what was staged for it.
+                let staged = self.files.stage_dir(&watcher.id, &run_id);
+                if staged.exists() {
+                    let _ = std::fs::remove_dir_all(staged);
+                }
+                return Err(e);
+            }
+        };
         self.deps
             .store
             .touch_watcher_event(&watcher.id, &timestamp(now))
@@ -567,6 +594,8 @@ impl Watchers {
 
     /// Checks a polling watcher once and says when to check next.
     pub async fn poll_now(&self, watcher_id: &str) -> Result<Poll> {
+        let check = self.check_lock(watcher_id);
+        let _one_at_a_time = check.lock().await;
         let watcher = self.deps.store.get_watcher(watcher_id).await?;
         let polled = match &watcher.config {
             WatcherConfig::Email(config) => email::poll(self, &watcher, config).await,
@@ -585,6 +614,19 @@ impl Watchers {
     }
 
     /// Forgets what a GitHub watcher knew of its token and answers.
+    /// Forgets watchers whose rows are gone with their dot: their staged files, their task
+    /// and what the service kept for them.
+    pub fn forget(&self, ids: &[String]) {
+        for id in ids {
+            self.files.forget_watcher(id);
+            self.backoffs.lock().unwrap().remove(id);
+            self.checks.lock().unwrap().remove(id);
+            self.forget_remote(id);
+            self.stop_task(id);
+        }
+        self.reload();
+    }
+
     fn forget_remote(&self, id: &str) {
         self.logins.lock().unwrap().remove(id);
         self.etags.lock().unwrap().retain(|(w, _), _| w != id);
@@ -668,11 +710,19 @@ impl Watchers {
         ) {
             Ok(()) => true,
             Err(failure) => {
+                // Reported; a transient one is tried again when the backoff says.
                 let this = self.clone();
                 let id = watcher.id.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = this.note_failure(&id, failure).await {
-                        tracing::warn!(watcher = %id, "reporting a folder failure failed: {e}");
+                    match this.note_failure(&id, failure).await {
+                        Ok(Poll::Next(at)) => {
+                            this.deps.clock.sleep_until(at).await;
+                            this.reload();
+                        }
+                        Ok(Poll::Stopped) => {}
+                        Err(e) => {
+                            tracing::warn!(watcher = %id, "reporting a folder failure failed: {e}")
+                        }
                     }
                 });
                 false

@@ -601,3 +601,226 @@ async fn a_repo_the_token_cannot_see_first_does_not_hide_the_others() {
         Some(cannot_see("GITHUB_TOKEN", "owner/private"))
     );
 }
+
+/// Deferred minor: a compare GitHub cannot answer (the old head is gone after a force-push)
+/// skips that push; it does not pause the watcher.
+#[tokio::test]
+async fn a_push_whose_compare_is_gone_is_skipped_without_a_pause() {
+    let (h, server, dot, w) = setup(|c| {
+        c.events = vec![GithubEvent::Push];
+        c.branches = vec!["main".into()];
+    })
+    .await;
+    serve(
+        &server,
+        &[(
+            "/repos/owner/repo/branches/main",
+            json!({"commit": {"sha": "aaa"}}),
+        )],
+    )
+    .await;
+    h.watchers.poll_now(&w.id).await.unwrap();
+    serve(
+        &server,
+        &[(
+            "/repos/owner/repo/branches/main",
+            json!({"commit": {"sha": "bbb"}}),
+        )],
+    )
+    .await;
+    assert_eq!(
+        h.watchers.poll_now(&w.id).await.unwrap(),
+        Poll::Next(t0() + TimeDelta::minutes(1))
+    );
+    let now = h.store.get_watcher(&w.id).await.unwrap();
+    assert_eq!((now.paused_reason, now.last_error), (None, None));
+    assert!(h.runs(&dot.id).await.is_empty());
+    let commits =
+        json!([{"sha": "ccc0000x", "commit": {"message": "Next"}, "author": user("alice")}]);
+    serve(
+        &server,
+        &[
+            (
+                "/repos/owner/repo/branches/main",
+                json!({"commit": {"sha": "ccc"}}),
+            ),
+            (
+                "/repos/owner/repo/compare/bbb...ccc",
+                json!({"commits": commits, "html_url": "u"}),
+            ),
+        ],
+    )
+    .await;
+    h.watchers.poll_now(&w.id).await.unwrap();
+    assert_eq!(h.runs(&dot.id).await.len(), 1);
+}
+
+/// Deferred minor: a secondary rate limit (a 403 that says so, without the usual headers)
+/// waits a minute; it does not pause the watcher.
+#[tokio::test]
+async fn a_secondary_rate_limit_waits_a_minute_without_a_pause() {
+    let (h, server, _dot, w) = setup(|c| c.events = vec![GithubEvent::Issue]).await;
+    serve(&server, &[]).await;
+    Mock::given(method("GET"))
+        .and(path("/repos/owner/repo/issues"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(json!({
+            "message": "You have exceeded a secondary rate limit. Please wait a few minutes."})))
+        .mount(&server)
+        .await;
+    assert_eq!(
+        h.watchers.poll_now(&w.id).await.unwrap(),
+        Poll::Next(t0() + TimeDelta::minutes(1))
+    );
+    let now = h.store.get_watcher(&w.id).await.unwrap();
+    assert_eq!((now.paused_reason, now.last_error), (None, None));
+}
+
+/// Deferred minor: a branch name with `/`, `#` or `%` is one path segment of the URL.
+#[tokio::test]
+async fn a_branch_name_is_encoded_in_the_url() {
+    let (h, server, _dot, w) = setup(|c| {
+        c.events = vec![GithubEvent::Push];
+        c.branches = vec!["feat/x#1".into()];
+    })
+    .await;
+    serve(
+        &server,
+        &[(
+            "/repos/owner/repo/branches/feat%2Fx%231",
+            json!({"commit": {"sha": "aaa"}}),
+        )],
+    )
+    .await;
+    assert_eq!(
+        h.watchers.poll_now(&w.id).await.unwrap(),
+        Poll::Next(t0() + TimeDelta::minutes(1))
+    );
+    assert_eq!(
+        h.store.get_watcher(&w.id).await.unwrap().paused_reason,
+        None
+    );
+}
+
+/// Deferred minor: a second review submitted in the same second as one already handled still
+/// wakes the dot.
+#[tokio::test]
+async fn a_review_in_the_same_second_as_one_handled_still_wakes_it() {
+    let (h, server, dot, w) = setup(|c| c.events = vec![GithubEvent::Comment]).await;
+    serve(
+        &server,
+        &[
+            ("/repos/owner/repo/issues/comments", json!([])),
+            ("/repos/owner/repo/pulls", json!([])),
+        ],
+    )
+    .await;
+    h.watchers.poll_now(&w.id).await.unwrap();
+    let review = |id: u64, text: &str| {
+        json!({"id": id, "body": text, "state": "COMMENTED",
+        "submitted_at": "2026-10-23T09:05:00Z", "html_url": "r", "user": user("carol")})
+    };
+    serve(
+        &server,
+        &[
+            ("/repos/owner/repo/issues/comments", json!([])),
+            (
+                "/repos/owner/repo/pulls",
+                json!([pull(2006, 6, "Add export", false)]),
+            ),
+            (
+                "/repos/owner/repo/pulls/6/reviews",
+                json!([review(5001, "First.")]),
+            ),
+        ],
+    )
+    .await;
+    h.watchers.poll_now(&w.id).await.unwrap();
+    serve(
+        &server,
+        &[
+            ("/repos/owner/repo/issues/comments", json!([])),
+            (
+                "/repos/owner/repo/pulls",
+                json!([pull(2006, 6, "Add export", false)]),
+            ),
+            (
+                "/repos/owner/repo/pulls/6/reviews",
+                json!([review(5001, "First."), review(5002, "Second.")]),
+            ),
+        ],
+    )
+    .await;
+    h.watchers.poll_now(&w.id).await.unwrap();
+    let bodies: Vec<String> = h
+        .runs(&dot.id)
+        .await
+        .iter()
+        .map(|r| {
+            r.payload.as_ref().unwrap()["body"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        })
+        .collect();
+    assert_eq!(bodies, ["First.", "Second."]);
+}
+
+/// Deferred minor: only lists are asked again with their ETag; a one-off answer (an issue's
+/// title) is not kept, so the cache does not grow with every comment.
+#[tokio::test]
+async fn only_lists_are_asked_again_with_their_etag() {
+    let (h, server, _dot, w) = setup(|c| c.events = vec![GithubEvent::Comment]).await;
+    serve(
+        &server,
+        &[
+            ("/repos/owner/repo/issues/comments", json!([])),
+            ("/repos/owner/repo/pulls", json!([])),
+        ],
+    )
+    .await;
+    h.watchers.poll_now(&w.id).await.unwrap();
+    let comment = |id: u64| {
+        json!({"id": id, "body": "x", "html_url": "u", "user": user("bob"),
+        "issue_url": "https://api.github.com/repos/owner/repo/issues/12"})
+    };
+    let detail = || {
+        Mock::given(method("GET"))
+            .and(path("/repos/owner/repo/issues/12"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("ETag", "\"d\"")
+                    .set_body_json(issue(1012, 12, "Crash", "alice", &[])),
+            )
+    };
+    serve(
+        &server,
+        &[
+            ("/repos/owner/repo/issues/comments", json!([comment(4002)])),
+            ("/repos/owner/repo/pulls", json!([])),
+        ],
+    )
+    .await;
+    detail().mount(&server).await;
+    h.watchers.poll_now(&w.id).await.unwrap();
+    serve(
+        &server,
+        &[
+            (
+                "/repos/owner/repo/issues/comments",
+                json!([comment(4003), comment(4002)]),
+            ),
+            ("/repos/owner/repo/pulls", json!([])),
+        ],
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/owner/repo/issues/12"))
+        .and(header("If-None-Match", "\"d\""))
+        .respond_with(ResponseTemplate::new(304))
+        .expect(0)
+        .mount(&server)
+        .await;
+    detail().mount(&server).await;
+    h.watchers.poll_now(&w.id).await.unwrap();
+    server.verify().await;
+}

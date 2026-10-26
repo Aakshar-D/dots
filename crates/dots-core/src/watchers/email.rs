@@ -489,10 +489,18 @@ impl Mailbox for ImapMailbox {
     async fn examine(&mut self, folder: &str) -> std::result::Result<Option<FolderState>, Failure> {
         match tokio::time::timeout(COMMAND_TIMEOUT, self.session.examine(folder)).await {
             Err(_) => Err(transient("timed out")),
-            Ok(Ok(mailbox)) => Ok(Some(FolderState {
-                uid_validity: mailbox.uid_validity.unwrap_or(0),
-                uid_next: mailbox.uid_next.unwrap_or(mailbox.exists + 1),
-            })),
+            Ok(Ok(mailbox)) => {
+                // Without UIDNEXT, one past the newest UID the server has: a message count is
+                // not a UID.
+                let uid_next = match mailbox.uid_next {
+                    Some(next) => next,
+                    None => self.search_from(1).await?.last().map_or(1, |u| u + 1),
+                };
+                Ok(Some(FolderState {
+                    uid_validity: mailbox.uid_validity.unwrap_or(0),
+                    uid_next,
+                }))
+            }
             Ok(Err(async_imap::error::Error::No(_))) => Ok(None),
             Ok(Err(e)) => Err(transient(e)),
         }

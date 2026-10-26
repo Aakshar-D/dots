@@ -143,3 +143,23 @@ async fn the_sweep_removes_what_no_watcher_or_open_thread_needs() {
     assert!(!files.stage_dir(&w.id, "GONE").exists());
     assert!(!dir.path().join("watchers").join("NOWATCHER").exists());
 }
+
+/// Deferred minor: the device names Windows also reserves, a reserved name before any
+/// extension, the characters that reverse how a name reads, and a suffix that keeps 120.
+#[test]
+fn more_names_windows_or_people_misread_are_made_safe() {
+    for (raw, safe) in [
+        ("CONIN$", "_CONIN$"),
+        ("conout$.txt", "_conout$.txt"),
+        ("CON.tar.gz", "_CON.tar.gz"),
+        ("invoice\u{202E}fdp.exe", "invoicefdp.exe"),
+        ("a\u{2066}b\u{200F}.pdf", "ab.pdf"),
+    ] {
+        assert_eq!(safe_name(raw), safe, "{raw:?}");
+    }
+    let long = format!("{}.pdf", "a".repeat(116));
+    let names = unique_names(&[long.clone(), long]);
+    assert!(names.iter().all(|n| n.chars().count() <= 120), "{names:?}");
+    assert_ne!(names[0].to_lowercase(), names[1].to_lowercase());
+    assert!(names[1].ends_with(" (2).pdf"), "{}", names[1]);
+}

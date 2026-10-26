@@ -393,6 +393,7 @@ impl Runner {
         if let Some(active) = released {
             self.acting_end(&active.dot_id);
         }
+        self.release_attachments(run_id).await;
         self.forget_run(run_id);
         match self
             .store

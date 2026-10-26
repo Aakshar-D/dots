@@ -119,3 +119,51 @@ async fn a_refused_login_is_permanent_and_an_unreachable_server_transient() {
         Err(Failure::Transient(_))
     ));
 }
+
+/// Deferred minor: a server that sends no UIDNEXT: the next UID is one past the newest the
+/// server has, not a message count.
+#[tokio::test]
+async fn without_uidnext_the_next_uid_is_one_past_the_newest() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let (read, mut write) = socket.into_split();
+        let mut read = BufReader::new(read);
+        write.write_all(b"* OK IMAP4rev1 ready\r\n").await.unwrap();
+        let mut line = String::new();
+        while read.read_line(&mut line).await.unwrap() > 0 {
+            let text = line.trim_end().to_string();
+            line.clear();
+            let (tag, command) = text.split_once(' ').unwrap_or((&text, ""));
+            let verb = command.to_ascii_uppercase();
+            let answer = if verb.starts_with("EXAMINE") {
+                format!("* 2 EXISTS\r\n* OK [UIDVALIDITY 7] ok\r\n{tag} OK [READ-ONLY] done\r\n")
+            } else if verb.starts_with("UID SEARCH") {
+                format!("* SEARCH 40 90\r\n{tag} OK done\r\n")
+            } else if verb.starts_with("LOGOUT") {
+                write
+                    .write_all(format!("* BYE\r\n{tag} OK done\r\n").as_bytes())
+                    .await
+                    .unwrap();
+                break;
+            } else {
+                format!("{tag} OK done\r\n")
+            };
+            write.write_all(answer.as_bytes()).await.unwrap();
+        }
+    });
+    let source = ImapMailSource::plain("127.0.0.1", port);
+    let mut mailbox = source
+        .connect("me@gmail.com", "app-pass-123")
+        .await
+        .unwrap();
+    assert_eq!(
+        mailbox.examine("INBOX").await.unwrap(),
+        Some(FolderState {
+            uid_validity: 7,
+            uid_next: 91
+        })
+    );
+    mailbox.logout().await;
+}

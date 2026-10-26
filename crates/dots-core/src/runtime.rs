@@ -834,7 +834,16 @@ impl Runtime {
     /// Deletes the dot; its schedule row goes with it (`ON DELETE CASCADE`).
     pub async fn delete_dot(&self, id: &str) -> Result<()> {
         let had_row = self.store.get_schedule_state(id).await?.is_some();
+        let watchers: Vec<String> = self
+            .store
+            .list_watchers(id)
+            .await?
+            .into_iter()
+            .map(|w| w.id)
+            .collect();
         self.store.delete_dot_if_idle(id).await?;
+        // Its watchers went with it; what they staged and kept goes too.
+        self.watchers.forget(&watchers);
         // It can no longer be viewed (needs-you spec section 7).
         {
             let mut viewing = lock(&self.viewing);

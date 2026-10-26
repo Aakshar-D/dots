@@ -35,10 +35,17 @@ pub const MAX_ATTACHMENTS_BYTES: usize = 25 * 1024 * 1024;
 /// The longest safe name, in characters.
 const MAX_NAME_CHARS: usize = 120;
 
-const RESERVED: [&str; 4] = ["CON", "PRN", "AUX", "NUL"];
+const RESERVED: [&str; 6] = ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"];
 
-/// Whether `stem` is a reserved Windows device name.
-fn reserved(stem: &str) -> bool {
+/// Characters that change the order a name reads in (`invoice\u{202E}fdp.exe` would show as
+/// `invoiceexe.pdf`): dropped.
+fn reorders(c: char) -> bool {
+    matches!(c, '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+}
+
+/// Whether the name is a reserved Windows device name: its part before the first dot is.
+fn reserved(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or(name).trim_end();
     let upper = stem.to_ascii_uppercase();
     if RESERVED.contains(&upper.as_str()) {
         return true;
@@ -65,7 +72,7 @@ pub fn safe_name(name: &str) -> String {
     let last = name.rsplit(['/', '\\']).next().unwrap_or(name);
     let mut out: String = last
         .chars()
-        .filter(|c| !c.is_control())
+        .filter(|c| !c.is_control() && !reorders(*c))
         .map(|c| if "<>:\"|?*".contains(c) { '_' } else { c })
         .collect();
     while out.ends_with([' ', '.']) {
@@ -75,7 +82,7 @@ pub fn safe_name(name: &str) -> String {
     if out.is_empty() {
         return "attachment".to_string();
     }
-    if reserved(split_extension(&out).0) {
+    if reserved(&out) {
         out.insert(0, '_');
     }
     if out.chars().count() > MAX_NAME_CHARS {
@@ -94,8 +101,11 @@ pub fn unique_names(names: &[String]) -> Vec<String> {
         let mut candidate = name.clone();
         let mut n = 2;
         while taken.iter().any(|t| t.eq_ignore_ascii_case(&candidate)) {
+            // The stem gives way, so the name stays within 120 characters.
             let (stem, ext) = split_extension(name);
-            candidate = format!("{stem} ({n}){ext}");
+            let suffix = format!(" ({n}){ext}");
+            let keep = MAX_NAME_CHARS.saturating_sub(suffix.chars().count());
+            candidate = stem.chars().take(keep).collect::<String>() + &suffix;
             n += 1;
         }
         taken.push(candidate);

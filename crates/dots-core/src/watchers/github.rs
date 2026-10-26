@@ -65,6 +65,9 @@ pub struct RepoCursor {
     pub comment: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review_since: Option<String>,
+    /// The ids of the reviews handled at `review_since` (times are to the second).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub review_seen: Vec<u64>,
     #[serde(default)]
     pub heads: BTreeMap<String, String>,
     /// The completion time of the newest CI run handled, and the ids of the runs handled
@@ -116,6 +119,19 @@ fn time(v: &Value) -> Option<DateTime<Utc>> {
         .map(|t| t.with_timezone(&Utc))
 }
 
+/// `text` as one URL path segment: every byte but `A-Z a-z 0-9 - . _ ~` percent-encoded, so a
+/// branch named `feat/x#1` is one segment.
+fn segment(text: &str) -> String {
+    text.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
 fn ids_above(items: &[Value], after: u64) -> Vec<&Value> {
     let mut out: Vec<&Value> = items
         .iter()
@@ -152,12 +168,30 @@ impl Poller<'_> {
             .await
     }
 
-    /// `GET <api><path>`: the JSON, the cached one on a `304`, or why the poll stops.
+    /// `GET <api><path>`: the JSON, the cached one on a `304`, or why the poll stops (a
+    /// missing resource is the token not seeing the repository).
     async fn get(&self, path: &str, repo: &str) -> Step<Value> {
+        match self.get_or_missing(path, repo).await? {
+            Some(json) => Ok(json),
+            None => Err(Stop::Failed(Failure::Permanent(cannot_see(
+                &self.config.secret,
+                repo,
+            )))),
+        }
+    }
+
+    /// As `get`, but a `404` is `None`: a resource that may be gone (a compare whose old head a
+    /// force-push removed). Only lists (a path with a query) keep their ETag and answer.
+    async fn get_or_missing(&self, path: &str, repo: &str) -> Step<Option<Value>> {
         let api = self.service.deps.sources.github_api.trim_end_matches('/');
         let url = format!("{api}{path}");
         let key = (self.watcher.id.clone(), url.clone());
-        let cached = self.service.etags.lock().unwrap().get(&key).cloned();
+        let keep = path.contains('?');
+        let cached = if keep {
+            self.service.etags.lock().unwrap().get(&key).cloned()
+        } else {
+            None
+        };
         let mut request = self
             .client
             .get(&url)
@@ -177,44 +211,51 @@ impl Poller<'_> {
                 .and_then(|v| v.to_str().ok())
                 .map(str::to_string)
         };
+        let (etag, remaining, reset, retry_after) = (
+            header("etag"),
+            header("x-ratelimit-remaining"),
+            header("x-ratelimit-reset"),
+            header("retry-after"),
+        );
         let secret = &self.config.secret;
         if status == StatusCode::NOT_MODIFIED {
-            return Ok(cached.map(|(_, v)| v).unwrap_or(Value::Null));
+            return Ok(Some(cached.map(|(_, v)| v).unwrap_or(Value::Null)));
         }
         if status.is_success() {
-            let etag = header("etag");
             let json: Value = answer.json().await.map_err(transient_unreachable)?;
-            if let Some(etag) = etag {
+            if let Some(etag) = etag.filter(|_| keep) {
                 self.service
                     .etags
                     .lock()
                     .unwrap()
                     .insert(key, (etag, json.clone()));
             }
-            return Ok(json);
+            return Ok(Some(json));
         }
         if status == StatusCode::UNAUTHORIZED {
             return Err(Stop::Failed(Failure::Permanent(token_refused(secret))));
         }
         if status == StatusCode::FORBIDDEN || status == StatusCode::TOO_MANY_REQUESTS {
             let now = self.service.deps.clock.now();
-            if header("x-ratelimit-remaining").as_deref() == Some("0") {
-                let reset = header("x-ratelimit-reset")
+            if remaining.as_deref() == Some("0") {
+                let reset = reset
                     .and_then(|r| r.parse::<i64>().ok())
                     .and_then(|r| DateTime::<Utc>::from_timestamp(r, 0))
                     .unwrap_or(now + POLL_EVERY);
                 return Err(Stop::Wait(reset));
             }
-            if let Some(secs) = header("retry-after").and_then(|r| r.parse::<i64>().ok()) {
+            if let Some(secs) = retry_after.and_then(|r| r.parse::<i64>().ok()) {
                 return Err(Stop::Wait(now + TimeDelta::seconds(secs)));
             }
-            if status == StatusCode::TOO_MANY_REQUESTS {
+            // A secondary rate limit may come without either header: GitHub asks for a minute.
+            let said = answer.text().await.unwrap_or_default().to_lowercase();
+            if status == StatusCode::TOO_MANY_REQUESTS || said.contains("rate limit") {
                 return Err(Stop::Wait(now + POLL_EVERY));
             }
             return Err(Stop::Failed(Failure::Permanent(cannot_see(secret, repo))));
         }
         if status == StatusCode::NOT_FOUND {
-            return Err(Stop::Failed(Failure::Permanent(cannot_see(secret, repo))));
+            return Ok(None);
         }
         Err(Stop::Failed(Failure::Transient(server_error(
             status.as_str(),
@@ -417,9 +458,15 @@ impl Poller<'_> {
         let path =
             format!("/repos/{repo}/pulls?state=open&sort=updated&direction=desc&per_page=20");
         let pulls = self.list(&path, repo).await?;
+        // Times are to the second: a review at `since` is new unless its id was handled.
+        let seen = self.repo_cursor(repo).review_seen.clone();
+        let new = |at: DateTime<Utc>, review: &Value| {
+            at > since
+                || (at == since && !review["id"].as_u64().is_some_and(|id| seen.contains(&id)))
+        };
         let mut found: Vec<(DateTime<Utc>, Value, Value)> = Vec::new();
         for pr in pulls {
-            if !time(&pr["updated_at"]).is_some_and(|t| t > since) {
+            if !time(&pr["updated_at"]).is_some_and(|t| t >= since) {
                 continue;
             }
             let Some(number) = pr["number"].as_u64() else {
@@ -429,16 +476,16 @@ impl Poller<'_> {
                 .list(&format!("/repos/{repo}/pulls/{number}/reviews"), repo)
                 .await?;
             for review in reviews {
-                if let Some(at) = time(&review["submitted_at"]).filter(|t| *t > since) {
+                if let Some(at) = time(&review["submitted_at"]).filter(|t| new(*t, &review)) {
                     found.push((at, review, pr.clone()));
                 }
             }
         }
-        found.sort_by_key(|(at, _, _)| *at);
+        found.sort_by_key(|(at, review, _)| (*at, review["id"].as_u64()));
         for (at, review, pr) in found {
             let said = review["body"].as_str().unwrap_or_default();
             if said.trim().is_empty() || !self.passes(&review["user"], None) {
-                self.repo_cursor(repo).review_since = Some(crate::util::timestamp(at));
+                self.review_handled(repo, &review, at);
                 continue;
             }
             let payload = json!({
@@ -452,9 +499,22 @@ impl Poller<'_> {
                 "number": pr["number"],
             });
             self.fire(payload).await?;
-            self.repo_cursor(repo).review_since = Some(crate::util::timestamp(at));
+            self.review_handled(repo, &review, at);
         }
         Ok(())
+    }
+
+    /// Notes a review as handled: the newest time, and the ids handled at that time.
+    fn review_handled(&mut self, repo: &str, review: &Value, at: DateTime<Utc>) {
+        let cursor = self.repo_cursor(repo);
+        let since = cursor.review_since.as_deref().and_then(|s| time(&json!(s)));
+        if since.is_none_or(|s| at > s) {
+            cursor.review_since = Some(crate::util::timestamp(at));
+            cursor.review_seen.clear();
+        }
+        if let Some(id) = review["id"].as_u64() {
+            cursor.review_seen.push(id);
+        }
     }
 
     async fn pushes(&mut self, repo: &str) -> Step<()> {
@@ -466,7 +526,10 @@ impl Poller<'_> {
         };
         for branch in branches.into_iter().filter(|b| !b.is_empty()) {
             let info = self
-                .get(&format!("/repos/{repo}/branches/{branch}"), repo)
+                .get(
+                    &format!("/repos/{repo}/branches/{}", segment(&branch)),
+                    repo,
+                )
                 .await?;
             let head = text(&info["commit"]["sha"]);
             let old = self.repo_cursor(repo).heads.get(&branch).cloned();
@@ -474,9 +537,12 @@ impl Poller<'_> {
                 self.repo_cursor(repo).heads.insert(branch, head);
                 continue;
             };
-            let compare = self
-                .get(&format!("/repos/{repo}/compare/{old}...{head}"), repo)
-                .await?;
+            // After a force-push the old head may be gone: that push is skipped.
+            let path = format!("/repos/{repo}/compare/{old}...{head}");
+            let Some(compare) = self.get_or_missing(&path, repo).await? else {
+                self.repo_cursor(repo).heads.insert(branch, head);
+                continue;
+            };
             let commits = compare["commits"].as_array().cloned().unwrap_or_default();
             let Some(last) = commits.last() else {
                 self.repo_cursor(repo).heads.insert(branch, head);

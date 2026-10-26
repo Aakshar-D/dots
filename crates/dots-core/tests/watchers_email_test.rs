@@ -376,3 +376,16 @@ async fn a_failure_of_dots_own_backs_off_and_the_mail_is_tried_again() {
     h.watchers.poll_now(&w.id).await.unwrap();
     assert_eq!(h.runs(&dot.id).await.len(), 1);
 }
+
+/// Deferred minor: two checks of one watcher never run at once, so a mail is never fired
+/// twice.
+#[tokio::test]
+async fn two_checks_at_once_fire_a_mail_once() {
+    let (h, fake, dot, w) = setup(|_| {}).await;
+    h.watchers.poll_now(&w.id).await.unwrap();
+    fake.deliver("INBOX", invoice(1));
+    let (a, b) = tokio::join!(h.watchers.poll_now(&w.id), h.watchers.poll_now(&w.id));
+    a.unwrap();
+    b.unwrap();
+    assert_eq!(h.runs(&dot.id).await.len(), 1);
+}
