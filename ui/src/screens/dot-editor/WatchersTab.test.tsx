@@ -256,13 +256,13 @@ describe("a dot's Watchers tab", () => {
     await waitFor(() => expect(backend.callsTo("watcher_delete")).toEqual([{ id: folder.id }]));
   });
 
-  it("gives each row's switch a visible label beside it, as the app's other switches have", async () => {
+  it("gives each row's switch a visible label beside it that reads right on or off", async () => {
     holding([folder]);
     await openTab();
     const row = await screen.findByRole("listitem", { name: "Invoices folder" });
     const toggle = within(row).getByRole("switch", { name: "Invoices folder is on" });
     const label = row.querySelector(`label[for="${toggle.id}"]`);
-    expect(label).toHaveTextContent("On");
+    expect(label).toHaveTextContent("Watching");
   });
 
   it("keeps its panel out of the tab order, its controls being the stops (WCAG target size)", async () => {
@@ -281,5 +281,53 @@ describe("a dot's Watchers tab", () => {
     await user.click(within(folderForm).getByRole("button", { name: "Cancel" }));
     const hubForm = await add(user, "GitHub", "New GitHub watcher");
     expect(within(hubForm).getByRole("group", { name: "Events" })).toBeVisible();
+  });
+
+  it("gives focus back to what opened the form when it closes", async () => {
+    holding([folder]);
+    backend.on("watcher_update", () => folder);
+    const { user } = await openTab();
+    const row = await screen.findByRole("listitem", { name: "Invoices folder" });
+    const addButton = screen.getByRole("button", { name: "Add watcher" });
+    let dialog = await add(user, "Folder", "New folder watcher");
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(addButton).toHaveFocus());
+    const edit = within(row).getByRole("button", { name: "Edit" });
+    await user.click(edit);
+    dialog = await screen.findByRole("dialog", { name: "Edit Invoices folder" });
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(edit).toHaveFocus());
+    await user.click(edit);
+    dialog = await screen.findByRole("dialog", { name: "Edit Invoices folder" });
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() =>
+      expect(within(screen.getByRole("listitem", { name: "Invoices folder" })).getByRole("button", { name: "Edit" })).toHaveFocus(),
+    );
+  });
+
+  it("gives focus back to the vault chooser when the vault form closes", async () => {
+    holding([]);
+    const { user } = await openTab();
+    const dialog = await add(user, "Email", "New email watcher");
+    const chooser = within(dialog).getByLabelText("App password");
+    await user.selectOptions(chooser, "Add to vault…");
+    const vault = await screen.findByRole("dialog", { name: "Add variable" });
+    await user.click(within(vault).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(chooser).toHaveFocus());
+  });
+
+  it("lets a row wrap and a long name break on a narrow window", async () => {
+    holding([{ ...github, name: "octocat/Hello-World-with-a-long-name" }]);
+    await openTab();
+    const row = await screen.findByRole("listitem", { name: "octocat/Hello-World-with-a-long-name" });
+    expect(row).toHaveClass("flex-wrap");
+    expect(within(row).getByText("octocat/Hello-World-with-a-long-name")).toHaveClass("break-words");
+  });
+
+  it("scrolls its tab strip, not the page, when the tabs do not fit", async () => {
+    holding([]);
+    await openTab();
+    expect(screen.getByRole("tablist")).toHaveClass("overflow-x-auto");
   });
 });

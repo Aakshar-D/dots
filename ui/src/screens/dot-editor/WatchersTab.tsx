@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Eye, Folder, GitPullRequest, Mail } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { commands } from "@/api/commands";
 import type {
@@ -120,12 +120,14 @@ function VaultChooser(props: {
 }) {
   const env = useQuery({ queryKey: keys.env, queryFn: commands.envList });
   const [adding, setAdding] = useState(false);
+  const select = useRef<HTMLSelectElement>(null);
   const secrets = (env.data ?? []).filter((e) => e.kind === "secret").map((e) => e.name);
   // What was just saved may not be in the list yet: it is an option all the same.
   if (props.value && !secrets.includes(props.value)) secrets.push(props.value);
   return (
     <>
       <NativeSelect
+        ref={select}
         id={props.id}
         value={props.value}
         onChange={(e) => {
@@ -146,7 +148,11 @@ function VaultChooser(props: {
           entry={null}
           initialName={props.initialName}
           onSaved={(saved) => props.onChange(saved.name)}
-          onClose={() => setAdding(false)}
+          onClose={() => {
+            setAdding(false);
+            // Back to the chooser, not the page.
+            setTimeout(() => select.current?.focus(), 0);
+          }}
         />
       )}
     </>
@@ -467,6 +473,8 @@ export function WatchersTab({ dotId }: { dotId: string }) {
   });
   const dot = useQuery({ queryKey: keys.dot(dotId), queryFn: () => commands.getDot(dotId) });
   const [form, setForm] = useState<{ kind: WatcherKind; watcher: Watcher | null } | null>(null);
+  const addButton = useRef<HTMLButtonElement>(null);
+  const editButtons = useRef(new Map<string, HTMLButtonElement>());
   const refresh = () => {
     invalidate(qc, keys.watchers(dotId));
     invalidate(qc, keys.inbox);
@@ -499,7 +507,9 @@ export function WatchersTab({ dotId }: { dotId: string }) {
       <div className="flex items-center justify-end">
         <DropdownMenu.Root modal={false}>
           <DropdownMenu.Trigger asChild>
-            <Button size="sm">Add watcher</Button>
+            <Button ref={addButton} size="sm">
+              Add watcher
+            </Button>
           </DropdownMenu.Trigger>
           <DropdownMenu.Portal>
             <DropdownMenu.Content
@@ -537,11 +547,12 @@ export function WatchersTab({ dotId }: { dotId: string }) {
               <li
                 key={w.id}
                 aria-label={w.name}
-                className="flex items-start gap-3 rounded-lg border p-3"
+                className="flex flex-wrap items-start gap-3 rounded-lg border p-3"
               >
                 <Icon aria-hidden className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-                <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                  <p className="font-medium">{w.name}</p>
+                {/* The text keeps at least 15rem; on a narrow window the controls wrap below. */}
+                <div className="flex min-w-0 flex-1 basis-60 flex-col gap-0.5">
+                  <p className="font-medium break-words">{w.name}</p>
                   <p className="truncate text-sm text-muted-foreground">{watcherSummary(w)}</p>
                   <p className="text-xs text-muted-foreground">
                     {w.last_event_at
@@ -554,32 +565,39 @@ export function WatchersTab({ dotId }: { dotId: string }) {
                     {watcherState(w)}
                   </p>
                 </div>
-                <div className="flex h-8 items-center gap-2">
-                  <Switch
-                    id={`watcher-on-${w.id}`}
-                    aria-label={`${w.name} is on`}
-                    checked={w.enabled && !paused}
-                    disabled={toggle.isPending}
-                    onCheckedChange={(on) => toggle.mutate({ watcher: w, on })}
-                  />
-                  <Label htmlFor={`watcher-on-${w.id}`}>On</Label>
+                <div className="ml-auto flex items-center gap-3">
+                  <div className="flex h-8 items-center gap-2">
+                    <Switch
+                      id={`watcher-on-${w.id}`}
+                      aria-label={`${w.name} is on`}
+                      checked={w.enabled && !paused}
+                      disabled={toggle.isPending}
+                      onCheckedChange={(on) => toggle.mutate({ watcher: w, on })}
+                    />
+                    {/* Names what the switch does, so it reads right on and off. */}
+                    <Label htmlFor={`watcher-on-${w.id}`}>Watching</Label>
+                  </div>
+                  <Button
+                    ref={(el) => {
+                      if (el) editButtons.current.set(w.id, el);
+                      else editButtons.current.delete(w.id);
+                    }}
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setForm({ kind: w.config.kind, watcher: w })}
+                  >
+                    Edit
+                  </Button>
+                  <ConfirmButton
+                    title={`Delete the watcher ${w.name}?`}
+                    description="It stops starting this dot. Runs it started stay."
+                    confirmLabel="Delete"
+                    disabled={remove.isPending}
+                    onConfirm={() => remove.mutate(w.id)}
+                  >
+                    Delete
+                  </ConfirmButton>
                 </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setForm({ kind: w.config.kind, watcher: w })}
-                >
-                  Edit
-                </Button>
-                <ConfirmButton
-                  title={`Delete the watcher ${w.name}?`}
-                  description="It stops starting this dot. Runs it started stay."
-                  confirmLabel="Delete"
-                  disabled={remove.isPending}
-                  onConfirm={() => remove.mutate(w.id)}
-                >
-                  Delete
-                </ConfirmButton>
               </li>
             );
           })}
@@ -591,7 +609,14 @@ export function WatchersTab({ dotId }: { dotId: string }) {
           workdir={dot.data?.workdir ?? null}
           watcher={form.watcher}
           kind={form.kind}
-          onClose={() => setForm(null)}
+          onClose={() => {
+            // Focus goes back to what opened the form: the row's Edit, or Add watcher.
+            const opener = form.watcher
+              ? () => editButtons.current.get(form.watcher!.id)
+              : () => addButton.current;
+            setForm(null);
+            setTimeout(() => opener()?.focus(), 0);
+          }}
         />
       )}
     </div>

@@ -224,7 +224,8 @@ function ExistingDot({ dotId }: { dotId: string }) {
               setParams(next === "settings" ? {} : { tab: next }, { replace: true })
             }
           >
-            <TabsList>
+            {/* Five tabs outgrow a narrow window: the strip scrolls, not the page. */}
+            <TabsList className="max-w-full justify-start overflow-x-auto overflow-y-hidden">
               <TabsTrigger value="settings">Settings</TabsTrigger>
               <TabsTrigger value="runs">Runs</TabsTrigger>
               <TabsTrigger value="follow-ups">Follow-ups</TabsTrigger>

@@ -439,3 +439,12 @@ async fn a_run_can_be_queued_under_an_id_made_beforehand() {
         .unwrap();
     assert_eq!(other.id.len(), 26);
 }
+
+/// Self-QA: an empty folder field asks for a folder, rather than for an absolute path.
+#[tokio::test]
+async fn an_empty_folder_field_asks_for_a_folder() {
+    let (_dir, store) = temp_store().await;
+    let refused = message(check_config(&store, &folder("  ")).await.unwrap_err());
+    assert_eq!(refused, dots_core::watchers::FOLDER_RULE);
+    assert_eq!(dots_core::watchers::FOLDER_RULE, "Choose a folder.");
+}

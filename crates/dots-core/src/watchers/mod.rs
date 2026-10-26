@@ -50,6 +50,7 @@ pub const MAX_BODY_CHARS: usize = 20_000;
 pub const MAX_NAME_CHARS: usize = 80;
 
 pub const NAME_RULE: &str = "A watcher's name is 1 to 80 characters.";
+pub const FOLDER_RULE: &str = "Choose a folder.";
 pub const NOT_ABSOLUTE: &str = "The folder must be an absolute path.";
 pub const FOLDER_EVENTS_RULE: &str = "Choose at least one of created, changed or deleted.";
 pub const ADDRESS_RULE: &str = "Enter the Gmail address.";
@@ -134,6 +135,9 @@ async fn check_secret(store: &Store, name: &str) -> Result<String> {
 
 fn check_folder(config: &FolderConfig) -> Result<FolderConfig> {
     let path = config.path.trim();
+    if path.is_empty() {
+        return Err(invalid(FOLDER_RULE));
+    }
     if !Path::new(path).is_absolute() {
         return Err(invalid(NOT_ABSOLUTE));
     }
