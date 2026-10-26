@@ -5,6 +5,7 @@ import { NavLink, Outlet } from "react-router";
 
 import { commands } from "@/api/commands";
 import { Banners } from "@/app/Banners";
+import { LimitsMeter } from "@/components/LimitsMeter";
 import { Badge } from "@/components/ui/badge";
 import { Toaster } from "@/components/ui/sonner";
 import { isOpenQuestion, waits } from "@/lib/messages";
@@ -78,6 +79,7 @@ export function Layout() {
             </NavLink>
           );
         })}
+        <LimitsMeter />
       </nav>
       <div className="flex min-w-0 flex-1 flex-col">
         <Banners />

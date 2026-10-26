@@ -76,6 +76,18 @@ export function installDefaults(): void {
   backend.on("startup_error", () => null);
   backend.on("status", () => quietStatus);
   backend.on("update_note", () => ({ state: "none" }));
+  // No Claude reading yet, nothing held.
+  backend.on("limits_get", () => ({
+    windows: [],
+    five_hour: null,
+    weekly: null,
+    shares: { enabled: true, five_hour: 60, weekly: 70 },
+    holding: false,
+    draining: false,
+    rejected_until: null,
+    held_run_ids: [],
+    hold_until: null,
+  }));
   backend.on("inbox", () => ({
     approvals: [],
     review_runs: [],
