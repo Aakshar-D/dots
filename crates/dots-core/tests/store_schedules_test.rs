@@ -29,7 +29,7 @@ fn daily_at_nine() -> Schedule {
 async fn scheduled(store: &Store, name: &str) -> Dot {
     let mut s = spec(name);
     s.schedule = Some(daily_at_nine());
-    let dot = store.create_dot(&s).await.unwrap();
+    let dot = store.create_dot(&s, None).await.unwrap();
     assert!(store
         .sync_schedule_state(&dot.id, dot.spec.schedule.as_ref(), false, t(T0))
         .await
@@ -166,7 +166,7 @@ async fn a_pass_works_on_the_rows_of_enabled_dots() {
     let off = scheduled(&store, "off").await;
     store.set_dot_enabled(&off.id, false).await.unwrap();
     // A dot without a schedule has no row.
-    store.create_dot(&spec("plain")).await.unwrap();
+    store.create_dot(&spec("plain"), None).await.unwrap();
 
     let rows = store.list_schedule_states().await.unwrap();
     assert_eq!(rows, [state(&store, &on).await]);
@@ -457,7 +457,7 @@ async fn the_write_that_judges_a_failed_run_marks_it_reviewed() {
 #[tokio::test]
 async fn a_run_records_the_run_it_retries() {
     let (_d, store) = temp_store().await;
-    let dot = store.create_dot(&spec("a")).await.unwrap();
+    let dot = store.create_dot(&spec("a"), None).await.unwrap();
     let plain = store
         .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
         .await

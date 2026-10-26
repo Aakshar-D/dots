@@ -10,15 +10,15 @@ import { keys } from "@/lib/query";
 
 import { ContextTab } from "./ContextTab";
 import { EnvTab } from "./EnvTab";
-import { McpServersTab, serverStatus } from "./McpServersTab";
+import { McpServersTab } from "./McpServersTab";
 import type { ContextEntry, PluginEntry, ServerEntry, SkillEntry } from "./parts";
 import { PluginsTab } from "./PluginsTab";
 import { SkillsTab } from "./SkillsTab";
-import { ToolsReview } from "./ToolsReview";
+import { catalogIn, ToolsReview } from "./ToolsReview";
 
 /// The Library: the MCP servers, skills, plugins, context collections and variables that dots
-/// can use. `?review=<server id>`
-/// opens the review of that server's changed tool list (the Inbox links to it).
+/// can use. `?review=<server id>` opens the review of that server's changed tool list, in
+/// Personal or, with `&scope=<org id>`, in that org (the Inbox links to it).
 export function LibraryScreen() {
   const library = useQuery({ queryKey: keys.library, queryFn: commands.libraryList });
   const [params, setParams] = useSearchParams();
@@ -40,9 +40,12 @@ export function LibraryScreen() {
   const contexts = entries.filter((e): e is ContextEntry => e.kind === "context");
 
   const reviewId = params.get("review");
-  const reviewing = servers.find((s) => s.id === reviewId && serverStatus(s) === "changed");
-  const review = (id: string | null) =>
-    setParams(id ? { review: id } : {}, { replace: true });
+  const reviewScope = params.get("scope") ?? undefined;
+  const reviewing = servers.find(
+    (s) => s.id === reviewId && catalogIn(s, reviewScope)?.status === "changed",
+  );
+  const review = (id: string | null, scope?: string) =>
+    setParams(id ? { review: id, ...(scope ? { scope } : {}) } : {}, { replace: true });
 
   return (
     <Page title="Library">
@@ -71,7 +74,9 @@ export function LibraryScreen() {
           <EnvTab />
         </TabsContent>
       </Tabs>
-      {reviewing && <ToolsReview entry={reviewing} onClose={() => review(null)} />}
+      {reviewing && (
+        <ToolsReview entry={reviewing} scope={reviewScope} onClose={() => review(null)} />
+      )}
     </Page>
   );
 }

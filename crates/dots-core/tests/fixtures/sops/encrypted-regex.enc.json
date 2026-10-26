@@ -1,0 +1,38 @@
+{
+	"env": {
+		"LOG_LEVEL": "ENC[AES256_GCM,data:dIx/dRw=,iv:04CWg92K0Um16I5XQVK0AHdZS5DmY4c2+Xb/JPMOyJU=,tag:52/I/mbdRCpx+lqO7O8tKA==,type:str]",
+		"DATABASE_URL": "ENC[AES256_GCM,data:NWukRRvKzXobc197PlYNfhO3ewQLuL7aC+QjV6MU8yYGH9uMWil0LF+9HFct/iq9MOBgKNmPTpsLQqwuwQ==,iv:StivQnwN6H/a4khmdrPotislVAThvriHbeKY28hR0f8=,tag:Qg1DnkL2mIsMGEioBBoiDA==,type:str]",
+		"API_KEY": "ENC[AES256_GCM,data:RCduow71sx1Y797dMvcYXta4F3hBrA==,iv:yN3eZqiTGmsfj1g8XSz9Lq3NS9/bJ4aXdW8Tfy4TimI=,tag:9XE383lPbdJ8c1p7h0HqxQ==,type:str]"
+	},
+	"policy": "ENC[AES256_GCM,data:tsUCyTr4C6Hd7Kp/qe/9U6WeEmrFUgHSumz6h+mnnIN6Y5eNrcVl+NH5jeGsIn4E2uwc6YNPB+X+n/r5mhAz6Z8=,iv:FmJZELykCSlW4kTri40l9ODSPrzJ0LkQbBatuyy4lg4=,tag:K5eUctdG21Kl9FI2GRaKaQ==,type:str]",
+	"extra": {
+		"region": "eu-west-1",
+		"replicas": [
+			3,
+			5,
+			{
+				"name": "edge",
+				"weight": 0.25
+			}
+		],
+		"retries": 7,
+		"ratio": 1.5,
+		"enabled": true,
+		"disabled": false,
+		"blank": "",
+		"nothing": null
+	},
+	"note_unencrypted": "visible text that the MAC still covers",
+	"sops": {
+		"age": [
+			{
+				"enc": "-----BEGIN AGE ENCRYPTED FILE-----\nYWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBOVTdMTE1xYmErNTY4blYy\nS3JoRmFScE1DR281VDh2V1VPeGFKbXQxT1ZFCnplY0FpYkJSSkVpNmRlMEtram9B\ncFFoZGFKS3dTTWkrYzdoRDI4YnZlNDgKLS0tIGExcEZmTFBkUnhnMXlnbUZZRWJ3\ndlcxcEtrNUJOSTJRTWNDYy9idHlLR0EKdfqCWvJU8KIGM0oESm+P+dg74spqBDFJ\nJngVaWbkAfvzXZeanAZ04ZU4c62QZYnoeDyltLoiS/cUFLZAZ/Nnag==\n-----END AGE ENCRYPTED FILE-----\n",
+				"recipient": "age1a03d7rmd3zc7lpcxldf24f2g2gyhgphdwesczxmtf0vfvcjtcshseuswgt"
+			}
+		],
+		"encrypted_regex": "^(env|policy)$",
+		"lastmodified": "2026-10-23T18:59:10Z",
+		"mac": "ENC[AES256_GCM,data:+oxVuOHmqSZebQccqnrHF2LaZ6fq7jVl/HaX2UPs/5fmHzYEyCEaNuElS1SfdpE5eByk4R63leudfBxhDDceZ+BU0n8PAAwRZx4k7Vc0AUyrbxTp+6xs3lko/PNn/0tZ9QywoUoGWQMDkyOB+D1mabPtIl4xxukR6CtCbIbahXQ=,iv:844zZfblGEqrFPFqN5GTsyNGt/kJ4Bl3WC8IxVyMuBo=,tag:gwBNV/11q+mgZsmYWhzz3A==,type:str]",
+		"version": "3.13.3"
+	}
+}

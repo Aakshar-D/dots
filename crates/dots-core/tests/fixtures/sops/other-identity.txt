@@ -1,0 +1,5 @@
+# For tests only: a throwaway key that protects no real secret. Never use it elsewhere.
+# It is not a recipient of the files encrypted to test-identity.txt alone.
+# created: 2026-10-23T14:51:59-04:00
+# public key: age16fa053f93s48cuu70erfpw7yygxuwkns96x5ptg2ldsrlceqgf8qw8r74u
+AGE-SECRET-KEY-16Y7NC2KHX6TME4X70HF4GVPHDZ5ULNDHLUE9PDTTCUF4LV5W2QFSXCRW3F

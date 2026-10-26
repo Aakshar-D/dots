@@ -11,12 +11,12 @@ use common::{spec, temp_store};
 use dots_core::events::{new_bus, Bus, RuntimeEvent};
 use dots_core::library::{
     CatalogStatus, ContextConfig, LibraryConfig, LibraryKind, McpServerConfig, PluginConfig,
-    SkillConfig,
+    SkillConfig, PERSONAL_SCOPE,
 };
 use dots_core::library_service::LibraryService;
 use dots_core::mcp::fingerprint;
 use dots_core::store::Store;
-use dots_core::vault::{EntryKind, Grants, Vault};
+use dots_core::vault::{DotScope, EntryKind, Grants, Vault};
 use dots_core::Error;
 use serde_json::{json, Value};
 use tempfile::TempDir;
@@ -129,7 +129,7 @@ async fn adding_a_server_with_the_probed_fingerprint_accepts_that_list() {
         .add("files", server(&fake), Some(&probe.fingerprint))
         .await
         .unwrap();
-    let catalog = store.get_catalog(&item.id).await.unwrap();
+    let catalog = store.get_catalog(&item.id, PERSONAL_SCOPE).await.unwrap();
     assert_eq!(catalog.status, CatalogStatus::Accepted);
     assert_eq!(
         catalog.accepted_fingerprint.as_deref(),
@@ -147,7 +147,11 @@ async fn a_server_added_without_a_fingerprint_stays_unchecked_and_is_not_started
     let fake = FakeMcp::new(json!({"tools": [tool("read", true)]}));
     let item = lib.add("files", server(&fake), None).await.unwrap();
     assert_eq!(
-        store.get_catalog(&item.id).await.unwrap().status,
+        store
+            .get_catalog(&item.id, PERSONAL_SCOPE)
+            .await
+            .unwrap()
+            .status,
         CatalogStatus::Unchecked
     );
     assert!(fake.received("initialize").is_empty());
@@ -163,7 +167,7 @@ async fn adding_with_a_fingerprint_that_moved_leaves_the_list_to_review() {
         .add("files", server(&fake), Some("not-what-it-lists"))
         .await
         .unwrap();
-    let catalog = store.get_catalog(&item.id).await.unwrap();
+    let catalog = store.get_catalog(&item.id, PERSONAL_SCOPE).await.unwrap();
     assert_eq!(catalog.status, CatalogStatus::Changed);
     assert_eq!(catalog.accepted_fingerprint, None);
     assert!(catalog.seen_fingerprint.is_some());
@@ -188,13 +192,13 @@ async fn check_records_a_changed_list_and_accept_guards_the_fingerprint() {
         .unwrap();
 
     // The same list: still accepted.
-    let same = lib.check(&item.id).await.unwrap();
+    let same = lib.check(&item.id, &DotScope::Personal).await.unwrap();
     assert_eq!(same.status, CatalogStatus::Accepted);
 
     // The server now lists another tool.
     fake.rewrite(json!({"tools": [tool("read", true), tool("drop", false)]}));
     let mut rx = bus.subscribe();
-    let changed = lib.check(&item.id).await.unwrap();
+    let changed = lib.check(&item.id, &DotScope::Personal).await.unwrap();
     assert_eq!(changed.status, CatalogStatus::Changed);
     assert_eq!(
         changed.accepted_fingerprint.as_deref(),
@@ -204,9 +208,15 @@ async fn check_records_a_changed_list_and_accept_guards_the_fingerprint() {
     assert_ne!(seen, first.fingerprint);
     assert_eq!(updated(&mut rx), vec![item.id.clone()]);
 
-    let err = lib.accept(&item.id, &first.fingerprint).await.unwrap_err();
+    let err = lib
+        .accept(&item.id, &DotScope::Personal, &first.fingerprint)
+        .await
+        .unwrap_err();
     assert!(matches!(err, Error::Conflict(_)), "{err}");
-    let accepted = lib.accept(&item.id, &seen).await.unwrap();
+    let accepted = lib
+        .accept(&item.id, &DotScope::Personal, &seen)
+        .await
+        .unwrap();
     assert_eq!(accepted.status, CatalogStatus::Accepted);
     assert_eq!(accepted.accepted_fingerprint, Some(seen));
     assert_eq!(updated(&mut rx), vec![item.id.clone()]);
@@ -229,10 +239,14 @@ async fn a_failed_check_is_unreachable_and_keeps_the_accepted_list() {
     ));
     lib.update(&item.id, broken).await.unwrap();
     assert_eq!(
-        store.get_catalog(&item.id).await.unwrap().status,
+        store
+            .get_catalog(&item.id, PERSONAL_SCOPE)
+            .await
+            .unwrap()
+            .status,
         CatalogStatus::Unchecked
     );
-    let catalog = lib.check(&item.id).await.unwrap();
+    let catalog = lib.check(&item.id, &DotScope::Personal).await.unwrap();
     assert_eq!(catalog.status, CatalogStatus::Unreachable);
     assert_eq!(
         catalog.error.as_deref(),
@@ -255,11 +269,13 @@ async fn only_an_mcp_server_is_checked_or_accepted() {
         .await
         .unwrap();
     assert!(matches!(
-        lib.check(&skill.id).await.unwrap_err(),
+        lib.check(&skill.id, &DotScope::Personal).await.unwrap_err(),
         Error::Invalid(_)
     ));
     assert!(matches!(
-        lib.accept(&skill.id, "fp").await.unwrap_err(),
+        lib.accept(&skill.id, &DotScope::Personal, "fp")
+            .await
+            .unwrap_err(),
         Error::Invalid(_)
     ));
 }
@@ -277,7 +293,7 @@ async fn removing_an_item_that_dots_use_asks_first_and_names_them() {
     for name in ["nightly", "audit"] {
         let mut s = spec(name);
         s.uses.skills = vec!["pdf".into()];
-        store.create_dot(&s).await.unwrap();
+        store.create_dot(&s, None).await.unwrap();
     }
     let err = lib.remove(&skill.id, false).await.unwrap_err();
     match &err {
@@ -363,8 +379,10 @@ async fn a_plugins_mcp_servers_are_kept_in_line_with_its_folder() {
         .unwrap();
     // Accept beta's list, so that a change of its config shows as a reset.
     let probe = lib.probe(&b.stdio()).await.unwrap();
-    lib.check(&beta.id).await.unwrap();
-    lib.accept(&beta.id, &probe.fingerprint).await.unwrap();
+    lib.check(&beta.id, &DotScope::Personal).await.unwrap();
+    lib.accept(&beta.id, &DotScope::Personal, &probe.fingerprint)
+        .await
+        .unwrap();
 
     // The folder changes: alpha goes, beta gets an argument, gamma comes.
     let c = FakeMcp::new(json!({"tools": [tool("c", true)]}));
@@ -396,7 +414,11 @@ async fn a_plugins_mcp_servers_are_kept_in_line_with_its_folder() {
     let beta_now = store.get_library_item(&beta.id).await.unwrap();
     assert_eq!(beta_now.id, beta.id, "a server that stays keeps its item");
     assert_eq!(
-        store.get_catalog(&beta.id).await.unwrap().status,
+        store
+            .get_catalog(&beta.id, PERSONAL_SCOPE)
+            .await
+            .unwrap()
+            .status,
         CatalogStatus::Unchecked
     );
     let ids = updated(&mut rx);
@@ -441,7 +463,7 @@ async fn the_list_says_who_uses_an_item_and_what_it_holds() {
     let mut s = spec("nightly");
     s.uses.mcp_servers = vec!["files".into()];
     s.uses.plugins = vec!["forms".into()];
-    let dot = store.create_dot(&s).await.unwrap();
+    let dot = store.create_dot(&s, None).await.unwrap();
     // The skill's folder goes away after it was added.
     std::fs::remove_dir_all(&skill_path).unwrap();
 
@@ -583,7 +605,7 @@ async fn the_inbox_lists_servers_whose_tools_changed_and_counts_them() {
         .unwrap();
     let mut s = spec("nightly");
     s.uses.mcp_servers = vec!["files".into()];
-    rt.create_dot(s).await.unwrap();
+    rt.create_dot(s, None).await.unwrap();
     let inbox = rt.inbox().await.unwrap();
     assert_eq!(inbox.tools_changed.len(), 1);
     let changed = &inbox.tools_changed[0];
@@ -595,12 +617,15 @@ async fn the_inbox_lists_servers_whose_tools_changed_and_counts_them() {
 
     let seen = rt
         .store()
-        .get_catalog(&item.id)
+        .get_catalog(&item.id, PERSONAL_SCOPE)
         .await
         .unwrap()
         .seen_fingerprint
         .unwrap();
-    rt.library().accept(&item.id, &seen).await.unwrap();
+    rt.library()
+        .accept(&item.id, &DotScope::Personal, &seen)
+        .await
+        .unwrap();
     assert!(rt.inbox().await.unwrap().tools_changed.is_empty());
     assert_eq!(rt.inbox_count().await.unwrap(), 0);
     rt.shutdown();
@@ -666,6 +691,7 @@ async fn runs_opening_one_plugin_together_after_its_servers_changed_all_succeed(
                 plugins_dir: None,
                 cancel: &CancellationToken::new(),
                 vault: &Vault::in_memory(store.clone()),
+                scope: &DotScope::Personal,
                 grants: &Grants::default(),
                 dot_name: "forms",
             })
@@ -745,6 +771,7 @@ async fn an_installed_plugin_that_moved_has_its_hooks_switched_off() {
                 plugins_dir: Some(plugins_dir),
                 cancel: &CancellationToken::new(),
                 vault: &Vault::in_memory(store.clone()),
+                scope: &DotScope::Personal,
                 grants: &Grants::default(),
                 dot_name: "forms",
             })
@@ -818,7 +845,7 @@ Short sentences.",
         .unwrap();
     let mut s = spec("nightly");
     s.uses.context = vec!["company".into()];
-    store.create_dot(&s).await.unwrap();
+    store.create_dot(&s, None).await.unwrap();
     let entry = lib
         .list()
         .await
@@ -862,10 +889,10 @@ async fn removing_a_collection_takes_it_out_of_the_dots_that_tick_it() {
     let mut s = spec("nightly");
     s.uses.context = vec!["company".into()];
     s.uses.skills = Vec::new();
-    store.create_dot(&s).await.unwrap();
+    store.create_dot(&s, None).await.unwrap();
     let mut unknown = spec("audit");
     unknown.uses.context = vec!["clients".into()];
-    let err = store.create_dot(&unknown).await.unwrap_err();
+    let err = store.create_dot(&unknown, None).await.unwrap_err();
     assert!(
         err.to_string()
             .contains("the Library has no context collection named \"clients\""),

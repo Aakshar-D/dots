@@ -9,7 +9,7 @@ use dots_core::workflow::{Budget, Definition, Step, StepKind, Trigger};
 use dots_core::Error;
 
 async fn dot(store: &Store, name: &str) -> String {
-    store.create_dot(&spec(name)).await.unwrap().id
+    store.create_dot(&spec(name), None).await.unwrap().id
 }
 
 fn team(name: &str, members: &[&str]) -> TeamSpec {

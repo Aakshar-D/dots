@@ -41,7 +41,7 @@ impl Rt {
     }
 
     async fn dot(&self, name: &str) -> Dot {
-        self.rt.create_dot(spec(name)).await.unwrap()
+        self.rt.create_dot(spec(name), None).await.unwrap()
     }
 
     /// A manual run of `dot` that ended with `status`, with the session `s1` when `session`.

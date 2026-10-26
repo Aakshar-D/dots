@@ -1,0 +1,10 @@
+{
+  "env": {
+    "API_KEY": "fixture-api-key-9d27b3",
+    "DOTS_POLICY": "fixture-skipped-1f0a",
+    "dots_policy": "fixture-skipped-1f0a",
+    "1BAD": "fixture-skipped-1f0a",
+    "has-dash": "fixture-skipped-1f0a"
+  },
+  "policy": "placeholder-signed-policy-5a8e: the SOPS source does not check it"
+}

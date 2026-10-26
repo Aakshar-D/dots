@@ -203,7 +203,7 @@ async fn worktree_dot(store: &Store, dir: &Path, name: &str) -> Dot {
     let mut s = spec(name);
     s.workdir = own.to_string_lossy().to_string();
     s.workspace_mode = WorkspaceMode::Worktree;
-    store.create_dot(&s).await.unwrap()
+    store.create_dot(&s, None).await.unwrap()
 }
 
 async fn world() -> World {

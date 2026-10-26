@@ -42,7 +42,7 @@ async fn open_the_browser_opens_the_dots_edge_and_deleting_the_dot_removes_it() 
     let rt = runtime(&dir).await;
     let root = dir.path().join("data").join("browser");
     let edges = FakeEdges::new(&root);
-    let dot = rt.create_dot(browser_spec(&dir)).await.unwrap();
+    let dot = rt.create_dot(browser_spec(&dir), None).await.unwrap();
     rt.browser_open(&dot.id).await.unwrap();
     assert!(edges.running(&dot.id));
     let args: Vec<String> =
@@ -87,7 +87,7 @@ async fn the_status_names_edge_and_a_missing_edge_is_said() {
     };
     rt.update_settings(settings).await.unwrap();
     assert_eq!(rt.browser_status().await.edge, None);
-    let dot = rt.create_dot(browser_spec(&dir)).await.unwrap();
+    let dot = rt.create_dot(browser_spec(&dir), None).await.unwrap();
     let err = rt.browser_open(&dot.id).await.unwrap_err();
     assert_eq!(
         err.to_string(),
@@ -100,7 +100,7 @@ async fn the_status_names_edge_and_a_missing_edge_is_said() {
 async fn a_screenshot_is_read_only_by_its_playwright_name() {
     let dir = tempfile::tempdir().unwrap();
     let rt = runtime(&dir).await;
-    let dot = rt.create_dot(browser_spec(&dir)).await.unwrap();
+    let dot = rt.create_dot(browser_spec(&dir), None).await.unwrap();
     let ws = dir.path().join("ws");
     std::fs::create_dir_all(ws.join("downloads")).unwrap();
     let mut new = NewRun::new(&dot.id, TriggerKind::Manual);

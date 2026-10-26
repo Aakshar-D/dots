@@ -9,10 +9,10 @@ use std::collections::BTreeMap;
 use common::fake_mcp::{tool, FakeMcp};
 use common::{spec, temp_store};
 use dots_core::events::new_bus;
-use dots_core::library::{LibraryConfig, McpServerConfig, PluginConfig, Uses};
+use dots_core::library::{LibraryConfig, McpServerConfig, PluginConfig, Uses, PERSONAL_SCOPE};
 use dots_core::run_tools::{OpenRequest, RunTools};
 use dots_core::store::Store;
-use dots_core::vault::{Consumer, EntryKind, Grants, Missing, Unresolved, Vault};
+use dots_core::vault::{Consumer, DotScope, EntryKind, Grants, Missing, Unresolved, Vault};
 use dots_core::Error;
 use serde_json::{json, Value};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
@@ -119,7 +119,7 @@ async fn ticking_a_server_grants_its_variables_and_a_later_one_waits() {
         .unwrap();
     let mut s = spec("triage");
     s.uses.mcp_servers = names(&["github", "plain"]);
-    let dot = store.create_dot(&s).await.unwrap();
+    let dot = store.create_dot(&s, None).await.unwrap();
     assert_eq!(
         dot.spec.variables,
         grants(&[("mcp:github", &["GITHUB_TOKEN"])])
@@ -191,7 +191,7 @@ async fn ticking_a_plugin_grants_the_variables_of_its_servers() {
     .unwrap();
     let mut s = spec("filler");
     s.uses.plugins = names(&["forms"]);
-    let dot = store.create_dot(&s).await.unwrap();
+    let dot = store.create_dot(&s, None).await.unwrap();
     assert_eq!(
         dot.spec.variables,
         grants(&[("mcp:plugin-forms-db", &["DB_TOKEN"])])
@@ -225,7 +225,7 @@ async fn a_plugin_update_adding_a_variable_does_not_grant_it() {
     let item = lib.add("forms", plugin.clone(), None).await.unwrap();
     let mut s = spec("filler");
     s.uses.plugins = names(&["forms"]);
-    let dot = store.create_dot(&s).await.unwrap();
+    let dot = store.create_dot(&s, None).await.unwrap();
     // The plugin's update reads one more variable, and the plugin is synced again.
     std::fs::write(
         root.join(".mcp.json"),
@@ -265,7 +265,7 @@ async fn a_name_resolves_only_when_granted_and_only_from_personal() {
     let g = grants(&[("mcp:github", &["github_token", "DOTS_VAULT_ONLY_IN_ENV"])]);
 
     let ok = vault
-        .resolve(&g, &github, &names(&["GITHUB_TOKEN"]))
+        .resolve(&DotScope::Personal, &g, &github, &names(&["GITHUB_TOKEN"]))
         .await
         .unwrap()
         .unwrap();
@@ -273,6 +273,7 @@ async fn a_name_resolves_only_when_granted_and_only_from_personal() {
 
     let missing = vault
         .resolve(
+            &DotScope::Personal,
             &g,
             &github,
             &names(&["GITHUB_TOKEN", "DOTS_VAULT_ONLY_IN_ENV"]),
@@ -287,7 +288,12 @@ async fn a_name_resolves_only_when_granted_and_only_from_personal() {
     );
 
     let refused: Missing = vault
-        .resolve(&g, &Consumer::Shell, &names(&["GITHUB_TOKEN"]))
+        .resolve(
+            &DotScope::Personal,
+            &g,
+            &Consumer::Shell,
+            &names(&["GITHUB_TOKEN"]),
+        )
         .await
         .unwrap()
         .unwrap_err();
@@ -313,6 +319,7 @@ async fn open(
         plugins_dir: None,
         cancel: &CancellationToken::new(),
         vault,
+        scope: &DotScope::Personal,
         grants,
         dot_name: "triage",
     })
@@ -359,7 +366,7 @@ async fn a_run_starts_a_server_with_its_granted_values_and_leaves_out_one_withou
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
     assert_eq!(shell, [("LOG_LEVEL", "debug")]);
-    let catalog = store.get_catalog(&item.id).await.unwrap();
+    let catalog = store.get_catalog(&item.id, PERSONAL_SCOPE).await.unwrap();
     assert_eq!(catalog.error, None);
     tools.close().await;
 
@@ -452,7 +459,7 @@ async fn a_name_personal_cannot_hold_is_not_auto_granted_and_the_dot_still_saves
         .unwrap();
     let mut s = spec("wide-dot");
     s.uses.mcp_servers = names(&["wide"]);
-    let dot = store.create_dot(&s).await.unwrap();
+    let dot = store.create_dot(&s, None).await.unwrap();
     assert_eq!(dot.spec.variables, grants(&[("mcp:wide", &["GOOD"])]));
     store.update_dot(&dot.id, &dot.spec).await.unwrap();
 }
@@ -468,7 +475,7 @@ async fn resolved_values_never_print() {
     let github = Consumer::Mcp("github".into());
     let g = grants(&[("mcp:github", &["DEMO_TOKEN"])]);
     let resolved = vault
-        .resolve(&g, &github, &names(&["DEMO_TOKEN"]))
+        .resolve(&DotScope::Personal, &g, &github, &names(&["DEMO_TOKEN"]))
         .await
         .unwrap()
         .unwrap();
@@ -477,7 +484,7 @@ async fn resolved_values_never_print() {
     assert!(!shown.contains("s3cret-made-up-value"), "{shown}");
     // What does not resolve holds names and a consumer only.
     let missing = vault
-        .resolve(&g, &github, &names(&["OTHER"]))
+        .resolve(&DotScope::Personal, &g, &github, &names(&["OTHER"]))
         .await
         .unwrap()
         .unwrap_err();
@@ -593,4 +600,208 @@ async fn a_token_that_is_already_a_hash_is_not_hashed_again() {
         None
     );
     store.close().await;
+}
+
+/// A database Dots left at 0012 at `path`, holding the Library `servers` (id, name, config)
+/// and the plain Personal variables `plain`.
+async fn db_at_0012(
+    path: &std::path::Path,
+    servers: &[(&str, &str, Value)],
+    plain: &[(&str, &str)],
+) {
+    let opts = SqliteConnectOptions::new()
+        .filename(path)
+        .create_if_missing(true);
+    let pool = SqlitePool::connect_with(opts).await.unwrap();
+    let mut before = sqlx::migrate!("./migrations");
+    before.migrations = before
+        .migrations
+        .iter()
+        .filter(|m| m.version < 13)
+        .cloned()
+        .collect::<Vec<_>>()
+        .into();
+    before.run(&pool).await.unwrap();
+    for (id, name, config) in servers {
+        sqlx::query(
+            "INSERT INTO library_items (id, kind, name, config, owner_id, created_at, \
+             updated_at) VALUES (?, 'mcp_server', ?, ?, NULL, '2026-10-01T00:00:00.000Z', \
+             '2026-10-01T00:00:00.000Z')",
+        )
+        .bind(id)
+        .bind(name)
+        .bind(config.to_string())
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    for (name, value) in plain {
+        sqlx::query(
+            "INSERT INTO env_entries (name, kind, value, created_at, updated_at) \
+             VALUES (?, 'plain', ?, '2026-10-01T00:00:00.000Z', '2026-10-01T00:00:00.000Z')",
+        )
+        .bind(name)
+        .bind(value)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    pool.close().await;
+}
+
+/// Whether the database at `path` still has migration 0013's list of servers to do.
+async fn upgrade_0013_waits(path: &std::path::Path) -> bool {
+    let opts = SqliteConnectOptions::new().filename(path);
+    let pool = SqlitePool::connect_with(opts).await.unwrap();
+    let left: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'upgrade_0013'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    pool.close().await;
+    left > 0
+}
+
+/// Migration 0013: each http server whose URL reads a variable gets the origin its URL reaches
+/// with Personal's values now confirmed in Personal, so it keeps working; one whose origin
+/// cannot be computed, a fixed URL (whatever its headers send) and a stdio server get none. It
+/// runs once.
+#[tokio::test]
+async fn migration_0013_confirms_the_origin_each_http_server_reaches_now() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("dots.db");
+    let http =
+        |url: &str, headers: Value| json!({"transport": "http", "url": url, "headers": headers});
+    db_at_0012(
+        &path,
+        &[
+            (
+                "S1",
+                "hosted",
+                http(
+                    "https://${MCP_HOST}/mcp",
+                    json!({"A": "Bearer ${GH_TOKEN}"}),
+                ),
+            ),
+            (
+                "S2",
+                "unset",
+                http("https://${NOT_SET}/mcp", json!({"A": "${GH_TOKEN}"})),
+            ),
+            (
+                "S3",
+                "plain",
+                http("https://plain.example/mcp", json!({"A": "fixed"})),
+            ),
+            (
+                "S4",
+                "github",
+                http(
+                    "https://API.github.com:443/mcp",
+                    json!({"A": "${GH_TOKEN}"}),
+                ),
+            ),
+            (
+                "S5",
+                "local",
+                json!({"transport": "stdio", "command": "node", "env": {"T": "${GH_TOKEN}"}}),
+            ),
+            (
+                "S6",
+                "github-path",
+                http(
+                    "https://API.github.com:443/${GH_PATH}",
+                    json!({"A": "${GH_TOKEN}"}),
+                ),
+            ),
+        ],
+        &[("MCP_HOST", "mcp.example:8443"), ("GH_PATH", "mcp")],
+    )
+    .await;
+
+    let store = Store::open(&path).await.unwrap();
+    assert!(upgrade_0013_waits(&path).await);
+    // What Runtime::start does once the vault is open.
+    let vault = Vault::in_memory(store.clone());
+    assert_eq!(store.finish_0013(&vault).await.unwrap(), 2);
+    let confirmed = |pairs: &[&str]| -> BTreeMap<String, Vec<String>> {
+        match pairs {
+            [] => BTreeMap::new(),
+            list => BTreeMap::from([(
+                PERSONAL_SCOPE.to_string(),
+                list.iter().map(|s| s.to_string()).collect(),
+            )]),
+        }
+    };
+    let want = [
+        ("S1", confirmed(&["https://mcp.example:8443"])),
+        ("S2", confirmed(&[])),
+        ("S3", confirmed(&[])),
+        ("S4", confirmed(&[])),
+        ("S5", confirmed(&[])),
+        ("S6", confirmed(&["https://api.github.com"])),
+    ];
+    for (id, origins) in &want {
+        assert_eq!(&store.confirmed_origins(id).await.unwrap(), origins, "{id}");
+    }
+    assert!(!upgrade_0013_waits(&path).await, "the list is dropped");
+
+    // Once only: values set or changed since are not recorded by a second start.
+    vault
+        .add("NOT_SET", EntryKind::Plain, "late.example")
+        .await
+        .unwrap();
+    vault.set_value("MCP_HOST", "moved.example").await.unwrap();
+    store.close().await;
+    let store = Store::open(&path).await.unwrap();
+    let vault = Vault::in_memory(store.clone());
+    assert_eq!(store.finish_0013(&vault).await.unwrap(), 0);
+    for (id, origins) in &want {
+        assert_eq!(&store.confirmed_origins(id).await.unwrap(), origins, "{id}");
+    }
+}
+
+/// A store with no Library items, as a new data folder has: nothing to record, and the list
+/// is still dropped.
+#[tokio::test]
+async fn migration_0013_on_a_store_without_servers_records_nothing() {
+    let (dir, store) = temp_store().await;
+    let path = dir.path().join("dots.db");
+    assert!(upgrade_0013_waits(&path).await);
+    let vault = Vault::in_memory(store.clone());
+    assert_eq!(store.finish_0013(&vault).await.unwrap(), 0);
+    assert!(!upgrade_0013_waits(&path).await);
+    assert_eq!(store.finish_0013(&vault).await.unwrap(), 0);
+}
+
+/// The runtime runs the step at its start: a server from before 0013 starts where it did.
+#[tokio::test]
+async fn a_runtime_start_confirms_the_origins_of_the_servers_from_before() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("data");
+    std::fs::create_dir_all(&data).unwrap();
+    db_at_0012(
+        &data.join(dots_core::store::DB_FILE),
+        &[(
+            "S1",
+            "hosted",
+            json!({"transport": "http", "url": "https://${MCP_HOST}/mcp"}),
+        )],
+        &[("MCP_HOST", "mcp.example")],
+    )
+    .await;
+    let mut cfg = dots_core::Config::new(data);
+    cfg.port = 0;
+    cfg.claude_path = Some(dir.path().join("no-claude.exe"));
+    let rt = dots_core::Runtime::start(cfg).await.unwrap();
+    assert_eq!(
+        rt.store().confirmed_origins("S1").await.unwrap(),
+        BTreeMap::from([(
+            PERSONAL_SCOPE.to_string(),
+            vec!["https://mcp.example".to_string()]
+        )])
+    );
+    assert_eq!(rt.store().finish_0013(rt.vault()).await.unwrap(), 0);
+    rt.shutdown();
 }

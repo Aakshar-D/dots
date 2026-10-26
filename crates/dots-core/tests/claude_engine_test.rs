@@ -83,7 +83,7 @@ async fn folder_dot(e: &E2e, wait: u64) -> Dot {
     s.workdir = e.dir.path().to_string_lossy().to_string();
     s.workspace_mode = WorkspaceMode::Folder;
     s.approval_wait_secs = wait;
-    e.store.create_dot(&s).await.unwrap()
+    e.store.create_dot(&s, None).await.unwrap()
 }
 
 fn recorded_args(e: &E2e) -> Value {
@@ -446,7 +446,7 @@ async fn the_cli_gets_the_shell_grants_and_not_the_rest_of_dots_environment() {
         )]
         .into(),
     );
-    let dot = e.store.create_dot(&s).await.unwrap();
+    let dot = e.store.create_dot(&s, None).await.unwrap();
     let run = e
         .runner
         .enqueue(NewRun::new(&dot.id, TriggerKind::Manual))
@@ -480,7 +480,7 @@ async fn the_gateway_file_is_owner_only_while_the_run_is_on() {
     let mut s = spec("dacl");
     s.workdir = e.dir.path().to_string_lossy().to_string();
     s.workspace_mode = WorkspaceMode::Folder;
-    let dot = e.store.create_dot(&s).await.unwrap();
+    let dot = e.store.create_dot(&s, None).await.unwrap();
     let run = e
         .runner
         .enqueue(NewRun::new(&dot.id, TriggerKind::Manual))
@@ -543,7 +543,7 @@ async fn a_shell_grant_cannot_set_the_clis_own_variables() {
         )]
         .into(),
     );
-    let dot = e.store.create_dot(&s).await.unwrap();
+    let dot = e.store.create_dot(&s, None).await.unwrap();
     let run = e
         .runner
         .enqueue(NewRun::new(&dot.id, TriggerKind::Manual))
@@ -581,7 +581,7 @@ async fn a_shell_grant_cannot_redirect_the_cli_or_load_code_into_it() {
     let mut granted: Vec<String> = refused.iter().map(|n| n.to_string()).collect();
     granted.push("DOTS_TEST_GRANTED".into());
     s.variables = Grants([("shell".to_string(), granted)].into());
-    let dot = e.store.create_dot(&s).await.unwrap();
+    let dot = e.store.create_dot(&s, None).await.unwrap();
     let run = e
         .runner
         .enqueue(NewRun::new(&dot.id, TriggerKind::Manual))

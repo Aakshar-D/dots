@@ -1,0 +1,7 @@
+{
+  "env": {
+    "API_KEY": "fixture-api-key-9d27b3",
+    "Api_Key": "fixture-api-key-9d27b3"
+  },
+  "policy": "placeholder-signed-policy-5a8e: the SOPS source does not check it"
+}

@@ -39,7 +39,7 @@ async fn create_and_get_round_trip() {
     );
     store.add_library_item("sf", &sf, None).await.unwrap();
     s.uses.mcp_servers = vec!["sf".into()];
-    let dot = store.create_dot(&s).await.unwrap();
+    let dot = store.create_dot(&s, None).await.unwrap();
     assert_eq!(dot.spec, s);
     assert_eq!(dot.id.len(), 26);
     // No webhook token until one is made (env vault spec §11).
@@ -47,13 +47,15 @@ async fn create_and_get_round_trip() {
     assert_eq!(dot.created_at, dot.updated_at);
     assert_eq!(store.get_dot(&dot.id).await.unwrap(), dot);
     assert_eq!(dot.spec.policy.preset, Preset::Sandboxed);
+    // A dot is Personal unless it is made in an org.
+    assert_eq!(dot.org_id, None);
 }
 
 #[tokio::test]
 async fn duplicate_name_conflicts() {
     let (_d, store) = temp_store().await;
-    store.create_dot(&spec("a")).await.unwrap();
-    let err = store.create_dot(&spec("a")).await.unwrap_err();
+    store.create_dot(&spec("a"), None).await.unwrap();
+    let err = store.create_dot(&spec("a"), None).await.unwrap_err();
     assert!(matches!(err, Error::Conflict(_)), "{err:?}");
 }
 
@@ -107,7 +109,7 @@ async fn invalid_specs_are_rejected() {
         empty_skill,
         zero_turns,
     ] {
-        let err = store.create_dot(&s).await.unwrap_err();
+        let err = store.create_dot(&s, None).await.unwrap_err();
         assert!(matches!(err, Error::Invalid(_)), "{}: {err:?}", s.name);
     }
     assert!(store.list_dots().await.unwrap().is_empty());
@@ -116,7 +118,7 @@ async fn invalid_specs_are_rejected() {
 #[tokio::test]
 async fn update_changes_fields_and_timestamp() {
     let (_d, store) = temp_store().await;
-    let dot = store.create_dot(&spec("a")).await.unwrap();
+    let dot = store.create_dot(&spec("a"), None).await.unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     let mut s = dot.spec.clone();
     s.instructions = "New instructions".into();
@@ -136,11 +138,42 @@ async fn update_changes_fields_and_timestamp() {
     ));
 }
 
+/// A dot's org is fixed when it is made (env vault spec §5.2): no change of the dot moves it.
+#[tokio::test]
+async fn no_change_of_a_dot_changes_its_org() {
+    let (_d, store) = temp_store().await;
+    let dot = store
+        .create_dot(&spec("a"), Some("acme-eng"))
+        .await
+        .unwrap();
+    assert_eq!(dot.org_id.as_deref(), Some("acme-eng"));
+    let org = |d: Dot| d.org_id;
+    let mut s = dot.spec.clone();
+    s.name = "renamed".into();
+    s.instructions = "New instructions".into();
+    s.enabled = false;
+    let updated = store.update_dot(&dot.id, &s).await.unwrap();
+    assert_eq!(updated.spec.name, "renamed");
+    assert_eq!(org(updated), dot.org_id);
+    let enabled = store.set_dot_enabled(&dot.id, true).await.unwrap();
+    assert_eq!(org(enabled), dot.org_id);
+    assert_eq!(org(store.mark_dot_seen(&dot.id).await.unwrap()), dot.org_id);
+    store.regenerate_webhook_token(&dot.id).await.unwrap();
+    assert_eq!(org(store.get_dot(&dot.id).await.unwrap()), dot.org_id);
+    // A Personal dot stays Personal.
+    let personal = store.create_dot(&spec("b"), None).await.unwrap();
+    let saved = store
+        .update_dot(&personal.id, &personal.spec)
+        .await
+        .unwrap();
+    assert_eq!(org(saved), None);
+}
+
 #[tokio::test]
 async fn list_is_sorted_by_name() {
     let (_d, store) = temp_store().await;
     for n in ["c", "a", "b"] {
-        store.create_dot(&spec(n)).await.unwrap();
+        store.create_dot(&spec(n), None).await.unwrap();
     }
     let names: Vec<String> = store
         .list_dots()
@@ -155,7 +188,7 @@ async fn list_is_sorted_by_name() {
 #[tokio::test]
 async fn delete_enable_and_token_regeneration() {
     let (_d, store) = temp_store().await;
-    let dot = store.create_dot(&spec("a")).await.unwrap();
+    let dot = store.create_dot(&spec("a"), None).await.unwrap();
     let disabled = store.set_dot_enabled(&dot.id, false).await.unwrap();
     assert!(!disabled.spec.enabled);
     assert!(!store.check_webhook_token(&dot.id, "").await.unwrap());
@@ -227,7 +260,7 @@ async fn a_schedule_that_would_never_run_is_refused_on_create_and_on_change() {
     ] {
         let mut s = spec(name);
         s.schedule = Some(schedule(past));
-        let err = store.create_dot(&s).await.unwrap_err();
+        let err = store.create_dot(&s, None).await.unwrap_err();
         assert!(never_runs(&err), "{name}: {err:?}");
     }
     assert!(store.list_dots().await.unwrap().is_empty());
@@ -236,7 +269,7 @@ async fn a_schedule_that_would_never_run_is_refused_on_create_and_on_change() {
     s.schedule = Some(schedule(
         json!({"rule": {"kind": "once", "at": "2100-01-01T09:00"}}),
     ));
-    let dot = store.create_dot(&s).await.unwrap();
+    let dot = store.create_dot(&s, None).await.unwrap();
     s.schedule = Some(schedule(
         json!({"rule": {"kind": "once", "at": "2020-01-01T09:00"}}),
     ));
@@ -252,7 +285,7 @@ async fn a_stored_schedule_whose_date_passed_loads_and_saves_unchanged() {
     s.schedule = Some(schedule(
         json!({"rule": {"kind": "once", "at": "2100-01-01T09:00"}}),
     ));
-    let dot = store.create_dot(&s).await.unwrap();
+    let dot = store.create_dot(&s, None).await.unwrap();
     // The date passes (written behind the store's back, as time would do it).
     sqlx::query("UPDATE dots SET schedule = ? WHERE id = ?")
         .bind(r#"{"rule":{"kind":"once","at":"2020-01-01T09:00"},"catch_up":true,"until":null}"#)
@@ -287,7 +320,7 @@ async fn the_core_sets_the_anchor_of_an_every_schedule() {
     // As the UI sends it: no anchor.
     s.schedule = Some(schedule(json!({"rule": {"kind": "every", "minutes": 30}})));
     let before = Utc::now();
-    let dot = store.create_dot(&s).await.unwrap();
+    let dot = store.create_dot(&s, None).await.unwrap();
     let first = anchor(&dot);
     assert!(first >= before - TimeDelta::milliseconds(1) && first <= Utc::now());
     assert_eq!(first.timestamp_subsec_nanos() % 1_000_000, 0, "whole ms");
@@ -325,7 +358,7 @@ async fn migration_0007_lets_every_stored_policy_read_context() {
     before.run(&pool).await.unwrap();
     // A policy as 0006 left it: the preset's rules without `Context`, without the check-in
     // tools, which 0008 adds after it, without `Memory`, which 0012 adds after them, and without
-    // `Workflow`, which 0013 adds last.
+    // `Workflow`, which 0014 adds last.
     let old = |preset: Preset| {
         let mut p = Policy::preset(preset);
         p.rules.retain(|r| {
@@ -371,6 +404,51 @@ async fn migration_0007_lets_every_stored_policy_read_context() {
     }
     // A rule that names `Context` already is the person's: nothing is added.
     assert_eq!(store.get_dot("D3").await.unwrap().spec.policy, denies);
+}
+
+/// Migration 0013 on a database Dots left at 0012: every stored dot is Personal, and no org is
+/// joined (env vault spec §5.2).
+#[tokio::test]
+async fn migration_0013_leaves_every_stored_dot_in_personal() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("dots.db");
+    let opts = SqliteConnectOptions::new()
+        .filename(&path)
+        .create_if_missing(true);
+    let pool = SqlitePool::connect_with(opts).await.unwrap();
+    let mut before = sqlx::migrate!("./migrations");
+    before.migrations = before
+        .migrations
+        .iter()
+        .filter(|m| m.version < 13)
+        .cloned()
+        .collect::<Vec<_>>()
+        .into();
+    before.run(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO dots (id, name, instructions, engine, model, workdir, workspace_mode, \
+         webhook_token, policy, max_turns, timeout_secs, approval_wait_secs, \
+         created_at, updated_at) VALUES ('D1', 'old', 'Do it.', 'claude', 'sonnet', \
+         'C:/tmp/repo', 'worktree', '', ?, 40, 1800, 240, '2026-10-01T00:00:00.000Z', \
+         '2026-10-01T00:00:00.000Z')",
+    )
+    .bind(serde_json::to_string(&Policy::preset(Preset::Sandboxed)).unwrap())
+    .execute(&pool)
+    .await
+    .unwrap();
+    pool.close().await;
+
+    let store = Store::open(&path).await.unwrap();
+    let old = store.get_dot("D1").await.unwrap();
+    assert_eq!(old.org_id, None);
+    assert_eq!(old.spec.name, "old");
+    assert!(store.list_orgs().await.unwrap().is_empty());
+    let made = store
+        .create_dot(&spec("new"), Some("acme-eng"))
+        .await
+        .unwrap();
+    assert_eq!(made.org_id.as_deref(), Some("acme-eng"));
+    assert_eq!(store.get_dot("D1").await.unwrap(), old);
 }
 
 /// Migration 0005 on a database that Dots left with a cron string (Scheduler v2 spec §4).

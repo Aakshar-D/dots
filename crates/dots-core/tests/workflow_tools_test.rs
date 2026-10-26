@@ -1,5 +1,5 @@
 //! `start_workflow` (teams spec section 7): every preset allows `Workflow`, a rule names it
-//! alone, migration 0013 gives it to stored policies; a chat run of a member that a chat
+//! alone, migration 0014 gives it to stored policies; a chat run of a member that a chat
 //! trigger names lists the workflows it may start and starts one, on both engines.
 
 mod common;
@@ -52,11 +52,11 @@ fn workflow_is_last_asked_by_sandboxed_and_custom_and_the_cli_never_sees_it() {
     assert!(e.contains(WORKFLOW_RULE), "{e}");
 }
 
-/// Migration 0013 on a database Dots left at 0012: every stored policy whose preset is not
+/// Migration 0014 on a database Dots left at 0013: every stored policy whose preset is not
 /// Custom gets the `Workflow` rule its preset has (Sandboxed asks, the others allow) unless a
 /// rule names it, after `Memory`.
 #[tokio::test]
-async fn migration_0013_gives_every_policy_that_is_not_custom_its_workflow_rule() {
+async fn migration_0014_gives_every_policy_that_is_not_custom_its_workflow_rule() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("dots.db");
     let opts = SqliteConnectOptions::new()
@@ -67,7 +67,7 @@ async fn migration_0013_gives_every_policy_that_is_not_custom_its_workflow_rule(
     before.migrations = before
         .migrations
         .iter()
-        .filter(|m| m.version < 13)
+        .filter(|m| m.version < 14)
         .cloned()
         .collect::<Vec<_>>()
         .into();
@@ -264,7 +264,7 @@ async fn a_local_helper_starts_the_teams_workflow_from_a_chat() {
     ])
     .await;
     let helper =
-        t.rt.create_dot(local_spec(&t, &llm.endpoint(), "helper"))
+        t.rt.create_dot(local_spec(&t, &llm.endpoint(), "helper"), None)
             .await
             .unwrap();
     team_of(&t, &helper).await;
@@ -336,7 +336,7 @@ async fn a_claude_helper_starts_it_through_dots_own_server() {
     s.workdir = t.dir.path().to_string_lossy().to_string();
     s.workspace_mode = WorkspaceMode::Folder;
     s.policy = Policy::preset(Preset::Trusted);
-    let helper = t.rt.create_dot(s).await.unwrap();
+    let helper = t.rt.create_dot(s, None).await.unwrap();
     team_of(&t, &helper).await;
     let chat =
         t.rt.chat(&helper.id, "Please fix the icon.", None)
@@ -383,7 +383,7 @@ async fn the_answer_to_a_workflow_steps_question_may_not_start_a_workflow() {
     ])
     .await;
     let helper =
-        t.rt.create_dot(local_spec(&t, &llm.endpoint(), "helper"))
+        t.rt.create_dot(local_spec(&t, &llm.endpoint(), "helper"), None)
             .await
             .unwrap();
     let (_, flow) = team_with(
@@ -462,7 +462,7 @@ async fn a_call_held_for_approval_is_refused_once_the_member_stops_being_a_start
     let mut s = local_spec(&t, &llm.endpoint(), "helper");
     s.policy.rules.push(Rule::new("Workflow", Action::Ask));
     s.approval_wait_secs = 30;
-    let helper = t.rt.create_dot(s).await.unwrap();
+    let helper = t.rt.create_dot(s, None).await.unwrap();
     let team = team_of(&t, &helper).await;
     let mut events = t.rt.subscribe();
     let chat =
@@ -511,7 +511,7 @@ async fn an_approval_that_outlives_the_wait_still_starts_the_workflow_on_the_res
     let mut s = local_spec(&t, &llm.endpoint(), "helper");
     s.policy.rules.push(Rule::new("Workflow", Action::Ask));
     s.approval_wait_secs = 0;
-    let helper = t.rt.create_dot(s).await.unwrap();
+    let helper = t.rt.create_dot(s, None).await.unwrap();
     team_of(&t, &helper).await;
     let chat =
         t.rt.chat(&helper.id, "Please fix the icon.", None)
@@ -549,7 +549,7 @@ async fn a_reply_in_the_chat_of_a_step_that_has_ended_is_refused() {
     let t = start(json!([])).await;
     let llm = Llm::start(vec![text("Fixed.")]).await;
     let helper =
-        t.rt.create_dot(local_spec(&t, &llm.endpoint(), "helper"))
+        t.rt.create_dot(local_spec(&t, &llm.endpoint(), "helper"), None)
             .await
             .unwrap();
     let (_, flow) = team_with(
@@ -626,7 +626,7 @@ async fn a_chat_starts_a_workflow_on_a_project_once_until_that_run_ends() {
     ])
     .await;
     let helper =
-        t.rt.create_dot(local_spec(&t, &llm.endpoint(), "helper"))
+        t.rt.create_dot(local_spec(&t, &llm.endpoint(), "helper"), None)
             .await
             .unwrap();
     team_of(&t, &helper).await;
@@ -668,7 +668,7 @@ async fn a_chat_of_a_dot_whose_policy_denies_workflow_is_not_offered_the_tool() 
     let llm = Llm::start(vec![text("Hello.")]).await;
     let mut s = local_spec(&t, &llm.endpoint(), "helper");
     s.policy.rules.push(Rule::new("Workflow", Action::Deny));
-    let helper = t.rt.create_dot(s).await.unwrap();
+    let helper = t.rt.create_dot(s, None).await.unwrap();
     team_of(&t, &helper).await;
     let chat = t.rt.chat(&helper.id, "Hi.", None).await.unwrap();
     wait_status(t.rt.store(), &chat.id, RunStatus::Succeeded, 30).await;
@@ -694,7 +694,7 @@ async fn a_sandboxed_dot_is_offered_start_workflow_and_asks_before_it_starts_one
     let mut s = local_spec(&t, &llm.endpoint(), "helper");
     s.policy = Policy::preset(Preset::Sandboxed);
     s.approval_wait_secs = 30;
-    let helper = t.rt.create_dot(s).await.unwrap();
+    let helper = t.rt.create_dot(s, None).await.unwrap();
     team_of(&t, &helper).await;
     let mut events = t.rt.subscribe();
     let chat =

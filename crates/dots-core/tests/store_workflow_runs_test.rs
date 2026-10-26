@@ -20,7 +20,7 @@ struct Fixture {
 
 async fn fixture() -> Fixture {
     let (dir, store) = temp_store().await;
-    let dot = store.create_dot(&spec("dev")).await.unwrap().id;
+    let dot = store.create_dot(&spec("dev"), None).await.unwrap().id;
     let team = store
         .create_team(&TeamSpec {
             name: "T".into(),
