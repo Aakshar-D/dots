@@ -19,13 +19,16 @@ const failedRun = {
   error: "timeout",
 };
 
+/// An Inbox as a test writes it: without paused watchers unless it says so.
+type InboxSpec = Omit<Inbox, "watchers"> & Partial<Pick<Inbox, "watchers">>;
+
 /// An inbox the test can empty, the way a decision or a review does.
-function inbox(initial: Inbox) {
-  let current = initial;
+function inbox(initial: InboxSpec) {
+  let current: Inbox = { watchers: [], ...initial };
   backend.on("inbox", () => current);
   return {
-    set: (next: Inbox) => {
-      current = next;
+    set: (next: InboxSpec) => {
+      current = { watchers: [], ...next };
     },
   };
 }
@@ -96,9 +99,9 @@ describe("the Inbox", () => {
   });
 
   it("approves a tool call and drops it from the list", async () => {
-    const box = inbox({ approvals: [approval], review_runs: [], attention: [], tools_changed: [] });
+    const box = inbox({ approvals: [approval], review_runs: [], attention: [], tools_changed: [], watchers: [] });
     backend.on("decide_approval", () => {
-      box.set({ approvals: [], review_runs: [], attention: [], tools_changed: [] });
+      box.set({ approvals: [], review_runs: [], attention: [], tools_changed: [], watchers: [] });
       return { ...sample.approval, status: "approved" };
     });
     const { user } = renderApp("/inbox");
@@ -113,7 +116,7 @@ describe("the Inbox", () => {
   const settle = () => act(() => new Promise<void>((resolve) => setTimeout(resolve, 20)));
 
   it("keeps both buttons of a decided approval off until the list has reloaded", async () => {
-    inbox({ approvals: [approval], review_runs: [], attention: [], tools_changed: [] });
+    inbox({ approvals: [approval], review_runs: [], attention: [], tools_changed: [], watchers: [] });
     backend.on("decide_approval", () => ({ ...sample.approval, status: "approved" }));
     const { user } = renderApp("/inbox");
     const approve = await screen.findByRole("button", { name: "Approve" });
@@ -126,7 +129,7 @@ describe("the Inbox", () => {
     const loads = backend.callsTo("inbox").length;
     backend.on("inbox", async () => {
       await held;
-      return { approvals: [], review_runs: [], attention: [], tools_changed: [] };
+      return { approvals: [], review_runs: [], attention: [], tools_changed: [], watchers: [] };
     });
 
     await user.click(approve);
@@ -154,7 +157,7 @@ describe("the Inbox", () => {
         tools_changed: [],
       });
       backend.on("decide_approval", (args) => {
-        box.set({ approvals: [next], review_runs: [], attention: [], tools_changed: [] });
+        box.set({ approvals: [next], review_runs: [], attention: [], tools_changed: [], watchers: [] });
         return { ...sample.approval, id: args.id, status: "approved" };
       });
       const { user } = renderApp("/inbox");
@@ -185,7 +188,7 @@ describe("the Inbox", () => {
       tools_changed: [],
     });
     backend.on("mark_reviewed", () => {
-      box.set({ approvals: [], review_runs: [], attention: [], tools_changed: [] });
+      box.set({ approvals: [], review_runs: [], attention: [], tools_changed: [], watchers: [] });
       return { ...sample.run, id: failedRun.id, reviewed_at: sample.run.ended_at };
     });
     const { user } = renderApp("/inbox");
@@ -204,7 +207,7 @@ describe("the Inbox", () => {
       tools_changed: [],
     });
     backend.on("mark_reviewed", (args) => {
-      box.set({ approvals: [], review_runs: [next], attention: [], tools_changed: [] });
+      box.set({ approvals: [], review_runs: [next], attention: [], tools_changed: [], watchers: [] });
       return { ...sample.run, id: args.runId, reviewed_at: sample.run.ended_at };
     });
     renderApp("/inbox");
@@ -226,7 +229,7 @@ describe("the Inbox", () => {
       tools_changed: [],
     });
     backend.on("discard_worktree", () => {
-      box.set({ approvals: [], review_runs: [], attention: [], tools_changed: [] });
+      box.set({ approvals: [], review_runs: [], attention: [], tools_changed: [], watchers: [] });
       return { ...sample.run, reviewed_at: sample.run.ended_at };
     });
     const { user } = renderApp("/inbox");
@@ -243,7 +246,7 @@ describe("the Inbox", () => {
   });
 
   it("shows a refused action and keeps the run in the list", async () => {
-    inbox({ approvals: [], review_runs: [worktreeRun], attention: [], tools_changed: [] });
+    inbox({ approvals: [], review_runs: [worktreeRun], attention: [], tools_changed: [], watchers: [] });
     backend.on("mark_reviewed", () => {
       throw { kind: "conflict", message: "the thread is still running" };
     });
@@ -263,7 +266,7 @@ describe("the Inbox", () => {
       tools_changed: [],
     });
     backend.on("mark_reviewed", () => {
-      box.set({ approvals: [], review_runs: [], attention: [], tools_changed: [] });
+      box.set({ approvals: [], review_runs: [], attention: [], tools_changed: [], watchers: [] });
       throw { kind: "not_found", message: `run ${failedRun.id}` };
     });
     const { user } = renderApp("/inbox");
@@ -280,7 +283,7 @@ describe("the Inbox", () => {
       tools_changed: [],
     });
     backend.on("discard_worktree", () => {
-      box.set({ approvals: [], review_runs: [], attention: [], tools_changed: [] });
+      box.set({ approvals: [], review_runs: [], attention: [], tools_changed: [], watchers: [] });
       throw { kind: "not_found", message: `run ${worktreeRun.id}` };
     });
     const { user } = renderApp("/inbox");
@@ -307,7 +310,7 @@ describe("the Inbox", () => {
     const before = later<WorktreeDiff>();
     backend.on("worktree_diff", () => before.answer);
     backend.on("discard_worktree", () => {
-      box.set({ approvals: [], review_runs: [], attention: [], tools_changed: [] });
+      box.set({ approvals: [], review_runs: [], attention: [], tools_changed: [], watchers: [] });
       backend.on("worktree_diff", () => ({ files: [], truncated: false, exists: false }));
       return { ...sample.run, reviewed_at: sample.run.ended_at };
     });
@@ -330,7 +333,7 @@ describe("the Inbox", () => {
   });
 
   it("loads a run's approvals again when one was decided while they were loading", async () => {
-    const box = inbox({ approvals: [approval], review_runs: [], attention: [], tools_changed: [] });
+    const box = inbox({ approvals: [approval], review_runs: [], attention: [], tools_changed: [], watchers: [] });
     const waiting: Run = {
       ...sample.run,
       branch: null,
@@ -345,7 +348,7 @@ describe("the Inbox", () => {
     backend.on("approvals_for_run", () => before.answer);
     backend.on("decide_approval", () => {
       const approved: Approval = { ...sample.approval, status: "approved" };
-      box.set({ approvals: [], review_runs: [], attention: [], tools_changed: [] });
+      box.set({ approvals: [], review_runs: [], attention: [], tools_changed: [], watchers: [] });
       backend.on("approvals_for_run", () => [approved]);
       return approved;
     });
@@ -367,11 +370,11 @@ describe("the Inbox", () => {
   });
 
   it("shows a new approval as soon as the dot asks", async () => {
-    const box = inbox({ approvals: [], review_runs: [], attention: [], tools_changed: [] });
+    const box = inbox({ approvals: [], review_runs: [], attention: [], tools_changed: [], watchers: [] });
     renderApp("/inbox");
     expect(await screen.findByText(/Nothing waits for you/)).toBeVisible();
     await waitFor(() => expect(backend.callsTo("inbox").length).toBeGreaterThan(0));
-    box.set({ approvals: [approval], review_runs: [], attention: [], tools_changed: [] });
+    box.set({ approvals: [approval], review_runs: [], attention: [], tools_changed: [], watchers: [] });
     act(() => backend.emit("runtime", { type: "approval_requested", approval: sample.approval }));
     expect(await screen.findByRole("article", { name: "Approval for Bash" })).toBeVisible();
   });
@@ -381,10 +384,10 @@ describe("saving a rule with an approval", () => {
   const dotKey = keys.dot(approval.dot_id);
   /// An Inbox with the one approval, whose decision empties it, and the rules the core offers.
   function waiting(rules: RuleCandidate[] = sample.rules) {
-    const box = inbox({ approvals: [approval], review_runs: [], attention: [], tools_changed: [] });
+    const box = inbox({ approvals: [approval], review_runs: [], attention: [], tools_changed: [], watchers: [] });
     backend.on("approval_rule_candidates", () => rules);
     backend.on("decide_approval", () => {
-      box.set({ approvals: [], review_runs: [], attention: [], tools_changed: [] });
+      box.set({ approvals: [], review_runs: [], attention: [], tools_changed: [], watchers: [] });
       return { ...sample.approval, status: "approved" };
     });
   }
@@ -512,7 +515,7 @@ describe("the approvals of one run", () => {
     input: { file_path: "b.txt" },
   };
   const mine = { name: `Approvals asked by ${approval.dot_name}` };
-  const empty: Inbox = { approvals: [], review_runs: [], attention: [], tools_changed: [] };
+  const empty: Inbox = { approvals: [], review_runs: [], attention: [], tools_changed: [], watchers: [] };
   const answered = [approval, second].map((a) => ({ ...sample.approval, id: a.id }));
 
   it("stand together under their dot, and a single one has no batch buttons", async () => {
@@ -583,7 +586,7 @@ describe("the approvals of one run", () => {
   });
 
   it("stay, with their buttons, when the core refuses the batch", async () => {
-    inbox({ approvals: [approval, second], review_runs: [], attention: [], tools_changed: [] });
+    inbox({ approvals: [approval, second], review_runs: [], attention: [], tools_changed: [], watchers: [] });
     backend.on("decide_run_approvals", () => {
       throw { kind: "internal", message: "database is locked" };
     });
@@ -607,7 +610,7 @@ describe("the approvals of one run", () => {
     const later2 = { ...approval, id: "apr-5", tool: "Read", input: { file_path: "d.txt" } };
     backend.on("decide_run_approvals", () => {
       // The run went on and asked for two more calls before the Inbox reloaded.
-      box.set({ approvals: [later1, later2], review_runs: [], attention: [], tools_changed: [] });
+      box.set({ approvals: [later1, later2], review_runs: [], attention: [], tools_changed: [], watchers: [] });
       return answered.map((a) => ({ ...a, status: "approved" }));
     });
     const { user } = renderApp("/inbox");
@@ -628,7 +631,7 @@ describe("the approvals of one run", () => {
       tools_changed: [],
     });
     backend.on("decide_approval", (args) => {
-      box.set({ approvals: [second], review_runs: [], attention: [], tools_changed: [] });
+      box.set({ approvals: [second], review_runs: [], attention: [], tools_changed: [], watchers: [] });
       return { ...sample.approval, id: args.id, status: "approved" };
     });
     const { user } = renderApp("/inbox");
@@ -678,7 +681,7 @@ describe("a parked approval", () => {
 
 describe("a schedule that needs attention", () => {
   const [flagged] = sample.inbox.attention;
-  const empty: Inbox = { approvals: [], review_runs: [], attention: [], tools_changed: [] };
+  const empty: Inbox = { approvals: [], review_runs: [], attention: [], tools_changed: [], watchers: [] };
   const only = (attention: Inbox["attention"]): Inbox => ({ ...empty, attention });
   const item = () => screen.findByRole("listitem", { name: `${flagged.dot_name} needs attention` });
   /// Lets what a command's answer set off reach the screen.

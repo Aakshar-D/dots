@@ -88,6 +88,15 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
       // The dot's Memory tab.
       invalidate(qc, keys.memories(event.dot_id));
       break;
+    case "watcher_updated":
+      // The dot's Watchers tab, the Inbox's paused watchers and the dots' needs-you counts.
+      invalidate(qc, keys.watchers(event.dot_id));
+      invalidate(qc, keys.inbox);
+      invalidate(qc, keys.overview);
+      break;
+    case "watcher_paused":
+      // The app's notification; a `watcher_updated` comes with it.
+      break;
   }
 }
 

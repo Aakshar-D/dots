@@ -139,7 +139,13 @@
     "memories_list",
     "memory_add",
     "memory_update",
-    "memory_delete"
+    "memory_delete",
+    "watchers_list",
+    "watcher_add",
+    "watcher_update",
+    "watcher_delete",
+    "watcher_set_enabled",
+    "watcher_resume"
   ],
   "ContextDocuments": {
     "complete": true,
@@ -635,11 +641,23 @@
       "deleted",
       "renamed"
     ],
+    "FolderEvent": [
+      "created",
+      "changed",
+      "deleted"
+    ],
     "FollowUpStatus": [
       "pending",
       "fired",
       "cancelled",
       "skipped"
+    ],
+    "GithubEvent": [
+      "issue",
+      "pull_request",
+      "comment",
+      "push",
+      "ci"
     ],
     "LibraryKind": [
       "mcp_server",
@@ -654,6 +672,10 @@
     "MessageKind": [
       "note",
       "question"
+    ],
+    "PausedReason": [
+      "flood",
+      "error"
     ],
     "Preset": [
       "read-only",
@@ -680,7 +702,13 @@
       "manual",
       "chat",
       "resume",
-      "follow_up"
+      "follow_up",
+      "watcher"
+    ],
+    "WatcherKind": [
+      "folder",
+      "email",
+      "github"
     ],
     "WorkspaceMode": [
       "worktree",
@@ -810,6 +838,18 @@
         ],
         "name": "github",
         "server_id": "01J0SRV"
+      }
+    ],
+    "watchers": [
+      {
+        "at": "2026-10-09T12:00:00.000Z",
+        "dot_id": "01J0DOT",
+        "dot_name": "nightly-tests",
+        "error": "Gmail refused the app password for me@gmail.com, or IMAP is off for it.",
+        "kind": "email",
+        "name": "Billing mail",
+        "reason": "error",
+        "watcher_id": "01J0WAT2"
       }
     ]
   },
@@ -1159,7 +1199,8 @@
     "max_memories": 200,
     "max_memory_text": 500,
     "max_schedule_attempts": 6,
-    "max_timeout_secs": 604800
+    "max_timeout_secs": 604800,
+    "max_watcher_name": 80
   },
   "McpCatalog": {
     "accepted_fingerprint": "fp-accepted",
@@ -1737,6 +1778,52 @@
     {
       "dot_id": "01J0DOT",
       "type": "memories_updated"
+    },
+    {
+      "dot_id": "01J0DOT",
+      "type": "watcher_updated",
+      "watcher_id": "01J0WAT1"
+    },
+    {
+      "dot_id": "01J0DOT",
+      "error": null,
+      "name": "Repo events",
+      "reason": "flood",
+      "type": "watcher_paused",
+      "watcher_id": "01J0WAT3"
+    },
+    {
+      "run": {
+        "base_commit": "0123abcd",
+        "branch": "dots/nightly-tests/01J0RUN",
+        "dot_id": "01J0DOT",
+        "ended_at": "2026-10-09T12:00:00.000Z",
+        "error": null,
+        "id": "01J0RUN3",
+        "parent_run_id": null,
+        "payload": {
+          "event": "created",
+          "path": "C:\\Users\\u\\Downloads\\Invoices\\invoice-12.pdf",
+          "relative": "invoice-12.pdf",
+          "size": 1200,
+          "source": "folder",
+          "watcher_id": "01J0WAT1",
+          "watcher_name": "Invoices folder"
+        },
+        "queued_at": "2026-10-09T12:00:00.000Z",
+        "retry_of": null,
+        "reviewed_at": null,
+        "root_run_id": "01J0RUN3",
+        "session_id": "sess-1",
+        "started_at": "2026-10-09T12:00:00.000Z",
+        "status": "succeeded",
+        "summary": "All tests pass.",
+        "tokens_in": 1200,
+        "tokens_out": 340,
+        "trigger": "watcher",
+        "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
+      },
+      "type": "run_updated"
     }
   ],
   "ScannedSkill": [
@@ -1888,6 +1975,76 @@
     {
       "error": "The backup failed: disk full",
       "state": "failed"
+    }
+  ],
+  "Watcher": [
+    {
+      "config": {
+        "events": [
+          "created",
+          "changed",
+          "deleted"
+        ],
+        "kind": "folder",
+        "path": "C:\\Users\\u\\Downloads\\Invoices",
+        "pattern": "*.pdf",
+        "recursive": true
+      },
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "dot_id": "01J0DOT",
+      "enabled": true,
+      "id": "01J0WAT1",
+      "last_error": null,
+      "last_event_at": "2026-10-09T12:00:00.000Z",
+      "name": "Invoices folder",
+      "paused_reason": null,
+      "updated_at": "2026-10-09T12:00:00.000Z"
+    },
+    {
+      "config": {
+        "address": "me@gmail.com",
+        "from": "billing@acme.com",
+        "has_attachment": null,
+        "kind": "email",
+        "label": "Dots",
+        "secret": "GMAIL_APP_PASSWORD",
+        "subject": "invoice"
+      },
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "dot_id": "01J0DOT",
+      "enabled": true,
+      "id": "01J0WAT2",
+      "last_error": "Gmail refused the app password for me@gmail.com, or IMAP is off for it.",
+      "last_event_at": null,
+      "name": "Billing mail",
+      "paused_reason": "error",
+      "updated_at": "2026-10-09T12:00:00.000Z"
+    },
+    {
+      "config": {
+        "authors": [],
+        "branches": [],
+        "events": [
+          "issue",
+          "pull_request"
+        ],
+        "kind": "github",
+        "label": null,
+        "repos": [
+          "owner/repo"
+        ],
+        "secret": "GITHUB_TOKEN",
+        "skip_bots": true
+      },
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "dot_id": "01J0DOT",
+      "enabled": true,
+      "id": "01J0WAT3",
+      "last_error": null,
+      "last_event_at": "2026-10-09T12:00:00.000Z",
+      "name": "Repo events",
+      "paused_reason": "flood",
+      "updated_at": "2026-10-09T12:00:00.000Z"
     }
   ],
   "WorktreeDiff": {

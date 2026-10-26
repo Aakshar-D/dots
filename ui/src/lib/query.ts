@@ -51,6 +51,7 @@ export const keys = {
   messages: (dotId: string | null) => ["messages", dotId] as const,
   followUps: (dotId: string | null) => ["follow-ups", dotId] as const,
   memories: (dotId: string) => ["memories", dotId] as const,
+  watchers: (dotId: string) => ["watchers", dotId] as const,
 };
 
 type DotSwitch = { id: string; enabled: boolean };
