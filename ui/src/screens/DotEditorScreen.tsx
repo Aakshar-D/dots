@@ -19,9 +19,11 @@ import { useDebounced } from "@/lib/use-debounced";
 import { DotForm, type Draft } from "@/screens/dot-editor/DotForm";
 import { MemoryTab } from "@/screens/dot-editor/MemoryTab";
 import { RunsList } from "@/screens/dot-editor/RunsList";
+import { WatchersTab } from "@/screens/dot-editor/WatchersTab";
 
-/// The tabs of a dot's editor; `?tab=` opens one (the ⚙ menu's Memory… opens `memory`).
-const TABS = ["settings", "runs", "follow-ups", "memory"];
+/// The tabs of a dot's editor; `?tab=` opens one (the ⚙ menu's Memory… opens `memory`; the
+/// Inbox opens `watchers`).
+const TABS = ["settings", "runs", "follow-ups", "memory", "watchers"];
 
 /// The form with its Save button. `onSave` stores the spec; its rejection is shown above the
 /// form (the core's answer when it refuses what the form let through).
@@ -227,6 +229,7 @@ function ExistingDot({ dotId }: { dotId: string }) {
               <TabsTrigger value="runs">Runs</TabsTrigger>
               <TabsTrigger value="follow-ups">Follow-ups</TabsTrigger>
               <TabsTrigger value="memory">Memory</TabsTrigger>
+              <TabsTrigger value="watchers">Watchers</TabsTrigger>
             </TabsList>
             <TabsContent value="settings">{form}</TabsContent>
             <TabsContent value="runs">
@@ -237,6 +240,9 @@ function ExistingDot({ dotId }: { dotId: string }) {
             </TabsContent>
             <TabsContent value="memory">
               <MemoryTab dotId={dotId} />
+            </TabsContent>
+            <TabsContent value="watchers">
+              <WatchersTab dotId={dotId} />
             </TabsContent>
           </Tabs>
         </>
