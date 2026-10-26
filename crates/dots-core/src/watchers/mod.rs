@@ -5,6 +5,7 @@
 
 pub mod acting;
 pub mod cap;
+pub mod folder;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -548,7 +549,7 @@ impl Watchers {
 
     /// The watchers that should run: enabled, not paused by Dots, of an enabled dot, while Dots
     /// is not paused.
-    async fn should_run(&self) -> Result<HashMap<String, WatcherConfig>> {
+    async fn should_run(&self) -> Result<HashMap<String, Watcher>> {
         if self.is_paused() {
             return Ok(HashMap::new());
         }
@@ -568,7 +569,7 @@ impl Watchers {
             .await?
             .into_iter()
             .filter(|w| w.enabled && w.paused_reason.is_none() && enabled.contains(&w.dot_id))
-            .map(|w| (w.id, w.config))
+            .map(|w| (w.id.clone(), w))
             .collect())
     }
 
@@ -578,39 +579,62 @@ impl Watchers {
         let wanted = self.should_run().await?;
         let mut tasks = self.tasks.lock().unwrap();
         tasks.retain(|id, (config, token)| {
-            let keep = wanted.get(id) == Some(config);
+            let keep = wanted.get(id).map(|w| &w.config) == Some(config);
             if !keep {
                 token.cancel();
             }
             keep
         });
-        for (id, config) in wanted {
+        for (id, watcher) in wanted {
             if tasks.contains_key(&id) {
                 continue;
             }
             let token = shutdown.child_token();
-            let started = match config.kind() {
-                WatcherKind::Folder => self.start_watch(&id, &config, &token),
+            let started = match watcher.kind() {
+                WatcherKind::Folder => self.start_watch(&watcher, &token),
                 WatcherKind::Email | WatcherKind::Github => {
                     self.start_polls(&id, &token);
                     true
                 }
             };
             if started {
-                tasks.insert(id, (config, token));
+                tasks.insert(id, (watcher.config, token));
             }
         }
         Ok(())
     }
 
-    /// A folder watcher's OS watch (Task 3 fills it in); false when nothing was started.
-    fn start_watch(
-        self: &Arc<Self>,
-        _id: &str,
-        _config: &WatcherConfig,
-        _token: &CancellationToken,
-    ) -> bool {
-        false
+    /// A folder watcher's OS watch; false when it could not start (its failure is reported).
+    fn start_watch(self: &Arc<Self>, watcher: &Watcher, token: &CancellationToken) -> bool {
+        let WatcherConfig::Folder(config) = &watcher.config else {
+            return false;
+        };
+        match folder::start(
+            Arc::downgrade(self),
+            watcher.clone(),
+            config.clone(),
+            self.deps.acting.clone(),
+            self.deps.clock.clone(),
+            token.clone(),
+        ) {
+            Ok(()) => true,
+            Err(failure) => {
+                let this = self.clone();
+                let id = watcher.id.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = this.note_failure(&id, failure).await {
+                        tracing::warn!(watcher = %id, "reporting a folder failure failed: {e}");
+                    }
+                });
+                false
+            }
+        }
+    }
+
+    /// The ids of the watchers whose task runs.
+    #[doc(hidden)]
+    pub fn running(&self) -> Vec<String> {
+        self.tasks.lock().unwrap().keys().cloned().collect()
     }
 
     /// A polling watcher's loop: check, then sleep until the time the check gave.

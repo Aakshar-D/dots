@@ -192,6 +192,18 @@ impl Harness {
         runs
     }
 
+    /// Waits (at most 5 real seconds) until the service has started the watcher's task.
+    pub async fn watching(&self, watcher_id: &str) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !self.watchers.running().iter().any(|id| id == watcher_id) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "watcher {watcher_id} did not start"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
     /// The `WatcherPaused` events since the last call: (watcher id, error).
     pub fn paused(&mut self) -> Vec<(String, Option<String>)> {
         let mut out = Vec::new();

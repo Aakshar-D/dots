@@ -12,6 +12,7 @@ chrono = { version = "0.4", features = ["serde"] }
 cron = "0.15"
 getrandom = "0.3"
 globset = "0.4"
+notify = "8"
 ignore = "0.4"
 openidconnect = { version = "4.0.1", default-features = false, features = ["reqwest"] }
 regex = "1"

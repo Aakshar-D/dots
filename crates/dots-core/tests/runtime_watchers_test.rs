@@ -234,3 +234,54 @@ async fn a_dot_acts_while_its_run_is_held_and_five_seconds_after_it_ends() {
     tokio::time::sleep(Duration::from_millis(5500)).await;
     assert!(!acting.is_acting(&dot.id, Utc::now()));
 }
+
+#[tokio::test]
+async fn a_dot_that_writes_into_its_watched_folder_does_not_wake_itself() {
+    let t = start(Some(json!([
+        {"write": {"path": "report.pdf", "text": "done"}},
+        {"emit": {"type": "system", "subtype": "init", "session_id": "$SESSION"}},
+        {"emit": {"type": "result", "subtype": "success", "is_error": false,
+                  "result": "filed", "usage": {"input_tokens": 1, "output_tokens": 1}}}
+    ])))
+    .await;
+    let dot = folder_dot(&t, "filer").await;
+    let work = t.dir.path().join("work");
+    let w =
+        t.rt.watcher_add(
+            &dot.id,
+            "Work folder",
+            WatcherConfig::Folder(FolderConfig::new(&work.to_string_lossy())),
+        )
+        .await
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !t.rt.watchers().running().contains(&w.id) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the watcher did not start"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    std::fs::write(work.join("in.pdf"), b"%PDF").unwrap();
+    let watcher_runs = || async {
+        t.rt.list_runs(Some(&dot.id), 50)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|r| r.trigger == dots_core::model::TriggerKind::Watcher)
+            .collect::<Vec<_>>()
+    };
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let runs = watcher_runs().await;
+        if runs.len() == 1 && runs[0].status == dots_core::model::RunStatus::Succeeded {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "{runs:#?}");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(work.join("report.pdf").is_file());
+    // The settle (2 s), the 5 seconds after the run, and some.
+    tokio::time::sleep(Duration::from_secs(9)).await;
+    assert_eq!(watcher_runs().await.len(), 1);
+}
