@@ -7,7 +7,9 @@
 //! 0008 (check-ins spec section 8): `finish_0008` last gives each dot listed in `upgrade_0008`
 //! whose preset is not Custom an allow rule for each check-in tool that no rule names, and
 //! drops that table. 0012 (dot memory spec section 3): `finish_0012` does the same for
-//! `Memory` with `upgrade_0012`.
+//! `Memory` with `upgrade_0012`. 0011 and 0013 (env vault spec §11, §8): `finish_0011` grants
+//! each dot the variables of its servers, and `finish_0013`, once the vault is open, confirms in
+//! Personal the origin each http server whose URL reads a variable reaches now.
 
 use std::collections::BTreeMap;
 
@@ -15,12 +17,13 @@ use serde_json::{json, Value};
 use sqlx::SqlitePool;
 
 use crate::library::{
-    check_name, looks_secret, mcp_server_name, CatalogStatus, LibraryConfig, LibraryKind,
-    McpServerConfig, Uses, MAX_SERVER_NAME,
+    check_name, http_origin, looks_secret, mcp_server_name, url_variables, CatalogStatus,
+    LibraryConfig, LibraryKind, McpServerConfig, Uses, MAX_SERVER_NAME, PERSONAL_SCOPE,
 };
 use crate::policy::{Action, Policy, Preset, CHECK_IN_TOOLS, MEMORY_TOOL};
 use crate::util::{new_id, now};
-use crate::Result;
+use crate::vault::Vault;
+use crate::{Error, Result};
 
 /// Converts what migration 0006 left waiting, if anything.
 pub(super) async fn finish_0006(pool: &SqlitePool) -> Result<()> {
@@ -502,4 +505,58 @@ pub(super) async fn finish_0011(store: &super::Store) -> Result<()> {
         .await?;
     tx.commit().await?;
     Ok(())
+}
+
+/// Confirms in Personal, for each MCP server that migration 0013 listed and whose origin is
+/// pinned (`McpServerConfig::origin_pinned`), the origin its URL reaches with Personal's values
+/// now, so nothing that worked before stops (env vault spec §8); then drops the list. An origin
+/// that cannot be computed (a variable Personal does not set, a URL that is no http one) is not
+/// recorded: that server asks to be confirmed again. It runs once the vault is open, since a
+/// URL may read a Personal secret. A value that cannot be read fails it with nothing written,
+/// and the next start tries again. Returns how many origins were recorded.
+pub(super) async fn finish_0013(store: &super::Store, vault: &Vault) -> Result<usize> {
+    let waiting: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'upgrade_0013'",
+    )
+    .fetch_one(&store.pool)
+    .await?;
+    if waiting == 0 {
+        return Ok(0);
+    }
+    let ids: Vec<String> = sqlx::query_scalar("SELECT server_id FROM upgrade_0013")
+        .fetch_all(&store.pool)
+        .await?;
+    let mut found = Vec::new();
+    for id in ids {
+        let item = match store.get_library_item(&id).await {
+            Ok(item) => item,
+            Err(Error::NotFound(_)) => continue,
+            Err(e) => return Err(e),
+        };
+        let LibraryConfig::McpServer(config @ McpServerConfig::Http { url, .. }) = &item.config
+        else {
+            continue;
+        };
+        if !config.origin_pinned() {
+            continue;
+        }
+        let personal = vault.personal_values(&url_variables(url)).await?;
+        match http_origin(url, &|k| personal.get(k)) {
+            Ok(origin) => found.push((id, origin.ascii)),
+            Err(why) => tracing::warn!(
+                "migration 0013: the MCP server {:?} has no origin to confirm ({why}); it asks \
+                 to be confirmed again",
+                item.name
+            ),
+        }
+    }
+    let mut tx = store.pool.begin().await?;
+    for (id, origin) in &found {
+        super::library::add_origin_in(&mut tx, id, PERSONAL_SCOPE, origin).await?;
+    }
+    sqlx::query("DROP TABLE upgrade_0013")
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(found.len())
 }

@@ -25,12 +25,15 @@ use zeroize::Zeroizing;
 use crate::context::{self, Collection};
 use crate::events::Bus;
 use crate::kit::{self, KitPlugin, KitSkill, PluginInfo, RunKit, SkillInfo};
-use crate::library::{CatalogStatus, LibraryConfig, LibraryItem, LibraryKind, McpCatalog, Uses};
+use crate::library::{
+    http_origin, CatalogStatus, LibraryConfig, LibraryItem, LibraryKind, McpCatalog,
+    McpServerConfig, Uses,
+};
 use crate::library_service::{record_check, refresh_plugin, skill_problem};
 use crate::mcp::{McpError, McpSession, McpTool, SessionOptions};
 use crate::policy::McpTrust;
 use crate::store::Store;
-use crate::vault::{Consumer, Grants, Resolved, Vault};
+use crate::vault::{Consumer, DotScope, Grants, Resolved, Vault};
 use crate::Result;
 
 /// What `RunTools::open` needs.
@@ -45,9 +48,10 @@ pub struct OpenRequest<'a> {
     pub plugins_dir: Option<&'a Path>,
     /// The run's cancel token: opening stops when it fires.
     pub cancel: &'a CancellationToken,
-    /// Where the dot's variables resolve, its grants, and its name for the run events
-    /// (env vault spec §8).
+    /// Where the dot's variables resolve, its scope (Personal or its org), its grants, and its
+    /// name for the run events (env vault spec §8).
     pub vault: &'a Vault,
+    pub scope: &'a DotScope,
     pub grants: &'a Grants,
     pub dot_name: &'a str,
 }
@@ -295,6 +299,7 @@ impl RunTools {
             plugins_dir,
             cancel,
             vault,
+            scope,
             grants,
             dot_name,
         } = req;
@@ -328,7 +333,12 @@ impl RunTools {
             .filter(|s| s.owner_id.as_ref().is_none_or(|o| !left_out.contains(o)))
             .collect();
         // A server whose variables do not all resolve for it is left out, with the reason; its
-        // catalog is the Library's and does not record a dot's grants.
+        // catalog is the Library's and does not record a dot's grants. So is an http server whose
+        // URL reaches an origin not confirmed for the dot's scope (env vault spec §8),
+        // computed with the values this run resolved: an org's value, or a Personal one that
+        // changed, may move the host. A server that starts records what it lists in its
+        // catalog of the dot's scope, Personal's or the org's: a server never seen in that
+        // scope is held, as an unchecked one is.
         let mut items = Vec::new();
         for item in used {
             let LibraryConfig::McpServer(config) = &item.config else {
@@ -336,14 +346,17 @@ impl RunTools {
             };
             let consumer = Consumer::Mcp(item.name.clone());
             match vault
-                .resolve(grants, &consumer, &config.variables())
+                .resolve(scope, grants, &consumer, &config.variables())
                 .await?
             {
-                Ok(env) => items.push((item, env)),
+                Ok(env) => match unconfirmed_origin(store, &item, config, &env, scope).await? {
+                    Some(notice) => notices.push(notice),
+                    None => items.push((item, env)),
+                },
                 Err(missing) => notices.push(missing.text(dot_name)),
             }
         }
-        let shell_env = shell_env(vault, grants, dot_name, &mut notices).await?;
+        let shell_env = shell_env(vault, scope, grants, dot_name, &mut notices).await?;
         let Some(opened) = open_sessions(&items, workspace, cancel).await else {
             return Ok((RunTools::default(), Vec::new()));
         };
@@ -352,7 +365,8 @@ impl RunTools {
         for ((item, _), outcome) in items.into_iter().zip(opened) {
             match outcome {
                 Ok((session, listed, changes)) => {
-                    let catalog = record_check(store, bus, &item.id, Ok(&listed)).await?;
+                    let catalog =
+                        record_check(store, bus, &item.id, scope.key(), Ok(&listed)).await?;
                     if let Some(notice) = held_notice(&item.name, &catalog) {
                         notices.push(notice);
                     }
@@ -369,11 +383,11 @@ impl RunTools {
                         name: item.name,
                         handled,
                     };
-                    tools.watch(&server, changes, handled_tx, store, bus);
+                    tools.watch(&server, scope.key(), changes, handled_tx, store, bus);
                     tools.servers.push(server);
                 }
                 Err(e) => {
-                    record_check(store, bus, &item.id, Err(&e)).await?;
+                    record_check(store, bus, &item.id, scope.key(), Err(&e)).await?;
                     notices.push(format!("{}: {e}", item.name));
                 }
             }
@@ -476,11 +490,12 @@ impl RunTools {
     }
 
     /// Follows the server's `notifications/tools/list_changed` for the run: each one lists the
-    /// tools again and records them in the catalog; a list that is not the accepted one holds
-    /// the server at once (spec section 6).
+    /// tools again and records them in the catalog of the dot's `scope`; a list that is not the
+    /// accepted one holds the server at once (spec section 6).
     fn watch(
         &self,
         server: &RunServer,
+        scope: &str,
         mut changes: watch::Receiver<u64>,
         handled: watch::Sender<u64>,
         store: &Store,
@@ -490,6 +505,7 @@ impl RunTools {
         let live = server.live.clone();
         let (store, bus) = (store.clone(), bus.clone());
         let (id, name) = (server.item_id.clone(), server.name.clone());
+        let scope = scope.to_string();
         let stop = self.stop.clone();
         let handle = tokio::spawn(async move {
             loop {
@@ -512,7 +528,7 @@ impl RunTools {
                         continue;
                     }
                 };
-                let accepted = match record_check(&store, &bus, &id, Ok(&listed)).await {
+                let accepted = match record_check(&store, &bus, &id, &scope, Ok(&listed)).await {
                     Ok(catalog) => catalog.status == CatalogStatus::Accepted,
                     Err(e) => {
                         tracing::warn!("{name}: recording its changed tools failed: {e}");
@@ -586,6 +602,7 @@ type Opened = std::result::Result<(McpSession, Vec<McpTool>, watch::Receiver<u64
 /// event saying why.
 async fn shell_env(
     vault: &Vault,
+    scope: &DotScope,
     grants: &Grants,
     dot_name: &str,
     notices: &mut Vec<String>,
@@ -593,7 +610,10 @@ async fn shell_env(
     let mut out = Vec::new();
     for name in grants.names(&Consumer::Shell) {
         let names = std::slice::from_ref(name);
-        match vault.resolve(grants, &Consumer::Shell, names).await? {
+        match vault
+            .resolve(scope, grants, &Consumer::Shell, names)
+            .await?
+        {
             Ok(env) => {
                 if let Some(value) = env.get(name) {
                     out.push((name.clone(), Zeroizing::new(value)));
@@ -603,6 +623,40 @@ async fn shell_env(
         }
     }
     Ok(out)
+}
+
+/// Why the server `item` does not start in `scope` with the values `env`: its origin is pinned
+/// (`McpServerConfig::origin_pinned`) and the origin its URL reaches with them is not confirmed
+/// there, or it reaches none. `None` when it may start. The notice names the server and the
+/// origin in ASCII, never a value.
+async fn unconfirmed_origin(
+    store: &Store,
+    item: &LibraryItem,
+    config: &McpServerConfig,
+    env: &Resolved,
+    scope: &DotScope,
+) -> Result<Option<String>> {
+    let McpServerConfig::Http { url, .. } = config else {
+        return Ok(None);
+    };
+    if !config.origin_pinned() {
+        return Ok(None);
+    }
+    let origin = match http_origin(url, &|k| env.get(k)) {
+        Ok(origin) => origin.ascii,
+        Err(why) => return Ok(Some(format!("{}: could not start: {why}", item.name))),
+    };
+    let confirmed = store.confirmed_origins(&item.id).await?;
+    if confirmed
+        .get(scope.key())
+        .is_some_and(|list| list.contains(&origin))
+    {
+        return Ok(None);
+    }
+    Ok(Some(format!(
+        "{}: {origin} is not a confirmed origin; open the server in the Library to confirm it",
+        item.name
+    )))
 }
 
 /// Opens a session with each server at once, its `${VAR}` read from its resolved values, and

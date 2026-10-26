@@ -16,6 +16,8 @@ const entry = (name: string, kind: "secret" | "plain"): EnvEntry => ({
   value: kind === "plain" ? "debug" : null,
   created_at: TS,
   updated_at: TS,
+  used_by: [],
+  value_missing: false,
 });
 const INVOICES = "C:\\Users\\u\\Downloads\\Invoices";
 

@@ -827,4 +827,71 @@ describe("the Inbox, tools changed", () => {
     await user.click(await screen.findByRole("link", { name: "Review" }));
     expect(await screen.findByRole("dialog", { name: /Tools changed: github/ })).toBeVisible();
   });
+
+  it("accepts a Personal row's list with the arguments it always had", async () => {
+    inbox({ approvals: [], review_runs: [], attention: [], tools_changed: [changed!] });
+    // Personal's catalogs only: the Library shows an org's line otherwise.
+    backend.on("library_list", () =>
+      sample.library.map((e) => ({
+        ...e,
+        catalogs: e.catalogs.filter((c) => c.scope === "personal"),
+      })),
+    );
+    backend.on("library_accept", () => sample.library[0].catalog);
+    const { user } = renderApp("/inbox");
+    await user.click(await screen.findByRole("link", { name: "Review" }));
+    const review = await screen.findByRole("dialog", { name: /Tools changed: github/ });
+    await user.click(within(review).getByRole("button", { name: "Accept" }));
+    await waitFor(() => expect(backend.callsTo("library_accept")).toHaveLength(1));
+    const [args] = backend.callsTo("library_accept");
+    expect(args).toEqual({ id: changed!.server_id, fingerprint: "fp-seen" });
+    expect("scope" in args && args.scope !== undefined).toBe(false);
+    // Nothing on the screen is an org's: the org names are not asked for.
+    expect(backend.callsTo("org_list")).toEqual([]);
+  });
+
+  it("names the org of an org's row, keyed by scope, and accepts in that scope", async () => {
+    const [personal, org] = sample.toolsChanged;
+    const [acme] = sample.orgs;
+    inbox({ approvals: [], review_runs: [], attention: [], tools_changed: [personal!, org!] });
+    backend.on("org_list", () => [acme]);
+    const [github, ...rest] = sample.library;
+    // The list changed in Acme Engineering too.
+    const acmeCatalog = { ...github.catalog!, seen_fingerprint: "fp-acme" };
+    const personalOnly = github.catalogs.filter((c) => c.scope === "personal");
+    backend.on("library_list", () => [
+      {
+        ...github,
+        catalogs: [
+          ...personalOnly,
+          { scope: "acme-eng", catalog: acmeCatalog, stored: true, used_by: [] },
+        ],
+      },
+      ...rest,
+    ]);
+    backend.on("library_accept", () => acmeCatalog);
+    const { user } = renderApp("/inbox");
+    const group = await screen.findByRole("region", { name: "Tools changed" });
+    const orgRow = await within(group).findByRole("listitem", {
+      name: "github (Acme Engineering) tools changed",
+    });
+    const personalRow = within(group).getByRole("listitem", { name: "github tools changed" });
+    expect(within(personalRow).getByRole("link", { name: "Review" })).toHaveAttribute(
+      "href",
+      `/library?review=${org!.server_id}`,
+    );
+    expect(within(orgRow).getByRole("link", { name: "Review" })).toHaveAttribute(
+      "href",
+      `/library?review=${org!.server_id}&scope=acme-eng`,
+    );
+
+    await user.click(within(orgRow).getByRole("link", { name: "Review" }));
+    const review = await screen.findByRole("dialog", { name: /Tools changed: github/ });
+    await user.click(within(review).getByRole("button", { name: "Accept" }));
+    await waitFor(() =>
+      expect(backend.callsTo("library_accept")).toEqual([
+        { id: org!.server_id, fingerprint: "fp-acme", scope: "acme-eng" },
+      ]),
+    );
+  });
 });

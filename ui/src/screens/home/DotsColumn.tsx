@@ -7,6 +7,7 @@ import { Link } from "react-router";
 import { commands } from "@/api/commands";
 import type { DotOverview } from "@/api/types";
 import { Button } from "@/components/ui/button";
+import { orgRemoved, orgRemovedText, useOrgList } from "@/lib/dot-org";
 import { dotStatus, lastLine, nextLine } from "@/lib/dot-status";
 import { keys } from "@/lib/query";
 import { StatusMark } from "@/screens/home/StatusMark";
@@ -24,6 +25,8 @@ export function DotsColumn({ rows, openId }: { rows: DotOverview[]; openId: stri
       queryKey: keys.followUps(null),
       queryFn: () => commands.followUpsList(null),
     }).data ?? [];
+  // A dot whose org is no longer joined says so; the orgs are asked for only when a dot has one.
+  const orgs = useOrgList(rows.some((row) => row.dot.org_id !== null));
   // Up and Down move the focus to the dot above or below, Home and End to the first and the
   // last; Enter (the link's own) opens the dot in focus. Moving opens nothing, so that passing
   // over dots neither loads them nor marks their questions read.
@@ -75,6 +78,14 @@ export function DotsColumn({ rows, openId }: { rows: DotOverview[]; openId: stri
                   {lastLine(row)}
                 </span>
                 {next && <span className="pl-4.5 text-xs text-muted-foreground">{next}</span>}
+                {row.dot.org_id !== null && orgRemoved(row.dot, orgs) && (
+                  <span
+                    className="pl-4.5 text-xs text-destructive"
+                    title={orgRemovedText(row.dot.org_id)}
+                  >
+                    org removed
+                  </span>
+                )}
               </Link>
             </li>
           );

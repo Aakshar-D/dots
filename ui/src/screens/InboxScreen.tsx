@@ -144,15 +144,24 @@ function AttentionRow({ item }: { item: NeedsAttention }) {
   );
 }
 
-/// An MCP server whose tool list changed since it was accepted: its tools ask until a review.
+/// An MCP server whose tool list changed since it was accepted in one scope, Personal or an
+/// org's: its tools ask there until a review. An org's row names the org, and its review
+/// accepts the org's list.
 function ToolsChangedRow({ item }: { item: ToolsChanged }) {
+  const inOrg = item.scope !== "personal";
+  const orgs = useQuery({ queryKey: keys.orgs, queryFn: commands.orgList, enabled: inOrg });
+  const orgName = orgs.data?.find((org) => org.id === item.scope)?.name ?? item.scope;
+  const name = inOrg ? `${item.name} (${orgName})` : item.name;
+  const review =
+    `/library?review=${encodeURIComponent(item.server_id)}` +
+    (inOrg ? `&scope=${encodeURIComponent(item.scope)}` : "");
   return (
     <li
-      aria-label={`${item.name} tools changed`}
+      aria-label={`${name} tools changed`}
       className="flex items-center gap-3 rounded-lg border p-3"
     >
       <div className="flex min-w-0 flex-1 flex-col">
-        <span className="font-medium">{item.name}</span>
+        <span className="font-medium">{name}</span>
         <span className="truncate text-xs text-muted-foreground">
           {item.dots.length === 0
             ? "No dot uses it yet."
@@ -160,7 +169,7 @@ function ToolsChangedRow({ item }: { item: ToolsChanged }) {
         </span>
       </div>
       <Button asChild size="sm" variant="outline">
-        <Link to={`/library?review=${encodeURIComponent(item.server_id)}`}>Review</Link>
+        <Link to={review}>Review</Link>
       </Button>
     </li>
   );
@@ -352,7 +361,7 @@ export function InboxScreen() {
           </h2>
           <ul className="flex flex-col gap-2">
             {tools.map((item) => (
-              <ToolsChangedRow key={item.server_id} item={item} />
+              <ToolsChangedRow key={`${item.server_id}/${item.scope}`} item={item} />
             ))}
           </ul>
         </section>

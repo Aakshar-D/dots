@@ -87,7 +87,7 @@ async fn dot(e: &Env, rules: &[(&str, Action)], wait: u64) -> Dot {
     s.policy
         .rules
         .extend(rules.iter().map(|(tool, action)| Rule::new(tool, *action)));
-    let dot = e.store.create_dot(&s).await.unwrap();
+    let dot = e.store.create_dot(&s, None).await.unwrap();
     e.edges.first_pages(&dot.id, &[CART]);
     dot
 }

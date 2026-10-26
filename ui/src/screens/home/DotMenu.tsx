@@ -6,6 +6,7 @@ import { useNavigate } from "react-router";
 import { commands } from "@/api/commands";
 import type { Dot } from "@/api/types";
 import { Button } from "@/components/ui/button";
+import { orgRemovedText, useDotOrg } from "@/lib/dot-org";
 import { notifyError } from "@/lib/notify";
 import { invalidate, invalidateDots, keys, setDotEnabledMutation, useSwitchingDot } from "@/lib/query";
 
@@ -19,6 +20,8 @@ export function DotMenu({ dot }: { dot: Dot }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const switching = useSwitchingDot(dot.id);
+  // A dot whose org is no longer joined can't run; it can still be switched off.
+  const { removed } = useDotOrg(dot.org_id);
   const runNow = useMutation({
     mutationFn: () => commands.runNow(dot.id),
     onSuccess: () => invalidate(qc, ["runs"]),
@@ -58,7 +61,8 @@ export function DotMenu({ dot }: { dot: Dot }) {
           </DropdownMenu.Item>
           <DropdownMenu.Item
             className={ITEM}
-            disabled={runNow.isPending}
+            disabled={runNow.isPending || removed}
+            title={removed && dot.org_id ? orgRemovedText(dot.org_id) : undefined}
             onSelect={() => runNow.mutate()}
           >
             Run now

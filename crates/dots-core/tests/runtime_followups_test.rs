@@ -33,7 +33,7 @@ async fn a_chat_and_a_due_follow_up_on_one_thread_give_one_run() {
     let mut s = spec("racer");
     s.workdir = dir.path().to_string_lossy().to_string();
     s.workspace_mode = WorkspaceMode::Folder;
-    let dot = rt.create_dot(s).await.unwrap();
+    let dot = rt.create_dot(s, None).await.unwrap();
     let first = rt.run_now(&dot.id).await.unwrap();
     let first = wait_status(rt.store(), &first.id, RunStatus::Succeeded, 15).await;
     let follow_up = rt

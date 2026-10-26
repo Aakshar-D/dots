@@ -22,7 +22,7 @@ use crate::prompt::{build_prompt_with_memories, context_tool_name};
 use crate::run_tools::{CloseOnDrop, OpenRequest, RunTools};
 use crate::store::Store;
 use crate::util::{ct_eq, new_token};
-use crate::vault::Vault;
+use crate::vault::{DotScope, Vault};
 use crate::workspace::{Prepared, WorkspaceManager};
 use crate::{Error, Result};
 
@@ -683,6 +683,14 @@ impl Runner {
         if let Some(reason) = engine.unavailable() {
             return Err(Error::Other(reason));
         }
+        // A dot whose org is no longer joined does not start, and a stale org is fetched
+        // before its variables resolve (env vault spec §6.4), before any folder is made.
+        let vault = self
+            .vault
+            .get()
+            .cloned()
+            .unwrap_or_else(|| Vault::in_memory(self.store.clone()));
+        vault.before_run(&dot).await?;
         let prepared = match Prepared::from_run(run) {
             Some(p) if p.path.is_dir() => {
                 // A resumed or follow-up run works in the folder its row names, and the
@@ -730,12 +738,7 @@ impl Runner {
         let refreshed = self.copy_attachments(run, &prepared.path).await;
         let run = refreshed.as_ref().unwrap_or(run);
         // The run's MCP sessions, skills and plugin folders (MCP/skills spec section 5), each
-        // server with the variables its dot grants it (env vault spec §8).
-        let vault = self
-            .vault
-            .get()
-            .cloned()
-            .unwrap_or_else(|| Vault::in_memory(self.store.clone()));
+        // server with the variables its dot grants it, in the dot's scope (env vault spec §8).
         let (tools, mut notices) = RunTools::open(OpenRequest {
             store: &self.store,
             bus: &self.bus,
@@ -746,6 +749,7 @@ impl Runner {
                 .then_some(self.cfg.plugins_dir.as_path()),
             cancel: &cancel,
             vault: &vault,
+            scope: &DotScope::of(&dot),
             grants: &dot.spec.variables,
             dot_name: &dot.spec.name,
         })

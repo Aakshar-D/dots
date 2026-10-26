@@ -31,6 +31,7 @@ describe("the dot editor, new dot", () => {
     expect(backend.callsTo("create_dot")).toEqual([
       {
         spec: { ...blankSpec, name: "nightly", instructions: "Run the tests.", workdir: "C:/dev/app" },
+        orgId: null,
       },
     ]);
     expect(await screen.findByText("Dot created")).toBeVisible();
@@ -141,7 +142,7 @@ describe("the dot editor, new dot", () => {
       until: { count: 10 },
     };
     expect(backend.callsTo("create_dot")).toEqual([
-      { spec: { ...blankSpec, ...basics, schedule: weekly } },
+      { spec: { ...blankSpec, ...basics, schedule: weekly }, orgId: null },
     ]);
   });
 
@@ -156,7 +157,7 @@ describe("the dot editor, new dot", () => {
 
     await waitFor(() => expect(router.state.location.pathname).toBe("/dots/dot-new"));
     expect(backend.callsTo("create_dot")).toEqual([
-      { spec: { ...blankSpec, ...basics, schedule: cron("0 0 2 * * *", true) } },
+      { spec: { ...blankSpec, ...basics, schedule: cron("0 0 2 * * *", true) }, orgId: null },
     ]);
   });
 

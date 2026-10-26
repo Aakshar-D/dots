@@ -93,7 +93,7 @@ impl Setup {
     }
 
     async fn run(&self, s: &DotSpec, status: RunStatus) -> String {
-        let dot = self.store.create_dot(s).await.unwrap();
+        let dot = self.store.create_dot(s, None).await.unwrap();
         let r = self
             .runner
             .enqueue(NewRun::new(&dot.id, TriggerKind::Manual))

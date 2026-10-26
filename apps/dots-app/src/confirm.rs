@@ -3,12 +3,14 @@
 use std::future::Future;
 
 use dots_core::library::{
-    check_name, http_origin, origin_changed, LibraryConfig, LibraryItem, LibraryKind,
-    McpServerConfig,
+    check_name, http_origin, origin_changed, HttpOrigin, LibraryConfig, LibraryItem, LibraryKind,
+    McpCatalog, McpServerConfig,
 };
-use dots_core::library_service::McpProbe;
+use dots_core::library_service::{McpProbe, OriginToConfirm};
 use dots_core::model::SettingsSaved;
 use dots_core::settings::Settings;
+use dots_core::vault::org::{OrgSummary, SourceCreds, KEY_CHANGE};
+use dots_core::vault::{DotScope, Resolved};
 use dots_core::Runtime;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
@@ -222,16 +224,43 @@ pub fn library_confirmation_in(
 /// that is no URL), the quoted URL and why the server cannot start.
 fn origin_text(url: &str, env: &dyn Fn(&str) -> Option<String>) -> String {
     match http_origin(url, env) {
-        Ok(o) => match o.unicode {
-            Some(u) => format!("{} ({u})", quoted(&o.ascii)),
-            None => quoted(&o.ascii),
-        },
+        Ok(o) => shown_origin(&o),
         Err(why) if why.ends_with("is not set") => format!(
             "{} ({why}: the server cannot start until it is set)",
             quoted(url)
         ),
         Err(why) => format!("{} ({why}: the server cannot start)", quoted(url)),
     }
+}
+
+/// An origin for a dialog: quoted in ASCII, with the Unicode host in parentheses when it
+/// differs.
+fn shown_origin(origin: &HttpOrigin) -> String {
+    match &origin.unicode {
+        Some(u) => format!("{} ({u})", quoted(&origin.ascii)),
+        None => quoted(&origin.ascii),
+    }
+}
+
+/// The question before an http MCP server may send a scope's values to the origin its URL
+/// reaches there: the words of the server form's question, naming the org whose values they
+/// are. Names, never values.
+pub fn origin_question(asked: &OriginToConfirm, scope: &DotScope) -> String {
+    let whose = match scope {
+        DotScope::Personal => String::new(),
+        DotScope::Org(_) => format!(" in {}", asked.scope_name),
+    };
+    format!(
+        "Dots will send the values of {}{whose} to {}. Send them?\n\nAllow this only for a \
+         server you trust.",
+        asked.variables.join(", "),
+        shown_origin(&asked.origin)
+    )
+}
+
+/// The scope a command names: an org id, or none for Personal.
+pub fn scope_of(scope: Option<String>) -> DotScope {
+    scope.map_or(DotScope::Personal, DotScope::Org)
 }
 
 /// The title of the dialog for a question `library_confirmation` made.
@@ -322,15 +351,38 @@ fn plugin_info(
     dots_core::kit::read_plugin(std::path::Path::new(&next.path)).ok()
 }
 
+/// What the person allowed in `confirm_library`'s question: the origins it named, each in ASCII
+/// as the HTTP client reaches it with Personal's values, and those values. Empty when nothing
+/// was asked, or the question named no origin that could be computed.
+struct Allowed {
+    origins: Vec<String>,
+    personal: Resolved,
+}
+
+impl Allowed {
+    /// The Personal origin of `config` when the question named it.
+    fn origin_of(&self, config: &LibraryConfig) -> Option<String> {
+        let LibraryConfig::McpServer(server @ McpServerConfig::Http { url, .. }) = config else {
+            return None;
+        };
+        if !server.origin_pinned() {
+            return None;
+        }
+        let origin = http_origin(url, &|k| self.personal.get(k)).ok()?.ascii;
+        self.origins.contains(&origin).then_some(origin)
+    }
+}
+
 /// Asks `library_confirmation`'s question, if there is one, with each origin computed from
 /// Personal's values, where the server's `${VAR}` resolve. A refusal is `cancelled`, and the
-/// caller then starts and stores nothing.
+/// caller then starts and stores nothing. An answer of yes returns the origins the question
+/// named, for `record_allowed` once the save is done.
 async fn confirm_library<F, Fut>(
     rt: &Runtime,
     stored: Option<&LibraryConfig>,
     next: &LibraryConfig,
     ask: F,
-) -> Result<(), CmdError>
+) -> Result<Allowed, CmdError>
 where
     F: FnOnce(String) -> Fut,
     Fut: Future<Output = bool>,
@@ -348,9 +400,53 @@ where
     let personal = rt.vault().personal_values(&names).await?;
     let env = |k: &str| personal.get(k);
     let starts = plugin_starts(info.as_ref(), &env);
+    let mut origins = Vec::new();
     if let Some(question) = library_confirmation_in(stored, next, &starts, &env) {
         if !ask(question).await {
             return Err(CmdError::cancelled("declined: nothing was run or saved"));
+        }
+        // The origins the question named: the server's, or each of the plugin's http servers
+        // that send variables.
+        let named = match next {
+            LibraryConfig::McpServer(server) => vec![server],
+            _ => info
+                .iter()
+                .flat_map(|i| &i.servers)
+                .map(|s| &s.config)
+                .collect(),
+        };
+        for server in named {
+            if let McpServerConfig::Http { url, .. } = server {
+                if server.origin_pinned() {
+                    origins.extend(http_origin(url, &env).ok().map(|o| o.ascii));
+                }
+            }
+        }
+    }
+    Ok(Allowed { origins, personal })
+}
+
+/// Records, after a save the person allowed, the Personal origin the question named of each
+/// http server the save holds: the server `item`, or the plugin `item`'s own servers. A server
+/// whose origin the question did not name (nothing relevant changed, so nothing was asked)
+/// keeps the origins confirmed before.
+async fn record_allowed(
+    rt: &Runtime,
+    item: &LibraryItem,
+    allowed: &Allowed,
+) -> Result<(), CmdError> {
+    if allowed.origins.is_empty() {
+        return Ok(());
+    }
+    let servers = match item.config {
+        LibraryConfig::Plugin(_) => rt.store().owned_library_items(&item.id).await?,
+        _ => vec![item.clone()],
+    };
+    for server in servers {
+        if let Some(origin) = allowed.origin_of(&server.config) {
+            rt.library()
+                .add_confirmed_origin(&server.id, &DotScope::Personal, &origin)
+                .await?;
         }
     }
     Ok(())
@@ -376,7 +472,9 @@ where
     Ok(rt.library().probe(&config).await?)
 }
 
-/// `library_add`, after the user's yes when it adds a stdio server or a plugin with hooks on.
+/// `library_add`, after the user's yes when it adds a stdio server or a plugin with hooks on,
+/// or an http server that sends variables. The Personal origin that question named is then
+/// recorded as confirmed (env vault spec §8), so a Personal dot's run starts the server there.
 pub async fn add_confirmed<F, Fut>(
     rt: &Runtime,
     name: &str,
@@ -396,12 +494,29 @@ where
         )
         .into());
     }
-    confirm_library(rt, None, &config, ask).await?;
-    Ok(rt.library().add(name, config, accept).await?)
+    let allowed = confirm_library(rt, None, &config, ask).await?;
+    let item = rt.library().add(name, config, None).await?;
+    record_allowed(rt, &item, &allowed).await?;
+    // Checked once the origin the person allowed is recorded, so the Check may reach it.
+    if let Some(fp) = accept {
+        match rt
+            .library()
+            .check_and_accept(&item.id, &DotScope::Personal, fp)
+            .await
+        {
+            Ok(_) => {}
+            // An origin the question could not name: nothing was sent, and it stays unchecked.
+            Err(dots_core::Error::Conflict(why)) => tracing::warn!("{why}; saved unchecked"),
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok(item)
 }
 
 /// `library_update`, after the user's yes when the stored config does not already hold what is
-/// asked for: another stdio command line, or hooks switched on.
+/// asked for: another stdio command line, hooks switched on, or variables sent to another
+/// origin. After a yes the Personal origin the question named is recorded as confirmed; with no
+/// question the origins confirmed before stay.
 pub async fn update_confirmed<F, Fut>(
     rt: &Runtime,
     id: &str,
@@ -439,9 +554,127 @@ where
             ))
             .into());
         }
-        confirm_library(rt, Some(&stored.config), &config, ask).await?;
+        let allowed = confirm_library(rt, Some(&stored.config), &config, ask).await?;
+        let item = rt.library().update(id, config).await?;
+        record_allowed(rt, &item, &allowed).await?;
+        return Ok(item);
     }
     Ok(rt.library().update(id, config).await?)
+}
+
+/// Asks `asked`'s question for the server `id` in `scope`, and records the origin after a yes.
+/// A no answers `cancelled`, with nothing sent or recorded.
+async fn confirm_asked<F, Fut>(
+    rt: &Runtime,
+    id: &str,
+    scope: &DotScope,
+    asked: &OriginToConfirm,
+    ask: F,
+) -> Result<(), CmdError>
+where
+    F: FnOnce(String) -> Fut,
+    Fut: Future<Output = bool>,
+{
+    if !ask(origin_question(asked, scope)).await {
+        return Err(CmdError::cancelled("declined: nothing was sent or saved"));
+    }
+    rt.library()
+        .add_confirmed_origin(id, scope, &asked.origin.ascii)
+        .await?;
+    Ok(())
+}
+
+/// `library_check` in `scope` (env vault spec §8). The core refuses to check a pinned server
+/// whose origin in that scope is not confirmed; then this asks, with that origin and the
+/// server's variables, and a yes records the origin and checks. A no answers `cancelled`, and
+/// nothing is sent.
+pub async fn check_confirmed<F, Fut>(
+    rt: &Runtime,
+    id: &str,
+    scope: &DotScope,
+    ask: F,
+) -> Result<McpCatalog, CmdError>
+where
+    F: FnOnce(String) -> Fut,
+    Fut: Future<Output = bool>,
+{
+    let library = rt.library();
+    let refused = match library.check(id, scope).await {
+        Err(dots_core::Error::Conflict(why)) => why,
+        other => return Ok(other?),
+    };
+    // A conflict that no longer holds is answered as it came; a failure to ask is its own.
+    let Some(asked) = library.origin_to_confirm(id, scope).await? else {
+        return Err(dots_core::Error::Conflict(refused).into());
+    };
+    confirm_asked(rt, id, scope, &asked, ask).await?;
+    Ok(library.check(id, scope).await?)
+}
+
+/// `confirm_origin`: the question of `check_confirmed` and its record, without the Check. It
+/// works for a plugin's own server, which the server form cannot change. An origin confirmed
+/// already asks nothing.
+pub async fn origin_confirmed<F, Fut>(
+    rt: &Runtime,
+    id: &str,
+    scope: &DotScope,
+    ask: F,
+) -> Result<(), CmdError>
+where
+    F: FnOnce(String) -> Fut,
+    Fut: Future<Output = bool>,
+{
+    match rt.library().origin_to_confirm(id, scope).await? {
+        Some(asked) => confirm_asked(rt, id, scope, &asked, ask).await,
+        None => Ok(()),
+    }
+}
+
+/// The title of the question before an Update that brings a new policy key.
+pub const KEY_TITLE: &str = "Accept the new policy key?";
+
+/// The question before an Update that brings a new policy key: the preview's warning.
+pub fn key_question(org: &str, warning: &str) -> String {
+    format!("{org}: {warning}.\n\nUpdate {org} with this code?")
+}
+
+/// `org_update`, after the person's yes when the code brings a new policy key (env vault spec
+/// §6.4): the key that signs the org's policy decides what Dots trusts, so the warning of
+/// `org_preview` is asked in a dialog the webview cannot answer. A no answers `cancelled` and
+/// nothing is fetched or changed. A code for another org is the core's refusal, unasked.
+pub async fn update_org_confirmed<F, Fut>(
+    rt: &Runtime,
+    org_id: &str,
+    code: &str,
+    creds: Option<SourceCreds>,
+    ask: F,
+) -> Result<OrgSummary, CmdError>
+where
+    F: FnOnce(String) -> Fut,
+    Fut: Future<Output = bool>,
+{
+    let preview = rt.preview_org(code)?;
+    // The core's comparison of the whole policy keys decides, never the key id (which whoever
+    // makes a key can set) or the words of a line. A code for another org, or an org not
+    // joined, is the core's refusal, unasked.
+    if preview.org_id == org_id && preview.key_changed {
+        let warning = preview
+            .changes
+            .iter()
+            .find(|c| c.starts_with(KEY_CHANGE))
+            .cloned()
+            .unwrap_or_else(|| {
+                format!(
+                    "{KEY_CHANGE} to {}: the key that signs the org's policy is new, so accept \
+                     this code only if your admin told you the key changed",
+                    preview.key_fingerprint
+                )
+            });
+        if !ask(key_question(&preview.name, &warning)).await {
+            return Err(CmdError::cancelled("the org was not updated"));
+        }
+    }
+    Ok(rt.update_org(org_id, code, creds).await?)
 }
 
 /// Whether the environment answers confirmations instead of the user.
@@ -478,6 +711,7 @@ pub async fn ask(app: &AppHandle, title: &str, message: String) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dots_core::vault::EntryKind;
 
     /// `plugin_starts` of the plugin `config` names, with no variable set.
     fn starts_of(stored: Option<&LibraryConfig>, config: &LibraryConfig) -> Vec<String> {
@@ -999,6 +1233,180 @@ mod tests {
         assert!(!preconfirmed(true, None));
     }
 
+    /// The origins confirmed in Personal for the item `id`.
+    async fn confirmed(rt: &Runtime, id: &str) -> Vec<String> {
+        rt.store()
+            .confirmed_origins(id)
+            .await
+            .unwrap()
+            .remove("personal")
+            .unwrap_or_default()
+    }
+
+    /// Every question asked, and the answer `answer` to each.
+    fn answering(
+        asked: &std::cell::RefCell<Vec<String>>,
+        answer: bool,
+    ) -> impl FnOnce(String) -> std::future::Ready<bool> + '_ {
+        move |q| {
+            asked.borrow_mut().push(q);
+            std::future::ready(answer)
+        }
+    }
+
+    #[tokio::test]
+    async fn an_allowed_variable_send_confirms_the_personal_origin_it_named() {
+        let dir = tempfile::tempdir().unwrap();
+        let rt = runtime(&dir).await;
+        rt.vault()
+            .add("MCP_HOST", EntryKind::Plain, "Mcp.Example:8443")
+            .await
+            .unwrap();
+        let asked = std::cell::RefCell::new(Vec::new());
+        let config = http_with("https://${MCP_HOST}/mcp", "Bearer ${TOK}");
+
+        // A no saves nothing, so nothing is confirmed.
+        let err = add_confirmed(&rt, "web", config.clone(), None, answering(&asked, false))
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind, CmdErrorKind::Cancelled);
+        assert!(rt.library().list().await.unwrap().is_empty());
+        // A yes records the origin the question named, as the client reaches it.
+        let item = add_confirmed(&rt, "web", config, None, answering(&asked, true))
+            .await
+            .unwrap();
+        assert!(
+            asked.borrow()[1].contains(r#"values of MCP_HOST, TOK to "https://mcp.example:8443""#),
+            "{:?}",
+            asked.borrow()
+        );
+        assert_eq!(confirmed(&rt, &item.id).await, ["https://mcp.example:8443"]);
+
+        // Nothing relevant changed: no question, and the confirmation stays.
+        let path = http_with("https://${MCP_HOST}/other", "Bearer ${TOK}");
+        update_confirmed(&rt, &item.id, path, answering(&asked, false))
+            .await
+            .unwrap();
+        assert_eq!(asked.borrow().len(), 2);
+        assert_eq!(confirmed(&rt, &item.id).await, ["https://mcp.example:8443"]);
+        // Moved, the URL still reading a variable, and declined: nothing recorded.
+        let moved = http_with("https://b.example/mcp?via=${MCP_HOST}", "Bearer ${TOK}");
+        let err = update_confirmed(&rt, &item.id, moved.clone(), answering(&asked, false))
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind, CmdErrorKind::Cancelled);
+        assert_eq!(confirmed(&rt, &item.id).await, ["https://mcp.example:8443"]);
+        // Moved and allowed: the new origin is recorded next to the old one.
+        update_confirmed(&rt, &item.id, moved, answering(&asked, true))
+            .await
+            .unwrap();
+        assert_eq!(
+            confirmed(&rt, &item.id).await,
+            ["https://mcp.example:8443", "https://b.example"]
+        );
+        assert_eq!(asked.borrow().len(), 4);
+
+        // A question whose origin could not be computed confirms none.
+        let unset = http_with("https://${NOPE}/mcp", "${TOK}");
+        let item = add_confirmed(&rt, "unset", unset, None, answering(&asked, true))
+            .await
+            .unwrap();
+        assert!(asked.borrow()[4].contains("NOPE is not set"));
+        assert!(rt
+            .store()
+            .confirmed_origins(&item.id)
+            .await
+            .unwrap()
+            .is_empty());
+        // A secret typed into a header asks nothing. Dots moves it into Personal, so the server
+        // sends a variable, to the one origin its fixed URL has: it is not pinned, and nothing
+        // is confirmed.
+        let typed = http_with("https://typed.example/mcp", "typed-secret-value-81f3");
+        let item = add_confirmed(&rt, "typed", typed, None, answering(&asked, false))
+            .await
+            .unwrap();
+        assert_eq!(asked.borrow().len(), 5);
+        assert!(rt
+            .store()
+            .confirmed_origins(&item.id)
+            .await
+            .unwrap()
+            .is_empty());
+        // A fixed URL whose header reads a variable asks, and a yes confirms nothing: there is
+        // no pin to record.
+        let fixed = http_with("https://fixed.example/mcp", "Bearer ${TOK}");
+        let item = add_confirmed(&rt, "fixed", fixed, None, answering(&asked, true))
+            .await
+            .unwrap();
+        assert!(asked.borrow()[5].contains(r#"values of TOK to "https://fixed.example""#));
+        assert!(rt
+            .store()
+            .confirmed_origins(&item.id)
+            .await
+            .unwrap()
+            .is_empty());
+        // A server that sends no variables asks nothing and has nothing to confirm.
+        let item = add_confirmed(&rt, "plain", http(), None, answering(&asked, false))
+            .await
+            .unwrap();
+        assert_eq!(asked.borrow().len(), 6);
+        assert!(rt
+            .store()
+            .confirmed_origins(&item.id)
+            .await
+            .unwrap()
+            .is_empty());
+        for question in asked.borrow().iter() {
+            assert!(!question.contains("Mcp.Example") && !question.contains("typed-secret"));
+        }
+        rt.shutdown();
+    }
+
+    #[tokio::test]
+    async fn an_allowed_plugin_confirms_the_origins_of_its_servers_whose_url_reads_a_variable() {
+        let dir = tempfile::tempdir().unwrap();
+        let rt = runtime(&dir).await;
+        rt.vault()
+            .add("W_HOST", EntryKind::Plain, "H.example:9")
+            .await
+            .unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let servers = serde_json::json!({"mcpServers": {
+            "w": {"type": "http", "url": "https://${W_HOST}/x",
+                  "headers": {"A": "Bearer ${TOKEN}"}},
+            "fixed": {"type": "http", "url": "https://fixed.example/mcp",
+                      "headers": {"A": "Bearer ${TOKEN}"}},
+            "plain": {"type": "http", "url": "https://plain.example/mcp"},
+        }});
+        std::fs::write(folder.path().join(".mcp.json"), servers.to_string()).unwrap();
+        let config = LibraryConfig::Plugin(dots_core::library::PluginConfig {
+            path: folder.path().to_string_lossy().into_owned(),
+            installed_id: None,
+            run_hooks: false,
+        });
+        let asked = std::cell::RefCell::new(Vec::new());
+        let err = add_confirmed(&rt, "forms", config.clone(), None, answering(&asked, false))
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind, CmdErrorKind::Cancelled);
+        assert!(rt.library().list().await.unwrap().is_empty());
+
+        let plugin = add_confirmed(&rt, "forms", config, None, answering(&asked, true))
+            .await
+            .unwrap();
+        assert_eq!(asked.borrow().len(), 2);
+        let servers = rt.store().owned_library_items(&plugin.id).await.unwrap();
+        let by_name = |name: &str| servers.iter().find(|s| s.name == name).unwrap().id.clone();
+        assert_eq!(
+            confirmed(&rt, &by_name("plugin-forms-w")).await,
+            ["https://h.example:9"]
+        );
+        for name in ["plugin-forms-fixed", "plugin-forms-plain"] {
+            assert!(confirmed(&rt, &by_name(name)).await.is_empty(), "{name}");
+        }
+        rt.shutdown();
+    }
+
     const PROGRAM: &str = "C:/tools/claude.exe";
 
     #[tokio::test]
@@ -1248,6 +1656,351 @@ mod tests {
         let (result, asked) = save(&rt, edge(None), false).await;
         assert_eq!(result.unwrap().settings.edge_path, None);
         assert_eq!(asked, [] as [String; 0]);
+        rt.shutdown();
+    }
+
+    /// A server whose host comes from `${MCP_HOST}`, which Personal sets to a port nothing
+    /// listens on, so a check that runs records `unreachable`. Added as the store adds it,
+    /// with nothing confirmed.
+    async fn pinned(rt: &Runtime, name: &str) -> LibraryItem {
+        let config = http_with("http://${MCP_HOST}/mcp", "Bearer ${TOK}");
+        rt.store()
+            .add_library_item(name, &config, None)
+            .await
+            .unwrap()
+    }
+
+    async fn with_host(dir: &tempfile::TempDir) -> Runtime {
+        let rt = runtime(dir).await;
+        rt.vault()
+            .add("MCP_HOST", EntryKind::Plain, "127.0.0.1:1")
+            .await
+            .unwrap();
+        rt.vault()
+            .add("TOK", EntryKind::Secret, "check-secret-value-6d21e0")
+            .await
+            .unwrap();
+        rt
+    }
+
+    const ASKED: &str = "Dots will send the values of MCP_HOST, TOK to \"http://127.0.0.1:1\". \
+                         Send them?\n\nAllow this only for a server you trust.";
+
+    #[tokio::test]
+    async fn a_check_whose_origin_is_not_confirmed_asks_then_checks() {
+        let dir = tempfile::tempdir().unwrap();
+        let rt = with_host(&dir).await;
+        let item = pinned(&rt, "gh").await;
+        let asked = std::cell::RefCell::new(Vec::new());
+
+        // A no sends nothing and records nothing.
+        let err = check_confirmed(&rt, &item.id, &DotScope::Personal, answering(&asked, false))
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind, CmdErrorKind::Cancelled);
+        assert_eq!(*asked.borrow(), [ASKED]);
+        assert_eq!(library_title(&asked.borrow()[0]), "Send these variables?");
+        assert!(confirmed(&rt, &item.id).await.is_empty());
+        let catalog = rt.store().get_catalog(&item.id, "personal").await.unwrap();
+        assert_eq!(catalog.checked_at, None, "not checked: {catalog:?}");
+
+        // A yes records the origin, then checks.
+        let catalog = check_confirmed(&rt, &item.id, &DotScope::Personal, answering(&asked, true))
+            .await
+            .unwrap();
+        assert_eq!(asked.borrow().len(), 2);
+        assert!(catalog.checked_at.is_some(), "{catalog:?}");
+        assert_eq!(confirmed(&rt, &item.id).await, ["http://127.0.0.1:1"]);
+        // Confirmed: no question again (a no would refuse it).
+        check_confirmed(&rt, &item.id, &DotScope::Personal, answering(&asked, false))
+            .await
+            .unwrap();
+        assert_eq!(asked.borrow().len(), 2);
+        // An org that is not joined is the core's refusal, unasked.
+        let acme = DotScope::Org("acme-eng".into());
+        let err = check_confirmed(&rt, &item.id, &acme, answering(&asked, true))
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind, CmdErrorKind::NotFound);
+        assert_eq!(asked.borrow().len(), 2);
+        for question in asked.borrow().iter() {
+            assert!(!question.contains("check-secret-value"), "{question}");
+        }
+        rt.shutdown();
+    }
+
+    #[tokio::test]
+    async fn a_server_that_is_not_pinned_is_checked_without_a_question() {
+        let dir = tempfile::tempdir().unwrap();
+        let rt = with_host(&dir).await;
+        let fixed = http_with("http://127.0.0.1:1/mcp", "Bearer ${TOK}");
+        let item = rt
+            .store()
+            .add_library_item("fixed", &fixed, None)
+            .await
+            .unwrap();
+        let asked = std::cell::RefCell::new(Vec::new());
+        let catalog = check_confirmed(&rt, &item.id, &DotScope::Personal, answering(&asked, false))
+            .await
+            .unwrap();
+        assert!(catalog.checked_at.is_some());
+        assert!(asked.borrow().is_empty());
+        rt.shutdown();
+    }
+
+    #[tokio::test]
+    async fn confirming_an_origin_asks_and_records_it_without_a_check() {
+        let dir = tempfile::tempdir().unwrap();
+        let rt = with_host(&dir).await;
+        // A plugin's own server, which the server form cannot change.
+        let folder = tempfile::tempdir().unwrap();
+        let servers = serde_json::json!({"mcpServers": {
+            "w": {"type": "http", "url": "http://${MCP_HOST}/mcp",
+                  "headers": {"A": "Bearer ${TOK}"}},
+            "fixed": {"type": "http", "url": "http://127.0.0.1:1/mcp",
+                      "headers": {"A": "Bearer ${TOK}"}},
+        }});
+        std::fs::write(folder.path().join(".mcp.json"), servers.to_string()).unwrap();
+        let config = LibraryConfig::Plugin(dots_core::library::PluginConfig {
+            path: folder.path().to_string_lossy().into_owned(),
+            installed_id: None,
+            run_hooks: false,
+        });
+        let plugin = rt.library().add("forms", config, None).await.unwrap();
+        let owned = rt.store().owned_library_items(&plugin.id).await.unwrap();
+        let id = |name: &str| owned.iter().find(|s| s.name == name).unwrap().id.clone();
+        let (w, fixed) = (id("plugin-forms-w"), id("plugin-forms-fixed"));
+        let asked = std::cell::RefCell::new(Vec::new());
+
+        let err = origin_confirmed(&rt, &w, &DotScope::Personal, answering(&asked, false))
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind, CmdErrorKind::Cancelled);
+        assert!(confirmed(&rt, &w).await.is_empty());
+        origin_confirmed(&rt, &w, &DotScope::Personal, answering(&asked, true))
+            .await
+            .unwrap();
+        assert_eq!(confirmed(&rt, &w).await, ["http://127.0.0.1:1"]);
+        assert_eq!(*asked.borrow(), [ASKED, ASKED]);
+        // Confirmed already: nothing is asked.
+        origin_confirmed(&rt, &w, &DotScope::Personal, answering(&asked, false))
+            .await
+            .unwrap();
+        assert_eq!(asked.borrow().len(), 2);
+        // Nothing was checked.
+        let catalog = rt.store().get_catalog(&w, "personal").await.unwrap();
+        assert_eq!(catalog.checked_at, None);
+        // A fixed URL has no origin to confirm.
+        let err = origin_confirmed(&rt, &fixed, &DotScope::Personal, answering(&asked, true))
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind, CmdErrorKind::Invalid);
+        assert_eq!(asked.borrow().len(), 2);
+        rt.shutdown();
+    }
+
+    #[test]
+    fn the_question_for_an_orgs_scope_names_the_org() {
+        let asked = OriginToConfirm {
+            server: "gh".into(),
+            origin: HttpOrigin {
+                ascii: "https://xn--bcher-kva.de".into(),
+                unicode: Some("bücher.de".into()),
+            },
+            variables: vec!["API_KEY".into(), "MCP_HOST".into()],
+            scope_name: "Acme Engineering".into(),
+        };
+        assert_eq!(
+            origin_question(&asked, &DotScope::Org("acme-eng".into())),
+            "Dots will send the values of API_KEY, MCP_HOST in Acme Engineering to \
+             \"https://xn--bcher-kva.de\" (bücher.de). Send them?\n\nAllow this only for a \
+             server you trust."
+        );
+        assert!(origin_question(&asked, &DotScope::Personal)
+            .starts_with("Dots will send the values of API_KEY, MCP_HOST to \"https://"));
+        assert_eq!(scope_of(None), DotScope::Personal);
+        assert_eq!(
+            scope_of(Some("acme-eng".into())),
+            DotScope::Org("acme-eng".into())
+        );
+    }
+
+    /// Two policy keys, with the key ids 0101010101010101 and 0202020202020202. Their
+    /// fingerprints are `FINGERPRINT_A` and `FINGERPRINT_B`.
+    const KEY_A: &str = "RWQBAQEBAQEBARERERERERERERERERERERERERERERERERERERERERER";
+    const KEY_B: &str = "RWQCAgICAgICAhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhIS";
+    const FINGERPRINT_A: &str = "B255 6546 5BDA 78EE 6896 66BA A32B 8C2C";
+    const FINGERPRINT_B: &str = "C71A EB03 11E4 4506 B223 5F88 006F 1976";
+
+    /// The join code of `org_id` signed with `key`, its OpenBao on a port nothing listens on.
+    fn org_code(org_id: &str, path: &str, key: &str) -> String {
+        use dots_core::vault::org::{BaoAuth, JoinCode, OpenBaoSettings, SourceSettings};
+        JoinCode {
+            v: 1,
+            org_id: org_id.into(),
+            name: "Acme Engineering".into(),
+            source: SourceSettings::OpenBao(OpenBaoSettings {
+                address: "http://127.0.0.1:1".into(),
+                mount: "secret".into(),
+                path: path.into(),
+                auth: BaoAuth::Token,
+                auth_mount: None,
+                namespace: None,
+            }),
+            policy_key: key.into(),
+        }
+        .encode()
+    }
+
+    #[tokio::test]
+    async fn an_update_that_brings_a_new_policy_key_asks_first() {
+        let dir = tempfile::tempdir().unwrap();
+        // Acme is joined with key A: its row, as a join leaves it, with no copy.
+        let data = dir.path().join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        let store = dots_core::store::Store::open(&data.join(dots_core::store::DB_FILE))
+            .await
+            .unwrap();
+        let joined = org_code("acme-eng", "dots", KEY_A);
+        let code = dots_core::vault::org::parse_join_code(&joined).unwrap();
+        store
+            .add_org(&dots_core::vault::org::OrgRow {
+                id: code.org_id,
+                name: code.name,
+                source: code.source,
+                policy_key: code.policy_key,
+                last_issued_at: None,
+                last_fetch_at: None,
+                joined_at: "2026-10-22T09:00:00.000Z".into(),
+            })
+            .await
+            .unwrap();
+        store.close().await;
+        let rt = runtime(&dir).await;
+        let token: SourceCreds =
+            serde_json::from_value(serde_json::json!({"kind": "token", "token": "hvs.t"})).unwrap();
+        let asked = std::cell::RefCell::new(Vec::new());
+        let new_key = org_code("acme-eng", "dots", KEY_B);
+
+        // A no fetches and changes nothing.
+        let err = update_org_confirmed(
+            &rt,
+            "acme-eng",
+            &new_key,
+            Some(token.clone()),
+            answering(&asked, false),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err, CmdError::cancelled("the org was not updated"));
+        assert_eq!(
+            *asked.borrow(),
+            [key_question(
+                "Acme Engineering",
+                &format!(
+                    "the policy key changes from {FINGERPRINT_A} to {FINGERPRINT_B}: the key \
+                     that signs the org's policy is new, so accept this code only if your admin \
+                     told you the key changed"
+                )
+            )]
+        );
+        assert!(asked.borrow()[0].starts_with("Acme Engineering: the policy key changes from"));
+        let summary = rt.orgs().summary("acme-eng").await.unwrap();
+        assert_eq!(summary.key_fingerprint, FINGERPRINT_A);
+
+        // A yes goes on to the Update, which fetches with the new settings (and fails here).
+        let err = update_org_confirmed(
+            &rt,
+            "acme-eng",
+            &new_key,
+            Some(token.clone()),
+            answering(&asked, true),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.kind, CmdErrorKind::Internal);
+        assert!(
+            err.message.starts_with("could not update Acme Engineering"),
+            "{err:?}"
+        );
+        assert_eq!(asked.borrow().len(), 2);
+
+        // The same key asks nothing; a code for another org is the core's refusal, unasked.
+        let same_key = org_code("acme-eng", "dots2", KEY_A);
+        let err = update_org_confirmed(
+            &rt,
+            "acme-eng",
+            &same_key,
+            Some(token.clone()),
+            answering(&asked, false),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.message.starts_with("could not update"), "{err:?}");
+        let other = org_code("beta", "dots", KEY_B);
+        let err = update_org_confirmed(
+            &rt,
+            "acme-eng",
+            &other,
+            Some(token),
+            answering(&asked, true),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.kind, CmdErrorKind::Invalid);
+        assert_eq!(asked.borrow().len(), 2);
+        rt.shutdown();
+    }
+
+    /// A key made with the id of `KEY_A` but other bytes after it: the same key id, which
+    /// whoever makes a key chooses, but not the same key.
+    const KEY_A_LOOKALIKE: &str = "RWQBAQEBAQEBASIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIi";
+
+    #[tokio::test]
+    async fn a_key_with_the_same_id_is_still_a_new_key_and_asks() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        let store = dots_core::store::Store::open(&data.join(dots_core::store::DB_FILE))
+            .await
+            .unwrap();
+        let code =
+            dots_core::vault::org::parse_join_code(&org_code("acme-eng", "dots", KEY_A)).unwrap();
+        store
+            .add_org(&dots_core::vault::org::OrgRow {
+                id: code.org_id,
+                name: code.name,
+                source: code.source,
+                policy_key: code.policy_key,
+                last_issued_at: None,
+                last_fetch_at: None,
+                joined_at: "2026-10-22T09:00:00.000Z".into(),
+            })
+            .await
+            .unwrap();
+        store.close().await;
+        let rt = runtime(&dir).await;
+        let lookalike = org_code("acme-eng", "dots", KEY_A_LOOKALIKE);
+        let preview = rt.preview_org(&lookalike).unwrap();
+        // The fingerprint covers the whole key, so the person sees that it differs.
+        assert_eq!(
+            preview.key_fingerprint,
+            "D5D8 218B 3A8A 6F28 5454 4026 AC2F CE07"
+        );
+        assert_ne!(preview.key_fingerprint, FINGERPRINT_A);
+        assert!(preview.key_changed);
+        let asked = std::cell::RefCell::new(Vec::new());
+        let err = update_org_confirmed(&rt, "acme-eng", &lookalike, None, answering(&asked, false))
+            .await
+            .unwrap_err();
+        assert_eq!(err, CmdError::cancelled("the org was not updated"));
+        assert_eq!(asked.borrow().len(), 1);
+        assert!(asked.borrow()[0].starts_with("Acme Engineering: the policy key changes"));
+        // The no kept the key the org was joined with.
+        let row = rt.store().get_org("acme-eng").await.unwrap().unwrap();
+        assert_eq!(row.policy_key, KEY_A);
+        let summary = rt.orgs().summary("acme-eng").await.unwrap();
+        assert_eq!(summary.key_fingerprint, FINGERPRINT_A);
         rt.shutdown();
     }
 }

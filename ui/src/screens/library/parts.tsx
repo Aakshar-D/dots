@@ -1,8 +1,8 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 
 import { CommandError, commands } from "@/api/commands";
-import type { LibraryEntry, McpTool } from "@/api/types";
+import type { DotRef, LibraryEntry, McpTool } from "@/api/types";
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { Badge } from "@/components/ui/badge";
 import { notifyError } from "@/lib/notify";
@@ -33,9 +33,25 @@ export function ItemRow(props: { label: string; actions?: ReactNode; children: R
   );
 }
 
-/// The dots that use an item.
-export function UsedBy({ dots }: { dots: LibraryEntry["used_by"] }) {
-  if (dots.length === 0) return <span className="text-xs text-muted-foreground">Not used yet</span>;
+/// The scope key of Personal in `LibraryEntry.catalogs` and `confirmed_origins`.
+export const PERSONAL = "personal";
+
+/// The orgs joined on this PC, and `nameOf(scope)`: "Personal" for Personal (`scope` left out
+/// or `personal`), else the org's name, or its id while the list loads. With `enabled` false
+/// the list is not asked for, so a screen with nothing of an org's makes no call.
+export function useScopes(enabled = true) {
+  const orgs = useQuery({ queryKey: keys.orgs, queryFn: commands.orgList, enabled });
+  const list = orgs.data ?? [];
+  const nameOf = (scope?: string) =>
+    scope === undefined || scope === PERSONAL
+      ? "Personal"
+      : (list.find((org) => org.id === scope)?.name ?? scope);
+  return { orgs: list, nameOf };
+}
+
+/// The dots that use an item, or that grant a variable; `none` when there are none.
+export function UsedBy({ dots, none = "Not used yet" }: { dots: DotRef[]; none?: string }) {
+  if (dots.length === 0) return <span className="text-xs text-muted-foreground">{none}</span>;
   return (
     <span className="text-xs text-muted-foreground">
       Used by {dots.map((d) => d.name).join(", ")}

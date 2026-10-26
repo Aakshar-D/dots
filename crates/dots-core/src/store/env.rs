@@ -22,6 +22,9 @@ fn entry_from_row(row: &SqliteRow) -> Result<EnvEntry> {
         },
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
+        // The vault's to fill: they come from the dots and the secret store.
+        used_by: Vec::new(),
+        value_missing: false,
     })
 }
 

@@ -6,6 +6,7 @@ import { useNavigate } from "react-router";
 import { commands } from "@/api/commands";
 import type { Message } from "@/api/types";
 import { Button } from "@/components/ui/button";
+import { orgRemovedText, useDotOrg } from "@/lib/dot-org";
 import {
   defaultTarget,
   isActive,
@@ -43,6 +44,9 @@ export function replyTarget(
 export function ReplyArea(props: {
   dotId: string;
   dotName: string;
+  /// The dot's org, null for Personal. A dot whose org is not joined can't run, so nothing is
+  /// sent: the core would refuse the run at its start anyway.
+  orgId: string | null;
   shown: Topic[];
   checkIns: Message[];
   pick: ReplyPick;
@@ -54,6 +58,8 @@ export function ReplyArea(props: {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const target = replyTarget(pick, shown, olderRoot);
+  const { removed } = useDotOrg(props.orgId);
+  const blocked = removed && props.orgId !== null ? orgRemovedText(props.orgId) : undefined;
   const busy = target?.runs.some(isActive) ?? false;
   const approving = target?.runs.some((run) => run.status === "awaiting_approval") ?? false;
   // A reply resumes the last run's session. A run that ended before its engine had one (a
@@ -132,17 +138,24 @@ export function ReplyArea(props: {
       : olderRoot === undefined && target.kind === "chat"
         ? "Replying to: current topic"
         : `Replying to: ${topicTitle(target)}`;
-  const hint = answering
-    ? "Your answer to the question"
-    : busy
-      ? approving
-        ? "Waiting for your approval above"
-        : `${dotName} is working on this…`
-      : closed
-        ? "This topic cannot be continued"
-        : `Message ${dotName}…`;
+  const hint = blocked
+    ? "org removed"
+    : answering
+      ? "Your answer to the question"
+      : busy
+        ? approving
+          ? "Waiting for your approval above"
+          : `${dotName} is working on this…`
+        : closed
+          ? "This topic cannot be continued"
+          : `Message ${dotName}…`;
   return (
     <div className="flex flex-col gap-2 border-t pt-2">
+      {blocked && (
+        <p role="status" className="px-3 text-destructive">
+          org removed: {blocked}
+        </p>
+      )}
       {closed && (
         <p className="flex items-center gap-2 px-3 text-muted-foreground">
           <span className="flex-1">
@@ -168,7 +181,7 @@ export function ReplyArea(props: {
               key={choice}
               size="sm"
               variant="outline"
-              disabled={questionBusy || answer.isPending}
+              disabled={questionBusy || answer.isPending || blocked !== undefined}
               onClick={onSingleClick(() => answer.mutate(choice))}
             >
               {choice}
@@ -178,7 +191,7 @@ export function ReplyArea(props: {
             size="sm"
             variant={answering ? "default" : "outline"}
             aria-pressed={answering}
-            disabled={questionBusy}
+            disabled={questionBusy || blocked !== undefined}
             onClick={() => setReplying(!replying)}
           >
             Reply to question
@@ -206,7 +219,8 @@ export function ReplyArea(props: {
       </div>
       <Composer
         disabled={
-          answering ? questionBusy || answer.isPending : busy || send.isPending || closed
+          blocked !== undefined ||
+          (answering ? questionBusy || answer.isPending : busy || send.isPending || closed)
         }
         hint={hint}
         onSend={(message) =>

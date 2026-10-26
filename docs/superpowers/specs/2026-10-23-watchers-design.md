@@ -26,7 +26,7 @@ Anti-goals (a failure even if it works): a dot that wakes itself in a loop; hund
 
 ## 3. A watcher
 
-A watcher belongs to one dot; a dot has any number. Stored in a new table `watchers` (migration `0013_watchers.sql`; 0011 is the vault, 0012 memories):
+A watcher belongs to one dot; a dot has any number. Stored in a new table `watchers` (migration `0014_watchers.sql`; 0011 is the vault, 0012 memories, 0013 orgs):
 
 - `id` (ULID), `dot_id` (foreign key to `dots`, `ON DELETE CASCADE`), `kind` (`folder` | `email` | `github`), `name` (the person's label, 1 to 80 characters; a default from the source, e.g. "Invoices folder"), `config` (JSON, section 4), `enabled` (the person's pause), `paused_reason` (null | `flood` | `error`: paused by Dots), `last_error` (text), `cursor` (JSON: where an email or GitHub watcher has read up to), `last_event_at`, `created_at`, `updated_at` (ISO-8601 UTC, the core's `util::now()`).
 - Validation on save: the config's fields per kind (section 4); a folder that exists; vault entry names that exist in the vault as secret entries (the chooser lists secret entries only; a plain entry is refused) (the value is not checked on save; a wrong password shows as an error, section 7).
@@ -98,7 +98,7 @@ A watcher belongs to one dot; a dot has any number. Stored in a new table `watch
 
 ## 9. Collisions with parallel work
 
-None open: the other developer has no open PR (vault #18 and update QA #21 are merged). New files: `crates/dots-core/src/watchers/` (`mod.rs` the service, `folder.rs`, `email.rs`, `github.rs`, `cap.rs`), `store/watchers.rs`, `migrations/0013_watchers.sql`, the UI tab and its tests. Shared files touched: `model.rs` (`TriggerKind::Watcher`, `Watcher` types, the Inbox list), `runtime.rs` (start the service, commands), `runner.rs` (copy staged attachments at prepare), `prompt.rs` (the trigger line and the outside-content section), `events.rs`; the app's `commands.rs`, `lib.rs`, `contract.rs`, `events.rs` (the notification); in the UI `api/{commands,types}.ts`, `lib/query.ts`, `lib/runtime-events.ts`, `lib/home-topics.ts` and `components/Transcript.tsx` (trigger labels), `DotEditorScreen.tsx` (one tab), the Inbox screen, Settings.
+None open: the other developer has no open PR (vault #18 and update QA #21 are merged). New files: `crates/dots-core/src/watchers/` (`mod.rs` the service, `folder.rs`, `email.rs`, `github.rs`, `cap.rs`), `store/watchers.rs`, `migrations/0014_watchers.sql` (written as 0013; renumbered when env vault B took 0013 for orgs), the UI tab and its tests. Shared files touched: `model.rs` (`TriggerKind::Watcher`, `Watcher` types, the Inbox list), `runtime.rs` (start the service, commands), `runner.rs` (copy staged attachments at prepare), `prompt.rs` (the trigger line and the outside-content section), `events.rs`; the app's `commands.rs`, `lib.rs`, `contract.rs`, `events.rs` (the notification); in the UI `api/{commands,types}.ts`, `lib/query.ts`, `lib/runtime-events.ts`, `lib/home-topics.ts` and `components/Transcript.tsx` (trigger labels), `DotEditorScreen.tsx` (one tab), the Inbox screen, Settings.
 
 New dependencies: `notify` (and its debouncer) for folders; an async IMAP client over rustls (`async-imap` with `tokio-rustls`, or the builder's equivalent) and a MIME parser (`mail-parser`) for email; `reqwest` (present) for GitHub.
 

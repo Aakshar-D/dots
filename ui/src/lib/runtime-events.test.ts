@@ -116,6 +116,31 @@ describe("runtime events and the query cache", () => {
     for (const key of untouched) expect(stale(qc, key), key.join("/")).toBe(false);
   });
 
+  it("marks the orgs, the Library and the inbox stale on an org update", () => {
+    const qc = createQueryClient();
+    // The Library and the Inbox list a server's catalog and changed tools per joined org. What
+    // is read per org sits under the orgs' key. This PC's age key does not change.
+    const lists = [keys.orgs, ["orgs", "acme-eng", "entries"], keys.library, keys.inbox];
+    const untouched = [keys.settings, keys.dots, keys.env, keys.orgSopsKey("acme-eng")];
+    for (const key of [...lists, ...untouched]) qc.setQueryData(key, []);
+
+    applyRuntimeEvent(qc, { type: "org_updated", org_id: "acme-eng" });
+    for (const key of lists) expect(stale(qc, key), key.join("/")).toBe(true);
+    for (const key of untouched) expect(stale(qc, key), key.join("/")).toBe(false);
+  });
+
+  it("marks each dot's variables stale on an org update, and not the dots", () => {
+    const qc = createQueryClient();
+    // Each dot's variables resolve in its org. An editor fills its form from the dot.
+    const variables = [keys.dotVariables("dot-a"), keys.dotVariables("dot-b")];
+    const dots = [keys.dot("dot-a"), keys.dot("dot-b"), keys.overview];
+    for (const key of [...variables, ...dots]) qc.setQueryData(key, []);
+
+    applyRuntimeEvent(qc, { type: "org_updated", org_id: "acme-eng" });
+    for (const key of variables) expect(stale(qc, key), key.join("/")).toBe(true);
+    for (const key of dots) expect(stale(qc, key), key.join("/")).toBe(false);
+  });
+
   it("leaves the caches to the schedule update that comes with a schedule's attention", () => {
     const qc = createQueryClient();
     const all = [keys.dots, keys.overview, keys.inbox, keys.dot(sample.dot.id)];

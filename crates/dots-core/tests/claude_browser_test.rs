@@ -127,7 +127,7 @@ async fn browser_dot(e: &Env, edit: impl FnOnce(&mut DotSpec)) -> Dot {
     s.browser = true;
     s.approval_wait_secs = 0;
     edit(&mut s);
-    let dot = e.store.create_dot(&s).await.unwrap();
+    let dot = e.store.create_dot(&s, None).await.unwrap();
     e.edges.first_pages(&dot.id, &[CART]);
     dot
 }

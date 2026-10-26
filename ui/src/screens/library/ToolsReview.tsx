@@ -16,7 +16,7 @@ import {
 import { errorMessage } from "@/lib/notify";
 import { invalidate, keys } from "@/lib/query";
 
-import { ToolList } from "./parts";
+import { ToolList, useScopes } from "./parts";
 import { diffTools, parseTools } from "./tools";
 
 function Group(props: { title: string; children: ReactNode }) {
@@ -28,16 +28,24 @@ function Group(props: { title: string; children: ReactNode }) {
   );
 }
 
+/// The entry's catalog in `scope`, an org id; Personal's when it is left out.
+export function catalogIn(entry: LibraryEntry, scope?: string) {
+  if (scope === undefined) return entry.catalog;
+  return entry.catalogs.find((c) => c.scope === scope)?.catalog ?? null;
+}
+
 /// The review of a server whose tool list differs from the accepted one: the tools added,
 /// removed and changed (and which part of a changed tool), and "Accept". Accepting names the
-/// list that is shown; the core refuses it if the list moved meanwhile.
-export function ToolsReview(props: { entry: LibraryEntry; onClose: () => void }) {
-  const { entry } = props;
+/// list that is shown; the core refuses it if the list moved meanwhile. `scope` is the org
+/// whose list it is, named in the title; left out, Personal's.
+export function ToolsReview(props: { entry: LibraryEntry; scope?: string; onClose: () => void }) {
+  const { entry, scope } = props;
   const qc = useQueryClient();
-  const catalog = entry.catalog;
+  const { nameOf } = useScopes(scope !== undefined);
+  const catalog = catalogIn(entry, scope);
   const diff = diffTools(parseTools(catalog?.accepted_tools), parseTools(catalog?.seen_tools));
   const accept = useMutation({
-    mutationFn: () => commands.libraryAccept(entry.id, catalog?.seen_fingerprint ?? ""),
+    mutationFn: () => commands.libraryAccept(entry.id, catalog?.seen_fingerprint ?? "", scope),
     onSuccess: () => {
       invalidate(qc, keys.library);
       props.onClose();
@@ -51,7 +59,11 @@ export function ToolsReview(props: { entry: LibraryEntry; onClose: () => void })
     <Dialog open onOpenChange={(next) => !next && props.onClose()}>
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>{`Tools changed: ${entry.name}`}</DialogTitle>
+          <DialogTitle>
+            {scope === undefined
+              ? `Tools changed: ${entry.name}`
+              : `Tools changed: ${entry.name} in ${nameOf(scope)}`}
+          </DialogTitle>
           <DialogDescription>
             {never
               ? "This server's tools were never accepted."

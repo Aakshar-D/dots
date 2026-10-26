@@ -31,7 +31,11 @@ use crate::server::{self, ServerState};
 use crate::settings::Settings;
 use crate::skill_creator::SkillDrafts;
 use crate::store::Store;
-use crate::vault::{os_secrets, MemorySecrets, SecretStore, Vault};
+use crate::vault::org::{
+    http_client, os_protector, JoinPreview, OrgStatus, OrgSummary, OrgTimers, Orgs, SourceCreds,
+    OFFLINE_DIR,
+};
+use crate::vault::{os_secrets, GrantStatus, MemorySecrets, SecretStore, Vault};
 use crate::workspace::{Prepared, WorkspaceManager};
 use crate::{Error, Result};
 
@@ -123,6 +127,9 @@ pub struct Runtime {
     /// The dot whose conversation the person has open in the focused window (needs-you spec
     /// section 3).
     viewing: Viewing,
+    /// The orgs joined on this PC (env vault spec §6), the vault's, and their timers.
+    orgs: Orgs,
+    org_timers: OrgTimers,
     shutdown: CancellationToken,
 }
 
@@ -135,9 +142,23 @@ impl Runtime {
             Some(secrets) => secrets.clone(),
             None => os_secrets(&store.install_id().await?),
         };
+        // The orgs joined on this PC, each with its offline copy if it has one, and every org
+        // secret in the redactor (env vault spec §6.4). They are fetched in the background
+        // once the runtime is up.
+        let orgs = Orgs::new(
+            store.clone(),
+            secrets.clone(),
+            os_protector(),
+            cfg.data_dir.join(OFFLINE_DIR),
+            http_client(),
+            cfg.clock.clone(),
+        );
+        orgs.load().await?;
         // Every Personal secret is in the redactor before any run or Library call (env vault
         // spec §10).
-        let vault = Vault::open(store.clone(), secrets).await?;
+        let vault = Vault::open(store.clone(), secrets)
+            .await?
+            .with_orgs(orgs.clone());
         // A setup from before the vault: its stored secret values move into Personal (env
         // vault spec §11). A failure is logged and the app starts anyway. The old-backups
         // cut-off is set once the move has run, even when a server failed: that server is
@@ -150,6 +171,14 @@ impl Runtime {
                 vault.mark_vault_since().await?;
             }
             Err(e) => tracing::error!("moving stored secret values to the vault failed: {e}"),
+        }
+        // Migration 0013, here and not in `Store::open`: it needs the vault open, since an
+        // origin is computed from Personal's values, which live in the secret store. (The move
+        // above rewrites only env and header values, never a URL.) Each http server whose URL
+        // reads a variable keeps working where it reaches now (env vault spec §8). A failure is
+        // logged, and the next start tries again.
+        if let Err(e) = store.finish_0013(&vault).await {
+            tracing::error!("confirming the origins of the MCP servers failed: {e}");
         }
         let bus = new_bus();
         let hub = Arc::new(ApprovalHub::new(store.clone(), bus.clone()));
@@ -286,6 +315,15 @@ impl Runtime {
             Err(e) => tracing::error!("listing awaiting runs failed: {e}"),
         }
         let shutdown = CancellationToken::new();
+        // Every org is fetched once now, without holding the start up, and then every
+        // `refresh_minutes` of its policy (env vault spec §6.4).
+        let org_timers = OrgTimers::new(
+            orgs.clone(),
+            cfg.clock.clone(),
+            bus.clone(),
+            shutdown.clone(),
+        );
+        org_timers.start_up();
         if let Some(listener) = listener {
             server::serve(
                 listener,
@@ -361,6 +399,8 @@ impl Runtime {
             follow_ups,
             browsers,
             viewing,
+            orgs,
+            org_timers,
             shutdown,
         })
     }
@@ -449,6 +489,14 @@ impl Runtime {
 
     pub async fn get_dot(&self, id: &str) -> Result<Dot> {
         self.store.get_dot(id).await
+    }
+
+    /// The status of each of the dot's stored grants in its scope (the editor's Variables),
+    /// as a run's start would resolve them now, without its fetch of a stale org. It holds no
+    /// value (`Vault::grant_statuses`).
+    pub async fn dot_variables(&self, id: &str) -> Result<Vec<GrantStatus>> {
+        let dot = self.store.get_dot(id).await?;
+        self.vault.grant_statuses(&dot).await
     }
 
     /// Every dot with its active and last run, where its schedule stands, and what it has for
@@ -812,16 +860,31 @@ impl Runtime {
         });
     }
 
-    pub async fn create_dot(&self, spec: DotSpec) -> Result<Dot> {
-        let dot = self.store.create_dot(&spec).await?;
+    /// Creates a dot, in the org `org_id` or, with `None`, in Personal. The org must be joined
+    /// on this PC; it is fixed from then on (env vault spec §5.2).
+    pub async fn create_dot(&self, spec: DotSpec, org_id: Option<String>) -> Result<Dot> {
+        if let Some(org) = &org_id {
+            if self.store.get_org(org).await?.is_none() {
+                return Err(Error::Invalid(format!(
+                    "no org '{org}' is joined on this PC"
+                )));
+            }
+        }
+        let dot = self.store.create_dot(&spec, org_id.as_deref()).await?;
         self.sync_schedule(&dot, false).await?;
         self.scheduler.reload();
         self.watchers.reload();
         Ok(dot)
     }
 
+    /// Saves a dot's spec. A dot whose org is no longer joined on this PC is refused: it can't
+    /// run until the org is joined again or the dot is deleted (env vault spec §6.4).
     pub async fn update_dot(&self, id: &str, spec: DotSpec) -> Result<Dot> {
-        let was_enabled = self.store.get_dot(id).await?.spec.enabled;
+        let old = self.store.get_dot(id).await?;
+        if let Some(text) = self.vault.org_removed(&old) {
+            return Err(Error::Conflict(text));
+        }
+        let was_enabled = old.spec.enabled;
         let dot = self.store.update_dot(id, &spec).await?;
         self.sync_schedule(&dot, dot.spec.enabled && !was_enabled)
             .await?;
@@ -1087,6 +1150,80 @@ impl Runtime {
         tokio::time::timeout(limit, self.store.close())
             .await
             .is_ok()
+    }
+}
+
+/// Orgs (env vault spec §6.1 and §6.4). The app changes an org through these, not through
+/// `Orgs` itself, so that its timer stays in step and the screens hear of it (`OrgUpdated`).
+impl Runtime {
+    /// The orgs joined on this PC, for what only reads them: the list, a join code's preview,
+    /// an org's entries, and a SOPS org's key.
+    pub fn orgs(&self) -> &Orgs {
+        &self.orgs
+    }
+
+    /// The orgs' timers.
+    pub fn org_timers(&self) -> &OrgTimers {
+        &self.org_timers
+    }
+
+    /// What `code` would join, or change for an org joined already. Nothing is fetched.
+    pub fn preview_org(&self, code: &str) -> Result<JoinPreview> {
+        self.orgs.preview_join(code)
+    }
+
+    /// Joins the org of `code` (**Join**), then starts its timer. A SOPS join that waits for
+    /// the admin (`Pending`) joins nothing, so it has no timer and no event.
+    pub async fn join_org(&self, code: &str, creds: Option<SourceCreds>) -> Result<OrgSummary> {
+        let summary = self.orgs.join(code, creds).await?;
+        if summary.status != OrgStatus::Pending {
+            self.org_timers.start(&summary.id);
+            self.org_updated(&summary.id);
+        }
+        Ok(summary)
+    }
+
+    /// Replaces a joined org's settings with a new join code's (**Update**). It fetched just
+    /// now, so its timer counts from now, with the new policy's `refresh_minutes`.
+    pub async fn update_org(
+        &self,
+        org_id: &str,
+        code: &str,
+        creds: Option<SourceCreds>,
+    ) -> Result<OrgSummary> {
+        let summary = self.orgs.update(org_id, code, creds).await?;
+        self.org_timers.retime(org_id);
+        self.org_updated(org_id);
+        Ok(summary)
+    }
+
+    /// Fetches the org now (**Refresh**); its timer counts from now.
+    pub async fn refresh_org(&self, org_id: &str) -> Result<OrgSummary> {
+        let summary = self.orgs.refresh(org_id).await?;
+        self.org_timers.retime(org_id);
+        self.org_updated(org_id);
+        Ok(summary)
+    }
+
+    /// Leaves the org (**Remove**): its timer stops first, so no fetch of it starts while its
+    /// copy, sign-in details and row go. If the remove fails with the org still joined, its
+    /// timer starts again.
+    pub async fn remove_org(&self, org_id: &str) -> Result<()> {
+        self.org_timers.stop(org_id);
+        if let Err(e) = self.orgs.remove(org_id).await {
+            if self.orgs.is_joined(org_id) {
+                self.org_timers.start(org_id);
+            }
+            return Err(e);
+        }
+        self.org_updated(org_id);
+        Ok(())
+    }
+
+    fn org_updated(&self, org_id: &str) {
+        let _ = self.bus.send(RuntimeEvent::OrgUpdated {
+            org_id: org_id.to_string(),
+        });
     }
 }
 

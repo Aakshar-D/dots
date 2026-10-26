@@ -15,6 +15,7 @@ mod follow_ups;
 mod library;
 mod memories;
 mod messages;
+mod orgs;
 mod runs;
 mod schedules;
 mod settings;
@@ -58,6 +59,14 @@ impl Store {
         upgrade::finish_0011(&store).await?;
         upgrade::finish_0012(&store.pool).await?;
         Ok(store)
+    }
+
+    /// The part of migration 0013 that needs Personal's values (`upgrade::finish_0013`): each
+    /// http MCP server made before it whose URL reads a variable gets the origin it reaches now
+    /// confirmed in Personal. Runs once, when the runtime starts with its vault; later calls do
+    /// nothing. Returns how many origins were recorded.
+    pub async fn finish_0013(&self, vault: &crate::vault::Vault) -> Result<usize> {
+        upgrade::finish_0013(self, vault).await
     }
 
     /// Rewrites the database so freed pages lose what they held, and empties the WAL.
