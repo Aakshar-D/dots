@@ -191,6 +191,10 @@ pub struct Dot {
     /// first time (needs-you spec section 2).
     #[serde(default)]
     pub seen_at: Option<String>,
+    /// The org the dot belongs to, fixed when it is created; `None` is Personal (env vault spec
+    /// §5.2). The org may have been removed since, and the dot keeps its id (§6.4).
+    #[serde(default)]
+    pub org_id: Option<String>,
     #[serde(flatten)]
     pub spec: DotSpec,
 }
@@ -502,7 +506,10 @@ pub struct DotRef {
 pub struct ToolsChanged {
     pub server_id: String,
     pub name: String,
-    /// The dots that use it (through its plugin, for a plugin's server), by name.
+    /// The scope whose list changed: `personal` or an org id (env vault spec §8). Accepting
+    /// it accepts that scope's list.
+    pub scope: String,
+    /// The dots of that scope that use it (through its plugin, for a plugin's server).
     pub dots: Vec<DotRef>,
 }
 

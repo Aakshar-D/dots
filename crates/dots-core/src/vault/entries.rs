@@ -3,6 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::model::DotRef;
 use crate::{Error, Result};
 
 str_enum!(EntryKind {
@@ -23,6 +24,14 @@ pub struct EnvEntry {
     pub value: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    /// The Personal dots that grant this name, by name (the Env tab's "used by"). `Vault`
+    /// fills it in; the store leaves it empty.
+    #[serde(default)]
+    pub used_by: Vec<DotRef>,
+    /// A secret whose value is gone from the secret store (deleted outside Dots): it resolves
+    /// for no dot until it is set again. Found from the store's keys; no value is read.
+    #[serde(default)]
+    pub value_missing: bool,
 }
 
 /// A variable name: a letter or `_`, then letters, digits or `_`, at most 128 characters.

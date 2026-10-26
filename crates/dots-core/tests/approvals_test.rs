@@ -29,7 +29,7 @@ async fn setup(
     let mut s = spec("gate");
     s.policy = Policy::preset(preset);
     s.approval_wait_secs = wait_secs;
-    let dot = store.create_dot(&s).await.unwrap();
+    let dot = store.create_dot(&s, None).await.unwrap();
     let run = store
         .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
         .await

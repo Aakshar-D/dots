@@ -1081,6 +1081,8 @@ describe("the Library's Env tab", () => {
     value: null,
     created_at: "2026-10-21T12:00:00.000Z",
     updated_at: "2026-10-21T12:00:00.000Z",
+    used_by: [],
+    value_missing: false,
   };
   const plain = { ...secret, name: "LOG_LEVEL", kind: "plain" as const, value: "debug" };
 

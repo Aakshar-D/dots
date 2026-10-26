@@ -21,6 +21,7 @@ import { errorMessage, notifyError } from "@/lib/notify";
 import { invalidate, keys } from "@/lib/query";
 
 import { isDeclined, ToolList, type ServerEntry } from "./parts";
+import { ServerScopes } from "./ServerScopes";
 import { joinLines, movesToVault, parseLines, variablesIn } from "./text";
 import { parseTools } from "./tools";
 
@@ -152,9 +153,12 @@ function secretKeys(draft: Draft): string[] {
 }
 
 /// The form to add an MCP server (`entry` is null) or to change one. Adding tests the
-/// connection first when the person asks; saving then accepts the list that was shown.
+/// connection first when the person asks; saving then accepts the list that was shown. A saved
+/// server also has Check as and its confirmed origins (`ServerScopes`). A plugin's own server
+/// opens read-only: its settings change with the plugin.
 export function ServerForm(props: { entry: ServerEntry | null; onClose: () => void }) {
   const { entry } = props;
+  const readOnly = entry?.owner_id != null;
   const qc = useQueryClient();
   const [draft, setDraft] = useState(() => draftOf(entry));
   const [tried, setTried] = useState(false);
@@ -210,10 +214,18 @@ export function ServerForm(props: { entry: ServerEntry | null; onClose: () => vo
     <Dialog open onOpenChange={(next) => !next && props.onClose()}>
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>{entry ? `Edit ${entry.name}` : "Add MCP server"}</DialogTitle>
+          <DialogTitle>
+            {!entry ? "Add MCP server" : readOnly ? entry.name : `Edit ${entry.name}`}
+          </DialogTitle>
           <DialogDescription>
-            A server gives dots tools named <code>mcp__name__tool</code>. Dots starts it for each
-            run that uses it.
+            {readOnly ? (
+              "This server comes with a plugin: its settings change with the plugin."
+            ) : (
+              <>
+                A server gives dots tools named <code>mcp__name__tool</code>. Dots starts it for
+                each run that uses it.
+              </>
+            )}
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-3">
@@ -228,6 +240,7 @@ export function ServerForm(props: { entry: ServerEntry | null; onClose: () => vo
           <Field label="Transport" htmlFor="server-transport">
             <NativeSelect
               id="server-transport"
+              disabled={readOnly}
               value={draft.transport}
               onChange={(e) => set({ transport: e.target.value as Draft["transport"] })}
             >
@@ -245,6 +258,7 @@ export function ServerForm(props: { entry: ServerEntry | null; onClose: () => vo
               <Field label="Command" htmlFor="server-command" error={shown.command}>
                 <Input
                   id="server-command"
+                  disabled={readOnly}
                   className="font-mono"
                   value={draft.command}
                   onChange={(e) => set({ command: e.target.value })}
@@ -258,6 +272,7 @@ export function ServerForm(props: { entry: ServerEntry | null; onClose: () => vo
               >
                 <Textarea
                   id="server-args"
+                  disabled={readOnly}
                   rows={3}
                   className="font-mono"
                   value={draft.args}
@@ -273,11 +288,12 @@ export function ServerForm(props: { entry: ServerEntry | null; onClose: () => vo
                 <div className="flex gap-2">
                   <Input
                     id="server-cwd"
+                    disabled={readOnly}
                     className="font-mono"
                     value={draft.cwd}
                     onChange={(e) => set({ cwd: e.target.value })}
                   />
-                  <Button type="button" variant="outline" onClick={browse}>
+                  <Button type="button" variant="outline" disabled={readOnly} onClick={browse}>
                     Browse
                   </Button>
                 </div>
@@ -290,6 +306,7 @@ export function ServerForm(props: { entry: ServerEntry | null; onClose: () => vo
               >
                 <Textarea
                   id="server-env"
+                  disabled={readOnly}
                   rows={3}
                   className="font-mono"
                   value={draft.env}
@@ -302,6 +319,7 @@ export function ServerForm(props: { entry: ServerEntry | null; onClose: () => vo
               <Field label="URL" htmlFor="server-url" error={shown.url}>
                 <Input
                   id="server-url"
+                  disabled={readOnly}
                   className="font-mono"
                   placeholder="https://example.com/mcp"
                   value={draft.url}
@@ -316,6 +334,7 @@ export function ServerForm(props: { entry: ServerEntry | null; onClose: () => vo
               >
                 <Textarea
                   id="server-headers"
+                  disabled={readOnly}
                   rows={3}
                   className="font-mono"
                   value={draft.headers}
@@ -329,58 +348,61 @@ export function ServerForm(props: { entry: ServerEntry | null; onClose: () => vo
               Not in Personal: {notSet.join(", ")}. Add it in the Env tab.
             </p>
           )}
-          {secretKeys(draft).map((key) => (
+          {!readOnly && secretKeys(draft).map((key) => (
             <p key={key} className="text-xs text-needs">
               {key} looks like a secret. When you save, Dots moves its value to Personal as a
               secret and the server reads it from there.
             </p>
           ))}
 
-          <div className="flex flex-col gap-2 rounded-md border p-3">
-            <div className="flex items-center gap-3">
-              <p className="flex-1 text-xs text-muted-foreground">
-                {entry
-                  ? "After a change, use Check now to list the tools again."
-                  : "Test lists the tools the server offers. Saving then accepts that list."}
-              </p>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={probe.isPending}
-                onClick={test}
-              >
-                {probe.isPending ? "Testing…" : "Test connection"}
-              </Button>
-            </div>
-            {probe.isSuccess && (
-              <>
-                <p role="status" className="text-xs">
-                  {tools.length === 1 ? "1 tool" : `${tools.length} tools`}
-                  {entry ? "." : ". Saving accepts this list."}
+          {entry && <ServerScopes entry={entry} />}
+          {!readOnly && (
+            <div className="flex flex-col gap-2 rounded-md border p-3">
+              <div className="flex items-center gap-3">
+                <p className="flex-1 text-xs text-muted-foreground">
+                  {entry
+                    ? "After a change, use Check now to list the tools again."
+                    : "Test lists the tools the server offers. Saving then accepts that list."}
                 </p>
-                <ToolList tools={tools} />
-              </>
-            )}
-            {probe.isError &&
-              (isDeclined(probe.error) ? (
-                <p role="status" className="text-xs text-muted-foreground">
-                  You declined. Nothing was tested.
-                </p>
-              ) : (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={probe.isPending}
+                  onClick={test}
+                >
+                  {probe.isPending ? "Testing…" : "Test connection"}
+                </Button>
+              </div>
+              {probe.isSuccess && (
                 <>
-                  <p role="alert" className="text-xs text-destructive">
-                    {errorMessage(probe.error)}
+                  <p role="status" className="text-xs">
+                    {tools.length === 1 ? "1 tool" : `${tools.length} tools`}
+                    {entry ? "." : ". Saving accepts this list."}
                   </p>
-                  {!entry && (
-                    <p className="text-xs text-muted-foreground">
-                      You can still save: the server is saved without its tools, and its tools ask
-                      until a check succeeds and you accept the list.
-                    </p>
-                  )}
+                  <ToolList tools={tools} />
                 </>
-              ))}
-          </div>
+              )}
+              {probe.isError &&
+                (isDeclined(probe.error) ? (
+                  <p role="status" className="text-xs text-muted-foreground">
+                    You declined. Nothing was tested.
+                  </p>
+                ) : (
+                  <>
+                    <p role="alert" className="text-xs text-destructive">
+                      {errorMessage(probe.error)}
+                    </p>
+                    {!entry && (
+                      <p className="text-xs text-muted-foreground">
+                        You can still save: the server is saved without its tools, and its tools ask
+                        until a check succeeds and you accept the list.
+                      </p>
+                    )}
+                  </>
+                ))}
+            </div>
+          )}
 
           {save.isError &&
             (isDeclined(save.error) ? (
@@ -395,11 +417,13 @@ export function ServerForm(props: { entry: ServerEntry | null; onClose: () => vo
         </div>
         <DialogFooter>
           <Button type="button" variant="outline" onClick={props.onClose}>
-            Cancel
+            {readOnly ? "Close" : "Cancel"}
           </Button>
-          <Button type="button" disabled={save.isPending} onClick={submit}>
-            Save
-          </Button>
+          {!readOnly && (
+            <Button type="button" disabled={save.isPending} onClick={submit}>
+              Save
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

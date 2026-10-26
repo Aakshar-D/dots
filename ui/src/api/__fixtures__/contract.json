@@ -72,6 +72,7 @@
     "dot_overview",
     "list_dots",
     "get_dot",
+    "dot_variables",
     "create_dot",
     "update_dot",
     "delete_dot",
@@ -106,6 +107,7 @@
     "library_remove",
     "library_probe",
     "library_check",
+    "confirm_origin",
     "library_accept",
     "library_scan_skills",
     "skill_draft",
@@ -124,6 +126,14 @@
     "env_import_dismiss",
     "env_old_backups",
     "env_old_backups_answer",
+    "org_list",
+    "org_preview",
+    "org_sops_key",
+    "org_join",
+    "org_update",
+    "org_refresh",
+    "org_remove",
+    "org_entries",
     "messages_list",
     "message_reply",
     "message_dismiss",
@@ -166,6 +176,7 @@
     "max_turns": 40,
     "model": "sonnet",
     "name": "nightly-tests",
+    "org_id": null,
     "policy": {
       "default": "ask",
       "mcp_default": "ask",
@@ -311,6 +322,7 @@
       "max_turns": 40,
       "model": "sonnet",
       "name": "nightly-tests",
+      "org_id": null,
       "policy": {
         "default": "ask",
         "mcp_default": "ask",
@@ -641,6 +653,18 @@
       "cancelled",
       "skipped"
     ],
+    "GrantState": [
+      "ok",
+      "not_granted",
+      "not_defined",
+      "denied_by_policy",
+      "shell_secrets_forbidden",
+      "org_offline",
+      "org_expired",
+      "org_revoked",
+      "policy_invalid",
+      "org_removed"
+    ],
     "LibraryKind": [
       "mcp_server",
       "skill",
@@ -654,6 +678,11 @@
     "MessageKind": [
       "note",
       "question"
+    ],
+    "PersonalMode": [
+      "deny",
+      "fallback",
+      "override"
     ],
     "Preset": [
       "read-only",
@@ -682,6 +711,10 @@
       "resume",
       "follow_up"
     ],
+    "ValueSource": [
+      "org",
+      "personal"
+    ],
     "WorkspaceMode": [
       "worktree",
       "folder"
@@ -693,14 +726,32 @@
       "kind": "secret",
       "name": "GITHUB_TOKEN",
       "updated_at": "2026-10-09T12:00:00.000Z",
-      "value": null
+      "used_by": [
+        {
+          "id": "01J0DOT",
+          "name": "nightly-tests"
+        }
+      ],
+      "value": null,
+      "value_missing": false
     },
     {
       "created_at": "2026-10-09T12:00:00.000Z",
       "kind": "plain",
       "name": "LOG_LEVEL",
       "updated_at": "2026-10-09T12:00:00.000Z",
-      "value": "debug"
+      "used_by": [],
+      "value": "debug",
+      "value_missing": false
+    },
+    {
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "kind": "secret",
+      "name": "NPM_TOKEN",
+      "updated_at": "2026-10-09T12:00:00.000Z",
+      "used_by": [],
+      "value": null,
+      "value_missing": true
     }
   ],
   "EnvVariable": [
@@ -737,6 +788,56 @@
       "note": "Check the build.",
       "retry_at": null,
       "status": "fired"
+    }
+  ],
+  "GrantStatus": [
+    {
+      "consumer": "mcp:github",
+      "name": "GITHUB_TOKEN",
+      "secret": true,
+      "source": "org",
+      "status": "ok",
+      "text": null
+    },
+    {
+      "consumer": "shell",
+      "name": "LOG_LEVEL",
+      "secret": false,
+      "source": "personal",
+      "status": "ok",
+      "text": null
+    },
+    {
+      "consumer": "mcp:github",
+      "name": "API_KEY",
+      "secret": false,
+      "source": null,
+      "status": "not_defined",
+      "text": "API_KEY: not in Acme Engineering (dot 'acme-release', mcp:github)"
+    },
+    {
+      "consumer": "mcp:github",
+      "name": "PROD_DB_URL",
+      "secret": false,
+      "source": null,
+      "status": "denied_by_policy",
+      "text": "PROD_DB_URL: Acme Engineering's policy does not allow it (dot 'acme-release')"
+    },
+    {
+      "consumer": "shell",
+      "name": "GITHUB_TOKEN",
+      "secret": true,
+      "source": "org",
+      "status": "shell_secrets_forbidden",
+      "text": "GITHUB_TOKEN: Acme Engineering does not allow secrets in the shell (dot 'acme-release')"
+    },
+    {
+      "consumer": "shell",
+      "name": "LOG_LEVEL",
+      "secret": false,
+      "source": null,
+      "status": "org_removed",
+      "text": "dot 'acme-release': its org 'acme-eng' was removed"
     }
   ],
   "Inbox": {
@@ -809,6 +910,7 @@
           }
         ],
         "name": "github",
+        "scope": "personal",
         "server_id": "01J0SRV"
       }
     ]
@@ -822,6 +924,35 @@
       "name": "pdf-tools",
       "scope": "user",
       "version": "1.2.0"
+    }
+  ],
+  "JoinPreview": [
+    {
+      "address": "https://bao.acme.internal",
+      "auth": "token",
+      "changes": [],
+      "existing": false,
+      "key_changed": false,
+      "key_fingerprint": "6E2F 0A1B 9C3D 4E5F 7A81 B2C3 D4E5 F607",
+      "name": "Acme Engineering",
+      "org_id": "acme-eng",
+      "source_changed": false,
+      "source_kind": "openbao"
+    },
+    {
+      "address": "https://bao.acme.internal",
+      "auth": "token",
+      "changes": [
+        "path changes from dots to dots2",
+        "the policy key changes from 6E2F 0A1B 9C3D 4E5F 7A81 B2C3 D4E5 F607 to 0A1B 2C3D 4E5F 6071 8293 A4B5 C6D7 E8F9: the key that signs the org's policy is new, so accept this code only if your admin told you the key changed"
+      ],
+      "existing": true,
+      "key_changed": true,
+      "key_fingerprint": "0A1B 2C3D 4E5F 6071 8293 A4B5 C6D7 E8F9",
+      "name": "Acme Engineering",
+      "org_id": "acme-eng",
+      "source_changed": true,
+      "source_kind": "openbao"
     }
   ],
   "LibraryConfig": [
@@ -919,6 +1050,111 @@
         "server_id": "01J0SRV",
         "status": "changed"
       },
+      "catalogs": [
+        {
+          "catalog": {
+            "accepted_fingerprint": "fp-accepted",
+            "accepted_tools": [
+              {
+                "annotations": {
+                  "readOnlyHint": true
+                },
+                "description": "Search the issues of a repository.",
+                "inputSchema": {
+                  "properties": {
+                    "query": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "name": "search_issues",
+                "title": "Search issues"
+              }
+            ],
+            "checked_at": "2026-10-09T12:00:00.000Z",
+            "error": null,
+            "seen_fingerprint": "fp-seen",
+            "seen_tools": [
+              {
+                "annotations": {
+                  "readOnlyHint": true
+                },
+                "description": "Search the issues of a repository.",
+                "inputSchema": {
+                  "properties": {
+                    "query": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "name": "search_issues",
+                "title": "Search issues"
+              }
+            ],
+            "server_id": "01J0SRV",
+            "status": "changed"
+          },
+          "scope": "personal",
+          "stored": true,
+          "used_by": [
+            {
+              "id": "01J0DOT",
+              "name": "nightly-tests"
+            }
+          ]
+        },
+        {
+          "catalog": {
+            "accepted_fingerprint": "fp-accepted",
+            "accepted_tools": [
+              {
+                "annotations": {
+                  "readOnlyHint": true
+                },
+                "description": "Search the issues of a repository.",
+                "inputSchema": {
+                  "properties": {
+                    "query": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "name": "search_issues",
+                "title": "Search issues"
+              }
+            ],
+            "checked_at": "2026-10-09T12:00:00.000Z",
+            "error": null,
+            "seen_fingerprint": "fp-seen",
+            "seen_tools": [
+              {
+                "annotations": {
+                  "readOnlyHint": true
+                },
+                "description": "Search the issues of a repository.",
+                "inputSchema": {
+                  "properties": {
+                    "query": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "name": "search_issues",
+                "title": "Search issues"
+              }
+            ],
+            "server_id": "01J0SRV",
+            "status": "accepted"
+          },
+          "scope": "acme-eng",
+          "stored": true,
+          "used_by": []
+        }
+      ],
       "config": {
         "args": [
           "-y",
@@ -931,6 +1167,7 @@
         },
         "transport": "stdio"
       },
+      "confirmed_origins": {},
       "context": null,
       "created_at": "2026-10-09T12:00:00.000Z",
       "dots_folder": false,
@@ -997,12 +1234,76 @@
         "server_id": "01J0SRV",
         "status": "accepted"
       },
+      "catalogs": [
+        {
+          "catalog": {
+            "accepted_fingerprint": "fp-accepted",
+            "accepted_tools": [
+              {
+                "annotations": {
+                  "readOnlyHint": true
+                },
+                "description": "Search the issues of a repository.",
+                "inputSchema": {
+                  "properties": {
+                    "query": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "name": "search_issues",
+                "title": "Search issues"
+              }
+            ],
+            "checked_at": "2026-10-09T12:00:00.000Z",
+            "error": null,
+            "seen_fingerprint": "fp-seen",
+            "seen_tools": [
+              {
+                "annotations": {
+                  "readOnlyHint": true
+                },
+                "description": "Search the issues of a repository.",
+                "inputSchema": {
+                  "properties": {
+                    "query": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "name": "search_issues",
+                "title": "Search issues"
+              }
+            ],
+            "server_id": "01J0SRV",
+            "status": "accepted"
+          },
+          "scope": "personal",
+          "stored": true,
+          "used_by": [
+            {
+              "id": "01J0DOT",
+              "name": "nightly-tests"
+            }
+          ]
+        }
+      ],
       "config": {
         "headers": {
           "Authorization": "Bearer ${EXAMPLE_TOKEN}"
         },
         "transport": "http",
         "url": "https://mcp.example.com/mcp"
+      },
+      "confirmed_origins": {
+        "acme-eng": [
+          "https://mcp.acme.example"
+        ],
+        "personal": [
+          "https://mcp.example.com"
+        ]
       },
       "context": null,
       "created_at": "2026-10-09T12:00:00.000Z",
@@ -1025,9 +1326,11 @@
     },
     {
       "catalog": null,
+      "catalogs": [],
       "config": {
         "path": "C:/skills/pdf"
       },
+      "confirmed_origins": {},
       "context": null,
       "created_at": "2026-10-09T12:00:00.000Z",
       "dots_folder": true,
@@ -1046,11 +1349,13 @@
     },
     {
       "catalog": null,
+      "catalogs": [],
       "config": {
         "installed_id": "pdf-tools@market",
         "path": "C:/plugins/pdf-tools",
         "run_hooks": false
       },
+      "confirmed_origins": {},
       "context": null,
       "created_at": "2026-10-09T12:00:00.000Z",
       "dots_folder": false,
@@ -1091,11 +1396,13 @@
     },
     {
       "catalog": null,
+      "catalogs": [],
       "config": {
         "description": "How we work: style, people, runbooks",
         "every_dot": true,
         "path": "C:/notes/company"
       },
+      "confirmed_origins": {},
       "context": {
         "complete": true,
         "documents": 42
@@ -1456,6 +1763,197 @@
     "workdir": "",
     "workspace_mode": "worktree"
   },
+  "OrgEntry": [
+    {
+      "kind": "plain",
+      "locked": true,
+      "name": "API_BASE_URL",
+      "used_by": [
+        {
+          "id": "01J0DOTACME",
+          "name": "acme-release"
+        }
+      ],
+      "value": "https://api.acme.example"
+    },
+    {
+      "kind": "secret",
+      "locked": false,
+      "name": "GITHUB_TOKEN",
+      "used_by": [],
+      "value": null
+    }
+  ],
+  "OrgSummary": [
+    {
+      "address": "https://bao.acme.internal",
+      "copy_until": "2026-10-10T12:00:00.000Z",
+      "id": "acme-eng",
+      "key_fingerprint": "6E2F 0A1B 9C3D 4E5F 7A81 B2C3 D4E5 F607",
+      "last_fetch_at": "2026-10-09T12:00:00.000Z",
+      "name": "Acme Engineering",
+      "personal_mode": "fallback",
+      "policy_summary": [
+        "org: acme-eng",
+        "personal: fallback (a personal entry is used when the org has none)"
+      ],
+      "shell_secrets": false,
+      "source_kind": "openbao",
+      "status": "connected",
+      "status_text": "connected",
+      "use_rules": {
+        "allow": [
+          "*"
+        ],
+        "deny": [
+          "PROD_*"
+        ]
+      }
+    },
+    {
+      "address": "https://bao.acme.internal",
+      "copy_until": "2026-10-10T12:00:00.000Z",
+      "id": "acme-eng",
+      "key_fingerprint": "6E2F 0A1B 9C3D 4E5F 7A81 B2C3 D4E5 F607",
+      "last_fetch_at": "2026-10-09T12:00:00.000Z",
+      "name": "Acme Engineering",
+      "personal_mode": "fallback",
+      "policy_summary": [
+        "org: acme-eng",
+        "personal: fallback (a personal entry is used when the org has none)"
+      ],
+      "shell_secrets": false,
+      "source_kind": "openbao",
+      "status": "offline",
+      "status_text": "offline (connection refused); using the saved copy until 2026-10-10T12:00:00.000Z",
+      "until": "2026-10-10T12:00:00.000Z",
+      "use_rules": {
+        "allow": [
+          "*"
+        ],
+        "deny": [
+          "PROD_*"
+        ]
+      }
+    },
+    {
+      "address": "https://bao.acme.internal",
+      "copy_until": null,
+      "id": "acme-eng",
+      "key_fingerprint": "6E2F 0A1B 9C3D 4E5F 7A81 B2C3 D4E5 F607",
+      "last_fetch_at": "2026-10-09T12:00:00.000Z",
+      "name": "Acme Engineering",
+      "personal_mode": "fallback",
+      "policy_summary": [
+        "org: acme-eng",
+        "personal: fallback (a personal entry is used when the org has none)"
+      ],
+      "shell_secrets": false,
+      "source_kind": "openbao",
+      "status": "offline",
+      "status_text": "offline, with no saved copy",
+      "until": null,
+      "use_rules": {
+        "allow": [
+          "*"
+        ],
+        "deny": [
+          "PROD_*"
+        ]
+      }
+    },
+    {
+      "address": "https://bao.acme.internal",
+      "copy_until": null,
+      "id": "acme-eng",
+      "key_fingerprint": "6E2F 0A1B 9C3D 4E5F 7A81 B2C3 D4E5 F607",
+      "last_fetch_at": "2026-10-09T12:00:00.000Z",
+      "name": "Acme Engineering",
+      "personal_mode": "fallback",
+      "policy_summary": [
+        "org: acme-eng",
+        "personal: fallback (a personal entry is used when the org has none)"
+      ],
+      "shell_secrets": false,
+      "source_kind": "openbao",
+      "status": "revoked",
+      "status_text": "access revoked (permission denied)",
+      "use_rules": {
+        "allow": [
+          "*"
+        ],
+        "deny": [
+          "PROD_*"
+        ]
+      }
+    },
+    {
+      "address": "https://bao.acme.internal",
+      "copy_until": "2026-10-10T12:00:00.000Z",
+      "error": "signature does not match",
+      "id": "acme-eng",
+      "key_fingerprint": "6E2F 0A1B 9C3D 4E5F 7A81 B2C3 D4E5 F607",
+      "last_fetch_at": "2026-10-09T12:00:00.000Z",
+      "name": "Acme Engineering",
+      "personal_mode": "fallback",
+      "policy_summary": [
+        "org: acme-eng",
+        "personal: fallback (a personal entry is used when the org has none)"
+      ],
+      "shell_secrets": false,
+      "source_kind": "openbao",
+      "status": "policy_invalid",
+      "status_text": "policy invalid: signature does not match; using the saved copy until 2026-10-10T12:00:00.000Z",
+      "use_rules": {
+        "allow": [
+          "*"
+        ],
+        "deny": [
+          "PROD_*"
+        ]
+      }
+    },
+    {
+      "address": "https://bao.acme.internal",
+      "copy_until": null,
+      "id": "acme-eng",
+      "key_fingerprint": "6E2F 0A1B 9C3D 4E5F 7A81 B2C3 D4E5 F607",
+      "last_fetch_at": "2026-10-09T12:00:00.000Z",
+      "name": "Acme Engineering",
+      "personal_mode": "fallback",
+      "policy_summary": [
+        "org: acme-eng",
+        "personal: fallback (a personal entry is used when the org has none)"
+      ],
+      "shell_secrets": false,
+      "source_kind": "openbao",
+      "status": "expired",
+      "status_text": "secrets expired offline; reconnect to refresh",
+      "use_rules": {
+        "allow": [
+          "*"
+        ],
+        "deny": [
+          "PROD_*"
+        ]
+      }
+    },
+    {
+      "address": "C:/Users/u/Sync/acme/design.enc.json",
+      "copy_until": null,
+      "id": "design",
+      "key_fingerprint": "6E2F 0A1B 9C3D 4E5F 7A81 B2C3 D4E5 F607",
+      "last_fetch_at": null,
+      "name": "Design",
+      "personal_mode": null,
+      "policy_summary": [],
+      "shell_secrets": false,
+      "source_kind": "sops",
+      "status": "pending",
+      "status_text": "waiting for the admin to add this PC's key",
+      "use_rules": null
+    }
+  ],
   "RuleCandidate": [
     {
       "label": "this exact command",
@@ -1737,6 +2235,10 @@
     {
       "dot_id": "01J0DOT",
       "type": "memories_updated"
+    },
+    {
+      "org_id": "acme-eng",
+      "type": "org_updated"
     }
   ],
   "ScannedSkill": [
@@ -1844,6 +2346,26 @@
       "tested_claude_version": "2.1.295"
     }
   },
+  "SourceCreds": [
+    {
+      "kind": "token",
+      "token": "hvs.sample-token"
+    },
+    {
+      "kind": "login",
+      "password": "sample-password",
+      "username": "jdoe"
+    },
+    {
+      "client_id": "sample-id",
+      "client_secret": "sample-secret",
+      "kind": "machine"
+    },
+    {
+      "identity": "AGE-SECRET-KEY-1SAMPLE",
+      "kind": "age"
+    }
+  ],
   "StartupError": {
     "backup": "C:/Users/u/AppData/Local/dots/backups/dots-0.1.0-2026-10-20-091700.db",
     "log_dir": "C:/Users/u/AppData/Local/dots/logs",
@@ -1862,6 +2384,25 @@
     "schedules_paused": false,
     "server_error": null
   },
+  "ToolsChanged": [
+    {
+      "dots": [
+        {
+          "id": "01J0DOT",
+          "name": "nightly-tests"
+        }
+      ],
+      "name": "github",
+      "scope": "personal",
+      "server_id": "01J0SRV"
+    },
+    {
+      "dots": [],
+      "name": "github",
+      "scope": "acme-eng",
+      "server_id": "01J0SRV"
+    }
+  ],
   "UpdateNote": [
     {
       "state": "none"

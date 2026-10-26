@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { scheduleError, scheduleOf, specErrors, specOf } from "@/lib/dot-rules";
 import { errorMessage, notifyError } from "@/lib/notify";
+import { orgRemovedText, useDotOrg } from "@/lib/dot-org";
 import { invalidateDots, keys, useSwitchingDot } from "@/lib/query";
 import { useDebounced } from "@/lib/use-debounced";
 import { DotForm, type Draft } from "@/screens/dot-editor/DotForm";
@@ -23,21 +24,36 @@ import { RunsList } from "@/screens/dot-editor/RunsList";
 /// The tabs of a dot's editor; `?tab=` opens one (the ⚙ menu's Memory… opens `memory`).
 const TABS = ["settings", "runs", "follow-ups", "memory"];
 
-/// The form with its Save button. `onSave` stores the spec; its rejection is shown above the
-/// form (the core's answer when it refuses what the form let through).
+/// The form with its Save button. `onSave` stores the spec, with the org a new dot is made in;
+/// its rejection is shown above the form (the core's answer when it refuses what the form let
+/// through). `blocked` says why the dot can't be saved: Save is off, and `setEnabled` switches
+/// the dot on or off at once instead.
 function Editor(props: {
   title: string;
   initial: DotSpec;
   existing: Dot | null;
   saveLabel: string;
-  onSave: (spec: DotSpec) => Promise<unknown>;
+  onSave: (spec: DotSpec, org: string | null) => Promise<unknown>;
+  blocked?: string;
+  setEnabled?: (enabled: boolean) => Promise<unknown>;
   actions?: ReactNode;
   children?: (form: ReactNode) => ReactNode;
 }) {
-  const [draft, setDraft] = useState<Draft>(() => ({ spec: props.initial }));
+  const [draft, setDraft] = useState<Draft>(() => ({ spec: props.initial, org: null }));
   const [tried, setTried] = useState(false);
   const settings = useQuery({ queryKey: keys.settings, queryFn: commands.getSettings }).data;
-  const save = useMutation({ mutationFn: props.onSave });
+  const save = useMutation({
+    mutationFn: (v: { spec: DotSpec; org: string | null }) => props.onSave(v.spec, v.org),
+  });
+  const { setEnabled } = props;
+  // The stored dot changes at once; the form follows, keeping what else was typed.
+  const onEnabled = setEnabled
+    ? (enabled: boolean) =>
+        void setEnabled(enabled).then(
+          () => setDraft((d) => ({ ...d, spec: { ...d.spec, enabled } })),
+          notifyError,
+        )
+    : undefined;
 
   // The core validates the schedule and computes the preview; the UI parses no schedule. It
   // only holds back one with an emptied field, which the core could not even be sent.
@@ -62,9 +78,12 @@ function Editor(props: {
     setTried(true);
     if (Object.keys(errors).length > 0) return;
     save.mutate({
-      ...draft.spec,
-      schedule: scheduleOf(draft.spec.schedule),
-      endpoint_url: draft.spec.endpoint_url?.trim() || null,
+      spec: {
+        ...draft.spec,
+        schedule: scheduleOf(draft.spec.schedule),
+        endpoint_url: draft.spec.endpoint_url?.trim() || null,
+      },
+      org: draft.org,
     });
   }
 
@@ -89,6 +108,7 @@ function Editor(props: {
           pending: preview.isFetching,
           note: changed ? undefined : objection,
         }}
+        onEnabled={onEnabled}
       />
     </div>
   );
@@ -98,7 +118,12 @@ function Editor(props: {
       actions={
         <>
           {props.actions}
-          <Button size="sm" disabled={save.isPending} onClick={submit}>
+          <Button
+            size="sm"
+            disabled={save.isPending || props.blocked !== undefined}
+            title={props.blocked}
+            onClick={submit}
+          >
             {props.saveLabel}
           </Button>
         </>
@@ -127,8 +152,9 @@ function NewDot() {
       initial={blank.data}
       existing={null}
       saveLabel="Create dot"
-      onSave={async (spec) => {
-        const dot = await commands.createDot(spec);
+      onSave={async (spec, org) => {
+        // Personal sends no org.
+        const dot = await commands.createDot(spec, org);
         invalidateDots(qc);
         qc.setQueryData(keys.dot(dot.id), dot);
         toast.success("Dot created");
@@ -154,6 +180,8 @@ function ExistingDot({ dotId }: { dotId: string }) {
     queryFn: () => commands.getDot(dotId),
     enabled: !switching,
   });
+  const org = useDotOrg(dot.data?.org_id ?? null);
+  const blocked = org.removed && dot.data?.org_id ? orgRemovedText(dot.data.org_id) : undefined;
   const runNow = useMutation({
     mutationFn: () => commands.runNow(dotId),
     onSuccess: (run) => void navigate(`/runs/${run.id}`),
@@ -185,6 +213,16 @@ function ExistingDot({ dotId }: { dotId: string }) {
       initial={specOf(dot.data)}
       existing={dot.data}
       saveLabel="Save"
+      blocked={blocked}
+      setEnabled={
+        blocked === undefined
+          ? undefined
+          : async (enabled) => {
+              const saved = await commands.setDotEnabled(dotId, enabled);
+              qc.setQueryData(keys.dot(dotId), saved);
+              invalidateDots(qc);
+            }
+      }
       onSave={async (spec) => {
         const saved = await commands.updateDot(dotId, spec);
         invalidateDots(qc);
@@ -205,7 +243,8 @@ function ExistingDot({ dotId }: { dotId: string }) {
           <Button
             size="sm"
             variant="outline"
-            disabled={runNow.isPending}
+            disabled={runNow.isPending || blocked !== undefined}
+            title={blocked}
             onClick={() => runNow.mutate()}
           >
             <Play aria-hidden /> Run now

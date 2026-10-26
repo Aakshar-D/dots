@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use common::{spec, temp_store};
 use dots_core::library::{
     CatalogStatus, LibraryConfig, LibraryKind, McpCatalog, McpServerConfig, PluginConfig,
-    SkillConfig, Uses,
+    SkillConfig, Uses, PERSONAL_SCOPE,
 };
 use dots_core::policy::{Action, Policy, Preset, Rule};
 use dots_core::store::Store;
@@ -144,14 +144,14 @@ async fn a_new_server_has_an_unchecked_catalog() {
         .await
         .unwrap();
     assert_eq!(
-        store.get_catalog(&sf.id).await.unwrap(),
+        store.get_catalog(&sf.id, PERSONAL_SCOPE).await.unwrap(),
         McpCatalog::unchecked(&sf.id)
     );
     let sk = store
         .add_library_item("pdf", &skill("C:/s"), None)
         .await
         .unwrap();
-    let err = store.get_catalog(&sk.id).await.unwrap_err();
+    let err = store.get_catalog(&sk.id, PERSONAL_SCOPE).await.unwrap_err();
     assert!(matches!(err, Error::NotFound(_)), "{err:?}");
     assert_eq!(store.list_catalogs().await.unwrap().len(), 1);
 }
@@ -171,16 +171,28 @@ async fn a_catalog_is_written_and_accepted_only_at_the_seen_fingerprint() {
         checked_at: Some("2026-10-15T00:00:00.000Z".into()),
         ..McpCatalog::unchecked(&sf.id)
     };
-    store.put_catalog(&seen).await.unwrap();
-    assert_eq!(store.get_catalog(&sf.id).await.unwrap(), seen);
+    store.put_catalog(PERSONAL_SCOPE, &seen).await.unwrap();
+    assert_eq!(
+        store.get_catalog(&sf.id, PERSONAL_SCOPE).await.unwrap(),
+        seen
+    );
 
-    let err = store.accept_catalog(&sf.id, "f0").await.unwrap_err();
+    let err = store
+        .accept_catalog(&sf.id, PERSONAL_SCOPE, "f0")
+        .await
+        .unwrap_err();
     assert!(matches!(err, Error::Conflict(_)), "{err:?}");
-    let accepted = store.accept_catalog(&sf.id, "f1").await.unwrap();
+    let accepted = store
+        .accept_catalog(&sf.id, PERSONAL_SCOPE, "f1")
+        .await
+        .unwrap();
     assert_eq!(accepted.status, CatalogStatus::Accepted);
     assert_eq!(accepted.accepted_fingerprint.as_deref(), Some("f1"));
     assert_eq!(accepted.accepted_tools, Some(tools));
-    let err = store.accept_catalog("nope", "f1").await.unwrap_err();
+    let err = store
+        .accept_catalog("nope", PERSONAL_SCOPE, "f1")
+        .await
+        .unwrap_err();
     assert!(matches!(err, Error::NotFound(_)), "{err:?}");
 }
 
@@ -192,15 +204,21 @@ async fn changing_a_server_config_resets_its_catalog() {
         .await
         .unwrap();
     store
-        .put_catalog(&McpCatalog {
-            seen_fingerprint: Some("f1".into()),
-            seen_tools: Some(json!([])),
-            status: CatalogStatus::Changed,
-            ..McpCatalog::unchecked(&sf.id)
-        })
+        .put_catalog(
+            PERSONAL_SCOPE,
+            &McpCatalog {
+                seen_fingerprint: Some("f1".into()),
+                seen_tools: Some(json!([])),
+                status: CatalogStatus::Changed,
+                ..McpCatalog::unchecked(&sf.id)
+            },
+        )
         .await
         .unwrap();
-    store.accept_catalog(&sf.id, "f1").await.unwrap();
+    store
+        .accept_catalog(&sf.id, PERSONAL_SCOPE, "f1")
+        .await
+        .unwrap();
 
     // The same config: nothing to check again.
     store
@@ -208,7 +226,11 @@ async fn changing_a_server_config_resets_its_catalog() {
         .await
         .unwrap();
     assert_eq!(
-        store.get_catalog(&sf.id).await.unwrap().status,
+        store
+            .get_catalog(&sf.id, PERSONAL_SCOPE)
+            .await
+            .unwrap()
+            .status,
         CatalogStatus::Accepted
     );
 
@@ -219,7 +241,7 @@ async fn changing_a_server_config_resets_its_catalog() {
         .unwrap();
     assert_eq!(changed.config, server("sf-mcp-2"));
     assert!(changed.updated_at > sf.updated_at);
-    let catalog = store.get_catalog(&sf.id).await.unwrap();
+    let catalog = store.get_catalog(&sf.id, PERSONAL_SCOPE).await.unwrap();
     assert_eq!(catalog.status, CatalogStatus::Unchecked);
     assert_eq!(catalog.seen_fingerprint, None);
     // The list accepted before stays, for the review of the next check.
@@ -264,7 +286,7 @@ async fn a_dot_uses_only_what_the_library_has() {
 
     let mut s = spec("triage");
     s.uses = uses(&["sf"], &["pdf"], &["tools"]);
-    let dot = store.create_dot(&s).await.unwrap();
+    let dot = store.create_dot(&s, None).await.unwrap();
     assert_eq!(dot.spec.uses, s.uses);
 
     for (name, bad) in [
@@ -277,7 +299,7 @@ async fn a_dot_uses_only_what_the_library_has() {
     ] {
         let mut s = spec(name);
         s.uses = bad;
-        let err = store.create_dot(&s).await.unwrap_err();
+        let err = store.create_dot(&s, None).await.unwrap_err();
         assert!(matches!(err, Error::Invalid(_)), "{name}: {err:?}");
         let mut changed = dot.spec.clone();
         changed.uses = s.uses.clone();
@@ -350,11 +372,11 @@ async fn removing_an_item_unticks_it_and_takes_a_plugins_servers_along() {
         .unwrap();
     let mut a = spec("a");
     a.uses = uses(&["sf"], &[], &["tools"]);
-    let a = store.create_dot(&a).await.unwrap();
+    let a = store.create_dot(&a, None).await.unwrap();
     let mut b = spec("b");
     b.uses = uses(&["sf"], &[], &[]);
-    let b = store.create_dot(&b).await.unwrap();
-    let c = store.create_dot(&spec("c")).await.unwrap();
+    let b = store.create_dot(&b, None).await.unwrap();
+    let c = store.create_dot(&spec("c"), None).await.unwrap();
 
     let names = |dots: Vec<dots_core::model::Dot>| -> Vec<String> {
         dots.into_iter().map(|d| d.spec.name).collect()
@@ -374,7 +396,7 @@ async fn removing_an_item_unticks_it_and_takes_a_plugins_servers_along() {
         Uses::default()
     );
     assert_eq!(store.get_dot(&c.id).await.unwrap(), c);
-    let err = store.get_catalog(&sf.id).await.unwrap_err();
+    let err = store.get_catalog(&sf.id, PERSONAL_SCOPE).await.unwrap_err();
     assert!(matches!(err, Error::NotFound(_)), "{err:?}");
 
     store.remove_library_item(&tools.id).await.unwrap();
@@ -528,7 +550,7 @@ async fn migration_0006_moves_each_dots_servers_into_the_library() {
     for item in &items {
         assert_eq!(item.owner_id, None);
         assert_eq!(
-            store.get_catalog(&item.id).await.unwrap(),
+            store.get_catalog(&item.id, PERSONAL_SCOPE).await.unwrap(),
             McpCatalog::unchecked(&item.id)
         );
     }
@@ -914,10 +936,13 @@ async fn moving_an_http_server_to_another_origin_drops_what_was_accepted() {
         .unwrap();
     let accept = || async {
         store
-            .record_catalog_seen(&item.id, "f1", &tools)
+            .record_catalog_seen(&item.id, PERSONAL_SCOPE, "f1", &tools)
             .await
             .unwrap();
-        store.accept_catalog(&item.id, "f1").await.unwrap();
+        store
+            .accept_catalog(&item.id, PERSONAL_SCOPE, "f1")
+            .await
+            .unwrap();
     };
     accept().await;
 
@@ -926,11 +951,11 @@ async fn moving_an_http_server_to_another_origin_drops_what_was_accepted() {
         .update_library_item(&item.id, &http("https://A.example/other", "2"))
         .await
         .unwrap();
-    let c = store.get_catalog(&item.id).await.unwrap();
+    let c = store.get_catalog(&item.id, PERSONAL_SCOPE).await.unwrap();
     assert_eq!(c.status, CatalogStatus::Unchecked);
     assert_eq!(c.accepted_fingerprint.as_deref(), Some("f1"));
     let c = store
-        .record_catalog_seen(&item.id, "f1", &tools)
+        .record_catalog_seen(&item.id, PERSONAL_SCOPE, "f1", &tools)
         .await
         .unwrap();
     assert_eq!(c.status, CatalogStatus::Accepted);
@@ -940,11 +965,11 @@ async fn moving_an_http_server_to_another_origin_drops_what_was_accepted() {
         .update_library_item(&item.id, &http("https://b.example/mcp", "2"))
         .await
         .unwrap();
-    let c = store.get_catalog(&item.id).await.unwrap();
+    let c = store.get_catalog(&item.id, PERSONAL_SCOPE).await.unwrap();
     assert_eq!(c.accepted_fingerprint, None);
     assert_eq!(c.accepted_tools, None);
     let c = store
-        .record_catalog_seen(&item.id, "f1", &tools)
+        .record_catalog_seen(&item.id, PERSONAL_SCOPE, "f1", &tools)
         .await
         .unwrap();
     assert_eq!(c.status, CatalogStatus::Changed);
@@ -959,16 +984,19 @@ async fn a_url_moves_the_origin_to_the_host_the_client_reaches_after_expanding()
         .await
         .unwrap();
     store
-        .record_catalog_seen(&item.id, "f1", &tools)
+        .record_catalog_seen(&item.id, PERSONAL_SCOPE, "f1", &tools)
         .await
         .unwrap();
-    store.accept_catalog(&item.id, "f1").await.unwrap();
+    store
+        .accept_catalog(&item.id, PERSONAL_SCOPE, "f1")
+        .await
+        .unwrap();
     // The default port is the same origin: the accepted list stays.
     store
         .update_library_item(&item.id, &http("https://api.github.com:443/mcp", "1"))
         .await
         .unwrap();
-    let c = store.get_catalog(&item.id).await.unwrap();
+    let c = store.get_catalog(&item.id, PERSONAL_SCOPE).await.unwrap();
     assert_eq!(c.accepted_fingerprint.as_deref(), Some("f1"));
     // A variable that holds a backslash makes this url reach evil.example, though the raw text
     // reads like the trusted host.
@@ -983,7 +1011,7 @@ async fn a_url_moves_the_origin_to_the_host_the_client_reaches_after_expanding()
         )
         .await
         .unwrap();
-    let c = store.get_catalog(&item.id).await.unwrap();
+    let c = store.get_catalog(&item.id, PERSONAL_SCOPE).await.unwrap();
     assert_eq!(c.accepted_fingerprint, None);
     // An unparsable url (a variable in the host) is a move unless the text is equal.
     let var = |p: &str| http(&format!("https://${{HOST}}/{p}"), "1");
@@ -992,21 +1020,24 @@ async fn a_url_moves_the_origin_to_the_host_the_client_reaches_after_expanding()
         .await
         .unwrap();
     store
-        .record_catalog_seen(&item.id, "f1", &tools)
+        .record_catalog_seen(&item.id, PERSONAL_SCOPE, "f1", &tools)
         .await
         .unwrap();
-    store.accept_catalog(&item.id, "f1").await.unwrap();
+    store
+        .accept_catalog(&item.id, PERSONAL_SCOPE, "f1")
+        .await
+        .unwrap();
     store
         .update_library_item(&item.id, &var("a"))
         .await
         .unwrap();
-    let c = store.get_catalog(&item.id).await.unwrap();
+    let c = store.get_catalog(&item.id, PERSONAL_SCOPE).await.unwrap();
     assert_eq!(c.accepted_fingerprint.as_deref(), Some("f1"));
     store
         .update_library_item(&item.id, &var("b"))
         .await
         .unwrap();
-    let c = store.get_catalog(&item.id).await.unwrap();
+    let c = store.get_catalog(&item.id, PERSONAL_SCOPE).await.unwrap();
     assert_eq!(c.accepted_fingerprint, None);
 }
 
@@ -1020,13 +1051,13 @@ async fn a_catalog_failure_holds_no_secret_the_vault_has_read() {
         .await
         .unwrap();
     let c = store
-        .record_catalog_failure(&sf.id, &format!("invalid token {secret}"))
+        .record_catalog_failure(&sf.id, PERSONAL_SCOPE, &format!("invalid token {secret}"))
         .await
         .unwrap();
     assert_eq!(
         c.error.as_deref(),
         Some("invalid token [secret:DOTS_CATALOG_TOKEN]")
     );
-    let stored = store.get_catalog(&sf.id).await.unwrap();
+    let stored = store.get_catalog(&sf.id, PERSONAL_SCOPE).await.unwrap();
     assert!(!format!("{stored:?}").contains(secret));
 }

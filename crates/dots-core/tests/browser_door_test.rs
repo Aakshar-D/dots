@@ -252,7 +252,7 @@ async fn a_run_whose_playwright_lost_its_door_gets_a_new_one() {
     s.workdir = dir.path().to_string_lossy().into_owned();
     s.workspace_mode = WorkspaceMode::Folder;
     s.browser = true;
-    let dot = store.create_dot(&s).await.unwrap();
+    let dot = store.create_dot(&s, None).await.unwrap();
     edges.first_pages(&dot.id, &[CART]);
     let run = store
         .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))

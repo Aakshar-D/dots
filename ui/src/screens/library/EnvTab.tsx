@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus } from "lucide-react";
+import { Lock, Plus } from "lucide-react";
 import { useState } from "react";
 
 import { commands } from "@/api/commands";
-import type { EnvEntry } from "@/api/types";
+import type { EnvEntry, OrgSummary } from "@/api/types";
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { ErrorNote } from "@/components/ErrorNote";
 import { Field } from "@/components/Field";
@@ -22,15 +22,17 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { errorMessage, notifyError } from "@/lib/notify";
 import { invalidate, keys } from "@/lib/query";
+import { ORG_TONE } from "@/screens/Organisations";
 
-import { ItemRow } from "./parts";
+import { ItemRow, UsedBy, useScopes } from "./parts";
 
 /// A variable name as `vault::entries::check_variable_name` takes it.
 export const validVariableName = (name: string) => /^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(name);
 const NAME_RULE = "Use a letter or _, then letters, digits or _ (at most 128).";
 
-/// Add a variable (`entry` null), or edit a plain one's value or replace a secret's. A secret's
-/// value is typed into a password field and never shown, before or after it is saved.
+/// Add a variable (`entry` null), or edit a plain one's value or replace a secret's (or set it
+/// again when it is missing). A secret's value is typed into a password field and never shown,
+/// before or after it is saved.
 function VariableDialog(props: { entry: EnvEntry | null; onClose: () => void }) {
   const qc = useQueryClient();
   const { entry } = props;
@@ -61,18 +63,22 @@ function VariableDialog(props: { entry: EnvEntry | null; onClose: () => void }) 
 
   const title = !entry
     ? "Add variable"
-    : entry.kind === "secret"
-      ? `Replace ${entry.name}`
-      : `Edit ${entry.name}`;
+    : entry.value_missing
+      ? `Set ${entry.name}`
+      : entry.kind === "secret"
+        ? `Replace ${entry.name}`
+        : `Edit ${entry.name}`;
   return (
     <Dialog open onOpenChange={(next) => !next && props.onClose()}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>
-            {entry?.kind === "secret"
-              ? "The new value takes the old one's place. Neither is shown."
-              : "A dot can read it only where it is granted it."}
+            {entry?.value_missing
+              ? "Its value is gone from Windows Credential Manager. The new one is not shown."
+              : entry?.kind === "secret"
+                ? "The new value takes the old one's place. Neither is shown."
+                : "A dot can read it only where it is granted it."}
           </DialogDescription>
         </DialogHeader>
         {!entry && (
@@ -252,12 +258,65 @@ function BackupsOffer({ files }: { files: string[] }) {
   );
 }
 
-/// The Library's Env tab (env vault spec §9): the personal variables a dot can be granted. A
-/// secret's value is never shown.
+/// The badge of an org's entry that a Personal variable of the same name can't replace.
+function LockBadge() {
+  return (
+    <Badge variant="outline" title="A Personal variable of the same name can't take its place.">
+      <Lock aria-hidden /> Locked
+    </Badge>
+  );
+}
+
+/// One joined org's section: its status, then its entries, read-only: the org's admin manages
+/// them. An org that gives no values (offline with no copy, expired, revoked) has no rows; its
+/// status says why.
+function OrgSection({ org }: { org: OrgSummary }) {
+  const entries = useQuery({
+    queryKey: keys.orgEntries(org.id),
+    queryFn: () => commands.orgEntries(org.id),
+  });
+  return (
+    <section aria-label={org.name} className="flex flex-col gap-2">
+      <div className="flex flex-col">
+        <h2 className="text-sm font-medium">{org.name}</h2>
+        <p className={`text-xs first-letter:uppercase ${ORG_TONE[org.status]}`}>
+          {org.status_text}
+        </p>
+      </div>
+      {entries.isError && <ErrorNote error={entries.error} />}
+      {entries.data?.length === 0 && org.status === "connected" && (
+        <p className="text-sm text-muted-foreground">The org has no variables.</p>
+      )}
+      <ul className="flex flex-col gap-2">
+        {(entries.data ?? []).map((entry) => (
+          <ItemRow key={entry.name} label={entry.name}>
+            <div className="flex items-center gap-2">
+              <span className="font-mono text-sm font-medium">{entry.name}</span>
+              <Badge variant="secondary">{entry.kind}</Badge>
+              {entry.locked && <LockBadge />}
+            </div>
+            {/* A secret's value never reaches the screen, whatever the answer holds. */}
+            {entry.kind === "plain" && (
+              <span className="truncate font-mono text-xs text-muted-foreground">
+                {entry.value}
+              </span>
+            )}
+            <span className="text-xs text-muted-foreground">{`Managed by ${org.name}`}</span>
+            <UsedBy dots={entry.used_by} none="Not used" />
+          </ItemRow>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/// The Library's Env tab (env vault spec §9): the personal variables a dot can be granted, then
+/// each joined org's, read-only. A secret's value is never shown.
 export function EnvTab() {
   const env = useQuery({ queryKey: keys.env, queryFn: commands.envList });
   const imports = useQuery({ queryKey: keys.envImport, queryFn: commands.envImportCandidates });
   const backups = useQuery({ queryKey: keys.envBackups, queryFn: commands.envOldBackups });
+  const { orgs } = useScopes();
   const [editing, setEditing] = useState<EnvEntry | null | undefined>(undefined);
   // The names the import offer could not take: shown once the offer is gone.
   const [skipped, setSkipped] = useState<string[]>([]);
@@ -302,7 +361,11 @@ export function EnvTab() {
                     size="sm"
                     onClick={() => setEditing(entry)}
                   >
-                    {entry.kind === "secret" ? "Replace value" : "Edit"}
+                    {entry.value_missing
+                      ? "Set value"
+                      : entry.kind === "secret"
+                        ? "Replace value"
+                        : "Edit"}
                   </Button>
                   <RemoveVariable entry={entry} />
                 </>
@@ -311,18 +374,34 @@ export function EnvTab() {
               <div className="flex items-center gap-2">
                 <span className="font-mono text-sm font-medium">{entry.name}</span>
                 <Badge variant="secondary">{entry.kind}</Badge>
+                {entry.value_missing && (
+                  <Badge
+                    variant="secondary"
+                    className="border-needs-border bg-transparent text-needs"
+                  >
+                    value missing
+                  </Badge>
+                )}
               </div>
-              {entry.kind === "secret" ? (
+              {entry.value_missing ? (
+                <span className="text-xs text-needs">
+                  Its value is gone from Credential Manager. Set it again to use it.
+                </span>
+              ) : entry.kind === "secret" ? (
                 <span className="text-xs text-muted-foreground">Kept in Credential Manager</span>
               ) : (
                 <span className="truncate font-mono text-xs text-muted-foreground">
                   {entry.value}
                 </span>
               )}
+              <UsedBy dots={entry.used_by} none="Not used" />
             </ItemRow>
           ))}
         </ul>
       </section>
+      {orgs.map((org) => (
+        <OrgSection key={org.id} org={org} />
+      ))}
       {editing !== undefined && (
         <VariableDialog entry={editing} onClose={() => setEditing(undefined)} />
       )}

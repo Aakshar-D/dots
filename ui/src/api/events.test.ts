@@ -34,6 +34,18 @@ describe("events", () => {
     expect(seen).toEqual(["run_updated", "lagged", "/inbox", 47321, "ready"]);
   });
 
+  it("hands an org's change to the runtime listener", async () => {
+    const seen: unknown[] = [];
+    await onRuntimeEvent(
+      (e) => seen.push(e.type === "org_updated" ? e.org_id : e.type),
+      () => seen.push("refetch"),
+    );
+    const org = fixture.RuntimeEvent.find((e) => e.type === "org_updated");
+    handlers.get("runtime")!({ payload: org });
+    handlers.get("runtime")!({ payload: { type: "org_updated" } });
+    expect(seen).toEqual(["acme-eng", "refetch"]);
+  });
+
   it("asks for a refetch when a runtime event is in a shape it does not know", async () => {
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     const seen: unknown[] = [];

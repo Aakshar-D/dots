@@ -103,7 +103,7 @@ async fn local_dot(e: &Env, llm: &Llm, policy: Policy, servers: &[&str]) -> Dot 
     s.policy = policy;
     s.approval_wait_secs = 0;
     s.uses.mcp_servers = servers.iter().map(|n| n.to_string()).collect();
-    e.store.create_dot(&s).await.unwrap()
+    e.store.create_dot(&s, None).await.unwrap()
 }
 
 async fn run(e: &Env, dot: &Dot) -> Run {

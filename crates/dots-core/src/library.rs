@@ -186,8 +186,12 @@ impl Uses {
     }
 }
 
-/// What Dots knows of an MCP server's tools (spec section 3). The tool lists are `tools/list`
-/// results as JSON.
+/// The scope of a catalog checked with Personal's values. Any other scope is an org's id (env
+/// vault spec §8): a server's tools can differ by credential, so each scope has its own.
+pub const PERSONAL_SCOPE: &str = "personal";
+
+/// What Dots knows of an MCP server's tools in one scope (spec section 3). The tool lists are
+/// `tools/list` results as JSON.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct McpCatalog {
     pub server_id: String,
@@ -404,6 +408,26 @@ pub fn http_origin(
     let host = parsed.host_str().unwrap_or_default();
     let unicode = punycode_host(host).filter(|u| u != host);
     Ok(HttpOrigin { ascii, unicode })
+}
+
+impl McpServerConfig {
+    /// Whether the server's origin is pinned (env vault spec §8): an http server whose `url`
+    /// reads a `${VAR}`, so a value can move the host its requests go to. A run starts it only
+    /// when the origin it reaches with the run's values was confirmed for the dot's scope. A
+    /// fixed URL has one origin, which the add and change dialog already names with the
+    /// variables its headers send, so it starts as before.
+    pub fn origin_pinned(&self) -> bool {
+        matches!(self, Self::Http { url, .. } if !url_variables(url).is_empty())
+    }
+}
+
+/// The variables an http URL reads, sorted, each once: the ones its origin depends on.
+pub(crate) fn url_variables(url: &str) -> Vec<String> {
+    McpServerConfig::Http {
+        url: url.to_string(),
+        headers: BTreeMap::new(),
+    }
+    .variables()
 }
 
 /// Whether the origin differs between two URLs under `env`. An origin that cannot be computed
