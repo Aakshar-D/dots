@@ -3,7 +3,7 @@ use sqlx::sqlite::{SqliteConnection, SqliteRow};
 use sqlx::Row;
 
 use super::{opt_json, Store};
-use crate::model::{NewRun, Run, RunEventRecord, RunStatus, TriggerKind};
+use crate::model::{EngineKind, NewRun, Run, RunEventRecord, RunStatus, TriggerKind};
 use crate::util::{new_id, now};
 use crate::vault::redact::global;
 use crate::{Error, Result};
@@ -287,6 +287,30 @@ impl Store {
         .fetch_all(&self.pool)
         .await?;
         rows.iter().map(run_from_row).collect()
+    }
+
+    /// The queued runs with their dot's engine, oldest first: all of them, or with
+    /// `dispatchable` only those whose dot has no running run (what the dispatcher may start).
+    pub async fn queued_with_engine(&self, dispatchable: bool) -> Result<Vec<(Run, EngineKind)>> {
+        let only = if dispatchable {
+            " AND NOT EXISTS (SELECT 1 FROM runs x WHERE x.dot_id = r.dot_id \
+             AND x.status = 'running')"
+        } else {
+            ""
+        };
+        let rows = sqlx::query(&format!(
+            "SELECT {RUN_COLUMNS}, (SELECT d.engine FROM dots d WHERE d.id = r.dot_id) \
+             AS dot_engine FROM runs r WHERE r.status = 'queued'{only} \
+             ORDER BY r.queued_at, r.id"
+        ))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|row| {
+                let engine = EngineKind::parse(&row.try_get::<String, _>("dot_engine")?)?;
+                Ok((run_from_row(row)?, engine))
+            })
+            .collect()
     }
 
     pub async fn claim_run(&self, id: &str) -> Result<bool> {
