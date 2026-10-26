@@ -1,7 +1,7 @@
 # Watchers: dots that start when something happens
 
 - Date: 2026-10-23
-- Status: written from the conversation; builder check done; awaiting the person's review
+- Status: built (plan `docs/superpowers/plans/2026-10-23-watchers.md`); section 12 records how it differs
 - Builds on: `2026-10-21-env-vault-design.md` (secrets), the scheduler (`crates/dots-core/src/scheduler.rs`, the background-service pattern), `2026-10-22-needs-you-design.md` (what needs the person), `2026-10-23-dot-memory-design.md` (the editor's tabs, the conversation's run cards).
 
 ## 1. Intent
@@ -119,3 +119,47 @@ New dependencies: `notify` (and its debouncer) for folders; an async IMAP client
 ## 11. Left to the builder
 
 The exact crate choices within section 9's constraints; the debounce implementation; how the service schedules its polls (one task per watcher or one loop, as the scheduler does); the cap's storage (a small table of fire times or a count over `runs`); the IMAP test approach; the HTML-to-text conversion.
+
+## 12. As built
+
+### 12.1 Where it differs
+
+| Spec | This plan | Why |
+|---|---|---|
+| §4.2: the staged copy is deleted "when the run ends (any end, including a park)" and also "kept until the thread's last run ends" | The workspace copy is removed at every end of every run of the thread (park included); the staged copy is removed once no run of the thread is `queued`, `running` or `awaiting_approval` (`WatcherFiles::release`) | The two sentences contradict; a resume needs the staged copy |
+| §4.2: staged under `<data>/watchers/<watcher_id>/<run_id>/`, but the run is made after the fetch | `NewRun` gets `id: Option<String>`; `fire` makes the id, stages, then enqueues under it. A resume run's copy goes to `attachments/<root run id>/`, the same path its first prompt named | The id must exist before the files; a resumed model already knows the paths |
+| §4.1: acting also "while Dots performs a call the person approved (an apply)" | No separate tracking: an apply runs inside the resume run, which the runner holds | The runner's hold is the whole span |
+| §4.1: "names starting with `.`" | Any part of the path under the watched folder starting with `.` (so `.git/…`), and the names the spec lists; the pattern matches the file name in any case | A repository folder churns `.git`; Windows names are case-insensitive |
+| §4.1: a deleted path might be a folder | The folder source keeps the folders it has seen (a walk at start, at most 20,000 entries, plus each created one) and drops their deletion | Windows reports a removal without saying what it was |
+| §4.1: (silent) a "changed" with nothing changed | Dropped when size and modified time equal what was last reported for the path | Cloud-sync engines touch settled files (Review Focus 1) |
+| §5: (silent) dots that are switched off | A disabled dot's watchers do not run | As its schedule |
+| §6: deleting the vault entry pauses its watchers | Noticed at the watcher's next connect (within a minute): `entry_gone` | The vault's commands know nothing of watchers; a minute is the poll anyway |
+| §7: one event `watcher_updated`; the app "notifies once" | Also `watcher_paused { dot_id, watcher_id, name, reason, error }`, sent once when Dots pauses a watcher | The notifier reacts to an event, as for `schedule_attention` |
+| §7: the Inbox item's `at` | Column `paused_at` | `updated_at` moves on edits |
+| §7: "counted in the badge and the Home total" | A paused watcher counts in its dot's `needs_you` (`Store::dot_counts`), so in `unread` and the Home total, and in `inbox_count` and the Inbox link | As an open question does |
+| §4.3: `pull_request` "opened, or marked ready for review" | Opened and not a draft (`/pulls`), or a `ready_for_review` issue event (`/issues/events`); a draft opened wakes nothing until it is marked ready | Avoids two runs for one PR |
+| §4.3: `comment` includes "a PR review with a body" | Reviews are read per open PR updated since the last check (`/pulls?sort=updated`, then `/pulls/<n>/reviews`); a comment's title is its issue's title (`/issues/<n>`) | GitHub has no repository-wide review list; the line needs a title |
+| §4.3: `push` "listing its commits, at most 20" | The commits go in `body` as lines `- <sha7> <first line> (<author>)`, the newest 20, with "(<n> commits; the newest 20 listed)" first when there are more; `title` is "<n> commit(s)" | Keeps the payload's shape |
+| §4.3: `label` filter | Applies to `issue` and `pull_request`; `authors` and `skip_bots` to every kind; `branches` to `push`, `ci` (and an empty list means the default branch for `push`) | The comment API carries no labels |
+| §4.3: ETags | Kept in memory per URL; a restart asks once without | The cursor is what must survive |
+| §5: the one-line trigger holds the subject or title, which is outside text | The line is flattened to one line and cut to 200 characters; the full text is fenced under the outside heading with a fence longer than any backtick run in it | A body could otherwise forge a heading |
+| §5: "Pause all schedules" renamed in Settings | The tray item is renamed too | One switch, one name |
+
+### 12.2 Decided by the builder (section 11)
+
+- Crates: `notify` 8 (no debouncer crate: a 2-second settle per path in `watchers/folder.rs`), `async-imap` 0.10 on tokio over `tokio-rustls` 0.26 (ring) with `webpki-roots`, `mail-parser` 0.11 (its `body_text` turns HTML into text), `reqwest` for GitHub.
+- Polls: one task per running watcher, started and stopped by `Watchers::reload`; the folder source checks its folder every second.
+- The cap: a table `watcher_fires`, one row per run in the sliding hour, checked in the statement that inserts.
+- The IMAP test: the `MailSource` trait with a fake mailbox for behaviour, and the real client against a scripted local server for the commands it sends.
+- The GitHub watcher's icon is lucide's `GitPullRequest` (this lucide has no brand icons).
+
+### 12.3 Smoke
+
+Run on 2026-10-26, debug build of `feat/watchers` at `eed644e`, a fresh data folder, one local dot "filer" (`qwen2.5:7b`) whose folder is the watched folder, told to write a `seen-<name>.txt` for each new file; a folder watcher on that folder with no pattern.
+
+- Five PDFs dropped at once: five watcher runs, queued together and run one after another, all succeeded (about 200 s in all).
+- The dot's own writes: each run wrote its file into the watched folder; 15 seconds after the last run ended there were still five watcher runs.
+- The flood: 16 more files dropped at once made 15 more runs (20 in the hour) and the 21st event paused the watcher (`flood`); the Inbox listed "Paused watchers: Work folder · filer · paused: too many runs" (axe: no violations), the Inbox link counted it; Resume cleared it and the section went. The 13 runs still queued were cancelled by hand.
+- The notification: with the window on Settings, the watched folder was renamed; within a second the watcher paused with "The folder … no longer exists." and Windows showed one toast, "filer's watcher paused / Work folder paused: The folder … no longer exists.". (While the window showed the dot's conversation, its notices stayed quiet, as the needs-you spec says.)
+- The Watchers tab showed the watcher's summary, last event and paused state; no console error. axe reported one serious `target-size` on the row's on/off switch (32 x 18 px, too close to Edit), fixed in the final review pass.
+- Email and GitHub: not run (no test account).
