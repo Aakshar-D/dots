@@ -1,7 +1,7 @@
 use serde::Serialize;
 use tokio::sync::broadcast;
 
-use crate::model::{Approval, Message, Run, RunEventRecord};
+use crate::model::{Approval, Message, PausedReason, Run, RunEventRecord};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -61,6 +61,22 @@ pub enum RuntimeEvent {
     /// memory spec section 3).
     MemoriesUpdated {
         dot_id: String,
+    },
+    /// A watcher of the dot was added, changed, paused, resumed, deleted or had an event
+    /// (watchers spec section 7).
+    WatcherUpdated {
+        dot_id: String,
+        watcher_id: String,
+    },
+    /// Dots paused a watcher (too many runs, or an error it cannot get past). Published once,
+    /// when it goes from running to paused; a `WatcherUpdated` goes with it. The app notifies
+    /// on it.
+    WatcherPaused {
+        dot_id: String,
+        watcher_id: String,
+        name: String,
+        reason: PausedReason,
+        error: Option<String>,
     },
     /// An org was joined, updated, fetched (by **Refresh**, its timer or the start-up fetch) or
     /// removed (env vault spec §6.4): its status, policy or values may have changed, and so

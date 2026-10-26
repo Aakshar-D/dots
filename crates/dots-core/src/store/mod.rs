@@ -20,6 +20,7 @@ mod runs;
 mod schedules;
 mod settings;
 mod upgrade;
+mod watchers;
 
 pub(crate) use upgrade::{auth_scheme, var_name};
 

@@ -20,9 +20,11 @@ import { useDebounced } from "@/lib/use-debounced";
 import { DotForm, type Draft } from "@/screens/dot-editor/DotForm";
 import { MemoryTab } from "@/screens/dot-editor/MemoryTab";
 import { RunsList } from "@/screens/dot-editor/RunsList";
+import { WatchersTab } from "@/screens/dot-editor/WatchersTab";
 
-/// The tabs of a dot's editor; `?tab=` opens one (the ⚙ menu's Memory… opens `memory`).
-const TABS = ["settings", "runs", "follow-ups", "memory"];
+/// The tabs of a dot's editor; `?tab=` opens one (the ⚙ menu's Memory… opens `memory`; the
+/// Inbox opens `watchers`).
+const TABS = ["settings", "runs", "follow-ups", "memory", "watchers"];
 
 /// The form with its Save button. `onSave` stores the spec, with the org a new dot is made in;
 /// its rejection is shown above the form (the core's answer when it refuses what the form let
@@ -261,11 +263,13 @@ function ExistingDot({ dotId }: { dotId: string }) {
               setParams(next === "settings" ? {} : { tab: next }, { replace: true })
             }
           >
-            <TabsList>
+            {/* Five tabs outgrow a narrow window: the strip scrolls, not the page. */}
+            <TabsList className="max-w-full justify-start overflow-x-auto overflow-y-hidden">
               <TabsTrigger value="settings">Settings</TabsTrigger>
               <TabsTrigger value="runs">Runs</TabsTrigger>
               <TabsTrigger value="follow-ups">Follow-ups</TabsTrigger>
               <TabsTrigger value="memory">Memory</TabsTrigger>
+              <TabsTrigger value="watchers">Watchers</TabsTrigger>
             </TabsList>
             <TabsContent value="settings">{form}</TabsContent>
             <TabsContent value="runs">
@@ -276,6 +280,11 @@ function ExistingDot({ dotId }: { dotId: string }) {
             </TabsContent>
             <TabsContent value="memory">
               <MemoryTab dotId={dotId} />
+            </TabsContent>
+            {/* Its rows' switches and buttons are the tab stops: a focusable panel around them
+                would crowd their touch targets (WCAG 2.5.8). */}
+            <TabsContent value="watchers" tabIndex={-1}>
+              <WatchersTab dotId={dotId} />
             </TabsContent>
           </Tabs>
         </>

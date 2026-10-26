@@ -21,7 +21,13 @@ const pay: PendingApproval = {
 };
 
 function inbox(approvals: PendingApproval[]) {
-  backend.on("inbox", () => ({ approvals, review_runs: [], attention: [], tools_changed: [] }));
+  backend.on("inbox", () => ({
+    approvals,
+    review_runs: [],
+    attention: [],
+    tools_changed: [],
+    watchers: [],
+  }));
   backend.on("decide_approval", (args): Approval => ({
     ...sample.approval,
     id: String(args.id),

@@ -35,6 +35,7 @@ describe("the rail (deep-teal spec section 4)", () => {
       review_runs: [],
       attention: [],
       tools_changed: [],
+      watchers: [],
     }));
     renderApp("/library");
     const rail = within(await nav());

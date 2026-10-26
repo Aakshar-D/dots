@@ -311,7 +311,9 @@ impl Store {
              (SELECT COUNT(*) FROM messages m WHERE m.dot_id = d.id AND m.kind = 'question' \
               AND m.answered_at IS NULL AND m.dismissed_at IS NULL) \
              + (SELECT COUNT(*) FROM approvals a JOIN runs r ON r.id = a.run_id \
-              WHERE r.dot_id = d.id AND a.status = 'pending') AS needs_you, \
+              WHERE r.dot_id = d.id AND a.status = 'pending') \
+             + (SELECT COUNT(*) FROM watchers w WHERE w.dot_id = d.id \
+              AND w.paused_reason IS NOT NULL) AS needs_you, \
              CASE WHEN d.seen_at IS NULL THEN 0 ELSE \
              (SELECT COUNT(*) FROM runs r WHERE r.dot_id = d.id \
               AND r.status IN ('succeeded', 'failed', 'cancelled') AND r.ended_at > d.seen_at) \

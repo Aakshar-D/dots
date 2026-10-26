@@ -48,7 +48,7 @@ fn event_from_row(row: &SqliteRow) -> Result<RunEventRecord> {
 }
 
 pub(super) async fn insert_run(conn: &mut SqliteConnection, new: &NewRun) -> Result<String> {
-    let id = new_id();
+    let id = new.id.clone().unwrap_or_else(new_id);
     let root = new.root_run_id.clone().unwrap_or_else(|| id.clone());
     sqlx::query(
         "INSERT INTO runs (id, dot_id, root_run_id, parent_run_id, trigger_kind, payload, \
@@ -166,6 +166,17 @@ impl Store {
             Some(id) => Ok(Some(self.get_run(&id).await?)),
             None => Ok(None),
         }
+    }
+
+    /// Replaces the run's payload (scrubbed, as `insert_run` stores it): a watcher run's
+    /// attachment paths, once they are in its workspace (watchers spec section 4.2).
+    pub async fn set_run_payload(&self, id: &str, payload: &Value) -> Result<Run> {
+        sqlx::query("UPDATE runs SET payload = ? WHERE id = ?")
+            .bind(global().scrub_json(payload).to_string())
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        self.get_run(id).await
     }
 
     pub async fn get_run(&self, id: &str) -> Result<Run> {

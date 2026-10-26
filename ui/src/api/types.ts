@@ -24,6 +24,8 @@ export const TriggerKind = z.enum([
   "resume",
   // A run a dot scheduled for itself (check-ins spec section 6).
   "follow_up",
+  // A run a watcher started: a file, an email or a GitHub event (watchers spec section 5).
+  "watcher",
 ]);
 export const RunStatus = z.enum([
   "queued",
@@ -266,6 +268,67 @@ export const Memory = z.strictObject({
   updated_at: z.string(),
 });
 
+// Watchers (watchers spec sections 3 and 4): what starts a dot when a folder, a Gmail label or a
+// GitHub repository changes.
+export const WatcherKind = z.enum(["folder", "email", "github"]);
+// Why Dots paused a watcher; the person's own pause is `enabled`.
+export const PausedReason = z.enum(["flood", "error"]);
+export const FolderEvent = z.enum(["created", "changed", "deleted"]);
+export const GithubEvent = z.enum(["issue", "pull_request", "comment", "push", "ci"]);
+export const FolderConfig = z.strictObject({
+  kind: z.literal("folder"),
+  path: z.string(),
+  // A file-name pattern such as *.pdf; empty matches every file.
+  pattern: z.string(),
+  events: z.array(FolderEvent),
+  recursive: z.boolean(),
+});
+export const EmailConfig = z.strictObject({
+  kind: z.literal("email"),
+  address: z.string(),
+  // The vault entry that holds the app password.
+  secret: z.string(),
+  label: z.string(),
+  from: nullable(z.string()),
+  subject: nullable(z.string()),
+  has_attachment: nullable(z.boolean()),
+});
+export const GithubConfig = z.strictObject({
+  kind: z.literal("github"),
+  repos: z.array(z.string()),
+  events: z.array(GithubEvent),
+  // The vault entry that holds the token.
+  secret: z.string(),
+  label: nullable(z.string()),
+  authors: z.array(z.string()),
+  skip_bots: z.boolean(),
+  branches: z.array(z.string()),
+});
+export const WatcherConfig = z.discriminatedUnion("kind", [FolderConfig, EmailConfig, GithubConfig]);
+export const Watcher = z.strictObject({
+  id: z.string(),
+  dot_id: z.string(),
+  name: z.string(),
+  config: WatcherConfig,
+  enabled: z.boolean(),
+  paused_reason: nullable(PausedReason),
+  last_error: nullable(z.string()),
+  last_event_at: nullable(z.string()),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+// A watcher Dots paused, as the Inbox lists it.
+export const PausedWatcher = z.strictObject({
+  watcher_id: z.string(),
+  dot_id: z.string(),
+  dot_name: z.string(),
+  kind: WatcherKind,
+  name: z.string(),
+  reason: PausedReason,
+  error: nullable(z.string()),
+  at: z.string(),
+});
+
 export const RuntimeEvent = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("run_updated"), run: Run }),
   z.strictObject({ type: z.literal("run_event"), event: RunEventRecord }),
@@ -293,6 +356,21 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("dot_seen"), dot_id: z.string() }),
   // A memory of the dot was saved, changed or deleted, by a run or by the person.
   z.strictObject({ type: z.literal("memories_updated"), dot_id: z.string() }),
+  // A watcher of the dot was added, changed, paused, resumed, deleted or had an event.
+  z.strictObject({
+    type: z.literal("watcher_updated"),
+    dot_id: z.string(),
+    watcher_id: z.string(),
+  }),
+  // Dots paused a watcher; the app notifies on it.
+  z.strictObject({
+    type: z.literal("watcher_paused"),
+    dot_id: z.string(),
+    watcher_id: z.string(),
+    name: z.string(),
+    reason: PausedReason,
+    error: nullable(z.string()),
+  }),
   // An org was joined, updated, fetched (by Refresh, its timer or the start-up fetch) or
   // removed: its status, policy or values may have changed.
   z.strictObject({ type: z.literal("org_updated"), org_id: z.string() }),
@@ -397,6 +475,8 @@ export const Inbox = z.strictObject({
   attention: z.array(NeedsAttention),
   // Personal's first, then each joined org's; by server name within a scope.
   tools_changed: z.array(ToolsChanged),
+  // Watchers Dots paused, newest first.
+  watchers: z.array(PausedWatcher),
 });
 
 // The Library (MCP/skills spec section 2 and 9). `${VAR}` in a server's config stays a
@@ -767,6 +847,7 @@ export const LIMITS = {
   max_global_instructions: 32768,
   max_memories: 200,
   max_memory_text: 500,
+  max_watcher_name: 80,
 } as const;
 
 export type EngineKind = z.infer<typeof EngineKind>;
@@ -851,4 +932,14 @@ export type Message = z.infer<typeof Message>;
 export type FollowUp = z.infer<typeof FollowUp>;
 export type MemorySource = z.infer<typeof MemorySource>;
 export type Memory = z.infer<typeof Memory>;
+export type WatcherKind = z.infer<typeof WatcherKind>;
+export type PausedReason = z.infer<typeof PausedReason>;
+export type FolderEvent = z.infer<typeof FolderEvent>;
+export type GithubEvent = z.infer<typeof GithubEvent>;
+export type FolderConfig = z.infer<typeof FolderConfig>;
+export type EmailConfig = z.infer<typeof EmailConfig>;
+export type GithubConfig = z.infer<typeof GithubConfig>;
+export type WatcherConfig = z.infer<typeof WatcherConfig>;
+export type Watcher = z.infer<typeof Watcher>;
+export type PausedWatcher = z.infer<typeof PausedWatcher>;
 export type UpdateNote = z.infer<typeof UpdateNote>;

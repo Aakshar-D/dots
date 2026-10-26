@@ -34,7 +34,8 @@ export function Layout() {
       ? inbox.approvals.length +
         inbox.review_runs.length +
         inbox.attention.length +
-        inbox.tools_changed.length
+        inbox.tools_changed.length +
+        inbox.watchers.length
       : 0) + (messages ?? []).filter(waits).length;
   // A pending approval or an open question needs the person: the counts take the needs colour
   // (deep-teal spec section 4).

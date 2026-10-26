@@ -1,4 +1,4 @@
-//! The tray icon: Open, Needs you, Inbox (n), Pause all schedules, Quit (spec §7; needs-you
+//! The tray icon: Open, Needs you, Inbox (n), Pause schedules and watchers, Quit (spec §7; needs-you
 //! spec section 4.3).
 
 use std::sync::{Arc, Mutex, PoisonError};
@@ -78,7 +78,7 @@ impl Tray {
         let pause = CheckMenuItem::with_id(
             app,
             "pause",
-            "Pause all schedules",
+            "Pause schedules and watchers",
             true,
             paused,
             None::<&str>,

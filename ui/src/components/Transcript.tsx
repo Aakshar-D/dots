@@ -20,6 +20,7 @@ import { isActive } from "@/lib/home-topics";
 import { localDateTime, localTime } from "@/lib/format";
 import { mcpToolLabel } from "@/lib/mcp-tool";
 import { keys } from "@/lib/query";
+import { watcherTitle } from "@/lib/watchers";
 import {
   checkInLine,
   callLabel,
@@ -36,6 +37,7 @@ const TRIGGER: Record<Run["trigger"], string> = {
   chat: "Chat message",
   resume: "Continued after approval",
   follow_up: "Follow-up the dot scheduled",
+  watcher: "Watcher run",
 };
 
 /// What the person wrote, for a chat run: an answer to a question as they typed it, not the
@@ -83,6 +85,13 @@ function ScheduleLine({ run }: { run: Run }) {
       );
   }
   return <p className="mb-2 text-xs text-muted-foreground">{line}</p>;
+}
+
+/// What woke the dot, under a watcher run's header (watchers spec section 8).
+function WatcherLine({ run }: { run: Run }) {
+  const title = watcherTitle(run);
+  if (title === null) return null;
+  return <p className="mb-2 text-xs text-muted-foreground">{title}</p>;
 }
 
 /// The message a follow-up run carries: what the dot scheduled itself to do.
@@ -371,6 +380,7 @@ export function Transcript(props: {
             </header>
             <ScheduleLine run={run} />
             <FollowUpLine run={run} />
+            <WatcherLine run={run} />
             <div className="flex flex-col gap-2">
               {message !== null && (
                 <p

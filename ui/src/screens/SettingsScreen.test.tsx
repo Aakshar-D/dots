@@ -206,10 +206,10 @@ describe("the Settings screen", () => {
       schedules_paused: args.paused as boolean,
     }));
     const { user } = renderApp("/settings");
-    const pause = await screen.findByLabelText("Pause all schedules");
+    const pause = await screen.findByLabelText("Pause schedules and watchers");
     await waitFor(() => expect(pause).toBeEnabled());
     await user.click(pause);
-    await waitFor(() => expect(screen.getByLabelText("Pause all schedules")).toBeChecked());
+    await waitFor(() => expect(screen.getByLabelText("Pause schedules and watchers")).toBeChecked());
     expect(backend.callsTo("set_schedules_paused")).toEqual([{ paused: true }]);
     expect(backend.callsTo("update_settings")).toEqual([]);
     expect(await screen.findByRole("button", { name: "Resume schedules" })).toBeVisible();
@@ -223,7 +223,7 @@ describe("the Settings screen", () => {
       return { ...quietStatus, schedules_paused: paused };
     });
     const { user, listening, queryClient } = renderApp("/settings");
-    const pause = await screen.findByLabelText("Pause all schedules");
+    const pause = await screen.findByLabelText("Pause schedules and watchers");
     await listening();
 
     // The status is asked for again, and the core reads it for that answer before the pause.
@@ -253,7 +253,7 @@ describe("the Settings screen", () => {
       return { ...quietStatus, schedules_paused: paused };
     });
     const { user, listening } = renderApp("/settings");
-    await screen.findByLabelText("Pause all schedules");
+    await screen.findByLabelText("Pause schedules and watchers");
     await listening();
 
     // The dots column is read, and left for Settings before its answer is here.
@@ -266,8 +266,8 @@ describe("the Settings screen", () => {
     await user.click(screen.getByRole("link", { name: "Home" }));
     await waitFor(() => expect(backend.callsTo("dot_overview")).toHaveLength(1));
     await user.click(screen.getByRole("link", { name: "Settings" }));
-    await user.click(await screen.findByLabelText("Pause all schedules"));
-    await waitFor(() => expect(screen.getByLabelText("Pause all schedules")).toBeChecked());
+    await user.click(await screen.findByLabelText("Pause schedules and watchers"));
+    await waitFor(() => expect(screen.getByLabelText("Pause schedules and watchers")).toBeChecked());
     await act(async () => read.give([before]));
 
     // The answer was read before the pause, so the list is asked for again when it is shown.

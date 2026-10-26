@@ -361,6 +361,64 @@ fn memories() -> Vec<Memory> {
     ]
 }
 
+/// A folder watcher that is on, an email one Dots paused on an error, a GitHub one it paused on
+/// a flood (watchers spec sections 3 and 4).
+fn watchers() -> Vec<Watcher> {
+    let folder = Watcher {
+        id: "01J0WAT1".into(),
+        dot_id: "01J0DOT".into(),
+        name: "Invoices folder".into(),
+        config: WatcherConfig::Folder(FolderConfig {
+            path: r"C:\Users\u\Downloads\Invoices".into(),
+            pattern: "*.pdf".into(),
+            events: FolderEvent::ALL.to_vec(),
+            recursive: true,
+        }),
+        enabled: true,
+        paused_reason: None,
+        last_error: None,
+        last_event_at: Some(TS.into()),
+        created_at: TS.into(),
+        updated_at: TS.into(),
+    };
+    vec![
+        folder.clone(),
+        Watcher {
+            id: "01J0WAT2".into(),
+            name: "Billing mail".into(),
+            config: WatcherConfig::Email(EmailConfig {
+                address: "me@gmail.com".into(),
+                secret: "GMAIL_APP_PASSWORD".into(),
+                label: "Dots".into(),
+                from: Some("billing@acme.com".into()),
+                subject: Some("invoice".into()),
+                has_attachment: None,
+            }),
+            paused_reason: Some(PausedReason::Error),
+            last_error: Some(
+                "Gmail refused the app password for me@gmail.com, or IMAP is off for it.".into(),
+            ),
+            last_event_at: None,
+            ..folder.clone()
+        },
+        Watcher {
+            id: "01J0WAT3".into(),
+            name: "Repo events".into(),
+            config: WatcherConfig::Github(GithubConfig {
+                repos: vec!["owner/repo".into()],
+                events: vec![GithubEvent::Issue, GithubEvent::PullRequest],
+                secret: "GITHUB_TOKEN".into(),
+                label: None,
+                authors: Vec::new(),
+                skip_bots: true,
+                branches: Vec::new(),
+            }),
+            paused_reason: Some(PausedReason::Flood),
+            ..folder
+        },
+    ]
+}
+
 /// A pending follow-up that failed to start once, and one that fired.
 fn follow_ups() -> Vec<FollowUp> {
     let pending = FollowUp {
@@ -693,6 +751,19 @@ pub fn samples() -> Value {
                 failed_at: TS.into(),
             }],
             tools_changed: tools_changed()[..1].to_vec(),
+            watchers: vec![PausedWatcher {
+                watcher_id: "01J0WAT2".into(),
+                dot_id: "01J0DOT".into(),
+                dot_name: "nightly-tests".into(),
+                kind: WatcherKind::Email,
+                name: "Billing mail".into(),
+                reason: PausedReason::Error,
+                error: Some(
+                    "Gmail refused the app password for me@gmail.com, or IMAP is off for it."
+                        .into(),
+                ),
+                at: TS.into(),
+            }],
         }),
         // What `library_add` takes and the Library commands answer: a config of every kind and
         // transport, and entries of every kind (a plugin's own server among them).
@@ -777,6 +848,7 @@ pub fn samples() -> Value {
             "max_global_instructions": MAX_GLOBAL_INSTRUCTIONS,
             "max_memories": dots_core::memory::MAX_PER_DOT,
             "max_memory_text": dots_core::memory::MAX_TEXT,
+            "max_watcher_name": dots_core::watchers::MAX_NAME_CHARS,
         },
         "StartupError": to(StartupError {
             message: "Dots could not start: database disk image is malformed".into(),
@@ -789,9 +861,14 @@ pub fn samples() -> Value {
     samples["Message"] = to(messages());
     samples["FollowUp"] = to(follow_ups());
     samples["Memory"] = to(memories());
+    samples["Watcher"] = to(watchers());
     samples["Enums"]["MessageKind"] = to(MessageKind::ALL);
     samples["Enums"]["FollowUpStatus"] = to(FollowUpStatus::ALL);
     samples["Enums"]["MemorySource"] = to(MemorySource::ALL);
+    samples["Enums"]["WatcherKind"] = to(WatcherKind::ALL);
+    samples["Enums"]["PausedReason"] = to(PausedReason::ALL);
+    samples["Enums"]["FolderEvent"] = to(FolderEvent::ALL);
+    samples["Enums"]["GithubEvent"] = to(GithubEvent::ALL);
     samples["RuntimeEvent"]
         .as_array_mut()
         .expect("the RuntimeEvent samples")
@@ -810,6 +887,34 @@ pub fn samples() -> Value {
             }),
             to(RuntimeEvent::MemoriesUpdated {
                 dot_id: "01J0DOT".into(),
+            }),
+            to(RuntimeEvent::WatcherUpdated {
+                dot_id: "01J0DOT".into(),
+                watcher_id: "01J0WAT1".into(),
+            }),
+            to(RuntimeEvent::WatcherPaused {
+                dot_id: "01J0DOT".into(),
+                watcher_id: "01J0WAT3".into(),
+                name: "Repo events".into(),
+                reason: PausedReason::Flood,
+                error: None,
+            }),
+            to(RuntimeEvent::RunUpdated {
+                run: Run {
+                    id: "01J0RUN3".into(),
+                    root_run_id: "01J0RUN3".into(),
+                    trigger: TriggerKind::Watcher,
+                    payload: Some(json!({
+                        "source": "folder",
+                        "event": "created",
+                        "path": r"C:\Users\u\Downloads\Invoices\invoice-12.pdf",
+                        "relative": "invoice-12.pdf",
+                        "size": 1200,
+                        "watcher_id": "01J0WAT1",
+                        "watcher_name": "Invoices folder",
+                    })),
+                    ..run()
+                },
             }),
             to(RuntimeEvent::OrgUpdated {
                 org_id: "acme-eng".into(),

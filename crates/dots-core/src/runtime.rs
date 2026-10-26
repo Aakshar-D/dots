@@ -65,6 +65,8 @@ pub struct Config {
     /// Credential Manager under this data folder's install id, which is what the app uses.
     /// `Config::new` keeps them in memory, so a test never writes to Credential Manager.
     pub secrets: Option<Arc<dyn SecretStore>>,
+    /// Where email and GitHub watchers read (watchers spec §4). Tests point them at fakes.
+    pub watcher_sources: crate::watchers::Sources,
 }
 
 impl Config {
@@ -80,6 +82,7 @@ impl Config {
             clock: Arc::new(SystemClock),
             draft_limit: crate::skill_creator::DRAFT_LIMIT,
             secrets: Some(Arc::new(MemorySecrets::new())),
+            watcher_sources: crate::watchers::Sources::default(),
         }
     }
 
@@ -100,6 +103,7 @@ pub struct Runtime {
     hub: Arc<ApprovalHub>,
     runner: Arc<Runner>,
     scheduler: Arc<Scheduler>,
+    watchers: Arc<crate::watchers::Watchers>,
     library: LibraryService,
     vault: Vault,
     skill_drafts: SkillDrafts,
@@ -279,6 +283,14 @@ impl Runtime {
         // Dots' own `dots` MCP server serves the check-in tools to Claude runs.
         runner.set_checkins(checkins.clone());
         runner.set_vault(vault.clone());
+        // What watchers staged for their runs; a crash's leftovers go (watchers spec §4.2).
+        let watcher_files =
+            crate::watchers::files::WatcherFiles::new(cfg.data_dir.join("watchers"));
+        watcher_files.sweep(&store).await;
+        runner.set_watcher_files(watcher_files);
+        // Which dots are acting, for the folder watchers (watchers spec section 4.1).
+        let acting = crate::watchers::ActingTracker::new(cfg.clock.clone());
+        runner.set_acting(acting.clone());
         // The dots' browsers: Edge on each dot's own profile, Playwright MCP per run (browser
         // spec section 2).
         let browsers = crate::browser::Browsers::new(
@@ -332,6 +344,19 @@ impl Runtime {
         );
         scheduler.set_paused(settings.schedules_paused);
         scheduler.spawn(shutdown.clone());
+        // Watchers stop with the schedules (watchers spec section 5).
+        let watchers = crate::watchers::Watchers::new(crate::watchers::WatcherDeps {
+            store: store.clone(),
+            bus: bus.clone(),
+            runner: runner.clone(),
+            vault: vault.clone(),
+            clock: cfg.clock.clone(),
+            acting,
+            data_dir: cfg.data_dir.clone(),
+            sources: cfg.watcher_sources.clone(),
+        });
+        watchers.set_paused(settings.schedules_paused);
+        watchers.spawn(shutdown.clone());
         // Follow-ups wait while schedules are paused (check-ins spec section 6).
         follow_ups.set_paused(settings.schedules_paused);
         follow_ups.spawn(runner.clone(), shutdown.clone());
@@ -352,6 +377,7 @@ impl Runtime {
             hub,
             runner,
             scheduler,
+            watchers,
             clock: cfg.clock.clone(),
             port,
             server_error,
@@ -451,6 +477,7 @@ impl Runtime {
         change(&mut next);
         self.store.put_settings(&next).await?;
         self.scheduler.set_paused(next.schedules_paused);
+        self.watchers.set_paused(next.schedules_paused);
         self.follow_ups.set_paused(next.schedules_paused);
         *current = next.clone();
         Ok(next)
@@ -612,6 +639,7 @@ impl Runtime {
             review_runs,
             attention: self.store.list_schedule_attention().await?,
             tools_changed: self.library.tools_changed().await?,
+            watchers: self.store.paused_watchers().await?,
         })
     }
 
@@ -622,6 +650,7 @@ impl Runtime {
             + inbox.review_runs.len()
             + inbox.attention.len()
             + inbox.tools_changed.len()
+            + inbox.watchers.len()
             + self.store.count_waiting_messages().await?)
     }
 
@@ -844,6 +873,7 @@ impl Runtime {
         let dot = self.store.create_dot(&spec, org_id.as_deref()).await?;
         self.sync_schedule(&dot, false).await?;
         self.scheduler.reload();
+        self.watchers.reload();
         Ok(dot)
     }
 
@@ -859,6 +889,7 @@ impl Runtime {
         self.sync_schedule(&dot, dot.spec.enabled && !was_enabled)
             .await?;
         self.scheduler.reload();
+        self.watchers.reload();
         self.follow_ups.wake();
         Ok(dot)
     }
@@ -866,7 +897,16 @@ impl Runtime {
     /// Deletes the dot; its schedule row goes with it (`ON DELETE CASCADE`).
     pub async fn delete_dot(&self, id: &str) -> Result<()> {
         let had_row = self.store.get_schedule_state(id).await?.is_some();
+        let watchers: Vec<String> = self
+            .store
+            .list_watchers(id)
+            .await?
+            .into_iter()
+            .map(|w| w.id)
+            .collect();
         self.store.delete_dot_if_idle(id).await?;
+        // Its watchers went with it; what they staged and kept goes too.
+        self.watchers.forget(&watchers);
         // It can no longer be viewed (needs-you spec section 7).
         {
             let mut viewing = lock(&self.viewing);
@@ -880,6 +920,7 @@ impl Runtime {
             self.schedule_updated(id);
         }
         self.scheduler.reload();
+        self.watchers.reload();
         self.follow_ups.wake();
         Ok(())
     }
@@ -889,6 +930,7 @@ impl Runtime {
         let dot = self.store.set_dot_enabled(id, enabled).await?;
         self.sync_schedule(&dot, enabled && !was_enabled).await?;
         self.scheduler.reload();
+        self.watchers.reload();
         self.follow_ups.wake();
         Ok(dot)
     }
@@ -1322,5 +1364,50 @@ impl Runtime {
     /// Deletes any memory. `NotFound` for an unknown id.
     pub async fn memory_delete(&self, id: &str) -> Result<()> {
         self.checkins.memories().delete(id).await
+    }
+}
+
+/// Watchers, the person's side (watchers spec sections 7 and 8).
+impl Runtime {
+    pub fn watchers(&self) -> &Arc<crate::watchers::Watchers> {
+        &self.watchers
+    }
+
+    pub async fn watchers_list(&self, dot_id: &str) -> Result<Vec<crate::model::Watcher>> {
+        self.watchers.list(dot_id).await
+    }
+
+    pub async fn watcher_add(
+        &self,
+        dot_id: &str,
+        name: &str,
+        config: crate::model::WatcherConfig,
+    ) -> Result<crate::model::Watcher> {
+        self.watchers.add(dot_id, name, config).await
+    }
+
+    pub async fn watcher_update(
+        &self,
+        id: &str,
+        name: &str,
+        config: crate::model::WatcherConfig,
+    ) -> Result<crate::model::Watcher> {
+        self.watchers.update(id, name, config).await
+    }
+
+    pub async fn watcher_delete(&self, id: &str) -> Result<()> {
+        self.watchers.delete(id).await
+    }
+
+    pub async fn watcher_set_enabled(
+        &self,
+        id: &str,
+        enabled: bool,
+    ) -> Result<crate::model::Watcher> {
+        self.watchers.set_enabled(id, enabled).await
+    }
+
+    pub async fn watcher_resume(&self, id: &str) -> Result<crate::model::Watcher> {
+        self.watchers.resume(id).await
     }
 }
