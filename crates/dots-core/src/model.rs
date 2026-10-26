@@ -521,6 +521,8 @@ pub struct Inbox {
     pub attention: Vec<NeedsAttention>,
     /// By server name.
     pub tools_changed: Vec<ToolsChanged>,
+    /// Watchers Dots paused (too many runs, or an error), newest first (watchers spec §7).
+    pub watchers: Vec<PausedWatcher>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

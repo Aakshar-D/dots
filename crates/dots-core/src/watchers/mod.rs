@@ -1,13 +1,45 @@
 //! Watchers (watchers spec): what starts a dot when a file changes in a folder, an email
 //! arrives in a Gmail label, or something happens on a GitHub repository. This module holds the
-//! checks a watcher passes before it is saved, with the spec's sentences.
+//! checks a watcher passes before it is saved, with the spec's sentences, and `Watchers`, the
+//! service every event goes through (sections 5 and 7).
 
-use std::path::Path;
+pub mod acting;
+pub mod cap;
 
-use crate::model::{EmailConfig, FolderConfig, GithubConfig, WatcherConfig};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+
+use chrono::{DateTime, TimeDelta, Utc};
+use serde_json::Value;
+use tokio::sync::Notify;
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
+
+pub use acting::{ActingTracker, ACTING_GRACE};
+pub use cap::{FLOOD_CAP, FLOOD_WINDOW};
+
+use crate::events::{Bus, RuntimeEvent};
+use crate::model::{
+    EmailConfig, FolderConfig, GithubConfig, NewRun, PausedReason, Run, TriggerKind, Watcher,
+    WatcherConfig, WatcherKind,
+};
+use crate::runner::Runner;
+use crate::scheduler::Clock;
 use crate::store::Store;
-use crate::vault::EntryKind;
+use crate::util::{new_id, timestamp};
+use crate::vault::{EntryKind, Vault};
 use crate::{Error, Result};
+
+/// How often an email or GitHub watcher checks (spec sections 4.2 and 4.3).
+pub const POLL_EVERY: TimeDelta = TimeDelta::minutes(1);
+/// How long a watcher keeps failing before Dots pauses it (spec section 7).
+pub const GIVE_UP_AFTER: TimeDelta = TimeDelta::minutes(60);
+/// The waits after the first failures; every 10 minutes after them.
+pub const BACKOFF_MINUTES: [i64; 4] = [1, 2, 5, 10];
+/// The most text of an email body or a GitHub event a run gets.
+pub const MAX_BODY_CHARS: usize = 20_000;
 
 /// A watcher's name is 1 to 80 characters (spec section 3).
 pub const MAX_NAME_CHARS: usize = 80;
@@ -175,4 +207,433 @@ pub async fn check_config(store: &Store, config: &WatcherConfig) -> Result<Watch
         WatcherConfig::Email(c) => WatcherConfig::Email(check_email(store, c).await?),
         WatcherConfig::Github(c) => WatcherConfig::Github(check_github(store, c).await?),
     })
+}
+
+/// The retries of a failing watcher (spec section 7): 1, 2, 5 and 10 minutes, then every 10;
+/// none once it has failed for `GIVE_UP_AFTER`.
+#[derive(Debug, Default, Clone)]
+pub struct Backoff {
+    since: Option<DateTime<Utc>>,
+    attempts: usize,
+}
+
+impl Backoff {
+    pub fn new() -> Backoff {
+        Backoff::default()
+    }
+
+    /// A failure at `now`: when to try again, or `None` to give up.
+    pub fn failed(&mut self, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        let since = *self.since.get_or_insert(now);
+        if now - since >= GIVE_UP_AFTER {
+            return None;
+        }
+        let wait = BACKOFF_MINUTES.get(self.attempts).copied().unwrap_or(10);
+        self.attempts += 1;
+        Some(now + TimeDelta::minutes(wait))
+    }
+
+    pub fn succeeded(&mut self) {
+        *self = Backoff::default();
+    }
+}
+
+/// How a source failed: a transient failure is tried again, a permanent one pauses at once.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Failure {
+    Transient(String),
+    Permanent(String),
+}
+
+/// One event of a source: the run's payload, and the files to stage for it (email attachments:
+/// name and bytes).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SourceEvent {
+    pub payload: Value,
+    pub files: Vec<(String, Vec<u8>)>,
+}
+
+impl SourceEvent {
+    pub fn new(payload: Value) -> SourceEvent {
+        SourceEvent {
+            payload,
+            files: Vec::new(),
+        }
+    }
+}
+
+/// What `fire` did with an event.
+#[derive(Debug)]
+pub enum Fired {
+    Run(Box<Run>),
+    /// The hour was full: this event paused the watcher.
+    Capped,
+    /// The watcher, its dot or Dots is paused or off: nothing was done.
+    Off,
+}
+
+/// When a polling watcher checks next.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Poll {
+    Next(DateTime<Utc>),
+    Stopped,
+}
+
+/// Where email and GitHub watchers read; tests point them at fakes.
+#[derive(Debug, Clone)]
+pub struct Sources {
+    pub github_api: String,
+}
+
+impl Default for Sources {
+    fn default() -> Self {
+        Sources {
+            github_api: "https://api.github.com".to_string(),
+        }
+    }
+}
+
+pub struct WatcherDeps {
+    pub store: Store,
+    pub bus: Bus,
+    pub runner: Arc<Runner>,
+    pub vault: Vault,
+    pub clock: Arc<dyn Clock>,
+    pub acting: Arc<ActingTracker>,
+    pub data_dir: PathBuf,
+    pub sources: Sources,
+}
+
+/// The watchers service (spec sections 5 and 7): one task per running watcher, the one door
+/// every event goes through (`fire`), and where sources report failures.
+pub struct Watchers {
+    deps: WatcherDeps,
+    paused: AtomicBool,
+    reload: Notify,
+    tasks: Mutex<HashMap<String, (WatcherConfig, CancellationToken)>>,
+    backoffs: Mutex<HashMap<String, Backoff>>,
+}
+
+impl Watchers {
+    pub fn new(deps: WatcherDeps) -> Arc<Watchers> {
+        Arc::new(Watchers {
+            deps,
+            paused: AtomicBool::new(false),
+            reload: Notify::new(),
+            tasks: Mutex::new(HashMap::new()),
+            backoffs: Mutex::new(HashMap::new()),
+        })
+    }
+
+    /// Runs the service until `shutdown`: starts and stops the watchers' tasks on every reload.
+    pub fn spawn(self: &Arc<Self>, shutdown: CancellationToken) -> JoinHandle<()> {
+        let this = self.clone();
+        tokio::spawn(async move {
+            loop {
+                if let Err(e) = this.reconcile(&shutdown).await {
+                    tracing::warn!("watchers: reconcile failed: {e}");
+                }
+                tokio::select! {
+                    biased;
+                    _ = shutdown.cancelled() => break,
+                    _ = this.reload.notified() => {}
+                }
+            }
+            for (_, (_, token)) in this.tasks.lock().unwrap().drain() {
+                token.cancel();
+            }
+        })
+    }
+
+    /// Asks the service to start and stop tasks to match the watchers now.
+    pub fn reload(&self) {
+        self.reload.notify_one();
+    }
+
+    /// The person's "Pause schedules and watchers" (spec section 5).
+    pub fn set_paused(&self, paused: bool) {
+        self.paused.store(paused, Ordering::SeqCst);
+        self.reload();
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.paused.load(Ordering::SeqCst)
+    }
+
+    pub fn acting(&self) -> &Arc<ActingTracker> {
+        &self.deps.acting
+    }
+
+    fn updated(&self, watcher: &Watcher) {
+        let _ = self.deps.bus.send(RuntimeEvent::WatcherUpdated {
+            dot_id: watcher.dot_id.clone(),
+            watcher_id: watcher.id.clone(),
+        });
+    }
+
+    fn changed(&self, watcher: &Watcher) {
+        self.updated(watcher);
+        self.reload();
+    }
+
+    pub async fn list(&self, dot_id: &str) -> Result<Vec<Watcher>> {
+        self.deps.store.get_dot(dot_id).await?;
+        self.deps.store.list_watchers(dot_id).await
+    }
+
+    pub async fn add(&self, dot_id: &str, name: &str, config: WatcherConfig) -> Result<Watcher> {
+        let name = check_name(name)?;
+        let config = check_config(&self.deps.store, &config).await?;
+        let watcher = self.deps.store.add_watcher(dot_id, &name, &config).await?;
+        self.changed(&watcher);
+        Ok(watcher)
+    }
+
+    pub async fn update(&self, id: &str, name: &str, config: WatcherConfig) -> Result<Watcher> {
+        self.deps.store.get_watcher(id).await?;
+        let name = check_name(name)?;
+        let config = check_config(&self.deps.store, &config).await?;
+        let watcher = self.deps.store.update_watcher(id, &name, &config).await?;
+        self.backoffs.lock().unwrap().remove(id);
+        self.changed(&watcher);
+        Ok(watcher)
+    }
+
+    pub async fn delete(&self, id: &str) -> Result<()> {
+        let watcher = self.deps.store.delete_watcher(id).await?;
+        self.backoffs.lock().unwrap().remove(id);
+        self.stop_task(id);
+        self.changed(&watcher);
+        Ok(())
+    }
+
+    pub async fn set_enabled(&self, id: &str, enabled: bool) -> Result<Watcher> {
+        let watcher = self.deps.store.set_watcher_enabled(id, enabled).await?;
+        self.changed(&watcher);
+        Ok(watcher)
+    }
+
+    /// The person resumes a watcher Dots paused; nothing happens to one that was not paused.
+    pub async fn resume(&self, id: &str) -> Result<Watcher> {
+        let watcher = self.deps.store.get_watcher(id).await?;
+        if watcher.paused_reason.is_none() {
+            return Ok(watcher);
+        }
+        let watcher = self.deps.store.resume_watcher(id).await?;
+        self.backoffs.lock().unwrap().remove(id);
+        self.changed(&watcher);
+        Ok(watcher)
+    }
+
+    /// Dots pauses the watcher. Announced once: a watcher paused already stays as it is.
+    pub async fn pause(&self, id: &str, reason: PausedReason, error: Option<&str>) -> Result<()> {
+        let error = error.map(|e| crate::vault::redact::global().scrub(e).into_owned());
+        let at = timestamp(self.deps.clock.now());
+        let paused = self
+            .deps
+            .store
+            .pause_watcher(id, reason, error.as_deref(), &at)
+            .await?;
+        self.backoffs.lock().unwrap().remove(id);
+        self.stop_task(id);
+        if let Some(watcher) = paused {
+            self.updated(&watcher);
+            let _ = self.deps.bus.send(RuntimeEvent::WatcherPaused {
+                dot_id: watcher.dot_id.clone(),
+                watcher_id: watcher.id.clone(),
+                name: watcher.name.clone(),
+                reason,
+                error,
+            });
+        }
+        self.reload();
+        Ok(())
+    }
+
+    /// The one door every event goes through (spec section 5): one queued `watcher` run, unless
+    /// the watcher, its dot or Dots is paused or off, or the hour is full.
+    pub async fn fire(&self, watcher_id: &str, event: SourceEvent) -> Result<Fired> {
+        let watcher = self.deps.store.get_watcher(watcher_id).await?;
+        if self.is_paused() || !watcher.enabled || watcher.paused_reason.is_some() {
+            return Ok(Fired::Off);
+        }
+        if !self.deps.store.get_dot(&watcher.dot_id).await?.spec.enabled {
+            return Ok(Fired::Off);
+        }
+        let now = self.deps.clock.now();
+        if !cap::take(&self.deps.store, &watcher.id, now).await? {
+            self.pause(&watcher.id, PausedReason::Flood, None).await?;
+            return Ok(Fired::Capped);
+        }
+        let mut payload = event.payload;
+        if let Value::Object(map) = &mut payload {
+            map.insert("watcher_id".into(), Value::String(watcher.id.clone()));
+            map.insert("watcher_name".into(), Value::String(watcher.name.clone()));
+        }
+        let mut new = NewRun::new(&watcher.dot_id, TriggerKind::Watcher);
+        new.id = Some(new_id());
+        new.payload = Some(payload);
+        let run = self.deps.runner.enqueue(new).await?;
+        self.deps
+            .store
+            .touch_watcher_event(&watcher.id, &timestamp(now))
+            .await?;
+        self.updated(&watcher);
+        Ok(Fired::Run(Box::new(run)))
+    }
+
+    /// A source failed: a transient failure is retried by the backoff, until it has lasted
+    /// `GIVE_UP_AFTER`; a permanent one pauses the watcher at once.
+    pub async fn note_failure(&self, watcher_id: &str, failure: Failure) -> Result<Poll> {
+        match failure {
+            Failure::Permanent(error) => {
+                self.pause(watcher_id, PausedReason::Error, Some(&error))
+                    .await?;
+                Ok(Poll::Stopped)
+            }
+            Failure::Transient(error) => {
+                let now = self.deps.clock.now();
+                let next = self
+                    .backoffs
+                    .lock()
+                    .unwrap()
+                    .entry(watcher_id.to_string())
+                    .or_default()
+                    .failed(now);
+                match next {
+                    Some(at) => {
+                        let scrubbed = crate::vault::redact::global().scrub(&error).into_owned();
+                        self.deps
+                            .store
+                            .set_watcher_error(watcher_id, Some(&scrubbed))
+                            .await?;
+                        let watcher = self.deps.store.get_watcher(watcher_id).await?;
+                        self.updated(&watcher);
+                        Ok(Poll::Next(at))
+                    }
+                    None => {
+                        self.pause(watcher_id, PausedReason::Error, Some(&error))
+                            .await?;
+                        Ok(Poll::Stopped)
+                    }
+                }
+            }
+        }
+    }
+
+    /// A source worked: its backoff and its last error go.
+    pub async fn note_success(&self, watcher_id: &str) -> Result<()> {
+        self.backoffs.lock().unwrap().remove(watcher_id);
+        let watcher = self.deps.store.get_watcher(watcher_id).await?;
+        if watcher.last_error.is_some() && watcher.paused_reason.is_none() {
+            self.deps.store.set_watcher_error(watcher_id, None).await?;
+            self.updated(&watcher);
+        }
+        Ok(())
+    }
+
+    /// Checks a polling watcher once and says when to check next.
+    pub async fn poll_now(&self, watcher_id: &str) -> Result<Poll> {
+        let watcher = self.deps.store.get_watcher(watcher_id).await?;
+        match watcher.kind() {
+            WatcherKind::Folder | WatcherKind::Email | WatcherKind::Github => Ok(Poll::Stopped),
+        }
+    }
+
+    fn stop_task(&self, id: &str) {
+        if let Some((_, token)) = self.tasks.lock().unwrap().remove(id) {
+            token.cancel();
+        }
+    }
+
+    /// The watchers that should run: enabled, not paused by Dots, of an enabled dot, while Dots
+    /// is not paused.
+    async fn should_run(&self) -> Result<HashMap<String, WatcherConfig>> {
+        if self.is_paused() {
+            return Ok(HashMap::new());
+        }
+        let enabled: std::collections::HashSet<String> = self
+            .deps
+            .store
+            .list_dots()
+            .await?
+            .into_iter()
+            .filter(|d| d.spec.enabled)
+            .map(|d| d.id)
+            .collect();
+        Ok(self
+            .deps
+            .store
+            .all_watchers()
+            .await?
+            .into_iter()
+            .filter(|w| w.enabled && w.paused_reason.is_none() && enabled.contains(&w.dot_id))
+            .map(|w| (w.id, w.config))
+            .collect())
+    }
+
+    /// Stops the tasks of watchers that should not run or whose config changed, and starts the
+    /// missing ones.
+    async fn reconcile(self: &Arc<Self>, shutdown: &CancellationToken) -> Result<()> {
+        let wanted = self.should_run().await?;
+        let mut tasks = self.tasks.lock().unwrap();
+        tasks.retain(|id, (config, token)| {
+            let keep = wanted.get(id) == Some(config);
+            if !keep {
+                token.cancel();
+            }
+            keep
+        });
+        for (id, config) in wanted {
+            if tasks.contains_key(&id) {
+                continue;
+            }
+            let token = shutdown.child_token();
+            let started = match config.kind() {
+                WatcherKind::Folder => self.start_watch(&id, &config, &token),
+                WatcherKind::Email | WatcherKind::Github => {
+                    self.start_polls(&id, &token);
+                    true
+                }
+            };
+            if started {
+                tasks.insert(id, (config, token));
+            }
+        }
+        Ok(())
+    }
+
+    /// A folder watcher's OS watch (Task 3 fills it in); false when nothing was started.
+    fn start_watch(
+        self: &Arc<Self>,
+        _id: &str,
+        _config: &WatcherConfig,
+        _token: &CancellationToken,
+    ) -> bool {
+        false
+    }
+
+    /// A polling watcher's loop: check, then sleep until the time the check gave.
+    fn start_polls(self: &Arc<Self>, id: &str, token: &CancellationToken) {
+        let this = self.clone();
+        let id = id.to_string();
+        let token = token.clone();
+        tokio::spawn(async move {
+            loop {
+                match this.poll_now(&id).await {
+                    Ok(Poll::Next(at)) => {
+                        tokio::select! {
+                            _ = this.deps.clock.sleep_until(at) => {}
+                            _ = token.cancelled() => break,
+                        }
+                    }
+                    Ok(Poll::Stopped) => break,
+                    Err(e) => {
+                        tracing::warn!(watcher = %id, "watcher poll failed: {e}");
+                        break;
+                    }
+                }
+            }
+        });
+    }
 }

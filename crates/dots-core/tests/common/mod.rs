@@ -7,6 +7,7 @@ pub mod fake_mcp;
 pub mod playwright;
 pub mod secrets;
 pub mod tz;
+pub mod watchers;
 
 use std::path::Path;
 

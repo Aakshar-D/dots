@@ -658,6 +658,7 @@ pub fn samples() -> Value {
                     name: "nightly-tests".into(),
                 }],
             }],
+            watchers: vec![],
         }),
         // What `library_add` takes and the Library commands answer: a config of every kind and
         // transport, and entries of every kind (a plugin's own server among them).

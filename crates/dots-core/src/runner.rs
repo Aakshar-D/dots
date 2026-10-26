@@ -86,6 +86,9 @@ pub struct Runner {
     /// The dots' browsers (browser spec section 2), set once by the runtime before any run
     /// starts (`set_browsers`).
     browsers: OnceLock<Arc<crate::browser::Browsers>>,
+    /// Which dots are acting, for the watchers (watchers spec section 4.1), set once by the
+    /// runtime (`set_acting`). The runner tells it when it takes a run and lets it go.
+    acting: OnceLock<Arc<crate::watchers::ActingTracker>>,
 }
 
 impl Runner {
@@ -111,6 +114,7 @@ impl Runner {
             checkins: OnceLock::new(),
             vault: OnceLock::new(),
             browsers: OnceLock::new(),
+            acting: OnceLock::new(),
         })
     }
 
@@ -118,6 +122,23 @@ impl Runner {
     /// any run starts.
     pub fn set_vault(&self, vault: Vault) {
         let _ = self.vault.set(vault);
+    }
+
+    /// The tracker of acting dots the watchers read. Set once, before any run starts.
+    pub fn set_acting(&self, acting: Arc<crate::watchers::ActingTracker>) {
+        let _ = self.acting.set(acting);
+    }
+
+    fn acting_begin(&self, dot_id: &str) {
+        if let Some(acting) = self.acting.get() {
+            acting.begin(dot_id);
+        }
+    }
+
+    fn acting_end(&self, dot_id: &str) {
+        if let Some(acting) = self.acting.get() {
+            acting.end(dot_id);
+        }
     }
 
     fn emit_run(&self, run: &Run) {
@@ -272,14 +293,17 @@ impl Runner {
                     },
                 );
             }
+            self.acting_begin(&run.dot_id);
             match self.store.claim_run(&run.id).await {
                 Ok(true) => {}
                 Ok(false) => {
                     self.active.lock().unwrap().remove(&run.id);
+                    self.acting_end(&run.dot_id);
                     continue;
                 }
                 Err(e) => {
                     self.active.lock().unwrap().remove(&run.id);
+                    self.acting_end(&run.dot_id);
                     return Err(e);
                 }
             }
@@ -309,7 +333,10 @@ impl Runner {
     async fn recover_panicked(&self, run_id: &str, cancel: &CancellationToken) {
         tracing::error!(run = %run_id, "engine task panicked");
         cancel.cancel();
-        self.active.lock().unwrap().remove(run_id);
+        let released = self.active.lock().unwrap().remove(run_id);
+        if let Some(active) = released {
+            self.acting_end(&active.dot_id);
+        }
         self.forget_run(run_id);
         match self
             .store
@@ -365,7 +392,10 @@ impl Runner {
         self.after_finish(&run_id).await;
         // Released only after the resume check, so `is_active` going false means the
         // runner is completely done with the run.
-        self.active.lock().unwrap().remove(&run_id);
+        let released = self.active.lock().unwrap().remove(&run_id);
+        if let Some(active) = released {
+            self.acting_end(&active.dot_id);
+        }
         self.apply_late_cancel(&run_id, &by_user).await;
         self.wake.notify_one();
     }
