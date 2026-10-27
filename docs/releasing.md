@@ -50,7 +50,22 @@ The variable changes only where Dots looks; a download must still carry your sig
 
 Copies of Dots from before this feature (`0.1.0`) have no updater. Install the first release that has it by hand, once, on each machine. Every later version arrives on its own.
 
+## What each installed Dots offers (Settings › Updates)
+
+From the version with the updates UI (spec `docs/superpowers/specs/2026-10-27-updates-ui-design.md`):
+
+- **Check for updates** checks at once; **What's new** shows the running version's release notes.
+- **Install updates by itself when idle** (off by default): with an update downloaded, Dots installs it when no run is unfinished, nothing is typed in the composer, and the window has had no input for 10 minutes or is hidden. The installer runs quietly and the new Dots stays in the tray; the next time the window shows, a strip says "Dots updated itself to <version> at <time>". **Later** on the strip stops it until Dots next starts.
+- **Repair Dots…** downloads the running version again and reinstalls it, with a backup first.
+- **Go back to <version>…** is offered while the backup the last update made still exists. It reinstalls the version before the update and puts that backup in place of `dots.db`; the database being replaced is kept in `backups\failed-dots-<version>-<time>.db`. Anything done since the update is lost.
+- After each update, the new version must start and show its window within 2 minutes. If it does not (or the start fails, or it crashes before then), Dots offers **Go back**, on the fatal page when Dots cannot start, and never offers that version to this PC again. The record of this lives in `%LOCALAPPDATA%\dots\update-state.json`.
+- A version its developers withdraw (part 2's Releases page) shows a strip offering to go back.
+
+A copy started with `DOTS_DATA_DIR`, or a development build, says "Updates are off in this copy" and shows none of these.
+
 ## Going back to an older version
+
+Dots can do this itself (above). By hand, as a last resort:
 
 A broken release is fixed by publishing a newer one. Deleting a release on GitHub makes "latest" point at the one before it, but a Dots that has updated stays where it is. To take one machine back:
 

@@ -1,6 +1,6 @@
 # Updates in the Dots window: design
 
-Status: draft for review. Builds on `2026-10-20-auto-update-design.md` ("the update spec"), which stays in force except where §2 says otherwise.
+Status: part 1 (section 4) built; part 2 (section 5) to plan. Builds on `2026-10-20-auto-update-design.md` ("the update spec"), which stays in force except where §2 says otherwise.
 
 ## 1. Intent
 
@@ -239,3 +239,22 @@ No installed Dots has the Releases page yet: nothing is published, and 0.1.0 has
 - Whether the GitHub calls live in the app crate or the core (watchers' client may be reused).
 - How the workflow's stages are read from the Actions API (jobs and steps) and how often they are polled while the page is open *(at most every 10 s)*.
 - The exact layout of the Releases page within mockup B, and wording beyond what this document quotes.
+
+## 8. As built, part 1 (everyone's side and the safety net)
+
+Plan: `docs/superpowers/plans/2026-10-27-updates-part1.md`. Smoke: `docs/verification/2026-10-27-updates-part1-smoke.md`.
+
+**Deviations and the builder's choices**
+
+| Where | Built | Why |
+|---|---|---|
+| §4.4 | A set-aside database is `backups/failed-dots-<v>-<time>.db` | `dots-<v>-…` would count as a backup: pruning keeps three and could delete the update's backup |
+| §4.3 | A repair keeps the record's earlier go-back target | Going back after a repair goes to the version before the last update |
+| §4.2 | An idle install downloads the update again with the quiet installer (`/S`) | tauri-plugin-updater fixes installer arguments when it checks |
+| §4.2 | Whether `/S` beats the config's `/P` was not readable (no bundler sources on the build machine) | At worst a small progress window shows; to confirm on the first real idle install |
+| §4.1 | "Checking…" while a check runs | The version is unknown until the check answers |
+| §4.4 | The window reports its first render from the app frame, not the fatal page | A fatal page is not a healthy start |
+| §4.1 | The strip's Go back has no second confirm; Settings' does | The strip carries the warning sentence |
+| Wording | "Repairing Dots. Dots restarts in a moment.", "Going back to Dots <v>. …", "Dots will repair itself when … finishes.", "Dots will go back to <v> when … finishes.", the fatal page's "This start followed an update. Go back to <v>? …" | Beyond what §4 quotes |
+
+**Not seen in the smoke (person steps):** a real update, idle install, repair and go back on an installed Dots; the quiet installer's behaviour; the withdrawn strip against a real withdrawn release.
