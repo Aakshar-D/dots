@@ -16,6 +16,7 @@ use super::tests::{self, TestReport};
 use super::{data, Apps};
 use crate::events::RuntimeEvent;
 use crate::library::{AppOrigin, LibraryItem};
+use crate::policy::Action;
 use crate::{Error, Result};
 
 /// The tool's name on both engines (`mcp__dots__propose_app` on the Claude engine).
@@ -412,46 +413,88 @@ impl Apps {
     }
 
     /// `copy_app`: writes the files of the app `name`'s active version, as its version folder
-    /// holds them, into `folder` (already confined to the run's workspace), which must be new
-    /// or empty. `shown` is the folder as the dot named it. `Ok` is what the dot is told; `Err`
-    /// the problem, in a sentence for the dot.
+    /// holds them, into `folder` (already confined to the run `run_id`'s workspace), which must
+    /// be new or empty. `shown` is the folder as the dot named it. The write is judged first as
+    /// the run's dot policy judges a `Write` of `<folder>/app.json`, so the dot copies only where
+    /// it may write. A failure part way leaves nothing this call made. `Ok` is what the dot is
+    /// told; `Err` the problem, in a sentence for the dot.
     pub async fn copy_to(
         &self,
+        run_id: &str,
         name: &str,
         folder: PathBuf,
         shown: &str,
     ) -> std::result::Result<String, String> {
+        let run = self.store.get_run(run_id).await.map_err(said)?;
+        let dot = self.store.get_dot(&run.dot_id).await.map_err(said)?;
+        // `folder` is confined, so canonical (on Windows with a verbatim prefix): judge the path
+        // below the workspace, as a model names a file in its own workspace.
+        let workspace = run.workspace_path.as_deref().map(std::path::Path::new);
+        let target = folder.join("app.json");
+        let target = workspace.and_then(|ws| {
+            let canonical = std::fs::canonicalize(ws).ok();
+            let rel = |ws: &std::path::Path| target.strip_prefix(ws).ok().map(PathBuf::from);
+            canonical.as_deref().and_then(rel).or_else(|| rel(ws))
+        });
+        let allowed = target.is_some_and(|target| {
+            let write = json!({ "file_path": target.to_string_lossy() });
+            dot.spec.policy.resolve_in("Write", &write, workspace) == Action::Allow
+        });
+        if !allowed {
+            return Err(format!(
+                "your rules do not let you write to {shown}, so the app cannot be copied there"
+            ));
+        }
         let (item, config) = match self.get(name).await {
             Ok(found) => found,
             Err(Error::NotFound(_)) => return Err(format!("there is no app {name}")),
             Err(e) => return Err(said(e)),
         };
         let src = self.load(&item, &config).await.map_err(said)?;
-        let refused = format!("the folder {shown} is not empty: copy the app into a new folder");
+        let in_use = format!("the folder {shown} is not empty: copy the app into a new folder");
+        let is_file = format!("{shown} is a file: copy the app into a new folder");
         blocking(move || -> std::result::Result<(), String> {
             if folder.is_file() {
-                return Err(refused);
+                return Err(is_file);
             }
             if let Ok(mut entries) = std::fs::read_dir(&folder) {
                 if entries.next().is_some() {
-                    return Err(refused);
+                    return Err(in_use);
                 }
             }
-            for (path, bytes) in src.files() {
-                let file = folder.join(path);
-                if let Some(parent) = file.parent() {
-                    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            // What this call makes, in order: the folders that were missing (the folder itself
+            // when it was new) and the files it wrote.
+            let mut made: Vec<PathBuf> = Vec::new();
+            let written = (|| -> std::io::Result<()> {
+                for (path, bytes) in src.files() {
+                    let file = folder.join(path);
+                    if let Some(parent) = file.parent() {
+                        let mut missing = Vec::new();
+                        let mut up = Some(parent);
+                        while let Some(dir) = up.filter(|d| !d.exists()) {
+                            missing.push(dir.to_path_buf());
+                            up = dir.parent();
+                        }
+                        std::fs::create_dir_all(parent)?;
+                        made.extend(missing.into_iter().rev());
+                    }
+                    made.push(file.clone());
+                    std::fs::write(file, bytes)?;
                 }
-                std::fs::write(file, bytes).map_err(|e| e.to_string())?;
+                Ok(())
+            })();
+            if let Err(e) = written {
+                for path in made.iter().rev() {
+                    let _ = std::fs::remove_file(path).or_else(|_| std::fs::remove_dir(path));
+                }
+                return Err(e.to_string());
             }
             Ok(())
         })
         .await
         .map_err(said)??;
         Ok(format!(
-            "Copied version {} of the app {name} into {shown}. Change it there, keep its \
-             migrations as they are and add new ones after them, then send the whole folder with \
-             propose_app.",
+            "Copied version {} of the app {name} into {shown}. Change it there, keep its              migrations as they are and add new ones after them, then send the whole folder with              propose_app.",
             config.version
         ))
     }

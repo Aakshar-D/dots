@@ -266,8 +266,9 @@ async fn call_propose(s: &ServerState, run_id: &str, req: &Value) -> Result<Valu
 
 /// Checks a `copy_app` call against the dot's policy under `ProposeApp`, waiting for an
 /// approval when a rule asks, and copies the app into the folder, confined to the run's
-/// workspace (app library spec section 15). A call that is not performed is a tool result with
-/// `isError`.
+/// workspace (app library spec section 15); `copy_to` also judges the destination as a `Write`
+/// of the dot. A call without `app` and `path` as text is refused before the gate. A call that
+/// is not performed is a tool result with `isError`.
 async fn call_copy(s: &ServerState, run_id: &str, req: &Value) -> Result<Value, (i64, String)> {
     let Some(apps) = s.runner.apps() else {
         return Err((-32602, "unknown tool".to_string()));
@@ -282,6 +283,9 @@ async fn call_copy(s: &ServerState, run_id: &str, req: &Value) -> Result<Value, 
     };
     if let Value::Object(args) = &mut input {
         args.retain(|key, _| crate::apps::propose::COPY_REQUIRED.contains(&key.as_str()));
+    }
+    if !(input["app"].is_string() && input["path"].is_string()) {
+        return Ok(not_performed("copy_app needs \"app\" and \"path\" as text"));
     }
     let input = match s
         .hub
@@ -306,7 +310,7 @@ async fn call_copy(s: &ServerState, run_id: &str, req: &Value) -> Result<Value, 
         Err(e) => return Ok(not_performed(&e)),
     };
     let app = input["app"].as_str().unwrap_or_default();
-    Ok(match apps.copy_to(app, folder, path).await {
+    Ok(match apps.copy_to(run_id, app, folder, path).await {
         Ok(text) => json!({ "content": [{ "type": "text", "text": text }] }),
         Err(text) => not_performed(&cap_head(text)),
     })

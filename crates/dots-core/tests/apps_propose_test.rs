@@ -440,6 +440,8 @@ async fn a_claude_dot_copies_an_installed_app_through_dots_own_server() {
         {"emit": {"type": "system", "subtype": "init", "session_id": "$SESSION"}},
         {"mcp_call": {"server": "dots", "tool": "copy_app",
                       "arguments": {"app": "expenses", "path": "copy"}}},
+        {"mcp_call": {"server": "dots", "tool": "copy_app",
+                      "arguments": {"path": "other"}}},
         {"emit": {"type": "result", "subtype": "success", "is_error": false, "result": "done",
                   "usage": {"input_tokens": 1, "output_tokens": 1}}}
     ]);
@@ -479,6 +481,30 @@ async fn a_claude_dot_copies_an_installed_app_through_dots_own_server() {
         "{args:?}"
     );
     assert!(t.dir.path().join("copy").join("logic.js").is_file());
+    // A call without `app` is refused before the gate: no approval is stored for the run.
+    let results: Vec<Value> =
+        t.rt.store()
+            .list_events(&run.id, 0)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|ev| ev.kind == "tool_result")
+            .map(|ev| ev.data)
+            .collect();
+    assert_eq!(results.len(), 2, "{results:?}");
+    assert_eq!(results[1]["is_error"], true, "{results:?}");
+    assert!(
+        results[1].to_string().contains("copy_app needs"),
+        "{results:?}"
+    );
+    assert!(t
+        .rt
+        .store()
+        .approvals_for_run(&run.id)
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(!t.dir.path().join("other").exists());
     t.rt.shutdown();
 }
 

@@ -96,7 +96,7 @@ impl Session {
     }
 
     /// `copy_app` after the gate allowed it: `path` was confined to the workspace by `prepare`,
-    /// and is resolved again here.
+    /// and is resolved again here. `copy_to` judges the destination as a `Write` of the dot.
     pub(super) async fn copy_app(&self, input: &Value) -> ToolOutput {
         let Some(apps) = &self.apps else {
             return ToolOutput::err("copy_app is not available in this run");
@@ -107,7 +107,12 @@ impl Session {
             Err(e) => return ToolOutput::err(e),
         };
         match apps
-            .copy_to(tools::str_arg(input, "app"), folder, shown)
+            .copy_to(
+                &self.ctx.run_id,
+                tools::str_arg(input, "app"),
+                folder,
+                shown,
+            )
             .await
         {
             Ok(text) => ToolOutput::ok(text),
