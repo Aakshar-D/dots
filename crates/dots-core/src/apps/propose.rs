@@ -374,6 +374,11 @@ impl Apps {
     /// the app it changes. A change whose app has moved on since it was checked is a
     /// `Conflict`.
     pub async fn accept(&self, p: &AppProposal, on_kept: bool) -> Result<LibraryItem> {
+        if on_kept && p.base_version.is_some() {
+            return Err(Error::Invalid(
+                "kept data is offered only to a new app".into(),
+            ));
+        }
         let dir = self.proposed_dir(&p.id);
         let src = blocking(move || source::read_folder(&dir)).await??;
         let Some(base) = p.base_version else {

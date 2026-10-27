@@ -120,6 +120,8 @@ async fn a_new_app_that_keeps_the_migrations_is_offered_the_kept_data_and_starts
     assert_eq!(items(&apps).await, ["Ink"], "the kept row is there");
     assert!(apps.kept().await.unwrap().is_empty());
     assert!(!apps.app_dir(&old.id).exists());
+    let gone = apps.delete_kept(&old.id).await;
+    assert!(matches!(gone, Err(Error::NotFound(_))), "{gone:?}");
 }
 
 #[tokio::test]
@@ -174,4 +176,80 @@ async fn removing_an_app_forgets_its_topics() {
     apps.remove("expenses", true, false).await.unwrap();
     assert!(store.open_app_topics(&item.id).await.unwrap().is_empty());
     assert_eq!(store.prune_app_topics().await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn a_failed_migration_on_kept_data_moves_it_back_and_keeps_it_listed() {
+    let (dir, store, apps) = fixture().await;
+    let (old, _) = apps.get("expenses").await.unwrap();
+    apps.remove("expenses", true, false).await.unwrap();
+    let mut files = expenses();
+    files.push((
+        "migrations/0002_twice.sql",
+        "INSERT INTO expenses SELECT * FROM expenses;\n".to_string(),
+    ));
+    let p = proposed(&dir, &store, &apps, &files).await;
+    assert!(p.summary.kept_data.is_some());
+    let failed = apps.accept(&p, true).await;
+    assert!(failed.is_err(), "{failed:?}");
+    assert!(apps.list().await.unwrap().is_empty(), "nothing was added");
+    let kept = apps.kept().await.unwrap();
+    assert_eq!(kept.len(), 1, "{kept:?}");
+    assert_eq!(kept[0].id, old.id);
+    assert!(kept[0].bytes > 0);
+
+    let again = proposed(&dir, &store, &apps, &expenses()).await;
+    let item = apps.accept(&again, true).await.unwrap();
+    assert_ne!(item.id, old.id);
+    assert_eq!(items(&apps).await, ["Ink"]);
+}
+
+#[tokio::test]
+async fn the_offered_kept_data_is_started_on_though_newer_kept_data_appeared() {
+    let (dir, store, apps) = fixture().await;
+    let (old, _) = apps.get("expenses").await.unwrap();
+    apps.remove("expenses", true, false).await.unwrap();
+    let p = proposed(&dir, &store, &apps, &expenses()).await;
+    assert_eq!(
+        p.summary.kept_data.as_ref().map(|k| k.id.clone()),
+        Some(old.id.clone())
+    );
+    apps.install(
+        read_folder(&dir.path().join("first")).unwrap(),
+        AppOrigin::Proposed,
+    )
+    .await
+    .unwrap();
+    let (newer, _) = apps.get("expenses").await.unwrap();
+    apps.remove("expenses", true, false).await.unwrap();
+
+    apps.accept(&p, true).await.unwrap();
+    assert_eq!(
+        items(&apps).await,
+        ["Ink"],
+        "the offered data was started on"
+    );
+    let kept: Vec<String> = apps
+        .kept()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|k| k.id)
+        .collect();
+    assert_eq!(kept, [newer.id], "only the newer kept data is left");
+}
+
+#[tokio::test]
+async fn kept_data_is_offered_only_to_a_new_app() {
+    let (dir, store, apps) = fixture().await;
+    let mut files = expenses();
+    files.push((
+        "migrations/0002_categories.sql",
+        "CREATE TABLE categories (name TEXT PRIMARY KEY);\n".to_string(),
+    ));
+    let p = proposed(&dir, &store, &apps, &files).await;
+    assert!(p.base_version.is_some());
+    let refused = apps.accept(&p, true).await;
+    assert!(matches!(refused, Err(Error::Invalid(_))), "{refused:?}");
+    apps.accept(&p, false).await.unwrap();
 }

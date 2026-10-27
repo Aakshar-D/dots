@@ -78,6 +78,11 @@ pub(super) fn note_removed(
     title: &str,
     src: Option<&AppSource>,
 ) -> Result<()> {
+    // A removal retried after it stopped half way finds the note written while the code was whole;
+    // a new one could name fewer migrations (or none) and let a wrong app start on the data.
+    if dir.join(REMOVED_FILE).exists() {
+        return Ok(());
+    }
     let note = Removed {
         name: name.to_string(),
         title: title.to_string(),
@@ -97,15 +102,43 @@ pub(super) fn note_removed(
     Ok(())
 }
 
-/// Moves the database files from `from` to `to`. Blocks.
+/// Moves the database files from `from` to `to`, `data.db` last: until it moves the data is where
+/// it was. When a rename fails, the files already moved go back, so the data stays together on one
+/// side. Blocks.
 pub(super) fn move_data(from: &Path, to: &Path) -> Result<()> {
     std::fs::create_dir_all(to)?;
-    for file in data_files() {
-        if from.join(&file).exists() {
-            std::fs::rename(from.join(&file), to.join(&file))?;
+    let mut moved: Vec<String> = Vec::new();
+    for file in data_files().into_iter().rev() {
+        if !from.join(&file).exists() {
+            continue;
         }
+        if let Err(e) = std::fs::rename(from.join(&file), to.join(&file)) {
+            for back in moved.iter().rev() {
+                let _ = std::fs::rename(to.join(back), from.join(back));
+            }
+            return Err(e.into());
+        }
+        moved.push(file);
     }
     Ok(())
+}
+
+/// Whether `dir` holds any of an app's database files.
+fn has_data(dir: &Path) -> bool {
+    data_files().iter().any(|f| dir.join(f).exists())
+}
+
+/// Clears the folder of an app that could not be added on the kept data of `kept_dir`. A folder
+/// that still holds database files (they could not all go back) is kept, without its code and
+/// with a copy of the kept folder's note, so the Apps screen lists it as kept data; any other is
+/// deleted. Blocks.
+pub(super) fn clear_failed(app_dir: &Path, kept_dir: &Path) {
+    if has_data(app_dir) {
+        let _ = std::fs::remove_dir_all(app_dir.join("code"));
+        let _ = std::fs::copy(kept_dir.join(REMOVED_FILE), app_dir.join(REMOVED_FILE));
+    } else {
+        let _ = std::fs::remove_dir_all(app_dir);
+    }
 }
 
 /// Every folder below `root` with a `removed.json`, and the migrations it names. Blocks.
@@ -171,11 +204,12 @@ impl Apps {
 
     /// Deletes the kept data `id`; `NotFound` when there is none.
     pub async fn delete_kept(&self, id: &str) -> Result<()> {
+        // Checked under the lock: an install that moves this data into a new app holds it too.
+        let lock = self.lock(id);
+        let _held = lock.lock().await;
         if !self.kept().await?.iter().any(|k| k.id == id) {
             return Err(Error::NotFound(format!("kept data {id}")));
         }
-        let lock = self.lock(id);
-        let _held = lock.lock().await;
         let dir = self.app_dir(id);
         blocking(move || remove_all(&dir)).await?
     }
@@ -184,20 +218,18 @@ impl Apps {
     /// review card offers to start the new app on.
     pub async fn kept_fit(&self, src: &AppSource) -> Result<Option<KeptOffer>> {
         for (kept, ran) in self.kept_notes().await? {
-            let Some(ran) = ran else {
-                continue;
-            };
-            if kept.name == src.manifest.name && fits(&ran, &src.migrations) {
-                return Ok(Some(KeptOffer {
-                    migrations: src.migrations[ran.len()..]
-                        .iter()
-                        .map(|m| m.file.clone())
-                        .collect(),
-                    id: kept.id,
-                    title: kept.title,
-                    removed_at: kept.removed_at,
-                    bytes: kept.bytes,
-                }));
+            if let Some(offer) = offer_for(src, kept, ran) {
+                return Ok(Some(offer));
+            }
+        }
+        Ok(None)
+    }
+
+    /// The offer of the kept data `kept_id` to `src`, when that data still exists and fits it.
+    pub async fn kept_fit_of(&self, src: &AppSource, kept_id: &str) -> Result<Option<KeptOffer>> {
+        for (kept, ran) in self.kept_notes().await? {
+            if kept.id == kept_id {
+                return Ok(offer_for(src, kept, ran));
             }
         }
         Ok(None)
@@ -209,17 +241,33 @@ impl Apps {
     pub async fn install_kept(&self, src: AppSource, kept_id: &str) -> Result<LibraryItem> {
         let lock = self.lock(kept_id);
         let _held = lock.lock().await;
-        match self.kept_fit(&src).await? {
-            Some(offer) if offer.id == kept_id => {}
-            _ => {
-                return Err(Error::Conflict(format!(
-                    "the data kept from the removed {} is gone or no longer fits; add the app \
-                     without it",
-                    src.manifest.title
-                )))
-            }
+        if self.kept_fit_of(&src, kept_id).await?.is_none() {
+            return Err(Error::Conflict(format!(
+                "the data kept from the removed {} is gone or no longer fits; add the app \
+                 without it",
+                src.manifest.title
+            )));
         }
         self.install_on(src, AppOrigin::Proposed, Some(kept_id))
             .await
     }
+}
+
+/// The offer that kept data `kept`, with the migrations `ran` (`None` when unknown), makes to
+/// `src`: the same name, and migrations that begin with those that ran. `None` when it makes none.
+fn offer_for(src: &AppSource, kept: KeptData, ran: Option<Vec<RanMigration>>) -> Option<KeptOffer> {
+    let ran = ran?;
+    if kept.name != src.manifest.name || !fits(&ran, &src.migrations) {
+        return None;
+    }
+    Some(KeptOffer {
+        migrations: src.migrations[ran.len()..]
+            .iter()
+            .map(|m| m.file.clone())
+            .collect(),
+        id: kept.id,
+        title: kept.title,
+        removed_at: kept.removed_at,
+        bytes: kept.bytes,
+    })
 }

@@ -497,21 +497,35 @@ impl Apps {
         let app_dir = self.app_dir(&item.id);
         let kept_dir = kept.map(|id| self.app_dir(id));
         let written = blocking(move || -> Result<()> {
-            write_version(&code, &src)?;
+            if let Err(e) = write_version(&code, &src) {
+                // The folder holds only code here: the kept data moves in after it.
+                let _ = std::fs::remove_dir_all(&app_dir);
+                return Err(e);
+            }
             if let Some(from) = &kept_dir {
-                crate::apps::kept::move_data(from, &app_dir)?;
+                if let Err(e) = crate::apps::kept::move_data(from, &app_dir) {
+                    crate::apps::kept::clear_failed(&app_dir, from);
+                    return Err(e);
+                }
             }
             let migrated = data::open(&data_path)
                 .and_then(|mut conn| data::migrate(&mut conn, &src.migrations));
             match (migrated, &kept_dir) {
                 (Ok(_), Some(from)) => {
-                    let _ = remove_all(from);
+                    // The note goes first, so nothing lists the old folder again.
+                    if let Err(e) = std::fs::remove_file(from.join(crate::apps::kept::REMOVED_FILE))
+                    {
+                        tracing::warn!(app = %name, "the removed app's note could not be deleted: {e}");
+                    }
+                    if let Err(e) = remove_all(from) {
+                        tracing::warn!(app = %name, "the removed app's folder could not be deleted: {e}");
+                    }
                     Ok(())
                 }
                 (Ok(_), None) => Ok(()),
                 (Err(e), Some(from)) => {
                     let _ = crate::apps::kept::move_data(&app_dir, from);
-                    let _ = std::fs::remove_dir_all(&app_dir);
+                    crate::apps::kept::clear_failed(&app_dir, from);
                     Err(e)
                 }
                 (Err(e), None) => {
