@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 
 import type { Message } from "@/api/types";
+import { AppReviews } from "@/components/AppReviewCard";
 import { Button } from "@/components/ui/button";
 import type { Topic } from "@/lib/home-topics";
 import { useStickToBottom } from "@/lib/use-stick-to-bottom";
@@ -46,6 +47,8 @@ export function Timeline(props: {
                 dotName={dotName}
                 onReply={() => props.onReply(topic)}
               />
+              {/* An app the run sent for review waits under its card. */}
+              <AppReviews runs={topic.runs.slice(0, 1)} dotName={dotName} />
               {topic.runs.length > 1 && (
                 <TopicRuns runs={topic.runs.slice(1)} checkIns={checkIns} dotName={dotName} />
               )}
