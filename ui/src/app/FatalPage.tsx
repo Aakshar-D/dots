@@ -1,3 +1,9 @@
+import { useMutation } from "@tanstack/react-query";
+
+import { commands } from "@/api/commands";
+import { Button } from "@/components/ui/button";
+import { errorMessage } from "@/lib/notify";
+
 /// Where every version's installer is (updates spec §8).
 const RELEASES = "https://github.com/Aakshar-D/dots/releases";
 
@@ -7,7 +13,10 @@ export function FatalPage(props: {
   message: string;
   logDir: string | null;
   backup: string | null;
+  /// The version Go back installs when this start followed a failed update.
+  goBack: string | null;
 }) {
+  const goBack = useMutation({ mutationFn: commands.updateGoBack });
   return (
     <main className="mx-auto flex h-screen max-w-2xl flex-col justify-center gap-4 p-8">
       <h1 className="text-xl font-semibold">Dots could not start</h1>
@@ -27,6 +36,27 @@ export function FatalPage(props: {
           previous version's installer is on{" "}
           <span className="font-mono text-foreground select-all">{RELEASES}</span>.
         </p>
+      )}
+      {props.goBack && (
+        <div className="flex flex-col items-start gap-2">
+          <p className="text-sm">
+            This start followed an update. Go back to {props.goBack}? Your data from before the
+            update comes back with it; anything done since the update is lost.
+          </p>
+          <Button size="sm" disabled={goBack.isPending} onClick={() => goBack.mutate()}>
+            Go back to {props.goBack}
+          </Button>
+          {goBack.isError && (
+            <p role="alert" className="text-sm text-destructive">
+              {errorMessage(goBack.error)}
+            </p>
+          )}
+          {goBack.isSuccess && (
+            <p role="status" className="text-sm">
+              Going back to Dots {props.goBack}. Dots restarts in a moment.
+            </p>
+          )}
+        </div>
       )}
       <p className="text-sm text-muted-foreground">
         Close this window to quit. Dots tries again the next time you start it.

@@ -1,11 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Link } from "react-router";
 
 import { commands } from "@/api/commands";
 import type { Status, UpdateNote } from "@/api/types";
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { Button } from "@/components/ui/button";
+import { WhatsNewDialog } from "@/components/WhatsNewDialog";
+import { localTime } from "@/lib/format";
 import { notifyError } from "@/lib/notify";
 import { invalidate, keys, takeStatus } from "@/lib/query";
 
@@ -81,15 +83,78 @@ function UpdateBanner() {
     onError: notifyError,
   });
   const whatsNew = useMutation({ mutationFn: commands.updateOpenNotes, onError: notifyError });
+  const [notesOf, setNotesOf] = useState<string | null>(null);
   if (!note || note.state === "none") return null;
   if (note.state === "installing") {
+    const doing =
+      note.purpose === "repair"
+        ? "Repairing Dots."
+        : note.purpose === "go_back"
+          ? `Going back to Dots ${note.version}.`
+          : `Installing Dots ${note.version}.`;
     return (
       <Banner tone="info">
-        <span className="flex-1">Installing Dots {note.version}. Dots restarts in a moment.</span>
+        <span className="flex-1">{doing} Dots restarts in a moment.</span>
       </Banner>
     );
   }
   const busy = press.isPending;
+  if (note.state === "unhealthy" || note.state === "withdrawn") {
+    const back = note.back_to;
+    const said =
+      note.state === "unhealthy"
+        ? back
+          ? `Dots ${note.version} did not start properly. Go back to ${back}? Your data from before the update comes back with it; anything done since the update is lost.`
+          : `Dots ${note.version} did not start properly, and there is no backup of the version before it to go back to.`
+        : back
+          ? `The developers withdrew Dots ${note.version}. Go back to ${back}?`
+          : `The developers withdrew Dots ${note.version}. A fixed version will be offered when it is out.`;
+    return (
+      <Banner tone="warning">
+        <span className="flex-1">{said}</span>
+        {back && (
+          <Button size="sm" disabled={busy} onClick={() => press.mutate(commands.updateGoBack)}>
+            Go back
+          </Button>
+        )}
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={busy}
+          onClick={() => press.mutate(commands.updateLater)}
+        >
+          Not now
+        </Button>
+      </Banner>
+    );
+  }
+  if (note.state === "updated_itself") {
+    return (
+      <Banner tone="info">
+        <span className="flex-1">
+          Dots updated itself to {note.version} at {localTime(note.at)}.
+        </span>
+        <Button size="sm" variant="outline" onClick={() => setNotesOf(note.version)}>
+          What's new
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={busy}
+          onClick={() => press.mutate(commands.updateDismissUpdated)}
+        >
+          Dismiss
+        </Button>
+        {notesOf && (
+          <WhatsNewDialog
+            version={notesOf}
+            open
+            onOpenChange={(open) => !open && setNotesOf(null)}
+          />
+        )}
+      </Banner>
+    );
+  }
   if (note.state === "failed") {
     return (
       <Banner tone="warning">
@@ -110,11 +175,15 @@ function UpdateBanner() {
   }
   if (note.state === "waiting") {
     const many = note.waiting_for.length > 1;
+    const when = `when ${dotNames(note.waiting_for)} ${many ? "finish" : "finishes"}.`;
     return (
       <Banner tone="info">
         <span className="flex-1">
-          Will restart into Dots {note.version} when {dotNames(note.waiting_for)}{" "}
-          {many ? "finish" : "finishes"}. New runs wait until after the update.
+          {note.purpose === "repair"
+            ? `Dots will repair itself ${when}`
+            : note.purpose === "go_back"
+              ? `Dots will go back to ${note.version} ${when}`
+              : `Will restart into Dots ${note.version} ${when} New runs wait until after the update.`}
         </span>
         <Button
           size="sm"
@@ -127,7 +196,6 @@ function UpdateBanner() {
       </Banner>
     );
   }
-  if (note.state !== "ready") return null;
   const { working } = note;
   const many = working.length > 1;
   return (
