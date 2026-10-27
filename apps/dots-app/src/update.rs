@@ -172,19 +172,37 @@ impl UpdateState {
     /// Repair or Go back, whose download is ready under `label` (the version it installs):
     /// installs at once when no dot has a run working, else waits for them, like "Restart to
     /// update". Nothing when an install has begun.
-    pub fn begin_other(&mut self, purpose: Purpose, label: &str, working: &[String]) -> Next {
+    pub fn begin_other(
+        &mut self,
+        purpose: Purpose,
+        label: &str,
+        working: &[String],
+    ) -> dots_core::Result<Next> {
         if self.installing {
-            return Next::Nothing;
+            return Err(dots_core::Error::Conflict(
+                "An install has begun; Dots is about to restart.".into(),
+            ));
+        }
+        if self.waiting {
+            return Err(dots_core::Error::Conflict(format!(
+                "Dots is already waiting to install {}. Cancel that first.",
+                self.ready.as_deref().unwrap_or("an update")
+            )));
         }
         self.ready = Some(label.to_string());
         self.purpose = purpose;
         self.later = false;
         self.error = None;
         if working.is_empty() {
-            return self.begin();
+            return Ok(self.begin());
         }
         self.waiting = true;
-        Next::Nothing
+        Ok(Next::Nothing)
+    }
+
+    /// What the ready install is for and the version it installs.
+    pub fn ready_purpose(&self) -> Option<(Purpose, &str)> {
+        self.ready.as_deref().map(|v| (self.purpose, v))
     }
 
     /// A downloaded update, checked against Dots' key. True when the note changed.
@@ -251,11 +269,14 @@ impl UpdateState {
     /// with no update ready that is all it does, so the next update still shows.
     pub fn later(&mut self) {
         self.error = None;
+        // "Not now" on Unhealthy or Withdrawn dismisses that strip only: an update ready
+        // behind it shows next, and the idle install is not stopped.
         if matches!(
             self.notice,
             Some(UpdateNote::Unhealthy { .. } | UpdateNote::Withdrawn { .. })
         ) {
             self.notice = None;
+            return;
         }
         if self.ready.is_some() {
             self.later = true;
@@ -310,9 +331,17 @@ impl UpdateState {
         }
     }
 
-    /// "Cancel": stop waiting, and let the queue start again.
-    pub fn cancel_wait(&mut self) {
+    /// "Cancel": stop waiting, and let the queue start again. A cancelled Repair or Go back is
+    /// dropped, so it is never offered as an update; true when that happened and its download
+    /// must go too.
+    pub fn cancel_wait(&mut self) -> bool {
         self.waiting = false;
+        if self.installing || self.purpose == Purpose::Update {
+            return false;
+        }
+        self.ready = None;
+        self.purpose = Purpose::Update;
+        true
     }
 
     fn check_ready(&self) -> dots_core::Result<()> {
@@ -402,15 +431,32 @@ pub fn undo_set_aside(data_dir: &Path, moved: &Path) -> Result<(), String> {
         .and_then(|n| n.to_str())
         .ok_or_else(|| format!("{} is not a set-aside database", moved.display()))?;
     let dir = moved.parent().unwrap_or(data_dir);
+    // The restored copy is moved aside first, never deleted before the original is back
+    // (final review I-5): if putting the original back fails, `dots.db` is missing and the
+    // next start puts the set-aside database back (`startup::recover_set_aside`).
+    let restored = format!("restored-{name}");
+    for file in DB_FILES {
+        let from = data_dir.join(file);
+        if from.exists() {
+            let to = dir.join(format!("{restored}{}", &file["dots.db".len()..]));
+            std::fs::rename(&from, &to).map_err(|e| format!("moving {}: {e}", from.display()))?;
+        }
+    }
+    if !moved.exists() {
+        return Err(format!(
+            "the set-aside database {} is gone",
+            moved.display()
+        ));
+    }
     for file in DB_FILES {
         let from = dir.join(format!("{name}{}", &file["dots.db".len()..]));
-        let to = data_dir.join(file);
         if from.exists() {
-            let _ = std::fs::remove_file(&to);
+            let to = data_dir.join(file);
             std::fs::rename(&from, &to).map_err(|e| format!("moving {}: {e}", from.display()))?;
-        } else {
-            let _ = std::fs::remove_file(&to);
         }
+    }
+    for file in DB_FILES {
+        let _ = std::fs::remove_file(dir.join(format!("{restored}{}", &file["dots.db".len()..])));
     }
     Ok(())
 }
@@ -1190,7 +1236,8 @@ mod tests {
     fn repair_and_go_back_wait_for_working_runs_like_restart() {
         let mut s = UpdateState::new(None, vec![]);
         assert_eq!(
-            s.begin_other(Purpose::Repair, "0.3.0", &names(&["digest"])),
+            s.begin_other(Purpose::Repair, "0.3.0", &names(&["digest"]))
+                .unwrap(),
             Next::Nothing
         );
         assert_eq!(
@@ -1210,7 +1257,10 @@ mod tests {
             }
         );
         let mut s = UpdateState::new(None, vec![]);
-        assert_eq!(s.begin_other(Purpose::GoBack, "0.2.0", &[]), Next::Install);
+        assert_eq!(
+            s.begin_other(Purpose::GoBack, "0.2.0", &[]).unwrap(),
+            Next::Install
+        );
         assert_eq!(
             s.note(&[]),
             UpdateNote::Installing {
@@ -1230,8 +1280,9 @@ mod tests {
         s.offer("0.3.2");
         s.set_notice(Some(unhealthy.clone()));
         assert_eq!(s.note(&[]), unhealthy);
+        // "Not now" dismisses the notice; the ready update behind it shows (final review I-6).
         s.later();
-        assert_eq!(s.note(&[]), UpdateNote::None);
+        assert!(matches!(s.note(&[]), UpdateNote::Ready { .. }));
         let mut s = UpdateState::new(None, vec![]);
         s.offer("0.3.2");
         s.set_notice(Some(UpdateNote::UpdatedItself {
@@ -1304,5 +1355,75 @@ mod tests {
         for f in ["dots.db", "dots.db-wal", "dots.db-shm"] {
             assert_eq!(std::fs::read_to_string(dir.path().join(f)).unwrap(), f);
         }
+    }
+
+    // Final review C-1: a cancelled Go back or Repair must not stay "ready".
+    #[test]
+    fn cancelling_a_repair_or_go_back_leaves_nothing_ready() {
+        for purpose in [Purpose::Repair, Purpose::GoBack] {
+            let mut s = UpdateState::new(None, vec![]);
+            assert_eq!(
+                s.begin_other(purpose, "0.3.0", &names(&["digest"]))
+                    .unwrap(),
+                Next::Nothing
+            );
+            assert!(s.cancel_wait(), "the cancelled install's download goes");
+            assert_eq!(s.note(&[]), UpdateNote::None);
+            assert!(s.restart(&[]).is_err(), "nothing is left to install");
+            assert_eq!(s.ready_purpose(), None);
+        }
+        // Cancelling an update's wait keeps the update ready.
+        let mut s = UpdateState::new(None, vec![]);
+        s.offer("0.3.1");
+        s.restart(&names(&["digest"])).unwrap();
+        assert!(!s.cancel_wait());
+        assert!(matches!(s.note(&[]), UpdateNote::Ready { .. }));
+    }
+
+    // Final review I-7: a second Repair or Go back while one waits is refused.
+    #[test]
+    fn another_install_is_refused_while_one_waits() {
+        let mut s = UpdateState::new(None, vec![]);
+        s.offer("0.3.1");
+        s.restart(&names(&["digest"])).unwrap();
+        assert!(s
+            .begin_other(Purpose::GoBack, "0.3.0", &names(&["digest"]))
+            .is_err());
+        assert_eq!(s.ready_purpose(), Some((Purpose::Update, "0.3.1")));
+    }
+
+    // Final review I-6: "Not now" on an Unhealthy strip must not hide a ready fix.
+    #[test]
+    fn not_now_on_a_notice_keeps_a_ready_update() {
+        let mut s = UpdateState::new(None, vec![]);
+        s.offer("0.3.2");
+        s.set_notice(Some(UpdateNote::Unhealthy {
+            version: "0.3.1".into(),
+            back_to: Some("0.3.0".into()),
+        }));
+        s.later();
+        assert!(matches!(s.note(&[]), UpdateNote::Ready { .. }));
+        assert!(!s.later_pressed());
+    }
+
+    // Final review I-5: undo never deletes the restored database before the original is back.
+    #[test]
+    fn undo_leaves_no_database_rather_than_an_empty_one_when_the_original_is_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("dots.db"), "live").unwrap();
+        let moved = set_aside_database(dir.path(), "0.3.1", at(9)).unwrap();
+        std::fs::write(dir.path().join("dots.db"), "restored").unwrap();
+        // The set-aside file vanished (say, moved by something else): undo fails...
+        let elsewhere = dir.path().join("elsewhere.db");
+        std::fs::rename(&moved, &elsewhere).unwrap();
+        assert!(undo_set_aside(dir.path(), &moved).is_err());
+        // ...and keeps the restored copy rather than deleting it.
+        assert!(std::fs::read_dir(dir.path().join(BACKUPS_DIR))
+            .unwrap()
+            .any(|e| e
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("restored-")));
     }
 }

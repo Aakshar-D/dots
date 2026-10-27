@@ -264,11 +264,14 @@ pub async fn update_stop_and_restart(
 /// "Cancel" of a waiting install: the queue starts again.
 #[tauri::command]
 pub async fn update_cancel_wait(app: AppHandle, state: State<'_, AppState>) -> Res<UpdateNote> {
-    update_service::press(&app, &state.rt()?, |s, _| {
+    let note = update_service::press(&app, &state.rt()?, |s, _| {
         s.cancel_wait();
         Ok(Next::Nothing)
     })
-    .await
+    .await?;
+    // A cancelled Repair or Go back leaves its download behind; it is never installed.
+    update_service::clear_stale_download(&app);
+    Ok(note)
 }
 
 #[tauri::command]

@@ -26,6 +26,9 @@ pub struct UpdateRecord {
     pub by_itself_at: Option<String>,
     /// Versions never offered to this machine again.
     pub bad: Vec<String>,
+    /// The version whose idle install failed: never installed by itself again (it can still
+    /// be installed from the strip).
+    pub idle_failed: Option<String>,
 }
 
 /// The new version's health, at a start.
@@ -82,7 +85,7 @@ pub fn on_start(record: &mut UpdateRecord, current: &str, runtime_ok: bool) -> H
     if !runtime_ok || record.starts >= 1 {
         return Health::Failed {
             version: current.to_string(),
-            back_to: go_back_target(record).map(|(version, _)| version),
+            back_to: go_back_target(record, current).map(|(version, _)| version),
         };
     }
     record.starts += 1;
@@ -103,11 +106,24 @@ pub fn failed(record: &mut UpdateRecord, version: &str) {
     }
 }
 
-/// The version Go back installs and the backup it restores: only while that backup exists.
-pub fn go_back_target(record: &UpdateRecord) -> Option<(String, PathBuf)> {
-    let version = record.leaving.clone()?;
+/// The version Go back installs and the backup it restores: only on `current` as the last
+/// update installed it, from another version, while that backup exists.
+pub fn go_back_target(record: &UpdateRecord, current: &str) -> Option<(String, PathBuf)> {
+    if record.installing.as_deref() != Some(current) {
+        return None;
+    }
+    let version = record.leaving.clone().filter(|v| v != current)?;
     let backup = record.backup.clone()?;
     backup.is_file().then_some((version, backup))
+}
+
+/// Dots went back: nothing is left to go back to, and nothing is pending.
+pub fn went_back(record: &mut UpdateRecord) {
+    record.leaving = None;
+    record.installing = None;
+    record.backup = None;
+    record.pending = false;
+    record.starts = 0;
 }
 
 #[cfg(test)]
@@ -209,11 +225,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut record = installed(dir.path());
         assert_eq!(
-            go_back_target(&record),
+            go_back_target(&record, "0.3.1"),
             Some(("0.3.0".to_string(), record.backup.clone().unwrap()))
         );
         std::fs::remove_file(record.backup.as_ref().unwrap()).unwrap();
-        assert_eq!(go_back_target(&record), None);
+        assert_eq!(go_back_target(&record, "0.3.1"), None);
         assert_eq!(
             on_start(&mut record, "0.3.1", false),
             Health::Failed {
@@ -221,5 +237,19 @@ mod tests {
                 back_to: None
             }
         );
+    }
+
+    // Final review I-1: Go back only from the version the last update installed.
+    #[test]
+    fn go_back_is_only_from_the_version_the_update_installed() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut record = installed(dir.path());
+        assert!(go_back_target(&record, "0.3.1").is_some());
+        // An install that did not happen: still on the version it would have left.
+        assert_eq!(go_back_target(&record, "0.3.0"), None);
+        // After going back, nothing is left to go back to.
+        went_back(&mut record);
+        assert_eq!(go_back_target(&record, "0.3.0"), None);
+        assert_eq!(go_back_target(&record, "0.3.1"), None);
     }
 }

@@ -21,17 +21,19 @@ export function reportComposer(hasText: boolean): void {
   send();
 }
 
-/// Tells the core about keyboard and pointer input in the window, at most every 30 s.
+/// What counts as the person using the window: reading with the wheel or moving the pointer
+/// too, not only typing and clicking.
+const INPUT_EVENTS = ["keydown", "pointerdown", "pointermove", "wheel", "focus"] as const;
+
+/// Tells the core about input in the window, at most every 30 s.
 export function useActivity(): void {
   useEffect(() => {
     const onInput = () => {
       if (Date.now() - lastSent >= EVERY_MS) send();
     };
-    window.addEventListener("keydown", onInput);
-    window.addEventListener("pointerdown", onInput);
+    for (const name of INPUT_EVENTS) window.addEventListener(name, onInput, { passive: true });
     return () => {
-      window.removeEventListener("keydown", onInput);
-      window.removeEventListener("pointerdown", onInput);
+      for (const name of INPUT_EVENTS) window.removeEventListener(name, onInput);
     };
   }, []);
 }

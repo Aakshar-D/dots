@@ -35,6 +35,8 @@ struct Downloaded {
 pub struct Updates {
     state: Mutex<UpdateState>,
     downloaded: Mutex<Option<Downloaded>>,
+    /// The quiet copy an idle install downloaded (`/S`), kept until it installs.
+    quiet: Mutex<Option<Downloaded>>,
     data_dir: PathBuf,
     /// One button or run change at a time, so the hold always matches the state.
     turn: tokio::sync::Mutex<()>,
@@ -55,6 +57,7 @@ impl Updates {
         Self {
             state: Mutex::new(UpdateState::new(error, bad)),
             downloaded: Mutex::new(None),
+            quiet: Mutex::new(None),
             data_dir,
             turn: tokio::sync::Mutex::new(()),
             checked_at: Mutex::new(None),
@@ -165,14 +168,37 @@ pub struct GoBackPlan {
     pub close_runtime: bool,
 }
 
-pub fn go_back_plan(record: &UpdateRecord, runtime_ok: bool) -> Result<GoBackPlan, String> {
-    let (version, backup) =
-        update_record::go_back_target(record).ok_or_else(|| NOTHING_TO_GO_BACK.to_string())?;
+pub fn go_back_plan(
+    record: &UpdateRecord,
+    current: &str,
+    runtime_ok: bool,
+) -> Result<GoBackPlan, String> {
+    let (version, backup) = update_record::go_back_target(record, current)
+        .ok_or_else(|| NOTHING_TO_GO_BACK.to_string())?;
     Ok(GoBackPlan {
         version,
         backup,
         close_runtime: runtime_ok,
     })
+}
+
+/// Whether a download is the one the state means to install: its purpose and version.
+pub fn download_matches(purpose: Purpose, version: &str, state: &UpdateState) -> bool {
+    state.ready_purpose() == Some((purpose, version))
+}
+
+/// Drops a download the state no longer means (a cancelled Repair or Go back).
+pub fn clear_stale_download(app: &AppHandle) {
+    let Ok(updates) = updates(app) else {
+        return;
+    };
+    let mut slot = updates.downloaded.lock().unwrap();
+    let stale = slot.as_ref().is_some_and(|d| {
+        !download_matches(d.purpose, &d.update.version, &updates.state.lock().unwrap())
+    });
+    if stale {
+        *slot = None;
+    }
 }
 
 /// Repair downloads the running version's own installer, so it needs its release.
@@ -213,7 +239,8 @@ pub async fn status(app: &AppHandle, rt: Option<&Arc<Runtime>>) -> Result<Update
         checked_at,
         ready,
         last_error,
-        go_back: update_record::go_back_target(&record).map(|(version, _)| version),
+        go_back: update_record::go_back_target(&record, env!("CARGO_PKG_VERSION"))
+            .map(|(version, _)| version),
         auto_install,
     })
 }
@@ -286,9 +313,13 @@ pub async fn repair(app: &AppHandle, rt: &Arc<Runtime>) -> Result<UpdateNote, Cm
     let downloaded = download_version(app, current, Purpose::Repair, None)
         .await
         .map_err(conflict)?;
-    *updates(app)?.downloaded.lock().unwrap() = Some(downloaded);
-    press(app, rt, |s, working| {
-        Ok(s.begin_other(Purpose::Repair, current, working))
+    // The download is kept in the same turn as the state change, so a check or a wait that
+    // settles meanwhile can never swap it (final review I-7).
+    let slot = updates(app)?;
+    press(app, rt, move |s, working| {
+        let next = s.begin_other(Purpose::Repair, current, working)?;
+        *slot.downloaded.lock().unwrap() = Some(downloaded);
+        Ok(next)
     })
     .await
 }
@@ -299,7 +330,7 @@ pub async fn repair(app: &AppHandle, rt: &Arc<Runtime>) -> Result<UpdateNote, Cm
 pub async fn go_back(app: &AppHandle, rt: Option<Arc<Runtime>>) -> Result<UpdateNote, CmdError> {
     let updates = updates(app)?;
     let record = update_record::read(&updates.data_dir);
-    let plan = go_back_plan(&record, rt.is_some()).map_err(conflict)?;
+    let plan = go_back_plan(&record, env!("CARGO_PKG_VERSION"), rt.is_some()).map_err(conflict)?;
     let downloaded = download_version(
         app,
         &plan.version,
@@ -310,9 +341,12 @@ pub async fn go_back(app: &AppHandle, rt: Option<Arc<Runtime>>) -> Result<Update
     .map_err(conflict)?;
     match rt {
         Some(rt) => {
-            *updates.downloaded.lock().unwrap() = Some(downloaded);
-            press(app, &rt, |s, working| {
-                Ok(s.begin_other(Purpose::GoBack, &plan.version, working))
+            let version = plan.version.clone();
+            let slot = &updates;
+            press(app, &rt, move |s, working| {
+                let next = s.begin_other(Purpose::GoBack, &version, working)?;
+                *slot.downloaded.lock().unwrap() = Some(downloaded);
+                Ok(next)
             })
             .await
         }
@@ -323,6 +357,7 @@ pub async fn go_back(app: &AppHandle, rt: Option<Arc<Runtime>>) -> Result<Update
                 data_dir: updates.data_dir.clone(),
                 downloaded,
                 quiet: false,
+                stay_hidden: false,
             };
             tauri::async_runtime::spawn(async move {
                 update::install(&steps, Purpose::GoBack, Some(&plan.backup)).await
@@ -346,29 +381,35 @@ pub trait IdleControls {
     /// The main window is hidden or minimised.
     fn window_hidden(&self) -> bool;
     async fn hold_runs(&self, held: bool);
-    /// Downloads `version` again with the quiet installer and starts its install, the window
-    /// kept hidden. False when it could not begin.
-    async fn start_quiet_install(&self, version: &str) -> bool;
+    /// The version whose idle install failed before: never tried again by itself.
+    fn idle_failed(&self) -> Option<String>;
+    /// Downloads `version` again with the quiet installer and keeps it. False when it could
+    /// not.
+    async fn download_quiet(&self, version: &str) -> bool;
+    /// Starts the install of what `download_quiet` kept. `stay_hidden`: the window was hidden,
+    /// so the new Dots stays in the tray. False when it could not begin.
+    fn start_quiet_install(&self, stay_hidden: bool) -> bool;
 }
 
-/// One look at whether Dots may install the ready update by itself now; true when the
-/// install began. The runs are read again under the turn with the queue held, so a run that
-/// started meanwhile stops it.
-pub async fn idle_tick(c: &impl IdleControls, updates: &Updates) -> bool {
-    let _turn = updates.turn.lock().await;
+/// Whether the idle install of the ready update is due now, and its version.
+async fn idle_due(c: &impl IdleControls, updates: &Updates) -> Option<String> {
     let (ready, later, busy) = {
         let state = updates.state.lock().unwrap();
         (
-            state.ready_version().map(str::to_string),
+            state
+                .ready_purpose()
+                .filter(|(p, _)| *p == Purpose::Update)
+                .map(|(_, v)| v.to_string()),
             state.later_pressed(),
             state.holds_runs(),
         )
     };
-    let Some(version) = ready else {
-        return false;
-    };
+    let version = ready?;
+    if c.idle_failed().as_deref() == Some(version.as_str()) {
+        return None;
+    }
     let (input_idle, composer_has_text) = updates.activity();
-    let due = idle_install_due(&IdleInput {
+    idle_install_due(&IdleInput {
         enabled: c.auto_install_on().await,
         ready: true,
         later,
@@ -377,15 +418,34 @@ pub async fn idle_tick(c: &impl IdleControls, updates: &Updates) -> bool {
         composer_has_text,
         input_idle,
         window_hidden: c.window_hidden(),
-    });
-    if !due {
+    })
+    .then_some(version)
+}
+
+/// One look at whether Dots may install the ready update by itself now; true when the
+/// install began. The quiet installer is downloaded first, holding nothing; then, under the
+/// turn with the queue held, everything is looked at again (runs, input, the composer,
+/// "Later", the version), so a run or the person returning during the download stops it
+/// (final review I-2).
+pub async fn idle_tick(c: &impl IdleControls, updates: &Updates) -> bool {
+    let Some(version) = ({
+        let _turn = updates.turn.lock().await;
+        idle_due(c, updates).await
+    }) else {
+        return false;
+    };
+    if !c.download_quiet(&version).await {
+        tracing::warn!("downloading {version} for an idle install failed; tried again later");
         return false;
     }
+    let _turn = updates.turn.lock().await;
     c.hold_runs(true).await;
-    if c.unfinished_runs().await > 0 {
+    let still = idle_due(c, updates).await;
+    if still.as_deref() != Some(version.as_str()) {
         c.hold_runs(false).await;
         return false;
     }
+    let stay_hidden = c.window_hidden();
     if !matches!(
         updates.state.lock().unwrap().restart(&[]),
         Ok(Next::Install)
@@ -393,11 +453,11 @@ pub async fn idle_tick(c: &impl IdleControls, updates: &Updates) -> bool {
         c.hold_runs(false).await;
         return false;
     }
-    if c.start_quiet_install(&version).await {
+    if c.start_quiet_install(stay_hidden) {
         return true;
     }
     updates.state.lock().unwrap().abandon(&format!(
-        "Dots could not download {version} again to install it by itself. It tries again at the next check."
+        "Dots could not install {version} by itself. It tries again at the next check."
     ));
     c.hold_runs(false).await;
     false
@@ -430,7 +490,7 @@ pub fn finish_health(updates: &Updates, version: &str, passed: bool) -> UpdateNo
         updates.state.lock().unwrap().mark_bad(version);
         UpdateNote::Unhealthy {
             version: version.to_string(),
-            back_to: update_record::go_back_target(&record).map(|(v, _)| v),
+            back_to: update_record::go_back_target(&record, version).map(|(v, _)| v),
         }
     };
     if let Err(e) = update_record::write(&updates.data_dir, &record) {
@@ -450,7 +510,7 @@ pub fn withdrawn_notice(
     let release = release.filter(|r| r.withdrawn)?;
     Some(UpdateNote::Withdrawn {
         version: release.version.clone(),
-        back_to: update_record::go_back_target(record).map(|(v, _)| v),
+        back_to: update_record::go_back_target(record, &release.version).map(|(v, _)| v),
     })
 }
 
@@ -526,16 +586,33 @@ impl IdleControls for AppIdle<'_> {
         self.rt.hold_runs(held).await;
     }
 
-    async fn start_quiet_install(&self, version: &str) -> bool {
+    fn idle_failed(&self) -> Option<String> {
+        let updates = updates(self.app).ok()?;
+        update_record::read(&updates.data_dir).idle_failed
+    }
+
+    async fn download_quiet(&self, version: &str) -> bool {
         let Ok(updates) = updates(self.app) else {
             return false;
         };
-        let downloaded = match download_quiet(self.app, version).await {
-            Ok(downloaded) => downloaded,
+        match download_quiet(self.app, version).await {
+            Ok(downloaded) => {
+                *updates.quiet.lock().unwrap() = Some(downloaded);
+                true
+            }
             Err(e) => {
                 tracing::warn!("downloading {version} for an idle install failed: {e}");
-                return false;
+                false
             }
+        }
+    }
+
+    fn start_quiet_install(&self, stay_hidden: bool) -> bool {
+        let Ok(updates) = updates(self.app) else {
+            return false;
+        };
+        let Some(downloaded) = updates.quiet.lock().unwrap().take() else {
+            return false;
         };
         let steps = AppSteps {
             app: self.app.clone(),
@@ -543,6 +620,7 @@ impl IdleControls for AppIdle<'_> {
             data_dir: updates.data_dir.clone(),
             downloaded,
             quiet: true,
+            stay_hidden,
         };
         tauri::async_runtime::spawn(
             async move { update::install(&steps, Purpose::Update, None).await },
@@ -911,6 +989,16 @@ fn start_install(app: &AppHandle, rt: &Arc<Runtime>) -> bool {
     let Some(downloaded) = updates.downloaded.lock().unwrap().take() else {
         return false;
     };
+    // Only the download the state means is ever installed (final review C-1 and I-7).
+    let meant = download_matches(
+        downloaded.purpose,
+        &downloaded.update.version,
+        &updates.state.lock().unwrap(),
+    );
+    if !meant {
+        tracing::error!("an install began with a download the state did not mean; dropped it");
+        return false;
+    }
     let (purpose, backup) = (downloaded.purpose, downloaded.backup.clone());
     let steps = AppSteps {
         app: app.clone(),
@@ -918,6 +1006,7 @@ fn start_install(app: &AppHandle, rt: &Arc<Runtime>) -> bool {
         data_dir: updates.data_dir.clone(),
         downloaded,
         quiet: false,
+        stay_hidden: false,
     };
     tauri::async_runtime::spawn(async move {
         update::install(&steps, purpose, backup.as_deref()).await
@@ -931,8 +1020,10 @@ struct AppSteps {
     rt: Option<Arc<Runtime>>,
     data_dir: PathBuf,
     downloaded: Downloaded,
-    /// An idle install: no installer window, and the new Dots stays in the tray.
+    /// An idle install: no installer window.
     quiet: bool,
+    /// The window was hidden when the idle install began: the new Dots stays in the tray.
+    stay_hidden: bool,
 }
 
 impl InstallSteps for AppSteps {
@@ -952,12 +1043,21 @@ impl InstallSteps for AppSteps {
     fn restart_current(&self, error: &str) {
         tracing::error!("the update was not installed: {error}");
         update::leave_error(&self.data_dir, error);
-        crate::startup::mark_restart(&self.data_dir);
+        if self.quiet {
+            // An idle install that failed is never tried again by itself for this version,
+            // and its restart keeps the window as it was (final review I-4).
+            let mut record = update_record::read(&self.data_dir);
+            record.idle_failed = Some(self.downloaded.update.version.clone());
+            if let Err(e) = update_record::write(&self.data_dir, &record) {
+                tracing::warn!("could not write the update record: {e}");
+            }
+        }
+        self.mark_restart();
         self.app.restart();
     }
 
     fn mark_restart(&self) {
-        if self.quiet {
+        if self.quiet && self.stay_hidden {
             crate::startup::mark_stay_hidden(&self.data_dir);
         } else {
             crate::startup::mark_restart(&self.data_dir);
@@ -975,9 +1075,8 @@ impl InstallSteps for AppSteps {
         let mut record = crate::update_record::read(&self.data_dir);
         match purpose {
             Purpose::GoBack => {
-                record.pending = false;
-                record.starts = 0;
-                crate::update_record::failed(&mut record, current);
+                update_record::went_back(&mut record);
+                update_record::failed(&mut record, current);
             }
             Purpose::Repair => {
                 // The earlier update's go-back target stays: going back from a repair goes to
@@ -1340,14 +1439,14 @@ mod tests {
             backup: Some(backup.clone()),
             ..Default::default()
         };
-        let plan = go_back_plan(&record, true).unwrap();
+        let plan = go_back_plan(&record, "0.3.1", true).unwrap();
         assert_eq!((plan.version.as_str(), plan.close_runtime), ("0.3.0", true));
         assert_eq!(plan.backup, backup);
         // From the fatal page there is no runtime to close.
-        assert!(!go_back_plan(&record, false).unwrap().close_runtime);
+        assert!(!go_back_plan(&record, "0.3.1", false).unwrap().close_runtime);
         std::fs::remove_file(&backup).unwrap();
         assert_eq!(
-            go_back_plan(&record, true).err().as_deref(),
+            go_back_plan(&record, "0.3.1", true).err().as_deref(),
             Some("There is nothing to go back to.")
         );
     }
@@ -1369,19 +1468,26 @@ mod tests {
         assert_eq!(repair_allowed(Some(&release)), Ok(()));
     }
 
-    /// The idle side of the app: the setting on, the window hidden, `runs` answered in turn.
-    struct FakeIdle {
+    /// The idle side of the app: the setting on, `runs` answered in turn, `touch` (when set)
+    /// reporting input during the download.
+    struct FakeIdle<'a> {
         runs: RefCell<Vec<usize>>,
         log: RefCell<Vec<String>>,
         install_ok: bool,
+        hidden: bool,
+        failed: Option<String>,
+        touch: Option<&'a Updates>,
     }
 
-    impl FakeIdle {
+    impl<'a> FakeIdle<'a> {
         fn new(runs: &[usize], install_ok: bool) -> Self {
             Self {
                 runs: RefCell::new(runs.iter().rev().copied().collect()),
                 log: RefCell::new(Vec::new()),
                 install_ok,
+                hidden: true,
+                failed: None,
+                touch: None,
             }
         }
         fn take(&self) -> Vec<String> {
@@ -1389,7 +1495,7 @@ mod tests {
         }
     }
 
-    impl IdleControls for FakeIdle {
+    impl IdleControls for FakeIdle<'_> {
         async fn auto_install_on(&self) -> bool {
             true
         }
@@ -1397,15 +1503,24 @@ mod tests {
             self.runs.borrow_mut().pop().unwrap_or(0)
         }
         fn window_hidden(&self) -> bool {
-            true
+            self.hidden
         }
         async fn hold_runs(&self, held: bool) {
             self.log.borrow_mut().push(format!("hold {held}"));
         }
-        async fn start_quiet_install(&self, version: &str) -> bool {
-            self.log
-                .borrow_mut()
-                .push(format!("quiet install {version}"));
+        fn idle_failed(&self) -> Option<String> {
+            self.failed.clone()
+        }
+        async fn download_quiet(&self, version: &str) -> bool {
+            self.log.borrow_mut().push(format!("download {version}"));
+            if let Some(updates) = self.touch {
+                updates.report_activity(false);
+            }
+            true
+        }
+        fn start_quiet_install(&self, stay_hidden: bool) -> bool {
+            let shown = if stay_hidden { "hidden" } else { "shown" };
+            self.log.borrow_mut().push(format!("quiet install {shown}"));
             self.install_ok
         }
     }
@@ -1413,44 +1528,84 @@ mod tests {
     #[tokio::test]
     async fn an_idle_install_rechecks_the_runs_under_the_turn_before_it_begins() {
         let updates = ready();
-        // No run when the tick decides, one at the recheck: nothing is installed.
+        // No run when the tick decides, one at the recheck after the download: no install.
         let fake = FakeIdle::new(&[0, 1], true);
         assert!(!idle_tick(&fake, &updates).await);
-        assert_eq!(fake.take(), ["hold true", "hold false"]);
+        assert_eq!(fake.take(), ["download 0.2.0", "hold true", "hold false"]);
         assert!(matches!(
             updates.state.lock().unwrap().note(&[]),
             UpdateNote::Ready { .. }
         ));
     }
 
+    // Final review I-2: the person returning during the download stops the install.
     #[tokio::test]
-    async fn an_idle_install_is_quiet_and_keeps_the_window_hidden() {
+    async fn input_during_the_quiet_download_stops_the_idle_install() {
+        let updates = ready();
+        *updates.activity.lock().unwrap() = (Instant::now() - update::IDLE_AFTER, false);
+        let mut fake = FakeIdle::new(&[0, 0], true);
+        fake.hidden = false;
+        fake.touch = Some(&updates);
+        assert!(!idle_tick(&fake, &updates).await);
+        assert_eq!(fake.take(), ["download 0.2.0", "hold true", "hold false"]);
+    }
+
+    #[tokio::test]
+    async fn an_idle_install_is_quiet_and_keeps_the_window_as_it_was() {
         let updates = ready();
         let fake = FakeIdle::new(&[0, 0], true);
         assert!(idle_tick(&fake, &updates).await);
-        assert_eq!(fake.take(), ["hold true", "quiet install 0.2.0"]);
+        assert_eq!(
+            fake.take(),
+            ["download 0.2.0", "hold true", "quiet install hidden"]
+        );
         assert!(matches!(
             updates.state.lock().unwrap().note(&[]),
             UpdateNote::Installing { .. }
         ));
+        // Final review I-3: a window left open but untouched comes back shown.
+        let updates = ready();
+        *updates.activity.lock().unwrap() = (Instant::now() - update::IDLE_AFTER, false);
+        let mut fake = FakeIdle::new(&[0, 0], true);
+        fake.hidden = false;
+        assert!(idle_tick(&fake, &updates).await);
+        assert_eq!(
+            fake.take(),
+            ["download 0.2.0", "hold true", "quiet install shown"]
+        );
         // "Later" stops it for the rest of the session.
         let updates = ready();
         updates.state.lock().unwrap().later();
         let fake = FakeIdle::new(&[0, 0], true);
         assert!(!idle_tick(&fake, &updates).await);
         assert!(fake.take().is_empty());
-        // A quiet download that fails lets the queue go and says why.
+        // An install that cannot begin lets the queue go and says why.
         let updates = ready();
         let fake = FakeIdle::new(&[0, 0], false);
         assert!(!idle_tick(&fake, &updates).await);
         assert_eq!(
             fake.take(),
-            ["hold true", "quiet install 0.2.0", "hold false"]
+            [
+                "download 0.2.0",
+                "hold true",
+                "quiet install hidden",
+                "hold false"
+            ]
         );
         assert!(matches!(
             updates.state.lock().unwrap().note(&[]),
             UpdateNote::Failed { .. }
         ));
+    }
+
+    // Final review I-4: a version whose idle install failed is not tried again by itself.
+    #[tokio::test]
+    async fn a_failed_idle_install_of_a_version_is_not_tried_again() {
+        let updates = ready();
+        let mut fake = FakeIdle::new(&[0, 0], true);
+        fake.failed = Some("0.2.0".into());
+        assert!(!idle_tick(&fake, &updates).await);
+        assert!(fake.take().is_empty());
     }
 
     #[tokio::test]
@@ -1510,6 +1665,7 @@ mod tests {
         std::fs::write(&backup, "db").unwrap();
         let record = UpdateRecord {
             leaving: Some("0.1.0".into()),
+            installing: Some("0.2.0".into()),
             backup: Some(backup),
             ..Default::default()
         };
@@ -1537,5 +1693,22 @@ mod tests {
                 back_to: None
             })
         );
+    }
+
+    // Final review C-1 and I-7: an install only ever installs the download the state means.
+    #[test]
+    fn an_install_refuses_a_download_the_state_does_not_mean() {
+        let mut state = UpdateState::new(None, vec![]);
+        state.offer("0.3.2");
+        assert!(download_matches(Purpose::Update, "0.3.2", &state));
+        assert!(!download_matches(Purpose::GoBack, "0.3.0", &state));
+        assert!(!download_matches(Purpose::Update, "0.3.1", &state));
+        state
+            .begin_other(Purpose::GoBack, "0.3.0", &names(&["digest"]))
+            .unwrap();
+        assert!(download_matches(Purpose::GoBack, "0.3.0", &state));
+        assert!(!download_matches(Purpose::Update, "0.3.2", &state));
+        state.cancel_wait();
+        assert!(!download_matches(Purpose::GoBack, "0.3.0", &state));
     }
 }

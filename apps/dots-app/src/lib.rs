@@ -203,6 +203,7 @@ fn setup(app: &AppHandle, panics_logged: bool) -> Result<(), Box<dyn std::error:
                 app.manage(DataDirLock(lock));
                 // Only the Dots that holds the data folder takes the mark "Restart Dots" left.
                 restarted = startup::take_restart_mark(dir);
+                startup::recover_set_aside(dir);
                 tauri::async_runtime::block_on(startup::start_runtime(dir))
             }
             Err(e) => Err(e),

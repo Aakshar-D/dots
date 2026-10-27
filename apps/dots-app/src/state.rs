@@ -80,8 +80,12 @@ impl AppState {
                 .and_then(crate::update::newest_backup)
                 .map(|path| path.to_string_lossy().into_owned())
                 .unwrap_or_default(),
+            // Only for a start that failed the health check after an update, not for any
+            // failed start while a backup exists.
             go_back: self.data_dir.as_deref().and_then(|dir| {
-                crate::update_record::go_back_target(&crate::update_record::read(dir))
+                let record = crate::update_record::read(dir);
+                record.pending.then_some(())?;
+                crate::update_record::go_back_target(&record, env!("CARGO_PKG_VERSION"))
                     .map(|(version, _)| version)
             }),
         })
@@ -181,7 +185,7 @@ mod tests {
             dir.path(),
             &crate::update_record::UpdateRecord {
                 leaving: Some("0.3.0".into()),
-                installing: Some("0.3.1".into()),
+                installing: Some(env!("CARGO_PKG_VERSION").into()),
                 backup: Some(backup),
                 pending: true,
                 ..Default::default()
@@ -195,6 +199,38 @@ mod tests {
                 .go_back
                 .as_deref(),
             Some("0.3.0")
+        );
+    }
+
+    // Final review I-1: the fatal page offers Go back only for a start that failed its
+    // health check, not for any failed start while a backup exists.
+    #[test]
+    fn the_fatal_page_offers_go_back_only_while_the_update_is_pending() {
+        let dir = tempfile::tempdir().unwrap();
+        let backup = dir
+            .path()
+            .join("backups")
+            .join("dots-0.0.9-2026-10-27-031200.db");
+        std::fs::create_dir_all(backup.parent().unwrap()).unwrap();
+        std::fs::write(&backup, "db").unwrap();
+        let mut record = crate::update_record::UpdateRecord {
+            leaving: Some("0.0.9".into()),
+            installing: Some(env!("CARGO_PKG_VERSION").into()),
+            backup: Some(backup),
+            pending: false,
+            ..Default::default()
+        };
+        crate::update_record::write(dir.path(), &record).unwrap();
+        let state = || {
+            AppState::new(Err("database is locked".into()), None)
+                .with_data_dir(Some(dir.path().to_path_buf()))
+        };
+        assert_eq!(state().startup_error().unwrap().go_back, None);
+        record.pending = true;
+        crate::update_record::write(dir.path(), &record).unwrap();
+        assert_eq!(
+            state().startup_error().unwrap().go_back.as_deref(),
+            Some("0.0.9")
         );
     }
 }
