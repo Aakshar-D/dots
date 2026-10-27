@@ -1,6 +1,6 @@
 # Updates in the Dots window: design
 
-Status: part 1 (section 4) built; part 2 (section 5) to plan. Builds on `2026-10-20-auto-update-design.md` ("the update spec"), which stays in force except where §2 says otherwise.
+Status: built (part 1, section 4, and part 2, section 5). Builds on `2026-10-20-auto-update-design.md` ("the update spec"), which stays in force except where §2 says otherwise.
 
 ## 1. Intent
 
@@ -258,3 +258,20 @@ Plan: `docs/superpowers/plans/2026-10-27-updates-part1.md`. Smoke: `docs/verific
 | Wording | "Repairing Dots. Dots restarts in a moment.", "Going back to Dots <v>. …", "Dots will repair itself when … finishes.", "Dots will go back to <v> when … finishes.", the fatal page's "This start followed an update. Go back to <v>? …" | Beyond what §4 quotes |
 
 **Not seen in the smoke (person steps):** a real update, idle install, repair and go back on an installed Dots; the quiet installer's behaviour; the withdrawn strip against a real withdrawn release.
+
+## 9. As built, part 2 (the Releases page)
+
+Plan: `docs/superpowers/plans/2026-10-27-updates-part2.md`. Smoke: `docs/verification/2026-10-27-updates-part2-smoke.md`.
+
+| Where | Built | Why |
+|---|---|---|
+| §5.2–5.9 | The flows run through a `Hub` trait; their tests use an in-memory repository, the HTTP client its own mock-server tests | Trees, branches and tags are checked directly |
+| §5.2 | `Setup` is `done`, `needed`, or `half_done { secrets: how many of the two, pubkey }` | One secret of two is half done too |
+| §5.2 | The key file is saved through a native save dialog the app opens | The window gets no file-system power |
+| §5.4 | A second trial of a version keeps notes already on its branch | The publisher's edits survive |
+| §5.7 | The page shows a promotion in progress or failed (`PageState.promotion`), with **Retry** | Retry needs something to show |
+| §5.7 | The release branch is not deleted after a promotion | Deleting from a read of the page would be a side effect |
+| §5.9 | Withdraw's confirm says "…go back to the version before it." | The page does not carry the previous release |
+| §5.4 | CI skips `preview_schedule_lists_the_next_fire_times` | It depends on the machine's time zone |
+
+**Person steps, each only on the person's word:** the setup against the real repository; the first trial (which also checks the workflow's new test job); promoting it; a hand install of master after the key PR is merged.

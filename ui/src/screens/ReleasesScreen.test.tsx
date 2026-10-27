@@ -74,6 +74,13 @@ describe("the Releases page", () => {
     );
   });
 
+  // Smoke: axe found a second main landmark inside the app's.
+  it("sits inside the app's one main landmark", async () => {
+    releases(halfDone);
+    await screen.findByRole("heading", { name: "Releases" });
+    expect(screen.getAllByRole("main")).toHaveLength(1);
+  });
+
   it("says a half set-up repository is left alone", async () => {
     releases(halfDone);
     expect(

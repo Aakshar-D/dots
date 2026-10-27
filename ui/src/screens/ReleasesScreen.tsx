@@ -364,7 +364,7 @@ export function ReleasesScreen() {
     },
   });
   return (
-    <main className="flex flex-col gap-4 overflow-y-auto p-6">
+    <div className="flex flex-col gap-4 overflow-y-auto p-6">
       <h1 className="text-lg font-semibold">Releases</h1>
       {publisher && !isPublisher && (
         <p className="text-sm text-muted-foreground">
@@ -385,6 +385,6 @@ export function ReleasesScreen() {
           {page.data.promotion && <PromotionCard promotion={page.data.promotion} />}
         </>
       )}
-    </main>
+    </div>
   );
 }
