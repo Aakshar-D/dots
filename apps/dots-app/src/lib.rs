@@ -9,6 +9,7 @@ pub mod startup;
 pub mod state;
 pub mod tray;
 pub mod update;
+pub mod update_record;
 pub mod update_service;
 pub mod viewing;
 
