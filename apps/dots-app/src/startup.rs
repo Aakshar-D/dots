@@ -147,10 +147,41 @@ pub fn take_restart_mark(data_dir: &Path) -> bool {
     true
 }
 
-/// Whether a start shows the main window: always after a failed start (its error page), when
-/// Dots was not started hidden, and after "Restart Dots" whatever the arguments say.
-pub fn show_window(failed: bool, hidden: bool, restarted: bool) -> bool {
-    failed || !hidden || restarted
+/// The file an idle install leaves for the Dots its installer starts (updates UI spec section
+/// 4.2): the installer passes the old process's arguments on, so the mark keeps the new one
+/// in the tray even when the old one was not started hidden.
+pub const STAY_HIDDEN_MARK: &str = "stay-hidden-after-update";
+
+/// Leaves the stay-hidden mark in `data_dir`. A failure is logged: at worst the window shows.
+pub fn mark_stay_hidden(data_dir: &Path) {
+    if let Err(e) = std::fs::write(data_dir.join(STAY_HIDDEN_MARK), "") {
+        tracing::warn!(
+            "could not leave the stay-hidden mark in {}: {e}",
+            data_dir.display()
+        );
+    }
+}
+
+/// Whether an idle install left its mark; removed, so it counts for one start.
+pub fn take_stay_hidden_mark(data_dir: &Path) -> bool {
+    let mark = data_dir.join(STAY_HIDDEN_MARK);
+    if !mark.is_file() {
+        return false;
+    }
+    if let Err(e) = std::fs::remove_file(&mark) {
+        tracing::warn!(
+            "could not remove the stay-hidden mark {}: {e}",
+            mark.display()
+        );
+    }
+    true
+}
+
+/// Whether a start shows the main window: always after a failed start (its error page);
+/// never after an idle install (`stay_hidden`); else when Dots was not started hidden, and
+/// after "Restart Dots" whatever the arguments say.
+pub fn show_window(failed: bool, hidden: bool, restarted: bool, stay_hidden: bool) -> bool {
+    failed || (!stay_hidden && (!hidden || restarted))
 }
 
 /// Today's log file in `log_dir`: daily files, the last seven kept. The folder is created
@@ -369,16 +400,16 @@ mod tests {
         const HIDDEN: bool = true;
         const RESTARTED: bool = true;
         // Started at login: in the tray, without a window.
-        assert!(!show_window(!FAILED, HIDDEN, !RESTARTED));
+        assert!(!show_window(!FAILED, HIDDEN, !RESTARTED, false));
         // "Restart Dots" passes `--hidden` on from a login start: the window still comes back.
-        assert!(show_window(!FAILED, HIDDEN, RESTARTED));
+        assert!(show_window(!FAILED, HIDDEN, RESTARTED, false));
         // A failed start always shows its error page.
-        assert!(show_window(FAILED, HIDDEN, !RESTARTED));
-        assert!(show_window(FAILED, HIDDEN, RESTARTED));
+        assert!(show_window(FAILED, HIDDEN, !RESTARTED, false));
+        assert!(show_window(FAILED, HIDDEN, RESTARTED, false));
         // Started by the person: shown, whatever else is true.
         for failed in [false, true] {
             for restarted in [false, true] {
-                assert!(show_window(failed, !HIDDEN, restarted));
+                assert!(show_window(failed, !HIDDEN, restarted, false));
             }
         }
     }
@@ -638,5 +669,18 @@ mod tests {
         std::fs::write(&file, "x").unwrap();
         let err = start_runtime(&file.join("dots")).await.err().unwrap();
         assert!(err.starts_with("Dots could not read its settings"), "{err}");
+    }
+
+    #[test]
+    fn a_stay_hidden_mark_keeps_the_window_hidden_unless_the_start_failed() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!take_stay_hidden_mark(dir.path()));
+        mark_stay_hidden(dir.path());
+        assert!(take_stay_hidden_mark(dir.path()));
+        assert!(!take_stay_hidden_mark(dir.path()), "counts for one start");
+        // The installer passes the old process's arguments on, without --hidden.
+        assert!(!show_window(false, false, false, true));
+        assert!(show_window(true, false, false, true));
+        assert!(show_window(false, false, false, false));
     }
 }

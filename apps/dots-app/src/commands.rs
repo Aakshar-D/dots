@@ -203,6 +203,31 @@ pub async fn update_go_back(app: AppHandle, state: State<'_, AppState>) -> Res<U
     update_service::go_back(&app, state.rt().ok()).await
 }
 
+/// The window had keyboard or pointer input, or its composer's text changed (the idle install,
+/// updates UI spec section 4.2).
+#[tauri::command]
+pub fn report_activity(app: AppHandle, composer_has_text: bool) -> Res<()> {
+    if let Some(updates) = app.try_state::<update_service::Updates>() {
+        updates.report_activity(composer_has_text);
+    }
+    Ok(())
+}
+
+/// The window rendered after this start: the health check's last condition.
+#[tauri::command]
+pub fn app_rendered(app: AppHandle) -> Res<()> {
+    if let Some(updates) = app.try_state::<update_service::Updates>() {
+        updates.report_rendered();
+    }
+    Ok(())
+}
+
+/// "Dismiss" of "Dots updated itself".
+#[tauri::command]
+pub fn update_dismiss_updated(app: AppHandle) -> Res<UpdateNote> {
+    update_service::dismiss_updated(&app)
+}
+
 /// "Later": the note is hidden until Dots next starts.
 #[tauri::command]
 pub async fn update_later(app: AppHandle, state: State<'_, AppState>) -> Res<UpdateNote> {

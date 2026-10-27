@@ -152,6 +152,13 @@ impl UpdateState {
             && !self.bad.iter().any(|b| b == version)
     }
 
+    /// `version` failed on this machine: never wanted again.
+    pub fn mark_bad(&mut self, version: &str) {
+        if !self.bad.iter().any(|b| b == version) {
+            self.bad.push(version.to_string());
+        }
+    }
+
     /// Whether "Later" was pressed this session: no idle install until the next start.
     pub fn later_pressed(&self) -> bool {
         self.later

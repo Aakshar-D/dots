@@ -48,6 +48,9 @@ command_list![
     update_release_notes,
     update_repair,
     update_go_back,
+    update_dismiss_updated,
+    report_activity,
+    app_rendered,
     update_open_notes,
     update_later,
     update_restart,
@@ -224,22 +227,35 @@ fn setup(app: &AppHandle, panics_logged: bool) -> Result<(), Box<dyn std::error:
     // Managed whenever the data folder is known, so the fatal page can go back too (updates UI
     // spec section 4.4); only the checks need the runtime. What a failed install left is read
     // while Dots holds the data folder.
+    let mut stay_hidden = false;
     if let Ok(dir) = &data_dir {
+        // The health check after an update (updates UI spec section 4.4).
+        let mut record = update_record::read(dir);
+        let health =
+            update_record::on_start(&mut record, env!("CARGO_PKG_VERSION"), runtime.is_ok());
+        if let update_record::Health::Failed { version, .. } = &health {
+            update_record::failed(&mut record, version);
+        }
+        if let Err(e) = update_record::write(dir, &record) {
+            tracing::warn!("could not write the update record: {e}");
+        }
         app.manage(update_service::Updates::new(
             dir.clone(),
             update::take_error(dir),
-            update_record::read(dir).bad,
+            record.bad.clone(),
         ));
+        update_service::start_health(app, health);
         if let Ok((rt, _)) = &runtime {
             update_service::spawn(app.clone(), rt.clone());
         }
+        stay_hidden = startup::take_stay_hidden_mark(dir);
     }
     app.manage(dots_core::chatgpt::ChatGptAuth::from_env());
     app.manage(AppState::new(runtime.map(|(rt, _)| rt), log_dir).with_data_dir(data_dir.ok()));
     // A failed start always shows its error page, even when launched hidden; so does a start
     // that "Restart Dots" asked for.
     let hidden = startup::start_hidden(std::env::args());
-    if startup::show_window(failed, hidden, restarted) {
+    if startup::show_window(failed, hidden, restarted, stay_hidden) {
         show_main(app);
     }
     Ok(())

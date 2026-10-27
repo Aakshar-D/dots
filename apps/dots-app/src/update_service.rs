@@ -3,6 +3,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use chrono::Local;
 use dots_core::events::RuntimeEvent;
@@ -14,7 +15,9 @@ use tokio::sync::broadcast::error::RecvError;
 
 use crate::error::CmdError;
 use crate::events::UPDATE_EVENT;
-use crate::update::{self, InstallSteps, Next, Purpose, UpdateNote, UpdateState};
+use crate::update::{
+    self, idle_install_due, IdleInput, InstallSteps, Next, Purpose, UpdateNote, UpdateState,
+};
 use crate::update_record::{self, UpdateRecord};
 
 /// A downloaded update whose signature the updater has checked.
@@ -38,6 +41,11 @@ pub struct Updates {
     /// When a check last got an answer (RFC 3339 UTC), and why the last check failed.
     checked_at: Mutex<Option<String>>,
     check_error: Mutex<Option<String>>,
+    /// The window's last keyboard or pointer input, and whether the composer holds unsent
+    /// text (`report_activity`).
+    activity: Mutex<(Instant, bool)>,
+    /// Set once the window has rendered after this start (`app_rendered`).
+    rendered: tokio::sync::watch::Sender<bool>,
 }
 
 impl Updates {
@@ -51,7 +59,24 @@ impl Updates {
             turn: tokio::sync::Mutex::new(()),
             checked_at: Mutex::new(None),
             check_error: Mutex::new(None),
+            activity: Mutex::new((Instant::now(), false)),
+            rendered: tokio::sync::watch::Sender::new(false),
         }
+    }
+
+    /// The window had keyboard or pointer input, or the composer's text changed.
+    pub fn report_activity(&self, composer_has_text: bool) {
+        *self.activity.lock().unwrap() = (Instant::now(), composer_has_text);
+    }
+
+    /// The window rendered: the health check's last condition.
+    pub fn report_rendered(&self) {
+        self.rendered.send_replace(true);
+    }
+
+    fn activity(&self) -> (Duration, bool) {
+        let (at, composer) = *self.activity.lock().unwrap();
+        (at.elapsed(), composer)
     }
 }
 
@@ -297,6 +322,7 @@ pub async fn go_back(app: &AppHandle, rt: Option<Arc<Runtime>>) -> Result<Update
                 rt: None,
                 data_dir: updates.data_dir.clone(),
                 downloaded,
+                quiet: false,
             };
             tauri::async_runtime::spawn(async move {
                 update::install(&steps, Purpose::GoBack, Some(&plan.backup)).await
@@ -307,6 +333,251 @@ pub async fn go_back(app: &AppHandle, rt: Option<Arc<Runtime>>) -> Result<Update
             })
         }
     }
+}
+
+/// The idle install's view of the app (updates UI spec section 4.2), so `idle_tick` is tested
+/// without it.
+#[allow(async_fn_in_trait)]
+pub trait IdleControls {
+    /// "Install updates by itself when idle".
+    async fn auto_install_on(&self) -> bool;
+    /// Runs queued, running or waiting for an approval; an error counts as one.
+    async fn unfinished_runs(&self) -> usize;
+    /// The main window is hidden or minimised.
+    fn window_hidden(&self) -> bool;
+    async fn hold_runs(&self, held: bool);
+    /// Downloads `version` again with the quiet installer and starts its install, the window
+    /// kept hidden. False when it could not begin.
+    async fn start_quiet_install(&self, version: &str) -> bool;
+}
+
+/// One look at whether Dots may install the ready update by itself now; true when the
+/// install began. The runs are read again under the turn with the queue held, so a run that
+/// started meanwhile stops it.
+pub async fn idle_tick(c: &impl IdleControls, updates: &Updates) -> bool {
+    let _turn = updates.turn.lock().await;
+    let (ready, later, busy) = {
+        let state = updates.state.lock().unwrap();
+        (
+            state.ready_version().map(str::to_string),
+            state.later_pressed(),
+            state.holds_runs(),
+        )
+    };
+    let Some(version) = ready else {
+        return false;
+    };
+    let (input_idle, composer_has_text) = updates.activity();
+    let due = idle_install_due(&IdleInput {
+        enabled: c.auto_install_on().await,
+        ready: true,
+        later,
+        busy,
+        unfinished_runs: c.unfinished_runs().await,
+        composer_has_text,
+        input_idle,
+        window_hidden: c.window_hidden(),
+    });
+    if !due {
+        return false;
+    }
+    c.hold_runs(true).await;
+    if c.unfinished_runs().await > 0 {
+        c.hold_runs(false).await;
+        return false;
+    }
+    if !matches!(
+        updates.state.lock().unwrap().restart(&[]),
+        Ok(Next::Install)
+    ) {
+        c.hold_runs(false).await;
+        return false;
+    }
+    if c.start_quiet_install(&version).await {
+        return true;
+    }
+    updates.state.lock().unwrap().abandon(&format!(
+        "Dots could not download {version} again to install it by itself. It tries again at the next check."
+    ));
+    c.hold_runs(false).await;
+    false
+}
+
+/// Whether the window renders within `limit`.
+pub async fn wait_rendered(updates: &Updates, limit: Duration) -> bool {
+    let mut rx = updates.rendered.subscribe();
+    tokio::time::timeout(limit, rx.wait_for(|done| *done))
+        .await
+        .is_ok_and(|r| r.is_ok())
+}
+
+/// The end of the health check of `version`: the record says whether it passed. Returns the
+/// note it leaves: UpdatedItself after a passed idle install, Unhealthy after a failure,
+/// None otherwise. The note is kept as the state's notice.
+pub fn finish_health(updates: &Updates, version: &str, passed: bool) -> UpdateNote {
+    let mut record = update_record::read(&updates.data_dir);
+    let note = if passed {
+        update_record::passed(&mut record);
+        match record.by_itself_at.clone() {
+            Some(at) => UpdateNote::UpdatedItself {
+                version: version.to_string(),
+                at,
+            },
+            None => UpdateNote::None,
+        }
+    } else {
+        update_record::failed(&mut record, version);
+        updates.state.lock().unwrap().mark_bad(version);
+        UpdateNote::Unhealthy {
+            version: version.to_string(),
+            back_to: update_record::go_back_target(&record).map(|(v, _)| v),
+        }
+    };
+    if let Err(e) = update_record::write(&updates.data_dir, &record) {
+        tracing::warn!("could not write the update record: {e}");
+    }
+    let notice = (note != UpdateNote::None).then(|| note.clone());
+    updates.state.lock().unwrap().set_notice(notice);
+    note
+}
+
+/// The note for the version running when its developers withdrew it (`release` is its own
+/// release), with Go back's version when the last update left a backup.
+pub fn withdrawn_notice(
+    release: Option<&dots_core::releases::Release>,
+    record: &UpdateRecord,
+) -> Option<UpdateNote> {
+    let release = release.filter(|r| r.withdrawn)?;
+    Some(UpdateNote::Withdrawn {
+        version: release.version.clone(),
+        back_to: update_record::go_back_target(record).map(|(v, _)| v),
+    })
+}
+
+/// After this start's record was read (`update_record::on_start`): a failed health check
+/// shows Unhealthy; a check in progress waits for the window, at most `HEALTH_LIMIT`.
+pub fn start_health(app: &AppHandle, health: update_record::Health) {
+    let Ok(managed) = updates(app) else {
+        return;
+    };
+    match health {
+        update_record::Health::Fine => {}
+        update_record::Health::Failed { version, back_to } => {
+            managed.state.lock().unwrap().mark_bad(&version);
+            managed
+                .state
+                .lock()
+                .unwrap()
+                .set_notice(Some(UpdateNote::Unhealthy { version, back_to }));
+        }
+        update_record::Health::Checking => {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                let Ok(updates) = updates(&app) else {
+                    return;
+                };
+                let passed = wait_rendered(&updates, update_record::HEALTH_LIMIT).await;
+                let note = finish_health(&updates, env!("CARGO_PKG_VERSION"), passed);
+                if note != UpdateNote::None {
+                    if let Err(e) = app.emit(UPDATE_EVENT, &note) {
+                        tracing::warn!("emitting the update note failed: {e}");
+                    }
+                }
+            });
+        }
+    }
+}
+
+/// "Dismiss" of "Dots updated itself": said once.
+pub fn dismiss_updated(app: &AppHandle) -> Result<UpdateNote, CmdError> {
+    let updates = updates(app)?;
+    let mut record = update_record::read(&updates.data_dir);
+    record.by_itself_at = None;
+    update_record::write(&updates.data_dir, &record).map_err(CmdError::internal)?;
+    let mut state = updates.state.lock().unwrap();
+    if matches!(state.note(&[]), UpdateNote::UpdatedItself { .. }) {
+        state.set_notice(None);
+    }
+    Ok(state.note(&[]))
+}
+
+/// The app's `IdleControls`.
+struct AppIdle<'a> {
+    app: &'a AppHandle,
+    rt: &'a Arc<Runtime>,
+}
+
+impl IdleControls for AppIdle<'_> {
+    async fn auto_install_on(&self) -> bool {
+        self.rt.settings().await.auto_install_updates
+    }
+
+    async fn unfinished_runs(&self) -> usize {
+        self.rt.unfinished_runs().await.unwrap_or(1)
+    }
+
+    fn window_hidden(&self) -> bool {
+        self.app
+            .get_webview_window("main")
+            .is_none_or(|w| !w.is_visible().unwrap_or(false) || w.is_minimized().unwrap_or(false))
+    }
+
+    async fn hold_runs(&self, held: bool) {
+        self.rt.hold_runs(held).await;
+    }
+
+    async fn start_quiet_install(&self, version: &str) -> bool {
+        let Ok(updates) = updates(self.app) else {
+            return false;
+        };
+        let downloaded = match download_quiet(self.app, version).await {
+            Ok(downloaded) => downloaded,
+            Err(e) => {
+                tracing::warn!("downloading {version} for an idle install failed: {e}");
+                return false;
+            }
+        };
+        let steps = AppSteps {
+            app: self.app.clone(),
+            rt: Some(self.rt.clone()),
+            data_dir: updates.data_dir.clone(),
+            downloaded,
+            quiet: true,
+        };
+        tauri::async_runtime::spawn(
+            async move { update::install(&steps, Purpose::Update, None).await },
+        );
+        true
+    }
+}
+
+/// The ready update again, from the usual endpoint, with the quiet installer (`/S`): the
+/// updater fixes its installer's arguments when it checks, so a quiet install needs its own
+/// download.
+async fn download_quiet(app: &AppHandle, version: &str) -> Result<Downloaded, String> {
+    let url = update::endpoint(std::env::var_os(update::ENDPOINT_ENV))?;
+    let updater = app
+        .updater_builder()
+        .endpoints(vec![url])
+        .map(|b| b.installer_arg("/S"))
+        .and_then(|b| b.build())
+        .map_err(|e| e.to_string())?;
+    let found = updater
+        .check()
+        .await
+        .map_err(|e| e.to_string())?
+        .filter(|u| u.version == version)
+        .ok_or_else(|| format!("Dots {version} is no longer offered."))?;
+    let bytes = found
+        .download(|_, _| {}, || {})
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(Downloaded {
+        update: found,
+        bytes,
+        purpose: Purpose::Update,
+        backup: None,
+    })
 }
 
 /// What a button and a run change do to the rest of Dots, so `act` and `settle` are tested
@@ -458,15 +729,69 @@ pub fn spawn(app: AppHandle, rt: Arc<Runtime>) {
             return;
         }
     };
+    let (idle_app, idle_rt) = (app.clone(), rt.clone());
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(IDLE_TICK).await;
+            let Ok(updates) = updates(&idle_app) else {
+                continue;
+            };
+            let controls = AppIdle {
+                app: &idle_app,
+                rt: &idle_rt,
+            };
+            if idle_tick(&controls, &updates).await {
+                tracing::info!("installing the update by itself while Dots is idle");
+            }
+        }
+    });
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(update::FIRST_CHECK_AFTER).await;
         loop {
             if let Err(e) = check(&app, &rt, &url).await {
                 tracing::warn!("checking for an update failed: {e}");
             }
+            check_withdrawn(&app, &rt).await;
             tokio::time::sleep(update::CHECK_EVERY).await;
         }
     });
+}
+
+/// How often the idle install looks (updates UI spec section 4.2).
+const IDLE_TICK: Duration = Duration::from_secs(60);
+
+/// Whether the developers withdrew the version running: the strip offers Go back. A failed
+/// read is logged; nothing is shown.
+async fn check_withdrawn(app: &AppHandle, rt: &Arc<Runtime>) {
+    let Ok(updates) = updates(app) else {
+        return;
+    };
+    let release = match dots_core::releases::fetch_release(
+        dots_core::releases::API,
+        env!("CARGO_PKG_VERSION"),
+    )
+    .await
+    {
+        Ok(release) => release,
+        Err(e) => {
+            tracing::warn!("reading this version's release failed: {e}");
+            return;
+        }
+    };
+    let record = update_record::read(&updates.data_dir);
+    let Some(notice) = withdrawn_notice(release.as_ref(), &record) else {
+        return;
+    };
+    {
+        let mut state = updates.state.lock().unwrap();
+        if matches!(state.note(&[]), UpdateNote::Unhealthy { .. }) {
+            return;
+        }
+        state.set_notice(Some(notice));
+    }
+    let working = rt.working_dots().await.unwrap_or_default();
+    let note = updates.state.lock().unwrap().note(&working);
+    AppControls { app, rt }.announce(&note);
 }
 
 /// A run changed: the note's list of working dots follows, and a waiting install begins once
@@ -592,6 +917,7 @@ fn start_install(app: &AppHandle, rt: &Arc<Runtime>) -> bool {
         rt: Some(rt.clone()),
         data_dir: updates.data_dir.clone(),
         downloaded,
+        quiet: false,
     };
     tauri::async_runtime::spawn(async move {
         update::install(&steps, purpose, backup.as_deref()).await
@@ -605,6 +931,8 @@ struct AppSteps {
     rt: Option<Arc<Runtime>>,
     data_dir: PathBuf,
     downloaded: Downloaded,
+    /// An idle install: no installer window, and the new Dots stays in the tray.
+    quiet: bool,
 }
 
 impl InstallSteps for AppSteps {
@@ -629,7 +957,11 @@ impl InstallSteps for AppSteps {
     }
 
     fn mark_restart(&self) {
-        crate::startup::mark_restart(&self.data_dir);
+        if self.quiet {
+            crate::startup::mark_stay_hidden(&self.data_dir);
+        } else {
+            crate::startup::mark_restart(&self.data_dir);
+        }
     }
 
     fn discard_backup(&self, backup: &Path) {
@@ -660,7 +992,7 @@ impl InstallSteps for AppSteps {
                 record.backup = backup.map(Path::to_path_buf);
                 record.pending = true;
                 record.starts = 0;
-                record.by_itself_at = None;
+                record.by_itself_at = self.quiet.then(dots_core::util::now);
             }
         }
         crate::update_record::write(&self.data_dir, &record)
@@ -1035,5 +1367,175 @@ mod tests {
             withdrawn: false,
         };
         assert_eq!(repair_allowed(Some(&release)), Ok(()));
+    }
+
+    /// The idle side of the app: the setting on, the window hidden, `runs` answered in turn.
+    struct FakeIdle {
+        runs: RefCell<Vec<usize>>,
+        log: RefCell<Vec<String>>,
+        install_ok: bool,
+    }
+
+    impl FakeIdle {
+        fn new(runs: &[usize], install_ok: bool) -> Self {
+            Self {
+                runs: RefCell::new(runs.iter().rev().copied().collect()),
+                log: RefCell::new(Vec::new()),
+                install_ok,
+            }
+        }
+        fn take(&self) -> Vec<String> {
+            std::mem::take(&mut *self.log.borrow_mut())
+        }
+    }
+
+    impl IdleControls for FakeIdle {
+        async fn auto_install_on(&self) -> bool {
+            true
+        }
+        async fn unfinished_runs(&self) -> usize {
+            self.runs.borrow_mut().pop().unwrap_or(0)
+        }
+        fn window_hidden(&self) -> bool {
+            true
+        }
+        async fn hold_runs(&self, held: bool) {
+            self.log.borrow_mut().push(format!("hold {held}"));
+        }
+        async fn start_quiet_install(&self, version: &str) -> bool {
+            self.log
+                .borrow_mut()
+                .push(format!("quiet install {version}"));
+            self.install_ok
+        }
+    }
+
+    #[tokio::test]
+    async fn an_idle_install_rechecks_the_runs_under_the_turn_before_it_begins() {
+        let updates = ready();
+        // No run when the tick decides, one at the recheck: nothing is installed.
+        let fake = FakeIdle::new(&[0, 1], true);
+        assert!(!idle_tick(&fake, &updates).await);
+        assert_eq!(fake.take(), ["hold true", "hold false"]);
+        assert!(matches!(
+            updates.state.lock().unwrap().note(&[]),
+            UpdateNote::Ready { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn an_idle_install_is_quiet_and_keeps_the_window_hidden() {
+        let updates = ready();
+        let fake = FakeIdle::new(&[0, 0], true);
+        assert!(idle_tick(&fake, &updates).await);
+        assert_eq!(fake.take(), ["hold true", "quiet install 0.2.0"]);
+        assert!(matches!(
+            updates.state.lock().unwrap().note(&[]),
+            UpdateNote::Installing { .. }
+        ));
+        // "Later" stops it for the rest of the session.
+        let updates = ready();
+        updates.state.lock().unwrap().later();
+        let fake = FakeIdle::new(&[0, 0], true);
+        assert!(!idle_tick(&fake, &updates).await);
+        assert!(fake.take().is_empty());
+        // A quiet download that fails lets the queue go and says why.
+        let updates = ready();
+        let fake = FakeIdle::new(&[0, 0], false);
+        assert!(!idle_tick(&fake, &updates).await);
+        assert_eq!(
+            fake.take(),
+            ["hold true", "quiet install 0.2.0", "hold false"]
+        );
+        assert!(matches!(
+            updates.state.lock().unwrap().note(&[]),
+            UpdateNote::Failed { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn the_health_check_passes_once_the_window_has_rendered_and_fails_at_the_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let backup = dir.path().join("dots-0.1.0-2026-10-27-031200.db");
+        std::fs::write(&backup, "db").unwrap();
+        let record = UpdateRecord {
+            leaving: Some("0.1.0".into()),
+            installing: Some("0.2.0".into()),
+            backup: Some(backup),
+            pending: true,
+            starts: 1,
+            by_itself_at: Some("2026-10-27T03:12:00.000Z".into()),
+            ..Default::default()
+        };
+        update_record::write(dir.path(), &record).unwrap();
+        let updates = Updates::new(dir.path().to_path_buf(), None, Vec::new());
+        let sender = updates.rendered.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            sender.send_replace(true);
+        });
+        assert!(wait_rendered(&updates, Duration::from_secs(5)).await);
+        let note = finish_health(&updates, "0.2.0", true);
+        assert!(!update_record::read(dir.path()).pending);
+        assert_eq!(
+            note,
+            UpdateNote::UpdatedItself {
+                version: "0.2.0".into(),
+                at: "2026-10-27T03:12:00.000Z".into()
+            }
+        );
+
+        update_record::write(dir.path(), &record).unwrap();
+        let updates = Updates::new(dir.path().to_path_buf(), None, Vec::new());
+        assert!(!wait_rendered(&updates, Duration::from_millis(50)).await);
+        let note = finish_health(&updates, "0.2.0", false);
+        assert_eq!(
+            update_record::read(dir.path()).bad,
+            vec!["0.2.0".to_string()]
+        );
+        assert_eq!(
+            note,
+            UpdateNote::Unhealthy {
+                version: "0.2.0".into(),
+                back_to: Some("0.1.0".into())
+            }
+        );
+        assert!(!updates.state.lock().unwrap().wants("0.2.0"));
+    }
+
+    #[test]
+    fn a_withdrawn_running_version_offers_go_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let backup = dir.path().join("dots-0.1.0-2026-10-27-031200.db");
+        std::fs::write(&backup, "db").unwrap();
+        let record = UpdateRecord {
+            leaving: Some("0.1.0".into()),
+            backup: Some(backup),
+            ..Default::default()
+        };
+        let release = |withdrawn| dots_core::releases::Release {
+            version: "0.2.0".into(),
+            name: "Dots 0.2.0".into(),
+            body: String::new(),
+            url: String::new(),
+            prerelease: withdrawn,
+            withdrawn,
+        };
+        assert_eq!(withdrawn_notice(None, &record), None);
+        assert_eq!(withdrawn_notice(Some(&release(false)), &record), None);
+        assert_eq!(
+            withdrawn_notice(Some(&release(true)), &record),
+            Some(UpdateNote::Withdrawn {
+                version: "0.2.0".into(),
+                back_to: Some("0.1.0".into())
+            })
+        );
+        assert_eq!(
+            withdrawn_notice(Some(&release(true)), &UpdateRecord::default()),
+            Some(UpdateNote::Withdrawn {
+                version: "0.2.0".into(),
+                back_to: None
+            })
+        );
     }
 }
