@@ -75,6 +75,9 @@ pub struct FollowUps {
     /// `Runtime::chat` and `CheckIns::reply` take it too, so no two of them give one run two
     /// children.
     thread_lock: Arc<Mutex<()>>,
+    /// The threads (by root run id) whose app decision is being carried out without the
+    /// thread lock: nothing continues them meanwhile (`Runtime::decide_app_proposal`).
+    deciding: std::sync::Mutex<std::collections::HashSet<String>>,
     wake: Notify,
     paused: AtomicBool,
 }
@@ -86,6 +89,7 @@ impl FollowUps {
             bus,
             clock,
             thread_lock: Arc::new(Mutex::new(())),
+            deciding: Default::default(),
             wake: Notify::new(),
             paused: AtomicBool::new(false),
         })
@@ -94,6 +98,27 @@ impl FollowUps {
     /// The lock of every writer that continues a thread.
     pub fn thread_lock(&self) -> Arc<Mutex<()>> {
         self.thread_lock.clone()
+    }
+
+    /// Marks the thread `root` as deciding, under the thread lock; `false` when it already is.
+    pub fn begin_deciding(&self, root: &str) -> bool {
+        self.deciding
+            .lock()
+            .expect("deciding threads")
+            .insert(root.to_string())
+    }
+
+    pub fn end_deciding(&self, root: &str) {
+        self.deciding.lock().expect("deciding threads").remove(root);
+    }
+
+    /// Whether the thread `root` waits for an app decision being carried out: a writer that
+    /// continues threads leaves it alone until then.
+    pub fn deciding(&self, root: &str) -> bool {
+        self.deciding
+            .lock()
+            .expect("deciding threads")
+            .contains(root)
     }
 
     /// Wakes the loop for a pass: a follow-up was added or cancelled, or a dot changed.
@@ -259,7 +284,8 @@ impl FollowUps {
             Some(from) => self.store.list_thread(&from.root_run_id).await?,
             None => Vec::new(),
         };
-        if thread.iter().any(|r| !r.status.is_terminal()) {
+        let deciding = from.as_ref().is_some_and(|f| self.deciding(&f.root_run_id));
+        if deciding || thread.iter().any(|r| !r.status.is_terminal()) {
             return Ok(None);
         }
         let new = follow_up_run(row, from.as_ref(), thread.last(), now)?;

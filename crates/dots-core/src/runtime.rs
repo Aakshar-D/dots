@@ -1070,6 +1070,9 @@ impl Runtime {
             // resuming the same session in the same folder. The UI keeps its composer locked
             // until then, so these refusals answer a stale screen or a second window; their
             // text is shown to the user as it is.
+            if self.follow_ups.deciding(&named.root_run_id) {
+                return Err(Error::Conflict(crate::checkins::DECIDING.into()));
+            }
             let thread = self.store.list_thread(&named.root_run_id).await?;
             if let Some(active) = thread.iter().find(|r| !r.status.is_terminal()) {
                 return Err(Error::Conflict(
@@ -1132,7 +1135,9 @@ impl Runtime {
     /// library" (or "Update") adds the app first, and a failure there leaves the card waiting;
     /// then the proposal is decided and the dot's thread continues with what the person decided,
     /// as an answered question does (`CheckIns::reply`). A thread that has not ended is refused,
-    /// as a reply is.
+    /// as a reply is. Adding runs the app's migrations, which may take long on real data: the
+    /// thread lock is let go meanwhile, and the thread is marked as deciding, so no chat, reply
+    /// or follow-up continues it and no second decision is made in it.
     pub async fn decide_app_proposal(
         &self,
         id: &str,
@@ -1140,12 +1145,15 @@ impl Runtime {
     ) -> Result<(crate::apps::propose::AppProposal, Run)> {
         use crate::apps::propose::{Decision, ProposalStatus, DECIDED_ALREADY, DISCARDED};
         let lock = self.follow_ups.thread_lock();
-        let _one_at_a_time = lock.lock().await;
+        let mut one_at_a_time = lock.lock().await;
         let p = self.store.get_app_proposal(id).await?;
         if p.status != ProposalStatus::Pending {
             return Err(Error::Conflict(DECIDED_ALREADY.into()));
         }
         let asked = self.store.get_run(&p.run_id).await?;
+        if self.follow_ups.deciding(&asked.root_run_id) {
+            return Err(Error::Conflict(crate::checkins::DECIDING.into()));
+        }
         let thread = self.store.list_thread(&asked.root_run_id).await?;
         if let Some(active) = thread.iter().find(|r| !r.status.is_terminal()) {
             return Err(crate::checkins::thread_busy(active.status));
@@ -1172,7 +1180,12 @@ impl Runtime {
             Decision::Discard => (ProposalStatus::Discarded, None, DISCARDED.to_string()),
             Decision::Add | Decision::AddWithKeptData => {
                 let on_kept = decision == Decision::AddWithKeptData;
-                let item = self.apps.accept(&p, on_kept).await?;
+                self.follow_ups.begin_deciding(&asked.root_run_id);
+                drop(one_at_a_time);
+                let accepted = self.apps.accept(&p, on_kept).await;
+                one_at_a_time = lock.lock().await;
+                self.follow_ups.end_deciding(&asked.root_run_id);
+                let item = accepted?;
                 let version = match &item.config {
                     crate::library::LibraryConfig::App(c) => c.version,
                     _ => 1,
@@ -1205,6 +1218,7 @@ impl Runtime {
             .store
             .decide_app_proposal(id, status, answer.as_deref(), &new)
             .await?;
+        drop(one_at_a_time);
         self.runner.enqueued(&run);
         self.apps.drop_proposed(id).await;
         self.apps.proposal_changed(&decided);

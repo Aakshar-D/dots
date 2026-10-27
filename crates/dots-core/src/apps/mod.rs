@@ -16,7 +16,7 @@ pub mod source;
 pub mod tests;
 pub mod wake;
 
-pub use registry::{AppCall, Apps, APPS_DIR};
+pub use registry::{AppCall, Apps, APPS_DIR, MAX_LOGGED};
 pub use run::{RunApp, RunApps};
 
 /// The policy name of every app tool (spec section 6): a rule `App`, `App(<app>)`,

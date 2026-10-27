@@ -536,6 +536,67 @@ async fn a_claude_dot_copies_an_installed_app_through_dots_own_server() {
 }
 
 #[tokio::test]
+async fn while_an_update_migrates_its_thread_waits_and_other_threads_go_on() {
+    let t = start().await;
+    let first = in_workspace(&t, "first", &expenses());
+    let apps = t.rt.apps();
+    apps.install(read_folder(&first).unwrap(), AppOrigin::Proposed)
+        .await
+        .unwrap();
+    let ink = json!({ "item": "Ink", "amount": 3, "on": "2026-10-20" });
+    apps.call(
+        "expenses",
+        "add_expense",
+        ink,
+        dots_core::apps::call::Actor::Person,
+    )
+    .await
+    .unwrap();
+    // Slow on real data only: the tests' empty databases seed no recursion.
+    let slow = "CREATE TABLE pad AS WITH RECURSIVE c(x) AS (SELECT 1 FROM expenses UNION ALL \
+                SELECT x + 1 FROM c WHERE x < 4000000) SELECT max(x) AS x FROM c;\n";
+    let mut files = expenses();
+    files.push(("migrations/0002_pad.sql", slow.to_string()));
+    let next = in_workspace(&t, "next", &files);
+    let llm = Llm::start(dones(6)).await;
+    let fixer = finished_run(&t, &llm, "fixer").await;
+    let other = finished_run(&t, &llm, "other").await;
+    apps.propose(&fixer.id, next, "Pads.").await.unwrap();
+    let p = proposals(&t, &fixer.dot_id).await.remove(0);
+    let done = std::sync::atomic::AtomicBool::new(false);
+    let decide = async {
+        let decided = t.rt.decide_app_proposal(&p.id, Decision::Add).await;
+        done.store(true, std::sync::atomic::Ordering::SeqCst);
+        decided
+    };
+    let meanwhile = async {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let same = t.rt.chat(&fixer.dot_id, "And?", Some(&fixer.id)).await;
+        let elsewhere = t.rt.chat(&other.dot_id, "Hello", Some(&other.id)).await;
+        (
+            same,
+            elsewhere,
+            done.load(std::sync::atomic::Ordering::SeqCst),
+        )
+    };
+    let (decided, (same, elsewhere, finished)) = tokio::join!(decide, meanwhile);
+    assert!(
+        !finished,
+        "the migration outlasted the chats; make it slower"
+    );
+    match same {
+        Err(Error::Conflict(m)) => assert_eq!(m, dots_core::checkins::DECIDING),
+        other => panic!("{other:?}"),
+    }
+    assert!(elsewhere.is_ok(), "{elsewhere:?}");
+    let (decided, _) = decided.unwrap();
+    assert_eq!(decided.status, ProposalStatus::Added);
+    let (_, config) = apps.get("expenses").await.unwrap();
+    assert_eq!(config.version, 2);
+    t.rt.shutdown();
+}
+
+#[tokio::test]
 async fn a_claude_dot_proposes_through_dots_own_server_under_its_policy() {
     let script = json!([
         {"emit": {"type": "system", "subtype": "init", "session_id": "$SESSION"}},

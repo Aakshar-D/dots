@@ -267,7 +267,12 @@ impl Apps {
                 _ => None,
             };
             let (result, error, ids, changes) = match &ran {
-                Ok(out) => (Some(out.result.clone()), None, out.ids.clone(), out.changes),
+                Ok(out) => (
+                    Some(log_value(out.result.clone())),
+                    None,
+                    out.ids.clone(),
+                    out.changes,
+                ),
                 Err(e) => (None, Some(e.to_string()), Vec::new(), 0),
             };
             let record = AppCall {
@@ -276,7 +281,7 @@ impl Apps {
                 tool: tool.to_string(),
                 actor: actor.clone(),
                 run_id,
-                input: logged_input(input),
+                input: log_value(input),
                 now,
                 ids,
                 result,
@@ -772,17 +777,17 @@ impl Apps {
     }
 }
 
-/// The most of a call's input the call log keeps, as JSON text.
-const MAX_LOGGED_INPUT: usize = 30 * 1024;
+/// The most of a call's input, and of its result, the call log keeps, as JSON text.
+pub const MAX_LOGGED: usize = 30 * 1024;
 
-/// A call's input as the call log keeps it: whole, or past `MAX_LOGGED_INPUT` its size and its
-/// start.
-fn logged_input(input: Value) -> Value {
+/// A call's input or result as the call log keeps it: whole, or past `MAX_LOGGED` its size and
+/// its start.
+fn log_value(input: Value) -> Value {
     let text = input.to_string();
-    if text.len() <= MAX_LOGGED_INPUT {
+    if text.len() <= MAX_LOGGED {
         return input;
     }
-    let mut at = MAX_LOGGED_INPUT;
+    let mut at = MAX_LOGGED;
     while !text.is_char_boundary(at) {
         at -= 1;
     }
