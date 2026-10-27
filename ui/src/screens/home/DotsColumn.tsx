@@ -48,7 +48,9 @@ export function DotsColumn({ rows, openId }: { rows: DotOverview[]; openId: stri
     links[to]?.focus();
   }
   return (
-    <nav aria-label="Dots" className="flex w-64 shrink-0 flex-col border-r bg-sidebar">
+    // Narrower in a small window, so the conversation keeps room and nothing scrolls
+    // sideways (420 px self-QA).
+    <nav aria-label="Dots" className="flex w-40 shrink-0 flex-col border-r bg-sidebar sm:w-64">
       <div className="flex items-center gap-2 px-3 py-2">
         <h2 className="flex-1 font-semibold">Dots</h2>
         <Button asChild size="icon-sm" variant="ghost">

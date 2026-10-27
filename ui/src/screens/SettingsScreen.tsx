@@ -347,7 +347,7 @@ function Form({ stored, status }: { stored: Settings; status: Status | undefined
       <Section title="Claude Code CLI">
         <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-xs">
           <dt className="text-muted-foreground">In use</dt>
-          <dd className="font-mono">{claude?.program ?? "not found"}</dd>
+          <dd className="min-w-0 font-mono break-all">{claude?.program ?? "not found"}</dd>
           <dt className="text-muted-foreground">Version</dt>
           <dd>{claude?.version ?? "unknown"}</dd>
           <dt className="text-muted-foreground">Tested with</dt>
