@@ -3,7 +3,7 @@ use std::io::Cursor;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use crypto_box::aead::OsRng;
-use dots_core::publish::keys::{make_key, pubkey_in_conf, seal, with_pubkey, PROTOTYPE_PUBKEY};
+use dots_core::publish::keys::{make_key, pubkey_in_conf, seal, with_pubkey};
 use minisign::{PublicKeyBox, SecretKeyBox};
 
 const PASSWORD: &str = "correct horse battery";
@@ -58,7 +58,8 @@ fn the_pubkey_is_read_and_replaced_without_touching_the_rest() {
             .join("../../apps/dots-app/tauri.conf.json"),
     )
     .unwrap();
-    assert_eq!(pubkey_in_conf(&conf).as_deref(), Some(PROTOTYPE_PUBKEY));
+    // Whichever key master holds: the prototype's before the setup, the release key after.
+    assert!(pubkey_in_conf(&conf).is_some_and(|k| !k.is_empty() && k != "TkVXS0VZ"));
     let changed = with_pubkey(&conf, "TkVXS0VZ").unwrap();
     assert_eq!(pubkey_in_conf(&changed).as_deref(), Some("TkVXS0VZ"));
     let differing = conf
