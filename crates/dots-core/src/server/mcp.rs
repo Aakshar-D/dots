@@ -114,6 +114,7 @@ pub async fn handle(State(s): State<ServerState>, headers: HeaderMap, body: Byte
             // runner the apps.
             if s.runner.apps().is_some() {
                 tools.push(crate::apps::propose::mcp_schema());
+                tools.push(crate::apps::propose::copy_mcp_schema());
             }
             // The run's app tools (app library spec section 6).
             if let Some(apps) = run_apps(&s, &run_id) {
@@ -130,6 +131,7 @@ pub async fn handle(State(s): State<ServerState>, headers: HeaderMap, body: Byte
             let answer = match (name, name.and_then(Tool::from_name)) {
                 (Some("context"), _) => call_context(&s, &run_id, &req).await,
                 (Some(crate::apps::propose::TOOL), _) => call_propose(&s, &run_id, &req).await,
+                (Some(crate::apps::propose::COPY_TOOL), _) => call_copy(&s, &run_id, &req).await,
                 (_, Some(tool)) => call_check_in(&s, &run_id, &req, tool).await,
                 (Some(n), None) if TeamTool::from_name(n).is_some() => {
                     call_workflow(&s, &run_id, &req).await
@@ -257,6 +259,54 @@ async fn call_propose(s: &ServerState, run_id: &str, req: &Value) -> Result<Valu
     };
     let note = input["note"].as_str().unwrap_or_default();
     Ok(match apps.propose(run_id, folder, note).await {
+        Ok(text) => json!({ "content": [{ "type": "text", "text": text }] }),
+        Err(text) => not_performed(&cap_head(text)),
+    })
+}
+
+/// Checks a `copy_app` call against the dot's policy under `ProposeApp`, waiting for an
+/// approval when a rule asks, and copies the app into the folder, confined to the run's
+/// workspace (app library spec section 15). A call that is not performed is a tool result with
+/// `isError`.
+async fn call_copy(s: &ServerState, run_id: &str, req: &Value) -> Result<Value, (i64, String)> {
+    let Some(apps) = s.runner.apps() else {
+        return Err((-32602, "unknown tool".to_string()));
+    };
+    let params = req
+        .get("params")
+        .ok_or((-32602, "missing params".to_string()))?;
+    let mut input = match params.get("arguments") {
+        None | Some(Value::Null) => json!({}),
+        Some(args @ Value::Object(_)) => args.clone(),
+        Some(_) => return Err((-32602, "params.arguments must be an object".to_string())),
+    };
+    if let Value::Object(args) = &mut input {
+        args.retain(|key, _| crate::apps::propose::COPY_REQUIRED.contains(&key.as_str()));
+    }
+    let input = match s
+        .hub
+        .check(run_id, crate::apps::PROPOSE_POLICY, input)
+        .await
+    {
+        Ok(PermissionOutcome::Allow { input }) => input,
+        Ok(PermissionOutcome::Deny { message }) => return Ok(not_performed(&message)),
+        Err(e) => return Ok(not_performed(&format!("permission check failed: {e}"))),
+    };
+    let workspace = match s.store.get_run(run_id).await {
+        Ok(run) => run.workspace_path,
+        Err(e) => return Ok(not_performed(&format!("the run could not be read: {e}"))),
+    };
+    let Some(workspace) = workspace else {
+        return Ok(not_performed("this run has no workspace"));
+    };
+    let path = input["path"].as_str().unwrap_or_default();
+    let folder = match crate::engine::local::tools::confine(std::path::Path::new(&workspace), path)
+    {
+        Ok(folder) => folder,
+        Err(e) => return Ok(not_performed(&e)),
+    };
+    let app = input["app"].as_str().unwrap_or_default();
+    Ok(match apps.copy_to(app, folder, path).await {
         Ok(text) => json!({ "content": [{ "type": "text", "text": text }] }),
         Err(text) => not_performed(&cap_head(text)),
     })

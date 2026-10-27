@@ -32,7 +32,9 @@ pub const MAX_ENTRIES: usize = 500;
 /// the same way (`context::run`). The check-in tools tell and ask the person and schedule a
 /// follow-up (`checkins::run`), offered to every run of an engine that has check-ins, as are
 /// the memory tools (`memory::run`), which share one alias. `propose_app` hands an app folder in
-/// the workspace to the person (app library spec section 6.2), offered when the engine has apps.
+/// the workspace to the person (app library spec section 6.2), and `copy_app` copies an
+/// installed app into the workspace, under the same alias; both are offered when the engine has
+/// apps.
 pub const TOOLS: &[(&str, &str)] = &[
     ("read_file", "Read"),
     ("write_file", "Write"),
@@ -50,6 +52,7 @@ pub const TOOLS: &[(&str, &str)] = &[
     ("forget", "Memory"),
     ("recall", "Memory"),
     ("propose_app", "ProposeApp"),
+    ("copy_app", "ProposeApp"),
     ("start_workflow", "Workflow"),
 ];
 
@@ -88,16 +91,21 @@ pub fn alias(name: &str) -> Option<&'static str> {
 }
 
 /// The local tool behind a policy alias (`Bash` is `shell`): what an approval's `tool` names.
-/// The memory tools share `Memory`: `local_name_for` tells them apart by the call's input.
+/// The memory tools share `Memory`, and `propose_app` and `copy_app` share `ProposeApp`:
+/// `local_name_for` tells them apart by the call's input.
 pub fn local_name(alias: &str) -> Option<&'static str> {
     TOOLS.iter().find(|(_, a)| *a == alias).map(|(n, _)| *n)
 }
 
 /// The local tool of an approval's call: `local_name`, or for `Memory` the memory tool whose
-/// argument the input holds (`memory::Tool::for_input`).
+/// argument the input holds (`memory::Tool::for_input`), or for `ProposeApp` `copy_app` when
+/// the input names an app.
 pub fn local_name_for(alias: &str, input: &Value) -> Option<&'static str> {
     if alias == crate::memory::POLICY_NAME {
         return Some(crate::memory::Tool::for_input(input).name());
+    }
+    if alias == crate::apps::PROPOSE_POLICY && input.get("app").is_some() {
+        return Some(crate::apps::propose::COPY_TOOL);
     }
     local_name(alias)
 }
@@ -180,6 +188,7 @@ const ARGS: &[(&str, Params)] = &[
         "propose_app",
         &[("path", PathStr, true), ("note", Str, true)],
     ),
+    ("copy_app", &[("app", Str, true), ("path", PathStr, true)]),
     (
         "start_workflow",
         &[

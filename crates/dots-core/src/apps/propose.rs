@@ -45,8 +45,39 @@ pub const DESCRIPTION: &str = "Send an app you wrote in your workspace to the pe
     (the person's screen, which calls dots.call(tool, input)), migrations/0001_<name>.sql and on, \
     an optional sample.sql, and tests/<name>.test.js using test(name, fn), assert.equal, \
     assert.deepEqual, assert.throws and call(tool, input, { actor, now }). To change an app, \
-    send its whole folder, keeping the migrations that ran and adding new ones after them. Dots \
-    checks the folder and runs the tests; a problem comes back as an error for you to fix.";
+    send its whole folder, keeping the migrations that ran and adding new ones after them; copy \
+    an installed app into your workspace with copy_app first. Dots checks the folder and runs \
+    the tests; a problem comes back as an error for you to fix.";
+
+/// The tool that copies an installed app into the run's workspace, under `ProposeApp` (spec
+/// section 15): a change must keep the active version's migrations byte for byte, and only the
+/// dot that wrote an app still has its folder.
+pub const COPY_TOOL: &str = "copy_app";
+
+pub const COPY_DESCRIPTION: &str = "Copy an installed app's active version, as Dots keeps it, \
+    into a new folder of your workspace, to change it there and send it back with propose_app. \
+    Keep its migrations exactly as they are and add new ones after them.";
+
+/// `copy_app`'s arguments.
+pub fn copy_properties() -> Value {
+    json!({
+        "app": { "type": "string", "description": "The app's name" },
+        "path": { "type": "string", "description": "A new folder, relative to your workspace" }
+    })
+}
+
+pub const COPY_REQUIRED: [&str; 2] = ["app", "path"];
+
+/// `copy_app` as Dots' own `dots` MCP server lists it.
+pub fn copy_mcp_schema() -> Value {
+    json!({
+        "name": COPY_TOOL,
+        "description": COPY_DESCRIPTION,
+        "inputSchema": {
+            "type": "object", "properties": copy_properties(), "required": COPY_REQUIRED
+        }
+    })
+}
 
 /// The tool's arguments.
 pub fn properties() -> Value {
@@ -373,6 +404,51 @@ impl Apps {
             ))),
             other => other,
         }
+    }
+
+    /// `copy_app`: writes the files of the app `name`'s active version, as its version folder
+    /// holds them, into `folder` (already confined to the run's workspace), which must be new
+    /// or empty. `shown` is the folder as the dot named it. `Ok` is what the dot is told; `Err`
+    /// the problem, in a sentence for the dot.
+    pub async fn copy_to(
+        &self,
+        name: &str,
+        folder: PathBuf,
+        shown: &str,
+    ) -> std::result::Result<String, String> {
+        let (item, config) = match self.get(name).await {
+            Ok(found) => found,
+            Err(Error::NotFound(_)) => return Err(format!("there is no app {name}")),
+            Err(e) => return Err(said(e)),
+        };
+        let src = self.load(&item, &config).await.map_err(said)?;
+        let refused = format!("the folder {shown} is not empty: copy the app into a new folder");
+        blocking(move || -> std::result::Result<(), String> {
+            if folder.is_file() {
+                return Err(refused);
+            }
+            if let Ok(mut entries) = std::fs::read_dir(&folder) {
+                if entries.next().is_some() {
+                    return Err(refused);
+                }
+            }
+            for (path, bytes) in src.files() {
+                let file = folder.join(path);
+                if let Some(parent) = file.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+                }
+                std::fs::write(file, bytes).map_err(|e| e.to_string())?;
+            }
+            Ok(())
+        })
+        .await
+        .map_err(said)??;
+        Ok(format!(
+            "Copied version {} of the app {name} into {shown}. Change it there, keep its \
+             migrations as they are and add new ones after them, then send the whole folder with \
+             propose_app.",
+            config.version
+        ))
     }
 
     /// Deletes a decided proposal's files, and closes its previews.

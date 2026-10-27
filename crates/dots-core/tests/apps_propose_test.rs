@@ -399,6 +399,90 @@ async fn a_change_keeps_the_migrations_that_ran_and_waits_for_its_base_version()
 }
 
 #[tokio::test]
+async fn a_local_dot_copies_an_installed_app_into_its_workspace() {
+    let t = start().await;
+    let src = in_workspace(&t, "first", &expenses());
+    t.rt.apps()
+        .install(read_folder(&src).unwrap(), AppOrigin::Proposed)
+        .await
+        .unwrap();
+    let llm = Llm::start(vec![
+        llm_call("c1", "copy_app", json!({"app": "expenses", "path": "copy"})),
+        llm_text("Copied."),
+    ])
+    .await;
+    let dot =
+        t.rt.create_dot(local_spec(&t, &llm.endpoint(), "fixer"), None)
+            .await
+            .unwrap();
+    let run = t.rt.run_now(&dot.id).await.unwrap();
+    wait_status(t.rt.store(), &run.id, RunStatus::Succeeded, 30).await;
+    let reqs = llm.requests();
+    let names: Vec<&str> = reqs[0]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["function"]["name"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"copy_app"), "{names:?}");
+    assert!(
+        tool_result(&reqs[1], "c1").starts_with("Copied version 1 of the app expenses into copy."),
+        "{}",
+        tool_result(&reqs[1], "c1")
+    );
+    assert!(t.dir.path().join("copy").join("app.json").is_file());
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn a_claude_dot_copies_an_installed_app_through_dots_own_server() {
+    let script = json!([
+        {"emit": {"type": "system", "subtype": "init", "session_id": "$SESSION"}},
+        {"mcp_call": {"server": "dots", "tool": "copy_app",
+                      "arguments": {"app": "expenses", "path": "copy"}}},
+        {"emit": {"type": "result", "subtype": "success", "is_error": false, "result": "done",
+                  "usage": {"input_tokens": 1, "output_tokens": 1}}}
+    ]);
+    let t = start_with(|cfg, dir| {
+        let path = dir.join("script.json");
+        std::fs::write(&path, script.to_string()).unwrap();
+        cfg.claude_env = vec![
+            (
+                "FAKE_CLAUDE_SCRIPT".into(),
+                path.to_string_lossy().into_owned(),
+            ),
+            (
+                "FAKE_CLAUDE_ARGS_OUT".into(),
+                dir.join("args.json").to_string_lossy().into_owned(),
+            ),
+        ];
+    })
+    .await;
+    let src = in_workspace(&t, "first", &expenses());
+    t.rt.apps()
+        .install(read_folder(&src).unwrap(), AppOrigin::Proposed)
+        .await
+        .unwrap();
+    let mut s = spec("claude");
+    s.workdir = t.dir.path().to_string_lossy().to_string();
+    s.workspace_mode = WorkspaceMode::Folder;
+    s.engine = EngineKind::Claude;
+    let dot = t.rt.create_dot(s, None).await.unwrap();
+    let run = t.rt.run_now(&dot.id).await.unwrap();
+    wait_status(t.rt.store(), &run.id, RunStatus::Succeeded, 30).await;
+    let recorded: Value =
+        serde_json::from_str(&std::fs::read_to_string(t.dir.path().join("args.json")).unwrap())
+            .unwrap();
+    let args: Vec<String> = serde_json::from_value(recorded["args"].clone()).unwrap();
+    assert!(
+        args.contains(&"mcp__dots__copy_app".to_string()),
+        "{args:?}"
+    );
+    assert!(t.dir.path().join("copy").join("logic.js").is_file());
+    t.rt.shutdown();
+}
+
+#[tokio::test]
 async fn a_claude_dot_proposes_through_dots_own_server_under_its_policy() {
     let script = json!([
         {"emit": {"type": "system", "subtype": "init", "session_id": "$SESSION"}},

@@ -22,6 +22,17 @@ pub(super) fn propose_schema() -> Value {
     )
 }
 
+/// The function definition of `copy_app`.
+pub(super) fn copy_schema() -> Value {
+    use crate::apps::propose;
+    tools::tool(
+        propose::COPY_TOOL,
+        propose::COPY_DESCRIPTION,
+        propose::copy_properties(),
+        &propose::COPY_REQUIRED,
+    )
+}
+
 impl Session {
     /// Whether the model's call `name` is one of the run's app tools.
     pub(super) fn app_tool(&self, name: &str) -> bool {
@@ -77,6 +88,26 @@ impl Session {
         };
         match apps
             .propose(&self.ctx.run_id, folder, tools::str_arg(input, "note"))
+            .await
+        {
+            Ok(text) => ToolOutput::ok(text),
+            Err(text) => ToolOutput::err(text),
+        }
+    }
+
+    /// `copy_app` after the gate allowed it: `path` was confined to the workspace by `prepare`,
+    /// and is resolved again here.
+    pub(super) async fn copy_app(&self, input: &Value) -> ToolOutput {
+        let Some(apps) = &self.apps else {
+            return ToolOutput::err("copy_app is not available in this run");
+        };
+        let shown = tools::str_arg(input, "path");
+        let folder = match tools::confine(&self.ctx.workspace, shown) {
+            Ok(folder) => folder,
+            Err(e) => return ToolOutput::err(e),
+        };
+        match apps
+            .copy_to(tools::str_arg(input, "app"), folder, shown)
             .await
         {
             Ok(text) => ToolOutput::ok(text),
