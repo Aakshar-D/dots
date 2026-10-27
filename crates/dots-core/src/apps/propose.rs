@@ -356,8 +356,9 @@ impl Apps {
         }
     }
 
-    /// Deletes a decided proposal's files.
+    /// Deletes a decided proposal's files, and closes its previews.
     pub async fn drop_proposed(&self, id: &str) {
+        self.previews.close_proposal(id);
         let dir = self.proposed_dir(id);
         let _ = blocking(move || std::fs::remove_dir_all(dir)).await;
     }

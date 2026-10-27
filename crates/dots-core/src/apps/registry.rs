@@ -49,6 +49,8 @@ pub struct Apps {
     clock: Arc<dyn Clock>,
     /// Announces a run an app started, so the runner starts it (`set_starter`).
     starter: Arc<std::sync::OnceLock<Starter>>,
+    /// The review cards' previews (spec section 6.2).
+    pub(super) previews: super::preview::Previews,
 }
 
 type Starter = Box<dyn Fn(&Run) + Send + Sync>;
@@ -92,6 +94,7 @@ impl Apps {
             cache: Arc::default(),
             clock: Arc::new(SystemClock),
             starter: Arc::default(),
+            previews: Default::default(),
         }
     }
 
@@ -219,27 +222,10 @@ impl Apps {
                  the dot's rules for it as a tool that does not; a new run has the new version"
             ));
         }
-        let dots: Vec<DotRef> = self
-            .store
-            .dots_with_app(&item)
-            .await
-            .map_err(|e| e.to_string())?
-            .into_iter()
-            // A dot the person switched off is neither listed nor woken (spec section 7), as a
-            // webhook or a follow-up does not run it.
-            .filter(|d| d.spec.enabled)
-            .map(|d| DotRef {
-                id: d.id,
-                name: d.spec.name,
-            })
-            .collect();
+        let dots = self.listed_dots(&item).await.map_err(|e| e.to_string())?;
         let logged =
             matches!(actor, Actor::Dots) || src.manifest.tool(tool).is_some_and(|t| t.writes);
-        let now = self
-            .clock
-            .now()
-            .with_timezone(&Local)
-            .to_rfc3339_opts(SecondsFormat::Secs, false);
+        let now = self.call_now();
         // Read under the lock, so two calls cannot both spend the hour's last start.
         let start = if config.can_start_dots && src.manifest.can_start_dots() {
             Some(self.start_gate(&item.id).await.map_err(|e| e.to_string())?)
@@ -317,6 +303,31 @@ impl Apps {
             }
             Err(e) => Err(e.to_string()),
         }
+    }
+
+    /// What `ctx.dots.list()` gives a call of the app `item`: the dots that use it. A dot the
+    /// person switched off is neither listed nor woken (spec section 7), as a webhook or a
+    /// follow-up does not run it.
+    pub(super) async fn listed_dots(&self, item: &LibraryItem) -> Result<Vec<DotRef>> {
+        Ok(self
+            .store
+            .dots_with_app(item)
+            .await?
+            .into_iter()
+            .filter(|d| d.spec.enabled)
+            .map(|d| DotRef {
+                id: d.id,
+                name: d.spec.name,
+            })
+            .collect())
+    }
+
+    /// A call's `ctx.now`: the clock's time, RFC 3339 with the local offset.
+    pub(super) fn call_now(&self) -> String {
+        self.clock
+            .now()
+            .with_timezone(&Local)
+            .to_rfc3339_opts(SecondsFormat::Secs, false)
     }
 
     /// The folder that holds the apps (`<data>/apps`).
