@@ -4,6 +4,7 @@
 
 pub mod github;
 pub mod keys;
+pub mod versions;
 
 /// `text` with each non-empty secret replaced by `[hidden]`.
 pub fn scrub(text: &str, secrets: &[&str]) -> String {
