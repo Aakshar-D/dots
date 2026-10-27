@@ -2,6 +2,7 @@
 //! signing key, versions and notes, and the flows of the Releases page. No token or private key
 //! ever leaves this module in an error or a log: GitHub's text passes through `scrub`.
 
+pub mod flow;
 pub mod github;
 pub mod keys;
 pub mod versions;
