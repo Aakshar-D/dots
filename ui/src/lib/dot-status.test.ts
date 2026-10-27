@@ -36,6 +36,12 @@ describe("a dot's status mark", () => {
     expect(dotStatus({ ...everything, active_run: run("running") }, [question])).toBe("waiting");
     expect(dotStatus({ ...everything, active_run: run("running") }, [])).toBe("running");
     expect(dotStatus({ ...everything, active_run: run("queued") }, [])).toBe("running");
+    // Self-QA: a dot whose run waits for Claude usage said "running" for hours.
+    const queued = run("queued");
+    expect(dotStatus({ ...everything, active_run: queued }, [], [queued.id])).toBe("held");
+    expect(dotStatus({ ...everything, active_run: run("running") }, [], [queued.id])).toBe(
+      "running",
+    );
     expect(dotStatus({ ...everything, active_run: null }, [])).toBe("attention");
     expect(dotStatus({ ...everything, active_run: null, schedule_state: null }, [])).toBe("off");
     expect(dotStatus(row("a"), [])).toBe("idle");

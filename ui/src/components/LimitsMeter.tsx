@@ -16,7 +16,8 @@ const part = (label: string, r: LimitReading | null) =>
 
 /// "Claude usage: 5-hour 42%, resets 15:10; weekly 55%, resets Thu 09:00; holding 0 runs"
 export function limitsName(limits: LimitsState): string {
-  return `Claude usage: ${part("5-hour", limits.five_hour)}; ${part("weekly", limits.weekly)}; holding ${limits.held_run_ids.length} runs`;
+  const held = limits.held_run_ids.length;
+  return `Claude usage: ${part("5-hour", limits.five_hour)}; ${part("weekly", limits.weekly)}; holding ${held} ${held === 1 ? "run" : "runs"}`;
 }
 
 /// The name, and the age of the oldest reading once it is older than 10 minutes.

@@ -32,6 +32,21 @@ describe("a run's numbers", () => {
     render(<RunNumbers run={{ ...ended, cost_usd: null, ended_at: null }} />);
     expect(screen.getByText(/tokens/)).toHaveTextContent(/^182k tokens \(170k in, 12k out\)$/);
   });
+
+  // Self-QA: a held run's card said "0 tokens (0 in, 0 out)" above why it waits.
+  it("say nothing for a run that has not started", () => {
+    const queued: Run = {
+      ...ended,
+      status: "queued",
+      started_at: null,
+      ended_at: null,
+      tokens_in: 0,
+      tokens_out: 0,
+      cost_usd: null,
+    };
+    const { container } = render(<RunNumbers run={queued} />);
+    expect(container).toBeEmptyDOMElement();
+  });
 });
 
 describe("a run held for Claude usage", () => {

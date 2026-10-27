@@ -46,3 +46,15 @@ The tray's tooltip lines and the Windows notices ("Dots is holding background ru
 
 1. The rail's bar tracks are hard to see at low usage: at 1% the bars are almost invisible against the rail, in both themes.
 2. "holding 1 runs": the count is not made singular.
+
+## Self-QA after merging master (e6011fe)
+
+Debug build, a fresh sandbox data folder, two Claude dots on Haiku ("pinger" by hand, "ticker" every minute). A real run stored its cost and its cache reads together (19,281 in, 15,136 from the cache, $0.00098). The Usage page's periods and rows, the Settings share rule (7, 63 and 105 refused, 10 saved), the hold (Inbox, amber rail, "Inbox, 1 waiting"), Run anyway from the run page, Run now during the hold, and the release on raising the share all behaved as in the steps above. axe: no violations on Home, Usage, Inbox, Settings, Library, a run page and a dot page, dark and light; at 420 px none scrolled sideways; no console errors. Master's app commands answered.
+
+Found and fixed (test first):
+
+1. A cost under half a cent read "$0.00"; it now reads "<$0.01".
+2. A held run's card said "0 tokens (0 in, 0 out)"; a run that has not started shows no numbers.
+3. A dot whose only run was held said "running"; it now says "held for Claude usage", with an amber ring as its mark.
+4. The share rule was not tied to its fields; both fields are now marked invalid and described by it, and it is announced.
+5. "holding 1 runs" (rail and tray) is now "holding 1 run".

@@ -18,9 +18,9 @@ export function formatDuration(secs: number): string {
   return `${Math.floor(s / 3600)}h ${pad(Math.floor((s % 3600) / 60))}m`;
 }
 
-/// "$1.32".
+/// "$1.32"; "<$0.01" for a cost that would round to nothing.
 export function formatCost(usd: number): string {
-  return `$${usd.toFixed(2)}`;
+  return usd > 0 && usd < 0.005 ? "<$0.01" : `$${usd.toFixed(2)}`;
 }
 
 /// The share used in whole percent, at most 100 (the CLI may report more than the window).

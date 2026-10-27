@@ -19,9 +19,10 @@ const API_EQ =
   "Your subscription does not bill per run: this is what the run would cost on the API.";
 
 /// "12m 04s · 182k tokens (170k in, 12k out) · $1.32 API-eq." (usage and limits spec section 5).
-/// No time while the run goes on, no cost when the engine gave none.
+/// No time while the run goes on, no cost when the engine gave none, nothing before it starts.
 export function RunNumbers(props: { run: Run }) {
   const { run } = props;
+  if (run.started_at === null) return null;
   const secs = runSeconds(run);
   const tokens = `${formatTokens(run.tokens_in + run.tokens_out)} tokens (${formatTokens(run.tokens_in)} in, ${formatTokens(run.tokens_out)} out)`;
   return (

@@ -37,6 +37,21 @@ describe("the Claude usage settings", () => {
     expect(backend.callsTo("update_settings")).toEqual([]);
   });
 
+  // Self-QA: the rule showed under the fields but neither field said it was wrong.
+  it("mark both share fields with the rule and announce it", async () => {
+    const { user } = settings();
+    const field = await screen.findByLabelText("Weekly window share (%)");
+    await user.clear(field);
+    await user.type(field, "7");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    const rule = "A share is 10 to 100%, in steps of 5.";
+    expect(await screen.findByRole("alert")).toHaveTextContent(rule);
+    for (const name of ["5-hour window share (%)", "Weekly window share (%)"]) {
+      expect(screen.getByLabelText(name)).toHaveAttribute("aria-invalid", "true");
+      expect(screen.getByLabelText(name)).toHaveAccessibleDescription(rule);
+    }
+  });
+
   it("save the switch and both shares with the other settings", async () => {
     const { user } = settings();
     await user.click(await screen.findByLabelText("Hold background dots when Claude usage is high"));

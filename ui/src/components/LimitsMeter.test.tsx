@@ -67,6 +67,11 @@ describe("the rail's Claude usage bars", () => {
     expect(bars(link).every((b) => b.dataset.holding === "true")).toBe(true);
   });
 
+  it("say one held run in the singular", async () => {
+    const { link } = await meter({ ...quiet, holding: true, held_run_ids: ["a"], hold_until: at(120) });
+    expect(link).toHaveAccessibleName(/holding 1 run$/);
+  });
+
   it("show a window without a reading as an empty dashed bar", async () => {
     const { link } = await meter({ ...quiet, weekly: null });
     expect(link).toHaveAccessibleName(/; weekly unknown;/);

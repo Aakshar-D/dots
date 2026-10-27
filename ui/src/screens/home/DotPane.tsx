@@ -24,6 +24,8 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
   const allMessages =
     useQuery({ queryKey: keys.messages(null), queryFn: () => commands.messagesList(null) }).data ??
     [];
+  const held =
+    useQuery({ queryKey: keys.limits, queryFn: commands.limitsGet }).data?.held_run_ids ?? [];
   useEffect(() => rememberDot(dot.id), [dot.id]);
   useViewing(dot.id);
   const view = useConversation(dot.id, rootRunId);
@@ -37,7 +39,7 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
   if (gone) return <Navigate to={`/home/${dot.id}`} replace />;
   return (
     <div className="flex min-w-0 flex-1 flex-col">
-      <DotHeader name={dot.name} status={dotStatus(row, allMessages)}>
+      <DotHeader name={dot.name} status={dotStatus(row, allMessages, held)}>
         <DotMenu dot={dot} />
         <HistoryMenu dotId={dot.id} topics={view.older} />
         <Button size="sm" variant="ghost" onClick={() => setPick({ kind: "new" })}>

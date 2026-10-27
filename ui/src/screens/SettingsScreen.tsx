@@ -152,6 +152,7 @@ function Form({ stored, status }: { stored: Settings; status: Status | undefined
   });
 
   const errors = settingsErrors(draft);
+  const shareBad = tried && errors.share !== undefined;
   function submit() {
     setTried(true);
     if (Object.keys(errors).length > 0) return;
@@ -301,6 +302,8 @@ function Form({ stored, status }: { stored: Settings; status: Status | undefined
               max={100}
               step={5}
               className="w-28"
+              aria-invalid={shareBad || undefined}
+              aria-describedby={shareBad ? "settings-share-error" : undefined}
               value={shown(draft.hold_share_five_hour)}
               onChange={(e) => set({ hold_share_five_hour: numberOf(e.target.value) })}
             />
@@ -313,12 +316,18 @@ function Form({ stored, status }: { stored: Settings; status: Status | undefined
               max={100}
               step={5}
               className="w-28"
+              aria-invalid={shareBad || undefined}
+              aria-describedby={shareBad ? "settings-share-error" : undefined}
               value={shown(draft.hold_share_weekly)}
               onChange={(e) => set({ hold_share_weekly: numberOf(e.target.value) })}
             />
           </Field>
         </div>
-        {tried && errors.share && <p className="text-sm text-destructive">{errors.share}</p>}
+        {shareBad && (
+          <p id="settings-share-error" role="alert" className="text-sm text-destructive">
+            {errors.share}
+          </p>
+        )}
       </Section>
 
       <Section title="Claude Code CLI">

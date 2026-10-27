@@ -4,6 +4,7 @@ import { STATUS_LABEL, type DotStatus } from "@/lib/dot-status";
 
 const LOOK: Record<DotStatus, string> = {
   waiting: "bg-needs",
+  held: "border-2 border-needs bg-transparent",
   running: "animate-pulse bg-primary motion-reduce:animate-none",
   attention: "bg-destructive",
   off: "border border-muted-foreground bg-transparent",

@@ -37,9 +37,10 @@ pub fn tooltip(count: usize, limits: Option<&LimitsState>, now: DateTime<Utc>) -
             .as_deref()
             .and_then(|t| DateTime::parse_from_rfc3339(t).ok());
         if let (true, Some(until)) = (limits.holding, until) {
+            let held = limits.held_run_ids.len();
             text.push_str(&format!(
-                "\nHolding {} runs until {}",
-                limits.held_run_ids.len(),
+                "\nHolding {held} {} until {}",
+                if held == 1 { "run" } else { "runs" },
                 local_time(until.with_timezone(&Utc), now)
             ));
         }
@@ -301,6 +302,11 @@ mod tests {
         assert_eq!(
             tooltip(0, Some(&state), now),
             "Dots\nClaude 5h 42% · week 55%\nHolding 3 runs until 15:10"
+        );
+        state.held_run_ids = vec!["a".into()];
+        assert_eq!(
+            tooltip(0, Some(&state), now),
+            "Dots\nClaude 5h 42% · week 55%\nHolding 1 run until 15:10"
         );
         state.weekly = None;
         state.holding = false;

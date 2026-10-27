@@ -28,6 +28,9 @@ describe("the usage numbers", () => {
   it("round a cost to cents and a share to at most 100%", () => {
     expect(formatCost(1.3249)).toBe("$1.32");
     expect(formatCost(18.4)).toBe("$18.40");
+    // Self-QA: a Haiku run's $0.004 read as $0.00, as if it had cost nothing.
+    expect(formatCost(0.0038)).toBe("<$0.01");
+    expect(formatCost(0)).toBe("$0.00");
     expect(pct(0.424)).toBe(42);
     expect(pct(1.4)).toBe(100);
   });
