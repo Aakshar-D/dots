@@ -148,6 +148,8 @@ pub struct UpdateStatus {
     pub auto_install: bool,
     /// This Dots publishes (updates UI spec section 5.1).
     pub publisher: bool,
+    /// Why the last install, repair or go back did not happen.
+    pub install_error: Option<String>,
 }
 
 /// A version's notes for "What's new".
@@ -235,6 +237,7 @@ pub async fn status(app: &AppHandle, rt: Option<&Arc<Runtime>>) -> Result<Update
         .map(str::to_string);
     let checked_at = updates.checked_at.lock().unwrap().clone();
     let last_error = updates.check_error.lock().unwrap().clone();
+    let install_error = updates.state.lock().unwrap().install_error();
     Ok(UpdateStatus {
         version: env!("CARGO_PKG_VERSION").to_string(),
         checks_on: checks_on(),
@@ -242,6 +245,7 @@ pub async fn status(app: &AppHandle, rt: Option<&Arc<Runtime>>) -> Result<Update
         ready,
         last_error,
         publisher: crate::publishing::is_publisher(app),
+        install_error,
         go_back: update_record::go_back_target(&record, env!("CARGO_PKG_VERSION"))
             .map(|(version, _)| version),
         auto_install,
@@ -361,6 +365,7 @@ pub async fn go_back(app: &AppHandle, rt: Option<Arc<Runtime>>) -> Result<Update
                 downloaded,
                 quiet: false,
                 stay_hidden: false,
+                before: Mutex::new(None),
             };
             tauri::async_runtime::spawn(async move {
                 update::install(&steps, Purpose::GoBack, Some(&plan.backup)).await
@@ -392,6 +397,8 @@ pub trait IdleControls {
     /// Starts the install of what `download_quiet` kept. `stay_hidden`: the window was hidden,
     /// so the new Dots stays in the tray. False when it could not begin.
     fn start_quiet_install(&self, stay_hidden: bool) -> bool;
+    /// Tells the window the note that follows.
+    fn announce(&self, note: &UpdateNote);
 }
 
 /// Whether the idle install of the ready update is due now, and its version.
@@ -456,6 +463,8 @@ pub async fn idle_tick(c: &impl IdleControls, updates: &Updates) -> bool {
         c.hold_runs(false).await;
         return false;
     }
+    let installing = updates.state.lock().unwrap().note(&[]);
+    c.announce(&installing);
     if c.start_quiet_install(stay_hidden) {
         return true;
     }
@@ -523,15 +532,15 @@ pub fn start_health(app: &AppHandle, health: update_record::Health) {
     let Ok(managed) = updates(app) else {
         return;
     };
+    let record = update_record::read(&managed.data_dir);
+    let notice = update_record::start_notice(&health, &record, env!("CARGO_PKG_VERSION"));
     match health {
-        update_record::Health::Fine => {}
-        update_record::Health::Failed { version, back_to } => {
+        update_record::Health::Fine => {
+            managed.state.lock().unwrap().set_notice(notice);
+        }
+        update_record::Health::Failed { version, .. } => {
             managed.state.lock().unwrap().mark_bad(&version);
-            managed
-                .state
-                .lock()
-                .unwrap()
-                .set_notice(Some(UpdateNote::Unhealthy { version, back_to }));
+            managed.state.lock().unwrap().set_notice(notice);
         }
         update_record::Health::Checking => {
             let app = app.clone();
@@ -610,6 +619,12 @@ impl IdleControls for AppIdle<'_> {
         }
     }
 
+    fn announce(&self, note: &UpdateNote) {
+        if let Err(e) = self.app.emit(UPDATE_EVENT, note) {
+            tracing::warn!("emitting the update note failed: {e}");
+        }
+    }
+
     fn start_quiet_install(&self, stay_hidden: bool) -> bool {
         let Ok(updates) = updates(self.app) else {
             return false;
@@ -624,6 +639,7 @@ impl IdleControls for AppIdle<'_> {
             downloaded,
             quiet: true,
             stay_hidden,
+            before: Mutex::new(None),
         };
         tauri::async_runtime::spawn(
             async move { update::install(&steps, Purpose::Update, None).await },
@@ -1070,6 +1086,7 @@ fn start_install(app: &AppHandle, rt: &Arc<Runtime>) -> bool {
         downloaded,
         quiet: false,
         stay_hidden: false,
+        before: Mutex::new(None),
     };
     tauri::async_runtime::spawn(async move {
         update::install(&steps, purpose, backup.as_deref()).await
@@ -1087,6 +1104,8 @@ struct AppSteps {
     quiet: bool,
     /// The window was hidden when the idle install began: the new Dots stays in the tray.
     stay_hidden: bool,
+    /// The record as it was before `record`, for `restore_record`.
+    before: Mutex<Option<UpdateRecord>>,
 }
 
 impl InstallSteps for AppSteps {
@@ -1098,7 +1117,15 @@ impl InstallSteps for AppSteps {
     }
 
     async fn back_up(&self) -> Result<PathBuf, String> {
-        let made = update::back_up(&self.data_dir, env!("CARGO_PKG_VERSION"), Local::now()).await?;
+        // The backup the last update's Go back restores is never pruned (deferred minor M-4).
+        let keep = update_record::read(&self.data_dir).backup;
+        let made = update::back_up_keeping(
+            &self.data_dir,
+            env!("CARGO_PKG_VERSION"),
+            Local::now(),
+            keep.as_deref(),
+        )
+        .await?;
         tracing::info!("backed up the database to {}", made.display());
         Ok(made)
     }
@@ -1136,6 +1163,7 @@ impl InstallSteps for AppSteps {
     fn record(&self, purpose: Purpose, backup: Option<&Path>) -> Result<(), String> {
         let current = env!("CARGO_PKG_VERSION");
         let mut record = crate::update_record::read(&self.data_dir);
+        *self.before.lock().unwrap() = Some(record.clone());
         match purpose {
             Purpose::GoBack => {
                 update_record::went_back(&mut record);
@@ -1147,6 +1175,7 @@ impl InstallSteps for AppSteps {
                 record.installing = Some(current.to_string());
                 record.pending = true;
                 record.starts = 0;
+                record.by_itself_at = None;
             }
             Purpose::Update => {
                 record.leaving = Some(current.to_string());
@@ -1176,6 +1205,14 @@ impl InstallSteps for AppSteps {
                 "could not put the database back from {}: {e}",
                 set_aside.display()
             );
+        }
+    }
+
+    fn restore_record(&self) {
+        if let Some(before) = self.before.lock().unwrap().take() {
+            if let Err(e) = update_record::write(&self.data_dir, &before) {
+                tracing::warn!("could not put the update record back: {e}");
+            }
         }
     }
 
@@ -1581,6 +1618,11 @@ mod tests {
             }
             true
         }
+        fn announce(&self, note: &UpdateNote) {
+            if matches!(note, UpdateNote::Installing { .. }) {
+                self.log.borrow_mut().push("announce installing".into());
+            }
+        }
         fn start_quiet_install(&self, stay_hidden: bool) -> bool {
             let shown = if stay_hidden { "hidden" } else { "shown" };
             self.log.borrow_mut().push(format!("quiet install {shown}"));
@@ -1620,7 +1662,12 @@ mod tests {
         assert!(idle_tick(&fake, &updates).await);
         assert_eq!(
             fake.take(),
-            ["download 0.2.0", "hold true", "quiet install hidden"]
+            [
+                "download 0.2.0",
+                "hold true",
+                "announce installing",
+                "quiet install hidden"
+            ]
         );
         assert!(matches!(
             updates.state.lock().unwrap().note(&[]),
@@ -1634,7 +1681,12 @@ mod tests {
         assert!(idle_tick(&fake, &updates).await);
         assert_eq!(
             fake.take(),
-            ["download 0.2.0", "hold true", "quiet install shown"]
+            [
+                "download 0.2.0",
+                "hold true",
+                "announce installing",
+                "quiet install shown"
+            ]
         );
         // "Later" stops it for the rest of the session.
         let updates = ready();
@@ -1651,6 +1703,7 @@ mod tests {
             [
                 "download 0.2.0",
                 "hold true",
+                "announce installing",
                 "quiet install hidden",
                 "hold false"
             ]

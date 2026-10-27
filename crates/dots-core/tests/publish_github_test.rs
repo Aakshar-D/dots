@@ -260,3 +260,25 @@ async fn a_run_for_a_tag_reads_its_jobs_and_steps() {
         .unwrap()
         .is_none());
 }
+
+// Deferred minor 9: anything shaped like a GitHub token is hidden, not only this client's.
+#[test]
+fn token_like_text_is_hidden_too() {
+    let text = "a ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345 b github_pat_11ABCDEFG0123456789_abcdefghijklmnop c";
+    let scrubbed = dots_core::publish::scrub(text, &[]);
+    assert_eq!(scrubbed, "a [hidden] b [hidden] c");
+    assert_eq!(dots_core::publish::scrub("ghp_short", &[]), "ghp_short");
+}
+
+// Deferred minor 13: a missing branch is NotFound, so other errors are not taken for one.
+#[tokio::test]
+async fn a_missing_ref_is_not_found() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!("{REPO}/git/ref/heads/release/9.9.9")))
+        .respond_with(ResponseTemplate::new(404).set_body_json(json!({"message": "Not Found"})))
+        .mount(&server)
+        .await;
+    let err = gh(&server).await.head("release/9.9.9").await.unwrap_err();
+    assert!(matches!(err, dots_core::Error::NotFound(_)), "{err}");
+}

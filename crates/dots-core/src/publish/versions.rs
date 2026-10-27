@@ -82,7 +82,35 @@ pub fn next_minor(live: Option<&str>) -> String {
     }
 }
 
+fn tagged(tags: &[String], version: &str) -> bool {
+    tags.iter().any(|t| t == &format!("v{version}"))
+}
+
+/// The next minor version after `live` that was never tagged.
+pub fn next_free_minor(live: Option<&str>, tags: &[String]) -> String {
+    let mut next = next_minor(live);
+    while tagged(tags, &next) {
+        next = next_minor(Some(&next));
+    }
+    next
+}
+
+/// The next patch of `version` that was never tagged (after a failed promote, spec §5.7).
+pub fn next_free_patch(version: &str, tags: &[String]) -> String {
+    let Some((major, minor, mut patch)) = parse(version) else {
+        return version.to_string();
+    };
+    loop {
+        patch += 1;
+        let next = format!("{major}.{minor}.{patch}");
+        if !tagged(tags, &next) {
+            return next;
+        }
+    }
+}
+
 /// Whether `version` may be published: plain, above the live one, and never tagged before.
+/// A refusal names a version that may.
 pub fn check_new(
     version: &str,
     live: Option<&str>,
@@ -91,20 +119,16 @@ pub fn check_new(
     let wanted = parse(version).ok_or_else(|| FORMAT.to_string())?;
     if let Some(live) = live {
         if parse(live).is_some_and(|l| wanted <= l) {
-            return Err(format!("{version} is not above the live {live}."));
+            return Err(format!(
+                "{version} is not above the live {live}; use {}.",
+                next_free_minor(Some(live), tags)
+            ));
         }
     }
-    if tags.iter().any(|t| t == &format!("v{version}")) {
-        let highest = tags
-            .iter()
-            .filter_map(|t| t.strip_prefix('v'))
-            .chain(live)
-            .filter_map(|v| parse(v).map(|p| (p, v)))
-            .max()
-            .map(|(_, v)| v.to_string());
+    if tagged(tags, version) {
         return Err(format!(
             "{version} was published before; use {}.",
-            next_minor(highest.as_deref())
+            next_free_patch(version, tags)
         ));
     }
     Ok(())

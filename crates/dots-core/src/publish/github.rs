@@ -151,7 +151,15 @@ impl GitHub {
             .as_str()
             .unwrap_or(text.as_str())
             .to_string();
-        Err(self.scrubbed(format!("GitHub answered {}: {message}", status.as_u16())))
+        let text = super::scrub(
+            &format!("GitHub answered {}: {message}", status.as_u16()),
+            &[&self.token],
+        );
+        // A missing ref, file or release is NotFound, so callers can tell it from a failure.
+        if status == StatusCode::NOT_FOUND {
+            return Err(Error::NotFound(text));
+        }
+        Err(Error::Other(text))
     }
 
     async fn get(&self, path: &str) -> Result<Value> {

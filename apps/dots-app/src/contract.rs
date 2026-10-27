@@ -827,6 +827,7 @@ fn update_statuses() -> Vec<crate::update_service::UpdateStatus> {
             go_back: Some("0.1.0".into()),
             auto_install: true,
             publisher: true,
+            install_error: Some("The update could not start: access denied".into()),
         },
         UpdateStatus {
             version: "0.2.0".into(),
@@ -837,6 +838,7 @@ fn update_statuses() -> Vec<crate::update_service::UpdateStatus> {
             go_back: None,
             auto_install: false,
             publisher: false,
+            install_error: None,
         },
     ]
 }
@@ -908,6 +910,7 @@ fn page_states() -> Vec<dots_core::publish::flow::PageState> {
             promotion: None,
             changes: changes.clone(),
             suggested: "0.2.0".into(),
+            next_rcs: Default::default(),
         },
         PageState {
             setup: Setup::KeyPending,
@@ -916,6 +919,7 @@ fn page_states() -> Vec<dots_core::publish::flow::PageState> {
             promotion: None,
             changes: vec![],
             suggested: "0.2.0".into(),
+            next_rcs: Default::default(),
         },
         PageState {
             setup: Setup::HalfDone {
@@ -927,6 +931,7 @@ fn page_states() -> Vec<dots_core::publish::flow::PageState> {
             promotion: None,
             changes: vec![],
             suggested: "0.2.0".into(),
+            next_rcs: Default::default(),
         },
         PageState {
             setup: Setup::Done,
@@ -951,6 +956,7 @@ fn page_states() -> Vec<dots_core::publish::flow::PageState> {
             }),
             changes,
             suggested: "0.3.0".into(),
+            next_rcs: [("0.3.0".to_string(), 2)].into(),
         },
     ]
 }

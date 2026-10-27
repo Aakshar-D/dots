@@ -1286,10 +1286,6 @@ impl Runtime {
         self.runner.set_held(held).await;
     }
 
-    /// The names of the dots with a run whose status is `running`, sorted: the runs an update
-    /// waits for (updates spec §6). Queued runs and runs awaiting an approval survive a
-    /// restart, so they are left out. A run is no longer counted once the `RunUpdated` event
-    /// of its end is out. A dot deleted between the two reads is left out.
     /// The GitHub token Dots publishes with: the value of the vault entry the settings name
     /// (updates UI spec section 5.1). Never logged or sent in an event.
     pub async fn publish_token(&self) -> Result<Option<String>> {
@@ -1308,6 +1304,10 @@ impl Runtime {
         self.store.unfinished_run_count().await
     }
 
+    /// The names of the dots with a run whose status is `running`, sorted: the runs an update
+    /// waits for (updates spec §6). Queued runs and runs awaiting an approval survive a
+    /// restart, so they are left out. A run is no longer counted once the `RunUpdated` event
+    /// of its end is out. A dot deleted between the two reads is left out.
     pub async fn working_dots(&self) -> Result<Vec<String>> {
         let mut names = Vec::new();
         for id in self.store.running_dot_ids().await? {

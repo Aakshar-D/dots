@@ -18,6 +18,7 @@ const status = (over: Partial<UpdateStatus> = {}): UpdateStatus => ({
   go_back: null,
   auto_install: false,
   publisher: false,
+  install_error: null,
   ...over,
 });
 
@@ -90,7 +91,7 @@ describe("the Updates settings", () => {
     await user.click(await within(await section()).findByRole("button", { name: "Repair Dots…" }));
     const dialog = await screen.findByRole("alertdialog");
     expect(dialog).toHaveTextContent(
-      "Dots will download version 0.3.0 again, back up your data and reinstall it. Runs that are working will be stopped.",
+      "Dots will download version 0.3.0 again, back up your data and reinstall it. It waits for runs that are working to finish.",
     );
     await user.click(within(dialog).getByRole("button", { name: "Repair" }));
     await waitFor(() => expect(backend.callsTo("update_repair")).toHaveLength(1));
@@ -161,5 +162,30 @@ describe("the Updates settings", () => {
     expect(
       await within(updates).findByRole("link", { name: "Publish versions of Dots…" }),
     ).toHaveAttribute("href", "/releases");
+  });
+
+  // Deferred minor M-11: What's new for the update that is ready too.
+  it("offers the ready version's notes", async () => {
+    backend.on("update_release_notes", () => null);
+    const { user } = settings({ ready: "0.3.1" });
+    await user.click(
+      await within(await section()).findByRole("button", { name: "What's new in 0.3.1" }),
+    );
+    expect(await screen.findByRole("dialog", { name: "What's new in 0.3.1" })).toBeVisible();
+  });
+
+  // Deferred minor 10: the refusal shows without opening the chooser, and a refused token is
+  // checked again when the section opens.
+  it("says why the token was refused and checks it again", async () => {
+    const refused = {
+      token: "GITHUB_PUBLISH",
+      state: { state: "refused", reason: "GitHub could not be reached" },
+    };
+    backend.on("publisher_status", () => refused);
+    backend.on("publisher_check", () => refused);
+    settings();
+    const updates = await section();
+    expect(await within(updates).findByText("GitHub could not be reached")).toBeVisible();
+    await waitFor(() => expect(backend.callsTo("publisher_check")).toHaveLength(1));
   });
 });

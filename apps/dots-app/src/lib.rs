@@ -245,15 +245,8 @@ fn setup(app: &AppHandle, panics_logged: bool) -> Result<(), Box<dyn std::error:
     let mut stay_hidden = false;
     if let Ok(dir) = &data_dir {
         // The health check after an update (updates UI spec section 4.4).
-        let mut record = update_record::read(dir);
-        let health =
-            update_record::on_start(&mut record, env!("CARGO_PKG_VERSION"), runtime.is_ok());
-        if let update_record::Health::Failed { version, .. } = &health {
-            update_record::failed(&mut record, version);
-        }
-        if let Err(e) = update_record::write(dir, &record) {
-            tracing::warn!("could not write the update record: {e}");
-        }
+        let (record, health) =
+            update_record::settle_start(dir, env!("CARGO_PKG_VERSION"), runtime.is_ok());
         app.manage(update_service::Updates::new(
             dir.clone(),
             update::take_error(dir),

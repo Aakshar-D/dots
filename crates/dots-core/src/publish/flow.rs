@@ -238,6 +238,8 @@ pub struct PageState {
     pub promotion: Option<Promotion>,
     pub changes: Vec<MergedPull>,
     pub suggested: String,
+    /// Each version's next trial number, for the versions that have trials.
+    pub next_rcs: std::collections::BTreeMap<String, u32>,
 }
 
 /// The first line of `release-notes.md`: the version the notes belong to, so a later release
@@ -294,10 +296,6 @@ pub async fn page_state(h: &impl Hub) -> Result<PageState> {
     let changes = h
         .merged_pulls_since(live.as_ref().map(|r| r.tag.as_str()), "master")
         .await?;
-    let mut suggested = versions::next_minor(live_version.as_deref());
-    while tags.iter().any(|t| t == &format!("v{suggested}")) {
-        suggested = versions::next_minor(Some(&suggested));
-    }
 
     // The newest trial whose version was never promoted and whose branch still exists.
     let mut rcs: Vec<(String, u32)> = tags.iter().filter_map(|t| rc_of(t)).collect();
@@ -305,7 +303,12 @@ pub async fn page_state(h: &impl Hub) -> Result<PageState> {
     let mut trial = None;
     if let Some((version, rc)) = rcs.last().cloned() {
         let promoted = tags.iter().any(|t| t == &format!("v{version}"));
-        if !promoted && h.head(&branch(&version)).await.is_ok() {
+        let branch_there = match h.head(&branch(&version)).await {
+            Ok(_) => true,
+            Err(Error::NotFound(_)) => false,
+            Err(e) => return Err(e),
+        };
+        if !promoted && branch_there {
             let tag = format!("v{version}-rc.{rc}");
             let release = releases.iter().find(|r| r.tag == tag).cloned();
             if !release.as_ref().is_some_and(withdrawn) {
@@ -350,6 +353,15 @@ pub async fn page_state(h: &impl Hub) -> Result<PageState> {
         }
     }
 
+    // A failed or running promotion takes the next patch (spec section 5.7); else the next minor.
+    let suggested = match &promotion {
+        Some(p) => versions::next_free_patch(&p.version, &tags),
+        None => versions::next_free_minor(live_version.as_deref(), &tags),
+    };
+    let next_rcs = rcs
+        .iter()
+        .map(|(v, _)| (v.clone(), versions::next_rc(v, &tags)))
+        .collect();
     Ok(PageState {
         setup,
         live,
@@ -357,6 +369,7 @@ pub async fn page_state(h: &impl Hub) -> Result<PageState> {
         promotion,
         changes,
         suggested,
+        next_rcs,
     })
 }
 

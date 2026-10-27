@@ -121,4 +121,27 @@ describe("the fatal page", () => {
     await userEvent.setup().click(screen.getByRole("button", { name: "Go back to 0.2.0" }));
     await waitFor(() => expect(backend.callsTo("update_go_back")).toHaveLength(1));
   });
+
+  // Deferred minor M-7: a failed go back from the fatal page says why on the next start.
+  it("says why the last install did not happen", async () => {
+    backend.on("update_status", () => ({
+      version: "0.3.1",
+      checks_on: true,
+      checked_at: null,
+      ready: null,
+      last_error: null,
+      go_back: "0.3.0",
+      auto_install: false,
+      publisher: false,
+      install_error: "The update could not start: access denied",
+    }));
+    render(
+      withClient(
+        <FatalPage message="migration 0017 failed" logDir={null} backup={null} goBack="0.3.0" />,
+      ),
+    );
+    expect(
+      await screen.findByText("The update could not start: access denied"),
+    ).toBeVisible();
+  });
 });

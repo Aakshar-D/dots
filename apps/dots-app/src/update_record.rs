@@ -51,6 +51,7 @@ pub fn read(data_dir: &Path) -> UpdateRecord {
         return UpdateRecord::default();
     };
     if text.trim().is_empty() {
+        tracing::warn!("{} is empty, so nothing is pending", file.display());
         return UpdateRecord::default();
     }
     serde_json::from_str(&text).unwrap_or_else(|e| {
@@ -115,6 +116,49 @@ pub fn go_back_target(record: &UpdateRecord, current: &str) -> Option<(String, P
     let version = record.leaving.clone().filter(|v| v != current)?;
     let backup = record.backup.clone()?;
     backup.is_file().then_some((version, backup))
+}
+
+/// This start's health check: the record read, `on_start` applied, a failed version marked
+/// bad, and the record written only when that changed it (a record this Dots cannot read is
+/// left as it is: a newer Dots may have written it).
+pub fn settle_start(data_dir: &Path, current: &str, runtime_ok: bool) -> (UpdateRecord, Health) {
+    let mut record = read(data_dir);
+    let before = record.clone();
+    let health = on_start(&mut record, current, runtime_ok);
+    if let Health::Failed { version, .. } = &health {
+        failed(&mut record, version);
+    }
+    if record != before {
+        if let Err(e) = write(data_dir, &record) {
+            tracing::warn!("could not write the update record: {e}");
+        }
+    }
+    (record, health)
+}
+
+/// The note this start leaves: Unhealthy after a failed check; "updated itself" while an idle
+/// install's note was never dismissed (the window may not have been opened since).
+pub fn start_notice(
+    health: &Health,
+    record: &UpdateRecord,
+    current: &str,
+) -> Option<crate::update::UpdateNote> {
+    match health {
+        Health::Failed { version, back_to } => Some(crate::update::UpdateNote::Unhealthy {
+            version: version.clone(),
+            back_to: back_to.clone(),
+        }),
+        Health::Fine => {
+            record
+                .by_itself_at
+                .clone()
+                .map(|at| crate::update::UpdateNote::UpdatedItself {
+                    version: current.to_string(),
+                    at,
+                })
+        }
+        Health::Checking => None,
+    }
 }
 
 /// Dots went back: nothing is left to go back to, and nothing is pending.
@@ -251,5 +295,43 @@ mod tests {
         went_back(&mut record);
         assert_eq!(go_back_target(&record, "0.3.0"), None);
         assert_eq!(go_back_target(&record, "0.3.1"), None);
+    }
+
+    // Deferred minor M-2: a start with nothing to change leaves the record as it is.
+    #[test]
+    fn a_start_with_nothing_to_change_leaves_the_record_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join(RECORD_FILE);
+        std::fs::write(&file, "{written by a newer Dots").unwrap();
+        let (_, health) = settle_start(dir.path(), "0.3.0", true);
+        assert_eq!(health, Health::Fine);
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "{written by a newer Dots"
+        );
+        // A start that does change it writes it.
+        write(dir.path(), &installed(dir.path())).unwrap();
+        let (record, health) = settle_start(dir.path(), "0.3.1", true);
+        assert_eq!(health, Health::Checking);
+        assert_eq!(read(dir.path()), record);
+    }
+
+    // Deferred minor M-5: "updated itself" waits for the window, across starts, until dismissed.
+    #[test]
+    fn updated_itself_is_said_until_it_is_dismissed() {
+        let mut record = UpdateRecord {
+            by_itself_at: Some("2026-10-27T03:12:00.000Z".into()),
+            ..UpdateRecord::default()
+        };
+        assert_eq!(
+            start_notice(&Health::Fine, &record, "0.3.1"),
+            Some(crate::update::UpdateNote::UpdatedItself {
+                version: "0.3.1".into(),
+                at: "2026-10-27T03:12:00.000Z".into()
+            })
+        );
+        assert_eq!(start_notice(&Health::Checking, &record, "0.3.1"), None);
+        record.by_itself_at = None;
+        assert_eq!(start_notice(&Health::Fine, &record, "0.3.1"), None);
     }
 }

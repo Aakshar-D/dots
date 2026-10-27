@@ -2642,6 +2642,7 @@
         }
       ],
       "live": null,
+      "next_rcs": {},
       "promotion": null,
       "setup": {
         "state": "needed"
@@ -2652,6 +2653,7 @@
     {
       "changes": [],
       "live": null,
+      "next_rcs": {},
       "promotion": null,
       "setup": {
         "state": "key_pending"
@@ -2662,6 +2664,7 @@
     {
       "changes": [],
       "live": null,
+      "next_rcs": {},
       "promotion": null,
       "setup": {
         "pubkey": false,
@@ -2687,6 +2690,9 @@
         "published_at": "2026-10-09T12:00:00.000Z",
         "tag": "v0.2.0",
         "url": "https://github.com/Aakshar-D/dots/releases/tag/v0.2.0"
+      },
+      "next_rcs": {
+        "0.3.0": 2
       },
       "promotion": {
         "run": {
@@ -3568,6 +3574,7 @@
       "checked_at": "2026-10-09T12:00:00.000Z",
       "checks_on": true,
       "go_back": "0.1.0",
+      "install_error": "The update could not start: access denied",
       "last_error": "GitHub could not be reached",
       "publisher": true,
       "ready": "0.2.1",
@@ -3578,6 +3585,7 @@
       "checked_at": null,
       "checks_on": false,
       "go_back": null,
+      "install_error": null,
       "last_error": null,
       "publisher": false,
       "ready": null,

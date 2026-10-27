@@ -86,6 +86,7 @@ export function installDefaults(): void {
     go_back: null,
     auto_install: false,
     publisher: false,
+    install_error: null,
   }));
   backend.on("publisher_status", () => ({ token: null, state: { state: "none" } }));
   backend.on("report_activity", () => null);

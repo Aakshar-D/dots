@@ -255,8 +255,13 @@ pub async fn releases_page(
 
 /// Setup step 1: makes the signing key; its public half.
 #[tauri::command]
-pub fn release_make_key(app: AppHandle, password: String) -> Res<String> {
-    crate::publishing::make_key(&app, &password)
+pub async fn release_make_key(app: AppHandle, password: String) -> Res<String> {
+    // scrypt takes a moment: off the main thread, so the window stays responsive.
+    let made =
+        tauri::async_runtime::spawn_blocking(move || dots_core::publish::keys::make_key(&password))
+            .await
+            .map_err(|e| CmdError::internal(e.to_string()))??;
+    crate::publishing::keep_key(&app, made)
 }
 
 /// Setup step 2: saves the private key where the person chooses; the path, or none.

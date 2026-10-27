@@ -122,7 +122,7 @@ impl Hub for Fake {
             .branches
             .get(branch)
             .cloned()
-            .ok_or_else(|| Error::Other(format!("no branch {branch}")))
+            .ok_or_else(|| Error::NotFound(format!("no branch {branch}")))
     }
     async fn commit_files(
         &self,
@@ -567,4 +567,122 @@ async fn promote_ships_the_tagged_trial_not_a_later_branch_commit() {
     assert_eq!(parent, Some(tagged_trial));
     assert_eq!(tree["README.md"], "readme");
     assert_eq!(tree[NOTES_FILE], "<!-- dots:notes 0.3.0 -->\n- Final notes");
+}
+
+// Deferred minor 7: after a failed promote the suggestion is the next patch, as spec §5.7 says.
+#[tokio::test]
+async fn after_a_failed_promote_the_next_patch_is_suggested() {
+    let fake = Fake::new(REAL_KEY);
+    fake.0
+        .borrow_mut()
+        .releases
+        .push(release(10, "v0.2.0", false));
+    fake.0
+        .borrow_mut()
+        .tags
+        .insert("v0.2.0".into(), "c0".into());
+    fake.0
+        .borrow_mut()
+        .tags
+        .insert("v0.3.0".into(), "c0".into());
+    let page = page_state(&fake).await.unwrap();
+    assert_eq!(page.suggested, "0.3.1");
+}
+
+// Deferred minor 8: the page knows each version's next trial number.
+#[tokio::test]
+async fn the_page_knows_each_versions_next_trial_number() {
+    let fake = Fake::new(REAL_KEY);
+    fake.0
+        .borrow_mut()
+        .tags
+        .insert("v0.3.0-rc.1".into(), "c0".into());
+    fake.0
+        .borrow_mut()
+        .tags
+        .insert("v0.3.0-rc.2".into(), "c0".into());
+    let page = page_state(&fake).await.unwrap();
+    assert_eq!(page.next_rcs.get("0.3.0"), Some(&3));
+}
+
+/// A fake whose branch reads fail for a reason other than "not found".
+struct Flaky(Fake);
+
+#[allow(async_fn_in_trait)]
+impl Hub for Flaky {
+    async fn secret_exists(&self, n: &str) -> Result<bool> {
+        self.0.secret_exists(n).await
+    }
+    async fn secrets_key(&self) -> Result<(String, String)> {
+        self.0.secrets_key().await
+    }
+    async fn put_secret(&self, n: &str, k: &str, e: &str) -> Result<()> {
+        self.0.put_secret(n, k, e).await
+    }
+    async fn file(&self, p: &str, r: &str) -> Result<Option<String>> {
+        self.0.file(p, r).await
+    }
+    async fn head(&self, _branch: &str) -> Result<String> {
+        Err(Error::Other("GitHub answered 502: Bad gateway".into()))
+    }
+    async fn commit_files(&self, p: &str, f: &[(String, String)], m: &str) -> Result<String> {
+        self.0.commit_files(p, f, m).await
+    }
+    async fn set_branch(&self, b: &str, s: &str, f: bool) -> Result<()> {
+        self.0.set_branch(b, s, f).await
+    }
+    async fn delete_branch(&self, b: &str) -> Result<()> {
+        self.0.delete_branch(b).await
+    }
+    async fn tag(&self, t: &str, s: &str) -> Result<()> {
+        self.0.tag(t, s).await
+    }
+    async fn tag_sha(&self, t: &str) -> Result<String> {
+        self.0.tag_sha(t).await
+    }
+    async fn tags(&self) -> Result<Vec<String>> {
+        self.0.tags().await
+    }
+    async fn merge(&self, b: &str, h: &str, m: &str) -> Result<MergeOutcome> {
+        self.0.merge(b, h, m).await
+    }
+    async fn open_pull(&self, h: &str, b: &str, t: &str, d: &str) -> Result<(u64, String)> {
+        self.0.open_pull(h, b, t, d).await
+    }
+    async fn merged_pulls_since(&self, b: Option<&str>, h: &str) -> Result<Vec<MergedPull>> {
+        self.0.merged_pulls_since(b, h).await
+    }
+    async fn commits_ahead(&self, b: &str, br: &str) -> Result<u32> {
+        self.0.commits_ahead(b, br).await
+    }
+    async fn releases(&self) -> Result<Vec<ReleaseInfo>> {
+        self.0.releases().await
+    }
+    async fn edit_release(
+        &self,
+        i: u64,
+        n: Option<&str>,
+        b: Option<&str>,
+        p: Option<bool>,
+    ) -> Result<()> {
+        self.0.edit_release(i, n, b, p).await
+    }
+    async fn run_for_tag(&self, t: &str) -> Result<Option<RunInfo>> {
+        self.0.run_for_tag(t).await
+    }
+    async fn rerun(&self, r: u64) -> Result<()> {
+        self.0.rerun(r).await
+    }
+}
+
+// Deferred minor 13: a failed read of the trial's branch is an error, not "no trial".
+#[tokio::test]
+async fn a_failed_branch_read_is_an_error_not_a_missing_trial() {
+    let fake = Fake::new(REAL_KEY);
+    fake.0
+        .borrow_mut()
+        .tags
+        .insert("v0.3.0-rc.1".into(), "c0".into());
+    let err = page_state(&Flaky(fake)).await.unwrap_err().to_string();
+    assert!(err.contains("502"), "{err}");
 }

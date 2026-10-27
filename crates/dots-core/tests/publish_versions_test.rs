@@ -42,11 +42,11 @@ fn a_version_must_be_new_and_above_the_live_one() {
     );
     assert_eq!(
         check_new("0.2.0", Some("0.2.0"), &tags).unwrap_err(),
-        "0.2.0 is not above the live 0.2.0."
+        "0.2.0 is not above the live 0.2.0; use 0.4.0."
     );
     assert_eq!(
         check_new("0.3.0", Some("0.2.0"), &tags).unwrap_err(),
-        "0.3.0 was published before; use 0.4.0."
+        "0.3.0 was published before; use 0.3.1."
     );
     assert_eq!(check_new("0.4.0", Some("0.2.0"), &tags), Ok(()));
     assert_eq!(check_new("0.2.0", None, &[]), Ok(()));

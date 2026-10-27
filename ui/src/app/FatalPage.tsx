@@ -1,8 +1,9 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 
 import { commands } from "@/api/commands";
 import { Button } from "@/components/ui/button";
 import { errorMessage } from "@/lib/notify";
+import { keys } from "@/lib/query";
 
 /// Where every version's installer is (updates spec §8).
 const RELEASES = "https://github.com/Aakshar-D/dots/releases";
@@ -17,6 +18,12 @@ export function FatalPage(props: {
   goBack: string | null;
 }) {
   const goBack = useMutation({ mutationFn: commands.updateGoBack });
+  // Why the last install or go back did not happen (deferred minor M-7).
+  const installError = useQuery({
+    queryKey: keys.updateStatus,
+    queryFn: commands.updateStatus,
+    retry: false,
+  }).data?.install_error;
   return (
     <main className="mx-auto flex h-screen max-w-2xl flex-col justify-center gap-4 p-8">
       <h1 className="text-xl font-semibold">Dots could not start</h1>
@@ -35,6 +42,11 @@ export function FatalPage(props: {
           <span className="font-mono text-foreground select-all">{props.backup}</span>. The
           previous version's installer is on{" "}
           <span className="font-mono text-foreground select-all">{RELEASES}</span>.
+        </p>
+      )}
+      {installError && (
+        <p role="alert" className="text-sm text-destructive">
+          {installError}
         </p>
       )}
       {props.goBack && (

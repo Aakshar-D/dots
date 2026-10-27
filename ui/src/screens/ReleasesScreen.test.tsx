@@ -151,7 +151,7 @@ describe("the Releases page", () => {
 
   it("publishes a trial after asking with the exact words", async () => {
     backend.on("release_publish_trial", () => building.trial);
-    const { user } = releases({ ...building, trial: null, promotion: null });
+    const { user } = releases({ ...building, trial: null, promotion: null, next_rcs: {} });
     const version = await screen.findByLabelText("Version");
     expect(version).toHaveValue("0.3.0");
     await user.click(screen.getByRole("button", { name: "Publish trial" }));
@@ -240,6 +240,10 @@ describe("the Releases page", () => {
     const { user } = releases(building);
     expect(await screen.findByText(/Failed at Build the installer/)).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Retry" }));
+    // Deferred minor 14: Retry asks first.
+    await user.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Retry" }),
+    );
     await waitFor(() => expect(backend.callsTo("release_retry")).toEqual([{ tag: "v0.2.1" }]));
     await user.click(screen.getByRole("button", { name: "Drop trial" }));
     await user.click(
@@ -255,5 +259,13 @@ describe("the Releases page", () => {
     await waitFor(() =>
       expect(backend.callsTo("release_withdraw")).toEqual([{ version: "0.2.0" }]),
     );
+  });
+
+  // Deferred minor 8: the confirm names the trial number the core will use.
+  it("names the next trial number of the version typed", async () => {
+    const { user } = releases({ ...building, trial: null, promotion: null, next_rcs: { "0.3.0": 3 } });
+    await screen.findByLabelText("Version");
+    await user.click(screen.getByRole("button", { name: "Publish trial" }));
+    expect(await screen.findByRole("alertdialog")).toHaveTextContent("Publish 0.3.0-rc.3 from master");
   });
 });

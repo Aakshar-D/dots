@@ -182,7 +182,7 @@ function SetupCard({ keyPending }: { keyPending: boolean }) {
 function ReadyCard({ page }: { page: PageState }) {
   const qc = useQueryClient();
   const [version, setVersion] = useState(page.suggested);
-  const rc = page.trial && page.trial.version === version ? page.trial.rc + 1 : 1;
+  const rc = page.next_rcs[version] ?? 1;
   const publish = useMutation({
     mutationFn: () => commands.releasePublishTrial(version),
     onSettled: () => invalidate(qc, keys.releasesPage),
@@ -355,14 +355,16 @@ function PromotionCard({ promotion }: { promotion: NonNullable<PageState["promot
         )}
       </p>
       {promotion.stage.stage === "failed" && (
-        <Button
-          size="sm"
-          className="self-start"
+        <ConfirmButton
+          title="Retry the build"
+          description={`GitHub runs the build of ${promotion.tag} again. If it passes, every Dots is offered ${promotion.version}.`}
+          confirmLabel="Retry"
+          variant="default"
           disabled={retry.isPending}
-          onClick={() => retry.mutate()}
+          onConfirm={() => retry.mutate()}
         >
           Retry
-        </Button>
+        </ConfirmButton>
       )}
       {retry.error && (
         <p role="alert" className="text-sm text-destructive">

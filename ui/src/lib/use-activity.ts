@@ -37,3 +37,10 @@ export function useActivity(): void {
     };
   }, []);
 }
+
+/// The composer's emptiness for the idle install, and "empty" once the composer goes away, so
+/// text left in a closed conversation does not block it for the session.
+export function useComposerReport(hasText: boolean): void {
+  useEffect(() => reportComposer(hasText), [hasText]);
+  useEffect(() => () => reportComposer(false), []);
+}

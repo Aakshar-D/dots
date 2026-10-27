@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { commands } from "@/api/commands";
 import type { CheckOutcome, UpdateStatus } from "@/api/types";
@@ -45,6 +45,18 @@ export function UpdatesSection(props: {
 }) {
   const [choosing, setChoosing] = useState(false);
   const publisher = useQuery({ queryKey: keys.publisher, queryFn: commands.publisherStatus }).data;
+  const refused = publisher?.state.state === "refused" ? publisher.state.reason : null;
+  // A refused token is checked again when this opens: GitHub may have been out of reach at
+  // start (deferred minor 10).
+  const recheck = useMutation({
+    mutationFn: commands.publisherCheck,
+    onSuccess: (next) => qc.setQueryData(keys.publisher, next),
+  });
+  const shouldRecheck = refused !== null;
+  useEffect(() => {
+    if (shouldRecheck) recheck.mutate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shouldRecheck]);
   const qc = useQueryClient();
   const status = useQuery({ queryKey: keys.updateStatus, queryFn: commands.updateStatus }).data;
   const [notesOf, setNotesOf] = useState<string | null>(null);
@@ -74,6 +86,11 @@ export function UpdatesSection(props: {
             <Button size="sm" variant="outline" onClick={() => setNotesOf(status.version)}>
               What's new
             </Button>
+            {status.ready && (
+              <Button size="sm" variant="outline" onClick={() => setNotesOf(status.ready)}>
+                What's new in {status.ready}
+              </Button>
+            )}
             {check.isPending && <span className="text-sm text-muted-foreground">Checking…</span>}
             {!check.isPending && check.data && outcomeLine(check.data) && (
               <span
@@ -100,7 +117,7 @@ export function UpdatesSection(props: {
           <div className="flex flex-wrap gap-2">
             <ConfirmButton
               title="Repair Dots"
-              description={`Dots will download version ${status.version} again, back up your data and reinstall it. Runs that are working will be stopped.`}
+              description={`Dots will download version ${status.version} again, back up your data and reinstall it. It waits for runs that are working to finish.`}
               confirmLabel="Repair"
               disabled={repair.isPending}
               onConfirm={() => repair.mutate()}
@@ -135,6 +152,11 @@ export function UpdatesSection(props: {
           <Button size="sm" variant="ghost" onClick={() => setChoosing((c) => !c)}>
             Publish versions of Dots (for its developers)…
           </Button>
+          {refused && (
+            <p role="alert" className="text-sm text-destructive">
+              {refused}
+            </p>
+          )}
           {choosing && (
             <div className="flex flex-col gap-1">
               <Label htmlFor="settings-publish-token">GitHub token</Label>
@@ -147,11 +169,7 @@ export function UpdatesSection(props: {
               <p className="text-xs text-muted-foreground">
                 A classic token with the repo and workflow scopes.
               </p>
-              {publisher?.state.state === "refused" && (
-                <p role="alert" className="text-sm text-destructive">
-                  {publisher.state.reason}
-                </p>
-              )}
+
             </div>
           )}
         </div>

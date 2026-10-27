@@ -131,9 +131,8 @@ pub async fn hub(app: &AppHandle, rt: &Arc<Runtime>) -> Result<GitHub, CmdError>
     Ok(GitHub::new(dots_core::releases::API, &token)?)
 }
 
-/// Setup step 1: a key pair kept in memory; its public half for the page.
-pub fn make_key(app: &AppHandle, password: &str) -> Result<String, CmdError> {
-    let made = dots_core::publish::keys::make_key(password)?;
+/// Setup step 1: the key pair made, kept in memory; its public half for the page.
+pub fn keep_key(app: &AppHandle, made: MadeKey) -> Result<String, CmdError> {
     let public = made.public_b64.clone();
     let p = publisher(app)?;
     *p.pending_key.lock().unwrap() = Some(made);

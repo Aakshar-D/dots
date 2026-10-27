@@ -200,6 +200,11 @@ impl UpdateState {
         Ok(Next::Nothing)
     }
 
+    /// Why the last install did not happen, while that is still said.
+    pub fn install_error(&self) -> Option<String> {
+        self.error.clone()
+    }
+
     /// What the ready install is for and the version it installs.
     pub fn ready_purpose(&self) -> Option<(Purpose, &str)> {
         self.ready.as_deref().map(|v| (self.purpose, v))
@@ -504,6 +509,16 @@ pub async fn back_up(
     version: &str,
     at: DateTime<Local>,
 ) -> Result<PathBuf, String> {
+    back_up_keeping(data_dir, version, at, None).await
+}
+
+/// `back_up`, never pruning `keep` (the backup the last update's Go back restores).
+pub async fn back_up_keeping(
+    data_dir: &Path,
+    version: &str,
+    at: DateTime<Local>,
+    keep: Option<&Path>,
+) -> Result<PathBuf, String> {
     let dir = data_dir.join(BACKUPS_DIR);
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let dest = dir.join(backup_file_name(version, at));
@@ -523,7 +538,12 @@ pub async fn back_up(
     }
     match backups(&dir) {
         Ok(all) => {
-            for old in all.iter().filter(|p| **p != dest).skip(KEEP_BACKUPS - 1) {
+            let pruned = all
+                .iter()
+                .filter(|p| **p != dest)
+                .skip(KEEP_BACKUPS - 1)
+                .filter(|p| keep != Some(p.as_path()));
+            for old in pruned {
                 if let Err(e) = std::fs::remove_file(old) {
                     tracing::warn!("could not delete the old backup {}: {e}", old.display());
                 }
@@ -576,6 +596,9 @@ pub trait InstallSteps {
     async fn restore_backup(&self, backup: &Path) -> Result<(), String>;
     /// Puts the database `set_aside_database` moved back in place. A failure is logged.
     fn undo_restore(&self, set_aside: &Path);
+    /// Puts the update record back as it was before `record` (an install that did not
+    /// happen must not change the go-back target or the pending check). A failure is logged.
+    fn restore_record(&self);
     /// Starts the installer and ends the process. Returns only when it could not start.
     fn install(&self) -> Result<(), String>;
     /// Deletes a backup that no install followed. A failure is logged.
@@ -613,6 +636,7 @@ pub async fn install(steps: &impl InstallSteps, purpose: Purpose, backup: Option
     steps.mark_restart();
     if let Err(e) = steps.install() {
         steps.discard_backup(&backup);
+        steps.restore_record();
         steps.restart_current(&format!("The update could not start: {e}"));
     }
 }
@@ -629,11 +653,13 @@ async fn go_back(steps: &impl InstallSteps, backup: Option<&Path>) {
             return;
         }
     };
+    let mut recorded = false;
     let failure = match steps.restore_backup(backup).await {
         Err(e) => Some(format!("The backup could not be restored: {e}")),
         Ok(()) => match steps.record(Purpose::GoBack, Some(backup)) {
             Err(e) => Some(format!("Going back could not be recorded: {e}")),
             Ok(()) => {
+                recorded = true;
                 steps.mark_restart();
                 steps
                     .install()
@@ -644,6 +670,9 @@ async fn go_back(steps: &impl InstallSteps, backup: Option<&Path>) {
     };
     if let Some(reason) = failure {
         steps.undo_restore(&set_aside);
+        if recorded {
+            steps.restore_record();
+        }
         steps.restart_current(&reason);
     }
 }
@@ -1115,6 +1144,9 @@ mod tests {
         fn undo_restore(&self, set_aside: &Path) {
             self.log(&format!("undo restore {}", set_aside.display()));
         }
+        fn restore_record(&self) {
+            self.log("restore record");
+        }
         fn install(&self) -> Result<(), String> {
             self.log("install")
                 .then_some(())
@@ -1161,6 +1193,8 @@ mod tests {
                 "install",
                 // Nothing changed since the backup: kept, a retry could prune an older one.
                 "discard b.db",
+                // Deferred minor M-3: the record is as it was before this install.
+                "restore record",
                 "restart: The update could not start: access denied"
             ]
         );
@@ -1328,9 +1362,11 @@ mod tests {
         install(&steps, Purpose::GoBack, Some(Path::new("old.db"))).await;
         let done = steps.done();
         assert_eq!(
-            &done[done.len() - 2..],
+            &done[done.len() - 3..],
             [
                 "undo restore failed.db",
+                // Deferred minor M-6: still pending, so the strip still offers Go back.
+                "restore record",
                 "restart: The update could not start: access denied"
             ]
         );
@@ -1425,5 +1461,25 @@ mod tests {
                 .file_name()
                 .to_string_lossy()
                 .starts_with("restored-")));
+    }
+
+    // Deferred minor M-4: three backups after the update cannot prune the one Go back needs.
+    #[tokio::test]
+    async fn pruning_never_deletes_the_backup_go_back_needs() {
+        let dir = tempfile::tempdir().unwrap();
+        let backups = dir.path().join(BACKUPS_DIR);
+        std::fs::create_dir_all(&backups).unwrap();
+        let keep = backups.join(backup_file_name("0.2.0", at(1)));
+        std::fs::write(&keep, "go back").unwrap();
+        for h in 2..5 {
+            std::fs::write(backups.join(backup_file_name("0.3.0", at(h))), "x").unwrap();
+        }
+        dots_core::store::Store::open(&dir.path().join(dots_core::store::DB_FILE))
+            .await
+            .unwrap();
+        back_up_keeping(dir.path(), "0.3.0", at(9), Some(&keep))
+            .await
+            .unwrap();
+        assert!(keep.exists());
     }
 }

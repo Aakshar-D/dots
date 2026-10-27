@@ -1082,6 +1082,8 @@ export const UpdateStatus = z.strictObject({
   go_back: nullable(z.string()),
   auto_install: z.boolean(),
   publisher: z.boolean(),
+  // Why the last install, repair or go back did not happen.
+  install_error: nullable(z.string()),
 });
 
 /// Whether this Dots publishes (updates UI spec section 5.1).
@@ -1164,6 +1166,8 @@ export const PageState = z.strictObject({
   promotion: nullable(Promotion),
   changes: z.array(MergedPull),
   suggested: z.string(),
+  // Each version's next trial number.
+  next_rcs: z.record(z.string(), z.number().int()),
 });
 
 /// What "Check for updates" found.
