@@ -5,7 +5,8 @@
 <script>
   // Each probe tries something an app's screen must not reach, and records whether it got
   // there through the bridge. Only "bridge", "theme", "own_script", "own_module", "data_image" and
-  // "done" should say reached.
+  // "done" should say reached; "dns_prefetch" (always reached) and "webview_post" are judged by
+  // the controller, host-side, from the DNS cache and the app's every_dot read-back.
   const out = document.getElementById("out");
   const record = (probe, reached, detail) =>
     dots.call("record", { probe, reached, detail: String(detail ?? "").slice(0, 200) });
@@ -16,6 +17,7 @@
       await record(probe, false, (e && e.message) || e);
     }
   };
+  const fresh = () => Math.random().toString(36).slice(2, 10);
   const within = (ms, promise) =>
     Promise.race([promise, new Promise((_, no) => setTimeout(() => no(new Error(`no answer in ${ms} ms`)), ms))]);
   (async () => {
@@ -86,6 +88,53 @@
       })),
     );
     await attempt("data_script", () => script("data:text/javascript,window.fromData=1"));
+    // A STUN server name is looked up by the browser itself; the controller reads the DNS cache
+    // for the host and judges the probe. Reached means a server-reflexive candidate arrived.
+    await attempt("webrtc", async () => {
+      if (typeof RTCPeerConnection === "undefined") throw new Error("no RTCPeerConnection");
+      const host = `webrtc-${fresh()}.dots-probe.invalid`;
+      const pc = new RTCPeerConnection({ iceServers: [{ urls: `stun:${host}:3478` }] });
+      try {
+        pc.createDataChannel("probe");
+        const srflx = new Promise((ok) => {
+          pc.onicecandidate = (e) => {
+            if (!e.candidate) ok(false);
+            else if (e.candidate.type === "srflx" || / typ srflx /.test(e.candidate.candidate)) ok(true);
+          };
+          setTimeout(() => ok(false), 3000);
+        });
+        await pc.setLocalDescription(await pc.createOffer());
+        if (!(await srflx)) throw new Error(`no srflx candidate from ${host}`);
+        return `srflx candidate from ${host}`;
+      } finally {
+        pc.close();
+      }
+    });
+    // Hints that make a browser look a name up ahead of any request. Always recorded as reached:
+    // the controller reads the DNS cache for the two hosts.
+    {
+      const id = fresh();
+      const hosts = [`prefetch-${id}.dots-probe.invalid`, `preconnect-${id}.dots-probe.invalid`];
+      const prefetch = document.createElement("link");
+      prefetch.rel = "dns-prefetch";
+      prefetch.href = `//${hosts[0]}`;
+      const preconnect = document.createElement("link");
+      preconnect.rel = "preconnect";
+      preconnect.href = `https://${hosts[1]}`;
+      document.head.append(prefetch, preconnect);
+      await new Promise((ok) => setTimeout(ok, 1000));
+      await record("dns_prefetch", true, hosts.join(" "));
+    }
+    // WebView2's own message channel to the host. The every_dot read-back, not this record, is
+    // the proof that nothing happened.
+    await attempt("webview_post", async () => {
+      const channel = window.chrome?.webview;
+      if (!channel) throw new Error("no window.chrome.webview");
+      channel.postMessage(
+        JSON.stringify({ cmd: "app_set_every_dot", payload: { name: "probe", on: true } }),
+      );
+      return "channel existed; message posted";
+    });
     await record("done", true, "all probes ran");
     out.textContent = "Done.";
   })();
