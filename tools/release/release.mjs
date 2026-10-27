@@ -71,6 +71,16 @@ export function checkTag(root, tag) {
   return { version, prerelease: version.includes("-"), errors };
 }
 
+/// The notes in `release-notes.md` when they belong to `version` (their first line names it:
+/// `<!-- dots:notes 0.3.0 -->`, which a trial `0.3.0-rc.2` matches too); else undefined, so a
+/// later release never publishes an older version's notes.
+export function notesFor(text, version) {
+  const match = /^<!-- dots:notes (\S+) -->\r?\n?/.exec(text);
+  if (!match || match[1] !== version.split("-")[0]) return undefined;
+  const body = text.slice(match[0].length).trim();
+  return body || undefined;
+}
+
 /// The updater manifest for one Windows installer. `notes`: the release's notes
 /// (`release-notes.md`), when the tag has them.
 export function manifest({ version, signature, installer, date, notes }) {
@@ -98,6 +108,16 @@ function main([command, tag, installer, out, notesFile]) {
     const line = `prerelease=${checked.prerelease}`;
     console.log(line);
     if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `${line}\n`);
+  } else if (command === "notes" && installer && out) {
+    // notes <tag> <release-notes.md> <out>: writes the notes when they name this version.
+    const text = existsSync(installer) ? readFileSync(installer, "utf8") : "";
+    const notes = notesFor(text, checked.version);
+    if (notes) {
+      writeFileSync(out, `${notes}\n`);
+      console.log(`release: the notes for ${checked.version} are in ${out}`);
+    } else {
+      console.log(`release: no notes for ${checked.version}; GitHub's are used`);
+    }
   } else if (command === "manifest" && installer && out) {
     const signature = readFileSync(`${installer}.sig`, "utf8");
     const notes = notesFile && existsSync(notesFile) ? readFileSync(notesFile, "utf8") : undefined;
@@ -111,7 +131,9 @@ function main([command, tag, installer, out, notesFile]) {
     writeFileSync(out, `${JSON.stringify(body, null, 2)}\n`);
     console.log(`release: wrote ${out}`);
   } else {
-    console.error("usage: release.mjs check <tag> | manifest <tag> <installer> <out> [notes-file]");
+    console.error(
+      "usage: release.mjs check <tag> | notes <tag> <notes-in> <notes-out> | manifest <tag> <installer> <out> [notes-file]",
+    );
     process.exit(2);
   }
 }

@@ -34,6 +34,7 @@ pub trait Hub {
     async fn set_branch(&self, branch: &str, sha: &str, force: bool) -> Result<()>;
     async fn delete_branch(&self, branch: &str) -> Result<()>;
     async fn tag(&self, tag: &str, sha: &str) -> Result<()>;
+    async fn tag_sha(&self, tag: &str) -> Result<String>;
     async fn tags(&self) -> Result<Vec<String>>;
     async fn merge(&self, base: &str, head: &str, message: &str) -> Result<MergeOutcome>;
     async fn open_pull(
@@ -90,6 +91,9 @@ impl Hub for GitHub {
     async fn tag(&self, tag: &str, sha: &str) -> Result<()> {
         GitHub::tag(self, tag, sha).await
     }
+    async fn tag_sha(&self, tag: &str) -> Result<String> {
+        GitHub::tag_sha(self, tag).await
+    }
     async fn tags(&self) -> Result<Vec<String>> {
         GitHub::tags(self).await
     }
@@ -138,6 +142,9 @@ pub enum Setup {
     Done,
     /// Nothing is there yet: the setup can run.
     Needed,
+    /// Both secrets are in and master still has the prototype key: the setup's step 4, the
+    /// pull request with the public key, is what is left.
+    KeyPending,
     /// Some is there and some is not; the setup never touches it. `secrets`: how many of the
     /// two exist; `pubkey`: master has a key that is not the prototype's.
     HalfDone {
@@ -155,6 +162,7 @@ pub async fn setup_state(h: &impl Hub) -> Result<Setup> {
     Ok(match (secrets, pubkey) {
         (2, true) => Setup::Done,
         (0, false) => Setup::Needed,
+        (2, false) => Setup::KeyPending,
         (secrets, pubkey) => Setup::HalfDone { secrets, pubkey },
     })
 }
@@ -232,6 +240,26 @@ pub struct PageState {
     pub suggested: String,
 }
 
+/// The first line of `release-notes.md`: the version the notes belong to, so a later release
+/// never publishes them (the workflow checks it).
+fn notes_marker(version: &str) -> String {
+    format!("<!-- dots:notes {version} -->")
+}
+
+/// The notes as the file holds them: the marker line, then the text.
+pub fn mark_notes(version: &str, notes: &str) -> String {
+    format!("{}\n{}", notes_marker(version), unmark_notes(notes))
+}
+
+/// The notes without the marker line.
+pub fn unmark_notes(text: &str) -> String {
+    match text.split_once('\n') {
+        Some((first, rest)) if first.starts_with("<!-- dots:notes ") => rest.to_string(),
+        _ if text.starts_with("<!-- dots:notes ") => String::new(),
+        _ => text.to_string(),
+    }
+}
+
 fn withdrawn(r: &ReleaseInfo) -> bool {
     r.body.trim_start().starts_with(WITHDRAWN_MARKER)
 }
@@ -283,7 +311,7 @@ pub async fn page_state(h: &impl Hub) -> Result<PageState> {
             if !release.as_ref().is_some_and(withdrawn) {
                 let run = h.run_for_tag(&tag).await?;
                 let notes = match h.file(NOTES_FILE, &branch(&version)).await? {
-                    Some(notes) => notes,
+                    Some(notes) => unmark_notes(&notes),
                     None => versions::draft_notes(&changes),
                 };
                 trial = Some(Trial {
@@ -350,7 +378,7 @@ pub async fn publish_trial(h: &impl Hub, version: &str) -> Result<Trial> {
     let master = h.head("master").await?;
     // Notes edited on an earlier trial of this version are kept.
     let notes = match h.file(NOTES_FILE, &branch(version)).await.ok().flatten() {
-        Some(notes) => notes,
+        Some(notes) => unmark_notes(&notes),
         None => {
             let pulls = h
                 .merged_pulls_since(live.as_ref().map(|r| r.tag.as_str()), &master)
@@ -366,13 +394,14 @@ pub async fn publish_trial(h: &impl Hub, version: &str) -> Result<Trial> {
             .ok_or_else(|| Error::Other(format!("{path} is not on master")))?;
         files.push((path.to_string(), versions::set_version(path, &text, &full)?));
     }
-    files.push((NOTES_FILE.to_string(), notes.clone()));
+    files.push((NOTES_FILE.to_string(), mark_notes(version, &notes)));
     let commit = h
         .commit_files(&master, &files, &format!("Dots {full}"))
         .await?;
-    h.set_branch(&branch(version), &commit, true).await?;
+    // The tag first: a branch moved without its tag would hold an untested tree.
     let tag = format!("v{full}");
     h.tag(&tag, &commit).await?;
+    h.set_branch(&branch(version), &commit, true).await?;
     Ok(Trial {
         version: version.to_string(),
         rc,
@@ -401,14 +430,15 @@ pub async fn save_notes(h: &impl Hub, version: &str, notes: &str) -> Result<()> 
     let commit = h
         .commit_files(
             &head,
-            &[(NOTES_FILE.to_string(), notes.to_string())],
+            &[(NOTES_FILE.to_string(), mark_notes(version, notes))],
             &format!("Release notes for {version}"),
         )
         .await?;
     h.set_branch(&branch(version), &commit, false).await?;
     let tag = trial_tag(h, version).await?;
     if let Some(release) = h.releases().await?.into_iter().find(|r| r.tag == tag) {
-        h.edit_release(release.id, None, Some(notes), None).await?;
+        h.edit_release(release.id, None, Some(&unmark_notes(notes)), None)
+            .await?;
     }
     Ok(())
 }
@@ -417,25 +447,43 @@ pub fn conflict_message(version: &str) -> String {
     format!("master could not take {version}: its version fields changed. Publish a new trial.")
 }
 
-/// "Promote": the trial's tree with the final version, merged into master, and tagged.
+/// "Promote": the tagged trial's tree with the final version and the notes saved since,
+/// merged into master, and tagged. Only a trial that was published (its tests passed and it
+/// built) is promoted; a later commit on its branch is never shipped.
 pub async fn promote(h: &impl Hub, version: &str) -> Result<()> {
-    trial_tag(h, version).await?;
-    let head = h.head(&branch(version)).await?;
+    let tag = trial_tag(h, version).await?;
+    let published = h
+        .releases()
+        .await?
+        .into_iter()
+        .any(|r| r.tag == tag && !r.draft && !withdrawn(&r));
+    if !published {
+        return Err(Error::Conflict(format!(
+            "Promote waits for {} to be published.",
+            tag.trim_start_matches('v')
+        )));
+    }
+    let base = h.tag_sha(&tag).await?;
+    let notes = match h.file(NOTES_FILE, &branch(version)).await? {
+        Some(notes) => notes,
+        None => h.file(NOTES_FILE, &base).await?.unwrap_or_default(),
+    };
     let mut files = Vec::new();
     for path in VERSION_FILES {
         let text = h
-            .file(path, &head)
+            .file(path, &base)
             .await?
-            .ok_or_else(|| Error::Other(format!("{path} is not on the release branch")))?;
+            .ok_or_else(|| Error::Other(format!("{path} is not in the trial")))?;
         files.push((
             path.to_string(),
             versions::set_version(path, &text, version)?,
         ));
     }
+    files.push((NOTES_FILE.to_string(), mark_notes(version, &notes)));
     let commit = h
-        .commit_files(&head, &files, &format!("Dots {version}"))
+        .commit_files(&base, &files, &format!("Dots {version}"))
         .await?;
-    h.set_branch(&branch(version), &commit, false).await?;
+    h.set_branch(&branch(version), &commit, true).await?;
     if h.merge(
         "master",
         &branch(version),

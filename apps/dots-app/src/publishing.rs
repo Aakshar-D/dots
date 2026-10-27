@@ -191,19 +191,17 @@ pub async fn put_secrets(
     put
 }
 
+pub const NO_PUBLIC_KEY: &str = "This Dots did not make the key in GitHub's secrets, or has restarted since. Ask whoever set it up for the public key, or remove both secrets on GitHub to start again.";
+
+/// The public key step 4 needs: only this Dots' own, made in this run.
+pub fn public_key_for_pull(kept: Option<String>) -> Result<String, CmdError> {
+    kept.ok_or_else(|| dots_core::Error::Conflict(NO_PUBLIC_KEY.into()).into())
+}
+
 /// Setup step 4: the pull request that puts the public key into Dots.
 pub async fn open_key_pull(app: &AppHandle, rt: &Arc<Runtime>) -> Result<PullOpened, CmdError> {
     let gh = hub(app, rt).await?;
-    let public = publisher(app)?
-        .public_key
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or_else(|| {
-            CmdError::from(dots_core::Error::Conflict(
-                "Make the signing key first.".into(),
-            ))
-        })?;
+    let public = public_key_for_pull(publisher(app)?.public_key.lock().unwrap().clone())?;
     let (number, url) = dots_core::publish::flow::open_pubkey_pull(&gh, &public).await?;
     Ok(PullOpened { number, url })
 }
@@ -261,5 +259,15 @@ mod tests {
         assert!(slot.lock().unwrap().is_some());
         after_put(&slot, &Ok(()));
         assert!(slot.lock().unwrap().is_none());
+    }
+
+    // Final review C1: step 4 after a restart, or in a Dots that did not make the key, says why.
+    #[test]
+    fn step_four_needs_this_dots_own_public_key() {
+        assert_eq!(public_key_for_pull(Some("UFVC".into())).unwrap(), "UFVC");
+        assert_eq!(
+            public_key_for_pull(None).unwrap_err().message,
+            NO_PUBLIC_KEY
+        );
     }
 }

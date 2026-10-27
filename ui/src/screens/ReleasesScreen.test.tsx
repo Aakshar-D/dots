@@ -6,7 +6,16 @@ import { backend } from "@/test/backend";
 import { sample } from "@/test/fixtures";
 import { renderApp } from "@/test/render";
 
-const [needed, halfDone, building] = sample.pageStates as [PageState, PageState, PageState];
+const [needed, keyPending, halfDone, building] = sample.pageStates as [
+  PageState,
+  PageState,
+  PageState,
+  PageState,
+];
+const published: PageState = {
+  ...building,
+  trial: { ...building.trial!, stage: { stage: "published" } },
+};
 const publisher: PublisherStatus = {
   token: "GITHUB_PUBLISH",
   state: { state: "publisher", login: "shraddesh" },
@@ -48,6 +57,7 @@ describe("the Releases page", () => {
     const put = screen.getByRole("button", { name: "Put it in GitHub's secrets" });
     expect(put).toBeDisabled();
     await user.type(screen.getByLabelText("Password"), "correct horse battery");
+    await user.type(screen.getByLabelText("Password again"), "correct horse battery");
     await user.click(screen.getByRole("button", { name: "Make the signing key" }));
     await waitFor(() =>
       expect(backend.callsTo("release_make_key")).toEqual([{ password: "correct horse battery" }]),
@@ -66,8 +76,19 @@ describe("the Releases page", () => {
       ),
     );
     await user.click(put);
+    // Final review I4: steps 3 and 4 ask first.
+    await user.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", {
+        name: "Put it in GitHub's secrets",
+      }),
+    );
     await waitFor(() => expect(backend.callsTo("release_put_secrets")).toHaveLength(1));
     await user.click(screen.getByRole("button", { name: "Put the public key into Dots" }));
+    await user.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", {
+        name: "Open the pull request",
+      }),
+    );
     expect(await screen.findByRole("link", { name: /pull request #31/ })).toHaveAttribute(
       "href",
       "https://github.com/Aakshar-D/dots/pull/31",
@@ -79,6 +100,43 @@ describe("the Releases page", () => {
     releases(halfDone);
     await screen.findByRole("heading", { name: "Releases" });
     expect(screen.getAllByRole("main")).toHaveLength(1);
+  });
+
+  // Final review I5: the password is typed twice; a typo would make the backup useless.
+  it("makes the key only when both passwords match", async () => {
+    const { user } = releases(needed);
+    const make = await screen.findByRole("button", { name: "Make the signing key" });
+    await user.type(screen.getByLabelText("Password"), "correct horse battery");
+    await user.type(screen.getByLabelText("Password again"), "correct horse batterz");
+    expect(make).toBeDisabled();
+    expect(screen.getByText("The two passwords differ.")).toBeVisible();
+  });
+
+  // Final review C1: after the secrets, the setup shows step 4, not the half-done sentence.
+  it("offers step 4 once the secrets are in", async () => {
+    backend.on("release_open_key_pull", () => ({
+      number: 31,
+      url: "https://github.com/Aakshar-D/dots/pull/31",
+    }));
+    const { user } = releases(keyPending);
+    const pull = await screen.findByRole("button", { name: "Put the public key into Dots" });
+    expect(pull).toBeEnabled();
+    expect(screen.queryByText(/GitHub already has a signing key/)).toBeNull();
+    await user.click(pull);
+    await user.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", {
+        name: "Open the pull request",
+      }),
+    );
+    expect(await screen.findByRole("link", { name: /pull request #31/ })).toBeVisible();
+  });
+
+  // Final review I2: only a published trial is promoted.
+  it("offers Promote only once the trial is published", async () => {
+    releases(building);
+    expect(
+      await screen.findByRole("button", { name: "Promote 0.3.0 to everyone" }),
+    ).toBeDisabled();
   });
 
   it("says a half set-up repository is left alone", async () => {
@@ -151,11 +209,14 @@ describe("the Releases page", () => {
   it("saves the notes and promotes after asking", async () => {
     backend.on("release_save_notes", () => null);
     backend.on("release_promote", () => null);
-    const { user } = releases(building);
+    const { user } = releases(published);
     const notes = await screen.findByLabelText("What's new");
     await user.clear(notes);
     await user.type(notes, "- Better");
     await user.click(screen.getByRole("button", { name: "Save notes" }));
+    await user.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Save notes" }),
+    );
     await waitFor(() =>
       expect(backend.callsTo("release_save_notes")).toEqual([
         { version: "0.3.0", notes: "- Better" },

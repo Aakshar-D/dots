@@ -1101,6 +1101,8 @@ export const PullOpened = z.strictObject({ number: z.number().int(), url: z.stri
 export const Setup = z.discriminatedUnion("state", [
   z.strictObject({ state: z.literal("done") }),
   z.strictObject({ state: z.literal("needed") }),
+  // The secrets are in; the pull request with the public key is what is left.
+  z.strictObject({ state: z.literal("key_pending") }),
   z.strictObject({
     state: z.literal("half_done"),
     secrets: z.number().int(),

@@ -910,6 +910,14 @@ fn page_states() -> Vec<dots_core::publish::flow::PageState> {
             suggested: "0.2.0".into(),
         },
         PageState {
+            setup: Setup::KeyPending,
+            live: None,
+            trial: None,
+            promotion: None,
+            changes: vec![],
+            suggested: "0.2.0".into(),
+        },
+        PageState {
             setup: Setup::HalfDone {
                 secrets: 2,
                 pubkey: false,

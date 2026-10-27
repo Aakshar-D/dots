@@ -161,6 +161,14 @@ impl Hub for Fake {
         self.0.borrow_mut().tags.insert(tag.into(), sha.into());
         Ok(())
     }
+    async fn tag_sha(&self, tag: &str) -> Result<String> {
+        self.0
+            .borrow()
+            .tags
+            .get(tag)
+            .cloned()
+            .ok_or_else(|| Error::NotFound(format!("no tag {tag}")))
+    }
     async fn tags(&self) -> Result<Vec<String>> {
         Ok(self.0.borrow().tags.keys().cloned().collect())
     }
@@ -251,11 +259,10 @@ async fn setup_is_needed_done_or_half_done() {
         setup_state(&fake).await.unwrap(),
         Setup::HalfDone { .. }
     ));
+    // Final review C1: both secrets in and the prototype key still on master is the setup's
+    // own step 4, not someone else's half-done setup.
     fake.0.borrow_mut().secrets.insert(PASSWORD_SECRET.into());
-    assert!(matches!(
-        setup_state(&fake).await.unwrap(),
-        Setup::HalfDone { .. }
-    ));
+    assert_eq!(setup_state(&fake).await.unwrap(), Setup::KeyPending);
     let done = Fake::new(REAL_KEY);
     done.0
         .borrow_mut()
@@ -315,7 +322,15 @@ async fn a_trial_commits_the_versions_and_notes_on_its_branch_and_tags_it() {
     for path in VERSION_FILES {
         assert!(tree[path].contains("0.3.0-rc.1"), "{path}");
     }
-    assert_eq!(tree[NOTES_FILE], "- The rail's Claude usage bars (#26)\n");
+    // Final review I6: the notes name the version they belong to.
+    assert_eq!(
+        tree[NOTES_FILE],
+        "<!-- dots:notes 0.3.0 -->\n- The rail's Claude usage bars (#26)\n"
+    );
+    assert_eq!(
+        page_state(&fake).await.unwrap().trial.unwrap().notes,
+        "- The rail's Claude usage bars (#26)\n"
+    );
     assert_eq!(tree["README.md"], "readme");
     // A version that is not MAJOR.MINOR.PATCH: refused, nothing written.
     let before = fake.calls().len();
@@ -349,7 +364,7 @@ async fn saving_notes_changes_only_the_notes_file_and_the_release_body() {
     let after = fake.tree("release/0.3.0");
     for (path, text) in &before {
         if path == NOTES_FILE {
-            assert_eq!(after[path], "- Edited");
+            assert_eq!(after[path], "<!-- dots:notes 0.3.0 -->\n- Edited");
         } else {
             assert_eq!(&after[path], text, "{path}");
         }
@@ -361,6 +376,10 @@ async fn saving_notes_changes_only_the_notes_file_and_the_release_body() {
 async fn promote_ships_the_trial_tree_and_stops_on_a_conflicting_merge() {
     let fake = Fake::new(REAL_KEY);
     publish_trial(&fake, "0.3.0").await.unwrap();
+    fake.0
+        .borrow_mut()
+        .releases
+        .push(release(9, "v0.3.0-rc.1", true));
     fake.push_master();
     let trial_sha = fake.resolve("release/0.3.0").unwrap();
     promote(&fake, "0.3.0").await.unwrap();
@@ -385,6 +404,11 @@ async fn promote_ships_the_trial_tree_and_stops_on_a_conflicting_merge() {
 
     let conflicted = Fake::new(REAL_KEY);
     publish_trial(&conflicted, "0.3.0").await.unwrap();
+    conflicted
+        .0
+        .borrow_mut()
+        .releases
+        .push(release(9, "v0.3.0-rc.1", true));
     conflicted.0.borrow_mut().merge = Some(MergeOutcome::Conflict);
     let err = promote(&conflicted, "0.3.0").await.unwrap_err().to_string();
     assert!(
@@ -496,4 +520,51 @@ fn the_stage_follows_the_run_and_the_release() {
     );
     let published = release(9, "v0.3.0-rc.1", true);
     assert_eq!(stage_of(Some(&failed), Some(&published)), Stage::Published);
+}
+
+// Final review I2: Promote waits for the trial to be published (its tests passed and it built).
+#[tokio::test]
+async fn promote_waits_for_a_published_trial() {
+    let fake = Fake::new(REAL_KEY);
+    publish_trial(&fake, "0.3.0").await.unwrap();
+    let err = promote(&fake, "0.3.0").await.unwrap_err().to_string();
+    assert!(
+        err.contains("Promote waits for 0.3.0-rc.1 to be published."),
+        "{err}"
+    );
+    assert!(!fake.0.borrow().tags.contains_key("v0.3.0"));
+    let mut withdrawn = release(9, "v0.3.0-rc.1", true);
+    withdrawn.body = format!("{WITHDRAWN_MARKER}\n- x");
+    fake.0.borrow_mut().releases.push(withdrawn);
+    assert!(promote(&fake, "0.3.0").await.is_err());
+}
+
+// Final review I3: Promote ships the tagged trial, never a later commit on its branch; only the
+// notes saved since come along.
+#[tokio::test]
+async fn promote_ships_the_tagged_trial_not_a_later_branch_commit() {
+    let fake = Fake::new(REAL_KEY);
+    publish_trial(&fake, "0.3.0").await.unwrap();
+    fake.0
+        .borrow_mut()
+        .releases
+        .push(release(9, "v0.3.0-rc.1", true));
+    let tagged_trial = fake.0.borrow().tags["v0.3.0-rc.1"].clone();
+    save_notes(&fake, "0.3.0", "- Final notes").await.unwrap();
+    // Something untested lands on the branch after the trial.
+    let head = fake.resolve("release/0.3.0").unwrap();
+    let untested = fake
+        .commit_files(&head, &[("README.md".into(), "untested".into())], "by hand")
+        .await
+        .unwrap();
+    fake.0
+        .borrow_mut()
+        .branches
+        .insert("release/0.3.0".into(), untested);
+    promote(&fake, "0.3.0").await.unwrap();
+    let tagged = fake.0.borrow().tags["v0.3.0"].clone();
+    let (parent, tree) = fake.0.borrow().commits[&tagged].clone();
+    assert_eq!(parent, Some(tagged_trial));
+    assert_eq!(tree["README.md"], "readme");
+    assert_eq!(tree[NOTES_FILE], "<!-- dots:notes 0.3.0 -->\n- Final notes");
 }

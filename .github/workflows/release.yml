@@ -129,12 +129,14 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           installer="target/release/bundle/nsis/Dots_${version}_x64-setup.exe"
-          node tools/release/release.mjs manifest "$GITHUB_REF_NAME" "$installer" latest.json release-notes.md
+          # The notes the Releases page wrote for this version, when the tag has them; else
+          # GitHub's own. Notes left on master by an earlier version are never used.
+          node tools/release/release.mjs notes "$GITHUB_REF_NAME" release-notes.md release-notes.out.md
+          node tools/release/release.mjs manifest "$GITHUB_REF_NAME" "$installer" latest.json release-notes.out.md
           flags=()
           if [ "$PRERELEASE" = "true" ]; then flags+=(--prerelease); fi
-          # The notes the Releases page wrote, when the tag has them; else GitHub's own.
-          if [ -s release-notes.md ]; then
-            flags+=(--notes-file release-notes.md)
+          if [ -s release-notes.out.md ]; then
+            flags+=(--notes-file release-notes.out.md)
           else
             flags+=(--generate-notes)
           fi

@@ -6,7 +6,7 @@ import { dirname, join, relative } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { checkTag, isThisFile, manifest, PROTOTYPE_PUBKEY } from "./release.mjs";
+import { checkTag, isThisFile, manifest, notesFor, PROTOTYPE_PUBKEY } from "./release.mjs";
 
 const script = fileURLToPath(new URL("./release.mjs", import.meta.url));
 /// The script's path with its folders in another case, as Windows may spell it.
@@ -112,6 +112,15 @@ test("the manifest carries the notes file when one is given", () => {
   assert.equal(manifest({ ...base, notes: "- New things\n" }).notes, "- New things");
   assert.equal(manifest(base).notes, "Dots 0.3.0");
   assert.equal(manifest({ ...base, notes: "  \n" }).notes, "Dots 0.3.0");
+});
+
+// Final review I6: the notes a promote left on master never describe a later version.
+test("the notes are used only for the version they name", () => {
+  const file = "<!-- dots:notes 0.3.0 -->\n- New things\n";
+  assert.equal(notesFor(file, "0.3.0"), "- New things");
+  assert.equal(notesFor(file, "0.3.0-rc.2"), "- New things");
+  assert.equal(notesFor(file, "0.3.1"), undefined);
+  assert.equal(notesFor("- unmarked", "0.3.0"), undefined);
 });
 
 test("the script knows itself by any spelling of its path", () => {

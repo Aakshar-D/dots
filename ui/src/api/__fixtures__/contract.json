@@ -2654,6 +2654,16 @@
       "live": null,
       "promotion": null,
       "setup": {
+        "state": "key_pending"
+      },
+      "suggested": "0.2.0",
+      "trial": null
+    },
+    {
+      "changes": [],
+      "live": null,
+      "promotion": null,
+      "setup": {
         "pubkey": false,
         "secrets": 2,
         "state": "half_done"

@@ -306,6 +306,14 @@ impl GitHub {
         Ok(())
     }
 
+    /// The commit a (lightweight) tag points at.
+    pub async fn tag_sha(&self, tag: &str) -> Result<String> {
+        let v = self
+            .get(&format!("/repos/{REPO}/git/ref/tags/{tag}"))
+            .await?;
+        Ok(v["object"]["sha"].as_str().unwrap_or_default().to_string())
+    }
+
     pub async fn tag_exists(&self, tag: &str) -> Result<bool> {
         let path = format!("/repos/{REPO}/git/ref/tags/{tag}");
         let (status, _, _) = self.call(Method::GET, &path, None, &[404]).await?;

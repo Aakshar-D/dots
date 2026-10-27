@@ -44,14 +44,17 @@ function Card(props: { title: string; children: ReactNode }) {
   );
 }
 
-/// The one-time setup (updates UI spec section 5.2).
-function SetupCard() {
+/// The one-time setup (updates UI spec section 5.2). `keyPending`: the secrets are in already,
+/// so only step 4 is left.
+function SetupCard({ keyPending }: { keyPending: boolean }) {
   const qc = useQueryClient();
   const [password, setPassword] = useState("");
-  const [made, setMade] = useState(false);
+  const [again, setAgain] = useState("");
+  const [made, setMade] = useState(keyPending);
   const [savedTo, setSavedTo] = useState<string | null>(null);
-  const [ticked, setTicked] = useState(false);
-  const [secretsIn, setSecretsIn] = useState(false);
+  const [ticked, setTicked] = useState(keyPending);
+  const [secretsIn, setSecretsIn] = useState(keyPending);
+  const differ = again !== "" && again !== password;
   const make = useMutation({
     mutationFn: () => commands.releaseMakeKey(password),
     onSuccess: () => setMade(true),
@@ -81,10 +84,26 @@ function SetupCard() {
             disabled={made}
             onChange={(e) => setPassword(e.target.value)}
           />
+          <Label htmlFor="release-password-again">Password again</Label>
+          <Input
+            id="release-password-again"
+            type="password"
+            className="max-w-xs"
+            value={again}
+            disabled={made}
+            aria-invalid={differ || undefined}
+            aria-describedby={differ ? "release-password-differ" : undefined}
+            onChange={(e) => setAgain(e.target.value)}
+          />
+          {differ && (
+            <p id="release-password-differ" className="text-xs text-destructive">
+              The two passwords differ.
+            </p>
+          )}
           <Button
             size="sm"
             className="self-start"
-            disabled={made || make.isPending}
+            disabled={made || make.isPending || password === "" || again !== password}
             onClick={() => make.mutate()}
           >
             Make the signing key
@@ -118,25 +137,29 @@ function SetupCard() {
         </li>
         <li className="flex flex-col gap-2">
           <span className="font-medium">Put it in GitHub's secrets {secretsIn && "✓"}</span>
-          <Button
-            size="sm"
-            className="self-start"
+          <ConfirmButton
+            title="Put it in GitHub's secrets"
+            description="Dots stores the key and its password as the repository's two signing secrets, then forgets them. Your backup is the only other copy."
+            confirmLabel="Put it in GitHub's secrets"
+            variant="default"
             disabled={!made || !savedTo || !ticked || secretsIn || put.isPending}
-            onClick={() => put.mutate()}
+            onConfirm={() => put.mutate()}
           >
             Put it in GitHub's secrets
-          </Button>
+          </ConfirmButton>
         </li>
         <li className="flex flex-col gap-2">
           <span className="font-medium">Put the public key into Dots</span>
-          <Button
-            size="sm"
-            className="self-start"
+          <ConfirmButton
+            title="Put the public key into Dots"
+            description={`Dots opens a pull request, "Use the release signing key", that puts the public key into Dots.`}
+            confirmLabel="Open the pull request"
+            variant="default"
             disabled={!secretsIn || pull.isPending || !!pull.data}
-            onClick={() => pull.mutate()}
+            onConfirm={() => pull.mutate()}
           >
             Put the public key into Dots
-          </Button>
+          </ConfirmButton>
           {pull.data && (
             <a href={pull.data.url} target="_blank" rel="noreferrer" className="underline">
               Open pull request #{pull.data.number}
@@ -273,20 +296,22 @@ function TrialCard({ trial }: { trial: NonNullable<PageState["trial"]> }) {
         onChange={(e) => setNotes(e.target.value)}
       />
       <div className="flex flex-wrap gap-2">
-        <Button
-          size="sm"
-          variant="outline"
+        <ConfirmButton
+          title="Save notes"
+          description={`Dots commits these notes on release/${trial.version}; they become what's new in ${trial.version}.`}
+          confirmLabel="Save notes"
           disabled={saveNotes.isPending}
-          onClick={() => saveNotes.mutate()}
+          onConfirm={() => saveNotes.mutate()}
         >
           Save notes
-        </Button>
+        </ConfirmButton>
         <ConfirmButton
           title="Promote to everyone"
           description={`Every Dots will be offered ${trial.version} within six hours. It is exactly the code of ${trial.version}-rc.${trial.rc}.`}
           confirmLabel="Promote"
           variant="default"
-          disabled={promote.isPending}
+          // Only a trial whose tests passed and that was published (final review I2).
+          disabled={promote.isPending || trial.stage.stage !== "published"}
           onConfirm={() => promote.mutate()}
         >
           Promote {trial.version} to everyone
@@ -377,7 +402,9 @@ export function ReleasesScreen() {
           {HALF_DONE}
         </p>
       )}
-      {page.data?.setup.state === "needed" && <SetupCard />}
+      {(page.data?.setup.state === "needed" || page.data?.setup.state === "key_pending") && (
+        <SetupCard keyPending={page.data.setup.state === "key_pending"} />
+      )}
       {page.data?.setup.state === "done" && (
         <>
           <ReadyCard key={page.data.suggested} page={page.data} />
