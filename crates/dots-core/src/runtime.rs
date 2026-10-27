@@ -1290,6 +1290,19 @@ impl Runtime {
     /// waits for (updates spec §6). Queued runs and runs awaiting an approval survive a
     /// restart, so they are left out. A run is no longer counted once the `RunUpdated` event
     /// of its end is out. A dot deleted between the two reads is left out.
+    /// The GitHub token Dots publishes with: the value of the vault entry the settings name
+    /// (updates UI spec section 5.1). Never logged or sent in an event.
+    pub async fn publish_token(&self) -> Result<Option<String>> {
+        let Some(name) = self.settings().await.publish_token else {
+            return Ok(None);
+        };
+        Ok(self
+            .vault
+            .personal_value(&name)
+            .await?
+            .map(|v| v.to_string()))
+    }
+
     /// How many runs have not ended (queued, running or waiting for an approval).
     pub async fn unfinished_runs(&self) -> Result<usize> {
         self.store.unfinished_run_count().await

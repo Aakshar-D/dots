@@ -412,6 +412,19 @@
     "update_repair",
     "update_go_back",
     "update_dismiss_updated",
+    "publisher_status",
+    "publisher_check",
+    "releases_page",
+    "release_make_key",
+    "release_save_key",
+    "release_put_secrets",
+    "release_open_key_pull",
+    "release_publish_trial",
+    "release_save_notes",
+    "release_promote",
+    "release_retry",
+    "release_drop_trial",
+    "release_withdraw",
     "report_activity",
     "app_rendered",
     "update_open_notes",
@@ -2620,6 +2633,148 @@
       "use_rules": null
     }
   ],
+  "PageState": [
+    {
+      "changes": [
+        {
+          "number": 26,
+          "title": "Usage and limits"
+        }
+      ],
+      "live": null,
+      "promotion": null,
+      "setup": {
+        "state": "needed"
+      },
+      "suggested": "0.2.0",
+      "trial": null
+    },
+    {
+      "changes": [],
+      "live": null,
+      "promotion": null,
+      "setup": {
+        "pubkey": false,
+        "secrets": 2,
+        "state": "half_done"
+      },
+      "suggested": "0.2.0",
+      "trial": null
+    },
+    {
+      "changes": [
+        {
+          "number": 26,
+          "title": "Usage and limits"
+        }
+      ],
+      "live": {
+        "body": "- Watchers",
+        "draft": false,
+        "id": 41,
+        "name": "Dots 0.2.0",
+        "prerelease": false,
+        "published_at": "2026-10-09T12:00:00.000Z",
+        "tag": "v0.2.0",
+        "url": "https://github.com/Aakshar-D/dots/releases/tag/v0.2.0"
+      },
+      "promotion": {
+        "run": {
+          "conclusion": null,
+          "id": 7,
+          "jobs": [
+            {
+              "conclusion": null,
+              "name": "test",
+              "status": "in_progress",
+              "steps": [
+                [
+                  "Run the core tests",
+                  "in_progress",
+                  null
+                ]
+              ]
+            }
+          ],
+          "status": "in_progress",
+          "url": "https://github.com/Aakshar-D/dots/actions/runs/7"
+        },
+        "stage": {
+          "stage": "failed",
+          "step": "Build the installer"
+        },
+        "tag": "v0.2.1",
+        "version": "0.2.1"
+      },
+      "setup": {
+        "state": "done"
+      },
+      "suggested": "0.3.0",
+      "trial": {
+        "newer_on_master": 2,
+        "notes": "- Usage and limits (#26)",
+        "rc": 1,
+        "release": null,
+        "run": {
+          "conclusion": null,
+          "id": 7,
+          "jobs": [
+            {
+              "conclusion": null,
+              "name": "test",
+              "status": "in_progress",
+              "steps": [
+                [
+                  "Run the core tests",
+                  "in_progress",
+                  null
+                ]
+              ]
+            }
+          ],
+          "status": "in_progress",
+          "url": "https://github.com/Aakshar-D/dots/actions/runs/7"
+        },
+        "stage": {
+          "stage": "testing"
+        },
+        "tag": "v0.3.0-rc.1",
+        "version": "0.3.0"
+      }
+    }
+  ],
+  "PublisherStatus": [
+    {
+      "state": {
+        "state": "none"
+      },
+      "token": null
+    },
+    {
+      "state": {
+        "state": "checking"
+      },
+      "token": "GITHUB_PUBLISH"
+    },
+    {
+      "state": {
+        "login": "shraddesh",
+        "state": "publisher"
+      },
+      "token": "GITHUB_PUBLISH"
+    },
+    {
+      "state": {
+        "reason": "This token needs the repo and workflow scopes.",
+        "state": "refused"
+      },
+      "token": "GITHUB_PUBLISH"
+    }
+  ],
+  "PullOpened": {
+    "number": 31,
+    "url": "https://github.com/Aakshar-D/dots/pull/31"
+  },
   "ReleaseNotes": [
     {
       "body": "- Dots holds background runs when your Claude usage is high.",
@@ -3255,6 +3410,7 @@
     "max_concurrent_runs": 2,
     "notify_on_notes": true,
     "port": 47321,
+    "publish_token": null,
     "schedules_paused": false,
     "tested_claude_version": "2.1.295"
   },
@@ -3275,6 +3431,7 @@
       "max_concurrent_runs": 2,
       "notify_on_notes": true,
       "port": 47321,
+      "publish_token": null,
       "schedules_paused": false,
       "tested_claude_version": "2.1.295"
     }
@@ -3402,6 +3559,7 @@
       "checks_on": true,
       "go_back": "0.1.0",
       "last_error": "GitHub could not be reached",
+      "publisher": true,
       "ready": "0.2.1",
       "version": "0.2.0"
     },
@@ -3411,6 +3569,7 @@
       "checks_on": false,
       "go_back": null,
       "last_error": null,
+      "publisher": false,
       "ready": null,
       "version": "0.2.0"
     }

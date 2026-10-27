@@ -228,6 +228,127 @@ pub fn update_dismiss_updated(app: AppHandle) -> Res<UpdateNote> {
     update_service::dismiss_updated(&app)
 }
 
+/// Whether this Dots publishes (updates UI spec section 5.1).
+#[tauri::command]
+pub fn publisher_status(app: AppHandle) -> Res<crate::publishing::PublisherStatus> {
+    crate::publishing::status(&app)
+}
+
+/// Checks the chosen token again (after the person chose one).
+#[tauri::command]
+pub async fn publisher_check(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Res<crate::publishing::PublisherStatus> {
+    crate::publishing::check(&app, &state.rt()?).await
+}
+
+/// The Releases page.
+#[tauri::command]
+pub async fn releases_page(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Res<dots_core::publish::flow::PageState> {
+    let gh = crate::publishing::hub(&app, &state.rt()?).await?;
+    Ok(dots_core::publish::flow::page_state(&gh).await?)
+}
+
+/// Setup step 1: makes the signing key; its public half.
+#[tauri::command]
+pub fn release_make_key(app: AppHandle, password: String) -> Res<String> {
+    crate::publishing::make_key(&app, &password)
+}
+
+/// Setup step 2: saves the private key where the person chooses; the path, or none.
+#[tauri::command]
+pub async fn release_save_key(app: AppHandle) -> Res<Option<String>> {
+    crate::publishing::save_key(&app)
+}
+
+/// Setup step 3: both secrets on GitHub.
+#[tauri::command]
+pub async fn release_put_secrets(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    password: String,
+) -> Res<()> {
+    crate::publishing::put_secrets(&app, &state.rt()?, &password).await
+}
+
+/// Setup step 4: the pull request with the public key.
+#[tauri::command]
+pub async fn release_open_key_pull(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Res<crate::publishing::PullOpened> {
+    crate::publishing::open_key_pull(&app, &state.rt()?).await
+}
+
+#[tauri::command]
+pub async fn release_publish_trial(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    version: String,
+) -> Res<dots_core::publish::flow::Trial> {
+    let gh = crate::publishing::hub(&app, &state.rt()?).await?;
+    Ok(dots_core::publish::flow::publish_trial(&gh, &version).await?)
+}
+
+#[tauri::command]
+pub async fn release_save_notes(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    version: String,
+    notes: String,
+) -> Res<()> {
+    let gh = crate::publishing::hub(&app, &state.rt()?).await?;
+    Ok(dots_core::publish::flow::save_notes(&gh, &version, &notes).await?)
+}
+
+#[tauri::command]
+pub async fn release_promote(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    version: String,
+) -> Res<()> {
+    let gh = crate::publishing::hub(&app, &state.rt()?).await?;
+    Ok(dots_core::publish::flow::promote(&gh, &version).await?)
+}
+
+#[tauri::command]
+pub async fn release_retry(app: AppHandle, state: State<'_, AppState>, tag: String) -> Res<()> {
+    let gh = crate::publishing::hub(&app, &state.rt()?).await?;
+    Ok(dots_core::publish::flow::retry(&gh, &tag).await?)
+}
+
+#[tauri::command]
+pub async fn release_drop_trial(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    version: String,
+) -> Res<()> {
+    let gh = crate::publishing::hub(&app, &state.rt()?).await?;
+    Ok(dots_core::publish::flow::drop_trial(&gh, &version).await?)
+}
+
+/// Withdraws the live release `version`.
+#[tauri::command]
+pub async fn release_withdraw(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    version: String,
+) -> Res<()> {
+    let gh = crate::publishing::hub(&app, &state.rt()?).await?;
+    let tag = format!("v{version}");
+    let release = gh
+        .releases()
+        .await?
+        .into_iter()
+        .find(|r| r.tag == tag)
+        .ok_or_else(|| dots_core::Error::NotFound(format!("no release {tag}")))?;
+    Ok(dots_core::publish::flow::withdraw(&gh, &release).await?)
+}
+
 /// "Later": the note is hidden until Dots next starts.
 #[tauri::command]
 pub async fn update_later(app: AppHandle, state: State<'_, AppState>) -> Res<UpdateNote> {

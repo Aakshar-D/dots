@@ -826,6 +826,7 @@ fn update_statuses() -> Vec<crate::update_service::UpdateStatus> {
             last_error: Some("GitHub could not be reached".into()),
             go_back: Some("0.1.0".into()),
             auto_install: true,
+            publisher: true,
         },
         UpdateStatus {
             version: "0.2.0".into(),
@@ -835,6 +836,113 @@ fn update_statuses() -> Vec<crate::update_service::UpdateStatus> {
             last_error: None,
             go_back: None,
             auto_install: false,
+            publisher: false,
+        },
+    ]
+}
+
+/// The publisher's states.
+fn publisher_statuses() -> Vec<crate::publishing::PublisherStatus> {
+    use crate::publishing::{PublisherState, PublisherStatus};
+    let token = Some("GITHUB_PUBLISH".to_string());
+    vec![
+        PublisherStatus {
+            token: None,
+            state: PublisherState::None,
+        },
+        PublisherStatus {
+            token: token.clone(),
+            state: PublisherState::Checking,
+        },
+        PublisherStatus {
+            token: token.clone(),
+            state: PublisherState::Publisher {
+                login: "shraddesh".into(),
+            },
+        },
+        PublisherStatus {
+            token,
+            state: PublisherState::Refused {
+                reason: "This token needs the repo and workflow scopes.".into(),
+            },
+        },
+    ]
+}
+
+/// The Releases page: not set up; half set up; a live release with a trial building and a
+/// promotion that failed.
+fn page_states() -> Vec<dots_core::publish::flow::PageState> {
+    use dots_core::publish::flow::{PageState, Promotion, Setup, Stage, Trial};
+    use dots_core::publish::github::{JobInfo, MergedPull, ReleaseInfo, RunInfo};
+    let live = ReleaseInfo {
+        id: 41,
+        tag: "v0.2.0".into(),
+        name: "Dots 0.2.0".into(),
+        body: "- Watchers".into(),
+        prerelease: false,
+        draft: false,
+        url: "https://github.com/Aakshar-D/dots/releases/tag/v0.2.0".into(),
+        published_at: Some(TS.into()),
+    };
+    let run = RunInfo {
+        id: 7,
+        status: "in_progress".into(),
+        conclusion: None,
+        url: "https://github.com/Aakshar-D/dots/actions/runs/7".into(),
+        jobs: vec![JobInfo {
+            name: "test".into(),
+            status: "in_progress".into(),
+            conclusion: None,
+            steps: vec![("Run the core tests".into(), "in_progress".into(), None)],
+        }],
+    };
+    let changes = vec![MergedPull {
+        number: 26,
+        title: "Usage and limits".into(),
+    }];
+    vec![
+        PageState {
+            setup: Setup::Needed,
+            live: None,
+            trial: None,
+            promotion: None,
+            changes: changes.clone(),
+            suggested: "0.2.0".into(),
+        },
+        PageState {
+            setup: Setup::HalfDone {
+                secrets: 2,
+                pubkey: false,
+            },
+            live: None,
+            trial: None,
+            promotion: None,
+            changes: vec![],
+            suggested: "0.2.0".into(),
+        },
+        PageState {
+            setup: Setup::Done,
+            live: Some(live),
+            trial: Some(Trial {
+                version: "0.3.0".into(),
+                rc: 1,
+                tag: "v0.3.0-rc.1".into(),
+                release: None,
+                run: Some(run.clone()),
+                stage: Stage::Testing,
+                newer_on_master: 2,
+                notes: "- Usage and limits (#26)".into(),
+            }),
+            promotion: Some(Promotion {
+                version: "0.2.1".into(),
+                tag: "v0.2.1".into(),
+                run: Some(run),
+                stage: Stage::Failed {
+                    step: "Build the installer".into(),
+                },
+            }),
+            changes,
+            suggested: "0.3.0".into(),
         },
     ]
 }
@@ -1192,6 +1300,12 @@ pub fn samples() -> Value {
     samples["UpdateNote"] = to(update_notes());
     samples["UpdateStatus"] = to(update_statuses());
     samples["CheckOutcome"] = to(check_outcomes());
+    samples["PublisherStatus"] = to(publisher_statuses());
+    samples["PageState"] = to(page_states());
+    samples["PullOpened"] = to(crate::publishing::PullOpened {
+        number: 31,
+        url: "https://github.com/Aakshar-D/dots/pull/31".into(),
+    });
     samples["ReleaseNotes"] = to(vec![
         Some(crate::update_service::ReleaseNotes {
             version: "0.2.0".into(),

@@ -5,6 +5,7 @@ pub mod contract;
 pub mod error;
 pub mod events;
 pub mod notify_routes;
+pub mod publishing;
 pub mod startup;
 pub mod state;
 pub mod tray;
@@ -49,6 +50,19 @@ command_list![
     update_repair,
     update_go_back,
     update_dismiss_updated,
+    publisher_status,
+    publisher_check,
+    releases_page,
+    release_make_key,
+    release_save_key,
+    release_put_secrets,
+    release_open_key_pull,
+    release_publish_trial,
+    release_save_notes,
+    release_promote,
+    release_retry,
+    release_drop_trial,
+    release_withdraw,
     report_activity,
     app_rendered,
     update_open_notes,
@@ -248,10 +262,18 @@ fn setup(app: &AppHandle, panics_logged: bool) -> Result<(), Box<dyn std::error:
         update_service::start_health(app, health);
         if let Ok((rt, _)) = &runtime {
             update_service::spawn(app.clone(), rt.clone());
+            // Whether this Dots publishes, checked once at start (updates UI spec section 5.1).
+            let (app, rt) = (app.clone(), rt.clone());
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = publishing::check(&app, &rt).await {
+                    tracing::warn!("checking the publishing token failed: {}", e.message);
+                }
+            });
         }
         stay_hidden = startup::take_stay_hidden_mark(dir);
     }
     app.manage(dots_core::chatgpt::ChatGptAuth::from_env());
+    app.manage(publishing::Publisher::default());
     app.manage(AppState::new(runtime.map(|(rt, _)| rt), log_dir).with_data_dir(data_dir.ok()));
     // A failed start always shows its error page, even when launched hidden; so does a start
     // that "Restart Dots" asked for.

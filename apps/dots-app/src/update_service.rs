@@ -146,6 +146,8 @@ pub struct UpdateStatus {
     /// The version Go back installs, while the last update's backup exists.
     pub go_back: Option<String>,
     pub auto_install: bool,
+    /// This Dots publishes (updates UI spec section 5.1).
+    pub publisher: bool,
 }
 
 /// A version's notes for "What's new".
@@ -239,6 +241,7 @@ pub async fn status(app: &AppHandle, rt: Option<&Arc<Runtime>>) -> Result<Update
         checked_at,
         ready,
         last_error,
+        publisher: crate::publishing::is_publisher(app),
         go_back: update_record::go_back_target(&record, env!("CARGO_PKG_VERSION"))
             .map(|(version, _)| version),
         auto_install,
@@ -658,6 +661,61 @@ async fn download_quiet(app: &AppHandle, version: &str) -> Result<Downloaded, St
     })
 }
 
+/// A version's order: its number, then a release above its trials (`-rc.<n>`).
+fn version_order(v: &str) -> Option<((u64, u64, u64), u32)> {
+    let v = v.trim_start_matches('v');
+    let (plain, rc) = match v.split_once("-rc.") {
+        Some((plain, n)) => (plain, n.parse().ok()?),
+        None => (v, u32::MAX),
+    };
+    Some((dots_core::publish::versions::parse(plain)?, rc))
+}
+
+/// For a publisher, the newest trial worth taking: a prerelease that is not withdrawn, not bad
+/// on this machine, newer than the version running and than the newest release. Its own
+/// manifest (updates UI spec section 5.5).
+pub fn trial_endpoint(
+    releases: &[dots_core::publish::github::ReleaseInfo],
+    running: &str,
+    bad: &[String],
+) -> Option<Url> {
+    let withdrawn = |r: &dots_core::publish::github::ReleaseInfo| {
+        r.body
+            .trim_start()
+            .starts_with(dots_core::releases::WITHDRAWN_MARKER)
+    };
+    let latest = releases
+        .iter()
+        .filter(|r| !r.prerelease && !r.draft)
+        .filter_map(|r| version_order(&r.tag))
+        .max();
+    let floor = std::cmp::max(version_order(running), latest)?;
+    let trial = releases
+        .iter()
+        .filter(|r| r.prerelease && !r.draft && !withdrawn(r))
+        .filter(|r| !bad.iter().any(|b| b == r.tag.trim_start_matches('v')))
+        .filter_map(|r| Some((version_order(&r.tag)?, r)))
+        .filter(|(order, _)| *order > floor)
+        .max_by_key(|(order, _)| *order)?
+        .1;
+    Url::parse(&format!(
+        "https://github.com/{}/releases/download/{}/latest.json",
+        dots_core::releases::REPO,
+        trial.tag
+    ))
+    .ok()
+}
+
+/// A publisher's trial endpoint now, if there is one to take.
+async fn trial_url(app: &AppHandle, rt: &Arc<Runtime>, bad: &[String]) -> Option<Url> {
+    if !crate::publishing::is_publisher(app) {
+        return None;
+    }
+    let gh = crate::publishing::hub(app, rt).await.ok()?;
+    let releases = gh.releases().await.ok()?;
+    trial_endpoint(&releases, env!("CARGO_PKG_VERSION"), bad)
+}
+
 /// What a button and a run change do to the rest of Dots, so `act` and `settle` are tested
 /// without the app. Only this crate implements it, so the futures need no `Send` bound in the
 /// signature.
@@ -927,9 +985,14 @@ async fn check_once(
     rt: &Arc<Runtime>,
     url: &Url,
 ) -> Result<Option<String>, String> {
+    // A publisher takes trials too (updates UI spec section 5.5).
+    let bad = update_record::read(&updates(app).map_err(|e| e.message)?.data_dir).bad;
+    let url = trial_url(app, rt, &bad)
+        .await
+        .unwrap_or_else(|| url.clone());
     let updater = app
         .updater_builder()
-        .endpoints(vec![url.clone()])
+        .endpoints(vec![url])
         .and_then(|b| b.build())
         .map_err(|e| e.to_string())?;
     let updates = updates(app).map_err(|e| e.message)?;
@@ -1710,5 +1773,49 @@ mod tests {
         assert!(!download_matches(Purpose::Update, "0.3.2", &state));
         state.cancel_wait();
         assert!(!download_matches(Purpose::GoBack, "0.3.0", &state));
+    }
+
+    #[test]
+    fn a_publisher_takes_the_newest_good_trial() {
+        use dots_core::publish::github::ReleaseInfo;
+        let r = |tag: &str, prerelease: bool, body: &str| ReleaseInfo {
+            id: 1,
+            tag: tag.into(),
+            name: tag.into(),
+            body: body.into(),
+            prerelease,
+            draft: false,
+            url: String::new(),
+            published_at: None,
+        };
+        let url = |tag: &str| {
+            Some(
+                Url::parse(&format!(
+                    "https://github.com/Aakshar-D/dots/releases/download/{tag}/latest.json"
+                ))
+                .unwrap(),
+            )
+        };
+        let releases = vec![
+            r("v0.3.0-rc.2", true, ""),
+            r("v0.3.0-rc.1", true, ""),
+            r("v0.2.0", false, ""),
+        ];
+        assert_eq!(trial_endpoint(&releases, "0.2.0", &[]), url("v0.3.0-rc.2"));
+        // Bad here: the one before it.
+        assert_eq!(
+            trial_endpoint(&releases, "0.2.0", &["0.3.0-rc.2".into()]),
+            url("v0.3.0-rc.1")
+        );
+        // Withdrawn: not taken.
+        let withdrawn = vec![
+            r("v0.3.0-rc.1", true, "<!-- dots:withdrawn -->\n- x"),
+            r("v0.2.0", false, ""),
+        ];
+        assert_eq!(trial_endpoint(&withdrawn, "0.2.0", &[]), None);
+        // Older than the version running, or than the newest release: not taken.
+        assert_eq!(trial_endpoint(&releases, "0.3.0-rc.2", &[]), None);
+        let promoted = vec![r("v0.3.0", false, ""), r("v0.3.0-rc.2", true, "")];
+        assert_eq!(trial_endpoint(&promoted, "0.2.0", &[]), None);
     }
 }
