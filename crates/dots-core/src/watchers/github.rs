@@ -466,7 +466,7 @@ impl Poller<'_> {
         };
         let mut found: Vec<(DateTime<Utc>, Value, Value)> = Vec::new();
         for pr in pulls {
-            if !time(&pr["updated_at"]).is_some_and(|t| t >= since) {
+            if time(&pr["updated_at"]).is_none_or(|t| t < since) {
                 continue;
             }
             let Some(number) = pr["number"].as_u64() else {
