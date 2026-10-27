@@ -77,6 +77,7 @@ async fn the_cost_and_the_limit_reading_are_recorded() {
         Step::Emit(EngineEvent::Limits {
             status: "allowed".into(),
             windows: vec![reading],
+            resets_at: None,
         }),
         Step::Emit(EngineEvent::Usage {
             tokens_in: 10,

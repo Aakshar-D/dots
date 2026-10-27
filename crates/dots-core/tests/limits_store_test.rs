@@ -68,7 +68,8 @@ async fn requeue_puts_a_running_run_back_with_its_payload() {
         .unwrap();
     store.set_session(&run.id, "sess-1").await.unwrap();
 
-    let back = store.requeue_run(&run.id).await.unwrap();
+    // Queued with nothing of a thread: what this attempt set goes.
+    let back = store.requeue_run(&run.id, &run).await.unwrap();
     assert_eq!(back.status, RunStatus::Queued);
     assert_eq!(back.started_at, None);
     assert_eq!(back.session_id, None);
@@ -78,9 +79,30 @@ async fn requeue_puts_a_running_run_back_with_its_payload() {
     assert_eq!(back.trigger, TriggerKind::Watcher);
     assert_eq!(back.payload, Some(json!({"a": 1})));
     assert!(matches!(
-        store.requeue_run(&run.id).await,
+        store.requeue_run(&run.id, &run).await,
         Err(Error::Conflict(_))
     ));
+}
+
+/// Final review I1: a run queued with its thread's session and folder gets them back.
+#[tokio::test]
+async fn requeue_restores_the_thread_a_run_was_queued_with() {
+    let (_d, store) = temp_store().await;
+    let dot = store.create_dot(&spec("a"), None).await.unwrap();
+    let mut new = NewRun::new(&dot.id, TriggerKind::FollowUp);
+    new.session_id = Some("thread".into());
+    new.workspace_path = Some("C:/ws".into());
+    new.branch = Some("dots/a/x".into());
+    new.base_commit = Some("abc123".into());
+    let queued = store.create_run(&new).await.unwrap();
+    assert!(store.claim_run(&queued.id).await.unwrap());
+    store.set_session(&queued.id, "other").await.unwrap();
+    let back = store.requeue_run(&queued.id, &queued).await.unwrap();
+    assert_eq!(back.status, RunStatus::Queued);
+    assert_eq!(back.session_id.as_deref(), Some("thread"));
+    assert_eq!(back.workspace_path.as_deref(), Some("C:/ws"));
+    assert_eq!(back.branch.as_deref(), Some("dots/a/x"));
+    assert_eq!(back.base_commit.as_deref(), Some("abc123"));
 }
 
 #[tokio::test]

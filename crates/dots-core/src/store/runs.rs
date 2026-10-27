@@ -404,12 +404,18 @@ impl Store {
     /// Puts a `running` run back in the queue as if it had never started (usage and limits spec
     /// section 4: Claude's limit ended it before it did anything). Its trigger and payload stay;
     /// its session, workspace and outcome go, so it starts afresh. `Conflict` if not running.
-    pub async fn requeue_run(&self, id: &str) -> Result<Run> {
+    /// `queued` is the run as it was queued: its session, folder, branch and base commit are
+    /// put back (a follow-up keeps its thread's), and what this attempt set goes.
+    pub async fn requeue_run(&self, id: &str, queued: &Run) -> Result<Run> {
         let res = sqlx::query(
-            "UPDATE runs SET status = 'queued', started_at = NULL, session_id = NULL, \
-             workspace_path = NULL, branch = NULL, base_commit = NULL, error = NULL, \
+            "UPDATE runs SET status = 'queued', started_at = NULL, session_id = ?, \
+             workspace_path = ?, branch = ?, base_commit = ?, error = NULL, \
              summary = NULL WHERE id = ? AND status = 'running'",
         )
+        .bind(&queued.session_id)
+        .bind(&queued.workspace_path)
+        .bind(&queued.branch)
+        .bind(&queued.base_commit)
         .bind(id)
         .execute(&self.pool)
         .await?;

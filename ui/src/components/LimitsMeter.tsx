@@ -38,7 +38,10 @@ function Bar(props: { window: string; reading: LimitReading | null; holding: boo
       data-holding={props.holding || undefined}
       className={cn(
         "relative h-7 w-1.5 overflow-hidden rounded-full",
-        level === null ? "border border-dashed border-muted-foreground" : "bg-muted",
+        // An outline on every track, so an empty one still shows against the rail.
+        level === null
+          ? "border border-dashed border-muted-foreground"
+          : "border border-muted-foreground bg-muted",
       )}
     >
       {level !== null && (

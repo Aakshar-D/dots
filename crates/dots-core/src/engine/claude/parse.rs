@@ -178,9 +178,15 @@ fn limit_events(v: &Value) -> Vec<EngineEvent> {
             .into_iter()
             .collect(),
     };
+    let resets_at = info
+        .get("resetsAt")
+        .and_then(Value::as_i64)
+        .and_then(|t| chrono::DateTime::from_timestamp(t, 0))
+        .map(crate::util::timestamp);
     vec![EngineEvent::Limits {
         status: status.to_string(),
         windows,
+        resets_at,
     }]
 }
 

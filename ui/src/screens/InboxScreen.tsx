@@ -27,6 +27,7 @@ import { notifyError } from "@/lib/notify";
 import { invalidate, keys } from "@/lib/query";
 import { onSingleClick } from "@/lib/single-click";
 import { toolPreview } from "@/lib/transcript";
+import { releasable } from "@/components/RunNumbers";
 import { resetTime } from "@/lib/usage-format";
 
 /// A finished run that waits for the user: it failed, or it left a worktree to look at.
@@ -97,6 +98,7 @@ function PausedWatcherRow({ item }: { item: PausedWatcher }) {
 /// and **Run anyway**.
 function HeldRunRow({ item }: { item: HeldRun }) {
   const qc = useQueryClient();
+  const limits = useQuery({ queryKey: keys.limits, queryFn: commands.limitsGet }).data;
   const release = useMutation({
     mutationFn: () => commands.runReleaseHold(item.run_id),
     onError: notifyError,
@@ -115,14 +117,16 @@ function HeldRunRow({ item }: { item: HeldRun }) {
       <Link to={`/runs/${item.run_id}`} className="min-w-0 flex-1 truncate hover:underline">
         {item.dot_name} · {triggerLabel(item)} · {when}
       </Link>
-      <Button
-        size="sm"
-        variant="outline"
-        disabled={release.isPending}
-        onClick={onSingleClick(() => release.mutate())}
-      >
-        Run anyway
-      </Button>
+      {releasable(item.trigger, limits) && (
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={release.isPending}
+          onClick={onSingleClick(() => release.mutate())}
+        >
+          Run anyway
+        </Button>
+      )}
     </li>
   );
 }

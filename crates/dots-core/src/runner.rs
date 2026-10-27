@@ -703,9 +703,14 @@ impl Runner {
                     .add_usage(run_id, *tokens_in as i64, *tokens_out as i64, *cost_usd)
                     .await?
             }
-            EngineEvent::Limits { status, windows } => {
+            EngineEvent::Limits {
+                status,
+                windows,
+                resets_at,
+            } => {
                 if let Some(limits) = self.limits.get() {
-                    if let Err(e) = limits.record(status, windows.clone()).await {
+                    let reset = resets_at.as_deref();
+                    if let Err(e) = limits.record_reset(status, windows.clone(), reset).await {
                         tracing::warn!(run = %run_id, "keeping the limit reading failed: {e}");
                     }
                     self.nudge();
@@ -940,13 +945,22 @@ impl Runner {
         } else if let Some(e) = error {
             let stopped_by_limit =
                 saw_rejected && dot.spec.engine == EngineKind::Claude && is_background(run.trigger);
-            if stopped_by_limit && !saw_tool_call {
+            // Back to the queue only while Dots knows when the limit resets: without that the
+            // run would start again at once, and be refused again.
+            let resets_known = self
+                .limits
+                .get()
+                .is_some_and(|l| l.rejected_until().is_some());
+            if stopped_by_limit && !saw_tool_call && resets_known {
                 // It did nothing yet: back to the queue, held until the limit resets, with its
-                // trigger and payload, so a watcher's event is not lost.
-                if let Err(e) = self.workspaces.cleanup_if_unchanged(&dot, &prepared).await {
-                    tracing::warn!(run = %run.id, "workspace cleanup failed: {e}");
+                // trigger and payload, so a watcher's event is not lost. A folder it was queued
+                // with (a follow-up's thread) stays; one this attempt made goes.
+                if run.workspace_path.is_none() {
+                    if let Err(e) = self.workspaces.cleanup_if_unchanged(&dot, &prepared).await {
+                        tracing::warn!(run = %run.id, "workspace cleanup failed: {e}");
+                    }
                 }
-                let queued = self.store.requeue_run(&run.id).await?;
+                let queued = self.store.requeue_run(&run.id, run).await?;
                 self.emit_run(&queued);
                 return Ok(());
             }

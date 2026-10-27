@@ -42,6 +42,32 @@ describe("runs held for Claude usage in the Inbox", () => {
     );
   });
 
+  // Final review: Run anyway releases a background run from a share's hold; it cannot get
+  // past Claude's limit, nor release a run of the person's own that waits for it.
+  it("offer Run anyway only where it can release the run", async () => {
+    const [holding] = sample.limits;
+    const mine: HeldRun = { ...scheduled, run_id: "01J0RUN6", dot_name: "chatty", trigger: "chat" };
+    backend.on("inbox", () => only([scheduled, mine]));
+    backend.on("limits_get", () => holding);
+    renderApp("/inbox");
+    const section = await screen.findByRole("region", { name: "Held for Claude usage" });
+    const [background, own] = within(section).getAllByRole("listitem");
+    expect(within(background!).getByRole("button", { name: "Run anyway" })).toBeVisible();
+    expect(within(own!).queryByRole("button", { name: "Run anyway" })).toBeNull();
+  });
+
+  it("offer no Run anyway while Claude's limit is reached", async () => {
+    const [holding] = sample.limits;
+    backend.on("inbox", () => only([scheduled]));
+    backend.on("limits_get", () => ({ ...holding, rejected_until: scheduled.starts_after }));
+    renderApp("/inbox");
+    const section = await screen.findByRole("region", { name: "Held for Claude usage" });
+    await within(section).findByRole("listitem");
+    await waitFor(() =>
+      expect(within(section).queryByRole("button", { name: "Run anyway" })).toBeNull(),
+    );
+  });
+
   it("count as one in the rail's Inbox link, however many", async () => {
     backend.on("inbox", () => only([scheduled, draining]));
     renderApp("/home");

@@ -62,4 +62,19 @@ describe("a run held for Claude usage", () => {
     await user.click(screen.getByRole("button", { name: "Run anyway" }));
     expect(backend.callsTo("run_release_hold")).toEqual([{ runId: held.id }]);
   });
+
+  it("offers no Run anyway while Claude's limit is reached", async () => {
+    const until = holding.hold_until!;
+    backend.on("limits_get", () => ({ ...holding, holding: false, rejected_until: until }));
+    backend.on("run_thread", () => [held]);
+    backend.on("get_dot", () => sample.dot);
+    backend.on("list_run_events", () => []);
+    backend.on("approvals_for_run", () => []);
+    backend.on("worktree_diff", () => sample.diff);
+    renderApp(`/runs/${held.id}`);
+    expect(
+      await screen.findByText(`Held: Claude's limit is reached, starts after ${resetTime(until)}`),
+    ).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Run anyway" })).toBeNull();
+  });
 });

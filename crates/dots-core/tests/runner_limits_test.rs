@@ -52,6 +52,7 @@ fn rejected() -> EngineEvent {
     EngineEvent::Limits {
         status: "rejected".into(),
         windows: vec![five(1.0, "rejected")],
+        resets_at: Some(timestamp(t0() + TimeDelta::hours(1))),
     }
 }
 
@@ -198,6 +199,7 @@ async fn held_runs_start_one_at_a_time_oldest_first() {
     let reading = EngineEvent::Limits {
         status: "allowed".into(),
         windows: vec![five(0.1, "allowed")],
+        resets_at: None,
     };
     let e = env(
         Turns::new(
@@ -257,6 +259,57 @@ async fn a_background_run_rejected_before_a_tool_call_is_queued_again() {
         .set(t0() + TimeDelta::hours(1) + TimeDelta::seconds(1));
     e.runner.nudge();
     wait_status(&e.store, &id, RunStatus::Succeeded, 5).await;
+}
+
+/// Final review I1: a follow-up continues its thread; sent back to the queue it keeps the
+/// thread's session and folder, so after the reset it resumes the conversation.
+#[tokio::test]
+async fn a_follow_up_sent_back_to_the_queue_keeps_its_thread() {
+    let first = vec![
+        Step::Emit(rejected()),
+        Step::Emit(EngineEvent::Failed {
+            error: "You've hit your limit".into(),
+        }),
+    ];
+    let e = env(Turns::new(vec![first], vec![Step::Emit(finished())]), 2).await;
+    let dot = e.dot("f").await;
+    let folder = dot.spec.workdir.clone();
+    let mut new = NewRun::new(&dot.id, TriggerKind::FollowUp);
+    new.session_id = Some("thread-session".into());
+    new.workspace_path = Some(folder.clone());
+    let id = e.runner.enqueue(new).await.unwrap().id;
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while e.limits.rejected_until().is_none() || e.status(&id).await != RunStatus::Queued {
+        assert!(std::time::Instant::now() < deadline, "not queued again");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let run = e.store.get_run(&id).await.unwrap();
+    assert_eq!(run.session_id.as_deref(), Some("thread-session"));
+    assert_eq!(run.workspace_path.as_deref(), Some(folder.as_str()));
+}
+
+/// Final review I2: a `rejected` line Dots cannot read a reset from does not send the run
+/// back to the queue, where it would start again at once; it fails with the note.
+#[tokio::test]
+async fn a_rejected_run_without_a_reset_fails_instead_of_starting_again() {
+    let first = vec![
+        Step::Emit(EngineEvent::Limits {
+            status: "rejected".into(),
+            windows: vec![],
+            resets_at: None,
+        }),
+        Step::Emit(EngineEvent::Failed {
+            error: "You've hit your limit".into(),
+        }),
+    ];
+    let e = env(Turns::new(vec![first], vec![Step::Emit(finished())]), 2).await;
+    let dot = e.dot("w").await;
+    let id = e.queue(&dot, TriggerKind::Watcher).await;
+    let run = wait_status(&e.store, &id, RunStatus::Failed, 5).await;
+    assert_eq!(
+        run.error.as_deref(),
+        Some(format!("{STOPPED_BY_LIMIT}: You've hit your limit").as_str())
+    );
 }
 
 #[tokio::test]

@@ -679,6 +679,7 @@ fn engine_events() -> Value {
                 status: "allowed".into(),
                 read_at: TS.into(),
             }],
+            resets_at: Some(TS.into()),
         },
         EngineEvent::Raw {
             line: "{\"type\":\"future\"}".into(),

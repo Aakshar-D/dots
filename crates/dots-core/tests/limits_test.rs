@@ -167,6 +167,19 @@ async fn rejected_stops_every_claude_run_until_it_resets() {
     assert_eq!(e.limits.admit(&q("c", TriggerKind::Chat), 0), Admit::Go);
 }
 
+/// Final review I2: the reset the `rejected` line names wins over the windows' resets (the
+/// weekly one is days away).
+#[tokio::test]
+async fn rejected_holds_until_the_reset_its_line_names() {
+    let e = env(SHARES).await;
+    let at = timestamp(t0() + TimeDelta::minutes(40));
+    e.limits
+        .record_reset("rejected", vec![five(0.5), week(0.5)], Some(&at))
+        .await
+        .unwrap();
+    assert_eq!(e.limits.rejected_until().as_deref(), Some(at.as_str()));
+}
+
 #[tokio::test]
 async fn a_reading_already_reset_counts_as_reset() {
     let e = env(SHARES).await;

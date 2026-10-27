@@ -48,6 +48,9 @@ pub enum EngineEvent {
     Limits {
         status: String,
         windows: Vec<crate::store::LimitReading>,
+        /// When the window that limits now resets (the line's own `resetsAt`), RFC 3339 UTC.
+        #[serde(default)]
+        resets_at: Option<String>,
     },
     Raw {
         line: String,

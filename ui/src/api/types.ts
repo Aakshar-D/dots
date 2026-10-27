@@ -261,7 +261,12 @@ export const RunEventData = z.discriminatedUnion("kind", [
     cost_usd: nullable(z.number()).optional(),
   }),
   // The claude CLI's limit reading; not shown in the transcript.
-  z.strictObject({ kind: z.literal("limits"), status: z.string(), windows: z.array(LimitReading) }),
+  z.strictObject({
+    kind: z.literal("limits"),
+    status: z.string(),
+    windows: z.array(LimitReading),
+    resets_at: nullable(z.string()).optional(),
+  }),
   z.strictObject({ kind: z.literal("raw"), line: z.string() }),
   z.strictObject({ kind: z.literal("message"), message: z.unknown() }),
   z.strictObject({ kind: z.literal("finished"), summary: z.string() }),

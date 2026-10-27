@@ -20,10 +20,17 @@ fn strip(r: &LimitReading) -> (String, f64, String, String) {
 #[test]
 fn the_rate_limit_line_becomes_a_limits_event() {
     let events = parse_line(RATE_LIMIT);
-    let [EngineEvent::Limits { status, windows }] = events.as_slice() else {
+    let [EngineEvent::Limits {
+        status,
+        windows,
+        resets_at,
+    }] = events.as_slice()
+    else {
         panic!("one Limits event, got {events:?}");
     };
     assert_eq!(status, "allowed");
+    // The line's own reset, of the window that limits now (final review I2).
+    assert_eq!(resets_at.as_deref(), Some("2026-10-26T17:40:00.000Z"));
     let got: Vec<_> = windows.iter().map(strip).collect();
     assert_eq!(
         got,
@@ -49,7 +56,10 @@ fn the_rate_limit_line_becomes_a_limits_event() {
 fn a_rate_limit_line_with_only_the_limiting_window_reads_that_one() {
     let line = r#"{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1793036400,"rateLimitType":"five_hour","utilization":1.02}}"#;
     let events = parse_line(line);
-    let [EngineEvent::Limits { status, windows }] = events.as_slice() else {
+    let [EngineEvent::Limits {
+        status, windows, ..
+    }] = events.as_slice()
+    else {
         panic!("one Limits event, got {events:?}");
     };
     assert_eq!(status, "rejected");
@@ -67,6 +77,7 @@ fn a_rate_limit_line_with_a_status_only_has_no_readings() {
         vec![EngineEvent::Limits {
             status: "allowed".into(),
             windows: vec![],
+            resets_at: None,
         }]
     );
 }

@@ -49,6 +49,11 @@ describe("the rail's Claude usage bars", () => {
       ["seven_day", "55"],
     ]);
     expect(bars(link).every((b) => b.dataset.holding === undefined)).toBe(true);
+    // The smoke run: an empty track vanished into the rail. Every track has a solid outline.
+    for (const bar of bars(link)) {
+      expect(bar.className.split(" ")).toContain("border");
+      expect(bar.className).not.toContain("border-dashed");
+    }
   });
 
   it("turn to the holding colour and say how many runs wait", async () => {

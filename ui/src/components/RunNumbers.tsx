@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { commands } from "@/api/commands";
-import type { LimitsState, Run } from "@/api/types";
+import type { LimitsState, Run, TriggerKind } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { notifyError } from "@/lib/notify";
 import { invalidate, keys } from "@/lib/query";
@@ -40,6 +40,14 @@ export function RunNumbers(props: { run: Run }) {
   );
 }
 
+const BACKGROUND: TriggerKind[] = ["schedule", "watcher", "follow_up", "webhook"];
+
+/// Whether **Run anyway** can release a held run: a background run held by a share, not one of
+/// the person's own and not while Claude's limit is reached (the core refuses those).
+export function releasable(trigger: TriggerKind, limits: LimitsState | undefined): boolean {
+  return BACKGROUND.includes(trigger) && !limits?.rejected_until;
+}
+
 /// Why a held run waits: the window over its share and when it resets, Claude's limit, or its
 /// turn after the reset.
 function heldLine(limits: LimitsState): string {
@@ -72,14 +80,16 @@ export function HeldNote(props: { run: Run }) {
   return (
     <div className="flex flex-wrap items-center gap-2 text-sm">
       <span className="text-needs">{heldLine(limits)}</span>
-      <Button
-        size="xs"
-        variant="outline"
-        disabled={release.isPending}
-        onClick={onSingleClick(() => release.mutate())}
-      >
-        Run anyway
-      </Button>
+      {releasable(props.run.trigger, limits) && (
+        <Button
+          size="xs"
+          variant="outline"
+          disabled={release.isPending}
+          onClick={onSingleClick(() => release.mutate())}
+        >
+          Run anyway
+        </Button>
+      )}
     </div>
   );
 }

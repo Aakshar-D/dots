@@ -320,9 +320,23 @@ impl Limits {
     /// Keeps a reading from the CLI. `rejected` holds every Claude run until the limiting
     /// window resets (the latest reset among the windows it names as rejected, or among all).
     pub async fn record(&self, status: &str, readings: Vec<LimitReading>) -> Result<()> {
+        self.record_reset(status, readings, None).await
+    }
+
+    /// `record`, with the reset the line itself names (`rate_limit_info.resetsAt`): when it
+    /// says `rejected`, that is when Claude takes runs again, whatever the windows say.
+    pub async fn record_reset(
+        &self,
+        status: &str,
+        readings: Vec<LimitReading>,
+        resets_at: Option<&str>,
+    ) -> Result<()> {
         self.store.save_limit_readings(&readings).await?;
         let mut inner = self.inner.lock().unwrap();
-        if status == "rejected" {
+        let named = resets_at.and_then(parse_time);
+        if status == "rejected" && named.is_some() {
+            inner.rejected_until = named;
+        } else if status == "rejected" {
             let rejected: Vec<&LimitReading> =
                 readings.iter().filter(|r| r.status == "rejected").collect();
             let pool = if rejected.is_empty() {

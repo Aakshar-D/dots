@@ -108,6 +108,7 @@ fn unknown_and_invalid_lines_are_raw_and_blank_is_nothing() {
         vec![EngineEvent::Limits {
             status: "allowed".into(),
             windows: vec![],
+            resets_at: None,
         }]
     );
     assert_eq!(
