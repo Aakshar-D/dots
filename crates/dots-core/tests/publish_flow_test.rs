@@ -8,7 +8,7 @@ use dots_core::publish::flow::{
     stage_of, Hub, Setup, Stage, KEY_SECRET, NOTES_FILE, PASSWORD_SECRET,
 };
 use dots_core::publish::github::{JobInfo, MergeOutcome, MergedPull, ReleaseInfo, RunInfo};
-use dots_core::publish::keys::{make_key, PROTOTYPE_PUBKEY};
+use dots_core::publish::keys::{make_key, with_pubkey, PROTOTYPE_PUBKEY};
 use dots_core::publish::versions::VERSION_FILES;
 use dots_core::releases::WITHDRAWN_MARKER;
 use dots_core::{Error, Result};
@@ -41,9 +41,10 @@ fn real_tree(pubkey: &str) -> Tree {
             )
         })
         .collect();
+    // Whatever key master's file holds now, the fake master holds `pubkey`.
     tree.insert("apps/dots-app/tauri.conf.json".into(), {
         let real = tree["apps/dots-app/tauri.conf.json"].clone();
-        real.replace(PROTOTYPE_PUBKEY, pubkey)
+        with_pubkey(&real, pubkey).unwrap()
     });
     tree.insert("README.md".into(), "readme".into());
     tree
