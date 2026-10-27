@@ -359,6 +359,17 @@ impl Store {
         .await?)
     }
 
+    /// How many runs have not ended: queued, running or waiting for an approval (updates UI
+    /// spec section 4.2, the idle install).
+    pub async fn unfinished_run_count(&self) -> Result<usize> {
+        let n: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM runs WHERE status IN ('queued', 'running', 'awaiting_approval')",
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(n as usize)
+    }
+
     pub async fn has_queued_run(&self, dot_id: &str) -> Result<bool> {
         let n: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE dot_id = ? AND status = 'queued'")

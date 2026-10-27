@@ -38,6 +38,7 @@ async fn settings_round_trip() {
         hold_enabled: false,
         hold_share_five_hour: 50,
         hold_share_weekly: 80,
+        auto_install_updates: true,
     };
     store.put_settings(&s).await.unwrap();
     assert_eq!(store.get_settings().await.unwrap(), s);
@@ -433,4 +434,11 @@ async fn hold_shares_default_and_bounds() {
         };
         s.validate().unwrap();
     }
+}
+
+#[test]
+fn auto_install_updates_is_off_by_default_and_reads_from_old_settings() {
+    assert!(!Settings::default().auto_install_updates);
+    let old: Settings = serde_json::from_str(r#"{"port": 47321}"#).unwrap();
+    assert!(!old.auto_install_updates);
 }

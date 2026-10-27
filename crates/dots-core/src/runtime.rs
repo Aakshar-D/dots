@@ -1290,6 +1290,11 @@ impl Runtime {
     /// waits for (updates spec §6). Queued runs and runs awaiting an approval survive a
     /// restart, so they are left out. A run is no longer counted once the `RunUpdated` event
     /// of its end is out. A dot deleted between the two reads is left out.
+    /// How many runs have not ended (queued, running or waiting for an approval).
+    pub async fn unfinished_runs(&self) -> Result<usize> {
+        self.store.unfinished_run_count().await
+    }
+
     pub async fn working_dots(&self) -> Result<Vec<String>> {
         let mut names = Vec::new();
         for id in self.store.running_dot_ids().await? {

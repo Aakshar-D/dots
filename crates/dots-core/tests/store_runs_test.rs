@@ -1035,3 +1035,26 @@ async fn a_failed_run_is_for_review_whatever_its_trigger() {
     want.sort();
     assert_eq!(ids, want);
 }
+
+#[tokio::test]
+async fn unfinished_runs_count_queued_running_and_awaiting_approval() {
+    let (_d, store) = temp_store().await;
+    let dot = store.create_dot(&spec("a"), None).await.unwrap();
+    for status in [
+        RunStatus::Queued,
+        RunStatus::Running,
+        RunStatus::AwaitingApproval,
+        RunStatus::Succeeded,
+        RunStatus::Failed,
+        RunStatus::Cancelled,
+    ] {
+        let run = store
+            .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
+            .await
+            .unwrap();
+        if status != RunStatus::Queued {
+            store.set_status(&run.id, status).await.unwrap();
+        }
+    }
+    assert_eq!(store.unfinished_run_count().await.unwrap(), 3);
+}
