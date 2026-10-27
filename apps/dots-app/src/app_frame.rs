@@ -212,6 +212,8 @@ pub fn response(target: &Target, found: dots_core::Result<Vec<u8>>) -> Response<
         .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
         .header(header::CACHE_CONTROL, "no-store")
         .header("Referrer-Policy", "no-referrer")
+        // No host-name lookups ahead of a click or a request.
+        .header("X-DNS-Prefetch-Control", "off")
         .body(body)
         .expect("a file response")
 }
@@ -340,6 +342,7 @@ mod tests {
         );
         assert_eq!(headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
         assert_eq!(headers[header::ACCESS_CONTROL_ALLOW_ORIGIN], "*");
+        assert_eq!(headers["X-DNS-Prefetch-Control"], "off");
         assert!(String::from_utf8_lossy(page.body()).contains("window, \"dots\""));
 
         let script = app("expenses", 3, "app.js").unwrap();
