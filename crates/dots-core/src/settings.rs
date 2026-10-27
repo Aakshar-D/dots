@@ -42,6 +42,11 @@ pub struct Settings {
     pub hold_share_five_hour: u8,
     /// The weekly window's share, in percent (10 to 100, in steps of 5).
     pub hold_share_weekly: u8,
+    /// Dots installs a downloaded update by itself when idle (updates UI spec section 4.2).
+    pub auto_install_updates: bool,
+    /// The vault entry holding the GitHub token Dots publishes with (updates UI spec section
+    /// 5.1); `None` when this Dots does not publish.
+    pub publish_token: Option<String>,
 }
 
 impl Default for Settings {
@@ -60,6 +65,8 @@ impl Default for Settings {
             hold_enabled: true,
             hold_share_five_hour: 60,
             hold_share_weekly: 70,
+            auto_install_updates: false,
+            publish_token: None,
         }
     }
 }

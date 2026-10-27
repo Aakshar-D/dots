@@ -29,6 +29,7 @@ export const sample = {
   limits: T.LimitsState.array().parse(contract.LimitsState),
   /// A week: nightly-tests (Claude, heaviest) and local-summarizer (local, no cost).
   usage: T.UsageSummary.parse(contract.UsageSummary),
+  pageStates: T.PageState.array().parse(contract.PageState),
   diff: T.WorktreeDiff.parse(contract.WorktreeDiff),
   startupError: T.StartupError.parse(contract.StartupError),
   /// One schedule of each kind: once; every with an anchor and a count; every without an
@@ -76,6 +77,20 @@ export function installDefaults(): void {
   backend.on("startup_error", () => null);
   backend.on("status", () => quietStatus);
   backend.on("update_note", () => ({ state: "none" }));
+  backend.on("update_status", () => ({
+    version: "0.3.0",
+    checks_on: true,
+    checked_at: null,
+    ready: null,
+    last_error: null,
+    go_back: null,
+    auto_install: false,
+    publisher: false,
+    install_error: null,
+  }));
+  backend.on("publisher_status", () => ({ token: null, state: { state: "none" } }));
+  backend.on("report_activity", () => null);
+  backend.on("app_rendered", () => null);
   // No Claude reading yet, nothing held.
   backend.on("limits_get", () => ({
     windows: [],

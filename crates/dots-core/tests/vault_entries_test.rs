@@ -189,3 +189,24 @@ async fn a_secret_row_with_a_value_is_refused_by_the_database() {
     assert!(refused.is_err());
     assert!(store.list_env_entries().await.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn the_publish_token_is_read_from_the_vault_entry_the_settings_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut cfg = dots_core::Config::new(dir.path().join("data"));
+    cfg.claude_path = Some(dir.path().join("no-claude.exe"));
+    let rt = dots_core::Runtime::start(cfg).await.unwrap();
+    assert_eq!(rt.publish_token().await.unwrap(), None);
+    rt.vault()
+        .add("GH_PUBLISH", EntryKind::Secret, "ghp_value")
+        .await
+        .unwrap();
+    let mut settings = rt.settings().await;
+    settings.publish_token = Some("GH_PUBLISH".into());
+    rt.update_settings(settings).await.unwrap();
+    assert_eq!(
+        rt.publish_token().await.unwrap().as_deref(),
+        Some("ghp_value")
+    );
+    rt.shutdown();
+}

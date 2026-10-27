@@ -374,6 +374,22 @@
       "signing_in": false
     }
   ],
+  "CheckOutcome": [
+    {
+      "state": "off"
+    },
+    {
+      "state": "up_to_date"
+    },
+    {
+      "state": "ready",
+      "version": "0.2.1"
+    },
+    {
+      "error": "GitHub could not be reached",
+      "state": "failed"
+    }
+  ],
   "CmdError": {
     "kind": "conflict",
     "message": "run 01J0RUN is already succeeded"
@@ -390,6 +406,27 @@
     "set_schedules_paused",
     "restart_app",
     "update_note",
+    "update_status",
+    "update_check_now",
+    "update_release_notes",
+    "update_repair",
+    "update_go_back",
+    "update_dismiss_updated",
+    "publisher_status",
+    "publisher_check",
+    "releases_page",
+    "release_make_key",
+    "release_save_key",
+    "release_put_secrets",
+    "release_open_key_pull",
+    "release_publish_trial",
+    "release_save_notes",
+    "release_promote",
+    "release_retry",
+    "release_drop_trial",
+    "release_withdraw",
+    "report_activity",
+    "app_rendered",
     "update_open_notes",
     "update_later",
     "update_restart",
@@ -2596,6 +2633,172 @@
       "use_rules": null
     }
   ],
+  "PageState": [
+    {
+      "changes": [
+        {
+          "number": 26,
+          "title": "Usage and limits"
+        }
+      ],
+      "live": null,
+      "next_rcs": {},
+      "promotion": null,
+      "setup": {
+        "state": "needed"
+      },
+      "suggested": "0.2.0",
+      "trial": null
+    },
+    {
+      "changes": [],
+      "live": null,
+      "next_rcs": {},
+      "promotion": null,
+      "setup": {
+        "state": "key_pending"
+      },
+      "suggested": "0.2.0",
+      "trial": null
+    },
+    {
+      "changes": [],
+      "live": null,
+      "next_rcs": {},
+      "promotion": null,
+      "setup": {
+        "pubkey": false,
+        "secrets": 2,
+        "state": "half_done"
+      },
+      "suggested": "0.2.0",
+      "trial": null
+    },
+    {
+      "changes": [
+        {
+          "number": 26,
+          "title": "Usage and limits"
+        }
+      ],
+      "live": {
+        "body": "- Watchers",
+        "draft": false,
+        "id": 41,
+        "name": "Dots 0.2.0",
+        "prerelease": false,
+        "published_at": "2026-10-09T12:00:00.000Z",
+        "tag": "v0.2.0",
+        "url": "https://github.com/Aakshar-D/dots/releases/tag/v0.2.0"
+      },
+      "next_rcs": {
+        "0.3.0": 2
+      },
+      "promotion": {
+        "run": {
+          "conclusion": null,
+          "id": 7,
+          "jobs": [
+            {
+              "conclusion": null,
+              "name": "test",
+              "status": "in_progress",
+              "steps": [
+                [
+                  "Run the core tests",
+                  "in_progress",
+                  null
+                ]
+              ]
+            }
+          ],
+          "status": "in_progress",
+          "url": "https://github.com/Aakshar-D/dots/actions/runs/7"
+        },
+        "stage": {
+          "stage": "failed",
+          "step": "Build the installer"
+        },
+        "tag": "v0.2.1",
+        "version": "0.2.1"
+      },
+      "setup": {
+        "state": "done"
+      },
+      "suggested": "0.3.0",
+      "trial": {
+        "newer_on_master": 2,
+        "notes": "- Usage and limits (#26)",
+        "rc": 1,
+        "release": null,
+        "run": {
+          "conclusion": null,
+          "id": 7,
+          "jobs": [
+            {
+              "conclusion": null,
+              "name": "test",
+              "status": "in_progress",
+              "steps": [
+                [
+                  "Run the core tests",
+                  "in_progress",
+                  null
+                ]
+              ]
+            }
+          ],
+          "status": "in_progress",
+          "url": "https://github.com/Aakshar-D/dots/actions/runs/7"
+        },
+        "stage": {
+          "stage": "testing"
+        },
+        "tag": "v0.3.0-rc.1",
+        "version": "0.3.0"
+      }
+    }
+  ],
+  "PublisherStatus": [
+    {
+      "state": {
+        "state": "none"
+      },
+      "token": null
+    },
+    {
+      "state": {
+        "state": "checking"
+      },
+      "token": "GITHUB_PUBLISH"
+    },
+    {
+      "state": {
+        "login": "shraddesh",
+        "state": "publisher"
+      },
+      "token": "GITHUB_PUBLISH"
+    },
+    {
+      "state": {
+        "reason": "This token needs the repo and workflow scopes.",
+        "state": "refused"
+      },
+      "token": "GITHUB_PUBLISH"
+    }
+  ],
+  "PullOpened": {
+    "number": 31,
+    "url": "https://github.com/Aakshar-D/dots/pull/31"
+  },
+  "ReleaseNotes": [
+    {
+      "body": "- Dots holds background runs when your Claude usage is high.",
+      "url": "https://github.com/Aakshar-D/dots/releases/tag/v0.2.0",
+      "version": "0.2.0"
+    },
+    null
+  ],
   "RuleCandidate": [
     {
       "label": "this exact command",
@@ -3209,6 +3412,7 @@
     }
   ],
   "Settings": {
+    "auto_install_updates": false,
     "autostart": true,
     "claude_path": null,
     "edge_path": null,
@@ -3222,12 +3426,14 @@
     "max_concurrent_runs": 2,
     "notify_on_notes": true,
     "port": 47321,
+    "publish_token": null,
     "schedules_paused": false,
     "tested_claude_version": "2.1.295"
   },
   "SettingsSaved": {
     "restart_required": true,
     "settings": {
+      "auto_install_updates": false,
       "autostart": true,
       "claude_path": null,
       "edge_path": null,
@@ -3241,6 +3447,7 @@
       "max_concurrent_runs": 2,
       "notify_on_notes": true,
       "port": 47321,
+      "publish_token": null,
       "schedules_paused": false,
       "tested_claude_version": "2.1.295"
     }
@@ -3267,6 +3474,7 @@
   ],
   "StartupError": {
     "backup": "C:/Users/u/AppData/Local/dots/backups/dots-0.1.0-2026-10-20-091700.db",
+    "go_back": "0.1.0",
     "log_dir": "C:/Users/u/AppData/Local/dots/logs",
     "message": "Dots could not start: database disk image is malformed"
   },
@@ -3315,6 +3523,7 @@
       ]
     },
     {
+      "purpose": "update",
       "state": "waiting",
       "version": "0.2.0",
       "waiting_for": [
@@ -3322,12 +3531,65 @@
       ]
     },
     {
+      "purpose": "update",
       "state": "installing",
       "version": "0.2.0"
     },
     {
       "error": "The backup failed: disk full",
       "state": "failed"
+    },
+    {
+      "purpose": "repair",
+      "state": "waiting",
+      "version": "0.2.0",
+      "waiting_for": [
+        "Daily digest"
+      ]
+    },
+    {
+      "purpose": "go_back",
+      "state": "installing",
+      "version": "0.1.0"
+    },
+    {
+      "back_to": "0.1.0",
+      "state": "unhealthy",
+      "version": "0.2.0"
+    },
+    {
+      "back_to": null,
+      "state": "withdrawn",
+      "version": "0.2.0"
+    },
+    {
+      "at": "2026-10-09T12:00:00.000Z",
+      "state": "updated_itself",
+      "version": "0.2.0"
+    }
+  ],
+  "UpdateStatus": [
+    {
+      "auto_install": true,
+      "checked_at": "2026-10-09T12:00:00.000Z",
+      "checks_on": true,
+      "go_back": "0.1.0",
+      "install_error": "The update could not start: access denied",
+      "last_error": "GitHub could not be reached",
+      "publisher": true,
+      "ready": "0.2.1",
+      "version": "0.2.0"
+    },
+    {
+      "auto_install": false,
+      "checked_at": null,
+      "checks_on": false,
+      "go_back": null,
+      "install_error": null,
+      "last_error": null,
+      "publisher": false,
+      "ready": null,
+      "version": "0.2.0"
     }
   ],
   "UsageSummary": {

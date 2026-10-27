@@ -13,7 +13,49 @@ permissions:
   contents: write
 
 jobs:
+  # Nothing is built from code whose tests fail (updates UI spec section 5.4).
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.13
+
+      - uses: dtolnay/rust-toolchain@035fceb3c12fb0c6a9461b52775e16473133e591 # 1.95.0
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+
+      - name: Install the UI's packages
+        run: bun install --frozen-lockfile
+
+      - name: Check the formatting
+        run: cargo fmt --all --check
+
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      # preview_schedule_lists_the_next_fire_times depends on the machine's time zone.
+      - name: Run the core tests
+        run: cargo test -p dots-core --locked -- --skip preview_schedule_lists_the_next_fire_times
+
+      - name: Run the app tests
+        run: cargo test -p dots-app --locked
+
+      - name: Run the release script's tests
+        run: node --test tools/release/release.test.mjs
+
+      - name: Check and test the UI
+        working-directory: ui
+        run: |
+          bun run typecheck
+          bun run test
+
   release:
+    needs: test
     runs-on: windows-latest
     steps:
       # The whole history, so that a release tag can be checked against master.
@@ -87,8 +129,16 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           installer="target/release/bundle/nsis/Dots_${version}_x64-setup.exe"
-          node tools/release/release.mjs manifest "$GITHUB_REF_NAME" "$installer" latest.json
+          # The notes the Releases page wrote for this version, when the tag has them; else
+          # GitHub's own. Notes left on master by an earlier version are never used.
+          node tools/release/release.mjs notes "$GITHUB_REF_NAME" release-notes.md release-notes.out.md
+          node tools/release/release.mjs manifest "$GITHUB_REF_NAME" "$installer" latest.json release-notes.out.md
           flags=()
           if [ "$PRERELEASE" = "true" ]; then flags+=(--prerelease); fi
-          gh release create "$GITHUB_REF_NAME" --title "Dots $version" --generate-notes \
+          if [ -s release-notes.out.md ]; then
+            flags+=(--notes-file release-notes.out.md)
+          else
+            flags+=(--generate-notes)
+          fi
+          gh release create "$GITHUB_REF_NAME" --title "Dots $version" \
             "${flags[@]}" "$installer" "$installer.sig" latest.json

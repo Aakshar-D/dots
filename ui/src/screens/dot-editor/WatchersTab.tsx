@@ -112,7 +112,7 @@ const ADD = "\u0000add";
 
 /// The secret entries of the vault, "Add to vault…" opening the vault's form (watchers spec
 /// section 8).
-function VaultChooser(props: {
+export function VaultChooser(props: {
   id: string;
   value: string;
   onChange: (name: string) => void;

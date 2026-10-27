@@ -11,7 +11,9 @@ export function Root() {
   const startup = useQuery({ queryKey: keys.startupError, queryFn: commands.startupError });
   if (startup.isPending) return null;
   if (startup.isError) {
-    return <FatalPage message={errorMessage(startup.error)} logDir={null} backup={null} />;
+    return (
+      <FatalPage message={errorMessage(startup.error)} logDir={null} backup={null} goBack={null} />
+    );
   }
   if (startup.data) {
     return (
@@ -19,6 +21,7 @@ export function Root() {
         message={startup.data.message}
         logDir={startup.data.log_dir}
         backup={startup.data.backup}
+        goBack={startup.data.go_back}
       />
     );
   }

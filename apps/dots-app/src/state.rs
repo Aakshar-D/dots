@@ -13,6 +13,9 @@ pub struct StartupError {
     pub log_dir: String,
     /// The newest backup an update made, empty when there is none (updates spec §8).
     pub backup: String,
+    /// The version Go back installs, when the last update left a backup to restore (updates
+    /// UI spec section 4.4).
+    pub go_back: Option<String>,
 }
 
 /// Tauri-managed state: the runtime, or why it is missing, and the folders `setup` found.
@@ -77,6 +80,14 @@ impl AppState {
                 .and_then(crate::update::newest_backup)
                 .map(|path| path.to_string_lossy().into_owned())
                 .unwrap_or_default(),
+            // Only for a start that failed the health check after an update, not for any
+            // failed start while a backup exists.
+            go_back: self.data_dir.as_deref().and_then(|dir| {
+                let record = crate::update_record::read(dir);
+                record.pending.then_some(())?;
+                crate::update_record::go_back_target(&record, env!("CARGO_PKG_VERSION"))
+                    .map(|(version, _)| version)
+            }),
         })
     }
 }
@@ -104,6 +115,7 @@ mod tests {
                 message: "no local data folder".into(),
                 log_dir: "".into(),
                 backup: "".into(),
+                go_back: None,
             })
         );
     }
@@ -136,6 +148,7 @@ mod tests {
                 message: "disk full".into(),
                 log_dir: "C:/logs".into(),
                 backup: "".into(),
+                go_back: None,
             })
         );
     }
@@ -152,5 +165,72 @@ mod tests {
             .with_data_dir(Some(dir.path().to_path_buf()));
         let shown = state.startup_error().unwrap();
         assert_eq!(shown.backup, newest.to_string_lossy());
+    }
+
+    #[test]
+    fn the_fatal_page_offers_go_back_when_the_record_does() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = |dir: &std::path::Path| {
+            AppState::new(Err("migration 0017 failed".into()), None)
+                .with_data_dir(Some(dir.to_path_buf()))
+        };
+        assert_eq!(state(dir.path()).startup_error().unwrap().go_back, None);
+        let backup = dir
+            .path()
+            .join("backups")
+            .join("dots-0.3.0-2026-10-27-031200.db");
+        std::fs::create_dir_all(backup.parent().unwrap()).unwrap();
+        std::fs::write(&backup, "db").unwrap();
+        crate::update_record::write(
+            dir.path(),
+            &crate::update_record::UpdateRecord {
+                leaving: Some("0.3.0".into()),
+                installing: Some(env!("CARGO_PKG_VERSION").into()),
+                backup: Some(backup),
+                pending: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            state(dir.path())
+                .startup_error()
+                .unwrap()
+                .go_back
+                .as_deref(),
+            Some("0.3.0")
+        );
+    }
+
+    // Final review I-1: the fatal page offers Go back only for a start that failed its
+    // health check, not for any failed start while a backup exists.
+    #[test]
+    fn the_fatal_page_offers_go_back_only_while_the_update_is_pending() {
+        let dir = tempfile::tempdir().unwrap();
+        let backup = dir
+            .path()
+            .join("backups")
+            .join("dots-0.0.9-2026-10-27-031200.db");
+        std::fs::create_dir_all(backup.parent().unwrap()).unwrap();
+        std::fs::write(&backup, "db").unwrap();
+        let mut record = crate::update_record::UpdateRecord {
+            leaving: Some("0.0.9".into()),
+            installing: Some(env!("CARGO_PKG_VERSION").into()),
+            backup: Some(backup),
+            pending: false,
+            ..Default::default()
+        };
+        crate::update_record::write(dir.path(), &record).unwrap();
+        let state = || {
+            AppState::new(Err("database is locked".into()), None)
+                .with_data_dir(Some(dir.path().to_path_buf()))
+        };
+        assert_eq!(state().startup_error().unwrap().go_back, None);
+        record.pending = true;
+        crate::update_record::write(dir.path(), &record).unwrap();
+        assert_eq!(
+            state().startup_error().unwrap().go_back.as_deref(),
+            Some("0.0.9")
+        );
     }
 }

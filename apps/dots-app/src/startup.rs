@@ -147,10 +147,85 @@ pub fn take_restart_mark(data_dir: &Path) -> bool {
     true
 }
 
-/// Whether a start shows the main window: always after a failed start (its error page), when
-/// Dots was not started hidden, and after "Restart Dots" whatever the arguments say.
-pub fn show_window(failed: bool, hidden: bool, restarted: bool) -> bool {
-    failed || !hidden || restarted
+/// A go back whose undo failed can leave the data folder without `dots.db`, its live database
+/// set aside as `backups/failed-dots-<v>-<time>.db`. Before the runtime opens (and would make
+/// an empty database), the newest such set puts itself back. The path moved, if any. Call
+/// it only while holding the lock on the data folder.
+pub fn recover_set_aside(data_dir: &Path) -> Option<PathBuf> {
+    if data_dir.join("dots.db").exists() {
+        return None;
+    }
+    let dir = data_dir.join(crate::update::BACKUPS_DIR);
+    let mut found: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .ok()?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("failed-dots-") && n.ends_with(".db"))
+        })
+        .collect();
+    // The name ends in its time ("-YYYY-MM-DD-HHMMSS.db"), so the newest sorts last.
+    found.sort_by_key(|p| {
+        let n = p
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default()
+            .to_string();
+        n.len()
+            .checked_sub(20)
+            .map(|at| n[at..].to_string())
+            .unwrap_or_default()
+    });
+    let newest = found.pop()?;
+    for suffix in ["", "-wal", "-shm"] {
+        let from = PathBuf::from(format!("{}{suffix}", newest.display()));
+        if from.exists() {
+            if let Err(e) = std::fs::rename(&from, data_dir.join(format!("dots.db{suffix}"))) {
+                tracing::error!("could not put {} back: {e}", from.display());
+                return None;
+            }
+        }
+    }
+    tracing::warn!("put the set-aside database {} back", newest.display());
+    Some(newest)
+}
+
+/// The file an idle install leaves for the Dots its installer starts (updates UI spec section
+/// 4.2): the installer passes the old process's arguments on, so the mark keeps the new one
+/// in the tray even when the old one was not started hidden.
+pub const STAY_HIDDEN_MARK: &str = "stay-hidden-after-update";
+
+/// Leaves the stay-hidden mark in `data_dir`. A failure is logged: at worst the window shows.
+pub fn mark_stay_hidden(data_dir: &Path) {
+    if let Err(e) = std::fs::write(data_dir.join(STAY_HIDDEN_MARK), "") {
+        tracing::warn!(
+            "could not leave the stay-hidden mark in {}: {e}",
+            data_dir.display()
+        );
+    }
+}
+
+/// Whether an idle install left its mark; removed, so it counts for one start.
+pub fn take_stay_hidden_mark(data_dir: &Path) -> bool {
+    let mark = data_dir.join(STAY_HIDDEN_MARK);
+    if !mark.is_file() {
+        return false;
+    }
+    if let Err(e) = std::fs::remove_file(&mark) {
+        tracing::warn!(
+            "could not remove the stay-hidden mark {}: {e}",
+            mark.display()
+        );
+    }
+    true
+}
+
+/// Whether a start shows the main window: always after a failed start (its error page);
+/// never after an idle install (`stay_hidden`); else when Dots was not started hidden, and
+/// after "Restart Dots" whatever the arguments say.
+pub fn show_window(failed: bool, hidden: bool, restarted: bool, stay_hidden: bool) -> bool {
+    failed || (!stay_hidden && (!hidden || restarted))
 }
 
 /// Today's log file in `log_dir`: daily files, the last seven kept. The folder is created
@@ -369,16 +444,16 @@ mod tests {
         const HIDDEN: bool = true;
         const RESTARTED: bool = true;
         // Started at login: in the tray, without a window.
-        assert!(!show_window(!FAILED, HIDDEN, !RESTARTED));
+        assert!(!show_window(!FAILED, HIDDEN, !RESTARTED, false));
         // "Restart Dots" passes `--hidden` on from a login start: the window still comes back.
-        assert!(show_window(!FAILED, HIDDEN, RESTARTED));
+        assert!(show_window(!FAILED, HIDDEN, RESTARTED, false));
         // A failed start always shows its error page.
-        assert!(show_window(FAILED, HIDDEN, !RESTARTED));
-        assert!(show_window(FAILED, HIDDEN, RESTARTED));
+        assert!(show_window(FAILED, HIDDEN, !RESTARTED, false));
+        assert!(show_window(FAILED, HIDDEN, RESTARTED, false));
         // Started by the person: shown, whatever else is true.
         for failed in [false, true] {
             for restarted in [false, true] {
-                assert!(show_window(failed, !HIDDEN, restarted));
+                assert!(show_window(failed, !HIDDEN, restarted, false));
             }
         }
     }
@@ -638,5 +713,59 @@ mod tests {
         std::fs::write(&file, "x").unwrap();
         let err = start_runtime(&file.join("dots")).await.err().unwrap();
         assert!(err.starts_with("Dots could not read its settings"), "{err}");
+    }
+
+    #[test]
+    fn a_stay_hidden_mark_keeps_the_window_hidden_unless_the_start_failed() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!take_stay_hidden_mark(dir.path()));
+        mark_stay_hidden(dir.path());
+        assert!(take_stay_hidden_mark(dir.path()));
+        assert!(!take_stay_hidden_mark(dir.path()), "counts for one start");
+        // The installer passes the old process's arguments on, without --hidden.
+        assert!(!show_window(false, false, false, true));
+        assert!(show_window(true, false, false, true));
+        assert!(show_window(false, false, false, false));
+    }
+
+    // Final review I-5: a go back whose undo failed left no dots.db; the next start puts the
+    // set-aside database back instead of starting empty.
+    #[test]
+    fn a_start_without_a_database_puts_the_set_aside_one_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let backups = dir.path().join("backups");
+        std::fs::create_dir_all(&backups).unwrap();
+        std::fs::write(
+            backups.join("failed-dots-0.3.1-2026-10-27-090000.db"),
+            "older",
+        )
+        .unwrap();
+        std::fs::write(
+            backups.join("failed-dots-0.3.1-2026-10-27-100000.db"),
+            "live",
+        )
+        .unwrap();
+        std::fs::write(
+            backups.join("failed-dots-0.3.1-2026-10-27-100000.db-wal"),
+            "wal",
+        )
+        .unwrap();
+        assert_eq!(
+            recover_set_aside(dir.path()),
+            Some(backups.join("failed-dots-0.3.1-2026-10-27-100000.db"))
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("dots.db")).unwrap(),
+            "live"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("dots.db-wal")).unwrap(),
+            "wal"
+        );
+        // With a database in place, nothing moves.
+        assert_eq!(recover_set_aside(dir.path()), None);
+        assert!(backups
+            .join("failed-dots-0.3.1-2026-10-27-090000.db")
+            .exists());
     }
 }

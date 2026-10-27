@@ -546,6 +546,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "blake2"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "46502ad458c9a52b69d4d4d32775c788b7a1b85e8bc9d482d92250fc0e3f8efe"
+dependencies = [
+ "digest 0.10.7",
+]
+
+[[package]]
 name = "block-buffer"
 version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1074,6 +1083,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "crypto_box"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "16182b4f39a82ec8a6851155cc4c0cda3065bb1db33651726a29e1951de0f009"
+dependencies = [
+ "aead",
+ "blake2",
+ "crypto_secretbox",
+ "curve25519-dalek",
+ "salsa20",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
+name = "crypto_secretbox"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b9d6cf87adf719ddf43a805e92c6870a531aedda35ff640442cbaf8674e141e1"
+dependencies = [
+ "aead",
+ "cipher",
+ "generic-array",
+ "poly1305",
+ "salsa20",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
 name = "cssparser"
 version = "0.37.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1466,6 +1505,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "cron",
+ "crypto_box",
  "dots-core",
  "futures-util",
  "getrandom 0.3.4",
