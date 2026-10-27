@@ -127,6 +127,12 @@ function Form({ stored, status }: { stored: Settings; status: Status | undefined
     mutationFn: commands.updateSettings,
     onSuccess: (saved) => {
       qc.setQueryData(keys.settings, saved.settings);
+      // A token chosen for publishing is checked at once (updates UI spec section 5.1).
+      commands
+        .publisherCheck()
+        .then((status) => qc.setQueryData(keys.publisher, status))
+        .catch(() => {})
+        .finally(() => invalidate(qc, keys.updateStatus));
       // The restart banner comes from the status.
       invalidate(qc, keys.status);
       toast.success(saved.restart_required ? "Saved. Restart Dots to apply." : "Saved");
@@ -334,6 +340,8 @@ function Form({ stored, status }: { stored: Settings; status: Status | undefined
       <UpdatesSection
         autoInstall={draft.auto_install_updates}
         onAutoInstall={(auto_install_updates) => set({ auto_install_updates })}
+        publishToken={draft.publish_token}
+        onPublishToken={(publish_token) => set({ publish_token })}
       />
 
       <Section title="Claude Code CLI">

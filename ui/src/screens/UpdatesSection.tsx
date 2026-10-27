@@ -3,6 +3,8 @@ import { useState } from "react";
 
 import { commands } from "@/api/commands";
 import type { CheckOutcome, UpdateStatus } from "@/api/types";
+import { Link } from "react-router";
+
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -11,6 +13,7 @@ import { WhatsNewDialog } from "@/components/WhatsNewDialog";
 import { localTime } from "@/lib/format";
 import { errorMessage } from "@/lib/notify";
 import { invalidate, keys } from "@/lib/query";
+import { VaultChooser } from "@/screens/dot-editor/WatchersTab";
 
 /// "Dots 0.3.0 · up to date · checked 10:42", "· 0.3.1 is ready", "· never checked".
 function statusLine(s: UpdateStatus): string {
@@ -37,7 +40,11 @@ function outcomeLine(o: CheckOutcome): string | null {
 export function UpdatesSection(props: {
   autoInstall: boolean;
   onAutoInstall: (on: boolean) => void;
+  publishToken: string | null;
+  onPublishToken: (name: string | null) => void;
 }) {
+  const [choosing, setChoosing] = useState(false);
+  const publisher = useQuery({ queryKey: keys.publisher, queryFn: commands.publisherStatus }).data;
   const qc = useQueryClient();
   const status = useQuery({ queryKey: keys.updateStatus, queryFn: commands.updateStatus }).data;
   const [notesOf, setNotesOf] = useState<string | null>(null);
@@ -118,6 +125,36 @@ export function UpdatesSection(props: {
             </p>
           )}
         </>
+      )}
+      {status?.publisher ? (
+        <Link to="/releases" className="text-sm underline">
+          Publish versions of Dots…
+        </Link>
+      ) : (
+        <div className="flex flex-col items-start gap-2">
+          <Button size="sm" variant="ghost" onClick={() => setChoosing((c) => !c)}>
+            Publish versions of Dots (for its developers)…
+          </Button>
+          {choosing && (
+            <div className="flex flex-col gap-1">
+              <Label htmlFor="settings-publish-token">GitHub token</Label>
+              <VaultChooser
+                id="settings-publish-token"
+                value={props.publishToken ?? ""}
+                onChange={(name) => props.onPublishToken(name || null)}
+                initialName="GITHUB_PUBLISH"
+              />
+              <p className="text-xs text-muted-foreground">
+                A classic token with the repo and workflow scopes.
+              </p>
+              {publisher?.state.state === "refused" && (
+                <p role="alert" className="text-sm text-destructive">
+                  {publisher.state.reason}
+                </p>
+              )}
+            </div>
+          )}
+        </div>
       )}
       {notesOf && (
         <WhatsNewDialog

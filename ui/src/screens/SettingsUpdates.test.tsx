@@ -17,6 +17,7 @@ const status = (over: Partial<UpdateStatus> = {}): UpdateStatus => ({
   last_error: null,
   go_back: null,
   auto_install: false,
+  publisher: false,
   ...over,
 });
 
@@ -135,5 +136,30 @@ describe("the Updates settings", () => {
     await user.click(await screen.findByRole("link", { name: "Settings" }));
     await section();
     expect(backend.callsTo("app_rendered")).toHaveLength(1);
+  });
+
+  it("a non-publisher sees the developers' link, which opens the token chooser", async () => {
+    backend.on("env_list", () => []);
+    const { user } = settings();
+    const updates = await section();
+    await user.click(
+      await within(updates).findByRole("button", {
+        name: "Publish versions of Dots (for its developers)…",
+      }),
+    );
+    expect(within(updates).getByText("A classic token with the repo and workflow scopes.")).toBeVisible();
+    expect(within(updates).getByLabelText("GitHub token")).toBeVisible();
+  });
+
+  it("a publisher's link opens the Releases page", async () => {
+    backend.on("publisher_status", () => ({
+      token: "GITHUB_PUBLISH",
+      state: { state: "publisher", login: "shraddesh" },
+    }));
+    settings({ publisher: true });
+    const updates = await section();
+    expect(
+      await within(updates).findByRole("link", { name: "Publish versions of Dots…" }),
+    ).toHaveAttribute("href", "/releases");
   });
 });

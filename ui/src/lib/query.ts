@@ -64,6 +64,8 @@ export const keys = {
   watchers: (dotId: string) => ["watchers", dotId] as const,
   limits: ["limits"] as const,
   updateStatus: ["update-status"] as const,
+  publisher: ["publisher"] as const,
+  releasesPage: ["releases-page"] as const,
   releaseNotes: (version: string) => ["release-notes", version] as const,
   usage: (period: string) => ["usage", period] as const,
 };

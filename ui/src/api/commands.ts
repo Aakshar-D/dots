@@ -103,6 +103,23 @@ export const commands = {
   /// The window rendered after this start (the health check after an update).
   appRendered: () => call(nothing, "app_rendered"),
 
+  publisherStatus: () => call(T.PublisherStatus, "publisher_status"),
+  publisherCheck: () => call(T.PublisherStatus, "publisher_check"),
+  releasesPage: () => call(T.PageState, "releases_page"),
+  releaseMakeKey: (password: string) => call(z.string(), "release_make_key", { password }),
+  /// Opens the native save dialog; the path written, or null when cancelled.
+  releaseSaveKey: () => call(z.string().nullable(), "release_save_key"),
+  releasePutSecrets: (password: string) => call(nothing, "release_put_secrets", { password }),
+  releaseOpenKeyPull: () => call(T.PullOpened, "release_open_key_pull"),
+  releasePublishTrial: (version: string) =>
+    call(T.Trial, "release_publish_trial", { version }),
+  releaseSaveNotes: (version: string, notes: string) =>
+    call(nothing, "release_save_notes", { version, notes }),
+  releasePromote: (version: string) => call(nothing, "release_promote", { version }),
+  releaseRetry: (tag: string) => call(nothing, "release_retry", { tag }),
+  releaseDropTrial: (version: string) => call(nothing, "release_drop_trial", { version }),
+  releaseWithdraw: (version: string) => call(nothing, "release_withdraw", { version }),
+
   dotOverview: () => call(T.DotOverview.array(), "dot_overview"),
   listDots: () => call(T.Dot.array(), "list_dots"),
   getDot: (id: string) => call(T.Dot, "get_dot", { id }),

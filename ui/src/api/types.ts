@@ -511,6 +511,8 @@ export const Settings = z.strictObject({
   hold_share_weekly: z.number().int(),
   // Dots installs a downloaded update by itself when idle (updates UI spec section 4.2).
   auto_install_updates: z.boolean(),
+  // The vault entry holding the GitHub token Dots publishes with; null when it does not.
+  publish_token: nullable(z.string()),
 });
 export const SettingsSaved = z.strictObject({
   settings: Settings,
@@ -1079,6 +1081,87 @@ export const UpdateStatus = z.strictObject({
   last_error: nullable(z.string()),
   go_back: nullable(z.string()),
   auto_install: z.boolean(),
+  publisher: z.boolean(),
+});
+
+/// Whether this Dots publishes (updates UI spec section 5.1).
+export const PublisherState = z.discriminatedUnion("state", [
+  z.strictObject({ state: z.literal("none") }),
+  z.strictObject({ state: z.literal("checking") }),
+  z.strictObject({ state: z.literal("publisher"), login: z.string() }),
+  z.strictObject({ state: z.literal("refused"), reason: z.string() }),
+]);
+export const PublisherStatus = z.strictObject({
+  token: nullable(z.string()),
+  state: PublisherState,
+});
+export const PullOpened = z.strictObject({ number: z.number().int(), url: z.string() });
+
+/// The Releases page (updates UI spec section 5).
+export const Setup = z.discriminatedUnion("state", [
+  z.strictObject({ state: z.literal("done") }),
+  z.strictObject({ state: z.literal("needed") }),
+  z.strictObject({
+    state: z.literal("half_done"),
+    secrets: z.number().int(),
+    pubkey: z.boolean(),
+  }),
+]);
+export const MergedPull = z.strictObject({ number: z.number().int(), title: z.string() });
+export const ReleaseInfo = z.strictObject({
+  id: z.number().int(),
+  tag: z.string(),
+  name: z.string(),
+  body: z.string(),
+  prerelease: z.boolean(),
+  draft: z.boolean(),
+  url: z.string(),
+  published_at: nullable(z.string()),
+});
+export const JobInfo = z.strictObject({
+  name: z.string(),
+  status: z.string(),
+  conclusion: nullable(z.string()),
+  steps: z.array(z.tuple([z.string(), z.string(), nullable(z.string())])),
+});
+export const RunInfo = z.strictObject({
+  id: z.number().int(),
+  status: z.string(),
+  conclusion: nullable(z.string()),
+  url: z.string(),
+  jobs: z.array(JobInfo),
+});
+export const Stage = z.discriminatedUnion("stage", [
+  z.strictObject({ stage: z.literal("waiting") }),
+  z.strictObject({ stage: z.literal("testing") }),
+  z.strictObject({ stage: z.literal("building") }),
+  z.strictObject({ stage: z.literal("signing") }),
+  z.strictObject({ stage: z.literal("published") }),
+  z.strictObject({ stage: z.literal("failed"), step: z.string() }),
+]);
+export const Trial = z.strictObject({
+  version: z.string(),
+  rc: z.number().int(),
+  tag: z.string(),
+  release: nullable(ReleaseInfo),
+  run: nullable(RunInfo),
+  stage: Stage,
+  newer_on_master: z.number().int(),
+  notes: z.string(),
+});
+export const Promotion = z.strictObject({
+  version: z.string(),
+  tag: z.string(),
+  run: nullable(RunInfo),
+  stage: Stage,
+});
+export const PageState = z.strictObject({
+  setup: Setup,
+  live: nullable(ReleaseInfo),
+  trial: nullable(Trial),
+  promotion: nullable(Promotion),
+  changes: z.array(MergedPull),
+  suggested: z.string(),
 });
 
 /// What "Check for updates" found.
@@ -1229,3 +1312,7 @@ export type UpdateNote = z.infer<typeof UpdateNote>;
 export type UpdateStatus = z.infer<typeof UpdateStatus>;
 export type CheckOutcome = z.infer<typeof CheckOutcome>;
 export type ReleaseNotes = z.infer<typeof ReleaseNotes>;
+export type PublisherStatus = z.infer<typeof PublisherStatus>;
+export type PageState = z.infer<typeof PageState>;
+export type Stage = z.infer<typeof Stage>;
+export type Trial = z.infer<typeof Trial>;
