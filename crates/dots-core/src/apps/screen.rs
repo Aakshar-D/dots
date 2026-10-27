@@ -13,6 +13,7 @@ use super::registry::blocking;
 use super::source::{self, AppSource};
 use super::{AppCall, Apps};
 use crate::library::LibraryItem;
+use crate::model::{FileDiff, FileStatus, WorktreeDiff};
 use crate::{Error, Result};
 
 /// The most calls `calls` gives at once.
@@ -54,6 +55,53 @@ fn files_of(src: &AppSource) -> Vec<AppFile> {
             },
         })
         .collect()
+}
+
+/// How a version's files became another's (spec section 6.2, the Code tab): each file that is
+/// new, gone or changed, by path, as a unified diff with three lines of context. A file that is
+/// not UTF-8 on either side is listed as binary, without a patch.
+pub fn diff_files(
+    old: &BTreeMap<String, Vec<u8>>,
+    new: &BTreeMap<String, Vec<u8>>,
+) -> WorktreeDiff {
+    let paths: std::collections::BTreeSet<&String> = old.keys().chain(new.keys()).collect();
+    let mut files = Vec::new();
+    for path in paths {
+        let (before, after) = (old.get(path), new.get(path));
+        let status = match (before, after) {
+            (None, Some(_)) => FileStatus::Added,
+            (Some(_), None) => FileStatus::Deleted,
+            (Some(a), Some(b)) if a != b => FileStatus::Modified,
+            _ => continue,
+        };
+        let empty = Vec::new();
+        let texts = (
+            std::str::from_utf8(before.unwrap_or(&empty)),
+            std::str::from_utf8(after.unwrap_or(&empty)),
+        );
+        let (patch, binary) = match texts {
+            (Ok(a), Ok(b)) => {
+                let patch = similar::TextDiff::from_lines(a, b)
+                    .unified_diff()
+                    .context_radius(3)
+                    .header(&format!("a/{path}"), &format!("b/{path}"))
+                    .to_string();
+                (patch, false)
+            }
+            _ => (String::new(), true),
+        };
+        files.push(FileDiff {
+            path: path.clone(),
+            status,
+            patch,
+            binary,
+        });
+    }
+    WorktreeDiff {
+        files,
+        truncated: false,
+        exists: true,
+    }
 }
 
 impl Apps {
@@ -100,6 +148,25 @@ impl Apps {
         }
         let src = blocking(move || source::read_folder(&dir)).await??;
         Ok(files_of(&src))
+    }
+
+    /// The Code tab's diff of the waiting proposal `id` (spec section 6.2): against the app's
+    /// active version for a change, every file added for a new app. A decided proposal has no
+    /// files left: `NotFound`.
+    pub async fn proposal_diff(&self, id: &str) -> Result<WorktreeDiff> {
+        let p = self.store.get_app_proposal(id).await?;
+        let dir = self.proposed_dir(&p.id);
+        if !dir.is_dir() {
+            return Err(Error::NotFound(format!("the files of app proposal {id}")));
+        }
+        let next = blocking(move || source::read_folder(&dir)).await??.files();
+        let current = match (&p.app_id, self.get(&p.app_name).await) {
+            (Some(app_id), Ok((item, config))) if item.id == *app_id => {
+                self.load(&item, &config).await?.files()
+            }
+            _ => BTreeMap::new(),
+        };
+        Ok(diff_files(&current, &next))
     }
 
     /// The newest `limit` logged calls of the app `name` (at most 500), newest first.
