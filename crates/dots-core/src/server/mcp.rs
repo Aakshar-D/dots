@@ -8,11 +8,13 @@ use serde_json::{json, Value};
 use super::gateway::not_performed;
 use super::webhook::bearer;
 use super::ServerState;
+use crate::apps::{RunApps, APP_POLICY};
 use crate::checkins::Tool;
 use crate::context;
 use crate::engine::local::tools::cap_head;
 use crate::engine::{PermissionGate, PermissionOutcome};
 use crate::memory::{self, Tool as MemoryTool};
+use crate::team_tools::{self, Tool as TeamTool};
 
 const DEFAULT_PROTOCOL: &str = "2025-06-18";
 
@@ -108,16 +110,38 @@ pub async fn handle(State(s): State<ServerState>, headers: HeaderMap, body: Byte
                 tools.extend(Tool::ALL.map(Tool::mcp_schema));
                 tools.extend(MemoryTool::ALL.map(MemoryTool::mcp_schema));
             }
+            // `propose_app` (app library spec section 6.2), once the runtime has given the
+            // runner the apps.
+            if s.runner.apps().is_some() {
+                tools.push(crate::apps::propose::mcp_schema());
+            }
+            // The run's app tools (app library spec section 6).
+            if let Some(apps) = run_apps(&s, &run_id) {
+                tools.extend(apps.mcp_schemas());
+            }
+            // A chat run of a member that may start a workflow (teams spec section 7).
+            if has_startable(&s, &run_id) {
+                tools.push(TeamTool::StartWorkflow.mcp_schema());
+            }
             json!({ "tools": tools })
         }
         "tools/call" => {
             let name = req.pointer("/params/name").and_then(Value::as_str);
             let answer = match (name, name.and_then(Tool::from_name)) {
                 (Some("context"), _) => call_context(&s, &run_id, &req).await,
+                (Some(crate::apps::propose::TOOL), _) => call_propose(&s, &run_id, &req).await,
                 (_, Some(tool)) => call_check_in(&s, &run_id, &req, tool).await,
+                (Some(n), None) if TeamTool::from_name(n).is_some() => {
+                    call_workflow(&s, &run_id, &req).await
+                }
                 (Some(n), None) if MemoryTool::from_name(n).is_some() => {
                     let tool = MemoryTool::from_name(n).expect("a memory tool");
                     call_memory(&s, &run_id, &req, tool).await
+                }
+                (Some(n), None)
+                    if run_apps(&s, &run_id).is_some_and(|a| a.resolve(n).is_some()) =>
+                {
+                    call_app(&s, &run_id, &req, n).await
                 }
                 _ => call_approve(&s, &run_id, &req).await,
             };
@@ -131,11 +155,153 @@ pub async fn handle(State(s): State<ServerState>, headers: HeaderMap, body: Byte
     Json(json!({ "jsonrpc": "2.0", "id": id, "result": result })).into_response()
 }
 
+/// The run may start a team workflow, so `start_workflow` is one of its tools.
+fn has_startable(s: &ServerState, run_id: &str) -> bool {
+    s.runner
+        .run_tools(run_id)
+        .is_some_and(|tools| !tools.startable().is_empty())
+}
+
+/// Checks a `start_workflow` call against the dot's policy under `Workflow`, waiting for an
+/// approval when a rule asks, and starts the workflow (teams spec section 7). A call that is not
+/// performed is a tool result with `isError`, as for the check-in tools.
+async fn call_workflow(s: &ServerState, run_id: &str, req: &Value) -> Result<Value, (i64, String)> {
+    let (Some(checkins), Some(tools)) = (
+        s.runner.checkins(),
+        s.runner
+            .run_tools(run_id)
+            .filter(|tools| !tools.startable().is_empty()),
+    ) else {
+        return Err((-32602, "unknown tool".to_string()));
+    };
+    let Some(workflows) = checkins.workflows() else {
+        return Err((-32602, "unknown tool".to_string()));
+    };
+    let params = req
+        .get("params")
+        .ok_or((-32602, "missing params".to_string()))?;
+    let mut input = match params.get("arguments") {
+        None | Some(Value::Null) => json!({}),
+        Some(args @ Value::Object(_)) => args.clone(),
+        Some(_) => return Err((-32602, "params.arguments must be an object".to_string())),
+    };
+    // Only the tool's own arguments, as the local engine's `prepare` keeps.
+    let own = TeamTool::StartWorkflow.properties();
+    if let (Value::Object(args), Value::Object(own)) = (&mut input, &own) {
+        args.retain(|key, _| own.contains_key(key));
+    }
+    let input = match s.hub.check(run_id, team_tools::POLICY_NAME, input).await {
+        Ok(PermissionOutcome::Allow { input }) => input,
+        Ok(PermissionOutcome::Deny { message }) => return Ok(not_performed(&message)),
+        Err(e) => return Ok(not_performed(&format!("permission check failed: {e}"))),
+    };
+    Ok(
+        match workflows
+            .call_start(run_id, tools.startable(), &input)
+            .await
+        {
+            Ok(text) => json!({ "content": [{ "type": "text", "text": text }] }),
+            Err(text) => not_performed(&text),
+        },
+    )
+}
+
 /// The run has context collections open, so `context` is one of its tools.
 fn has_contexts(s: &ServerState, run_id: &str) -> bool {
     s.runner
         .run_tools(run_id)
         .is_some_and(|tools| !tools.contexts().is_empty())
+}
+
+/// Checks a `propose_app` call against the dot's policy under `ProposeApp`, waiting for an
+/// approval when a rule asks, and hands the folder, confined to the run's workspace, to the
+/// apps (app library spec section 6.2). A call that is not performed, or whose folder fails its
+/// checks, is a tool result with `isError`.
+async fn call_propose(s: &ServerState, run_id: &str, req: &Value) -> Result<Value, (i64, String)> {
+    let Some(apps) = s.runner.apps() else {
+        return Err((-32602, "unknown tool".to_string()));
+    };
+    let params = req
+        .get("params")
+        .ok_or((-32602, "missing params".to_string()))?;
+    let mut input = match params.get("arguments") {
+        None | Some(Value::Null) => json!({}),
+        Some(args @ Value::Object(_)) => args.clone(),
+        Some(_) => return Err((-32602, "params.arguments must be an object".to_string())),
+    };
+    // Only the tool's own arguments, as for the memory tools: the approval names what will run.
+    if let Value::Object(args) = &mut input {
+        args.retain(|key, _| crate::apps::propose::REQUIRED.contains(&key.as_str()));
+    }
+    let input = match s
+        .hub
+        .check(run_id, crate::apps::PROPOSE_POLICY, input)
+        .await
+    {
+        Ok(PermissionOutcome::Allow { input }) => input,
+        Ok(PermissionOutcome::Deny { message }) => return Ok(not_performed(&message)),
+        Err(e) => return Ok(not_performed(&format!("permission check failed: {e}"))),
+    };
+    let workspace = match s.store.get_run(run_id).await {
+        Ok(run) => run.workspace_path,
+        Err(e) => return Ok(not_performed(&format!("the run could not be read: {e}"))),
+    };
+    let Some(workspace) = workspace else {
+        return Ok(not_performed("this run has no workspace"));
+    };
+    let path = input["path"].as_str().unwrap_or_default();
+    let folder = match crate::engine::local::tools::confine(std::path::Path::new(&workspace), path)
+    {
+        Ok(folder) => folder,
+        Err(e) => return Ok(not_performed(&e)),
+    };
+    let note = input["note"].as_str().unwrap_or_default();
+    Ok(match apps.propose(run_id, folder, note).await {
+        Ok(text) => json!({ "content": [{ "type": "text", "text": text }] }),
+        Err(text) => not_performed(&cap_head(text)),
+    })
+}
+
+/// The run's apps, when it has any.
+fn run_apps(s: &ServerState, run_id: &str) -> Option<std::sync::Arc<RunApps>> {
+    s.runner
+        .run_tools(run_id)
+        .and_then(|tools| tools.apps().cloned())
+}
+
+/// Checks a call of the app tool `key` (`<app>__<tool>`) against the dot's policy under `App`,
+/// waiting for an approval when a rule asks, and calls the app as the run's dot (app library
+/// spec section 6). A call that is not performed, or that the app refuses, is a tool result
+/// with `isError`, as for the memory tools.
+async fn call_app(
+    s: &ServerState,
+    run_id: &str,
+    req: &Value,
+    key: &str,
+) -> Result<Value, (i64, String)> {
+    let Some(apps) = run_apps(s, run_id) else {
+        return Err((-32602, "unknown tool".to_string()));
+    };
+    let params = req
+        .get("params")
+        .ok_or((-32602, "missing params".to_string()))?;
+    let input = match params.get("arguments") {
+        None | Some(Value::Null) => json!({}),
+        Some(args @ Value::Object(_)) => args.clone(),
+        Some(_) => return Err((-32602, "params.arguments must be an object".to_string())),
+    };
+    let Some(checked) = apps.policy_input(key, &input) else {
+        return Err((-32602, "unknown tool".to_string()));
+    };
+    let checked = match s.hub.check(run_id, APP_POLICY, checked).await {
+        Ok(PermissionOutcome::Allow { input }) => input,
+        Ok(PermissionOutcome::Deny { message }) => return Ok(not_performed(&message)),
+        Err(e) => return Ok(not_performed(&format!("permission check failed: {e}"))),
+    };
+    Ok(match apps.call(&checked).await {
+        Ok(text) => json!({ "content": [{ "type": "text", "text": text }] }),
+        Err(text) => not_performed(&text),
+    })
 }
 
 /// Checks a `context` call against the dot's policy as the tool `Context`, waiting for an

@@ -4,7 +4,7 @@
 //! server on the Claude engine. This module holds their names, descriptions and input rules,
 //! and `CheckIns`, which performs an allowed call.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock, Weak};
 
 use chrono::{DateTime, Local, TimeDelta, Utc};
 use serde_json::{json, Value};
@@ -284,13 +284,16 @@ pub fn local_label(t: DateTime<Utc>) -> String {
 
 /// Performs the check-in tools' calls for both engines (spec sections 2 and 3), and holds the
 /// dots' memories, whose tools are served wherever the check-in tools are (dot memory spec
-/// section 3). Cheap to clone.
+/// section 3), and the workflow runs, for the workflow tools (teams spec section 7). Cheap to
+/// clone; the clones share the workflow runs once they are set.
 #[derive(Clone)]
 pub struct CheckIns {
     store: Store,
     bus: Bus,
     follow_ups: Arc<FollowUps>,
     memories: Memories,
+    /// Weak: the workflow runs hold the runner, which holds these.
+    workflows: Arc<OnceLock<Weak<crate::workflows::Workflows>>>,
 }
 
 impl CheckIns {
@@ -300,7 +303,18 @@ impl CheckIns {
             store,
             bus,
             follow_ups,
+            workflows: Arc::new(OnceLock::new()),
         }
+    }
+
+    /// Gives the workflow tools the workflow runs. The runtime calls it once, at start.
+    pub fn set_workflows(&self, workflows: &Arc<crate::workflows::Workflows>) {
+        let _ = self.workflows.set(Arc::downgrade(workflows));
+    }
+
+    /// The workflow runs, once the runtime has set them and while they exist.
+    pub fn workflows(&self) -> Option<Arc<crate::workflows::Workflows>> {
+        self.workflows.get().and_then(Weak::upgrade)
     }
 
     /// The dots' memories: the person's commands and the memory tools go through them.
@@ -375,6 +389,32 @@ impl CheckIns {
     }
 }
 
+/// The run that carries the person's answer to something `asked` posted, in the thread whose
+/// last run is `end` (check-ins spec section 5): a chat run that resumes `end`'s session when it
+/// has one, else a chat run of its own. `answer` is what the person typed, which the chat shows
+/// in place of the message.
+pub(crate) fn continuation(
+    asked: &Run,
+    end: &Run,
+    message: String,
+    answer: Option<&str>,
+) -> NewRun {
+    let mut new = NewRun::new(&asked.dot_id, TriggerKind::Chat);
+    if end.session_id.is_some() {
+        new.parent_run_id = Some(end.id.clone());
+        new.root_run_id = Some(end.root_run_id.clone());
+        new.session_id = end.session_id.clone();
+        new.workspace_path = end.workspace_path.clone();
+        new.branch = end.branch.clone();
+        new.base_commit = end.base_commit.clone();
+    }
+    new.payload = Some(match answer {
+        Some(answer) => json!({ "message": message, "answer": answer }),
+        None => json!({ "message": message }),
+    });
+    new
+}
+
 /// The refusal of a reply to a thread that has not ended, in the words `Runtime::chat` gives.
 pub fn thread_busy(status: RunStatus) -> Error {
     Error::Conflict(
@@ -441,14 +481,7 @@ impl CheckIns {
             return Err(thread_busy(active.status));
         }
         let end = thread.last().unwrap_or(&asked);
-        let mut new = NewRun::new(&asked.dot_id, TriggerKind::Chat);
         let message = if end.session_id.is_some() {
-            new.parent_run_id = Some(end.id.clone());
-            new.root_run_id = Some(end.root_run_id.clone());
-            new.session_id = end.session_id.clone();
-            new.workspace_path = end.workspace_path.clone();
-            new.branch = end.branch.clone();
-            new.base_commit = end.base_commit.clone();
             format!("Answer to your question \"{}\": {text}", question.text)
         } else {
             format!(
@@ -456,8 +489,7 @@ impl CheckIns {
                 question.text
             )
         };
-        // `answer` is what the person typed, which the chat shows in place of the message.
-        new.payload = Some(json!({ "message": message, "answer": text }));
+        let new = continuation(&asked, end, message, Some(text));
         let (answered, run) = self.store.answer_question(id, &new).await?;
         runner.enqueued(&run);
         self.updated(answered);

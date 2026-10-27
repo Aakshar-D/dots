@@ -24,6 +24,10 @@ export const TriggerKind = z.enum([
   "resume",
   // A run a dot scheduled for itself (check-ins spec section 6).
   "follow_up",
+  // A run an app started (app library spec section 7).
+  "app",
+  // A step of a team's workflow (teams spec section 5).
+  "workflow",
   // A run a watcher started: a file, an email or a GitHub event (watchers spec section 5).
   "watcher",
 ]);
@@ -49,7 +53,7 @@ export const Action = z.enum(["allow", "ask", "deny"]);
 export const Preset = z.enum(["read-only", "sandboxed", "trusted", "custom"]);
 export const FileStatus = z.enum(["added", "modified", "deleted", "renamed"]);
 export const ScheduleStatus = z.enum(["active", "completed", "expired"]);
-export const LibraryKind = z.enum(["mcp_server", "skill", "plugin", "context"]);
+export const LibraryKind = z.enum(["mcp_server", "skill", "plugin", "context", "app"]);
 // Where an MCP server's tool list stands: accepted, changed since, last check failed, or never
 // accepted.
 export const CatalogStatus = z.enum(["accepted", "changed", "unreachable", "unchecked"]);
@@ -93,6 +97,7 @@ export const Uses = z.strictObject({
   skills: z.array(z.string()),
   plugins: z.array(z.string()),
   context: z.array(z.string()),
+  apps: z.array(z.string()),
 });
 
 const dotSpecShape = {
@@ -158,6 +163,10 @@ const runShape = {
   cost_usd: nullable(z.number()),
   // The person released it from the hold with Run anyway.
   hold_released: z.boolean(),
+  // The workflow step the run works for (teams spec section 4).
+  workflow_step_run_id: nullable(z.string()),
+  // The part of tokens_in read from the prompt cache.
+  tokens_cache_read: z.number().int(),
 };
 export const Run = z.strictObject(runShape);
 
@@ -257,6 +266,8 @@ export const RunEventData = z.discriminatedUnion("kind", [
     kind: z.literal("usage"),
     tokens_in: z.number().int(),
     tokens_out: z.number().int(),
+    // The part of tokens_in read from the prompt cache; absent from older events.
+    cache_read: z.number().int().optional(),
     // Absent from the events of runs that ended before Dots kept a cost.
     cost_usd: nullable(z.number()).optional(),
   }),
@@ -435,6 +446,10 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("dot_seen"), dot_id: z.string() }),
   // A memory of the dot was saved, changed or deleted, by a run or by the person.
   z.strictObject({ type: z.literal("memories_updated"), dot_id: z.string() }),
+  // A call changed the app's data: its screen reads again.
+  z.strictObject({ type: z.literal("app_data_changed"), app: z.string() }),
+  // A dot proposed an app, or the person decided a proposal: the review card reads it again.
+  z.strictObject({ type: z.literal("app_proposal_changed"), id: z.string(), dot_id: z.string() }),
   // A watcher of the dot was added, changed, paused, resumed, deleted or had an event.
   z.strictObject({
     type: z.literal("watcher_updated"),
@@ -601,12 +616,113 @@ export const ContextConfig = z.strictObject({
   // Every dot uses it, ticked or not.
   every_dot: z.boolean(),
 });
+// Where an app came from (app library spec section 8).
+export const AppOrigin = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("bundled"), release: z.string() }),
+  z.strictObject({ kind: z.literal("proposed") }),
+]);
+// An app in the Library (app library spec sections 4 and 6); Dots keeps its code and data.
+export const AppConfig = z.strictObject({
+  title: z.string(),
+  description: z.string(),
+  version: z.number(),
+  // Kept for "Roll back" while the update after it ran no migrations.
+  previous_version: nullable(z.number()),
+  // The highest version Dots has given it; a roll back keeps it (0: the active version).
+  last_version: z.number(),
+  every_dot: z.boolean(),
+  // "Can start dots": off until the person switches it on.
+  can_start_dots: z.boolean(),
+  origin: AppOrigin,
+  // A bundled app the person changed: Dots no longer updates it.
+  changed: z.boolean(),
+});
+// What an app may reach outside its data; v1 has one grant.
+export const Permission = z.enum(["start_dots"]);
+// Who called an app: the person on its screen, a dot in a run, or Dots itself (`on_run_end`).
+export const AppActor = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("person") }),
+  z.strictObject({ kind: z.literal("dot"), id: z.string(), name: z.string(), run_id: z.string() }),
+  z.strictObject({ kind: z.literal("dots") }),
+]);
+// One file of an app: its text when it is UTF-8, else its bytes in base64.
+export const AppFile = z.strictObject({
+  path: z.string(),
+  text: nullable(z.string()),
+  base64: nullable(z.string()),
+});
+// A logged call: every call of a tool that writes, and of `on_run_end`.
+export const AppCall = z.strictObject({
+  id: z.string(),
+  app_id: z.string(),
+  tool: z.string(),
+  actor: AppActor,
+  run_id: nullable(z.string()),
+  input: z.unknown(),
+  // The call's `ctx.now`.
+  now: z.string(),
+  // The ids `ctx.id()` gave.
+  ids: z.array(z.string()),
+  result: z.unknown(),
+  error: nullable(z.string()),
+  changes: z.number(),
+  took_ms: z.number(),
+  at: z.string(),
+});
+export const TestResult = z.strictObject({
+  file: z.string(),
+  // Empty for a file that could not run.
+  name: z.string(),
+  passed: z.boolean(),
+  error: nullable(z.string()),
+});
+export const ProposalStatus = z.enum(["pending", "added", "changes_asked", "discarded"]);
+// What a review card's summary shows.
+export const ProposalSummary = z.strictObject({
+  title: z.string(),
+  description: z.string(),
+  tools: z.array(z.strictObject({ name: z.string(), description: z.string(), writes: z.boolean() })),
+  // Empty for "Nothing".
+  permissions: z.array(Permission),
+  tests: z.strictObject({ results: z.array(TestResult) }),
+  files: z.number(),
+  bytes: z.number(),
+  // The migrations accepting it runs: every one for a new app, the new ones for a change.
+  migrations: z.array(z.string()),
+  // The version a change was checked against; null for a new app.
+  update_from: nullable(z.number()),
+});
+// An app a dot proposed, and what the person decided (app library spec section 6.2).
+export const AppProposal = z.strictObject({
+  id: z.string(),
+  dot_id: z.string(),
+  run_id: z.string(),
+  root_run_id: z.string(),
+  app_name: z.string(),
+  app_id: nullable(z.string()),
+  base_version: nullable(z.number()),
+  note: z.string(),
+  summary: ProposalSummary,
+  status: ProposalStatus,
+  answer: nullable(z.string()),
+  answer_run_id: nullable(z.string()),
+  created_at: z.string(),
+  decided_at: nullable(z.string()),
+});
+// The person's answer on a review card.
+export const ProposalDecision = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("add") }),
+  z.strictObject({ kind: z.literal("ask_for_changes"), text: z.string() }),
+  z.strictObject({ kind: z.literal("discard") }),
+]);
+
 // An item's config with its kind: what `library_add` and `library_update` take.
 export const LibraryConfig = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("mcp_server"), config: McpServerConfig }),
   z.strictObject({ kind: z.literal("skill"), config: SkillConfig }),
   z.strictObject({ kind: z.literal("plugin"), config: PluginConfig }),
   z.strictObject({ kind: z.literal("context"), config: ContextConfig }),
+  z.strictObject({ kind: z.literal("app"), config: AppConfig }),
 ]);
 const libraryItemShape = {
   id: z.string(),
@@ -640,6 +756,12 @@ const libraryItemOf = <E extends z.ZodRawShape>(extra: E) =>
     z.strictObject({
       kind: z.literal("context"),
       config: ContextConfig,
+      ...libraryItemShape,
+      ...extra,
+    }),
+    z.strictObject({
+      kind: z.literal("app"),
+      config: AppConfig,
       ...libraryItemShape,
       ...extra,
     }),
@@ -995,12 +1117,27 @@ export type SkillConfig = z.infer<typeof SkillConfig>;
 export type PluginConfig = z.infer<typeof PluginConfig>;
 export type LibraryConfig = z.infer<typeof LibraryConfig>;
 export type LibraryItem = z.infer<typeof LibraryItem>;
+// An installed app as the Apps screen lists it.
+export const AppRow = z.strictObject({
+  item: LibraryItem,
+  // The names of the dots that use it.
+  dots: z.array(z.string()),
+  // Why its code cannot be read: it is left out of runs until it can.
+  error: nullable(z.string()),
+});
+export type AppRow = z.infer<typeof AppRow>;
+export type AppFile = z.infer<typeof AppFile>;
+export type AppCall = z.infer<typeof AppCall>;
+export type AppProposal = z.infer<typeof AppProposal>;
+export type ProposalDecision = z.infer<typeof ProposalDecision>;
 export type McpTool = z.infer<typeof McpTool>;
 export type McpCatalog = z.infer<typeof McpCatalog>;
 export type SkillDetail = z.infer<typeof SkillDetail>;
 export type PluginDetail = z.infer<typeof PluginDetail>;
 export type LibraryEntry = z.infer<typeof LibraryEntry>;
 export type ContextConfig = z.infer<typeof ContextConfig>;
+export type AppConfig = z.infer<typeof AppConfig>;
+export type AppOrigin = z.infer<typeof AppOrigin>;
 export type ContextDocuments = z.infer<typeof ContextDocuments>;
 export type McpProbe = z.infer<typeof McpProbe>;
 export type ScannedSkill = z.infer<typeof ScannedSkill>;

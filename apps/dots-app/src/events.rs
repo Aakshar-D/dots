@@ -392,6 +392,8 @@ mod tests {
             retry_of: None,
             cost_usd: None,
             hold_released: false,
+            workflow_step_run_id: None,
+            tokens_cache_read: 0,
         }
     }
 

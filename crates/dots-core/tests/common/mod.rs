@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+pub mod apps;
 pub mod clock;
 pub mod edge_pipe;
 pub mod fake_browser;
@@ -103,6 +104,8 @@ pub fn fake_run(trigger: TriggerKind, payload: Option<Value>, session_id: Option
         retry_of: None,
         cost_usd: None,
         hold_released: false,
+        workflow_step_run_id: None,
+        tokens_cache_read: 0,
     }
 }
 

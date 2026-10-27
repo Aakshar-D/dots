@@ -279,6 +279,36 @@ export const commands = {
   memoryUpdate: (id: string, text: string | null, pinned: boolean | null) =>
     call(T.Memory, "memory_update", { id, text, pinned }),
   memoryDelete: (id: string) => call(nothing, "memory_delete", { id }),
+
+  /// The installed apps, with the dots that use each and the error that keeps one out of runs.
+  appsList: () => call(T.AppRow.array(), "apps_list"),
+  /// A call from the app's screen, as the person. Rejects with kind `invalid` and the rule the
+  /// call broke (an unlisted tool, a bad input, the code's error).
+  appCall: (name: string, tool: string, input: unknown) =>
+    call(z.unknown(), "app_call", { name, tool, input }),
+  /// The active version's files.
+  appFiles: (name: string) => call(T.AppFile.array(), "app_files", { name }),
+  /// The newest logged calls (at most 500), newest first.
+  appCalls: (name: string, limit: number) => call(T.AppCall.array(), "app_calls", { name, limit }),
+  appSetEveryDot: (name: string, on: boolean) =>
+    call(T.LibraryItem, "app_set_every_dot", { name, on }),
+  /// "Can start dots"; rejects for an app that does not ask for it.
+  appSetCanStartDots: (name: string, on: boolean) =>
+    call(T.LibraryItem, "app_set_can_start_dots", { name, on }),
+  appRollBack: (name: string) => call(T.LibraryItem, "app_roll_back", { name }),
+  /// `confirm` is the person's yes to "dots use it"; `deleteData` also deletes its data.
+  appRemove: (name: string, confirm: boolean, deleteData: boolean) =>
+    call(nothing, "app_remove", { name, confirm, deleteData }),
+  /// The apps dots proposed, of one dot or of all (null), newest first.
+  appProposalsList: (dotId: string | null) =>
+    call(T.AppProposal.array(), "app_proposals_list", { dotId }),
+  /// A waiting proposal's files; rejects with kind `not_found` once it is decided.
+  appProposalFiles: (id: string) => call(T.AppFile.array(), "app_proposal_files", { id }),
+  /// The person's answer on the card. Rejects with kind `conflict` when it was decided already
+  /// or its app moved on, and while the dot's thread is still working.
+  appProposalDecide: (id: string, decision: T.ProposalDecision) =>
+    call(T.AppProposal, "app_proposal_decide", { id, decision }),
+
   watchersList: (dotId: string) => call(T.Watcher.array(), "watchers_list", { dotId }),
   watcherAdd: (dotId: string, name: string, config: T.WatcherConfig) =>
     call(T.Watcher, "watcher_add", { dotId, name, config }),

@@ -3,6 +3,7 @@ use std::path::Path;
 use chrono::{DateTime, Local};
 use serde_json::Value;
 
+use crate::apps::RunApps;
 use crate::context::{self, Collection};
 use crate::memory;
 use crate::model::{Dot, EngineKind, Memory, Run, TriggerKind};
@@ -17,6 +18,15 @@ pub fn context_tool_name(engine: EngineKind) -> &'static str {
     }
 }
 
+/// What a run's prompt names beyond the dot and the run: its context collections, the dot's
+/// memories and the run's apps.
+#[derive(Default, Clone, Copy)]
+pub struct PromptParts<'a> {
+    pub contexts: &'a [Collection],
+    pub memories: &'a [Memory],
+    pub apps: Option<&'a RunApps>,
+}
+
 /// The prompt of `run` for a dot without memories (`build_prompt_with_memories`).
 pub fn build_prompt(
     dot: &Dot,
@@ -29,12 +39,7 @@ pub fn build_prompt(
     build_prompt_with_memories(dot, run, workspace, now, global, contexts, &[])
 }
 
-/// The prompt of `run`. A thread's first prompt starts with `global` (the global instructions of
-/// Settings) when it is not blank and the dot uses it, has the dot's `memories` after its
-/// instructions (`memory::prompt_section`, dot memory spec section 3) unless its policy denies
-/// `Memory` (the person turned memory off), and ends with the run's
-/// context collections; resumes, chat follow-ups and follow-up runs that resume a session send
-/// only their message.
+/// The prompt of `run` for a dot without apps (`build_prompt_full`).
 pub fn build_prompt_with_memories(
     dot: &Dot,
     run: &Run,
@@ -44,6 +49,33 @@ pub fn build_prompt_with_memories(
     contexts: &[Collection],
     memories: &[Memory],
 ) -> String {
+    let parts = PromptParts {
+        contexts,
+        memories,
+        apps: None,
+    };
+    build_prompt_full(dot, run, workspace, now, global, parts)
+}
+
+/// The prompt of `run`. A thread's first prompt starts with `global` (the global instructions of
+/// Settings) when it is not blank and the dot uses it, has the dot's memories after its
+/// instructions (`memory::prompt_section`, dot memory spec section 3) unless its policy denies
+/// `Memory` (the person turned memory off), names the run's apps (app library spec section 6)
+/// and ends with the run's context collections; resumes, chat follow-ups and follow-up runs
+/// that resume a session send only their message.
+pub fn build_prompt_full(
+    dot: &Dot,
+    run: &Run,
+    workspace: &Path,
+    now: DateTime<Local>,
+    global: &str,
+    parts: PromptParts<'_>,
+) -> String {
+    let PromptParts {
+        contexts,
+        memories,
+        apps,
+    } = parts;
     let message = run
         .payload
         .as_ref()
@@ -52,7 +84,9 @@ pub fn build_prompt_with_memories(
         .unwrap_or_default();
     match run.trigger {
         TriggerKind::Resume => return message.to_string(),
-        TriggerKind::Chat | TriggerKind::FollowUp if run.session_id.is_some() => {
+        TriggerKind::Chat | TriggerKind::FollowUp | TriggerKind::Workflow
+            if run.session_id.is_some() =>
+        {
             return message.to_string()
         }
         _ => {}
@@ -80,6 +114,28 @@ pub fn build_prompt_with_memories(
     if run.trigger == TriggerKind::Chat {
         out.push_str("## Message from the user\n\n");
         out.push_str(message);
+        out.push_str("\n\n");
+    } else if run.trigger == TriggerKind::App {
+        // A run an app started (app library spec section 7): the app's message, by its title.
+        let app = run
+            .payload
+            .as_ref()
+            .and_then(|p| p.get("app_title"))
+            .and_then(Value::as_str)
+            .unwrap_or("an app");
+        out.push_str(&format!("## Message from the app {app}\n\n"));
+        // Quoted: the text an app builds (from task titles a dot may have written) cannot open
+        // a section of its own, such as "## Message from the user".
+        for line in message.lines() {
+            out.push_str("> ");
+            out.push_str(line);
+            out.push('\n');
+        }
+        out.push('\n');
+    } else if let Some(section) = workflow_section(run) {
+        // A workflow step (teams spec section 5.2): the workflow, the task and the hand-offs,
+        // written by the workflow run.
+        out.push_str(section.trim());
         out.push_str("\n\n");
     } else if run.trigger == TriggerKind::FollowUp {
         // A follow-up whose thread could not be resumed (check-ins spec section 6).
@@ -123,6 +179,10 @@ pub fn build_prompt_with_memories(
         out.push('\n');
         out.push_str(crate::browser::PROMPT);
     }
+    if let Some(apps) = apps {
+        out.push_str("\n## Apps\n\n");
+        out.push_str(&apps.prompt_section(dot.spec.engine));
+    }
     let section = context::prompt_section(contexts, context_tool_name(dot.spec.engine));
     if !section.is_empty() {
         out.push_str("\n## Shared context\n\n");
@@ -130,4 +190,16 @@ pub fn build_prompt_with_memories(
         out.push('\n');
     }
     out
+}
+
+/// The `## Workflow` section a workflow run wrote into the payload of a step's run.
+fn workflow_section(run: &Run) -> Option<&str> {
+    if run.trigger != TriggerKind::Workflow {
+        return None;
+    }
+    run.payload
+        .as_ref()?
+        .pointer("/workflow/section")?
+        .as_str()
+        .filter(|s| !s.trim().is_empty())
 }

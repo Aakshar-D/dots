@@ -37,6 +37,8 @@ const TRIGGER: Record<Run["trigger"], string> = {
   chat: "Chat message",
   resume: "Continued after approval",
   follow_up: "Follow-up the dot scheduled",
+  app: "Started by an app",
+  workflow: "Workflow step",
   watcher: "Watcher run",
 };
 

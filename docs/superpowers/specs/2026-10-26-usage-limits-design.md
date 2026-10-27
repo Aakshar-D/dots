@@ -89,7 +89,7 @@ A background run that started under the share but ends because the CLI reported 
 
 ## 7. Storage
 
-Migration `0015_usage.sql`. On master, 0013 is orgs and 0014 watchers; the other developer's open PRs #22 (teams) and #24 (apps) each claim 0013 and will renumber when they merge. If one merges first and takes 0015, this one moves to the next free number.
+Migration `0015_usage.sql`. On master, 0013 is orgs and 0014 watchers; the other developer's open PRs #22 (teams) and #24 (apps) each claim 0013 and will renumber when they merge. If one merges first and takes 0015, this one moves to the next free number. As built: #22 took 0015 (teams) and #24 0016 (apps) first, so this phase ships `0017_usage.sql`.
 
 - Table `claude_limits`: `window` (primary key, the CLI's name), `utilization` (real), `resets_at`, `status`, `read_at` (ISO-8601 UTC, `util::now()`).
 - `runs`: `cost_usd REAL` (nullable), `hold_released INTEGER NOT NULL DEFAULT 0`.

@@ -11,7 +11,7 @@ import { backend } from "@/test/backend";
 import { sample } from "@/test/fixtures";
 
 type Grants = Record<string, string[]>;
-const none: Uses = { mcp_servers: [], skills: [], plugins: [], context: [] };
+const none: Uses = { mcp_servers: [], skills: [], plugins: [], context: [], apps: [] };
 const both: Uses = { ...none, mcp_servers: ["github"], plugins: ["pdf-tools"] };
 const token = {
   name: "GITHUB_TOKEN",

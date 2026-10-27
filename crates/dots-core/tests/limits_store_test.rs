@@ -45,10 +45,13 @@ async fn cost_adds_up_and_stays_null_without_one() {
         .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
         .await
         .unwrap();
-    store.add_usage(&run.id, 10, 2, None).await.unwrap();
+    store.add_usage(&run.id, 10, 2, 0, None).await.unwrap();
     assert_eq!(store.get_run(&run.id).await.unwrap().cost_usd, None);
-    store.add_usage(&run.id, 10, 2, Some(0.5)).await.unwrap();
-    store.add_usage(&run.id, 10, 2, Some(0.25)).await.unwrap();
+    store.add_usage(&run.id, 10, 2, 0, Some(0.5)).await.unwrap();
+    store
+        .add_usage(&run.id, 10, 2, 0, Some(0.25))
+        .await
+        .unwrap();
     let run = store.get_run(&run.id).await.unwrap();
     assert_eq!(run.cost_usd, Some(0.75));
     assert_eq!((run.tokens_in, run.tokens_out), (30, 6));

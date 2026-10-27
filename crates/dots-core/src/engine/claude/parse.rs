@@ -204,6 +204,7 @@ fn result_events(v: &Value) -> Vec<EngineEvent> {
             + n("cache_read_input_tokens"),
         tokens_out: n("output_tokens"),
         cost_usd: v.get("total_cost_usd").and_then(Value::as_f64),
+        cache_read: n("cache_read_input_tokens"),
     }];
     let subtype = v
         .get("subtype")

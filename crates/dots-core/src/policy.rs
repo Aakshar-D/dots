@@ -70,9 +70,28 @@ pub const CHECK_IN_TOOLS: [&str; 3] = ["Notify", "Ask", "FollowUp"];
 /// refused.
 pub const MEMORY_TOOL: &str = crate::memory::POLICY_NAME;
 
-/// A tool whose ask rule wins over an allow rule: the check-in tools and `Memory`.
+/// Dots' own app tools by their policy names (app library spec section 6): treated as the
+/// check-in tools are.
+pub const APP_TOOLS: [&str; 2] = [crate::apps::APP_POLICY, crate::apps::PROPOSE_POLICY];
+
+/// The refusal of a rule `ProposeApp(...)`.
+pub const PROPOSE_RULE: &str = "a ProposeApp rule names no argument";
+
+/// Dots' own workflow tools (`start_workflow`) by their one policy name (teams spec section 7):
+/// treated as `Memory` is. A rule names it alone: `Workflow(...)` is refused.
+pub const WORKFLOW_TOOL: &str = crate::team_tools::POLICY_NAME;
+
+/// The refusal of a rule `Workflow(...)`.
+pub const WORKFLOW_RULE: &str =
+    "a Workflow rule takes no argument: the rule Workflow covers every workflow tool";
+
+/// A tool whose ask rule wins over an allow rule: the check-in tools, `Memory`, `Workflow` and
+/// the app tools.
 fn ask_wins(tool: &str) -> bool {
-    CHECK_IN_TOOLS.contains(&tool) || tool == MEMORY_TOOL
+    CHECK_IN_TOOLS.contains(&tool)
+        || tool == MEMORY_TOOL
+        || tool == WORKFLOW_TOOL
+        || APP_TOOLS.contains(&tool)
 }
 
 /// The refusal of a rule `Memory(...)`.
@@ -177,6 +196,15 @@ impl Policy {
         rules.push(Rule::new("Context", Action::Allow));
         rules.extend(CHECK_IN_TOOLS.map(|tool| Rule::new(tool, Action::Allow)));
         rules.push(Rule::new(MEMORY_TOOL, Action::Allow));
+        // And start its team's workflows from a chat, which Sandboxed and Custom ask before
+        // (teams spec section 7, as decided by the person).
+        let workflow = match preset {
+            Preset::Sandboxed | Preset::Custom => Action::Ask,
+            Preset::ReadOnly | Preset::Trusted => Action::Allow,
+        };
+        rules.push(Rule::new(WORKFLOW_TOOL, workflow));
+        // And use its apps and propose new ones: the review card is a proposal's gate.
+        rules.extend(APP_TOOLS.map(|tool| Rule::new(tool, Action::Allow)));
         Policy {
             preset,
             rules,
@@ -254,15 +282,22 @@ impl Policy {
     pub fn cli_lists(&self) -> (Vec<String>, Vec<String>) {
         let dots_only = |tool: &str| {
             let tool = tool.trim();
-            ["Context", "Browser", "BrowserRisky", MEMORY_TOOL]
-                .iter()
-                .chain(CHECK_IN_TOOLS.iter())
-                .any(|name| {
-                    tool == *name
-                        || tool
-                            .strip_prefix(name)
-                            .is_some_and(|rest| rest.starts_with('('))
-                })
+            [
+                "Context",
+                "Browser",
+                "BrowserRisky",
+                MEMORY_TOOL,
+                WORKFLOW_TOOL,
+            ]
+            .iter()
+            .chain(CHECK_IN_TOOLS.iter())
+            .chain(APP_TOOLS.iter())
+            .any(|name| {
+                tool == *name
+                    || tool
+                        .strip_prefix(name)
+                        .is_some_and(|rest| rest.starts_with('('))
+            })
         };
         let pick = |a: Action| -> Vec<String> {
             self.rules
@@ -293,6 +328,15 @@ impl Policy {
             if let Pattern::WithSpec { tool, spec } = pattern {
                 if tool == MEMORY_TOOL {
                     return Err(invalid(MEMORY_RULE));
+                }
+                if tool == crate::apps::PROPOSE_POLICY {
+                    return Err(invalid(PROPOSE_RULE));
+                }
+                if tool == crate::apps::APP_POLICY {
+                    crate::apps::check_rule_spec(spec).map_err(|e| invalid(&e))?;
+                }
+                if tool == WORKFLOW_TOOL {
+                    return Err(invalid(WORKFLOW_RULE));
                 }
                 if matches!(tool, "Browser" | "BrowserRisky") {
                     crate::browser::sites::check_site(spec).map_err(|e| invalid(&e))?;
@@ -879,6 +923,10 @@ fn pattern_matches(
                 spec.trim_start().strip_prefix("domain:"),
             ) {
                 webfetch_domain_matches(domain, input, action)
+            } else if name == crate::apps::APP_POLICY {
+                // The argument names an app, a tool or the writing tools. The CLI never sees
+                // `App` rules: a call without an `app` matches deny and ask rules only.
+                crate::apps::rule_spec_matches(spec, input).unwrap_or(action != Action::Allow)
             } else if name == "Context" {
                 // The argument names a collection. The CLI never sees `Context` rules, so this
                 // is the only check: a call without a `collection` matches deny and ask rules.

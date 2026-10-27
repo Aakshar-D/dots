@@ -9,8 +9,8 @@ use dots_core::engine::EngineEvent;
 use dots_core::events::RuntimeEvent;
 use dots_core::kit::InstalledPlugin;
 use dots_core::library::{
-    CatalogStatus, ContextConfig, LibraryConfig, LibraryItem, LibraryKind, McpCatalog,
-    McpServerConfig, PluginConfig, SkillConfig, Uses,
+    AppConfig, AppOrigin, CatalogStatus, ContextConfig, LibraryConfig, LibraryItem, LibraryKind,
+    McpCatalog, McpServerConfig, PluginConfig, SkillConfig, Uses,
 };
 use dots_core::library_service::{
     ContextDetail, ContextDocuments, EnvVariable, LibraryEntry, McpProbe, PluginDetail,
@@ -53,6 +53,7 @@ fn spec() -> DotSpec {
         skills: vec!["pdf".into()],
         plugins: vec!["pdf-tools".into()],
         context: vec!["company".into()],
+        apps: vec!["projects".into()],
     };
     s
 }
@@ -121,6 +122,22 @@ fn context_config() -> LibraryConfig {
     })
 }
 
+fn app_config() -> LibraryConfig {
+    LibraryConfig::App(AppConfig {
+        title: "Projects".into(),
+        description: "Projects, tasks and to-dos, shared by you and your dots".into(),
+        version: 3,
+        previous_version: Some(2),
+        last_version: 4,
+        every_dot: true,
+        can_start_dots: true,
+        origin: AppOrigin::Bundled {
+            release: "0.4.0".into(),
+        },
+        changed: false,
+    })
+}
+
 /// A config of every kind and transport, as `library_add` takes them.
 fn library_configs() -> Vec<LibraryConfig> {
     vec![
@@ -129,6 +146,15 @@ fn library_configs() -> Vec<LibraryConfig> {
         skill_config(),
         plugin_config(),
         context_config(),
+        app_config(),
+        LibraryConfig::App(AppConfig {
+            origin: AppOrigin::Proposed,
+            previous_version: None,
+            ..match app_config() {
+                LibraryConfig::App(c) => c,
+                _ => unreachable!(),
+            }
+        }),
     ]
 }
 
@@ -201,6 +227,7 @@ fn library_entries() -> Vec<LibraryEntry> {
     let skill = library_item("01J0SKL", "pdf", skill_config());
     let plugin = library_item("01J0PLG", "pdf-tools", plugin_config());
     let company = library_item("01J0CTX", "company", context_config());
+    let projects = library_item("01J0APP", "projects", app_config());
     vec![
         LibraryEntry {
             catalog: Some(catalog(CatalogStatus::Changed)),
@@ -271,8 +298,9 @@ fn library_entries() -> Vec<LibraryEntry> {
                 documents: 42,
                 complete: true,
             }),
-            ..bare(company, users)
+            ..bare(company, users.clone())
         },
+        bare(projects, users),
     ]
 }
 
@@ -470,6 +498,8 @@ fn run() -> Run {
         retry_of: None,
         cost_usd: Some(1.32),
         hold_released: false,
+        workflow_step_run_id: None,
+        tokens_cache_read: 0,
     }
 }
 
@@ -668,6 +698,7 @@ fn engine_events() -> Value {
         EngineEvent::Usage {
             tokens_in: 1200,
             tokens_out: 340,
+            cache_read: 900,
             cost_usd: Some(1.32),
         },
         EngineEvent::Limits {
@@ -1014,6 +1045,13 @@ pub fn samples() -> Value {
             to(RuntimeEvent::MemoriesUpdated {
                 dot_id: "01J0DOT".into(),
             }),
+            to(RuntimeEvent::AppDataChanged {
+                app: "projects".into(),
+            }),
+            to(RuntimeEvent::AppProposalChanged {
+                id: "01J0PROPOSAL".into(),
+                dot_id: "01J0DOT".into(),
+            }),
             to(RuntimeEvent::WatcherUpdated {
                 dot_id: "01J0DOT".into(),
                 watcher_id: "01J0WAT1".into(),
@@ -1140,6 +1178,7 @@ pub fn samples() -> Value {
         },
     ]);
     samples["Enums"]["EntryKind"] = to(EntryKind::ALL);
+    apps_samples(&mut samples);
     samples["DraftSummary"] = to(DraftSummary {
         name: "pr-tests".into(),
         description: "Checks a PR for missing tests.".into(),
@@ -1173,6 +1212,127 @@ pub fn samples() -> Value {
     samples["Enums"]["ValueSource"] = to(ValueSource::ALL);
     samples["Enums"]["PersonalMode"] = to(PersonalMode::ALL);
     samples
+}
+
+/// The apps' samples (app library spec): a row of the Apps screen, files, a logged call of each
+/// actor, and a proposal of each status.
+fn apps_samples(samples: &mut Value) {
+    use dots_core::apps::call::Actor;
+    use dots_core::apps::manifest::Permission;
+    use dots_core::apps::propose::{AppProposal, ProposalStatus, ProposalSummary, ToolSummary};
+    use dots_core::apps::screen::{AppFile, AppRow};
+    use dots_core::apps::tests::{TestReport, TestResult};
+    use dots_core::apps::AppCall;
+
+    samples["AppRow"] = to([
+        AppRow {
+            item: library_item("01J0APP", "projects", app_config()),
+            dots: vec!["builder".into(), "nightly-tests".into()],
+            error: None,
+        },
+        AppRow {
+            item: library_item("01J0APP2", "expenses", app_config()),
+            dots: vec![],
+            error: Some("invalid input: app.json: EOF while parsing an object".into()),
+        },
+    ]);
+    samples["AppFile"] = to([
+        AppFile {
+            path: "app.json".into(),
+            text: Some("{}".into()),
+            base64: None,
+        },
+        AppFile {
+            path: "ui/logo.png".into(),
+            text: None,
+            base64: Some("iVBORw0KGgo=".into()),
+        },
+    ]);
+    let call = |actor: Actor, error: Option<&str>| AppCall {
+        id: "01J0CALL".into(),
+        app_id: "01J0APP".into(),
+        tool: "update_task".into(),
+        run_id: match &actor {
+            Actor::Dot { run_id, .. } => Some(run_id.clone()),
+            _ => None,
+        },
+        actor,
+        input: json!({"id": "t1", "status": "in_review"}),
+        now: "2026-10-23T09:12:00+05:30".into(),
+        ids: vec!["01J0ID".into()],
+        result: error.is_none().then(|| json!({"ok": true})),
+        error: error.map(str::to_string),
+        changes: if error.is_none() { 1 } else { 0 },
+        took_ms: 3,
+        at: TS.into(),
+    };
+    samples["AppCall"] = to([
+        call(Actor::Person, None),
+        call(
+            Actor::Dot {
+                id: "01J0DOT".into(),
+                name: "builder".into(),
+                run_id: "01J0RUN".into(),
+            },
+            Some("input.status must be one of todo, in_progress, in_review"),
+        ),
+        call(Actor::Dots, None),
+    ]);
+    let summary = ProposalSummary {
+        title: "Expenses".into(),
+        description: "Logs expenses and totals them by month".into(),
+        tools: vec![ToolSummary {
+            name: "add_expense".into(),
+            description: "Log an expense".into(),
+            writes: true,
+        }],
+        permissions: vec![Permission::StartDots],
+        tests: TestReport {
+            results: vec![TestResult {
+                file: "tests/expenses.test.js".into(),
+                name: "a month's total adds its expenses".into(),
+                passed: true,
+                error: None,
+            }],
+        },
+        files: 7,
+        bytes: 2_048,
+        migrations: vec!["0001_expenses.sql".into()],
+        update_from: None,
+    };
+    let proposal = |id: &str, status: ProposalStatus| AppProposal {
+        id: id.into(),
+        dot_id: "01J0DOT".into(),
+        run_id: "01J0RUN".into(),
+        root_run_id: "01J0RUN".into(),
+        app_name: "expenses".into(),
+        app_id: None,
+        base_version: None,
+        note: "Tracks expenses by month.".into(),
+        summary: summary.clone(),
+        status,
+        answer: (status == ProposalStatus::ChangesAsked).then(|| "Add a category.".into()),
+        answer_run_id: (status != ProposalStatus::Pending).then(|| "01J0RUN2".into()),
+        created_at: TS.into(),
+        decided_at: (status != ProposalStatus::Pending).then(|| TS.into()),
+    };
+    let mut update = proposal("01J0PROP3", ProposalStatus::Added);
+    update.app_id = Some("01J0APP2".into());
+    update.base_version = Some(1);
+    update.summary.update_from = Some(1);
+    update.summary.migrations = vec!["0002_category.sql".into()];
+    samples["AppProposal"] = to([
+        proposal("01J0PROP", ProposalStatus::Pending),
+        proposal("01J0PROP2", ProposalStatus::ChangesAsked),
+        update,
+        proposal("01J0PROP4", ProposalStatus::Discarded),
+    ]);
+    samples["Enums"]["ProposalStatus"] = to([
+        ProposalStatus::Pending,
+        ProposalStatus::Added,
+        ProposalStatus::ChangesAsked,
+        ProposalStatus::Discarded,
+    ]);
 }
 
 /// What `dot_variables` answers for acme-release, a dot of Acme Engineering (`personal:

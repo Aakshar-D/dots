@@ -96,6 +96,7 @@ fn the_result_line_carries_the_cost() {
         EngineEvent::Usage {
             tokens_in: 3,
             tokens_out: 4,
+            cache_read: 0,
             cost_usd: Some(1.32),
         }
     );
@@ -105,6 +106,7 @@ fn the_result_line_carries_the_cost() {
         EngineEvent::Usage {
             tokens_in: 3,
             tokens_out: 4,
+            cache_read: 0,
             cost_usd: None,
         }
     );

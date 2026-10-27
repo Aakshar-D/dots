@@ -415,6 +415,11 @@ pub(crate) async fn refresh_plugin(
     }))
 }
 
+/// The answer to a Library command about an app: apps arrive through review and change on the
+/// Apps screen (app library spec sections 6.2 and 10).
+pub const APPS_ELSEWHERE: &str =
+    "apps join the Library through review, and change or go on the Apps screen";
+
 pub struct LibraryService {
     store: Store,
     bus: Bus,
@@ -471,6 +476,7 @@ impl LibraryService {
                 LibraryConfig::Plugin(c) => (LibraryKind::Plugin, c.path.clone()),
                 LibraryConfig::McpServer(_) => (LibraryKind::McpServer, String::new()),
                 LibraryConfig::Context(c) => (LibraryKind::Context, c.path.clone()),
+                LibraryConfig::App(_) => (LibraryKind::App, String::new()),
             })
             .collect();
         let skills_dir = self.skills_dir.clone();
@@ -497,7 +503,7 @@ impl LibraryService {
                                 .map(|w| (None, None, Some((w.total, w.complete))))
                                 .map_err(|e| context_problem(&dir, &e)),
                         ),
-                        LibraryKind::McpServer => None,
+                        LibraryKind::McpServer | LibraryKind::App => None,
                     };
                     (read, own)
                 })
@@ -1094,6 +1100,9 @@ impl LibraryService {
     }
 
     fn refuse_owned(&self, item: &LibraryItem, verb: &str) -> Result<()> {
+        if item.kind() == LibraryKind::App {
+            return Err(Error::Invalid(APPS_ELSEWHERE.into()));
+        }
         if item.owner_id.is_some() {
             return Err(Error::Invalid(format!(
                 "the MCP server {:?} comes with a plugin; {verb} the plugin instead",
@@ -1128,6 +1137,7 @@ impl LibraryService {
                 Ok(None)
             }
             LibraryConfig::McpServer(_) => Ok(None),
+            LibraryConfig::App(_) => Err(Error::Invalid(APPS_ELSEWHERE.into())),
         }
     }
 

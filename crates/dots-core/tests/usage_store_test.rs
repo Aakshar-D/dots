@@ -39,7 +39,7 @@ async fn run(
         .await
         .unwrap();
     store
-        .add_usage(&r.id, tokens.0, tokens.1, cost)
+        .add_usage(&r.id, tokens.0, tokens.1, 0, cost)
         .await
         .unwrap();
     r.id

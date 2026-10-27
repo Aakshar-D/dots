@@ -3,7 +3,7 @@
 //! the CLI never sees their rules, and migration 0008 gives them to stored policies that are
 //! not Custom.
 
-use dots_core::policy::{Action, Policy, Preset, Rule, CHECK_IN_TOOLS};
+use dots_core::policy::{Action, Policy, Preset, Rule, APP_TOOLS, CHECK_IN_TOOLS};
 use dots_core::store::Store;
 use serde_json::json;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
@@ -13,14 +13,25 @@ fn every_preset_allows_the_check_in_tools_after_skill_and_context() {
     assert_eq!(CHECK_IN_TOOLS, ["Notify", "Ask", "FollowUp"]);
     for preset in Preset::ALL {
         let p = Policy::preset(*preset);
-        // `Memory` follows them (dot memory spec section 3).
-        let tail: Vec<&str> = p.rules[p.rules.len() - 6..]
+        // `Memory` follows them (dot memory spec section 3), then `Workflow` (teams spec section
+        // 7), then `App` and `ProposeApp` (app library spec section 6).
+        let tail: Vec<&str> = p.rules[p.rules.len() - 9..]
             .iter()
             .map(|r| r.tool.as_str())
             .collect();
         assert_eq!(
             tail,
-            ["Skill", "Context", "Notify", "Ask", "FollowUp", "Memory"],
+            [
+                "Skill",
+                "Context",
+                "Notify",
+                "Ask",
+                "FollowUp",
+                "Memory",
+                "Workflow",
+                "App",
+                "ProposeApp"
+            ],
             "{preset:?}"
         );
         for tool in CHECK_IN_TOOLS {
@@ -86,12 +97,18 @@ async fn migration_0008_lets_every_policy_that_is_not_custom_check_in() {
         .collect::<Vec<_>>()
         .into();
     before.run(&pool).await.unwrap();
-    // A policy as 0007 left it: the preset's rules without the check-in tools and without
-    // `Memory`, which 0012 adds after them.
+    // A policy as 0007 left it: the preset's rules without the check-in tools, without
+    // `Memory`, which 0012 adds after them, without `Workflow`, which 0015 adds after that, and
+    // without `App` and `ProposeApp`, which 0016 adds last.
     let old = |preset: Preset| {
         let mut p = Policy::preset(preset);
-        p.rules
-            .retain(|r| !CHECK_IN_TOOLS.contains(&r.tool.as_str()) && r.tool != "Memory");
+        p.rules.retain(|r| {
+            let tool = r.tool.as_str();
+            !CHECK_IN_TOOLS.contains(&tool)
+                && tool != "Memory"
+                && tool != "Workflow"
+                && !APP_TOOLS.contains(&tool)
+        });
         p
     };
     let mut asks = old(Preset::Trusted);
@@ -132,8 +149,16 @@ async fn migration_0008_lets_every_policy_that_is_not_custom_check_in() {
     want.rules.push(Rule::new("Notify", Action::Allow));
     want.rules.push(Rule::new("FollowUp", Action::Allow));
     want.rules.push(Rule::new("Memory", Action::Allow));
+    want.rules.push(Rule::new("Workflow", Action::Allow));
+    want.rules
+        .extend(APP_TOOLS.map(|tool| Rule::new(tool, Action::Allow)));
     assert_eq!(store.get_dot("D3").await.unwrap().spec.policy, want);
-    // A Custom policy is the person's own: it is left as it was.
+    // A Custom policy is the person's own: no check-in rule is added. 0016 gives it `App` and
+    // `ProposeApp`, as 0007 did `Context`.
+    let mut custom = custom;
+    custom
+        .rules
+        .extend(APP_TOOLS.map(|tool| Rule::new(tool, Action::Allow)));
     assert_eq!(store.get_dot("D4").await.unwrap().spec.policy, custom);
     store.close().await;
     // Opening again adds nothing twice.

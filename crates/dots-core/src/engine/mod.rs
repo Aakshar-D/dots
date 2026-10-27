@@ -38,6 +38,10 @@ pub enum EngineEvent {
     Usage {
         tokens_in: u64,
         tokens_out: u64,
+        /// The part of `tokens_in` read from the prompt cache (teams spec section 9). An event
+        /// recorded before it existed reads as 0.
+        #[serde(default)]
+        cache_read: u64,
         /// What the run so far would cost on the API (the `claude` CLI's `total_cost_usd`);
         /// `None` when the engine gives none (usage and limits spec section 5).
         #[serde(default)]

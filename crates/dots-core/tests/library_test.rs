@@ -254,7 +254,7 @@ fn uses_default_to_nothing() {
     assert!(uses.is_empty());
     assert_eq!(
         serde_json::to_value(&uses).unwrap(),
-        json!({"mcp_servers": [], "skills": [], "plugins": [], "context": []})
+        json!({"mcp_servers": [], "skills": [], "plugins": [], "context": [], "apps": []})
     );
     // A dot stored before collections existed reads with none.
     let old: Uses =

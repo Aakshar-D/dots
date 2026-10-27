@@ -127,6 +127,12 @@ pub struct Runtime {
     /// The dot whose conversation the person has open in the focused window (needs-you spec
     /// section 3).
     viewing: Viewing,
+    /// The installed apps (app library spec).
+    apps: crate::apps::Apps,
+    /// Teams, their projects and workflows (teams spec section 11).
+    teams: crate::teams::Teams,
+    /// The workflow runs and their loop (teams spec sections 5 to 8).
+    workflows: Arc<crate::workflows::Workflows>,
     /// The orgs joined on this PC (env vault spec §6), the vault's, and their timers.
     orgs: Orgs,
     org_timers: OrgTimers,
@@ -223,6 +229,13 @@ impl Runtime {
                 .await?;
         }
 
+        // The installed apps (app library spec), which runs call as their dots and propose.
+        let apps = crate::apps::Apps::new(
+            store.clone(),
+            bus.clone(),
+            cfg.data_dir.join(crate::apps::APPS_DIR),
+        )
+        .with_clock(cfg.clock.clone());
         let mut engines: HashMap<EngineKind, Arc<dyn Engine>> = HashMap::new();
         let claude_program = resolve_claude(cfg.claude_path.as_deref());
         let claude_version = match &claude_program {
@@ -257,7 +270,8 @@ impl Runtime {
                     hub.clone(),
                     cfg.local_retry_delays.clone(),
                 )
-                .with_checkins(checkins.clone()),
+                .with_checkins(checkins.clone())
+                .with_apps(apps.clone()),
             ),
         );
 
@@ -314,6 +328,7 @@ impl Runtime {
         )
         .await?;
         runner.set_limits(limits.clone());
+        runner.set_apps(apps.clone());
         // Decisions parked before a restart (decided, but the resume never happened) are
         // turned into resume runs now; failures are logged and never block startup.
         match store.list_runs_by_status(RunStatus::AwaitingApproval).await {
@@ -348,6 +363,15 @@ impl Runtime {
             );
         }
         runner.spawn_dispatcher(shutdown.clone());
+        // The runs apps start are queued as the runner's, and apps hear when a run of a topic
+        // they started ends (app library spec section 7).
+        let starting = Arc::downgrade(&runner);
+        apps.set_starter(move |run| {
+            if let Some(runner) = starting.upgrade() {
+                runner.enqueued(run);
+            }
+        });
+        crate::apps::wake::spawn_run_ends(apps.clone(), &bus, shutdown.clone());
         let scheduler = Scheduler::new(
             store.clone(),
             runner.clone(),
@@ -373,6 +397,19 @@ impl Runtime {
         follow_ups.set_paused(settings.schedules_paused);
         follow_ups.spawn(runner.clone(), shutdown.clone());
         let viewing = Viewing::default();
+        let teams = crate::teams::Teams::new(store.clone(), bus.clone());
+        // Started after the dispatcher and after interrupted runs were failed, so its first
+        // pass sees each workflow's runs as they are.
+        let workflows = crate::workflows::Workflows::new(
+            store.clone(),
+            bus.clone(),
+            runner.clone(),
+            cfg.clock.clone(),
+        );
+        workflows.spawn(shutdown.clone());
+        // The workflow tools reach the workflow runs through the check-ins (teams spec
+        // section 7).
+        checkins.set_workflows(&workflows);
         watch_viewing(
             store.clone(),
             bus.clone(),
@@ -411,6 +448,9 @@ impl Runtime {
             follow_ups,
             browsers,
             viewing,
+            apps,
+            teams,
+            workflows,
             orgs,
             org_timers,
             limits,
@@ -794,6 +834,11 @@ impl Runtime {
         &self.library
     }
 
+    /// The installed apps (app library spec).
+    pub fn apps(&self) -> &crate::apps::Apps {
+        &self.apps
+    }
+
     /// The personal variables of the Env tab (env vault spec §5).
     pub fn vault(&self) -> &Vault {
         &self.vault
@@ -821,6 +866,16 @@ impl Runtime {
     /// section 10). Answering a question is `reply`.
     pub fn checkins(&self) -> &CheckIns {
         &self.checkins
+    }
+
+    /// Teams, their projects and workflows.
+    pub fn teams(&self) -> &crate::teams::Teams {
+        &self.teams
+    }
+
+    /// The workflow runs: start, approve a check, retry a step, stop.
+    pub fn workflows(&self) -> &Arc<crate::workflows::Workflows> {
+        &self.workflows
     }
 
     /// The follow-ups dots scheduled: what the `follow_up*` commands call.
@@ -915,6 +970,7 @@ impl Runtime {
     /// Deletes the dot; its schedule row goes with it (`ON DELETE CASCADE`).
     pub async fn delete_dot(&self, id: &str) -> Result<()> {
         let had_row = self.store.get_schedule_state(id).await?.is_some();
+        let proposals = self.store.list_app_proposals(Some(id)).await?;
         let watchers: Vec<String> = self
             .store
             .list_watchers(id)
@@ -923,6 +979,10 @@ impl Runtime {
             .map(|w| w.id)
             .collect();
         self.store.delete_dot_if_idle(id).await?;
+        // Its proposals' rows went with it; their files go too (app library spec section 6.2).
+        for p in &proposals {
+            self.apps.drop_proposed(&p.id).await;
+        }
         // Its watchers went with it; what they staged and kept goes too.
         self.watchers.forget(&watchers);
         // It can no longer be viewed (needs-you spec section 7).
@@ -1019,6 +1079,10 @@ impl Runtime {
                         .into(),
                 ));
             };
+            // A step's chat ends with the step (teams spec section 8).
+            if self.store.in_ended_step_thread(parent).await? {
+                return Err(Error::Conflict(crate::workflows::ENDED_STEP_THREAD.into()));
+            }
             if parent.session_id.is_none() {
                 return Err(Error::Conflict(
                     "this chat cannot be continued because its last run ended before the dot \
@@ -1047,6 +1111,83 @@ impl Runtime {
         let run = self.store.get_run(&approval.run_id).await?;
         let workspace = run.workspace_path.as_deref().map(Path::new);
         Ok(allow_candidates(&approval.tool, &approval.input, workspace))
+    }
+
+    /// The person's answer on an app proposal's card (app library spec section 6.2): "Add to
+    /// library" (or "Update") adds the app first, and a failure there leaves the card waiting;
+    /// then the proposal is decided and the dot's thread continues with what the person decided,
+    /// as an answered question does (`CheckIns::reply`). A thread that has not ended is refused,
+    /// as a reply is.
+    pub async fn decide_app_proposal(
+        &self,
+        id: &str,
+        decision: crate::apps::propose::Decision,
+    ) -> Result<(crate::apps::propose::AppProposal, Run)> {
+        use crate::apps::propose::{Decision, ProposalStatus, DECIDED_ALREADY, DISCARDED};
+        let lock = self.follow_ups.thread_lock();
+        let _one_at_a_time = lock.lock().await;
+        let p = self.store.get_app_proposal(id).await?;
+        if p.status != ProposalStatus::Pending {
+            return Err(Error::Conflict(DECIDED_ALREADY.into()));
+        }
+        let asked = self.store.get_run(&p.run_id).await?;
+        let thread = self.store.list_thread(&asked.root_run_id).await?;
+        if let Some(active) = thread.iter().find(|r| !r.status.is_terminal()) {
+            return Err(crate::checkins::thread_busy(active.status));
+        }
+        let end = thread.last().unwrap_or(&asked);
+        let (status, answer, said) = match &decision {
+            Decision::AskForChanges { text } => {
+                let text = text.trim();
+                if text.is_empty() {
+                    return Err(Error::Invalid("say what to change".into()));
+                }
+                if text.chars().count() > crate::apps::propose::MAX_NOTE {
+                    return Err(Error::Invalid(format!(
+                        "say what to change in at most {} characters",
+                        crate::apps::propose::MAX_NOTE
+                    )));
+                }
+                let said = format!(
+                    "The person asked for changes to the app {}: {text}",
+                    p.app_name
+                );
+                (ProposalStatus::ChangesAsked, Some(text.to_string()), said)
+            }
+            Decision::Discard => (ProposalStatus::Discarded, None, DISCARDED.to_string()),
+            Decision::Add => {
+                let item = self.apps.accept(&p).await?;
+                let version = match &item.config {
+                    crate::library::LibraryConfig::App(c) => c.version,
+                    _ => 1,
+                };
+                let said = match p.base_version {
+                    Some(_) => format!(
+                        "The person accepted your change to the app {}; it is now version {version}.",
+                        p.app_name
+                    ),
+                    None => format!("The person added the app {} to the Library.", p.app_name),
+                };
+                (ProposalStatus::Added, None, said)
+            }
+        };
+        let message = if end.session_id.is_some() {
+            said
+        } else {
+            format!(
+                "Earlier you sent the app {} for review: \"{}\"\n{said}",
+                p.app_name, p.note
+            )
+        };
+        let new = crate::checkins::continuation(&asked, end, message, answer.as_deref());
+        let (decided, run) = self
+            .store
+            .decide_app_proposal(id, status, answer.as_deref(), &new)
+            .await?;
+        self.runner.enqueued(&run);
+        self.apps.drop_proposed(id).await;
+        self.apps.proposal_changed(&decided);
+        Ok((decided, run))
     }
 
     /// Decides an approval. With `allow_rule`, an approval also saves that allow rule to the

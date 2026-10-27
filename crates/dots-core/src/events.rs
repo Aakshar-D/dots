@@ -1,7 +1,7 @@
 use serde::Serialize;
 use tokio::sync::broadcast;
 
-use crate::model::{Approval, Message, PausedReason, Run, RunEventRecord};
+use crate::model::{Approval, Message, PausedReason, Run, RunEventRecord, WorkflowRun};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -61,6 +61,31 @@ pub enum RuntimeEvent {
     /// memory spec section 3).
     MemoriesUpdated {
         dot_id: String,
+    },
+    /// A call changed the app's data (app library spec section 5): its screen reads again.
+    AppDataChanged {
+        app: String,
+    },
+    /// A dot proposed an app, or the person decided a proposal (app library spec section 6.2):
+    /// the review card reads it again.
+    AppProposalChanged {
+        id: String,
+        dot_id: String,
+    },
+    /// A team, its members or its projects were made, changed or deleted (teams spec
+    /// section 11).
+    TeamUpdated {
+        team_id: String,
+    },
+    /// A workflow of the team was made, changed or deleted.
+    WorkflowUpdated {
+        team_id: String,
+        workflow_id: String,
+    },
+    /// A workflow run started, moved to another step, waited, or ended (teams spec section
+    /// 11): the run page, the chat card, Needs you and the Inbox read it.
+    WorkflowRunUpdated {
+        run: WorkflowRun,
     },
     /// A watcher of the dot was added, changed, paused, resumed, deleted or had an event
     /// (watchers spec section 7).
