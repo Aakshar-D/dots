@@ -55,6 +55,57 @@ async fn the_rows_name_the_dots_and_the_error_that_keeps_an_app_out() {
 }
 
 #[tokio::test]
+async fn a_dot_whose_rules_deny_the_app_is_not_among_its_users() {
+    let (dir, store) = common::temp_store().await;
+    let apps = Apps::new(store.clone(), Bus::new(16), dir.path().join("apps"));
+    let manifest = common::apps::MANIFEST.replacen(
+        "\"tools\": [",
+        "\"tools\": [\n    { \"name\": \"team\", \"description\": \"The dots\", \
+         \"input\": { \"type\": \"object\" } },",
+        1,
+    );
+    let logic = format!(
+        "{}\nexport function team(input, ctx) {{ return ctx.dots.list().map(d => d.name); }}\n",
+        common::apps::LOGIC
+    );
+    let mut files = common::apps::expenses_with("app.json", Some(&manifest));
+    files.retain(|(path, _)| *path != "logic.js");
+    files.push(("logic.js", logic));
+    let src = tempfile::tempdir().unwrap();
+    write_app(src.path(), &files);
+    apps.install(read_folder(src.path()).unwrap(), AppOrigin::Proposed)
+        .await
+        .unwrap();
+    for (name, rule) in [
+        ("reader", None),
+        ("no_writes", Some("App(expenses.write)")),
+        ("denied", Some("App(expenses)")),
+    ] {
+        let mut s = spec(name);
+        s.uses.apps = vec!["expenses".into()];
+        if let Some(rule) = rule {
+            s.policy.rules.push(dots_core::policy::Rule::new(
+                rule,
+                dots_core::policy::Action::Deny,
+            ));
+        }
+        store.create_dot(&s, None).await.unwrap();
+    }
+    let rows = apps.rows().await.unwrap();
+    let mut dots = rows[0].dots.clone();
+    dots.sort();
+    assert_eq!(dots, ["no_writes", "reader"]);
+    let mut listed: Vec<String> = serde_json::from_value(
+        apps.call("expenses", "team", json!({}), Actor::Person)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    listed.sort();
+    assert_eq!(listed, ["no_writes", "reader"]);
+}
+
+#[tokio::test]
 async fn the_screen_calls_as_the_person_and_only_listed_tools() {
     let (_dir, store, apps) = fixture().await;
     let out = apps

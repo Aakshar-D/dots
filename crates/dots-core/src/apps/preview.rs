@@ -79,10 +79,6 @@ impl Apps {
         if p.status != ProposalStatus::Pending {
             return Err(Error::Conflict(DECIDED_ALREADY.into()));
         }
-        let dots = match (&p.app_id, self.get(&p.app_name).await) {
-            (Some(app_id), Ok((item, _))) if item.id == *app_id => self.listed_dots(&item).await?,
-            _ => Vec::new(),
-        };
         let dir = self.proposed_dir(&p.id);
         let (src, conn) = blocking(move || -> Result<(AppSource, Connection)> {
             let src = source::read_folder(&dir)?;
@@ -94,6 +90,12 @@ impl Apps {
             Ok((src, conn))
         })
         .await??;
+        let dots = match (&p.app_id, self.get(&p.app_name).await) {
+            (Some(app_id), Ok((item, _))) if item.id == *app_id => {
+                self.listed_dots(&item, &src.manifest).await?
+            }
+            _ => Vec::new(),
+        };
         let id = crate::util::new_id();
         self.previews.add(Preview {
             id: id.clone(),

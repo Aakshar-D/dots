@@ -106,17 +106,16 @@ pub fn diff_files(
 
 impl Apps {
     /// Every installed app with the dots that use it and the error that keeps it out of runs.
+    /// A dot whose policy denies every tool of the app does not use it; while the code cannot
+    /// be read, every dot that ticks it is named.
     pub async fn rows(&self) -> Result<Vec<AppRow>> {
         let mut rows = Vec::new();
         for (item, config) in self.list().await? {
-            let dots = self
-                .store
-                .dots_with_app(&item)
-                .await?
-                .into_iter()
-                .map(|d| d.spec.name)
-                .collect();
-            let error = self.load(&item, &config).await.err().map(|e| e.to_string());
+            let (users, error) = match self.load(&item, &config).await {
+                Ok(src) => (self.users(&item, &src.manifest).await?, None),
+                Err(e) => (self.store.dots_with_app(&item).await?, Some(e.to_string())),
+            };
+            let dots = users.into_iter().map(|d| d.spec.name).collect();
             rows.push(AppRow { item, dots, error });
         }
         Ok(rows)

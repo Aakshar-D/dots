@@ -222,7 +222,10 @@ impl Apps {
                  the dot's rules for it as a tool that does not; a new run has the new version"
             ));
         }
-        let dots = self.listed_dots(&item).await.map_err(|e| e.to_string())?;
+        let dots = self
+            .listed_dots(&item, &src.manifest)
+            .await
+            .map_err(|e| e.to_string())?;
         let logged =
             matches!(actor, Actor::Dots) || src.manifest.tool(tool).is_some_and(|t| t.writes);
         let now = self.call_now();
@@ -305,13 +308,32 @@ impl Apps {
         }
     }
 
-    /// What `ctx.dots.list()` gives a call of the app `item`: the dots that use it. A dot the
-    /// person switched off is neither listed nor woken (spec section 7), as a webhook or a
-    /// follow-up does not run it.
-    pub(super) async fn listed_dots(&self, item: &LibraryItem) -> Result<Vec<DotRef>> {
+    /// The dots that use the app `item` whose code is `manifest`: those that tick it (or all,
+    /// for an "Every dot" app) and whose policy leaves them one of its tools.
+    pub(super) async fn users(
+        &self,
+        item: &LibraryItem,
+        manifest: &crate::apps::manifest::Manifest,
+    ) -> Result<Vec<crate::model::Dot>> {
         Ok(self
             .store
             .dots_with_app(item)
+            .await?
+            .into_iter()
+            .filter(|d| !crate::apps::run::offered_tools(d, manifest).is_empty())
+            .collect())
+    }
+
+    /// What `ctx.dots.list()` gives a call of the app `item`: its users. A dot the person
+    /// switched off is neither listed nor woken (spec section 7), as a webhook or a follow-up
+    /// does not run it.
+    pub(super) async fn listed_dots(
+        &self,
+        item: &LibraryItem,
+        manifest: &crate::apps::manifest::Manifest,
+    ) -> Result<Vec<DotRef>> {
+        Ok(self
+            .users(item, manifest)
             .await?
             .into_iter()
             .filter(|d| d.spec.enabled)
