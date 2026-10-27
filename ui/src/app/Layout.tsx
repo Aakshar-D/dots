@@ -1,6 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "cn";
-import { House, Inbox as InboxIcon, Library as LibraryIcon, Settings as SettingsIcon } from "lucide-react";
+import {
+  House,
+  Inbox as InboxIcon,
+  LayoutGrid,
+  Library as LibraryIcon,
+  Settings as SettingsIcon,
+} from "lucide-react";
 import { NavLink, Outlet } from "react-router";
 
 import { commands } from "@/api/commands";
@@ -15,6 +21,7 @@ import { useRuntimeEvents } from "@/lib/runtime-events";
 const LINKS = [
   { to: "/home", label: "Home", icon: House },
   { to: "/inbox", label: "Inbox", icon: InboxIcon },
+  { to: "/apps", label: "Apps", icon: LayoutGrid },
   { to: "/library", label: "Library", icon: LibraryIcon },
   { to: "/settings", label: "Settings", icon: SettingsIcon },
 ];

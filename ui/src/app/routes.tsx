@@ -1,6 +1,8 @@
 import { Navigate, type RouteObject } from "react-router";
 
 import { Root } from "@/app/Root";
+import { AppScreen } from "@/screens/apps/AppScreen";
+import { AppsScreen } from "@/screens/apps/AppsScreen";
 import { DotEditorScreen } from "@/screens/DotEditorScreen";
 import { ChatRedirect } from "@/screens/home/ChatRedirect";
 import { HomeScreen } from "@/screens/home/HomeScreen";
@@ -26,6 +28,8 @@ export const routes: RouteObject[] = [
       { path: "runs/:runId", element: <RunScreen /> },
       { path: "library", element: <LibraryScreen /> },
       { path: "inbox", element: <InboxScreen /> },
+      { path: "apps", element: <AppsScreen /> },
+      { path: "apps/:name", element: <AppScreen /> },
       { path: "chat", element: <Navigate to="/home" replace /> },
       { path: "chat/:dotId", element: <ChatRedirect /> },
       { path: "chat/:dotId/:runId", element: <ChatRedirect /> },

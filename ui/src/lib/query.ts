@@ -64,6 +64,9 @@ export const keys = {
   watchers: (dotId: string) => ["watchers", dotId] as const,
   /// The apps dots proposed, of one dot or of all (null).
   appProposals: (dotId: string | null) => ["app-proposals", dotId] as const,
+  /// The installed apps (the Apps screen), and below them the data removed apps kept.
+  apps: ["apps"] as const,
+  appsKept: ["apps", "kept"] as const,
   limits: ["limits"] as const,
   usage: (period: string) => ["usage", period] as const,
 };

@@ -1,8 +1,18 @@
 import { describe, expect, it } from "vitest";
 
-import { duration, localDateTime, localTime, relativeTime } from "./format";
+import { duration, formatBytes, localDateTime, localTime, relativeTime } from "./format";
 
 const at = (iso: string) => Date.parse(iso);
+
+describe("sizes", () => {
+  it("reads in bytes, kilobytes and megabytes", () => {
+    expect(formatBytes(240)).toBe("240 B");
+    expect(formatBytes(2_458)).toBe("2.4 KB");
+    expect(formatBytes(24_576)).toBe("24 KB");
+    expect(formatBytes(1_572_864)).toBe("1.5 MB");
+    expect(formatBytes(512 * 1024 * 1024)).toBe("512 MB");
+  });
+});
 
 describe("format", () => {
   it("writes a duration in its two largest units", () => {
