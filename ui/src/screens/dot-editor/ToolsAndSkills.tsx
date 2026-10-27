@@ -12,10 +12,12 @@ const GROUPS: { kind: LibraryKind; key: keyof Uses; title: string }[] = [
   { kind: "skill", key: "skills", title: "Skills" },
   { kind: "plugin", key: "plugins", title: "Plugins" },
   { kind: "context", key: "context", title: "Context" },
+  { kind: "app", key: "apps", title: "Apps" },
 ];
 
-/// A context collection every dot reads, ticked or not.
-const everyDot = (entry: LibraryEntry) => entry.kind === "context" && entry.config.every_dot;
+/// A context collection every dot reads, or an app every dot uses, ticked or not.
+const everyDot = (entry: LibraryEntry) =>
+  (entry.kind === "context" || entry.kind === "app") && entry.config.every_dot;
 
 /// The parts of a plugin that a local dot does not use, as a phrase ("1 command, 2 agents and
 /// its hooks"), or null when it has none.
@@ -47,7 +49,11 @@ function Detail({ entry }: { entry: LibraryEntry }) {
             ]
               .filter(Boolean)
               .join(" · ")
-          : null;
+          : entry.kind === "app"
+            ? [entry.config.description, entry.config.every_dot && "every dot"]
+                .filter(Boolean)
+                .join(" · ")
+            : null;
   const status = entry.catalog?.status;
   return (
     <>
@@ -67,9 +73,9 @@ function Detail({ entry }: { entry: LibraryEntry }) {
   );
 }
 
-/// The dot editor's "Tools and skills" section: which Library items the dot uses, as four
+/// The dot editor's "Tools and skills" section: which Library items the dot uses, as five
 /// checklists. A plugin's own MCP servers are not listed: they come with the plugin. A context
-/// collection for every dot shows ticked and cannot be unticked here.
+/// collection or an app for every dot shows ticked and cannot be unticked here.
 export function ToolsAndSkills(props: {
   uses: Uses;
   engine: EngineKind;
@@ -122,9 +128,15 @@ export function ToolsAndSkills(props: {
         return (
           <fieldset key={kind} aria-label={title} className="flex flex-col gap-1.5">
             <legend className="mb-1 text-xs font-medium text-muted-foreground">{title}</legend>
-            {items.length === 0 && stale.length === 0 && (
+            {items.length === 0 && stale.length === 0 && kind !== "app" && (
               <p className="text-xs text-muted-foreground">
                 Nothing here yet. Add some in the <Link to="/library" className="underline">Library</Link>.
+              </p>
+            )}
+            {items.length === 0 && stale.length === 0 && kind === "app" && (
+              <p className="text-xs text-muted-foreground">
+                No apps yet. Ask a dot for one; the apps you add show in{" "}
+                <Link to="/apps" className="underline">Apps</Link>.
               </p>
             )}
             <ul className="flex flex-col gap-1.5">
