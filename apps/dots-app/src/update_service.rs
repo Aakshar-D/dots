@@ -35,7 +35,7 @@ impl Updates {
     /// `error`: what the last start left (`update::take_error`).
     pub fn new(data_dir: PathBuf, error: Option<String>) -> Self {
         Self {
-            state: Mutex::new(UpdateState::new(error)),
+            state: Mutex::new(UpdateState::new(error, Vec::new())),
             downloaded: Mutex::new(None),
             data_dir,
             turn: tokio::sync::Mutex::new(()),
@@ -319,7 +319,9 @@ fn start_install(app: &AppHandle, rt: &Arc<Runtime>) -> bool {
         data_dir: updates.data_dir.clone(),
         downloaded,
     };
-    tauri::async_runtime::spawn(async move { update::install(&steps).await });
+    tauri::async_runtime::spawn(async move {
+        update::install(&steps, update::Purpose::Update, None).await
+    });
     true
 }
 
@@ -355,6 +357,57 @@ impl InstallSteps for AppSteps {
     fn discard_backup(&self, backup: &std::path::Path) {
         if let Err(e) = std::fs::remove_file(backup) {
             tracing::warn!("could not delete the backup {}: {e}", backup.display());
+        }
+    }
+
+    fn record(
+        &self,
+        purpose: update::Purpose,
+        backup: Option<&std::path::Path>,
+    ) -> Result<(), String> {
+        let current = env!("CARGO_PKG_VERSION");
+        let mut record = crate::update_record::read(&self.data_dir);
+        match purpose {
+            update::Purpose::GoBack => {
+                record.pending = false;
+                record.starts = 0;
+                crate::update_record::failed(&mut record, current);
+            }
+            update::Purpose::Repair => {
+                // The earlier update's go-back target stays: going back from a repair goes to
+                // the version before the last update, not to this one.
+                record.installing = Some(current.to_string());
+                record.pending = true;
+                record.starts = 0;
+            }
+            update::Purpose::Update => {
+                record.leaving = Some(current.to_string());
+                record.installing = Some(self.downloaded.update.version.clone());
+                record.backup = backup.map(std::path::Path::to_path_buf);
+                record.pending = true;
+                record.starts = 0;
+                record.by_itself_at = None;
+            }
+        }
+        crate::update_record::write(&self.data_dir, &record)
+    }
+
+    async fn set_aside_database(&self) -> Result<PathBuf, String> {
+        update::set_aside_database(&self.data_dir, env!("CARGO_PKG_VERSION"), Local::now())
+    }
+
+    async fn restore_backup(&self, backup: &std::path::Path) -> Result<(), String> {
+        std::fs::copy(backup, self.data_dir.join("dots.db"))
+            .map(|_| ())
+            .map_err(|e| format!("copying {}: {e}", backup.display()))
+    }
+
+    fn undo_restore(&self, set_aside: &std::path::Path) {
+        if let Err(e) = update::undo_set_aside(&self.data_dir, set_aside) {
+            tracing::error!(
+                "could not put the database back from {}: {e}",
+                set_aside.display()
+            );
         }
     }
 
@@ -420,6 +473,9 @@ mod tests {
                 UpdateNote::Waiting { .. } => "announce waiting",
                 UpdateNote::Installing { .. } => "announce installing",
                 UpdateNote::Failed { .. } => "announce failed",
+                UpdateNote::Unhealthy { .. } => "announce unhealthy",
+                UpdateNote::Withdrawn { .. } => "announce withdrawn",
+                UpdateNote::UpdatedItself { .. } => "announce updated",
             });
         }
         fn start_install(&self) -> bool {
@@ -464,6 +520,7 @@ mod tests {
     fn installing() -> UpdateNote {
         UpdateNote::Installing {
             version: "0.2.0".into(),
+            purpose: update::Purpose::Update,
         }
     }
 
@@ -478,6 +535,7 @@ mod tests {
             UpdateNote::Waiting {
                 version: "0.2.0".into(),
                 waiting_for: names(&["triage"]),
+                purpose: update::Purpose::Update,
             }
         );
         assert_eq!(

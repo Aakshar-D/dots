@@ -781,9 +781,11 @@ fn update_notes() -> Vec<UpdateNote> {
         UpdateNote::Waiting {
             version: "0.2.0".into(),
             waiting_for: vec!["Daily digest".into()],
+            purpose: crate::update::Purpose::Update,
         },
         UpdateNote::Installing {
             version: "0.2.0".into(),
+            purpose: crate::update::Purpose::Update,
         },
         UpdateNote::Failed {
             error: "The backup failed: disk full".into(),
