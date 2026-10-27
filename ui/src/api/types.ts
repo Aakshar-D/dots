@@ -690,11 +690,17 @@ export const KeptOffer = z.strictObject({
   // The new app's migrations that would run on it.
   migrations: z.array(z.string()),
 });
+// A tool of an app, as a review card and the Apps screen list it.
+export const ToolSummary = z.strictObject({
+  name: z.string(),
+  description: z.string(),
+  writes: z.boolean(),
+});
 // What a review card's summary shows.
 export const ProposalSummary = z.strictObject({
   title: z.string(),
   description: z.string(),
-  tools: z.array(z.strictObject({ name: z.string(), description: z.string(), writes: z.boolean() })),
+  tools: z.array(ToolSummary),
   // Empty for "Nothing".
   permissions: z.array(Permission),
   tests: z.strictObject({ results: z.array(TestResult) }),
@@ -1147,8 +1153,21 @@ export const AppRow = z.strictObject({
   dots: z.array(z.string()),
   // Why its code cannot be read: it is left out of runs until it can.
   error: nullable(z.string()),
+  // The tools its screen may call; none while its code cannot be read.
+  tools: z.array(ToolSummary),
+  // What it asks to reach outside its data: "start_dots" for "Can start dots".
+  permissions: z.array(Permission),
 });
 export type AppRow = z.infer<typeof AppRow>;
+// Data a removed app kept (app library spec section 10).
+export const KeptData = z.strictObject({
+  id: z.string(),
+  name: z.string(),
+  title: z.string(),
+  removed_at: z.string(),
+  bytes: z.number(),
+});
+export type KeptData = z.infer<typeof KeptData>;
 export type AppFile = z.infer<typeof AppFile>;
 export type AppCall = z.infer<typeof AppCall>;
 export type AppProposal = z.infer<typeof AppProposal>;

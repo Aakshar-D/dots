@@ -27,6 +27,11 @@ pub struct AppRow {
     pub dots: Vec<String>,
     /// Why its code cannot be read (spec section 11): it is left out of runs until it can.
     pub error: Option<String>,
+    /// The tools its screen may call (spec section 5): those its active version lists; none
+    /// while its code cannot be read.
+    pub tools: Vec<super::propose::ToolSummary>,
+    /// What its active version asks to reach outside its data ("Can start dots").
+    pub permissions: Vec<super::manifest::Permission>,
 }
 
 /// One file of an app: its text when it is UTF-8, else its bytes in base64.
@@ -111,12 +116,28 @@ impl Apps {
     pub async fn rows(&self) -> Result<Vec<AppRow>> {
         let mut rows = Vec::new();
         for (item, config) in self.list().await? {
-            let (users, error) = match self.load(&item, &config).await {
-                Ok(src) => (self.users(&item, &src.manifest).await?, None),
-                Err(e) => (self.store.dots_with_app(&item).await?, Some(e.to_string())),
+            let (users, error, tools, permissions) = match self.load(&item, &config).await {
+                Ok(src) => (
+                    self.users(&item, &src.manifest).await?,
+                    None,
+                    super::propose::tool_summaries(&src.manifest),
+                    src.manifest.permissions.clone(),
+                ),
+                Err(e) => (
+                    self.store.dots_with_app(&item).await?,
+                    Some(e.to_string()),
+                    Vec::new(),
+                    Vec::new(),
+                ),
             };
             let dots = users.into_iter().map(|d| d.spec.name).collect();
-            rows.push(AppRow { item, dots, error });
+            rows.push(AppRow {
+                item,
+                dots,
+                error,
+                tools,
+                permissions,
+            });
         }
         Ok(rows)
     }

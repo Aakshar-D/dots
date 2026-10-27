@@ -1,3 +1,4 @@
+pub mod app_frame;
 pub mod autostart;
 pub mod commands;
 pub mod confirm;
@@ -138,7 +139,13 @@ command_list![
     app_remove,
     app_proposals_list,
     app_proposal_files,
+    app_proposal_diff,
     app_proposal_decide,
+    app_preview_open,
+    app_preview_call,
+    app_preview_close,
+    apps_kept_list,
+    app_kept_delete,
     watchers_list,
     watcher_add,
     watcher_update,
@@ -263,6 +270,14 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // The pages of the apps' screens (app library spec section 5).
+        .register_asynchronous_uri_scheme_protocol(app_frame::SCHEME, |ctx, request, responder| {
+            let app = ctx.app_handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let rt = state::runtime_of(app.try_state::<AppState>().as_deref());
+                responder.respond(app_frame::respond(rt.as_deref(), &request).await);
+            });
+        })
         .setup(move |app| {
             setup(app.handle(), panics_logged)?;
             Ok(())

@@ -38,6 +38,19 @@ async fn the_rows_name_the_dots_and_the_error_that_keeps_an_app_out() {
     assert_eq!(rows[0].item.name, "expenses");
     assert_eq!(rows[0].dots, ["builder"]);
     assert_eq!(rows[0].error, None);
+    let tools: Vec<(&str, bool)> = rows[0]
+        .tools
+        .iter()
+        .map(|t| (t.name.as_str(), t.writes))
+        .collect();
+    assert_eq!(
+        tools,
+        [
+            ("add_expense", true),
+            ("list_expenses", false),
+            ("month_total", false)
+        ]
+    );
 
     // A code folder broken outside Dots shows on the row of a fresh start (spec section 11).
     let (item, config) = apps.get("expenses").await.unwrap();

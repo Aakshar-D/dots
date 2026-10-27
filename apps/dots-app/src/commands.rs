@@ -11,6 +11,7 @@
 //! a native dialog from Rust before it is run or stored (`confirm.rs`). The UI is first-party
 //! code under a `default-src 'self'` policy.
 
+use dots_core::apps::kept::KeptData;
 use dots_core::apps::propose::{AppProposal, Decision};
 use dots_core::apps::screen::{AppFile, AppRow};
 use dots_core::apps::AppCall;
@@ -942,6 +943,54 @@ pub async fn app_proposals_list(
 #[tauri::command]
 pub async fn app_proposal_files(state: State<'_, AppState>, id: String) -> Res<Vec<AppFile>> {
     Ok(state.rt()?.apps().proposal_files(&id).await?)
+}
+
+/// The Code tab's diff: against the active version for a change, every file for a new app.
+#[tauri::command]
+pub async fn app_proposal_diff(state: State<'_, AppState>, id: String) -> Res<WorktreeDiff> {
+    Ok(state.rt()?.apps().proposal_diff(&id).await?)
+}
+
+/// Opens the card's preview: the proposal's code on a database built from its migrations and
+/// `sample.sql` (app library spec section 6.2). Returns the preview's id, which its frame's
+/// address and calls name.
+#[tauri::command]
+pub async fn app_preview_open(state: State<'_, AppState>, id: String) -> Res<String> {
+    Ok(state.rt()?.apps().preview_open(&id).await?)
+}
+
+/// A call from the preview's frame, as the person; no dot can be started from it.
+#[tauri::command]
+pub async fn app_preview_call(
+    state: State<'_, AppState>,
+    preview: String,
+    tool: String,
+    input: serde_json::Value,
+) -> Res<serde_json::Value> {
+    Ok(state
+        .rt()?
+        .apps()
+        .preview_call(&preview, &tool, input)
+        .await?)
+}
+
+/// Closes the preview: its changes are gone.
+#[tauri::command]
+pub async fn app_preview_close(state: State<'_, AppState>, preview: String) -> Res<()> {
+    state.rt()?.apps().preview_close(&preview);
+    Ok(())
+}
+
+/// The data removed apps kept, newest first (app library spec section 10).
+#[tauri::command]
+pub async fn apps_kept_list(state: State<'_, AppState>) -> Res<Vec<KeptData>> {
+    Ok(state.rt()?.apps().kept().await?)
+}
+
+/// Deletes data a removed app kept.
+#[tauri::command]
+pub async fn app_kept_delete(state: State<'_, AppState>, id: String) -> Res<()> {
+    Ok(state.rt()?.apps().delete_kept(&id).await?)
 }
 
 /// The person's answer on the card: add (or update), ask for changes, or discard.

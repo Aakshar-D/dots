@@ -140,6 +140,19 @@ pub struct ToolSummary {
     pub writes: bool,
 }
 
+/// The tools of `manifest` as the card and the Apps screen list them.
+pub fn tool_summaries(manifest: &super::manifest::Manifest) -> Vec<ToolSummary> {
+    manifest
+        .tools
+        .iter()
+        .map(|t| ToolSummary {
+            name: t.name.clone(),
+            description: t.description.clone(),
+            writes: t.writes,
+        })
+        .collect()
+}
+
 /// What the card's summary shows.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProposalSummary {
@@ -317,16 +330,7 @@ impl Apps {
         let summary = ProposalSummary {
             title: src.manifest.title.clone(),
             description: src.manifest.description.clone(),
-            tools: src
-                .manifest
-                .tools
-                .iter()
-                .map(|t| ToolSummary {
-                    name: t.name.clone(),
-                    description: t.description.clone(),
-                    writes: t.writes,
-                })
-                .collect(),
+            tools: tool_summaries(&src.manifest),
             permissions: src.manifest.permissions.clone(),
             tests: report,
             files: files.len(),

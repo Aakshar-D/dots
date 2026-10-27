@@ -1231,13 +1231,35 @@ fn apps_samples(samples: &mut Value) {
             item: library_item("01J0APP", "projects", app_config()),
             dots: vec!["builder".into(), "nightly-tests".into()],
             error: None,
+            tools: vec![
+                ToolSummary {
+                    name: "get_task".into(),
+                    description: "A task with its spec, subtasks and recent activity".into(),
+                    writes: false,
+                },
+                ToolSummary {
+                    name: "update_task".into(),
+                    description: "Change a task".into(),
+                    writes: true,
+                },
+            ],
+            permissions: vec![Permission::StartDots],
         },
         AppRow {
             item: library_item("01J0APP2", "expenses", app_config()),
             dots: vec![],
             error: Some("invalid input: app.json: EOF while parsing an object".into()),
+            tools: vec![],
+            permissions: vec![],
         },
     ]);
+    samples["KeptData"] = to([dots_core::apps::kept::KeptData {
+        id: "01J0APP0".into(),
+        name: "expenses".into(),
+        title: "Expenses".into(),
+        removed_at: TS.into(),
+        bytes: 24_576,
+    }]);
     samples["AppFile"] = to([
         AppFile {
             path: "app.json".into(),

@@ -354,7 +354,22 @@
         "name": "projects",
         "owner_id": null,
         "updated_at": "2026-10-09T12:00:00.000Z"
-      }
+      },
+      "permissions": [
+        "start_dots"
+      ],
+      "tools": [
+        {
+          "description": "A task with its spec, subtasks and recent activity",
+          "name": "get_task",
+          "writes": false
+        },
+        {
+          "description": "Change a task",
+          "name": "update_task",
+          "writes": true
+        }
+      ]
     },
     {
       "dots": [],
@@ -380,7 +395,9 @@
         "name": "expenses",
         "owner_id": null,
         "updated_at": "2026-10-09T12:00:00.000Z"
-      }
+      },
+      "permissions": [],
+      "tools": []
     }
   ],
   "Approval": {
@@ -544,7 +561,13 @@
     "app_remove",
     "app_proposals_list",
     "app_proposal_files",
+    "app_proposal_diff",
     "app_proposal_decide",
+    "app_preview_open",
+    "app_preview_call",
+    "app_preview_close",
+    "apps_kept_list",
+    "app_kept_delete",
     "watchers_list",
     "watcher_add",
     "watcher_update",
@@ -1518,6 +1541,15 @@
       "org_id": "acme-eng",
       "source_changed": true,
       "source_kind": "openbao"
+    }
+  ],
+  "KeptData": [
+    {
+      "bytes": 24576,
+      "id": "01J0APP0",
+      "name": "expenses",
+      "removed_at": "2026-10-09T12:00:00.000Z",
+      "title": "Expenses"
     }
   ],
   "LibraryConfig": [
