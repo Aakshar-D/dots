@@ -9,7 +9,7 @@
 //       Writes the updater manifest (latest.json) for the NSIS installer <installer>, whose
 //       signature is <installer>.sig, to <out>.
 
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -71,11 +71,12 @@ export function checkTag(root, tag) {
   return { version, prerelease: version.includes("-"), errors };
 }
 
-/// The updater manifest for one Windows installer.
-export function manifest({ version, signature, installer, date }) {
+/// The updater manifest for one Windows installer. `notes`: the release's notes
+/// (`release-notes.md`), when the tag has them.
+export function manifest({ version, signature, installer, date, notes }) {
   return {
     version,
-    notes: `Dots ${version}`,
+    notes: notes?.trim() || `Dots ${version}`,
     pub_date: date.toISOString(),
     platforms: {
       [PLATFORM]: {
@@ -86,7 +87,7 @@ export function manifest({ version, signature, installer, date }) {
   };
 }
 
-function main([command, tag, installer, out]) {
+function main([command, tag, installer, out, notesFile]) {
   const root = fileURLToPath(new URL("../..", import.meta.url));
   const checked = tag ? checkTag(root, tag) : { errors: ["no tag given"] };
   if (checked.errors.length > 0) {
@@ -99,11 +100,18 @@ function main([command, tag, installer, out]) {
     if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `${line}\n`);
   } else if (command === "manifest" && installer && out) {
     const signature = readFileSync(`${installer}.sig`, "utf8");
-    const body = manifest({ version: checked.version, signature, installer, date: new Date() });
+    const notes = notesFile && existsSync(notesFile) ? readFileSync(notesFile, "utf8") : undefined;
+    const body = manifest({
+      version: checked.version,
+      signature,
+      installer,
+      date: new Date(),
+      notes,
+    });
     writeFileSync(out, `${JSON.stringify(body, null, 2)}\n`);
     console.log(`release: wrote ${out}`);
   } else {
-    console.error("usage: release.mjs check <tag> | manifest <tag> <installer> <out>");
+    console.error("usage: release.mjs check <tag> | manifest <tag> <installer> <out> [notes-file]");
     process.exit(2);
   }
 }

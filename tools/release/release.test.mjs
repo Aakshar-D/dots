@@ -102,6 +102,18 @@ test("the manifest points the updater at the release's installer and its signatu
   });
 });
 
+test("the manifest carries the notes file when one is given", () => {
+  const base = {
+    version: "0.3.0",
+    signature: "c2ln",
+    installer: "Dots_0.3.0_x64-setup.exe",
+    date: new Date("2026-10-27T09:00:00Z"),
+  };
+  assert.equal(manifest({ ...base, notes: "- New things\n" }).notes, "- New things");
+  assert.equal(manifest(base).notes, "Dots 0.3.0");
+  assert.equal(manifest({ ...base, notes: "  \n" }).notes, "Dots 0.3.0");
+});
+
 test("the script knows itself by any spelling of its path", () => {
   assert.ok(isThisFile(script));
   assert.ok(isThisFile(relative(process.cwd(), script)));
