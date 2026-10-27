@@ -51,9 +51,21 @@
     if (event.data.type !== "dots:connect" || event.ports.length !== 1) return;
     port = event.ports[0];
     port.onmessage = receive;
-    for (const msg of queued.splice(0)) port.postMessage(msg);
+    for (const msg of queued.splice(0)) deliver(msg);
   });
-  const send = (msg) => (port === null ? queued.push(msg) : port.postMessage(msg));
+  // A message the port refuses (one that cannot be cloned) rejects only its own call, so the
+  // calls queued before or after it still go out.
+  const deliver = (msg) => {
+    try {
+      port.postMessage(msg);
+    } catch (error) {
+      const call = waiting.get(msg.id);
+      if (call === undefined) return;
+      waiting.delete(msg.id);
+      call.reject(new Error(String(error)));
+    }
+  };
+  const send = (msg) => (port === null ? queued.push(msg) : deliver(msg));
   const dots = Object.freeze({
     call(tool, input = {}) {
       return new Promise((resolve, reject) => {

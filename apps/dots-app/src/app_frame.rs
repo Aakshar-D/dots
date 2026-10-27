@@ -74,8 +74,18 @@ pub fn parse(path: &str) -> Option<Target> {
         "app" => {
             let mut it = rest.splitn(3, '/');
             let name = it.next()?.to_string();
-            let version: u32 = it.next()?.parse().ok()?;
-            (Some((name, version)), it.next().unwrap_or(""))
+            let digits = it.next()?;
+            // Canonical decimal only: `+3` and `03` would name a second address for version 3.
+            let canonical = !digits.is_empty()
+                && digits.bytes().all(|b| b.is_ascii_digit())
+                && (digits == "0" || !digits.starts_with('0'));
+            if !canonical {
+                return None;
+            }
+            let version: u32 = digits.parse().ok()?;
+            // A page at `/app/<name>/<version>` has no folder of its own: its relative URLs would
+            // resolve past it. So a slash must follow the version, even when nothing comes after.
+            (Some((name, version)), it.next()?)
         }
         "preview" => (None, rest),
         _ => return None,
@@ -91,7 +101,12 @@ pub fn parse(path: &str) -> Option<Target> {
     let mut segments = Vec::new();
     for segment in file.split('/') {
         let segment = decode(segment)?;
-        if segment.is_empty() || segment == "." || segment == ".." || segment.contains('\\') {
+        // A decoded `/` (`%2F`) or NUL (`%00`) names a file the path split did not see.
+        if segment.is_empty()
+            || segment == "."
+            || segment == ".."
+            || segment.contains(['\\', '/', '\0'])
+        {
             return None;
         }
         segments.push(segment);
@@ -174,7 +189,13 @@ pub fn response(target: &Target, found: dots_core::Result<Vec<u8>>) -> Response<
     let bytes = match found {
         Ok(bytes) => bytes,
         Err(Error::NotFound(_)) => return plain(StatusCode::NOT_FOUND, "not found"),
-        Err(e) => return plain(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => {
+            tracing::warn!("app file could not be read: {e}");
+            return plain(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "the file could not be read",
+            );
+        }
     };
     let path = target.path();
     let body = if path == "index.html" {
@@ -187,6 +208,8 @@ pub fn response(target: &Target, found: dots_core::Result<Vec<u8>>) -> Response<
         .header(header::CONTENT_TYPE, content_type(path))
         .header(header::CONTENT_SECURITY_POLICY, csp(&target.base()))
         .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
+        // The frame's origin is opaque, so fonts and module scripts load in CORS mode.
+        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
         .header(header::CACHE_CONTROL, "no-store")
         .header("Referrer-Policy", "no-referrer")
         .body(body)
@@ -234,7 +257,6 @@ mod tests {
             app("expenses", 3, "index.html")
         );
         assert_eq!(parse("/app/expenses/3/"), app("expenses", 3, "index.html"));
-        assert_eq!(parse("/app/expenses/3"), app("expenses", 3, "index.html"));
         assert_eq!(
             parse("/app/expenses/3/img/my%20logo.png"),
             app("expenses", 3, "img/my logo.png")
@@ -250,10 +272,15 @@ mod tests {
             "/",
             "/app/expenses",
             "/app/expenses/x/index.html",
+            "/app/expenses/3",
+            "/app/expenses/+3/index.html",
+            "/app/expenses/03/index.html",
             "/app/expenses/3/../logic.js",
             "/app/expenses/3/%2e%2e/logic.js",
+            "/app/expenses/3/..%2Flogic.js",
             "/app/expenses/3/a//b.js",
             "/app/expenses/3/a%5cb.js",
+            "/app/expenses/3/a%00.js",
             "/app/expenses/3/%zz",
             "/preview/",
             "/other/x",
@@ -312,6 +339,7 @@ mod tests {
             csp(&target.base()).as_str()
         );
         assert_eq!(headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+        assert_eq!(headers[header::ACCESS_CONTROL_ALLOW_ORIGIN], "*");
         assert!(String::from_utf8_lossy(page.body()).contains("window, \"dots\""));
 
         let script = app("expenses", 3, "app.js").unwrap();
@@ -330,6 +358,17 @@ mod tests {
         assert_eq!(missing.status(), StatusCode::NOT_FOUND);
         assert_eq!(content_type("ui/font.WOFF2"), "font/woff2");
         assert_eq!(content_type("data.bin"), "application/octet-stream");
+    }
+
+    #[test]
+    fn a_failed_read_answers_a_fixed_text_and_no_detail() {
+        let target = app("expenses", 3, "app.js").unwrap();
+        let failed = response(
+            &target,
+            Err(Error::Io(std::io::Error::other("C:\\secret\\path"))),
+        );
+        assert_eq!(failed.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(failed.body(), b"the file could not be read");
     }
 
     #[tokio::test]
