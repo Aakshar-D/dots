@@ -1,0 +1,81 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Probe</title>
+<p id="out">Probing…</p>
+<script>
+  // Each probe tries something an app's screen must not reach, and records whether it got
+  // there through the bridge. Only "bridge", "theme", "own_script" and "own_module" should say reached.
+  const out = document.getElementById("out");
+  const record = (probe, reached, detail) =>
+    dots.call("record", { probe, reached, detail: String(detail ?? "").slice(0, 200) });
+  const attempt = async (probe, fn) => {
+    try {
+      await record(probe, true, await fn());
+    } catch (e) {
+      await record(probe, false, (e && e.message) || e);
+    }
+  };
+  const within = (ms, promise) =>
+    Promise.race([promise, new Promise((_, no) => setTimeout(() => no(new Error(`no answer in ${ms} ms`)), ms))]);
+  (async () => {
+    await record("bridge", true, "dots.call answered");
+    await attempt("theme", async () => {
+      await within(3000, new Promise((ok) => {
+        const value = () => getComputedStyle(document.documentElement).getPropertyValue("--dots-primary");
+        if (value()) ok();
+        else dots.onTheme(() => ok());
+      }));
+      return getComputedStyle(document.documentElement).getPropertyValue("--dots-primary");
+    });
+    await attempt("ipc_fetch", async () => {
+      const r = await within(3000, fetch("http://ipc.localhost/apps_list", { method: "POST", body: "{}" }));
+      return `HTTP ${r.status}`;
+    });
+    await attempt("ipc_internals", async () => {
+      const internals = window.__TAURI_INTERNALS__;
+      if (!internals) throw new Error("no __TAURI_INTERNALS__");
+      const answer = await within(3000, internals.invoke("app_set_every_dot", { name: "probe", on: true }));
+      return JSON.stringify(answer).slice(0, 100);
+    });
+    await attempt("network", async () => {
+      const r = await within(5000, fetch("https://example.com/"));
+      return `HTTP ${r.status}`;
+    });
+    await attempt("image", () =>
+      within(5000, new Promise((ok, no) => {
+        const img = new Image();
+        img.onload = () => ok("loaded");
+        img.onerror = () => no(new Error("blocked"));
+        img.src = "https://example.com/favicon.ico";
+      })),
+    );
+    await attempt("parent_dom", async () => String(parent.document.title));
+    await attempt("storage", async () => {
+      localStorage.setItem("probe", "1");
+      return "stored";
+    });
+    const script = (src) =>
+      within(3000, new Promise((ok, no) => {
+        const s = document.createElement("script");
+        s.onload = () => ok("loaded");
+        s.onerror = () => no(new Error("blocked"));
+        s.src = src;
+        document.head.appendChild(s);
+      }));
+    // A file of its own folder loads; a script from anywhere else does not.
+    await attempt("own_script", () => script("own.js"));
+    await attempt("own_module", () =>
+      within(3000, new Promise((ok, no) => {
+        const s = document.createElement("script");
+        s.type = "module";
+        s.onload = () => ok("loaded");
+        s.onerror = () => no(new Error("blocked"));
+        s.src = "own.mjs";
+        document.head.appendChild(s);
+      })),
+    );
+    await attempt("data_script", () => script("data:text/javascript,window.fromData=1"));
+    await record("done", true, "all probes ran");
+    out.textContent = "Done.";
+  })();
+</script>

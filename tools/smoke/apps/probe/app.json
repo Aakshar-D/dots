@@ -1,0 +1,27 @@
+{
+  "name": "probe",
+  "title": "Probe",
+  "description": "Tries to reach what an app's screen must not, for the frame smoke",
+  "tools": [
+    {
+      "name": "record",
+      "description": "Record whether a probe reached what it tried",
+      "input": {
+        "type": "object",
+        "properties": {
+          "probe": { "type": "string", "minLength": 1, "maxLength": 40 },
+          "reached": { "type": "boolean" },
+          "detail": { "type": "string", "maxLength": 200 }
+        },
+        "required": ["probe", "reached"],
+        "additionalProperties": false
+      },
+      "writes": true
+    },
+    {
+      "name": "results",
+      "description": "What each probe reached, by probe",
+      "input": { "type": "object" }
+    }
+  ]
+}
