@@ -3,6 +3,7 @@
 //! ever leaves this module in an error or a log: GitHub's text passes through `scrub`.
 
 pub mod github;
+pub mod keys;
 
 /// `text` with each non-empty secret replaced by `[hidden]`.
 pub fn scrub(text: &str, secrets: &[&str]) -> String {
