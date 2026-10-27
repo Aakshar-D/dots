@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+pub mod apps;
 pub mod clock;
 pub mod edge_pipe;
 pub mod fake_browser;

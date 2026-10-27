@@ -13,7 +13,7 @@ use dots_core::model::{
     Dot, DotSpec, EngineKind, MemberSpec, ProjectSpec, RunStatus, TeamSpec, WaitingOn,
     WorkflowRunStatus, WorkflowSpec, WorkflowTrigger, WorkspaceMode,
 };
-use dots_core::policy::{Action, Policy, Preset, Rule, WORKFLOW_RULE, WORKFLOW_TOOL};
+use dots_core::policy::{Action, Policy, Preset, Rule, APP_TOOLS, WORKFLOW_RULE, WORKFLOW_TOOL};
 use dots_core::store::Store;
 use dots_core::workflow::{Budget, Definition, Step, StepKind, Trigger};
 use dots_core::{Config, Runtime};
@@ -23,15 +23,20 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 use tempfile::TempDir;
 
 #[test]
-fn workflow_is_last_asked_by_sandboxed_and_custom_and_the_cli_never_sees_it() {
+fn workflow_follows_memory_asked_by_sandboxed_and_custom_and_the_cli_never_sees_it() {
     assert_eq!(WORKFLOW_TOOL, "Workflow");
     for preset in Preset::ALL {
         let p = Policy::preset(*preset);
-        let tail: Vec<&str> = p.rules[p.rules.len() - 2..]
+        // The app rules come after it (app library spec section 6).
+        let tail: Vec<&str> = p.rules[p.rules.len() - 4..]
             .iter()
             .map(|r| r.tool.as_str())
             .collect();
-        assert_eq!(tail, ["Memory", "Workflow"], "{preset:?}");
+        assert_eq!(
+            tail,
+            ["Memory", "Workflow", "App", "ProposeApp"],
+            "{preset:?}"
+        );
         let want = match preset {
             Preset::Sandboxed | Preset::Custom => Action::Ask,
             Preset::ReadOnly | Preset::Trusted => Action::Allow,
@@ -54,7 +59,8 @@ fn workflow_is_last_asked_by_sandboxed_and_custom_and_the_cli_never_sees_it() {
 
 /// Migration 0015 on a database Dots left at 0014: every stored policy whose preset is not
 /// Custom gets the `Workflow` rule its preset has (Sandboxed asks, the others allow) unless a
-/// rule names it, after `Memory`.
+/// rule names it, after `Memory`; 0016 then adds `App` and `ProposeApp` (app library spec
+/// section 6), a Custom policy too.
 #[tokio::test]
 async fn migration_0015_gives_every_policy_that_is_not_custom_its_workflow_rule() {
     let dir = tempfile::tempdir().unwrap();
@@ -72,9 +78,16 @@ async fn migration_0015_gives_every_policy_that_is_not_custom_its_workflow_rule(
         .collect::<Vec<_>>()
         .into();
     before.run(&pool).await.unwrap();
+    // A policy as 0014 left it: without `Workflow`, and without the app rules 0016 adds.
     let old = |preset: Preset| {
         let mut p = Policy::preset(preset);
-        p.rules.retain(|r| r.tool != "Workflow");
+        p.rules
+            .retain(|r| r.tool != "Workflow" && !APP_TOOLS.contains(&r.tool.as_str()));
+        p
+    };
+    let with_apps = |mut p: Policy| {
+        p.rules
+            .extend(APP_TOOLS.map(|tool| Rule::new(tool, Action::Allow)));
         p
     };
     let mut denies = old(Preset::Sandboxed);
@@ -104,13 +117,21 @@ async fn migration_0015_gives_every_policy_that_is_not_custom_its_workflow_rule(
     let store = Store::open(&path).await.unwrap();
     let d1 = store.get_dot("D1").await.unwrap().spec.policy;
     assert_eq!(d1, Policy::preset(Preset::Sandboxed));
-    assert_eq!(d1.rules.last(), Some(&Rule::new("Workflow", Action::Ask)));
+    let workflow = d1.rules.iter().position(|r| r.tool == "Workflow").unwrap();
+    assert_eq!(d1.rules[workflow], Rule::new("Workflow", Action::Ask));
+    assert_eq!(d1.rules[workflow - 1].tool, "Memory");
     assert_eq!(
         store.get_dot("D2").await.unwrap().spec.policy,
         Policy::preset(Preset::Trusted)
     );
-    assert_eq!(store.get_dot("D3").await.unwrap().spec.policy, denies);
-    assert_eq!(store.get_dot("D4").await.unwrap().spec.policy, custom);
+    assert_eq!(
+        store.get_dot("D3").await.unwrap().spec.policy,
+        with_apps(denies)
+    );
+    assert_eq!(
+        store.get_dot("D4").await.unwrap().spec.policy,
+        with_apps(custom)
+    );
     store.close().await;
 }
 

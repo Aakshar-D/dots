@@ -12,7 +12,7 @@ import { backend } from "@/test/backend";
 import { sample } from "@/test/fixtures";
 
 const [github, pluginServer, pdf, pdfTools, company] = sample.library;
-const none: Uses = { mcp_servers: [], skills: [], plugins: [], context: [] };
+const none: Uses = { mcp_servers: [], skills: [], plugins: [], context: [], apps: [] };
 
 function setup(opts: { uses?: Uses; engine?: EngineKind; library?: LibraryEntry[] } = {}) {
   backend.on("library_list", () => opts.library ?? sample.library);
@@ -78,6 +78,7 @@ describe("the editor's Tools and skills section", () => {
       skills: [],
       plugins: ["pdf-tools"],
       context: [],
+      apps: [],
     });
   });
 

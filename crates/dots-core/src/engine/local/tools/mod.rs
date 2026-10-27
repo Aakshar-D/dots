@@ -31,7 +31,8 @@ pub const MAX_ENTRIES: usize = 500;
 /// offers it only to a run that has skills. `context` reads the run's context collections in
 /// the same way (`context::run`). The check-in tools tell and ask the person and schedule a
 /// follow-up (`checkins::run`), offered to every run of an engine that has check-ins, as are
-/// the memory tools (`memory::run`), which share one alias.
+/// the memory tools (`memory::run`), which share one alias. `propose_app` hands an app folder in
+/// the workspace to the person (app library spec section 6.2), offered when the engine has apps.
 pub const TOOLS: &[(&str, &str)] = &[
     ("read_file", "Read"),
     ("write_file", "Write"),
@@ -48,6 +49,7 @@ pub const TOOLS: &[(&str, &str)] = &[
     ("remember", "Memory"),
     ("forget", "Memory"),
     ("recall", "Memory"),
+    ("propose_app", "ProposeApp"),
     ("start_workflow", "Workflow"),
 ];
 
@@ -174,6 +176,10 @@ const ARGS: &[(&str, Params)] = &[
     ("remember", &[("text", Str, true)]),
     ("forget", &[("id", Str, true)]),
     ("recall", &[("query", Str, false)]),
+    (
+        "propose_app",
+        &[("path", PathStr, true), ("note", Str, true)],
+    ),
     (
         "start_workflow",
         &[

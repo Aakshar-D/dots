@@ -17,6 +17,7 @@ str_enum!(TriggerKind {
     Chat => "chat",
     Resume => "resume",
     FollowUp => "follow_up",
+    App => "app",
     Workflow => "workflow",
     Watcher => "watcher",
 });
@@ -235,8 +236,8 @@ pub struct Run {
 /// Input for `Store::create_run`. `root_run_id: None` makes the run its own root.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewRun {
-    /// The run's id when the caller made it beforehand (a watcher stages files under it);
-    /// `None`: the store makes one.
+    /// The run's id when the caller made it beforehand: a watcher stages files under it, and an
+    /// app's start returned it already (app library spec section 7). `None`: the store makes one.
     pub id: Option<String>,
     pub dot_id: String,
     pub trigger: TriggerKind,

@@ -11,7 +11,8 @@
 //! with the rule the dot's preset has (Sandboxed asks, ReadOnly and Trusted allow). 0011 and
 //! 0013 (env vault spec §11, §8): `finish_0011` grants each dot the variables of its servers,
 //! and `finish_0013`, once the vault is open, confirms in Personal the origin each http server
-//! whose URL reads a variable reaches now.
+//! whose URL reads a variable reaches now. 0016 (app library spec section 6): `finish_0016` does
+//! what `finish_0012` does for `App` and `ProposeApp` with `upgrade_0016`, Custom policies too.
 
 use std::collections::BTreeMap;
 
@@ -382,24 +383,37 @@ fn with_context(stored: &str) -> Option<String> {
 /// Gives the policy of each dot that migration 0008 listed the check-in tools' rules
 /// (`with_preset_rules`), and drops the list.
 pub(super) async fn finish_0008(pool: &SqlitePool) -> Result<()> {
-    give_preset_rules(pool, "0008", &CHECK_IN_TOOLS).await
+    give_preset_rules(pool, "0008", &CHECK_IN_TOOLS, false).await
 }
 
 /// Gives the policy of each dot that migration 0012 listed the `Memory` rule, and drops
 /// the list.
 pub(super) async fn finish_0012(pool: &SqlitePool) -> Result<()> {
-    give_preset_rules(pool, "0012", &[MEMORY_TOOL]).await
+    give_preset_rules(pool, "0012", &[MEMORY_TOOL], false).await
 }
 
 /// Gives the policy of each dot that migration 0015 listed the `Workflow` rule its preset has
 /// (Sandboxed asks, ReadOnly and Trusted allow), and drops the list (teams spec section 7).
 pub(super) async fn finish_0015(pool: &SqlitePool) -> Result<()> {
-    give_preset_rules(pool, "0015", &[WORKFLOW_TOOL]).await
+    give_preset_rules(pool, "0015", &[WORKFLOW_TOOL], false).await
+}
+
+/// Gives the policy of each dot that migration 0016 listed the `App` and `ProposeApp` allow
+/// rules, a Custom policy included, as 0007 did for `Context` (app library spec section 6), and
+/// drops the list.
+pub(super) async fn finish_0016(pool: &SqlitePool) -> Result<()> {
+    give_preset_rules(pool, "0016", &crate::policy::APP_TOOLS, true).await
 }
 
 /// Gives the policy of each dot listed in `upgrade_<migration>` the rule its preset has for each
-/// of `tools` (`with_preset_rules`), and drops the list, in one transaction.
-async fn give_preset_rules(pool: &SqlitePool, migration: &str, tools: &[&str]) -> Result<()> {
+/// of `tools` (`with_preset_rules`, Custom policies too when `custom_too`), and drops the list,
+/// in one transaction.
+async fn give_preset_rules(
+    pool: &SqlitePool,
+    migration: &str,
+    tools: &[&str],
+    custom_too: bool,
+) -> Result<()> {
     let table = format!("upgrade_{migration}");
     let waiting: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?")
@@ -416,7 +430,7 @@ async fn give_preset_rules(pool: &SqlitePool, migration: &str, tools: &[&str]) -
     .fetch_all(&mut *tx)
     .await?;
     for (dot_id, stored) in rows {
-        let Some(policy) = with_preset_rules(&stored, tools) else {
+        let Some(policy) = with_preset_rules(&stored, tools, custom_too) else {
             tracing::warn!(dot = %dot_id, "migration {migration}: the policy could not be read");
             continue;
         };
@@ -435,14 +449,14 @@ async fn give_preset_rules(pool: &SqlitePool, migration: &str, tools: &[&str]) -
 
 /// The stored policy with, at the end, the rule its preset has for each of `tools` (in that
 /// order) that no rule names (`Notify` or `Notify(...)`); a Custom policy is left as it is, as
-/// the person made it. `None` when the stored JSON is not a policy.
-fn with_preset_rules(stored: &str, tools: &[&str]) -> Option<String> {
+/// the person made it, unless `custom_too`. `None` when the stored JSON is not a policy.
+fn with_preset_rules(stored: &str, tools: &[&str], custom_too: bool) -> Option<String> {
     let mut value: Value = serde_json::from_str(stored).ok()?;
     let custom = value.get("preset").and_then(Value::as_str) == Some(Preset::Custom.as_str());
     let preset = Preset::parse(value.get("preset")?.as_str()?).ok()?;
     let given = Policy::preset(preset);
     let rules = value.get_mut("rules")?.as_array_mut()?;
-    if !custom {
+    if !custom || custom_too {
         for &tool in tools {
             let action = given
                 .rules

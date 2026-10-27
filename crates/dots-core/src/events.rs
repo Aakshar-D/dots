@@ -62,6 +62,16 @@ pub enum RuntimeEvent {
     MemoriesUpdated {
         dot_id: String,
     },
+    /// A call changed the app's data (app library spec section 5): its screen reads again.
+    AppDataChanged {
+        app: String,
+    },
+    /// A dot proposed an app, or the person decided a proposal (app library spec section 6.2):
+    /// the review card reads it again.
+    AppProposalChanged {
+        id: String,
+        dot_id: String,
+    },
     /// A team, its members or its projects were made, changed or deleted (teams spec
     /// section 11).
     TeamUpdated {

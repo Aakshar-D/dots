@@ -85,6 +85,7 @@ const KIND_WORD = {
   skill: "skill",
   plugin: "plugin",
   context: "collection",
+  app: "app",
 } as const;
 
 /// "Remove": asks first and names the dots that use the item, then removes it and takes it out

@@ -94,8 +94,9 @@ impl ToolNames {
     }
 }
 
-/// The arguments of an MCP call: a JSON object, sent as one or as a JSON string.
-fn arguments(raw: &Value) -> Result<Value, String> {
+/// The arguments of an MCP call (or an app call): a JSON object, sent as one or as a JSON
+/// string.
+pub(super) fn arguments(raw: &Value) -> Result<Value, String> {
     match raw {
         Value::Object(_) => Ok(raw.clone()),
         Value::Null => Ok(json!({})),
@@ -161,6 +162,14 @@ impl Session {
         if self.checkins.is_some() {
             out.extend(tools::checkins::schemas());
             out.extend(tools::memory::schemas());
+        }
+        // `propose_app` (app library spec section 6.2), when the engine has apps.
+        if self.apps.is_some() {
+            out.push(super::app_tools::propose_schema());
+        }
+        // The run's app tools (app library spec section 6), by their own names.
+        if let Some(apps) = self.ctx.tools.apps() {
+            out.extend(apps.function_schemas());
         }
         // A chat run of a member that may start a workflow (teams spec section 7).
         if !self.ctx.tools.startable().is_empty() {

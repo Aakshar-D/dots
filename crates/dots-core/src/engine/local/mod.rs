@@ -18,6 +18,7 @@ use self::client::{ChatClient, ToolCallRequest, DEFAULT_RETRY_DELAYS};
 use self::mcp_tools::{ToolNames, CHANGED};
 use self::tools::{PathFilter, PreparedCall, ToolOutput};
 
+mod app_tools;
 pub mod client;
 pub mod history;
 pub mod mcp_tools;
@@ -114,6 +115,8 @@ pub struct LocalEngine {
     client: ChatClient,
     /// The check-in tools, offered to every run when set (`with_checkins`).
     checkins: Option<CheckIns>,
+    /// The installed apps, for `propose_app` (`with_apps`).
+    apps: Option<crate::apps::Apps>,
 }
 
 impl LocalEngine {
@@ -131,6 +134,7 @@ impl LocalEngine {
             gate,
             client: ChatClient::new(retry_delays),
             checkins: None,
+            apps: None,
         }
     }
 
@@ -138,6 +142,12 @@ impl LocalEngine {
     /// section 2).
     pub fn with_checkins(mut self, checkins: CheckIns) -> Self {
         self.checkins = Some(checkins);
+        self
+    }
+
+    /// Offers `propose_app` to every run (app library spec section 6.2).
+    pub fn with_apps(mut self, apps: crate::apps::Apps) -> Self {
+        self.apps = Some(apps);
         self
     }
 }
@@ -166,6 +176,7 @@ impl Engine for LocalEngine {
             messages,
             mcp_names: ToolNames::default(),
             checkins: self.checkins.clone(),
+            apps: self.apps.clone(),
         };
         tokio::spawn(session.run());
         Ok(rx)
@@ -189,6 +200,7 @@ struct Session {
     messages: Vec<Value>,
     mcp_names: ToolNames,
     checkins: Option<CheckIns>,
+    apps: Option<crate::apps::Apps>,
 }
 
 impl Session {
@@ -359,7 +371,9 @@ impl Session {
             if !self.emit(shown).await {
                 return None;
             }
-            let output = if approval.tool.starts_with("mcp__") {
+            let output = if approval.tool == crate::apps::APP_POLICY {
+                self.perform_app(&approval.input).await
+            } else if approval.tool.starts_with("mcp__") {
                 self.perform_mcp(&approval.tool, &approval.input).await
             } else {
                 let prepared = tools::local_name_for(&approval.tool, &approval.input)
@@ -417,6 +431,9 @@ impl Session {
         }
         if call.name == "context" {
             return tools::context::run(self.ctx.tools.contexts(), &call.input).await;
+        }
+        if call.name == crate::apps::propose::TOOL {
+            return self.propose(&call.input).await;
         }
         if CheckInTool::from_name(call.name).is_some() {
             return match &self.checkins {
@@ -504,9 +521,13 @@ impl Session {
         if self.ctx.cancel.is_cancelled() {
             return false;
         }
-        let output = match self.mcp_tool(&call.name) {
-            Some(qualified) => self.mcp_output(call, &qualified).await,
-            None => self.builtin_output(call).await,
+        let output = if self.app_tool(&call.name) {
+            self.app_output(call).await
+        } else {
+            match self.mcp_tool(&call.name) {
+                Some(qualified) => self.mcp_output(call, &qualified).await,
+                None => self.builtin_output(call).await,
+            }
         };
         let Some(output) = output else {
             return false;

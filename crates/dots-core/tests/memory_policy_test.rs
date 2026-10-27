@@ -3,7 +3,9 @@
 //! alone, the CLI never sees its rules, and migration 0012 gives it to stored policies that are
 //! not Custom.
 
-use dots_core::policy::{Action, Policy, Preset, Rule, CHECK_IN_TOOLS, MEMORY_RULE, MEMORY_TOOL};
+use dots_core::policy::{
+    Action, Policy, Preset, Rule, APP_TOOLS, CHECK_IN_TOOLS, MEMORY_RULE, MEMORY_TOOL,
+};
 use dots_core::store::Store;
 use serde_json::json;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
@@ -13,14 +15,23 @@ fn every_preset_allows_memory_after_the_check_in_tools() {
     assert_eq!(MEMORY_TOOL, "Memory");
     for preset in Preset::ALL {
         let p = Policy::preset(*preset);
-        // `Workflow` follows it (teams spec section 7).
-        let tail: Vec<&str> = p.rules[p.rules.len() - 5..]
+        // `Workflow` follows it (teams spec section 7), then `App` and `ProposeApp` (app library
+        // spec section 6).
+        let tail: Vec<&str> = p.rules[p.rules.len() - 7..]
             .iter()
             .map(|r| r.tool.as_str())
             .collect();
         assert_eq!(
             tail,
-            ["Notify", "Ask", "FollowUp", "Memory", "Workflow"],
+            [
+                "Notify",
+                "Ask",
+                "FollowUp",
+                "Memory",
+                "Workflow",
+                "App",
+                "ProposeApp"
+            ],
             "{preset:?}"
         );
         for input in [json!({"text": "x"}), json!({"id": "x"}), json!({})] {
@@ -89,12 +100,13 @@ async fn migration_0012_gives_every_policy_that_is_not_custom_its_memory() {
         .collect::<Vec<_>>()
         .into();
     before.run(&pool).await.unwrap();
-    // A policy as 0010 left it: the preset's rules without `Memory`, and without `Workflow`,
-    // which 0015 adds after it.
+    // A policy as 0010 left it: the preset's rules without `Memory`, without `Workflow`, which
+    // 0015 adds after it, and without `App` and `ProposeApp`, which 0016 adds after that.
     let old = |preset: Preset| {
         let mut p = Policy::preset(preset);
-        p.rules
-            .retain(|r| r.tool != "Memory" && r.tool != "Workflow");
+        p.rules.retain(|r| {
+            r.tool != "Memory" && r.tool != "Workflow" && !APP_TOOLS.contains(&r.tool.as_str())
+        });
         p
     };
     let mut asks = old(Preset::Trusted);
@@ -130,11 +142,19 @@ async fn migration_0012_gives_every_policy_that_is_not_custom_its_memory() {
             "{id}"
         );
     }
-    // The person's own rule is kept, and no allow is added for it (0015 adds `Workflow`).
+    // The person's own rule is kept, and no `Memory` allow is added; 0015 adds `Workflow` and
+    // 0016 `App` and `ProposeApp`.
     let mut kept = asks;
     kept.rules.push(Rule::new("Workflow", Action::Allow));
+    kept.rules
+        .extend(APP_TOOLS.map(|tool| Rule::new(tool, Action::Allow)));
     assert_eq!(store.get_dot("D3").await.unwrap().spec.policy, kept);
-    assert_eq!(store.get_dot("D4").await.unwrap().spec.policy, custom);
+    // 0016 gives Custom policies `App` and `ProposeApp` too, as 0007 did `Context`.
+    let mut custom_then = custom.clone();
+    custom_then
+        .rules
+        .extend(APP_TOOLS.map(|tool| Rule::new(tool, Action::Allow)));
+    assert_eq!(store.get_dot("D4").await.unwrap().spec.policy, custom_then);
     assert!(CHECK_IN_TOOLS
         .iter()
         .all(|t| custom.rules.iter().any(|r| r.tool == *t)));

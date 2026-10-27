@@ -389,6 +389,32 @@ impl CheckIns {
     }
 }
 
+/// The run that carries the person's answer to something `asked` posted, in the thread whose
+/// last run is `end` (check-ins spec section 5): a chat run that resumes `end`'s session when it
+/// has one, else a chat run of its own. `answer` is what the person typed, which the chat shows
+/// in place of the message.
+pub(crate) fn continuation(
+    asked: &Run,
+    end: &Run,
+    message: String,
+    answer: Option<&str>,
+) -> NewRun {
+    let mut new = NewRun::new(&asked.dot_id, TriggerKind::Chat);
+    if end.session_id.is_some() {
+        new.parent_run_id = Some(end.id.clone());
+        new.root_run_id = Some(end.root_run_id.clone());
+        new.session_id = end.session_id.clone();
+        new.workspace_path = end.workspace_path.clone();
+        new.branch = end.branch.clone();
+        new.base_commit = end.base_commit.clone();
+    }
+    new.payload = Some(match answer {
+        Some(answer) => json!({ "message": message, "answer": answer }),
+        None => json!({ "message": message }),
+    });
+    new
+}
+
 /// The refusal of a reply to a thread that has not ended, in the words `Runtime::chat` gives.
 pub fn thread_busy(status: RunStatus) -> Error {
     Error::Conflict(
@@ -455,14 +481,7 @@ impl CheckIns {
             return Err(thread_busy(active.status));
         }
         let end = thread.last().unwrap_or(&asked);
-        let mut new = NewRun::new(&asked.dot_id, TriggerKind::Chat);
         let message = if end.session_id.is_some() {
-            new.parent_run_id = Some(end.id.clone());
-            new.root_run_id = Some(end.root_run_id.clone());
-            new.session_id = end.session_id.clone();
-            new.workspace_path = end.workspace_path.clone();
-            new.branch = end.branch.clone();
-            new.base_commit = end.base_commit.clone();
             format!("Answer to your question \"{}\": {text}", question.text)
         } else {
             format!(
@@ -470,8 +489,7 @@ impl CheckIns {
                 question.text
             )
         };
-        // `answer` is what the person typed, which the chat shows in place of the message.
-        new.payload = Some(json!({ "message": message, "answer": text }));
+        let new = continuation(&asked, end, message, Some(text));
         let (answered, run) = self.store.answer_question(id, &new).await?;
         runner.enqueued(&run);
         self.updated(answered);

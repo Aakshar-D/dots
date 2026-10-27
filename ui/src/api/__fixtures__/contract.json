@@ -1,4 +1,330 @@
 {
+  "AppCall": [
+    {
+      "actor": {
+        "kind": "person"
+      },
+      "app_id": "01J0APP",
+      "at": "2026-10-09T12:00:00.000Z",
+      "changes": 1,
+      "error": null,
+      "id": "01J0CALL",
+      "ids": [
+        "01J0ID"
+      ],
+      "input": {
+        "id": "t1",
+        "status": "in_review"
+      },
+      "now": "2026-10-23T09:12:00+05:30",
+      "result": {
+        "ok": true
+      },
+      "run_id": null,
+      "took_ms": 3,
+      "tool": "update_task"
+    },
+    {
+      "actor": {
+        "id": "01J0DOT",
+        "kind": "dot",
+        "name": "builder",
+        "run_id": "01J0RUN"
+      },
+      "app_id": "01J0APP",
+      "at": "2026-10-09T12:00:00.000Z",
+      "changes": 0,
+      "error": "input.status must be one of todo, in_progress, in_review",
+      "id": "01J0CALL",
+      "ids": [
+        "01J0ID"
+      ],
+      "input": {
+        "id": "t1",
+        "status": "in_review"
+      },
+      "now": "2026-10-23T09:12:00+05:30",
+      "result": null,
+      "run_id": "01J0RUN",
+      "took_ms": 3,
+      "tool": "update_task"
+    },
+    {
+      "actor": {
+        "kind": "dots"
+      },
+      "app_id": "01J0APP",
+      "at": "2026-10-09T12:00:00.000Z",
+      "changes": 1,
+      "error": null,
+      "id": "01J0CALL",
+      "ids": [
+        "01J0ID"
+      ],
+      "input": {
+        "id": "t1",
+        "status": "in_review"
+      },
+      "now": "2026-10-23T09:12:00+05:30",
+      "result": {
+        "ok": true
+      },
+      "run_id": null,
+      "took_ms": 3,
+      "tool": "update_task"
+    }
+  ],
+  "AppFile": [
+    {
+      "base64": null,
+      "path": "app.json",
+      "text": "{}"
+    },
+    {
+      "base64": "iVBORw0KGgo=",
+      "path": "ui/logo.png",
+      "text": null
+    }
+  ],
+  "AppProposal": [
+    {
+      "answer": null,
+      "answer_run_id": null,
+      "app_id": null,
+      "app_name": "expenses",
+      "base_version": null,
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "decided_at": null,
+      "dot_id": "01J0DOT",
+      "id": "01J0PROP",
+      "note": "Tracks expenses by month.",
+      "root_run_id": "01J0RUN",
+      "run_id": "01J0RUN",
+      "status": "pending",
+      "summary": {
+        "bytes": 2048,
+        "description": "Logs expenses and totals them by month",
+        "files": 7,
+        "migrations": [
+          "0001_expenses.sql"
+        ],
+        "permissions": [
+          "start_dots"
+        ],
+        "tests": {
+          "results": [
+            {
+              "error": null,
+              "file": "tests/expenses.test.js",
+              "name": "a month's total adds its expenses",
+              "passed": true
+            }
+          ]
+        },
+        "title": "Expenses",
+        "tools": [
+          {
+            "description": "Log an expense",
+            "name": "add_expense",
+            "writes": true
+          }
+        ],
+        "update_from": null
+      }
+    },
+    {
+      "answer": "Add a category.",
+      "answer_run_id": "01J0RUN2",
+      "app_id": null,
+      "app_name": "expenses",
+      "base_version": null,
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "decided_at": "2026-10-09T12:00:00.000Z",
+      "dot_id": "01J0DOT",
+      "id": "01J0PROP2",
+      "note": "Tracks expenses by month.",
+      "root_run_id": "01J0RUN",
+      "run_id": "01J0RUN",
+      "status": "changes_asked",
+      "summary": {
+        "bytes": 2048,
+        "description": "Logs expenses and totals them by month",
+        "files": 7,
+        "migrations": [
+          "0001_expenses.sql"
+        ],
+        "permissions": [
+          "start_dots"
+        ],
+        "tests": {
+          "results": [
+            {
+              "error": null,
+              "file": "tests/expenses.test.js",
+              "name": "a month's total adds its expenses",
+              "passed": true
+            }
+          ]
+        },
+        "title": "Expenses",
+        "tools": [
+          {
+            "description": "Log an expense",
+            "name": "add_expense",
+            "writes": true
+          }
+        ],
+        "update_from": null
+      }
+    },
+    {
+      "answer": null,
+      "answer_run_id": "01J0RUN2",
+      "app_id": "01J0APP2",
+      "app_name": "expenses",
+      "base_version": 1,
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "decided_at": "2026-10-09T12:00:00.000Z",
+      "dot_id": "01J0DOT",
+      "id": "01J0PROP3",
+      "note": "Tracks expenses by month.",
+      "root_run_id": "01J0RUN",
+      "run_id": "01J0RUN",
+      "status": "added",
+      "summary": {
+        "bytes": 2048,
+        "description": "Logs expenses and totals them by month",
+        "files": 7,
+        "migrations": [
+          "0002_category.sql"
+        ],
+        "permissions": [
+          "start_dots"
+        ],
+        "tests": {
+          "results": [
+            {
+              "error": null,
+              "file": "tests/expenses.test.js",
+              "name": "a month's total adds its expenses",
+              "passed": true
+            }
+          ]
+        },
+        "title": "Expenses",
+        "tools": [
+          {
+            "description": "Log an expense",
+            "name": "add_expense",
+            "writes": true
+          }
+        ],
+        "update_from": 1
+      }
+    },
+    {
+      "answer": null,
+      "answer_run_id": "01J0RUN2",
+      "app_id": null,
+      "app_name": "expenses",
+      "base_version": null,
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "decided_at": "2026-10-09T12:00:00.000Z",
+      "dot_id": "01J0DOT",
+      "id": "01J0PROP4",
+      "note": "Tracks expenses by month.",
+      "root_run_id": "01J0RUN",
+      "run_id": "01J0RUN",
+      "status": "discarded",
+      "summary": {
+        "bytes": 2048,
+        "description": "Logs expenses and totals them by month",
+        "files": 7,
+        "migrations": [
+          "0001_expenses.sql"
+        ],
+        "permissions": [
+          "start_dots"
+        ],
+        "tests": {
+          "results": [
+            {
+              "error": null,
+              "file": "tests/expenses.test.js",
+              "name": "a month's total adds its expenses",
+              "passed": true
+            }
+          ]
+        },
+        "title": "Expenses",
+        "tools": [
+          {
+            "description": "Log an expense",
+            "name": "add_expense",
+            "writes": true
+          }
+        ],
+        "update_from": null
+      }
+    }
+  ],
+  "AppRow": [
+    {
+      "dots": [
+        "builder",
+        "nightly-tests"
+      ],
+      "error": null,
+      "item": {
+        "config": {
+          "can_start_dots": true,
+          "changed": false,
+          "description": "Projects, tasks and to-dos, shared by you and your dots",
+          "every_dot": true,
+          "last_version": 4,
+          "origin": {
+            "kind": "bundled",
+            "release": "0.4.0"
+          },
+          "previous_version": 2,
+          "title": "Projects",
+          "version": 3
+        },
+        "created_at": "2026-10-09T12:00:00.000Z",
+        "id": "01J0APP",
+        "kind": "app",
+        "name": "projects",
+        "owner_id": null,
+        "updated_at": "2026-10-09T12:00:00.000Z"
+      }
+    },
+    {
+      "dots": [],
+      "error": "invalid input: app.json: EOF while parsing an object",
+      "item": {
+        "config": {
+          "can_start_dots": true,
+          "changed": false,
+          "description": "Projects, tasks and to-dos, shared by you and your dots",
+          "every_dot": true,
+          "last_version": 4,
+          "origin": {
+            "kind": "bundled",
+            "release": "0.4.0"
+          },
+          "previous_version": 2,
+          "title": "Projects",
+          "version": 3
+        },
+        "created_at": "2026-10-09T12:00:00.000Z",
+        "id": "01J0APP2",
+        "kind": "app",
+        "name": "expenses",
+        "owner_id": null,
+        "updated_at": "2026-10-09T12:00:00.000Z"
+      }
+    }
+  ],
   "Approval": {
     "applied_at": null,
     "apply_state": null,
@@ -150,6 +476,17 @@
     "memory_add",
     "memory_update",
     "memory_delete",
+    "apps_list",
+    "app_call",
+    "app_files",
+    "app_calls",
+    "app_set_every_dot",
+    "app_set_can_start_dots",
+    "app_roll_back",
+    "app_remove",
+    "app_proposals_list",
+    "app_proposal_files",
+    "app_proposal_decide",
     "watchers_list",
     "watcher_add",
     "watcher_update",
@@ -283,6 +620,14 @@
         {
           "action": "ask",
           "tool": "Workflow"
+        },
+        {
+          "action": "allow",
+          "tool": "App"
+        },
+        {
+          "action": "allow",
+          "tool": "ProposeApp"
         }
       ]
     },
@@ -300,6 +645,9 @@
     "use_global_instructions": true,
     "use_user_settings": false,
     "uses": {
+      "apps": [
+        "projects"
+      ],
       "context": [
         "company"
       ],
@@ -433,6 +781,14 @@
           {
             "action": "ask",
             "tool": "Workflow"
+          },
+          {
+            "action": "allow",
+            "tool": "App"
+          },
+          {
+            "action": "allow",
+            "tool": "ProposeApp"
           }
         ]
       },
@@ -450,6 +806,9 @@
       "use_global_instructions": true,
       "use_user_settings": false,
       "uses": {
+        "apps": [
+          "projects"
+        ],
         "context": [
           "company"
         ],
@@ -585,6 +944,14 @@
         {
           "action": "allow",
           "tool": "Workflow"
+        },
+        {
+          "action": "allow",
+          "tool": "App"
+        },
+        {
+          "action": "allow",
+          "tool": "ProposeApp"
         }
       ]
     },
@@ -593,6 +960,7 @@
     "use_global_instructions": true,
     "use_user_settings": false,
     "uses": {
+      "apps": [],
       "context": [],
       "mcp_servers": [],
       "plugins": [],
@@ -701,7 +1069,8 @@
       "mcp_server",
       "skill",
       "plugin",
-      "context"
+      "context",
+      "app"
     ],
     "MemorySource": [
       "dot",
@@ -726,6 +1095,12 @@
       "trusted",
       "custom"
     ],
+    "ProposalStatus": [
+      "pending",
+      "added",
+      "changes_asked",
+      "discarded"
+    ],
     "RunStatus": [
       "queued",
       "running",
@@ -746,6 +1121,7 @@
       "chat",
       "resume",
       "follow_up",
+      "app",
       "workflow",
       "watcher"
     ],
@@ -1059,6 +1435,39 @@
         "path": "C:/notes/company"
       },
       "kind": "context"
+    },
+    {
+      "config": {
+        "can_start_dots": true,
+        "changed": false,
+        "description": "Projects, tasks and to-dos, shared by you and your dots",
+        "every_dot": true,
+        "last_version": 4,
+        "origin": {
+          "kind": "bundled",
+          "release": "0.4.0"
+        },
+        "previous_version": 2,
+        "title": "Projects",
+        "version": 3
+      },
+      "kind": "app"
+    },
+    {
+      "config": {
+        "can_start_dots": true,
+        "changed": false,
+        "description": "Projects, tasks and to-dos, shared by you and your dots",
+        "every_dot": true,
+        "last_version": 4,
+        "origin": {
+          "kind": "proposed"
+        },
+        "previous_version": null,
+        "title": "Projects",
+        "version": 3
+      },
+      "kind": "app"
     }
   ],
   "LibraryEntry": [
@@ -1481,6 +1890,43 @@
           "name": "nightly-tests"
         }
       ]
+    },
+    {
+      "catalog": null,
+      "catalogs": [],
+      "config": {
+        "can_start_dots": true,
+        "changed": false,
+        "description": "Projects, tasks and to-dos, shared by you and your dots",
+        "every_dot": true,
+        "last_version": 4,
+        "origin": {
+          "kind": "bundled",
+          "release": "0.4.0"
+        },
+        "previous_version": 2,
+        "title": "Projects",
+        "version": 3
+      },
+      "confirmed_origins": {},
+      "context": null,
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "dots_folder": false,
+      "id": "01J0APP",
+      "kind": "app",
+      "missing_variables": [],
+      "name": "projects",
+      "owner_id": null,
+      "plugin": null,
+      "problem": null,
+      "skill": null,
+      "updated_at": "2026-10-09T12:00:00.000Z",
+      "used_by": [
+        {
+          "id": "01J0DOT",
+          "name": "nightly-tests"
+        }
+      ]
     }
   ],
   "LibraryItem": [
@@ -1808,6 +2254,14 @@
         {
           "action": "ask",
           "tool": "Workflow"
+        },
+        {
+          "action": "allow",
+          "tool": "App"
+        },
+        {
+          "action": "allow",
+          "tool": "ProposeApp"
         }
       ]
     },
@@ -1816,6 +2270,7 @@
     "use_global_instructions": true,
     "use_user_settings": false,
     "uses": {
+      "apps": [],
       "context": [],
       "mcp_servers": [],
       "plugins": [],
@@ -2302,6 +2757,15 @@
     {
       "dot_id": "01J0DOT",
       "type": "memories_updated"
+    },
+    {
+      "app": "projects",
+      "type": "app_data_changed"
+    },
+    {
+      "dot_id": "01J0DOT",
+      "id": "01J0PROPOSAL",
+      "type": "app_proposal_changed"
     },
     {
       "dot_id": "01J0DOT",

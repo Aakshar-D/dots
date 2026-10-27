@@ -8,6 +8,7 @@ use sqlx::{ConnectOptions, Connection};
 use crate::Result;
 
 mod approvals;
+mod apps;
 mod browser;
 mod dots;
 mod env;
@@ -61,6 +62,7 @@ impl Store {
         upgrade::finish_0011(&store).await?;
         upgrade::finish_0012(&store.pool).await?;
         upgrade::finish_0015(&store.pool).await?;
+        upgrade::finish_0016(&store.pool).await?;
         Ok(store)
     }
 
