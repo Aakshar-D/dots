@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { reportComposer } from "@/lib/use-activity";
 
 /// Where a message is typed. Enter sends; Shift+Enter starts a new line. The text is cleared
 /// once the send has succeeded; a refused message stays for another try.
@@ -12,6 +13,9 @@ export function Composer(props: {
   onSend: (message: string) => Promise<unknown>;
 }) {
   const [text, setText] = useState("");
+  const hasText = text.trim() !== "";
+  // An idle install never closes Dots over a message being written.
+  useEffect(() => reportComposer(hasText), [hasText]);
   const box = useRef<HTMLTextAreaElement>(null);
   // The box is disabled while a send is on its way and while the dot works, and a browser
   // takes the focus from a disabled control. When the box can be used again it gets the focus

@@ -40,6 +40,9 @@ const schemas: Record<SampleName, { parse: (v: unknown) => unknown }> = {
   CmdError: T.CmdError,
   StartupError: T.StartupError,
   UpdateNote: T.UpdateNote.array(),
+  UpdateStatus: T.UpdateStatus.array(),
+  CheckOutcome: T.CheckOutcome.array(),
+  ReleaseNotes: T.ReleaseNotes.nullable().array(),
   Message: T.Message.array(),
   FollowUp: T.FollowUp.array(),
   Memory: T.Memory.array(),
@@ -181,7 +184,8 @@ describe("Rust/TypeScript contract", () => {
 
   it("has a sample of every update state", () => {
     const states = T.UpdateNote.options.map((o) => o.shape.state.value);
-    expect(fixture.UpdateNote.map((n) => n.state).sort()).toEqual([...states].sort());
+    // Waiting and Installing come once per purpose, so the states are compared as a set.
+    expect([...new Set(fixture.UpdateNote.map((n) => n.state))].sort()).toEqual([...states].sort());
   });
 
   it("mirrors the core's limits", () => {

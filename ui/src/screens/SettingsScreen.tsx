@@ -20,6 +20,7 @@ import { invalidate, keys, takeStatus } from "@/lib/query";
 
 import { ChatGptAccount } from "./ChatGptAccount";
 import { Organisations } from "./Organisations";
+import { UpdatesSection } from "@/screens/UpdatesSection";
 
 type Errors = { port?: string; max?: string; global?: string; share?: string };
 
@@ -329,6 +330,11 @@ function Form({ stored, status }: { stored: Settings; status: Status | undefined
           </p>
         )}
       </Section>
+
+      <UpdatesSection
+        autoInstall={draft.auto_install_updates}
+        onAutoInstall={(auto_install_updates) => set({ auto_install_updates })}
+      />
 
       <Section title="Claude Code CLI">
         <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-xs">

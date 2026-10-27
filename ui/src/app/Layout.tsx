@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "cn";
 import { House, Inbox as InboxIcon, Library as LibraryIcon, Settings as SettingsIcon } from "lucide-react";
+import { useEffect } from "react";
 import { NavLink, Outlet } from "react-router";
 
 import { commands } from "@/api/commands";
@@ -11,6 +12,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { isOpenQuestion, waits } from "@/lib/messages";
 import { keys } from "@/lib/query";
 import { useRuntimeEvents } from "@/lib/runtime-events";
+import { useActivity } from "@/lib/use-activity";
 
 const LINKS = [
   { to: "/home", label: "Home", icon: House },
@@ -22,6 +24,11 @@ const LINKS = [
 /// The frame around every screen: the icon rail, the banners, the screen, the toasts.
 export function Layout() {
   useRuntimeEvents();
+  useActivity();
+  // The health check after an update waits for this (updates UI spec section 4.4).
+  useEffect(() => {
+    commands.appRendered().catch(() => {});
+  }, []);
   const inbox = useQuery({ queryKey: keys.inbox, queryFn: commands.inbox }).data;
   const messages = useQuery({
     queryKey: keys.messages(null),

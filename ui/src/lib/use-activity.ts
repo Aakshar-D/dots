@@ -1,0 +1,37 @@
+import { useEffect } from "react";
+
+import { commands } from "@/api/commands";
+
+/// How often keyboard and pointer input is told to the core at most.
+const EVERY_MS = 30_000;
+
+let composerHasText = false;
+let lastSent = 0;
+
+function send(): void {
+  lastSent = Date.now();
+  commands.reportActivity(composerHasText).catch(() => {});
+}
+
+/// The composer's text became empty or not: told at once, so an idle install never closes
+/// Dots over a message being written (updates UI spec section 4.2).
+export function reportComposer(hasText: boolean): void {
+  if (hasText === composerHasText) return;
+  composerHasText = hasText;
+  send();
+}
+
+/// Tells the core about keyboard and pointer input in the window, at most every 30 s.
+export function useActivity(): void {
+  useEffect(() => {
+    const onInput = () => {
+      if (Date.now() - lastSent >= EVERY_MS) send();
+    };
+    window.addEventListener("keydown", onInput);
+    window.addEventListener("pointerdown", onInput);
+    return () => {
+      window.removeEventListener("keydown", onInput);
+      window.removeEventListener("pointerdown", onInput);
+    };
+  }, []);
+}

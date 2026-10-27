@@ -76,6 +76,17 @@ export function installDefaults(): void {
   backend.on("startup_error", () => null);
   backend.on("status", () => quietStatus);
   backend.on("update_note", () => ({ state: "none" }));
+  backend.on("update_status", () => ({
+    version: "0.3.0",
+    checks_on: true,
+    checked_at: null,
+    ready: null,
+    last_error: null,
+    go_back: null,
+    auto_install: false,
+  }));
+  backend.on("report_activity", () => null);
+  backend.on("app_rendered", () => null);
   // No Claude reading yet, nothing held.
   backend.on("limits_get", () => ({
     windows: [],

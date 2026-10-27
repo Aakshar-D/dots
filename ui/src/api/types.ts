@@ -509,6 +509,8 @@ export const Settings = z.strictObject({
   hold_enabled: z.boolean(),
   hold_share_five_hour: z.number().int(),
   hold_share_weekly: z.number().int(),
+  // Dots installs a downloaded update by itself when idle (updates UI spec section 4.2).
+  auto_install_updates: z.boolean(),
 });
 export const SettingsSaved = z.strictObject({
   settings: Settings,
@@ -1030,7 +1032,12 @@ export const StartupError = z.strictObject({
   message: z.string(),
   log_dir: z.string(),
   backup: z.string(),
+  // The version Go back installs after a failed update; null when there is none.
+  go_back: nullable(z.string()),
 });
+
+/// What an install is for: a new version, the same one again, or the one before the update.
+export const Purpose = z.enum(["update", "repair", "go_back"]);
 
 /// What the update strip shows (apps/dots-app/src/update.rs).
 export const UpdateNote = z.discriminatedUnion("state", [
@@ -1045,10 +1052,49 @@ export const UpdateNote = z.discriminatedUnion("state", [
     state: z.literal("waiting"),
     version: z.string(),
     waiting_for: z.array(z.string()),
+    purpose: Purpose,
   }),
-  z.strictObject({ state: z.literal("installing"), version: z.string() }),
+  z.strictObject({ state: z.literal("installing"), version: z.string(), purpose: Purpose }),
+  z.strictObject({ state: z.literal("failed"), error: z.string() }),
+  // The new version did not start properly; back_to is the version Go back installs.
+  z.strictObject({
+    state: z.literal("unhealthy"),
+    version: z.string(),
+    back_to: nullable(z.string()),
+  }),
+  z.strictObject({
+    state: z.literal("withdrawn"),
+    version: z.string(),
+    back_to: nullable(z.string()),
+  }),
+  z.strictObject({ state: z.literal("updated_itself"), version: z.string(), at: z.string() }),
+]);
+
+/// Settings › Updates (updates UI spec section 4.1).
+export const UpdateStatus = z.strictObject({
+  version: z.string(),
+  checks_on: z.boolean(),
+  checked_at: nullable(z.string()),
+  ready: nullable(z.string()),
+  last_error: nullable(z.string()),
+  go_back: nullable(z.string()),
+  auto_install: z.boolean(),
+});
+
+/// What "Check for updates" found.
+export const CheckOutcome = z.discriminatedUnion("state", [
+  z.strictObject({ state: z.literal("off") }),
+  z.strictObject({ state: z.literal("up_to_date") }),
+  z.strictObject({ state: z.literal("ready"), version: z.string() }),
   z.strictObject({ state: z.literal("failed"), error: z.string() }),
 ]);
+
+/// A version's notes ("What's new").
+export const ReleaseNotes = z.strictObject({
+  version: z.string(),
+  body: z.string(),
+  url: z.string(),
+});
 
 /// Validation limits of the core that the dot editor and Settings mirror, and the attempts a
 /// scheduled occurrence has at most, which the Dots list and the run view name. The contract
@@ -1180,3 +1226,6 @@ export type WatcherConfig = z.infer<typeof WatcherConfig>;
 export type Watcher = z.infer<typeof Watcher>;
 export type PausedWatcher = z.infer<typeof PausedWatcher>;
 export type UpdateNote = z.infer<typeof UpdateNote>;
+export type UpdateStatus = z.infer<typeof UpdateStatus>;
+export type CheckOutcome = z.infer<typeof CheckOutcome>;
+export type ReleaseNotes = z.infer<typeof ReleaseNotes>;

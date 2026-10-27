@@ -127,6 +127,7 @@ function UpdateBanner() {
       </Banner>
     );
   }
+  if (note.state !== "ready") return null;
   const { working } = note;
   const many = working.length > 1;
   return (

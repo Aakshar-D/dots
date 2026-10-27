@@ -90,6 +90,18 @@ export const commands = {
   updateStopAndRestart: (working: string[]) =>
     call(T.UpdateNote, "update_stop_and_restart", { working }),
   updateCancelWait: () => call(T.UpdateNote, "update_cancel_wait"),
+  updateStatus: () => call(T.UpdateStatus, "update_status"),
+  updateCheckNow: () => call(T.CheckOutcome, "update_check_now"),
+  updateReleaseNotes: (version: string) =>
+    call(T.ReleaseNotes.nullable(), "update_release_notes", { version }),
+  updateRepair: () => call(T.UpdateNote, "update_repair"),
+  updateGoBack: () => call(T.UpdateNote, "update_go_back"),
+  updateDismissUpdated: () => call(T.UpdateNote, "update_dismiss_updated"),
+  /// The window had input, or the composer's text changed (the idle install).
+  reportActivity: (composerHasText: boolean) =>
+    call(nothing, "report_activity", { composerHasText }),
+  /// The window rendered after this start (the health check after an update).
+  appRendered: () => call(nothing, "app_rendered"),
 
   dotOverview: () => call(T.DotOverview.array(), "dot_overview"),
   listDots: () => call(T.Dot.array(), "list_dots"),
