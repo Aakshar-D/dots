@@ -917,6 +917,8 @@ pub fn samples() -> Value {
                 at: TS.into(),
             }],
             held: held_runs(),
+            // Filled in by `app_samples`, which has a proposal.
+            app_reviews: vec![],
         }),
         // What `library_add` takes and the Library commands answer: a config of every kind and
         // transport, and entries of every kind (a plugin's own server among them).
@@ -1337,6 +1339,11 @@ fn apps_samples(samples: &mut Value) {
         proposal("01J0PROP4", ProposalStatus::Discarded),
         on_kept,
     ]);
+    samples["Inbox"]["app_reviews"] = to([PendingAppReview {
+        dot_id: "01J0DOT".into(),
+        dot_name: "builder".into(),
+        proposal: proposal("01J0PROP", ProposalStatus::Pending),
+    }]);
     samples["Enums"]["ProposalStatus"] = to([
         ProposalStatus::Pending,
         ProposalStatus::Added,

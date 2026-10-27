@@ -107,6 +107,13 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
     case "watcher_paused":
       // The app's notification; a `watcher_updated` comes with it.
       break;
+    case "app_proposal_changed":
+      // A review card was posted or decided: the conversation's cards, the Inbox's reviews and
+      // the dots' needs-you counts.
+      invalidate(qc, ["app-proposals"]);
+      invalidate(qc, keys.inbox);
+      invalidate(qc, keys.overview);
+      break;
     case "limits_updated":
       // The rail's bars read the limits; the Inbox's held runs and the Usage page follow.
       qc.setQueryData(keys.limits, event.limits);

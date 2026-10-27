@@ -584,6 +584,9 @@ export const Inbox = z.strictObject({
   watchers: z.array(PausedWatcher),
   // Background runs held for Claude usage, oldest first.
   held: z.array(HeldRun),
+  // Apps dots sent for review that wait for the person, newest first. Lazy: the proposal's
+  // schema is declared with the apps, below.
+  app_reviews: z.array(z.lazy(() => PendingAppReview)),
 });
 
 // The Library (MCP/skills spec section 2 and 9). `${VAR}` in a server's config stays a
@@ -720,6 +723,13 @@ export const AppProposal = z.strictObject({
   created_at: z.string(),
   decided_at: nullable(z.string()),
 });
+// An app proposal that waits for the person, as the Inbox lists it.
+export const PendingAppReview = z.strictObject({
+  dot_id: z.string(),
+  dot_name: z.string(),
+  proposal: AppProposal,
+});
+export type PendingAppReview = z.infer<typeof PendingAppReview>;
 // The person's answer on a review card.
 export const ProposalDecision = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("add") }),

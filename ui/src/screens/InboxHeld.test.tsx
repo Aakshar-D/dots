@@ -21,6 +21,7 @@ const only = (held: HeldRun[]): Inbox => ({
   tools_changed: [],
   watchers: [],
   held,
+  app_reviews: [],
 });
 
 describe("runs held for Claude usage in the Inbox", () => {

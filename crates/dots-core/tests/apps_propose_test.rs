@@ -261,6 +261,33 @@ async fn a_proposal_that_fails_its_checks_goes_back_to_the_dot() {
 }
 
 #[tokio::test]
+async fn a_waiting_card_counts_in_what_needs_the_person() {
+    let t = start().await;
+    let folder = in_workspace(&t, "expenses", &expenses());
+    let llm = Llm::start(dones(2)).await;
+    let run = finished_run(&t, &llm, "builder").await;
+    let before = t.rt.inbox_count().await.unwrap();
+    t.rt.apps()
+        .propose(&run.id, folder, "Tracks expenses.")
+        .await
+        .unwrap();
+    let inbox = t.rt.inbox().await.unwrap();
+    assert_eq!(inbox.app_reviews.len(), 1);
+    assert_eq!(inbox.app_reviews[0].dot_name, "builder");
+    assert_eq!(inbox.app_reviews[0].proposal.note, "Tracks expenses.");
+    assert_eq!(t.rt.inbox_count().await.unwrap(), before + 1);
+    assert_eq!(t.rt.store().dot_counts(&run.dot_id).await.unwrap().0, 1);
+
+    let p = proposals(&t, &run.dot_id).await.remove(0);
+    t.rt.decide_app_proposal(&p.id, Decision::Discard)
+        .await
+        .unwrap();
+    assert!(t.rt.inbox().await.unwrap().app_reviews.is_empty());
+    assert_eq!(t.rt.store().dot_counts(&run.dot_id).await.unwrap().0, 0);
+    t.rt.shutdown();
+}
+
+#[tokio::test]
 async fn asking_for_changes_and_discarding_continue_the_dots_thread() {
     let t = start().await;
     let folder = in_workspace(&t, "expenses", &expenses());

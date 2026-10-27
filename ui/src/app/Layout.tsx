@@ -38,11 +38,16 @@ export function Layout() {
         inbox.tools_changed.length +
         inbox.watchers.length +
         // Runs held for Claude usage wait as one line, however many.
-        Math.min(inbox.held.length, 1)
+        Math.min(inbox.held.length, 1) +
+        // A waiting app review counts like an approval.
+        inbox.app_reviews.length
       : 0) + (messages ?? []).filter(waits).length;
   // A pending approval or an open question needs the person: the counts take the needs colour
   // (deep-teal spec section 4).
-  const needs = (inbox?.approvals.length ?? 0) > 0 || (messages ?? []).some(isOpenQuestion);
+  const needs =
+    (inbox?.approvals.length ?? 0) > 0 ||
+    (inbox?.app_reviews.length ?? 0) > 0 ||
+    (messages ?? []).some(isOpenQuestion);
   return (
     <div className="flex h-screen bg-background text-sm text-foreground">
       <nav

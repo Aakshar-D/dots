@@ -547,6 +547,17 @@ pub struct Inbox {
     pub watchers: Vec<PausedWatcher>,
     /// Background runs held for Claude usage, oldest first (usage and limits spec section 5).
     pub held: Vec<HeldRun>,
+    /// Apps dots sent for review that wait for the person, newest first (app library spec
+    /// section 10: a waiting card counts like an approval).
+    pub app_reviews: Vec<PendingAppReview>,
+}
+
+/// An app proposal that waits for the person, as the Inbox lists it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PendingAppReview {
+    pub dot_id: String,
+    pub dot_name: String,
+    pub proposal: crate::apps::propose::AppProposal,
 }
 
 /// A queued run held for Claude usage, as the Inbox lists it (usage and limits spec section 5).

@@ -689,6 +689,18 @@ impl Runtime {
                 })
             })
             .collect();
+        let app_reviews = self
+            .store
+            .list_app_proposals(None)
+            .await?
+            .into_iter()
+            .filter(|p| p.status == crate::apps::propose::ProposalStatus::Pending)
+            .map(|proposal| crate::model::PendingAppReview {
+                dot_name: name(&proposal.dot_id),
+                dot_id: proposal.dot_id.clone(),
+                proposal,
+            })
+            .collect();
         Ok(Inbox {
             approvals,
             review_runs,
@@ -696,6 +708,7 @@ impl Runtime {
             tools_changed: self.library.tools_changed().await?,
             watchers: self.store.paused_watchers().await?,
             held: self.held_runs(&names).await?,
+            app_reviews,
         })
     }
 
@@ -709,6 +722,8 @@ impl Runtime {
             + inbox.watchers.len()
             // Held runs wait as one line, however many (usage and limits spec section 5).
             + usize::from(!inbox.held.is_empty())
+            // A waiting review card counts like an approval (app library spec section 10).
+            + inbox.app_reviews.len()
             + self.store.count_waiting_messages().await?)
     }
 

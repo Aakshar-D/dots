@@ -303,8 +303,9 @@ impl Store {
     }
 
     /// What the dot has for the person (needs-you spec section 2), as `(needs_you, unread)`:
-    /// its open questions and pending approvals; and those plus its runs that ended and its
-    /// notes posted after its `seen_at` (none without one). `NotFound` for an unknown dot.
+    /// its open questions, pending approvals, paused watchers and app proposals waiting for
+    /// review; and those plus its runs that ended and its notes posted after its `seen_at`
+    /// (none without one). `NotFound` for an unknown dot.
     pub async fn dot_counts(&self, id: &str) -> Result<(u32, u32)> {
         let row = sqlx::query(
             "SELECT \
@@ -313,7 +314,9 @@ impl Store {
              + (SELECT COUNT(*) FROM approvals a JOIN runs r ON r.id = a.run_id \
               WHERE r.dot_id = d.id AND a.status = 'pending') \
              + (SELECT COUNT(*) FROM watchers w WHERE w.dot_id = d.id \
-              AND w.paused_reason IS NOT NULL) AS needs_you, \
+              AND w.paused_reason IS NOT NULL) \
+             + (SELECT COUNT(*) FROM app_proposals p WHERE p.dot_id = d.id \
+              AND p.status = 'pending') AS needs_you, \
              CASE WHEN d.seen_at IS NULL THEN 0 ELSE \
              (SELECT COUNT(*) FROM runs r WHERE r.dot_id = d.id \
               AND r.status IN ('succeeded', 'failed', 'cancelled') AND r.ended_at > d.seen_at) \

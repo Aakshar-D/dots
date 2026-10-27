@@ -62,6 +62,8 @@ export const keys = {
   followUps: (dotId: string | null) => ["follow-ups", dotId] as const,
   memories: (dotId: string) => ["memories", dotId] as const,
   watchers: (dotId: string) => ["watchers", dotId] as const,
+  /// The apps dots proposed, of one dot or of all (null).
+  appProposals: (dotId: string | null) => ["app-proposals", dotId] as const,
   limits: ["limits"] as const,
   usage: (period: string) => ["usage", period] as const,
 };
