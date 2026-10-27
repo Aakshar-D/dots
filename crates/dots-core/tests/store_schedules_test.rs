@@ -226,6 +226,44 @@ async fn a_fired_slot_enqueues_counts_watches_and_drops_the_retry() {
     assert_eq!(row.updated_at, T2);
 }
 
+/// Usage and limits spec section 4: a run held for Claude usage may wait for hours; a slot
+/// must not vanish into a queued run started by an event (a watcher's, a webhook's or a
+/// follow-up's), which carries its own payload. It joins a queued schedule run.
+#[tokio::test]
+async fn a_schedule_slot_does_not_join_a_queued_watcher_run() {
+    for trigger in [
+        TriggerKind::Watcher,
+        TriggerKind::Webhook,
+        TriggerKind::FollowUp,
+    ] {
+        let (_d, store) = temp_store().await;
+        let dot = scheduled(&store, "a").await;
+        store
+            .create_run(&NewRun::new(&dot.id, trigger))
+            .await
+            .unwrap();
+        let start = store
+            .record_slot(&dot.id, t(T1), Some(&scheduled_run(&dot, T1)), t(T1))
+            .await
+            .unwrap();
+        assert!(matches!(start, SlotStart::Enqueued(_)), "{trigger:?}");
+        assert_eq!(store.list_runs(None, 10).await.unwrap().len(), 2);
+    }
+}
+
+#[tokio::test]
+async fn a_schedule_slot_joins_a_queued_schedule_run() {
+    let (_d, store) = temp_store().await;
+    let dot = scheduled(&store, "a").await;
+    let queued = store.create_run(&scheduled_run(&dot, T0)).await.unwrap();
+    let start = store
+        .record_slot(&dot.id, t(T1), Some(&scheduled_run(&dot, T1)), t(T1))
+        .await
+        .unwrap();
+    assert_eq!(start, SlotStart::Coalesced(queued));
+    assert_eq!(store.list_runs(None, 10).await.unwrap().len(), 1);
+}
+
 #[tokio::test]
 async fn a_slot_joins_the_queued_run() {
     let (_d, store) = temp_store().await;
@@ -319,7 +357,7 @@ async fn a_retry_joins_the_queued_run() {
     let failed = failed_run(&store, &dot).await;
     busy(&store, &dot, &failed).await;
     let queued = store
-        .create_run(&NewRun::new(&dot.id, TriggerKind::Webhook))
+        .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
         .await
         .unwrap();
 

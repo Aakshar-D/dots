@@ -226,6 +226,11 @@ pub struct Run {
     pub reviewed_at: Option<String>,
     /// The failed scheduled run that this run retries.
     pub retry_of: Option<String>,
+    /// What the run would cost on the API, as the `claude` CLI reported it; `None` for a local
+    /// run and for a Claude run whose CLI gave none (usage and limits spec section 5).
+    pub cost_usd: Option<f64>,
+    /// The person released this run from the hold with **Run anyway** (spec section 4).
+    pub hold_released: bool,
     /// The workflow step this run works for (teams spec section 4); a resume or a chat that
     /// continues the run's thread keeps it.
     pub workflow_step_run_id: Option<String>,
@@ -540,6 +545,70 @@ pub struct Inbox {
     pub tools_changed: Vec<ToolsChanged>,
     /// Watchers Dots paused (too many runs, or an error), newest first (watchers spec §7).
     pub watchers: Vec<PausedWatcher>,
+    /// Background runs held for Claude usage, oldest first (usage and limits spec section 5).
+    pub held: Vec<HeldRun>,
+}
+
+/// A queued run held for Claude usage, as the Inbox lists it (usage and limits spec section 5).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeldRun {
+    pub run_id: String,
+    pub dot_id: String,
+    pub dot_name: String,
+    pub trigger: TriggerKind,
+    pub queued_at: String,
+    /// When the window that holds it resets; `None` while held runs start one at a time.
+    pub starts_after: Option<String>,
+}
+
+str_enum!(UsagePeriod { FiveHours => "five_hours", Week => "week", Month => "month" });
+
+impl UsagePeriod {
+    /// How far back the period reaches from now.
+    pub fn reach(self) -> chrono::TimeDelta {
+        match self {
+            Self::FiveHours => chrono::TimeDelta::hours(5),
+            Self::Week => chrono::TimeDelta::days(7),
+            Self::Month => chrono::TimeDelta::days(30),
+        }
+    }
+}
+
+/// The Usage page (usage and limits spec section 5): the dots' runs started since `since`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UsageSummary {
+    pub period: UsagePeriod,
+    pub since: String,
+    pub rows: Vec<UsageRow>,
+}
+
+/// One dot's runs in the period, by tokens (in + out), heaviest dot first.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UsageRow {
+    pub dot_id: String,
+    pub dot_name: String,
+    pub engine: EngineKind,
+    pub runs: u32,
+    pub tokens_in: i64,
+    pub tokens_out: i64,
+    /// The ended runs' time, start to end.
+    pub run_secs: i64,
+    /// `None` when no run of the dot reported a cost (a local model's).
+    pub cost_usd: Option<f64>,
+    /// The dot's heaviest runs in the period, by tokens, at most `limits::HEAVIEST`.
+    pub heaviest: Vec<UsageRun>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UsageRun {
+    pub run_id: String,
+    pub trigger: TriggerKind,
+    pub started_at: String,
+    pub tokens_in: i64,
+    pub tokens_out: i64,
+    /// `None` while the run has not ended.
+    pub run_secs: Option<i64>,
+    pub cost_usd: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -242,9 +242,15 @@ async fn a_continuing_run_keeps_its_parents_step_and_spend_is_summed() {
         .unwrap();
     assert_eq!(plain.workflow_step_run_id, None);
 
-    f.store.add_usage(&first.id, 1000, 50, 800).await.unwrap();
-    f.store.add_usage(&child.id, 200, 10, 0).await.unwrap();
-    f.store.add_usage(&plain.id, 99, 99, 0).await.unwrap();
+    f.store
+        .add_usage(&first.id, 1000, 50, 800, None)
+        .await
+        .unwrap();
+    f.store
+        .add_usage(&child.id, 200, 10, 0, None)
+        .await
+        .unwrap();
+    f.store.add_usage(&plain.id, 99, 99, 0, None).await.unwrap();
     let wr = f.store.get_workflow_run(&wr.id).await.unwrap();
     // New input plus output: (1000 - 800 + 50) + (200 + 10); the cache reads apart.
     assert_eq!(

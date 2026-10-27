@@ -106,7 +106,7 @@ const TRIGGER: Record<Run["trigger"], string> = {
 };
 
 /// What started a run, in a word or two: "Scheduled", "Webhook", "Run now".
-export function triggerLabel(run: Run): string {
+export function triggerLabel(run: Pick<Run, "trigger">): string {
   return TRIGGER[run.trigger];
 }
 

@@ -33,9 +33,9 @@ describe("the app frame", () => {
     for (const name of ["Home", "Library", "Settings"]) {
       expect(within(nav).getByRole("link", { name })).toHaveAttribute("title", name);
     }
-    // One pending approval, one run to review, one schedule that needs attention and one MCP
-    // server whose tools changed.
-    expect(await within(nav).findByRole("link", { name: "Inbox, 5 waiting" })).toBeVisible();
+    // One pending approval, one run to review, one schedule that needs attention, one MCP
+    // server whose tools changed, one paused watcher and the runs held for Claude usage.
+    expect(await within(nav).findByRole("link", { name: "Inbox, 6 waiting" })).toBeVisible();
   });
 
   it("shows why Dots could not start instead of the app", async () => {
@@ -351,7 +351,7 @@ describe("the app frame", () => {
     await listening();
     backend.on("inbox", () => sample.inbox);
     act(() => backend.emit("runtime", { type: "approval_requested", approval: sample.approval }));
-    expect(await within(nav).findByRole("link", { name: "Inbox, 5 waiting" })).toBeVisible();
+    expect(await within(nav).findByRole("link", { name: "Inbox, 6 waiting" })).toBeVisible();
   });
 });
 

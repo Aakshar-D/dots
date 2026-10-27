@@ -5,6 +5,7 @@ import { NavLink, Outlet } from "react-router";
 
 import { commands } from "@/api/commands";
 import { Banners } from "@/app/Banners";
+import { LimitsMeter } from "@/components/LimitsMeter";
 import { Badge } from "@/components/ui/badge";
 import { Toaster } from "@/components/ui/sonner";
 import { isOpenQuestion, waits } from "@/lib/messages";
@@ -35,7 +36,9 @@ export function Layout() {
         inbox.review_runs.length +
         inbox.attention.length +
         inbox.tools_changed.length +
-        inbox.watchers.length
+        inbox.watchers.length +
+        // Runs held for Claude usage wait as one line, however many.
+        Math.min(inbox.held.length, 1)
       : 0) + (messages ?? []).filter(waits).length;
   // A pending approval or an open question needs the person: the counts take the needs colour
   // (deep-teal spec section 4).
@@ -78,6 +81,7 @@ export function Layout() {
             </NavLink>
           );
         })}
+        <LimitsMeter />
       </nav>
       <div className="flex min-w-0 flex-1 flex-col">
         <Banners />

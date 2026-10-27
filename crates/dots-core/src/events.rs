@@ -103,6 +103,13 @@ pub enum RuntimeEvent {
         reason: PausedReason,
         error: Option<String>,
     },
+    /// The Claude limit readings or the hold changed (usage and limits spec section 6): a new
+    /// reading, a hold starting or ending, a held run starting or released. `change` says when
+    /// a hold started or ended; the app notifies on it.
+    LimitsUpdated {
+        limits: crate::limits::LimitsState,
+        change: Option<crate::limits::HoldChange>,
+    },
     /// An org was joined, updated, fetched (by **Refresh**, its timer or the start-up fetch) or
     /// removed (env vault spec §6.4): its status, policy or values may have changed, and so
     /// what Settings, the Env tab and the Library show of it.

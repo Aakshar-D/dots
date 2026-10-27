@@ -78,6 +78,7 @@ fn parses_results() {
             EngineEvent::Usage {
                 tokens_in: 26819,
                 tokens_out: 4,
+                cost_usd: None,
                 cache_read: 10,
             },
             EngineEvent::Finished {
@@ -91,6 +92,7 @@ fn parses_results() {
             EngineEvent::Usage {
                 tokens_in: 1,
                 tokens_out: 1,
+                cost_usd: None,
                 cache_read: 0,
             },
             EngineEvent::Failed {
@@ -102,9 +104,14 @@ fn parses_results() {
 
 #[test]
 fn unknown_and_invalid_lines_are_raw_and_blank_is_nothing() {
+    // A rate limit line is read, not kept as raw text (usage and limits spec section 3).
     assert_eq!(
         parse_line(RATE),
-        vec![EngineEvent::Raw { line: RATE.into() }]
+        vec![EngineEvent::Limits {
+            status: "allowed".into(),
+            windows: vec![],
+            resets_at: None,
+        }]
     );
     assert_eq!(
         parse_line("not json"),

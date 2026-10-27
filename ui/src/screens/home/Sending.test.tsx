@@ -390,6 +390,20 @@ describe("sending on the home", () => {
   });
 });
 
+describe("a chat while Claude's limit is reached", () => {
+  it("says until when, and keeps the message", async () => {
+    home([chat("a", "10:00")]);
+    backend.on("chat", () => {
+      throw { kind: "invalid", message: "Claude's limit is reached until 15:10." };
+    });
+    const { user } = renderApp(`/home/${dot.id}`);
+    const found = await readyBox();
+    await user.type(found, "hello{Enter}");
+    expect(await screen.findByText("Claude's limit is reached until 15:10.")).toBeVisible();
+    expect(found).toHaveValue("hello");
+  });
+});
+
 describe("a failed reload of the dots while a conversation is open", () => {
   it("keeps the conversation and the text being typed, and says the load failed", async () => {
     const runs = home([chat("a", "10:00")]);

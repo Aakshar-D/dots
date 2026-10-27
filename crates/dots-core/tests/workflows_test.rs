@@ -137,6 +137,7 @@ impl Engine for Team {
                         tokens_in,
                         tokens_out,
                         cache_read,
+                        cost_usd: None,
                     };
                     let _ = tx.send(usage).await;
                     EngineEvent::Finished {

@@ -14,6 +14,8 @@ pub const TESTED_CLAUDE_VERSION: &str = "2.1.295";
 pub const MAX_CONCURRENT_RUNS: usize = 16;
 /// The longest global instructions, in bytes (context library spec section 2).
 pub const MAX_GLOBAL_INSTRUCTIONS: usize = 32 * 1024;
+/// The words when a hold share is out of bounds (usage and limits spec section 4).
+pub const SHARE_RULE: &str = "A share is 10 to 100%, in steps of 5.";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -33,6 +35,13 @@ pub struct Settings {
     /// The Microsoft Edge that dots browse with (browser spec section 6). `None` uses the one
     /// installed under Program Files.
     pub edge_path: Option<String>,
+    /// Background Claude runs wait while the account's Claude usage is at or above a share
+    /// (usage and limits spec section 4).
+    pub hold_enabled: bool,
+    /// The 5-hour window's share, in percent (10 to 100, in steps of 5).
+    pub hold_share_five_hour: u8,
+    /// The weekly window's share, in percent (10 to 100, in steps of 5).
+    pub hold_share_weekly: u8,
 }
 
 impl Default for Settings {
@@ -48,6 +57,9 @@ impl Default for Settings {
             global_instructions: String::new(),
             notify_on_notes: true,
             edge_path: None,
+            hold_enabled: true,
+            hold_share_five_hour: 60,
+            hold_share_weekly: 70,
         }
     }
 }
@@ -84,6 +96,10 @@ impl Settings {
         }
         if self.global_instructions.len() > MAX_GLOBAL_INSTRUCTIONS {
             return invalid("global_instructions must be at most 32 KB");
+        }
+        let share_ok = |s: u8| (10..=100).contains(&s) && s.is_multiple_of(5);
+        if !share_ok(self.hold_share_five_hour) || !share_ok(self.hold_share_weekly) {
+            return invalid(SHARE_RULE);
         }
         Ok(())
     }

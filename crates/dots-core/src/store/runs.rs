@@ -3,7 +3,7 @@ use sqlx::sqlite::{SqliteConnection, SqliteRow};
 use sqlx::Row;
 
 use super::{opt_json, Store};
-use crate::model::{NewRun, Run, RunEventRecord, RunStatus, TriggerKind};
+use crate::model::{EngineKind, NewRun, Run, RunEventRecord, RunStatus, TriggerKind};
 use crate::util::{new_id, now};
 use crate::vault::redact::global;
 use crate::{Error, Result};
@@ -11,7 +11,7 @@ use crate::{Error, Result};
 const RUN_COLUMNS: &str = "id, dot_id, root_run_id, parent_run_id, trigger_kind, payload, status, \
     session_id, workspace_path, branch, base_commit, summary, error, tokens_in, tokens_out, \
     queued_at, started_at, ended_at, reviewed_at, retry_of, workflow_step_run_id, \
-    tokens_cache_read";
+    tokens_cache_read, cost_usd, hold_released";
 
 fn run_from_row(row: &SqliteRow) -> Result<Run> {
     Ok(Run {
@@ -35,9 +35,20 @@ fn run_from_row(row: &SqliteRow) -> Result<Run> {
         ended_at: row.try_get("ended_at")?,
         reviewed_at: row.try_get("reviewed_at")?,
         retry_of: row.try_get("retry_of")?,
+        cost_usd: row.try_get("cost_usd")?,
+        hold_released: row.try_get::<i64, _>("hold_released")? != 0,
         workflow_step_run_id: row.try_get("workflow_step_run_id")?,
         tokens_cache_read: row.try_get("tokens_cache_read")?,
     })
+}
+
+/// A run's time from start to end, in whole seconds; `None` until it has both.
+fn run_seconds(run: &Run) -> Option<i64> {
+    let at = |t: &Option<String>| {
+        t.as_deref()
+            .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+    };
+    Some((at(&run.ended_at)? - at(&run.started_at)?).num_seconds())
 }
 
 fn event_from_row(row: &SqliteRow) -> Result<RunEventRecord> {
@@ -303,6 +314,31 @@ impl Store {
         rows.iter().map(run_from_row).collect()
     }
 
+    /// The queued runs with their dot's engine, oldest first: all of them, or with
+    /// `dispatchable` only those the dispatcher may start, as `dispatchable_runs` picks them.
+    pub async fn queued_with_engine(&self, dispatchable: bool) -> Result<Vec<(Run, EngineKind)>> {
+        let only = if dispatchable {
+            " AND (r.workflow_step_run_id IS NOT NULL OR NOT EXISTS \
+             (SELECT 1 FROM runs x WHERE x.dot_id = r.dot_id AND x.status = 'running' \
+             AND x.workflow_step_run_id IS NULL))"
+        } else {
+            ""
+        };
+        let rows = sqlx::query(&format!(
+            "SELECT {RUN_COLUMNS}, (SELECT d.engine FROM dots d WHERE d.id = r.dot_id) \
+             AS dot_engine FROM runs r WHERE r.status = 'queued'{only} \
+             ORDER BY r.queued_at, r.id"
+        ))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|row| {
+                let engine = EngineKind::parse(&row.try_get::<String, _>("dot_engine")?)?;
+                Ok((run_from_row(row)?, engine))
+            })
+            .collect()
+    }
+
     pub async fn claim_run(&self, id: &str) -> Result<bool> {
         let res = sqlx::query(
             "UPDATE runs SET status = 'running', started_at = ? WHERE id = ? AND status = 'queued'",
@@ -358,26 +394,143 @@ impl Store {
         Ok(())
     }
 
-    /// Adds a usage report to the run; `cache_read` is the part of `tokens_in` read from the
-    /// prompt cache.
+    /// Adds a usage report to the run's totals; `cache_read` is the part of `tokens_in` read
+    /// from the prompt cache. A cost is added to the run's (a run with none yet takes it as is);
+    /// a report without one leaves the cost as it was.
     pub async fn add_usage(
         &self,
         id: &str,
         tokens_in: i64,
         tokens_out: i64,
         cache_read: i64,
+        cost_usd: Option<f64>,
     ) -> Result<()> {
         sqlx::query(
             "UPDATE runs SET tokens_in = tokens_in + ?, tokens_out = tokens_out + ?, \
-             tokens_cache_read = tokens_cache_read + ? WHERE id = ?",
+             tokens_cache_read = tokens_cache_read + ?, \
+             cost_usd = CASE WHEN ? IS NULL THEN cost_usd ELSE COALESCE(cost_usd, 0) + ? END \
+             WHERE id = ?",
         )
         .bind(tokens_in)
         .bind(tokens_out)
         .bind(cache_read)
+        .bind(cost_usd)
+        .bind(cost_usd)
         .bind(id)
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    /// Puts a `running` run back in the queue as if it had never started (usage and limits spec
+    /// section 4: Claude's limit ended it before it did anything). Its trigger and payload stay;
+    /// its session, workspace and outcome go, so it starts afresh. `Conflict` if not running.
+    /// `queued` is the run as it was queued: its session, folder, branch and base commit are
+    /// put back (a follow-up keeps its thread's), and what this attempt set goes.
+    pub async fn requeue_run(&self, id: &str, queued: &Run) -> Result<Run> {
+        let res = sqlx::query(
+            "UPDATE runs SET status = 'queued', started_at = NULL, session_id = ?, \
+             workspace_path = ?, branch = ?, base_commit = ?, error = NULL, \
+             summary = NULL WHERE id = ? AND status = 'running'",
+        )
+        .bind(&queued.session_id)
+        .bind(&queued.workspace_path)
+        .bind(&queued.branch)
+        .bind(&queued.base_commit)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        if res.rows_affected() != 1 {
+            return Err(Error::Conflict(format!("run {id} is not running")));
+        }
+        self.get_run(id).await
+    }
+
+    /// Sets a run's start and end, for tests of the Usage page's periods.
+    #[doc(hidden)]
+    pub async fn set_run_times(&self, id: &str, started: &str, ended: Option<&str>) -> Result<()> {
+        sqlx::query("UPDATE runs SET started_at = ?, ended_at = ? WHERE id = ?")
+            .bind(started)
+            .bind(ended)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Each dot's runs started at or after `since` (usage and limits spec section 5), heaviest
+    /// dot first, then by name.
+    pub async fn usage_rows(&self, since: &str) -> Result<Vec<crate::model::UsageRow>> {
+        use crate::model::{UsageRow, UsageRun};
+        let rows = sqlx::query(&format!(
+            "SELECT {RUN_COLUMNS}, \
+             (SELECT d.name FROM dots d WHERE d.id = runs.dot_id) AS dot_name, \
+             (SELECT d.engine FROM dots d WHERE d.id = runs.dot_id) AS dot_engine \
+             FROM runs WHERE started_at >= ? ORDER BY started_at, id"
+        ))
+        .bind(since)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut by_dot: Vec<UsageRow> = Vec::new();
+        for row in &rows {
+            let run = run_from_row(row)?;
+            let secs = run_seconds(&run);
+            let at = match by_dot.iter().position(|r| r.dot_id == run.dot_id) {
+                Some(i) => i,
+                None => {
+                    by_dot.push(UsageRow {
+                        dot_id: run.dot_id.clone(),
+                        dot_name: row.try_get("dot_name")?,
+                        engine: EngineKind::parse(&row.try_get::<String, _>("dot_engine")?)?,
+                        runs: 0,
+                        tokens_in: 0,
+                        tokens_out: 0,
+                        run_secs: 0,
+                        cost_usd: None,
+                        heaviest: Vec::new(),
+                    });
+                    by_dot.len() - 1
+                }
+            };
+            let entry = &mut by_dot[at];
+            entry.runs += 1;
+            entry.tokens_in += run.tokens_in;
+            entry.tokens_out += run.tokens_out;
+            entry.run_secs += secs.unwrap_or(0);
+            if let Some(cost) = run.cost_usd {
+                entry.cost_usd = Some(entry.cost_usd.unwrap_or(0.0) + cost);
+            }
+            entry.heaviest.push(UsageRun {
+                run_id: run.id,
+                trigger: run.trigger,
+                started_at: run.started_at.unwrap_or_default(),
+                tokens_in: run.tokens_in,
+                tokens_out: run.tokens_out,
+                run_secs: secs,
+                cost_usd: run.cost_usd,
+            });
+        }
+        for entry in &mut by_dot {
+            entry
+                .heaviest
+                .sort_by_key(|r| std::cmp::Reverse(r.tokens_in + r.tokens_out));
+            entry.heaviest.truncate(crate::limits::HEAVIEST);
+        }
+        by_dot.sort_by(|a, b| {
+            (b.tokens_in + b.tokens_out)
+                .cmp(&(a.tokens_in + a.tokens_out))
+                .then_with(|| a.dot_name.cmp(&b.dot_name))
+        });
+        Ok(by_dot)
+    }
+
+    /// Marks a run released from the hold by **Run anyway** (usage and limits spec section 4).
+    pub async fn set_hold_released(&self, id: &str) -> Result<Run> {
+        sqlx::query("UPDATE runs SET hold_released = 1 WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        self.get_run(id).await
     }
 
     pub async fn finish_run(

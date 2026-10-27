@@ -5,20 +5,22 @@ import { chatText, oneLine } from "@/lib/home-topics";
 import { isOpenQuestion } from "@/lib/messages";
 
 /// A dot's status mark, in the order the first match wins.
-export type DotStatus = "waiting" | "running" | "attention" | "off" | "idle";
+export type DotStatus = "waiting" | "held" | "running" | "attention" | "off" | "idle";
 
 export const STATUS_LABEL: Record<DotStatus, string> = {
   waiting: "waiting for you",
+  held: "held for Claude usage",
   running: "running",
   attention: "needs attention",
   off: "off",
   idle: "idle",
 };
 
-/// Waiting (a run waits for an approval, or the dot asked a question still open), running (a
-/// run is queued or running), attention (its schedule needs attention), off (disabled), else
-/// idle. `messages`: any messages; only the dot's open questions count.
-export function dotStatus(row: DotOverview, messages: Message[]): DotStatus {
+/// Waiting (a run waits for an approval, or the dot asked a question still open), held (its
+/// queued run is held for Claude usage), running (a run is queued or running), attention (its
+/// schedule needs attention), off (disabled), else idle. `messages`: any messages; only the
+/// dot's open questions count. `held`: the ids of the runs held for Claude usage.
+export function dotStatus(row: DotOverview, messages: Message[], held: string[] = []): DotStatus {
   const active = row.active_run;
   if (
     active?.status === "awaiting_approval" ||
@@ -26,6 +28,7 @@ export function dotStatus(row: DotOverview, messages: Message[]): DotStatus {
   ) {
     return "waiting";
   }
+  if (active?.status === "queued" && held.includes(active.id)) return "held";
   if (active?.status === "queued" || active?.status === "running") return "running";
   if (row.schedule_state?.attention) return "attention";
   if (!row.dot.enabled) return "off";

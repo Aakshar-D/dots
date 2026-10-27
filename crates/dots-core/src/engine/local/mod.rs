@@ -277,6 +277,7 @@ impl Session {
             let usage = EngineEvent::Usage {
                 tokens_in: completion.tokens_in,
                 tokens_out: completion.tokens_out,
+                cost_usd: None,
                 cache_read: 0,
             };
             if !self.emit(usage).await || !self.push(completion.message.clone()).await {

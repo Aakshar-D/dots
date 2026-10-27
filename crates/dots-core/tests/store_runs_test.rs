@@ -86,8 +86,8 @@ async fn finish_workspace_session_usage() {
         .await
         .unwrap();
     store.set_session(&run.id, "sess-1").await.unwrap();
-    store.add_usage(&run.id, 10, 5, 0).await.unwrap();
-    store.add_usage(&run.id, 1, 1, 0).await.unwrap();
+    store.add_usage(&run.id, 10, 5, 0, None).await.unwrap();
+    store.add_usage(&run.id, 1, 1, 0, None).await.unwrap();
     let done = store
         .finish_run(&run.id, RunStatus::Succeeded, Some("did it"), None)
         .await

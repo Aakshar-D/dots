@@ -16,6 +16,7 @@ use crate::approvals::grant_key;
 use crate::checkins::{CheckIns, Tool as CheckInTool};
 use crate::engine::{Engine, EngineEvent, RunContext};
 use crate::events::{Bus, RuntimeEvent};
+use crate::limits::{is_background, Admit, Limits, QueuedRun, STOPPED_BY_LIMIT};
 use crate::model::{
     ApprovalStatus, Dot, EngineKind, NewRun, Run, RunStatus, TriggerKind, WorkspaceMode,
 };
@@ -107,6 +108,8 @@ struct Active {
     workflow: bool,
     cancel: CancellationToken,
     cancelled_by_user: Arc<AtomicBool>,
+    /// A background run on the Claude engine: while held runs drain, one such at a time.
+    background_claude: bool,
 }
 
 pub struct Runner {
@@ -143,6 +146,9 @@ pub struct Runner {
     /// Where watchers staged their runs' files (watchers spec section 4.2), set once by the
     /// runtime (`set_watcher_files`).
     watcher_files: OnceLock<crate::watchers::files::WatcherFiles>,
+    /// Claude's usage limits (usage and limits spec section 4), set once by the runtime
+    /// (`set_limits`). Without them no run is held.
+    limits: OnceLock<Arc<Limits>>,
 }
 
 impl Runner {
@@ -171,7 +177,41 @@ impl Runner {
             apps: OnceLock::new(),
             acting: OnceLock::new(),
             watcher_files: OnceLock::new(),
+            limits: OnceLock::new(),
         })
+    }
+
+    /// The usage limits the dispatcher asks before it starts a queued run. Set once, before
+    /// any run starts.
+    pub fn set_limits(&self, limits: Arc<Limits>) {
+        let _ = self.limits.set(limits);
+    }
+
+    /// Wakes the dispatcher: something the limits depend on changed (a reading, a share, a
+    /// reset that passed, a run released from the hold).
+    pub fn nudge(&self) {
+        self.wake.notify_one();
+    }
+
+    /// Every queued run as the limits see it, oldest first.
+    pub async fn queued_runs(&self) -> Result<Vec<QueuedRun>> {
+        Ok(self
+            .store
+            .queued_with_engine(false)
+            .await?
+            .into_iter()
+            .map(|(run, engine)| queued_run(&run, engine))
+            .collect())
+    }
+
+    /// How many background Claude runs the runner holds now.
+    pub fn running_background_claude(&self) -> usize {
+        self.active
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|a| a.background_claude)
+            .count()
     }
 
     /// The vault runs resolve their dots' variables from (env vault spec §8). Set once, before
@@ -408,7 +448,20 @@ impl Runner {
             return Ok(0);
         }
         let mut started = 0;
-        for run in self.store.dispatchable_runs().await? {
+        // The limits hear of the queue first: a hold that ended starts draining before a run
+        // is let through (usage and limits spec section 4).
+        let limits = self.limits.get().cloned();
+        let mut running_background = self.running_background_claude();
+        if let Some(limits) = &limits {
+            limits.publish(&self.queued_runs().await?, running_background);
+        }
+        for (run, engine) in self.store.queued_with_engine(true).await? {
+            let background_claude = engine == EngineKind::Claude && is_background(run.trigger);
+            if let Some(limits) = &limits {
+                if limits.admit(&queued_run(&run, engine), running_background) != Admit::Go {
+                    continue;
+                }
+            }
             // Register as active before claiming, so a run is never `running` in the store
             // without a cancellation handle: a cancel in between is recorded on the token
             // and honoured by `execute` before anything starts.
@@ -434,8 +487,12 @@ impl Runner {
                         workflow,
                         cancel: cancel.clone(),
                         cancelled_by_user: by_user.clone(),
+                        background_claude,
                     },
                 );
+            }
+            if background_claude {
+                running_background += 1;
             }
             self.acting_begin(&run.dot_id);
             match self.store.claim_run(&run.id).await {
@@ -829,6 +886,7 @@ impl Runner {
                 tokens_in,
                 tokens_out,
                 cache_read,
+                cost_usd,
             } => {
                 self.store
                     .add_usage(
@@ -836,8 +894,22 @@ impl Runner {
                         *tokens_in as i64,
                         *tokens_out as i64,
                         *cache_read as i64,
+                        *cost_usd,
                     )
                     .await?
+            }
+            EngineEvent::Limits {
+                status,
+                windows,
+                resets_at,
+            } => {
+                if let Some(limits) = self.limits.get() {
+                    let reset = resets_at.as_deref();
+                    if let Err(e) = limits.record_reset(status, windows.clone(), reset).await {
+                        tracing::warn!(run = %run_id, "keeping the limit reading failed: {e}");
+                    }
+                    self.nudge();
+                }
             }
             _ => {}
         }
@@ -1078,6 +1150,9 @@ impl Runner {
         let mut timed_out = false;
         let mut summary: Option<String> = None;
         let mut error: Option<String> = None;
+        // Claude's `rejected` ending a background run (usage and limits spec section 4).
+        let mut saw_tool_call = false;
+        let mut saw_rejected = false;
         loop {
             let limit = grace.unwrap_or(deadline);
             tokio::select! {
@@ -1087,6 +1162,10 @@ impl Runner {
                     match ev {
                         EngineEvent::Finished { summary: s } => summary = Some(s),
                         EngineEvent::Failed { error: e } => error = Some(e),
+                        EngineEvent::ToolCall { .. } => saw_tool_call = true,
+                        EngineEvent::Limits { status, .. } if status == "rejected" => {
+                            saw_rejected = true;
+                        }
                         _ => {}
                     }
                 }
@@ -1125,7 +1204,32 @@ impl Runner {
         } else if waiting {
             (RunStatus::AwaitingApproval, error)
         } else if let Some(e) = error {
-            (RunStatus::Failed, Some(e))
+            let stopped_by_limit =
+                saw_rejected && dot.spec.engine == EngineKind::Claude && is_background(run.trigger);
+            // Back to the queue only while Dots knows when the limit resets: without that the
+            // run would start again at once, and be refused again.
+            let resets_known = self
+                .limits
+                .get()
+                .is_some_and(|l| l.rejected_until().is_some());
+            if stopped_by_limit && !saw_tool_call && resets_known {
+                // It did nothing yet: back to the queue, held until the limit resets, with its
+                // trigger and payload, so a watcher's event is not lost. A folder it was queued
+                // with (a follow-up's thread) stays; one this attempt made goes.
+                if run.workspace_path.is_none() {
+                    if let Err(e) = self.workspaces.cleanup_if_unchanged(&dot, &prepared).await {
+                        tracing::warn!(run = %run.id, "workspace cleanup failed: {e}");
+                    }
+                }
+                let queued = self.store.requeue_run(&run.id, run).await?;
+                self.emit_run(&queued);
+                return Ok(());
+            }
+            if stopped_by_limit {
+                (RunStatus::Failed, Some(format!("{STOPPED_BY_LIMIT}: {e}")))
+            } else {
+                (RunStatus::Failed, Some(e))
+            }
         } else if summary.is_some() {
             (RunStatus::Succeeded, None)
         } else {
@@ -1237,4 +1341,15 @@ impl Runner {
 
 fn already(run: &Run) -> Error {
     Error::Conflict(format!("run {} is already {}", run.id, run.status.as_str()))
+}
+
+/// A queued run as the limits see it.
+fn queued_run(run: &Run, engine: EngineKind) -> QueuedRun {
+    QueuedRun {
+        id: run.id.clone(),
+        trigger: run.trigger,
+        engine,
+        hold_released: run.hold_released,
+        queued_at: run.queued_at.clone(),
+    }
 }

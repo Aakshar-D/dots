@@ -55,6 +55,8 @@ const schemas: Record<SampleName, { parse: (v: unknown) => unknown }> = {
   OrgEntry: T.OrgEntry.array(),
   SourceCreds: T.SourceCreds.array(),
   GrantStatus: T.GrantStatus.array(),
+  LimitsState: T.LimitsState.array(),
+  UsageSummary: T.UsageSummary,
 };
 
 // The UI parses live data with these schemas, so it must know every variant the core has.
@@ -79,6 +81,7 @@ const enums: Record<keyof typeof fixture.Enums, { options: readonly string[] }> 
   ProposalStatus: T.ProposalStatus,
   WatcherKind: T.WatcherKind,
   PausedReason: T.PausedReason,
+  UsagePeriod: T.UsagePeriod,
   FolderEvent: T.FolderEvent,
   GithubEvent: T.GithubEvent,
   GrantState: T.GrantState,

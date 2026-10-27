@@ -8,6 +8,7 @@ import { InboxScreen } from "@/screens/InboxScreen";
 import { LibraryScreen } from "@/screens/library/LibraryScreen";
 import { RunScreen } from "@/screens/RunScreen";
 import { SettingsScreen } from "@/screens/SettingsScreen";
+import { UsageScreen } from "@/screens/UsageScreen";
 
 export const routes: RouteObject[] = [
   {
@@ -29,6 +30,7 @@ export const routes: RouteObject[] = [
       { path: "chat/:dotId", element: <ChatRedirect /> },
       { path: "chat/:dotId/:runId", element: <ChatRedirect /> },
       { path: "settings", element: <SettingsScreen /> },
+      { path: "usage", element: <UsageScreen /> },
       { path: "*", element: <Navigate to="/home" replace /> },
     ],
   },

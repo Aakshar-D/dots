@@ -9,14 +9,43 @@ use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, Wry};
 
+use chrono::{DateTime, Utc};
+use dots_core::limits::{local_time, percent, LimitReading, LimitsState};
+
 use crate::events::{NAVIGATE_EVENT, STATUS_EVENT};
 use crate::state::{runtime_of, AppState};
 
-pub fn tooltip(count: usize) -> String {
-    match count {
+/// The tray's tooltip: the Inbox count, then Claude's 5-hour and weekly usage and, while
+/// background runs are held, how many until when (usage and limits spec section 5).
+pub fn tooltip(count: usize, limits: Option<&LimitsState>, now: DateTime<Utc>) -> String {
+    let mut text = match count {
         0 => "Dots".to_string(),
         n => format!("Dots: {n} to review"),
+    };
+    if let Some(limits) = limits {
+        let pct = |r: &Option<LimitReading>| match r {
+            Some(r) => format!("{}%", percent(r.utilization)),
+            None => "–".to_string(),
+        };
+        text.push_str(&format!(
+            "\nClaude 5h {} · week {}",
+            pct(&limits.five_hour),
+            pct(&limits.weekly)
+        ));
+        let until = limits
+            .hold_until
+            .as_deref()
+            .and_then(|t| DateTime::parse_from_rfc3339(t).ok());
+        if let (true, Some(until)) = (limits.holding, until) {
+            let held = limits.held_run_ids.len();
+            text.push_str(&format!(
+                "\nHolding {held} {} until {}",
+                if held == 1 { "run" } else { "runs" },
+                local_time(until.with_timezone(&Utc), now)
+            ));
+        }
     }
+    text
 }
 
 pub fn inbox_label(count: usize) -> String {
@@ -89,7 +118,7 @@ impl Tray {
         let needs = Submenu::with_id_and_items(app, "needs", "Needs you", true, &[&nothing])?;
         let menu = Menu::with_items(app, &[&open, &needs, &inbox, &pause, &separator, &quit])?;
         let mut builder = TrayIconBuilder::with_id("main")
-            .tooltip(tooltip(0))
+            .tooltip(tooltip(0, None, Utc::now()))
             .menu(&menu)
             .show_menu_on_left_click(false)
             .on_menu_event(|app, event| on_menu(app, event.id().as_ref()))
@@ -116,8 +145,10 @@ impl Tray {
         })
     }
 
-    pub fn set_count(&self, count: usize) {
-        let _ = self.icon.set_tooltip(Some(tooltip(count)));
+    pub fn set_count(&self, count: usize, limits: Option<&LimitsState>) {
+        let _ = self
+            .icon
+            .set_tooltip(Some(tooltip(count, limits, Utc::now())));
         let _ = self.inbox.set_text(inbox_label(count));
     }
 
@@ -158,8 +189,9 @@ impl Tray {
 pub async fn refresh_count(app: &AppHandle, rt: &Runtime) {
     match rt.inbox_count().await {
         Ok(n) => {
+            let limits = rt.limits_get().await.ok();
             if let Some(tray) = app.try_state::<Tray>() {
-                tray.set_count(n);
+                tray.set_count(n, limits.as_ref());
             }
         }
         Err(e) => tracing::warn!("counting the inbox failed: {e}"),
@@ -221,10 +253,74 @@ mod tests {
     use dots_core::events::RuntimeEvent;
     use dots_core::model::{Dot, DotOverview, DotSpec};
 
+    /// Usage and limits spec section 5: the tooltip's lines for the Claude windows and the
+    /// hold.
+    #[test]
+    fn tooltip_shows_the_limits_and_holding() {
+        use chrono::{Local, NaiveTime, TimeZone, Utc};
+        use dots_core::limits::{HoldShares, LimitReading, LimitsState};
+        let today = |h, m| {
+            Local
+                .from_local_datetime(
+                    &Local::now()
+                        .date_naive()
+                        .and_time(NaiveTime::from_hms_opt(h, m, 0).unwrap()),
+                )
+                .unwrap()
+                .with_timezone(&Utc)
+        };
+        let now = today(12, 0);
+        let reading = |window: &str, u: f64| LimitReading {
+            window: window.into(),
+            utilization: u,
+            resets_at: dots_core::util::timestamp(today(15, 10)),
+            status: "allowed".into(),
+            read_at: dots_core::util::timestamp(now),
+        };
+        let mut state = LimitsState {
+            windows: vec![],
+            five_hour: Some(reading("five_hour", 0.42)),
+            weekly: Some(reading("seven_day", 0.55)),
+            shares: HoldShares {
+                enabled: true,
+                five_hour: 60,
+                weekly: 70,
+            },
+            holding: false,
+            draining: false,
+            rejected_until: None,
+            held_run_ids: vec![],
+            hold_until: None,
+        };
+        assert_eq!(
+            tooltip(2, Some(&state), now),
+            "Dots: 2 to review\nClaude 5h 42% · week 55%"
+        );
+        state.holding = true;
+        state.held_run_ids = vec!["a".into(), "b".into(), "c".into()];
+        state.hold_until = Some(dots_core::util::timestamp(today(15, 10)));
+        assert_eq!(
+            tooltip(0, Some(&state), now),
+            "Dots\nClaude 5h 42% · week 55%\nHolding 3 runs until 15:10"
+        );
+        state.held_run_ids = vec!["a".into()];
+        assert_eq!(
+            tooltip(0, Some(&state), now),
+            "Dots\nClaude 5h 42% · week 55%\nHolding 1 run until 15:10"
+        );
+        state.weekly = None;
+        state.holding = false;
+        assert_eq!(
+            tooltip(0, Some(&state), now),
+            "Dots\nClaude 5h 42% · week –"
+        );
+    }
+
     #[test]
     fn tray_texts_show_the_inbox_count() {
-        assert_eq!(tooltip(0), "Dots");
-        assert_eq!(tooltip(3), "Dots: 3 to review");
+        let now = chrono::Utc::now();
+        assert_eq!(tooltip(0, None, now), "Dots");
+        assert_eq!(tooltip(3, None, now), "Dots: 3 to review");
         assert_eq!(inbox_label(0), "Inbox");
         assert_eq!(inbox_label(12), "Inbox (12)");
     }

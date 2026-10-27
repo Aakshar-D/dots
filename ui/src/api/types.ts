@@ -159,6 +159,10 @@ const runShape = {
   reviewed_at: nullable(z.string()),
   // The failed scheduled run that this run retries.
   retry_of: nullable(z.string()),
+  // What the run would cost on the API, as the claude CLI said; null for a local run.
+  cost_usd: nullable(z.number()),
+  // The person released it from the hold with Run anyway.
+  hold_released: z.boolean(),
   // The workflow step the run works for (teams spec section 4).
   workflow_step_run_id: nullable(z.string()),
   // The part of tokens_in read from the prompt cache.
@@ -172,6 +176,72 @@ export const RunEventRecord = z.strictObject({
   ts: z.string(),
   kind: z.string(),
   data: z.unknown(),
+});
+
+// Claude's usage limits (usage and limits spec sections 3 to 6). A reading of one window as
+// the claude CLI last reported it; utilization is the share used, 0 to 1 (it may exceed 1).
+export const LimitReading = z.strictObject({
+  window: z.string(),
+  utilization: z.number(),
+  resets_at: z.string(),
+  status: z.string(),
+  read_at: z.string(),
+});
+export const HoldShares = z.strictObject({
+  enabled: z.boolean(),
+  five_hour: z.number().int(),
+  weekly: z.number().int(),
+});
+// five_hour and weekly are the known readings only (null once a window has reset).
+export const LimitsState = z.strictObject({
+  windows: z.array(LimitReading),
+  five_hour: nullable(LimitReading),
+  weekly: nullable(LimitReading),
+  shares: HoldShares,
+  holding: z.boolean(),
+  draining: z.boolean(),
+  rejected_until: nullable(z.string()),
+  held_run_ids: z.array(z.string()),
+  hold_until: nullable(z.string()),
+});
+export const HoldChange = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("started"), window: z.string(), utilization: z.number() }),
+  z.strictObject({ kind: z.literal("ended") }),
+]);
+export const UsagePeriod = z.enum(["five_hours", "week", "month"]);
+export const UsageRun = z.strictObject({
+  run_id: z.string(),
+  trigger: TriggerKind,
+  started_at: z.string(),
+  tokens_in: z.number().int(),
+  tokens_out: z.number().int(),
+  run_secs: nullable(z.number().int()),
+  cost_usd: nullable(z.number()),
+});
+export const UsageRow = z.strictObject({
+  dot_id: z.string(),
+  dot_name: z.string(),
+  engine: EngineKind,
+  runs: z.number().int(),
+  tokens_in: z.number().int(),
+  tokens_out: z.number().int(),
+  run_secs: z.number().int(),
+  cost_usd: nullable(z.number()),
+  heaviest: z.array(UsageRun),
+});
+export const UsageSummary = z.strictObject({
+  period: UsagePeriod,
+  since: z.string(),
+  rows: z.array(UsageRow),
+});
+// A run held for Claude usage; starts_after is null while held runs start one at a time.
+export const HeldRun = z.strictObject({
+  run_id: z.string(),
+  dot_id: z.string(),
+  dot_name: z.string(),
+  trigger: TriggerKind,
+  queued_at: z.string(),
+  starts_after: nullable(z.string()),
 });
 
 // What a run event's `data` holds: the engine event, tagged by `kind`. `RunEventRecord.data`
@@ -198,6 +268,15 @@ export const RunEventData = z.discriminatedUnion("kind", [
     tokens_out: z.number().int(),
     // The part of tokens_in read from the prompt cache; absent from older events.
     cache_read: z.number().int().optional(),
+    // Absent from the events of runs that ended before Dots kept a cost.
+    cost_usd: nullable(z.number()).optional(),
+  }),
+  // The claude CLI's limit reading; not shown in the transcript.
+  z.strictObject({
+    kind: z.literal("limits"),
+    status: z.string(),
+    windows: z.array(LimitReading),
+    resets_at: nullable(z.string()).optional(),
   }),
   z.strictObject({ kind: z.literal("raw"), line: z.string() }),
   z.strictObject({ kind: z.literal("message"), message: z.unknown() }),
@@ -389,6 +468,13 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
   // An org was joined, updated, fetched (by Refresh, its timer or the start-up fetch) or
   // removed: its status, policy or values may have changed.
   z.strictObject({ type: z.literal("org_updated"), org_id: z.string() }),
+  // A new limit reading, or a hold that started, ended or changed what it holds; `change` is
+  // set when a hold started or ended (the app notifies).
+  z.strictObject({
+    type: z.literal("limits_updated"),
+    limits: LimitsState,
+    change: nullable(HoldChange),
+  }),
 ]);
 
 export const ClaudeStatus = z.strictObject({
@@ -419,6 +505,10 @@ export const Settings = z.strictObject({
   notify_on_notes: z.boolean(),
   // The Edge program dots browse with; null uses the installed one.
   edge_path: nullable(z.string()),
+  // Background Claude runs wait at these shares of the 5-hour and weekly windows (percent).
+  hold_enabled: z.boolean(),
+  hold_share_five_hour: z.number().int(),
+  hold_share_weekly: z.number().int(),
 });
 export const SettingsSaved = z.strictObject({
   settings: Settings,
@@ -492,6 +582,8 @@ export const Inbox = z.strictObject({
   tools_changed: z.array(ToolsChanged),
   // Watchers Dots paused, newest first.
   watchers: z.array(PausedWatcher),
+  // Background runs held for Claude usage, oldest first.
+  held: z.array(HeldRun),
 });
 
 // The Library (MCP/skills spec section 2 and 9). `${VAR}` in a server's config stays a
@@ -973,6 +1065,14 @@ export const LIMITS = {
 } as const;
 
 export type EngineKind = z.infer<typeof EngineKind>;
+export type LimitReading = z.infer<typeof LimitReading>;
+export type LimitsState = z.infer<typeof LimitsState>;
+export type HoldChange = z.infer<typeof HoldChange>;
+export type UsagePeriod = z.infer<typeof UsagePeriod>;
+export type UsageSummary = z.infer<typeof UsageSummary>;
+export type UsageRow = z.infer<typeof UsageRow>;
+export type UsageRun = z.infer<typeof UsageRun>;
+export type HeldRun = z.infer<typeof HeldRun>;
 export type WorkspaceMode = z.infer<typeof WorkspaceMode>;
 export type TriggerKind = z.infer<typeof TriggerKind>;
 export type RunStatus = z.infer<typeof RunStatus>;

@@ -19,16 +19,16 @@ const failedRun = {
   error: "timeout",
 };
 
-/// An Inbox as a test writes it: without paused watchers unless it says so.
-type InboxSpec = Omit<Inbox, "watchers"> & Partial<Pick<Inbox, "watchers">>;
+/// An Inbox as a test writes it: without paused watchers or held runs unless it says so.
+type InboxSpec = Omit<Inbox, "watchers" | "held"> & Partial<Pick<Inbox, "watchers" | "held">>;
 
 /// An inbox the test can empty, the way a decision or a review does.
 function inbox(initial: InboxSpec) {
-  let current: Inbox = { watchers: [], ...initial };
+  let current: Inbox = { watchers: [], held: [], ...initial };
   backend.on("inbox", () => current);
   return {
     set: (next: InboxSpec) => {
-      current = { watchers: [], ...next };
+      current = { watchers: [], held: [], ...next };
     },
   };
 }
@@ -129,7 +129,14 @@ describe("the Inbox", () => {
     const loads = backend.callsTo("inbox").length;
     backend.on("inbox", async () => {
       await held;
-      return { approvals: [], review_runs: [], attention: [], tools_changed: [], watchers: [] };
+      return {
+        approvals: [],
+        review_runs: [],
+        attention: [],
+        tools_changed: [],
+        watchers: [],
+        held: [],
+      };
     });
 
     await user.click(approve);
@@ -515,7 +522,14 @@ describe("the approvals of one run", () => {
     input: { file_path: "b.txt" },
   };
   const mine = { name: `Approvals asked by ${approval.dot_name}` };
-  const empty: Inbox = { approvals: [], review_runs: [], attention: [], tools_changed: [], watchers: [] };
+  const empty: Inbox = {
+    approvals: [],
+    review_runs: [],
+    attention: [],
+    tools_changed: [],
+    watchers: [],
+    held: [],
+  };
   const answered = [approval, second].map((a) => ({ ...sample.approval, id: a.id }));
 
   it("stand together under their dot, and a single one has no batch buttons", async () => {
@@ -681,7 +695,14 @@ describe("a parked approval", () => {
 
 describe("a schedule that needs attention", () => {
   const [flagged] = sample.inbox.attention;
-  const empty: Inbox = { approvals: [], review_runs: [], attention: [], tools_changed: [], watchers: [] };
+  const empty: Inbox = {
+    approvals: [],
+    review_runs: [],
+    attention: [],
+    tools_changed: [],
+    watchers: [],
+    held: [],
+  };
   const only = (attention: Inbox["attention"]): Inbox => ({ ...empty, attention });
   const item = () => screen.findByRole("listitem", { name: `${flagged.dot_name} needs attention` });
   /// Lets what a command's answer set off reach the screen.

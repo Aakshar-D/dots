@@ -136,6 +136,8 @@ pub struct Runtime {
     /// The orgs joined on this PC (env vault spec §6), the vault's, and their timers.
     orgs: Orgs,
     org_timers: OrgTimers,
+    /// Claude's usage limits (usage and limits spec section 4).
+    limits: Arc<crate::limits::Limits>,
     shutdown: CancellationToken,
 }
 
@@ -316,6 +318,16 @@ impl Runtime {
             port,
         );
         runner.set_browsers(browsers.clone());
+        // Claude's usage limits: the readings kept before, and the person's shares (usage and
+        // limits spec section 4). The dispatcher asks them before it starts a queued run.
+        let limits = crate::limits::Limits::load(
+            store.clone(),
+            bus.clone(),
+            cfg.clock.clone(),
+            (&settings).into(),
+        )
+        .await?;
+        runner.set_limits(limits.clone());
         runner.set_apps(apps.clone());
         // Decisions parked before a restart (decided, but the resume never happened) are
         // turned into resume runs now; failures are logged and never block startup.
@@ -441,6 +453,7 @@ impl Runtime {
             workflows,
             orgs,
             org_timers,
+            limits,
             shutdown,
         })
     }
@@ -518,6 +531,8 @@ impl Runtime {
         self.store.put_settings(&next).await?;
         self.scheduler.set_paused(next.schedules_paused);
         self.watchers.set_paused(next.schedules_paused);
+        self.limits.set_shares((&next).into());
+        self.runner.nudge();
         self.follow_ups.set_paused(next.schedules_paused);
         *current = next.clone();
         Ok(next)
@@ -680,6 +695,7 @@ impl Runtime {
             attention: self.store.list_schedule_attention().await?,
             tools_changed: self.library.tools_changed().await?,
             watchers: self.store.paused_watchers().await?,
+            held: self.held_runs(&names).await?,
         })
     }
 
@@ -691,6 +707,8 @@ impl Runtime {
             + inbox.attention.len()
             + inbox.tools_changed.len()
             + inbox.watchers.len()
+            // Held runs wait as one line, however many (usage and limits spec section 5).
+            + usize::from(!inbox.held.is_empty())
             + self.store.count_waiting_messages().await?)
     }
 
@@ -1002,7 +1020,8 @@ impl Runtime {
     }
 
     pub async fn run_now(&self, dot_id: &str) -> Result<Run> {
-        self.store.get_dot(dot_id).await?;
+        let dot = self.store.get_dot(dot_id).await?;
+        self.refuse_at_the_limit(&dot)?;
         self.runner
             .enqueue(NewRun::new(dot_id, TriggerKind::Manual))
             .await
@@ -1017,7 +1036,8 @@ impl Runtime {
         if message.trim().is_empty() {
             return Err(Error::Invalid("message must not be empty".into()));
         }
-        self.store.get_dot(dot_id).await?;
+        let dot = self.store.get_dot(dot_id).await?;
+        self.refuse_at_the_limit(&dot)?;
         let mut new = NewRun::new(dot_id, TriggerKind::Chat);
         new.payload = Some(json!({ "message": message }));
         // Held until the new run is stored: of two follow-ups sent at once, the second must
@@ -1550,5 +1570,91 @@ impl Runtime {
 
     pub async fn watcher_resume(&self, id: &str) -> Result<crate::model::Watcher> {
         self.watchers.resume(id).await
+    }
+}
+
+/// Claude's usage limits (usage and limits spec sections 4 to 6).
+impl Runtime {
+    /// The limit readings, the shares and what is held now.
+    pub async fn limits_get(&self) -> Result<crate::limits::LimitsState> {
+        Ok(self.limits.state(
+            &self.runner.queued_runs().await?,
+            self.runner.running_background_claude(),
+        ))
+    }
+
+    /// The Usage page: each dot's runs started in the period.
+    pub async fn usage_summary(
+        &self,
+        period: crate::model::UsagePeriod,
+    ) -> Result<crate::model::UsageSummary> {
+        let since = crate::util::timestamp(self.clock.now() - period.reach());
+        Ok(crate::model::UsageSummary {
+            period,
+            rows: self.store.usage_rows(&since).await?,
+            since,
+        })
+    }
+
+    /// **Run anyway**: releases one held background Claude run from the hold.
+    pub async fn run_release_hold(&self, run_id: &str) -> Result<Run> {
+        let run = self.store.get_run(run_id).await?;
+        let dot = self.store.get_dot(&run.dot_id).await?;
+        if run.status != RunStatus::Queued
+            || run.hold_released
+            || dot.spec.engine != crate::model::EngineKind::Claude
+            || !crate::limits::is_background(run.trigger)
+        {
+            return Err(Error::Invalid(crate::limits::NOT_HELD.into()));
+        }
+        let run = self.store.set_hold_released(run_id).await?;
+        let _ = self.bus.send(RuntimeEvent::RunUpdated { run: run.clone() });
+        self.runner.nudge();
+        Ok(run)
+    }
+
+    /// Refuses the person's own Claude run while Claude's limit is reached: the CLI would
+    /// refuse it anyway (usage and limits spec section 4).
+    fn refuse_at_the_limit(&self, dot: &crate::model::Dot) -> Result<()> {
+        if dot.spec.engine != crate::model::EngineKind::Claude {
+            return Ok(());
+        }
+        let until = self
+            .limits
+            .rejected_until()
+            .and_then(|t| DateTime::parse_from_rfc3339(&t).ok());
+        match until {
+            Some(until) => Err(Error::Invalid(crate::limits::limit_reached(
+                until.with_timezone(&Utc),
+                self.clock.now(),
+            ))),
+            None => Ok(()),
+        }
+    }
+
+    /// The Inbox's held runs, oldest first.
+    async fn held_runs(
+        &self,
+        names: &HashMap<String, String>,
+    ) -> Result<Vec<crate::model::HeldRun>> {
+        let state = self.limits_get().await?;
+        let starts_after = if state.holding {
+            state.hold_until.clone()
+        } else {
+            None
+        };
+        let mut held = Vec::new();
+        for id in &state.held_run_ids {
+            let run = self.store.get_run(id).await?;
+            held.push(crate::model::HeldRun {
+                dot_name: names.get(&run.dot_id).cloned().unwrap_or_default(),
+                dot_id: run.dot_id,
+                run_id: run.id,
+                trigger: run.trigger,
+                queued_at: run.queued_at,
+                starts_after: starts_after.clone(),
+            });
+        }
+        Ok(held)
     }
 }

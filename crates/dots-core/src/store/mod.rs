@@ -14,6 +14,7 @@ mod dots;
 mod env;
 mod follow_ups;
 mod library;
+mod limits;
 mod memories;
 mod messages;
 mod orgs;
@@ -35,6 +36,7 @@ pub struct Store {
     pub(crate) pool: SqlitePool,
 }
 
+pub use limits::LimitReading;
 pub use memories::Added;
 
 impl Store {

@@ -11,12 +11,14 @@ import { ErrorNote, LoadErrors } from "@/components/ErrorNote";
 import { Markdown } from "@/components/Markdown";
 import { Page } from "@/components/Page";
 import { ReviewActions } from "@/components/ReviewActions";
+import { HeldNote } from "@/components/RunNumbers";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Transcript } from "@/components/Transcript";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { isActive } from "@/lib/home-topics";
 import { duration, localDateTime } from "@/lib/format";
+import { formatCost } from "@/lib/usage-format";
 import { notifyError } from "@/lib/notify";
 import { eventsQuery, keys } from "@/lib/query";
 import { useNow } from "@/lib/use-now";
@@ -72,6 +74,9 @@ function Thread({ runId, runs }: { runId: string; runs: Run[] }) {
     (latest.status === "failed" || worktreeKept || diff.isError);
   const tokensIn = runs.reduce((n, r) => n + r.tokens_in, 0);
   const tokensOut = runs.reduce((n, r) => n + r.tokens_out, 0);
+  // What the thread would cost on the API, when the engine said (usage and limits spec §5).
+  const costs = runs.flatMap((r) => (r.cost_usd === null ? [] : [r.cost_usd]));
+  const costUsd = costs.length > 0 ? costs.reduce((a, b) => a + b, 0) : null;
   const first = runs[0];
   const took = duration(first.started_at, active ? null : latest.ended_at, now);
 
@@ -152,6 +157,19 @@ function Thread({ runId, runs }: { runId: string; runs: Run[] }) {
             {tokensIn} in, {tokensOut} out
           </dd>
         </div>
+        {costUsd !== null && (
+          <div className="flex gap-1">
+            <dt>
+              <abbr
+                title="Your subscription does not bill per run: this is what the run would cost on the API."
+                className="no-underline"
+              >
+                API-eq.
+              </abbr>
+            </dt>
+            <dd className="text-foreground">{formatCost(costUsd)}</dd>
+          </div>
+        )}
         {latest.branch && (
           <div className="flex gap-1">
             <dt>Branch</dt>
@@ -159,6 +177,7 @@ function Thread({ runId, runs }: { runId: string; runs: Run[] }) {
           </div>
         )}
       </dl>
+      <HeldNote run={latest} />
       {latest.error && (
         <p role="alert" className="rounded-md border border-destructive/50 p-3 text-destructive">
           {latest.error}

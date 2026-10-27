@@ -25,6 +25,9 @@ export function DotsColumn({ rows, openId }: { rows: DotOverview[]; openId: stri
       queryKey: keys.followUps(null),
       queryFn: () => commands.followUpsList(null),
     }).data ?? [];
+  // A dot whose queued run waits for Claude usage says so rather than "running".
+  const held =
+    useQuery({ queryKey: keys.limits, queryFn: commands.limitsGet }).data?.held_run_ids ?? [];
   // A dot whose org is no longer joined says so; the orgs are asked for only when a dot has one.
   const orgs = useOrgList(rows.some((row) => row.dot.org_id !== null));
   // Up and Down move the focus to the dot above or below, Home and End to the first and the
@@ -70,7 +73,7 @@ export function DotsColumn({ rows, openId }: { rows: DotOverview[]; openId: stri
                 )}
               >
                 <span className="flex items-center gap-2">
-                  <StatusMark status={dotStatus(row, messages)} />
+                  <StatusMark status={dotStatus(row, messages, held)} />
                   <span className="truncate font-medium">{row.dot.name}</span>
                   <UnreadBadge row={row} />
                 </span>

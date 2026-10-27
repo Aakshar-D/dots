@@ -997,6 +997,27 @@ pub async fn watcher_set_enabled(
     Ok(state.rt()?.watcher_set_enabled(&id, enabled).await?)
 }
 
+/// Claude's limit readings and what is held (usage and limits spec section 6).
+#[tauri::command]
+pub async fn limits_get(state: State<'_, AppState>) -> Res<dots_core::limits::LimitsState> {
+    Ok(state.rt()?.limits_get().await?)
+}
+
+/// The Usage page's table for the period.
+#[tauri::command]
+pub async fn usage_summary(
+    state: State<'_, AppState>,
+    period: dots_core::model::UsagePeriod,
+) -> Res<dots_core::model::UsageSummary> {
+    Ok(state.rt()?.usage_summary(period).await?)
+}
+
+/// **Run anyway**: releases a held background run from the hold.
+#[tauri::command]
+pub async fn run_release_hold(state: State<'_, AppState>, run_id: String) -> Res<Run> {
+    Ok(state.rt()?.run_release_hold(&run_id).await?)
+}
+
 /// Resumes a watcher Dots paused (too many runs, or an error).
 #[tauri::command]
 pub async fn watcher_resume(state: State<'_, AppState>, id: String) -> Res<Watcher> {
