@@ -165,6 +165,44 @@ pub fn update_open_notes(app: AppHandle) -> Res<()> {
         .map_err(|e| CmdError::internal(format!("could not open {page}: {e}")))
 }
 
+/// Settings › Updates: the version, the last check, a ready update, Go back's version and the
+/// idle-install switch. Answers after a failed start too.
+#[tauri::command]
+pub async fn update_status(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Res<update_service::UpdateStatus> {
+    update_service::status(&app, state.rt().ok().as_ref()).await
+}
+
+/// "Check for updates": checks now and says what it found.
+#[tauri::command]
+pub async fn update_check_now(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Res<update_service::CheckOutcome> {
+    Ok(update_service::check_now(&app, &state.rt()?).await)
+}
+
+/// "What's new": a version's notes from its release, `None` when it has none.
+#[tauri::command]
+pub async fn update_release_notes(version: String) -> Res<Option<update_service::ReleaseNotes>> {
+    update_service::release_notes(&version).await
+}
+
+/// "Repair Dots": reinstalls this version, waiting for working runs.
+#[tauri::command]
+pub async fn update_repair(app: AppHandle, state: State<'_, AppState>) -> Res<UpdateNote> {
+    update_service::repair(&app, &state.rt()?).await
+}
+
+/// "Go back": installs the version before the last update with that update's backup. Works on
+/// the fatal page too.
+#[tauri::command]
+pub async fn update_go_back(app: AppHandle, state: State<'_, AppState>) -> Res<UpdateNote> {
+    update_service::go_back(&app, state.rt().ok()).await
+}
+
 /// "Later": the note is hidden until Dots next starts.
 #[tauri::command]
 pub async fn update_later(app: AppHandle, state: State<'_, AppState>) -> Res<UpdateNote> {

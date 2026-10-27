@@ -1,24 +1,30 @@
 //! Wires `update.rs` to `tauri-plugin-updater`, the runtime and the window: the checks, the
 //! downloaded update, the strip's buttons and the install (updates spec §5-§7).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use chrono::Local;
 use dots_core::events::RuntimeEvent;
 use dots_core::Runtime;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, Url};
 use tauri_plugin_updater::{Update, UpdaterExt};
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::error::CmdError;
 use crate::events::UPDATE_EVENT;
-use crate::update::{self, InstallSteps, Next, UpdateNote, UpdateState};
+use crate::update::{self, InstallSteps, Next, Purpose, UpdateNote, UpdateState};
+use crate::update_record::{self, UpdateRecord};
 
 /// A downloaded update whose signature the updater has checked.
 struct Downloaded {
     update: Update,
     bytes: Vec<u8>,
+    /// An update, a repair, or going back.
+    purpose: Purpose,
+    /// Going back: the update's backup it restores.
+    backup: Option<PathBuf>,
 }
 
 /// Tauri-managed: what the strip shows, and the update it installs. Managed only when the
@@ -29,16 +35,22 @@ pub struct Updates {
     data_dir: PathBuf,
     /// One button or run change at a time, so the hold always matches the state.
     turn: tokio::sync::Mutex<()>,
+    /// When a check last got an answer (RFC 3339 UTC), and why the last check failed.
+    checked_at: Mutex<Option<String>>,
+    check_error: Mutex<Option<String>>,
 }
 
 impl Updates {
-    /// `error`: what the last start left (`update::take_error`).
-    pub fn new(data_dir: PathBuf, error: Option<String>) -> Self {
+    /// `error`: what the last start left (`update::take_error`). `bad`: the versions this
+    /// machine never takes again (`update_record`).
+    pub fn new(data_dir: PathBuf, error: Option<String>, bad: Vec<String>) -> Self {
         Self {
-            state: Mutex::new(UpdateState::new(error, Vec::new())),
+            state: Mutex::new(UpdateState::new(error, bad)),
             downloaded: Mutex::new(None),
             data_dir,
             turn: tokio::sync::Mutex::new(()),
+            checked_at: Mutex::new(None),
+            check_error: Mutex::new(None),
         }
     }
 }
@@ -61,6 +73,239 @@ pub fn release_page(app: &AppHandle) -> Result<String, CmdError> {
     match state.ready_version() {
         Some(version) => Ok(update::release_page(version)),
         None => Err(dots_core::Error::Conflict("no update is ready".into()).into()),
+    }
+}
+
+/// What "Check for updates" found (updates UI spec section 4.1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum CheckOutcome {
+    /// This copy never checks (a development build, or `DOTS_DATA_DIR` set).
+    Off,
+    UpToDate,
+    Ready {
+        version: String,
+    },
+    Failed {
+        error: String,
+    },
+}
+
+/// The outcome of a check that left `result`: the version ready after it, or why it failed.
+pub fn outcome_of(checks_on: bool, result: &Result<Option<String>, String>) -> CheckOutcome {
+    match (checks_on, result) {
+        (false, _) => CheckOutcome::Off,
+        (true, Ok(None)) => CheckOutcome::UpToDate,
+        (true, Ok(Some(version))) => CheckOutcome::Ready {
+            version: version.clone(),
+        },
+        (true, Err(error)) => CheckOutcome::Failed {
+            error: error.clone(),
+        },
+    }
+}
+
+/// What Settings › Updates shows (updates UI spec section 4.1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpdateStatus {
+    /// The version running.
+    pub version: String,
+    pub checks_on: bool,
+    pub checked_at: Option<String>,
+    /// The update downloaded and ready, if any.
+    pub ready: Option<String>,
+    pub last_error: Option<String>,
+    /// The version Go back installs, while the last update's backup exists.
+    pub go_back: Option<String>,
+    pub auto_install: bool,
+}
+
+/// A version's notes for "What's new".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReleaseNotes {
+    pub version: String,
+    pub body: String,
+    pub url: String,
+}
+
+pub const NOTHING_TO_GO_BACK: &str = "There is nothing to go back to.";
+pub const NO_INSTALLER: &str = "This version has no published installer to repair from.";
+
+/// Going back: the version it installs, the backup it restores, and whether there is a
+/// runtime to close first (none on the fatal page).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GoBackPlan {
+    pub version: String,
+    pub backup: PathBuf,
+    pub close_runtime: bool,
+}
+
+pub fn go_back_plan(record: &UpdateRecord, runtime_ok: bool) -> Result<GoBackPlan, String> {
+    let (version, backup) =
+        update_record::go_back_target(record).ok_or_else(|| NOTHING_TO_GO_BACK.to_string())?;
+    Ok(GoBackPlan {
+        version,
+        backup,
+        close_runtime: runtime_ok,
+    })
+}
+
+/// Repair downloads the running version's own installer, so it needs its release.
+pub fn repair_allowed(release: Option<&dots_core::releases::Release>) -> Result<(), String> {
+    release.map(|_| ()).ok_or_else(|| NO_INSTALLER.to_string())
+}
+
+fn conflict(message: impl Into<String>) -> CmdError {
+    dots_core::Error::Conflict(message.into()).into()
+}
+
+fn checks_on() -> bool {
+    update::checks_enabled(
+        cfg!(debug_assertions),
+        std::env::var_os(crate::startup::DATA_DIR_ENV),
+    )
+}
+
+/// What Settings › Updates shows. `rt`: none after a failed start.
+pub async fn status(app: &AppHandle, rt: Option<&Arc<Runtime>>) -> Result<UpdateStatus, CmdError> {
+    let updates = updates(app)?;
+    let record = update_record::read(&updates.data_dir);
+    let auto_install = match rt {
+        Some(rt) => rt.settings().await.auto_install_updates,
+        None => false,
+    };
+    let ready = updates
+        .state
+        .lock()
+        .unwrap()
+        .ready_version()
+        .map(str::to_string);
+    let checked_at = updates.checked_at.lock().unwrap().clone();
+    let last_error = updates.check_error.lock().unwrap().clone();
+    Ok(UpdateStatus {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        checks_on: checks_on(),
+        checked_at,
+        ready,
+        last_error,
+        go_back: update_record::go_back_target(&record).map(|(version, _)| version),
+        auto_install,
+    })
+}
+
+/// "Check for updates": a check now, its outcome kept for the status line.
+pub async fn check_now(app: &AppHandle, rt: &Arc<Runtime>) -> CheckOutcome {
+    if !checks_on() {
+        return CheckOutcome::Off;
+    }
+    let result = match update::endpoint(std::env::var_os(update::ENDPOINT_ENV)) {
+        Ok(url) => check(app, rt, &url).await,
+        Err(e) => Err(e),
+    };
+    outcome_of(true, &result)
+}
+
+/// A version's notes, or `None` when it has no release.
+pub async fn release_notes(version: &str) -> Result<Option<ReleaseNotes>, CmdError> {
+    let release = dots_core::releases::fetch_release(dots_core::releases::API, version).await?;
+    Ok(release.map(|r| ReleaseNotes {
+        version: r.version,
+        body: r.body,
+        url: r.url,
+    }))
+}
+
+/// Downloads `version`'s own installer (`releases/download/v<version>/latest.json`), whatever
+/// its order against the version running: the same one for a repair, an older one for going
+/// back. The signature is still the updater's to check.
+async fn download_version(
+    app: &AppHandle,
+    version: &str,
+    purpose: Purpose,
+    backup: Option<PathBuf>,
+) -> Result<Downloaded, String> {
+    let url = Url::parse(&format!(
+        "https://github.com/{}/releases/download/v{version}/latest.json",
+        dots_core::releases::REPO
+    ))
+    .map_err(|e| e.to_string())?;
+    let updater = app
+        .updater_builder()
+        .endpoints(vec![url])
+        .map(|b| b.version_comparator(|_, _| true))
+        .and_then(|b| b.build())
+        .map_err(|e| e.to_string())?;
+    let found = updater
+        .check()
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("No installer was found for Dots {version}."))?;
+    let bytes = found
+        .download(|_, _| {}, || {})
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(Downloaded {
+        update: found,
+        bytes,
+        purpose,
+        backup,
+    })
+}
+
+/// "Repair Dots": downloads this version again and installs it like an update, waiting for
+/// working runs as "Restart to update" does.
+pub async fn repair(app: &AppHandle, rt: &Arc<Runtime>) -> Result<UpdateNote, CmdError> {
+    let current = env!("CARGO_PKG_VERSION");
+    let release = dots_core::releases::fetch_release(dots_core::releases::API, current).await?;
+    repair_allowed(release.as_ref()).map_err(conflict)?;
+    let downloaded = download_version(app, current, Purpose::Repair, None)
+        .await
+        .map_err(conflict)?;
+    *updates(app)?.downloaded.lock().unwrap() = Some(downloaded);
+    press(app, rt, |s, working| {
+        Ok(s.begin_other(Purpose::Repair, current, working))
+    })
+    .await
+}
+
+/// "Go back": downloads the version before the last update and installs it with that
+/// update's backup. With a runtime it waits for working runs like "Restart to update"; on the
+/// fatal page (`rt` none) it begins at once.
+pub async fn go_back(app: &AppHandle, rt: Option<Arc<Runtime>>) -> Result<UpdateNote, CmdError> {
+    let updates = updates(app)?;
+    let record = update_record::read(&updates.data_dir);
+    let plan = go_back_plan(&record, rt.is_some()).map_err(conflict)?;
+    let downloaded = download_version(
+        app,
+        &plan.version,
+        Purpose::GoBack,
+        Some(plan.backup.clone()),
+    )
+    .await
+    .map_err(conflict)?;
+    match rt {
+        Some(rt) => {
+            *updates.downloaded.lock().unwrap() = Some(downloaded);
+            press(app, &rt, |s, working| {
+                Ok(s.begin_other(Purpose::GoBack, &plan.version, working))
+            })
+            .await
+        }
+        None => {
+            let steps = AppSteps {
+                app: app.clone(),
+                rt: None,
+                data_dir: updates.data_dir.clone(),
+                downloaded,
+            };
+            tauri::async_runtime::spawn(async move {
+                update::install(&steps, Purpose::GoBack, Some(&plan.backup)).await
+            });
+            Ok(UpdateNote::Installing {
+                version: plan.version,
+                purpose: Purpose::GoBack,
+            })
+        }
     }
 }
 
@@ -260,18 +505,44 @@ async fn settle(controls: &impl Controls, updates: &Updates) {
 /// One check: a newer version is downloaded, its signature checked, and offered. Whether a
 /// found version is kept is `UpdateState::wants`, tested in `update.rs`; the rest needs the
 /// updater.
-async fn check(app: &AppHandle, rt: &Arc<Runtime>, url: &Url) -> Result<(), String> {
+async fn check(app: &AppHandle, rt: &Arc<Runtime>, url: &Url) -> Result<Option<String>, String> {
+    let result = check_once(app, rt, url).await;
+    if let Ok(updates) = updates(app) {
+        match &result {
+            Ok(_) => {
+                *updates.checked_at.lock().unwrap() = Some(dots_core::util::now());
+                *updates.check_error.lock().unwrap() = None;
+            }
+            Err(e) => *updates.check_error.lock().unwrap() = Some(e.clone()),
+        }
+    }
+    result
+}
+
+async fn check_once(
+    app: &AppHandle,
+    rt: &Arc<Runtime>,
+    url: &Url,
+) -> Result<Option<String>, String> {
     let updater = app
         .updater_builder()
         .endpoints(vec![url.clone()])
         .and_then(|b| b.build())
         .map_err(|e| e.to_string())?;
-    let Some(found) = updater.check().await.map_err(|e| e.to_string())? else {
-        return Ok(());
-    };
     let updates = updates(app).map_err(|e| e.message)?;
+    let ready = || {
+        updates
+            .state
+            .lock()
+            .unwrap()
+            .ready_version()
+            .map(str::to_string)
+    };
+    let Some(found) = updater.check().await.map_err(|e| e.to_string())? else {
+        return Ok(ready());
+    };
     if !updates.state.lock().unwrap().wants(&found.version) {
-        return Ok(());
+        return Ok(ready());
     }
     let bytes = found
         .download(|_, _| {}, || {})
@@ -282,11 +553,13 @@ async fn check(app: &AppHandle, rt: &Arc<Runtime>, url: &Url) -> Result<(), Stri
     let shown = {
         let mut state = updates.state.lock().unwrap();
         if !state.wants(&version) {
-            return Ok(());
+            return Ok(state.ready_version().map(str::to_string));
         }
         *updates.downloaded.lock().unwrap() = Some(Downloaded {
             update: found,
             bytes,
+            purpose: Purpose::Update,
+            backup: None,
         });
         state.offer(&version)
     };
@@ -302,7 +575,7 @@ async fn check(app: &AppHandle, rt: &Arc<Runtime>, url: &Url) -> Result<(), Stri
         let note = updates.state.lock().unwrap().note(&working);
         AppControls { app, rt }.announce(&note);
     }
-    Ok(())
+    Ok(Some(version))
 }
 
 /// Spawns the install of the downloaded update. False when there is none.
@@ -313,28 +586,33 @@ fn start_install(app: &AppHandle, rt: &Arc<Runtime>) -> bool {
     let Some(downloaded) = updates.downloaded.lock().unwrap().take() else {
         return false;
     };
+    let (purpose, backup) = (downloaded.purpose, downloaded.backup.clone());
     let steps = AppSteps {
         app: app.clone(),
-        rt: rt.clone(),
+        rt: Some(rt.clone()),
         data_dir: updates.data_dir.clone(),
         downloaded,
     };
     tauri::async_runtime::spawn(async move {
-        update::install(&steps, update::Purpose::Update, None).await
+        update::install(&steps, purpose, backup.as_deref()).await
     });
     true
 }
 
 struct AppSteps {
     app: AppHandle,
-    rt: Arc<Runtime>,
+    /// None on the fatal page: there is no runtime to close.
+    rt: Option<Arc<Runtime>>,
     data_dir: PathBuf,
     downloaded: Downloaded,
 }
 
 impl InstallSteps for AppSteps {
     async fn close_runtime(&self) -> bool {
-        self.rt.close(update::CLOSE_LIMIT).await
+        match &self.rt {
+            Some(rt) => rt.close(update::CLOSE_LIMIT).await,
+            None => true,
+        }
     }
 
     async fn back_up(&self) -> Result<PathBuf, String> {
@@ -354,36 +632,32 @@ impl InstallSteps for AppSteps {
         crate::startup::mark_restart(&self.data_dir);
     }
 
-    fn discard_backup(&self, backup: &std::path::Path) {
+    fn discard_backup(&self, backup: &Path) {
         if let Err(e) = std::fs::remove_file(backup) {
             tracing::warn!("could not delete the backup {}: {e}", backup.display());
         }
     }
 
-    fn record(
-        &self,
-        purpose: update::Purpose,
-        backup: Option<&std::path::Path>,
-    ) -> Result<(), String> {
+    fn record(&self, purpose: Purpose, backup: Option<&Path>) -> Result<(), String> {
         let current = env!("CARGO_PKG_VERSION");
         let mut record = crate::update_record::read(&self.data_dir);
         match purpose {
-            update::Purpose::GoBack => {
+            Purpose::GoBack => {
                 record.pending = false;
                 record.starts = 0;
                 crate::update_record::failed(&mut record, current);
             }
-            update::Purpose::Repair => {
+            Purpose::Repair => {
                 // The earlier update's go-back target stays: going back from a repair goes to
                 // the version before the last update, not to this one.
                 record.installing = Some(current.to_string());
                 record.pending = true;
                 record.starts = 0;
             }
-            update::Purpose::Update => {
+            Purpose::Update => {
                 record.leaving = Some(current.to_string());
                 record.installing = Some(self.downloaded.update.version.clone());
-                record.backup = backup.map(std::path::Path::to_path_buf);
+                record.backup = backup.map(Path::to_path_buf);
                 record.pending = true;
                 record.starts = 0;
                 record.by_itself_at = None;
@@ -396,13 +670,13 @@ impl InstallSteps for AppSteps {
         update::set_aside_database(&self.data_dir, env!("CARGO_PKG_VERSION"), Local::now())
     }
 
-    async fn restore_backup(&self, backup: &std::path::Path) -> Result<(), String> {
+    async fn restore_backup(&self, backup: &Path) -> Result<(), String> {
         std::fs::copy(backup, self.data_dir.join("dots.db"))
             .map(|_| ())
             .map_err(|e| format!("copying {}: {e}", backup.display()))
     }
 
-    fn undo_restore(&self, set_aside: &std::path::Path) {
+    fn undo_restore(&self, set_aside: &Path) {
         if let Err(e) = update::undo_set_aside(&self.data_dir, set_aside) {
             tracing::error!(
                 "could not put the database back from {}: {e}",
@@ -490,7 +764,7 @@ mod tests {
 
     /// Updates with version 0.2.0 ready.
     fn ready() -> Updates {
-        let updates = Updates::new(PathBuf::new(), None);
+        let updates = Updates::new(PathBuf::new(), None, Vec::new());
         updates.state.lock().unwrap().offer("0.2.0");
         updates
     }
@@ -683,7 +957,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_button_with_no_update_ready_is_a_conflict_and_the_hold_follows_the_state() {
-        let updates = Updates::new(PathBuf::new(), None);
+        let updates = Updates::new(PathBuf::new(), None, Vec::new());
         let fake = Fake::answering(&[&[]]);
         let err = act(&fake, &updates, restart).await.unwrap_err();
         assert_eq!(err.kind, CmdErrorKind::Conflict);
@@ -696,5 +970,70 @@ mod tests {
         let err = act(&fake, &updates, restart).await.unwrap_err();
         assert_eq!(err.kind, CmdErrorKind::Conflict);
         assert_eq!(fake.take(), ["hold", "working", "hold"]);
+    }
+
+    #[test]
+    fn check_now_reports_off_up_to_date_ready_or_the_error() {
+        assert_eq!(outcome_of(false, &Ok(None)), CheckOutcome::Off);
+        assert_eq!(outcome_of(true, &Ok(None)), CheckOutcome::UpToDate);
+        assert_eq!(
+            outcome_of(true, &Ok(Some("0.3.1".into()))),
+            CheckOutcome::Ready {
+                version: "0.3.1".into()
+            }
+        );
+        // A bad version is never kept, so a check that found only it is up to date.
+        let mut state = UpdateState::new(None, vec!["0.3.1".into()]);
+        assert!(!state.offer("0.3.1"));
+        assert_eq!(
+            outcome_of(true, &Ok(state.ready_version().map(str::to_string))),
+            CheckOutcome::UpToDate
+        );
+        assert_eq!(
+            outcome_of(true, &Err("offline".into())),
+            CheckOutcome::Failed {
+                error: "offline".into()
+            }
+        );
+    }
+
+    #[test]
+    fn go_back_is_offered_only_with_a_backup_and_works_without_a_runtime() {
+        let dir = tempfile::tempdir().unwrap();
+        let backup = dir.path().join("dots-0.3.0-2026-10-27-031200.db");
+        std::fs::write(&backup, "db").unwrap();
+        let record = crate::update_record::UpdateRecord {
+            leaving: Some("0.3.0".into()),
+            installing: Some("0.3.1".into()),
+            backup: Some(backup.clone()),
+            ..Default::default()
+        };
+        let plan = go_back_plan(&record, true).unwrap();
+        assert_eq!((plan.version.as_str(), plan.close_runtime), ("0.3.0", true));
+        assert_eq!(plan.backup, backup);
+        // From the fatal page there is no runtime to close.
+        assert!(!go_back_plan(&record, false).unwrap().close_runtime);
+        std::fs::remove_file(&backup).unwrap();
+        assert_eq!(
+            go_back_plan(&record, true).err().as_deref(),
+            Some("There is nothing to go back to.")
+        );
+    }
+
+    #[test]
+    fn repair_needs_a_published_release() {
+        assert_eq!(
+            repair_allowed(None),
+            Err("This version has no published installer to repair from.".to_string())
+        );
+        let release = dots_core::releases::Release {
+            version: "0.3.0".into(),
+            name: "Dots 0.3.0".into(),
+            body: String::new(),
+            url: String::new(),
+            prerelease: false,
+            withdrawn: false,
+        };
+        assert_eq!(repair_allowed(Some(&release)), Ok(()));
     }
 }

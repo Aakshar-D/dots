@@ -790,6 +790,67 @@ fn update_notes() -> Vec<UpdateNote> {
         UpdateNote::Failed {
             error: "The backup failed: disk full".into(),
         },
+        UpdateNote::Waiting {
+            version: "0.2.0".into(),
+            waiting_for: vec!["Daily digest".into()],
+            purpose: crate::update::Purpose::Repair,
+        },
+        UpdateNote::Installing {
+            version: "0.1.0".into(),
+            purpose: crate::update::Purpose::GoBack,
+        },
+        UpdateNote::Unhealthy {
+            version: "0.2.0".into(),
+            back_to: Some("0.1.0".into()),
+        },
+        UpdateNote::Withdrawn {
+            version: "0.2.0".into(),
+            back_to: None,
+        },
+        UpdateNote::UpdatedItself {
+            version: "0.2.0".into(),
+            at: TS.into(),
+        },
+    ]
+}
+
+/// Settings › Updates: one status with every field, one of a copy without checks.
+fn update_statuses() -> Vec<crate::update_service::UpdateStatus> {
+    use crate::update_service::UpdateStatus;
+    vec![
+        UpdateStatus {
+            version: "0.2.0".into(),
+            checks_on: true,
+            checked_at: Some(TS.into()),
+            ready: Some("0.2.1".into()),
+            last_error: Some("GitHub could not be reached".into()),
+            go_back: Some("0.1.0".into()),
+            auto_install: true,
+        },
+        UpdateStatus {
+            version: "0.2.0".into(),
+            checks_on: false,
+            checked_at: None,
+            ready: None,
+            last_error: None,
+            go_back: None,
+            auto_install: false,
+        },
+    ]
+}
+
+/// One outcome of each kind of "Check for updates".
+fn check_outcomes() -> Vec<crate::update_service::CheckOutcome> {
+    use crate::update_service::CheckOutcome;
+    vec![
+        CheckOutcome::Off,
+        CheckOutcome::UpToDate,
+        CheckOutcome::Ready {
+            version: "0.2.1".into(),
+        },
+        CheckOutcome::Failed {
+            error: "GitHub could not be reached".into(),
+        },
     ]
 }
 
@@ -1009,6 +1070,7 @@ pub fn samples() -> Value {
             message: "Dots could not start: database disk image is malformed".into(),
             log_dir: "C:/Users/u/AppData/Local/dots/logs".into(),
             backup: "C:/Users/u/AppData/Local/dots/backups/dots-0.1.0-2026-10-20-091700.db".into(),
+            go_back: Some("0.1.0".into()),
         }),
     });
     // Past the `json!` macro's recursion limit, so added here.
@@ -1128,6 +1190,16 @@ pub fn samples() -> Value {
         },
     ]);
     samples["UpdateNote"] = to(update_notes());
+    samples["UpdateStatus"] = to(update_statuses());
+    samples["CheckOutcome"] = to(check_outcomes());
+    samples["ReleaseNotes"] = to(vec![
+        Some(crate::update_service::ReleaseNotes {
+            version: "0.2.0".into(),
+            body: "- Dots holds background runs when your Claude usage is high.".into(),
+            url: "https://github.com/Aakshar-D/dots/releases/tag/v0.2.0".into(),
+        }),
+        None,
+    ]);
     samples["BrowserStatus"] = to(BrowserStatus {
         edge: Some("C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe".into()),
         npx: Some("C:/Program Files/nodejs/npx.cmd".into()),

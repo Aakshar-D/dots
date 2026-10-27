@@ -43,6 +43,11 @@ command_list![
     set_schedules_paused,
     restart_app,
     update_note,
+    update_status,
+    update_check_now,
+    update_release_notes,
+    update_repair,
+    update_go_back,
     update_open_notes,
     update_later,
     update_restart,
@@ -215,12 +220,17 @@ fn setup(app: &AppHandle, panics_logged: bool) -> Result<(), Box<dyn std::error:
         // A click on a notification opens what it is about (needs-you spec section 4.2).
         notify_routes::listen(app);
         events::spawn_forwarder(app.clone(), rt.clone());
-        if let Ok(dir) = &data_dir {
-            // What a failed install left is read while Dots holds the data folder.
-            app.manage(update_service::Updates::new(
-                dir.clone(),
-                update::take_error(dir),
-            ));
+    }
+    // Managed whenever the data folder is known, so the fatal page can go back too (updates UI
+    // spec section 4.4); only the checks need the runtime. What a failed install left is read
+    // while Dots holds the data folder.
+    if let Ok(dir) = &data_dir {
+        app.manage(update_service::Updates::new(
+            dir.clone(),
+            update::take_error(dir),
+            update_record::read(dir).bad,
+        ));
+        if let Ok((rt, _)) = &runtime {
             update_service::spawn(app.clone(), rt.clone());
         }
     }

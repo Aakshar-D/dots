@@ -374,6 +374,22 @@
       "signing_in": false
     }
   ],
+  "CheckOutcome": [
+    {
+      "state": "off"
+    },
+    {
+      "state": "up_to_date"
+    },
+    {
+      "state": "ready",
+      "version": "0.2.1"
+    },
+    {
+      "error": "GitHub could not be reached",
+      "state": "failed"
+    }
+  ],
   "CmdError": {
     "kind": "conflict",
     "message": "run 01J0RUN is already succeeded"
@@ -390,6 +406,11 @@
     "set_schedules_paused",
     "restart_app",
     "update_note",
+    "update_status",
+    "update_check_now",
+    "update_release_notes",
+    "update_repair",
+    "update_go_back",
     "update_open_notes",
     "update_later",
     "update_restart",
@@ -2596,6 +2617,14 @@
       "use_rules": null
     }
   ],
+  "ReleaseNotes": [
+    {
+      "body": "- Dots holds background runs when your Claude usage is high.",
+      "url": "https://github.com/Aakshar-D/dots/releases/tag/v0.2.0",
+      "version": "0.2.0"
+    },
+    null
+  ],
   "RuleCandidate": [
     {
       "label": "this exact command",
@@ -3209,6 +3238,7 @@
     }
   ],
   "Settings": {
+    "auto_install_updates": false,
     "autostart": true,
     "claude_path": null,
     "edge_path": null,
@@ -3228,6 +3258,7 @@
   "SettingsSaved": {
     "restart_required": true,
     "settings": {
+      "auto_install_updates": false,
       "autostart": true,
       "claude_path": null,
       "edge_path": null,
@@ -3267,6 +3298,7 @@
   ],
   "StartupError": {
     "backup": "C:/Users/u/AppData/Local/dots/backups/dots-0.1.0-2026-10-20-091700.db",
+    "go_back": "0.1.0",
     "log_dir": "C:/Users/u/AppData/Local/dots/logs",
     "message": "Dots could not start: database disk image is malformed"
   },
@@ -3315,6 +3347,7 @@
       ]
     },
     {
+      "purpose": "update",
       "state": "waiting",
       "version": "0.2.0",
       "waiting_for": [
@@ -3322,12 +3355,61 @@
       ]
     },
     {
+      "purpose": "update",
       "state": "installing",
       "version": "0.2.0"
     },
     {
       "error": "The backup failed: disk full",
       "state": "failed"
+    },
+    {
+      "purpose": "repair",
+      "state": "waiting",
+      "version": "0.2.0",
+      "waiting_for": [
+        "Daily digest"
+      ]
+    },
+    {
+      "purpose": "go_back",
+      "state": "installing",
+      "version": "0.1.0"
+    },
+    {
+      "back_to": "0.1.0",
+      "state": "unhealthy",
+      "version": "0.2.0"
+    },
+    {
+      "back_to": null,
+      "state": "withdrawn",
+      "version": "0.2.0"
+    },
+    {
+      "at": "2026-10-09T12:00:00.000Z",
+      "state": "updated_itself",
+      "version": "0.2.0"
+    }
+  ],
+  "UpdateStatus": [
+    {
+      "auto_install": true,
+      "checked_at": "2026-10-09T12:00:00.000Z",
+      "checks_on": true,
+      "go_back": "0.1.0",
+      "last_error": "GitHub could not be reached",
+      "ready": "0.2.1",
+      "version": "0.2.0"
+    },
+    {
+      "auto_install": false,
+      "checked_at": null,
+      "checks_on": false,
+      "go_back": null,
+      "last_error": null,
+      "ready": null,
+      "version": "0.2.0"
     }
   ],
   "UsageSummary": {
