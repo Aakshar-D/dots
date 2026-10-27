@@ -21,6 +21,7 @@ pub mod model;
 pub mod policy;
 pub mod proc;
 pub mod prompt;
+pub mod publish;
 pub mod releases;
 pub mod run_tools;
 pub mod runner;
