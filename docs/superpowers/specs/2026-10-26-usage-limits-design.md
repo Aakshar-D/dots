@@ -1,7 +1,7 @@
 # Usage and limits: dots that leave room for the person's own Claude work
 
 - Date: 2026-10-26
-- Status: design, awaiting approval
+- Status: built (plan `docs/superpowers/plans/2026-10-26-usage-limits.md`); section 12 records how it differs
 - Builds on: the Claude engine (`crates/dots-core/src/engine/claude/`), the runner's dispatcher (`runner.rs`, `dispatch_once`, `set_held`), the scheduler's coalescing (`scheduler.rs`, `store/schedules.rs` `start_or_join`), `2026-10-23-watchers-design.md` (watcher runs, the flood cap), `2026-10-22-needs-you-design.md` (the Inbox, notifications, the tray).
 
 ## 1. Intent
@@ -120,3 +120,36 @@ The rail bars are one focusable control (a link to `/usage`) whose accessible na
 - Whether `utilization` can exceed 1 (show at most 100%, store as read).
 - The tray tooltip's wording within the lines above.
 - The visual detail of the rail bars within the mockup (teal, amber, dashed when unknown).
+
+## 12. As built
+
+### 12.1 Where it differs
+
+| Spec | As built | Why |
+|---|---|---|
+| §4: after a restart, "while either window is unknown" one at a time | Only a hold window that **reset** since its last reading (or draining) forces one at a time; a window **never read** does not | If the CLI named only the limiting window, the weekly one might never be read and runs would go one at a time forever |
+| §4: a schedule slot joins "only a queued run whose trigger is `schedule`" | A slot (or a retry) joins any queued run except a `watcher`, `webhook` or `follow_up` one | Joining a queued Run now run is earlier, tested behaviour; the point is that a slot does not vanish into an event's run |
+| §5: held runs count "in Needs you only as one line" | The rail's Inbox count and the tray's to-review count add 1 when any run is held; per-dot needs-you counts are unchanged | Held runs are not one dot's doing |
+| §4: a share out of bounds is the core's refusal | The Settings screen also checks it, with the core's words, before saving | As the other number fields do |
+| §6: an event "on each new reading" | `LimitsUpdated` is sent only when what it carries changed (the dispatcher publishes on every pass; the state at start counts as sent) | Otherwise one event every 2 seconds |
+| (silent) a reset that passes | No timer of its own: the dispatcher looks every 2 seconds and the guard reads the clock | A reset releases runs within 2 seconds |
+
+### 12.2 Decided by the builder (section 11)
+
+- `rate_limit_event` in CLI 2.1.310 (captured from a real run, pinned in `crates/dots-core/tests/fixtures/rate_limit_event.json`): `rate_limit_info` has `status`, `resetsAt` (Unix seconds), `rateLimitType`, and `unifiedWindows` with `five_hour` and `seven_day`, each `{utilization, resetsAt, status}`. Every run reports both windows. A line with a status and no window is a `Limits` event with no readings; one without a readable status is ignored. The result line's `total_cost_usd` is the run's API-equivalent cost.
+- Utilization is stored as read and shown at most 100%.
+- The tray: "Dots: N to review", then "Claude 5h 42% · week 55%" ("–" for an unknown window), then "Holding N runs until 15:10" while holding. The hold notices are titled "Claude usage" and open the Usage page.
+- Tokens show one decimal under 10k ("1.5k"). The run page shows the thread's API-eq. cost next to its tokens, and a held run's reason with **Run anyway**.
+- Run events stored before this phase have no `cost_usd`; the UI reads them as before.
+
+### 12.3 Smoke
+
+Run on 2026-10-27, debug build of `feat/usage-limits` at `db4eb89`, a fresh data folder, Claude CLI 2.1.310 logged in as the person (`docs/verification/2026-10-27-usage-limits-smoke.md`).
+
+- One real run ("Reply with the single word ok"): 24,392 tokens in, 50 out, $0.098 API-eq.; the readings were 5-hour 1% and weekly 18%, both kept.
+- The weekly share set to 10%: the next slot of a one-minute schedule was held; the Inbox listed "ticker · Scheduled · starts after Wed 9:30 am" with **Run anyway**; the rail's bars turned to the holding colour and read "…; holding 1 runs"; the Inbox link counted 1.
+- Run now of another dot during the hold started and succeeded; **Run anyway** on the held run started it and it succeeded.
+- The share raised back to 70% with a run held: it started at once and succeeded.
+- The Usage page listed both dots (runs, tokens, run time, cost). axe: no violations on Usage, Inbox, Settings and Home, dark and light; no sideways scroll at 420 px.
+- Not seen: the tray tooltip and the Windows notices (not reachable from the page; covered by the app's unit tests).
+- Found: the rail's bar tracks barely show at low usage; "holding 1 runs".
