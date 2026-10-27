@@ -62,9 +62,13 @@ fn files_of(src: &AppSource) -> Vec<AppFile> {
         .collect()
 }
 
+/// The time one file's diff may take before `similar` settles for an approximate one.
+const DIFF_DEADLINE: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// How a version's files became another's (spec section 6.2, the Code tab): each file that is
 /// new, gone or changed, by path, as a unified diff with three lines of context. A file that is
-/// not UTF-8 on either side is listed as binary, without a patch.
+/// not UTF-8 on either side is listed as binary, without a patch. A file whose diff takes more
+/// than `DIFF_DEADLINE` gets an approximate one.
 pub fn diff_files(
     old: &BTreeMap<String, Vec<u8>>,
     new: &BTreeMap<String, Vec<u8>>,
@@ -86,7 +90,9 @@ pub fn diff_files(
         );
         let (patch, binary) = match texts {
             (Ok(a), Ok(b)) => {
-                let patch = similar::TextDiff::from_lines(a, b)
+                let patch = similar::TextDiff::configure()
+                    .timeout(DIFF_DEADLINE)
+                    .diff_lines(a, b)
                     .unified_diff()
                     .context_radius(3)
                     .header(&format!("a/{path}"), &format!("b/{path}"))
@@ -186,7 +192,7 @@ impl Apps {
             }
             _ => BTreeMap::new(),
         };
-        Ok(diff_files(&current, &next))
+        blocking(move || diff_files(&current, &next)).await
     }
 
     /// The newest `limit` logged calls of the app `name` (at most 500), newest first.

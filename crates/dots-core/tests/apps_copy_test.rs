@@ -41,9 +41,11 @@ async fn a_copy_is_the_active_version_as_kept_and_a_change_made_from_it_passes()
         .copy_to(&run.id, "expenses", copy.clone(), "expenses")
         .await
         .unwrap();
-    assert!(
-        said.starts_with("Copied version 1 of the app expenses into expenses."),
-        "{said}"
+    assert_eq!(
+        said,
+        "Copied version 1 of the app expenses into expenses. Change it there, keep its \
+         migrations as they are and add new ones after them, then send the whole folder with \
+         propose_app."
     );
     let kept = apps.code_dir(&item.id, 1);
     for entry in [

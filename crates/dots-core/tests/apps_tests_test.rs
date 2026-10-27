@@ -172,6 +172,14 @@ fn the_test_files_together_are_bounded_too() {
         Duration::from_millis(300),
         Duration::from_millis(450),
     );
+    let second = report
+        .results
+        .iter()
+        .find(|r| r.file == "tests/b.test.js")
+        .unwrap();
+    let error = second.error.as_deref().unwrap();
+    assert!(error.contains("in all"), "{error}");
+    assert!(error.contains("0.45 s"), "{error}");
     let last = report.results.last().unwrap();
     assert_eq!(last.file, "tests/c.test.js", "{report:?}");
     assert_eq!(

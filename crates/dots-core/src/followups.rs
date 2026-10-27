@@ -65,6 +65,23 @@ pub fn parse_time(s: &str) -> Result<DateTime<Utc>> {
         .map_err(|e| Error::Invalid(format!("stored time {s:?}: {e}")))
 }
 
+/// A thread marked as deciding (`FollowUps::begin_deciding`); unmarks it when dropped.
+pub struct Deciding {
+    follow_ups: Arc<FollowUps>,
+    root: String,
+}
+
+impl Drop for Deciding {
+    fn drop(&mut self) {
+        self.follow_ups
+            .deciding
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.root);
+        self.follow_ups.wake();
+    }
+}
+
 /// The follow-ups of every dot, and the loop that fires them (spec section 6). Held by the
 /// runtime, by `CheckIns`, which schedules them, and by the loop.
 pub struct FollowUps {
@@ -100,16 +117,19 @@ impl FollowUps {
         self.thread_lock.clone()
     }
 
-    /// Marks the thread `root` as deciding, under the thread lock; `false` when it already is.
-    pub fn begin_deciding(&self, root: &str) -> bool {
-        self.deciding
+    /// Marks the thread `root` as deciding, under the thread lock; `None` when it already is.
+    /// Dropping the guard unmarks the thread and wakes the loop, so a panic or a dropped
+    /// future unmarks it too and a follow-up held back meanwhile fires at once.
+    pub fn begin_deciding(self: &Arc<Self>, root: &str) -> Option<Deciding> {
+        let fresh = self
+            .deciding
             .lock()
             .expect("deciding threads")
-            .insert(root.to_string())
-    }
-
-    pub fn end_deciding(&self, root: &str) {
-        self.deciding.lock().expect("deciding threads").remove(root);
+            .insert(root.to_string());
+        fresh.then(|| Deciding {
+            follow_ups: self.clone(),
+            root: root.to_string(),
+        })
     }
 
     /// Whether the thread `root` waits for an app decision being carried out: a writer that

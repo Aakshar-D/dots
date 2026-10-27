@@ -139,6 +139,16 @@ impl Store {
         rows.iter().map(proposal_from_row).collect()
     }
 
+    /// The proposals that wait for the person, newest first.
+    pub async fn list_pending_app_proposals(&self) -> Result<Vec<AppProposal>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {PROPOSAL_COLUMNS} FROM app_proposals WHERE status = 'pending'              ORDER BY created_at DESC, id DESC"
+        ))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(proposal_from_row).collect()
+    }
+
     /// The run's proposal that waits for the person, if any: a run sends one at a time.
     pub async fn pending_app_proposal_for_run(&self, run_id: &str) -> Result<Option<AppProposal>> {
         sqlx::query(&format!(

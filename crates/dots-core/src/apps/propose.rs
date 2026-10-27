@@ -479,8 +479,8 @@ impl Apps {
                             missing.push(dir.to_path_buf());
                             up = dir.parent();
                         }
-                        std::fs::create_dir_all(parent)?;
                         made.extend(missing.into_iter().rev());
+                        std::fs::create_dir_all(parent)?;
                     }
                     made.push(file.clone());
                     std::fs::write(file, bytes)?;
@@ -498,7 +498,9 @@ impl Apps {
         .await
         .map_err(said)??;
         Ok(format!(
-            "Copied version {} of the app {name} into {shown}. Change it there, keep its              migrations as they are and add new ones after them, then send the whole folder with              propose_app.",
+            "Copied version {} of the app {name} into {shown}. Change it there, keep its \
+             migrations as they are and add new ones after them, then send the whole folder \
+             with propose_app.",
             config.version
         ))
     }

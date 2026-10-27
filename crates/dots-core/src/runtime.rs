@@ -691,10 +691,9 @@ impl Runtime {
             .collect();
         let app_reviews = self
             .store
-            .list_app_proposals(None)
+            .list_pending_app_proposals()
             .await?
             .into_iter()
-            .filter(|p| p.status == crate::apps::propose::ProposalStatus::Pending)
             .map(|proposal| crate::model::PendingAppReview {
                 dot_name: name(&proposal.dot_id),
                 dot_id: proposal.dot_id.clone(),
@@ -1152,7 +1151,7 @@ impl Runtime {
         }
         let asked = self.store.get_run(&p.run_id).await?;
         if self.follow_ups.deciding(&asked.root_run_id) {
-            return Err(Error::Conflict(crate::checkins::DECIDING.into()));
+            return Err(Error::Conflict(crate::checkins::ADDING.into()));
         }
         let thread = self.store.list_thread(&asked.root_run_id).await?;
         if let Some(active) = thread.iter().find(|r| !r.status.is_terminal()) {
@@ -1180,11 +1179,13 @@ impl Runtime {
             Decision::Discard => (ProposalStatus::Discarded, None, DISCARDED.to_string()),
             Decision::Add | Decision::AddWithKeptData => {
                 let on_kept = decision == Decision::AddWithKeptData;
-                self.follow_ups.begin_deciding(&asked.root_run_id);
+                let Some(deciding) = self.follow_ups.begin_deciding(&asked.root_run_id) else {
+                    return Err(Error::Conflict(crate::checkins::ADDING.into()));
+                };
                 drop(one_at_a_time);
                 let accepted = self.apps.accept(&p, on_kept).await;
                 one_at_a_time = lock.lock().await;
-                self.follow_ups.end_deciding(&asked.root_run_id);
+                drop(deciding);
                 let item = accepted?;
                 let version = match &item.config {
                     crate::library::LibraryConfig::App(c) => c.version,

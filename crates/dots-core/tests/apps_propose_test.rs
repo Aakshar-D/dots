@@ -416,6 +416,9 @@ async fn a_change_keeps_the_migrations_that_ran_and_waits_for_its_base_version()
     }
     let still = t.rt.store().get_app_proposal(&stale.id).await.unwrap();
     assert_eq!(still.status, ProposalStatus::Pending);
+    // The failed accept left the thread unmarked: a chat to it goes through.
+    let chat = t.rt.chat(&cont.dot_id, "Go on.", Some(&cont.id)).await;
+    assert!(chat.is_ok(), "{chat:?}");
     let (_, config) = apps.get("expenses").await.unwrap();
     assert_eq!(config.version, 3);
     assert!(matches!(

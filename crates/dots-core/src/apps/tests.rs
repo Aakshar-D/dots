@@ -182,7 +182,9 @@ pub fn run_tests_bounded(src: &AppSource, limit: Duration, total: Duration) -> T
             });
             continue;
         }
-        results.extend(run_file(src, &file, code, limit.min(left)));
+        // A file that starts with less than its own limit is stopped by the total, and says so.
+        let cut = (left < limit).then_some(total);
+        results.extend(run_file(src, &file, code, limit.min(left), cut));
     }
     TestReport { results }
 }
@@ -195,7 +197,13 @@ struct Bench {
     starts: Vec<Start>,
 }
 
-fn run_file(src: &AppSource, file: &str, code: &str, limit: Duration) -> Vec<TestResult> {
+fn run_file(
+    src: &AppSource,
+    file: &str,
+    code: &str,
+    limit: Duration,
+    cut_by: Option<Duration>,
+) -> Vec<TestResult> {
     let failed = |name: &str, error: String| TestResult {
         file: file.to_string(),
         name: bounded(name.to_string(), MAX_NAME),
@@ -289,7 +297,12 @@ fn run_file(src: &AppSource, file: &str, code: &str, limit: Duration) -> Vec<Tes
         // Every test the file did not finish fails with what stopped it.
         Err(stop) => {
             let stop = match stop {
-                Failure::TimedOut => format!("the tests ran over {} s", limit.as_secs_f32()),
+                Failure::TimedOut => match cut_by {
+                    Some(total) => {
+                        format!("the app's tests ran past {} s in all", total.as_secs_f32())
+                    }
+                    None => format!("the tests ran over {} s", limit.as_secs_f32()),
+                },
                 other => other.to_string(),
             };
             let done = results.len();
