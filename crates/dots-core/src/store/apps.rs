@@ -188,6 +188,27 @@ impl Store {
         ))
     }
 
+    /// Forgets the topics of the app `app_id`: it was removed.
+    pub async fn delete_app_topics(&self, app_id: &str) -> Result<()> {
+        sqlx::query("DELETE FROM app_topics WHERE app_id = ?")
+            .bind(app_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Forgets the topics of apps that are no longer installed (removed before their topics
+    /// went with them).
+    pub async fn prune_app_topics(&self) -> Result<u64> {
+        let res = sqlx::query(
+            "DELETE FROM app_topics WHERE app_id NOT IN \
+             (SELECT id FROM library_items WHERE kind = 'app')",
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected())
+    }
+
     /// Stores the run an app's start asked for and its topic, in one transaction (app library
     /// spec section 7). `at` is when the app started it.
     pub async fn start_app_run(

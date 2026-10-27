@@ -454,6 +454,18 @@ impl Apps {
     /// its row is stored with both switches off, then its code is written and its migrations run
     /// on a new database. A name the Library has is a `Conflict`. On a failure nothing stays.
     pub async fn install(&self, src: AppSource, origin: AppOrigin) -> Result<LibraryItem> {
+        self.install_on(src, origin, None).await
+    }
+
+    /// `install`, on the data a removal kept in `<data>/apps/<kept>/` when `kept` names it: the
+    /// data moves to the new app before the migrations run, and back on a failure; the kept
+    /// folder goes once the app is in.
+    pub(super) async fn install_on(
+        &self,
+        src: AppSource,
+        origin: AppOrigin,
+        kept: Option<&str>,
+    ) -> Result<LibraryItem> {
         let name = src.manifest.name.clone();
         if self
             .store
@@ -483,16 +495,34 @@ impl Apps {
         let code = self.code_dir(&item.id, 1);
         let data_path = self.data_path(&item.id);
         let app_dir = self.app_dir(&item.id);
+        let kept_dir = kept.map(|id| self.app_dir(id));
         let written = blocking(move || -> Result<()> {
             write_version(&code, &src)?;
-            let mut conn = data::open(&data_path)?;
-            data::migrate(&mut conn, &src.migrations)?;
-            Ok(())
+            if let Some(from) = &kept_dir {
+                crate::apps::kept::move_data(from, &app_dir)?;
+            }
+            let migrated = data::open(&data_path)
+                .and_then(|mut conn| data::migrate(&mut conn, &src.migrations));
+            match (migrated, &kept_dir) {
+                (Ok(_), Some(from)) => {
+                    let _ = remove_all(from);
+                    Ok(())
+                }
+                (Ok(_), None) => Ok(()),
+                (Err(e), Some(from)) => {
+                    let _ = crate::apps::kept::move_data(&app_dir, from);
+                    let _ = std::fs::remove_dir_all(&app_dir);
+                    Err(e)
+                }
+                (Err(e), None) => {
+                    let _ = std::fs::remove_dir_all(&app_dir);
+                    Err(e)
+                }
+            }
         })
         .await?;
         if let Err(e) = written {
             let _ = self.store.remove_library_item(&item.id).await;
-            let _ = blocking(move || std::fs::remove_dir_all(app_dir)).await;
             return Err(e);
         }
         self.changed(&item.id);
@@ -688,9 +718,11 @@ impl Apps {
 
     /// Removes the app `name` (spec section 10): refused (`Conflict`, naming them) while dots
     /// tick it, unless `confirm`; its code goes, and its data too when `delete_data` (the second
-    /// confirmation). Kept data is found again by nothing: a new app gets a new id.
+    /// confirmation). Data that stays gets a `removed.json`, so the Apps screen lists it and a
+    /// new app of the name may start on it (`kept`). Its topics go: no run of them can reach
+    /// it again.
     pub async fn remove(&self, name: &str, confirm: bool, delete_data: bool) -> Result<()> {
-        let (_held, item, _) = self.get_locked(name).await?;
+        let (_held, item, config) = self.get_locked(name).await?;
         // "Every dot" gives the app to dots that do not name it: they use it too.
         let users = self.store.dots_with_app(&item).await?;
         if !users.is_empty() && !confirm {
@@ -700,9 +732,14 @@ impl Apps {
                 names.join(", ")
             )));
         }
+        let src = self.load(&item, &config).await.ok();
         // The files first: when one cannot be deleted the row stays, and removing again retries.
         let dir = self.app_dir(&item.id);
+        let (app, title) = (item.name.clone(), config.title.clone());
         blocking(move || -> Result<()> {
+            if !delete_data {
+                crate::apps::kept::note_removed(&dir, &app, &title, src.as_deref())?;
+            }
             remove_all(&dir.join("code"))?;
             if delete_data {
                 remove_all(&dir)?;
@@ -710,6 +747,7 @@ impl Apps {
             Ok(())
         })
         .await??;
+        self.store.delete_app_topics(&item.id).await?;
         self.store.remove_library_item(&item.id).await?;
         self.cache
             .lock()
@@ -738,7 +776,7 @@ fn logged_input(input: Value) -> Value {
 }
 
 /// Deletes `path` and all under it; one already gone is not an error.
-fn remove_all(path: &Path) -> Result<()> {
+pub(super) fn remove_all(path: &Path) -> Result<()> {
     match std::fs::remove_dir_all(path) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
         _ => Ok(()),

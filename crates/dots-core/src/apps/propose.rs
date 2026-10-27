@@ -123,6 +123,10 @@ pub struct ProposalSummary {
     pub migrations: Vec<String>,
     /// The version a change was checked against; `None` for a new app.
     pub update_from: Option<u32>,
+    /// Data a removed app of this name kept that fits this new app's migrations: the card
+    /// offers to start on it (spec section 10).
+    #[serde(default)]
+    pub kept_data: Option<super::kept::KeptOffer>,
 }
 
 /// An app a dot proposed, and what the person decided.
@@ -153,6 +157,8 @@ pub struct AppProposal {
 pub enum Decision {
     /// "Add to library", or "Update" for a change.
     Add,
+    /// "Add to library" on the kept data the card offered.
+    AddWithKeptData,
     /// "Ask for changes": the text continues the dot's thread.
     AskForChanges {
         text: String,
@@ -237,6 +243,7 @@ impl Apps {
             .map_err(said)?
             .map_err(said)?;
         let name = src.manifest.name.clone();
+        let mut kept_data = None;
         let (base, migrations) = match self.get(&name).await {
             Ok((item, config)) => {
                 let current = self.load(&item, &config).await.map_err(said)?;
@@ -249,10 +256,13 @@ impl Apps {
                     .collect();
                 (Some((item.id, config.version)), newer)
             }
-            Err(Error::NotFound(_)) => (
-                None,
-                src.migrations.iter().map(|m| m.file.clone()).collect(),
-            ),
+            Err(Error::NotFound(_)) => {
+                kept_data = self.kept_fit(&src).await.map_err(said)?;
+                (
+                    None,
+                    src.migrations.iter().map(|m| m.file.clone()).collect(),
+                )
+            }
             Err(e) => return Err(said(e)),
         };
         let checked = src.clone();
@@ -291,6 +301,7 @@ impl Apps {
             bytes: files.values().map(|b| b.len() as u64).sum(),
             migrations,
             update_from: base.as_ref().map(|(_, v)| *v),
+            kept_data,
         };
         let id = crate::util::new_id();
         let dir = self.proposed_dir(&id);
@@ -328,13 +339,21 @@ impl Apps {
     }
 
     /// "Add to library" or "Update" for the pending proposal `p`: a new app at version 1, its
-    /// switches off, or the next version of the app it changes. A change whose app has moved
-    /// on since it was checked is a `Conflict`.
-    pub async fn accept(&self, p: &AppProposal) -> Result<LibraryItem> {
+    /// switches off, on the kept data the card offered when `on_kept`, or the next version of
+    /// the app it changes. A change whose app has moved on since it was checked is a
+    /// `Conflict`.
+    pub async fn accept(&self, p: &AppProposal, on_kept: bool) -> Result<LibraryItem> {
         let dir = self.proposed_dir(&p.id);
         let src = blocking(move || source::read_folder(&dir)).await??;
         let Some(base) = p.base_version else {
-            return self.install(src, AppOrigin::Proposed).await;
+            return match (on_kept, &p.summary.kept_data) {
+                (false, _) => self.install(src, AppOrigin::Proposed).await,
+                (true, Some(kept)) => self.install_kept(src, &kept.id).await,
+                (true, None) => Err(Error::Invalid(format!(
+                    "no kept data was offered for the app {}",
+                    p.app_name
+                ))),
+            };
         };
         let Some(app_id) = p.app_id.as_deref() else {
             return Err(Error::Other(format!(

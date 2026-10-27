@@ -1155,8 +1155,9 @@ impl Runtime {
                 (ProposalStatus::ChangesAsked, Some(text.to_string()), said)
             }
             Decision::Discard => (ProposalStatus::Discarded, None, DISCARDED.to_string()),
-            Decision::Add => {
-                let item = self.apps.accept(&p).await?;
+            Decision::Add | Decision::AddWithKeptData => {
+                let on_kept = decision == Decision::AddWithKeptData;
+                let item = self.apps.accept(&p, on_kept).await?;
                 let version = match &item.config {
                     crate::library::LibraryConfig::App(c) => c.version,
                     _ => 1,
@@ -1164,6 +1165,11 @@ impl Runtime {
                 let said = match p.base_version {
                     Some(_) => format!(
                         "The person accepted your change to the app {}; it is now version {version}.",
+                        p.app_name
+                    ),
+                    None if on_kept => format!(
+                        "The person added the app {} to the Library, on the data kept from the \
+                         removed one.",
                         p.app_name
                     ),
                     None => format!("The person added the app {} to the Library.", p.app_name),

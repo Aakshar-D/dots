@@ -1299,6 +1299,7 @@ fn apps_samples(samples: &mut Value) {
         bytes: 2_048,
         migrations: vec!["0001_expenses.sql".into()],
         update_from: None,
+        kept_data: None,
     };
     let proposal = |id: &str, status: ProposalStatus| AppProposal {
         id: id.into(),
@@ -1321,11 +1322,20 @@ fn apps_samples(samples: &mut Value) {
     update.base_version = Some(1);
     update.summary.update_from = Some(1);
     update.summary.migrations = vec!["0002_category.sql".into()];
+    let mut on_kept = proposal("01J0PROP5", ProposalStatus::Pending);
+    on_kept.summary.kept_data = Some(dots_core::apps::kept::KeptOffer {
+        id: "01J0APP0".into(),
+        title: "Expenses".into(),
+        removed_at: TS.into(),
+        bytes: 24_576,
+        migrations: vec!["0002_category.sql".into()],
+    });
     samples["AppProposal"] = to([
         proposal("01J0PROP", ProposalStatus::Pending),
         proposal("01J0PROP2", ProposalStatus::ChangesAsked),
         update,
         proposal("01J0PROP4", ProposalStatus::Discarded),
+        on_kept,
     ]);
     samples["Enums"]["ProposalStatus"] = to([
         ProposalStatus::Pending,

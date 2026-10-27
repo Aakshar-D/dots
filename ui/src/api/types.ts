@@ -677,6 +677,16 @@ export const TestResult = z.strictObject({
   error: nullable(z.string()),
 });
 export const ProposalStatus = z.enum(["pending", "added", "changes_asked", "discarded"]);
+// Data a removed app of the same name kept that fits a new app's migrations: the review card
+// offers to start on it.
+export const KeptOffer = z.strictObject({
+  id: z.string(),
+  title: z.string(),
+  removed_at: z.string(),
+  bytes: z.number(),
+  // The new app's migrations that would run on it.
+  migrations: z.array(z.string()),
+});
 // What a review card's summary shows.
 export const ProposalSummary = z.strictObject({
   title: z.string(),
@@ -691,6 +701,7 @@ export const ProposalSummary = z.strictObject({
   migrations: z.array(z.string()),
   // The version a change was checked against; null for a new app.
   update_from: nullable(z.number()),
+  kept_data: nullable(KeptOffer),
 });
 // An app a dot proposed, and what the person decided (app library spec section 6.2).
 export const AppProposal = z.strictObject({
@@ -712,6 +723,8 @@ export const AppProposal = z.strictObject({
 // The person's answer on a review card.
 export const ProposalDecision = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("add") }),
+  // "Add to library" on the kept data the card offered.
+  z.strictObject({ kind: z.literal("add_with_kept_data") }),
   z.strictObject({ kind: z.literal("ask_for_changes"), text: z.string() }),
   z.strictObject({ kind: z.literal("discard") }),
 ]);
