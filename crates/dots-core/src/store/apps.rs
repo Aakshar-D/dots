@@ -142,7 +142,8 @@ impl Store {
     /// The proposals that wait for the person, newest first.
     pub async fn list_pending_app_proposals(&self) -> Result<Vec<AppProposal>> {
         let rows = sqlx::query(&format!(
-            "SELECT {PROPOSAL_COLUMNS} FROM app_proposals WHERE status = 'pending'              ORDER BY created_at DESC, id DESC"
+            "SELECT {PROPOSAL_COLUMNS} FROM app_proposals WHERE status = 'pending' \
+             ORDER BY created_at DESC, id DESC"
         ))
         .fetch_all(&self.pool)
         .await?;

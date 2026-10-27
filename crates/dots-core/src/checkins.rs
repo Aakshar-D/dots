@@ -417,7 +417,8 @@ pub(crate) fn continuation(
 
 /// What a reply or a chat message is told while an app the person accepted in the thread is
 /// being added (`Runtime::decide_app_proposal`).
-pub const DECIDING: &str = "Dots is still adding the app you accepted in this chat; send your     message again in a moment";
+pub const DECIDING: &str = "Dots is still adding the app you accepted in this chat; send your \
+                            message again in a moment";
 
 /// What the Add button is told when the thread is already adding an app.
 pub const ADDING: &str = "Dots is still adding this app; wait until it has finished";
