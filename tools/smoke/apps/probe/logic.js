@@ -12,3 +12,8 @@ export function results(input, ctx) {
     .query("SELECT probe, reached, detail FROM probes ORDER BY probe", [])
     .map((r) => ({ probe: r.probe, reached: r.reached === 1, detail: r.detail }));
 }
+
+export function reset(input, ctx) {
+  ctx.db.exec("DELETE FROM probes", []);
+  return { cleared: true };
+}

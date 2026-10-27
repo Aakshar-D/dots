@@ -22,6 +22,12 @@
       "name": "results",
       "description": "What each probe reached, by probe",
       "input": { "type": "object" }
+    },
+    {
+      "name": "reset",
+      "description": "Forget every recorded outcome",
+      "input": { "type": "object" },
+      "writes": true
     }
   ]
 }
