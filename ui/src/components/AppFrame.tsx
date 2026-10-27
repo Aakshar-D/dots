@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { connectFrame, SANDBOX, type Bridge } from "@/lib/app-bridge";
@@ -29,7 +29,7 @@ export function AppFrame(props: {
     if ((props.changes ?? 0) > 0) bridge.current?.changed();
   }, [props.changes]);
   // Another page (a new version, another preview) is a new frame with its own first load.
-  useEffect(() => {
+  useLayoutEffect(() => {
     loads.current = 0;
   }, [props.src]);
   useEffect(

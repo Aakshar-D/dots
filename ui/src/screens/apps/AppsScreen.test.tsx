@@ -85,7 +85,7 @@ describe("the Apps screen", () => {
     backend.on("app_roll_back", () => expenses().item);
     const { user } = renderApp("/apps");
     const row = await screen.findByRole("listitem", { name: "Expenses" });
-    await user.click(within(row).getByRole("button", { name: "Roll back" }));
+    await user.click(within(row).getByRole("button", { name: "Roll back Expenses" }));
     const dialog = await screen.findByRole("alertdialog", { name: "Roll back Expenses?" });
     expect(dialog).toHaveTextContent("Version 2 becomes the active one again.");
     await user.click(within(dialog).getByRole("button", { name: "Roll back" }));
@@ -97,7 +97,7 @@ describe("the Apps screen", () => {
     backend.on("apps_kept_list", () => []);
     renderApp("/apps");
     const row = await screen.findByRole("listitem", { name: "Expenses" });
-    expect(within(row).queryByRole("button", { name: "Roll back" })).toBeNull();
+    expect(within(row).queryByRole("button", { name: "Roll back Expenses" })).toBeNull();
   });
 
   it("removes an app after asking twice, keeping its data unless told", async () => {
@@ -106,7 +106,7 @@ describe("the Apps screen", () => {
     backend.on("app_remove", () => null);
     const { user } = renderApp("/apps");
     const row = await screen.findByRole("listitem", { name: "Expenses" });
-    await user.click(within(row).getByRole("button", { name: "Remove" }));
+    await user.click(within(row).getByRole("button", { name: "Remove Expenses" }));
     const first = await screen.findByRole("alertdialog", { name: "Remove Expenses?" });
     expect(first).toHaveTextContent("Used by builder. Removing it takes it out of them.");
     await user.click(within(first).getByRole("button", { name: "Remove app" }));
@@ -118,7 +118,7 @@ describe("the Apps screen", () => {
       ]),
     );
 
-    await user.click(within(row).getByRole("button", { name: "Remove" }));
+    await user.click(within(row).getByRole("button", { name: "Remove Expenses" }));
     await user.click(
       within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Remove app" }),
     );
@@ -132,6 +132,28 @@ describe("the Apps screen", () => {
       confirm: true,
       deleteData: true,
     });
+  });
+
+  it("removes an app no dot uses, which the core confirms only when told", async () => {
+    backend.on("apps_list", () => [expenses({ dots: [] })]);
+    backend.on("apps_kept_list", () => []);
+    backend.on("app_remove", (args) => {
+      if (args.confirm !== true) throw { kind: "conflict", message: "dots use this app" };
+      return null;
+    });
+    const { user } = renderApp("/apps");
+    const row = await screen.findByRole("listitem", { name: "Expenses" });
+    await user.click(within(row).getByRole("button", { name: "Remove Expenses" }));
+    const first = await screen.findByRole("alertdialog", { name: "Remove Expenses?" });
+    expect(first).toHaveTextContent("No dot uses it.");
+    await user.click(within(first).getByRole("button", { name: "Remove app" }));
+    const second = await screen.findByRole("alertdialog", { name: "Delete Expenses's data too?" });
+    await user.click(within(second).getByRole("button", { name: "Keep the data" }));
+    await waitFor(() =>
+      expect(backend.callsTo("app_remove")).toEqual([
+        { name: "expenses", confirm: true, deleteData: false },
+      ]),
+    );
   });
 
   it("lists the data removed apps kept, and deletes it after asking", async () => {

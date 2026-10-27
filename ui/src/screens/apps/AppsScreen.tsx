@@ -118,6 +118,7 @@ function AppItem({ row }: { row: AppRow }) {
               title={`Roll back ${title}?`}
               description={`Version ${config.previous_version} becomes the active one again. Its data stays as it is: the update after it changed no data schema.`}
               confirmLabel="Roll back"
+              ariaLabel={`Roll back ${title}`}
               disabled={rollBack.isPending}
               onConfirm={() => rollBack.mutate()}
             >
@@ -172,14 +173,15 @@ function AppItem({ row }: { row: AppRow }) {
   );
 }
 
-/// "Remove" (app library spec section 10): the usual "dots use it" confirmation, then a second
-/// one for the data, which stays unless the person says to delete it too.
+/// "Remove" (app library spec section 10): the first dialog is the person's confirmation, also
+/// of the dots that use the app; then a second one for the data, which stays unless the person
+/// says to delete it too.
 function RemoveApp({ row, title }: { row: AppRow; title: string }) {
   const qc = useQueryClient();
   const [step, setStep] = useState<"closed" | "app" | "data">("closed");
   const remove = useMutation({
     mutationFn: (deleteData: boolean) =>
-      commands.appRemove(row.item.name, row.dots.length > 0, deleteData),
+      commands.appRemove(row.item.name, true, deleteData),
     onSuccess: () => {
       invalidate(qc, keys.apps);
       invalidate(qc, keys.library);
@@ -190,7 +192,12 @@ function RemoveApp({ row, title }: { row: AppRow; title: string }) {
   });
   return (
     <>
-      <Button variant="outline" size="sm" onClick={() => setStep("app")}>
+      <Button
+        variant="outline"
+        size="sm"
+        aria-label={`Remove ${title}`}
+        onClick={() => setStep("app")}
+      >
         Remove
       </Button>
       <AlertDialog open={step === "app"} onOpenChange={(open) => !open && setStep("closed")}>

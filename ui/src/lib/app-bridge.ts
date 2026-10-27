@@ -61,10 +61,13 @@ export function connectFrame(
       send({ type: "result", id, ok: false, error: `this app has no tool ${tool}` });
       return;
     }
-    options.call(tool, input ?? {}).then(
-      (result) => send({ type: "result", id, ok: true, result }),
-      (e: unknown) => send({ type: "result", id, ok: false, error: errorMessage(e) }),
-    );
+    // A call that throws at once, or answers without a promise, is answered like any failure.
+    Promise.resolve()
+      .then(() => options.call(tool, input ?? {}))
+      .then(
+        (result) => send({ type: "result", id, ok: true, result }),
+        (e: unknown) => send({ type: "result", id, ok: false, error: errorMessage(e) }),
+      );
   };
   frame.postMessage({ type: "dots:connect" }, "*", [channel.port2]);
   return {

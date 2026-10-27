@@ -21,7 +21,8 @@ import { plural } from "@/screens/library/parts";
 const MAX_ASK = 2000;
 
 /// The cards of the apps `runs` sent for review that still wait, under those runs: a chat
-/// thread's runs, or the first run of a run topic (a scheduled or manual run).
+/// thread's runs, or the first run of a run topic (a scheduled or manual run). When the list
+/// cannot be read it shows nothing: the conversation shows that error once (`Timeline`).
 export function AppReviews({ runs, dotName }: { runs: Run[]; dotName: string }) {
   const dotId = runs[0]?.dot_id ?? null;
   const proposals = useQuery({
@@ -29,7 +30,7 @@ export function AppReviews({ runs, dotName }: { runs: Run[]; dotName: string }) 
     queryFn: () => commands.appProposalsList(dotId),
     enabled: dotId !== null,
   });
-  if (proposals.isError) return <ErrorNote error={proposals.error} />;
+  if (proposals.isError) return null;
   const waiting = (proposals.data ?? []).filter(
     (p) => p.status === "pending" && runs.some((run) => run.id === p.run_id),
   );
@@ -81,8 +82,12 @@ export function AppReviewCard({ proposal, dotName }: { proposal: AppProposal; do
 }
 
 /// The proposal's screen on its own throwaway database, opened with the card and closed with it.
+/// The preview's data changes only through the page's own calls, so a successful call of a tool
+/// that writes is the change it is told of.
 function Preview({ proposal }: { proposal: AppProposal }) {
   const [opened, setOpened] = useState<{ id: string } | { error: unknown } | null>(null);
+  // The calls of tools that write which went through: the page hears of each (`dots.onChange`).
+  const [changes, setChanges] = useState(0);
   useEffect(() => {
     let gone = false;
     let id: string | null = null;
@@ -113,7 +118,15 @@ function Preview({ proposal }: { proposal: AppProposal }) {
           src={previewSrc(preview)}
           title={`${proposal.summary.title} preview`}
           tools={proposal.summary.tools.map((t) => t.name)}
-          call={(tool, input) => commands.appPreviewCall(preview, tool, input)}
+          call={(tool, input) =>
+            commands.appPreviewCall(preview, tool, input).then((result) => {
+              if (proposal.summary.tools.some((t) => t.name === tool && t.writes)) {
+                setChanges((n) => n + 1);
+              }
+              return result;
+            })
+          }
+          changes={changes}
         />
       </div>
       <p className="text-xs text-muted-foreground">

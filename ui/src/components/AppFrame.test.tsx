@@ -21,7 +21,7 @@ function load(frame: HTMLIFrameElement) {
   const port = transfer[0]!;
   const got: unknown[] = [];
   port.onmessage = (e: MessageEvent) => got.push(e.data);
-  return { port, got };
+  return { port, got, post };
 }
 
 describe("an app's screen in its frame", () => {
@@ -90,10 +90,12 @@ describe("an app's screen in its frame", () => {
     const user = userEvent.setup();
     render(<AppFrame src={appSrc("expenses", 1)} title="Expenses" tools={[]} call={vi.fn()} />);
     const first = screen.getByTitle<HTMLIFrameElement>("Expenses");
-    load(first);
+    const { post } = load(first);
     act(() => {
       fireEvent.load(first);
     });
+    // The navigated page got no port: the one message was the first load's.
+    expect(post).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("alert")).toHaveTextContent(
       "The app's screen left its page, so Dots stopped answering it.",
     );

@@ -69,6 +69,20 @@ describe("an app sent for review", () => {
     );
   });
 
+  it("tells the preview's page when one of its calls wrote", async () => {
+    previewing();
+    backend.on("app_preview_call", () => [{ item: "Coffee" }]);
+    show(fresh);
+    const frame = await screen.findByTitle<HTMLIFrameElement>("Expenses preview");
+    const post = vi.spyOn(frame.contentWindow!, "postMessage");
+    fireEvent.load(frame);
+    const port = (post.mock.calls[0] as unknown as [unknown, string, MessagePort[]])[2][0]!;
+    const got: unknown[] = [];
+    port.onmessage = (e: MessageEvent) => got.push(e.data);
+    port.postMessage({ type: "call", id: 1, tool: "add_expense", input: { item: "Tea" } });
+    await waitFor(() => expect(got).toContainEqual({ type: "changed" }));
+  });
+
   it("sums up what the app is, what it reaches and its tests", async () => {
     previewing();
     const { user } = show(fresh);
@@ -199,5 +213,16 @@ describe("a review card in the conversation", () => {
     expect(
       await within(conversation).findByRole("article", { name: "Review of Expenses" }),
     ).toBeVisible();
+  });
+
+  it("shows one error when the proposals cannot be read, not one per run", async () => {
+    home([chat("c1", "10:00"), chat("c2", "11:00"), scheduled("s1", "09:00")]);
+    backend.on("app_proposals_list", () => {
+      throw { kind: "internal", message: "no proposals today" };
+    });
+    renderApp(`/home/${dot.id}`);
+    const conversation = await screen.findByRole("region", { name: "Conversation" });
+    await within(conversation).findByText(/no proposals today/);
+    expect(within(conversation).getAllByText(/no proposals today/)).toHaveLength(1);
   });
 });
