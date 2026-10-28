@@ -12,6 +12,7 @@ mod args;
 pub mod join;
 pub mod keys;
 pub mod policy;
+pub mod roster;
 
 /// The environment variable a password is read from before asking on the terminal.
 pub const PASSWORD_VAR: &str = "DOTS_ADMIN_PASSWORD";
@@ -67,13 +68,32 @@ dots-admin: the org admin's key, policy and join code helper for Dots.
 Commands:
   dots-admin keygen --out <dir> [--no-password]
       Makes the policy signing key pair, <dir>/policy.key and <dir>/policy.pub.
-  dots-admin policy new --org-id <id> [--out <file>]
-      Writes a policy with every field at its default.
+  dots-admin policy new --org-id <id> [--roster] [--out <file>]
+      Writes a policy with every field at its default. With --roster it is a v2 policy that
+      requires a signed member list.
   dots-admin policy check <policy.json>
       Checks a policy as Dots does.
   dots-admin policy sign <policy.json> --key <policy.key> [--out <file>]
       Sets issued_at to now and writes the signed text, to store as DOTS_POLICY.
   dots-admin policy verify <signed> --pub <policy.pub> [--org-id <id>]
+      Shows what a Dots client would accept.
+  dots-admin policy admins add|remove <policy.json> <dots-id>
+      Edits the policy's admins, the keys that may sign the member list. Sign it afterwards.
+  dots-admin roster new --org-id <id> --owner-name <name> --owner-email <email>
+                        --owner-key <dots-id> [--out <roster.json>]
+      Starts a member list with its owner and the default workspace.
+  dots-admin roster add <roster.json> --name <name> --email <email> --key <dots-id>
+                        --role <owner|admin|member|viewer> [--workspace <id>=<role> ...]
+      Adds a member; an email already listed gets the key as another PC.
+  dots-admin roster set-role <roster.json> <email> <role>
+  dots-admin roster remove <roster.json> <email> [--key <dots-id>]
+      Changes a member's role, or removes them (or just one of their keys).
+  dots-admin roster check <roster.json> --org-id <id>
+      Checks a member list as Dots does.
+  dots-admin roster sign <roster.json> --key <policy.key> [--out <file>]
+      Raises seq by one, sets issued_at to now and writes the signed text, to store as
+      DOTS_ROSTER.
+  dots-admin roster verify <signed> --pub <policy.pub> [--admin <dots-id> ...] --org-id <id>
       Shows what a Dots client would accept.
   dots-admin join-code --org-id <id> --name <name> --source <openbao|infisical|sops>
                        [source options] --pub <policy.pub> [--file <out.dotsorg>]
@@ -97,16 +117,20 @@ pub fn run(args: &[String], io: &mut Io<'_>) -> Result<()> {
         "keygen" => keys::keygen_command(rest, io),
         "policy" => {
             let Some((sub, rest)) = rest.split_first() else {
-                return Err(usage("'policy' needs one of: new, check, sign, verify"));
+                return Err(usage(
+                    "'policy' needs one of: new, check, sign, verify, admins",
+                ));
             };
             match sub.as_str() {
                 "new" => policy::new_command(rest, io),
                 "check" => policy::check_command(rest, io),
                 "sign" => policy::sign_command(rest, io),
                 "verify" => policy::verify_command(rest, io),
+                "admins" => policy::admins_command(rest, io),
                 other => Err(usage(format!("unknown policy command '{other}'"))),
             }
         }
+        "roster" => roster::roster_command(rest, io),
         "join-code" => join::join_code_command(rest, io),
         other => Err(usage(format!("unknown command '{other}'"))),
     }
