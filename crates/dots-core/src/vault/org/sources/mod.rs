@@ -51,13 +51,16 @@ pub trait Source: Send + Sync {
 }
 
 /// What a fetch read: the entries by name, the signed policy text, and the signed member list if
-/// there is one, neither yet verified. Its `Debug`
-/// shows only the names.
+/// there is one, neither yet verified. Its `Debug` shows only the names.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Fetched {
     pub entries: BTreeMap<String, Zeroizing<String>>,
     pub policy: String,
     pub roster: Option<String>,
+    /// Why there is no member list when the source would not let it be read, such as "can't
+    /// read DOTS_ROSTER at secret/dots/roster (HTTP 403)" from an ACL that grants only the
+    /// entries and the policy (members spec §6.5). Shown only under a `required` policy.
+    pub roster_note: Option<String>,
 }
 
 impl std::fmt::Debug for Fetched {
@@ -413,8 +416,8 @@ fn roster_text(field: Field) -> std::result::Result<String, SourceError> {
 }
 
 /// The entries of a source's map. `DOTS_POLICY` and `DOTS_ROSTER` are never entries, and a name
-/// that is not a variable name is skipped with a warning. A value that is not text is refused, and so are two
-/// names that differ only in case, since names compare without case.
+/// that is not a variable name is skipped with a warning. A value that is not text is refused,
+/// and so are two names that differ only in case, since names compare without case.
 fn collect_entries(
     raw: BTreeMap<String, Field>,
 ) -> std::result::Result<BTreeMap<String, Zeroizing<String>>, SourceError> {

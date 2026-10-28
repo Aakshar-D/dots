@@ -325,6 +325,7 @@ fn open(file: &Node, identity: &x25519::Identity) -> std::result::Result<Fetched
         entries: collect_entries(raw)?,
         policy: policy.to_string(),
         roster,
+        roster_note: None,
     })
 }
 

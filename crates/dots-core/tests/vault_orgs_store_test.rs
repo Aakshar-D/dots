@@ -270,6 +270,52 @@ async fn membership_is_recorded_and_read_back() {
     assert!(matches!(err, Error::NotFound(_)), "{err:?}");
 }
 
+/// A good fetch and this PC's place on the member list it brought are recorded together, in
+/// one write: a refresh never leaves one without the other.
+#[tokio::test]
+async fn a_fetch_and_its_membership_are_recorded_together() {
+    let (_dir, store) = temp_store().await;
+    store.add_org(&acme()).await.unwrap();
+    let active = MemberRow {
+        membership: Membership::Active,
+        member_id: Some("01ME".into()),
+        role: Some(Role::Admin),
+        last_roster_seq: Some(4),
+        key: Some("RWQme".into()),
+        roster_hash: Some("cd34".into()),
+        ..MemberRow::default()
+    };
+    store
+        .record_org_fetch_and_membership(
+            "acme-eng",
+            "2026-10-22T09:00:05.000Z",
+            "2026-10-22T08:00:00Z",
+            &active,
+        )
+        .await
+        .unwrap();
+    let got = store.get_org("acme-eng").await.unwrap().unwrap();
+    assert_eq!(
+        got,
+        OrgRow {
+            last_fetch_at: Some("2026-10-22T09:00:05.000Z".into()),
+            last_issued_at: Some("2026-10-22T08:00:00Z".into()),
+            member: active.clone(),
+            ..acme()
+        }
+    );
+    let err = store
+        .record_org_fetch_and_membership(
+            "nope",
+            "2026-10-22T09:00:05.000Z",
+            "2026-10-22T08:00:00Z",
+            &active,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::NotFound(_)), "{err:?}");
+}
+
 #[tokio::test]
 async fn a_good_fetch_is_recorded_and_the_next_one_replaces_it() {
     let (_dir, store) = temp_store().await;

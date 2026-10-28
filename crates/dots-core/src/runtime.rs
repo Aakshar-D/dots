@@ -242,7 +242,8 @@ impl Runtime {
             bus.clone(),
             cfg.data_dir.join(crate::apps::APPS_DIR),
         )
-        .with_clock(cfg.clock.clone());
+        .with_clock(cfg.clock.clone())
+        .with_orgs(orgs.clone());
         let mut engines: HashMap<EngineKind, Arc<dyn Engine>> = HashMap::new();
         let claude_program = resolve_claude(cfg.claude_path.as_deref());
         let claude_version = match &claude_program {
@@ -1034,9 +1035,11 @@ impl Runtime {
     }
 
     /// Deletes the dot; its schedule row goes with it (`ON DELETE CASCADE`). In an account, the
-    /// role must allow changing dots (members spec §6.3).
+    /// role must allow changing dots (members spec §6.3), or this PC is waiting for or removed
+    /// from the member list, and only cleaning up (`require_cleanup`).
     pub async fn delete_dot(&self, id: &str) -> Result<()> {
-        self.require_for_dot(id, Permission::EditDots).await?;
+        let dot = self.store.get_dot(id).await?;
+        self.require_cleanup(dot.org_id.as_deref()).await?;
         let had_row = self.store.get_schedule_state(id).await?.is_some();
         let proposals = self.store.list_app_proposals(Some(id)).await?;
         let watchers: Vec<String> = self
@@ -1071,10 +1074,17 @@ impl Runtime {
         Ok(())
     }
 
+    /// Switches the dot on or off. In an account, the role must allow changing dots (members
+    /// spec §6.3); switching one off is cleaning up, which a PC waiting for or removed from the
+    /// member list may still do (`require_cleanup`).
     pub async fn set_dot_enabled(&self, id: &str, enabled: bool) -> Result<Dot> {
         let old = self.store.get_dot(id).await?;
-        self.require(old.org_id.as_deref(), Permission::EditDots)
-            .await?;
+        if enabled {
+            self.require(old.org_id.as_deref(), Permission::EditDots)
+                .await?;
+        } else {
+            self.require_cleanup(old.org_id.as_deref()).await?;
+        }
         let was_enabled = old.spec.enabled;
         let dot = self.store.set_dot_enabled(id, enabled).await?;
         self.sync_schedule(&dot, enabled && !was_enabled).await?;
@@ -1447,6 +1457,17 @@ impl Runtime {
     /// account and the role, or why this PC is not on its member list.
     pub async fn require(&self, org_id: Option<&str>, p: Permission) -> Result<()> {
         crate::accounts::require(Some(&self.orgs), org_id, p).await
+    }
+
+    /// `require` of `EditDots` for cleaning up a dot of `org_id`: switching it off or deleting
+    /// it. A PC waiting for, or removed from, the account's member list may still do that: its
+    /// dots can't run, and Leave removes the account. Enabling, editing and watcher changes stay
+    /// refused for it.
+    async fn require_cleanup(&self, org_id: Option<&str>) -> Result<()> {
+        if matches!(self.access(org_id), Access::Waiting | Access::Removed) {
+            return Ok(());
+        }
+        self.require(org_id, Permission::EditDots).await
     }
 
     /// `require` in the account of the dot `dot_id`.

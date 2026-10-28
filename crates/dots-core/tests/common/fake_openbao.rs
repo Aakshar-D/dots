@@ -3,7 +3,7 @@
 //! errors `research.md` §1 gives. It is programmed through `FakeOpenBao` and records every
 //! request it sees. It stops when dropped.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -60,6 +60,9 @@ struct Fake {
     /// Users by `(auth mount, username)`.
     users: HashMap<(String, String), User>,
     failures: VecDeque<Failure>,
+    /// KV paths, `<mount>/data/<path>`, every read of which is refused (403), as an ACL that
+    /// does not grant them answers.
+    denied: HashSet<String>,
     refuse_renewals: bool,
     /// What every login answers instead, as a status and one `errors` text.
     login_error: Option<(u16, String)>,
@@ -137,6 +140,12 @@ impl FakeOpenBao {
     /// Deletes the KV v2 secret `<mount>/<path>`: reading it is a 404.
     pub fn remove(&self, mount: &str, path: &str) {
         self.fake().kv.remove(&format!("{mount}/data/{path}"));
+    }
+
+    /// Refuses every read of `<mount>/data/<path>` with a 403, as a token whose ACL does not
+    /// grant the path is refused.
+    pub fn deny(&self, mount: &str, path: &str) {
+        self.fake().denied.insert(format!("{mount}/data/{path}"));
     }
 
     /// Accepts `token` from now on. `lookup-self` says whether it is `renewable`.
@@ -407,6 +416,7 @@ async fn handle(
             Value::Null,
             auth_answer(token.as_deref().unwrap(), "", 3600),
         ),
+        (Method::GET, kv) if fake.denied.contains(kv) => denied(),
         (Method::GET, kv) => match fake.kv.get(kv) {
             Some(data) => envelope(
                 json!({

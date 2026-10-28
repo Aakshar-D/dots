@@ -247,6 +247,7 @@ impl Infisical {
             entries,
             policy: std::mem::take(&mut *policy),
             roster,
+            roster_note: None,
         })
     }
 

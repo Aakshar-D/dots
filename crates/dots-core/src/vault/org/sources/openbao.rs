@@ -221,34 +221,71 @@ impl OpenBao {
         let Field::Text(mut policy) = policy else {
             return Err(SourceError::Invalid(format!("{POLICY_ENTRY} is not text")));
         };
-        // No secret at `<path>/roster`, or none with the key, is no roster. Any other failure is
-        // the policy read's.
-        let roster = self
-            .read_kv(&reads.roster, &reads.roster_name, token)
-            .await?
-            .and_then(|mut keys| keys.remove(ROSTER_ENTRY))
-            .map(roster_text)
-            .transpose()?;
+        let (roster, roster_note) = self.read_roster(reads, token).await?;
         Ok(Fetched {
             entries,
             policy: std::mem::take(&mut *policy),
             roster,
+            roster_note,
         })
     }
 
-    /// One KV v2 read: its keys, or `None` when nothing is there (404, 204 or no data). A
-    /// 404's body is never read: a deleted version's carries its metadata.
+    /// The roster at `<path>/roster`, and why there is none when the token may not read it.
+    /// No secret there (404, 204), none with the key, or a refusal (401, 403) is no roster: a
+    /// phase 1 ACL grants only `env` and `policy`, and that token is not revoked (members spec
+    /// §6.5). Any other failure is the policy read's: server trouble and timeouts are
+    /// `Unreachable`, never no roster.
+    async fn read_roster(
+        &self,
+        reads: &Reads,
+        token: &str,
+    ) -> Result<(Option<String>, Option<String>), SourceError> {
+        let response = self.get(&reads.roster, token).await?;
+        let status = response.status();
+        if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
+            let note = format!(
+                "can't read {ROSTER_ENTRY} at {} (HTTP {})",
+                reads.roster_name,
+                status.as_u16()
+            );
+            return Ok((None, Some(note)));
+        }
+        let roster = self
+            .kv_answer(response, &reads.roster_name)
+            .await?
+            .and_then(|mut keys| keys.remove(ROSTER_ENTRY))
+            .map(roster_text)
+            .transpose()?;
+        Ok((roster, None))
+    }
+
+    /// One KV v2 read: its keys, or `None` when nothing is there (404, 204 or no data).
     async fn read_kv(
         &self,
         url: &Url,
         name: &str,
         token: &str,
     ) -> Result<Option<BTreeMap<String, Field>>, SourceError> {
+        let response = self.get(url, token).await?;
+        self.kv_answer(response, name).await
+    }
+
+    /// A GET of `url` with `token`, answered or not.
+    async fn get(&self, url: &Url, token: &str) -> Result<reqwest::Response, SourceError> {
         let request = self.request(self.http.get(url.clone()), Some(token))?;
-        let response = request
+        request
             .send()
             .await
-            .map_err(|e| request_failed(self.address(), e))?;
+            .map_err(|e| request_failed(self.address(), e))
+    }
+
+    /// A KV v2 read's answer: its keys, or `None` when nothing is there (404, 204 or no data).
+    /// A 404's body is never read: a deleted version's carries its metadata.
+    async fn kv_answer(
+        &self,
+        response: reqwest::Response,
+        name: &str,
+    ) -> Result<Option<BTreeMap<String, Field>>, SourceError> {
         match response.status() {
             StatusCode::NOT_FOUND | StatusCode::NO_CONTENT => Ok(None),
             StatusCode::SERVICE_UNAVAILABLE => Err(self.not_ready()),

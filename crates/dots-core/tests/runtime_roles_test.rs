@@ -9,6 +9,7 @@ mod common;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use common::apps::write_app;
 use common::clock::FakeClock;
 use common::fake_openbao::FakeOpenBao;
 use common::orgs::{
@@ -16,13 +17,16 @@ use common::orgs::{
     ISSUED, START, TOKEN,
 };
 use common::{spec, wait_status};
-use dots_core::accounts::{identity, Access, Permission};
+use dots_core::accounts::{identity, Access, Membership, Permission};
+use dots_core::apps::call::Actor;
 use dots_core::apps::propose::{AppProposal, Decision};
+use dots_core::apps::source::read_folder;
+use dots_core::library::AppOrigin;
 use dots_core::model::{
     DotSpec, FolderConfig, HoldReason, MemberSpec, NewRun, NewWorkflowRun, ProjectSpec, RunStatus,
     TeamSpec, TriggerKind, WatcherConfig, WorkflowSpec, WorkflowTrigger, WorkspaceMode,
 };
-use dots_core::vault::org::Orgs;
+use dots_core::vault::org::{OrgStatus, Orgs};
 use dots_core::vault::{DotScope, Grants, MemorySecrets};
 use dots_core::workflow::{Budget, Definition, Step, StepKind, Trigger};
 use dots_core::workflows::StartRequest;
@@ -636,6 +640,10 @@ async fn a_damaged_org_acts_as_waiting() {
     pool.close().await;
     let t = Rt::on(dir, secrets, bao, keys).await;
     assert_eq!(t.rt.access(Some(ACME)), Access::Waiting);
+    // Its summary says the same as its access: waiting, with the waiting words.
+    let summary = t.orgs().summary(ACME).await.unwrap();
+    assert_eq!(summary.membership, Membership::Waiting);
+    assert_eq!(summary.not_member_text.as_deref(), Some(WAITING_TEXT));
     assert_eq!(refused(t.rt.run_now(&dot.id).await), WAITING_TEXT);
     match t.rt.vault().before_run(&dot).await {
         Err(Error::NotAllowed(got)) => assert_eq!(got, WAITING_TEXT),
@@ -708,5 +716,211 @@ async fn release_refused_for_role_hold() {
         t.rt.store().get_run(&run.id).await.unwrap().status,
         RunStatus::Queued
     );
+    t.rt.shutdown();
+}
+
+/// A phase 1 org whose token's ACL grants only `env` and `policy`: OpenBao refuses the roster
+/// with a 403. That is no roster, not a revoked token: the legacy account joins, stays
+/// connected on refresh, and keeps its values and its offline copy.
+#[tokio::test]
+async fn a_legacy_org_whose_roster_read_is_refused_stays_connected() {
+    let t = Rt::start().await;
+    t.bao.deny("secret", "dots/roster");
+    let signed = sign(
+        &t.keys,
+        &policy(ACME, ISSUED, json!({"plain": ["DOTS_TEST_LEVEL"]})),
+    );
+    t.bao
+        .put_env("secret", "dots", json!({"DOTS_TEST_LEVEL": LEVEL}));
+    t.bao.put_policy("secret", "dots", &signed);
+    t.join().await;
+    t.rt.refresh_org(ACME).await.unwrap();
+    assert!(t
+        .bao
+        .calls()
+        .contains(&"GET /v1/secret/data/dots/roster".to_string()));
+
+    let summary = t.orgs().summary(ACME).await.unwrap();
+    assert_eq!(
+        summary.status,
+        OrgStatus::Connected,
+        "{}",
+        summary.status_text
+    );
+    assert_eq!(summary.membership, Membership::Legacy);
+    assert_eq!(summary.roster_error, None);
+    assert!(summary.copy_until.is_some(), "the offline copy is kept");
+    let dot =
+        t.rt.create_dot(t.triage(), Some(ACME.into()))
+            .await
+            .unwrap();
+    assert_eq!(t.run(&dot.id).await, LEVEL);
+    t.rt.shutdown();
+}
+
+/// Under `required`, a roster the token may not read is no member list: the PC waits, and the
+/// account says why.
+#[tokio::test]
+async fn a_required_org_whose_roster_read_is_refused_waits_and_says_why() {
+    let t = Rt::start().await;
+    t.bao.deny("secret", "dots/roster");
+    t.serve_list(1, Some("member")).await;
+    t.join().await;
+    let summary = t.orgs().summary(ACME).await.unwrap();
+    assert_eq!(summary.membership, Membership::Waiting);
+    assert_eq!(
+        summary.roster_error.as_deref(),
+        Some(
+            "the account has no member list: can't read DOTS_ROSTER at secret/dots/roster \
+             (HTTP 403)"
+        )
+    );
+    t.rt.shutdown();
+}
+
+/// A webhook of a dot whose account does not let this PC run dots is refused when it is
+/// called, with the refusal's words: no run is queued to fire later.
+#[tokio::test]
+async fn a_webhook_is_refused_when_the_role_cannot_run_dots() {
+    let t = Rt::start().await;
+    t.join_as("member").await;
+    let dot =
+        t.rt.create_dot(t.triage(), Some(ACME.into()))
+            .await
+            .unwrap();
+    let token = t.rt.regenerate_webhook_token(&dot.id).await.unwrap();
+    let url = t.rt.webhook_url(&dot).unwrap();
+    let call = || {
+        reqwest::Client::new()
+            .post(&url)
+            .bearer_auth(&token)
+            .json(&json!({"event": "build_failed"}))
+            .send()
+    };
+
+    t.become_(2, Some("viewer")).await;
+    let resp = call().await.unwrap();
+    assert_eq!(resp.status(), 403);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"], viewer_cant("run dots"));
+
+    t.become_(3, None).await;
+    let resp = call().await.unwrap();
+    assert_eq!(resp.status(), 403);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"], "Acme Engineering: you were removed from it.");
+    assert_eq!(t.runs(&dot.id).await, 0);
+    t.rt.shutdown();
+}
+
+/// A PC waiting for, or removed from, the member list may still clean up the account's dots:
+/// switch them off or delete them. Switching one on or changing it stays refused.
+#[tokio::test]
+async fn waiting_or_removed_may_switch_off_and_delete_but_not_change() {
+    let t = Rt::start().await;
+    // Joined before the account asked for a member list: legacy.
+    t.serve(json!({}), None);
+    t.join().await;
+    let one =
+        t.rt.create_dot(t.triage(), Some(ACME.into()))
+            .await
+            .unwrap();
+    let mut other = t.triage();
+    other.name = "tidy".into();
+    let two = t.rt.create_dot(other, Some(ACME.into())).await.unwrap();
+    // The account now asks for a list that leaves this PC out: waiting.
+    t.serve_list(1, None).await;
+    t.rt.refresh_org(ACME).await.unwrap();
+    assert_eq!(t.rt.access(Some(ACME)), Access::Waiting);
+
+    let mut changed = one.spec.clone();
+    changed.instructions = "something else".into();
+    assert_eq!(
+        refused(t.rt.update_dot(&one.id, changed).await),
+        WAITING_TEXT
+    );
+    let off = t.rt.set_dot_enabled(&one.id, false).await.unwrap();
+    assert!(!off.spec.enabled);
+    assert_eq!(
+        refused(t.rt.set_dot_enabled(&one.id, true).await),
+        WAITING_TEXT
+    );
+    t.rt.delete_dot(&one.id).await.unwrap();
+
+    // Added, then left off the next list: removed, with the same cleanup.
+    t.become_(2, Some("member")).await;
+    t.become_(3, None).await;
+    assert_eq!(t.rt.access(Some(ACME)), Access::Removed);
+    let removed = "Acme Engineering: you were removed from it.";
+    assert_eq!(refused(t.rt.set_dot_enabled(&two.id, true).await), removed);
+    t.rt.set_dot_enabled(&two.id, false).await.unwrap();
+    t.rt.delete_dot(&two.id).await.unwrap();
+    assert!(t.rt.store().get_dot(&two.id).await.is_err());
+    t.rt.shutdown();
+}
+
+const STARTER_MANIFEST: &str = r#"{
+  "name": "chores",
+  "title": "Chores",
+  "description": "Chores dots do",
+  "tools": [
+    {
+      "name": "assign",
+      "description": "Give a chore to a dot",
+      "input": { "type": "object", "properties": { "dot": { "type": "string" } }, "required": ["dot"] },
+      "writes": true
+    }
+  ],
+  "permissions": ["start_dots"]
+}"#;
+
+const STARTER_LOGIC: &str = r#"
+export function assign({ dot }, ctx) {
+  return ctx.dots.start(dot, "Do the chore", "chore");
+}
+"#;
+
+/// An app's start of a dot whose account does not let this PC run dots queues nothing: it is
+/// refused when it would be queued, not created to fail at its start.
+#[tokio::test]
+async fn an_app_start_is_refused_when_the_role_cannot_run_dots() {
+    let t = Rt::start().await;
+    let src = t.dir.path().join("chores");
+    write_app(
+        &src,
+        &[
+            ("app.json", STARTER_MANIFEST.to_string()),
+            ("logic.js", STARTER_LOGIC.to_string()),
+            (
+                "ui/index.html",
+                "<!doctype html><title>Chores</title>\n".to_string(),
+            ),
+        ],
+    );
+    t.rt.apps()
+        .install(read_folder(&src).unwrap(), AppOrigin::Proposed)
+        .await
+        .unwrap();
+    t.rt.apps()
+        .set_can_start_dots("chores", true)
+        .await
+        .unwrap();
+    t.join_as("member").await;
+    let mut s = t.triage();
+    s.uses.apps = vec!["chores".into()];
+    let dot = t.rt.create_dot(s, Some(ACME.into())).await.unwrap();
+    t.become_(2, Some("viewer")).await;
+
+    let id =
+        t.rt.apps()
+            .call("chores", "assign", json!({"dot": dot.id}), Actor::Person)
+            .await
+            .unwrap();
+    let id = id.as_str().unwrap();
+    assert!(matches!(
+        t.rt.store().get_run(id).await,
+        Err(Error::NotFound(_))
+    ));
+    assert_eq!(t.runs(&dot.id).await, 0);
     t.rt.shutdown();
 }

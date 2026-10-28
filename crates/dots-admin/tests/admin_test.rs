@@ -1161,6 +1161,30 @@ fn policy_new_roster_is_v2_required() {
     assert_eq!(parsed.org_id, "acme-eng");
 }
 
+/// `--admin` names the keys that may sign the member list from the start (members spec §6.1),
+/// in the order given: the owner's Dots ID, and others'. Each must be a Dots ID, given once, and
+/// only for a `--roster` policy.
+#[test]
+fn policy_new_roster_with_admins() {
+    let (a, b) = (dots_id(), dots_id());
+    let ran = ok(&[
+        "policy", "new", "--org-id", "acme-eng", "--roster", "--admin", &a, "--admin", &b,
+    ]);
+    let parsed = parse_policy(&ran.out).unwrap();
+    assert_eq!(parsed.admins, vec![a.clone(), b.clone()]);
+
+    let err = failure(&[
+        "policy", "new", "--org-id", "acme-eng", "--roster", "--admin", "nope",
+    ]);
+    assert_eq!(err.to_string(), "'nope' is not a Dots ID");
+    let err = failure(&[
+        "policy", "new", "--org-id", "acme-eng", "--roster", "--admin", &a, "--admin", &a,
+    ]);
+    assert!(err.to_string().contains("is given twice"), "{err}");
+    let err = failure(&["policy", "new", "--org-id", "acme-eng", "--admin", &a]);
+    assert!(err.to_string().contains("--admin needs --roster"), "{err}");
+}
+
 #[test]
 fn policy_new_default_stays_v1() {
     let ran = ok(&["policy", "new", "--org-id", "acme-eng"]);

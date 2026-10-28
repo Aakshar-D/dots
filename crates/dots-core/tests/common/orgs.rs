@@ -289,6 +289,7 @@ impl Scripted {
                 .collect(),
             policy: signed.to_string(),
             roster: None,
+            roster_note: None,
         }));
     }
 

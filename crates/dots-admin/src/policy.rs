@@ -30,20 +30,36 @@ pub fn timestamp(now: DateTime<Utc>) -> String {
 /// A new policy's text, with every field present at its default so the admin sees what can be
 /// set, and `issued_at` set to `now`.
 pub fn new_policy(org_id: &str, now: DateTime<Utc>) -> Result<String> {
-    new_policy_text(org_id, now, false)
+    new_policy_text(org_id, now, false, &[])
 }
 
 /// Like `new_policy`; with `roster` it is a v2 policy that requires a signed member list
-/// (members spec §6.1) and names no admins yet.
-pub fn new_policy_text(org_id: &str, now: DateTime<Utc>, roster: bool) -> Result<String> {
+/// (members spec §6.1), whose `admins` are `admins`: the keys that may sign the list from the
+/// start, such as the owner's Dots ID. Each must be a Dots ID, given once.
+pub fn new_policy_text(
+    org_id: &str,
+    now: DateTime<Utc>,
+    roster: bool,
+    admins: &[String],
+) -> Result<String> {
     check_org_id(org_id).map_err(core_failed)?;
+    if !roster && !admins.is_empty() {
+        return Err(usage("--admin needs --roster: a v1 policy has no admins"));
+    }
+    for (i, admin) in admins.iter().enumerate() {
+        check_dots_id(admin)?;
+        if admins[..i].contains(admin) {
+            return Err(usage(format!("--admin {admin} is given twice")));
+        }
+    }
     let (version, audit_end, extra) = if roster {
         (
             POLICY_VERSION,
             ",",
             format!(
-                "  \"roster\": \"{}\",\n  \"admins\": []\n",
-                RosterMode::Required.as_str()
+                "  \"roster\": \"{}\",\n  \"admins\": {}\n",
+                RosterMode::Required.as_str(),
+                admins_list(admins)
             ),
         )
     } else {
@@ -138,11 +154,17 @@ pub fn verify_signed(
         .map_err(|e| failed(format!("a Dots client would refuse it: {e}")))
 }
 
-/// `policy new --org-id <id> [--roster] [--out <file>]`. The file is never replaced: it may hold edits.
+/// `policy new --org-id <id> [--roster [--admin <dots-id> ...]] [--out <file>]`. The file is
+/// never replaced: it may hold edits.
 pub(crate) fn new_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
-    let args = Args::parse(args, &["org-id", "out"], &["roster"])?;
+    let args = Args::parse_repeating(args, &["org-id", "out"], &["admin"], &["roster"])?;
     args.none()?;
-    let text = new_policy_text(args.required("org-id")?, Utc::now(), args.switch("roster"))?;
+    let text = new_policy_text(
+        args.required("org-id")?,
+        Utc::now(),
+        args.switch("roster"),
+        args.all("admin"),
+    )?;
     let Some(path) = args.value("out") else {
         return write_all(io.out, &text);
     };
@@ -276,21 +298,25 @@ pub(crate) fn check_dots_id(key: &str) -> Result<()> {
         .map_err(|_| failed(format!("'{key}' is not a Dots ID")))
 }
 
+/// The text of an `admins` list as a policy's second-level value: one key per line.
+fn admins_list(admins: &[String]) -> String {
+    if admins.is_empty() {
+        return "[]".to_string();
+    }
+    let items: Vec<String> = admins
+        .iter()
+        .map(|a| format!("    {}", json_string(a)))
+        .collect();
+    format!("[\n{}\n  ]", items.join(",\n"))
+}
+
 /// The policy text with its top-level `admins` list replaced, every other byte as it was. A
 /// policy without the field is a v1 policy, which has no admins.
 fn set_admins(text: &str, admins: &[String]) -> Result<String> {
     let span = value_span(text, "admins").ok_or_else(|| {
         failed("this policy has no admins list; make a v2 policy with 'policy new --roster'")
     })?;
-    let list = if admins.is_empty() {
-        "[]".to_string()
-    } else {
-        let items: Vec<String> = admins
-            .iter()
-            .map(|a| format!("    {}", json_string(a)))
-            .collect();
-        format!("[\n{}\n  ]", items.join(",\n"))
-    };
+    let list = admins_list(admins);
     Ok(format!(
         "{}{list}{}",
         &text[..span.start],

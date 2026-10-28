@@ -629,16 +629,20 @@ async fn no_roster_is_none() {
     // A 404 on `<path>/roster`.
     let fetched = bao(settings(&fake)).fetch(&token()).await.unwrap();
     assert_eq!(fetched.roster, None);
+    assert_eq!(fetched.roster_note, None);
     // A secret there with no `DOTS_ROSTER` key.
     fake.put("secret", "dots/roster", json!({ "OTHER": "x" }));
     let fetched = bao(settings(&fake)).fetch(&token()).await.unwrap();
     assert_eq!(fetched.roster, None);
 }
 
-/// A roster read that fails fails the fetch, as the entries' and the policy's do: it is never
-/// taken for no roster. The reads go entries, policy, roster.
+/// A roster the token may not read is no roster: a phase 1 ACL grants only `env` and
+/// `policy`, and OpenBao refuses `roster` with a 403. The fetch keeps its entries and policy,
+/// with a note saying why there is no roster. Server trouble and timeouts on the roster still
+/// fail the fetch as `Unreachable`: they are never taken for no roster. The reads go entries,
+/// policy, roster.
 #[tokio::test]
-async fn a_failed_roster_read_fails_the_fetch() {
+async fn a_refused_roster_read_is_no_roster_and_other_failures_fail_the_fetch() {
     let fake = seeded().await;
     fake.put_roster("secret", "dots", &signed_roster());
     let source = OpenBao::new(
@@ -651,13 +655,22 @@ async fn a_failed_roster_read_fails_the_fetch() {
         fake.fail_next(failure, 1);
     };
 
-    on_roster(Failure::Status(403));
-    let e = source.fetch(&token()).await.unwrap_err();
-    assert!(matches!(e, SourceError::Denied(_)), "{e:?}");
-    assert_eq!(
-        fake.calls().last().map(String::as_str),
-        Some("GET /v1/secret/data/dots/roster")
-    );
+    for code in [401, 403] {
+        on_roster(Failure::Status(code));
+        let fetched = source.fetch(&token()).await.unwrap();
+        assert_eq!(fetched.roster, None);
+        assert_eq!(
+            fetched.roster_note,
+            Some(format!(
+                "can't read DOTS_ROSTER at secret/dots/roster (HTTP {code})"
+            ))
+        );
+        assert_eq!(names(&fetched), ["API_KEY", "LOG_LEVEL"]);
+        assert_eq!(fetched.policy, POLICY);
+        assert!(fake
+            .calls()
+            .contains(&"GET /v1/secret/data/dots/roster".to_string()));
+    }
 
     on_roster(Failure::Status(500));
     let e = source.fetch(&token()).await.unwrap_err();
@@ -672,8 +685,19 @@ async fn a_failed_roster_read_fails_the_fetch() {
     );
     assert_clean(&e);
 
-    // With nothing queued, the same fetch works and has the roster.
-    assert!(source.fetch(&token()).await.unwrap().roster.is_some());
+    // With nothing queued, the same fetch works and has the roster, with no note.
+    let fetched = source.fetch(&token()).await.unwrap();
+    assert!(fetched.roster.is_some());
+    assert_eq!(fetched.roster_note, None);
+}
+
+/// A token refused everywhere is still refused: only the roster's read is taken for no roster.
+#[tokio::test]
+async fn a_refused_entries_read_still_fails_the_fetch() {
+    let fake = seeded().await;
+    fake.deny("secret", "dots/env");
+    let e = bao(settings(&fake)).fetch(&token()).await.unwrap_err();
+    assert!(matches!(e, SourceError::Denied(_)), "{e:?}");
 }
 
 #[tokio::test]

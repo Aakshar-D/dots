@@ -855,11 +855,15 @@ impl Orgs {
             Outcome::Accepted(fetched, policy) => {
                 let now = self.inner.clock.now();
                 let evaluated = self.evaluate(&row, kept.as_ref(), &policy, &fetched).await;
-                let store = &self.inner.store;
-                store
-                    .record_org_fetch(org_id, &stamp(now), &policy.issued_at)
+                self.inner
+                    .store
+                    .record_org_fetch_and_membership(
+                        org_id,
+                        &stamp(now),
+                        &policy.issued_at,
+                        &evaluated.member,
+                    )
                     .await?;
-                store.record_membership(org_id, &evaluated.member).await?;
                 let row = OrgRow {
                     last_issued_at: Some(policy.issued_at.clone()),
                     last_fetch_at: Some(stamp(now)),
@@ -1048,9 +1052,11 @@ impl Orgs {
                 error: None,
             };
         }
-        let checked = match fetched.roster.as_deref() {
-            None => Err("the account has no member list".to_string()),
-            Some(signed) => check_roster(row, policy, signed).map_err(|e| e.to_string()),
+        let checked = match (fetched.roster.as_deref(), &fetched.roster_note) {
+            (None, None) => Err("the account has no member list".to_string()),
+            // The source would not let the list be read: say why, so the admin can fix it.
+            (None, Some(note)) => Err(format!("the account has no member list: {note}")),
+            (Some(signed), _) => check_roster(row, policy, signed).map_err(|e| e.to_string()),
         };
         let list = match checked {
             Ok(list) => list,
@@ -1318,13 +1324,9 @@ impl Orgs {
             .await?;
         let last_fetch_at = row.last_fetch_at.as_deref().unwrap_or_default();
         let last_issued_at = row.last_issued_at.as_deref().unwrap_or_default();
-        let recorded = match store
-            .record_org_fetch(&row.id, last_fetch_at, last_issued_at)
-            .await
-        {
-            Ok(()) => store.record_membership(&row.id, &row.member).await,
-            Err(e) => Err(e),
-        };
+        let recorded = store
+            .record_org_fetch_and_membership(&row.id, last_fetch_at, last_issued_at, &row.member)
+            .await;
         if let Err(e) = recorded {
             let restored = store
                 .update_org_settings(&old.id, &old.name, &old.source, &old.policy_key)
@@ -1568,9 +1570,7 @@ fn summary_of(id: &str, slot: &Slot) -> OrgSummary {
                 .roster
                 .as_ref()
                 .map(|kept| u32::try_from(kept.roster.members.len()).unwrap_or(u32::MAX)),
-            not_member_text: joined
-                .not_member()
-                .map(|why| why.text(&joined.row.name)),
+            not_member_text: joined.not_member().map(|why| why.text(&joined.row.name)),
         },
         Slot::Damaged { name, error } => OrgSummary {
             id: id.to_string(),
@@ -1588,12 +1588,13 @@ fn summary_of(id: &str, slot: &Slot) -> OrgSummary {
             personal_mode: None,
             shell_secrets: false,
             use_rules: None,
-            membership: Membership::Legacy,
+            // Its member list can't be read, so it fails closed as `Orgs::access` does: waiting.
+            membership: Membership::Waiting,
             role: None,
             roster_seq: None,
             roster_error: None,
             member_count: None,
-            not_member_text: None,
+            not_member_text: Some(NotMember::Waiting.text(name)),
         },
         Slot::Pending(code) => OrgSummary {
             id: id.to_string(),

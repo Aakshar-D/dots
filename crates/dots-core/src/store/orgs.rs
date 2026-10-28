@@ -217,6 +217,38 @@ impl Store {
         Ok(())
     }
 
+    /// Records a good fetch and this PC's place on the member list it brought, in one write
+    /// (`record_org_fetch` and `record_membership` together), so a refresh never keeps one
+    /// without the other.
+    pub async fn record_org_fetch_and_membership(
+        &self,
+        id: &str,
+        last_fetch_at: &str,
+        last_issued_at: &str,
+        member: &MemberRow,
+    ) -> Result<()> {
+        let (workspaces, seq) = member_columns(member)?;
+        let done = sqlx::query(
+            "UPDATE orgs SET last_fetch_at = ?, last_issued_at = ?, membership = ?,              my_member_id = ?, my_role = ?, my_workspaces = ?, last_roster_seq = ?, my_key = ?,              last_roster_hash = ? WHERE id = ?",
+        )
+        .bind(last_fetch_at)
+        .bind(last_issued_at)
+        .bind(member.membership.as_str())
+        .bind(&member.member_id)
+        .bind(member.role.map(|role| role.as_str()))
+        .bind(workspaces)
+        .bind(seq)
+        .bind(&member.key)
+        .bind(&member.roster_hash)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        if done.rows_affected() == 0 {
+            return Err(not_joined(id));
+        }
+        Ok(())
+    }
+
     /// Removes the org's row. Its dots keep their `org_id` (§6.4).
     pub async fn remove_org(&self, id: &str) -> Result<()> {
         let done = sqlx::query("DELETE FROM orgs WHERE id = ?")

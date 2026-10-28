@@ -68,9 +68,9 @@ dots-admin: the org admin's key, policy and join code helper for Dots.
 Commands:
   dots-admin keygen --out <dir> [--no-password]
       Makes the policy signing key pair, <dir>/policy.key and <dir>/policy.pub.
-  dots-admin policy new --org-id <id> [--roster] [--out <file>]
+  dots-admin policy new --org-id <id> [--roster [--admin <dots-id> ...]] [--out <file>]
       Writes a policy with every field at its default. With --roster it is a v2 policy that
-      requires a signed member list.
+      requires a signed member list; each --admin (the owner's Dots ID, say) may sign it.
   dots-admin policy check <policy.json>
       Checks a policy as Dots does.
   dots-admin policy sign <policy.json> --key <policy.key> [--out <file>]

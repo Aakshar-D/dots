@@ -256,6 +256,20 @@ impl Runner {
         Ok(Some((account, text)))
     }
 
+    /// `Ok` when this PC's access to the account of `dot` lets it run dots, otherwise the
+    /// refusal naming the role, or why this PC is not on the member list (members spec §6.3).
+    /// For a trigger that would queue runs to fire later, such as a webhook: it is refused
+    /// when it is called instead.
+    pub async fn require_run(&self, dot: &Dot) -> Result<()> {
+        let orgs = self.vault.get().and_then(|v| v.orgs());
+        crate::accounts::require(
+            orgs,
+            dot.org_id.as_deref(),
+            crate::accounts::Permission::RunDots,
+        )
+        .await
+    }
+
     /// How many background Claude runs the runner holds now.
     pub fn running_background_claude(&self) -> usize {
         self.active

@@ -44,6 +44,14 @@ pub async fn trigger(
     if !dot.spec.enabled {
         return error(StatusCode::CONFLICT, "dot is disabled");
     }
+    // A role that may not run the account's dots is refused now, with the refusal's words: a
+    // queued run would only be held, and fire with every other call once the role returns
+    // (members spec §6.3).
+    match s.runner.require_run(&dot).await {
+        Ok(()) => {}
+        Err(Error::NotAllowed(text)) => return error(StatusCode::FORBIDDEN, &text),
+        Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
     let payload = if body.iter().all(u8::is_ascii_whitespace) {
         None
     } else {
