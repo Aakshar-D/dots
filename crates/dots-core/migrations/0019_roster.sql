@@ -5,3 +5,5 @@ ALTER TABLE orgs ADD COLUMN my_member_id TEXT;
 ALTER TABLE orgs ADD COLUMN my_role TEXT;
 ALTER TABLE orgs ADD COLUMN my_workspaces TEXT;
 ALTER TABLE orgs ADD COLUMN last_roster_seq INTEGER;
+ALTER TABLE orgs ADD COLUMN my_key TEXT;
+ALTER TABLE orgs ADD COLUMN last_roster_hash TEXT;

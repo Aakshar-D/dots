@@ -354,6 +354,33 @@ pub fn verify_roster(
     })
 }
 
+/// Reads the signed text of a list **already accepted** for `org_id`, without checking who
+/// signed it: the envelope, then the roster and its org. It is for a list the caller knows by
+/// its `roster_hash` (members spec §6.1: removing a key from `admins` later never invalidates a
+/// list already accepted). Any other list goes through `verify_roster`.
+pub fn open_accepted_roster(signed: &str, org_id: &str) -> Result<(Roster, String), RosterError> {
+    let envelope: Envelope =
+        serde_json::from_str(signed).map_err(|e| RosterError::Envelope(plain_serde(&e)))?;
+    if envelope.v != ROSTER_ENVELOPE_VERSION {
+        return Err(RosterError::Envelope(format!(
+            "version {} is not supported; this Dots reads version {ROSTER_ENVELOPE_VERSION}",
+            envelope.v
+        )));
+    }
+    let roster = parse_roster(&envelope.roster, org_id)?;
+    Ok((roster, envelope.roster))
+}
+
+/// The SHA-256 of a roster's text (the text that was signed), in lower-case hex: how the
+/// `orgs` row knows the list it accepted last (`last_roster_hash`).
+pub fn roster_hash(text: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(text.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
 /// A workspace id: `^[a-z0-9][a-z0-9-]{0,31}$`.
 fn is_workspace_id(id: &str) -> bool {
     let ok = |c: char| c.is_ascii_lowercase() || c.is_ascii_digit();

@@ -11,9 +11,11 @@ use common::orgs::{
     ISSUED,
 };
 use common::spec;
-use dots_core::accounts::{ensure_identity, verify_roster, Membership, Role, WorkspaceRole};
+use dots_core::accounts::{
+    ensure_identity, verify_roster, Membership, NotMember, Role, WorkspaceRole,
+};
 use dots_core::vault::org::{read_offline, OrgLookup, OrgStatus};
-use dots_core::vault::{GrantState, Grants};
+use dots_core::vault::{GrantState, Grants, SecretStore};
 use dots_core::Error;
 use minisign::KeyPair;
 use serde_json::{json, Value};
@@ -173,7 +175,7 @@ async fn required_not_on_list_first_time_is_waiting_nothing_wiped() {
     assert!(h.copy_path(ACME).exists(), "the copy is kept");
     assert_eq!(
         h.orgs.lookup(ACME, "API_KEY").await,
-        OrgLookup::NotMember(Membership::Waiting)
+        OrgLookup::NotMember(NotMember::Waiting)
     );
     assert!(h.orgs.entries(ACME).await.unwrap().is_empty());
 
@@ -190,10 +192,11 @@ async fn required_not_on_list_first_time_is_waiting_nothing_wiped() {
 }
 
 #[tokio::test]
-async fn no_identity_is_waiting_never_removed() {
+async fn missing_identity_while_active_stays_active() {
     let h = OrgsHarness::new().await;
     join_active(&h).await;
-    // The Dots ID is gone when the next list is evaluated, and the list no longer names it.
+    // The Dots ID can't be read when the next list is evaluated, and the list no longer names
+    // it: nothing changes, and the summary says why.
     h.store
         .set_marker("identity_public_key", &Value::Null, false)
         .await
@@ -206,7 +209,14 @@ async fn no_identity_is_waiting_never_removed() {
         Some(&sign_roster(&h.keys, &text)),
     );
     let summary = h.orgs.refresh(ACME).await.unwrap();
-    assert_eq!(summary.membership, Membership::Waiting);
+    assert_eq!(summary.membership, Membership::Active);
+    assert_eq!(summary.role, Some(Role::Admin));
+    assert_eq!(summary.roster_seq, Some(1));
+    assert!(summary
+        .roster_error
+        .as_deref()
+        .is_some_and(|e| e.starts_with("this PC's Dots ID can't be read")));
+    assert_eq!(h.orgs.lookup(ACME, "API_KEY").await, value());
     assert!(h.copy_path(ACME).exists(), "nothing is wiped");
 
     // A first join with no Dots ID at all is waiting as well.
@@ -247,7 +257,7 @@ async fn active_then_dropped_is_removed_and_wiped() {
     assert!(!h.copy_path(ACME).exists(), "the copy is wiped");
     assert_eq!(
         h.orgs.lookup(ACME, "API_KEY").await,
-        OrgLookup::NotMember(Membership::Removed)
+        OrgLookup::NotMember(NotMember::Removed)
     );
     assert_eq!(h.orgs.access(ACME), Some((Membership::Removed, None)));
     let row = h.store.get_org(ACME).await.unwrap().unwrap();
@@ -272,7 +282,7 @@ async fn active_then_dropped_is_removed_and_wiped() {
     assert_eq!(summary.membership, Membership::Removed);
     assert_eq!(
         restarted.lookup(ACME, "API_KEY").await,
-        OrgLookup::NotMember(Membership::Removed)
+        OrgLookup::NotMember(NotMember::Removed)
     );
 
     // Leaving and joining again starts over.
@@ -486,4 +496,219 @@ async fn summary_carries_membership_and_role() {
     assert_eq!(json["role"], Value::Null);
     assert_eq!(json["roster_seq"], Value::Null);
     assert_eq!(json["member_count"], Value::Null);
+}
+
+/// Policy v2 asking for a member list, with `more` fields over it.
+fn required_with(admins: &[String], more: Value) -> Value {
+    let mut policy = required(admins);
+    for (key, value) in more.as_object().unwrap() {
+        policy[key] = value.clone();
+    }
+    policy
+}
+
+/// Makes a new Dots ID for this PC, as `ensure_identity` does when the secret was lost.
+async fn regenerate_identity(h: &OrgsHarness) -> String {
+    let old = me(h).await;
+    h.secrets.delete("identity").unwrap();
+    let new = me(h).await;
+    assert_ne!(new, old);
+    new
+}
+
+#[tokio::test]
+async fn admin_dropped_from_admins_keeps_the_accepted_list() {
+    let h = OrgsHarness::new().await;
+    let mine = me(&h).await;
+    let admin = keys();
+    let text = list(3, &[member("01ME", "me@acme.com", "member", &mine)]);
+    let signed = sign_roster(&admin, &text);
+    serve(&h, ISSUED, required(&[public_key(&admin)]), Some(&signed));
+    join(&h).await;
+    assert_eq!(h.orgs.summary(ACME).await.unwrap().roster_error, None);
+
+    // The owner re-signs the policy without that admin; the list it signed stays accepted.
+    serve(&h, LATER, required(&[]), Some(&signed));
+    let summary = h.orgs.refresh(ACME).await.unwrap();
+    assert_eq!(summary.roster_error, None);
+    assert_eq!(summary.membership, Membership::Active);
+    assert_eq!(summary.roster_seq, Some(3));
+
+    let restarted = h.service();
+    restarted.load().await.unwrap();
+    let summary = restarted.summary(ACME).await.unwrap();
+    assert_eq!(summary.roster_error, None);
+    assert_eq!(summary.membership, Membership::Active);
+    assert_eq!(summary.member_count, Some(2));
+    let summary = restarted.refresh(ACME).await.unwrap();
+    assert_eq!(summary.roster_error, None);
+    assert_eq!(summary.membership, Membership::Active);
+
+    // A new list from the dropped admin is refused.
+    let newer = list(4, &[member("01ME", "me@acme.com", "viewer", &mine)]);
+    serve(&h, LATER, required(&[]), Some(&sign_roster(&admin, &newer)));
+    let summary = restarted.refresh(ACME).await.unwrap();
+    assert_eq!(
+        summary.roster_error.as_deref(),
+        Some("the member list is not signed by the owner or an admin")
+    );
+    assert_eq!(summary.role, Some(Role::Member));
+}
+
+#[tokio::test]
+async fn regenerated_identity_waits_for_the_new_id_nothing_wiped() {
+    let h = OrgsHarness::new().await;
+    join_active(&h).await;
+    let new = regenerate_identity(&h).await;
+
+    // The same list: the old ID is on it, the new one is not.
+    let summary = h.orgs.refresh(ACME).await.unwrap();
+    let changed = "Acme Engineering: this PC's Dots ID changed. Send the new one to an Admin.";
+    assert_eq!(summary.membership, Membership::Waiting);
+    assert_eq!(summary.status_text, changed);
+    assert_eq!(summary.role, None);
+    assert!(h.copy_path(ACME).exists(), "nothing is wiped");
+    assert_eq!(
+        h.orgs.lookup(ACME, "API_KEY").await,
+        OrgLookup::NotMember(NotMember::IdChanged)
+    );
+    let row = h.store.get_org(ACME).await.unwrap().unwrap();
+    assert_eq!(row.member.membership, Membership::Waiting);
+    assert_eq!(row.member.member_id.as_deref(), Some("01ME"));
+    let dot = h
+        .store
+        .create_dot(&spec("triage"), Some(ACME))
+        .await
+        .unwrap();
+    match h.vault().before_run(&dot).await {
+        Err(Error::Other(text)) => assert_eq!(text, changed),
+        other => panic!("expected the run refused, got {other:?}"),
+    }
+
+    // A restart says the same.
+    let restarted = h.service();
+    restarted.load().await.unwrap();
+    assert_eq!(restarted.summary(ACME).await.unwrap().status_text, changed);
+
+    // The admin swaps in the new ID for the same member: active again.
+    let text = list(2, &[member("01ME", "me@acme.com", "admin", &new)]);
+    serve(
+        &h,
+        ISSUED,
+        required(&[]),
+        Some(&sign_roster(&h.keys, &text)),
+    );
+    let summary = restarted.refresh(ACME).await.unwrap();
+    assert_eq!(summary.membership, Membership::Active);
+    assert_eq!(summary.role, Some(Role::Admin));
+    assert_eq!(restarted.lookup(ACME, "API_KEY").await, value());
+    let row = h.store.get_org(ACME).await.unwrap().unwrap();
+    assert_eq!(row.member.key.as_deref(), Some(new.as_str()));
+}
+
+#[tokio::test]
+async fn regenerated_identity_and_member_gone_is_removed() {
+    let h = OrgsHarness::new().await;
+    join_active(&h).await;
+    regenerate_identity(&h).await;
+    let summary = h.orgs.refresh(ACME).await.unwrap();
+    assert_eq!(summary.membership, Membership::Waiting);
+    // The admin takes the member off: the old ID and the member are both gone.
+    let text = list(2, &[]);
+    serve(
+        &h,
+        ISSUED,
+        required(&[]),
+        Some(&sign_roster(&h.keys, &text)),
+    );
+    let summary = h.orgs.refresh(ACME).await.unwrap();
+    assert_eq!(summary.membership, Membership::Removed);
+    assert!(!h.copy_path(ACME).exists());
+}
+
+#[tokio::test]
+async fn equal_seq_with_another_text_after_restart_without_copy_is_refused() {
+    let h = OrgsHarness::new().await;
+    let mine = me(&h).await;
+    let no_copy = required_with(&[], json!({"offline_hours": 0}));
+    let text = list(3, &[member("01ME", "me@acme.com", "admin", &mine)]);
+    let signed = sign_roster(&h.keys, &text);
+    serve(&h, ISSUED, no_copy.clone(), Some(&signed));
+    join(&h).await;
+    assert!(!h.copy_path(ACME).exists());
+
+    let restarted = h.service();
+    restarted.load().await.unwrap();
+    // The same list again is known by its hash.
+    let summary = restarted.refresh(ACME).await.unwrap();
+    assert_eq!(summary.roster_error, None);
+    assert_eq!(summary.role, Some(Role::Admin));
+
+    // Another list of the same seq is refused.
+    let other = list(3, &[member("01ME", "me@acme.com", "viewer", &mine)]);
+    serve(&h, ISSUED, no_copy, Some(&sign_roster(&h.keys, &other)));
+    let summary = restarted.refresh(ACME).await.unwrap();
+    assert_eq!(
+        summary.roster_error.as_deref(),
+        Some("this member list (#3) is older than the one already accepted (#3)")
+    );
+    assert_eq!(summary.role, Some(Role::Admin));
+}
+
+#[tokio::test]
+async fn active_then_policy_off_is_legacy() {
+    let h = OrgsHarness::new().await;
+    join_active(&h).await;
+    serve(&h, LATER, json!({"v": 2}), None);
+    let summary = h.orgs.refresh(ACME).await.unwrap();
+    assert_eq!(summary.membership, Membership::Legacy);
+    assert_eq!(summary.role, None);
+    assert_eq!(summary.member_count, None);
+    assert_eq!(h.orgs.access(ACME), Some((Membership::Legacy, None)));
+    assert_eq!(h.orgs.lookup(ACME, "API_KEY").await, value());
+}
+
+#[tokio::test]
+async fn unreachable_or_invalid_while_active_is_never_removed() {
+    let h = OrgsHarness::new().await;
+    join_active(&h).await;
+    h.bao
+        .fail_next(common::fake_openbao::Failure::Status(503), 1);
+    let summary = h.orgs.refresh(ACME).await.unwrap();
+    assert!(matches!(summary.status, OrgStatus::Offline { .. }));
+    assert_eq!(summary.membership, Membership::Active);
+
+    // A policy signed by another key is refused; the list is not looked at.
+    let forged = sign(&keys(), &policy(ACME, LATER, required(&[])));
+    h.serve("dots", entries(), &forged);
+    h.bao
+        .put_roster("secret", "dots", &sign_roster(&h.keys, &list(2, &[])));
+    let summary = h.orgs.refresh(ACME).await.unwrap();
+    assert!(matches!(summary.status, OrgStatus::PolicyInvalid { .. }));
+    assert_eq!(summary.membership, Membership::Active);
+    assert_eq!(h.orgs.lookup(ACME, "API_KEY").await, value());
+    assert!(h.copy_path(ACME).exists());
+}
+
+#[tokio::test]
+async fn denied_while_waiting_stays_waiting() {
+    let h = OrgsHarness::new().await;
+    me(&h).await;
+    let text = list(1, &[]);
+    serve(
+        &h,
+        ISSUED,
+        required(&[]),
+        Some(&sign_roster(&h.keys, &text)),
+    );
+    join(&h).await;
+    h.bao.revoke_token(common::orgs::TOKEN);
+    let summary = h.orgs.refresh(ACME).await.unwrap();
+    assert_eq!(summary.membership, Membership::Waiting);
+    assert_ne!(summary.status, OrgStatus::Revoked);
+    assert!(h.copy_path(ACME).exists(), "nothing is wiped");
+    assert_eq!(
+        h.orgs.lookup(ACME, "API_KEY").await,
+        OrgLookup::NotMember(NotMember::Waiting)
+    );
 }

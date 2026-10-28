@@ -11,7 +11,7 @@ use zeroize::Zeroizing;
 use super::grants::{Consumer, Grants};
 use super::org::{OrgLookup, OrgPolicy, OrgView, PersonalMode};
 use super::service::Vault;
-use crate::accounts::Membership;
+use crate::accounts::NotMember;
 use crate::library::PERSONAL_SCOPE;
 use crate::model::Dot;
 use crate::{Error, Result};
@@ -63,9 +63,8 @@ pub enum Unresolved {
     PolicyInvalid(String),
     /// The dot's org is not joined on this PC.
     OrgRemoved,
-    /// This PC is not on the account's member list: `Waiting`, or `Removed` from it (members
-    /// spec §6.4).
-    NotMember(Membership),
+    /// This PC is not on the account's member list, and why (members spec §6.4).
+    NotMember(NotMember),
 }
 
 /// A variable that did not resolve for a consumer.
@@ -77,17 +76,6 @@ pub struct Missing {
     /// The org's name, for the text; its id when it is not joined (`OrgRemoved`). `None` for
     /// a Personal dot.
     pub org: Option<String>,
-}
-
-/// What a PC that is not on `account`'s member list is told, for a run's start and for each
-/// variable (members spec §6.4): it waits to be added, or it was removed.
-pub fn not_member_text(account: &str, membership: Membership) -> String {
-    match membership {
-        Membership::Removed => format!("{account}: you were removed from it."),
-        _ => {
-            format!("{account}: you aren't on its member list yet. Send your Dots ID to an Admin.")
-        }
-    }
 }
 
 /// What a dot whose org is not joined on this PC says: at its run's start, when it is saved,
@@ -118,7 +106,7 @@ impl Missing {
             Unresolved::PolicyInvalid(error) => format!("{org}: policy invalid: {error}"),
             Unresolved::OrgOffline => format!("{org}: offline, with no saved copy"),
             Unresolved::OrgRemoved => org_removed_text(dot, org),
-            Unresolved::NotMember(membership) => not_member_text(org, *membership),
+            Unresolved::NotMember(why) => why.text(org),
         }
     }
 
@@ -141,9 +129,7 @@ impl Missing {
             Unresolved::PolicyInvalid(error) => format!("{name}: {org}: policy invalid: {error}"),
             Unresolved::OrgOffline => format!("{name}: {org}: offline, with no saved copy"),
             Unresolved::OrgRemoved => format!("{name}: no org '{org}' is joined on this PC"),
-            Unresolved::NotMember(membership) => {
-                format!("{name}: {}", not_member_text(org, *membership))
-            }
+            Unresolved::NotMember(why) => format!("{name}: {}", why.text(org)),
         }
     }
 }
@@ -390,11 +376,9 @@ impl Vault {
                 return Err(Error::Other(text));
             }
             // A PC that is not on the account's member list runs none of its dots (§6.4).
-            if let Some((membership @ (Membership::Waiting | Membership::Removed), _)) =
-                orgs.access(&org_id)
-            {
+            if let Some(why) = orgs.not_member(&org_id) {
                 let account = self.org_name(&org_id).await;
-                return Err(Error::Other(not_member_text(&account, membership)));
+                return Err(Error::Other(why.text(&account)));
             }
         }
         Ok(())
@@ -439,7 +423,7 @@ impl Vault {
             }
             OrgLookup::Offline => return refused(Unresolved::OrgOffline),
             OrgLookup::Removed => return refused(Unresolved::OrgRemoved),
-            OrgLookup::NotMember(membership) => return refused(Unresolved::NotMember(*membership)),
+            OrgLookup::NotMember(why) => return refused(Unresolved::NotMember(*why)),
         };
         // An org that gives values has an accepted policy. Without one, nothing is guessed.
         let Some(policy) = policy else {

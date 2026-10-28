@@ -10,7 +10,7 @@ use common::orgs::{
     keys, policy, sign, token, OrgsHarness, Scripted, ACME, ACME_NAME, ISSUED, TOKEN,
 };
 use common::{spec, temp_store};
-use dots_core::accounts::Membership;
+use dots_core::accounts::NotMember;
 use dots_core::vault::org::OrgStatus;
 use dots_core::vault::{Consumer, DotScope, EntryKind, Grants, Missing, Unresolved, Vault};
 use dots_core::Error;
@@ -740,22 +740,21 @@ fn every_missing_text_is_exact() {
             "dot 'D': its org 'acme-eng' was removed",
         ),
         (
-            text(
-                "NAME",
-                x(),
-                Unresolved::NotMember(Membership::Waiting),
-                acme,
-            ),
+            text("NAME", x(), Unresolved::NotMember(NotMember::Waiting), acme),
             "Acme Engineering: you aren't on its member list yet. Send your Dots ID to an Admin.",
+        ),
+        (
+            text("NAME", x(), Unresolved::NotMember(NotMember::Removed), acme),
+            "Acme Engineering: you were removed from it.",
         ),
         (
             text(
                 "NAME",
                 x(),
-                Unresolved::NotMember(Membership::Removed),
+                Unresolved::NotMember(NotMember::IdChanged),
                 acme,
             ),
-            "Acme Engineering: you were removed from it.",
+            "Acme Engineering: this PC's Dots ID changed. Send the new one to an Admin.",
         ),
     ];
     for (got, want) in cases {

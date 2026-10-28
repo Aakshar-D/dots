@@ -40,4 +40,17 @@ pub struct MemberRow {
     pub workspaces: BTreeMap<String, WorkspaceRole>,
     /// The `seq` of the last list accepted: an older one is refused.
     pub last_roster_seq: Option<u64>,
+    /// The Dots ID this PC was `active` under. It stays while `waiting` because that ID
+    /// changed, so the account can say so.
+    pub key: Option<String>,
+    /// The `roster_hash` of the last list accepted. The same list fetched again is known by it,
+    /// and is not checked against the current admins again (§6.1).
+    pub roster_hash: Option<String>,
+}
+
+impl MemberRow {
+    /// Waiting because this PC's Dots ID changed since it was on the list.
+    pub fn id_changed(&self) -> bool {
+        self.membership == Membership::Waiting && self.key.is_some()
+    }
 }

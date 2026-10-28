@@ -243,6 +243,8 @@ async fn membership_is_recorded_and_read_back() {
         .into_iter()
         .collect(),
         last_roster_seq: Some(7),
+        key: Some("RWQme".into()),
+        roster_hash: Some("ab12".into()),
     };
     store.record_membership("acme-eng", &active).await.unwrap();
     let got = store.get_org("acme-eng").await.unwrap().unwrap();

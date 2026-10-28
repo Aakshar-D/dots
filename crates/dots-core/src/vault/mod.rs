@@ -15,9 +15,7 @@ pub mod upgrade;
 
 pub use entries::{EntryKind, EnvEntry};
 pub use grants::{Consumer, Grants};
-pub use resolve::{
-    not_member_text, org_removed_text, DotScope, Missing, Resolved, Unresolved, ValueSource,
-};
+pub use resolve::{org_removed_text, DotScope, Missing, Resolved, Unresolved, ValueSource};
 #[cfg(windows)]
 pub use secrets::WindowsCredentials;
 pub use secrets::{os_secrets, MemorySecrets, SecretStore, MAX_SECRET_BYTES};
