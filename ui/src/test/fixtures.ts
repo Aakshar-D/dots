@@ -44,6 +44,10 @@ export const sample = {
   memories: T.Memory.array().parse(contract.Memory),
   /// A folder watcher that is on, an email one paused on an error, a GitHub one paused on a flood.
   watchers: T.Watcher.array().parse(contract.Watcher),
+  /// This install's Dots ID, with a name and email set.
+  identity: T.Identity.parse(contract.Identity),
+  /// Personal's default workspace.
+  scope: T.CurrentScope.parse(contract.CurrentScope),
   /// Acme Engineering (OpenBao) in each status but pending, then Design (SOPS), pending.
   orgs: T.OrgSummary.array().parse(contract.OrgSummary),
   /// A code for a new org (OpenBao, token), and one that changes Acme's path and policy key.
@@ -134,6 +138,7 @@ export function installDefaults(): void {
   backend.on("env_old_backups", () => []);
   // No org is joined on this PC.
   backend.on("org_list", () => []);
+  backend.on("identity_get", () => sample.identity);
   // No grant has a status: the editor shows each as it shows a grant not saved yet.
   backend.on("dot_variables", () => []);
   backend.on("new_dot_spec", () => blankSpec);

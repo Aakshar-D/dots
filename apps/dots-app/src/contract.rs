@@ -3,6 +3,7 @@
 //! schema, so a field renamed or added on one side fails the other side's tests.
 //! Regenerate after changing a type: `UPDATE_CONTRACT=1 cargo test -p dots-app contract`.
 
+use dots_core::accounts::{CurrentScope, Identity};
 use dots_core::browser::BrowserStatus;
 use dots_core::context::Document;
 use dots_core::engine::EngineEvent;
@@ -1390,6 +1391,16 @@ pub fn samples() -> Value {
     // The Inbox's sample keeps one, Personal's; these are one of each scope.
     samples["ToolsChanged"] = to(tools_changed());
     samples["OrgSummary"] = to(org_summaries());
+    samples["Identity"] = to(Identity {
+        public_key: "q83vEjRWeJq83vEjRWeJq83vEjRWeJq83vEjRWeJq8s=".into(),
+        fingerprint: "AB12 CD34 EF56 7890".into(),
+        name: "Asha Rao".into(),
+        email: "asha@acme.com".into(),
+    });
+    samples["CurrentScope"] = to(CurrentScope {
+        account: "personal".into(),
+        workspace: "default".into(),
+    });
     samples["JoinPreview"] = to(join_previews());
     samples["OrgEntry"] = to([
         OrgEntry {

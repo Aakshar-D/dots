@@ -37,7 +37,11 @@ export const keys = {
   env: ["env"] as const,
   envImport: ["env-import"] as const,
   envBackups: ["env-backups"] as const,
-  /// The orgs joined on this PC (Settings → Organisations, and the org names other screens
+  /// This install's Dots ID (Settings → Profile).
+  identity: ["identity"] as const,
+  /// The account and workspace the person works in now.
+  scope: ["scope"] as const,
+  /// The orgs joined on this PC (Settings → Accounts, and the org names other screens
   /// show). What is read per org belongs under this prefix, so an org event reaches it too.
   orgs: ["orgs"] as const,
   /// An org's entries for the Library's Env tab, under the orgs' key.

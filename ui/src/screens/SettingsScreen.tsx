@@ -19,7 +19,8 @@ import { errorMessage, notifyError } from "@/lib/notify";
 import { invalidate, keys, takeStatus } from "@/lib/query";
 
 import { ChatGptAccount } from "./ChatGptAccount";
-import { Organisations } from "./Organisations";
+import { Accounts } from "./Accounts";
+import { ProfileSection } from "./ProfileSection";
 import { UpdatesSection } from "@/screens/UpdatesSection";
 
 type Errors = { port?: string; max?: string; global?: string; share?: string };
@@ -197,7 +198,9 @@ function Form({ stored, status }: { stored: Settings; status: Status | undefined
 
       <ChatGptAccount />
 
-      <Organisations />
+      <ProfileSection />
+
+      <Accounts />
 
       <Section title="General">
         <div className="flex items-center gap-2">

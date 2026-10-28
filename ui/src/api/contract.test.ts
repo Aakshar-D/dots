@@ -57,6 +57,8 @@ const schemas: Record<SampleName, { parse: (v: unknown) => unknown }> = {
   AppCall: T.AppCall.array(),
   AppProposal: T.AppProposal.array(),
   ToolsChanged: T.ToolsChanged.array(),
+  Identity: T.Identity,
+  CurrentScope: T.CurrentScope,
   OrgSummary: T.OrgSummary.array(),
   JoinPreview: T.JoinPreview.array(),
   OrgEntry: T.OrgEntry.array(),

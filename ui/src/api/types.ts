@@ -971,6 +971,17 @@ const orgSummaryShape = {
   // The accepted policy's `use` globs; null while no policy is accepted.
   use_rules: nullable(UseRules),
 };
+// This install's Dots ID. `name` and `email` are empty until the person sets them.
+export const Identity = z.strictObject({
+  // The public key, in base64: what the person shares to be added to an account.
+  public_key: z.string(),
+  // The short form of the public key people compare by eye.
+  fingerprint: z.string(),
+  name: z.string(),
+  email: z.string(),
+});
+// The account and workspace the person works in now.
+export const CurrentScope = z.strictObject({ account: z.string(), workspace: z.string() });
 // An org as Settings shows it, by its status.
 export const OrgSummary = z.discriminatedUnion("status", [
   z.strictObject({ status: z.literal("connected"), ...orgSummaryShape }),
@@ -1326,6 +1337,8 @@ export type EntryKind = z.infer<typeof EntryKind>;
 export type EnvEntry = z.infer<typeof EnvEntry>;
 export type ScopedCatalog = z.infer<typeof ScopedCatalog>;
 export type SourceCreds = z.infer<typeof SourceCreds>;
+export type Identity = z.infer<typeof Identity>;
+export type CurrentScope = z.infer<typeof CurrentScope>;
 export type OrgSummary = z.infer<typeof OrgSummary>;
 export type BaoAuth = z.infer<typeof BaoAuth>;
 export type JoinPreview = z.infer<typeof JoinPreview>;

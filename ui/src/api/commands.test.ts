@@ -197,6 +197,23 @@ describe("commands", () => {
     expect((await failure(commands.orgRefresh("acme-eng"))).kind).toBe("internal");
   });
 
+  it("sends the account commands as the core names them", async () => {
+    reply = async () => fixture.Identity;
+    expect(await commands.identityGet()).toEqual(fixture.Identity);
+    await commands.profileSet("Asha Rao", "asha@acme.com");
+    reply = async () => fixture.CurrentScope;
+    expect(await commands.scopeGet()).toEqual(fixture.CurrentScope);
+    await commands.scopeSet("personal", "default");
+    expect(calls).toEqual([
+      ["identity_get", undefined],
+      ["profile_set", { name: "Asha Rao", email: "asha@acme.com" }],
+      ["scope_get", undefined],
+      ["scope_set", { account: "personal", workspace: "default" }],
+    ]);
+    reply = async () => ({ ...fixture.Identity, secret: "x" });
+    expect((await failure(commands.identityGet())).kind).toBe("internal");
+  });
+
   it("refuses to remove a used Library item without a yes, with the dots named", async () => {
     reply = async () => {
       throw {

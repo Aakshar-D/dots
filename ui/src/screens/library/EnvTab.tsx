@@ -22,7 +22,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { errorMessage, notifyError } from "@/lib/notify";
 import { invalidate, keys } from "@/lib/query";
-import { ORG_TONE } from "@/screens/Organisations";
+import { ORG_TONE } from "@/screens/Accounts";
 
 import { ItemRow, UsedBy, useScopes } from "./parts";
 

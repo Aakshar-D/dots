@@ -139,7 +139,7 @@ export function ReplyArea(props: {
         ? "Replying to: current topic"
         : `Replying to: ${topicTitle(target)}`;
   const hint = blocked
-    ? "org removed"
+    ? "account removed"
     : answering
       ? "Your answer to the question"
       : busy
@@ -153,7 +153,7 @@ export function ReplyArea(props: {
     <div className="flex flex-col gap-2 border-t pt-2">
       {blocked && (
         <p role="status" className="px-3 text-destructive">
-          org removed: {blocked}
+          account removed: {blocked}
         </p>
       )}
       {closed && (

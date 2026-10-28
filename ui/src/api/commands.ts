@@ -244,6 +244,15 @@ export const commands = {
   envOldBackupsAnswer: (deleteThem: boolean) =>
     call(z.string().array(), "env_old_backups_answer", { delete: deleteThem }),
 
+  /// This install's Dots ID, with the name and email the person set.
+  identityGet: () => call(T.Identity, "identity_get"),
+  /// Sets the name and email; rejects with the core's message for one it refuses.
+  profileSet: (name: string, email: string) => call(T.Identity, "profile_set", { name, email }),
+  /// The account and workspace the person works in now.
+  scopeGet: () => call(T.CurrentScope, "scope_get"),
+  scopeSet: (account: string, workspace: string) =>
+    call(T.CurrentScope, "scope_set", { account, workspace }),
+
   /// The orgs joined on this PC, by name. Never a value.
   orgList: () => call(T.OrgSummary.array(), "org_list"),
   /// What a join code (its text, or a `.dotsorg` file's) would join or change; nothing is
