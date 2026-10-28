@@ -222,7 +222,7 @@ fn said(e: Error) -> String {
 
 /// A change keeps every migration the active version ran, unchanged (spec section 5: the data
 /// has run them).
-fn check_migrations_kept(
+pub(super) fn check_migrations_kept(
     current: &AppSource,
     next: &AppSource,
     version: u32,
