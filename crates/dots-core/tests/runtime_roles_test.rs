@@ -16,13 +16,20 @@ use common::orgs::{
     ISSUED, START, TOKEN,
 };
 use common::{spec, wait_status};
-use dots_core::accounts::{identity, Permission};
-use dots_core::model::{DotSpec, NewRun, RunStatus, TriggerKind, WorkspaceMode};
+use dots_core::accounts::{identity, Access, Permission};
+use dots_core::apps::propose::{AppProposal, Decision};
+use dots_core::model::{
+    DotSpec, FolderConfig, MemberSpec, NewRun, NewWorkflowRun, ProjectSpec, RunStatus, TeamSpec,
+    TriggerKind, WatcherConfig, WorkflowSpec, WorkflowTrigger, WorkspaceMode,
+};
 use dots_core::vault::org::Orgs;
 use dots_core::vault::{DotScope, Grants, MemorySecrets};
+use dots_core::workflow::{Budget, Definition, Step, StepKind, Trigger};
+use dots_core::workflows::StartRequest;
 use dots_core::{Config, Error, Runtime};
 use minisign::KeyPair;
 use serde_json::{json, Value};
+use sqlx::sqlite::SqlitePool;
 use tempfile::TempDir;
 
 const LEVEL: &str = "org-plain-level-roles-7d21";
@@ -39,18 +46,24 @@ struct Rt {
     args_out: PathBuf,
     bao: FakeOpenBao,
     keys: KeyPair,
+    secrets: Arc<MemorySecrets>,
 }
 
 impl Rt {
     async fn start() -> Rt {
         let bao = FakeOpenBao::start().await;
         bao.allow_token(TOKEN, false);
-        let dir = tempfile::tempdir().unwrap();
+        let secrets = Arc::new(MemorySecrets::new());
+        Rt::on(tempfile::tempdir().unwrap(), secrets, bao, keys()).await
+    }
+
+    /// A runtime on the data folder in `dir`, with `secrets`, as a restart of Dots finds them.
+    async fn on(dir: TempDir, secrets: Arc<MemorySecrets>, bao: FakeOpenBao, keys: KeyPair) -> Rt {
         let args_out = dir.path().join("args.json");
         let mut cfg = Config::new(dir.path().join("data"));
         cfg.port = 0;
         cfg.clock = FakeClock::new(at(START));
-        cfg.secrets = Some(Arc::new(MemorySecrets::new()));
+        cfg.secrets = Some(secrets.clone());
         cfg.claude_path = Some(PathBuf::from(env!("CARGO_BIN_EXE_fake-claude")));
         cfg.claude_env.push((
             "FAKE_CLAUDE_ARGS_OUT".into(),
@@ -62,8 +75,18 @@ impl Rt {
             rt,
             args_out,
             bao,
-            keys: keys(),
+            keys,
+            secrets,
         }
+    }
+
+    async fn runs(&self, dot_id: &str) -> usize {
+        self.rt
+            .store()
+            .list_runs(Some(dot_id), 100)
+            .await
+            .unwrap()
+            .len()
     }
 
     fn orgs(&self) -> &Orgs {
@@ -182,6 +205,8 @@ async fn viewer_cannot_create_edit_run_or_answer() {
             .unwrap();
     t.become_(2, Some("viewer")).await;
     let edit = viewer_cant("create or change dots");
+    // No queued run is claimed, so nothing but the calls below changes the approval and runs.
+    t.rt.hold_runs(true).await;
 
     assert_eq!(
         refused(t.rt.create_dot(t.triage(), Some(ACME.into())).await),
@@ -201,6 +226,8 @@ async fn viewer_cannot_create_edit_run_or_answer() {
     let run_text = viewer_cant("run dots");
     assert_eq!(refused(t.rt.run_now(&dot.id).await), run_text);
     assert_eq!(refused(t.rt.chat(&dot.id, "hello", None).await), run_text);
+    // No run was enqueued.
+    assert_eq!(t.runs(&dot.id).await, 1);
 
     let answer = viewer_cant("answer approvals");
     assert_eq!(
@@ -211,6 +238,8 @@ async fn viewer_cannot_create_edit_run_or_answer() {
         refused(t.rt.decide_run_approvals(&run.id, true, None).await),
         answer
     );
+    let still = t.rt.store().get_approval(&approval.id).await.unwrap();
+    assert_eq!(still, approval);
 
     let mcp = viewer_cant("add MCP servers");
     let scope = DotScope::Org(ACME.into());
@@ -360,5 +389,257 @@ async fn legacy_account_acts_as_member() {
         refused(t.rt.require(Some(ACME), Permission::ManageWorkspaces).await),
         "Acme Engineering: a Member can't manage workspaces. Ask an Admin or Owner."
     );
+    t.rt.shutdown();
+}
+
+/// A workflow of one agent step, done by `member`.
+fn flow(member: &str) -> WorkflowSpec {
+    WorkflowSpec {
+        name: "fix".into(),
+        definition: Definition {
+            trigger: Trigger::Manual,
+            steps: vec![Step {
+                id: "a".into(),
+                name: "Work".into(),
+                kind: StepKind::Agent {
+                    member: member.into(),
+                    job: "Fix it.".into(),
+                },
+            }],
+            budget: Budget::default(),
+        },
+        enabled: true,
+    }
+}
+
+#[tokio::test]
+async fn viewer_cannot_answer_or_change_through_the_other_doors() {
+    let t = Rt::start().await;
+    t.join_as("member").await;
+    let dot =
+        t.rt.create_dot(t.triage(), Some(ACME.into()))
+            .await
+            .unwrap();
+    let store = t.rt.store();
+    // What a Member made while it could: a run that asked a question and proposed an app, a
+    // memory, a watcher, and a team with a project, a workflow and a workflow run.
+    t.rt.hold_runs(true).await;
+    let run = store
+        .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    let question = store
+        .add_question(&dot.id, &run.id, "Which branch?", None)
+        .await
+        .unwrap()
+        .unwrap();
+    let proposal: AppProposal = serde_json::from_value(json!({
+        "id": "proposal-1", "dot_id": dot.id, "run_id": run.id, "root_run_id": run.root_run_id,
+        "app_name": "notes", "app_id": null, "base_version": null, "note": "Built it.",
+        "summary": {
+            "title": "Notes", "description": "", "tools": [], "permissions": [],
+            "tests": {"results": []}, "files": 0, "bytes": 0, "migrations": [],
+            "update_from": null
+        },
+        "status": "pending", "answer": null, "answer_run_id": null,
+        "created_at": START, "decided_at": null
+    }))
+    .unwrap();
+    store.add_app_proposal(&proposal).await.unwrap();
+    let memory = t.rt.memory_add(&dot.id, "Use main.").await.unwrap();
+    let folder = t.dir.path().to_string_lossy().to_string();
+    let watcher =
+        t.rt.watcher_add(
+            &dot.id,
+            "inbox",
+            WatcherConfig::Folder(FolderConfig::new(&folder)),
+        )
+        .await
+        .unwrap();
+    let team_spec = TeamSpec {
+        name: "crew".into(),
+        description: String::new(),
+        members: vec![MemberSpec {
+            dot_id: dot.id.clone(),
+            role: String::new(),
+        }],
+        org_id: Some(ACME.into()),
+    };
+    let team = t.rt.teams().create(&team_spec).await.unwrap();
+    let project_spec = ProjectSpec {
+        name: "repo".into(),
+        repo_path: folder.clone(),
+        default_branch: None,
+        remote: "origin".into(),
+    };
+    // Added in the store: the folder is not a git repo, which the store does not check.
+    let project = store.add_project(&team.id, &project_spec).await.unwrap();
+    let workflow =
+        t.rt.teams()
+            .create_workflow(&team.id, &flow(&dot.id))
+            .await
+            .unwrap();
+    let wr = store
+        .create_workflow_run(&NewWorkflowRun {
+            workflow_id: workflow.id.clone(),
+            team_id: team.id.clone(),
+            definition: workflow.spec.definition.clone(),
+            project_id: project.id.clone(),
+            project: project_spec.clone(),
+            task: "Fix it.".into(),
+            trigger: WorkflowTrigger::Manual,
+            origin_run_id: None,
+            test: false,
+        })
+        .await
+        .unwrap();
+    t.become_(2, Some("viewer")).await;
+    let team = t.rt.teams().get(&team.id).await.unwrap();
+    let edit = viewer_cant("create or change dots");
+    let answer = viewer_cant("answer approvals");
+    let run_text = viewer_cant("run dots");
+
+    // Answers.
+    assert_eq!(refused(t.rt.reply(&question.id, "main").await), answer);
+    assert!(store.get_message(&question.id).await.unwrap().waits());
+    assert_eq!(
+        refused(
+            t.rt.decide_app_proposal(&proposal.id, Decision::Discard)
+                .await
+        ),
+        answer
+    );
+    assert_eq!(
+        store.get_app_proposal(&proposal.id).await.unwrap(),
+        proposal
+    );
+    assert_eq!(t.runs(&dot.id).await, 1);
+
+    // Memories and watchers.
+    assert_eq!(refused(t.rt.memory_add(&dot.id, "More.").await), edit);
+    assert_eq!(
+        refused(t.rt.memory_update(&memory.id, Some("Other."), None).await),
+        edit
+    );
+    assert_eq!(refused(t.rt.memory_delete(&memory.id).await), edit);
+    assert_eq!(store.list_memories(&dot.id).await.unwrap(), vec![memory]);
+    let config = WatcherConfig::Folder(FolderConfig::new(&folder));
+    assert_eq!(
+        refused(t.rt.watcher_add(&dot.id, "more", config.clone()).await),
+        edit
+    );
+    assert_eq!(
+        refused(t.rt.watcher_update(&watcher.id, "renamed", config).await),
+        edit
+    );
+    assert_eq!(
+        refused(t.rt.watcher_set_enabled(&watcher.id, false).await),
+        edit
+    );
+    assert_eq!(refused(t.rt.watcher_resume(&watcher.id).await), edit);
+    assert_eq!(refused(t.rt.watcher_delete(&watcher.id).await), edit);
+    assert_eq!(store.list_watchers(&dot.id).await.unwrap(), vec![watcher]);
+
+    // Teams, projects and workflows.
+    let teams = t.rt.teams();
+    assert_eq!(refused(teams.create(&team_spec).await), edit);
+    let mut renamed = team_spec.clone();
+    renamed.name = "renamed".into();
+    assert_eq!(refused(teams.update(&team.id, &renamed).await), edit);
+    assert_eq!(refused(teams.delete(&team.id).await), edit);
+    assert_eq!(
+        refused(teams.add_project(&team.id, &project_spec).await),
+        edit
+    );
+    assert_eq!(
+        refused(teams.update_project(&project.id, &project_spec).await),
+        edit
+    );
+    assert_eq!(refused(teams.delete_project(&project.id).await), edit);
+    assert_eq!(
+        refused(teams.create_workflow(&team.id, &flow(&dot.id)).await),
+        edit
+    );
+    assert_eq!(
+        refused(teams.update_workflow(&workflow.id, &flow(&dot.id)).await),
+        edit
+    );
+    assert_eq!(refused(teams.delete_workflow(&workflow.id).await), edit);
+    assert_eq!(refused(t.rt.workflows().delete_team(&team.id).await), edit);
+    assert_eq!(teams.get(&team.id).await.unwrap(), team);
+    assert_eq!(
+        teams.list_workflows(&team.id).await.unwrap(),
+        vec![workflow.clone()]
+    );
+
+    // Workflow runs.
+    let start = StartRequest {
+        workflow_id: workflow.id.clone(),
+        project_id: project.id.clone(),
+        task: "Fix it again.".into(),
+        trigger: WorkflowTrigger::Manual,
+        origin_run_id: None,
+        test: false,
+    };
+    let workflows = t.rt.workflows();
+    let before = store
+        .list_workflow_runs(Some(&team.id), 100)
+        .await
+        .unwrap()
+        .len();
+    assert_eq!(refused(workflows.start(start).await), run_text);
+    assert_eq!(refused(workflows.retry_step(&wr.id).await), run_text);
+    assert_eq!(refused(workflows.add_budget(&wr.id).await), run_text);
+    assert_eq!(refused(workflows.approve_check(&wr.id, None).await), answer);
+    assert_eq!(
+        store
+            .list_workflow_runs(Some(&team.id), 100)
+            .await
+            .unwrap()
+            .len(),
+        before
+    );
+
+    // A worktree of the account's run.
+    assert_eq!(refused(t.rt.discard_worktree(&run.id).await), run_text);
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn a_damaged_org_acts_as_waiting() {
+    let t = Rt::start().await;
+    t.join_as("member").await;
+    let dot =
+        t.rt.create_dot(t.triage(), Some(ACME.into()))
+            .await
+            .unwrap();
+    // The org's saved settings no longer read: on the next start it loads as damaged.
+    let Rt {
+        dir,
+        rt,
+        bao,
+        keys,
+        secrets,
+        ..
+    } = t;
+    assert!(rt.close(std::time::Duration::from_secs(10)).await);
+    let db = dir.path().join("data").join("dots.db");
+    let pool = SqlitePool::connect(&format!("sqlite://{}", db.display()))
+        .await
+        .unwrap();
+    sqlx::query("UPDATE orgs SET source = ? WHERE id = ?")
+        .bind(json!({"kind": "dropbox", "folder": "x"}).to_string())
+        .bind(ACME)
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+    let t = Rt::on(dir, secrets, bao, keys).await;
+    assert_eq!(t.rt.access(Some(ACME)), Access::Waiting);
+    assert_eq!(refused(t.rt.run_now(&dot.id).await), WAITING_TEXT);
+    match t.rt.vault().before_run(&dot).await {
+        Err(Error::NotAllowed(got)) => assert_eq!(got, WAITING_TEXT),
+        other => panic!("expected NotAllowed, got {other:?}"),
+    }
     t.rt.shutdown();
 }

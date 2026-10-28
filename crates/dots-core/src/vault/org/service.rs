@@ -762,13 +762,13 @@ impl Orgs {
 
     /// This PC's place on the org's member list and its role there, for the permission checks
     /// (members spec §6.3, §6.4). `None` when the org is not joined. A damaged org's list
-    /// can't be read: it is `legacy`, and gives no values anyway.
+    /// can't be read, so it fails closed: `waiting`, with no role.
     pub fn access(&self, org_id: &str) -> Option<(Membership, Option<Role>)> {
         match self.read().get(org_id) {
             Some(Slot::Joined(joined)) => {
                 Some((joined.row.member.membership, joined.row.member.role))
             }
-            Some(Slot::Damaged { .. }) => Some((Membership::Legacy, None)),
+            Some(Slot::Damaged { .. }) => Some((Membership::Waiting, None)),
             Some(Slot::Pending(_)) | None => None,
         }
     }

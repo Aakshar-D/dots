@@ -404,7 +404,7 @@ impl Runtime {
         follow_ups.set_paused(settings.schedules_paused);
         follow_ups.spawn(runner.clone(), shutdown.clone());
         let viewing = Viewing::default();
-        let teams = crate::teams::Teams::new(store.clone(), bus.clone());
+        let teams = crate::teams::Teams::new(store.clone(), bus.clone()).with_orgs(orgs.clone());
         // Started after the dispatcher and after interrupted runs were failed, so its first
         // pass sees each workflow's runs as they are.
         let workflows = crate::workflows::Workflows::new(
@@ -413,6 +413,7 @@ impl Runtime {
             runner.clone(),
             cfg.clock.clone(),
         );
+        workflows.set_orgs(orgs.clone());
         workflows.spawn(shutdown.clone());
         // The workflow tools reach the workflow runs through the check-ins (teams spec
         // section 7).
@@ -800,6 +801,7 @@ impl Runtime {
     /// the thread is active, for folder runs, and for any row that does not name a worktree of
     /// dots.
     pub async fn discard_worktree(&self, run_id: &str) -> Result<Run> {
+        self.require_for_run(run_id, Permission::RunDots).await?;
         let run = self.store.get_run(run_id).await?;
         self.ensure_thread_idle(&run.root_run_id).await?;
         let (workspaces, prepared) = self.review_worktree(&run)?;
@@ -930,7 +932,11 @@ impl Runtime {
 
     /// Answers the open question `message_id` with `text` (check-ins spec section 5): a run
     /// continues the question's thread, or starts afresh when its end has no session.
+    /// In an account, the role must allow answering for its dots (members spec §6.3).
     pub async fn reply(&self, message_id: &str, text: &str) -> Result<Run> {
+        let question = self.store.get_message(message_id).await?;
+        self.require_for_dot(&question.dot_id, Permission::AnswerApprovals)
+            .await?;
         self.checkins.reply(&self.runner, message_id, text).await
     }
 
@@ -1087,8 +1093,7 @@ impl Runtime {
 
     pub async fn run_now(&self, dot_id: &str) -> Result<Run> {
         let dot = self.store.get_dot(dot_id).await?;
-        self.require(dot.org_id.as_deref(), Permission::RunDots)
-            .await?;
+        self.require_run(&dot).await?;
         self.refuse_at_the_limit(&dot)?;
         self.runner
             .enqueue(NewRun::new(dot_id, TriggerKind::Manual))
@@ -1105,8 +1110,7 @@ impl Runtime {
             return Err(Error::Invalid("message must not be empty".into()));
         }
         let dot = self.store.get_dot(dot_id).await?;
-        self.require(dot.org_id.as_deref(), Permission::RunDots)
-            .await?;
+        self.require_run(&dot).await?;
         self.refuse_at_the_limit(&dot)?;
         let mut new = NewRun::new(dot_id, TriggerKind::Chat);
         new.payload = Some(json!({ "message": message }));
@@ -1199,6 +1203,10 @@ impl Runtime {
         decision: crate::apps::propose::Decision,
     ) -> Result<(crate::apps::propose::AppProposal, Run)> {
         use crate::apps::propose::{Decision, ProposalStatus, DECIDED_ALREADY, DISCARDED};
+        // In an account, the role must allow answering for its dots (members spec §6.3).
+        let dot_id = self.store.get_app_proposal(id).await?.dot_id;
+        self.require_for_dot(&dot_id, Permission::AnswerApprovals)
+            .await?;
         let lock = self.follow_ups.thread_lock();
         let mut one_at_a_time = lock.lock().await;
         let p = self.store.get_app_proposal(id).await?;
@@ -1447,6 +1455,16 @@ impl Runtime {
         self.require(dot.org_id.as_deref(), p).await
     }
 
+    /// What a run the person starts of `dot` needs: its org still joined (env vault spec
+    /// §6.4), and a role that may run the account's dots.
+    async fn require_run(&self, dot: &Dot) -> Result<()> {
+        if let Some(text) = self.vault.org_removed(dot) {
+            return Err(Error::Conflict(text));
+        }
+        self.require(dot.org_id.as_deref(), Permission::RunDots)
+            .await
+    }
+
     /// `require` in the account of the dot of the run `run_id`.
     async fn require_for_run(&self, run_id: &str, p: Permission) -> Result<()> {
         let run = self.store.get_run(run_id).await?;
@@ -1649,6 +1667,7 @@ impl Runtime {
 
     /// The person's memory of the dot (source `person`).
     pub async fn memory_add(&self, dot_id: &str, text: &str) -> Result<crate::model::Memory> {
+        self.require_for_dot(dot_id, Permission::EditDots).await?;
         self.checkins.memories().add(dot_id, text).await
     }
 
@@ -1659,12 +1678,20 @@ impl Runtime {
         text: Option<&str>,
         pinned: Option<bool>,
     ) -> Result<crate::model::Memory> {
+        self.require_for_memory(id).await?;
         self.checkins.memories().update(id, text, pinned).await
     }
 
     /// Deletes any memory. `NotFound` for an unknown id.
     pub async fn memory_delete(&self, id: &str) -> Result<()> {
+        self.require_for_memory(id).await?;
         self.checkins.memories().delete(id).await
+    }
+
+    /// Changing a memory of an account's dot needs a role that may change its dots.
+    async fn require_for_memory(&self, id: &str) -> Result<()> {
+        let dot_id = self.store.get_memory(id).await?.dot_id;
+        self.require_for_dot(&dot_id, Permission::EditDots).await
     }
 }
 
@@ -1684,6 +1711,7 @@ impl Runtime {
         name: &str,
         config: crate::model::WatcherConfig,
     ) -> Result<crate::model::Watcher> {
+        self.require_for_dot(dot_id, Permission::EditDots).await?;
         self.watchers.add(dot_id, name, config).await
     }
 
@@ -1693,10 +1721,12 @@ impl Runtime {
         name: &str,
         config: crate::model::WatcherConfig,
     ) -> Result<crate::model::Watcher> {
+        self.require_for_watcher(id).await?;
         self.watchers.update(id, name, config).await
     }
 
     pub async fn watcher_delete(&self, id: &str) -> Result<()> {
+        self.require_for_watcher(id).await?;
         self.watchers.delete(id).await
     }
 
@@ -1705,11 +1735,20 @@ impl Runtime {
         id: &str,
         enabled: bool,
     ) -> Result<crate::model::Watcher> {
+        self.require_for_watcher(id).await?;
         self.watchers.set_enabled(id, enabled).await
     }
 
     pub async fn watcher_resume(&self, id: &str) -> Result<crate::model::Watcher> {
+        self.require_for_watcher(id).await?;
         self.watchers.resume(id).await
+    }
+
+    /// Changing a watcher of an account's dot needs a role that may change its dots (members
+    /// spec §6.3).
+    async fn require_for_watcher(&self, id: &str) -> Result<()> {
+        let dot_id = self.store.get_watcher(id).await?.dot_id;
+        self.require_for_dot(&dot_id, Permission::EditDots).await
     }
 }
 

@@ -135,11 +135,20 @@ async fn a_run_of_a_dot_whose_org_was_removed_fails_at_start_and_spawns_nothing(
             .unwrap();
     t.orgs().remove(ACME).await.unwrap();
 
-    let run = t.rt.run_now(&dot.id).await.unwrap();
-    let run = wait_status(t.rt.store(), &run.id, RunStatus::Failed, 15).await;
-    assert_eq!(run.error.as_deref(), Some(REMOVED));
+    // The person's own run is refused before it is queued.
+    match t.rt.run_now(&dot.id).await {
+        Err(Error::Conflict(text)) => assert_eq!(text, REMOVED),
+        other => panic!("expected Conflict, got {other:?}"),
+    }
+    assert!(t
+        .rt
+        .store()
+        .list_runs(Some(&dot.id), 10)
+        .await
+        .unwrap()
+        .is_empty());
 
-    // A webhook's run takes the same path.
+    // A webhook's run fails at its start.
     let token = t.rt.regenerate_webhook_token(&dot.id).await.unwrap();
     let resp: Value = reqwest::Client::new()
         .post(t.rt.webhook_url(&dot).unwrap())
