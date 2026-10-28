@@ -16,6 +16,16 @@
 import dgram from "node:dgram";
 import net from "node:net";
 const [type, base] = [process.argv[2], Number(process.argv[3])];
+const out = [];
+let hitsTotal = 0;
+// Prints the results gathered so far, then exits 1 when a probe got a hit, else 2: the check did not run.
+const couldNotRun = (message) => {
+  if (out.length) console.log(type, "\n  " + out.join("\n  "));
+  console.log(`the check could not run: ${message}`);
+  process.exit(hitsTotal > 0 ? 1 : 2);
+};
+process.on("uncaughtException", (e) => couldNotRun(e?.message ?? String(e)));
+process.on("unhandledRejection", (e) => couldNotRun(e?.message ?? String(e)));
 const probes = [
   ["preconnect_ip", "tcp", (p) => `const l = document.createElement("link"); l.rel = "preconnect"; l.href = "http://127.0.0.1:${p}/"; document.head.append(l);`],
   ["preconnect_name", "tcp", (p) => `const l = document.createElement("link"); l.rel = "preconnect"; l.href = "http://leak.localtest.me:${p}/"; document.head.append(l);`],
@@ -59,31 +69,37 @@ if ((await within(new Promise((r) => ws.addEventListener("open", () => r("open")
 let id = 0;
 const evaluate = (expression) => within(new Promise((r) => {
   const me = ++id;
-  const on = (m) => { const d = JSON.parse(m.data); if (d.id === me) { ws.removeEventListener("message", on); r(d.result?.result?.value ?? d.result?.exceptionDetails?.exception?.description ?? JSON.stringify(d)); } };
+  const on = (m) => {
+    let d;
+    try { d = JSON.parse(m.data); } catch { return; }
+    if (d.id === me) { ws.removeEventListener("message", on); r(d.result?.result?.value ?? d.result?.exceptionDetails?.exception?.description ?? JSON.stringify(d)); }
+  };
   ws.addEventListener("message", on);
-  ws.send(JSON.stringify({ id: me, method: "Runtime.evaluate", params: { expression, returnByValue: true } }));
+  try {
+    ws.send(JSON.stringify({ id: me, method: "Runtime.evaluate", params: { expression, returnByValue: true } }));
+  } catch {
+    ws.removeEventListener("message", on);
+    r(NO_ANSWER);
+  }
 }), NO_ANSWER);
-const out = [];
-let leaked = false;
 let skipped = false;
 for (const [i, [name, kind, js]] of probes.entries()) {
   const port = base + i;
   let hits = 0;
+  const onError = (e) => couldNotRun(`port ${port} for ${name}: ${e.message}`);
   const sock = kind === "udp"
-    ? dgram.createSocket("udp4").on("message", () => hits++)
-    : net.createServer((s) => { hits++; s.destroy(); });
+    ? dgram.createSocket("udp4").on("message", () => { hits++; hitsTotal++; }).on("error", onError)
+    : net.createServer((s) => { hits++; hitsTotal++; s.destroy(); }).on("error", onError);
   await new Promise((r) => kind === "udp" ? sock.bind(port, "127.0.0.1", r) : sock.listen(port, "127.0.0.1", r));
   const said = await evaluate(`(() => { try { ${js(port)} return "ran"; } catch (e) { return "threw " + e.message; } })()`);
   if (said === NO_ANSWER) {
-    console.log(`${name}: DevTools did not answer in ${ANSWER_MS / 1000} s; the rest are not run`);
-    process.exit(2);
+    couldNotRun(`${name}: DevTools did not answer in ${ANSWER_MS / 1000} s; the rest are not run`);
   }
   await new Promise((r) => setTimeout(r, 6000));
-  if (hits > 0) leaked = true;
   if (said !== "ran") skipped = true;
   out.push(`${name}: ${said}, ${hits} ${kind} hit(s)`);
   sock.close();
 }
 console.log(type, t.url.slice(0, 55), "\n  " + out.join("\n  "));
 ws.close();
-setTimeout(() => process.exit(leaked ? 1 : skipped ? 2 : 0), 100);
+setTimeout(() => process.exit(hitsTotal > 0 ? 1 : skipped ? 2 : 0), 100);
