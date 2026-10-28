@@ -457,7 +457,7 @@ export function InboxScreen() {
       {held.length > 0 && (
         <section aria-labelledby="inbox-held" className="flex flex-col gap-2">
           <h2 id="inbox-held" className="font-semibold">
-            Held for Claude usage
+            Waiting to run
           </h2>
           <ul className="flex flex-col gap-2">
             {held.map((item) => (

@@ -7,6 +7,7 @@ import { Link } from "react-router";
 import { commands } from "@/api/commands";
 import type { DotOverview } from "@/api/types";
 import { Button } from "@/components/ui/button";
+import { useScopeRefusal } from "@/lib/access";
 import { orgRemoved, orgRemovedText, useOrgList } from "@/lib/dot-org";
 import { dotStatus, lastLine, nextLine } from "@/lib/dot-status";
 import { keys } from "@/lib/query";
@@ -30,6 +31,8 @@ export function DotsColumn({ rows, openId }: { rows: DotOverview[]; openId: stri
     useQuery({ queryKey: keys.limits, queryFn: commands.limitsGet }).data?.held_run_ids ?? [];
   // A dot whose org is no longer joined says so; the orgs are asked for only when a dot has one.
   const orgs = useOrgList(rows.some((row) => row.dot.org_id !== null));
+  // A Viewer, or a PC off the member list, can't make a dot in the account it works in.
+  const refusal = useScopeRefusal("edit");
   // Up and Down move the focus to the dot above or below, Home and End to the first and the
   // last; Enter (the link's own) opens the dot in focus. Moving opens nothing, so that passing
   // over dots neither loads them nor marks their questions read.
@@ -53,11 +56,24 @@ export function DotsColumn({ rows, openId }: { rows: DotOverview[]; openId: stri
     <nav aria-label="Dots" className="flex w-40 shrink-0 flex-col border-r bg-sidebar sm:w-64">
       <div className="flex items-center gap-2 px-3 py-2">
         <h2 className="flex-1 font-semibold">Dots</h2>
-        <Button asChild size="icon-sm" variant="ghost">
-          <Link to="/dots/new" aria-label="New dot" title="New dot">
+        {refusal ? (
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            aria-label="New dot"
+            title={refusal}
+            aria-disabled="true"
+            className="cursor-not-allowed opacity-50"
+          >
             <Plus aria-hidden />
-          </Link>
-        </Button>
+          </Button>
+        ) : (
+          <Button asChild size="icon-sm" variant="ghost">
+            <Link to="/dots/new" aria-label="New dot" title="New dot">
+              <Plus aria-hidden />
+            </Link>
+          </Button>
+        )}
       </div>
       <ul className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-auto px-2 pb-2" onKeyDown={onKeyDown}>
         {rows.map((row) => {

@@ -4,6 +4,7 @@ import { Globe } from "lucide-react";
 import { commands } from "@/api/commands";
 import type { Approval } from "@/api/types";
 import { Button } from "@/components/ui/button";
+import { useRunRefusal } from "@/lib/access";
 import { askDetails, askParts, type BrowserAsk } from "@/lib/browser";
 import { notifyError } from "@/lib/notify";
 import { invalidate, invalidateDots, keys } from "@/lib/query";
@@ -49,7 +50,8 @@ export function BrowserApprovalCard({
     onError: notifyError,
   });
   // One decision per card, as on the tool card.
-  const decided = decide.isPending || decide.isSuccess;
+  const refusal = useRunRefusal(approval.run_id, "answer");
+  const decided = decide.isPending || decide.isSuccess || refusal !== undefined;
   const who = dotName ?? "The dot";
   const choose = (decision: Decision) => onSingleClick(() => decide.mutate(decision));
   return (
@@ -80,7 +82,7 @@ export function BrowserApprovalCard({
       )}
       {approval.parked && <p className="text-xs text-muted-foreground">{BROWSER_PARKED}</p>}
       <div className="flex flex-wrap items-center gap-2">
-        <Button size="sm" disabled={decided} onClick={choose({ approved: true, allowRule: null })}>
+        <Button size="sm" disabled={decided} title={refusal} onClick={choose({ approved: true, allowRule: null })}>
           Allow once
         </Button>
         {site && ask.site && (
@@ -88,6 +90,7 @@ export function BrowserApprovalCard({
             size="sm"
             variant="outline"
             disabled={decided}
+            title={refusal}
             onClick={choose({ approved: true, allowRule: site.pattern })}
           >
             Always allow on {ask.site}
@@ -98,6 +101,7 @@ export function BrowserApprovalCard({
             size="sm"
             variant="outline"
             disabled={decided}
+            title={refusal}
             onClick={choose({ approved: true, allowRule: risky.pattern })}
           >
             Always allow risky actions on {ask.site}
@@ -107,6 +111,7 @@ export function BrowserApprovalCard({
           size="sm"
           variant="outline"
           disabled={decided}
+          title={refusal}
           onClick={choose({ approved: false, allowRule: null })}
         >
           Deny

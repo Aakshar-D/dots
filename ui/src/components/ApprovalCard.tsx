@@ -6,6 +6,7 @@ import type { Approval } from "@/api/types";
 import { BrowserApprovalCard } from "@/components/BrowserApprovalCard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useRunRefusal } from "@/lib/access";
 import { parkedNote } from "@/lib/approvals";
 import { browserAsk } from "@/lib/browser";
 import { notifyError } from "@/lib/notify";
@@ -56,7 +57,8 @@ function ToolApprovalCard({ approval, dotName }: { approval: Approval; dotName?:
   });
   // One decision per card: after a success the card stays until its list has reloaded, and its
   // buttons stay off for that time.
-  const decided = decide.isPending || decide.isSuccess;
+  const refusal = useRunRefusal(approval.run_id, "answer");
+  const decided = decide.isPending || decide.isSuccess || refusal !== undefined;
   const noteId = `approval-note-${approval.id}`;
   const rulesId = `approval-rules-${approval.id}`;
   const tool = callLabel(approval.tool, approval.input);
@@ -89,6 +91,7 @@ function ToolApprovalCard({ approval, dotName }: { approval: Approval; dotName?:
         <Button
           size="sm"
           disabled={decided}
+          title={refusal}
           onClick={onSingleClick(() => decide.mutate({ approved: true, allowRule: null }))}
         >
           Approve
@@ -97,6 +100,7 @@ function ToolApprovalCard({ approval, dotName }: { approval: Approval; dotName?:
           size="sm"
           variant="outline"
           disabled={decided}
+          title={refusal}
           onClick={onSingleClick(() => decide.mutate({ approved: false, allowRule: null }))}
         >
           Deny
@@ -108,6 +112,7 @@ function ToolApprovalCard({ approval, dotName }: { approval: Approval; dotName?:
             aria-expanded={choosing}
             aria-controls={rulesId}
             disabled={decided}
+            title={refusal}
             onClick={() => setChoosing((open) => !open)}
           >
             Approve and always allow
@@ -143,6 +148,7 @@ function ToolApprovalCard({ approval, dotName }: { approval: Approval; dotName?:
             <Button
               size="sm"
               disabled={decided}
+              title={refusal}
               onClick={onSingleClick(() => decide.mutate({ approved: true, allowRule: chosen }))}
             >
               Approve and save rule

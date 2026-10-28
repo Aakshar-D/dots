@@ -13,6 +13,7 @@ import { Page } from "@/components/Page";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { scheduleError, scheduleOf, specErrors, specOf } from "@/lib/dot-rules";
+import { useRefusal } from "@/lib/access";
 import { errorMessage, notifyError } from "@/lib/notify";
 import { orgRemovedText, useDotOrg } from "@/lib/dot-org";
 import { invalidateDots, keys, useSwitchingDot } from "@/lib/query";
@@ -57,6 +58,9 @@ function Editor(props: {
   const save = useMutation({
     mutationFn: (v: { spec: DotSpec; org: string | null }) => props.onSave(v.spec, v.org),
   });
+  // A Viewer, or a PC off the member list, can't save in the dot's account (a new dot's is the
+  // one chosen in the form).
+  const refusal = useRefusal(isNew ? draft.org : (props.existing?.org_id ?? null), "edit");
   const { setEnabled } = props;
   // The stored dot changes at once; the form follows, keeping what else was typed.
   const onEnabled = setEnabled
@@ -132,8 +136,8 @@ function Editor(props: {
           {props.actions}
           <Button
             size="sm"
-            disabled={save.isPending || props.blocked !== undefined}
-            title={props.blocked}
+            disabled={save.isPending || props.blocked !== undefined || refusal !== undefined}
+            title={props.blocked ?? refusal}
             onClick={submit}
           >
             {props.saveLabel}

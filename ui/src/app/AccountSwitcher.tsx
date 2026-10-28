@@ -6,6 +6,7 @@ import { useLocation, useNavigate } from "react-router";
 
 import { commands } from "@/api/commands";
 import type { OrgSummary } from "@/api/types";
+import { accessOf, accessRole, roleLabel } from "@/lib/access";
 import { notifyError } from "@/lib/notify";
 import { keys } from "@/lib/query";
 import {
@@ -145,6 +146,7 @@ export function AccountSwitcher() {
         >
           {accounts.map((a) => {
             const count = waiting.get(a.id) ?? 0;
+            const role = accessRole(accessOf(a.org ?? undefined, a.org ? a.id : null));
             const status = a.org && a.org.status !== "connected" ? a.org : null;
             return (
               <button
@@ -160,6 +162,7 @@ export function AccountSwitcher() {
                   aria-hidden
                 />
                 <span className="min-w-0 flex-1 truncate">{a.name}</span>
+                {role && <span className="text-xs text-muted-foreground">{roleLabel(role)}</span>}
                 {status && (
                   <span className={cn("text-xs first-letter:uppercase", ORG_TONE[status.status])}>
                     {status.status_text}

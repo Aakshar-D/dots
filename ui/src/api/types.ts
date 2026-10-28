@@ -1364,6 +1364,7 @@ export type SourceCreds = z.infer<typeof SourceCreds>;
 export type Identity = z.infer<typeof Identity>;
 export type CurrentScope = z.infer<typeof CurrentScope>;
 export type OrgSummary = z.infer<typeof OrgSummary>;
+export type Role = z.infer<typeof Role>;
 export type BaoAuth = z.infer<typeof BaoAuth>;
 export type JoinPreview = z.infer<typeof JoinPreview>;
 export type OrgEntry = z.infer<typeof OrgEntry>;

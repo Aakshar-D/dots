@@ -104,4 +104,13 @@ describe("the account switcher", () => {
     expect(router.state.location.pathname).toBe("/settings");
     expect(router.state.location.hash).toBe("#accounts");
   });
+
+  it("labels each account with the person's role in it", async () => {
+    const { user } = setup();
+    await user.click(await screen.findByRole("button", { name: /^Account:/ }));
+    const items = await screen.findAllByRole("menuitemradio");
+    expect(items[0]).toHaveTextContent("Owner");
+    expect(items[1]).toHaveTextContent("Admin");
+    expect(items[2]).toHaveTextContent("Member");
+  });
 });

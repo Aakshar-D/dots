@@ -468,3 +468,40 @@ describe("Settings, Accounts", () => {
     expect(await screen.findByText(revoked.status_text)).toBeVisible();
   });
 });
+
+describe("Settings, Accounts, membership", () => {
+  const named = (over: Partial<OrgSummary>): OrgSummary =>
+    ({ ...acme, ...over }) as OrgSummary;
+
+  it("shows the role, and the size and number of the member list", async () => {
+    orgs([named({ membership: "active", role: "viewer", member_count: 4, roster_seq: 3 })]);
+    renderApp("/settings");
+    const r = await row(acme.name);
+    expect(within(r).getByText("Viewer")).toBeVisible();
+    expect(within(r).getByText("4 members · list #3")).toBeVisible();
+  });
+
+  it("asks a waiting PC to send its Dots ID, with a button that copies it", async () => {
+    orgs([named({ membership: "waiting", role: null })]);
+    backend.on("identity_get", () => sample.identity);
+    const { user } = renderApp("/settings");
+    const r = await row(acme.name);
+    expect(within(r).getByText("Waiting to be added to the member list")).toBeVisible();
+    await user.click(await within(r).findByRole("button", { name: "Copy my Dots ID" }));
+    expect(await navigator.clipboard.readText()).toBe(sample.identity.public_key);
+  });
+
+  it("says when the PC was removed", async () => {
+    orgs([named({ membership: "removed", role: null })]);
+    renderApp("/settings");
+    expect(await within(await row(acme.name)).findByText(`Removed from ${acme.name}`)).toBeVisible();
+  });
+
+  it("shows why the last member list was not accepted", async () => {
+    orgs([named({ roster_error: "the list is not signed by an admin" })]);
+    renderApp("/settings");
+    expect(
+      await within(await row(acme.name)).findByText("the list is not signed by an admin"),
+    ).toBeVisible();
+  });
+});
