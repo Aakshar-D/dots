@@ -139,6 +139,9 @@ export function installDefaults(): void {
   // No org is joined on this PC.
   backend.on("org_list", () => []);
   backend.on("identity_get", () => sample.identity);
+  // Personal, until a test picks an account.
+  backend.on("scope_get", () => sample.scope);
+  backend.on("scope_set", (args) => ({ account: String(args.account), workspace: String(args.workspace) }));
   // No grant has a status: the editor shows each as it shows a grant not saved yet.
   backend.on("dot_variables", () => []);
   backend.on("new_dot_spec", () => blankSpec);

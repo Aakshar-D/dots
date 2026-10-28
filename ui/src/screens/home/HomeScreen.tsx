@@ -6,6 +6,7 @@ import { ErrorNote } from "@/components/ErrorNote";
 import { Button } from "@/components/ui/button";
 import { sortDots } from "@/lib/dot-status";
 import { keys } from "@/lib/query";
+import { inScope, useCurrentScope } from "@/lib/scope";
 import { DotPane } from "@/screens/home/DotPane";
 import { DotsColumn } from "@/screens/home/DotsColumn";
 import { lastDot } from "@/screens/home/last-dot";
@@ -31,7 +32,9 @@ function EmptyHome() {
 export function HomeScreen() {
   const { dotId, rootRunId } = useParams();
   const overview = useQuery({ queryKey: keys.overview, queryFn: commands.dotOverview });
-  const rows = sortDots(overview.data ?? []);
+  // Home shows the current account's dots; every dot while the scope loads.
+  const scope = useCurrentScope();
+  const rows = sortDots(overview.data ?? []).filter((r) => !scope || inScope(r.dot, scope));
   // A failed reload keeps what was loaded, and the open conversation with what is being typed;
   // only a first load that failed has nothing to show but the error.
   const loaded = overview.data !== undefined;

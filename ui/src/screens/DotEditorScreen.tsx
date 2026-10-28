@@ -1,6 +1,6 @@
 import { hashKey, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Play } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router";
 import { toast } from "sonner";
 
@@ -16,6 +16,7 @@ import { scheduleError, scheduleOf, specErrors, specOf } from "@/lib/dot-rules";
 import { errorMessage, notifyError } from "@/lib/notify";
 import { orgRemovedText, useDotOrg } from "@/lib/dot-org";
 import { invalidateDots, keys, useSwitchingDot } from "@/lib/query";
+import { PERSONAL, useCurrentScope } from "@/lib/scope";
 import { useDebounced } from "@/lib/use-debounced";
 import { DotForm, type Draft } from "@/screens/dot-editor/DotForm";
 import { MemoryTab } from "@/screens/dot-editor/MemoryTab";
@@ -43,6 +44,15 @@ function Editor(props: {
 }) {
   const [draft, setDraft] = useState<Draft>(() => ({ spec: props.initial, org: null }));
   const [tried, setTried] = useState(false);
+  // A new dot starts in the current account (Personal has no org), once the scope is known.
+  const scope = useCurrentScope();
+  const orgDefaulted = useRef(false);
+  const isNew = props.existing === null;
+  useEffect(() => {
+    if (!isNew || !scope || orgDefaulted.current) return;
+    orgDefaulted.current = true;
+    if (scope.account !== PERSONAL) setDraft((d) => (d.org === null ? { ...d, org: scope.account } : d));
+  }, [isNew, scope]);
   const settings = useQuery({ queryKey: keys.settings, queryFn: commands.getSettings }).data;
   const save = useMutation({
     mutationFn: (v: { spec: DotSpec; org: string | null }) => props.onSave(v.spec, v.org),

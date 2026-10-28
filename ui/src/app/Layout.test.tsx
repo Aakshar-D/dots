@@ -39,6 +39,15 @@ describe("the app frame", () => {
     expect(await within(nav).findByRole("link", { name: "Inbox, 7 waiting" })).toBeVisible();
   });
 
+  it("counts approvals of the dots of an account that is not the current one", async () => {
+    backend.on("inbox", () => sample.inbox);
+    backend.on("scope_get", () => ({ account: "acme-eng", workspace: "default" }));
+    backend.on("dot_overview", () => [{ ...idle, dot: { ...sample.dot, org_id: null } }]);
+    renderApp("/dots");
+    const nav = await screen.findByRole("navigation", { name: "Main" });
+    expect(await within(nav).findByRole("link", { name: "Inbox, 7 waiting" })).toBeVisible();
+  });
+
   it("shows why Dots could not start instead of the app", async () => {
     backend.on("startup_error", () => sample.startupError);
     renderApp("/dots");

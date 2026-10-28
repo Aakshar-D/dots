@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Copy, TriangleAlert } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useLocation } from "react-router";
 import { toast } from "sonner";
 
 import { CommandError, commands } from "@/api/commands";
@@ -578,8 +579,14 @@ export function Accounts() {
   // The org to update; null to join a new one; undefined while the dialog is closed.
   const [joining, setJoining] = useState<OrgSummary | null>();
   const orgs = list.data ?? [];
+  // `/settings#accounts` (the account switcher's Manage and Join) lands on this section.
+  const { hash } = useLocation();
+  useEffect(() => {
+    if (hash === "#accounts") document.getElementById("accounts")?.scrollIntoView?.();
+  }, [hash]);
   return (
     <fieldset
+      id="accounts"
       aria-label="Accounts"
       className="flex max-w-3xl flex-col gap-3 rounded-lg border p-4"
     >
