@@ -801,6 +801,9 @@ pub struct TeamSpec {
     pub description: String,
     #[serde(default)]
     pub members: Vec<MemberSpec>,
+    /// The account the team belongs to; `None` is Personal. Fixed once the team is created.
+    #[serde(default)]
+    pub org_id: Option<String>,
 }
 
 impl TeamSpec {
@@ -882,6 +885,8 @@ pub struct Team {
     pub description: String,
     pub members: Vec<TeamMember>,
     pub projects: Vec<Project>,
+    /// The account the team belongs to; `None` is Personal.
+    pub org_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }

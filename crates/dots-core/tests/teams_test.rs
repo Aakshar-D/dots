@@ -14,6 +14,7 @@ async fn dot(store: &Store, name: &str) -> String {
 
 fn team(name: &str, members: &[&str]) -> TeamSpec {
     TeamSpec {
+        org_id: None,
         name: name.into(),
         description: "Runs Dots.".into(),
         members: members
@@ -258,4 +259,97 @@ async fn project_and_workflow_names_are_unique_without_case() {
         teams.create_workflow(&t.id, &flow("fix", &helper)).await,
         Err(Error::Conflict(m)) if m == "the team has a workflow named \"fix\""
     ));
+}
+
+fn acme_team(name: &str, members: &[&str]) -> TeamSpec {
+    TeamSpec {
+        org_id: Some(common::orgs::ACME.into()),
+        ..team(name, members)
+    }
+}
+
+async fn acme_dot(store: &Store, name: &str) -> String {
+    store
+        .create_dot(&spec(name), Some(common::orgs::ACME))
+        .await
+        .unwrap()
+        .id
+}
+
+#[tokio::test]
+async fn team_takes_spec_org() {
+    let (_dir, store) = temp_store().await;
+    let a = acme_dot(&store, "a").await;
+    let t = store.create_team(&acme_team("crew", &[&a])).await.unwrap();
+    assert_eq!(t.org_id.as_deref(), Some(common::orgs::ACME));
+    let personal = store.create_team(&team("solo", &[])).await.unwrap();
+    assert_eq!(personal.org_id, None);
+}
+
+#[tokio::test]
+async fn team_refuses_dot_of_other_account() {
+    let (_dir, store) = temp_store().await;
+    let p = dot(&store, "pat").await;
+    let a = acme_dot(&store, "amy").await;
+    let msg = "dot 'pat' is in another account than the team";
+    match store.create_team(&acme_team("crew", &[&p])).await {
+        Err(Error::Invalid(m)) => assert_eq!(m, msg),
+        other => panic!("{other:?}"),
+    }
+    // A personal team refuses an Acme dot too.
+    match store.create_team(&team("solo", &[&a])).await {
+        Err(Error::Invalid(m)) => assert_eq!(m, "dot 'amy' is in another account than the team"),
+        other => panic!("{other:?}"),
+    }
+    let t = store.create_team(&acme_team("crew", &[&a])).await.unwrap();
+    match store
+        .update_team(&t.id, &acme_team("crew", &[&a, &p]))
+        .await
+    {
+        Err(Error::Invalid(m)) => assert_eq!(m, msg),
+        other => panic!("{other:?}"),
+    }
+    // The refused update changed nothing, and the spec's org_id cannot move the team.
+    let moved = store.update_team(&t.id, &team("crew", &[&a])).await;
+    assert_eq!(moved.unwrap().org_id.as_deref(), Some(common::orgs::ACME));
+}
+
+#[tokio::test]
+async fn backfill_assigns_single_org_teams() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("dots.db");
+    let store = Store::open(&db).await.unwrap();
+    let (a, b, c) = (
+        dot(&store, "a").await,
+        dot(&store, "b").await,
+        dot(&store, "c").await,
+    );
+    let all = store.create_team(&team("all", &[&a, &b])).await.unwrap();
+    let mixed = store.create_team(&team("mixed", &[&b, &c])).await.unwrap();
+    let empty = store.create_team(&team("empty", &[])).await.unwrap();
+    let pool = sqlx::SqlitePool::connect(&format!("sqlite:{}", db.display()))
+        .await
+        .unwrap();
+    for id in [&a, &b] {
+        sqlx::query("UPDATE dots SET org_id = ? WHERE id = ?")
+            .bind(common::orgs::ACME)
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    sqlx::query("UPDATE teams SET org_id = NULL")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(dots_core::store::TEAM_ORG_BACKFILL_SQL)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        store.get_team(&all.id).await.unwrap().org_id.as_deref(),
+        Some(common::orgs::ACME)
+    );
+    assert_eq!(store.get_team(&mixed.id).await.unwrap().org_id, None);
+    assert_eq!(store.get_team(&empty.id).await.unwrap().org_id, None);
 }
