@@ -15,7 +15,7 @@ Result: not run.
 
 ### 2. A required roster without this PC shows Waiting
 
-Expect: make a v2 policy (`dots-admin policy new --org-id <id> --roster`), sign and store it as `DOTS_POLICY`. Make a roster that does not have this PC (`roster new` with another owner key), sign it, and store it as `DOTS_ROSTER` at `<mount>/data/<path>/roster`. Refresh the account. It shows Waiting with "Copy my Dots ID and send it to your admin". Nothing is wiped.
+Expect: make a v2 policy (`dots-admin policy new --org-id <id> --roster`), sign and store it as `DOTS_POLICY`. Make a roster that does not have this PC (`roster new` with another owner key), sign it, and store it as `DOTS_ROSTER` at `<mount>/data/<path>/roster`. Refresh the account. It shows Waiting, with the text "you aren't on its member list yet. Send your Dots ID to an Admin." beside the **Copy my Dots ID** button. Nothing is wiped. Keep this signed text (`roster.signed.json`): step 7 publishes it again as the older roster.
 
 Result: not run.
 
@@ -45,6 +45,6 @@ Result: not run.
 
 ### 7. A lower seq is refused
 
-Expect: store an older signed roster (a lower `seq` than the one this PC accepted) as `DOTS_ROSTER` and Refresh. The status says the member list is older than the one already accepted, and the previous roster, membership and role are kept.
+Expect: store the signed text kept from an earlier step (step 2's, or any `roster.signed.json` with a lower `seq` than the one this PC accepted) as `DOTS_ROSTER` again, and Refresh. The status says the member list is older than the one already accepted, and the previous roster, membership and role are kept.
 
 Result: not run.

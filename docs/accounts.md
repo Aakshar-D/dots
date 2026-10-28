@@ -76,8 +76,9 @@ you have a role:
 - **Member** can make and edit the account's dots, run them, answer approvals and grant the
   account's values.
 - **Viewer** can look at the account's dots and runs, but not change or run them. **New dot**,
-  **Save** and the approval buttons are greyed out with the reason. A manual run is refused. A
-  scheduled run, watcher, webhook or follow-up waits in the Inbox under **Waiting to run**, with the
+  **Save** and the approval buttons are greyed out with the reason. A manual run, an app's start
+  of a dot and a webhook call are refused (the webhook answers HTTP 403 with the reason). A
+  scheduled run, watcher or follow-up waits in the Inbox under **Waiting to run**, with the
   reason, and runs by itself when your role is back to Member or above.
 
 **Personal** is always yours as Owner. An account without a member list treats everyone as a Member.
@@ -92,6 +93,10 @@ Next to each account you see one of these states:
   new one. Send the new ID to an Admin. Nothing is wiped meanwhile.
 - **Removed**: an admin took you off the list. Dots deletes that account's secrets from this PC.
   Your dots stay. Join the account again to come back.
+
+While you are waiting or removed you can still clean up: switch the account's dots off or delete
+them. Turning them on, editing them and changing their watchers wait until you are on the list
+again. To drop the account altogether, leave it: **Remove** it in **Settings › Accounts**.
 
 Asking for access from inside Dots, and approving people there, are coming next. For now you send
 your Dots ID to the admin and they add you.

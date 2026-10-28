@@ -296,7 +296,7 @@ Every value must be text. A key that is not a variable name is skipped. Two name
 in case make the fetch invalid, since Dots compares names without regard to case. `DOTS_POLICY`
 is never an entry.
 
-**A read-only ACL policy.** Each person needs `read` on the two paths, and nothing else. In KV v2
+**A read-only ACL policy.** Each person needs `read` on these paths, and nothing else. In KV v2
 the API path has `data/` after the mount. The token must also keep the `default` policy, since
 Dots calls `auth/token/lookup-self` and `auth/token/renew-self`; or add those two paths to this
 policy. A token made with `-no-default-policy` stops renewing and is then refused, which wipes the
@@ -306,8 +306,14 @@ copy:
 bao policy write dots-acme - <<'EOF'
 path "secret/data/dots/env"    { capabilities = ["read"] }
 path "secret/data/dots/policy" { capabilities = ["read"] }
+path "secret/data/dots/roster" { capabilities = ["read"] }
 EOF
 ```
+
+The `roster` path holds the member list (section 10). A token without it still works for an org
+without a member list: Dots treats a refused read of `roster` as "no member list". Under a policy
+that requires one, the account then waits, and shows "can't read DOTS_ROSTER at
+secret/dots/roster (HTTP 403)" until you add the path.
 
 **Signing in.** Give each person their own credential, so that you can cut one person off:
 
@@ -733,7 +739,7 @@ fetched them, and keeps them. It refuses new lists signed by that admin.
 Start a new org's policy as v2 with the list required (to move an existing org, see below):
 
 ```bash
-dots-admin policy new --org-id acme-eng --roster --out policy.json
+dots-admin policy new --org-id acme-eng --roster --admin <asha's dots-id> --out policy.json
 dots-admin roster new --org-id acme-eng --owner-name "Asha Rao" --owner-email asha@acme.com \
     --owner-key <asha's dots-id> --out roster.json
 dots-admin roster add roster.json --name "Ben Li" --email ben@acme.com --key <ben's dots-id> --role member
@@ -768,12 +774,13 @@ Give people read access to it as you did for the policy. Keep write access to th
 
 Do it in this order so nobody is locked out by surprise:
 
-1. Make `roster.json` with every current member (ask each for their Dots ID) and sign it. Store
-   `DOTS_ROSTER` first. Policy v1 ignores it, so nothing changes yet.
-2. Make a v2 policy with `"roster": "required"` (`policy new --roster`, or copy your v1 fields
-   into a v2 file), sign it and store it as `DOTS_POLICY`. A v1 policy that has `roster` or
-   `admins` is refused.
-3. Before using v2, make sure every person has updated Dots. An older Dots can't read a v2 policy.
+1. Make sure every person has updated Dots first. An older Dots can't read a v2 policy.
+2. Make `roster.json` with every current member (ask each for their Dots ID) and sign it. Store
+   it as `DOTS_ROSTER`. Policy v1 ignores it, so nothing changes yet. On OpenBao or Vault, add the
+   `roster` path to each person's ACL policy (section 4).
+3. Only then make a v2 policy with `"roster": "required"` (`policy new --roster`, or copy your v1
+   fields into a v2 file), sign it and store it as `DOTS_POLICY`. A v1 policy that has `roster`
+   or `admins` is refused.
 
 A PC that is not on the list when v2 starts shows **Waiting** with **Copy my Dots ID**. Nothing is
 wiped. Ask the person for their ID, run `roster add`, `roster sign`, store the new list, and press
@@ -808,6 +815,10 @@ Protected against:
 - An old list being replayed: each Dots refuses a lower `seq`.
 - A removed member using the account's secrets after their next refresh: the saved copy is wiped.
 - A stolen admin PC promoting others to admin: only the root key changes `admins`.
+
+Dots's local API (the webhook and MCP port on this PC) is not yet guarded by a Host check and a
+Bearer key for everything it serves. That protection arrives with API keys in a later release
+(phase 5).
 
 Not protected against:
 
