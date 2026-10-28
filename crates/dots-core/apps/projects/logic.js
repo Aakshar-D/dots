@@ -255,6 +255,54 @@ function change(ctx, taskId, field, after, actor) {
   });
 }
 
+/// What a dot is told when Projects starts it on a task (spec section 8, "Assigning to a dot").
+function startMessage(task) {
+  return (
+    `You are assigned the Projects task "${task.title}" (id ${task.id}). Read it first with the ` +
+    "Projects tool get_task: its spec and subtasks say what to do. As you work, post progress " +
+    "with comment and check off subtasks with set_subtask. When you have finished, set its " +
+    "status to in_review with update_task; only the person marks a task Done."
+  );
+}
+
+/// Starts the dot a task was just given to, when Projects may start dots: the task goes In
+/// progress and its Activity says the dot started, with the run. A dot that takes a task itself
+/// is at work already, and a Done task waits. A start the rules refuse is written in Activity,
+/// and the task waits for the dot to find it.
+function startAssigned(ctx, taskId, actor) {
+  const task = taskRow(ctx, taskId);
+  if (task.assignee_kind !== "dot" || task.status === "done") return;
+  if (isDot(ctx) && ctx.actor.id === task.assignee_dot_id) return;
+  if (typeof ctx.dots.start !== "function") return;
+  const dot = dotNamed(ctx, task.assignee_dot_id);
+  const runner = { kind: "dot", dot_id: task.assignee_dot_id, name: dot?.name ?? "removed dot" };
+  let run;
+  try {
+    run = ctx.dots.start(task.assignee_dot_id, startMessage(task), task.id);
+  } catch (e) {
+    record(ctx, taskId, runner, { kind: "run", field: "not_started", text: String(e.message ?? e) });
+    return;
+  }
+  // The dot still works on the task from an earlier start: that run is the one.
+  const known = one(
+    ctx,
+    "SELECT id FROM activity WHERE task_id = ? AND kind = 'run' AND field = 'started' AND run_id = ?",
+    [taskId, run],
+  );
+  if (known !== null) return;
+  change(ctx, taskId, "status", "in_progress", actor);
+  record(ctx, taskId, runner, { kind: "run", field: "started", run_id: run });
+}
+
+const FIELD_NAMES = {
+  title: "The title",
+  spec: "The spec",
+  status: "The status",
+  assignee: "The assignee",
+  due_on: "The due date",
+  section: "The section",
+};
+
 function assigneeOut(task, dots) {
   if (task.assignee_kind === null) return null;
   if (task.assignee_kind === "person") return { kind: "person" };
@@ -467,6 +515,7 @@ export function create_task(input, ctx) {
     ],
   );
   record(ctx, id, actor, { kind: "change", field: "created", before: null, after: { title } });
+  startAssigned(ctx, id, actor);
   return taskOut(taskRow(ctx, id), ctx.dots.list());
 }
 
@@ -493,6 +542,7 @@ export function update_task(input, ctx) {
   for (const [field, value] of wanted) {
     const row = change(ctx, task.id, field, value, actor);
     if (row !== null) changes.push(row);
+    if (row !== null && field === "assignee") startAssigned(ctx, task.id, actor);
   }
   return { task: taskOut(taskRow(ctx, task.id), ctx.dots.list()), changes };
 }
@@ -523,4 +573,89 @@ export function comment({ task_id, text }, ctx) {
 
 export function list_dots(_, ctx) {
   return ctx.dots.list();
+}
+
+export function move_task({ id, section_id, before_id }, ctx) {
+  let task = taskRow(ctx, id);
+  if (section_id !== undefined) {
+    const place =
+      section_id === null
+        ? placeOf({ project_id: task.project_id, section_id: null })
+        : { project_id: sectionRow(ctx, section_id).project_id, section_id };
+    change(ctx, id, "section", place, who(ctx));
+    task = taskRow(ctx, id);
+  }
+  // The order within a list is not a change of the task: Activity does not show it.
+  const ids = ctx.db
+    .query(
+      "SELECT id FROM tasks WHERE project_id IS ? AND section_id IS ? AND id != ? " +
+        "ORDER BY position, rowid",
+      [task.project_id, task.section_id, id],
+    )
+    .map((r) => r.id);
+  const at = before_id === undefined || before_id === null ? ids.length : ids.indexOf(before_id);
+  if (at < 0) fail(`The task ${before_id} is not in the list the task moves to`);
+  ids.splice(at, 0, id);
+  ids.forEach((each, i) =>
+    exec(ctx, "UPDATE tasks SET position = ? WHERE id = ? AND position != ?", [i + 1, each, i + 1]),
+  );
+  return taskOut(taskRow(ctx, id), ctx.dots.list());
+}
+
+export function undo({ activity_id }, ctx) {
+  const row =
+    one(ctx, "SELECT rowid AS seq, * FROM activity WHERE id = ?", [activity_id]) ??
+    fail(`There is no Activity row ${activity_id}`);
+  if (row.kind !== "change" || row.field === "created") {
+    fail("Only a change is undone: not a comment, a run or a task's creation");
+  }
+  if (row.undone_by !== null) fail("This change was undone already");
+  if (isDot(ctx) && row.actor_kind !== "dot") fail("Only the person undoes the person's changes");
+  const task = taskRow(ctx, row.task_id);
+  const before = parse(row.before_json);
+  if (!same(valueOf(ctx, task, row.field), parse(row.after_json))) {
+    const what = FIELD_NAMES[row.field] ?? "The subtask";
+    const later = one(
+      ctx,
+      "SELECT actor_name, at FROM activity WHERE task_id = ? AND field = ? AND kind = 'change' " +
+        "AND rowid > ? ORDER BY rowid DESC LIMIT 1",
+      [row.task_id, row.field, row.seq],
+    );
+    fail(
+      later === null
+        ? `${what} no longer holds what this change set`
+        : `${what} was changed since by ${later.actor_name} at ${later.at}; undo that change first`,
+    );
+  }
+  if (row.field === "status" && before === "done" && isDot(ctx)) fail(ONLY_PERSON_DONE);
+  // An undo puts the value back and starts no dot, even when it gives the task back to one.
+  const by = change(ctx, row.task_id, row.field, before, who(ctx));
+  exec(ctx, "UPDATE activity SET undone_by = ? WHERE id = ?", [by, row.id]);
+  return { undone: row.id, by };
+}
+
+/// A run Projects started has ended (spec section 7): its summary or error goes to the task's
+/// Activity, and the task goes In review unless it is Done or now someone else's.
+export function run_ended(e, ctx) {
+  const task = one(ctx, "SELECT * FROM tasks WHERE id = ?", [e.tag]);
+  if (task === null) return null;
+  const started = one(
+    ctx,
+    "SELECT actor_name FROM activity WHERE task_id = ? AND field = 'started' AND run_id = ?",
+    [task.id, e.root_run_id],
+  );
+  const name = dotNamed(ctx, e.dot_id)?.name ?? started?.actor_name ?? "removed dot";
+  const runner = { kind: "dot", dot_id: e.dot_id, name };
+  const text = e.status === "succeeded" ? (e.summary ?? "") : (e.error ?? e.summary ?? "");
+  record(ctx, task.id, runner, {
+    kind: "run",
+    field: "ended",
+    after: e.status,
+    text,
+    run_id: e.run_id,
+  });
+  if (task.assignee_kind === "dot" && task.assignee_dot_id === e.dot_id && task.status !== "done") {
+    change(ctx, task.id, "status", "in_review", runner);
+  }
+  return null;
 }

@@ -24,8 +24,16 @@ const PROJECTS_FILES: &[(&str, &[u8])] = &[
         include_bytes!("../../apps/projects/sample.sql"),
     ),
     (
+        "tests/assign.test.js",
+        include_bytes!("../../apps/projects/tests/assign.test.js"),
+    ),
+    (
         "tests/tasks.test.js",
         include_bytes!("../../apps/projects/tests/tasks.test.js"),
+    ),
+    (
+        "tests/undo.test.js",
+        include_bytes!("../../apps/projects/tests/undo.test.js"),
     ),
     (
         "ui/index.html",

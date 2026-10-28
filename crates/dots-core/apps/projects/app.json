@@ -161,6 +161,34 @@
       "name": "list_dots",
       "description": "The dots a task can be assigned to: those that use Projects",
       "input": { "type": "object", "properties": {}, "additionalProperties": false }
+    },
+    {
+      "name": "move_task",
+      "description": "Move a task to another section (section_id, or null for none) and before another task of that list (before_id, or null for the end)",
+      "input": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "section_id": { "type": ["string", "null"] },
+          "before_id": { "type": ["string", "null"] }
+        },
+        "required": ["id"],
+        "additionalProperties": false
+      },
+      "writes": true
+    },
+    {
+      "name": "undo",
+      "description": "Undo a change in a task's Activity, while its field still holds what the change set. A dot undoes only dots' changes.",
+      "input": {
+        "type": "object",
+        "properties": { "activity_id": { "type": "string" } },
+        "required": ["activity_id"],
+        "additionalProperties": false
+      },
+      "writes": true
     }
-  ]
+  ],
+  "permissions": ["start_dots"],
+  "on_run_end": "run_ended"
 }
