@@ -12,6 +12,9 @@ import { PERSONAL, useCurrentScope } from "@/lib/scope";
 export type Access = {
   kind: "owner" | "role" | "legacy" | "waiting" | "removed";
   role?: Role;
+  /// For waiting and removed: the core's own refusal (it tells a changed Dots ID from plain
+  /// waiting).
+  text?: string;
 };
 
 /// What a person does that a role may not: the three the UI switches controls by.
@@ -27,9 +30,9 @@ export function accessOf(org: OrgSummary | undefined, orgId: string | null): Acc
     case "legacy":
       return { kind: "legacy" };
     case "removed":
-      return { kind: "removed" };
+      return { kind: "removed", text: org.not_member_text ?? undefined };
     case "waiting":
-      return { kind: "waiting" };
+      return { kind: "waiting", text: org.not_member_text ?? undefined };
     case "active":
       return org.role === null ? { kind: "waiting" } : { kind: "role", role: org.role };
   }
@@ -80,9 +83,12 @@ export function accessRole(access: Access): Role | null {
 export function notAllowedText(accountName: string, access: Access, p: Action): string {
   switch (access.kind) {
     case "waiting":
-      return `${accountName}: you aren't on its member list yet. Send your Dots ID to an Admin.`;
+      return (
+        access.text ??
+        `${accountName}: you aren't on its member list yet. Send your Dots ID to an Admin.`
+      );
     case "removed":
-      return `${accountName}: you were removed from it.`;
+      return access.text ?? `${accountName}: you were removed from it.`;
     default: {
       const role = accessRole(access);
       return `${accountName}: a ${role ? roleLabel(role) : "Member"} can't ${ACTION[p]}. Ask an Admin or Owner.`;
@@ -102,7 +108,7 @@ export function useRefusal(orgId: string | null, p: Action): string | undefined 
 
 /// `useRefusal` for the account the run `runId` belongs to (its dot's org).
 export function useRunRefusal(runId: string, p: Action): string | undefined {
-  const run = useQuery({ queryKey: ["run", runId], queryFn: () => commands.getRun(runId) }).data;
+  const run = useQuery({ queryKey: keys.run(runId), queryFn: () => commands.getRun(runId) }).data;
   const dot = useQuery({
     queryKey: keys.dot(run?.dot_id ?? ""),
     queryFn: () => commands.getDot(run?.dot_id ?? ""),

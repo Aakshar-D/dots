@@ -50,6 +50,7 @@ export const keys = {
   orgSopsKey: (orgId: string) => ["org-sops-key", orgId] as const,
   dots: ["dots"] as const,
   dot: (id: string) => ["dot", id] as const,
+  run: (id: string) => ["run", id] as const,
   /// The status of a dot's grants, under the dot's key: a change to the dot marks it stale, and
   /// so does an org event (lib/runtime-events.ts).
   dotVariables: (id: string) => ["dot", id, "variables"] as const,

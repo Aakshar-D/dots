@@ -197,6 +197,7 @@ describe("the New dot button", () => {
       return found;
     });
     expect(button).toHaveAttribute("aria-disabled", "true");
+    expect(button).toHaveAccessibleDescription(title);
   });
 
   it("is on in Personal", async () => {

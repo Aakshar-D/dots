@@ -63,9 +63,13 @@ export function DotsColumn({ rows, openId }: { rows: DotOverview[]; openId: stri
             aria-label="New dot"
             title={refusal}
             aria-disabled="true"
+            aria-describedby="new-dot-refusal"
             className="cursor-not-allowed opacity-50"
           >
             <Plus aria-hidden />
+            <span id="new-dot-refusal" className="sr-only">
+              {refusal}
+            </span>
           </Button>
         ) : (
           <Button asChild size="icon-sm" variant="ghost">

@@ -1726,6 +1726,7 @@ fn org_summaries() -> Vec<OrgSummary> {
         roster_seq: Some(3),
         roster_error: None,
         member_count: Some(4),
+        not_member_text: None,
     };
     let status = |status: OrgStatus, text: &str| OrgSummary {
         status,
@@ -1744,6 +1745,10 @@ fn org_summaries() -> Vec<OrgSummary> {
             copy_until: None,
             membership: Membership::Waiting,
             role: None,
+            not_member_text: Some(
+                "Acme Engineering: you aren't on its member list yet. Send your Dots ID to an Admin."
+                    .into(),
+            ),
             ..status(
                 OrgStatus::Offline { until: None },
                 "offline, with no saved copy",
@@ -1795,6 +1800,7 @@ fn org_summaries() -> Vec<OrgSummary> {
             membership: Membership::Removed,
             role: None,
             member_count: None,
+            not_member_text: Some("Acme Engineering: you were removed from it.".into()),
             ..status(OrgStatus::Revoked, "Removed from Acme Engineering")
         },
     ]

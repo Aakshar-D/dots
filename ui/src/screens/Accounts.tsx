@@ -70,6 +70,17 @@ function OrgRow({ org, onUpdate }: { org: OrgSummary; onUpdate: () => void }) {
     onError: notifyError,
   });
   const role = accessRole(accessOf(org, org.id));
+  // The core's refusal says where this PC stands on the list; the status line then adds only
+  // what it does not already say (not "connected", not the same words again).
+  const said = org.not_member_text;
+  const notMember = said && org.status_text.includes(said) ? org.status_text : said;
+  const showStatus =
+    !said ||
+    !(
+      org.status_text === "connected" ||
+      org.status_text.includes(said) ||
+      org.status_text.startsWith("Removed from")
+    );
   const policyId = `org-policy-${org.id}`;
   return (
     <li aria-label={org.name} className="flex flex-col gap-2 rounded-md border p-3">
@@ -83,19 +94,24 @@ function OrgRow({ org, onUpdate }: { org: OrgSummary; onUpdate: () => void }) {
               </span>
             )}
           </span>
-          <p className={`text-xs first-letter:uppercase ${ORG_TONE[org.status]}`}>
-            {org.status_text}
-          </p>
-          {org.membership === "waiting" && (
+          {showStatus && (
+            <p className={`text-xs first-letter:uppercase ${ORG_TONE[org.status]}`}>
+              {org.status_text}
+            </p>
+          )}
+          {notMember && (
             <div className="flex flex-wrap items-center gap-2 pt-1">
-              <p className="text-xs text-needs">Waiting to be added to the member list</p>
-              <CopyDotsIdButton />
+              <p
+                className={`text-xs ${org.membership === "removed" ? "text-destructive" : "text-needs"}`}
+              >
+                {notMember}
+              </p>
+              {org.membership === "waiting" && <CopyDotsIdButton />}
             </div>
           )}
-          {org.membership === "removed" && (
-            <p className="text-xs text-destructive">Removed from {org.name}</p>
+          {org.roster_error && !org.status_text.includes(org.roster_error) && (
+            <p className="text-xs text-needs">{org.roster_error}</p>
           )}
-          {org.roster_error && <p className="text-xs text-needs">{org.roster_error}</p>}
           {org.member_count !== null && org.roster_seq !== null && (
             <p className="text-xs text-muted-foreground">
               {org.member_count} {org.member_count === 1 ? "member" : "members"} · list #

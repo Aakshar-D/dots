@@ -991,6 +991,9 @@ const orgSummaryShape = {
   roster_error: nullable(z.string()),
   // How many members the kept list has; null when no list is kept.
   member_count: nullable(z.number()),
+  // The words a run of the account is refused with while this PC is not on the member list
+  // (waiting, its Dots ID changed, or removed); null otherwise.
+  not_member_text: nullable(z.string()),
 };
 // This install's Dots ID. `name` and `email` are empty until the person sets them.
 export const Identity = z.strictObject({

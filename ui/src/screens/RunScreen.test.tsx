@@ -775,6 +775,8 @@ describe("the approval buttons for a Viewer", () => {
     const approve = await screen.findByRole("button", { name: "Approve" });
     await waitFor(() => expect(approve).toBeDisabled());
     expect(approve).toHaveAttribute("title", title);
-    expect(screen.getByRole("button", { name: "Deny" })).toBeDisabled();
+    const deny = screen.getByRole("button", { name: "Deny" });
+    expect(deny).toBeDisabled();
+    expect(deny).toHaveAttribute("title", title);
   });
 });

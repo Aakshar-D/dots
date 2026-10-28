@@ -134,6 +134,9 @@ pub struct OrgSummary {
     pub roster_error: Option<String>,
     /// How many members the kept list has; `None` when no list is kept.
     pub member_count: Option<u32>,
+    /// The words a run of the account's dots is refused with while this PC is not on the member
+    /// list (waiting, its Dots ID changed, or removed); `None` otherwise.
+    pub not_member_text: Option<String>,
 }
 
 /// What a join code would join or change, shown before anything is fetched.
@@ -1565,6 +1568,9 @@ fn summary_of(id: &str, slot: &Slot) -> OrgSummary {
                 .roster
                 .as_ref()
                 .map(|kept| u32::try_from(kept.roster.members.len()).unwrap_or(u32::MAX)),
+            not_member_text: joined
+                .not_member()
+                .map(|why| why.text(&joined.row.name)),
         },
         Slot::Damaged { name, error } => OrgSummary {
             id: id.to_string(),
@@ -1587,6 +1593,7 @@ fn summary_of(id: &str, slot: &Slot) -> OrgSummary {
             roster_seq: None,
             roster_error: None,
             member_count: None,
+            not_member_text: None,
         },
         Slot::Pending(code) => OrgSummary {
             id: id.to_string(),
@@ -1607,6 +1614,7 @@ fn summary_of(id: &str, slot: &Slot) -> OrgSummary {
             roster_seq: None,
             roster_error: None,
             member_count: None,
+            not_member_text: None,
         },
     }
 }

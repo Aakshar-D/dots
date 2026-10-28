@@ -82,7 +82,12 @@ export function BrowserApprovalCard({
       )}
       {approval.parked && <p className="text-xs text-muted-foreground">{BROWSER_PARKED}</p>}
       <div className="flex flex-wrap items-center gap-2">
-        <Button size="sm" disabled={decided} title={refusal} onClick={choose({ approved: true, allowRule: null })}>
+        <Button
+          size="sm"
+          disabled={decided}
+          title={refusal}
+          onClick={choose({ approved: true, allowRule: null })}
+        >
           Allow once
         </Button>
         {site && ask.site && (

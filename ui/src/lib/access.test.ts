@@ -58,6 +58,12 @@ describe("notAllowedText", () => {
     );
   });
 
+  it("uses the core's own words for a PC off the list, e.g. a changed Dots ID", () => {
+    const changed = "Acme: this PC's Dots ID changed. Send the new one to an Admin.";
+    const access = accessOf(org({ membership: "waiting", role: null, not_member_text: changed }), base.id);
+    expect(notAllowedText("Acme", access, "run")).toBe(changed);
+  });
+
   it("says why a PC off the list gets nothing", () => {
     expect(notAllowedText("Acme", { kind: "waiting" }, "edit")).toBe(
       "Acme: you aren't on its member list yet. Send your Dots ID to an Admin.",

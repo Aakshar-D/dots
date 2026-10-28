@@ -170,6 +170,7 @@ async fn a_join_fetches_verifies_and_keeps_the_row_the_copy_and_the_creds() {
         roster_seq: None,
         roster_error: None,
         member_count: None,
+        not_member_text: None,
     };
     assert_eq!(summary, expected);
     assert_eq!(h.orgs.summaries().await, vec![expected.clone()]);

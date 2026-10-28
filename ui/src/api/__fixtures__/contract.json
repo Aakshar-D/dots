@@ -2647,6 +2647,7 @@
       "member_count": 4,
       "membership": "active",
       "name": "Acme Engineering",
+      "not_member_text": null,
       "personal_mode": "fallback",
       "policy_summary": [
         "org: acme-eng",
@@ -2677,6 +2678,7 @@
       "member_count": 4,
       "membership": "active",
       "name": "Acme Engineering",
+      "not_member_text": null,
       "personal_mode": "fallback",
       "policy_summary": [
         "org: acme-eng",
@@ -2708,6 +2710,7 @@
       "member_count": 4,
       "membership": "waiting",
       "name": "Acme Engineering",
+      "not_member_text": "Acme Engineering: you aren't on its member list yet. Send your Dots ID to an Admin.",
       "personal_mode": "fallback",
       "policy_summary": [
         "org: acme-eng",
@@ -2739,6 +2742,7 @@
       "member_count": 4,
       "membership": "active",
       "name": "Acme Engineering",
+      "not_member_text": null,
       "personal_mode": "fallback",
       "policy_summary": [
         "org: acme-eng",
@@ -2770,6 +2774,7 @@
       "member_count": 4,
       "membership": "active",
       "name": "Acme Engineering",
+      "not_member_text": null,
       "personal_mode": "fallback",
       "policy_summary": [
         "org: acme-eng",
@@ -2800,6 +2805,7 @@
       "member_count": 4,
       "membership": "active",
       "name": "Acme Engineering",
+      "not_member_text": null,
       "personal_mode": "fallback",
       "policy_summary": [
         "org: acme-eng",
@@ -2830,6 +2836,7 @@
       "member_count": null,
       "membership": "legacy",
       "name": "Design",
+      "not_member_text": null,
       "personal_mode": null,
       "policy_summary": [],
       "role": null,
@@ -2850,6 +2857,7 @@
       "member_count": null,
       "membership": "removed",
       "name": "Acme Engineering",
+      "not_member_text": "Acme Engineering: you were removed from it.",
       "personal_mode": "fallback",
       "policy_summary": [
         "org: acme-eng",

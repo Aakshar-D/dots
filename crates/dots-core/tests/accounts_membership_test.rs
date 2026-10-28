@@ -111,6 +111,7 @@ async fn v1_policy_is_legacy() {
     assert_eq!(summary.roster_seq, None);
     assert_eq!(summary.roster_error, None);
     assert_eq!(summary.member_count, None);
+    assert_eq!(summary.not_member_text, None);
     assert_eq!(h.orgs.access(ACME), Some((Membership::Legacy, None)));
     assert_eq!(h.orgs.lookup(ACME, "API_KEY").await, value());
     let row = h.store.get_org(ACME).await.unwrap().unwrap();
@@ -566,6 +567,7 @@ async fn regenerated_identity_waits_for_the_new_id_nothing_wiped() {
     let changed = "Acme Engineering: this PC's Dots ID changed. Send the new one to an Admin.";
     assert_eq!(summary.membership, Membership::Waiting);
     assert_eq!(summary.status_text, changed);
+    assert_eq!(summary.not_member_text.as_deref(), Some(changed));
     assert_eq!(summary.role, None);
     assert!(h.copy_path(ACME).exists(), "nothing is wiped");
     assert_eq!(
