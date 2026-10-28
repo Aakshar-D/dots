@@ -867,9 +867,17 @@ impl Orgs {
                     .await;
             }
             // A PC waiting to be added (a SOPS file before the admin adds its key) stays
-            // waiting: it has nothing usable to wipe (members spec §6.4).
+            // waiting, not revoked (members spec §6.4). Its values and copy are wiped all the
+            // same: a PC whose Dots ID changed still holds real ones, and a refused sign-in
+            // must not leave them on disk.
             Outcome::Denied(reason) if row.member.membership == Membership::Waiting => {
-                self.fall_back(org_id, None, Some(reason)).await
+                self.with_joined(org_id, |joined| {
+                    joined.entries = None;
+                    joined.copy_until = None;
+                    joined.status = OrgStatus::Offline { until: None };
+                    joined.reason = Some(reason);
+                });
+                self.delete_copy(org_id).await;
             }
             Outcome::Denied(reason) => {
                 self.with_joined(org_id, |joined| {
@@ -1488,10 +1496,13 @@ impl Joined {
     }
 
     fn fetch_text(&self) -> String {
-        match self.not_member() {
-            Some(NotMember::Removed) => return format!("Removed from {}", self.row.name),
-            Some(why @ NotMember::IdChanged) => return why.text(&self.row.name),
-            Some(NotMember::Waiting) | None => {}
+        match (self.not_member(), &self.reason) {
+            (Some(NotMember::Removed), _) => return format!("Removed from {}", self.row.name),
+            (Some(why @ (NotMember::IdChanged | NotMember::Waiting)), Some(reason)) => {
+                return format!("{} ({reason})", why.text(&self.row.name))
+            }
+            (Some(why @ NotMember::IdChanged), None) => return why.text(&self.row.name),
+            (Some(NotMember::Waiting), None) | (None, _) => {}
         }
         let with_reason = |text: &str| match &self.reason {
             Some(reason) => format!("{text} ({reason})"),

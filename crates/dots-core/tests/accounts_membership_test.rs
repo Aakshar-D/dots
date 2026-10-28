@@ -702,13 +702,42 @@ async fn denied_while_waiting_stays_waiting() {
         Some(&sign_roster(&h.keys, &text)),
     );
     join(&h).await;
+    assert!(h.copy_path(ACME).exists());
     h.bao.revoke_token(common::orgs::TOKEN);
     let summary = h.orgs.refresh(ACME).await.unwrap();
     assert_eq!(summary.membership, Membership::Waiting);
     assert_ne!(summary.status, OrgStatus::Revoked);
-    assert!(h.copy_path(ACME).exists(), "nothing is wiped");
+    assert!(
+        summary.status_text.starts_with(WAITING_TEXT),
+        "{}",
+        summary.status_text
+    );
+    assert_eq!(summary.copy_until, None);
+    assert!(!h.copy_path(ACME).exists(), "the copy is wiped");
+    assert!(h.orgs.entries(ACME).await.unwrap().is_empty());
     assert_eq!(
         h.orgs.lookup(ACME, "API_KEY").await,
         OrgLookup::NotMember(NotMember::Waiting)
+    );
+
+    // A PC waiting because its Dots ID changed holds real values: they go too.
+    let h = OrgsHarness::new().await;
+    join_active(&h).await;
+    regenerate_identity(&h).await;
+    h.orgs.refresh(ACME).await.unwrap();
+    assert!(h.copy_path(ACME).exists());
+    h.bao.revoke_token(common::orgs::TOKEN);
+    let summary = h.orgs.refresh(ACME).await.unwrap();
+    assert_eq!(summary.membership, Membership::Waiting);
+    assert_ne!(summary.status, OrgStatus::Revoked);
+    assert!(summary.status_text.starts_with(
+        "Acme Engineering: this PC's Dots ID changed. Send the new one to an Admin. ("
+    ));
+    assert!(!h.copy_path(ACME).exists(), "the copy is wiped");
+    let restarted = h.service();
+    restarted.load().await.unwrap();
+    assert_eq!(
+        restarted.lookup(ACME, "API_KEY").await,
+        OrgLookup::NotMember(NotMember::IdChanged)
     );
 }
