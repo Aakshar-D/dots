@@ -3,7 +3,7 @@
 //! schema, so a field renamed or added on one side fails the other side's tests.
 //! Regenerate after changing a type: `UPDATE_CONTRACT=1 cargo test -p dots-app contract`.
 
-use dots_core::accounts::{CurrentScope, Identity};
+use dots_core::accounts::{CurrentScope, Identity, Membership, Role};
 use dots_core::browser::BrowserStatus;
 use dots_core::context::Document;
 use dots_core::engine::EngineEvent;
@@ -1706,6 +1706,11 @@ fn org_summaries() -> Vec<OrgSummary> {
             allow: vec!["*".into()],
             deny: vec!["PROD_*".into()],
         }),
+        membership: Membership::Active,
+        role: Some(Role::Admin),
+        roster_seq: Some(3),
+        roster_error: None,
+        member_count: Some(4),
     };
     let status = |status: OrgStatus, text: &str| OrgSummary {
         status,
@@ -1722,6 +1727,8 @@ fn org_summaries() -> Vec<OrgSummary> {
         ),
         OrgSummary {
             copy_until: None,
+            membership: Membership::Waiting,
+            role: None,
             ..status(
                 OrgStatus::Offline { until: None },
                 "offline, with no saved copy",
@@ -1731,13 +1738,17 @@ fn org_summaries() -> Vec<OrgSummary> {
             copy_until: None,
             ..status(OrgStatus::Revoked, "access revoked (permission denied)")
         },
-        status(
-            OrgStatus::PolicyInvalid {
-                error: "signature does not match".into(),
-            },
-            "policy invalid: signature does not match; using the saved copy until \
-             2026-10-10T12:00:00.000Z",
-        ),
+        OrgSummary {
+            roster_error: Some("the member list is not signed by the owner or an admin".into()),
+            ..status(
+                OrgStatus::PolicyInvalid {
+                    error: "signature does not match".into(),
+                },
+                "policy invalid: signature does not match; using the saved copy until \
+                 2026-10-10T12:00:00.000Z; member list not accepted: the member list is not \
+                 signed by the owner or an admin",
+            )
+        },
         OrgSummary {
             copy_until: None,
             ..status(
@@ -1755,10 +1766,21 @@ fn org_summaries() -> Vec<OrgSummary> {
             policy_summary: vec![],
             personal_mode: None,
             use_rules: None,
+            membership: Membership::Legacy,
+            role: None,
+            roster_seq: None,
+            member_count: None,
             ..status(
                 OrgStatus::Pending,
                 "waiting for the admin to add this PC's key",
             )
+        },
+        OrgSummary {
+            copy_until: None,
+            membership: Membership::Removed,
+            role: None,
+            member_count: None,
+            ..status(OrgStatus::Revoked, "Removed from Acme Engineering")
         },
     ]
 }

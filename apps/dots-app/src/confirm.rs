@@ -1872,6 +1872,7 @@ mod tests {
                 last_issued_at: None,
                 last_fetch_at: None,
                 joined_at: "2026-10-22T09:00:00.000Z".into(),
+                member: Default::default(),
             })
             .await
             .unwrap();
@@ -1975,6 +1976,7 @@ mod tests {
                 last_issued_at: None,
                 last_fetch_at: None,
                 joined_at: "2026-10-22T09:00:00.000Z".into(),
+                member: Default::default(),
             })
             .await
             .unwrap();

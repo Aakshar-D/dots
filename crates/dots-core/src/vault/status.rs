@@ -22,6 +22,7 @@ str_enum!(GrantState {
     OrgRevoked => "org_revoked",
     PolicyInvalid => "policy_invalid",
     OrgRemoved => "org_removed",
+    NotMember => "not_member",
 });
 
 impl GrantState {
@@ -37,6 +38,7 @@ impl GrantState {
             Unresolved::OrgRevoked => GrantState::OrgRevoked,
             Unresolved::PolicyInvalid(_) => GrantState::PolicyInvalid,
             Unresolved::OrgRemoved => GrantState::OrgRemoved,
+            Unresolved::NotMember(_) => GrantState::NotMember,
         }
     }
 }

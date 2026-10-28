@@ -1,7 +1,10 @@
 //! An org joined on this PC, as the `orgs` table keeps it (env vault spec §5.2): the settings of
 //! its join code and what the last good fetch accepted. It holds no secrets.
 
+use std::collections::BTreeMap;
+
 use super::join::SourceSettings;
+use crate::accounts::{Membership, Role, WorkspaceRole};
 
 /// One row of `orgs`. `store/orgs.rs` reads and writes it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,4 +23,21 @@ pub struct OrgRow {
     pub last_fetch_at: Option<String>,
     /// When the org was joined, RFC 3339 UTC.
     pub joined_at: String,
+    /// This PC's place on the account's member list.
+    pub member: MemberRow,
+}
+
+/// This PC's place on an account's signed member list, as the `orgs` row keeps it (members
+/// spec §6.4). All but `membership` are empty until a list names this PC; `last_roster_seq`
+/// stays once a list was accepted, for the rollback check.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MemberRow {
+    pub membership: Membership,
+    /// This PC's member on the last accepted list, while `active`.
+    pub member_id: Option<String>,
+    pub role: Option<Role>,
+    /// The member's workspaces and roles there, while `active`.
+    pub workspaces: BTreeMap<String, WorkspaceRole>,
+    /// The `seq` of the last list accepted: an older one is refused.
+    pub last_roster_seq: Option<u64>,
 }

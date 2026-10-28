@@ -946,6 +946,10 @@ export const PersonalMode = z.enum(["deny", "fallback", "override"]);
 // The names an org's dots may be granted: a name matches an `allow` glob and no `deny` glob
 // (deny wins). A glob's `*` stands for any run of characters, and case does not matter.
 export const UseRules = z.strictObject({ allow: z.array(z.string()), deny: z.array(z.string()) });
+// This PC's place on an account's signed member list.
+export const Membership = z.enum(["legacy", "waiting", "active", "removed"]);
+// A role on an account's member list.
+export const Role = z.enum(["owner", "admin", "member", "viewer"]);
 const orgSummaryShape = {
   id: z.string(),
   name: z.string(),
@@ -970,6 +974,16 @@ const orgSummaryShape = {
   shell_secrets: z.boolean(),
   // The accepted policy's `use` globs; null while no policy is accepted.
   use_rules: nullable(UseRules),
+  // This PC's place on the account's member list.
+  membership: Membership,
+  // This PC's role on the list, while active.
+  role: nullable(Role),
+  // The `seq` of the last member list accepted; null before the first.
+  roster_seq: nullable(z.number()),
+  // Why the last member list fetched was not accepted, while the one before it is kept.
+  roster_error: nullable(z.string()),
+  // How many members the kept list has; null when no list is kept.
+  member_count: nullable(z.number()),
 };
 // This install's Dots ID. `name` and `email` are empty until the person sets them.
 export const Identity = z.strictObject({
@@ -1038,6 +1052,8 @@ export const GrantState = z.enum([
   "org_revoked",
   "policy_invalid",
   "org_removed",
+  // This PC is not on the account's member list: waiting to be added, or removed.
+  "not_member",
 ]);
 // Where a value comes from: the dot's org, or Personal.
 export const ValueSource = z.enum(["org", "personal"]);

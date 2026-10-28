@@ -150,6 +150,12 @@ impl Runtime {
             Some(secrets) => secrets.clone(),
             None => os_secrets(&store.install_id().await?),
         };
+        // The Dots ID of this install, made on first start (accounts design §5), before the orgs
+        // load: their member lists are read against it (members spec §6.4). A failure is logged
+        // and the app starts anyway; the next start tries again.
+        if let Err(e) = crate::accounts::ensure_identity(&store, secrets.as_ref()).await {
+            tracing::warn!("making the Dots ID failed: {e}");
+        }
         // The orgs joined on this PC, each with its offline copy if it has one, and every org
         // secret in the redactor (env vault spec §6.4). They are fetched in the background
         // once the runtime is up.
@@ -167,11 +173,6 @@ impl Runtime {
         let vault = Vault::open(store.clone(), secrets.clone())
             .await?
             .with_orgs(orgs.clone());
-        // The Dots ID of this install, made on first start (accounts design §5). A failure is
-        // logged and the app starts anyway; the next start tries again.
-        if let Err(e) = crate::accounts::ensure_identity(&store, secrets.as_ref()).await {
-            tracing::warn!("making the Dots ID failed: {e}");
-        }
         // A setup from before the vault: its stored secret values move into Personal (env
         // vault spec §11). A failure is logged and the app starts anyway. The old-backups
         // cut-off is set once the move has run, even when a server failed: that server is

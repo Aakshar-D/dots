@@ -26,6 +26,7 @@ fn copy(value: &str) -> OfflineCopy {
         fetched_at: FETCHED.into(),
         entries,
         policy: r#"{"v":1,"policy":"{}","signature":"sig"}"#.into(),
+        roster: None,
     }
 }
 

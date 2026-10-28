@@ -635,6 +635,47 @@ async fn no_roster_is_none() {
     assert_eq!(fetched.roster, None);
 }
 
+/// A roster read that fails fails the fetch, as the entries' and the policy's do: it is never
+/// taken for no roster. The reads go entries, policy, roster.
+#[tokio::test]
+async fn a_failed_roster_read_fails_the_fetch() {
+    let fake = seeded().await;
+    fake.put_roster("secret", "dots", &signed_roster());
+    let source = OpenBao::new(
+        settings(&fake),
+        http_client_with_timeout(Duration::from_millis(300)),
+    );
+    let on_roster = |failure: Failure| {
+        fake.clear_requests();
+        fake.fail_next(Failure::Pass, 2);
+        fake.fail_next(failure, 1);
+    };
+
+    on_roster(Failure::Status(403));
+    let e = source.fetch(&token()).await.unwrap_err();
+    assert!(matches!(e, SourceError::Denied(_)), "{e:?}");
+    assert_eq!(
+        fake.calls().last().map(String::as_str),
+        Some("GET /v1/secret/data/dots/roster")
+    );
+
+    on_roster(Failure::Status(500));
+    let e = source.fetch(&token()).await.unwrap_err();
+    assert!(matches!(e, SourceError::Unreachable(_)), "{e:?}");
+    assert!(e.to_string().contains("HTTP 500"), "{e}");
+
+    on_roster(Failure::Hang);
+    let e = source.fetch(&token()).await.unwrap_err();
+    assert_eq!(
+        e,
+        SourceError::Unreachable(format!("{} did not answer in time", fake.address()))
+    );
+    assert_clean(&e);
+
+    // With nothing queued, the same fetch works and has the roster.
+    assert!(source.fetch(&token()).await.unwrap().roster.is_some());
+}
+
 #[tokio::test]
 async fn a_roster_that_is_empty_or_not_text_is_invalid() {
     let fake = seeded().await;

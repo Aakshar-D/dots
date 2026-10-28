@@ -18,6 +18,7 @@ use common::orgs::{
     Scripted, ACME, ACME_NAME, ISSUED, START, TOKEN,
 };
 use common::spec;
+use dots_core::accounts::Membership;
 use dots_core::model::DotSpec;
 use dots_core::vault::entries::EntryKind;
 use dots_core::vault::org::sources::sops::public_key as age_public_key;
@@ -164,6 +165,11 @@ async fn a_join_fetches_verifies_and_keeps_the_row_the_copy_and_the_creds() {
         shell_secrets: false,
         // No `use` in the policy: its default, every name.
         use_rules: Some(UseRules::default()),
+        membership: Membership::Legacy,
+        role: None,
+        roster_seq: None,
+        roster_error: None,
+        member_count: None,
     };
     assert_eq!(summary, expected);
     assert_eq!(h.orgs.summaries().await, vec![expected.clone()]);
@@ -183,6 +189,7 @@ async fn a_join_fetches_verifies_and_keeps_the_row_the_copy_and_the_creds() {
             last_issued_at: Some(ISSUED.into()),
             last_fetch_at: Some(start_plus(0)),
             joined_at: start_plus(0),
+            member: Default::default(),
         }
     );
     assert_eq!(stored_creds(&h, ACME), Some(token()));
@@ -1275,6 +1282,7 @@ async fn load_adds_the_secrets_of_a_copy_to_the_redactor() {
             last_issued_at: Some(ISSUED.into()),
             last_fetch_at: Some(start_plus(0)),
             joined_at: start_plus(0),
+            member: Default::default(),
         })
         .await
         .unwrap();
@@ -1285,6 +1293,7 @@ async fn load_adds_the_secrets_of_a_copy_to_the_redactor() {
             ("LOG_LEVEL".to_string(), Zeroizing::new(PLAIN.to_string())),
         ]),
         policy: signed,
+        roster: None,
     };
     write_offline(&h.vault_dir(), &TestProtector, ACME, &copy).unwrap();
 

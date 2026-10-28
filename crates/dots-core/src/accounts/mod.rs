@@ -2,12 +2,14 @@
 //! (accounts design §5).
 
 mod identity;
+mod membership;
 pub mod roster;
 mod scope;
 
 pub use identity::{
     ensure_identity, identity, set_profile, Identity, IDENTITY_SECRET, MAX_EMAIL, MAX_PROFILE_NAME,
 };
+pub use membership::Membership;
 pub use roster::{
     parse_roster, roster_envelope, verify_roster, Accepted, Member, Role, Roster, RosterError,
     Workspace, WorkspaceRole, ROSTER_ENVELOPE_VERSION, ROSTER_VERSION,

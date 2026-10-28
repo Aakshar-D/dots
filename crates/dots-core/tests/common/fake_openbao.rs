@@ -17,6 +17,9 @@ use serde_json::{json, Value};
 /// What the next KV reads answer instead of the data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Failure {
+    /// The read answers as usual: queued before a failure, it lets that failure land on a later
+    /// read of the same fetch.
+    Pass,
     /// This status, with `{"errors":[…]}`. A 3xx also gets a `Location` to `/v1/elsewhere`.
     Status(u16),
     /// A 200 whose body is not JSON.
@@ -355,7 +358,7 @@ async fn handle(
         Some(Failure::Status(403)) => return denied(),
         Some(Failure::Status(503)) => return errors(503, &["Vault is sealed"]),
         Some(Failure::Status(code)) => return errors(code, &["internal error"]),
-        None => {}
+        Some(Failure::Pass) | None => {}
     }
 
     let mut fake = state.lock().unwrap();

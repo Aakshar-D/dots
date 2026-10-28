@@ -240,6 +240,9 @@ pub struct OfflineCopy {
     pub entries: BTreeMap<String, Zeroizing<String>>,
     /// The signed policy text the entries came with.
     pub policy: String,
+    /// The signed member list text last accepted with them (members spec §6.4); `None` when
+    /// none was, and in a copy written before member lists.
+    pub roster: Option<String>,
 }
 
 impl std::fmt::Debug for OfflineCopy {
@@ -259,6 +262,8 @@ struct Stored {
     fetched_at: String,
     entries: BTreeMap<String, Zeroizing<String>>,
     policy: String,
+    #[serde(default)]
+    roster: Option<String>,
 }
 
 /// The JSON form, written: only by `write_offline`, which protects it at once.
@@ -268,6 +273,9 @@ struct StoredRef<'a> {
     fetched_at: &'a str,
     entries: &'a BTreeMap<String, Zeroizing<String>>,
     policy: &'a str,
+    /// Left out when `None`, so such a copy reads as one written before member lists.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    roster: Option<&'a str>,
 }
 
 impl<'a> StoredRef<'a> {
@@ -277,6 +285,7 @@ impl<'a> StoredRef<'a> {
             fetched_at: &copy.fetched_at,
             entries: &copy.entries,
             policy: &copy.policy,
+            roster: copy.roster.as_deref(),
         }
     }
 }
@@ -311,6 +320,7 @@ impl TryFrom<Stored> for OfflineCopy {
             fetched_at: stored.fetched_at,
             entries: stored.entries,
             policy: stored.policy,
+            roster: stored.roster,
         };
         copy.check()?;
         Ok(copy)
