@@ -1779,6 +1779,14 @@ impl Runtime {
     pub async fn run_release_hold(&self, run_id: &str) -> Result<Run> {
         let run = self.store.get_run(run_id).await?;
         let dot = self.store.get_dot(&run.dot_id).await?;
+        // A run waiting for a role is not Run anyway's to release.
+        if run.status == RunStatus::Queued {
+            if let Some((account, _)) = self.runner.role_hold(&run).await? {
+                return Err(Error::NotAllowed(format!(
+                    "this run waits for {account} to let you run dots again"
+                )));
+            }
+        }
         if run.status != RunStatus::Queued
             || run.hold_released
             || dot.spec.engine != crate::model::EngineKind::Claude
@@ -1832,8 +1840,24 @@ impl Runtime {
                 trigger: run.trigger,
                 queued_at: run.queued_at,
                 starts_after: starts_after.clone(),
+                reason: crate::model::HoldReason::Usage,
             });
         }
+        // Runs waiting for a role, which the limits do not hold.
+        for (run, _) in self.store.queued_with_engine(false).await? {
+            if let Some((account, text)) = self.runner.role_hold(&run).await? {
+                held.push(crate::model::HeldRun {
+                    dot_name: names.get(&run.dot_id).cloned().unwrap_or_default(),
+                    dot_id: run.dot_id,
+                    run_id: run.id,
+                    trigger: run.trigger,
+                    queued_at: run.queued_at,
+                    starts_after: None,
+                    reason: crate::model::HoldReason::Role { account, text },
+                });
+            }
+        }
+        held.sort_by(|a, b| a.queued_at.cmp(&b.queued_at));
         Ok(held)
     }
 }

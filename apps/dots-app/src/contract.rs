@@ -552,16 +552,31 @@ fn usage_summary() -> UsageSummary {
     }
 }
 
-/// A schedule run held for Claude usage until 15:10.
+/// A schedule run held for Claude usage until 15:10, and a watcher run held for a role.
 fn held_runs() -> Vec<HeldRun> {
-    vec![HeldRun {
-        run_id: "01J0RUN4".into(),
-        dot_id: "01J0DOT".into(),
-        dot_name: "nightly-tests".into(),
-        trigger: TriggerKind::Schedule,
-        queued_at: TS.into(),
-        starts_after: Some("2026-10-09T15:10:00.000Z".into()),
-    }]
+    vec![
+        HeldRun {
+            run_id: "01J0RUN4".into(),
+            dot_id: "01J0DOT".into(),
+            dot_name: "nightly-tests".into(),
+            trigger: TriggerKind::Schedule,
+            queued_at: TS.into(),
+            starts_after: Some("2026-10-09T15:10:00.000Z".into()),
+            reason: HoldReason::Usage,
+        },
+        HeldRun {
+            run_id: "01J0RUN5".into(),
+            dot_id: "01J0DOT2".into(),
+            dot_name: "triage".into(),
+            trigger: TriggerKind::Watcher,
+            queued_at: TS.into(),
+            starts_after: None,
+            reason: HoldReason::Role {
+                account: "Acme Engineering".into(),
+                text: "Acme Engineering: your role no longer allows running dots".into(),
+            },
+        },
+    ]
 }
 
 /// A reading of `window` at `u`, resetting at 15:10 (usage and limits spec section 3).

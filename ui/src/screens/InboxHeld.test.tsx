@@ -13,6 +13,7 @@ const draining: HeldRun = {
   run_id: "01J0RUN5",
   trigger: "watcher",
   starts_after: null,
+  reason: { kind: "usage" },
 };
 const only = (held: HeldRun[]): Inbox => ({
   approvals: [],
@@ -67,6 +68,24 @@ describe("runs held for Claude usage in the Inbox", () => {
     await waitFor(() =>
       expect(within(section).queryByRole("button", { name: "Run anyway" })).toBeNull(),
     );
+  });
+
+  it("shows a role hold's text and offers no Run anyway", async () => {
+    const [holding] = sample.limits;
+    const text = "Acme Engineering: your role no longer allows running dots";
+    const role: HeldRun = {
+      ...scheduled,
+      run_id: "01J0RUN7",
+      starts_after: null,
+      reason: { kind: "role", account: "Acme Engineering", text },
+    };
+    backend.on("inbox", () => only([role]));
+    backend.on("limits_get", () => holding);
+    renderApp("/inbox");
+    const section = await screen.findByRole("region", { name: "Held for Claude usage" });
+    const [item] = await within(section).findAllByRole("listitem");
+    expect(item).toHaveTextContent(`${role.dot_name} · Scheduled · ${text}`);
+    expect(within(item!).queryByRole("button", { name: "Run anyway" })).toBeNull();
   });
 
   it("count as one in the rail's Inbox link, however many", async () => {

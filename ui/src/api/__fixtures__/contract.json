@@ -1493,9 +1493,25 @@
         "dot_id": "01J0DOT",
         "dot_name": "nightly-tests",
         "queued_at": "2026-10-09T12:00:00.000Z",
+        "reason": {
+          "kind": "usage"
+        },
         "run_id": "01J0RUN4",
         "starts_after": "2026-10-09T15:10:00.000Z",
         "trigger": "schedule"
+      },
+      {
+        "dot_id": "01J0DOT2",
+        "dot_name": "triage",
+        "queued_at": "2026-10-09T12:00:00.000Z",
+        "reason": {
+          "account": "Acme Engineering",
+          "kind": "role",
+          "text": "Acme Engineering: your role no longer allows running dots"
+        },
+        "run_id": "01J0RUN5",
+        "starts_after": null,
+        "trigger": "watcher"
       }
     ],
     "review_runs": [

@@ -234,7 +234,13 @@ export const UsageSummary = z.strictObject({
   since: z.string(),
   rows: z.array(UsageRow),
 });
-// A run held for Claude usage; starts_after is null while held runs start one at a time.
+// Why a run is held: Claude usage, or a role that no longer lets this PC run the dot.
+export const HoldReason = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("usage") }),
+  z.strictObject({ kind: z.literal("role"), account: z.string(), text: z.string() }),
+]);
+// A run held for Claude usage or a role; starts_after is null while held runs start one at a
+// time, and for a role hold.
 export const HeldRun = z.strictObject({
   run_id: z.string(),
   dot_id: z.string(),
@@ -242,6 +248,7 @@ export const HeldRun = z.strictObject({
   trigger: TriggerKind,
   queued_at: z.string(),
   starts_after: nullable(z.string()),
+  reason: HoldReason,
 });
 
 // What a run event's `data` holds: the engine event, tagged by `kind`. `RunEventRecord.data`
@@ -1263,6 +1270,7 @@ export type UsagePeriod = z.infer<typeof UsagePeriod>;
 export type UsageSummary = z.infer<typeof UsageSummary>;
 export type UsageRow = z.infer<typeof UsageRow>;
 export type UsageRun = z.infer<typeof UsageRun>;
+export type HoldReason = z.infer<typeof HoldReason>;
 export type HeldRun = z.infer<typeof HeldRun>;
 export type WorkspaceMode = z.infer<typeof WorkspaceMode>;
 export type TriggerKind = z.infer<typeof TriggerKind>;

@@ -19,8 +19,8 @@ use common::{spec, wait_status};
 use dots_core::accounts::{identity, Access, Permission};
 use dots_core::apps::propose::{AppProposal, Decision};
 use dots_core::model::{
-    DotSpec, FolderConfig, MemberSpec, NewRun, NewWorkflowRun, ProjectSpec, RunStatus, TeamSpec,
-    TriggerKind, WatcherConfig, WorkflowSpec, WorkflowTrigger, WorkspaceMode,
+    DotSpec, FolderConfig, HoldReason, MemberSpec, NewRun, NewWorkflowRun, ProjectSpec, RunStatus,
+    TeamSpec, TriggerKind, WatcherConfig, WorkflowSpec, WorkflowTrigger, WorkspaceMode,
 };
 use dots_core::vault::org::Orgs;
 use dots_core::vault::{DotScope, Grants, MemorySecrets};
@@ -641,5 +641,72 @@ async fn a_damaged_org_acts_as_waiting() {
         Err(Error::NotAllowed(got)) => assert_eq!(got, WAITING_TEXT),
         other => panic!("expected NotAllowed, got {other:?}"),
     }
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn scheduled_run_held_for_role_then_runs_when_role_returns() {
+    let t = Rt::start().await;
+    t.join_as("member").await;
+    let dot =
+        t.rt.create_dot(t.triage(), Some(ACME.into()))
+            .await
+            .unwrap();
+    t.become_(2, Some("viewer")).await;
+    let run =
+        t.rt.store()
+            .create_run(&NewRun::new(&dot.id, TriggerKind::Schedule))
+            .await
+            .unwrap();
+    t.rt.hold_runs(false).await;
+    // A few dispatch passes later the run is still queued, listed as held for the role.
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    assert_eq!(
+        t.rt.store().get_run(&run.id).await.unwrap().status,
+        RunStatus::Queued
+    );
+    let inbox = t.rt.inbox().await.unwrap();
+    assert_eq!(inbox.held.len(), 1);
+    assert_eq!(inbox.held[0].run_id, run.id);
+    assert_eq!(
+        inbox.held[0].reason,
+        HoldReason::Role {
+            account: ACME_NAME.into(),
+            text: "Acme Engineering: your role no longer allows running dots".into(),
+        }
+    );
+    // It is not a usage hold.
+    let limits = t.rt.limits_get().await.unwrap();
+    assert!(limits.held_run_ids.is_empty() && !limits.holding);
+    // The role returns: the run goes on the next dispatch.
+    t.become_(3, Some("member")).await;
+    t.rt.hold_runs(false).await;
+    wait_status(t.rt.store(), &run.id, RunStatus::Succeeded, 15).await;
+    assert!(t.rt.inbox().await.unwrap().held.is_empty());
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn release_refused_for_role_hold() {
+    let t = Rt::start().await;
+    t.join_as("member").await;
+    let dot =
+        t.rt.create_dot(t.triage(), Some(ACME.into()))
+            .await
+            .unwrap();
+    t.become_(2, Some("viewer")).await;
+    let run =
+        t.rt.store()
+            .create_run(&NewRun::new(&dot.id, TriggerKind::Schedule))
+            .await
+            .unwrap();
+    assert_eq!(
+        refused(t.rt.run_release_hold(&run.id).await),
+        "this run waits for Acme Engineering to let you run dots again"
+    );
+    assert_eq!(
+        t.rt.store().get_run(&run.id).await.unwrap().status,
+        RunStatus::Queued
+    );
     t.rt.shutdown();
 }

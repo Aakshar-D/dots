@@ -570,6 +570,19 @@ pub struct HeldRun {
     pub queued_at: String,
     /// When the window that holds it resets; `None` while held runs start one at a time.
     pub starts_after: Option<String>,
+    pub reason: HoldReason,
+}
+
+/// Why a queued run is held (members spec section 6.3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum HoldReason {
+    /// Claude usage holds it (usage and limits spec section 5).
+    Usage,
+    /// This PC's role in the dot's account no longer lets it run dots, or this PC is no longer
+    /// on the account's member list. `text` says which. The run stays queued and goes when
+    /// the access returns.
+    Role { account: String, text: String },
 }
 
 str_enum!(UsagePeriod { FiveHours => "five_hours", Week => "week", Month => "month" });
