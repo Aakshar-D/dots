@@ -873,6 +873,20 @@ impl Runtime {
         crate::accounts::set_profile(&self.store, name, email).await
     }
 
+    /// The account and workspace in view; personal when none was chosen or its org is gone.
+    pub async fn current_scope(&self) -> Result<crate::accounts::CurrentScope> {
+        crate::accounts::current_scope(&self.store, self.orgs()).await
+    }
+
+    /// Chooses the account (`personal` or a joined org) and workspace in view.
+    pub async fn set_current_scope(
+        &self,
+        account: &str,
+        workspace: &str,
+    ) -> Result<crate::accounts::CurrentScope> {
+        crate::accounts::set_current_scope(&self.store, self.orgs(), account, workspace).await
+    }
+
     /// The update backups made before this data folder first ran with the vault, until the
     /// offer is answered (env vault spec §11).
     pub async fn old_backups(&self) -> Result<Vec<String>> {
