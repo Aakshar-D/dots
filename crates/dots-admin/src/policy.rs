@@ -7,7 +7,7 @@ use std::io::{Cursor, ErrorKind, Write};
 use std::ops::Range;
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use dots_core::vault::org::policy::POLICY_VERSION;
+use dots_core::vault::org::policy::POLICY_V1;
 use dots_core::vault::org::{
     check_org_id, envelope, key_fingerprint, parse_policy, verify_policy, OrgPolicy, PolicyError,
 };
@@ -32,7 +32,7 @@ pub fn new_policy(org_id: &str, now: DateTime<Utc>) -> Result<String> {
     check_org_id(org_id).map_err(core_failed)?;
     Ok(format!(
         r#"{{
-  "v": {POLICY_VERSION},
+  "v": {POLICY_V1},
   "org_id": {org_id},
   "issued_at": {issued_at},
   "plain": [],
