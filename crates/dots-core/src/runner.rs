@@ -330,6 +330,43 @@ impl Runner {
         cur.trigger == TriggerKind::Chat
     }
 
+    /// The dot's runs a person's chat message names (conversational chat spec section 3.1): for
+    /// the first message of a topic, the newest ended runs outside it; for one that resumes the
+    /// topic, those that ended after its last run was queued. Nothing for any other run. A list
+    /// that cannot be read is logged and left empty; the chat goes on without it.
+    async fn recent_runs(&self, run: &Run) -> Vec<Run> {
+        if !crate::prompt::is_typed(run) {
+            return Vec::new();
+        }
+        let since = match (&run.session_id, &run.parent_run_id) {
+            (None, _) => None,
+            (Some(_), Some(parent)) => match self.store.get_run(parent).await {
+                Ok(parent) => Some(parent.queued_at),
+                Err(e) => {
+                    tracing::warn!(run = %run.id, "reading the chat's last run failed: {e}");
+                    return Vec::new();
+                }
+            },
+            (Some(_), None) => return Vec::new(),
+        };
+        match self
+            .store
+            .ended_runs_outside(
+                &run.dot_id,
+                &run.root_run_id,
+                since.as_deref(),
+                crate::prompt::RECENT_RUNS,
+            )
+            .await
+        {
+            Ok(runs) => runs,
+            Err(e) => {
+                tracing::warn!(run = %run.id, "listing the dot's recent runs failed: {e}");
+                Vec::new()
+            }
+        }
+    }
+
     /// Makes the run's open tools reachable through the MCP gateway (`POST /mcp/s/<server>`,
     /// spec section 5) until the run ends.
     pub fn register_tools(&self, run_id: &str, tools: Arc<RunTools>) {
@@ -1111,6 +1148,7 @@ impl Runner {
         let global = self.store.get_settings().await?.global_instructions;
         // The memories as they are now: a run's prompt does not change while it runs.
         let memories = self.store.list_memories(&dot.id).await?;
+        let recent = self.recent_runs(run).await;
         let secret = self.register_secret(&run.id);
         self.register_tools(&run.id, tools.clone());
         let mut prompt = build_prompt_full(
@@ -1123,6 +1161,7 @@ impl Runner {
                 contexts: tools.contexts(),
                 memories: &memories,
                 apps: tools.apps().map(|apps| apps.as_ref()),
+                recent: &recent,
             },
         );
         // A chat's first prompt lists the workflows it may start (teams spec section 7).

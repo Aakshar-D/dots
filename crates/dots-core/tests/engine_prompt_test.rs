@@ -13,8 +13,10 @@ use dots_core::engine::{
     Engine, EngineEvent, PermissionGate, PermissionOutcome, RunContext, UnavailableEngine,
 };
 use dots_core::model::{ApplyState, EngineKind, TriggerKind, WorkspaceMode};
+use dots_core::model::{Run, RunStatus};
 use dots_core::prompt::{
-    build_prompt, context_tool_name, is_typed, CHAT_SUMMARY_RULE, CONVERSATION,
+    build_prompt, build_prompt_full, context_tool_name, is_typed, recent_runs, PromptParts,
+    CHAT_SUMMARY_RULE, CONVERSATION, RECENT_TEXT,
 };
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
@@ -413,6 +415,147 @@ fn a_person_s_resumed_chat_message_is_only_the_message() {
     assert_eq!(
         build_prompt(&dot, &run, Path::new("C:/ws"), at(), "", &[]),
         "and now?"
+    );
+}
+
+fn ended(
+    trigger: TriggerKind,
+    status: RunStatus,
+    summary: Option<&str>,
+    error: Option<&str>,
+) -> Run {
+    let mut run = fake_run(trigger, None, None);
+    run.status = status;
+    run.summary = summary.map(str::to_string);
+    run.error = error.map(str::to_string);
+    run.ended_at = Some("2026-10-27T08:00:00.000Z".into());
+    run
+}
+
+fn local(t: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(t)
+        .unwrap()
+        .with_timezone(&Local)
+        .format("%Y-%m-%d %H:%M")
+        .to_string()
+}
+
+#[test]
+fn recent_runs_are_one_line_each() {
+    let when = local("2026-10-27T08:00:00.000Z");
+    let long = "word ".repeat(100);
+    let runs = [
+        ended(
+            TriggerKind::Schedule,
+            RunStatus::Succeeded,
+            Some("Ordered milk,\n\n  eggs and bread."),
+            None,
+        ),
+        ended(
+            TriggerKind::Webhook,
+            RunStatus::Failed,
+            Some("  "),
+            Some("timed out"),
+        ),
+        ended(TriggerKind::Manual, RunStatus::Cancelled, None, None),
+        ended(
+            TriggerKind::Watcher,
+            RunStatus::Succeeded,
+            Some(&long),
+            None,
+        ),
+    ];
+    let lines: Vec<String> = recent_runs(&runs).lines().map(str::to_string).collect();
+    assert_eq!(
+        lines[0],
+        format!("- Scheduled · {when} · done: Ordered milk, eggs and bread.")
+    );
+    assert_eq!(lines[1], format!("- Webhook · {when} · failed: timed out"));
+    assert_eq!(lines[2], format!("- Run now · {when} · cancelled"));
+    let cut = lines[3].split_once(": ").unwrap().1;
+    assert_eq!(cut.chars().count(), RECENT_TEXT + 1);
+    assert!(cut.ends_with('…'));
+    assert_eq!(lines.len(), 4);
+}
+
+#[test]
+fn a_person_s_first_chat_message_lists_the_recent_runs_before_the_conversation() {
+    let dot = fake_dot("d", Path::new("C:/repo"), WorkspaceMode::Folder);
+    let recent = [ended(
+        TriggerKind::Schedule,
+        RunStatus::Succeeded,
+        Some("Sent 3 emails"),
+        None,
+    )];
+    let parts = PromptParts {
+        recent: &recent,
+        ..PromptParts::default()
+    };
+    let typed = fake_run(
+        TriggerKind::Chat,
+        Some(json!({"message": "why?", "typed": true})),
+        None,
+    );
+    let p = build_prompt_full(&dot, &typed, Path::new("C:/ws"), at(), "", parts);
+    let list = p
+        .find("## Your recent runs\n\n- Scheduled · ")
+        .expect("the list");
+    assert!(p.contains(" · done: Sent 3 emails\n\n---\n\n"));
+    assert!(p.find("Do the thing.").unwrap() < list);
+    assert!(list < p.find(CONVERSATION).unwrap());
+    // Without runs, no section; a chat run Dots made never gets one.
+    let none = build_prompt_full(
+        &dot,
+        &typed,
+        Path::new("C:/ws"),
+        at(),
+        "",
+        PromptParts::default(),
+    );
+    assert!(!none.contains("## Your recent runs"));
+    let made = fake_run(
+        TriggerKind::Chat,
+        Some(json!({"message": "The person added the app x."})),
+        None,
+    );
+    let made = build_prompt_full(&dot, &made, Path::new("C:/ws"), at(), "", parts);
+    assert!(!made.contains("## Your recent runs"));
+}
+
+#[test]
+fn a_person_s_resumed_message_names_the_runs_since_before_it() {
+    let dot = fake_dot("d", Path::new("C:/repo"), WorkspaceMode::Folder);
+    let recent = [ended(
+        TriggerKind::Schedule,
+        RunStatus::Succeeded,
+        Some("Sent 3 emails"),
+        None,
+    )];
+    let parts = PromptParts {
+        recent: &recent,
+        ..PromptParts::default()
+    };
+    let typed = fake_run(
+        TriggerKind::Chat,
+        Some(json!({"message": "anything new?", "typed": true})),
+        Some("s"),
+    );
+    assert_eq!(
+        build_prompt_full(&dot, &typed, Path::new("C:/ws"), at(), "", parts),
+        format!(
+            "## Runs since your last message\n\n{}\n## Message from the user\n\nanything new?",
+            recent_runs(&recent)
+        )
+    );
+    // A resume Dots made stays only its message.
+    let made = fake_run(
+        TriggerKind::Chat,
+        Some(json!({"message": "Approved."})),
+        Some("s"),
+    );
+    assert_eq!(
+        build_prompt_full(&dot, &made, Path::new("C:/ws"), at(), "", parts),
+        "Approved."
     );
 }
 

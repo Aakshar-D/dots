@@ -89,6 +89,49 @@ async fn a_person_s_chat_message_is_marked_typed() {
 }
 
 #[tokio::test]
+async fn a_person_s_chat_names_the_dot_s_runs_outside_the_topic() {
+    let t = start(None, None).await;
+    let dot =
+        t.rt.create_dot(folder_spec(&t.dir, "recent"), None)
+            .await
+            .unwrap();
+    let prompt = || -> String {
+        let rec: Value =
+            serde_json::from_str(&std::fs::read_to_string(&t.args_out).unwrap()).unwrap();
+        rec["prompt"].as_str().unwrap().to_string()
+    };
+    let manual = t.rt.run_now(&dot.id).await.unwrap();
+    wait_status(t.rt.store(), &manual.id, RunStatus::Succeeded, 15).await;
+
+    let first = t.rt.chat(&dot.id, "what did you do?", None).await.unwrap();
+    let first = wait_status(t.rt.store(), &first.id, RunStatus::Succeeded, 15).await;
+    let p = prompt();
+    let listed = p
+        .find("## Your recent runs\n\n- Run now · ")
+        .expect("the list");
+    assert!(p[listed..].contains(" · done: fake done\n"));
+    assert!(listed < p.find("## Chat with the person").unwrap());
+
+    // Nothing ended since: the resume is only the message.
+    let second = t.rt.chat(&dot.id, "and?", Some(&first.id)).await.unwrap();
+    let second = wait_status(t.rt.store(), &second.id, RunStatus::Succeeded, 15).await;
+    assert_eq!(prompt(), "and?");
+
+    // A run that ended since the topic's last run is named before the message.
+    let again = t.rt.run_now(&dot.id).await.unwrap();
+    wait_status(t.rt.store(), &again.id, RunStatus::Succeeded, 15).await;
+    let third =
+        t.rt.chat(&dot.id, "anything new?", Some(&second.id))
+            .await
+            .unwrap();
+    wait_status(t.rt.store(), &third.id, RunStatus::Succeeded, 15).await;
+    let p = prompt();
+    assert!(p.starts_with("## Runs since your last message\n\n- Run now · "));
+    assert_eq!(p.matches("- Run now").count(), 1, "{p}");
+    assert!(p.ends_with("\n## Message from the user\n\nanything new?"));
+}
+
+#[tokio::test]
 async fn run_now_then_chat_follow_up_resumes_session() {
     let t = start(None, None).await;
     let dot =
