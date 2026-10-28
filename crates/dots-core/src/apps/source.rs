@@ -88,7 +88,23 @@ fn invalid<T>(msg: impl Into<String>) -> Result<T> {
 /// every listed tool and `on_run_end`. `Err(Invalid)` names the first problem. Blocks: call it
 /// from `spawn_blocking`.
 pub fn read_folder(dir: &Path) -> Result<AppSource> {
-    let files = walk(dir)?;
+    read_files(&walk(dir)?)
+}
+
+/// `read_folder` for an app's files held in memory, by their path relative to the app folder
+/// with `/` (the apps that come with Dots, `apps::bundled`). The same checks, the bounds
+/// included. Blocks.
+pub fn read_files(files: &BTreeMap<String, Vec<u8>>) -> Result<AppSource> {
+    let total: u64 = files.values().map(|b| b.len() as u64).sum();
+    if total > MAX_APP_BYTES {
+        return invalid(format!(
+            "the app's files hold more than {} MB",
+            MAX_APP_BYTES / (1024 * 1024)
+        ));
+    }
+    if files.len() > MAX_APP_FILES {
+        return invalid(format!("the app holds more than {MAX_APP_FILES} files"));
+    }
     let text = |path: &str| -> Result<String> {
         let bytes = files
             .get(path)
@@ -104,7 +120,7 @@ pub fn read_folder(dir: &Path) -> Result<AppSource> {
     let mut ui = BTreeMap::new();
     let mut migrations = Vec::new();
     let mut tests = Vec::new();
-    for (path, bytes) in &files {
+    for (path, bytes) in files {
         if let Some(rest) = path.strip_prefix("ui/") {
             ui.insert(rest.to_string(), bytes.clone());
         } else if let Some(name) = path.strip_prefix("migrations/") {
