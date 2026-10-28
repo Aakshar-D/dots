@@ -148,17 +148,21 @@ describe("a dot whose org was removed", () => {
   });
 
   it("is marked on its card at home, and can't be run from there", async () => {
+    // The core can only be in Personal once the org is gone; its dots are listed there.
     backend.on("org_list", () => []);
-    backend.on("scope_get", () => ({ account: "acme-eng", workspace: "default" }));
-    backend.on("dot_overview", () => [{ ...sample.overview, dot: release }]);
+    backend.on("scope_get", () => ({ account: "personal", workspace: "default" }));
+    backend.on("dot_overview", () => [
+      { ...sample.overview, dot: release },
+      { ...sample.overview, dot: personal },
+    ]);
     backend.on("set_dot_enabled", (args) => ({ ...release, enabled: args.enabled as boolean }));
     const { user } = renderApp(`/home/${release.id}`);
     const card = await screen.findByRole("listitem", { name: "acme-release" });
     const mark = await within(card).findByText("account removed");
     expect(mark).toHaveClass("text-destructive");
     expect(mark).toHaveAttribute("title", REMOVED);
-    // Home lists the current account's dots only, so the Personal dot is not beside it.
-    expect(screen.queryByRole("listitem", { name: personal.name })).toBeNull();
+    const other = screen.getByRole("listitem", { name: personal.name });
+    expect(within(other).queryByText("account removed")).toBeNull();
 
     await user.click(screen.getByRole("button", { name: "Dot settings" }));
     expect(await screen.findByRole("menuitem", { name: "Run now" })).toHaveAttribute(
@@ -173,7 +177,7 @@ describe("a dot whose org was removed", () => {
 
   it("can't be sent a message from the chat at home, which says why", async () => {
     backend.on("org_list", () => []);
-    backend.on("scope_get", () => ({ account: "acme-eng", workspace: "default" }));
+    backend.on("scope_get", () => ({ account: "personal", workspace: "default" }));
     backend.on("dot_overview", () => [{ ...sample.overview, dot: release }]);
     renderApp(`/home/${release.id}`);
     const why = await screen.findByText(`account removed: ${REMOVED}`);
@@ -183,6 +187,8 @@ describe("a dot whose org was removed", () => {
     expect(box).toHaveAttribute("placeholder", "account removed");
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
     expect(backend.callsTo("chat")).toEqual([]);
+    // Opened from Personal, where it is listed: no switch is asked for.
+    expect(backend.callsTo("scope_set")).toEqual([]);
   });
 
   it("can be sent a message from the chat while its org is joined", async () => {

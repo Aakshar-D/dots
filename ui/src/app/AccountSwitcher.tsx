@@ -1,14 +1,14 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { cn } from "cn";
 import { Check } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router";
+import { useLocation, useNavigate } from "react-router";
 
 import { commands } from "@/api/commands";
 import type { OrgSummary } from "@/api/types";
 import { notifyError } from "@/lib/notify";
 import { keys } from "@/lib/query";
-import { PERSONAL, useCurrentScope, waitingByAccount } from "@/lib/scope";
+import { PERSONAL, useCurrentScope, useSwitchAccount, waitingByAccount } from "@/lib/scope";
 import { ORG_TONE } from "@/screens/Accounts";
 
 /// Up to two initials of `name`; "?" when it is blank.
@@ -33,21 +33,26 @@ export function AccountSwitcher() {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
-  const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const switchAccount = useSwitchAccount();
   const scope = useCurrentScope();
   const identity = useQuery({ queryKey: keys.identity, queryFn: commands.identityGet }).data;
   // The joined accounts are read when the menu opens, or to name an org already chosen; what
   // waits in each only when the menu opens, so the rail adds no calls of its own.
   const inOrg = scope !== undefined && scope.account !== PERSONAL;
-  const orgs =
-    useQuery({ queryKey: keys.orgs, queryFn: commands.orgList, enabled: open || inOrg }).data ?? [];
+  const joined = useQuery({
+    queryKey: keys.orgs,
+    queryFn: commands.orgList,
+    enabled: open || inOrg,
+  }).data;
+  const orgs = joined ?? [];
   const overview = useQuery({
     queryKey: keys.overview,
     queryFn: commands.dotOverview,
     enabled: open,
   }).data;
-  const waiting = waitingByAccount(overview ?? []);
+  const waiting = waitingByAccount(overview ?? [], joined);
 
   useEffect(() => {
     if (!open) return;
@@ -83,9 +88,13 @@ export function AccountSwitcher() {
   function choose(id: string) {
     setOpen(false);
     trigger.current?.focus();
-    commands
-      .scopeSet(id, "default")
-      .then(() => queryClient.invalidateQueries({ queryKey: keys.scope }), notifyError);
+    // On the home, a new account opens its own first dot rather than keeping one it does not
+    // list; the scope is loaded again first, so the home picks from the new account's dots.
+    const onHome = pathname === "/home" || pathname.startsWith("/home/");
+    const changed = id !== currentId;
+    switchAccount(id).then(() => {
+      if (onHome && changed) navigate("/home", { replace: true });
+    }, notifyError);
   }
   function manage() {
     setOpen(false);

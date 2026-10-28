@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import type { DotOverview } from "@/api/types";
+import type { DotOverview, OrgSummary } from "@/api/types";
 import { backend } from "@/test/backend";
 import { sample } from "@/test/fixtures";
 import { renderApp } from "@/test/render";
@@ -13,6 +13,8 @@ const row = (name: string, org_id: string | null): DotOverview => ({
   last_run: null,
 });
 const dots = [row("mine", null), row("builder", "acme-eng"), row("pixels", "design")];
+const acme: OrgSummary = { ...sample.orgs[0], id: "acme-eng", name: "Acme Engineering" };
+const design: OrgSummary = { ...sample.orgs[0], id: "design", name: "Design" };
 const column = () => screen.getByRole("navigation", { name: "Dots" });
 
 describe("the home follows the current account", () => {
@@ -29,6 +31,7 @@ describe("the home follows the current account", () => {
 
   it("lists only the dots without an org in Personal", async () => {
     backend.on("dot_overview", () => dots);
+    backend.on("org_list", () => [acme, design]);
     backend.on("scope_get", () => ({ account: "personal", workspace: "default" }));
     renderApp("/home");
     await within(await screen.findByRole("navigation", { name: "Dots" })).findByRole("listitem", {
@@ -50,12 +53,77 @@ describe("the home follows the current account", () => {
 
   it("switches to the account of a dot opened by link, without redirecting", async () => {
     backend.on("dot_overview", () => dots);
-    backend.on("scope_get", () => ({ account: "personal", workspace: "default" }));
-    backend.on("scope_set", (args) => ({ account: String(args.account), workspace: "default" }));
+    backend.on("org_list", () => [acme, design]);
+    let account = "personal";
+    backend.on("scope_get", () => ({ account, workspace: "default" }));
+    backend.on("scope_set", (args) => {
+      account = String(args.account);
+      return { account, workspace: "default" };
+    });
     const { router } = renderApp("/home/dot-builder");
-    await waitFor(() =>
-      expect(backend.callsTo("scope_set")).toEqual([{ account: "acme-eng", workspace: "default" }]),
+    // Settled: the dot's account is current and its conversation is open.
+    await within(await screen.findByRole("navigation", { name: "Dots" })).findByRole("listitem", {
+      name: "builder",
+    });
+    await waitFor(() => expect(within(column()).queryByRole("listitem", { name: "mine" })).toBeNull());
+    expect(await screen.findByLabelText("Message")).toBeVisible();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(backend.callsTo("scope_set")).toEqual([{ account: "acme-eng", workspace: "default" }]);
+    expect(router.state.location.pathname).toBe("/home/dot-builder");
+  });
+
+  it("stays in the account picked while a dot is open", async () => {
+    let account = "acme-eng";
+    backend.on("dot_overview", () => dots);
+    backend.on("org_list", () => [acme, design]);
+    backend.on("scope_get", () => ({ account, workspace: "default" }));
+    backend.on("scope_set", (args) => {
+      account = String(args.account);
+      return { account, workspace: "default" };
+    });
+    const { user, router } = renderApp("/home/dot-builder");
+    await screen.findByLabelText("Message");
+    await user.click(await screen.findByRole("button", { name: /^Account:/ }));
+    await user.click(await screen.findByRole("menuitemradio", { name: /Personal/ }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/home/dot-mine"));
+    await within(column()).findByRole("listitem", { name: "mine" });
+    await screen.findByLabelText("Message");
+    // Settle, then the scope was set once, to the account picked, and stays there.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(backend.callsTo("scope_set")).toEqual([{ account: "personal", workspace: "default" }]);
+    expect(account).toBe("personal");
+    expect(router.state.location.pathname).toBe("/home/dot-mine");
+    expect(within(column()).queryByRole("listitem", { name: "builder" })).toBeNull();
+  });
+
+  it("goes back to the home when the switch for a link is refused", async () => {
+    backend.on("dot_overview", () => dots);
+    backend.on("org_list", () => [acme, design]);
+    backend.on("scope_get", () => ({ account: "personal", workspace: "default" }));
+    backend.on("scope_set", () => {
+      throw { kind: "conflict", message: "no such account" };
+    });
+    const { router } = renderApp("/home/dot-builder");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/home/dot-mine"));
+    expect(await screen.findByLabelText("Message")).toBeVisible();
+    expect(backend.callsTo("scope_set")).toEqual([{ account: "acme-eng", workspace: "default" }]);
+  });
+
+  it("lists the dots of a removed account under Personal, and opens them without a switch", async () => {
+    backend.on("dot_overview", () => dots);
+    backend.on("org_list", () => [design]);
+    backend.on("scope_get", () => ({ account: "personal", workspace: "default" }));
+    const { router } = renderApp("/home/dot-builder");
+    const card = await within(await screen.findByRole("navigation", { name: "Dots" })).findByRole(
+      "listitem",
+      { name: "builder" },
     );
+    expect(within(card).getByText("account removed")).toBeVisible();
+    expect(within(column()).getByRole("listitem", { name: "mine" })).toBeVisible();
+    expect(within(column()).queryByRole("listitem", { name: "pixels" })).toBeNull();
+    expect(await screen.findByLabelText("Message")).toBeVisible();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(backend.callsTo("scope_set")).toEqual([]);
     expect(router.state.location.pathname).toBe("/home/dot-builder");
   });
 });

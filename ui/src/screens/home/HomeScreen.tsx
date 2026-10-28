@@ -1,14 +1,15 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect } from "react";
-import { Link, Navigate, useParams } from "react-router";
+import { useQuery } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
+import { Link, Navigate, useNavigate, useParams } from "react-router";
 
 import { commands } from "@/api/commands";
 import { ErrorNote } from "@/components/ErrorNote";
 import { Button } from "@/components/ui/button";
+import { useOrgList } from "@/lib/dot-org";
 import { sortDots } from "@/lib/dot-status";
 import { keys } from "@/lib/query";
 import { notifyError } from "@/lib/notify";
-import { inScope, PERSONAL, useCurrentScope } from "@/lib/scope";
+import { accountOf, inScope, useCurrentScope, useSwitchAccount } from "@/lib/scope";
 import { DotPane } from "@/screens/home/DotPane";
 import { DotsColumn } from "@/screens/home/DotsColumn";
 import { lastDot } from "@/screens/home/last-dot";
@@ -33,23 +34,42 @@ function EmptyHome() {
 /// it back to `/home`.
 export function HomeScreen() {
   const { dotId, rootRunId } = useParams();
+  const navigate = useNavigate();
   const overview = useQuery({ queryKey: keys.overview, queryFn: commands.dotOverview });
-  // Home shows the current account's dots; every dot while the scope loads.
+  // Home shows the current account's dots; every dot while the scope loads. A dot whose
+  // account was removed is listed under Personal, once the joined accounts say so.
   const scope = useCurrentScope();
   const all = sortDots(overview.data ?? []);
-  const rows = all.filter((r) => !scope || inScope(r.dot, scope));
+  const orgs = useOrgList(all.some((r) => r.dot.org_id !== null));
+  const rows = all.filter((r) => !scope || inScope(r.dot, scope, orgs));
   // A link to a dot of another account (an Inbox "Open") switches to that account and keeps
-  // the route, rather than treating the dot as gone.
-  const outside = dotId === undefined ? undefined : all.find((r) => r.dot.id === dotId);
-  const outsideAccount =
-    outside && !rows.includes(outside) ? (outside.dot.org_id ?? PERSONAL) : undefined;
-  const queryClient = useQueryClient();
+  // the route, rather than treating the dot as gone. Only a new route does: once a dot was
+  // handled, a change of account with it open (the switcher) never switches back.
+  const linked = dotId === undefined ? undefined : all.find((r) => r.dot.id === dotId);
+  const outside = linked !== undefined && !rows.includes(linked);
+  const [handled, setHandled] = useState<string | undefined>(undefined);
+  const switchAccount = useSwitchAccount();
   useEffect(() => {
-    if (outsideAccount === undefined) return;
-    commands
-      .scopeSet(outsideAccount, "default")
-      .then(() => queryClient.invalidateQueries({ queryKey: keys.scope }), notifyError);
-  }, [outsideAccount, queryClient]);
+    if (dotId === undefined) {
+      // No dot open: a later link, even to the same dot, is a new one.
+      if (handled !== undefined) setHandled(undefined);
+      return;
+    }
+    if (handled === dotId) return;
+    if (linked === undefined || scope === undefined) return;
+    if (!outside) {
+      setHandled(dotId);
+      return;
+    }
+    // Its account is not known while the joined accounts load: wait rather than guess.
+    const account = accountOf(linked.dot, orgs);
+    if (account === undefined) return;
+    setHandled(dotId);
+    switchAccount(account).catch((error: unknown) => {
+      notifyError(error);
+      navigate("/home", { replace: true });
+    });
+  }, [dotId, handled, linked, scope, outside, orgs, switchAccount, navigate]);
   // A failed reload keeps what was loaded, and the open conversation with what is being typed;
   // only a first load that failed has nothing to show but the error.
   const loaded = overview.data !== undefined;
@@ -66,10 +86,11 @@ export function HomeScreen() {
     pane = open ? <Navigate to={`/home/${open.dot.id}`} replace /> : <EmptyHome />;
   } else if (loaded) {
     const row = rows.find((r) => r.dot.id === dotId);
-    pane = outsideAccount !== undefined ? null : row ? (
+    pane = row ? (
       // An older topic, or the conversation again, opens with its own reply target and scroll.
       <DotPane key={`${row.dot.id}/${rootRunId ?? ""}`} row={row} rootRunId={rootRunId} />
-    ) : (
+    ) : linked !== undefined && handled !== dotId ? null : (
+      // Gone, or of another account once the link was handled: the home opens a dot it lists.
       <Navigate to="/home" replace />
     );
   }
