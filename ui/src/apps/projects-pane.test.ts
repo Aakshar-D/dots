@@ -260,4 +260,18 @@ describe("Projects' side pane", () => {
     await waitFor(() => expect(fake.callsTo("get_task")).toHaveLength(2));
     expect(fake.callsTo("comment")).toEqual([{ task_id: "t2", text: "Once" }]);
   });
+
+  it("opening and closing a task keeps the list where it was", async () => {
+    const fake = sample({ get_task: () => detail() });
+    const user = await show(fake);
+    await user.click(screen.getByRole("button", { name: "● Website relaunch" }));
+    const list = () => document.querySelector(".list") as HTMLElement;
+    list().scrollTop = 40;
+    await user.click(screen.getByRole("button", { name: "Build signup form" }));
+    const pane = await screen.findByRole("complementary", { name: "Task" });
+    expect(list().scrollTop).toBe(40);
+    await user.click(within(pane).getByRole("button", { name: "Close the task" }));
+    await waitFor(() => expect(screen.queryByRole("complementary", { name: "Task" })).toBeNull());
+    expect(list().scrollTop).toBe(40);
+  });
 });

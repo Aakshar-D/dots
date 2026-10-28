@@ -256,12 +256,12 @@ export function mount(root, dots) {
     for (const [key, el] of now) {
       if (fields.has(key)) el.value = fields.get(key);
     }
-    // Another view or task opens at the top.
-    if (drawnPlace === placeNow()) {
-      for (const [sel, top] of scroll) {
-        const el = root.querySelector(sel);
-        if (el) el.scrollTop = top;
-      }
+    // Another view opens its list and column at the top, another task its pane.
+    const sameView = drawnView === viewNow();
+    for (const [sel, top] of scroll) {
+      if (!sameView || (sel === ".pane" && drawnOpen !== state.open)) continue;
+      const el = root.querySelector(sel);
+      if (el) el.scrollTop = top;
     }
     if (focus === null) return;
     const el = now.find(([key]) => key === focus.key)?.[1];
@@ -274,10 +274,10 @@ export function mount(root, dots) {
     }
   }
 
-  /// The view and task the page shows, as text.
-  const placeNow = () => JSON.stringify([state.view, state.open]);
-  /// Where the page was drawn last: scroll offsets belong to that place only.
-  let drawnPlace = null;
+  const viewNow = () => JSON.stringify(state.view);
+  /// The view and the task the page was drawn with last: scroll offsets belong to them.
+  let drawnView = null;
+  let drawnOpen = null;
 
   function draw() {
     const before = snapshot();
@@ -290,7 +290,8 @@ export function mount(root, dots) {
       drawing = false;
     }
     restore(before);
-    drawnPlace = placeNow();
+    drawnView = viewNow();
+    drawnOpen = state.open;
     if (state.focus !== null) {
       root.querySelector(`[data-focus="${state.focus}"]`)?.focus();
       state.focus = null;
