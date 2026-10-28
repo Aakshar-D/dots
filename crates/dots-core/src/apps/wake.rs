@@ -82,6 +82,7 @@ impl Apps {
     /// Tells the apps of the ends they missed (while Dots was not running, or when the bus
     /// lagged): each topic nothing waits in whose newest run ended and was not told.
     pub async fn catch_up(&self) -> Result<()> {
+        self.store.prune_app_topics().await?;
         for topic in self.store.idle_app_topics().await? {
             let thread = self.store.list_thread(&topic.root_run_id).await?;
             let Some(newest) = thread.last() else {

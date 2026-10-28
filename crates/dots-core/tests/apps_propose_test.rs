@@ -261,6 +261,33 @@ async fn a_proposal_that_fails_its_checks_goes_back_to_the_dot() {
 }
 
 #[tokio::test]
+async fn a_waiting_card_counts_in_what_needs_the_person() {
+    let t = start().await;
+    let folder = in_workspace(&t, "expenses", &expenses());
+    let llm = Llm::start(dones(2)).await;
+    let run = finished_run(&t, &llm, "builder").await;
+    let before = t.rt.inbox_count().await.unwrap();
+    t.rt.apps()
+        .propose(&run.id, folder, "Tracks expenses.")
+        .await
+        .unwrap();
+    let inbox = t.rt.inbox().await.unwrap();
+    assert_eq!(inbox.app_reviews.len(), 1);
+    assert_eq!(inbox.app_reviews[0].dot_name, "builder");
+    assert_eq!(inbox.app_reviews[0].proposal.note, "Tracks expenses.");
+    assert_eq!(t.rt.inbox_count().await.unwrap(), before + 1);
+    assert_eq!(t.rt.store().dot_counts(&run.dot_id).await.unwrap().0, 1);
+
+    let p = proposals(&t, &run.dot_id).await.remove(0);
+    t.rt.decide_app_proposal(&p.id, Decision::Discard)
+        .await
+        .unwrap();
+    assert!(t.rt.inbox().await.unwrap().app_reviews.is_empty());
+    assert_eq!(t.rt.store().dot_counts(&run.dot_id).await.unwrap().0, 0);
+    t.rt.shutdown();
+}
+
+#[tokio::test]
 async fn asking_for_changes_and_discarding_continue_the_dots_thread() {
     let t = start().await;
     let folder = in_workspace(&t, "expenses", &expenses());
@@ -389,12 +416,186 @@ async fn a_change_keeps_the_migrations_that_ran_and_waits_for_its_base_version()
     }
     let still = t.rt.store().get_app_proposal(&stale.id).await.unwrap();
     assert_eq!(still.status, ProposalStatus::Pending);
+    // The failed accept left the thread unmarked: a chat to it goes through.
+    let chat = t.rt.chat(&cont.dot_id, "Go on.", Some(&cont.id)).await;
+    assert!(chat.is_ok(), "{chat:?}");
     let (_, config) = apps.get("expenses").await.unwrap();
     assert_eq!(config.version, 3);
     assert!(matches!(
         apps.get("expenses").await.unwrap().0.config,
         LibraryConfig::App(_)
     ));
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn a_local_dot_copies_an_installed_app_into_its_workspace() {
+    let t = start().await;
+    let src = in_workspace(&t, "first", &expenses());
+    t.rt.apps()
+        .install(read_folder(&src).unwrap(), AppOrigin::Proposed)
+        .await
+        .unwrap();
+    let llm = Llm::start(vec![
+        llm_call("c1", "copy_app", json!({"app": "expenses", "path": "copy"})),
+        llm_text("Copied."),
+    ])
+    .await;
+    let dot =
+        t.rt.create_dot(local_spec(&t, &llm.endpoint(), "fixer"), None)
+            .await
+            .unwrap();
+    let run = t.rt.run_now(&dot.id).await.unwrap();
+    wait_status(t.rt.store(), &run.id, RunStatus::Succeeded, 30).await;
+    let reqs = llm.requests();
+    let names: Vec<&str> = reqs[0]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["function"]["name"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"copy_app"), "{names:?}");
+    assert!(
+        tool_result(&reqs[1], "c1").starts_with("Copied version 1 of the app expenses into copy."),
+        "{}",
+        tool_result(&reqs[1], "c1")
+    );
+    assert!(t.dir.path().join("copy").join("app.json").is_file());
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn a_claude_dot_copies_an_installed_app_through_dots_own_server() {
+    let script = json!([
+        {"emit": {"type": "system", "subtype": "init", "session_id": "$SESSION"}},
+        {"mcp_call": {"server": "dots", "tool": "copy_app",
+                      "arguments": {"app": "expenses", "path": "copy"}}},
+        {"mcp_call": {"server": "dots", "tool": "copy_app",
+                      "arguments": {"path": "other"}}},
+        {"emit": {"type": "result", "subtype": "success", "is_error": false, "result": "done",
+                  "usage": {"input_tokens": 1, "output_tokens": 1}}}
+    ]);
+    let t = start_with(|cfg, dir| {
+        let path = dir.join("script.json");
+        std::fs::write(&path, script.to_string()).unwrap();
+        cfg.claude_env = vec![
+            (
+                "FAKE_CLAUDE_SCRIPT".into(),
+                path.to_string_lossy().into_owned(),
+            ),
+            (
+                "FAKE_CLAUDE_ARGS_OUT".into(),
+                dir.join("args.json").to_string_lossy().into_owned(),
+            ),
+        ];
+    })
+    .await;
+    let src = in_workspace(&t, "first", &expenses());
+    t.rt.apps()
+        .install(read_folder(&src).unwrap(), AppOrigin::Proposed)
+        .await
+        .unwrap();
+    let mut s = spec("claude");
+    s.workdir = t.dir.path().to_string_lossy().to_string();
+    s.workspace_mode = WorkspaceMode::Folder;
+    s.engine = EngineKind::Claude;
+    let dot = t.rt.create_dot(s, None).await.unwrap();
+    let run = t.rt.run_now(&dot.id).await.unwrap();
+    wait_status(t.rt.store(), &run.id, RunStatus::Succeeded, 30).await;
+    let recorded: Value =
+        serde_json::from_str(&std::fs::read_to_string(t.dir.path().join("args.json")).unwrap())
+            .unwrap();
+    let args: Vec<String> = serde_json::from_value(recorded["args"].clone()).unwrap();
+    assert!(
+        args.contains(&"mcp__dots__copy_app".to_string()),
+        "{args:?}"
+    );
+    assert!(t.dir.path().join("copy").join("logic.js").is_file());
+    // A call without `app` is refused before the gate: no approval is stored for the run.
+    let results: Vec<Value> =
+        t.rt.store()
+            .list_events(&run.id, 0)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|ev| ev.kind == "tool_result")
+            .map(|ev| ev.data)
+            .collect();
+    assert_eq!(results.len(), 2, "{results:?}");
+    assert_eq!(results[1]["is_error"], true, "{results:?}");
+    assert!(
+        results[1].to_string().contains("copy_app needs"),
+        "{results:?}"
+    );
+    assert!(t
+        .rt
+        .store()
+        .approvals_for_run(&run.id)
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(!t.dir.path().join("other").exists());
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn while_an_update_migrates_its_thread_waits_and_other_threads_go_on() {
+    let t = start().await;
+    let first = in_workspace(&t, "first", &expenses());
+    let apps = t.rt.apps();
+    apps.install(read_folder(&first).unwrap(), AppOrigin::Proposed)
+        .await
+        .unwrap();
+    let ink = json!({ "item": "Ink", "amount": 3, "on": "2026-10-20" });
+    apps.call(
+        "expenses",
+        "add_expense",
+        ink,
+        dots_core::apps::call::Actor::Person,
+    )
+    .await
+    .unwrap();
+    // Slow on real data only: the tests' empty databases seed no recursion.
+    let slow = "CREATE TABLE pad AS WITH RECURSIVE c(x) AS (SELECT 1 FROM expenses UNION ALL \
+                SELECT x + 1 FROM c WHERE x < 4000000) SELECT max(x) AS x FROM c;\n";
+    let mut files = expenses();
+    files.push(("migrations/0002_pad.sql", slow.to_string()));
+    let next = in_workspace(&t, "next", &files);
+    let llm = Llm::start(dones(6)).await;
+    let fixer = finished_run(&t, &llm, "fixer").await;
+    let other = finished_run(&t, &llm, "other").await;
+    apps.propose(&fixer.id, next, "Pads.").await.unwrap();
+    let p = proposals(&t, &fixer.dot_id).await.remove(0);
+    let done = std::sync::atomic::AtomicBool::new(false);
+    let decide = async {
+        let decided = t.rt.decide_app_proposal(&p.id, Decision::Add).await;
+        done.store(true, std::sync::atomic::Ordering::SeqCst);
+        decided
+    };
+    let meanwhile = async {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let same = t.rt.chat(&fixer.dot_id, "And?", Some(&fixer.id)).await;
+        let elsewhere = t.rt.chat(&other.dot_id, "Hello", Some(&other.id)).await;
+        (
+            same,
+            elsewhere,
+            done.load(std::sync::atomic::Ordering::SeqCst),
+        )
+    };
+    let (decided, (same, elsewhere, finished)) = tokio::join!(decide, meanwhile);
+    assert!(
+        !finished,
+        "the migration outlasted the chats; make it slower"
+    );
+    match same {
+        Err(Error::Conflict(m)) => assert_eq!(m, dots_core::checkins::DECIDING),
+        other => panic!("{other:?}"),
+    }
+    assert!(elsewhere.is_ok(), "{elsewhere:?}");
+    let (decided, _) = decided.unwrap();
+    assert_eq!(decided.status, ProposalStatus::Added);
+    let (_, config) = apps.get("expenses").await.unwrap();
+    assert_eq!(config.version, 2);
     t.rt.shutdown();
 }
 
@@ -541,4 +742,12 @@ async fn a_dot_has_at_most_five_proposals_waiting() {
         }
     }
     t.rt.shutdown();
+}
+
+#[test]
+fn the_deciding_notice_keeps_its_exact_words() {
+    assert_eq!(
+        dots_core::checkins::DECIDING,
+        "Dots is still adding the app you accepted in this chat; send your message again in a moment"
+    );
 }

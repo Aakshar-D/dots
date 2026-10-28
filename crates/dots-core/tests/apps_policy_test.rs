@@ -3,7 +3,7 @@
 mod common;
 
 use dots_core::apps::policy_input;
-use dots_core::policy::{Action, Policy, Preset, Rule, APP_TOOLS, PROPOSE_RULE};
+use dots_core::policy::{allow_candidates, Action, Policy, Preset, Rule, APP_TOOLS, PROPOSE_RULE};
 use serde_json::json;
 
 fn call(app: &str, tool: &str, writes: bool) -> serde_json::Value {
@@ -14,6 +14,30 @@ fn with_rules(preset: Preset, extra: &[(&str, Action)]) -> Policy {
     let mut p = Policy::preset(preset);
     p.rules.extend(extra.iter().map(|(t, a)| Rule::new(t, *a)));
     p
+}
+
+#[test]
+fn an_app_approval_offers_rules_that_name_its_tool_and_its_app() {
+    let input = policy_input("expenses", "add_expense", true, &json!({ "item": "Ink" }));
+    let offered: Vec<(String, String)> = allow_candidates("App", &input, None)
+        .into_iter()
+        .map(|c| (c.pattern, c.label))
+        .collect();
+    assert_eq!(
+        offered,
+        [
+            (
+                "App(expenses.add_expense)".to_string(),
+                "add_expense of the app expenses".to_string()
+            ),
+            (
+                "App(expenses)".to_string(),
+                "every tool of the app expenses".to_string()
+            ),
+        ]
+    );
+    // A call without its app offers nothing: never the bare `App`.
+    assert!(allow_candidates("App", &json!({ "input": {} }), None).is_empty());
 }
 
 #[test]

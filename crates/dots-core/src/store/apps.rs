@@ -139,6 +139,17 @@ impl Store {
         rows.iter().map(proposal_from_row).collect()
     }
 
+    /// The proposals that wait for the person, newest first.
+    pub async fn list_pending_app_proposals(&self) -> Result<Vec<AppProposal>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {PROPOSAL_COLUMNS} FROM app_proposals WHERE status = 'pending' \
+             ORDER BY created_at DESC, id DESC"
+        ))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(proposal_from_row).collect()
+    }
+
     /// The run's proposal that waits for the person, if any: a run sends one at a time.
     pub async fn pending_app_proposal_for_run(&self, run_id: &str) -> Result<Option<AppProposal>> {
         sqlx::query(&format!(
@@ -186,6 +197,27 @@ impl Store {
             self.get_app_proposal(id).await?,
             self.get_run(&run_id).await?,
         ))
+    }
+
+    /// Forgets the topics of the app `app_id`: it was removed.
+    pub async fn delete_app_topics(&self, app_id: &str) -> Result<()> {
+        sqlx::query("DELETE FROM app_topics WHERE app_id = ?")
+            .bind(app_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Forgets the topics of apps that are no longer installed (removed before their topics
+    /// went with them).
+    pub async fn prune_app_topics(&self) -> Result<u64> {
+        let res = sqlx::query(
+            "DELETE FROM app_topics WHERE app_id NOT IN \
+             (SELECT id FROM library_items WHERE kind = 'app')",
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected())
     }
 
     /// Stores the run an app's start asked for and its topic, in one transaction (app library

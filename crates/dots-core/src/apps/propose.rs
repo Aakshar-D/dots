@@ -16,6 +16,7 @@ use super::tests::{self, TestReport};
 use super::{data, Apps};
 use crate::events::RuntimeEvent;
 use crate::library::{AppOrigin, LibraryItem};
+use crate::policy::Action;
 use crate::{Error, Result};
 
 /// The tool's name on both engines (`mcp__dots__propose_app` on the Claude engine).
@@ -45,8 +46,39 @@ pub const DESCRIPTION: &str = "Send an app you wrote in your workspace to the pe
     (the person's screen, which calls dots.call(tool, input)), migrations/0001_<name>.sql and on, \
     an optional sample.sql, and tests/<name>.test.js using test(name, fn), assert.equal, \
     assert.deepEqual, assert.throws and call(tool, input, { actor, now }). To change an app, \
-    send its whole folder, keeping the migrations that ran and adding new ones after them. Dots \
-    checks the folder and runs the tests; a problem comes back as an error for you to fix.";
+    send its whole folder, keeping the migrations that ran and adding new ones after them; copy \
+    an installed app into your workspace with copy_app first. Dots checks the folder and runs \
+    the tests; a problem comes back as an error for you to fix.";
+
+/// The tool that copies an installed app into the run's workspace, under `ProposeApp` (spec
+/// section 15): a change must keep the active version's migrations byte for byte, and only the
+/// dot that wrote an app still has its folder.
+pub const COPY_TOOL: &str = "copy_app";
+
+pub const COPY_DESCRIPTION: &str = "Copy an installed app's active version, as Dots keeps it, \
+    into a new folder of your workspace, to change it there and send it back with propose_app. \
+    Keep its migrations exactly as they are and add new ones after them.";
+
+/// `copy_app`'s arguments.
+pub fn copy_properties() -> Value {
+    json!({
+        "app": { "type": "string", "description": "The app's name" },
+        "path": { "type": "string", "description": "A new folder, relative to your workspace" }
+    })
+}
+
+pub const COPY_REQUIRED: [&str; 2] = ["app", "path"];
+
+/// `copy_app` as Dots' own `dots` MCP server lists it.
+pub fn copy_mcp_schema() -> Value {
+    json!({
+        "name": COPY_TOOL,
+        "description": COPY_DESCRIPTION,
+        "inputSchema": {
+            "type": "object", "properties": copy_properties(), "required": COPY_REQUIRED
+        }
+    })
+}
 
 /// The tool's arguments.
 pub fn properties() -> Value {
@@ -108,6 +140,19 @@ pub struct ToolSummary {
     pub writes: bool,
 }
 
+/// The tools of `manifest` as the card and the Apps screen list them.
+pub fn tool_summaries(manifest: &super::manifest::Manifest) -> Vec<ToolSummary> {
+    manifest
+        .tools
+        .iter()
+        .map(|t| ToolSummary {
+            name: t.name.clone(),
+            description: t.description.clone(),
+            writes: t.writes,
+        })
+        .collect()
+}
+
 /// What the card's summary shows.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProposalSummary {
@@ -123,6 +168,10 @@ pub struct ProposalSummary {
     pub migrations: Vec<String>,
     /// The version a change was checked against; `None` for a new app.
     pub update_from: Option<u32>,
+    /// Data a removed app of this name kept that fits this new app's migrations: the card
+    /// offers to start on it (spec section 10).
+    #[serde(default)]
+    pub kept_data: Option<super::kept::KeptOffer>,
 }
 
 /// An app a dot proposed, and what the person decided.
@@ -153,6 +202,8 @@ pub struct AppProposal {
 pub enum Decision {
     /// "Add to library", or "Update" for a change.
     Add,
+    /// "Add to library" on the kept data the card offered.
+    AddWithKeptData,
     /// "Ask for changes": the text continues the dot's thread.
     AskForChanges {
         text: String,
@@ -237,6 +288,7 @@ impl Apps {
             .map_err(said)?
             .map_err(said)?;
         let name = src.manifest.name.clone();
+        let mut kept_data = None;
         let (base, migrations) = match self.get(&name).await {
             Ok((item, config)) => {
                 let current = self.load(&item, &config).await.map_err(said)?;
@@ -249,10 +301,13 @@ impl Apps {
                     .collect();
                 (Some((item.id, config.version)), newer)
             }
-            Err(Error::NotFound(_)) => (
-                None,
-                src.migrations.iter().map(|m| m.file.clone()).collect(),
-            ),
+            Err(Error::NotFound(_)) => {
+                kept_data = self.kept_fit(&src).await.map_err(said)?;
+                (
+                    None,
+                    src.migrations.iter().map(|m| m.file.clone()).collect(),
+                )
+            }
             Err(e) => return Err(said(e)),
         };
         let checked = src.clone();
@@ -275,22 +330,14 @@ impl Apps {
         let summary = ProposalSummary {
             title: src.manifest.title.clone(),
             description: src.manifest.description.clone(),
-            tools: src
-                .manifest
-                .tools
-                .iter()
-                .map(|t| ToolSummary {
-                    name: t.name.clone(),
-                    description: t.description.clone(),
-                    writes: t.writes,
-                })
-                .collect(),
+            tools: tool_summaries(&src.manifest),
             permissions: src.manifest.permissions.clone(),
             tests: report,
             files: files.len(),
             bytes: files.values().map(|b| b.len() as u64).sum(),
             migrations,
             update_from: base.as_ref().map(|(_, v)| *v),
+            kept_data,
         };
         let id = crate::util::new_id();
         let dir = self.proposed_dir(&id);
@@ -328,13 +375,26 @@ impl Apps {
     }
 
     /// "Add to library" or "Update" for the pending proposal `p`: a new app at version 1, its
-    /// switches off, or the next version of the app it changes. A change whose app has moved
-    /// on since it was checked is a `Conflict`.
-    pub async fn accept(&self, p: &AppProposal) -> Result<LibraryItem> {
+    /// switches off, on the kept data the card offered when `on_kept`, or the next version of
+    /// the app it changes. A change whose app has moved on since it was checked is a
+    /// `Conflict`.
+    pub async fn accept(&self, p: &AppProposal, on_kept: bool) -> Result<LibraryItem> {
+        if on_kept && p.base_version.is_some() {
+            return Err(Error::Invalid(
+                "kept data is offered only to a new app".into(),
+            ));
+        }
         let dir = self.proposed_dir(&p.id);
         let src = blocking(move || source::read_folder(&dir)).await??;
         let Some(base) = p.base_version else {
-            return self.install(src, AppOrigin::Proposed).await;
+            return match (on_kept, &p.summary.kept_data) {
+                (false, _) => self.install(src, AppOrigin::Proposed).await,
+                (true, Some(kept)) => self.install_kept(src, &kept.id).await,
+                (true, None) => Err(Error::Invalid(format!(
+                    "no kept data was offered for the app {}",
+                    p.app_name
+                ))),
+            };
         };
         let Some(app_id) = p.app_id.as_deref() else {
             return Err(Error::Other(format!(
@@ -356,8 +416,98 @@ impl Apps {
         }
     }
 
-    /// Deletes a decided proposal's files.
+    /// `copy_app`: writes the files of the app `name`'s active version, as its version folder
+    /// holds them, into `folder` (already confined to the run `run_id`'s workspace), which must
+    /// be new or empty. `shown` is the folder as the dot named it. The write is judged first as
+    /// the run's dot policy judges a `Write` of `<folder>/app.json`, so the dot copies only where
+    /// it may write. A failure part way leaves nothing this call made. `Ok` is what the dot is
+    /// told; `Err` the problem, in a sentence for the dot.
+    pub async fn copy_to(
+        &self,
+        run_id: &str,
+        name: &str,
+        folder: PathBuf,
+        shown: &str,
+    ) -> std::result::Result<String, String> {
+        let run = self.store.get_run(run_id).await.map_err(said)?;
+        let dot = self.store.get_dot(&run.dot_id).await.map_err(said)?;
+        // `folder` is confined, so canonical (on Windows with a verbatim prefix): judge the path
+        // below the workspace, as a model names a file in its own workspace.
+        let workspace = run.workspace_path.as_deref().map(std::path::Path::new);
+        let target = folder.join("app.json");
+        let target = workspace.and_then(|ws| {
+            let canonical = std::fs::canonicalize(ws).ok();
+            let rel = |ws: &std::path::Path| target.strip_prefix(ws).ok().map(PathBuf::from);
+            canonical.as_deref().and_then(rel).or_else(|| rel(ws))
+        });
+        let allowed = target.is_some_and(|target| {
+            let write = json!({ "file_path": target.to_string_lossy() });
+            dot.spec.policy.resolve_in("Write", &write, workspace) == Action::Allow
+        });
+        if !allowed {
+            return Err(format!(
+                "your rules do not let you write to {shown}, so the app cannot be copied there"
+            ));
+        }
+        let (item, config) = match self.get(name).await {
+            Ok(found) => found,
+            Err(Error::NotFound(_)) => return Err(format!("there is no app {name}")),
+            Err(e) => return Err(said(e)),
+        };
+        let src = self.load(&item, &config).await.map_err(said)?;
+        let in_use = format!("the folder {shown} is not empty: copy the app into a new folder");
+        let is_file = format!("{shown} is a file: copy the app into a new folder");
+        blocking(move || -> std::result::Result<(), String> {
+            if folder.is_file() {
+                return Err(is_file);
+            }
+            if let Ok(mut entries) = std::fs::read_dir(&folder) {
+                if entries.next().is_some() {
+                    return Err(in_use);
+                }
+            }
+            // What this call makes, in order: the folders that were missing (the folder itself
+            // when it was new) and the files it wrote.
+            let mut made: Vec<PathBuf> = Vec::new();
+            let written = (|| -> std::io::Result<()> {
+                for (path, bytes) in src.files() {
+                    let file = folder.join(path);
+                    if let Some(parent) = file.parent() {
+                        let mut missing = Vec::new();
+                        let mut up = Some(parent);
+                        while let Some(dir) = up.filter(|d| !d.exists()) {
+                            missing.push(dir.to_path_buf());
+                            up = dir.parent();
+                        }
+                        made.extend(missing.into_iter().rev());
+                        std::fs::create_dir_all(parent)?;
+                    }
+                    made.push(file.clone());
+                    std::fs::write(file, bytes)?;
+                }
+                Ok(())
+            })();
+            if let Err(e) = written {
+                for path in made.iter().rev() {
+                    let _ = std::fs::remove_file(path).or_else(|_| std::fs::remove_dir(path));
+                }
+                return Err(e.to_string());
+            }
+            Ok(())
+        })
+        .await
+        .map_err(said)??;
+        Ok(format!(
+            "Copied version {} of the app {name} into {shown}. Change it there, keep its \
+             migrations as they are and add new ones after them, then send the whole folder \
+             with propose_app.",
+            config.version
+        ))
+    }
+
+    /// Deletes a decided proposal's files, and closes its previews.
     pub async fn drop_proposed(&self, id: &str) {
+        self.previews.close_proposal(id);
         let dir = self.proposed_dir(id);
         let _ = blocking(move || std::fs::remove_dir_all(dir)).await;
     }

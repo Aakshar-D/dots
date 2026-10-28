@@ -163,9 +163,10 @@ impl Session {
             out.extend(tools::checkins::schemas());
             out.extend(tools::memory::schemas());
         }
-        // `propose_app` (app library spec section 6.2), when the engine has apps.
+        // `propose_app` and `copy_app` (app library spec section 6.2), when the engine has apps.
         if self.apps.is_some() {
             out.push(super::app_tools::propose_schema());
+            out.push(super::app_tools::copy_schema());
         }
         // The run's app tools (app library spec section 6), by their own names.
         if let Some(apps) = self.ctx.tools.apps() {

@@ -16,7 +16,7 @@ import {
 import { BrowserCall } from "@/components/BrowserCall";
 import { Markdown } from "@/components/Markdown";
 import { StatusBadge } from "@/components/StatusBadge";
-import { isActive } from "@/lib/home-topics";
+import { appTitle, isActive } from "@/lib/home-topics";
 import { localDateTime, localTime } from "@/lib/format";
 import { mcpToolLabel } from "@/lib/mcp-tool";
 import { keys } from "@/lib/query";
@@ -41,6 +41,13 @@ const TRIGGER: Record<Run["trigger"], string> = {
   workflow: "Workflow step",
   watcher: "Watcher run",
 };
+
+/// What a run's header says started it; an app-started run names its app (app library spec
+/// section 7).
+export function runTrigger(run: Pick<Run, "trigger" | "payload">): string {
+  const title = appTitle(run);
+  return title === null ? TRIGGER[run.trigger] : `Started by ${title}`;
+}
 
 /// What the person wrote, for a chat run: an answer to a question as they typed it, not the
 /// words Dots wraps it in for the dot.
@@ -96,9 +103,11 @@ function WatcherLine({ run }: { run: Run }) {
   return <p className="mb-2 text-xs text-muted-foreground">{title}</p>;
 }
 
-/// The message a follow-up run carries: what the dot scheduled itself to do.
+/// The message a follow-up run carries: what the dot scheduled itself to do; and the message an
+/// app started a run with.
 function FollowUpLine({ run }: { run: Run }) {
-  if (run.trigger !== "follow_up" || typeof run.payload !== "object" || run.payload === null) {
+  const carries = run.trigger === "follow_up" || run.trigger === "app";
+  if (!carries || typeof run.payload !== "object" || run.payload === null) {
     return null;
   }
   const message = (run.payload as Record<string, unknown>).message;
@@ -359,7 +368,7 @@ export function Transcript(props: {
   // get "(2)", "(3)" so that their names differ.
   const seen = new Map<string, number>();
   const names = props.runs.map((run) => {
-    const name = `${TRIGGER[run.trigger]}, ${localDateTime(run.queued_at)}`;
+    const name = `${runTrigger(run)}, ${localDateTime(run.queued_at)}`;
     const n = (seen.get(name) ?? 0) + 1;
     seen.set(name, n);
     return n === 1 ? name : `${name} (${n})`;
@@ -376,7 +385,7 @@ export function Transcript(props: {
         return (
           <section key={run.id} aria-label={names[i]}>
             <header className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
-              <span>{TRIGGER[run.trigger]}</span>
+              <span>{runTrigger(run)}</span>
               <span>{localDateTime(run.queued_at)}</span>
               {many && <StatusBadge status={run.status} />}
             </header>

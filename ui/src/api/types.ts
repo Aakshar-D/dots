@@ -588,6 +588,9 @@ export const Inbox = z.strictObject({
   watchers: z.array(PausedWatcher),
   // Background runs held for Claude usage, oldest first.
   held: z.array(HeldRun),
+  // Apps dots sent for review that wait for the person, newest first. Lazy: the proposal's
+  // schema is declared with the apps, below.
+  app_reviews: z.array(z.lazy(() => PendingAppReview)),
 });
 
 // The Library (MCP/skills spec section 2 and 9). `${VAR}` in a server's config stays a
@@ -681,11 +684,27 @@ export const TestResult = z.strictObject({
   error: nullable(z.string()),
 });
 export const ProposalStatus = z.enum(["pending", "added", "changes_asked", "discarded"]);
+// Data a removed app of the same name kept that fits a new app's migrations: the review card
+// offers to start on it.
+export const KeptOffer = z.strictObject({
+  id: z.string(),
+  title: z.string(),
+  removed_at: z.string(),
+  bytes: z.number(),
+  // The new app's migrations that would run on it.
+  migrations: z.array(z.string()),
+});
+// A tool of an app, as a review card and the Apps screen list it.
+export const ToolSummary = z.strictObject({
+  name: z.string(),
+  description: z.string(),
+  writes: z.boolean(),
+});
 // What a review card's summary shows.
 export const ProposalSummary = z.strictObject({
   title: z.string(),
   description: z.string(),
-  tools: z.array(z.strictObject({ name: z.string(), description: z.string(), writes: z.boolean() })),
+  tools: z.array(ToolSummary),
   // Empty for "Nothing".
   permissions: z.array(Permission),
   tests: z.strictObject({ results: z.array(TestResult) }),
@@ -695,6 +714,7 @@ export const ProposalSummary = z.strictObject({
   migrations: z.array(z.string()),
   // The version a change was checked against; null for a new app.
   update_from: nullable(z.number()),
+  kept_data: nullable(KeptOffer),
 });
 // An app a dot proposed, and what the person decided (app library spec section 6.2).
 export const AppProposal = z.strictObject({
@@ -713,9 +733,18 @@ export const AppProposal = z.strictObject({
   created_at: z.string(),
   decided_at: nullable(z.string()),
 });
+// An app proposal that waits for the person, as the Inbox lists it.
+export const PendingAppReview = z.strictObject({
+  dot_id: z.string(),
+  dot_name: z.string(),
+  proposal: AppProposal,
+});
+export type PendingAppReview = z.infer<typeof PendingAppReview>;
 // The person's answer on a review card.
 export const ProposalDecision = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("add") }),
+  // "Add to library" on the kept data the card offered.
+  z.strictObject({ kind: z.literal("add_with_kept_data") }),
   z.strictObject({ kind: z.literal("ask_for_changes"), text: z.string() }),
   z.strictObject({ kind: z.literal("discard") }),
 ]);
@@ -1259,8 +1288,21 @@ export const AppRow = z.strictObject({
   dots: z.array(z.string()),
   // Why its code cannot be read: it is left out of runs until it can.
   error: nullable(z.string()),
+  // The tools its screen may call; none while its code cannot be read.
+  tools: z.array(ToolSummary),
+  // What it asks to reach outside its data: "start_dots" for "Can start dots".
+  permissions: z.array(Permission),
 });
 export type AppRow = z.infer<typeof AppRow>;
+// Data a removed app kept (app library spec section 10).
+export const KeptData = z.strictObject({
+  id: z.string(),
+  name: z.string(),
+  title: z.string(),
+  removed_at: z.string(),
+  bytes: z.number(),
+});
+export type KeptData = z.infer<typeof KeptData>;
 export type AppFile = z.infer<typeof AppFile>;
 export type AppCall = z.infer<typeof AppCall>;
 export type AppProposal = z.infer<typeof AppProposal>;

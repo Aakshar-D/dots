@@ -1,0 +1,2 @@
+CREATE TABLE probes (probe TEXT PRIMARY KEY, reached INTEGER NOT NULL, detail TEXT NOT NULL,
+  at TEXT NOT NULL);

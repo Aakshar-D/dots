@@ -1,4 +1,7 @@
-//! Test stand-in for `claude -p --output-format stream-json`. Used only by dots-core tests.
+//! Test stand-in for `claude -p --output-format stream-json`. Used by dots-core tests, and by
+//! smokes of a debug Dots: Dots gives the CLI only the variables it keeps (`vault::child_env`),
+//! so a smoke names the script in `CLAUDE_CODE_FAKE_SCRIPT`, which it keeps, in place of
+//! `FAKE_CLAUDE_SCRIPT`.
 
 use std::io::{Read, Write};
 use std::path::Path;
@@ -170,7 +173,9 @@ async fn main() {
         std::fs::write(out, record.to_string()).unwrap();
     }
     let session = flag(&args, "--resume").unwrap_or_else(|| "fake-session".to_string());
-    let script: Vec<Value> = match std::env::var("FAKE_CLAUDE_SCRIPT") {
+    let named =
+        std::env::var("FAKE_CLAUDE_SCRIPT").or_else(|_| std::env::var("CLAUDE_CODE_FAKE_SCRIPT"));
+    let script: Vec<Value> = match named {
         Ok(p) => serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap(),
         Err(_) => default_script(),
     };

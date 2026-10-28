@@ -26,6 +26,8 @@ use super::source::{AppSource, Migration, TESTS_DIR};
 
 /// The longest one test file may run, its calls included.
 pub const FILE_TIME_LIMIT: Duration = Duration::from_secs(10);
+/// The longest an app's test files may run together: a file past it does not run.
+pub const TOTAL_TIME_LIMIT: Duration = Duration::from_secs(60);
 /// The most tests one file may hold.
 pub const MAX_TESTS: usize = 500;
 /// `ctx.now` of a call whose options name none.
@@ -152,15 +154,37 @@ impl TestReport {
 /// Runs every test file of `src` (spec section 9, item 4). Blocks: call it from
 /// `spawn_blocking`.
 pub fn run_tests(src: &AppSource) -> TestReport {
-    run_tests_within(src, FILE_TIME_LIMIT)
+    run_tests_bounded(src, FILE_TIME_LIMIT, TOTAL_TIME_LIMIT)
 }
 
 /// `run_tests`, each file bounded by `limit` (tests).
 pub fn run_tests_within(src: &AppSource, limit: Duration) -> TestReport {
+    run_tests_bounded(src, limit, TOTAL_TIME_LIMIT)
+}
+
+/// `run_tests`, each file bounded by `limit` and all of them by `total`: a file starts with
+/// what is left of `total`, and once nothing is left the files after it fail without running.
+pub fn run_tests_bounded(src: &AppSource, limit: Duration, total: Duration) -> TestReport {
+    let started = Instant::now();
     let mut results = Vec::new();
     for (name, code) in &src.tests {
         let file = format!("{TESTS_DIR}/{name}");
-        results.extend(run_file(src, &file, code, limit));
+        let left = total.saturating_sub(started.elapsed());
+        if left.is_zero() {
+            results.push(TestResult {
+                file: file.clone(),
+                name: String::new(),
+                passed: false,
+                error: Some(format!(
+                    "{file} did not run: the app's tests ran past {} s in all",
+                    total.as_secs_f32()
+                )),
+            });
+            continue;
+        }
+        // A file that starts with less than its own limit is stopped by the total, and says so.
+        let cut = (left < limit).then_some(total);
+        results.extend(run_file(src, &file, code, limit.min(left), cut));
     }
     TestReport { results }
 }
@@ -173,7 +197,13 @@ struct Bench {
     starts: Vec<Start>,
 }
 
-fn run_file(src: &AppSource, file: &str, code: &str, limit: Duration) -> Vec<TestResult> {
+fn run_file(
+    src: &AppSource,
+    file: &str,
+    code: &str,
+    limit: Duration,
+    cut_by: Option<Duration>,
+) -> Vec<TestResult> {
     let failed = |name: &str, error: String| TestResult {
         file: file.to_string(),
         name: bounded(name.to_string(), MAX_NAME),
@@ -267,7 +297,12 @@ fn run_file(src: &AppSource, file: &str, code: &str, limit: Duration) -> Vec<Tes
         // Every test the file did not finish fails with what stopped it.
         Err(stop) => {
             let stop = match stop {
-                Failure::TimedOut => format!("the tests ran over {} s", limit.as_secs_f32()),
+                Failure::TimedOut => match cut_by {
+                    Some(total) => {
+                        format!("the app's tests ran past {} s in all", total.as_secs_f32())
+                    }
+                    None => format!("the tests ran over {} s", limit.as_secs_f32()),
+                },
                 other => other.to_string(),
             };
             let done = results.len();

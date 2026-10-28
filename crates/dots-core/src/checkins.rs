@@ -415,6 +415,14 @@ pub(crate) fn continuation(
     new
 }
 
+/// What a reply or a chat message is told while an app the person accepted in the thread is
+/// being added (`Runtime::decide_app_proposal`).
+pub const DECIDING: &str = "Dots is still adding the app you accepted in this chat; send your \
+                            message again in a moment";
+
+/// What the Add button is told when the thread is already adding an app.
+pub const ADDING: &str = "Dots is still adding this app; wait until it has finished";
+
 /// The refusal of a reply to a thread that has not ended, in the words `Runtime::chat` gives.
 pub fn thread_busy(status: RunStatus) -> Error {
     Error::Conflict(
@@ -476,6 +484,9 @@ impl CheckIns {
         // Held until the new run is stored, as `Runtime::chat` holds it.
         let lock = self.follow_ups.thread_lock();
         let _one_at_a_time = lock.lock().await;
+        if self.follow_ups.deciding(&asked.root_run_id) {
+            return Err(Error::Conflict(DECIDING.into()));
+        }
         let thread = self.store.list_thread(&asked.root_run_id).await?;
         if let Some(active) = thread.iter().find(|r| !r.status.is_terminal()) {
             return Err(thread_busy(active.status));
