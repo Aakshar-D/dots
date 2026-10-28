@@ -122,6 +122,15 @@ impl FakeOpenBao {
         );
     }
 
+    /// Writes the org's signed roster text, as key `DOTS_ROSTER` of `<mount>/<path>/roster`.
+    pub fn put_roster(&self, mount: &str, path: &str, signed: &str) {
+        self.put(
+            mount,
+            &format!("{path}/roster"),
+            json!({ "DOTS_ROSTER": signed }),
+        );
+    }
+
     /// Deletes the KV v2 secret `<mount>/<path>`: reading it is a 404.
     pub fn remove(&self, mount: &str, path: &str) {
         self.fake().kv.remove(&format!("{mount}/data/{path}"));

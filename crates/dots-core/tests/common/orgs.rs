@@ -11,6 +11,7 @@ use std::time::Duration as StdDuration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
+use dots_core::accounts::roster_envelope;
 use dots_core::store::Store;
 use dots_core::vault::org::{
     envelope, http_client_with_timeout, BaoAuth, Fetched, JoinCode, OpenBaoSettings, OrgSummary,
@@ -63,6 +64,25 @@ pub fn sign(keys: &KeyPair, policy: &str) -> String {
         .unwrap()
         .to_string();
     envelope(policy, &signature)
+}
+
+/// The signed text of `roster`, as `dots-admin roster sign` writes it.
+pub fn sign_roster(keys: &KeyPair, roster: &str) -> String {
+    let signature = minisign::sign(Some(&keys.pk), &keys.sk, Cursor::new(roster), None, None)
+        .unwrap()
+        .to_string();
+    roster_envelope(roster, &signature)
+}
+
+/// A roster for `org_id` at `seq` with `members` (a JSON list, each naming a real Dots ID and
+/// the `default` workspace) and the `default` workspace, which every roster needs.
+pub fn roster(org_id: &str, seq: u64, members: Value) -> String {
+    json!({
+        "v": 1, "org_id": org_id, "issued_at": "2026-10-28T09:00:00Z", "seq": seq,
+        "workspaces": [{"id": "default", "name": "Default"}],
+        "members": members
+    })
+    .to_string()
 }
 
 /// A policy for `org_id` issued at `issued_at`: the defaults, with `extra`'s fields over them.
@@ -268,6 +288,7 @@ impl Scripted {
                 .map(|(k, v)| (k.to_string(), Zeroizing::new(v.to_string())))
                 .collect(),
             policy: signed.to_string(),
+            roster: None,
         }));
     }
 

@@ -179,6 +179,63 @@ async fn a_login_then_a_read_give_the_entries_and_the_policy() {
 }
 
 #[tokio::test]
+async fn reads_roster_when_present() {
+    let fake = seeded().await;
+    fake.put_roster(PROJECT, ENV, PATH, "signed-roster-5b2e");
+    let fetched = infisical(settings(&fake)).fetch(&creds()).await.unwrap();
+    assert_eq!(fetched.roster.as_deref(), Some("signed-roster-5b2e"));
+    assert_eq!(fetched.policy, POLICY);
+    assert_eq!(names(&fetched), ["API_KEY", "LOG_LEVEL"]);
+    // The roster sits beside the policy: no extra request.
+    assert_eq!(read_paths(&fake), ["/dots", "/dots/policy"]);
+}
+
+#[tokio::test]
+async fn no_roster_is_none() {
+    let fake = seeded().await;
+    let fetched = infisical(settings(&fake)).fetch(&creds()).await.unwrap();
+    assert_eq!(fetched.roster, None);
+}
+
+#[tokio::test]
+async fn roster_is_not_an_entry() {
+    let fake = seeded().await;
+    fake.put_roster(PROJECT, ENV, PATH, "signed-roster-5b2e");
+    fake.put_secret(PROJECT, ENV, PATH, "DOTS_ROSTER", json!("stray"));
+    fake.put_secret(PROJECT, ENV, PATH, "dots_roster", json!("stray"));
+    let fetched = infisical(settings(&fake)).fetch(&creds()).await.unwrap();
+    assert_eq!(names(&fetched), ["API_KEY", "LOG_LEVEL"]);
+    assert_eq!(fetched.roster.as_deref(), Some("signed-roster-5b2e"));
+}
+
+#[tokio::test]
+async fn a_roster_that_is_empty_not_text_or_hidden_is_invalid() {
+    let cases = [
+        (
+            json!({ "secretKey": "DOTS_ROSTER", "secretValue": "" }),
+            "DOTS_ROSTER is not text",
+        ),
+        (
+            json!({ "secretKey": "DOTS_ROSTER", "secretValue": NUMBER }),
+            "DOTS_ROSTER is not text",
+        ),
+        (
+            json!({ "secretKey": "DOTS_ROSTER", "type": "shared" }),
+            "DOTS_ROSTER has no value",
+        ),
+    ];
+    for (secret, why) in cases {
+        let fake = seeded().await;
+        fake.put_raw(PROJECT, ENV, "/dots/policy", secret);
+        let e = infisical(settings(&fake))
+            .fetch(&creds())
+            .await
+            .unwrap_err();
+        assert_eq!(invalid(e), why);
+    }
+}
+
+#[tokio::test]
 async fn the_root_folder_reads_its_policy_from_slash_policy() {
     let fake = FakeInfisical::start().await;
     seed(&fake, "/");

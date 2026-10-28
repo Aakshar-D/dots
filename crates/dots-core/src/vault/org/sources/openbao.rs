@@ -16,8 +16,8 @@ use tokio::sync::Mutex;
 use zeroize::Zeroizing;
 
 use super::{
-    collect_entries, endpoint, path_segments, read_json, request_failed, status_failed, Fetched,
-    Field, Source, SourceCreds, SourceError, POLICY_ENTRY,
+    collect_entries, endpoint, path_segments, read_json, request_failed, roster_text,
+    status_failed, Fetched, Field, Source, SourceCreds, SourceError, POLICY_ENTRY, ROSTER_ENTRY,
 };
 use crate::vault::org::{BaoAuth, OpenBaoSettings};
 
@@ -78,6 +78,8 @@ struct Reads {
     env_name: String,
     policy: Url,
     policy_name: String,
+    roster: Url,
+    roster_name: String,
 }
 
 #[derive(Deserialize)]
@@ -151,6 +153,8 @@ impl OpenBao {
             env_name: name("env"),
             policy: url("policy")?,
             policy_name: name("policy"),
+            roster: url("roster")?,
+            roster_name: name("roster"),
         })
     }
 
@@ -195,7 +199,7 @@ impl OpenBao {
         Ok(request)
     }
 
-    /// Reads the entries, then the policy, with `token`.
+    /// Reads the entries, then the policy, then the roster if there is one, with `token`.
     async fn read(&self, reads: &Reads, token: &str) -> Result<Fetched, SourceError> {
         let env = self.read_kv(&reads.env, &reads.env_name, token).await?;
         let Some(env) = env else {
@@ -217,9 +221,18 @@ impl OpenBao {
         let Field::Text(mut policy) = policy else {
             return Err(SourceError::Invalid(format!("{POLICY_ENTRY} is not text")));
         };
+        // No secret at `<path>/roster`, or none with the key, is no roster. Any other failure is
+        // the policy read's.
+        let roster = self
+            .read_kv(&reads.roster, &reads.roster_name, token)
+            .await?
+            .and_then(|mut keys| keys.remove(ROSTER_ENTRY))
+            .map(roster_text)
+            .transpose()?;
         Ok(Fetched {
             entries,
             policy: std::mem::take(&mut *policy),
+            roster,
         })
     }
 
