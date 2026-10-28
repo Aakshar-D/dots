@@ -1,10 +1,19 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useIsMutating, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback } from "react";
 
 import { commands } from "@/api/commands";
 import type { CurrentScope, DotOverview, OrgSummary } from "@/api/types";
 import { orgRemoved } from "@/lib/dot-org";
 import { keys } from "@/lib/query";
+
+/// The key of a switch the person picked in the account switcher, so that the home does not
+/// follow a link to another account meanwhile.
+export const accountPickKey = ["account-pick"] as const;
+
+/// Whether a switch the person picked is on its way.
+export function usePickingAccount(): boolean {
+  return useIsMutating({ mutationKey: accountPickKey }) > 0;
+}
 
 /// The account Personal dots belong to, as the scope names it.
 export const PERSONAL = "personal";

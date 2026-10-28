@@ -31,7 +31,8 @@ At the top of the rail is the account switcher. Click it to see **Personal** and
 have joined.
 
 - Pick one and **Home** shows only that account's dots. Your pick is remembered. If a dot was
-  open, Home opens the first dot of the account you picked.
+  open, Home opens the dot you last opened, if it is in the account you picked, or else that
+  account's first dot.
 - A new dot you create starts in the selected account.
 - If you follow a link to a dot in another account, Dots switches to that account for you.
 - Next to each account the menu shows how many things are waiting for you there.

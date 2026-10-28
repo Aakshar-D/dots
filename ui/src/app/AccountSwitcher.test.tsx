@@ -17,8 +17,13 @@ const row = (org_id: string | null, needs_you: number): DotOverview => ({
 function setup(account = "personal") {
   backend.on("identity_get", () => ({ ...sample.identity, name: "Ada Lovelace" }));
   backend.on("org_list", () => [acme, design]);
+  // The core keeps the account picked, and answers a switch late, as real IPC can.
   backend.on("scope_get", () => ({ account, workspace: "default" }));
-  backend.on("scope_set", (args) => ({ account: String(args.account), workspace: "default" }));
+  backend.on("scope_set", async (args) => {
+    await new Promise((r) => setTimeout(r, 200));
+    account = String(args.account);
+    return { account, workspace: "default" };
+  });
   backend.on("dot_overview", () => [row(null, 0), row("acme-eng", 2)]);
   return renderApp("/home");
 }
@@ -47,10 +52,11 @@ describe("the account switcher", () => {
     const { user } = setup();
     await user.click(await screen.findByRole("button", { name: /^Account:/ }));
     await user.click(await screen.findByRole("menuitemradio", { name: /Acme Engineering/ }));
-    await waitFor(() =>
-      expect(backend.callsTo("scope_set")).toEqual([{ account: "acme-eng", workspace: "default" }]),
-    );
     expect(screen.queryByRole("menu")).toBeNull();
+    await screen.findByRole("button", { name: "Account: Acme Engineering" }, { timeout: 3000 });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(backend.callsTo("scope_set")).toEqual([{ account: "acme-eng", workspace: "default" }]);
+    expect(screen.getByRole("button", { name: "Account: Acme Engineering" })).toBeVisible();
   });
 
   it("counts what waits in an account that is not the current one", async () => {

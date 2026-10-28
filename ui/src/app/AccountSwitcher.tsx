@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { cn } from "cn";
 import { Check } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -8,7 +8,13 @@ import { commands } from "@/api/commands";
 import type { OrgSummary } from "@/api/types";
 import { notifyError } from "@/lib/notify";
 import { keys } from "@/lib/query";
-import { PERSONAL, useCurrentScope, useSwitchAccount, waitingByAccount } from "@/lib/scope";
+import {
+  accountPickKey,
+  PERSONAL,
+  useCurrentScope,
+  useSwitchAccount,
+  waitingByAccount,
+} from "@/lib/scope";
 import { ORG_TONE } from "@/screens/Accounts";
 
 /// Up to two initials of `name`; "?" when it is blank.
@@ -36,6 +42,7 @@ export function AccountSwitcher() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const switchAccount = useSwitchAccount();
+  const pick = useMutation({ mutationKey: accountPickKey, mutationFn: switchAccount });
   const scope = useCurrentScope();
   const identity = useQuery({ queryKey: keys.identity, queryFn: commands.identityGet }).data;
   // The joined accounts are read when the menu opens, or to name an org already chosen; what
@@ -92,7 +99,7 @@ export function AccountSwitcher() {
     // list; the scope is loaded again first, so the home picks from the new account's dots.
     const onHome = pathname === "/home" || pathname.startsWith("/home/");
     const changed = id !== currentId;
-    switchAccount(id).then(() => {
+    pick.mutateAsync(id).then(() => {
       if (onHome && changed) navigate("/home", { replace: true });
     }, notifyError);
   }
