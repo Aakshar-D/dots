@@ -583,6 +583,27 @@ export const ToolsChanged = z.strictObject({
   // The dots of that scope that use it.
   dots: z.array(DotRef),
 });
+// Instructions a dot proposed for itself, and what the person decided (conversational chat
+// spec section 4). `base` is the dot's instructions when it proposed.
+export const InstructionStatus = z.enum(["pending", "approved", "rejected", "replaced"]);
+export const InstructionProposal = z.strictObject({
+  id: z.string(),
+  dot_id: z.string(),
+  run_id: z.string(),
+  root_run_id: z.string(),
+  base: z.string(),
+  instructions: z.string(),
+  reason: z.string(),
+  status: InstructionStatus,
+  answer_run_id: nullable(z.string()),
+  created_at: z.string(),
+  decided_at: nullable(z.string()),
+});
+export const PendingInstructions = z.strictObject({
+  proposal: InstructionProposal,
+  dot_name: z.string(),
+});
+
 export const Inbox = z.strictObject({
   approvals: z.array(PendingApproval),
   review_runs: z.array(ReviewRun),
@@ -594,6 +615,8 @@ export const Inbox = z.strictObject({
   watchers: z.array(PausedWatcher),
   // Background runs held for Claude usage, oldest first.
   held: z.array(HeldRun),
+  // Instructions dots proposed that wait for the person, newest first.
+  instructions: z.array(PendingInstructions),
 });
 
 // The Library (MCP/skills spec section 2 and 9). `${VAR}` in a server's config stays a
@@ -1253,6 +1276,8 @@ export type NeedsAttention = z.infer<typeof NeedsAttention>;
 export type DotRef = z.infer<typeof DotRef>;
 export type ToolsChanged = z.infer<typeof ToolsChanged>;
 export type Inbox = z.infer<typeof Inbox>;
+export type InstructionProposal = z.infer<typeof InstructionProposal>;
+export type PendingInstructions = z.infer<typeof PendingInstructions>;
 export type McpServerConfig = z.infer<typeof McpServerConfig>;
 export type SkillConfig = z.infer<typeof SkillConfig>;
 export type PluginConfig = z.infer<typeof PluginConfig>;

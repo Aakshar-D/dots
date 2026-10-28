@@ -1119,6 +1119,12 @@
       "policy_invalid",
       "org_removed"
     ],
+    "InstructionStatus": [
+      "pending",
+      "approved",
+      "rejected",
+      "replaced"
+    ],
     "LibraryKind": [
       "mcp_server",
       "skill",
@@ -1361,6 +1367,24 @@
         "trigger": "schedule"
       }
     ],
+    "instructions": [
+      {
+        "dot_name": "shopper",
+        "proposal": {
+          "answer_run_id": null,
+          "base": "Order the usual groceries.",
+          "created_at": "2026-10-09T12:00:00.000Z",
+          "decided_at": null,
+          "dot_id": "01J0DOT",
+          "id": "01J0INS",
+          "instructions": "Order the usual groceries.\nIf an item is out of stock, buy the closest brand and say so in the summary.",
+          "reason": "Buy the closest brand when an item is out of stock.",
+          "root_run_id": "01J0RUN",
+          "run_id": "01J0RUN",
+          "status": "pending"
+        }
+      }
+    ],
     "review_runs": [
       {
         "base_commit": "0123abcd",
@@ -1428,6 +1452,60 @@
       "name": "pdf-tools",
       "scope": "user",
       "version": "1.2.0"
+    }
+  ],
+  "InstructionProposal": [
+    {
+      "answer_run_id": null,
+      "base": "Order the usual groceries.",
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "decided_at": null,
+      "dot_id": "01J0DOT",
+      "id": "01J0INS0",
+      "instructions": "Order the usual groceries.\nIf an item is out of stock, buy the closest brand and say so in the summary.",
+      "reason": "Buy the closest brand when an item is out of stock.",
+      "root_run_id": "01J0RUN",
+      "run_id": "01J0RUN",
+      "status": "pending"
+    },
+    {
+      "answer_run_id": "01J0RUN2",
+      "base": "Order the usual groceries.",
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "decided_at": "2026-10-09T12:00:00.000Z",
+      "dot_id": "01J0DOT",
+      "id": "01J0INS1",
+      "instructions": "Order the usual groceries.\nIf an item is out of stock, buy the closest brand and say so in the summary.",
+      "reason": "Buy the closest brand when an item is out of stock.",
+      "root_run_id": "01J0RUN",
+      "run_id": "01J0RUN",
+      "status": "approved"
+    },
+    {
+      "answer_run_id": "01J0RUN2",
+      "base": "Order the usual groceries.",
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "decided_at": "2026-10-09T12:00:00.000Z",
+      "dot_id": "01J0DOT",
+      "id": "01J0INS2",
+      "instructions": "Order the usual groceries.\nIf an item is out of stock, buy the closest brand and say so in the summary.",
+      "reason": "Buy the closest brand when an item is out of stock.",
+      "root_run_id": "01J0RUN",
+      "run_id": "01J0RUN",
+      "status": "rejected"
+    },
+    {
+      "answer_run_id": null,
+      "base": "Order the usual groceries.",
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "decided_at": "2026-10-09T12:00:00.000Z",
+      "dot_id": "01J0DOT",
+      "id": "01J0INS3",
+      "instructions": "Order the usual groceries.\nIf an item is out of stock, buy the closest brand and say so in the summary.",
+      "reason": "Buy the closest brand when an item is out of stock.",
+      "root_run_id": "01J0RUN",
+      "run_id": "01J0RUN",
+      "status": "replaced"
     }
   ],
   "JoinPreview": [

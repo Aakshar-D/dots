@@ -97,6 +97,13 @@ pub struct InstructionProposal {
     pub decided_at: Option<String>,
 }
 
+/// A proposal that waits for the person, as the Inbox lists it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PendingInstructions {
+    pub proposal: InstructionProposal,
+    pub dot_name: String,
+}
+
 /// The run may propose instructions: a run of a topic the person started with a message they
 /// typed, not a workflow step's.
 pub async fn may_propose(store: &Store, run: &Run) -> Result<bool> {

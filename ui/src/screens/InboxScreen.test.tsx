@@ -19,16 +19,18 @@ const failedRun = {
   error: "timeout",
 };
 
-/// An Inbox as a test writes it: without paused watchers or held runs unless it says so.
-type InboxSpec = Omit<Inbox, "watchers" | "held"> & Partial<Pick<Inbox, "watchers" | "held">>;
+/// An Inbox as a test writes it: without paused watchers, held runs or proposed instructions
+/// unless it says so.
+type InboxSpec = Omit<Inbox, "watchers" | "held" | "instructions"> &
+  Partial<Pick<Inbox, "watchers" | "held" | "instructions">>;
 
 /// An inbox the test can empty, the way a decision or a review does.
 function inbox(initial: InboxSpec) {
-  let current: Inbox = { watchers: [], held: [], ...initial };
+  let current: Inbox = { watchers: [], held: [], instructions: [], ...initial };
   backend.on("inbox", () => current);
   return {
     set: (next: InboxSpec) => {
-      current = { watchers: [], held: [], ...next };
+      current = { watchers: [], held: [], instructions: [], ...next };
     },
   };
 }
@@ -135,7 +137,7 @@ describe("the Inbox", () => {
         attention: [],
         tools_changed: [],
         watchers: [],
-        held: [],
+        held: [], instructions: [],
       };
     });
 
@@ -528,7 +530,7 @@ describe("the approvals of one run", () => {
     attention: [],
     tools_changed: [],
     watchers: [],
-    held: [],
+    held: [], instructions: [],
   };
   const answered = [approval, second].map((a) => ({ ...sample.approval, id: a.id }));
 
@@ -701,7 +703,7 @@ describe("a schedule that needs attention", () => {
     attention: [],
     tools_changed: [],
     watchers: [],
-    held: [],
+    held: [], instructions: [],
   };
   const only = (attention: Inbox["attention"]): Inbox => ({ ...empty, attention });
   const item = () => screen.findByRole("listitem", { name: `${flagged.dot_name} needs attention` });

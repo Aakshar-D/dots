@@ -547,6 +547,9 @@ pub struct Inbox {
     pub watchers: Vec<PausedWatcher>,
     /// Background runs held for Claude usage, oldest first (usage and limits spec section 5).
     pub held: Vec<HeldRun>,
+    /// Instructions dots proposed that wait for the person, newest first (conversational chat
+    /// spec section 4).
+    pub instructions: Vec<crate::instructions::PendingInstructions>,
 }
 
 /// A queued run held for Claude usage, as the Inbox lists it (usage and limits spec section 5).

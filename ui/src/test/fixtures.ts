@@ -108,7 +108,7 @@ export function installDefaults(): void {
     review_runs: [],
     attention: [],
     tools_changed: [],
-    watchers: [], held: [],
+    watchers: [], held: [], instructions: [],
   }));
   // An approval card asks for these when it shows; by default the core offers no rule.
   backend.on("approval_rule_candidates", () => []);
