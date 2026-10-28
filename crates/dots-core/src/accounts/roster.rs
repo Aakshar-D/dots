@@ -5,7 +5,7 @@
 //!
 //! `{"v":1,"roster":"<roster JSON text>","signature":"<the whole .minisig text>"}`
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chrono::DateTime;
 use serde::{Deserialize, Serialize};
@@ -188,10 +188,17 @@ pub fn parse_roster(text: &str, org_id: &str) -> Result<Roster, RosterError> {
             raw.issued_at
         )));
     }
+    let mut seen_workspaces = HashSet::new();
     for workspace in &raw.workspaces {
         if !is_workspace_id(&workspace.id) {
             return Err(invalid(format!(
                 "workspace id '{}' must be lowercase letters, digits and dashes, up to 32",
+                workspace.id
+            )));
+        }
+        if !seen_workspaces.insert(workspace.id.as_str()) {
+            return Err(invalid(format!(
+                "workspace id '{}' is listed twice",
                 workspace.id
             )));
         }
@@ -209,15 +216,48 @@ pub fn parse_roster(text: &str, org_id: &str) -> Result<Roster, RosterError> {
             }
         }
     }
-    let mut owners: HashMap<&str, &str> = HashMap::new();
-    for member in &raw.members {
+    let mut ids = HashSet::new();
+    let mut emails = HashSet::new();
+    // Which member (by position) holds each key.
+    let mut holders: HashMap<&str, usize> = HashMap::new();
+    for (at, member) in raw.members.iter().enumerate() {
+        if !ids.insert(member.id.as_str()) {
+            return Err(invalid(format!(
+                "member id '{}' is listed twice",
+                member.id
+            )));
+        }
+        if !emails.insert(member.email.as_str()) {
+            return Err(invalid(format!(
+                "email {} is listed for two members",
+                member.email
+            )));
+        }
+        if member.keys.is_empty() {
+            return Err(invalid(format!(
+                "member {} needs at least one key",
+                member.email
+            )));
+        }
         for key in &member.keys {
-            if owners
-                .insert(key.as_str(), member.id.as_str())
-                .is_some_and(|other| other != member.id)
-            {
-                let short: String = key.chars().take(8).collect();
-                return Err(invalid(format!("key {short}… is listed for two members")));
+            if minisign_verify::PublicKey::from_base64(key).is_err() {
+                return Err(invalid(format!(
+                    "member {} has a key that isn't a Dots ID",
+                    member.email
+                )));
+            }
+            match holders.insert(key.as_str(), at) {
+                Some(other) if other == at => {
+                    return Err(invalid(format!(
+                        "member {} lists a key twice",
+                        member.email
+                    )))
+                }
+                Some(_) => {
+                    let short: String = key.chars().take(8).collect();
+                    return Err(invalid(format!("key {short}… is listed for two members")));
+                }
+                None => {}
             }
         }
     }

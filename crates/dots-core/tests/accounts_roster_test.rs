@@ -14,6 +14,11 @@ fn keys() -> KeyPair {
     KeyPair::generate_unencrypted_keypair().unwrap()
 }
 
+/// A new Dots ID, as the roster lists one.
+fn dots_id() -> String {
+    keys().pk.to_base64()
+}
+
 fn sign(keys: &KeyPair, roster: &str) -> String {
     let signature = minisign::sign(Some(&keys.pk), &keys.sk, Cursor::new(roster), None, None)
         .unwrap()
@@ -36,7 +41,7 @@ fn roster_json() -> Value {
             {"id": "default", "name": "Default"},
             {"id": "payments", "name": "Payments", "use": {"allow": ["STRIPE_*"], "deny": []}}
         ],
-        "members": [member("01A", "asha@acme.com", "owner", "RWQowner0000000000")]
+        "members": [member("01A", "asha@acme.com", "owner", &dots_id())]
     })
 }
 
@@ -199,16 +204,65 @@ fn a_member_cannot_name_a_missing_workspace() {
     );
 }
 
+fn push_member(r: &mut Value, m: Value) {
+    r["members"].as_array_mut().unwrap().push(m);
+}
+
 #[test]
 fn a_key_belongs_to_one_member() {
     let mut r = roster_json();
-    r["members"].as_array_mut().unwrap().push(member(
-        "01B",
-        "ben@acme.com",
-        "member",
-        "RWQowner0000000000",
-    ));
-    assert_eq!(invalid(&r), "key RWQowner… is listed for two members");
+    let key = r["members"][0]["keys"][0].as_str().unwrap().to_string();
+    push_member(&mut r, member("01B", "ben@acme.com", "member", &key));
+    let short: String = key.chars().take(8).collect();
+    assert_eq!(
+        invalid(&r),
+        format!("key {short}… is listed for two members")
+    );
+}
+
+#[test]
+fn a_repeated_member_id_cannot_share_a_key() {
+    let mut r = roster_json();
+    let key = r["members"][0]["keys"][0].as_str().unwrap().to_string();
+    push_member(&mut r, member("01A", "ben@acme.com", "viewer", &key));
+    assert_eq!(invalid(&r), "member id '01A' is listed twice");
+}
+
+#[test]
+fn an_email_belongs_to_one_member() {
+    let mut r = roster_json();
+    push_member(&mut r, member("01B", "asha@acme.com", "member", &dots_id()));
+    assert_eq!(invalid(&r), "email asha@acme.com is listed for two members");
+}
+
+#[test]
+fn a_workspace_id_is_listed_once() {
+    let mut r = roster_json();
+    r["workspaces"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id": "payments", "name": "Again"}));
+    assert_eq!(invalid(&r), "workspace id 'payments' is listed twice");
+}
+
+#[test]
+fn a_member_needs_real_keys() {
+    let mut r = roster_json();
+    r["members"][0]["keys"] = json!([]);
+    assert_eq!(invalid(&r), "member asha@acme.com needs at least one key");
+    r["members"][0]["keys"] = json!(["RWQnotakey"]);
+    assert_eq!(
+        invalid(&r),
+        "member asha@acme.com has a key that isn't a Dots ID"
+    );
+}
+
+#[test]
+fn a_key_is_listed_once_per_member() {
+    let mut r = roster_json();
+    let key = r["members"][0]["keys"][0].clone();
+    r["members"][0]["keys"] = json!([key, key]);
+    assert_eq!(invalid(&r), "member asha@acme.com lists a key twice");
 }
 
 #[test]
@@ -246,18 +300,12 @@ fn an_unknown_role_or_version_is_refused() {
 #[test]
 fn member_with_key_finds_member() {
     let mut r = roster_json();
-    r["members"].as_array_mut().unwrap().push(member(
-        "01B",
-        "ben@acme.com",
-        "member",
-        "RWQben000000000000",
-    ));
+    let ben = dots_id();
+    push_member(&mut r, member("01B", "ben@acme.com", "member", &ben));
     let roster = parse_roster(&r.to_string(), ORG).unwrap();
     assert_eq!(
-        roster
-            .member_with_key("RWQben000000000000")
-            .map(|m| m.email.as_str()),
+        roster.member_with_key(&ben).map(|m| m.email.as_str()),
         Some("ben@acme.com")
     );
-    assert!(roster.member_with_key("RWQnobody").is_none());
+    assert!(roster.member_with_key(&dots_id()).is_none());
 }
