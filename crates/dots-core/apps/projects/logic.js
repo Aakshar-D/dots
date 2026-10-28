@@ -7,6 +7,10 @@ const ONLY_PERSON_DONE = "Only the person marks a task Done; set In review";
 const RECENT_ACTIVITY = 20;
 /// The tasks list_tasks gives when it is not told how many.
 const LIST_LIMIT = 100;
+/// The most bytes of JSON list_tasks gives a dot: a dot's result is bounded at 30 KB.
+const DOT_LIST_BYTES = 28000;
+/// The most characters of a spec an Activity row shows, before and after.
+const ACTIVITY_SPEC = 200;
 
 const fail = (message) => {
   throw new Error(message);
@@ -15,6 +19,29 @@ const one = (ctx, sql, params) => ctx.db.query(sql, params)[0] ?? null;
 const exec = (ctx, sql, params) => ctx.db.exec(sql, params);
 const json = (value) => (value === undefined ? null : JSON.stringify(value));
 const parse = (text) => (text === null ? null : JSON.parse(text));
+
+/// The bytes of `text` in UTF-8.
+function utf8Bytes(text) {
+  let n = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if (c < 0x80) n += 1;
+    else if (c < 0x800) n += 2;
+    // Each half of a surrogate pair counts 2: the pair is 4 bytes.
+    else if (c >= 0xd800 && c <= 0xdfff) n += 2;
+    else n += 3;
+  }
+  return n;
+}
+
+/// A spec as an Activity row shows it: its first characters, followed by "…" when it is longer.
+function shortSpec(text) {
+  if (typeof text !== "string" || text.length <= ACTIVITY_SPEC) return text;
+  // A cut between the halves of a surrogate pair would leave half a character.
+  const high = text.charCodeAt(ACTIVITY_SPEC - 1);
+  const end = high >= 0xd800 && high <= 0xdbff ? ACTIVITY_SPEC - 1 : ACTIVITY_SPEC;
+  return `${text.slice(0, end)}…`;
+}
 
 function trimmed(text, what) {
   const t = text.trim();
@@ -326,15 +353,19 @@ function taskOut(task, dots) {
   };
 }
 
+/// An Activity row as a tool gives it. A spec change shows the start of the spec before and after,
+/// so that a task's Activity stays within a dot's result bound; undo reads the row itself.
 function activityOut(r) {
+  const spec = r.kind === "change" && r.field === "spec";
+  const shown = (text) => (spec ? shortSpec(parse(text)) : parse(text));
   return {
     id: r.id,
     at: r.at,
     actor: { kind: r.actor_kind, dot_id: r.actor_dot_id, name: r.actor_name },
     kind: r.kind,
     field: r.field,
-    before: parse(r.before_json),
-    after: parse(r.after_json),
+    before: shown(r.before_json),
+    after: shown(r.after_json),
     text: r.text,
     run_id: r.run_id,
     undone_by: r.undone_by,
@@ -435,13 +466,21 @@ export function list_tasks(input, ctx) {
     [...params, limit + 1],
   );
   const dots = ctx.dots.list();
-  return {
-    tasks: rows.slice(0, limit).map((t) => ({
-      ...taskOut(t, dots),
-      subtasks: { done: t.subtasks_done, total: t.subtasks_total },
-    })),
-    more: rows.length > limit,
-  };
+  const tasks = rows.slice(0, limit).map((t) => ({
+    ...taskOut(t, dots),
+    subtasks: { done: t.subtasks_done, total: t.subtasks_total },
+  }));
+  if (!isDot(ctx)) return { tasks, more: rows.length > limit };
+  // A dot's result is bounded: its list stops before its JSON would pass DOT_LIST_BYTES, and
+  // says there are more. The person's screen is not bounded this way.
+  let bytes = utf8Bytes(JSON.stringify({ tasks: [], more: false }));
+  let fits = 0;
+  for (const t of tasks) {
+    bytes += utf8Bytes(JSON.stringify(t)) + (fits > 0 ? 1 : 0);
+    if (bytes > DOT_LIST_BYTES) break;
+    fits++;
+  }
+  return { tasks: tasks.slice(0, fits), more: fits < tasks.length || rows.length > limit };
 }
 
 export function get_task({ id, activity }, ctx) {

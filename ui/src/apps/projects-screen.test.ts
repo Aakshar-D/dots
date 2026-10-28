@@ -268,6 +268,50 @@ describe("Projects' screen", () => {
     );
   });
 
+  it("an add-row draft stays with its project", async () => {
+    const home = {
+      id: "p2",
+      name: "Home",
+      position: 2,
+      sections: [{ id: "s3", name: "To do", position: 1 }],
+    };
+    const fake = sample({
+      list_projects: () => [website, home],
+      list_tasks: () => ({ tasks: [], more: false }),
+    });
+    const user = await show(fake);
+    await user.click(screen.getByRole("button", { name: "● Website relaunch" }));
+    await user.type(screen.getByRole("textbox", { name: "Add a task to To do" }), "Website only");
+    await user.click(screen.getByRole("button", { name: "● Home" }));
+    await waitFor(() => expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Home"));
+    expect(screen.getByRole("textbox", { name: "Add a task to To do" })).toHaveValue("");
+  });
+
+  it("a list that loads again after a failure no longer shows the error", async () => {
+    let fail = true;
+    const fake = sample({
+      list_tasks: () => {
+        if (fail) throw new Error("the list is down");
+        return { tasks: [landlord], more: false };
+      },
+      update_task: () => {
+        throw new Error("There is no task t4");
+      },
+    });
+    const user = await show(fake);
+    expect(screen.getByRole("alert")).toHaveTextContent("the list is down");
+    fail = false;
+    fake.change();
+    expect(await screen.findByRole("row", { name: "Call the landlord" })).toBeVisible();
+    expect(screen.queryByRole("alert")).toBeNull();
+    // A refusal of the person's change stays until their next one, across loads.
+    await user.click(screen.getByRole("button", { name: "Mark Call the landlord done" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("There is no task t4");
+    fake.change();
+    await waitFor(() => expect(fake.callsTo("list_tasks")).toHaveLength(4));
+    expect(screen.getByRole("alert")).toHaveTextContent("There is no task t4");
+  });
+
   it("opening another project starts at the top of its list", async () => {
     const other = { id: "p2", name: "Home", position: 2, sections: [] };
     const fake = sample({ list_projects: () => [website, other] });

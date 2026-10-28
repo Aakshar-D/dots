@@ -49,7 +49,7 @@
     },
     {
       "name": "list_tasks",
-      "description": "Tasks without their spec, filtered. assignee: \"me\" (you), \"person\", or a dot's id or name. view: \"my_tasks\" (the person's tasks and unassigned to-dos) or \"assigned_to_dots\". due_before: YYYY-MM-DD. At most limit tasks (100 by default); more says whether there are others.",
+      "description": "Tasks without their spec, filtered. assignee: \"me\" (you), \"person\", or a dot's id or name. view: \"my_tasks\" (the person's tasks and unassigned to-dos) or \"assigned_to_dots\". due_before: YYYY-MM-DD. At most limit tasks (100 by default), and for you at most about 28 KB of them; more: true means there are more. With many tasks, filter by status (and project_id or assignee) rather than reading them all.",
       "input": {
         "type": "object",
         "properties": {
@@ -65,7 +65,7 @@
     },
     {
       "name": "get_task",
-      "description": "A task with its spec, subtasks and recent activity (the last 20 rows, or the last activity rows)",
+      "description": "A task with its spec, subtasks and recent activity (the last 20 rows, or the last activity rows); a spec change in the activity shows the first 200 characters of the spec before and after",
       "input": {
         "type": "object",
         "properties": {

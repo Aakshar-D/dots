@@ -216,3 +216,47 @@ test("a comment is an Activity row; get_task gives the last 20 rows, oldest firs
 test("list_dots gives the dots that use Projects", () => {
   assert.deepEqual(call("list_dots", {}, { dots }), dots);
 });
+
+test("a dot's list of many tasks stays within the result bound and says there are more", () => {
+  const { s } = project();
+  for (let i = 0; i < 150; i++) {
+    call("create_task", { title: `Task ${i} `.padEnd(200, "x"), section_id: s.id });
+  }
+  const listed = call("list_tasks", {}, as(builder));
+  const size = JSON.stringify(listed).length;
+  assert.ok(size <= 28000, `the dot's list is ${size} characters`);
+  assert.ok(listed.tasks.length > 0);
+  assert.equal(listed.more, true);
+  // The person's calls (the screen) give every row up to the limit.
+  const person = call("list_tasks", {});
+  assert.equal(person.tasks.length, 100);
+  assert.equal(person.more, true);
+  const all = call("list_tasks", { limit: 1000 });
+  assert.equal(all.tasks.length, 150);
+  assert.equal(all.more, false);
+});
+
+test("a task's Activity after many spec edits stays within the result bound", () => {
+  const first = "Lorem ipsum dolor sit amet. ".repeat(143).slice(0, 4000);
+  const t = call("create_task", { title: "Signup form", spec: first });
+  const specs = [first];
+  for (let i = 1; i <= 10; i++) {
+    specs.push(`${first} edit ${i}`);
+    call("update_task", { id: t.id, spec: specs[i] });
+  }
+  const got = call("get_task", { id: t.id }, as(builder));
+  const size = JSON.stringify(got).length;
+  assert.ok(size <= 30720, `the dot's task is ${size} characters`);
+  assert.equal(got.spec, specs[10]);
+  const rows = got.activity.filter((r) => r.field === "spec");
+  assert.equal(rows.length, 10);
+  for (const r of rows) {
+    assert.equal(typeof r.before, "string");
+    assert.equal(typeof r.after, "string");
+    assert.ok(r.before.length <= 201 && r.after.length <= 201, "a spec row is shortened");
+  }
+  assert.equal(rows[0].before, `${first.slice(0, 200)}…`);
+  // Undo reads the database, not this output: the whole previous spec comes back.
+  call("undo", { activity_id: rows[9].id });
+  assert.equal(call("get_task", { id: t.id }).spec, specs[9]);
+});

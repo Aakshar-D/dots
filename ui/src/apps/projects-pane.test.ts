@@ -49,6 +49,12 @@ const detail = (over: Input = {}) => ({
   ...over,
 });
 
+/// get_task of the project's two first tasks: "Write pricing page copy" (t1) and the signup form.
+const two = (input: Input) =>
+  input.id === "t1"
+    ? detail({ id: "t1", title: "Write pricing page copy", activity: [], activity_total: 0 })
+    : detail();
+
 async function opened(more: Parameters<typeof sample>[0] = {}) {
   const fake = sample({ get_task: () => detail(), ...more });
   const user = await show(fake);
@@ -259,6 +265,54 @@ describe("Projects' side pane", () => {
     fireEvent.click(button);
     await waitFor(() => expect(fake.callsTo("get_task")).toHaveLength(2));
     expect(fake.callsTo("comment")).toEqual([{ task_id: "t2", text: "Once" }]);
+  });
+
+  it("a comment typed on one task is not carried to another", async () => {
+    const { fake, user, pane } = await opened({ get_task: two, comment: () => ({ id: "a9" }) });
+    await user.type(within(pane).getByRole("textbox", { name: "Comment" }), "Meant for signup");
+    await user.click(screen.getByRole("button", { name: "Write pricing page copy" }));
+    await waitFor(() => expect(fake.callsTo("get_task")).toHaveLength(2));
+    const other = screen.getByRole("complementary", { name: "Task" });
+    expect(within(other).getByRole("textbox", { name: "Title" })).toHaveValue(
+      "Write pricing page copy",
+    );
+    expect(within(other).getByRole("textbox", { name: "Comment" })).toHaveValue("");
+    await user.click(within(other).getByRole("button", { name: "Comment" }));
+    expect(fake.callsTo("comment")).toEqual([]);
+  });
+
+  it("a title typed on one task does not rename another", async () => {
+    const { fake, user, pane } = await opened({ get_task: two });
+    const title = within(pane).getByRole("textbox", { name: "Title" });
+    await user.clear(title);
+    await user.type(title, "Signup draft");
+    await user.click(screen.getByRole("button", { name: "Write pricing page copy" }));
+    await waitFor(() =>
+      expect(fake.callsTo("get_task").at(-1)).toEqual({ id: "t1", activity: 200 }),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("row", { name: "Write pricing page copy" })).toHaveClass("open"),
+    );
+    const other = screen.getByRole("complementary", { name: "Task" });
+    expect(within(other).getByRole("textbox", { name: "Title" })).toHaveValue(
+      "Write pricing page copy",
+    );
+    // Leaving the field renames the task it was typed on, if any; never the one opened next.
+    expect(fake.callsTo("update_task").filter((c) => c.id !== "t2")).toEqual([]);
+  });
+
+  it("a refused comment keeps its text", async () => {
+    const { fake, user, pane } = await opened({
+      comment: () => {
+        throw new Error("The comment cannot be empty");
+      },
+    });
+    await user.type(within(pane).getByRole("textbox", { name: "Comment" }), "Looks good");
+    await user.click(within(pane).getByRole("button", { name: "Comment" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("The comment cannot be empty");
+    const now = screen.getByRole("complementary", { name: "Task" });
+    expect(within(now).getByRole("textbox", { name: "Comment" })).toHaveValue("Looks good");
+    expect(fake.callsTo("comment")).toEqual([{ task_id: "t2", text: "Looks good" }]);
   });
 
   it("opening and closing a task keeps the list where it was", async () => {

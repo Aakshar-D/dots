@@ -146,6 +146,9 @@ export function mount(root, dots) {
     dots: [],
     tasks: [],
     more: false,
+    // Why the page could not load (cleared by the next load that works), and a refusal of the
+    // person's change (cleared by their next change).
+    loadError: null,
     error: null,
     renaming: null,
     dragging: null,
@@ -174,11 +177,12 @@ export function mount(root, dots) {
       const task = state.open === null ? null : await openTask(state.open);
       if (mine !== loads) return;
       Object.assign(state, { projects, dots: users, tasks: listed.tasks, more: listed.more, task });
+      state.loadError = null;
       // A task deleted meanwhile closes its pane.
       if (task === null) state.open = null;
     } catch (e) {
       if (mine !== loads) return;
-      state.error = String(e?.message ?? e);
+      state.loadError = String(e?.message ?? e);
     }
     draw();
   }
@@ -201,14 +205,15 @@ export function mount(root, dots) {
   }
 
   /// A change made in the side pane, then a load; a refusal shows in the pane. `done` runs when
-  /// the change was accepted, before the load draws.
-  async function paneAct(change, done) {
+  /// the change was accepted, `refused` when it was not, before the load draws.
+  async function paneAct(change, done, refused) {
     state.paneError = null;
     try {
       await change();
       done?.();
     } catch (e) {
       state.paneError = String(e?.message ?? e);
+      refused?.();
     }
     await load();
   }
@@ -236,12 +241,15 @@ export function mount(root, dots) {
   }
 
   /// What the person has typed (a field whose text differs from the one it was drawn with, by its
-  /// accessible name), the field with the focus and its selection, and the scroll offsets.
+  /// accessible name, and whether it is in the side pane), the field with the focus and its
+  /// selection, and the scroll offsets.
   function snapshot() {
     const fields = new Map();
     let focus = null;
     for (const [key, el] of keyed(root)) {
-      if (el.value !== el.defaultValue) fields.set(key, el.value);
+      if (el.value !== el.defaultValue) {
+        fields.set(key, { value: el.value, inPane: el.closest(".pane") !== null });
+      }
       if (el === document.activeElement) {
         focus = { key, start: el.selectionStart, end: el.selectionEnd };
       }
@@ -252,14 +260,18 @@ export function mount(root, dots) {
 
   /// Puts back what `snapshot` noted, in the page just drawn.
   function restore({ fields, focus, scroll }) {
+    // A draft and a scroll offset belong to the view they were made in, and in the side pane to
+    // its task too: another view opens with its own fields empty and its list and column at the
+    // top, another task its pane.
+    const sameView = drawnView === viewNow();
+    const sameTask = sameView && drawnOpen === state.open;
     const now = keyed(root);
     for (const [key, el] of now) {
-      if (fields.has(key)) el.value = fields.get(key);
+      const draft = fields.get(key);
+      if (draft && (draft.inPane ? sameTask : sameView)) el.value = draft.value;
     }
-    // Another view opens its list and column at the top, another task its pane.
-    const sameView = drawnView === viewNow();
     for (const [sel, top] of scroll) {
-      if (!sameView || (sel === ".pane" && drawnOpen !== state.open)) continue;
+      if (sel === ".pane" ? !sameTask : !sameView) continue;
       const el = root.querySelector(sel);
       if (el) el.scrollTop = top;
     }
@@ -365,6 +377,7 @@ export function mount(root, dots) {
       "main",
       { class: "list" },
       h("h1", { text: title() }),
+      state.loadError && h("p", { class: "error", role: "alert", text: state.loadError }),
       state.error && h("p", { class: "error", role: "alert", text: state.error }),
       h(
         "div",
@@ -708,9 +721,17 @@ export function mount(root, dots) {
         onclick: () => {
           const text = box.value.trim();
           if (text === "") return;
-          // Forgotten before the call, so that a second click sends nothing.
+          // Forgotten before the call, so that a second click sends nothing; put back in the box
+          // when the comment is refused, unless the person has typed again or left the task.
           box.value = "";
-          return paneAct(() => dots.call("comment", { task_id: t.id, text }));
+          return paneAct(
+            () => dots.call("comment", { task_id: t.id, text }),
+            null,
+            () => {
+              const now = root.querySelector('.pane textarea[aria-label="Comment"]');
+              if (state.open === t.id && now && now.value === "") now.value = text;
+            },
+          );
         },
       }),
     );
