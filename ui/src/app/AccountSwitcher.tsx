@@ -32,6 +32,7 @@ const ITEM =
 export function AccountSwitcher() {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const scope = useCurrentScope();
@@ -51,7 +52,10 @@ export function AccountSwitcher() {
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
+      if (e.key === "Escape") {
+        setOpen(false);
+        trigger.current?.focus();
+      }
     };
     const onDown = (e: MouseEvent) => {
       if (!root.current?.contains(e.target as Node)) setOpen(false);
@@ -66,7 +70,7 @@ export function AccountSwitcher() {
 
   // Focus the first item when the menu opens, so the keyboard can take it from there.
   useEffect(() => {
-    if (open) root.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+    if (open) root.current?.querySelector<HTMLElement>('[role^="menuitem"]')?.focus();
   }, [open]);
 
   const accounts: Account[] = [
@@ -78,6 +82,7 @@ export function AccountSwitcher() {
 
   function choose(id: string) {
     setOpen(false);
+    trigger.current?.focus();
     commands
       .scopeSet(id, "default")
       .then(() => queryClient.invalidateQueries({ queryKey: keys.scope }), notifyError);
@@ -89,7 +94,7 @@ export function AccountSwitcher() {
   function onMenuKey(e: React.KeyboardEvent) {
     if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
     e.preventDefault();
-    const items = [...(root.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [])];
+    const items = [...(root.current?.querySelectorAll<HTMLElement>('[role^="menuitem"]') ?? [])];
     const at = items.indexOf(document.activeElement as HTMLElement);
     const next = (at + (e.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
     items[next]?.focus();
@@ -98,6 +103,7 @@ export function AccountSwitcher() {
   return (
     <div ref={root} className="relative">
       <button
+        ref={trigger}
         type="button"
         aria-label={`Account: ${currentName}`}
         title={`Account: ${currentName}`}
@@ -128,7 +134,8 @@ export function AccountSwitcher() {
               <button
                 key={a.id}
                 type="button"
-                role="menuitem"
+                role="menuitemradio"
+                aria-checked={a.id === currentId}
                 className={ITEM}
                 onClick={() => choose(a.id)}
               >

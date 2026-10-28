@@ -1,4 +1,4 @@
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import type { DotOverview } from "@/api/types";
@@ -46,5 +46,16 @@ describe("the home follows the current account", () => {
     for (const name of ["mine", "builder", "pixels"]) {
       expect(await within(nav).findByRole("listitem", { name })).toBeVisible();
     }
+  });
+
+  it("switches to the account of a dot opened by link, without redirecting", async () => {
+    backend.on("dot_overview", () => dots);
+    backend.on("scope_get", () => ({ account: "personal", workspace: "default" }));
+    backend.on("scope_set", (args) => ({ account: String(args.account), workspace: "default" }));
+    const { router } = renderApp("/home/dot-builder");
+    await waitFor(() =>
+      expect(backend.callsTo("scope_set")).toEqual([{ account: "acme-eng", workspace: "default" }]),
+    );
+    expect(router.state.location.pathname).toBe("/home/dot-builder");
   });
 });

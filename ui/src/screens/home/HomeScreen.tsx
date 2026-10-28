@@ -1,4 +1,5 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect } from "react";
 import { Link, Navigate, useParams } from "react-router";
 
 import { commands } from "@/api/commands";
@@ -6,7 +7,8 @@ import { ErrorNote } from "@/components/ErrorNote";
 import { Button } from "@/components/ui/button";
 import { sortDots } from "@/lib/dot-status";
 import { keys } from "@/lib/query";
-import { inScope, useCurrentScope } from "@/lib/scope";
+import { notifyError } from "@/lib/notify";
+import { inScope, PERSONAL, useCurrentScope } from "@/lib/scope";
 import { DotPane } from "@/screens/home/DotPane";
 import { DotsColumn } from "@/screens/home/DotsColumn";
 import { lastDot } from "@/screens/home/last-dot";
@@ -34,7 +36,20 @@ export function HomeScreen() {
   const overview = useQuery({ queryKey: keys.overview, queryFn: commands.dotOverview });
   // Home shows the current account's dots; every dot while the scope loads.
   const scope = useCurrentScope();
-  const rows = sortDots(overview.data ?? []).filter((r) => !scope || inScope(r.dot, scope));
+  const all = sortDots(overview.data ?? []);
+  const rows = all.filter((r) => !scope || inScope(r.dot, scope));
+  // A link to a dot of another account (an Inbox "Open") switches to that account and keeps
+  // the route, rather than treating the dot as gone.
+  const outside = dotId === undefined ? undefined : all.find((r) => r.dot.id === dotId);
+  const outsideAccount =
+    outside && !rows.includes(outside) ? (outside.dot.org_id ?? PERSONAL) : undefined;
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    if (outsideAccount === undefined) return;
+    commands
+      .scopeSet(outsideAccount, "default")
+      .then(() => queryClient.invalidateQueries({ queryKey: keys.scope }), notifyError);
+  }, [outsideAccount, queryClient]);
   // A failed reload keeps what was loaded, and the open conversation with what is being typed;
   // only a first load that failed has nothing to show but the error.
   const loaded = overview.data !== undefined;
@@ -51,7 +66,7 @@ export function HomeScreen() {
     pane = open ? <Navigate to={`/home/${open.dot.id}`} replace /> : <EmptyHome />;
   } else if (loaded) {
     const row = rows.find((r) => r.dot.id === dotId);
-    pane = row ? (
+    pane = outsideAccount !== undefined ? null : row ? (
       // An older topic, or the conversation again, opens with its own reply target and scroll.
       <DotPane key={`${row.dot.id}/${rootRunId ?? ""}`} row={row} rootRunId={rootRunId} />
     ) : (

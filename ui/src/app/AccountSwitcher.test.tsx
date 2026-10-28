@@ -35,7 +35,7 @@ describe("the account switcher", () => {
     const { user } = setup();
     await user.click(await screen.findByRole("button", { name: /^Account:/ }));
     const menu = screen.getByRole("menu");
-    const names = within(menu).getAllByRole("menuitem").map((i) => i.textContent);
+    const names = within(menu).getAllByRole("menuitemradio").map((i) => i.textContent);
     expect(names[0]).toContain("Personal");
     expect(names[1]).toContain("Acme Engineering");
     expect(names[2]).toContain("Design");
@@ -46,7 +46,7 @@ describe("the account switcher", () => {
   it("switches to the account picked", async () => {
     const { user } = setup();
     await user.click(await screen.findByRole("button", { name: /^Account:/ }));
-    await user.click(await screen.findByRole("menuitem", { name: /Acme Engineering/ }));
+    await user.click(await screen.findByRole("menuitemradio", { name: /Acme Engineering/ }));
     await waitFor(() =>
       expect(backend.callsTo("scope_set")).toEqual([{ account: "acme-eng", workspace: "default" }]),
     );
@@ -56,14 +56,14 @@ describe("the account switcher", () => {
   it("counts what waits in an account that is not the current one", async () => {
     const { user } = setup();
     await user.click(await screen.findByRole("button", { name: /^Account:/ }));
-    const acmeItem = await screen.findByRole("menuitem", { name: /Acme Engineering/ });
+    const acmeItem = await screen.findByRole("menuitemradio", { name: /Acme Engineering/ });
     await waitFor(() => expect(acmeItem).toHaveTextContent("2"));
   });
 
   it("says when an account is not plainly connected", async () => {
     const { user } = setup();
     await user.click(await screen.findByRole("button", { name: /^Account:/ }));
-    const item = await screen.findByRole("menuitem", { name: /Design/ });
+    const item = await screen.findByRole("menuitemradio", { name: /Design/ });
     expect(item).toHaveTextContent(/waiting for the admin/i);
   });
 
@@ -76,6 +76,19 @@ describe("the account switcher", () => {
     await user.click(screen.getByRole("button", { name: /^Account:/ }));
     await user.click(document.body);
     expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("marks the current account and returns focus to the button", async () => {
+    const { user } = setup("acme-eng");
+    const button = await screen.findByRole("button", { name: /^Account:/ });
+    await user.click(button);
+    expect(await screen.findByRole("menuitemradio", { name: /Acme Engineering/ })).toBeChecked();
+    expect(screen.getByRole("menuitemradio", { name: /Personal/ })).not.toBeChecked();
+    await user.keyboard("{Escape}");
+    expect(button).toHaveFocus();
+    await user.click(button);
+    await user.click(await screen.findByRole("menuitemradio", { name: /Design/ }));
+    expect(button).toHaveFocus();
   });
 
   it("opens Settings at the accounts", async () => {
