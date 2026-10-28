@@ -12,7 +12,9 @@ use dots_core::model::{NewRun, Run, RunStatus, TriggerKind};
 use dots_core::store::Store;
 use dots_core::Error;
 use serde_json::json;
-use tokio::sync::broadcast;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::{broadcast, Mutex};
 
 async fn chat(store: &Store, dot_id: &str, typed: bool) -> Run {
     let mut new = NewRun::new(dot_id, TriggerKind::Chat);
@@ -26,7 +28,8 @@ async fn chat(store: &Store, dot_id: &str, typed: bool) -> Run {
 
 fn proposals(store: &Store) -> (Proposals, broadcast::Receiver<RuntimeEvent>) {
     let (bus, rx) = broadcast::channel(16);
-    (Proposals::new(store.clone(), bus), rx)
+    let thread_lock = Arc::new(Mutex::new(()));
+    (Proposals::new(store.clone(), bus, thread_lock), rx)
 }
 
 fn changed(rx: &mut broadcast::Receiver<RuntimeEvent>) -> Vec<String> {
@@ -121,6 +124,32 @@ async fn only_a_topic_the_person_started_may_propose() {
         .await
         .unwrap()
         .is_empty());
+}
+
+#[tokio::test]
+async fn a_proposal_is_kept_only_under_the_thread_lock() {
+    let (_d, store) = temp_store().await;
+    let dot = store.create_dot(&spec("shopper"), None).await.unwrap();
+    let run = chat(&store, &dot.id, true).await;
+    let (bus, _rx) = broadcast::channel(16);
+    let thread_lock = Arc::new(Mutex::new(()));
+    let p = Proposals::new(store.clone(), bus, thread_lock.clone());
+    // A decision holds the lock: the proposal waits until it is done.
+    let held = thread_lock.lock().await;
+    let sent = tokio::spawn(async move { p.propose(&run.id, "Other.", "Why").await });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!sent.is_finished());
+    assert!(store
+        .list_instruction_proposals(None)
+        .await
+        .unwrap()
+        .is_empty());
+    drop(held);
+    assert_eq!(sent.await.unwrap().unwrap(), SENT);
+    assert_eq!(
+        store.list_instruction_proposals(None).await.unwrap().len(),
+        1
+    );
 }
 
 #[tokio::test]

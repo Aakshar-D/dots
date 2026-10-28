@@ -302,7 +302,11 @@ impl CheckIns {
     pub fn new(store: Store, bus: Bus, follow_ups: Arc<FollowUps>) -> Self {
         Self {
             memories: Memories::new(store.clone(), bus.clone()),
-            instructions: crate::instructions::Proposals::new(store.clone(), bus.clone()),
+            instructions: crate::instructions::Proposals::new(
+                store.clone(),
+                bus.clone(),
+                follow_ups.thread_lock(),
+            ),
             store,
             bus,
             follow_ups,

@@ -1205,7 +1205,8 @@ impl Runtime {
 
     /// The person's answer on a card of instructions a dot proposed (conversational chat spec
     /// section 4). Approving saves them as the editor does (`update_dot`), unless the dot's
-    /// instructions changed since it proposed: that is a `Conflict` and the card waits. Then
+    /// instructions changed since it proposed: that is a `Conflict` and the card waits; if they
+    /// changed to the proposal itself, they are kept as they are and the approval goes on. Then
     /// the proposal is decided and the dot's chat continues with what the person decided, as
     /// for an app proposal (`decide_app_proposal`). A chat that has not ended is refused.
     pub async fn decide_instruction_proposal(
@@ -1228,12 +1229,17 @@ impl Runtime {
         let end = thread.last().unwrap_or(&asked);
         let (status, said) = if approve {
             let dot = self.store.get_dot(&p.dot_id).await?;
-            if dot.spec.instructions.trim() != p.base {
-                return Err(Error::Conflict(STALE.into()));
+            let current = dot.spec.instructions.trim();
+            // Instructions that already say the proposal (the person typed it in the editor)
+            // count as applied: nothing is saved again, and the approval goes on.
+            if current != p.instructions {
+                if current != p.base {
+                    return Err(Error::Conflict(STALE.into()));
+                }
+                let mut spec = dot.spec;
+                spec.instructions = p.instructions.clone();
+                self.update_dot(&p.dot_id, spec).await?;
             }
-            let mut spec = dot.spec;
-            spec.instructions = p.instructions.clone();
-            self.update_dot(&p.dot_id, spec).await?;
             (InstructionStatus::Approved, APPROVED)
         } else {
             (InstructionStatus::Rejected, REJECTED)

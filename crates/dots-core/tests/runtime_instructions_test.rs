@@ -140,6 +140,26 @@ async fn instructions_edited_since_the_proposal_are_not_overwritten() {
 }
 
 #[tokio::test]
+async fn approving_instructions_that_already_say_the_proposal_continues_the_chat() {
+    let t = start(None).await;
+    let (dot_id, chat, id) = proposed(&t, "shopper").await;
+    // The person typed the proposal's text into the editor before approving.
+    let mut edited = t.rt.get_dot(&dot_id).await.unwrap().spec;
+    edited.instructions = "Do the thing twice.\n".into();
+    let saved = t.rt.update_dot(&dot_id, edited).await.unwrap();
+    let (decided, run) = t.rt.decide_instruction_proposal(&id, true).await.unwrap();
+    assert_eq!(decided.status, InstructionStatus::Approved);
+    assert_eq!(decided.answer_run_id.as_deref(), Some(run.id.as_str()));
+    assert_eq!(run.parent_run_id.as_deref(), Some(chat.id.as_str()));
+    assert_eq!(message(&run), APPROVED);
+    // Applied already: they are not saved again.
+    let dot = t.rt.get_dot(&dot_id).await.unwrap();
+    assert_eq!(dot.spec.instructions, "Do the thing twice.\n");
+    assert_eq!(dot.updated_at, saved.updated_at);
+    wait_status(t.rt.store(), &run.id, RunStatus::Succeeded, 15).await;
+}
+
+#[tokio::test]
 async fn a_chat_that_is_still_working_is_not_continued() {
     let t = start(Some(json!([{"sleep_ms": 3000}]))).await;
     let dot =

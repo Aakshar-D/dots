@@ -2,8 +2,11 @@
 //! person's chat it calls `propose_instructions`, Dots keeps the proposal and posts a card, and
 //! the person's answer continues the chat, as a decided app proposal does.
 
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use tokio::sync::Mutex;
 
 use crate::events::{Bus, RuntimeEvent};
 use crate::model::{EngineKind, Run};
@@ -123,11 +126,18 @@ pub async fn may_propose(store: &Store, run: &Run) -> Result<bool> {
 pub struct Proposals {
     store: Store,
     bus: Bus,
+    /// The follow-ups' thread lock (`FollowUps::thread_lock`), which the decisions hold too: a
+    /// proposal never replaces one while it is being approved.
+    thread_lock: Arc<Mutex<()>>,
 }
 
 impl Proposals {
-    pub fn new(store: Store, bus: Bus) -> Self {
-        Self { store, bus }
+    pub fn new(store: Store, bus: Bus, thread_lock: Arc<Mutex<()>>) -> Self {
+        Self {
+            store,
+            bus,
+            thread_lock,
+        }
     }
 
     /// `propose_instructions` for the run `run_id`: checks the text, keeps the proposal in
@@ -157,6 +167,10 @@ impl Proposals {
         if !may_propose(&self.store, &run).await.map_err(said)? {
             return Err(NOT_HERE.to_string());
         }
+        // Held from reading the base until the proposal is kept: a decision of the dot's
+        // waiting proposal (`Runtime::decide_instruction_proposal`) cannot fall in between.
+        // No caller holds it while a run executes, so a run's call never waits on itself.
+        let _one_at_a_time = self.thread_lock.lock().await;
         let dot = self.store.get_dot(&run.dot_id).await.map_err(said)?;
         let base = dot.spec.instructions.trim().to_string();
         if base == instructions {
