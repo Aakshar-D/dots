@@ -542,7 +542,9 @@ async fn an_act_on_a_page_that_moved_away_asks() {
 #[tokio::test]
 async fn a_live_approval_on_a_page_that_moved_is_not_performed() {
     let e = env().await;
-    let dot = dot(&e, &[("Browser(shop.com)", Action::Allow)], 10).await;
+    // Approved as soon as it is asked; the long wait is only room for a slow CI machine,
+    // where 10 s once ran out and the click was queued instead.
+    let dot = dot(&e, &[("Browser(shop.com)", Action::Allow)], 60).await;
     let (_run, browser) = run(&e, &dot).await;
     call(&e, &browser, "browser_snapshot", json!({})).await;
     // The person approves "Pay now" after the page moved on.

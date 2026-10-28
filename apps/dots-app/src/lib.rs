@@ -1,3 +1,4 @@
+pub mod app_frame;
 pub mod autostart;
 pub mod commands;
 pub mod confirm;
@@ -161,9 +162,15 @@ command_list![
     app_remove,
     app_proposals_list,
     app_proposal_files,
+    app_proposal_diff,
     app_proposal_decide,
     instruction_proposals_list,
     instruction_proposal_decide,
+    app_preview_open,
+    app_preview_call,
+    app_preview_close,
+    apps_kept_list,
+    app_kept_delete,
     watchers_list,
     watcher_add,
     watcher_update,
@@ -194,6 +201,18 @@ pub fn show_main(app: &AppHandle) {
 /// `panics_logged`: `run` has installed the panic hook already, so `setup` must not chain a
 /// second one (one line per panic).
 fn setup(app: &AppHandle, panics_logged: bool) -> Result<(), Box<dyn std::error::Error>> {
+    // The main window is made here, not by Tauri, so it starts with `app_frame::browser_args`
+    // (`additionalBrowserArgs` in the config cannot differ between dev and release).
+    let config = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|w| w.label == "main")
+        .ok_or("tauri.conf.json has no main window")?;
+    tauri::WebviewWindowBuilder::from_config(app, config)?
+        .additional_browser_args(&app_frame::browser_args(tauri::is_dev()))
+        .build()?;
     // Without a data folder there is nowhere to log and nothing to start: the error goes to
     // the fatal-error page like any other failed start.
     let data_dir = startup::data_dir(
@@ -308,6 +327,14 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // The pages of the apps' screens (app library spec section 5).
+        .register_asynchronous_uri_scheme_protocol(app_frame::SCHEME, |ctx, request, responder| {
+            let app = ctx.app_handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let rt = state::runtime_of(app.try_state::<AppState>().as_deref());
+                responder.respond(app_frame::respond(rt.as_deref(), &request).await);
+            });
+        })
         .setup(move |app| {
             setup(app.handle(), panics_logged)?;
             Ok(())

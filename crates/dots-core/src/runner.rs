@@ -45,9 +45,15 @@ fn model_tool_name<'a>(tool: &'a str, input: &Value, engine: EngineKind) -> Cow<
     } else if tool == crate::instructions::POLICY_NAME {
         Cow::Borrowed(crate::instructions::model_name(engine))
     } else if tool == crate::apps::PROPOSE_POLICY {
+        // `copy_app` names an app; `propose_app` does not.
+        let name = if input.get("app").is_some() {
+            crate::apps::propose::COPY_TOOL
+        } else {
+            crate::apps::propose::TOOL
+        };
         Cow::Owned(match engine {
-            EngineKind::Claude => format!("mcp__dots__{}", crate::apps::propose::TOOL),
-            EngineKind::Local => crate::apps::propose::TOOL.to_string(),
+            EngineKind::Claude => format!("mcp__dots__{name}"),
+            EngineKind::Local => name.to_string(),
         })
     } else if tool == crate::apps::APP_POLICY {
         let part = |key: &str| input[key].as_str().unwrap_or_default().to_string();

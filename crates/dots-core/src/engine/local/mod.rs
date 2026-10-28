@@ -436,6 +436,9 @@ impl Session {
         if call.name == crate::apps::propose::TOOL {
             return self.propose(&call.input).await;
         }
+        if call.name == crate::apps::propose::COPY_TOOL {
+            return self.copy_app(&call.input).await;
+        }
         if CheckInTool::from_name(call.name).is_some() {
             return match &self.checkins {
                 Some(checkins) => {

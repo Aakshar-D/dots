@@ -49,6 +49,8 @@ pub struct Apps {
     clock: Arc<dyn Clock>,
     /// Announces a run an app started, so the runner starts it (`set_starter`).
     starter: Arc<std::sync::OnceLock<Starter>>,
+    /// The review cards' previews (spec section 6.2).
+    pub(super) previews: super::preview::Previews,
 }
 
 type Starter = Box<dyn Fn(&Run) + Send + Sync>;
@@ -92,6 +94,7 @@ impl Apps {
             cache: Arc::default(),
             clock: Arc::new(SystemClock),
             starter: Arc::default(),
+            previews: Default::default(),
         }
     }
 
@@ -219,27 +222,13 @@ impl Apps {
                  the dot's rules for it as a tool that does not; a new run has the new version"
             ));
         }
-        let dots: Vec<DotRef> = self
-            .store
-            .dots_with_app(&item)
+        let dots = self
+            .listed_dots(&item, &src.manifest)
             .await
-            .map_err(|e| e.to_string())?
-            .into_iter()
-            // A dot the person switched off is neither listed nor woken (spec section 7), as a
-            // webhook or a follow-up does not run it.
-            .filter(|d| d.spec.enabled)
-            .map(|d| DotRef {
-                id: d.id,
-                name: d.spec.name,
-            })
-            .collect();
+            .map_err(|e| e.to_string())?;
         let logged =
             matches!(actor, Actor::Dots) || src.manifest.tool(tool).is_some_and(|t| t.writes);
-        let now = self
-            .clock
-            .now()
-            .with_timezone(&Local)
-            .to_rfc3339_opts(SecondsFormat::Secs, false);
+        let now = self.call_now();
         // Read under the lock, so two calls cannot both spend the hour's last start.
         let start = if config.can_start_dots && src.manifest.can_start_dots() {
             Some(self.start_gate(&item.id).await.map_err(|e| e.to_string())?)
@@ -278,7 +267,12 @@ impl Apps {
                 _ => None,
             };
             let (result, error, ids, changes) = match &ran {
-                Ok(out) => (Some(out.result.clone()), None, out.ids.clone(), out.changes),
+                Ok(out) => (
+                    Some(log_value(out.result.clone())),
+                    None,
+                    out.ids.clone(),
+                    out.changes,
+                ),
                 Err(e) => (None, Some(e.to_string()), Vec::new(), 0),
             };
             let record = AppCall {
@@ -287,7 +281,7 @@ impl Apps {
                 tool: tool.to_string(),
                 actor: actor.clone(),
                 run_id,
-                input: logged_input(input),
+                input: log_value(input),
                 now,
                 ids,
                 result,
@@ -317,6 +311,50 @@ impl Apps {
             }
             Err(e) => Err(e.to_string()),
         }
+    }
+
+    /// The dots that use the app `item` whose code is `manifest`: those that tick it (or all,
+    /// for an "Every dot" app) and whose policy leaves them one of its tools.
+    pub(super) async fn users(
+        &self,
+        item: &LibraryItem,
+        manifest: &crate::apps::manifest::Manifest,
+    ) -> Result<Vec<crate::model::Dot>> {
+        Ok(self
+            .store
+            .dots_with_app(item)
+            .await?
+            .into_iter()
+            .filter(|d| !crate::apps::run::offered_tools(d, manifest).is_empty())
+            .collect())
+    }
+
+    /// What `ctx.dots.list()` gives a call of the app `item`: its users. A dot the person
+    /// switched off is neither listed nor woken (spec section 7), as a webhook or a follow-up
+    /// does not run it.
+    pub(super) async fn listed_dots(
+        &self,
+        item: &LibraryItem,
+        manifest: &crate::apps::manifest::Manifest,
+    ) -> Result<Vec<DotRef>> {
+        Ok(self
+            .users(item, manifest)
+            .await?
+            .into_iter()
+            .filter(|d| d.spec.enabled)
+            .map(|d| DotRef {
+                id: d.id,
+                name: d.spec.name,
+            })
+            .collect())
+    }
+
+    /// A call's `ctx.now`: the clock's time, RFC 3339 with the local offset.
+    pub(super) fn call_now(&self) -> String {
+        self.clock
+            .now()
+            .with_timezone(&Local)
+            .to_rfc3339_opts(SecondsFormat::Secs, false)
     }
 
     /// The folder that holds the apps (`<data>/apps`).
@@ -421,6 +459,18 @@ impl Apps {
     /// its row is stored with both switches off, then its code is written and its migrations run
     /// on a new database. A name the Library has is a `Conflict`. On a failure nothing stays.
     pub async fn install(&self, src: AppSource, origin: AppOrigin) -> Result<LibraryItem> {
+        self.install_on(src, origin, None).await
+    }
+
+    /// `install`, on the data a removal kept in `<data>/apps/<kept>/` when `kept` names it: the
+    /// data moves to the new app before the migrations run, and back on a failure; the kept
+    /// folder goes once the app is in.
+    pub(super) async fn install_on(
+        &self,
+        src: AppSource,
+        origin: AppOrigin,
+        kept: Option<&str>,
+    ) -> Result<LibraryItem> {
         let name = src.manifest.name.clone();
         if self
             .store
@@ -450,16 +500,48 @@ impl Apps {
         let code = self.code_dir(&item.id, 1);
         let data_path = self.data_path(&item.id);
         let app_dir = self.app_dir(&item.id);
+        let kept_dir = kept.map(|id| self.app_dir(id));
         let written = blocking(move || -> Result<()> {
-            write_version(&code, &src)?;
-            let mut conn = data::open(&data_path)?;
-            data::migrate(&mut conn, &src.migrations)?;
-            Ok(())
+            if let Err(e) = write_version(&code, &src) {
+                // The folder holds only code here: the kept data moves in after it.
+                let _ = std::fs::remove_dir_all(&app_dir);
+                return Err(e);
+            }
+            if let Some(from) = &kept_dir {
+                if let Err(e) = crate::apps::kept::move_data(from, &app_dir) {
+                    crate::apps::kept::clear_failed(&app_dir, from);
+                    return Err(e);
+                }
+            }
+            let migrated = data::open(&data_path)
+                .and_then(|mut conn| data::migrate(&mut conn, &src.migrations));
+            match (migrated, &kept_dir) {
+                (Ok(_), Some(from)) => {
+                    // The note goes first, so nothing lists the old folder again.
+                    if let Err(e) = std::fs::remove_file(from.join(crate::apps::kept::REMOVED_FILE))
+                    {
+                        tracing::warn!(app = %name, "the removed app's note could not be deleted: {e}");
+                    }
+                    if let Err(e) = remove_all(from) {
+                        tracing::warn!(app = %name, "the removed app's folder could not be deleted: {e}");
+                    }
+                    Ok(())
+                }
+                (Ok(_), None) => Ok(()),
+                (Err(e), Some(from)) => {
+                    let _ = crate::apps::kept::move_data(&app_dir, from);
+                    crate::apps::kept::clear_failed(&app_dir, from);
+                    Err(e)
+                }
+                (Err(e), None) => {
+                    let _ = std::fs::remove_dir_all(&app_dir);
+                    Err(e)
+                }
+            }
         })
         .await?;
         if let Err(e) = written {
             let _ = self.store.remove_library_item(&item.id).await;
-            let _ = blocking(move || std::fs::remove_dir_all(app_dir)).await;
             return Err(e);
         }
         self.changed(&item.id);
@@ -655,9 +737,11 @@ impl Apps {
 
     /// Removes the app `name` (spec section 10): refused (`Conflict`, naming them) while dots
     /// tick it, unless `confirm`; its code goes, and its data too when `delete_data` (the second
-    /// confirmation). Kept data is found again by nothing: a new app gets a new id.
+    /// confirmation). Data that stays gets a `removed.json`, so the Apps screen lists it and a
+    /// new app of the name may start on it (`kept`). Its topics go: no run of them can reach
+    /// it again.
     pub async fn remove(&self, name: &str, confirm: bool, delete_data: bool) -> Result<()> {
-        let (_held, item, _) = self.get_locked(name).await?;
+        let (_held, item, config) = self.get_locked(name).await?;
         // "Every dot" gives the app to dots that do not name it: they use it too.
         let users = self.store.dots_with_app(&item).await?;
         if !users.is_empty() && !confirm {
@@ -667,9 +751,14 @@ impl Apps {
                 names.join(", ")
             )));
         }
+        let src = self.load(&item, &config).await.ok();
         // The files first: when one cannot be deleted the row stays, and removing again retries.
         let dir = self.app_dir(&item.id);
+        let (app, title) = (item.name.clone(), config.title.clone());
         blocking(move || -> Result<()> {
+            if !delete_data {
+                crate::apps::kept::note_removed(&dir, &app, &title, src.as_deref())?;
+            }
             remove_all(&dir.join("code"))?;
             if delete_data {
                 remove_all(&dir)?;
@@ -677,6 +766,7 @@ impl Apps {
             Ok(())
         })
         .await??;
+        self.store.delete_app_topics(&item.id).await?;
         self.store.remove_library_item(&item.id).await?;
         self.cache
             .lock()
@@ -687,17 +777,17 @@ impl Apps {
     }
 }
 
-/// The most of a call's input the call log keeps, as JSON text.
-const MAX_LOGGED_INPUT: usize = 30 * 1024;
+/// The most of a call's input, and of its result, the call log keeps, as JSON text.
+pub const MAX_LOGGED: usize = 30 * 1024;
 
-/// A call's input as the call log keeps it: whole, or past `MAX_LOGGED_INPUT` its size and its
-/// start.
-fn logged_input(input: Value) -> Value {
+/// A call's input or result as the call log keeps it: whole, or past `MAX_LOGGED` its size and
+/// its start.
+fn log_value(input: Value) -> Value {
     let text = input.to_string();
-    if text.len() <= MAX_LOGGED_INPUT {
+    if text.len() <= MAX_LOGGED {
         return input;
     }
-    let mut at = MAX_LOGGED_INPUT;
+    let mut at = MAX_LOGGED;
     while !text.is_char_boundary(at) {
         at -= 1;
     }
@@ -705,7 +795,7 @@ fn logged_input(input: Value) -> Value {
 }
 
 /// Deletes `path` and all under it; one already gone is not an error.
-fn remove_all(path: &Path) -> Result<()> {
+pub(super) fn remove_all(path: &Path) -> Result<()> {
     match std::fs::remove_dir_all(path) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
         _ => Ok(()),

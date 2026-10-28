@@ -105,6 +105,7 @@
         "bytes": 2048,
         "description": "Logs expenses and totals them by month",
         "files": 7,
+        "kept_data": null,
         "migrations": [
           "0001_expenses.sql"
         ],
@@ -150,6 +151,7 @@
         "bytes": 2048,
         "description": "Logs expenses and totals them by month",
         "files": 7,
+        "kept_data": null,
         "migrations": [
           "0001_expenses.sql"
         ],
@@ -195,6 +197,7 @@
         "bytes": 2048,
         "description": "Logs expenses and totals them by month",
         "files": 7,
+        "kept_data": null,
         "migrations": [
           "0002_category.sql"
         ],
@@ -240,6 +243,61 @@
         "bytes": 2048,
         "description": "Logs expenses and totals them by month",
         "files": 7,
+        "kept_data": null,
+        "migrations": [
+          "0001_expenses.sql"
+        ],
+        "permissions": [
+          "start_dots"
+        ],
+        "tests": {
+          "results": [
+            {
+              "error": null,
+              "file": "tests/expenses.test.js",
+              "name": "a month's total adds its expenses",
+              "passed": true
+            }
+          ]
+        },
+        "title": "Expenses",
+        "tools": [
+          {
+            "description": "Log an expense",
+            "name": "add_expense",
+            "writes": true
+          }
+        ],
+        "update_from": null
+      }
+    },
+    {
+      "answer": null,
+      "answer_run_id": null,
+      "app_id": null,
+      "app_name": "expenses",
+      "base_version": null,
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "decided_at": null,
+      "dot_id": "01J0DOT",
+      "id": "01J0PROP5",
+      "note": "Tracks expenses by month.",
+      "root_run_id": "01J0RUN",
+      "run_id": "01J0RUN",
+      "status": "pending",
+      "summary": {
+        "bytes": 2048,
+        "description": "Logs expenses and totals them by month",
+        "files": 7,
+        "kept_data": {
+          "bytes": 24576,
+          "id": "01J0APP0",
+          "migrations": [
+            "0002_category.sql"
+          ],
+          "removed_at": "2026-10-09T12:00:00.000Z",
+          "title": "Expenses"
+        },
         "migrations": [
           "0001_expenses.sql"
         ],
@@ -296,7 +354,22 @@
         "name": "projects",
         "owner_id": null,
         "updated_at": "2026-10-09T12:00:00.000Z"
-      }
+      },
+      "permissions": [
+        "start_dots"
+      ],
+      "tools": [
+        {
+          "description": "A task with its spec, subtasks and recent activity",
+          "name": "get_task",
+          "writes": false
+        },
+        {
+          "description": "Change a task",
+          "name": "update_task",
+          "writes": true
+        }
+      ]
     },
     {
       "dots": [],
@@ -322,7 +395,9 @@
         "name": "expenses",
         "owner_id": null,
         "updated_at": "2026-10-09T12:00:00.000Z"
-      }
+      },
+      "permissions": [],
+      "tools": []
     }
   ],
   "Approval": {
@@ -523,9 +598,15 @@
     "app_remove",
     "app_proposals_list",
     "app_proposal_files",
+    "app_proposal_diff",
     "app_proposal_decide",
     "instruction_proposals_list",
     "instruction_proposal_decide",
+    "app_preview_open",
+    "app_preview_call",
+    "app_preview_close",
+    "apps_kept_list",
+    "app_kept_delete",
     "watchers_list",
     "watcher_add",
     "watcher_update",
@@ -1327,6 +1408,58 @@
     }
   ],
   "Inbox": {
+    "app_reviews": [
+      {
+        "dot_id": "01J0DOT",
+        "dot_name": "builder",
+        "proposal": {
+          "answer": null,
+          "answer_run_id": null,
+          "app_id": null,
+          "app_name": "expenses",
+          "base_version": null,
+          "created_at": "2026-10-09T12:00:00.000Z",
+          "decided_at": null,
+          "dot_id": "01J0DOT",
+          "id": "01J0PROP",
+          "note": "Tracks expenses by month.",
+          "root_run_id": "01J0RUN",
+          "run_id": "01J0RUN",
+          "status": "pending",
+          "summary": {
+            "bytes": 2048,
+            "description": "Logs expenses and totals them by month",
+            "files": 7,
+            "kept_data": null,
+            "migrations": [
+              "0001_expenses.sql"
+            ],
+            "permissions": [
+              "start_dots"
+            ],
+            "tests": {
+              "results": [
+                {
+                  "error": null,
+                  "file": "tests/expenses.test.js",
+                  "name": "a month's total adds its expenses",
+                  "passed": true
+                }
+              ]
+            },
+            "title": "Expenses",
+            "tools": [
+              {
+                "description": "Log an expense",
+                "name": "add_expense",
+                "writes": true
+              }
+            ],
+            "update_from": null
+          }
+        }
+      }
+    ],
     "approvals": [
       {
         "applied_at": null,
@@ -1537,6 +1670,15 @@
       "org_id": "acme-eng",
       "source_changed": true,
       "source_kind": "openbao"
+    }
+  ],
+  "KeptData": [
+    {
+      "bytes": 24576,
+      "id": "01J0APP0",
+      "name": "expenses",
+      "removed_at": "2026-10-09T12:00:00.000Z",
+      "title": "Expenses"
     }
   ],
   "LibraryConfig": [

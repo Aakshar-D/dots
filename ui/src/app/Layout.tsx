@@ -3,6 +3,7 @@ import { cn } from "cn";
 import {
   House,
   Inbox as InboxIcon,
+  LayoutGrid,
   Library as LibraryIcon,
   Rocket,
   Settings as SettingsIcon,
@@ -23,6 +24,7 @@ import { useActivity } from "@/lib/use-activity";
 const LINKS = [
   { to: "/home", label: "Home", icon: House },
   { to: "/inbox", label: "Inbox", icon: InboxIcon },
+  { to: "/apps", label: "Apps", icon: LayoutGrid },
   { to: "/library", label: "Library", icon: LibraryIcon },
   { to: "/settings", label: "Settings", icon: SettingsIcon },
 ];
@@ -57,18 +59,23 @@ export function Layout() {
         // Proposed instructions wait for the person's answer.
         inbox.instructions.length +
         // Runs held for Claude usage wait as one line, however many.
-        Math.min(inbox.held.length, 1)
+        Math.min(inbox.held.length, 1) +
+        // A waiting app review counts like an approval.
+        inbox.app_reviews.length
       : 0) + (messages ?? []).filter(waits).length;
   // A pending approval or an open question needs the person: the counts take the needs colour
   // (deep-teal spec section 4).
-  const needs = (inbox?.approvals.length ?? 0) > 0 || (messages ?? []).some(isOpenQuestion);
+  const needs =
+    (inbox?.approvals.length ?? 0) > 0 ||
+    (inbox?.app_reviews.length ?? 0) > 0 ||
+    (messages ?? []).some(isOpenQuestion);
   return (
     <div className="flex h-screen bg-background text-sm text-foreground">
       <nav
         aria-label="Main"
         className="flex w-[46px] shrink-0 flex-col items-center gap-1 border-r bg-sidebar py-2 text-sidebar-foreground"
       >
-        {(isPublisher ? [...LINKS.slice(0, 3), RELEASES, LINKS[3]!] : LINKS).map(({ to, label, icon: Icon }) => {
+        {(isPublisher ? [...LINKS.slice(0, -1), RELEASES, LINKS.at(-1)!] : LINKS).map(({ to, label, icon: Icon }) => {
           const count = to === "/inbox" ? waiting : to === "/home" ? unread : 0;
           // The name says the count too, and the tooltip shows it.
           const name = count > 0 ? `${label}, ${count} ${to === "/home" ? "unread" : "waiting"}` : label;

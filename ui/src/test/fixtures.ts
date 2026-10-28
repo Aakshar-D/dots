@@ -108,12 +108,14 @@ export function installDefaults(): void {
     review_runs: [],
     attention: [],
     tools_changed: [],
-    watchers: [], held: [], instructions: [],
+    watchers: [], held: [], instructions: [], app_reviews: [],
   }));
   // No dot proposed instructions.
   backend.on("instruction_proposals_list", () => []);
   // An approval card asks for these when it shows; by default the core offers no rule.
   backend.on("approval_rule_candidates", () => []);
+  // A conversation asks for the dot's app proposals; by default it has none.
+  backend.on("app_proposals_list", () => []);
   backend.on("dot_overview", () => []);
   backend.on("list_dots", () => []);
   backend.on("get_settings", () => sample.settings);

@@ -1,6 +1,15 @@
 const dateTime = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 const timeOfDay = new Intl.DateTimeFormat(undefined, { timeStyle: "short" });
 
+/// A size in bytes as a person reads it: "240 B", "2.4 KB", "1.5 MB".
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${kb < 10 ? kb.toFixed(1) : Math.round(kb)} KB`;
+  const mb = kb / 1024;
+  return `${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB`;
+}
+
 /// An RFC 3339 timestamp in the user's locale and time zone. "" for none; the text itself
 /// when it is not a timestamp.
 export function localDateTime(iso: string | null | undefined): string {

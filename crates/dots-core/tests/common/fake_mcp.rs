@@ -91,7 +91,8 @@ impl FakeMcp {
     /// `protocol` and `auth` over http), `{"http": "GET"|"DELETE", ...}`.
     pub fn log(&self) -> Vec<Value> {
         match std::fs::read_to_string(self.dir.path().join("log.jsonl")) {
-            Ok(text) => text
+            // Only whole lines: the fake may be writing the last one now.
+            Ok(text) => text[..text.rfind('\n').map_or(0, |i| i + 1)]
                 .lines()
                 .map(|l| serde_json::from_str(l).unwrap())
                 .collect(),

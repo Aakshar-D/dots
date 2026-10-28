@@ -48,11 +48,11 @@ describe("the Inbox's messages", () => {
     expect(
       within(group).getByRole("listitem", { name: `Note from ${note.dot_name}` }),
     ).toHaveTextContent("Half the tests pass.");
-    // The seven items (a paused watcher, the held runs and a proposed instruction among them) of
-    // the sample Inbox and the two messages.
+    // The eight items (a paused watcher, the held runs, a proposed instruction and an app to
+    // review among them) of the sample Inbox and the two messages.
     const nav = screen.getByRole("navigation", { name: "Main" });
     await waitFor(() =>
-      expect(within(nav).getByRole("link", { name: /Inbox/ })).toHaveTextContent("9"),
+      expect(within(nav).getByRole("link", { name: /Inbox/ })).toHaveTextContent("10"),
     );
     // A question shown here counts as read; it stays open.
     await waitFor(() => expect(backend.callsTo("message_mark_read")).toEqual([{ id: open.id }]));

@@ -7,6 +7,7 @@ import type {
   HeldRun,
   NeedsAttention,
   PausedWatcher,
+  PendingAppReview,
   PendingInstructions,
   ReviewRun,
   ToolsChanged,
@@ -56,6 +57,32 @@ function ReviewRow({ run }: { run: ReviewRun }) {
         canReview
         canDiscard={run.worktree_exists}
       />
+    </li>
+  );
+}
+
+/// An app a dot sent for review (app library spec section 10). The card, with its preview, waits
+/// in the dot's conversation; the row opens it there.
+function AppReviewRow({ item }: { item: PendingAppReview }) {
+  const { proposal } = item;
+  const { title, update_from: from } = proposal.summary;
+  const what = from === null ? `the app ${title}` : `a change to ${title}`;
+  return (
+    <li
+      aria-label={`${title} to review`}
+      className="flex items-center gap-3 rounded-lg border p-3"
+    >
+      <div className="flex min-w-0 flex-1 flex-col">
+        <span className="font-medium">
+          {item.dot_name} sent {what} for review
+        </span>
+        <span className="truncate text-xs text-muted-foreground">
+          {proposal.note} · {relativeTime(proposal.created_at)}
+        </span>
+      </div>
+      <Button asChild size="sm" variant="outline">
+        <Link to={`/home/${item.dot_id}/${proposal.root_run_id}`}>Open</Link>
+      </Button>
     </li>
   );
 }
@@ -360,6 +387,7 @@ export function InboxScreen() {
     watchers,
     held,
     instructions,
+    app_reviews: reviews,
   } = inbox.data;
   const waiting = (messages.data ?? []).filter(waits);
   if (
@@ -371,14 +399,15 @@ export function InboxScreen() {
     tools.length === 0 &&
     watchers.length === 0 &&
     held.length === 0 &&
-    instructions.length === 0
+    instructions.length === 0 &&
+    reviews.length === 0
   ) {
     return (
       <Page title="Inbox">
         <EmptyState icon={InboxIcon}>
-          Nothing waits for you. Questions and notes from dots, approvals a dot asks for,
-          schedules that need attention, paused watchers and finished runs to review show up
-          here.
+          Nothing waits for you. Questions and notes from dots, approvals a dot asks for, apps
+          sent for review, schedules that need attention, paused watchers and finished runs to
+          review show up here.
         </EmptyState>
       </Page>
     );
@@ -406,6 +435,18 @@ export function InboxScreen() {
           {byRun(approvals).map((group) => (
             <RunApprovalsGroup key={group.runId} group={group} />
           ))}
+        </section>
+      )}
+      {reviews.length > 0 && (
+        <section aria-labelledby="inbox-app-reviews" className="flex flex-col gap-2">
+          <h2 id="inbox-app-reviews" className="font-semibold">
+            Apps to review
+          </h2>
+          <ul className="flex flex-col gap-2">
+            {reviews.map((item) => (
+              <AppReviewRow key={item.proposal.id} item={item} />
+            ))}
+          </ul>
         </section>
       )}
       {instructions.length > 0 && (

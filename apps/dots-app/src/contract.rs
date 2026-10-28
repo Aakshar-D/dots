@@ -1109,6 +1109,8 @@ pub fn samples() -> Value {
                 ),
                 dot_name: "shopper".into(),
             }],
+            // Filled in by `app_samples`, which has a proposal.
+            app_reviews: vec![],
         }),
         // What `library_add` takes and the Library commands answer: a config of every kind and
         // transport, and entries of every kind (a plugin's own server among them).
@@ -1473,13 +1475,35 @@ fn apps_samples(samples: &mut Value) {
             item: library_item("01J0APP", "projects", app_config()),
             dots: vec!["builder".into(), "nightly-tests".into()],
             error: None,
+            tools: vec![
+                ToolSummary {
+                    name: "get_task".into(),
+                    description: "A task with its spec, subtasks and recent activity".into(),
+                    writes: false,
+                },
+                ToolSummary {
+                    name: "update_task".into(),
+                    description: "Change a task".into(),
+                    writes: true,
+                },
+            ],
+            permissions: vec![Permission::StartDots],
         },
         AppRow {
             item: library_item("01J0APP2", "expenses", app_config()),
             dots: vec![],
             error: Some("invalid input: app.json: EOF while parsing an object".into()),
+            tools: vec![],
+            permissions: vec![],
         },
     ]);
+    samples["KeptData"] = to([dots_core::apps::kept::KeptData {
+        id: "01J0APP0".into(),
+        name: "expenses".into(),
+        title: "Expenses".into(),
+        removed_at: TS.into(),
+        bytes: 24_576,
+    }]);
     samples["AppFile"] = to([
         AppFile {
             path: "app.json".into(),
@@ -1543,6 +1567,7 @@ fn apps_samples(samples: &mut Value) {
         bytes: 2_048,
         migrations: vec!["0001_expenses.sql".into()],
         update_from: None,
+        kept_data: None,
     };
     let proposal = |id: &str, status: ProposalStatus| AppProposal {
         id: id.into(),
@@ -1565,12 +1590,26 @@ fn apps_samples(samples: &mut Value) {
     update.base_version = Some(1);
     update.summary.update_from = Some(1);
     update.summary.migrations = vec!["0002_category.sql".into()];
+    let mut on_kept = proposal("01J0PROP5", ProposalStatus::Pending);
+    on_kept.summary.kept_data = Some(dots_core::apps::kept::KeptOffer {
+        id: "01J0APP0".into(),
+        title: "Expenses".into(),
+        removed_at: TS.into(),
+        bytes: 24_576,
+        migrations: vec!["0002_category.sql".into()],
+    });
     samples["AppProposal"] = to([
         proposal("01J0PROP", ProposalStatus::Pending),
         proposal("01J0PROP2", ProposalStatus::ChangesAsked),
         update,
         proposal("01J0PROP4", ProposalStatus::Discarded),
+        on_kept,
     ]);
+    samples["Inbox"]["app_reviews"] = to([PendingAppReview {
+        dot_id: "01J0DOT".into(),
+        dot_name: "builder".into(),
+        proposal: proposal("01J0PROP", ProposalStatus::Pending),
+    }]);
     samples["Enums"]["ProposalStatus"] = to([
         ProposalStatus::Pending,
         ProposalStatus::Added,
