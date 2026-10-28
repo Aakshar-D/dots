@@ -110,6 +110,8 @@ export function installDefaults(): void {
     tools_changed: [],
     watchers: [], held: [], instructions: [],
   }));
+  // No dot proposed instructions.
+  backend.on("instruction_proposals_list", () => []);
   // An approval card asks for these when it shows; by default the core offers no rule.
   backend.on("approval_rule_candidates", () => []);
   backend.on("dot_overview", () => []);

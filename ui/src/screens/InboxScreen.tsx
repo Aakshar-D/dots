@@ -7,6 +7,7 @@ import type {
   HeldRun,
   NeedsAttention,
   PausedWatcher,
+  PendingInstructions,
   ReviewRun,
   ToolsChanged,
 } from "@/api/types";
@@ -14,6 +15,7 @@ import { ApprovalCard } from "@/components/ApprovalCard";
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { EmptyState } from "@/components/EmptyState";
 import { ErrorNote } from "@/components/ErrorNote";
+import { InstructionsCard } from "@/components/InstructionsCard";
 import { MessageCard } from "@/components/MessageCard";
 import { Page } from "@/components/Page";
 import { ReviewActions } from "@/components/ReviewActions";
@@ -313,6 +315,26 @@ function RunApprovalsGroup({ group }: { group: RunApprovals }) {
   );
 }
 
+/// Instructions a dot proposed, with links to its dot and its conversation.
+function InstructionsRow({ item }: { item: PendingInstructions }) {
+  const { proposal, dot_name: dotName } = item;
+  return (
+    <li className="flex flex-col gap-2">
+      <p className="text-xs text-muted-foreground">
+        <Link to={`/dots/${proposal.dot_id}`} className="text-foreground hover:underline">
+          {dotName}
+        </Link>{" "}
+        proposed {relativeTime(proposal.created_at)} ·{" "}
+        {/* The old chat address of the run opens its topic, in the conversation or alone. */}
+        <Link to={`/chat/${proposal.dot_id}/${proposal.run_id}`} className="hover:underline">
+          Open conversation
+        </Link>
+      </p>
+      <InstructionsCard proposal={proposal} dotName={dotName} />
+    </li>
+  );
+}
+
 /// Everything that waits for the user: tool calls to approve, schedules that need attention,
 /// and finished runs to review.
 export function InboxScreen() {
@@ -337,6 +359,7 @@ export function InboxScreen() {
     tools_changed: tools,
     watchers,
     held,
+    instructions,
   } = inbox.data;
   const waiting = (messages.data ?? []).filter(waits);
   if (
@@ -347,7 +370,8 @@ export function InboxScreen() {
     attention.length === 0 &&
     tools.length === 0 &&
     watchers.length === 0 &&
-    held.length === 0
+    held.length === 0 &&
+    instructions.length === 0
   ) {
     return (
       <Page title="Inbox">
@@ -382,6 +406,18 @@ export function InboxScreen() {
           {byRun(approvals).map((group) => (
             <RunApprovalsGroup key={group.runId} group={group} />
           ))}
+        </section>
+      )}
+      {instructions.length > 0 && (
+        <section aria-labelledby="inbox-instructions" className="flex flex-col gap-2">
+          <h2 id="inbox-instructions" className="font-semibold">
+            New instructions
+          </h2>
+          <ul className="flex flex-col gap-2">
+            {instructions.map((item) => (
+              <InstructionsRow key={item.proposal.id} item={item} />
+            ))}
+          </ul>
         </section>
       )}
       {attention.length > 0 && (
