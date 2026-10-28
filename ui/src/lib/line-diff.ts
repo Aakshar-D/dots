@@ -5,10 +5,11 @@ export type DiffLine = { kind: "same" | "added" | "removed"; text: string };
 
 /// The lines of `after` against those of `before`: a longest common subsequence of lines is
 /// kept, what only `before` has is removed and what only `after` has is added, a removal
-/// before the addition that takes its place.
+/// before the addition that takes its place. A line ends at "\n" or "\r\n", so instructions
+/// saved with Windows line ends match the same lines without them.
 export function lineDiff(before: string, after: string): DiffLine[] {
-  const a = before === "" ? [] : before.split("\n");
-  const b = after === "" ? [] : after.split("\n");
+  const a = before === "" ? [] : before.split(/\r?\n/);
+  const b = after === "" ? [] : after.split(/\r?\n/);
   // keep[i][j]: the longest common subsequence of a[i..] and b[j..].
   const keep = Array.from({ length: a.length + 1 }, () => new Array<number>(b.length + 1).fill(0));
   for (let i = a.length - 1; i >= 0; i--) {

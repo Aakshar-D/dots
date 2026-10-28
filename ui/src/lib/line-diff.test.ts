@@ -31,4 +31,11 @@ describe("a line diff of instructions", () => {
       { kind: "added", text: "Then report." },
     ]);
   });
+
+  it("reads Windows line ends as the same lines", () => {
+    expect(lineDiff("Do the thing.\r\nThen report.", "Do the thing.\nThen report.")).toEqual([
+      { kind: "same", text: "Do the thing." },
+      { kind: "same", text: "Then report." },
+    ]);
+  });
 });
