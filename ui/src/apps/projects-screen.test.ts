@@ -238,4 +238,48 @@ describe("Projects' screen", () => {
     fireEvent.drop(row("Pick hosting"));
     expect(fake.callsTo("move_task")).toEqual([]);
   });
+
+  it("two sections with the same name keep their own drafts and focus", async () => {
+    const twins = {
+      ...website,
+      sections: [
+        { id: "s1", name: "To do", position: 1 },
+        { id: "s2", name: "To do", position: 2 },
+      ],
+    };
+    const fake = sample({
+      list_projects: () => [twins],
+      list_tasks: () => ({ tasks: [], more: false }),
+    });
+    const user = await show(fake);
+    await user.click(screen.getByRole("button", { name: "● Website relaunch" }));
+    const boxes = () => screen.getAllByRole("textbox", { name: "Add a task to To do" });
+    await user.type(boxes()[1]!, "Second");
+    fake.change();
+    await waitFor(() => expect(fake.callsTo("list_projects")).toHaveLength(3));
+    expect(boxes()[0]).toHaveValue("");
+    expect(boxes()[1]).toHaveValue("Second");
+    expect(boxes()[1]).toHaveFocus();
+    await user.keyboard("{Enter}");
+    await waitFor(() =>
+      expect(fake.callsTo("create_task")).toEqual([
+        { title: "Second", project_id: "p1", section_id: "s2" },
+      ]),
+    );
+  });
+
+  it("opening another project starts at the top of its list", async () => {
+    const other = { id: "p2", name: "Home", position: 2, sections: [] };
+    const fake = sample({ list_projects: () => [website, other] });
+    const user = await show(fake);
+    await user.click(screen.getByRole("button", { name: "● Website relaunch" }));
+    const list = () => document.querySelector(".list") as HTMLElement;
+    list().scrollTop = 50;
+    fake.change();
+    await waitFor(() => expect(fake.callsTo("list_projects")).toHaveLength(3));
+    expect(list().scrollTop).toBe(50);
+    await user.click(screen.getByRole("button", { name: "● Home" }));
+    await waitFor(() => expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Home"));
+    expect(list().scrollTop).toBe(0);
+  });
 });

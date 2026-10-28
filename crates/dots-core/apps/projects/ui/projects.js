@@ -23,6 +23,20 @@ const PANE_ACTIVITY = 200;
 /// The fields whose text and focus a redraw keeps, and the panes whose scroll it keeps.
 const FIELDS = "input[aria-label], textarea[aria-label]";
 const SCROLLERS = [".list", ".side", ".pane"];
+/// True while `draw` replaces the page: a blur caused by the removal of an input does nothing.
+let drawing = false;
+
+/// The fields of `root`, each with its key: its accessible name and its place among the fields of
+/// that name (two sections can share a name).
+function keyed(root) {
+  const seen = new Map();
+  return [...root.querySelectorAll(FIELDS)].map((el) => {
+    const label = el.getAttribute("aria-label");
+    const n = seen.get(label) ?? 0;
+    seen.set(label, n + 1);
+    return [`${label}#${n}`, el];
+  });
+}
 
 /// An element: `attrs` are attributes, with `on<event>` for listeners and `text` for its text;
 /// a null or false attribute or child is left out.
@@ -225,36 +239,32 @@ export function mount(root, dots) {
   /// accessible name), the field with the focus and its selection, and the scroll offsets.
   function snapshot() {
     const fields = new Map();
-    for (const el of root.querySelectorAll(FIELDS)) {
-      if (el.value !== el.defaultValue) fields.set(el.getAttribute("aria-label"), el.value);
+    let focus = null;
+    for (const [key, el] of keyed(root)) {
+      if (el.value !== el.defaultValue) fields.set(key, el.value);
+      if (el === document.activeElement) {
+        focus = { key, start: el.selectionStart, end: el.selectionEnd };
+      }
     }
-    const active = document.activeElement;
-    const focus =
-      active && root.contains(active) && active.matches(FIELDS)
-        ? {
-            label: active.getAttribute("aria-label"),
-            start: active.selectionStart,
-            end: active.selectionEnd,
-          }
-        : null;
     const scroll = SCROLLERS.map((sel) => [sel, root.querySelector(sel)?.scrollTop ?? 0]);
     return { fields, focus, scroll };
   }
 
   /// Puts back what `snapshot` noted, in the page just drawn.
   function restore({ fields, focus, scroll }) {
-    for (const el of root.querySelectorAll(FIELDS)) {
-      const label = el.getAttribute("aria-label");
-      if (fields.has(label)) el.value = fields.get(label);
+    const now = keyed(root);
+    for (const [key, el] of now) {
+      if (fields.has(key)) el.value = fields.get(key);
     }
-    for (const [sel, top] of scroll) {
-      const el = root.querySelector(sel);
-      if (el) el.scrollTop = top;
+    // Another view or task opens at the top.
+    if (drawnPlace === placeNow()) {
+      for (const [sel, top] of scroll) {
+        const el = root.querySelector(sel);
+        if (el) el.scrollTop = top;
+      }
     }
     if (focus === null) return;
-    const el = [...root.querySelectorAll(FIELDS)].find(
-      (f) => f.getAttribute("aria-label") === focus.label,
-    );
+    const el = now.find(([key]) => key === focus.key)?.[1];
     if (!el) return;
     el.focus();
     try {
@@ -264,12 +274,23 @@ export function mount(root, dots) {
     }
   }
 
+  /// The view and task the page shows, as text.
+  const placeNow = () => JSON.stringify([state.view, state.open]);
+  /// Where the page was drawn last: scroll offsets belong to that place only.
+  let drawnPlace = null;
+
   function draw() {
     const before = snapshot();
-    root.replaceChildren(
-      h("div", { class: "projects" }, side(), list(), state.task && pane(state.task)),
-    );
+    drawing = true;
+    try {
+      root.replaceChildren(
+        h("div", { class: "projects" }, side(), list(), state.task && pane(state.task)),
+      );
+    } finally {
+      drawing = false;
+    }
     restore(before);
+    drawnPlace = placeNow();
     if (state.focus !== null) {
       root.querySelector(`[data-focus="${state.focus}"]`)?.focus();
       state.focus = null;
@@ -376,7 +397,7 @@ export function mount(root, dots) {
         entry(
           { class: "rename", value: g.section.name, "aria-label": `Rename ${g.section.name}`, "data-focus": "rename", onblur: () => {
               // Removing the input blurs it too: only a person leaving it redraws.
-              if (state.renaming === null) return;
+              if (drawing || state.renaming === null) return;
               state.renaming = null;
               draw();
             },
