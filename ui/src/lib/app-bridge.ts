@@ -29,11 +29,12 @@ const Call = z.strictObject({
   tool: z.string(),
   input: z.unknown(),
 });
-/// The page asks to open a run in its conversation (`dots.openRun`).
+/// The page asks to open a run in its conversation (`dots.openRun`). A run's id is a ULID: an
+/// empty one, or one longer than 64 characters, is malformed and ignored like a malformed call.
 const OpenRun = z.strictObject({
   type: z.literal("open_run"),
   id: z.number().int().positive(),
-  run_id: z.string(),
+  run_id: z.string().min(1).max(64),
 });
 
 export type Bridge = {

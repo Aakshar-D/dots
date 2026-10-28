@@ -107,6 +107,31 @@ describe("an app's screen in its frame", () => {
     );
   });
 
+  it("ignores a run to open whose id is empty or longer than 64 characters", async () => {
+    const openRun = vi.fn(async () => {});
+    render(
+      <AppFrame
+        src={appSrc("projects", 1)}
+        title="Projects"
+        tools={[]}
+        call={vi.fn()}
+        openRun={openRun}
+      />,
+    );
+    const { port, got } = load(screen.getByTitle<HTMLIFrameElement>("Projects"));
+    port.postMessage({ type: "open_run", id: 1, run_id: "r".repeat(65) });
+    port.postMessage({ type: "open_run", id: 2, run_id: "" });
+    port.postMessage({ type: "open_run", id: 3, run_id: "r".repeat(64) });
+    await waitFor(() =>
+      expect(got).toContainEqual({ type: "result", id: 3, ok: true, result: null }),
+    );
+    expect(openRun).toHaveBeenCalledTimes(1);
+    expect(openRun).toHaveBeenCalledWith("r".repeat(64));
+    // Like a malformed call, a malformed request is not answered.
+    const answered = got.filter((m) => (m as { type: string }).type === "result");
+    expect(answered.map((m) => (m as { id: number }).id)).toEqual([3]);
+  });
+
   it("sends the theme again when it changes after the page loaded", async () => {
     render(<AppFrame src={appSrc("expenses", 1)} title="Expenses" tools={[]} call={vi.fn()} />);
     const { got } = load(screen.getByTitle<HTMLIFrameElement>("Expenses"));

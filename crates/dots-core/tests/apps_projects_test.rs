@@ -9,9 +9,12 @@ mod llm;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use common::apps::{expenses, write_app};
 use common::{spec, wait_status};
 use dots_core::apps::bundled::PROJECTS;
 use dots_core::apps::call::Actor;
+use dots_core::apps::source::read_folder;
+use dots_core::library::AppOrigin;
 use dots_core::model::{EngineKind, RunStatus, TriggerKind, WorkspaceMode};
 use dots_core::{Config, Error, Runtime};
 use llm::{call as llm_call, messages, text as llm_text, Llm};
@@ -184,10 +187,18 @@ async fn a_dot_given_a_task_reads_it_reports_and_leaves_it_in_review() {
         (builder.id.as_str(), run_id.as_str())
     );
     let other = rt.run_now(&builder.id).await.unwrap();
+    // Another installed app does not open Projects' run: the topic must be its own.
+    let src = tempfile::tempdir().unwrap();
+    write_app(src.path(), &expenses());
+    rt.apps()
+        .install(read_folder(src.path()).unwrap(), AppOrigin::Proposed)
+        .await
+        .unwrap();
     for (app, run) in [
         (PROJECTS, other.id.as_str()),
         (PROJECTS, "nope"),
         ("expenses", run_id.as_str()),
+        ("nothing", run_id.as_str()),
     ] {
         let refused = rt.apps().run_link(app, run).await;
         assert!(

@@ -2,7 +2,7 @@ import { act, fireEvent, screen, waitFor, within } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest";
 
 import type { AppRow, BundledOffer, KeptData } from "@/api/types";
-import { backend } from "@/test/backend";
+import { backend, later } from "@/test/backend";
 import { renderApp } from "@/test/render";
 import contract from "@/api/__fixtures__/contract.json";
 import * as T from "@/api/types";
@@ -276,6 +276,25 @@ describe("Projects, which comes with Dots", () => {
     port.postMessage({ type: "open_run", id: 1, run_id: "r9" });
     await waitFor(() => expect(router.state.location.pathname).toBe("/home/d1/r1"));
     expect(backend.callsTo("app_run_link")).toEqual([{ name: "projects", runId: "r9" }]);
+  });
+
+  it("does not open a run once the person has left the app's screen", async () => {
+    backend.on("apps_list", () => [bundled(true)]);
+    backend.on("apps_kept_list", () => []);
+    const link = later<{ dot_id: string; root_run_id: string }>();
+    backend.on("app_run_link", () => link.answer);
+    const { router } = renderApp("/apps/projects");
+    const frame = await screen.findByTitle<HTMLIFrameElement>("Projects");
+    const post = vi.spyOn(frame.contentWindow!, "postMessage");
+    fireEvent.load(frame);
+    const port = (post.mock.calls[0] as unknown as [unknown, string, MessagePort[]])[2][0]!;
+    port.postMessage({ type: "open_run", id: 1, run_id: "r9" });
+    await waitFor(() => expect(backend.callsTo("app_run_link")).toHaveLength(1));
+    await act(() => router.navigate("/apps"));
+    await screen.findByRole("heading", { name: "Apps", level: 1 });
+    await act(async () => link.give({ dot_id: "d1", root_run_id: "r1" }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(router.state.location.pathname).toBe("/apps");
   });
 });
 

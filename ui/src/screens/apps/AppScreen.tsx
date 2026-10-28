@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 
 import { commands } from "@/api/commands";
@@ -73,6 +73,14 @@ export function AppScreen() {
   const navigate = useNavigate();
   const apps = useQuery({ queryKey: keys.apps, queryFn: commands.appsList });
   const changes = useDataChanges(name);
+  // False once the screen is gone: a run link that arrives after the person left opens nothing.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const row = apps.data?.find((r) => r.item.name === name);
   const config = row ? appConfig(row) : null;
   if (apps.isPending) return <Page title="Apps" />;
@@ -94,6 +102,7 @@ export function AppScreen() {
   }
   const openRun = async (runId: string) => {
     const link = await commands.appRunLink(name, runId);
+    if (!mounted.current) return;
     navigate(`/home/${encodeURIComponent(link.dot_id)}/${encodeURIComponent(link.root_run_id)}`);
   };
   return (
