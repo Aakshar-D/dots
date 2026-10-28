@@ -12,7 +12,9 @@
 //! 0013 (env vault spec §11, §8): `finish_0011` grants each dot the variables of its servers,
 //! and `finish_0013`, once the vault is open, confirms in Personal the origin each http server
 //! whose URL reads a variable reaches now. 0016 (app library spec section 6): `finish_0016` does
-//! what `finish_0012` does for `App` and `ProposeApp` with `upgrade_0016`, Custom policies too.
+//! what `finish_0012` does for `App` and `ProposeApp` with `upgrade_0016`, Custom policies too,
+//! and 0018 (conversational chat spec section 4) `finish_0018` for `Instructions` with
+//! `upgrade_0018`.
 
 use std::collections::BTreeMap;
 
@@ -403,6 +405,13 @@ pub(super) async fn finish_0015(pool: &SqlitePool) -> Result<()> {
 /// drops the list.
 pub(super) async fn finish_0016(pool: &SqlitePool) -> Result<()> {
     give_preset_rules(pool, "0016", &crate::policy::APP_TOOLS, true).await
+}
+
+/// Gives the policy of each dot that migration 0018 listed the `Instructions` allow rule, a
+/// Custom policy included, as 0016 did for the app tools (conversational chat spec section 4),
+/// and drops the list.
+pub(super) async fn finish_0018(pool: &SqlitePool) -> Result<()> {
+    give_preset_rules(pool, "0018", &[crate::policy::INSTRUCTIONS_TOOL], true).await
 }
 
 /// Gives the policy of each dot listed in `upgrade_<migration>` the rule its preset has for each

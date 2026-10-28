@@ -292,6 +292,8 @@ pub struct CheckIns {
     bus: Bus,
     follow_ups: Arc<FollowUps>,
     memories: Memories,
+    /// The instructions dots propose (conversational chat spec section 4).
+    instructions: crate::instructions::Proposals,
     /// Weak: the workflow runs hold the runner, which holds these.
     workflows: Arc<OnceLock<Weak<crate::workflows::Workflows>>>,
 }
@@ -300,6 +302,11 @@ impl CheckIns {
     pub fn new(store: Store, bus: Bus, follow_ups: Arc<FollowUps>) -> Self {
         Self {
             memories: Memories::new(store.clone(), bus.clone()),
+            instructions: crate::instructions::Proposals::new(
+                store.clone(),
+                bus.clone(),
+                follow_ups.thread_lock(),
+            ),
             store,
             bus,
             follow_ups,
@@ -320,6 +327,11 @@ impl CheckIns {
     /// The dots' memories: the person's commands and the memory tools go through them.
     pub fn memories(&self) -> &Memories {
         &self.memories
+    }
+
+    /// The instructions dots propose: `propose_instructions` goes through them.
+    pub fn instructions(&self) -> &crate::instructions::Proposals {
+        &self.instructions
     }
 
     /// Performs an allowed call of `tool` by the run `run_id`. `Ok` is the text the model gets;

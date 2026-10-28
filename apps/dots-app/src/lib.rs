@@ -164,6 +164,8 @@ command_list![
     app_proposal_files,
     app_proposal_diff,
     app_proposal_decide,
+    instruction_proposals_list,
+    instruction_proposal_decide,
     app_preview_open,
     app_preview_call,
     app_preview_close,

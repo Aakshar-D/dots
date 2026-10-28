@@ -450,6 +450,12 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("app_data_changed"), app: z.string() }),
   // A dot proposed an app, or the person decided a proposal: the review card reads it again.
   z.strictObject({ type: z.literal("app_proposal_changed"), id: z.string(), dot_id: z.string() }),
+  // A dot proposed instructions, or a proposal was decided or replaced: the card reads it again.
+  z.strictObject({
+    type: z.literal("instruction_proposal_changed"),
+    id: z.string(),
+    dot_id: z.string(),
+  }),
   // A watcher of the dot was added, changed, paused, resumed, deleted or had an event.
   z.strictObject({
     type: z.literal("watcher_updated"),
@@ -577,6 +583,27 @@ export const ToolsChanged = z.strictObject({
   // The dots of that scope that use it.
   dots: z.array(DotRef),
 });
+// Instructions a dot proposed for itself, and what the person decided (conversational chat
+// spec section 4). `base` is the dot's instructions when it proposed.
+export const InstructionStatus = z.enum(["pending", "approved", "rejected", "replaced"]);
+export const InstructionProposal = z.strictObject({
+  id: z.string(),
+  dot_id: z.string(),
+  run_id: z.string(),
+  root_run_id: z.string(),
+  base: z.string(),
+  instructions: z.string(),
+  reason: z.string(),
+  status: InstructionStatus,
+  answer_run_id: nullable(z.string()),
+  created_at: z.string(),
+  decided_at: nullable(z.string()),
+});
+export const PendingInstructions = z.strictObject({
+  proposal: InstructionProposal,
+  dot_name: z.string(),
+});
+
 export const Inbox = z.strictObject({
   approvals: z.array(PendingApproval),
   review_runs: z.array(ReviewRun),
@@ -588,6 +615,8 @@ export const Inbox = z.strictObject({
   watchers: z.array(PausedWatcher),
   // Background runs held for Claude usage, oldest first.
   held: z.array(HeldRun),
+  // Instructions dots proposed that wait for the person, newest first.
+  instructions: z.array(PendingInstructions),
   // Apps dots sent for review that wait for the person, newest first. Lazy: the proposal's
   // schema is declared with the apps, below.
   app_reviews: z.array(z.lazy(() => PendingAppReview)),
@@ -1276,6 +1305,8 @@ export type NeedsAttention = z.infer<typeof NeedsAttention>;
 export type DotRef = z.infer<typeof DotRef>;
 export type ToolsChanged = z.infer<typeof ToolsChanged>;
 export type Inbox = z.infer<typeof Inbox>;
+export type InstructionProposal = z.infer<typeof InstructionProposal>;
+export type PendingInstructions = z.infer<typeof PendingInstructions>;
 export type McpServerConfig = z.infer<typeof McpServerConfig>;
 export type SkillConfig = z.infer<typeof SkillConfig>;
 export type PluginConfig = z.infer<typeof PluginConfig>;

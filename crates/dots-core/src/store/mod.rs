@@ -13,6 +13,7 @@ mod browser;
 mod dots;
 mod env;
 mod follow_ups;
+mod instructions;
 mod library;
 mod limits;
 mod memories;
@@ -65,6 +66,7 @@ impl Store {
         upgrade::finish_0012(&store.pool).await?;
         upgrade::finish_0015(&store.pool).await?;
         upgrade::finish_0016(&store.pool).await?;
+        upgrade::finish_0018(&store.pool).await?;
         Ok(store)
     }
 

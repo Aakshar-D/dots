@@ -11,6 +11,7 @@ pub mod engine;
 pub mod error;
 pub mod events;
 pub mod followups;
+pub mod instructions;
 pub mod kit;
 pub mod library;
 pub mod library_service;
