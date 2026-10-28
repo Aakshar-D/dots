@@ -38,6 +38,19 @@ pub fn envelope(policy_text: &str, signature_box: &str) -> String {
     .expect("an envelope serializes")
 }
 
+/// Checks a minisign signature box (prehashed `ED` only) over the exact bytes of `text` against
+/// each of `keys`, and gives the index of the first key that verifies it. A key that is not a
+/// minisign public key never verifies. The policy and the member list share this check.
+pub(crate) fn verify_with_any(text: &str, signature_box: &str, keys: &[&str]) -> Result<usize, ()> {
+    let signature = Signature::decode(signature_box).map_err(|_| ())?;
+    keys.iter()
+        .position(|key| {
+            PublicKey::from_base64(key)
+                .is_ok_and(|key| key.verify(text.as_bytes(), &signature, false).is_ok())
+        })
+        .ok_or(())
+}
+
 /// Verifies the signed text fetched from an org's source against the join code's `policy_key`
 /// and `org_id`, in this order: the envelope, the signature (prehashed `ED` only), the policy,
 /// then the org. The policy is not read until its signature checks out. Rollback is the
@@ -55,11 +68,11 @@ pub fn verify_policy(
             envelope.v
         )));
     }
-    let key = PublicKey::from_base64(policy_key).map_err(|_| PolicyError::Key)?;
-    let signature = Signature::decode(&envelope.signature)
+    PublicKey::from_base64(policy_key).map_err(|_| PolicyError::Key)?;
+    Signature::decode(&envelope.signature)
         .map_err(|_| PolicyError::Envelope("the signature is not a minisign signature".into()))?;
-    key.verify(envelope.policy.as_bytes(), &signature, false)
-        .map_err(|_| PolicyError::Signature)?;
+    verify_with_any(&envelope.policy, &envelope.signature, &[policy_key])
+        .map_err(|()| PolicyError::Signature)?;
 
     let policy = parse_policy(&envelope.policy)?;
     if policy.org_id != org_id {
