@@ -13,7 +13,9 @@ use dots_core::engine::{
     Engine, EngineEvent, PermissionGate, PermissionOutcome, RunContext, UnavailableEngine,
 };
 use dots_core::model::{ApplyState, EngineKind, TriggerKind, WorkspaceMode};
-use dots_core::prompt::{build_prompt, context_tool_name};
+use dots_core::prompt::{
+    build_prompt, context_tool_name, is_typed, CHAT_SUMMARY_RULE, CONVERSATION,
+};
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
@@ -361,4 +363,67 @@ fn a_dot_with_the_browser_is_told_how_to_use_it() {
         Some("s1"),
     );
     assert_eq!(build_prompt(&dot, &resume, ws, at(), "", &[]), "Go on.");
+}
+
+#[test]
+fn a_person_s_first_chat_message_is_a_conversation() {
+    let dot = fake_dot("d", Path::new("C:/repo"), WorkspaceMode::Folder);
+    let run = fake_run(
+        TriggerKind::Chat,
+        Some(json!({"message": "why did it skip the coffee?", "typed": true})),
+        None,
+    );
+    let p = build_prompt(&dot, &run, Path::new("C:/ws"), at(), "", &[]);
+    assert!(p.starts_with("Do the thing."));
+    let talk = p.find(CONVERSATION).expect("the conversation section");
+    let message = p
+        .find("## Message from the user\n\nwhy did it skip the coffee?")
+        .expect("the message");
+    assert!(talk < message);
+    assert!(p.contains(CHAT_SUMMARY_RULE));
+    assert!(!p.contains("- End with a short summary"));
+    assert!(p.contains("do not retry it"));
+}
+
+#[test]
+fn chat_runs_dots_makes_keep_the_task_framing() {
+    let dot = fake_dot("d", Path::new("C:/repo"), WorkspaceMode::Folder);
+    for payload in [
+        json!({"message": "You asked: \"Which?\"\nThe person answered: the red one", "answer": "the red one"}),
+        json!({"message": "The person added the app notes to the Library."}),
+        json!({"message": "hi", "typed": false}),
+    ] {
+        let run = fake_run(TriggerKind::Chat, Some(payload), None);
+        let p = build_prompt(&dot, &run, Path::new("C:/ws"), at(), "", &[]);
+        assert!(!p.contains("## Chat with the person"), "{p}");
+        assert!(p.contains(
+            "- End with a short summary: what you did, what changed, and what needs human review."
+        ));
+    }
+}
+
+#[test]
+fn a_person_s_resumed_chat_message_is_only_the_message() {
+    let dot = fake_dot("d", Path::new("C:/repo"), WorkspaceMode::Folder);
+    let run = fake_run(
+        TriggerKind::Chat,
+        Some(json!({"message": "and now?", "typed": true})),
+        Some("s"),
+    );
+    assert_eq!(
+        build_prompt(&dot, &run, Path::new("C:/ws"), at(), "", &[]),
+        "and now?"
+    );
+}
+
+#[test]
+fn only_a_chat_run_can_be_typed() {
+    let typed = Some(json!({"message": "go", "typed": true}));
+    assert!(is_typed(&fake_run(TriggerKind::Chat, typed.clone(), None)));
+    assert!(!is_typed(&fake_run(TriggerKind::Webhook, typed, None)));
+    assert!(!is_typed(&fake_run(
+        TriggerKind::Chat,
+        Some(json!({"message": "go"})),
+        None
+    )));
 }

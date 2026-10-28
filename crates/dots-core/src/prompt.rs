@@ -9,6 +9,36 @@ use crate::memory;
 use crate::model::{Dot, EngineKind, Memory, Run, TriggerKind};
 use crate::policy::Action;
 
+/// The key `Runtime::chat` sets in a chat run's payload: the person typed the message in a chat
+/// (conversational chat spec section 3). Chat runs Dots makes itself carry no such key.
+pub const TYPED: &str = "typed";
+
+/// What a person's chat message's first prompt tells the dot (conversational chat spec section
+/// 3): a chat is a conversation, not a run of its instructions.
+pub const CONVERSATION: &str = "## Chat with the person\n\n\
+    This is a conversation with the person who set you up, not a run of the instructions above.\n\n\
+    - Answer questions directly, also ones that have nothing to do with your instructions.\n\
+    - Run the process your instructions describe only when the person asks you to run it.\n\
+    - When asked to change something in your work, change only that, without redoing the rest.\n\
+    - Files a past run wrote are in that run's own copy, not in your workspace. To change them, \
+    tell the person to use Reply on that run's card.\n";
+
+/// The standing rule on summaries of a person's chat: only work ends with one.
+pub const CHAT_SUMMARY_RULE: &str = "- When you ran your instructions or changed files, end with \
+    a short summary: what you did, what changed, and what needs human review. Otherwise your \
+    answer is your reply.\n";
+
+/// The run carries a message the person typed in a chat, not one Dots wrote for them.
+pub fn is_typed(run: &Run) -> bool {
+    run.trigger == TriggerKind::Chat
+        && run
+            .payload
+            .as_ref()
+            .and_then(|p| p.get(TYPED))
+            .and_then(Value::as_bool)
+            == Some(true)
+}
+
 /// The name a run's model calls the `context` tool by: Dots' own MCP server's tool on the
 /// Claude engine, a built-in tool on the local engine.
 pub fn context_tool_name(engine: EngineKind) -> &'static str {
@@ -111,6 +141,11 @@ pub fn build_prompt_full(
         out.push_str(remembered.trim_end());
     }
     out.push_str("\n\n---\n\n");
+    let typed = is_typed(run);
+    if typed {
+        out.push_str(CONVERSATION);
+        out.push('\n');
+    }
     if run.trigger == TriggerKind::Chat {
         out.push_str("## Message from the user\n\n");
         out.push_str(message);
@@ -171,9 +206,13 @@ pub fn build_prompt_full(
     out.push_str(
         "- If a tool call is queued for human approval, do not retry it; finish the remaining work.\n",
     );
-    out.push_str(
-        "- End with a short summary: what you did, what changed, and what needs human review.\n",
-    );
+    if typed {
+        out.push_str(CHAT_SUMMARY_RULE);
+    } else {
+        out.push_str(
+            "- End with a short summary: what you did, what changed, and what needs human review.\n",
+        );
+    }
     // A dot with a browser is told how to use it (browser spec section 4).
     if dot.spec.browser {
         out.push('\n');

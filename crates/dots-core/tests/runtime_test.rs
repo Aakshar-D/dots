@@ -77,6 +77,18 @@ async fn webhook_to_success_end_to_end() {
 }
 
 #[tokio::test]
+async fn a_person_s_chat_message_is_marked_typed() {
+    let t = start(None, None).await;
+    let dot =
+        t.rt.create_dot(folder_spec(&t.dir, "typed"), None)
+            .await
+            .unwrap();
+    let run = t.rt.chat(&dot.id, "why?", None).await.unwrap();
+    assert_eq!(run.payload, Some(json!({"message": "why?", "typed": true})));
+    assert!(dots_core::prompt::is_typed(&run));
+}
+
+#[tokio::test]
 async fn run_now_then_chat_follow_up_resumes_session() {
     let t = start(None, None).await;
     let dot =

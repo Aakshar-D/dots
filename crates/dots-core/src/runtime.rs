@@ -1039,7 +1039,8 @@ impl Runtime {
         let dot = self.store.get_dot(dot_id).await?;
         self.refuse_at_the_limit(&dot)?;
         let mut new = NewRun::new(dot_id, TriggerKind::Chat);
-        new.payload = Some(json!({ "message": message }));
+        // The person typed it (conversational chat spec section 3).
+        new.payload = Some(json!({ "message": message, crate::prompt::TYPED: true }));
         // Held until the new run is stored: of two follow-ups sent at once, the second must
         // find the first one's run in the thread.
         let _one_at_a_time = self.chat_lock.lock().await;
