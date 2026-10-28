@@ -450,6 +450,12 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("app_data_changed"), app: z.string() }),
   // A dot proposed an app, or the person decided a proposal: the review card reads it again.
   z.strictObject({ type: z.literal("app_proposal_changed"), id: z.string(), dot_id: z.string() }),
+  // A dot proposed instructions, or a proposal was decided or replaced: the card reads it again.
+  z.strictObject({
+    type: z.literal("instruction_proposal_changed"),
+    id: z.string(),
+    dot_id: z.string(),
+  }),
   // A watcher of the dot was added, changed, paused, resumed, deleted or had an event.
   z.strictObject({
     type: z.literal("watcher_updated"),

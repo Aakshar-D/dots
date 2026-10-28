@@ -13,6 +13,7 @@ mod browser;
 mod dots;
 mod env;
 mod follow_ups;
+mod instructions;
 mod library;
 mod limits;
 mod memories;

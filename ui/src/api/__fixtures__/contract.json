@@ -3132,6 +3132,11 @@
     },
     {
       "dot_id": "01J0DOT",
+      "id": "01J0INSTRUCTIONS",
+      "type": "instruction_proposal_changed"
+    },
+    {
+      "dot_id": "01J0DOT",
       "type": "watcher_updated",
       "watcher_id": "01J0WAT1"
     },
