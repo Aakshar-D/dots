@@ -8,7 +8,7 @@ mod common;
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use dots_core::apps::bundled::{projects, projects_files, release, PROJECTS};
+use dots_core::apps::bundled::{projects, projects_files, release, BUNDLED_FILE, PROJECTS};
 use dots_core::apps::call::Actor;
 use dots_core::apps::data;
 use dots_core::apps::source::read_files;
@@ -198,12 +198,49 @@ async fn a_bundled_release_that_changes_a_migration_that_ran_is_refused() {
         format!("{sql}\nCREATE TABLE old_notes (id TEXT);\n").into_bytes(),
     );
     install_earlier(&apps, files).await;
+    create_project(&apps, "Home").await;
     let err = apps.sync_bundled().await.unwrap_err().to_string();
     assert!(
         err.contains("the bundled Projects cannot update: migrations/0001_projects.sql differs"),
         "{err}"
     );
     assert_eq!(config(&apps).await.version, 1);
+    assert_eq!(project_names(&apps).await, ["Home"]);
+    let (item, _) = apps.get(PROJECTS).await.unwrap();
+    assert!(!apps.code_dir(&item.id, 2).exists(), "no version 2 is made");
+}
+
+#[tokio::test]
+async fn a_rolled_back_bundled_update_stays_rolled_back_when_the_next_release_brings_the_same_files(
+) {
+    let (_dir, store, apps) = fixture().await;
+    install_earlier(&apps, earlier_files()).await;
+    apps.sync_bundled().await.unwrap();
+    assert_eq!(config(&apps).await.version, 2);
+    apps.roll_back(PROJECTS).await.unwrap();
+    assert_eq!(config(&apps).await.version, 1);
+
+    // The next start looks like a new release, with the same bundled files.
+    let (item, mut cfg) = apps.get(PROJECTS).await.unwrap();
+    cfg.origin = AppOrigin::Bundled {
+        release: "9.9.9".into(),
+    };
+    store
+        .update_library_item(&item.id, &dots_core::library::LibraryConfig::App(cfg))
+        .await
+        .unwrap();
+    apps.sync_bundled().await.unwrap();
+    assert_eq!(config(&apps).await.version, 1);
+}
+
+#[tokio::test]
+async fn a_corrupt_bundled_note_puts_back_nothing() {
+    let (dir, _store, apps) = fixture().await;
+    apps.sync_bundled().await.unwrap();
+    apps.remove(PROJECTS, true, true).await.unwrap();
+    std::fs::write(dir.path().join("apps").join(BUNDLED_FILE), "not json").unwrap();
+    assert!(apps.sync_bundled().await.is_err());
+    assert!(matches!(apps.get(PROJECTS).await, Err(Error::NotFound(_))));
 }
 
 #[tokio::test]
