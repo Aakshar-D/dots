@@ -8,6 +8,7 @@ use serde_json::json;
 use tokio::sync::{broadcast, Mutex};
 use tokio_util::sync::CancellationToken;
 
+use crate::accounts::{Access, Permission};
 use crate::approvals::{ApprovalHub, DecideEffect};
 use crate::checkins::CheckIns;
 use crate::engine::claude::args::resolve_claude;
@@ -978,7 +979,8 @@ impl Runtime {
     }
 
     /// Creates a dot, in the org `org_id` or, with `None`, in Personal. The org must be joined
-    /// on this PC; it is fixed from then on (env vault spec §5.2).
+    /// on this PC; it is fixed from then on (env vault spec §5.2). In an account, the role must
+    /// allow changing dots, and giving it secrets when it is granted any (members spec §6.3).
     pub async fn create_dot(&self, spec: DotSpec, org_id: Option<String>) -> Result<Dot> {
         if let Some(org) = &org_id {
             if self.store.get_org(org).await?.is_none() {
@@ -986,6 +988,12 @@ impl Runtime {
                     "no org '{org}' is joined on this PC"
                 )));
             }
+        }
+        self.require(org_id.as_deref(), Permission::EditDots)
+            .await?;
+        if !spec.variables.0.is_empty() {
+            self.require(org_id.as_deref(), Permission::GrantEntries)
+                .await?;
         }
         let dot = self.store.create_dot(&spec, org_id.as_deref()).await?;
         self.sync_schedule(&dot, false).await?;
@@ -995,11 +1003,19 @@ impl Runtime {
     }
 
     /// Saves a dot's spec. A dot whose org is no longer joined on this PC is refused: it can't
-    /// run until the org is joined again or the dot is deleted (env vault spec §6.4).
+    /// run until the org is joined again or the dot is deleted (env vault spec §6.4). In an
+    /// account, the role must allow changing dots, and giving secrets to them when the grants
+    /// change (members spec §6.3).
     pub async fn update_dot(&self, id: &str, spec: DotSpec) -> Result<Dot> {
         let old = self.store.get_dot(id).await?;
         if let Some(text) = self.vault.org_removed(&old) {
             return Err(Error::Conflict(text));
+        }
+        self.require(old.org_id.as_deref(), Permission::EditDots)
+            .await?;
+        if spec.variables != old.spec.variables {
+            self.require(old.org_id.as_deref(), Permission::GrantEntries)
+                .await?;
         }
         let was_enabled = old.spec.enabled;
         let dot = self.store.update_dot(id, &spec).await?;
@@ -1011,8 +1027,10 @@ impl Runtime {
         Ok(dot)
     }
 
-    /// Deletes the dot; its schedule row goes with it (`ON DELETE CASCADE`).
+    /// Deletes the dot; its schedule row goes with it (`ON DELETE CASCADE`). In an account, the
+    /// role must allow changing dots (members spec §6.3).
     pub async fn delete_dot(&self, id: &str) -> Result<()> {
+        self.require_for_dot(id, Permission::EditDots).await?;
         let had_row = self.store.get_schedule_state(id).await?.is_some();
         let proposals = self.store.list_app_proposals(Some(id)).await?;
         let watchers: Vec<String> = self
@@ -1048,7 +1066,10 @@ impl Runtime {
     }
 
     pub async fn set_dot_enabled(&self, id: &str, enabled: bool) -> Result<Dot> {
-        let was_enabled = self.store.get_dot(id).await?.spec.enabled;
+        let old = self.store.get_dot(id).await?;
+        self.require(old.org_id.as_deref(), Permission::EditDots)
+            .await?;
+        let was_enabled = old.spec.enabled;
         let dot = self.store.set_dot_enabled(id, enabled).await?;
         self.sync_schedule(&dot, enabled && !was_enabled).await?;
         self.scheduler.reload();
@@ -1058,6 +1079,7 @@ impl Runtime {
     }
 
     pub async fn regenerate_webhook_token(&self, id: &str) -> Result<String> {
+        self.require_for_dot(id, Permission::EditDots).await?;
         let token = self.store.regenerate_webhook_token(id).await?;
         self.scheduler.reload();
         Ok(token)
@@ -1065,6 +1087,8 @@ impl Runtime {
 
     pub async fn run_now(&self, dot_id: &str) -> Result<Run> {
         let dot = self.store.get_dot(dot_id).await?;
+        self.require(dot.org_id.as_deref(), Permission::RunDots)
+            .await?;
         self.refuse_at_the_limit(&dot)?;
         self.runner
             .enqueue(NewRun::new(dot_id, TriggerKind::Manual))
@@ -1081,6 +1105,8 @@ impl Runtime {
             return Err(Error::Invalid("message must not be empty".into()));
         }
         let dot = self.store.get_dot(dot_id).await?;
+        self.require(dot.org_id.as_deref(), Permission::RunDots)
+            .await?;
         self.refuse_at_the_limit(&dot)?;
         let mut new = NewRun::new(dot_id, TriggerKind::Chat);
         new.payload = Some(json!({ "message": message }));
@@ -1267,6 +1293,9 @@ impl Runtime {
         note: Option<String>,
         allow_rule: Option<String>,
     ) -> Result<Approval> {
+        let run_id = self.store.get_approval(id).await?.run_id;
+        self.require_for_run(&run_id, Permission::AnswerApprovals)
+            .await?;
         let rule = match allow_rule {
             None => None,
             Some(_) if !approved => {
@@ -1304,7 +1333,8 @@ impl Runtime {
         approved: bool,
         note: Option<String>,
     ) -> Result<Vec<Approval>> {
-        self.store.get_run(run_id).await?;
+        self.require_for_run(run_id, Permission::AnswerApprovals)
+            .await?;
         let mut decided = Vec::new();
         let mut parked = false;
         let mut failure = None;
@@ -1395,6 +1425,32 @@ impl Runtime {
         tokio::time::timeout(limit, self.store.close())
             .await
             .is_ok()
+    }
+}
+
+/// Account roles (members spec §6.3): what this PC may do in Personal or an account.
+impl Runtime {
+    /// This PC's access to `org_id`; `None` is Personal, where it is always Owner.
+    pub fn access(&self, org_id: Option<&str>) -> Access {
+        crate::accounts::access(Some(&self.orgs), org_id)
+    }
+
+    /// `Ok` when this PC may do `p` in `org_id`, otherwise `Error::NotAllowed` naming the
+    /// account and the role, or why this PC is not on its member list.
+    pub async fn require(&self, org_id: Option<&str>, p: Permission) -> Result<()> {
+        crate::accounts::require(Some(&self.orgs), org_id, p).await
+    }
+
+    /// `require` in the account of the dot `dot_id`.
+    async fn require_for_dot(&self, dot_id: &str, p: Permission) -> Result<()> {
+        let dot = self.store.get_dot(dot_id).await?;
+        self.require(dot.org_id.as_deref(), p).await
+    }
+
+    /// `require` in the account of the dot of the run `run_id`.
+    async fn require_for_run(&self, run_id: &str, p: Permission) -> Result<()> {
+        let run = self.store.get_run(run_id).await?;
+        self.require_for_dot(&run.dot_id, p).await
     }
 }
 

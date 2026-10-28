@@ -466,7 +466,7 @@ async fn waiting_dot_run_refused_with_message() {
     let vault = h.vault();
 
     match vault.before_run(&dot).await {
-        Err(Error::Other(text)) => assert_eq!(text, WAITING_TEXT),
+        Err(Error::NotAllowed(text)) => assert_eq!(text, WAITING_TEXT),
         other => panic!("expected the run refused, got {other:?}"),
     }
     let statuses = vault.grant_statuses(&dot).await.unwrap();
@@ -581,7 +581,7 @@ async fn regenerated_identity_waits_for_the_new_id_nothing_wiped() {
         .await
         .unwrap();
     match h.vault().before_run(&dot).await {
-        Err(Error::Other(text)) => assert_eq!(text, changed),
+        Err(Error::NotAllowed(text)) => assert_eq!(text, changed),
         other => panic!("expected the run refused, got {other:?}"),
     }
 

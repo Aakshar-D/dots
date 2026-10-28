@@ -1084,7 +1084,7 @@ export const WorktreeDiff = z.strictObject({
 });
 
 // `cancelled`: the user declined a native confirmation; nothing was changed.
-export const CmdErrorKind = z.enum(["not_found", "invalid", "conflict", "internal", "cancelled"]);
+export const CmdErrorKind = z.enum(["not_found", "invalid", "not_allowed", "conflict", "internal", "cancelled"]);
 export const CmdError = z.strictObject({ kind: CmdErrorKind, message: z.string() });
 export const StartupError = z.strictObject({
   message: z.string(),

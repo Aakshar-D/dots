@@ -1148,6 +1148,7 @@
     "CmdErrorKind": [
       "not_found",
       "invalid",
+      "not_allowed",
       "conflict",
       "internal",
       "cancelled"
