@@ -25,12 +25,30 @@ const probes = [
   ["turn_tcp_ip", "tcp", (p) => `const pc = new RTCPeerConnection({ iceServers: [{ urls: "turn:127.0.0.1:${p}?transport=tcp", username: "u", credential: "c" }] }); pc.createDataChannel("x"); pc.createOffer().then((o) => pc.setLocalDescription(o)); window.__b = pc;`],
 ];
 const ANSWER_MS = 10000;
-/// `promise`, or `fallback` once ANSWER_MS have passed.
-const within = (promise, fallback) =>
-  Promise.race([promise, new Promise((r) => setTimeout(() => r(fallback), ANSWER_MS))]);
-const t = (await (await fetch("http://127.0.0.1:9333/json/list")).json()).find((x) => x.type === type);
+/// `promise`, or `fallback` once ANSWER_MS have passed; the timer is cleared when `promise` wins.
+const within = (promise, fallback) => {
+  let timer;
+  const late = new Promise((r) => { timer = setTimeout(() => r(fallback), ANSWER_MS); });
+  return Promise.race([promise, late]).finally(() => clearTimeout(timer));
+};
+const NO_ANSWER = Symbol("no answer");
+let listing;
+try {
+  const res = await fetch("http://127.0.0.1:9333/json/list", { signal: AbortSignal.timeout(ANSWER_MS) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  listing = await res.json();
+  if (!Array.isArray(listing)) throw new Error("the list is not an array");
+} catch (e) {
+  console.log(`${type}: the DevTools list did not answer on port 9333 (${e.message})`);
+  process.exit(2);
+}
+const t = listing.find((x) => x.type === type);
 if (!t) {
   console.log(`no ${type} target on port 9333`);
+  process.exit(2);
+}
+if (!t.webSocketDebuggerUrl) {
+  console.log(`${type}: the target has no webSocketDebuggerUrl (another DevTools client is attached)`);
   process.exit(2);
 }
 const ws = new WebSocket(t.webSocketDebuggerUrl);
@@ -44,7 +62,7 @@ const evaluate = (expression) => within(new Promise((r) => {
   const on = (m) => { const d = JSON.parse(m.data); if (d.id === me) { ws.removeEventListener("message", on); r(d.result?.result?.value ?? d.result?.exceptionDetails?.exception?.description ?? JSON.stringify(d)); } };
   ws.addEventListener("message", on);
   ws.send(JSON.stringify({ id: me, method: "Runtime.evaluate", params: { expression, returnByValue: true } }));
-}), `no answer in ${ANSWER_MS / 1000} s`);
+}), NO_ANSWER);
 const out = [];
 let leaked = false;
 let skipped = false;
@@ -56,6 +74,10 @@ for (const [i, [name, kind, js]] of probes.entries()) {
     : net.createServer((s) => { hits++; s.destroy(); });
   await new Promise((r) => kind === "udp" ? sock.bind(port, "127.0.0.1", r) : sock.listen(port, "127.0.0.1", r));
   const said = await evaluate(`(() => { try { ${js(port)} return "ran"; } catch (e) { return "threw " + e.message; } })()`);
+  if (said === NO_ANSWER) {
+    console.log(`${name}: DevTools did not answer in ${ANSWER_MS / 1000} s; the rest are not run`);
+    process.exit(2);
+  }
   await new Promise((r) => setTimeout(r, 6000));
   if (hits > 0) leaked = true;
   if (said !== "ran") skipped = true;
