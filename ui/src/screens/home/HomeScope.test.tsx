@@ -135,6 +135,42 @@ describe("the home follows the current account", () => {
     expect(router.state.location.pathname).toBe("/home/dot-mine");
   });
 
+  it("does not leave the pane empty when a pick overtakes a link's switch", async () => {
+    backend.on("dot_overview", () => dots);
+    backend.on("org_list", () => [acme, design]);
+    // The core applies switches in order, 200 ms each, and answers the scope 300 ms after it is
+    // asked, as it was then.
+    const state = { account: "personal" };
+    let queue = Promise.resolve();
+    backend.on("scope_get", async () => {
+      const answer = { account: state.account, workspace: "default" };
+      await new Promise((r) => setTimeout(r, 300));
+      return answer;
+    });
+    backend.on("scope_set", (args) => {
+      const done = queue.then(async () => {
+        await new Promise((r) => setTimeout(r, 200));
+        state.account = String(args.account);
+        return { account: state.account, workspace: "default" };
+      });
+      queue = done.then(() => undefined);
+      return done;
+    });
+    const { user, router } = renderApp("/home/dot-builder");
+    // The link's switch is on its way; the person picks the account that is still current.
+    await waitFor(() => expect(backend.callsTo("scope_set")).toHaveLength(1), { timeout: 3000 });
+    await user.click(screen.getByRole("button", { name: /^Account:/ }));
+    await user.click(await screen.findByRole("menuitemradio", { name: /Personal/ }));
+    await settle(1500);
+    expect(backend.callsTo("scope_set")).toEqual([
+      { account: "acme-eng", workspace: "default" },
+      { account: "personal", workspace: "default" },
+    ]);
+    // Whatever the route, the pane shows a conversation of the account now current.
+    expect(await screen.findByLabelText("Message")).toBeVisible();
+    expect(["/home/dot-mine", "/home/dot-builder"]).toContain(router.state.location.pathname);
+  });
+
   it("says so when the joined accounts can't be read for a link", async () => {
     backend.on("dot_overview", () => dots);
     backend.on("org_list", () => {

@@ -58,7 +58,7 @@ export function HomeScreen() {
   const linked = dotId === undefined ? undefined : all.find((r) => r.dot.id === dotId);
   const outside = linked !== undefined && !rows.includes(linked);
   const [handled, setHandled] = useState<string | undefined>(undefined);
-  // The switch a link asked for, until the scope has reached its account.
+  // The switch a link asked for, until it settles or the scope has reached its account.
   const [pending, setPending] = useState<{ dotId: string; account: string } | undefined>();
   // A switch the person picked in the switcher wins over a link still waiting to switch.
   const picking = usePickingAccount();
@@ -88,11 +88,14 @@ export function HomeScreen() {
     if (account === undefined) return;
     setHandled(dotId);
     setPending({ dotId, account });
-    switchAccount(account).catch((error: unknown) => {
-      notifyError(error);
-      setPending(undefined);
-      navigate("/home", { replace: true });
-    });
+    // Once the switch settles, the usual filter decides: the dot shows if its account is now
+    // current, else the home opens one it lists (a pick may have overtaken this switch).
+    switchAccount(account)
+      .catch((error: unknown) => {
+        notifyError(error);
+        navigate("/home", { replace: true });
+      })
+      .finally(() => setPending(undefined));
   }, [dotId, handled, pending, picking, linked, scope, outside, orgs, switchAccount, navigate]);
   // A failed reload keeps what was loaded, and the open conversation with what is being typed;
   // only a first load that failed has nothing to show but the error.
