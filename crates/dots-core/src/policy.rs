@@ -858,6 +858,20 @@ pub fn allow_candidates(tool: &str, input: &Value, workspace: Option<&Path>) -> 
                 "this host and its subdomains".into(),
             ));
         }
+    } else if tool == crate::apps::APP_POLICY {
+        // An app call offers its own tool and its app (app library spec section 6), never every
+        // app: a bare `App` would allow the writes of apps the person has not seen yet.
+        let named = |key: &str| input.get(key).and_then(Value::as_str);
+        if let (Some(app), Some(name)) = (named("app"), named("tool")) {
+            found.push((
+                format!("{tool}({app}.{name})"),
+                format!("{name} of the app {app}"),
+            ));
+            found.push((
+                format!("{tool}({app})"),
+                format!("every tool of the app {app}"),
+            ));
+        }
     } else if !tool.contains('*') {
         // A name that ends in `*` would be read as a prefix of other tools' names.
         found.push((tool.to_string(), "every call of this tool".into()));

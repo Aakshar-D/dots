@@ -155,12 +155,12 @@ fn prepare_validates_calls_before_the_policy() {
     // Every local tool but `skill` and `context`, which a run gets only with skills
     // (`skill::schema`) and context collections (`context::schema`), the three check-in
     // tools and the three memory tools, which an engine with check-ins adds
-    // (`checkins::schemas`, `memory::schemas`), `propose_app`, which an engine with apps
-    // adds, and `start_workflow`, which a chat run that may start a workflow gets
+    // (`checkins::schemas`, `memory::schemas`), `propose_app` and `copy_app`, which an engine
+    // with apps adds, and `start_workflow`, which a chat run that may start a workflow gets
     // (`team::start_schema`).
     assert_eq!(
         tools::schemas().as_array().unwrap().len(),
-        tools::TOOLS.len() - 10
+        tools::TOOLS.len() - 11
     );
 }
 
@@ -216,6 +216,7 @@ fn a_prepared_input_passes_prepare_again_unchanged() {
             "propose_app",
             json!({"path": "apps//expenses", "note": "Tracks expenses."}),
         ),
+        ("copy_app", json!({"app": "expenses", "path": "apps//copy"})),
         ("forget", json!({"id": "01HX"})),
         ("recall", json!({"query": "pdf"})),
         ("recall", json!({})),
@@ -238,11 +239,12 @@ fn a_prepared_input_passes_prepare_again_unchanged() {
     // Every local tool was checked, and the two name maps are each other's inverse.
     let all: std::collections::BTreeSet<&str> = tools::TOOLS.iter().map(|(n, _)| *n).collect();
     assert_eq!(tools_seen, all);
-    // The memory tools share `Memory`, which names the first of them (`local_name_for` tells
-    // them apart by the call's input, checked above).
+    // The memory tools share `Memory`, which names the first of them, and `copy_app` shares
+    // `ProposeApp` with `propose_app` (`local_name_for` tells them apart by the call's input,
+    // checked above).
     for (name, alias) in tools::TOOLS {
         assert_eq!(tools::alias(name), Some(*alias));
-        if *alias != "Memory" || *name == "remember" {
+        if (*alias != "Memory" || *name == "remember") && *name != "copy_app" {
             assert_eq!(tools::local_name(alias), Some(*name));
         }
     }

@@ -65,6 +65,23 @@ pub fn parse_time(s: &str) -> Result<DateTime<Utc>> {
         .map_err(|e| Error::Invalid(format!("stored time {s:?}: {e}")))
 }
 
+/// A thread marked as deciding (`FollowUps::begin_deciding`); unmarks it when dropped.
+pub struct Deciding {
+    follow_ups: Arc<FollowUps>,
+    root: String,
+}
+
+impl Drop for Deciding {
+    fn drop(&mut self) {
+        self.follow_ups
+            .deciding
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.root);
+        self.follow_ups.wake();
+    }
+}
+
 /// The follow-ups of every dot, and the loop that fires them (spec section 6). Held by the
 /// runtime, by `CheckIns`, which schedules them, and by the loop.
 pub struct FollowUps {
@@ -75,6 +92,9 @@ pub struct FollowUps {
     /// `Runtime::chat` and `CheckIns::reply` take it too, so no two of them give one run two
     /// children.
     thread_lock: Arc<Mutex<()>>,
+    /// The threads (by root run id) whose app decision is being carried out without the
+    /// thread lock: nothing continues them meanwhile (`Runtime::decide_app_proposal`).
+    deciding: std::sync::Mutex<std::collections::HashSet<String>>,
     wake: Notify,
     paused: AtomicBool,
 }
@@ -86,6 +106,7 @@ impl FollowUps {
             bus,
             clock,
             thread_lock: Arc::new(Mutex::new(())),
+            deciding: Default::default(),
             wake: Notify::new(),
             paused: AtomicBool::new(false),
         })
@@ -94,6 +115,30 @@ impl FollowUps {
     /// The lock of every writer that continues a thread.
     pub fn thread_lock(&self) -> Arc<Mutex<()>> {
         self.thread_lock.clone()
+    }
+
+    /// Marks the thread `root` as deciding, under the thread lock; `None` when it already is.
+    /// Dropping the guard unmarks the thread and wakes the loop, so a panic or a dropped
+    /// future unmarks it too and a follow-up held back meanwhile fires at once.
+    pub fn begin_deciding(self: &Arc<Self>, root: &str) -> Option<Deciding> {
+        let fresh = self
+            .deciding
+            .lock()
+            .expect("deciding threads")
+            .insert(root.to_string());
+        fresh.then(|| Deciding {
+            follow_ups: self.clone(),
+            root: root.to_string(),
+        })
+    }
+
+    /// Whether the thread `root` waits for an app decision being carried out: a writer that
+    /// continues threads leaves it alone until then.
+    pub fn deciding(&self, root: &str) -> bool {
+        self.deciding
+            .lock()
+            .expect("deciding threads")
+            .contains(root)
     }
 
     /// Wakes the loop for a pass: a follow-up was added or cancelled, or a dot changed.
@@ -259,7 +304,8 @@ impl FollowUps {
             Some(from) => self.store.list_thread(&from.root_run_id).await?,
             None => Vec::new(),
         };
-        if thread.iter().any(|r| !r.status.is_terminal()) {
+        let deciding = from.as_ref().is_some_and(|f| self.deciding(&f.root_run_id));
+        if deciding || thread.iter().any(|r| !r.status.is_terminal()) {
             return Ok(None);
         }
         let new = follow_up_run(row, from.as_ref(), thread.last(), now)?;

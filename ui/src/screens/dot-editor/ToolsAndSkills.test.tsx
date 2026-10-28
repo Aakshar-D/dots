@@ -11,7 +11,7 @@ import { ToolsAndSkills } from "@/screens/dot-editor/ToolsAndSkills";
 import { backend } from "@/test/backend";
 import { sample } from "@/test/fixtures";
 
-const [github, pluginServer, pdf, pdfTools, company] = sample.library;
+const [github, pluginServer, pdf, pdfTools, company, projects] = sample.library;
 const none: Uses = { mcp_servers: [], skills: [], plugins: [], context: [], apps: [] };
 
 function setup(opts: { uses?: Uses; engine?: EngineKind; library?: LibraryEntry[] } = {}) {
@@ -57,6 +57,29 @@ describe("the editor's Tools and skills section", () => {
     expect(box).not.toBeChecked();
     await user.click(box);
     expect(uses().context).toEqual(["clients"]);
+  });
+
+  it("lists the apps, one every dot uses ticked and fixed", async () => {
+    const own = { ...projects!, id: "01J0APP3", name: "expenses" } as LibraryEntry;
+    if (own.kind !== "app") throw new Error("the sample is an app");
+    own.config = { ...own.config, every_dot: false, description: "Logs expenses" };
+    const { user, uses } = setup({ library: [projects!, own] });
+    const group = await screen.findByRole("group", { name: "Apps" });
+    const every = within(group).getByLabelText("projects");
+    expect(every).toBeChecked();
+    expect(every).toBeDisabled();
+    expect(within(group).getByText(/Projects, tasks and to-dos, shared by you and your dots · every dot/)).toBeVisible();
+    const box = within(group).getByLabelText("expenses");
+    expect(box).not.toBeChecked();
+    await user.click(box);
+    expect(uses().apps).toEqual(["expenses"]);
+  });
+
+  it("says where apps come from when there is none", async () => {
+    setup({ library: [] });
+    const group = await screen.findByRole("group", { name: "Apps" });
+    expect(group).toHaveTextContent("No apps yet. Ask a dot for one; the apps you add show in Apps.");
+    expect(within(group).getByRole("link", { name: "Apps" })).toHaveAttribute("href", "/apps");
   });
 
   it("says \"at least\" when a collection's count is only a lower bound", async () => {

@@ -1,8 +1,13 @@
+import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 
+import { commands } from "@/api/commands";
 import type { Message } from "@/api/types";
+import { AppReviews } from "@/components/AppReviewCard";
+import { ErrorNote } from "@/components/ErrorNote";
 import { Button } from "@/components/ui/button";
 import type { Topic } from "@/lib/home-topics";
+import { keys } from "@/lib/query";
 import { useStickToBottom } from "@/lib/use-stick-to-bottom";
 import { RunCard } from "@/screens/home/RunCard";
 import { TopicRuns } from "@/screens/home/TopicRuns";
@@ -21,6 +26,14 @@ export function Timeline(props: {
 }) {
   const { topics, checkIns, dotName } = props;
   const { ref, onScroll, behind, jump } = useStickToBottom<HTMLElement>();
+  // The cards of apps waiting for review read this list (the same query); a failure to read it
+  // is shown here once, not under every run.
+  const dotId = topics[0]?.runs[0]?.dot_id ?? null;
+  const proposals = useQuery({
+    queryKey: keys.appProposals(dotId),
+    queryFn: () => commands.appProposalsList(dotId),
+    enabled: dotId !== null,
+  });
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
       <section
@@ -30,6 +43,7 @@ export function Timeline(props: {
         className="flex min-h-0 flex-1 flex-col gap-6 overflow-auto p-4"
       >
         {props.children}
+        {proposals.isError && <ErrorNote error={proposals.error} />}
         {topics.map((topic) =>
           topic.kind === "chat" ? (
             <TopicRuns
@@ -46,6 +60,8 @@ export function Timeline(props: {
                 dotName={dotName}
                 onReply={() => props.onReply(topic)}
               />
+              {/* An app the run sent for review waits under its card. */}
+              <AppReviews runs={topic.runs.slice(0, 1)} dotName={dotName} />
               {topic.runs.length > 1 && (
                 <TopicRuns runs={topic.runs.slice(1)} checkIns={checkIns} dotName={dotName} />
               )}

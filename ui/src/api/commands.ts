@@ -333,6 +333,19 @@ export const commands = {
     call(T.AppProposal.array(), "app_proposals_list", { dotId }),
   /// A waiting proposal's files; rejects with kind `not_found` once it is decided.
   appProposalFiles: (id: string) => call(T.AppFile.array(), "app_proposal_files", { id }),
+  /// The Code tab's diff: against the active version for a change, every file for a new app.
+  appProposalDiff: (id: string) => call(T.WorktreeDiff, "app_proposal_diff", { id }),
+  /// Opens the card's preview on a throwaway database; answers its id. Rejects with kind
+  /// `conflict` once the proposal is decided.
+  appPreviewOpen: (id: string) => call(z.string(), "app_preview_open", { id }),
+  /// A call from the preview's frame, as the person. Rejects with kind `invalid` and the rule
+  /// the call broke, `not_found` once the preview is closed.
+  appPreviewCall: (preview: string, tool: string, input: unknown) =>
+    call(z.unknown(), "app_preview_call", { preview, tool, input }),
+  appPreviewClose: (preview: string) => call(nothing, "app_preview_close", { preview }),
+  /// The data removed apps kept, newest first.
+  appsKeptList: () => call(T.KeptData.array(), "apps_kept_list"),
+  appKeptDelete: (id: string) => call(nothing, "app_kept_delete", { id }),
   /// The person's answer on the card. Rejects with kind `conflict` when it was decided already
   /// or its app moved on, and while the dot's thread is still working.
   appProposalDecide: (id: string, decision: T.ProposalDecision) =>

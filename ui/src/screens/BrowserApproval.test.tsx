@@ -26,7 +26,7 @@ function inbox(approvals: PendingApproval[]) {
     review_runs: [],
     attention: [],
     tools_changed: [],
-    watchers: [], held: [],
+    watchers: [], held: [], app_reviews: [],
   }));
   backend.on("decide_approval", (args): Approval => ({
     ...sample.approval,

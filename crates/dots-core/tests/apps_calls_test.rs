@@ -109,6 +109,43 @@ async fn a_write_is_logged_with_who_and_what_and_a_read_is_not() {
 }
 
 #[tokio::test]
+async fn a_long_result_is_logged_as_its_size_and_start() {
+    let manifest = common::apps::MANIFEST.replacen(
+        "\"tools\": [",
+        "\"tools\": [\n    { \"name\": \"pad\", \"description\": \"A long answer\", \
+         \"input\": { \"type\": \"object\" }, \"writes\": true },",
+        1,
+    );
+    let logic = format!(
+        "{}\nexport function pad(input, ctx) {{ return {{ text: \"x\".repeat(40000) }}; }}\n",
+        common::apps::LOGIC
+    );
+    let mut files = common::apps::expenses_with("app.json", Some(&manifest));
+    files.retain(|(path, _)| *path != "logic.js");
+    files.push(("logic.js", logic));
+    let f = fixture(&files).await;
+    let out = f
+        .apps
+        .call("expenses", "pad", json!({}), Actor::Person)
+        .await
+        .unwrap();
+    assert_eq!(
+        out["text"].as_str().unwrap().len(),
+        40_000,
+        "the caller gets it whole"
+    );
+    let (item, _) = f.apps.get("expenses").await.unwrap();
+    let logged = f.store.app_calls(&item.id, 1).await.unwrap().remove(0);
+    let result = logged.result.unwrap();
+    assert_eq!(result["truncated"], true);
+    assert_eq!(result["bytes"], out.to_string().len());
+    assert_eq!(
+        result["head"].as_str().unwrap().len(),
+        dots_core::apps::MAX_LOGGED
+    );
+}
+
+#[tokio::test]
 async fn a_failed_write_is_logged_with_its_error() {
     let f = fixture(&expenses()).await;
     let err = f

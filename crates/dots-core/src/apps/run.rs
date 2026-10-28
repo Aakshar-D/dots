@@ -5,7 +5,7 @@
 use serde_json::{json, Value};
 
 use super::call::Actor;
-use super::manifest::{split_tool_key, tool_key, ToolSpec};
+use super::manifest::{split_tool_key, tool_key, Manifest, ToolSpec};
 use super::{policy_input, Apps, APP_POLICY};
 use crate::engine::local::tools::cap_head;
 use crate::library::LibraryConfig;
@@ -42,6 +42,20 @@ pub struct RunApps {
     apps: Apps,
     list: Vec<RunApp>,
     actor: Actor,
+}
+
+/// The tools of the app `manifest` that `dot`'s policy does not deny (spec section 6, and
+/// section 15: a denied tool is not offered). A dot left with none does not use the app.
+pub fn offered_tools(dot: &Dot, manifest: &Manifest) -> Vec<ToolSpec> {
+    manifest
+        .tools
+        .iter()
+        .filter(|t| {
+            let input = policy_input(&manifest.name, &t.name, t.writes, &Value::Null);
+            dot.spec.policy.resolve(APP_POLICY, &input) != Action::Deny
+        })
+        .cloned()
+        .collect()
 }
 
 /// The name `engine`'s model calls the app tool `key` (`<app>__<tool>`) by.
@@ -94,16 +108,7 @@ impl RunApps {
                     continue;
                 }
             };
-            let tools: Vec<ToolSpec> = src
-                .manifest
-                .tools
-                .iter()
-                .filter(|t| {
-                    let input = policy_input(&item.name, &t.name, t.writes, &Value::Null);
-                    dot.spec.policy.resolve(APP_POLICY, &input) != Action::Deny
-                })
-                .cloned()
-                .collect();
+            let tools = offered_tools(dot, &src.manifest);
             if tools.is_empty() {
                 continue;
             }

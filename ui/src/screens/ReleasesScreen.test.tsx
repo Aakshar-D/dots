@@ -33,6 +33,12 @@ describe("the Releases page", () => {
     const first = renderApp("/home");
     const nav = await screen.findByRole("navigation", { name: "Main" });
     expect(await within(nav).findByRole("link", { name: "Releases" })).toBeVisible();
+    // Releases comes just before Settings, however many links come before it.
+    const hrefs = within(nav)
+      .getAllByRole("link")
+      .map((link) => link.getAttribute("href"));
+    expect(hrefs).toContain("/apps");
+    expect(hrefs.indexOf("/releases")).toBe(hrefs.indexOf("/settings") - 1);
     first.unmount();
     backend.on("publisher_status", () => ({
       token: "GITHUB_PUBLISH",

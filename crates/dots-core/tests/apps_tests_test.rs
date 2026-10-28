@@ -7,7 +7,9 @@ use std::time::Duration;
 
 use common::apps::{expenses, expenses_with, write_app, MANIFEST};
 use dots_core::apps::source::{read_folder, AppSource};
-use dots_core::apps::tests::{run_tests, run_tests_within, TestReport, NO_TESTS};
+use dots_core::apps::tests::{
+    run_tests, run_tests_bounded, run_tests_within, TestReport, NO_TESTS,
+};
 
 fn source(files: &[(&str, String)]) -> AppSource {
     let dir = tempfile::tempdir().unwrap();
@@ -154,6 +156,35 @@ test("never reached", () => {});
     assert_eq!(
         error,
         "tests/check.test.js stopped after 1 tests: the tests ran over 0.3 s"
+    );
+    assert!(!report.passed());
+}
+
+#[test]
+fn the_test_files_together_are_bounded_too() {
+    let forever = "test(\"forever\", () => { for (;;) {} });\n".to_string();
+    let mut files = expenses_with("tests/expenses.test.js", None);
+    for name in ["tests/a.test.js", "tests/b.test.js", "tests/c.test.js"] {
+        files.push((name, forever.clone()));
+    }
+    let report = run_tests_bounded(
+        &source(&files),
+        Duration::from_millis(300),
+        Duration::from_millis(450),
+    );
+    let second = report
+        .results
+        .iter()
+        .find(|r| r.file == "tests/b.test.js")
+        .unwrap();
+    let error = second.error.as_deref().unwrap();
+    assert!(error.contains("in all"), "{error}");
+    assert!(error.contains("0.45 s"), "{error}");
+    let last = report.results.last().unwrap();
+    assert_eq!(last.file, "tests/c.test.js", "{report:?}");
+    assert_eq!(
+        last.error.as_deref(),
+        Some("tests/c.test.js did not run: the app's tests ran past 0.45 s in all")
     );
     assert!(!report.passed());
 }

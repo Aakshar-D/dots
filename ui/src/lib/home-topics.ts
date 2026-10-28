@@ -105,9 +105,21 @@ const TRIGGER: Record<Run["trigger"], string> = {
   watcher: "Watcher",
 };
 
-/// What started a run, in a word or two: "Scheduled", "Webhook", "Run now".
-export function triggerLabel(run: Pick<Run, "trigger">): string {
-  return TRIGGER[run.trigger];
+/// A run without its payload (a held run, a usage row) names no app.
+export type Started = Pick<Run, "trigger"> & Partial<Pick<Run, "payload">>;
+
+/// The title of the app that started `run` (app library spec section 7), or null.
+export function appTitle(run: Started): string | null {
+  if (run.trigger !== "app" || typeof run.payload !== "object" || run.payload === null) {
+    return null;
+  }
+  const title = (run.payload as Record<string, unknown>).app_title;
+  return typeof title === "string" && title !== "" ? title : null;
+}
+
+/// What started a run, in a word or two: "Scheduled", "Webhook", "Run now", or the app's title.
+export function triggerLabel(run: Started): string {
+  return appTitle(run) ?? TRIGGER[run.trigger];
 }
 
 /// The first line of a string, trimmed and cut to `max` characters; "" for none.

@@ -60,10 +60,22 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
       break;
     case "library_updated":
       // The Library lists, the Inbox group of a changed tool list, and what shows the dots that
-      // use the item: removing it takes it out of them, and no dot event says so.
-      for (const queryKey of [keys.library, keys.inbox, keys.dots, ["dot"], keys.overview]) {
+      // use the item: removing it takes it out of them, and no dot event says so. An app's row,
+      // and the data a removed one kept, are on the Apps screen.
+      for (const queryKey of [
+        keys.library,
+        keys.inbox,
+        keys.dots,
+        ["dot"],
+        keys.overview,
+        keys.apps,
+      ]) {
         invalidate(qc, queryKey);
       }
+      break;
+    case "app_data_changed":
+      // The app's open screen refreshes (`dots.onChange`).
+      appDataChanges.dispatchEvent(new Event(event.app));
       break;
     case "org_updated":
       // The org list, and what lists a server per joined org: the Library's catalogs and the
@@ -107,6 +119,13 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
     case "watcher_paused":
       // The app's notification; a `watcher_updated` comes with it.
       break;
+    case "app_proposal_changed":
+      // A review card was posted or decided: the conversation's cards, the Inbox's reviews and
+      // the dots' needs-you counts.
+      invalidate(qc, ["app-proposals"]);
+      invalidate(qc, keys.inbox);
+      invalidate(qc, keys.overview);
+      break;
     case "limits_updated":
       // The rail's bars read the limits; the Inbox's held runs and the Usage page follow.
       qc.setQueryData(keys.limits, event.limits);
@@ -115,6 +134,9 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
       break;
   }
 }
+
+/// Hears that an app's data changed: an event named by the app, for its open screen.
+export const appDataChanges = new EventTarget();
 
 /// Subscribes the app to the backend: runtime events patch the caches, a lagged or unreadable
 /// stream refetches everything, the tray navigates, and a status or an update note changed

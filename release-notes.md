@@ -1,4 +1,5 @@
 <!-- dots:notes 0.2.0 -->
+- app library screens — the Apps screen, app frames, the review card and copy_app (plan B) (#32)
 - Use the release signing key (#28)
 - Updates in the Dots window: Settings › Updates, going back, and the Releases page (#27)
 - Usage and limits: hold background Claude runs near the subscription limit (#26)

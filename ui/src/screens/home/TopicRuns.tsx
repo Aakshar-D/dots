@@ -3,6 +3,7 @@ import { useQueries, useQueryClient } from "@tanstack/react-query";
 import { commands } from "@/api/commands";
 import type { Message, Run, RunEventRecord } from "@/api/types";
 import { AppliedCalls } from "@/components/AppliedCalls";
+import { AppReviews } from "@/components/AppReviewCard";
 import { ApprovalCard } from "@/components/ApprovalCard";
 import { LoadErrors } from "@/components/ErrorNote";
 import { Failure, Transcript } from "@/components/Transcript";
@@ -10,7 +11,7 @@ import { eventsQuery, keys } from "@/lib/query";
 
 /// Runs of one topic as the chat shows a thread: each run's message, the dot's text, its tool
 /// steps, check-ins and browser calls (`Transcript`), the calls Dots performed, a card per
-/// approval it waits for, and why the last run failed.
+/// approval it waits for and per app it sent for review, and why the last run failed.
 export function TopicRuns(props: { runs: Run[]; checkIns: Message[]; dotName: string }) {
   const { runs, dotName } = props;
   const qc = useQueryClient();
@@ -44,6 +45,7 @@ export function TopicRuns(props: { runs: Run[]; checkIns: Message[]; dotName: st
       {pending.map((approval) => (
         <ApprovalCard key={approval.id} approval={approval} dotName={dotName} />
       ))}
+      <AppReviews runs={runs} dotName={dotName} />
       {failure && <Failure>{failure}</Failure>}
     </div>
   );

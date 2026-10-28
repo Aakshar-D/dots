@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Dots",
-  "version": "0.2.0-rc.3",
+  "version": "0.2.0-rc.4",
   "identifier": "dev.dots.app",
   "build": {
     "beforeDevCommand": "bun run --cwd ui dev",
@@ -13,6 +13,7 @@
     "windows": [
       {
         "label": "main",
+        "create": false,
         "title": "Dots",
         "width": 1200,
         "height": 800,
@@ -22,7 +23,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost"
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost; frame-src http://dots-app.localhost"
     }
   },
   "bundle": {
