@@ -123,6 +123,10 @@ pub async fn handle(State(s): State<ServerState>, headers: HeaderMap, body: Byte
             if has_startable(&s, &run_id) {
                 tools.push(TeamTool::StartWorkflow.mcp_schema());
             }
+            // A run of a chat the person started (conversational chat spec section 4).
+            if has_instructions(&s, &run_id) {
+                tools.push(crate::instructions::mcp_schema());
+            }
             json!({ "tools": tools })
         }
         "tools/call" => {
@@ -130,6 +134,7 @@ pub async fn handle(State(s): State<ServerState>, headers: HeaderMap, body: Byte
             let answer = match (name, name.and_then(Tool::from_name)) {
                 (Some("context"), _) => call_context(&s, &run_id, &req).await,
                 (Some(crate::apps::propose::TOOL), _) => call_propose(&s, &run_id, &req).await,
+                (Some(crate::instructions::TOOL), _) => call_instructions(&s, &run_id, &req).await,
                 (_, Some(tool)) => call_check_in(&s, &run_id, &req, tool).await,
                 (Some(n), None) if TeamTool::from_name(n).is_some() => {
                     call_workflow(&s, &run_id, &req).await
@@ -153,6 +158,58 @@ pub async fn handle(State(s): State<ServerState>, headers: HeaderMap, body: Byte
         other => return rpc_error(id, -32601, &format!("method not found: {other}")),
     };
     Json(json!({ "jsonrpc": "2.0", "id": id, "result": result })).into_response()
+}
+
+/// The run may propose new instructions, so `propose_instructions` is one of its tools.
+fn has_instructions(s: &ServerState, run_id: &str) -> bool {
+    s.runner
+        .run_tools(run_id)
+        .is_some_and(|tools| tools.instructions())
+}
+
+/// Checks a `propose_instructions` call against the dot's policy under `Instructions` and
+/// keeps the proposal (conversational chat spec section 4). A call that is not performed is a
+/// tool result with `isError`, as for the check-in tools.
+async fn call_instructions(
+    s: &ServerState,
+    run_id: &str,
+    req: &Value,
+) -> Result<Value, (i64, String)> {
+    let Some(checkins) = s.runner.checkins().filter(|_| has_instructions(s, run_id)) else {
+        return Err((-32602, "unknown tool".to_string()));
+    };
+    let params = req
+        .get("params")
+        .ok_or((-32602, "missing params".to_string()))?;
+    let mut input = match params.get("arguments") {
+        None | Some(Value::Null) => json!({}),
+        Some(args @ Value::Object(_)) => args.clone(),
+        Some(_) => return Err((-32602, "params.arguments must be an object".to_string())),
+    };
+    // Only the tool's own arguments, as the local engine's `prepare` keeps.
+    if let Value::Object(args) = &mut input {
+        args.retain(|key, _| crate::instructions::REQUIRED.contains(&key.as_str()));
+    }
+    let input = match s
+        .hub
+        .check(run_id, crate::instructions::POLICY_NAME, input)
+        .await
+    {
+        Ok(PermissionOutcome::Allow { input }) => input,
+        Ok(PermissionOutcome::Deny { message }) => return Ok(not_performed(&message)),
+        Err(e) => return Ok(not_performed(&format!("permission check failed: {e}"))),
+    };
+    let arg = |key: &str| input.get(key).and_then(Value::as_str).unwrap_or_default();
+    Ok(
+        match checkins
+            .instructions()
+            .propose(run_id, arg("instructions"), arg("reason"))
+            .await
+        {
+            Ok(text) => json!({ "content": [{ "type": "text", "text": text }] }),
+            Err(text) => not_performed(&text),
+        },
+    )
 }
 
 /// The run may start a team workflow, so `start_workflow` is one of its tools.

@@ -23,6 +23,11 @@ pub const CONVERSATION: &str = "## Chat with the person\n\n\
     - Files a past run wrote are in that run's own copy, not in your workspace. To change them, \
     tell the person to use Reply on that run's card.\n";
 
+/// What a person's chat is told when its dot may not propose instructions.
+pub const NO_INSTRUCTIONS_TOOL: &str = "- You cannot change your own instructions: when the \
+    person asks you to change how you work from now on, tell them to edit your instructions \
+    in the dot's editor.\n";
+
 /// The standing rule on summaries of a person's chat: only work ends with one.
 pub const CHAT_SUMMARY_RULE: &str = "- When you ran your instructions or changed files, end with \
     a short summary: what you did, what changed, and what needs human review. Otherwise your \
@@ -57,6 +62,8 @@ pub struct PromptParts<'a> {
     pub memories: &'a [Memory],
     pub apps: Option<&'a RunApps>,
     pub recent: &'a [Run],
+    /// The name the run's model calls `propose_instructions` by, when the run has it.
+    pub instructions_tool: Option<&'a str>,
 }
 
 /// The most runs a person's chat message names (conversational chat spec section 3.1).
@@ -170,6 +177,7 @@ pub fn build_prompt_full(
         memories,
         apps,
         recent,
+        instructions_tool,
     } = parts;
     let message = run
         .payload
@@ -221,6 +229,13 @@ pub fn build_prompt_full(
     out.push_str("\n\n---\n\n");
     if typed {
         out.push_str(CONVERSATION);
+        out.push_str(&match instructions_tool {
+            Some(tool) => format!(
+                "- When the person asks you to change how you work from now on, propose new \
+                 instructions with `{tool}` instead of only promising to.\n"
+            ),
+            None => NO_INSTRUCTIONS_TOOL.to_string(),
+        });
         out.push('\n');
     }
     if run.trigger == TriggerKind::Chat {

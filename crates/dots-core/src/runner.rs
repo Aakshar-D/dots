@@ -42,6 +42,8 @@ fn model_tool_name<'a>(tool: &'a str, input: &Value, engine: EngineKind) -> Cow<
         Cow::Borrowed(crate::memory::Tool::for_input(input).model_name(engine))
     } else if tool == crate::team_tools::POLICY_NAME {
         Cow::Borrowed(crate::team_tools::Tool::for_input(input).model_name(engine))
+    } else if tool == crate::instructions::POLICY_NAME {
+        Cow::Borrowed(crate::instructions::model_name(engine))
     } else if tool == crate::apps::PROPOSE_POLICY {
         Cow::Owned(match engine {
             EngineKind::Claude => format!("mcp__dots__{}", crate::apps::propose::TOOL),
@@ -1118,6 +1120,24 @@ impl Runner {
         } else {
             tools
         };
+        // A run of a chat the person started may propose new instructions for its dot
+        // (conversational chat spec section 4), unless its policy denies `Instructions`
+        // outright: the tool is then neither offered nor named.
+        let instructions_off = dot
+            .spec
+            .policy
+            .resolve(crate::policy::INSTRUCTIONS_TOOL, &Value::Null)
+            == crate::policy::Action::Deny;
+        let proposes = !instructions_off
+            && self.checkins().is_some()
+            && match crate::instructions::may_propose(&self.store, run).await {
+                Ok(may) => may,
+                Err(e) => {
+                    tracing::warn!(run = %run.id, "reading the run's topic failed: {e}");
+                    false
+                }
+            };
+        let tools = tools.with_instructions(proposes);
         let tools = Arc::new(tools);
         let _closer = CloseOnDrop(tools.clone());
         if cancel.is_cancelled() {
@@ -1162,6 +1182,9 @@ impl Runner {
                 memories: &memories,
                 apps: tools.apps().map(|apps| apps.as_ref()),
                 recent: &recent,
+                instructions_tool: tools
+                    .instructions()
+                    .then(|| crate::instructions::model_name(dot.spec.engine)),
             },
         );
         // A chat's first prompt lists the workflows it may start (teams spec section 7).

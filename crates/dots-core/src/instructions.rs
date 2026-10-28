@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::events::{Bus, RuntimeEvent};
-use crate::model::Run;
+use crate::model::{EngineKind, Run};
 use crate::store::Store;
 use crate::{Error, Result};
 
@@ -52,6 +52,15 @@ pub fn properties() -> Value {
 }
 
 pub const REQUIRED: [&str; 2] = ["instructions", "reason"];
+
+/// The name the run's model knows the tool by: Dots' own MCP server's tool on the Claude
+/// engine, a built-in tool on the local engine.
+pub fn model_name(engine: EngineKind) -> &'static str {
+    match engine {
+        EngineKind::Claude => "mcp__dots__propose_instructions",
+        EngineKind::Local => TOOL,
+    }
+}
 
 /// The tool as Dots' own `dots` MCP server lists it.
 pub fn mcp_schema() -> Value {

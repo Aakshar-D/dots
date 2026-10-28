@@ -16,7 +16,7 @@ use dots_core::model::{ApplyState, EngineKind, TriggerKind, WorkspaceMode};
 use dots_core::model::{Run, RunStatus};
 use dots_core::prompt::{
     build_prompt, build_prompt_full, context_tool_name, is_typed, recent_runs, PromptParts,
-    CHAT_SUMMARY_RULE, CONVERSATION, RECENT_TEXT,
+    CHAT_SUMMARY_RULE, CONVERSATION, NO_INSTRUCTIONS_TOOL, RECENT_TEXT,
 };
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
@@ -557,6 +557,43 @@ fn a_person_s_resumed_message_names_the_runs_since_before_it() {
         build_prompt_full(&dot, &made, Path::new("C:/ws"), at(), "", parts),
         "Approved."
     );
+}
+
+#[test]
+fn a_person_s_chat_is_told_how_it_may_change_its_instructions() {
+    let dot = fake_dot("d", Path::new("C:/repo"), WorkspaceMode::Folder);
+    let typed = fake_run(
+        TriggerKind::Chat,
+        Some(json!({"message": "do it twice from now on", "typed": true})),
+        None,
+    );
+    let offered = PromptParts {
+        instructions_tool: Some("propose_instructions"),
+        ..PromptParts::default()
+    };
+    let p = build_prompt_full(&dot, &typed, Path::new("C:/ws"), at(), "", offered);
+    assert!(p.contains(&format!(
+        "{CONVERSATION}- When the person asks you to change how you work from now on, propose \
+         new instructions with `propose_instructions` instead of only promising to.\n\n"
+    )));
+    assert!(!p.contains(NO_INSTRUCTIONS_TOOL));
+    let p = build_prompt_full(
+        &dot,
+        &typed,
+        Path::new("C:/ws"),
+        at(),
+        "",
+        PromptParts::default(),
+    );
+    assert!(p.contains(&format!("{CONVERSATION}{NO_INSTRUCTIONS_TOOL}\n")));
+    // A chat run Dots made is told neither.
+    let made = fake_run(
+        TriggerKind::Chat,
+        Some(json!({"message": "Approved."})),
+        None,
+    );
+    let p = build_prompt_full(&dot, &made, Path::new("C:/ws"), at(), "", offered);
+    assert!(!p.contains("propose_instructions") && !p.contains(NO_INSTRUCTIONS_TOOL));
 }
 
 #[test]
