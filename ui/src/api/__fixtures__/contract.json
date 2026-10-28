@@ -668,6 +668,10 @@
         {
           "action": "allow",
           "tool": "ProposeApp"
+        },
+        {
+          "action": "allow",
+          "tool": "Instructions"
         }
       ]
     },
@@ -829,6 +833,10 @@
           {
             "action": "allow",
             "tool": "ProposeApp"
+          },
+          {
+            "action": "allow",
+            "tool": "Instructions"
           }
         ]
       },
@@ -994,6 +1002,10 @@
         {
           "action": "allow",
           "tool": "ProposeApp"
+        },
+        {
+          "action": "allow",
+          "tool": "Instructions"
         }
       ]
     },
@@ -2424,6 +2436,10 @@
         {
           "action": "allow",
           "tool": "ProposeApp"
+        },
+        {
+          "action": "allow",
+          "tool": "Instructions"
         }
       ]
     },
