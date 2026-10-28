@@ -2,7 +2,10 @@
 // WebRTC STUN server; a TURN-over-TCP server) in one DevTools target of a debug Dots, with
 // listeners on 127.0.0.1 that count what arrives. The CSP does not cover these, so Dots closes
 // them with browser arguments (`browser_args` in apps/dots-app/src/app_frame.rs). Each probe
-// waits 6 s. Exit 1 when any probe got a hit, 0 otherwise.
+// waits 6 s. Exit 1 when any probe got a hit, 2 when a probe did not run, 0 otherwise.
+//
+// Needs Node 22 or later (the global WebSocket). `preconnect_name` uses the public name
+// leak.localtest.me, which public DNS resolves to 127.0.0.1: without that DNS it cannot hit.
 //
 // Usage: node tools/smoke/frame-leaks.mjs <page|iframe> <base port>
 // Start a debug Dots with WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS holding
@@ -32,6 +35,7 @@ const evaluate = (expression) => new Promise((r) => {
 });
 const out = [];
 let leaked = false;
+let skipped = false;
 for (const [i, [name, kind, js]] of probes.entries()) {
   const port = base + i;
   let hits = 0;
@@ -42,9 +46,10 @@ for (const [i, [name, kind, js]] of probes.entries()) {
   const said = await evaluate(`(() => { try { ${js(port)} return "ran"; } catch (e) { return "threw " + e.message; } })()`);
   await new Promise((r) => setTimeout(r, 6000));
   if (hits > 0) leaked = true;
+  if (said !== "ran") skipped = true;
   out.push(`${name}: ${said}, ${hits} ${kind} hit(s)`);
   sock.close();
 }
 console.log(type, t.url.slice(0, 55), "\n  " + out.join("\n  "));
 ws.close();
-setTimeout(() => process.exit(leaked ? 1 : 0), 100);
+setTimeout(() => process.exit(leaked ? 1 : skipped ? 2 : 0), 100);
