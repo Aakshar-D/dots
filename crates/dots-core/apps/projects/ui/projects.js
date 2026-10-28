@@ -20,6 +20,9 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 const LIST_LIMIT = 1000;
 /// The most Activity rows the side pane shows.
 const PANE_ACTIVITY = 200;
+/// The fields whose text and focus a redraw keeps, and the panes whose scroll it keeps.
+const FIELDS = "input[aria-label], textarea[aria-label]";
+const SCROLLERS = [".list", ".side", ".pane"];
 
 /// An element: `attrs` are attributes, with `on<event>` for listeners and `text` for its text;
 /// a null or false attribute or child is left out.
@@ -29,7 +32,11 @@ export function h(tag, attrs = {}, ...children) {
     if (value === null || value === undefined || value === false) continue;
     if (key.startsWith("on")) el.addEventListener(key.slice(2), value);
     else if (key === "text") el.textContent = value;
-    else if (key === "value") el.value = value;
+    else if (key === "value") {
+      // The default too, so that a redraw can tell a draft from the value it was drawn with.
+      el.defaultValue = value;
+      el.value = value;
+    }
     else el.setAttribute(key, value === true ? "" : String(value));
   }
   for (const child of children.flat()) {
@@ -97,14 +104,17 @@ export function describe(row) {
   }
 }
 
-/// An input that does `action(text)` on Enter and forgets its text on Escape.
+/// An input that does `action(text)` on Enter and forgets its text on Escape. It forgets the
+/// text before the action runs, so that a second Enter sends nothing.
 function entry(attrs, action) {
   return h("input", {
     ...attrs,
     onkeydown: (e) => {
       if (e.key === "Enter" && e.target.value.trim() !== "") {
         e.preventDefault();
-        action(e.target.value.trim());
+        const text = e.target.value.trim();
+        e.target.value = "";
+        action(text);
       } else if (e.key === "Escape") {
         e.target.value = "";
         e.target.blur();
@@ -176,11 +186,13 @@ export function mount(root, dots) {
     return load();
   }
 
-  /// A change made in the side pane, then a load; a refusal shows in the pane.
-  async function paneAct(change) {
+  /// A change made in the side pane, then a load; a refusal shows in the pane. `done` runs when
+  /// the change was accepted, before the load draws.
+  async function paneAct(change, done) {
     state.paneError = null;
     try {
       await change();
+      done?.();
     } catch (e) {
       state.paneError = String(e?.message ?? e);
     }
@@ -209,10 +221,55 @@ export function mount(root, dots) {
     return load();
   }
 
+  /// What the person has typed (a field whose text differs from the one it was drawn with, by its
+  /// accessible name), the field with the focus and its selection, and the scroll offsets.
+  function snapshot() {
+    const fields = new Map();
+    for (const el of root.querySelectorAll(FIELDS)) {
+      if (el.value !== el.defaultValue) fields.set(el.getAttribute("aria-label"), el.value);
+    }
+    const active = document.activeElement;
+    const focus =
+      active && root.contains(active) && active.matches(FIELDS)
+        ? {
+            label: active.getAttribute("aria-label"),
+            start: active.selectionStart,
+            end: active.selectionEnd,
+          }
+        : null;
+    const scroll = SCROLLERS.map((sel) => [sel, root.querySelector(sel)?.scrollTop ?? 0]);
+    return { fields, focus, scroll };
+  }
+
+  /// Puts back what `snapshot` noted, in the page just drawn.
+  function restore({ fields, focus, scroll }) {
+    for (const el of root.querySelectorAll(FIELDS)) {
+      const label = el.getAttribute("aria-label");
+      if (fields.has(label)) el.value = fields.get(label);
+    }
+    for (const [sel, top] of scroll) {
+      const el = root.querySelector(sel);
+      if (el) el.scrollTop = top;
+    }
+    if (focus === null) return;
+    const el = [...root.querySelectorAll(FIELDS)].find(
+      (f) => f.getAttribute("aria-label") === focus.label,
+    );
+    if (!el) return;
+    el.focus();
+    try {
+      if (focus.start !== null) el.setSelectionRange(focus.start, focus.end);
+    } catch {
+      // An input of a kind with no selection (a date).
+    }
+  }
+
   function draw() {
+    const before = snapshot();
     root.replaceChildren(
       h("div", { class: "projects" }, side(), list(), state.task && pane(state.task)),
     );
+    restore(before);
     if (state.focus !== null) {
       root.querySelector(`[data-focus="${state.focus}"]`)?.focus();
       state.focus = null;
@@ -247,6 +304,8 @@ export function mount(root, dots) {
     const v = state.view;
     if (v.kind === "project") {
       const project = state.projects.find((p) => p.id === v.id);
+      // A project that is not listed (made, and then the list failed to load; or deleted).
+      if (!project) return [];
       const loose = state.tasks.filter((t) => t.section_id === null);
       const out = project.sections.map((s) => ({
         key: s.id,
@@ -315,7 +374,13 @@ export function mount(root, dots) {
         "h3",
         {},
         entry(
-          { class: "rename", value: g.section.name, "aria-label": `Rename ${g.section.name}`, "data-focus": "rename", onblur: () => { state.renaming = null; draw(); } },
+          { class: "rename", value: g.section.name, "aria-label": `Rename ${g.section.name}`, "data-focus": "rename", onblur: () => {
+              // Removing the input blurs it too: only a person leaving it redraws.
+              if (state.renaming === null) return;
+              state.renaming = null;
+              draw();
+            },
+          },
           (name) => {
             state.renaming = null;
             return act(() => dots.call("rename_section", { id: g.section.id, name }));
@@ -391,6 +456,7 @@ export function mount(root, dots) {
         "aria-label": task.title,
         "data-task": task.id,
         draggable: inProject ? "true" : null,
+        ondragend: inProject ? () => (state.dragging = null) : null,
         ondragstart: inProject
           ? (e) => {
               state.dragging = task.id;
@@ -427,9 +493,12 @@ export function mount(root, dots) {
         "aria-label": "Close the task",
         text: "×",
         onclick: () => {
+          // A load in flight must not open the task again.
+          loads++;
           state.open = null;
           state.task = null;
           draw();
+          load();
         },
       }),
       h("input", {
@@ -473,7 +542,7 @@ export function mount(root, dots) {
           ),
         ),
       ),
-      spec(t, update),
+      spec(t),
       h("h4", { text: "Subtasks" }),
       h(
         "ul",
@@ -509,7 +578,7 @@ export function mount(root, dots) {
   }
 
   /// The task's spec: shown as Markdown, or edited as text.
-  function spec(t, update) {
+  function spec(t) {
     if (state.editingSpec) {
       const box = h("textarea", { class: "spec-edit", "aria-label": "Spec", rows: 10, value: t.spec });
       return h(
@@ -523,10 +592,12 @@ export function mount(root, dots) {
           h("button", {
             class: "primary",
             text: "Save",
-            onclick: () => {
-              state.editingSpec = false;
-              update({ spec: box.value });
-            },
+            // The edit stays, with the person's text, until the update is accepted.
+            onclick: () =>
+              paneAct(
+                () => dots.call("update_task", { id: t.id, spec: box.value }),
+                () => (state.editingSpec = false),
+              ),
           }),
           h("button", {
             text: "Cancel",
@@ -612,9 +683,13 @@ export function mount(root, dots) {
       h("button", {
         class: "primary",
         text: "Comment",
-        onclick: () =>
-          box.value.trim() !== "" &&
-          paneAct(() => dots.call("comment", { task_id: t.id, text: box.value.trim() })),
+        onclick: () => {
+          const text = box.value.trim();
+          if (text === "") return;
+          // Forgotten before the call, so that a second click sends nothing.
+          box.value = "";
+          return paneAct(() => dots.call("comment", { task_id: t.id, text }));
+        },
       }),
     );
   }

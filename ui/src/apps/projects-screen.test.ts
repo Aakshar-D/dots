@@ -3,7 +3,7 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { copy, landlord, sample, show, signup, task } from "./projects-fake";
+import { copy, landlord, sample, show, signup, task, website } from "./projects-fake";
 
 const region = (name: string) => screen.getByRole("region", { name });
 const row = (name: string) => screen.getByRole("row", { name });
@@ -151,5 +151,91 @@ describe("Projects' screen", () => {
     tasks.push(task({ id: "t8", title: "Pack boxes", project_id: null, section_id: null }));
     fake.change();
     expect(await screen.findByRole("row", { name: "Pack boxes" })).toBeVisible();
+  });
+
+  it("a change from a dot keeps what the person is typing and where they are", async () => {
+    const tasks = [landlord];
+    const fake = sample({ list_tasks: () => ({ tasks, more: false }) });
+    const user = await show(fake);
+    const box = screen.getByRole("textbox", { name: "Add a task to To-dos" });
+    await user.type(box, "Pack the");
+    tasks.push(task({ id: "t8", title: "Pack boxes", project_id: null, section_id: null }));
+    fake.change();
+    expect(await screen.findByRole("row", { name: "Pack boxes" })).toBeVisible();
+    const again = screen.getByRole("textbox", { name: "Add a task to To-dos" });
+    expect(again).toHaveValue("Pack the");
+    expect(again).toHaveFocus();
+  });
+
+  it("a title is shown as text, never as markup", async () => {
+    const evil = task({
+      id: "t7",
+      title: '<img src=x onerror="window.__hit=1">',
+      project_id: null,
+      section_id: null,
+    });
+    const fake = sample({ list_tasks: () => ({ tasks: [evil], more: false }) });
+    await show(fake);
+    expect(row('<img src=x onerror="window.__hit=1">')).toHaveTextContent(
+      '<img src=x onerror="window.__hit=1">',
+    );
+    expect(document.querySelector("img")).toBeNull();
+    expect((window as unknown as { __hit?: number }).__hit).toBeUndefined();
+  });
+
+  it("a list that fails to load says so and the page stays usable", async () => {
+    let fail = true;
+    const fake = sample({
+      list_tasks: () => {
+        if (fail) throw new Error("the list is down");
+        return { tasks: [landlord], more: false };
+      },
+    });
+    await show(fake);
+    expect(screen.getByRole("alert")).toHaveTextContent("the list is down");
+    fail = false;
+    fake.change();
+    expect(await screen.findByRole("row", { name: "Call the landlord" })).toBeVisible();
+  });
+
+  it("creating a project whose list then fails to load does not break the page", async () => {
+    let fail = false;
+    const fake = sample({
+      list_projects: () => {
+        if (fail) throw new Error("no projects now");
+        return [website];
+      },
+      create_project: () => {
+        fail = true;
+        return { id: "p2", name: "Home", position: 2, sections: [] };
+      },
+    });
+    const user = await show(fake);
+    await user.type(screen.getByRole("textbox", { name: "New project" }), "Home{Enter}");
+    expect(await screen.findByRole("alert")).toHaveTextContent("no projects now");
+    fail = false;
+    await user.click(screen.getByRole("button", { name: "My tasks" }));
+    expect(await screen.findByRole("row", { name: "Call the landlord" })).toBeVisible();
+  });
+
+  it("two quick Enters add one task", async () => {
+    const fake = sample();
+    await show(fake);
+    const box = screen.getByRole("textbox", { name: "Add a task to To-dos" });
+    fireEvent.change(box, { target: { value: "Rent" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    fireEvent.keyDown(box, { key: "Enter" });
+    await waitFor(() => expect(fake.callsTo("list_tasks")).toHaveLength(2));
+    expect(fake.callsTo("create_task")).toEqual([{ title: "Rent" }]);
+  });
+
+  it("a drop after a drag has ended moves nothing", async () => {
+    const fake = sample();
+    const user = await show(fake);
+    await user.click(screen.getByRole("button", { name: "● Website relaunch" }));
+    fireEvent.dragStart(row("Write pricing page copy"));
+    fireEvent.dragEnd(row("Write pricing page copy"));
+    fireEvent.drop(row("Pick hosting"));
+    expect(fake.callsTo("move_task")).toEqual([]);
   });
 });

@@ -1,6 +1,6 @@
 // Projects' side pane (app library spec section 8): a task's fields, its spec in Markdown, its
 // subtasks and its Activity, with Undo, a dot's runs and the comment box.
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { type Input, sample, show, signup } from "./projects-fake";
@@ -202,5 +202,62 @@ describe("Projects' side pane", () => {
     const select = screen.getByRole("combobox", { name: "Assignee" });
     expect(select).toHaveValue("dx");
     expect(within(select).getByRole("option", { name: "● removed dot" })).toBeVisible();
+  });
+
+  it("keeps the spec being edited, the comment and the subtask draft across a redraw", async () => {
+    const { fake, user, pane } = await opened();
+    await user.type(within(pane).getByRole("textbox", { name: "Comment" }), "Half a thou");
+    await user.type(within(pane).getByRole("textbox", { name: "New subtask" }), "Dep");
+    fake.change();
+    await waitFor(() => expect(fake.callsTo("get_task")).toHaveLength(2));
+    const now = screen.getByRole("complementary", { name: "Task" });
+    expect(within(now).getByRole("textbox", { name: "Comment" })).toHaveValue("Half a thou");
+    expect(within(now).getByRole("textbox", { name: "New subtask" })).toHaveValue("Dep");
+    expect(within(now).getByRole("textbox", { name: "New subtask" })).toHaveFocus();
+  });
+
+  it("a refused spec save keeps what the person wrote", async () => {
+    const { user, pane } = await opened({
+      update_task: () => {
+        throw new Error("The spec is too long");
+      },
+    });
+    await user.click(within(pane).getByRole("button", { name: "Edit the spec" }));
+    const box = screen.getByRole("textbox", { name: "Spec" });
+    await user.clear(box);
+    await user.type(box, "My new spec");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("The spec is too long");
+    expect(screen.getByRole("textbox", { name: "Spec" })).toHaveValue("My new spec");
+  });
+
+  it("closing the pane while a change arrives keeps it closed", async () => {
+    let release: () => void = () => {};
+    let hold = false;
+    const { fake, user, pane } = await opened({
+      get_task: async () => {
+        if (hold) await new Promise<void>((resolve) => (release = resolve));
+        return detail();
+      },
+    });
+    hold = true;
+    fake.change();
+    await waitFor(() => expect(fake.callsTo("get_task")).toHaveLength(2));
+    await user.click(within(pane).getByRole("button", { name: "Close the task" }));
+    release();
+    await waitFor(() => expect(fake.callsTo("list_tasks").length).toBeGreaterThan(2));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(screen.queryByRole("complementary", { name: "Task" })).toBeNull();
+  });
+
+  it("two quick clicks on Comment add one comment", async () => {
+    const { fake, pane } = await opened({ comment: () => ({ id: "a9" }) });
+    const box = within(pane).getByRole("textbox", { name: "Comment" });
+    fireEvent.change(box, { target: { value: "Once" } });
+    const button = within(pane).getByRole("button", { name: "Comment" });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    await waitFor(() => expect(fake.callsTo("get_task")).toHaveLength(2));
+    expect(fake.callsTo("comment")).toEqual([{ task_id: "t2", text: "Once" }]);
   });
 });
