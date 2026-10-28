@@ -5,8 +5,8 @@ mod common;
 use common::{spec, temp_store};
 use dots_core::events::RuntimeEvent;
 use dots_core::instructions::{
-    may_propose, InstructionStatus, Proposals, DECIDED_ALREADY, MAX_INSTRUCTIONS, MAX_REASON,
-    NOT_HERE, SENT, UNCHANGED,
+    may_propose, InstructionProposal, InstructionStatus, Proposals, DECIDED_ALREADY,
+    MAX_INSTRUCTIONS, MAX_REASON, NOT_HERE, SENT, UNCHANGED,
 };
 use dots_core::model::{NewRun, Run, RunStatus, TriggerKind};
 use dots_core::store::Store;
@@ -207,4 +207,90 @@ async fn a_proposal_is_decided_once_and_goes_with_its_dot() {
         .await
         .unwrap()
         .is_empty());
+}
+
+/// A proposal of the run `run`, made at `created_at`, with the id `id`.
+fn proposal(run: &Run, id: &str, created_at: &str) -> InstructionProposal {
+    InstructionProposal {
+        id: id.into(),
+        dot_id: run.dot_id.clone(),
+        run_id: run.id.clone(),
+        root_run_id: run.root_run_id.clone(),
+        base: "Do the thing.".into(),
+        instructions: format!("Do the thing {id}."),
+        reason: "Why".into(),
+        status: InstructionStatus::Pending,
+        answer_run_id: None,
+        created_at: created_at.into(),
+        decided_at: None,
+    }
+}
+
+#[tokio::test]
+async fn proposals_made_in_the_same_millisecond_list_the_newer_first() {
+    let (_d, store) = temp_store().await;
+    let dot = store.create_dot(&spec("shopper"), None).await.unwrap();
+    let run = chat(&store, &dot.id, true).await;
+    let at = "2026-10-28T09:00:00.000Z";
+    // The newer one has the smaller id: the order cannot come from the ids.
+    store
+        .add_instruction_proposal(&proposal(&run, "b", at))
+        .await
+        .unwrap();
+    store
+        .add_instruction_proposal(&proposal(&run, "a", at))
+        .await
+        .unwrap();
+    let ids: Vec<String> = store
+        .list_instruction_proposals(Some(&dot.id))
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|p| p.id)
+        .collect();
+    assert_eq!(ids, ["a", "b"]);
+}
+
+#[tokio::test]
+async fn only_the_waiting_proposals_are_pending() {
+    let (_d, store) = temp_store().await;
+    let one = store.create_dot(&spec("one"), None).await.unwrap();
+    let two = store.create_dot(&spec("two"), None).await.unwrap();
+    let three = store.create_dot(&spec("three"), None).await.unwrap();
+    let (p, _rx) = proposals(&store);
+    for dot in [&one, &two, &three] {
+        let run = chat(&store, &dot.id, true).await;
+        p.propose(&run.id, "Other.", "Why").await.unwrap();
+    }
+    // One is replaced by a newer one, one is decided.
+    let run = chat(&store, &one.id, true).await;
+    p.propose(&run.id, "Other again.", "Why").await.unwrap();
+    let decided = store
+        .list_instruction_proposals(Some(&two.id))
+        .await
+        .unwrap()[0]
+        .id
+        .clone();
+    store
+        .decide_instruction_proposal(
+            &decided,
+            InstructionStatus::Rejected,
+            &NewRun::new(&two.id, TriggerKind::Chat),
+        )
+        .await
+        .unwrap();
+    let pending = store.pending_instruction_proposals().await.unwrap();
+    assert_eq!(
+        pending
+            .iter()
+            .map(|p| (p.dot_id.as_str(), p.instructions.as_str()))
+            .collect::<Vec<_>>(),
+        [
+            (one.id.as_str(), "Other again."),
+            (three.id.as_str(), "Other.")
+        ]
+    );
+    assert!(pending
+        .iter()
+        .all(|p| p.status == InstructionStatus::Pending));
 }

@@ -691,10 +691,9 @@ impl Runtime {
             .collect();
         let instructions = self
             .store
-            .list_instruction_proposals(None)
+            .pending_instruction_proposals()
             .await?
             .into_iter()
-            .filter(|p| p.status == crate::instructions::InstructionStatus::Pending)
             .map(|proposal| crate::instructions::PendingInstructions {
                 dot_name: name(&proposal.dot_id),
                 proposal,

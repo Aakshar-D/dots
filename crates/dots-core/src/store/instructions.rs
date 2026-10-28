@@ -74,17 +74,29 @@ impl Store {
         proposal_from_row(&row)
     }
 
-    /// The proposals of one dot or of all, newest first.
+    /// The proposals of one dot or of all, newest first; of two made in the same millisecond, the
+    /// one stored last (`rowid`).
     pub async fn list_instruction_proposals(
         &self,
         dot_id: Option<&str>,
     ) -> Result<Vec<InstructionProposal>> {
         let rows = sqlx::query(&format!(
             "SELECT {COLUMNS} FROM instruction_proposals WHERE ? IS NULL OR dot_id = ? \
-             ORDER BY created_at DESC, id DESC"
+             ORDER BY created_at DESC, rowid DESC"
         ))
         .bind(dot_id)
         .bind(dot_id)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(proposal_from_row).collect()
+    }
+
+    /// The proposals that wait for the person, of every dot, newest first: what the Inbox lists.
+    pub async fn pending_instruction_proposals(&self) -> Result<Vec<InstructionProposal>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {COLUMNS} FROM instruction_proposals WHERE status = 'pending' \
+             ORDER BY created_at DESC, rowid DESC"
+        ))
         .fetch_all(&self.pool)
         .await?;
         rows.iter().map(proposal_from_row).collect()
