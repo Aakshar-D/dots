@@ -1,0 +1,61 @@
+# Accounts
+
+An account is a group of people and dots that belong together, such as your team or company.
+Your own dots live in **Personal**, which is always there. This guide explains how Dots knows who
+you are, how to switch between accounts, and how to join one.
+
+Members, roles, invites, shared workspaces and API keys are **coming next**. This version covers
+your identity, the switcher, and joining.
+
+## Your Dots ID
+
+The first time Dots starts, it makes a key pair for you on this PC. The private half never leaves
+the PC. The public half is your **Dots ID**, shown as a short **fingerprint** so it is easy to read
+out and compare.
+
+- Open **Settings → Profile** to see your fingerprint.
+- Choose **Copy my Dots ID** to copy it. Send it to an account's admin when they ask who you are.
+- Your fingerprint stays the same across restarts and updates. It changes only if you delete the
+  Dots data folder.
+
+## Your profile
+
+In **Settings → Profile** you can set the name other people see. The initials on the account
+switcher in the rail come from that name. Save the name and the initials change right away.
+
+## Switching accounts
+
+At the top of the rail is the account switcher. Click it to see **Personal** and every account you
+have joined.
+
+- Pick one and **Home** shows only that account's dots. Your pick is remembered.
+- A new dot you create starts in the selected account.
+- If you follow a link to a dot in another account, Dots switches to that account for you.
+- Next to each account the menu shows how many things are waiting for you there.
+
+Switching only narrows **Home**. **Inbox**, **Needs you** and notifications always show everything,
+from every account, so an approval is never hidden because you are looking at another account.
+
+## Joining an account
+
+Your admin gives you a join code. See [Setting up Dots for an organisation](vault-admin.md) for
+what the admin does.
+
+1. Open the switcher and choose **Join an account**, or go to **Settings → Accounts** and choose
+   **Join an account**.
+2. Paste the join code and sign in to the source with your own credential.
+3. The account now appears in the switcher.
+
+**Manage accounts** in the switcher opens **Settings → Accounts**, where you can update an
+account's sign-in or remove it (leave it). If you remove the account that is selected, Dots goes back to
+**Personal**.
+
+Settings used to call these "Organisations". It is the same thing under a new name.
+
+## Coming next
+
+- Members of an account and who they are.
+- Roles, so an admin can decide who may do what.
+- Invites by Dots ID instead of a join code.
+- Shared workspaces.
+- API keys for an account.
