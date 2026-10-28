@@ -13,6 +13,7 @@
     "windows": [
       {
         "label": "main",
+        "create": false,
         "title": "Dots",
         "width": 1200,
         "height": 800,

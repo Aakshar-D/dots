@@ -176,6 +176,18 @@ pub fn show_main(app: &AppHandle) {
 /// `panics_logged`: `run` has installed the panic hook already, so `setup` must not chain a
 /// second one (one line per panic).
 fn setup(app: &AppHandle, panics_logged: bool) -> Result<(), Box<dyn std::error::Error>> {
+    // The main window is made here, not by Tauri, so it starts with `app_frame::browser_args`
+    // (`additionalBrowserArgs` in the config cannot differ between dev and release).
+    let config = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|w| w.label == "main")
+        .ok_or("tauri.conf.json has no main window")?;
+    tauri::WebviewWindowBuilder::from_config(app, config)?
+        .additional_browser_args(&app_frame::browser_args(tauri::is_dev()))
+        .build()?;
     // Without a data folder there is nowhere to log and nothing to start: the error goes to
     // the fatal-error page like any other failed start.
     let data_dir = startup::data_dir(

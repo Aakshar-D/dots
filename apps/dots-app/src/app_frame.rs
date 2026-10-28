@@ -17,6 +17,23 @@ pub const ORIGIN: &str = "http://dots-app.localhost";
 /// The client the page talks to Dots through.
 pub const CLIENT: &str = include_str!("app_client.js");
 
+/// The WebView2 arguments of the main window. The frame's CSP does not cover WebRTC (STUN and
+/// TURN servers get packets and connections) or connection hints (`preconnect`, `dns-prefetch`),
+/// so a page could reach the network with them. WebRTC is held to proxied UDP, and every name and
+/// address resolves to nothing; the custom protocols are served by Dots and need no lookup.
+/// wry passes its own `--disable-features` only when it is given no arguments, so it is repeated
+/// here. Under `tauri dev` the page comes from `localhost`, which stays resolvable.
+pub(crate) fn browser_args(dev: bool) -> String {
+    let rule = if dev {
+        "MAP * ~NOTFOUND, EXCLUDE localhost"
+    } else {
+        "MAP * ~NOTFOUND"
+    };
+    format!(
+        "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --webrtc-ip-handling-policy=disable_non_proxied_udp --host-resolver-rules=\"{rule}\""
+    )
+}
+
 /// What a request asks for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Target {
@@ -243,6 +260,20 @@ pub async fn respond(rt: Option<&Runtime>, request: &Request<Vec<u8>>) -> Respon
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_release_arguments_are_exactly_these() {
+        assert_eq!(
+            browser_args(false),
+            "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --webrtc-ip-handling-policy=disable_non_proxied_udp --host-resolver-rules=\"MAP * ~NOTFOUND\""
+        );
+    }
+
+    #[test]
+    fn a_dev_build_leaves_localhost_resolvable_and_a_release_build_leaves_nothing() {
+        assert!(browser_args(true).contains("EXCLUDE localhost"));
+        assert!(!browser_args(false).contains("EXCLUDE"));
+    }
 
     fn app(name: &str, version: u32, path: &str) -> Option<Target> {
         Some(Target::App {
