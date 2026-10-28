@@ -3,7 +3,7 @@
 - Date: 2026-10-28
 - Build: dev app (`bun run tauri dev`), branch `feat/accounts`.
 - Data: a fresh data folder for step 1, then the same folder for the rest. A test organisation to join (see `docs/vault-admin.md`), and at least one dot that belongs to it.
-- Steps: 8, all manual, to be done by a person at the machine. Mark each pass or fail and note anything odd.
+- Steps: 9, all manual, to be done by a person at the machine. Mark each pass or fail and note anything odd.
 
 ## Steps
 
@@ -45,12 +45,18 @@ Result: not run.
 
 ### 7. Leaving the selected account returns to Personal
 
-Expect: with the test account selected, leave it with Remove in Settings › Accounts; the switcher falls back to Personal and Home shows Personal's dots.
+Expect: with the test account selected, leave it with Remove in Settings › Accounts; the switcher falls back to Personal and Home shows Personal's dots. The test account's dots are listed there too, marked "account removed", and open without switching account.
 
 Result: not run.
 
 ### 8. Approvals outside the selected account still show
 
-Expect: rejoin the test account, make the dot from step 5 ask for approval (give it a task whose tool needs approval), then select Personal. The approval still shows in the Inbox and in the Needs you count, and the switcher's menu shows a waiting count beside the test account.
+Expect: rejoin the test account (step 7 left it). The dot created in step 6 is back in that account, no longer marked "account removed", so it can run again. Make that dot ask for approval (give it a task whose tool needs approval), then select Personal. The approval still shows in the Inbox and in the Needs you count, and the switcher's menu shows a waiting count beside the test account.
+
+Result: not run.
+
+### 9. Switching with a dot open stays on the new account
+
+Expect: open a dot of the test account on Home, then pick Personal in the switcher. The switcher stays on Personal (it does not switch back), and Home opens a Personal dot. Do the same from a Personal dot to the test account.
 
 Result: not run.
