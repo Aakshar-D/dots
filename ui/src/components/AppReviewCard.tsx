@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
 
-import { commands } from "@/api/commands";
+import { CommandError, commands } from "@/api/commands";
 import type { AppFile, AppProposal, ProposalDecision, Run } from "@/api/types";
 import { AppFrame } from "@/components/AppFrame";
 import { ConfirmButton } from "@/components/ConfirmButton";
@@ -88,6 +88,10 @@ function Preview({ proposal }: { proposal: AppProposal }) {
   const [opened, setOpened] = useState<{ id: string } | { error: unknown } | null>(null);
   // The calls of tools that write which went through: the page hears of each (`dots.onChange`).
   const [changes, setChanges] = useState(0);
+  // Dots keeps 8 previews open and closed this one for another card's: the person starts it
+  // again (`fresh` counts the starts).
+  const [closed, setClosed] = useState(false);
+  const [fresh, setFresh] = useState(0);
   useEffect(() => {
     let gone = false;
     let id: string | null = null;
@@ -107,7 +111,28 @@ function Preview({ proposal }: { proposal: AppProposal }) {
       gone = true;
       if (id !== null) void commands.appPreviewClose(id).catch(() => {});
     };
-  }, [proposal.id]);
+  }, [proposal.id, fresh]);
+  if (closed) {
+    return (
+      <div role="alert" className="flex flex-col items-start gap-2 text-sm">
+        <p>
+          Dots closed this preview to open another card's: it keeps 8 open at a time. Your changes
+          in it are gone.
+        </p>
+        <Button
+          size="sm"
+          onClick={() => {
+            setClosed(false);
+            setOpened(null);
+            setChanges(0);
+            setFresh((n) => n + 1);
+          }}
+        >
+          Start the preview again
+        </Button>
+      </div>
+    );
+  }
   if (opened === null) return <p className="text-muted-foreground">Starting the preview…</p>;
   if ("error" in opened) return <ErrorNote error={opened.error} />;
   const preview = opened.id;
@@ -119,12 +144,18 @@ function Preview({ proposal }: { proposal: AppProposal }) {
           title={`${proposal.summary.title} preview`}
           tools={proposal.summary.tools.map((t) => t.name)}
           call={(tool, input) =>
-            commands.appPreviewCall(preview, tool, input).then((result) => {
-              if (proposal.summary.tools.some((t) => t.name === tool && t.writes)) {
-                setChanges((n) => n + 1);
-              }
-              return result;
-            })
+            commands.appPreviewCall(preview, tool, input).then(
+              (result) => {
+                if (proposal.summary.tools.some((t) => t.name === tool && t.writes)) {
+                  setChanges((n) => n + 1);
+                }
+                return result;
+              },
+              (error: unknown) => {
+                if (error instanceof CommandError && error.kind === "not_found") setClosed(true);
+                throw error;
+              },
+            )
           }
           changes={changes}
         />
