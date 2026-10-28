@@ -274,3 +274,30 @@ async fn install_projects_starts_on_the_kept_data_or_fresh() {
     let other = apps.install_bundled("expenses", None).await;
     assert!(matches!(other, Err(Error::NotFound(_))), "{other:?}");
 }
+
+#[tokio::test]
+async fn the_prompt_to_start_dots_shows_until_the_person_answers_or_sets_the_switch() {
+    let (_dir, _store, apps) = fixture().await;
+    apps.sync_bundled().await.unwrap();
+    assert!(!config(&apps).await.start_asked);
+    apps.answer_start_prompt(PROJECTS, false).await.unwrap();
+    let now = config(&apps).await;
+    assert!(
+        now.start_asked && !now.can_start_dots,
+        "Not now leaves it off"
+    );
+
+    // A fresh install asks again; "Switch on" turns it on.
+    apps.remove(PROJECTS, true, true).await.unwrap();
+    apps.install_bundled(PROJECTS, None).await.unwrap();
+    assert!(!config(&apps).await.start_asked);
+    apps.answer_start_prompt(PROJECTS, true).await.unwrap();
+    let now = config(&apps).await;
+    assert!(now.start_asked && now.can_start_dots);
+
+    // The switch on the Apps screen is an answer too.
+    apps.remove(PROJECTS, true, true).await.unwrap();
+    apps.install_bundled(PROJECTS, None).await.unwrap();
+    apps.set_can_start_dots(PROJECTS, false).await.unwrap();
+    assert!(config(&apps).await.start_asked);
+}

@@ -176,5 +176,24 @@ async fn a_dot_given_a_task_reads_it_reports_and_leaves_it_in_review() {
     let got = person(&rt, "get_task", json!({ "id": task })).await;
     assert_eq!(got["status"], "in_review");
     assert_eq!(got["subtasks"][0]["done"], true);
+
+    // The screen opens the run it started, and no other.
+    let link = rt.apps().run_link(PROJECTS, &run_id).await.unwrap();
+    assert_eq!(
+        (link.dot_id.as_str(), link.root_run_id.as_str()),
+        (builder.id.as_str(), run_id.as_str())
+    );
+    let other = rt.run_now(&builder.id).await.unwrap();
+    for (app, run) in [
+        (PROJECTS, other.id.as_str()),
+        (PROJECTS, "nope"),
+        ("expenses", run_id.as_str()),
+    ] {
+        let refused = rt.apps().run_link(app, run).await;
+        assert!(
+            matches!(refused, Err(Error::NotFound(_))),
+            "{app} {run}: {refused:?}"
+        );
+    }
     rt.shutdown();
 }

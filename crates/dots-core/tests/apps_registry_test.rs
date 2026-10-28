@@ -83,6 +83,7 @@ async fn an_app_installs_at_version_1_with_both_switches_off() {
             can_start_dots: false,
             origin: AppOrigin::Proposed,
             changed: false,
+            start_asked: false,
         }
     );
     assert!(f.apps.code_dir(&item.id, 1).join("logic.js").is_file());

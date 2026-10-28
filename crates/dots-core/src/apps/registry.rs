@@ -493,6 +493,7 @@ impl Apps {
             can_start_dots: false,
             origin,
             changed: false,
+            start_asked: false,
         };
         let item = self
             .store
@@ -724,6 +725,7 @@ impl Apps {
     }
 
     /// Switches "Can start dots" (spec section 7): on only for an app whose code asks for it.
+    /// The person has then made their choice: the one-time prompt no longer shows.
     pub async fn set_can_start_dots(&self, name: &str, on: bool) -> Result<LibraryItem> {
         let (_held, item, config) = self.get_locked(name).await?;
         if on && !self.load(&item, &config).await?.manifest.can_start_dots() {
@@ -735,6 +737,25 @@ impl Apps {
             &item,
             AppConfig {
                 can_start_dots: on,
+                start_asked: true,
+                ..config
+            },
+        )
+        .await
+    }
+
+    /// The person's answer to the one-time prompt to let the app `name` start dots (spec
+    /// section 8): "Switch on" (`on`) turns the switch on, "Not now" leaves it off; either way
+    /// the prompt no longer shows.
+    pub async fn answer_start_prompt(&self, name: &str, on: bool) -> Result<LibraryItem> {
+        if on {
+            return self.set_can_start_dots(name, true).await;
+        }
+        let (_held, item, config) = self.get_locked(name).await?;
+        self.store_config(
+            &item,
+            AppConfig {
+                start_asked: true,
                 ..config
             },
         )

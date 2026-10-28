@@ -643,6 +643,8 @@ export const AppConfig = z.strictObject({
   origin: AppOrigin,
   // A bundled app the person changed: Dots no longer updates it.
   changed: z.boolean(),
+  // The person answered the one-time prompt to let a bundled app start dots, or set the switch.
+  start_asked: z.boolean(),
 });
 // What an app may reach outside its data; v1 has one grant.
 export const Permission = z.enum(["start_dots"]);
@@ -1303,6 +1305,21 @@ export const KeptData = z.strictObject({
   bytes: z.number(),
 });
 export type KeptData = z.infer<typeof KeptData>;
+// An app that comes with Dots and is not installed: "Install Projects", with the kept data it
+// may start on (app library spec section 8).
+export const BundledOffer = z.strictObject({
+  name: z.string(),
+  title: z.string(),
+  description: z.string(),
+  kept: nullable(KeptOffer),
+});
+export type BundledOffer = z.infer<typeof BundledOffer>;
+// Where a run an app started is: the dot's conversation at the topic's root.
+export const RunLink = z.strictObject({
+  dot_id: z.string(),
+  root_run_id: z.string(),
+});
+export type RunLink = z.infer<typeof RunLink>;
 export type AppFile = z.infer<typeof AppFile>;
 export type AppCall = z.infer<typeof AppCall>;
 export type AppProposal = z.infer<typeof AppProposal>;

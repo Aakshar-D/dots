@@ -11,9 +11,11 @@
 //! a native dialog from Rust before it is run or stored (`confirm.rs`). The UI is first-party
 //! code under a `default-src 'self'` policy.
 
+use dots_core::apps::bundled::BundledOffer;
 use dots_core::apps::kept::KeptData;
 use dots_core::apps::propose::{AppProposal, Decision};
 use dots_core::apps::screen::{AppFile, AppRow};
+use dots_core::apps::wake::RunLink;
 use dots_core::apps::AppCall;
 use dots_core::browser::BrowserStatus;
 use dots_core::kit::InstalledPlugin;
@@ -1183,6 +1185,48 @@ pub async fn apps_kept_list(state: State<'_, AppState>) -> Res<Vec<KeptData>> {
 #[tauri::command]
 pub async fn app_kept_delete(state: State<'_, AppState>, id: String) -> Res<()> {
     Ok(state.rt()?.apps().delete_kept(&id).await?)
+}
+
+/// The apps that come with Dots and are not installed, with the kept data each may start on
+/// (app library spec section 8, "Install Projects").
+#[tauri::command]
+pub async fn apps_bundled_offers(state: State<'_, AppState>) -> Res<Vec<BundledOffer>> {
+    Ok(state.rt()?.apps().bundled_offers().await?)
+}
+
+/// Installs an app that comes with Dots again: on the kept data `kept_id`, or fresh.
+#[tauri::command]
+pub async fn app_install_bundled(
+    state: State<'_, AppState>,
+    name: String,
+    kept_id: Option<String>,
+) -> Res<LibraryItem> {
+    Ok(state
+        .rt()?
+        .apps()
+        .install_bundled(&name, kept_id.as_deref())
+        .await?)
+}
+
+/// The person's answer to the one-time prompt to let the app start dots: "Switch on" or
+/// "Not now" (app library spec section 8).
+#[tauri::command]
+pub async fn app_answer_start_prompt(
+    state: State<'_, AppState>,
+    name: String,
+    on: bool,
+) -> Res<LibraryItem> {
+    Ok(state.rt()?.apps().answer_start_prompt(&name, on).await?)
+}
+
+/// Where the app's screen opens a run it started (`dots.openRun`); refused for any other run.
+#[tauri::command]
+pub async fn app_run_link(
+    state: State<'_, AppState>,
+    name: String,
+    run_id: String,
+) -> Res<RunLink> {
+    Ok(state.rt()?.apps().run_link(&name, &run_id).await?)
 }
 
 /// The person's answer on the card: add (or update), ask for changes, or discard.
