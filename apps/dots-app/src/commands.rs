@@ -166,6 +166,195 @@ pub fn update_open_notes(app: AppHandle) -> Res<()> {
         .map_err(|e| CmdError::internal(format!("could not open {page}: {e}")))
 }
 
+/// Settings › Updates: the version, the last check, a ready update, Go back's version and the
+/// idle-install switch. Answers after a failed start too.
+#[tauri::command]
+pub async fn update_status(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Res<update_service::UpdateStatus> {
+    update_service::status(&app, state.rt().ok().as_ref()).await
+}
+
+/// "Check for updates": checks now and says what it found.
+#[tauri::command]
+pub async fn update_check_now(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Res<update_service::CheckOutcome> {
+    Ok(update_service::check_now(&app, &state.rt()?).await)
+}
+
+/// "What's new": a version's notes from its release, `None` when it has none.
+#[tauri::command]
+pub async fn update_release_notes(version: String) -> Res<Option<update_service::ReleaseNotes>> {
+    update_service::release_notes(&version).await
+}
+
+/// "Repair Dots": reinstalls this version, waiting for working runs.
+#[tauri::command]
+pub async fn update_repair(app: AppHandle, state: State<'_, AppState>) -> Res<UpdateNote> {
+    update_service::repair(&app, &state.rt()?).await
+}
+
+/// "Go back": installs the version before the last update with that update's backup. Works on
+/// the fatal page too.
+#[tauri::command]
+pub async fn update_go_back(app: AppHandle, state: State<'_, AppState>) -> Res<UpdateNote> {
+    update_service::go_back(&app, state.rt().ok()).await
+}
+
+/// The window had keyboard or pointer input, or its composer's text changed (the idle install,
+/// updates UI spec section 4.2).
+#[tauri::command]
+pub fn report_activity(app: AppHandle, composer_has_text: bool) -> Res<()> {
+    if let Some(updates) = app.try_state::<update_service::Updates>() {
+        updates.report_activity(composer_has_text);
+    }
+    Ok(())
+}
+
+/// The window rendered after this start: the health check's last condition.
+#[tauri::command]
+pub fn app_rendered(app: AppHandle) -> Res<()> {
+    if let Some(updates) = app.try_state::<update_service::Updates>() {
+        updates.report_rendered();
+    }
+    Ok(())
+}
+
+/// "Dismiss" of "Dots updated itself".
+#[tauri::command]
+pub fn update_dismiss_updated(app: AppHandle) -> Res<UpdateNote> {
+    update_service::dismiss_updated(&app)
+}
+
+/// Whether this Dots publishes (updates UI spec section 5.1).
+#[tauri::command]
+pub fn publisher_status(app: AppHandle) -> Res<crate::publishing::PublisherStatus> {
+    crate::publishing::status(&app)
+}
+
+/// Checks the chosen token again (after the person chose one).
+#[tauri::command]
+pub async fn publisher_check(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Res<crate::publishing::PublisherStatus> {
+    crate::publishing::check(&app, &state.rt()?).await
+}
+
+/// The Releases page.
+#[tauri::command]
+pub async fn releases_page(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Res<dots_core::publish::flow::PageState> {
+    let gh = crate::publishing::hub(&app, &state.rt()?).await?;
+    Ok(dots_core::publish::flow::page_state(&gh).await?)
+}
+
+/// Setup step 1: makes the signing key; its public half.
+#[tauri::command]
+pub async fn release_make_key(app: AppHandle, password: String) -> Res<String> {
+    // scrypt takes a moment: off the main thread, so the window stays responsive.
+    let made =
+        tauri::async_runtime::spawn_blocking(move || dots_core::publish::keys::make_key(&password))
+            .await
+            .map_err(|e| CmdError::internal(e.to_string()))??;
+    crate::publishing::keep_key(&app, made)
+}
+
+/// Setup step 2: saves the private key where the person chooses; the path, or none.
+#[tauri::command]
+pub async fn release_save_key(app: AppHandle) -> Res<Option<String>> {
+    crate::publishing::save_key(&app)
+}
+
+/// Setup step 3: both secrets on GitHub.
+#[tauri::command]
+pub async fn release_put_secrets(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    password: String,
+) -> Res<()> {
+    crate::publishing::put_secrets(&app, &state.rt()?, &password).await
+}
+
+/// Setup step 4: the pull request with the public key.
+#[tauri::command]
+pub async fn release_open_key_pull(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Res<crate::publishing::PullOpened> {
+    crate::publishing::open_key_pull(&app, &state.rt()?).await
+}
+
+#[tauri::command]
+pub async fn release_publish_trial(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    version: String,
+) -> Res<dots_core::publish::flow::Trial> {
+    let gh = crate::publishing::hub(&app, &state.rt()?).await?;
+    Ok(dots_core::publish::flow::publish_trial(&gh, &version).await?)
+}
+
+#[tauri::command]
+pub async fn release_save_notes(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    version: String,
+    notes: String,
+) -> Res<()> {
+    let gh = crate::publishing::hub(&app, &state.rt()?).await?;
+    Ok(dots_core::publish::flow::save_notes(&gh, &version, &notes).await?)
+}
+
+#[tauri::command]
+pub async fn release_promote(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    version: String,
+) -> Res<()> {
+    let gh = crate::publishing::hub(&app, &state.rt()?).await?;
+    Ok(dots_core::publish::flow::promote(&gh, &version).await?)
+}
+
+#[tauri::command]
+pub async fn release_retry(app: AppHandle, state: State<'_, AppState>, tag: String) -> Res<()> {
+    let gh = crate::publishing::hub(&app, &state.rt()?).await?;
+    Ok(dots_core::publish::flow::retry(&gh, &tag).await?)
+}
+
+#[tauri::command]
+pub async fn release_drop_trial(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    version: String,
+) -> Res<()> {
+    let gh = crate::publishing::hub(&app, &state.rt()?).await?;
+    Ok(dots_core::publish::flow::drop_trial(&gh, &version).await?)
+}
+
+/// Withdraws the live release `version`.
+#[tauri::command]
+pub async fn release_withdraw(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    version: String,
+) -> Res<()> {
+    let gh = crate::publishing::hub(&app, &state.rt()?).await?;
+    let tag = format!("v{version}");
+    let release = gh
+        .releases()
+        .await?
+        .into_iter()
+        .find(|r| r.tag == tag)
+        .ok_or_else(|| dots_core::Error::NotFound(format!("no release {tag}")))?;
+    Ok(dots_core::publish::flow::withdraw(&gh, &release).await?)
+}
+
 /// "Later": the note is hidden until Dots next starts.
 #[tauri::command]
 pub async fn update_later(app: AppHandle, state: State<'_, AppState>) -> Res<UpdateNote> {
@@ -202,11 +391,14 @@ pub async fn update_stop_and_restart(
 /// "Cancel" of a waiting install: the queue starts again.
 #[tauri::command]
 pub async fn update_cancel_wait(app: AppHandle, state: State<'_, AppState>) -> Res<UpdateNote> {
-    update_service::press(&app, &state.rt()?, |s, _| {
+    let note = update_service::press(&app, &state.rt()?, |s, _| {
         s.cancel_wait();
         Ok(Next::Nothing)
     })
-    .await
+    .await?;
+    // A cancelled Repair or Go back leaves its download behind; it is never installed.
+    update_service::clear_stale_download(&app);
+    Ok(note)
 }
 
 #[tauri::command]

@@ -90,6 +90,35 @@ export const commands = {
   updateStopAndRestart: (working: string[]) =>
     call(T.UpdateNote, "update_stop_and_restart", { working }),
   updateCancelWait: () => call(T.UpdateNote, "update_cancel_wait"),
+  updateStatus: () => call(T.UpdateStatus, "update_status"),
+  updateCheckNow: () => call(T.CheckOutcome, "update_check_now"),
+  updateReleaseNotes: (version: string) =>
+    call(T.ReleaseNotes.nullable(), "update_release_notes", { version }),
+  updateRepair: () => call(T.UpdateNote, "update_repair"),
+  updateGoBack: () => call(T.UpdateNote, "update_go_back"),
+  updateDismissUpdated: () => call(T.UpdateNote, "update_dismiss_updated"),
+  /// The window had input, or the composer's text changed (the idle install).
+  reportActivity: (composerHasText: boolean) =>
+    call(nothing, "report_activity", { composerHasText }),
+  /// The window rendered after this start (the health check after an update).
+  appRendered: () => call(nothing, "app_rendered"),
+
+  publisherStatus: () => call(T.PublisherStatus, "publisher_status"),
+  publisherCheck: () => call(T.PublisherStatus, "publisher_check"),
+  releasesPage: () => call(T.PageState, "releases_page"),
+  releaseMakeKey: (password: string) => call(z.string(), "release_make_key", { password }),
+  /// Opens the native save dialog; the path written, or null when cancelled.
+  releaseSaveKey: () => call(z.string().nullable(), "release_save_key"),
+  releasePutSecrets: (password: string) => call(nothing, "release_put_secrets", { password }),
+  releaseOpenKeyPull: () => call(T.PullOpened, "release_open_key_pull"),
+  releasePublishTrial: (version: string) =>
+    call(T.Trial, "release_publish_trial", { version }),
+  releaseSaveNotes: (version: string, notes: string) =>
+    call(nothing, "release_save_notes", { version, notes }),
+  releasePromote: (version: string) => call(nothing, "release_promote", { version }),
+  releaseRetry: (tag: string) => call(nothing, "release_retry", { tag }),
+  releaseDropTrial: (version: string) => call(nothing, "release_drop_trial", { version }),
+  releaseWithdraw: (version: string) => call(nothing, "release_withdraw", { version }),
 
   dotOverview: () => call(T.DotOverview.array(), "dot_overview"),
   listDots: () => call(T.Dot.array(), "list_dots"),

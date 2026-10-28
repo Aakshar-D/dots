@@ -363,8 +363,13 @@ describe("the update strip", () => {
     working,
     error,
   });
-  const waiting: UpdateNote = { state: "waiting", version: "0.2.0", waiting_for: ["triage"] };
-  const installing: UpdateNote = { state: "installing", version: "0.2.0" };
+  const waiting: UpdateNote = {
+    state: "waiting",
+    version: "0.2.0",
+    waiting_for: ["triage"],
+    purpose: "update",
+  };
+  const installing: UpdateNote = { state: "installing", version: "0.2.0", purpose: "update" };
   const strip = () => screen.findByText(/Dots 0\.2\.0 is ready/);
 
   it("shows nothing until an update is ready, then what the core announces", async () => {

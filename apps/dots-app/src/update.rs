@@ -41,16 +41,71 @@ pub enum UpdateNote {
         working: Vec<String>,
         error: Option<String>,
     },
-    /// "Restart when it's done": Dots installs once no dot has a run working.
+    /// "Restart when it's done": Dots installs once no dot has a run working. `purpose`: an
+    /// update, a repair or going back (updates UI spec section 4).
     Waiting {
         version: String,
         waiting_for: Vec<String>,
+        purpose: Purpose,
     },
     /// The install has begun; Dots is about to close.
-    Installing { version: String },
+    Installing { version: String, purpose: Purpose },
+    /// The new version did not pass its health check (updates UI spec section 4.4). `back_to`:
+    /// the version Go back installs, when it can.
+    Unhealthy {
+        version: String,
+        back_to: Option<String>,
+    },
+    /// The developers withdrew the version running (updates UI spec section 4.5).
+    Withdrawn {
+        version: String,
+        back_to: Option<String>,
+    },
+    /// Dots installed `version` by itself while idle, at `at` (RFC 3339 UTC); said once.
+    UpdatedItself { version: String, at: String },
     /// The last install did not happen and no update is ready (yet) to try again: why, until
     /// the person dismisses it ("Later") or the update is downloaded again (spec §7).
     Failed { error: String },
+}
+
+/// What an install is for (updates UI spec section 4): a new version, the same version again,
+/// or the version before the last update.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Purpose {
+    #[default]
+    Update,
+    Repair,
+    GoBack,
+}
+
+/// How long the window has to go without input before an idle install (spec section 4.2).
+pub const IDLE_AFTER: Duration = Duration::from_secs(10 * 60);
+
+/// What decides an idle install. `busy`: an install waits or has begun.
+#[derive(Debug, Clone, Copy)]
+pub struct IdleInput {
+    pub enabled: bool,
+    pub ready: bool,
+    pub later: bool,
+    pub busy: bool,
+    pub unfinished_runs: usize,
+    pub composer_has_text: bool,
+    pub input_idle: Duration,
+    pub window_hidden: bool,
+}
+
+/// Whether Dots may install the ready update by itself now: the person turned it on, did not
+/// press "Later", no run is unfinished, nothing is being written, and the window is hidden or
+/// untouched for `IDLE_AFTER`.
+pub fn idle_install_due(i: &IdleInput) -> bool {
+    i.enabled
+        && i.ready
+        && !i.later
+        && !i.busy
+        && i.unfinished_runs == 0
+        && !i.composer_has_text
+        && (i.window_hidden || i.input_idle >= IDLE_AFTER)
 }
 
 /// What the app does after a change of `UpdateState`.
@@ -69,13 +124,21 @@ pub struct UpdateState {
     waiting: bool,
     installing: bool,
     error: Option<String>,
+    /// Versions this machine never takes again (`update_record`).
+    bad: Vec<String>,
+    /// What the ready install is for.
+    purpose: Purpose,
+    /// Unhealthy, Withdrawn or UpdatedItself, set by the service.
+    notice: Option<UpdateNote>,
 }
 
 impl UpdateState {
     /// `error`: what the last start left (`take_error`).
-    pub fn new(error: Option<String>) -> Self {
+    /// `bad`: the versions this machine marked bad.
+    pub fn new(error: Option<String>, bad: Vec<String>) -> Self {
         Self {
             error,
+            bad,
             ..Self::default()
         }
     }
@@ -83,7 +146,68 @@ impl UpdateState {
     /// Whether a check that found `version` should download it: not while an install waits or
     /// has begun (the person agreed to the version they saw), and not a second time.
     pub fn wants(&self, version: &str) -> bool {
-        !self.waiting && !self.installing && self.ready.as_deref() != Some(version)
+        !self.waiting
+            && !self.installing
+            && self.ready.as_deref() != Some(version)
+            && !self.bad.iter().any(|b| b == version)
+    }
+
+    /// `version` failed on this machine: never wanted again.
+    pub fn mark_bad(&mut self, version: &str) {
+        if !self.bad.iter().any(|b| b == version) {
+            self.bad.push(version.to_string());
+        }
+    }
+
+    /// Whether "Later" was pressed this session: no idle install until the next start.
+    pub fn later_pressed(&self) -> bool {
+        self.later
+    }
+
+    /// Unhealthy, Withdrawn or UpdatedItself, or none.
+    pub fn set_notice(&mut self, notice: Option<UpdateNote>) {
+        self.notice = notice;
+    }
+
+    /// Repair or Go back, whose download is ready under `label` (the version it installs):
+    /// installs at once when no dot has a run working, else waits for them, like "Restart to
+    /// update". Nothing when an install has begun.
+    pub fn begin_other(
+        &mut self,
+        purpose: Purpose,
+        label: &str,
+        working: &[String],
+    ) -> dots_core::Result<Next> {
+        if self.installing {
+            return Err(dots_core::Error::Conflict(
+                "An install has begun; Dots is about to restart.".into(),
+            ));
+        }
+        if self.waiting {
+            return Err(dots_core::Error::Conflict(format!(
+                "Dots is already waiting to install {}. Cancel that first.",
+                self.ready.as_deref().unwrap_or("an update")
+            )));
+        }
+        self.ready = Some(label.to_string());
+        self.purpose = purpose;
+        self.later = false;
+        self.error = None;
+        if working.is_empty() {
+            return Ok(self.begin());
+        }
+        self.waiting = true;
+        Ok(Next::Nothing)
+    }
+
+    /// Why the last install did not happen, while that is still said.
+    pub fn install_error(&self) -> Option<String> {
+        self.error.clone()
+    }
+
+    /// What the ready install is for and the version it installs.
+    pub fn ready_purpose(&self) -> Option<(Purpose, &str)> {
+        self.ready.as_deref().map(|v| (self.purpose, v))
     }
 
     /// A downloaded update, checked against Dots' key. True when the note changed.
@@ -92,33 +216,46 @@ impl UpdateState {
             return false;
         }
         self.ready = Some(version.to_string());
+        self.purpose = Purpose::Update;
         !self.later
     }
 
+    /// The note, first that applies: Installing, Waiting, Unhealthy, Withdrawn, Ready,
+    /// UpdatedItself, Failed, None.
     pub fn note(&self, working: &[String]) -> UpdateNote {
-        let Some(version) = self.ready.clone() else {
-            return match &self.error {
-                Some(error) => UpdateNote::Failed {
-                    error: error.clone(),
-                },
-                None => UpdateNote::None,
-            };
-        };
-        if self.installing {
-            UpdateNote::Installing { version }
-        } else if self.waiting {
-            UpdateNote::Waiting {
-                version,
-                waiting_for: working.to_vec(),
+        if let Some(version) = self.ready.clone() {
+            let purpose = self.purpose;
+            if self.installing {
+                return UpdateNote::Installing { version, purpose };
             }
-        } else if self.later {
-            UpdateNote::None
-        } else {
-            UpdateNote::Ready {
+            if self.waiting {
+                return UpdateNote::Waiting {
+                    version,
+                    waiting_for: working.to_vec(),
+                    purpose,
+                };
+            }
+        }
+        if let Some(notice @ (UpdateNote::Unhealthy { .. } | UpdateNote::Withdrawn { .. })) =
+            &self.notice
+        {
+            return notice.clone();
+        }
+        if let (Some(version), false) = (self.ready.clone(), self.later) {
+            return UpdateNote::Ready {
                 version,
                 working: working.to_vec(),
                 error: self.error.clone(),
-            }
+            };
+        }
+        if let Some(notice @ UpdateNote::UpdatedItself { .. }) = &self.notice {
+            return notice.clone();
+        }
+        match &self.error {
+            Some(error) if self.ready.is_none() => UpdateNote::Failed {
+                error: error.clone(),
+            },
+            _ => UpdateNote::None,
         }
     }
 
@@ -137,6 +274,15 @@ impl UpdateState {
     /// with no update ready that is all it does, so the next update still shows.
     pub fn later(&mut self) {
         self.error = None;
+        // "Not now" on Unhealthy or Withdrawn dismisses that strip only: an update ready
+        // behind it shows next, and the idle install is not stopped.
+        if matches!(
+            self.notice,
+            Some(UpdateNote::Unhealthy { .. } | UpdateNote::Withdrawn { .. })
+        ) {
+            self.notice = None;
+            return;
+        }
         if self.ready.is_some() {
             self.later = true;
         }
@@ -148,6 +294,7 @@ impl UpdateState {
         self.ready = None;
         self.waiting = false;
         self.installing = false;
+        self.purpose = Purpose::Update;
         self.error = Some(error.to_string());
     }
 
@@ -189,9 +336,17 @@ impl UpdateState {
         }
     }
 
-    /// "Cancel": stop waiting, and let the queue start again.
-    pub fn cancel_wait(&mut self) {
+    /// "Cancel": stop waiting, and let the queue start again. A cancelled Repair or Go back is
+    /// dropped, so it is never offered as an update; true when that happened and its download
+    /// must go too.
+    pub fn cancel_wait(&mut self) -> bool {
         self.waiting = false;
+        if self.installing || self.purpose == Purpose::Update {
+            return false;
+        }
+        self.ready = None;
+        self.purpose = Purpose::Update;
+        true
     }
 
     fn check_ready(&self) -> dots_core::Result<()> {
@@ -238,6 +393,79 @@ pub fn backup_file_name(version: &str, at: DateTime<Local>) -> String {
     format!("dots-{version}-{}.db", at.format("%Y-%m-%d-%H%M%S"))
 }
 
+/// The database files `set_aside_database` moves: the database and its WAL files.
+const DB_FILES: [&str; 3] = ["dots.db", "dots.db-wal", "dots.db-shm"];
+
+/// Moves the database and its WAL files into the backups folder as
+/// `failed-dots-<version>-<stamp>.db` (and `-wal`, `-shm`), before going back puts the
+/// update's backup in its place. Named so the backup pruning never counts or deletes them.
+/// The path of the moved database.
+pub fn set_aside_database(
+    data_dir: &Path,
+    version: &str,
+    at: DateTime<Local>,
+) -> Result<PathBuf, String> {
+    let dir = data_dir.join(BACKUPS_DIR);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("making {}: {e}", dir.display()))?;
+    let name = format!("failed-{}", backup_file_name(version, at));
+    let moved = dir.join(&name);
+    for (i, file) in DB_FILES.iter().enumerate() {
+        let from = data_dir.join(file);
+        if !from.exists() {
+            continue;
+        }
+        let to = dir.join(format!("{name}{}", &file["dots.db".len()..]));
+        if let Err(e) = std::fs::rename(&from, &to) {
+            // Put back what already moved, so the database stays whole.
+            for earlier in &DB_FILES[..i] {
+                let _ = std::fs::rename(
+                    dir.join(format!("{name}{}", &earlier["dots.db".len()..])),
+                    data_dir.join(earlier),
+                );
+            }
+            return Err(format!("moving {}: {e}", from.display()));
+        }
+    }
+    Ok(moved)
+}
+
+/// Puts back what `set_aside_database` moved to `moved`, replacing what is in place now.
+pub fn undo_set_aside(data_dir: &Path, moved: &Path) -> Result<(), String> {
+    let name = moved
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| format!("{} is not a set-aside database", moved.display()))?;
+    let dir = moved.parent().unwrap_or(data_dir);
+    // The restored copy is moved aside first, never deleted before the original is back
+    // (final review I-5): if putting the original back fails, `dots.db` is missing and the
+    // next start puts the set-aside database back (`startup::recover_set_aside`).
+    let restored = format!("restored-{name}");
+    for file in DB_FILES {
+        let from = data_dir.join(file);
+        if from.exists() {
+            let to = dir.join(format!("{restored}{}", &file["dots.db".len()..]));
+            std::fs::rename(&from, &to).map_err(|e| format!("moving {}: {e}", from.display()))?;
+        }
+    }
+    if !moved.exists() {
+        return Err(format!(
+            "the set-aside database {} is gone",
+            moved.display()
+        ));
+    }
+    for file in DB_FILES {
+        let from = dir.join(format!("{name}{}", &file["dots.db".len()..]));
+        if from.exists() {
+            let to = data_dir.join(file);
+            std::fs::rename(&from, &to).map_err(|e| format!("moving {}: {e}", from.display()))?;
+        }
+    }
+    for file in DB_FILES {
+        let _ = std::fs::remove_file(dir.join(format!("{restored}{}", &file["dots.db".len()..])));
+    }
+    Ok(())
+}
+
 /// The time in a backup's name, which orders backups whatever their versions.
 fn stamp(name: &str) -> Option<&str> {
     let stem = name.strip_prefix("dots-")?.strip_suffix(".db")?;
@@ -281,6 +509,16 @@ pub async fn back_up(
     version: &str,
     at: DateTime<Local>,
 ) -> Result<PathBuf, String> {
+    back_up_keeping(data_dir, version, at, None).await
+}
+
+/// `back_up`, never pruning `keep` (the backup the last update's Go back restores).
+pub async fn back_up_keeping(
+    data_dir: &Path,
+    version: &str,
+    at: DateTime<Local>,
+    keep: Option<&Path>,
+) -> Result<PathBuf, String> {
     let dir = data_dir.join(BACKUPS_DIR);
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let dest = dir.join(backup_file_name(version, at));
@@ -300,7 +538,12 @@ pub async fn back_up(
     }
     match backups(&dir) {
         Ok(all) => {
-            for old in all.iter().filter(|p| **p != dest).skip(KEEP_BACKUPS - 1) {
+            let pruned = all
+                .iter()
+                .filter(|p| **p != dest)
+                .skip(KEEP_BACKUPS - 1)
+                .filter(|p| keep != Some(p.as_path()));
+            for old in pruned {
                 if let Err(e) = std::fs::remove_file(old) {
                     tracing::warn!("could not delete the old backup {}: {e}", old.display());
                 }
@@ -343,6 +586,19 @@ pub trait InstallSteps {
     fn restart_current(&self, error: &str);
     /// The restart mark, so the new Dots shows its window.
     fn mark_restart(&self);
+    /// Writes the update record for `purpose` (`update_record`): what is left and installed
+    /// and `backup` for an update or a repair, the current version as bad for going back.
+    fn record(&self, purpose: Purpose, backup: Option<&Path>) -> Result<(), String>;
+    /// Moves `dots.db` and its WAL files aside into the backups folder; the path of the moved
+    /// database.
+    async fn set_aside_database(&self) -> Result<PathBuf, String>;
+    /// Copies `backup` in as `dots.db`.
+    async fn restore_backup(&self, backup: &Path) -> Result<(), String>;
+    /// Puts the database `set_aside_database` moved back in place. A failure is logged.
+    fn undo_restore(&self, set_aside: &Path);
+    /// Puts the update record back as it was before `record` (an install that did not
+    /// happen must not change the go-back target or the pending check). A failure is logged.
+    fn restore_record(&self);
     /// Starts the installer and ends the process. Returns only when it could not start.
     fn install(&self) -> Result<(), String>;
     /// Deletes a backup that no install followed. A failure is logged.
@@ -353,9 +609,16 @@ pub trait InstallSteps {
 /// reason, which the strip shows after that start. A backup no install followed is deleted:
 /// the database is the same, and each retry would otherwise prune an older backup, until the
 /// one from before the last real update is gone.
-pub async fn install(steps: &impl InstallSteps) {
+///
+/// Going back (`purpose` GoBack, `backup` the update's backup) sets the database aside and
+/// restores the backup instead of making one; any failure after that puts the database back.
+pub async fn install(steps: &impl InstallSteps, purpose: Purpose, backup: Option<&Path>) {
     if !steps.close_runtime().await {
         steps.restart_current("Dots could not close its database in time, so no backup was made.");
+        return;
+    }
+    if purpose == Purpose::GoBack {
+        go_back(steps, backup).await;
         return;
     }
     let backup = match steps.back_up().await {
@@ -365,10 +628,52 @@ pub async fn install(steps: &impl InstallSteps) {
             return;
         }
     };
+    if let Err(e) = steps.record(purpose, Some(&backup)) {
+        steps.discard_backup(&backup);
+        steps.restart_current(&format!("The update could not be recorded: {e}"));
+        return;
+    }
     steps.mark_restart();
     if let Err(e) = steps.install() {
         steps.discard_backup(&backup);
+        steps.restore_record();
         steps.restart_current(&format!("The update could not start: {e}"));
+    }
+}
+
+async fn go_back(steps: &impl InstallSteps, backup: Option<&Path>) {
+    let Some(backup) = backup else {
+        steps.restart_current("There is nothing to go back to.");
+        return;
+    };
+    let set_aside = match steps.set_aside_database().await {
+        Ok(path) => path,
+        Err(e) => {
+            steps.restart_current(&format!("The database could not be set aside: {e}"));
+            return;
+        }
+    };
+    let mut recorded = false;
+    let failure = match steps.restore_backup(backup).await {
+        Err(e) => Some(format!("The backup could not be restored: {e}")),
+        Ok(()) => match steps.record(Purpose::GoBack, Some(backup)) {
+            Err(e) => Some(format!("Going back could not be recorded: {e}")),
+            Ok(()) => {
+                recorded = true;
+                steps.mark_restart();
+                steps
+                    .install()
+                    .err()
+                    .map(|e| format!("The update could not start: {e}"))
+            }
+        },
+    };
+    if let Some(reason) = failure {
+        steps.undo_restore(&set_aside);
+        if recorded {
+            steps.restore_record();
+        }
+        steps.restart_current(&reason);
     }
 }
 
@@ -394,7 +699,7 @@ mod tests {
 
     #[test]
     fn there_is_no_note_until_an_update_is_ready_and_later_hides_it() {
-        let mut s = UpdateState::new(None);
+        let mut s = UpdateState::new(None, vec![]);
         assert_eq!(s.note(&[]), UpdateNote::None);
         assert_eq!(s.ready_version(), None);
         assert!(s.wants("0.2.0"));
@@ -411,7 +716,7 @@ mod tests {
 
     #[test]
     fn the_note_names_the_working_dots_and_the_last_error() {
-        let mut s = UpdateState::new(Some("The backup failed: disk full".into()));
+        let mut s = UpdateState::new(Some("The backup failed: disk full".into()), vec![]);
         s.offer("0.2.0");
         assert_eq!(
             s.note(&names(&["Daily digest"])),
@@ -421,7 +726,7 @@ mod tests {
 
     #[test]
     fn the_last_error_shows_with_no_update_ready_until_it_is_dismissed() {
-        let mut s = UpdateState::new(Some("The backup failed: disk full".into()));
+        let mut s = UpdateState::new(Some("The backup failed: disk full".into()), vec![]);
         assert_eq!(
             s.note(&[]),
             UpdateNote::Failed {
@@ -438,7 +743,7 @@ mod tests {
 
     #[test]
     fn the_last_error_goes_once_the_person_acts_on_the_update() {
-        let mut s = UpdateState::new(Some("The backup failed: disk full".into()));
+        let mut s = UpdateState::new(Some("The backup failed: disk full".into()), vec![]);
         s.offer("0.2.0");
         s.restart(&names(&["a"])).unwrap();
         s.cancel_wait();
@@ -448,7 +753,7 @@ mod tests {
             "the reason is not shown again"
         );
 
-        let mut s = UpdateState::new(Some("The backup failed: disk full".into()));
+        let mut s = UpdateState::new(Some("The backup failed: disk full".into()), vec![]);
         s.offer("0.2.0");
         s.later();
         assert_eq!(s.note(&[]), UpdateNote::None);
@@ -456,7 +761,7 @@ mod tests {
 
     #[test]
     fn an_install_that_cannot_begin_lets_the_queue_go_and_says_why() {
-        let mut s = UpdateState::new(None);
+        let mut s = UpdateState::new(None, vec![]);
         s.offer("0.2.0");
         assert_eq!(s.restart(&[]).unwrap(), Next::Install);
         s.abandon("The downloaded update was lost; Dots downloads it again.");
@@ -481,14 +786,15 @@ mod tests {
 
     #[test]
     fn restart_installs_at_once_when_nothing_works_and_waits_otherwise() {
-        let mut s = UpdateState::new(None);
+        let mut s = UpdateState::new(None, vec![]);
         assert!(s.restart(&[]).is_err(), "nothing is ready");
         s.offer("0.2.0");
         assert_eq!(s.restart(&[]).unwrap(), Next::Install);
         assert_eq!(
             s.note(&[]),
             UpdateNote::Installing {
-                version: "0.2.0".into()
+                version: "0.2.0".into(),
+                purpose: Purpose::Update,
             }
         );
         assert!(
@@ -496,7 +802,7 @@ mod tests {
             "an install that has begun is not begun twice"
         );
 
-        let mut s = UpdateState::new(None);
+        let mut s = UpdateState::new(None, vec![]);
         s.offer("0.2.0");
         let busy = names(&["Daily digest"]);
         assert_eq!(s.restart(&busy).unwrap(), Next::Nothing);
@@ -506,6 +812,7 @@ mod tests {
             UpdateNote::Waiting {
                 version: "0.2.0".into(),
                 waiting_for: busy.clone(),
+                purpose: Purpose::Update,
             }
         );
         assert!(
@@ -516,14 +823,14 @@ mod tests {
 
     #[test]
     fn a_wait_ends_with_the_last_run_or_with_cancel() {
-        let mut s = UpdateState::new(None);
+        let mut s = UpdateState::new(None, vec![]);
         s.offer("0.2.0");
         s.restart(&names(&["a", "b"])).unwrap();
         assert_eq!(s.runs_changed(&names(&["b"])), Next::Nothing);
         assert_eq!(s.runs_changed(&[]), Next::Install);
         assert_eq!(s.runs_changed(&[]), Next::Nothing, "one install");
 
-        let mut s = UpdateState::new(None);
+        let mut s = UpdateState::new(None, vec![]);
         s.offer("0.2.0");
         s.restart(&names(&["a"])).unwrap();
         s.cancel_wait();
@@ -534,7 +841,7 @@ mod tests {
 
     #[test]
     fn stop_and_restart_installs_when_only_the_dots_it_named_work() {
-        let mut s = UpdateState::new(None);
+        let mut s = UpdateState::new(None, vec![]);
         assert!(s.stop_and_restart(&[], &[]).is_err());
         s.offer("0.2.0");
         let seen = names(&["a", "b"]);
@@ -549,7 +856,7 @@ mod tests {
             Next::Install
         );
 
-        let mut s = UpdateState::new(None);
+        let mut s = UpdateState::new(None, vec![]);
         s.offer("0.2.0");
         s.restart(&names(&["a"])).unwrap();
         assert_eq!(
@@ -564,7 +871,7 @@ mod tests {
 
     #[test]
     fn the_queue_is_held_while_an_install_waits_and_once_it_has_begun() {
-        let mut s = UpdateState::new(None);
+        let mut s = UpdateState::new(None, vec![]);
         assert!(!s.holds_runs());
         s.offer("0.2.0");
         assert!(!s.holds_runs(), "a ready update holds nothing");
@@ -582,7 +889,7 @@ mod tests {
 
     #[test]
     fn a_check_downloads_a_version_only_when_none_waits_or_installs() {
-        let mut s = UpdateState::new(None);
+        let mut s = UpdateState::new(None, vec![]);
         assert!(s.wants("0.2.0"), "nothing is ready");
         s.offer("0.2.0");
         assert!(!s.wants("0.2.0"), "already downloaded");
@@ -817,6 +1124,29 @@ mod tests {
         fn discard_backup(&self, backup: &Path) {
             self.log(&format!("discard {}", backup.display()));
         }
+        fn record(&self, purpose: Purpose, backup: Option<&Path>) -> Result<(), String> {
+            let purpose = serde_json::to_value(purpose).unwrap();
+            let backup = backup.map(|b| b.display().to_string()).unwrap_or_default();
+            self.log(&format!("record {} {backup}", purpose.as_str().unwrap()))
+                .then_some(())
+                .ok_or_else(|| "read-only".to_string())
+        }
+        async fn set_aside_database(&self) -> Result<PathBuf, String> {
+            self.log("set aside")
+                .then(|| PathBuf::from("failed.db"))
+                .ok_or_else(|| "locked".to_string())
+        }
+        async fn restore_backup(&self, backup: &Path) -> Result<(), String> {
+            self.log(&format!("restore {}", backup.display()))
+                .then_some(())
+                .ok_or_else(|| "disk full".to_string())
+        }
+        fn undo_restore(&self, set_aside: &Path) {
+            self.log(&format!("undo restore {}", set_aside.display()));
+        }
+        fn restore_record(&self) {
+            self.log("restore record");
+        }
         fn install(&self) -> Result<(), String> {
             self.log("install")
                 .then_some(())
@@ -827,14 +1157,17 @@ mod tests {
     #[tokio::test]
     async fn an_install_closes_backs_up_marks_then_installs() {
         let steps = Steps::new("");
-        install(&steps).await;
-        assert_eq!(steps.done(), ["close", "back up", "mark", "install"]);
+        install(&steps, Purpose::Update, None).await;
+        assert_eq!(
+            steps.done(),
+            ["close", "back up", "record update b.db", "mark", "install"]
+        );
     }
 
     #[tokio::test]
     async fn a_failed_step_restarts_on_this_version_with_the_reason() {
         let steps = Steps::new("close");
-        install(&steps).await;
+        install(&steps, Purpose::Update, None).await;
         assert_eq!(
             steps.done(),
             [
@@ -843,24 +1176,310 @@ mod tests {
             ]
         );
         let steps = Steps::new("back up");
-        install(&steps).await;
+        install(&steps, Purpose::Update, None).await;
         assert_eq!(
             steps.done(),
             ["close", "back up", "restart: The backup failed: disk full"]
         );
         let steps = Steps::new("install");
-        install(&steps).await;
+        install(&steps, Purpose::Update, None).await;
         assert_eq!(
             steps.done(),
             [
                 "close",
                 "back up",
+                "record update b.db",
                 "mark",
                 "install",
                 // Nothing changed since the backup: kept, a retry could prune an older one.
                 "discard b.db",
+                // Deferred minor M-3: the record is as it was before this install.
+                "restore record",
                 "restart: The update could not start: access denied"
             ]
         );
+    }
+
+    #[test]
+    fn a_bad_version_is_never_wanted_but_a_newer_one_is() {
+        let s = UpdateState::new(None, vec!["0.3.1".into()]);
+        assert!(!s.wants("0.3.1"));
+        assert!(s.wants("0.3.2"));
+    }
+
+    #[test]
+    fn the_idle_install_is_due_only_when_everything_is_quiet() {
+        let quiet = IdleInput {
+            enabled: true,
+            ready: true,
+            later: false,
+            busy: false,
+            unfinished_runs: 0,
+            composer_has_text: false,
+            input_idle: IDLE_AFTER,
+            window_hidden: false,
+        };
+        assert!(idle_install_due(&quiet));
+        let not = |i: IdleInput| assert!(!idle_install_due(&i));
+        not(IdleInput {
+            input_idle: IDLE_AFTER - Duration::from_secs(1),
+            ..quiet
+        });
+        assert!(idle_install_due(&IdleInput {
+            input_idle: Duration::ZERO,
+            window_hidden: true,
+            ..quiet
+        }));
+        not(IdleInput {
+            later: true,
+            ..quiet
+        });
+        not(IdleInput {
+            unfinished_runs: 1,
+            ..quiet
+        });
+        not(IdleInput {
+            composer_has_text: true,
+            ..quiet
+        });
+        not(IdleInput {
+            busy: true,
+            ..quiet
+        });
+        not(IdleInput {
+            enabled: false,
+            ..quiet
+        });
+        not(IdleInput {
+            ready: false,
+            ..quiet
+        });
+    }
+
+    #[test]
+    fn later_stops_the_idle_install_until_the_next_start() {
+        let mut s = UpdateState::new(None, vec![]);
+        s.offer("0.3.1");
+        assert!(!s.later_pressed());
+        s.later();
+        assert!(s.later_pressed());
+        assert!(!UpdateState::new(None, vec![]).later_pressed());
+    }
+
+    #[test]
+    fn repair_and_go_back_wait_for_working_runs_like_restart() {
+        let mut s = UpdateState::new(None, vec![]);
+        assert_eq!(
+            s.begin_other(Purpose::Repair, "0.3.0", &names(&["digest"]))
+                .unwrap(),
+            Next::Nothing
+        );
+        assert_eq!(
+            s.note(&names(&["digest"])),
+            UpdateNote::Waiting {
+                version: "0.3.0".into(),
+                waiting_for: names(&["digest"]),
+                purpose: Purpose::Repair
+            }
+        );
+        assert_eq!(s.runs_changed(&[]), Next::Install);
+        assert_eq!(
+            s.note(&[]),
+            UpdateNote::Installing {
+                version: "0.3.0".into(),
+                purpose: Purpose::Repair
+            }
+        );
+        let mut s = UpdateState::new(None, vec![]);
+        assert_eq!(
+            s.begin_other(Purpose::GoBack, "0.2.0", &[]).unwrap(),
+            Next::Install
+        );
+        assert_eq!(
+            s.note(&[]),
+            UpdateNote::Installing {
+                version: "0.2.0".into(),
+                purpose: Purpose::GoBack
+            }
+        );
+    }
+
+    #[test]
+    fn the_notes_come_in_order() {
+        let unhealthy = UpdateNote::Unhealthy {
+            version: "0.3.1".into(),
+            back_to: Some("0.3.0".into()),
+        };
+        let mut s = UpdateState::new(None, vec![]);
+        s.offer("0.3.2");
+        s.set_notice(Some(unhealthy.clone()));
+        assert_eq!(s.note(&[]), unhealthy);
+        // "Not now" dismisses the notice; the ready update behind it shows (final review I-6).
+        s.later();
+        assert!(matches!(s.note(&[]), UpdateNote::Ready { .. }));
+        let mut s = UpdateState::new(None, vec![]);
+        s.offer("0.3.2");
+        s.set_notice(Some(UpdateNote::UpdatedItself {
+            version: "0.3.1".into(),
+            at: "2026-10-27T03:12:00.000Z".into(),
+        }));
+        assert!(matches!(s.note(&[]), UpdateNote::Ready { .. }));
+        s.set_notice(Some(unhealthy));
+        assert_eq!(s.restart(&[]).unwrap(), Next::Install);
+        assert!(matches!(s.note(&[]), UpdateNote::Installing { .. }));
+    }
+
+    #[tokio::test]
+    async fn an_update_records_then_marks_then_installs() {
+        let steps = Steps::new("");
+        install(&steps, Purpose::Update, None).await;
+        assert_eq!(
+            steps.done(),
+            ["close", "back up", "record update b.db", "mark", "install"]
+        );
+    }
+
+    #[tokio::test]
+    async fn go_back_sets_the_database_aside_restores_the_backup_and_installs() {
+        let steps = Steps::new("");
+        install(&steps, Purpose::GoBack, Some(Path::new("old.db"))).await;
+        assert_eq!(
+            steps.done(),
+            [
+                "close",
+                "set aside",
+                "restore old.db",
+                "record go_back old.db",
+                "mark",
+                "install"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_go_back_whose_installer_cannot_start_puts_the_database_back() {
+        let steps = Steps::new("install");
+        install(&steps, Purpose::GoBack, Some(Path::new("old.db"))).await;
+        let done = steps.done();
+        assert_eq!(
+            &done[done.len() - 3..],
+            [
+                "undo restore failed.db",
+                // Deferred minor M-6: still pending, so the strip still offers Go back.
+                "restore record",
+                "restart: The update could not start: access denied"
+            ]
+        );
+    }
+
+    #[test]
+    fn setting_the_database_aside_moves_it_and_its_wal_and_undo_puts_them_back() {
+        let dir = tempfile::tempdir().unwrap();
+        for f in ["dots.db", "dots.db-wal", "dots.db-shm"] {
+            std::fs::write(dir.path().join(f), f).unwrap();
+        }
+        let moved = set_aside_database(dir.path(), "0.3.1", at(9)).unwrap();
+        assert!(!dir.path().join("dots.db").exists());
+        assert!(!dir.path().join("dots.db-wal").exists());
+        let name = moved.file_name().unwrap().to_str().unwrap().to_string();
+        assert!(name.starts_with("failed-dots-0.3.1-"));
+        assert_eq!(std::fs::read_to_string(&moved).unwrap(), "dots.db");
+        // Not a backup: never counted or pruned, never named on the fatal page.
+        assert_eq!(newest_backup(dir.path()), None);
+        std::fs::write(dir.path().join("dots.db"), "restored").unwrap();
+        undo_set_aside(dir.path(), &moved).unwrap();
+        for f in ["dots.db", "dots.db-wal", "dots.db-shm"] {
+            assert_eq!(std::fs::read_to_string(dir.path().join(f)).unwrap(), f);
+        }
+    }
+
+    // Final review C-1: a cancelled Go back or Repair must not stay "ready".
+    #[test]
+    fn cancelling_a_repair_or_go_back_leaves_nothing_ready() {
+        for purpose in [Purpose::Repair, Purpose::GoBack] {
+            let mut s = UpdateState::new(None, vec![]);
+            assert_eq!(
+                s.begin_other(purpose, "0.3.0", &names(&["digest"]))
+                    .unwrap(),
+                Next::Nothing
+            );
+            assert!(s.cancel_wait(), "the cancelled install's download goes");
+            assert_eq!(s.note(&[]), UpdateNote::None);
+            assert!(s.restart(&[]).is_err(), "nothing is left to install");
+            assert_eq!(s.ready_purpose(), None);
+        }
+        // Cancelling an update's wait keeps the update ready.
+        let mut s = UpdateState::new(None, vec![]);
+        s.offer("0.3.1");
+        s.restart(&names(&["digest"])).unwrap();
+        assert!(!s.cancel_wait());
+        assert!(matches!(s.note(&[]), UpdateNote::Ready { .. }));
+    }
+
+    // Final review I-7: a second Repair or Go back while one waits is refused.
+    #[test]
+    fn another_install_is_refused_while_one_waits() {
+        let mut s = UpdateState::new(None, vec![]);
+        s.offer("0.3.1");
+        s.restart(&names(&["digest"])).unwrap();
+        assert!(s
+            .begin_other(Purpose::GoBack, "0.3.0", &names(&["digest"]))
+            .is_err());
+        assert_eq!(s.ready_purpose(), Some((Purpose::Update, "0.3.1")));
+    }
+
+    // Final review I-6: "Not now" on an Unhealthy strip must not hide a ready fix.
+    #[test]
+    fn not_now_on_a_notice_keeps_a_ready_update() {
+        let mut s = UpdateState::new(None, vec![]);
+        s.offer("0.3.2");
+        s.set_notice(Some(UpdateNote::Unhealthy {
+            version: "0.3.1".into(),
+            back_to: Some("0.3.0".into()),
+        }));
+        s.later();
+        assert!(matches!(s.note(&[]), UpdateNote::Ready { .. }));
+        assert!(!s.later_pressed());
+    }
+
+    // Final review I-5: undo never deletes the restored database before the original is back.
+    #[test]
+    fn undo_leaves_no_database_rather_than_an_empty_one_when_the_original_is_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("dots.db"), "live").unwrap();
+        let moved = set_aside_database(dir.path(), "0.3.1", at(9)).unwrap();
+        std::fs::write(dir.path().join("dots.db"), "restored").unwrap();
+        // The set-aside file vanished (say, moved by something else): undo fails...
+        let elsewhere = dir.path().join("elsewhere.db");
+        std::fs::rename(&moved, &elsewhere).unwrap();
+        assert!(undo_set_aside(dir.path(), &moved).is_err());
+        // ...and keeps the restored copy rather than deleting it.
+        assert!(std::fs::read_dir(dir.path().join(BACKUPS_DIR))
+            .unwrap()
+            .any(|e| e
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("restored-")));
+    }
+
+    // Deferred minor M-4: three backups after the update cannot prune the one Go back needs.
+    #[tokio::test]
+    async fn pruning_never_deletes_the_backup_go_back_needs() {
+        let dir = tempfile::tempdir().unwrap();
+        let backups = dir.path().join(BACKUPS_DIR);
+        std::fs::create_dir_all(&backups).unwrap();
+        let keep = backups.join(backup_file_name("0.2.0", at(1)));
+        std::fs::write(&keep, "go back").unwrap();
+        for h in 2..5 {
+            std::fs::write(backups.join(backup_file_name("0.3.0", at(h))), "x").unwrap();
+        }
+        dots_core::store::Store::open(&dir.path().join(dots_core::store::DB_FILE))
+            .await
+            .unwrap();
+        back_up_keeping(dir.path(), "0.3.0", at(9), Some(&keep))
+            .await
+            .unwrap();
+        assert!(keep.exists());
     }
 }

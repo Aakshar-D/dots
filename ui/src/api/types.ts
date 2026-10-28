@@ -509,6 +509,10 @@ export const Settings = z.strictObject({
   hold_enabled: z.boolean(),
   hold_share_five_hour: z.number().int(),
   hold_share_weekly: z.number().int(),
+  // Dots installs a downloaded update by itself when idle (updates UI spec section 4.2).
+  auto_install_updates: z.boolean(),
+  // The vault entry holding the GitHub token Dots publishes with; null when it does not.
+  publish_token: nullable(z.string()),
 });
 export const SettingsSaved = z.strictObject({
   settings: Settings,
@@ -1059,7 +1063,12 @@ export const StartupError = z.strictObject({
   message: z.string(),
   log_dir: z.string(),
   backup: z.string(),
+  // The version Go back installs after a failed update; null when there is none.
+  go_back: nullable(z.string()),
 });
+
+/// What an install is for: a new version, the same one again, or the one before the update.
+export const Purpose = z.enum(["update", "repair", "go_back"]);
 
 /// What the update strip shows (apps/dots-app/src/update.rs).
 export const UpdateNote = z.discriminatedUnion("state", [
@@ -1074,10 +1083,136 @@ export const UpdateNote = z.discriminatedUnion("state", [
     state: z.literal("waiting"),
     version: z.string(),
     waiting_for: z.array(z.string()),
+    purpose: Purpose,
   }),
-  z.strictObject({ state: z.literal("installing"), version: z.string() }),
+  z.strictObject({ state: z.literal("installing"), version: z.string(), purpose: Purpose }),
+  z.strictObject({ state: z.literal("failed"), error: z.string() }),
+  // The new version did not start properly; back_to is the version Go back installs.
+  z.strictObject({
+    state: z.literal("unhealthy"),
+    version: z.string(),
+    back_to: nullable(z.string()),
+  }),
+  z.strictObject({
+    state: z.literal("withdrawn"),
+    version: z.string(),
+    back_to: nullable(z.string()),
+  }),
+  z.strictObject({ state: z.literal("updated_itself"), version: z.string(), at: z.string() }),
+]);
+
+/// Settings › Updates (updates UI spec section 4.1).
+export const UpdateStatus = z.strictObject({
+  version: z.string(),
+  checks_on: z.boolean(),
+  checked_at: nullable(z.string()),
+  ready: nullable(z.string()),
+  last_error: nullable(z.string()),
+  go_back: nullable(z.string()),
+  auto_install: z.boolean(),
+  publisher: z.boolean(),
+  // Why the last install, repair or go back did not happen.
+  install_error: nullable(z.string()),
+});
+
+/// Whether this Dots publishes (updates UI spec section 5.1).
+export const PublisherState = z.discriminatedUnion("state", [
+  z.strictObject({ state: z.literal("none") }),
+  z.strictObject({ state: z.literal("checking") }),
+  z.strictObject({ state: z.literal("publisher"), login: z.string() }),
+  z.strictObject({ state: z.literal("refused"), reason: z.string() }),
+]);
+export const PublisherStatus = z.strictObject({
+  token: nullable(z.string()),
+  state: PublisherState,
+});
+export const PullOpened = z.strictObject({ number: z.number().int(), url: z.string() });
+
+/// The Releases page (updates UI spec section 5).
+export const Setup = z.discriminatedUnion("state", [
+  z.strictObject({ state: z.literal("done") }),
+  z.strictObject({ state: z.literal("needed") }),
+  // The secrets are in; the pull request with the public key is what is left.
+  z.strictObject({ state: z.literal("key_pending") }),
+  z.strictObject({
+    state: z.literal("half_done"),
+    secrets: z.number().int(),
+    pubkey: z.boolean(),
+  }),
+]);
+export const MergedPull = z.strictObject({ number: z.number().int(), title: z.string() });
+export const ReleaseInfo = z.strictObject({
+  id: z.number().int(),
+  tag: z.string(),
+  name: z.string(),
+  body: z.string(),
+  prerelease: z.boolean(),
+  draft: z.boolean(),
+  url: z.string(),
+  published_at: nullable(z.string()),
+});
+export const JobInfo = z.strictObject({
+  name: z.string(),
+  status: z.string(),
+  conclusion: nullable(z.string()),
+  steps: z.array(z.tuple([z.string(), z.string(), nullable(z.string())])),
+});
+export const RunInfo = z.strictObject({
+  id: z.number().int(),
+  status: z.string(),
+  conclusion: nullable(z.string()),
+  url: z.string(),
+  jobs: z.array(JobInfo),
+});
+export const Stage = z.discriminatedUnion("stage", [
+  z.strictObject({ stage: z.literal("waiting") }),
+  z.strictObject({ stage: z.literal("testing") }),
+  z.strictObject({ stage: z.literal("building") }),
+  z.strictObject({ stage: z.literal("signing") }),
+  z.strictObject({ stage: z.literal("published") }),
+  z.strictObject({ stage: z.literal("failed"), step: z.string() }),
+]);
+export const Trial = z.strictObject({
+  version: z.string(),
+  rc: z.number().int(),
+  tag: z.string(),
+  release: nullable(ReleaseInfo),
+  run: nullable(RunInfo),
+  stage: Stage,
+  newer_on_master: z.number().int(),
+  notes: z.string(),
+});
+export const Promotion = z.strictObject({
+  version: z.string(),
+  tag: z.string(),
+  run: nullable(RunInfo),
+  stage: Stage,
+});
+export const PageState = z.strictObject({
+  setup: Setup,
+  live: nullable(ReleaseInfo),
+  trial: nullable(Trial),
+  promotion: nullable(Promotion),
+  changes: z.array(MergedPull),
+  suggested: z.string(),
+  // Each version's next trial number.
+  next_rcs: z.record(z.string(), z.number().int()),
+});
+
+/// What "Check for updates" found.
+export const CheckOutcome = z.discriminatedUnion("state", [
+  z.strictObject({ state: z.literal("off") }),
+  z.strictObject({ state: z.literal("up_to_date") }),
+  z.strictObject({ state: z.literal("ready"), version: z.string() }),
   z.strictObject({ state: z.literal("failed"), error: z.string() }),
 ]);
+
+/// A version's notes ("What's new").
+export const ReleaseNotes = z.strictObject({
+  version: z.string(),
+  body: z.string(),
+  url: z.string(),
+});
 
 /// Validation limits of the core that the dot editor and Settings mirror, and the attempts a
 /// scheduled occurrence has at most, which the Dots list and the run view name. The contract
@@ -1222,3 +1357,10 @@ export type WatcherConfig = z.infer<typeof WatcherConfig>;
 export type Watcher = z.infer<typeof Watcher>;
 export type PausedWatcher = z.infer<typeof PausedWatcher>;
 export type UpdateNote = z.infer<typeof UpdateNote>;
+export type UpdateStatus = z.infer<typeof UpdateStatus>;
+export type CheckOutcome = z.infer<typeof CheckOutcome>;
+export type ReleaseNotes = z.infer<typeof ReleaseNotes>;
+export type PublisherStatus = z.infer<typeof PublisherStatus>;
+export type PageState = z.infer<typeof PageState>;
+export type Stage = z.infer<typeof Stage>;
+export type Trial = z.infer<typeof Trial>;

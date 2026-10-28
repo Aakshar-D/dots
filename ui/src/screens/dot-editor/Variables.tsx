@@ -232,10 +232,10 @@ export function Variables(props: {
             </Button>
           </div>
         ))}
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Input
             aria-label="Variable for the shell"
-            className="w-64 font-mono"
+            className="w-64 max-w-full min-w-0 font-mono"
             list={listId}
             value={shellName}
             onChange={(e) => setShellName(e.target.value)}

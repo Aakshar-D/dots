@@ -6,10 +6,12 @@ pub mod contract;
 pub mod error;
 pub mod events;
 pub mod notify_routes;
+pub mod publishing;
 pub mod startup;
 pub mod state;
 pub mod tray;
 pub mod update;
+pub mod update_record;
 pub mod update_service;
 pub mod viewing;
 
@@ -43,6 +45,27 @@ command_list![
     set_schedules_paused,
     restart_app,
     update_note,
+    update_status,
+    update_check_now,
+    update_release_notes,
+    update_repair,
+    update_go_back,
+    update_dismiss_updated,
+    publisher_status,
+    publisher_check,
+    releases_page,
+    release_make_key,
+    release_save_key,
+    release_put_secrets,
+    release_open_key_pull,
+    release_publish_trial,
+    release_save_notes,
+    release_promote,
+    release_retry,
+    release_drop_trial,
+    release_withdraw,
+    report_activity,
+    app_rendered,
     update_open_notes,
     update_later,
     update_restart,
@@ -213,6 +236,7 @@ fn setup(app: &AppHandle, panics_logged: bool) -> Result<(), Box<dyn std::error:
                 app.manage(DataDirLock(lock));
                 // Only the Dots that holds the data folder takes the mark "Restart Dots" left.
                 restarted = startup::take_restart_mark(dir);
+                startup::recover_set_aside(dir);
                 tauri::async_runtime::block_on(startup::start_runtime(dir))
             }
             Err(e) => Err(e),
@@ -233,21 +257,40 @@ fn setup(app: &AppHandle, panics_logged: bool) -> Result<(), Box<dyn std::error:
         // A click on a notification opens what it is about (needs-you spec section 4.2).
         notify_routes::listen(app);
         events::spawn_forwarder(app.clone(), rt.clone());
-        if let Ok(dir) = &data_dir {
-            // What a failed install left is read while Dots holds the data folder.
-            app.manage(update_service::Updates::new(
-                dir.clone(),
-                update::take_error(dir),
-            ));
+    }
+    // Managed whenever the data folder is known, so the fatal page can go back too (updates UI
+    // spec section 4.4); only the checks need the runtime. What a failed install left is read
+    // while Dots holds the data folder.
+    let mut stay_hidden = false;
+    if let Ok(dir) = &data_dir {
+        // The health check after an update (updates UI spec section 4.4).
+        let (record, health) =
+            update_record::settle_start(dir, env!("CARGO_PKG_VERSION"), runtime.is_ok());
+        app.manage(update_service::Updates::new(
+            dir.clone(),
+            update::take_error(dir),
+            record.bad.clone(),
+        ));
+        update_service::start_health(app, health);
+        if let Ok((rt, _)) = &runtime {
             update_service::spawn(app.clone(), rt.clone());
+            // Whether this Dots publishes, checked once at start (updates UI spec section 5.1).
+            let (app, rt) = (app.clone(), rt.clone());
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = publishing::check(&app, &rt).await {
+                    tracing::warn!("checking the publishing token failed: {}", e.message);
+                }
+            });
         }
+        stay_hidden = startup::take_stay_hidden_mark(dir);
     }
     app.manage(dots_core::chatgpt::ChatGptAuth::from_env());
+    app.manage(publishing::Publisher::default());
     app.manage(AppState::new(runtime.map(|(rt, _)| rt), log_dir).with_data_dir(data_dir.ok()));
     // A failed start always shows its error page, even when launched hidden; so does a start
     // that "Restart Dots" asked for.
     let hidden = startup::start_hidden(std::env::args());
-    if startup::show_window(failed, hidden, restarted) {
+    if startup::show_window(failed, hidden, restarted, stay_hidden) {
         show_main(app);
     }
     Ok(())

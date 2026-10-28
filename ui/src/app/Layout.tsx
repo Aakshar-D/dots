@@ -5,8 +5,10 @@ import {
   Inbox as InboxIcon,
   LayoutGrid,
   Library as LibraryIcon,
+  Rocket,
   Settings as SettingsIcon,
 } from "lucide-react";
+import { useEffect } from "react";
 import { NavLink, Outlet } from "react-router";
 
 import { commands } from "@/api/commands";
@@ -17,6 +19,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { isOpenQuestion, waits } from "@/lib/messages";
 import { keys } from "@/lib/query";
 import { useRuntimeEvents } from "@/lib/runtime-events";
+import { useActivity } from "@/lib/use-activity";
 
 const LINKS = [
   { to: "/home", label: "Home", icon: House },
@@ -25,10 +28,19 @@ const LINKS = [
   { to: "/library", label: "Library", icon: LibraryIcon },
   { to: "/settings", label: "Settings", icon: SettingsIcon },
 ];
+/// Only a publisher sees it (updates UI spec section 5.1).
+const RELEASES = { to: "/releases", label: "Releases", icon: Rocket };
 
 /// The frame around every screen: the icon rail, the banners, the screen, the toasts.
 export function Layout() {
   useRuntimeEvents();
+  useActivity();
+  const publisher = useQuery({ queryKey: keys.publisher, queryFn: commands.publisherStatus }).data;
+  const isPublisher = publisher?.state.state === "publisher";
+  // The health check after an update waits for this (updates UI spec section 4.4).
+  useEffect(() => {
+    commands.appRendered().catch(() => {});
+  }, []);
   const inbox = useQuery({ queryKey: keys.inbox, queryFn: commands.inbox }).data;
   const messages = useQuery({
     queryKey: keys.messages(null),
@@ -61,7 +73,7 @@ export function Layout() {
         aria-label="Main"
         className="flex w-[46px] shrink-0 flex-col items-center gap-1 border-r bg-sidebar py-2 text-sidebar-foreground"
       >
-        {LINKS.map(({ to, label, icon: Icon }) => {
+        {(isPublisher ? [...LINKS.slice(0, -1), RELEASES, LINKS.at(-1)!] : LINKS).map(({ to, label, icon: Icon }) => {
           const count = to === "/inbox" ? waiting : to === "/home" ? unread : 0;
           // The name says the count too, and the tooltip shows it.
           const name = count > 0 ? `${label}, ${count} ${to === "/home" ? "unread" : "waiting"}` : label;
