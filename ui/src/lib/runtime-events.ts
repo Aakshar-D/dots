@@ -98,6 +98,12 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
       // The dot's Memory tab.
       invalidate(qc, keys.memories(event.dot_id));
       break;
+    case "instruction_proposal_changed":
+      // The dot's proposal cards and the Inbox's group of them. Approving changes the dot,
+      // which the card that decided reads again itself.
+      invalidate(qc, keys.instructionProposals(event.dot_id));
+      invalidate(qc, keys.inbox);
+      break;
     case "watcher_updated":
       // The dot's Watchers tab, the Inbox's paused watchers and the dots' needs-you counts.
       invalidate(qc, keys.watchers(event.dot_id));

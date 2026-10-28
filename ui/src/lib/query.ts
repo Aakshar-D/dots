@@ -61,6 +61,8 @@ export const keys = {
   messages: (dotId: string | null) => ["messages", dotId] as const,
   followUps: (dotId: string | null) => ["follow-ups", dotId] as const,
   memories: (dotId: string) => ["memories", dotId] as const,
+  /// The instructions a dot proposed (conversational chat spec section 4).
+  instructionProposals: (dotId: string) => ["instruction-proposals", dotId] as const,
   watchers: (dotId: string) => ["watchers", dotId] as const,
   limits: ["limits"] as const,
   updateStatus: ["update-status"] as const,

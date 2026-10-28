@@ -44,6 +44,38 @@ describe("the rail (deep-teal spec section 4)", () => {
     expect(tone(await rail.findByRole("link", { name: "Home, 2 unread" }), "2")).toBe("needs");
   });
 
+  it("counts proposed instructions in the Inbox's count without the needs colour", async () => {
+    backend.on("inbox", () => ({
+      approvals: [],
+      review_runs: [],
+      attention: [],
+      tools_changed: [],
+      watchers: [],
+      held: [],
+      instructions: [
+        {
+          proposal: {
+            id: "01J0INS",
+            dot_id: sample.dot.id,
+            run_id: sample.run.id,
+            root_run_id: sample.run.id,
+            base: "Old.",
+            instructions: "New.",
+            reason: "Shorter.",
+            status: "pending",
+            answer_run_id: null,
+            created_at: "2026-10-28T10:00:00Z",
+            decided_at: null,
+          },
+          dot_name: sample.dot.name,
+        },
+      ],
+    }));
+    renderApp("/library");
+    const rail = within(await nav());
+    expect(tone(await rail.findByRole("link", { name: "Inbox, 1 waiting" }), "1")).toBe("muted");
+  });
+
   it("counts an open question as something that needs the person", async () => {
     backend.on("messages_list", () => [sample.messages[0]]);
     renderApp("/library");

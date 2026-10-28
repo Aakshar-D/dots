@@ -337,6 +337,13 @@ export const commands = {
   /// or its app moved on, and while the dot's thread is still working.
   appProposalDecide: (id: string, decision: T.ProposalDecision) =>
     call(T.AppProposal, "app_proposal_decide", { id, decision }),
+  /// The instructions dots proposed, of one dot or of all (null), newest first.
+  instructionProposalsList: (dotId: string | null) =>
+    call(T.InstructionProposal.array(), "instruction_proposals_list", { dotId }),
+  /// The person's answer on the card. Rejects with kind `conflict` when it was decided already,
+  /// when the dot's instructions changed since it proposed, and while its chat is working.
+  instructionProposalDecide: (id: string, approve: boolean) =>
+    call(T.InstructionProposal, "instruction_proposal_decide", { id, approve }),
 
   watchersList: (dotId: string) => call(T.Watcher.array(), "watchers_list", { dotId }),
   watcherAdd: (dotId: string, name: string, config: T.WatcherConfig) =>

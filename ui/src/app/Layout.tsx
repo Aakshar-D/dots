@@ -54,6 +54,8 @@ export function Layout() {
         inbox.attention.length +
         inbox.tools_changed.length +
         inbox.watchers.length +
+        // Proposed instructions wait for the person's answer.
+        inbox.instructions.length +
         // Runs held for Claude usage wait as one line, however many.
         Math.min(inbox.held.length, 1)
       : 0) + (messages ?? []).filter(waits).length;

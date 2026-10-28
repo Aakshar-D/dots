@@ -162,6 +162,8 @@ command_list![
     app_proposals_list,
     app_proposal_files,
     app_proposal_decide,
+    instruction_proposals_list,
+    instruction_proposal_decide,
     watchers_list,
     watcher_add,
     watcher_update,
