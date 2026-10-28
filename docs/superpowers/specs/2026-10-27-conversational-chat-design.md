@@ -129,3 +129,17 @@ Layout A from the conversation: the existing home (`ui/src/screens/home/`), rest
 - The tool's and policy's final names.
 - How Transcript gets its conversation look without changing the run screen.
 - Spacing, radii and sizes within the existing theme tokens.
+
+## 9. As built (plan A: sections 3 and 4)
+
+Plan A (`docs/superpowers/plans/2026-10-27-conversational-chat-a.md`) builds sections 3, 3.1 and 4; plan B builds section 5. Where the spec left room:
+
+- **A person's chat message** is a chat run whose payload has `"typed": true`, which `Runtime::chat` sets (`prompt::is_typed`). The runs Dots makes (`checkins::continuation`, the decisions on app and instruction proposals) have no such key and keep the task framing.
+- **The conversation framing** is `prompt::CONVERSATION`, after the memories and the recent runs and before "Message from the user", with one line on changing instructions: the tool's name when the run has it, else `prompt::NO_INSTRUCTIONS_TOOL` (edit them in the editor). The summary rule becomes `prompt::CHAT_SUMMARY_RULE`.
+- **A reply to a run topic** gets no framing line of its own: it resumes the run's session as before, with "Runs since your last message" when runs ended since.
+- **The recent runs** are the newest 5 runs of the dot that ended (succeeded, failed or cancelled) outside the topic, other chat topics included, latest end first, one line each: trigger, local end time, `done`/`failed`/`cancelled`, and the first 300 characters of the summary, else of the error, on one line, cut with `…`. "Since the last message" means ended after the parent run was queued.
+- **One proposal waits per dot**: a newer proposal replaces the waiting one (status `replaced`, card gone). The instructions are 1 to 20,000 characters, the reason 1 to 500; a proposal equal to the current instructions is refused. Proposals go with their dot.
+- **The tool is offered** to a run whose topic's root is a person's chat message, not to a workflow step's run, and not when the policy denies `Instructions`. The preset rule is `Instructions` allow, last in every preset; `Instructions(...)` is refused, and the CLI never sees the rule.
+- **Deciding** needs the topic's runs to have ended (the refusals of a reply), so a card can't be decided while the dot still works on the chat. Approving checks the instructions are still the proposal's `base`, else refuses with `instructions::STALE` and the card waits. The chat goes on with `instructions::APPROVED` or `REJECTED`, in the session when the last run had one.
+- **The Inbox** has a "New instructions" group of the waiting proposals, each with its dot and Open conversation, and counts them, in the tray's count and in the rail's Inbox count alike. They don't take the needs colour (a proposal is not an approval), and the dots' needs-you counts don't count them. The conversation shows only waiting proposals, under the topic's runs.
+- **The card's diff** is a line diff of the two texts (`lib/line-diff.ts`), not `DiffView`, which shows git patches.
