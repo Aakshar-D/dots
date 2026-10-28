@@ -13,14 +13,14 @@ The first time Dots starts, it makes a key pair for you on this PC. The private 
 the PC. The public half is your **Dots ID**, shown as a short **fingerprint** so it is easy to read
 out and compare.
 
-- Open **Settings → Profile** to see your fingerprint.
+- Open **Settings › Profile** to see your fingerprint.
 - Choose **Copy my Dots ID** to copy it. Send it to an account's admin when they ask who you are.
 - Your fingerprint stays the same across restarts and updates. It changes only if you delete the
   Dots data folder.
 
 ## Your profile
 
-In **Settings → Profile** you can set the name other people see. The initials on the account
+In **Settings › Profile** you can set the name other people see. The initials on the account
 switcher in the rail come from that name. Save the name and the initials change right away.
 
 ## Switching accounts
@@ -41,12 +41,19 @@ from every account, so an approval is never hidden because you are looking at an
 Your admin gives you a join code. See [Setting up Dots for an organisation](vault-admin.md) for
 what the admin does.
 
-1. Open the switcher and choose **Join an account**, or go to **Settings → Accounts** and choose
+1. Open the switcher and choose **Join an account**, or go to **Settings › Accounts** and choose
    **Join an account**.
-2. Paste the join code and sign in to the source with your own credential.
-3. The account now appears in the switcher.
+2. Paste the join code, or open the `.dotsorg` file your admin sent. Check what it joins.
+3. Most accounts then ask you to sign in to the source with your own credential.
+   Some accounts need no sign-in. Instead the dialog shows a key for this PC. Send that key to your
+   admin, who adds it to the account.
+4. The account now appears in the switcher.
 
-**Manage accounts** in the switcher opens **Settings → Accounts**, where you can update an
+If you see **waiting for the admin to add this PC's key**, the join worked but the admin has not
+added your key yet. Nothing is wrong on your side. Once they have, open **Settings › Accounts**
+and choose Refresh on the account.
+
+**Manage accounts** in the switcher opens **Settings › Accounts**, where you can update an
 account's sign-in or remove it (leave it). If you remove the account that is selected, Dots goes back to
 **Personal**.
 

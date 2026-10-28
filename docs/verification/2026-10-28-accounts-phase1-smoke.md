@@ -51,6 +51,6 @@ Result: not run.
 
 ### 8. Approvals outside the selected account still show
 
-Expect: rejoin the test account, make one of its dots ask for approval, then select Personal. The approval still shows in the Inbox and in the Needs you count, and the switcher's menu shows a waiting count beside the test account.
+Expect: rejoin the test account, make the dot from step 5 ask for approval (give it a task whose tool needs approval), then select Personal. The approval still shows in the Inbox and in the Needs you count, and the switcher's menu shows a waiting count beside the test account.
 
 Result: not run.
