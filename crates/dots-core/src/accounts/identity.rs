@@ -17,8 +17,8 @@ pub const MAX_PROFILE_NAME: usize = 80;
 pub const MAX_EMAIL: usize = 254;
 
 const PUBLIC_KEY_MARKER: &str = "identity_public_key";
-const NAME_MARKER: &str = "identity_name";
-const EMAIL_MARKER: &str = "identity_email";
+const NAME_MARKER: &str = "profile_name";
+const EMAIL_MARKER: &str = "profile_email";
 
 /// A Dots ID. `name` and `email` are empty until the person sets them.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
