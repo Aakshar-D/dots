@@ -369,25 +369,39 @@ impl Runner {
         }
     }
 
-    /// For a person's message that resumes its topic: the dot was saved after the topic's last
-    /// run was queued, so the prompt names its instructions as they are now. `Dot::updated_at`
-    /// moves on every save of the dot, not only of its instructions; naming them once more is
-    /// harmless. Both are `util::now()` text, so they compare as strings. A last run that
-    /// cannot be read is logged and counts as no change.
+    /// For a person's message that resumes its topic: the dot was saved after the session last
+    /// learned its instructions, so the prompt names them as they are now. The session learned
+    /// them in the nearest earlier run of the topic that told it: the person's message (it had
+    /// this section, or nothing had changed), or the run that started the session (it had the
+    /// whole prompt; only that run has no parent). The runs Dots makes in between (an answer, a
+    /// resume after an approval, a follow-up, a decision) send only their message, so they are
+    /// passed over. `Dot::updated_at` moves on every save of the dot, not only of its
+    /// instructions; naming them once more is harmless, so a topic that cannot be read counts
+    /// as a change (logged). Both are `util::now()` text, so they compare as strings.
     async fn instructions_changed(&self, run: &Run, dot: &Dot) -> bool {
         if !crate::prompt::is_typed(run) || run.session_id.is_none() {
             return false;
         }
-        let Some(parent) = &run.parent_run_id else {
-            return false;
-        };
-        match self.store.get_run(parent).await {
-            Ok(parent) => dot.updated_at > parent.queued_at,
+        let thread = match self.store.list_thread(&run.root_run_id).await {
+            Ok(thread) => thread,
             Err(e) => {
-                tracing::warn!(run = %run.id, "reading the chat's last run failed: {e}");
-                false
+                tracing::warn!(run = %run.id, "reading the chat's runs failed: {e}");
+                return true;
             }
+        };
+        let mut next = run.parent_run_id.as_deref();
+        // At most one step per run of the thread.
+        for _ in 0..thread.len() {
+            let Some(prev) = next.and_then(|id| thread.iter().find(|r| r.id == id)) else {
+                break;
+            };
+            if prev.parent_run_id.is_none() || crate::prompt::is_typed(prev) {
+                return dot.updated_at > prev.queued_at;
+            }
+            next = prev.parent_run_id.as_deref();
         }
+        tracing::warn!(run = %run.id, "the chat's runs do not lead to its first one");
+        true
     }
 
     /// Makes the run's open tools reachable through the MCP gateway (`POST /mcp/s/<server>`,
