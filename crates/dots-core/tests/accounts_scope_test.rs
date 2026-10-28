@@ -17,7 +17,7 @@ use serde_json::json;
 use tempfile::TempDir;
 
 struct Rt {
-    _dir: TempDir,
+    dir: TempDir,
     rt: Runtime,
     bao: FakeOpenBao,
     keys: KeyPair,
@@ -35,7 +35,7 @@ impl Rt {
         cfg.claude_path = Some(PathBuf::from(env!("CARGO_BIN_EXE_fake-claude")));
         let rt = Runtime::start(cfg).await.unwrap();
         Rt {
-            _dir: dir,
+            dir,
             rt,
             bao,
             keys: keys(),
@@ -107,4 +107,25 @@ async fn falls_back_after_org_removed() {
     t.rt.set_current_scope(ACME, "default").await.unwrap();
     t.rt.orgs().remove(ACME).await.unwrap();
     assert_eq!(t.rt.current_scope().await.unwrap().account, PERSONAL);
+}
+
+#[tokio::test]
+async fn unreadable_stored_scope_is_personal() {
+    let t = Rt::start().await;
+    t.join_acme().await;
+    let db = t.dir.path().join("data").join("dots.db");
+    let pool = sqlx::SqlitePool::connect(&format!("sqlite:{}", db.display()))
+        .await
+        .unwrap();
+    // Text that is not JSON, then JSON of the wrong shape.
+    for raw in ["not json {", r#"{"account": 5}"#] {
+        sqlx::query(
+            "INSERT INTO settings (key, value) VALUES ('current_scope', ?)              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        )
+        .bind(raw)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(t.rt.current_scope().await.unwrap(), personal(), "{raw}");
+    }
 }

@@ -35,15 +35,15 @@ async fn is_account(orgs: &Orgs, id: &str) -> bool {
     id == PERSONAL || orgs.summaries().await.iter().any(|o| o.id == id)
 }
 
-/// The stored scope; personal when none is stored, it cannot be read, or its org is gone.
+/// The stored scope; personal when none is stored, it does not parse, or its org is gone.
 /// A fallback is not written back.
 pub async fn current_scope(store: &Store, orgs: &Orgs) -> Result<CurrentScope> {
-    let stored = store
-        .marker(SCOPE_MARKER)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|v| serde_json::from_value::<CurrentScope>(v).ok());
+    // Only a stored value that does not parse falls back; a failing store is an error.
+    let stored = match store.marker(SCOPE_MARKER).await {
+        Ok(v) => v.and_then(|v| serde_json::from_value::<CurrentScope>(v).ok()),
+        Err(Error::Json(_)) => None,
+        Err(e) => return Err(e),
+    };
     match stored {
         Some(s) if is_account(orgs, &s.account).await => Ok(s),
         _ => Ok(CurrentScope::default()),
