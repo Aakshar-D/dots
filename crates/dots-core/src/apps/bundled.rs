@@ -61,6 +61,18 @@ const PROJECTS_FILES: &[(&str, &[u8])] = &[
         "ui/index.html",
         include_bytes!("../../apps/projects/ui/index.html"),
     ),
+    (
+        "ui/main.js",
+        include_bytes!("../../apps/projects/ui/main.js"),
+    ),
+    (
+        "ui/projects.css",
+        include_bytes!("../../apps/projects/ui/projects.css"),
+    ),
+    (
+        "ui/projects.js",
+        include_bytes!("../../apps/projects/ui/projects.js"),
+    ),
 ];
 
 /// The Dots release the bundled apps come with: `AppOrigin::Bundled`'s `release`.
