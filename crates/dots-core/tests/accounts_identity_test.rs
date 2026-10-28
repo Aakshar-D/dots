@@ -70,6 +70,10 @@ async fn profile_trims_and_validates() {
         "an email address needs an @"
     );
     assert_eq!(
+        invalid(set_profile(&store, "Asha", "a@").await),
+        "an email address needs an @"
+    );
+    assert_eq!(
         invalid(set_profile(&store, "Asha", "@b.c").await),
         "an email address needs an @"
     );
