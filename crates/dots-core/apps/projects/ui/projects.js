@@ -1,9 +1,13 @@
 // Projects' screen (app library spec section 8, mockup A, list view only): the left column (My
 // tasks, Assigned to dots, the projects, + New project) and the list, grouped by section, with
 // the columns Task, Assignee, Due and Status. Tasks and sections are added inline, sections
-// renamed, and tasks dragged between sections. The page talks to Dots only through `dots`, the
-// client Dots puts in it: every change is a call of a Projects tool, made as the person, and
-// `dots.onChange` brings the screen up to date after any change, a dot's included.
+// renamed, and tasks dragged between sections. A task opens in the side pane: its fields, its
+// spec in Markdown, its subtasks and its Activity, where a change has Undo and a dot's run opens
+// in its conversation. The page talks to Dots only through `dots`, the client Dots puts in it:
+// every change is a call of a Projects tool, made as the person, and `dots.onChange` brings the
+// screen up to date after any change, a dot's included.
+
+import { markdown } from "./markdown.js";
 
 export const STATUS_LABELS = {
   to_do: "To do",
@@ -14,6 +18,8 @@ export const STATUS_LABELS = {
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 /// The most tasks one list shows.
 const LIST_LIMIT = 1000;
+/// The most Activity rows the side pane shows.
+const PANE_ACTIVITY = 200;
 
 /// An element: `attrs` are attributes, with `on<event>` for listeners and `text` for its text;
 /// a null or false attribute or child is left out.
@@ -47,6 +53,50 @@ export function assigneePill(assignee) {
   return h("span", { class: "pill dot" }, `● ${assignee.name ?? "removed dot"}`);
 }
 
+/// Who did an Activity row's change: "You" or "● <dot>".
+const actorName = (actor) => (actor.kind === "person" ? "You" : `● ${actor.name}`);
+
+/// An Activity row's time: "09:40".
+const clock = (at) => at.slice(11, 16);
+
+/// What an Activity row says, after the actor's name.
+export function describe(row) {
+  const { field, before, after } = row;
+  if (row.kind === "comment") return `: ${row.text}`;
+  if (row.kind === "run") {
+    if (field === "started") return " started";
+    if (field === "not_started") return ` could not start: ${row.text}`;
+    const said = row.text ? `: ${row.text}` : "";
+    if (after === "succeeded") return ` finished${said}`;
+    return `'s run ${after === "cancelled" ? "was cancelled" : "failed"}${said}`;
+  }
+  switch (field) {
+    case "created":
+      return " created the task";
+    case "title":
+      return ` renamed it to "${after}"`;
+    case "spec":
+      return " changed the spec";
+    case "status":
+      return ` set the status to ${STATUS_LABELS[after]}`;
+    case "assignee":
+      if (after === null) return " unassigned it";
+      return ` assigned it to ${after.kind === "person" ? "you" : (after.name ?? "a removed dot")}`;
+    case "due_on":
+      return after === null ? " removed the due date" : ` set the due date to ${shortDate(after)}`;
+    case "section":
+      if (after === null) return " made it a to-do";
+      return ` moved it to ${after.project ?? "a project"}${after.section ? ` › ${after.section}` : ""}`;
+    default:
+      if (before === null) return ` added the subtask "${after.title}"`;
+      if (after === null) return ` removed the subtask "${before.title}"`;
+      if (before.title !== after.title) {
+        return ` renamed the subtask "${before.title}" to "${after.title}"`;
+      }
+      return ` ${after.done ? "checked" : "unchecked"} "${after.title}"`;
+  }
+}
+
 /// An input that does `action(text)` on Enter and forgets its text on Escape.
 function entry(attrs, action) {
   return h("input", {
@@ -77,6 +127,12 @@ export function mount(root, dots) {
     dragging: null,
     // The input to focus again after the next draw (an add row keeps the cursor).
     focus: null,
+    // The task open in the side pane: its id, what get_task gave, whether its spec is being
+    // edited, and a refusal of a change made there.
+    open: null,
+    task: null,
+    editingSpec: false,
+    paneError: null,
   };
   let loads = 0;
 
@@ -91,13 +147,44 @@ export function mount(root, dots) {
         state.view = { kind: "my_tasks" };
       }
       const listed = await dots.call("list_tasks", filter(state.view));
+      const task = state.open === null ? null : await openTask(state.open);
       if (mine !== loads) return;
-      Object.assign(state, { projects, dots: users, tasks: listed.tasks, more: listed.more });
+      Object.assign(state, { projects, dots: users, tasks: listed.tasks, more: listed.more, task });
+      // A task deleted meanwhile closes its pane.
+      if (task === null) state.open = null;
     } catch (e) {
       if (mine !== loads) return;
       state.error = String(e?.message ?? e);
     }
     draw();
+  }
+
+  /// The task `id` for the side pane, or null when it is gone.
+  async function openTask(id) {
+    try {
+      return await dots.call("get_task", { id, activity: PANE_ACTIVITY });
+    } catch (e) {
+      if (String(e?.message ?? e).startsWith("There is no task")) return null;
+      throw e;
+    }
+  }
+
+  function select(id) {
+    state.open = id;
+    state.editingSpec = false;
+    state.paneError = null;
+    return load();
+  }
+
+  /// A change made in the side pane, then a load; a refusal shows in the pane.
+  async function paneAct(change) {
+    state.paneError = null;
+    try {
+      await change();
+    } catch (e) {
+      state.paneError = String(e?.message ?? e);
+    }
+    await load();
   }
 
   /// Runs a change, then loads again; a refusal shows above the list.
@@ -123,7 +210,9 @@ export function mount(root, dots) {
   }
 
   function draw() {
-    root.replaceChildren(h("div", { class: "projects" }, side(), list()));
+    root.replaceChildren(
+      h("div", { class: "projects" }, side(), list(), state.task && pane(state.task)),
+    );
     if (state.focus !== null) {
       root.querySelector(`[data-focus="${state.focus}"]`)?.focus();
       state.focus = null;
@@ -297,7 +386,7 @@ export function mount(root, dots) {
     return h(
       "div",
       {
-        class: "row",
+        class: state.open === task.id ? "row open" : "row",
         role: "row",
         "aria-label": task.title,
         "data-task": task.id,
@@ -317,10 +406,216 @@ export function mount(root, dots) {
         text: done ? "✓" : "○",
         onclick: () => act(() => dots.call("update_task", { id: task.id, status: done ? "to_do" : "done" })),
       }),
-      h("span", { class: "title", text: task.title }),
+      h("button", { class: "title", text: task.title, onclick: () => select(task.id) }),
       h("span", { class: "cell" }, assigneePill(task.assignee)),
       h("span", { class: "cell", text: shortDate(task.due_on) }),
       h("span", { class: "cell" }, h("span", { class: `pill ${task.status}`, text: STATUS_LABELS[task.status] })),
+    );
+  }
+
+  /// The side pane of the open task `t`.
+  function pane(t) {
+    const update = (fields) => paneAct(() => dots.call("update_task", { id: t.id, ...fields }));
+    const listed = t.assignee?.kind === "dot" && state.dots.some((d) => d.id === t.assignee.id);
+    const assignee = t.assignee === null ? "" : t.assignee.kind === "person" ? "person" : t.assignee.id;
+    const pick = (value) => (value === assignee ? true : null);
+    return h(
+      "aside",
+      { class: "pane", "aria-label": "Task" },
+      h("button", {
+        class: "close",
+        "aria-label": "Close the task",
+        text: "×",
+        onclick: () => {
+          state.open = null;
+          state.task = null;
+          draw();
+        },
+      }),
+      h("input", {
+        class: "pane-title",
+        "aria-label": "Title",
+        value: t.title,
+        onchange: (e) => e.target.value.trim() !== "" && update({ title: e.target.value.trim() }),
+      }),
+      state.paneError && h("p", { class: "error", role: "alert", text: state.paneError }),
+      h(
+        "div",
+        { class: "fields" },
+        h("label", { for: "pane-assignee", text: "Assignee" }),
+        h(
+          "select",
+          { id: "pane-assignee", onchange: (e) => update({ assignee: e.target.value || null }) },
+          h("option", { value: "", selected: pick(""), text: "No one" }),
+          h("option", { value: "person", selected: pick("person"), text: "You" }),
+          state.dots.map((d) => h("option", { value: d.id, selected: pick(d.id), text: `● ${d.name}` })),
+          t.assignee?.kind === "dot" &&
+            !listed &&
+            h("option", {
+              value: t.assignee.id,
+              selected: true,
+              text: `● ${t.assignee.name ?? "removed dot"}`,
+            }),
+        ),
+        h("label", { for: "pane-due", text: "Due" }),
+        h("input", {
+          id: "pane-due",
+          type: "date",
+          value: t.due_on ?? "",
+          onchange: (e) => update({ due_on: e.target.value || null }),
+        }),
+        h("label", { for: "pane-status", text: "Status" }),
+        h(
+          "select",
+          { id: "pane-status", onchange: (e) => update({ status: e.target.value }) },
+          Object.entries(STATUS_LABELS).map(([value, text]) =>
+            h("option", { value, selected: value === t.status ? true : null, text }),
+          ),
+        ),
+      ),
+      spec(t, update),
+      h("h4", { text: "Subtasks" }),
+      h(
+        "ul",
+        { class: "subtasks" },
+        t.subtasks.map((s) =>
+          h(
+            "li",
+            {},
+            h(
+              "label",
+              {},
+              h("input", {
+                type: "checkbox",
+                checked: s.done ? true : null,
+                onchange: (e) =>
+                  paneAct(() => dots.call("set_subtask", { id: s.id, done: e.target.checked })),
+              }),
+              ` ${s.title}`,
+            ),
+          ),
+        ),
+      ),
+      entry(
+        { class: "add", placeholder: "+ Add subtask", "aria-label": "New subtask", "data-focus": "subtask" },
+        (title) =>
+          paneAct(() => {
+            state.focus = "subtask";
+            return dots.call("add_subtask", { task_id: t.id, title });
+          }),
+      ),
+      activity(t),
+    );
+  }
+
+  /// The task's spec: shown as Markdown, or edited as text.
+  function spec(t, update) {
+    if (state.editingSpec) {
+      const box = h("textarea", { class: "spec-edit", "aria-label": "Spec", rows: 10, value: t.spec });
+      return h(
+        "div",
+        { class: "spec" },
+        h("h4", { text: "Spec" }),
+        box,
+        h(
+          "div",
+          { class: "buttons" },
+          h("button", {
+            class: "primary",
+            text: "Save",
+            onclick: () => {
+              state.editingSpec = false;
+              update({ spec: box.value });
+            },
+          }),
+          h("button", {
+            text: "Cancel",
+            onclick: () => {
+              state.editingSpec = false;
+              draw();
+            },
+          }),
+        ),
+      );
+    }
+    const shown = h("div", { class: "markdown" });
+    if (t.spec.trim() === "") shown.append(h("p", { class: "muted", text: "No spec yet." }));
+    // `markdown` escapes every character of the spec before it adds markup of its own.
+    else shown.innerHTML = markdown(t.spec);
+    return h(
+      "div",
+      { class: "spec" },
+      h(
+        "h4",
+        {},
+        "Spec ",
+        h("button", {
+          class: "link-button",
+          "aria-label": "Edit the spec",
+          text: "Edit",
+          onclick: () => {
+            state.editingSpec = true;
+            draw();
+          },
+        }),
+      ),
+      shown,
+    );
+  }
+
+  /// The task's Activity, newest last, with Undo on each change still in force, a dot's runs
+  /// opening in its conversation, and the comment box.
+  function activity(t) {
+    const box = h("textarea", { "aria-label": "Comment", rows: 2, placeholder: "Comment…" });
+    return h(
+      "div",
+      { class: "activity" },
+      h("h4", { text: "Activity" }),
+      t.activity_total > t.activity.length &&
+        h("p", { class: "muted", text: `The last ${t.activity.length} of ${t.activity_total}.` }),
+      h(
+        "ol",
+        { "aria-label": "Activity" },
+        t.activity.map((r) =>
+          h(
+            "li",
+            { class: r.undone_by ? "undone" : null },
+            h("span", { class: "who", text: actorName(r.actor) }),
+            describe(r),
+            h("span", { class: "muted", text: ` · ${clock(r.at)}` }),
+            r.undone_by && h("span", { class: "muted", text: " (undone)" }),
+            r.kind === "change" &&
+              r.field !== "created" &&
+              !r.undone_by &&
+              h("button", {
+                class: "link-button",
+                text: "Undo",
+                onclick: () => paneAct(() => dots.call("undo", { activity_id: r.id })),
+              }),
+            r.kind === "run" &&
+              r.run_id &&
+              h("button", {
+                class: "link-button",
+                text: "Open the run",
+                onclick: () =>
+                  Promise.resolve()
+                    .then(() => dots.openRun(r.run_id))
+                    .catch((e) => {
+                      state.paneError = String(e?.message ?? e);
+                      draw();
+                    }),
+              }),
+          ),
+        ),
+      ),
+      box,
+      h("button", {
+        class: "primary",
+        text: "Comment",
+        onclick: () =>
+          box.value.trim() !== "" &&
+          paneAct(() => dots.call("comment", { task_id: t.id, text: box.value.trim() })),
+      }),
     );
   }
 

@@ -66,6 +66,10 @@ const PROJECTS_FILES: &[(&str, &[u8])] = &[
         include_bytes!("../../apps/projects/ui/main.js"),
     ),
     (
+        "ui/markdown.js",
+        include_bytes!("../../apps/projects/ui/markdown.js"),
+    ),
+    (
         "ui/projects.css",
         include_bytes!("../../apps/projects/ui/projects.css"),
     ),

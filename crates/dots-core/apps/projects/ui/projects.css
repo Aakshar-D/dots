@@ -83,3 +83,36 @@ input, select, textarea {
 .add { width: 100%; margin-top: 4px; border-style: dashed; background: transparent; }
 .muted { color: var(--dots-muted-foreground, #4f6867); }
 .error { color: var(--dots-destructive, #b23838); }
+.row .title { text-align: left; }
+.row .title:hover { text-decoration: underline; }
+
+.pane {
+  width: 340px;
+  flex: none;
+  overflow-y: auto;
+  padding: 12px 14px;
+  border-left: 1px solid var(--dots-border, #d3e3e1);
+  background: var(--dots-card, #fff);
+  position: relative;
+}
+.pane .close { position: absolute; top: 8px; right: 10px; font-size: 18px; }
+.pane-title { width: calc(100% - 24px); font-size: 15px; font-weight: 600; border-color: transparent; }
+.fields { display: grid; grid-template-columns: 70px 1fr; gap: 6px; align-items: center; margin: 10px 0; }
+.fields label { color: var(--dots-muted-foreground, #4f6867); }
+.pane h4 { margin: 14px 0 4px; font-size: 12px; text-transform: uppercase; color: var(--dots-muted-foreground, #4f6867); }
+.spec-edit, .activity textarea { width: 100%; resize: vertical; }
+.markdown { overflow-wrap: anywhere; }
+.markdown p, .markdown ul, .markdown ol, .markdown pre, .markdown blockquote { margin: 4px 0; }
+.markdown pre, .markdown code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; background: var(--dots-muted, #e9f2f1); border-radius: 4px; }
+.markdown pre { padding: 6px 8px; overflow-x: auto; }
+.markdown blockquote { padding-left: 8px; border-left: 3px solid var(--dots-border, #d3e3e1); }
+.markdown li.task { list-style: none; margin-left: -14px; }
+.markdown .link { text-decoration: underline dotted; }
+.subtasks { list-style: none; padding: 0; margin: 0; }
+.activity ol { list-style: none; padding: 0; margin: 0 0 8px; }
+.activity li { margin: 6px 0; }
+.activity li.undone { opacity: 0.6; }
+.who { font-weight: 600; }
+.link-button { color: var(--dots-primary, #0c7765); margin-left: 6px; text-decoration: underline; }
+.buttons { display: flex; gap: 8px; margin-top: 6px; }
+.primary { background: var(--dots-primary, #0c7765); color: var(--dots-primary-foreground, #fff); border-radius: 6px; padding: 3px 10px; margin-top: 4px; }
