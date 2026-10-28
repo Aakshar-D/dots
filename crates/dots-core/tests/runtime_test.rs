@@ -135,6 +135,44 @@ async fn a_person_s_chat_names_the_dot_s_runs_outside_the_topic() {
 }
 
 #[tokio::test]
+async fn a_person_s_reply_names_the_instructions_edited_since_the_topic_s_last_run() {
+    let t = start(None, None).await;
+    let dot =
+        t.rt.create_dot(folder_spec(&t.dir, "edited"), None)
+            .await
+            .unwrap();
+    let prompt = || -> String {
+        let rec: Value =
+            serde_json::from_str(&std::fs::read_to_string(&t.args_out).unwrap()).unwrap();
+        rec["prompt"].as_str().unwrap().to_string()
+    };
+    let first = t.rt.chat(&dot.id, "do the thing", None).await.unwrap();
+    let first = wait_status(t.rt.store(), &first.id, RunStatus::Succeeded, 15).await;
+    let second = t.rt.chat(&dot.id, "and?", Some(&first.id)).await.unwrap();
+    let second = wait_status(t.rt.store(), &second.id, RunStatus::Succeeded, 15).await;
+    assert_eq!(prompt(), "and?");
+
+    // The person edits the instructions after the topic's last run: the reply names them.
+    let mut spec = t.rt.get_dot(&dot.id).await.unwrap().spec;
+    spec.instructions = "Do the thing twice.\n".into();
+    t.rt.update_dot(&dot.id, spec).await.unwrap();
+    let third =
+        t.rt.chat(&dot.id, "and now?", Some(&second.id))
+            .await
+            .unwrap();
+    let third = wait_status(t.rt.store(), &third.id, RunStatus::Succeeded, 15).await;
+    assert_eq!(
+        prompt(),
+        "## Your instructions now\n\nDo the thing twice.\n\n## Message from the user\n\nand now?"
+    );
+
+    // Named once: the next reply is only its message again.
+    let fourth = t.rt.chat(&dot.id, "ok", Some(&third.id)).await.unwrap();
+    wait_status(t.rt.store(), &fourth.id, RunStatus::Succeeded, 15).await;
+    assert_eq!(prompt(), "ok");
+}
+
+#[tokio::test]
 async fn run_now_then_chat_follow_up_resumes_session() {
     let t = start(None, None).await;
     let dot =

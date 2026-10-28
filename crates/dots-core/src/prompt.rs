@@ -64,6 +64,9 @@ pub struct PromptParts<'a> {
     pub recent: &'a [Run],
     /// The name the run's model calls `propose_instructions` by, when the run has it.
     pub instructions_tool: Option<&'a str>,
+    /// A person's message that resumes its topic: the dot's instructions changed after the
+    /// topic's last run was queued, so the prompt names them as they are now.
+    pub instructions_changed: bool,
 }
 
 /// The most runs a person's chat message names (conversational chat spec section 3.1).
@@ -180,6 +183,7 @@ pub fn build_prompt_full(
         apps,
         recent,
         instructions_tool,
+        instructions_changed,
     } = parts;
     let message = run
         .payload
@@ -189,12 +193,24 @@ pub fn build_prompt_full(
         .unwrap_or_default();
     // A person's message that resumes its topic names the runs that ended since the topic's
     // last one (conversational chat spec section 3.1).
-    if is_typed(run) && run.session_id.is_some() && !recent.is_empty() {
-        return format!(
-            "## Runs since your last message\n\n{RUNS_ARE_REPORTS}\n\n{}\n## Message from the \
-             user\n\n{message}",
-            recent_runs(recent)
-        );
+    if is_typed(run) && run.session_id.is_some() && (instructions_changed || !recent.is_empty()) {
+        let mut out = String::new();
+        // A topic lives for days: the session knows the instructions only as they were, and
+        // a change the person asks for must start from the text as it is now.
+        if instructions_changed {
+            out.push_str("## Your instructions now\n\n");
+            out.push_str(dot.spec.instructions.trim());
+            out.push_str("\n\n");
+        }
+        if !recent.is_empty() {
+            out.push_str(&format!(
+                "## Runs since your last message\n\n{RUNS_ARE_REPORTS}\n\n{}\n",
+                recent_runs(recent)
+            ));
+        }
+        out.push_str("## Message from the user\n\n");
+        out.push_str(message);
+        return out;
     }
     match run.trigger {
         TriggerKind::Resume => return message.to_string(),

@@ -369,6 +369,27 @@ impl Runner {
         }
     }
 
+    /// For a person's message that resumes its topic: the dot was saved after the topic's last
+    /// run was queued, so the prompt names its instructions as they are now. `Dot::updated_at`
+    /// moves on every save of the dot, not only of its instructions; naming them once more is
+    /// harmless. Both are `util::now()` text, so they compare as strings. A last run that
+    /// cannot be read is logged and counts as no change.
+    async fn instructions_changed(&self, run: &Run, dot: &Dot) -> bool {
+        if !crate::prompt::is_typed(run) || run.session_id.is_none() {
+            return false;
+        }
+        let Some(parent) = &run.parent_run_id else {
+            return false;
+        };
+        match self.store.get_run(parent).await {
+            Ok(parent) => dot.updated_at > parent.queued_at,
+            Err(e) => {
+                tracing::warn!(run = %run.id, "reading the chat's last run failed: {e}");
+                false
+            }
+        }
+    }
+
     /// Makes the run's open tools reachable through the MCP gateway (`POST /mcp/s/<server>`,
     /// spec section 5) until the run ends.
     pub fn register_tools(&self, run_id: &str, tools: Arc<RunTools>) {
@@ -1169,6 +1190,7 @@ impl Runner {
         // The memories as they are now: a run's prompt does not change while it runs.
         let memories = self.store.list_memories(&dot.id).await?;
         let recent = self.recent_runs(run).await;
+        let instructions_changed = self.instructions_changed(run, &dot).await;
         let secret = self.register_secret(&run.id);
         self.register_tools(&run.id, tools.clone());
         let mut prompt = build_prompt_full(
@@ -1185,6 +1207,7 @@ impl Runner {
                 instructions_tool: tools
                     .instructions()
                     .then(|| crate::instructions::model_name(dot.spec.engine)),
+                instructions_changed,
             },
         );
         // A chat's first prompt lists the workflows it may start (teams spec section 7).
