@@ -1,7 +1,7 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { AppRow, KeptData } from "@/api/types";
+import type { AppRow, BundledOffer, KeptData } from "@/api/types";
 import { backend } from "@/test/backend";
 import { renderApp } from "@/test/render";
 import contract from "@/api/__fixtures__/contract.json";
@@ -9,6 +9,23 @@ import * as T from "@/api/types";
 
 const [projects, broken] = T.AppRow.array().parse(contract.AppRow) as [AppRow, AppRow];
 const [kept] = T.KeptData.array().parse(contract.KeptData) as [KeptData];
+const [onKept, fresh] = T.BundledOffer.array().parse(contract.BundledOffer) as [
+  BundledOffer,
+  BundledOffer,
+];
+
+/// Projects as Dots installs it: bundled, asking to start dots, the switch off and the prompt
+/// not answered unless `asked`.
+function bundled(asked = false): AppRow {
+  if (projects.item.kind !== "app") throw new Error("an app row");
+  return {
+    ...projects,
+    item: {
+      ...projects.item,
+      config: { ...projects.item.config, can_start_dots: false, start_asked: asked },
+    },
+  };
+}
 
 /// The Expenses app as a row: used by one dot, version 3, with a version to roll back to.
 function expenses(over: Partial<{ every_dot: boolean; previous: number | null; dots: string[] }> = {}): AppRow {
@@ -172,6 +189,96 @@ describe("the Apps screen", () => {
   });
 });
 
+describe("Projects, which comes with Dots", () => {
+  it("offers Install Projects on the kept data, which the person may untick", async () => {
+    backend.on("apps_list", () => []);
+    backend.on("apps_kept_list", () => [kept]);
+    backend.on("apps_bundled_offers", () => [onKept]);
+    backend.on("app_install_bundled", () => projects.item);
+    const { user } = renderApp("/apps");
+    const section = await screen.findByRole("region", { name: "Comes with Dots" });
+    await user.click(within(section).getByRole("button", { name: "Install Projects" }));
+    const dialog = await screen.findByRole("alertdialog");
+    const box = within(dialog).getByRole("checkbox", { name: /Start on the data kept/ });
+    expect(box).toBeChecked();
+    expect(dialog).toHaveTextContent("it then runs 0002_labels.sql on it");
+    await user.click(within(dialog).getByRole("button", { name: "Install" }));
+    await waitFor(() =>
+      expect(backend.callsTo("app_install_bundled")).toEqual([
+        { name: "projects", keptId: onKept.kept!.id },
+      ]),
+    );
+    await user.click(within(section).getByRole("button", { name: "Install Projects" }));
+    const again = await screen.findByRole("alertdialog");
+    await user.click(within(again).getByRole("checkbox", { name: /Start on the data kept/ }));
+    await user.click(within(again).getByRole("button", { name: "Install" }));
+    await waitFor(() =>
+      expect(backend.callsTo("app_install_bundled").at(-1)).toEqual({
+        name: "projects",
+        keptId: null,
+      }),
+    );
+  });
+
+  it("installs fresh when no kept data fits", async () => {
+    backend.on("apps_list", () => []);
+    backend.on("apps_kept_list", () => []);
+    backend.on("apps_bundled_offers", () => [fresh]);
+    backend.on("app_install_bundled", () => projects.item);
+    const { user } = renderApp("/apps");
+    await user.click(await screen.findByRole("button", { name: "Install Projects" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).queryByRole("checkbox")).toBeNull();
+    await user.click(within(dialog).getByRole("button", { name: "Install" }));
+    await waitFor(() =>
+      expect(backend.callsTo("app_install_bundled")).toEqual([{ name: "projects", keptId: null }]),
+    );
+  });
+
+  it("asks once above its screen to let it start dots", async () => {
+    let row = bundled();
+    backend.on("apps_list", () => [row]);
+    backend.on("app_answer_start_prompt", () => {
+      row = bundled(true);
+      return row.item;
+    });
+    const { user } = renderApp("/apps/projects");
+    const prompt = await screen.findByRole("region", { name: "Let Projects start dots?" });
+    await user.click(within(prompt).getByRole("button", { name: "Not now" }));
+    await waitFor(() =>
+      expect(backend.callsTo("app_answer_start_prompt")).toEqual([{ name: "projects", on: false }]),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("region", { name: "Let Projects start dots?" })).toBeNull(),
+    );
+  });
+
+  it("switches starting dots on from the prompt", async () => {
+    backend.on("apps_list", () => [bundled()]);
+    backend.on("app_answer_start_prompt", () => projects.item);
+    const { user } = renderApp("/apps/projects");
+    const prompt = await screen.findByRole("region", { name: "Let Projects start dots?" });
+    await user.click(within(prompt).getByRole("button", { name: "Switch on" }));
+    await waitFor(() =>
+      expect(backend.callsTo("app_answer_start_prompt")).toEqual([{ name: "projects", on: true }]),
+    );
+  });
+
+  it("opens a run the page asks for in the dot's conversation", async () => {
+    backend.on("apps_list", () => [bundled(true)]);
+    backend.on("app_run_link", () => ({ dot_id: "d1", root_run_id: "r1" }));
+    const { router } = renderApp("/apps/projects");
+    const frame = await screen.findByTitle<HTMLIFrameElement>("Projects");
+    expect(screen.queryByRole("region", { name: "Let Projects start dots?" })).toBeNull();
+    const post = vi.spyOn(frame.contentWindow!, "postMessage");
+    fireEvent.load(frame);
+    const port = (post.mock.calls[0] as unknown as [unknown, string, MessagePort[]])[2][0]!;
+    port.postMessage({ type: "open_run", id: 1, run_id: "r9" });
+    await waitFor(() => expect(router.state.location.pathname).toBe("/home/d1/r1"));
+    expect(backend.callsTo("app_run_link")).toEqual([{ name: "projects", runId: "r9" }]);
+  });
+});
+
 describe("an app's own screen", () => {
   it("fills the content area with the app's frame and tells it of changes", async () => {
     backend.on("apps_list", () => [expenses()]);
@@ -193,6 +300,30 @@ describe("an app's own screen", () => {
     ]);
     act(() => backend.emit("runtime", { type: "app_data_changed", app: "expenses" }));
     await waitFor(() => expect(got).toContainEqual({ type: "changed" }));
+  });
+
+  it("does not tell the frame of another app's data changes", async () => {
+    backend.on("apps_list", () => [expenses()]);
+    renderApp("/apps/expenses");
+    const frame = await screen.findByTitle<HTMLIFrameElement>("Expenses");
+    const post = vi.spyOn(frame.contentWindow!, "postMessage");
+    fireEvent.load(frame);
+    const port = (post.mock.calls[0] as unknown as [unknown, string, MessagePort[]])[2][0]!;
+    const got: unknown[] = [];
+    port.onmessage = (e: MessageEvent) => got.push(e.data);
+    act(() => backend.emit("runtime", { type: "app_data_changed", app: "projects" }));
+    act(() => backend.emit("runtime", { type: "app_data_changed", app: "expenses" }));
+    await waitFor(() => expect(got).toContainEqual({ type: "changed" }));
+    expect(got.filter((m) => (m as { type: string }).type === "changed")).toHaveLength(1);
+  });
+
+  it("shows why an app whose code cannot be read does not open", async () => {
+    backend.on("apps_list", () => [broken]);
+    renderApp(`/apps/${broken.item.name}`);
+    expect(
+      await screen.findByText(/cannot open: invalid input: app.json: EOF while parsing an object/),
+    ).toBeVisible();
+    expect(document.querySelector("iframe")).toBeNull();
   });
 
   it("says so for an app it does not have", async () => {

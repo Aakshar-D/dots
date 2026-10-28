@@ -67,6 +67,8 @@ export const keys = {
   /// The installed apps (the Apps screen), and below them the data removed apps kept.
   apps: ["apps"] as const,
   appsKept: ["apps", "kept"] as const,
+  /// The apps that come with Dots and are not installed ("Install Projects").
+  appsBundled: ["apps", "bundled"] as const,
   limits: ["limits"] as const,
   updateStatus: ["update-status"] as const,
   publisher: ["publisher"] as const,
