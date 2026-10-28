@@ -1,5 +1,6 @@
 <!-- dots:notes 0.2.0 -->
 - Accounts, part 1: your Dots ID and Profile, Organisations renamed Accounts, and an account switcher that filters Home
+- Accounts, part 2: a signed member list with roles (Owner, Admin, Member, Viewer), waiting and removed states, and held runs when a role no longer allows them
 - app library screens — the Apps screen, app frames, the review card and copy_app (plan B) (#32)
 - Use the release signing key (#28)
 - Updates in the Dots window: Settings › Updates, going back, and the Releases page (#27)
