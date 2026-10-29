@@ -2,6 +2,7 @@
 //! with the org's minisign key, joined with a join code.
 
 pub mod join;
+mod members;
 pub mod offline;
 pub mod policy;
 pub mod row;
@@ -13,6 +14,10 @@ pub mod timers;
 pub use join::{
     check_org_id, key_fingerprint, parse_join_code, same_policy_key, shown_address, BaoAuth,
     InfisicalSettings, InviteOffer, JoinCode, OpenBaoSettings, SopsSettings, SourceSettings,
+};
+pub use members::{
+    CreatedInvite, DraftView, EditOutcome, InviteState, InviteView, KeyView, MemberView,
+    MembersView, RequestPreview,
 };
 #[cfg(windows)]
 pub use offline::Dpapi;

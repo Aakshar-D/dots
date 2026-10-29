@@ -158,6 +158,13 @@ impl FakeOpenBao {
             .insert(format!("{mount}/data/{path}"));
     }
 
+    /// Accepts writes to `<mount>/data/<path>` again, after `deny_writes`.
+    pub fn allow_writes(&self, mount: &str, path: &str) {
+        self.fake()
+            .denied_writes
+            .remove(&format!("{mount}/data/{path}"));
+    }
+
     /// Accepts `token` from now on. `lookup-self` says whether it is `renewable`.
     pub fn allow_token(&self, token: &str, renewable: bool) {
         self.fake().tokens.insert(token.to_string(), renewable);

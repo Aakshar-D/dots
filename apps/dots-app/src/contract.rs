@@ -1727,6 +1727,7 @@ fn org_summaries() -> Vec<OrgSummary> {
         roster_error: None,
         member_count: Some(4),
         not_member_text: None,
+        request_code: None,
     };
     let status = |status: OrgStatus, text: &str| OrgSummary {
         status,

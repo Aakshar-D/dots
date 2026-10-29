@@ -14,7 +14,8 @@ use super::roster::{parse_roster, Member, Role, Roster, WorkspaceRole, ROSTER_VE
 use crate::vault::org::key_fingerprint;
 use crate::Error;
 
-const OWNER_LOCKED: &str =
+/// Why Dots refuses an edit that touches an Owner.
+pub const OWNER_LOCKED: &str =
     "Owners can only be changed with the account owner's key, using dots-admin.";
 
 /// What a person asks for on the Members tab, as it crosses to the service. `Approve` carries
