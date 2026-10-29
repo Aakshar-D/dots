@@ -162,7 +162,7 @@ went. Keys are made and used in Dots on this PC. They never leave it.
 1. Open **Settings › Accounts**. On an account, open its **API keys** tab. For Personal, the
    **API keys** list is under **Personal**.
 2. Choose **Create key**, give it a name and pick the workspace.
-3. The key appears once, with a **Copy** button and a ready `curl` line: "Copy it now. Dots won't
+3. The key appears once, with a **Copy** button and a ready `curl` line (the bash form): "Copy it now. Dots won't
    show it again." Dots keeps only the first 12 characters, to recognise it by, and a hash. Close
    the dialog and the key is gone. If you lose it, revoke it and make another.
 
@@ -182,15 +182,30 @@ The local server answers on `http://127.0.0.1:PORT`, where PORT is the port in *
 create dialog shows the exact base URL (`http://127.0.0.1:PORT/v1`). If the local server is not
 running, it says so instead. Send the key as a Bearer token:
 
-On Windows, use `curl.exe` (in PowerShell, plain `curl` is a different command). This works in cmd and PowerShell:
+On Windows, use `curl.exe` (in PowerShell, plain `curl` is a different command). Inline JSON
+quoting differs between cmd and PowerShell, so put the body in a file first.
+
+PowerShell (ascii, so no byte order mark is written):
+
+```
+'{"order":"A-17"}' | Set-Content -Encoding ascii payload.json
+```
+
+cmd:
+
+```
+echo {"order":"A-17"}> payload.json
+```
+
+Then, in either shell:
 
 ```
 curl.exe -H "Authorization: Bearer dots_sk_..." http://127.0.0.1:PORT/v1/dots
-curl.exe -X POST -H "Authorization: Bearer dots_sk_..." -d "{\"order\":\"A-17\"}" http://127.0.0.1:PORT/v1/dots/DOT_ID/trigger
+curl.exe -X POST -H "Authorization: Bearer dots_sk_..." -H "Content-Type: application/json" --data-binary "@payload.json" http://127.0.0.1:PORT/v1/dots/DOT_ID/trigger
 curl.exe -H "Authorization: Bearer dots_sk_..." http://127.0.0.1:PORT/v1/runs/RUN_ID
 ```
 
-Or put the body in a file and send it with `-d @payload.json`. In bash (macOS, Linux, Git Bash):
+In bash (macOS, Linux, Git Bash), the body can go inline:
 
 ```bash
 curl -H "Authorization: Bearer dots_sk_..." http://127.0.0.1:PORT/v1/dots

@@ -2,7 +2,7 @@
 
 - Date: 2026-10-30
 - Build: dev app (`bun run tauri dev`), branch `feat/accounts-api-keys`.
-- Data: the same two PCs as phase 4: an Owner/Admin PC "A" and a member PC "B", sharing one dev OpenBao with a test org on a member list. The account has the workspaces Default and Payments (with a few dots in each). B is a Member in Default and a viewer in Payments. PORT below is the port in Settings (curl is run on the PC that made the key). Commands are for Windows (cmd or PowerShell) and use `curl.exe`; in bash use `curl` and put JSON bodies in single quotes.
+- Data: the same two PCs as phase 4: an Owner/Admin PC "A" and a member PC "B", sharing one dev OpenBao with a test org on a member list. The account has the workspaces Default and Payments (with a few dots in each). B is a Member in Default and a viewer in Payments. PORT below is the port in Settings (curl is run on the PC that made the key). Commands use `curl.exe` (Windows, cmd or PowerShell) and read JSON bodies from a file made as in step 3; in bash use `curl` and put JSON bodies in single quotes.
 - Steps: 10, all manual, to be done by a person at the machine. Mark each pass or fail and note anything odd.
 
 ## Steps
@@ -21,7 +21,7 @@ Result: not run.
 
 ### 3. Trigger a dot
 
-Expect: `curl.exe -X POST -H "Authorization: Bearer dots_sk_..." -d "{\"order\":\"A-17\"}" http://127.0.0.1:PORT/v1/dots/DOT_ID/trigger` for an enabled dot of Default answers 202 with `{"run_id":"..."}`. The run appears in Dots marked **API**, with the body as its payload. A disabled dot answers 409 `{"error":"dot is disabled"}`. Optional (hard to reproduce on a dev box): with Claude usage held high, the run waits like a webhook run.
+Expect: first make the body file. PowerShell: `'{"order":"A-17"}' | Set-Content -Encoding ascii payload.json`. cmd: `echo {"order":"A-17"}> payload.json`. Then, in either shell, `curl.exe -X POST -H "Authorization: Bearer dots_sk_..." -H "Content-Type: application/json" --data-binary "@payload.json" http://127.0.0.1:PORT/v1/dots/DOT_ID/trigger` for an enabled dot of Default answers 202 with `{"run_id":"..."}`. The run appears in Dots marked **API**, with the body as its payload. A disabled dot answers 409 `{"error":"dot is disabled"}`. Optional (hard to reproduce on a dev box): with Claude usage held high, the run waits like a webhook run.
 
 Result: not run.
 
