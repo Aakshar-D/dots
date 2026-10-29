@@ -103,6 +103,7 @@ const TRIGGER: Record<Run["trigger"], string> = {
   app: "App",
   workflow: "Workflow",
   watcher: "Watcher",
+  api: "API",
 };
 
 /// A run without its payload (a held run, a usage row) names no app.

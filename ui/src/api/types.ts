@@ -30,6 +30,8 @@ export const TriggerKind = z.enum([
   "workflow",
   // A run a watcher started: a file, an email or a GitHub event (watchers spec section 5).
   "watcher",
+  // A run a caller with an API key started through /v1 (accounts spec section 10).
+  "api",
 ]);
 export const RunStatus = z.enum([
   "queued",

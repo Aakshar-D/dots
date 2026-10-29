@@ -78,7 +78,11 @@ pub fn local_time(t: DateTime<Utc>, now: DateTime<Utc>) -> String {
 pub fn is_background(t: TriggerKind) -> bool {
     matches!(
         t,
-        TriggerKind::Schedule | TriggerKind::Watcher | TriggerKind::FollowUp | TriggerKind::Webhook
+        TriggerKind::Schedule
+            | TriggerKind::Watcher
+            | TriggerKind::FollowUp
+            | TriggerKind::Webhook
+            | TriggerKind::Api
     )
 }
 

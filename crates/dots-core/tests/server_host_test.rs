@@ -78,6 +78,49 @@ fn host_allowed_table() {
     assert!(!host_allowed(Some("evil.example:4321"), p));
     assert!(!host_allowed(Some("[::1]:4321"), p));
     assert!(!host_allowed(None, p));
+    // The port must be the canonical digits, and the name exactly one of the two.
+    assert!(!host_allowed(Some("127.0.0.1:04321"), p));
+    assert!(!host_allowed(Some("127.0.0.1:+4321"), p));
+    assert!(!host_allowed(Some("localhost.:4321"), p));
+    assert!(!host_allowed(Some("a@127.0.0.1:4321"), p));
+    assert!(!host_allowed(Some("127.0.0.1:"), p));
+    assert!(!host_allowed(Some(""), p));
+}
+
+#[tokio::test]
+async fn two_host_headers_are_refused() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let s = start().await;
+    let send = |hosts: usize| {
+        let port = s.port;
+        async move {
+            let mut c = tokio::net::TcpStream::connect(("127.0.0.1", port))
+                .await
+                .unwrap();
+            let mut req = String::from(
+                "GET /health HTTP/1.1
+",
+            );
+            for _ in 0..hosts {
+                req.push_str(&format!(
+                    "Host: 127.0.0.1:{port}
+"
+                ));
+            }
+            req.push_str(
+                "Connection: close
+
+",
+            );
+            c.write_all(req.as_bytes()).await.unwrap();
+            let mut out = String::new();
+            c.read_to_string(&mut out).await.unwrap();
+            out
+        }
+    };
+    assert!(send(1).await.starts_with("HTTP/1.1 200"));
+    let two = send(2).await;
+    assert!(two.starts_with("HTTP/1.1 403"), "{two}");
 }
 
 #[tokio::test]

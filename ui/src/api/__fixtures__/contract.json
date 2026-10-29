@@ -1351,7 +1351,8 @@
       "follow_up",
       "app",
       "workflow",
-      "watcher"
+      "watcher",
+      "api"
     ],
     "UsagePeriod": [
       "five_hours",
