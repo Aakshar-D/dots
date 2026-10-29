@@ -157,6 +157,11 @@ export function installDefaults(): void {
   backend.on("workspace_list", (args) => [
     { scope: String(args.scope), id: "default", name: "Default", use_rules: null, my_role: null, can_manage: true, refusals: allowed },
   ]);
+  // No API key is made, and the local server is off.
+  backend.on("api_key_list", () => []);
+  backend.on("api_base_url", () => {
+    throw { kind: "conflict", message: "The local server is not running." };
+  });
   // The person may do all with every dot.
   backend.on("dot_access", () => allowed);
   // No grant has a status: the editor shows each as it shows a grant not saved yet.

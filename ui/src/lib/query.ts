@@ -43,6 +43,8 @@ export const keys = {
   scope: ["scope"] as const,
   /// The workspaces of an account (`personal` or an org id) this PC may see.
   workspaces: (account: string) => ["workspaces", account] as const,
+  /// The API keys of an account (`personal` or an org id).
+  apiKeys: (scope: string) => ["apiKeys", scope] as const,
   /// The orgs joined on this PC (Settings → Accounts, and the org names other screens
   /// show). What is read per org belongs under this prefix, so an org event reaches it too.
   orgs: ["orgs"] as const,

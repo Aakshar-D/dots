@@ -1545,6 +1545,7 @@ export type RequestPreview = z.infer<typeof RequestPreview>;
 export type RosterEdit = z.infer<typeof RosterEdit>;
 export type WorkspaceView = z.infer<typeof WorkspaceView>;
 export type Refusals = z.infer<typeof Refusals>;
+export type ApiKeyView = z.infer<typeof ApiKeyView>;
 export type DotAccess = z.infer<typeof DotAccess>;
 export type WorkspaceRole = z.infer<typeof WorkspaceRole>;
 export type EditOutcome = z.infer<typeof EditOutcome>;

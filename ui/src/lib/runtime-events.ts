@@ -88,6 +88,8 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
         keys.library,
         keys.inbox,
         ["workspaces"],
+        // A role change or leaving the account changes which keys may be managed.
+        ["apiKeys"],
         keys.scope,
         keys.dots,
         keys.overview,
