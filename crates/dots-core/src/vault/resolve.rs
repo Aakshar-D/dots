@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, HashSet};
 use zeroize::Zeroizing;
 
 use super::grants::{Consumer, Grants};
-use super::org::{OrgLookup, OrgPolicy, OrgView, PersonalMode};
+use super::org::{may_use_in, OrgLookup, OrgPolicy, OrgView, PersonalMode, UseRules};
 use super::service::Vault;
 use crate::accounts::{NotMember, Permission};
 use crate::library::PERSONAL_SCOPE;
@@ -51,6 +51,9 @@ pub enum Unresolved {
     NotDefined,
     /// The org's `use` rules do not allow the name.
     DeniedByPolicy,
+    /// The dot's workspace, by name, has `use` rules that do not allow the name. It counts as
+    /// `DeniedByPolicy` wherever states are told apart.
+    DeniedByWorkspace(String),
     /// The value is a secret, the consumer is the shell, and the org's `shell_secrets` is false.
     ShellSecretsForbidden,
     /// The org's source can't be reached, and there is no saved copy that still holds.
@@ -96,6 +99,9 @@ impl Missing {
             Unresolved::DeniedByPolicy => {
                 format!("{name}: {org}'s policy does not allow it (dot '{dot}')")
             }
+            Unresolved::DeniedByWorkspace(workspace) => {
+                format!("the {workspace} workspace doesn't allow {name}")
+            }
             Unresolved::ShellSecretsForbidden => {
                 format!("{name}: {org} does not allow secrets in the shell (dot '{dot}')")
             }
@@ -119,6 +125,9 @@ impl Missing {
             Unresolved::NotGranted => format!("{name}: not granted"),
             Unresolved::NotDefined => format!("{name}: not in {org}"),
             Unresolved::DeniedByPolicy => format!("{name}: {org}'s policy does not allow it"),
+            Unresolved::DeniedByWorkspace(workspace) => {
+                format!("the {workspace} workspace doesn't allow {name}")
+            }
             Unresolved::ShellSecretsForbidden => {
                 format!("{name}: {org} does not allow secrets in the shell")
             }
@@ -177,6 +186,8 @@ pub(super) struct InScope {
     /// The org's policy and answers for the names, from one read; `None` for Personal, or
     /// for a vault without orgs.
     view: Option<OrgView>,
+    /// The dot's workspace's name and its `use` rules, when it has any.
+    workspace: Option<(String, UseRules)>,
 }
 
 /// Resolved values by the name they were asked for. Its `Debug` shows the names only.
@@ -220,7 +231,24 @@ impl Vault {
         names: &[String],
     ) -> Result<std::result::Result<Resolved, Missing>> {
         let granted = |name: &str| grants.allows(consumer, name);
-        self.resolve_where(scope, &granted, consumer, names).await
+        self.resolve_where(scope, None, &granted, consumer, names)
+            .await
+    }
+
+    /// `resolve` for a dot of the workspace `workspace_id`: after the org's `use` rules, the
+    /// workspace's own narrow the names its dots may use (members spec §6.3). A workspace with
+    /// no `use` rules narrows nothing.
+    pub async fn resolve_in(
+        &self,
+        scope: &DotScope,
+        workspace_id: &str,
+        grants: &Grants,
+        consumer: &Consumer,
+        names: &[String],
+    ) -> Result<std::result::Result<Resolved, Missing>> {
+        let granted = |name: &str| grants.allows(consumer, name);
+        self.resolve_where(scope, Some(workspace_id), &granted, consumer, names)
+            .await
     }
 
     /// The values of `names` for the Library's Check of an MCP server in `scope` (§8), as if
@@ -243,18 +271,20 @@ impl Vault {
                 "no org '{org_id}' is joined on this PC"
             )));
         }
-        self.resolve_where(scope, &|_| true, consumer, names).await
+        self.resolve_where(scope, None, &|_| true, consumer, names)
+            .await
     }
 
     /// `resolve`, with `granted` saying which names are granted to `consumer`.
     async fn resolve_where(
         &self,
         scope: &DotScope,
+        workspace_id: Option<&str>,
         granted: &(dyn Fn(&str) -> bool + Sync),
         consumer: &Consumer,
         names: &[String],
     ) -> Result<std::result::Result<Resolved, Missing>> {
-        let read = self.in_scope(scope, names).await;
+        let read = self.in_scope(scope, workspace_id, names).await?;
         let mut out = BTreeMap::new();
         for (i, name) in names.iter().enumerate() {
             let answer = self
@@ -276,12 +306,28 @@ impl Vault {
 
     /// What resolving in `scope` reads once for `names`: the org's name, and its policy and
     /// answers for those names from one read of the org.
-    pub(super) async fn in_scope(&self, scope: &DotScope, names: &[String]) -> InScope {
+    pub(super) async fn in_scope(
+        &self,
+        scope: &DotScope,
+        workspace_id: Option<&str>,
+        names: &[String],
+    ) -> Result<InScope> {
         let DotScope::Org(org_id) = scope else {
-            return InScope {
+            return Ok(InScope {
                 org: None,
                 view: None,
-            };
+                workspace: None,
+            });
+        };
+        // The dot's workspace, when it gives `use` rules of its own, as the store mirrors the
+        // account's member list. A read that fails fails the resolve: no rules are guessed.
+        let workspace = match workspace_id {
+            Some(id) => self
+                .store()
+                .workspace(org_id, id)
+                .await?
+                .and_then(|row| row.use_rules.map(|rules| (row.name, rules))),
+            None => None,
         };
         let name = self.org_name(org_id).await;
         // The org's policy and values, from one read of the org.
@@ -289,10 +335,11 @@ impl Vault {
             Some(orgs) => Some(orgs.view(org_id, names).await),
             None => None,
         };
-        InScope {
+        Ok(InScope {
             org: Some((org_id.clone(), name)),
             view,
-        }
+            workspace,
+        })
     }
 
     /// The `i`th of the names `read` was made for, for `consumer`, in the spec's order (§8):
@@ -328,8 +375,15 @@ impl Vault {
                 .ok_or((Unresolved::NotDefined, None)),
             (Some(_), Some(view)) => {
                 let (lookup, policy) = (&view.lookups[i], view.policy.as_ref());
-                self.org_value(lookup, policy, consumer, name, reading)
-                    .await?
+                self.org_value(
+                    lookup,
+                    policy,
+                    read.workspace.as_ref(),
+                    consumer,
+                    name,
+                    reading,
+                )
+                .await?
             }
             (Some(_), None) => Err((Unresolved::OrgRemoved, None)),
         };
@@ -401,6 +455,7 @@ impl Vault {
         &self,
         lookup: &OrgLookup,
         policy: Option<&OrgPolicy>,
+        workspace: Option<&(String, UseRules)>,
         consumer: &Consumer,
         name: &str,
         reading: &Reading,
@@ -431,8 +486,15 @@ impl Vault {
             let error = "no policy has been accepted".to_string();
             return refused(Unresolved::PolicyInvalid(error));
         };
+        // The account's `use` rules, then the dot's workspace's: the account's denial names the
+        // account, and a name only the workspace turns away names the workspace.
         if !policy.may_use(name) {
             return refused(Unresolved::DeniedByPolicy);
+        }
+        if let Some((workspace, rules)) = workspace {
+            if !may_use_in(&policy.use_rules, Some(rules), name) {
+                return refused(Unresolved::DeniedByWorkspace(workspace.clone()));
+            }
         }
         let chosen = match policy.personal {
             PersonalMode::Deny => in_org,

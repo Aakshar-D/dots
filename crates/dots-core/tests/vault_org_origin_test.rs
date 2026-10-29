@@ -146,6 +146,7 @@ async fn run(h: &OrgsHarness, vault: &Vault, scope: &DotScope, name: &str) -> (u
         cancel: &CancellationToken::new(),
         vault,
         scope,
+        workspace_id: "default",
         grants: &grants,
         dot_name: "triage",
     })
@@ -651,6 +652,7 @@ async fn a_typed_secret_that_dots_moves_leaves_a_fixed_url_unpinned() {
         cancel: &CancellationToken::new(),
         vault: &vault,
         scope: &DotScope::Personal,
+        workspace_id: "default",
         grants: &grants,
         dot_name: "triage",
     })

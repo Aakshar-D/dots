@@ -320,6 +320,7 @@ async fn open(
         cancel: &CancellationToken::new(),
         vault,
         scope: &DotScope::Personal,
+        workspace_id: "default",
         grants,
         dot_name: "triage",
     })

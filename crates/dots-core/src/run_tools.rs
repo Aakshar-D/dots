@@ -52,6 +52,8 @@ pub struct OpenRequest<'a> {
     /// name for the run events (env vault spec §8).
     pub vault: &'a Vault,
     pub scope: &'a DotScope,
+    /// The dot's workspace, whose `use` rules narrow the org's.
+    pub workspace_id: &'a str,
     pub grants: &'a Grants,
     pub dot_name: &'a str,
 }
@@ -326,6 +328,7 @@ impl RunTools {
             cancel,
             vault,
             scope,
+            workspace_id,
             grants,
             dot_name,
         } = req;
@@ -372,7 +375,7 @@ impl RunTools {
             };
             let consumer = Consumer::Mcp(item.name.clone());
             match vault
-                .resolve(scope, grants, &consumer, &config.variables())
+                .resolve_in(scope, workspace_id, grants, &consumer, &config.variables())
                 .await?
             {
                 Ok(env) => match unconfirmed_origin(store, &item, config, &env, scope).await? {
@@ -382,7 +385,8 @@ impl RunTools {
                 Err(missing) => notices.push(missing.text(dot_name)),
             }
         }
-        let shell_env = shell_env(vault, scope, grants, dot_name, &mut notices).await?;
+        let shell_env =
+            shell_env(vault, scope, workspace_id, grants, dot_name, &mut notices).await?;
         let Some(opened) = open_sessions(&items, workspace, cancel).await else {
             return Ok((RunTools::default(), Vec::new()));
         };
@@ -629,6 +633,7 @@ type Opened = std::result::Result<(McpSession, Vec<McpTool>, watch::Receiver<u64
 async fn shell_env(
     vault: &Vault,
     scope: &DotScope,
+    workspace_id: &str,
     grants: &Grants,
     dot_name: &str,
     notices: &mut Vec<String>,
@@ -637,7 +642,7 @@ async fn shell_env(
     for name in grants.names(&Consumer::Shell) {
         let names = std::slice::from_ref(name);
         match vault
-            .resolve(scope, grants, &Consumer::Shell, names)
+            .resolve_in(scope, workspace_id, grants, &Consumer::Shell, names)
             .await?
         {
             Ok(env) => {

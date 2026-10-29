@@ -692,6 +692,7 @@ async fn runs_opening_one_plugin_together_after_its_servers_changed_all_succeed(
                 cancel: &CancellationToken::new(),
                 vault: &Vault::in_memory(store.clone()),
                 scope: &DotScope::Personal,
+                workspace_id: "default",
                 grants: &Grants::default(),
                 dot_name: "forms",
             })
@@ -772,6 +773,7 @@ async fn an_installed_plugin_that_moved_has_its_hooks_switched_off() {
                 cancel: &CancellationToken::new(),
                 vault: &Vault::in_memory(store.clone()),
                 scope: &DotScope::Personal,
+                workspace_id: "default",
                 grants: &Grants::default(),
                 dot_name: "forms",
             })

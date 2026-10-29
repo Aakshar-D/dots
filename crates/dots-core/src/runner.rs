@@ -1118,6 +1118,7 @@ impl Runner {
             cancel: &cancel,
             vault: &vault,
             scope: &DotScope::of(&dot),
+            workspace_id: &dot.workspace_id,
             grants: &dot.spec.variables,
             dot_name: &dot.spec.name,
         })

@@ -598,6 +598,7 @@ async fn open(h: &OrgsHarness, vault: &Vault, scope: &DotScope, name: &str) -> R
         cancel: &CancellationToken::new(),
         vault,
         scope,
+        workspace_id: "default",
         grants: &grants,
         dot_name: "triage",
     })
