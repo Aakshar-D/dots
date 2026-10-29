@@ -138,6 +138,7 @@ describe("the workspaces under an account", () => {
     backend.on("workspace_list", () => [ws("default", "Default")]);
     await user.click(await screen.findByRole("button", { name: /^Account:/ }));
     await waitFor(() => expect(backend.callsTo("workspace_list").length).toBeGreaterThan(0));
+    expect(screen.queryByRole("group", { name: "Workspaces" })).toBeNull();
     expect(screen.queryByRole("menuitemradio", { name: "Default" })).toBeNull();
   });
 

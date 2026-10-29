@@ -166,53 +166,53 @@ export function AccountSwitcher() {
             const status = a.org && a.org.status !== "connected" ? a.org : null;
             return (
               <Fragment key={a.id}>
-              <button
-                type="button"
-                role="menuitemradio"
-                aria-checked={a.id === currentId}
-                className={ITEM}
-                onClick={() => choose(a.id)}
-              >
-                <Check
-                  className={cn("size-4 shrink-0", a.id !== currentId && "invisible")}
-                  aria-hidden
-                />
-                <span className="min-w-0 flex-1 truncate">{a.name}</span>
-                {role && <span className="text-xs text-muted-foreground">{roleLabel(role)}</span>}
-                {status && (
-                  <span className={cn("text-xs first-letter:uppercase", ORG_TONE[status.status])}>
-                    {status.status_text}
-                  </span>
-                )}
-                {count > 0 && (
-                  <span
-                    data-tone="needs"
-                    className="rounded-full bg-needs px-1.5 text-[10px] text-needs-foreground"
-                  >
-                    {count}
-                  </span>
-                )}
-              </button>
-              {a.id === currentId && workspaces.length > 1 && (
-                <div role="group" aria-label="Workspaces" className="flex flex-col gap-0.5 pl-4">
-                  {workspaces.map((w) => (
-                    <button
-                      key={w.id}
-                      type="button"
-                      role="menuitemradio"
-                      aria-checked={w.id === scope?.workspace}
-                      className={ITEM}
-                      onClick={() => chooseWorkspace(w.id)}
+                <button
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={a.id === currentId}
+                  className={ITEM}
+                  onClick={() => choose(a.id)}
+                >
+                  <Check
+                    className={cn("size-4 shrink-0", a.id !== currentId && "invisible")}
+                    aria-hidden
+                  />
+                  <span className="min-w-0 flex-1 truncate">{a.name}</span>
+                  {role && <span className="text-xs text-muted-foreground">{roleLabel(role)}</span>}
+                  {status && (
+                    <span className={cn("text-xs first-letter:uppercase", ORG_TONE[status.status])}>
+                      {status.status_text}
+                    </span>
+                  )}
+                  {count > 0 && (
+                    <span
+                      data-tone="needs"
+                      className="rounded-full bg-needs px-1.5 text-[10px] text-needs-foreground"
                     >
-                      <Check
-                        className={cn("size-4 shrink-0", w.id !== scope?.workspace && "invisible")}
-                        aria-hidden
-                      />
-                      <span className="min-w-0 flex-1 truncate">{w.name}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
+                      {count}
+                    </span>
+                  )}
+                </button>
+                {a.id === currentId && workspaces.length > 1 && (
+                  <div role="group" aria-label="Workspaces" className="flex flex-col gap-0.5 pl-4">
+                    {workspaces.map((w) => (
+                      <button
+                        key={w.id}
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={w.id === scope?.workspace}
+                        className={ITEM}
+                        onClick={() => chooseWorkspace(w.id)}
+                      >
+                        <Check
+                          className={cn("size-4 shrink-0", w.id !== scope?.workspace && "invisible")}
+                          aria-hidden
+                        />
+                        <span className="min-w-0 flex-1 truncate">{w.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </Fragment>
             );
           })}

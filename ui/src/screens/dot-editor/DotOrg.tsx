@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { commands } from "@/api/commands";
 import type { Dot } from "@/api/types";
@@ -105,6 +105,8 @@ export function WorkspaceMove({ dot }: { dot: Dot }) {
   const qc = useQueryClient();
   const choices = useChoices(dot.org_id ?? PERSONAL);
   const [placed, setPlaced] = useState(dot.workspace_id);
+  // Follows the stored dot when it is loaded again.
+  useEffect(() => setPlaced(dot.workspace_id), [dot.workspace_id]);
   const move = useMutation({
     mutationFn: (workspace: string) => commands.moveDot(dot.id, workspace),
     onSuccess: (moved) => {
@@ -123,6 +125,11 @@ export function WorkspaceMove({ dot }: { dot: Dot }) {
         title={move.isPending ? "Moving the dot" : undefined}
         onChange={(e) => move.mutate(e.target.value)}
       >
+        {!choices.some((w) => w.id === placed) && (
+          <option value={placed} disabled>
+            {placed}
+          </option>
+        )}
         {choices.map((w) => (
           <option key={w.id} value={w.id}>
             {w.name}

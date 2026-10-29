@@ -80,7 +80,10 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
     case "org_updated":
       // The org list, and what lists a server per joined org: the Library's catalogs and the
       // Inbox's changed tool lists. What is read per org sits under the orgs' key.
-      for (const queryKey of [keys.orgs, keys.library, keys.inbox]) invalidate(qc, queryKey);
+      // A roster change can add or take away the workspaces a member sees.
+      for (const queryKey of [keys.orgs, keys.library, keys.inbox, ["workspaces"]]) {
+        invalidate(qc, queryKey);
+      }
       // Each dot's variables, read in its org. Only those: a dot loaded again would be one an
       // open editor might fill its form from.
       for (const query of qc.getQueryCache().findAll({ queryKey: ["dot"] })) {

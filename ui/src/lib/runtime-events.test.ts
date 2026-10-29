@@ -120,13 +120,37 @@ describe("runtime events and the query cache", () => {
     const qc = createQueryClient();
     // The Library and the Inbox list a server's catalog and changed tools per joined org. What
     // is read per org sits under the orgs' key. This PC's age key does not change.
-    const lists = [keys.orgs, ["orgs", "acme-eng", "entries"], keys.library, keys.inbox];
+    const lists = [
+      keys.orgs,
+      ["orgs", "acme-eng", "entries"],
+      keys.library,
+      keys.inbox,
+      keys.workspaces("acme-eng"),
+    ];
     const untouched = [keys.settings, keys.dots, keys.env, keys.orgSopsKey("acme-eng")];
     for (const key of [...lists, ...untouched]) qc.setQueryData(key, []);
 
     applyRuntimeEvent(qc, { type: "org_updated", org_id: "acme-eng" });
     for (const key of lists) expect(stale(qc, key), key.join("/")).toBe(true);
     for (const key of untouched) expect(stale(qc, key), key.join("/")).toBe(false);
+  });
+
+  it("refetches the workspace list on an org update", async () => {
+    const qc = createQueryClient();
+    let calls = 0;
+    backend.on("workspace_list", () => {
+      calls += 1;
+      return [];
+    });
+    const observer = new QueryObserver(qc, {
+      queryKey: keys.workspaces("acme-eng"),
+      queryFn: () => commands.workspaceList("acme-eng"),
+    });
+    const unsubscribe = observer.subscribe(() => {});
+    await vi.waitFor(() => expect(calls).toBe(1));
+    applyRuntimeEvent(qc, { type: "org_updated", org_id: "acme-eng" });
+    await vi.waitFor(() => expect(calls).toBe(2));
+    unsubscribe();
   });
 
   it("marks each dot's variables stale on an org update, and not the dots", () => {
