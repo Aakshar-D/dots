@@ -46,6 +46,8 @@ pub struct MemberRow {
     /// The `roster_hash` of the last list accepted. The same list fetched again is known by it,
     /// and is not checked against the current admins again (§6.1).
     pub roster_hash: Option<String>,
+    /// The `owners_hash` of the last list accepted: a list signed by an admin must keep it.
+    pub owners_hash: Option<String>,
 }
 
 impl MemberRow {

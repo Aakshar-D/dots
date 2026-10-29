@@ -722,7 +722,10 @@ for now you edit the list with `dots-admin` and sign it.
   can change the policy, and it can always sign the member list.
 - An **admin key** is the Dots ID of a person you trust to sign the member list. It is listed in
   the policy's `admins`. An admin can sign new lists, but can't change the policy, the root key or
-  `admins`. Keep the root key off everyone else's PC.
+  `admins`, and can't add, change or remove an Owner: a list signed by an admin must keep the
+  Owner entries of the list each Dots accepted last, word for word, or it is refused ("this
+  member list changes the Owners, which only the owner's key may sign; an Admin signed it").
+  Sign a list that changes Owners with the root key. Keep the root key off everyone else's PC.
 
 Add or drop an admin in the policy, then sign the policy again (section 3):
 

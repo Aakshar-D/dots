@@ -617,6 +617,7 @@ impl Orgs {
         let kept = kept.filter(|_| same_key);
         if !same_key {
             row.member.roster_hash = None;
+            row.member.owners_hash = None;
         }
         let evaluated = self.evaluate(&row, kept.as_ref(), &policy, &fetched).await;
         row.member = evaluated.member.clone();
@@ -1019,6 +1020,7 @@ impl Orgs {
             membership,
             last_roster_seq: last.last_roster_seq,
             roster_hash: last.roster_hash.clone(),
+            owners_hash: last.owners_hash.clone(),
             ..MemberRow::default()
         };
         // The last place and list, unchanged, with why nothing new was taken. An account that
@@ -1077,6 +1079,7 @@ impl Orgs {
             membership,
             last_roster_seq: Some(roster.seq),
             roster_hash: Some(roster_hash(&list.text)),
+            owners_hash: Some(roster.owners_hash()),
             ..MemberRow::default()
         };
         let was_on = last.membership == Membership::Active || last.id_changed();
@@ -1656,6 +1659,10 @@ fn check_roster(
     }
     let accepted = verify_roster(signed, &row.policy_key, &policy.admins, &row.id)?;
     accepted.roster.check_seq(row.member.last_roster_seq)?;
+    accepted.roster.check_owners(
+        accepted.signer == row.policy_key,
+        row.member.owners_hash.as_deref(),
+    )?;
     Ok(KeptRoster {
         signed: signed.to_string(),
         roster: accepted.roster,

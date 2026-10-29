@@ -518,6 +518,96 @@ async fn regenerate_identity(h: &OrgsHarness) -> String {
 }
 
 #[tokio::test]
+async fn only_the_root_key_changes_owners() {
+    let h = OrgsHarness::new().await;
+    let mine = me(&h).await;
+    let admin = keys();
+    let admins = vec![public_key(&admin)];
+    let owner = member("01OWNER", "owner@acme.com", "owner", &stranger());
+    let with = |seq: u64, me: Value| roster(ACME, seq, json!([owner.clone(), me]));
+
+    let first = with(1, member("01ME", "me@acme.com", "admin", &mine));
+    serve(
+        &h,
+        ISSUED,
+        required(&admins),
+        Some(&sign_roster(&admin, &first)),
+    );
+    join(&h).await;
+    assert_eq!(h.orgs.summary(ACME).await.unwrap().role, Some(Role::Admin));
+
+    // An admin may change anyone but the Owners.
+    let second = with(2, member("01ME", "me@acme.com", "viewer", &mine));
+    serve(
+        &h,
+        ISSUED,
+        required(&admins),
+        Some(&sign_roster(&admin, &second)),
+    );
+    let summary = h.orgs.refresh(ACME).await.unwrap();
+    assert_eq!(summary.roster_error, None);
+    assert_eq!(summary.role, Some(Role::Viewer));
+
+    // Making someone an Owner, signed by an admin, is refused; the last list stays.
+    let promoted = with(3, member("01ME", "me@acme.com", "owner", &mine));
+    serve(
+        &h,
+        ISSUED,
+        required(&admins),
+        Some(&sign_roster(&admin, &promoted)),
+    );
+    let summary = h.orgs.refresh(ACME).await.unwrap();
+    assert_eq!(
+        summary.roster_error.as_deref(),
+        Some("this member list changes the Owners, which only the owner's key may sign; an Admin signed it")
+    );
+    assert_eq!(summary.role, Some(Role::Viewer));
+    assert_eq!(summary.roster_seq, Some(2));
+
+    // Removing the Owner, signed by an admin, is refused too.
+    let ousted = roster(
+        ACME,
+        3,
+        json!([member("01ME", "me@acme.com", "owner", &mine)]),
+    );
+    serve(
+        &h,
+        ISSUED,
+        required(&admins),
+        Some(&sign_roster(&admin, &ousted)),
+    );
+    let summary = h.orgs.refresh(ACME).await.unwrap();
+    assert!(summary.roster_error.is_some());
+    assert_eq!(summary.roster_seq, Some(2));
+
+    // The same list signed by the root key is taken.
+    serve(
+        &h,
+        ISSUED,
+        required(&admins),
+        Some(&sign_roster(&h.keys, &promoted)),
+    );
+    let summary = h.orgs.refresh(ACME).await.unwrap();
+    assert_eq!(summary.roster_error, None);
+    assert_eq!(summary.role, Some(Role::Owner));
+    assert_eq!(summary.roster_seq, Some(3));
+
+    // After a restart the Owners are still known: an admin can't undo it.
+    let restarted = h.service();
+    restarted.load().await.unwrap();
+    let demoted = with(4, member("01ME", "me@acme.com", "member", &mine));
+    serve(
+        &h,
+        ISSUED,
+        required(&admins),
+        Some(&sign_roster(&admin, &demoted)),
+    );
+    let summary = restarted.refresh(ACME).await.unwrap();
+    assert!(summary.roster_error.is_some());
+    assert_eq!(summary.role, Some(Role::Owner));
+}
+
+#[tokio::test]
 async fn admin_dropped_from_admins_keeps_the_accepted_list() {
     let h = OrgsHarness::new().await;
     let mine = me(&h).await;

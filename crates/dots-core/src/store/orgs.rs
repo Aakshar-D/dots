@@ -11,7 +11,8 @@ use crate::{Error, Result};
 
 const ORG_COLUMNS: &str =
     "id, name, source, policy_key, last_issued_at, last_fetch_at, joined_at, \
-     membership, my_member_id, my_role, my_workspaces, last_roster_seq, my_key, last_roster_hash";
+     membership, my_member_id, my_role, my_workspaces, last_roster_seq, my_key, last_roster_hash, \
+     last_owners_hash";
 
 /// The member columns of a row (members spec §6.4).
 fn member_from_row(id: &str, row: &SqliteRow) -> Result<MemberRow> {
@@ -42,6 +43,7 @@ fn member_from_row(id: &str, row: &SqliteRow) -> Result<MemberRow> {
         last_roster_seq,
         key: row.try_get("my_key")?,
         roster_hash: row.try_get("last_roster_hash")?,
+        owners_hash: row.try_get("last_owners_hash")?,
     })
 }
 
@@ -90,7 +92,7 @@ impl Store {
         check_org_id(&org.id)?;
         let (workspaces, seq) = member_columns(&org.member)?;
         let added = sqlx::query(&format!(
-            "INSERT INTO orgs ({ORG_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            "INSERT INTO orgs ({ORG_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         ))
         .bind(&org.id)
         .bind(&org.name)
@@ -106,6 +108,7 @@ impl Store {
         .bind(seq)
         .bind(&org.member.key)
         .bind(&org.member.roster_hash)
+        .bind(&org.member.owners_hash)
         .execute(&self.pool)
         .await;
         if let Err(sqlx::Error::Database(db)) = &added {
@@ -199,7 +202,7 @@ impl Store {
         let (workspaces, seq) = member_columns(member)?;
         let done = sqlx::query(
             "UPDATE orgs SET membership = ?, my_member_id = ?, my_role = ?, my_workspaces = ?, \
-             last_roster_seq = ?, my_key = ?, last_roster_hash = ? WHERE id = ?",
+             last_roster_seq = ?, my_key = ?, last_roster_hash = ?, last_owners_hash = ? WHERE id = ?",
         )
         .bind(member.membership.as_str())
         .bind(&member.member_id)
@@ -208,6 +211,7 @@ impl Store {
         .bind(seq)
         .bind(&member.key)
         .bind(&member.roster_hash)
+        .bind(&member.owners_hash)
         .bind(id)
         .execute(&self.pool)
         .await?;
@@ -229,7 +233,9 @@ impl Store {
     ) -> Result<()> {
         let (workspaces, seq) = member_columns(member)?;
         let done = sqlx::query(
-            "UPDATE orgs SET last_fetch_at = ?, last_issued_at = ?, membership = ?,              my_member_id = ?, my_role = ?, my_workspaces = ?, last_roster_seq = ?, my_key = ?,              last_roster_hash = ? WHERE id = ?",
+            "UPDATE orgs SET last_fetch_at = ?, last_issued_at = ?, membership = ?, \
+             my_member_id = ?, my_role = ?, my_workspaces = ?, last_roster_seq = ?, my_key = ?, \
+             last_roster_hash = ?, last_owners_hash = ? WHERE id = ?",
         )
         .bind(last_fetch_at)
         .bind(last_issued_at)
@@ -240,6 +246,7 @@ impl Store {
         .bind(seq)
         .bind(&member.key)
         .bind(&member.roster_hash)
+        .bind(&member.owners_hash)
         .bind(id)
         .execute(&self.pool)
         .await?;

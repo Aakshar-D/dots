@@ -100,6 +100,9 @@ pub enum RosterError {
     /// The roster is older than the last one accepted for this org.
     #[error("this member list (#{found}) is older than the one already accepted (#{last})")]
     RolledBack { last: u64, found: u64 },
+    /// An admin signed a list that adds, changes or removes an Owner: only the root key may.
+    #[error("this member list changes the Owners, which only the owner's key may sign; an Admin signed it")]
+    OwnersChanged,
 }
 
 /// A roster whose signature and rules checked out, with the exact text that was signed (to keep
@@ -282,6 +285,29 @@ impl Roster {
                 last,
                 found: self.seq,
             }),
+            _ => Ok(()),
+        }
+    }
+
+    /// The SHA-256 of the Owner entries, in id order, in lower-case hex: how the `orgs` row
+    /// knows the Owners of the list it accepted last (`last_owners_hash`).
+    pub fn owners_hash(&self) -> String {
+        let mut owners: Vec<&Member> = self
+            .members
+            .iter()
+            .filter(|m| m.role == Role::Owner)
+            .collect();
+        owners.sort_by(|a, b| a.id.cmp(&b.id));
+        roster_hash(&serde_json::to_string(&owners).expect("members serialize"))
+    }
+
+    /// Refuses a list signed by an admin key (not the root key) that adds, changes or removes
+    /// an Owner since the list accepted last, whose Owners hash to `last`. Only the owner's key
+    /// may change Owners, so a stolen Admin PC can't take the account. The first list has
+    /// nothing to compare with and is taken.
+    pub fn check_owners(&self, by_root: bool, last: Option<&str>) -> Result<(), RosterError> {
+        match last {
+            Some(last) if !by_root && self.owners_hash() != last => Err(RosterError::OwnersChanged),
             _ => Ok(()),
         }
     }
