@@ -48,14 +48,20 @@ export function useSwitchWorkspace(): (account: string, workspace: string) => Pr
   );
 }
 
-/// The workspaces of `account` (`"personal"` or an org id) this PC may see; `undefined` while
-/// they load, and while `enabled` is false.
-export function useWorkspaces(account: string, enabled = true): WorkspaceView[] | undefined {
+/// The question for the workspaces of `account` (`"personal"` or an org id) this PC may see,
+/// for a screen that shows its failure too.
+export function useWorkspacesQuery(account: string, enabled = true) {
   return useQuery({
     queryKey: keys.workspaces(account),
     queryFn: () => commands.workspaceList(account),
     enabled,
-  }).data;
+  });
+}
+
+/// The workspaces of `account` (`"personal"` or an org id) this PC may see; `undefined` while
+/// they load, and while `enabled` is false.
+export function useWorkspaces(account: string, enabled = true): WorkspaceView[] | undefined {
+  return useWorkspacesQuery(account, enabled).data;
 }
 
 /// The account `dot` is listed under: its org, or Personal for a dot with none and for one

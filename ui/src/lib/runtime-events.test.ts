@@ -130,9 +130,9 @@ describe("runtime events and the query cache", () => {
       keys.scope,
       keys.dots,
       keys.overview,
-      keys.dot("dot-a"),
     ];
-    const untouched = [keys.settings, keys.orgSopsKey("acme-eng")];
+    // A dot itself is not asked again: an open editor may have been filled from it.
+    const untouched = [keys.settings, keys.orgSopsKey("acme-eng"), keys.dot("dot-a")];
     for (const key of [...lists, ...untouched]) qc.setQueryData(key, []);
 
     applyRuntimeEvent(qc, { type: "org_updated", org_id: "acme-eng" });

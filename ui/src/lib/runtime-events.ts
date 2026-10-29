@@ -4,7 +4,7 @@ import { useNavigate } from "react-router";
 
 import { onLagged, onNavigate, onRuntimeEvent, onStatus, onUpdate } from "@/api/events";
 import type { RunEventRecord, RuntimeEvent } from "@/api/types";
-import { invalidate, invalidateDots, keys, mergeEvents, takeStatus } from "@/lib/query";
+import { invalidate, keys, mergeEvents, takeStatus } from "@/lib/query";
 
 /// Brings the query caches in step with one runtime event.
 export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
@@ -83,12 +83,24 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
       // A roster change can add or take away the workspaces a member sees, and with them the
       // scope in view (the core falls back to Default); a workspace that went away, or leaving
       // the account, moves dots to Default.
-      for (const queryKey of [keys.orgs, keys.library, keys.inbox, ["workspaces"], keys.scope]) {
+      for (const queryKey of [
+        keys.orgs,
+        keys.library,
+        keys.inbox,
+        ["workspaces"],
+        keys.scope,
+        keys.dots,
+        keys.overview,
+      ]) {
         invalidate(qc, queryKey);
       }
-      // The dots, and each dot's variables (read in its org) and access (from the member list).
-      // An open editor keeps its form: it is filled once, when it mounts.
-      invalidateDots(qc);
+      // What is read per dot under its key: its variables (read in its org) and its access
+      // (from the member list). Not the dot itself: an editor opened from a cached copy has not
+      // loaded it since, and loading it again would put the editor back to empty, losing what
+      // was typed.
+      for (const query of qc.getQueryCache().findAll({ queryKey: ["dot"] })) {
+        if (query.queryKey.length > 2) invalidate(qc, query.queryKey);
+      }
       break;
     case "schedule_attention":
       // For the notification; the `schedule_updated` sent with it refreshes the screens.

@@ -1,9 +1,10 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import type { DotAccess, Refusals, WorkspaceView } from "@/api/types";
 import { backend } from "@/test/backend";
 import { allowed, blankSpec, sample } from "@/test/fixtures";
+import { keys } from "@/lib/query";
 import { renderApp } from "@/test/render";
 
 const ws = (
@@ -161,5 +162,53 @@ describe("the workspace a new dot starts in", () => {
     const create = await screen.findByRole("button", { name: "Create dot" });
     await waitFor(() => expect(create).toBeDisabled());
     expect(create).toHaveAttribute("title", OUTSIDE);
+  });
+});
+
+describe("an open editor and an org event", () => {
+  it("keeps what was typed in a dot opened from the cache, and asks the access again", async () => {
+    const dot = { ...sample.dot, org_id: "acme-eng" };
+    backend.on("org_list", () => [acme]);
+    backend.on("get_dot", () => dot);
+    const { user, router, queryClient, listening } = renderApp("/home");
+    await listening();
+    // As after Create: the dot is in the cache and its editor opens from it, without a fetch.
+    queryClient.setQueryData(keys.dot(dot.id), dot);
+    await act(() => router.navigate(`/dots/${dot.id}`));
+    const name = await screen.findByLabelText("Name");
+    await waitFor(() => expect(backend.callsTo("dot_access")).toHaveLength(1));
+    await user.clear(name);
+    await user.type(name, "typed-name");
+
+    const dotLoads = backend.callsTo("get_dot").length;
+    act(() => backend.emit("runtime", { type: "org_updated", org_id: "acme-eng" }));
+    await waitFor(() => expect(backend.callsTo("dot_access")).toHaveLength(2));
+    await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+    // The dot itself was not loaded again, and the form kept what was typed.
+    expect(backend.callsTo("get_dot")).toHaveLength(dotLoads);
+    expect(await screen.findByLabelText("Name")).toHaveValue("typed-name");
+  });
+});
+
+describe("a failed question about what the person may do", () => {
+  it("is shown by the editor's buttons, which stay on", async () => {
+    const dot = { ...sample.dot, workspace_id: "default" };
+    backend.on("get_dot", () => dot);
+    backend.on("dot_access", () => {
+      throw { kind: "internal", message: "database is locked" };
+    });
+    renderApp(`/dots/${dot.id}`);
+    expect(await screen.findByText(/database is locked/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Run now" })).toBeEnabled();
+  });
+
+  it("of a new dot's workspaces is shown too, and Create dot stays on", async () => {
+    backend.on("workspace_list", () => {
+      throw { kind: "internal", message: "database is locked" };
+    });
+    renderApp("/dots/new");
+    expect(await screen.findByText(/database is locked/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Create dot" })).toBeEnabled();
   });
 });

@@ -12,12 +12,12 @@ import { FollowUpsList } from "@/components/FollowUpsList";
 import { Page } from "@/components/Page";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useDotAccess, useWorkspaceRefusal } from "@/lib/access";
+import { useDotAccess, useDotAccessQuery, useWorkspaceRefusal } from "@/lib/access";
 import { scheduleError, scheduleOf, specErrors, specOf } from "@/lib/dot-rules";
 import { errorMessage, notifyError } from "@/lib/notify";
 import { orgRemovedText, useDotOrg } from "@/lib/dot-org";
 import { invalidateDots, keys, useSwitchingDot } from "@/lib/query";
-import { PERSONAL, useCurrentScope } from "@/lib/scope";
+import { PERSONAL, useCurrentScope, useWorkspacesQuery } from "@/lib/scope";
 import { useDebounced } from "@/lib/use-debounced";
 import { DotForm, type Draft } from "@/screens/dot-editor/DotForm";
 import { MemoryTab } from "@/screens/dot-editor/MemoryTab";
@@ -70,6 +70,11 @@ function Editor(props: {
   );
   const dotRefusal = useDotAccess(props.existing?.id)?.edit ?? undefined;
   const refusal = isNew ? newRefusal : dotRefusal;
+  // When that question fails the buttons stay on (the core still refuses what it must), and
+  // the form says it could not check.
+  const spaces = useWorkspacesQuery(draft.org ?? PERSONAL, isNew);
+  const access = useDotAccessQuery(props.existing?.id);
+  const checkError = isNew ? spaces.error : access.error;
   const { setEnabled } = props;
   // The stored dot changes at once; the form follows, keeping what else was typed.
   const onEnabled = setEnabled
@@ -116,6 +121,11 @@ function Editor(props: {
   const form = (
     <div className="flex flex-col gap-4">
       {save.isError && <ErrorNote error={save.error} />}
+      {checkError && (
+        <ErrorNote
+          error={`Couldn't check what you may do with this dot: ${errorMessage(checkError)}`}
+        />
+      )}
       {tried && Object.keys(errors).length > 0 && (
         <p role="alert" className="text-destructive">
           Fix the marked fields, then save again.

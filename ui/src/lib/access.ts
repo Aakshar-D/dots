@@ -98,14 +98,19 @@ export function useWorkspaceRefusal(
   return views?.find((w) => w.id === workspace)?.refusals[p] ?? undefined;
 }
 
-/// What the core says the person may not do with the dot `dotId` (`dot_access`); undefined
-/// while it loads and without a dot.
-export function useDotAccess(dotId: string | undefined): DotAccess | undefined {
+/// The question `dot_access` for the dot `dotId`, for a screen that shows its failure too.
+export function useDotAccessQuery(dotId: string | undefined) {
   return useQuery({
     queryKey: keys.dotAccess(dotId ?? ""),
     queryFn: () => commands.dotAccess(dotId ?? ""),
     enabled: dotId !== undefined,
-  }).data;
+  });
+}
+
+/// What the core says the person may not do with the dot `dotId` (`dot_access`); undefined
+/// while it loads, when it failed, and without a dot.
+export function useDotAccess(dotId: string | undefined): DotAccess | undefined {
+  return useDotAccessQuery(dotId).data;
 }
 
 /// Why the core refuses `p` on the dot of the run `runId` (its account and workspace), for the
