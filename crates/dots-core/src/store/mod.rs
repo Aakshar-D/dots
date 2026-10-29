@@ -7,6 +7,7 @@ use sqlx::{ConnectOptions, Connection};
 
 use crate::Result;
 
+mod api_keys;
 mod approvals;
 mod apps;
 mod browser;
@@ -40,6 +41,7 @@ pub struct Store {
     pub(crate) pool: SqlitePool,
 }
 
+pub use api_keys::ApiKeyRow;
 pub use invites::{DraftRow, InviteRow};
 pub use limits::LimitReading;
 pub use memories::Added;
