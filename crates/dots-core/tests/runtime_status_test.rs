@@ -50,6 +50,7 @@ async fn a_taken_port_starts_without_the_server_and_fails_claude_runs() {
         .unwrap();
     // No URL on a port that another program owns.
     assert!(matches!(rt.webhook_url(&dot), Err(Error::Conflict(_))));
+    assert!(matches!(rt.api_base_url(), Err(Error::Conflict(_))));
     let run = rt.run_now(&dot.id).await.unwrap();
     let failed = wait_status(rt.store(), &run.id, RunStatus::Failed, 15).await;
     assert_eq!(

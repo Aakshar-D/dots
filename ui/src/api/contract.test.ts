@@ -72,6 +72,8 @@ const schemas: Record<SampleName, { parse: (v: unknown) => unknown }> = {
   UsageSummary: T.UsageSummary,
   WorkspaceView: T.WorkspaceView.array(),
   DotAccess: T.DotAccess.array(),
+  ApiKeyView: T.ApiKeyView.array(),
+  CreatedApiKey: T.CreatedApiKey,
   RosterEdit: T.RosterEdit.array(),
 };
 

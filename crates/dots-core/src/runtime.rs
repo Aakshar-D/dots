@@ -967,6 +967,17 @@ impl Runtime {
         ))
     }
 
+    /// The address `/v1` answers on, for the API keys tab to show: this PC's own port. A
+    /// Conflict when the local server is not running, like `webhook_url`.
+    pub fn api_base_url(&self) -> Result<String> {
+        if let Some(reason) = &self.server_error {
+            return Err(Error::Conflict(format!(
+                "the API is off because the local server is not running: {reason}"
+            )));
+        }
+        Ok(format!("http://127.0.0.1:{}/v1", self.port))
+    }
+
     /// Brings the dot's schedule row in line with the dot after a change of it (Scheduler v2
     /// spec §4): made for a new schedule, reset for a changed one or when `enabled_now` (the
     /// dot was disabled and is enabled now), deleted without a schedule. A change of the row

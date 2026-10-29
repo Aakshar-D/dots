@@ -11,6 +11,7 @@
 //! a native dialog from Rust before it is run or stored (`confirm.rs`). The UI is first-party
 //! code under a `default-src 'self'` policy.
 
+use dots_core::accounts::api_keys::{ApiKeyView, CreatedApiKey};
 use dots_core::accounts::edit::RosterEdit;
 use dots_core::accounts::{CurrentScope, Identity, Role};
 use dots_core::accounts::{DotAccess, WorkspaceView};
@@ -488,6 +489,38 @@ pub async fn personal_workspace_rename(
 #[tauri::command]
 pub async fn personal_workspace_delete(state: State<'_, AppState>, id: String) -> Res<()> {
     Ok(state.rt()?.personal_workspace_delete(&id).await?)
+}
+
+/// The API keys of the workspaces of `scope` this PC may see; never carries a key's text.
+#[tauri::command]
+pub async fn api_key_list(state: State<'_, AppState>, scope: String) -> Res<Vec<ApiKeyView>> {
+    Ok(state.rt()?.api_keys(&scope).await?)
+}
+
+/// Makes an API key in a workspace. The answer carries the key's text, the only time it exists.
+#[tauri::command]
+pub async fn api_key_create(
+    state: State<'_, AppState>,
+    scope: String,
+    workspace_id: String,
+    name: String,
+) -> Res<CreatedApiKey> {
+    Ok(state
+        .rt()?
+        .create_api_key(&scope, &workspace_id, &name)
+        .await?)
+}
+
+/// Revokes an API key.
+#[tauri::command]
+pub async fn api_key_revoke(state: State<'_, AppState>, id: String) -> Res<ApiKeyView> {
+    Ok(state.rt()?.revoke_api_key(&id).await?)
+}
+
+/// The address the API answers on; an error when the local server is not running.
+#[tauri::command]
+pub fn api_base_url(state: State<'_, AppState>) -> Res<String> {
+    Ok(state.rt()?.api_base_url()?)
 }
 
 #[tauri::command]

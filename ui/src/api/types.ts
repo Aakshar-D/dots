@@ -1166,6 +1166,25 @@ export const Refusals = z.strictObject({
   answer: nullable(z.string()),
   create_api_keys: nullable(z.string()),
 });
+// An API key as the keys tab lists it: never the key text, only its prefix, and why this PC may
+// not manage it (null is allowed).
+export const ApiKeyView = z.strictObject({
+  id: z.string(),
+  scope: z.string(),
+  workspace_id: z.string(),
+  workspace_name: z.string(),
+  name: z.string(),
+  prefix: z.string(),
+  created_at: z.string(),
+  last_used_at: nullable(z.string()),
+  revoked_at: nullable(z.string()),
+  refusal: nullable(z.string()),
+});
+// What making a key answers: the key and its text, which exists only in this answer.
+export const CreatedApiKey = z.strictObject({
+  key: ApiKeyView,
+  secret: z.string(),
+});
 // What `dot_access` answers for one dot: the refusals of its account and workspace.
 export const DotAccess = Refusals;
 // A workspace as this PC sees it: its account (`personal` or an org's id), its own use rules
