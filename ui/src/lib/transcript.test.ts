@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { RunEventRecord } from "@/api/types";
-import { toolPreview, transcriptItems } from "@/lib/transcript";
+import { stepsLine, toolPreview, transcriptItems } from "@/lib/transcript";
 
 let seq = 0;
 const ev = (data: Record<string, unknown>): RunEventRecord => ({
@@ -72,5 +72,66 @@ describe("the transcript", () => {
     expect(toolPreview({ n: 1 })).toBe('{"n":1}');
     expect(toolPreview({ text: "x".repeat(200) })).toHaveLength(81);
     expect(toolPreview(undefined)).toBe("");
+  });
+});
+
+describe("the line a group of tool steps shows as", () => {
+  const none = new Map<string, string>();
+  const step = (tool: string, input: unknown = {}) => ({ tool, input });
+
+  it("counts the steps by phrase, in the order each phrase first comes", () => {
+    expect(
+      stepsLine([step("Read"), step("Bash"), step("read_file"), step("Grep")], none),
+    ).toBe("Read 2 files · Ran a command · Searched the files");
+    expect(stepsLine([step("WebSearch"), step("Edit"), step("WebFetch")], none)).toBe(
+      "Searched the web · Edited a file · Read a web page",
+    );
+  });
+
+  it("says how many for each phrase", () => {
+    expect(stepsLine([step("Write"), step("MultiEdit"), step("edit_file")], none)).toBe(
+      "Edited 3 files",
+    );
+    expect(stepsLine([step("Bash"), step("shell")], none)).toBe("Ran 2 commands");
+    expect(stepsLine([step("Glob"), step("LS"), step("list_dir")], none)).toBe(
+      "Searched the files 3 times",
+    );
+    expect(stepsLine([step("WebFetch"), step("WebFetch")], none)).toBe("Read 2 web pages");
+    expect(stepsLine([step("WebSearch"), step("WebSearch")], none)).toBe(
+      "Searched the web 2 times",
+    );
+    expect(stepsLine([step("Read"), step("Read")], none)).toBe("Read 2 files");
+  });
+
+  it("names any other tool by the label of its chip, one phrase per tool", () => {
+    const owners = new Map([["sf", "Salesforce"]]);
+    expect(
+      stepsLine(
+        [
+          step("mcp__sf__query"),
+          step("mcp__github__search"),
+          step("mcp__sf__query"),
+          step("mcp__sf__query"),
+        ],
+        owners,
+      ),
+    ).toBe("Used Salesforce › query 3 times · Used github › search");
+    expect(stepsLine([step("Task")], none)).toBe("Used Task");
+  });
+
+  it("names a local memory call by the tool it ran", () => {
+    expect(
+      stepsLine(
+        [
+          step("Memory", { text: "A fact." }),
+          step("Memory", { query: "x" }),
+          step("Memory", { text: "B." }),
+        ],
+        none,
+      ),
+    ).toBe("Used Memory › remember 2 times · Used Memory › recall");
+    expect(stepsLine([step("mcp__dots__remember", { text: "A fact." })], none)).toBe(
+      "Used dots › remember",
+    );
   });
 });

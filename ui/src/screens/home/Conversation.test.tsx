@@ -48,6 +48,8 @@ describe("a dot's conversation", () => {
     const { listening } = renderApp(`/home/${dot.id}`);
     const shown = await card(run);
     await listening();
+    // A rounded light-bordered card, not a rule on its left.
+    expect(shown).toHaveClass("rounded-xl", "border", "bg-card");
     expect(within(shown).getByText("Succeeded")).toBeVisible();
     expect(within(shown).getByText("Sent 3 invoices")).toBeVisible();
     expect(within(shown).getByRole("link", { name: "Details" })).toHaveAttribute(
@@ -185,10 +187,44 @@ describe("a dot's conversation", () => {
     expect(await screen.findByText("question current")).toBeVisible();
   });
 
-  it("invites the first message to a dot that never ran", async () => {
+  it("greets with the dot's name over the composer when the conversation is empty", async () => {
     home([]);
     renderApp(`/home/${dot.id}`);
-    expect(await screen.findByText(`Ask ${dot.name} something.`, { exact: false })).toBeVisible();
+    const name = await screen.findByRole("heading", { level: 2, name: dot.name });
+    expect(name).toHaveClass("text-2xl", "font-semibold");
+    const invite = screen.getByText(`Ask ${dot.name} something`);
+    expect(invite).toHaveClass("text-muted-foreground");
+    // The old line is gone, and there is no conversation to scroll.
+    expect(screen.queryByText(/It answers with its own instructions/)).toBeNull();
+    expect(screen.queryByRole("region", { name: "Conversation" })).toBeNull();
+    // The composer is right under the greeting.
+    const box = screen.getByLabelText("Message");
+    expect(invite.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Send" })).toBeVisible();
+  });
+
+  it("does not greet when the dot's runs could not be loaded", async () => {
+    home([]);
+    backend.on("list_runs", () => {
+      throw { kind: "internal", message: "database is locked" };
+    });
+    renderApp(`/home/${dot.id}`);
+    const view = within(await screen.findByRole("region", { name: "Conversation" }));
+    expect(await view.findByRole("alert")).toHaveTextContent("database is locked");
+    expect(screen.queryByText(`Ask ${dot.name} something`)).toBeNull();
+  });
+
+  it("turns the greeting into the conversation with the first message", async () => {
+    home([]);
+    const { user } = renderApp(`/home/${dot.id}`);
+    await screen.findByText(`Ask ${dot.name} something`);
+    const box = screen.getByLabelText("Message");
+    await waitFor(() => expect(box).toBeEnabled());
+    await user.type(box, "Hello there{Enter}");
+    const view = within(await screen.findByRole("region", { name: "Conversation" }));
+    expect(await view.findByText("Hello there")).toBeVisible();
+    expect(screen.queryByText(`Ask ${dot.name} something`)).toBeNull();
+    expect(screen.queryByRole("heading", { level: 2, name: dot.name })).toBeNull();
   });
 
   it("shows a failure once when the run also stored it as an event", async () => {
@@ -311,9 +347,11 @@ describe("what the self-QA found", () => {
         }),
       ],
     );
-    renderApp(`/home/${dot.id}`);
+    const { user } = renderApp(`/home/${dot.id}`);
     const view = within(await screen.findByRole("region", { name: "Conversation" }));
-    expect(await view.findByText("sent for approval")).toBeVisible();
+    // The chip is under the steps line.
+    await user.click(await view.findByText("Ran a command"));
+    expect(view.getByText("sent for approval")).toBeVisible();
     expect(view.queryByText("failed")).toBeNull();
   });
 

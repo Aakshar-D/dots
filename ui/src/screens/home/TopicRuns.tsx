@@ -8,6 +8,7 @@ import { ApprovalCard } from "@/components/ApprovalCard";
 import { LoadErrors } from "@/components/ErrorNote";
 import { InstructionsCard } from "@/components/InstructionsCard";
 import { Failure, Transcript } from "@/components/Transcript";
+import { isActive } from "@/lib/home-topics";
 import { eventsQuery, keys } from "@/lib/query";
 
 /// Runs of one topic as the chat shows a thread: each run's message, the dot's text, its tool
@@ -42,6 +43,8 @@ export function TopicRuns(props: {
   const proposals = (props.proposals ?? []).filter((p) =>
     runs.some((run) => run.id === p.run_id),
   );
+  // A proposal can't be decided while the dot still works on its topic.
+  const busy = runs.some(isActive);
   return (
     <div className="flex flex-col gap-4">
       <Transcript
@@ -50,6 +53,7 @@ export function TopicRuns(props: {
         shownError={failure}
         messages={checkIns}
         dotName={dotName}
+        variant="conversation"
       />
       <LoadErrors queries={[...events, ...approvals]} />
       <AppliedCalls approvals={asked} />
@@ -58,7 +62,7 @@ export function TopicRuns(props: {
       ))}
       <AppReviews runs={runs} dotName={dotName} />
       {proposals.map((proposal) => (
-        <InstructionsCard key={proposal.id} proposal={proposal} dotName={dotName} />
+        <InstructionsCard key={proposal.id} proposal={proposal} dotName={dotName} busy={busy} />
       ))}
       {failure && <Failure>{failure}</Failure>}
     </div>
