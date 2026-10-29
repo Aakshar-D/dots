@@ -568,7 +568,7 @@ describe("Settings, Accounts, invites and request codes", () => {
     expect(within(dialog).getByRole("button", { name: "Continue" })).toBeEnabled();
   });
 
-  it("expired invite disables Join", async () => {
+  it("expired invite disables Continue", async () => {
     orgs([]);
     backend.on("org_preview", () => invited({ expires_at: "2020-01-01T00:00:00Z" }));
     const { user } = renderApp("/settings");
@@ -601,6 +601,19 @@ describe("Settings, Accounts, invites and request codes", () => {
     expect(await within(dialog).findByLabelText("Request code")).toHaveValue(REQUEST);
     expect(backend.callsTo("profile_set")).toEqual([{ name: "Asha Rao", email: "asha@acme.com" }]);
     expect(backend.callsTo("org_join")).toHaveLength(1);
+  });
+
+  it("invite join keeps Join disabled while the profile is unknown", async () => {
+    orgs([]);
+    backend.on("identity_get", () => Promise.reject({ kind: "internal", message: "no identity" }));
+    backend.on("org_preview", () => ({ ...invited(), source_kind: "sops", auth: null }));
+    backend.on("org_sops_key", () => AGE_KEY);
+    const { user } = renderApp("/settings");
+    const dialog = await preview(user);
+    await user.click(within(dialog).getByRole("button", { name: "Continue" }));
+    expect(await within(dialog).findByText(/no identity/)).toBeVisible();
+    expect(within(dialog).getByRole("button", { name: "Join" })).toBeDisabled();
+    expect(backend.callsTo("org_join")).toHaveLength(0);
   });
 
   it("after joining with an invite the request code is shown", async () => {

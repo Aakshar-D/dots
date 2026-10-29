@@ -113,24 +113,25 @@ function OrgRow({ org, onUpdate }: { org: OrgSummary; onUpdate: () => void }) {
                 {notMember}
               </p>
               {org.membership === "waiting" && <CopyDotsIdButton />}
-              {org.membership === "waiting" && !org.request_code && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={requestAccess.isPending}
-                  onClick={() => requestAccess.mutate()}
-                >
-                  Request access
-                </Button>
-              )}
             </div>
           )}
-          {org.membership === "waiting" && org.request_code && (
-            <div className="pt-1">
-              <RequestCodeBox account={org.name} code={org.request_code} />
-            </div>
-          )}
+          {org.membership === "waiting" &&
+            (org.request_code ? (
+              <div className="pt-1">
+                <RequestCodeBox account={org.name} code={org.request_code} />
+              </div>
+            ) : (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="mt-1 self-start"
+                disabled={requestAccess.isPending}
+                onClick={() => requestAccess.mutate()}
+              >
+                Request access
+              </Button>
+            ))}
           {org.roster_error && !org.status_text.includes(org.roster_error) && (
             <p className="text-xs text-needs">{org.roster_error}</p>
           )}
@@ -348,7 +349,7 @@ export function JoinDialog(props: { org?: OrgSummary; onClose: () => void }) {
   // An invite is answered with a request that carries the person's name and email: without
   // them the core joins with no request code and the invite is lost.
   const needsProfile =
-    !org && !!preview?.invite && !!identity.data && (!identity.data.name || !identity.data.email);
+    !org && !!preview?.invite && (!identity.data || !identity.data.name || !identity.data.email);
   async function submit() {
     if (creds === "partial") return;
     setFields(unsecret(fields));
@@ -404,8 +405,10 @@ export function JoinDialog(props: { org?: OrgSummary; onClose: () => void }) {
         ? `${preview.name} is joined already: use Update on it in the list.`
         : undefined;
   const verb = org ? "Update" : "Join";
-  const expired = !!preview?.invite && Date.parse(preview.invite.expires_at) < Date.now();
-  const profileMissing = needsProfile && (name.trim() === "" || email.trim() === "");
+  const expired = !org && !!preview?.invite && Date.parse(preview.invite.expires_at) < Date.now();
+  // While the identity loads or failed, the profile is unknown, so Join waits.
+  const profileMissing =
+    needsProfile && (!identity.data || name.trim() === "" || email.trim() === "");
   // An Update to a changed source never reuses the saved details: the core would refuse.
   const fresh = !org || !!preview?.source_changed;
   const required = fresh && creds === null && kind !== "age";
@@ -607,7 +610,8 @@ export function JoinDialog(props: { org?: OrgSummary; onClose: () => void }) {
                     </Field>
                   </>
                 )}
-                {needsProfile && (
+                {needsProfile && identity.isError && <ErrorNote error={identity.error} />}
+                {needsProfile && identity.data && (
                   <>
                     <p className="text-xs text-muted-foreground">
                       The Admin sees your name and email with your request.
