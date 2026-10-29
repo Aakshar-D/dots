@@ -271,6 +271,19 @@ export const commands = {
     call(T.OrgSummary, "org_update", { orgId, code, creds }),
   /// Fetches the org now. A failed fetch is not a rejection: the answer's status says it.
   orgRefresh: (orgId: string) => call(T.OrgSummary, "org_refresh", { orgId }),
+  // Members and invites. Answers are unchecked until the Members tab adds their schemas.
+  memberList: (orgId: string) => call(z.unknown(), "member_list", { orgId }),
+  inviteCreate: (orgId: string, email: string, role: string) =>
+    call(z.unknown(), "invite_create", { orgId, email, role }),
+  inviteRevoke: (orgId: string, inviteId: string) =>
+    call(nothing, "invite_revoke", { orgId, inviteId }),
+  requestInspect: (orgId: string, code: string) =>
+    call(z.unknown(), "request_inspect", { orgId, code }),
+  memberEdit: (orgId: string, baseSeq: number, edit: unknown) =>
+    call(z.unknown(), "member_edit", { orgId, baseSeq, edit }),
+  rosterDraftRetry: (orgId: string) => call(z.unknown(), "roster_draft_retry", { orgId }),
+  rosterDraftDiscard: (orgId: string) => call(nothing, "roster_draft_discard", { orgId }),
+  orgRequestAccess: (orgId: string) => call(T.OrgSummary, "org_request_access", { orgId }),
   /// Leaves the org; its dots stay, "org removed". The UI confirms first.
   orgRemove: (orgId: string) => call(nothing, "org_remove", { orgId }),
   /// The org's entries for the Env tab; a secret's value is never in the answer.
