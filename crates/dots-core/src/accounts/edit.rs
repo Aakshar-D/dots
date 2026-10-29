@@ -140,7 +140,9 @@ pub fn edit_members(
                     "This Dots ID is already on the member list.".into(),
                 ));
             }
-            if let Some(member) = next.members.iter_mut().find(|m| &m.email == email) {
+            let listed = roster.member_with_email(email).map(|m| m.id.clone());
+            if let Some(member) = listed.and_then(|id| next.members.iter_mut().find(|m| m.id == id))
+            {
                 locked(member.role == Role::Owner)?;
                 member.keys.push(key.clone());
                 format!("Add a PC for {}", member.name)

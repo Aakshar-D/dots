@@ -132,12 +132,24 @@ pub struct RequestPreview {
     pub fingerprint: String,
     /// The invite the request answers, when this PC made it.
     pub invite: Option<InviteView>,
-    /// The role the invite gives.
+    /// The role the approval gives: the role of the member the email names, or else the
+    /// invite's.
     pub role: Option<Role>,
+    /// The member already on the list with the request's email: approving adds this PC to
+    /// them, with their role.
+    pub joins_member: Option<JoinsMember>,
     /// The age key a SOPS account's file must be encrypted to.
     pub age_recipient: Option<String>,
     /// Why the request can't be approved, in plain words; `None` when it can.
     pub problem: Option<String>,
+}
+
+/// A member a request's email names.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct JoinsMember {
+    pub id: String,
+    pub name: String,
+    pub role: Role,
 }
 
 /// How an edit ended: published, or kept as a draft.
@@ -336,16 +348,30 @@ impl Orgs {
                 if let Some(problem) = preview.problem {
                     return Err(Error::Invalid(problem));
                 }
-                let (role, workspaces, invite_id) = match invite {
-                    Some(invite) => (invite.role, invite.workspaces, Some(invite.id)),
-                    None => match role {
-                        Some(role) if confirm_no_invite => (
-                            role,
-                            BTreeMap::from([("default".to_string(), default_workspace_role(role))]),
-                            None,
-                        ),
-                        _ => return Err(Error::Invalid(NO_INVITE.into())),
-                    },
+                // A request whose email is on the list adds this PC to that member, who keeps
+                // their role: a role picked here (or by the invite) that differs is refused,
+                // never silently dropped.
+                if let Some(member) = &preview.joins_member {
+                    let picked = invite.as_ref().map(|i| i.role).or(role);
+                    if picked.is_some_and(|picked| picked != member.role) {
+                        return Err(Error::Invalid(format!(
+                            "{} is already on the list as {} ({label}). Approving adds this PC \
+                             to them as {label}; change their role separately.",
+                            asked.email,
+                            member.name,
+                            label = member.role.label()
+                        )));
+                    }
+                }
+                let joins = preview.joins_member.as_ref().map(|m| m.role);
+                let (role, workspaces, invite_id) = match (invite, joins.or(role)) {
+                    (Some(invite), _) => (invite.role, invite.workspaces, Some(invite.id)),
+                    (None, Some(role)) if confirm_no_invite => (
+                        role,
+                        BTreeMap::from([("default".to_string(), default_workspace_role(role))]),
+                        None,
+                    ),
+                    (None, _) => return Err(Error::Invalid(NO_INVITE.into())),
                 };
                 let change = Change::AddKey {
                     name: asked.name,
@@ -398,12 +424,7 @@ impl Orgs {
         self.refresh(org_id).await?;
         let state = self.member_state(org_id)?;
         let (roster, text) = accepted(&state)?;
-        let drafted = open_accepted_roster(&draft.signed, org_id)
-            .map(|(_, text)| text)
-            .ok();
-        let reached = roster.seq > draft.seq
-            || (roster.seq == draft.seq && drafted.as_deref() == Some(text.as_str()));
-        if reached {
+        if reached(roster, text, &draft) {
             self.store().delete_draft(org_id).await?;
             return Ok(EditOutcome::Published {
                 summary: Box::new(self.summary_or_missing(org_id).await?),
@@ -413,6 +434,9 @@ impl Orgs {
             self.store().delete_draft(org_id).await?;
             return Err(changed(&state.row.name, roster.seq));
         }
+        // The fetch may have brought a policy that no longer names this PC's Dots ID: the draft
+        // is kept, but nothing is published.
+        let state = self.check_signer(org_id).await?;
         self.publish(&state, draft, None).await
     }
 
@@ -453,10 +477,15 @@ impl Orgs {
         };
         let now = self.now();
         let view = invite.as_ref().map(|i| invite_view(i, now));
-        let listed = state
-            .roster
-            .as_ref()
-            .is_some_and(|(roster, _)| roster.member_with_key(&asked.key).is_some());
+        let roster = state.roster.as_ref().map(|(roster, _)| roster);
+        let listed = roster.is_some_and(|roster| roster.member_with_key(&asked.key).is_some());
+        let joins_member = roster
+            .and_then(|roster| roster.member_with_email(&asked.email))
+            .map(|m| JoinsMember {
+                id: m.id.clone(),
+                name: m.name.clone(),
+                role: m.role,
+            });
         let problem = (if asked.org_id != *org_id {
             Some(format!(
                 "This request is for another account ({}).",
@@ -486,7 +515,11 @@ impl Orgs {
             email: asked.email.clone(),
             fingerprint: key_fingerprint(&asked.key)?,
             key: asked.key.clone(),
-            role: invite.as_ref().map(|i| i.role),
+            role: joins_member
+                .as_ref()
+                .map(|m| m.role)
+                .or(invite.as_ref().map(|i| i.role)),
+            joins_member,
             invite: view,
             age_recipient: asked.age_recipient.clone(),
             problem,
@@ -518,12 +551,20 @@ impl Orgs {
         let error = match published {
             Ok(()) => {
                 let summary = self.refresh(org_id).await?;
-                if summary.roster_seq.is_some_and(|seq| seq >= draft.seq) {
-                    self.use_invite(org_id, invite_id).await?;
-                    self.store().delete_draft(org_id).await?;
-                    return Ok(EditOutcome::Published {
-                        summary: Box::new(summary),
-                    });
+                let now = self.member_state(org_id)?;
+                if let Some((roster, text)) = &now.roster {
+                    if reached(roster, text, &draft) {
+                        self.use_invite(org_id, invite_id).await?;
+                        self.store().delete_draft(org_id).await?;
+                        return Ok(EditOutcome::Published {
+                            summary: Box::new(summary),
+                        });
+                    }
+                    // Another list of the same number took its place: this change is lost.
+                    if roster.seq >= draft.seq {
+                        self.store().delete_draft(org_id).await?;
+                        return Err(changed(&now.row.name, roster.seq));
+                    }
                 }
                 NOT_READ_BACK.to_string()
             }
@@ -551,6 +592,14 @@ impl Orgs {
     async fn summary_or_missing(&self, org_id: &str) -> Result<OrgSummary> {
         self.summary(org_id).await.ok_or_else(|| not_joined(org_id))
     }
+}
+
+/// Whether the account has reached the draft's list: a later one was accepted, or this very
+/// list (the same text) at its `seq`. Another list of the same `seq` is not it.
+fn reached(accepted: &Roster, accepted_text: &str, draft: &DraftRow) -> bool {
+    let drafted = open_accepted_roster(&draft.signed, &draft.org_id).map(|(_, text)| text);
+    accepted.seq > draft.seq
+        || (accepted.seq == draft.seq && drafted.is_ok_and(|text| text == accepted_text))
 }
 
 /// The list accepted last, or `NotFound` when there is none.

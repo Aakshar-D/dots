@@ -16,8 +16,8 @@ pub use join::{
     InfisicalSettings, InviteOffer, JoinCode, OpenBaoSettings, SopsSettings, SourceSettings,
 };
 pub use members::{
-    CreatedInvite, DraftView, EditOutcome, InviteState, InviteView, KeyView, MemberView,
-    MembersView, RequestPreview,
+    CreatedInvite, DraftView, EditOutcome, InviteState, InviteView, JoinsMember, KeyView,
+    MemberView, MembersView, RequestPreview,
 };
 #[cfg(windows)]
 pub use offline::Dpapi;

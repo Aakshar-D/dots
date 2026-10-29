@@ -6,6 +6,10 @@
 
 mod common;
 
+use std::sync::{Arc, Mutex};
+use std::time::Duration as StdDuration;
+
+use async_trait::async_trait;
 use chrono::Duration;
 use common::orgs::{
     code, keys, policy, public_key, roster, sign, sign_roster, sops_at, token, OrgsHarness,
@@ -16,7 +20,8 @@ use dots_core::accounts::{
     ensure_identity, make_request, parse_request, set_profile, verify_roster, Membership, Role,
 };
 use dots_core::vault::org::{
-    EditOutcome, Fetched, InviteState, MembersView, OrgSummary, SourceCreds,
+    http_client_with_timeout, source_for, EditOutcome, Fetched, InviteState, MembersView,
+    OrgSummary, PublishError, Source, SourceCreds, SourceError, SourceSettings,
 };
 use dots_core::Error;
 use serde_json::{json, Value};
@@ -26,6 +31,8 @@ const CHANGED: &str = "Acme Engineering: the member list changed (now #2) while 
                        editing. Check it and make the change again.";
 const NOT_SIGNER: &str = "Acme Engineering: your Dots ID isn't one of the account's signing \
                           admins yet. Ask the owner to add it with dots-admin policy admins add.";
+/// A policy issued after `ISSUED`.
+const LATER: &str = "2026-10-22T08:30:00Z";
 const NO_INVITE: &str =
     "This person has no invite from this PC. Confirm to approve them anyway, and pick a role.";
 const SOPS_COPY: &str = "Copy the signed list into the SOPS file (see the admin guide).";
@@ -95,6 +102,38 @@ fn publish_out_of_band(h: &OrgsHarness, mine: &str) {
     let text = roster(ACME, 2, Value::Array(members));
     h.bao
         .put_roster("secret", "dots", &sign_roster(&h.keys, &text));
+}
+
+/// The owner's list at seq 2 (this PC an Admin, Bob gone), signed with the root key.
+fn other_list(h: &OrgsHarness, mine: &str) -> String {
+    let members = vec![
+        member("01OWNER", "owner@acme.com", "owner", &public_key(&keys())),
+        member("01ME", "ada@acme.com", "admin", mine),
+    ];
+    sign_roster(&h.keys, &roster(ACME, 2, Value::Array(members)))
+}
+
+/// The real OpenBao source, except that right after it writes this PC's list it writes
+/// `other` (once), as an admin elsewhere publishing at the same moment would.
+struct Racing {
+    inner: Box<dyn Source>,
+    other: Arc<Mutex<Option<String>>>,
+}
+
+#[async_trait]
+impl Source for Racing {
+    async fn fetch(&self, creds: &SourceCreds) -> Result<Fetched, SourceError> {
+        self.inner.fetch(creds).await
+    }
+
+    async fn publish_roster(&self, creds: &SourceCreds, signed: &str) -> Result<(), PublishError> {
+        self.inner.publish_roster(creds, signed).await?;
+        let other = self.other.lock().unwrap().take();
+        if let Some(other) = other {
+            self.inner.publish_roster(creds, &other).await?;
+        }
+        Ok(())
+    }
 }
 
 /// Another PC with its own data folder, Dots ID and profile.
@@ -623,4 +662,111 @@ async fn request_access_for_waiting_pc_is_stable() {
     assert_eq!(request.invite_id, None);
     assert_eq!(request.email, "jo@acme.com");
     assert_eq!(request.org_id, ACME);
+}
+
+#[tokio::test]
+async fn request_with_a_listed_email_joins_that_member_with_their_role() {
+    let h = OrgsHarness::new().await;
+    setup(&h, "admin", true).await;
+    // Someone claims this PC's person's email, in other case, with no invite.
+    let other = newcomer("Ada again", "ADA@acme.com").await;
+    let code = request(&other, None).await;
+    let preview = h.orgs.inspect_request(ACME, &code).await.unwrap();
+    assert_eq!(preview.problem, None);
+    let joins = preview.joins_member.expect("the member the email names");
+    assert_eq!((joins.id.as_str(), joins.role), ("01ME", Role::Admin));
+    assert_eq!(preview.role, Some(Role::Admin));
+
+    let picked = RosterEdit::Approve {
+        request: code.clone(),
+        role: Some(Role::Viewer),
+        confirm_no_invite: true,
+    };
+    let e = h.orgs.edit_members(ACME, 1, picked).await.unwrap_err();
+    let refused = "ADA@acme.com is already on the list as ada@acme.com (Admin). Approving adds \
+                   this PC to them as Admin; change their role separately.";
+    assert!(matches!(&e, Error::Invalid(t) if t == refused), "{e:?}");
+    assert_eq!(writes(&h), 0);
+    assert_eq!(h.store.draft(ACME).await.unwrap(), None);
+
+    let edit = RosterEdit::Approve {
+        request: code,
+        role: None,
+        confirm_no_invite: true,
+    };
+    let summary = published(h.orgs.edit_members(ACME, 1, edit).await.unwrap());
+    assert_eq!(summary.roster_seq, Some(2));
+    assert_eq!(summary.member_count, Some(3));
+    let view = members(&h).await;
+    let me = view.members.iter().find(|m| m.id == "01ME").unwrap();
+    assert_eq!(me.role, Role::Admin);
+    assert_eq!(me.keys.len(), 2);
+}
+
+#[tokio::test]
+async fn another_list_read_back_after_publish_is_a_conflict() {
+    // Lightest way to race: a source wrapping the real OpenBao one writes the owner's own
+    // seq 2 right after this PC's, before the fetch that reads it back.
+    let h = OrgsHarness::new().await;
+    let other = Arc::new(Mutex::new(None));
+    let racing = other.clone();
+    h.orgs
+        .clone()
+        .with_sources(Arc::new(move |settings: &SourceSettings| {
+            Box::new(Racing {
+                inner: source_for(
+                    settings,
+                    http_client_with_timeout(StdDuration::from_secs(5)),
+                ),
+                other: racing.clone(),
+            }) as Box<dyn Source>
+        }));
+    let mine = setup(&h, "admin", true).await;
+    *other.lock().unwrap() = Some(other_list(&h, &mine));
+
+    let e = h
+        .orgs
+        .edit_members(ACME, 1, set_bob_viewer())
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&e, Error::Conflict(text) if text == CHANGED),
+        "{e:?}"
+    );
+    assert_eq!(h.store.draft(ACME).await.unwrap(), None);
+    let view = members(&h).await;
+    assert_eq!(view.seq, 2);
+    assert!(
+        view.members.iter().all(|m| m.id != "01BOB"),
+        "the owner's list"
+    );
+}
+
+#[tokio::test]
+async fn retry_rechecks_the_signer() {
+    let h = OrgsHarness::new().await;
+    setup(&h, "admin", true).await;
+    h.bao.deny_writes("secret", "dots/roster");
+    drafted(
+        h.orgs
+            .edit_members(ACME, 1, set_bob_viewer())
+            .await
+            .unwrap(),
+    );
+    assert_eq!(writes(&h), 1, "the refused write");
+    // The owner takes this PC's Dots ID out of `admins`.
+    let signed = sign(&h.keys, &policy(ACME, LATER, required(&[])));
+    h.bao.put_policy("secret", "dots", &signed);
+    h.bao.allow_writes("secret", "dots/roster");
+
+    let e = h.orgs.retry_draft(ACME).await.unwrap_err();
+    assert!(
+        matches!(&e, Error::NotAllowed(text) if text == NOT_SIGNER),
+        "{e:?}"
+    );
+    assert_eq!(writes(&h), 1, "nothing more was written");
+    assert!(
+        h.store.draft(ACME).await.unwrap().is_some(),
+        "the draft is kept"
+    );
 }
