@@ -1012,7 +1012,8 @@ Protected against:
 - A stolen admin PC promoting others to admin: only the root key changes `admins`.
 
 Dots's local server (the webhook, MCP and `/v1` port on this PC) only answers requests addressed
-to `127.0.0.1:PORT` or `localhost:PORT`. **API keys** for a workspace are made in Dots on each PC,
+to `127.0.0.1:PORT` or `localhost:PORT` (a tunnel for webhooks must rewrite `Host` to
+`127.0.0.1:PORT`; see [Accounts](accounts.md#the-host-check)). **API keys** for a workspace are made in Dots on each PC,
 under the account's **API keys** tab. They are per PC and per workspace, are never in the member
 list, and nobody signs them. A key checks the person's role in its workspace on every request, so a
 role change in the list applies at once. Removing someone from the list stops their keys the same

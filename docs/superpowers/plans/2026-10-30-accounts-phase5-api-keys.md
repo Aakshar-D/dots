@@ -13,7 +13,7 @@
 Base branch: `feat/accounts-api-keys`, from `feat/accounts-workspaces` (df98cad).
 
 Rulings in this plan:
-- Keys are local to this PC, so "own" keys (§6.3) is moot: creating, listing and revoking a workspace's keys needs `CreateApiKeys` in that workspace (`require_in`; Member rights or above there). Personal workspaces always allow it.
+- Keys are local to this PC, so "own" keys (§6.3) is moot: creating a workspace's keys needs `CreateApiKeys` in that workspace (`require_in`; Member rights or above there); revoking is always allowed (it only reduces access; any key stored on this PC, NotFound for an unknown id). Personal workspaces always allow it.
 - Key text: `dots_sk_` + 43 characters from `[0-9A-Za-z]`, each drawn from `getrandom` bytes by rejection sampling (bytes ≥ 248 dropped), so ≥256 bits and no modulo bias.
 - `prefix` = the first 12 characters of the key (`dots_sk_` + 4). `hash` = `util::token_hash(key)` (the existing `sha256:<hex>` format), compared with `ct_eq` like webhook tokens.
 - Deleting a workspace or a workspace vanishing from the roster revokes its keys; leaving the account deletes the account's keys. A key whose workspace no longer exists is refused.

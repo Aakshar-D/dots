@@ -52,14 +52,15 @@ pub struct ApiKeyView {
     /// `personal` or the id of the org the key's workspace belongs to.
     pub scope: String,
     pub workspace_id: String,
-    /// The workspace's name, or its id when the workspace has gone.
+    /// The workspace's name (a key whose workspace is not visible is not listed at all).
     pub workspace_name: String,
     pub name: String,
     pub prefix: String,
     pub created_at: String,
     pub last_used_at: Option<String>,
     pub revoked_at: Option<String>,
-    /// The core's words for why this PC may not manage keys in that workspace; `None` is allowed.
+    /// The core's words for why this PC may not create keys in that workspace; `None` is
+    /// allowed. Revoking is always allowed.
     pub refusal: Option<String>,
 }
 

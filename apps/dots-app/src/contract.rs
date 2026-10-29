@@ -1511,7 +1511,7 @@ pub fn samples() -> Value {
         workspace_id: "default".into(),
         workspace_name: "Default".into(),
         name: "CI".into(),
-        prefix: "dots_sk_a1b2c3".into(),
+        prefix: "dots_sk_a1b2".into(),
         created_at: TS.into(),
         last_used_at: Some(TS.into()),
         revoked_at: None,

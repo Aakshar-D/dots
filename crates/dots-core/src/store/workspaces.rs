@@ -150,7 +150,8 @@ impl Store {
             return Err(Error::NotFound(format!("workspace {id}")));
         }
         move_to_default(&mut tx, scope, id).await?;
-        // Its API keys stop working (accounts spec §10); the records stay, shown as revoked.
+        // Its API keys stop working (accounts spec §10); the records stay in the store,
+        // though the list hides them with the workspace.
         sqlx::query(
             "UPDATE api_keys SET revoked_at = ? \
              WHERE scope = ? AND workspace_id = ? AND revoked_at IS NULL",

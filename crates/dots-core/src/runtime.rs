@@ -1131,7 +1131,8 @@ impl Runtime {
     }
 
     /// The API keys of the workspaces of `scope` (`personal` or an org id) this PC may see,
-    /// newest first. Each says why this PC may not manage it, if it may not. Never carries a
+    /// newest first. Keys of a workspace this PC can no longer see are left out (they stay
+    /// refused at request time). Each says why this PC may not create keys there, if it may not. Never carries a
     /// key's text.
     pub async fn api_keys(
         &self,
@@ -1190,17 +1191,9 @@ impl Runtime {
         Ok(CreatedApiKey { key, secret })
     }
 
-    /// Revokes a key: it stops working at once and stays listed as revoked. The role must allow
-    /// creating API keys in the key's workspace.
+    /// Revokes a key: it stops working at once and stays listed as revoked. No role is needed:
+    /// revoking only reduces access, so any key stored on this PC may be revoked.
     pub async fn revoke_api_key(&self, id: &str) -> Result<crate::accounts::api_keys::ApiKeyView> {
-        let row = self
-            .store
-            .api_key(id)
-            .await?
-            .ok_or_else(|| Error::NotFound(format!("No API key '{id}'.")))?;
-        let org_id = (row.scope != crate::accounts::PERSONAL).then_some(row.scope.as_str());
-        self.require_in(org_id, &row.workspace_id, Permission::CreateApiKeys)
-            .await?;
         self.store.revoke_api_key(id, &crate::util::now()).await?;
         let row = self
             .store

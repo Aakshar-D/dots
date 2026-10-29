@@ -220,7 +220,7 @@ async fn name_rules() {
 }
 
 #[tokio::test]
-async fn viewer_cannot_create_or_revoke() {
+async fn viewer_cannot_create_but_can_revoke() {
     let t = Rt::start().await;
     t.join().await;
     let made = t.rt.create_api_key(ACME, "payments", "ci").await.unwrap();
@@ -237,13 +237,15 @@ async fn viewer_cannot_create_or_revoke() {
         refused(t.rt.create_api_key(ACME, "payments", "again").await),
         text
     );
-    assert_eq!(refused(t.rt.revoke_api_key(&made.key.id).await), text);
-    let row = t.rt.store().api_key(&made.key.id).await.unwrap().unwrap();
-    assert_eq!(row.revoked_at, None);
-    // The list still shows the key, with the core's words for why it can't be managed.
+    // The list shows the key, with the core's words for why it can't be created for.
     let listed = t.rt.api_keys(ACME).await.unwrap();
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].refusal.as_deref(), Some(text.as_str()));
+    // Revoking only reduces access, so any role may do it.
+    let revoked = t.rt.revoke_api_key(&made.key.id).await.unwrap();
+    assert!(revoked.revoked_at.is_some());
+    let row = t.rt.store().api_key(&made.key.id).await.unwrap().unwrap();
+    assert!(row.revoked_at.is_some());
     let views = t.rt.workspaces(ACME).await.unwrap();
     let payments = views.iter().find(|w| w.id == "payments").unwrap();
     assert_eq!(
@@ -271,7 +273,8 @@ async fn outside_workspace_cannot_create() {
         refused(t.rt.create_api_key(ACME, "payments", "again").await),
         OUTSIDE
     );
-    assert_eq!(refused(t.rt.revoke_api_key(&made.key.id).await), OUTSIDE);
+    // Revoking only reduces access, so even a key out of sight may be revoked.
+    assert!(t.rt.revoke_api_key(&made.key.id).await.is_ok());
     t.rt.shutdown();
 }
 

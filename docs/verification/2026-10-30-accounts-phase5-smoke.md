@@ -39,7 +39,7 @@ Result: not run.
 
 ### 6. A Viewer cannot trigger
 
-Expect: on B, in the **API keys** tab, **Create key** is off for Payments, with the reason ("... a Viewer in the Payments workspace can't create API keys. Ask an Admin or Owner."). In Default, B can make a key. On A, set B's Default workspace role to viewer and Refresh on B. B's Default key still answers 200 for `GET /v1/dots`, but `POST .../trigger` answers 403 with the role refusal. Set B back to member and Refresh: the trigger answers 202 again.
+Expect: on B, in the **API keys** tab, **Create key** is off for Payments, with the reason ("... a Viewer in the Payments workspace can't create API keys. Ask an Admin or Owner."). In Default, B can make a key. On A, set B's Default workspace role to viewer and Refresh on B. Revoke stays on for B's keys whatever the role. B's Default key still answers 200 for `GET /v1/dots`, but `POST .../trigger` answers 403 with the role refusal. Set B back to member and Refresh: the trigger answers 202 again.
 
 Result: not run.
 
@@ -51,7 +51,7 @@ Result: not run.
 
 ### 8. Deleting a workspace revokes its keys
 
-Expect: make a key for Payments on A and use it (200). Delete Payments on the **Workspaces** tab, sign, store, and Refresh. The key is marked **Revoked** and the `curl.exe` answers 401. Leaving an account (**Remove** in Settings › Accounts) removes its keys from the list.
+Expect: make a key for Payments on A and use it (200). Delete Payments on the **Workspaces** tab, sign, store, and Refresh. The key is no longer listed, and the `curl.exe` answers 401 with the bad-key text ("That API key isn't valid. Make a new one in Dots."). Leaving an account (**Remove** in Settings › Accounts) removes its keys from the list.
 
 Result: not run.
 

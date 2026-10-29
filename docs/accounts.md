@@ -162,7 +162,7 @@ went. Keys are made and used in Dots on this PC. They never leave it.
 1. Open **Settings › Accounts**. On an account, open its **API keys** tab. For Personal, the
    **API keys** list is under **Personal**.
 2. Choose **Create key**, give it a name and pick the workspace.
-3. The key appears once, with a **Copy** button and a ready `curl` line (the bash form): "Copy it now. Dots won't
+3. The key appears once, with a **Copy** button and a ready `curl` line (`curl.exe` on Windows): "Copy it now. Dots won't
    show it again." Dots keeps only the first 12 characters, to recognise it by, and a hash. Close
    the dialog and the key is gone. If you lose it, revoke it and make another.
 
@@ -170,9 +170,12 @@ A key looks like `dots_sk_` followed by 43 letters and digits. Treat it like a p
 
 - A key belongs to **one workspace** on **this PC**. It is not shared through the member list. Your
   teammates make their own keys on their own PCs.
-- You need **Member** rights or above in that workspace to make or revoke a key. A Viewer sees the
-  list, with **Create** and **Revoke** off and the reason, such as "Acme: a Viewer in the Payments
-  workspace can't create API keys. Ask an Admin or Owner."
+- You need **Member** rights or above in that workspace to make a key. A Viewer sees the list, with
+  **Create** off and the reason, such as "Acme: a Viewer in the Payments workspace can't create API
+  keys. Ask an Admin or Owner." Anyone can **Revoke** a key on this PC, whatever their role:
+  revoking only takes access away.
+- Keys of a workspace you can no longer see are hidden from the list. They stay refused at request
+  time, and come back to the list if you are added back to the workspace.
 - The list shows each key's name, its first 12 characters, the workspace, when it was made and
   when it was last used (**Never** until it is used).
 
@@ -246,4 +249,4 @@ in the list, marked **Revoked**.
 Every route of the local server (webhooks, MCP and `/v1`) only answers requests addressed to
 `127.0.0.1:PORT` or `localhost:PORT`. Any other `Host` gets 403. This stops a web page that
 re-points its own name at your PC (DNS rebinding) from reaching Dots. Normal use of webhooks and
-MCP is unchanged.
+MCP is unchanged. If you forward webhooks through a tunnel, have it rewrite Host to 127.0.0.1:PORT (ngrok `--host-header=rewrite`, cloudflared `httpHostHeader`).

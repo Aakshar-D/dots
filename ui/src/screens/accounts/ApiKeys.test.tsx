@@ -1,5 +1,5 @@
 import { screen, waitFor, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { ApiKeyView, WorkspaceView } from "@/api/types";
 import { backend } from "@/test/backend";
@@ -130,12 +130,11 @@ describe("Settings, Accounts, API keys", () => {
     expect(await within(panel).findByText("Revoked")).toBeInTheDocument();
   });
 
-  it("viewer_controls_disabled_with_reason", async () => {
-    account({ keys: [key({ refusal: "Only an Admin can revoke this key." })] });
+  it("viewer_can_revoke_but_not_create", async () => {
+    account({ keys: [key({ refusal: "Viewers can't make keys here." })] });
     const { user, panel } = await keysTab();
-    const revoke = await within(panel).findByRole("button", { name: "Revoke CI" });
-    expect(revoke).toBeDisabled();
-    expect(revoke).toHaveAttribute("title", "Only an Admin can revoke this key.");
+    // Revoking only reduces access, so it stays on whatever the role.
+    expect(await within(panel).findByRole("button", { name: "Revoke CI" })).toBeEnabled();
     await user.click(within(panel).getByRole("button", { name: "Create key" }));
     const dialog = await screen.findByRole("dialog");
     const ops = within(dialog).getByRole("option", { name: "Ops" });
@@ -155,6 +154,27 @@ describe("Settings, Accounts, API keys", () => {
     expect(create).toBeDisabled();
     expect(create).toHaveAttribute("title", "Viewers can't make keys.");
     expect(dialog).toHaveTextContent("Viewers can't make keys.");
+  });
+
+  it("the_sample_says_curl_exe_on_windows", async () => {
+    const ua = vi
+      .spyOn(navigator, "userAgent", "get")
+      .mockReturnValue("Mozilla/5.0 (Windows NT 10.0; Win64; x64) WebView2");
+    try {
+      account({ url: "http://127.0.0.1:4455" });
+      const { user, panel } = await keysTab();
+      await within(panel).findByRole("listitem", { name: "CI" });
+      await user.click(within(panel).getByRole("button", { name: "Create key" }));
+      const dialog = await screen.findByRole("dialog");
+      await user.type(within(dialog).getByLabelText("Name"), "Deploy");
+      await user.click(within(dialog).getByRole("button", { name: "Create" }));
+      await within(dialog).findByDisplayValue(SECRET);
+      expect(dialog).toHaveTextContent(
+        `curl.exe -H "Authorization: Bearer ${SECRET}" http://127.0.0.1:4455/dots`,
+      );
+    } finally {
+      ua.mockRestore();
+    }
   });
 
   it("server_off_shows_the_reason", async () => {

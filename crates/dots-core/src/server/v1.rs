@@ -45,7 +45,7 @@ fn internal(e: Error) -> Response {
 }
 
 /// The request's key, when it has the shape of a key, is known, is not revoked and its
-/// workspace is still there (else 401), and the person's role in that workspace allows `p` at
+/// workspace and org are still there (else 401), and the person's role in that workspace allows `p` at
 /// this moment (else 403 with the refusal's words).
 async fn caller(s: &ServerState, headers: &HeaderMap, p: Permission) -> Result<Caller, Response> {
     let unauthorized = || error(StatusCode::UNAUTHORIZED, BAD_KEY);
@@ -63,6 +63,10 @@ async fn caller(s: &ServerState, headers: &HeaderMap, p: Permission) -> Result<C
         Err(e) => return Err(internal(e)),
     }
     let caller = Caller { key };
+    // Leaving an org deletes its keys; this refuses one that is left over all the same.
+    if caller.org_id().is_some_and(|org| !s.runner.org_joined(org)) {
+        return Err(unauthorized());
+    }
     match s
         .runner
         .require_in(caller.org_id(), &caller.key.workspace_id, p)

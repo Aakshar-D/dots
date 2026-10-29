@@ -395,6 +395,34 @@ async fn bad_keys_are_401() {
         .unwrap();
     assert_eq!(t.get("/v1/dots", Some(&orphan)).await, want);
 
+    // A key of an org that is not joined on this PC, though its row and workspace remain.
+    let ghost = dots_core::accounts::api_keys::new_api_key();
+    t.rt.store()
+        .add_workspace(&dots_core::store::WorkspaceRow {
+            scope: "ghost-org".into(),
+            id: "default".into(),
+            name: "Default".into(),
+            use_rules: None,
+            created_at: dots_core::util::now(),
+        })
+        .await
+        .unwrap();
+    t.rt.store()
+        .add_api_key(&ApiKeyRow {
+            id: "ghost".into(),
+            scope: "ghost-org".into(),
+            workspace_id: "default".into(),
+            name: "ghost".into(),
+            prefix: dots_core::accounts::api_keys::key_prefix(&ghost),
+            hash: dots_core::util::token_hash(&ghost),
+            created_at: dots_core::util::now(),
+            last_used_at: None,
+            revoked_at: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(t.get("/v1/dots", Some(&ghost)).await, want);
+
     // A deleted workspace's key.
     let ws = t.rt.personal_workspace_add("Billing").await.unwrap();
     let billing = t.key(PERSONAL, &ws.id).await;

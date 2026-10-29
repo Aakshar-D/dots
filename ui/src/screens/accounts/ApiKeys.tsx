@@ -27,6 +27,11 @@ import { invalidate, keys } from "@/lib/query";
 /// The revoke confirm's words.
 export const REVOKE_TEXT = "Apps using this key stop working at once.";
 
+/// The command for the sample: `curl.exe` on Windows, where PowerShell's `curl` is another command.
+function curlCommand(): string {
+  return /windows/i.test(navigator.userAgent) ? "curl.exe" : "curl";
+}
+
 /// What the create answer shows: the key, and where to call or why that is not known.
 type Made = { secret: string; base: { url: string } | { reason: string } };
 
@@ -181,7 +186,7 @@ function Secret({ made }: { made: Made }) {
       )}
       {url && (
         <code className="block overflow-x-auto rounded-md border p-2 font-mono text-xs whitespace-pre">
-          {`curl -H "Authorization: Bearer ${made.secret}" ${url}/dots`}
+          {`${curlCommand()} -H "Authorization: Bearer ${made.secret}" ${url}/dots`}
         </code>
       )}
     </div>
@@ -203,35 +208,25 @@ function KeyRow({ k, onRevoke }: { k: ApiKeyView; onRevoke: () => void }) {
         </span>
       </div>
       {/* A revoked key cannot be used again, so there is nothing left to revoke. */}
-      {!k.revoked_at &&
-        (k.refusal ? (
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled
-            title={k.refusal}
-            aria-label={`Revoke ${k.name}`}
-          >
-            Revoke
-          </Button>
-        ) : (
-          <ConfirmButton
-            title={`Revoke ${k.name}?`}
-            description={REVOKE_TEXT}
-            confirmLabel="Revoke"
-            ariaLabel={`Revoke ${k.name}`}
-            onConfirm={onRevoke}
-          >
-            Revoke
-          </ConfirmButton>
-        ))}
+      {/* Revoking only reduces access, so any role may: `refusal` is about making keys. */}
+      {!k.revoked_at && (
+        <ConfirmButton
+          title={`Revoke ${k.name}?`}
+          description={REVOKE_TEXT}
+          confirmLabel="Revoke"
+          ariaLabel={`Revoke ${k.name}`}
+          onConfirm={onRevoke}
+        >
+          Revoke
+        </ConfirmButton>
+      )}
     </li>
   );
 }
 
 /// The API keys of an account (`scope` is its id) or of Personal (`personal`): the list, Create
-/// key (the key is shown once) and Revoke. What a person may not do is off with the core's reason.
+/// key (the key is shown once) and Revoke. Making a key their role does not allow is off with the
+/// core's reason; revoking is always allowed.
 export function ApiKeys({ scope }: { scope: string }) {
   const qc = useQueryClient();
   const [creating, setCreating] = useState(false);
