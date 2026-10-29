@@ -95,3 +95,31 @@ async fn text_marker(store: &Store, key: &str) -> Result<Option<String>> {
         _ => None,
     })
 }
+
+/// Signs `text` with this PC's Dots ID: a minisign signature box (prehashed), with
+/// `trusted_comment` signed along with it. The secret key never leaves the secret store.
+pub async fn sign_with_identity(
+    store: &Store,
+    secrets: &dyn SecretStore,
+    text: &str,
+    trusted_comment: &str,
+) -> Result<String> {
+    let public_key = identity(store).await?.public_key;
+    let boxed = secrets
+        .get(IDENTITY_SECRET)?
+        .ok_or_else(|| Error::Other("the Dots ID's secret key is missing from this PC".into()))?;
+    let secret_key = minisign::SecretKeyBox::from_string(&boxed)
+        .and_then(|b| b.into_unencrypted_secret_key())
+        .map_err(|e| Error::Other(format!("the Dots ID's secret key is not readable: {e}")))?;
+    let public_key = minisign::PublicKey::from_base64(&public_key)
+        .map_err(|e| Error::Other(format!("the Dots ID's public key is not readable: {e}")))?;
+    let signature = minisign::sign(
+        Some(&public_key),
+        &secret_key,
+        std::io::Cursor::new(text.as_bytes()),
+        Some(trusted_comment),
+        None,
+    )
+    .map_err(|e| Error::Other(format!("could not sign with the Dots ID: {e}")))?;
+    Ok(signature.into_string())
+}
