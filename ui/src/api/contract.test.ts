@@ -53,6 +53,8 @@ const schemas: Record<SampleName, { parse: (v: unknown) => unknown }> = {
   BrowserStatus: T.BrowserStatus,
   AppRow: T.AppRow.array(),
   KeptData: T.KeptData.array(),
+  BundledOffer: T.BundledOffer.array(),
+  RunLink: T.RunLink,
   AppFile: T.AppFile.array(),
   AppCall: T.AppCall.array(),
   AppProposal: T.AppProposal.array(),

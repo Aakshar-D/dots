@@ -488,10 +488,12 @@ impl Apps {
             version: 1,
             previous_version: None,
             last_version: 1,
-            every_dot: false,
+            // An app that comes with Dots is for every dot (spec section 6: Projects is).
+            every_dot: matches!(origin, AppOrigin::Bundled { .. }),
             can_start_dots: false,
             origin,
             changed: false,
+            start_asked: false,
         };
         let item = self
             .store
@@ -573,6 +575,19 @@ impl Apps {
         by_proposal: bool,
         expect: Option<(&str, u32)>,
     ) -> Result<LibraryItem> {
+        self.update_as(name, src, by_proposal, expect, None).await
+    }
+
+    /// `update_checked` that also records where the new version came from, when `origin` names
+    /// it (a Dots release's bundled app, `apps::bundled`).
+    pub(super) async fn update_as(
+        &self,
+        name: &str,
+        src: AppSource,
+        by_proposal: bool,
+        expect: Option<(&str, u32)>,
+        origin: Option<AppOrigin>,
+    ) -> Result<LibraryItem> {
         if src.manifest.name != name {
             return Err(Error::Invalid(format!(
                 "the new code names the app {}, not {name}",
@@ -621,6 +636,7 @@ impl Apps {
             can_start_dots: old.can_start_dots && src.manifest.can_start_dots(),
             changed: old.changed
                 || (by_proposal && matches!(old.origin, AppOrigin::Bundled { .. })),
+            origin: origin.unwrap_or_else(|| old.origin.clone()),
             ..old.clone()
         };
         let item = self
@@ -709,6 +725,7 @@ impl Apps {
     }
 
     /// Switches "Can start dots" (spec section 7): on only for an app whose code asks for it.
+    /// The person has then made their choice: the one-time prompt no longer shows.
     pub async fn set_can_start_dots(&self, name: &str, on: bool) -> Result<LibraryItem> {
         let (_held, item, config) = self.get_locked(name).await?;
         if on && !self.load(&item, &config).await?.manifest.can_start_dots() {
@@ -720,6 +737,25 @@ impl Apps {
             &item,
             AppConfig {
                 can_start_dots: on,
+                start_asked: true,
+                ..config
+            },
+        )
+        .await
+    }
+
+    /// The person's answer to the one-time prompt to let the app `name` start dots (spec
+    /// section 8): "Switch on" (`on`) turns the switch on, "Not now" leaves it off; either way
+    /// the prompt no longer shows.
+    pub async fn answer_start_prompt(&self, name: &str, on: bool) -> Result<LibraryItem> {
+        if on {
+            return self.set_can_start_dots(name, true).await;
+        }
+        let (_held, item, config) = self.get_locked(name).await?;
+        self.store_config(
+            &item,
+            AppConfig {
+                start_asked: true,
                 ..config
             },
         )

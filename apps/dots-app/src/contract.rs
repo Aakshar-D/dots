@@ -135,6 +135,7 @@ fn app_config() -> LibraryConfig {
             release: "0.4.0".into(),
         },
         changed: false,
+        start_asked: true,
     })
 }
 
@@ -1504,6 +1505,30 @@ fn apps_samples(samples: &mut Value) {
         removed_at: TS.into(),
         bytes: 24_576,
     }]);
+    samples["BundledOffer"] = to([
+        dots_core::apps::bundled::BundledOffer {
+            name: "projects".into(),
+            title: "Projects".into(),
+            description: "Projects, tasks and to-dos, shared by you and your dots".into(),
+            kept: Some(dots_core::apps::kept::KeptOffer {
+                id: "01J0APP0".into(),
+                title: "Projects".into(),
+                removed_at: TS.into(),
+                bytes: 24_576,
+                migrations: vec!["0002_labels.sql".into()],
+            }),
+        },
+        dots_core::apps::bundled::BundledOffer {
+            name: "projects".into(),
+            title: "Projects".into(),
+            description: "Projects, tasks and to-dos, shared by you and your dots".into(),
+            kept: None,
+        },
+    ]);
+    samples["RunLink"] = to(dots_core::apps::wake::RunLink {
+        dot_id: "01J0DOT".into(),
+        root_run_id: "01J0RUN".into(),
+    });
     samples["AppFile"] = to([
         AppFile {
             path: "app.json".into(),

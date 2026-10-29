@@ -345,6 +345,7 @@
             "release": "0.4.0"
           },
           "previous_version": 2,
+          "start_asked": true,
           "title": "Projects",
           "version": 3
         },
@@ -386,6 +387,7 @@
             "release": "0.4.0"
           },
           "previous_version": 2,
+          "start_asked": true,
           "title": "Projects",
           "version": 3
         },
@@ -423,6 +425,28 @@
     "edge": "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
     "npx": "C:/Program Files/nodejs/npx.cmd"
   },
+  "BundledOffer": [
+    {
+      "description": "Projects, tasks and to-dos, shared by you and your dots",
+      "kept": {
+        "bytes": 24576,
+        "id": "01J0APP0",
+        "migrations": [
+          "0002_labels.sql"
+        ],
+        "removed_at": "2026-10-09T12:00:00.000Z",
+        "title": "Projects"
+      },
+      "name": "projects",
+      "title": "Projects"
+    },
+    {
+      "description": "Projects, tasks and to-dos, shared by you and your dots",
+      "kept": null,
+      "name": "projects",
+      "title": "Projects"
+    }
+  ],
   "ChatGptStatus": [
     {
       "account": null,
@@ -607,6 +631,10 @@
     "app_preview_close",
     "apps_kept_list",
     "app_kept_delete",
+    "apps_bundled_offers",
+    "app_install_bundled",
+    "app_answer_start_prompt",
+    "app_run_link",
     "watchers_list",
     "watcher_add",
     "watcher_update",
@@ -1741,6 +1769,7 @@
           "release": "0.4.0"
         },
         "previous_version": 2,
+        "start_asked": true,
         "title": "Projects",
         "version": 3
       },
@@ -1757,6 +1786,7 @@
           "kind": "proposed"
         },
         "previous_version": null,
+        "start_asked": true,
         "title": "Projects",
         "version": 3
       },
@@ -2198,6 +2228,7 @@
           "release": "0.4.0"
         },
         "previous_version": 2,
+        "start_asked": true,
         "title": "Projects",
         "version": 3
       },
@@ -3160,6 +3191,10 @@
     "run_id": "01J0RUN",
     "seq": 3,
     "ts": "2026-10-09T12:00:00.000Z"
+  },
+  "RunLink": {
+    "dot_id": "01J0DOT",
+    "root_run_id": "01J0RUN"
   },
   "RuntimeEvent": [
     {

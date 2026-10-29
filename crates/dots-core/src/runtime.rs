@@ -67,6 +67,10 @@ pub struct Config {
     pub secrets: Option<Arc<dyn SecretStore>>,
     /// Where email and GitHub watchers read (watchers spec §4). Tests point them at fakes.
     pub watcher_sources: crate::watchers::Sources,
+    /// Install and update the apps that come with Dots at start (app library spec section 8).
+    /// `Config::new` leaves them out, so a test starts with no app unless it asks for them;
+    /// the app's configuration has them.
+    pub bundled_apps: bool,
 }
 
 impl Config {
@@ -83,6 +87,7 @@ impl Config {
             draft_limit: crate::skill_creator::DRAFT_LIMIT,
             secrets: Some(Arc::new(MemorySecrets::new())),
             watcher_sources: crate::watchers::Sources::default(),
+            bundled_apps: false,
         }
     }
 
@@ -93,6 +98,7 @@ impl Config {
         cfg.max_concurrent_runs = settings.max_concurrent_runs;
         cfg.claude_path = settings.claude_path.as_ref().map(PathBuf::from);
         cfg.secrets = None;
+        cfg.bundled_apps = true;
         cfg
     }
 }
@@ -236,6 +242,15 @@ impl Runtime {
             cfg.data_dir.join(crate::apps::APPS_DIR),
         )
         .with_clock(cfg.clock.clone());
+        // Projects comes with Dots (spec section 8). One that cannot be installed or updated
+        // leaves Dots running without the change; the next start tries again.
+        if cfg.bundled_apps {
+            if let Err(e) = apps.sync_bundled().await {
+                tracing::error!(
+                    "the apps that come with Dots could not be brought up to date: {e}"
+                );
+            }
+        }
         let mut engines: HashMap<EngineKind, Arc<dyn Engine>> = HashMap::new();
         let claude_program = resolve_claude(cfg.claude_path.as_deref());
         let claude_version = match &claude_program {
