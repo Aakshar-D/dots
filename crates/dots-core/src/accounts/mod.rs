@@ -16,8 +16,8 @@ pub use identity::{
 };
 pub use membership::{Membership, NotMember};
 pub use permissions::{
-    access, access_dot, access_in, can, require, require_dot, require_in, require_team,
-    workspace_name, Access, Permission,
+    access, access_dot, access_in, account_label, can, require, require_dot, require_in,
+    require_team, workspace_name, Access, Permission,
 };
 pub use request::{make_request, parse_request, AccessRequest, RequestError, REQUEST_PREFIX};
 pub use roster::{

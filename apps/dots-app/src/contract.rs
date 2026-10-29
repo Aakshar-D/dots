@@ -1125,6 +1125,7 @@ pub fn samples() -> Value {
             held: held_runs(),
             // Filled in by `app_samples`, which has a proposal.
             app_reviews: vec![],
+            team_scope: vec![],
         }),
         // What `library_add` takes and the Library commands answer: a config of every kind and
         // transport, and entries of every kind (a plugin's own server among them).

@@ -63,7 +63,7 @@ async fn edited_run(t: &Rt) -> Run {
     s.engine = dots_core::model::EngineKind::Local;
     s.endpoint_url = Some(llm.endpoint());
     s.model = "m".into();
-    let dot = t.rt.create_dot(s, None).await.unwrap();
+    let dot = t.rt.create_dot(s, None, None).await.unwrap();
     let run = t.rt.run_now(&dot.id).await.unwrap();
     let run = wait_status(t.rt.store(), &run.id, RunStatus::Succeeded, 15).await;
     drop(llm);
@@ -204,7 +204,7 @@ async fn folder_runs_have_no_worktree_to_diff_or_discard() {
     let mut s = spec("plain");
     s.workdir = t.dir.path().to_string_lossy().to_string();
     s.workspace_mode = WorkspaceMode::Folder;
-    let dot = t.rt.create_dot(s, None).await.unwrap();
+    let dot = t.rt.create_dot(s, None, None).await.unwrap();
     let run = t.rt.run_now(&dot.id).await.unwrap();
     wait_status(t.rt.store(), &run.id, RunStatus::Succeeded, 15).await;
     assert!(matches!(
@@ -345,7 +345,7 @@ async fn a_follow_up_fails_before_the_engine_starts_when_its_row_names_no_dots_w
     let mut s = spec("wt-chat");
     s.workdir = t.repo.to_string_lossy().to_string();
     s.workspace_mode = WorkspaceMode::Worktree;
-    let dot = t.rt.create_dot(s, None).await.unwrap();
+    let dot = t.rt.create_dot(s, None, None).await.unwrap();
     let first = t.rt.chat(&dot.id, "look around", None).await.unwrap();
     let first = wait_status(t.rt.store(), &first.id, RunStatus::Succeeded, 15).await;
     assert!(started.is_file(), "the first run starts the fake CLI");
@@ -491,7 +491,7 @@ async fn an_unchanged_run_with_an_ignored_junction_is_cleaned_up_and_stays_out_o
     s.endpoint_url = Some(llm.endpoint());
     s.model = "m".into();
     s.policy = Policy::preset(Preset::Trusted);
-    let dot = t.rt.create_dot(s, None).await.unwrap();
+    let dot = t.rt.create_dot(s, None, None).await.unwrap();
     let run = t.rt.run_now(&dot.id).await.unwrap();
     let run = wait_status(t.rt.store(), &run.id, RunStatus::Succeeded, 30).await;
 
@@ -580,7 +580,7 @@ async fn discard_waits_for_the_thread_to_finish() {
     s.engine = dots_core::model::EngineKind::Local;
     s.endpoint_url = Some(llm.endpoint());
     s.model = "m".into();
-    let dot = t.rt.create_dot(s, None).await.unwrap();
+    let dot = t.rt.create_dot(s, None, None).await.unwrap();
     let run = t.rt.run_now(&dot.id).await.unwrap();
     wait_status(t.rt.store(), &run.id, RunStatus::Running, 15).await;
     assert!(matches!(

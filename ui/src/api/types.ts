@@ -600,7 +600,18 @@ export const Inbox = z.strictObject({
   // Apps dots sent for review that wait for the person, newest first. Lazy: the proposal's
   // schema is declared with the apps, below.
   app_reviews: z.array(z.lazy(() => PendingAppReview)),
+  // Teams with a member dot outside the team's account or workspace.
+  team_scope: z.array(z.lazy(() => TeamScopeIssue)),
 });
+// A member dot that is not in its team's account or workspace, as the Inbox lists it.
+export const TeamScopeIssue = z.strictObject({
+  team_id: z.string(),
+  team_name: z.string(),
+  dot_id: z.string(),
+  dot_name: z.string(),
+  reason: z.string(),
+});
+export type TeamScopeIssue = z.infer<typeof TeamScopeIssue>;
 
 // The Library (MCP/skills spec section 2 and 9). `${VAR}` in a server's config stays a
 // reference: the core reads the environment when the server starts.

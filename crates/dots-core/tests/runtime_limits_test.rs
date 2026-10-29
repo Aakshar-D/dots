@@ -87,7 +87,7 @@ impl T {
         let mut s = spec(name);
         s.workdir = work.to_string_lossy().to_string();
         s.workspace_mode = WorkspaceMode::Folder;
-        self.rt.create_dot(s, None).await.unwrap()
+        self.rt.create_dot(s, None, None).await.unwrap()
     }
 
     /// A Run now of a fresh dot that brings `reading`, to its end.
@@ -152,7 +152,7 @@ async fn chat_and_run_now_are_refused_under_the_limit() {
     s.engine = EngineKind::Local;
     s.model = "m".into();
     s.endpoint_url = Some("http://127.0.0.1:1/v1".into());
-    let local = t.rt.create_dot(s, None).await.unwrap();
+    let local = t.rt.create_dot(s, None, None).await.unwrap();
     assert!(t.rt.chat(&local.id, "hi", None).await.is_ok());
 }
 

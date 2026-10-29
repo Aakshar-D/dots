@@ -190,6 +190,14 @@ pub fn workspace_name(orgs: Option<&Orgs>, org_id: &str, workspace_id: &str) -> 
         .unwrap_or_else(|| workspace_id.to_string())
 }
 
+/// The account's name for a text about `org_id`; `Personal` for `None`.
+pub async fn account_label(orgs: Option<&Orgs>, org_id: Option<&str>) -> String {
+    match org_id {
+        Some(org_id) => account_name(orgs, org_id).await,
+        None => "Personal".to_string(),
+    }
+}
+
 /// The account's name for the texts: the org's name, or its id when it is not joined.
 async fn account_name(orgs: Option<&Orgs>, org_id: &str) -> String {
     match orgs {

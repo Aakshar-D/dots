@@ -66,7 +66,7 @@ async fn main() -> anyhow::Result<()> {
     if args.iter().any(|a| a == "--folder") {
         spec.workspace_mode = WorkspaceMode::Folder;
     }
-    let dot = rt.create_dot(spec, None).await?;
+    let dot = rt.create_dot(spec, None, None).await?;
     let mut events = rt.subscribe();
     let mut stdin = BufReader::new(tokio::io::stdin()).lines();
     let first = rt.run_now(&dot.id).await?;

@@ -51,7 +51,7 @@ pub async fn folder_dot(t: &Rt, name: &str) -> dots_core::model::Dot {
     let mut s = spec(name);
     s.workdir = work.to_string_lossy().to_string();
     s.workspace_mode = WorkspaceMode::Folder;
-    t.rt.create_dot(s, None).await.unwrap()
+    t.rt.create_dot(s, None, None).await.unwrap()
 }
 
 fn folder(t: &Rt, name: &str) -> WatcherConfig {
@@ -386,7 +386,7 @@ async fn attachments_never_show_as_a_worktree_runs_changes() {
     common::init_repo(&repo);
     let mut s = spec("tree");
     s.workdir = repo.to_string_lossy().to_string();
-    let dot = t.rt.create_dot(s, None).await.unwrap();
+    let dot = t.rt.create_dot(s, None, None).await.unwrap();
     let w = email_watcher(&t, &dot).await;
     let dots_core::watchers::Fired::Run(run) =
         t.rt.watchers().fire(&w.id, invoice_event()).await.unwrap()

@@ -302,7 +302,7 @@ describe("a run's events while their list loads or refetches", () => {
 });
 
 describe("a change announced while a fetch is in flight", () => {
-  const empty: Inbox = { approvals: [], review_runs: [], attention: [], tools_changed: [], watchers: [], held: [], app_reviews: [] };
+  const empty: Inbox = { approvals: [], review_runs: [], attention: [], tools_changed: [], watchers: [], held: [], app_reviews: [], team_scope: [] };
   /// Shows the Inbox as the app's frame does.
   const watchInbox = (qc: Client) =>
     new QueryObserver(qc, { queryKey: keys.inbox, queryFn: commands.inbox }).subscribe(() => {});

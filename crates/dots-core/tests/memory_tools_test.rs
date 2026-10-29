@@ -72,8 +72,8 @@ async fn a_local_dot_remembers_recalls_and_forgets_and_its_next_run_knows() {
     let memories = t.rt.checkins().memories().clone();
     // The dot is made first, so its memories' ids can go into the model's script.
     let mut s = local_spec(&t, "http://127.0.0.1:1", "invoices");
-    let dot = t.rt.create_dot(s.clone(), None).await.unwrap();
-    let other = t.rt.create_dot(spec("other"), None).await.unwrap();
+    let dot = t.rt.create_dot(s.clone(), None, None).await.unwrap();
+    let other = t.rt.create_dot(spec("other"), None, None).await.unwrap();
     let theirs = memories
         .add(&other.id, "Another dot's fact.")
         .await
@@ -216,7 +216,7 @@ async fn a_memory_rule_that_asks_parks_the_call_and_the_decision_is_carried_out(
     s.approval_wait_secs = 0;
     // An ask rule wins over the preset's allow.
     s.policy.rules.push(Rule::new("Memory", Action::Ask));
-    let dot = t.rt.create_dot(s, None).await.unwrap();
+    let dot = t.rt.create_dot(s, None, None).await.unwrap();
 
     // Approved: Dots performs the parked `remember` in the resume run.
     let parent = t.rt.run_now(&dot.id).await.unwrap();

@@ -40,7 +40,7 @@ impl Rt {
     }
 
     async fn dot(&self, name: &str) -> Dot {
-        self.rt.create_dot(spec(name), None).await.unwrap()
+        self.rt.create_dot(spec(name), None, None).await.unwrap()
     }
 
     /// A run of `dot` started by `trigger`, still queued.

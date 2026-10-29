@@ -1626,6 +1626,7 @@
         "worktree_exists": true
       }
     ],
+    "team_scope": [],
     "tools_changed": [
       {
         "dots": [

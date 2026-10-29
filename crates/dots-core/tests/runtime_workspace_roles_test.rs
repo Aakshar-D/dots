@@ -134,7 +134,7 @@ impl Rt {
         self.join().await;
         let dot = self
             .rt
-            .create_dot(self.triage(), Some(ACME.into()))
+            .create_dot(self.triage(), Some(ACME.into()), None)
             .await
             .unwrap();
         self.rt
@@ -335,6 +335,7 @@ async fn account_admin_is_admin_everywhere() {
                 s
             },
             Some(ACME.into()),
+            None,
         )
         .await
         .unwrap();
@@ -369,7 +370,7 @@ async fn legacy_and_personal_unchanged() {
     t.serve(json!({}), None);
     t.join().await;
     let dot =
-        t.rt.create_dot(t.triage(), Some(ACME.into()))
+        t.rt.create_dot(t.triage(), Some(ACME.into()), None)
             .await
             .unwrap();
     t.rt.store()
@@ -385,7 +386,7 @@ async fn legacy_and_personal_unchanged() {
     let mut s = t.triage();
     s.name = "home".into();
     s.variables = Grants::default();
-    let mine = t.rt.create_dot(s, None).await.unwrap();
+    let mine = t.rt.create_dot(s, None, None).await.unwrap();
     t.rt.store()
         .set_dot_workspace(&mine.id, "side-projects")
         .await
@@ -411,19 +412,19 @@ async fn create_dot_in_a_workspace_needs_rights_there() {
     .await;
     t.join().await;
     assert_eq!(
-        refused(t.rt.create_dot(t.triage(), Some(ACME.into())).await),
+        refused(t.rt.create_dot(t.triage(), Some(ACME.into()), None).await),
         "Acme Engineering: a Viewer in the Default workspace can't create or change dots. Ask an Admin or Owner."
     );
     // No entry in Default: it is closed.
     t.become_(2, "member", json!({"payments": "member"})).await;
     assert_eq!(
-        refused(t.rt.create_dot(t.triage(), Some(ACME.into())).await),
+        refused(t.rt.create_dot(t.triage(), Some(ACME.into()), None).await),
         "Acme Engineering: you aren't in the Default workspace. Ask an Admin or Owner to add you."
     );
     // Member there: allowed.
     t.become_(3, "member", json!({"default": "member"})).await;
     let dot =
-        t.rt.create_dot(t.triage(), Some(ACME.into()))
+        t.rt.create_dot(t.triage(), Some(ACME.into()), None)
             .await
             .unwrap();
     assert_eq!(dot.workspace_id, "default");

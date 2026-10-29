@@ -20,16 +20,16 @@ const failedRun = {
 };
 
 /// An Inbox as a test writes it: without paused watchers or held runs unless it says so.
-type InboxSpec = Omit<Inbox, "watchers" | "held" | "app_reviews"> &
-  Partial<Pick<Inbox, "watchers" | "held" | "app_reviews">>;
+type InboxSpec = Omit<Inbox, "watchers" | "held" | "app_reviews" | "team_scope"> &
+  Partial<Pick<Inbox, "watchers" | "held" | "app_reviews" | "team_scope">>;
 
 /// An inbox the test can empty, the way a decision or a review does.
 function inbox(initial: InboxSpec) {
-  let current: Inbox = { watchers: [], held: [], app_reviews: [], ...initial };
+  let current: Inbox = { watchers: [], held: [], app_reviews: [], team_scope: [], ...initial };
   backend.on("inbox", () => current);
   return {
     set: (next: InboxSpec) => {
-      current = { watchers: [], held: [], app_reviews: [], ...next };
+      current = { watchers: [], held: [], app_reviews: [], team_scope: [], ...next };
     },
   };
 }
@@ -532,6 +532,7 @@ describe("the approvals of one run", () => {
     watchers: [],
     held: [],
     app_reviews: [],
+    team_scope: [],
   };
   const answered = [approval, second].map((a) => ({ ...sample.approval, id: a.id }));
 
@@ -706,6 +707,7 @@ describe("a schedule that needs attention", () => {
     watchers: [],
     held: [],
     app_reviews: [],
+    team_scope: [],
   };
   const only = (attention: Inbox["attention"]): Inbox => ({ ...empty, attention });
   const item = () => screen.findByRole("listitem", { name: `${flagged.dot_name} needs attention` });

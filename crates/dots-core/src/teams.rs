@@ -97,12 +97,25 @@ impl Teams {
     pub async fn create(&self, spec: &TeamSpec) -> Result<Team> {
         self.require_edit(spec.org_id.as_deref(), &spec.workspace_id)
             .await?;
+        let scope = spec.org_id.as_deref().unwrap_or(crate::accounts::PERSONAL);
+        if self
+            .store
+            .workspace(scope, &spec.workspace_id)
+            .await?
+            .is_none()
+        {
+            return Err(Error::NotFound(format!(
+                "No workspace '{}' in {}.",
+                spec.workspace_id,
+                crate::accounts::account_label(self.orgs.as_ref(), spec.org_id.as_deref()).await
+            )));
+        }
         let team = self.store.create_team(spec).await?;
         self.team_updated(&team.id);
         Ok(team)
     }
 
-    /// Replaces the team's name, description and members. A workflow that names a member
+    /// Replaces the team's name, description and members; its account and workspace stay. A workflow that names a member
     /// removed here keeps its definition and gets a `problem`.
     pub async fn update(&self, id: &str, spec: &TeamSpec) -> Result<Team> {
         self.require_edit_team(id).await?;

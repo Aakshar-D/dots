@@ -435,7 +435,7 @@ pub async fn create_dot(
     spec: DotSpec,
     org_id: Option<String>,
 ) -> Res<Dot> {
-    Ok(state.rt()?.create_dot(spec, org_id).await?)
+    Ok(state.rt()?.create_dot(spec, org_id, None).await?)
 }
 
 #[tauri::command]

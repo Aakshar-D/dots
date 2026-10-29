@@ -605,7 +605,7 @@ async fn the_inbox_lists_servers_whose_tools_changed_and_counts_them() {
         .unwrap();
     let mut s = spec("nightly");
     s.uses.mcp_servers = vec!["files".into()];
-    rt.create_dot(s, None).await.unwrap();
+    rt.create_dot(s, None, None).await.unwrap();
     let inbox = rt.inbox().await.unwrap();
     assert_eq!(inbox.tools_changed.len(), 1);
     let changed = &inbox.tools_changed[0];

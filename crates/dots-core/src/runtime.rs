@@ -718,6 +718,7 @@ impl Runtime {
             watchers: self.store.paused_watchers().await?,
             held: self.held_runs(&names).await?,
             app_reviews,
+            team_scope: self.store.team_scope_issues().await?,
         })
     }
 
@@ -986,10 +987,16 @@ impl Runtime {
         });
     }
 
-    /// Creates a dot, in the org `org_id` or, with `None`, in Personal. The org must be joined
-    /// on this PC; it is fixed from then on (env vault spec §5.2). In an account, the role must
-    /// allow changing dots, and giving it secrets when it is granted any (members spec §6.3).
-    pub async fn create_dot(&self, spec: DotSpec, org_id: Option<String>) -> Result<Dot> {
+    /// Creates a dot, in the org `org_id` or, with `None`, in Personal, and in its workspace
+    /// `workspace_id` or, with `None`, Default. The org must be joined on this PC; it is fixed
+    /// from then on (env vault spec §5.2). In an account, the role in that workspace must allow
+    /// changing dots, and giving it secrets when it is granted any (members spec §6.3).
+    pub async fn create_dot(
+        &self,
+        spec: DotSpec,
+        org_id: Option<String>,
+        workspace_id: Option<String>,
+    ) -> Result<Dot> {
         if let Some(org) = &org_id {
             if self.store.get_org(org).await?.is_none() {
                 return Err(Error::Invalid(format!(
@@ -997,8 +1004,11 @@ impl Runtime {
                 )));
             }
         }
-        // New dots go to the account's Default workspace; the role there must allow them.
-        let workspace_id = crate::accounts::DEFAULT_WORKSPACE;
+        let workspace_id =
+            workspace_id.unwrap_or_else(|| crate::accounts::DEFAULT_WORKSPACE.into());
+        self.check_workspace(org_id.as_deref(), &workspace_id)
+            .await?;
+        let workspace_id = workspace_id.as_str();
         self.require_in(org_id.as_deref(), workspace_id, Permission::EditDots)
             .await?;
         if !spec.variables.0.is_empty() {
@@ -1013,6 +1023,89 @@ impl Runtime {
         self.scheduler.reload();
         self.watchers.reload();
         Ok(dot)
+    }
+
+    /// Refuses a workspace the account (`None` is Personal) doesn't have.
+    async fn check_workspace(&self, org_id: Option<&str>, workspace_id: &str) -> Result<()> {
+        let scope = org_id.unwrap_or(crate::accounts::PERSONAL);
+        if self.store.workspace(scope, workspace_id).await?.is_some() {
+            return Ok(());
+        }
+        Err(Error::NotFound(format!(
+            "No workspace '{workspace_id}' in {}.",
+            crate::accounts::account_label(Some(&self.orgs), org_id).await
+        )))
+    }
+
+    /// Moves a dot to another workspace of its account. The role must allow changing dots in
+    /// the workspace it leaves and in the one it goes to, and a dot in a team stays with the
+    /// team (accounts design §6.3).
+    pub async fn move_dot(&self, dot_id: &str, workspace_id: &str) -> Result<Dot> {
+        let dot = self.store.get_dot(dot_id).await?;
+        self.check_workspace(dot.org_id.as_deref(), workspace_id)
+            .await?;
+        self.require_dot(&dot, Permission::EditDots).await?;
+        self.require_in(dot.org_id.as_deref(), workspace_id, Permission::EditDots)
+            .await?;
+        if let Some(team_id) = self.store.teams_of_dot(dot_id).await?.first() {
+            let team = self.store.get_team(team_id).await?;
+            return Err(Error::Invalid(format!(
+                "{} is in the team {}. Take it out of the team first.",
+                dot.spec.name, team.name
+            )));
+        }
+        self.store.set_dot_workspace(dot_id, workspace_id).await?;
+        self.store.get_dot(dot_id).await
+    }
+
+    /// The workspaces of `scope` (`personal` or an org id) this PC may see.
+    pub async fn workspaces(&self, scope: &str) -> Result<Vec<crate::accounts::WorkspaceView>> {
+        crate::accounts::visible_workspaces(&self.store, &self.orgs, scope).await
+    }
+
+    /// Adds a workspace to Personal; its id is made from the name.
+    pub async fn personal_workspace_add(
+        &self,
+        name: &str,
+    ) -> Result<crate::accounts::WorkspaceView> {
+        let name = personal_workspace_name(name)?;
+        let taken: Vec<String> = self
+            .store
+            .list_workspaces(crate::accounts::PERSONAL)
+            .await?
+            .into_iter()
+            .map(|w| w.id)
+            .collect();
+        let id = crate::accounts::workspace_id_for(&name, &taken);
+        self.store
+            .add_workspace(&crate::store::WorkspaceRow {
+                scope: crate::accounts::PERSONAL.into(),
+                id: id.clone(),
+                name,
+                use_rules: None,
+                created_at: crate::util::now(),
+            })
+            .await?;
+        self.workspaces(crate::accounts::PERSONAL)
+            .await?
+            .into_iter()
+            .find(|w| w.id == id)
+            .ok_or_else(|| Error::NotFound(format!("workspace {id}")))
+    }
+
+    /// Renames a Personal workspace; its id stays.
+    pub async fn personal_workspace_rename(&self, id: &str, name: &str) -> Result<()> {
+        let name = personal_workspace_name(name)?;
+        self.store
+            .rename_workspace(crate::accounts::PERSONAL, id, &name)
+            .await
+    }
+
+    /// Deletes a Personal workspace; its dots and teams go to Default.
+    pub async fn personal_workspace_delete(&self, id: &str) -> Result<()> {
+        self.store
+            .delete_workspace(crate::accounts::PERSONAL, id)
+            .await
     }
 
     /// Saves a dot's spec. A dot whose org is no longer joined on this PC is refused: it can't
@@ -1960,4 +2053,13 @@ impl Runtime {
         held.sort_by(|a, b| a.queued_at.cmp(&b.queued_at));
         Ok(held)
     }
+}
+
+/// A Personal workspace's name, trimmed; it needs one.
+fn personal_workspace_name(name: &str) -> Result<String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(Error::Invalid("A workspace needs a name.".into()));
+    }
+    Ok(name.to_string())
 }
