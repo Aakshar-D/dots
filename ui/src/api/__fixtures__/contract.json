@@ -823,11 +823,13 @@
   "DotAccess": [
     {
       "answer": "Acme Engineering: you aren't in the Platform workspace. Ask an Admin or Owner to add you.",
+      "create_api_keys": "Acme Engineering: you aren't in the Platform workspace. Ask an Admin or Owner to add you.",
       "edit": "Acme Engineering: you aren't in the Platform workspace. Ask an Admin or Owner to add you.",
       "run": "Acme Engineering: you aren't in the Platform workspace. Ask an Admin or Owner to add you."
     },
     {
       "answer": null,
+      "create_api_keys": null,
       "edit": null,
       "run": null
     }
@@ -4253,6 +4255,7 @@
       "name": "Platform",
       "refusals": {
         "answer": "Acme Engineering: a Viewer in the Platform workspace can't answer approvals. Ask an Admin or Owner.",
+        "create_api_keys": "Acme Engineering: a Viewer in the Platform workspace can't create API keys. Ask an Admin or Owner.",
         "edit": "Acme Engineering: a Viewer in the Platform workspace can't create or change dots. Ask an Admin or Owner.",
         "run": "Acme Engineering: a Viewer in the Platform workspace can't run dots. Ask an Admin or Owner."
       },
@@ -4273,6 +4276,7 @@
       "name": "Default",
       "refusals": {
         "answer": null,
+        "create_api_keys": null,
         "edit": null,
         "run": null
       },

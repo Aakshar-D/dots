@@ -91,7 +91,7 @@ impl Store {
     }
 
     /// The record of the key whose text is `key`: found by its hash, then confirmed with a
-    /// constant-time comparison.
+    /// constant-time comparison. A revoked key is found too: callers must check `revoked_at`.
     pub async fn api_key_by_secret(&self, key: &str) -> Result<Option<ApiKeyRow>> {
         let hash = token_hash(key);
         let row = sqlx::query(&format!(

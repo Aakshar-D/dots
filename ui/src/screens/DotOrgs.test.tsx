@@ -234,7 +234,7 @@ describe("a Viewer in the editor", () => {
   const RUN = "Acme Engineering: a Viewer can't run dots. Ask an Admin or Owner.";
 
   it("can't save a dot of the account", async () => {
-    backend.on("dot_access", () => ({ edit: TITLE, run: RUN, answer: null }));
+    backend.on("dot_access", () => ({ edit: TITLE, run: RUN, answer: null, create_api_keys: null }));
     editor(release, [viewer]);
     const save = await screen.findByRole("button", { name: "Save" });
     await waitFor(() => expect(save).toBeDisabled());
@@ -254,7 +254,7 @@ describe("a Viewer in the editor", () => {
         use_rules: null,
         my_role: null,
         can_manage: false,
-        refusals: args.scope === "acme-eng" ? { edit: TITLE, run: RUN, answer: null } : allowed,
+        refusals: args.scope === "acme-eng" ? { edit: TITLE, run: RUN, answer: null, create_api_keys: null } : allowed,
       },
     ]);
     const { user } = await newDot([viewer]);

@@ -1,6 +1,10 @@
 //! Making API keys (accounts spec §10). A key is `dots_sk_` and 43 characters from `[0-9A-Za-z]`;
 //! the person sees it once, and only its prefix and hash are kept.
 
+use serde::Serialize;
+
+use crate::store::ApiKeyRow;
+
 /// What every API key starts with.
 pub const API_KEY_PREFIX: &str = "dots_sk_";
 
@@ -39,4 +43,46 @@ pub fn looks_like_key(text: &str) -> bool {
     text.strip_prefix(API_KEY_PREFIX).is_some_and(|rest| {
         rest.len() == SECRET_CHARS && rest.bytes().all(|b| b.is_ascii_alphanumeric())
     })
+}
+
+/// One of the keys in the API keys tab. Never carries the key text: only its prefix.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct ApiKeyView {
+    pub id: String,
+    /// `personal` or the id of the org the key's workspace belongs to.
+    pub scope: String,
+    pub workspace_id: String,
+    /// The workspace's name, or its id when the workspace has gone.
+    pub workspace_name: String,
+    pub name: String,
+    pub prefix: String,
+    pub created_at: String,
+    pub last_used_at: Option<String>,
+    pub revoked_at: Option<String>,
+    /// The core's words for why this PC may not manage keys in that workspace; `None` is allowed.
+    pub refusal: Option<String>,
+}
+
+impl ApiKeyView {
+    pub(crate) fn new(row: ApiKeyRow, workspace_name: String, refusal: Option<String>) -> Self {
+        ApiKeyView {
+            id: row.id,
+            scope: row.scope,
+            workspace_id: row.workspace_id,
+            workspace_name,
+            name: row.name,
+            prefix: row.prefix,
+            created_at: row.created_at,
+            last_used_at: row.last_used_at,
+            revoked_at: row.revoked_at,
+            refusal,
+        }
+    }
+}
+
+/// The answer to making a key: its view, and its text, which is shown this once and never kept.
+#[derive(Serialize, Clone, Debug)]
+pub struct CreatedApiKey {
+    pub key: ApiKeyView,
+    pub secret: String,
 }

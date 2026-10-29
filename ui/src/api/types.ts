@@ -1162,6 +1162,7 @@ export const Refusals = z.strictObject({
   edit: nullable(z.string()),
   run: nullable(z.string()),
   answer: nullable(z.string()),
+  create_api_keys: nullable(z.string()),
 });
 // What `dot_access` answers for one dot: the refusals of its account and workspace.
 export const DotAccess = Refusals;

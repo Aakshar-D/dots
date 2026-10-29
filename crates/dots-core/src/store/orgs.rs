@@ -317,6 +317,11 @@ impl Store {
             .bind(id)
             .execute(&mut *tx)
             .await?;
+        // Its API keys go too: leaving the account ends them (accounts spec §10).
+        sqlx::query("DELETE FROM api_keys WHERE scope = ?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
         for table in ["dots", "teams"] {
             sqlx::query(&format!(
                 "UPDATE {table} SET workspace_id = ? WHERE org_id = ?"

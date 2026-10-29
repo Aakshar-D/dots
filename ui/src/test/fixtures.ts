@@ -76,7 +76,7 @@ export const sample = {
 
 /// What `new_dot_spec` answers: the core's defaults with nothing filled in.
 /// What a workspace or a dot refuses when it refuses nothing (`Refusals`, `DotAccess`).
-export const allowed: T.Refusals = { edit: null, run: null, answer: null };
+export const allowed: T.Refusals = { edit: null, run: null, answer: null, create_api_keys: null };
 
 export const blankSpec: T.DotSpec = T.DotSpec.parse(contract.NewDotSpec);
 

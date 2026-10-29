@@ -462,6 +462,7 @@ async fn dot_access_names_what_the_role_refuses() {
             edit: Some(payments_viewer_cant("create or change dots")),
             run: Some(payments_viewer_cant("run dots")),
             answer: Some(payments_viewer_cant("answer approvals")),
+            create_api_keys: Some(payments_viewer_cant("create API keys")),
         }
     );
     // The workspace's own refusals say the same.
@@ -476,7 +477,8 @@ async fn dot_access_names_what_the_role_refuses() {
         DotAccess {
             edit: outside.clone(),
             run: outside.clone(),
-            answer: outside,
+            answer: outside.clone(),
+            create_api_keys: outside,
         }
     );
     assert!(matches!(

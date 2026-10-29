@@ -1119,6 +1119,96 @@ impl Runtime {
             .await
     }
 
+    /// The API keys of the workspaces of `scope` (`personal` or an org id) this PC may see,
+    /// newest first. Each says why this PC may not manage it, if it may not. Never carries a
+    /// key's text.
+    pub async fn api_keys(
+        &self,
+        scope: &str,
+    ) -> Result<Vec<crate::accounts::api_keys::ApiKeyView>> {
+        let visible = self.workspaces(scope).await?;
+        Ok(self
+            .store
+            .api_keys(scope)
+            .await?
+            .into_iter()
+            .filter_map(|row| {
+                let ws = visible.iter().find(|w| w.id == row.workspace_id)?;
+                let (name, refusal) = (ws.name.clone(), ws.refusals.create_api_keys.clone());
+                Some(crate::accounts::api_keys::ApiKeyView::new(
+                    row, name, refusal,
+                ))
+            })
+            .collect())
+    }
+
+    /// Makes a key for the workspace `workspace_id` of `scope` (accounts spec §10). The role
+    /// must allow creating API keys there. The key's text is in the answer and nowhere else:
+    /// only its prefix and hash are kept.
+    pub async fn create_api_key(
+        &self,
+        scope: &str,
+        workspace_id: &str,
+        name: &str,
+    ) -> Result<crate::accounts::api_keys::CreatedApiKey> {
+        use crate::accounts::api_keys::{key_prefix, new_api_key, ApiKeyView, CreatedApiKey};
+        let org_id = (scope != crate::accounts::PERSONAL).then_some(scope);
+        self.check_workspace(org_id, workspace_id).await?;
+        self.require_in(org_id, workspace_id, Permission::CreateApiKeys)
+            .await?;
+        let name = name.trim();
+        if name.is_empty() || name.chars().count() > 64 {
+            return Err(Error::Invalid(
+                "Give the key a name (up to 64 characters).".into(),
+            ));
+        }
+        let secret = new_api_key();
+        let row = crate::store::ApiKeyRow {
+            id: crate::util::new_id(),
+            scope: scope.to_string(),
+            workspace_id: workspace_id.to_string(),
+            name: name.to_string(),
+            prefix: key_prefix(&secret),
+            hash: crate::util::token_hash(&secret),
+            created_at: crate::util::now(),
+            last_used_at: None,
+            revoked_at: None,
+        };
+        self.store.add_api_key(&row).await?;
+        let key = ApiKeyView::new(row, self.workspace_label(scope, workspace_id).await?, None);
+        Ok(CreatedApiKey { key, secret })
+    }
+
+    /// Revokes a key: it stops working at once and stays listed as revoked. The role must allow
+    /// creating API keys in the key's workspace.
+    pub async fn revoke_api_key(&self, id: &str) -> Result<crate::accounts::api_keys::ApiKeyView> {
+        let row = self
+            .store
+            .api_key(id)
+            .await?
+            .ok_or_else(|| Error::NotFound(format!("No API key '{id}'.")))?;
+        let org_id = (row.scope != crate::accounts::PERSONAL).then_some(row.scope.as_str());
+        self.require_in(org_id, &row.workspace_id, Permission::CreateApiKeys)
+            .await?;
+        self.store.revoke_api_key(id, &crate::util::now()).await?;
+        let row = self
+            .store
+            .api_key(id)
+            .await?
+            .ok_or_else(|| Error::NotFound(format!("No API key '{id}'.")))?;
+        let name = self.workspace_label(&row.scope, &row.workspace_id).await?;
+        Ok(crate::accounts::api_keys::ApiKeyView::new(row, name, None))
+    }
+
+    /// The workspace's name, or its id when it has none.
+    async fn workspace_label(&self, scope: &str, workspace_id: &str) -> Result<String> {
+        Ok(self
+            .store
+            .workspace(scope, workspace_id)
+            .await?
+            .map_or_else(|| workspace_id.to_string(), |w| w.name))
+    }
+
     /// Saves a dot's spec. A dot whose org is no longer joined on this PC is refused: it can't
     /// run until the org is joined again or the dot is deleted (env vault spec §6.4). In an
     /// account, the role must allow changing dots, and giving secrets to them when the grants

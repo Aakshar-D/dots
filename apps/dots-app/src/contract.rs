@@ -1489,6 +1489,7 @@ pub fn samples() -> Value {
                 edit: Some(viewer_in_platform("create or change dots")),
                 run: Some(viewer_in_platform("run dots")),
                 answer: Some(viewer_in_platform("answer approvals")),
+                create_api_keys: Some(viewer_in_platform("create API keys")),
             },
         },
         WorkspaceView {
@@ -1510,6 +1511,7 @@ pub fn samples() -> Value {
             edit: Some(outside.into()),
             run: Some(outside.into()),
             answer: Some(outside.into()),
+            create_api_keys: Some(outside.into()),
         },
         DotAccess::default(),
     ]);

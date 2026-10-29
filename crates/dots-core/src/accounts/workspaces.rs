@@ -68,6 +68,8 @@ pub struct Refusals {
     pub edit: Option<String>,
     pub run: Option<String>,
     pub answer: Option<String>,
+    /// Making, listing and revoking the workspace's API keys.
+    pub create_api_keys: Option<String>,
 }
 
 /// What this PC may not do with one dot (`Runtime::dot_access`): the `Refusals` of its account
@@ -92,6 +94,7 @@ pub async fn refusals_in(
         edit: refused(Permission::EditDots).await?,
         run: refused(Permission::RunDots).await?,
         answer: refused(Permission::AnswerApprovals).await?,
+        create_api_keys: refused(Permission::CreateApiKeys).await?,
     })
 }
 

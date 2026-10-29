@@ -31,8 +31,9 @@ const asViewer: Refusals = {
   edit: viewer("create or change dots"),
   run: viewer("run dots"),
   answer: viewer("answer approvals"),
+  create_api_keys: viewer("create API keys"),
 };
-const outside: Refusals = { edit: OUTSIDE, run: OUTSIDE, answer: OUTSIDE };
+const outside: Refusals = { edit: OUTSIDE, run: OUTSIDE, answer: OUTSIDE, create_api_keys: OUTSIDE };
 const [acme] = sample.orgs;
 // Acme's Default, where the person is a Member, and Payments, as `payments` refuses.
 const acmeSpaces = (payments: Refusals) => [
