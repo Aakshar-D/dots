@@ -2,8 +2,8 @@
 // and the bridge through which the page's `dots.call` reaches Dots. The page runs sandboxed
 // (`allow-scripts` only, so in an opaque origin) and gets one MessagePort. Every message on it
 // is checked here before anything is called: a call names a tool the app lists, and Dots calls
-// it as the person (the page cannot say who calls). The page's client is
-// apps/dots-app/src/app_client.js.
+// it as the person (the page cannot say who calls); a run the page asks to open is one the app
+// started, which the core checks. The page's client is apps/dots-app/src/app_client.js.
 import { z } from "zod";
 
 import { errorMessage } from "@/lib/notify";
@@ -29,6 +29,13 @@ const Call = z.strictObject({
   tool: z.string(),
   input: z.unknown(),
 });
+/// The page asks to open a run in its conversation (`dots.openRun`). A run's id is a ULID: an
+/// empty one, or one longer than 64 characters, is malformed and ignored like a malformed call.
+const OpenRun = z.strictObject({
+  type: z.literal("open_run"),
+  id: z.number().int().positive(),
+  run_id: z.string().min(1).max(64),
+});
 
 export type Bridge = {
   /// Sends the theme's colours, for `--dots-<token>` in the page.
@@ -39,12 +46,14 @@ export type Bridge = {
 };
 
 /// Hands the framed page `frame` its port and answers its calls: `tools` are those it may call
-/// (read at each call), `call` performs one as the person.
+/// (read at each call), `call` performs one as the person, and `openRun` opens a run the app
+/// started (a page without it, a preview's, is refused).
 export function connectFrame(
   frame: Window,
   options: {
     tools: readonly string[];
     call: (tool: string, input: unknown) => Promise<unknown>;
+    openRun?: (runId: string) => Promise<void>;
   },
 ): Bridge {
   const channel = new MessageChannel();
@@ -53,7 +62,26 @@ export function connectFrame(
   const send = (message: unknown) => {
     if (open) port.postMessage(message);
   };
+  /// Answers the request `id` with what `work` gives, or its error.
+  const answer = (id: number, work: () => Promise<unknown> | unknown) =>
+    // Work that throws at once, or answers without a promise, is answered like any failure.
+    Promise.resolve()
+      .then(work)
+      .then(
+        (result) => send({ type: "result", id, ok: true, result }),
+        (e: unknown) => send({ type: "result", id, ok: false, error: errorMessage(e) }),
+      );
   port.onmessage = (event: MessageEvent) => {
+    const open = OpenRun.safeParse(event.data);
+    if (open.success) {
+      const { id, run_id } = open.data;
+      answer(id, async () => {
+        if (!options.openRun) throw new Error("this screen cannot open runs");
+        await options.openRun(run_id);
+        return null;
+      });
+      return;
+    }
     const parsed = Call.safeParse(event.data);
     if (!parsed.success) return;
     const { id, tool, input } = parsed.data;
@@ -61,13 +89,7 @@ export function connectFrame(
       send({ type: "result", id, ok: false, error: `this app has no tool ${tool}` });
       return;
     }
-    // A call that throws at once, or answers without a promise, is answered like any failure.
-    Promise.resolve()
-      .then(() => options.call(tool, input ?? {}))
-      .then(
-        (result) => send({ type: "result", id, ok: true, result }),
-        (e: unknown) => send({ type: "result", id, ok: false, error: errorMessage(e) }),
-      );
+    answer(id, () => options.call(tool, input ?? {}));
   };
   frame.postMessage({ type: "dots:connect" }, "*", [channel.port2]);
   return {

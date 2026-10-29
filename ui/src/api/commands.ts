@@ -346,6 +346,16 @@ export const commands = {
   /// The data removed apps kept, newest first.
   appsKeptList: () => call(T.KeptData.array(), "apps_kept_list"),
   appKeptDelete: (id: string) => call(nothing, "app_kept_delete", { id }),
+  /// The apps that come with Dots and are not installed ("Install Projects").
+  appsBundledOffers: () => call(T.BundledOffer.array(), "apps_bundled_offers"),
+  /// Installs an app that comes with Dots again: on the kept data `keptId`, or fresh (null).
+  appInstallBundled: (name: string, keptId: string | null) =>
+    call(T.LibraryItem, "app_install_bundled", { name, keptId }),
+  /// The one-time prompt to let the app start dots: "Switch on" (true) or "Not now" (false).
+  appAnswerStartPrompt: (name: string, on: boolean) =>
+    call(T.LibraryItem, "app_answer_start_prompt", { name, on }),
+  /// Where a run the app started is; rejects for a run it did not start.
+  appRunLink: (name: string, runId: string) => call(T.RunLink, "app_run_link", { name, runId }),
   /// The person's answer on the card. Rejects with kind `conflict` when it was decided already
   /// or its app moved on, and while the dot's thread is still working.
   appProposalDecide: (id: string, decision: T.ProposalDecision) =>

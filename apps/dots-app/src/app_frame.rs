@@ -110,7 +110,12 @@ pub fn parse(path: &str) -> Option<Target> {
     let (id, file) = match head {
         Some(_) => (None, file),
         None => {
-            let (id, file) = file.split_once('/').unwrap_or((file, ""));
+            // As for an app version, a slash must follow the preview's id: `/preview/<id>` has
+            // no folder of its own.
+            let (id, file) = file.split_once('/')?;
+            if id.is_empty() {
+                return None;
+            }
             (Some(id.to_string()), file)
         }
     };
@@ -301,6 +306,13 @@ mod tests {
                 path: "app.js".into()
             })
         );
+        assert_eq!(
+            parse("/preview/01J0PREV/"),
+            Some(Target::Preview {
+                id: "01J0PREV".into(),
+                path: "index.html".into()
+            })
+        );
         for refused in [
             "/",
             "/app/expenses",
@@ -316,6 +328,8 @@ mod tests {
             "/app/expenses/3/a%00.js",
             "/app/expenses/3/%zz",
             "/preview/",
+            "/preview/01J0PREV",
+            "/preview//index.html",
             "/other/x",
         ] {
             assert_eq!(parse(refused), None, "{refused}");

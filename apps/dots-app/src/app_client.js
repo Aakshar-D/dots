@@ -4,6 +4,8 @@
 // rejects with its error, `dots.onChange(cb)` hears that the app's data changed, and the
 // theme's colours arrive as CSS variables (`--dots-<token>`) on the root element, with
 // `data-theme` set to "light" or "dark" (`dots.onTheme(cb)` hears a change).
+// `dots.openRun(runId)` opens, in Dots, the conversation of a run the app started; it rejects
+// for any other run.
 (() => {
   let port = null;
   let next = 0;
@@ -66,13 +68,19 @@
     }
   };
   const send = (msg) => (port === null ? queued.push(msg) : deliver(msg));
+  // A request the host answers with a result of the same id.
+  const ask = (msg) =>
+    new Promise((resolve, reject) => {
+      next += 1;
+      waiting.set(next, { resolve, reject });
+      send({ ...msg, id: next });
+    });
   const dots = Object.freeze({
     call(tool, input = {}) {
-      return new Promise((resolve, reject) => {
-        next += 1;
-        waiting.set(next, { resolve, reject });
-        send({ type: "call", id: next, tool: String(tool), input });
-      });
+      return ask({ type: "call", tool: String(tool), input });
+    },
+    openRun(runId) {
+      return ask({ type: "open_run", run_id: String(runId) });
     },
     onChange(cb) {
       changes.add(cb);

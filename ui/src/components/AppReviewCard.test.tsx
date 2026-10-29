@@ -69,6 +69,29 @@ describe("an app sent for review", () => {
     );
   });
 
+  it("says so when Dots closed the preview for another card's, and starts it again", async () => {
+    let opened = 0;
+    backend.on("app_preview_open", () => `01J0PREV${(opened += 1)}`);
+    backend.on("app_preview_close", () => null);
+    backend.on("app_preview_call", () => {
+      throw { kind: "not_found", message: "preview 01J0PREV1" };
+    });
+    const { user } = show(fresh);
+    const frame = await screen.findByTitle<HTMLIFrameElement>("Expenses preview");
+    const post = vi.spyOn(frame.contentWindow!, "postMessage");
+    fireEvent.load(frame);
+    const port = (post.mock.calls[0] as unknown as [unknown, string, MessagePort[]])[2][0]!;
+    port.postMessage({ type: "call", id: 1, tool: "add_expense", input: { item: "Tea" } });
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Dots closed this preview to open another card's",
+    );
+    await user.click(screen.getByRole("button", { name: "Start the preview again" }));
+    expect(await screen.findByTitle("Expenses preview")).toHaveAttribute(
+      "src",
+      "http://dots-app.localhost/preview/01J0PREV2/index.html",
+    );
+  });
+
   it("tells the preview's page when one of its calls wrote", async () => {
     previewing();
     backend.on("app_preview_call", () => [{ item: "Coffee" }]);
