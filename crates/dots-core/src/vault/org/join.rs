@@ -253,7 +253,8 @@ impl JoinCode {
 /// Reads a join code as pasted or read from a `.dotsorg` file. Whitespace anywhere is ignored,
 /// so a code wrapped in an email still reads, and `=` padding is optional. Every field is
 /// checked: an unknown version, a bad org id, a policy key that is not a minisign public key, a
-/// source that is not `https://`, or a text field with a control or bidi character is refused.
+/// source that is not `https://`, a text field (the invite's id too) with a control or bidi
+/// character, or an invite whose end is not an RFC 3339 time is refused.
 pub fn parse_join_code(text: &str) -> Result<JoinCode> {
     let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
     let bytes = URL_SAFE_NO_PAD
@@ -284,6 +285,12 @@ pub fn parse_join_code(text: &str) -> Result<JoinCode> {
     // First, so that no refusal below quotes a text that reads as something else.
     check_plain("the org's id", &code.org_id)?;
     check_plain("the org's name", &code.name)?;
+    if let Some(invite) = &code.invite {
+        check_plain("the invite's id", &invite.id)?;
+        if chrono::DateTime::parse_from_rfc3339(&invite.expires_at).is_err() {
+            return Err(refused("the invite's end isn't a date and time (RFC 3339)"));
+        }
+    }
     check_org_id(&code.org_id)?;
     if code.name.trim().is_empty() {
         return Err(refused("the org's name is empty"));

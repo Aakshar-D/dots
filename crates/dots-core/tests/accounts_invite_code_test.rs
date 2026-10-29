@@ -100,3 +100,35 @@ async fn preview_shows_the_offer() {
         .invite
         .is_none());
 }
+
+#[tokio::test]
+async fn invite_id_with_a_hidden_character_is_refused() {
+    let h = OrgsHarness::new().await;
+    let hidden = InviteOffer {
+        id: "inv\u{202e}1".into(),
+        ..offer()
+    };
+    let e = parse_join_code(&with_invite(&h, 2, Some(hidden)))
+        .unwrap_err()
+        .to_string();
+    assert_eq!(
+        e,
+        "invalid input: join code: the invite's id holds a control character"
+    );
+}
+
+#[tokio::test]
+async fn invite_end_that_is_not_a_time_is_refused() {
+    let h = OrgsHarness::new().await;
+    let vague = InviteOffer {
+        expires_at: "next week".into(),
+        ..offer()
+    };
+    let e = parse_join_code(&with_invite(&h, 2, Some(vague)))
+        .unwrap_err()
+        .to_string();
+    assert_eq!(
+        e,
+        "invalid input: join code: the invite's end isn't a date and time (RFC 3339)"
+    );
+}
