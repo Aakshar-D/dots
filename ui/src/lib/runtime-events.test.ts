@@ -126,6 +126,7 @@ describe("runtime events and the query cache", () => {
       keys.library,
       keys.inbox,
       keys.workspaces("acme-eng"),
+      keys.apiKeys("acme-eng"),
       // A workspace that went away takes the scope in view with it, and moves dots to Default.
       keys.scope,
       keys.dots,

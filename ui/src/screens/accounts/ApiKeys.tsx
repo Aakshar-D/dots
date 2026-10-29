@@ -44,23 +44,34 @@ function CreateDialog(props: { scope: string; onClose: () => void }) {
   const items: WorkspaceView[] = spaces.data ?? [];
   const workspace = picked ?? items.find((w) => !w.refusals.create_api_keys)?.id ?? "";
   const refusal = items.find((w) => w.id === workspace)?.refusals.create_api_keys ?? null;
+  // The key goes straight into this dialog's state: the mutation below returns nothing, so the
+  // mutation cache (kept for minutes after the dialog closes) never holds it.
   const create = useMutation({
-    mutationFn: async (): Promise<Made> => {
+    mutationFn: async (): Promise<void> => {
       const answer = await commands.apiKeyCreate(props.scope, workspace, name.trim());
       // The server may be off: its reason is shown in the core's words beside the key.
       const base = await commands.apiBaseUrl().then(
         (url) => ({ url }),
         (e: unknown) => ({ reason: errorMessage(e) }),
       );
-      return { secret: answer.secret, base };
+      setMade({ secret: answer.secret, base });
     },
-    onSuccess: (answer) => {
-      setMade(answer);
+    onSuccess: () => {
       invalidate(qc, keys.apiKeys(props.scope));
+      invalidate(qc, keys.workspaces(props.scope));
     },
     onError: notifyError,
   });
-  const why = name.trim() === "" ? "Give the key a name first." : refusal;
+  const noneAllowed = items.length > 0 && items.every((w) => w.refusals.create_api_keys);
+  const why = spaces.isError
+    ? "The workspaces could not be loaded."
+    : !spaces.data
+      ? "Loading workspaces…"
+      : name.trim() === ""
+        ? "Give the key a name first."
+        : noneAllowed
+          ? (items[0]?.refusals.create_api_keys ?? null)
+          : refusal;
   return (
     <Dialog open onOpenChange={(next) => !next && props.onClose()}>
       <DialogContent className="sm:max-w-lg">
@@ -77,6 +88,12 @@ function CreateDialog(props: { scope: string; onClose: () => void }) {
         ) : (
           <>
             {spaces.isError && <ErrorNote error={spaces.error} />}
+            {!spaces.data && !spaces.isError && (
+              <p className="text-xs text-muted-foreground">Loading workspaces…</p>
+            )}
+            {noneAllowed && (
+              <p className="text-xs text-muted-foreground">{items[0]?.refusals.create_api_keys}</p>
+            )}
             <Field label="Name" htmlFor="api-key-name">
               <Input
                 id="api-key-name"
@@ -185,6 +202,7 @@ function KeyRow({ k, onRevoke }: { k: ApiKeyView; onRevoke: () => void }) {
           {k.last_used_at ? localDateTime(k.last_used_at) : "Never"}
         </span>
       </div>
+      {/* A revoked key cannot be used again, so there is nothing left to revoke. */}
       {!k.revoked_at &&
         (k.refusal ? (
           <Button
@@ -223,7 +241,10 @@ export function ApiKeys({ scope }: { scope: string }) {
   });
   const revoke = useMutation({
     mutationFn: (id: string) => commands.apiKeyRevoke(id),
-    onSuccess: () => invalidate(qc, keys.apiKeys(scope)),
+    onSuccess: () => {
+      invalidate(qc, keys.apiKeys(scope));
+      invalidate(qc, keys.workspaces(scope));
+    },
     onError: notifyError,
   });
   if (list.isError) return <ErrorNote error={list.error} />;

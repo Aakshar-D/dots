@@ -84,7 +84,7 @@ describe("Settings, Accounts, API keys", () => {
 
   it("create_shows_the_secret_once", async () => {
     account({ url: "http://127.0.0.1:4455" });
-    const { user, panel } = await keysTab();
+    const { user, panel, queryClient } = await keysTab();
     await within(panel).findByRole("listitem", { name: "CI" });
     await user.click(within(panel).getByRole("button", { name: "Create key" }));
     const dialog = await screen.findByRole("dialog");
@@ -102,6 +102,12 @@ describe("Settings, Accounts, API keys", () => {
       name: "Deploy",
     });
     await user.click(within(dialog).getByRole("button", { name: "Done" }));
+    // Neither cache keeps the key once the dialog is closed.
+    const held = JSON.stringify([
+      queryClient.getMutationCache().getAll().map((m) => [m.state.data, m.state.variables]),
+      queryClient.getQueryCache().getAll().map((q) => q.state.data),
+    ]);
+    expect(held).not.toContain(SECRET);
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     // The list has the new key, by its prefix alone, and the secret is nowhere.
     await within(panel).findByRole("listitem", { name: "Deploy" });
@@ -136,6 +142,19 @@ describe("Settings, Accounts, API keys", () => {
     expect(ops).toBeDisabled();
     expect(ops).toHaveAttribute("title", "Viewers can't make keys here.");
     expect(within(dialog).getByRole("option", { name: "Default" })).toBeEnabled();
+  });
+
+  it("create_is_off_with_the_core_text_when_every_workspace_is_refused", async () => {
+    account({ spaces: [ws("default", "Default", "Viewers can't make keys."), ws("ops", "Ops", "Viewers can't make keys.")] });
+    const { user, panel } = await keysTab();
+    await within(panel).findByRole("listitem", { name: "CI" });
+    await user.click(within(panel).getByRole("button", { name: "Create key" }));
+    const dialog = await screen.findByRole("dialog");
+    await user.type(within(dialog).getByLabelText("Name"), "Deploy");
+    const create = within(dialog).getByRole("button", { name: "Create" });
+    expect(create).toBeDisabled();
+    expect(create).toHaveAttribute("title", "Viewers can't make keys.");
+    expect(dialog).toHaveTextContent("Viewers can't make keys.");
   });
 
   it("server_off_shows_the_reason", async () => {
