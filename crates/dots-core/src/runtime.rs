@@ -997,15 +997,17 @@ impl Runtime {
                 )));
             }
         }
-        self.require(org_id.as_deref(), Permission::EditDots)
+        // New dots go to the account's Default workspace; the role there must allow them.
+        let workspace_id = crate::accounts::DEFAULT_WORKSPACE;
+        self.require_in(org_id.as_deref(), workspace_id, Permission::EditDots)
             .await?;
         if !spec.variables.0.is_empty() {
-            self.require(org_id.as_deref(), Permission::GrantEntries)
+            self.require_in(org_id.as_deref(), workspace_id, Permission::GrantEntries)
                 .await?;
         }
         let dot = self
             .store
-            .create_dot(&spec, org_id.as_deref(), "default")
+            .create_dot(&spec, org_id.as_deref(), workspace_id)
             .await?;
         self.sync_schedule(&dot, false).await?;
         self.scheduler.reload();
@@ -1022,11 +1024,9 @@ impl Runtime {
         if let Some(text) = self.vault.org_removed(&old) {
             return Err(Error::Conflict(text));
         }
-        self.require(old.org_id.as_deref(), Permission::EditDots)
-            .await?;
+        self.require_dot(&old, Permission::EditDots).await?;
         if spec.variables != old.spec.variables {
-            self.require(old.org_id.as_deref(), Permission::GrantEntries)
-                .await?;
+            self.require_dot(&old, Permission::GrantEntries).await?;
         }
         let was_enabled = old.spec.enabled;
         let dot = self.store.update_dot(id, &spec).await?;
@@ -1043,7 +1043,7 @@ impl Runtime {
     /// from the member list, and only cleaning up (`require_cleanup`).
     pub async fn delete_dot(&self, id: &str) -> Result<()> {
         let dot = self.store.get_dot(id).await?;
-        self.require_cleanup(dot.org_id.as_deref()).await?;
+        self.require_cleanup(&dot).await?;
         let had_row = self.store.get_schedule_state(id).await?.is_some();
         let proposals = self.store.list_app_proposals(Some(id)).await?;
         let watchers: Vec<String> = self
@@ -1084,10 +1084,9 @@ impl Runtime {
     pub async fn set_dot_enabled(&self, id: &str, enabled: bool) -> Result<Dot> {
         let old = self.store.get_dot(id).await?;
         if enabled {
-            self.require(old.org_id.as_deref(), Permission::EditDots)
-                .await?;
+            self.require_dot(&old, Permission::EditDots).await?;
         } else {
-            self.require_cleanup(old.org_id.as_deref()).await?;
+            self.require_cleanup(&old).await?;
         }
         let was_enabled = old.spec.enabled;
         let dot = self.store.set_dot_enabled(id, enabled).await?;
@@ -1463,34 +1462,52 @@ impl Runtime {
         crate::accounts::require(Some(&self.orgs), org_id, p).await
     }
 
-    /// `require` of `EditDots` for cleaning up a dot of `org_id`: switching it off or deleting
-    /// it. A PC waiting for, or removed from, the account's member list may still do that: its
-    /// dots can't run, and Leave removes the account. Enabling, editing and watcher changes stay
-    /// refused for it.
-    async fn require_cleanup(&self, org_id: Option<&str>) -> Result<()> {
-        if matches!(self.access(org_id), Access::Waiting | Access::Removed) {
-            return Ok(());
-        }
-        self.require(org_id, Permission::EditDots).await
+    /// `require` in the workspace `workspace_id` of `org_id`, where the member's role in the
+    /// workspace narrows the account role (members spec §6.3).
+    pub async fn require_in(
+        &self,
+        org_id: Option<&str>,
+        workspace_id: &str,
+        p: Permission,
+    ) -> Result<()> {
+        crate::accounts::require_in(Some(&self.orgs), org_id, workspace_id, p).await
     }
 
-    /// `require` in the account of the dot `dot_id`.
+    /// `require` on `dot`, in its account and workspace.
+    pub async fn require_dot(&self, dot: &Dot, p: Permission) -> Result<()> {
+        crate::accounts::require_dot(Some(&self.orgs), dot, p).await
+    }
+
+    /// `require_dot` of `EditDots` for cleaning up `dot`: switching it off or deleting it. A PC
+    /// waiting for, or removed from, the account's member list may still do that: its dots
+    /// can't run, and Leave removes the account. So may a member outside the dot's workspace
+    /// (members spec §6.3). Enabling, editing and watcher changes stay refused for them.
+    async fn require_cleanup(&self, dot: &Dot) -> Result<()> {
+        if matches!(
+            crate::accounts::access_dot(Some(&self.orgs), dot),
+            Access::Waiting | Access::Removed | Access::OutsideWorkspace { .. }
+        ) {
+            return Ok(());
+        }
+        self.require_dot(dot, Permission::EditDots).await
+    }
+
+    /// `require_dot` on the dot `dot_id`.
     async fn require_for_dot(&self, dot_id: &str, p: Permission) -> Result<()> {
         let dot = self.store.get_dot(dot_id).await?;
-        self.require(dot.org_id.as_deref(), p).await
+        self.require_dot(&dot, p).await
     }
 
     /// What a run the person starts of `dot` needs: its org still joined (env vault spec
-    /// §6.4), and a role that may run the account's dots.
+    /// §6.4), and a role that may run the dots of its account and workspace.
     async fn require_run(&self, dot: &Dot) -> Result<()> {
         if let Some(text) = self.vault.org_removed(dot) {
             return Err(Error::Conflict(text));
         }
-        self.require(dot.org_id.as_deref(), Permission::RunDots)
-            .await
+        self.require_dot(dot, Permission::RunDots).await
     }
 
-    /// `require` in the account of the dot of the run `run_id`.
+    /// `require_dot` on the dot of the run `run_id`.
     async fn require_for_run(&self, run_id: &str, p: Permission) -> Result<()> {
         let run = self.store.get_run(run_id).await?;
         self.require_for_dot(&run.dot_id, p).await

@@ -15,7 +15,10 @@ pub use identity::{
     MAX_EMAIL, MAX_PROFILE_NAME,
 };
 pub use membership::{Membership, NotMember};
-pub use permissions::{access, can, require, Access, Permission};
+pub use permissions::{
+    access, access_dot, access_in, can, require, require_dot, require_in, require_team,
+    workspace_name, Access, Permission,
+};
 pub use request::{make_request, parse_request, AccessRequest, RequestError, REQUEST_PREFIX};
 pub use roster::{
     open_accepted_roster, parse_roster, roster_envelope, roster_hash, verify_roster, Accepted,

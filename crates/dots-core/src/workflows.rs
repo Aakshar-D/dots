@@ -177,10 +177,11 @@ impl Workflows {
         let _ = self.orgs.set(orgs);
     }
 
-    /// `Ok` when this PC may do `p` in the account of the team `team_id` (members spec §6.3).
+    /// `Ok` when this PC may do `p` in the account and workspace of the team `team_id`
+    /// (members spec §6.3).
     async fn require(&self, team_id: &str, p: Permission) -> Result<()> {
         let team = self.store.get_team(team_id).await?;
-        crate::accounts::require(self.orgs.get(), team.org_id.as_deref(), p).await
+        crate::accounts::require_team(self.orgs.get(), &team, p).await
     }
 
     fn updated(&self, wr: &WorkflowRun) {

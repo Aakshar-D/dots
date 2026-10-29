@@ -808,6 +808,23 @@ impl Orgs {
         }
     }
 
+    /// The name the org's accepted member list gives the workspace `id`, for the texts that
+    /// name it (members spec §6.3). `None` when the org is not joined, keeps no list, or the
+    /// list has no such workspace.
+    pub fn workspace_name(&self, org_id: &str, id: &str) -> Option<String> {
+        match self.read().get(org_id) {
+            Some(Slot::Joined(joined)) => joined
+                .roster
+                .as_ref()?
+                .roster
+                .workspaces
+                .iter()
+                .find(|w| w.id == id)
+                .map(|w| w.name.clone()),
+            _ => None,
+        }
+    }
+
     /// Why this PC gets nothing from the org, when it is not on its member list: waiting,
     /// its Dots ID changed, or removed (members spec §6.4). `None` otherwise.
     pub fn not_member(&self, org_id: &str) -> Option<NotMember> {

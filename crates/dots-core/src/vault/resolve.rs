@@ -363,7 +363,8 @@ impl Vault {
     /// fetch that fails leaves the org as the fetch left it: its saved copy, while that holds,
     /// or the reason it gives nothing, which resolving then names. An org removed while the
     /// refresh waited is checked for again, so its dot does not start either. Nor does a dot of
-    /// an account this PC is not a member of, or whose role may not run dots: `NotAllowed`.
+    /// an account this PC is not a member of, or whose role (in the account or the dot's
+    /// workspace) may not run dots: `NotAllowed`.
     pub async fn before_run(&self, dot: &Dot) -> Result<()> {
         if let Some(text) = self.org_removed(dot) {
             return Err(Error::Other(text));
@@ -377,9 +378,9 @@ impl Vault {
                 return Err(Error::Other(text));
             }
             // A PC that is not on the account's member list runs none of its dots (§6.4), nor
-            // does a role that may not run them (members spec §6.3): the backstop for every
-            // trigger.
-            crate::accounts::require(Some(orgs), Some(&org_id), Permission::RunDots).await?;
+            // does a role that may not run them, in the account or the dot's workspace (members
+            // spec §6.3): the backstop for every trigger.
+            crate::accounts::require_dot(Some(orgs), dot, Permission::RunDots).await?;
         }
         Ok(())
     }

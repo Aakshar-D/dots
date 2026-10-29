@@ -212,7 +212,8 @@ impl Runner {
     }
 
     /// Why a queued background run of an account's dot may not start now: its account and the
-    /// words for the Inbox, when this PC's access to the account does not let it run dots.
+    /// words for the Inbox, when this PC's access to the dot's account and workspace does not
+    /// let it run dots (members spec §6.3).
     /// Manual and chat runs are refused when the person asks, so none is held here. `None` when
     /// the run may start, or is no run of an account's dot.
     pub async fn role_hold(&self, run: &Run) -> Result<Option<(String, String)>> {
@@ -228,8 +229,9 @@ impl Runner {
             return Ok(None);
         };
         let orgs = self.vault.get().and_then(|v| v.orgs());
-        let access = crate::accounts::access(orgs, Some(org_id));
-        if access.allows(crate::accounts::Permission::RunDots) {
+        let run_dots = crate::accounts::Permission::RunDots;
+        let access = crate::accounts::access_dot(orgs, &dot);
+        if access.allows(run_dots) {
             return Ok(None);
         }
         let account = match orgs {
@@ -238,17 +240,21 @@ impl Runner {
         }
         .unwrap_or_else(|| org_id.to_string());
         let text = match access {
+            // The account role would run it: the role in the dot's workspace does not.
+            crate::accounts::Access::Role(_)
+                if crate::accounts::access(orgs, Some(org_id)).allows(run_dots) =>
+            {
+                let workspace = crate::accounts::workspace_name(orgs, org_id, &dot.workspace_id);
+                format!(
+                    "{account}: your role in the {workspace} workspace doesn't allow running dots"
+                )
+            }
             crate::accounts::Access::Role(_) => {
                 format!("{account}: your role no longer allows running dots")
             }
-            // Waiting, changed Dots ID or removed: the refusal says which.
-            _ => match crate::accounts::require(
-                orgs,
-                Some(org_id),
-                crate::accounts::Permission::RunDots,
-            )
-            .await
-            {
+            // Waiting, changed Dots ID, removed, or outside the workspace: the refusal says
+            // which.
+            _ => match crate::accounts::require_dot(orgs, &dot, run_dots).await {
                 Err(Error::NotAllowed(text)) => text,
                 _ => format!("{account}: your role no longer allows running dots"),
             },
@@ -256,18 +262,14 @@ impl Runner {
         Ok(Some((account, text)))
     }
 
-    /// `Ok` when this PC's access to the account of `dot` lets it run dots, otherwise the
-    /// refusal naming the role, or why this PC is not on the member list (members spec §6.3).
+    /// `Ok` when this PC's access to the account and workspace of `dot` lets it run dots,
+    /// otherwise the refusal naming the role, or why this PC is not on the member list or in
+    /// the workspace (members spec §6.3).
     /// For a trigger that would queue runs to fire later, such as a webhook: it is refused
     /// when it is called instead.
     pub async fn require_run(&self, dot: &Dot) -> Result<()> {
         let orgs = self.vault.get().and_then(|v| v.orgs());
-        crate::accounts::require(
-            orgs,
-            dot.org_id.as_deref(),
-            crate::accounts::Permission::RunDots,
-        )
-        .await
+        crate::accounts::require_dot(orgs, dot, crate::accounts::Permission::RunDots).await
     }
 
     /// How many background Claude runs the runner holds now.
