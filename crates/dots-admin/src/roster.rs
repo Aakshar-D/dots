@@ -10,6 +10,7 @@ use std::fs::OpenOptions;
 use std::io::{Cursor, ErrorKind, Write};
 
 use chrono::{DateTime, Utc};
+use dots_core::accounts::edit::{default_workspace_role, new_member_id};
 use dots_core::accounts::roster::{
     parse_roster, roster_envelope, verify_roster, Member, Role, Roster, RosterError, Workspace,
     WorkspaceRole, ROSTER_VERSION,
@@ -67,26 +68,6 @@ fn write_roster(path: &str, roster: &Roster) -> Result<()> {
     write_file(path, &text)
 }
 
-/// A member id from their first key and email, which no other member shares: the first 12
-/// hex digits of the key's fingerprint, with a number added if the list already has it.
-fn member_id(roster: &Roster, key: &str) -> Result<String> {
-    let fingerprint = key_fingerprint(key).map_err(core_failed)?;
-    let hex: String = fingerprint
-        .chars()
-        .filter(char::is_ascii_hexdigit)
-        .take(12)
-        .collect::<String>()
-        .to_lowercase();
-    let base = format!("m-{hex}");
-    let mut id = base.clone();
-    let mut n = 1;
-    while roster.members.iter().any(|m| m.id == id) {
-        n += 1;
-        id = format!("{base}-{n}");
-    }
-    Ok(id)
-}
-
 fn parse_role(text: &str) -> Result<Role> {
     Role::parse(text).map_err(|_| {
         failed(format!(
@@ -101,16 +82,6 @@ fn parse_workspace_role(text: &str) -> Result<WorkspaceRole> {
             "'{text}' is not a workspace role; use admin, member or viewer"
         ))
     })
-}
-
-/// The role a person gets in the `default` workspace unless `--workspace default=…` says
-/// otherwise: their account role, with Owner counting as Admin.
-fn default_workspace_role(role: Role) -> WorkspaceRole {
-    match role {
-        Role::Owner | Role::Admin => WorkspaceRole::Admin,
-        Role::Member => WorkspaceRole::Member,
-        Role::Viewer => WorkspaceRole::Viewer,
-    }
 }
 
 /// `--workspace <id>=<role>` values as a map; the same id twice is refused.
@@ -160,7 +131,7 @@ pub fn new_roster(
         members: Vec::new(),
     };
     roster.members.push(Member {
-        id: member_id(&roster, owner_key)?,
+        id: new_member_id(&roster, owner_key),
         name: owner_name.to_string(),
         email: owner_email.to_string(),
         role: Role::Owner,
@@ -263,7 +234,7 @@ fn add_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
             BTreeMap::from([("default".to_string(), default_workspace_role(role))]);
         workspaces.extend(given);
         let member = Member {
-            id: member_id(&roster, key)?,
+            id: new_member_id(&roster, key),
             name: name.to_string(),
             email: email.to_string(),
             role,

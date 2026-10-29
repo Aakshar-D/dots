@@ -1,6 +1,7 @@
 //! Accounts: the Dots ID of this install, and (later) the members and workspaces built on it
 //! (accounts design §5).
 
+pub mod edit;
 mod identity;
 mod membership;
 mod permissions;
