@@ -24,6 +24,14 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
   const allMessages =
     useQuery({ queryKey: keys.messages(null), queryFn: () => commands.messagesList(null) }).data ??
     [];
+  // The instructions the dot proposed that wait for the person (conversational chat spec
+  // section 4), each on a card under the run that proposed it.
+  const proposals = (
+    useQuery({
+      queryKey: keys.instructionProposals(dot.id),
+      queryFn: () => commands.instructionProposalsList(dot.id),
+    }).data ?? []
+  ).filter((p) => p.status === "pending");
   const held =
     useQuery({ queryKey: keys.limits, queryFn: commands.limitsGet }).data?.held_run_ids ?? [];
   useEffect(() => rememberDot(dot.id), [dot.id]);
@@ -58,6 +66,7 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
         topics={view.pending ? [] : view.shown}
         checkIns={view.checkIns}
         dotName={dot.name}
+        proposals={proposals}
         onReply={(topic) => setPick({ kind: "topic", rootId: topic.rootId })}
       >
         <LoadErrors queries={[view.list, ...view.threads]} />

@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 
 import { commands } from "@/api/commands";
-import type { Message } from "@/api/types";
+import type { InstructionProposal, Message } from "@/api/types";
 import { AppReviews } from "@/components/AppReviewCard";
 import { ErrorNote } from "@/components/ErrorNote";
 import { Button } from "@/components/ui/button";
@@ -19,6 +19,8 @@ export function Timeline(props: {
   topics: Topic[];
   checkIns: Message[];
   dotName: string;
+  /// The instructions the dot proposed that wait for the person.
+  proposals: InstructionProposal[];
   /// Reply on a run card: makes its topic the reply target.
   onReply: (topic: Topic) => void;
   /// Shown above the topics: a failed load, or what to do when there is none.
@@ -51,6 +53,7 @@ export function Timeline(props: {
               runs={topic.runs}
               checkIns={checkIns}
               dotName={dotName}
+              proposals={props.proposals}
             />
           ) : (
             <div key={topic.rootId} className="flex flex-col gap-4">

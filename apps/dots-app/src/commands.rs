@@ -1239,6 +1239,34 @@ pub async fn app_proposal_decide(
     Ok(state.rt()?.decide_app_proposal(&id, decision).await?.0)
 }
 
+/// The instructions dots proposed, of one dot or of all, newest first (conversational chat
+/// spec section 4).
+#[tauri::command]
+pub async fn instruction_proposals_list(
+    state: State<'_, AppState>,
+    dot_id: Option<String>,
+) -> Res<Vec<dots_core::instructions::InstructionProposal>> {
+    Ok(state
+        .rt()?
+        .store()
+        .list_instruction_proposals(dot_id.as_deref())
+        .await?)
+}
+
+/// The person's answer on the card: approve (save the instructions) or reject.
+#[tauri::command]
+pub async fn instruction_proposal_decide(
+    state: State<'_, AppState>,
+    id: String,
+    approve: bool,
+) -> Res<dots_core::instructions::InstructionProposal> {
+    Ok(state
+        .rt()?
+        .decide_instruction_proposal(&id, approve)
+        .await?
+        .0)
+}
+
 /// The dot's watchers, oldest first (watchers spec section 8).
 #[tauri::command]
 pub async fn watchers_list(state: State<'_, AppState>, dot_id: String) -> Res<Vec<Watcher>> {

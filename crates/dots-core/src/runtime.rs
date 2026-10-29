@@ -704,6 +704,16 @@ impl Runtime {
                 })
             })
             .collect();
+        let instructions = self
+            .store
+            .pending_instruction_proposals()
+            .await?
+            .into_iter()
+            .map(|proposal| crate::instructions::PendingInstructions {
+                dot_name: name(&proposal.dot_id),
+                proposal,
+            })
+            .collect();
         let app_reviews = self
             .store
             .list_pending_app_proposals()
@@ -722,6 +732,7 @@ impl Runtime {
             tools_changed: self.library.tools_changed().await?,
             watchers: self.store.paused_watchers().await?,
             held: self.held_runs(&names).await?,
+            instructions,
             app_reviews,
         })
     }
@@ -736,6 +747,7 @@ impl Runtime {
             + inbox.watchers.len()
             // Held runs wait as one line, however many (usage and limits spec section 5).
             + usize::from(!inbox.held.is_empty())
+            + inbox.instructions.len()
             // A waiting review card counts like an approval (app library spec section 10).
             + inbox.app_reviews.len()
             + self.store.count_waiting_messages().await?)
@@ -1068,7 +1080,8 @@ impl Runtime {
         let dot = self.store.get_dot(dot_id).await?;
         self.refuse_at_the_limit(&dot)?;
         let mut new = NewRun::new(dot_id, TriggerKind::Chat);
-        new.payload = Some(json!({ "message": message }));
+        // The person typed it (conversational chat spec section 3).
+        new.payload = Some(json!({ "message": message, crate::prompt::TYPED: true }));
         // Held until the new run is stored: of two follow-ups sent at once, the second must
         // find the first one's run in the thread.
         let _one_at_a_time = self.chat_lock.lock().await;
@@ -1238,6 +1251,71 @@ impl Runtime {
         self.runner.enqueued(&run);
         self.apps.drop_proposed(id).await;
         self.apps.proposal_changed(&decided);
+        Ok((decided, run))
+    }
+
+    /// The person's answer on a card of instructions a dot proposed (conversational chat spec
+    /// section 4). Approving saves them as the editor does (`update_dot`), unless the dot's
+    /// instructions changed since it proposed: that is a `Conflict` and the card waits; if they
+    /// changed to the proposal itself, they are kept as they are and the approval goes on. Then
+    /// the proposal is decided and the dot's chat continues with what the person decided, as
+    /// for an app proposal (`decide_app_proposal`). A chat that has not ended is refused.
+    pub async fn decide_instruction_proposal(
+        &self,
+        id: &str,
+        approve: bool,
+    ) -> Result<(crate::instructions::InstructionProposal, Run)> {
+        use crate::instructions::{InstructionStatus, APPROVED, DECIDED_ALREADY, REJECTED, STALE};
+        let lock = self.follow_ups.thread_lock();
+        let _one_at_a_time = lock.lock().await;
+        let p = self.store.get_instruction_proposal(id).await?;
+        if p.status != InstructionStatus::Pending {
+            return Err(Error::Conflict(DECIDED_ALREADY.into()));
+        }
+        let asked = self.store.get_run(&p.run_id).await?;
+        // A chat adding an app the person accepted is not continued (`decide_app_proposal`).
+        if self.follow_ups.deciding(&asked.root_run_id) {
+            return Err(Error::Conflict(crate::checkins::DECIDING.into()));
+        }
+        let thread = self.store.list_thread(&asked.root_run_id).await?;
+        if let Some(active) = thread.iter().find(|r| !r.status.is_terminal()) {
+            return Err(crate::checkins::thread_busy(active.status));
+        }
+        let end = thread.last().unwrap_or(&asked);
+        let (status, said) = if approve {
+            let dot = self.store.get_dot(&p.dot_id).await?;
+            let current = dot.spec.instructions.trim();
+            // Instructions that already say the proposal (the person typed it in the editor)
+            // count as applied: nothing is saved again, and the approval goes on.
+            if current != p.instructions {
+                if current != p.base {
+                    return Err(Error::Conflict(STALE.into()));
+                }
+                let mut spec = dot.spec;
+                spec.instructions = p.instructions.clone();
+                self.update_dot(&p.dot_id, spec).await?;
+            }
+            (InstructionStatus::Approved, APPROVED)
+        } else {
+            (InstructionStatus::Rejected, REJECTED)
+        };
+        let message = if end.session_id.is_some() {
+            said.to_string()
+        } else {
+            format!(
+                "Earlier you proposed new instructions: \"{}\"\n{said}",
+                p.reason
+            )
+        };
+        let new = crate::checkins::continuation(&asked, end, message, None);
+        let (decided, run) = self
+            .store
+            .decide_instruction_proposal(id, status, &new)
+            .await?;
+        self.runner.enqueued(&run);
+        self.checkins
+            .instructions()
+            .changed(&decided.id, &decided.dot_id);
         Ok((decided, run))
     }
 

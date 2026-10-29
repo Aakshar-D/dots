@@ -1103,6 +1103,13 @@ pub fn samples() -> Value {
                 at: TS.into(),
             }],
             held: held_runs(),
+            instructions: vec![dots_core::instructions::PendingInstructions {
+                proposal: instruction_proposal(
+                    "01J0INS",
+                    dots_core::instructions::InstructionStatus::Pending,
+                ),
+                dot_name: "shopper".into(),
+            }],
             // Filled in by `app_samples`, which has a proposal.
             app_reviews: vec![],
         }),
@@ -1239,6 +1246,10 @@ pub fn samples() -> Value {
             }),
             to(RuntimeEvent::AppProposalChanged {
                 id: "01J0PROPOSAL".into(),
+                dot_id: "01J0DOT".into(),
+            }),
+            to(RuntimeEvent::InstructionProposalChanged {
+                id: "01J0INSTRUCTIONS".into(),
                 dot_id: "01J0DOT".into(),
             }),
             to(RuntimeEvent::WatcherUpdated {
@@ -1384,6 +1395,12 @@ pub fn samples() -> Value {
     ]);
     samples["Enums"]["EntryKind"] = to(EntryKind::ALL);
     apps_samples(&mut samples);
+    samples["InstructionProposal"] = to(dots_core::instructions::InstructionStatus::ALL
+        .iter()
+        .enumerate()
+        .map(|(i, s)| instruction_proposal(&format!("01J0INS{i}"), *s))
+        .collect::<Vec<_>>());
+    samples["Enums"]["InstructionStatus"] = to(dots_core::instructions::InstructionStatus::ALL);
     samples["DraftSummary"] = to(DraftSummary {
         name: "pr-tests".into(),
         description: "Checks a PR for missing tests.".into(),
@@ -1417,6 +1434,31 @@ pub fn samples() -> Value {
     samples["Enums"]["ValueSource"] = to(ValueSource::ALL);
     samples["Enums"]["PersonalMode"] = to(PersonalMode::ALL);
     samples
+}
+
+/// Instructions a dot proposed (conversational chat spec section 4), with `status`.
+fn instruction_proposal(
+    id: &str,
+    status: dots_core::instructions::InstructionStatus,
+) -> dots_core::instructions::InstructionProposal {
+    use dots_core::instructions::{InstructionProposal, InstructionStatus};
+    let decided = status != InstructionStatus::Pending;
+    InstructionProposal {
+        id: id.into(),
+        dot_id: "01J0DOT".into(),
+        run_id: "01J0RUN".into(),
+        root_run_id: "01J0RUN".into(),
+        base: "Order the usual groceries.".into(),
+        instructions: "Order the usual groceries.\nIf an item is out of stock, buy the \
+                       closest brand and say so in the summary."
+            .into(),
+        reason: "Buy the closest brand when an item is out of stock.".into(),
+        status,
+        answer_run_id: (decided && status != InstructionStatus::Replaced)
+            .then(|| "01J0RUN2".into()),
+        created_at: TS.into(),
+        decided_at: decided.then(|| TS.into()),
+    }
 }
 
 /// The apps' samples (app library spec): a row of the Apps screen, files, a logged call of each

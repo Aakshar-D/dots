@@ -72,6 +72,12 @@ pub enum RuntimeEvent {
         id: String,
         dot_id: String,
     },
+    /// A dot proposed instructions, or a proposal was decided or replaced (conversational chat
+    /// spec section 4): the card reads it again.
+    InstructionProposalChanged {
+        id: String,
+        dot_id: String,
+    },
     /// A team, its members or its projects were made, changed or deleted (teams spec
     /// section 11).
     TeamUpdated {
