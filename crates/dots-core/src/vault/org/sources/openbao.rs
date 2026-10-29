@@ -17,7 +17,8 @@ use zeroize::Zeroizing;
 
 use super::{
     collect_entries, endpoint, path_segments, read_json, request_failed, roster_text,
-    status_failed, Fetched, Field, Source, SourceCreds, SourceError, POLICY_ENTRY, ROSTER_ENTRY,
+    status_failed, Fetched, Field, PublishError, Source, SourceCreds, SourceError, POLICY_ENTRY,
+    ROSTER_ENTRY,
 };
 use crate::vault::org::{BaoAuth, OpenBaoSettings};
 
@@ -80,6 +81,8 @@ struct Reads {
     policy_name: String,
     roster: Url,
     roster_name: String,
+    /// The roster as the KV v2 API names it, `secret/data/dots/roster`, for a refused write.
+    roster_write_name: String,
 }
 
 #[derive(Deserialize)]
@@ -155,6 +158,7 @@ impl OpenBao {
             policy_name: name("policy"),
             roster: url("roster")?,
             roster_name: name("roster"),
+            roster_write_name: format!("{}/data/{}/roster", mount.join("/"), path.join("/")),
         })
     }
 
@@ -438,6 +442,71 @@ impl OpenBao {
         fetched
     }
 
+    /// One KV v2 write of `signed` as `DOTS_ROSTER`. Any 2xx is done; the answer's body, which
+    /// holds only version metadata, is not read.
+    async fn write_roster(
+        &self,
+        url: &Url,
+        name: &str,
+        token: &str,
+        signed: &str,
+    ) -> Result<(), SourceError> {
+        let body = Zeroizing::new(
+            serde_json::to_vec(&serde_json::json!({ "data": { ROSTER_ENTRY: signed } }))
+                .expect("a roster body serializes"),
+        );
+        let response = self
+            .request(self.http.post(url.clone()), Some(token))?
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(body.to_vec())
+            .send()
+            .await
+            .map_err(|e| request_failed(self.address(), e))?;
+        match response.status() {
+            s if s.is_success() => Ok(()),
+            StatusCode::SERVICE_UNAVAILABLE => Err(self.not_ready()),
+            s => Err(status_failed(self.address(), name, s)),
+        }
+    }
+
+    /// A write with a username and password. The token of the last login is used while it is
+    /// good; if the source refuses the write with it, one new login and one more try.
+    async fn write_with_login(
+        &self,
+        reads: &Reads,
+        mount: &str,
+        username: &str,
+        password: &str,
+        signed: &str,
+    ) -> Result<(), SourceError> {
+        let url = self.login_url(mount, username)?;
+        let creds = creds_hash(username, password);
+        let mut cached = self.login.lock().await;
+        if let Some(c) = cached.as_ref().filter(|c| c.usable(&creds)) {
+            match self
+                .write_roster(&reads.roster, &reads.roster_write_name, &c.token, signed)
+                .await
+            {
+                Err(SourceError::Denied(_)) => {}
+                done => return done,
+            }
+        }
+        *cached = None;
+        let token = self.log_in(&url, mount, password, creds).await?;
+        let done = self
+            .write_roster(
+                &reads.roster,
+                &reads.roster_write_name,
+                &token.token,
+                signed,
+            )
+            .await;
+        if !matches!(done, Err(SourceError::Denied(_))) {
+            *cached = Some(token);
+        }
+        done
+    }
+
     /// Checks the token once an hour, and renews it if it is renewable. A failure is logged,
     /// never an error: the next read will say if the token stopped working.
     async fn renew_if_due(&self, token: &str) {
@@ -531,6 +600,33 @@ impl Source for OpenBao {
                 "this org's OpenBao signs in with {}, so it needs a username and password",
                 auth.as_str()
             ))),
+        }
+    }
+
+    async fn publish_roster(&self, creds: &SourceCreds, signed: &str) -> Result<(), PublishError> {
+        let reads = self.reads()?;
+        let auth = self.settings.auth;
+        match (auth, creds) {
+            (BaoAuth::Token, SourceCreds::Token { token }) if !token.is_empty() => Ok(self
+                .write_roster(&reads.roster, &reads.roster_write_name, token, signed)
+                .await?),
+            (BaoAuth::Token, _) => Err(SourceError::Invalid(
+                "this org's OpenBao signs in with a token, so it needs a token".into(),
+            )
+            .into()),
+            (_, SourceCreds::Login { username, password })
+                if !username.is_empty() && !password.is_empty() =>
+            {
+                let mount = self.settings.login_mount().unwrap_or(auth.as_str());
+                Ok(self
+                    .write_with_login(&reads, mount, username, password, signed)
+                    .await?)
+            }
+            (_, _) => Err(SourceError::Invalid(format!(
+                "this org's OpenBao signs in with {}, so it needs a username and password",
+                auth.as_str()
+            ))
+            .into()),
         }
     }
 }

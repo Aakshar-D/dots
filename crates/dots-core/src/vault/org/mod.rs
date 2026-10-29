@@ -33,7 +33,7 @@ pub use service::{
 };
 pub use signed::{envelope, verify_policy};
 pub use sources::{
-    http_client, http_client_with_timeout, source_for, Fetched, Infisical, OpenBao, Sops, Source,
-    SourceCreds, SourceError, POLICY_ENTRY,
+    http_client, http_client_with_timeout, source_for, Fetched, Infisical, OpenBao, PublishError,
+    Sops, Source, SourceCreds, SourceError, POLICY_ENTRY,
 };
 pub use timers::OrgTimers;

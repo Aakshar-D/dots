@@ -22,7 +22,8 @@ use zeroize::Zeroizing;
 
 use super::{
     collect_entries, endpoint, is_dot_segment, read_json, request_failed, roster_text,
-    status_failed, Fetched, Field, Source, SourceCreds, SourceError, POLICY_ENTRY, ROSTER_ENTRY,
+    status_failed, Fetched, Field, PublishError, Source, SourceCreds, SourceError, POLICY_ENTRY,
+    ROSTER_ENTRY,
 };
 use crate::vault::entries::check_variable_name;
 use crate::vault::org::InfisicalSettings;
@@ -289,6 +290,82 @@ impl Infisical {
         }
     }
 
+    /// Writes `DOTS_ROSTER` into the policy folder `folder`, where the reads find it: an update
+    /// (`PATCH`), or a create (`POST`) when the secret is not there yet and the update says 404.
+    async fn write_roster(
+        &self,
+        folder: &str,
+        token: &str,
+        signed: &str,
+    ) -> Result<(), SourceError> {
+        let url = endpoint(&self.site, ["api", "v4", "secrets", ROSTER_ENTRY])?;
+        let body = Zeroizing::new(
+            serde_json::to_vec(&serde_json::json!({
+                "projectId": self.settings.project_id,
+                "environment": self.settings.environment,
+                "secretPath": folder,
+                "secretValue": signed,
+                "type": "shared",
+            }))
+            .expect("a roster body serializes"),
+        );
+        let name = format!("{ROSTER_ENTRY} at {}:{folder}", self.settings.environment);
+        let bearer = Zeroizing::new(format!("Bearer {token}"));
+        let mut bearer = HeaderValue::from_str(&bearer).map_err(|_| {
+            SourceError::Invalid(format!(
+                "the access token from {} holds characters a header cannot carry",
+                self.site
+            ))
+        })?;
+        bearer.set_sensitive(true);
+        for update in [true, false] {
+            let request = if update {
+                self.http.patch(url.clone())
+            } else {
+                self.http.post(url.clone())
+            };
+            let response = request
+                .header(AUTHORIZATION, bearer.clone())
+                .header(CONTENT_TYPE, "application/json")
+                .body(body.to_vec())
+                .send()
+                .await
+                .map_err(|e| request_failed(&self.site, e))?;
+            match response.status() {
+                s if s.is_success() => return Ok(()),
+                StatusCode::NOT_FOUND if update => continue,
+                s => return Err(status_failed(&self.site, &name, s)),
+            }
+        }
+        unreachable!("the second pass always returns")
+    }
+
+    /// A write with the machine identity, with the token handling of `fetch_with`.
+    async fn write_with(
+        &self,
+        folder: &str,
+        client_id: &str,
+        client_secret: &str,
+        signed: &str,
+    ) -> Result<(), SourceError> {
+        let url = endpoint(&self.site, ["api", "v1", "auth", "universal-auth", "login"])?;
+        let creds = creds_hash(client_id, client_secret);
+        let mut cached = self.login.lock().await;
+        if let Some(c) = cached.as_ref().filter(|c| c.usable(&creds)) {
+            match self.write_roster(folder, &c.token, signed).await {
+                Err(SourceError::Denied(_)) => {}
+                done => return done,
+            }
+        }
+        *cached = None;
+        let token = self.log_in(&url, client_id, client_secret, creds).await?;
+        let done = self.write_roster(folder, &token.token, signed).await;
+        if !matches!(done, Err(SourceError::Denied(_))) {
+            *cached = Some(token);
+        }
+        done
+    }
+
     /// A fetch with the machine identity. The token of the last login is used while it is
     /// good; if the source refuses it, the fetch logs in once more and tries again.
     async fn fetch_with(
@@ -442,6 +519,24 @@ impl Source for Infisical {
                  and client secret"
                     .into(),
             )),
+        }
+    }
+
+    async fn publish_roster(&self, creds: &SourceCreds, signed: &str) -> Result<(), PublishError> {
+        let folder = policy_folder(&folder_path(&self.settings.secret_path)?);
+        match creds {
+            SourceCreds::Machine {
+                client_id,
+                client_secret,
+            } if !client_id.is_empty() && !client_secret.is_empty() => Ok(self
+                .write_with(&folder, client_id, client_secret, signed)
+                .await?),
+            _ => Err(SourceError::Invalid(
+                "this org's Infisical signs in with a machine identity, so it needs a client id \
+                 and client secret"
+                    .into(),
+            )
+            .into()),
         }
     }
 }

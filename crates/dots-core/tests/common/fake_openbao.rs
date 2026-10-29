@@ -63,6 +63,8 @@ struct Fake {
     /// KV paths, `<mount>/data/<path>`, every read of which is refused (403), as an ACL that
     /// does not grant them answers.
     denied: HashSet<String>,
+    /// KV paths every write to which is refused (403), as an ACL that grants only read does.
+    denied_writes: HashSet<String>,
     refuse_renewals: bool,
     /// What every login answers instead, as a status and one `errors` text.
     login_error: Option<(u16, String)>,
@@ -148,6 +150,14 @@ impl FakeOpenBao {
         self.fake().denied.insert(format!("{mount}/data/{path}"));
     }
 
+    /// Refuses every write to `<mount>/data/<path>` with a 403, as a token whose ACL grants
+    /// only reading it is refused. Reads are not affected.
+    pub fn deny_writes(&self, mount: &str, path: &str) {
+        self.fake()
+            .denied_writes
+            .insert(format!("{mount}/data/{path}"));
+    }
+
     /// Accepts `token` from now on. `lookup-self` says whether it is `renewable`.
     pub fn allow_token(&self, token: &str, renewable: bool) {
         self.fake().tokens.insert(token.to_string(), renewable);
@@ -175,7 +185,7 @@ impl FakeOpenBao {
         );
     }
 
-    /// The next `count` KV reads answer `failure`. Logins and token calls are not affected.
+    /// The next `count` KV reads or writes answer `failure`. Logins and token calls are not affected.
     pub fn fail_next(&self, failure: Failure, count: usize) {
         let mut fake = self.fake();
         for _ in 0..count {
@@ -318,7 +328,8 @@ async fn handle(
             namespace: header(&headers, "x-vault-namespace"),
             body: serde_json::from_slice(&body).ok(),
         });
-        let kv_read = method == Method::GET && !path.starts_with("/v1/auth/");
+        let kv_read =
+            (method == Method::GET || method == Method::POST) && !path.starts_with("/v1/auth/");
         if kv_read {
             fake.failures.pop_front()
         } else {
@@ -416,6 +427,27 @@ async fn handle(
             Value::Null,
             auth_answer(token.as_deref().unwrap(), "", 3600),
         ),
+        (Method::POST, kv) if fake.denied_writes.contains(kv) => denied(),
+        (Method::POST, kv) if kv.contains("/data/") => {
+            // A KV v2 write: `{"data": {…}}` replaces the secret, and the answer is its metadata.
+            match serde_json::from_slice::<Value>(&body) {
+                Ok(Value::Object(mut write)) if write.get("data").is_some_and(Value::is_object) => {
+                    let data = write.remove("data").unwrap();
+                    fake.kv.insert(kv.to_string(), data);
+                    envelope(
+                        json!({
+                            "created_time": "2026-10-23T09:00:00.000000000Z",
+                            "custom_metadata": null,
+                            "deletion_time": "",
+                            "destroyed": false,
+                            "version": 2,
+                        }),
+                        Value::Null,
+                    )
+                }
+                _ => errors(400, &["no data provided"]),
+            }
+        }
         (Method::GET, kv) if fake.denied.contains(kv) => denied(),
         (Method::GET, kv) => match fake.kv.get(kv) {
             Some(data) => envelope(
