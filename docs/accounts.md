@@ -182,9 +182,20 @@ The local server answers on `http://127.0.0.1:PORT`, where PORT is the port in *
 create dialog shows the exact base URL (`http://127.0.0.1:PORT/v1`). If the local server is not
 running, it says so instead. Send the key as a Bearer token:
 
+On Windows, use `curl.exe` (in PowerShell, plain `curl` is a different command). This works in cmd and PowerShell:
+
+```
+curl.exe -H "Authorization: Bearer dots_sk_..." http://127.0.0.1:PORT/v1/dots
+curl.exe -X POST -H "Authorization: Bearer dots_sk_..." -d "{\"order\":\"A-17\"}" http://127.0.0.1:PORT/v1/dots/DOT_ID/trigger
+curl.exe -H "Authorization: Bearer dots_sk_..." http://127.0.0.1:PORT/v1/runs/RUN_ID
+```
+
+Or put the body in a file and send it with `-d @payload.json`. In bash (macOS, Linux, Git Bash):
+
 ```bash
 curl -H "Authorization: Bearer dots_sk_..." http://127.0.0.1:PORT/v1/dots
-curl -X POST -H "Authorization: Bearer dots_sk_..." -d '{"order":"A-17"}'   http://127.0.0.1:PORT/v1/dots/DOT_ID/trigger
+curl -X POST -H "Authorization: Bearer dots_sk_..." -d '{"order":"A-17"}' \
+  http://127.0.0.1:PORT/v1/dots/DOT_ID/trigger
 curl -H "Authorization: Bearer dots_sk_..." http://127.0.0.1:PORT/v1/runs/RUN_ID
 ```
 
