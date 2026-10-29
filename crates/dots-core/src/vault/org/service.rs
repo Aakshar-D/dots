@@ -38,7 +38,7 @@ use super::sources::{source_for, Fetched, Source, SourceCreds, SourceError};
 use super::SourceSettings;
 use crate::accounts::{
     make_request, open_accepted_roster, roster_hash, verify_roster, Membership, NotMember, Role,
-    Roster, RosterError,
+    Roster, RosterError, WorkspaceRole,
 };
 use crate::model::DotRef;
 use crate::scheduler::Clock;
@@ -798,6 +798,16 @@ impl Orgs {
         }
     }
 
+    /// This PC's entries on the org's member list: the workspaces it was put in, with its role in
+    /// each (members spec §6.3). `None` when the org is not joined; empty for a damaged one.
+    pub fn my_workspaces(&self, org_id: &str) -> Option<BTreeMap<String, WorkspaceRole>> {
+        match self.read().get(org_id) {
+            Some(Slot::Joined(joined)) => Some(joined.row.member.workspaces.clone()),
+            Some(Slot::Damaged { .. }) => Some(BTreeMap::new()),
+            Some(Slot::Pending(_)) | None => None,
+        }
+    }
+
     /// Why this PC gets nothing from the org, when it is not on its member list: waiting,
     /// its Dots ID changed, or removed (members spec §6.4). `None` otherwise.
     pub fn not_member(&self, org_id: &str) -> Option<NotMember> {
@@ -1188,6 +1198,7 @@ impl Orgs {
         at: DateTime<Utc>,
     ) {
         self.failed_at().remove(&row.id);
+        self.mirror_workspaces(&row.id, &evaluated).await;
         let roster = evaluated.roster.as_ref().map(|kept| kept.signed.as_str());
         let copy_until = self.save_copy(&row.id, &policy, &fetched, roster, at).await;
         add_secrets(&policy, &fetched.entries);
@@ -1204,6 +1215,24 @@ impl Orgs {
             roster_error: evaluated.error,
         };
         self.write().insert(id, Slot::Joined(Box::new(joined)));
+    }
+
+    /// Makes the org's workspaces those of the member list a fetch has just accepted (accounts
+    /// design §6.3). A fetch that kept the old list (it refused the new one) and an account
+    /// without a list change nothing: a legacy account keeps its Default workspace alone. A
+    /// failure is logged; the next fetch mirrors again.
+    async fn mirror_workspaces(&self, org_id: &str, evaluated: &Evaluated) {
+        let (Some(kept), None) = (&evaluated.roster, &evaluated.error) else {
+            return;
+        };
+        if let Err(e) = self
+            .inner
+            .store
+            .mirror_workspaces(org_id, &kept.roster.workspaces)
+            .await
+        {
+            tracing::warn!("org {org_id:?}: its workspaces were not updated: {e}");
+        }
     }
 
     /// Writes the copy of a good fetch, and says until when it may be used. Under

@@ -1,6 +1,15 @@
-//! Workspace ids (accounts design §6.3): made from a name, never changed after.
+//! Workspaces (accounts design §6.3): their ids, made from a name and never changed after, and
+//! which of an account's this PC may see.
 
-use super::DEFAULT_WORKSPACE;
+use serde::Serialize;
+
+use super::membership::Membership;
+use super::permissions::{access, Permission};
+use super::roster::{Role, WorkspaceRole};
+use super::{DEFAULT_WORKSPACE, PERSONAL};
+use crate::store::Store;
+use crate::vault::org::{Orgs, UseRules};
+use crate::Result;
 
 /// The longest a workspace id may be (`^[a-z0-9][a-z0-9-]{0,31}$`).
 const MAX_ID: usize = 32;
@@ -31,4 +40,66 @@ pub fn workspace_id_for(name: &str, taken: &[String]) -> String {
         })
         .find(|id| !is_taken(id))
         .expect("an unused number exists")
+}
+
+/// A workspace as this PC sees it.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct WorkspaceView {
+    /// `personal`, or the id of the org the workspace belongs to.
+    pub scope: String,
+    pub id: String,
+    pub name: String,
+    pub use_rules: Option<UseRules>,
+    /// This PC's role in the workspace: its entry on the member list (an Owner or Admin of the
+    /// account is `Admin` in every workspace). `None` in Personal and in an account with no
+    /// member list.
+    pub my_role: Option<WorkspaceRole>,
+    /// Whether this PC may rename, add or delete workspaces here.
+    pub can_manage: bool,
+}
+
+/// The workspaces of `scope` this PC may see (§6.3). Personal and an account with no member
+/// list: all of them. An active member: all as an Owner or Admin, otherwise only those the
+/// member list puts it in. A PC waiting to be added, removed, or in an account not joined: none.
+pub async fn visible_workspaces(
+    store: &Store,
+    orgs: &Orgs,
+    scope: &str,
+) -> Result<Vec<WorkspaceView>> {
+    let org = (scope != PERSONAL).then_some(scope);
+    let (membership, role) = match org {
+        None => (Membership::Legacy, Some(Role::Owner)),
+        Some(id) => match orgs.access(id) {
+            Some(place) => place,
+            None => return Ok(Vec::new()),
+        },
+    };
+    let mine = org
+        .and_then(|id| orgs.my_workspaces(id))
+        .unwrap_or_default();
+    let sees_all = match membership {
+        Membership::Waiting | Membership::Removed => return Ok(Vec::new()),
+        Membership::Legacy => true,
+        Membership::Active => matches!(role, Some(Role::Owner | Role::Admin)),
+    };
+    let can_manage = access(Some(orgs), org).allows(Permission::ManageWorkspaces);
+    let my_role = |id: &str| match (membership, role) {
+        (Membership::Active, Some(Role::Owner | Role::Admin)) => Some(WorkspaceRole::Admin),
+        (Membership::Active, _) => mine.get(id).copied(),
+        _ => None,
+    };
+    Ok(store
+        .list_workspaces(scope)
+        .await?
+        .into_iter()
+        .filter(|w| sees_all || mine.contains_key(&w.id))
+        .map(|w| WorkspaceView {
+            my_role: my_role(&w.id),
+            scope: w.scope,
+            name: w.name,
+            use_rules: w.use_rules,
+            can_manage,
+            id: w.id,
+        })
+        .collect())
 }

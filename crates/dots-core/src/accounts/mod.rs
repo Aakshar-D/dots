@@ -23,4 +23,4 @@ pub use roster::{
     ROSTER_VERSION,
 };
 pub use scope::{current_scope, set_current_scope, CurrentScope, DEFAULT_WORKSPACE, PERSONAL};
-pub use workspaces::workspace_id_for;
+pub use workspaces::{visible_workspaces, workspace_id_for, WorkspaceView};
