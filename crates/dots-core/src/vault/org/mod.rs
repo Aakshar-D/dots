@@ -26,7 +26,7 @@ pub use policy::{
     parse_policy, AuditTarget, OrgPolicy, PersonalMode, PolicyError, RosterMode, UseRules,
     DEFAULT_REFRESH_MINUTES, POLICY_V1, POLICY_VERSION, POLICY_VERSIONS,
 };
-pub use row::{MemberRow, OrgRow};
+pub use row::{MemberRow, OrgRow, PendingRequest};
 pub use service::{
     JoinPreview, OrgEntry, OrgLookup, OrgStatus, OrgSummary, OrgView, Orgs, SourceFactory,
     KEY_CHANGE, RETRY_AFTER,

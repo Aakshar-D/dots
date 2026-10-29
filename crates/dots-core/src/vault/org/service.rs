@@ -511,6 +511,7 @@ impl Orgs {
             last_fetch_at: Some(stamp(now)),
             joined_at: stamp(now),
             member: MemberRow::default(),
+            pending_request: None,
         };
         let evaluated = self.evaluate(&row, None, &policy, &fetched).await;
         row.member = evaluated.member.clone();

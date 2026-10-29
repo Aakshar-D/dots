@@ -191,6 +191,7 @@ async fn a_join_fetches_verifies_and_keeps_the_row_the_copy_and_the_creds() {
             last_fetch_at: Some(start_plus(0)),
             joined_at: start_plus(0),
             member: Default::default(),
+            pending_request: None,
         }
     );
     assert_eq!(stored_creds(&h, ACME), Some(token()));
@@ -1284,6 +1285,7 @@ async fn load_adds_the_secrets_of_a_copy_to_the_redactor() {
             last_fetch_at: Some(start_plus(0)),
             joined_at: start_plus(0),
             member: Default::default(),
+            pending_request: None,
         })
         .await
         .unwrap();
