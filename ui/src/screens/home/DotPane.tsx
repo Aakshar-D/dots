@@ -43,6 +43,10 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
     ((older.error instanceof CommandError && older.error.kind === "not_found") ||
       (older.isSuccess && older.data.length === 0));
   const [pick, setPick] = useState<ReplyPick>({ kind: "default" });
+  // The current conversation, loaded and with nothing in it, greets like a new chat
+  // (conversational chat spec section 5). A failed load shows its errors instead.
+  const greeting =
+    rootRunId === undefined && !view.pending && view.list.isSuccess && view.shown.length === 0;
   if (gone) return <Navigate to={`/home/${dot.id}`} replace />;
   return (
     <div className="flex min-w-0 flex-1 flex-col">
@@ -60,21 +64,26 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
           </Link>
         </p>
       )}
-      <Timeline
-        topics={view.pending ? [] : view.shown}
-        checkIns={view.checkIns}
-        dotName={dot.name}
-        proposals={proposals}
-        onReply={(topic) => setPick({ kind: "topic", rootId: topic.rootId })}
-      >
-        <LoadErrors queries={[view.list, ...view.threads]} />
-        {!view.pending && view.shown.length === 0 && view.list.isSuccess && (
-          <p className="text-muted-foreground">
-            Ask {dot.name} something. It answers with its own instructions, folder and
-            permissions.
-          </p>
-        )}
-      </Timeline>
+      {greeting ? (
+        // Above the composer and pushed down by as much space as the spacer under it, so that
+        // the greeting and the composer sit together in the middle of the pane.
+        <div className="mx-auto flex w-full max-w-[720px] flex-1 flex-col items-center justify-end gap-1 px-4 pb-6 text-center">
+          <h2 className="text-2xl font-semibold">{dot.name}</h2>
+          <p className="text-muted-foreground">Ask {dot.name} something</p>
+        </div>
+      ) : (
+        <Timeline
+          topics={view.pending ? [] : view.shown}
+          checkIns={view.checkIns}
+          dotName={dot.name}
+          proposals={proposals}
+          onReply={(topic) => setPick({ kind: "topic", rootId: topic.rootId })}
+        >
+          <LoadErrors queries={[view.list, ...view.threads]} />
+        </Timeline>
+      )}
+      {/* The reply area keeps its place in the tree when the greeting gives way to the
+          conversation, so a send on its way is not cut off. */}
       {!view.pending && (
         <ReplyArea
           dotId={dot.id}
@@ -87,6 +96,7 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
           olderRoot={rootRunId}
         />
       )}
+      {greeting && <div aria-hidden className="flex-1" />}
     </div>
   );
 }

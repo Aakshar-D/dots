@@ -38,7 +38,8 @@ describe("sending on the home", () => {
         { dotId: dot.id, message: "Why did the build fail?", parentRunId: null },
       ]),
     );
-    const view = within(screen.getByRole("region", { name: "Conversation" }));
+    // The empty conversation's greeting gives way to the conversation once the run is loaded.
+    const view = within(await screen.findByRole("region", { name: "Conversation" }));
     expect(await view.findByText("Why did the build fail?")).toBeVisible();
     expect(target()).toHaveTextContent("Replying to: current topic");
   });
