@@ -1011,9 +1011,12 @@ Protected against:
 - A removed member using the account's secrets after their next refresh: the saved copy is wiped.
 - A stolen admin PC promoting others to admin: only the root key changes `admins`.
 
-Dots's local API (the webhook and MCP port on this PC) is not yet guarded by a Host check and a
-Bearer key for everything it serves. That protection arrives with API keys in a later release
-(phase 5).
+Dots's local server (the webhook, MCP and `/v1` port on this PC) only answers requests addressed
+to `127.0.0.1:PORT` or `localhost:PORT`. **API keys** for a workspace are made in Dots on each PC,
+under the account's **API keys** tab. They are per PC and per workspace, are never in the member
+list, and nobody signs them. A key checks the person's role in its workspace on every request, so a
+role change in the list applies at once. Removing someone from the list stops their keys the same
+way. Deleting a workspace revokes its keys. See [Accounts](accounts.md#api-keys).
 
 Not protected against:
 
