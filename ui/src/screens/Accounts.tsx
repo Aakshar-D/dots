@@ -28,6 +28,8 @@ import { localDateTime } from "@/lib/format";
 import { errorMessage, notifyError } from "@/lib/notify";
 import { invalidate, keys } from "@/lib/query";
 import { AccountMembers } from "@/screens/accounts/AccountMembers";
+import { AccountWorkspaces } from "@/screens/accounts/AccountWorkspaces";
+import { PersonalWorkspaces } from "@/screens/accounts/PersonalWorkspaces";
 
 /// How an org's status reads: plain while it works; the attention colour while it works from
 /// its saved copy, has refused a new policy, or waits for the admin; the error colour once its
@@ -205,8 +207,9 @@ function OrgRow({ org, onUpdate }: { org: OrgSummary; onUpdate: () => void }) {
       )}
     </>
   );
-  // Only a PC on the member list sees it (accounts spec §6.5): Overview is the row as it was.
-  if (org.membership !== "active") {
+  // Only a PC on the member list sees Members (accounts spec §6.5); a legacy account has no list,
+  // so its Workspaces are read-only. The rest see Overview as it was.
+  if (org.membership !== "active" && org.membership !== "legacy") {
     return (
       <li aria-label={org.name} className="flex flex-col gap-2 rounded-md border p-3">
         {overview}
@@ -218,13 +221,19 @@ function OrgRow({ org, onUpdate }: { org: OrgSummary; onUpdate: () => void }) {
       <Tabs defaultValue="overview">
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="members">Members</TabsTrigger>
+          {org.membership === "active" && <TabsTrigger value="members">Members</TabsTrigger>}
+          <TabsTrigger value="workspaces">Workspaces</TabsTrigger>
         </TabsList>
         <TabsContent value="overview" className="flex flex-col gap-2">
           {overview}
         </TabsContent>
+        {org.membership === "active" && (
         <TabsContent value="members">
           <AccountMembers org={org} />
+        </TabsContent>
+        )}
+        <TabsContent value="workspaces">
+          <AccountWorkspaces org={org} />
         </TabsContent>
       </Tabs>
     </li>
@@ -764,6 +773,10 @@ export function Accounts() {
           ))}
         </ul>
       )}
+      <section aria-label="Personal" className="flex flex-col gap-2 rounded-md border p-3">
+        <span className="font-medium">Personal</span>
+        <PersonalWorkspaces />
+      </section>
       <Button
         type="button"
         size="sm"

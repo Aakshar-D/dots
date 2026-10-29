@@ -461,3 +461,55 @@ describe("Settings, Accounts, Members", () => {
     expect(within(row).queryByRole("tab", { name: "Members" })).toBeNull();
   });
 });
+
+describe("Settings, Accounts, Members, workspace roles", () => {
+  const spaces = (scope: string) =>
+    ["default", "platform", "ops"].map((id) => ({
+      scope,
+      id,
+      name: id === "default" ? "Default" : id === "ops" ? "Ops" : "Platform",
+      use_rules: null,
+      my_role: null,
+      can_manage: true,
+    }));
+
+  it("member workspace roles edit sends set_workspaces", async () => {
+    account(list);
+    backend.on("workspace_list", (args) => spaces(String(args.scope)));
+    backend.on("member_edit", () => ({ outcome: "published", summary: acme }));
+    const { user, panel } = await membersTab();
+    await user.click(
+      within(member(panel, "Asha Rao")).getByRole("button", { name: "Workspaces of Asha Rao" }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    await within(dialog).findByRole("list", { name: "Workspaces" });
+    // Default is always on; Platform is on with Admin.
+    expect(within(dialog).getByRole("checkbox", { name: "Default" })).toBeDisabled();
+    expect(within(dialog).getByRole("checkbox", { name: "Platform" })).toBeChecked();
+    expect(within(dialog).getByLabelText("Role in Ops")).toBeDisabled();
+    await user.selectOptions(within(dialog).getByLabelText("Role in Platform"), "viewer");
+    await user.click(within(dialog).getByRole("checkbox", { name: "Ops" }));
+    await user.selectOptions(within(dialog).getByLabelText("Role in Ops"), "admin");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(backend.callsTo("member_edit")).toHaveLength(1));
+    expect(backend.callsTo("member_edit")[0]).toEqual({
+      orgId: "acme-eng",
+      baseSeq: 3,
+      edit: {
+        kind: "set_workspaces",
+        member_id: "m-asha",
+        workspaces: { default: "member", platform: "viewer", ops: "admin" },
+      },
+    });
+  });
+
+  it("owner workspaces locked", async () => {
+    account(list);
+    const { panel } = await membersTab();
+    const button = within(member(panel, "Olu Owner")).getByRole("button", {
+      name: "Workspaces of Olu Owner",
+    });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("title", OWNER);
+  });
+});

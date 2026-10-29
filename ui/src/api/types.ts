@@ -1511,6 +1511,7 @@ export type CreatedInvite = z.infer<typeof CreatedInvite>;
 export type RequestPreview = z.infer<typeof RequestPreview>;
 export type RosterEdit = z.infer<typeof RosterEdit>;
 export type WorkspaceView = z.infer<typeof WorkspaceView>;
+export type WorkspaceRole = z.infer<typeof WorkspaceRole>;
 export type EditOutcome = z.infer<typeof EditOutcome>;
 export type OrgEntry = z.infer<typeof OrgEntry>;
 export type PersonalMode = z.infer<typeof PersonalMode>;
