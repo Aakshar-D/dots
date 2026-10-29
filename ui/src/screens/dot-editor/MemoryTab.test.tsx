@@ -289,11 +289,11 @@ describe("a dot's Memory tab", () => {
     expect(screen.getByRole("button", { name: "Add memory" })).toBeDisabled();
   });
 
-  it("opens from the dot's ⚙ menu", async () => {
+  it("opens from the dot's menu", async () => {
     home([]);
     holding([persons]);
     const { user, router } = renderApp(`/home/${dot.id}`);
-    await user.click(await screen.findByRole("button", { name: "Dot settings" }));
+    await user.click(await screen.findByRole("button", { name: dot.name }));
     await user.click(await screen.findByRole("menuitem", { name: "Memory…" }));
     await waitFor(() => expect(router.state.location.pathname).toBe(`/dots/${dot.id}`));
     expect(router.state.location.search).toBe("?tab=memory");

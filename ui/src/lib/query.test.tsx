@@ -23,7 +23,7 @@ describe("while the webview reports offline", () => {
     backend.on("dot_overview", () => [sample.overview]);
     backend.on("run_now", () => ({ ...sample.run, id: "run-new", status: "queued" }));
     const { user } = renderApp(`/home/${dot.id}`);
-    const settings = await screen.findByRole("button", { name: "Dot settings" });
+    const settings = await screen.findByRole("button", { name: dot.name });
 
     report("offline");
     await user.click(settings);

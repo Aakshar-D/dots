@@ -151,7 +151,7 @@ describe("a dot whose org was removed", () => {
     const other = screen.getByRole("listitem", { name: personal.name });
     expect(within(other).queryByText("org removed")).toBeNull();
 
-    await user.click(screen.getByRole("button", { name: "Dot settings" }));
+    await user.click(screen.getByRole("button", { name: release.name }));
     expect(await screen.findByRole("menuitem", { name: "Run now" })).toHaveAttribute(
       "data-disabled",
     );

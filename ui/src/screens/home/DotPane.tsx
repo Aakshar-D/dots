@@ -9,7 +9,6 @@ import { Button } from "@/components/ui/button";
 import { dotStatus } from "@/lib/dot-status";
 import { keys } from "@/lib/query";
 import { DotHeader } from "@/screens/home/DotHeader";
-import { DotMenu } from "@/screens/home/DotMenu";
 import { HistoryMenu } from "@/screens/home/HistoryMenu";
 import { rememberDot } from "@/screens/home/last-dot";
 import { ReplyArea, type ReplyPick } from "@/screens/home/ReplyArea";
@@ -47,15 +46,14 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
   if (gone) return <Navigate to={`/home/${dot.id}`} replace />;
   return (
     <div className="flex min-w-0 flex-1 flex-col">
-      <DotHeader name={dot.name} status={dotStatus(row, allMessages, held)}>
-        <DotMenu dot={dot} />
+      <DotHeader dot={dot} status={dotStatus(row, allMessages, held)}>
         <HistoryMenu dotId={dot.id} topics={view.older} />
         <Button size="sm" variant="ghost" onClick={() => setPick({ kind: "new" })}>
           New topic
         </Button>
       </DotHeader>
       {rootRunId !== undefined && (
-        <p className="border-b px-4 py-1.5 text-xs text-muted-foreground">
+        <p className="mx-auto w-full max-w-[720px] px-4 py-1.5 text-xs text-muted-foreground">
           Older topic ·{" "}
           <Link to={`/home/${dot.id}`} className="text-foreground underline">
             Back to the current conversation
