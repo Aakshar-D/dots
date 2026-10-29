@@ -311,9 +311,11 @@ describe("what the self-QA found", () => {
         }),
       ],
     );
-    renderApp(`/home/${dot.id}`);
+    const { user } = renderApp(`/home/${dot.id}`);
     const view = within(await screen.findByRole("region", { name: "Conversation" }));
-    expect(await view.findByText("sent for approval")).toBeVisible();
+    // The chip is under the steps line.
+    await user.click(await view.findByText("Ran a command"));
+    expect(view.getByText("sent for approval")).toBeVisible();
     expect(view.queryByText("failed")).toBeNull();
   });
 

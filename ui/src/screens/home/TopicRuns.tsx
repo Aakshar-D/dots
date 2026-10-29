@@ -50,6 +50,7 @@ export function TopicRuns(props: {
         shownError={failure}
         messages={checkIns}
         dotName={dotName}
+        variant="conversation"
       />
       <LoadErrors queries={[...events, ...approvals]} />
       <AppliedCalls approvals={asked} />
