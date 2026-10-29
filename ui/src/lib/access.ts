@@ -54,10 +54,15 @@ export function allows(access: Access, p: Action): boolean {
   }
 }
 
-const ACTION: Record<Action, string> = {
+/// What a refusal can name: the three actions, and managing the member list (Admin or Owner
+/// only, which `allows` doesn't decide: the core's `MembersView.can_manage` does).
+export type Refused = Action | "members";
+
+const ACTION: Record<Refused, string> = {
   edit: "create or change dots",
   run: "run dots",
   answer: "answer approvals",
+  members: "manage members",
 };
 
 /// "Admin" for `admin`.
@@ -80,7 +85,7 @@ export function accessRole(access: Access): Role | null {
 }
 
 /// Why `access` doesn't allow `p`, in the core's words (`Error::NotAllowed`).
-export function notAllowedText(accountName: string, access: Access, p: Action): string {
+export function notAllowedText(accountName: string, access: Access, p: Refused): string {
   switch (access.kind) {
     case "waiting":
       return (

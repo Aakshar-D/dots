@@ -46,6 +46,8 @@ export const keys = {
   orgs: ["orgs"] as const,
   /// An org's entries for the Library's Env tab, under the orgs' key.
   orgEntries: (orgId: string) => ["orgs", orgId, "entries"] as const,
+  /// An org's member list for the Members tab, under the orgs' key.
+  orgMembers: (orgId: string) => ["orgs", orgId, "members"] as const,
   /// This PC's age public key for a SOPS org: made once, so no org event asks for it again.
   orgSopsKey: (orgId: string) => ["org-sops-key", orgId] as const,
   dots: ["dots"] as const,

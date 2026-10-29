@@ -21,11 +21,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { accessOf, accessRole, roleLabel } from "@/lib/access";
 import { localDateTime } from "@/lib/format";
 import { errorMessage, notifyError } from "@/lib/notify";
 import { invalidate, keys } from "@/lib/query";
+import { AccountMembers } from "@/screens/accounts/AccountMembers";
 
 /// How an org's status reads: plain while it works; the attention colour while it works from
 /// its saved copy, has refused a new policy, or waits for the admin; the error colour once its
@@ -88,8 +90,8 @@ function OrgRow({ org, onUpdate }: { org: OrgSummary; onUpdate: () => void }) {
       org.status_text.startsWith("Removed from")
     );
   const policyId = `org-policy-${org.id}`;
-  return (
-    <li aria-label={org.name} className="flex flex-col gap-2 rounded-md border p-3">
+  const overview = (
+    <>
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex min-w-0 flex-1 flex-col">
           <span className="flex items-center gap-2">
@@ -201,6 +203,30 @@ function OrgRow({ org, onUpdate }: { org: OrgSummary; onUpdate: () => void }) {
           )}
         </>
       )}
+    </>
+  );
+  // Only a PC on the member list sees it (accounts spec §6.5): Overview is the row as it was.
+  if (org.membership !== "active") {
+    return (
+      <li aria-label={org.name} className="flex flex-col gap-2 rounded-md border p-3">
+        {overview}
+      </li>
+    );
+  }
+  return (
+    <li aria-label={org.name} className="flex flex-col gap-2 rounded-md border p-3">
+      <Tabs defaultValue="overview">
+        <TabsList>
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="members">Members</TabsTrigger>
+        </TabsList>
+        <TabsContent value="overview" className="flex flex-col gap-2">
+          {overview}
+        </TabsContent>
+        <TabsContent value="members">
+          <AccountMembers org={org} />
+        </TabsContent>
+      </Tabs>
     </li>
   );
 }
