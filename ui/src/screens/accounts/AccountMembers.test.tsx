@@ -13,6 +13,8 @@ const NOT_A_SIGNER =
   "Acme Engineering: your Dots ID isn't one of the account's signing admins yet. Ask the " +
   "owner to add it with dots-admin policy admins add.";
 const REQUEST = "dotsreq_c2FtcGxlLXJlcXVlc3QtY29kZQ";
+const WAITING = "Acme Engineering: a change is waiting to be published. Retry or discard it first.";
+const OWN_ROLE = "You're changing your own role. You may lose the right to manage members.";
 // The list as it stands, with no draft unless a test gives one.
 const list: MembersView = { ...sample.members, draft: null };
 
@@ -247,6 +249,9 @@ describe("Settings, Accounts, Members", () => {
       within(member(panel, "Asha Rao")).getByLabelText("Role of Asha Rao"),
       "member",
     );
+    // Asha is this PC: her own role is asked about first.
+    const ask = await screen.findByRole("alertdialog");
+    await user.click(within(ask).getByRole("button", { name: "Change role" }));
     expect(await within(panel).findByRole("alert")).toHaveTextContent(changed);
     expect(backend.callsTo("member_edit")).toEqual([
       {
@@ -290,12 +295,120 @@ describe("Settings, Accounts, Members", () => {
         name: "Remove this PC 99FF 88EE 77DD 66CC",
       }),
     );
+    // Asked first; another PC of hers, so no warning about this PC or her last one.
+    const ask = await screen.findByRole("alertdialog");
+    expect(ask).not.toHaveTextContent("This is this PC");
+    expect(ask).not.toHaveTextContent("last PC");
+    expect(backend.callsTo("member_edit")).toHaveLength(0);
+    await user.click(within(ask).getByRole("button", { name: "Remove this PC" }));
     await waitFor(() => expect(backend.callsTo("member_edit")).toHaveLength(1));
     expect(backend.callsTo("member_edit")[0].edit).toEqual({
       kind: "remove_key",
       member_id: "m-asha",
       key: "c3NhbXBsZS1zZWNvbmQtcGM",
     });
+  });
+
+  it("removing this PC warns that access here ends", async () => {
+    account(list);
+    backend.on("member_edit", () => ({ outcome: "published", summary: acme }));
+    const { user, panel } = await membersTab();
+    await user.click(
+      within(member(panel, "Asha Rao")).getByRole("button", {
+        name: "Remove this PC AB12 CD34 EF56 7890",
+      }),
+    );
+    const ask = await screen.findByRole("alertdialog");
+    expect(ask).toHaveTextContent("This is this PC. You'll lose access to Acme Engineering here.");
+    await user.click(within(ask).getByRole("button", { name: "Remove this PC" }));
+    await waitFor(() => expect(backend.callsTo("member_edit")).toHaveLength(1));
+    expect(backend.callsTo("member_edit")[0].edit).toEqual({
+      kind: "remove_key",
+      member_id: "m-asha",
+      key: list.members[1].keys[0].key,
+    });
+  });
+
+  it("removing a member's last PC says they are removed", async () => {
+    const [owner, asha] = list.members;
+    const bo = {
+      ...asha,
+      id: "m-bo",
+      name: "Bo Diaz",
+      email: "bo@acme.com",
+      role: "member" as const,
+      keys: [asha.keys[1]],
+    };
+    account({ ...list, members: [owner, asha, bo] });
+    const { user, panel } = await membersTab();
+    await user.click(
+      within(member(panel, "Bo Diaz")).getByRole("button", {
+        name: "Remove this PC 99FF 88EE 77DD 66CC",
+      }),
+    );
+    const ask = await screen.findByRole("alertdialog");
+    expect(ask).toHaveTextContent("This is their last PC; they'll be removed.");
+    await user.click(within(ask).getByRole("button", { name: "Cancel" }));
+    expect(backend.callsTo("member_edit")).toHaveLength(0);
+  });
+
+  it("changing your own role asks first", async () => {
+    account(list);
+    backend.on("member_edit", () => ({ outcome: "published", summary: acme }));
+    const { user, panel } = await membersTab();
+    const role = within(member(panel, "Asha Rao")).getByLabelText("Role of Asha Rao");
+    await user.selectOptions(role, "viewer");
+    const ask = await screen.findByRole("alertdialog");
+    expect(ask).toHaveTextContent(OWN_ROLE);
+    await user.click(within(ask).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(backend.callsTo("member_edit")).toHaveLength(0);
+    expect(role).toHaveValue("admin");
+
+    await user.selectOptions(role, "viewer");
+    await user.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", {
+        name: "Change role",
+      }),
+    );
+    await waitFor(() => expect(backend.callsTo("member_edit")).toHaveLength(1));
+    expect(backend.callsTo("member_edit")[0].edit).toEqual({
+      kind: "set_role",
+      member_id: "m-asha",
+      role: "viewer",
+    });
+  });
+
+  it("a waiting draft holds approvals and member edits, not invites", async () => {
+    account({ ...list, draft: sample.members.draft! });
+    const { panel } = await membersTab();
+    const approve = within(panel).getByRole("button", {
+      name: "Approve request",
+    });
+    expect(approve).toBeDisabled();
+    expect(approve).toHaveAttribute("title", WAITING);
+    const asha = member(panel, "Asha Rao");
+    const role = within(asha).getByLabelText("Role of Asha Rao");
+    expect(role).toBeDisabled();
+    expect(role).toHaveAttribute("title", WAITING);
+    const remove = within(asha).getByRole("button", {
+      name: "Remove Asha Rao",
+    });
+    expect(remove).toBeDisabled();
+    expect(remove).toHaveAttribute("title", WAITING);
+    for (const pc of within(asha).getAllByRole("button", {
+      name: /Remove this PC/,
+    })) {
+      expect(pc).toBeDisabled();
+      expect(pc).toHaveAttribute("title", WAITING);
+    }
+    // The Owner keeps the Owner text.
+    expect(within(member(panel, "Olu Owner")).getByLabelText("Role of Olu Owner")).toHaveAttribute(
+      "title",
+      OWNER,
+    );
+    expect(within(panel).getByRole("button", { name: "Invite" })).toBeEnabled();
+    expect(within(panel).getByRole("button", { name: "Revoke" })).toBeEnabled();
   });
 
   it("draft banner retries and discards", async () => {

@@ -13,6 +13,16 @@ import type {
   RosterEdit,
 } from "@/api/types";
 import { ConfirmButton } from "@/components/ConfirmButton";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { ErrorNote } from "@/components/ErrorNote";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,6 +31,7 @@ import { accessOf, notAllowedText, roleLabel } from "@/lib/access";
 import { localDateTime } from "@/lib/format";
 import { errorMessage, notifyError } from "@/lib/notify";
 import { invalidate, keys } from "@/lib/query";
+import { onSingleClick } from "@/lib/single-click";
 
 import { ApproveDialog } from "./ApproveDialog";
 import { INVITE_ROLES, InviteDialog } from "./InviteDialog";
@@ -34,6 +45,16 @@ const NOT_SIGNING = "Can sign the list once the owner adds their Dots ID to the 
 
 /// Why a control is off for the moment while the last change is sent.
 const BUSY = "Waiting for the last change to finish.";
+
+/// Why an edit waits: the core takes one change at a time while a draft waits (accounts spec
+/// §6.5), and refuses a new one with these words.
+const DRAFT_WAITING = "a change is waiting to be published. Retry or discard it first.";
+
+const OWN_ROLE = "You're changing your own role. You may lose the right to manage members.";
+
+const REMOVE_PC_TEXT =
+  "Also revoke its access in the source: the list stops Dots honouring this PC, only the " +
+  "source cuts it off.";
 
 const REMOVE_TEXT =
   "Also revoke their access in the source: the list stops Dots honouring them, only the " +
@@ -86,6 +107,9 @@ export function AccountMembers({ org }: { org: OrgSummary }) {
     (view.can_sign
       ? undefined
       : (view.sign_blocker ?? `${org.name}: this PC's Dots ID can't sign the member list.`));
+  // An approval, a role change or a removal also waits for a draft to be published or
+  // discarded; inviting and revoking don't touch the list.
+  const editBlocker = blocker ?? (view.draft ? `${org.name}: ${DRAFT_WAITING}` : undefined);
   const busy = act.isPending;
 
   // An approval from the dialog: its error shows in the dialog, not here.
@@ -119,8 +143,8 @@ export function AccountMembers({ org }: { org: OrgSummary }) {
           type="button"
           size="sm"
           variant="outline"
-          disabled={!!blocker}
-          title={blocker}
+          disabled={!!editBlocker}
+          title={editBlocker}
           onClick={() => setDialog("approve")}
         >
           Approve request
@@ -149,7 +173,8 @@ export function AccountMembers({ org }: { org: OrgSummary }) {
           <MemberRow
             key={m.id}
             member={m}
-            lock={m.owner_locked ? OWNER_TEXT : blocker}
+            account={org.name}
+            lock={m.owner_locked ? OWNER_TEXT : editBlocker}
             busy={busy}
             onEdit={(e) => act.mutate(edit(e))}
           />
@@ -200,14 +225,19 @@ export function AccountMembers({ org }: { org: OrgSummary }) {
 }
 
 /// One member: who, their role and workspaces, and each PC (Dots ID) on the list, with the
-/// controls `lock` (why they are off) allows.
+/// controls `lock` (why they are off) allows. A change that can take this PC's own rights away
+/// (its own role, or removing it) is asked about first.
 function MemberRow(props: {
   member: MemberView;
+  account: string;
   lock: string | undefined;
   busy: boolean;
   onEdit: (edit: RosterEdit) => void;
 }) {
   const { member: m, lock } = props;
+  // The role picked for this PC's own member, waiting for the confirm.
+  const [ownRole, setOwnRole] = useState<Role>();
+  const isMe = m.keys.some((k) => k.is_me);
   const off = props.busy || !!lock;
   const why = lock ?? (props.busy ? BUSY : undefined);
   const workspaces = Object.entries(m.workspaces);
@@ -233,13 +263,11 @@ function MemberRow(props: {
           value={m.role}
           disabled={off}
           title={why}
-          onChange={(e) =>
-            props.onEdit({
-              kind: "set_role",
-              member_id: m.id,
-              role: e.target.value as Role,
-            })
-          }
+          onChange={(e) => {
+            const role = e.target.value as Role;
+            if (isMe) setOwnRole(role);
+            else props.onEdit({ kind: "set_role", member_id: m.id, role });
+          }}
         >
           {roles.map((r) => (
             <NativeSelectOption key={r} value={r} disabled={r === "owner"}>
@@ -278,26 +306,69 @@ function MemberRow(props: {
           <li key={k.key} className="flex items-center gap-2">
             <span className="flex-1 font-mono">{k.fingerprint}</span>
             {k.is_me && <Badge variant="secondary">This PC</Badge>}
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              disabled={off}
-              title={why}
-              aria-label={`Remove this PC ${k.fingerprint}`}
-              onClick={() =>
-                props.onEdit({
-                  kind: "remove_key",
-                  member_id: m.id,
-                  key: k.key,
-                })
-              }
-            >
-              Remove this PC
-            </Button>
+            {off ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                disabled
+                title={why}
+                aria-label={`Remove this PC ${k.fingerprint}`}
+              >
+                Remove this PC
+              </Button>
+            ) : (
+              <ConfirmButton
+                variant="ghost"
+                title={`Remove this PC of ${m.name}?`}
+                description={
+                  k.is_me
+                    ? `This is this PC. You'll lose access to ${props.account} here.`
+                    : m.keys.length === 1
+                      ? "This is their last PC; they'll be removed."
+                      : REMOVE_PC_TEXT
+                }
+                confirmLabel="Remove this PC"
+                ariaLabel={`Remove this PC ${k.fingerprint}`}
+                onConfirm={() =>
+                  props.onEdit({
+                    kind: "remove_key",
+                    member_id: m.id,
+                    key: k.key,
+                  })
+                }
+              >
+                Remove this PC
+              </ConfirmButton>
+            )}
           </li>
         ))}
       </ul>
+      <AlertDialog open={!!ownRole} onOpenChange={(open) => !open && setOwnRole(undefined)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Change your own role to {ownRole ? roleLabel(ownRole) : ""}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>{OWN_ROLE}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={onSingleClick(() => {
+                if (ownRole)
+                  props.onEdit({
+                    kind: "set_role",
+                    member_id: m.id,
+                    role: ownRole,
+                  });
+              })}
+            >
+              Change role
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </li>
   );
 }
