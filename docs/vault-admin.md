@@ -897,6 +897,74 @@ its sender claims: for an email already on the list, `--role` must be that membe
 refused as `roster add` refuses it (change roles with `roster set-role`); when it matches, it
 prints "This adds a PC to <name> (<Role>)." Sign and store the list as above.
 
+### Workspaces
+
+A workspace is a part of an account, such as a team or a project. Every account has a **Default**
+workspace. The list of workspaces and each member's role in them are in the signed member list. So
+creating, renaming or deleting a workspace, and setting a member's workspace roles, are signed
+edits like any other. An Owner can make them with `dots-admin`. An Admin whose Dots ID is in
+`admins` can make them in Dots, on the account's **Workspaces** tab and with **Workspaces** next to
+a member on the **Members** tab. Personal workspaces are different: they are only on the PC that
+made them, and nobody signs them.
+
+With `dots-admin`:
+
+```bash
+dots-admin roster workspace add roster.json "Payments Team"
+dots-admin roster workspace rename roster.json payments-team Payments
+dots-admin roster workspace remove roster.json payments-team
+dots-admin roster set-workspaces roster.json ben@acme.com default=member payments=viewer
+dots-admin roster add roster.json --name "Cy Ode" --email cy@acme.com --key <cy's dots-id> --role member --workspace payments=member
+dots-admin roster sign roster.json --key keys/policy.key --out roster.signed.json
+```
+
+- Workspace roles are `admin`, `member` and `viewer`.
+- `roster workspace add` prints the new id. An id is made from the name: lower-case letters and
+  digits, words joined by `-`, at most 32 characters (`Payments Team` is `payments-team`). If the
+  id is taken, it gets `-2`, `-3` and so on. The id never changes, even when you rename the
+  workspace.
+- **Default** always exists. It can be renamed but not deleted ("The default workspace can't be
+  deleted."). Every member stays in it: `set-workspaces` replaces all of a member's workspace
+  roles, so it must list `default`.
+- `roster add` puts a new member in `default` with their account role (an Owner or Admin as admin),
+  plus any `--workspace <id>=<role>` you give.
+- Deleting a workspace takes it off every member's entry. Its dots and teams move to Default on
+  every PC at the next refresh.
+
+**What a person can do.** Their account role and their workspace entry together decide it:
+
+| Account role | In a workspace |
+| --- | --- |
+| Owner, Admin | Their account role in every workspace. |
+| Member | Entry `admin` or `member`: Member rights. Entry `viewer`: Viewer rights. No entry: no access. |
+| Viewer | Viewer rights where they have an entry. No access elsewhere. |
+
+With no access, the workspace is hidden from them, and its dots refuse everything except delete
+and turning them off: "<account>: you aren't in the <workspace> workspace. Ask an Admin or Owner
+to add you." A workspace Viewer can look but not change or run, the same as an account Viewer
+(see [Accounts](accounts.md)). A legacy account (no member list) and Personal are not narrowed
+by workspaces.
+
+**Narrowing `use`.** A workspace can have `use` rules of its own. They narrow the policy's `use`
+(section 3): deny rules from both apply, and a name must pass both allow lists. Set them only with
+`dots-admin`. Dots shows them read-only on the **Workspaces** tab.
+
+```bash
+dots-admin roster workspace use roster.json payments --allow "PAY_*" --deny "PAY_ADMIN_*"
+dots-admin roster workspace use roster.json payments
+```
+
+The second line, with no `--allow` or `--deny`, clears the rules. Sign and store the list, as above.
+A dot in a workspace refuses a name its rules don't allow: "the <workspace> workspace doesn't allow
+<name>". A dot in a workspace this PC doesn't know yet can't read any account entry until the next
+refresh. The Default workspace is exempt.
+
+**Moving dots and teams.** A dot moves between workspaces of the same account only, from the
+**Workspace** field of its editor. The person needs Member rights in both workspaces, and the dot
+must not be in a team ("<dot> is in the team <team>. Take it out of the team first."). A team's dots
+must all be in its account and workspace. A team with a stray dot shows it under **Needs attention**
+in the Inbox ("<dot> is in another workspace than the <team> team.").
+
 ### Moving a legacy org to a member list
 
 Do it in this order so nobody is locked out by surprise:
