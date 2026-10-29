@@ -118,10 +118,9 @@ describe("instructions a dot proposed", () => {
     renderApp(`/home/${dot.id}`);
     const shown = await card();
     const wait = `${dot.name} is still working on this topic`;
+    expect(within(shown).getByText(wait)).toHaveClass("text-xs", "text-muted-foreground");
     for (const name of ["Approve", "Reject"]) {
-      const button = within(shown).getByRole("button", { name });
-      expect(button).toBeDisabled();
-      expect(button).toHaveAttribute("title", wait);
+      expect(within(shown).getByRole("button", { name })).toBeDisabled();
     }
 
     runs[0] = { ...working, status: "succeeded", ended_at: sample.run.ended_at };
@@ -130,7 +129,7 @@ describe("instructions a dot proposed", () => {
       expect(within(shown).getByRole("button", { name: "Approve" })).toBeEnabled(),
     );
     expect(within(shown).getByRole("button", { name: "Reject" })).toBeEnabled();
-    expect(within(shown).getByRole("button", { name: "Approve" })).not.toHaveAttribute("title");
+    expect(within(shown).queryByText(wait)).toBeNull();
   });
 
   it("lists the waiting ones in the Inbox with their dot and conversation", async () => {

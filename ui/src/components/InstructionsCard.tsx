@@ -39,7 +39,6 @@ export function InstructionsCard(props: {
   });
   // One decision per card: after a success the card stays until its list has reloaded.
   const decided = decide.isPending || decide.isSuccess;
-  const wait = busy ? `${dotName} is still working on this topic` : undefined;
   const lines = lineDiff(proposal.base, proposal.instructions);
   return (
     <article
@@ -65,7 +64,6 @@ export function InstructionsCard(props: {
         <Button
           size="sm"
           disabled={decided || busy}
-          title={wait}
           onClick={onSingleClick(() => decide.mutate(true))}
         >
           Approve
@@ -74,11 +72,16 @@ export function InstructionsCard(props: {
           size="sm"
           variant="outline"
           disabled={decided || busy}
-          title={wait}
           onClick={onSingleClick(() => decide.mutate(false))}
         >
           Reject
         </Button>
+        {/* A disabled button gets no hover, so the reason is a line, not a tooltip. */}
+        {busy && (
+          <span className="text-xs text-muted-foreground">
+            {dotName} is still working on this topic
+          </span>
+        )}
       </div>
     </article>
   );

@@ -252,7 +252,8 @@ function ToolChips(props: {
 
 /// A group of consecutive tool steps in the conversation (conversational chat spec section 5):
 /// one muted line that says what they did and how it went, and opens to their row of chips. A
-/// call parked for approval is not counted as failed: it waits.
+/// call parked for approval is not counted as failed: it waits while its run goes on, and was
+/// sent for approval once the run has ended (the decision starts a run of its own).
 function StepsLine(props: {
   items: ToolItem[];
   active: boolean;
@@ -260,7 +261,7 @@ function StepsLine(props: {
 }) {
   const { items, active, owners } = props;
   const failed = items.filter((item) => item.result?.isError && !parked(item.result)).length;
-  const waiting = items.some((item) => parked(item.result));
+  const parkedCall = items.some((item) => parked(item.result));
   const running = active && items.some((item) => item.result === null);
   return (
     <details data-slot="steps" className="group/steps">
@@ -271,7 +272,12 @@ function StepsLine(props: {
         />
         <span className="min-w-0 truncate">{stepsLine(items, owners)}</span>
         {failed > 0 && <span className="shrink-0 text-destructive"> · {failed} failed</span>}
-        {waiting && <span className="shrink-0 text-needs"> · waiting for approval</span>}
+        {parkedCall &&
+          (active ? (
+            <span className="shrink-0 text-needs"> · waiting for approval</span>
+          ) : (
+            <span className="shrink-0"> · sent for approval</span>
+          ))}
         {running && <span className="shrink-0"> · running…</span>}
       </summary>
       <ToolChips items={items} active={active} owners={owners} className="mt-1.5" />
@@ -410,8 +416,9 @@ export function Transcript(props: {
   /// The dot's name, for the meta line above its words in the run variant.
   dotName?: string;
   /// "run" (the default) is the run screen's look. "conversation" is the home's (conversational
-  /// chat spec section 5): the dot's words with no meta line, a person's message with no header
-  /// line, and each group of tool steps as one line that opens to its chips.
+  /// chat spec section 5): the dot's words with no meta line, no header line on a chat-trigger run
+  /// (its bubble says it, whoever wrote the message), a cancelled one marked "Cancelled", and
+  /// each group of tool steps as one line that opens to its chips.
   variant?: "run" | "conversation";
 }) {
   const conversation = props.variant === "conversation";
@@ -439,7 +446,7 @@ export function Transcript(props: {
         const checkIns = (props.messages ?? []).filter((checkIn) => checkIn.run_id === run.id);
         return (
           <section key={run.id} aria-label={names[i]}>
-            {/* In the conversation a person's message needs no header: its bubble says it. The
+            {/* In the conversation a chat-trigger run needs no header: its bubble says it. The
                 section keeps its name either way. */}
             {!(conversation && run.trigger === "chat") && (
               <header className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
@@ -491,6 +498,9 @@ export function Transcript(props: {
                     runId={run.id}
                   />
                 ),
+              )}
+              {conversation && run.trigger === "chat" && run.status === "cancelled" && (
+                <p className="text-xs text-muted-foreground">Cancelled</p>
               )}
               {items.length === 0 && message === null && run.status === "queued" && (
                 <p className="text-muted-foreground">Waiting to start.</p>

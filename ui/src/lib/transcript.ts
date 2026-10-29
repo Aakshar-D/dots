@@ -228,7 +228,11 @@ const STEP_PHRASES = new Map<string, StepPhrase>([
 ]);
 
 /// The phrase of one step: its tool's own, else "Used" and the name its chip shows.
-function stepPhrase(tool: string, input: unknown, owners: ReadonlyMap<string, string>): StepPhrase {
+function stepPhrase(
+  tool: string,
+  input: unknown,
+  owners: ReadonlyMap<string, string>,
+): StepPhrase {
   const known = STEP_PHRASES.get(tool);
   if (known) return known;
   const label = mcpToolLabel(callLabel(tool, input), owners);

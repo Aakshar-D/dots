@@ -5,7 +5,7 @@ import type { Message, RunEventRecord } from "@/api/types";
 import { localTime } from "@/lib/format";
 import { backend } from "@/test/backend";
 import { sample } from "@/test/fixtures";
-import { chat, dot, home, said } from "@/test/home";
+import { chat, dot, home, reply, said } from "@/test/home";
 import { renderApp } from "@/test/render";
 
 const conversation = async () =>
@@ -104,6 +104,44 @@ describe("the conversation as a document (deep-teal spec section 4)", () => {
     expect(summary.getByText("· 1 failed")).toHaveClass("text-destructive");
     expect(summary.getByText("· waiting for approval")).toHaveClass("text-needs");
     expect(summary.queryByText(/running/)).toBeNull();
+  });
+
+  it("says in the steps line that a parked call was sent for approval once its run has ended", async () => {
+    home(
+      [chat("a", "10:00", { status: "succeeded" })],
+      [
+        event("a", 1, { kind: "tool_call", id: "t1", tool: "Bash", input: { command: "git push" } }),
+        event("a", 2, {
+          kind: "tool_result",
+          id: "t1",
+          output: "Queued for human approval #01APPROVAL. Do not retry this action.",
+          is_error: true,
+        }),
+      ],
+    );
+    renderApp(`/home/${dot.id}`);
+    const view = await conversation();
+    const line = await view.findByText("Ran a command");
+    const summary = within(line.closest("summary")!);
+    // Muted by the line it sits in, not the needs colour of a wait.
+    expect(summary.getByText("· sent for approval")).not.toHaveClass("text-needs");
+    expect(line.closest("summary")).toHaveClass("text-muted-foreground");
+    expect(summary.queryByText(/waiting for approval/)).toBeNull();
+  });
+
+  it("marks a cancelled chat run in the conversation, and no other", async () => {
+    const a = chat("a", "10:00", { status: "cancelled" });
+    home(
+      [a, reply("b", a, "10:05")],
+      [said("a", 1, "Half an answer."), said("b", 1, "A whole answer.")],
+    );
+    renderApp(`/home/${dot.id}`);
+    const view = await conversation();
+    await view.findByText("A whole answer.");
+    const cancelled = view.getByText("Cancelled");
+    expect(cancelled).toHaveClass("text-xs", "text-muted-foreground");
+    expect(view.getAllByText("Cancelled")).toHaveLength(1);
+    expect(follows(view.getByText("Half an answer."), cancelled)).toBe(true);
   });
 
   it("says in the steps line that a step is running while its run goes on", async () => {
