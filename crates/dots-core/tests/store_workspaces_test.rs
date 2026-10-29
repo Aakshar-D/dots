@@ -297,7 +297,10 @@ fn workspace_ids_come_from_names() {
     let long = workspace_id_for("Platform Reliability Engineering Team", &[]);
     assert!(long.len() <= 32, "{long}");
     assert_eq!(long, "platform-reliability-engineering");
-    let again = workspace_id_for("Platform Reliability Engineering Team", &[long.clone()]);
+    let again = workspace_id_for(
+        "Platform Reliability Engineering Team",
+        std::slice::from_ref(&long),
+    );
     assert!(again.len() <= 32, "{again}");
     assert_eq!(again, "platform-reliability-engineeri-2");
     // Cutting at a dash leaves no dash at the end.
