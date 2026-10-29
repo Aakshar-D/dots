@@ -60,6 +60,15 @@ impl Rt {
     /// Serves a member list at `seq` with the workspaces Default and Payments, an owner who is
     /// not this PC, and this PC as `role` with the workspace entries `mine`.
     async fn serve_list(&self, seq: u64, role: &str, mine: Value) {
+        let workspaces = json!([
+            {"id": "default", "name": "Default"},
+            {"id": "payments", "name": "Payments"}
+        ]);
+        self.serve_workspaces(seq, role, mine, workspaces).await;
+    }
+
+    /// `serve_list` with the workspaces `workspaces`.
+    async fn serve_workspaces(&self, seq: u64, role: &str, mine: Value, workspaces: Value) {
         let members = json!([
             member(
                 "01OWNER",
@@ -72,10 +81,7 @@ impl Rt {
         ]);
         let text = json!({
             "v": 1, "org_id": ACME, "issued_at": "2026-10-28T09:00:00Z", "seq": seq,
-            "workspaces": [
-                {"id": "default", "name": "Default"},
-                {"id": "payments", "name": "Payments"}
-            ],
+            "workspaces": workspaces,
             "members": members
         })
         .to_string();
@@ -436,6 +442,8 @@ async fn inbox_lists_team_scope_issues() {
 
     let issues = t.rt.inbox().await.unwrap().team_scope;
     assert_eq!(issues.len(), 1);
+    // It waits for the person like the rest of the Inbox.
+    assert_eq!(t.rt.inbox_count().await.unwrap(), 1);
     let issue = &issues[0];
     assert_eq!(
         (
@@ -453,5 +461,58 @@ async fn inbox_lists_team_scope_issues() {
 
     t.rt.store().set_dot_workspace(&b, "default").await.unwrap();
     assert!(t.rt.inbox().await.unwrap().team_scope.is_empty());
+    assert_eq!(t.rt.inbox_count().await.unwrap(), 0);
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn leaving_puts_the_accounts_dots_in_default_and_a_rejoin_keeps_them_there() {
+    let t = Rt::start().await;
+    t.join_as("member", json!({"default": "member", "payments": "member"}))
+        .await;
+    let dot =
+        t.rt.create_dot(spec("pay"), Some(ACME.into()), Some("payments".into()))
+            .await
+            .unwrap();
+    let crew =
+        t.rt.teams()
+            .create(&TeamSpec {
+                name: "crew".into(),
+                description: String::new(),
+                members: Vec::new(),
+                org_id: Some(ACME.into()),
+                workspace_id: "payments".into(),
+            })
+            .await
+            .unwrap();
+
+    t.rt.remove_org(ACME).await.unwrap();
+    let left = t.rt.store().get_dot(&dot.id).await.unwrap();
+    assert_eq!(left.org_id.as_deref(), Some(ACME));
+    assert_eq!(left.workspace_id, "default");
+    assert_eq!(
+        t.rt.store().get_team(&crew.id).await.unwrap().workspace_id,
+        "default"
+    );
+
+    // A dot left before leaving moved it, still in Payments, is moved when the account is
+    // joined again on a list without Payments: the mirror never saw that workspace.
+    t.rt.store()
+        .set_dot_workspace(&dot.id, "payments")
+        .await
+        .unwrap();
+    t.serve_workspaces(
+        1,
+        "member",
+        json!({"default": "member"}),
+        json!([{"id": "default", "name": "Default"}]),
+    )
+    .await;
+    let code = code(ACME, ACME_NAME, openbao(&t.bao.address(), "dots"), &t.keys);
+    t.orgs().join(&code, Some(token())).await.unwrap();
+    assert_eq!(
+        t.rt.store().get_dot(&dot.id).await.unwrap().workspace_id,
+        "default"
+    );
     t.rt.shutdown();
 }

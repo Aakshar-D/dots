@@ -16,7 +16,7 @@ use common::orgs::{
     START, TOKEN,
 };
 use common::{spec, wait_status};
-use dots_core::accounts::identity;
+use dots_core::accounts::{identity, DotAccess};
 use dots_core::model::{
     DotSpec, HoldReason, NewRun, RunStatus, TeamSpec, TriggerKind, WorkspaceMode,
 };
@@ -441,5 +441,47 @@ async fn create_dot_in_a_workspace_needs_rights_there() {
             .await
             .unwrap();
     assert_eq!(dot.workspace_id, "default");
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn dot_access_names_what_the_role_refuses() {
+    let t = Rt::start().await;
+    let dot = t.payments_dot().await;
+    assert_eq!(t.rt.dot_access(&dot).await.unwrap(), DotAccess::default());
+
+    t.become_(
+        2,
+        "member",
+        json!({"default": "member", "payments": "viewer"}),
+    )
+    .await;
+    assert_eq!(
+        t.rt.dot_access(&dot).await.unwrap(),
+        DotAccess {
+            edit: Some(payments_viewer_cant("create or change dots")),
+            run: Some(payments_viewer_cant("run dots")),
+            answer: Some(payments_viewer_cant("answer approvals")),
+        }
+    );
+    // The workspace's own refusals say the same.
+    let views = t.rt.workspaces(ACME).await.unwrap();
+    let payments = views.iter().find(|w| w.id == "payments").unwrap();
+    assert_eq!(payments.refusals, t.rt.dot_access(&dot).await.unwrap());
+
+    t.become_(3, "member", json!({"default": "member"})).await;
+    let outside = Some(OUTSIDE.to_string());
+    assert_eq!(
+        t.rt.dot_access(&dot).await.unwrap(),
+        DotAccess {
+            edit: outside.clone(),
+            run: outside.clone(),
+            answer: outside,
+        }
+    );
+    assert!(matches!(
+        t.rt.dot_access("ghost").await,
+        Err(Error::NotFound(_))
+    ));
     t.rt.shutdown();
 }

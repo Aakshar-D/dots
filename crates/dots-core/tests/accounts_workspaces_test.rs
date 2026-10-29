@@ -7,7 +7,7 @@ mod common;
 use common::orgs::{keys, policy, public_key, sign, sign_roster, token, OrgsHarness, ACME, ISSUED};
 use common::spec;
 use dots_core::accounts::{
-    current_scope, ensure_identity, set_current_scope, visible_workspaces, CurrentScope,
+    current_scope, ensure_identity, set_current_scope, visible_workspaces, CurrentScope, Refusals,
     WorkspaceRole,
 };
 use dots_core::Error;
@@ -223,4 +223,119 @@ async fn scope_picks_a_visible_workspace() {
         .unwrap();
     assert_eq!(set.workspace, "payments");
     assert_eq!(current_scope(&h.store, &h.orgs).await.unwrap(), set);
+}
+
+const WAITING: &str =
+    "Acme Engineering: you aren't on its member list yet. Send your Dots ID to an Admin.";
+
+/// A list at `seq` with both workspaces and only an owner who is not this PC.
+fn without_me(seq: u64) -> String {
+    json!({
+        "v": 1, "org_id": ACME, "issued_at": "2026-10-28T09:00:00Z", "seq": seq,
+        "workspaces": both(),
+        "members": [
+            {"id": "01OWNER", "name": "o", "email": "owner@acme.com", "role": "owner",
+             "keys": [public_key(&keys())], "workspaces": {"default": "admin"},
+             "added_at": "2026-10-28T09:00:00Z"}
+        ]
+    })
+    .to_string()
+}
+
+/// The same refusal for all three actions.
+fn all(text: &str) -> Refusals {
+    Refusals {
+        edit: Some(text.into()),
+        run: Some(text.into()),
+        answer: Some(text.into()),
+    }
+}
+
+#[tokio::test]
+async fn waiting_sees_default_read_only_and_can_pick_it() {
+    let h = OrgsHarness::new().await;
+    serve(&h, &without_me(1));
+    h.orgs.join(&h.acme_code(), Some(token())).await.unwrap();
+    let views = visible_workspaces(&h.store, &h.orgs, ACME).await.unwrap();
+    assert_eq!(views.len(), 1);
+    assert_eq!(views[0].id, "default");
+    assert_eq!(views[0].my_role, None);
+    assert!(!views[0].can_manage);
+    assert_eq!(views[0].refusals, all(WAITING));
+    let set = set_current_scope(&h.store, &h.orgs, ACME, "default")
+        .await
+        .unwrap();
+    assert_eq!(current_scope(&h.store, &h.orgs).await.unwrap(), set);
+}
+
+#[tokio::test]
+async fn removed_sees_default_read_only_and_can_pick_it() {
+    let h = joined("member", json!({"default": "member", "payments": "member"})).await;
+    serve(&h, &without_me(2));
+    h.orgs.refresh(ACME).await.unwrap();
+    let views = visible_workspaces(&h.store, &h.orgs, ACME).await.unwrap();
+    assert_eq!(ids(&h).await, ["default"]);
+    assert!(!views[0].can_manage);
+    assert_eq!(
+        views[0].refusals,
+        all("Acme Engineering: you were removed from it.")
+    );
+    set_current_scope(&h.store, &h.orgs, ACME, "default")
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn legacy_sees_default_and_is_not_refused() {
+    let h = OrgsHarness::new().await;
+    let policy = policy(ACME, ISSUED, json!({}));
+    h.serve("dots", json!({"A": "1"}), &sign(&h.keys, &policy));
+    h.orgs.join(&h.acme_code(), Some(token())).await.unwrap();
+    let views = visible_workspaces(&h.store, &h.orgs, ACME).await.unwrap();
+    assert_eq!(ids(&h).await, ["default"]);
+    assert_eq!(views[0].refusals, Refusals::default());
+    set_current_scope(&h.store, &h.orgs, ACME, "default")
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn member_without_a_default_entry_still_sees_default() {
+    let h = joined("member", json!({"payments": "member"})).await;
+    assert_eq!(ids(&h).await, ["default", "payments"]);
+    let views = visible_workspaces(&h.store, &h.orgs, ACME).await.unwrap();
+    assert_eq!(views[0].my_role, None);
+    assert_eq!(
+        views[0].refusals,
+        all("Acme Engineering: you aren't in the Default workspace. Ask an Admin or Owner to add you.")
+    );
+    assert_eq!(views[1].refusals, Refusals::default());
+    set_current_scope(&h.store, &h.orgs, ACME, "default")
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_workspace_viewer_is_refused_in_the_core_s_words() {
+    let h = joined("member", json!({"default": "member", "payments": "viewer"})).await;
+    let views = visible_workspaces(&h.store, &h.orgs, ACME).await.unwrap();
+    assert_eq!(views[0].refusals, Refusals::default());
+    let cant = |action: &str| {
+        Some(format!(
+            "Acme Engineering: a Viewer in the Payments workspace can't {action}. Ask an Admin or Owner."
+        ))
+    };
+    assert_eq!(
+        views[1].refusals,
+        Refusals {
+            edit: cant("create or change dots"),
+            run: cant("run dots"),
+            answer: cant("answer approvals"),
+        }
+    );
+    // Personal refuses nothing.
+    let personal = visible_workspaces(&h.store, &h.orgs, "personal")
+        .await
+        .unwrap();
+    assert_eq!(personal[0].refusals, Refusals::default());
 }

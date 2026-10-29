@@ -6,7 +6,9 @@
 use std::collections::BTreeMap;
 
 use dots_core::accounts::edit::RosterEdit;
-use dots_core::accounts::{CurrentScope, Identity, Membership, Role, WorkspaceRole, WorkspaceView};
+use dots_core::accounts::{
+    CurrentScope, DotAccess, Identity, Membership, Refusals, Role, WorkspaceRole, WorkspaceView,
+};
 use dots_core::browser::BrowserStatus;
 use dots_core::context::Document;
 use dots_core::engine::EngineEvent;
@@ -42,6 +44,13 @@ use crate::state::StartupError;
 use crate::update::UpdateNote;
 
 const TS: &str = "2026-10-09T12:00:00.000Z";
+
+/// How the core refuses a Viewer in the Platform workspace of Acme Engineering.
+fn viewer_in_platform(action: &str) -> String {
+    format!(
+        "Acme Engineering: a Viewer in the Platform workspace can't {action}. Ask an Admin or Owner."
+    )
+}
 
 fn to(v: impl serde::Serialize) -> Value {
     serde_json::to_value(v).expect("sample serializes")
@@ -1474,8 +1483,13 @@ pub fn samples() -> Value {
                 allow: vec!["GITHUB_*".into()],
                 deny: vec!["GITHUB_ADMIN".into()],
             }),
-            my_role: Some(WorkspaceRole::Member),
+            my_role: Some(WorkspaceRole::Viewer),
             can_manage: false,
+            refusals: Refusals {
+                edit: Some(viewer_in_platform("create or change dots")),
+                run: Some(viewer_in_platform("run dots")),
+                answer: Some(viewer_in_platform("answer approvals")),
+            },
         },
         WorkspaceView {
             scope: "personal".into(),
@@ -1484,7 +1498,20 @@ pub fn samples() -> Value {
             use_rules: None,
             my_role: None,
             can_manage: true,
+            refusals: Refusals::default(),
         },
+    ]);
+    // What `dot_access` answers: a dot in a workspace this PC isn't in, and one it may do all
+    // with.
+    let outside =
+        "Acme Engineering: you aren't in the Platform workspace. Ask an Admin or Owner to add you.";
+    samples["DotAccess"] = to([
+        DotAccess {
+            edit: Some(outside.into()),
+            run: Some(outside.into()),
+            answer: Some(outside.into()),
+        },
+        DotAccess::default(),
     ]);
     // What `member_edit` takes: one of every kind.
     samples["RosterEdit"] = to([

@@ -154,8 +154,10 @@ impl Store {
     }
 
     /// Makes the org's rows the roster's: names and `use` rules replaced, new ones added, the
-    /// ones the roster dropped removed with their dots and teams moved to Default. Returns the
-    /// ids that vanished. Default is kept even when the roster leaves it out.
+    /// ones the roster dropped removed. Every dot and team of the org in a workspace the roster
+    /// does not have is moved to Default, including one in a workspace these rows never had (a
+    /// dot from before the org was left and joined again). Returns the ids of the rows that
+    /// vanished. Default is kept even when the roster leaves it out.
     pub async fn mirror_workspaces(
         &self,
         org_id: &str,
@@ -198,12 +200,21 @@ impl Store {
                 .execute(&mut *tx)
                 .await?;
         }
-        let mut vanished = Vec::new();
-        for (id, _) in &old {
-            if id != DEFAULT_WORKSPACE && !roster.iter().any(|w| &w.id == id) {
-                move_to_default(&mut tx, org_id, id).await?;
-                vanished.push(id.clone());
-            }
+        let vanished = old
+            .into_iter()
+            .map(|(id, _)| id)
+            .filter(|id| id != DEFAULT_WORKSPACE && !roster.iter().any(|w| &w.id == id))
+            .collect();
+        for table in ["dots", "teams"] {
+            sqlx::query(&format!(
+                "UPDATE {table} SET workspace_id = ? WHERE org_id = ? AND workspace_id NOT IN \
+                 (SELECT id FROM workspaces WHERE scope = ?)"
+            ))
+            .bind(DEFAULT_WORKSPACE)
+            .bind(org_id)
+            .bind(org_id)
+            .execute(&mut *tx)
+            .await?;
         }
         tx.commit().await?;
         Ok(vanished)

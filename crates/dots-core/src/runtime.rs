@@ -734,6 +734,8 @@ impl Runtime {
             + usize::from(!inbox.held.is_empty())
             // A waiting review card counts like an approval (app library spec section 10).
             + inbox.app_reviews.len()
+            // A team with a member outside its account or workspace (accounts design §6.3).
+            + inbox.team_scope.len()
             + self.store.count_waiting_messages().await?)
     }
 
@@ -1061,6 +1063,15 @@ impl Runtime {
     /// The workspaces of `scope` (`personal` or an org id) this PC may see.
     pub async fn workspaces(&self, scope: &str) -> Result<Vec<crate::accounts::WorkspaceView>> {
         crate::accounts::visible_workspaces(&self.store, &self.orgs, scope).await
+    }
+
+    /// What this PC may not do with the dot `dot_id`: change it, run it, answer its approvals,
+    /// each in the words `require_dot` refuses it with (its account and workspace); `None` is
+    /// allowed. The UI switches its controls off by these (members spec §9).
+    pub async fn dot_access(&self, dot_id: &str) -> Result<crate::accounts::DotAccess> {
+        let dot = self.store.get_dot(dot_id).await?;
+        crate::accounts::refusals_in(Some(&self.orgs), dot.org_id.as_deref(), &dot.workspace_id)
+            .await
     }
 
     /// Adds a workspace to Personal; its id is made from the name.
@@ -1544,19 +1555,10 @@ impl Runtime {
 
 /// Account roles (members spec §6.3): what this PC may do in Personal or an account.
 impl Runtime {
-    /// This PC's access to `org_id`; `None` is Personal, where it is always Owner.
-    pub fn access(&self, org_id: Option<&str>) -> Access {
-        crate::accounts::access(Some(&self.orgs), org_id)
-    }
-
-    /// `Ok` when this PC may do `p` in `org_id`, otherwise `Error::NotAllowed` naming the
-    /// account and the role, or why this PC is not on its member list.
-    pub async fn require(&self, org_id: Option<&str>, p: Permission) -> Result<()> {
-        crate::accounts::require(Some(&self.orgs), org_id, p).await
-    }
-
-    /// `require` in the workspace `workspace_id` of `org_id`, where the member's role in the
-    /// workspace narrows the account role (members spec §6.3).
+    /// `Ok` when this PC may do `p` in the workspace `workspace_id` of `org_id`, where the
+    /// member's role in the workspace narrows the account role (members spec §6.3); otherwise
+    /// `Error::NotAllowed` naming the account and the role, or why this PC is not let in. Every
+    /// check on a dot or team goes through here (`require_dot`), never the account role alone.
     pub async fn require_in(
         &self,
         org_id: Option<&str>,

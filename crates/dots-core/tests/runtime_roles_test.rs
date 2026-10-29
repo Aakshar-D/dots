@@ -17,7 +17,7 @@ use common::orgs::{
     ISSUED, START, TOKEN,
 };
 use common::{spec, wait_status};
-use dots_core::accounts::{identity, Access, Membership, Permission};
+use dots_core::accounts::{self, identity, Access, Membership, Permission};
 use dots_core::apps::call::Actor;
 use dots_core::apps::propose::{AppProposal, Decision};
 use dots_core::apps::source::read_folder;
@@ -262,7 +262,7 @@ async fn viewer_cannot_create_edit_run_or_answer() {
 
     // `require` answers the same for what the app checks itself.
     assert_eq!(
-        refused(t.rt.require(Some(ACME), Permission::ManageMembers).await),
+        refused(accounts::require(Some(t.orgs()), Some(ACME), Permission::ManageMembers).await),
         viewer_cant("manage members")
     );
     t.rt.shutdown();
@@ -282,7 +282,7 @@ async fn member_can_create_and_run() {
     assert_eq!(t.run(&dot.id).await, LEVEL);
     // A Member does not manage the account.
     assert_eq!(
-        refused(t.rt.require(Some(ACME), Permission::ManageMembers).await),
+        refused(accounts::require(Some(t.orgs()), Some(ACME), Permission::ManageMembers).await),
         "Acme Engineering: a Member can't manage members. Ask an Admin or Owner."
     );
     t.rt.delete_dot(&dot.id).await.unwrap();
@@ -370,7 +370,7 @@ async fn personal_always_allowed() {
     let run = t.rt.run_now(&dot.id).await.unwrap();
     wait_status(t.rt.store(), &run.id, RunStatus::Succeeded, 15).await;
     for p in [Permission::ManageMembers, Permission::SignRoster] {
-        t.rt.require(None, p).await.unwrap();
+        accounts::require(Some(t.orgs()), None, p).await.unwrap();
     }
     t.rt.delete_dot(&dot.id).await.unwrap();
     t.rt.shutdown();
@@ -386,11 +386,11 @@ async fn legacy_account_acts_as_member() {
             .await
             .unwrap();
     assert_eq!(t.run(&dot.id).await, LEVEL);
-    t.rt.require(Some(ACME), Permission::GrantEntries)
+    accounts::require(Some(t.orgs()), Some(ACME), Permission::GrantEntries)
         .await
         .unwrap();
     assert_eq!(
-        refused(t.rt.require(Some(ACME), Permission::ManageWorkspaces).await),
+        refused(accounts::require(Some(t.orgs()), Some(ACME), Permission::ManageWorkspaces).await),
         "Acme Engineering: a Member can't manage workspaces. Ask an Admin or Owner."
     );
     t.rt.shutdown();
@@ -640,7 +640,10 @@ async fn a_damaged_org_acts_as_waiting() {
         .unwrap();
     pool.close().await;
     let t = Rt::on(dir, secrets, bao, keys).await;
-    assert_eq!(t.rt.access(Some(ACME)), Access::Waiting);
+    assert_eq!(
+        accounts::access(Some(t.orgs()), Some(ACME)),
+        Access::Waiting
+    );
     // Its summary says the same as its access: waiting, with the waiting words.
     let summary = t.orgs().summary(ACME).await.unwrap();
     assert_eq!(summary.membership, Membership::Waiting);
@@ -835,7 +838,10 @@ async fn waiting_or_removed_may_switch_off_and_delete_but_not_change() {
     // The account now asks for a list that leaves this PC out: waiting.
     t.serve_list(1, None).await;
     t.rt.refresh_org(ACME).await.unwrap();
-    assert_eq!(t.rt.access(Some(ACME)), Access::Waiting);
+    assert_eq!(
+        accounts::access(Some(t.orgs()), Some(ACME)),
+        Access::Waiting
+    );
 
     let mut changed = one.spec.clone();
     changed.instructions = "something else".into();
@@ -854,7 +860,10 @@ async fn waiting_or_removed_may_switch_off_and_delete_but_not_change() {
     // Added, then left off the next list: removed, with the same cleanup.
     t.become_(2, Some("member")).await;
     t.become_(3, None).await;
-    assert_eq!(t.rt.access(Some(ACME)), Access::Removed);
+    assert_eq!(
+        accounts::access(Some(t.orgs()), Some(ACME)),
+        Access::Removed
+    );
     let removed = "Acme Engineering: you were removed from it.";
     assert_eq!(refused(t.rt.set_dot_enabled(&two.id, true).await), removed);
     t.rt.set_dot_enabled(&two.id, false).await.unwrap();

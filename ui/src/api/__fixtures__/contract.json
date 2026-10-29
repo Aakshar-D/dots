@@ -513,6 +513,7 @@
     "dot_variables",
     "create_dot",
     "dot_move",
+    "dot_access",
     "workspace_list",
     "personal_workspace_add",
     "personal_workspace_rename",
@@ -819,6 +820,18 @@
     "workspace_id": "default",
     "workspace_mode": "worktree"
   },
+  "DotAccess": [
+    {
+      "answer": "Acme Engineering: you aren't in the Platform workspace. Ask an Admin or Owner to add you.",
+      "edit": "Acme Engineering: you aren't in the Platform workspace. Ask an Admin or Owner to add you.",
+      "run": "Acme Engineering: you aren't in the Platform workspace. Ask an Admin or Owner to add you."
+    },
+    {
+      "answer": null,
+      "edit": null,
+      "run": null
+    }
+  ],
   "DotOverview": {
     "active_run": null,
     "dot": {
@@ -4236,8 +4249,13 @@
     {
       "can_manage": false,
       "id": "platform",
-      "my_role": "member",
+      "my_role": "viewer",
       "name": "Platform",
+      "refusals": {
+        "answer": "Acme Engineering: a Viewer in the Platform workspace can't answer approvals. Ask an Admin or Owner.",
+        "edit": "Acme Engineering: a Viewer in the Platform workspace can't create or change dots. Ask an Admin or Owner.",
+        "run": "Acme Engineering: a Viewer in the Platform workspace can't run dots. Ask an Admin or Owner."
+      },
       "scope": "acme-eng",
       "use_rules": {
         "allow": [
@@ -4253,6 +4271,11 @@
       "id": "default",
       "my_role": null,
       "name": "Default",
+      "refusals": {
+        "answer": null,
+        "edit": null,
+        "run": null
+      },
       "scope": "personal",
       "use_rules": null
     }

@@ -5,9 +5,10 @@ mod common;
 use common::{spec, temp_store};
 use dots_core::accounts::{workspace_id_for, Workspace};
 use dots_core::model::TeamSpec;
-use dots_core::store::WorkspaceRow;
+use dots_core::store::{Store, WorkspaceRow};
 use dots_core::vault::org::{OrgRow, SopsSettings, SourceSettings, UseRules};
 use dots_core::Error;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 
 const KEY: &str = "RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3";
 
@@ -308,4 +309,163 @@ fn workspace_ids_come_from_names() {
         workspace_id_for("abcdefghijklmnopqrstuvwxyzabcde fgh", &[]),
         "abcdefghijklmnopqrstuvwxyzabcde"
     );
+}
+
+#[tokio::test]
+async fn removing_an_org_puts_its_dots_and_teams_in_default() {
+    let (_dir, store) = temp_store().await;
+    store.add_org(&acme()).await.unwrap();
+    store
+        .add_workspace(&row("acme-eng", "payments", "Payments"))
+        .await
+        .unwrap();
+    store
+        .add_workspace(&row("personal", "payments", "Payments"))
+        .await
+        .unwrap();
+    let theirs = store
+        .create_dot(&spec("theirs"), Some("acme-eng"), "payments")
+        .await
+        .unwrap();
+    let mine = store
+        .create_dot(&spec("mine"), None, "payments")
+        .await
+        .unwrap();
+    let crew = store
+        .create_team(&team("crew", Some("acme-eng"), "payments"))
+        .await
+        .unwrap();
+
+    store.remove_org("acme-eng").await.unwrap();
+    let left = store.get_dot(&theirs.id).await.unwrap();
+    assert_eq!(left.workspace_id, "default");
+    // It keeps its org (§6.4): joining again re-attaches it.
+    assert_eq!(left.org_id.as_deref(), Some("acme-eng"));
+    assert_eq!(
+        store.get_team(&crew.id).await.unwrap().workspace_id,
+        "default"
+    );
+    // Personal's dots are not touched.
+    assert_eq!(
+        store.get_dot(&mine.id).await.unwrap().workspace_id,
+        "payments"
+    );
+}
+
+#[tokio::test]
+async fn mirror_moves_dots_in_a_workspace_it_never_saw() {
+    let (_dir, store) = temp_store().await;
+    store.add_org(&acme()).await.unwrap();
+    // Placed in a workspace the org's rows never had (left and joined again, say).
+    let lost = store
+        .create_dot(&spec("lost"), Some("acme-eng"), "ghost")
+        .await
+        .unwrap();
+    let crew = store
+        .create_team(&team("crew", Some("acme-eng"), "ghost"))
+        .await
+        .unwrap();
+    let kept = store
+        .create_dot(&spec("kept"), Some("acme-eng"), "api")
+        .await
+        .unwrap();
+    let mine = store
+        .create_dot(&spec("mine"), None, "ghost")
+        .await
+        .unwrap();
+    let roster = vec![Workspace {
+        id: "api".into(),
+        name: "API".into(),
+        use_rules: None,
+    }];
+    store.mirror_workspaces("acme-eng", &roster).await.unwrap();
+    assert_eq!(
+        store.get_dot(&lost.id).await.unwrap().workspace_id,
+        "default"
+    );
+    assert_eq!(
+        store.get_team(&crew.id).await.unwrap().workspace_id,
+        "default"
+    );
+    assert_eq!(store.get_dot(&kept.id).await.unwrap().workspace_id, "api");
+    // Another account's dots are not touched.
+    assert_eq!(store.get_dot(&mine.id).await.unwrap().workspace_id, "ghost");
+}
+
+/// Migration 0023 on a database with a joined org, a team and dots made before it: Personal
+/// and the org get a Default workspace, and every dot and team is in it.
+#[tokio::test]
+async fn migration_0023_puts_what_was_there_in_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("dots.db");
+    let opts = SqliteConnectOptions::new()
+        .filename(&path)
+        .create_if_missing(true);
+    let pool = SqlitePool::connect_with(opts).await.unwrap();
+    let mut before = sqlx::migrate!("./migrations");
+    before.migrations = before
+        .migrations
+        .iter()
+        .filter(|m| m.version < 23)
+        .cloned()
+        .collect::<Vec<_>>()
+        .into();
+    before.run(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO orgs (id, name, source, policy_key, joined_at) VALUES ('acme-eng', \
+         'Acme Engineering', ?, ?, '2026-10-22T09:00:00.000Z')",
+    )
+    .bind(serde_json::to_string(&acme().source).unwrap())
+    .bind(KEY)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO teams (id, name, description, created_at, updated_at, org_id) VALUES \
+         ('T1', 'crew', '', '2026-10-01T00:00:00.000Z', '2026-10-01T00:00:00.000Z', 'acme-eng')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let policy = serde_json::to_string(&dots_core::policy::Policy::preset(
+        dots_core::policy::Preset::Sandboxed,
+    ))
+    .unwrap();
+    for (id, org) in [("D1", None), ("D2", Some("acme-eng"))] {
+        sqlx::query(
+            "INSERT INTO dots (id, name, instructions, engine, model, workdir, workspace_mode, \
+             webhook_token, policy, uses, max_turns, timeout_secs, approval_wait_secs, \
+             created_at, updated_at, org_id) VALUES (?, ?, 'Do it.', 'claude', 'sonnet', \
+             'C:/tmp/repo', 'worktree', ?, ?, '{}', 40, 1800, 240, \
+             '2026-10-01T00:00:00.000Z', '2026-10-01T00:00:00.000Z', ?)",
+        )
+        .bind(id)
+        .bind(format!("dot-{id}"))
+        .bind(format!("token-{id}"))
+        .bind(&policy)
+        .bind(org)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    pool.close().await;
+
+    let store = Store::open(&path).await.unwrap();
+    assert_eq!(
+        ids(&store.list_workspaces("personal").await.unwrap()),
+        ["default"]
+    );
+    assert_eq!(
+        ids(&store.list_workspaces("acme-eng").await.unwrap()),
+        ["default"]
+    );
+    for id in ["D1", "D2"] {
+        assert_eq!(store.get_dot(id).await.unwrap().workspace_id, "default");
+    }
+    assert_eq!(
+        store.get_dot("D2").await.unwrap().org_id.as_deref(),
+        Some("acme-eng")
+    );
+    assert_eq!(store.get_team("T1").await.unwrap().workspace_id, "default");
+    store.close().await;
 }

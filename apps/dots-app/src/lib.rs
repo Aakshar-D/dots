@@ -77,6 +77,7 @@ command_list![
     dot_variables,
     create_dot,
     dot_move,
+    dot_access,
     workspace_list,
     personal_workspace_add,
     personal_workspace_rename,

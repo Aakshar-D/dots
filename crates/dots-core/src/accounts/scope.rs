@@ -65,7 +65,8 @@ pub async fn current_scope(store: &Store, orgs: &Orgs) -> Result<CurrentScope> {
     }
 }
 
-/// Chooses the account and workspace in view.
+/// Chooses the account and workspace in view. `default` can be chosen in any joined account,
+/// even one this PC waits for or was removed from, so that its dots can be cleaned up.
 pub async fn set_current_scope(
     store: &Store,
     orgs: &Orgs,
@@ -79,7 +80,7 @@ pub async fn set_current_scope(
         account: account.into(),
         workspace: workspace.into(),
     };
-    if !is_visible(store, orgs, &scope).await? {
+    if workspace != DEFAULT_WORKSPACE && !is_visible(store, orgs, &scope).await? {
         return Err(Error::Invalid(format!(
             "no workspace '{workspace}' in this account"
         )));

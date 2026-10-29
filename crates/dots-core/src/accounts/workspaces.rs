@@ -4,12 +4,12 @@
 use serde::Serialize;
 
 use super::membership::Membership;
-use super::permissions::{access, Permission};
+use super::permissions::{access, require_in, Permission};
 use super::roster::{Role, WorkspaceRole};
 use super::{DEFAULT_WORKSPACE, PERSONAL};
 use crate::store::Store;
 use crate::vault::org::{Orgs, UseRules};
-use crate::Result;
+use crate::{Error, Result};
 
 /// The longest a workspace id may be (`^[a-z0-9][a-z0-9-]{0,31}$`).
 const MAX_ID: usize = 32;
@@ -56,11 +56,51 @@ pub struct WorkspaceView {
     pub my_role: Option<WorkspaceRole>,
     /// Whether this PC may rename, add or delete workspaces here.
     pub can_manage: bool,
+    /// What this PC may not do with the workspace's dots, in the core's words.
+    pub refusals: Refusals,
+}
+
+/// What this PC may not do in a workspace, each in the words the core refuses it with (members
+/// spec §9: a control switched off for lack of a role says which role is needed). `None` is
+/// allowed. The UI reads these and never decides a role itself.
+#[derive(Serialize, Clone, Debug, PartialEq, Eq, Default)]
+pub struct Refusals {
+    pub edit: Option<String>,
+    pub run: Option<String>,
+    pub answer: Option<String>,
+}
+
+/// What this PC may not do with one dot (`Runtime::dot_access`): the `Refusals` of its account
+/// and workspace.
+pub type DotAccess = Refusals;
+
+/// The `Refusals` of the workspace `workspace_id` of `org_id` (`None` is Personal), from
+/// `require_in`: Personal and an account with no member list refuse nothing.
+pub async fn refusals_in(
+    orgs: Option<&Orgs>,
+    org_id: Option<&str>,
+    workspace_id: &str,
+) -> Result<Refusals> {
+    let refused = |p| async move {
+        match require_in(orgs, org_id, workspace_id, p).await {
+            Ok(()) => Ok(None),
+            Err(Error::NotAllowed(text)) => Ok(Some(text)),
+            Err(e) => Err(e),
+        }
+    };
+    Ok(Refusals {
+        edit: refused(Permission::EditDots).await?,
+        run: refused(Permission::RunDots).await?,
+        answer: refused(Permission::AnswerApprovals).await?,
+    })
 }
 
 /// The workspaces of `scope` this PC may see (§6.3). Personal and an account with no member
-/// list: all of them. An active member: all as an Owner or Admin, otherwise only those the
-/// member list puts it in. A PC waiting to be added, removed, or in an account not joined: none.
+/// list: all of them. An active member: all as an Owner or Admin, otherwise Default and those
+/// the member list puts it in (Default even when a hand-made list gives it no entry there). A
+/// PC waiting to be added, removed, or whose account's settings are damaged: Default only, to
+/// pick the account and clean up its dots; its `refusals` say why it may do nothing else. An
+/// account not joined: none.
 pub async fn visible_workspaces(
     store: &Store,
     orgs: &Orgs,
@@ -77,10 +117,15 @@ pub async fn visible_workspaces(
     let mine = org
         .and_then(|id| orgs.my_workspaces(id))
         .unwrap_or_default();
-    let sees_all = match membership {
-        Membership::Waiting | Membership::Removed => return Ok(Vec::new()),
-        Membership::Legacy => true,
-        Membership::Active => matches!(role, Some(Role::Owner | Role::Admin)),
+    let sees = |id: &str| {
+        id == DEFAULT_WORKSPACE
+            || match membership {
+                Membership::Waiting | Membership::Removed => false,
+                Membership::Legacy => true,
+                Membership::Active => {
+                    matches!(role, Some(Role::Owner | Role::Admin)) || mine.contains_key(id)
+                }
+            }
     };
     let can_manage = access(Some(orgs), org).allows(Permission::ManageWorkspaces);
     let my_role = |id: &str| match (membership, role) {
@@ -88,18 +133,20 @@ pub async fn visible_workspaces(
         (Membership::Active, _) => mine.get(id).copied(),
         _ => None,
     };
-    Ok(store
-        .list_workspaces(scope)
-        .await?
-        .into_iter()
-        .filter(|w| sees_all || mine.contains_key(&w.id))
-        .map(|w| WorkspaceView {
+    let mut views = Vec::new();
+    for w in store.list_workspaces(scope).await? {
+        if !sees(&w.id) {
+            continue;
+        }
+        views.push(WorkspaceView {
             my_role: my_role(&w.id),
+            refusals: refusals_in(Some(orgs), org, &w.id).await?,
             scope: w.scope,
             name: w.name,
             use_rules: w.use_rules,
             can_manage,
             id: w.id,
-        })
-        .collect())
+        });
+    }
+    Ok(views)
 }

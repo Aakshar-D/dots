@@ -12,8 +12,8 @@
 //! code under a `default-src 'self'` policy.
 
 use dots_core::accounts::edit::RosterEdit;
-use dots_core::accounts::WorkspaceView;
 use dots_core::accounts::{CurrentScope, Identity, Role};
+use dots_core::accounts::{DotAccess, WorkspaceView};
 use dots_core::apps::kept::KeptData;
 use dots_core::apps::propose::{AppProposal, Decision};
 use dots_core::apps::screen::{AppFile, AppRow};
@@ -450,6 +450,13 @@ pub async fn dot_move(
     workspace_id: String,
 ) -> Res<Dot> {
     Ok(state.rt()?.move_dot(&dot_id, &workspace_id).await?)
+}
+
+/// What this PC may not do with the dot (change it, run it, answer its approvals), each in
+/// the core's words; null is allowed. The editor's and approval cards' buttons follow it.
+#[tauri::command]
+pub async fn dot_access(state: State<'_, AppState>, dot_id: String) -> Res<DotAccess> {
+    Ok(state.rt()?.dot_access(&dot_id).await?)
 }
 
 /// The workspaces of `scope` (`personal`, or an org's id) this PC may see.

@@ -300,8 +300,9 @@ impl Store {
         Ok(())
     }
 
-    /// Removes the org's row. Its dots keep their `org_id` (§6.4). Its invites and roster draft
-    /// go with it (their foreign keys cascade).
+    /// Removes the org's row. Its dots keep their `org_id` (§6.4); they and its teams go to the
+    /// `default` workspace, as its workspaces go with it (accounts design §6.3). Its invites and
+    /// roster draft go with it (their foreign keys cascade).
     pub async fn remove_org(&self, id: &str) -> Result<()> {
         let mut tx = self.pool.begin().await?;
         let done = sqlx::query("DELETE FROM orgs WHERE id = ?")
@@ -316,6 +317,15 @@ impl Store {
             .bind(id)
             .execute(&mut *tx)
             .await?;
+        for table in ["dots", "teams"] {
+            sqlx::query(&format!(
+                "UPDATE {table} SET workspace_id = ? WHERE org_id = ?"
+            ))
+            .bind(crate::accounts::DEFAULT_WORKSPACE)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        }
         tx.commit().await?;
         Ok(())
     }
