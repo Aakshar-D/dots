@@ -155,7 +155,9 @@ pub async fn trigger(
     used(&s, &caller, answer).await
 }
 
-/// `GET /v1/runs/{id}`: a run's status (§15 leaves events open; status is the minimum).
+/// `GET /v1/runs/{id}`: a run's status (§15 leaves events open; status is the minimum). A run
+/// does not record its workspace, so its scope follows its dot's current workspace: a run of a
+/// dot moved out of the key's workspace is no longer reached.
 pub async fn run(
     State(s): State<ServerState>,
     Path(id): Path<String>,

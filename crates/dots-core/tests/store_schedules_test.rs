@@ -230,14 +230,15 @@ async fn a_fired_slot_enqueues_counts_watches_and_drops_the_retry() {
 }
 
 /// Usage and limits spec section 4: a run held for Claude usage may wait for hours; a slot
-/// must not vanish into a queued run started by an event (a watcher's, a webhook's or a
-/// follow-up's), which carries its own payload. It joins a queued schedule run.
+/// must not vanish into a queued run started by an event (a watcher's, a webhook's, an API
+/// key's or a follow-up's), which carries its own payload. It joins a queued schedule run.
 #[tokio::test]
 async fn a_schedule_slot_does_not_join_a_queued_watcher_run() {
     for trigger in [
         TriggerKind::Watcher,
         TriggerKind::Webhook,
         TriggerKind::FollowUp,
+        TriggerKind::Api,
     ] {
         let (_d, store) = temp_store().await;
         let dot = scheduled(&store, "a").await;

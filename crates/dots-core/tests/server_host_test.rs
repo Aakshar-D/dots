@@ -97,21 +97,11 @@ async fn two_host_headers_are_refused() {
             let mut c = tokio::net::TcpStream::connect(("127.0.0.1", port))
                 .await
                 .unwrap();
-            let mut req = String::from(
-                "GET /health HTTP/1.1
-",
-            );
+            let mut req = String::from("GET /health HTTP/1.1\r\n");
             for _ in 0..hosts {
-                req.push_str(&format!(
-                    "Host: 127.0.0.1:{port}
-"
-                ));
+                req.push_str(&format!("Host: 127.0.0.1:{port}\r\n"));
             }
-            req.push_str(
-                "Connection: close
-
-",
-            );
+            req.push_str("Connection: close\r\n\r\n");
             c.write_all(req.as_bytes()).await.unwrap();
             let mut out = String::new();
             c.read_to_string(&mut out).await.unwrap();

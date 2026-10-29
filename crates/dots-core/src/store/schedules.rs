@@ -50,12 +50,12 @@ fn state_from_row(row: &SqliteRow) -> Result<ScheduleState> {
 
 /// The dot's queued run if it has one (the oldest), or else `new` inserted; true when joined.
 async fn start_or_join(conn: &mut SqliteConnection, new: &NewRun) -> Result<(String, bool)> {
-    // Not a run an event started (a watcher's, a webhook's, a follow-up's): it carries its
-    // own payload, and while it is held for Claude usage the slot would vanish into it (usage
-    // and limits spec section 4).
+    // Not a run an event started (a watcher's, a webhook's, an API key's, a follow-up's): it
+    // carries its own payload, and while it is held for Claude usage the slot would vanish into
+    // it (usage and limits spec section 4).
     let queued: Option<String> = sqlx::query_scalar(
         "SELECT id FROM runs WHERE dot_id = ? AND status = 'queued' \
-         AND trigger_kind NOT IN ('watcher', 'webhook', 'follow_up') \
+         AND trigger_kind NOT IN ('watcher', 'webhook', 'api', 'follow_up') \
          ORDER BY queued_at, id LIMIT 1",
     )
     .bind(&new.dot_id)
