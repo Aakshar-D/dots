@@ -1,8 +1,9 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import type { InstructionProposal } from "@/api/types";
 import { backend } from "@/test/backend";
+import { sample } from "@/test/fixtures";
 import { chat, dot, home } from "@/test/home";
 import { renderApp } from "@/test/render";
 
@@ -110,6 +111,28 @@ describe("instructions a dot proposed", () => {
     expect(within(shown).getByRole("button", { name: "Approve" })).toBeEnabled();
   });
 
+  it("waits to be decided while the dot still works on its topic", async () => {
+    const working = { ...a, status: "running" as const, ended_at: null };
+    const runs = home([working]);
+    backend.on("instruction_proposals_list", () => [proposal()]);
+    renderApp(`/home/${dot.id}`);
+    const shown = await card();
+    const wait = `${dot.name} is still working on this topic`;
+    for (const name of ["Approve", "Reject"]) {
+      const button = within(shown).getByRole("button", { name });
+      expect(button).toBeDisabled();
+      expect(button).toHaveAttribute("title", wait);
+    }
+
+    runs[0] = { ...working, status: "succeeded", ended_at: sample.run.ended_at };
+    act(() => backend.emit("runtime", { type: "run_updated", run: runs[0] }));
+    await waitFor(() =>
+      expect(within(shown).getByRole("button", { name: "Approve" })).toBeEnabled(),
+    );
+    expect(within(shown).getByRole("button", { name: "Reject" })).toBeEnabled();
+    expect(within(shown).getByRole("button", { name: "Approve" })).not.toHaveAttribute("title");
+  });
+
   it("lists the waiting ones in the Inbox with their dot and conversation", async () => {
     backend.on("inbox", () => ({
       approvals: [],
@@ -132,5 +155,9 @@ describe("instructions a dot proposed", () => {
       "href",
       `/dots/${dot.id}`,
     );
+    // The Inbox does not hold the topic's runs: its card is never made to wait.
+    for (const name of ["Approve", "Reject"]) {
+      expect(within(group).getByRole("button", { name })).toBeEnabled();
+    }
   });
 });

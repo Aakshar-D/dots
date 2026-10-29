@@ -48,6 +48,8 @@ describe("a dot's conversation", () => {
     const { listening } = renderApp(`/home/${dot.id}`);
     const shown = await card(run);
     await listening();
+    // A rounded light-bordered card, not a rule on its left.
+    expect(shown).toHaveClass("rounded-xl", "border", "bg-card");
     expect(within(shown).getByText("Succeeded")).toBeVisible();
     expect(within(shown).getByText("Sent 3 invoices")).toBeVisible();
     expect(within(shown).getByRole("link", { name: "Details" })).toHaveAttribute(

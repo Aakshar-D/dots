@@ -18,8 +18,14 @@ const LINE: Record<DiffLine["kind"], string> = {
 /// Instructions a dot proposed for itself (conversational chat spec section 4): why, its
 /// instructions before and after line by line, and Approve or Reject. Nothing changes until the
 /// person approves; the dot reads the answer as its chat's next message.
-export function InstructionsCard(props: { proposal: InstructionProposal; dotName: string }) {
-  const { proposal, dotName } = props;
+export function InstructionsCard(props: {
+  proposal: InstructionProposal;
+  dotName: string;
+  /// The dot still works on the proposal's topic. The core refuses a decision until the topic's
+  /// runs have ended, so Approve and Reject wait too.
+  busy?: boolean;
+}) {
+  const { proposal, dotName, busy = false } = props;
   const qc = useQueryClient();
   const decide = useMutation({
     mutationFn: (approve: boolean) => commands.instructionProposalDecide(proposal.id, approve),
@@ -33,6 +39,7 @@ export function InstructionsCard(props: { proposal: InstructionProposal; dotName
   });
   // One decision per card: after a success the card stays until its list has reloaded.
   const decided = decide.isPending || decide.isSuccess;
+  const wait = busy ? `${dotName} is still working on this topic` : undefined;
   const lines = lineDiff(proposal.base, proposal.instructions);
   return (
     <article
@@ -55,13 +62,19 @@ export function InstructionsCard(props: { proposal: InstructionProposal; dotName
         ))}
       </pre>
       <div className="flex flex-wrap items-center gap-2">
-        <Button size="sm" disabled={decided} onClick={onSingleClick(() => decide.mutate(true))}>
+        <Button
+          size="sm"
+          disabled={decided || busy}
+          title={wait}
+          onClick={onSingleClick(() => decide.mutate(true))}
+        >
           Approve
         </Button>
         <Button
           size="sm"
           variant="outline"
-          disabled={decided}
+          disabled={decided || busy}
+          title={wait}
           onClick={onSingleClick(() => decide.mutate(false))}
         >
           Reject
