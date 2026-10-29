@@ -293,4 +293,16 @@ fn workspace_ids_come_from_names() {
     assert_eq!(workspace_id_for("***", &[]), "workspace");
     let two = vec!["api".to_string(), "api-2".to_string()];
     assert_eq!(workspace_id_for("API!", &two), "api-3");
+
+    let long = workspace_id_for("Platform Reliability Engineering Team", &[]);
+    assert!(long.len() <= 32, "{long}");
+    assert_eq!(long, "platform-reliability-engineering");
+    let again = workspace_id_for("Platform Reliability Engineering Team", &[long.clone()]);
+    assert!(again.len() <= 32, "{again}");
+    assert_eq!(again, "platform-reliability-engineeri-2");
+    // Cutting at a dash leaves no dash at the end.
+    assert_eq!(
+        workspace_id_for("abcdefghijklmnopqrstuvwxyzabcde fgh", &[]),
+        "abcdefghijklmnopqrstuvwxyzabcde"
+    );
 }

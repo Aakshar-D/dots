@@ -23,7 +23,8 @@ pub struct WorkspaceRow {
 }
 
 const COLUMNS: &str = "scope, id, name, use_rules, created_at";
-const INSERT: &str = "INSERT INTO workspaces (scope, id, name, use_rules, created_at) \n                      VALUES (?, ?, ?, ?, ?)";
+const INSERT: &str =
+    "INSERT INTO workspaces (scope, id, name, use_rules, created_at) VALUES (?, ?, ?, ?, ?)";
 
 fn from_row(row: &SqliteRow) -> Result<WorkspaceRow> {
     let scope: String = row.try_get("scope")?;

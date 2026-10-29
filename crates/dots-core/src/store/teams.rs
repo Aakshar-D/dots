@@ -123,6 +123,8 @@ async fn insert_members(
 }
 
 impl Store {
+    /// Creates a team. Whether the spec's `workspace_id` exists in its account is the caller's
+    /// check.
     pub async fn create_team(&self, spec: &TeamSpec) -> Result<Team> {
         spec.validate()?;
         let id = new_id();

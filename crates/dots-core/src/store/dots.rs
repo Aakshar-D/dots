@@ -113,8 +113,9 @@ impl Store {
 
     /// Creates a dot, in the org `org_id` or, with `None`, in Personal. Nothing changes the org
     /// afterwards (env vault spec §5.2). Whether the org is joined is the caller's check
-    /// (`Runtime::create_dot`); `workspace_id` is the caller's too. Every item its `uses` names must be in the Library (`Invalid`).
-    /// The servers it uses are granted their variables.
+    /// (`Runtime::create_dot`); so is whether `workspace_id` exists in that account. Every item
+    /// its `uses` names must be in the Library (`Invalid`). The servers it uses are granted
+    /// their variables.
     pub async fn create_dot(
         &self,
         spec: &DotSpec,
