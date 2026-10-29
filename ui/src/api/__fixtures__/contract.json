@@ -512,6 +512,11 @@
     "get_dot",
     "dot_variables",
     "create_dot",
+    "dot_move",
+    "workspace_list",
+    "personal_workspace_add",
+    "personal_workspace_rename",
+    "personal_workspace_delete",
     "update_dot",
     "delete_dot",
     "set_dot_enabled",
@@ -1626,7 +1631,15 @@
         "worktree_exists": true
       }
     ],
-    "team_scope": [],
+    "team_scope": [
+      {
+        "dot_id": "01J0DOT",
+        "dot_name": "nightly-tests",
+        "reason": "nightly-tests is in another workspace than the crew team.",
+        "team_id": "01J0TEAM",
+        "team_name": "crew"
+      }
+    ],
     "tools_changed": [
       {
         "dots": [
@@ -3266,6 +3279,48 @@
       "role": "admin"
     }
   ],
+  "RosterEdit": [
+    {
+      "confirm_no_invite": false,
+      "kind": "approve",
+      "request": "dotsreq_c2FtcGxl",
+      "role": "member"
+    },
+    {
+      "kind": "set_role",
+      "member_id": "01J0MEM",
+      "role": "admin"
+    },
+    {
+      "kind": "remove",
+      "member_id": "01J0MEM"
+    },
+    {
+      "key": "q83vEjRWeJq83vEjRWeJq83vEjRWeJq83vEjRWeJq8s=",
+      "kind": "remove_key",
+      "member_id": "01J0MEM"
+    },
+    {
+      "kind": "add_workspace",
+      "name": "Platform"
+    },
+    {
+      "id": "platform",
+      "kind": "rename_workspace",
+      "name": "Platform team"
+    },
+    {
+      "id": "platform",
+      "kind": "delete_workspace"
+    },
+    {
+      "kind": "set_workspaces",
+      "member_id": "01J0MEM",
+      "workspaces": {
+        "platform": "admin"
+      }
+    }
+  ],
   "RuleCandidate": [
     {
       "label": "this exact command",
@@ -4175,6 +4230,31 @@
       "name": "Repo events",
       "paused_reason": "flood",
       "updated_at": "2026-10-09T12:00:00.000Z"
+    }
+  ],
+  "WorkspaceView": [
+    {
+      "can_manage": false,
+      "id": "platform",
+      "my_role": "member",
+      "name": "Platform",
+      "scope": "acme-eng",
+      "use_rules": {
+        "allow": [
+          "GITHUB_*"
+        ],
+        "deny": [
+          "GITHUB_ADMIN"
+        ]
+      }
+    },
+    {
+      "can_manage": true,
+      "id": "default",
+      "my_role": null,
+      "name": "Default",
+      "scope": "personal",
+      "use_rules": null
     }
   ],
   "WorktreeDiff": {

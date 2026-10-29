@@ -5,7 +5,8 @@
 
 use std::collections::BTreeMap;
 
-use dots_core::accounts::{CurrentScope, Identity, Membership, Role, WorkspaceRole};
+use dots_core::accounts::edit::RosterEdit;
+use dots_core::accounts::{CurrentScope, Identity, Membership, Role, WorkspaceRole, WorkspaceView};
 use dots_core::browser::BrowserStatus;
 use dots_core::context::Document;
 use dots_core::engine::EngineEvent;
@@ -1125,7 +1126,13 @@ pub fn samples() -> Value {
             held: held_runs(),
             // Filled in by `app_samples`, which has a proposal.
             app_reviews: vec![],
-            team_scope: vec![],
+            team_scope: vec![TeamScopeIssue {
+                team_id: "01J0TEAM".into(),
+                team_name: "crew".into(),
+                dot_id: "01J0DOT".into(),
+                dot_name: "nightly-tests".into(),
+                reason: "nightly-tests is in another workspace than the crew team.".into(),
+            }],
         }),
         // What `library_add` takes and the Library commands answer: a config of every kind and
         // transport, and entries of every kind (a plugin's own server among them).
@@ -1456,6 +1463,62 @@ pub fn samples() -> Value {
     samples["Enums"]["PersonalMode"] = to(PersonalMode::ALL);
     samples["Enums"]["InviteState"] = to(InviteState::ALL);
     samples["Enums"]["WorkspaceRole"] = to(WorkspaceRole::ALL);
+    // What `workspace_list` and `personal_workspace_add` answer: a workspace with use rules of its
+    // own and one without.
+    samples["WorkspaceView"] = to([
+        WorkspaceView {
+            scope: "acme-eng".into(),
+            id: "platform".into(),
+            name: "Platform".into(),
+            use_rules: Some(UseRules {
+                allow: vec!["GITHUB_*".into()],
+                deny: vec!["GITHUB_ADMIN".into()],
+            }),
+            my_role: Some(WorkspaceRole::Member),
+            can_manage: false,
+        },
+        WorkspaceView {
+            scope: "personal".into(),
+            id: "default".into(),
+            name: "Default".into(),
+            use_rules: None,
+            my_role: None,
+            can_manage: true,
+        },
+    ]);
+    // What `member_edit` takes: one of every kind.
+    samples["RosterEdit"] = to([
+        RosterEdit::Approve {
+            request: "dotsreq_c2FtcGxl".into(),
+            role: Some(Role::Member),
+            confirm_no_invite: false,
+        },
+        RosterEdit::SetRole {
+            member_id: "01J0MEM".into(),
+            role: Role::Admin,
+        },
+        RosterEdit::Remove {
+            member_id: "01J0MEM".into(),
+        },
+        RosterEdit::RemoveKey {
+            member_id: "01J0MEM".into(),
+            key: "q83vEjRWeJq83vEjRWeJq83vEjRWeJq83vEjRWeJq8s=".into(),
+        },
+        RosterEdit::AddWorkspace {
+            name: "Platform".into(),
+        },
+        RosterEdit::RenameWorkspace {
+            id: "platform".into(),
+            name: "Platform team".into(),
+        },
+        RosterEdit::DeleteWorkspace {
+            id: "platform".into(),
+        },
+        RosterEdit::SetWorkspaces {
+            member_id: "01J0MEM".into(),
+            workspaces: BTreeMap::from([("platform".to_string(), WorkspaceRole::Admin)]),
+        },
+    ]);
     samples
 }
 

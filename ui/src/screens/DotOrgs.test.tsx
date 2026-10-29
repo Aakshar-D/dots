@@ -62,7 +62,7 @@ describe("the org of a new dot", () => {
     await user.click(screen.getByRole("button", { name: "Create dot" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/dots/dot-new"));
     expect(backend.callsTo("create_dot")).toEqual([
-      { spec: { ...blankSpec, ...basics }, orgId: "acme-eng" },
+      { spec: { ...blankSpec, ...basics }, orgId: "acme-eng", workspaceId: null },
     ]);
   });
 
@@ -71,7 +71,7 @@ describe("the org of a new dot", () => {
     await user.click(screen.getByRole("button", { name: "Create dot" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/dots/dot-new"));
     expect(backend.callsTo("create_dot")).toEqual([
-      { spec: { ...blankSpec, ...basics }, orgId: null },
+      { spec: { ...blankSpec, ...basics }, orgId: null, workspaceId: null },
     ]);
   });
 
@@ -82,7 +82,7 @@ describe("the org of a new dot", () => {
     await user.click(screen.getByRole("button", { name: "Create dot" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/dots/dot-new"));
     expect(backend.callsTo("create_dot")).toEqual([
-      { spec: { ...blankSpec, ...basics }, orgId: "acme-eng" },
+      { spec: { ...blankSpec, ...basics }, orgId: "acme-eng", workspaceId: null },
     ]);
   });
 

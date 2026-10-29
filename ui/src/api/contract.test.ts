@@ -70,6 +70,8 @@ const schemas: Record<SampleName, { parse: (v: unknown) => unknown }> = {
   GrantStatus: T.GrantStatus.array(),
   LimitsState: T.LimitsState.array(),
   UsageSummary: T.UsageSummary,
+  WorkspaceView: T.WorkspaceView.array(),
+  RosterEdit: T.RosterEdit.array(),
 };
 
 // The UI parses live data with these schemas, so it must know every variant the core has.

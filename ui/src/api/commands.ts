@@ -127,8 +127,19 @@ export const commands = {
   /// where, and why not. It holds no value, and no org is fetched for it.
   dotVariables: (dotId: string) => call(T.GrantStatus.array(), "dot_variables", { dotId }),
   /// `orgId`: the joined org the dot belongs to, fixed from then on; null for Personal.
-  createDot: (spec: DotSpec, orgId: string | null = null) =>
-    call(T.Dot, "create_dot", { spec, orgId }),
+  /// `workspaceId`: the workspace of that account it starts in; null for the default one.
+  createDot: (spec: DotSpec, orgId: string | null = null, workspaceId: string | null = null) =>
+    call(T.Dot, "create_dot", { spec, orgId, workspaceId }),
+  /// Moves a dot to another workspace of its account.
+  moveDot: (dotId: string, workspaceId: string) =>
+    call(T.Dot, "dot_move", { dotId, workspaceId }),
+  /// The workspaces of `scope` (`personal`, or an org's id) this PC may see.
+  workspaceList: (scope: string) => call(T.WorkspaceView.array(), "workspace_list", { scope }),
+  personalWorkspaceAdd: (name: string) =>
+    call(T.WorkspaceView, "personal_workspace_add", { name }),
+  personalWorkspaceRename: (id: string, name: string) =>
+    call(nothing, "personal_workspace_rename", { id, name }),
+  personalWorkspaceDelete: (id: string) => call(nothing, "personal_workspace_delete", { id }),
   updateDot: (id: string, spec: DotSpec) => call(T.Dot, "update_dot", { id, spec }),
   deleteDot: (id: string) => call(nothing, "delete_dot", { id }),
   setDotEnabled: (id: string, enabled: boolean) =>

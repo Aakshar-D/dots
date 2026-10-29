@@ -1147,7 +1147,27 @@ export const RosterEdit = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("set_role"), member_id: z.string(), role: Role }),
   z.strictObject({ kind: z.literal("remove"), member_id: z.string() }),
   z.strictObject({ kind: z.literal("remove_key"), member_id: z.string(), key: z.string() }),
+  z.strictObject({ kind: z.literal("add_workspace"), name: z.string() }),
+  z.strictObject({ kind: z.literal("rename_workspace"), id: z.string(), name: z.string() }),
+  z.strictObject({ kind: z.literal("delete_workspace"), id: z.string() }),
+  z.strictObject({
+    kind: z.literal("set_workspaces"),
+    member_id: z.string(),
+    workspaces: z.record(z.string(), WorkspaceRole),
+  }),
 ]);
+// A workspace as this PC sees it: its account (`personal` or an org's id), its own use rules
+// narrowing the account's, and what this PC may do in it.
+export const WorkspaceView = z.strictObject({
+  scope: z.string(),
+  id: z.string(),
+  name: z.string(),
+  use_rules: nullable(UseRules),
+  // This PC's role in it; null in Personal and in an account with no member list.
+  my_role: nullable(WorkspaceRole),
+  // Whether this PC may rename, add or delete workspaces here.
+  can_manage: z.boolean(),
+});
 // How a member-list edit ended: published (the org's new row), or kept as a draft.
 export const EditOutcome = z.discriminatedUnion("outcome", [
   z.strictObject({ outcome: z.literal("published"), summary: OrgSummary }),
@@ -1490,6 +1510,7 @@ export type DraftView = z.infer<typeof DraftView>;
 export type CreatedInvite = z.infer<typeof CreatedInvite>;
 export type RequestPreview = z.infer<typeof RequestPreview>;
 export type RosterEdit = z.infer<typeof RosterEdit>;
+export type WorkspaceView = z.infer<typeof WorkspaceView>;
 export type EditOutcome = z.infer<typeof EditOutcome>;
 export type OrgEntry = z.infer<typeof OrgEntry>;
 export type PersonalMode = z.infer<typeof PersonalMode>;
