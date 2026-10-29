@@ -1336,12 +1336,36 @@ fn add_request_adds_member_with_role() {
 
     // A second PC for the same person, written in other case, joins the same member.
     let (second, key2) = request_code("acme-eng", "nia@acme.TEST", None, None);
-    let ran = ok(&["roster", "add-request", &file, &second, "--role", "viewer"]);
+    let ran = ok(&["roster", "add-request", &file, &second, "--role", "member"]);
     assert!(!ran.out.contains("age"), "{}", ran.out);
+    assert!(
+        ran.out.contains("This adds a PC to Nia New (Member)."),
+        "{}",
+        ran.out
+    );
     let roster = read_json(&file);
     assert_eq!(roster["members"].as_array().unwrap().len(), 2);
     assert_eq!(roster["members"][1]["role"], "member");
     assert_eq!(roster["members"][1]["keys"][1], key2.as_str());
+}
+
+#[test]
+fn add_request_for_a_listed_member_with_another_role_is_refused() {
+    let (dir, _, _) = keys();
+    let file = new_roster(dir.path(), &dots_id());
+    let before = std::fs::read_to_string(&file).unwrap();
+    // Anyone can sign a request naming the Owner's email: --role must match, or it is refused.
+    let (code, _) = request_code("acme-eng", "owner@acme.test", None, None);
+    let AdminError::Failed(text) =
+        failure(&["roster", "add-request", &file, &code, "--role", "member"])
+    else {
+        panic!("expected a failure")
+    };
+    assert_eq!(
+        text,
+        "owner@acme.test is already Owner; change that with 'roster set-role'"
+    );
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), before);
 }
 
 #[test]

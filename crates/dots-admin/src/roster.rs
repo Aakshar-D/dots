@@ -324,6 +324,20 @@ fn add_request_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
             request.org_id, roster.org_id
         )));
     }
+    // A request is self-asserted: one naming a listed person (even the Owner) adds a PC to
+    // them only with --role matching theirs, as `roster add` does.
+    let joins = roster
+        .member_with_email(&request.email)
+        .map(|m| (m.name.clone(), m.role));
+    if let Some((_, listed)) = &joins {
+        if *listed != role {
+            return Err(failed(format!(
+                "{} is already {}; change that with 'roster set-role'",
+                request.email,
+                listed.label()
+            )));
+        }
+    }
     let change = Change::AddKey {
         name: request.name.clone(),
         email: request.email.clone(),
@@ -336,6 +350,12 @@ fn add_request_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
         edit_members(&roster, &change, Utc::now(), true).map_err(core_failed)?;
     roster = edited;
     write_roster(path, &roster)?;
+    if let Some((name, listed)) = &joins {
+        say(
+            io.out,
+            &format!("This adds a PC to {name} ({}).", listed.label()),
+        )?;
+    }
     say(
         io.out,
         &format!("{summary}: {}", key_line(&request.email, &request.key)?),
