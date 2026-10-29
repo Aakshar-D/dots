@@ -20,6 +20,7 @@ use dots_core::accounts::identity;
 use dots_core::model::{
     DotSpec, HoldReason, NewRun, RunStatus, TeamSpec, TriggerKind, WorkspaceMode,
 };
+use dots_core::store::WorkspaceRow;
 use dots_core::vault::org::Orgs;
 use dots_core::vault::{Grants, MemorySecrets};
 use dots_core::{Config, Error, Runtime};
@@ -373,6 +374,18 @@ async fn legacy_and_personal_unchanged() {
         t.rt.create_dot(t.triage(), Some(ACME.into()), None)
             .await
             .unwrap();
+    // The mirror knows the workspace (it has no `use` rules): a workspace the mirror lacks
+    // refuses every org name, and an account with no member list has only Default of its own.
+    t.rt.store()
+        .add_workspace(&WorkspaceRow {
+            scope: ACME.into(),
+            id: "payments".into(),
+            name: "Payments".into(),
+            use_rules: None,
+            created_at: "2026-10-28T09:00:00Z".into(),
+        })
+        .await
+        .unwrap();
     t.rt.store()
         .set_dot_workspace(&dot.id, "payments")
         .await

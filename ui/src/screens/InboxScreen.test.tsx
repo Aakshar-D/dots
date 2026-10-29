@@ -138,6 +138,7 @@ describe("the Inbox", () => {
         watchers: [],
         held: [],
         app_reviews: [],
+        team_scope: [],
       };
     });
 
