@@ -4,10 +4,14 @@
 mod common;
 
 use common::orgs::{OrgsHarness, ACME};
+use dots_core::events::new_bus;
+use dots_core::library::Uses;
+use dots_core::run_tools::{OpenRequest, RunTools};
 use dots_core::store::WorkspaceRow;
 use dots_core::vault::org::{may_use_in, UseRules};
-use dots_core::vault::{Consumer, DotScope, Grants, Unresolved, Vault};
+use dots_core::vault::{Consumer, DotScope, GrantState, Grants, Unresolved, Vault};
 use serde_json::json;
+use tokio_util::sync::CancellationToken;
 
 fn rules(allow: &[&str], deny: &[&str]) -> UseRules {
     UseRules {
@@ -127,4 +131,92 @@ fn may_use_in_needs_both_to_allow() {
     assert!(!may_use_in(&policy, Some(&ws), "A_PRIVATE"));
     assert!(!may_use_in(&policy, Some(&ws), "SECRET_X"));
     assert!(!may_use_in(&policy, Some(&ws), "B_ONE"));
+}
+
+#[tokio::test]
+async fn a_missing_workspace_row_refuses_unless_it_is_default() {
+    let (_h, vault) = setup(json!({"shell_secrets": true}), None).await;
+    let consumer = Consumer::Shell;
+    let grants = Grants([(consumer.key(), vec!["API_KEY".to_string()])].into());
+    let names = vec!["API_KEY".to_string()];
+    let scope = DotScope::Org(ACME.into());
+    // A workspace the mirror does not know refuses every name, by its id.
+    let ghost = vault
+        .resolve_in(&scope, "ghost", &grants, &consumer, &names)
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(ghost.why, Unresolved::DeniedByWorkspace("ghost".into()));
+    assert_eq!(
+        ghost.text("triage"),
+        "the ghost workspace doesn't allow API_KEY"
+    );
+    // `default` with no row narrows nothing; a row without rules (`pay`) narrows nothing.
+    for id in ["default", "pay"] {
+        let ok = vault
+            .resolve_in(&scope, id, &grants, &consumer, &names)
+            .await
+            .unwrap();
+        assert_eq!(ok.unwrap().get("API_KEY").unwrap(), "a-1", "{id}");
+    }
+}
+
+/// An org dot of the workspace `pay` granting the shell `API_KEY` and `STRIPE_KEY`.
+async fn pay_dot(h: &OrgsHarness) -> (dots_core::model::Dot, Grants) {
+    let mut s = common::spec("triage");
+    s.variables = Grants(
+        [(
+            Consumer::Shell.key(),
+            vec!["API_KEY".to_string(), "STRIPE_KEY".to_string()],
+        )]
+        .into(),
+    );
+    let dot = h.store.create_dot(&s, Some(ACME), "pay").await.unwrap();
+    (dot, s.variables)
+}
+
+#[tokio::test]
+async fn a_run_of_a_dot_is_refused_by_its_workspace_with_its_name() {
+    let (h, vault) = setup(
+        json!({"shell_secrets": true}),
+        Some(rules(&["STRIPE_*"], &[])),
+    )
+    .await;
+    let (dot, grants) = pay_dot(&h).await;
+    let (tools, notices) = RunTools::open(OpenRequest {
+        store: &h.store,
+        bus: &new_bus(),
+        run_id: "01RUN",
+        uses: &Uses::default(),
+        workspace: h.data.path(),
+        plugins_dir: None,
+        cancel: &CancellationToken::new(),
+        vault: &vault,
+        scope: &DotScope::of(&dot),
+        workspace_id: &dot.workspace_id,
+        grants: &grants,
+        dot_name: "triage",
+    })
+    .await
+    .unwrap();
+    tools.close().await;
+    assert_eq!(notices, ["the Payments workspace doesn't allow API_KEY"]);
+}
+
+#[tokio::test]
+async fn a_dots_grant_status_says_its_workspace_denies_the_name() {
+    let (h, vault) = setup(
+        json!({"shell_secrets": true}),
+        Some(rules(&["STRIPE_*"], &[])),
+    )
+    .await;
+    let (dot, _) = pay_dot(&h).await;
+    let statuses = vault.grant_statuses(&dot).await.unwrap();
+    let of = |name: &str| statuses.iter().find(|s| s.name == name).unwrap();
+    assert_eq!(of("API_KEY").status, GrantState::DeniedByPolicy);
+    assert_eq!(
+        of("API_KEY").text.as_deref(),
+        Some("the Payments workspace doesn't allow API_KEY")
+    );
+    assert_eq!(of("STRIPE_KEY").status, GrantState::Ok);
 }

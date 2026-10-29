@@ -222,7 +222,8 @@ impl Vault {
     /// Resolves `names` for `consumer` under `grants`, in the dot's `scope`: all of them, or the
     /// first that does not resolve. For each name, in the spec's order (§8): the grant; for an
     /// org, its state, then its `use` rules, then its `personal` mode, then the shell's secrets
-    /// rule. A Personal scope reads Personal only.
+    /// rule. A Personal scope reads Personal only. For callers with no dot; code that acts for
+    /// a dot must use `resolve_in`, so its workspace's `use` rules apply.
     pub async fn resolve(
         &self,
         scope: &DotScope,
@@ -320,13 +321,24 @@ impl Vault {
             });
         };
         // The dot's workspace, when it gives `use` rules of its own, as the store mirrors the
-        // account's member list. A read that fails fails the resolve: no rules are guessed.
+        // account's member list. A read that fails fails the resolve: no rules are guessed. A
+        // row without `use` rules narrows nothing. A row that is missing must not read as
+        // "no rules": the `default` workspace is seeded at migration and join, so its absence
+        // is only a safety net and narrows nothing, but any other workspace the mirror does
+        // not know refuses every org name, so a dot never gets wider access than its
+        // workspace could have given.
         let workspace = match workspace_id {
-            Some(id) => self
-                .store()
-                .workspace(org_id, id)
-                .await?
-                .and_then(|row| row.use_rules.map(|rules| (row.name, rules))),
+            Some(id) => match self.store().workspace(org_id, id).await? {
+                Some(row) => row.use_rules.map(|rules| (row.name, rules)),
+                None if id == crate::accounts::DEFAULT_WORKSPACE => None,
+                None => Some((
+                    id.to_string(),
+                    UseRules {
+                        allow: Vec::new(),
+                        deny: Vec::new(),
+                    },
+                )),
+            },
             None => None,
         };
         let name = self.org_name(org_id).await;
