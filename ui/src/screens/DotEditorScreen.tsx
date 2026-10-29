@@ -37,13 +37,13 @@ function Editor(props: {
   initial: DotSpec;
   existing: Dot | null;
   saveLabel: string;
-  onSave: (spec: DotSpec, org: string | null) => Promise<unknown>;
+  onSave: (spec: DotSpec, org: string | null, workspace: string | null) => Promise<unknown>;
   blocked?: string;
   setEnabled?: (enabled: boolean) => Promise<unknown>;
   actions?: ReactNode;
   children?: (form: ReactNode) => ReactNode;
 }) {
-  const [draft, setDraft] = useState<Draft>(() => ({ spec: props.initial, org: null }));
+  const [draft, setDraft] = useState<Draft>(() => ({ spec: props.initial, org: null, workspace: null }));
   const [tried, setTried] = useState(false);
   // A new dot starts in the current account (Personal has no org), once the scope is known.
   const scope = useCurrentScope();
@@ -52,11 +52,14 @@ function Editor(props: {
   useEffect(() => {
     if (!isNew || !scope || orgDefaulted.current) return;
     orgDefaulted.current = true;
-    if (scope.account !== PERSONAL) setDraft((d) => (d.org === null ? { ...d, org: scope.account } : d));
+    const org = scope.account === PERSONAL ? null : scope.account;
+    const workspace = scope.workspace === "default" ? null : scope.workspace;
+    setDraft((d) => (d.org === null && d.workspace === null ? { ...d, org, workspace } : d));
   }, [isNew, scope]);
   const settings = useQuery({ queryKey: keys.settings, queryFn: commands.getSettings }).data;
   const save = useMutation({
-    mutationFn: (v: { spec: DotSpec; org: string | null }) => props.onSave(v.spec, v.org),
+    mutationFn: (v: { spec: DotSpec; org: string | null; workspace: string | null }) =>
+      props.onSave(v.spec, v.org, v.workspace),
   });
   // A Viewer, or a PC off the member list, can't save in the dot's account (a new dot's is the
   // one chosen in the form).
@@ -100,6 +103,7 @@ function Editor(props: {
         endpoint_url: draft.spec.endpoint_url?.trim() || null,
       },
       org: draft.org,
+      workspace: draft.workspace,
     });
   }
 
@@ -168,9 +172,9 @@ function NewDot() {
       initial={blank.data}
       existing={null}
       saveLabel="Create dot"
-      onSave={async (spec, org) => {
-        // Personal sends no org.
-        const dot = await commands.createDot(spec, org);
+      onSave={async (spec, org, workspace) => {
+        // Personal sends no org, and the default workspace sends none.
+        const dot = await commands.createDot(spec, org, workspace);
         invalidateDots(qc);
         qc.setQueryData(keys.dot(dot.id), dot);
         toast.success("Dot created");

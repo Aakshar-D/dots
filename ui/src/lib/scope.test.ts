@@ -26,6 +26,17 @@ describe("inScope", () => {
   });
 });
 
+describe("inScope, workspace", () => {
+  it("inScope compares workspace", () => {
+    const scope = { account: "personal", workspace: "ops" };
+    expect(inScope({ org_id: null, workspace_id: "ops" }, scope)).toBe(true);
+    expect(inScope({ org_id: null, workspace_id: "default" }, scope)).toBe(false);
+    const acme = { account: "acme-eng", workspace: "default" };
+    expect(inScope({ org_id: "acme-eng", workspace_id: "ops" }, acme)).toBe(false);
+    expect(inScope({ org_id: "acme-eng", workspace_id: "default" }, acme)).toBe(true);
+  });
+});
+
 describe("a dot whose account was removed", () => {
   const joined = [{ ...sample.orgs[0], id: "acme-eng" }];
 

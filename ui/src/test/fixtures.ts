@@ -150,6 +150,10 @@ export function installDefaults(): void {
   // Personal, until a test picks an account.
   backend.on("scope_get", () => sample.scope);
   backend.on("scope_set", (args) => ({ account: String(args.account), workspace: String(args.workspace) }));
+  // Only the Default workspace, so no workspace list or picker shows.
+  backend.on("workspace_list", (args) => [
+    { scope: String(args.scope), id: "default", name: "Default", use_rules: null, my_role: null, can_manage: true },
+  ]);
   // No grant has a status: the editor shows each as it shows a grant not saved yet.
   backend.on("dot_variables", () => []);
   backend.on("new_dot_spec", () => blankSpec);

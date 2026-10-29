@@ -923,3 +923,32 @@ describe("the Inbox, tools changed", () => {
     );
   });
 });
+
+describe("the Inbox, team scope", () => {
+  it("team scope issue appears in Needs attention", async () => {
+    inbox({
+      approvals: [],
+      review_runs: [],
+      attention: [],
+      tools_changed: [],
+      team_scope: [
+        {
+          team_id: "T1",
+          team_name: "Release crew",
+          dot_id: "D9",
+          dot_name: "nightly",
+          reason: "it is in another workspace than the team",
+        },
+      ],
+    });
+    renderApp("/inbox");
+    const section = await screen.findByRole("region", { name: "Needs attention" });
+    expect(within(section).getByText(/Release crew/)).toBeVisible();
+    expect(within(section).getByRole("link", { name: "nightly" })).toHaveAttribute(
+      "href",
+      "/dots/D9",
+    );
+    expect(within(section).getByText(/it is in another workspace than the team/)).toBeVisible();
+  });
+});
+
