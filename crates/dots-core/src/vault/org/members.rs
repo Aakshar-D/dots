@@ -20,8 +20,8 @@ use super::SourceSettings;
 use crate::accounts::edit::{apply, default_workspace_role, Change, RosterEdit, OWNER_LOCKED};
 use crate::accounts::{
     access, identity, make_request, open_accepted_roster, parse_request, require, roster_envelope,
-    sign_with_identity, AccessRequest, Membership, Permission, Role, Roster, WorkspaceRole,
-    ROSTER_VERSION,
+    roster_hash, sign_with_identity, AccessRequest, Membership, Permission, Role, Roster,
+    WorkspaceRole, ROSTER_VERSION,
 };
 use crate::store::{DraftRow, InviteRow};
 use crate::{Error, Result};
@@ -35,6 +35,10 @@ const COPY_TO_SOPS: &str = "Copy the signed list into the SOPS file (see the adm
 /// A draft's error when the source took the list but the fetch after it did not show it yet.
 const NOT_READ_BACK: &str =
     "The source took the list but Dots couldn't read it back yet. Retry in a moment.";
+
+/// Why an edit waits: the account has a draft (accounts spec §6.5). One change at a time, so
+/// that a new one never silently takes the place of a change not yet published.
+const DRAFT_WAITING: &str = "a change is waiting to be published. Retry or discard it first.";
 
 const NO_INVITE: &str =
     "This person has no invite from this PC. Confirm to approve them anyway, and pick a role.";
@@ -94,8 +98,7 @@ pub enum InviteState {
 
 impl InviteState {
     /// Every state, for the UI contract test.
-    pub const ALL: &'static [InviteState] =
-        &[Self::Open, Self::Used, Self::Expired, Self::Revoked];
+    pub const ALL: &'static [InviteState] = &[Self::Open, Self::Used, Self::Expired, Self::Revoked];
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -235,12 +238,17 @@ impl Orgs {
         if role == Role::Owner {
             return Err(Error::NotAllowed(OWNER_LOCKED.into()));
         }
+        let row = self.member_state(org_id)?.row;
         let email = email.trim();
         match email.split_once('@') {
             Some((local, domain)) if !local.is_empty() && !domain.is_empty() => {}
-            _ => return Err(Error::Invalid("an email address needs an @".into())),
+            _ => {
+                return Err(Error::Invalid(format!(
+                    "{}: an email address needs an @",
+                    row.name
+                )))
+            }
         }
-        let row = self.member_state(org_id)?.row;
         let now = self.now();
         let invite = InviteRow {
             id: ulid::Ulid::new().to_string(),
@@ -326,9 +334,10 @@ impl Orgs {
 
     /// Makes one change to the member list (members spec §6.2), in this order: the role may
     /// manage members; this PC's Dots ID signs for the account; the list is fetched again and
-    /// must still be `base_seq` (§6.2, concurrent edits); an approval's request checks out; the
-    /// change is applied (never to an Owner); the list is signed with the Dots ID and
-    /// published. A source that refuses it, or a SOPS file, leaves a draft.
+    /// has no draft waiting (one change at a time, §6.5) and must still be `base_seq` (§6.2,
+    /// concurrent edits); an approval's request checks out; the change is applied (never to an
+    /// Owner); the list is signed with the Dots ID and published. A source that refuses it, or a
+    /// SOPS file, leaves a draft.
     pub async fn edit_members(
         &self,
         org_id: &str,
@@ -340,8 +349,13 @@ impl Orgs {
         // The fetch may have brought another policy or list: check again against it.
         let state = self.check_signer(org_id).await?;
         let (roster, _) = accepted(&state)?;
+        let account = &state.row.name;
+        // The fetch drops a draft the account has reached, so one still here is waiting.
+        if self.store().draft(org_id).await?.is_some() {
+            return Err(Error::Conflict(format!("{account}: {DRAFT_WAITING}")));
+        }
         if roster.seq != base_seq {
-            return Err(changed(&state.row.name, roster.seq));
+            return Err(changed(account, roster.seq));
         }
 
         let (change, invite_id) = match edit {
@@ -377,7 +391,7 @@ impl Orgs {
                         BTreeMap::from([("default".to_string(), default_workspace_role(role))]),
                         None,
                     ),
-                    (None, _) => return Err(Error::Invalid(NO_INVITE.into())),
+                    (None, _) => return Err(Error::Invalid(format!("{account}: {NO_INVITE}"))),
                 };
                 let change = Change::AddKey {
                     name: asked.name,
@@ -396,7 +410,11 @@ impl Orgs {
         };
 
         let now = self.now();
-        let (next, summary) = apply(roster, &change, now)?;
+        // A member the list doesn't have is named with the account, like every refusal here.
+        let (next, summary) = apply(roster, &change, now).map_err(|e| match e {
+            Error::NotFound(why) => Error::NotFound(format!("{account}: {why}")),
+            other => other,
+        })?;
         // `apply` never touches an Owner; this guards the rule a reader checks the list by.
         next.check_owners(false, state.row.member.owners_hash.as_deref())
             .map_err(|_| Error::NotAllowed(OWNER_LOCKED.into()))?;
@@ -411,13 +429,15 @@ impl Orgs {
             summary,
             error: String::new(),
             created_at: stamp(now),
+            invite_id,
         };
-        self.publish(&state, draft, invite_id.as_deref()).await
+        self.publish(&state, draft, true).await
     }
 
-    /// Publishes the account's draft again. If the account has reached the draft's list since
-    /// (published, or copied into a SOPS file) it is done; if the list changed otherwise, the
-    /// draft is dropped and the change must be made again.
+    /// Publishes the account's draft again. If the account has reached the draft's very list
+    /// since (published, or copied into a SOPS file) it is done; if another list took its place
+    /// (a later one, or another of the same number) the draft is dropped, its invite is open
+    /// again, and the change must be made again.
     pub async fn retry_draft(&self, org_id: &str) -> Result<EditOutcome> {
         require(Some(self), Some(org_id), Permission::ManageMembers).await?;
         let state = self.member_state(org_id)?;
@@ -430,26 +450,43 @@ impl Orgs {
         self.refresh(org_id).await?;
         let state = self.member_state(org_id)?;
         let (roster, text) = accepted(&state)?;
-        if reached(roster, text, &draft) {
-            self.store().delete_draft(org_id).await?;
-            return Ok(EditOutcome::Published {
-                summary: Box::new(self.summary_or_missing(org_id).await?),
-            });
-        }
-        if roster.seq != draft.base_seq {
-            self.store().delete_draft(org_id).await?;
-            return Err(changed(&state.row.name, roster.seq));
+        match draft_stand(roster.seq, Some(&roster_hash(text)), &draft) {
+            DraftStand::Reached => {
+                self.store().delete_draft(org_id).await?;
+                return Ok(EditOutcome::Published {
+                    summary: Box::new(self.summary_or_missing(org_id).await?),
+                });
+            }
+            DraftStand::Waiting if roster.seq == draft.base_seq => {}
+            DraftStand::Waiting | DraftStand::Overtaken => {
+                self.drop_draft(&draft).await?;
+                return Err(changed(&state.row.name, roster.seq));
+            }
         }
         // The fetch may have brought a policy that no longer names this PC's Dots ID: the draft
         // is kept, but nothing is published.
         let state = self.check_signer(org_id).await?;
-        self.publish(&state, draft, None).await
+        self.publish(&state, draft, false).await
     }
 
-    /// Drops the account's draft. Having none is not an error.
+    /// Drops the account's draft, and the invite it answers is open again. Having none is not
+    /// an error.
     pub async fn discard_draft(&self, org_id: &str) -> Result<()> {
         require(Some(self), Some(org_id), Permission::ManageMembers).await?;
-        self.store().delete_draft(org_id).await
+        match self.store().draft(org_id).await? {
+            Some(draft) => self.drop_draft(&draft).await,
+            None => Ok(()),
+        }
+    }
+
+    /// Drops a draft that was never published: the invite it answers is open again, so the
+    /// same request code can be approved later.
+    async fn drop_draft(&self, draft: &DraftRow) -> Result<()> {
+        self.store().delete_draft(&draft.org_id).await?;
+        match &draft.invite_id {
+            Some(id) => self.store().release_invite(&draft.org_id, id).await,
+            None => Ok(()),
+        }
     }
 
     /// The role may manage members and this PC's Dots ID is in the policy's `admins`; the
@@ -515,7 +552,14 @@ impl Orgs {
         } else {
             None
         })
-        .or_else(|| listed.then(|| "This Dots ID is already on the member list.".to_string()));
+        .or_else(|| listed.then(|| "This Dots ID is already on the member list.".to_string()))
+        // Approving would add a PC to an Owner, which only the owner's key may do.
+        .or_else(|| {
+            joins_member
+                .as_ref()
+                .is_some_and(|m| m.role == Role::Owner)
+                .then(|| OWNER_LOCKED.to_string())
+        });
         let preview = RequestPreview {
             name: asked.name.clone(),
             email: asked.email.clone(),
@@ -533,14 +577,15 @@ impl Orgs {
         Ok((asked, preview, invite))
     }
 
-    /// Publishes a signed list to the account's source. Read back at the list's `seq`, it is
-    /// done: the draft is dropped. Otherwise it is kept as the draft, with why. Either way the
-    /// invite it answers is used.
+    /// Publishes a signed list to the account's source. Read back (its very text at its `seq`),
+    /// it is done: the draft is dropped. Another list read back in its place is a `Conflict`:
+    /// the draft is dropped and its invite open again. Otherwise it is kept as the draft, with
+    /// why. A new edit (`new_edit`) uses the invite it answers; a retry used it already.
     async fn publish(
         &self,
         state: &MemberState,
         mut draft: DraftRow,
-        invite_id: Option<&str>,
+        new_edit: bool,
     ) -> Result<EditOutcome> {
         let org_id = state.row.id.as_str();
         let published = match SourceCreds::load(self.secrets(), org_id)? {
@@ -559,17 +604,22 @@ impl Orgs {
                 let summary = self.refresh(org_id).await?;
                 let now = self.member_state(org_id)?;
                 if let Some((roster, text)) = &now.roster {
-                    if reached(roster, text, &draft) {
-                        self.use_invite(org_id, invite_id).await?;
-                        self.store().delete_draft(org_id).await?;
-                        return Ok(EditOutcome::Published {
-                            summary: Box::new(summary),
-                        });
-                    }
-                    // Another list of the same number took its place: this change is lost.
-                    if roster.seq >= draft.seq {
-                        self.store().delete_draft(org_id).await?;
-                        return Err(changed(&now.row.name, roster.seq));
+                    match draft_stand(roster.seq, Some(&roster_hash(text)), &draft) {
+                        DraftStand::Reached => {
+                            if new_edit {
+                                self.use_invite(&draft).await?;
+                            }
+                            self.store().delete_draft(org_id).await?;
+                            return Ok(EditOutcome::Published {
+                                summary: Box::new(summary),
+                            });
+                        }
+                        // Another list took its place: this change is lost.
+                        DraftStand::Overtaken => {
+                            self.drop_draft(&draft).await?;
+                            return Err(changed(&now.row.name, roster.seq));
+                        }
+                        DraftStand::Waiting => {}
                     }
                 }
                 NOT_READ_BACK.to_string()
@@ -578,17 +628,20 @@ impl Orgs {
         };
         draft.error = error;
         self.store().put_draft(&draft).await?;
-        self.use_invite(org_id, invite_id).await?;
+        if new_edit {
+            self.use_invite(&draft).await?;
+        }
         Ok(EditOutcome::Draft {
             draft: draft_view(draft),
         })
     }
 
-    async fn use_invite(&self, org_id: &str, invite_id: Option<&str>) -> Result<()> {
-        match invite_id {
+    /// Marks the invite the draft answers as used.
+    async fn use_invite(&self, draft: &DraftRow) -> Result<()> {
+        match &draft.invite_id {
             Some(id) => {
                 self.store()
-                    .mark_invite_used(org_id, id, &stamp(self.now()))
+                    .mark_invite_used(&draft.org_id, id, &stamp(self.now()))
                     .await
             }
             None => Ok(()),
@@ -600,12 +653,37 @@ impl Orgs {
     }
 }
 
-/// Whether the account has reached the draft's list: a later one was accepted, or this very
-/// list (the same text) at its `seq`. Another list of the same `seq` is not it.
-fn reached(accepted: &Roster, accepted_text: &str, draft: &DraftRow) -> bool {
-    let drafted = open_accepted_roster(&draft.signed, &draft.org_id).map(|(_, text)| text);
-    accepted.seq > draft.seq
-        || (accepted.seq == draft.seq && drafted.is_ok_and(|text| text == accepted_text))
+/// Where an account stands against its draft (accounts spec §6.5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum DraftStand {
+    /// The list accepted is older than the draft's: it may still be published.
+    Waiting,
+    /// The draft's very list was accepted: the same `seq` and the same text.
+    Reached,
+    /// Another list took its place: a later `seq`, or the same `seq` with other text. The
+    /// draft's change is not in the list.
+    Overtaken,
+}
+
+/// Where the account stands against `draft`, given the `seq` and `roster_hash` of the list it
+/// accepted last. A later list is never taken for the draft's: it may not hold its change.
+pub(super) fn draft_stand(
+    accepted_seq: u64,
+    accepted_hash: Option<&str>,
+    draft: &DraftRow,
+) -> DraftStand {
+    if accepted_seq < draft.seq {
+        return DraftStand::Waiting;
+    }
+    let drafted = open_accepted_roster(&draft.signed, &draft.org_id)
+        .ok()
+        .map(|(_, text)| roster_hash(&text));
+    match (drafted, accepted_hash) {
+        (Some(drafted), Some(accepted)) if accepted_seq == draft.seq && drafted == accepted => {
+            DraftStand::Reached
+        }
+        _ => DraftStand::Overtaken,
+    }
 }
 
 /// The list accepted last, or `NotFound` when there is none.
@@ -633,10 +711,15 @@ fn not_a_signer(account: &str) -> String {
 }
 
 fn changed(account: &str, seq: u64) -> Error {
-    Error::Conflict(format!(
+    Error::Conflict(changed_text(account, seq))
+}
+
+/// Why an edit (or a draft) no longer fits the list: another one, `#seq`, was accepted.
+pub(super) fn changed_text(account: &str, seq: u64) -> String {
+    format!(
         "{account}: the member list changed (now #{seq}) while you were editing. Check it and \
          make the change again."
-    ))
+    )
 }
 
 /// The roster as a roster file's text, the text that is signed.

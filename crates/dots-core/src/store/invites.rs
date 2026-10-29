@@ -42,6 +42,9 @@ pub struct DraftRow {
     /// Why it could not be published, empty while it has not failed.
     pub error: String,
     pub created_at: String,
+    /// The invite an approval in this list answers: it is used while the draft waits, and open
+    /// again when the draft is dropped without being published.
+    pub invite_id: Option<String>,
 }
 
 fn invite_from_row(row: &SqliteRow) -> Result<InviteRow> {
@@ -83,6 +86,7 @@ fn draft_from_row(row: &SqliteRow) -> Result<DraftRow> {
         summary: row.try_get("summary")?,
         error: row.try_get("error")?,
         created_at: row.try_get("created_at")?,
+        invite_id: row.try_get("invite_id")?,
         org_id,
     })
 }
@@ -146,15 +150,27 @@ impl Store {
 
     /// Records that the invite was used at `at`. An invite that is not there is `NotFound`.
     pub async fn mark_invite_used(&self, org_id: &str, id: &str, at: &str) -> Result<()> {
-        self.stamp_invite("used_at", org_id, id, at).await
+        self.stamp_invite("used_at", org_id, id, Some(at)).await
     }
 
     /// Records that the invite was revoked at `at`. An invite that is not there is `NotFound`.
     pub async fn revoke_invite(&self, org_id: &str, id: &str, at: &str) -> Result<()> {
-        self.stamp_invite("revoked_at", org_id, id, at).await
+        self.stamp_invite("revoked_at", org_id, id, Some(at)).await
     }
 
-    async fn stamp_invite(&self, column: &str, org_id: &str, id: &str, at: &str) -> Result<()> {
+    /// Makes a used invite open again: its draft was dropped unpublished. An invite that is not
+    /// there is `NotFound`.
+    pub async fn release_invite(&self, org_id: &str, id: &str) -> Result<()> {
+        self.stamp_invite("used_at", org_id, id, None).await
+    }
+
+    async fn stamp_invite(
+        &self,
+        column: &str,
+        org_id: &str,
+        id: &str,
+        at: Option<&str>,
+    ) -> Result<()> {
         let done = sqlx::query(&format!(
             "UPDATE account_invites SET {column} = ? WHERE org_id = ? AND id = ?"
         ))
@@ -175,8 +191,8 @@ impl Store {
     pub async fn put_draft(&self, draft: &DraftRow) -> Result<()> {
         sqlx::query(
             "INSERT OR REPLACE INTO roster_drafts \
-             (org_id, base_seq, seq, signed, summary, error, created_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+             (org_id, base_seq, seq, signed, summary, error, created_at, invite_id) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&draft.org_id)
         .bind(i64::try_from(draft.base_seq).map_err(|_| too_large())?)
@@ -185,6 +201,7 @@ impl Store {
         .bind(&draft.summary)
         .bind(&draft.error)
         .bind(&draft.created_at)
+        .bind(&draft.invite_id)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -193,7 +210,7 @@ impl Store {
     /// The org's draft, if it has one.
     pub async fn draft(&self, org_id: &str) -> Result<Option<DraftRow>> {
         let row = sqlx::query(
-            "SELECT org_id, base_seq, seq, signed, summary, error, created_at \
+            "SELECT org_id, base_seq, seq, signed, summary, error, created_at, invite_id \
              FROM roster_drafts WHERE org_id = ?",
         )
         .bind(org_id)

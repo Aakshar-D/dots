@@ -28,6 +28,7 @@ use super::join::{
     check_org_id, key_fingerprint, parse_join_code, same_policy_key, shown_address, BaoAuth,
     InviteOffer, JoinCode,
 };
+use super::members::{changed_text, draft_stand, DraftStand};
 use super::offline::{delete_offline, read_offline, write_offline, OfflineCopy, Protector};
 use super::policy::{OrgPolicy, PersonalMode, PolicyError, RosterMode, UseRules};
 use super::row::{MemberRow, OrgRow, PendingRequest};
@@ -1369,8 +1370,9 @@ impl Orgs {
     }
 
     /// What an accepted list answers (accounts spec §6.5): once this PC is `active` its request
-    /// code is done with, and a draft whose `seq` the account has reached (published, or copied
-    /// into a SOPS file) is dropped. A failure is logged.
+    /// code is done with, and a draft whose very list the account has reached (published, or
+    /// copied into a SOPS file: the same `seq` and text) is dropped. A draft another list took
+    /// the place of is kept with why, for Retry or Discard. A failure is logged.
     async fn settle_requests(&self, row: &mut OrgRow) {
         let store = &self.inner.store;
         if row.member.membership == Membership::Active && row.pending_request.is_some() {
@@ -1382,14 +1384,29 @@ impl Orgs {
         let Some(accepted) = row.member.last_roster_seq else {
             return;
         };
-        let dropped = match store.draft(&row.id).await {
-            Ok(Some(draft)) if accepted >= draft.seq => store.delete_draft(&row.id).await,
-            Ok(_) => Ok(()),
+        let hash = row.member.roster_hash.as_deref();
+        let settled = match store.draft(&row.id).await {
+            Ok(Some(mut draft)) => match draft_stand(accepted, hash, &draft) {
+                DraftStand::Reached => store.delete_draft(&row.id).await,
+                // Another list took its place: the draft stays, saying so, until Retry or
+                // Discard drops it (and makes its invite open again).
+                DraftStand::Overtaken => {
+                    let why = changed_text(&row.name, accepted);
+                    if draft.error == why {
+                        Ok(())
+                    } else {
+                        draft.error = why;
+                        store.put_draft(&draft).await
+                    }
+                }
+                DraftStand::Waiting => Ok(()),
+            },
+            Ok(None) => Ok(()),
             Err(e) => Err(e),
         };
-        if let Err(e) = dropped {
+        if let Err(e) = settled {
             tracing::warn!(
-                "org {:?}: its member list draft was not dropped: {e}",
+                "org {:?}: its member list draft was not settled: {e}",
                 row.id
             );
         }

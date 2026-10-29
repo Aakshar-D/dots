@@ -33,8 +33,12 @@ const NOT_SIGNER: &str = "Acme Engineering: your Dots ID isn't one of the accoun
                           admins yet. Ask the owner to add it with dots-admin policy admins add.";
 /// A policy issued after `ISSUED`.
 const LATER: &str = "2026-10-22T08:30:00Z";
-const NO_INVITE: &str =
-    "This person has no invite from this PC. Confirm to approve them anyway, and pick a role.";
+const NO_INVITE: &str = "Acme Engineering: This person has no invite from this PC. Confirm to \
+                         approve them anyway, and pick a role.";
+const WAITING: &str =
+    "Acme Engineering: a change is waiting to be published. Retry or discard it first.";
+const OWNER_LOCKED: &str =
+    "Owners can only be changed with the account owner's key, using dots-admin.";
 const SOPS_COPY: &str = "Copy the signed list into the SOPS file (see the admin guide).";
 const ROSTER_WRITE: &str = "POST /v1/secret/data/dots/roster";
 
@@ -92,6 +96,11 @@ async fn setup(h: &OrgsHarness, role: &str, signs: bool) -> String {
 /// The list at seq 2, published by the owner out of band: this PC stays an Admin, Bob is
 /// gone.
 fn publish_out_of_band(h: &OrgsHarness, mine: &str) {
+    publish_out_of_band_at(h, mine, 2);
+}
+
+/// `publish_out_of_band` at `seq`.
+fn publish_out_of_band_at(h: &OrgsHarness, mine: &str, seq: u64) {
     let mut members = vec![member(
         "01OWNER",
         "owner@acme.com",
@@ -99,7 +108,7 @@ fn publish_out_of_band(h: &OrgsHarness, mine: &str) {
         &public_key(&keys()),
     )];
     members.push(member("01ME", "ada@acme.com", "admin", mine));
-    let text = roster(ACME, 2, Value::Array(members));
+    let text = roster(ACME, seq, Value::Array(members));
     h.bao
         .put_roster("secret", "dots", &sign_roster(&h.keys, &text));
 }
@@ -132,6 +141,23 @@ impl Source for Racing {
         if let Some(other) = other {
             self.inner.publish_roster(creds, &other).await?;
         }
+        Ok(())
+    }
+}
+
+/// The real OpenBao source, except that a write is taken and never stored, as a source that
+/// is slow to show what it was given.
+struct Swallowing {
+    inner: Box<dyn Source>,
+}
+
+#[async_trait]
+impl Source for Swallowing {
+    async fn fetch(&self, creds: &SourceCreds) -> Result<Fetched, SourceError> {
+        self.inner.fetch(creds).await
+    }
+
+    async fn publish_roster(&self, _: &SourceCreds, _: &str) -> Result<(), PublishError> {
         Ok(())
     }
 }
@@ -769,4 +795,181 @@ async fn retry_rechecks_the_signer() {
         h.store.draft(ACME).await.unwrap().is_some(),
         "the draft is kept"
     );
+}
+
+/// An invite for Eve, her request code answering it, and the invite's id.
+async fn eve_invited(h: &OrgsHarness) -> (String, String) {
+    let invite = h
+        .orgs
+        .create_invite(ACME, "eve@acme.com", Role::Member)
+        .await
+        .unwrap()
+        .invite;
+    let eve = newcomer("Eve", "eve@acme.com").await;
+    (request(&eve, Some(&invite.id)).await, invite.id)
+}
+
+async fn invite_state(h: &OrgsHarness, id: &str) -> InviteState {
+    let view = members(h).await;
+    view.invites.iter().find(|i| i.id == id).unwrap().state
+}
+
+#[tokio::test]
+async fn another_list_of_the_same_number_keeps_the_draft_and_retry_drops_it() {
+    let h = OrgsHarness::new().await;
+    let mine = setup(&h, "admin", true).await;
+    let (code, invite_id) = eve_invited(&h).await;
+    h.bao.deny_writes("secret", "dots/roster");
+    drafted(h.orgs.edit_members(ACME, 1, approve(&code)).await.unwrap());
+    assert_eq!(invite_state(&h, &invite_id).await, InviteState::Used);
+    h.bao.allow_writes("secret", "dots/roster");
+    publish_out_of_band(&h, &mine);
+
+    // The fetch brings another #2: the draft stays, saying why it can't be published.
+    h.orgs.refresh(ACME).await.unwrap();
+    let draft = members(&h).await.draft.expect("the draft is kept");
+    assert_eq!(draft.error, CHANGED);
+
+    let e = h.orgs.retry_draft(ACME).await.unwrap_err();
+    assert!(
+        matches!(&e, Error::Conflict(text) if text == CHANGED),
+        "{e:?}"
+    );
+    assert_eq!(h.store.draft(ACME).await.unwrap(), None);
+    assert_eq!(invite_state(&h, &invite_id).await, InviteState::Open);
+}
+
+#[tokio::test]
+async fn two_other_lists_since_the_draft_are_a_conflict_not_published() {
+    let h = OrgsHarness::new().await;
+    let mine = setup(&h, "admin", true).await;
+    h.bao.deny_writes("secret", "dots/roster");
+    drafted(
+        h.orgs
+            .edit_members(ACME, 1, set_bob_viewer())
+            .await
+            .unwrap(),
+    );
+    h.bao.allow_writes("secret", "dots/roster");
+    publish_out_of_band(&h, &mine);
+    h.orgs.refresh(ACME).await.unwrap();
+    publish_out_of_band_at(&h, &mine, 3);
+    h.orgs.refresh(ACME).await.unwrap();
+    assert!(members(&h).await.draft.is_some(), "the draft is kept");
+
+    let e = h.orgs.retry_draft(ACME).await.unwrap_err();
+    let now_3 = "Acme Engineering: the member list changed (now #3) while you were editing. \
+                 Check it and make the change again.";
+    assert!(
+        matches!(&e, Error::Conflict(text) if text == now_3),
+        "{e:?}"
+    );
+    assert_eq!(h.store.draft(ACME).await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn a_list_not_read_back_yet_is_a_draft() {
+    let h = OrgsHarness::new().await;
+    h.orgs
+        .clone()
+        .with_sources(Arc::new(move |settings: &SourceSettings| {
+            Box::new(Swallowing {
+                inner: source_for(
+                    settings,
+                    http_client_with_timeout(StdDuration::from_secs(5)),
+                ),
+            }) as Box<dyn Source>
+        }));
+    setup(&h, "admin", true).await;
+    let draft = drafted(
+        h.orgs
+            .edit_members(ACME, 1, set_bob_viewer())
+            .await
+            .unwrap(),
+    );
+    assert_eq!(
+        draft.error,
+        "The source took the list but Dots couldn't read it back yet. Retry in a moment."
+    );
+    assert_eq!(members(&h).await.draft, Some(draft));
+}
+
+#[tokio::test]
+async fn a_new_edit_waits_for_the_draft() {
+    let h = OrgsHarness::new().await;
+    setup(&h, "admin", true).await;
+    h.bao.deny_writes("secret", "dots/roster");
+    let draft = drafted(
+        h.orgs
+            .edit_members(ACME, 1, set_bob_viewer())
+            .await
+            .unwrap(),
+    );
+    let remove_bob = RosterEdit::Remove {
+        member_id: "01BOB".into(),
+    };
+    let e = h.orgs.edit_members(ACME, 1, remove_bob).await.unwrap_err();
+    assert!(
+        matches!(&e, Error::Conflict(text) if text == WAITING),
+        "{e:?}"
+    );
+    assert_eq!(members(&h).await.draft, Some(draft));
+    assert_eq!(writes(&h), 1, "only the first, refused write");
+}
+
+#[tokio::test]
+async fn discard_releases_the_invite_and_the_request_approves_again() {
+    let h = OrgsHarness::new().await;
+    setup(&h, "admin", true).await;
+    let (code, invite_id) = eve_invited(&h).await;
+    h.bao.deny_writes("secret", "dots/roster");
+    drafted(h.orgs.edit_members(ACME, 1, approve(&code)).await.unwrap());
+    assert_eq!(invite_state(&h, &invite_id).await, InviteState::Used);
+
+    h.orgs.discard_draft(ACME).await.unwrap();
+    assert_eq!(invite_state(&h, &invite_id).await, InviteState::Open);
+    h.bao.allow_writes("secret", "dots/roster");
+    let summary = published(h.orgs.edit_members(ACME, 1, approve(&code)).await.unwrap());
+    assert_eq!(summary.roster_seq, Some(2));
+    assert_eq!(invite_state(&h, &invite_id).await, InviteState::Used);
+}
+
+#[tokio::test]
+async fn refusals_name_the_account() {
+    let h = OrgsHarness::new().await;
+    setup(&h, "admin", true).await;
+    let e = h
+        .orgs
+        .create_invite(ACME, "eve", Role::Member)
+        .await
+        .unwrap_err();
+    let no_at = "Acme Engineering: an email address needs an @";
+    assert!(matches!(&e, Error::Invalid(t) if t == no_at), "{e:?}");
+    let remove = RosterEdit::Remove {
+        member_id: "m-zed".into(),
+    };
+    let e = h.orgs.edit_members(ACME, 1, remove).await.unwrap_err();
+    let unknown = "Acme Engineering: No member 'm-zed' on the list.";
+    assert!(matches!(&e, Error::NotFound(t) if t == unknown), "{e:?}");
+}
+
+#[tokio::test]
+async fn a_request_naming_an_owner_is_a_problem() {
+    let h = OrgsHarness::new().await;
+    setup(&h, "admin", true).await;
+    let claimant = newcomer("Owner?", "owner@acme.com").await;
+    let code = request(&claimant, None).await;
+    let preview = h.orgs.inspect_request(ACME, &code).await.unwrap();
+    assert_eq!(preview.problem.as_deref(), Some(OWNER_LOCKED));
+    let edit = RosterEdit::Approve {
+        request: code,
+        role: None,
+        confirm_no_invite: true,
+    };
+    let e = h.orgs.edit_members(ACME, 1, edit).await.unwrap_err();
+    assert!(
+        matches!(&e, Error::Invalid(t) if t == OWNER_LOCKED),
+        "{e:?}"
+    );
+    assert_eq!(writes(&h), 0);
 }

@@ -64,6 +64,7 @@ fn draft(org_id: &str, seq: u64, summary: &str) -> DraftRow {
         summary: summary.into(),
         error: String::new(),
         created_at: "2026-10-29T10:00:00.000Z".into(),
+        invite_id: None,
     }
 }
 
@@ -117,6 +118,37 @@ async fn put_draft_replaces_the_previous_one() {
     assert_eq!(store.draft("acme-eng").await.unwrap(), Some(newer));
     store.delete_draft("acme-eng").await.unwrap();
     assert_eq!(store.draft("acme-eng").await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn draft_keeps_the_invite_it_answers() {
+    let (_dir, store) = store_with("acme-eng").await;
+    let mut kept = draft("acme-eng", 2, "Add sam@acme.example as Member");
+    kept.invite_id = Some("inv-1".into());
+    store.put_draft(&kept).await.unwrap();
+    assert_eq!(store.draft("acme-eng").await.unwrap(), Some(kept));
+}
+
+#[tokio::test]
+async fn release_invite_makes_a_used_invite_open_again() {
+    let (_dir, store) = store_with("acme-eng").await;
+    store
+        .add_invite(&invite("inv-1", "acme-eng", "2026-10-29T09:00:00.000Z"))
+        .await
+        .unwrap();
+    store
+        .mark_invite_used("acme-eng", "inv-1", "2026-10-29T12:00:00.000Z")
+        .await
+        .unwrap();
+    store.release_invite("acme-eng", "inv-1").await.unwrap();
+    let got = store.invite("acme-eng", "inv-1").await.unwrap().unwrap();
+    assert_eq!(got.used_at, None);
+
+    let err = store
+        .release_invite("acme-eng", "missing")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::NotFound(_)), "{err:?}");
 }
 
 #[tokio::test]
