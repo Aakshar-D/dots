@@ -798,6 +798,10 @@ person.
 - It expires after 7 days. **Open invites** lists what is waiting, with **Revoke**.
 - The person joins with the code (see [Accounts](accounts.md)). Dots then shows them a request
   code, which they send back to you.
+- **SOPS:** the person first sends you their PC's age key, shown in their Join dialog as **This
+  PC's key**. Add it to the file's recipients (section 4) and store the file. Until then their join
+  waits ("Waiting for your admin to add this PC's key") and there is no request code. Once the key
+  is in, they choose **Try again**, the join completes, and Dots shows them the request code.
 
 **Approve.** Choose **Approve request**, paste the request code and choose **Check**. Dots shows
 the name, email and Dots ID fingerprint, and any problem. Choose **Approve**. Dots signs a new
@@ -808,9 +812,12 @@ list and publishes it.
   and a role.
 - A request with an email that is already on the list joins that member, as another PC, with
   their existing role. The dialog says who.
-- Approving uses up the invite, even when the result is only a draft (see below).
+- Approving uses up the invite, even when the result is only a draft (see below). If that draft
+  is discarded, or dropped because another list took its place, the invite is open again and the
+  same request code can be approved later.
 - A request for another account, a revoked, used or expired invite, or a Dots ID already on the
-  list is refused with the reason.
+  list is refused with the reason. So is a request with an Owner's email: "Owners can only be
+  changed with the account owner's key, using dots-admin."
 
 **Change a role, remove a PC, remove a person.** Each member has a role menu, **Remove this PC**
 for each of their PCs, and **Remove**. Each change signs a new list. Dots does not touch an Owner:
@@ -821,7 +828,10 @@ it says "Owners can only be changed with the account owner's key, using dots-adm
 The list stops Dots honouring them. Only the source cuts them off (section 6).
 
 Take care when you remove the key of the PC you are on. Once the new list is published this PC is
-not on it, and can't sign any more.
+not on it, and can't sign any more. **Remove this PC** always asks first, and says "This is this
+PC. You'll lose access to <account> here." for your own PC, or "This is their last PC; they'll be
+removed." for a person's only PC. Changing your own role asks too: "You're changing your own role.
+You may lose the right to manage members."
 
 ### Write rights and drafts
 
@@ -848,8 +858,15 @@ Members tab shows "Not published yet:" with what it changes, the error, and **Re
 change until it is published. If the source took the list but Dots can't read it back yet, the
 error says "The source took the list but Dots couldn't read it back yet. Retry in a moment."
 
+One change at a time: while a draft waits, **Approve request**, the role menus and the remove
+buttons are off with "<account>: a change is waiting to be published. Retry or discard it first."
+**Invite** and **Revoke** still work.
+
 If another admin publishes first, Dots refuses and says "the member list changed (now #N) while you
-were editing. Check it and make the change again." Look at the new list and redo your change.
+were editing. Check it and make the change again." Look at the new list and redo your change. A
+draft that another list took the place of is never counted as published, even when that list's
+number is higher: the draft stays with that message until you choose **Retry** (which drops it and
+says so) or **Discard**.
 
 **SOPS.** For a SOPS file the draft's message is "Copy the signed list into the SOPS file (see the
 admin guide)." Choose **Copy signed list**, then put the text in the file's `roster` field with
@@ -859,8 +876,9 @@ admin guide)." Choose **Copy signed list**, then put the text in the file's `ros
 sops set acme-eng.enc.json '["roster"]' '"<the signed list, as a JSON string>"'
 ```
 
-Store the file as before. On **Refresh**, Dots reads the new list and drops the draft. If an
-approved request carried an age key, add it to the file's recipients too.
+Store the file as before. On **Refresh**, Dots reads the new list and drops the draft. The
+approved person's age key is a recipient already: their join waited for it, before they had a
+request code (see **Invite** above).
 
 ### Requests with dots-admin
 
@@ -874,7 +892,10 @@ dots-admin roster add-request roster.json <code> --role member
 `request inspect` checks the code's signature and prints the org, name, email, key fingerprint,
 invite id (or `none`), age recipient if any, and when it was made. `roster add-request` adds the
 sender to `roster.json`, or adds another PC if the email is already there, and prints the age
-recipient to add to a SOPS file. Sign and store the list as above.
+recipient the request carries (for a SOPS file it is a recipient already). A request is only what
+its sender claims: for an email already on the list, `--role` must be that member's role, or it is
+refused as `roster add` refuses it (change roles with `roster set-role`); when it matches, it
+prints "This adds a PC to <name> (<Role>)." Sign and store the list as above.
 
 ### Moving a legacy org to a member list
 

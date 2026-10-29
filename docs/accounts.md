@@ -63,6 +63,10 @@ Fill in your name and email in **Settings › Profile** first, because your requ
 After you join, Dots shows a **request code**. Choose **Copy request code** and send it to the
 admin. They approve you in Dots, and you become Active at the next refresh.
 
+If the Join dialog shows a key for this PC instead of a sign-in, send that key to the admin first.
+The join waits until they have added it; then choose **Try again**, the join completes, and the
+request code appears.
+
 ### Asking for access
 
 If your Dots ID is not on the member list, the account shows Waiting. Choose **Request access** to

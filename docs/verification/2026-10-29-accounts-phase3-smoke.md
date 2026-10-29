@@ -3,7 +3,7 @@
 - Date: 2026-10-29
 - Build: dev app (`bun run tauri dev`), branch `feat/accounts-invites`.
 - Data: two Dots data folders on one PC (an Owner/Admin PC "A" and a joining PC "B"), both run from this branch, sharing one dev OpenBao that holds a test org with a v2 policy (`policy new --roster`). The policy lists A's Dots ID in `admins` (`dots-admin policy admins add`). Both profiles have a name and an email. A's OpenBao token can write `<mount>/data/<path>/roster`; B's can only read it.
-- Steps: 12, all manual, to be done by a person at the machine. Mark each pass or fail and note anything odd.
+- Steps: 13, all manual, to be done by a person at the machine. Mark each pass or fail and note anything odd.
 
 ## Steps
 
@@ -63,7 +63,7 @@ Result: not run.
 
 ### 10. Publish denied, draft, retry
 
-Expect: on B (or any PC whose token cannot write `roster`), as an Admin whose Dots ID is in `admins`, make a change. The Members tab shows "Not published yet:" with what it changes, the source's error, **Retry** and **Discard**. Nothing is live for others. Add `create` and `update` on `<mount>/data/<path>/roster` to the token's policy, then choose **Retry**. The draft goes away and the list number goes up. Also check **Discard** on a second draft.
+Expect: on B (or any PC whose token cannot write `roster`), as an Admin whose Dots ID is in `admins`, make a change. The Members tab shows "Not published yet:" with what it changes, the source's error, **Retry** and **Discard**. Nothing is live for others. While it waits, **Approve request**, the role menus and the remove buttons are off with "... a change is waiting to be published. Retry or discard it first."; **Invite** still works. Add `create` and `update` on `<mount>/data/<path>/roster` to the token's policy, then choose **Retry**. The draft goes away and the list number goes up. Also check **Discard** on a second draft.
 
 Result: not run.
 
@@ -76,6 +76,12 @@ Result: not run.
 ### 12. SOPS copy flow
 
 Expect: with a SOPS org (age key), make a change on the Members tab. A draft shows "Copy the signed list into the SOPS file (see the admin guide)." and **Copy signed list**. Choose it, put the text in the file's `roster` field with `sops set`, store the file, and Refresh. The draft disappears and the new list shows.
+
+Result: not run.
+
+### 13. SOPS invite
+
+Expect: with a SOPS org, on A create an invite and send the code to B. On B, join with it: the dialog shows **This PC's key** and no request code yet. Press **Join**: "Waiting for your admin to add this PC's key". On A, add B's key to the file's recipients (`sops updatekeys`) and store the file. On B, choose **Try again**: the join completes and the request code appears. On A, approve it: a draft to copy (step 12). Copy it into the file, store it, and Refresh on both: B is Active with the invited role.
 
 Result: not run.
 
