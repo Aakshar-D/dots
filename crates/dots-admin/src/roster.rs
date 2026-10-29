@@ -10,7 +10,7 @@ use std::fs::OpenOptions;
 use std::io::{Cursor, ErrorKind, Write};
 
 use chrono::{DateTime, Utc};
-use dots_core::accounts::edit::{default_workspace_role, new_member_id};
+use dots_core::accounts::edit::{default_workspace_role, edit_members, new_member_id, Change};
 use dots_core::accounts::roster::{
     parse_roster, roster_envelope, verify_roster, Member, Role, Roster, RosterError, Workspace,
     WorkspaceRole, ROSTER_VERSION,
@@ -23,6 +23,7 @@ use serde_json::Value;
 use crate::args::Args;
 use crate::keys::{read_public_key, unlock_secret_key};
 use crate::policy::{check_dots_id, timestamp};
+use crate::request::read_request;
 use crate::{core_failed, failed, read_file, say, usage, write_file, Io, Result};
 
 /// The signature's untrusted comment. Nothing reads it; it tells a person what the box is.
@@ -147,12 +148,13 @@ pub fn new_roster(
 pub(crate) fn roster_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
     let Some((sub, rest)) = args.split_first() else {
         return Err(usage(
-            "'roster' needs one of: new, add, set-role, remove, check, sign, verify",
+            "'roster' needs one of: new, add, add-request, set-role, remove, check, sign, verify",
         ));
     };
     match sub.as_str() {
         "new" => new_command(rest, io),
         "add" => add_command(rest, io),
+        "add-request" => add_request_command(rest, io),
         "set-role" => set_role_command(rest, io),
         "remove" => remove_command(rest, io),
         "check" => check_command(rest, io),
@@ -217,9 +219,9 @@ fn add_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
     check_dots_id(key)?;
 
     let mut roster = read_roster(path)?;
-    let line = if let Some(at) = roster.members.iter().position(|m| m.email == email) {
+    let line = if let Some(id) = roster.member_with_email(email).map(|m| m.id.clone()) {
         // Another PC for a person already listed.
-        let member = &mut roster.members[at];
+        let member = member_mut(&mut roster, &id);
         if member.role != role {
             return Err(failed(format!(
                 "{email} is already {}; change that with 'roster set-role'",
@@ -281,8 +283,8 @@ fn remove_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
             format!("removed {}", key_line(email, key)?)
         }
         None => {
-            member_by_email(&mut roster, email)?;
-            roster.members.retain(|m| m.email != email);
+            let id = member_by_email(&mut roster, email)?.id.clone();
+            roster.members.retain(|m| m.id != id);
             format!("removed {email}")
         }
     };
@@ -290,12 +292,61 @@ fn remove_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
     say(io.out, &line)
 }
 
+/// The member whose email matches as Dots matches it (trimmed, any case).
 fn member_by_email<'a>(roster: &'a mut Roster, email: &str) -> Result<&'a mut Member> {
+    let id = roster
+        .member_with_email(email)
+        .map(|m| m.id.clone())
+        .ok_or_else(|| failed(format!("no member has the email {email}")))?;
+    Ok(member_mut(roster, &id))
+}
+
+fn member_mut<'a>(roster: &'a mut Roster, id: &str) -> &'a mut Member {
     roster
         .members
         .iter_mut()
-        .find(|m| m.email == email)
-        .ok_or_else(|| failed(format!("no member has the email {email}")))
+        .find(|m| m.id == id)
+        .expect("the id was just read from this list")
+}
+
+/// `roster add-request <roster.json> <code> --role <role>`: adds the sender of a request code,
+/// or another PC for the person with that email. The list is not signed or numbered; `sign`
+/// does that.
+fn add_request_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
+    let args = Args::parse(args, &["role"], &[])?;
+    let [path, code] = args.words(["the member list", "the request code"])?;
+    let role = parse_role(args.required("role")?)?;
+    let request = read_request(code)?;
+    let mut roster = read_roster(path)?;
+    if request.org_id != roster.org_id {
+        return Err(failed(format!(
+            "the request is for org '{}', but this member list is for '{}'",
+            request.org_id, roster.org_id
+        )));
+    }
+    let change = Change::AddKey {
+        name: request.name.clone(),
+        email: request.email.clone(),
+        key: request.key.clone(),
+        role,
+        workspaces: BTreeMap::from([("default".to_string(), default_workspace_role(role))]),
+    };
+    // The root key signs this list, so changing an Owner's entry is allowed here.
+    let (edited, summary) =
+        edit_members(&roster, &change, Utc::now(), true).map_err(core_failed)?;
+    roster = edited;
+    write_roster(path, &roster)?;
+    say(
+        io.out,
+        &format!("{summary}: {}", key_line(&request.email, &request.key)?),
+    )?;
+    if let Some(age) = &request.age_recipient {
+        say(
+            io.out,
+            &format!("Add this age recipient to the SOPS file's recipients: {age}"),
+        )?;
+    }
+    Ok(())
 }
 
 /// `roster check <roster.json> --org-id <id>`: "ok" and the summary, or why Dots would refuse

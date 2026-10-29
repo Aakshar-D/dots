@@ -1235,3 +1235,129 @@ fn policy_admins_add_remove() {
     let err = failure(&["policy", "admins", "add", &v1, &a]);
     assert!(err.to_string().contains("policy new --roster"), "{err}");
 }
+
+// ---- request codes ----------------------------------------------------------------------
+
+/// A request code for `org` signed by a new key pair, as Dots makes one. Returns the code and
+/// the requester's Dots ID.
+fn request_code(
+    org: &str,
+    email: &str,
+    invite: Option<&str>,
+    age: Option<&str>,
+) -> (String, String) {
+    let pair = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
+    let key = pair.pk.to_base64();
+    let mut request = serde_json::json!({
+        "v": 1, "org_id": org, "invite_id": invite, "key": key,
+        "name": "Nia New", "email": email, "created_at": "2026-10-29T10:00:00Z"
+    });
+    if let Some(age) = age {
+        request["age_recipient"] = age.into();
+    }
+    let text = request.to_string();
+    let signature = minisign::sign(
+        Some(&pair.pk),
+        &pair.sk,
+        std::io::Cursor::new(text.as_bytes()),
+        Some("dots request test"),
+        None,
+    )
+    .unwrap()
+    .into_string();
+    let envelope = serde_json::json!({"request": text, "signature": signature}).to_string();
+    let code = format!(
+        "dotsreq_{}",
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(envelope)
+    );
+    (code, key)
+}
+
+#[test]
+fn request_inspect_prints_fields() {
+    let (code, key) = request_code("acme-eng", "nia@acme.test", Some("inv-1"), Some("age1abc"));
+    let ran = ok(&["request", "inspect", &code]);
+    for want in [
+        "acme-eng",
+        "Nia New",
+        "nia@acme.test",
+        &dots_core::vault::org::key_fingerprint(&key).unwrap(),
+        "inv-1",
+        "age1abc",
+        "2026-10-29T10:00:00Z",
+    ] {
+        assert!(ran.out.contains(want), "{want} missing from {}", ran.out);
+    }
+    let (code, _) = request_code("acme-eng", "nia@acme.test", None, None);
+    let ran = ok(&["request", "inspect", &code]);
+    assert!(ran.out.contains("none"), "{}", ran.out);
+    assert!(!ran.out.contains("age"), "{}", ran.out);
+}
+
+#[test]
+fn request_inspect_refuses_tampered() {
+    let (code, _) = request_code("acme-eng", "nia@acme.test", None, None);
+    let AdminError::Failed(text) = failure(&["request", "inspect", "hello"]) else {
+        panic!("expected a failure")
+    };
+    assert_eq!(text, "this is not a Dots request code");
+    // Change the request inside the envelope; the signature no longer matches.
+    let body = code.strip_prefix("dotsreq_").unwrap();
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(body)
+        .unwrap();
+    let swapped = String::from_utf8(bytes)
+        .unwrap()
+        .replace("nia@acme.test", "eve@acme.test");
+    let tampered = format!(
+        "dotsreq_{}",
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(swapped)
+    );
+    let AdminError::Failed(text) = failure(&["request", "inspect", &tampered]) else {
+        panic!("expected a failure")
+    };
+    assert!(text.contains("signature"), "{text}");
+}
+
+#[test]
+fn add_request_adds_member_with_role() {
+    let (dir, _, _) = keys();
+    let file = new_roster(dir.path(), &dots_id());
+    let (code, key) = request_code("acme-eng", "Nia@Acme.test", None, Some("age1abc"));
+    let ran = ok(&["roster", "add-request", &file, &code, "--role", "member"]);
+    assert!(ran.out.contains("age1abc"), "{}", ran.out);
+    let roster = read_json(&file);
+    assert_eq!(roster["seq"], 0, "add-request must not bump seq");
+    let nia = &roster["members"][1];
+    assert_eq!(nia["email"], "Nia@Acme.test");
+    assert_eq!(nia["role"], "member");
+    assert_eq!(nia["keys"][0], key.as_str());
+    assert_eq!(nia["workspaces"]["default"], "member");
+
+    // A second PC for the same person, written in other case, joins the same member.
+    let (second, key2) = request_code("acme-eng", "nia@acme.TEST", None, None);
+    let ran = ok(&["roster", "add-request", &file, &second, "--role", "viewer"]);
+    assert!(!ran.out.contains("age"), "{}", ran.out);
+    let roster = read_json(&file);
+    assert_eq!(roster["members"].as_array().unwrap().len(), 2);
+    assert_eq!(roster["members"][1]["role"], "member");
+    assert_eq!(roster["members"][1]["keys"][1], key2.as_str());
+}
+
+#[test]
+fn add_request_wrong_org_is_refused() {
+    let (dir, _, _) = keys();
+    let file = new_roster(dir.path(), &dots_id());
+    let before = std::fs::read_to_string(&file).unwrap();
+    let (code, _) = request_code("other-org", "nia@acme.test", None, None);
+    let AdminError::Failed(text) =
+        failure(&["roster", "add-request", &file, &code, "--role", "member"])
+    else {
+        panic!("expected a failure")
+    };
+    assert!(
+        text.contains("other-org") && text.contains("acme-eng"),
+        "{text}"
+    );
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), before);
+}

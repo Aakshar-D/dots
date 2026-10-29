@@ -12,6 +12,7 @@ mod args;
 pub mod join;
 pub mod keys;
 pub mod policy;
+mod request;
 pub mod roster;
 
 /// The environment variable a password is read from before asking on the terminal.
@@ -88,6 +89,9 @@ Commands:
   dots-admin roster set-role <roster.json> <email> <role>
   dots-admin roster remove <roster.json> <email> [--key <dots-id>]
       Changes a member's role, or removes them (or just one of their keys).
+  dots-admin roster add-request <roster.json> <request code> --role <owner|admin|member|viewer>
+      Adds the sender of a request code (see 'request inspect'); an email already listed gets
+      the key as another PC. Sign the list afterwards.
   dots-admin roster check <roster.json> --org-id <id>
       Checks a member list as Dots does.
   dots-admin roster sign <roster.json> --key <policy.key> [--out <file>]
@@ -95,6 +99,8 @@ Commands:
       DOTS_ROSTER.
   dots-admin roster verify <signed> --pub <policy.pub> [--admin <dots-id> ...] --org-id <id>
       Shows what a Dots client would accept.
+  dots-admin request inspect <request code>
+      Shows who a request code is from, after checking its signature.
   dots-admin join-code --org-id <id> --name <name> --source <openbao|infisical|sops>
                        [source options] --pub <policy.pub> [--file <out.dotsorg>]
       Prints a join code, or writes it to a .dotsorg file.
@@ -130,6 +136,7 @@ pub fn run(args: &[String], io: &mut Io<'_>) -> Result<()> {
                 other => Err(usage(format!("unknown policy command '{other}'"))),
             }
         }
+        "request" => request::request_command(rest, io),
         "roster" => roster::roster_command(rest, io),
         "join-code" => join::join_code_command(rest, io),
         other => Err(usage(format!("unknown command '{other}'"))),

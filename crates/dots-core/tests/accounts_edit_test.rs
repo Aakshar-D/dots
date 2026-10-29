@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use chrono::{TimeZone, Utc};
-use dots_core::accounts::edit::{apply, Change};
+use dots_core::accounts::edit::{apply, edit_members, Change};
 use dots_core::accounts::{parse_roster, Role, Roster, WorkspaceRole};
 use dots_core::Error;
 use minisign::KeyPair;
@@ -235,4 +235,34 @@ fn summaries_read_plainly() {
         ),
         "Remove one PC of Asha Rao"
     );
+}
+
+#[test]
+fn edit_members_with_owner_changes_allowed_touches_neither_seq_nor_issued_at() {
+    let (owner, asha) = (dots_id(), dots_id());
+    let before = roster(&owner, &asha);
+    let (after, _) = edit_members(
+        &before,
+        &Change::SetRole {
+            member_id: "m-owner".into(),
+            role: Role::Owner,
+        },
+        now(),
+        true,
+    )
+    .unwrap();
+    // An Owner's own entry may be changed when the root key signs.
+    let (after, _) = edit_members(
+        &after,
+        &Change::SetRole {
+            member_id: "m-owner".into(),
+            role: Role::Admin,
+        },
+        now(),
+        true,
+    )
+    .unwrap();
+    assert_eq!(after.member_with_key(&owner).unwrap().role, Role::Admin);
+    assert_eq!(after.seq, before.seq);
+    assert_eq!(after.issued_at, before.issued_at);
 }
