@@ -52,6 +52,17 @@ describe("a dot whose account was removed", () => {
     );
   });
 
+  it("is listed in each Personal workspace, whatever workspace it was in", () => {
+    for (const workspace of ["default", "ops"]) {
+      const personal = { account: "personal", workspace };
+      expect(inScope({ org_id: "gone", workspace_id: "payments" }, personal, joined)).toBe(true);
+      expect(inScope({ org_id: "gone", workspace_id: "default" }, personal, joined)).toBe(true);
+    }
+    // A Personal dot still keeps to its workspace.
+    const ops = { account: "personal", workspace: "ops" };
+    expect(inScope({ org_id: null, workspace_id: "default" }, ops, joined)).toBe(false);
+  });
+
   it("is not guessed while the joined accounts load", () => {
     expect(accountOf({ org_id: "gone" }, undefined)).toBeUndefined();
     expect(accountOf({ org_id: null }, undefined)).toBe("personal");

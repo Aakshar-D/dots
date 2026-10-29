@@ -3,8 +3,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { commands } from "@/api/commands";
 import { ErrorNote } from "@/components/ErrorNote";
 import { notifyError } from "@/lib/notify";
-import { invalidate, keys } from "@/lib/query";
-import { PERSONAL } from "@/lib/scope";
+import { invalidate, invalidateDots, keys } from "@/lib/query";
+import { PERSONAL, useCurrentScope } from "@/lib/scope";
 
 import { WorkspaceList } from "./AccountWorkspaces";
 
@@ -16,12 +16,20 @@ export function PersonalWorkspaces() {
     queryKey: keys.workspaces(PERSONAL),
     queryFn: () => commands.workspaceList(PERSONAL),
   });
+  const scope = useCurrentScope();
+  const inView = (id: string) => scope?.account === PERSONAL && scope.workspace === id;
   const run = useMutation({
-    mutationFn: (task: () => Promise<unknown>) => task(),
-    // The dots moved by a delete are listed with their workspace, so they ask again too.
-    onSuccess: () => {
+    mutationFn: (v: { task: () => Promise<unknown>; touchesScope: boolean }) => v.task(),
+    // The dots moved by a delete are listed with their workspace, so they ask again too. A
+    // delete, or a rename of the workspace in view, changes what the scope shows.
+    onSuccess: (_answer, { touchesScope }) => {
       invalidate(qc, ["workspaces"]);
-      invalidate(qc, keys.dots);
+      if (touchesScope) {
+        invalidate(qc, keys.scope);
+        invalidateDots(qc);
+      } else {
+        invalidate(qc, keys.dots);
+      }
     },
     onError: notifyError,
   });
@@ -32,9 +40,18 @@ export function PersonalWorkspaces() {
       label="Personal"
       items={spaces.data}
       lock={run.isPending ? "Waiting for the last change to finish." : undefined}
-      onAdd={(name) => run.mutate(() => commands.personalWorkspaceAdd(name))}
-      onRename={(id, name) => run.mutate(() => commands.personalWorkspaceRename(id, name))}
-      onDelete={(id) => run.mutate(() => commands.personalWorkspaceDelete(id))}
+      onAdd={(name) =>
+        run.mutate({ task: () => commands.personalWorkspaceAdd(name), touchesScope: false })
+      }
+      onRename={(id, name) =>
+        run.mutate({
+          task: () => commands.personalWorkspaceRename(id, name),
+          touchesScope: inView(id),
+        })
+      }
+      onDelete={(id) =>
+        run.mutate({ task: () => commands.personalWorkspaceDelete(id), touchesScope: true })
+      }
     />
   );
 }

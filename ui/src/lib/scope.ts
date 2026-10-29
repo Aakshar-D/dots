@@ -69,17 +69,18 @@ export function accountOf(
   return orgs === undefined ? undefined : dot.org_id;
 }
 
-/// Whether `dot` belongs to the account of `scope`: Personal matches the dots with no org, and
-/// those whose org is no longer joined once the joined orgs (`orgs`) are known, and is in the
-/// workspace of `scope` (a dot with no `workspace_id` is in the default one).
+/// Whether `dot` is in the account and workspace of `scope` (a dot with no `workspace_id` is in
+/// the default one). Personal matches the dots with no org, and, in each of its workspaces,
+/// those whose org is no longer joined once the joined orgs (`orgs`) are known: their workspace
+/// was the left account's, not one of Personal's.
 export function inScope(
   dot: { org_id: string | null; workspace_id?: string },
   scope: CurrentScope,
   orgs?: OrgSummary[],
 ): boolean {
+  if (scope.account === PERSONAL && dot.org_id !== null) return orgRemoved(dot, orgs);
   if ((dot.workspace_id ?? "default") !== scope.workspace) return false;
-  if (scope.account === PERSONAL) return dot.org_id === null || orgRemoved(dot, orgs);
-  return dot.org_id === scope.account;
+  return dot.org_id === (scope.account === PERSONAL ? null : scope.account);
 }
 
 /// What waits for the person in each account, keyed by `"personal"` or the org id; a dot whose

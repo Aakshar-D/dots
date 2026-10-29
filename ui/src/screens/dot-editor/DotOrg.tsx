@@ -2,11 +2,12 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
 import { commands } from "@/api/commands";
-import type { Dot } from "@/api/types";
+import type { Dot, WorkspaceView } from "@/api/types";
 import { ErrorNote } from "@/components/ErrorNote";
 import { Field } from "@/components/Field";
 import { Badge } from "@/components/ui/badge";
 import { NativeSelect } from "@/components/ui/native-select";
+import { useDotAccess } from "@/lib/access";
 import { orgRemovedText, useDotOrg, useOrgList } from "@/lib/dot-org";
 import { invalidateDots, keys } from "@/lib/query";
 import { PERSONAL, useWorkspaces } from "@/lib/scope";
@@ -71,6 +72,17 @@ function useChoices(account: string) {
   return all.length > 1 ? all : undefined;
 }
 
+/// A workspace to choose; one the core refuses changing dots in is off, with its refusal as the
+/// reason (the one chosen now stays on, so the select can show it).
+function Choice({ workspace, chosen }: { workspace: WorkspaceView; chosen: boolean }) {
+  const refusal = chosen ? undefined : (workspace.refusals.edit ?? undefined);
+  return (
+    <option value={workspace.id} disabled={refusal !== undefined} title={refusal}>
+      {workspace.name}
+    </option>
+  );
+}
+
 /// The workspace a new dot starts in (spec: accounts workspaces), among the visible ones of its
 /// account. `null` stands for the default one.
 export function WorkspacePicker(props: {
@@ -90,9 +102,7 @@ export function WorkspacePicker(props: {
         }
       >
         {choices.map((w) => (
-          <option key={w.id} value={w.id}>
-            {w.name}
-          </option>
+          <Choice key={w.id} workspace={w} chosen={w.id === (props.value ?? DEFAULT_WORKSPACE)} />
         ))}
       </NativeSelect>
     </Field>
@@ -100,10 +110,12 @@ export function WorkspacePicker(props: {
 }
 
 /// The workspace of a stored dot; changing it moves the dot at once (`dotMove`), and the core's
-/// refusal is shown below. The account stays fixed.
+/// refusal is shown below. The account stays fixed. It is off, with the core's reason, when the
+/// person may not change the dot.
 export function WorkspaceMove({ dot }: { dot: Dot }) {
   const qc = useQueryClient();
   const choices = useChoices(dot.org_id ?? PERSONAL);
+  const refusal = useDotAccess(dot.id)?.edit ?? undefined;
   const [placed, setPlaced] = useState(dot.workspace_id);
   // Follows the stored dot when it is loaded again.
   useEffect(() => setPlaced(dot.workspace_id), [dot.workspace_id]);
@@ -121,8 +133,8 @@ export function WorkspaceMove({ dot }: { dot: Dot }) {
       <NativeSelect
         id="dot-workspace"
         value={placed}
-        disabled={move.isPending}
-        title={move.isPending ? "Moving the dot" : undefined}
+        disabled={move.isPending || refusal !== undefined}
+        title={move.isPending ? "Moving the dot" : refusal}
         onChange={(e) => move.mutate(e.target.value)}
       >
         {!choices.some((w) => w.id === placed) && (
@@ -131,9 +143,7 @@ export function WorkspaceMove({ dot }: { dot: Dot }) {
           </option>
         )}
         {choices.map((w) => (
-          <option key={w.id} value={w.id}>
-            {w.name}
-          </option>
+          <Choice key={w.id} workspace={w} chosen={w.id === placed} />
         ))}
       </NativeSelect>
       {move.isError && <ErrorNote error={move.error} />}

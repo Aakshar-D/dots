@@ -1156,6 +1156,15 @@ export const RosterEdit = z.discriminatedUnion("kind", [
     workspaces: z.record(z.string(), WorkspaceRole),
   }),
 ]);
+// What this PC may not do in a workspace, or with a dot, each in the core's own refusal; null is
+// allowed. The UI switches its controls off by these and never decides a role itself.
+export const Refusals = z.strictObject({
+  edit: nullable(z.string()),
+  run: nullable(z.string()),
+  answer: nullable(z.string()),
+});
+// What `dot_access` answers for one dot: the refusals of its account and workspace.
+export const DotAccess = Refusals;
 // A workspace as this PC sees it: its account (`personal` or an org's id), its own use rules
 // narrowing the account's, and what this PC may do in it.
 export const WorkspaceView = z.strictObject({
@@ -1167,6 +1176,8 @@ export const WorkspaceView = z.strictObject({
   my_role: nullable(WorkspaceRole),
   // Whether this PC may rename, add or delete workspaces here.
   can_manage: z.boolean(),
+  // What this PC may not do with the workspace's dots.
+  refusals: Refusals,
 });
 // How a member-list edit ended: published (the org's new row), or kept as a draft.
 export const EditOutcome = z.discriminatedUnion("outcome", [
@@ -1511,6 +1522,8 @@ export type CreatedInvite = z.infer<typeof CreatedInvite>;
 export type RequestPreview = z.infer<typeof RequestPreview>;
 export type RosterEdit = z.infer<typeof RosterEdit>;
 export type WorkspaceView = z.infer<typeof WorkspaceView>;
+export type Refusals = z.infer<typeof Refusals>;
+export type DotAccess = z.infer<typeof DotAccess>;
 export type WorkspaceRole = z.infer<typeof WorkspaceRole>;
 export type EditOutcome = z.infer<typeof EditOutcome>;
 export type OrgEntry = z.infer<typeof OrgEntry>;

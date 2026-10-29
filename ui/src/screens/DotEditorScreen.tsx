@@ -12,7 +12,7 @@ import { FollowUpsList } from "@/components/FollowUpsList";
 import { Page } from "@/components/Page";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useRefusal } from "@/lib/access";
+import { useDotAccess, useWorkspaceRefusal } from "@/lib/access";
 import { scheduleError, scheduleOf, specErrors, specOf } from "@/lib/dot-rules";
 import { errorMessage, notifyError } from "@/lib/notify";
 import { orgRemovedText, useDotOrg } from "@/lib/dot-org";
@@ -61,9 +61,15 @@ function Editor(props: {
     mutationFn: (v: { spec: DotSpec; org: string | null; workspace: string | null }) =>
       props.onSave(v.spec, v.org, v.workspace),
   });
-  // A Viewer, or a PC off the member list, can't save in the dot's account (a new dot's is the
-  // one chosen in the form).
-  const refusal = useRefusal(isNew ? draft.org : (props.existing?.org_id ?? null), "edit");
+  // The core says when the person can't save: for a new dot, the refusal of the account and
+  // workspace chosen in the form; for a stored one, the dot's own (`dot_access`).
+  const newRefusal = useWorkspaceRefusal(
+    isNew ? (draft.org ?? PERSONAL) : undefined,
+    draft.workspace ?? "default",
+    "edit",
+  );
+  const dotRefusal = useDotAccess(props.existing?.id)?.edit ?? undefined;
+  const refusal = isNew ? newRefusal : dotRefusal;
   const { setEnabled } = props;
   // The stored dot changes at once; the form follows, keeping what else was typed.
   const onEnabled = setEnabled
@@ -202,6 +208,9 @@ function ExistingDot({ dotId }: { dotId: string }) {
   });
   const org = useDotOrg(dot.data?.org_id ?? null);
   const blocked = org.removed && dot.data?.org_id ? orgRemovedText(dot.data.org_id) : undefined;
+  // Why Run now is off: the account was left, or the core refuses running it.
+  const access = useDotAccess(dotId);
+  const runRefusal = blocked ?? access?.run ?? undefined;
   const runNow = useMutation({
     mutationFn: () => commands.runNow(dotId),
     onSuccess: (run) => void navigate(`/runs/${run.id}`),
@@ -263,8 +272,8 @@ function ExistingDot({ dotId }: { dotId: string }) {
           <Button
             size="sm"
             variant="outline"
-            disabled={runNow.isPending || blocked !== undefined}
-            title={blocked}
+            disabled={runNow.isPending || runRefusal !== undefined}
+            title={runRefusal}
             onClick={() => runNow.mutate()}
           >
             <Play aria-hidden /> Run now

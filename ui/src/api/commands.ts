@@ -133,6 +133,9 @@ export const commands = {
   /// Moves a dot to another workspace of its account.
   moveDot: (dotId: string, workspaceId: string) =>
     call(T.Dot, "dot_move", { dotId, workspaceId }),
+  /// What this PC may not do with the dot (change, run, answer its approvals), in the core's
+  /// words; null is allowed.
+  dotAccess: (dotId: string) => call(T.DotAccess, "dot_access", { dotId }),
   /// The workspaces of `scope` (`personal`, or an org's id) this PC may see.
   workspaceList: (scope: string) => call(T.WorkspaceView.array(), "workspace_list", { scope }),
   personalWorkspaceAdd: (name: string) =>

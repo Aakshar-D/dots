@@ -1,19 +1,44 @@
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import type { WorkspaceView } from "@/api/types";
+import type { DotAccess, Refusals, WorkspaceView } from "@/api/types";
 import { backend } from "@/test/backend";
-import { blankSpec, sample } from "@/test/fixtures";
+import { allowed, blankSpec, sample } from "@/test/fixtures";
 import { renderApp } from "@/test/render";
 
-const ws = (id: string, name: string): WorkspaceView => ({
-  scope: "personal",
+const ws = (
+  id: string,
+  name: string,
+  refusals: Refusals = allowed,
+  scope = "personal",
+): WorkspaceView => ({
+  scope,
   id,
   name,
   use_rules: null,
   my_role: null,
   can_manage: true,
+  refusals,
 });
+// The core's words for a Viewer in Acme Engineering's Payments workspace, and for a member
+// outside it.
+const viewer = (action: string) =>
+  `Acme Engineering: a Viewer in the Payments workspace can't ${action}. Ask an Admin or Owner.`;
+const OUTSIDE =
+  "Acme Engineering: you aren't in the Payments workspace. Ask an Admin or Owner to add you.";
+const asViewer: Refusals = {
+  edit: viewer("create or change dots"),
+  run: viewer("run dots"),
+  answer: viewer("answer approvals"),
+};
+const outside: Refusals = { edit: OUTSIDE, run: OUTSIDE, answer: OUTSIDE };
+const [acme] = sample.orgs;
+// Acme's Default, where the person is a Member, and Payments, as `payments` refuses.
+const acmeSpaces = (payments: Refusals) => [
+  ws("default", "Default", allowed, "acme-eng"),
+  ws("payments", "Payments", payments, "acme-eng"),
+];
+
 const basics = { name: "nightly", instructions: "Run the tests.", workdir: "C:/dev/app" };
 
 describe("the workspace of a dot", () => {
@@ -54,5 +79,87 @@ describe("the workspace of a dot", () => {
     await user.selectOptions(select, "default");
     expect(await screen.findByText("you are a viewer in 'default'")).toBeVisible();
     expect(select).toHaveValue("ops");
+  });
+});
+
+describe("what the core lets the person do with a dot", () => {
+  const dot = { ...sample.dot, org_id: "acme-eng", workspace_id: "payments" };
+
+  function open(access: DotAccess) {
+    backend.on("org_list", () => [acme]);
+    backend.on("get_dot", () => dot);
+    backend.on("workspace_list", () => acmeSpaces(asViewer));
+    backend.on("dot_access", () => access);
+    return renderApp(`/dots/${dot.id}`);
+  }
+
+  it("a workspace Viewer can't save, run or move the dot, and is told why", async () => {
+    open(asViewer);
+    const save = await screen.findByRole("button", { name: "Save" });
+    await waitFor(() => expect(save).toBeDisabled());
+    expect(save).toHaveAttribute("title", viewer("create or change dots"));
+    const run = screen.getByRole("button", { name: "Run now" });
+    expect(run).toBeDisabled();
+    expect(run).toHaveAttribute("title", viewer("run dots"));
+    const move = await screen.findByLabelText("Workspace");
+    expect(move).toBeDisabled();
+    expect(move).toHaveAttribute("title", viewer("create or change dots"));
+    expect(backend.callsTo("dot_access")).toContainEqual({ dotId: dot.id });
+  });
+
+  it("outside the dot's workspace, each says the person isn't in it", async () => {
+    open(outside);
+    const save = await screen.findByRole("button", { name: "Save" });
+    await waitFor(() => expect(save).toBeDisabled());
+    expect(save).toHaveAttribute("title", OUTSIDE);
+    const run = screen.getByRole("button", { name: "Run now" });
+    expect(run).toBeDisabled();
+    expect(run).toHaveAttribute("title", OUTSIDE);
+  });
+
+  it("a Member can save, run and move it", async () => {
+    open(allowed);
+    const save = await screen.findByRole("button", { name: "Save" });
+    await waitFor(() => expect(backend.callsTo("dot_access").length).toBeGreaterThan(0));
+    expect(save).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Run now" })).toBeEnabled();
+    expect(await screen.findByLabelText("Workspace")).toBeEnabled();
+  });
+
+  it("a move offers a workspace the person can't change dots in switched off, with why", async () => {
+    const home = { ...dot, workspace_id: "default" };
+    backend.on("org_list", () => [acme]);
+    backend.on("get_dot", () => home);
+    backend.on("workspace_list", () => acmeSpaces(asViewer));
+    renderApp(`/dots/${home.id}`);
+    const move = await screen.findByLabelText("Workspace");
+    const payments = await within(move).findByRole("option", { name: "Payments" });
+    expect(payments).toBeDisabled();
+    expect(payments).toHaveAttribute("title", viewer("create or change dots"));
+    expect(within(move).getByRole("option", { name: "Default" })).toBeEnabled();
+  });
+});
+
+describe("the workspace a new dot starts in", () => {
+  it("offers one the person can't make dots in switched off, with why", async () => {
+    backend.on("org_list", () => [acme]);
+    backend.on("scope_get", () => ({ account: "acme-eng", workspace: "default" }));
+    backend.on("workspace_list", () => acmeSpaces(asViewer));
+    renderApp("/dots/new");
+    const picker = await screen.findByLabelText("Workspace");
+    const payments = within(picker).getByRole("option", { name: "Payments" });
+    expect(payments).toBeDisabled();
+    expect(payments).toHaveAttribute("title", viewer("create or change dots"));
+    expect(screen.getByRole("button", { name: "Create dot" })).toBeEnabled();
+  });
+
+  it("can't be created in a workspace the person isn't in, which Create dot says", async () => {
+    backend.on("org_list", () => [acme]);
+    backend.on("scope_get", () => ({ account: "acme-eng", workspace: "payments" }));
+    backend.on("workspace_list", () => acmeSpaces(outside));
+    renderApp("/dots/new");
+    const create = await screen.findByRole("button", { name: "Create dot" });
+    await waitFor(() => expect(create).toBeDisabled());
+    expect(create).toHaveAttribute("title", OUTSIDE);
   });
 });

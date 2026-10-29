@@ -36,11 +36,13 @@ function useText(rules: UseRules | null): string {
   return `use: ${parts.length > 0 ? parts.join("; ") : "no extra rules"}`;
 }
 
-/// A name asked for in a small dialog: a new workspace's, or a new name for one.
+/// A name asked for in a small dialog: a new workspace's, or a new name for one. `hint` says
+/// what the name does beyond naming it.
 function NameDialog(props: {
   title: string;
   confirm: string;
   initial: string;
+  hint?: string;
   onSave: (name: string) => void;
   onClose: () => void;
 }) {
@@ -48,10 +50,14 @@ function NameDialog(props: {
   const empty = name.trim() === "";
   return (
     <Dialog open onOpenChange={(next) => !next && props.onClose()}>
-      <DialogContent className="sm:max-w-sm">
+      {/* Without a hint the title says it all, so the dialog is described by nothing. */}
+      <DialogContent
+        className="sm:max-w-sm"
+        {...(props.hint ? {} : { "aria-describedby": undefined })}
+      >
         <DialogHeader>
           <DialogTitle>{props.title}</DialogTitle>
-          <DialogDescription>Its id is made from the name.</DialogDescription>
+          {props.hint && <DialogDescription>{props.hint}</DialogDescription>}
         </DialogHeader>
         <Field label="Name" htmlFor="workspace-name">
           <Input
@@ -166,6 +172,7 @@ export function WorkspaceList(props: {
           title="Add a workspace"
           confirm="Add"
           initial=""
+          hint="Its id is made from the name."
           onSave={props.onAdd}
           onClose={() => setDialog(undefined)}
         />

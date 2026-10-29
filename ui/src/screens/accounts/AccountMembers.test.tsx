@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import type { MembersView, OrgSummary } from "@/api/types";
 import { backend } from "@/test/backend";
-import { sample } from "@/test/fixtures";
+import { allowed, sample } from "@/test/fixtures";
 import { renderApp } from "@/test/render";
 
 const [acme] = sample.orgs; // Acme Engineering, active, this PC an Admin
@@ -471,6 +471,7 @@ describe("Settings, Accounts, Members, workspace roles", () => {
       use_rules: null,
       my_role: null,
       can_manage: true,
+      refusals: allowed,
     }));
 
   it("member workspace roles edit sends set_workspaces", async () => {

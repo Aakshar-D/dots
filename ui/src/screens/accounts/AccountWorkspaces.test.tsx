@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import type { MembersView, OrgSummary, WorkspaceView } from "@/api/types";
 import { backend } from "@/test/backend";
-import { sample } from "@/test/fixtures";
+import { allowed, sample } from "@/test/fixtures";
 import { renderApp } from "@/test/render";
 
 const [acme] = sample.orgs;
@@ -15,6 +15,7 @@ const ws = (scope: string, id: string, name: string, can_manage = true): Workspa
   use_rules: null,
   my_role: null,
   can_manage,
+  refusals: allowed,
 });
 
 /// Answers `org_list`, `member_list` and `workspace_list` like the core for one account.
@@ -57,6 +58,8 @@ describe("Settings, Accounts, Workspaces", () => {
     const before = backend.callsTo("workspace_list").length;
     await user.click(within(panel).getByRole("button", { name: "Add workspace" }));
     const dialog = await screen.findByRole("dialog");
+    // A new workspace's id comes from its name.
+    expect(dialog).toHaveAccessibleDescription("Its id is made from the name.");
     await user.type(within(dialog).getByLabelText("Name"), "Payments");
     await user.click(within(dialog).getByRole("button", { name: "Add" }));
     await waitFor(() => expect(backend.callsTo("member_edit")).toHaveLength(1));
@@ -75,6 +78,8 @@ describe("Settings, Accounts, Workspaces", () => {
     const { user, panel } = await workspacesTab();
     await user.click(within(panel).getByRole("button", { name: "Rename Ops" }));
     const dialog = await screen.findByRole("dialog");
+    // Renaming keeps the id, so nothing says it is made from the name.
+    expect(within(dialog).queryByText("Its id is made from the name.")).toBeNull();
     const name = within(dialog).getByLabelText("Name");
     await user.clear(name);
     await user.type(name, "Platform ops");
@@ -173,5 +178,35 @@ describe("Settings, Accounts, Workspaces", () => {
     await waitFor(() =>
       expect(backend.callsTo("personal_workspace_delete")).toEqual([{ id: "side" }]),
     );
+  });
+
+  it("deleting the Personal workspace in view loads the scope and the dots again", async () => {
+    account();
+    backend.on("scope_get", () => ({ account: "personal", workspace: "side" }));
+    backend.on("personal_workspace_delete", () => null);
+    const { user, section } = await settings();
+    const personal = await within(section).findByRole("region", { name: "Personal" });
+    await within(personal).findByRole("list", { name: "Workspaces in Personal" });
+    await waitFor(() => expect(backend.callsTo("scope_get").length).toBeGreaterThan(0));
+    const scopes = backend.callsTo("scope_get").length;
+    await user.click(within(personal).getByRole("button", { name: "Delete Side" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(backend.callsTo("scope_get").length).toBeGreaterThan(scopes));
+  });
+
+  it("renaming the Personal workspace in view loads the scope again", async () => {
+    account();
+    backend.on("scope_get", () => ({ account: "personal", workspace: "side" }));
+    backend.on("personal_workspace_rename", () => null);
+    const { user, section } = await settings();
+    const personal = await within(section).findByRole("region", { name: "Personal" });
+    await within(personal).findByRole("list", { name: "Workspaces in Personal" });
+    await waitFor(() => expect(backend.callsTo("scope_get").length).toBeGreaterThan(0));
+    const scopes = backend.callsTo("scope_get").length;
+    await user.click(within(personal).getByRole("button", { name: "Rename Side" }));
+    const dialog = await screen.findByRole("dialog");
+    await user.type(within(dialog).getByLabelText("Name"), " 2");
+    await user.click(within(dialog).getByRole("button", { name: "Rename" }));
+    await waitFor(() => expect(backend.callsTo("scope_get").length).toBeGreaterThan(scopes));
   });
 });

@@ -71,6 +71,7 @@ const schemas: Record<SampleName, { parse: (v: unknown) => unknown }> = {
   LimitsState: T.LimitsState.array(),
   UsageSummary: T.UsageSummary,
   WorkspaceView: T.WorkspaceView.array(),
+  DotAccess: T.DotAccess.array(),
   RosterEdit: T.RosterEdit.array(),
 };
 

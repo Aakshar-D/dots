@@ -75,6 +75,9 @@ export const sample = {
 };
 
 /// What `new_dot_spec` answers: the core's defaults with nothing filled in.
+/// What a workspace or a dot refuses when it refuses nothing (`Refusals`, `DotAccess`).
+export const allowed: T.Refusals = { edit: null, run: null, answer: null };
+
 export const blankSpec: T.DotSpec = T.DotSpec.parse(contract.NewDotSpec);
 
 /// A status with nothing to warn about.
@@ -150,10 +153,12 @@ export function installDefaults(): void {
   // Personal, until a test picks an account.
   backend.on("scope_get", () => sample.scope);
   backend.on("scope_set", (args) => ({ account: String(args.account), workspace: String(args.workspace) }));
-  // Only the Default workspace, so no workspace list or picker shows.
+  // Only the Default workspace, so no workspace list or picker shows; nothing is refused there.
   backend.on("workspace_list", (args) => [
-    { scope: String(args.scope), id: "default", name: "Default", use_rules: null, my_role: null, can_manage: true },
+    { scope: String(args.scope), id: "default", name: "Default", use_rules: null, my_role: null, can_manage: true, refusals: allowed },
   ]);
+  // The person may do all with every dot.
+  backend.on("dot_access", () => allowed);
   // No grant has a status: the editor shows each as it shows a grant not saved yet.
   backend.on("dot_variables", () => []);
   backend.on("new_dot_spec", () => blankSpec);

@@ -126,8 +126,13 @@ describe("runtime events and the query cache", () => {
       keys.library,
       keys.inbox,
       keys.workspaces("acme-eng"),
+      // A workspace that went away takes the scope in view with it, and moves dots to Default.
+      keys.scope,
+      keys.dots,
+      keys.overview,
+      keys.dot("dot-a"),
     ];
-    const untouched = [keys.settings, keys.dots, keys.env, keys.orgSopsKey("acme-eng")];
+    const untouched = [keys.settings, keys.orgSopsKey("acme-eng")];
     for (const key of [...lists, ...untouched]) qc.setQueryData(key, []);
 
     applyRuntimeEvent(qc, { type: "org_updated", org_id: "acme-eng" });
@@ -153,16 +158,30 @@ describe("runtime events and the query cache", () => {
     unsubscribe();
   });
 
-  it("marks each dot's variables stale on an org update, and not the dots", () => {
+  it("marks each dot's variables and access stale on an org update", () => {
     const qc = createQueryClient();
-    // Each dot's variables resolve in its org. An editor fills its form from the dot.
-    const variables = [keys.dotVariables("dot-a"), keys.dotVariables("dot-b")];
-    const dots = [keys.dot("dot-a"), keys.dot("dot-b"), keys.overview];
-    for (const key of [...variables, ...dots]) qc.setQueryData(key, []);
+    // Each dot's variables resolve in its org, and what the person may do with it follows the
+    // member list.
+    const perDot = [keys.dotVariables("dot-a"), keys.dotVariables("dot-b"), keys.dotAccess("dot-a")];
+    for (const key of perDot) qc.setQueryData(key, []);
 
     applyRuntimeEvent(qc, { type: "org_updated", org_id: "acme-eng" });
-    for (const key of variables) expect(stale(qc, key), key.join("/")).toBe(true);
-    for (const key of dots) expect(stale(qc, key), key.join("/")).toBe(false);
+    for (const key of perDot) expect(stale(qc, key), key.join("/")).toBe(true);
+  });
+
+  it("refetches the scope on an org update", async () => {
+    const qc = createQueryClient();
+    let calls = 0;
+    backend.on("scope_get", () => {
+      calls += 1;
+      return sample.scope;
+    });
+    const observer = new QueryObserver(qc, { queryKey: keys.scope, queryFn: commands.scopeGet });
+    const unsubscribe = observer.subscribe(() => {});
+    await vi.waitFor(() => expect(calls).toBe(1));
+    applyRuntimeEvent(qc, { type: "org_updated", org_id: "acme-eng" });
+    await vi.waitFor(() => expect(calls).toBe(2));
+    unsubscribe();
   });
 
   it("leaves the caches to the schedule update that comes with a schedule's attention", () => {

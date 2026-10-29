@@ -58,6 +58,9 @@ export const keys = {
   /// The status of a dot's grants, under the dot's key: a change to the dot marks it stale, and
   /// so does an org event (lib/runtime-events.ts).
   dotVariables: (id: string) => ["dot", id, "variables"] as const,
+  /// What the person may not do with a dot, under the dot's key: a move or an org event (its
+  /// member list) marks it stale.
+  dotAccess: (id: string) => ["dot", id, "access"] as const,
   newDotSpec: ["new-dot-spec"] as const,
   schedulePreview: (schedule: Schedule | null) => ["schedule-preview", schedule] as const,
   webhookUrl: (dotId: string) => ["webhook-url", dotId] as const,

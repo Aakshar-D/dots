@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import type { DotOverview, OrgSummary } from "@/api/types";
 import { backend } from "@/test/backend";
-import { sample } from "@/test/fixtures";
+import { allowed, sample } from "@/test/fixtures";
 import { renderApp } from "@/test/render";
 
 const acme: OrgSummary = { ...sample.orgs[0], id: "acme-eng", name: "Acme Engineering" };
@@ -118,6 +118,7 @@ describe("the account switcher", () => {
 describe("the workspaces under an account", () => {
   const ws = (id: string, name: string) => ({
     scope: "personal", id, name, use_rules: null, my_role: null, can_manage: true,
+    refusals: allowed,
   });
 
   it("switcher lists the account's workspaces and picks one", async () => {

@@ -4,7 +4,7 @@ import { useNavigate } from "react-router";
 
 import { onLagged, onNavigate, onRuntimeEvent, onStatus, onUpdate } from "@/api/events";
 import type { RunEventRecord, RuntimeEvent } from "@/api/types";
-import { invalidate, keys, mergeEvents, takeStatus } from "@/lib/query";
+import { invalidate, invalidateDots, keys, mergeEvents, takeStatus } from "@/lib/query";
 
 /// Brings the query caches in step with one runtime event.
 export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
@@ -80,15 +80,15 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
     case "org_updated":
       // The org list, and what lists a server per joined org: the Library's catalogs and the
       // Inbox's changed tool lists. What is read per org sits under the orgs' key.
-      // A roster change can add or take away the workspaces a member sees.
-      for (const queryKey of [keys.orgs, keys.library, keys.inbox, ["workspaces"]]) {
+      // A roster change can add or take away the workspaces a member sees, and with them the
+      // scope in view (the core falls back to Default); a workspace that went away, or leaving
+      // the account, moves dots to Default.
+      for (const queryKey of [keys.orgs, keys.library, keys.inbox, ["workspaces"], keys.scope]) {
         invalidate(qc, queryKey);
       }
-      // Each dot's variables, read in its org. Only those: a dot loaded again would be one an
-      // open editor might fill its form from.
-      for (const query of qc.getQueryCache().findAll({ queryKey: ["dot"] })) {
-        if (query.queryKey[2] === "variables") invalidate(qc, query.queryKey);
-      }
+      // The dots, and each dot's variables (read in its org) and access (from the member list).
+      // An open editor keeps its form: it is filled once, when it mounts.
+      invalidateDots(qc);
       break;
     case "schedule_attention":
       // For the notification; the `schedule_updated` sent with it refreshes the screens.

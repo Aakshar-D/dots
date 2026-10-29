@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { DotOverview, Message, Run } from "@/api/types";
 import { localTime } from "@/lib/format";
 import { backend } from "@/test/backend";
-import { sample } from "@/test/fixtures";
+import { allowed, sample } from "@/test/fixtures";
 import { renderApp } from "@/test/render";
 
 const at = (h: number) => `2026-10-09T${String(h).padStart(2, "0")}:00:00.000Z`;
@@ -184,12 +184,29 @@ describe("the home's dots column", () => {
 describe("the New dot button", () => {
   const viewer = { ...sample.orgs[0], id: "acme-eng", membership: "active", role: "viewer" } as const;
 
+  /// Acme's workspaces as the core shows them: those in `refusing` refuse making dots with
+  /// `title`.
+  function spaces(title: string, refusing: string[]) {
+    backend.on("workspace_list", (args) =>
+      ["default", "payments"].map((id) => ({
+        scope: String(args.scope),
+        id,
+        name: id === "default" ? "Default" : "Payments",
+        use_rules: null,
+        my_role: null,
+        can_manage: false,
+        refusals: refusing.includes(id) ? { edit: title, run: null, answer: null } : allowed,
+      })),
+    );
+  }
+
   it("is off with the reason in an account where the person is a Viewer", async () => {
+    const title = "Acme Engineering: a Viewer can't create or change dots. Ask an Admin or Owner.";
     backend.on("org_list", () => [viewer]);
     backend.on("scope_get", () => ({ account: "acme-eng", workspace: "default" }));
     backend.on("dot_overview", () => []);
+    spaces(title, ["default", "payments"]);
     renderApp("/home");
-    const title = "Acme Engineering: a Viewer can't create or change dots. Ask an Admin or Owner.";
     // The link is swapped for a disabled button once the account's role is known.
     const button = await waitFor(() => {
       const found = within(screen.getByRole("navigation", { name: "Dots" })).getByLabelText("New dot");
@@ -198,6 +215,22 @@ describe("the New dot button", () => {
     });
     expect(button).toHaveAttribute("aria-disabled", "true");
     expect(button).toHaveAccessibleDescription(title);
+  });
+
+  it("follows the workspace in view: off where the person is a workspace Viewer", async () => {
+    const title =
+      "Acme Engineering: a Viewer in the Payments workspace can't create or change dots. Ask an Admin or Owner.";
+    backend.on("org_list", () => [{ ...viewer, role: "member" }]);
+    backend.on("scope_get", () => ({ account: "acme-eng", workspace: "payments" }));
+    backend.on("dot_overview", () => []);
+    spaces(title, ["payments"]);
+    renderApp("/home");
+    const button = await waitFor(() => {
+      const found = within(screen.getByRole("navigation", { name: "Dots" })).getByLabelText("New dot");
+      expect(found).toHaveAttribute("title", title);
+      return found;
+    });
+    expect(button).toHaveAttribute("aria-disabled", "true");
   });
 
   it("is on in Personal", async () => {

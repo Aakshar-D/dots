@@ -197,6 +197,14 @@ describe("commands", () => {
     expect((await failure(commands.orgRefresh("acme-eng"))).kind).toBe("internal");
   });
 
+  it("asks what the person may not do with a dot", async () => {
+    reply = async () => fixture.DotAccess[0];
+    expect(await commands.dotAccess("D1")).toEqual(fixture.DotAccess[0]);
+    expect(calls).toEqual([["dot_access", { dotId: "D1" }]]);
+    reply = async () => ({ ...fixture.DotAccess[1], view: null });
+    expect((await failure(commands.dotAccess("D1"))).kind).toBe("internal");
+  });
+
   it("sends the account commands as the core names them", async () => {
     reply = async () => fixture.Identity;
     expect(await commands.identityGet()).toEqual(fixture.Identity);
