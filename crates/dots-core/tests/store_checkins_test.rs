@@ -27,7 +27,10 @@ fn t0() -> DateTime<Utc> {
 
 /// A dot and a queued run of it.
 async fn dot_and_run(store: &Store, name: &str) -> (Dot, Run) {
-    let dot = store.create_dot(&spec(name), None).await.unwrap();
+    let dot = store
+        .create_dot(&spec(name), None, "default")
+        .await
+        .unwrap();
     let run = store
         .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
         .await

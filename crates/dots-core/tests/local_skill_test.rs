@@ -251,7 +251,7 @@ async fn a_local_run_lists_its_skills_and_reads_one_with_the_skill_tool() {
     s.policy = Policy::preset(Preset::ReadOnly);
     s.uses.skills = vec!["pdf".into()];
     s.uses.plugins = vec!["kit".into()];
-    let dot = store.create_dot(&s, None).await.unwrap();
+    let dot = store.create_dot(&s, None, "default").await.unwrap();
     let r = runner
         .enqueue(NewRun::new(&dot.id, TriggerKind::Manual))
         .await

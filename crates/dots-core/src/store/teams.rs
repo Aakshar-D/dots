@@ -129,13 +129,14 @@ impl Store {
         let ts = now();
         let mut tx = self.pool.begin().await?;
         sqlx::query(
-            "INSERT INTO teams (id, name, description, org_id, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO teams (id, name, description, org_id, workspace_id, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(spec.name.trim())
         .bind(spec.description.trim())
         .bind(&spec.org_id)
+        .bind(&spec.workspace_id)
         .bind(&ts)
         .bind(&ts)
         .execute(&mut *tx)
@@ -153,7 +154,7 @@ impl Store {
     }
 
     /// Replaces the team's name, description and members. The team keeps its account; the
-    /// spec's `org_id` is ignored.
+    /// spec's `org_id` is ignored, and so is its `workspace_id`.
     pub async fn update_team(&self, id: &str, spec: &TeamSpec) -> Result<Team> {
         spec.validate()?;
         let mut tx = self.pool.begin().await?;
@@ -201,7 +202,8 @@ impl Store {
 
     pub async fn get_team(&self, id: &str) -> Result<Team> {
         let row = sqlx::query(
-            "SELECT id, name, description, org_id, created_at, updated_at FROM teams WHERE id = ?",
+            "SELECT id, name, description, org_id, workspace_id, created_at, updated_at \
+             FROM teams WHERE id = ?",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -239,6 +241,7 @@ impl Store {
             members,
             projects,
             org_id: row.try_get("org_id")?,
+            workspace_id: row.try_get("workspace_id")?,
             created_at: row.try_get("created_at")?,
             updated_at: row.try_get("updated_at")?,
         })

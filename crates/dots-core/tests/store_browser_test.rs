@@ -14,11 +14,14 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 #[tokio::test]
 async fn a_dot_keeps_its_browser_switch() {
     let (_dir, store) = temp_store().await;
-    let plain = store.create_dot(&spec("plain"), None).await.unwrap();
+    let plain = store
+        .create_dot(&spec("plain"), None, "default")
+        .await
+        .unwrap();
     assert!(!plain.spec.browser, "a new dot has no browser");
     let mut s = spec("shopper");
     s.browser = true;
-    let shopper = store.create_dot(&s, None).await.unwrap();
+    let shopper = store.create_dot(&s, None, "default").await.unwrap();
     assert!(shopper.spec.browser);
     assert!(store.get_dot(&shopper.id).await.unwrap().spec.browser);
     let on: Vec<String> = store

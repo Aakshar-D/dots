@@ -205,7 +205,7 @@ async fn the_runtime_takes_the_times_of_its_rows_from_its_clock() {
     std::fs::create_dir_all(&data).unwrap();
     let store = Store::open(&data.join(DB_FILE)).await.unwrap();
     let old = store
-        .create_dot(&folder_spec(&dir, "old", Some(every(600))), None)
+        .create_dot(&folder_spec(&dir, "old", Some(every(600))), None, "default")
         .await
         .unwrap();
     store.close().await;

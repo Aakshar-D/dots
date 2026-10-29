@@ -106,6 +106,7 @@ impl Store {
             .as_ref()
             .map(serde_json::to_string)
             .transpose()?;
+        let mut tx = self.pool.begin().await?;
         let added = sqlx::query(&format!(
             "INSERT INTO orgs ({ORG_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         ))
@@ -125,7 +126,7 @@ impl Store {
         .bind(&org.member.roster_hash)
         .bind(&org.member.owners_hash)
         .bind(pending_request)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await;
         if let Err(sqlx::Error::Database(db)) = &added {
             if db.is_unique_violation() {
@@ -136,6 +137,16 @@ impl Store {
             }
         }
         added?;
+        // Every account has its Default workspace (accounts design §6.3).
+        sqlx::query(
+            "INSERT INTO workspaces (scope, id, name, use_rules, created_at) \
+             VALUES (?, 'default', 'Default', NULL, ?)",
+        )
+        .bind(&org.id)
+        .bind(crate::util::now())
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -292,13 +303,20 @@ impl Store {
     /// Removes the org's row. Its dots keep their `org_id` (§6.4). Its invites and roster draft
     /// go with it (their foreign keys cascade).
     pub async fn remove_org(&self, id: &str) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
         let done = sqlx::query("DELETE FROM orgs WHERE id = ?")
             .bind(id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
         if done.rows_affected() == 0 {
             return Err(not_joined(id));
         }
+        // `workspaces.scope` can't be a foreign key (it can be 'personal'), so they go here.
+        sqlx::query("DELETE FROM workspaces WHERE scope = ?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
         Ok(())
     }
 }

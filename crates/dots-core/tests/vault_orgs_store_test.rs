@@ -369,7 +369,7 @@ async fn a_removed_orgs_dots_keep_its_id_and_a_re_join_attaches_them_again() {
     let (_dir, store) = temp_store().await;
     store.add_org(&acme()).await.unwrap();
     let dot = store
-        .create_dot(&spec("deploy"), Some("acme-eng"))
+        .create_dot(&spec("deploy"), Some("acme-eng"), "default")
         .await
         .unwrap();
     assert_eq!(dot.org_id.as_deref(), Some("acme-eng"));
@@ -459,10 +459,13 @@ async fn the_runtime_stores_the_org_of_a_dot_in_a_joined_org() {
 async fn a_dot_shows_its_org_as_org_id() {
     let (_dir, store) = temp_store().await;
     let in_org = store
-        .create_dot(&spec("deploy"), Some("acme-eng"))
+        .create_dot(&spec("deploy"), Some("acme-eng"), "default")
         .await
         .unwrap();
-    let personal = store.create_dot(&spec("notes"), None).await.unwrap();
+    let personal = store
+        .create_dot(&spec("notes"), None, "default")
+        .await
+        .unwrap();
     assert_eq!(serde_json::to_value(&in_org).unwrap()["org_id"], "acme-eng");
     assert_eq!(
         serde_json::to_value(&personal).unwrap()["org_id"],

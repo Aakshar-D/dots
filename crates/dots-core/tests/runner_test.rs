@@ -49,7 +49,7 @@ async fn folder_dot(store: &Store, dir: &TempDir, name: &str) -> Dot {
     let mut s = spec(name);
     s.workdir = dir.path().to_string_lossy().to_string();
     s.workspace_mode = WorkspaceMode::Folder;
-    store.create_dot(&s, None).await.unwrap()
+    store.create_dot(&s, None, "default").await.unwrap()
 }
 
 async fn manual(runner: &Runner, dot: &Dot) -> String {
@@ -212,7 +212,7 @@ async fn timeout_fails_run_and_frees_slot() {
     s.workdir = dir.path().to_string_lossy().to_string();
     s.workspace_mode = WorkspaceMode::Folder;
     s.timeout_secs = 1;
-    let hang = store.create_dot(&s, None).await.unwrap();
+    let hang = store.create_dot(&s, None, "default").await.unwrap();
     let other = folder_dot(&store, &dir, "other").await;
     let hung = manual(&runner, &hang).await;
     let next = manual(&runner, &other).await;
@@ -311,7 +311,7 @@ async fn missing_engine_fails_with_clear_error() {
     s.workspace_mode = WorkspaceMode::Folder;
     s.engine = EngineKind::Local;
     s.endpoint_url = Some("http://127.0.0.1:11434".into());
-    let dot = store.create_dot(&s, None).await.unwrap();
+    let dot = store.create_dot(&s, None, "default").await.unwrap();
     let id = manual(&runner, &dot).await;
     let run = wait_status(&store, &id, RunStatus::Failed, 5).await;
     assert_eq!(
@@ -326,7 +326,7 @@ async fn missing_engine_fails_with_clear_error() {
     w.workdir = repo.to_string_lossy().to_string();
     w.engine = EngineKind::Local;
     w.endpoint_url = Some("http://127.0.0.1:11434".into());
-    let wt_dot = store.create_dot(&w, None).await.unwrap();
+    let wt_dot = store.create_dot(&w, None, "default").await.unwrap();
     let id = manual(&runner, &wt_dot).await;
     wait_status(&store, &id, RunStatus::Failed, 5).await;
     assert!(!dir.path().join("wt").join(&id).exists());
@@ -353,7 +353,7 @@ async fn parked_approval_leaves_run_awaiting() {
     s.workdir = dir.path().to_string_lossy().to_string();
     s.workspace_mode = WorkspaceMode::Folder;
     s.approval_wait_secs = 0;
-    let dot = store.create_dot(&s, None).await.unwrap();
+    let dot = store.create_dot(&s, None, "default").await.unwrap();
     let id = manual(&runner, &dot).await;
     let run = wait_status(&store, &id, RunStatus::AwaitingApproval, 5).await;
     assert_eq!(run.summary.as_deref(), Some("done"));
@@ -376,7 +376,7 @@ async fn unchanged_worktree_is_removed_after_success() {
     init_repo(&repo);
     let mut s = spec("wt");
     s.workdir = repo.to_string_lossy().to_string();
-    let dot = store.create_dot(&s, None).await.unwrap();
+    let dot = store.create_dot(&s, None, "default").await.unwrap();
     let id = manual(&runner, &dot).await;
     let run = wait_status(&store, &id, RunStatus::Succeeded, 10).await;
     let path = run.workspace_path.unwrap();
@@ -419,7 +419,7 @@ async fn a_failed_read_for_the_workspace_announcement_does_not_fail_the_run() {
     init_repo(&repo);
     let mut s = spec("wt");
     s.workdir = repo.to_string_lossy().to_string();
-    let dot = store.create_dot(&s, None).await.unwrap();
+    let dot = store.create_dot(&s, None, "default").await.unwrap();
     let id = manual(&runner, &dot).await;
 
     // The row is unreadable for a moment, so `wait_status` cannot be used here.
@@ -582,7 +582,7 @@ async fn a_run_gets_its_tools_records_what_was_left_out_and_closes_them_at_the_e
     s.workspace_mode = WorkspaceMode::Folder;
     s.uses.mcp_servers = vec!["files".into()];
     s.uses.skills = vec!["gone".into()];
-    let dot = store.create_dot(&s, None).await.unwrap();
+    let dot = store.create_dot(&s, None, "default").await.unwrap();
     let id = manual(&runner, &dot).await;
     wait_status(&store, &id, RunStatus::Succeeded, 15).await;
     {

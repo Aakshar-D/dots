@@ -198,6 +198,10 @@ pub struct Dot {
     /// §5.2). The org may have been removed since, and the dot keeps its id (§6.4).
     #[serde(default)]
     pub org_id: Option<String>,
+    /// The workspace of its account the dot is in (accounts design §6.3); `default` before it is
+    /// moved.
+    #[serde(default = "default_workspace")]
+    pub workspace_id: String,
     #[serde(flatten)]
     pub spec: DotSpec,
 }
@@ -817,6 +821,14 @@ pub struct TeamSpec {
     /// The account the team belongs to; `None` is Personal. Fixed once the team is created.
     #[serde(default)]
     pub org_id: Option<String>,
+    /// The workspace of that account the team is placed in; `default` when not given.
+    #[serde(default = "default_workspace")]
+    pub workspace_id: String,
+}
+
+/// The workspace everything is in until it is moved (accounts design §6.3).
+pub fn default_workspace() -> String {
+    crate::accounts::DEFAULT_WORKSPACE.to_string()
 }
 
 impl TeamSpec {
@@ -900,6 +912,8 @@ pub struct Team {
     pub projects: Vec<Project>,
     /// The account the team belongs to; `None` is Personal.
     pub org_id: Option<String>,
+    /// The workspace of that account the team is in.
+    pub workspace_id: String,
     pub created_at: String,
     pub updated_at: String,
 }

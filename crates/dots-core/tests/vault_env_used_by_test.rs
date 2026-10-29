@@ -97,23 +97,35 @@ async fn used_by_lists_the_personal_dots_that_grant_the_name_in_any_case() {
     // Ticking the server grants it GITHUB_TOKEN; the shell grant is in another case.
     let mut uses_github = spec("nightly");
     uses_github.uses.mcp_servers = vec!["github".into()];
-    let nightly = h.store.create_dot(&uses_github, None).await.unwrap();
+    let nightly = h
+        .store
+        .create_dot(&uses_github, None, "default")
+        .await
+        .unwrap();
     let triage = h
         .store
         .create_dot(
             &granting("triage", &[("shell", &["github_token", "LOG_LEVEL"])]),
             None,
+            "default",
         )
         .await
         .unwrap();
-    h.store.create_dot(&spec("idle"), None).await.unwrap();
+    h.store
+        .create_dot(&spec("idle"), None, "default")
+        .await
+        .unwrap();
     // A dot of an org grants the same names: it reads them from the org, not from Personal.
     uses_github.name = "acme-bot".into();
-    h.store.create_dot(&uses_github, Some(ACME)).await.unwrap();
+    h.store
+        .create_dot(&uses_github, Some(ACME), "default")
+        .await
+        .unwrap();
     h.store
         .create_dot(
             &granting("acme-shell", &[("shell", &["LOG_LEVEL"])]),
             Some(ACME),
+            "default",
         )
         .await
         .unwrap();
@@ -209,11 +221,16 @@ async fn no_listing_holds_a_value() {
         .create_dot(
             &granting("acme-bot", &[("shell", &["API_KEY"])]),
             Some(ACME),
+            "default",
         )
         .await
         .unwrap();
     h.store
-        .create_dot(&granting("mine", &[("shell", &["GITHUB_TOKEN"])]), None)
+        .create_dot(
+            &granting("mine", &[("shell", &["GITHUB_TOKEN"])]),
+            None,
+            "default",
+        )
         .await
         .unwrap();
     h.secrets.delete("personal/GITHUB_TOKEN").unwrap();
@@ -244,6 +261,7 @@ async fn an_orgs_used_by_lists_only_the_dots_of_that_org() {
         .create_dot(
             &granting("acme-bot", &[("shell", &["api_key", "API_BASE_URL"])]),
             Some(ACME),
+            "default",
         )
         .await
         .unwrap();
@@ -252,18 +270,24 @@ async fn an_orgs_used_by_lists_only_the_dots_of_that_org() {
         .create_dot(
             &granting("acme-docs", &[("shell", &["API_BASE_URL"])]),
             Some(ACME),
+            "default",
         )
         .await
         .unwrap();
     // A Personal dot and another org's dot grant the same names.
     h.store
-        .create_dot(&granting("mine", &[("shell", &["API_KEY"])]), None)
+        .create_dot(
+            &granting("mine", &[("shell", &["API_KEY"])]),
+            None,
+            "default",
+        )
         .await
         .unwrap();
     h.store
         .create_dot(
             &granting("beta-bot", &[("shell", &["API_KEY"])]),
             Some("beta"),
+            "default",
         )
         .await
         .unwrap();

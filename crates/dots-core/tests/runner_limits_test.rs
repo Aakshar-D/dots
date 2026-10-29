@@ -134,7 +134,7 @@ impl Env {
         let mut s = spec(name);
         s.workdir = self.dir.path().to_string_lossy().to_string();
         s.workspace_mode = WorkspaceMode::Folder;
-        self.store.create_dot(&s, None).await.unwrap()
+        self.store.create_dot(&s, None, "default").await.unwrap()
     }
 
     async fn queue(&self, dot: &Dot, trigger: TriggerKind) -> String {

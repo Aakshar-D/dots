@@ -36,7 +36,10 @@ async fn setup() -> Setup {
 
 impl Setup {
     async fn dot(&self, name: &str) -> Dot {
-        self.store.create_dot(&spec(name), None).await.unwrap()
+        self.store
+            .create_dot(&spec(name), None, "default")
+            .await
+            .unwrap()
     }
 
     /// The dots whose memories changed since the last call, in order.

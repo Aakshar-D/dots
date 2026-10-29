@@ -41,7 +41,7 @@ async fn folder_dot(store: &Store, dir: &TempDir, name: &str) -> Dot {
     let mut s = spec(name);
     s.workdir = dir.path().to_string_lossy().to_string();
     s.workspace_mode = WorkspaceMode::Folder;
-    store.create_dot(&s, None).await.unwrap()
+    store.create_dot(&s, None, "default").await.unwrap()
 }
 
 /// A step run of a one-step workflow of a team that has `dot`, for runs to belong to.
@@ -59,6 +59,7 @@ async fn step_run_in(
     let team = store
         .create_team(&TeamSpec {
             org_id: None,
+            workspace_id: "default".into(),
             name: format!("team-{}", dot.spec.name),
             description: String::new(),
             members: vec![MemberSpec {
@@ -259,7 +260,7 @@ async fn worktree_dot(store: &Store, dir: &TempDir, name: &str) -> Dot {
     let mut s = spec(name);
     s.workdir = own.to_string_lossy().to_string();
     s.workspace_mode = WorkspaceMode::Worktree;
-    store.create_dot(&s, None).await.unwrap()
+    store.create_dot(&s, None, "default").await.unwrap()
 }
 
 async fn queue_with(runner: &Runner, dot: &Dot, step: &str, payload: serde_json::Value) -> Run {

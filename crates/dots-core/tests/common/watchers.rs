@@ -132,7 +132,10 @@ impl Harness {
     }
 
     pub async fn dot(&self, name: &str) -> Dot {
-        self.store.create_dot(&spec(name), None).await.unwrap()
+        self.store
+            .create_dot(&spec(name), None, "default")
+            .await
+            .unwrap()
     }
 
     pub async fn secret(&self, name: &str, value: &str) {

@@ -108,7 +108,7 @@ async fn local_dot(e: &Env, llm: &Llm, browser: bool, rules: &[(&str, Action)]) 
     s.policy
         .rules
         .extend(rules.iter().map(|(tool, action)| Rule::new(tool, *action)));
-    let dot = e.store.create_dot(&s, None).await.unwrap();
+    let dot = e.store.create_dot(&s, None, "default").await.unwrap();
     e.edges.first_pages(&dot.id, &[CART]);
     dot
 }

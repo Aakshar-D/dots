@@ -227,9 +227,9 @@ async fn the_app_sees_the_time_and_the_dots_that_use_it() {
         apps: vec!["expenses".into()],
         ..Uses::default()
     };
-    let b = f.store.create_dot(&spec, None).await.unwrap();
+    let b = f.store.create_dot(&spec, None, "default").await.unwrap();
     f.store
-        .create_dot(&common::spec("other"), None)
+        .create_dot(&common::spec("other"), None, "default")
         .await
         .unwrap();
     let out = f

@@ -161,7 +161,7 @@ async fn removing_an_app_forgets_its_topics() {
     let (_dir, store, apps) = fixture().await;
     let (item, _) = apps.get("expenses").await.unwrap();
     let dot = store
-        .create_dot(&common::spec("helper"), None)
+        .create_dot(&common::spec("helper"), None, "default")
         .await
         .unwrap();
     let mut new = NewRun::new(&dot.id, TriggerKind::App);

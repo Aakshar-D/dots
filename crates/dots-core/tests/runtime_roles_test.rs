@@ -468,6 +468,7 @@ async fn viewer_cannot_answer_or_change_through_the_other_doors() {
             role: String::new(),
         }],
         org_id: Some(ACME.into()),
+        workspace_id: "default".into(),
     };
     let team = t.rt.teams().create(&team_spec).await.unwrap();
     let project_spec = ProjectSpec {

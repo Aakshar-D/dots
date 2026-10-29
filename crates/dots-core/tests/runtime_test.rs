@@ -164,7 +164,10 @@ async fn start_recovers_interrupted_runs() {
     let data = dir.path().join("data");
     let run_id = {
         let store = Store::open(&data.join("dots.db")).await.unwrap();
-        let dot = store.create_dot(&spec("crashy"), None).await.unwrap();
+        let dot = store
+            .create_dot(&spec("crashy"), None, "default")
+            .await
+            .unwrap();
         let run = store
             .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
             .await
@@ -349,7 +352,7 @@ async fn chat_follow_up_is_refused_while_its_thread_waits_for_an_approval() {
     let (dot, first, parked) = {
         let store = Store::open(&data.join("dots.db")).await.unwrap();
         let dot = store
-            .create_dot(&folder_spec(&dir, "asks"), None)
+            .create_dot(&folder_spec(&dir, "asks"), None, "default")
             .await
             .unwrap();
         let first = store
@@ -431,7 +434,7 @@ async fn update_dot_workspace_change_conflicts_while_runs_are_active() {
     let (dot, run) = {
         let store = Store::open(&data.join("dots.db")).await.unwrap();
         let dot = store
-            .create_dot(&folder_spec(&dir, "moving"), None)
+            .create_dot(&folder_spec(&dir, "moving"), None, "default")
             .await
             .unwrap();
         let run = store
@@ -494,7 +497,7 @@ async fn start_resumes_awaiting_runs_with_parked_decisions() {
         let mut s = spec("restarted");
         s.workdir = dir.path().to_string_lossy().to_string();
         s.workspace_mode = WorkspaceMode::Folder;
-        let dot = store.create_dot(&s, None).await.unwrap();
+        let dot = store.create_dot(&s, None, "default").await.unwrap();
         let run = store
             .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
             .await

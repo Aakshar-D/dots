@@ -129,7 +129,7 @@ async fn claude_dot(e: &Env, name: &str, edit: impl FnOnce(&mut DotSpec)) -> Dot
     s.approval_wait_secs = 0;
     s.uses.apps = vec!["expenses".into()];
     edit(&mut s);
-    e.store.create_dot(&s, None).await.unwrap()
+    e.store.create_dot(&s, None, "default").await.unwrap()
 }
 
 /// A run of `dot` with its apps open, that the test calls the `dots` server for, and its secret.

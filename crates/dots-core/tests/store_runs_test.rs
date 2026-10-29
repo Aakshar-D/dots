@@ -10,7 +10,7 @@ use serde_json::json;
 #[tokio::test]
 async fn create_run_defaults_and_payload() {
     let (_d, store) = temp_store().await;
-    let dot = store.create_dot(&spec("a"), None).await.unwrap();
+    let dot = store.create_dot(&spec("a"), None, "default").await.unwrap();
     let mut n = NewRun::new(&dot.id, TriggerKind::Webhook);
     n.payload = Some(json!({"k": [1, 2]}));
     let run = store.create_run(&n).await.unwrap();
@@ -25,7 +25,7 @@ async fn create_run_defaults_and_payload() {
 #[tokio::test]
 async fn child_run_keeps_root_and_parent() {
     let (_d, store) = temp_store().await;
-    let dot = store.create_dot(&spec("a"), None).await.unwrap();
+    let dot = store.create_dot(&spec("a"), None, "default").await.unwrap();
     let parent = store
         .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
         .await
@@ -43,8 +43,8 @@ async fn child_run_keeps_root_and_parent() {
 #[tokio::test]
 async fn dispatchable_skips_dots_with_a_running_run_and_claim_is_exclusive() {
     let (_d, store) = temp_store().await;
-    let a = store.create_dot(&spec("a"), None).await.unwrap();
-    let b = store.create_dot(&spec("b"), None).await.unwrap();
+    let a = store.create_dot(&spec("a"), None, "default").await.unwrap();
+    let b = store.create_dot(&spec("b"), None, "default").await.unwrap();
     let a1 = store
         .create_run(&NewRun::new(&a.id, TriggerKind::Manual))
         .await
@@ -75,7 +75,7 @@ async fn dispatchable_skips_dots_with_a_running_run_and_claim_is_exclusive() {
 #[tokio::test]
 async fn finish_workspace_session_usage() {
     let (_d, store) = temp_store().await;
-    let dot = store.create_dot(&spec("a"), None).await.unwrap();
+    let dot = store.create_dot(&spec("a"), None, "default").await.unwrap();
     let run = store
         .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
         .await
@@ -105,7 +105,7 @@ async fn finish_workspace_session_usage() {
 #[tokio::test]
 async fn events_get_sequential_seq() {
     let (_d, store) = temp_store().await;
-    let dot = store.create_dot(&spec("a"), None).await.unwrap();
+    let dot = store.create_dot(&spec("a"), None, "default").await.unwrap();
     let run = store
         .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
         .await
@@ -126,8 +126,8 @@ async fn events_get_sequential_seq() {
 #[tokio::test]
 async fn recover_marks_running_as_interrupted() {
     let (_d, store) = temp_store().await;
-    let a = store.create_dot(&spec("a"), None).await.unwrap();
-    let b = store.create_dot(&spec("b"), None).await.unwrap();
+    let a = store.create_dot(&spec("a"), None, "default").await.unwrap();
+    let b = store.create_dot(&spec("b"), None, "default").await.unwrap();
     let running = store
         .create_run(&NewRun::new(&a.id, TriggerKind::Manual))
         .await
@@ -173,7 +173,7 @@ async fn recover_marks_running_as_interrupted() {
 #[tokio::test]
 async fn approvals_decide_once() {
     let (_d, store) = temp_store().await;
-    let dot = store.create_dot(&spec("a"), None).await.unwrap();
+    let dot = store.create_dot(&spec("a"), None, "default").await.unwrap();
     let run = store
         .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
         .await
@@ -207,7 +207,7 @@ async fn approvals_decide_once() {
 #[tokio::test]
 async fn parked_decisions_until_resolved_and_expiry() {
     let (_d, store) = temp_store().await;
-    let dot = store.create_dot(&spec("a"), None).await.unwrap();
+    let dot = store.create_dot(&spec("a"), None, "default").await.unwrap();
     let run = store
         .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
         .await
@@ -261,7 +261,7 @@ async fn grants_are_single_use() {
 #[tokio::test]
 async fn has_queued_run_and_list_runs() {
     let (_d, store) = temp_store().await;
-    let dot = store.create_dot(&spec("a"), None).await.unwrap();
+    let dot = store.create_dot(&spec("a"), None, "default").await.unwrap();
     assert!(!store.has_queued_run(&dot.id).await.unwrap());
     let r1 = store
         .create_run(&NewRun::new(&dot.id, TriggerKind::Schedule))
@@ -287,7 +287,7 @@ async fn has_queued_run_and_list_runs() {
 #[tokio::test]
 async fn cancel_if_inactive_only_touches_queued_or_awaiting() {
     let (_dir, store) = temp_store().await;
-    let dot = store.create_dot(&spec("c"), None).await.unwrap();
+    let dot = store.create_dot(&spec("c"), None, "default").await.unwrap();
     let queued = store
         .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
         .await
@@ -384,7 +384,10 @@ async fn the_parent_and_retry_indexes_exist() {
 /// A parent run that parked with `n` approved calls, resumed: the calls are queued for Dots to
 /// perform and the resume child exists. Returns (parent, child, approvals in the order asked).
 async fn resumed_with_queued(store: &Store, name: &str, n: usize) -> (Run, Run, Vec<Approval>) {
-    let dot = store.create_dot(&spec(name), None).await.unwrap();
+    let dot = store
+        .create_dot(&spec(name), None, "default")
+        .await
+        .unwrap();
     let parent = store
         .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
         .await
@@ -432,7 +435,7 @@ async fn apply_state(store: &Store, id: &str) -> Option<ApplyState> {
 #[tokio::test]
 async fn an_approval_records_whether_dots_performs_it() {
     let (_d, store) = temp_store().await;
-    let dot = store.create_dot(&spec("a"), None).await.unwrap();
+    let dot = store.create_dot(&spec("a"), None, "default").await.unwrap();
     let run = store
         .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
         .await
@@ -608,7 +611,7 @@ async fn recover_closes_the_calls_of_an_interrupted_resume_run() {
     // A resume run that had not started: its calls are still to be performed.
     let (_p2, waiting, later) = resumed_with_queued(&store, "b", 1).await;
     // A plain approval of another dot's run, never performed by Dots.
-    let other = store.create_dot(&spec("c"), None).await.unwrap();
+    let other = store.create_dot(&spec("c"), None, "default").await.unwrap();
     let run = store
         .create_run(&NewRun::new(&other.id, TriggerKind::Manual))
         .await
@@ -664,7 +667,7 @@ async fn recover_leaves_no_call_claimed() {
 #[tokio::test]
 async fn approvals_made_before_the_migration_are_not_self_applied() {
     let (dir, store) = temp_store().await;
-    let dot = store.create_dot(&spec("a"), None).await.unwrap();
+    let dot = store.create_dot(&spec("a"), None, "default").await.unwrap();
     let run = store
         .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
         .await
@@ -695,7 +698,7 @@ async fn approvals_made_before_the_migration_are_not_self_applied() {
 #[tokio::test]
 async fn approving_with_a_rule_writes_the_decision_and_the_policy_together() {
     let (_d, store) = temp_store().await;
-    let dot = store.create_dot(&spec("a"), None).await.unwrap();
+    let dot = store.create_dot(&spec("a"), None, "default").await.unwrap();
     let run = store
         .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
         .await
@@ -750,7 +753,7 @@ async fn approving_with_a_rule_writes_the_decision_and_the_policy_together() {
 #[tokio::test]
 async fn a_rule_the_policy_already_holds_keeps_the_preset() {
     let (_d, store) = temp_store().await;
-    let dot = store.create_dot(&spec("a"), None).await.unwrap();
+    let dot = store.create_dot(&spec("a"), None, "default").await.unwrap();
     let run = store
         .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
         .await
@@ -772,7 +775,7 @@ async fn a_rule_the_policy_already_holds_keeps_the_preset() {
 #[tokio::test]
 async fn pending_approvals_of_a_run_come_in_the_order_they_were_asked() {
     let (_d, store) = temp_store().await;
-    let dot = store.create_dot(&spec("a"), None).await.unwrap();
+    let dot = store.create_dot(&spec("a"), None, "default").await.unwrap();
     let run = store
         .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
         .await
@@ -875,7 +878,7 @@ async fn recover_skips_the_calls_a_resume_run_left_queued_when_it_ended() {
 #[tokio::test]
 async fn resume_parked_refuses_to_queue_a_call_dots_is_not_to_perform() {
     let (_d, store) = temp_store().await;
-    let dot = store.create_dot(&spec("a"), None).await.unwrap();
+    let dot = store.create_dot(&spec("a"), None, "default").await.unwrap();
     let parent = store
         .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
         .await
@@ -1009,7 +1012,7 @@ async fn failed_run(
 #[tokio::test]
 async fn a_failed_run_is_for_review_whatever_its_trigger() {
     let (_d, store) = temp_store().await;
-    let dot = store.create_dot(&spec("a"), None).await.unwrap();
+    let dot = store.create_dot(&spec("a"), None, "default").await.unwrap();
     let quiet = failed_run(&store, &dot.id, TriggerKind::Schedule, None, false).await;
     let retry = failed_run(
         &store,
@@ -1039,7 +1042,7 @@ async fn a_failed_run_is_for_review_whatever_its_trigger() {
 #[tokio::test]
 async fn unfinished_runs_count_queued_running_and_awaiting_approval() {
     let (_d, store) = temp_store().await;
-    let dot = store.create_dot(&spec("a"), None).await.unwrap();
+    let dot = store.create_dot(&spec("a"), None, "default").await.unwrap();
     for status in [
         RunStatus::Queued,
         RunStatus::Running,

@@ -64,7 +64,7 @@ async fn start() -> Srv {
 async fn dot(srv: &Srv, name: &str, wait: u64) -> Dot {
     let mut s = spec(name);
     s.approval_wait_secs = wait;
-    srv.store.create_dot(&s, None).await.unwrap()
+    srv.store.create_dot(&s, None, "default").await.unwrap()
 }
 
 /// A dot with a webhook token, and the token.

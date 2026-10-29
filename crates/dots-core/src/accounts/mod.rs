@@ -8,6 +8,7 @@ mod permissions;
 mod request;
 pub mod roster;
 mod scope;
+mod workspaces;
 
 pub use identity::{
     ensure_identity, identity, set_profile, sign_with_identity, Identity, IDENTITY_SECRET,
@@ -22,3 +23,4 @@ pub use roster::{
     ROSTER_VERSION,
 };
 pub use scope::{current_scope, set_current_scope, CurrentScope, DEFAULT_WORKSPACE, PERSONAL};
+pub use workspaces::workspace_id_for;

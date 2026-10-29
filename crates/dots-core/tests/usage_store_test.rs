@@ -48,12 +48,12 @@ async fn run(
 #[tokio::test]
 async fn the_usage_summary_sums_per_dot_in_the_period() {
     let (_d, store) = temp_store().await;
-    let a = store.create_dot(&spec("a"), None).await.unwrap();
+    let a = store.create_dot(&spec("a"), None, "default").await.unwrap();
     let mut local = spec("b");
     local.engine = EngineKind::Local;
     local.model = "m".into();
     local.endpoint_url = Some("http://127.0.0.1:1/v1".into());
-    let b = store.create_dot(&local, None).await.unwrap();
+    let b = store.create_dot(&local, None, "default").await.unwrap();
 
     let a1 = run(&store, &a, TimeDelta::hours(1), 60, (100, 10), Some(0.5)).await;
     let a2 = run(&store, &a, TimeDelta::days(3), 120, (1000, 100), Some(2.0)).await;
@@ -110,7 +110,7 @@ async fn the_usage_summary_sums_per_dot_in_the_period() {
 #[tokio::test]
 async fn at_most_five_heaviest_runs_and_unfinished_runs_add_no_time() {
     let (_d, store) = temp_store().await;
-    let a = store.create_dot(&spec("a"), None).await.unwrap();
+    let a = store.create_dot(&spec("a"), None, "default").await.unwrap();
     for n in 1..=7 {
         run(&store, &a, TimeDelta::minutes(n), 10, (n * 10, 0), None).await;
     }

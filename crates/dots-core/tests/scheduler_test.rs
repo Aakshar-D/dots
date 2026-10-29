@@ -159,7 +159,7 @@ impl Harness {
     async fn dot(&self, name: &str, schedule: Option<Schedule>, made: i64) -> Dot {
         let mut s = spec(name);
         s.schedule = schedule;
-        let dot = self.store.create_dot(&s, None).await.unwrap();
+        let dot = self.store.create_dot(&s, None, "default").await.unwrap();
         self.store
             .sync_schedule_state(&dot.id, dot.spec.schedule.as_ref(), false, after(made))
             .await
@@ -299,7 +299,7 @@ async fn a_disabled_dot_and_a_dot_without_a_row_are_left_alone() {
     let mut off = spec("off");
     off.schedule = Some(every(10, 0, true));
     off.enabled = false;
-    let off = h.store.create_dot(&off, None).await.unwrap();
+    let off = h.store.create_dot(&off, None, "default").await.unwrap();
     h.store
         .sync_schedule_state(&off.id, off.spec.schedule.as_ref(), false, after(-3600))
         .await
@@ -308,7 +308,7 @@ async fn a_disabled_dot_and_a_dot_without_a_row_are_left_alone() {
     // A schedule without a row: the runtime makes the rows (at start and on each change).
     let mut s = spec("no-row");
     s.schedule = Some(every(10, -3600, true));
-    let no_row = h.store.create_dot(&s, None).await.unwrap();
+    let no_row = h.store.create_dot(&s, None, "default").await.unwrap();
 
     h.start();
     assert_eq!(

@@ -40,7 +40,7 @@ async fn readings_are_kept_per_window_and_replaced() {
 #[tokio::test]
 async fn cost_adds_up_and_stays_null_without_one() {
     let (_d, store) = temp_store().await;
-    let dot = store.create_dot(&spec("a"), None).await.unwrap();
+    let dot = store.create_dot(&spec("a"), None, "default").await.unwrap();
     let run = store
         .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
         .await
@@ -60,7 +60,7 @@ async fn cost_adds_up_and_stays_null_without_one() {
 #[tokio::test]
 async fn requeue_puts_a_running_run_back_with_its_payload() {
     let (_d, store) = temp_store().await;
-    let dot = store.create_dot(&spec("a"), None).await.unwrap();
+    let dot = store.create_dot(&spec("a"), None, "default").await.unwrap();
     let mut new = NewRun::new(&dot.id, TriggerKind::Watcher);
     new.payload = Some(json!({"a": 1}));
     let run = store.create_run(&new).await.unwrap();
@@ -91,7 +91,7 @@ async fn requeue_puts_a_running_run_back_with_its_payload() {
 #[tokio::test]
 async fn requeue_restores_the_thread_a_run_was_queued_with() {
     let (_d, store) = temp_store().await;
-    let dot = store.create_dot(&spec("a"), None).await.unwrap();
+    let dot = store.create_dot(&spec("a"), None, "default").await.unwrap();
     let mut new = NewRun::new(&dot.id, TriggerKind::FollowUp);
     new.session_id = Some("thread".into());
     new.workspace_path = Some("C:/ws".into());
@@ -111,7 +111,7 @@ async fn requeue_restores_the_thread_a_run_was_queued_with() {
 #[tokio::test]
 async fn hold_released_is_stored() {
     let (_d, store) = temp_store().await;
-    let dot = store.create_dot(&spec("a"), None).await.unwrap();
+    let dot = store.create_dot(&spec("a"), None, "default").await.unwrap();
     let run = store
         .create_run(&NewRun::new(&dot.id, TriggerKind::Schedule))
         .await

@@ -1003,7 +1003,10 @@ impl Runtime {
             self.require(org_id.as_deref(), Permission::GrantEntries)
                 .await?;
         }
-        let dot = self.store.create_dot(&spec, org_id.as_deref()).await?;
+        let dot = self
+            .store
+            .create_dot(&spec, org_id.as_deref(), "default")
+            .await?;
         self.sync_schedule(&dot, false).await?;
         self.scheduler.reload();
         self.watchers.reload();

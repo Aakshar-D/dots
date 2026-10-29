@@ -811,6 +811,7 @@
     },
     "variables": {},
     "workdir": "C:/dev/app",
+    "workspace_id": "default",
     "workspace_mode": "worktree"
   },
   "DotOverview": {
@@ -972,6 +973,7 @@
       },
       "variables": {},
       "workdir": "C:/dev/app",
+      "workspace_id": "default",
       "workspace_mode": "worktree"
     },
     "last_run": {

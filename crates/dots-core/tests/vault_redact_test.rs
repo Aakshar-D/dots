@@ -65,7 +65,10 @@ async fn what_the_store_keeps_of_a_run_holds_no_secret_it_has_read() {
         .await
         .unwrap();
     let secret = "ghp_redact_test_value_42";
-    let dot = store.create_dot(&spec("redact"), None).await.unwrap();
+    let dot = store
+        .create_dot(&spec("redact"), None, "default")
+        .await
+        .unwrap();
     let mut new = NewRun::new(&dot.id, TriggerKind::Webhook);
     new.payload = Some(json!({"echo": format!("token={secret}")}));
     let run = store.create_run(&new).await.unwrap();
@@ -169,7 +172,10 @@ async fn a_parked_approval_that_holds_a_secret_still_matches_its_grant() {
     let (_dir, store) = temp_store().await;
     let secret = "ghp_grant_key_value_9911";
     global().add("DOTS_GRANT_TOKEN", secret);
-    let dot = store.create_dot(&spec("grant"), None).await.unwrap();
+    let dot = store
+        .create_dot(&spec("grant"), None, "default")
+        .await
+        .unwrap();
     let run = store
         .create_run(&NewRun::new(&dot.id, TriggerKind::Webhook))
         .await
@@ -197,7 +203,10 @@ async fn notes_of_approvals_and_follow_ups_are_scrubbed() {
     let (_dir, store) = temp_store().await;
     let secret = "ghp_note_scrub_value_5566";
     global().add("DOTS_NOTE_TOKEN", secret);
-    let dot = store.create_dot(&spec("notes"), None).await.unwrap();
+    let dot = store
+        .create_dot(&spec("notes"), None, "default")
+        .await
+        .unwrap();
     let run = store
         .create_run(&NewRun::new(&dot.id, TriggerKind::Webhook))
         .await

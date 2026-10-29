@@ -126,7 +126,7 @@ impl Setup {
                 })
                 .collect(),
         );
-        self.h.store.create_dot(&s, org).await.unwrap()
+        self.h.store.create_dot(&s, org, "default").await.unwrap()
     }
 
     /// The statuses of `dot`, none of which holds a value, read without reading a Personal

@@ -81,6 +81,7 @@ fn dot() -> Dot {
         updated_at: TS.into(),
         seen_at: Some(TS.into()),
         org_id: None,
+        workspace_id: "default".into(),
         spec: spec(),
     }
 }

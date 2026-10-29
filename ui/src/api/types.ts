@@ -134,6 +134,8 @@ export const Dot = z.strictObject({
   // The org the dot belongs to, fixed when it is made; null is Personal. The org may have been
   // removed since, and the dot keeps its id.
   org_id: nullable(z.string()),
+  // The workspace of its account the dot is in; "default" until it is moved.
+  workspace_id: z.string(),
   ...dotSpecShape,
 });
 

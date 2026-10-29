@@ -188,7 +188,10 @@ fn a_call_without_its_tool_or_writes_flag_matches_no_allow_rule() {
 #[tokio::test]
 async fn stored_dots_get_the_app_rules_once() {
     let (dir, store) = common::temp_store().await;
-    let dot = store.create_dot(&common::spec("old"), None).await.unwrap();
+    let dot = store
+        .create_dot(&common::spec("old"), None, "default")
+        .await
+        .unwrap();
     drop(store);
     // Make the dot look stored before apps: no app rules, and listed for the upgrade.
     let db = dir.path().join("dots.db");
