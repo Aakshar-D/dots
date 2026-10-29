@@ -4,12 +4,13 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use axum::extract::{ConnectInfo, DefaultBodyLimit, Request};
-use axum::http::StatusCode;
+use axum::extract::{ConnectInfo, DefaultBodyLimit, Request, State};
+use axum::http::{header, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use axum::Router;
+use axum::{Json, Router};
+use serde_json::json;
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -72,6 +73,41 @@ async fn loopback_only(
     next.run(req).await
 }
 
+/// Whether a `Host` header names this server: exactly `127.0.0.1:<port>` or `localhost:<port>`
+/// (the name is case-insensitive) for the port it is listening on. No `Host` is refused.
+pub fn host_allowed(host: Option<&str>, port: u16) -> bool {
+    let Some((name, p)) = host.and_then(|h| h.rsplit_once(':')) else {
+        return false;
+    };
+    p.parse::<u16>().is_ok_and(|p| p == port)
+        && (name == "127.0.0.1" || name.eq_ignore_ascii_case("localhost"))
+}
+
+/// Refuses a request whose `Host` does not name this server, so a page on another name that was
+/// re-pointed at 127.0.0.1 (DNS rebinding) reaches no route. The server speaks HTTP/1.1, where
+/// the name is the `Host` header; HTTP/2's `:authority` is not read. `/v1` answers in JSON words,
+/// the other routes with a bare 403 like `loopback_only`.
+async fn host_only(State(port): State<u16>, req: Request, next: Next) -> Response {
+    let host = req
+        .headers()
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok());
+    if host_allowed(host, port) {
+        return next.run(req).await;
+    }
+    let path = req.uri().path();
+    if path == "/v1" || path.starts_with("/v1/") {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "error": "This server only answers requests addressed to 127.0.0.1 or localhost."
+            })),
+        )
+            .into_response();
+    }
+    StatusCode::FORBIDDEN.into_response()
+}
+
 pub async fn bind(port: u16) -> Result<TcpListener> {
     Ok(TcpListener::bind(("127.0.0.1", port)).await?)
 }
@@ -129,7 +165,11 @@ pub fn serve(
     shutdown: CancellationToken,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let app = router(state).into_make_service_with_connect_info::<SocketAddr>();
+        // The check needs the port actually bound (tests bind port 0).
+        let port = listener.local_addr().map(|a| a.port()).unwrap_or(0);
+        let app = router(state)
+            .layer(middleware::from_fn_with_state(port, host_only))
+            .into_make_service_with_connect_info::<SocketAddr>();
         if let Err(e) = axum::serve(listener, app)
             .with_graceful_shutdown(shutdown.cancelled_owned())
             .await
