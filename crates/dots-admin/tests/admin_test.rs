@@ -587,6 +587,7 @@ fn join_code_for_each_source_kind_reads_back_in_dots() {
             name: "Acme Engineering".into(),
             source,
             policy_key: public_key.clone(),
+            invite: None,
         };
         let mut args = vec!["join-code"];
         args.extend(common);

@@ -26,7 +26,7 @@ use zeroize::Zeroizing;
 
 use super::join::{
     check_org_id, key_fingerprint, parse_join_code, same_policy_key, shown_address, BaoAuth,
-    JoinCode,
+    InviteOffer, JoinCode,
 };
 use super::offline::{delete_offline, read_offline, write_offline, OfflineCopy, Protector};
 use super::policy::{OrgPolicy, PersonalMode, PolicyError, RosterMode, UseRules};
@@ -161,6 +161,8 @@ pub struct JoinPreview {
     /// of source: the saved sign-in details are not sent to it, so the person gives them again.
     /// A SOPS file's new location keeps this PC's key.
     pub source_changed: bool,
+    /// The role this code offers as a personal invite; `None` for a plain code.
+    pub invite: Option<InviteOffer>,
 }
 
 /// One org entry for the Env tab. A secret's `value` is always `None`.
@@ -259,7 +261,7 @@ enum Slot {
         error: String,
     },
     /// A SOPS join that waits for the admin, with the code it was tried with. In memory only.
-    Pending(JoinCode),
+    Pending(Box<JoinCode>),
 }
 
 struct Joined {
@@ -405,6 +407,7 @@ impl Orgs {
                 SourceSettings::OpenBao(s) => Some(s.auth),
                 _ => None,
             },
+            invite: code.invite,
             org_id: code.org_id,
             name: code.name,
             existing,
@@ -486,7 +489,7 @@ impl Orgs {
         let fetched = match source.fetch(&creds).await {
             Ok(fetched) => fetched,
             Err(SourceError::Denied(why)) if sops && why == NOT_A_RECIPIENT => {
-                let slot = Slot::Pending(code);
+                let slot = Slot::Pending(Box::new(code));
                 let summary = summary_of(&id, &slot);
                 self.write().insert(id, slot);
                 return Ok(summary);

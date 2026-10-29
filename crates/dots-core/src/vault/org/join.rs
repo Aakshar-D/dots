@@ -11,10 +11,12 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use super::policy::plain_serde;
+use crate::accounts::Role;
 use crate::{Error, Result};
 
-/// The only join code version this Dots reads.
-pub const JOIN_CODE_VERSION: u32 = 1;
+/// The newest join code version this Dots reads and writes. Version 1 is a plain code; version 2
+/// may carry an invite offer.
+pub const JOIN_CODE_VERSION: u32 = 2;
 
 /// The longest org id. It appears in file names and Credential Manager targets.
 pub const MAX_ORG_ID: usize = 63;
@@ -30,6 +32,19 @@ pub struct JoinCode {
     pub source: SourceSettings,
     /// The minisign public key the org's policy is signed with, the bare `RW…` base64 line.
     pub policy_key: String,
+    /// The offer of a role that makes this a personal invite. Only a version 2 code may carry it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invite: Option<InviteOffer>,
+}
+
+/// The invite a version 2 join code offers: which invite it is, the role it gives and when the
+/// offer ends (RFC 3339). It holds no secrets.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InviteOffer {
+    pub id: String,
+    pub role: Role,
+    pub expires_at: String,
 }
 
 /// Where an org's entries and signed policy come from, and how to reach them. It holds no
@@ -223,9 +238,14 @@ impl SourceSettings {
 }
 
 impl JoinCode {
-    /// The code as the admin hands it out: base64url of the JSON, without padding.
+    /// The code as the admin hands it out: base64url of the JSON, without padding. A plain code
+    /// is written as version 1 so older Dots still read it; one with an invite is version 2.
     pub fn encode(&self) -> String {
-        let json = serde_json::to_string(self).expect("a join code serializes");
+        let versioned = Self {
+            v: if self.invite.is_some() { 2 } else { 1 },
+            ..self.clone()
+        };
+        let json = serde_json::to_string(&versioned).expect("a join code serializes");
         URL_SAFE_NO_PAD.encode(json)
     }
 }
@@ -241,7 +261,7 @@ pub fn parse_join_code(text: &str) -> Result<JoinCode> {
         .map_err(|_| refused("not base64url text"))?;
     let value: Value = serde_json::from_slice(&bytes).map_err(|_| refused("no JSON inside"))?;
     match value.get("v").map(Value::as_u64) {
-        Some(Some(v)) if v == u64::from(JOIN_CODE_VERSION) => {}
+        Some(Some(v)) if v == 1 || v == u64::from(JOIN_CODE_VERSION) => {}
         Some(Some(v)) => {
             return Err(refused(format!(
                 "version {v} is not supported; update Dots"
@@ -258,6 +278,9 @@ pub fn parse_join_code(text: &str) -> Result<JoinCode> {
             return Err(refused(plain_serde(&e)));
         }
     };
+    if code.v == 1 && code.invite.is_some() {
+        return Err(refused("a version 1 join code can't carry an invite"));
+    }
     // First, so that no refusal below quotes a text that reads as something else.
     check_plain("the org's id", &code.org_id)?;
     check_plain("the org's name", &code.name)?;

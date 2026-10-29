@@ -1020,6 +1020,12 @@ export const OrgSummary = z.discriminatedUnion("status", [
 // How an OpenBao or Vault join code signs in: a token, or a username and password against a
 // `userpass` or `ldap` mount.
 export const BaoAuth = z.enum(["token", "userpass", "ldap"]);
+// The invite a version 2 join code offers: which invite, the role it gives, when it ends.
+export const InviteOffer = z.strictObject({
+  id: z.string(),
+  role: Role,
+  expires_at: z.string(),
+});
 // What a join code would join, or change for an org joined already (Update). Nothing is
 // fetched for it.
 export const JoinPreview = z.strictObject({
@@ -1039,6 +1045,8 @@ export const JoinPreview = z.strictObject({
   // For Update, the code changes an OpenBao or Infisical source's settings, or the kind of
   // source: the saved sign-in details are not sent to it, so they must be given again.
   source_changed: z.boolean(),
+  // The role the code offers as a personal invite; null for a plain code.
+  invite: nullable(InviteOffer),
 });
 // An org's entry for the Env tab. A secret's value is always null.
 export const OrgEntry = z.strictObject({

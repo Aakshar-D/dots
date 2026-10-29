@@ -126,6 +126,7 @@ pub fn code(org_id: &str, name: &str, source: SourceSettings, keys: &KeyPair) ->
         name: name.into(),
         source,
         policy_key: public_key(keys),
+        invite: None,
     }
     .encode()
 }

@@ -1848,6 +1848,7 @@ mod tests {
                 namespace: None,
             }),
             policy_key: key.into(),
+            invite: None,
         }
         .encode()
     }

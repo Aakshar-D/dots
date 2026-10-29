@@ -1589,6 +1589,7 @@
       "auth": "token",
       "changes": [],
       "existing": false,
+      "invite": null,
       "key_changed": false,
       "key_fingerprint": "6E2F 0A1B 9C3D 4E5F 7A81 B2C3 D4E5 F607",
       "name": "Acme Engineering",
@@ -1604,6 +1605,7 @@
         "the policy key changes from 6E2F 0A1B 9C3D 4E5F 7A81 B2C3 D4E5 F607 to 0A1B 2C3D 4E5F 6071 8293 A4B5 C6D7 E8F9: the key that signs the org's policy is new, so accept this code only if your admin told you the key changed"
       ],
       "existing": true,
+      "invite": null,
       "key_changed": true,
       "key_fingerprint": "0A1B 2C3D 4E5F 6071 8293 A4B5 C6D7 E8F9",
       "name": "Acme Engineering",

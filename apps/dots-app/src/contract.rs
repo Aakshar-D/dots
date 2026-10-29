@@ -1819,6 +1819,7 @@ fn join_previews() -> Vec<JoinPreview> {
         changes: vec![],
         key_changed: false,
         source_changed: false,
+        invite: None,
     };
     vec![
         new.clone(),
