@@ -1452,6 +1452,8 @@ pub fn samples() -> Value {
     samples["Enums"]["GrantState"] = to(GrantState::ALL);
     samples["Enums"]["ValueSource"] = to(ValueSource::ALL);
     samples["Enums"]["PersonalMode"] = to(PersonalMode::ALL);
+    samples["Enums"]["InviteState"] = to(InviteState::ALL);
+    samples["Enums"]["WorkspaceRole"] = to(WorkspaceRole::ALL);
     samples
 }
 

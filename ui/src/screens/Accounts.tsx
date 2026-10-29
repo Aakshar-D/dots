@@ -10,6 +10,7 @@ import { ConfirmButton } from "@/components/ConfirmButton";
 import { CopyDotsIdButton } from "@/components/CopyDotsIdButton";
 import { ErrorNote } from "@/components/ErrorNote";
 import { Field } from "@/components/Field";
+import { RequestCodeBox } from "@/components/RequestCodeBox";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -69,6 +70,11 @@ function OrgRow({ org, onUpdate }: { org: OrgSummary; onUpdate: () => void }) {
     },
     onError: notifyError,
   });
+  const requestAccess = useMutation({
+    mutationFn: () => commands.orgRequestAccess(org.id),
+    onSuccess: () => invalidate(qc, keys.orgs),
+    onError: notifyError,
+  });
   const role = accessRole(accessOf(org, org.id));
   // The core's refusal says where this PC stands on the list; the status line then adds only
   // what it does not already say (not "connected", not the same words again).
@@ -107,6 +113,22 @@ function OrgRow({ org, onUpdate }: { org: OrgSummary; onUpdate: () => void }) {
                 {notMember}
               </p>
               {org.membership === "waiting" && <CopyDotsIdButton />}
+              {org.membership === "waiting" && !org.request_code && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={requestAccess.isPending}
+                  onClick={() => requestAccess.mutate()}
+                >
+                  Request access
+                </Button>
+              )}
+            </div>
+          )}
+          {org.membership === "waiting" && org.request_code && (
+            <div className="pt-1">
+              <RequestCodeBox account={org.name} code={org.request_code} />
             </div>
           )}
           {org.roster_error && !org.status_text.includes(org.roster_error) && (
@@ -291,6 +313,11 @@ export function JoinDialog(props: { org?: OrgSummary; onClose: () => void }) {
   const [error, setError] = useState<string>();
   const [declined, setDeclined] = useState(false);
   const [waiting, setWaiting] = useState(false);
+  // The request code a join with an invite made: the dialog shows it instead of closing.
+  const [requested, setRequested] = useState<{ account: string; code: string }>();
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const identity = useQuery({ queryKey: keys.identity, queryFn: commands.identityGet });
   const set = (change: Partial<Fields>) => setFields({ ...fields, ...change });
 
   async function look(text: string) {
@@ -318,6 +345,10 @@ export function JoinDialog(props: { org?: OrgSummary; onClose: () => void }) {
 
   const kind = preview ? credsKind(preview) : null;
   const creds = credsOf(kind, fields);
+  // An invite is answered with a request that carries the person's name and email: without
+  // them the core joins with no request code and the invite is lost.
+  const needsProfile =
+    !org && !!preview?.invite && !!identity.data && (!identity.data.name || !identity.data.email);
   async function submit() {
     if (creds === "partial") return;
     setFields(unsecret(fields));
@@ -325,10 +356,19 @@ export function JoinDialog(props: { org?: OrgSummary; onClose: () => void }) {
     setError(undefined);
     setDeclined(false);
     try {
+      if (needsProfile) {
+        const saved = await commands.profileSet(name.trim(), email.trim());
+        qc.setQueryData(keys.identity, saved);
+      }
       const joined = org
         ? await commands.orgUpdate(org.id, code, creds)
         : await commands.orgJoin(code, creds);
       invalidate(qc, keys.orgs);
+      if (preview?.invite && joined.request_code) {
+        setRequested({ account: joined.name, code: joined.request_code });
+        setBusy(false);
+        return;
+      }
       if (joined.status === "pending") {
         setWaiting(true);
         setBusy(false);
@@ -364,6 +404,8 @@ export function JoinDialog(props: { org?: OrgSummary; onClose: () => void }) {
         ? `${preview.name} is joined already: use Update on it in the list.`
         : undefined;
   const verb = org ? "Update" : "Join";
+  const expired = !!preview?.invite && Date.parse(preview.invite.expires_at) < Date.now();
+  const profileMissing = needsProfile && (name.trim() === "" || email.trim() === "");
   // An Update to a changed source never reuses the saved details: the core would refuse.
   const fresh = !org || !!preview?.source_changed;
   const required = fresh && creds === null && kind !== "age";
@@ -387,7 +429,16 @@ export function JoinDialog(props: { org?: OrgSummary; onClose: () => void }) {
           </DialogDescription>
         </DialogHeader>
 
-        {step === "code" && (
+        {requested && (
+          <>
+            <p role="status" className="text-sm">
+              You joined {requested.account}, but your Dots ID is not on its member list yet.
+            </p>
+            <RequestCodeBox account={requested.account} code={requested.code} />
+          </>
+        )}
+
+        {!requested && step === "code" && (
           <>
             <Field
               label="Join code"
@@ -416,7 +467,7 @@ export function JoinDialog(props: { org?: OrgSummary; onClose: () => void }) {
           </>
         )}
 
-        {step !== "code" && preview && (
+        {!requested && step !== "code" && preview && (
           <>
             {step === "preview" && (
               <>
@@ -435,6 +486,16 @@ export function JoinDialog(props: { org?: OrgSummary; onClose: () => void }) {
                   <dt className="text-muted-foreground">Key fingerprint</dt>
                   <dd className="font-mono">{preview.key_fingerprint}</dd>
                 </dl>
+                {preview.invite && !org && (
+                  <p
+                    className={`text-sm ${expired ? "text-destructive" : "text-muted-foreground"}`}
+                    role={expired ? "alert" : undefined}
+                  >
+                    {expired
+                      ? "This invite has expired. Ask for a new one."
+                      : `Invited as ${roleLabel(preview.invite.role)} \u00b7 expires ${localDateTime(preview.invite.expires_at)}`}
+                  </p>
+                )}
                 {refusal ? (
                   <p role="alert" className="text-sm text-destructive">
                     {refusal}
@@ -546,6 +607,30 @@ export function JoinDialog(props: { org?: OrgSummary; onClose: () => void }) {
                     </Field>
                   </>
                 )}
+                {needsProfile && (
+                  <>
+                    <p className="text-xs text-muted-foreground">
+                      The Admin sees your name and email with your request.
+                    </p>
+                    <Field label="Your name" htmlFor="join-name">
+                      <Input
+                        id="join-name"
+                        autoComplete="name"
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                      />
+                    </Field>
+                    <Field label="Your email" htmlFor="join-email">
+                      <Input
+                        id="join-email"
+                        type="email"
+                        autoComplete="email"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                      />
+                    </Field>
+                  </>
+                )}
                 {kind === "age" && <SopsKey orgId={preview.org_id} verb={verb} />}
                 {creds === "partial" && (
                   <p className="text-xs text-muted-foreground">
@@ -571,14 +656,14 @@ export function JoinDialog(props: { org?: OrgSummary; onClose: () => void }) {
         )}
         <DialogFooter>
           <Button type="button" variant="outline" onClick={props.onClose}>
-            Cancel
+            {requested ? "Close" : "Cancel"}
           </Button>
-          {step !== "code" && (
+          {!requested && step !== "code" && (
             <Button type="button" variant="outline" disabled={busy} onClick={back}>
               Back
             </Button>
           )}
-          {step === "code" && (
+          {!requested && step === "code" && (
             <Button
               type="button"
               disabled={busy || code.trim() === ""}
@@ -587,10 +672,10 @@ export function JoinDialog(props: { org?: OrgSummary; onClose: () => void }) {
               Preview
             </Button>
           )}
-          {step === "preview" && (
+          {!requested && step === "preview" && (
             <Button
               type="button"
-              disabled={!!refusal}
+              disabled={!!refusal || expired}
               onClick={() => {
                 setDeclined(false);
                 setStep("creds");
@@ -599,10 +684,10 @@ export function JoinDialog(props: { org?: OrgSummary; onClose: () => void }) {
               Continue
             </Button>
           )}
-          {step === "creds" && (
+          {!requested && step === "creds" && (
             <Button
               type="button"
-              disabled={busy || creds === "partial" || required}
+              disabled={busy || creds === "partial" || required || profileMissing}
               onClick={() => void submit()}
             >
               {waiting ? "Try again" : verb}

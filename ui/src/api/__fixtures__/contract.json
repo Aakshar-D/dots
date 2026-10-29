@@ -1265,6 +1265,12 @@
       "org_removed",
       "not_member"
     ],
+    "InviteState": [
+      "open",
+      "used",
+      "expired",
+      "revoked"
+    ],
     "LibraryKind": [
       "mcp_server",
       "skill",
@@ -1342,6 +1348,11 @@
     "WorkspaceMode": [
       "worktree",
       "folder"
+    ],
+    "WorkspaceRole": [
+      "admin",
+      "member",
+      "viewer"
     ]
   },
   "EnvEntry": [

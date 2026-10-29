@@ -100,6 +100,8 @@ const enums: Record<keyof typeof fixture.Enums, { options: readonly string[] }> 
   GrantState: T.GrantState,
   ValueSource: T.ValueSource,
   PersonalMode: T.PersonalMode,
+  InviteState: T.InviteState,
+  WorkspaceRole: T.WorkspaceRole,
 };
 
 describe("Rust/TypeScript contract", () => {

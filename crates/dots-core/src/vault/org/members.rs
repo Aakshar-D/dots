@@ -92,6 +92,12 @@ pub enum InviteState {
     Revoked,
 }
 
+impl InviteState {
+    /// Every state, for the UI contract test.
+    pub const ALL: &'static [InviteState] =
+        &[Self::Open, Self::Used, Self::Expired, Self::Revoked];
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct InviteView {
     pub id: String,
