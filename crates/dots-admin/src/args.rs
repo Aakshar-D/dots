@@ -106,6 +106,11 @@ impl Args {
         }
     }
 
+    /// The positional words from the `from`th on (none when there are fewer).
+    pub(crate) fn rest(&self, from: usize) -> &[String] {
+        self.positional.get(from..).unwrap_or_default()
+    }
+
     /// Exactly `N` positional words, `names` saying what each is for the error.
     pub(crate) fn words<const N: usize>(&self, names: [&str; N]) -> Result<[&str; N]> {
         if let Some(extra) = self.positional.get(N) {

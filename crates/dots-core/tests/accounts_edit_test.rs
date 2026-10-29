@@ -266,3 +266,175 @@ fn edit_members_with_owner_changes_allowed_touches_neither_seq_nor_issued_at() {
     assert_eq!(after.seq, before.seq);
     assert_eq!(after.issued_at, before.issued_at);
 }
+
+// ---- workspaces ---------------------------------------------------------------------------
+
+fn roles(pairs: &[(&str, WorkspaceRole)]) -> BTreeMap<String, WorkspaceRole> {
+    pairs.iter().map(|(id, r)| (id.to_string(), *r)).collect()
+}
+
+fn with_payments(owner: &str, asha: &str) -> Roster {
+    let (roster, _) = apply(
+        &roster(owner, asha),
+        &Change::AddWorkspace {
+            name: "Payments Team".into(),
+        },
+        now(),
+    )
+    .unwrap();
+    roster
+}
+
+#[test]
+fn add_rename_delete_workspace() {
+    let (owner, asha) = (dots_id(), dots_id());
+    let before = roster(&owner, &asha);
+    let (added, summary) = apply(
+        &before,
+        &Change::AddWorkspace {
+            name: "Payments Team".into(),
+        },
+        now(),
+    )
+    .unwrap();
+    assert_eq!(summary, "Add the Payments Team workspace");
+    assert_eq!(added.seq, 8);
+    let ids: Vec<_> = added.workspaces.iter().map(|w| w.id.as_str()).collect();
+    assert_eq!(ids, ["default", "payments-team"]);
+    assert_eq!(added.workspaces[1].name, "Payments Team");
+
+    let (renamed, summary) = apply(
+        &added,
+        &Change::RenameWorkspace {
+            id: "payments-team".into(),
+            name: "Payments".into(),
+        },
+        now(),
+    )
+    .unwrap();
+    assert_eq!(summary, "Rename Payments Team to Payments");
+    assert_eq!(renamed.workspaces[1].id, "payments-team");
+    assert_eq!(renamed.workspaces[1].name, "Payments");
+
+    let (deleted, summary) = apply(
+        &renamed,
+        &Change::DeleteWorkspace {
+            id: "payments-team".into(),
+        },
+        now(),
+    )
+    .unwrap();
+    assert_eq!(summary, "Delete the Payments workspace");
+    assert_eq!(deleted.workspaces.len(), 1);
+
+    let missing = Change::RenameWorkspace {
+        id: "nope".into(),
+        name: "X".into(),
+    };
+    assert!(matches!(
+        apply(&before, &missing, now()),
+        Err(Error::NotFound(_))
+    ));
+}
+
+#[test]
+fn delete_default_is_refused() {
+    let (owner, asha) = (dots_id(), dots_id());
+    let result = apply(
+        &roster(&owner, &asha),
+        &Change::DeleteWorkspace {
+            id: "default".into(),
+        },
+        now(),
+    );
+    assert!(matches!(result, Err(Error::Invalid(_))), "{result:?}");
+}
+
+#[test]
+fn delete_removes_member_entries() {
+    let (owner, asha) = (dots_id(), dots_id());
+    let list = with_payments(&owner, &asha);
+    let (list, _) = edit_members(
+        &list,
+        &Change::SetWorkspaces {
+            member_id: "m-asha".into(),
+            workspaces: roles(&[
+                ("default", WorkspaceRole::Member),
+                ("payments-team", WorkspaceRole::Admin),
+            ]),
+        },
+        now(),
+        false,
+    )
+    .unwrap();
+    assert_eq!(list.members[1].workspaces.len(), 2);
+    let (after, _) = apply(
+        &list,
+        &Change::DeleteWorkspace {
+            id: "payments-team".into(),
+        },
+        now(),
+    )
+    .unwrap();
+    assert_eq!(
+        after.members[1].workspaces,
+        roles(&[("default", WorkspaceRole::Member)])
+    );
+}
+
+#[test]
+fn set_workspaces_needs_default() {
+    let (owner, asha) = (dots_id(), dots_id());
+    let list = with_payments(&owner, &asha);
+    let result = apply(
+        &list,
+        &Change::SetWorkspaces {
+            member_id: "m-asha".into(),
+            workspaces: roles(&[("payments-team", WorkspaceRole::Member)]),
+        },
+        now(),
+    );
+    assert!(matches!(result, Err(Error::Invalid(_))), "{result:?}");
+    let unlisted = apply(
+        &list,
+        &Change::SetWorkspaces {
+            member_id: "m-asha".into(),
+            workspaces: roles(&[
+                ("default", WorkspaceRole::Member),
+                ("ghost", WorkspaceRole::Member),
+            ]),
+        },
+        now(),
+    );
+    assert!(unlisted.is_err());
+    let (ok, summary) = apply(
+        &list,
+        &Change::SetWorkspaces {
+            member_id: "m-asha".into(),
+            workspaces: roles(&[
+                ("default", WorkspaceRole::Viewer),
+                ("payments-team", WorkspaceRole::Member),
+            ]),
+        },
+        now(),
+    )
+    .unwrap();
+    assert_eq!(summary, "Change Asha Rao's workspaces");
+    assert_eq!(ok.members[1].workspaces.len(), 2);
+}
+
+#[test]
+fn owner_workspaces_locked() {
+    let (owner, asha) = (dots_id(), dots_id());
+    let list = roster(&owner, &asha);
+    let change = Change::SetWorkspaces {
+        member_id: "m-owner".into(),
+        workspaces: roles(&[("default", WorkspaceRole::Viewer)]),
+    };
+    not_allowed(apply(&list, &change, now()));
+    let (edited, _) = edit_members(&list, &change, now(), true).unwrap();
+    assert_eq!(
+        edited.members[0].workspaces["default"],
+        WorkspaceRole::Viewer
+    );
+}

@@ -1385,3 +1385,100 @@ fn add_request_wrong_org_is_refused() {
     );
     assert_eq!(std::fs::read_to_string(&file).unwrap(), before);
 }
+
+#[test]
+fn workspace_add_with_use() {
+    let (dir, _, _) = keys();
+    let file = new_roster(dir.path(), &dots_id());
+    let out = ok(&[
+        "roster",
+        "workspace",
+        "add",
+        &file,
+        "Payments Team",
+        "--allow",
+        "STRIPE_*",
+        "--allow",
+        "PAY_*",
+        "--deny",
+        "*_ROOT",
+    ]);
+    assert!(out.out.contains("payments-team"), "{}", out.out);
+    let json = read_json(&file);
+    assert_eq!(json["workspaces"][1]["id"], "payments-team");
+    assert_eq!(json["workspaces"][1]["name"], "Payments Team");
+    assert_eq!(
+        json["workspaces"][1]["use"],
+        serde_json::json!({"allow": ["STRIPE_*", "PAY_*"], "deny": ["*_ROOT"]})
+    );
+    assert_eq!(json["seq"], 0, "no seq bump");
+
+    ok(&[
+        "roster",
+        "workspace",
+        "rename",
+        &file,
+        "payments-team",
+        "Payments",
+    ]);
+    assert_eq!(read_json(&file)["workspaces"][1]["name"], "Payments");
+
+    ok(&[
+        "roster",
+        "workspace",
+        "use",
+        &file,
+        "payments-team",
+        "--deny",
+        "X",
+    ]);
+    assert_eq!(
+        read_json(&file)["workspaces"][1]["use"]["deny"],
+        serde_json::json!(["X"])
+    );
+    ok(&["roster", "workspace", "use", &file, "payments-team"]);
+    assert!(read_json(&file)["workspaces"][1].get("use").is_none());
+
+    ok(&["roster", "workspace", "remove", &file, "payments-team"]);
+    assert_eq!(read_json(&file)["workspaces"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn workspace_remove_default_refused() {
+    let (dir, _, _) = keys();
+    let file = new_roster(dir.path(), &dots_id());
+    let before = std::fs::read_to_string(&file).unwrap();
+    let err = failure(&["roster", "workspace", "remove", &file, "default"]);
+    assert!(err.to_string().contains("default"), "{err}");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), before);
+}
+
+#[test]
+fn set_workspaces_by_email() {
+    let (dir, _, _) = keys();
+    let file = new_roster(dir.path(), &dots_id());
+    ok(&["roster", "workspace", "add", &file, "Payments"]);
+    ok(&[
+        "roster",
+        "set-workspaces",
+        &file,
+        "owner@acme.test",
+        "default=viewer",
+        "payments=admin",
+    ]);
+    let json = read_json(&file);
+    assert_eq!(
+        json["members"][0]["workspaces"],
+        serde_json::json!({"default": "viewer", "payments": "admin"})
+    );
+    let before = std::fs::read_to_string(&file).unwrap();
+    let err = failure(&[
+        "roster",
+        "set-workspaces",
+        &file,
+        "owner@acme.test",
+        "payments=admin",
+    ]);
+    assert!(err.to_string().contains("default"), "{err}");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), before);
+}

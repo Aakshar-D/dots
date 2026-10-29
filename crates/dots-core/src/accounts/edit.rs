@@ -10,7 +10,9 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::roster::{parse_roster, Member, Role, Roster, WorkspaceRole, ROSTER_VERSION};
+use super::roster::{parse_roster, Member, Role, Roster, Workspace, WorkspaceRole, ROSTER_VERSION};
+use super::scope::DEFAULT_WORKSPACE;
+use super::workspaces::workspace_id_for;
 use crate::vault::org::key_fingerprint;
 use crate::Error;
 
@@ -39,6 +41,20 @@ pub enum RosterEdit {
         member_id: String,
         key: String,
     },
+    AddWorkspace {
+        name: String,
+    },
+    RenameWorkspace {
+        id: String,
+        name: String,
+    },
+    DeleteWorkspace {
+        id: String,
+    },
+    SetWorkspaces {
+        member_id: String,
+        workspaces: BTreeMap<String, WorkspaceRole>,
+    },
 }
 
 /// One change to the list.
@@ -64,6 +80,23 @@ pub enum Change {
     RemoveKey {
         member_id: String,
         key: String,
+    },
+    /// A new workspace; its id comes from the name.
+    AddWorkspace {
+        name: String,
+    },
+    RenameWorkspace {
+        id: String,
+        name: String,
+    },
+    /// Never `default`. Every member's entry for it goes too.
+    DeleteWorkspace {
+        id: String,
+    },
+    /// A member's role in each workspace they are in; `default` must be one.
+    SetWorkspaces {
+        member_id: String,
+        workspaces: BTreeMap<String, WorkspaceRole>,
     },
 }
 
@@ -191,8 +224,74 @@ pub fn edit_members(
                 format!("Remove one PC of {name}")
             }
         }
+        Change::AddWorkspace { name } => {
+            let name = workspace_name(name)?;
+            let taken: Vec<String> = roster.workspaces.iter().map(|w| w.id.clone()).collect();
+            next.workspaces.push(Workspace {
+                id: workspace_id_for(&name, &taken),
+                name: name.clone(),
+                use_rules: None,
+            });
+            format!("Add the {name} workspace")
+        }
+        Change::RenameWorkspace { id, name } => {
+            let name = workspace_name(name)?;
+            let workspace = find_workspace(&mut next, id)?;
+            let old = std::mem::replace(&mut workspace.name, name.clone());
+            format!("Rename {old} to {name}")
+        }
+        Change::DeleteWorkspace { id } => {
+            if id == DEFAULT_WORKSPACE {
+                return Err(Error::Invalid(
+                    "The default workspace can't be deleted.".into(),
+                ));
+            }
+            let name = find_workspace(&mut next, id)?.name.clone();
+            next.workspaces.retain(|w| w.id != *id);
+            for member in &mut next.members {
+                member.workspaces.remove(id);
+            }
+            format!("Delete the {name} workspace")
+        }
+        Change::SetWorkspaces {
+            member_id,
+            workspaces,
+        } => {
+            if !workspaces.contains_key(DEFAULT_WORKSPACE) {
+                return Err(Error::Invalid(
+                    "Every member stays in the default workspace.".into(),
+                ));
+            }
+            if let Some(id) = workspaces
+                .keys()
+                .find(|id| !roster.workspaces.iter().any(|w| &w.id == *id))
+            {
+                return Err(Error::NotFound(format!("No workspace '{id}' on the list.")));
+            }
+            let member = find(&mut next, member_id)?;
+            locked(member.role == Role::Owner)?;
+            member.workspaces = workspaces.clone();
+            format!("Change {}'s workspaces", member.name)
+        }
     };
     Ok((next, summary))
+}
+
+/// A workspace name as typed: trimmed, and not empty.
+fn workspace_name(name: &str) -> crate::Result<String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(Error::Invalid("A workspace needs a name.".into()));
+    }
+    Ok(name.to_string())
+}
+
+fn find_workspace<'a>(roster: &'a mut Roster, id: &str) -> crate::Result<&'a mut Workspace> {
+    roster
+        .workspaces
+        .iter_mut()
+        .find(|w| w.id == id)
+        .ok_or_else(|| Error::NotFound(format!("No workspace '{id}' on the list.")))
 }
 
 fn find<'a>(roster: &'a mut Roster, id: &str) -> crate::Result<&'a mut Member> {
