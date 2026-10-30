@@ -23,6 +23,8 @@ mod runs;
 mod schedules;
 mod settings;
 mod teams;
+#[doc(hidden)]
+pub use teams::TEAM_ORG_BACKFILL_SQL;
 mod upgrade;
 mod watchers;
 mod workflow_runs;

@@ -1,6 +1,7 @@
 #[macro_use]
 mod macros;
 
+pub mod accounts;
 pub mod approvals;
 pub mod apps;
 pub mod browser;

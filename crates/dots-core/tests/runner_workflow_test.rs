@@ -58,6 +58,7 @@ async fn step_run_in(
 ) -> String {
     let team = store
         .create_team(&TeamSpec {
+            org_id: None,
             name: format!("team-{}", dot.spec.name),
             description: String::new(),
             members: vec![MemberSpec {

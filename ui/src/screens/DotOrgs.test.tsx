@@ -11,7 +11,7 @@ const gamma: OrgSummary = { ...acme, id: "gamma", name: "Gamma" };
 // A dot of Acme Engineering, and the contract's Personal dot.
 const release: Dot = { ...sample.dot, id: "D2", name: "acme-release", org_id: "acme-eng" };
 const personal = sample.dot;
-const REMOVED = "Its org 'acme-eng' was removed. Join it again to run this dot.";
+const REMOVED = "Its account 'acme-eng' was removed. Join it again to run this dot.";
 const basics = { name: "nightly", instructions: "Run the tests.", workdir: "C:/dev/app" };
 
 /// Opens the new-dot form with `orgs` joined and fills in what a dot needs.
@@ -51,7 +51,7 @@ function editor(dot: Dot, orgs: OrgSummary[]) {
 describe("the org of a new dot", () => {
   it("offers Personal and each joined org, and creates the dot in the one chosen", async () => {
     const { user, router } = await newDot([acme, gamma]);
-    const picker = screen.getByLabelText("Org");
+    const picker = screen.getByLabelText("Account");
     expect(within(picker).getAllByRole("option").map((o) => o.textContent)).toEqual([
       "Personal",
       "Acme Engineering",
@@ -75,28 +75,39 @@ describe("the org of a new dot", () => {
     ]);
   });
 
+  it("starts in the current account", async () => {
+    backend.on("scope_get", () => ({ account: "acme-eng", workspace: "default" }));
+    const { user, router } = await newDot([acme, gamma]);
+    await waitFor(() => expect(screen.getByLabelText("Account")).toHaveValue("acme-eng"));
+    await user.click(screen.getByRole("button", { name: "Create dot" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/dots/dot-new"));
+    expect(backend.callsTo("create_dot")).toEqual([
+      { spec: { ...blankSpec, ...basics }, orgId: "acme-eng" },
+    ]);
+  });
+
   it("offers no picker when no org is joined", async () => {
     await newDot([]);
     await waitFor(() => expect(backend.callsTo("org_list").length).toBeGreaterThan(0));
-    expect(screen.queryByLabelText("Org")).toBeNull();
+    expect(screen.queryByLabelText("Account")).toBeNull();
   });
 
   it("shows the org as text once the dot is made, with no picker", async () => {
     const { user } = await newDot([acme]);
-    await user.selectOptions(screen.getByLabelText("Org"), "Acme Engineering");
+    await user.selectOptions(screen.getByLabelText("Account"), "Acme Engineering");
     await user.click(screen.getByRole("button", { name: "Create dot" }));
-    const org = await screen.findByRole("group", { name: "Org" });
-    await waitFor(() => expect(org).toHaveTextContent("Org: Acme Engineering"));
-    expect(screen.queryByRole("combobox", { name: "Org" })).toBeNull();
+    const org = await screen.findByRole("group", { name: "Account" });
+    await waitFor(() => expect(org).toHaveTextContent("Account: Acme Engineering"));
+    expect(screen.queryByRole("combobox", { name: "Account" })).toBeNull();
   });
 });
 
 describe("a dot whose org was removed", () => {
   it("says so in the editor, and keeps Save and Run off with the reason", async () => {
     editor(release, []);
-    const org = await screen.findByRole("group", { name: "Org" });
-    expect(await within(org).findByText("org removed")).toBeVisible();
-    expect(org).toHaveTextContent("Org: acme-eng");
+    const org = await screen.findByRole("group", { name: "Account" });
+    expect(await within(org).findByText("account removed")).toBeVisible();
+    expect(org).toHaveTextContent("Account: acme-eng");
     expect(within(org).getByText(REMOVED)).toHaveClass("text-destructive");
     const save = screen.getByRole("button", { name: "Save" });
     expect(save).toBeDisabled();
@@ -108,7 +119,7 @@ describe("a dot whose org was removed", () => {
 
   it("can still be switched off at once, and deleted", async () => {
     const { user, router } = editor({ ...release, enabled: true }, []);
-    await screen.findByRole("group", { name: "Org" });
+    await screen.findByRole("group", { name: "Account" });
     await waitFor(() => expect(screen.getByRole("button", { name: "Save" })).toBeDisabled());
     await user.click(screen.getByLabelText("Enabled"));
     await waitFor(() =>
@@ -125,8 +136,8 @@ describe("a dot whose org was removed", () => {
 
   it("shows the core's refusal when the org went away after the list was read", async () => {
     const { user } = editor(release, [acme]);
-    const org = await screen.findByRole("group", { name: "Org" });
-    await waitFor(() => expect(org).toHaveTextContent("Org: Acme Engineering"));
+    const org = await screen.findByRole("group", { name: "Account" });
+    await waitFor(() => expect(org).toHaveTextContent("Account: Acme Engineering"));
     backend.on("update_dot", () => {
       throw { kind: "conflict", message: "dot 'acme-release': its org 'acme-eng' was removed" };
     });
@@ -137,7 +148,9 @@ describe("a dot whose org was removed", () => {
   });
 
   it("is marked on its card at home, and can't be run from there", async () => {
+    // The core can only be in Personal once the org is gone; its dots are listed there.
     backend.on("org_list", () => []);
+    backend.on("scope_get", () => ({ account: "personal", workspace: "default" }));
     backend.on("dot_overview", () => [
       { ...sample.overview, dot: release },
       { ...sample.overview, dot: personal },
@@ -145,11 +158,11 @@ describe("a dot whose org was removed", () => {
     backend.on("set_dot_enabled", (args) => ({ ...release, enabled: args.enabled as boolean }));
     const { user } = renderApp(`/home/${release.id}`);
     const card = await screen.findByRole("listitem", { name: "acme-release" });
-    const mark = await within(card).findByText("org removed");
+    const mark = await within(card).findByText("account removed");
     expect(mark).toHaveClass("text-destructive");
     expect(mark).toHaveAttribute("title", REMOVED);
     const other = screen.getByRole("listitem", { name: personal.name });
-    expect(within(other).queryByText("org removed")).toBeNull();
+    expect(within(other).queryByText("account removed")).toBeNull();
 
     await user.click(screen.getByRole("button", { name: release.name }));
     expect(await screen.findByRole("menuitem", { name: "Run now" })).toHaveAttribute(
@@ -164,36 +177,41 @@ describe("a dot whose org was removed", () => {
 
   it("can't be sent a message from the chat at home, which says why", async () => {
     backend.on("org_list", () => []);
+    backend.on("scope_get", () => ({ account: "personal", workspace: "default" }));
     backend.on("dot_overview", () => [{ ...sample.overview, dot: release }]);
     renderApp(`/home/${release.id}`);
-    const why = await screen.findByText(`org removed: ${REMOVED}`);
+    const why = await screen.findByText(`account removed: ${REMOVED}`);
     expect(why).toHaveClass("text-destructive");
     const box = screen.getByLabelText("Message");
     expect(box).toBeDisabled();
-    expect(box).toHaveAttribute("placeholder", "org removed");
+    expect(box).toHaveAttribute("placeholder", "account removed");
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
     expect(backend.callsTo("chat")).toEqual([]);
+    // Opened from Personal, where it is listed: no switch is asked for.
+    expect(backend.callsTo("scope_set")).toEqual([]);
   });
 
   it("can be sent a message from the chat while its org is joined", async () => {
     backend.on("org_list", () => [acme]);
+    backend.on("scope_get", () => ({ account: "acme-eng", workspace: "default" }));
     backend.on("dot_overview", () => [{ ...sample.overview, dot: release }]);
     const { user } = renderApp(`/home/${release.id}`);
     const box = await screen.findByLabelText("Message");
     await waitFor(() => expect(backend.callsTo("org_list").length).toBeGreaterThan(0));
     expect(box).toBeEnabled();
-    expect(screen.queryByText(/org removed/)).toBeNull();
+    expect(screen.queryByText(/account removed/)).toBeNull();
     await user.type(box, "Ship it{Enter}");
     await waitFor(() => expect(backend.callsTo("chat")).toHaveLength(1));
   });
 
   it("is not marked while its org is joined", async () => {
     backend.on("org_list", () => [acme]);
+    backend.on("scope_get", () => ({ account: "acme-eng", workspace: "default" }));
     backend.on("dot_overview", () => [{ ...sample.overview, dot: release }]);
     renderApp(`/home/${release.id}`);
     await screen.findByRole("listitem", { name: "acme-release" });
     await waitFor(() => expect(backend.callsTo("org_list").length).toBeGreaterThan(0));
-    expect(screen.queryByText("org removed")).toBeNull();
+    expect(screen.queryByText("account removed")).toBeNull();
   });
 });
 
@@ -202,10 +220,10 @@ describe("a Personal dot", () => {
     backend.on("dot_overview", () => [{ ...sample.overview, dot: personal }]);
     editor(personal, [acme]);
     expect(await screen.findByLabelText("Name")).toHaveValue(personal.name);
-    expect(screen.queryByRole("group", { name: "Org" })).toBeNull();
+    expect(screen.queryByRole("group", { name: "Account" })).toBeNull();
     expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Run now" })).toBeEnabled();
-    expect(screen.queryByText("org removed")).toBeNull();
+    expect(screen.queryByText("account removed")).toBeNull();
     expect(backend.callsTo("org_list")).toEqual([]);
   });
 });

@@ -90,7 +90,7 @@ export function DotsColumn({ rows, openId }: { rows: DotOverview[]; openId: stri
                     className="pl-4.5 text-xs text-destructive"
                     title={orgRemovedText(row.dot.org_id)}
                   >
-                    org removed
+                    account removed
                   </span>
                 )}
               </Link>

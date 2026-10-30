@@ -588,6 +588,10 @@
     "env_import_dismiss",
     "env_old_backups",
     "env_old_backups_answer",
+    "identity_get",
+    "profile_set",
+    "scope_get",
+    "scope_set",
     "org_list",
     "org_preview",
     "org_sops_key",
@@ -656,6 +660,10 @@
     ],
     "total": 42,
     "truncated": true
+  },
+  "CurrentScope": {
+    "account": "personal",
+    "workspace": "default"
   },
   "Dot": {
     "approval_wait_secs": 240,
@@ -1435,6 +1443,12 @@
       "text": "dot 'acme-release': its org 'acme-eng' was removed"
     }
   ],
+  "Identity": {
+    "email": "asha@acme.com",
+    "fingerprint": "AB12 CD34 EF56 7890",
+    "name": "Asha Rao",
+    "public_key": "q83vEjRWeJq83vEjRWeJq83vEjRWeJq83vEjRWeJq8s="
+  },
   "Inbox": {
     "app_reviews": [
       {

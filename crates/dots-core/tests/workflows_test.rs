@@ -243,6 +243,7 @@ async fn world_with(clock: Arc<dyn Clock>, budget: Budget) -> World {
     let dev = worktree_dot(&store, dir.path(), "dev").await;
     let team = store
         .create_team(&TeamSpec {
+            org_id: None,
             name: "Dots management".into(),
             description: String::new(),
             members: vec![
@@ -705,6 +706,7 @@ async fn what_a_start_refuses() {
     let other = w
         .store
         .create_team(&TeamSpec {
+            org_id: None,
             name: "Other".into(),
             description: String::new(),
             members: vec![],

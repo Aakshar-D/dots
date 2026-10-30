@@ -7,7 +7,7 @@ import { keys } from "@/lib/query";
 /// What a dot whose org is not joined on this PC says, on its card and in its editor, and why
 /// it can't be saved or run.
 export function orgRemovedText(orgId: string): string {
-  return `Its org '${orgId}' was removed. Join it again to run this dot.`;
+  return `Its account '${orgId}' was removed. Join it again to run this dot.`;
 }
 
 /// Whether `dot`'s org is not joined on this PC, told from the joined orgs (`org_list`), as the

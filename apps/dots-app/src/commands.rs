@@ -11,6 +11,7 @@
 //! a native dialog from Rust before it is run or stored (`confirm.rs`). The UI is first-party
 //! code under a `default-src 'self'` policy.
 
+use dots_core::accounts::{CurrentScope, Identity};
 use dots_core::apps::bundled::BundledOffer;
 use dots_core::apps::kept::KeptData;
 use dots_core::apps::propose::{AppProposal, Decision};
@@ -849,6 +850,34 @@ pub async fn env_old_backups(state: State<'_, AppState>) -> Res<Vec<String>> {
 #[tauri::command]
 pub async fn env_old_backups_answer(state: State<'_, AppState>, delete: bool) -> Res<Vec<String>> {
     Ok(state.rt()?.answer_old_backups(delete).await?)
+}
+
+/// This install's Dots ID, with the name and email the person set (accounts spec §5).
+#[tauri::command]
+pub async fn identity_get(state: State<'_, AppState>) -> Res<Identity> {
+    Ok(state.rt()?.identity().await?)
+}
+
+/// Sets the name and email others see for this Dots ID, and answers the identity.
+#[tauri::command]
+pub async fn profile_set(state: State<'_, AppState>, name: String, email: String) -> Res<Identity> {
+    Ok(state.rt()?.set_profile(&name, &email).await?)
+}
+
+/// The account and workspace the person works in now.
+#[tauri::command]
+pub async fn scope_get(state: State<'_, AppState>) -> Res<CurrentScope> {
+    Ok(state.rt()?.current_scope().await?)
+}
+
+/// Switches to `account` and `workspace`, and answers the scope now current.
+#[tauri::command]
+pub async fn scope_set(
+    state: State<'_, AppState>,
+    account: String,
+    workspace: String,
+) -> Res<CurrentScope> {
+    Ok(state.rt()?.set_current_scope(&account, &workspace).await?)
 }
 
 /// The orgs joined on this PC, for Settings → Organisations (env vault spec §9). Never a value.

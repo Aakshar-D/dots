@@ -29,7 +29,7 @@ function orgs(initial: OrgSummary[]) {
   };
 }
 
-const section = () => screen.findByRole("group", { name: "Organisations" });
+const section = () => screen.findByRole("group", { name: "Accounts" });
 const row = async (name: string) =>
   within(await section()).findByRole("listitem", { name });
 /// No secret the test typed shows anywhere but in its own field.
@@ -45,7 +45,7 @@ async function preview(user: ReturnType<typeof renderApp>["user"], org?: string)
     await user.click(within(await row(org)).getByRole("button", { name: "Update" }));
   } else {
     await user.click(
-      within(await section()).getByRole("button", { name: "Join an organisation" }),
+      within(await section()).getByRole("button", { name: "Join an account" }),
     );
   }
   const dialog = await screen.findByRole("dialog");
@@ -55,7 +55,7 @@ async function preview(user: ReturnType<typeof renderApp>["user"], org?: string)
   return dialog;
 }
 
-describe("Settings, Organisations", () => {
+describe("Settings, Accounts", () => {
   it("lists each org with its status in the tone of that status", async () => {
     const statuses = sample.orgs.map((org, i) => ({ ...org, id: `org-${i}`, name: `Org ${i}` }));
     orgs(statuses);
@@ -100,7 +100,7 @@ describe("Settings, Organisations", () => {
   it("says when no org is joined", async () => {
     renderApp("/settings");
     expect(
-      await within(await section()).findByText("No organisation is joined on this PC."),
+      await within(await section()).findByText("No account is joined on this PC."),
     ).toBeVisible();
   });
 
@@ -139,7 +139,7 @@ describe("Settings, Organisations", () => {
     ask = await screen.findByRole("alertdialog", { name: "Remove Acme Engineering?" });
     await user.click(within(ask).getByRole("button", { name: "Remove" }));
     expect(
-      await within(await section()).findByText("No organisation is joined on this PC."),
+      await within(await section()).findByText("No account is joined on this PC."),
     ).toBeVisible();
     expect(backend.callsTo("org_remove")).toEqual([{ orgId: "acme-eng" }]);
   });
@@ -152,7 +152,7 @@ describe("Settings, Organisations", () => {
     const { user } = renderApp("/settings");
     const dialog = await preview(user);
 
-    expect(within(dialog).getByRole("heading", { name: "Join an organisation" })).toBeVisible();
+    expect(within(dialog).getByRole("heading", { name: "Join an account" })).toBeVisible();
     expect(dialog).toHaveTextContent("Acme Engineering");
     expect(dialog).toHaveTextContent("OpenBao at https://bao.acme.internal");
     expect(within(dialog).getByText(newCode.key_fingerprint)).toBeVisible();
@@ -391,7 +391,7 @@ describe("Settings, Organisations", () => {
     orgs([]);
     backend.on("org_preview", () => newCode);
     const { user } = renderApp("/settings");
-    await user.click(within(await section()).getByRole("button", { name: "Join an organisation" }));
+    await user.click(within(await section()).getByRole("button", { name: "Join an account" }));
     const dialog = await screen.findByRole("dialog");
     // As the admin guide says: a code whose SOPS URL carries a token holds a secret.
     expect(dialog).toHaveTextContent(
@@ -418,7 +418,7 @@ describe("Settings, Organisations", () => {
       throw { kind: "internal", message: failure };
     });
     const { user } = renderApp("/settings");
-    await user.click(within(await section()).getByRole("button", { name: "Join an organisation" }));
+    await user.click(within(await section()).getByRole("button", { name: "Join an account" }));
     let dialog = await screen.findByRole("dialog");
     await user.type(within(dialog).getByLabelText("Join code"), "nonsense");
     await user.click(within(dialog).getByRole("button", { name: "Preview" }));

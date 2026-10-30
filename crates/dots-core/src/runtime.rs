@@ -170,9 +170,14 @@ impl Runtime {
         orgs.load().await?;
         // Every Personal secret is in the redactor before any run or Library call (env vault
         // spec §10).
-        let vault = Vault::open(store.clone(), secrets)
+        let vault = Vault::open(store.clone(), secrets.clone())
             .await?
             .with_orgs(orgs.clone());
+        // The Dots ID of this install, made on first start (accounts design §5). A failure is
+        // logged and the app starts anyway; the next start tries again.
+        if let Err(e) = crate::accounts::ensure_identity(&store, secrets.as_ref()).await {
+            tracing::warn!("making the Dots ID failed: {e}");
+        }
         // A setup from before the vault: its stored secret values move into Personal (env
         // vault spec §11). A failure is logged and the app starts anyway. The old-backups
         // cut-off is set once the move has run, even when a server failed: that server is
@@ -883,6 +888,30 @@ impl Runtime {
     /// The personal variables of the Env tab (env vault spec §5).
     pub fn vault(&self) -> &Vault {
         &self.vault
+    }
+
+    /// The Dots ID of this install.
+    pub async fn identity(&self) -> Result<crate::accounts::Identity> {
+        crate::accounts::identity(&self.store).await
+    }
+
+    /// Sets the name and email of the Dots ID.
+    pub async fn set_profile(&self, name: &str, email: &str) -> Result<crate::accounts::Identity> {
+        crate::accounts::set_profile(&self.store, name, email).await
+    }
+
+    /// The account and workspace in view; personal when none was chosen or its org is gone.
+    pub async fn current_scope(&self) -> Result<crate::accounts::CurrentScope> {
+        crate::accounts::current_scope(&self.store, self.orgs()).await
+    }
+
+    /// Chooses the account (`personal` or a joined org) and workspace in view.
+    pub async fn set_current_scope(
+        &self,
+        account: &str,
+        workspace: &str,
+    ) -> Result<crate::accounts::CurrentScope> {
+        crate::accounts::set_current_scope(&self.store, self.orgs(), account, workspace).await
     }
 
     /// The update backups made before this data folder first ran with the vault, until the

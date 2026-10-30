@@ -11,7 +11,7 @@ export function OrgPicker(props: { value: string | null; onChange: (org: string 
   if (orgs.length === 0) return null;
   return (
     <Field
-      label="Org"
+      label="Account"
       htmlFor="dot-org"
       hint="Where the dot's variables come from. It can't be changed once the dot is made."
     >
@@ -32,22 +32,22 @@ export function OrgPicker(props: { value: string | null; onChange: (org: string 
 }
 
 /// The org of a dot that was made in one, as read-only text; when the org is no longer joined,
-/// "org removed" and why the dot can't be saved or run.
+/// "account removed" and why the dot can't be saved or run.
 export function OrgLine({ orgId }: { orgId: string }) {
   const { name, removed } = useDotOrg(orgId);
   return (
-    <div role="group" aria-label="Org" className="flex flex-col gap-1">
+    <div role="group" aria-label="Account" className="flex flex-col gap-1">
       <p className="flex items-center gap-2 text-sm">
         <span>
-          Org: <span className="font-medium">{name}</span>
+          Account: <span className="font-medium">{name}</span>
         </span>
-        {removed && <Badge variant="destructive">org removed</Badge>}
+        {removed && <Badge variant="destructive">account removed</Badge>}
       </p>
       {removed ? (
         <p className="text-xs text-destructive">{orgRemovedText(orgId)}</p>
       ) : (
         <p className="text-xs text-muted-foreground">
-          Its variables come from this org. It was set when the dot was made.
+          Its variables come from this account. It was set when the dot was made.
         </p>
       )}
     </div>

@@ -66,6 +66,42 @@ fn workflow_from_row(row: &SqliteRow, members: &[String]) -> Result<Workflow> {
     })
 }
 
+/// The backfill of `0019_accounts.sql`, kept here so a test can run it again. It must match the
+/// migration.
+#[doc(hidden)]
+pub const TEAM_ORG_BACKFILL_SQL: &str = "UPDATE teams SET org_id = (
+    SELECT MIN(d.org_id) FROM team_members m JOIN dots d ON d.id = m.dot_id WHERE m.team_id = teams.id
+) WHERE (
+    SELECT COUNT(DISTINCT IFNULL(d.org_id, '')) FROM team_members m JOIN dots d ON d.id = m.dot_id
+    WHERE m.team_id = teams.id
+) = 1";
+
+/// Refuses a member dot that is not in the account `org_id`.
+async fn check_accounts(
+    conn: &mut sqlx::SqliteConnection,
+    org_id: Option<&str>,
+    members: &[MemberSpec],
+) -> Result<()> {
+    for m in members {
+        // A missing dot is left for the foreign key to report.
+        let Some(row) = sqlx::query("SELECT name, org_id FROM dots WHERE id = ?")
+            .bind(&m.dot_id)
+            .fetch_optional(&mut *conn)
+            .await?
+        else {
+            continue;
+        };
+        let dot_org: Option<String> = row.try_get("org_id")?;
+        if dot_org.as_deref() != org_id {
+            let name: String = row.try_get("name")?;
+            return Err(Error::Invalid(format!(
+                "dot '{name}' is in another account than the team"
+            )));
+        }
+    }
+    Ok(())
+}
+
 async fn insert_members(
     conn: &mut sqlx::SqliteConnection,
     team_id: &str,
@@ -93,12 +129,13 @@ impl Store {
         let ts = now();
         let mut tx = self.pool.begin().await?;
         sqlx::query(
-            "INSERT INTO teams (id, name, description, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO teams (id, name, description, org_id, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(spec.name.trim())
         .bind(spec.description.trim())
+        .bind(&spec.org_id)
         .bind(&ts)
         .bind(&ts)
         .execute(&mut *tx)
@@ -109,12 +146,14 @@ impl Store {
                 format!("a team named {:?} already exists", spec.name.trim()),
             )
         })?;
+        check_accounts(&mut tx, spec.org_id.as_deref(), &spec.members).await?;
         insert_members(&mut tx, &id, &spec.members).await?;
         tx.commit().await?;
         self.get_team(&id).await
     }
 
-    /// Replaces the team's name, description and members.
+    /// Replaces the team's name, description and members. The team keeps its account; the
+    /// spec's `org_id` is ignored.
     pub async fn update_team(&self, id: &str, spec: &TeamSpec) -> Result<Team> {
         spec.validate()?;
         let mut tx = self.pool.begin().await?;
@@ -135,6 +174,11 @@ impl Store {
         if res.rows_affected() == 0 {
             return Err(Error::NotFound(format!("team {id}")));
         }
+        let org_id: Option<String> = sqlx::query_scalar("SELECT org_id FROM teams WHERE id = ?")
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await?;
+        check_accounts(&mut tx, org_id.as_deref(), &spec.members).await?;
         sqlx::query("DELETE FROM team_members WHERE team_id = ?")
             .bind(id)
             .execute(&mut *tx)
@@ -157,7 +201,7 @@ impl Store {
 
     pub async fn get_team(&self, id: &str) -> Result<Team> {
         let row = sqlx::query(
-            "SELECT id, name, description, created_at, updated_at FROM teams WHERE id = ?",
+            "SELECT id, name, description, org_id, created_at, updated_at FROM teams WHERE id = ?",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -194,6 +238,7 @@ impl Store {
             description: row.try_get("description")?,
             members,
             projects,
+            org_id: row.try_get("org_id")?,
             created_at: row.try_get("created_at")?,
             updated_at: row.try_get("updated_at")?,
         })

@@ -12,6 +12,7 @@ import { useEffect } from "react";
 import { NavLink, Outlet } from "react-router";
 
 import { commands } from "@/api/commands";
+import { AccountSwitcher } from "@/app/AccountSwitcher";
 import { Banners } from "@/app/Banners";
 import { LimitsMeter } from "@/components/LimitsMeter";
 import { Badge } from "@/components/ui/badge";
@@ -75,6 +76,7 @@ export function Layout() {
         aria-label="Main"
         className="flex w-[46px] shrink-0 flex-col items-center gap-1 border-r bg-sidebar py-2 text-sidebar-foreground"
       >
+        <AccountSwitcher />
         {(isPublisher ? [...LINKS.slice(0, -1), RELEASES, LINKS.at(-1)!] : LINKS).map(({ to, label, icon: Icon }) => {
           const count = to === "/inbox" ? waiting : to === "/home" ? unread : 0;
           // The name says the count too, and the tooltip shows it.

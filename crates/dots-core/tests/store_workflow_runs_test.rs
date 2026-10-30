@@ -23,6 +23,7 @@ async fn fixture() -> Fixture {
     let dot = store.create_dot(&spec("dev"), None).await.unwrap().id;
     let team = store
         .create_team(&TeamSpec {
+            org_id: None,
             name: "T".into(),
             description: String::new(),
             members: vec![MemberSpec {

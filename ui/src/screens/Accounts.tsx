@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Copy, TriangleAlert } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useLocation } from "react-router";
 import { toast } from "sonner";
 
 import { CommandError, commands } from "@/api/commands";
@@ -329,7 +330,7 @@ export function JoinDialog(props: { org?: OrgSummary; onClose: () => void }) {
     <Dialog open onOpenChange={(next) => !next && props.onClose()}>
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
         <DialogHeader>
-          <DialogTitle>{org ? `Update ${org.name}` : "Join an organisation"}</DialogTitle>
+          <DialogTitle>{org ? `Update ${org.name}` : "Join an account"}</DialogTitle>
           <DialogDescription>
             {step === "code"
               ? "Paste the join code from your admin, or open the .dotsorg file they sent."
@@ -338,8 +339,8 @@ export function JoinDialog(props: { org?: OrgSummary; onClose: () => void }) {
                   ? "Check what this code changes."
                   : "Check what this code joins."
                 : kind === "age"
-                  ? "This org's variables are in a file encrypted to each person's key."
-                  : "Your sign-in details for the org's source. Dots keeps them in Windows " +
+                  ? "This account's variables are in a file encrypted to each person's key."
+                  : "Your sign-in details for the account's source. Dots keeps them in Windows " +
                     "Credential Manager and never shows them."}
           </DialogDescription>
         </DialogHeader>
@@ -350,7 +351,7 @@ export function JoinDialog(props: { org?: OrgSummary; onClose: () => void }) {
               label="Join code"
               htmlFor="org-code"
               hint={
-                "The code says where the org's variables are. It holds no secret, unless its " +
+                "The code says where the account's variables are. It holds no secret, unless its " +
                 "SOPS file's URL carries a token: then keep it as private as a password."
               }
             >
@@ -378,7 +379,7 @@ export function JoinDialog(props: { org?: OrgSummary; onClose: () => void }) {
             {step === "preview" && (
               <>
                 <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-sm">
-                  <dt className="text-muted-foreground">Organisation</dt>
+                  <dt className="text-muted-foreground">Account</dt>
                   <dd>
                     {preview.name}{" "}
                     <span className="font-mono text-xs text-muted-foreground">
@@ -571,27 +572,33 @@ export function JoinDialog(props: { org?: OrgSummary; onClose: () => void }) {
   );
 }
 
-/// Settings → Organisations (env vault spec §9): the orgs joined on this PC, Join, and per org
+/// Settings → Accounts (env vault spec §9): the orgs joined on this PC, Join, and per org
 /// Refresh, Update and Remove. Nothing here ever shows a value or sign-in details.
-export function Organisations() {
+export function Accounts() {
   const list = useQuery({ queryKey: keys.orgs, queryFn: commands.orgList });
   // The org to update; null to join a new one; undefined while the dialog is closed.
   const [joining, setJoining] = useState<OrgSummary | null>();
   const orgs = list.data ?? [];
+  // `/settings#accounts` (the account switcher's Manage and Join) lands on this section.
+  const { hash } = useLocation();
+  useEffect(() => {
+    if (hash === "#accounts") document.getElementById("accounts")?.scrollIntoView?.();
+  }, [hash]);
   return (
     <fieldset
-      aria-label="Organisations"
+      id="accounts"
+      aria-label="Accounts"
       className="flex max-w-3xl flex-col gap-3 rounded-lg border p-4"
     >
-      <legend className="px-1 text-sm font-semibold">Organisations</legend>
+      <legend className="px-1 text-sm font-semibold">Accounts</legend>
       <p className="text-xs text-muted-foreground">
-        An organisation's admin keeps its variables in OpenBao, Infisical or a SOPS file, and
+        An account's admin keeps its variables in OpenBao, Infisical or a SOPS file, and
         its signed policy says how dots may use them. Join one with the code your admin gives
         you.
       </p>
       {list.isError && <ErrorNote error={list.error} />}
       {list.isSuccess && orgs.length === 0 && (
-        <p className="text-sm text-muted-foreground">No organisation is joined on this PC.</p>
+        <p className="text-sm text-muted-foreground">No account is joined on this PC.</p>
       )}
       {orgs.length > 0 && (
         <ul className="flex flex-col gap-2">
@@ -607,7 +614,7 @@ export function Organisations() {
         className="self-start"
         onClick={() => setJoining(null)}
       >
-        Join an organisation
+        Join an account
       </Button>
       {joining !== undefined && (
         <JoinDialog org={joining ?? undefined} onClose={() => setJoining(undefined)} />
