@@ -64,6 +64,10 @@ const schemas: Record<SampleName, { parse: (v: unknown) => unknown }> = {
   CurrentScope: T.CurrentScope,
   OrgSummary: T.OrgSummary.array(),
   JoinPreview: T.JoinPreview.array(),
+  MembersView: T.MembersView,
+  CreatedInvite: T.CreatedInvite,
+  RequestPreview: T.RequestPreview.array(),
+  EditOutcome: T.EditOutcome.array(),
   OrgEntry: T.OrgEntry.array(),
   SourceCreds: T.SourceCreds.array(),
   GrantStatus: T.GrantStatus.array(),
@@ -100,6 +104,8 @@ const enums: Record<keyof typeof fixture.Enums, { options: readonly string[] }> 
   GrantState: T.GrantState,
   ValueSource: T.ValueSource,
   PersonalMode: T.PersonalMode,
+  InviteState: T.InviteState,
+  WorkspaceRole: T.WorkspaceRole,
 };
 
 describe("Rust/TypeScript contract", () => {

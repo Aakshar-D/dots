@@ -2,6 +2,7 @@
 //! with the org's minisign key, joined with a join code.
 
 pub mod join;
+mod members;
 pub mod offline;
 pub mod policy;
 pub mod row;
@@ -12,7 +13,11 @@ pub mod timers;
 
 pub use join::{
     check_org_id, key_fingerprint, parse_join_code, same_policy_key, shown_address, BaoAuth,
-    InfisicalSettings, JoinCode, OpenBaoSettings, SopsSettings, SourceSettings,
+    InfisicalSettings, InviteOffer, JoinCode, OpenBaoSettings, SopsSettings, SourceSettings,
+};
+pub use members::{
+    CreatedInvite, DraftView, EditOutcome, InviteState, InviteView, JoinsMember, KeyView,
+    MemberView, MembersView, RequestPreview,
 };
 #[cfg(windows)]
 pub use offline::Dpapi;
@@ -26,14 +31,14 @@ pub use policy::{
     parse_policy, AuditTarget, OrgPolicy, PersonalMode, PolicyError, RosterMode, UseRules,
     DEFAULT_REFRESH_MINUTES, POLICY_V1, POLICY_VERSION, POLICY_VERSIONS,
 };
-pub use row::{MemberRow, OrgRow};
+pub use row::{MemberRow, OrgRow, PendingRequest};
 pub use service::{
     JoinPreview, OrgEntry, OrgLookup, OrgStatus, OrgSummary, OrgView, Orgs, SourceFactory,
     KEY_CHANGE, RETRY_AFTER,
 };
 pub use signed::{envelope, verify_policy};
 pub use sources::{
-    http_client, http_client_with_timeout, source_for, Fetched, Infisical, OpenBao, Sops, Source,
-    SourceCreds, SourceError, POLICY_ENTRY,
+    http_client, http_client_with_timeout, source_for, Fetched, Infisical, OpenBao, PublishError,
+    Sops, Source, SourceCreds, SourceError, POLICY_ENTRY,
 };
 pub use timers::OrgTimers;

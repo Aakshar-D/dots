@@ -546,3 +546,114 @@ describe("Settings, Accounts, membership", () => {
     expect(within(r).getAllByText(new RegExp(error))).toHaveLength(1);
   });
 });
+
+describe("Settings, Accounts, invites and request codes", () => {
+  const pending = () => sample.orgs.find((o) => o.status === "pending")!;
+  const waitingOrg = () => sample.orgs.find((o) => o.membership === "waiting")!;
+  const REQUEST = "RQ-7K2M-9XQA-31";
+  const EXPIRES = "2099-01-02T10:00:00Z";
+  const invited = (over: Partial<JoinPreview["invite"] & object> = {}): JoinPreview => ({
+    ...newCode,
+    invite: { id: "inv-1", role: "member", expires_at: EXPIRES, ...over },
+  });
+
+  it("join preview shows the offered role and expiry", async () => {
+    orgs([]);
+    backend.on("org_preview", () => invited({ role: "admin" }));
+    const { user } = renderApp("/settings");
+    const dialog = await preview(user);
+    expect(
+      within(dialog).getByText(`Invited as Admin \u00b7 expires ${localDateTime(EXPIRES)}`),
+    ).toBeVisible();
+    expect(within(dialog).getByRole("button", { name: "Continue" })).toBeEnabled();
+  });
+
+  it("expired invite disables Continue", async () => {
+    orgs([]);
+    backend.on("org_preview", () => invited({ expires_at: "2020-01-01T00:00:00Z" }));
+    const { user } = renderApp("/settings");
+    const dialog = await preview(user);
+    expect(within(dialog).getByText("This invite has expired. Ask for a new one.")).toBeVisible();
+    expect(within(dialog).getByRole("button", { name: "Continue" })).toBeDisabled();
+  });
+
+  it("invite join asks for name and email when the profile is empty", async () => {
+    orgs([]);
+    backend.on("identity_get", () => ({ ...sample.identity, name: "", email: "" }));
+    backend.on("org_preview", () => ({ ...invited(), source_kind: "sops", auth: null }));
+    backend.on("org_sops_key", () => AGE_KEY);
+    backend.on("profile_set", (args) => ({
+      ...sample.identity,
+      name: String(args.name),
+      email: String(args.email),
+    }));
+    backend.on("org_join", () => ({ ...pending(), request_code: REQUEST }));
+    const { user } = renderApp("/settings");
+    const dialog = await preview(user);
+    await user.click(within(dialog).getByRole("button", { name: "Continue" }));
+    const join = within(dialog).getByRole("button", { name: "Join" });
+    expect(join).toBeDisabled();
+    await user.type(within(dialog).getByLabelText("Your name"), "Asha Rao");
+    expect(join).toBeDisabled();
+    await user.type(within(dialog).getByLabelText("Your email"), "asha@acme.com");
+    expect(join).toBeEnabled();
+    await user.click(join);
+    expect(await within(dialog).findByLabelText("Request code")).toHaveValue(REQUEST);
+    expect(backend.callsTo("profile_set")).toEqual([{ name: "Asha Rao", email: "asha@acme.com" }]);
+    expect(backend.callsTo("org_join")).toHaveLength(1);
+  });
+
+  it("invite join keeps Join disabled while the profile is unknown", async () => {
+    orgs([]);
+    backend.on("identity_get", () => Promise.reject({ kind: "internal", message: "no identity" }));
+    backend.on("org_preview", () => ({ ...invited(), source_kind: "sops", auth: null }));
+    backend.on("org_sops_key", () => AGE_KEY);
+    const { user } = renderApp("/settings");
+    const dialog = await preview(user);
+    await user.click(within(dialog).getByRole("button", { name: "Continue" }));
+    expect(await within(dialog).findByText(/no identity/)).toBeVisible();
+    expect(within(dialog).getByRole("button", { name: "Join" })).toBeDisabled();
+    expect(backend.callsTo("org_join")).toHaveLength(0);
+  });
+
+  it("after joining with an invite the request code is shown", async () => {
+    orgs([]);
+    backend.on("org_preview", () => ({ ...invited(), source_kind: "sops", auth: null }));
+    backend.on("org_sops_key", () => AGE_KEY);
+    backend.on("org_join", () => ({ ...pending(), request_code: REQUEST }));
+    const { user } = renderApp("/settings");
+    const dialog = await preview(user);
+    await user.click(within(dialog).getByRole("button", { name: "Continue" }));
+    await user.click(within(dialog).getByRole("button", { name: "Join" }));
+    expect(await within(dialog).findByLabelText("Request code")).toHaveValue(REQUEST);
+    expect(dialog).toHaveTextContent(
+      `Send this to an Admin of ${pending().name}. Dots checks again on its normal refresh.`,
+    );
+    expect(screen.getByRole("dialog")).toBeVisible();
+  });
+
+  it("waiting account without a request offers Request access", async () => {
+    const waiting = { ...waitingOrg(), request_code: null };
+    const list = orgs([waiting]);
+    backend.on("org_request_access", () => {
+      const next = { ...waiting, request_code: REQUEST };
+      list.set([next]);
+      return next;
+    });
+    const { user } = renderApp("/settings");
+    const r = await row(waiting.name);
+    expect(within(r).queryByLabelText("Request code")).toBeNull();
+    await user.click(within(r).getByRole("button", { name: "Request access" }));
+    expect(backend.callsTo("org_request_access")).toEqual([{ orgId: waiting.id }]);
+    expect(await within(r).findByLabelText("Request code")).toHaveValue(REQUEST);
+    expect(within(r).queryByRole("button", { name: "Request access" })).toBeNull();
+  });
+
+  it("request code copies to the clipboard", async () => {
+    orgs([{ ...waitingOrg(), request_code: REQUEST }]);
+    const { user } = renderApp("/settings");
+    const r = await row(waitingOrg().name);
+    await user.click(await within(r).findByRole("button", { name: "Copy request code" }));
+    expect(await navigator.clipboard.readText()).toBe(REQUEST);
+  });
+});

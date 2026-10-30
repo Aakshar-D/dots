@@ -1,7 +1,6 @@
 //! Join codes (env vault spec §6.1): what the admin hands each person. A code names the org, its
 //! source and the policy key, and holds no secrets.
 
-use dots_core::vault::org::join::JOIN_CODE_VERSION;
 use dots_core::vault::org::{key_fingerprint, parse_join_code, BaoAuth, JoinCode, SourceSettings};
 use serde_json::{Map, Value};
 
@@ -46,11 +45,12 @@ pub fn join_code(
     public_key: &str,
 ) -> Result<JoinCode> {
     let code = JoinCode {
-        v: JOIN_CODE_VERSION,
+        v: 1,
         org_id: org_id.to_string(),
         name: name.to_string(),
         source,
         policy_key: public_key.to_string(),
+        invite: None,
     };
     let read_back = parse_join_code(&code.encode()).map_err(core_failed)?;
     if read_back != code {

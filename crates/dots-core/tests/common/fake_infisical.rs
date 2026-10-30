@@ -75,6 +75,9 @@ struct Fake {
     tokens: Vec<String>,
     read_failures: VecDeque<Failure>,
     login_failures: VecDeque<Failure>,
+    write_failures: VecDeque<Failure>,
+    /// Every write is refused (403), as an identity that may only read is.
+    writes_denied: bool,
     issued: usize,
     seen: Vec<Seen>,
 }
@@ -286,6 +289,18 @@ impl FakeInfisical {
             .extend(std::iter::repeat_n(failure, count));
     }
 
+    /// The next `count` writes of a secret answer `failure`.
+    pub fn fail_next_write(&self, failure: Failure, count: usize) {
+        let mut fake = self.fake();
+        fake.write_failures
+            .extend(std::iter::repeat_n(failure, count));
+    }
+
+    /// Refuses every write of a secret with a 403 from now on. Reads are not affected.
+    pub fn deny_writes(&self) {
+        self.fake().writes_denied = true;
+    }
+
     /// The next `count` logins answer `failure`.
     pub fn fail_next_login(&self, failure: Failure, count: usize) {
         let mut fake = self.fake();
@@ -407,6 +422,9 @@ async fn handle(
     let route = match (method.clone(), route) {
         (Method::POST, "/api/v1/auth/universal-auth/login") => Route::Login,
         (Method::GET, "/api/v4/secrets") => Route::List,
+        (Method::PATCH | Method::POST, name) if name.starts_with("/api/v4/secrets/") => {
+            Route::Write(name["/api/v4/secrets/".len()..].to_string())
+        }
         _ => Route::Other,
     };
     let failure = {
@@ -415,6 +433,7 @@ async fn handle(
         match route {
             Route::Login => fake.login_failures.pop_front(),
             Route::List => fake.read_failures.pop_front(),
+            Route::Write(_) => fake.write_failures.pop_front(),
             Route::Other => None,
         }
     };
@@ -432,6 +451,7 @@ async fn handle(
     match route {
         Route::Login => login(&mut fake, &seen),
         Route::List => list(&fake, &seen),
+        Route::Write(name) => write(&mut fake, &seen, name),
         Route::Other => error(
             404,
             "Not Found",
@@ -443,6 +463,7 @@ async fn handle(
 enum Route {
     Login,
     List,
+    Write(String),
     Other,
 }
 
@@ -493,4 +514,54 @@ fn list(fake: &Fake, seen: &Seen) -> Response {
         );
     };
     Json(json!({ "secrets": folder.secrets, "imports": folder.imports })).into_response()
+}
+
+/// `PATCH` or `POST /api/v4/secrets/{name}`: the body names the project, environment, folder and
+/// value. A `PATCH` of a secret that isn't there is a 404, and a `POST` of one that is, a 400.
+fn write(fake: &mut Fake, seen: &Seen, name: String) -> Response {
+    let token = seen.auth.as_deref().and_then(|a| a.strip_prefix("Bearer "));
+    if !token.is_some_and(|t| fake.tokens.iter().any(|known| known == t)) {
+        return unauthorized();
+    }
+    if fake.writes_denied {
+        return error(
+            403,
+            "PermissionDenied",
+            "You are not allowed to create on secrets",
+        );
+    }
+    let body = seen.body.clone().unwrap_or(Value::Null);
+    let field = |k: &str| body[k].as_str().map(str::to_string);
+    let (Some(project), Some(environment), Some(path), Some(value)) = (
+        field("projectId"),
+        field("environment"),
+        field("secretPath"),
+        field("secretValue"),
+    ) else {
+        return error(
+            400,
+            "BadRequest",
+            "projectId, environment, secretPath and secretValue",
+        );
+    };
+    let path = folder_key(&path);
+    let key = (project, environment.clone(), path.clone());
+    let Some(folder) = fake.folders.get_mut(&key) else {
+        return error(404, "NotFoundError", "Folder not found");
+    };
+    let at = folder
+        .secrets
+        .iter()
+        .position(|s| s["secretKey"] == name.as_str() && s["type"] != "personal");
+    match (seen.method.as_str(), at) {
+        ("PATCH", Some(at)) => folder.secrets[at]["secretValue"] = json!(value),
+        ("PATCH", None) => return error(404, "NotFoundError", "Secret not found"),
+        (_, Some(_)) => return error(400, "BadRequest", "Secret already exists"),
+        (_, None) => {
+            folder
+                .secrets
+                .push(secret(&environment, &path, "shared", &name, json!(value)))
+        }
+    }
+    Json(json!({ "secret": { "secretKey": name, "secretPath": path } })).into_response()
 }

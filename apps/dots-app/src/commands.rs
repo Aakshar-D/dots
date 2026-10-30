@@ -11,7 +11,8 @@
 //! a native dialog from Rust before it is run or stored (`confirm.rs`). The UI is first-party
 //! code under a `default-src 'self'` policy.
 
-use dots_core::accounts::{CurrentScope, Identity};
+use dots_core::accounts::edit::RosterEdit;
+use dots_core::accounts::{CurrentScope, Identity, Role};
 use dots_core::apps::bundled::BundledOffer;
 use dots_core::apps::kept::KeptData;
 use dots_core::apps::propose::{AppProposal, Decision};
@@ -32,7 +33,10 @@ use dots_core::policy::{Policy, Preset, RuleCandidate};
 use dots_core::schedule::Schedule;
 use dots_core::settings::Settings;
 use dots_core::skill_creator::{check_draft, DraftRequest, DraftSummary};
-use dots_core::vault::org::{JoinPreview, OrgEntry, OrgSummary, SourceCreds};
+use dots_core::vault::org::{
+    CreatedInvite, EditOutcome, JoinPreview, MembersView, OrgEntry, OrgSummary, RequestPreview,
+    SourceCreds,
+};
 use dots_core::vault::{EntryKind, EnvEntry, GrantStatus};
 use dots_core::Runtime;
 use tauri::{AppHandle, Manager, State};
@@ -936,6 +940,73 @@ pub async fn org_update(
 #[tauri::command]
 pub async fn org_refresh(state: State<'_, AppState>, org_id: String) -> Res<OrgSummary> {
     Ok(state.rt()?.refresh_org(&org_id).await?)
+}
+
+/// The org's member list for the Members tab, with its invites and any unpublished draft.
+#[tauri::command]
+pub async fn member_list(state: State<'_, AppState>, org_id: String) -> Res<MembersView> {
+    Ok(state.rt()?.member_list(&org_id).await?)
+}
+
+/// Makes a personal invite for `email` with `role`; answers it and the join code to send.
+#[tauri::command]
+pub async fn invite_create(
+    state: State<'_, AppState>,
+    org_id: String,
+    email: String,
+    role: Role,
+) -> Res<CreatedInvite> {
+    Ok(state.rt()?.invite_create(&org_id, &email, role).await?)
+}
+
+/// Revokes an invite made on this PC.
+#[tauri::command]
+pub async fn invite_revoke(
+    state: State<'_, AppState>,
+    org_id: String,
+    invite_id: String,
+) -> Res<()> {
+    Ok(state.rt()?.invite_revoke(&org_id, &invite_id).await?)
+}
+
+/// What a request `code` from a person's PC asks, checked against the invites and the list.
+#[tauri::command]
+pub async fn request_inspect(
+    state: State<'_, AppState>,
+    org_id: String,
+    code: String,
+) -> Res<RequestPreview> {
+    Ok(state.rt()?.request_inspect(&org_id, &code).await?)
+}
+
+/// Makes one change to the member list, made against `base_seq`: published, or kept as a
+/// draft when the source can't be reached.
+#[tauri::command]
+pub async fn member_edit(
+    state: State<'_, AppState>,
+    org_id: String,
+    base_seq: u64,
+    edit: RosterEdit,
+) -> Res<EditOutcome> {
+    Ok(state.rt()?.member_edit(&org_id, base_seq, edit).await?)
+}
+
+/// Publishes the org's waiting signed member list again.
+#[tauri::command]
+pub async fn roster_draft_retry(state: State<'_, AppState>, org_id: String) -> Res<EditOutcome> {
+    Ok(state.rt()?.roster_draft_retry(&org_id).await?)
+}
+
+/// Drops the org's waiting signed member list.
+#[tauri::command]
+pub async fn roster_draft_discard(state: State<'_, AppState>, org_id: String) -> Res<()> {
+    Ok(state.rt()?.roster_draft_discard(&org_id).await?)
+}
+
+/// Makes the request code of a PC that waits to be added, for the person to send to an Admin.
+#[tauri::command]
+pub async fn org_request_access(state: State<'_, AppState>, org_id: String) -> Res<OrgSummary> {
+    Ok(state.rt()?.org_request_access(&org_id).await?)
 }
 
 /// Leaves the org (**Remove**): its offline copy, sign-in details and row go; its dots stay,

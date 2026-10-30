@@ -26,18 +26,19 @@ use zeroize::Zeroizing;
 
 use super::join::{
     check_org_id, key_fingerprint, parse_join_code, same_policy_key, shown_address, BaoAuth,
-    JoinCode,
+    InviteOffer, JoinCode,
 };
+use super::members::{changed_text, draft_stand, DraftStand};
 use super::offline::{delete_offline, read_offline, write_offline, OfflineCopy, Protector};
 use super::policy::{OrgPolicy, PersonalMode, PolicyError, RosterMode, UseRules};
-use super::row::{MemberRow, OrgRow};
+use super::row::{MemberRow, OrgRow, PendingRequest};
 use super::signed::verify_policy;
 use super::sources::sops::{self, NOT_A_RECIPIENT};
 use super::sources::{source_for, Fetched, Source, SourceCreds, SourceError};
 use super::SourceSettings;
 use crate::accounts::{
-    open_accepted_roster, roster_hash, verify_roster, Membership, NotMember, Role, Roster,
-    RosterError,
+    make_request, open_accepted_roster, roster_hash, verify_roster, Membership, NotMember, Role,
+    Roster, RosterError,
 };
 use crate::model::DotRef;
 use crate::scheduler::Clock;
@@ -137,6 +138,9 @@ pub struct OrgSummary {
     /// The words a run of the account's dots is refused with while this PC is not on the member
     /// list (waiting, its Dots ID changed, or removed); `None` otherwise.
     pub not_member_text: Option<String>,
+    /// The request code this PC made for the account, while it waits to be added (accounts
+    /// spec §6.5): the person sends it to an Admin. `None` otherwise.
+    pub request_code: Option<String>,
 }
 
 /// What a join code would join or change, shown before anything is fetched.
@@ -161,6 +165,8 @@ pub struct JoinPreview {
     /// of source: the saved sign-in details are not sent to it, so the person gives them again.
     /// A SOPS file's new location keeps this PC's key.
     pub source_changed: bool,
+    /// The role this code offers as a personal invite; `None` for a plain code.
+    pub invite: Option<InviteOffer>,
 }
 
 /// One org entry for the Env tab. A secret's `value` is always `None`.
@@ -259,7 +265,7 @@ enum Slot {
         error: String,
     },
     /// A SOPS join that waits for the admin, with the code it was tried with. In memory only.
-    Pending(JoinCode),
+    Pending(Box<JoinCode>),
 }
 
 struct Joined {
@@ -291,6 +297,15 @@ struct KeptRoster {
     roster: Roster,
     /// The roster's text inside `signed`, as it was signed.
     text: String,
+}
+
+/// A joined org as `members.rs` reads it (`Orgs::member_state`).
+pub(super) struct MemberState {
+    pub row: OrgRow,
+    pub source: Arc<dyn Source>,
+    pub policy: Option<OrgPolicy>,
+    /// The list accepted last and its text as it was signed; `None` when there is none.
+    pub roster: Option<(Roster, String)>,
 }
 
 /// This PC's place on the member list after a fetch: the row's member columns, the list to
@@ -405,6 +420,7 @@ impl Orgs {
                 SourceSettings::OpenBao(s) => Some(s.auth),
                 _ => None,
             },
+            invite: code.invite,
             org_id: code.org_id,
             name: code.name,
             existing,
@@ -486,7 +502,7 @@ impl Orgs {
         let fetched = match source.fetch(&creds).await {
             Ok(fetched) => fetched,
             Err(SourceError::Denied(why)) if sops && why == NOT_A_RECIPIENT => {
-                let slot = Slot::Pending(code);
+                let slot = Slot::Pending(Box::new(code));
                 let summary = summary_of(&id, &slot);
                 self.write().insert(id, slot);
                 return Ok(summary);
@@ -508,6 +524,7 @@ impl Orgs {
             last_fetch_at: Some(stamp(now)),
             joined_at: stamp(now),
             member: MemberRow::default(),
+            pending_request: None,
         };
         let evaluated = self.evaluate(&row, None, &policy, &fetched).await;
         row.member = evaluated.member.clone();
@@ -517,6 +534,9 @@ impl Orgs {
         }
         self.keep_fetch(row, source, fetched, policy, evaluated, now)
             .await;
+        if let Some(invite) = &code.invite {
+            self.request_for_invite(&id, &creds, &invite.id).await;
+        }
         self.summary_now(&id).ok_or_else(|| not_joined(&id))
     }
 
@@ -621,6 +641,7 @@ impl Orgs {
         }
         let evaluated = self.evaluate(&row, kept.as_ref(), &policy, &fetched).await;
         row.member = evaluated.member.clone();
+        self.settle_requests(&mut row).await;
         if let Err(e) = self.store_settings(&row, &old).await {
             if given {
                 restore_creds(secrets, org_id, old_creds.as_ref());
@@ -865,12 +886,13 @@ impl Orgs {
                         &evaluated.member,
                     )
                     .await?;
-                let row = OrgRow {
+                let mut row = OrgRow {
                     last_issued_at: Some(policy.issued_at.clone()),
                     last_fetch_at: Some(stamp(now)),
                     member: evaluated.member.clone(),
                     ..row
                 };
+                self.settle_requests(&mut row).await;
                 self.keep_fetch(row, source, fetched, *policy, evaluated, now)
                     .await;
             }
@@ -1318,6 +1340,122 @@ impl Orgs {
         joined
     }
 
+    /// After a join with an invite code, while this PC waits to be added: makes its request
+    /// code answering the invite and keeps it, for the person to send (accounts spec §7). A
+    /// SOPS account's code carries this PC's age key. A failure (no profile yet) is logged: the
+    /// join stands, and **Request access** makes a code later.
+    async fn request_for_invite(&self, org_id: &str, creds: &SourceCreds, invite_id: &str) {
+        if !matches!(self.access(org_id), Some((Membership::Waiting, _))) {
+            return;
+        }
+        let age = match creds {
+            SourceCreds::Age { identity } => sops::public_key(identity).ok(),
+            _ => None,
+        };
+        let (store, secrets) = (&self.inner.store, self.inner.secrets.as_ref());
+        let now = self.inner.clock.now();
+        let made = make_request(store, secrets, org_id, Some(invite_id), age.as_deref(), now)
+            .await
+            .map(|code| PendingRequest {
+                code,
+                invite_id: Some(invite_id.to_string()),
+            });
+        let kept = match made {
+            Ok(request) => self.set_pending(org_id, Some(request)).await,
+            Err(e) => Err(e),
+        };
+        if let Err(e) = kept {
+            tracing::warn!("org {org_id:?}: no request code was made for its invite: {e}");
+        }
+    }
+
+    /// What an accepted list answers (accounts spec §6.5): once this PC is `active` its request
+    /// code is done with, and a draft whose very list the account has reached (published, or
+    /// copied into a SOPS file: the same `seq` and text) is dropped. A draft another list took
+    /// the place of is kept with why, for Retry or Discard. A failure is logged.
+    async fn settle_requests(&self, row: &mut OrgRow) {
+        let store = &self.inner.store;
+        if row.member.membership == Membership::Active && row.pending_request.is_some() {
+            match store.set_pending_request(&row.id, None).await {
+                Ok(()) => row.pending_request = None,
+                Err(e) => tracing::warn!("org {:?}: its request code was not cleared: {e}", row.id),
+            }
+        }
+        let Some(accepted) = row.member.last_roster_seq else {
+            return;
+        };
+        let hash = row.member.roster_hash.as_deref();
+        let settled = match store.draft(&row.id).await {
+            Ok(Some(mut draft)) => match draft_stand(accepted, hash, &draft) {
+                DraftStand::Reached => store.delete_draft(&row.id).await,
+                // Another list took its place: the draft stays, saying so, until Retry or
+                // Discard drops it (and makes its invite open again).
+                DraftStand::Overtaken => {
+                    let why = changed_text(&row.name, accepted);
+                    if draft.error == why {
+                        Ok(())
+                    } else {
+                        draft.error = why;
+                        store.put_draft(&draft).await
+                    }
+                }
+                DraftStand::Waiting => Ok(()),
+            },
+            Ok(None) => Ok(()),
+            Err(e) => Err(e),
+        };
+        if let Err(e) = settled {
+            tracing::warn!(
+                "org {:?}: its member list draft was not settled: {e}",
+                row.id
+            );
+        }
+    }
+
+    /// Keeps (or with `None` clears) the request code this PC waits on, in the row and here.
+    pub(super) async fn set_pending(
+        &self,
+        org_id: &str,
+        request: Option<PendingRequest>,
+    ) -> Result<()> {
+        self.inner
+            .store
+            .set_pending_request(org_id, request.as_ref())
+            .await?;
+        self.with_joined(org_id, |joined| joined.row.pending_request = request);
+        Ok(())
+    }
+
+    /// A joined org as the member service needs it: its row, source, policy and the list
+    /// accepted last. A damaged org is `Invalid`; one not joined is `NotFound`.
+    pub(super) fn member_state(&self, org_id: &str) -> Result<MemberState> {
+        match self.read().get(org_id) {
+            Some(Slot::Joined(joined)) => Ok(MemberState {
+                row: joined.row.clone(),
+                source: joined.source.clone(),
+                policy: joined.policy.clone(),
+                roster: joined
+                    .roster
+                    .as_ref()
+                    .map(|kept| (kept.roster.clone(), kept.text.clone())),
+            }),
+            Some(Slot::Damaged { .. }) => Err(Error::Invalid(damaged_text(org_id))),
+            Some(Slot::Pending(_)) | None => Err(not_joined(org_id)),
+        }
+    }
+
+    pub(super) fn store(&self) -> &Store {
+        &self.inner.store
+    }
+
+    pub(super) fn secrets(&self) -> &dyn SecretStore {
+        self.inner.secrets.as_ref()
+    }
+
+    pub(super) fn now(&self) -> DateTime<Utc> {
+        self.inner.clock.now()
+    }
+
     /// Writes an Update's settings, then its fetch. If the fetch can't be recorded, the old
     /// settings are put back.
     async fn store_settings(&self, row: &OrgRow, old: &OrgRow) -> Result<()> {
@@ -1574,6 +1712,12 @@ fn summary_of(id: &str, slot: &Slot) -> OrgSummary {
                 .as_ref()
                 .map(|kept| u32::try_from(kept.roster.members.len()).unwrap_or(u32::MAX)),
             not_member_text: joined.not_member().map(|why| why.text(&joined.row.name)),
+            request_code: joined
+                .row
+                .pending_request
+                .as_ref()
+                .filter(|_| joined.row.member.membership == Membership::Waiting)
+                .map(|request| request.code.clone()),
         },
         Slot::Damaged { name, error } => OrgSummary {
             id: id.to_string(),
@@ -1598,6 +1742,7 @@ fn summary_of(id: &str, slot: &Slot) -> OrgSummary {
             roster_error: None,
             member_count: None,
             not_member_text: Some(NotMember::Waiting.text(name)),
+            request_code: None,
         },
         Slot::Pending(code) => OrgSummary {
             id: id.to_string(),
@@ -1619,6 +1764,7 @@ fn summary_of(id: &str, slot: &Slot) -> OrgSummary {
             roster_error: None,
             member_count: None,
             not_member_text: None,
+            request_code: None,
         },
     }
 }
@@ -1825,7 +1971,7 @@ fn damaged_text(org_id: &str) -> String {
     format!("the settings of org '{org_id}' are damaged; remove it and join it again")
 }
 
-fn not_joined(org_id: &str) -> Error {
+pub(super) fn not_joined(org_id: &str) -> Error {
     Error::NotFound(format!("no org '{org_id}' is joined on this PC"))
 }
 
@@ -1836,11 +1982,11 @@ fn copy_end(at: DateTime<Utc>, offline_hours: u32) -> DateTime<Utc> {
 }
 
 /// A time as the orgs table keeps it: RFC 3339, UTC, to the millisecond.
-fn stamp(at: DateTime<Utc>) -> String {
+pub(super) fn stamp(at: DateTime<Utc>) -> String {
     at.to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
-fn parse_time(text: &str) -> Option<DateTime<Utc>> {
+pub(super) fn parse_time(text: &str) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(text)
         .ok()
         .map(|at| at.with_timezone(&Utc))

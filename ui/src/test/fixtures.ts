@@ -64,6 +64,14 @@ export const sample = {
   /// Personal, API_KEY not in the org, PROD_DB_URL denied, GITHUB_TOKEN refused to the shell;
   /// then a grant of a dot whose org was removed.
   grantStatuses: T.GrantStatus.array().parse(contract.GrantStatus),
+  /// Acme Engineering's member list (#3): Olu Owner, and Asha Rao (Admin, this PC and one
+  /// more), Ben's open invite and Cy's used one, and a draft that removes Ben.
+  members: T.MembersView.parse(contract.MembersView),
+  /// Ben's new invite and the code that carries it.
+  createdInvite: T.CreatedInvite.parse(contract.CreatedInvite),
+  /// Ben's request answering his invite; then one with no invite whose email is Asha's, with a
+  /// problem.
+  requestPreviews: T.RequestPreview.array().parse(contract.RequestPreview),
 };
 
 /// What `new_dot_spec` answers: the core's defaults with nothing filled in.

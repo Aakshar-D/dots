@@ -1025,6 +1025,8 @@ const orgSummaryShape = {
   // The words a run of the account is refused with while this PC is not on the member list
   // (waiting, its Dots ID changed, or removed); null otherwise.
   not_member_text: nullable(z.string()),
+  // The request code this PC made for the account, while it waits to be added; null otherwise.
+  request_code: nullable(z.string()),
 };
 // This install's Dots ID. `name` and `email` are empty until the person sets them.
 export const Identity = z.strictObject({
@@ -1051,6 +1053,12 @@ export const OrgSummary = z.discriminatedUnion("status", [
 // How an OpenBao or Vault join code signs in: a token, or a username and password against a
 // `userpass` or `ldap` mount.
 export const BaoAuth = z.enum(["token", "userpass", "ldap"]);
+// The invite a version 2 join code offers: which invite, the role it gives, when it ends.
+export const InviteOffer = z.strictObject({
+  id: z.string(),
+  role: Role,
+  expires_at: z.string(),
+});
 // What a join code would join, or change for an org joined already (Update). Nothing is
 // fetched for it.
 export const JoinPreview = z.strictObject({
@@ -1070,7 +1078,99 @@ export const JoinPreview = z.strictObject({
   // For Update, the code changes an OpenBao or Infisical source's settings, or the kind of
   // source: the saved sign-in details are not sent to it, so they must be given again.
   source_changed: z.boolean(),
+  // The role the code offers as a personal invite; null for a plain code.
+  invite: nullable(InviteOffer),
 });
+// A member's role in one workspace.
+export const WorkspaceRole = z.enum(["admin", "member", "viewer"]);
+// One PC (Dots ID) of a member; `signs` is true for one of the policy's admins.
+export const KeyView = z.strictObject({
+  key: z.string(),
+  fingerprint: z.string(),
+  is_me: z.boolean(),
+  signs: z.boolean(),
+});
+export const MemberView = z.strictObject({
+  id: z.string(),
+  name: z.string(),
+  email: z.string(),
+  role: Role,
+  keys: z.array(KeyView),
+  workspaces: z.record(z.string(), WorkspaceRole),
+  added_at: z.string(),
+  // An Owner: only the owner's key, in dots-admin, may change them.
+  owner_locked: z.boolean(),
+});
+export const InviteState = z.enum(["open", "used", "expired", "revoked"]);
+export const InviteView = z.strictObject({
+  id: z.string(),
+  email: z.string(),
+  role: Role,
+  created_at: z.string(),
+  expires_at: z.string(),
+  state: InviteState,
+});
+// A signed member list that was not published, with the reason.
+export const DraftView = z.strictObject({
+  base_seq: z.number(),
+  seq: z.number(),
+  summary: z.string(),
+  error: z.string(),
+  created_at: z.string(),
+  // The signed list, to copy into a SOPS file.
+  signed: z.string(),
+});
+// The Members tab of an org (`member_list`).
+export const MembersView = z.strictObject({
+  seq: z.number(),
+  members: z.array(MemberView),
+  can_manage: z.boolean(),
+  can_sign: z.boolean(),
+  sign_blocker: nullable(z.string()),
+  publishes: z.boolean(),
+  invites: z.array(InviteView),
+  draft: nullable(DraftView),
+});
+// A new invite and the join code that carries it (`invite_create`).
+export const CreatedInvite = z.strictObject({
+  invite: InviteView,
+  code: z.string(),
+});
+// The member a request's email names; approving adds the PC to them.
+export const JoinsMember = z.strictObject({
+  id: z.string(),
+  name: z.string(),
+  role: Role,
+});
+// What a request code asks (`request_inspect`); `problem` says why it can't be approved.
+export const RequestPreview = z.strictObject({
+  name: z.string(),
+  email: z.string(),
+  key: z.string(),
+  fingerprint: z.string(),
+  invite: nullable(InviteView),
+  role: nullable(Role),
+  joins_member: nullable(JoinsMember),
+  age_recipient: nullable(z.string()),
+  problem: nullable(z.string()),
+});
+// One change to the member list, sent to `member_edit`.
+export const RosterEdit = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("approve"),
+    request: z.string(),
+    role: nullable(Role),
+    confirm_no_invite: z.boolean(),
+  }),
+  z.strictObject({ kind: z.literal("set_role"), member_id: z.string(), role: Role }),
+  z.strictObject({ kind: z.literal("remove"), member_id: z.string() }),
+  z.strictObject({ kind: z.literal("remove_key"), member_id: z.string(), key: z.string() }),
+]);
+// How a member-list edit ended: published (the org's new row), or kept as a draft.
+export const EditOutcome = z.discriminatedUnion("outcome", [
+  z.strictObject({ outcome: z.literal("published"), summary: OrgSummary }),
+  z.strictObject({ outcome: z.literal("draft"), draft: DraftView }),
+]);
 // An org's entry for the Env tab. A secret's value is always null.
 export const OrgEntry = z.strictObject({
   name: z.string(),
@@ -1418,6 +1518,14 @@ export type OrgSummary = z.infer<typeof OrgSummary>;
 export type Role = z.infer<typeof Role>;
 export type BaoAuth = z.infer<typeof BaoAuth>;
 export type JoinPreview = z.infer<typeof JoinPreview>;
+export type MembersView = z.infer<typeof MembersView>;
+export type MemberView = z.infer<typeof MemberView>;
+export type InviteView = z.infer<typeof InviteView>;
+export type DraftView = z.infer<typeof DraftView>;
+export type CreatedInvite = z.infer<typeof CreatedInvite>;
+export type RequestPreview = z.infer<typeof RequestPreview>;
+export type RosterEdit = z.infer<typeof RosterEdit>;
+export type EditOutcome = z.infer<typeof EditOutcome>;
 export type OrgEntry = z.infer<typeof OrgEntry>;
 export type PersonalMode = z.infer<typeof PersonalMode>;
 export type UseRules = z.infer<typeof UseRules>;

@@ -1,17 +1,21 @@
 //! Accounts: the Dots ID of this install, and (later) the members and workspaces built on it
 //! (accounts design §5).
 
+pub mod edit;
 mod identity;
 mod membership;
 mod permissions;
+mod request;
 pub mod roster;
 mod scope;
 
 pub use identity::{
-    ensure_identity, identity, set_profile, Identity, IDENTITY_SECRET, MAX_EMAIL, MAX_PROFILE_NAME,
+    ensure_identity, identity, set_profile, sign_with_identity, Identity, IDENTITY_SECRET,
+    MAX_EMAIL, MAX_PROFILE_NAME,
 };
 pub use membership::{Membership, NotMember};
 pub use permissions::{access, can, require, Access, Permission};
+pub use request::{make_request, parse_request, AccessRequest, RequestError, REQUEST_PREFIX};
 pub use roster::{
     open_accepted_roster, parse_roster, roster_envelope, roster_hash, verify_roster, Accepted,
     Member, Role, Roster, RosterError, Workspace, WorkspaceRole, ROSTER_ENVELOPE_VERSION,

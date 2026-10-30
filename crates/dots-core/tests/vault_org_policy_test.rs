@@ -476,6 +476,7 @@ fn spec_join_code(policy_key: &str) -> JoinCode {
             namespace: None,
         }),
         policy_key: policy_key.into(),
+        invite: None,
     }
 }
 
@@ -617,11 +618,11 @@ fn a_join_code_with_an_unknown_version_is_refused() {
         &key,
         json!({"kind": "sops", "location": "https://a.example/f"}),
     );
-    value["v"] = json!(2);
+    value["v"] = json!(3);
     value["new_field"] = json!(true);
     assert_eq!(
         refused(&code_for(&value)),
-        "join code: version 2 is not supported; update Dots"
+        "join code: version 3 is not supported; update Dots"
     );
     value.as_object_mut().unwrap().remove("v");
     assert_eq!(refused(&code_for(&value)), "join code: no version 'v'");

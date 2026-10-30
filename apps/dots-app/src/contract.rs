@@ -3,7 +3,9 @@
 //! schema, so a field renamed or added on one side fails the other side's tests.
 //! Regenerate after changing a type: `UPDATE_CONTRACT=1 cargo test -p dots-app contract`.
 
-use dots_core::accounts::{CurrentScope, Identity, Membership, Role};
+use std::collections::BTreeMap;
+
+use dots_core::accounts::{CurrentScope, Identity, Membership, Role, WorkspaceRole};
 use dots_core::browser::BrowserStatus;
 use dots_core::context::Document;
 use dots_core::engine::EngineEvent;
@@ -25,7 +27,9 @@ use dots_core::scheduler::MAX_ATTEMPTS;
 use dots_core::settings::{Settings, MAX_CONCURRENT_RUNS, MAX_GLOBAL_INSTRUCTIONS};
 use dots_core::skill_creator::{DraftRequest, DraftSummary};
 use dots_core::vault::org::{
-    BaoAuth, JoinPreview, OrgEntry, OrgStatus, OrgSummary, PersonalMode, SourceCreds, UseRules,
+    BaoAuth, CreatedInvite, DraftView, EditOutcome, InviteOffer, InviteState, InviteView,
+    JoinPreview, JoinsMember, KeyView, MemberView, MembersView, OrgEntry, OrgStatus, OrgSummary,
+    PersonalMode, RequestPreview, SourceCreds, UseRules,
 };
 use dots_core::vault::{
     Consumer, EntryKind, EnvEntry, GrantState, GrantStatus, Missing, Unresolved, ValueSource,
@@ -1435,6 +1439,13 @@ pub fn samples() -> Value {
         workspace: "default".into(),
     });
     samples["JoinPreview"] = to(join_previews());
+    samples["MembersView"] = to(members_view());
+    samples["CreatedInvite"] = to(CreatedInvite {
+        invite: invite_view(InviteState::Open),
+        code: "dotsorg_c2FtcGxlLWludml0ZS1jb2Rl".into(),
+    });
+    samples["RequestPreview"] = to(request_previews());
+    samples["EditOutcome"] = to(edit_outcomes());
     samples["OrgEntry"] = to([
         OrgEntry {
             name: "API_BASE_URL".into(),
@@ -1459,6 +1470,8 @@ pub fn samples() -> Value {
     samples["Enums"]["GrantState"] = to(GrantState::ALL);
     samples["Enums"]["ValueSource"] = to(ValueSource::ALL);
     samples["Enums"]["PersonalMode"] = to(PersonalMode::ALL);
+    samples["Enums"]["InviteState"] = to(InviteState::ALL);
+    samples["Enums"]["WorkspaceRole"] = to(WorkspaceRole::ALL);
     samples
 }
 
@@ -1794,6 +1807,7 @@ fn org_summaries() -> Vec<OrgSummary> {
         roster_error: None,
         member_count: Some(4),
         not_member_text: None,
+        request_code: None,
     };
     let status = |status: OrgStatus, text: &str| OrgSummary {
         status,
@@ -1816,6 +1830,7 @@ fn org_summaries() -> Vec<OrgSummary> {
                 "Acme Engineering: you aren't on its member list yet. Send your Dots ID to an Admin."
                     .into(),
             ),
+            request_code: Some("dotsreq_c2FtcGxlLXJlcXVlc3Q".into()),
             ..status(
                 OrgStatus::Offline { until: None },
                 "offline, with no saved copy",
@@ -1886,6 +1901,7 @@ fn join_previews() -> Vec<JoinPreview> {
         changes: vec![],
         key_changed: false,
         source_changed: false,
+        invite: None,
     };
     vec![
         new.clone(),
@@ -1901,7 +1917,149 @@ fn join_previews() -> Vec<JoinPreview> {
             ],
             key_changed: true,
             source_changed: true,
+            ..new.clone()
+        },
+        JoinPreview {
+            invite: Some(InviteOffer {
+                id: "inv-1".into(),
+                role: Role::Member,
+                expires_at: "2026-10-17T12:00:00.000Z".into(),
+            }),
             ..new
+        },
+    ]
+}
+
+/// An invite made on this PC, in `state`.
+fn invite_view(state: InviteState) -> InviteView {
+    InviteView {
+        id: "inv-1".into(),
+        email: "ben@acme.com".into(),
+        role: Role::Member,
+        created_at: TS.into(),
+        expires_at: "2026-10-17T12:00:00.000Z".into(),
+        state,
+    }
+}
+
+/// An Admin's Members tab (`member_list`): an Owner, an Admin with two PCs, an open and a used
+/// invite, and a signed list that could not be published.
+fn members_view() -> MembersView {
+    let key = |key: &str, fingerprint: &str, is_me: bool, signs: bool| KeyView {
+        key: key.into(),
+        fingerprint: fingerprint.into(),
+        is_me,
+        signs,
+    };
+    MembersView {
+        seq: 3,
+        members: vec![
+            MemberView {
+                id: "m-owner".into(),
+                name: "Olu Owner".into(),
+                email: "olu@acme.com".into(),
+                role: Role::Owner,
+                keys: vec![key(
+                    "b3d1sampleOwnerKey",
+                    "11AA 22BB 33CC 44DD",
+                    false,
+                    true,
+                )],
+                workspaces: BTreeMap::new(),
+                added_at: TS.into(),
+                owner_locked: true,
+            },
+            MemberView {
+                id: "m-asha".into(),
+                name: "Asha Rao".into(),
+                email: "asha@acme.com".into(),
+                role: Role::Admin,
+                keys: vec![
+                    key(
+                        "q83vEjRWeJq83vEjRWeJq83vEjRWeJq83vEjRWeJq8s=",
+                        "AB12 CD34 EF56 7890",
+                        true,
+                        true,
+                    ),
+                    key(
+                        "c3NhbXBsZS1zZWNvbmQtcGM",
+                        "99FF 88EE 77DD 66CC",
+                        false,
+                        false,
+                    ),
+                ],
+                workspaces: BTreeMap::from([("platform".to_string(), WorkspaceRole::Admin)]),
+                added_at: TS.into(),
+                owner_locked: false,
+            },
+        ],
+        can_manage: true,
+        can_sign: true,
+        sign_blocker: None,
+        publishes: true,
+        invites: vec![invite_view(InviteState::Open), {
+            let mut used = invite_view(InviteState::Used);
+            used.id = "inv-0".into();
+            used.email = "cy@acme.com".into();
+            used
+        }],
+        draft: Some(draft_view()),
+    }
+}
+
+/// A signed list the source refused (`DraftView`).
+fn draft_view() -> DraftView {
+    DraftView {
+        base_seq: 3,
+        seq: 4,
+        summary: "Remove Ben Okoye".into(),
+        error: "the source could not be reached (connection refused)".into(),
+        created_at: TS.into(),
+        signed: "{\"sample\":\"signed member list\"}".into(),
+    }
+}
+
+/// A request that answers an invite, and one from a PC of a member already listed that cannot
+/// be approved (`request_inspect`).
+fn request_previews() -> Vec<RequestPreview> {
+    let invited = RequestPreview {
+        name: "Ben Okoye".into(),
+        email: "ben@acme.com".into(),
+        key: "c3NhbXBsZS1iZW4ta2V5".into(),
+        fingerprint: "5A5A 6B6B 7C7C 8D8D".into(),
+        invite: Some(invite_view(InviteState::Open)),
+        role: Some(Role::Member),
+        joins_member: None,
+        age_recipient: None,
+        problem: None,
+    };
+    vec![
+        invited.clone(),
+        RequestPreview {
+            email: "asha@acme.com".into(),
+            invite: None,
+            role: Some(Role::Admin),
+            joins_member: Some(JoinsMember {
+                id: "m-asha".into(),
+                name: "Asha Rao".into(),
+                role: Role::Admin,
+            }),
+            age_recipient: Some("age1samplerecipient".into()),
+            problem: Some("this request is older than the list".into()),
+            ..invited
+        },
+    ]
+}
+
+/// An edit that was published, and one kept as a draft (`member_edit`, `roster_draft_retry`).
+fn edit_outcomes() -> Vec<EditOutcome> {
+    let summary = org_summaries().remove(0);
+    vec![
+        EditOutcome::Published {
+            summary: Box::new(summary),
+        },
+        EditOutcome::Draft {
+            draft: draft_view(),
         },
     ]
 }

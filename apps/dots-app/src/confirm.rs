@@ -1848,6 +1848,7 @@ mod tests {
                 namespace: None,
             }),
             policy_key: key.into(),
+            invite: None,
         }
         .encode()
     }
@@ -1873,6 +1874,7 @@ mod tests {
                 last_fetch_at: None,
                 joined_at: "2026-10-22T09:00:00.000Z".into(),
                 member: Default::default(),
+                pending_request: None,
             })
             .await
             .unwrap();
@@ -1977,6 +1979,7 @@ mod tests {
                 last_fetch_at: None,
                 joined_at: "2026-10-22T09:00:00.000Z".into(),
                 member: Default::default(),
+                pending_request: None,
             })
             .await
             .unwrap();

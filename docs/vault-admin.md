@@ -713,8 +713,9 @@ If you change a value that forms a server's host, each person confirms the new o
 
 A plain org (policy v1) lets anyone who can read the source join, and every member counts as a
 Member. An account with a **member list** (the roster) adds names, roles and a way to remove
-someone. Request codes, Request access and approving people inside Dots come in the next release;
-for now you edit the list with `dots-admin` and sign it.
+someone. You can edit the list with `dots-admin`, or from the **Members** tab in Dots (see
+"Inviting and approving in Dots" below). Owners can only be changed with `dots-admin` and the root
+key.
 
 ### The root key and admin keys
 
@@ -771,7 +772,130 @@ Store the signed text next to `DOTS_POLICY`:
 - **SOPS**: a top-level field `roster` in the file. Encrypt it like `policy`: Dots refuses a file
   whose `roster` is in clear text.
 
-Give people read access to it as you did for the policy. Keep write access to the Owner and admins.
+Give people read access to it as you did for the policy. Keep write access to the Owner and admins (see "Write rights and drafts").
+
+### Inviting and approving in Dots
+
+An Owner or Admin can add people from **Settings › Accounts**. Open the account and choose its
+**Members** tab.
+
+**Signing needs your Dots ID in `admins`.** Dots signs the new list with this PC's Dots ID, so that
+ID must be in the policy's `admins`. This holds for the Owner's PC too. The owner adds it with the
+root key, signs the policy and stores it (section 3):
+
+```bash
+dots-admin policy admins add policy.json <dots-id>
+```
+
+Until then the buttons on the tab are off. The tab says "Can sign the list once the owner adds
+their Dots ID to the policy's admins."
+
+**Invite.** Choose **Invite**, give the person's email and a role, and choose **Create invite**.
+Dots shows an invite code. Choose **Copy**, or **Save as .dotsorg** to send a file. Send it to the
+person.
+
+- An invite lives only on the PC that made it. Another PC of yours does not see it.
+- It expires after 7 days. **Open invites** lists what is waiting, with **Revoke**.
+- The person joins with the code (see [Accounts](accounts.md)). Dots then shows them a request
+  code, which they send back to you.
+- **SOPS:** the person first sends you their PC's age key, shown in their Join dialog as **This
+  PC's key**. Add it to the file's recipients (section 4) and store the file. Until then their join
+  waits ("Waiting for your admin to add this PC's key") and there is no request code. Once the key
+  is in, they choose **Try again**, the join completes, and Dots shows them the request code.
+
+**Approve.** Choose **Approve request**, paste the request code and choose **Check**. Dots shows
+the name, email and Dots ID fingerprint, and any problem. Choose **Approve**. Dots signs a new
+list and publishes it.
+
+- A request that matches one of your invites gets the invite's role.
+- A request with no invite from this PC needs a tick on "This person has no invite from this PC"
+  and a role.
+- A request with an email that is already on the list joins that member, as another PC, with
+  their existing role. The dialog says who.
+- Approving uses up the invite, even when the result is only a draft (see below). If that draft
+  is discarded, or dropped because another list took its place, the invite is open again and the
+  same request code can be approved later.
+- A request for another account, a revoked, used or expired invite, or a Dots ID already on the
+  list is refused with the reason. So is a request with an Owner's email: "Owners can only be
+  changed with the account owner's key, using dots-admin."
+
+**Change a role, remove a PC, remove a person.** Each member has a role menu, **Remove this PC**
+for each of their PCs, and **Remove**. Each change signs a new list. Dots does not touch an Owner:
+it says "Owners can only be changed with the account owner's key, using dots-admin." Do that with
+`dots-admin` and the root key, as above.
+
+**Removing someone also needs their credential revoked at the source.** The confirmation says so.
+The list stops Dots honouring them. Only the source cuts them off (section 6).
+
+Take care when you remove the key of the PC you are on. Once the new list is published this PC is
+not on it, and can't sign any more. **Remove this PC** always asks first, and says "This is this
+PC. You'll lose access to <account> here." for your own PC, or "This is their last PC; they'll be
+removed." for a person's only PC. Changing your own role asks too: "You're changing your own role.
+You may lose the right to manage members."
+
+### Write rights and drafts
+
+Publishing writes `DOTS_ROSTER` to the source, so the signing PC's credential needs write rights
+there. Reading is not enough.
+
+- **OpenBao or Vault**: the token's policy must allow `create` and `update` on the roster path.
+  Give each signing Admin an ACL policy like this (the read paths stay as in section 4):
+
+```bash
+bao policy write dots-acme-admin - <<'EOF'
+path "secret/data/dots/env"    { capabilities = ["read"] }
+path "secret/data/dots/policy" { capabilities = ["read"] }
+path "secret/data/dots/roster" { capabilities = ["read", "create", "update"] }
+EOF
+```
+
+- **Infisical**: the machine identity needs write on the policy folder's `DOTS_ROSTER` secret.
+- **SOPS**: Dots can't write the file. See below.
+
+If the source refuses the write, or can't be reached, Dots keeps the signed list as a **draft**. The
+Members tab shows "Not published yet:" with what it changes, the error, and **Retry** and
+**Discard**. Fix the rights, then choose **Retry**. A draft is not live: nobody else sees the
+change until it is published. If the source took the list but Dots can't read it back yet, the
+error says "The source took the list but Dots couldn't read it back yet. Retry in a moment."
+
+One change at a time: while a draft waits, **Approve request**, the role menus and the remove
+buttons are off with "<account>: a change is waiting to be published. Retry or discard it first."
+**Invite** and **Revoke** still work.
+
+If another admin publishes first, Dots refuses and says "the member list changed (now #N) while you
+were editing. Check it and make the change again." Look at the new list and redo your change. A
+draft that another list took the place of is never counted as published, even when that list's
+number is higher: the draft stays with that message until you choose **Retry** (which drops it and
+says so) or **Discard**.
+
+**SOPS.** For a SOPS file the draft's message is "Copy the signed list into the SOPS file (see the
+admin guide)." Choose **Copy signed list**, then put the text in the file's `roster` field with
+`sops` (section 4):
+
+```bash
+sops set acme-eng.enc.json '["roster"]' '"<the signed list, as a JSON string>"'
+```
+
+Store the file as before. On **Refresh**, Dots reads the new list and drops the draft. The
+approved person's age key is a recipient already: their join waited for it, before they had a
+request code (see **Invite** above).
+
+### Requests with dots-admin
+
+You can read and add a request code without Dots:
+
+```bash
+dots-admin request inspect <code>
+dots-admin roster add-request roster.json <code> --role member
+```
+
+`request inspect` checks the code's signature and prints the org, name, email, key fingerprint,
+invite id (or `none`), age recipient if any, and when it was made. `roster add-request` adds the
+sender to `roster.json`, or adds another PC if the email is already there, and prints the age
+recipient the request carries (for a SOPS file it is a recipient already). A request is only what
+its sender claims: for an email already on the list, `--role` must be that member's role, or it is
+refused as `roster add` refuses it (change roles with `roster set-role`); when it matches, it
+prints "This adds a PC to <name> (<Role>)." Sign and store the list as above.
 
 ### Moving a legacy org to a member list
 
@@ -803,7 +927,7 @@ dots-admin roster remove roster.json ben@acme.com
 dots-admin roster sign roster.json --key keys/policy.key --out roster.signed.json
 ```
 
-Store the new list. At the person's next fetch their account shows **Removed** and Dots wipes that
+You can also use **Remove** on the **Members** tab. Store the new list. At the person's next fetch their account shows **Removed** and Dots wipes that
 account's secrets on that PC. If they come back, they join again and wait for you to add them.
 
 The list only stops Dots honouring them. **Also revoke their credential at the source**, as in

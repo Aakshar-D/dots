@@ -598,6 +598,14 @@
     "org_join",
     "org_update",
     "org_refresh",
+    "member_list",
+    "invite_create",
+    "invite_revoke",
+    "request_inspect",
+    "member_edit",
+    "roster_draft_retry",
+    "roster_draft_discard",
+    "org_request_access",
     "org_remove",
     "org_entries",
     "messages_list",
@@ -660,6 +668,17 @@
     ],
     "total": 42,
     "truncated": true
+  },
+  "CreatedInvite": {
+    "code": "dotsorg_c2FtcGxlLWludml0ZS1jb2Rl",
+    "invite": {
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "email": "ben@acme.com",
+      "expires_at": "2026-10-17T12:00:00.000Z",
+      "id": "inv-1",
+      "role": "member",
+      "state": "open"
+    }
   },
   "CurrentScope": {
     "account": "personal",
@@ -1161,6 +1180,54 @@
     "description": "Checks a PR for missing tests.",
     "name": "pr-tests"
   },
+  "EditOutcome": [
+    {
+      "outcome": "published",
+      "summary": {
+        "address": "https://bao.acme.internal",
+        "copy_until": "2026-10-10T12:00:00.000Z",
+        "id": "acme-eng",
+        "key_fingerprint": "6E2F 0A1B 9C3D 4E5F 7A81 B2C3 D4E5 F607",
+        "last_fetch_at": "2026-10-09T12:00:00.000Z",
+        "member_count": 4,
+        "membership": "active",
+        "name": "Acme Engineering",
+        "not_member_text": null,
+        "personal_mode": "fallback",
+        "policy_summary": [
+          "org: acme-eng",
+          "personal: fallback (a personal entry is used when the org has none)"
+        ],
+        "request_code": null,
+        "role": "admin",
+        "roster_error": null,
+        "roster_seq": 3,
+        "shell_secrets": false,
+        "source_kind": "openbao",
+        "status": "connected",
+        "status_text": "connected",
+        "use_rules": {
+          "allow": [
+            "*"
+          ],
+          "deny": [
+            "PROD_*"
+          ]
+        }
+      }
+    },
+    {
+      "draft": {
+        "base_seq": 3,
+        "created_at": "2026-10-09T12:00:00.000Z",
+        "error": "the source could not be reached (connection refused)",
+        "seq": 4,
+        "signed": "{\"sample\":\"signed member list\"}",
+        "summary": "Remove Ben Okoye"
+      },
+      "outcome": "draft"
+    }
+  ],
   "Enums": {
     "Action": [
       "allow",
@@ -1246,6 +1313,12 @@
       "rejected",
       "replaced"
     ],
+    "InviteState": [
+      "open",
+      "used",
+      "expired",
+      "revoked"
+    ],
     "LibraryKind": [
       "mcp_server",
       "skill",
@@ -1323,6 +1396,11 @@
     "WorkspaceMode": [
       "worktree",
       "folder"
+    ],
+    "WorkspaceRole": [
+      "admin",
+      "member",
+      "viewer"
     ]
   },
   "EnvEntry": [
@@ -1709,6 +1787,7 @@
       "auth": "token",
       "changes": [],
       "existing": false,
+      "invite": null,
       "key_changed": false,
       "key_fingerprint": "6E2F 0A1B 9C3D 4E5F 7A81 B2C3 D4E5 F607",
       "name": "Acme Engineering",
@@ -1724,11 +1803,29 @@
         "the policy key changes from 6E2F 0A1B 9C3D 4E5F 7A81 B2C3 D4E5 F607 to 0A1B 2C3D 4E5F 6071 8293 A4B5 C6D7 E8F9: the key that signs the org's policy is new, so accept this code only if your admin told you the key changed"
       ],
       "existing": true,
+      "invite": null,
       "key_changed": true,
       "key_fingerprint": "0A1B 2C3D 4E5F 6071 8293 A4B5 C6D7 E8F9",
       "name": "Acme Engineering",
       "org_id": "acme-eng",
       "source_changed": true,
+      "source_kind": "openbao"
+    },
+    {
+      "address": "https://bao.acme.internal",
+      "auth": "token",
+      "changes": [],
+      "existing": false,
+      "invite": {
+        "expires_at": "2026-10-17T12:00:00.000Z",
+        "id": "inv-1",
+        "role": "member"
+      },
+      "key_changed": false,
+      "key_fingerprint": "6E2F 0A1B 9C3D 4E5F 7A81 B2C3 D4E5 F607",
+      "name": "Acme Engineering",
+      "org_id": "acme-eng",
+      "source_changed": false,
       "source_kind": "openbao"
     }
   ],
@@ -2517,6 +2614,83 @@
       "url": "https://mcp.example.com/mcp"
     }
   ],
+  "MembersView": {
+    "can_manage": true,
+    "can_sign": true,
+    "draft": {
+      "base_seq": 3,
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "error": "the source could not be reached (connection refused)",
+      "seq": 4,
+      "signed": "{\"sample\":\"signed member list\"}",
+      "summary": "Remove Ben Okoye"
+    },
+    "invites": [
+      {
+        "created_at": "2026-10-09T12:00:00.000Z",
+        "email": "ben@acme.com",
+        "expires_at": "2026-10-17T12:00:00.000Z",
+        "id": "inv-1",
+        "role": "member",
+        "state": "open"
+      },
+      {
+        "created_at": "2026-10-09T12:00:00.000Z",
+        "email": "cy@acme.com",
+        "expires_at": "2026-10-17T12:00:00.000Z",
+        "id": "inv-0",
+        "role": "member",
+        "state": "used"
+      }
+    ],
+    "members": [
+      {
+        "added_at": "2026-10-09T12:00:00.000Z",
+        "email": "olu@acme.com",
+        "id": "m-owner",
+        "keys": [
+          {
+            "fingerprint": "11AA 22BB 33CC 44DD",
+            "is_me": false,
+            "key": "b3d1sampleOwnerKey",
+            "signs": true
+          }
+        ],
+        "name": "Olu Owner",
+        "owner_locked": true,
+        "role": "owner",
+        "workspaces": {}
+      },
+      {
+        "added_at": "2026-10-09T12:00:00.000Z",
+        "email": "asha@acme.com",
+        "id": "m-asha",
+        "keys": [
+          {
+            "fingerprint": "AB12 CD34 EF56 7890",
+            "is_me": true,
+            "key": "q83vEjRWeJq83vEjRWeJq83vEjRWeJq83vEjRWeJq8s=",
+            "signs": true
+          },
+          {
+            "fingerprint": "99FF 88EE 77DD 66CC",
+            "is_me": false,
+            "key": "c3NhbXBsZS1zZWNvbmQtcGM",
+            "signs": false
+          }
+        ],
+        "name": "Asha Rao",
+        "owner_locked": false,
+        "role": "admin",
+        "workspaces": {
+          "platform": "admin"
+        }
+      }
+    ],
+    "publishes": true,
+    "seq": 3,
+    "sign_blocker": null
+  },
   "Memory": [
     {
       "created_at": "2026-10-09T12:00:00.000Z",
@@ -2780,6 +2954,7 @@
         "org: acme-eng",
         "personal: fallback (a personal entry is used when the org has none)"
       ],
+      "request_code": null,
       "role": "admin",
       "roster_error": null,
       "roster_seq": 3,
@@ -2811,6 +2986,7 @@
         "org: acme-eng",
         "personal: fallback (a personal entry is used when the org has none)"
       ],
+      "request_code": null,
       "role": "admin",
       "roster_error": null,
       "roster_seq": 3,
@@ -2843,6 +3019,7 @@
         "org: acme-eng",
         "personal: fallback (a personal entry is used when the org has none)"
       ],
+      "request_code": "dotsreq_c2FtcGxlLXJlcXVlc3Q",
       "role": null,
       "roster_error": null,
       "roster_seq": 3,
@@ -2875,6 +3052,7 @@
         "org: acme-eng",
         "personal: fallback (a personal entry is used when the org has none)"
       ],
+      "request_code": null,
       "role": "admin",
       "roster_error": null,
       "roster_seq": 3,
@@ -2907,6 +3085,7 @@
         "org: acme-eng",
         "personal: fallback (a personal entry is used when the org has none)"
       ],
+      "request_code": null,
       "role": "admin",
       "roster_error": "the member list is not signed by the owner or an admin",
       "roster_seq": 3,
@@ -2938,6 +3117,7 @@
         "org: acme-eng",
         "personal: fallback (a personal entry is used when the org has none)"
       ],
+      "request_code": null,
       "role": "admin",
       "roster_error": null,
       "roster_seq": 3,
@@ -2966,6 +3146,7 @@
       "not_member_text": null,
       "personal_mode": null,
       "policy_summary": [],
+      "request_code": null,
       "role": null,
       "roster_error": null,
       "roster_seq": null,
@@ -2990,6 +3171,7 @@
         "org: acme-eng",
         "personal: fallback (a personal entry is used when the org has none)"
       ],
+      "request_code": null,
       "role": null,
       "roster_error": null,
       "roster_seq": 3,
@@ -3172,6 +3354,41 @@
       "version": "0.2.0"
     },
     null
+  ],
+  "RequestPreview": [
+    {
+      "age_recipient": null,
+      "email": "ben@acme.com",
+      "fingerprint": "5A5A 6B6B 7C7C 8D8D",
+      "invite": {
+        "created_at": "2026-10-09T12:00:00.000Z",
+        "email": "ben@acme.com",
+        "expires_at": "2026-10-17T12:00:00.000Z",
+        "id": "inv-1",
+        "role": "member",
+        "state": "open"
+      },
+      "joins_member": null,
+      "key": "c3NhbXBsZS1iZW4ta2V5",
+      "name": "Ben Okoye",
+      "problem": null,
+      "role": "member"
+    },
+    {
+      "age_recipient": "age1samplerecipient",
+      "email": "asha@acme.com",
+      "fingerprint": "5A5A 6B6B 7C7C 8D8D",
+      "invite": null,
+      "joins_member": {
+        "id": "m-asha",
+        "name": "Asha Rao",
+        "role": "admin"
+      },
+      "key": "c3NhbXBsZS1iZW4ta2V5",
+      "name": "Ben Okoye",
+      "problem": "this request is older than the list",
+      "role": "admin"
+    }
   ],
   "RuleCandidate": [
     {

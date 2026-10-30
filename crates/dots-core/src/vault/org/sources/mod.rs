@@ -48,6 +48,44 @@ const MAX_ANSWER_BYTES: usize = 1024 * 1024;
 pub trait Source: Send + Sync {
     /// Logs in if needed and reads every entry plus the signed policy text.
     async fn fetch(&self, creds: &SourceCreds) -> std::result::Result<Fetched, SourceError>;
+
+    /// Writes the signed member list (`signed`, the whole text) to where `fetch` reads it from
+    /// (members spec §6.5). A source that can't be written from Dots keeps this default.
+    async fn publish_roster(
+        &self,
+        _creds: &SourceCreds,
+        _signed: &str,
+    ) -> std::result::Result<(), PublishError> {
+        Err(PublishError::Unsupported)
+    }
+}
+
+/// Why a member list could not be written to a source. The messages name the source and the
+/// path, never the signed text or a token.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum PublishError {
+    /// This kind of source has no write from Dots (a SOPS file).
+    #[error("this source can't be written from Dots")]
+    Unsupported,
+    /// The source refused the write (401 or 403), or the sign-in details behind it.
+    #[error("the source refused the write: {0}")]
+    Denied(String),
+    /// A timeout, a connection error, rate limiting or a server error: try again later.
+    #[error("the source can't be reached: {0}")]
+    Unreachable(String),
+    /// Any other answer, or one that doesn't parse.
+    #[error("the source answered oddly: {0}")]
+    Invalid(String),
+}
+
+impl From<SourceError> for PublishError {
+    fn from(e: SourceError) -> PublishError {
+        match e {
+            SourceError::Unreachable(why) => PublishError::Unreachable(why),
+            SourceError::Denied(why) => PublishError::Denied(why),
+            SourceError::Invalid(why) => PublishError::Invalid(why),
+        }
+    }
 }
 
 /// What a fetch read: the entries by name, the signed policy text, and the signed member list if

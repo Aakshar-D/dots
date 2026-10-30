@@ -318,6 +318,15 @@ impl Roster {
             .iter()
             .find(|m| m.keys.iter().any(|k| k == key))
     }
+
+    /// The member with `email`, compared trimmed and without regard to case: how a new PC's
+    /// email finds the person it belongs to, in Dots and in `dots-admin` alike.
+    pub fn member_with_email(&self, email: &str) -> Option<&Member> {
+        let email = email.trim();
+        self.members
+            .iter()
+            .find(|m| m.email.trim().eq_ignore_ascii_case(email))
+    }
 }
 
 #[derive(Deserialize)]

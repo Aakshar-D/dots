@@ -3,6 +3,8 @@
 
 use std::collections::BTreeMap;
 
+use serde::{Deserialize, Serialize};
+
 use super::join::SourceSettings;
 use crate::accounts::{Membership, Role, WorkspaceRole};
 
@@ -25,6 +27,18 @@ pub struct OrgRow {
     pub joined_at: String,
     /// This PC's place on the account's member list.
     pub member: MemberRow,
+    /// The request code this PC made for the account and has not yet seen answered (accounts
+    /// spec §6.5). `None` when there is none.
+    pub pending_request: Option<PendingRequest>,
+}
+
+/// The request code this PC sent to an account's admins, kept so the person can see it again
+/// while they wait (accounts spec §6.5). Stored as JSON in `orgs.pending_request`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct PendingRequest {
+    pub code: String,
+    /// The invite the request answers, when it was made from a join code with an offer (§7).
+    pub invite_id: Option<String>,
 }
 
 /// This PC's place on an account's signed member list, as the `orgs` row keeps it (members

@@ -53,6 +53,7 @@ fn org(id: &str, name: &str, source: SourceSettings) -> OrgRow {
         last_fetch_at: None,
         joined_at: JOINED.into(),
         member: Default::default(),
+        pending_request: None,
     }
 }
 

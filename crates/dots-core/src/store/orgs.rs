@@ -6,13 +6,13 @@ use sqlx::Row;
 use super::Store;
 use crate::accounts::{Membership, Role};
 use crate::vault::org::policy::plain_serde;
-use crate::vault::org::{check_org_id, MemberRow, OrgRow, SourceSettings};
+use crate::vault::org::{check_org_id, MemberRow, OrgRow, PendingRequest, SourceSettings};
 use crate::{Error, Result};
 
 const ORG_COLUMNS: &str =
     "id, name, source, policy_key, last_issued_at, last_fetch_at, joined_at, \
      membership, my_member_id, my_role, my_workspaces, last_roster_seq, my_key, last_roster_hash, \
-     last_owners_hash";
+     last_owners_hash, pending_request";
 
 /// The member columns of a row (members spec §6.4).
 fn member_from_row(id: &str, row: &SqliteRow) -> Result<MemberRow> {
@@ -70,7 +70,17 @@ fn org_from_row(row: &SqliteRow) -> Result<OrgRow> {
             plain_serde(&e)
         ))
     })?;
+    let pending_request = match row.try_get::<Option<String>, _>("pending_request")? {
+        Some(text) => Some(serde_json::from_str(&text).map_err(|e| {
+            Error::Other(format!(
+                "org '{id}': its stored pending request is not readable: {}",
+                plain_serde(&e)
+            ))
+        })?),
+        None => None,
+    };
     Ok(OrgRow {
+        pending_request,
         member: member_from_row(&id, row)?,
         name: row.try_get("name")?,
         source,
@@ -91,8 +101,13 @@ impl Store {
     pub async fn add_org(&self, org: &OrgRow) -> Result<()> {
         check_org_id(&org.id)?;
         let (workspaces, seq) = member_columns(&org.member)?;
+        let pending_request = org
+            .pending_request
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()?;
         let added = sqlx::query(&format!(
-            "INSERT INTO orgs ({ORG_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            "INSERT INTO orgs ({ORG_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         ))
         .bind(&org.id)
         .bind(&org.name)
@@ -109,6 +124,7 @@ impl Store {
         .bind(&org.member.key)
         .bind(&org.member.roster_hash)
         .bind(&org.member.owners_hash)
+        .bind(pending_request)
         .execute(&self.pool)
         .await;
         if let Err(sqlx::Error::Database(db)) = &added {
@@ -256,7 +272,25 @@ impl Store {
         Ok(())
     }
 
-    /// Removes the org's row. Its dots keep their `org_id` (§6.4).
+    /// Sets (or with `None` clears) the request code this PC is waiting on for the org.
+    pub async fn set_pending_request(
+        &self,
+        id: &str,
+        request: Option<&PendingRequest>,
+    ) -> Result<()> {
+        let done = sqlx::query("UPDATE orgs SET pending_request = ? WHERE id = ?")
+            .bind(request.map(serde_json::to_string).transpose()?)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        if done.rows_affected() == 0 {
+            return Err(not_joined(id));
+        }
+        Ok(())
+    }
+
+    /// Removes the org's row. Its dots keep their `org_id` (§6.4). Its invites and roster draft
+    /// go with it (their foreign keys cascade).
     pub async fn remove_org(&self, id: &str) -> Result<()> {
         let done = sqlx::query("DELETE FROM orgs WHERE id = ?")
             .bind(id)

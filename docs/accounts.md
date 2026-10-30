@@ -4,8 +4,8 @@ An account is a group of people and dots that belong together, such as your team
 Your own dots live in **Personal**, which is always there. This guide explains how Dots knows who
 you are, how to switch between accounts, and how to join one.
 
-Invites, shared workspaces and API keys are **coming next**. This version covers
-your identity, the switcher, joining, and the member list with roles.
+Shared workspaces and API keys are **coming next**. This version covers
+your identity, the switcher, joining (with an invite or by asking), and the member list with roles.
 
 ## Your Dots ID
 
@@ -53,6 +53,26 @@ what the admin does.
    admin, who adds it to the account.
 4. The account now appears in the switcher.
 
+### Joining with an invite
+
+An admin can invite you by email. They send you an invite code or a `.dotsorg` file. Use it in
+**Join an account** like a join code. The preview says "Invited as ..." with the role and when the
+invite expires. An invite is good for 7 days. If it has expired, ask for a new one.
+
+Fill in your name and email in **Settings › Profile** first, because your request carries them.
+After you join, Dots shows a **request code**. Choose **Copy request code** and send it to the
+admin. They approve you in Dots, and you become Active at the next refresh.
+
+If the Join dialog shows a key for this PC instead of a sign-in, send that key to the admin first.
+The join waits until they have added it; then choose **Try again**, the join completes, and the
+request code appears.
+
+### Asking for access
+
+If your Dots ID is not on the member list, the account shows Waiting. Choose **Request access** to
+get a request code, copy it, and send it to an Admin. Dots checks again on its normal refresh, or
+you can choose Refresh. Nothing is lost while you wait.
+
 If you see **waiting for the admin to add this PC's key**, the join worked but the admin has not
 added your key yet. Nothing is wrong on your side. Once they have, open **Settings › Accounts**
 and choose Refresh on the account.
@@ -98,12 +118,12 @@ While you are waiting or removed you can still clean up: switch the account's do
 them. Turning them on, editing them and changing their watchers wait until you are on the list
 again. To drop the account altogether, leave it: **Remove** it in **Settings › Accounts**.
 
-Asking for access from inside Dots, and approving people there, are coming next. For now you send
-your Dots ID to the admin and they add you.
+Owners and Admins also see a **Members** tab on each account. It lists the members and lets an
+Admin invite people, approve requests, change roles and remove people. See
+[Setting up Dots for an organisation](vault-admin.md), section 10. Owners can only be changed with
+`dots-admin`.
 
 ## Coming next
 
-- A Members page, and asking for access or approving people inside Dots.
-- Invites by Dots ID instead of a join code.
 - Shared workspaces.
 - API keys for an account.

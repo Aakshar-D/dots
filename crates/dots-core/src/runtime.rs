@@ -8,7 +8,8 @@ use serde_json::json;
 use tokio::sync::{broadcast, Mutex};
 use tokio_util::sync::CancellationToken;
 
-use crate::accounts::{Access, Permission};
+use crate::accounts::edit::RosterEdit;
+use crate::accounts::{Access, Permission, Role};
 use crate::approvals::{ApprovalHub, DecideEffect};
 use crate::checkins::CheckIns;
 use crate::engine::claude::args::resolve_claude;
@@ -33,8 +34,8 @@ use crate::settings::Settings;
 use crate::skill_creator::SkillDrafts;
 use crate::store::Store;
 use crate::vault::org::{
-    http_client, os_protector, JoinPreview, OrgStatus, OrgSummary, OrgTimers, Orgs, SourceCreds,
-    OFFLINE_DIR,
+    http_client, os_protector, CreatedInvite, EditOutcome, JoinPreview, MembersView, OrgStatus,
+    OrgSummary, OrgTimers, Orgs, RequestPreview, SourceCreds, OFFLINE_DIR,
 };
 use crate::vault::{os_secrets, GrantStatus, MemorySecrets, SecretStore, Vault};
 use crate::workspace::{Prepared, WorkspaceManager};
@@ -1614,6 +1615,64 @@ impl Runtime {
             self.org_updated(&summary.id);
         }
         Ok(summary)
+    }
+
+    /// The account's member list for the Members tab (members spec section 6).
+    pub async fn member_list(&self, org_id: &str) -> Result<MembersView> {
+        self.orgs.members(org_id).await
+    }
+
+    /// Makes a personal invite for `email` and the join code that carries it.
+    pub async fn invite_create(
+        &self,
+        org_id: &str,
+        email: &str,
+        role: Role,
+    ) -> Result<CreatedInvite> {
+        self.orgs.create_invite(org_id, email, role).await
+    }
+
+    /// Revokes an invite made on this PC.
+    pub async fn invite_revoke(&self, org_id: &str, invite_id: &str) -> Result<()> {
+        self.orgs.revoke_invite(org_id, invite_id).await
+    }
+
+    /// Makes this waiting PC's request code and keeps it; the org's row changes.
+    pub async fn org_request_access(&self, org_id: &str) -> Result<OrgSummary> {
+        let summary = self.orgs.request_access(org_id).await?;
+        self.org_updated(org_id);
+        Ok(summary)
+    }
+
+    /// What a request code asks, checked against this PC's invites and the member list.
+    pub async fn request_inspect(&self, org_id: &str, code: &str) -> Result<RequestPreview> {
+        self.orgs.inspect_request(org_id, code).await
+    }
+
+    /// Makes one change to the member list, published or kept as a draft.
+    pub async fn member_edit(
+        &self,
+        org_id: &str,
+        base_seq: u64,
+        edit: RosterEdit,
+    ) -> Result<EditOutcome> {
+        let outcome = self.orgs.edit_members(org_id, base_seq, edit).await?;
+        self.org_updated(org_id);
+        Ok(outcome)
+    }
+
+    /// Publishes the org's waiting signed list again.
+    pub async fn roster_draft_retry(&self, org_id: &str) -> Result<EditOutcome> {
+        let outcome = self.orgs.retry_draft(org_id).await?;
+        self.org_updated(org_id);
+        Ok(outcome)
+    }
+
+    /// Drops the org's waiting signed list.
+    pub async fn roster_draft_discard(&self, org_id: &str) -> Result<()> {
+        self.orgs.discard_draft(org_id).await?;
+        self.org_updated(org_id);
+        Ok(())
     }
 
     /// Replaces a joined org's settings with a new join code's (**Update**). It fetched just

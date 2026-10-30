@@ -10,6 +10,7 @@ use std::fs::OpenOptions;
 use std::io::{Cursor, ErrorKind, Write};
 
 use chrono::{DateTime, Utc};
+use dots_core::accounts::edit::{default_workspace_role, edit_members, new_member_id, Change};
 use dots_core::accounts::roster::{
     parse_roster, roster_envelope, verify_roster, Member, Role, Roster, RosterError, Workspace,
     WorkspaceRole, ROSTER_VERSION,
@@ -22,6 +23,7 @@ use serde_json::Value;
 use crate::args::Args;
 use crate::keys::{read_public_key, unlock_secret_key};
 use crate::policy::{check_dots_id, timestamp};
+use crate::request::read_request;
 use crate::{core_failed, failed, read_file, say, usage, write_file, Io, Result};
 
 /// The signature's untrusted comment. Nothing reads it; it tells a person what the box is.
@@ -67,26 +69,6 @@ fn write_roster(path: &str, roster: &Roster) -> Result<()> {
     write_file(path, &text)
 }
 
-/// A member id from their first key and email, which no other member shares: the first 12
-/// hex digits of the key's fingerprint, with a number added if the list already has it.
-fn member_id(roster: &Roster, key: &str) -> Result<String> {
-    let fingerprint = key_fingerprint(key).map_err(core_failed)?;
-    let hex: String = fingerprint
-        .chars()
-        .filter(char::is_ascii_hexdigit)
-        .take(12)
-        .collect::<String>()
-        .to_lowercase();
-    let base = format!("m-{hex}");
-    let mut id = base.clone();
-    let mut n = 1;
-    while roster.members.iter().any(|m| m.id == id) {
-        n += 1;
-        id = format!("{base}-{n}");
-    }
-    Ok(id)
-}
-
 fn parse_role(text: &str) -> Result<Role> {
     Role::parse(text).map_err(|_| {
         failed(format!(
@@ -101,16 +83,6 @@ fn parse_workspace_role(text: &str) -> Result<WorkspaceRole> {
             "'{text}' is not a workspace role; use admin, member or viewer"
         ))
     })
-}
-
-/// The role a person gets in the `default` workspace unless `--workspace default=…` says
-/// otherwise: their account role, with Owner counting as Admin.
-fn default_workspace_role(role: Role) -> WorkspaceRole {
-    match role {
-        Role::Owner | Role::Admin => WorkspaceRole::Admin,
-        Role::Member => WorkspaceRole::Member,
-        Role::Viewer => WorkspaceRole::Viewer,
-    }
 }
 
 /// `--workspace <id>=<role>` values as a map; the same id twice is refused.
@@ -160,7 +132,7 @@ pub fn new_roster(
         members: Vec::new(),
     };
     roster.members.push(Member {
-        id: member_id(&roster, owner_key)?,
+        id: new_member_id(&roster, owner_key),
         name: owner_name.to_string(),
         email: owner_email.to_string(),
         role: Role::Owner,
@@ -176,12 +148,13 @@ pub fn new_roster(
 pub(crate) fn roster_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
     let Some((sub, rest)) = args.split_first() else {
         return Err(usage(
-            "'roster' needs one of: new, add, set-role, remove, check, sign, verify",
+            "'roster' needs one of: new, add, add-request, set-role, remove, check, sign, verify",
         ));
     };
     match sub.as_str() {
         "new" => new_command(rest, io),
         "add" => add_command(rest, io),
+        "add-request" => add_request_command(rest, io),
         "set-role" => set_role_command(rest, io),
         "remove" => remove_command(rest, io),
         "check" => check_command(rest, io),
@@ -246,9 +219,9 @@ fn add_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
     check_dots_id(key)?;
 
     let mut roster = read_roster(path)?;
-    let line = if let Some(at) = roster.members.iter().position(|m| m.email == email) {
+    let line = if let Some(id) = roster.member_with_email(email).map(|m| m.id.clone()) {
         // Another PC for a person already listed.
-        let member = &mut roster.members[at];
+        let member = member_mut(&mut roster, &id);
         if member.role != role {
             return Err(failed(format!(
                 "{email} is already {}; change that with 'roster set-role'",
@@ -263,7 +236,7 @@ fn add_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
             BTreeMap::from([("default".to_string(), default_workspace_role(role))]);
         workspaces.extend(given);
         let member = Member {
-            id: member_id(&roster, key)?,
+            id: new_member_id(&roster, key),
             name: name.to_string(),
             email: email.to_string(),
             role,
@@ -310,8 +283,8 @@ fn remove_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
             format!("removed {}", key_line(email, key)?)
         }
         None => {
-            member_by_email(&mut roster, email)?;
-            roster.members.retain(|m| m.email != email);
+            let id = member_by_email(&mut roster, email)?.id.clone();
+            roster.members.retain(|m| m.id != id);
             format!("removed {email}")
         }
     };
@@ -319,12 +292,81 @@ fn remove_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
     say(io.out, &line)
 }
 
+/// The member whose email matches as Dots matches it (trimmed, any case).
 fn member_by_email<'a>(roster: &'a mut Roster, email: &str) -> Result<&'a mut Member> {
+    let id = roster
+        .member_with_email(email)
+        .map(|m| m.id.clone())
+        .ok_or_else(|| failed(format!("no member has the email {email}")))?;
+    Ok(member_mut(roster, &id))
+}
+
+fn member_mut<'a>(roster: &'a mut Roster, id: &str) -> &'a mut Member {
     roster
         .members
         .iter_mut()
-        .find(|m| m.email == email)
-        .ok_or_else(|| failed(format!("no member has the email {email}")))
+        .find(|m| m.id == id)
+        .expect("the id was just read from this list")
+}
+
+/// `roster add-request <roster.json> <code> --role <role>`: adds the sender of a request code,
+/// or another PC for the person with that email. The list is not signed or numbered; `sign`
+/// does that.
+fn add_request_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
+    let args = Args::parse(args, &["role"], &[])?;
+    let [path, code] = args.words(["the member list", "the request code"])?;
+    let role = parse_role(args.required("role")?)?;
+    let request = read_request(code)?;
+    let mut roster = read_roster(path)?;
+    if request.org_id != roster.org_id {
+        return Err(failed(format!(
+            "the request is for org '{}', but this member list is for '{}'",
+            request.org_id, roster.org_id
+        )));
+    }
+    // A request is self-asserted: one naming a listed person (even the Owner) adds a PC to
+    // them only with --role matching theirs, as `roster add` does.
+    let joins = roster
+        .member_with_email(&request.email)
+        .map(|m| (m.name.clone(), m.role));
+    if let Some((_, listed)) = &joins {
+        if *listed != role {
+            return Err(failed(format!(
+                "{} is already {}; change that with 'roster set-role'",
+                request.email,
+                listed.label()
+            )));
+        }
+    }
+    let change = Change::AddKey {
+        name: request.name.clone(),
+        email: request.email.clone(),
+        key: request.key.clone(),
+        role,
+        workspaces: BTreeMap::from([("default".to_string(), default_workspace_role(role))]),
+    };
+    // The root key signs this list, so changing an Owner's entry is allowed here.
+    let (edited, summary) =
+        edit_members(&roster, &change, Utc::now(), true).map_err(core_failed)?;
+    roster = edited;
+    write_roster(path, &roster)?;
+    if let Some((name, listed)) = &joins {
+        say(
+            io.out,
+            &format!("This adds a PC to {name} ({}).", listed.label()),
+        )?;
+    }
+    say(
+        io.out,
+        &format!("{summary}: {}", key_line(&request.email, &request.key)?),
+    )?;
+    if let Some(age) = &request.age_recipient {
+        say(
+            io.out,
+            &format!("Add this age recipient to the SOPS file's recipients: {age}"),
+        )?;
+    }
+    Ok(())
 }
 
 /// `roster check <roster.json> --org-id <id>`: "ok" and the summary, or why Dots would refuse
