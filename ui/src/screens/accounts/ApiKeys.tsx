@@ -230,9 +230,12 @@ function KeyRow({ k, onRevoke }: { k: ApiKeyView; onRevoke: () => void }) {
 export function ApiKeys({ scope }: { scope: string }) {
   const qc = useQueryClient();
   const [creating, setCreating] = useState(false);
+  // Asked again each time the list is shown: a key's use is not announced, so "Last used"
+  // would otherwise stay as it was when the list was first loaded.
   const list = useQuery({
     queryKey: keys.apiKeys(scope),
     queryFn: () => commands.apiKeyList(scope),
+    refetchOnMount: "always",
   });
   const revoke = useMutation({
     mutationFn: (id: string) => commands.apiKeyRevoke(id),

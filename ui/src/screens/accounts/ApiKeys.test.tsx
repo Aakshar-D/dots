@@ -117,6 +117,24 @@ describe("Settings, Accounts, API keys", () => {
     expect(again.textContent).not.toContain(SECRET);
   });
 
+  it("shows_last_used_fresh_each_time_the_list_is_opened", async () => {
+    // A key's use is not announced: the list is asked again when it is shown.
+    account();
+    const { panel, router, user } = await keysTab();
+    expect(await within(panel).findByRole("listitem", { name: "CI" })).toHaveTextContent("Never");
+    await router.navigate("/home");
+    await waitFor(() => expect(screen.queryByRole("group", { name: "Accounts" })).toBeNull());
+    backend.on("api_key_list", () => [key({ last_used_at: "2026-10-03T10:00:00Z" })]);
+    await router.navigate("/settings");
+    const section = await screen.findByRole("group", { name: "Accounts" });
+    const row = await within(section).findByRole("listitem", { name: "Acme Engineering" });
+    await user.click(within(row).getByRole("tab", { name: "API keys" }));
+    const again = await within(row).findByRole("tabpanel");
+    await waitFor(() =>
+      expect(within(again).getByRole("listitem", { name: "CI" })).not.toHaveTextContent("Never"),
+    );
+  });
+
   it("revoke_asks_to_confirm", async () => {
     account();
     const { user, panel } = await keysTab();

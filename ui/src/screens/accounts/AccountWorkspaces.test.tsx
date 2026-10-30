@@ -194,6 +194,32 @@ describe("Settings, Accounts, Workspaces", () => {
     await waitFor(() => expect(backend.callsTo("scope_get").length).toBeGreaterThan(scopes));
   });
 
+  it.each(["Rename", "Delete"])(
+    "%s of a Personal workspace loads the API keys again",
+    async (action) => {
+      // A key is listed with its workspace's name, and a deleted workspace's keys are gone.
+      account();
+      backend.on("personal_workspace_rename", () => null);
+      backend.on("personal_workspace_delete", () => null);
+      const { user, section } = await settings();
+      const personal = await within(section).findByRole("region", { name: "Personal" });
+      await within(personal).findByRole("list", { name: "Workspaces in Personal" });
+      await waitFor(() => expect(backend.callsTo("api_key_list").length).toBeGreaterThan(0));
+      const before = backend.callsTo("api_key_list").length;
+      await user.click(within(personal).getByRole("button", { name: `${action} Side` }));
+      if (action === "Rename") {
+        const dialog = await screen.findByRole("dialog");
+        await user.type(within(dialog).getByLabelText("Name"), "2");
+        await user.click(within(dialog).getByRole("button", { name: "Rename" }));
+      } else {
+        await user.click(
+          within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Delete" }),
+        );
+      }
+      await waitFor(() => expect(backend.callsTo("api_key_list").length).toBeGreaterThan(before));
+    },
+  );
+
   it("renaming the Personal workspace in view loads the scope again", async () => {
     account();
     backend.on("scope_get", () => ({ account: "personal", workspace: "side" }));
