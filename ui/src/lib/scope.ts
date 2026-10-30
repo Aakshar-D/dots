@@ -2,7 +2,7 @@ import { useIsMutating, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback } from "react";
 
 import { commands } from "@/api/commands";
-import type { CurrentScope, DotOverview, OrgSummary } from "@/api/types";
+import type { CurrentScope, DotOverview, OrgSummary, WorkspaceView } from "@/api/types";
 import { orgRemoved } from "@/lib/dot-org";
 import { keys } from "@/lib/query";
 
@@ -36,6 +36,34 @@ export function useSwitchAccount(): (account: string) => Promise<void> {
   );
 }
 
+/// Switches the workspace within `account` (`scopeSet`), then reloads the scope.
+export function useSwitchWorkspace(): (account: string, workspace: string) => Promise<void> {
+  const queryClient = useQueryClient();
+  return useCallback(
+    async (account: string, workspace: string) => {
+      await commands.scopeSet(account, workspace);
+      await queryClient.invalidateQueries({ queryKey: keys.scope });
+    },
+    [queryClient],
+  );
+}
+
+/// The question for the workspaces of `account` (`"personal"` or an org id) this PC may see,
+/// for a screen that shows its failure too.
+export function useWorkspacesQuery(account: string, enabled = true) {
+  return useQuery({
+    queryKey: keys.workspaces(account),
+    queryFn: () => commands.workspaceList(account),
+    enabled,
+  });
+}
+
+/// The workspaces of `account` (`"personal"` or an org id) this PC may see; `undefined` while
+/// they load, and while `enabled` is false.
+export function useWorkspaces(account: string, enabled = true): WorkspaceView[] | undefined {
+  return useWorkspacesQuery(account, enabled).data;
+}
+
 /// The account `dot` is listed under: its org, or Personal for a dot with none and for one
 /// whose org is no longer joined (`orgs`, the joined orgs). `undefined` for a dot with an org
 /// while the joined orgs load, so nothing is guessed.
@@ -47,15 +75,18 @@ export function accountOf(
   return orgs === undefined ? undefined : dot.org_id;
 }
 
-/// Whether `dot` belongs to the account of `scope`: Personal matches the dots with no org, and
-/// those whose org is no longer joined once the joined orgs (`orgs`) are known.
+/// Whether `dot` is in the account and workspace of `scope` (a dot with no `workspace_id` is in
+/// the default one). Personal matches the dots with no org, and, in each of its workspaces,
+/// those whose org is no longer joined once the joined orgs (`orgs`) are known: their workspace
+/// was the left account's, not one of Personal's.
 export function inScope(
-  dot: { org_id: string | null },
+  dot: { org_id: string | null; workspace_id?: string },
   scope: CurrentScope,
   orgs?: OrgSummary[],
 ): boolean {
-  if (scope.account === PERSONAL) return dot.org_id === null || orgRemoved(dot, orgs);
-  return dot.org_id === scope.account;
+  if (scope.account === PERSONAL && dot.org_id !== null) return orgRemoved(dot, orgs);
+  if ((dot.workspace_id ?? "default") !== scope.workspace) return false;
+  return dot.org_id === (scope.account === PERSONAL ? null : scope.account);
 }
 
 /// What waits for the person in each account, keyed by `"personal"` or the org id; a dot whose

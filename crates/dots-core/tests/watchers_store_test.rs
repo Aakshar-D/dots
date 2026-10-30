@@ -50,8 +50,14 @@ fn email() -> WatcherConfig {
 #[tokio::test]
 async fn watchers_are_added_listed_changed_and_deleted_and_go_with_their_dot() {
     let (_dir, store) = temp_store().await;
-    let dot = store.create_dot(&spec("invoices"), None).await.unwrap();
-    let other = store.create_dot(&spec("other"), None).await.unwrap();
+    let dot = store
+        .create_dot(&spec("invoices"), None, "default")
+        .await
+        .unwrap();
+    let other = store
+        .create_dot(&spec("other"), None, "default")
+        .await
+        .unwrap();
     let a = store
         .add_watcher(&dot.id, "Invoices folder", &folder("C:/Users/me/Invoices"))
         .await
@@ -128,7 +134,10 @@ async fn watchers_are_added_listed_changed_and_deleted_and_go_with_their_dot() {
 #[tokio::test]
 async fn dots_pauses_a_watcher_once_and_the_person_resumes_it() {
     let (_dir, store) = temp_store().await;
-    let dot = store.create_dot(&spec("invoices"), None).await.unwrap();
+    let dot = store
+        .create_dot(&spec("invoices"), None, "default")
+        .await
+        .unwrap();
     let w = store
         .add_watcher(&dot.id, "Invoices folder", &folder("C:/in"))
         .await
@@ -197,7 +206,10 @@ async fn dots_pauses_a_watcher_once_and_the_person_resumes_it() {
 #[tokio::test]
 async fn a_watcher_takes_at_most_20_fires_in_a_sliding_hour() {
     let (_dir, store) = temp_store().await;
-    let dot = store.create_dot(&spec("busy"), None).await.unwrap();
+    let dot = store
+        .create_dot(&spec("busy"), None, "default")
+        .await
+        .unwrap();
     let w = store
         .add_watcher(&dot.id, "Busy", &folder("C:/in"))
         .await
@@ -424,7 +436,10 @@ fn a_watchers_config_is_tagged_by_its_kind_and_the_events_say_which_watcher() {
 #[tokio::test]
 async fn a_run_can_be_queued_under_an_id_made_beforehand() {
     let (_dir, store) = temp_store().await;
-    let dot = store.create_dot(&spec("ids"), None).await.unwrap();
+    let dot = store
+        .create_dot(&spec("ids"), None, "default")
+        .await
+        .unwrap();
     let mut new = NewRun::new(&dot.id, TriggerKind::Watcher);
     new.id = Some("01JWATCHRUN000000000000000".into());
     new.payload = Some(json!({"source": "folder"}));

@@ -74,7 +74,7 @@ async fn a_local_dot_proposes_from_the_person_s_chat_only() {
     ])
     .await;
     let dot =
-        t.rt.create_dot(local_spec(&t, &llm.endpoint(), "shopper"), None)
+        t.rt.create_dot(local_spec(&t, &llm.endpoint(), "shopper"), None, None)
             .await
             .unwrap();
     let chat =
@@ -114,7 +114,7 @@ async fn a_deny_rule_turns_the_tool_off_and_the_chat_is_told_to_send_the_person_
     s.policy
         .rules
         .insert(0, Rule::new("Instructions", Action::Deny));
-    let dot = t.rt.create_dot(s, None).await.unwrap();
+    let dot = t.rt.create_dot(s, None, None).await.unwrap();
     let chat =
         t.rt.chat(&dot.id, "do it twice from now on", None)
             .await
@@ -155,7 +155,7 @@ async fn a_claude_dot_proposes_through_dots_own_server_from_the_person_s_chat() 
     s.workdir = t.dir.path().to_string_lossy().to_string();
     s.workspace_mode = WorkspaceMode::Folder;
     s.engine = EngineKind::Claude;
-    let dot = t.rt.create_dot(s, None).await.unwrap();
+    let dot = t.rt.create_dot(s, None, None).await.unwrap();
     let chat =
         t.rt.chat(&dot.id, "do it twice from now on", None)
             .await

@@ -102,7 +102,10 @@ pub fn expenses() -> Vec<(&'static str, String)> {
 
 /// A dot `name` and a manual run of it in `store`, for `Apps::propose`.
 pub async fn proposing_run(store: &dots_core::store::Store, name: &str) -> dots_core::model::Run {
-    let dot = store.create_dot(&super::spec(name), None).await.unwrap();
+    let dot = store
+        .create_dot(&super::spec(name), None, "default")
+        .await
+        .unwrap();
     let new = dots_core::model::NewRun::new(&dot.id, dots_core::model::TriggerKind::Manual);
     store.create_run(&new).await.unwrap()
 }

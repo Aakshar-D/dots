@@ -9,12 +9,17 @@ use dots_core::workflow::{Budget, Definition, Step, StepKind, Trigger};
 use dots_core::Error;
 
 async fn dot(store: &Store, name: &str) -> String {
-    store.create_dot(&spec(name), None).await.unwrap().id
+    store
+        .create_dot(&spec(name), None, "default")
+        .await
+        .unwrap()
+        .id
 }
 
 fn team(name: &str, members: &[&str]) -> TeamSpec {
     TeamSpec {
         org_id: None,
+        workspace_id: "default".into(),
         name: name.into(),
         description: "Runs Dots.".into(),
         members: members
@@ -264,13 +269,14 @@ async fn project_and_workflow_names_are_unique_without_case() {
 fn acme_team(name: &str, members: &[&str]) -> TeamSpec {
     TeamSpec {
         org_id: Some(common::orgs::ACME.into()),
+        workspace_id: "default".into(),
         ..team(name, members)
     }
 }
 
 async fn acme_dot(store: &Store, name: &str) -> String {
     store
-        .create_dot(&spec(name), Some(common::orgs::ACME))
+        .create_dot(&spec(name), Some(common::orgs::ACME), "default")
         .await
         .unwrap()
         .id

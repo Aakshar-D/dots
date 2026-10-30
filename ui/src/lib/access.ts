@@ -1,10 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { commands } from "@/api/commands";
-import type { OrgSummary, Role } from "@/api/types";
-import { useOrgList } from "@/lib/dot-org";
+import type { DotAccess, OrgSummary, Role } from "@/api/types";
 import { keys } from "@/lib/query";
-import { PERSONAL, useCurrentScope } from "@/lib/scope";
+import { PERSONAL, useCurrentScope, useWorkspaces } from "@/lib/scope";
 
 /// This PC's standing in an account, as the core's `Access` tells it (members spec section 6):
 /// Personal is always Owner, an account with no member list acts as Member, and an account
@@ -17,7 +16,8 @@ export type Access = {
   text?: string;
 };
 
-/// What a person does that a role may not: the three the UI switches controls by.
+/// What a person does that a role may not: the three the UI switches controls by, as the
+/// core's `Refusals` name them.
 export type Action = "edit" | "run" | "answer";
 
 /// This PC's access to `orgId` (null is Personal), told from the joined `org` (undefined when
@@ -35,22 +35,6 @@ export function accessOf(org: OrgSummary | undefined, orgId: string | null): Acc
       return { kind: "waiting", text: org.not_member_text ?? undefined };
     case "active":
       return org.role === null ? { kind: "waiting" } : { kind: "role", role: org.role };
-  }
-}
-
-/// Whether `access` allows `p`: everyone but a Viewer may edit, run and answer; a PC that is
-/// not a member may do none.
-export function allows(access: Access, p: Action): boolean {
-  void p;
-  switch (access.kind) {
-    case "owner":
-    case "legacy":
-      return true;
-    case "role":
-      return access.role !== "viewer";
-    case "waiting":
-    case "removed":
-      return false;
   }
 }
 
@@ -101,29 +85,44 @@ export function notAllowedText(accountName: string, access: Access, p: Refused):
   }
 }
 
-/// Why the account `orgId` (null is Personal) refuses `p`, or undefined while it allows it or
-/// while the joined accounts load, so nothing is switched off before the answer.
-export function useRefusal(orgId: string | null, p: Action): string | undefined {
-  const orgs = useOrgList(orgId !== null);
-  if (orgId !== null && orgs === undefined) return undefined;
-  const org = orgs?.find((o) => o.id === orgId);
-  const access = accessOf(org, orgId);
-  return allows(access, p) ? undefined : notAllowedText(org?.name ?? orgId ?? "Personal", access, p);
+/// Why the core refuses `p` in the workspace `workspace` of `account` (`"personal"` or an org
+/// id), from that workspace's `refusals`; undefined while it allows it, while the scope or the
+/// workspaces load (so nothing is switched off before the answer), and for a workspace this PC
+/// doesn't see, which the core refuses when asked.
+export function useWorkspaceRefusal(
+  account: string | undefined,
+  workspace: string | undefined,
+  p: Action,
+): string | undefined {
+  const views = useWorkspaces(account ?? PERSONAL, account !== undefined);
+  return views?.find((w) => w.id === workspace)?.refusals[p] ?? undefined;
 }
 
-/// `useRefusal` for the account the run `runId` belongs to (its dot's org).
+/// The question `dot_access` for the dot `dotId`, for a screen that shows its failure too.
+export function useDotAccessQuery(dotId: string | undefined) {
+  return useQuery({
+    queryKey: keys.dotAccess(dotId ?? ""),
+    queryFn: () => commands.dotAccess(dotId ?? ""),
+    enabled: dotId !== undefined,
+  });
+}
+
+/// What the core says the person may not do with the dot `dotId` (`dot_access`); undefined
+/// while it loads, when it failed, and without a dot.
+export function useDotAccess(dotId: string | undefined): DotAccess | undefined {
+  return useDotAccessQuery(dotId).data;
+}
+
+/// Why the core refuses `p` on the dot of the run `runId` (its account and workspace), for the
+/// approval cards; undefined while it allows it or while that loads.
 export function useRunRefusal(runId: string, p: Action): string | undefined {
   const run = useQuery({ queryKey: keys.run(runId), queryFn: () => commands.getRun(runId) }).data;
-  const dot = useQuery({
-    queryKey: keys.dot(run?.dot_id ?? ""),
-    queryFn: () => commands.getDot(run?.dot_id ?? ""),
-    enabled: run !== undefined,
-  }).data;
-  return useRefusal(dot?.org_id ?? null, p);
+  return useDotAccess(run?.dot_id)?.[p] ?? undefined;
 }
 
-/// `useRefusal` for the account the person works in now (the scope), for the New dot button.
+/// Why the core refuses `p` in the workspace the person works in now (the scope), for the New
+/// dot button.
 export function useScopeRefusal(p: Action): string | undefined {
   const scope = useCurrentScope();
-  return useRefusal(scope === undefined || scope.account === PERSONAL ? null : scope.account, p);
+  return useWorkspaceRefusal(scope?.account, scope?.workspace, p);
 }

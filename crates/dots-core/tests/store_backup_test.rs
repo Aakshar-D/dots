@@ -6,7 +6,10 @@ use dots_core::store::{backup_database, Store};
 #[tokio::test]
 async fn a_backup_holds_what_was_written_also_after_the_store_closed() {
     let (dir, store) = temp_store().await;
-    let dot = store.create_dot(&spec("digest"), None).await.unwrap();
+    let dot = store
+        .create_dot(&spec("digest"), None, "default")
+        .await
+        .unwrap();
     store.close().await;
     let dest = dir.path().join("backups").join("copy.db");
     std::fs::create_dir_all(dest.parent().unwrap()).unwrap();

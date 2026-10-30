@@ -134,6 +134,8 @@ export const Dot = z.strictObject({
   // The org the dot belongs to, fixed when it is made; null is Personal. The org may have been
   // removed since, and the dot keeps its id.
   org_id: nullable(z.string()),
+  // The workspace of its account the dot is in; "default" until it is moved.
+  workspace_id: z.string(),
   ...dotSpecShape,
 });
 
@@ -627,7 +629,18 @@ export const Inbox = z.strictObject({
   // Apps dots sent for review that wait for the person, newest first. Lazy: the proposal's
   // schema is declared with the apps, below.
   app_reviews: z.array(z.lazy(() => PendingAppReview)),
+  // Teams with a member dot outside the team's account or workspace.
+  team_scope: z.array(z.lazy(() => TeamScopeIssue)),
 });
+// A member dot that is not in its team's account or workspace, as the Inbox lists it.
+export const TeamScopeIssue = z.strictObject({
+  team_id: z.string(),
+  team_name: z.string(),
+  dot_id: z.string(),
+  dot_name: z.string(),
+  reason: z.string(),
+});
+export type TeamScopeIssue = z.infer<typeof TeamScopeIssue>;
 
 // The Library (MCP/skills spec section 2 and 9). `${VAR}` in a server's config stays a
 // reference: the core reads the environment when the server starts.
@@ -1165,7 +1178,38 @@ export const RosterEdit = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("set_role"), member_id: z.string(), role: Role }),
   z.strictObject({ kind: z.literal("remove"), member_id: z.string() }),
   z.strictObject({ kind: z.literal("remove_key"), member_id: z.string(), key: z.string() }),
+  z.strictObject({ kind: z.literal("add_workspace"), name: z.string() }),
+  z.strictObject({ kind: z.literal("rename_workspace"), id: z.string(), name: z.string() }),
+  z.strictObject({ kind: z.literal("delete_workspace"), id: z.string() }),
+  z.strictObject({
+    kind: z.literal("set_workspaces"),
+    member_id: z.string(),
+    workspaces: z.record(z.string(), WorkspaceRole),
+  }),
 ]);
+// What this PC may not do in a workspace, or with a dot, each in the core's own refusal; null is
+// allowed. The UI switches its controls off by these and never decides a role itself.
+export const Refusals = z.strictObject({
+  edit: nullable(z.string()),
+  run: nullable(z.string()),
+  answer: nullable(z.string()),
+});
+// What `dot_access` answers for one dot: the refusals of its account and workspace.
+export const DotAccess = Refusals;
+// A workspace as this PC sees it: its account (`personal` or an org's id), its own use rules
+// narrowing the account's, and what this PC may do in it.
+export const WorkspaceView = z.strictObject({
+  scope: z.string(),
+  id: z.string(),
+  name: z.string(),
+  use_rules: nullable(UseRules),
+  // This PC's role in it; null in Personal and in an account with no member list.
+  my_role: nullable(WorkspaceRole),
+  // Whether this PC may rename, add or delete workspaces here.
+  can_manage: z.boolean(),
+  // What this PC may not do with the workspace's dots.
+  refusals: Refusals,
+});
 // How a member-list edit ended: published (the org's new row), or kept as a draft.
 export const EditOutcome = z.discriminatedUnion("outcome", [
   z.strictObject({ outcome: z.literal("published"), summary: OrgSummary }),
@@ -1525,6 +1569,10 @@ export type DraftView = z.infer<typeof DraftView>;
 export type CreatedInvite = z.infer<typeof CreatedInvite>;
 export type RequestPreview = z.infer<typeof RequestPreview>;
 export type RosterEdit = z.infer<typeof RosterEdit>;
+export type WorkspaceView = z.infer<typeof WorkspaceView>;
+export type Refusals = z.infer<typeof Refusals>;
+export type DotAccess = z.infer<typeof DotAccess>;
+export type WorkspaceRole = z.infer<typeof WorkspaceRole>;
 export type EditOutcome = z.infer<typeof EditOutcome>;
 export type OrgEntry = z.infer<typeof OrgEntry>;
 export type PersonalMode = z.infer<typeof PersonalMode>;

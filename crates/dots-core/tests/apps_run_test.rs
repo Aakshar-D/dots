@@ -129,7 +129,7 @@ async fn claude_dot(e: &Env, name: &str, edit: impl FnOnce(&mut DotSpec)) -> Dot
     s.approval_wait_secs = 0;
     s.uses.apps = vec!["expenses".into()];
     edit(&mut s);
-    e.store.create_dot(&s, None).await.unwrap()
+    e.store.create_dot(&s, None, "default").await.unwrap()
 }
 
 /// A run of `dot` with its apps open, that the test calls the `dots` server for, and its secret.
@@ -494,7 +494,7 @@ async fn a_local_dot_calls_its_app_tools_as_built_in_tools_named_app() {
     ])
     .await;
     let dot =
-        t.rt.create_dot(local_spec(&t, &llm.endpoint(), "builder"), None)
+        t.rt.create_dot(local_spec(&t, &llm.endpoint(), "builder"), None, None)
             .await
             .unwrap();
     let run = t.rt.run_now(&dot.id).await.unwrap();
@@ -570,7 +570,7 @@ async fn an_app_rule_that_asks_parks_the_call_and_the_decision_is_carried_out() 
     s.policy
         .rules
         .push(Rule::new("App(expenses.write)", Action::Ask));
-    let dot = t.rt.create_dot(s, None).await.unwrap();
+    let dot = t.rt.create_dot(s, None, None).await.unwrap();
 
     // Approved: Dots performs the parked call in the resume run, as the dot.
     let parent = t.rt.run_now(&dot.id).await.unwrap();

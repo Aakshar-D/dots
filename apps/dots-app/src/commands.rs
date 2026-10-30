@@ -13,6 +13,7 @@
 
 use dots_core::accounts::edit::RosterEdit;
 use dots_core::accounts::{CurrentScope, Identity, Role};
+use dots_core::accounts::{DotAccess, WorkspaceView};
 use dots_core::apps::bundled::BundledOffer;
 use dots_core::apps::kept::KeptData;
 use dots_core::apps::propose::{AppProposal, Decision};
@@ -431,13 +432,64 @@ pub async fn dot_variables(state: State<'_, AppState>, dot_id: String) -> Res<Ve
 }
 
 /// `org_id`, the UI's `orgId`: the org the new dot belongs to, `None` for Personal.
+/// `workspace_id`, the UI's `workspaceId`: the workspace of that account it starts in, `None`
+/// for the default one.
 #[tauri::command]
 pub async fn create_dot(
     state: State<'_, AppState>,
     spec: DotSpec,
     org_id: Option<String>,
+    workspace_id: Option<String>,
 ) -> Res<Dot> {
-    Ok(state.rt()?.create_dot(spec, org_id).await?)
+    Ok(state.rt()?.create_dot(spec, org_id, workspace_id).await?)
+}
+
+/// Moves a dot to another workspace of its account.
+#[tauri::command]
+pub async fn dot_move(
+    state: State<'_, AppState>,
+    dot_id: String,
+    workspace_id: String,
+) -> Res<Dot> {
+    Ok(state.rt()?.move_dot(&dot_id, &workspace_id).await?)
+}
+
+/// What this PC may not do with the dot (change it, run it, answer its approvals), each in
+/// the core's words; null is allowed. The editor's and approval cards' buttons follow it.
+#[tauri::command]
+pub async fn dot_access(state: State<'_, AppState>, dot_id: String) -> Res<DotAccess> {
+    Ok(state.rt()?.dot_access(&dot_id).await?)
+}
+
+/// The workspaces of `scope` (`personal`, or an org's id) this PC may see.
+#[tauri::command]
+pub async fn workspace_list(state: State<'_, AppState>, scope: String) -> Res<Vec<WorkspaceView>> {
+    Ok(state.rt()?.workspaces(&scope).await?)
+}
+
+/// Adds a workspace to Personal.
+#[tauri::command]
+pub async fn personal_workspace_add(
+    state: State<'_, AppState>,
+    name: String,
+) -> Res<WorkspaceView> {
+    Ok(state.rt()?.personal_workspace_add(&name).await?)
+}
+
+/// Renames a Personal workspace.
+#[tauri::command]
+pub async fn personal_workspace_rename(
+    state: State<'_, AppState>,
+    id: String,
+    name: String,
+) -> Res<()> {
+    Ok(state.rt()?.personal_workspace_rename(&id, &name).await?)
+}
+
+/// Deletes a Personal workspace.
+#[tauri::command]
+pub async fn personal_workspace_delete(state: State<'_, AppState>, id: String) -> Res<()> {
+    Ok(state.rt()?.personal_workspace_delete(&id).await?)
 }
 
 #[tauri::command]

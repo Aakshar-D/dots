@@ -12,7 +12,8 @@ import { Textarea } from "@/components/ui/textarea";
 import type { SpecErrors } from "@/lib/dot-rules";
 import { notifyError } from "@/lib/notify";
 import { BrowserSection } from "@/screens/dot-editor/BrowserSection";
-import { OrgLine, OrgPicker } from "@/screens/dot-editor/DotOrg";
+import { PERSONAL } from "@/lib/scope";
+import { OrgLine, OrgPicker, WorkspaceMove, WorkspacePicker } from "@/screens/dot-editor/DotOrg";
 import { PolicyEditor } from "@/screens/dot-editor/PolicyEditor";
 import { ScheduleEditor, type SchedulePreview } from "@/screens/dot-editor/ScheduleEditor";
 import { ToolsAndSkills } from "@/screens/dot-editor/ToolsAndSkills";
@@ -20,8 +21,9 @@ import { Variables } from "@/screens/dot-editor/Variables";
 import { WebhookPanel } from "@/screens/dot-editor/WebhookPanel";
 
 /// What the editor holds. The Library items the dot uses (`spec.uses`) are kept as they are.
-/// `org` is the org a new dot is made in (null for Personal); a stored dot's is its own.
-export type Draft = { spec: DotSpec; org: string | null };
+/// `org` is the org a new dot is made in (null for Personal), and `workspace` its workspace
+/// there (null for the default one); a stored dot's are its own.
+export type Draft = { spec: DotSpec; org: string | null; workspace: string | null };
 
 function Section(props: { title: string; children: ReactNode }) {
   return (
@@ -86,9 +88,22 @@ export function DotForm(props: {
           <Input id="dot-name" value={spec.name} onChange={(e) => set("name", e.target.value)} />
         </Field>
         {props.existing ? (
-          props.existing.org_id !== null && <OrgLine orgId={props.existing.org_id} />
+          <>
+            {props.existing.org_id !== null && <OrgLine orgId={props.existing.org_id} />}
+            <WorkspaceMove dot={props.existing} />
+          </>
         ) : (
-          <OrgPicker value={draft.org} onChange={(org) => props.onChange({ ...draft, org })} />
+          <>
+            <OrgPicker
+              value={draft.org}
+              onChange={(org) => props.onChange({ ...draft, org, workspace: null })}
+            />
+            <WorkspacePicker
+              account={draft.org ?? PERSONAL}
+              value={draft.workspace}
+              onChange={(workspace) => props.onChange({ ...draft, workspace })}
+            />
+          </>
         )}
         <Field
           label="Instructions"

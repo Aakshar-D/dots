@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { cn } from "cn";
 import { Check } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 
 import { commands } from "@/api/commands";
@@ -14,6 +14,8 @@ import {
   PERSONAL,
   useCurrentScope,
   useSwitchAccount,
+  useSwitchWorkspace,
+  useWorkspaces,
   waitingByAccount,
 } from "@/lib/scope";
 import { ORG_TONE } from "@/screens/Accounts";
@@ -44,6 +46,7 @@ export function AccountSwitcher() {
   const { pathname } = useLocation();
   const switchAccount = useSwitchAccount();
   const pick = useMutation({ mutationKey: accountPickKey, mutationFn: switchAccount });
+  const switchWorkspace = useSwitchWorkspace();
   const scope = useCurrentScope();
   const identity = useQuery({ queryKey: keys.identity, queryFn: commands.identityGet }).data;
   // The joined accounts are read when the menu opens, or to name an org already chosen; what
@@ -86,6 +89,10 @@ export function AccountSwitcher() {
     if (open) root.current?.querySelector<HTMLElement>('[role^="menuitem"]')?.focus();
   }, [open]);
 
+  // The current account's workspaces; the list shows only when it has more than Default, and
+  // an empty answer leaves the account alone.
+  const workspaces = useWorkspaces(scope?.account ?? PERSONAL, open && scope !== undefined) ?? [];
+
   const accounts: Account[] = [
     { id: PERSONAL, name: "Personal", org: null },
     ...orgs.map((org) => ({ id: org.id, name: org.name, org })),
@@ -102,6 +109,15 @@ export function AccountSwitcher() {
     const changed = id !== currentId;
     pick.mutateAsync(id).then(() => {
       if (onHome && changed) navigate("/home", { replace: true });
+    }, notifyError);
+  }
+  function chooseWorkspace(id: string) {
+    setOpen(false);
+    trigger.current?.focus();
+    if (id === scope?.workspace) return;
+    const onHome = pathname === "/home" || pathname.startsWith("/home/");
+    switchWorkspace(currentId, id).then(() => {
+      if (onHome) navigate("/home", { replace: true });
     }, notifyError);
   }
   function manage() {
@@ -149,34 +165,55 @@ export function AccountSwitcher() {
             const role = accessRole(accessOf(a.org ?? undefined, a.org ? a.id : null));
             const status = a.org && a.org.status !== "connected" ? a.org : null;
             return (
-              <button
-                key={a.id}
-                type="button"
-                role="menuitemradio"
-                aria-checked={a.id === currentId}
-                className={ITEM}
-                onClick={() => choose(a.id)}
-              >
-                <Check
-                  className={cn("size-4 shrink-0", a.id !== currentId && "invisible")}
-                  aria-hidden
-                />
-                <span className="min-w-0 flex-1 truncate">{a.name}</span>
-                {role && <span className="text-xs text-muted-foreground">{roleLabel(role)}</span>}
-                {status && (
-                  <span className={cn("text-xs first-letter:uppercase", ORG_TONE[status.status])}>
-                    {status.status_text}
-                  </span>
+              <Fragment key={a.id}>
+                <button
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={a.id === currentId}
+                  className={ITEM}
+                  onClick={() => choose(a.id)}
+                >
+                  <Check
+                    className={cn("size-4 shrink-0", a.id !== currentId && "invisible")}
+                    aria-hidden
+                  />
+                  <span className="min-w-0 flex-1 truncate">{a.name}</span>
+                  {role && <span className="text-xs text-muted-foreground">{roleLabel(role)}</span>}
+                  {status && (
+                    <span className={cn("text-xs first-letter:uppercase", ORG_TONE[status.status])}>
+                      {status.status_text}
+                    </span>
+                  )}
+                  {count > 0 && (
+                    <span
+                      data-tone="needs"
+                      className="rounded-full bg-needs px-1.5 text-[10px] text-needs-foreground"
+                    >
+                      {count}
+                    </span>
+                  )}
+                </button>
+                {a.id === currentId && workspaces.length > 1 && (
+                  <div role="group" aria-label="Workspaces" className="flex flex-col gap-0.5 pl-4">
+                    {workspaces.map((w) => (
+                      <button
+                        key={w.id}
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={w.id === scope?.workspace}
+                        className={ITEM}
+                        onClick={() => chooseWorkspace(w.id)}
+                      >
+                        <Check
+                          className={cn("size-4 shrink-0", w.id !== scope?.workspace && "invisible")}
+                          aria-hidden
+                        />
+                        <span className="min-w-0 flex-1 truncate">{w.name}</span>
+                      </button>
+                    ))}
+                  </div>
                 )}
-                {count > 0 && (
-                  <span
-                    data-tone="needs"
-                    className="rounded-full bg-needs px-1.5 text-[10px] text-needs-foreground"
-                  >
-                    {count}
-                  </span>
-                )}
-              </button>
+              </Fragment>
             );
           })}
           <div role="separator" className="my-1 h-px bg-border" />

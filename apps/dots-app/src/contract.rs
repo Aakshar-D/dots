@@ -5,7 +5,10 @@
 
 use std::collections::BTreeMap;
 
-use dots_core::accounts::{CurrentScope, Identity, Membership, Role, WorkspaceRole};
+use dots_core::accounts::edit::RosterEdit;
+use dots_core::accounts::{
+    CurrentScope, DotAccess, Identity, Membership, Refusals, Role, WorkspaceRole, WorkspaceView,
+};
 use dots_core::browser::BrowserStatus;
 use dots_core::context::Document;
 use dots_core::engine::EngineEvent;
@@ -41,6 +44,13 @@ use crate::state::StartupError;
 use crate::update::UpdateNote;
 
 const TS: &str = "2026-10-09T12:00:00.000Z";
+
+/// How the core refuses a Viewer in the Platform workspace of Acme Engineering.
+fn viewer_in_platform(action: &str) -> String {
+    format!(
+        "Acme Engineering: a Viewer in the Platform workspace can't {action}. Ask an Admin or Owner."
+    )
+}
 
 fn to(v: impl serde::Serialize) -> Value {
     serde_json::to_value(v).expect("sample serializes")
@@ -81,6 +91,7 @@ fn dot() -> Dot {
         updated_at: TS.into(),
         seen_at: Some(TS.into()),
         org_id: None,
+        workspace_id: "default".into(),
         spec: spec(),
     }
 }
@@ -1132,6 +1143,13 @@ pub fn samples() -> Value {
             }],
             // Filled in by `app_samples`, which has a proposal.
             app_reviews: vec![],
+            team_scope: vec![TeamScopeIssue {
+                team_id: "01J0TEAM".into(),
+                team_name: "crew".into(),
+                dot_id: "01J0DOT".into(),
+                dot_name: "nightly-tests".into(),
+                reason: "nightly-tests is in another workspace than the crew team.".into(),
+            }],
         }),
         // What `library_add` takes and the Library commands answer: a config of every kind and
         // transport, and entries of every kind (a plugin's own server among them).
@@ -1472,6 +1490,80 @@ pub fn samples() -> Value {
     samples["Enums"]["PersonalMode"] = to(PersonalMode::ALL);
     samples["Enums"]["InviteState"] = to(InviteState::ALL);
     samples["Enums"]["WorkspaceRole"] = to(WorkspaceRole::ALL);
+    // What `workspace_list` and `personal_workspace_add` answer: a workspace with use rules of its
+    // own and one without.
+    samples["WorkspaceView"] = to([
+        WorkspaceView {
+            scope: "acme-eng".into(),
+            id: "platform".into(),
+            name: "Platform".into(),
+            use_rules: Some(UseRules {
+                allow: vec!["GITHUB_*".into()],
+                deny: vec!["GITHUB_ADMIN".into()],
+            }),
+            my_role: Some(WorkspaceRole::Viewer),
+            can_manage: false,
+            refusals: Refusals {
+                edit: Some(viewer_in_platform("create or change dots")),
+                run: Some(viewer_in_platform("run dots")),
+                answer: Some(viewer_in_platform("answer approvals")),
+            },
+        },
+        WorkspaceView {
+            scope: "personal".into(),
+            id: "default".into(),
+            name: "Default".into(),
+            use_rules: None,
+            my_role: None,
+            can_manage: true,
+            refusals: Refusals::default(),
+        },
+    ]);
+    // What `dot_access` answers: a dot in a workspace this PC isn't in, and one it may do all
+    // with.
+    let outside =
+        "Acme Engineering: you aren't in the Platform workspace. Ask an Admin or Owner to add you.";
+    samples["DotAccess"] = to([
+        DotAccess {
+            edit: Some(outside.into()),
+            run: Some(outside.into()),
+            answer: Some(outside.into()),
+        },
+        DotAccess::default(),
+    ]);
+    // What `member_edit` takes: one of every kind.
+    samples["RosterEdit"] = to([
+        RosterEdit::Approve {
+            request: "dotsreq_c2FtcGxl".into(),
+            role: Some(Role::Member),
+            confirm_no_invite: false,
+        },
+        RosterEdit::SetRole {
+            member_id: "01J0MEM".into(),
+            role: Role::Admin,
+        },
+        RosterEdit::Remove {
+            member_id: "01J0MEM".into(),
+        },
+        RosterEdit::RemoveKey {
+            member_id: "01J0MEM".into(),
+            key: "q83vEjRWeJq83vEjRWeJq83vEjRWeJq83vEjRWeJq8s=".into(),
+        },
+        RosterEdit::AddWorkspace {
+            name: "Platform".into(),
+        },
+        RosterEdit::RenameWorkspace {
+            id: "platform".into(),
+            name: "Platform team".into(),
+        },
+        RosterEdit::DeleteWorkspace {
+            id: "platform".into(),
+        },
+        RosterEdit::SetWorkspaces {
+            member_id: "01J0MEM".into(),
+            workspaces: BTreeMap::from([("platform".to_string(), WorkspaceRole::Admin)]),
+        },
+    ]);
     samples
 }
 

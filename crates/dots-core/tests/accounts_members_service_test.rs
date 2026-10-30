@@ -973,3 +973,48 @@ async fn a_request_naming_an_owner_is_a_problem() {
     );
     assert_eq!(writes(&h), 0);
 }
+
+#[tokio::test]
+async fn member_cannot_add_workspace() {
+    let h = OrgsHarness::new().await;
+    setup(&h, "member", true).await;
+    let e = h
+        .orgs
+        .edit_members(
+            ACME,
+            1,
+            RosterEdit::AddWorkspace {
+                name: "Payments".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(&e, Error::NotAllowed(_)), "{e:?}");
+    assert_eq!(writes(&h), 0);
+}
+
+#[tokio::test]
+async fn admin_adds_workspace_and_it_mirrors() {
+    let h = OrgsHarness::new().await;
+    setup(&h, "admin", true).await;
+    let summary = published(
+        h.orgs
+            .edit_members(
+                ACME,
+                1,
+                RosterEdit::AddWorkspace {
+                    name: "Payments".into(),
+                },
+            )
+            .await
+            .unwrap(),
+    );
+    assert_eq!(summary.roster_seq, Some(2));
+    assert_eq!(writes(&h), 1);
+    let rows = h.store.list_workspaces(ACME).await.unwrap();
+    assert!(
+        rows.iter()
+            .any(|w| w.id == "payments" && w.name == "Payments"),
+        "{rows:?}"
+    );
+}

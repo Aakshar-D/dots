@@ -19,18 +19,18 @@ const failedRun = {
   error: "timeout",
 };
 
-/// An Inbox as a test writes it: without paused watchers, held runs, proposed instructions or
-/// apps to review unless it says so.
-type InboxSpec = Omit<Inbox, "watchers" | "held" | "instructions" | "app_reviews"> &
-  Partial<Pick<Inbox, "watchers" | "held" | "instructions" | "app_reviews">>;
+/// An Inbox as a test writes it: without paused watchers, held runs, proposed instructions,
+/// apps to review or team scope problems unless it says so.
+type InboxSpec = Omit<Inbox, "watchers" | "held" | "instructions" | "app_reviews" | "team_scope"> &
+  Partial<Pick<Inbox, "watchers" | "held" | "instructions" | "app_reviews" | "team_scope">>;
 
 /// An inbox the test can empty, the way a decision or a review does.
 function inbox(initial: InboxSpec) {
-  let current: Inbox = { watchers: [], held: [], instructions: [], app_reviews: [], ...initial };
+  let current: Inbox = { watchers: [], held: [], instructions: [], app_reviews: [], team_scope: [], ...initial };
   backend.on("inbox", () => current);
   return {
     set: (next: InboxSpec) => {
-      current = { watchers: [], held: [], instructions: [], app_reviews: [], ...next };
+      current = { watchers: [], held: [], instructions: [], app_reviews: [], team_scope: [], ...next };
     },
   };
 }
@@ -139,6 +139,7 @@ describe("the Inbox", () => {
         watchers: [],
         held: [], instructions: [],
         app_reviews: [],
+        team_scope: [],
       };
     });
 
@@ -533,6 +534,7 @@ describe("the approvals of one run", () => {
     watchers: [],
     held: [], instructions: [],
     app_reviews: [],
+    team_scope: [],
   };
   const answered = [approval, second].map((a) => ({ ...sample.approval, id: a.id }));
 
@@ -707,6 +709,7 @@ describe("a schedule that needs attention", () => {
     watchers: [],
     held: [], instructions: [],
     app_reviews: [],
+    team_scope: [],
   };
   const only = (attention: Inbox["attention"]): Inbox => ({ ...empty, attention });
   const item = () => screen.findByRole("listitem", { name: `${flagged.dot_name} needs attention` });
@@ -921,3 +924,32 @@ describe("the Inbox, tools changed", () => {
     );
   });
 });
+
+describe("the Inbox, team scope", () => {
+  it("team scope issue appears in Needs attention", async () => {
+    inbox({
+      approvals: [],
+      review_runs: [],
+      attention: [],
+      tools_changed: [],
+      team_scope: [
+        {
+          team_id: "T1",
+          team_name: "Release crew",
+          dot_id: "D9",
+          dot_name: "nightly",
+          reason: "it is in another workspace than the team",
+        },
+      ],
+    });
+    renderApp("/inbox");
+    const section = await screen.findByRole("region", { name: "Needs attention" });
+    expect(within(section).getByText(/Release crew/)).toBeVisible();
+    expect(within(section).getByRole("link", { name: "nightly" })).toHaveAttribute(
+      "href",
+      "/dots/D9",
+    );
+    expect(within(section).getByText(/it is in another workspace than the team/)).toBeVisible();
+  });
+});
+

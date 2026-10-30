@@ -335,6 +335,7 @@ mod tests {
                 updated_at: "t".into(),
                 seen_at: None,
                 org_id: None,
+                workspace_id: "default".into(),
                 spec: DotSpec::new(name, "Do it.", "C:/work"),
             },
             active_run: None,

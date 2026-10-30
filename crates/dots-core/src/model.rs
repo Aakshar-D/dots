@@ -198,6 +198,10 @@ pub struct Dot {
     /// §5.2). The org may have been removed since, and the dot keeps its id (§6.4).
     #[serde(default)]
     pub org_id: Option<String>,
+    /// The workspace of its account the dot is in (accounts design §6.3); `default` before it is
+    /// moved.
+    #[serde(default = "default_workspace")]
+    pub workspace_id: String,
     #[serde(flatten)]
     pub spec: DotSpec,
 }
@@ -553,6 +557,21 @@ pub struct Inbox {
     /// Apps dots sent for review that wait for the person, newest first (app library spec
     /// section 10: a waiting card counts like an approval).
     pub app_reviews: Vec<PendingAppReview>,
+    /// Teams with a member dot outside the team's account or workspace, from data made before
+    /// a team's members had to share them (accounts design section 6.3).
+    #[serde(default)]
+    pub team_scope: Vec<TeamScopeIssue>,
+}
+
+/// A member dot that is not in its team's account or workspace, as the Inbox lists it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamScopeIssue {
+    pub team_id: String,
+    pub team_name: String,
+    pub dot_id: String,
+    pub dot_name: String,
+    /// In plain words, e.g. `beta is in another workspace than the crew team.`
+    pub reason: String,
 }
 
 /// An app proposal that waits for the person, as the Inbox lists it.
@@ -820,6 +839,14 @@ pub struct TeamSpec {
     /// The account the team belongs to; `None` is Personal. Fixed once the team is created.
     #[serde(default)]
     pub org_id: Option<String>,
+    /// The workspace of that account the team is placed in; `default` when not given.
+    #[serde(default = "default_workspace")]
+    pub workspace_id: String,
+}
+
+/// The workspace everything is in until it is moved (accounts design §6.3).
+pub fn default_workspace() -> String {
+    crate::accounts::DEFAULT_WORKSPACE.to_string()
 }
 
 impl TeamSpec {
@@ -903,6 +930,8 @@ pub struct Team {
     pub projects: Vec<Project>,
     /// The account the team belongs to; `None` is Personal.
     pub org_id: Option<String>,
+    /// The workspace of that account the team is in.
+    pub workspace_id: String,
     pub created_at: String,
     pub updated_at: String,
 }

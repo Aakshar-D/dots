@@ -10,6 +10,7 @@ import type {
   PendingAppReview,
   PendingInstructions,
   ReviewRun,
+  TeamScopeIssue,
   ToolsChanged,
 } from "@/api/types";
 import { ApprovalCard } from "@/components/ApprovalCard";
@@ -347,6 +348,23 @@ function RunApprovalsGroup({ group }: { group: RunApprovals }) {
   );
 }
 
+/// A team's member dot that is outside the team's account or workspace, and why.
+function TeamScopeRow({ item }: { item: TeamScopeIssue }) {
+  return (
+    <li
+      aria-label={`${item.dot_name} in team ${item.team_name} needs attention`}
+      className="flex min-w-0 flex-col rounded-lg border p-3"
+    >
+      <Link to={`/dots/${item.dot_id}`} className="font-medium hover:underline">
+        {item.dot_name}
+      </Link>
+      <span className="text-xs text-muted-foreground">
+        Team {item.team_name} · {item.reason}
+      </span>
+    </li>
+  );
+}
+
 /// Instructions a dot proposed, with links to its dot and its conversation.
 function InstructionsRow({ item }: { item: PendingInstructions }) {
   const { proposal, dot_name: dotName } = item;
@@ -393,6 +411,7 @@ export function InboxScreen() {
     held,
     instructions,
     app_reviews: reviews,
+    team_scope: teamScope,
   } = inbox.data;
   const waiting = (messages.data ?? []).filter(waits);
   if (
@@ -401,6 +420,7 @@ export function InboxScreen() {
     approvals.length === 0 &&
     runs.length === 0 &&
     attention.length === 0 &&
+    teamScope.length === 0 &&
     tools.length === 0 &&
     watchers.length === 0 &&
     held.length === 0 &&
@@ -466,7 +486,7 @@ export function InboxScreen() {
           </ul>
         </section>
       )}
-      {attention.length > 0 && (
+      {(attention.length > 0 || teamScope.length > 0) && (
         <section aria-labelledby="inbox-attention" className="flex flex-col gap-2">
           <h2 id="inbox-attention" className="font-semibold">
             Needs attention
@@ -474,6 +494,9 @@ export function InboxScreen() {
           <ul className="flex flex-col gap-2">
             {attention.map((item) => (
               <AttentionRow key={item.dot_id} item={item} />
+            ))}
+            {teamScope.map((item) => (
+              <TeamScopeRow key={`${item.team_id}/${item.dot_id}`} item={item} />
             ))}
           </ul>
         </section>

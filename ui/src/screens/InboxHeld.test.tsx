@@ -24,6 +24,7 @@ const only = (held: HeldRun[]): Inbox => ({
   held,
   instructions: [],
   app_reviews: [],
+  team_scope: [],
 });
 
 describe("runs held for Claude usage in the Inbox", () => {

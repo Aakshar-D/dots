@@ -123,7 +123,7 @@ async fn claude_dot(e: &Env, edit: impl FnOnce(&mut DotSpec)) -> Dot {
     s.policy = Policy::preset(Preset::Sandboxed);
     s.approval_wait_secs = 0;
     edit(&mut s);
-    e.store.create_dot(&s, None).await.unwrap()
+    e.store.create_dot(&s, None, "default").await.unwrap()
 }
 
 async fn start(e: &Env, dot: &Dot) -> Run {
@@ -524,6 +524,7 @@ async fn the_gateway_answers_a_running_runs_open_servers_and_checks_each_call() 
         cancel: &cancel,
         vault: &Vault::in_memory(e.store.clone()),
         scope: &DotScope::Personal,
+        workspace_id: "default",
         grants: &Grants::default(),
         dot_name: "gateway",
     })
@@ -731,6 +732,7 @@ async fn under_trusted_a_writing_gateway_tool_asks_and_so_does_a_tool_outside_th
         cancel: &cancel,
         vault: &Vault::in_memory(e.store.clone()),
         scope: &DotScope::Personal,
+        workspace_id: "default",
         grants: &Grants::default(),
         dot_name: "gateway",
     })
@@ -818,6 +820,7 @@ async fn a_plugin_server_under_claude_codes_own_name_is_checked_by_approve() {
         cancel: &cancel,
         vault: &Vault::in_memory(e.store.clone()),
         scope: &DotScope::Personal,
+        workspace_id: "default",
         grants: &Grants::default(),
         dot_name: "gateway",
     })
@@ -922,6 +925,7 @@ async fn dots_own_server_offers_context_only_with_collections_and_checks_each_ca
             cancel: &cancel,
             vault: &Vault::in_memory(e.store.clone()),
             scope: &DotScope::Personal,
+            workspace_id: "default",
             grants: &Grants::default(),
             dot_name: "gateway",
         })
@@ -1069,6 +1073,7 @@ async fn dots_own_server_caps_the_text_of_an_error_like_the_local_tool() {
         cancel: &cancel,
         vault: &Vault::in_memory(e.store.clone()),
         scope: &DotScope::Personal,
+        workspace_id: "default",
         grants: &Grants::default(),
         dot_name: "gateway",
     })
@@ -1119,6 +1124,7 @@ async fn a_context_call_that_asks_waits_for_the_decision_and_parks_when_none_com
         cancel: &cancel,
         vault: &Vault::in_memory(e.store.clone()),
         scope: &DotScope::Personal,
+        workspace_id: "default",
         grants: &Grants::default(),
         dot_name: "gateway",
     })

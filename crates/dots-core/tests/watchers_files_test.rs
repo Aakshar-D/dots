@@ -43,7 +43,10 @@ fn attachment_names_are_made_safe_for_windows() {
 async fn the_copy_fills_the_payload_paths_and_is_removed_whole() {
     let (dir, store) = temp_store().await;
     let files = WatcherFiles::new(dir.path().join("watchers"));
-    let dot = store.create_dot(&spec("mail"), None).await.unwrap();
+    let dot = store
+        .create_dot(&spec("mail"), None, "default")
+        .await
+        .unwrap();
     let mut new = NewRun::new(&dot.id, TriggerKind::Watcher);
     new.payload = Some(
         json!({"source": "email", "watcher_id": "W1", "attachments": [
@@ -80,7 +83,10 @@ async fn the_copy_fills_the_payload_paths_and_is_removed_whole() {
 async fn the_staged_copy_stays_while_the_thread_has_a_run_to_come() {
     let (dir, store) = temp_store().await;
     let files = WatcherFiles::new(dir.path().join("watchers"));
-    let dot = store.create_dot(&spec("mail"), None).await.unwrap();
+    let dot = store
+        .create_dot(&spec("mail"), None, "default")
+        .await
+        .unwrap();
     let mut new = NewRun::new(&dot.id, TriggerKind::Watcher);
     new.payload = Some(json!({"source": "email", "watcher_id": "W1", "attachments": []}));
     let root = store.create_run(&new).await.unwrap();
@@ -110,7 +116,10 @@ async fn the_staged_copy_stays_while_the_thread_has_a_run_to_come() {
 async fn the_sweep_removes_what_no_watcher_or_open_thread_needs() {
     let (dir, store) = temp_store().await;
     let files = WatcherFiles::new(dir.path().join("watchers"));
-    let dot = store.create_dot(&spec("mail"), None).await.unwrap();
+    let dot = store
+        .create_dot(&spec("mail"), None, "default")
+        .await
+        .unwrap();
     let w = store
         .add_watcher(
             &dot.id,

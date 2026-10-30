@@ -344,10 +344,11 @@ impl Orgs {
         base_seq: u64,
         edit: RosterEdit,
     ) -> Result<EditOutcome> {
-        self.check_signer(org_id).await?;
+        let needs = edit_permission(&edit);
+        self.check_signer(org_id, needs).await?;
         self.refresh(org_id).await?;
         // The fetch may have brought another policy or list: check again against it.
-        let state = self.check_signer(org_id).await?;
+        let state = self.check_signer(org_id, needs).await?;
         let (roster, _) = accepted(&state)?;
         let account = &state.row.name;
         // The fetch drops a draft the account has reached, so one still here is waiting.
@@ -407,6 +408,21 @@ impl Orgs {
             RosterEdit::RemoveKey { member_id, key } => {
                 (Change::RemoveKey { member_id, key }, None)
             }
+            RosterEdit::AddWorkspace { name } => (Change::AddWorkspace { name }, None),
+            RosterEdit::RenameWorkspace { id, name } => {
+                (Change::RenameWorkspace { id, name }, None)
+            }
+            RosterEdit::DeleteWorkspace { id } => (Change::DeleteWorkspace { id }, None),
+            RosterEdit::SetWorkspaces {
+                member_id,
+                workspaces,
+            } => (
+                Change::SetWorkspaces {
+                    member_id,
+                    workspaces,
+                },
+                None,
+            ),
         };
 
         let now = self.now();
@@ -465,7 +481,7 @@ impl Orgs {
         }
         // The fetch may have brought a policy that no longer names this PC's Dots ID: the draft
         // is kept, but nothing is published.
-        let state = self.check_signer(org_id).await?;
+        let state = self.check_signer(org_id, Permission::ManageMembers).await?;
         self.publish(&state, draft, false).await
     }
 
@@ -489,10 +505,10 @@ impl Orgs {
         }
     }
 
-    /// The role may manage members and this PC's Dots ID is in the policy's `admins`; the
-    /// org's state as it stands.
-    async fn check_signer(&self, org_id: &str) -> Result<MemberState> {
-        require(Some(self), Some(org_id), Permission::ManageMembers).await?;
+    /// The role holds `needs` and this PC's Dots ID is in the policy's `admins`; the org's
+    /// state as it stands.
+    async fn check_signer(&self, org_id: &str, needs: Permission) -> Result<MemberState> {
+        require(Some(self), Some(org_id), needs).await?;
         let state = self.member_state(org_id)?;
         let mine = identity(self.store()).await?.public_key;
         if !admins(&state)
@@ -683,6 +699,17 @@ pub(super) fn draft_stand(
             DraftStand::Reached
         }
         _ => DraftStand::Overtaken,
+    }
+}
+
+/// What the role must hold to make `edit`: managing workspaces for changes to the workspace
+/// list, managing members for everything else (a member's workspace roles included).
+fn edit_permission(edit: &RosterEdit) -> Permission {
+    match edit {
+        RosterEdit::AddWorkspace { .. }
+        | RosterEdit::RenameWorkspace { .. }
+        | RosterEdit::DeleteWorkspace { .. } => Permission::ManageWorkspaces,
+        _ => Permission::ManageMembers,
     }
 }
 

@@ -561,14 +561,17 @@ async fn two_orgs_with_the_same_names_never_mix_under_any_personal_mode() {
             .unwrap();
         let store = &h.store;
         let in_acme = store
-            .create_dot(&spec("in-acme"), Some(ACME))
+            .create_dot(&spec("in-acme"), Some(ACME), "default")
             .await
             .unwrap();
         let in_beta = store
-            .create_dot(&spec("in-beta"), Some("beta"))
+            .create_dot(&spec("in-beta"), Some("beta"), "default")
             .await
             .unwrap();
-        let mine = store.create_dot(&spec("mine"), None).await.unwrap();
+        let mine = store
+            .create_dot(&spec("mine"), None, "default")
+            .await
+            .unwrap();
         let (acme, beta, personal) = (
             DotScope::of(&in_acme),
             DotScope::of(&in_beta),
@@ -634,7 +637,11 @@ async fn a_run_whose_org_is_removed_while_it_waits_to_refresh_does_not_start() {
     orgs.join(&h.acme_code(), Some(token())).await.unwrap();
     scripted.entered().await;
     let vault = Vault::new(h.store.clone(), h.secrets.clone()).with_orgs(orgs.clone());
-    let dot = h.store.create_dot(&spec(DOT), Some(ACME)).await.unwrap();
+    let dot = h
+        .store
+        .create_dot(&spec(DOT), Some(ACME), "default")
+        .await
+        .unwrap();
 
     // A Refresh holds the org's lock while its source answers.
     let gate = scripted.hold();
@@ -665,10 +672,14 @@ async fn a_run_whose_org_is_removed_while_it_waits_to_refresh_does_not_start() {
 #[tokio::test]
 async fn a_dots_scope_is_its_org() {
     let h = OrgsHarness::new().await;
-    let personal = h.store.create_dot(&spec("mine"), None).await.unwrap();
+    let personal = h
+        .store
+        .create_dot(&spec("mine"), None, "default")
+        .await
+        .unwrap();
     let in_org = h
         .store
-        .create_dot(&spec("theirs"), Some(ACME))
+        .create_dot(&spec("theirs"), Some(ACME), "default")
         .await
         .unwrap();
     assert_eq!(DotScope::of(&personal), DotScope::Personal);

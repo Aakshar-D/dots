@@ -28,8 +28,8 @@ pub use offline::{
     OfflineCopy, Protector, OFFLINE_DIR,
 };
 pub use policy::{
-    parse_policy, AuditTarget, OrgPolicy, PersonalMode, PolicyError, RosterMode, UseRules,
-    DEFAULT_REFRESH_MINUTES, POLICY_V1, POLICY_VERSION, POLICY_VERSIONS,
+    may_use_in, parse_policy, AuditTarget, OrgPolicy, PersonalMode, PolicyError, RosterMode,
+    UseRules, DEFAULT_REFRESH_MINUTES, POLICY_V1, POLICY_VERSION, POLICY_VERSIONS,
 };
 pub use row::{MemberRow, OrgRow, PendingRequest};
 pub use service::{

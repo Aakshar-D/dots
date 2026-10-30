@@ -31,7 +31,7 @@ describe("the dot editor, new dot", () => {
     expect(backend.callsTo("create_dot")).toEqual([
       {
         spec: { ...blankSpec, name: "nightly", instructions: "Run the tests.", workdir: "C:/dev/app" },
-        orgId: null,
+        orgId: null, workspaceId: null,
       },
     ]);
     expect(await screen.findByText("Dot created")).toBeVisible();
@@ -142,7 +142,7 @@ describe("the dot editor, new dot", () => {
       until: { count: 10 },
     };
     expect(backend.callsTo("create_dot")).toEqual([
-      { spec: { ...blankSpec, ...basics, schedule: weekly }, orgId: null },
+      { spec: { ...blankSpec, ...basics, schedule: weekly }, orgId: null, workspaceId: null },
     ]);
   });
 
@@ -157,7 +157,7 @@ describe("the dot editor, new dot", () => {
 
     await waitFor(() => expect(router.state.location.pathname).toBe("/dots/dot-new"));
     expect(backend.callsTo("create_dot")).toEqual([
-      { spec: { ...blankSpec, ...basics, schedule: cron("0 0 2 * * *", true) }, orgId: null },
+      { spec: { ...blankSpec, ...basics, schedule: cron("0 0 2 * * *", true) }, orgId: null, workspaceId: null },
     ]);
   });
 
@@ -524,11 +524,11 @@ describe("the dot editor, stored dot", () => {
       review_runs: sample.inbox.review_runs,
       attention: [],
       tools_changed: [],
-      watchers: [], held: [], instructions: [], app_reviews: [],
+      watchers: [], held: [], instructions: [], app_reviews: [], team_scope: [],
     };
     backend.on("inbox", () => waiting);
     backend.on("delete_dot", () => {
-      waiting = { approvals: [], review_runs: [], attention: [], tools_changed: [], watchers: [], held: [], instructions: [], app_reviews: [] };
+      waiting = { approvals: [], review_runs: [], attention: [], tools_changed: [], watchers: [], held: [], instructions: [], app_reviews: [], team_scope: [] };
       return null;
     });
     const { user, router } = renderApp(path);

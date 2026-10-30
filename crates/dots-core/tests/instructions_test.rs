@@ -45,7 +45,10 @@ fn changed(rx: &mut broadcast::Receiver<RuntimeEvent>) -> Vec<String> {
 #[tokio::test]
 async fn a_person_s_chat_proposes_and_a_newer_proposal_replaces_the_waiting_one() {
     let (_d, store) = temp_store().await;
-    let dot = store.create_dot(&spec("shopper"), None).await.unwrap();
+    let dot = store
+        .create_dot(&spec("shopper"), None, "default")
+        .await
+        .unwrap();
     let run = chat(&store, &dot.id, true).await;
     let (p, mut rx) = proposals(&store);
     let next = "Do the thing.\nIf an item is out of stock, buy the closest brand.";
@@ -95,7 +98,10 @@ async fn a_person_s_chat_proposes_and_a_newer_proposal_replaces_the_waiting_one(
 #[tokio::test]
 async fn only_a_topic_the_person_started_may_propose() {
     let (_d, store) = temp_store().await;
-    let dot = store.create_dot(&spec("shopper"), None).await.unwrap();
+    let dot = store
+        .create_dot(&spec("shopper"), None, "default")
+        .await
+        .unwrap();
     let (p, _rx) = proposals(&store);
     let scheduled = store
         .create_run(&NewRun::new(&dot.id, TriggerKind::Schedule))
@@ -129,7 +135,10 @@ async fn only_a_topic_the_person_started_may_propose() {
 #[tokio::test]
 async fn a_proposal_is_kept_only_under_the_thread_lock() {
     let (_d, store) = temp_store().await;
-    let dot = store.create_dot(&spec("shopper"), None).await.unwrap();
+    let dot = store
+        .create_dot(&spec("shopper"), None, "default")
+        .await
+        .unwrap();
     let run = chat(&store, &dot.id, true).await;
     let (bus, _rx) = broadcast::channel(16);
     let thread_lock = Arc::new(Mutex::new(()));
@@ -155,7 +164,10 @@ async fn a_proposal_is_kept_only_under_the_thread_lock() {
 #[tokio::test]
 async fn the_text_and_the_reason_are_checked() {
     let (_d, store) = temp_store().await;
-    let dot = store.create_dot(&spec("shopper"), None).await.unwrap();
+    let dot = store
+        .create_dot(&spec("shopper"), None, "default")
+        .await
+        .unwrap();
     let run = chat(&store, &dot.id, true).await;
     let (p, _rx) = proposals(&store);
     let long = "x".repeat(MAX_INSTRUCTIONS + 1);
@@ -194,7 +206,10 @@ async fn the_text_and_the_reason_are_checked() {
 #[tokio::test]
 async fn a_proposal_is_decided_once_and_goes_with_its_dot() {
     let (_d, store) = temp_store().await;
-    let dot = store.create_dot(&spec("shopper"), None).await.unwrap();
+    let dot = store
+        .create_dot(&spec("shopper"), None, "default")
+        .await
+        .unwrap();
     let run = chat(&store, &dot.id, true).await;
     let (p, _rx) = proposals(&store);
     p.propose(&run.id, "Other.", "Why").await.unwrap();
@@ -258,7 +273,10 @@ fn proposal(run: &Run, id: &str, created_at: &str) -> InstructionProposal {
 #[tokio::test]
 async fn proposals_made_in_the_same_millisecond_list_the_newer_first() {
     let (_d, store) = temp_store().await;
-    let dot = store.create_dot(&spec("shopper"), None).await.unwrap();
+    let dot = store
+        .create_dot(&spec("shopper"), None, "default")
+        .await
+        .unwrap();
     let run = chat(&store, &dot.id, true).await;
     let at = "2026-10-28T09:00:00.000Z";
     // The newer one has the smaller id: the order cannot come from the ids.
@@ -283,9 +301,18 @@ async fn proposals_made_in_the_same_millisecond_list_the_newer_first() {
 #[tokio::test]
 async fn only_the_waiting_proposals_are_pending() {
     let (_d, store) = temp_store().await;
-    let one = store.create_dot(&spec("one"), None).await.unwrap();
-    let two = store.create_dot(&spec("two"), None).await.unwrap();
-    let three = store.create_dot(&spec("three"), None).await.unwrap();
+    let one = store
+        .create_dot(&spec("one"), None, "default")
+        .await
+        .unwrap();
+    let two = store
+        .create_dot(&spec("two"), None, "default")
+        .await
+        .unwrap();
+    let three = store
+        .create_dot(&spec("three"), None, "default")
+        .await
+        .unwrap();
     let (p, _rx) = proposals(&store);
     for dot in [&one, &two, &three] {
         let run = chat(&store, &dot.id, true).await;

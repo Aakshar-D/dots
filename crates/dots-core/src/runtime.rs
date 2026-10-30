@@ -744,6 +744,7 @@ impl Runtime {
             held: self.held_runs(&names).await?,
             instructions,
             app_reviews,
+            team_scope: self.store.team_scope_issues().await?,
         })
     }
 
@@ -760,6 +761,8 @@ impl Runtime {
             + inbox.instructions.len()
             // A waiting review card counts like an approval (app library spec section 10).
             + inbox.app_reviews.len()
+            // A team with a member outside its account or workspace (accounts design §6.3).
+            + inbox.team_scope.len()
             + self.store.count_waiting_messages().await?)
     }
 
@@ -1013,10 +1016,16 @@ impl Runtime {
         });
     }
 
-    /// Creates a dot, in the org `org_id` or, with `None`, in Personal. The org must be joined
-    /// on this PC; it is fixed from then on (env vault spec §5.2). In an account, the role must
-    /// allow changing dots, and giving it secrets when it is granted any (members spec §6.3).
-    pub async fn create_dot(&self, spec: DotSpec, org_id: Option<String>) -> Result<Dot> {
+    /// Creates a dot, in the org `org_id` or, with `None`, in Personal, and in its workspace
+    /// `workspace_id` or, with `None`, Default. The org must be joined on this PC; it is fixed
+    /// from then on (env vault spec §5.2). In an account, the role in that workspace must allow
+    /// changing dots, and giving it secrets when it is granted any (members spec §6.3).
+    pub async fn create_dot(
+        &self,
+        spec: DotSpec,
+        org_id: Option<String>,
+        workspace_id: Option<String>,
+    ) -> Result<Dot> {
         if let Some(org) = &org_id {
             if self.store.get_org(org).await?.is_none() {
                 return Err(Error::Invalid(format!(
@@ -1024,17 +1033,117 @@ impl Runtime {
                 )));
             }
         }
-        self.require(org_id.as_deref(), Permission::EditDots)
+        let workspace_id =
+            workspace_id.unwrap_or_else(|| crate::accounts::DEFAULT_WORKSPACE.into());
+        self.check_workspace(org_id.as_deref(), &workspace_id)
+            .await?;
+        let workspace_id = workspace_id.as_str();
+        self.require_in(org_id.as_deref(), workspace_id, Permission::EditDots)
             .await?;
         if !spec.variables.0.is_empty() {
-            self.require(org_id.as_deref(), Permission::GrantEntries)
+            self.require_in(org_id.as_deref(), workspace_id, Permission::GrantEntries)
                 .await?;
         }
-        let dot = self.store.create_dot(&spec, org_id.as_deref()).await?;
+        let dot = self
+            .store
+            .create_dot(&spec, org_id.as_deref(), workspace_id)
+            .await?;
         self.sync_schedule(&dot, false).await?;
         self.scheduler.reload();
         self.watchers.reload();
         Ok(dot)
+    }
+
+    /// Refuses a workspace the account (`None` is Personal) doesn't have.
+    async fn check_workspace(&self, org_id: Option<&str>, workspace_id: &str) -> Result<()> {
+        let scope = org_id.unwrap_or(crate::accounts::PERSONAL);
+        if self.store.workspace(scope, workspace_id).await?.is_some() {
+            return Ok(());
+        }
+        Err(Error::NotFound(format!(
+            "No workspace '{workspace_id}' in {}.",
+            crate::accounts::account_label(Some(&self.orgs), org_id).await
+        )))
+    }
+
+    /// Moves a dot to another workspace of its account. The role must allow changing dots in
+    /// the workspace it leaves and in the one it goes to, and a dot in a team stays with the
+    /// team (accounts design §6.3).
+    pub async fn move_dot(&self, dot_id: &str, workspace_id: &str) -> Result<Dot> {
+        let dot = self.store.get_dot(dot_id).await?;
+        self.check_workspace(dot.org_id.as_deref(), workspace_id)
+            .await?;
+        self.require_dot(&dot, Permission::EditDots).await?;
+        self.require_in(dot.org_id.as_deref(), workspace_id, Permission::EditDots)
+            .await?;
+        if let Some(team_id) = self.store.teams_of_dot(dot_id).await?.first() {
+            let team = self.store.get_team(team_id).await?;
+            return Err(Error::Invalid(format!(
+                "{} is in the team {}. Take it out of the team first.",
+                dot.spec.name, team.name
+            )));
+        }
+        self.store.set_dot_workspace(dot_id, workspace_id).await?;
+        self.store.get_dot(dot_id).await
+    }
+
+    /// The workspaces of `scope` (`personal` or an org id) this PC may see.
+    pub async fn workspaces(&self, scope: &str) -> Result<Vec<crate::accounts::WorkspaceView>> {
+        crate::accounts::visible_workspaces(&self.store, &self.orgs, scope).await
+    }
+
+    /// What this PC may not do with the dot `dot_id`: change it, run it, answer its approvals,
+    /// each in the words `require_dot` refuses it with (its account and workspace); `None` is
+    /// allowed. The UI switches its controls off by these (members spec §9).
+    pub async fn dot_access(&self, dot_id: &str) -> Result<crate::accounts::DotAccess> {
+        let dot = self.store.get_dot(dot_id).await?;
+        crate::accounts::refusals_in(Some(&self.orgs), dot.org_id.as_deref(), &dot.workspace_id)
+            .await
+    }
+
+    /// Adds a workspace to Personal; its id is made from the name.
+    pub async fn personal_workspace_add(
+        &self,
+        name: &str,
+    ) -> Result<crate::accounts::WorkspaceView> {
+        let name = personal_workspace_name(name)?;
+        let taken: Vec<String> = self
+            .store
+            .list_workspaces(crate::accounts::PERSONAL)
+            .await?
+            .into_iter()
+            .map(|w| w.id)
+            .collect();
+        let id = crate::accounts::workspace_id_for(&name, &taken);
+        self.store
+            .add_workspace(&crate::store::WorkspaceRow {
+                scope: crate::accounts::PERSONAL.into(),
+                id: id.clone(),
+                name,
+                use_rules: None,
+                created_at: crate::util::now(),
+            })
+            .await?;
+        self.workspaces(crate::accounts::PERSONAL)
+            .await?
+            .into_iter()
+            .find(|w| w.id == id)
+            .ok_or_else(|| Error::NotFound(format!("workspace {id}")))
+    }
+
+    /// Renames a Personal workspace; its id stays.
+    pub async fn personal_workspace_rename(&self, id: &str, name: &str) -> Result<()> {
+        let name = personal_workspace_name(name)?;
+        self.store
+            .rename_workspace(crate::accounts::PERSONAL, id, &name)
+            .await
+    }
+
+    /// Deletes a Personal workspace; its dots and teams go to Default.
+    pub async fn personal_workspace_delete(&self, id: &str) -> Result<()> {
+        self.store
+            .delete_workspace(crate::accounts::PERSONAL, id)
+            .await
     }
 
     /// Saves a dot's spec. A dot whose org is no longer joined on this PC is refused: it can't
@@ -1046,11 +1155,9 @@ impl Runtime {
         if let Some(text) = self.vault.org_removed(&old) {
             return Err(Error::Conflict(text));
         }
-        self.require(old.org_id.as_deref(), Permission::EditDots)
-            .await?;
+        self.require_dot(&old, Permission::EditDots).await?;
         if spec.variables != old.spec.variables {
-            self.require(old.org_id.as_deref(), Permission::GrantEntries)
-                .await?;
+            self.require_dot(&old, Permission::GrantEntries).await?;
         }
         let was_enabled = old.spec.enabled;
         let dot = self.store.update_dot(id, &spec).await?;
@@ -1067,7 +1174,7 @@ impl Runtime {
     /// from the member list, and only cleaning up (`require_cleanup`).
     pub async fn delete_dot(&self, id: &str) -> Result<()> {
         let dot = self.store.get_dot(id).await?;
-        self.require_cleanup(dot.org_id.as_deref()).await?;
+        self.require_cleanup(&dot).await?;
         let had_row = self.store.get_schedule_state(id).await?.is_some();
         let proposals = self.store.list_app_proposals(Some(id)).await?;
         let watchers: Vec<String> = self
@@ -1108,10 +1215,9 @@ impl Runtime {
     pub async fn set_dot_enabled(&self, id: &str, enabled: bool) -> Result<Dot> {
         let old = self.store.get_dot(id).await?;
         if enabled {
-            self.require(old.org_id.as_deref(), Permission::EditDots)
-                .await?;
+            self.require_dot(&old, Permission::EditDots).await?;
         } else {
-            self.require_cleanup(old.org_id.as_deref()).await?;
+            self.require_cleanup(&old).await?;
         }
         let was_enabled = old.spec.enabled;
         let dot = self.store.set_dot_enabled(id, enabled).await?;
@@ -1542,45 +1648,54 @@ impl Runtime {
 
 /// Account roles (members spec §6.3): what this PC may do in Personal or an account.
 impl Runtime {
-    /// This PC's access to `org_id`; `None` is Personal, where it is always Owner.
-    pub fn access(&self, org_id: Option<&str>) -> Access {
-        crate::accounts::access(Some(&self.orgs), org_id)
+    /// `Ok` when this PC may do `p` in the workspace `workspace_id` of `org_id`, where the
+    /// member's role in the workspace narrows the account role (members spec §6.3); otherwise
+    /// `Error::NotAllowed` naming the account and the role, or why this PC is not let in. Every
+    /// check on a dot or team goes through here (`require_dot`), never the account role alone.
+    pub async fn require_in(
+        &self,
+        org_id: Option<&str>,
+        workspace_id: &str,
+        p: Permission,
+    ) -> Result<()> {
+        crate::accounts::require_in(Some(&self.orgs), org_id, workspace_id, p).await
     }
 
-    /// `Ok` when this PC may do `p` in `org_id`, otherwise `Error::NotAllowed` naming the
-    /// account and the role, or why this PC is not on its member list.
-    pub async fn require(&self, org_id: Option<&str>, p: Permission) -> Result<()> {
-        crate::accounts::require(Some(&self.orgs), org_id, p).await
+    /// `require` on `dot`, in its account and workspace.
+    pub async fn require_dot(&self, dot: &Dot, p: Permission) -> Result<()> {
+        crate::accounts::require_dot(Some(&self.orgs), dot, p).await
     }
 
-    /// `require` of `EditDots` for cleaning up a dot of `org_id`: switching it off or deleting
-    /// it. A PC waiting for, or removed from, the account's member list may still do that: its
-    /// dots can't run, and Leave removes the account. Enabling, editing and watcher changes stay
-    /// refused for it.
-    async fn require_cleanup(&self, org_id: Option<&str>) -> Result<()> {
-        if matches!(self.access(org_id), Access::Waiting | Access::Removed) {
+    /// `require_dot` of `EditDots` for cleaning up `dot`: switching it off or deleting it. A PC
+    /// waiting for, or removed from, the account's member list may still do that: its dots
+    /// can't run, and Leave removes the account. So may a member outside the dot's workspace
+    /// (members spec §6.3). Enabling, editing and watcher changes stay refused for them.
+    async fn require_cleanup(&self, dot: &Dot) -> Result<()> {
+        if matches!(
+            crate::accounts::access_dot(Some(&self.orgs), dot),
+            Access::Waiting | Access::Removed | Access::OutsideWorkspace { .. }
+        ) {
             return Ok(());
         }
-        self.require(org_id, Permission::EditDots).await
+        self.require_dot(dot, Permission::EditDots).await
     }
 
-    /// `require` in the account of the dot `dot_id`.
+    /// `require_dot` on the dot `dot_id`.
     async fn require_for_dot(&self, dot_id: &str, p: Permission) -> Result<()> {
         let dot = self.store.get_dot(dot_id).await?;
-        self.require(dot.org_id.as_deref(), p).await
+        self.require_dot(&dot, p).await
     }
 
     /// What a run the person starts of `dot` needs: its org still joined (env vault spec
-    /// §6.4), and a role that may run the account's dots.
+    /// §6.4), and a role that may run the dots of its account and workspace.
     async fn require_run(&self, dot: &Dot) -> Result<()> {
         if let Some(text) = self.vault.org_removed(dot) {
             return Err(Error::Conflict(text));
         }
-        self.require(dot.org_id.as_deref(), Permission::RunDots)
-            .await
+        self.require_dot(dot, Permission::RunDots).await
     }
 
-    /// `require` in the account of the dot of the run `run_id`.
+    /// `require_dot` on the dot of the run `run_id`.
     async fn require_for_run(&self, run_id: &str, p: Permission) -> Result<()> {
         let run = self.store.get_run(run_id).await?;
         self.require_for_dot(&run.dot_id, p).await
@@ -2033,4 +2148,13 @@ impl Runtime {
         held.sort_by(|a, b| a.queued_at.cmp(&b.queued_at));
         Ok(held)
     }
+}
+
+/// A Personal workspace's name, trimmed; it needs one.
+fn personal_workspace_name(name: &str) -> Result<String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(Error::Invalid("A workspace needs a name.".into()));
+    }
+    Ok(name.to_string())
 }

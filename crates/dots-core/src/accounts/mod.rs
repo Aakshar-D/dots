@@ -8,13 +8,17 @@ mod permissions;
 mod request;
 pub mod roster;
 mod scope;
+mod workspaces;
 
 pub use identity::{
     ensure_identity, identity, set_profile, sign_with_identity, Identity, IDENTITY_SECRET,
     MAX_EMAIL, MAX_PROFILE_NAME,
 };
 pub use membership::{Membership, NotMember};
-pub use permissions::{access, can, require, Access, Permission};
+pub use permissions::{
+    access, access_dot, access_in, account_label, can, require, require_dot, require_in,
+    require_team, workspace_name, Access, Permission,
+};
 pub use request::{make_request, parse_request, AccessRequest, RequestError, REQUEST_PREFIX};
 pub use roster::{
     open_accepted_roster, parse_roster, roster_envelope, roster_hash, verify_roster, Accepted,
@@ -22,3 +26,6 @@ pub use roster::{
     ROSTER_VERSION,
 };
 pub use scope::{current_scope, set_current_scope, CurrentScope, DEFAULT_WORKSPACE, PERSONAL};
+pub use workspaces::{
+    refusals_in, visible_workspaces, workspace_id_for, DotAccess, Refusals, WorkspaceView,
+};

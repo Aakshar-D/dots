@@ -10,6 +10,7 @@ import type {
   MemberView,
   OrgSummary,
   Role,
+  WorkspaceRole,
   RosterEdit,
 } from "@/api/types";
 import { ConfirmButton } from "@/components/ConfirmButton";
@@ -26,6 +27,14 @@ import {
 import { ErrorNote } from "@/components/ErrorNote";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { accessOf, notAllowedText, roleLabel } from "@/lib/access";
 import { localDateTime } from "@/lib/format";
@@ -44,11 +53,14 @@ export const OWNER_TEXT =
 const NOT_SIGNING = "Can sign the list once the owner adds their Dots ID to the policy's admins.";
 
 /// Why a control is off for the moment while the last change is sent.
-const BUSY = "Waiting for the last change to finish.";
+export const BUSY = "Waiting for the last change to finish.";
 
 /// Why an edit waits: the core takes one change at a time while a draft waits (accounts spec
 /// §6.5), and refuses a new one with these words.
-const DRAFT_WAITING = "a change is waiting to be published. Retry or discard it first.";
+export const DRAFT_WAITING = "a change is waiting to be published. Retry or discard it first.";
+
+/// The roles a member may hold in one workspace.
+const WORKSPACE_ROLES: WorkspaceRole[] = ["admin", "member", "viewer"];
 
 const OWN_ROLE = "You're changing your own role. You may lose the right to manage members.";
 
@@ -60,23 +72,23 @@ const REMOVE_TEXT =
   "Also revoke their access in the source: the list stops Dots honouring them, only the " +
   "source cuts them off.";
 
-/// The Members tab of an account (accounts spec §6.5, §7; members spec §6.2): who is on the
-/// list and with which PCs, its open invites, and, for an Admin or Owner whose Dots ID signs,
-/// Invite, Approve request, role changes and removals. Every edit is made against the list's
-/// `seq`; a list that changed meanwhile is refused with the core's words and asked for again.
-export function AccountMembers({ org }: { org: OrgSummary }) {
+/// What the member-list edits of an account share (Members and Workspaces tabs): the list, the
+/// core's words for the last edit that failed, and one change at a time. What changed the list
+/// asks for it, the org's row and the workspaces again. A refusal does too: the list may have
+/// changed (a `conflict`) or its draft been dropped.
+export function useRosterEdits(org: OrgSummary, enabled = true) {
   const qc = useQueryClient();
   const list = useQuery({
     queryKey: keys.orgMembers(org.id),
     queryFn: () => commands.memberList(org.id),
+    enabled,
   });
   // The core's words for the last edit that failed.
   const [notice, setNotice] = useState<string>();
-  const [dialog, setDialog] = useState<"invite" | "approve">();
-
-  // What changed the list asks for it and for the org's row again (both are under `orgs`). A
-  // refusal does too: the list may have changed (a `conflict`) or its draft been dropped.
-  const changed = () => invalidate(qc, keys.orgs);
+  const changed = () => {
+    invalidate(qc, keys.orgs);
+    invalidate(qc, ["workspaces"]);
+  };
   const told = (outcome: EditOutcome | null) => {
     if (outcome?.outcome === "published") toast.success(`Published the member list of ${org.name}`);
   };
@@ -92,13 +104,13 @@ export function AccountMembers({ org }: { org: OrgSummary }) {
       changed();
     },
   });
+  return { list, notice, changed, told, act };
+}
 
-  if (list.isError) return <ErrorNote error={list.error} />;
-  const view = list.data;
-  if (!view) return <p className="text-xs text-muted-foreground">Loading the member list…</p>;
-
-  const edit = (e: RosterEdit) => () => commands.memberEdit(org.id, view.seq, e);
-  // Why the list can't be changed from this PC, or undefined when it can.
+/// Why the list can't be changed from this PC (`blocker`), why a change that needs the list
+/// to have no draft can't be made (`editBlocker`), and why a draft can't be discarded
+/// (`manageBlocker`); each undefined when it can.
+export function rosterBlockers(org: OrgSummary, view: MembersView) {
   const manageBlocker = view.can_manage
     ? undefined
     : notAllowedText(org.name, accessOf(org, org.id), "members");
@@ -110,6 +122,23 @@ export function AccountMembers({ org }: { org: OrgSummary }) {
   // An approval, a role change or a removal also waits for a draft to be published or
   // discarded; inviting and revoking don't touch the list.
   const editBlocker = blocker ?? (view.draft ? `${org.name}: ${DRAFT_WAITING}` : undefined);
+  return { manageBlocker, blocker, editBlocker };
+}
+
+/// The Members tab of an account (accounts spec §6.5, §7; members spec §6.2): who is on the
+/// list and with which PCs, its open invites, and, for an Admin or Owner whose Dots ID signs,
+/// Invite, Approve request, role changes and removals. Every edit is made against the list's
+/// `seq`; a list that changed meanwhile is refused with the core's words and asked for again.
+export function AccountMembers({ org }: { org: OrgSummary }) {
+  const { list, notice, changed, told, act } = useRosterEdits(org);
+  const [dialog, setDialog] = useState<"invite" | "approve">();
+
+  if (list.isError) return <ErrorNote error={list.error} />;
+  const view = list.data;
+  if (!view) return <p className="text-xs text-muted-foreground">Loading the member list…</p>;
+
+  const edit = (e: RosterEdit) => () => commands.memberEdit(org.id, view.seq, e);
+  const { manageBlocker, blocker, editBlocker } = rosterBlockers(org, view);
   const busy = act.isPending;
 
   // An approval from the dialog: its error shows in the dialog, not here.
@@ -174,6 +203,7 @@ export function AccountMembers({ org }: { org: OrgSummary }) {
             key={m.id}
             member={m}
             account={org.name}
+            orgId={org.id}
             lock={m.owner_locked ? OWNER_TEXT : editBlocker}
             busy={busy}
             onEdit={(e) => act.mutate(edit(e))}
@@ -230,6 +260,7 @@ export function AccountMembers({ org }: { org: OrgSummary }) {
 function MemberRow(props: {
   member: MemberView;
   account: string;
+  orgId: string;
   lock: string | undefined;
   busy: boolean;
   onEdit: (edit: RosterEdit) => void;
@@ -237,6 +268,7 @@ function MemberRow(props: {
   const { member: m, lock } = props;
   // The role picked for this PC's own member, waiting for the confirm.
   const [ownRole, setOwnRole] = useState<Role>();
+  const [picking, setPicking] = useState(false);
   const isMe = m.keys.some((k) => k.is_me);
   const off = props.busy || !!lock;
   const why = lock ?? (props.busy ? BUSY : undefined);
@@ -275,6 +307,17 @@ function MemberRow(props: {
             </NativeSelectOption>
           ))}
         </NativeSelect>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={off}
+          title={why}
+          aria-label={`Workspaces of ${m.name}`}
+          onClick={() => setPicking(true)}
+        >
+          Workspaces
+        </Button>
         {off ? (
           <Button
             type="button"
@@ -344,6 +387,21 @@ function MemberRow(props: {
           </li>
         ))}
       </ul>
+      {picking && (
+        <MemberWorkspacesDialog
+          member={m}
+          orgId={props.orgId}
+          onSave={(workspaces) => {
+            props.onEdit({
+              kind: "set_workspaces",
+              member_id: m.id,
+              workspaces,
+            });
+            setPicking(false);
+          }}
+          onClose={() => setPicking(false)}
+        />
+      )}
       <AlertDialog open={!!ownRole} onOpenChange={(open) => !open && setOwnRole(undefined)}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -375,7 +433,7 @@ function MemberRow(props: {
 
 /// A list signed on this PC but not published (accounts spec §6.5): what it changes and why it
 /// waits, Retry and Discard, and for a SOPS file, which Dots can't write, the list to copy.
-function DraftBanner(props: {
+export function DraftBanner(props: {
   view: MembersView;
   blocker: string | undefined;
   discardBlocker: string | undefined;
@@ -431,5 +489,96 @@ function DraftBanner(props: {
         )}
       </div>
     </section>
+  );
+}
+
+/// The workspaces of an account a member is in (workspaces spec): a checkbox and a role for
+/// each. Default is always on, so it can't be unchecked. Saving sends the whole set.
+function MemberWorkspacesDialog(props: {
+  member: MemberView;
+  orgId: string;
+  onSave: (workspaces: Record<string, WorkspaceRole>) => void;
+  onClose: () => void;
+}) {
+  const { member: m } = props;
+  const list = useQuery({
+    queryKey: keys.workspaces(props.orgId),
+    queryFn: () => commands.workspaceList(props.orgId),
+  });
+  const [picked, setPicked] = useState<Record<string, WorkspaceRole>>({
+    default: "member",
+    ...m.workspaces,
+  });
+  return (
+    <Dialog open onOpenChange={(next) => !next && props.onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Workspaces of {m.name}</DialogTitle>
+          <DialogDescription>
+            The workspaces they are in and their role in each. Default is always on.
+          </DialogDescription>
+        </DialogHeader>
+        {list.isError && <ErrorNote error={list.error} />}
+        <ul aria-label="Workspaces" className="flex flex-col gap-2">
+          {(list.data ?? []).map((w) => {
+            const role = picked[w.id];
+            const isDefault = w.id === "default";
+            return (
+              <li key={w.id} className="flex items-center gap-2 text-sm">
+                <label className="flex flex-1 items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={isDefault || !!role}
+                    disabled={isDefault}
+                    title={isDefault ? "Default is always on." : undefined}
+                    onChange={(e) =>
+                      setPicked((p) => {
+                        const next = { ...p };
+                        if (e.target.checked) next[w.id] = "member";
+                        else delete next[w.id];
+                        return next;
+                      })
+                    }
+                  />
+                  {w.name}
+                </label>
+                <NativeSelect
+                  size="sm"
+                  aria-label={`Role in ${w.name}`}
+                  value={role ?? "member"}
+                  disabled={!role}
+                  title={role ? undefined : "Add them to the workspace first."}
+                  onChange={(e) =>
+                    setPicked((p) => ({
+                      ...p,
+                      [w.id]: e.target.value as WorkspaceRole,
+                    }))
+                  }
+                >
+                  {WORKSPACE_ROLES.map((r) => (
+                    <NativeSelectOption key={r} value={r}>
+                      {roleLabel(r)}
+                    </NativeSelectOption>
+                  ))}
+                </NativeSelect>
+              </li>
+            );
+          })}
+        </ul>
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={props.onClose}>
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            disabled={!list.data}
+            title={list.data ? undefined : "Loading the workspaces."}
+            onClick={() => props.onSave(picked)}
+          >
+            Save
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

@@ -89,6 +89,15 @@ Commands:
   dots-admin roster set-role <roster.json> <email> <role>
   dots-admin roster remove <roster.json> <email> [--key <dots-id>]
       Changes a member's role, or removes them (or just one of their keys).
+  dots-admin roster set-workspaces <roster.json> <email> <id>=<role> ...
+      Sets the member's role in each workspace they are in (admin, member or viewer); the
+      default workspace must be one.
+  dots-admin roster workspace add <roster.json> <name> [--allow <pattern> ...] [--deny <pattern> ...]
+  dots-admin roster workspace rename <roster.json> <id> <name>
+  dots-admin roster workspace remove <roster.json> <id>
+  dots-admin roster workspace use <roster.json> <id> [--allow <pattern> ...] [--deny <pattern> ...]
+      Adds, renames or removes a workspace (never default), or sets the entry names its dots
+      may use; 'use' with no patterns clears them. These edit the file only; sign it afterwards.
   dots-admin roster add-request <roster.json> <request code> --role <owner|admin|member|viewer>
       Adds the sender of a request code (see 'request inspect'); an email already listed gets
       the key as another PC. Sign the list afterwards.

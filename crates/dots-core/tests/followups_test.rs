@@ -120,7 +120,11 @@ impl Harness {
     /// A dot and the run that schedules its follow-up: ended `succeeded` with the summary
     /// "Built it.", and with the session `s1` when `session`.
     async fn thread(&self, name: &str, session: bool) -> (Dot, Run) {
-        let dot = self.store.create_dot(&spec(name), None).await.unwrap();
+        let dot = self
+            .store
+            .create_dot(&spec(name), None, "default")
+            .await
+            .unwrap();
         let run = self
             .store
             .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))

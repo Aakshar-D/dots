@@ -42,7 +42,10 @@ fn folder_spec(t: &Rt, name: &str) -> DotSpec {
 
 /// A dot whose chat ended after it proposed `Do the thing twice.`, and the proposal's id.
 async fn proposed(t: &Rt, name: &str) -> (String, Run, String) {
-    let dot = t.rt.create_dot(folder_spec(t, name), None).await.unwrap();
+    let dot =
+        t.rt.create_dot(folder_spec(t, name), None, None)
+            .await
+            .unwrap();
     let chat =
         t.rt.chat(&dot.id, "do it twice from now on", None)
             .await
@@ -163,7 +166,7 @@ async fn approving_instructions_that_already_say_the_proposal_continues_the_chat
 async fn a_chat_that_is_still_working_is_not_continued() {
     let t = start(Some(json!([{"sleep_ms": 3000}]))).await;
     let dot =
-        t.rt.create_dot(folder_spec(&t, "busy"), None)
+        t.rt.create_dot(folder_spec(&t, "busy"), None, None)
             .await
             .unwrap();
     let chat =

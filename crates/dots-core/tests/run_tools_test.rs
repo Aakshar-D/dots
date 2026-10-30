@@ -115,6 +115,7 @@ impl Fixture {
             cancel: &CancellationToken::new(),
             vault: &Vault::in_memory(self.store.clone()),
             scope: &DotScope::Personal,
+            workspace_id: "default",
             grants: &Grants::default(),
             dot_name: "tools",
         })
@@ -493,6 +494,7 @@ async fn a_cancelled_run_stops_opening_its_servers() {
         cancel: &cancel,
         vault: &Vault::in_memory(f.store.clone()),
         scope: &DotScope::Personal,
+        workspace_id: "default",
         grants: &Grants::default(),
         dot_name: "tools",
     })

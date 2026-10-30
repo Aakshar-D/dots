@@ -20,10 +20,15 @@ struct Fixture {
 
 async fn fixture() -> Fixture {
     let (dir, store) = temp_store().await;
-    let dot = store.create_dot(&spec("dev"), None).await.unwrap().id;
+    let dot = store
+        .create_dot(&spec("dev"), None, "default")
+        .await
+        .unwrap()
+        .id;
     let team = store
         .create_team(&TeamSpec {
             org_id: None,
+            workspace_id: "default".into(),
             name: "T".into(),
             description: String::new(),
             members: vec![MemberSpec {

@@ -148,9 +148,9 @@ impl Apps {
         start: &Start,
     ) -> Result<Run> {
         let dot = self.store.get_dot(&start.dot_id).await?;
-        crate::accounts::require(
+        crate::accounts::require_dot(
             self.orgs.as_ref(),
-            dot.org_id.as_deref(),
+            &dot,
             crate::accounts::Permission::RunDots,
         )
         .await?;

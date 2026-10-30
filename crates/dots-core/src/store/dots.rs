@@ -14,7 +14,8 @@ use crate::{Error, Result};
 pub(super) const DOT_COLUMNS: &str = "id, name, instructions, engine, model, endpoint_url, \
     workdir, workspace_mode, schedule, webhook_token, policy, uses, variables, browser, \
     use_global_instructions, use_user_settings, max_turns, \
-    timeout_secs, approval_wait_secs, enabled, created_at, updated_at, seen_at, org_id";
+    timeout_secs, approval_wait_secs, enabled, created_at, updated_at, seen_at, org_id, \
+    workspace_id";
 
 pub(super) fn dot_from_row(row: &SqliteRow) -> Result<Dot> {
     Ok(Dot {
@@ -24,6 +25,7 @@ pub(super) fn dot_from_row(row: &SqliteRow) -> Result<Dot> {
         updated_at: row.try_get("updated_at")?,
         seen_at: row.try_get("seen_at")?,
         org_id: row.try_get("org_id")?,
+        workspace_id: row.try_get("workspace_id")?,
         spec: DotSpec {
             name: row.try_get("name")?,
             instructions: row.try_get("instructions")?,
@@ -111,9 +113,15 @@ impl Store {
 
     /// Creates a dot, in the org `org_id` or, with `None`, in Personal. Nothing changes the org
     /// afterwards (env vault spec §5.2). Whether the org is joined is the caller's check
-    /// (`Runtime::create_dot`). Every item its `uses` names must be in the Library (`Invalid`).
-    /// The servers it uses are granted their variables.
-    pub async fn create_dot(&self, spec: &DotSpec, org_id: Option<&str>) -> Result<Dot> {
+    /// (`Runtime::create_dot`); so is whether `workspace_id` exists in that account. Every item
+    /// its `uses` names must be in the Library (`Invalid`). The servers it uses are granted
+    /// their variables.
+    pub async fn create_dot(
+        &self,
+        spec: &DotSpec,
+        org_id: Option<&str>,
+        workspace_id: &str,
+    ) -> Result<Dot> {
         let mut spec = prepared(spec, None)?;
         spec.variables = self.synced_grants(None, &spec).await?;
         let spec = &spec;
@@ -124,8 +132,8 @@ impl Store {
             "INSERT INTO dots (id, name, instructions, engine, model, endpoint_url, workdir, \
              workspace_mode, schedule, webhook_token, policy, uses, variables, browser, \
              use_global_instructions, use_user_settings, max_turns, timeout_secs, \
-             approval_wait_secs, enabled, created_at, updated_at, org_id) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             approval_wait_secs, enabled, created_at, updated_at, org_id, workspace_id) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&spec.name)
@@ -151,12 +159,27 @@ impl Store {
         .bind(&ts)
         .bind(&ts)
         .bind(org_id)
+        .bind(workspace_id)
         .execute(&mut *tx)
         .await
         .map_err(|e| map_unique(e, &spec.name))?;
         check_uses(&mut tx, &spec.uses).await?;
         tx.commit().await?;
         self.get_dot(&id).await
+    }
+
+    /// Moves a dot to another workspace of its account. Whether the workspace exists is the
+    /// caller's check.
+    pub async fn set_dot_workspace(&self, id: &str, workspace_id: &str) -> Result<()> {
+        let done = sqlx::query("UPDATE dots SET workspace_id = ? WHERE id = ?")
+            .bind(workspace_id)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        if done.rows_affected() == 0 {
+            return Err(Error::NotFound(format!("dot {id}")));
+        }
+        Ok(())
     }
 
     pub async fn get_dot(&self, id: &str) -> Result<Dot> {

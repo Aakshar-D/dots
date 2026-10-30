@@ -18,7 +18,7 @@ async fn run_in(store: &Store, preset: Preset, ws: &std::path::Path) -> Run {
     std::fs::create_dir_all(ws).unwrap();
     let mut spec = common::spec(&format!("copier-{preset:?}"));
     spec.policy = Policy::preset(preset);
-    let dot = store.create_dot(&spec, None).await.unwrap();
+    let dot = store.create_dot(&spec, None, "default").await.unwrap();
     let mut new = NewRun::new(&dot.id, TriggerKind::Manual);
     new.workspace_path = Some(ws.to_string_lossy().into_owned());
     store.create_run(&new).await.unwrap()

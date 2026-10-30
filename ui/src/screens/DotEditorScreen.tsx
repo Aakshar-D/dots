@@ -12,12 +12,12 @@ import { FollowUpsList } from "@/components/FollowUpsList";
 import { Page } from "@/components/Page";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useRefusal } from "@/lib/access";
+import { useDotAccess, useDotAccessQuery, useWorkspaceRefusal } from "@/lib/access";
 import { scheduleError, scheduleOf, specErrors, specOf } from "@/lib/dot-rules";
 import { errorMessage, notifyError } from "@/lib/notify";
 import { orgRemovedText, useDotOrg } from "@/lib/dot-org";
 import { invalidateDots, keys, useSwitchingDot } from "@/lib/query";
-import { PERSONAL, useCurrentScope } from "@/lib/scope";
+import { PERSONAL, useCurrentScope, useWorkspacesQuery } from "@/lib/scope";
 import { useDebounced } from "@/lib/use-debounced";
 import { DotForm, type Draft } from "@/screens/dot-editor/DotForm";
 import { MemoryTab } from "@/screens/dot-editor/MemoryTab";
@@ -37,13 +37,13 @@ function Editor(props: {
   initial: DotSpec;
   existing: Dot | null;
   saveLabel: string;
-  onSave: (spec: DotSpec, org: string | null) => Promise<unknown>;
+  onSave: (spec: DotSpec, org: string | null, workspace: string | null) => Promise<unknown>;
   blocked?: string;
   setEnabled?: (enabled: boolean) => Promise<unknown>;
   actions?: ReactNode;
   children?: (form: ReactNode) => ReactNode;
 }) {
-  const [draft, setDraft] = useState<Draft>(() => ({ spec: props.initial, org: null }));
+  const [draft, setDraft] = useState<Draft>(() => ({ spec: props.initial, org: null, workspace: null }));
   const [tried, setTried] = useState(false);
   // A new dot starts in the current account (Personal has no org), once the scope is known.
   const scope = useCurrentScope();
@@ -52,15 +52,29 @@ function Editor(props: {
   useEffect(() => {
     if (!isNew || !scope || orgDefaulted.current) return;
     orgDefaulted.current = true;
-    if (scope.account !== PERSONAL) setDraft((d) => (d.org === null ? { ...d, org: scope.account } : d));
+    const org = scope.account === PERSONAL ? null : scope.account;
+    const workspace = scope.workspace === "default" ? null : scope.workspace;
+    setDraft((d) => (d.org === null && d.workspace === null ? { ...d, org, workspace } : d));
   }, [isNew, scope]);
   const settings = useQuery({ queryKey: keys.settings, queryFn: commands.getSettings }).data;
   const save = useMutation({
-    mutationFn: (v: { spec: DotSpec; org: string | null }) => props.onSave(v.spec, v.org),
+    mutationFn: (v: { spec: DotSpec; org: string | null; workspace: string | null }) =>
+      props.onSave(v.spec, v.org, v.workspace),
   });
-  // A Viewer, or a PC off the member list, can't save in the dot's account (a new dot's is the
-  // one chosen in the form).
-  const refusal = useRefusal(isNew ? draft.org : (props.existing?.org_id ?? null), "edit");
+  // The core says when the person can't save: for a new dot, the refusal of the account and
+  // workspace chosen in the form; for a stored one, the dot's own (`dot_access`).
+  const newRefusal = useWorkspaceRefusal(
+    isNew ? (draft.org ?? PERSONAL) : undefined,
+    draft.workspace ?? "default",
+    "edit",
+  );
+  const dotRefusal = useDotAccess(props.existing?.id)?.edit ?? undefined;
+  const refusal = isNew ? newRefusal : dotRefusal;
+  // When that question fails the buttons stay on (the core still refuses what it must), and
+  // the form says it could not check.
+  const spaces = useWorkspacesQuery(draft.org ?? PERSONAL, isNew);
+  const access = useDotAccessQuery(props.existing?.id);
+  const checkError = isNew ? spaces.error : access.error;
   const { setEnabled } = props;
   // The stored dot changes at once; the form follows, keeping what else was typed.
   const onEnabled = setEnabled
@@ -100,12 +114,18 @@ function Editor(props: {
         endpoint_url: draft.spec.endpoint_url?.trim() || null,
       },
       org: draft.org,
+      workspace: draft.workspace,
     });
   }
 
   const form = (
     <div className="flex flex-col gap-4">
       {save.isError && <ErrorNote error={save.error} />}
+      {checkError && (
+        <ErrorNote
+          error={`Couldn't check what you may do with this dot: ${errorMessage(checkError)}`}
+        />
+      )}
       {tried && Object.keys(errors).length > 0 && (
         <p role="alert" className="text-destructive">
           Fix the marked fields, then save again.
@@ -168,9 +188,9 @@ function NewDot() {
       initial={blank.data}
       existing={null}
       saveLabel="Create dot"
-      onSave={async (spec, org) => {
-        // Personal sends no org.
-        const dot = await commands.createDot(spec, org);
+      onSave={async (spec, org, workspace) => {
+        // Personal sends no org, and the default workspace sends none.
+        const dot = await commands.createDot(spec, org, workspace);
         invalidateDots(qc);
         qc.setQueryData(keys.dot(dot.id), dot);
         toast.success("Dot created");
@@ -198,6 +218,9 @@ function ExistingDot({ dotId }: { dotId: string }) {
   });
   const org = useDotOrg(dot.data?.org_id ?? null);
   const blocked = org.removed && dot.data?.org_id ? orgRemovedText(dot.data.org_id) : undefined;
+  // Why Run now is off: the account was left, or the core refuses running it.
+  const access = useDotAccess(dotId);
+  const runRefusal = blocked ?? access?.run ?? undefined;
   const runNow = useMutation({
     mutationFn: () => commands.runNow(dotId),
     onSuccess: (run) => void navigate(`/runs/${run.id}`),
@@ -259,8 +282,8 @@ function ExistingDot({ dotId }: { dotId: string }) {
           <Button
             size="sm"
             variant="outline"
-            disabled={runNow.isPending || blocked !== undefined}
-            title={blocked}
+            disabled={runNow.isPending || runRefusal !== undefined}
+            title={runRefusal}
             onClick={() => runNow.mutate()}
           >
             <Play aria-hidden /> Run now

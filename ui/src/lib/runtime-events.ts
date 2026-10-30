@@ -80,11 +80,26 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
     case "org_updated":
       // The org list, and what lists a server per joined org: the Library's catalogs and the
       // Inbox's changed tool lists. What is read per org sits under the orgs' key.
-      for (const queryKey of [keys.orgs, keys.library, keys.inbox]) invalidate(qc, queryKey);
-      // Each dot's variables, read in its org. Only those: a dot loaded again would be one an
-      // open editor might fill its form from.
+      // A roster change can add or take away the workspaces a member sees, and with them the
+      // scope in view (the core falls back to Default); a workspace that went away, or leaving
+      // the account, moves dots to Default.
+      for (const queryKey of [
+        keys.orgs,
+        keys.library,
+        keys.inbox,
+        ["workspaces"],
+        keys.scope,
+        keys.dots,
+        keys.overview,
+      ]) {
+        invalidate(qc, queryKey);
+      }
+      // What is read per dot under its key: its variables (read in its org) and its access
+      // (from the member list). Not the dot itself: an editor opened from a cached copy has not
+      // loaded it since, and loading it again would put the editor back to empty, losing what
+      // was typed.
       for (const query of qc.getQueryCache().findAll({ queryKey: ["dot"] })) {
-        if (query.queryKey[2] === "variables") invalidate(qc, query.queryKey);
+        if (query.queryKey.length > 2) invalidate(qc, query.queryKey);
       }
       break;
     case "schedule_attention":

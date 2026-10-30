@@ -31,8 +31,11 @@ async fn the_rows_name_the_dots_and_the_error_that_keeps_an_app_out() {
     let (dir, store, apps) = fixture().await;
     let mut s = spec("builder");
     s.uses.apps = vec!["expenses".into()];
-    store.create_dot(&s, None).await.unwrap();
-    store.create_dot(&spec("other"), None).await.unwrap();
+    store.create_dot(&s, None, "default").await.unwrap();
+    store
+        .create_dot(&spec("other"), None, "default")
+        .await
+        .unwrap();
     let rows = apps.rows().await.unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].item.name, "expenses");
@@ -102,7 +105,7 @@ async fn a_dot_whose_rules_deny_the_app_is_not_among_its_users() {
                 dots_core::policy::Action::Deny,
             ));
         }
-        store.create_dot(&s, None).await.unwrap();
+        store.create_dot(&s, None, "default").await.unwrap();
     }
     let rows = apps.rows().await.unwrap();
     let mut dots = rows[0].dots.clone();

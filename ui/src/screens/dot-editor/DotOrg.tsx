@@ -1,7 +1,18 @@
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
+
+import { commands } from "@/api/commands";
+import type { Dot, WorkspaceView } from "@/api/types";
+import { ErrorNote } from "@/components/ErrorNote";
 import { Field } from "@/components/Field";
 import { Badge } from "@/components/ui/badge";
 import { NativeSelect } from "@/components/ui/native-select";
+import { useDotAccess } from "@/lib/access";
 import { orgRemovedText, useDotOrg, useOrgList } from "@/lib/dot-org";
+import { invalidateDots, keys } from "@/lib/query";
+import { PERSONAL, useWorkspaces } from "@/lib/scope";
+
+const DEFAULT_WORKSPACE = "default";
 
 /// The org a new dot belongs to (env vault spec §9): Personal, or one of the orgs joined on
 /// this PC. Fixed once the dot is made. With no org joined there is nothing to choose, and
@@ -51,5 +62,91 @@ export function OrgLine({ orgId }: { orgId: string }) {
         </p>
       )}
     </div>
+  );
+}
+
+/// The workspaces of `account` (`"personal"` or an org id) a dot can be in, when it has more
+/// than Default to choose from; `undefined` otherwise, and nothing shows.
+function useChoices(account: string) {
+  const all = useWorkspaces(account) ?? [];
+  return all.length > 1 ? all : undefined;
+}
+
+/// A workspace to choose; one the core refuses changing dots in is off, with its refusal as the
+/// reason (the one chosen now stays on, so the select can show it).
+function Choice({ workspace, chosen }: { workspace: WorkspaceView; chosen: boolean }) {
+  const refusal = chosen ? undefined : (workspace.refusals.edit ?? undefined);
+  return (
+    <option value={workspace.id} disabled={refusal !== undefined} title={refusal}>
+      {workspace.name}
+    </option>
+  );
+}
+
+/// The workspace a new dot starts in (spec: accounts workspaces), among the visible ones of its
+/// account. `null` stands for the default one.
+export function WorkspacePicker(props: {
+  account: string;
+  value: string | null;
+  onChange: (workspace: string | null) => void;
+}) {
+  const choices = useChoices(props.account);
+  if (!choices) return null;
+  return (
+    <Field label="Workspace" htmlFor="dot-workspace" hint="Where the dot is listed and works.">
+      <NativeSelect
+        id="dot-workspace"
+        value={props.value ?? DEFAULT_WORKSPACE}
+        onChange={(e) =>
+          props.onChange(e.target.value === DEFAULT_WORKSPACE ? null : e.target.value)
+        }
+      >
+        {choices.map((w) => (
+          <Choice key={w.id} workspace={w} chosen={w.id === (props.value ?? DEFAULT_WORKSPACE)} />
+        ))}
+      </NativeSelect>
+    </Field>
+  );
+}
+
+/// The workspace of a stored dot; changing it moves the dot at once (`dotMove`), and the core's
+/// refusal is shown below. The account stays fixed. It is off, with the core's reason, when the
+/// person may not change the dot.
+export function WorkspaceMove({ dot }: { dot: Dot }) {
+  const qc = useQueryClient();
+  const choices = useChoices(dot.org_id ?? PERSONAL);
+  const refusal = useDotAccess(dot.id)?.edit ?? undefined;
+  const [placed, setPlaced] = useState(dot.workspace_id);
+  // Follows the stored dot when it is loaded again.
+  useEffect(() => setPlaced(dot.workspace_id), [dot.workspace_id]);
+  const move = useMutation({
+    mutationFn: (workspace: string) => commands.moveDot(dot.id, workspace),
+    onSuccess: (moved) => {
+      setPlaced(moved.workspace_id);
+      qc.setQueryData(keys.dot(dot.id), moved);
+      invalidateDots(qc);
+    },
+  });
+  if (!choices) return null;
+  return (
+    <Field label="Workspace" htmlFor="dot-workspace" hint="Moving it takes effect at once.">
+      <NativeSelect
+        id="dot-workspace"
+        value={placed}
+        disabled={move.isPending || refusal !== undefined}
+        title={move.isPending ? "Moving the dot" : refusal}
+        onChange={(e) => move.mutate(e.target.value)}
+      >
+        {!choices.some((w) => w.id === placed) && (
+          <option value={placed} disabled>
+            {placed}
+          </option>
+        )}
+        {choices.map((w) => (
+          <Choice key={w.id} workspace={w} chosen={w.id === placed} />
+        ))}
+      </NativeSelect>
+      {move.isError && <ErrorNote error={move.error} />}
+    </Field>
   );
 }

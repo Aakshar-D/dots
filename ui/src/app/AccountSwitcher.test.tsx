@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import type { DotOverview, OrgSummary } from "@/api/types";
 import { backend } from "@/test/backend";
-import { sample } from "@/test/fixtures";
+import { allowed, sample } from "@/test/fixtures";
 import { renderApp } from "@/test/render";
 
 const acme: OrgSummary = { ...sample.orgs[0], id: "acme-eng", name: "Acme Engineering" };
@@ -114,3 +114,40 @@ describe("the account switcher", () => {
     expect(items[2]).toHaveTextContent("Member");
   });
 });
+
+describe("the workspaces under an account", () => {
+  const ws = (id: string, name: string) => ({
+    scope: "personal", id, name, use_rules: null, my_role: null, can_manage: true,
+    refusals: allowed,
+  });
+
+  it("switcher lists the account's workspaces and picks one", async () => {
+    const { user } = setup();
+    backend.on("workspace_list", () => [ws("default", "Default"), ws("ops", "Ops")]);
+    await user.click(await screen.findByRole("button", { name: /^Account:/ }));
+    const menu = screen.getByRole("menu");
+    const current = await within(menu).findByRole("menuitemradio", { name: "Default" });
+    expect(current).toHaveAttribute("aria-checked", "true");
+    await user.click(within(menu).getByRole("menuitemradio", { name: "Ops" }));
+    await waitFor(() =>
+      expect(backend.callsTo("scope_set")).toEqual([{ account: "personal", workspace: "ops" }]),
+    );
+  });
+
+  it("single Default workspace shows no list", async () => {
+    const { user } = setup();
+    backend.on("workspace_list", () => [ws("default", "Default")]);
+    await user.click(await screen.findByRole("button", { name: /^Account:/ }));
+    await waitFor(() => expect(backend.callsTo("workspace_list").length).toBeGreaterThan(0));
+    expect(screen.queryByRole("group", { name: "Workspaces" })).toBeNull();
+    expect(screen.queryByRole("menuitemradio", { name: "Default" })).toBeNull();
+  });
+
+  it("renders the account alone when no workspace matches the scope", async () => {
+    const { user } = setup();
+    backend.on("workspace_list", () => []);
+    await user.click(await screen.findByRole("button", { name: /^Account:/ }));
+    expect(await screen.findByRole("menuitemradio", { name: /Personal/ })).toBeVisible();
+  });
+});
+

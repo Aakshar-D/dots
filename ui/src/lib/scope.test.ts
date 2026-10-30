@@ -26,6 +26,17 @@ describe("inScope", () => {
   });
 });
 
+describe("inScope, workspace", () => {
+  it("inScope compares workspace", () => {
+    const scope = { account: "personal", workspace: "ops" };
+    expect(inScope({ org_id: null, workspace_id: "ops" }, scope)).toBe(true);
+    expect(inScope({ org_id: null, workspace_id: "default" }, scope)).toBe(false);
+    const acme = { account: "acme-eng", workspace: "default" };
+    expect(inScope({ org_id: "acme-eng", workspace_id: "ops" }, acme)).toBe(false);
+    expect(inScope({ org_id: "acme-eng", workspace_id: "default" }, acme)).toBe(true);
+  });
+});
+
 describe("a dot whose account was removed", () => {
   const joined = [{ ...sample.orgs[0], id: "acme-eng" }];
 
@@ -39,6 +50,17 @@ describe("a dot whose account was removed", () => {
     expect(inScope({ org_id: "gone" }, { account: "acme-eng", workspace: "default" }, joined)).toBe(
       false,
     );
+  });
+
+  it("is listed in each Personal workspace, whatever workspace it was in", () => {
+    for (const workspace of ["default", "ops"]) {
+      const personal = { account: "personal", workspace };
+      expect(inScope({ org_id: "gone", workspace_id: "payments" }, personal, joined)).toBe(true);
+      expect(inScope({ org_id: "gone", workspace_id: "default" }, personal, joined)).toBe(true);
+    }
+    // A Personal dot still keeps to its workspace.
+    const ops = { account: "personal", workspace: "ops" };
+    expect(inScope({ org_id: null, workspace_id: "default" }, ops, joined)).toBe(false);
   });
 
   it("is not guessed while the joined accounts load", () => {

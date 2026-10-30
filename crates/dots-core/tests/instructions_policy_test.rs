@@ -93,12 +93,15 @@ async fn as_before_0018(db: &std::path::Path, dot_id: &str, keep: Option<Value>)
 #[tokio::test]
 async fn stored_dots_get_the_instructions_rule_once_custom_too() {
     let (dir, store) = common::temp_store().await;
-    let plain = store.create_dot(&common::spec("old"), None).await.unwrap();
+    let plain = store
+        .create_dot(&common::spec("old"), None, "default")
+        .await
+        .unwrap();
     let mut custom = common::spec("custom");
     custom.policy = Policy::preset(Preset::Custom);
-    let custom = store.create_dot(&custom, None).await.unwrap();
+    let custom = store.create_dot(&custom, None, "default").await.unwrap();
     let denied = store
-        .create_dot(&common::spec("denied"), None)
+        .create_dot(&common::spec("denied"), None, "default")
         .await
         .unwrap();
     drop(store);

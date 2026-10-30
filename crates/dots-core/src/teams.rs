@@ -55,15 +55,22 @@ impl Teams {
         self
     }
 
-    /// `Ok` when this PC may change dots and teams in the account `org_id` (members spec §6.3).
-    async fn require_edit(&self, org_id: Option<&str>) -> Result<()> {
-        crate::accounts::require(self.orgs.as_ref(), org_id, Permission::EditDots).await
+    /// `Ok` when this PC may change dots and teams in the workspace `workspace_id` of the
+    /// account `org_id` (members spec §6.3).
+    async fn require_edit(&self, org_id: Option<&str>, workspace_id: &str) -> Result<()> {
+        crate::accounts::require_in(
+            self.orgs.as_ref(),
+            org_id,
+            workspace_id,
+            Permission::EditDots,
+        )
+        .await
     }
 
-    /// `require_edit` in the account of the team `team_id`.
+    /// `require_edit` in the account and workspace of the team `team_id`.
     async fn require_edit_team(&self, team_id: &str) -> Result<()> {
         let team = self.store.get_team(team_id).await?;
-        self.require_edit(team.org_id.as_deref()).await
+        crate::accounts::require_team(self.orgs.as_ref(), &team, Permission::EditDots).await
     }
 
     fn team_updated(&self, team_id: &str) {
@@ -88,13 +95,27 @@ impl Teams {
     }
 
     pub async fn create(&self, spec: &TeamSpec) -> Result<Team> {
-        self.require_edit(spec.org_id.as_deref()).await?;
+        self.require_edit(spec.org_id.as_deref(), &spec.workspace_id)
+            .await?;
+        let scope = spec.org_id.as_deref().unwrap_or(crate::accounts::PERSONAL);
+        if self
+            .store
+            .workspace(scope, &spec.workspace_id)
+            .await?
+            .is_none()
+        {
+            return Err(Error::NotFound(format!(
+                "No workspace '{}' in {}.",
+                spec.workspace_id,
+                crate::accounts::account_label(self.orgs.as_ref(), spec.org_id.as_deref()).await
+            )));
+        }
         let team = self.store.create_team(spec).await?;
         self.team_updated(&team.id);
         Ok(team)
     }
 
-    /// Replaces the team's name, description and members. A workflow that names a member
+    /// Replaces the team's name, description and members; its account and workspace stay. A workflow that names a member
     /// removed here keeps its definition and gets a `problem`.
     pub async fn update(&self, id: &str, spec: &TeamSpec) -> Result<Team> {
         self.require_edit_team(id).await?;

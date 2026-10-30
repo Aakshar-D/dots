@@ -44,7 +44,10 @@ async fn a_taken_port_starts_without_the_server_and_fails_claude_runs() {
     let err = status.server_error.expect("server error reported");
     assert!(err.contains(&taken.to_string()), "{err}");
 
-    let dot = rt.create_dot(folder_spec(&dir, "cli"), None).await.unwrap();
+    let dot = rt
+        .create_dot(folder_spec(&dir, "cli"), None, None)
+        .await
+        .unwrap();
     // No URL on a port that another program owns.
     assert!(matches!(rt.webhook_url(&dot), Err(Error::Conflict(_))));
     let run = rt.run_now(&dot.id).await.unwrap();
@@ -63,7 +66,7 @@ async fn a_taken_port_starts_without_the_server_and_fails_claude_runs() {
     s.engine = EngineKind::Local;
     s.endpoint_url = Some(llm.endpoint());
     s.model = "m".into();
-    let local = rt.create_dot(s, None).await.unwrap();
+    let local = rt.create_dot(s, None, None).await.unwrap();
     let run = rt.run_now(&local.id).await.unwrap();
     let done = wait_status(rt.store(), &run.id, RunStatus::Succeeded, 15).await;
     assert_eq!(done.summary.as_deref(), Some("done locally"));
@@ -148,7 +151,7 @@ async fn a_missing_claude_is_reported_and_fails_claude_runs() {
         Err(Error::Invalid(_))
     ));
     let dot = rt
-        .create_dot(folder_spec(&dir, "nocli"), None)
+        .create_dot(folder_spec(&dir, "nocli"), None, None)
         .await
         .unwrap();
     let run = rt.run_now(&dot.id).await.unwrap();
@@ -227,7 +230,7 @@ async fn paused_schedules_fire_nothing_until_resumed() {
     assert!(rt.settings().await.schedules_paused);
     let mut s = folder_spec(&dir, "ticker");
     s.schedule = Some(Schedule::cron("* * * * * *"));
-    let dot = rt.create_dot(s, None).await.unwrap();
+    let dot = rt.create_dot(s, None, None).await.unwrap();
     tokio::time::sleep(Duration::from_millis(2500)).await;
     assert!(rt
         .store()

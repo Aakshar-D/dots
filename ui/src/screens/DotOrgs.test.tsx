@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import type { Dot, OrgSummary } from "@/api/types";
 import { backend } from "@/test/backend";
-import { blankSpec, sample } from "@/test/fixtures";
+import { allowed, blankSpec, sample } from "@/test/fixtures";
 import { renderApp } from "@/test/render";
 
 const [acme] = sample.orgs as [OrgSummary]; // Acme Engineering, connected
@@ -62,7 +62,7 @@ describe("the org of a new dot", () => {
     await user.click(screen.getByRole("button", { name: "Create dot" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/dots/dot-new"));
     expect(backend.callsTo("create_dot")).toEqual([
-      { spec: { ...blankSpec, ...basics }, orgId: "acme-eng" },
+      { spec: { ...blankSpec, ...basics }, orgId: "acme-eng", workspaceId: null },
     ]);
   });
 
@@ -71,7 +71,7 @@ describe("the org of a new dot", () => {
     await user.click(screen.getByRole("button", { name: "Create dot" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/dots/dot-new"));
     expect(backend.callsTo("create_dot")).toEqual([
-      { spec: { ...blankSpec, ...basics }, orgId: null },
+      { spec: { ...blankSpec, ...basics }, orgId: null, workspaceId: null },
     ]);
   });
 
@@ -82,7 +82,7 @@ describe("the org of a new dot", () => {
     await user.click(screen.getByRole("button", { name: "Create dot" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/dots/dot-new"));
     expect(backend.callsTo("create_dot")).toEqual([
-      { spec: { ...blankSpec, ...basics }, orgId: "acme-eng" },
+      { spec: { ...blankSpec, ...basics }, orgId: "acme-eng", workspaceId: null },
     ]);
   });
 
@@ -231,15 +231,32 @@ describe("a Personal dot", () => {
 describe("a Viewer in the editor", () => {
   const viewer: OrgSummary = { ...acme, membership: "active", role: "viewer" };
   const TITLE = "Acme Engineering: a Viewer can't create or change dots. Ask an Admin or Owner.";
+  const RUN = "Acme Engineering: a Viewer can't run dots. Ask an Admin or Owner.";
 
   it("can't save a dot of the account", async () => {
+    backend.on("dot_access", () => ({ edit: TITLE, run: RUN, answer: null }));
     editor(release, [viewer]);
     const save = await screen.findByRole("button", { name: "Save" });
     await waitFor(() => expect(save).toBeDisabled());
     expect(save).toHaveAttribute("title", TITLE);
+    const run = screen.getByRole("button", { name: "Run now" });
+    expect(run).toBeDisabled();
+    expect(run).toHaveAttribute("title", RUN);
   });
 
   it("can't create a dot in the account chosen, but can in Personal", async () => {
+    // The core refuses the account's Default; Personal's refuses nothing.
+    backend.on("workspace_list", (args) => [
+      {
+        scope: String(args.scope),
+        id: "default",
+        name: "Default",
+        use_rules: null,
+        my_role: null,
+        can_manage: false,
+        refusals: args.scope === "acme-eng" ? { edit: TITLE, run: RUN, answer: null } : allowed,
+      },
+    ]);
     const { user } = await newDot([viewer]);
     await user.selectOptions(screen.getByLabelText("Account"), "acme-eng");
     const create = screen.getByRole("button", { name: "Create dot" });

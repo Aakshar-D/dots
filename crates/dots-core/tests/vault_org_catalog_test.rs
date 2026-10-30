@@ -598,6 +598,7 @@ async fn open(h: &OrgsHarness, vault: &Vault, scope: &DotScope, name: &str) -> R
         cancel: &CancellationToken::new(),
         vault,
         scope,
+        workspace_id: "default",
         grants: &grants,
         dot_name: "triage",
     })
@@ -667,9 +668,13 @@ async fn the_library_and_the_inbox_show_each_scopes_catalog() {
     let (_fake, item) = server_reading(&h.store, "sf", "API_KEY").await;
     let mut spec = common::spec("mine");
     spec.uses.mcp_servers = vec!["sf".into()];
-    let mine = h.store.create_dot(&spec, None).await.unwrap();
+    let mine = h.store.create_dot(&spec, None, "default").await.unwrap();
     spec.name = "theirs".into();
-    let theirs = h.store.create_dot(&spec, Some(ACME)).await.unwrap();
+    let theirs = h
+        .store
+        .create_dot(&spec, Some(ACME), "default")
+        .await
+        .unwrap();
     let entry = |entries: Vec<dots_core::library_service::LibraryEntry>| {
         entries.into_iter().find(|e| e.item.id == item.id).unwrap()
     };

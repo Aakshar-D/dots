@@ -17,7 +17,7 @@ use common::orgs::{
     ISSUED, START, TOKEN,
 };
 use common::{spec, wait_status};
-use dots_core::accounts::{identity, Access, Membership, Permission};
+use dots_core::accounts::{self, identity, Access, Membership, Permission};
 use dots_core::apps::call::Actor;
 use dots_core::apps::propose::{AppProposal, Decision};
 use dots_core::apps::source::read_folder;
@@ -194,7 +194,7 @@ async fn viewer_cannot_create_edit_run_or_answer() {
     let t = Rt::start().await;
     t.join_as("member").await;
     let dot =
-        t.rt.create_dot(t.triage(), Some(ACME.into()))
+        t.rt.create_dot(t.triage(), Some(ACME.into()), None)
             .await
             .unwrap();
     let run =
@@ -213,7 +213,7 @@ async fn viewer_cannot_create_edit_run_or_answer() {
     t.rt.hold_runs(true).await;
 
     assert_eq!(
-        refused(t.rt.create_dot(t.triage(), Some(ACME.into())).await),
+        refused(t.rt.create_dot(t.triage(), Some(ACME.into()), None).await),
         edit
     );
     let mut changed = dot.spec.clone();
@@ -262,7 +262,7 @@ async fn viewer_cannot_create_edit_run_or_answer() {
 
     // `require` answers the same for what the app checks itself.
     assert_eq!(
-        refused(t.rt.require(Some(ACME), Permission::ManageMembers).await),
+        refused(accounts::require(Some(t.orgs()), Some(ACME), Permission::ManageMembers).await),
         viewer_cant("manage members")
     );
     t.rt.shutdown();
@@ -273,7 +273,7 @@ async fn member_can_create_and_run() {
     let t = Rt::start().await;
     t.join_as("member").await;
     let dot =
-        t.rt.create_dot(t.triage(), Some(ACME.into()))
+        t.rt.create_dot(t.triage(), Some(ACME.into()), None)
             .await
             .unwrap();
     let mut changed = dot.spec.clone();
@@ -282,7 +282,7 @@ async fn member_can_create_and_run() {
     assert_eq!(t.run(&dot.id).await, LEVEL);
     // A Member does not manage the account.
     assert_eq!(
-        refused(t.rt.require(Some(ACME), Permission::ManageMembers).await),
+        refused(accounts::require(Some(t.orgs()), Some(ACME), Permission::ManageMembers).await),
         "Acme Engineering: a Member can't manage members. Ask an Admin or Owner."
     );
     t.rt.delete_dot(&dot.id).await.unwrap();
@@ -294,7 +294,7 @@ async fn member_grant_change_needs_grant_permission_ok_for_member() {
     let t = Rt::start().await;
     t.join_as("member").await;
     let dot =
-        t.rt.create_dot(t.triage(), Some(ACME.into()))
+        t.rt.create_dot(t.triage(), Some(ACME.into()), None)
             .await
             .unwrap();
     let mut regranted = dot.spec.clone();
@@ -315,7 +315,7 @@ async fn removed_run_refused_with_removed_text() {
     let t = Rt::start().await;
     t.join_as("member").await;
     let dot =
-        t.rt.create_dot(t.triage(), Some(ACME.into()))
+        t.rt.create_dot(t.triage(), Some(ACME.into()), None)
             .await
             .unwrap();
     // A new list leaves out this PC, which was on the last one: removed.
@@ -336,7 +336,7 @@ async fn waiting_run_refused_with_waiting_text() {
     t.serve(json!({}), None);
     t.join().await;
     let dot =
-        t.rt.create_dot(t.triage(), Some(ACME.into()))
+        t.rt.create_dot(t.triage(), Some(ACME.into()), None)
             .await
             .unwrap();
     // The account now asks for a list that leaves this PC out: waiting, never removed.
@@ -362,7 +362,7 @@ async fn personal_always_allowed() {
     t.join_as("viewer").await;
     let mut s = t.triage();
     s.variables = Grants::default();
-    let dot = t.rt.create_dot(s, None).await.unwrap();
+    let dot = t.rt.create_dot(s, None, None).await.unwrap();
     let mut changed = dot.spec.clone();
     changed.instructions = "something else".into();
     t.rt.update_dot(&dot.id, changed).await.unwrap();
@@ -370,7 +370,7 @@ async fn personal_always_allowed() {
     let run = t.rt.run_now(&dot.id).await.unwrap();
     wait_status(t.rt.store(), &run.id, RunStatus::Succeeded, 15).await;
     for p in [Permission::ManageMembers, Permission::SignRoster] {
-        t.rt.require(None, p).await.unwrap();
+        accounts::require(Some(t.orgs()), None, p).await.unwrap();
     }
     t.rt.delete_dot(&dot.id).await.unwrap();
     t.rt.shutdown();
@@ -382,15 +382,15 @@ async fn legacy_account_acts_as_member() {
     t.serve(json!({}), None);
     t.join().await;
     let dot =
-        t.rt.create_dot(t.triage(), Some(ACME.into()))
+        t.rt.create_dot(t.triage(), Some(ACME.into()), None)
             .await
             .unwrap();
     assert_eq!(t.run(&dot.id).await, LEVEL);
-    t.rt.require(Some(ACME), Permission::GrantEntries)
+    accounts::require(Some(t.orgs()), Some(ACME), Permission::GrantEntries)
         .await
         .unwrap();
     assert_eq!(
-        refused(t.rt.require(Some(ACME), Permission::ManageWorkspaces).await),
+        refused(accounts::require(Some(t.orgs()), Some(ACME), Permission::ManageWorkspaces).await),
         "Acme Engineering: a Member can't manage workspaces. Ask an Admin or Owner."
     );
     t.rt.shutdown();
@@ -421,7 +421,7 @@ async fn viewer_cannot_answer_or_change_through_the_other_doors() {
     let t = Rt::start().await;
     t.join_as("member").await;
     let dot =
-        t.rt.create_dot(t.triage(), Some(ACME.into()))
+        t.rt.create_dot(t.triage(), Some(ACME.into()), None)
             .await
             .unwrap();
     let store = t.rt.store();
@@ -468,6 +468,7 @@ async fn viewer_cannot_answer_or_change_through_the_other_doors() {
             role: String::new(),
         }],
         org_id: Some(ACME.into()),
+        workspace_id: "default".into(),
     };
     let team = t.rt.teams().create(&team_spec).await.unwrap();
     let project_spec = ProjectSpec {
@@ -614,7 +615,7 @@ async fn a_damaged_org_acts_as_waiting() {
     let t = Rt::start().await;
     t.join_as("member").await;
     let dot =
-        t.rt.create_dot(t.triage(), Some(ACME.into()))
+        t.rt.create_dot(t.triage(), Some(ACME.into()), None)
             .await
             .unwrap();
     // The org's saved settings no longer read: on the next start it loads as damaged.
@@ -639,7 +640,10 @@ async fn a_damaged_org_acts_as_waiting() {
         .unwrap();
     pool.close().await;
     let t = Rt::on(dir, secrets, bao, keys).await;
-    assert_eq!(t.rt.access(Some(ACME)), Access::Waiting);
+    assert_eq!(
+        accounts::access(Some(t.orgs()), Some(ACME)),
+        Access::Waiting
+    );
     // Its summary says the same as its access: waiting, with the waiting words.
     let summary = t.orgs().summary(ACME).await.unwrap();
     assert_eq!(summary.membership, Membership::Waiting);
@@ -657,7 +661,7 @@ async fn scheduled_run_held_for_role_then_runs_when_role_returns() {
     let t = Rt::start().await;
     t.join_as("member").await;
     let dot =
-        t.rt.create_dot(t.triage(), Some(ACME.into()))
+        t.rt.create_dot(t.triage(), Some(ACME.into()), None)
             .await
             .unwrap();
     t.become_(2, Some("viewer")).await;
@@ -699,7 +703,7 @@ async fn release_refused_for_role_hold() {
     let t = Rt::start().await;
     t.join_as("member").await;
     let dot =
-        t.rt.create_dot(t.triage(), Some(ACME.into()))
+        t.rt.create_dot(t.triage(), Some(ACME.into()), None)
             .await
             .unwrap();
     t.become_(2, Some("viewer")).await;
@@ -751,7 +755,7 @@ async fn a_legacy_org_whose_roster_read_is_refused_stays_connected() {
     assert_eq!(summary.roster_error, None);
     assert!(summary.copy_until.is_some(), "the offline copy is kept");
     let dot =
-        t.rt.create_dot(t.triage(), Some(ACME.into()))
+        t.rt.create_dot(t.triage(), Some(ACME.into()), None)
             .await
             .unwrap();
     assert_eq!(t.run(&dot.id).await, LEVEL);
@@ -785,7 +789,7 @@ async fn a_webhook_is_refused_when_the_role_cannot_run_dots() {
     let t = Rt::start().await;
     t.join_as("member").await;
     let dot =
-        t.rt.create_dot(t.triage(), Some(ACME.into()))
+        t.rt.create_dot(t.triage(), Some(ACME.into()), None)
             .await
             .unwrap();
     let token = t.rt.regenerate_webhook_token(&dot.id).await.unwrap();
@@ -822,16 +826,22 @@ async fn waiting_or_removed_may_switch_off_and_delete_but_not_change() {
     t.serve(json!({}), None);
     t.join().await;
     let one =
-        t.rt.create_dot(t.triage(), Some(ACME.into()))
+        t.rt.create_dot(t.triage(), Some(ACME.into()), None)
             .await
             .unwrap();
     let mut other = t.triage();
     other.name = "tidy".into();
-    let two = t.rt.create_dot(other, Some(ACME.into())).await.unwrap();
+    let two =
+        t.rt.create_dot(other, Some(ACME.into()), None)
+            .await
+            .unwrap();
     // The account now asks for a list that leaves this PC out: waiting.
     t.serve_list(1, None).await;
     t.rt.refresh_org(ACME).await.unwrap();
-    assert_eq!(t.rt.access(Some(ACME)), Access::Waiting);
+    assert_eq!(
+        accounts::access(Some(t.orgs()), Some(ACME)),
+        Access::Waiting
+    );
 
     let mut changed = one.spec.clone();
     changed.instructions = "something else".into();
@@ -850,7 +860,10 @@ async fn waiting_or_removed_may_switch_off_and_delete_but_not_change() {
     // Added, then left off the next list: removed, with the same cleanup.
     t.become_(2, Some("member")).await;
     t.become_(3, None).await;
-    assert_eq!(t.rt.access(Some(ACME)), Access::Removed);
+    assert_eq!(
+        accounts::access(Some(t.orgs()), Some(ACME)),
+        Access::Removed
+    );
     let removed = "Acme Engineering: you were removed from it.";
     assert_eq!(refused(t.rt.set_dot_enabled(&two.id, true).await), removed);
     t.rt.set_dot_enabled(&two.id, false).await.unwrap();
@@ -908,7 +921,7 @@ async fn an_app_start_is_refused_when_the_role_cannot_run_dots() {
     t.join_as("member").await;
     let mut s = t.triage();
     s.uses.apps = vec!["chores".into()];
-    let dot = t.rt.create_dot(s, Some(ACME.into())).await.unwrap();
+    let dot = t.rt.create_dot(s, Some(ACME.into()), None).await.unwrap();
     t.become_(2, Some("viewer")).await;
 
     let id =

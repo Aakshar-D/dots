@@ -4,8 +4,8 @@ An account is a group of people and dots that belong together, such as your team
 Your own dots live in **Personal**, which is always there. This guide explains how Dots knows who
 you are, how to switch between accounts, and how to join one.
 
-Shared workspaces and API keys are **coming next**. This version covers
-your identity, the switcher, joining (with an invite or by asking), and the member list with roles.
+API keys are **coming next**. This version covers your identity, the switcher, joining (with an
+invite or by asking), the member list with roles, and workspaces.
 
 ## Your Dots ID
 
@@ -37,8 +37,13 @@ have joined.
 - If you follow a link to a dot in another account, Dots switches to that account for you.
 - Next to each account the menu shows how many things are waiting for you there.
 
-Switching only narrows **Home**. **Inbox**, **Needs you** and notifications always show everything,
-from every account, so an approval is never hidden because you are looking at another account.
+If the account has more than one workspace, they are listed under it in the switcher. Pick one and
+**Home** shows only that workspace's dots, and a new dot starts in it. Your pick is remembered.
+
+Switching only narrows **Home**'s dot list and where new dots start.
+**Inbox**, **Needs you**, notifications, runs and Usage always show everything,
+from every account and workspace, so an approval is never hidden because you are looking at another
+one.
 
 ## Joining an account
 
@@ -123,7 +128,30 @@ Admin invite people, approve requests, change roles and remove people. See
 [Setting up Dots for an organisation](vault-admin.md), section 10. Owners can only be changed with
 `dots-admin`.
 
+## Workspaces
+
+A workspace is a part of an account, such as a team or a project. Every account has **Default**.
+Your dots are listed in one workspace. Dots you made before workspaces are in Default.
+
+- On an account with a member list, an Owner or Admin sees every workspace. A Member or Viewer
+  sees only the workspaces the list puts them in. Their role there can narrow what they can do:
+  in a workspace where you are a **viewer** you can look but not change or run, even if you are a
+  Member of the account. A workspace you are not in is hidden. If you open one of its dots by a
+  link, it refuses everything except delete and turning it off: "... you aren't in the ...
+  workspace. Ask an Admin or Owner to add you."
+- An Owner or Admin adds, renames and deletes workspaces and sets who is in each, on the account's
+  **Workspaces** tab and **Members** tab. Deleting a workspace moves its dots and teams to Default.
+  The **Workspaces** tab also shows each workspace's `use` rules (which variable names its dots may
+  use). Only `dots-admin` changes those. See [Setting up Dots for an
+  organisation](vault-admin.md), section 10.
+- **Personal** has workspaces too. They are only on this PC. Add, rename and delete them in
+  **Settings › Accounts**, under Personal.
+- To move a dot, change its **Workspace** in the dot's editor. It moves at once. You need Member
+  rights in both workspaces. A dot can move within its account only, and not while it is in a team.
+  A team's dots must be in the team's workspace.
+
+An account without a member list has only Default, and Personal is not narrowed.
+
 ## Coming next
 
-- Shared workspaces.
 - API keys for an account.

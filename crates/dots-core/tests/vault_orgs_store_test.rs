@@ -369,7 +369,7 @@ async fn a_removed_orgs_dots_keep_its_id_and_a_re_join_attaches_them_again() {
     let (_dir, store) = temp_store().await;
     store.add_org(&acme()).await.unwrap();
     let dot = store
-        .create_dot(&spec("deploy"), Some("acme-eng"))
+        .create_dot(&spec("deploy"), Some("acme-eng"), "default")
         .await
         .unwrap();
     assert_eq!(dot.org_id.as_deref(), Some("acme-eng"));
@@ -429,7 +429,7 @@ async fn runtime() -> (TempDir, Runtime) {
 async fn the_runtime_refuses_a_dot_in_an_org_that_is_not_joined() {
     let (_dir, rt) = runtime().await;
     let err = rt
-        .create_dot(spec("deploy"), Some("acme-eng".into()))
+        .create_dot(spec("deploy"), Some("acme-eng".into()), None)
         .await
         .unwrap_err();
     assert!(
@@ -445,12 +445,12 @@ async fn the_runtime_stores_the_org_of_a_dot_in_a_joined_org() {
     let (_dir, rt) = runtime().await;
     rt.store().add_org(&acme()).await.unwrap();
     let dot = rt
-        .create_dot(spec("deploy"), Some("acme-eng".into()))
+        .create_dot(spec("deploy"), Some("acme-eng".into()), None)
         .await
         .unwrap();
     assert_eq!(dot.org_id.as_deref(), Some("acme-eng"));
     assert_eq!(rt.get_dot(&dot.id).await.unwrap(), dot);
-    let personal = rt.create_dot(spec("notes"), None).await.unwrap();
+    let personal = rt.create_dot(spec("notes"), None, None).await.unwrap();
     assert_eq!(personal.org_id, None);
     rt.shutdown();
 }
@@ -459,10 +459,13 @@ async fn the_runtime_stores_the_org_of_a_dot_in_a_joined_org() {
 async fn a_dot_shows_its_org_as_org_id() {
     let (_dir, store) = temp_store().await;
     let in_org = store
-        .create_dot(&spec("deploy"), Some("acme-eng"))
+        .create_dot(&spec("deploy"), Some("acme-eng"), "default")
         .await
         .unwrap();
-    let personal = store.create_dot(&spec("notes"), None).await.unwrap();
+    let personal = store
+        .create_dot(&spec("notes"), None, "default")
+        .await
+        .unwrap();
     assert_eq!(serde_json::to_value(&in_org).unwrap()["org_id"], "acme-eng");
     assert_eq!(
         serde_json::to_value(&personal).unwrap()["org_id"],

@@ -355,7 +355,7 @@ async fn rejoining_a_removed_org_re_attaches_its_dots() {
     h.join_acme(entries(), acme_policy()).await;
     let dot = h
         .store
-        .create_dot(&dot_spec("Triage"), Some(ACME))
+        .create_dot(&dot_spec("Triage"), Some(ACME), "default")
         .await
         .unwrap();
 
@@ -381,7 +381,7 @@ async fn remove_wipes_the_copy_the_creds_and_the_row_and_the_dots_stay() {
     h.join_acme(entries(), acme_policy()).await;
     let dot = h
         .store
-        .create_dot(&dot_spec("Triage"), Some(ACME))
+        .create_dot(&dot_spec("Triage"), Some(ACME), "default")
         .await
         .unwrap();
     assert!(h.copy_path(ACME).exists());
@@ -633,7 +633,7 @@ async fn an_update_replaces_the_settings_and_leaves_dots_and_grants_alone() {
     h.join_acme(entries(), acme_policy()).await;
     let dot = h
         .store
-        .create_dot(&dot_spec("Triage"), Some(ACME))
+        .create_dot(&dot_spec("Triage"), Some(ACME), "default")
         .await
         .unwrap();
 

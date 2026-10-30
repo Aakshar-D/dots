@@ -115,7 +115,7 @@ fn local_spec(t: &Rt, endpoint: &str, name: &str) -> DotSpec {
 }
 
 async fn dot(t: &Rt, endpoint: &str, name: &str) -> Dot {
-    t.rt.create_dot(local_spec(t, endpoint, name), None)
+    t.rt.create_dot(local_spec(t, endpoint, name), None, None)
         .await
         .unwrap()
 }
@@ -240,7 +240,7 @@ async fn the_switch_the_dots_the_pause_and_the_hour_bound_the_starts() {
     let builder = dot(&t, "http://127.0.0.1:1", "builder").await;
     let mut other_spec = local_spec(&t, "http://127.0.0.1:1", "other");
     other_spec.uses.apps.clear();
-    let other = t.rt.create_dot(other_spec, None).await.unwrap();
+    let other = t.rt.create_dot(other_spec, None, None).await.unwrap();
     let runs_of = |dot: &Dot| {
         let (store, id) = (t.rt.store().clone(), dot.id.clone());
         async move { store.list_runs(Some(&id), 100).await.unwrap().len() }

@@ -130,7 +130,7 @@ async fn a_run_of_a_dot_whose_org_was_removed_fails_at_start_and_spawns_nothing(
     let t = Rt::start().await;
     t.join_acme().await;
     let dot =
-        t.rt.create_dot(t.triage(), Some(ACME.into()))
+        t.rt.create_dot(t.triage(), Some(ACME.into()), None)
             .await
             .unwrap();
     t.orgs().remove(ACME).await.unwrap();
@@ -175,7 +175,7 @@ async fn a_run_start_fetches_a_stale_org_once_and_not_a_fresh_one() {
     t.join_acme().await;
     assert_eq!(t.env_reads(), 1);
     let dot =
-        t.rt.create_dot(t.triage(), Some(ACME.into()))
+        t.rt.create_dot(t.triage(), Some(ACME.into()), None)
             .await
             .unwrap();
 
@@ -200,7 +200,7 @@ async fn saving_a_dot_whose_org_was_removed_is_refused() {
     let t = Rt::start().await;
     t.join_acme().await;
     let dot =
-        t.rt.create_dot(t.triage(), Some(ACME.into()))
+        t.rt.create_dot(t.triage(), Some(ACME.into()), None)
             .await
             .unwrap();
     t.orgs().remove(ACME).await.unwrap();
@@ -218,7 +218,7 @@ async fn saving_a_dot_whose_org_was_removed_is_refused() {
     // A Personal dot saves as before.
     let mut mine = t.triage();
     mine.name = "mine".into();
-    let mine = t.rt.create_dot(mine, None).await.unwrap();
+    let mine = t.rt.create_dot(mine, None, None).await.unwrap();
     t.rt.update_dot(&mine.id, mine.spec.clone()).await.unwrap();
     t.rt.shutdown();
 }
@@ -349,7 +349,7 @@ async fn the_status_of_a_dots_variables_fetches_nothing_and_holds_no_value() {
     let t = Rt::start().await;
     t.join_acme().await;
     let dot =
-        t.rt.create_dot(t.triage(), Some(ACME.into()))
+        t.rt.create_dot(t.triage(), Some(ACME.into()), None)
             .await
             .unwrap();
     assert_eq!(t.env_reads(), 1);

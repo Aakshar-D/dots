@@ -5,8 +5,8 @@ use sqlx::Row;
 
 use super::Store;
 use crate::model::{
-    MemberSpec, Project, ProjectSpec, StartableWorkflow, Team, TeamMember, TeamSpec, Workflow,
-    WorkflowSpec,
+    MemberSpec, Project, ProjectSpec, StartableWorkflow, Team, TeamMember, TeamScopeIssue,
+    TeamSpec, Workflow, WorkflowSpec,
 };
 use crate::util::{new_id, now};
 use crate::{Error, Result};
@@ -76,15 +76,16 @@ pub const TEAM_ORG_BACKFILL_SQL: &str = "UPDATE teams SET org_id = (
     WHERE m.team_id = teams.id
 ) = 1";
 
-/// Refuses a member dot that is not in the account `org_id`.
+/// Refuses a member dot that is not in the account `org_id` and its workspace `workspace_id`.
 async fn check_accounts(
     conn: &mut sqlx::SqliteConnection,
     org_id: Option<&str>,
+    workspace_id: &str,
     members: &[MemberSpec],
 ) -> Result<()> {
     for m in members {
         // A missing dot is left for the foreign key to report.
-        let Some(row) = sqlx::query("SELECT name, org_id FROM dots WHERE id = ?")
+        let Some(row) = sqlx::query("SELECT name, org_id, workspace_id FROM dots WHERE id = ?")
             .bind(&m.dot_id)
             .fetch_optional(&mut *conn)
             .await?
@@ -96,6 +97,13 @@ async fn check_accounts(
             let name: String = row.try_get("name")?;
             return Err(Error::Invalid(format!(
                 "dot '{name}' is in another account than the team"
+            )));
+        }
+        let dot_workspace: String = row.try_get("workspace_id")?;
+        if dot_workspace != workspace_id {
+            let name: String = row.try_get("name")?;
+            return Err(Error::Invalid(format!(
+                "dot '{name}' is in another workspace than the team"
             )));
         }
     }
@@ -123,19 +131,22 @@ async fn insert_members(
 }
 
 impl Store {
+    /// Creates a team. Whether the spec's `workspace_id` exists in its account is the caller's
+    /// check.
     pub async fn create_team(&self, spec: &TeamSpec) -> Result<Team> {
         spec.validate()?;
         let id = new_id();
         let ts = now();
         let mut tx = self.pool.begin().await?;
         sqlx::query(
-            "INSERT INTO teams (id, name, description, org_id, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO teams (id, name, description, org_id, workspace_id, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(spec.name.trim())
         .bind(spec.description.trim())
         .bind(&spec.org_id)
+        .bind(&spec.workspace_id)
         .bind(&ts)
         .bind(&ts)
         .execute(&mut *tx)
@@ -146,14 +157,20 @@ impl Store {
                 format!("a team named {:?} already exists", spec.name.trim()),
             )
         })?;
-        check_accounts(&mut tx, spec.org_id.as_deref(), &spec.members).await?;
+        check_accounts(
+            &mut tx,
+            spec.org_id.as_deref(),
+            &spec.workspace_id,
+            &spec.members,
+        )
+        .await?;
         insert_members(&mut tx, &id, &spec.members).await?;
         tx.commit().await?;
         self.get_team(&id).await
     }
 
     /// Replaces the team's name, description and members. The team keeps its account; the
-    /// spec's `org_id` is ignored.
+    /// spec's `org_id` is ignored, and so is its `workspace_id`.
     pub async fn update_team(&self, id: &str, spec: &TeamSpec) -> Result<Team> {
         spec.validate()?;
         let mut tx = self.pool.begin().await?;
@@ -174,11 +191,12 @@ impl Store {
         if res.rows_affected() == 0 {
             return Err(Error::NotFound(format!("team {id}")));
         }
-        let org_id: Option<String> = sqlx::query_scalar("SELECT org_id FROM teams WHERE id = ?")
-            .bind(id)
-            .fetch_one(&mut *tx)
-            .await?;
-        check_accounts(&mut tx, org_id.as_deref(), &spec.members).await?;
+        let (org_id, workspace_id): (Option<String>, String) =
+            sqlx::query_as("SELECT org_id, workspace_id FROM teams WHERE id = ?")
+                .bind(id)
+                .fetch_one(&mut *tx)
+                .await?;
+        check_accounts(&mut tx, org_id.as_deref(), &workspace_id, &spec.members).await?;
         sqlx::query("DELETE FROM team_members WHERE team_id = ?")
             .bind(id)
             .execute(&mut *tx)
@@ -201,7 +219,8 @@ impl Store {
 
     pub async fn get_team(&self, id: &str) -> Result<Team> {
         let row = sqlx::query(
-            "SELECT id, name, description, org_id, created_at, updated_at FROM teams WHERE id = ?",
+            "SELECT id, name, description, org_id, workspace_id, created_at, updated_at \
+             FROM teams WHERE id = ?",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -239,6 +258,7 @@ impl Store {
             members,
             projects,
             org_id: row.try_get("org_id")?,
+            workspace_id: row.try_get("workspace_id")?,
             created_at: row.try_get("created_at")?,
             updated_at: row.try_get("updated_at")?,
         })
@@ -447,6 +467,33 @@ impl Store {
         .fetch_optional(&self.pool)
         .await?
         .ok_or_else(|| Error::NotFound(format!("project {project}")))
+    }
+
+    /// The member dots that are not in their team's account or workspace, by team and dot name.
+    pub async fn team_scope_issues(&self) -> Result<Vec<TeamScopeIssue>> {
+        let rows = sqlx::query(
+            "SELECT t.id AS team_id, t.name AS team_name, d.id AS dot_id, d.name AS dot_name,                     d.org_id IS NOT t.org_id AS other_account              FROM team_members m JOIN teams t ON t.id = m.team_id JOIN dots d ON d.id = m.dot_id              WHERE d.org_id IS NOT t.org_id OR d.workspace_id != t.workspace_id              ORDER BY t.name, d.name",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|row| {
+                let team_name: String = row.try_get("team_name")?;
+                let dot_name: String = row.try_get("dot_name")?;
+                let what = if row.try_get::<bool, _>("other_account")? {
+                    "account"
+                } else {
+                    "workspace"
+                };
+                Ok(TeamScopeIssue {
+                    team_id: row.try_get("team_id")?,
+                    dot_id: row.try_get("dot_id")?,
+                    reason: format!("{dot_name} is in another {what} than the {team_name} team."),
+                    team_name,
+                    dot_name,
+                })
+            })
+            .collect()
     }
 
     /// The teams `dot_id` is a member of, by id.

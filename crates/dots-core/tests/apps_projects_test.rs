@@ -100,7 +100,7 @@ async fn a_dot_given_a_task_reads_it_reports_and_leaves_it_in_review() {
     s.engine = EngineKind::Local;
     s.endpoint_url = Some(format!("{}/v1", llm.endpoint()));
     s.model = "test-model".into();
-    let builder = rt.create_dot(s, None).await.unwrap();
+    let builder = rt.create_dot(s, None, None).await.unwrap();
     rt.apps().set_can_start_dots(PROJECTS, true).await.unwrap();
 
     person(

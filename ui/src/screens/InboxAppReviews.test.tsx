@@ -16,6 +16,7 @@ const only = (app_reviews: PendingAppReview[]): Inbox => ({
   held: [],
   instructions: [],
   app_reviews,
+  team_scope: [],
 });
 
 describe("apps sent for review in the Inbox", () => {

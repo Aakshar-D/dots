@@ -204,7 +204,7 @@ async fn worktree_dot(store: &Store, dir: &Path, name: &str) -> Dot {
     let mut s = spec(name);
     s.workdir = own.to_string_lossy().to_string();
     s.workspace_mode = WorkspaceMode::Worktree;
-    store.create_dot(&s, None).await.unwrap()
+    store.create_dot(&s, None, "default").await.unwrap()
 }
 
 async fn world() -> World {
@@ -244,6 +244,7 @@ async fn world_with(clock: Arc<dyn Clock>, budget: Budget) -> World {
     let team = store
         .create_team(&TeamSpec {
             org_id: None,
+            workspace_id: "default".into(),
             name: "Dots management".into(),
             description: String::new(),
             members: vec![
@@ -707,6 +708,7 @@ async fn what_a_start_refuses() {
         .store
         .create_team(&TeamSpec {
             org_id: None,
+            workspace_id: "default".into(),
             name: "Other".into(),
             description: String::new(),
             members: vec![],

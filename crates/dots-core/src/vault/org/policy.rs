@@ -107,6 +107,22 @@ fn allow_all() -> Vec<String> {
     vec!["*".into()]
 }
 
+impl UseRules {
+    /// Whether `name` matches an `allow` glob and no `deny` glob. Case is ignored.
+    fn allows(&self, name: &str) -> bool {
+        let matches = |globs: &[String]| globs.iter().any(|g| glob_matches(g, name));
+        !matches(&self.deny) && matches(&self.allow)
+    }
+}
+
+/// Whether a dot may use the entry `name` under the account's `policy` rules and, when its
+/// workspace gives its own, the `workspace` rules (members spec §6.3): either's `deny` refuses,
+/// and `allow` must match in both, so a workspace only narrows what the account allows. A
+/// workspace with no `use` rules narrows nothing.
+pub fn may_use_in(policy: &UseRules, workspace: Option<&UseRules>, name: &str) -> bool {
+    policy.allows(name) && workspace.is_none_or(|rules| rules.allows(name))
+}
+
 /// Where audit records go (plan C sends them). `token_entry` names an org entry sent as
 /// `Authorization: Bearer`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -257,8 +273,7 @@ impl OrgPolicy {
     /// Whether dots may be granted the org entry `name`: an `allow` glob matches and no `deny`
     /// glob does. Case is ignored, as names compare that way.
     pub fn may_use(&self, name: &str) -> bool {
-        let matches = |globs: &[String]| globs.iter().any(|g| glob_matches(g, name));
-        !matches(&self.use_rules.deny) && matches(&self.use_rules.allow)
+        self.use_rules.allows(name)
     }
 
     /// Whether the org entry `name` is plain, shown with its value. Every other entry is secret.

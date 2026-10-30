@@ -1,5 +1,6 @@
 <!-- dots:notes 0.2.0 -->
 - Accounts, part 1: your Dots ID and Profile, Organisations renamed Accounts, and an account switcher that filters Home
+- Accounts, part 4: workspaces. Split an account into workspaces with their own members' roles, filter Home by workspace, move dots between them, and narrow what each may use
 - Accounts, part 3: invites, request codes and a Members tab to invite, approve, change roles and remove people, with in-app signing, publishing and drafts
 - Accounts, part 2: a signed member list with roles (Owner, Admin, Member, Viewer), waiting and removed states, and held runs when a role no longer allows them
 - app library screens — the Apps screen, app frames, the review card and copy_app (plan B) (#32)

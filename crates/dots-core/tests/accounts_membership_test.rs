@@ -463,7 +463,7 @@ async fn waiting_dot_run_refused_with_message() {
             .into_iter()
             .collect(),
     );
-    let dot = h.store.create_dot(&s, Some(ACME)).await.unwrap();
+    let dot = h.store.create_dot(&s, Some(ACME), "default").await.unwrap();
     let vault = h.vault();
 
     match vault.before_run(&dot).await {
@@ -669,7 +669,7 @@ async fn regenerated_identity_waits_for_the_new_id_nothing_wiped() {
     assert_eq!(row.member.member_id.as_deref(), Some("01ME"));
     let dot = h
         .store
-        .create_dot(&spec("triage"), Some(ACME))
+        .create_dot(&spec("triage"), Some(ACME), "default")
         .await
         .unwrap();
     match h.vault().before_run(&dot).await {

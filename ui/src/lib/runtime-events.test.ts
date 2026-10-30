@@ -135,8 +135,19 @@ describe("runtime events and the query cache", () => {
     const qc = createQueryClient();
     // The Library and the Inbox list a server's catalog and changed tools per joined org. What
     // is read per org sits under the orgs' key. This PC's age key does not change.
-    const lists = [keys.orgs, ["orgs", "acme-eng", "entries"], keys.library, keys.inbox];
-    const untouched = [keys.settings, keys.dots, keys.env, keys.orgSopsKey("acme-eng")];
+    const lists = [
+      keys.orgs,
+      ["orgs", "acme-eng", "entries"],
+      keys.library,
+      keys.inbox,
+      keys.workspaces("acme-eng"),
+      // A workspace that went away takes the scope in view with it, and moves dots to Default.
+      keys.scope,
+      keys.dots,
+      keys.overview,
+    ];
+    // A dot itself is not asked again: an open editor may have been filled from it.
+    const untouched = [keys.settings, keys.orgSopsKey("acme-eng"), keys.dot("dot-a")];
     for (const key of [...lists, ...untouched]) qc.setQueryData(key, []);
 
     applyRuntimeEvent(qc, { type: "org_updated", org_id: "acme-eng" });
@@ -144,16 +155,48 @@ describe("runtime events and the query cache", () => {
     for (const key of untouched) expect(stale(qc, key), key.join("/")).toBe(false);
   });
 
-  it("marks each dot's variables stale on an org update, and not the dots", () => {
+  it("refetches the workspace list on an org update", async () => {
     const qc = createQueryClient();
-    // Each dot's variables resolve in its org. An editor fills its form from the dot.
-    const variables = [keys.dotVariables("dot-a"), keys.dotVariables("dot-b")];
-    const dots = [keys.dot("dot-a"), keys.dot("dot-b"), keys.overview];
-    for (const key of [...variables, ...dots]) qc.setQueryData(key, []);
+    let calls = 0;
+    backend.on("workspace_list", () => {
+      calls += 1;
+      return [];
+    });
+    const observer = new QueryObserver(qc, {
+      queryKey: keys.workspaces("acme-eng"),
+      queryFn: () => commands.workspaceList("acme-eng"),
+    });
+    const unsubscribe = observer.subscribe(() => {});
+    await vi.waitFor(() => expect(calls).toBe(1));
+    applyRuntimeEvent(qc, { type: "org_updated", org_id: "acme-eng" });
+    await vi.waitFor(() => expect(calls).toBe(2));
+    unsubscribe();
+  });
+
+  it("marks each dot's variables and access stale on an org update", () => {
+    const qc = createQueryClient();
+    // Each dot's variables resolve in its org, and what the person may do with it follows the
+    // member list.
+    const perDot = [keys.dotVariables("dot-a"), keys.dotVariables("dot-b"), keys.dotAccess("dot-a")];
+    for (const key of perDot) qc.setQueryData(key, []);
 
     applyRuntimeEvent(qc, { type: "org_updated", org_id: "acme-eng" });
-    for (const key of variables) expect(stale(qc, key), key.join("/")).toBe(true);
-    for (const key of dots) expect(stale(qc, key), key.join("/")).toBe(false);
+    for (const key of perDot) expect(stale(qc, key), key.join("/")).toBe(true);
+  });
+
+  it("refetches the scope on an org update", async () => {
+    const qc = createQueryClient();
+    let calls = 0;
+    backend.on("scope_get", () => {
+      calls += 1;
+      return sample.scope;
+    });
+    const observer = new QueryObserver(qc, { queryKey: keys.scope, queryFn: commands.scopeGet });
+    const unsubscribe = observer.subscribe(() => {});
+    await vi.waitFor(() => expect(calls).toBe(1));
+    applyRuntimeEvent(qc, { type: "org_updated", org_id: "acme-eng" });
+    await vi.waitFor(() => expect(calls).toBe(2));
+    unsubscribe();
   });
 
   it("leaves the caches to the schedule update that comes with a schedule's attention", () => {
@@ -317,7 +360,7 @@ describe("a run's events while their list loads or refetches", () => {
 });
 
 describe("a change announced while a fetch is in flight", () => {
-  const empty: Inbox = { approvals: [], review_runs: [], attention: [], tools_changed: [], watchers: [], held: [], instructions: [], app_reviews: [] };
+  const empty: Inbox = { approvals: [], review_runs: [], attention: [], tools_changed: [], watchers: [], held: [], instructions: [], app_reviews: [], team_scope: [] };
   /// Shows the Inbox as the app's frame does.
   const watchInbox = (qc: Client) =>
     new QueryObserver(qc, { queryKey: keys.inbox, queryFn: commands.inbox }).subscribe(() => {});

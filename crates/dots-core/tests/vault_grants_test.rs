@@ -119,7 +119,7 @@ async fn ticking_a_server_grants_its_variables_and_a_later_one_waits() {
         .unwrap();
     let mut s = spec("triage");
     s.uses.mcp_servers = names(&["github", "plain"]);
-    let dot = store.create_dot(&s, None).await.unwrap();
+    let dot = store.create_dot(&s, None, "default").await.unwrap();
     assert_eq!(
         dot.spec.variables,
         grants(&[("mcp:github", &["GITHUB_TOKEN"])])
@@ -191,7 +191,7 @@ async fn ticking_a_plugin_grants_the_variables_of_its_servers() {
     .unwrap();
     let mut s = spec("filler");
     s.uses.plugins = names(&["forms"]);
-    let dot = store.create_dot(&s, None).await.unwrap();
+    let dot = store.create_dot(&s, None, "default").await.unwrap();
     assert_eq!(
         dot.spec.variables,
         grants(&[("mcp:plugin-forms-db", &["DB_TOKEN"])])
@@ -225,7 +225,7 @@ async fn a_plugin_update_adding_a_variable_does_not_grant_it() {
     let item = lib.add("forms", plugin.clone(), None).await.unwrap();
     let mut s = spec("filler");
     s.uses.plugins = names(&["forms"]);
-    let dot = store.create_dot(&s, None).await.unwrap();
+    let dot = store.create_dot(&s, None, "default").await.unwrap();
     // The plugin's update reads one more variable, and the plugin is synced again.
     std::fs::write(
         root.join(".mcp.json"),
@@ -320,6 +320,7 @@ async fn open(
         cancel: &CancellationToken::new(),
         vault,
         scope: &DotScope::Personal,
+        workspace_id: "default",
         grants,
         dot_name: "triage",
     })
@@ -459,7 +460,7 @@ async fn a_name_personal_cannot_hold_is_not_auto_granted_and_the_dot_still_saves
         .unwrap();
     let mut s = spec("wide-dot");
     s.uses.mcp_servers = names(&["wide"]);
-    let dot = store.create_dot(&s, None).await.unwrap();
+    let dot = store.create_dot(&s, None, "default").await.unwrap();
     assert_eq!(dot.spec.variables, grants(&[("mcp:wide", &["GOOD"])]));
     store.update_dot(&dot.id, &dot.spec).await.unwrap();
 }

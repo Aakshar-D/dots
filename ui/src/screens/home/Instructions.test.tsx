@@ -142,6 +142,7 @@ describe("instructions a dot proposed", () => {
       held: [],
       instructions: [{ proposal: proposal(), dot_name: dot.name }],
       app_reviews: [],
+      team_scope: [],
     }));
     renderApp("/inbox");
     const group = await screen.findByRole("region", { name: "New instructions" });

@@ -29,6 +29,7 @@ pub use teams::TEAM_ORG_BACKFILL_SQL;
 mod upgrade;
 mod watchers;
 mod workflow_runs;
+mod workspaces;
 
 pub(crate) use upgrade::{auth_scheme, var_name};
 
@@ -43,6 +44,7 @@ pub struct Store {
 pub use invites::{DraftRow, InviteRow};
 pub use limits::LimitReading;
 pub use memories::Added;
+pub use workspaces::WorkspaceRow;
 
 impl Store {
     /// Opens (creating if needed) the database file and applies migrations, with the parts of

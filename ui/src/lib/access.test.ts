@@ -1,13 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import type { OrgSummary, Role } from "@/api/types";
+import type { OrgSummary } from "@/api/types";
 import { sample } from "@/test/fixtures";
 
-import { accessOf, allows, notAllowedText, type Action } from "./access";
+import { accessOf, notAllowedText } from "./access";
 
 const base = sample.orgs[0];
 const org = (over: Partial<OrgSummary>): OrgSummary => ({ ...base, ...over }) as OrgSummary;
-const ACTIONS: Action[] = ["edit", "run", "answer"];
 
 describe("accessOf", () => {
   it("is Owner in Personal, Legacy for an unjoined or list-less account", () => {
@@ -26,21 +25,6 @@ describe("accessOf", () => {
     });
     expect(accessOf(org({ membership: "waiting", role: null }), base.id).kind).toBe("waiting");
     expect(accessOf(org({ membership: "removed", role: null }), base.id).kind).toBe("removed");
-  });
-});
-
-describe("allows", () => {
-  it("lets everyone but a Viewer, and nobody off the list", () => {
-    for (const p of ACTIONS) {
-      expect(allows({ kind: "owner" }, p)).toBe(true);
-      expect(allows({ kind: "legacy" }, p)).toBe(true);
-      for (const role of ["owner", "admin", "member"] as Role[]) {
-        expect(allows({ kind: "role", role }, p)).toBe(true);
-      }
-      expect(allows({ kind: "role", role: "viewer" }, p)).toBe(false);
-      expect(allows({ kind: "waiting" }, p)).toBe(false);
-      expect(allows({ kind: "removed" }, p)).toBe(false);
-    }
   });
 });
 

@@ -15,7 +15,7 @@ use dots_core::accounts::roster::{
     parse_roster, roster_envelope, verify_roster, Member, Role, Roster, RosterError, Workspace,
     WorkspaceRole, ROSTER_VERSION,
 };
-use dots_core::vault::org::{check_org_id, key_fingerprint};
+use dots_core::vault::org::{check_org_id, key_fingerprint, UseRules};
 use minisign::PublicKey;
 use serde::Serialize;
 use serde_json::Value;
@@ -85,18 +85,19 @@ fn parse_workspace_role(text: &str) -> Result<WorkspaceRole> {
     })
 }
 
-/// `--workspace <id>=<role>` values as a map; the same id twice is refused.
-fn workspace_roles(values: &[String]) -> Result<BTreeMap<String, WorkspaceRole>> {
+/// `<id>=<role>` values as a map, `what` naming them for the error ("--workspace"); the same
+/// id twice is refused.
+fn workspace_roles(what: &str, values: &[String]) -> Result<BTreeMap<String, WorkspaceRole>> {
     let mut roles = BTreeMap::new();
     for value in values {
         let (id, role) = value
             .split_once('=')
-            .ok_or_else(|| usage(format!("--workspace '{value}' must look like <id>=<role>")))?;
+            .ok_or_else(|| usage(format!("{what} '{value}' must look like <id>=<role>")))?;
         if roles
             .insert(id.to_string(), parse_workspace_role(role)?)
             .is_some()
         {
-            return Err(usage(format!("--workspace {id} is given twice")));
+            return Err(usage(format!("{what} {id} is given twice")));
         }
     }
     Ok(roles)
@@ -148,10 +149,13 @@ pub fn new_roster(
 pub(crate) fn roster_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
     let Some((sub, rest)) = args.split_first() else {
         return Err(usage(
-            "'roster' needs one of: new, add, add-request, set-role, remove, check, sign, verify",
+            "'roster' needs one of: new, add, add-request, set-role, set-workspaces, workspace, \
+             remove, check, sign, verify",
         ));
     };
     match sub.as_str() {
+        "set-workspaces" => set_workspaces_command(rest, io),
+        "workspace" => workspace_command(rest, io),
         "new" => new_command(rest, io),
         "add" => add_command(rest, io),
         "add-request" => add_request_command(rest, io),
@@ -215,7 +219,7 @@ fn add_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
         args.required("key")?,
     );
     let role = parse_role(args.required("role")?)?;
-    let given = workspace_roles(args.all("workspace"))?;
+    let given = workspace_roles("--workspace", args.all("workspace"))?;
     check_dots_id(key)?;
 
     let mut roster = read_roster(path)?;
@@ -261,6 +265,122 @@ fn set_role_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
     member.role = role;
     write_roster(path, &roster)?;
     say(io.out, &format!("{email} is now {}", role.label()))
+}
+
+/// `roster set-workspaces <roster.json> <email> <id>=<role> ...`: the member's roles in every
+/// workspace they are in, replacing the old ones. `default` must be one.
+fn set_workspaces_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
+    let args = Args::parse(args, &[], &[])?;
+    let (Some(path), Some(email)) = (args.rest(0).first(), args.rest(1).first()) else {
+        return Err(usage(
+            "give the member list, the member's email and one or more <id>=<role>",
+        ));
+    };
+    let workspaces = workspace_roles("a workspace role", args.rest(2))?;
+    let mut roster = read_roster(path)?;
+    let member_id = member_by_email(&mut roster, email)?.id.clone();
+    let change = Change::SetWorkspaces {
+        member_id,
+        workspaces,
+    };
+    // The root key signs this list, so changing an Owner's entry is allowed here.
+    let (edited, _) = edit_members(&roster, &change, Utc::now(), true).map_err(core_failed)?;
+    write_roster(path, &edited)?;
+    say(io.out, &format!("{email}'s workspaces are changed"))
+}
+
+/// `roster workspace add|rename|remove|use ...`: the account's workspaces.
+fn workspace_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
+    let Some((sub, rest)) = args.split_first() else {
+        return Err(usage(
+            "'roster workspace' needs one of: add, rename, remove, use",
+        ));
+    };
+    match sub.as_str() {
+        "add" => workspace_add_command(rest, io),
+        "rename" => workspace_rename_command(rest, io),
+        "remove" => workspace_remove_command(rest, io),
+        "use" => workspace_use_command(rest, io),
+        other => Err(usage(format!("unknown roster workspace command '{other}'"))),
+    }
+}
+
+/// The `--allow` and `--deny` patterns as use rules; none given is no rules.
+fn use_rules(args: &Args) -> Option<UseRules> {
+    let (allow, deny) = (args.all("allow"), args.all("deny"));
+    if allow.is_empty() && deny.is_empty() {
+        return None;
+    }
+    let mut rules = UseRules::default();
+    if !allow.is_empty() {
+        rules.allow = allow.to_vec();
+    }
+    rules.deny = deny.to_vec();
+    Some(rules)
+}
+
+/// `roster workspace add <roster.json> <name> [--allow <pattern> ...] [--deny <pattern> ...]`.
+fn workspace_add_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
+    let args = Args::parse_repeating(args, &[], &["allow", "deny"], &[])?;
+    let [path, name] = args.words(["the member list", "the workspace name"])?;
+    let mut roster = read_roster(path)?;
+    let change = Change::AddWorkspace { name: name.into() };
+    let (mut edited, summary) =
+        edit_members(&roster, &change, Utc::now(), true).map_err(core_failed)?;
+    let added = edited
+        .workspaces
+        .last_mut()
+        .expect("a workspace was just added");
+    added.use_rules = use_rules(&args);
+    let id = added.id.clone();
+    roster = edited;
+    write_roster(path, &roster)?;
+    say(io.out, &format!("{summary}: id {id}"))
+}
+
+/// `roster workspace rename <roster.json> <id> <name>`.
+fn workspace_rename_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
+    let args = Args::parse(args, &[], &[])?;
+    let [path, id, name] = args.words(["the member list", "the workspace id", "the new name"])?;
+    let roster = read_roster(path)?;
+    let change = Change::RenameWorkspace {
+        id: id.into(),
+        name: name.into(),
+    };
+    let (edited, summary) =
+        edit_members(&roster, &change, Utc::now(), true).map_err(core_failed)?;
+    write_roster(path, &edited)?;
+    say(io.out, &summary)
+}
+
+/// `roster workspace remove <roster.json> <id>`: never `default`.
+fn workspace_remove_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
+    let args = Args::parse(args, &[], &[])?;
+    let [path, id] = args.words(["the member list", "the workspace id"])?;
+    let roster = read_roster(path)?;
+    let change = Change::DeleteWorkspace { id: id.into() };
+    let (edited, summary) =
+        edit_members(&roster, &change, Utc::now(), true).map_err(core_failed)?;
+    write_roster(path, &edited)?;
+    say(io.out, &summary)
+}
+
+/// `roster workspace use <roster.json> <id> [--allow <pattern> ...] [--deny <pattern> ...]`:
+/// the workspace's use rules; with no flags, the rules are cleared.
+fn workspace_use_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
+    let args = Args::parse_repeating(args, &[], &["allow", "deny"], &[])?;
+    let [path, id] = args.words(["the member list", "the workspace id"])?;
+    let mut roster = read_roster(path)?;
+    let Some(workspace) = roster.workspaces.iter_mut().find(|w| w.id == id) else {
+        return Err(failed(format!("no workspace '{id}' on the list")));
+    };
+    workspace.use_rules = use_rules(&args);
+    let line = match &workspace.use_rules {
+        Some(_) => format!("the {} workspace has new use rules", workspace.name),
+        None => format!("the {} workspace has no use rules", workspace.name),
+    };
+    write_roster(path, &roster)?;
+    say(io.out, &line)
 }
 
 /// `roster remove <roster.json> <email> [--key <dots-id>]`: the member, or one of their keys.

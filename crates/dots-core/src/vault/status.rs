@@ -31,7 +31,9 @@ impl GrantState {
         match why {
             Unresolved::NotGranted => GrantState::NotGranted,
             Unresolved::NotDefined => GrantState::NotDefined,
-            Unresolved::DeniedByPolicy => GrantState::DeniedByPolicy,
+            Unresolved::DeniedByPolicy | Unresolved::DeniedByWorkspace(_) => {
+                GrantState::DeniedByPolicy
+            }
             Unresolved::ShellSecretsForbidden => GrantState::ShellSecretsForbidden,
             Unresolved::OrgOffline => GrantState::OrgOffline,
             Unresolved::OrgExpired => GrantState::OrgExpired,
@@ -80,7 +82,9 @@ impl Vault {
             granted.extend(names.iter().map(|name| (consumer.clone(), name.clone())));
         }
         let names: Vec<String> = granted.iter().map(|(_, name)| name.clone()).collect();
-        let read = self.in_scope(&DotScope::of(dot), &names).await;
+        let read = self
+            .in_scope(&DotScope::of(dot), Some(&dot.workspace_id), &names)
+            .await?;
         let reading = Reading::Presence(self.personal_secret_keys());
         let mut out = Vec::new();
         for (i, (consumer, name)) in granted.into_iter().enumerate() {

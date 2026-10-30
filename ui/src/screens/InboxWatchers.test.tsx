@@ -15,6 +15,7 @@ const inbox = (watchers: PausedWatcher[]) => ({
   watchers,
   held: [], instructions: [],
   app_reviews: [],
+  team_scope: [],
 });
 
 describe("paused watchers in the Inbox", () => {

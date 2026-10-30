@@ -106,7 +106,7 @@ async fn the_schedule_row_follows_the_dot() {
     // Created with a schedule: a fresh row.
     let since = now();
     let dot = rt
-        .create_dot(folder_spec(&dir, "a", Some(every(600))), None)
+        .create_dot(folder_spec(&dir, "a", Some(every(600))), None, None)
         .await
         .unwrap();
     assert_fresh(&rt, &dot, &since).await;
@@ -169,7 +169,7 @@ async fn only_a_dot_with_a_schedule_has_a_row_and_it_goes_with_the_dot() {
     let mut rx = rt.subscribe();
 
     let plain = rt
-        .create_dot(folder_spec(&dir, "plain", None), None)
+        .create_dot(folder_spec(&dir, "plain", None), None, None)
         .await
         .unwrap();
     assert_eq!(row(&rt, &plain).await, None);
@@ -179,7 +179,7 @@ async fn only_a_dot_with_a_schedule_has_a_row_and_it_goes_with_the_dot() {
     let mut s = folder_spec(&dir, "off", Some(every(600)));
     s.enabled = false;
     let since = now();
-    let dot = rt.create_dot(s, None).await.unwrap();
+    let dot = rt.create_dot(s, None, None).await.unwrap();
     assert_fresh(&rt, &dot, &since).await;
     assert_eq!(updated(&mut rx), [dot.id.as_str()]);
 
@@ -205,7 +205,7 @@ async fn the_runtime_takes_the_times_of_its_rows_from_its_clock() {
     std::fs::create_dir_all(&data).unwrap();
     let store = Store::open(&data.join(DB_FILE)).await.unwrap();
     let old = store
-        .create_dot(&folder_spec(&dir, "old", Some(every(600))), None)
+        .create_dot(&folder_spec(&dir, "old", Some(every(600))), None, "default")
         .await
         .unwrap();
     store.close().await;
@@ -217,7 +217,7 @@ async fn the_runtime_takes_the_times_of_its_rows_from_its_clock() {
     assert_eq!(row(&rt, &old).await.unwrap().last_slot_at, timestamp(t0));
 
     let dot = rt
-        .create_dot(folder_spec(&dir, "new", Some(every(600))), None)
+        .create_dot(folder_spec(&dir, "new", Some(every(600))), None, None)
         .await
         .unwrap();
     assert_eq!(row(&rt, &dot).await.unwrap().last_slot_at, timestamp(t0));
@@ -285,15 +285,15 @@ async fn attention_is_listed_in_the_inbox_until_dismissed() {
     let dir = tempfile::tempdir().unwrap();
     let rt = start(&dir).await;
     let older = rt
-        .create_dot(folder_spec(&dir, "older", Some(every(600))), None)
+        .create_dot(folder_spec(&dir, "older", Some(every(600))), None, None)
         .await
         .unwrap();
     let newer = rt
-        .create_dot(folder_spec(&dir, "newer", Some(every(600))), None)
+        .create_dot(folder_spec(&dir, "newer", Some(every(600))), None, None)
         .await
         .unwrap();
     let plain = rt
-        .create_dot(folder_spec(&dir, "plain", None), None)
+        .create_dot(folder_spec(&dir, "plain", None), None, None)
         .await
         .unwrap();
     let first = flag(&rt, &older, "model server down").await;
@@ -467,14 +467,18 @@ async fn the_overview_shows_where_each_schedule_stands() {
     cfg.clock = FakeClock::new(t0);
     let rt = Runtime::start(cfg).await.unwrap();
     let on = rt
-        .create_dot(folder_spec(&dir, "on", Some(hourly(json!(null)))), None)
+        .create_dot(
+            folder_spec(&dir, "on", Some(hourly(json!(null)))),
+            None,
+            None,
+        )
         .await
         .unwrap();
     let mut s = folder_spec(&dir, "off", Some(hourly(json!(null))));
     s.enabled = false;
-    let off = rt.create_dot(s, None).await.unwrap();
+    let off = rt.create_dot(s, None, None).await.unwrap();
     let plain = rt
-        .create_dot(folder_spec(&dir, "plain", None), None)
+        .create_dot(folder_spec(&dir, "plain", None), None, None)
         .await
         .unwrap();
     let failed = flag(&rt, &on, "model server down").await;
