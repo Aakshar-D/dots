@@ -38,8 +38,8 @@ export function replyTarget(
   return chosen ?? older ?? defaultTarget(shown);
 }
 
-/// Below the conversation: why the target cannot be continued, the open question, the reply
-/// target, and the composer. A message continues the target's last run, or starts a new chat
+/// Below the conversation, in its centred column: why the target cannot be continued, the open
+/// question, the reply target, and the composer. A message continues the target's last run, or starts a new chat
 /// topic without one; an answer to the open question goes through `message_reply`.
 export function ReplyArea(props: {
   dotId: string;
@@ -150,14 +150,14 @@ export function ReplyArea(props: {
           ? "This topic cannot be continued"
           : `Message ${dotName}…`;
   return (
-    <div className="flex flex-col gap-2 border-t pt-2">
+    <div className="mx-auto flex w-full max-w-[720px] flex-col gap-2 px-4 pb-4">
       {blocked && (
-        <p role="status" className="px-3 text-destructive">
+        <p role="status" className="px-1 text-destructive">
           account removed: {blocked}
         </p>
       )}
       {closed && (
-        <p className="flex items-center gap-2 px-3 text-muted-foreground">
+        <p className="flex items-center gap-2 px-1 text-muted-foreground">
           <span className="flex-1">
             This topic cannot be continued: its last run ended before the dot had a session to
             resume.
@@ -171,7 +171,7 @@ export function ReplyArea(props: {
         <div
           role="region"
           aria-label="Open question"
-          className="flex flex-wrap items-center gap-2 px-3"
+          className="flex flex-wrap items-center gap-2 rounded-xl border bg-card px-3 py-2"
         >
           <p className="min-w-0 flex-1 whitespace-pre-wrap">
             {dotName} asked: {question.text}
@@ -202,7 +202,7 @@ export function ReplyArea(props: {
         role="group"
         aria-label="Reply target"
         aria-live="polite"
-        className="flex items-center gap-1 px-3 text-xs text-muted-foreground"
+        className="flex items-center gap-1 px-1 text-xs text-muted-foreground"
       >
         <span>{chip}</span>
         {pick.kind !== "default" && (

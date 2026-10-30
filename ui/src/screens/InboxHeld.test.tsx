@@ -21,6 +21,7 @@ const only = (held: HeldRun[]): Inbox => ({
   tools_changed: [],
   watchers: [],
   held,
+  instructions: [],
   app_reviews: [],
 });
 

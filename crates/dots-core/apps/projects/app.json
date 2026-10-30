@@ -1,0 +1,194 @@
+{
+  "name": "projects",
+  "title": "Projects",
+  "description": "Projects, tasks and to-dos, shared by you and your dots",
+  "tools": [
+    {
+      "name": "list_projects",
+      "description": "Every project with its sections, in order",
+      "input": { "type": "object", "properties": {}, "additionalProperties": false }
+    },
+    {
+      "name": "create_project",
+      "description": "Add a project",
+      "input": {
+        "type": "object",
+        "properties": { "name": { "type": "string", "minLength": 1, "maxLength": 100 } },
+        "required": ["name"],
+        "additionalProperties": false
+      },
+      "writes": true
+    },
+    {
+      "name": "create_section",
+      "description": "Add a section at the end of a project",
+      "input": {
+        "type": "object",
+        "properties": {
+          "project_id": { "type": "string" },
+          "name": { "type": "string", "minLength": 1, "maxLength": 100 }
+        },
+        "required": ["project_id", "name"],
+        "additionalProperties": false
+      },
+      "writes": true
+    },
+    {
+      "name": "rename_section",
+      "description": "Rename a section",
+      "input": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string", "minLength": 1, "maxLength": 100 }
+        },
+        "required": ["id", "name"],
+        "additionalProperties": false
+      },
+      "writes": true
+    },
+    {
+      "name": "list_tasks",
+      "description": "Tasks without their spec, filtered. assignee: \"me\" (you), \"person\", or a dot's id or name. view: \"my_tasks\" (the person's tasks and unassigned to-dos) or \"assigned_to_dots\". due_before: YYYY-MM-DD. At most limit tasks (100 by default), and for you at most about 28 KB of them; more: true means there are more. With many tasks, filter by status (and project_id or assignee) rather than reading them all.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "project_id": { "type": "string" },
+          "assignee": { "type": "string" },
+          "status": { "type": "string", "enum": ["to_do", "in_progress", "in_review", "done"] },
+          "due_before": { "type": "string" },
+          "view": { "type": "string", "enum": ["my_tasks", "assigned_to_dots"] },
+          "limit": { "type": "integer", "minimum": 1, "maximum": 1000 }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "get_task",
+      "description": "A task with its spec, subtasks and recent activity (the last 20 rows, or the last activity rows); a spec change in the activity shows the first 200 characters of the spec before and after",
+      "input": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "activity": { "type": "integer", "minimum": 1, "maximum": 500 }
+        },
+        "required": ["id"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "create_task",
+      "description": "Add a task: in a project's section, in a project, or with neither as a to-do. assignee: \"me\" (you), \"person\", a dot's id or name, or null. due_on: YYYY-MM-DD or null. A dot cannot create a task as done.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "project_id": { "type": ["string", "null"] },
+          "section_id": { "type": ["string", "null"] },
+          "spec": { "type": "string", "maxLength": 20000 },
+          "assignee": { "type": ["string", "null"] },
+          "due_on": { "type": ["string", "null"] },
+          "status": { "type": "string", "enum": ["to_do", "in_progress", "in_review", "done"] }
+        },
+        "required": ["title"],
+        "additionalProperties": false
+      },
+      "writes": true
+    },
+    {
+      "name": "update_task",
+      "description": "Change a task's fields; each change shows in its Activity. status: to_do, in_progress, in_review or done (only the person marks a task done: set in_review when your work is finished). assignee: \"me\" (you), \"person\", a dot's id or name, or null. due_on: YYYY-MM-DD or null. section_id: a section of any project (the task moves to that project), or null.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "spec": { "type": "string", "maxLength": 20000 },
+          "status": { "type": "string", "enum": ["to_do", "in_progress", "in_review", "done"] },
+          "assignee": { "type": ["string", "null"] },
+          "due_on": { "type": ["string", "null"] },
+          "section_id": { "type": ["string", "null"] }
+        },
+        "required": ["id"],
+        "additionalProperties": false
+      },
+      "writes": true
+    },
+    {
+      "name": "add_subtask",
+      "description": "Add a subtask at the end of a task's checklist",
+      "input": {
+        "type": "object",
+        "properties": {
+          "task_id": { "type": "string" },
+          "title": { "type": "string", "minLength": 1, "maxLength": 200 }
+        },
+        "required": ["task_id", "title"],
+        "additionalProperties": false
+      },
+      "writes": true
+    },
+    {
+      "name": "set_subtask",
+      "description": "Check or uncheck a subtask, or rename it",
+      "input": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "done": { "type": "boolean" },
+          "title": { "type": "string", "minLength": 1, "maxLength": 200 }
+        },
+        "required": ["id"],
+        "additionalProperties": false
+      },
+      "writes": true
+    },
+    {
+      "name": "comment",
+      "description": "Add a comment to a task's Activity: progress, a question, what you found",
+      "input": {
+        "type": "object",
+        "properties": {
+          "task_id": { "type": "string" },
+          "text": { "type": "string", "minLength": 1, "maxLength": 4000 }
+        },
+        "required": ["task_id", "text"],
+        "additionalProperties": false
+      },
+      "writes": true
+    },
+    {
+      "name": "list_dots",
+      "description": "The dots a task can be assigned to: those that use Projects",
+      "input": { "type": "object", "properties": {}, "additionalProperties": false }
+    },
+    {
+      "name": "move_task",
+      "description": "Move a task to another section (section_id, or null for none) and before another task of that list (before_id, or null for the end)",
+      "input": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "section_id": { "type": ["string", "null"] },
+          "before_id": { "type": ["string", "null"] }
+        },
+        "required": ["id"],
+        "additionalProperties": false
+      },
+      "writes": true
+    },
+    {
+      "name": "undo",
+      "description": "Undo a change in a task's Activity, while its field still holds what the change set. A dot undoes only dots' changes.",
+      "input": {
+        "type": "object",
+        "properties": { "activity_id": { "type": "string" } },
+        "required": ["activity_id"],
+        "additionalProperties": false
+      },
+      "writes": true
+    }
+  ],
+  "permissions": ["start_dots"],
+  "on_run_end": "run_ended"
+}

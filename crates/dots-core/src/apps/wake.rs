@@ -25,7 +25,34 @@ pub struct AppTopic {
     pub told_run_id: Option<String>,
 }
 
+/// Where the person finds a run an app started: the dot's conversation at the topic's root.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RunLink {
+    pub dot_id: String,
+    pub root_run_id: String,
+}
+
 impl Apps {
+    /// The conversation of `run_id`, a run of a topic the app `name` started, for the app's
+    /// screen to open (`dots.openRun`). Any other run is `NotFound`: an app's screen opens only
+    /// the runs it started.
+    pub async fn run_link(&self, name: &str, run_id: &str) -> Result<RunLink> {
+        let (item, _) = self.get(name).await?;
+        let not_found = || Error::NotFound(format!("the app {name} started no run {run_id}"));
+        let run = match self.store.get_run(run_id).await {
+            Ok(run) => run,
+            Err(Error::NotFound(_)) => return Err(not_found()),
+            Err(e) => return Err(e),
+        };
+        match self.store.app_topic(&run.root_run_id).await? {
+            Some(topic) if topic.app_id == item.id => Ok(RunLink {
+                dot_id: run.dot_id,
+                root_run_id: run.root_run_id,
+            }),
+            _ => Err(not_found()),
+        }
+    }
+
     /// Tells the app that started `run`'s topic that the run ended, when nothing in the topic
     /// waits, once per run. A topic of an app that is gone, or that has no `on_run_end`, is
     /// left alone. The switch does not matter: a topic started before it went off still ends.

@@ -2,7 +2,7 @@ import { act, fireEvent, screen, waitFor, within } from "@testing-library/react"
 import { describe, expect, it } from "vitest";
 
 import type { ApplyState, Approval, Run, RunEventRecord, WorktreeDiff } from "@/api/types";
-import { localDateTime } from "@/lib/format";
+import { localDateTime, localTime } from "@/lib/format";
 import { backend, later } from "@/test/backend";
 import { sample } from "@/test/fixtures";
 import { renderApp } from "@/test/render";
@@ -71,6 +71,31 @@ describe("the run view", () => {
     expect(within(call).getByText("test result: ok")).toBeInTheDocument();
     expect(screen.queryByText("hidden")).toBeNull();
     expect(screen.getByText("Unparsed output").closest("details")).not.toHaveAttribute("open");
+  });
+
+  it("shows a chat run's tool steps as chips, with its header and the dot's name label", async () => {
+    const asked: Run = { ...folderRun, trigger: "chat", payload: { message: "Run the tests." } };
+    thread(
+      [asked],
+      [
+        ev({ kind: "tool_call", id: "t1", tool: "Read", input: { file_path: "a.rs" } }),
+        ev({ kind: "tool_result", id: "t1", output: "fn a", is_error: false }),
+        ev({ kind: "tool_call", id: "t2", tool: "Bash", input: { command: "cargo test" } }),
+        ev({ kind: "tool_result", id: "t2", output: "ok", is_error: false }),
+        ev({ kind: "assistant_text", text: "The tests pass." }),
+      ],
+    );
+    renderApp(`/runs/${run.id}`);
+    expect(await screen.findByText("The tests pass.")).toBeVisible();
+    // The conversation's look is the home's: the run screen keeps its own.
+    const chips = screen.getByRole("group", { name: "Tool steps" });
+    expect(within(chips).getByText("Read")).toBeVisible();
+    expect(within(chips).getByText("Bash")).toBeVisible();
+    expect(chips.closest("details")).toBeNull();
+    expect(screen.queryByText("Read a file · Ran a command")).toBeNull();
+    expect(screen.getByText("Chat message")).toBeVisible();
+    expect(screen.getByText(`${sample.dot.name} · ${localTime(asked.queued_at)}`)).toBeVisible();
+    expect(screen.getByText("Run the tests.")).toHaveClass("max-w-[80%]");
   });
 
   it("names an MCP call by its server and tool, a plugin's server by its plugin", async () => {

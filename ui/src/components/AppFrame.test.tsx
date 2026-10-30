@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { AppFrame } from "@/components/AppFrame";
 import { appSrc } from "@/lib/app-bridge";
+import { applyTheme } from "@/lib/theme";
 
 /// Loads the frame and returns the port its page was handed, with what arrives on it.
 function load(frame: HTMLIFrameElement) {
@@ -73,6 +74,78 @@ describe("an app's screen in its frame", () => {
         error: "amount: must be at least 0",
       }),
     );
+  });
+
+  it("opens a run the page asks for, and refuses where the screen cannot open runs", async () => {
+    const openRun = vi.fn(async () => {});
+    const { unmount } = render(
+      <AppFrame
+        src={appSrc("projects", 1)}
+        title="Projects"
+        tools={[]}
+        call={vi.fn()}
+        openRun={openRun}
+      />,
+    );
+    const { port, got } = load(screen.getByTitle<HTMLIFrameElement>("Projects"));
+    port.postMessage({ type: "open_run", id: 1, run_id: "r1" });
+    await waitFor(() =>
+      expect(got).toContainEqual({ type: "result", id: 1, ok: true, result: null }),
+    );
+    expect(openRun).toHaveBeenCalledWith("r1");
+    unmount();
+    render(<AppFrame src={appSrc("projects", 1)} title="Preview" tools={[]} call={vi.fn()} />);
+    const preview = load(screen.getByTitle<HTMLIFrameElement>("Preview"));
+    preview.port.postMessage({ type: "open_run", id: 2, run_id: "r1" });
+    await waitFor(() =>
+      expect(preview.got).toContainEqual({
+        type: "result",
+        id: 2,
+        ok: false,
+        error: "this screen cannot open runs",
+      }),
+    );
+  });
+
+  it("ignores a run to open whose id is empty or longer than 64 characters", async () => {
+    const openRun = vi.fn(async () => {});
+    render(
+      <AppFrame
+        src={appSrc("projects", 1)}
+        title="Projects"
+        tools={[]}
+        call={vi.fn()}
+        openRun={openRun}
+      />,
+    );
+    const { port, got } = load(screen.getByTitle<HTMLIFrameElement>("Projects"));
+    port.postMessage({ type: "open_run", id: 1, run_id: "r".repeat(65) });
+    port.postMessage({ type: "open_run", id: 2, run_id: "" });
+    port.postMessage({ type: "open_run", id: 3, run_id: "r".repeat(64) });
+    await waitFor(() =>
+      expect(got).toContainEqual({ type: "result", id: 3, ok: true, result: null }),
+    );
+    expect(openRun).toHaveBeenCalledTimes(1);
+    expect(openRun).toHaveBeenCalledWith("r".repeat(64));
+    // Like a malformed call, a malformed request is not answered.
+    const answered = got.filter((m) => (m as { type: string }).type === "result");
+    expect(answered.map((m) => (m as { id: number }).id)).toEqual([3]);
+  });
+
+  it("sends the theme again when it changes after the page loaded", async () => {
+    render(<AppFrame src={appSrc("expenses", 1)} title="Expenses" tools={[]} call={vi.fn()} />);
+    const { got } = load(screen.getByTitle<HTMLIFrameElement>("Expenses"));
+    await waitFor(() => expect(got).toHaveLength(1));
+    act(() => {
+      applyTheme("dark");
+    });
+    try {
+      await waitFor(() => expect(got.at(-1)).toMatchObject({ type: "theme", mode: "dark" }));
+    } finally {
+      act(() => {
+        applyTheme("light");
+      });
+    }
   });
 
   it("tells the page of each change to the app's data", async () => {

@@ -8,6 +8,7 @@ import client from "../../../apps/dots-app/src/app_client.js?raw";
 
 type Dots = {
   call: (tool: string, input?: unknown) => Promise<unknown>;
+  openRun: (runId: string) => Promise<unknown>;
   onChange: (cb: () => void) => () => void;
   onTheme: (cb: (mode: string) => void) => () => void;
 };
@@ -68,6 +69,19 @@ describe("the client in an app's page", () => {
     port.postMessage({ type: "result", id: 2, ok: false, error: "this app has no tool drop_all" });
     await expect(refused).rejects.toThrow("this app has no tool drop_all");
     port.close();
+  });
+
+  it("asks the host to open a run, and settles with its answer", async () => {
+    const p = page();
+    const port = connect(p);
+    const opened = p.dots.openRun("r1");
+    expect(await next(port)).toEqual({ type: "open_run", id: 1, run_id: "r1" });
+    port.postMessage({ type: "result", id: 1, ok: true, result: null });
+    await expect(opened).resolves.toBeNull();
+    const refused = p.dots.openRun("r2");
+    await next(port);
+    port.postMessage({ type: "result", id: 2, ok: false, error: "the app started no run r2" });
+    await expect(refused).rejects.toThrow("the app started no run r2");
   });
 
   it("takes one port, and only from the window that framed it", async () => {

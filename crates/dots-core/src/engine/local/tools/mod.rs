@@ -13,6 +13,7 @@ use crate::policy::{Action, Policy};
 pub mod checkins;
 pub mod context;
 mod fs;
+pub mod instructions;
 pub mod memory;
 mod search;
 mod shell;
@@ -34,7 +35,8 @@ pub const MAX_ENTRIES: usize = 500;
 /// the memory tools (`memory::run`), which share one alias. `propose_app` hands an app folder in
 /// the workspace to the person (app library spec section 6.2), and `copy_app` copies an
 /// installed app into the workspace, under the same alias; both are offered when the engine has
-/// apps.
+/// apps. `propose_instructions` proposes new instructions for the dot (conversational chat spec
+/// section 4), offered to a run of a chat the person started.
 pub const TOOLS: &[(&str, &str)] = &[
     ("read_file", "Read"),
     ("write_file", "Write"),
@@ -54,6 +56,7 @@ pub const TOOLS: &[(&str, &str)] = &[
     ("propose_app", "ProposeApp"),
     ("copy_app", "ProposeApp"),
     ("start_workflow", "Workflow"),
+    ("propose_instructions", "Instructions"),
 ];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -196,6 +199,10 @@ const ARGS: &[(&str, Params)] = &[
             ("project", Str, true),
             ("task", Str, true),
         ],
+    ),
+    (
+        "propose_instructions",
+        &[("instructions", Str, true), ("reason", Str, true)],
     ),
 ];
 

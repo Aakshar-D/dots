@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 
 import { commands } from "@/api/commands";
-import type { Message } from "@/api/types";
+import type { InstructionProposal, Message } from "@/api/types";
 import { AppReviews } from "@/components/AppReviewCard";
 import { ErrorNote } from "@/components/ErrorNote";
 import { Button } from "@/components/ui/button";
@@ -19,6 +19,8 @@ export function Timeline(props: {
   topics: Topic[];
   checkIns: Message[];
   dotName: string;
+  /// The instructions the dot proposed that wait for the person.
+  proposals: InstructionProposal[];
   /// Reply on a run card: makes its topic the reply target.
   onReply: (topic: Topic) => void;
   /// Shown above the topics: a failed load, or what to do when there is none.
@@ -40,34 +42,39 @@ export function Timeline(props: {
         ref={ref}
         onScroll={onScroll}
         aria-label="Conversation"
-        className="flex min-h-0 flex-1 flex-col gap-6 overflow-auto p-4"
+        className="flex min-h-0 flex-1 flex-col overflow-auto"
       >
-        {props.children}
-        {proposals.isError && <ErrorNote error={proposals.error} />}
-        {topics.map((topic) =>
-          topic.kind === "chat" ? (
-            <TopicRuns
-              key={topic.rootId}
-              runs={topic.runs}
-              checkIns={checkIns}
-              dotName={dotName}
-            />
-          ) : (
-            <div key={topic.rootId} className="flex flex-col gap-4">
-              <RunCard
-                topic={topic}
+        {/* The scrolling area keeps the pane's width, so its scrollbar is at the pane's edge;
+            what it shows is one centred column (conversational chat spec section 5). */}
+        <div className="mx-auto flex w-full max-w-[720px] flex-col gap-6 px-4 py-4">
+          {props.children}
+          {proposals.isError && <ErrorNote error={proposals.error} />}
+          {topics.map((topic) =>
+            topic.kind === "chat" ? (
+              <TopicRuns
+                key={topic.rootId}
+                runs={topic.runs}
                 checkIns={checkIns}
                 dotName={dotName}
-                onReply={() => props.onReply(topic)}
+                proposals={props.proposals}
               />
-              {/* An app the run sent for review waits under its card. */}
-              <AppReviews runs={topic.runs.slice(0, 1)} dotName={dotName} />
-              {topic.runs.length > 1 && (
-                <TopicRuns runs={topic.runs.slice(1)} checkIns={checkIns} dotName={dotName} />
-              )}
-            </div>
-          ),
-        )}
+            ) : (
+              <div key={topic.rootId} className="flex flex-col gap-4">
+                <RunCard
+                  topic={topic}
+                  checkIns={checkIns}
+                  dotName={dotName}
+                  onReply={() => props.onReply(topic)}
+                />
+                {/* An app the run sent for review waits under its card. */}
+                <AppReviews runs={topic.runs.slice(0, 1)} dotName={dotName} />
+                {topic.runs.length > 1 && (
+                  <TopicRuns runs={topic.runs.slice(1)} checkIns={checkIns} dotName={dotName} />
+                )}
+              </div>
+            ),
+          )}
+        </div>
       </section>
       {behind && (
         <Button

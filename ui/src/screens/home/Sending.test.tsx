@@ -38,7 +38,8 @@ describe("sending on the home", () => {
         { dotId: dot.id, message: "Why did the build fail?", parentRunId: null },
       ]),
     );
-    const view = within(screen.getByRole("region", { name: "Conversation" }));
+    // The empty conversation's greeting gives way to the conversation once the run is loaded.
+    const view = within(await screen.findByRole("region", { name: "Conversation" }));
     expect(await view.findByText("Why did the build fail?")).toBeVisible();
     expect(target()).toHaveTextContent("Replying to: current topic");
   });
@@ -416,5 +417,46 @@ describe("a failed reload of the dots while a conversation is open", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("database is locked");
     expect(box()).toHaveValue("Draft that must survive");
     expect(screen.getByRole("region", { name: "Conversation" })).toBeVisible();
+  });
+});
+
+describe("the composer (conversational chat spec section 5)", () => {
+  it("holds the text and a round Send button in one box under the conversation", async () => {
+    home([chat("a", "10:00")]);
+    renderApp(`/home/${dot.id}`);
+    const found = await readyBox();
+    const send = screen.getByRole("button", { name: "Send" });
+    expect(send).toHaveAttribute("title", "Send");
+    expect(send).toHaveClass("rounded-full");
+    // The button sits in the box with the text, after it.
+    const container = send.parentElement!;
+    expect(container).toContainElement(found);
+    expect(container).toHaveClass("rounded-2xl", "border");
+    expect(found.compareDocumentPosition(send) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(found).toHaveAttribute("rows", "1");
+    expect(found).toHaveClass("field-sizing-content", "max-h-40", "resize-none");
+  });
+
+  it("offers Send only for a message with text, and not while the box is locked", async () => {
+    const working = chat("a", "10:00", { status: "running", ended_at: null });
+    const runs = home([working]);
+    const { user } = renderApp(`/home/${dot.id}`);
+    await waitFor(() =>
+      expect(box()).toHaveAttribute("placeholder", `${dot.name} is working on this…`),
+    );
+    const send = screen.getByRole("button", { name: "Send" });
+    expect(box()).toBeDisabled();
+    expect(send).toBeDisabled();
+    expect(send.parentElement).toHaveClass("opacity-60");
+
+    runs[0] = { ...working, status: "succeeded", ended_at: sample.run.ended_at };
+    act(() => backend.emit("runtime", { type: "run_updated", run: runs[0] }));
+    const found = await readyBox();
+    expect(send).toBeDisabled();
+    await user.type(found, "   ");
+    expect(send).toBeDisabled();
+    await user.type(found, "Next?");
+    expect(send).toBeEnabled();
+    expect(send.parentElement).not.toHaveClass("opacity-60");
   });
 });

@@ -23,7 +23,7 @@ import { MemoryTab } from "@/screens/dot-editor/MemoryTab";
 import { RunsList } from "@/screens/dot-editor/RunsList";
 import { WatchersTab } from "@/screens/dot-editor/WatchersTab";
 
-/// The tabs of a dot's editor; `?tab=` opens one (the ⚙ menu's Memory… opens `memory`; the
+/// The tabs of a dot's editor; `?tab=` opens one (the dot's menu's Memory… opens `memory`; the
 /// Inbox opens `watchers`).
 const TABS = ["settings", "runs", "follow-ups", "memory", "watchers"];
 
