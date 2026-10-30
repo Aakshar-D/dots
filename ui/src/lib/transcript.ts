@@ -1,6 +1,7 @@
 // Turns a run's stored events into what the transcript shows.
 import { RunEventData, type RunEventRecord } from "@/api/types";
 import { BROWSER_PREFIX } from "@/lib/browser";
+import { mcpToolLabel } from "@/lib/mcp-tool";
 
 export type TranscriptItem =
   | { type: "text"; seq: number; text: string }
@@ -185,4 +186,75 @@ export function memoryNote(
   return which === "remember"
     ? { kind: "remembered", text: field(input, "text") }
     : { kind: "forgot" };
+}
+
+/// How a group of tool steps reads, for one step and for `n` of them.
+type StepPhrase = { one: string; many: (n: number) => string };
+
+const READ_FILE: StepPhrase = { one: "Read a file", many: (n) => `Read ${n} files` };
+const EDIT_FILE: StepPhrase = { one: "Edited a file", many: (n) => `Edited ${n} files` };
+const COMMAND: StepPhrase = { one: "Ran a command", many: (n) => `Ran ${n} commands` };
+const SEARCH_FILES: StepPhrase = {
+  one: "Searched the files",
+  many: (n) => `Searched the files ${n} times`,
+};
+const WEB_PAGE: StepPhrase = { one: "Read a web page", many: (n) => `Read ${n} web pages` };
+const WEB_SEARCH: StepPhrase = {
+  one: "Searched the web",
+  many: (n) => `Searched the web ${n} times`,
+};
+
+/// The tools a phrase of its own says, by the names both engines store their calls under: the
+/// Claude engine's built-in tools and the local engine's.
+const STEP_PHRASES = new Map<string, StepPhrase>([
+  ["Read", READ_FILE],
+  ["read_file", READ_FILE],
+  ["Write", EDIT_FILE],
+  ["Edit", EDIT_FILE],
+  ["MultiEdit", EDIT_FILE],
+  ["NotebookEdit", EDIT_FILE],
+  ["write_file", EDIT_FILE],
+  ["edit_file", EDIT_FILE],
+  ["Bash", COMMAND],
+  ["shell", COMMAND],
+  ["Glob", SEARCH_FILES],
+  ["Grep", SEARCH_FILES],
+  ["LS", SEARCH_FILES],
+  ["glob", SEARCH_FILES],
+  ["grep", SEARCH_FILES],
+  ["list_dir", SEARCH_FILES],
+  ["WebFetch", WEB_PAGE],
+  ["WebSearch", WEB_SEARCH],
+]);
+
+/// The phrase of one step: its tool's own, else "Used" and the name its chip shows.
+function stepPhrase(
+  tool: string,
+  input: unknown,
+  owners: ReadonlyMap<string, string>,
+): StepPhrase {
+  const known = STEP_PHRASES.get(tool);
+  if (known) return known;
+  const label = mcpToolLabel(callLabel(tool, input), owners);
+  return { one: `Used ${label}`, many: (n) => `Used ${label} ${n} times` };
+}
+
+/// The one line a group of consecutive tool steps shows as in the conversation (conversational
+/// chat spec section 5): the steps counted by phrase, in the order each phrase first comes, as
+/// "Read 2 files · Ran a command". `owners`: MCP server name to the plugin it comes with.
+export function stepsLine(
+  items: { tool: string; input: unknown }[],
+  owners: ReadonlyMap<string, string>,
+): string {
+  // A phrase's one-step words tell it apart: two tools that share a phrase share them.
+  const counts = new Map<string, { phrase: StepPhrase; n: number }>();
+  for (const item of items) {
+    const phrase = stepPhrase(item.tool, item.input, owners);
+    const seen = counts.get(phrase.one);
+    if (seen) seen.n += 1;
+    else counts.set(phrase.one, { phrase, n: 1 });
+  }
+  return [...counts.values()]
+    .map(({ phrase, n }) => (n === 1 ? phrase.one : phrase.many(n)))
+    .join(" · ");
 }

@@ -70,6 +70,11 @@ pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
                 .to_string(),
         );
     }
+    // And of `propose_instructions`, for a run of a chat the person started (conversational
+    // chat spec section 4).
+    if ctx.tools.instructions() {
+        allow.push(crate::instructions::model_name(EngineKind::Claude).to_string());
+    }
     if !allow.is_empty() {
         a.push("--allowedTools".into());
         a.extend(allow);

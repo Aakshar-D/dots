@@ -7,9 +7,9 @@ import { backend, later } from "@/test/backend";
 import { dot, home, overview, scheduled } from "@/test/home";
 import { renderApp } from "@/test/render";
 
-/// Opens the header's ⚙ menu.
+/// Opens the menu under the dot's name in the header.
 async function openMenu(user: ReturnType<typeof renderApp>["user"]) {
-  await user.click(await screen.findByRole("button", { name: "Dot settings" }));
+  await user.click(await screen.findByRole("button", { name: dot.name }));
   return screen.findByRole("menu");
 }
 
@@ -26,7 +26,37 @@ function oneDot() {
   return held;
 }
 
-describe("the dot's ⚙ menu", () => {
+describe("the dot's menu", () => {
+  it("opens from the dot's name with Edit, Memory…, Run now and Enabled", async () => {
+    home([]);
+    const { user } = renderApp(`/home/${dot.id}`);
+    const name = await screen.findByRole("button", { name: dot.name });
+    // The name is the header's heading, and the menu's only way in: there is no ⚙.
+    expect(screen.getByRole("heading", { level: 1, name: dot.name })).toContainElement(name);
+    expect(name).toHaveAttribute("title", "Dot settings");
+    expect(screen.queryByRole("button", { name: "Dot settings" })).toBeNull();
+    await user.click(name);
+    const menu = await screen.findByRole("menu");
+    const items = [...menu.querySelectorAll('[role="menuitem"], [role="menuitemcheckbox"]')];
+    expect(items.map((item) => item.textContent)).toEqual([
+      "Edit",
+      "Memory…",
+      "Run now",
+      "Enabled",
+    ]);
+  });
+
+  it("opens from the keyboard", async () => {
+    home([]);
+    const { user } = renderApp(`/home/${dot.id}`);
+    const name = await screen.findByRole("button", { name: dot.name });
+    act(() => name.focus());
+    await user.keyboard("{Enter}");
+    expect(
+      within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Edit" }),
+    ).toBeVisible();
+  });
+
   it("opens the dot's editor", async () => {
     home([]);
     backend.on("get_dot", () => dot);
@@ -81,7 +111,7 @@ describe("the dot's ⚙ menu", () => {
       expect(backend.callsTo("set_dot_enabled")).toEqual([{ id: dot.id, enabled: false }]),
     );
     const header = screen.getByRole("heading", { level: 1, name: dot.name }).closest("header")!;
-    expect(await within(header).findByText("off")).toBeVisible();
+    expect(await within(header).findByRole("img", { name: "off" })).toBeVisible();
     menu = await openMenu(user);
     expect(within(menu).getByRole("menuitemcheckbox", { name: "Enabled" })).not.toBeChecked();
   });

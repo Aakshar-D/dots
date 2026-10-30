@@ -180,3 +180,26 @@ async fn previews_are_bounded_and_a_decided_proposal_closes_its_own() {
     let gone = apps.preview_open(&p.id).await;
     assert!(gone.is_err(), "{gone:?}");
 }
+
+#[tokio::test]
+async fn opening_one_preview_too_many_closes_the_one_used_least_recently() {
+    let (dir, store, apps) = fixture().await;
+    let p = proposed(&dir, &store, &apps, "builder", &expenses()).await;
+    let mut open = Vec::new();
+    for _ in 0..MAX_PREVIEWS {
+        open.push(apps.preview_open(&p.id).await.unwrap());
+    }
+    // The first card is still in use: a call and a file keep its preview.
+    apps.preview_call(&open[0], "list_expenses", json!({ "month": "2026-10" }))
+        .await
+        .unwrap();
+    apps.preview_file(&open[1], "index.html").unwrap();
+    let newest = apps.preview_open(&p.id).await.unwrap();
+    assert!(apps.preview_file(&open[0], "index.html").is_ok());
+    assert!(apps.preview_file(&open[1], "index.html").is_ok());
+    assert!(matches!(
+        apps.preview_file(&open[2], "index.html"),
+        Err(Error::NotFound(_))
+    ));
+    assert!(apps.preview_file(&newest, "index.html").is_ok());
+}

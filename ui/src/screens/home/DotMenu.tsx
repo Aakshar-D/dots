@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, Settings } from "lucide-react";
+import { Check, ChevronDown } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
 import { useNavigate } from "react-router";
 
@@ -13,9 +13,9 @@ import { invalidate, invalidateDots, keys, setDotEnabledMutation, useSwitchingDo
 const ITEM =
   "flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 outline-none select-none data-[disabled]:text-muted-foreground data-[highlighted]:bg-accent";
 
-/// The header's ⚙: what the Dots list offered for a dot. Edit opens its editor, Memory… its
-/// editor's Memory tab, Run now starts a run (it shows up in the conversation as a card),
-/// Enabled switches it on or off.
+/// The dot's name in the header, which opens what the Dots list offered for a dot. Edit opens
+/// its editor, Memory… its editor's Memory tab, Run now starts a run (it shows up in the
+/// conversation as a card), Enabled switches it on or off.
 export function DotMenu({ dot }: { dot: Dot }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
@@ -41,13 +41,19 @@ export function DotMenu({ dot }: { dot: Dot }) {
   return (
     <DropdownMenu.Root modal={false}>
       <DropdownMenu.Trigger asChild>
-        <Button size="icon-sm" variant="ghost" aria-label="Dot settings" title="Dot settings">
-          <Settings aria-hidden />
+        {/* Named by the dot's name; the tooltip says what it opens. */}
+        <Button
+          variant="ghost"
+          title="Dot settings"
+          className="min-w-0 max-w-full text-base font-semibold"
+        >
+          <span className="truncate">{dot.name}</span>
+          <ChevronDown aria-hidden className="text-muted-foreground" />
         </Button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content
-          align="end"
+          align="start"
           className="z-50 w-48 rounded-md border bg-popover p-1 text-sm text-popover-foreground shadow-md"
         >
           <DropdownMenu.Item className={ITEM} onSelect={() => void navigate(`/dots/${dot.id}`)}>

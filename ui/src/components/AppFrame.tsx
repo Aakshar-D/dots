@@ -7,12 +7,14 @@ import { useResolvedTheme } from "@/lib/theme";
 /// An app's screen in its sandboxed frame (app library spec section 5), filling its box. The
 /// page gets its bridge on its first load. A page that loads again has navigated away from what
 /// Dots served: it is cut off, and the person can load it afresh. `changes` counts the changes
-/// to the app's data; each new count tells the page (`dots.onChange`).
+/// to the app's data; each new count tells the page (`dots.onChange`). `openRun` opens a run the
+/// app started (`dots.openRun`); without it the page's asks are refused.
 export function AppFrame(props: {
   src: string;
   title: string;
   tools: readonly string[];
   call: (tool: string, input: unknown) => Promise<unknown>;
+  openRun?: (runId: string) => Promise<void>;
   changes?: number;
 }) {
   const frame = useRef<HTMLIFrameElement>(null);
@@ -22,8 +24,8 @@ export function AppFrame(props: {
   const [fresh, setFresh] = useState(0);
   const theme = useResolvedTheme();
   // What the bridge reads at each call, without a new bridge on each render.
-  const latest = useRef({ tools: props.tools, call: props.call, theme });
-  latest.current = { tools: props.tools, call: props.call, theme };
+  const latest = useRef({ tools: props.tools, call: props.call, openRun: props.openRun, theme });
+  latest.current = { tools: props.tools, call: props.call, openRun: props.openRun, theme };
   useEffect(() => bridge.current?.theme(theme), [theme]);
   useEffect(() => {
     if ((props.changes ?? 0) > 0) bridge.current?.changed();
@@ -53,6 +55,10 @@ export function AppFrame(props: {
         return latest.current.tools;
       },
       call: (tool, input) => latest.current.call(tool, input),
+      openRun: (runId) => {
+        const open = latest.current.openRun;
+        return open ? open(runId) : Promise.reject(new Error("this screen cannot open runs"));
+      },
     });
     bridge.current.theme(latest.current.theme);
   };

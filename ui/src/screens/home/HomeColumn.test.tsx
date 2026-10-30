@@ -63,6 +63,21 @@ describe("the home's dots column", () => {
     expect(screen.getByRole("link", { name: "New dot" })).toHaveAttribute("href", "/dots/new");
   });
 
+  it("starts with New dot, then the heading over the list", async () => {
+    backend.on("dot_overview", () => [reader, shopper]);
+    renderApp(`/home/${reader.dot.id}`);
+    const view = within(await screen.findByRole("navigation", { name: "Dots" }));
+    const create = view.getByRole("link", { name: "New dot" });
+    expect(create).toHaveTextContent("New dot");
+    expect(create).toHaveAttribute("href", "/dots/new");
+    const heading = view.getByRole("heading", { name: "Dots" });
+    const list = view.getByRole("list");
+    const before = (a: Node, b: Node) =>
+      (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+    expect(before(create, heading)).toBe(true);
+    expect(before(heading, list)).toBe(true);
+  });
+
   it("marks running, attention and off, and a dot whose question is open as waiting", async () => {
     const question: Message = { ...sample.messages[0], dot_id: "dot-asker" };
     backend.on("messages_list", () => [question]);
@@ -160,7 +175,7 @@ describe("the home's dots column", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe(`/home/${shopper.dot.id}`));
   });
 
-  it("shows the dot's name and 'off' in the header of a disabled dot", async () => {
+  it("shows the dot's name and its 'off' mark in the header of a disabled dot", async () => {
     const off = row("paused", {
       dot: { ...sample.dot, id: "dot-paused", name: "paused", enabled: false },
     });
@@ -169,7 +184,9 @@ describe("the home's dots column", () => {
     const header = (await screen.findByRole("heading", { level: 1, name: "paused" })).closest(
       "header",
     )!;
-    expect(within(header).getByText("off")).toBeVisible();
+    expect(within(header).getByRole("img", { name: "off" })).toBeVisible();
+    // The mark says it; the header has no status text of its own.
+    expect(within(header).queryByText("off")).toBeNull();
   });
 
   it("shows a failed load of the dots", async () => {
@@ -209,7 +226,8 @@ describe("the New dot button", () => {
     renderApp("/home");
     // The link is swapped for a disabled button once the account's role is known.
     const button = await waitFor(() => {
-      const found = within(screen.getByRole("navigation", { name: "Dots" })).getByLabelText("New dot");
+      const nav = within(screen.getByRole("navigation", { name: "Dots" }));
+      const found = nav.getByRole("button", { name: "New dot" });
       expect(found).toHaveAttribute("title", title);
       return found;
     });
@@ -226,7 +244,7 @@ describe("the New dot button", () => {
     spaces(title, ["payments"]);
     renderApp("/home");
     const button = await waitFor(() => {
-      const found = within(screen.getByRole("navigation", { name: "Dots" })).getByLabelText("New dot");
+      const found = within(screen.getByRole("navigation", { name: "Dots" })).getByRole("button", { name: "New dot" });
       expect(found).toHaveAttribute("title", title);
       return found;
     });
@@ -236,10 +254,9 @@ describe("the New dot button", () => {
   it("is on in Personal", async () => {
     backend.on("dot_overview", () => []);
     renderApp("/home");
-    const button = await within(await screen.findByRole("navigation", { name: "Dots" })).findByLabelText(
-      "New dot",
-    );
-    expect(button).toHaveAttribute("title", "New dot");
-    expect(button).not.toHaveAttribute("aria-disabled");
+    const nav = within(await screen.findByRole("navigation", { name: "Dots" }));
+    const link = await nav.findByRole("link", { name: "New dot" });
+    expect(link).toHaveAttribute("href", "/dots/new");
+    expect(link).not.toHaveAttribute("aria-disabled");
   });
 });

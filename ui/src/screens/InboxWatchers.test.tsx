@@ -13,7 +13,7 @@ const inbox = (watchers: PausedWatcher[]) => ({
   attention: [],
   tools_changed: [],
   watchers,
-  held: [],
+  held: [], instructions: [],
   app_reviews: [],
   team_scope: [],
 });
