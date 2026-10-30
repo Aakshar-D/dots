@@ -1,12 +1,14 @@
-import { Send } from "lucide-react";
+import { cn } from "cn";
+import { ArrowUp } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
 import { useComposerReport } from "@/lib/use-activity";
 
-/// Where a message is typed. Enter sends; Shift+Enter starts a new line. The text is cleared
-/// once the send has succeeded; a refused message stays for another try.
+/// Where a message is typed: one rounded box holding the text and, at its bottom right, the send
+/// button (conversational chat spec section 5). The text grows with what is typed, up to a few
+/// lines, then scrolls. Enter sends; Shift+Enter starts a new line. The text is cleared once the
+/// send has succeeded; a refused message stays for another try.
 export function Composer(props: {
   disabled: boolean;
   hint: string;
@@ -39,14 +41,20 @@ export function Composer(props: {
     );
   }
   return (
-    <div className="flex items-end gap-2 px-3 pb-3">
+    // The box draws the focus ring for the text inside it, which has none of its own.
+    <div
+      className={cn(
+        "flex items-end gap-2 rounded-2xl border bg-card p-2 shadow-xs focus-within:border-ring focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-ring",
+        props.disabled && "cursor-not-allowed opacity-60",
+      )}
+    >
       <label htmlFor="chat-message" className="sr-only">
         Message
       </label>
-      <Textarea
+      <textarea
         id="chat-message"
         ref={box}
-        rows={2}
+        rows={1}
         placeholder={props.hint}
         disabled={props.disabled}
         value={text}
@@ -57,9 +65,17 @@ export function Composer(props: {
             send();
           }
         }}
+        className="field-sizing-content max-h-40 min-w-0 flex-1 resize-none overflow-y-auto bg-transparent px-1.5 py-1 text-base outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed md:text-sm"
       />
-      <Button disabled={props.disabled || text.trim() === ""} onClick={send}>
-        <Send aria-hidden /> Send
+      <Button
+        size="icon-sm"
+        className="shrink-0 rounded-full"
+        aria-label="Send"
+        title="Send"
+        disabled={props.disabled || !hasText}
+        onClick={send}
+      >
+        <ArrowUp aria-hidden />
       </Button>
     </div>
   );

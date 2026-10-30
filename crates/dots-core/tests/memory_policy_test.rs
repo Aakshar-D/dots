@@ -16,8 +16,8 @@ fn every_preset_allows_memory_after_the_check_in_tools() {
     for preset in Preset::ALL {
         let p = Policy::preset(*preset);
         // `Workflow` follows it (teams spec section 7), then `App` and `ProposeApp` (app library
-        // spec section 6).
-        let tail: Vec<&str> = p.rules[p.rules.len() - 7..]
+        // spec section 6), then `Instructions` (conversational chat spec section 4).
+        let tail: Vec<&str> = p.rules[p.rules.len() - 8..]
             .iter()
             .map(|r| r.tool.as_str())
             .collect();
@@ -30,7 +30,8 @@ fn every_preset_allows_memory_after_the_check_in_tools() {
                 "Memory",
                 "Workflow",
                 "App",
-                "ProposeApp"
+                "ProposeApp",
+                "Instructions"
             ],
             "{preset:?}"
         );
@@ -105,7 +106,10 @@ async fn migration_0012_gives_every_policy_that_is_not_custom_its_memory() {
     let old = |preset: Preset| {
         let mut p = Policy::preset(preset);
         p.rules.retain(|r| {
-            r.tool != "Memory" && r.tool != "Workflow" && !APP_TOOLS.contains(&r.tool.as_str())
+            r.tool != "Memory"
+                && r.tool != "Workflow"
+                && !APP_TOOLS.contains(&r.tool.as_str())
+                && r.tool != "Instructions"
         });
         p
     };
@@ -148,12 +152,16 @@ async fn migration_0012_gives_every_policy_that_is_not_custom_its_memory() {
     kept.rules.push(Rule::new("Workflow", Action::Allow));
     kept.rules
         .extend(APP_TOOLS.map(|tool| Rule::new(tool, Action::Allow)));
+    kept.rules.push(Rule::new("Instructions", Action::Allow));
     assert_eq!(store.get_dot("D3").await.unwrap().spec.policy, kept);
     // 0016 gives Custom policies `App` and `ProposeApp` too, as 0007 did `Context`.
     let mut custom_then = custom.clone();
     custom_then
         .rules
         .extend(APP_TOOLS.map(|tool| Rule::new(tool, Action::Allow)));
+    custom_then
+        .rules
+        .push(Rule::new("Instructions", Action::Allow));
     assert_eq!(store.get_dot("D4").await.unwrap().spec.policy, custom_then);
     assert!(CHECK_IN_TOOLS
         .iter()

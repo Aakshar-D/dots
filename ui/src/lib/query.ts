@@ -66,12 +66,16 @@ export const keys = {
   messages: (dotId: string | null) => ["messages", dotId] as const,
   followUps: (dotId: string | null) => ["follow-ups", dotId] as const,
   memories: (dotId: string) => ["memories", dotId] as const,
+  /// The instructions a dot proposed (conversational chat spec section 4).
+  instructionProposals: (dotId: string) => ["instruction-proposals", dotId] as const,
   watchers: (dotId: string) => ["watchers", dotId] as const,
   /// The apps dots proposed, of one dot or of all (null).
   appProposals: (dotId: string | null) => ["app-proposals", dotId] as const,
   /// The installed apps (the Apps screen), and below them the data removed apps kept.
   apps: ["apps"] as const,
   appsKept: ["apps", "kept"] as const,
+  /// The apps that come with Dots and are not installed ("Install Projects").
+  appsBundled: ["apps", "bundled"] as const,
   limits: ["limits"] as const,
   updateStatus: ["update-status"] as const,
   publisher: ["publisher"] as const,

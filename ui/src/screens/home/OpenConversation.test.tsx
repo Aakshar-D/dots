@@ -42,7 +42,7 @@ describe("the Inbox's Open conversation", () => {
       review_runs: [],
       attention: [],
       tools_changed: [],
-      watchers: [], held: [], app_reviews: [],
+      watchers: [], held: [], instructions: [], app_reviews: [],
     }));
     const { user, router } = renderApp("/inbox");
     const group = await screen.findByRole("group", { name: `Approvals asked by ${dot.name}` });

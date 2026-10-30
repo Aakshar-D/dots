@@ -462,6 +462,15 @@ impl Session {
                 _ => ToolOutput::err(format!("{} is not available in this run", call.name)),
             };
         }
+        if call.name == crate::instructions::TOOL {
+            return match &self.checkins {
+                Some(checkins) if self.ctx.tools.instructions() => {
+                    tools::instructions::run(checkins.instructions(), &self.ctx.run_id, &call.input)
+                        .await
+                }
+                _ => ToolOutput::err(format!("{} is not available in this run", call.name)),
+            };
+        }
         if crate::memory::Tool::from_name(call.name).is_some() {
             return match &self.checkins {
                 Some(checkins) => {

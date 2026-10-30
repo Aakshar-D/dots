@@ -15,7 +15,8 @@ import { keys } from "@/lib/query";
 /// A topic that a schedule, a webhook, Run now or a follow-up started, as one card: its trigger
 /// and time, its status, the first line of its summary or error, Details and Reply. While its run
 /// waits for an approval or has an open question the card is open and shows them; closed, it
-/// loads nothing (chat-first home spec, section 4.2).
+/// loads nothing (chat-first home spec, section 4.2). It is a rounded light-bordered card, as
+/// the conversation's other cards are (conversational chat spec section 5).
 export function RunCard(props: {
   topic: Topic;
   checkIns: Message[];
@@ -38,7 +39,7 @@ export function RunCard(props: {
   return (
     <article
       aria-label={topicTitle(topic)}
-      className="flex flex-col gap-2 border-l-2 border-border py-1 pl-3"
+      className="flex flex-col gap-2 rounded-xl border bg-card px-4 py-3"
     >
       <div className="flex items-center gap-2">
         <span className="font-medium">{topicTitle(topic)}</span>

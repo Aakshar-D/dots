@@ -9,7 +9,6 @@ import { Button } from "@/components/ui/button";
 import { dotStatus } from "@/lib/dot-status";
 import { keys } from "@/lib/query";
 import { DotHeader } from "@/screens/home/DotHeader";
-import { DotMenu } from "@/screens/home/DotMenu";
 import { HistoryMenu } from "@/screens/home/HistoryMenu";
 import { rememberDot } from "@/screens/home/last-dot";
 import { ReplyArea, type ReplyPick } from "@/screens/home/ReplyArea";
@@ -24,6 +23,14 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
   const allMessages =
     useQuery({ queryKey: keys.messages(null), queryFn: () => commands.messagesList(null) }).data ??
     [];
+  // The instructions the dot proposed that wait for the person (conversational chat spec
+  // section 4), each on a card under the run that proposed it.
+  const proposals = (
+    useQuery({
+      queryKey: keys.instructionProposals(dot.id),
+      queryFn: () => commands.instructionProposalsList(dot.id),
+    }).data ?? []
+  ).filter((p) => p.status === "pending");
   const held =
     useQuery({ queryKey: keys.limits, queryFn: commands.limitsGet }).data?.held_run_ids ?? [];
   useEffect(() => rememberDot(dot.id), [dot.id]);
@@ -36,38 +43,47 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
     ((older.error instanceof CommandError && older.error.kind === "not_found") ||
       (older.isSuccess && older.data.length === 0));
   const [pick, setPick] = useState<ReplyPick>({ kind: "default" });
+  // The current conversation, loaded and with nothing in it, greets like a new chat
+  // (conversational chat spec section 5). A failed load shows its errors instead.
+  const greeting =
+    rootRunId === undefined && !view.pending && view.list.isSuccess && view.shown.length === 0;
   if (gone) return <Navigate to={`/home/${dot.id}`} replace />;
   return (
     <div className="flex min-w-0 flex-1 flex-col">
-      <DotHeader name={dot.name} status={dotStatus(row, allMessages, held)}>
-        <DotMenu dot={dot} />
+      <DotHeader dot={dot} status={dotStatus(row, allMessages, held)}>
         <HistoryMenu dotId={dot.id} topics={view.older} />
         <Button size="sm" variant="ghost" onClick={() => setPick({ kind: "new" })}>
           New topic
         </Button>
       </DotHeader>
       {rootRunId !== undefined && (
-        <p className="border-b px-4 py-1.5 text-xs text-muted-foreground">
+        <p className="mx-auto w-full max-w-[720px] px-4 py-1.5 text-xs text-muted-foreground">
           Older topic ·{" "}
           <Link to={`/home/${dot.id}`} className="text-foreground underline">
             Back to the current conversation
           </Link>
         </p>
       )}
-      <Timeline
-        topics={view.pending ? [] : view.shown}
-        checkIns={view.checkIns}
-        dotName={dot.name}
-        onReply={(topic) => setPick({ kind: "topic", rootId: topic.rootId })}
-      >
-        <LoadErrors queries={[view.list, ...view.threads]} />
-        {!view.pending && view.shown.length === 0 && view.list.isSuccess && (
-          <p className="text-muted-foreground">
-            Ask {dot.name} something. It answers with its own instructions, folder and
-            permissions.
-          </p>
-        )}
-      </Timeline>
+      {greeting ? (
+        // Above the composer and pushed down by as much space as the spacer under it, so that
+        // the greeting and the composer sit together in the middle of the pane.
+        <div className="mx-auto flex w-full max-w-[720px] flex-1 flex-col items-center justify-end gap-1 px-4 pb-6 text-center">
+          <h2 className="text-2xl font-semibold">{dot.name}</h2>
+          <p className="text-muted-foreground">Ask {dot.name} something</p>
+        </div>
+      ) : (
+        <Timeline
+          topics={view.pending ? [] : view.shown}
+          checkIns={view.checkIns}
+          dotName={dot.name}
+          proposals={proposals}
+          onReply={(topic) => setPick({ kind: "topic", rootId: topic.rootId })}
+        >
+          <LoadErrors queries={[view.list, ...view.threads]} />
+        </Timeline>
+      )}
+      {/* The reply area keeps its place in the tree when the greeting gives way to the
+          conversation, so a send on its way is not cut off. */}
       {!view.pending && (
         <ReplyArea
           dotId={dot.id}
@@ -80,6 +96,7 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
           olderRoot={rootRunId}
         />
       )}
+      {greeting && <div aria-hidden className="flex-1" />}
     </div>
   );
 }
