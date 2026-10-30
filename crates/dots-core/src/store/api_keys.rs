@@ -41,20 +41,39 @@ fn key_from_row(row: &SqliteRow) -> Result<ApiKeyRow> {
 impl Store {
     /// Adds a key's record. An id or hash already used is a `Conflict`.
     pub async fn add_api_key(&self, key: &ApiKeyRow) -> Result<()> {
-        let added = sqlx::query(&format!(
-            "INSERT INTO api_keys ({API_KEY_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-        ))
-        .bind(&key.id)
-        .bind(&key.scope)
-        .bind(&key.workspace_id)
-        .bind(&key.name)
-        .bind(&key.prefix)
-        .bind(&key.hash)
-        .bind(&key.created_at)
-        .bind(&key.last_used_at)
-        .bind(&key.revoked_at)
-        .execute(&self.pool)
-        .await;
+        self.insert_api_key(key, false).await
+    }
+
+    /// Adds a key's record if its workspace is still there, in one statement: a workspace
+    /// deleted after the caller checked it is `NotFound`, and is left with no key that would
+    /// outlive it. An id or hash already used is a `Conflict`.
+    pub async fn add_workspace_api_key(&self, key: &ApiKeyRow) -> Result<()> {
+        self.insert_api_key(key, true).await
+    }
+
+    async fn insert_api_key(&self, key: &ApiKeyRow, in_workspace: bool) -> Result<()> {
+        let guard = if in_workspace {
+            "WHERE EXISTS (SELECT 1 FROM workspaces WHERE scope = ? AND id = ?)"
+        } else {
+            ""
+        };
+        let sql = format!(
+            "INSERT INTO api_keys ({API_KEY_COLUMNS}) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? {guard}"
+        );
+        let mut insert = sqlx::query(&sql)
+            .bind(&key.id)
+            .bind(&key.scope)
+            .bind(&key.workspace_id)
+            .bind(&key.name)
+            .bind(&key.prefix)
+            .bind(&key.hash)
+            .bind(&key.created_at)
+            .bind(&key.last_used_at)
+            .bind(&key.revoked_at);
+        if in_workspace {
+            insert = insert.bind(&key.scope).bind(&key.workspace_id);
+        }
+        let added = insert.execute(&self.pool).await;
         if let Err(sqlx::Error::Database(db)) = &added {
             if db.is_unique_violation() {
                 return Err(Error::Conflict(format!(
@@ -63,7 +82,9 @@ impl Store {
                 )));
             }
         }
-        added?;
+        if added?.rows_affected() == 0 {
+            return Err(Error::NotFound(format!("workspace {}", key.workspace_id)));
+        }
         Ok(())
     }
 

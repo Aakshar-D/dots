@@ -157,7 +157,6 @@ async fn create_shows_the_secret_once_and_lists_without_it() {
     assert_eq!(made.key.prefix, key_prefix(&made.secret));
     assert_eq!(made.key.name, "ci");
     assert_eq!(made.key.workspace_name, "Default");
-    assert_eq!(made.key.refusal, None);
     assert_eq!(made.key.revoked_at, None);
 
     let listed = t.rt.api_keys(PERSONAL).await.unwrap();
@@ -169,7 +168,31 @@ async fn create_shows_the_secret_once_and_lists_without_it() {
     let row = t.rt.store().api_key(&made.key.id).await.unwrap().unwrap();
     assert_eq!(row.hash, token_hash(&made.secret));
     assert_ne!(row.hash, made.secret);
+    // The key's text is in no file Dots wrote.
     t.rt.shutdown();
+    for file in files_under(t._dir.path()) {
+        let bytes = std::fs::read(&file).unwrap();
+        assert!(
+            !bytes
+                .windows(made.secret.len())
+                .any(|w| w == made.secret.as_bytes()),
+            "{}",
+            file.display()
+        );
+    }
+}
+
+fn files_under(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            files.extend(files_under(&path));
+        } else {
+            files.push(path);
+        }
+    }
+    files
 }
 
 #[tokio::test]
@@ -189,7 +212,7 @@ async fn personal_keys_allowed() {
     assert_eq!(again.revoked_at, revoked.revoked_at);
     assert!(matches!(
         t.rt.revoke_api_key("nope").await,
-        Err(Error::NotFound(_))
+        Err(Error::NotFound(text)) if text == "That API key isn't on this PC any more."
     ));
     t.rt.shutdown();
 }
@@ -237,10 +260,9 @@ async fn viewer_cannot_create_but_can_revoke() {
         refused(t.rt.create_api_key(ACME, "payments", "again").await),
         text
     );
-    // The list shows the key, with the core's words for why it can't be created for.
+    // The list still shows the key.
     let listed = t.rt.api_keys(ACME).await.unwrap();
     assert_eq!(listed.len(), 1);
-    assert_eq!(listed[0].refusal.as_deref(), Some(text.as_str()));
     // Revoking only reduces access, so any role may do it.
     let revoked = t.rt.revoke_api_key(&made.key.id).await.unwrap();
     assert!(revoked.revoked_at.is_some());

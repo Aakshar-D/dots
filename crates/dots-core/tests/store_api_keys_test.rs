@@ -117,21 +117,18 @@ async fn lookup_by_secret_finds_only_the_exact_key() {
 }
 
 #[tokio::test]
-async fn the_plain_key_is_not_stored() {
+async fn a_key_for_a_workspace_is_added_only_while_the_workspace_is_there() {
     let (_dir, store) = temp_store().await;
     let key = new_api_key();
-    let row = row_for(&key, "personal", "2026-10-30T09:00:00.000Z");
-    store.add_api_key(&row).await.unwrap();
-    let got = store.api_key(&row.id).await.unwrap().unwrap();
-    let all = [
-        &got.id,
-        &got.scope,
-        &got.workspace_id,
-        &got.name,
-        &got.prefix,
-        &got.hash,
-        &got.created_at,
-    ];
-    assert!(all.iter().all(|c| !c.contains(&key)));
-    assert_ne!(got.prefix, key);
+    let mut row = row_for(&key, "personal", "2026-10-30T09:00:00.000Z");
+    row.workspace_id = "gone".into();
+    assert!(matches!(
+        store.add_workspace_api_key(&row).await,
+        Err(Error::NotFound(_))
+    ));
+    assert_eq!(store.api_key(&row.id).await.unwrap(), None);
+
+    row.workspace_id = "default".into();
+    store.add_workspace_api_key(&row).await.unwrap();
+    assert_eq!(store.api_key(&row.id).await.unwrap(), Some(row));
 }

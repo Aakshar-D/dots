@@ -131,14 +131,45 @@ describe("runtime events and the query cache", () => {
       keys.scope,
       keys.dots,
       keys.overview,
+      keys.dot("dot-a"),
     ];
-    // A dot itself is not asked again: an open editor may have been filled from it.
-    const untouched = [keys.settings, keys.orgSopsKey("acme-eng"), keys.dot("dot-a")];
+    const untouched = [keys.settings, keys.orgSopsKey("acme-eng")];
     for (const key of [...lists, ...untouched]) qc.setQueryData(key, []);
 
     applyRuntimeEvent(qc, { type: "org_updated", org_id: "acme-eng" });
     for (const key of lists) expect(stale(qc, key), key.join("/")).toBe(true);
     for (const key of untouched) expect(stale(qc, key), key.join("/")).toBe(false);
+  });
+
+  it.each([
+    { type: "library_updated", item_id: "01J0SRV" },
+    { type: "org_updated", org_id: "acme-eng" },
+  ] as const)("does not load an open dot again on $type", async (update) => {
+    // An open editor was filled from the dot once; loading it again would put the editor back
+    // to empty. It is marked stale, so it is loaded when it is next opened.
+    const qc = createQueryClient();
+    let calls = 0;
+    backend.on("get_dot", () => {
+      calls += 1;
+      return sample.dot;
+    });
+    const observer = new QueryObserver(qc, {
+      queryKey: keys.dot(sample.dot.id),
+      queryFn: () => commands.getDot(sample.dot.id),
+    });
+    const unsubscribe = observer.subscribe(() => {});
+    // Loaded and settled: one still loading is asked again once it settles.
+    await vi.waitFor(() =>
+      expect(qc.getQueryState(keys.dot(sample.dot.id))).toMatchObject({
+        status: "success",
+        fetchStatus: "idle",
+      }),
+    );
+    applyRuntimeEvent(qc, update);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(calls).toBe(1);
+    expect(stale(qc, keys.dot(sample.dot.id))).toBe(true);
+    unsubscribe();
   });
 
   it("refetches the workspace list on an org update", async () => {

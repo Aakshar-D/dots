@@ -22,15 +22,20 @@ pub fn new_api_key() -> String {
     while chars < SECRET_CHARS {
         let mut buf = [0u8; 64];
         getrandom::fill(&mut buf).expect("OS random number generator unavailable");
-        for b in buf.into_iter().filter(|b| *b < REJECT_FROM) {
+        for c in buf.into_iter().filter_map(char_for) {
             if chars == SECRET_CHARS {
                 break;
             }
-            key.push(ALPHABET[usize::from(b % 62)] as char);
+            key.push(c);
             chars += 1;
         }
     }
     key
+}
+
+/// The character a random byte stands for, or none for a byte that is dropped.
+fn char_for(b: u8) -> Option<char> {
+    (b < REJECT_FROM).then(|| ALPHABET[usize::from(b % 62)] as char)
 }
 
 /// The part of a key kept in the clear to recognise it by: its first 12 characters.
@@ -59,13 +64,10 @@ pub struct ApiKeyView {
     pub created_at: String,
     pub last_used_at: Option<String>,
     pub revoked_at: Option<String>,
-    /// The core's words for why this PC may not create keys in that workspace; `None` is
-    /// allowed. Revoking is always allowed.
-    pub refusal: Option<String>,
 }
 
 impl ApiKeyView {
-    pub(crate) fn new(row: ApiKeyRow, workspace_name: String, refusal: Option<String>) -> Self {
+    pub(crate) fn new(row: ApiKeyRow, workspace_name: String) -> Self {
         ApiKeyView {
             id: row.id,
             scope: row.scope,
@@ -76,7 +78,6 @@ impl ApiKeyView {
             created_at: row.created_at,
             last_used_at: row.last_used_at,
             revoked_at: row.revoked_at,
-            refusal,
         }
     }
 }
@@ -86,4 +87,25 @@ impl ApiKeyView {
 pub struct CreatedApiKey {
     pub key: ApiKeyView,
     pub secret: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_character_stands_for_the_same_number_of_bytes() {
+        let mut counts = std::collections::HashMap::new();
+        for b in 0..=u8::MAX {
+            match char_for(b) {
+                Some(c) => *counts.entry(c).or_insert(0) += 1,
+                None => assert!(b >= REJECT_FROM, "{b}"),
+            }
+        }
+        assert_eq!(counts.len(), 62);
+        assert!(counts.values().all(|n| *n == 4));
+        assert_eq!(char_for(0), Some('0'));
+        assert_eq!(char_for(247), Some('z'));
+        assert_eq!(char_for(248), None);
+    }
 }

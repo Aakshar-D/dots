@@ -73,17 +73,27 @@ impl Rt {
     /// Serves a member list at `seq` with the workspaces Default and Payments, an owner who is
     /// not this PC, and this PC as `role` with the workspace entries `mine`.
     async fn serve_list(&self, seq: u64, role: &str, mine: Value) {
+        let me = member("01ME", "me@acme.com", role, &self.me().await, mine);
+        self.serve_members(seq, Some(me)).await;
+    }
+
+    /// Serves a member list at `seq` with the owner and, when given, this PC's entry.
+    async fn serve_members(&self, seq: u64, me: Option<Value>) {
+        let mut members = vec![member(
+            "01OWNER",
+            "owner@acme.com",
+            "owner",
+            &public_key(&keys()),
+            json!({"default": "admin"}),
+        )];
+        members.extend(me);
         let text = json!({
             "v": 1, "org_id": ACME, "issued_at": "2026-10-28T09:00:00Z", "seq": seq,
             "workspaces": [
                 {"id": "default", "name": "Default"},
                 {"id": "payments", "name": "Payments"}
             ],
-            "members": [
-                member("01OWNER", "owner@acme.com", "owner", &public_key(&keys()),
-                       json!({"default": "admin"})),
-                member("01ME", "me@acme.com", role, &self.me().await, mine),
-            ]
+            "members": members,
         })
         .to_string();
         let policy_text = sign(
@@ -545,6 +555,55 @@ async fn bad_json_is_400() {
             .unwrap()
             .starts_with("body must be JSON: "),
         "{body}"
+    );
+    assert_eq!(t.runs_of(&dot).await, 0);
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn removed_from_the_account_refuses_existing_key() {
+    let t = Rt::start().await;
+    t.join().await;
+    let dot = t.dot("d", Some(ACME), "default").await;
+    let key = t.key(ACME, "default").await;
+    assert_eq!(t.get("/v1/dots", Some(&key)).await.0, StatusCode::OK);
+
+    // The member list no longer has this PC.
+    t.serve_members(2, None).await;
+    t.rt.refresh_org(ACME).await.unwrap();
+    let removed = (
+        StatusCode::FORBIDDEN,
+        error("Acme Engineering: you were removed from it."),
+    );
+    assert_eq!(t.get("/v1/dots", Some(&key)).await, removed);
+    assert_eq!(t.trigger(&dot, &key, "").await, removed);
+    assert_eq!(t.runs_of(&dot).await, 0, "nothing queued");
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn oversized_body_is_checked_after_the_key() {
+    let t = Rt::start().await;
+    let dot = t.dot("d", None, "default").await;
+    let key = t.key(PERSONAL, "default").await;
+    let big = format!("\"{}\"", "a".repeat(dots_core::server::MAX_WEBHOOK_BODY));
+    // No key: 401, not 413.
+    let r = t
+        .http
+        .post(format!("{}/v1/dots/{dot}/trigger", t.base))
+        .body(big.clone())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(answer(r).await, (StatusCode::UNAUTHORIZED, error(BAD_KEY)));
+    // With a key: 413 in JSON.
+    let (status, body) = t.trigger(&dot, &key, &big).await;
+    assert_eq!(
+        (status, body),
+        (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            error("body must be 256 KB or less")
+        )
     );
     assert_eq!(t.runs_of(&dot).await, 0);
     t.rt.shutdown();

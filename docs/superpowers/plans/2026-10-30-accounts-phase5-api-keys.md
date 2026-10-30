@@ -54,7 +54,7 @@ Rulings in this plan:
   - `pub const API_KEY_PREFIX: &str = "dots_sk_";`, `pub fn new_api_key() -> String` (the rulings' algorithm), `pub fn key_prefix(key: &str) -> String` (first 12 chars), `pub fn looks_like_key(text: &str) -> bool` (prefix + exactly 43 base62 chars).
   - `pub struct ApiKeyRow { pub id: String, pub scope: String, pub workspace_id: String, pub name: String, pub prefix: String, pub hash: String, pub created_at: String, pub last_used_at: Option<String>, pub revoked_at: Option<String> }`.
   - `Store::add_api_key(&ApiKeyRow)`, `Store::api_keys(scope) -> Result<Vec<ApiKeyRow>>` (newest first), `Store::api_key(id) -> Result<Option<ApiKeyRow>>`, `Store::api_key_by_secret(key: &str) -> Result<Option<ApiKeyRow>>` (looks up by `token_hash`, confirms with `ct_eq`), `Store::revoke_api_key(id, at)` (NotFound if absent; an already revoked key keeps its first time), `Store::touch_api_key(id, at)`.
-- [ ] **Step 1: Failing tests:** `new_keys_have_the_shape` (prefix, length 51, base62 only, 100 keys all different); `key_prefix_is_12_chars`; `looks_like_key` accepts a new key and refuses short / long / other prefix / a `-`; `add_list_revoke_touch_round_trip`; `lookup_by_secret_finds_only_the_exact_key` (one changed character → None); `the_plain_key_is_not_stored` (no column of the row contains it).
+- [ ] **Step 1: Failing tests:** `new_keys_have_the_shape` (prefix, length 51, base62 only, 100 keys all different); `key_prefix_is_12_chars`; `looks_like_key` accepts a new key and refuses short / long / other prefix / a `-`; `add_list_revoke_touch_round_trip`; `lookup_by_secret_finds_only_the_exact_key` (one changed character → None); `a_key_for_a_workspace_is_added_only_while_the_workspace_is_there`; the key's text is in no file Dots wrote (checked in `create_shows_the_secret_once_and_lists_without_it`).
 - [ ] **Step 2–4:** FAIL, implement, PASS.
 - [ ] **Step 5: Commit** `feat(accounts): api_keys table and key making`
 
@@ -75,7 +75,7 @@ Rulings in this plan:
   - `Runtime::revoke_api_key(id: &str) -> Result<ApiKeyView>` — same permission on the key's workspace.
   - `WorkspaceView.refusals` gains `create_api_keys: Option<String>` (core text) so the UI can disable the create form per workspace without a TS role rule.
   - Store hooks: `delete_workspace` and `mirror_workspaces` set `revoked_at` on keys of removed workspaces; `remove_org` deletes the org's keys — each in the existing transaction.
-- [ ] **Step 1: Failing tests:** `create_shows_the_secret_once_and_lists_without_it`; `viewer_cannot_create_or_revoke` (exact phase 2/4 text); `outside_workspace_cannot_create`; `personal_keys_allowed`; `name_rules`; `workspace_gone_revokes_keys` (delete workspace → revoked; roster drops it → revoked; leave account → gone); `list_shows_only_visible_workspaces`.
+- [ ] **Step 1: Failing tests:** `create_shows_the_secret_once_and_lists_without_it`; `viewer_cannot_create_but_can_revoke` (exact phase 2/4 text; revoking needs no role); `outside_workspace_cannot_create`; `personal_keys_allowed`; `name_rules`; `workspace_gone_revokes_keys` (delete workspace → revoked; roster drops it → revoked; leave account → gone); `list_shows_only_visible_workspaces`.
 - [ ] **Step 2–4:** FAIL, implement, PASS; rerun the workspace and store suites.
 - [ ] **Step 5: Commit** `feat(accounts): create, list and revoke API keys per workspace`
 
@@ -136,7 +136,7 @@ Rulings in this plan:
 - **Create key**: name + workspace select (visible workspaces; an option is disabled with `refusals.create_api_keys` as the reason). The answer shows the secret once in a read-only box with **Copy**, the line "Copy it now. Dots won't show it again.", the base URL from `api_base_url`, and an example `curl -H "Authorization: Bearer <key>" <base>/dots`. Closing drops the secret from memory (never put in the TanStack Query cache).
 - Server not running → the base URL line shows the core's Conflict text.
 - Invalidate the key list after create/revoke and on `org_updated`.
-- [ ] **Step 1: Failing tests:** `lists_keys_with_prefix_and_last_used`; `create_shows_the_secret_once` (after closing and reopening the secret is gone; the list shows only the prefix); `revoke_asks_to_confirm`; `viewer_controls_disabled_with_reason`; `server_off_shows_the_reason`.
+- [ ] **Step 1: Failing tests:** `lists_keys_with_prefix_and_last_used`; `create_shows_the_secret_once` (after closing and reopening the secret is gone; the list shows only the prefix); `revoke_asks_to_confirm`; `viewer_can_revoke_but_not_create`; `server_off_shows_the_reason`.
 - [ ] **Step 2–4:** FAIL, implement, PASS; full UI gates.
 - [ ] **Step 5: Commit** `feat(accounts): API keys tab`
 

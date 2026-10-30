@@ -1166,8 +1166,8 @@ export const Refusals = z.strictObject({
   answer: nullable(z.string()),
   create_api_keys: nullable(z.string()),
 });
-// An API key as the keys tab lists it: never the key text, only its prefix, and why this PC may
-// not manage it (null is allowed).
+// An API key as the keys tab lists it: never the key text, only its prefix. Whether keys may be
+// made in its workspace is in the workspace's refusals.
 export const ApiKeyView = z.strictObject({
   id: z.string(),
   scope: z.string(),
@@ -1178,7 +1178,6 @@ export const ApiKeyView = z.strictObject({
   created_at: z.string(),
   last_used_at: nullable(z.string()),
   revoked_at: nullable(z.string()),
-  refusal: nullable(z.string()),
 });
 // What making a key answers: the key and its text, which exists only in this answer.
 export const CreatedApiKey = z.strictObject({

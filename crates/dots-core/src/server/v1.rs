@@ -4,6 +4,7 @@
 //! other workspace or account is answered like one that does not exist.
 
 use axum::body::Bytes;
+use axum::extract::rejection::BytesRejection;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -129,12 +130,13 @@ pub async fn list_dots(State(s): State<ServerState>, headers: HeaderMap) -> Resp
 }
 
 /// `POST /v1/dots/{id}/trigger`: queues a run of the dot with the body as its payload, like
-/// the dot's webhook.
+/// the dot's webhook. A body that could not be read (larger than `MAX_WEBHOOK_BODY`) is
+/// answered only once the key is checked, and in JSON like every other `/v1` answer.
 pub async fn trigger(
     State(s): State<ServerState>,
     Path(id): Path<String>,
     headers: HeaderMap,
-    body: Bytes,
+    body: Result<Bytes, BytesRejection>,
 ) -> Response {
     let caller = match caller(&s, &headers, Permission::RunDots).await {
         Ok(c) => c,
@@ -147,6 +149,14 @@ pub async fn trigger(
     if !dot.spec.enabled {
         return error(StatusCode::CONFLICT, "dot is disabled");
     }
+    let body = match body {
+        Ok(body) => body,
+        Err(e) if e.status() == StatusCode::PAYLOAD_TOO_LARGE => {
+            let limit = super::MAX_WEBHOOK_BODY / 1024;
+            return error(e.status(), &format!("body must be {limit} KB or less"));
+        }
+        Err(e) => return error(e.status(), &e.body_text()),
+    };
     let mut new = NewRun::new(&dot.id, TriggerKind::Api);
     new.payload = match payload(&body) {
         Ok(p) => p,

@@ -1503,8 +1503,8 @@ pub fn samples() -> Value {
             refusals: Refusals::default(),
         },
     ]);
-    // What `api_key_list` answers: a live key this PC may manage, a revoked one, and one in a
-    // workspace this PC may not manage keys in. None carries the key text.
+    // What `api_key_list` answers: a live key, a revoked one, and one in an account's
+    // workspace. None carries the key text.
     let live_key = ApiKeyView {
         id: "01J0KEY".into(),
         scope: "personal".into(),
@@ -1515,7 +1515,6 @@ pub fn samples() -> Value {
         created_at: TS.into(),
         last_used_at: Some(TS.into()),
         revoked_at: None,
-        refusal: None,
     };
     samples["ApiKeyView"] = to([
         live_key.clone(),
@@ -1533,7 +1532,6 @@ pub fn samples() -> Value {
             workspace_name: "Platform".into(),
             name: "Deploy bot".into(),
             last_used_at: None,
-            refusal: Some(viewer_in_platform("create API keys")),
             ..live_key.clone()
         },
     ]);

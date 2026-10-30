@@ -2,7 +2,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { ApiKeyView, WorkspaceView } from "@/api/types";
-import { backend } from "@/test/backend";
+import { backend, later } from "@/test/backend";
 import { allowed, sample } from "@/test/fixtures";
 import { renderApp } from "@/test/render";
 
@@ -27,7 +27,6 @@ const key = (over: Partial<ApiKeyView> = {}): ApiKeyView => ({
   created_at: "2026-10-01T09:00:00Z",
   last_used_at: null,
   revoked_at: null,
-  refusal: null,
   ...over,
 });
 
@@ -131,7 +130,7 @@ describe("Settings, Accounts, API keys", () => {
   });
 
   it("viewer_can_revoke_but_not_create", async () => {
-    account({ keys: [key({ refusal: "Viewers can't make keys here." })] });
+    account({ keys: [key()] });
     const { user, panel } = await keysTab();
     // Revoking only reduces access, so it stays on whatever the role.
     expect(await within(panel).findByRole("button", { name: "Revoke CI" })).toBeEnabled();
@@ -154,6 +153,47 @@ describe("Settings, Accounts, API keys", () => {
     expect(create).toBeDisabled();
     expect(create).toHaveAttribute("title", "Viewers can't make keys.");
     expect(dialog).toHaveTextContent("Viewers can't make keys.");
+  });
+
+  it("create_says_why_while_the_workspaces_load_and_when_they_fail", async () => {
+    account();
+    const spaces = later<WorkspaceView[]>();
+    backend.on("workspace_list", () => spaces.answer);
+    const { user, panel } = await keysTab();
+    await within(panel).findByRole("listitem", { name: "CI" });
+    await user.click(within(panel).getByRole("button", { name: "Create key" }));
+    const dialog = await screen.findByRole("dialog");
+    await user.type(within(dialog).getByLabelText("Name"), "Deploy");
+    const create = within(dialog).getByRole("button", { name: "Create" });
+    expect(create).toBeDisabled();
+    expect(create).toHaveAttribute("title", "Loading workspaces…");
+    spaces.fail({ kind: "internal", message: "The store is locked." });
+    await waitFor(() =>
+      expect(create).toHaveAttribute("title", "The workspaces could not be loaded."),
+    );
+    expect(create).toBeDisabled();
+    expect(dialog).toHaveTextContent("The store is locked.");
+  });
+
+  it("create_and_revoke_refresh_the_keys_and_workspaces", async () => {
+    account({ url: "http://127.0.0.1:4455" });
+    const { user, panel } = await keysTab();
+    await user.click(await within(panel).findByRole("button", { name: "Create key" }));
+    const dialog = await screen.findByRole("dialog");
+    await within(dialog).findByRole("option", { name: "Default" });
+    const before = { keys: backend.callsTo("api_key_list").length, spaces: backend.callsTo("workspace_list").length };
+    await user.type(within(dialog).getByLabelText("Name"), "Deploy");
+    await user.click(within(dialog).getByRole("button", { name: "Create" }));
+    await within(dialog).findByDisplayValue(SECRET);
+    await waitFor(() => expect(backend.callsTo("api_key_list").length).toBeGreaterThan(before.keys));
+    expect(backend.callsTo("workspace_list").length).toBeGreaterThan(before.spaces);
+    await user.click(within(dialog).getByRole("button", { name: "Done" }));
+
+    const after = backend.callsTo("api_key_list").length;
+    await user.click(await within(panel).findByRole("button", { name: "Revoke CI" }));
+    const confirm = await screen.findByRole("alertdialog");
+    await user.click(within(confirm).getByRole("button", { name: "Revoke" }));
+    await waitFor(() => expect(backend.callsTo("api_key_list").length).toBeGreaterThan(after));
   });
 
   it("the_sample_says_curl_exe_on_windows", async () => {

@@ -120,6 +120,13 @@ describe("Rust/TypeScript contract", () => {
     expect(() => T.Run.parse({ ...fixture.Run, extra: 1 })).toThrow();
   });
 
+  it("rejects an API key view or a made key with a field the schema does not know", () => {
+    // A key's text must never ride along in a listed key.
+    const [key] = fixture.ApiKeyView;
+    expect(() => T.ApiKeyView.parse({ ...key, secret: "dots_sk_x" })).toThrow();
+    expect(() => T.CreatedApiKey.parse({ ...fixture.CreatedApiKey, extra: 1 })).toThrow();
+  });
+
   for (const [name, schema] of Object.entries(enums)) {
     it(`knows every ${name} the core has`, () => {
       const core = fixture.Enums[name as keyof typeof fixture.Enums];

@@ -220,8 +220,8 @@ curl -H "Authorization: Bearer dots_sk_..." http://127.0.0.1:PORT/v1/runs/RUN_ID
 - `GET /v1/dots` lists the dots of the key's workspace: `id`, `name`, `enabled`, `org_id` and
   `workspace_id`.
 - `POST /v1/dots/{id}/trigger` starts a run. The body is the run's payload, the same as for the
-  dot's webhook. It answers 202 with `{"run_id": "..."}`. A disabled dot answers 409 "dot is
-  disabled".
+  dot's webhook, up to 256 KB. It answers 202 with `{"run_id": "..."}`. A disabled dot answers
+  409 "dot is disabled"; a larger body answers 413 "body must be 256 KB or less".
 - `GET /v1/runs/{id}` gives the run's status: `id`, `dot_id`, `status`, `queued_at`, `started_at`,
   `ended_at`, `summary` and `error`. Only status, no events.
 
@@ -230,7 +230,8 @@ What a key can reach:
 - Only the dots and runs of **its own workspace**. A dot or run anywhere else, or one that does not
   exist, answers 404 "Not found." so a caller can't tell them apart.
 - Every request checks your **current role** in that workspace. A Viewer key can list and read
-  runs, but a trigger answers 403 with the reason. If your role changes, the key follows at once.
+  runs, but a trigger answers 403 with the reason. If your role changes, or you are removed from
+  the account, the key follows at once.
 - A key that is wrong, revoked, or whose workspace was deleted gets the same 401: "That API key
   isn't valid. Make a new one in Dots."
 - Runs started this way show as **API** in Dots. They are background runs: like webhooks, they wait

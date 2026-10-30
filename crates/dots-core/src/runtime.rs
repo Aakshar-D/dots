@@ -1044,10 +1044,14 @@ impl Runtime {
         if self.store.workspace(scope, workspace_id).await?.is_some() {
             return Ok(());
         }
-        Err(Error::NotFound(format!(
+        Err(self.no_workspace(org_id, workspace_id).await)
+    }
+
+    async fn no_workspace(&self, org_id: Option<&str>, workspace_id: &str) -> Error {
+        Error::NotFound(format!(
             "No workspace '{workspace_id}' in {}.",
             crate::accounts::account_label(Some(&self.orgs), org_id).await
-        )))
+        ))
     }
 
     /// Moves a dot to another workspace of its account. The role must allow changing dots in
@@ -1132,8 +1136,8 @@ impl Runtime {
 
     /// The API keys of the workspaces of `scope` (`personal` or an org id) this PC may see,
     /// newest first. Keys of a workspace this PC can no longer see are left out (they stay
-    /// refused at request time). Each says why this PC may not create keys there, if it may not. Never carries a
-    /// key's text.
+    /// refused at request time). Never carries a key's text; whether keys may be created in a
+    /// workspace is in its `WorkspaceView`.
     pub async fn api_keys(
         &self,
         scope: &str,
@@ -1146,9 +1150,9 @@ impl Runtime {
             .into_iter()
             .filter_map(|row| {
                 let ws = visible.iter().find(|w| w.id == row.workspace_id)?;
-                let (name, refusal) = (ws.name.clone(), ws.refusals.create_api_keys.clone());
                 Some(crate::accounts::api_keys::ApiKeyView::new(
-                    row, name, refusal,
+                    row,
+                    ws.name.clone(),
                 ))
             })
             .collect())
@@ -1186,22 +1190,26 @@ impl Runtime {
             last_used_at: None,
             revoked_at: None,
         };
-        self.store.add_api_key(&row).await?;
-        let key = ApiKeyView::new(row, self.workspace_label(scope, workspace_id).await?, None);
+        // The workspace may have been deleted since it was checked.
+        match self.store.add_workspace_api_key(&row).await {
+            Err(Error::NotFound(_)) => return Err(self.no_workspace(org_id, workspace_id).await),
+            added => added?,
+        }
+        let key = ApiKeyView::new(row, self.workspace_label(scope, workspace_id).await?);
         Ok(CreatedApiKey { key, secret })
     }
 
     /// Revokes a key: it stops working at once and stays listed as revoked. No role is needed:
     /// revoking only reduces access, so any key stored on this PC may be revoked.
     pub async fn revoke_api_key(&self, id: &str) -> Result<crate::accounts::api_keys::ApiKeyView> {
-        self.store.revoke_api_key(id, &crate::util::now()).await?;
-        let row = self
-            .store
-            .api_key(id)
-            .await?
-            .ok_or_else(|| Error::NotFound(format!("No API key '{id}'.")))?;
+        let gone = || Error::NotFound("That API key isn't on this PC any more.".into());
+        match self.store.revoke_api_key(id, &crate::util::now()).await {
+            Err(Error::NotFound(_)) => return Err(gone()),
+            revoked => revoked?,
+        }
+        let row = self.store.api_key(id).await?.ok_or_else(gone)?;
         let name = self.workspace_label(&row.scope, &row.workspace_id).await?;
-        Ok(crate::accounts::api_keys::ApiKeyView::new(row, name, None))
+        Ok(crate::accounts::api_keys::ApiKeyView::new(row, name))
     }
 
     /// The workspace's name, or its id when it has none.

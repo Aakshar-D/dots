@@ -203,8 +203,8 @@ async fn normal_callers_still_work() {
         .await
         .unwrap();
     assert_ne!(r.status(), StatusCode::OK);
-    // A websocket upgrade to the browser door with the right Host reaches the route (which
-    // answers for its unknown secret itself).
+    // A websocket upgrade to the browser door with the right Host reaches the route, which
+    // answers 404 for its unknown secret itself.
     let r = s
         .http
         .get(format!("{}/cdp/bad-secret", s.base))
@@ -226,9 +226,9 @@ async fn normal_callers_still_work() {
         .await
         .unwrap();
     assert_eq!(forged.status(), StatusCode::FORBIDDEN);
-    assert_ne!(
+    assert_eq!(
         r.status(),
-        StatusCode::FORBIDDEN,
+        StatusCode::NOT_FOUND,
         "the Host check must not refuse the real caller"
     );
 }

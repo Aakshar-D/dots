@@ -62,16 +62,10 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
       // The Library lists, the Inbox group of a changed tool list, and what shows the dots that
       // use the item: removing it takes it out of them, and no dot event says so. An app's row,
       // and the data a removed one kept, are on the Apps screen.
-      for (const queryKey of [
-        keys.library,
-        keys.inbox,
-        keys.dots,
-        ["dot"],
-        keys.overview,
-        keys.apps,
-      ]) {
+      for (const queryKey of [keys.library, keys.inbox, keys.dots, keys.overview, keys.apps]) {
         invalidate(qc, queryKey);
       }
+      staleDots(qc);
       break;
     case "app_data_changed":
       // The app's open screen refreshes (`dots.onChange`).
@@ -97,12 +91,8 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
         invalidate(qc, queryKey);
       }
       // What is read per dot under its key: its variables (read in its org) and its access
-      // (from the member list). Not the dot itself: an editor opened from a cached copy has not
-      // loaded it since, and loading it again would put the editor back to empty, losing what
-      // was typed.
-      for (const query of qc.getQueryCache().findAll({ queryKey: ["dot"] })) {
-        if (query.queryKey.length > 2) invalidate(qc, query.queryKey);
-      }
+      // (from the member list).
+      staleDots(qc);
       break;
     case "schedule_attention":
       // For the notification; the `schedule_updated` sent with it refreshes the screens.
@@ -149,6 +139,20 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
       invalidate(qc, keys.inbox);
       invalidate(qc, ["usage"]);
       break;
+  }
+}
+
+/// Marks every loaded dot stale, and what is read per dot under its key. A dot an editor shows
+/// is not loaded again now: the editor was filled from it once, and loading it again would put
+/// the editor back to empty, losing what was typed. It is loaded when it is next opened. One
+/// being loaded is asked again once that load settles, as `invalidate` does.
+function staleDots(qc: QueryClient): void {
+  for (const query of qc.getQueryCache().findAll({ queryKey: ["dot"] })) {
+    if (query.queryKey.length > 2 || query.state.fetchStatus === "fetching") {
+      invalidate(qc, query.queryKey);
+    } else {
+      void qc.invalidateQueries({ queryKey: query.queryKey, exact: true, refetchType: "none" });
+    }
   }
 }
 
