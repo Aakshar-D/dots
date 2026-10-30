@@ -4,12 +4,13 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use axum::extract::{ConnectInfo, DefaultBodyLimit, Request};
-use axum::http::StatusCode;
+use axum::extract::{ConnectInfo, DefaultBodyLimit, Request, State};
+use axum::http::{header, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use axum::Router;
+use axum::{Json, Router};
+use serde_json::json;
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -22,6 +23,7 @@ use crate::Result;
 mod browser;
 pub mod gateway;
 pub mod mcp;
+pub mod v1;
 pub mod webhook;
 
 pub const MAX_WEBHOOK_BODY: usize = 256 * 1024;
@@ -34,6 +36,8 @@ pub struct ServerState {
     pub hub: Arc<ApprovalHub>,
 }
 
+/// The routes, behind the loopback check. The Host check needs the bound port and is applied
+/// in `serve`, so a test of it must go through `serve`.
 pub fn router(state: ServerState) -> Router {
     Router::new()
         .route("/health", get(|| async { "ok" }))
@@ -41,6 +45,13 @@ pub fn router(state: ServerState) -> Router {
             "/dots/{id}/trigger",
             post(webhook::trigger).layer(DefaultBodyLimit::max(MAX_WEBHOOK_BODY)),
         )
+        // The API of a workspace's keys (accounts spec §10).
+        .route("/v1/dots", get(v1::list_dots))
+        .route(
+            "/v1/dots/{id}/trigger",
+            post(v1::trigger).layer(DefaultBodyLimit::max(MAX_WEBHOOK_BODY)),
+        )
+        .route("/v1/runs/{id}", get(v1::run))
         // Tool inputs (e.g. a Write of a large file) pass through the permission gate.
         .route(
             "/mcp",
@@ -70,6 +81,43 @@ async fn loopback_only(
         return StatusCode::FORBIDDEN.into_response();
     }
     next.run(req).await
+}
+
+/// Whether a `Host` header names this server: exactly `127.0.0.1:<port>` or `localhost:<port>`
+/// (the name is case-insensitive) for the port it is listening on, the port in its plain digits
+/// (no `04321` or `+4321`). No `Host` is refused.
+pub fn host_allowed(host: Option<&str>, port: u16) -> bool {
+    let Some((name, p)) = host.and_then(|h| h.rsplit_once(':')) else {
+        return false;
+    };
+    p == port.to_string() && (name == "127.0.0.1" || name.eq_ignore_ascii_case("localhost"))
+}
+
+/// Refuses a request whose `Host` does not name this server, so a page on another name that was
+/// re-pointed at 127.0.0.1 (DNS rebinding) reaches no route. The server speaks HTTP/1.1, where
+/// the name is the `Host` header; HTTP/2's `:authority` is not read. A request with more than
+/// one `Host` is refused too. `/v1` answers in JSON words, the other routes with a bare 403 like
+/// `loopback_only`.
+async fn host_only(State(port): State<u16>, req: Request, next: Next) -> Response {
+    let hosts = req.headers().get_all(header::HOST);
+    let host = match hosts.iter().count() {
+        1 => hosts.iter().next().and_then(|h| h.to_str().ok()),
+        _ => None,
+    };
+    if host_allowed(host, port) {
+        return next.run(req).await;
+    }
+    let path = req.uri().path();
+    if path == "/v1" || path.starts_with("/v1/") {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "error": "This server only answers requests addressed to 127.0.0.1 or localhost."
+            })),
+        )
+            .into_response();
+    }
+    StatusCode::FORBIDDEN.into_response()
 }
 
 pub async fn bind(port: u16) -> Result<TcpListener> {
@@ -129,7 +177,18 @@ pub fn serve(
     shutdown: CancellationToken,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let app = router(state).into_make_service_with_connect_info::<SocketAddr>();
+        // The check needs the port actually bound (tests bind port 0).
+        let port = match listener.local_addr() {
+            Ok(addr) => addr.port(),
+            Err(e) => {
+                // Port 0 is never a request's port: every request is then refused.
+                tracing::error!("http server cannot read its port, so refuses every request: {e}");
+                0
+            }
+        };
+        let app = router(state)
+            .layer(middleware::from_fn_with_state(port, host_only))
+            .into_make_service_with_connect_info::<SocketAddr>();
         if let Err(e) = axum::serve(listener, app)
             .with_graceful_shutdown(shutdown.cancelled_owned())
             .await

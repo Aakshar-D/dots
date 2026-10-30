@@ -41,6 +41,7 @@ const TRIGGER: Record<Run["trigger"], string> = {
   app: "Started by an app",
   workflow: "Workflow step",
   watcher: "Watcher run",
+  api: "API run",
 };
 
 /// What a run's header says started it; an app-started run names its app (app library spec

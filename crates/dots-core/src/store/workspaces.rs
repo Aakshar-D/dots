@@ -132,7 +132,8 @@ impl Store {
         Ok(())
     }
 
-    /// Deletes a workspace; its dots and teams go to Default. Default itself stays.
+    /// Deletes a workspace; its dots and teams go to Default and its API keys are revoked.
+    /// Default itself stays.
     pub async fn delete_workspace(&self, scope: &str, id: &str) -> Result<()> {
         if id == DEFAULT_WORKSPACE {
             return Err(Error::Invalid(
@@ -149,6 +150,17 @@ impl Store {
             return Err(Error::NotFound(format!("workspace {id}")));
         }
         move_to_default(&mut tx, scope, id).await?;
+        // Its API keys stop working (accounts spec §10); the records stay in the store,
+        // though the list hides them with the workspace.
+        sqlx::query(
+            "UPDATE api_keys SET revoked_at = ? \
+             WHERE scope = ? AND workspace_id = ? AND revoked_at IS NULL",
+        )
+        .bind(now())
+        .bind(scope)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
         tx.commit().await?;
         Ok(())
     }
@@ -216,6 +228,16 @@ impl Store {
             .execute(&mut *tx)
             .await?;
         }
+        // The API keys of a workspace the roster no longer has are revoked (accounts spec §10).
+        sqlx::query(
+            "UPDATE api_keys SET revoked_at = ? WHERE scope = ? AND revoked_at IS NULL AND \
+             workspace_id NOT IN (SELECT id FROM workspaces WHERE scope = ?)",
+        )
+        .bind(&ts)
+        .bind(org_id)
+        .bind(org_id)
+        .execute(&mut *tx)
+        .await?;
         tx.commit().await?;
         Ok(vanished)
     }

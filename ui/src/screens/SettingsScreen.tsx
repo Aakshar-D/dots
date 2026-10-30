@@ -300,8 +300,8 @@ function Form({ stored, status }: { stored: Settings; status: Status | undefined
           <Label htmlFor="settings-hold">Hold background dots when Claude usage is high</Label>
         </div>
         <p className="text-xs text-muted-foreground">
-          Scheduled, watcher, follow-up and webhook runs wait while your Claude usage is at or
-          above a share; chat and Run now never wait. Usage counts your own Claude use too.
+          Scheduled, watcher, follow-up, webhook and API runs wait while your Claude usage is at
+          or above a share; chat and Run now never wait. Usage counts your own Claude use too.
         </p>
         <div className="flex flex-wrap gap-4">
           <Field label="5-hour window share (%)" htmlFor="settings-share-five">

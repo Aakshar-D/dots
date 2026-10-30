@@ -248,6 +248,7 @@ fn all(text: &str) -> Refusals {
         edit: Some(text.into()),
         run: Some(text.into()),
         answer: Some(text.into()),
+        create_api_keys: Some(text.into()),
     }
 }
 
@@ -331,6 +332,7 @@ async fn a_workspace_viewer_is_refused_in_the_core_s_words() {
             edit: cant("create or change dots"),
             run: cant("run dots"),
             answer: cant("answer approvals"),
+            create_api_keys: cant("create API keys"),
         }
     );
     // Personal refuses nothing.

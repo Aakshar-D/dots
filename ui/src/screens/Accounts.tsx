@@ -29,6 +29,7 @@ import { errorMessage, notifyError } from "@/lib/notify";
 import { invalidate, keys } from "@/lib/query";
 import { AccountMembers } from "@/screens/accounts/AccountMembers";
 import { AccountWorkspaces } from "@/screens/accounts/AccountWorkspaces";
+import { ApiKeys } from "@/screens/accounts/ApiKeys";
 import { PersonalWorkspaces } from "@/screens/accounts/PersonalWorkspaces";
 
 /// How an org's status reads: plain while it works; the attention colour while it works from
@@ -223,6 +224,7 @@ function OrgRow({ org, onUpdate }: { org: OrgSummary; onUpdate: () => void }) {
           <TabsTrigger value="overview">Overview</TabsTrigger>
           {org.membership === "active" && <TabsTrigger value="members">Members</TabsTrigger>}
           <TabsTrigger value="workspaces">Workspaces</TabsTrigger>
+          <TabsTrigger value="api-keys">API keys</TabsTrigger>
         </TabsList>
         <TabsContent value="overview" className="flex flex-col gap-2">
           {overview}
@@ -234,6 +236,9 @@ function OrgRow({ org, onUpdate }: { org: OrgSummary; onUpdate: () => void }) {
         )}
         <TabsContent value="workspaces">
           <AccountWorkspaces org={org} />
+        </TabsContent>
+        <TabsContent value="api-keys">
+          <ApiKeys scope={org.id} />
         </TabsContent>
       </Tabs>
     </li>
@@ -776,6 +781,8 @@ export function Accounts() {
       <section aria-label="Personal" className="flex flex-col gap-2 rounded-md border p-3">
         <span className="font-medium">Personal</span>
         <PersonalWorkspaces />
+        <span className="text-sm font-medium">API keys</span>
+        <ApiKeys scope="personal" />
       </section>
       <Button
         type="button"

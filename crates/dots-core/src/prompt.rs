@@ -88,6 +88,7 @@ fn trigger_label(trigger: TriggerKind) -> &'static str {
         TriggerKind::App => "Started by an app",
         TriggerKind::Workflow => "Workflow step",
         TriggerKind::Watcher => "Watcher",
+        TriggerKind::Api => "API",
     }
 }
 

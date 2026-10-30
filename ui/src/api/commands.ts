@@ -143,6 +143,15 @@ export const commands = {
   personalWorkspaceRename: (id: string, name: string) =>
     call(nothing, "personal_workspace_rename", { id, name }),
   personalWorkspaceDelete: (id: string) => call(nothing, "personal_workspace_delete", { id }),
+  /// The API keys of the workspaces of `scope` this PC may see. Never carries a key's text.
+  apiKeyList: (scope: string) => call(T.ApiKeyView.array(), "api_key_list", { scope }),
+  /// Makes a key. The answer carries its text, the only time it exists: it is returned to the
+  /// caller and held nowhere else.
+  apiKeyCreate: (scope: string, workspaceId: string, name: string) =>
+    call(T.CreatedApiKey, "api_key_create", { scope, workspaceId, name }),
+  apiKeyRevoke: (id: string) => call(T.ApiKeyView, "api_key_revoke", { id }),
+  /// The address the API answers on; rejects when the local server is not running.
+  apiBaseUrl: () => call(text, "api_base_url", {}),
   updateDot: (id: string, spec: DotSpec) => call(T.Dot, "update_dot", { id, spec }),
   deleteDot: (id: string) => call(nothing, "delete_dot", { id }),
   setDotEnabled: (id: string, enabled: boolean) =>

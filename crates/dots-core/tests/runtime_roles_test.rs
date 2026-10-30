@@ -794,6 +794,10 @@ async fn a_webhook_is_refused_when_the_role_cannot_run_dots() {
             .unwrap();
     let token = t.rt.regenerate_webhook_token(&dot.id).await.unwrap();
     let url = t.rt.webhook_url(&dot).unwrap();
+    assert_eq!(
+        t.rt.api_base_url().unwrap(),
+        url.replace(&format!("/dots/{}/trigger", dot.id), "/v1")
+    );
     let call = || {
         reqwest::Client::new()
             .post(&url)

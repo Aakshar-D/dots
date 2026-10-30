@@ -5,6 +5,7 @@
 
 use std::collections::BTreeMap;
 
+use dots_core::accounts::api_keys::{ApiKeyView, CreatedApiKey};
 use dots_core::accounts::edit::RosterEdit;
 use dots_core::accounts::{
     CurrentScope, DotAccess, Identity, Membership, Refusals, Role, WorkspaceRole, WorkspaceView,
@@ -1507,6 +1508,7 @@ pub fn samples() -> Value {
                 edit: Some(viewer_in_platform("create or change dots")),
                 run: Some(viewer_in_platform("run dots")),
                 answer: Some(viewer_in_platform("answer approvals")),
+                create_api_keys: Some(viewer_in_platform("create API keys")),
             },
         },
         WorkspaceView {
@@ -1519,6 +1521,43 @@ pub fn samples() -> Value {
             refusals: Refusals::default(),
         },
     ]);
+    // What `api_key_list` answers: a live key, a revoked one, and one in an account's
+    // workspace. None carries the key text.
+    let live_key = ApiKeyView {
+        id: "01J0KEY".into(),
+        scope: "personal".into(),
+        workspace_id: "default".into(),
+        workspace_name: "Default".into(),
+        name: "CI".into(),
+        prefix: "dots_sk_a1b2".into(),
+        created_at: TS.into(),
+        last_used_at: Some(TS.into()),
+        revoked_at: None,
+    };
+    samples["ApiKeyView"] = to([
+        live_key.clone(),
+        ApiKeyView {
+            id: "01J0KEY2".into(),
+            name: "Old script".into(),
+            last_used_at: None,
+            revoked_at: Some(TS.into()),
+            ..live_key.clone()
+        },
+        ApiKeyView {
+            id: "01J0KEY3".into(),
+            scope: "acme-eng".into(),
+            workspace_id: "platform".into(),
+            workspace_name: "Platform".into(),
+            name: "Deploy bot".into(),
+            last_used_at: None,
+            ..live_key.clone()
+        },
+    ]);
+    // What `api_key_create` answers: the key and its text, which is shown once.
+    samples["CreatedApiKey"] = to(CreatedApiKey {
+        key: live_key,
+        secret: "dots_sk_a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0".into(),
+    });
     // What `dot_access` answers: a dot in a workspace this PC isn't in, and one it may do all
     // with.
     let outside =
@@ -1528,6 +1567,7 @@ pub fn samples() -> Value {
             edit: Some(outside.into()),
             run: Some(outside.into()),
             answer: Some(outside.into()),
+            create_api_keys: Some(outside.into()),
         },
         DotAccess::default(),
     ]);

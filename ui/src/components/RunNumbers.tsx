@@ -41,7 +41,7 @@ export function RunNumbers(props: { run: Run }) {
   );
 }
 
-const BACKGROUND: TriggerKind[] = ["schedule", "watcher", "follow_up", "webhook"];
+const BACKGROUND: TriggerKind[] = ["schedule", "watcher", "follow_up", "webhook", "api"];
 
 /// Whether **Run anyway** can release a held run: a background run held by a share, not one of
 /// the person's own and not while Claude's limit is reached (the core refuses those).

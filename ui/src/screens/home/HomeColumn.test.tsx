@@ -212,7 +212,7 @@ describe("the New dot button", () => {
         use_rules: null,
         my_role: null,
         can_manage: false,
-        refusals: refusing.includes(id) ? { edit: title, run: null, answer: null } : allowed,
+        refusals: refusing.includes(id) ? { edit: title, run: null, answer: null, create_api_keys: null } : allowed,
       })),
     );
   }

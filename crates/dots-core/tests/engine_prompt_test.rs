@@ -479,6 +479,21 @@ fn recent_runs_are_one_line_each() {
 }
 
 #[test]
+fn an_api_run_is_listed_as_api() {
+    let when = local("2026-10-27T08:00:00.000Z");
+    let run = ended(
+        TriggerKind::Api,
+        RunStatus::Succeeded,
+        Some("Filed it."),
+        None,
+    );
+    assert_eq!(
+        recent_runs(&[run]).trim_end(),
+        format!("- API · {when} · done: Filed it.")
+    );
+}
+
+#[test]
 fn a_person_s_first_chat_message_lists_the_recent_runs_before_the_conversation() {
     let dot = fake_dot("d", Path::new("C:/repo"), WorkspaceMode::Folder);
     let recent = [ended(

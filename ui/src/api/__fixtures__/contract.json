@@ -1,4 +1,39 @@
 {
+  "ApiKeyView": [
+    {
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "id": "01J0KEY",
+      "last_used_at": "2026-10-09T12:00:00.000Z",
+      "name": "CI",
+      "prefix": "dots_sk_a1b2",
+      "revoked_at": null,
+      "scope": "personal",
+      "workspace_id": "default",
+      "workspace_name": "Default"
+    },
+    {
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "id": "01J0KEY2",
+      "last_used_at": null,
+      "name": "Old script",
+      "prefix": "dots_sk_a1b2",
+      "revoked_at": "2026-10-09T12:00:00.000Z",
+      "scope": "personal",
+      "workspace_id": "default",
+      "workspace_name": "Default"
+    },
+    {
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "id": "01J0KEY3",
+      "last_used_at": null,
+      "name": "Deploy bot",
+      "prefix": "dots_sk_a1b2",
+      "revoked_at": null,
+      "scope": "acme-eng",
+      "workspace_id": "platform",
+      "workspace_name": "Platform"
+    }
+  ],
   "AppCall": [
     {
       "actor": {
@@ -542,6 +577,10 @@
     "personal_workspace_add",
     "personal_workspace_rename",
     "personal_workspace_delete",
+    "api_key_list",
+    "api_key_create",
+    "api_key_revoke",
+    "api_base_url",
     "update_dot",
     "delete_dot",
     "set_dot_enabled",
@@ -674,6 +713,20 @@
     ],
     "total": 42,
     "truncated": true
+  },
+  "CreatedApiKey": {
+    "key": {
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "id": "01J0KEY",
+      "last_used_at": "2026-10-09T12:00:00.000Z",
+      "name": "CI",
+      "prefix": "dots_sk_a1b2",
+      "revoked_at": null,
+      "scope": "personal",
+      "workspace_id": "default",
+      "workspace_name": "Default"
+    },
+    "secret": "dots_sk_a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0"
   },
   "CreatedInvite": {
     "code": "dotsorg_c2FtcGxlLWludml0ZS1jb2Rl",
@@ -857,11 +910,13 @@
   "DotAccess": [
     {
       "answer": "Acme Engineering: you aren't in the Platform workspace. Ask an Admin or Owner to add you.",
+      "create_api_keys": "Acme Engineering: you aren't in the Platform workspace. Ask an Admin or Owner to add you.",
       "edit": "Acme Engineering: you aren't in the Platform workspace. Ask an Admin or Owner to add you.",
       "run": "Acme Engineering: you aren't in the Platform workspace. Ask an Admin or Owner to add you."
     },
     {
       "answer": null,
+      "create_api_keys": null,
       "edit": null,
       "run": null
     }
@@ -1397,7 +1452,8 @@
       "follow_up",
       "app",
       "workflow",
-      "watcher"
+      "watcher",
+      "api"
     ],
     "UsagePeriod": [
       "five_hours",
@@ -4389,6 +4445,7 @@
       "name": "Platform",
       "refusals": {
         "answer": "Acme Engineering: a Viewer in the Platform workspace can't answer approvals. Ask an Admin or Owner.",
+        "create_api_keys": "Acme Engineering: a Viewer in the Platform workspace can't create API keys. Ask an Admin or Owner.",
         "edit": "Acme Engineering: a Viewer in the Platform workspace can't create or change dots. Ask an Admin or Owner.",
         "run": "Acme Engineering: a Viewer in the Platform workspace can't run dots. Ask an Admin or Owner."
       },
@@ -4409,6 +4466,7 @@
       "name": "Default",
       "refusals": {
         "answer": null,
+        "create_api_keys": null,
         "edit": null,
         "run": null
       },

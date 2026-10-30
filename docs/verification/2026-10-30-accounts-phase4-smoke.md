@@ -47,19 +47,19 @@ Result: not run.
 
 Expect: in Settings › Accounts, under Personal, choose **Add workspace** and name it "Side projects". It appears and is listed in the switcher when Personal is selected. Rename it, then delete it: its dots go to Default. Nothing is signed or published, and B does not see it.
 
-Result: not run.
+Result: pass for Personal (2026-10-30, debug build of 705ae90 on Windows 11, own data folder): added, listed in the switcher, renamed (id kept), deleted with its dots moved to Default. Not checked with a second PC.
 
 ### 8. Move a dot
 
 Expect: open a dot in the account on A. Change **Workspace** in its editor to another workspace. It moves at once. Try a dot that is in a team: "<dot> is in the team <team>. Take it out of the team first." Try with a PC that is a workspace viewer in the target workspace: the move is refused with the role and the workspace named. Put a dot of another workspace in a team: the team's dot shows under **Needs attention** in the Inbox, "<dot> is in another workspace than the <team> team."
 
-Result: not run.
+Result: partly (2026-10-30, debug build of 705ae90 on Windows 11, own data folder): a Personal dot moved at once. Team and viewer cases need an account; not run.
 
 ### 9. The switcher filters Home
 
 Expect: on A, with a workspace picked in the switcher, **Home** lists only that workspace's dots, and a new dot starts in that workspace (its **Workspace** field shows it). Your pick survives a restart. **Inbox**, **Needs you**, runs and Usage still show everything. An account with only Default shows no workspace list in the switcher.
 
-Result: not run.
+Result: pass for Personal (2026-10-30, debug build of 705ae90 on Windows 11, own data folder): Home lists only the picked workspace, a new dot starts in it, the pick survives a restart, the Inbox still shows other workspaces' runs.
 
 ## Not an app step
 

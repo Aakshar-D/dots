@@ -599,7 +599,7 @@ impl Scheduler {
     /// A run with trigger `schedule` that made no tool call is marked reviewed by the same
     /// write: it changed nothing, and the retry or the flag speaks for it. A failure after a
     /// tool call may have changed something, so it stays a run to review besides the flag. A
-    /// run of another trigger that a slot or retry joined (a manual or webhook run, or a resume
+    /// run of another trigger that a slot or retry joined (a manual, webhook or API run, or a resume
     /// run) is the person's or the caller's run: it notifies its own failure and stays a run
     /// to review too.
     async fn failed(

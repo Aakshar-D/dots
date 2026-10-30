@@ -20,6 +20,8 @@ str_enum!(TriggerKind {
     App => "app",
     Workflow => "workflow",
     Watcher => "watcher",
+    // A run a caller with an API key started through `/v1` (accounts spec §10).
+    Api => "api",
 });
 str_enum!(RunStatus {
     Queued => "queued",

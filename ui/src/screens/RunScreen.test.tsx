@@ -796,7 +796,7 @@ describe("the approval buttons for a Viewer", () => {
     backend.on("get_run", () => waiting);
     backend.on("get_dot", () => ({ ...sample.dot, org_id: "acme-eng", workspace_id: "payments" }));
     backend.on("org_list", () => [{ ...sample.orgs[0], id: "acme-eng" }]);
-    backend.on("dot_access", () => ({ edit: answer, run: answer, answer }));
+    backend.on("dot_access", () => ({ edit: answer, run: answer, answer, create_api_keys: answer }));
     renderApp(`/runs/${run.id}`);
     const approve = await screen.findByRole("button", { name: "Approve" });
     await waitFor(() => expect(approve).toBeDisabled());

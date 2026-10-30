@@ -15,8 +15,25 @@ pub fn bearer(headers: &HeaderMap) -> Option<String> {
     value.strip_prefix("Bearer ").map(|t| t.trim().to_string())
 }
 
-fn error(status: StatusCode, message: &str) -> Response {
+/// A JSON `{"error": message}` answer with `status`.
+pub(super) fn error(status: StatusCode, message: &str) -> Response {
     (status, Json(json!({ "error": message }))).into_response()
+}
+
+/// The payload a trigger's body carries: none when the body is empty or blank, otherwise its
+/// JSON; anything else is a 400 answer.
+pub(super) fn payload(body: &[u8]) -> Result<Option<Value>, Box<Response>> {
+    if body.iter().all(u8::is_ascii_whitespace) {
+        return Ok(None);
+    }
+    serde_json::from_slice::<Value>(body)
+        .map(Some)
+        .map_err(|e| {
+            Box::new(error(
+                StatusCode::BAD_REQUEST,
+                &format!("body must be JSON: {e}"),
+            ))
+        })
 }
 
 pub async fn trigger(
@@ -52,13 +69,9 @@ pub async fn trigger(
         Err(Error::NotAllowed(text)) => return error(StatusCode::FORBIDDEN, &text),
         Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
-    let payload = if body.iter().all(u8::is_ascii_whitespace) {
-        None
-    } else {
-        match serde_json::from_slice::<Value>(&body) {
-            Ok(v) => Some(v),
-            Err(e) => return error(StatusCode::BAD_REQUEST, &format!("body must be JSON: {e}")),
-        }
+    let payload = match payload(&body) {
+        Ok(p) => p,
+        Err(answer) => return *answer,
     };
     let mut new = NewRun::new(&dot.id, TriggerKind::Webhook);
     new.payload = payload;

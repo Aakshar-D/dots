@@ -119,6 +119,7 @@ async fn background_runs_are_held_at_the_share() {
         TriggerKind::Watcher,
         TriggerKind::FollowUp,
         TriggerKind::Webhook,
+        TriggerKind::Api,
     ] {
         e.limits.record("allowed", vec![five(0.9)]).await.unwrap();
         assert_eq!(e.limits.admit(&q("r", t), 0), Admit::Held, "{t:?}");

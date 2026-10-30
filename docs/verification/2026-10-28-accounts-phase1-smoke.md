@@ -11,19 +11,19 @@
 
 Expect: on a fresh data folder, Settings › Profile shows a fingerprint, and "Copy my Dots ID" copies it.
 
-Result: not run.
+Result: pass (2026-10-30, debug build of 705ae90 on Windows 11, own data folder). Copy not checked.
 
 ### 2. The fingerprint survives a restart
 
 Expect: close and start the app again; the fingerprint is the same as in step 1.
 
-Result: not run.
+Result: pass (2026-10-30, debug build of 705ae90 on Windows 11, own data folder): same fingerprint after Restart Dots and after a full stop and start.
 
 ### 3. Saving a name changes the rail initials
 
-Expect: type a name in Settings › Profile and save; the initials on the switcher at the top of the rail change to match.
+Expect: type a name and an email in Settings › Profile and save; the initials on the switcher at the top of the rail change to match.
 
-Result: not run.
+Result: pass (2026-10-30, debug build of 705ae90 on Windows 11, own data folder): rail shows QT. Saving needs an email too, as the spec says; with an empty email Save profile says "an email address needs an @".
 
 ### 4. Joining a test org adds it to the switcher
 

@@ -30,6 +30,8 @@ export const TriggerKind = z.enum([
   "workflow",
   // A run a watcher started: a file, an email or a GitHub event (watchers spec section 5).
   "watcher",
+  // A run a caller with an API key started through /v1 (accounts spec section 10).
+  "api",
 ]);
 export const RunStatus = z.enum([
   "queued",
@@ -1193,6 +1195,25 @@ export const Refusals = z.strictObject({
   edit: nullable(z.string()),
   run: nullable(z.string()),
   answer: nullable(z.string()),
+  create_api_keys: nullable(z.string()),
+});
+// An API key as the keys tab lists it: never the key text, only its prefix. Whether keys may be
+// made in its workspace is in the workspace's refusals.
+export const ApiKeyView = z.strictObject({
+  id: z.string(),
+  scope: z.string(),
+  workspace_id: z.string(),
+  workspace_name: z.string(),
+  name: z.string(),
+  prefix: z.string(),
+  created_at: z.string(),
+  last_used_at: nullable(z.string()),
+  revoked_at: nullable(z.string()),
+});
+// What making a key answers: the key and its text, which exists only in this answer.
+export const CreatedApiKey = z.strictObject({
+  key: ApiKeyView,
+  secret: z.string(),
 });
 // What `dot_access` answers for one dot: the refusals of its account and workspace.
 export const DotAccess = Refusals;
@@ -1571,6 +1592,7 @@ export type RequestPreview = z.infer<typeof RequestPreview>;
 export type RosterEdit = z.infer<typeof RosterEdit>;
 export type WorkspaceView = z.infer<typeof WorkspaceView>;
 export type Refusals = z.infer<typeof Refusals>;
+export type ApiKeyView = z.infer<typeof ApiKeyView>;
 export type DotAccess = z.infer<typeof DotAccess>;
 export type WorkspaceRole = z.infer<typeof WorkspaceRole>;
 export type EditOutcome = z.infer<typeof EditOutcome>;

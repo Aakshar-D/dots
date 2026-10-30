@@ -76,7 +76,7 @@ export const sample = {
 
 /// What `new_dot_spec` answers: the core's defaults with nothing filled in.
 /// What a workspace or a dot refuses when it refuses nothing (`Refusals`, `DotAccess`).
-export const allowed: T.Refusals = { edit: null, run: null, answer: null };
+export const allowed: T.Refusals = { edit: null, run: null, answer: null, create_api_keys: null };
 
 export const blankSpec: T.DotSpec = T.DotSpec.parse(contract.NewDotSpec);
 
@@ -159,6 +159,11 @@ export function installDefaults(): void {
   backend.on("workspace_list", (args) => [
     { scope: String(args.scope), id: "default", name: "Default", use_rules: null, my_role: null, can_manage: true, refusals: allowed },
   ]);
+  // No API key is made, and the local server is off.
+  backend.on("api_key_list", () => []);
+  backend.on("api_base_url", () => {
+    throw { kind: "conflict", message: "The local server is not running." };
+  });
   // The person may do all with every dot.
   backend.on("dot_access", () => allowed);
   // No grant has a status: the editor shows each as it shows a grant not saved yet.

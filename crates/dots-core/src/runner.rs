@@ -274,6 +274,27 @@ impl Runner {
         crate::accounts::require_dot(orgs, dot, crate::accounts::Permission::RunDots).await
     }
 
+    /// `Ok` when this PC's access to the account `org_id` (None: Personal) and its workspace
+    /// `workspace_id` allows `p`, otherwise the refusal in the same words as `require_run`. For
+    /// a caller outside the app, such as an API key: checked on every call (accounts spec §10).
+    pub async fn require_in(
+        &self,
+        org_id: Option<&str>,
+        workspace_id: &str,
+        p: crate::accounts::Permission,
+    ) -> Result<()> {
+        let orgs = self.vault.get().and_then(|v| v.orgs());
+        crate::accounts::require_in(orgs, org_id, workspace_id, p).await
+    }
+
+    /// Whether the account `org_id` is joined on this PC. False when there is no vault yet.
+    pub fn org_joined(&self, org_id: &str) -> bool {
+        self.vault
+            .get()
+            .and_then(|v| v.orgs())
+            .is_some_and(|orgs| orgs.is_joined(org_id))
+    }
+
     /// How many background Claude runs the runner holds now.
     pub fn running_background_claude(&self) -> usize {
         self.active

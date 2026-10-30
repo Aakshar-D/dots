@@ -4,8 +4,8 @@ An account is a group of people and dots that belong together, such as your team
 Your own dots live in **Personal**, which is always there. This guide explains how Dots knows who
 you are, how to switch between accounts, and how to join one.
 
-API keys are **coming next**. This version covers your identity, the switcher, joining (with an
-invite or by asking), the member list with roles, and workspaces.
+This guide covers your identity, the switcher, joining (with an invite or by asking), the member
+list with roles, workspaces, and API keys.
 
 ## Your Dots ID
 
@@ -152,6 +152,102 @@ Your dots are listed in one workspace. Dots you made before workspaces are in De
 
 An account without a member list has only Default, and Personal is not narrowed.
 
-## Coming next
+## API keys
 
-- API keys for an account.
+An API key lets an app or a script on this PC list a workspace's dots, run one, and read how a run
+went. Keys are made and used in Dots on this PC. They never leave it.
+
+### Making a key
+
+1. Open **Settings › Accounts**. On an account, open its **API keys** tab. For Personal, the
+   **API keys** list is under **Personal**.
+2. Choose **Create key**, give it a name and pick the workspace.
+3. The key appears once, with a **Copy** button and a ready `curl` line (`curl.exe` on Windows): "Copy it now. Dots won't
+   show it again." Dots keeps only the first 12 characters, to recognise it by, and a hash. Close
+   the dialog and the key is gone. If you lose it, revoke it and make another.
+
+A key looks like `dots_sk_` followed by 43 letters and digits. Treat it like a password.
+
+- A key belongs to **one workspace** on **this PC**. It is not shared through the member list. Your
+  teammates make their own keys on their own PCs.
+- You need **Member** rights or above in that workspace to make a key. A Viewer sees the list, with
+  **Create** off and the reason, such as "Acme: a Viewer in the Payments workspace can't create API
+  keys. Ask an Admin or Owner." Anyone can **Revoke** a key on this PC, whatever their role:
+  revoking only takes access away.
+- Keys of a workspace you can no longer see are hidden from the list. They stay refused at request
+  time, and come back to the list if you are added back to the workspace.
+- The list shows each key's name, its first 12 characters, the workspace, when it was made and
+  when it was last used (**Never** until it is used).
+
+### Using a key
+
+The local server answers on `http://127.0.0.1:PORT`, where PORT is the port in **Settings**. The
+create dialog shows the exact base URL (`http://127.0.0.1:PORT/v1`). If the local server is not
+running, it says so instead. Send the key as a Bearer token:
+
+On Windows, use `curl.exe` (in PowerShell, plain `curl` is a different command). Inline JSON
+quoting differs between cmd and PowerShell, so put the body in a file first.
+
+PowerShell (ascii, so no byte order mark is written):
+
+```
+'{"order":"A-17"}' | Set-Content -Encoding ascii payload.json
+```
+
+cmd:
+
+```
+echo {"order":"A-17"}> payload.json
+```
+
+Then, in either shell:
+
+```
+curl.exe -H "Authorization: Bearer dots_sk_..." http://127.0.0.1:PORT/v1/dots
+curl.exe -X POST -H "Authorization: Bearer dots_sk_..." -H "Content-Type: application/json" --data-binary "@payload.json" http://127.0.0.1:PORT/v1/dots/DOT_ID/trigger
+curl.exe -H "Authorization: Bearer dots_sk_..." http://127.0.0.1:PORT/v1/runs/RUN_ID
+```
+
+In bash (macOS, Linux, Git Bash), the body can go inline:
+
+```bash
+curl -H "Authorization: Bearer dots_sk_..." http://127.0.0.1:PORT/v1/dots
+curl -X POST -H "Authorization: Bearer dots_sk_..." -d '{"order":"A-17"}' \
+  http://127.0.0.1:PORT/v1/dots/DOT_ID/trigger
+curl -H "Authorization: Bearer dots_sk_..." http://127.0.0.1:PORT/v1/runs/RUN_ID
+```
+
+- `GET /v1/dots` lists the dots of the key's workspace: `id`, `name`, `enabled`, `org_id` and
+  `workspace_id`.
+- `POST /v1/dots/{id}/trigger` starts a run. The body is the run's payload, the same as for the
+  dot's webhook, up to 256 KB. It answers 202 with `{"run_id": "..."}`. A disabled dot answers
+  409 "dot is disabled"; a larger body answers 413 "body must be 256 KB or less".
+- `GET /v1/runs/{id}` gives the run's status: `id`, `dot_id`, `status`, `queued_at`, `started_at`,
+  `ended_at`, `summary` and `error`. Only status, no events.
+
+What a key can reach:
+
+- Only the dots and runs of **its own workspace**. A dot or run anywhere else, or one that does not
+  exist, answers 404 "Not found." so a caller can't tell them apart.
+- Every request checks your **current role** in that workspace. A Viewer key can list and read
+  runs, but a trigger answers 403 with the reason. If your role changes, or you are removed from
+  the account, the key follows at once.
+- A key that is wrong, revoked, or whose workspace was deleted gets the same 401: "That API key
+  isn't valid. Make a new one in Dots."
+- Runs started this way show as **API** in Dots. They are background runs: like webhooks, they wait
+  while Claude usage is high.
+
+### Revoking a key
+
+Choose **Revoke** next to the key and confirm: "Apps using this key stop working at once." It stays
+in the list, marked **Revoked**.
+
+- Deleting a workspace revokes its keys.
+- Leaving an account (**Remove** in **Settings › Accounts**) deletes its keys from this PC.
+
+### The Host check
+
+Every route of the local server (webhooks, MCP and `/v1`) only answers requests addressed to
+`127.0.0.1:PORT` or `localhost:PORT`. Any other `Host` gets 403. This stops a web page that
+re-points its own name at your PC (DNS rebinding) from reaching Dots. Normal use of webhooks and
+MCP is unchanged. If you forward webhooks through a tunnel, have it rewrite Host to 127.0.0.1:PORT (ngrok `--host-header=rewrite`, cloudflared `httpHostHeader`).

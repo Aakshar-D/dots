@@ -20,10 +20,12 @@ export function PersonalWorkspaces() {
   const inView = (id: string) => scope?.account === PERSONAL && scope.workspace === id;
   const run = useMutation({
     mutationFn: (v: { task: () => Promise<unknown>; touchesScope: boolean }) => v.task(),
-    // The dots moved by a delete are listed with their workspace, so they ask again too. A
+    // The dots moved by a delete are listed with their workspace, so they ask again too, and
+    // so do the API keys, listed with their workspace's name (a deleted one's are gone). A
     // delete, or a rename of the workspace in view, changes what the scope shows.
     onSuccess: (_answer, { touchesScope }) => {
       invalidate(qc, ["workspaces"]);
+      invalidate(qc, keys.apiKeys(PERSONAL));
       if (touchesScope) {
         invalidate(qc, keys.scope);
         invalidateDots(qc);
