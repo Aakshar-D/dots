@@ -32,11 +32,17 @@ describe("a memory tool step in the conversation", () => {
         ...step(7, "Memory", { text: "Again." }, "This dot already remembers that.", true),
       ],
     );
-    renderApp(`/home/${dot.id}`);
+    const { user } = renderApp(`/home/${dot.id}`);
     const view = within(await screen.findByRole("region", { name: "Conversation" }));
     const remembered = await view.findByText("Remembered: Prefers invoices as PDF.");
     const forgot = view.getByText("Forgot a memory");
+    // The notes show while the steps line is closed.
+    expect(remembered).toBeVisible();
+    expect(forgot).toBeVisible();
     // Each chip shows as every tool's does; the notes follow the row of chips.
+    await user.click(
+      view.getByText("Used Memory › remember 2 times · Used dots › forget · Used dots › recall"),
+    );
     const chips = view.getByRole("group", { name: "Tool steps" });
     expect(within(chips).getAllByText("done")).toHaveLength(3);
     expect(within(chips).getByText("failed")).toBeVisible();
@@ -83,9 +89,13 @@ describe("a memory tool step in the conversation", () => {
         ...step(5, "Memory", { query: "pdf" }, "Nothing remembered about that."),
       ],
     );
-    renderApp(`/home/${dot.id}`);
+    const { user } = renderApp(`/home/${dot.id}`);
     const view = within(await screen.findByRole("region", { name: "Conversation" }));
-    const chips = await view.findByRole("group", { name: "Tool steps" });
+    const line = await view.findByText(
+      "Used Memory › remember · Used Memory › forget · Used Memory › recall",
+    );
+    await user.click(line);
+    const chips = view.getByRole("group", { name: "Tool steps" });
     for (const name of ["Memory › remember", "Memory › forget", "Memory › recall"]) {
       expect(within(chips).getByText(name)).toBeVisible();
     }

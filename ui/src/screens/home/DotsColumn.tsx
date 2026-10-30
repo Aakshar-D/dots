@@ -54,31 +54,36 @@ export function DotsColumn({ rows, openId }: { rows: DotOverview[]; openId: stri
     // Narrower in a small window, so the conversation keeps room and nothing scrolls
     // sideways (420 px self-QA).
     <nav aria-label="Dots" className="flex w-40 shrink-0 flex-col border-r bg-sidebar sm:w-64">
-      <div className="flex items-center gap-2 px-3 py-2">
-        <h2 className="flex-1 font-semibold">Dots</h2>
+      {/* New dot first, then the list under a quiet heading, as a chat app's column. When the
+          role in the account in view refuses making dots, the button stays, off, with the
+          core's reason. */}
+      <div className="px-2 pt-2">
         {refusal ? (
           <Button
-            size="icon-sm"
             variant="ghost"
-            aria-label="New dot"
             title={refusal}
             aria-disabled="true"
             aria-describedby="new-dot-refusal"
-            className="cursor-not-allowed opacity-50"
+            className="w-full cursor-not-allowed justify-start opacity-50"
           >
             <Plus aria-hidden />
-            <span id="new-dot-refusal" className="sr-only">
-              {refusal}
-            </span>
+            New dot
           </Button>
         ) : (
-          <Button asChild size="icon-sm" variant="ghost">
-            <Link to="/dots/new" aria-label="New dot" title="New dot">
+          <Button asChild variant="ghost" className="w-full justify-start">
+            <Link to="/dots/new">
               <Plus aria-hidden />
+              New dot
             </Link>
           </Button>
         )}
+        {refusal && (
+          <span id="new-dot-refusal" className="sr-only">
+            {refusal}
+          </span>
+        )}
       </div>
+      <h2 className="px-4 pt-3 pb-1 text-xs font-medium text-muted-foreground">Dots</h2>
       <ul className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-auto px-2 pb-2" onKeyDown={onKeyDown}>
         {rows.map((row) => {
           const open = row.dot.id === openId;

@@ -368,10 +368,27 @@ export const commands = {
   /// The data removed apps kept, newest first.
   appsKeptList: () => call(T.KeptData.array(), "apps_kept_list"),
   appKeptDelete: (id: string) => call(nothing, "app_kept_delete", { id }),
+  /// The apps that come with Dots and are not installed ("Install Projects").
+  appsBundledOffers: () => call(T.BundledOffer.array(), "apps_bundled_offers"),
+  /// Installs an app that comes with Dots again: on the kept data `keptId`, or fresh (null).
+  appInstallBundled: (name: string, keptId: string | null) =>
+    call(T.LibraryItem, "app_install_bundled", { name, keptId }),
+  /// The one-time prompt to let the app start dots: "Switch on" (true) or "Not now" (false).
+  appAnswerStartPrompt: (name: string, on: boolean) =>
+    call(T.LibraryItem, "app_answer_start_prompt", { name, on }),
+  /// Where a run the app started is; rejects for a run it did not start.
+  appRunLink: (name: string, runId: string) => call(T.RunLink, "app_run_link", { name, runId }),
   /// The person's answer on the card. Rejects with kind `conflict` when it was decided already
   /// or its app moved on, and while the dot's thread is still working.
   appProposalDecide: (id: string, decision: T.ProposalDecision) =>
     call(T.AppProposal, "app_proposal_decide", { id, decision }),
+  /// The instructions dots proposed, of one dot or of all (null), newest first.
+  instructionProposalsList: (dotId: string | null) =>
+    call(T.InstructionProposal.array(), "instruction_proposals_list", { dotId }),
+  /// The person's answer on the card. Rejects with kind `conflict` when it was decided already,
+  /// when the dot's instructions changed since it proposed, and while its chat is working.
+  instructionProposalDecide: (id: string, approve: boolean) =>
+    call(T.InstructionProposal, "instruction_proposal_decide", { id, approve }),
 
   watchersList: (dotId: string) => call(T.Watcher.array(), "watchers_list", { dotId }),
   watcherAdd: (dotId: string, name: string, config: T.WatcherConfig) =>

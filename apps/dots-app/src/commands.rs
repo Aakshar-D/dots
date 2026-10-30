@@ -13,9 +13,11 @@
 
 use dots_core::accounts::edit::RosterEdit;
 use dots_core::accounts::{CurrentScope, Identity, Role};
+use dots_core::apps::bundled::BundledOffer;
 use dots_core::apps::kept::KeptData;
 use dots_core::apps::propose::{AppProposal, Decision};
 use dots_core::apps::screen::{AppFile, AppRow};
+use dots_core::apps::wake::RunLink;
 use dots_core::apps::AppCall;
 use dots_core::browser::BrowserStatus;
 use dots_core::kit::InstalledPlugin;
@@ -1285,6 +1287,48 @@ pub async fn app_kept_delete(state: State<'_, AppState>, id: String) -> Res<()> 
     Ok(state.rt()?.apps().delete_kept(&id).await?)
 }
 
+/// The apps that come with Dots and are not installed, with the kept data each may start on
+/// (app library spec section 8, "Install Projects").
+#[tauri::command]
+pub async fn apps_bundled_offers(state: State<'_, AppState>) -> Res<Vec<BundledOffer>> {
+    Ok(state.rt()?.apps().bundled_offers().await?)
+}
+
+/// Installs an app that comes with Dots again: on the kept data `kept_id`, or fresh.
+#[tauri::command]
+pub async fn app_install_bundled(
+    state: State<'_, AppState>,
+    name: String,
+    kept_id: Option<String>,
+) -> Res<LibraryItem> {
+    Ok(state
+        .rt()?
+        .apps()
+        .install_bundled(&name, kept_id.as_deref())
+        .await?)
+}
+
+/// The person's answer to the one-time prompt to let the app start dots: "Switch on" or
+/// "Not now" (app library spec section 8).
+#[tauri::command]
+pub async fn app_answer_start_prompt(
+    state: State<'_, AppState>,
+    name: String,
+    on: bool,
+) -> Res<LibraryItem> {
+    Ok(state.rt()?.apps().answer_start_prompt(&name, on).await?)
+}
+
+/// Where the app's screen opens a run it started (`dots.openRun`); refused for any other run.
+#[tauri::command]
+pub async fn app_run_link(
+    state: State<'_, AppState>,
+    name: String,
+    run_id: String,
+) -> Res<RunLink> {
+    Ok(state.rt()?.apps().run_link(&name, &run_id).await?)
+}
+
 /// The person's answer on the card: add (or update), ask for changes, or discard.
 #[tauri::command]
 pub async fn app_proposal_decide(
@@ -1293,6 +1337,34 @@ pub async fn app_proposal_decide(
     decision: Decision,
 ) -> Res<AppProposal> {
     Ok(state.rt()?.decide_app_proposal(&id, decision).await?.0)
+}
+
+/// The instructions dots proposed, of one dot or of all, newest first (conversational chat
+/// spec section 4).
+#[tauri::command]
+pub async fn instruction_proposals_list(
+    state: State<'_, AppState>,
+    dot_id: Option<String>,
+) -> Res<Vec<dots_core::instructions::InstructionProposal>> {
+    Ok(state
+        .rt()?
+        .store()
+        .list_instruction_proposals(dot_id.as_deref())
+        .await?)
+}
+
+/// The person's answer on the card: approve (save the instructions) or reject.
+#[tauri::command]
+pub async fn instruction_proposal_decide(
+    state: State<'_, AppState>,
+    id: String,
+    approve: bool,
+) -> Res<dots_core::instructions::InstructionProposal> {
+    Ok(state
+        .rt()?
+        .decide_instruction_proposal(&id, approve)
+        .await?
+        .0)
 }
 
 /// The dot's watchers, oldest first (watchers spec section 8).

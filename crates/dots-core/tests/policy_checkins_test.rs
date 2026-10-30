@@ -14,8 +14,8 @@ fn every_preset_allows_the_check_in_tools_after_skill_and_context() {
     for preset in Preset::ALL {
         let p = Policy::preset(*preset);
         // `Memory` follows them (dot memory spec section 3), then `Workflow` (teams spec section
-        // 7), then `App` and `ProposeApp` (app library spec section 6).
-        let tail: Vec<&str> = p.rules[p.rules.len() - 9..]
+        // 7), then `App` and `ProposeApp` (app library spec section 6), then `Instructions`.
+        let tail: Vec<&str> = p.rules[p.rules.len() - 10..]
             .iter()
             .map(|r| r.tool.as_str())
             .collect();
@@ -30,7 +30,8 @@ fn every_preset_allows_the_check_in_tools_after_skill_and_context() {
                 "Memory",
                 "Workflow",
                 "App",
-                "ProposeApp"
+                "ProposeApp",
+                "Instructions"
             ],
             "{preset:?}"
         );
@@ -108,6 +109,7 @@ async fn migration_0008_lets_every_policy_that_is_not_custom_check_in() {
                 && tool != "Memory"
                 && tool != "Workflow"
                 && !APP_TOOLS.contains(&tool)
+                && tool != "Instructions"
         });
         p
     };
@@ -152,6 +154,7 @@ async fn migration_0008_lets_every_policy_that_is_not_custom_check_in() {
     want.rules.push(Rule::new("Workflow", Action::Allow));
     want.rules
         .extend(APP_TOOLS.map(|tool| Rule::new(tool, Action::Allow)));
+    want.rules.push(Rule::new("Instructions", Action::Allow));
     assert_eq!(store.get_dot("D3").await.unwrap().spec.policy, want);
     // A Custom policy is the person's own: no check-in rule is added. 0016 gives it `App` and
     // `ProposeApp`, as 0007 did `Context`.
@@ -159,6 +162,7 @@ async fn migration_0008_lets_every_policy_that_is_not_custom_check_in() {
     custom
         .rules
         .extend(APP_TOOLS.map(|tool| Rule::new(tool, Action::Allow)));
+    custom.rules.push(Rule::new("Instructions", Action::Allow));
     assert_eq!(store.get_dot("D4").await.unwrap().spec.policy, custom);
     store.close().await;
     // Opening again adds nothing twice.

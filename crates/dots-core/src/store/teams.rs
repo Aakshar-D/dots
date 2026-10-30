@@ -66,7 +66,7 @@ fn workflow_from_row(row: &SqliteRow, members: &[String]) -> Result<Workflow> {
     })
 }
 
-/// The backfill of `0018_accounts.sql`, kept here so a test can run it again. It must match the
+/// The backfill of `0019_accounts.sql`, kept here so a test can run it again. It must match the
 /// migration.
 #[doc(hidden)]
 pub const TEAM_ORG_BACKFILL_SQL: &str = "UPDATE teams SET org_id = (

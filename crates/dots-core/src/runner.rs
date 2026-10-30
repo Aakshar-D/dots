@@ -42,6 +42,8 @@ fn model_tool_name<'a>(tool: &'a str, input: &Value, engine: EngineKind) -> Cow<
         Cow::Borrowed(crate::memory::Tool::for_input(input).model_name(engine))
     } else if tool == crate::team_tools::POLICY_NAME {
         Cow::Borrowed(crate::team_tools::Tool::for_input(input).model_name(engine))
+    } else if tool == crate::instructions::POLICY_NAME {
+        Cow::Borrowed(crate::instructions::model_name(engine))
     } else if tool == crate::apps::PROPOSE_POLICY {
         // `copy_app` names an app; `propose_app` does not.
         let name = if input.get("app").is_some() {
@@ -394,6 +396,78 @@ impl Runner {
             }
         }
         cur.trigger == TriggerKind::Chat
+    }
+
+    /// The dot's runs a person's chat message names (conversational chat spec section 3.1): for
+    /// the first message of a topic, the newest ended runs outside it; for one that resumes the
+    /// topic, those that ended after its last run was queued. Nothing for any other run. A list
+    /// that cannot be read is logged and left empty; the chat goes on without it.
+    async fn recent_runs(&self, run: &Run) -> Vec<Run> {
+        if !crate::prompt::is_typed(run) {
+            return Vec::new();
+        }
+        let since = match (&run.session_id, &run.parent_run_id) {
+            (None, _) => None,
+            (Some(_), Some(parent)) => match self.store.get_run(parent).await {
+                Ok(parent) => Some(parent.queued_at),
+                Err(e) => {
+                    tracing::warn!(run = %run.id, "reading the chat's last run failed: {e}");
+                    return Vec::new();
+                }
+            },
+            (Some(_), None) => return Vec::new(),
+        };
+        match self
+            .store
+            .ended_runs_outside(
+                &run.dot_id,
+                &run.root_run_id,
+                since.as_deref(),
+                crate::prompt::RECENT_RUNS,
+            )
+            .await
+        {
+            Ok(runs) => runs,
+            Err(e) => {
+                tracing::warn!(run = %run.id, "listing the dot's recent runs failed: {e}");
+                Vec::new()
+            }
+        }
+    }
+
+    /// For a person's message that resumes its topic: the dot was saved after the session last
+    /// learned its instructions, so the prompt names them as they are now. The session learned
+    /// them in the nearest earlier run of the topic that told it: the person's message (it had
+    /// this section, or nothing had changed), or the run that started the session (it had the
+    /// whole prompt; only that run has no parent). The runs Dots makes in between (an answer, a
+    /// resume after an approval, a follow-up, a decision) send only their message, so they are
+    /// passed over. `Dot::updated_at` moves on every save of the dot, not only of its
+    /// instructions; naming them once more is harmless, so a topic that cannot be read counts
+    /// as a change (logged). Both are `util::now()` text, so they compare as strings.
+    async fn instructions_changed(&self, run: &Run, dot: &Dot) -> bool {
+        if !crate::prompt::is_typed(run) || run.session_id.is_none() {
+            return false;
+        }
+        let thread = match self.store.list_thread(&run.root_run_id).await {
+            Ok(thread) => thread,
+            Err(e) => {
+                tracing::warn!(run = %run.id, "reading the chat's runs failed: {e}");
+                return true;
+            }
+        };
+        let mut next = run.parent_run_id.as_deref();
+        // At most one step per run of the thread.
+        for _ in 0..thread.len() {
+            let Some(prev) = next.and_then(|id| thread.iter().find(|r| r.id == id)) else {
+                break;
+            };
+            if prev.parent_run_id.is_none() || crate::prompt::is_typed(prev) {
+                return dot.updated_at > prev.queued_at;
+            }
+            next = prev.parent_run_id.as_deref();
+        }
+        tracing::warn!(run = %run.id, "the chat's runs do not lead to its first one");
+        true
     }
 
     /// Makes the run's open tools reachable through the MCP gateway (`POST /mcp/s/<server>`,
@@ -1152,6 +1226,24 @@ impl Runner {
         } else {
             tools
         };
+        // A run of a chat the person started may propose new instructions for its dot
+        // (conversational chat spec section 4), unless its policy denies `Instructions`
+        // outright: the tool is then neither offered nor named.
+        let instructions_off = dot
+            .spec
+            .policy
+            .resolve(crate::policy::INSTRUCTIONS_TOOL, &Value::Null)
+            == crate::policy::Action::Deny;
+        let proposes = !instructions_off
+            && self.checkins().is_some()
+            && match crate::instructions::may_propose(&self.store, run).await {
+                Ok(may) => may,
+                Err(e) => {
+                    tracing::warn!(run = %run.id, "reading the run's topic failed: {e}");
+                    false
+                }
+            };
+        let tools = tools.with_instructions(proposes);
         let tools = Arc::new(tools);
         let _closer = CloseOnDrop(tools.clone());
         if cancel.is_cancelled() {
@@ -1182,6 +1274,8 @@ impl Runner {
         let global = self.store.get_settings().await?.global_instructions;
         // The memories as they are now: a run's prompt does not change while it runs.
         let memories = self.store.list_memories(&dot.id).await?;
+        let recent = self.recent_runs(run).await;
+        let instructions_changed = self.instructions_changed(run, &dot).await;
         let secret = self.register_secret(&run.id);
         self.register_tools(&run.id, tools.clone());
         let mut prompt = build_prompt_full(
@@ -1194,6 +1288,11 @@ impl Runner {
                 contexts: tools.contexts(),
                 memories: &memories,
                 apps: tools.apps().map(|apps| apps.as_ref()),
+                recent: &recent,
+                instructions_tool: tools
+                    .instructions()
+                    .then(|| crate::instructions::model_name(dot.spec.engine)),
+                instructions_changed,
             },
         );
         // A chat's first prompt lists the workflows it may start (teams spec section 7).

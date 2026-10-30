@@ -14,6 +14,7 @@ const only = (app_reviews: PendingAppReview[]): Inbox => ({
   tools_changed: [],
   watchers: [],
   held: [],
+  instructions: [],
   app_reviews,
 });
 

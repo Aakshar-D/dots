@@ -285,6 +285,96 @@ async fn has_queued_run_and_list_runs() {
 }
 
 #[tokio::test]
+async fn ended_runs_outside_a_topic_latest_end_first() {
+    let (_d, store) = temp_store().await;
+    let dot = store.create_dot(&spec("a"), None).await.unwrap();
+    let other = store.create_dot(&spec("b"), None).await.unwrap();
+    let ended = |trigger, ended_at: &'static str, status| {
+        let store = store.clone();
+        let dot_id = dot.id.clone();
+        async move {
+            let run = store
+                .create_run(&NewRun::new(&dot_id, trigger))
+                .await
+                .unwrap();
+            store
+                .finish_run(&run.id, status, Some("s"), None)
+                .await
+                .unwrap();
+            store
+                .set_run_times(&run.id, "2026-10-27T07:00:00.000Z", Some(ended_at))
+                .await
+                .unwrap();
+            run
+        }
+    };
+    let topic = ended(
+        TriggerKind::Chat,
+        "2026-10-27T09:00:00.000Z",
+        RunStatus::Succeeded,
+    )
+    .await;
+    let mut reply = NewRun::new(&dot.id, TriggerKind::Chat);
+    reply.parent_run_id = Some(topic.id.clone());
+    reply.root_run_id = Some(topic.id.clone());
+    store.create_run(&reply).await.unwrap();
+    let morning = ended(
+        TriggerKind::Schedule,
+        "2026-10-27T08:00:00.000Z",
+        RunStatus::Succeeded,
+    )
+    .await;
+    let failed = ended(
+        TriggerKind::Webhook,
+        "2026-10-27T08:30:00.000Z",
+        RunStatus::Failed,
+    )
+    .await;
+    let later = ended(
+        TriggerKind::Manual,
+        "2026-10-27T10:00:00.000Z",
+        RunStatus::Cancelled,
+    )
+    .await;
+    // Neither a run that has not ended nor another dot's run is named.
+    store
+        .create_run(&NewRun::new(&dot.id, TriggerKind::Schedule))
+        .await
+        .unwrap();
+    let theirs = store
+        .create_run(&NewRun::new(&other.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    store
+        .finish_run(&theirs.id, RunStatus::Succeeded, None, None)
+        .await
+        .unwrap();
+
+    let ids = |runs: Vec<Run>| runs.into_iter().map(|r| r.id).collect::<Vec<_>>();
+    assert_eq!(
+        ids(store
+            .ended_runs_outside(&dot.id, &topic.id, None, 5)
+            .await
+            .unwrap()),
+        vec![later.id.clone(), failed.id.clone(), morning.id.clone()]
+    );
+    assert_eq!(
+        ids(store
+            .ended_runs_outside(&dot.id, &topic.id, None, 2)
+            .await
+            .unwrap()),
+        vec![later.id.clone(), failed.id.clone()]
+    );
+    assert_eq!(
+        ids(store
+            .ended_runs_outside(&dot.id, &topic.id, Some("2026-10-27T08:30:00.000Z"), 5)
+            .await
+            .unwrap()),
+        vec![later.id]
+    );
+}
+
+#[tokio::test]
 async fn cancel_if_inactive_only_touches_queued_or_awaiting() {
     let (_dir, store) = temp_store().await;
     let dot = store.create_dot(&spec("c"), None).await.unwrap();

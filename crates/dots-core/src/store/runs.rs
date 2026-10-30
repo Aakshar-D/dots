@@ -246,6 +246,32 @@ impl Store {
         rows.iter().map(run_from_row).collect()
     }
 
+    /// The `limit` newest ended runs of `dot_id` outside the lineage `root_run_id`, latest end
+    /// first; with `ended_after`, only those that ended after it (conversational chat spec
+    /// section 3.1).
+    pub async fn ended_runs_outside(
+        &self,
+        dot_id: &str,
+        root_run_id: &str,
+        ended_after: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<Run>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {RUN_COLUMNS} FROM runs WHERE dot_id = ? AND root_run_id <> ? \
+             AND status IN ('succeeded', 'failed', 'cancelled') AND ended_at IS NOT NULL \
+             AND (? IS NULL OR ended_at > ?) \
+             ORDER BY ended_at DESC, id DESC LIMIT ?"
+        ))
+        .bind(dot_id)
+        .bind(root_run_id)
+        .bind(ended_after)
+        .bind(ended_after)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(run_from_row).collect()
+    }
+
     /// The newest run of `dot_id`, optionally only among queued, running and awaiting runs.
     pub async fn latest_run(&self, dot_id: &str, active_only: bool) -> Result<Option<Run>> {
         let filter = if active_only {

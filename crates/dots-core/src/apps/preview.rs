@@ -20,7 +20,7 @@ use super::source::{self, AppSource};
 use super::Apps;
 use crate::{Error, Result};
 
-/// The most previews open at once; opening one more closes the oldest.
+/// The most previews open at once; opening one more closes the one used least recently.
 pub const MAX_PREVIEWS: usize = 8;
 
 /// One open preview.
@@ -34,19 +34,22 @@ pub(super) struct Preview {
     dots: Vec<DotRef>,
 }
 
-/// The open previews, oldest first.
+/// The open previews, the one used least recently first.
 #[derive(Clone, Default)]
 pub(super) struct Previews(Arc<Mutex<Vec<Arc<Preview>>>>);
 
 impl Previews {
+    /// The open preview `id`, which becomes the one used most recently: a card the person is
+    /// using keeps its preview while others open.
     fn find(&self, id: &str) -> Result<Arc<Preview>> {
-        self.0
-            .lock()
-            .expect("previews")
+        let mut open = self.0.lock().expect("previews");
+        let at = open
             .iter()
-            .find(|p| p.id == id)
-            .cloned()
-            .ok_or_else(|| Error::NotFound(format!("preview {id}")))
+            .position(|p| p.id == id)
+            .ok_or_else(|| Error::NotFound(format!("preview {id}")))?;
+        let preview = open.remove(at);
+        open.push(preview.clone());
+        Ok(preview)
     }
 
     fn add(&self, preview: Preview) {
