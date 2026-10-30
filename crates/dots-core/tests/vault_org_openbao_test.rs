@@ -7,6 +7,8 @@ mod common;
 use std::time::{Duration, Instant};
 
 use common::fake_openbao::{Failure, FakeOpenBao};
+use common::orgs::{keys, roster, sign_roster};
+use dots_core::accounts::parse_roster;
 use dots_core::vault::org::{
     http_client, http_client_with_timeout, source_for, BaoAuth, Fetched, OpenBao, OpenBaoSettings,
     Source, SourceCreds, SourceError, SourceSettings,
@@ -122,6 +124,7 @@ async fn a_token_read_gives_the_entries_and_the_policy() {
         [
             "GET /v1/secret/data/dots/env",
             "GET /v1/secret/data/dots/policy",
+            "GET /v1/secret/data/dots/roster",
             "GET /v1/auth/token/lookup-self",
         ]
     );
@@ -146,7 +149,7 @@ async fn the_namespace_header_is_sent_only_when_set() {
     source.fetch(&login("alice", PASSWORD)).await.unwrap();
 
     let seen = fake.requests();
-    assert_eq!(seen.len(), 6, "{:?}", fake.calls());
+    assert_eq!(seen.len(), 8, "{:?}", fake.calls());
     for seen in seen {
         assert_eq!(seen.namespace.as_deref(), Some("team-a/"), "{seen:?}");
     }
@@ -183,6 +186,7 @@ async fn each_path_segment_is_percent_encoded() {
             "POST /v1/auth/userpass/login/a%2Fb%20c",
             "GET /v1/kv/team/data/eng%20ops/q%3Fx%23y/env",
             "GET /v1/kv/team/data/eng%20ops/q%3Fx%23y/policy",
+            "GET /v1/kv/team/data/eng%20ops/q%3Fx%23y/roster",
         ]
     );
 }
@@ -587,6 +591,137 @@ async fn no_policy_is_invalid() {
     let e = bao(settings(&fake)).fetch(&token()).await.unwrap_err();
     assert_eq!(e, SourceError::Invalid("DOTS_POLICY is not text".into()));
     assert_clean(&e);
+}
+
+/// A signed roster for `acme-eng` with one owner.
+fn signed_roster() -> String {
+    let org = keys();
+    let owner = keys().pk.to_base64();
+    let text = roster(
+        "acme-eng",
+        3,
+        json!([{
+            "id": "01A", "name": "Asha Rao", "email": "asha@acme.com", "role": "owner",
+            "keys": [owner], "workspaces": {"default": "member"},
+            "added_at": "2026-10-28T09:00:00Z"
+        }]),
+    );
+    parse_roster(&text, "acme-eng").unwrap();
+    sign_roster(&org, &text)
+}
+
+#[tokio::test]
+async fn reads_roster_when_present() {
+    let fake = seeded().await;
+    let signed = signed_roster();
+    fake.put_roster("secret", "dots", &signed);
+    let fetched = bao(settings(&fake)).fetch(&token()).await.unwrap();
+    assert_eq!(fetched.roster, Some(signed));
+    assert_eq!(fetched.policy, POLICY);
+    assert!(fake
+        .calls()
+        .contains(&"GET /v1/secret/data/dots/roster".to_string()));
+}
+
+#[tokio::test]
+async fn no_roster_is_none() {
+    let fake = seeded().await;
+    // A 404 on `<path>/roster`.
+    let fetched = bao(settings(&fake)).fetch(&token()).await.unwrap();
+    assert_eq!(fetched.roster, None);
+    assert_eq!(fetched.roster_note, None);
+    // A secret there with no `DOTS_ROSTER` key.
+    fake.put("secret", "dots/roster", json!({ "OTHER": "x" }));
+    let fetched = bao(settings(&fake)).fetch(&token()).await.unwrap();
+    assert_eq!(fetched.roster, None);
+}
+
+/// A roster the token may not read is no roster: a phase 1 ACL grants only `env` and
+/// `policy`, and OpenBao refuses `roster` with a 403. The fetch keeps its entries and policy,
+/// with a note saying why there is no roster. Server trouble and timeouts on the roster still
+/// fail the fetch as `Unreachable`: they are never taken for no roster. The reads go entries,
+/// policy, roster.
+#[tokio::test]
+async fn a_refused_roster_read_is_no_roster_and_other_failures_fail_the_fetch() {
+    let fake = seeded().await;
+    fake.put_roster("secret", "dots", &signed_roster());
+    let source = OpenBao::new(
+        settings(&fake),
+        http_client_with_timeout(Duration::from_millis(300)),
+    );
+    let on_roster = |failure: Failure| {
+        fake.clear_requests();
+        fake.fail_next(Failure::Pass, 2);
+        fake.fail_next(failure, 1);
+    };
+
+    for code in [401, 403] {
+        on_roster(Failure::Status(code));
+        let fetched = source.fetch(&token()).await.unwrap();
+        assert_eq!(fetched.roster, None);
+        assert_eq!(
+            fetched.roster_note,
+            Some(format!(
+                "can't read DOTS_ROSTER at secret/dots/roster (HTTP {code})"
+            ))
+        );
+        assert_eq!(names(&fetched), ["API_KEY", "LOG_LEVEL"]);
+        assert_eq!(fetched.policy, POLICY);
+        assert!(fake
+            .calls()
+            .contains(&"GET /v1/secret/data/dots/roster".to_string()));
+    }
+
+    on_roster(Failure::Status(500));
+    let e = source.fetch(&token()).await.unwrap_err();
+    assert!(matches!(e, SourceError::Unreachable(_)), "{e:?}");
+    assert!(e.to_string().contains("HTTP 500"), "{e}");
+
+    on_roster(Failure::Hang);
+    let e = source.fetch(&token()).await.unwrap_err();
+    assert_eq!(
+        e,
+        SourceError::Unreachable(format!("{} did not answer in time", fake.address()))
+    );
+    assert_clean(&e);
+
+    // With nothing queued, the same fetch works and has the roster, with no note.
+    let fetched = source.fetch(&token()).await.unwrap();
+    assert!(fetched.roster.is_some());
+    assert_eq!(fetched.roster_note, None);
+}
+
+/// A token refused everywhere is still refused: only the roster's read is taken for no roster.
+#[tokio::test]
+async fn a_refused_entries_read_still_fails_the_fetch() {
+    let fake = seeded().await;
+    fake.deny("secret", "dots/env");
+    let e = bao(settings(&fake)).fetch(&token()).await.unwrap_err();
+    assert!(matches!(e, SourceError::Denied(_)), "{e:?}");
+}
+
+#[tokio::test]
+async fn a_roster_that_is_empty_or_not_text_is_invalid() {
+    let fake = seeded().await;
+    let source = bao(settings(&fake));
+    for value in [json!(""), json!(NUMBER), json!({ "a": 1 })] {
+        fake.put("secret", "dots/roster", json!({ "DOTS_ROSTER": value }));
+        let e = source.fetch(&token()).await.unwrap_err();
+        assert_eq!(e, SourceError::Invalid("DOTS_ROSTER is not text".into()));
+    }
+}
+
+#[tokio::test]
+async fn a_roster_key_in_the_entries_is_not_an_entry() {
+    let fake = seeded().await;
+    fake.put_env(
+        "secret",
+        "dots",
+        json!({ "API_KEY": SECRET, "DOTS_ROSTER": "stray" }),
+    );
+    let fetched = bao(settings(&fake)).fetch(&token()).await.unwrap();
+    assert_eq!(names(&fetched), ["API_KEY"]);
+    assert_eq!(fetched.roster, None);
 }
 
 #[tokio::test]

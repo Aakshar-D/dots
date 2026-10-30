@@ -3,7 +3,7 @@
 //! schema, so a field renamed or added on one side fails the other side's tests.
 //! Regenerate after changing a type: `UPDATE_CONTRACT=1 cargo test -p dots-app contract`.
 
-use dots_core::accounts::{CurrentScope, Identity};
+use dots_core::accounts::{CurrentScope, Identity, Membership, Role};
 use dots_core::browser::BrowserStatus;
 use dots_core::context::Document;
 use dots_core::engine::EngineEvent;
@@ -553,16 +553,31 @@ fn usage_summary() -> UsageSummary {
     }
 }
 
-/// A schedule run held for Claude usage until 15:10.
+/// A schedule run held for Claude usage until 15:10, and a watcher run held for a role.
 fn held_runs() -> Vec<HeldRun> {
-    vec![HeldRun {
-        run_id: "01J0RUN4".into(),
-        dot_id: "01J0DOT".into(),
-        dot_name: "nightly-tests".into(),
-        trigger: TriggerKind::Schedule,
-        queued_at: TS.into(),
-        starts_after: Some("2026-10-09T15:10:00.000Z".into()),
-    }]
+    vec![
+        HeldRun {
+            run_id: "01J0RUN4".into(),
+            dot_id: "01J0DOT".into(),
+            dot_name: "nightly-tests".into(),
+            trigger: TriggerKind::Schedule,
+            queued_at: TS.into(),
+            starts_after: Some("2026-10-09T15:10:00.000Z".into()),
+            reason: HoldReason::Usage,
+        },
+        HeldRun {
+            run_id: "01J0RUN5".into(),
+            dot_id: "01J0DOT2".into(),
+            dot_name: "triage".into(),
+            trigger: TriggerKind::Watcher,
+            queued_at: TS.into(),
+            starts_after: None,
+            reason: HoldReason::Role {
+                account: "Acme Engineering".into(),
+                text: "Acme Engineering: your role no longer allows running dots".into(),
+            },
+        },
+    ]
 }
 
 /// A reading of `window` at `u`, resetting at 15:10 (usage and limits spec section 3).
@@ -1773,6 +1788,12 @@ fn org_summaries() -> Vec<OrgSummary> {
             allow: vec!["*".into()],
             deny: vec!["PROD_*".into()],
         }),
+        membership: Membership::Active,
+        role: Some(Role::Admin),
+        roster_seq: Some(3),
+        roster_error: None,
+        member_count: Some(4),
+        not_member_text: None,
     };
     let status = |status: OrgStatus, text: &str| OrgSummary {
         status,
@@ -1789,6 +1810,12 @@ fn org_summaries() -> Vec<OrgSummary> {
         ),
         OrgSummary {
             copy_until: None,
+            membership: Membership::Waiting,
+            role: None,
+            not_member_text: Some(
+                "Acme Engineering: you aren't on its member list yet. Send your Dots ID to an Admin."
+                    .into(),
+            ),
             ..status(
                 OrgStatus::Offline { until: None },
                 "offline, with no saved copy",
@@ -1798,13 +1825,17 @@ fn org_summaries() -> Vec<OrgSummary> {
             copy_until: None,
             ..status(OrgStatus::Revoked, "access revoked (permission denied)")
         },
-        status(
-            OrgStatus::PolicyInvalid {
-                error: "signature does not match".into(),
-            },
-            "policy invalid: signature does not match; using the saved copy until \
-             2026-10-10T12:00:00.000Z",
-        ),
+        OrgSummary {
+            roster_error: Some("the member list is not signed by the owner or an admin".into()),
+            ..status(
+                OrgStatus::PolicyInvalid {
+                    error: "signature does not match".into(),
+                },
+                "policy invalid: signature does not match; using the saved copy until \
+                 2026-10-10T12:00:00.000Z; member list not accepted: the member list is not \
+                 signed by the owner or an admin",
+            )
+        },
         OrgSummary {
             copy_until: None,
             ..status(
@@ -1822,10 +1853,22 @@ fn org_summaries() -> Vec<OrgSummary> {
             policy_summary: vec![],
             personal_mode: None,
             use_rules: None,
+            membership: Membership::Legacy,
+            role: None,
+            roster_seq: None,
+            member_count: None,
             ..status(
                 OrgStatus::Pending,
                 "waiting for the admin to add this PC's key",
             )
+        },
+        OrgSummary {
+            copy_until: None,
+            membership: Membership::Removed,
+            role: None,
+            member_count: None,
+            not_member_text: Some("Acme Engineering: you were removed from it.".into()),
+            ..status(OrgStatus::Revoked, "Removed from Acme Engineering")
         },
     ]
 }

@@ -13,6 +13,7 @@ const draining: HeldRun = {
   run_id: "01J0RUN5",
   trigger: "watcher",
   starts_after: null,
+  reason: { kind: "usage" },
 };
 const only = (held: HeldRun[]): Inbox => ({
   approvals: [],
@@ -30,7 +31,7 @@ describe("runs held for Claude usage in the Inbox", () => {
     backend.on("inbox", () => only([scheduled, draining]));
     backend.on("run_release_hold", () => ({ ...sample.run, id: scheduled.run_id }));
     const { user } = renderApp("/inbox");
-    const section = await screen.findByRole("region", { name: "Held for Claude usage" });
+    const section = await screen.findByRole("region", { name: "Waiting to run" });
     const items = within(section).getAllByRole("listitem");
     expect(items[0]).toHaveTextContent(
       `${scheduled.dot_name} · Scheduled · starts after ${resetTime(scheduled.starts_after!)}`,
@@ -52,7 +53,7 @@ describe("runs held for Claude usage in the Inbox", () => {
     backend.on("inbox", () => only([scheduled, mine]));
     backend.on("limits_get", () => holding);
     renderApp("/inbox");
-    const section = await screen.findByRole("region", { name: "Held for Claude usage" });
+    const section = await screen.findByRole("region", { name: "Waiting to run" });
     const [background, own] = within(section).getAllByRole("listitem");
     expect(within(background!).getByRole("button", { name: "Run anyway" })).toBeVisible();
     expect(within(own!).queryByRole("button", { name: "Run anyway" })).toBeNull();
@@ -63,11 +64,29 @@ describe("runs held for Claude usage in the Inbox", () => {
     backend.on("inbox", () => only([scheduled]));
     backend.on("limits_get", () => ({ ...holding, rejected_until: scheduled.starts_after }));
     renderApp("/inbox");
-    const section = await screen.findByRole("region", { name: "Held for Claude usage" });
+    const section = await screen.findByRole("region", { name: "Waiting to run" });
     await within(section).findByRole("listitem");
     await waitFor(() =>
       expect(within(section).queryByRole("button", { name: "Run anyway" })).toBeNull(),
     );
+  });
+
+  it("shows a role hold's text and offers no Run anyway", async () => {
+    const [holding] = sample.limits;
+    const text = "Acme Engineering: your role no longer allows running dots";
+    const role: HeldRun = {
+      ...scheduled,
+      run_id: "01J0RUN7",
+      starts_after: null,
+      reason: { kind: "role", account: "Acme Engineering", text },
+    };
+    backend.on("inbox", () => only([role]));
+    backend.on("limits_get", () => holding);
+    renderApp("/inbox");
+    const section = await screen.findByRole("region", { name: "Waiting to run" });
+    const [item] = await within(section).findAllByRole("listitem");
+    expect(item).toHaveTextContent(`${role.dot_name} · Scheduled · ${text}`);
+    expect(within(item!).queryByRole("button", { name: "Run anyway" })).toBeNull();
   });
 
   it("count as one in the rail's Inbox link, however many", async () => {

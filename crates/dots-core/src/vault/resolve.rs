@@ -11,6 +11,7 @@ use zeroize::Zeroizing;
 use super::grants::{Consumer, Grants};
 use super::org::{OrgLookup, OrgPolicy, OrgView, PersonalMode};
 use super::service::Vault;
+use crate::accounts::{NotMember, Permission};
 use crate::library::PERSONAL_SCOPE;
 use crate::model::Dot;
 use crate::{Error, Result};
@@ -62,6 +63,8 @@ pub enum Unresolved {
     PolicyInvalid(String),
     /// The dot's org is not joined on this PC.
     OrgRemoved,
+    /// This PC is not on the account's member list, and why (members spec §6.4).
+    NotMember(NotMember),
 }
 
 /// A variable that did not resolve for a consumer.
@@ -103,6 +106,7 @@ impl Missing {
             Unresolved::PolicyInvalid(error) => format!("{org}: policy invalid: {error}"),
             Unresolved::OrgOffline => format!("{org}: offline, with no saved copy"),
             Unresolved::OrgRemoved => org_removed_text(dot, org),
+            Unresolved::NotMember(why) => why.text(org),
         }
     }
 
@@ -125,6 +129,7 @@ impl Missing {
             Unresolved::PolicyInvalid(error) => format!("{name}: {org}: policy invalid: {error}"),
             Unresolved::OrgOffline => format!("{name}: {org}: offline, with no saved copy"),
             Unresolved::OrgRemoved => format!("{name}: no org '{org}' is joined on this PC"),
+            Unresolved::NotMember(why) => format!("{name}: {}", why.text(org)),
         }
     }
 }
@@ -357,7 +362,8 @@ impl Vault {
     /// an org whose last good fetch is older than its `refresh_minutes` is fetched first. A
     /// fetch that fails leaves the org as the fetch left it: its saved copy, while that holds,
     /// or the reason it gives nothing, which resolving then names. An org removed while the
-    /// refresh waited is checked for again, so its dot does not start either.
+    /// refresh waited is checked for again, so its dot does not start either. Nor does a dot of
+    /// an account this PC is not a member of, or whose role may not run dots: `NotAllowed`.
     pub async fn before_run(&self, dot: &Dot) -> Result<()> {
         if let Some(text) = self.org_removed(dot) {
             return Err(Error::Other(text));
@@ -370,6 +376,10 @@ impl Vault {
             if let Some(text) = self.org_removed(dot) {
                 return Err(Error::Other(text));
             }
+            // A PC that is not on the account's member list runs none of its dots (§6.4), nor
+            // does a role that may not run them (members spec §6.3): the backstop for every
+            // trigger.
+            crate::accounts::require(Some(orgs), Some(&org_id), Permission::RunDots).await?;
         }
         Ok(())
     }
@@ -413,6 +423,7 @@ impl Vault {
             }
             OrgLookup::Offline => return refused(Unresolved::OrgOffline),
             OrgLookup::Removed => return refused(Unresolved::OrgRemoved),
+            OrgLookup::NotMember(why) => return refused(Unresolved::NotMember(*why)),
         };
         // An org that gives values has an accepted policy. Without one, nothing is guessed.
         let Some(policy) = policy else {

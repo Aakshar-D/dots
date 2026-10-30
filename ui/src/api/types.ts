@@ -234,7 +234,13 @@ export const UsageSummary = z.strictObject({
   since: z.string(),
   rows: z.array(UsageRow),
 });
-// A run held for Claude usage; starts_after is null while held runs start one at a time.
+// Why a run is held: Claude usage, or a role that no longer lets this PC run the dot.
+export const HoldReason = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("usage") }),
+  z.strictObject({ kind: z.literal("role"), account: z.string(), text: z.string() }),
+]);
+// A run held for Claude usage or a role; starts_after is null while held runs start one at a
+// time, and for a role hold.
 export const HeldRun = z.strictObject({
   run_id: z.string(),
   dot_id: z.string(),
@@ -242,6 +248,7 @@ export const HeldRun = z.strictObject({
   trigger: TriggerKind,
   queued_at: z.string(),
   starts_after: nullable(z.string()),
+  reason: HoldReason,
 });
 
 // What a run event's `data` holds: the engine event, tagged by `kind`. `RunEventRecord.data`
@@ -977,6 +984,10 @@ export const PersonalMode = z.enum(["deny", "fallback", "override"]);
 // The names an org's dots may be granted: a name matches an `allow` glob and no `deny` glob
 // (deny wins). A glob's `*` stands for any run of characters, and case does not matter.
 export const UseRules = z.strictObject({ allow: z.array(z.string()), deny: z.array(z.string()) });
+// This PC's place on an account's signed member list.
+export const Membership = z.enum(["legacy", "waiting", "active", "removed"]);
+// A role on an account's member list.
+export const Role = z.enum(["owner", "admin", "member", "viewer"]);
 const orgSummaryShape = {
   id: z.string(),
   name: z.string(),
@@ -1001,6 +1012,19 @@ const orgSummaryShape = {
   shell_secrets: z.boolean(),
   // The accepted policy's `use` globs; null while no policy is accepted.
   use_rules: nullable(UseRules),
+  // This PC's place on the account's member list.
+  membership: Membership,
+  // This PC's role on the list, while active.
+  role: nullable(Role),
+  // The `seq` of the last member list accepted; null before the first.
+  roster_seq: nullable(z.number()),
+  // Why the last member list fetched was not accepted, while the one before it is kept.
+  roster_error: nullable(z.string()),
+  // How many members the kept list has; null when no list is kept.
+  member_count: nullable(z.number()),
+  // The words a run of the account is refused with while this PC is not on the member list
+  // (waiting, its Dots ID changed, or removed); null otherwise.
+  not_member_text: nullable(z.string()),
 };
 // This install's Dots ID. `name` and `email` are empty until the person sets them.
 export const Identity = z.strictObject({
@@ -1069,6 +1093,8 @@ export const GrantState = z.enum([
   "org_revoked",
   "policy_invalid",
   "org_removed",
+  // This PC is not on the account's member list: waiting to be added, or removed.
+  "not_member",
 ]);
 // Where a value comes from: the dot's org, or Personal.
 export const ValueSource = z.enum(["org", "personal"]);
@@ -1099,7 +1125,7 @@ export const WorktreeDiff = z.strictObject({
 });
 
 // `cancelled`: the user declined a native confirmation; nothing was changed.
-export const CmdErrorKind = z.enum(["not_found", "invalid", "conflict", "internal", "cancelled"]);
+export const CmdErrorKind = z.enum(["not_found", "invalid", "not_allowed", "conflict", "internal", "cancelled"]);
 export const CmdError = z.strictObject({ kind: CmdErrorKind, message: z.string() });
 export const StartupError = z.strictObject({
   message: z.string(),
@@ -1278,6 +1304,7 @@ export type UsagePeriod = z.infer<typeof UsagePeriod>;
 export type UsageSummary = z.infer<typeof UsageSummary>;
 export type UsageRow = z.infer<typeof UsageRow>;
 export type UsageRun = z.infer<typeof UsageRun>;
+export type HoldReason = z.infer<typeof HoldReason>;
 export type HeldRun = z.infer<typeof HeldRun>;
 export type WorkspaceMode = z.infer<typeof WorkspaceMode>;
 export type TriggerKind = z.infer<typeof TriggerKind>;
@@ -1388,6 +1415,7 @@ export type SourceCreds = z.infer<typeof SourceCreds>;
 export type Identity = z.infer<typeof Identity>;
 export type CurrentScope = z.infer<typeof CurrentScope>;
 export type OrgSummary = z.infer<typeof OrgSummary>;
+export type Role = z.infer<typeof Role>;
 export type BaoAuth = z.infer<typeof BaoAuth>;
 export type JoinPreview = z.infer<typeof JoinPreview>;
 export type OrgEntry = z.infer<typeof OrgEntry>;

@@ -5,8 +5,17 @@
 
 mod common;
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use aes_gcm::aead::consts::U32;
+use aes_gcm::aead::{AeadInPlace, KeyInit};
+use aes_gcm::aes::Aes256;
+use aes_gcm::{AesGcm, Key, Nonce};
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
+use sha2::{Digest, Sha512};
 
 use common::fake_files::FakeFiles;
 use dots_core::vault::org::sources::sops::{new_identity, public_key};
@@ -227,6 +236,123 @@ async fn one_key_group_opens_like_the_top_level_age_list() {
         invalid(e),
         "the file has 2 key groups, which is not supported"
     );
+}
+
+// A roster.
+
+const ROSTER: &str = "signed-roster-8c41: the SOPS source does not check it";
+
+/// A SOPS file of `env` with `API_KEY`, then `policy`, then `roster` if there is one, made the
+/// way SOPS 3.13 makes one for `TEST_RECIPIENT` (a fixed data key, the default rule, a MAC over
+/// every value): the checked-in fixtures have no roster, and are not regenerated. A roster of
+/// `""` is written as SOPS writes an empty text, in the clear.
+fn sealed(roster: Option<&str>) -> String {
+    type Cipher = AesGcm<Aes256, U32>;
+    const LAST_MODIFIED: &str = "2026-10-29T08:00:00Z";
+    let data_key = [7u8; 32];
+    let cipher = Cipher::new(Key::<Cipher>::from_slice(&data_key));
+    let seal = |plain: &str, aad: &str, iv: u8| {
+        let iv = [iv; 32];
+        let mut data = plain.as_bytes().to_vec();
+        let tag = cipher
+            .encrypt_in_place_detached(Nonce::<U32>::from_slice(&iv), aad.as_bytes(), &mut data)
+            .unwrap();
+        format!(
+            "ENC[AES256_GCM,data:{},iv:{},tag:{},type:str]",
+            STANDARD.encode(data),
+            STANDARD.encode(iv),
+            STANDARD.encode(tag)
+        )
+    };
+
+    let mut mac = Sha512::new();
+    let mut leaf = |plain: &str, aad: &str, iv: u8| {
+        mac.update(plain.as_bytes());
+        if plain.is_empty() {
+            String::new()
+        } else {
+            seal(plain, aad, iv)
+        }
+    };
+    let mut file = serde_json::Map::new();
+    let api_key = leaf(API_KEY, "env:API_KEY:", 1);
+    file.insert("env".into(), serde_json::json!({ "API_KEY": api_key }));
+    file.insert("policy".into(), leaf(POLICY, "policy:", 2).into());
+    if let Some(roster) = roster {
+        file.insert("roster".into(), leaf(roster, "roster:", 3).into());
+    }
+    let digest: String = mac.finalize().iter().map(|b| format!("{b:02X}")).collect();
+
+    let recipient: age::x25519::Recipient = TEST_RECIPIENT.parse().unwrap();
+    let encryptor =
+        age::Encryptor::with_recipients(std::iter::once(&recipient as &dyn age::Recipient))
+            .unwrap();
+    let mut armored = Vec::new();
+    let armor =
+        age::armor::ArmoredWriter::wrap_output(&mut armored, age::armor::Format::AsciiArmor)
+            .unwrap();
+    let mut writer = encryptor.wrap_output(armor).unwrap();
+    writer.write_all(&data_key).unwrap();
+    writer.finish().unwrap().finish().unwrap();
+
+    file.insert(
+        "sops".into(),
+        serde_json::json!({
+            "age": [{"recipient": TEST_RECIPIENT, "enc": String::from_utf8(armored).unwrap()}],
+            "lastmodified": LAST_MODIFIED,
+            "mac": seal(&digest, LAST_MODIFIED, 4),
+            "unencrypted_suffix": "_unencrypted",
+            "version": "3.13.3"
+        }),
+    );
+    // `preserve_order` is off, so the keys come out sorted: `env`, `policy`, `roster`, `sops`,
+    // which is the order they were hashed in.
+    serde_json::to_string_pretty(&file).unwrap()
+}
+
+async fn open_sealed(roster: Option<&str>) -> Result<Fetched, SourceError> {
+    let dir = tempfile::tempdir().unwrap();
+    local(&write(&dir, &sealed(roster))).fetch(&mine()).await
+}
+
+#[tokio::test]
+async fn reads_roster_when_present() {
+    let fetched = open_sealed(Some(ROSTER)).await.unwrap();
+    assert_eq!(fetched.roster.as_deref(), Some(ROSTER));
+    assert_eq!(fetched.policy, POLICY);
+    assert_eq!(entries(&fetched), [("API_KEY", API_KEY)]);
+}
+
+#[tokio::test]
+async fn no_roster_is_none() {
+    let fetched = open_sealed(None).await.unwrap();
+    assert_eq!(fetched.roster, None);
+    assert_eq!(fetched.policy, POLICY);
+    let fetched = open("good.enc.json", &mine()).await.unwrap();
+    assert_eq!(fetched.roster, None);
+}
+
+#[tokio::test]
+async fn an_empty_roster_is_not_text() {
+    let e = open_sealed(Some("")).await.unwrap_err();
+    assert_eq!(invalid(e), "DOTS_ROSTER is not text");
+}
+
+#[tokio::test]
+async fn a_roster_left_in_the_clear_is_refused() {
+    // The rule now leaves `roster` plain, and the MAC still matches the plain text: like the
+    // policy, the roster must still be encrypted.
+    let text = sealed(Some(ROSTER));
+    let file: Value = serde_json::from_str(&text).unwrap();
+    let text = text
+        .replace(file["roster"].as_str().unwrap(), ROSTER)
+        .replace(
+            "\"unencrypted_suffix\": \"_unencrypted\"",
+            "\"unencrypted_regex\": \"^roster$\"",
+        );
+    let dir = tempfile::tempdir().unwrap();
+    let e = local(&write(&dir, &text)).fetch(&mine()).await.unwrap_err();
+    assert_eq!(invalid(e), "the file's value at roster is not encrypted");
 }
 
 #[tokio::test]

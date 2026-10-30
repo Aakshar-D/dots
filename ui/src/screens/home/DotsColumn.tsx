@@ -7,6 +7,7 @@ import { Link } from "react-router";
 import { commands } from "@/api/commands";
 import type { DotOverview } from "@/api/types";
 import { Button } from "@/components/ui/button";
+import { useScopeRefusal } from "@/lib/access";
 import { orgRemoved, orgRemovedText, useOrgList } from "@/lib/dot-org";
 import { dotStatus, lastLine, nextLine } from "@/lib/dot-status";
 import { keys } from "@/lib/query";
@@ -30,6 +31,8 @@ export function DotsColumn({ rows, openId }: { rows: DotOverview[]; openId: stri
     useQuery({ queryKey: keys.limits, queryFn: commands.limitsGet }).data?.held_run_ids ?? [];
   // A dot whose org is no longer joined says so; the orgs are asked for only when a dot has one.
   const orgs = useOrgList(rows.some((row) => row.dot.org_id !== null));
+  // A Viewer, or a PC off the member list, can't make a dot in the account it works in.
+  const refusal = useScopeRefusal("edit");
   // Up and Down move the focus to the dot above or below, Home and End to the first and the
   // last; Enter (the link's own) opens the dot in focus. Moving opens nothing, so that passing
   // over dots neither loads them nor marks their questions read.
@@ -51,14 +54,34 @@ export function DotsColumn({ rows, openId }: { rows: DotOverview[]; openId: stri
     // Narrower in a small window, so the conversation keeps room and nothing scrolls
     // sideways (420 px self-QA).
     <nav aria-label="Dots" className="flex w-40 shrink-0 flex-col border-r bg-sidebar sm:w-64">
-      {/* New dot first, then the list under a quiet heading, as a chat app's column. */}
+      {/* New dot first, then the list under a quiet heading, as a chat app's column. When the
+          role in the account in view refuses making dots, the button stays, off, with the
+          core's reason. */}
       <div className="px-2 pt-2">
-        <Button asChild variant="ghost" className="w-full justify-start">
-          <Link to="/dots/new">
+        {refusal ? (
+          <Button
+            variant="ghost"
+            title={refusal}
+            aria-disabled="true"
+            aria-describedby="new-dot-refusal"
+            className="w-full cursor-not-allowed justify-start opacity-50"
+          >
             <Plus aria-hidden />
             New dot
-          </Link>
-        </Button>
+          </Button>
+        ) : (
+          <Button asChild variant="ghost" className="w-full justify-start">
+            <Link to="/dots/new">
+              <Plus aria-hidden />
+              New dot
+            </Link>
+          </Button>
+        )}
+        {refusal && (
+          <span id="new-dot-refusal" className="sr-only">
+            {refusal}
+          </span>
+        )}
       </div>
       <h2 className="px-4 pt-3 pb-1 text-xs font-medium text-muted-foreground">Dots</h2>
       <ul className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-auto px-2 pb-2" onKeyDown={onKeyDown}>

@@ -26,6 +26,7 @@ use crate::library::{AppConfig, AppOrigin, LibraryConfig, LibraryItem, LibraryKi
 use crate::model::{NewRun, Run, TriggerKind};
 use crate::scheduler::{Clock, SystemClock};
 use crate::store::Store;
+use crate::vault::org::Orgs;
 use crate::{Error, Result};
 
 /// The folder below the data folder that holds the apps.
@@ -51,6 +52,9 @@ pub struct Apps {
     starter: Arc<std::sync::OnceLock<Starter>>,
     /// The review cards' previews (spec section 6.2).
     pub(super) previews: super::preview::Previews,
+    /// The orgs joined on this PC, whose member lists say whether a start of an account's dot
+    /// may be queued (members spec §6.3). `None` (tests) treats every account as legacy.
+    orgs: Option<Orgs>,
 }
 
 type Starter = Box<dyn Fn(&Run) + Send + Sync>;
@@ -95,7 +99,15 @@ impl Apps {
             clock: Arc::new(SystemClock),
             starter: Arc::default(),
             previews: Default::default(),
+            orgs: None,
         }
+    }
+
+    /// Gives the apps the orgs whose member lists decide whether a start of an account's dot
+    /// may be queued.
+    pub fn with_orgs(mut self, orgs: Orgs) -> Apps {
+        self.orgs = Some(orgs);
+        self
     }
 
     /// Gives the apps what announces a run they started (the runtime: the runner's
@@ -126,13 +138,22 @@ impl Apps {
     }
 
     /// Queues the run a committed call's start asked for (spec section 7): a new topic of the
-    /// dot, triggered by the app, under the id `start` returned to the app.
+    /// dot, triggered by the app, under the id `start` returned to the app. A dot whose account
+    /// does not let this PC run dots is refused here (members spec §6.3), with the refusal's
+    /// words: its run would only fail at its start.
     async fn queue_start(
         &self,
         item: &LibraryItem,
         config: &AppConfig,
         start: &Start,
     ) -> Result<Run> {
+        let dot = self.store.get_dot(&start.dot_id).await?;
+        crate::accounts::require(
+            self.orgs.as_ref(),
+            dot.org_id.as_deref(),
+            crate::accounts::Permission::RunDots,
+        )
+        .await?;
         let mut new = NewRun::new(&start.dot_id, TriggerKind::App);
         new.id = Some(start.run_id.clone());
         new.payload = Some(serde_json::json!({

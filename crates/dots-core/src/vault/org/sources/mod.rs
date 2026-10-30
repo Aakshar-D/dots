@@ -33,6 +33,10 @@ use crate::{Error, Result};
 /// The key the signed policy is kept under, beside the entries (spec §6.3). It is never an entry.
 pub const POLICY_ENTRY: &str = "DOTS_POLICY";
 
+/// The key the signed member list is kept under (members spec §6.5). It is optional, and never an
+/// entry.
+pub const ROSTER_ENTRY: &str = "DOTS_ROSTER";
+
 /// How long one request to a source may take, from connecting to the last byte of its answer.
 pub const FETCH_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -46,12 +50,17 @@ pub trait Source: Send + Sync {
     async fn fetch(&self, creds: &SourceCreds) -> std::result::Result<Fetched, SourceError>;
 }
 
-/// What a fetch read: the entries by name, and the signed policy text, not yet verified. Its
-/// `Debug` shows only the names.
+/// What a fetch read: the entries by name, the signed policy text, and the signed member list if
+/// there is one, neither yet verified. Its `Debug` shows only the names.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Fetched {
     pub entries: BTreeMap<String, Zeroizing<String>>,
     pub policy: String,
+    pub roster: Option<String>,
+    /// Why there is no member list when the source would not let it be read, such as "can't
+    /// read DOTS_ROSTER at secret/dots/roster (HTTP 403)" from an ACL that grants only the
+    /// entries and the policy (members spec §6.5). Shown only under a `required` policy.
+    pub roster_note: Option<String>,
 }
 
 impl std::fmt::Debug for Fetched {
@@ -397,16 +406,25 @@ impl<'de> Visitor<'de> for FieldVisitor {
     }
 }
 
-/// The entries of a source's map. `DOTS_POLICY` is never an entry, and a name that is not a
-/// variable name is skipped with a warning. A value that is not text is refused, and so are two
-/// names that differ only in case, since names compare without case.
+/// The roster text out of a source's `DOTS_ROSTER` value. A roster that is not text, or is empty,
+/// is refused: a missing one is `None`, never an error.
+fn roster_text(field: Field) -> std::result::Result<String, SourceError> {
+    match field {
+        Field::Text(mut text) if !text.is_empty() => Ok(std::mem::take(&mut *text)),
+        _ => Err(SourceError::Invalid(format!("{ROSTER_ENTRY} is not text"))),
+    }
+}
+
+/// The entries of a source's map. `DOTS_POLICY` and `DOTS_ROSTER` are never entries, and a name
+/// that is not a variable name is skipped with a warning. A value that is not text is refused,
+/// and so are two names that differ only in case, since names compare without case.
 fn collect_entries(
     raw: BTreeMap<String, Field>,
 ) -> std::result::Result<BTreeMap<String, Zeroizing<String>>, SourceError> {
     let mut entries = BTreeMap::new();
     let mut seen: HashMap<String, String> = HashMap::new();
     for (name, field) in raw {
-        if name.eq_ignore_ascii_case(POLICY_ENTRY) {
+        if name.eq_ignore_ascii_case(POLICY_ENTRY) || name.eq_ignore_ascii_case(ROSTER_ENTRY) {
             continue;
         }
         if check_variable_name(&name).is_err() {

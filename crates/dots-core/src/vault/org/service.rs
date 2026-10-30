@@ -29,12 +29,16 @@ use super::join::{
     JoinCode,
 };
 use super::offline::{delete_offline, read_offline, write_offline, OfflineCopy, Protector};
-use super::policy::{OrgPolicy, PersonalMode, PolicyError, UseRules};
-use super::row::OrgRow;
+use super::policy::{OrgPolicy, PersonalMode, PolicyError, RosterMode, UseRules};
+use super::row::{MemberRow, OrgRow};
 use super::signed::verify_policy;
 use super::sources::sops::{self, NOT_A_RECIPIENT};
 use super::sources::{source_for, Fetched, Source, SourceCreds, SourceError};
 use super::SourceSettings;
+use crate::accounts::{
+    open_accepted_roster, roster_hash, verify_roster, Membership, NotMember, Role, Roster,
+    RosterError,
+};
 use crate::model::DotRef;
 use crate::scheduler::Clock;
 use crate::store::Store;
@@ -120,6 +124,19 @@ pub struct OrgSummary {
     /// The accepted policy's `use` globs, which say which names a dot of the org may be granted
     /// (the shell's name picker leaves out the rest); `None` while no policy is accepted.
     pub use_rules: Option<UseRules>,
+    /// This PC's place on the account's member list (members spec §6.4).
+    pub membership: Membership,
+    /// This PC's role on the list, while `active`.
+    pub role: Option<Role>,
+    /// The `seq` of the last member list accepted; `None` before the first.
+    pub roster_seq: Option<u64>,
+    /// Why the last member list fetched was not accepted, while the one before it is kept.
+    pub roster_error: Option<String>,
+    /// How many members the kept list has; `None` when no list is kept.
+    pub member_count: Option<u32>,
+    /// The words a run of the account's dots is refused with while this PC is not on the member
+    /// list (waiting, its Dots ID changed, or removed); `None` otherwise.
+    pub not_member_text: Option<String>,
 }
 
 /// What a join code would join or change, shown before anything is fetched.
@@ -180,6 +197,8 @@ pub enum OrgLookup {
     Offline,
     /// No org of that id is joined on this PC.
     Removed,
+    /// This PC is not on the account's member list, and why (members spec §6.4).
+    NotMember(NotMember),
 }
 
 impl std::fmt::Debug for OrgLookup {
@@ -195,6 +214,7 @@ impl std::fmt::Debug for OrgLookup {
             Self::PolicyInvalid(error) => f.debug_tuple("PolicyInvalid").field(error).finish(),
             Self::Offline => f.write_str("Offline"),
             Self::Removed => f.write_str("Removed"),
+            Self::NotMember(why) => f.debug_tuple("NotMember").field(why).finish(),
         }
     }
 }
@@ -256,6 +276,29 @@ struct Joined {
     status: OrgStatus,
     /// Why the last fetch failed, for `Offline` and `Revoked`.
     reason: Option<String>,
+    /// The last member list accepted, kept while a newer one is missing or refused (members
+    /// spec §6.4); `None` when there is none, or under a policy that asks for none.
+    roster: Option<KeptRoster>,
+    /// Why the last member list fetched was not accepted.
+    roster_error: Option<String>,
+}
+
+/// A member list accepted for an org: the signed text, kept in the offline copy, and what it
+/// says.
+#[derive(Clone)]
+struct KeptRoster {
+    signed: String,
+    roster: Roster,
+    /// The roster's text inside `signed`, as it was signed.
+    text: String,
+}
+
+/// This PC's place on the member list after a fetch: the row's member columns, the list to
+/// keep, and why the fetched list was not accepted.
+struct Evaluated {
+    member: MemberRow,
+    roster: Option<KeptRoster>,
+    error: Option<String>,
 }
 
 /// What one fetch came to.
@@ -456,7 +499,7 @@ impl Orgs {
         };
 
         let now = self.inner.clock.now();
-        let row = OrgRow {
+        let mut row = OrgRow {
             id: id.clone(),
             name: code.name.clone(),
             source: code.source.clone(),
@@ -464,12 +507,16 @@ impl Orgs {
             last_issued_at: Some(policy.issued_at.clone()),
             last_fetch_at: Some(stamp(now)),
             joined_at: stamp(now),
+            member: MemberRow::default(),
         };
+        let evaluated = self.evaluate(&row, None, &policy, &fetched).await;
+        row.member = evaluated.member.clone();
         if let Err(e) = self.inner.store.add_org(&row).await {
             self.forget_creds(&code);
             return Err(e);
         }
-        self.settle(row, source, fetched, policy, now).await;
+        self.keep_fetch(row, source, fetched, policy, evaluated, now)
+            .await;
         self.summary_now(&id).ok_or_else(|| not_joined(&id))
     }
 
@@ -495,8 +542,8 @@ impl Orgs {
             )));
         }
         let _guard = self.lock(org_id).await;
-        let old = match self.read().get(org_id) {
-            Some(Slot::Joined(joined)) => joined.row.clone(),
+        let (old, kept) = match self.read().get(org_id) {
+            Some(Slot::Joined(joined)) => (joined.row.clone(), joined.roster.clone()),
             Some(Slot::Damaged { .. }) => return Err(Error::Invalid(damaged_text(org_id))),
             Some(Slot::Pending(_)) | None => return Err(not_joined(org_id)),
         };
@@ -556,7 +603,7 @@ impl Orgs {
             creds.save(secrets, org_id)?;
         }
         let now = self.inner.clock.now();
-        let row = OrgRow {
+        let mut row = OrgRow {
             name: code.name.clone(),
             source: code.source.clone(),
             policy_key: code.policy_key.clone(),
@@ -564,13 +611,24 @@ impl Orgs {
             last_fetch_at: Some(stamp(now)),
             ..old.clone()
         };
+        // A list signed for the old key is not carried over to a new one, nor known by its hash:
+        // the list is checked against the new key.
+        let same_key = same_policy_key(&old.policy_key, &row.policy_key);
+        let kept = kept.filter(|_| same_key);
+        if !same_key {
+            row.member.roster_hash = None;
+            row.member.owners_hash = None;
+        }
+        let evaluated = self.evaluate(&row, kept.as_ref(), &policy, &fetched).await;
+        row.member = evaluated.member.clone();
         if let Err(e) = self.store_settings(&row, &old).await {
             if given {
                 restore_creds(secrets, org_id, old_creds.as_ref());
             }
             return Err(e);
         }
-        self.settle(row, source, fetched, policy, now).await;
+        self.keep_fetch(row, source, fetched, policy, evaluated, now)
+            .await;
         self.summary_now(org_id).ok_or_else(|| not_joined(org_id))
     }
 
@@ -706,6 +764,28 @@ impl Orgs {
         }
     }
 
+    /// This PC's place on the org's member list and its role there, for the permission checks
+    /// (members spec §6.3, §6.4). `None` when the org is not joined. A damaged org's list
+    /// can't be read, so it fails closed: `waiting`, with no role.
+    pub fn access(&self, org_id: &str) -> Option<(Membership, Option<Role>)> {
+        match self.read().get(org_id) {
+            Some(Slot::Joined(joined)) => {
+                Some((joined.row.member.membership, joined.row.member.role))
+            }
+            Some(Slot::Damaged { .. }) => Some((Membership::Waiting, None)),
+            Some(Slot::Pending(_)) | None => None,
+        }
+    }
+
+    /// Why this PC gets nothing from the org, when it is not on its member list: waiting,
+    /// its Dots ID changed, or removed (members spec §6.4). `None` otherwise.
+    pub fn not_member(&self, org_id: &str) -> Option<NotMember> {
+        match self.read().get(org_id) {
+            Some(Slot::Joined(joined)) => joined.not_member(),
+            _ => None,
+        }
+    }
+
     /// The org's value of `name`, compared without regard to case, or why there is none.
     pub async fn lookup(&self, org_id: &str, name: &str) -> OrgLookup {
         self.expire_if_due(org_id).await;
@@ -743,15 +823,21 @@ impl Orgs {
     /// Whether it fetched.
     async fn refresh_org(&self, org_id: &str, only_if_stale: bool) -> Result<bool> {
         let _guard = self.lock(org_id).await;
-        let (row, source, refresh_minutes) = match self.read().get(org_id) {
+        let (row, source, refresh_minutes, kept) = match self.read().get(org_id) {
             Some(Slot::Joined(joined)) => (
                 joined.row.clone(),
                 joined.source.clone(),
                 joined.policy.as_ref().map(|p| p.refresh_minutes),
+                joined.roster.clone(),
             ),
             Some(Slot::Damaged { .. }) => return Ok(false),
             Some(Slot::Pending(_)) | None => return Err(not_joined(org_id)),
         };
+        // A PC removed from the member list stays removed until the person joins again
+        // (members spec §6.4): nothing is fetched for it.
+        if row.member.membership == Membership::Removed {
+            return Ok(false);
+        }
         if only_if_stale {
             let now = self.inner.clock.now();
             let failed = self.failed_at().get(org_id).copied();
@@ -769,16 +855,37 @@ impl Orgs {
         match outcome {
             Outcome::Accepted(fetched, policy) => {
                 let now = self.inner.clock.now();
+                let evaluated = self.evaluate(&row, kept.as_ref(), &policy, &fetched).await;
                 self.inner
                     .store
-                    .record_org_fetch(org_id, &stamp(now), &policy.issued_at)
+                    .record_org_fetch_and_membership(
+                        org_id,
+                        &stamp(now),
+                        &policy.issued_at,
+                        &evaluated.member,
+                    )
                     .await?;
                 let row = OrgRow {
                     last_issued_at: Some(policy.issued_at.clone()),
                     last_fetch_at: Some(stamp(now)),
+                    member: evaluated.member.clone(),
                     ..row
                 };
-                self.settle(row, source, fetched, *policy, now).await;
+                self.keep_fetch(row, source, fetched, *policy, evaluated, now)
+                    .await;
+            }
+            // A PC waiting to be added (a SOPS file before the admin adds its key) stays
+            // waiting, not revoked (members spec §6.4). Its values and copy are wiped all the
+            // same: a PC whose Dots ID changed still holds real ones, and a refused sign-in
+            // must not leave them on disk.
+            Outcome::Denied(reason) if row.member.membership == Membership::Waiting => {
+                self.with_joined(org_id, |joined| {
+                    joined.entries = None;
+                    joined.copy_until = None;
+                    joined.status = OrgStatus::Offline { until: None };
+                    joined.reason = Some(reason);
+                });
+                self.delete_copy(org_id).await;
             }
             Outcome::Denied(reason) => {
                 self.with_joined(org_id, |joined| {
@@ -888,19 +995,179 @@ impl Orgs {
         }
     }
 
-    /// Keeps the values and policy of a good fetch, at `at`, as the org's `row`: writes the
-    /// copy, adds the secrets to the redactor, and makes the org `Connected`. A failed fetch
-    /// before it no longer holds `refresh_if_stale` back.
+    /// This PC's place on the member list after a fetch whose policy was accepted (members
+    /// spec §6.4), from the row's last place and `kept`, the last list accepted:
+    /// - Under a policy that asks for no list, `legacy`.
+    /// - Under `required`, the list accepted last, fetched again, is known by its hash and not
+    ///   checked against the current admins again (§6.1). A new list must verify (signed by the
+    ///   root key or an admin the policy names) and be newer than the last.
+    /// - On the list by this PC's Dots ID: `active`. Not on it: `waiting`, unless this PC was
+    ///   on it. Then, if its Dots ID changed and the old ID or the member is still listed, it
+    ///   waits for the new ID to be added; otherwise it is `removed`.
+    /// - A list missing or refused keeps the last one and this PC's place, with the error; with
+    ///   none accepted before, the PC is `waiting`.
+    /// - Without a readable Dots ID nothing changes (an account not yet on lists waits): never
+    ///   `removed`. A removed PC stays removed.
+    async fn evaluate(
+        &self,
+        row: &OrgRow,
+        kept: Option<&KeptRoster>,
+        policy: &OrgPolicy,
+        fetched: &Fetched,
+    ) -> Evaluated {
+        let last = &row.member;
+        let left = |membership: Membership| MemberRow {
+            membership,
+            last_roster_seq: last.last_roster_seq,
+            roster_hash: last.roster_hash.clone(),
+            owners_hash: last.owners_hash.clone(),
+            ..MemberRow::default()
+        };
+        // The last place and list, unchanged, with why nothing new was taken. An account that
+        // was not on lists yet waits instead: `legacy` gives access a list must grant.
+        let unchanged = |error: String| {
+            if last.membership == Membership::Legacy {
+                Evaluated {
+                    member: left(Membership::Waiting),
+                    roster: None,
+                    error: Some(error),
+                }
+            } else {
+                Evaluated {
+                    member: last.clone(),
+                    roster: kept.cloned(),
+                    error: Some(error),
+                }
+            }
+        };
+        if last.membership == Membership::Removed {
+            return Evaluated {
+                member: last.clone(),
+                roster: None,
+                error: None,
+            };
+        }
+        if policy.roster == RosterMode::Off {
+            return Evaluated {
+                member: left(Membership::Legacy),
+                roster: None,
+                error: None,
+            };
+        }
+        let checked = match (fetched.roster.as_deref(), &fetched.roster_note) {
+            (None, None) => Err("the account has no member list".to_string()),
+            // The source would not let the list be read: say why, so the admin can fix it.
+            (None, Some(note)) => Err(format!("the account has no member list: {note}")),
+            (Some(signed), _) => check_roster(row, policy, signed).map_err(|e| e.to_string()),
+        };
+        let list = match checked {
+            Ok(list) => list,
+            Err(error) => return unchanged(error),
+        };
+        let my_key = match crate::accounts::identity(&self.inner.store).await {
+            Ok(identity) => identity.public_key,
+            Err(e) => {
+                tracing::warn!(
+                    "org {:?}: no Dots ID to look for on its member list: {e}",
+                    row.id
+                );
+                return unchanged(format!("this PC's Dots ID can't be read: {e}"));
+            }
+        };
+        let roster = &list.roster;
+        let place = |membership: Membership| MemberRow {
+            membership,
+            last_roster_seq: Some(roster.seq),
+            roster_hash: Some(roster_hash(&list.text)),
+            owners_hash: Some(roster.owners_hash()),
+            ..MemberRow::default()
+        };
+        let was_on = last.membership == Membership::Active || last.id_changed();
+        let member = if let Some(mine) = roster.member_with_key(&my_key) {
+            MemberRow {
+                membership: Membership::Active,
+                member_id: Some(mine.id.clone()),
+                role: Some(mine.role),
+                workspaces: mine.workspaces.clone(),
+                key: Some(my_key.clone()),
+                ..place(Membership::Active)
+            }
+        } else if !was_on {
+            place(Membership::Waiting)
+        } else {
+            let old_key = last.key.as_deref().filter(|key| *key != my_key);
+            let old_key_listed = old_key.is_some_and(|key| roster.member_with_key(key).is_some());
+            let member_listed = last
+                .member_id
+                .as_deref()
+                .is_some_and(|id| roster.members.iter().any(|m| m.id == id));
+            if old_key.is_some() && (old_key_listed || member_listed) {
+                MemberRow {
+                    key: last.key.clone(),
+                    member_id: last.member_id.clone(),
+                    ..place(Membership::Waiting)
+                }
+            } else {
+                place(Membership::Removed)
+            }
+        };
+        Evaluated {
+            member,
+            roster: Some(list),
+            error: None,
+        }
+    }
+
+    /// Keeps what a good fetch came to, at `at`: the values, the policy and the member list,
+    /// or, for a PC just removed from the list, the same wipe as a revoked one (members spec
+    /// §6.4): no values, no copy.
+    async fn keep_fetch(
+        &self,
+        row: OrgRow,
+        source: Arc<dyn Source>,
+        fetched: Fetched,
+        policy: OrgPolicy,
+        evaluated: Evaluated,
+        at: DateTime<Utc>,
+    ) {
+        if row.member.membership != Membership::Removed {
+            return self
+                .settle(row, source, fetched, policy, evaluated, at)
+                .await;
+        }
+        self.failed_at().remove(&row.id);
+        let id = row.id.clone();
+        let joined = Joined {
+            row,
+            source,
+            policy: Some(policy),
+            entries: None,
+            copy_until: None,
+            status: OrgStatus::Revoked,
+            reason: None,
+            roster: None,
+            roster_error: None,
+        };
+        self.write()
+            .insert(id.clone(), Slot::Joined(Box::new(joined)));
+        self.delete_copy(&id).await;
+    }
+
+    /// Keeps the values, policy and member list of a good fetch, at `at`, as the org's `row`:
+    /// writes the copy, adds the secrets to the redactor, and makes the org `Connected`. A
+    /// failed fetch before it no longer holds `refresh_if_stale` back.
     async fn settle(
         &self,
         row: OrgRow,
         source: Arc<dyn Source>,
         fetched: Fetched,
         policy: OrgPolicy,
+        evaluated: Evaluated,
         at: DateTime<Utc>,
     ) {
         self.failed_at().remove(&row.id);
-        let copy_until = self.save_copy(&row.id, &policy, &fetched, at).await;
+        let roster = evaluated.roster.as_ref().map(|kept| kept.signed.as_str());
+        let copy_until = self.save_copy(&row.id, &policy, &fetched, roster, at).await;
         add_secrets(&policy, &fetched.entries);
         let id = row.id.clone();
         let joined = Joined {
@@ -911,6 +1178,8 @@ impl Orgs {
             copy_until,
             status: OrgStatus::Connected,
             reason: None,
+            roster: evaluated.roster,
+            roster_error: evaluated.error,
         };
         self.write().insert(id, Slot::Joined(Box::new(joined)));
     }
@@ -923,6 +1192,7 @@ impl Orgs {
         org_id: &str,
         policy: &OrgPolicy,
         fetched: &Fetched,
+        roster: Option<&str>,
         at: DateTime<Utc>,
     ) -> Option<DateTime<Utc>> {
         if policy.offline_hours == 0 {
@@ -933,6 +1203,7 @@ impl Orgs {
             fetched_at: stamp(at),
             entries: fetched.entries.clone(),
             policy: fetched.policy.clone(),
+            roster: roster.map(str::to_string),
         };
         let (dir, protector, id) = (
             self.inner.dir.clone(),
@@ -967,7 +1238,16 @@ impl Orgs {
             copy_until: None,
             status: OrgStatus::Offline { until: None },
             reason: None,
+            roster: None,
+            roster_error: None,
         };
+        // A PC removed from the member list had its copy wiped, and stays removed.
+        if joined.row.member.membership == Membership::Removed {
+            let id = joined.row.id.clone();
+            self.delete_copy(&id).await;
+            joined.status = OrgStatus::Revoked;
+            return joined;
+        }
         let row = &joined.row;
         let (dir, protector, id) = (
             self.inner.dir.clone(),
@@ -1010,6 +1290,24 @@ impl Orgs {
             joined.status = OrgStatus::Expired;
             return joined;
         }
+        // The list kept with the copy must be the one the row accepted last: its `seq` and its
+        // hash. Its signer was checked when it was accepted, and is not again (members spec
+        // §6.1). If it doesn't match, this PC keeps its place from the row, and the summary says
+        // why.
+        if let Some(signed) = copy.roster {
+            match open_saved_roster(&signed, row) {
+                Ok((roster, text)) => {
+                    joined.roster = Some(KeptRoster {
+                        signed,
+                        roster,
+                        text,
+                    })
+                }
+                Err(e) => {
+                    joined.roster_error = Some(format!("its saved member list was refused: {e}"))
+                }
+            }
+        }
         add_secrets(&policy, &copy.entries);
         joined.entries = Some(copy.entries);
         joined.policy = Some(policy);
@@ -1029,10 +1327,10 @@ impl Orgs {
             .await?;
         let last_fetch_at = row.last_fetch_at.as_deref().unwrap_or_default();
         let last_issued_at = row.last_issued_at.as_deref().unwrap_or_default();
-        if let Err(e) = store
-            .record_org_fetch(&row.id, last_fetch_at, last_issued_at)
-            .await
-        {
+        let recorded = store
+            .record_org_fetch_and_membership(&row.id, last_fetch_at, last_issued_at, &row.member)
+            .await;
+        if let Err(e) = recorded {
             let restored = store
                 .update_org_settings(&old.id, &old.name, &old.source, &old.policy_key)
                 .await;
@@ -1132,7 +1430,22 @@ impl Orgs {
 }
 
 impl Joined {
+    /// Why this PC is not on the account's member list, when it is not: the org then gives no
+    /// values, whatever it holds (members spec §6.4).
+    fn not_member(&self) -> Option<NotMember> {
+        let member = &self.row.member;
+        match member.membership {
+            Membership::Removed => Some(NotMember::Removed),
+            Membership::Waiting if member.id_changed() => Some(NotMember::IdChanged),
+            Membership::Waiting => Some(NotMember::Waiting),
+            Membership::Legacy | Membership::Active => None,
+        }
+    }
+
     fn lookup(&self, name: &str) -> OrgLookup {
+        if let Some(why) = self.not_member() {
+            return OrgLookup::NotMember(why);
+        }
         if let Some(entries) = &self.entries {
             return match entries.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)) {
                 Some((key, value)) => OrgLookup::Value {
@@ -1156,6 +1469,9 @@ impl Joined {
         let (Some(entries), Some(policy)) = (&self.entries, &self.policy) else {
             return Vec::new();
         };
+        if self.not_member().is_some() {
+            return Vec::new();
+        }
         let locked = policy.personal != PersonalMode::Override;
         let mut out: Vec<OrgEntry> = entries
             .iter()
@@ -1178,7 +1494,24 @@ impl Joined {
         out
     }
 
+    /// The status in plain words, with why the last member list was not accepted.
     fn status_text(&self) -> String {
+        let text = self.fetch_text();
+        match &self.roster_error {
+            Some(error) => format!("{text}; member list not accepted: {error}"),
+            None => text,
+        }
+    }
+
+    fn fetch_text(&self) -> String {
+        match (self.not_member(), &self.reason) {
+            (Some(NotMember::Removed), _) => return format!("Removed from {}", self.row.name),
+            (Some(why @ (NotMember::IdChanged | NotMember::Waiting)), Some(reason)) => {
+                return format!("{} ({reason})", why.text(&self.row.name))
+            }
+            (Some(why @ NotMember::IdChanged), None) => return why.text(&self.row.name),
+            (Some(NotMember::Waiting), None) | (None, _) => {}
+        }
         let with_reason = |text: &str| match &self.reason {
             Some(reason) => format!("{text} ({reason})"),
             None => text.to_string(),
@@ -1232,6 +1565,15 @@ fn summary_of(id: &str, slot: &Slot) -> OrgSummary {
             personal_mode: joined.policy.as_ref().map(|p| p.personal),
             shell_secrets: joined.policy.as_ref().is_some_and(|p| p.shell_secrets),
             use_rules: joined.policy.as_ref().map(|p| p.use_rules.clone()),
+            membership: joined.row.member.membership,
+            role: joined.row.member.role,
+            roster_seq: joined.row.member.last_roster_seq,
+            roster_error: joined.roster_error.clone(),
+            member_count: joined
+                .roster
+                .as_ref()
+                .map(|kept| u32::try_from(kept.roster.members.len()).unwrap_or(u32::MAX)),
+            not_member_text: joined.not_member().map(|why| why.text(&joined.row.name)),
         },
         Slot::Damaged { name, error } => OrgSummary {
             id: id.to_string(),
@@ -1249,6 +1591,13 @@ fn summary_of(id: &str, slot: &Slot) -> OrgSummary {
             personal_mode: None,
             shell_secrets: false,
             use_rules: None,
+            // Its member list can't be read, so it fails closed as `Orgs::access` does: waiting.
+            membership: Membership::Waiting,
+            role: None,
+            roster_seq: None,
+            roster_error: None,
+            member_count: None,
+            not_member_text: Some(NotMember::Waiting.text(name)),
         },
         Slot::Pending(code) => OrgSummary {
             id: id.to_string(),
@@ -1264,6 +1613,12 @@ fn summary_of(id: &str, slot: &Slot) -> OrgSummary {
             personal_mode: None,
             shell_secrets: false,
             use_rules: None,
+            membership: Membership::Legacy,
+            role: None,
+            roster_seq: None,
+            roster_error: None,
+            member_count: None,
+            not_member_text: None,
         },
     }
 }
@@ -1279,6 +1634,52 @@ fn verify(
     let policy = verify_policy(&fetched.policy, policy_key, org_id)?;
     policy.check_not_rolled_back(last_issued_at)?;
     Ok(policy)
+}
+
+/// The member list of a fetch, if it can be taken. The list accepted last, fetched again, is
+/// known by its hash (`last_roster_hash`) and taken as it is: its signer was checked when it was
+/// accepted, and a key dropped from `admins` since does not undo that (members spec §6.1). Any
+/// other list must be signed by the root key or an admin the policy names now, and be newer
+/// than the last: a list of the same `seq` with another text is refused.
+fn check_roster(
+    row: &OrgRow,
+    policy: &OrgPolicy,
+    signed: &str,
+) -> std::result::Result<KeptRoster, RosterError> {
+    if let Some(hash) = &row.member.roster_hash {
+        if let Ok((roster, text)) = open_accepted_roster(signed, &row.id) {
+            if roster_hash(&text) == *hash {
+                return Ok(KeptRoster {
+                    signed: signed.to_string(),
+                    roster,
+                    text,
+                });
+            }
+        }
+    }
+    let accepted = verify_roster(signed, &row.policy_key, &policy.admins, &row.id)?;
+    accepted.roster.check_seq(row.member.last_roster_seq)?;
+    accepted.roster.check_owners(
+        accepted.signer == row.policy_key,
+        row.member.owners_hash.as_deref(),
+    )?;
+    Ok(KeptRoster {
+        signed: signed.to_string(),
+        roster: accepted.roster,
+        text: accepted.text,
+    })
+}
+
+/// The list saved in an offline copy, if it is the one the row accepted last: the same `seq`
+/// and the same hash.
+fn open_saved_roster(signed: &str, row: &OrgRow) -> std::result::Result<(Roster, String), String> {
+    let (roster, text) = open_accepted_roster(signed, &row.id).map_err(|e| e.to_string())?;
+    let member = &row.member;
+    if Some(roster.seq) != member.last_roster_seq || Some(roster_hash(&text)) != member.roster_hash
+    {
+        return Err("it is not the list accepted last".into());
+    }
+    Ok((roster, text))
 }
 
 /// Scrubs every secret value of a fetch from what Dots writes from now on. Plain values are

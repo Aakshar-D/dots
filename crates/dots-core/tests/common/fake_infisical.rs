@@ -228,6 +228,12 @@ impl FakeInfisical {
         self.put_secret(project, environment, &policy, "DOTS_POLICY", json!(signed));
     }
 
+    /// Writes the org's signed roster text, as secret `DOTS_ROSTER` of `<path>/policy`.
+    pub fn put_roster(&self, project: &str, environment: &str, path: &str, signed: &str) {
+        let policy = policy_path(path);
+        self.put_secret(project, environment, &policy, "DOTS_ROSTER", json!(signed));
+    }
+
     /// Adds an import to a folder: `key` as if imported from the folder `from`.
     pub fn put_import(
         &self,

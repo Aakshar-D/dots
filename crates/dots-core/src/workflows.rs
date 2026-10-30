@@ -6,7 +6,7 @@
 //! when a question is posted or answered, when it is woken, and every `TICK`.
 
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use serde_json::json;
@@ -16,6 +16,7 @@ use tokio::sync::{Mutex, Notify};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+use crate::accounts::Permission;
 use crate::events::{Bus, RuntimeEvent};
 use crate::model::{
     BranchRef, Handoff, NewRun, NewWorkflowRun, Run, RunStatus, StartableWorkflow, StepRun,
@@ -26,6 +27,7 @@ use crate::runner::Runner;
 use crate::scheduler::Clock;
 use crate::store::Store;
 use crate::util::timestamp;
+use crate::vault::org::Orgs;
 use crate::workflow::{Budget, Step, StepKind};
 use crate::workspace::git;
 use crate::{Error, Result};
@@ -69,6 +71,9 @@ pub struct Workflows {
     /// Held by `call_start` from its check that the chat has no such run in flight to the start,
     /// so two calls made at once cannot both pass it.
     start_lock: Mutex<()>,
+    /// The orgs a team's account role is read from (members spec §6.3); without them, an
+    /// account's team acts as `legacy`.
+    orgs: OnceLock<Orgs>,
 }
 
 /// The newest step run of `step_id`.
@@ -163,7 +168,19 @@ impl Workflows {
             wake: Notify::new(),
             lock: Mutex::new(()),
             start_lock: Mutex::new(()),
+            orgs: OnceLock::new(),
         })
+    }
+
+    /// The orgs whose roles gate what a person does with an account's workflow runs.
+    pub fn set_orgs(&self, orgs: Orgs) {
+        let _ = self.orgs.set(orgs);
+    }
+
+    /// `Ok` when this PC may do `p` in the account of the team `team_id` (members spec §6.3).
+    async fn require(&self, team_id: &str, p: Permission) -> Result<()> {
+        let team = self.store.get_team(team_id).await?;
+        crate::accounts::require(self.orgs.get(), team.org_id.as_deref(), p).await
     }
 
     fn updated(&self, wr: &WorkflowRun) {
@@ -209,6 +226,7 @@ impl Workflows {
             ));
         }
         let workflow = self.store.get_workflow(&req.workflow_id).await?;
+        self.require(&workflow.team_id, Permission::RunDots).await?;
         let name = &workflow.spec.name;
         if !workflow.spec.enabled {
             return Err(Error::Conflict(format!("workflow {name} is turned off")));
@@ -260,7 +278,9 @@ impl Workflows {
     /// lets it go on (section 9).
     pub async fn add_budget(&self, id: &str) -> Result<WorkflowRun> {
         let _one = self.lock.lock().await;
-        let wr = self.tick(&self.store.get_workflow_run(id).await?).await?;
+        let wr = self.store.get_workflow_run(id).await?;
+        self.require(&wr.team_id, Permission::RunDots).await?;
+        let wr = self.tick(&wr).await?;
         if !(wr.status == WorkflowRunStatus::Waiting && wr.waiting_on == Some(WaitingOn::Budget)) {
             return Err(Error::Conflict(format!(
                 "workflow run {id} is not waiting for budget"
@@ -448,7 +468,10 @@ impl Workflows {
     /// it was shown on, and the workflow goes on.
     pub async fn approve_check(&self, id: &str, note: Option<&str>) -> Result<WorkflowRun> {
         let _one = self.lock.lock().await;
-        let wr = self.tick(&self.store.get_workflow_run(id).await?).await?;
+        let wr = self.store.get_workflow_run(id).await?;
+        self.require(&wr.team_id, Permission::AnswerApprovals)
+            .await?;
+        let wr = self.tick(&wr).await?;
         let step_run = match (&wr.status, &wr.waiting_on, &wr.current_step) {
             (WorkflowRunStatus::Waiting, Some(WaitingOn::Check), Some(current)) => {
                 latest(&wr, current).cloned()
@@ -496,7 +519,9 @@ impl Workflows {
     /// Runs the failed step again, as a new attempt (sections 8 and 10.3).
     pub async fn retry_step(&self, id: &str) -> Result<WorkflowRun> {
         let _one = self.lock.lock().await;
-        let wr = self.tick(&self.store.get_workflow_run(id).await?).await?;
+        let wr = self.store.get_workflow_run(id).await?;
+        self.require(&wr.team_id, Permission::RunDots).await?;
+        let wr = self.tick(&wr).await?;
         let index = match (&wr.status, &wr.waiting_on, &wr.current_step) {
             (WorkflowRunStatus::Waiting, Some(WaitingOn::StepFailed), Some(current)) => {
                 wr.definition.step(current).map(|(i, _)| i)
@@ -584,6 +609,7 @@ impl Workflows {
 
     /// Stops the team's workflow runs in flight, then deletes the team (section 4).
     pub async fn delete_team(&self, team_id: &str) -> Result<()> {
+        self.require(team_id, Permission::EditDots).await?;
         let _one = self.lock.lock().await;
         for wr in self
             .store

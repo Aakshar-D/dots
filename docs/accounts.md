@@ -4,8 +4,8 @@ An account is a group of people and dots that belong together, such as your team
 Your own dots live in **Personal**, which is always there. This guide explains how Dots knows who
 you are, how to switch between accounts, and how to join one.
 
-Members, roles, invites, shared workspaces and API keys are **coming next**. This version covers
-your identity, the switcher, and joining.
+Invites, shared workspaces and API keys are **coming next**. This version covers
+your identity, the switcher, joining, and the member list with roles.
 
 ## Your Dots ID
 
@@ -67,10 +67,43 @@ you join the account again, and then they move back to it.
 
 Settings used to call these "Organisations". It is the same thing under a new name.
 
+## Member lists and roles
+
+Some accounts keep a **member list**, signed by the account's Owner or an Admin. On those accounts
+you have a role:
+
+- **Owner** and **Admin** can do everything a Member can, and change the member list.
+- **Member** can make and edit the account's dots, run them, answer approvals and grant the
+  account's values.
+- **Viewer** can look at the account's dots and runs, but not change or run them. **New dot**,
+  **Save** and the approval buttons are greyed out with the reason. A manual run, an app's start
+  of a dot and a webhook call are refused (the webhook answers HTTP 403 with the reason). A
+  scheduled run, watcher or follow-up waits in the Inbox under **Waiting to run**, with the
+  reason, and runs by itself when your role is back to Member or above.
+
+**Personal** is always yours as Owner. An account without a member list treats everyone as a Member.
+
+Next to each account you see one of these states:
+
+- **Active**: you are on the list, with your role.
+- **Waiting**: the account has a member list and you are not on it yet. Choose **Copy my Dots ID**
+  (in **Settings › Profile**) and send it to your admin. Nothing is lost while you wait. When they
+  have added you, choose Refresh on the account.
+- **Waiting, "this PC's Dots ID changed"**: the saved key on this PC was lost, so your Dots ID is a
+  new one. Send the new ID to an Admin. Nothing is wiped meanwhile.
+- **Removed**: an admin took you off the list. Dots deletes that account's secrets from this PC.
+  Your dots stay. Join the account again to come back.
+
+While you are waiting or removed you can still clean up: switch the account's dots off or delete
+them. Turning them on, editing them and changing their watchers wait until you are on the list
+again. To drop the account altogether, leave it: **Remove** it in **Settings › Accounts**.
+
+Asking for access from inside Dots, and approving people there, are coming next. For now you send
+your Dots ID to the admin and they add you.
+
 ## Coming next
 
-- Members of an account and who they are.
-- Roles, so an admin can decide who may do what.
+- A Members page, and asking for access or approving people inside Dots.
 - Invites by Dots ID instead of a join code.
 - Shared workspaces.
 - API keys for an account.

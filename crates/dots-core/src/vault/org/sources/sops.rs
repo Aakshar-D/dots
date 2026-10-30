@@ -1,7 +1,7 @@
 //! A SOPS file encrypted with age (env vault spec §6.1): the file at the join code's
 //! `location`, a local path synced by git or IT, or an `https://` URL. Only SOPS's JSON format
-//! is read. The file holds `{"env": {NAME: value, …}, "policy": "<signed policy text>"}`, and
-//! may hold other keys, which are ignored but covered by the MAC.
+//! is read. The file holds `{"env": {NAME: value, …}, "policy": "<signed policy text>"}` and may
+//! hold `"roster": "<signed member list>"`. Other keys are ignored but covered by the MAC.
 //!
 //! This PC holds its own age identity for the org, and the admin adds its public key as a
 //! recipient. Opening the file follows SOPS 3.13 exactly:
@@ -57,7 +57,7 @@ use zeroize::Zeroizing;
 
 use super::{
     collect_entries, read_json, request_failed, status_failed, Fetched, Field, Source, SourceCreds,
-    SourceError, MAX_ANSWER_BYTES,
+    SourceError, MAX_ANSWER_BYTES, ROSTER_ENTRY,
 };
 use crate::vault::org::SopsSettings;
 use crate::{Error, Result};
@@ -227,6 +227,7 @@ fn open(file: &Node, identity: &x25519::Identity) -> std::result::Result<Fetched
 
     let mut env = Part::Missing;
     let mut policy = Part::Missing;
+    let mut roster = Part::Missing;
     let mut path = Vec::new();
     for (key, node) in top {
         if key == METADATA {
@@ -249,6 +250,12 @@ fn open(file: &Node, identity: &x25519::Identity) -> std::result::Result<Fetched
             }
             ("policy", other) => {
                 policy = match run.walk(other, &mut path)? {
+                    Some(plain) => Part::Found(plain),
+                    None => Part::NotItsShape,
+                }
+            }
+            ("roster", other) => {
+                roster = match run.walk(other, &mut path)? {
                     Some(plain) => Part::Found(plain),
                     None => Part::NotItsShape,
                 }
@@ -276,6 +283,13 @@ fn open(file: &Node, identity: &x25519::Identity) -> std::result::Result<Fetched
     };
     let policy =
         policy.ok_or_else(|| SourceError::Invalid("the file's policy is not text".into()))?;
+    // The roster is optional, but one that is there must be encrypted text like the policy.
+    let roster = match roster {
+        Part::Missing => None,
+        Part::NotItsShape => return Err(roster_not_text()),
+        Part::Found(Plain::Unencrypted) => return Err(not_encrypted(&["roster"])),
+        Part::Found(plain) => Some(plain.into_text().ok_or_else(roster_not_text)?.to_string()),
+    };
     let env = match env {
         Part::Missing => return Err(SourceError::Invalid("the file has no env object".into())),
         Part::NotItsShape => {
@@ -310,11 +324,17 @@ fn open(file: &Node, identity: &x25519::Identity) -> std::result::Result<Fetched
     Ok(Fetched {
         entries: collect_entries(raw)?,
         policy: policy.to_string(),
+        roster,
+        roster_note: None,
     })
 }
 
-/// What the file's `env` or `policy` held: nothing, a value of the wrong shape (`env` must be
-/// an object, `policy` a leaf), or its values, not yet read.
+fn roster_not_text() -> SourceError {
+    SourceError::Invalid(format!("{ROSTER_ENTRY} is not text"))
+}
+
+/// What the file's `env`, `policy` or `roster` held: nothing, a value of the wrong shape (`env`
+/// must be an object, the others a leaf), or its values, not yet read.
 enum Part<T> {
     Missing,
     NotItsShape,

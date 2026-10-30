@@ -124,7 +124,8 @@ function PausedWatcherRow({ item }: { item: PausedWatcher }) {
 }
 
 /// A background run held for Claude usage (usage and limits spec section 5): when it starts,
-/// and **Run anyway**.
+/// and **Run anyway**. One held for a role says why and has no button: it goes when the role
+/// returns (members spec section 6.3).
 function HeldRunRow({ item }: { item: HeldRun }) {
   const qc = useQueryClient();
   const limits = useQuery({ queryKey: keys.limits, queryFn: commands.limitsGet }).data;
@@ -135,9 +136,13 @@ function HeldRunRow({ item }: { item: HeldRun }) {
       for (const queryKey of [keys.inbox, keys.limits]) invalidate(qc, queryKey);
     },
   });
-  const when = item.starts_after
-    ? `starts after ${resetTime(item.starts_after)}`
-    : "waiting for the first run after the reset";
+  const { reason } = item;
+  const role = reason.kind === "role";
+  const when = role
+    ? reason.text
+    : item.starts_after
+      ? `starts after ${resetTime(item.starts_after)}`
+      : "waiting for the first run after the reset";
   return (
     <li
       aria-label={`${item.dot_name} run held`}
@@ -146,7 +151,7 @@ function HeldRunRow({ item }: { item: HeldRun }) {
       <Link to={`/runs/${item.run_id}`} className="min-w-0 flex-1 truncate hover:underline">
         {item.dot_name} · {triggerLabel(item)} · {when}
       </Link>
-      {releasable(item.trigger, limits) && (
+      {!role && releasable(item.trigger, limits) && (
         <Button
           size="sm"
           variant="outline"
@@ -488,7 +493,7 @@ export function InboxScreen() {
       {held.length > 0 && (
         <section aria-labelledby="inbox-held" className="flex flex-col gap-2">
           <h2 id="inbox-held" className="font-semibold">
-            Held for Claude usage
+            Waiting to run
           </h2>
           <ul className="flex flex-col gap-2">
             {held.map((item) => (

@@ -23,10 +23,10 @@ pub use offline::{
     OfflineCopy, Protector, OFFLINE_DIR,
 };
 pub use policy::{
-    parse_policy, AuditTarget, OrgPolicy, PersonalMode, PolicyError, UseRules,
-    DEFAULT_REFRESH_MINUTES,
+    parse_policy, AuditTarget, OrgPolicy, PersonalMode, PolicyError, RosterMode, UseRules,
+    DEFAULT_REFRESH_MINUTES, POLICY_V1, POLICY_VERSION, POLICY_VERSIONS,
 };
-pub use row::OrgRow;
+pub use row::{MemberRow, OrgRow};
 pub use service::{
     JoinPreview, OrgEntry, OrgLookup, OrgStatus, OrgSummary, OrgView, Orgs, SourceFactory,
     KEY_CHANGE, RETRY_AFTER,

@@ -72,6 +72,11 @@ describe("Settings, Accounts", () => {
     };
     for (const org of statuses) {
       const item = await row(org.name);
+      // A removed PC reads the core's refusal once, not the status that says the same.
+      if (org.membership === "removed") {
+        expect(within(item).getByText(org.not_member_text!)).toBeVisible();
+        continue;
+      }
       const status = within(item).getByText(org.status_text);
       const tone = tones[org.status];
       for (const other of ["text-needs", "text-destructive"]) {
@@ -466,5 +471,78 @@ describe("Settings, Accounts", () => {
     list.set([revoked]);
     act(() => backend.emit("runtime", { type: "org_updated", org_id: "acme-eng" }));
     expect(await screen.findByText(revoked.status_text)).toBeVisible();
+  });
+});
+
+describe("Settings, Accounts, membership", () => {
+  const named = (over: Partial<OrgSummary>): OrgSummary =>
+    ({ ...acme, ...over }) as OrgSummary;
+  const WAITING = "Acme Engineering: you aren't on its member list yet. Send your Dots ID to an Admin.";
+  const CHANGED = "Acme Engineering: this PC's Dots ID changed. Send the new one to an Admin.";
+  const REMOVED = "Acme Engineering: you were removed from it.";
+
+  it("shows the role, and the size and number of the member list", async () => {
+    orgs([named({ membership: "active", role: "viewer", member_count: 4, roster_seq: 3 })]);
+    renderApp("/settings");
+    const r = await row(acme.name);
+    expect(within(r).getByText("Viewer")).toBeVisible();
+    expect(within(r).getByText("4 members · list #3")).toBeVisible();
+  });
+
+  it("says once that a waiting PC is not on the list, with a button that copies its Dots ID", async () => {
+    orgs([
+      named({ membership: "waiting", role: null, status_text: "connected", not_member_text: WAITING }),
+    ]);
+    backend.on("identity_get", () => sample.identity);
+    const { user } = renderApp("/settings");
+    const r = await row(acme.name);
+    expect(within(r).getByText(WAITING)).toBeVisible();
+    expect(within(r).queryByText("connected")).toBeNull();
+    await user.click(await within(r).findByRole("button", { name: "Copy my Dots ID" }));
+    expect(await navigator.clipboard.readText()).toBe(sample.identity.public_key);
+  });
+
+  it("says once that the Dots ID changed, with the reason the core adds", async () => {
+    orgs([
+      named({
+        membership: "waiting",
+        role: null,
+        status_text: `${CHANGED} (offline)`,
+        not_member_text: CHANGED,
+      }),
+    ]);
+    renderApp("/settings");
+    const r = await row(acme.name);
+    expect(within(r).getAllByText(/Dots ID changed/)).toHaveLength(1);
+    expect(within(r).getByText(`${CHANGED} (offline)`)).toBeVisible();
+  });
+
+  it("says once that the PC was removed", async () => {
+    orgs([
+      named({
+        membership: "removed",
+        role: null,
+        status_text: "Removed from Acme Engineering",
+        not_member_text: REMOVED,
+      }),
+    ]);
+    renderApp("/settings");
+    const r = await row(acme.name);
+    expect(within(r).getByText(REMOVED)).toBeVisible();
+    expect(within(r).queryByText("Removed from Acme Engineering")).toBeNull();
+    expect(within(r).queryByRole("button", { name: "Copy my Dots ID" })).toBeNull();
+  });
+
+  it("shows why the last member list was not accepted once", async () => {
+    const error = "the list is not signed by an admin";
+    orgs([
+      named({
+        roster_error: error,
+        status_text: `connected; member list not accepted: ${error}`,
+      }),
+    ]);
+    renderApp("/settings");
+    const r = await row(acme.name);
+    expect(within(r).getAllByText(new RegExp(error))).toHaveLength(1);
   });
 });

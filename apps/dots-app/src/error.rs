@@ -28,6 +28,9 @@ macro_rules! kinds {
 kinds! {
     NotFound,
     Invalid,
+    /// This PC's role in an account does not allow it, or it is not on the account's member
+    /// list (members spec §6.3); the message says which.
+    NotAllowed,
     Conflict,
     Internal,
     /// The user declined a native confirmation and nothing was changed.
@@ -55,6 +58,7 @@ impl From<dots_core::Error> for CmdError {
         let kind = match &e {
             dots_core::Error::NotFound(_) => CmdErrorKind::NotFound,
             dots_core::Error::Invalid(_) => CmdErrorKind::Invalid,
+            dots_core::Error::NotAllowed(_) => CmdErrorKind::NotAllowed,
             dots_core::Error::Conflict(_) => CmdErrorKind::Conflict,
             _ => CmdErrorKind::Internal,
         };
@@ -62,6 +66,7 @@ impl From<dots_core::Error> for CmdError {
         let message = match e {
             dots_core::Error::NotFound(m)
             | dots_core::Error::Invalid(m)
+            | dots_core::Error::NotAllowed(m)
             | dots_core::Error::Conflict(m) => m,
             other => other.to_string(),
         };
@@ -92,6 +97,11 @@ mod tests {
                 "bad cron",
             ),
             (
+                Error::NotAllowed("Acme: a Viewer can't run dots. Ask an Admin or Owner.".into()),
+                CmdErrorKind::NotAllowed,
+                "Acme: a Viewer can't run dots. Ask an Admin or Owner.",
+            ),
+            (
                 Error::Conflict("busy".into()),
                 CmdErrorKind::Conflict,
                 "busy",
@@ -109,6 +119,7 @@ mod tests {
         match kind {
             CmdErrorKind::NotFound => Error::NotFound("x".into()).into(),
             CmdErrorKind::Invalid => Error::Invalid("x".into()).into(),
+            CmdErrorKind::NotAllowed => Error::NotAllowed("x".into()).into(),
             CmdErrorKind::Conflict => Error::Conflict("x".into()).into(),
             CmdErrorKind::Internal => CmdError::internal("x"),
             CmdErrorKind::Cancelled => CmdError::cancelled("x"),

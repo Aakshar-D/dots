@@ -202,14 +202,74 @@ impl Runner {
     }
 
     /// Every queued run as the limits see it, oldest first.
+    /// A run held for a role is not among them: it is no usage hold (members spec section 6.3).
     pub async fn queued_runs(&self) -> Result<Vec<QueuedRun>> {
-        Ok(self
-            .store
-            .queued_with_engine(false)
-            .await?
-            .into_iter()
-            .map(|(run, engine)| queued_run(&run, engine))
-            .collect())
+        let mut queued = Vec::new();
+        for (run, engine) in self.store.queued_with_engine(false).await? {
+            if self.role_hold(&run).await?.is_none() {
+                queued.push(queued_run(&run, engine));
+            }
+        }
+        Ok(queued)
+    }
+
+    /// Why a queued background run of an account's dot may not start now: its account and the
+    /// words for the Inbox, when this PC's access to the account does not let it run dots.
+    /// Manual and chat runs are refused when the person asks, so none is held here. `None` when
+    /// the run may start, or is no run of an account's dot.
+    pub async fn role_hold(&self, run: &Run) -> Result<Option<(String, String)>> {
+        if !is_background(run.trigger) {
+            return Ok(None);
+        }
+        let dot = match self.store.get_dot(&run.dot_id).await {
+            Ok(dot) => dot,
+            Err(Error::NotFound(_)) => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        let Some(org_id) = dot.org_id.as_deref() else {
+            return Ok(None);
+        };
+        let orgs = self.vault.get().and_then(|v| v.orgs());
+        let access = crate::accounts::access(orgs, Some(org_id));
+        if access.allows(crate::accounts::Permission::RunDots) {
+            return Ok(None);
+        }
+        let account = match orgs {
+            Some(orgs) => orgs.summary(org_id).await.map(|s| s.name),
+            None => None,
+        }
+        .unwrap_or_else(|| org_id.to_string());
+        let text = match access {
+            crate::accounts::Access::Role(_) => {
+                format!("{account}: your role no longer allows running dots")
+            }
+            // Waiting, changed Dots ID or removed: the refusal says which.
+            _ => match crate::accounts::require(
+                orgs,
+                Some(org_id),
+                crate::accounts::Permission::RunDots,
+            )
+            .await
+            {
+                Err(Error::NotAllowed(text)) => text,
+                _ => format!("{account}: your role no longer allows running dots"),
+            },
+        };
+        Ok(Some((account, text)))
+    }
+
+    /// `Ok` when this PC's access to the account of `dot` lets it run dots, otherwise the
+    /// refusal naming the role, or why this PC is not on the member list (members spec §6.3).
+    /// For a trigger that would queue runs to fire later, such as a webhook: it is refused
+    /// when it is called instead.
+    pub async fn require_run(&self, dot: &Dot) -> Result<()> {
+        let orgs = self.vault.get().and_then(|v| v.orgs());
+        crate::accounts::require(
+            orgs,
+            dot.org_id.as_deref(),
+            crate::accounts::Permission::RunDots,
+        )
+        .await
     }
 
     /// How many background Claude runs the runner holds now.
@@ -537,6 +597,11 @@ impl Runner {
         }
         for (run, engine) in self.store.queued_with_engine(true).await? {
             let background_claude = engine == EngineKind::Claude && is_background(run.trigger);
+            // A role that may not run dots keeps a background run queued, unstarted, until the
+            // role returns (members spec section 6.3); the next pass looks again.
+            if self.role_hold(&run).await?.is_some() {
+                continue;
+            }
             if let Some(limits) = &limits {
                 if limits.admit(&queued_run(&run, engine), running_background) != Admit::Go {
                     continue;

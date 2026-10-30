@@ -3,7 +3,7 @@
 //! errors `research.md` §1 gives. It is programmed through `FakeOpenBao` and records every
 //! request it sees. It stops when dropped.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -17,6 +17,9 @@ use serde_json::{json, Value};
 /// What the next KV reads answer instead of the data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Failure {
+    /// The read answers as usual: queued before a failure, it lets that failure land on a later
+    /// read of the same fetch.
+    Pass,
     /// This status, with `{"errors":[…]}`. A 3xx also gets a `Location` to `/v1/elsewhere`.
     Status(u16),
     /// A 200 whose body is not JSON.
@@ -57,6 +60,9 @@ struct Fake {
     /// Users by `(auth mount, username)`.
     users: HashMap<(String, String), User>,
     failures: VecDeque<Failure>,
+    /// KV paths, `<mount>/data/<path>`, every read of which is refused (403), as an ACL that
+    /// does not grant them answers.
+    denied: HashSet<String>,
     refuse_renewals: bool,
     /// What every login answers instead, as a status and one `errors` text.
     login_error: Option<(u16, String)>,
@@ -122,9 +128,24 @@ impl FakeOpenBao {
         );
     }
 
+    /// Writes the org's signed roster text, as key `DOTS_ROSTER` of `<mount>/<path>/roster`.
+    pub fn put_roster(&self, mount: &str, path: &str, signed: &str) {
+        self.put(
+            mount,
+            &format!("{path}/roster"),
+            json!({ "DOTS_ROSTER": signed }),
+        );
+    }
+
     /// Deletes the KV v2 secret `<mount>/<path>`: reading it is a 404.
     pub fn remove(&self, mount: &str, path: &str) {
         self.fake().kv.remove(&format!("{mount}/data/{path}"));
+    }
+
+    /// Refuses every read of `<mount>/data/<path>` with a 403, as a token whose ACL does not
+    /// grant the path is refused.
+    pub fn deny(&self, mount: &str, path: &str) {
+        self.fake().denied.insert(format!("{mount}/data/{path}"));
     }
 
     /// Accepts `token` from now on. `lookup-self` says whether it is `renewable`.
@@ -346,7 +367,7 @@ async fn handle(
         Some(Failure::Status(403)) => return denied(),
         Some(Failure::Status(503)) => return errors(503, &["Vault is sealed"]),
         Some(Failure::Status(code)) => return errors(code, &["internal error"]),
-        None => {}
+        Some(Failure::Pass) | None => {}
     }
 
     let mut fake = state.lock().unwrap();
@@ -395,6 +416,7 @@ async fn handle(
             Value::Null,
             auth_answer(token.as_deref().unwrap(), "", 3600),
         ),
+        (Method::GET, kv) if fake.denied.contains(kv) => denied(),
         (Method::GET, kv) => match fake.kv.get(kv) {
             Some(data) => envelope(
                 json!({

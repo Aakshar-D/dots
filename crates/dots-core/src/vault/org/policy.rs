@@ -21,8 +21,26 @@ impl Default for PersonalMode {
     }
 }
 
-/// The only policy version this Dots reads.
-pub const POLICY_VERSION: u32 = 1;
+// Whether an org keeps a signed member list (members spec §6.1). `Required` makes the roster
+// the gate for who may use the org's entries.
+str_enum!(RosterMode {
+    Off => "off",
+    Required => "required",
+});
+
+impl Default for RosterMode {
+    /// No member list unless the admin turns it on.
+    fn default() -> Self {
+        Self::Off
+    }
+}
+
+/// The newest policy version this Dots reads, and the one a roster policy is written as.
+pub const POLICY_VERSION: u32 = 2;
+/// The first policy version, with no member list. `policy new` still writes it.
+pub const POLICY_V1: u32 = 1;
+/// Every policy version this Dots reads.
+pub const POLICY_VERSIONS: [u32; 2] = [POLICY_V1, POLICY_VERSION];
 
 const FIELDS: &[&str] = &[
     "v",
@@ -36,6 +54,9 @@ const FIELDS: &[&str] = &[
     "offline_hours",
     "audit",
 ];
+
+/// The fields only a v2 policy may carry.
+const FIELDS_V2: &[&str] = &["roster", "admins"];
 
 /// Why a policy, or the signed text that carries it, was refused. The text names what failed in
 /// plain words, for "Acme Engineering: policy invalid: <error>".
@@ -109,6 +130,10 @@ pub struct OrgPolicy {
     pub refresh_minutes: u32,
     pub offline_hours: u32,
     pub audit: Option<AuditTarget>,
+    /// Whether the org keeps a signed member list; always `Off` for a v1 policy.
+    pub roster: RosterMode,
+    /// The Dots IDs (minisign public keys, base64) of the org's admins; empty for a v1 policy.
+    pub admins: Vec<String>,
     /// `issued_at` as an instant, so `+01:00` and `Z` spellings compare right.
     issued: DateTime<Utc>,
 }
@@ -116,7 +141,7 @@ pub struct OrgPolicy {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawPolicy {
-    /// Checked to be 1 before this struct is parsed.
+    /// Checked to be 1 or 2 before this struct is parsed.
     #[serde(rename = "v")]
     _v: u64,
     org_id: String,
@@ -135,6 +160,10 @@ struct RawPolicy {
     offline_hours: u32,
     #[serde(default)]
     audit: Option<AuditTarget>,
+    #[serde(default)]
+    roster: RosterMode,
+    #[serde(default)]
+    admins: Vec<String>,
 }
 
 /// `refresh_minutes` when the policy leaves it out. The org timers use it too while an org
@@ -157,16 +186,19 @@ pub fn parse_policy(text: &str) -> Result<OrgPolicy, PolicyError> {
     let Value::Object(fields) = &value else {
         return Err(invalid("the policy must be a JSON object"));
     };
-    match fields.get("v") {
+    let version = match fields.get("v") {
         None => return Err(invalid("missing field 'v'")),
-        Some(v) if v.as_u64() == Some(u64::from(POLICY_VERSION)) => {}
-        Some(v) => {
-            return Err(invalid(format!(
-                "policy version {v} is not supported; this Dots reads version {POLICY_VERSION}"
-            )))
-        }
-    }
-    if let Some(unknown) = fields.keys().find(|k| !FIELDS.contains(&k.as_str())) {
+        Some(v) => match v.as_u64().and_then(|n| u32::try_from(n).ok()) {
+            Some(n) if POLICY_VERSIONS.contains(&n) => n,
+            _ => {
+                return Err(invalid(format!(
+                    "policy version {v} is not supported; this Dots reads versions 1 and 2"
+                )))
+            }
+        },
+    };
+    let allowed = |k: &str| FIELDS.contains(&k) || (version >= 2 && FIELDS_V2.contains(&k));
+    if let Some(unknown) = fields.keys().find(|k| !allowed(k.as_str())) {
         return Err(invalid(format!("unknown field '{unknown}'")));
     }
     // Parsed again from the text, not the `Value`, so a field given twice is refused.
@@ -199,6 +231,11 @@ pub fn parse_policy(text: &str) -> Result<OrgPolicy, PolicyError> {
     if let Some(audit) = &raw.audit {
         check_audit(audit)?;
     }
+    for (i, admin) in raw.admins.iter().enumerate() {
+        if minisign_verify::PublicKey::from_base64(admin).is_err() {
+            return Err(invalid(format!("admins[{i}] is not a Dots ID")));
+        }
+    }
 
     Ok(OrgPolicy {
         org_id: raw.org_id,
@@ -210,6 +247,8 @@ pub fn parse_policy(text: &str) -> Result<OrgPolicy, PolicyError> {
         refresh_minutes: raw.refresh_minutes,
         offline_hours: raw.offline_hours,
         audit: raw.audit,
+        roster: raw.roster,
+        admins: raw.admins,
         issued,
     })
 }
@@ -297,7 +336,7 @@ impl OrgPolicy {
                 audit.endpoint, audit.token_entry
             ),
         };
-        vec![
+        let mut lines = vec![
             format!("org: {}", self.org_id),
             format!("issued at: {}", self.issued_at),
             plain,
@@ -307,7 +346,14 @@ impl OrgPolicy {
             format!("refresh: every {}", count(self.refresh_minutes, "minute")),
             offline,
             audit,
-        ]
+        ];
+        if self.roster == RosterMode::Required {
+            lines.push(format!(
+                "Member list: required, {} admin(s)",
+                self.admins.len()
+            ));
+        }
+        lines
     }
 }
 

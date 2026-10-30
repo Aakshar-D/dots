@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
+use crate::accounts::Permission;
 use crate::context::{self, Document};
 use crate::events::{Bus, RuntimeEvent};
 use crate::kit::{self, InstalledPlugin, PluginInfo};
@@ -840,13 +841,15 @@ impl LibraryService {
     /// Records `origin` as confirmed for the http MCP server `id` in `scope`
     /// (`Store::add_confirmed_origin`), after the person allowed it: the server form's
     /// confirmation, or the one for an org's scope. A run of a dot in that scope then starts the
-    /// server where its URL reaches that origin.
+    /// server where its URL reaches that origin. In an account, the role must allow adding MCP
+    /// servers (members spec §6.3).
     pub async fn add_confirmed_origin(
         &self,
         id: &str,
         scope: &DotScope,
         origin: &str,
     ) -> Result<()> {
+        self.require_mcp(scope).await?;
         self.store
             .add_confirmed_origin(id, scope.key(), origin)
             .await?;
@@ -855,13 +858,15 @@ impl LibraryService {
     }
 
     /// Accepts the list last seen in `scope` of the MCP server `id`, if its fingerprint is
-    /// still `fingerprint` (`library_accept`); a newer list is a `Conflict`.
+    /// still `fingerprint` (`library_accept`); a newer list is a `Conflict`. In an account, the
+    /// role must allow adding MCP servers (members spec §6.3).
     pub async fn accept(
         &self,
         id: &str,
         scope: &DotScope,
         fingerprint: &str,
     ) -> Result<McpCatalog> {
+        self.require_mcp(scope).await?;
         self.server(id).await?;
         let catalog = self
             .store
@@ -869,6 +874,15 @@ impl LibraryService {
             .await?;
         publish(&self.bus, id);
         Ok(catalog)
+    }
+
+    /// `Ok` when this PC may add MCP servers in `scope`: always in Personal.
+    async fn require_mcp(&self, scope: &DotScope) -> Result<()> {
+        let org_id = match scope {
+            DotScope::Personal => None,
+            DotScope::Org(org_id) => Some(org_id.as_str()),
+        };
+        crate::accounts::require(self.vault.orgs(), org_id, Permission::AddMcp).await
     }
 
     /// Saves a drafted `SKILL.md` as a new skill (`skill_create`, skill creator spec §6): to

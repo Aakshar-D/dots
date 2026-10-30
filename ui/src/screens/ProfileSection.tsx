@@ -1,14 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Copy } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { commands } from "@/api/commands";
+import { CopyDotsIdButton } from "@/components/CopyDotsIdButton";
 import { ErrorNote } from "@/components/ErrorNote";
 import { Field } from "@/components/Field";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { notifyError } from "@/lib/notify";
 import { invalidate, keys } from "@/lib/query";
 
 /// Settings → Profile (accounts spec §5): this install's Dots ID, which the person shares to be
@@ -44,18 +43,7 @@ export function ProfileSection() {
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-sm text-muted-foreground">Dots ID</span>
           <code className="font-mono text-sm">{saved.fingerprint}</code>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() =>
-              navigator.clipboard
-                .writeText(saved.public_key)
-                .then(() => toast.success("Copied your Dots ID"), notifyError)
-            }
-          >
-            <Copy aria-hidden /> Copy my Dots ID
-          </Button>
+          <CopyDotsIdButton />
         </div>
       )}
       <form

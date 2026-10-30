@@ -296,7 +296,7 @@ Every value must be text. A key that is not a variable name is skipped. Two name
 in case make the fetch invalid, since Dots compares names without regard to case. `DOTS_POLICY`
 is never an entry.
 
-**A read-only ACL policy.** Each person needs `read` on the two paths, and nothing else. In KV v2
+**A read-only ACL policy.** Each person needs `read` on these paths, and nothing else. In KV v2
 the API path has `data/` after the mount. The token must also keep the `default` policy, since
 Dots calls `auth/token/lookup-self` and `auth/token/renew-self`; or add those two paths to this
 policy. A token made with `-no-default-policy` stops renewing and is then refused, which wipes the
@@ -306,8 +306,14 @@ copy:
 bao policy write dots-acme - <<'EOF'
 path "secret/data/dots/env"    { capabilities = ["read"] }
 path "secret/data/dots/policy" { capabilities = ["read"] }
+path "secret/data/dots/roster" { capabilities = ["read"] }
 EOF
 ```
+
+The `roster` path holds the member list (section 10). A token without it still works for an org
+without a member list: Dots treats a refused read of `roster` as "no member list". Under a policy
+that requires one, the account then waits, and shows "can't read DOTS_ROSTER at
+secret/dots/roster (HTTP 403)" until you add the path.
 
 **Signing in.** Give each person their own credential, so that you can cut one person off:
 
@@ -702,3 +708,124 @@ If you change a value that forms a server's host, each person confirms the new o
   the same Windows user, a person who extracts a value they were granted, or a granted MCP server
   or shell that sends a value elsewhere. Revoking access at the source, rotating values, and the
   source's own audit log are your controls there.
+
+## 10. Accounts with a member list
+
+A plain org (policy v1) lets anyone who can read the source join, and every member counts as a
+Member. An account with a **member list** (the roster) adds names, roles and a way to remove
+someone. Request codes, Request access and approving people inside Dots come in the next release;
+for now you edit the list with `dots-admin` and sign it.
+
+### The root key and admin keys
+
+- The **root key** is the policy key from section 2 (`policy.key`). It is the Owner's key. Only it
+  can change the policy, and it can always sign the member list.
+- An **admin key** is the Dots ID of a person you trust to sign the member list. It is listed in
+  the policy's `admins`. An admin can sign new lists, but can't change the policy, the root key or
+  `admins`, and can't add, change or remove an Owner: a list signed by an admin must keep the
+  Owner entries of the list each Dots accepted last, word for word, or it is refused ("this
+  member list changes the Owners, which only the owner's key may sign; an Admin signed it").
+  Sign a list that changes Owners with the root key. Keep the root key off everyone else's PC.
+
+Add or drop an admin in the policy, then sign the policy again (section 3):
+
+```bash
+dots-admin policy admins add policy.json <dots-id>
+dots-admin policy admins remove policy.json <dots-id>
+```
+
+Dropping an admin does not undo lists they already signed: each Dots accepted those when it
+fetched them, and keeps them. It refuses new lists signed by that admin.
+
+### Making and signing the list
+
+Start a new org's policy as v2 with the list required (to move an existing org, see below):
+
+```bash
+dots-admin policy new --org-id acme-eng --roster --admin <asha's dots-id> --out policy.json
+dots-admin roster new --org-id acme-eng --owner-name "Asha Rao" --owner-email asha@acme.com \
+    --owner-key <asha's dots-id> --out roster.json
+dots-admin roster add roster.json --name "Ben Li" --email ben@acme.com --key <ben's dots-id> --role member
+dots-admin roster set-role roster.json ben@acme.com admin
+dots-admin roster check roster.json --org-id acme-eng
+dots-admin roster sign roster.json --key keys/policy.key --out roster.signed.json
+```
+
+- Roles are `owner`, `admin`, `member` and `viewer`. The list needs at least one owner.
+- The Dots ID is what the person copies with **Settings › Profile › Copy my Dots ID**.
+- `roster add` with an email that is already listed adds the key as that person's **second PC**.
+- `roster sign` signs with the root key, raises `seq` by one, sets `issued_at`, writes both back
+  into `roster.json` and prints the signed text. Keep `roster.json`: it is the file you edit next
+  time. Each Dots refuses a list whose `seq` is not higher than the last it accepted.
+- `roster verify roster.signed.json --pub keys/policy.pub --org-id acme-eng` (add `--admin
+  <dots-id>` for an admin-signed list) shows what a Dots client would accept.
+
+### Where to store DOTS_ROSTER
+
+Store the signed text next to `DOTS_POLICY`:
+
+- **OpenBao or Vault**: key `DOTS_ROSTER` at `<mount>/data/<path>/roster`, a second secret beside
+  the policy's.
+- **Infisical**: secret `DOTS_ROSTER` in `<secret path>/policy`, the folder that holds
+  `DOTS_POLICY`. It is not shown as an entry.
+- **SOPS**: a top-level field `roster` in the file. Encrypt it like `policy`: Dots refuses a file
+  whose `roster` is in clear text.
+
+Give people read access to it as you did for the policy. Keep write access to the Owner and admins.
+
+### Moving a legacy org to a member list
+
+Do it in this order so nobody is locked out by surprise:
+
+1. Make sure every person has updated Dots first. An older Dots can't read a v2 policy.
+2. Make `roster.json` with every current member (ask each for their Dots ID) and sign it. Store
+   it as `DOTS_ROSTER`. Policy v1 ignores it, so nothing changes yet. On OpenBao or Vault, add the
+   `roster` path to each person's ACL policy (section 4).
+3. Only then make a v2 policy with `"roster": "required"` (`policy new --roster`, or copy your v1
+   fields into a v2 file), sign it and store it as `DOTS_POLICY`. A v1 policy that has `roster`
+   or `admins` is refused.
+
+A PC that is not on the list when v2 starts shows **Waiting** with **Copy my Dots ID**. Nothing is
+wiped. Ask the person for their ID, run `roster add`, `roster sign`, store the new list, and press
+**Refresh**.
+
+If someone's saved key was lost, their Dots ID changed. Their PC waits with "this PC's Dots ID
+changed. Send the new one to an Admin." Run `roster add` with the same email and the new key (the
+old key can go with `roster remove --key`), then sign and store.
+
+If you change the policy key (**Update** with a new join code), sign the list again so `seq` goes
+up by one. The same list at the same `seq` is refused.
+
+### Removing someone
+
+```bash
+dots-admin roster remove roster.json ben@acme.com
+dots-admin roster sign roster.json --key keys/policy.key --out roster.signed.json
+```
+
+Store the new list. At the person's next fetch their account shows **Removed** and Dots wipes that
+account's secrets on that PC. If they come back, they join again and wait for you to add them.
+
+The list only stops Dots honouring them. **Also revoke their credential at the source**, as in
+section 6 (Cutting someone off). Without that, someone running a changed Dots can still read the
+source.
+
+### What this does and does not protect
+
+Protected against:
+
+- A member editing the member list or the policy on their own PC: both are signed.
+- An old list being replayed: each Dots refuses a lower `seq`.
+- A removed member using the account's secrets after their next refresh: the saved copy is wiped.
+- A stolen admin PC promoting others to admin: only the root key changes `admins`.
+
+Dots's local API (the webhook and MCP port on this PC) is not yet guarded by a Host check and a
+Bearer key for everything it serves. That protection arrives with API keys in a later release
+(phase 5).
+
+Not protected against:
+
+- A person patching their own Dots to ignore their role. Roles stop mistakes and honest use. The
+  real cut-off is revoking the source credential, the same trade-off as for the vault.
+- A removed person's PC that stays offline. It keeps its saved copy until `offline_hours` run out.
+- A stolen PC while its Windows login is unlocked.

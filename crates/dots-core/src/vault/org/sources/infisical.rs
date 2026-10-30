@@ -21,8 +21,8 @@ use tokio::sync::Mutex;
 use zeroize::Zeroizing;
 
 use super::{
-    collect_entries, endpoint, is_dot_segment, read_json, request_failed, status_failed, Fetched,
-    Field, Source, SourceCreds, SourceError, POLICY_ENTRY,
+    collect_entries, endpoint, is_dot_segment, read_json, request_failed, roster_text,
+    status_failed, Fetched, Field, Source, SourceCreds, SourceError, POLICY_ENTRY, ROSTER_ENTRY,
 };
 use crate::vault::entries::check_variable_name;
 use crate::vault::org::InfisicalSettings;
@@ -201,7 +201,7 @@ impl Infisical {
         })
     }
 
-    /// Reads the entries, then the policy, with `token`.
+    /// Reads the entries, then the policy and the roster if there is one, with `token`.
     async fn read(&self, reads: &Reads, token: &str) -> Result<Fetched, SourceError> {
         let Some(secrets) = self.list(&reads.env, &reads.env_name, token).await? else {
             return Err(SourceError::Invalid(format!(
@@ -211,12 +211,29 @@ impl Infisical {
         };
         let entries = shared_entries(secrets, &reads.env_name)?;
 
-        let policy = self
+        // The roster sits beside the policy, so one listing holds both.
+        let mut beside = self
             .list(&reads.policy, &reads.policy_name, token)
             .await?
-            .unwrap_or_default()
+            .unwrap_or_default();
+        beside.retain(|s| !s.is_personal());
+        let roster = match beside
+            .iter()
+            .position(|s| s.key.as_deref() == Some(ROSTER_ENTRY))
+        {
+            None => None,
+            Some(at) => {
+                let field = match (beside[at].hidden, beside[at].value.take()) {
+                    (Some(true), _) => return Err(hidden(ROSTER_ENTRY)),
+                    (_, Some(field)) => field,
+                    (_, None) => return Err(no_value(ROSTER_ENTRY)),
+                };
+                Some(roster_text(field)?)
+            }
+        };
+        let policy = beside
             .into_iter()
-            .find(|s| !s.is_personal() && s.key.as_deref() == Some(POLICY_ENTRY))
+            .find(|s| s.key.as_deref() == Some(POLICY_ENTRY))
             .ok_or_else(|| {
                 SourceError::Invalid(format!("no {POLICY_ENTRY} at {}", reads.policy_name))
             })?;
@@ -229,6 +246,8 @@ impl Infisical {
         Ok(Fetched {
             entries,
             policy: std::mem::take(&mut *policy),
+            roster,
+            roster_note: None,
         })
     }
 
@@ -377,9 +396,11 @@ fn shared_entries(
     collect_entries(raw)
 }
 
-/// Whether `collect_entries` skips `name`: the policy key, or not a variable name.
+/// Whether `collect_entries` skips `name`: the policy or roster key, or not a variable name.
 fn skipped(name: &str) -> bool {
-    name.eq_ignore_ascii_case(POLICY_ENTRY) || check_variable_name(name).is_err()
+    name.eq_ignore_ascii_case(POLICY_ENTRY)
+        || name.eq_ignore_ascii_case(ROSTER_ENTRY)
+        || check_variable_name(name).is_err()
 }
 
 fn hidden(name: &str) -> SourceError {

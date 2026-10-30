@@ -785,3 +785,23 @@ describe("the line under a scheduled run's trigger", () => {
     expect(screen.queryByText(/^Scheduled for|^Retry/)).toBeNull();
   });
 });
+
+describe("the approval buttons for a Viewer", () => {
+  it("are off with the core's reason", async () => {
+    const waiting: Run = { ...folderRun, status: "awaiting_approval", ended_at: null };
+    thread([waiting], [], [sample.approval]);
+    backend.on("approval_rule_candidates", () => sample.rules);
+    backend.on("get_run", () => waiting);
+    backend.on("get_dot", () => ({ ...sample.dot, org_id: "acme-eng" }));
+    const org = { ...sample.orgs[0], id: "acme-eng", membership: "active", role: "viewer" } as const;
+    backend.on("org_list", () => [org]);
+    renderApp(`/runs/${run.id}`);
+    const title = "Acme Engineering: a Viewer can't answer approvals. Ask an Admin or Owner.";
+    const approve = await screen.findByRole("button", { name: "Approve" });
+    await waitFor(() => expect(approve).toBeDisabled());
+    expect(approve).toHaveAttribute("title", title);
+    const deny = screen.getByRole("button", { name: "Deny" });
+    expect(deny).toBeDisabled();
+    expect(deny).toHaveAttribute("title", title);
+  });
+});

@@ -860,3 +860,377 @@ fn the_binary_exits_non_zero_on_a_bad_policy() {
         "dots-admin: policy invalid: unknown field 'foo'"
     );
 }
+
+// ---- member list (roster) and policy admins -------------------------------------------
+
+/// A fresh Dots ID: the public key of a new unprotected pair.
+fn dots_id() -> String {
+    keys().2
+}
+
+/// A new roster for `acme-eng` in `dir`, owned by `owner@acme.test` with `owner_key`.
+fn new_roster(dir: &Path, owner_key: &str) -> String {
+    let file = path(dir, "roster.json");
+    ok(&[
+        "roster",
+        "new",
+        "--org-id",
+        "acme-eng",
+        "--owner-name",
+        "Olive Owner",
+        "--owner-email",
+        "owner@acme.test",
+        "--owner-key",
+        owner_key,
+        "--out",
+        &file,
+    ]);
+    file
+}
+
+fn read_json(file: &str) -> Value {
+    serde_json::from_str(&std::fs::read_to_string(file).unwrap()).unwrap()
+}
+
+#[test]
+fn roster_new_add_sign_verify_round_trip() {
+    let (dir, secret, public) = keys();
+    let owner_key = dots_id();
+    let file = new_roster(dir.path(), &owner_key);
+    let new = read_json(&file);
+    assert_eq!(new["seq"], 0);
+    assert_eq!(new["workspaces"][0]["id"], "default");
+    assert_eq!(new["members"][0]["role"], "owner");
+    assert_eq!(new["members"][0]["workspaces"]["default"], "admin");
+    assert!(std::fs::read_to_string(&file).unwrap().ends_with("}\n"));
+
+    let bob_key = dots_id();
+    let added = ok(&[
+        "roster",
+        "add",
+        &file,
+        "--name",
+        "Bob",
+        "--email",
+        "bob@acme.test",
+        "--key",
+        &bob_key,
+        "--role",
+        "member",
+    ]);
+    assert!(
+        added.out.contains(&key_fingerprint(&bob_key).unwrap()),
+        "{}",
+        added.out
+    );
+    ok(&["roster", "check", &file, "--org-id", "acme-eng"]);
+
+    let key_file = path(dir.path(), "root.key");
+    std::fs::write(&key_file, secret).unwrap();
+    let signed_file = path(dir.path(), "signed.json");
+    run_with(
+        &[
+            "roster",
+            "sign",
+            &file,
+            "--key",
+            &key_file,
+            "--out",
+            &signed_file,
+        ],
+        None,
+    )
+    .result
+    .unwrap();
+    let pub_file = path(dir.path(), "policy.pub");
+    std::fs::write(&pub_file, &public).unwrap();
+    let verified = ok(&[
+        "roster",
+        "verify",
+        &signed_file,
+        "--pub",
+        &pub_file,
+        "--org-id",
+        "acme-eng",
+    ]);
+    assert!(verified.out.starts_with("ok"), "{}", verified.out);
+    // The signed text is what Dots reads.
+    let text = std::fs::read_to_string(&signed_file).unwrap();
+    let accepted =
+        dots_core::accounts::roster::verify_roster(text.trim(), &public, &[], "acme-eng").unwrap();
+    assert_eq!(accepted.roster.seq, 1);
+    assert_eq!(accepted.roster.members.len(), 2);
+
+    // Signed by another key: refused, unless that key is named as an admin.
+    let (_d2, other_secret, other_public) = keys();
+    let other_key = path(dir.path(), "other.key");
+    std::fs::write(&other_key, other_secret).unwrap();
+    let by_admin = path(dir.path(), "by-admin.json");
+    run_with(
+        &[
+            "roster", "sign", &file, "--key", &other_key, "--out", &by_admin,
+        ],
+        None,
+    )
+    .result
+    .unwrap();
+    let refused = failure(&[
+        "roster", "verify", &by_admin, "--pub", &pub_file, "--org-id", "acme-eng",
+    ]);
+    assert!(
+        refused
+            .to_string()
+            .contains("not signed by the owner or an admin"),
+        "{refused}"
+    );
+    ok(&[
+        "roster",
+        "verify",
+        &by_admin,
+        "--pub",
+        &pub_file,
+        "--admin",
+        &other_public,
+        "--org-id",
+        "acme-eng",
+    ]);
+}
+
+#[test]
+fn roster_sign_bumps_seq() {
+    let (dir, secret, _) = keys();
+    let file = new_roster(dir.path(), &dots_id());
+    let key_file = path(dir.path(), "root.key");
+    std::fs::write(&key_file, secret).unwrap();
+    for expected in [1, 2] {
+        let ran = run_with(&["roster", "sign", &file, "--key", &key_file], None);
+        ran.result.unwrap();
+        let envelope: Value = serde_json::from_str(ran.out.trim()).unwrap();
+        let roster: Value = serde_json::from_str(envelope["roster"].as_str().unwrap()).unwrap();
+        assert_eq!(roster["seq"], expected);
+        assert_eq!(
+            read_json(&file)["seq"],
+            expected,
+            "the file keeps the new seq"
+        );
+        assert!(ran.err.contains("DOTS_ROSTER"), "{}", ran.err);
+    }
+}
+
+#[test]
+fn add_same_email_adds_key() {
+    let (dir, _, _) = keys();
+    let file = new_roster(dir.path(), &dots_id());
+    let second_pc = dots_id();
+    ok(&[
+        "roster",
+        "add",
+        &file,
+        "--name",
+        "Olive",
+        "--email",
+        "owner@acme.test",
+        "--key",
+        &second_pc,
+        "--role",
+        "owner",
+    ]);
+    let roster = read_json(&file);
+    assert_eq!(roster["members"].as_array().unwrap().len(), 1);
+    assert_eq!(roster["members"][0]["keys"].as_array().unwrap().len(), 2);
+    assert_eq!(roster["members"][0]["keys"][1], second_pc.as_str());
+
+    // A key that belongs to someone else is refused.
+    let bob = dots_id();
+    ok(&[
+        "roster",
+        "add",
+        &file,
+        "--name",
+        "Bob",
+        "--email",
+        "bob@acme.test",
+        "--key",
+        &bob,
+        "--role",
+        "viewer",
+        "--workspace",
+        "default=viewer",
+    ]);
+    let err = failure(&[
+        "roster",
+        "add",
+        &file,
+        "--name",
+        "Bob",
+        "--email",
+        "bob@acme.test",
+        "--key",
+        &second_pc,
+        "--role",
+        "viewer",
+    ]);
+    assert!(err.to_string().contains("two members"), "{err}");
+    // Remove just one PC, then the member.
+    ok(&[
+        "roster",
+        "remove",
+        &file,
+        "owner@acme.test",
+        "--key",
+        &second_pc,
+    ]);
+    assert_eq!(
+        read_json(&file)["members"][0]["keys"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    ok(&["roster", "set-role", &file, "bob@acme.test", "admin"]);
+    assert_eq!(read_json(&file)["members"][1]["role"], "admin");
+    ok(&["roster", "remove", &file, "bob@acme.test"]);
+    assert_eq!(read_json(&file)["members"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn remove_last_owner_refused() {
+    let (dir, _, _) = keys();
+    let file = new_roster(dir.path(), &dots_id());
+    let before = std::fs::read_to_string(&file).unwrap();
+    for args in [
+        vec!["roster", "remove", &file, "owner@acme.test"],
+        vec!["roster", "set-role", &file, "owner@acme.test", "admin"],
+    ] {
+        let err = failure(&args);
+        assert!(
+            err.to_string()
+                .contains("the member list needs at least one Owner"),
+            "{err}"
+        );
+    }
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        before,
+        "nothing was written"
+    );
+}
+
+#[test]
+fn bad_dots_id_refused() {
+    let (dir, _, _) = keys();
+    let file = path(dir.path(), "roster.json");
+    let err = failure(&[
+        "roster",
+        "new",
+        "--org-id",
+        "acme-eng",
+        "--owner-name",
+        "O",
+        "--owner-email",
+        "o@a.test",
+        "--owner-key",
+        "nope",
+        "--out",
+        &file,
+    ]);
+    assert!(err.to_string().contains("not a Dots ID"), "{err}");
+    assert!(!Path::new(&file).exists());
+    let file = new_roster(dir.path(), &dots_id());
+    let err = failure(&[
+        "roster", "add", &file, "--name", "B", "--email", "b@a.test", "--key", "nope", "--role",
+        "member",
+    ]);
+    assert!(err.to_string().contains("not a Dots ID"), "{err}");
+    let policy = path(dir.path(), "policy.json");
+    ok(&[
+        "policy", "new", "--org-id", "acme-eng", "--roster", "--out", &policy,
+    ]);
+    let err = failure(&["policy", "admins", "add", &policy, "nope"]);
+    assert!(err.to_string().contains("not a Dots ID"), "{err}");
+}
+
+#[test]
+fn policy_new_roster_is_v2_required() {
+    let ran = ok(&["policy", "new", "--org-id", "acme-eng", "--roster"]);
+    let policy: Value = serde_json::from_str(&ran.out).unwrap();
+    assert_eq!(policy["v"], 2);
+    assert_eq!(policy["roster"], "required");
+    assert_eq!(policy["admins"], serde_json::json!([]));
+    let parsed = parse_policy(&ran.out).unwrap();
+    assert_eq!(parsed.org_id, "acme-eng");
+}
+
+/// `--admin` names the keys that may sign the member list from the start (members spec §6.1),
+/// in the order given: the owner's Dots ID, and others'. Each must be a Dots ID, given once, and
+/// only for a `--roster` policy.
+#[test]
+fn policy_new_roster_with_admins() {
+    let (a, b) = (dots_id(), dots_id());
+    let ran = ok(&[
+        "policy", "new", "--org-id", "acme-eng", "--roster", "--admin", &a, "--admin", &b,
+    ]);
+    let parsed = parse_policy(&ran.out).unwrap();
+    assert_eq!(parsed.admins, vec![a.clone(), b.clone()]);
+
+    let err = failure(&[
+        "policy", "new", "--org-id", "acme-eng", "--roster", "--admin", "nope",
+    ]);
+    assert_eq!(err.to_string(), "'nope' is not a Dots ID");
+    let err = failure(&[
+        "policy", "new", "--org-id", "acme-eng", "--roster", "--admin", &a, "--admin", &a,
+    ]);
+    assert!(err.to_string().contains("is given twice"), "{err}");
+    let err = failure(&["policy", "new", "--org-id", "acme-eng", "--admin", &a]);
+    assert!(err.to_string().contains("--admin needs --roster"), "{err}");
+}
+
+#[test]
+fn policy_new_default_stays_v1() {
+    let ran = ok(&["policy", "new", "--org-id", "acme-eng"]);
+    let policy: Value = serde_json::from_str(&ran.out).unwrap();
+    assert_eq!(policy["v"], 1);
+    assert!(policy.get("roster").is_none() && policy.get("admins").is_none());
+}
+
+#[test]
+fn policy_admins_add_remove() {
+    let (dir, _, _) = keys();
+    let file = path(dir.path(), "policy.json");
+    ok(&[
+        "policy", "new", "--org-id", "acme-eng", "--roster", "--out", &file,
+    ]);
+    let (a, b) = (dots_id(), dots_id());
+    let added = ok(&["policy", "admins", "add", &file, &a]);
+    assert!(
+        added.out.contains(&key_fingerprint(&a).unwrap()),
+        "{}",
+        added.out
+    );
+    ok(&["policy", "admins", "add", &file, &b]);
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert_eq!(
+        parse_policy(&text).unwrap().admins,
+        vec![a.clone(), b.clone()]
+    );
+    assert!(
+        text.contains("\"refresh_minutes\": 15"),
+        "other lines are kept"
+    );
+    let again = failure(&["policy", "admins", "add", &file, &a]);
+    assert!(again.to_string().contains("already"), "{again}");
+    ok(&["policy", "admins", "remove", &file, &a]);
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert_eq!(parse_policy(&text).unwrap().admins, vec![b.clone()]);
+    ok(&["policy", "admins", "remove", &file, &b]);
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(parse_policy(&text).unwrap().admins.is_empty());
+    let gone = failure(&["policy", "admins", "remove", &file, &b]);
+    assert!(gone.to_string().contains("not an admin"), "{gone}");
+
+    // A v1 policy has no admins to edit.
+    let v1 = path(dir.path(), "v1.json");
+    ok(&["policy", "new", "--org-id", "acme-eng", "--out", &v1]);
+    let err = failure(&["policy", "admins", "add", &v1, &a]);
+    assert!(err.to_string().contains("policy new --roster"), "{err}");
+}

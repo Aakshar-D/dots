@@ -4,11 +4,63 @@ use sqlx::sqlite::SqliteRow;
 use sqlx::Row;
 
 use super::Store;
+use crate::accounts::{Membership, Role};
 use crate::vault::org::policy::plain_serde;
-use crate::vault::org::{check_org_id, OrgRow, SourceSettings};
+use crate::vault::org::{check_org_id, MemberRow, OrgRow, SourceSettings};
 use crate::{Error, Result};
 
-const ORG_COLUMNS: &str = "id, name, source, policy_key, last_issued_at, last_fetch_at, joined_at";
+const ORG_COLUMNS: &str =
+    "id, name, source, policy_key, last_issued_at, last_fetch_at, joined_at, \
+     membership, my_member_id, my_role, my_workspaces, last_roster_seq, my_key, last_roster_hash, \
+     last_owners_hash";
+
+/// The member columns of a row (members spec §6.4).
+fn member_from_row(id: &str, row: &SqliteRow) -> Result<MemberRow> {
+    let damaged = |what: &str, why: String| {
+        Error::Other(format!(
+            "org '{id}': its stored {what} is not readable: {why}"
+        ))
+    };
+    let workspaces = match row.try_get::<Option<String>, _>("my_workspaces")? {
+        Some(text) => serde_json::from_str(&text)
+            .map_err(|e| damaged("member workspaces", plain_serde(&e)))?,
+        None => Default::default(),
+    };
+    let last_roster_seq = match row.try_get::<Option<i64>, _>("last_roster_seq")? {
+        Some(seq) => {
+            Some(u64::try_from(seq).map_err(|_| damaged("member list number", seq.to_string()))?)
+        }
+        None => None,
+    };
+    Ok(MemberRow {
+        membership: Membership::parse(&row.try_get::<String, _>("membership")?)?,
+        member_id: row.try_get("my_member_id")?,
+        role: row
+            .try_get::<Option<String>, _>("my_role")?
+            .map(|role| Role::parse(&role))
+            .transpose()?,
+        workspaces,
+        last_roster_seq,
+        key: row.try_get("my_key")?,
+        roster_hash: row.try_get("last_roster_hash")?,
+        owners_hash: row.try_get("last_owners_hash")?,
+    })
+}
+
+/// The member columns as they are written: workspaces as JSON, NULL when there are none.
+fn member_columns(member: &MemberRow) -> Result<(Option<String>, Option<i64>)> {
+    let workspaces = if member.workspaces.is_empty() {
+        None
+    } else {
+        Some(serde_json::to_string(&member.workspaces)?)
+    };
+    let seq = member
+        .last_roster_seq
+        .map(i64::try_from)
+        .transpose()
+        .map_err(|_| Error::Invalid("a member list number is too large".into()))?;
+    Ok((workspaces, seq))
+}
 
 fn org_from_row(row: &SqliteRow) -> Result<OrgRow> {
     let id: String = row.try_get("id")?;
@@ -19,6 +71,7 @@ fn org_from_row(row: &SqliteRow) -> Result<OrgRow> {
         ))
     })?;
     Ok(OrgRow {
+        member: member_from_row(&id, row)?,
         name: row.try_get("name")?,
         source,
         policy_key: row.try_get("policy_key")?,
@@ -37,8 +90,9 @@ impl Store {
     /// Adds a joined org. An id already joined is a `Conflict`.
     pub async fn add_org(&self, org: &OrgRow) -> Result<()> {
         check_org_id(&org.id)?;
+        let (workspaces, seq) = member_columns(&org.member)?;
         let added = sqlx::query(&format!(
-            "INSERT INTO orgs ({ORG_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?)"
+            "INSERT INTO orgs ({ORG_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         ))
         .bind(&org.id)
         .bind(&org.name)
@@ -47,6 +101,14 @@ impl Store {
         .bind(&org.last_issued_at)
         .bind(&org.last_fetch_at)
         .bind(&org.joined_at)
+        .bind(org.member.membership.as_str())
+        .bind(&org.member.member_id)
+        .bind(org.member.role.map(|role| role.as_str()))
+        .bind(workspaces)
+        .bind(seq)
+        .bind(&org.member.key)
+        .bind(&org.member.roster_hash)
+        .bind(&org.member.owners_hash)
         .execute(&self.pool)
         .await;
         if let Err(sqlx::Error::Database(db)) = &added {
@@ -128,6 +190,66 @@ impl Store {
                 .bind(id)
                 .execute(&self.pool)
                 .await?;
+        if done.rows_affected() == 0 {
+            return Err(not_joined(id));
+        }
+        Ok(())
+    }
+
+    /// Records this PC's place on the org's member list, worked out after a fetch (members
+    /// spec §6.4).
+    pub async fn record_membership(&self, id: &str, member: &MemberRow) -> Result<()> {
+        let (workspaces, seq) = member_columns(member)?;
+        let done = sqlx::query(
+            "UPDATE orgs SET membership = ?, my_member_id = ?, my_role = ?, my_workspaces = ?, \
+             last_roster_seq = ?, my_key = ?, last_roster_hash = ?, last_owners_hash = ? WHERE id = ?",
+        )
+        .bind(member.membership.as_str())
+        .bind(&member.member_id)
+        .bind(member.role.map(|role| role.as_str()))
+        .bind(workspaces)
+        .bind(seq)
+        .bind(&member.key)
+        .bind(&member.roster_hash)
+        .bind(&member.owners_hash)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        if done.rows_affected() == 0 {
+            return Err(not_joined(id));
+        }
+        Ok(())
+    }
+
+    /// Records a good fetch and this PC's place on the member list it brought, in one write
+    /// (`record_org_fetch` and `record_membership` together), so a refresh never keeps one
+    /// without the other.
+    pub async fn record_org_fetch_and_membership(
+        &self,
+        id: &str,
+        last_fetch_at: &str,
+        last_issued_at: &str,
+        member: &MemberRow,
+    ) -> Result<()> {
+        let (workspaces, seq) = member_columns(member)?;
+        let done = sqlx::query(
+            "UPDATE orgs SET last_fetch_at = ?, last_issued_at = ?, membership = ?, \
+             my_member_id = ?, my_role = ?, my_workspaces = ?, last_roster_seq = ?, my_key = ?, \
+             last_roster_hash = ?, last_owners_hash = ? WHERE id = ?",
+        )
+        .bind(last_fetch_at)
+        .bind(last_issued_at)
+        .bind(member.membership.as_str())
+        .bind(&member.member_id)
+        .bind(member.role.map(|role| role.as_str()))
+        .bind(workspaces)
+        .bind(seq)
+        .bind(&member.key)
+        .bind(&member.roster_hash)
+        .bind(&member.owners_hash)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
         if done.rows_affected() == 0 {
             return Err(not_joined(id));
         }

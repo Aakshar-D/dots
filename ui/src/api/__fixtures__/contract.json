@@ -1190,6 +1190,7 @@
     "CmdErrorKind": [
       "not_found",
       "invalid",
+      "not_allowed",
       "conflict",
       "internal",
       "cancelled"
@@ -1236,7 +1237,8 @@
       "org_expired",
       "org_revoked",
       "policy_invalid",
-      "org_removed"
+      "org_removed",
+      "not_member"
     ],
     "InstructionStatus": [
       "pending",
@@ -1539,9 +1541,25 @@
         "dot_id": "01J0DOT",
         "dot_name": "nightly-tests",
         "queued_at": "2026-10-09T12:00:00.000Z",
+        "reason": {
+          "kind": "usage"
+        },
         "run_id": "01J0RUN4",
         "starts_after": "2026-10-09T15:10:00.000Z",
         "trigger": "schedule"
+      },
+      {
+        "dot_id": "01J0DOT2",
+        "dot_name": "triage",
+        "queued_at": "2026-10-09T12:00:00.000Z",
+        "reason": {
+          "account": "Acme Engineering",
+          "kind": "role",
+          "text": "Acme Engineering: your role no longer allows running dots"
+        },
+        "run_id": "01J0RUN5",
+        "starts_after": null,
+        "trigger": "watcher"
       }
     ],
     "instructions": [
@@ -2753,12 +2771,18 @@
       "id": "acme-eng",
       "key_fingerprint": "6E2F 0A1B 9C3D 4E5F 7A81 B2C3 D4E5 F607",
       "last_fetch_at": "2026-10-09T12:00:00.000Z",
+      "member_count": 4,
+      "membership": "active",
       "name": "Acme Engineering",
+      "not_member_text": null,
       "personal_mode": "fallback",
       "policy_summary": [
         "org: acme-eng",
         "personal: fallback (a personal entry is used when the org has none)"
       ],
+      "role": "admin",
+      "roster_error": null,
+      "roster_seq": 3,
       "shell_secrets": false,
       "source_kind": "openbao",
       "status": "connected",
@@ -2778,12 +2802,18 @@
       "id": "acme-eng",
       "key_fingerprint": "6E2F 0A1B 9C3D 4E5F 7A81 B2C3 D4E5 F607",
       "last_fetch_at": "2026-10-09T12:00:00.000Z",
+      "member_count": 4,
+      "membership": "active",
       "name": "Acme Engineering",
+      "not_member_text": null,
       "personal_mode": "fallback",
       "policy_summary": [
         "org: acme-eng",
         "personal: fallback (a personal entry is used when the org has none)"
       ],
+      "role": "admin",
+      "roster_error": null,
+      "roster_seq": 3,
       "shell_secrets": false,
       "source_kind": "openbao",
       "status": "offline",
@@ -2804,12 +2834,18 @@
       "id": "acme-eng",
       "key_fingerprint": "6E2F 0A1B 9C3D 4E5F 7A81 B2C3 D4E5 F607",
       "last_fetch_at": "2026-10-09T12:00:00.000Z",
+      "member_count": 4,
+      "membership": "waiting",
       "name": "Acme Engineering",
+      "not_member_text": "Acme Engineering: you aren't on its member list yet. Send your Dots ID to an Admin.",
       "personal_mode": "fallback",
       "policy_summary": [
         "org: acme-eng",
         "personal: fallback (a personal entry is used when the org has none)"
       ],
+      "role": null,
+      "roster_error": null,
+      "roster_seq": 3,
       "shell_secrets": false,
       "source_kind": "openbao",
       "status": "offline",
@@ -2830,12 +2866,18 @@
       "id": "acme-eng",
       "key_fingerprint": "6E2F 0A1B 9C3D 4E5F 7A81 B2C3 D4E5 F607",
       "last_fetch_at": "2026-10-09T12:00:00.000Z",
+      "member_count": 4,
+      "membership": "active",
       "name": "Acme Engineering",
+      "not_member_text": null,
       "personal_mode": "fallback",
       "policy_summary": [
         "org: acme-eng",
         "personal: fallback (a personal entry is used when the org has none)"
       ],
+      "role": "admin",
+      "roster_error": null,
+      "roster_seq": 3,
       "shell_secrets": false,
       "source_kind": "openbao",
       "status": "revoked",
@@ -2856,16 +2898,22 @@
       "id": "acme-eng",
       "key_fingerprint": "6E2F 0A1B 9C3D 4E5F 7A81 B2C3 D4E5 F607",
       "last_fetch_at": "2026-10-09T12:00:00.000Z",
+      "member_count": 4,
+      "membership": "active",
       "name": "Acme Engineering",
+      "not_member_text": null,
       "personal_mode": "fallback",
       "policy_summary": [
         "org: acme-eng",
         "personal: fallback (a personal entry is used when the org has none)"
       ],
+      "role": "admin",
+      "roster_error": "the member list is not signed by the owner or an admin",
+      "roster_seq": 3,
       "shell_secrets": false,
       "source_kind": "openbao",
       "status": "policy_invalid",
-      "status_text": "policy invalid: signature does not match; using the saved copy until 2026-10-10T12:00:00.000Z",
+      "status_text": "policy invalid: signature does not match; using the saved copy until 2026-10-10T12:00:00.000Z; member list not accepted: the member list is not signed by the owner or an admin",
       "use_rules": {
         "allow": [
           "*"
@@ -2881,12 +2929,18 @@
       "id": "acme-eng",
       "key_fingerprint": "6E2F 0A1B 9C3D 4E5F 7A81 B2C3 D4E5 F607",
       "last_fetch_at": "2026-10-09T12:00:00.000Z",
+      "member_count": 4,
+      "membership": "active",
       "name": "Acme Engineering",
+      "not_member_text": null,
       "personal_mode": "fallback",
       "policy_summary": [
         "org: acme-eng",
         "personal: fallback (a personal entry is used when the org has none)"
       ],
+      "role": "admin",
+      "roster_error": null,
+      "roster_seq": 3,
       "shell_secrets": false,
       "source_kind": "openbao",
       "status": "expired",
@@ -2906,14 +2960,51 @@
       "id": "design",
       "key_fingerprint": "6E2F 0A1B 9C3D 4E5F 7A81 B2C3 D4E5 F607",
       "last_fetch_at": null,
+      "member_count": null,
+      "membership": "legacy",
       "name": "Design",
+      "not_member_text": null,
       "personal_mode": null,
       "policy_summary": [],
+      "role": null,
+      "roster_error": null,
+      "roster_seq": null,
       "shell_secrets": false,
       "source_kind": "sops",
       "status": "pending",
       "status_text": "waiting for the admin to add this PC's key",
       "use_rules": null
+    },
+    {
+      "address": "https://bao.acme.internal",
+      "copy_until": null,
+      "id": "acme-eng",
+      "key_fingerprint": "6E2F 0A1B 9C3D 4E5F 7A81 B2C3 D4E5 F607",
+      "last_fetch_at": "2026-10-09T12:00:00.000Z",
+      "member_count": null,
+      "membership": "removed",
+      "name": "Acme Engineering",
+      "not_member_text": "Acme Engineering: you were removed from it.",
+      "personal_mode": "fallback",
+      "policy_summary": [
+        "org: acme-eng",
+        "personal: fallback (a personal entry is used when the org has none)"
+      ],
+      "role": null,
+      "roster_error": null,
+      "roster_seq": 3,
+      "shell_secrets": false,
+      "source_kind": "openbao",
+      "status": "revoked",
+      "status_text": "Removed from Acme Engineering",
+      "use_rules": {
+        "allow": [
+          "*"
+        ],
+        "deny": [
+          "PROD_*"
+        ]
+      }
     }
   ],
   "PageState": [

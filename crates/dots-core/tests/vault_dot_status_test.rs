@@ -474,7 +474,8 @@ fn the_states_serialize_in_snake_case() {
             "org_expired",
             "org_revoked",
             "policy_invalid",
-            "org_removed"
+            "org_removed",
+            "not_member"
         ]
     );
     assert_eq!(

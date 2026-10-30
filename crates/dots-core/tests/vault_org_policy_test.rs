@@ -8,7 +8,8 @@ use base64::Engine;
 use dots_core::vault::org::{
     check_org_id, envelope, key_fingerprint, parse_join_code, parse_policy, same_policy_key,
     shown_address, verify_policy, AuditTarget, BaoAuth, InfisicalSettings, JoinCode,
-    OpenBaoSettings, OrgPolicy, PersonalMode, PolicyError, SopsSettings, SourceSettings, UseRules,
+    OpenBaoSettings, OrgPolicy, PersonalMode, PolicyError, RosterMode, SopsSettings,
+    SourceSettings, UseRules,
 };
 use dots_core::Error;
 use minisign::KeyPair;
@@ -146,12 +147,12 @@ fn an_unknown_top_level_field_is_refused() {
 }
 
 #[test]
-fn a_version_other_than_1_is_refused_before_its_fields_are_read() {
-    let v2 = json!({"v": 2, "org_id": "acme-eng", "issued_at": "2026-10-21T09:00:00Z",
-                    "new_v2_field": true});
+fn a_version_other_than_1_or_2_is_refused_before_its_fields_are_read() {
+    let v3 = json!({"v": 3, "org_id": "acme-eng", "issued_at": "2026-10-21T09:00:00Z",
+                    "new_v3_field": true});
     assert_eq!(
-        invalid(&v2.to_string()),
-        "policy version 2 is not supported; this Dots reads version 1"
+        invalid(&v3.to_string()),
+        "policy version 3 is not supported; this Dots reads versions 1 and 2"
     );
     assert!(invalid(&policy_with(json!({"v": "1"}))).contains("version \"1\" is not supported"));
 }
@@ -1092,4 +1093,70 @@ fn the_key_fingerprint_is_a_digest_of_the_whole_key() {
         key_fingerprint("RWQ-not-a-key"),
         Err(Error::Invalid(_))
     ));
+}
+
+/// A v2 policy with only the required fields, plus `extra`.
+fn policy_v2_with(extra: Value) -> String {
+    let mut policy = json!({"v": 2, "org_id": "acme-eng", "issued_at": "2026-10-21T09:00:00Z"});
+    for (k, v) in extra.as_object().unwrap() {
+        policy[k] = v.clone();
+    }
+    policy.to_string()
+}
+
+#[test]
+fn v1_policy_means_roster_off() {
+    let p = parsed(json!({}));
+    assert_eq!(p.roster, RosterMode::Off);
+    assert!(p.admins.is_empty());
+    assert!(!p.summary().iter().any(|l| l.starts_with("Member list")));
+}
+
+#[test]
+fn v2_policy_reads_roster_and_admins() {
+    let (a, b) = (keys().pk.to_base64(), keys().pk.to_base64());
+    let p = parse_policy(&policy_v2_with(
+        json!({"roster": "required", "admins": [a, b]}),
+    ))
+    .unwrap();
+    assert_eq!(p.roster, RosterMode::Required);
+    assert_eq!(p.admins, [a, b]);
+    assert!(p
+        .summary()
+        .contains(&"Member list: required, 2 admin(s)".to_string()));
+    // A v2 policy may leave both out.
+    let plain = parse_policy(&policy_v2_with(json!({}))).unwrap();
+    assert_eq!(plain.roster, RosterMode::Off);
+    assert!(plain.admins.is_empty());
+}
+
+#[test]
+fn v1_policy_with_roster_is_refused() {
+    assert_eq!(
+        invalid(&policy_with(json!({"roster": "required"}))),
+        "unknown field 'roster'"
+    );
+    assert_eq!(
+        invalid(&policy_with(json!({"admins": []}))),
+        "unknown field 'admins'"
+    );
+}
+
+#[test]
+fn v2_bad_admin_key_refused() {
+    let good = keys().pk.to_base64();
+    assert_eq!(
+        invalid(&policy_v2_with(
+            json!({"roster": "required", "admins": [good, "nope"]})
+        )),
+        "admins[1] is not a Dots ID"
+    );
+}
+
+#[test]
+fn version_3_refused() {
+    assert!(
+        invalid(&policy_v2_with(json!({})).replace("\"v\":2", "\"v\":3"))
+            .contains("policy version 3 is not supported")
+    );
 }

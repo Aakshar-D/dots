@@ -3,10 +3,11 @@
 mod common;
 
 use common::{spec, temp_store};
+use dots_core::accounts::{Membership, Role, WorkspaceRole};
 use dots_core::model::Dot;
 use dots_core::store::Store;
 use dots_core::vault::org::{
-    BaoAuth, InfisicalSettings, OpenBaoSettings, OrgRow, SopsSettings, SourceSettings,
+    BaoAuth, InfisicalSettings, MemberRow, OpenBaoSettings, OrgRow, SopsSettings, SourceSettings,
 };
 use dots_core::{Config, Error, Runtime};
 use serde_json::{json, Value};
@@ -51,6 +52,7 @@ fn org(id: &str, name: &str, source: SourceSettings) -> OrgRow {
         last_issued_at: None,
         last_fetch_at: None,
         joined_at: JOINED.into(),
+        member: Default::default(),
     }
 }
 
@@ -218,6 +220,101 @@ async fn updating_the_settings_keeps_what_the_last_fetch_accepted() {
         matches!(&err, Error::NotFound(m) if m == "no org 'nope' is joined on this PC"),
         "{err:?}"
     );
+}
+
+/// This PC's place on the member list (members spec §6.4): `legacy` and empty for a new row,
+/// then what `record_membership` keeps, and nothing else of the row changes.
+#[tokio::test]
+async fn membership_is_recorded_and_read_back() {
+    let (_dir, store) = temp_store().await;
+    store.add_org(&acme()).await.unwrap();
+    assert_eq!(
+        store.get_org("acme-eng").await.unwrap().unwrap().member,
+        MemberRow::default()
+    );
+    let active = MemberRow {
+        membership: Membership::Active,
+        member_id: Some("01ME".into()),
+        role: Some(Role::Viewer),
+        workspaces: [
+            ("default".to_string(), WorkspaceRole::Member),
+            ("payments".to_string(), WorkspaceRole::Admin),
+        ]
+        .into_iter()
+        .collect(),
+        last_roster_seq: Some(7),
+        key: Some("RWQme".into()),
+        roster_hash: Some("ab12".into()),
+        owners_hash: Some("cd34".into()),
+    };
+    store.record_membership("acme-eng", &active).await.unwrap();
+    let got = store.get_org("acme-eng").await.unwrap().unwrap();
+    assert_eq!(
+        got,
+        OrgRow {
+            member: active,
+            ..acme()
+        }
+    );
+
+    let removed = MemberRow {
+        membership: Membership::Removed,
+        last_roster_seq: Some(8),
+        ..MemberRow::default()
+    };
+    store.record_membership("acme-eng", &removed).await.unwrap();
+    assert_eq!(
+        store.get_org("acme-eng").await.unwrap().unwrap().member,
+        removed
+    );
+    let err = store.record_membership("nope", &removed).await.unwrap_err();
+    assert!(matches!(err, Error::NotFound(_)), "{err:?}");
+}
+
+/// A good fetch and this PC's place on the member list it brought are recorded together, in
+/// one write: a refresh never leaves one without the other.
+#[tokio::test]
+async fn a_fetch_and_its_membership_are_recorded_together() {
+    let (_dir, store) = temp_store().await;
+    store.add_org(&acme()).await.unwrap();
+    let active = MemberRow {
+        membership: Membership::Active,
+        member_id: Some("01ME".into()),
+        role: Some(Role::Admin),
+        last_roster_seq: Some(4),
+        key: Some("RWQme".into()),
+        roster_hash: Some("cd34".into()),
+        ..MemberRow::default()
+    };
+    store
+        .record_org_fetch_and_membership(
+            "acme-eng",
+            "2026-10-22T09:00:05.000Z",
+            "2026-10-22T08:00:00Z",
+            &active,
+        )
+        .await
+        .unwrap();
+    let got = store.get_org("acme-eng").await.unwrap().unwrap();
+    assert_eq!(
+        got,
+        OrgRow {
+            last_fetch_at: Some("2026-10-22T09:00:05.000Z".into()),
+            last_issued_at: Some("2026-10-22T08:00:00Z".into()),
+            member: active.clone(),
+            ..acme()
+        }
+    );
+    let err = store
+        .record_org_fetch_and_membership(
+            "nope",
+            "2026-10-22T09:00:05.000Z",
+            "2026-10-22T08:00:00Z",
+            &active,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::NotFound(_)), "{err:?}");
 }
 
 #[tokio::test]

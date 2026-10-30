@@ -197,3 +197,33 @@ describe("the home's dots column", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("database is locked");
   });
 });
+
+describe("the New dot button", () => {
+  const viewer = { ...sample.orgs[0], id: "acme-eng", membership: "active", role: "viewer" } as const;
+
+  it("is off with the reason in an account where the person is a Viewer", async () => {
+    backend.on("org_list", () => [viewer]);
+    backend.on("scope_get", () => ({ account: "acme-eng", workspace: "default" }));
+    backend.on("dot_overview", () => []);
+    renderApp("/home");
+    const title = "Acme Engineering: a Viewer can't create or change dots. Ask an Admin or Owner.";
+    // The link is swapped for a disabled button once the account's role is known.
+    const button = await waitFor(() => {
+      const nav = within(screen.getByRole("navigation", { name: "Dots" }));
+      const found = nav.getByRole("button", { name: "New dot" });
+      expect(found).toHaveAttribute("title", title);
+      return found;
+    });
+    expect(button).toHaveAttribute("aria-disabled", "true");
+    expect(button).toHaveAccessibleDescription(title);
+  });
+
+  it("is on in Personal", async () => {
+    backend.on("dot_overview", () => []);
+    renderApp("/home");
+    const nav = within(await screen.findByRole("navigation", { name: "Dots" }));
+    const link = await nav.findByRole("link", { name: "New dot" });
+    expect(link).toHaveAttribute("href", "/dots/new");
+    expect(link).not.toHaveAttribute("aria-disabled");
+  });
+});

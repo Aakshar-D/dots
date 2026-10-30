@@ -227,3 +227,25 @@ describe("a Personal dot", () => {
     expect(backend.callsTo("org_list")).toEqual([]);
   });
 });
+
+describe("a Viewer in the editor", () => {
+  const viewer: OrgSummary = { ...acme, membership: "active", role: "viewer" };
+  const TITLE = "Acme Engineering: a Viewer can't create or change dots. Ask an Admin or Owner.";
+
+  it("can't save a dot of the account", async () => {
+    editor(release, [viewer]);
+    const save = await screen.findByRole("button", { name: "Save" });
+    await waitFor(() => expect(save).toBeDisabled());
+    expect(save).toHaveAttribute("title", TITLE);
+  });
+
+  it("can't create a dot in the account chosen, but can in Personal", async () => {
+    const { user } = await newDot([viewer]);
+    await user.selectOptions(screen.getByLabelText("Account"), "acme-eng");
+    const create = screen.getByRole("button", { name: "Create dot" });
+    await waitFor(() => expect(create).toBeDisabled());
+    expect(create).toHaveAttribute("title", TITLE);
+    await user.selectOptions(screen.getByLabelText("Account"), "");
+    await waitFor(() => expect(create).toBeEnabled());
+  });
+});
