@@ -184,6 +184,8 @@ pub struct RunTools {
     apps: Option<Arc<crate::apps::RunApps>>,
     /// The workflows a chat run may start (teams spec section 7); none for other runs.
     startable: Vec<crate::model::StartableWorkflow>,
+    /// The run may propose new instructions for its dot (conversational chat spec section 4).
+    instructions: bool,
 }
 
 impl fmt::Debug for RunTools {
@@ -256,6 +258,17 @@ impl RunTools {
     /// The workflows the run may start with `start_workflow` (teams spec section 7).
     pub fn startable(&self) -> &[crate::model::StartableWorkflow] {
         &self.startable
+    }
+
+    /// The run may propose new instructions with `propose_instructions`.
+    pub fn instructions(&self) -> bool {
+        self.instructions
+    }
+
+    /// The run's tools, with `propose_instructions` when `offered`.
+    pub fn with_instructions(mut self, offered: bool) -> RunTools {
+        self.instructions = offered;
+        self
     }
 
     /// The run's tools with the workflows it may start.

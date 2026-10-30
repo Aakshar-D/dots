@@ -239,6 +239,17 @@ impl Apps {
     /// moves to the new app, and the migrations after those that ran on it run. On a failure the
     /// data goes back where it was.
     pub async fn install_kept(&self, src: AppSource, kept_id: &str) -> Result<LibraryItem> {
+        self.install_kept_as(src, kept_id, AppOrigin::Proposed)
+            .await
+    }
+
+    /// `install_kept` for an app from `origin` (a bundled app, `apps::bundled`).
+    pub(super) async fn install_kept_as(
+        &self,
+        src: AppSource,
+        kept_id: &str,
+        origin: AppOrigin,
+    ) -> Result<LibraryItem> {
         let lock = self.lock(kept_id);
         let _held = lock.lock().await;
         if self.kept_fit_of(&src, kept_id).await?.is_none() {
@@ -248,8 +259,7 @@ impl Apps {
                 src.manifest.title
             )));
         }
-        self.install_on(src, AppOrigin::Proposed, Some(kept_id))
-            .await
+        self.install_on(src, origin, Some(kept_id)).await
     }
 }
 

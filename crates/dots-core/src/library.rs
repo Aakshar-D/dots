@@ -139,6 +139,10 @@ pub struct AppConfig {
     /// A bundled app the person changed through a dot's proposal: Dots no longer updates it.
     #[serde(default)]
     pub changed: bool,
+    /// The person has answered the one-time prompt to let a bundled app start dots, or set the
+    /// switch themselves (spec section 8): the prompt no longer shows.
+    #[serde(default)]
+    pub start_asked: bool,
 }
 
 /// Where an app came from (spec section 8).

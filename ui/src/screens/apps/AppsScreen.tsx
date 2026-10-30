@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Link } from "react-router";
 
 import { commands } from "@/api/commands";
-import type { AppConfig, AppRow, KeptData } from "@/api/types";
+import type { AppConfig, AppRow, BundledOffer, KeptData } from "@/api/types";
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { EmptyState } from "@/components/EmptyState";
 import { ErrorNote } from "@/components/ErrorNote";
@@ -33,10 +33,12 @@ export function appConfig(row: AppRow): AppConfig | null {
 }
 
 /// The Apps screen (app library spec section 10): the installed apps, each opening its screen,
-/// with its switches, roll back and remove; then the data removed apps kept.
+/// with its switches, roll back and remove; the apps that come with Dots and were removed, to
+/// install again; then the data removed apps kept.
 export function AppsScreen() {
   const apps = useQuery({ queryKey: keys.apps, queryFn: commands.appsList });
   const kept = useQuery({ queryKey: keys.appsKept, queryFn: commands.appsKeptList });
+  const bundled = useQuery({ queryKey: keys.appsBundled, queryFn: commands.appsBundledOffers });
   if (apps.isPending) return <Page title="Apps" />;
   if (apps.isError) {
     return (
@@ -59,6 +61,19 @@ export function AppsScreen() {
             <AppItem key={row.item.id} row={row} />
           ))}
         </ul>
+      )}
+      {bundled.isError && <ErrorNote error={bundled.error} />}
+      {(bundled.data ?? []).length > 0 && (
+        <section aria-labelledby="apps-bundled" className="flex flex-col gap-2">
+          <h2 id="apps-bundled" className="font-semibold">
+            Comes with Dots
+          </h2>
+          <ul className="flex flex-col gap-2">
+            {bundled.data!.map((offer) => (
+              <BundledItem key={offer.name} offer={offer} />
+            ))}
+          </ul>
+        </section>
       )}
       {kept.isError && <ErrorNote error={kept.error} />}
       {keptData.length > 0 && (
@@ -248,6 +263,77 @@ function RemoveApp({ row, title }: { row: AppRow; title: string }) {
         </AlertDialogContent>
       </AlertDialog>
     </>
+  );
+}
+
+/// An app that comes with Dots and was removed: "Install <title>", on the data its removal kept
+/// when that fits (ticked, and the person may untick it to start fresh).
+function BundledItem({ offer }: { offer: BundledOffer }) {
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [onKept, setOnKept] = useState(true);
+  const install = useMutation({
+    mutationFn: () =>
+      commands.appInstallBundled(offer.name, onKept ? (offer.kept?.id ?? null) : null),
+    onSuccess: () => {
+      invalidate(qc, keys.apps);
+      invalidate(qc, keys.library);
+      invalidateDots(qc);
+    },
+    onError: notifyError,
+    onSettled: () => setOpen(false),
+  });
+  const kept = offer.kept;
+  return (
+    <ItemRow
+      label={offer.title}
+      actions={
+        <Button size="sm" onClick={() => setOpen(true)}>
+          Install {offer.title}
+        </Button>
+      }
+    >
+      <span className="font-medium">{offer.title}</span>
+      <span className="text-xs text-muted-foreground">{offer.description}</span>
+      <AlertDialog open={open} onOpenChange={setOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Install {offer.title}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {offer.title} comes with Dots, for every dot. Dots updates it with each release
+              until you accept a dot's change to it.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {kept && (
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={onKept}
+                onChange={(e) => setOnKept(e.target.checked)}
+              />
+              <span>
+                Start on the data kept from the removed {kept.title} (removed{" "}
+                {relativeTime(kept.removed_at)}, {formatBytes(kept.bytes)})
+                {kept.migrations.length > 0 && `; it then runs ${kept.migrations.join(", ")} on it`}
+              </span>
+            </label>
+          )}
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={install.isPending}
+              onClick={(e) => {
+                e.preventDefault();
+                install.mutate();
+              }}
+            >
+              Install
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </ItemRow>
   );
 }
 

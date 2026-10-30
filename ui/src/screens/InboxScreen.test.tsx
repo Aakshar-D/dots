@@ -19,17 +19,18 @@ const failedRun = {
   error: "timeout",
 };
 
-/// An Inbox as a test writes it: without paused watchers or held runs unless it says so.
-type InboxSpec = Omit<Inbox, "watchers" | "held" | "app_reviews" | "team_scope"> &
-  Partial<Pick<Inbox, "watchers" | "held" | "app_reviews" | "team_scope">>;
+/// An Inbox as a test writes it: without paused watchers, held runs, proposed instructions,
+/// apps to review or team scope problems unless it says so.
+type InboxSpec = Omit<Inbox, "watchers" | "held" | "instructions" | "app_reviews" | "team_scope"> &
+  Partial<Pick<Inbox, "watchers" | "held" | "instructions" | "app_reviews" | "team_scope">>;
 
 /// An inbox the test can empty, the way a decision or a review does.
 function inbox(initial: InboxSpec) {
-  let current: Inbox = { watchers: [], held: [], app_reviews: [], team_scope: [], ...initial };
+  let current: Inbox = { watchers: [], held: [], instructions: [], app_reviews: [], team_scope: [], ...initial };
   backend.on("inbox", () => current);
   return {
     set: (next: InboxSpec) => {
-      current = { watchers: [], held: [], app_reviews: [], team_scope: [], ...next };
+      current = { watchers: [], held: [], instructions: [], app_reviews: [], team_scope: [], ...next };
     },
   };
 }
@@ -136,7 +137,7 @@ describe("the Inbox", () => {
         attention: [],
         tools_changed: [],
         watchers: [],
-        held: [],
+        held: [], instructions: [],
         app_reviews: [],
         team_scope: [],
       };
@@ -531,7 +532,7 @@ describe("the approvals of one run", () => {
     attention: [],
     tools_changed: [],
     watchers: [],
-    held: [],
+    held: [], instructions: [],
     app_reviews: [],
     team_scope: [],
   };
@@ -706,7 +707,7 @@ describe("a schedule that needs attention", () => {
     attention: [],
     tools_changed: [],
     watchers: [],
-    held: [],
+    held: [], instructions: [],
     app_reviews: [],
     team_scope: [],
   };

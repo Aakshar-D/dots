@@ -524,11 +524,11 @@ describe("the dot editor, stored dot", () => {
       review_runs: sample.inbox.review_runs,
       attention: [],
       tools_changed: [],
-      watchers: [], held: [], app_reviews: [], team_scope: [],
+      watchers: [], held: [], instructions: [], app_reviews: [], team_scope: [],
     };
     backend.on("inbox", () => waiting);
     backend.on("delete_dot", () => {
-      waiting = { approvals: [], review_runs: [], attention: [], tools_changed: [], watchers: [], held: [], app_reviews: [], team_scope: [] };
+      waiting = { approvals: [], review_runs: [], attention: [], tools_changed: [], watchers: [], held: [], instructions: [], app_reviews: [], team_scope: [] };
       return null;
     });
     const { user, router } = renderApp(path);

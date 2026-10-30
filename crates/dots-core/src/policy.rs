@@ -85,13 +85,21 @@ pub const WORKFLOW_TOOL: &str = crate::team_tools::POLICY_NAME;
 pub const WORKFLOW_RULE: &str =
     "a Workflow rule takes no argument: the rule Workflow covers every workflow tool";
 
-/// A tool whose ask rule wins over an allow rule: the check-in tools, `Memory`, `Workflow` and
-/// the app tools.
+/// Dots' own `propose_instructions` by its policy name (conversational chat spec section 4):
+/// treated as `Memory` is. A rule names it alone: `Instructions(...)` is refused.
+pub const INSTRUCTIONS_TOOL: &str = crate::instructions::POLICY_NAME;
+
+/// The refusal of a rule `Instructions(...)`.
+pub const INSTRUCTIONS_RULE: &str = "an Instructions rule names no argument";
+
+/// A tool whose ask rule wins over an allow rule: the check-in tools, `Memory`, `Workflow`,
+/// the app tools and `Instructions`.
 fn ask_wins(tool: &str) -> bool {
     CHECK_IN_TOOLS.contains(&tool)
         || tool == MEMORY_TOOL
         || tool == WORKFLOW_TOOL
         || APP_TOOLS.contains(&tool)
+        || tool == INSTRUCTIONS_TOOL
 }
 
 /// The refusal of a rule `Memory(...)`.
@@ -205,6 +213,9 @@ impl Policy {
         rules.push(Rule::new(WORKFLOW_TOOL, workflow));
         // And use its apps and propose new ones: the review card is a proposal's gate.
         rules.extend(APP_TOOLS.map(|tool| Rule::new(tool, Action::Allow)));
+        // And propose new instructions for itself from a chat: the card is the proposal's gate
+        // (conversational chat spec section 4).
+        rules.push(Rule::new(INSTRUCTIONS_TOOL, Action::Allow));
         Policy {
             preset,
             rules,
@@ -288,6 +299,7 @@ impl Policy {
                 "BrowserRisky",
                 MEMORY_TOOL,
                 WORKFLOW_TOOL,
+                INSTRUCTIONS_TOOL,
             ]
             .iter()
             .chain(CHECK_IN_TOOLS.iter())
@@ -337,6 +349,9 @@ impl Policy {
                 }
                 if tool == WORKFLOW_TOOL {
                     return Err(invalid(WORKFLOW_RULE));
+                }
+                if tool == INSTRUCTIONS_TOOL {
+                    return Err(invalid(INSTRUCTIONS_RULE));
                 }
                 if matches!(tool, "Browser" | "BrowserRisky") {
                     crate::browser::sites::check_site(spec).map_err(|e| invalid(&e))?;

@@ -176,6 +176,10 @@ impl Session {
         if !self.ctx.tools.startable().is_empty() {
             out.push(tools::team::start_schema());
         }
+        // A run of a chat the person started (conversational chat spec section 4).
+        if self.ctx.tools.instructions() && self.checkins.is_some() {
+            out.push(tools::instructions::schema());
+        }
         // The built-in browser's tools (browser spec section 2.2); their names fit as they are,
         // so `ToolNames` finds them by their `mcp__` name.
         if self.ctx.tools.browser().is_some() {

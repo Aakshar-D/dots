@@ -371,6 +371,7 @@ async fn migration_0007_lets_every_stored_policy_read_context() {
                 && r.tool != "Workflow"
                 && !dots_core::policy::CHECK_IN_TOOLS.contains(&r.tool.as_str())
                 && !dots_core::policy::APP_TOOLS.contains(&r.tool.as_str())
+                && r.tool != "Instructions"
         });
         p
     };
@@ -413,6 +414,10 @@ async fn migration_0007_lets_every_stored_policy_read_context() {
         dots_core::policy::APP_TOOLS
             .map(|tool| dots_core::policy::Rule::new(tool, dots_core::policy::Action::Allow)),
     );
+    denies.rules.push(dots_core::policy::Rule::new(
+        "Instructions",
+        dots_core::policy::Action::Allow,
+    ));
     assert_eq!(store.get_dot("D3").await.unwrap().spec.policy, denies);
 }
 

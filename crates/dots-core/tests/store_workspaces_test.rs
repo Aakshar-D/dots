@@ -392,10 +392,10 @@ async fn mirror_moves_dots_in_a_workspace_it_never_saw() {
     assert_eq!(store.get_dot(&mine.id).await.unwrap().workspace_id, "ghost");
 }
 
-/// Migration 0023 on a database with a joined org, a team and dots made before it: Personal
+/// Migration 0024 on a database with a joined org, a team and dots made before it: Personal
 /// and the org get a Default workspace, and every dot and team is in it.
 #[tokio::test]
-async fn migration_0023_puts_what_was_there_in_default() {
+async fn migration_0024_puts_what_was_there_in_default() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("dots.db");
     let opts = SqliteConnectOptions::new()
@@ -406,7 +406,7 @@ async fn migration_0023_puts_what_was_there_in_default() {
     before.migrations = before
         .migrations
         .iter()
-        .filter(|m| m.version < 23)
+        .filter(|m| m.version < 24)
         .cloned()
         .collect::<Vec<_>>()
         .into();

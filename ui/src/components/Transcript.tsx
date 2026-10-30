@@ -1,7 +1,7 @@
 import { Fragment, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "cn";
-import { Brain, Info } from "lucide-react";
+import { Brain, ChevronRight, Info } from "lucide-react";
 import { Link } from "react-router";
 import { z } from "zod";
 
@@ -25,6 +25,7 @@ import {
   checkInLine,
   callLabel,
   memoryNote,
+  stepsLine,
   toolPreview,
   transcriptItems,
   type TranscriptItem,
@@ -230,8 +231,63 @@ function MemoryNote({ item, dotId }: { item: ToolItem; dotId: string }) {
   );
 }
 
-/// What a run's section shows, in order: consecutive tool steps as one row of chips, every
-/// other item by itself.
+/// One row of tool step chips.
+function ToolChips(props: {
+  items: ToolItem[];
+  active: boolean;
+  owners: ReadonlyMap<string, string>;
+  className?: string;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label="Tool steps"
+      className={cn("flex flex-wrap items-start gap-1.5", props.className)}
+    >
+      {props.items.map((item) => (
+        <ToolChip key={item.seq} item={item} active={props.active} owners={props.owners} />
+      ))}
+    </div>
+  );
+}
+
+/// A group of consecutive tool steps in the conversation (conversational chat spec section 5):
+/// one muted line that says what they did and how it went, and opens to their row of chips. A
+/// call parked for approval is not counted as failed: it waits while its run goes on, and was
+/// sent for approval once the run has ended (the decision starts a run of its own).
+function StepsLine(props: {
+  items: ToolItem[];
+  active: boolean;
+  owners: ReadonlyMap<string, string>;
+}) {
+  const { items, active, owners } = props;
+  const failed = items.filter((item) => item.result?.isError && !parked(item.result)).length;
+  const parkedCall = items.some((item) => parked(item.result));
+  const running = active && items.some((item) => item.result === null);
+  return (
+    <details data-slot="steps" className="group/steps">
+      <summary className="flex cursor-pointer list-none items-center gap-1 text-xs text-muted-foreground [&::-webkit-details-marker]:hidden">
+        <ChevronRight
+          aria-hidden
+          className="size-3.5 shrink-0 transition-transform group-open/steps:rotate-90 motion-reduce:transition-none"
+        />
+        <span className="min-w-0 truncate">{stepsLine(items, owners)}</span>
+        {failed > 0 && <span className="shrink-0 text-destructive"> · {failed} failed</span>}
+        {parkedCall &&
+          (active ? (
+            <span className="shrink-0 text-needs"> · waiting for approval</span>
+          ) : (
+            <span className="shrink-0"> · sent for approval</span>
+          ))}
+        {running && <span className="shrink-0"> · running…</span>}
+      </summary>
+      <ToolChips items={items} active={active} owners={owners} className="mt-1.5" />
+    </details>
+  );
+}
+
+/// What a run's section shows, in order: consecutive tool steps as one row of chips (one line in
+/// the conversation), every other item by itself.
 type Block =
   | { kind: "tools"; seq: number; items: ToolItem[] }
   | { kind: "item"; item: TranscriptItem };
@@ -358,9 +414,15 @@ export function Transcript(props: {
   /// an event too: the one of the last run that says the same is left out, so that the error is
   /// on screen once.
   shownError?: string | null;
-  /// The dot's name, for the meta line above its words.
+  /// The dot's name, for the meta line above its words in the run variant.
   dotName?: string;
+  /// "run" (the default) is the run screen's look. "conversation" is the home's (conversational
+  /// chat spec section 5): the dot's words with no meta line, no header line on a chat-trigger run
+  /// (its bubble says it, whoever wrote the message), a cancelled one marked "Cancelled", and
+  /// each group of tool steps as one line that opens to its chips.
+  variant?: "run" | "conversation";
 }) {
+  const conversation = props.variant === "conversation";
   const many = props.runs.length > 1;
   // A plugin's MCP server shows as its plugin; the Library tells which server comes from which.
   const library = useQuery({ queryKey: keys.library, queryFn: commands.libraryList });
@@ -385,11 +447,15 @@ export function Transcript(props: {
         const checkIns = (props.messages ?? []).filter((checkIn) => checkIn.run_id === run.id);
         return (
           <section key={run.id} aria-label={names[i]}>
-            <header className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
-              <span>{runTrigger(run)}</span>
-              <span>{localDateTime(run.queued_at)}</span>
-              {many && <StatusBadge status={run.status} />}
-            </header>
+            {/* In the conversation a chat-trigger run needs no header: its bubble says it. The
+                section keeps its name either way. */}
+            {!(conversation && run.trigger === "chat") && (
+              <header className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
+                <span>{runTrigger(run)}</span>
+                <span>{localDateTime(run.queued_at)}</span>
+                {many && <StatusBadge status={run.status} />}
+              </header>
+            )}
             <ScheduleLine run={run} />
             <FollowUpLine run={run} />
             <WatcherLine run={run} />
@@ -397,12 +463,15 @@ export function Transcript(props: {
               {message !== null && (
                 <p
                   data-from="person"
-                  className="max-w-[80%] self-end rounded-2xl rounded-br-sm bg-bubble px-3.5 py-2 whitespace-pre-wrap text-bubble-foreground"
+                  className={cn(
+                    "self-end rounded-2xl rounded-br-sm bg-bubble px-3.5 py-2 whitespace-pre-wrap text-bubble-foreground",
+                    conversation ? "max-w-[75%] break-words" : "max-w-[80%]",
+                  )}
                 >
                   {message}
                 </p>
               )}
-              {(items.length > 0 || checkIns.length > 0) && (
+              {!conversation && (items.length > 0 || checkIns.length > 0) && (
                 <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
                   <span aria-hidden className="size-1.5 rounded-full bg-primary" />
                   {props.dotName ?? "The dot"} · {localTime(run.queued_at)}
@@ -411,20 +480,12 @@ export function Transcript(props: {
               {blocks(items).map((block) =>
                 block.kind === "tools" ? (
                   <Fragment key={block.seq}>
-                    <div
-                      role="group"
-                      aria-label="Tool steps"
-                      className="flex flex-wrap items-start gap-1.5"
-                    >
-                      {block.items.map((item) => (
-                        <ToolChip
-                          key={item.seq}
-                          item={item}
-                          active={isActive(run)}
-                          owners={owners}
-                        />
-                      ))}
-                    </div>
+                    {conversation ? (
+                      <StepsLine items={block.items} active={isActive(run)} owners={owners} />
+                    ) : (
+                      <ToolChips items={block.items} active={isActive(run)} owners={owners} />
+                    )}
+                    {/* The memory notes stay under the steps, shown while the steps are closed. */}
                     {block.items.map((item) => (
                       <MemoryNote key={item.seq} item={item} dotId={run.dot_id} />
                     ))}
@@ -438,6 +499,9 @@ export function Transcript(props: {
                     runId={run.id}
                   />
                 ),
+              )}
+              {conversation && run.trigger === "chat" && run.status === "cancelled" && (
+                <p className="text-xs text-muted-foreground">Cancelled</p>
               )}
               {items.length === 0 && message === null && run.status === "queued" && (
                 <p className="text-muted-foreground">Waiting to start.</p>
