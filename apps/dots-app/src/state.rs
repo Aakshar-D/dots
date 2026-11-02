@@ -178,13 +178,13 @@ mod tests {
         let backup = dir
             .path()
             .join("backups")
-            .join("dots-0.3.0-2026-10-27-031200.db");
+            .join("dots-0.1.0-2026-10-27-031200.db");
         std::fs::create_dir_all(backup.parent().unwrap()).unwrap();
         std::fs::write(&backup, "db").unwrap();
         crate::update_record::write(
             dir.path(),
             &crate::update_record::UpdateRecord {
-                leaving: Some("0.3.0".into()),
+                leaving: Some("0.1.0".into()),
                 installing: Some(env!("CARGO_PKG_VERSION").into()),
                 backup: Some(backup),
                 pending: true,
@@ -198,7 +198,7 @@ mod tests {
                 .unwrap()
                 .go_back
                 .as_deref(),
-            Some("0.3.0")
+            Some("0.1.0")
         );
     }
 
