@@ -71,9 +71,10 @@ pub enum Notice {
 }
 
 /// Decides which events notify: approval requests, a run moving from queued or running into
-/// succeeded, failed or awaiting approval, and a schedule that needs attention, and a run
-/// gone quiet. Chat runs do not notify (the user is watching them), except a chat run the
-/// watchdog stopped, which does. A scheduled run that fails does not notify by
+/// succeeded, failed or awaiting approval, a schedule that needs attention, and a run gone
+/// quiet. The quiet notice goes for any run, chat included, except the dot being viewed. A
+/// run that ends notifies except chat runs (the user is watching them); a chat run the
+/// watchdog stopped does notify. A scheduled run that fails does not notify by
 /// itself: it is retried, or its schedule needs attention, which notifies. A run first seen
 /// in a final state (e.g. marked reviewed) and a parked run closed by a decision do not
 /// notify either. A run that parks on an approval request this notifier has announced does
@@ -1025,7 +1026,7 @@ mod tests {
     }
 
     #[test]
-    fn a_quiet_run_notifies_once() {
+    fn a_quiet_run_notifies_only_when_marked_quiet() {
         let mut n = Notifier::default();
         assert_eq!(
             n.decide(&quiet_event(Some("t"), Some(600))),
