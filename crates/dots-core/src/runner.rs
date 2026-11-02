@@ -1380,10 +1380,24 @@ impl Runner {
             let quiet_timer = quiet
                 .filter(|_| grace.is_none())
                 .map(|q| quiet_at.unwrap_or(last_output) + q);
-            // Biased, output first: output ready at the same poll as the warn deadline wins,
-            // so a run that just spoke is never announced as gone quiet.
+            // Biased, in this order: the time limit and a cancel come first, so a flood of
+            // engine events can never starve them. Output comes before the quiet timer, so
+            // output ready at the same poll as the warn deadline wins and a run that just
+            // spoke is never announced as gone quiet.
             tokio::select! {
                 biased;
+                _ = tokio::time::sleep_until(limit) => {
+                    if grace.is_some() {
+                        tracing::warn!(run = %run.id, "engine ignored cancellation; abandoning it");
+                        break;
+                    }
+                    timed_out = true;
+                    cancel.cancel();
+                    grace = Some(Instant::now() + self.cfg.cancel_grace);
+                }
+                _ = cancel.cancelled(), if grace.is_none() => {
+                    grace = Some(Instant::now() + self.cfg.cancel_grace);
+                }
                 ev = rx.recv() => {
                     let Some(ev) = ev else { break };
                     self.record(&run.id, &ev).await?;
@@ -1400,18 +1414,6 @@ impl Runner {
                         }
                         _ => {}
                     }
-                }
-                _ = tokio::time::sleep_until(limit) => {
-                    if grace.is_some() {
-                        tracing::warn!(run = %run.id, "engine ignored cancellation; abandoning it");
-                        break;
-                    }
-                    timed_out = true;
-                    cancel.cancel();
-                    grace = Some(Instant::now() + self.cfg.cancel_grace);
-                }
-                _ = cancel.cancelled(), if grace.is_none() => {
-                    grace = Some(Instant::now() + self.cfg.cancel_grace);
                 }
                 _ = tokio::time::sleep_until(quiet_timer.unwrap_or(deadline)),
                     if quiet_timer.is_some() =>

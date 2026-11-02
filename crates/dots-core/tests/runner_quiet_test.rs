@@ -322,6 +322,22 @@ async fn the_time_limit_firing_first_keeps_its_reason() {
 }
 
 #[tokio::test]
+async fn a_flooding_engine_still_hits_the_time_limit() {
+    let (dir, store) = temp_store().await;
+    let bus = new_bus();
+    // Output every poll, and cancellation ignored: only the time limit and the grace
+    // period can end this run.
+    let engine = Arc::new(ScriptedEngine::new(vec![Step::Flood]));
+    let runner = runner_with(&store, &bus, &dir, engine);
+    let dot = folder_dot(&store, &dir, "flood", Some(86400), 1, 240).await;
+    let id = manual(&runner, &dot).await;
+
+    let run = wait_status(&store, &id, RunStatus::Failed, 15).await;
+    assert_eq!(run.error.as_deref(), Some("timeout after 1s"));
+    assert!(!run.quiet_stopped);
+}
+
+#[tokio::test]
 async fn keep_waiting_errors() {
     let dir = tempfile::tempdir().unwrap();
     let mut cfg = Config::new(dir.path().join("data"));
