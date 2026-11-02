@@ -78,6 +78,23 @@ describe("runtime events and the query cache", () => {
     for (const key of untouched) expect(stale(qc, key), key.join("/")).toBe(false);
   });
 
+  it("marks the run, the topic and the overview stale when a run goes quiet", () => {
+    const qc = createQueryClient();
+    const lists = [keys.thread(sample.run.root_run_id), keys.runs(sample.dot.id), keys.overview];
+    const untouched = [keys.dots, keys.settings];
+    for (const key of [...lists, ...untouched]) qc.setQueryData(key, []);
+
+    applyRuntimeEvent(qc, {
+      type: "run_quiet",
+      run_id: sample.run.id,
+      dot_id: sample.dot.id,
+      quiet_since: "2026-11-02T12:00:00Z",
+      quiet_limit_secs: 600,
+    });
+    for (const key of lists) expect(stale(qc, key), key.join("/")).toBe(true);
+    for (const key of untouched) expect(stale(qc, key), key.join("/")).toBe(false);
+  });
+
   it("marks the inbox and the run's approvals stale on an approval event", () => {
     const qc = createQueryClient();
     const mine = keys.approvals(sample.approval.run_id);

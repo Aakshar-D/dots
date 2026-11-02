@@ -22,6 +22,7 @@ import { formatCost } from "@/lib/usage-format";
 import { notifyError } from "@/lib/notify";
 import { eventsQuery, keys } from "@/lib/query";
 import { useNow } from "@/lib/use-now";
+import { QuietCard } from "@/screens/home/QuietCard";
 
 /// One thread: the run in the address and every other run of its lineage, as one transcript,
 /// with what the thread changed and the actions on it.
@@ -118,6 +119,7 @@ function Thread({ runId, runs }: { runId: string; runs: Run[] }) {
       {pending.map((approval) => (
         <ApprovalCard key={approval.id} approval={approval} dotName={dot.data?.name} />
       ))}
+      {active && <QuietCard run={active} />}
       <AppliedCalls approvals={asked} />
       {/* The run's error stands above, so the transcript does not repeat it. */}
       <Transcript

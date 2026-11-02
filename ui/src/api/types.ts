@@ -122,6 +122,8 @@ const dotSpecShape = {
   max_turns: z.number().int(),
   timeout_secs: z.number().int(),
   approval_wait_secs: z.number().int(),
+  // Quiet limit in seconds: null follows the app default, 0 is off, else 60 to 86400.
+  quiet_limit_secs: nullable(z.number().int()),
   enabled: z.boolean(),
 };
 export const DotSpec = z.strictObject(dotSpecShape);
@@ -171,6 +173,12 @@ const runShape = {
   workflow_step_run_id: nullable(z.string()),
   // The part of tokens_in read from the prompt cache.
   tokens_cache_read: z.number().int(),
+  // When the run went quiet (RFC 3339 UTC); null while it is not quiet.
+  quiet_since: nullable(z.string()),
+  // The quiet limit the run is held to, in seconds; null when none applies.
+  quiet_limit_secs: nullable(z.number().int()),
+  // The watchdog stopped the run for being quiet.
+  quiet_stopped: z.boolean(),
 };
 export const Run = z.strictObject(runShape);
 
@@ -433,6 +441,14 @@ export const PausedWatcher = z.strictObject({
 export const RuntimeEvent = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("run_updated"), run: Run }),
   z.strictObject({ type: z.literal("run_event"), event: RunEventRecord }),
+  // A running run went quiet, or spoke again (quiet_since null); a `run_updated` comes with it.
+  z.strictObject({
+    type: z.literal("run_quiet"),
+    run_id: z.string(),
+    dot_id: z.string(),
+    quiet_since: nullable(z.string()),
+    quiet_limit_secs: nullable(z.number().int()),
+  }),
   z.strictObject({ type: z.literal("approval_requested"), approval: Approval }),
   z.strictObject({ type: z.literal("approval_decided"), approval: Approval }),
   z.strictObject({ type: z.literal("approval_updated"), approval: Approval }),
@@ -530,6 +546,8 @@ export const Settings = z.strictObject({
   auto_install_updates: z.boolean(),
   // The vault entry holding the GitHub token Dots publishes with; null when it does not.
   publish_token: nullable(z.string()),
+  // Seconds a run may stay quiet before it is stopped (60 to 86400); a dot may override it.
+  quiet_limit_secs: z.number().int(),
 });
 export const SettingsSaved = z.strictObject({
   settings: Settings,
@@ -1452,6 +1470,8 @@ export const ReleaseNotes = z.strictObject({
 /// test checks them against the Rust constants.
 export const LIMITS = {
   max_timeout_secs: 604800,
+  min_quiet_limit_secs: 60,
+  max_quiet_limit_secs: 86400,
   max_approval_wait_secs: 280,
   max_concurrent_runs: 16,
   max_schedule_attempts: 6,

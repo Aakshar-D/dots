@@ -1,6 +1,8 @@
+import { useQuery } from "@tanstack/react-query";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { ReactNode } from "react";
 
+import { commands } from "@/api/commands";
 import { EngineKind, WorkspaceMode, type Dot, type DotSpec } from "@/api/types";
 import { Field } from "@/components/Field";
 import { Button } from "@/components/ui/button";
@@ -11,6 +13,7 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import type { SpecErrors } from "@/lib/dot-rules";
 import { notifyError } from "@/lib/notify";
+import { keys } from "@/lib/query";
 import { BrowserSection } from "@/screens/dot-editor/BrowserSection";
 import { PERSONAL } from "@/lib/scope";
 import { OrgLine, OrgPicker, WorkspaceMove, WorkspacePicker } from "@/screens/dot-editor/DotOrg";
@@ -53,6 +56,68 @@ function NumberField(props: {
           props.onChange(e.target.value === "" ? Number.NaN : Number(e.target.value))
         }
       />
+    </Field>
+  );
+}
+
+type QuietMode = "default" | "off" | "minutes";
+const quietMode = (secs: number | null): QuietMode =>
+  secs === null ? "default" : secs === 0 ? "off" : "minutes";
+
+/// The dot's quiet limit: the app default, off, or a number of minutes. The spec holds seconds.
+function QuietLimit(props: {
+  spec: DotSpec;
+  onChange: (secs: number | null) => void;
+  error?: string;
+}) {
+  const settings = useQuery({ queryKey: keys.settings, queryFn: commands.getSettings }).data;
+  const { spec } = props;
+  const secs = spec.quiet_limit_secs;
+  const mode = quietMode(secs);
+  const defaultLabel = settings
+    ? `App default (${settings.quiet_limit_secs / 60} min)`
+    : "App default";
+  const longer = secs !== null && secs > spec.timeout_secs;
+  return (
+    <Field
+      label="Quiet limit"
+      htmlFor="dot-quiet-mode"
+      error={props.error}
+      hint={
+        <>
+          If this dot shows no output for this long, Dots asks you; at twice this long it stops
+          the run.
+          {longer && " Longer than the time limit; the time limit will end the run first."}
+        </>
+      }
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <NativeSelect
+          id="dot-quiet-mode"
+          className="w-52"
+          value={mode}
+          onChange={(e) => {
+            const next = e.target.value;
+            props.onChange(next === "default" ? null : next === "off" ? 0 : 600);
+          }}
+        >
+          <option value="default">{defaultLabel}</option>
+          <option value="off">Off</option>
+          <option value="minutes">Minutes</option>
+        </NativeSelect>
+        {mode === "minutes" && (
+          <Input
+            id="dot-quiet-minutes"
+            aria-label="Quiet limit (minutes)"
+            type="number"
+            className="w-28"
+            value={secs === null || Number.isNaN(secs) ? "" : secs / 60}
+            onChange={(e) =>
+              props.onChange(e.target.value === "" ? Number.NaN : Number(e.target.value) * 60)
+            }
+          />
+        )}
+      </div>
     </Field>
   );
 }
@@ -292,6 +357,11 @@ export function DotForm(props: {
           onChange={(v) => set("approval_wait_secs", v)}
           error={errors.approval_wait_secs}
           hint="How long a run waits for your answer before it parks and continues later."
+        />
+        <QuietLimit
+          spec={spec}
+          onChange={(secs) => set("quiet_limit_secs", secs)}
+          error={errors.quiet_limit_secs}
         />
       </Section>
 

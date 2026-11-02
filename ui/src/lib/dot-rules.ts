@@ -10,6 +10,8 @@ const filled = (message: string) => z.string().refine((s) => s.trim() !== "", me
 const whole = (min: number, max: number, message: string) =>
   z.number({ error: message }).int(message).min(min, message).max(max, message);
 
+const QUIET_MESSAGE = `Quiet limit must be 1 to ${LIMITS.max_quiet_limit_secs / 60} minutes.`;
+
 const Fields = z.object({
   name: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/, "Use 1 to 64 letters, digits, '-' or '_'."),
   instructions: filled("Say what the dot should do."),
@@ -26,6 +28,12 @@ const Fields = z.object({
     LIMITS.max_approval_wait_secs,
     `Approval wait must be a whole number of seconds, 0 to ${LIMITS.max_approval_wait_secs}.`,
   ),
+  // null follows the app default and 0 is off.
+  quiet_limit_secs: z
+    .number({ error: QUIET_MESSAGE })
+    .int(QUIET_MESSAGE)
+    .refine((n) => n === 0 || (n >= LIMITS.min_quiet_limit_secs && n <= LIMITS.max_quiet_limit_secs), QUIET_MESSAGE)
+    .nullable(),
 });
 
 /// What is wrong with a draft, by field. Empty when it can be saved.
@@ -186,6 +194,7 @@ export function specOf(dot: DotSpec): DotSpec {
     max_turns: dot.max_turns,
     timeout_secs: dot.timeout_secs,
     approval_wait_secs: dot.approval_wait_secs,
+    quiet_limit_secs: dot.quiet_limit_secs,
     enabled: dot.enabled,
   };
 }

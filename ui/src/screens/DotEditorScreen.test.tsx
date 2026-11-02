@@ -583,3 +583,57 @@ describe("the dot editor, stored dot", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe("/runs/run-new"));
   });
 });
+
+describe("the dot editor, quiet limit", () => {
+  async function save(user: ReturnType<typeof renderApp>["user"]) {
+    backend.on("create_dot", (args) => ({ ...dot, ...(args.spec as object), id: "dot-new" }));
+    backend.on("get_dot", () => ({ ...dot, id: "dot-new", name: "nightly" }));
+    await user.type(await screen.findByLabelText("Name"), "nightly");
+    await user.type(screen.getByLabelText("Instructions"), "Run the tests.");
+    await user.type(screen.getByLabelText("Folder"), "C:/dev/app");
+    await user.click(screen.getByRole("button", { name: "Create dot" }));
+    await waitFor(() => expect(backend.callsTo("create_dot")).toHaveLength(1));
+    return (backend.callsTo("create_dot")[0] as { spec: { quiet_limit_secs: number | null } }).spec
+      .quiet_limit_secs;
+  }
+
+  it("offers the app default in minutes from Settings, and saves it as none", async () => {
+    const { user } = renderApp("/dots/new");
+    const choice = await screen.findByLabelText("Quiet limit");
+    await waitFor(() =>
+      expect(within(choice).getByRole("option", { name: "App default (10 min)" })).toBeVisible(),
+    );
+    expect(choice).toHaveValue("default");
+    expect(await save(user)).toBeNull();
+  });
+
+  it("saves Off as 0", async () => {
+    const { user } = renderApp("/dots/new");
+    await user.selectOptions(await screen.findByLabelText("Quiet limit"), "off");
+    expect(await save(user)).toBe(0);
+  });
+
+  it("saves minutes as seconds", async () => {
+    const { user } = renderApp("/dots/new");
+    await user.selectOptions(await screen.findByLabelText("Quiet limit"), "minutes");
+    const minutes = screen.getByLabelText("Quiet limit (minutes)");
+    await user.clear(minutes);
+    await user.type(minutes, "15");
+    expect(await save(user)).toBe(900);
+  });
+
+  it("warns when the quiet limit is longer than the time limit", async () => {
+    const { user } = renderApp("/dots/new");
+    const hint = "Longer than the time limit; the time limit will end the run first.";
+    await user.selectOptions(await screen.findByLabelText("Quiet limit"), "minutes");
+    const minutes = screen.getByLabelText("Quiet limit (minutes)");
+    await user.clear(minutes);
+    await user.type(minutes, "60");
+    // The default timeout is 1800 seconds.
+    expect(blankSpec.timeout_secs).toBe(1800);
+    expect(screen.getByText(new RegExp(hint))).toBeVisible();
+    await user.clear(minutes);
+    await user.type(minutes, "20");
+    expect(screen.queryByText(new RegExp(hint))).toBeNull();
+  });
+});

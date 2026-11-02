@@ -289,3 +289,42 @@ describe("the Settings screen", () => {
     expect(backend.callsTo("mark_claude_tested")).toHaveLength(1);
   });
 });
+
+describe("the quiet limit setting", () => {
+  it("shows the stored seconds as minutes and saves minutes as seconds", async () => {
+    saving();
+    const { user } = renderApp("/settings");
+    const field = await screen.findByLabelText("Quiet limit for every dot");
+    expect(stored.quiet_limit_secs).toBe(600);
+    expect(field).toHaveValue(10);
+    await user.clear(field);
+    await user.type(field, "20");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("Saved")).toBeVisible();
+    expect(backend.callsTo("update_settings")).toEqual([
+      { settings: { ...stored, quiet_limit_secs: 1200 } },
+    ]);
+  });
+
+  it.each(["0", "1441"])("marks %s minutes and does not save", async (minutes) => {
+    saving();
+    const { user } = renderApp("/settings");
+    const field = await screen.findByLabelText("Quiet limit for every dot");
+    await user.clear(field);
+    await user.type(field, minutes);
+    expect(screen.getByText(/1 to 1440/)).toBeVisible();
+    const save = screen.getByRole("button", { name: "Save" });
+    expect(save).toBeDisabled();
+    await user.click(save);
+    expect(backend.callsTo("update_settings")).toEqual([]);
+  });
+
+  it("checks the limit in seconds", () => {
+    const base = { port: 47321, max_concurrent_runs: 4 };
+    expect(settingsErrors({ ...base, quiet_limit_secs: 60 })).toEqual({});
+    expect(settingsErrors({ ...base, quiet_limit_secs: 86400 })).toEqual({});
+    expect(settingsErrors({ ...base, quiet_limit_secs: 0 })).toHaveProperty("quiet");
+    expect(settingsErrors({ ...base, quiet_limit_secs: 86460 })).toHaveProperty("quiet");
+    expect(settingsErrors({ ...base, quiet_limit_secs: 90 })).toHaveProperty("quiet");
+  });
+});

@@ -23,7 +23,7 @@ import { Accounts } from "./Accounts";
 import { ProfileSection } from "./ProfileSection";
 import { UpdatesSection } from "@/screens/UpdatesSection";
 
-type Errors = { port?: string; max?: string; global?: string; share?: string };
+type Errors = { port?: string; max?: string; global?: string; share?: string; quiet?: string };
 
 /// The core's words for a hold share out of bounds (usage and limits spec section 4).
 const SHARE_RULE = "A share is 10 to 100%, in steps of 5.";
@@ -35,7 +35,12 @@ export const utf8Bytes = (text: string) => new TextEncoder().encode(text).length
 /// in the core.
 export function settingsErrors(
   draft: Pick<Settings, "port" | "max_concurrent_runs"> &
-    Partial<Pick<Settings, "global_instructions" | "hold_share_five_hour" | "hold_share_weekly">>,
+    Partial<
+      Pick<
+        Settings,
+        "global_instructions" | "hold_share_five_hour" | "hold_share_weekly" | "quiet_limit_secs"
+      >
+    >,
 ): Errors {
   const errors: Errors = {};
   if (utf8Bytes(draft.global_instructions ?? "") > LIMITS.max_global_instructions) {
@@ -49,6 +54,13 @@ export function settingsErrors(
   const share = (n: number | undefined) => n === undefined || (whole(n, 10, 100) && n % 5 === 0);
   if (!share(draft.hold_share_five_hour) || !share(draft.hold_share_weekly)) {
     errors.share = SHARE_RULE;
+  }
+  const quiet = draft.quiet_limit_secs;
+  if (
+    quiet !== undefined &&
+    !(whole(quiet, LIMITS.min_quiet_limit_secs, LIMITS.max_quiet_limit_secs) && quiet % 60 === 0)
+  ) {
+    errors.quiet = `The quiet limit must be a whole number of minutes, 1 to ${LIMITS.max_quiet_limit_secs / 60}.`;
   }
   return errors;
 }
@@ -188,7 +200,11 @@ function Form({ stored, status }: { stored: Settings; status: Status | undefined
     <Page
       title="Settings"
       actions={
-        <Button size="sm" disabled={save.isPending} onClick={submit}>
+        <Button
+          size="sm"
+          disabled={save.isPending || errors.quiet !== undefined}
+          onClick={submit}
+        >
           Save
         </Button>
       }
@@ -286,6 +302,20 @@ function Form({ stored, status }: { stored: Settings; status: Status | undefined
             className="w-40"
             value={shown(draft.max_concurrent_runs)}
             onChange={(e) => set({ max_concurrent_runs: numberOf(e.target.value) })}
+          />
+        </Field>
+        <Field
+          label="Quiet limit for every dot"
+          htmlFor="settings-quiet"
+          error={errors.quiet}
+          hint="If a run shows no output for this many minutes, Dots asks you; at twice this long it stops the run. A dot can set its own."
+        >
+          <Input
+            id="settings-quiet"
+            type="number"
+            className="w-40"
+            value={shown(draft.quiet_limit_secs / 60)}
+            onChange={(e) => set({ quiet_limit_secs: numberOf(e.target.value) * 60 })}
           />
         </Field>
       </Section>

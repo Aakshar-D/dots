@@ -20,6 +20,22 @@ describe("dot editor rules", () => {
     expect(specErrors(specOf(sample.dot))).toEqual({});
   });
 
+  it("takes the app default, off, and 1 to 1440 minutes as a quiet limit", () => {
+    for (const quiet_limit_secs of [null, 0, 60, 900, 86400]) {
+      expect(specErrors({ ...good, quiet_limit_secs }), String(quiet_limit_secs)).toEqual({});
+    }
+    for (const quiet_limit_secs of [59, 86401, -60, 90.5, Number.NaN]) {
+      expect(specErrors({ ...good, quiet_limit_secs }), String(quiet_limit_secs)).toHaveProperty(
+        "quiet_limit_secs",
+      );
+    }
+  });
+
+  it("carries the quiet limit into the editable spec", () => {
+    expect(specOf({ ...sample.dot, quiet_limit_secs: 900 }).quiet_limit_secs).toBe(900);
+    expect(specOf({ ...sample.dot, quiet_limit_secs: null }).quiet_limit_secs).toBeNull();
+  });
+
   it("names what a new dot still lacks", () => {
     expect(Object.keys(specErrors(blankSpec)).sort()).toEqual([
       "instructions",

@@ -171,6 +171,7 @@ export const commands = {
   chat: (dotId: string, message: string, parentRunId: string | null) =>
     call(T.Run, "chat", { dotId, message, parentRunId }),
   cancelRun: (runId: string) => call(T.Run, "cancel_run", { runId }),
+  keepWaiting: (runId: string) => call(nothing, "keep_waiting", { runId }),
   listRuns: (dotId: string | null, limit: number) =>
     call(T.Run.array(), "list_runs", { dotId, limit }),
   getRun: (id: string) => call(T.Run, "get_run", { id }),
