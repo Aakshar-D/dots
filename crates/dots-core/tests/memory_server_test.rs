@@ -329,6 +329,9 @@ async fn a_memory_call_is_checked_with_its_own_argument_only() {
     call(&e, &secret, "remember", mixed.clone()).await;
     call(&e, &secret, "forget", mixed.clone()).await;
     call(&e, &secret, "recall", mixed).await;
+    // Every row is recorded under the one `Memory` rule (`a.tool`), so the rows are told apart
+    // by their input. Each expected input must appear exactly once, whatever order the rows
+    // come back in.
     let inputs: Vec<Value> = e
         .store
         .approvals_for_run(&run.id)
@@ -337,12 +340,17 @@ async fn a_memory_call_is_checked_with_its_own_argument_only() {
         .into_iter()
         .map(|a| a.input)
         .collect();
-    assert_eq!(
-        inputs,
-        [
-            json!({"text": "Prefers PDF"}),
-            json!({"id": "01HXAAAAAAAAAAAAAAAAAAAAAA"}),
-            json!({"query": "x"}),
-        ]
-    );
+    let expected = [
+        json!({"text": "Prefers PDF"}),
+        json!({"id": "01HXAAAAAAAAAAAAAAAAAAAAAA"}),
+        json!({"query": "x"}),
+    ];
+    assert_eq!(inputs.len(), expected.len(), "{inputs:?}");
+    for want in &expected {
+        assert_eq!(
+            inputs.iter().filter(|got| *got == want).count(),
+            1,
+            "{want} in {inputs:?}"
+        );
+    }
 }
