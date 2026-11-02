@@ -70,6 +70,10 @@ async fn requeue_puts_a_running_run_back_with_its_payload() {
         .await
         .unwrap();
     store.set_session(&run.id, "sess-1").await.unwrap();
+    store
+        .set_run_quiet(&run.id, Some("2026-11-02T12:00:00Z"))
+        .await
+        .unwrap();
 
     // Queued with nothing of a thread: what this attempt set goes.
     let back = store.requeue_run(&run.id, &run).await.unwrap();
@@ -79,6 +83,7 @@ async fn requeue_puts_a_running_run_back_with_its_payload() {
     assert_eq!(back.workspace_path, None);
     assert_eq!(back.branch, None);
     assert_eq!(back.base_commit, None);
+    assert_eq!(back.quiet_since, None);
     assert_eq!(back.trigger, TriggerKind::Watcher);
     assert_eq!(back.payload, Some(json!({"a": 1})));
     assert!(matches!(

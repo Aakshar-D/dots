@@ -318,6 +318,7 @@ impl Runtime {
                 worktrees_dir: cfg.data_dir.join("worktrees"),
                 cancel_grace: Duration::from_secs(10),
                 plugins_dir: cfg.data_dir.join("plugins"),
+                quiet_unit: Duration::from_secs(1),
             },
         );
         // Dots' own `dots` MCP server serves the check-in tools to Claude runs.
@@ -1426,6 +1427,17 @@ impl Runtime {
 
     pub async fn cancel_run(&self, run_id: &str) -> Result<Run> {
         self.runner.cancel(run_id).await
+    }
+
+    /// Keep waiting on a quiet run (stuck-run watchdog spec section 4.4): the mark goes and the
+    /// quiet clock starts again. `NotFound` for an unknown run, `Conflict` unless it is running
+    /// and quiet.
+    pub async fn keep_waiting(&self, run_id: &str) -> Result<()> {
+        let run = self.store.get_run(run_id).await?;
+        if run.status != RunStatus::Running || run.quiet_since.is_none() {
+            return Err(Error::Conflict(format!("run {run_id} is not quiet")));
+        }
+        self.runner.keep_waiting(run_id).await
     }
 
     /// The allow rules a person may save while approving this call, narrowest first. Empty when

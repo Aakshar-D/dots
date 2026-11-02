@@ -278,6 +278,8 @@ async fn workspace_member_can_edit_and_run() {
 async fn outside_workspace_refuses_but_cleanup() {
     let t = Rt::start().await;
     let dot = t.payments_dot().await;
+    // Held before the run is queued, so the dispatcher cannot claim it in between.
+    t.rt.hold_runs(true).await;
     let run =
         t.rt.store()
             .create_run(&NewRun::new(&dot, TriggerKind::Manual))
@@ -288,7 +290,6 @@ async fn outside_workspace_refuses_but_cleanup() {
             .create_approval(&run.id, "Bash", &json!({"command": "ls"}))
             .await
             .unwrap();
-    t.rt.hold_runs(true).await;
     t.become_(2, "member", json!({"default": "member"})).await;
 
     assert_eq!(refused(t.rt.run_now(&dot).await), OUTSIDE);

@@ -91,6 +91,7 @@ async fn env(script: Value) -> Env {
             worktrees_dir: dir.path().join("wt"),
             cancel_grace: Duration::from_secs(2),
             plugins_dir: dir.path().join("plugins"),
+            quiet_unit: Duration::from_secs(1),
         },
     );
     let follow_ups = FollowUps::new(store.clone(), bus.clone(), Arc::new(SystemClock));

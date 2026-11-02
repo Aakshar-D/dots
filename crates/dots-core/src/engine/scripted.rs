@@ -22,6 +22,9 @@ pub enum Step {
     WaitForCancel,
     /// Blocks forever and ignores cancellation (a process that never exits).
     Hang,
+    /// Emits text without pause, ignoring cancellation, until the receiver is dropped (an
+    /// engine flooding the runner with events).
+    Flood,
     /// Performs `RunContext::approved_calls` the way a self-applying engine does, without
     /// running anything: claims each through the gate, emits its tool call, settles it as
     /// applied and emits the result `performed`.
@@ -125,6 +128,14 @@ impl Engine for ScriptedEngine {
                     Step::Hang => {
                         let _keep_open = tx.clone();
                         std::future::pending::<()>().await;
+                    }
+                    Step::Flood => {
+                        while tx
+                            .send(EngineEvent::AssistantText { text: "x".into() })
+                            .await
+                            .is_ok()
+                        {}
+                        return;
                     }
                     Step::ApplyApproved => {
                         let Some(gate) = &gate else { continue };

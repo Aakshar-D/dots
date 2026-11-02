@@ -612,7 +612,8 @@ impl Scheduler {
         let called = self.store.called_a_tool(&run.id).await?;
         let reviewed_run =
             (run.trigger == TriggerKind::Schedule && !called).then(|| run.id.clone());
-        if attempt < MAX_ATTEMPTS && !called {
+        // A run the watchdog stopped is not retried either: it was stuck, and would be again.
+        if attempt < MAX_ATTEMPTS && !called && !run.quiet_stopped {
             let ended = match &run.ended_at {
                 Some(t) => parse_time(t)?,
                 None => now,

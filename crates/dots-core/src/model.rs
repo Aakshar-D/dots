@@ -5,6 +5,7 @@ use serde_json::Value;
 use crate::library::Uses;
 use crate::policy::{Policy, Preset};
 use crate::schedule::{next_slot, Schedule, Until};
+use crate::settings::Settings;
 use crate::vault::Grants;
 use crate::{Error, Result};
 
@@ -74,6 +75,18 @@ fn yes() -> bool {
 
 pub const MAX_TIMEOUT_SECS: u64 = 7 * 24 * 60 * 60;
 pub const MAX_APPROVAL_WAIT_SECS: u64 = 280;
+pub const MIN_QUIET_LIMIT_SECS: u64 = 60;
+pub const MAX_QUIET_LIMIT_SECS: u64 = 86_400;
+
+/// The quiet limit that applies to a run of `spec`: the dot's own, else the Settings default;
+/// `None` when the watchdog is off for the dot (`Some(0)`).
+pub fn effective_quiet_limit(spec: &DotSpec, settings: &Settings) -> Option<u64> {
+    match spec.quiet_limit_secs {
+        Some(0) => None,
+        Some(secs) => Some(secs),
+        None => Some(settings.quiet_limit_secs),
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DotSpec {
@@ -97,6 +110,11 @@ pub struct DotSpec {
     /// existed reads as off.
     #[serde(default)]
     pub browser: bool,
+    /// How long a run may go without output before the watchdog stops it (stuck-run watchdog
+    /// spec section 4.3): `None` takes the Settings default, `Some(0)` turns it off for this
+    /// dot. A spec written before it existed reads as `None`.
+    #[serde(default)]
+    pub quiet_limit_secs: Option<u64>,
     /// The first prompt starts with the global instructions of Settings (context library spec
     /// section 2).
     #[serde(default = "yes")]
@@ -123,6 +141,7 @@ impl DotSpec {
             uses: Uses::default(),
             variables: Grants::default(),
             browser: false,
+            quiet_limit_secs: None,
             use_global_instructions: true,
             use_user_settings: false,
             max_turns: 40,
@@ -175,6 +194,12 @@ impl DotSpec {
         // The CLI aborts a pending permission-prompt call at about 300 s.
         if self.approval_wait_secs > MAX_APPROVAL_WAIT_SECS {
             return invalid("approval_wait_secs must be at most 280");
+        }
+        // `Some(0)` turns the watchdog off for this dot.
+        if let Some(secs) = self.quiet_limit_secs {
+            if secs != 0 && !(MIN_QUIET_LIMIT_SECS..=MAX_QUIET_LIMIT_SECS).contains(&secs) {
+                return invalid("quiet_limit_secs must be between 60 and 86400");
+            }
         }
         self.policy.validate()?;
         // Whether the Library has each item is checked by the store when the dot is saved.
@@ -242,6 +267,13 @@ pub struct Run {
     pub workflow_step_run_id: Option<String>,
     /// The part of `tokens_in` read from the prompt cache (teams spec section 9).
     pub tokens_cache_read: i64,
+    /// When the run went quiet and was flagged for the person; `None` while it is not quiet
+    /// (stuck-run watchdog spec section 4.3).
+    pub quiet_since: Option<String>,
+    /// The quiet limit the run started with (`None`: the watchdog was off for it).
+    pub quiet_limit_secs: Option<u64>,
+    /// The watchdog stopped this run for being quiet too long.
+    pub quiet_stopped: bool,
 }
 
 /// Input for `Store::create_run`. `root_run_id: None` makes the run its own root.

@@ -601,6 +601,12 @@ pub async fn cancel_run(state: State<'_, AppState>, run_id: String) -> Res<Run> 
     Ok(state.rt()?.cancel_run(&run_id).await?)
 }
 
+/// "Keep waiting" on a run that has gone quiet: restarts its quiet clock.
+#[tauri::command]
+pub async fn keep_waiting(state: State<'_, AppState>, run_id: String) -> Res<()> {
+    Ok(state.rt()?.keep_waiting(&run_id).await?)
+}
+
 #[tauri::command]
 pub async fn list_runs(
     state: State<'_, AppState>,

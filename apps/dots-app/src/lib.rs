@@ -98,6 +98,7 @@ command_list![
     run_now,
     chat,
     cancel_run,
+    keep_waiting,
     list_runs,
     get_run,
     run_thread,

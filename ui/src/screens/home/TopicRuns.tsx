@@ -11,6 +11,8 @@ import { Failure, Transcript } from "@/components/Transcript";
 import { isActive } from "@/lib/home-topics";
 import { eventsQuery, keys } from "@/lib/query";
 
+import { QuietCard } from "./QuietCard";
+
 /// Runs of one topic as the chat shows a thread: each run's message, the dot's text, its tool
 /// steps, check-ins and browser calls (`Transcript`), the calls Dots performed, a card per
 /// approval it waits for and per app it sent for review, the instructions the dot proposed that
@@ -60,6 +62,7 @@ export function TopicRuns(props: {
       {pending.map((approval) => (
         <ApprovalCard key={approval.id} approval={approval} dotName={dotName} />
       ))}
+      {latest && <QuietCard run={latest} />}
       <AppReviews runs={runs} dotName={dotName} />
       {proposals.map((proposal) => (
         <InstructionsCard key={proposal.id} proposal={proposal} dotName={dotName} busy={busy} />

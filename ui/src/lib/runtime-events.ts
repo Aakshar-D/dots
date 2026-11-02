@@ -23,6 +23,13 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
         invalidate(qc, queryKey);
       }
       break;
+    case "run_quiet":
+      // The quiet card of the run, and the dot's needs-you count. The run list comes with the
+      // `run_updated` sent alongside.
+      for (const queryKey of [["thread"], ["runs"], keys.overview]) {
+        invalidate(qc, queryKey);
+      }
+      break;
     case "run_event": {
       const queryKey = keys.events(event.event.run_id);
       const have = qc.getQueryData<RunEventRecord[]>(queryKey);

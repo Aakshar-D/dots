@@ -11,7 +11,8 @@ use crate::{Error, Result};
 const RUN_COLUMNS: &str = "id, dot_id, root_run_id, parent_run_id, trigger_kind, payload, status, \
     session_id, workspace_path, branch, base_commit, summary, error, tokens_in, tokens_out, \
     queued_at, started_at, ended_at, reviewed_at, retry_of, workflow_step_run_id, \
-    tokens_cache_read, cost_usd, hold_released";
+    tokens_cache_read, cost_usd, hold_released, quiet_since, quiet_limit_secs, \
+    quiet_stopped";
 
 fn run_from_row(row: &SqliteRow) -> Result<Run> {
     Ok(Run {
@@ -39,6 +40,11 @@ fn run_from_row(row: &SqliteRow) -> Result<Run> {
         hold_released: row.try_get::<i64, _>("hold_released")? != 0,
         workflow_step_run_id: row.try_get("workflow_step_run_id")?,
         tokens_cache_read: row.try_get("tokens_cache_read")?,
+        quiet_since: row.try_get("quiet_since")?,
+        quiet_limit_secs: row
+            .try_get::<Option<i64>, _>("quiet_limit_secs")?
+            .map(|n| n as u64),
+        quiet_stopped: row.try_get::<i64, _>("quiet_stopped")? != 0,
     })
 }
 
@@ -468,7 +474,7 @@ impl Store {
         let res = sqlx::query(
             "UPDATE runs SET status = 'queued', started_at = NULL, session_id = ?, \
              workspace_path = ?, branch = ?, base_commit = ?, error = NULL, \
-             summary = NULL WHERE id = ? AND status = 'running'",
+             summary = NULL, quiet_since = NULL WHERE id = ? AND status = 'running'",
         )
         .bind(&queued.session_id)
         .bind(&queued.workspace_path)
@@ -570,6 +576,26 @@ impl Store {
         self.get_run(id).await
     }
 
+    /// Records the quiet limit the run started with (stuck-run watchdog spec section 4.3).
+    pub async fn set_run_quiet_limit(&self, id: &str, secs: Option<u64>) -> Result<()> {
+        sqlx::query("UPDATE runs SET quiet_limit_secs = ? WHERE id = ?")
+            .bind(secs.map(|n| n as i64))
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Sets or clears the run's quiet mark, only while it is `running`; returns the row.
+    pub async fn set_run_quiet(&self, id: &str, since: Option<&str>) -> Result<Run> {
+        sqlx::query("UPDATE runs SET quiet_since = ? WHERE id = ? AND status = 'running'")
+            .bind(since)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        self.get_run(id).await
+    }
+
     pub async fn finish_run(
         &self,
         id: &str,
@@ -577,14 +603,29 @@ impl Store {
         summary: Option<&str>,
         error: Option<&str>,
     ) -> Result<Run> {
+        self.finish_run_with(id, status, summary, error, false)
+            .await
+    }
+
+    /// `finish_run`, recording whether the watchdog stopped the run (`quiet_stopped`). The
+    /// quiet mark is cleared either way.
+    pub async fn finish_run_with(
+        &self,
+        id: &str,
+        status: RunStatus,
+        summary: Option<&str>,
+        error: Option<&str>,
+        quiet_stopped: bool,
+    ) -> Result<Run> {
         sqlx::query(
-            "UPDATE runs SET status = ?, summary = COALESCE(?, summary), error = ?, ended_at = ? \
-             WHERE id = ?",
+            "UPDATE runs SET status = ?, summary = COALESCE(?, summary), error = ?, ended_at = ?, \
+             quiet_since = NULL, quiet_stopped = ? WHERE id = ?",
         )
         .bind(status.as_str())
         .bind(summary.map(|s| global().scrub(s).into_owned()))
         .bind(error.map(|e| global().scrub(e).into_owned()))
         .bind(now())
+        .bind(quiet_stopped as i64)
         .bind(id)
         .execute(&self.pool)
         .await?;
@@ -594,7 +635,7 @@ impl Store {
     /// Marks a run `failed` with `error` only if it is still `running`; `None` otherwise.
     pub async fn fail_if_running(&self, id: &str, error: &str) -> Result<Option<Run>> {
         let res = sqlx::query(
-            "UPDATE runs SET status = 'failed', error = ?, ended_at = ? \
+            "UPDATE runs SET status = 'failed', error = ?, ended_at = ?, quiet_since = NULL \
              WHERE id = ? AND status = 'running'",
         )
         .bind(error)
@@ -612,7 +653,8 @@ impl Store {
     /// Returns `None` when the run is in any other state (nothing changed).
     pub async fn cancel_if_inactive(&self, id: &str) -> Result<Option<Run>> {
         let res = sqlx::query(
-            "UPDATE runs SET status = 'cancelled', ended_at = ?              WHERE id = ? AND status IN ('queued', 'awaiting_approval')",
+            "UPDATE runs SET status = 'cancelled', ended_at = ?, quiet_since = NULL \
+             WHERE id = ? AND status IN ('queued', 'awaiting_approval')",
         )
         .bind(now())
         .bind(id)
@@ -642,7 +684,7 @@ impl Store {
         let ts = now();
         let mut tx = self.pool.begin().await?;
         let ids: Vec<String> = sqlx::query_scalar(
-            "UPDATE runs SET status = 'failed', error = 'interrupted', ended_at = ? \
+            "UPDATE runs SET status = 'failed', error = 'interrupted', ended_at = ?, quiet_since = NULL \
              WHERE status = 'running' RETURNING id",
         )
         .bind(&ts)

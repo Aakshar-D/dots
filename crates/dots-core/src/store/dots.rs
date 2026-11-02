@@ -13,7 +13,7 @@ use crate::{Error, Result};
 
 pub(super) const DOT_COLUMNS: &str = "id, name, instructions, engine, model, endpoint_url, \
     workdir, workspace_mode, schedule, webhook_token, policy, uses, variables, browser, \
-    use_global_instructions, use_user_settings, max_turns, \
+    quiet_limit_secs, use_global_instructions, use_user_settings, max_turns, \
     timeout_secs, approval_wait_secs, enabled, created_at, updated_at, seen_at, org_id, \
     workspace_id";
 
@@ -42,6 +42,9 @@ pub(super) fn dot_from_row(row: &SqliteRow) -> Result<Dot> {
             uses: serde_json::from_str(&row.try_get::<String, _>("uses")?)?,
             variables: serde_json::from_str(&row.try_get::<String, _>("variables")?)?,
             browser: row.try_get::<i64, _>("browser")? != 0,
+            quiet_limit_secs: row
+                .try_get::<Option<i64>, _>("quiet_limit_secs")?
+                .map(|n| n as u64),
             use_global_instructions: row.try_get::<i64, _>("use_global_instructions")? != 0,
             use_user_settings: row.try_get::<i64, _>("use_user_settings")? != 0,
             max_turns: row.try_get::<i64, _>("max_turns")? as u32,
@@ -131,9 +134,10 @@ impl Store {
         sqlx::query(
             "INSERT INTO dots (id, name, instructions, engine, model, endpoint_url, workdir, \
              workspace_mode, schedule, webhook_token, policy, uses, variables, browser, \
-             use_global_instructions, use_user_settings, max_turns, timeout_secs, \
-             approval_wait_secs, enabled, created_at, updated_at, org_id, workspace_id) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             quiet_limit_secs, use_global_instructions, use_user_settings, max_turns, \
+             timeout_secs, approval_wait_secs, enabled, created_at, updated_at, org_id, \
+             workspace_id) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&spec.name)
@@ -150,6 +154,7 @@ impl Store {
         .bind(serde_json::to_string(&spec.uses)?)
         .bind(serde_json::to_string(&spec.variables)?)
         .bind(spec.browser as i64)
+        .bind(spec.quiet_limit_secs.map(|n| n as i64))
         .bind(spec.use_global_instructions as i64)
         .bind(spec.use_user_settings as i64)
         .bind(spec.max_turns as i64)
@@ -213,7 +218,7 @@ impl Store {
         let res = sqlx::query(
             "UPDATE dots SET name = ?, instructions = ?, engine = ?, model = ?, endpoint_url = ?, \
              workdir = ?, workspace_mode = ?, schedule = ?, policy = ?, uses = ?, variables = ?, \
-             browser = ?, \
+             browser = ?, quiet_limit_secs = ?, \
              use_global_instructions = ?, use_user_settings = ?, max_turns = ?, timeout_secs = ?, approval_wait_secs = ?, \
              enabled = ?, updated_at = ? WHERE id = ? \
              AND ((workdir = ? AND workspace_mode = ?) OR NOT EXISTS (SELECT 1 FROM runs \
@@ -231,6 +236,7 @@ impl Store {
         .bind(serde_json::to_string(&spec.uses)?)
         .bind(serde_json::to_string(&spec.variables)?)
         .bind(spec.browser as i64)
+        .bind(spec.quiet_limit_secs.map(|n| n as i64))
         .bind(spec.use_global_instructions as i64)
         .bind(spec.use_user_settings as i64)
         .bind(spec.max_turns as i64)
@@ -339,7 +345,9 @@ impl Store {
              + (SELECT COUNT(*) FROM watchers w WHERE w.dot_id = d.id \
               AND w.paused_reason IS NOT NULL) \
              + (SELECT COUNT(*) FROM app_proposals p WHERE p.dot_id = d.id \
-              AND p.status = 'pending') AS needs_you, \
+              AND p.status = 'pending') \
+             + (SELECT COUNT(*) FROM runs q WHERE q.dot_id = d.id AND q.status = 'running' \
+              AND q.quiet_since IS NOT NULL) AS needs_you, \
              CASE WHEN d.seen_at IS NULL THEN 0 ELSE \
              (SELECT COUNT(*) FROM runs r WHERE r.dot_id = d.id \
               AND r.status IN ('succeeded', 'failed', 'cancelled') AND r.ended_at > d.seen_at) \

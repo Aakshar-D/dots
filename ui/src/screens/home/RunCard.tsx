@@ -12,6 +12,8 @@ import { oneLine, topicTitle, type Topic } from "@/lib/home-topics";
 import { isOpenQuestion } from "@/lib/messages";
 import { keys } from "@/lib/query";
 
+import { QuietCard } from "./QuietCard";
+
 /// A topic that a schedule, a webhook, Run now or a follow-up started, as one card: its trigger
 /// and time, its status, the first line of its summary or error, Details and Reply. While its run
 /// waits for an approval or has an open question the card is open and shows them; closed, it
@@ -60,6 +62,7 @@ export function RunCard(props: {
       {pending.map((approval) => (
         <ApprovalCard key={approval.id} approval={approval} dotName={dotName} />
       ))}
+      <QuietCard run={run} />
       {question && (
         <div
           role="group"

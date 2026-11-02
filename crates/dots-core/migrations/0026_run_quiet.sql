@@ -1,0 +1,4 @@
+ALTER TABLE dots ADD COLUMN quiet_limit_secs INTEGER;
+ALTER TABLE runs ADD COLUMN quiet_since TEXT;
+ALTER TABLE runs ADD COLUMN quiet_limit_secs INTEGER;
+ALTER TABLE runs ADD COLUMN quiet_stopped INTEGER NOT NULL DEFAULT 0;

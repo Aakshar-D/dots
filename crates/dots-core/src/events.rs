@@ -12,6 +12,15 @@ pub enum RuntimeEvent {
     RunEvent {
         event: RunEventRecord,
     },
+    /// The run's quiet mark was set (`quiet_since` is when) or cleared (`None`) by the
+    /// stuck-run watchdog (stuck-run watchdog spec section 4.3). `quiet_limit_secs` is the
+    /// limit the run started with. A `RunUpdated` with the row goes with it.
+    RunQuiet {
+        run_id: String,
+        dot_id: String,
+        quiet_since: Option<String>,
+        quiet_limit_secs: Option<u64>,
+    },
     ApprovalRequested {
         approval: Approval,
     },

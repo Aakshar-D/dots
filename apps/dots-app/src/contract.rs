@@ -518,6 +518,9 @@ fn run() -> Run {
         hold_released: false,
         workflow_step_run_id: None,
         tokens_cache_read: 0,
+        quiet_since: None,
+        quiet_limit_secs: None,
+        quiet_stopped: false,
     }
 }
 
@@ -1229,6 +1232,8 @@ pub fn samples() -> Value {
         },
         "Limits": {
             "max_timeout_secs": MAX_TIMEOUT_SECS,
+            "min_quiet_limit_secs": MIN_QUIET_LIMIT_SECS,
+            "max_quiet_limit_secs": MAX_QUIET_LIMIT_SECS,
             "max_approval_wait_secs": MAX_APPROVAL_WAIT_SECS,
             "max_concurrent_runs": MAX_CONCURRENT_RUNS,
             "max_schedule_attempts": MAX_ATTEMPTS,
@@ -1331,6 +1336,28 @@ pub fn samples() -> Value {
                         "watcher_id": "01J0WAT1",
                         "watcher_name": "Invoices folder",
                     })),
+                    ..run()
+                },
+            }),
+            to(RuntimeEvent::RunQuiet {
+                run_id: "01J0RUN3".into(),
+                dot_id: "01J0DOT".into(),
+                quiet_since: Some("2026-10-20T09:10:00Z".into()),
+                quiet_limit_secs: Some(600),
+            }),
+            to(RuntimeEvent::RunQuiet {
+                run_id: "01J0RUN3".into(),
+                dot_id: "01J0DOT".into(),
+                quiet_since: None,
+                quiet_limit_secs: Some(600),
+            }),
+            to(RuntimeEvent::RunUpdated {
+                run: Run {
+                    id: "01J0RUN4".into(),
+                    root_run_id: "01J0RUN4".into(),
+                    status: RunStatus::Running,
+                    quiet_since: Some("2026-10-20T09:10:00Z".into()),
+                    quiet_limit_secs: Some(600),
                     ..run()
                 },
             }),

@@ -107,6 +107,9 @@ pub fn fake_run(trigger: TriggerKind, payload: Option<Value>, session_id: Option
         hold_released: false,
         workflow_step_run_id: None,
         tokens_cache_read: 0,
+        quiet_since: None,
+        quiet_limit_secs: None,
+        quiet_stopped: false,
     }
 }
 

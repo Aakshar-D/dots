@@ -114,7 +114,12 @@ async fn closing_ends_it_over_its_pipe_and_a_closed_window_starts_again() {
     e.host.close("D1").await;
     assert!(e.edges.gone_within("D1", Duration::from_secs(10)).await);
     assert_eq!(e.edges.methods("D1").last().unwrap(), "Browser.close");
-    assert!(opened.edge.is_closed());
+    assert!(
+        tokio::time::timeout(Duration::from_secs(10), opened.edge.closed())
+            .await
+            .is_ok(),
+        "the pipe did not close"
+    );
     assert!(e.host.open("D1", &edge()).await.unwrap().started);
     // The person closes the window: the next open starts Edge again on the same profile.
     e.edges.quit("D1");
