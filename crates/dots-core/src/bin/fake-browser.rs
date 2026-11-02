@@ -260,12 +260,13 @@ async fn main() {
         .append(true)
         .open(dir.join("fake-browser.jsonl"))
         .unwrap();
-    writeln!(
-        log,
-        "{}",
+    // One write for the whole line: `writeln!` on a `File` writes in pieces, and a test reading
+    // between them would see half a line.
+    let line = format!(
+        "{}\n",
         json!({"args": args, "control": control, "pid": std::process::id()})
-    )
-    .unwrap();
+    );
+    log.write_all(line.as_bytes()).unwrap();
     let first: Vec<String> = std::fs::read_to_string(dir.join("fake-pages.json"))
         .ok()
         .and_then(|text| serde_json::from_str(&text).ok())
