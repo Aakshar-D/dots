@@ -139,15 +139,16 @@ async fn a_quiet_run_is_marked_and_announced() {
         Step::WaitForCancel,
     ]));
     let runner = runner_with(&store, &bus, &dir, engine);
-    let dot = quiet_dot(&store, &dir, "quiet").await;
+    // A 120 s limit: the mark at 1.2 s, the stop not before 2.4 s, so the cancel has room.
+    let dot = folder_dot(&store, &dir, "quiet", Some(120), 3600, 240).await;
     let id = manual(&runner, &dot).await;
 
     let (since, limit, run) = next_quiet(&mut events, &id, 5).await;
     assert!(since.is_some());
-    assert_eq!(limit, Some(60));
+    assert_eq!(limit, Some(120));
     assert_eq!(run.status, RunStatus::Running);
     assert_eq!(run.quiet_since, since);
-    assert_eq!(run.quiet_limit_secs, Some(60));
+    assert_eq!(run.quiet_limit_secs, Some(120));
 
     runner.cancel(&id).await.unwrap();
     let run = wait_status(&store, &id, RunStatus::Cancelled, 10).await;
@@ -221,35 +222,28 @@ async fn keep_waiting_restarts_the_clock() {
     let mut events = bus.subscribe();
     let engine = Arc::new(ScriptedEngine::new(vec![Step::WaitForCancel]));
     let runner = runner_with(&store, &bus, &dir, engine);
-    let dot = quiet_dot(&store, &dir, "patient").await;
+    // A 120 s limit (1.2 s): a second of slack between the mark and the stop.
+    let dot = folder_dot(&store, &dir, "patient", Some(120), 3600, 240).await;
     let id = manual(&runner, &dot).await;
 
     let (since, _, _) = next_quiet(&mut events, &id, 5).await;
     assert!(since.is_some());
+    let t0 = std::time::Instant::now();
     runner.keep_waiting(&id).await.unwrap();
     let (since, _, run) = next_quiet(&mut events, &id, 5).await;
     assert_eq!(since, None);
     assert_eq!(run.quiet_since, None);
 
-    // The clock starts again at the press: no new mark comes soon after it. (Had only the
-    // mark gone, the timer would already be past due and mark the run again at once.)
-    let soon = tokio::time::timeout(Duration::from_millis(300), async {
-        loop {
-            if let RuntimeEvent::RunQuiet { run_id, .. } = events.recv().await.unwrap() {
-                if run_id == id {
-                    return;
-                }
-            }
-        }
-    })
-    .await;
-    assert!(
-        soon.is_err(),
-        "the run was marked again right after Keep waiting"
-    );
-    assert_eq!(store.get_run(&id).await.unwrap().status, RunStatus::Running);
+    // The clock starts again at the press: the next mark comes a full limit after it. (Had only
+    // the mark gone, the timer would already be past due and mark the run again at once.)
     let (since, _, _) = next_quiet(&mut events, &id, 5).await;
     assert!(since.is_some(), "a second mark comes a full limit later");
+    assert!(
+        t0.elapsed() >= Duration::from_millis(1080),
+        "the run was marked again {:?} after Keep waiting",
+        t0.elapsed()
+    );
+    assert_eq!(store.get_run(&id).await.unwrap().status, RunStatus::Running);
 
     runner.cancel(&id).await.unwrap();
     wait_status(&store, &id, RunStatus::Cancelled, 10).await;
@@ -272,7 +266,7 @@ async fn a_pending_approval_pauses_the_watchdog() {
         hub,
     ));
     let runner = runner_with(&store, &bus, &dir, engine);
-    let dot = folder_dot(&store, &dir, "asks", Some(60), 3600, 30).await;
+    let dot = folder_dot(&store, &dir, "asks", Some(120), 3600, 30).await;
     let id = manual(&runner, &dot).await;
 
     wait_status(&store, &id, RunStatus::Running, 5).await;
@@ -282,7 +276,8 @@ async fn a_pending_approval_pauses_the_watchdog() {
         assert!(std::time::Instant::now() < deadline, "no approval asked");
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    tokio::time::sleep(Duration::from_millis(1500)).await;
+    // Past the stop (2.4 s) a run left quiet would be gone.
+    tokio::time::sleep(Duration::from_millis(3000)).await;
 
     let run = store.get_run(&id).await.unwrap();
     assert_eq!(run.status, RunStatus::Running);
