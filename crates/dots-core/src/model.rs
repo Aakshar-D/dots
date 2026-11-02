@@ -97,6 +97,11 @@ pub struct DotSpec {
     /// existed reads as off.
     #[serde(default)]
     pub browser: bool,
+    /// How long a run may go without output before the watchdog stops it (stuck-run watchdog
+    /// spec section 4.3): `None` takes the Settings default, `Some(0)` turns it off for this
+    /// dot. A spec written before it existed reads as `None`.
+    #[serde(default)]
+    pub quiet_limit_secs: Option<u64>,
     /// The first prompt starts with the global instructions of Settings (context library spec
     /// section 2).
     #[serde(default = "yes")]
@@ -123,6 +128,7 @@ impl DotSpec {
             uses: Uses::default(),
             variables: Grants::default(),
             browser: false,
+            quiet_limit_secs: None,
             use_global_instructions: true,
             use_user_settings: false,
             max_turns: 40,
@@ -242,6 +248,13 @@ pub struct Run {
     pub workflow_step_run_id: Option<String>,
     /// The part of `tokens_in` read from the prompt cache (teams spec section 9).
     pub tokens_cache_read: i64,
+    /// When the run went quiet and was flagged for the person; `None` while it is not quiet
+    /// (stuck-run watchdog spec section 4.3).
+    pub quiet_since: Option<String>,
+    /// The quiet limit the run started with (`None`: the watchdog was off for it).
+    pub quiet_limit_secs: Option<u64>,
+    /// The watchdog stopped this run for being quiet too long.
+    pub quiet_stopped: bool,
 }
 
 /// Input for `Store::create_run`. `root_run_id: None` makes the run its own root.

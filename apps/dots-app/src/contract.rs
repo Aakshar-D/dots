@@ -518,6 +518,9 @@ fn run() -> Run {
         hold_released: false,
         workflow_step_run_id: None,
         tokens_cache_read: 0,
+        quiet_since: None,
+        quiet_limit_secs: None,
+        quiet_stopped: false,
     }
 }
 
