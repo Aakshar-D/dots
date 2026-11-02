@@ -61,6 +61,13 @@ pub enum Notice {
     Hold {
         change: dots_core::limits::HoldChange,
     },
+    /// A run has produced no output for its quiet limit (stuck-run watchdog spec section 4.3).
+    /// The core publishes it once, when the run is marked quiet.
+    RunQuiet {
+        run_id: String,
+        dot_id: String,
+        minutes: u64,
+    },
 }
 
 /// Decides which events notify: approval requests, a run moving from queued or running into
@@ -113,12 +120,22 @@ impl Notifier {
                     RunStatus::AwaitingApproval => !told,
                     _ => false,
                 };
-                (was_working && ended && run.trigger != TriggerKind::Chat).then(|| {
-                    Notice::RunEnded {
+                // A chat run is watched, unless the watchdog stopped it while nobody was looking.
+                (was_working && ended && (run.trigger != TriggerKind::Chat || run.quiet_stopped))
+                    .then(|| Notice::RunEnded {
                         run: Box::new(run.clone()),
-                    }
-                })
+                    })
             }
+            RuntimeEvent::RunQuiet {
+                run_id,
+                dot_id,
+                quiet_since: Some(_),
+                quiet_limit_secs: Some(limit),
+            } => Some(Notice::RunQuiet {
+                run_id: run_id.clone(),
+                dot_id: dot_id.clone(),
+                minutes: limit / 60,
+            }),
             // The core publishes this once, when the flag goes from clear to set.
             RuntimeEvent::ScheduleAttention { dot_id, error, .. } => Some(Notice::ScheduleFailed {
                 dot_id: dot_id.clone(),
@@ -255,6 +272,10 @@ pub fn notice_text(notice: &Notice, dot_name: &str) -> (String, String) {
                 HoldChange::Ended => dots_core::limits::HOLD_ENDED.to_string(),
             },
         ),
+        Notice::RunQuiet { minutes, .. } => (
+            format!("{dot_name} has gone quiet"),
+            format!("No output for {minutes} min. Open it to stop it or keep waiting."),
+        ),
     }
 }
 
@@ -266,6 +287,7 @@ pub fn notice_route(notice: &Notice, dot_id: &str) -> String {
     match notice {
         Notice::ApprovalNeeded { run_id, .. } => format!("/chat/{dot_id}/{run_id}"),
         Notice::RunEnded { run } => format!("/chat/{dot_id}/{}", run.id),
+        Notice::RunQuiet { run_id, .. } => format!("/chat/{dot_id}/{run_id}"),
         Notice::ScheduleFailed { .. } | Notice::MessagePosted { .. } => format!("/home/{dot_id}"),
         Notice::WatcherPaused { .. } => format!("/dots/{dot_id}?tab=watchers"),
         Notice::Hold { .. } => "/usage".to_string(),
@@ -331,6 +353,7 @@ async fn notify(app: &AppHandle, rt: &Runtime, notice: &Notice) {
         Notice::ScheduleFailed { dot_id, .. } => Some(dot_id.clone()),
         Notice::MessagePosted { message } => Some(message.dot_id.clone()),
         Notice::WatcherPaused { dot_id, .. } => Some(dot_id.clone()),
+        Notice::RunQuiet { dot_id, .. } => Some(dot_id.clone()),
         Notice::Hold { .. } => None,
     };
     // Nothing for the dot whose conversation the person is reading (needs-you spec 4.2).
@@ -774,6 +797,15 @@ mod tests {
         };
         let cases = [
             (
+                Notice::RunQuiet {
+                    run_id: "r".into(),
+                    dot_id: "d".into(),
+                    minutes: 10,
+                },
+                "nightly has gone quiet",
+                "No output for 10 min. Open it to stop it or keep waiting.",
+            ),
+            (
                 message(MessageKind::Question),
                 "nightly asks",
                 "Ship the release?",
@@ -963,6 +995,12 @@ mod tests {
             input: approval.input,
         };
         assert_eq!(notice_route(&ask, "d"), "/chat/d/r2");
+        let quiet_run = Notice::RunQuiet {
+            run_id: "r3".into(),
+            dot_id: "d".into(),
+            minutes: 10,
+        };
+        assert_eq!(notice_route(&quiet_run, "d"), "/chat/d/r3");
         let failed = Notice::ScheduleFailed {
             dot_id: "d".into(),
             error: None,
@@ -976,6 +1014,66 @@ mod tests {
         }
     }
 
+    fn quiet_event(since: Option<&str>, limit: Option<u64>) -> RuntimeEvent {
+        RuntimeEvent::RunQuiet {
+            run_id: "r".into(),
+            dot_id: "d".into(),
+            quiet_since: since.map(str::to_string),
+            quiet_limit_secs: limit,
+        }
+    }
+
+    #[test]
+    fn a_quiet_run_notifies_once() {
+        let mut n = Notifier::default();
+        assert_eq!(
+            n.decide(&quiet_event(Some("t"), Some(600))),
+            Some(Notice::RunQuiet {
+                run_id: "r".into(),
+                dot_id: "d".into(),
+                minutes: 10,
+            })
+        );
+        // Cleared, or without a limit: nothing to say.
+        assert_eq!(n.decide(&quiet_event(None, Some(600))), None);
+        assert_eq!(n.decide(&quiet_event(Some("t"), None)), None);
+    }
+
+    #[test]
+    fn a_chat_run_the_watchdog_stopped_notifies_as_failed() {
+        let mut n = Notifier::default();
+        let chat = TriggerKind::Chat;
+        let stopped = |quiet_stopped| RuntimeEvent::RunUpdated {
+            run: Run {
+                quiet_stopped,
+                ..run("c", Failed, TriggerKind::Chat)
+            },
+        };
+        assert_eq!(
+            notified(&mut n, "c", chat, &[Queued, Running]),
+            [false, false]
+        );
+        assert!(matches!(
+            n.decide(&stopped(true)),
+            Some(Notice::RunEnded { .. })
+        ));
+        // A chat run that fails on its own stays quiet.
+        assert_eq!(
+            notified(&mut n, "d", chat, &[Queued, Running, Failed]),
+            [false, false, false]
+        );
+        // A scheduled run the watchdog stopped is retried or needs attention: quiet here.
+        let s = TriggerKind::Schedule;
+        assert_eq!(notified(&mut n, "s", s, &[Running]), [false]);
+        let ev = RuntimeEvent::RunUpdated {
+            run: Run {
+                quiet_stopped: true,
+                ..run("s", Failed, s)
+            },
+        };
+        assert_eq!(n.decide(&ev), None);
+    }
+
     #[test]
     fn nothing_notifies_about_the_dot_being_viewed() {
         assert!(quiet(Some("d"), Some("d")));
@@ -984,5 +1082,11 @@ mod tests {
         // A notice whose dot is unknown (its run is gone) is not about the viewed dot.
         assert!(!quiet(None, Some("d")));
         assert!(!quiet(None, None));
+        let quiet_run = Notice::RunQuiet {
+            run_id: "r".into(),
+            dot_id: "d".into(),
+            minutes: 10,
+        };
+        assert_eq!(notice_route(&quiet_run, "d"), "/chat/d/r");
     }
 }
