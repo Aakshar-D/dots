@@ -114,6 +114,11 @@ async fn invalid_settings_are_rejected_and_not_stored() {
             |s| s.quiet_limit_secs = 86_401,
             "quiet_limit_secs must be between 60 and 86400",
         ),
+        // Settings has no "off": only a dot can turn the watchdog off, with 0.
+        (
+            |s| s.quiet_limit_secs = 0,
+            "quiet_limit_secs must be between 60 and 86400",
+        ),
     ];
     for (mutate, needle) in cases {
         let mut s = Settings::default();
@@ -129,6 +134,19 @@ async fn invalid_settings_are_rejected_and_not_stored() {
     };
     store.put_settings(&s).await.unwrap();
     assert_eq!(store.get_settings().await.unwrap(), s);
+}
+
+#[tokio::test]
+async fn the_quiet_limit_bounds_are_accepted() {
+    let (_dir, store) = temp_store().await;
+    for ok in [60, 86_400] {
+        let s = Settings {
+            quiet_limit_secs: ok,
+            ..Settings::default()
+        };
+        store.put_settings(&s).await.unwrap();
+        assert_eq!(store.get_settings().await.unwrap().quiet_limit_secs, ok);
+    }
 }
 
 fn with_claude_path(path: &str) -> Settings {

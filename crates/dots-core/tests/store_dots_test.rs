@@ -553,7 +553,7 @@ fn timeout_and_approval_wait_are_capped() {
 #[test]
 fn quiet_limit_is_bounded_unless_off() {
     let mut s = spec("quiet");
-    for bad in [59, 86_401] {
+    for bad in [1, 59, 86_401] {
         s.quiet_limit_secs = Some(bad);
         let err = s.validate().unwrap_err().to_string();
         assert!(
@@ -576,4 +576,11 @@ fn the_effective_quiet_limit_is_the_dots_or_the_default() {
     assert_eq!(effective_quiet_limit(&s, &settings), Some(900));
     s.quiet_limit_secs = Some(0);
     assert_eq!(effective_quiet_limit(&s, &settings), None);
+    // A dot with no limit of its own follows the Settings default, whatever that is.
+    let settings = Settings {
+        quiet_limit_secs: 120,
+        ..Settings::default()
+    };
+    s.quiet_limit_secs = None;
+    assert_eq!(effective_quiet_limit(&s, &settings), Some(120));
 }
