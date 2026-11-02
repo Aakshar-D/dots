@@ -215,9 +215,11 @@ impl ApprovalHub {
         // found no waiter then, wrote the row as parked and returned `Parked`, so the caller
         // resumes the run with a grant. Executing the action here as well would run it twice,
         // so tell the engine it is queued and leave the outcome to the parked/resume path.
-        // Re-reading after the insert is race-free: a later decision reaches the waiter.
+        // Re-reading after the insert is race-free: a later decision reaches the waiter. Such a
+        // decision may already be written when the row is read; it is not parked then, and its
+        // send is on the way, so wait for it too.
         let current = self.store.get_approval(&approval.id).await?;
-        if current.status == ApprovalStatus::Pending {
+        if current.status == ApprovalStatus::Pending || !current.parked {
             if let Ok(Ok(d)) = tokio::time::timeout(wait, &mut rx).await {
                 return Ok(outcome_of(d.approved, d.note.as_deref(), input));
             }
