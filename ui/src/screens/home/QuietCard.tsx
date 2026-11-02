@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { commands } from "@/api/commands";
 import type { Run } from "@/api/types";
 import { Button } from "@/components/ui/button";
-import { errorMessage, notifyError } from "@/lib/notify";
+import { errorMessage } from "@/lib/notify";
 import { invalidate, keys } from "@/lib/query";
 
 const MINUTE_MS = 60_000;
@@ -24,7 +24,7 @@ export function QuietCard({ run }: { run: Run }) {
     const timer = setInterval(() => setNow(Date.now()), 30_000);
     return () => clearInterval(timer);
   }, [quiet]);
-  const stop = useMutation({ mutationFn: commands.cancelRun, onError: notifyError });
+  const stop = useMutation({ mutationFn: commands.cancelRun });
   const keep = useMutation({
     mutationFn: commands.keepWaiting,
     onSuccess: () => {
@@ -60,9 +60,9 @@ export function QuietCard({ run }: { run: Run }) {
           Keep waiting
         </Button>
       </div>
-      {keep.isError && (
+      {(stop.isError || keep.isError) && (
         <p role="alert" className="text-xs text-destructive">
-          {errorMessage(keep.error)}
+          {errorMessage(stop.isError ? stop.error : keep.error)}
         </p>
       )}
     </article>

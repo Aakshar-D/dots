@@ -78,6 +78,15 @@ describe("the quiet card", () => {
     await waitFor(() => expect(backend.callsTo("cancel_run")).toEqual([{ runId: sample.run.id }]));
   });
 
+  it("shows the error on the card when Stop fails", async () => {
+    backend.on("cancel_run", () => {
+      throw { kind: "internal", message: "could not stop the run" };
+    });
+    show(quiet(3));
+    await userEvent.setup().click(screen.getByRole("button", { name: "Stop" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("could not stop the run");
+  });
+
   it("keeps waiting", async () => {
     backend.on("keep_waiting", () => null);
     show(quiet(3));
