@@ -161,19 +161,21 @@ async fn output_clears_the_mark() {
     let bus = new_bus();
     let mut events = bus.subscribe();
     let engine = Arc::new(ScriptedEngine::new(vec![
-        Step::Sleep(Duration::from_millis(800)),
+        Step::Sleep(Duration::from_millis(1800)),
         text("still here"),
         Step::WaitForCancel,
     ]));
     let runner = runner_with(&store, &bus, &dir, engine);
-    let dot = quiet_dot(&store, &dir, "talks").await;
+    // A 120 s limit: the mark at 1.2 s, the output at 1.8 s, the stop not before 2.4 s, so a
+    // slow machine has room on both sides.
+    let dot = folder_dot(&store, &dir, "talks", Some(120), 3600, 240).await;
     let id = manual(&runner, &dot).await;
 
     let (since, _, _) = next_quiet(&mut events, &id, 5).await;
     assert!(since.is_some());
     let (since, limit, run) = next_quiet(&mut events, &id, 5).await;
     assert_eq!(since, None);
-    assert_eq!(limit, Some(60));
+    assert_eq!(limit, Some(120));
     assert_eq!(run.status, RunStatus::Running);
     assert_eq!(run.quiet_since, None);
 
@@ -229,7 +231,22 @@ async fn keep_waiting_restarts_the_clock() {
     assert_eq!(since, None);
     assert_eq!(run.quiet_since, None);
 
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    // The clock starts again at the press: no new mark comes soon after it. (Had only the
+    // mark gone, the timer would already be past due and mark the run again at once.)
+    let soon = tokio::time::timeout(Duration::from_millis(300), async {
+        loop {
+            if let RuntimeEvent::RunQuiet { run_id, .. } = events.recv().await.unwrap() {
+                if run_id == id {
+                    return;
+                }
+            }
+        }
+    })
+    .await;
+    assert!(
+        soon.is_err(),
+        "the run was marked again right after Keep waiting"
+    );
     assert_eq!(store.get_run(&id).await.unwrap().status, RunStatus::Running);
     let (since, _, _) = next_quiet(&mut events, &id, 5).await;
     assert!(since.is_some(), "a second mark comes a full limit later");
