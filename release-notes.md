@@ -7,3 +7,4 @@
 - Conversational chat: a dot answers you in the conversation and proposes new instructions for you to accept (#33)
 - The conversation gets a new layout (conversational chat, part B) (#37)
 - Projects, the app that comes with Dots (app library, plan C) (#35)
+- An approval answered the moment it is asked now reaches the waiting dot instead of being queued (#43)
