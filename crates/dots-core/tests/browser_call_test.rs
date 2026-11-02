@@ -158,9 +158,13 @@ async fn newest(e: &Env, run: &Run) -> Approval {
 
 /// Approves the pending approval once it appears, after the page moved to `moved`.
 async fn approve_when_asked(e: &Env, dot: &Dot, moved: Option<&str>) {
+    // The row is written before the call starts waiting; a decision in between is parked
+    // (queued) rather than live, so wait for the waiter as well.
     let pending = loop {
-        if let Some(a) = e.store.list_pending_approvals().await.unwrap().pop() {
-            break a;
+        if e.hub.waiter_count() > 0 {
+            if let Some(a) = e.store.list_pending_approvals().await.unwrap().pop() {
+                break a;
+            }
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     };
