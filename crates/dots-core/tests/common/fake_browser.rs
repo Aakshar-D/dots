@@ -41,12 +41,13 @@ impl FakeEdges {
     }
 
     /// Every start on the dot's profile, oldest first: `{"args": [...], "control": n, "pid":
-    /// n}`.
+    /// n}`. A last line without its newline is still being written, and is left out.
     pub fn starts(&self, dot_id: &str) -> Vec<Value> {
         match std::fs::read_to_string(self.profile(dot_id).join("fake-browser.jsonl")) {
             Ok(text) => text
-                .lines()
-                .map(|line| serde_json::from_str(line).unwrap())
+                .split_inclusive('\n')
+                .filter(|line| line.ends_with('\n'))
+                .map(|line| serde_json::from_str(line.trim_end()).unwrap())
                 .collect(),
             Err(_) => Vec::new(),
         }
