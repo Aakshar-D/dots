@@ -1,34 +1,9 @@
-<!-- dots:notes 0.2.0 -->
+<!-- dots:notes 0.3.0 -->
 - Accounts, part 1: your Dots ID and Profile, Organisations renamed Accounts, and an account switcher that filters Home
-- Accounts, part 5: API keys for a workspace, made in Dots, to list dots, trigger a run and read its status over the local server, plus a Host check on every route of it. If you forward webhooks through a tunnel, have it rewrite Host to 127.0.0.1:PORT (ngrok `--host-header=rewrite`, cloudflared `httpHostHeader`).
-- Accounts, part 4: workspaces. Split an account into workspaces with their own members' roles, filter Home by workspace, move dots between them, and narrow what each may use
-- Accounts, part 3: invites, request codes and a Members tab to invite, approve, change roles and remove people, with in-app signing, publishing and drafts
 - Accounts, part 2: a signed member list with roles (Owner, Admin, Member, Viewer), waiting and removed states, and held runs when a role no longer allows them
-- app library screens — the Apps screen, app frames, the review card and copy_app (plan B) (#32)
-- Use the release signing key (#28)
-- Updates in the Dots window: Settings › Updates, going back, and the Releases page (#27)
-- Usage and limits: hold background Claude runs near the subscription limit (#26)
-- app library core — sandboxed apps that dots call and people use (plan A) (#24)
-- teams and workflows, plan A (core) (#22)
-- Watchers: dots that start when a file, an email or GitHub changes (#25)
-- Env vault: organisations, signed policy, OpenBao/Infisical/SOPS sources and dots-admin (plan B) (#23)
-- Memory for each dot (#20)
-- updates QA — prototype key guard, failed-install note, stuck hold, backup pruning (#21)
-- Env vault: Personal variables, grants, a clean child environment and redaction (plan A) (#18)
-- Deep Teal: Dots' own look, light and dark themes with a switch (chat-first UI, part C) (#19)
-- add ChatGPT account sign-in (#17)
-- What needs me: unread badges, notifications that open the conversation, tray Needs you (chat-first UI, part B) (#16)
-- Chat-first home: talk to your dots from one screen (chat-first UI, part A) (#15)
-- Browser use: dots drive their own Edge, gated by site and risky clicks, with no debugging port (#12)
-- context library follow-ups (#14)
-- a skill creator in the Library (#13)
-- check-ins and self-scheduled follow-ups for dots (#11)
-- updates for installed Dots (#10)
-- shared context library — global instructions and document collections for every dot (#9)
-- MCP servers, skills and plugins for dots, through a Library and a checking gateway (#8)
-- Scheduler v2 — one-shot and bounded schedules, catch-up, retry and Needs attention (#7)
-- Approvals v2 follow-ups (#6)
-- Approvals v2, late approvals performed by Dots, allow rules from the Inbox, and batch answers (#5)
-- hardening and packaging (plan 3c of 3), with the six screens of 3b (#4)
-- core additions and Tauri shell (plan 3a of 3) (#2)
-- local engine (plan 2 of 3) (#1)
+- Accounts, part 3: invites, request codes and a Members tab to invite, approve, change roles and remove people, with in-app signing, publishing and drafts
+- Accounts, part 4: workspaces. Split an account into workspaces with their own members' roles, filter Home by workspace, move dots between them, and narrow what each may use
+- Accounts, part 5: API keys for a workspace, made in Dots, to list dots, trigger a run and read its status over the local server, plus a Host check on every route of it. If you forward webhooks through a tunnel, have it rewrite Host to 127.0.0.1:PORT (ngrok `--host-header=rewrite`, cloudflared `httpHostHeader`).
+- Conversational chat: a dot answers you in the conversation and proposes new instructions for you to accept (#33)
+- The conversation gets a new layout (conversational chat, part B) (#37)
+- Projects, the app that comes with Dots (app library, plan C) (#35)
