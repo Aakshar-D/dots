@@ -622,6 +622,35 @@ describe("the dot editor, quiet limit", () => {
     expect(await save(user)).toBe(900);
   });
 
+  it("keeps the minutes mode while typing, and does not save 0 or empty minutes as Off", async () => {
+    backend.on("create_dot", (args) => ({ ...dot, ...(args.spec as object), id: "dot-new" }));
+    backend.on("get_dot", () => ({ ...dot, id: "dot-new", name: "nightly" }));
+    const { user } = renderApp("/dots/new");
+    const choice = await screen.findByLabelText("Quiet limit");
+    await user.type(screen.getByLabelText("Name"), "nightly");
+    await user.type(screen.getByLabelText("Instructions"), "Run the tests.");
+    await user.type(screen.getByLabelText("Folder"), "C:/dev/app");
+    await user.selectOptions(choice, "minutes");
+    const minutes = screen.getByLabelText("Quiet limit (minutes)");
+    const message = "The quiet limit must be a whole number of minutes, 1 to 1440.";
+    for (const typed of ["0", "", "1.5"]) {
+      await user.clear(minutes);
+      if (typed) await user.type(minutes, typed);
+      expect(choice).toHaveValue("minutes");
+      await user.click(screen.getByRole("button", { name: "Create dot" }));
+      expect(await screen.findAllByText(message)).not.toHaveLength(0);
+    }
+    expect(backend.callsTo("create_dot")).toHaveLength(0);
+    await user.clear(minutes);
+    await user.type(minutes, "5");
+    await user.click(screen.getByRole("button", { name: "Create dot" }));
+    await waitFor(() => expect(backend.callsTo("create_dot")).toHaveLength(1));
+    expect(
+      (backend.callsTo("create_dot")[0] as { spec: { quiet_limit_secs: number } }).spec
+        .quiet_limit_secs,
+    ).toBe(300);
+  });
+
   it("warns when the quiet limit is longer than the time limit", async () => {
     const { user } = renderApp("/dots/new");
     const hint = "Longer than the time limit; the time limit will end the run first.";

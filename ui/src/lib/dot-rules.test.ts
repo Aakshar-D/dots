@@ -24,7 +24,7 @@ describe("dot editor rules", () => {
     for (const quiet_limit_secs of [null, 0, 60, 900, 86400]) {
       expect(specErrors({ ...good, quiet_limit_secs }), String(quiet_limit_secs)).toEqual({});
     }
-    for (const quiet_limit_secs of [59, 86401, -60, 90.5, Number.NaN]) {
+    for (const quiet_limit_secs of [59, 86401, -60, 90, 90.5, Number.NaN]) {
       expect(specErrors({ ...good, quiet_limit_secs }), String(quiet_limit_secs)).toHaveProperty(
         "quiet_limit_secs",
       );

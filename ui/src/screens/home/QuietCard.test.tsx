@@ -104,4 +104,35 @@ describe("the quiet card", () => {
     await userEvent.setup().click(screen.getByRole("button", { name: "Keep waiting" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("the run is not running");
   });
+
+  it("shows the latest failure only: Stop's error goes when Keep waiting is pressed", async () => {
+    backend.on("cancel_run", () => {
+      throw { kind: "internal", message: "could not stop the run" };
+    });
+    backend.on("keep_waiting", () => {
+      throw { kind: "conflict", message: "the run is not running" };
+    });
+    show(quiet(3));
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Stop" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("could not stop the run");
+    await user.click(screen.getByRole("button", { name: "Keep waiting" }));
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent("the run is not running"),
+    );
+    expect(screen.getByRole("alert")).not.toHaveTextContent("could not stop the run");
+  });
+
+  it("drops Stop's error when Keep waiting then succeeds", async () => {
+    backend.on("cancel_run", () => {
+      throw { kind: "internal", message: "could not stop the run" };
+    });
+    backend.on("keep_waiting", () => null);
+    show(quiet(3));
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Stop" }));
+    expect(await screen.findByRole("alert")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Keep waiting" }));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  });
 });

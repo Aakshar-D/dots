@@ -10,7 +10,7 @@ const filled = (message: string) => z.string().refine((s) => s.trim() !== "", me
 const whole = (min: number, max: number, message: string) =>
   z.number({ error: message }).int(message).min(min, message).max(max, message);
 
-const QUIET_MESSAGE = `Quiet limit must be 1 to ${LIMITS.max_quiet_limit_secs / 60} minutes.`;
+const QUIET_MESSAGE = `The quiet limit must be a whole number of minutes, 1 to ${LIMITS.max_quiet_limit_secs / 60}.`;
 
 const Fields = z.object({
   name: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/, "Use 1 to 64 letters, digits, '-' or '_'."),
@@ -32,7 +32,13 @@ const Fields = z.object({
   quiet_limit_secs: z
     .number({ error: QUIET_MESSAGE })
     .int(QUIET_MESSAGE)
-    .refine((n) => n === 0 || (n >= LIMITS.min_quiet_limit_secs && n <= LIMITS.max_quiet_limit_secs), QUIET_MESSAGE)
+    // Whole minutes, as in Settings; the core itself takes any seconds in range.
+    .refine(
+      (n) =>
+        n === 0 ||
+        (n >= LIMITS.min_quiet_limit_secs && n <= LIMITS.max_quiet_limit_secs && n % 60 === 0),
+      QUIET_MESSAGE,
+    )
     .nullable(),
 });
 

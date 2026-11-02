@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { open } from "@tauri-apps/plugin-dialog";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
 import { commands } from "@/api/commands";
 import { EngineKind, WorkspaceMode, type Dot, type DotSpec } from "@/api/types";
@@ -73,7 +73,10 @@ function QuietLimit(props: {
   const settings = useQuery({ queryKey: keys.settings, queryFn: commands.getSettings }).data;
   const { spec } = props;
   const secs = spec.quiet_limit_secs;
-  const mode = quietMode(secs);
+  // The select's mode is held here: it is derived from the stored seconds only at first, so
+  // typing 0 minutes does not flip the select to Off.
+  const [mode, setMode] = useState<QuietMode>(() => quietMode(secs));
+  const [minutes, setMinutes] = useState(() => (secs ? String(secs / 60) : "10"));
   const defaultLabel = settings
     ? `App default (${settings.quiet_limit_secs / 60} min)`
     : "App default";
@@ -97,8 +100,14 @@ function QuietLimit(props: {
           className="w-52"
           value={mode}
           onChange={(e) => {
-            const next = e.target.value;
-            props.onChange(next === "default" ? null : next === "off" ? 0 : 600);
+            const next = e.target.value as QuietMode;
+            setMode(next);
+            if (next === "minutes") {
+              setMinutes("10");
+              props.onChange(600);
+            } else {
+              props.onChange(next === "default" ? null : 0);
+            }
           }}
         >
           <option value="default">{defaultLabel}</option>
@@ -111,10 +120,13 @@ function QuietLimit(props: {
             aria-label="Quiet limit (minutes)"
             type="number"
             className="w-28"
-            value={secs === null || Number.isNaN(secs) ? "" : secs / 60}
-            onChange={(e) =>
-              props.onChange(e.target.value === "" ? Number.NaN : Number(e.target.value) * 60)
-            }
+            value={minutes}
+            onChange={(e) => {
+              setMinutes(e.target.value);
+              // Empty or 0 minutes is not a limit and not Off: it is invalid until fixed.
+              const n = e.target.value === "" ? Number.NaN : Number(e.target.value);
+              props.onChange(n === 0 ? Number.NaN : n * 60);
+            }}
           />
         )}
       </div>

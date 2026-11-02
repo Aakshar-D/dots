@@ -42,6 +42,11 @@ export function QuietCard({ run }: { run: Run }) {
     0,
     Math.ceil((since + run.quiet_limit_secs * 1000 - now) / MINUTE_MS),
   );
+  // Each press clears the other's error, so the alert shows the latest failure only.
+  const press = (own: typeof stop | typeof keep, other: typeof stop | typeof keep) => {
+    other.reset();
+    own.mutate(run.id);
+  };
   const busy = stop.isPending || keep.isPending;
   return (
     <article
@@ -53,10 +58,10 @@ export function QuietCard({ run }: { run: Run }) {
         <span className="text-xs text-muted-foreground">Stops by itself in {stopsInMin} min</span>
       </header>
       <div className="flex gap-2">
-        <Button size="sm" disabled={busy} onClick={() => stop.mutate(run.id)}>
+        <Button size="sm" disabled={busy} onClick={() => press(stop, keep)}>
           Stop
         </Button>
-        <Button size="sm" variant="outline" disabled={busy} onClick={() => keep.mutate(run.id)}>
+        <Button size="sm" variant="outline" disabled={busy} onClick={() => press(keep, stop)}>
           Keep waiting
         </Button>
       </div>
