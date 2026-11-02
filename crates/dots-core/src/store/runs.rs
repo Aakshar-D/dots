@@ -474,7 +474,7 @@ impl Store {
         let res = sqlx::query(
             "UPDATE runs SET status = 'queued', started_at = NULL, session_id = ?, \
              workspace_path = ?, branch = ?, base_commit = ?, error = NULL, \
-             summary = NULL WHERE id = ? AND status = 'running'",
+             summary = NULL, quiet_since = NULL WHERE id = ? AND status = 'running'",
         )
         .bind(&queued.session_id)
         .bind(&queued.workspace_path)

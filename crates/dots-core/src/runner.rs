@@ -1380,7 +1380,10 @@ impl Runner {
             let quiet_timer = quiet
                 .filter(|_| grace.is_none())
                 .map(|q| quiet_at.unwrap_or(last_output) + q);
+            // Biased, output first: output ready at the same poll as the warn deadline wins,
+            // so a run that just spoke is never announced as gone quiet.
             tokio::select! {
+                biased;
                 ev = rx.recv() => {
                     let Some(ev) = ev else { break };
                     self.record(&run.id, &ev).await?;
@@ -1413,7 +1416,17 @@ impl Runner {
                 _ = tokio::time::sleep_until(quiet_timer.unwrap_or(deadline)),
                     if quiet_timer.is_some() =>
                 {
-                    if self.store.has_pending_for_run(&run.id).await? {
+                    // A store error must not end the run: it counts as waiting, and the
+                    // clock starts again.
+                    let pending = self
+                        .store
+                        .has_pending_for_run(&run.id)
+                        .await
+                        .unwrap_or_else(|e| {
+                            tracing::warn!(run = %run.id, "checking pending approvals failed: {e}");
+                            true
+                        });
+                    if pending {
                         // Waiting on the person is not quiet: the clock starts again.
                         last_output = Instant::now();
                         if quiet_at.take().is_some() {

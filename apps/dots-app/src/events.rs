@@ -71,8 +71,9 @@ pub enum Notice {
 }
 
 /// Decides which events notify: approval requests, a run moving from queued or running into
-/// succeeded, failed or awaiting approval, and a schedule that needs attention. Chat runs
-/// never notify (the user is watching them). A scheduled run that fails does not notify by
+/// succeeded, failed or awaiting approval, and a schedule that needs attention, and a run
+/// gone quiet. Chat runs do not notify (the user is watching them), except a chat run the
+/// watchdog stopped, which does. A scheduled run that fails does not notify by
 /// itself: it is retried, or its schedule needs attention, which notifies. A run first seen
 /// in a final state (e.g. marked reviewed) and a parked run closed by a decision do not
 /// notify either. A run that parks on an approval request this notifier has announced does
