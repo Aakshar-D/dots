@@ -5,6 +5,7 @@ use serde_json::Value;
 use crate::library::Uses;
 use crate::policy::{Policy, Preset};
 use crate::schedule::{next_slot, Schedule, Until};
+use crate::settings::Settings;
 use crate::vault::Grants;
 use crate::{Error, Result};
 
@@ -74,6 +75,18 @@ fn yes() -> bool {
 
 pub const MAX_TIMEOUT_SECS: u64 = 7 * 24 * 60 * 60;
 pub const MAX_APPROVAL_WAIT_SECS: u64 = 280;
+pub const MIN_QUIET_LIMIT_SECS: u64 = 60;
+pub const MAX_QUIET_LIMIT_SECS: u64 = 86_400;
+
+/// The quiet limit that applies to a run of `spec`: the dot's own, else the Settings default;
+/// `None` when the watchdog is off for the dot (`Some(0)`).
+pub fn effective_quiet_limit(spec: &DotSpec, settings: &Settings) -> Option<u64> {
+    match spec.quiet_limit_secs {
+        Some(0) => None,
+        Some(secs) => Some(secs),
+        None => Some(settings.quiet_limit_secs),
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DotSpec {
@@ -181,6 +194,12 @@ impl DotSpec {
         // The CLI aborts a pending permission-prompt call at about 300 s.
         if self.approval_wait_secs > MAX_APPROVAL_WAIT_SECS {
             return invalid("approval_wait_secs must be at most 280");
+        }
+        // `Some(0)` turns the watchdog off for this dot.
+        if let Some(secs) = self.quiet_limit_secs {
+            if secs != 0 && !(MIN_QUIET_LIMIT_SECS..=MAX_QUIET_LIMIT_SECS).contains(&secs) {
+                return invalid("quiet_limit_secs must be between 60 and 86400");
+            }
         }
         self.policy.validate()?;
         // Whether the Library has each item is checked by the store when the dot is saved.

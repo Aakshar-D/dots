@@ -3,10 +3,11 @@ mod common;
 use chrono::{Local, TimeDelta, TimeZone, Utc};
 use common::{spec, temp_store};
 use dots_core::library::LibraryConfig;
-use dots_core::model::{Dot, EngineKind};
+use dots_core::model::{effective_quiet_limit, Dot, EngineKind};
 use dots_core::policy::{Policy, Preset};
 use dots_core::schedule::{next_slot, Rule, Schedule};
 use dots_core::scheduler::parse_cron;
+use dots_core::settings::Settings;
 use dots_core::store::Store;
 use dots_core::Error;
 use serde_json::{json, Value};
@@ -547,4 +548,32 @@ fn timeout_and_approval_wait_are_capped() {
     s.timeout_secs = 1800;
     s.approval_wait_secs = 281;
     assert!(matches!(s.validate(), Err(Error::Invalid(_))));
+}
+
+#[test]
+fn quiet_limit_is_bounded_unless_off() {
+    let mut s = spec("quiet");
+    for bad in [59, 86_401] {
+        s.quiet_limit_secs = Some(bad);
+        let err = s.validate().unwrap_err().to_string();
+        assert!(
+            err.contains("quiet_limit_secs must be between 60 and 86400"),
+            "{err}"
+        );
+    }
+    for ok in [None, Some(0), Some(60), Some(86_400)] {
+        s.quiet_limit_secs = ok;
+        s.validate().unwrap();
+    }
+}
+
+#[test]
+fn the_effective_quiet_limit_is_the_dots_or_the_default() {
+    let settings = Settings::default();
+    let mut s = spec("quiet");
+    assert_eq!(effective_quiet_limit(&s, &settings), Some(600));
+    s.quiet_limit_secs = Some(900);
+    assert_eq!(effective_quiet_limit(&s, &settings), Some(900));
+    s.quiet_limit_secs = Some(0);
+    assert_eq!(effective_quiet_limit(&s, &settings), None);
 }

@@ -4,7 +4,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::check_endpoint_url;
+use crate::model::{check_endpoint_url, MAX_QUIET_LIMIT_SECS, MIN_QUIET_LIMIT_SECS};
 use crate::store::Store;
 use crate::{Error, Result};
 
@@ -47,6 +47,9 @@ pub struct Settings {
     /// The vault entry holding the GitHub token Dots publishes with (updates UI spec section
     /// 5.1); `None` when this Dots does not publish.
     pub publish_token: Option<String>,
+    /// How long a run may go without output before the watchdog stops it, unless the dot sets
+    /// its own (stuck-run watchdog spec section 4.3). 60 to 86400.
+    pub quiet_limit_secs: u64,
 }
 
 impl Default for Settings {
@@ -67,6 +70,7 @@ impl Default for Settings {
             hold_share_weekly: 70,
             auto_install_updates: false,
             publish_token: None,
+            quiet_limit_secs: 600,
         }
     }
 }
@@ -107,6 +111,9 @@ impl Settings {
         let share_ok = |s: u8| (10..=100).contains(&s) && s.is_multiple_of(5);
         if !share_ok(self.hold_share_five_hour) || !share_ok(self.hold_share_weekly) {
             return invalid(SHARE_RULE);
+        }
+        if !(MIN_QUIET_LIMIT_SECS..=MAX_QUIET_LIMIT_SECS).contains(&self.quiet_limit_secs) {
+            return invalid("quiet_limit_secs must be between 60 and 86400");
         }
         Ok(())
     }
