@@ -18,7 +18,8 @@ use crate::engine::{Engine, EngineEvent, RunContext};
 use crate::events::{Bus, RuntimeEvent};
 use crate::limits::{is_background, Admit, Limits, QueuedRun, STOPPED_BY_LIMIT};
 use crate::model::{
-    ApprovalStatus, Dot, EngineKind, NewRun, Run, RunStatus, TriggerKind, WorkspaceMode,
+    effective_quiet_limit, ApprovalStatus, Dot, EngineKind, NewRun, Run, RunStatus, TriggerKind,
+    WorkspaceMode,
 };
 use crate::prompt::{build_prompt_full, context_tool_name, PromptParts};
 use crate::run_tools::{CloseOnDrop, OpenRequest, RunTools};
@@ -107,6 +108,8 @@ pub struct RunnerConfig {
     pub cancel_grace: Duration,
     /// Where a Claude-engine run's plugin folders go (`<data_dir>/plugins`).
     pub plugins_dir: PathBuf,
+    /// How long one second of a quiet limit lasts: `Duration::from_secs(1)`; tests shorten it.
+    pub quiet_unit: Duration,
 }
 
 struct Active {
@@ -116,6 +119,8 @@ struct Active {
     workflow: bool,
     cancel: CancellationToken,
     cancelled_by_user: Arc<AtomicBool>,
+    /// Tells the run's loop the person chose Keep waiting (stuck-run watchdog spec section 4.2).
+    keep_waiting: Arc<Notify>,
     /// A background run on the Claude engine: while held runs drain, one such at a time.
     background_claude: bool,
 }
@@ -635,6 +640,7 @@ impl Runner {
             // and honoured by `execute` before anything starts.
             let cancel = CancellationToken::new();
             let by_user = Arc::new(AtomicBool::new(false));
+            let keep_waiting = Arc::new(Notify::new());
             {
                 let mut active = self.active.lock().unwrap();
                 if active.len() >= self.cfg.max_concurrent {
@@ -655,6 +661,7 @@ impl Runner {
                         workflow,
                         cancel: cancel.clone(),
                         cancelled_by_user: by_user.clone(),
+                        keep_waiting: keep_waiting.clone(),
                         background_claude,
                     },
                 );
@@ -680,10 +687,12 @@ impl Runner {
             // after this point go through `execute`'s error path, which frees the slot.
             // A panic skips that path, so a watcher task cleans up instead.
             let run_id = run.id.clone();
-            let inner = tokio::spawn(
-                self.clone()
-                    .execute(run_id.clone(), cancel.clone(), by_user),
-            );
+            let inner = tokio::spawn(self.clone().execute(
+                run_id.clone(),
+                cancel.clone(),
+                by_user,
+                keep_waiting,
+            ));
             let this = self.clone();
             tokio::spawn(async move {
                 if let Err(e) = inner.await {
@@ -731,11 +740,13 @@ impl Runner {
         run_id: String,
         cancel: CancellationToken,
         by_user: Arc<AtomicBool>,
+        keep_waiting: Arc<Notify>,
     ) {
         let result = match self.store.get_run(&run_id).await {
             Ok(run) => {
                 self.emit_run(&run);
-                self.execute_inner(&run, cancel.clone(), &by_user).await
+                self.execute_inner(&run, cancel.clone(), &by_user, &keep_waiting)
+                    .await
             }
             Err(e) => Err(e),
         };
@@ -1094,6 +1105,7 @@ impl Runner {
         run: &Run,
         cancel: CancellationToken,
         by_user: &AtomicBool,
+        keep_waiting: &Notify,
     ) -> Result<()> {
         // Cancelled between claim and start: never prepare a workspace or start an engine.
         if cancel.is_cancelled() || by_user.load(Ordering::SeqCst) {
@@ -1295,7 +1307,10 @@ impl Runner {
             }
             _ => Vec::new(),
         };
-        let global = self.store.get_settings().await?.global_instructions;
+        let settings = self.store.get_settings().await?;
+        let global = &settings.global_instructions;
+        // The quiet limit is read once, as the engine starts (stuck-run watchdog spec 4.1).
+        let quiet_secs = effective_quiet_limit(&dot.spec, &settings);
         // The memories as they are now: a run's prompt does not change while it runs.
         let memories = self.store.list_memories(&dot.id).await?;
         let recent = self.recent_runs(run).await;
@@ -1307,7 +1322,7 @@ impl Runner {
             run,
             &prepared.path,
             chrono::Local::now(),
-            &global,
+            global,
             PromptParts {
                 contexts: tools.contexts(),
                 memories: &memories,
@@ -1337,11 +1352,22 @@ impl Runner {
             approved_calls,
             tools: tools.clone(),
         };
+        self.store.set_run_quiet_limit(&run.id, quiet_secs).await?;
         let mut rx = engine.start(ctx).await?;
 
         let deadline = Instant::now() + Duration::from_secs(dot.spec.timeout_secs);
         let mut grace: Option<Instant> = None;
         let mut timed_out = false;
+        // The stuck-run watchdog (stuck-run watchdog spec section 4.2): warn after `quiet` of no
+        // output, stop after another `quiet` still quiet. No limit, no timer.
+        let quiet = quiet_secs.map(|secs| {
+            self.cfg
+                .quiet_unit
+                .saturating_mul(u32::try_from(secs).unwrap_or(u32::MAX))
+        });
+        let mut last_output = Instant::now();
+        let mut quiet_at: Option<Instant> = None;
+        let mut quiet_stopped = false;
         let mut summary: Option<String> = None;
         let mut error: Option<String> = None;
         // Claude's `rejected` ending a background run (usage and limits spec section 4).
@@ -1349,10 +1375,19 @@ impl Runner {
         let mut saw_rejected = false;
         loop {
             let limit = grace.unwrap_or(deadline);
+            // Warn a limit after the last output; once quiet, stop a limit after the warning.
+            // Off once the run is being stopped.
+            let quiet_timer = quiet
+                .filter(|_| grace.is_none())
+                .map(|q| quiet_at.unwrap_or(last_output) + q);
             tokio::select! {
                 ev = rx.recv() => {
                     let Some(ev) = ev else { break };
                     self.record(&run.id, &ev).await?;
+                    last_output = Instant::now();
+                    if quiet_at.take().is_some() {
+                        self.set_quiet(run, None, quiet_secs).await;
+                    }
                     match ev {
                         EngineEvent::Finished { summary: s } => summary = Some(s),
                         EngineEvent::Failed { error: e } => error = Some(e),
@@ -1375,6 +1410,33 @@ impl Runner {
                 _ = cancel.cancelled(), if grace.is_none() => {
                     grace = Some(Instant::now() + self.cfg.cancel_grace);
                 }
+                _ = tokio::time::sleep_until(quiet_timer.unwrap_or(deadline)),
+                    if quiet_timer.is_some() =>
+                {
+                    if self.store.has_pending_for_run(&run.id).await? {
+                        // Waiting on the person is not quiet: the clock starts again.
+                        last_output = Instant::now();
+                        if quiet_at.take().is_some() {
+                            self.set_quiet(run, None, quiet_secs).await;
+                        }
+                    } else if quiet_at.is_none() {
+                        quiet_at = Some(Instant::now());
+                        let since = crate::util::now();
+                        self.set_quiet(run, Some(&since), quiet_secs).await;
+                    } else {
+                        // Still quiet a limit after the warning: stopped as the time limit
+                        // stops a run.
+                        quiet_stopped = true;
+                        cancel.cancel();
+                        grace = Some(Instant::now() + self.cfg.cancel_grace);
+                    }
+                }
+                _ = keep_waiting.notified() => {
+                    last_output = Instant::now();
+                    if quiet_at.take().is_some() {
+                        self.set_quiet(run, None, quiet_secs).await;
+                    }
+                }
             }
         }
         tools.close().await;
@@ -1394,6 +1456,12 @@ impl Runner {
             (
                 RunStatus::Failed,
                 Some(format!("timeout after {}s", dot.spec.timeout_secs)),
+            )
+        } else if quiet_stopped {
+            let minutes = 2 * quiet_secs.unwrap_or_default() / 60;
+            (
+                RunStatus::Failed,
+                Some(format!("stopped: no output for {minutes} min")),
             )
         } else if waiting {
             (RunStatus::AwaitingApproval, error)
@@ -1432,7 +1500,9 @@ impl Runner {
                 Some("engine exited without a result".to_string()),
             )
         };
-        if user_cancelled || timed_out {
+        // The watchdog names the ending only when nothing before it in the list above did.
+        let quiet_stopped = quiet_stopped && !user_cancelled && !timed_out;
+        if user_cancelled || timed_out || quiet_stopped {
             self.store.expire_pending_for_run(&run.id).await?;
         }
         // Clean up before publishing the terminal status so observers that see
@@ -1444,10 +1514,52 @@ impl Runner {
         }
         let finished = self
             .store
-            .finish_run(&run.id, status, summary.as_deref(), err_text.as_deref())
+            .finish_run_with(
+                &run.id,
+                status,
+                summary.as_deref(),
+                err_text.as_deref(),
+                quiet_stopped,
+            )
             .await?;
         self.emit_run(&finished);
         Ok(())
+    }
+
+    /// Sets (`since`) or clears the run's quiet mark and announces it: a `RunQuiet` and the
+    /// run's row. Only an announcement of the watchdog's state: a failed write is logged and
+    /// the run goes on.
+    async fn set_quiet(&self, run: &Run, since: Option<&str>, limit: Option<u64>) {
+        match self.store.set_run_quiet(&run.id, since).await {
+            Ok(row) => {
+                let _ = self.bus.send(RuntimeEvent::RunQuiet {
+                    run_id: row.id.clone(),
+                    dot_id: row.dot_id.clone(),
+                    quiet_since: row.quiet_since.clone(),
+                    quiet_limit_secs: limit,
+                });
+                self.emit_run(&row);
+            }
+            Err(e) => tracing::warn!(run = %run.id, "updating the quiet mark failed: {e}"),
+        }
+    }
+
+    /// Keep waiting on a quiet run (stuck-run watchdog spec section 4.2): its loop clears the
+    /// mark and starts the quiet clock again. `Conflict` if the runner does not hold the run.
+    pub async fn keep_waiting(&self, run_id: &str) -> Result<()> {
+        let keep = self
+            .active
+            .lock()
+            .unwrap()
+            .get(run_id)
+            .map(|a| a.keep_waiting.clone());
+        match keep {
+            Some(keep) => {
+                keep.notify_one();
+                Ok(())
+            }
+            None => Err(already(&self.store.get_run(run_id).await?)),
+        }
     }
 
     pub async fn cancel(&self, run_id: &str) -> Result<Run> {

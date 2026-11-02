@@ -68,6 +68,7 @@ async fn build_env(steps: Vec<Step>, resume_steps: Option<Vec<Step>>, dispatch: 
             worktrees_dir: dir.path().join("wt"),
             cancel_grace: Duration::from_millis(200),
             plugins_dir: dir.path().join("plugins"),
+            quiet_unit: Duration::from_secs(1),
         },
     );
     if dispatch {
