@@ -40,7 +40,9 @@ struct Env {
 }
 
 /// A runner with the Claude engine on `fake-claude` playing `script`, and the local server.
-async fn env(script: Value) -> Env {
+/// Without `dispatch` nothing runs: a dispatcher would start a `registered` run, and its end
+/// forgets the run's secret, so the server would answer the test's next call with a bare `401`.
+async fn env(script: Value, dispatch: bool) -> Env {
     let (dir, store) = temp_store().await;
     let bus = new_bus();
     let hub = Arc::new(ApprovalHub::new(store.clone(), bus.clone()));
@@ -83,7 +85,9 @@ async fn env(script: Value) -> Env {
         },
         CancellationToken::new(),
     );
-    runner.spawn_dispatcher(CancellationToken::new());
+    if dispatch {
+        runner.spawn_dispatcher(CancellationToken::new());
+    }
     Env {
         dir,
         store,
@@ -106,7 +110,8 @@ async fn claude_dot(e: &Env, name: &str, edit: impl FnOnce(&mut DotSpec)) -> Dot
     e.store.create_dot(&s, None, "default").await.unwrap()
 }
 
-/// A run of `dot` that the test calls the `dots` server for, and its secret. It never starts.
+/// A run of `dot` that the test calls the `dots` server for, and its secret. It never starts,
+/// since its `env` has no dispatcher.
 async fn registered(e: &Env, dot: &Dot) -> (Run, String) {
     let run = e
         .store
@@ -119,16 +124,18 @@ async fn registered(e: &Env, dot: &Dot) -> (Run, String) {
 
 /// The answer of Dots' own server to `body`, for the run of `secret`.
 async fn rpc(e: &Env, secret: &str, body: Value) -> Value {
-    reqwest::Client::new()
+    let answer = reqwest::Client::new()
         .post(format!("{}/mcp", e.base))
         .bearer_auth(secret)
         .json(&body)
         .send()
         .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap()
+        .unwrap();
+    // The status and body on failure: a `401` here means the secret's run is no longer known.
+    let status = answer.status();
+    let raw = answer.text().await.unwrap();
+    assert!(status.is_success(), "{status} {raw:?} for {body}");
+    serde_json::from_str(&raw).unwrap_or_else(|err| panic!("{err}: {raw:?} for {body}"))
 }
 
 /// Calls the `dots` server's tool `name` for the run of `secret`.
@@ -154,7 +161,7 @@ fn refused(answer: &Value) -> String {
 
 #[tokio::test]
 async fn dots_own_server_serves_the_memory_tools_for_the_runs_dot() {
-    let e = env(json!([])).await;
+    let e = env(json!([]), false).await;
     let dot = claude_dot(&e, "invoices", |_| {}).await;
     let other = claude_dot(&e, "other", |_| {}).await;
     let theirs = e
@@ -241,7 +248,7 @@ async fn dots_own_server_serves_the_memory_tools_for_the_runs_dot() {
 
 #[tokio::test]
 async fn dots_own_server_checks_each_memory_call_against_the_dots_policy() {
-    let e = env(json!([])).await;
+    let e = env(json!([]), false).await;
     let denying = claude_dot(&e, "denying", |s| {
         s.policy.rules.insert(0, Rule::new("Memory", Action::Deny));
     })
@@ -274,14 +281,17 @@ async fn dots_own_server_checks_each_memory_call_against_the_dots_policy() {
 
 #[tokio::test]
 async fn a_claude_run_may_call_the_memory_tools_without_asking_the_cli() {
-    let e = env(json!([
-        {"emit": {"type": "system", "subtype": "init", "session_id": "$SESSION"}},
-        {"mcp_list": "dots"},
-        {"mcp_call": {"server": "dots", "tool": "remember",
-                      "arguments": {"text": "Prefers invoices as PDF."}}},
-        {"emit": {"type": "result", "subtype": "success", "is_error": false, "result": "done",
-                  "usage": {"input_tokens": 1, "output_tokens": 1}}}
-    ]))
+    let e = env(
+        json!([
+            {"emit": {"type": "system", "subtype": "init", "session_id": "$SESSION"}},
+            {"mcp_list": "dots"},
+            {"mcp_call": {"server": "dots", "tool": "remember",
+                          "arguments": {"text": "Prefers invoices as PDF."}}},
+            {"emit": {"type": "result", "subtype": "success", "is_error": false, "result": "done",
+                      "usage": {"input_tokens": 1, "output_tokens": 1}}}
+        ]),
+        true,
+    )
     .await;
     let dot = claude_dot(&e, "claude", |_| {}).await;
     let run = e
@@ -319,7 +329,7 @@ async fn a_claude_run_may_call_the_memory_tools_without_asking_the_cli() {
 /// redeemed by another with the same arguments.
 #[tokio::test]
 async fn a_memory_call_is_checked_with_its_own_argument_only() {
-    let e = env(json!([])).await;
+    let e = env(json!([]), false).await;
     let asking = claude_dot(&e, "asking", |s| {
         s.policy.rules.push(Rule::new("Memory", Action::Ask));
     })
