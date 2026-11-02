@@ -808,6 +808,43 @@ async fn a_failure_after_a_tool_call_needs_attention_until_a_scheduled_run_succe
     assert!(h.notices().is_empty(), "clearing the flag is quiet");
 }
 
+/// A run the watchdog stopped may be stuck on something a retry would meet again: it is not
+/// retried even though it made no tool call. The schedule needs attention at once and keeps firing.
+#[tokio::test]
+async fn a_run_the_watchdog_stopped_needs_attention_at_once() {
+    const STOPPED: &str = "stopped: no output for 20 min";
+    let mut h = Harness::new().await;
+    let dot = h.dot("quiet", Some(every(10, 60, true)), 0).await;
+    h.start();
+    h.settle().await;
+    h.at(60).await;
+    let run = h.watched(&dot).await;
+    h.events();
+    let ended = timestamp(h.clock.now());
+    h.exec(
+        "UPDATE runs SET status='failed', error=?, quiet_stopped=1, ended_at=? WHERE id=?",
+        &[STOPPED, &ended, &run.id],
+    )
+    .await;
+    h.sched.reload();
+    h.settle().await;
+
+    let row = h.row(&dot).await;
+    assert_eq!((row.watch_run_id, row.retry), (None, None), "not retried");
+    assert_eq!(row.attention_run_id.as_deref(), Some(run.id.as_str()));
+    assert_eq!(
+        h.notices(),
+        [(dot.id.clone(), run.id.clone(), Some(STOPPED.to_string()))]
+    );
+    assert_eq!(h.runs(&dot).await.len(), 1, "no retry run was queued");
+
+    // The schedule goes on: the next slot fires.
+    h.at(660).await;
+    let next = h.watched(&dot).await;
+    assert_ne!(next.id, run.id);
+    assert_eq!(h.runs(&dot).await.len(), 2);
+}
+
 /// Final review F1: a run still running when the next slot fires is no longer watched, so the
 /// scheduler never judges it. When it then fails before any tool call, it is a run to review.
 /// A scheduled run that failed before any tool call and that the scheduler judged into a
