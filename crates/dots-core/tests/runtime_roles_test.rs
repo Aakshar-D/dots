@@ -197,6 +197,9 @@ async fn viewer_cannot_create_edit_run_or_answer() {
         t.rt.create_dot(t.triage(), Some(ACME.into()), None)
             .await
             .unwrap();
+    // No queued run is claimed, so nothing but the calls below changes the approval and runs.
+    // Held before the run is queued, so the dispatcher cannot claim it in between.
+    t.rt.hold_runs(true).await;
     let run =
         t.rt.store()
             .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
@@ -209,9 +212,6 @@ async fn viewer_cannot_create_edit_run_or_answer() {
             .unwrap();
     t.become_(2, Some("viewer")).await;
     let edit = viewer_cant("create or change dots");
-    // No queued run is claimed, so nothing but the calls below changes the approval and runs.
-    t.rt.hold_runs(true).await;
-
     assert_eq!(
         refused(t.rt.create_dot(t.triage(), Some(ACME.into()), None).await),
         edit
