@@ -29,7 +29,7 @@ use dots_core::library_service::{
 };
 use dots_core::model::{
     Approval, Dot, DotOverview, DotSpec, FollowUp, Inbox, Memory, Message, Run, RunEventRecord,
-    ScheduleSkip, SettingsSaved, Status, Watcher, WatcherConfig, WorktreeDiff,
+    ScheduleSkip, SettingsSaved, Status, WatchHours, Watcher, WatcherConfig, WorktreeDiff,
 };
 use dots_core::policy::{Policy, Preset, RuleCandidate};
 use dots_core::schedule::Schedule;
@@ -1481,10 +1481,11 @@ pub async fn watcher_add(
     dot_id: String,
     name: String,
     config: WatcherConfig,
+    hours: Option<WatchHours>,
 ) -> Res<Watcher> {
     Ok(state
         .rt()?
-        .watcher_add(&dot_id, &name, config, None)
+        .watcher_add(&dot_id, &name, config, hours)
         .await?)
 }
 
@@ -1495,8 +1496,12 @@ pub async fn watcher_update(
     id: String,
     name: String,
     config: WatcherConfig,
+    hours: Option<WatchHours>,
 ) -> Res<Watcher> {
-    Ok(state.rt()?.watcher_update(&id, &name, config, None).await?)
+    Ok(state
+        .rt()?
+        .watcher_update(&id, &name, config, hours)
+        .await?)
 }
 
 #[tauri::command]
