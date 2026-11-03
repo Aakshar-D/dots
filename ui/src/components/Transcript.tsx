@@ -62,6 +62,14 @@ function chatMessage(run: Run): string | null {
   return typeof message === "string" ? message : null;
 }
 
+/// Whether Dots sent this chat message again after it restarted (crash resend spec section 3.4).
+function resentAfterRestart(run: Run): boolean {
+  if (run.trigger !== "chat" || typeof run.payload !== "object" || run.payload === null) {
+    return false;
+  }
+  return (run.payload as Record<string, unknown>).resent === "restart";
+}
+
 /// What the scheduler wrote into the payload of a run it started: the slot, whether the slot
 /// had been missed, and which attempt of the occurrence the run is (a first one has none).
 const SchedulePayload = z.object({
@@ -470,6 +478,9 @@ export function Transcript(props: {
                 >
                   {message}
                 </p>
+              )}
+              {resentAfterRestart(run) && (
+                <p className="self-end text-xs text-muted-foreground">Resent after Dots restarted</p>
               )}
               {!conversation && (items.length > 0 || checkIns.length > 0) && (
                 <p className="flex items-center gap-1.5 text-xs text-muted-foreground">

@@ -1,4 +1,4 @@
-import { useQueries, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQueryClient } from "@tanstack/react-query";
 
 import { commands } from "@/api/commands";
 import type { InstructionProposal, Message, Run, RunEventRecord } from "@/api/types";
@@ -8,8 +8,10 @@ import { ApprovalCard } from "@/components/ApprovalCard";
 import { LoadErrors } from "@/components/ErrorNote";
 import { InstructionsCard } from "@/components/InstructionsCard";
 import { Failure, Transcript } from "@/components/Transcript";
+import { Button } from "@/components/ui/button";
 import { isActive } from "@/lib/home-topics";
-import { eventsQuery, keys } from "@/lib/query";
+import { errorMessage } from "@/lib/notify";
+import { eventsQuery, invalidate, keys } from "@/lib/query";
 
 import { QuietCard } from "./QuietCard";
 
@@ -68,6 +70,39 @@ export function TopicRuns(props: {
         <InstructionsCard key={proposal.id} proposal={proposal} dotName={dotName} busy={busy} />
       ))}
       {failure && <Failure>{failure}</Failure>}
+      {latest?.status === "failed" && latest.trigger === "chat" && <SendAgain run={latest} />}
+    </div>
+  );
+}
+
+/// Send again (crash resend spec section 3.6): the failed message of the topic's last run,
+/// queued once more in the topic. The core refuses when the topic has moved on; its text shows.
+function SendAgain({ run }: { run: Run }) {
+  const qc = useQueryClient();
+  const send = useMutation({
+    mutationFn: commands.resendRun,
+    onSuccess: () => {
+      invalidate(qc, ["thread"]);
+      invalidate(qc, ["runs"]);
+      invalidate(qc, keys.overview);
+    },
+  });
+  return (
+    <div className="flex flex-col gap-1">
+      <Button
+        size="sm"
+        variant="outline"
+        className="self-start"
+        disabled={send.isPending}
+        onClick={() => send.mutate(run.id)}
+      >
+        Send again
+      </Button>
+      {send.isError && (
+        <p role="alert" className="text-xs text-destructive">
+          {errorMessage(send.error)}
+        </p>
+      )}
     </div>
   );
 }
