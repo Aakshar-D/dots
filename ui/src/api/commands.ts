@@ -188,6 +188,9 @@ export const commands = {
   /// the call can only be approved one at a time.
   approvalRuleCandidates: (id: string) =>
     call(T.RuleCandidate.array(), "approval_rule_candidates", { id }),
+  /// True when the call touches a private folder (keys, tokens, `.env` files): it always asks,
+  /// and no rule can be saved with its approval.
+  approvalTouchesPrivate: (id: string) => call(z.boolean(), "approval_touches_private", { id }),
   /// Gives every pending approval of one run the same answer, in the order they were asked.
   /// Answers the approvals it decided.
   decideRunApprovals: (runId: string, approved: boolean, note: string | null) =>

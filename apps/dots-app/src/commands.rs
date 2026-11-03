@@ -672,6 +672,13 @@ pub async fn approval_rule_candidates(
     Ok(state.rt()?.approval_rule_candidates(&id).await?)
 }
 
+/// True when the call touches a private folder: it always asks, and no rule can be saved with
+/// its approval (approval guards spec section 3.3).
+#[tauri::command]
+pub async fn approval_touches_private(state: State<'_, AppState>, id: String) -> Res<bool> {
+    Ok(state.rt()?.approval_touches_private(&id).await?)
+}
+
 #[tauri::command]
 pub async fn decide_run_approvals(
     state: State<'_, AppState>,

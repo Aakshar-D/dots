@@ -107,6 +107,7 @@ command_list![
     approvals_for_run,
     decide_approval,
     approval_rule_candidates,
+    approval_touches_private,
     decide_run_approvals,
     inbox,
     inbox_count,
