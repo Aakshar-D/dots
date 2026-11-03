@@ -220,6 +220,79 @@ async fn step_runs_record_their_hand_off_and_decision() {
 }
 
 #[tokio::test]
+async fn step_runs_record_their_outcome_and_notice() {
+    let f = fixture().await;
+    let wr = f.store.create_workflow_run(&f.new).await.unwrap();
+    let step = f
+        .store
+        .create_step_run(&wr.id, "a", 1, StepRunStatus::Running)
+        .await
+        .unwrap();
+    assert_eq!(
+        (step.outcome.as_deref(), step.notice.as_deref()),
+        (None, None)
+    );
+    let reported = f
+        .store
+        .set_step_outcome(&step.id, Some("fixed"))
+        .await
+        .unwrap();
+    assert_eq!(reported.outcome.as_deref(), Some("fixed"));
+    assert_eq!(reported.status, StepRunStatus::Running);
+    let noticed = f
+        .store
+        .set_step_run(
+            &step.id,
+            &StepRunChange {
+                notice: Some(Some("Started again from the start.".into())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        noticed.notice.as_deref(),
+        Some("Started again from the start.")
+    );
+    // A change that does not name them leaves them as they are.
+    let done = f
+        .store
+        .set_step_run(
+            &step.id,
+            &StepRunChange {
+                status: Some(StepRunStatus::Succeeded),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(done.outcome.as_deref(), Some("fixed"));
+    assert_eq!(
+        done.notice.as_deref(),
+        Some("Started again from the start.")
+    );
+    // Both clear.
+    let cleared = f.store.set_step_outcome(&step.id, None).await.unwrap();
+    assert_eq!(cleared.outcome, None);
+    let cleared = f
+        .store
+        .set_step_run(
+            &step.id,
+            &StepRunChange {
+                notice: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(cleared.notice, None);
+    assert!(matches!(
+        f.store.set_step_outcome("nope", Some("fixed")).await,
+        Err(Error::NotFound(_))
+    ));
+}
+
+#[tokio::test]
 async fn a_continuing_run_keeps_its_parents_step_and_spend_is_summed() {
     let f = fixture().await;
     let wr = f.store.create_workflow_run(&f.new).await.unwrap();

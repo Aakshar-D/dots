@@ -1,9 +1,11 @@
 //! Workflow runs (teams and workflows spec sections 5 to 8). `Workflows` starts them and moves
 //! each one along its steps: an agent step queues a run of its member and ends when that run's
-//! thread does; a check waits for the person. Every move is made by a pass that reads the
-//! workflow runs in flight from the store and does what each one's state calls for, so a
-//! restart or a lost event never loses a step. The loop passes when a run of a step changes,
-//! when a question is posted or answered, when it is woken, and every `TICK`.
+//! thread does; a check waits for the person; a branch takes one of its paths at once. A run's
+//! place is the id of its current step, anywhere in the definition's tree. Every move is made
+//! by a pass that reads the workflow runs in flight from the store and does what each one's
+//! state calls for, so a restart or a lost event never loses a step. The loop passes when a run
+//! of a step changes, when a question is posted or answered, when it is woken, and every
+//! `TICK`.
 
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
@@ -28,7 +30,7 @@ use crate::scheduler::Clock;
 use crate::store::Store;
 use crate::util::timestamp;
 use crate::vault::org::Orgs;
-use crate::workflow::{Budget, Step, StepKind};
+use crate::workflow::{BranchOn, BranchPath, Budget, Step, StepKind};
 use crate::workspace::git;
 use crate::{Error, Result};
 
@@ -40,7 +42,7 @@ pub const MAX_HANDOFF_SUMMARY: usize = 4_000;
 /// would work in the project's worktree outside the workflow.
 pub const ENDED_STEP_THREAD: &str =
     "this chat was a step of a workflow, and the step has ended; start a new chat";
-/// Why a step of a kind Dots cannot run yet (a branch, a deploy) fails when it begins.
+/// Why a step of a kind Dots cannot run yet (a deploy) fails when it begins.
 pub const NOT_BUILT: &str = "this kind of step is not built yet";
 /// How often the loop passes while nothing wakes it.
 pub const TICK: Duration = Duration::from_secs(30);
@@ -78,39 +80,145 @@ pub struct Workflows {
     orgs: OnceLock<Orgs>,
 }
 
-/// The place of the top-level step `id` in the definition's list. Runs move along that list
-/// for now; a branch step, the only one with steps inside it, fails when it begins.
-fn index_of(wr: &WorkflowRun, id: &str) -> Option<usize> {
-    wr.definition.steps.iter().position(|s| s.id == id)
-}
-
 /// The newest step run of `step_id`.
 fn latest<'a>(wr: &'a WorkflowRun, step_id: &str) -> Option<&'a StepRun> {
     wr.steps.iter().rev().find(|s| s.step_id == step_id)
 }
 
-/// The hand-offs of the agent steps before `index`, oldest first: each step's newest
-/// succeeded run.
-fn handoffs_before(wr: &WorkflowRun, index: usize) -> Vec<(&Step, &Handoff)> {
-    wr.definition.steps[..index]
+/// The newest succeeded step run of `step_id`.
+fn succeeded<'a>(wr: &'a WorkflowRun, step_id: &str) -> Option<&'a StepRun> {
+    wr.steps
         .iter()
-        .filter(|s| matches!(s.kind, StepKind::Agent { .. }))
-        .filter_map(|s| {
-            let run = wr
-                .steps
+        .rev()
+        .find(|s| s.step_id == step_id && s.status == StepRunStatus::Succeeded)
+}
+
+/// The attempt a new step run of `step_id` is: one more than the runs it has had.
+fn next_attempt(wr: &WorkflowRun, step_id: &str) -> u32 {
+    wr.steps.iter().filter(|s| s.step_id == step_id).count() as u32 + 1
+}
+
+/// Whether `id` is `step` or a step inside it, at any depth.
+fn holds(step: &Step, id: &str) -> bool {
+    step.id == id
+        || match &step.kind {
+            StepKind::Branch {
+                paths, otherwise, ..
+            } => paths
                 .iter()
+                .flat_map(|p| &p.steps)
+                .chain(otherwise)
+                .any(|s| holds(s, id)),
+            _ => false,
+        }
+}
+
+/// The steps of the path the branch step `branch` took in this run: the path its newest
+/// succeeded step run chose (`decision.path`), `otherwise` when it chose none. Empty for a
+/// branch that has not run and for the other kinds.
+fn taken<'a>(wr: &WorkflowRun, branch: &'a Step) -> &'a [Step] {
+    let StepKind::Branch {
+        paths, otherwise, ..
+    } = &branch.kind
+    else {
+        return &[];
+    };
+    let Some(run) = succeeded(wr, &branch.id) else {
+        return &[];
+    };
+    let label = run
+        .decision
+        .as_ref()
+        .and_then(|d| d.get("path"))
+        .and_then(serde_json::Value::as_str);
+    match label {
+        Some(label) => paths
+            .iter()
+            .find(|p| p.label.trim() == label)
+            .map_or(&[], |p| p.steps.as_slice()),
+        None => otherwise,
+    }
+}
+
+/// Pushes the steps that ran inside `step` in this run, in run order: for a branch, the steps
+/// of the path it took and, recursively, of the branches on that path.
+fn ran_inside<'a>(wr: &WorkflowRun, step: &'a Step, out: &mut Vec<&'a Step>) {
+    for s in taken(wr, step) {
+        out.push(s);
+        ran_inside(wr, s, out);
+    }
+}
+
+/// The steps that ran before the step `id` in this run, oldest first: `Definition::before`,
+/// with the steps of the path each earlier branch took after that branch. A path a branch did
+/// not take is never in it. The branches `id` is inside are not opened: the steps of its own
+/// path before it are already in `before`.
+fn ran_before<'a>(wr: &'a WorkflowRun, id: &str) -> Vec<&'a Step> {
+    let mut out = Vec::new();
+    for step in wr.definition.before(id) {
+        out.push(step);
+        if !holds(step, id) {
+            ran_inside(wr, step, &mut out);
+        }
+    }
+    out
+}
+
+/// The step to begin after the step `id` succeeded: for a branch, the first step of the path
+/// it took, else (an empty path) the step after the branch; for the others the step after it.
+/// `None` past the last step: the workflow run has succeeded.
+fn next_of<'a>(wr: &'a WorkflowRun, id: &str) -> Option<&'a Step> {
+    let step = wr.definition.step(id)?;
+    taken(wr, step)
+        .first()
+        .or_else(|| wr.definition.next_after(id))
+}
+
+/// The path a branch step takes (section 5.6): the first whose label matches, `None` for
+/// `otherwise`. On `outcome` the label is compared with the outcome the newest succeeded run
+/// of the nearest agent step before it reported, as the definition declares it (after
+/// trimming); on `project` with the workflow run's project name, without case.
+fn choose<'a>(
+    wr: &WorkflowRun,
+    id: &str,
+    on: BranchOn,
+    paths: &'a [BranchPath],
+) -> Option<&'a BranchPath> {
+    match on {
+        BranchOn::Outcome => {
+            let source = wr
+                .definition
+                .before(id)
+                .into_iter()
                 .rev()
-                .find(|r| r.step_id == s.id && r.status == StepRunStatus::Succeeded)?;
-            Some((s, run.handoff.as_ref()?))
-        })
+                .find(|s| matches!(s.kind, StepKind::Agent { .. }))?;
+            let outcome = succeeded(wr, &source.id)?.outcome.as_deref()?.trim();
+            paths.iter().find(|p| p.label.trim() == outcome)
+        }
+        BranchOn::Project => {
+            let project = wr.project.name.trim();
+            paths
+                .iter()
+                .find(|p| p.label.trim().eq_ignore_ascii_case(project))
+        }
+    }
+}
+
+/// The hand-offs of the agent steps that ran before the step `id` (`ran_before`), oldest
+/// first: each step's newest succeeded run.
+fn handoffs_before<'a>(wr: &'a WorkflowRun, id: &str) -> Vec<(&'a Step, &'a Handoff)> {
+    ran_before(wr, id)
+        .into_iter()
+        .filter(|s| matches!(s.kind, StepKind::Agent { .. }))
+        .filter_map(|s| Some((s, succeeded(wr, &s.id)?.handoff.as_ref()?)))
         .collect()
 }
 
-/// The branch a step at `index` starts from (section 6): the newest earlier hand-off that has
+/// The branch the step `id` starts from (section 6): the newest earlier hand-off that has
 /// branches, when it has exactly one, as its full ref (a tag of the same name must not stand
 /// in for it). `None` starts from the project's default branch.
-fn start_branch(wr: &WorkflowRun, index: usize) -> Option<String> {
-    let newest = handoffs_before(wr, index)
+fn start_branch(wr: &WorkflowRun, id: &str) -> Option<String> {
+    let newest = handoffs_before(wr, id)
         .into_iter()
         .rev()
         .find(|(_, h)| !h.branches.is_empty())?;
@@ -313,10 +421,10 @@ impl Workflows {
         let held_retry = running.current_step.as_deref().and_then(|current| {
             let failed =
                 latest(&running, current).is_some_and(|s| s.status == StepRunStatus::Failed);
-            failed.then(|| index_of(&running, current)).flatten()
+            failed.then(|| running.definition.step(current)).flatten()
         });
         match held_retry {
-            Some(index) => self.begin_step(&running, index).await?,
+            Some(step) => self.begin_step(&running, step).await?,
             None => self.advance(id).await?,
         }
         let wr = self.store.get_workflow_run(id).await?;
@@ -490,8 +598,7 @@ impl Workflows {
                 "workflow run {id} is not waiting for a check"
             )));
         };
-        let index = index_of(&wr, &step_run.step_id).unwrap_or(0);
-        let shown = handoffs_before(&wr, index)
+        let shown = handoffs_before(&wr, &step_run.step_id)
             .last()
             .map(|(_, h)| (*h).clone())
             .unwrap_or_default();
@@ -529,13 +636,15 @@ impl Workflows {
         let wr = self.store.get_workflow_run(id).await?;
         self.require(&wr.team_id, Permission::RunDots).await?;
         let wr = self.tick(&wr).await?;
-        let index = match (&wr.status, &wr.waiting_on, &wr.current_step) {
-            (WorkflowRunStatus::Waiting, Some(WaitingOn::StepFailed), Some(current)) => {
-                index_of(&wr, current)
+        let current = match (&wr.status, &wr.waiting_on, &wr.current_step) {
+            (WorkflowRunStatus::Waiting, Some(WaitingOn::StepFailed), Some(current))
+                if wr.definition.step(current).is_some() =>
+            {
+                Some(current.clone())
             }
             _ => None,
         };
-        let Some(index) = index else {
+        let Some(current) = current else {
             return Err(Error::Conflict(format!(
                 "workflow run {id} has no failed step to retry"
             )));
@@ -552,7 +661,9 @@ impl Workflows {
                 },
             )
             .await?;
-        self.begin_step(&wr, index).await?;
+        if let Some(step) = wr.definition.step(&current) {
+            self.begin_step(&wr, step).await?;
+        }
         let wr = self.store.get_workflow_run(id).await?;
         self.updated(&wr);
         Ok(wr)
@@ -675,19 +786,28 @@ impl Workflows {
             return Ok(());
         }
         let Some(current) = wr.current_step.clone() else {
-            return self.begin_step(&wr, 0).await;
+            return self.begin_or_finish(&wr, wr.definition.first()).await;
         };
-        let Some(index) = index_of(&wr, &current) else {
+        let Some(step) = wr.definition.step(&current) else {
             return Err(Error::Other(format!(
                 "step {current} is not in the workflow"
             )));
         };
         match latest(&wr, &current).map(|s| (s.status, s.clone())) {
-            None => self.begin_step(&wr, index).await,
-            Some((StepRunStatus::Running, step_run)) => {
-                self.watch_agent(&wr, index, &step_run).await
+            None => self.begin_step(&wr, step).await,
+            // A branch cut off between its two writes: it chooses now.
+            Some((StepRunStatus::Running, step_run))
+                if matches!(step.kind, StepKind::Branch { .. }) =>
+            {
+                let next = self.take_branch(&wr, step, Some(&step_run)).await?;
+                self.begin_or_finish(&wr, next).await
             }
-            Some((StepRunStatus::Succeeded, _)) => self.begin_step(&wr, index + 1).await,
+            Some((StepRunStatus::Running, step_run)) => {
+                self.watch_agent(&wr, step, &step_run).await
+            }
+            Some((StepRunStatus::Succeeded, _)) => {
+                self.begin_or_finish(&wr, next_of(&wr, &current)).await
+            }
             // A move cut off between its two writes (a crash, a store error) leaves the run
             // `Running` behind a step that is failed or waiting for the person: put the run
             // where the person can act on it.
@@ -696,7 +816,6 @@ impl Workflows {
                     .error
                     .clone()
                     .unwrap_or_else(|| "the step failed".to_string());
-                let name = wr.definition.steps[index].name.clone();
                 let waiting = self
                     .store
                     .set_workflow_run(
@@ -704,7 +823,7 @@ impl Workflows {
                         &WorkflowRunChange {
                             status: Some(WorkflowRunStatus::Waiting),
                             waiting_on: Some(Some(WaitingOn::StepFailed)),
-                            error: Some(Some(format!("{name}: {error}"))),
+                            error: Some(Some(format!("{}: {error}", step.name))),
                             ..Default::default()
                         },
                     )
@@ -731,25 +850,45 @@ impl Workflows {
         }
     }
 
-    /// Starts the step at `index`: an agent step queues its member's run, a check waits for the
-    /// person. Past the last step the workflow run has succeeded.
-    async fn begin_step(&self, wr: &WorkflowRun, index: usize) -> Result<()> {
-        let Some(step) = wr.definition.steps.get(index) else {
-            let done = self
-                .store
-                .set_workflow_run(
-                    &wr.id,
-                    &WorkflowRunChange {
-                        status: Some(WorkflowRunStatus::Succeeded),
-                        current_step: Some(None),
-                        ..Default::default()
-                    },
-                )
-                .await?;
-            self.updated(&done);
-            return Ok(());
-        };
-        let attempt = wr.steps.iter().filter(|s| s.step_id == step.id).count() as u32 + 1;
+    /// Begins `next`; `None` (past the last step) succeeds the workflow run.
+    async fn begin_or_finish(&self, wr: &WorkflowRun, next: Option<&Step>) -> Result<()> {
+        match next {
+            Some(step) => self.begin_step(wr, step).await,
+            None => self.finish(wr).await,
+        }
+    }
+
+    /// Succeeds the workflow run: it is past its last step.
+    async fn finish(&self, wr: &WorkflowRun) -> Result<()> {
+        let done = self
+            .store
+            .set_workflow_run(
+                &wr.id,
+                &WorkflowRunChange {
+                    status: Some(WorkflowRunStatus::Succeeded),
+                    current_step: Some(None),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        self.updated(&done);
+        Ok(())
+    }
+
+    /// Begins `step`, a step of `wr`'s definition: an agent step queues its member's run, a
+    /// check waits for the person, and a branch takes its path at once and begins the step
+    /// that path leads to (past the last step, the workflow run has succeeded).
+    async fn begin_step<'a>(&self, wr: &'a WorkflowRun, step: &'a Step) -> Result<()> {
+        let mut step = step;
+        // A loop, not a call of itself: a branch whose path starts with a branch takes both
+        // in one move, and an async fn cannot call itself without a box.
+        while matches!(step.kind, StepKind::Branch { .. }) {
+            match self.take_branch(wr, step, None).await? {
+                Some(next) => step = next,
+                None => return self.finish(wr).await,
+            }
+        }
+        let attempt = next_attempt(wr, &step.id);
         match &step.kind {
             StepKind::Check { .. } => {
                 self.store
@@ -796,14 +935,16 @@ impl Workflows {
                 match refusal {
                     Some(error) => self.fail_step(wr, step, &step_run, &error).await?,
                     None => {
+                        // Read again: the hand-offs before the step include the paths the
+                        // branches just taken chose.
                         let wr = self.store.get_workflow_run(&wr.id).await?;
-                        self.queue_agent_run(&wr, index, &step_run).await?;
+                        self.queue_agent_run(&wr, step, &step_run).await?;
                         self.updated(&self.store.get_workflow_run(&wr.id).await?);
                     }
                 }
             }
-            // A definition may hold them already; the run waits on them as on a failed step.
-            StepKind::Branch { .. } | StepKind::Deploy { .. } => {
+            // A definition may hold one already; the run waits on it as on a failed step.
+            StepKind::Deploy { .. } => {
                 let step_run = self
                     .store
                     .create_step_run(&wr.id, &step.id, attempt, StepRunStatus::Failed)
@@ -819,8 +960,63 @@ impl Workflows {
                     .await?;
                 self.fail_step(wr, step, &step_run, NOT_BUILT).await?;
             }
+            StepKind::Branch { .. } => {}
         }
         Ok(())
+    }
+
+    /// Runs the branch step `step` (section 5.6): chooses its path (`choose`) and records the
+    /// choice on a step run that succeeds at once, `decision: {"path": <label> | null}`, with
+    /// the branch as the current step. `step_run` is one a move cut off left running. Gives the
+    /// step to begin next: the path's first, else the step after the branch.
+    async fn take_branch<'a>(
+        &self,
+        wr: &'a WorkflowRun,
+        step: &'a Step,
+        step_run: Option<&StepRun>,
+    ) -> Result<Option<&'a Step>> {
+        let StepKind::Branch {
+            on,
+            paths,
+            otherwise,
+        } = &step.kind
+        else {
+            return Ok(wr.definition.next_after(&step.id));
+        };
+        let path = choose(wr, &step.id, *on, paths);
+        let step_run = match step_run {
+            Some(run) => run.clone(),
+            None => {
+                let attempt = next_attempt(wr, &step.id);
+                self.store
+                    .create_step_run(&wr.id, &step.id, attempt, StepRunStatus::Running)
+                    .await?
+            }
+        };
+        self.store
+            .set_workflow_run(
+                &wr.id,
+                &WorkflowRunChange {
+                    current_step: Some(Some(step.id.clone())),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        // One write: the choice and the end, so a branch that reads as succeeded has chosen.
+        self.store
+            .set_step_run(
+                &step_run.id,
+                &StepRunChange {
+                    status: Some(StepRunStatus::Succeeded),
+                    decision: Some(Some(json!({"path": path.map(|p| p.label.trim())}))),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        let first = path
+            .map_or(otherwise.as_slice(), |p| p.steps.as_slice())
+            .first();
+        Ok(first.or_else(|| wr.definition.next_after(&step.id)))
     }
 
     /// Puts the workflow run in wait for the person to add budget, past `limit` (section 9).
@@ -857,33 +1053,32 @@ impl Workflows {
     async fn queue_agent_run(
         &self,
         wr: &WorkflowRun,
-        index: usize,
+        step: &Step,
         step_run: &StepRun,
     ) -> Result<Run> {
-        let step = &wr.definition.steps[index];
         let StepKind::Agent { member, .. } = &step.kind else {
             return Err(Error::Other(format!(
                 "step {} is not an agent step",
                 step.id
             )));
         };
-        let section = self.section(wr, index).await?;
+        let section = self.section(wr, step).await?;
         let mut new = NewRun::new(member, TriggerKind::Workflow);
         new.workflow_step_run_id = Some(step_run.id.clone());
         new.payload = Some(json!({
             "workflow": {
                 "workflow_run_id": wr.id,
                 "step_id": step.id,
-                "start": start_branch(wr, index),
+                "start": start_branch(wr, &step.id),
                 "section": section,
             }
         }));
         self.runner.enqueue(new).await
     }
 
-    /// The `## Workflow` section of the prompt of the step at `index` (section 5.2).
-    async fn section(&self, wr: &WorkflowRun, index: usize) -> Result<String> {
-        let step = &wr.definition.steps[index];
+    /// The `## Workflow` section of the prompt of `step` (section 5.2). Its place counts every
+    /// step of the tree in run order, branches and the paths not taken included.
+    async fn section(&self, wr: &WorkflowRun, step: &Step) -> Result<String> {
         let StepKind::Agent { member, job, .. } = &step.kind else {
             return Ok(String::new());
         };
@@ -913,15 +1108,15 @@ impl Workflows {
         out.push_str(&format!(
             "- Step: {} ({} of {})\n\n",
             step.name,
-            index + 1,
-            wr.definition.steps.len()
+            wr.definition.position(&step.id).unwrap_or_default() + 1,
+            wr.definition.all().len()
         ));
         out.push_str("### Task\n\n");
         out.push_str(wr.task.trim());
         out.push_str("\n\n### Your job in this step\n\n");
         out.push_str(job.trim());
         out.push_str("\n\n");
-        let earlier = handoffs_before(wr, index);
+        let earlier = handoffs_before(wr, &step.id);
         if !earlier.is_empty() {
             out.push_str("### Earlier steps\n\n");
             for (s, h) in earlier {
@@ -949,13 +1144,12 @@ impl Workflows {
     /// question of it waits for the person. A step whose run is gone gets one again, as a step
     /// that begins does: unless its member may not run, which fails it, or a limit is reached,
     /// which waits for the person.
-    async fn watch_agent(&self, wr: &WorkflowRun, index: usize, step_run: &StepRun) -> Result<()> {
+    async fn watch_agent(&self, wr: &WorkflowRun, step: &Step, step_run: &StepRun) -> Result<()> {
         // The question first: an answer closes it and stores the run that continues the thread
         // in one transaction, so once it reads as closed, the runs read next include that run.
         if self.store.step_has_open_question(&step_run.id).await? {
             return Ok(());
         }
-        let step = &wr.definition.steps[index];
         let runs = self.store.runs_of_step_run(&step_run.id).await?;
         let Some(last) = runs.last() else {
             if let StepKind::Agent { member, .. } = &step.kind {
@@ -966,7 +1160,7 @@ impl Workflows {
             if let Some(limit) = budget_reached(wr) {
                 return self.wait_on_budget(wr, &limit).await;
             }
-            self.queue_agent_run(wr, index, step_run).await?;
+            self.queue_agent_run(wr, step, step_run).await?;
             return Ok(());
         };
         if runs.iter().any(|r| !r.status.is_terminal()) {
@@ -979,7 +1173,12 @@ impl Workflows {
             });
             return self.fail_step(wr, step, step_run, &error).await;
         }
-        let handoff = self.handoff_of(wr, &runs).await;
+        // Read again: the outcome its run reported may have come after `step_run` was read.
+        let outcome = self.store.get_step_run(&step_run.id).await?.outcome;
+        let handoff = Handoff {
+            outcome,
+            ..self.handoff_of(wr, &runs).await
+        };
         self.store
             .set_step_run(
                 &step_run.id,
@@ -992,7 +1191,7 @@ impl Workflows {
             .await?;
         self.step_ended(wr, &step.id);
         let wr = self.store.get_workflow_run(&wr.id).await?;
-        self.begin_step(&wr, index + 1).await
+        self.begin_or_finish(&wr, next_of(&wr, &step.id)).await
     }
 
     /// Fails a step: the workflow run waits for the person to retry it or stop (section 8).
@@ -1032,7 +1231,8 @@ impl Workflows {
 
     /// What a finished agent step hands on (section 6): its newest run's summary, and the
     /// branch of its thread when the branch still exists (a worktree with no change was
-    /// removed with its branch). What the thread left uncommitted is committed first.
+    /// removed with its branch). What the thread left uncommitted is committed first. The
+    /// outcome is the caller's: the step run's.
     async fn handoff_of(&self, wr: &WorkflowRun, runs: &[Run]) -> Handoff {
         let last = runs.last();
         let summary = last.and_then(|r| r.summary.clone()).unwrap_or_default();

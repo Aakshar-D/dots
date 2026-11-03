@@ -561,28 +561,8 @@ async fn a_disabled_member_fails_its_step() {
 }
 
 #[tokio::test]
-async fn a_branch_or_deploy_step_fails_as_not_built_yet() {
+async fn a_deploy_step_fails_as_not_built_yet() {
     let w = world().await;
-    let branch = Step {
-        id: "pick".into(),
-        name: "Pick".into(),
-        kind: StepKind::Branch {
-            on: BranchOn::Project,
-            paths: vec![BranchPath {
-                label: "Dots".into(),
-                steps: vec![check("inner")],
-            }],
-            otherwise: vec![],
-        },
-    };
-    let flow = w.workflow("Branch", vec![branch]).await;
-    let wr = w.start(&flow).await;
-    let wr = w.until(&wr.id, waits_on(WaitingOn::StepFailed)).await;
-    assert_eq!(
-        wr.error.as_deref(),
-        Some("Pick: this kind of step is not built yet")
-    );
-    assert_eq!(wr.current_step.as_deref(), Some("pick"));
     let deploy = Step {
         id: "ship".into(),
         name: "Ship".into(),
@@ -599,6 +579,7 @@ async fn a_branch_or_deploy_step_fails_as_not_built_yet() {
         wr.error.as_deref(),
         Some("Ship: this kind of step is not built yet")
     );
+    assert_eq!(wr.current_step.as_deref(), Some("ship"));
     // A retry tries it again, and it fails again.
     w.workflows.retry_step(&wr.id).await.unwrap();
     let wr = w.until(&wr.id, waits_on(WaitingOn::StepFailed)).await;
@@ -1436,4 +1417,346 @@ async fn a_long_summary_is_cut_to_the_hand_off_limit_mark_included() {
     assert_eq!(summary.chars().count(), 4_000);
     assert!(summary.ends_with(" [cut]"), "{summary}");
     assert!(long.starts_with(summary.trim_end_matches(" [cut]")));
+}
+
+/// A branch step with `paths` (label, steps) and `otherwise`.
+fn branch(id: &str, on: BranchOn, paths: Vec<(&str, Vec<Step>)>, otherwise: Vec<Step>) -> Step {
+    Step {
+        id: id.into(),
+        name: format!("Branch {id}"),
+        kind: StepKind::Branch {
+            on,
+            paths: paths
+                .into_iter()
+                .map(|(label, steps)| BranchPath {
+                    label: label.into(),
+                    steps,
+                })
+                .collect(),
+            otherwise,
+        },
+    }
+}
+
+/// An agent step that may report `outcomes`.
+fn reporting(id: &str, name: &str, member: &Dot, outcomes: &[&str]) -> Step {
+    let mut step = agent(id, name, member, "Look into it.");
+    if let StepKind::Agent { outcomes: o, .. } = &mut step.kind {
+        *o = outcomes.iter().map(|s| s.to_string()).collect();
+    }
+    step
+}
+
+/// The step ids of the workflow run's step runs, oldest first.
+fn ran(wr: &WorkflowRun) -> Vec<&str> {
+    wr.steps.iter().map(|s| s.step_id.as_str()).collect()
+}
+
+/// The path the newest run of the branch step `id` chose (`None` for `otherwise`).
+fn chose(wr: &WorkflowRun, id: &str) -> Option<String> {
+    let run = wr.steps.iter().rev().find(|s| s.step_id == id).unwrap();
+    assert_eq!(run.status, StepRunStatus::Succeeded);
+    let path = &run.decision.as_ref().unwrap()["path"];
+    path.as_str().map(str::to_string)
+}
+
+#[tokio::test]
+async fn a_branch_on_project_takes_the_matching_path_then_the_step_after_it() {
+    let w = world().await;
+    let flow = w
+        .workflow(
+            "Ship",
+            vec![
+                branch(
+                    "pick",
+                    BranchOn::Project,
+                    vec![
+                        ("Other app", vec![agent("other", "Other", &w.dev, "No.")]),
+                        // The project is "Dots": labels match without case.
+                        ("dots", vec![agent("dots", "Ship Dots", &w.dev, "Ship it.")]),
+                    ],
+                    vec![agent("else", "Else", &w.dev, "No.")],
+                ),
+                agent("after", "After", &w.helper, "Tell the person."),
+            ],
+        )
+        .await;
+    let wr = w.start(&flow).await;
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    assert_eq!(ran(&wr), ["pick", "dots", "after"]);
+    assert_eq!(chose(&wr, "pick").as_deref(), Some("dots"));
+    assert_eq!(wr.current_step, None);
+    // Only the path taken ran.
+    assert_eq!(w.engine.prompts_of("dev").len(), 1);
+}
+
+#[tokio::test]
+async fn no_matching_path_takes_otherwise_and_an_empty_otherwise_goes_straight_on() {
+    let w = world().await;
+    let web = || vec![("Web", vec![agent("web", "Web", &w.dev, "No.")])];
+    let flow = w
+        .workflow(
+            "Otherwise",
+            vec![
+                branch(
+                    "pick",
+                    BranchOn::Project,
+                    web(),
+                    vec![agent("else", "Else", &w.dev, "Do the rest.")],
+                ),
+                agent("after", "After", &w.helper, "Tell the person."),
+            ],
+        )
+        .await;
+    let wr = w.start(&flow).await;
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    assert_eq!(ran(&wr), ["pick", "else", "after"]);
+    assert_eq!(chose(&wr, "pick"), None);
+
+    let flow = w
+        .workflow(
+            "Straight on",
+            vec![
+                branch("pick", BranchOn::Project, web(), vec![]),
+                agent("after", "After", &w.helper, "Tell the person."),
+            ],
+        )
+        .await;
+    let wr = w.start(&flow).await;
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    assert_eq!(ran(&wr), ["pick", "after"]);
+    assert_eq!(chose(&wr, "pick"), None);
+
+    // A branch that is the last step and takes an empty path ends the run.
+    let flow = w
+        .workflow(
+            "Last",
+            vec![branch("pick", BranchOn::Project, web(), vec![])],
+        )
+        .await;
+    let wr = w.start(&flow).await;
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    assert_eq!(ran(&wr), ["pick"]);
+    assert_eq!(wr.current_step, None);
+}
+
+/// The flow of the outcome tests: the dev triages and may report `fixed` or `needs_info`.
+async fn triage_flow(w: &World) -> String {
+    w.workflow(
+        "Triage",
+        vec![
+            reporting("triage", "Triage", &w.dev, &["fixed", "needs_info"]),
+            branch(
+                "route",
+                BranchOn::Outcome,
+                vec![
+                    ("fixed", vec![agent("ship", "Ship", &w.helper, "Ship.")]),
+                    (
+                        "needs_info",
+                        vec![agent("ask", "Ask", &w.helper, "Ask the person.")],
+                    ),
+                ],
+                vec![agent("else", "Else", &w.helper, "Look again.")],
+            ),
+        ],
+    )
+    .await
+}
+
+#[tokio::test]
+async fn a_branch_on_outcome_takes_the_path_of_the_outcome_reported() {
+    let w = world().await;
+    w.engine.set(&w.dev.spec.name, vec![Act::Gate]);
+    let flow = triage_flow(&w).await;
+    let wr = w.start(&flow).await;
+    let step_run = w.until(&wr.id, |wr| !wr.steps.is_empty()).await.steps[0].clone();
+    // The agent reports while its step runs.
+    w.store
+        .set_step_outcome(&step_run.id, Some("needs_info"))
+        .await
+        .unwrap();
+    w.engine.gate.notify_one();
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    assert_eq!(ran(&wr), ["triage", "route", "ask"]);
+    assert_eq!(chose(&wr, "route").as_deref(), Some("needs_info"));
+    // The hand-off carries the outcome.
+    let triage = &wr.steps[0];
+    assert_eq!(triage.outcome.as_deref(), Some("needs_info"));
+    assert_eq!(
+        triage.handoff.as_ref().unwrap().outcome.as_deref(),
+        Some("needs_info")
+    );
+}
+
+#[tokio::test]
+async fn a_branch_on_outcome_with_no_outcome_reported_takes_otherwise() {
+    let w = world().await;
+    let flow = triage_flow(&w).await;
+    let wr = w.start(&flow).await;
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    assert_eq!(ran(&wr), ["triage", "route", "else"]);
+    assert_eq!(chose(&wr, "route"), None);
+    assert_eq!(wr.steps[0].handoff.as_ref().unwrap().outcome, None);
+}
+
+#[tokio::test]
+async fn a_branch_inside_a_path_takes_its_own_path_and_the_run_climbs_out_of_both() {
+    let w = world().await;
+    let flow = w
+        .workflow(
+            "Nested",
+            vec![
+                branch(
+                    "outer",
+                    BranchOn::Project,
+                    vec![(
+                        "Dots",
+                        vec![branch(
+                            "inner",
+                            BranchOn::Project,
+                            vec![("Other app", vec![agent("other", "Other", &w.dev, "No.")])],
+                            vec![agent("deep", "Deep", &w.dev, "Work.")],
+                        )],
+                    )],
+                    vec![],
+                ),
+                agent("last", "Last", &w.helper, "Tell the person."),
+            ],
+        )
+        .await;
+    let wr = w.start(&flow).await;
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    assert_eq!(ran(&wr), ["outer", "inner", "deep", "last"]);
+    assert_eq!(chose(&wr, "outer").as_deref(), Some("Dots"));
+    assert_eq!(chose(&wr, "inner"), None);
+    // The tree in run order: outer, inner, other, deep, last.
+    let deep = &w.engine.prompts_of("dev")[0];
+    assert!(deep.contains("- Step: Deep (4 of 5)"), "{deep}");
+}
+
+#[tokio::test]
+async fn the_step_after_a_branch_gets_the_hand_offs_of_the_path_taken() {
+    let w = world().await;
+    w.engine.set(
+        &w.helper.spec.name,
+        vec![Act::Finish("Task: ship the fix."), Act::Finish("Reviewed.")],
+    );
+    w.engine.set(
+        &w.dev.spec.name,
+        vec![Act::Write("fix.txt", "Fixed on Dots.")],
+    );
+    let flow = w
+        .workflow(
+            "Review",
+            vec![
+                agent("task", "Write the task", &w.helper, "Write it."),
+                branch(
+                    "pick",
+                    BranchOn::Project,
+                    vec![
+                        ("Other app", vec![agent("skip", "Skipped", &w.dev, "No.")]),
+                        ("Dots", vec![agent("fix", "Fix Dots", &w.dev, "Fix it.")]),
+                    ],
+                    vec![],
+                ),
+                agent("review", "Review", &w.helper, "Review it."),
+            ],
+        )
+        .await;
+    let wr = w.start(&flow).await;
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    assert_eq!(ran(&wr), ["task", "pick", "fix", "review"]);
+    // The step on the path gets the hand-off before the branch, numbered in the whole tree.
+    let fix = &w.engine.prompts_of("dev")[0];
+    for part in [
+        "- Step: Fix Dots (4 of 5)",
+        "#### Write the task\n\nTask: ship the fix.",
+    ] {
+        assert!(fix.contains(part), "missing {part:?} in:\n{fix}");
+    }
+    // The step after the branch gets both, the path's last, and never the path not taken.
+    let review = &w.engine.prompts_of("helper")[1];
+    for part in [
+        "- Step: Review (5 of 5)",
+        "### Earlier steps\n\n#### Write the task\n\nTask: ship the fix.\n\n#### Fix Dots\n\nFixed on Dots.",
+    ] {
+        assert!(review.contains(part), "missing {part:?} in:\n{review}");
+    }
+    assert!(!review.contains("Skipped"), "{review}");
+    // And starts from the path's branch.
+    let fixed = &wr.steps[2].handoff.as_ref().unwrap().branches[0].branch;
+    let tip = git_out(&w.repo, &["rev-parse", &format!("refs/heads/{fixed}")]);
+    let runs = w.store.runs_of_step_run(&wr.steps[3].id).await.unwrap();
+    assert_eq!(runs[0].base_commit.as_deref(), Some(tip.as_str()));
+}
+
+#[tokio::test]
+async fn a_pass_finishes_a_branch_cut_off_before_it_chose() {
+    let w = world().await;
+    let flow = w
+        .workflow(
+            "Cut",
+            vec![
+                check("check"),
+                branch(
+                    "pick",
+                    BranchOn::Project,
+                    vec![("Dots", vec![agent("dots", "Dots", &w.dev, "Work.")])],
+                    vec![],
+                ),
+            ],
+        )
+        .await;
+    let wr = w.start(&flow).await;
+    let wr = w.until(&wr.id, waits_on(WaitingOn::Check)).await;
+    // The check was approved and the branch's step run created, but the move stopped there.
+    w.store
+        .set_step_run(
+            &wr.steps[0].id,
+            &dots_core::model::StepRunChange {
+                status: Some(StepRunStatus::Succeeded),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    w.store
+        .create_step_run(&wr.id, "pick", 1, StepRunStatus::Running)
+        .await
+        .unwrap();
+    w.store
+        .set_workflow_run(
+            &wr.id,
+            &dots_core::model::WorkflowRunChange {
+                status: Some(WorkflowRunStatus::Running),
+                waiting_on: Some(None),
+                current_step: Some(Some("pick".into())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    w.workflows.pass().await.unwrap();
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    // The same step run chose: no second attempt.
+    assert_eq!(ran(&wr), ["check", "pick", "dots"]);
+    assert_eq!(chose(&wr, "pick").as_deref(), Some("Dots"));
 }

@@ -1074,6 +1074,12 @@ pub struct StepRun {
     /// A check's decision: `{"decision": "approved" | "sent_back", "note": ...}`.
     pub decision: Option<Value>,
     pub error: Option<String>,
+    /// The outcome label an agent step reported (`report_outcome`), copied into its hand-off
+    /// when it succeeds.
+    pub outcome: Option<String>,
+    /// What the run page says about this attempt beyond its status, such as a send-back that
+    /// had to start fresh.
+    pub notice: Option<String>,
     pub started_at: String,
     pub ended_at: Option<String>,
 }
@@ -1148,6 +1154,7 @@ pub struct StepRunChange {
     pub handoff: Option<Option<Handoff>>,
     pub decision: Option<Option<Value>>,
     pub error: Option<Option<String>>,
+    pub notice: Option<Option<String>>,
 }
 
 /// A workflow a member may start from a chat (`start_workflow`, teams spec section 7): turned
