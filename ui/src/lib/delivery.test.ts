@@ -52,6 +52,18 @@ describe("deliveryLine", () => {
     });
   });
 
+  it("says plain Not delivered when no reason is known", () => {
+    for (const reason of [null, "", "  "]) {
+      const run: Run = {
+        ...sample.run,
+        delivery: "not_delivered",
+        undelivered_at: "2026-11-02T11:00:00Z",
+        undelivered_reason: reason,
+      };
+      expect(deliveryLine(run, NOW)).toEqual({ kind: "not_delivered", text: "Not delivered" });
+    }
+  });
+
   it("says only Not delivered once it is dismissed", () => {
     const run: Run = {
       ...sample.run,

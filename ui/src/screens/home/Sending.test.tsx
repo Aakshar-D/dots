@@ -285,6 +285,31 @@ describe("sending on the home", () => {
     );
   });
 
+  it("starts afresh after a topic whose only message was discarded", async () => {
+    home([
+      chat("a", "10:00", {
+        status: "failed",
+        session_id: null,
+        delivery: "not_delivered",
+        delivered_at: null,
+        undelivered_at: "2026-10-09T10:30:00.000Z",
+        undelivered_reason: "claude CLI not found",
+        dismissed_at: "2026-10-09T10:31:00.000Z",
+      }),
+    ]);
+    const { user } = renderApp(`/home/${dot.id}`);
+    const found = await readyBox();
+    expect(screen.queryByText(/cannot be continued/)).toBeNull();
+    expect(found).toHaveAttribute("placeholder", `Message ${dot.name}…`);
+    expect(target()).toHaveTextContent("New topic");
+    await user.type(found, "Once more{Enter}");
+    await waitFor(() =>
+      expect(backend.callsTo("chat")).toEqual([
+        { dotId: dot.id, message: "Once more", parentRunId: null },
+      ]),
+    );
+  });
+
   it("gives the message box the focus back when the answer to a send has ended", async () => {
     const runs = home([chat("a", "10:00")]);
     const { user } = renderApp(`/home/${dot.id}`);

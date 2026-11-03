@@ -136,7 +136,7 @@ describe("lastRun", () => {
     const retried = reply("a2", a, 10);
     const dismissed = reply("a3", a, 20);
     const topic = topicOf([a, retried, { ...dismissed, dismissed_at: "2026-10-09T10:21:00Z", delivered_at: null }]);
-    expect(lastRun(topic).id).toBe("a2");
+    expect(lastRun(topic)?.id).toBe("a2");
   });
 
   it("still picks a dismissed last run that was delivered", () => {
@@ -146,12 +146,15 @@ describe("lastRun", () => {
       dismissed_at: "2026-10-09T10:21:00Z",
       delivered_at: "2026-10-09T10:11:00Z",
     };
-    expect(lastRun(topicOf([a, dismissed])).id).toBe("a2");
+    expect(lastRun(topicOf([a, dismissed]))?.id).toBe("a2");
   });
 
-  it("is the last run when all are dismissed or none is", () => {
+  it("is the last run when none is dismissed", () => {
+    expect(lastRun(topicOf([root("b", 0), reply("b2", root("b", 0), 5)]))?.id).toBe("b2");
+  });
+
+  it("is none when every run was dismissed and never delivered", () => {
     const a = { ...root("a", 0), dismissed_at: "2026-10-09T10:21:00Z", delivered_at: null };
-    expect(lastRun(topicOf([a])).id).toBe("a");
-    expect(lastRun(topicOf([root("b", 0), reply("b2", root("b", 0), 5)])).id).toBe("b2");
+    expect(lastRun(topicOf([a]))).toBeUndefined();
   });
 });

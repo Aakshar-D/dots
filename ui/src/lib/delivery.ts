@@ -22,7 +22,8 @@ export type DeliveryLineInfo = {
 export function deliveryLine(run: Run, now: number): DeliveryLineInfo | null {
   if (run.delivery === "not_delivered") {
     if (run.dismissed_at) return { kind: "dismissed", text: "Not delivered" };
-    return { kind: "not_delivered", text: `Not delivered: ${run.undelivered_reason ?? ""}` };
+    const reason = run.undelivered_reason?.trim();
+    return { kind: "not_delivered", text: reason ? `Not delivered: ${reason}` : "Not delivered" };
   }
   if (run.delivery === "waiting" && run.status === "queued" && run.wait_reason) {
     const minutes = Math.floor((now - Date.parse(run.queued_at)) / MINUTE_MS);
