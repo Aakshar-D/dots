@@ -221,7 +221,7 @@ fn messages_that_carry_engine_or_tool_text_are_hidden() {
     }
     // Other runner lines stay.
     let kept = line("INFO", "dots_core::runner", "run started run=01ABC");
-    assert_eq!(tail_of(&[kept.clone()], &plain()), vec![kept]);
+    assert_eq!(tail_of(std::slice::from_ref(&kept), &plain()), vec![kept]);
 }
 
 #[test]
