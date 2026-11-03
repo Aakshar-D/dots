@@ -9,9 +9,28 @@ import { topicTitle, type Topic } from "@/lib/home-topics";
 const ITEM =
   "flex cursor-default flex-col rounded-sm px-2 py-1.5 outline-none select-none data-[disabled]:text-muted-foreground data-[highlighted]:bg-accent";
 
-/// The dot's topics older than the conversation, newest first, each opening alone.
-export function HistoryMenu({ dotId, topics }: { dotId: string; topics: Topic[] }) {
+/// The dot's topics older than the conversation, newest first, each opening alone; then the
+/// archived ones under "Archived" (topic tools spec section 6).
+export function HistoryMenu({
+  dotId,
+  topics,
+  archived = [],
+}: {
+  dotId: string;
+  topics: Topic[];
+  archived?: Topic[];
+}) {
   const navigate = useNavigate();
+  const item = (topic: Topic) => (
+    <DropdownMenu.Item
+      key={topic.rootId}
+      className={ITEM}
+      onSelect={() => void navigate(`/home/${dotId}/${topic.rootId}`)}
+    >
+      <span className="truncate">{topicTitle(topic)}</span>
+      <span className="text-xs text-muted-foreground">{localDateTime(topic.root.queued_at)}</span>
+    </DropdownMenu.Item>
+  );
   return (
     <DropdownMenu.Root modal={false}>
       <DropdownMenu.Trigger asChild>
@@ -29,18 +48,16 @@ export function HistoryMenu({ dotId, topics }: { dotId: string; topics: Topic[] 
               No older topics
             </DropdownMenu.Item>
           )}
-          {topics.map((topic) => (
-            <DropdownMenu.Item
-              key={topic.rootId}
-              className={ITEM}
-              onSelect={() => void navigate(`/home/${dotId}/${topic.rootId}`)}
-            >
-              <span className="truncate">{topicTitle(topic)}</span>
-              <span className="text-xs text-muted-foreground">
-                {localDateTime(topic.root.queued_at)}
-              </span>
-            </DropdownMenu.Item>
-          ))}
+          {topics.map(item)}
+          {archived.length > 0 && (
+            <DropdownMenu.Group aria-label="Archived">
+              <DropdownMenu.Separator className="my-1 h-px bg-border" />
+              <DropdownMenu.Label className="px-2 py-1 text-xs font-medium text-muted-foreground">
+                Archived
+              </DropdownMenu.Label>
+              {archived.map(item)}
+            </DropdownMenu.Group>
+          )}
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>

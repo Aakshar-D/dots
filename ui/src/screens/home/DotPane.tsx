@@ -10,9 +10,11 @@ import { dotStatus, skipLine } from "@/lib/dot-status";
 import { keys } from "@/lib/query";
 import { DotHeader } from "@/screens/home/DotHeader";
 import { HistoryMenu } from "@/screens/home/HistoryMenu";
+import { currentTopic } from "@/lib/home-topics";
 import { rememberDot } from "@/screens/home/last-dot";
 import { ReplyArea, type ReplyPick } from "@/screens/home/ReplyArea";
 import { Timeline } from "@/screens/home/Timeline";
+import { TopicMenu } from "@/screens/home/TopicTools";
 import { useConversation } from "@/screens/home/use-conversation";
 import { useViewing } from "@/screens/home/use-viewing";
 
@@ -47,6 +49,9 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
   // (conversational chat spec section 5). A failed load shows its errors instead.
   const greeting =
     rootRunId === undefined && !view.pending && view.list.isSuccess && view.shown.length === 0;
+  // The topic the header's topic menu acts on: the older topic shown alone, else the current
+  // topic of the conversation.
+  const viewed = rootRunId !== undefined ? view.shown[0] : currentTopic(view.shown);
   if (gone) return <Navigate to={`/home/${dot.id}`} replace />;
   return (
     <div className="flex min-w-0 flex-1 flex-col">
@@ -55,10 +60,17 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
         status={dotStatus(row, allMessages, held)}
         skipLine={skipLine(row.schedule_state)}
       >
-        <HistoryMenu dotId={dot.id} topics={view.older} />
+        <HistoryMenu dotId={dot.id} topics={view.older} archived={view.archived} />
         <Button size="sm" variant="ghost" onClick={() => setPick({ kind: "new" })}>
           New topic
         </Button>
+        {viewed && (
+          <TopicMenu
+            dotId={dot.id}
+            topic={viewed}
+            others={view.topics.filter((topic) => topic.rootId !== viewed.rootId)}
+          />
+        )}
       </DotHeader>
       {rootRunId !== undefined && (
         <p className="mx-auto w-full max-w-[720px] px-4 py-1.5 text-xs text-muted-foreground">
@@ -82,6 +94,7 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
           dotName={dot.name}
           skipsDotId={rootRunId === undefined ? dot.id : undefined}
           proposals={proposals}
+          moveTargets={view.topics}
           onReply={(topic) => setPick({ kind: "topic", rootId: topic.rootId })}
         >
           <LoadErrors queries={[view.list, ...view.threads]} />

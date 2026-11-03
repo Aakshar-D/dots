@@ -46,6 +46,8 @@ export function Timeline(props: {
   skipsDotId?: string;
   /// The instructions the dot proposed that wait for the person.
   proposals: InstructionProposal[];
+  /// The dot's topics a message may be moved to ("Move to topic…"); none offers no move.
+  moveTargets?: Topic[];
   /// Reply on a run card: makes its topic the reply target.
   onReply: (topic: Topic) => void;
   /// Shown above the topics: a failed load, or what to do when there is none.
@@ -95,6 +97,7 @@ export function Timeline(props: {
                 checkIns={checkIns}
                 dotName={dotName}
                 proposals={props.proposals}
+                moveTargets={props.moveTargets}
               />
             ) : (
               <div key={topic.rootId} className="flex flex-col gap-4">
@@ -107,7 +110,12 @@ export function Timeline(props: {
                 {/* An app the run sent for review waits under its card. */}
                 <AppReviews runs={topic.runs.slice(0, 1)} dotName={dotName} />
                 {topic.runs.length > 1 && (
-                  <TopicRuns runs={topic.runs.slice(1)} checkIns={checkIns} dotName={dotName} />
+                  <TopicRuns
+                    runs={topic.runs.slice(1)}
+                    checkIns={checkIns}
+                    dotName={dotName}
+                    moveTargets={props.moveTargets}
+                  />
                 )}
               </div>
             );
