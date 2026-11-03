@@ -3926,3 +3926,194 @@ async fn a_deploy_after_a_delegate_step_pushes_the_members_branches() {
         assert_eq!(w.remote_tip(b).as_ref(), Some(tip));
     }
 }
+
+#[tokio::test]
+async fn a_member_deploy_starts_from_the_approved_commit() {
+    let w = world().await;
+    w.engine.set(
+        &w.dev.spec.name,
+        vec![
+            Act::Write("a.txt", "Approved work."),
+            Act::Write("b.txt", "Work nobody approved."),
+        ],
+    );
+    w.engine.set(
+        &w.helper.spec.name,
+        vec![Act::Write("release.txt", "Tagged the release.")],
+    );
+    let flow = w
+        .workflow(
+            "Late",
+            vec![
+                agent("dev", "Fix it", &w.dev, "Fix the bug."),
+                check("check"),
+                agent("more", "More", &w.dev, "Do more."),
+                ship(DeployMode::Member {
+                    member: w.helper.id.clone(),
+                    job: "Tag a release.".into(),
+                }),
+            ],
+        )
+        .await;
+    let (wr, _, tip) = w.at_the_check(&flow, false).await;
+    w.workflows.approve_check(&wr.id, None).await.unwrap();
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    // The later step's branch is not what the member starts from: the approved commit is.
+    let runs = w.runs_of(&newest(&wr, "ship").id).await;
+    assert_eq!(runs.len(), 1);
+    let start = runs[0].payload.as_ref().unwrap().pointer("/workflow/start");
+    assert_eq!(start, Some(&json!(tip)));
+    let release = &newest(&wr, "ship").handoff.as_ref().unwrap().branches[0].branch;
+    let files = git_out(&w.repo, &["ls-tree", "-r", "--name-only", release]);
+    assert!(
+        files.contains("a.txt") && !files.contains("b.txt"),
+        "{files}"
+    );
+}
+
+/// A run of `flow` stopped at its deploy, which waits on the budget (the dev's run spent it),
+/// and the dev's branch.
+async fn member_deploy_on_budget(budget_w: &World, flow: &str) -> (WorkflowRun, String) {
+    let (wr, branch, _) = budget_w.at_the_check(flow, false).await;
+    budget_w
+        .workflows
+        .approve_check(&wr.id, None)
+        .await
+        .unwrap();
+    let held = budget_w.until(&wr.id, waits_on(WaitingOn::Budget)).await;
+    assert!(budget_w.runs_of(&newest(&held, "ship").id).await.is_empty());
+    (held, branch)
+}
+
+async fn budget_world() -> World {
+    let w = world_with(
+        Arc::new(SystemClock),
+        Budget {
+            max_runs: 1,
+            ..Budget::default()
+        },
+    )
+    .await;
+    w.engine.set(
+        &w.helper.spec.name,
+        vec![Act::Write("release.txt", "Tagged the release.")],
+    );
+    w
+}
+
+#[tokio::test]
+async fn a_member_deploy_is_refused_when_the_branch_moved() {
+    let w = budget_world().await;
+    let flow = w
+        .ship_flow(DeployMode::Member {
+            member: w.helper.id.clone(),
+            job: "Tag a release.".into(),
+        })
+        .await;
+    let (held, branch) = member_deploy_on_budget(&w, &flow).await;
+    w.commit_after(&branch);
+    w.workflows.add_budget(&held.id).await.unwrap();
+    let failed = w.until(&held.id, waits_on(WaitingOn::StepFailed)).await;
+    assert_eq!(
+        failed.error.as_deref(),
+        Some("Ship: The branch changed after it was approved.")
+    );
+    assert!(w.runs_of(&newest(&failed, "ship").id).await.is_empty());
+    assert_eq!(w.engine.prompts_of("helper").len(), 0);
+}
+
+#[tokio::test]
+async fn a_member_deploy_waiting_on_budget_still_checks_the_tip() {
+    let w = budget_world().await;
+    let flow = w
+        .ship_flow(DeployMode::Member {
+            member: w.helper.id.clone(),
+            job: "Tag a release.".into(),
+        })
+        .await;
+    let (held, branch) = member_deploy_on_budget(&w, &flow).await;
+    assert_eq!(held.error.as_deref(), Some("Budget reached: runs, 1 of 1"));
+    let tip = git_out(&w.repo, &["rev-parse", &format!("refs/heads/{branch}")]);
+    w.commit_after(&branch);
+    // The budget comes only after the branch moved, and the member never starts.
+    w.workflows.add_budget(&held.id).await.unwrap();
+    let failed = w.until(&held.id, waits_on(WaitingOn::StepFailed)).await;
+    assert_eq!(newest(&failed, "ship").status, StepRunStatus::Failed);
+    assert!(w.runs_of(&newest(&failed, "ship").id).await.is_empty());
+    // Put back, a retry starts the member.
+    git_out(
+        &w.repo,
+        &["update-ref", &format!("refs/heads/{branch}"), &tip],
+    );
+    w.workflows.retry_step(&failed.id).await.unwrap();
+    let done = w
+        .until(&failed.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    assert_eq!(newest(&done, "ship").attempt, 2);
+}
+
+#[tokio::test]
+async fn a_deploy_with_no_recorded_approval_fails_without_pushing() {
+    let w = world().await;
+    w.shipping_to_origin("ok");
+    let flow = w.ship_flow(DeployMode::Push).await;
+    let (wr, branch, _) = w.at_the_check(&flow, false).await;
+    let (_, gate) = w.approved_and_held(&wr.id).await;
+    // An approval made before Dots recorded the branches.
+    let wr = w.store.get_workflow_run(&wr.id).await.unwrap();
+    w.store
+        .set_step_run(
+            &newest(&wr, "check").id,
+            &dots_core::model::StepRunChange {
+                decision: Some(Some(json!({"decision": "approved", "note": null}))),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    gate.add_permits(1);
+    let failed = w.until(&wr.id, waits_on(WaitingOn::StepFailed)).await;
+    assert_eq!(
+        failed.error.as_deref(),
+        Some("Ship: the check before it recorded no approved branches")
+    );
+    assert_eq!(w.remote_tip(&branch), None);
+}
+
+#[tokio::test]
+async fn a_pr_deploy_needs_a_default_branch_and_a_push_deploy_does_not() {
+    // A detached repo with no remote HEAD and no default branch set names no branch.
+    let w = world().await;
+    w.shipping_to_origin("ok");
+    let pr = w.ship_flow(DeployMode::Pr).await;
+    git_out(&w.repo, &["checkout", "-q", "--detach"]);
+    let (wr, branch, _) = w.at_the_check(&pr, false).await;
+    w.workflows.approve_check(&wr.id, None).await.unwrap();
+    let failed = w.until(&wr.id, waits_on(WaitingOn::StepFailed)).await;
+    assert_eq!(
+        failed.error.as_deref(),
+        Some("Ship: the project's default branch could not be found; set it on the project")
+    );
+    assert_eq!(w.remote_tip(&branch), None);
+    let push = w
+        .workflow(
+            "Ship by push",
+            vec![
+                agent("dev", "Fix it", &w.dev, "Fix the bug."),
+                check("check"),
+                ship(DeployMode::Push),
+            ],
+        )
+        .await;
+    w.engine.set(
+        &w.dev.spec.name,
+        vec![Act::Write("fix.txt", "Fixed the icon.")],
+    );
+    let (wr, branch, tip) = w.at_the_check(&push, false).await;
+    w.workflows.approve_check(&wr.id, None).await.unwrap();
+    w.until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    assert_eq!(w.remote_tip(&branch), Some(tip));
+}

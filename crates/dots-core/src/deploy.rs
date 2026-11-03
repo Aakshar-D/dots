@@ -126,9 +126,7 @@ impl Deployer {
         title: &str,
         body: &str,
     ) -> Result<DeployResult, String> {
-        for b in branches {
-            check_tip(repo, b).await?;
-        }
+        check_tips(repo, branches).await?;
         let mut result = DeployResult {
             branches: branches
                 .iter()
@@ -238,6 +236,14 @@ impl Deployer {
             .env("GH_PROMPT_DISABLED", "1");
         run(tool, &mut cmd, None).await
     }
+}
+
+/// Refuses unless every branch still points at the commit it was approved at.
+pub async fn check_tips(repo: &Path, branches: &[ApprovedBranch]) -> Result<(), String> {
+    for b in branches {
+        check_tip(repo, b).await?;
+    }
+    Ok(())
 }
 
 /// Refuses `b` unless its branch still points at the approved commit.

@@ -13,7 +13,7 @@ use std::path::Path;
 use serde_json::{json, Value};
 
 use super::{ran_before, succeeded, Workflows};
-use crate::deploy::{ApprovedBranch, DeployResult, Deployer, BRANCH_CHANGED};
+use crate::deploy::{check_tips, ApprovedBranch, DeployResult, Deployer, BRANCH_CHANGED};
 use crate::model::{
     Handoff, ProjectSpec, StepRun, StepRunChange, StepRunStatus, WorkflowRun, WorkflowRunChange,
 };
@@ -24,8 +24,8 @@ use crate::{Error, Result};
 /// Why a deploy step fails when the check before it recorded no branches it approved: a check
 /// approved before Dots recorded them, or one that sent the work back.
 pub const NO_APPROVAL: &str = "the check before it recorded no approved branches";
-/// Why a `push`, `pr` or `pr_merge` deploy fails when the project's default branch cannot be
-/// found: the project names none, the remote's `HEAD` names none, and the repo is on no branch.
+/// Why a `pr` or `pr_merge` deploy fails when the project's default branch cannot be
+/// found (a `push` deploy needs none): the project names none, the remote's `HEAD` names none, and the repo is on no branch.
 pub const NO_DEFAULT_BRANCH: &str =
     "the project's default branch could not be found; set it on the project";
 /// Why a deploy step Dots stopped during fails, as plan A words an interrupted run.
@@ -109,6 +109,17 @@ fn approved(
     Ok((out, shown.summary))
 }
 
+/// What the member of a real-run `member` deploy starts from: the one branch the check
+/// approved, at the commit approved (never a later worker's hand-off). `None` when the check
+/// approved none or several: the project's default branch.
+pub(super) fn member_start(wr: &WorkflowRun, step: &Step) -> Option<String> {
+    let (branches, _) = approved(wr, &step.id).ok()?;
+    match branches.as_slice() {
+        [only] => Some(only.commit.clone()),
+        _ => None,
+    }
+}
+
 /// The project's default branch by name, for a pull request's base and the scan of a branch
 /// with no base commit: its `default_branch`, else as worktrees find it: the branch the remote's
 /// `HEAD` names, else the branch the repo is on. `None` when none of them names one.
@@ -153,6 +164,10 @@ impl Workflows {
         step: &Step,
         attempt: u32,
     ) -> Result<()> {
+        if !matches!(step.kind, StepKind::Deploy { .. }) {
+            return Err(Error::Other(format!("step {} is not a deploy", step.id)));
+        }
+        let member = worker(wr, step).is_some();
         let step_run = self
             .store
             .create_step_run(&wr.id, &step.id, attempt, StepRunStatus::Running)
@@ -167,32 +182,28 @@ impl Workflows {
                 },
             )
             .await?;
-        if worker(&wr, step).is_none() {
+        if !member {
             // In the locked section that made the step run: no pass finds it without its job.
             self.start_deploy(&wr, &step_run);
             self.updated(&wr);
             return Ok(());
         }
-        // Only `git rev-parse` per branch for this mode, so under the lock as an approval is.
-        let checked = match approved(&wr, &step.id) {
-            Ok((branches, _)) => {
-                let repo = Path::new(&wr.project.repo_path);
-                let StepKind::Deploy { mode } = &step.kind else {
-                    return Err(Error::Other(format!("step {} is not a deploy", step.id)));
-                };
-                self.deployer()
-                    .deploy(repo, &wr.project.remote, "", mode, &branches, "", "")
-                    .await
-                    .map(drop)
-            }
-            Err(e) => Err(e),
-        };
-        if let Err(error) = checked {
-            return self.fail_step(&wr, step, &step_run, &error).await;
-        }
+        // The approved tips are checked in `start_agent`, which every start of the member's
+        // run goes through (this one, a wait on the budget, a restart).
         self.start_agent(&wr, step, &step_run).await?;
         self.updated(&self.store.get_workflow_run(&wr.id).await?);
         Ok(())
+    }
+
+    /// For a deploy step a member works on: whether the branches its check approved are still at
+    /// the commits approved (`Err` with the words to fail the step with, if not).
+    pub(super) async fn check_approved(
+        &self,
+        wr: &WorkflowRun,
+        step: &Step,
+    ) -> std::result::Result<(), String> {
+        let (branches, _) = approved(wr, &step.id)?;
+        check_tips(Path::new(&wr.project.repo_path), &branches).await
     }
 
     /// Watches a deploy step run that runs with no member: its job is in flight, or Dots
@@ -287,10 +298,10 @@ impl Workflows {
         let (branches, summary) = approved(wr, step_id)?;
         let repo = Path::new(&wr.project.repo_path);
         let base = match mode {
-            DeployMode::Branch | DeployMode::Member { .. } => String::new(),
-            _ => base_branch(repo, &wr.project)
+            DeployMode::Pr | DeployMode::PrMerge { .. } => base_branch(repo, &wr.project)
                 .await
                 .ok_or_else(|| NO_DEFAULT_BRANCH.to_string())?,
+            _ => String::new(),
         };
         self.deployer()
             .deploy(

@@ -1144,6 +1144,9 @@ impl Workflows {
             .await?;
         let start = match again {
             Some(again) => again.start.clone(),
+            None if matches!(step.kind, StepKind::Deploy { .. }) => {
+                deploy_step::member_start(wr, step)
+            }
             None => start_branch(wr, &step.id),
         };
         let mut new = NewRun::new(member, TriggerKind::Workflow);
@@ -1300,6 +1303,13 @@ impl Workflows {
     async fn start_agent(&self, wr: &WorkflowRun, step: &Step, step_run: &StepRun) -> Result<()> {
         if let Some((member, _)) = deploy_step::worker(wr, step) {
             if let Some(error) = self.member_refusal(member).await? {
+                return self.fail_step(wr, step, step_run, &error).await;
+            }
+        }
+        // A deploy ships what the check approved: a branch moved since fails it, whenever the
+        // member's run is started (first, after a wait on the budget, after a restart).
+        if matches!(step.kind, StepKind::Deploy { .. }) {
+            if let Err(error) = self.check_approved(wr, step).await {
                 return self.fail_step(wr, step, step_run, &error).await;
             }
         }
