@@ -23,7 +23,7 @@ use crate::model::{
     SlotStart, TriggerKind,
 };
 use crate::runner::Runner;
-use crate::schedule::{due_slot, next_slot, Schedule, Until};
+use crate::schedule::{due_slot, next_slot, Rule, Schedule, Until};
 use crate::store::Store;
 use crate::util::timestamp;
 use crate::{Error, Result};
@@ -322,17 +322,29 @@ impl Scheduler {
             // A fired slot drops a pending retry; its run takes the retry's attempt over.
             let attempt = retry.as_ref().map(|r| r.attempt);
             let new = fire.then(|| scheduled_run(dot, due, late >= ON_TIME, attempt));
+            // A repeating slot is skipped while its dot is busy; a `Once` has no later slot.
+            let skip_when_busy = !matches!(schedule.rule, Rule::Once { .. });
             match self
                 .store
-                .record_slot(&dot.id, due, new.as_ref(), false, now)
+                .record_slot(&dot.id, due, new.as_ref(), skip_when_busy, now)
                 .await
             {
                 Ok(start) => {
                     last = due;
                     row_slot = timestamp(due);
                     match start {
-                        SlotStart::Skipped | SlotStart::Busy(_) => {
+                        SlotStart::Skipped => {
                             tracing::info!(dot = %dot.spec.name, slot = %due, "missed slot skipped");
+                        }
+                        SlotStart::Busy(skip) => {
+                            tracing::info!(
+                                dot = %dot.spec.name, slot = %due, run = ?skip.run_id,
+                                "slot skipped: the dot is busy"
+                            );
+                            let _ = self.bus.send(RuntimeEvent::ScheduleSkipped {
+                                dot_id: dot.id.clone(),
+                                skip,
+                            });
                         }
                         SlotStart::Enqueued(run) => {
                             fired += 1;
@@ -396,6 +408,7 @@ impl Scheduler {
                                 );
                                 watch = Some(run.id);
                             }
+                            // `start_retry` never reports a busy dot.
                             SlotStart::Skipped | SlotStart::Busy(_) => {}
                         }
                         retry = None;
