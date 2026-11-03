@@ -254,58 +254,78 @@ async fn check_tip(repo: &Path, b: &ApprovedBranch) -> Result<(), String> {
     Ok(())
 }
 
-/// The secret and size check of one branch: the files changed between its base and the
-/// approved commit that are still there at the commit. A file added and then deleted on the
-/// branch is not pushed as a file of the tip, so it is not looked at.
+/// The secret and size check of one branch: every file in every commit the push would send,
+/// even one deleted again by a later commit, as the history it pushes keeps it. With a given
+/// `base`, the commits after it; else the commits the remote's tracking refs lack, or, when the
+/// remote has none, those after the merge-base with the project's default branch.
 async fn guard(repo: &Path, remote: &str, base: &str, b: &ApprovedBranch) -> Result<(), String> {
-    let from = match &b.base {
-        Some(from) => from.clone(),
-        None => {
-            let default = crate::workspace::default_branch_ref(repo, base, remote).await;
-            let args = ["merge-base", "--end-of-options", &default, &b.commit];
-            let out = run("git merge-base", &mut git(repo, &args), None).await?;
-            succeeded("git merge-base", &out)?.trim().to_string()
-        }
-    };
-    // Plumbing, so no diff setting of the repository changes the output; `d` leaves deleted
-    // files out, and with renames off a renamed file shows as added under its new name.
-    let args = [
-        "diff-tree",
-        "-r",
+    let mut args: Vec<String> = [
+        "log",
         "-z",
+        "--raw",
         "--no-renames",
         "--diff-filter=d",
-        "--end-of-options",
-        &from,
-        &b.commit,
+        "--format=",
+        "--no-abbrev",
+        "--diff-merges=separate",
+        "--not",
+    ]
+    .map(String::from)
+    .to_vec();
+    let tracking = format!("refs/remotes/{remote}/");
+    let refs = [
+        "for-each-ref",
+        "--count=1",
+        "--format=%(refname)",
+        &tracking,
     ];
-    let out = run("git diff-tree", &mut git(repo, &args), None).await?;
-    let raw = succeeded("git diff-tree", &out)?;
-    let mut files: Vec<(String, Option<String>)> = Vec::new();
-    let mut fields = raw.split('\0');
+    let out = run("git for-each-ref", &mut git(repo, &refs), None).await?;
+    let has_tracking = !succeeded("git for-each-ref", &out)?.trim().is_empty();
+    match &b.base {
+        Some(from) => args.push(from.clone()),
+        None if has_tracking => args.push(format!("--remotes={remote}")),
+        None => {
+            let default = crate::workspace::default_branch_ref(repo, base, remote).await;
+            let mb = ["merge-base", "--end-of-options", &default, &b.commit];
+            let out = run("git merge-base", &mut git(repo, &mb), None).await?;
+            args.push(succeeded("git merge-base", &out)?.trim().to_string());
+        }
+    }
+    // The second `--not` turns the selection back on for the commit itself.
+    args.extend(["--not", "--end-of-options"].map(String::from));
+    args.push(b.commit.clone());
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let out = run("git log", &mut git(repo, &args), None).await?;
+    let raw = succeeded("git log", &out)?;
+    // Plumbing output, so no setting of the repository changes it; `d` leaves deleted files
+    // out, and with renames off a renamed file shows as added under its new name.
+    let mut files: std::collections::BTreeSet<(String, Option<String>)> = Default::default();
+    let mut fields = raw.split('\0').filter(|f| !f.is_empty());
     while let Some(meta) = fields.next() {
-        let Some(path) = fields.next() else { break };
-        let meta: Vec<&str> = meta.trim_start_matches(':').split(' ').collect();
+        let path = fields.next();
+        let (Some(rest), Some(path)) = (meta.strip_prefix(':'), path) else {
+            return Err("git log printed a record that could not be read.".to_string());
+        };
         // `:<old mode> <new mode> <old id> <new id> <status>`; a submodule (mode 160000) is a
         // commit of another repository, not a file with a size.
+        let meta: Vec<&str> = rest.split(' ').collect();
         let blob = match (meta.get(1), meta.get(3)) {
             (Some(&mode), Some(&id)) if mode != "160000" => Some(id.to_string()),
-            _ => None,
+            (Some(_), Some(_)) => None,
+            _ => return Err("git log printed a record that could not be read.".to_string()),
         };
-        files.push((path.to_string(), blob));
+        files.insert((path.to_string(), blob));
     }
-    let ids: String = files
-        .iter()
-        .filter_map(|(_, id)| id.as_deref())
-        .map(|id| format!("{id}\n"))
-        .collect();
+    let ids: std::collections::BTreeSet<&str> =
+        files.iter().filter_map(|(_, id)| id.as_deref()).collect();
     let mut sizes = std::collections::HashMap::new();
     if !ids.is_empty() {
+        let input: String = ids.iter().map(|id| format!("{id}\n")).collect();
         let args = ["cat-file", "--batch-check=%(objectname) %(objectsize)"];
         let out = run(
             "git cat-file",
             &mut git(repo, &args),
-            Some(ids.into_bytes()),
+            Some(input.into_bytes()),
         )
         .await?;
         for line in succeeded("git cat-file", &out)?.lines() {
@@ -316,20 +336,24 @@ async fn guard(repo: &Path, remote: &str, base: &str, b: &ApprovedBranch) -> Res
             }
         }
     }
-    let refused: Vec<&str> = files
+    // A file whose size cannot be read is refused: the check fails closed.
+    let refused: std::collections::BTreeSet<String> = files
         .iter()
-        .filter(|(path, id)| {
-            looks_secret(path)
-                || id
-                    .as_ref()
-                    .and_then(|id| sizes.get(id))
-                    .is_some_and(|&size| size > MAX_FILE_BYTES)
+        .filter_map(|(path, id)| {
+            let size = id.as_ref().map(|id| sizes.get(id).copied());
+            if looks_secret(path) || size.flatten().is_some_and(|s| s > MAX_FILE_BYTES) {
+                Some(path.clone())
+            } else if size == Some(None) {
+                Some(format!("{path} (size unknown)"))
+            } else {
+                None
+            }
         })
-        .map(|(path, _)| path.as_str())
         .collect();
     if refused.is_empty() {
         return Ok(());
     }
+    let refused: Vec<&str> = refused.iter().map(String::as_str).collect();
     let mut list = refused[..refused.len().min(LISTED_FILES)].join(", ");
     if refused.len() > LISTED_FILES {
         list.push_str(&format!(" and {} more", refused.len() - LISTED_FILES));
@@ -431,7 +455,7 @@ fn succeeded(tool: &str, out: &Output) -> Result<String, String> {
         return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
     }
     let stderr = String::from_utf8_lossy(&out.stderr);
-    let stderr = crate::vault::redact::global().scrub(&stderr);
+    let stderr = strip_userinfo(&crate::vault::redact::global().scrub(&stderr));
     let lines: Vec<&str> = stderr
         .lines()
         .map(str::trim)
@@ -445,4 +469,46 @@ fn succeeded(tool: &str, out: &Output) -> Result<String, String> {
     };
     let message: String = message.chars().take(ERROR_CHARS).collect();
     Err(format!("{tool} failed: {message}"))
+}
+
+/// `text` with the user and password of every `scheme://user:pass@host` URL cut out, which git
+/// writes into its errors for a remote given that way.
+fn strip_userinfo(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(i) = rest.find("://") {
+        let (head, tail) = rest.split_at(i + 3);
+        out.push_str(head);
+        let end = tail
+            .find(|c: char| c == '/' || c.is_whitespace())
+            .unwrap_or(tail.len());
+        match tail[..end].rfind('@') {
+            Some(at) => rest = &tail[at + 1..],
+            None => rest = tail,
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_userinfo;
+
+    #[test]
+    fn url_userinfo_is_cut_out_of_a_quoted_error() {
+        assert_eq!(
+            strip_userinfo("fatal: unable to access 'https://me:s3cret@github.com/o/r.git/': 403"),
+            "fatal: unable to access 'https://github.com/o/r.git/': 403"
+        );
+        assert_eq!(
+            strip_userinfo("https://tok@a.com/x and ssh://u@h/p"),
+            "https://a.com/x and ssh://h/p"
+        );
+        assert_eq!(strip_userinfo("no url, a@b"), "no url, a@b");
+        assert_eq!(
+            strip_userinfo("https://github.com/o@r"),
+            "https://github.com/o@r"
+        );
+    }
 }

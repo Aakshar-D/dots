@@ -451,7 +451,7 @@ async fn a_refusal_names_ten_files_and_counts_the_rest() {
 }
 
 #[tokio::test]
-async fn a_secret_added_and_then_deleted_on_the_branch_is_not_refused() {
+async fn a_secret_added_and_then_deleted_on_the_branch_is_refused() {
     let s = scratch();
     let base = git_out(&s.repo, &["rev-parse", "main"]);
     s.commit("dots/fix", &[(".env", Some(b"TOKEN=1\n"))]);
@@ -460,14 +460,53 @@ async fn a_secret_added_and_then_deleted_on_the_branch_is_not_refused() {
         &[(".env", None), ("src/fix.rs", Some(b"fn fix() {}\n"))],
     );
     let mut branch = approved("dots/fix", &tip);
-    s.deploy("ok", &DeployMode::Push, std::slice::from_ref(&branch))
+    let err = s
+        .deploy("ok", &DeployMode::Pr, std::slice::from_ref(&branch))
         .await
-        .unwrap();
-    assert_eq!(s.remote_tip("dots/fix"), Some(tip.clone()));
+        .unwrap_err();
+    assert!(err.contains(": .env. Remove"), "{err}");
+    assert_eq!(s.remote_tip("dots/fix"), None);
+    assert!(s.gh_calls().is_empty(), "refused before gh runs");
 
-    // An explicit base is scanned from, in place of the merge-base.
+    // An explicit base is scanned from, in place of the remote's refs: still every commit after it.
     branch.base = Some(base);
-    s.deploy("ok", &DeployMode::Push, &[branch]).await.unwrap();
+    let err = s
+        .deploy("ok", &DeployMode::Push, &[branch])
+        .await
+        .unwrap_err();
+    assert!(err.contains(": .env. Remove"), "{err}");
+    assert_eq!(s.remote_tip("dots/fix"), None);
+}
+
+#[tokio::test]
+async fn a_huge_file_added_and_then_deleted_on_the_branch_is_refused() {
+    let s = scratch();
+    let big = vec![b'x'; 10 * MIB + 1];
+    s.commit("dots/fix", &[("big.bin", Some(&big))]);
+    let tip = s.commit(
+        "dots/fix",
+        &[("big.bin", None), ("src/fix.rs", Some(b"fn fix() {}\n"))],
+    );
+    let err = s
+        .deploy("ok", &DeployMode::Push, &[approved("dots/fix", &tip)])
+        .await
+        .unwrap_err();
+    assert!(err.contains(": big.bin. Remove"), "{err}");
+    assert_eq!(s.remote_tip("dots/fix"), None);
+}
+
+#[tokio::test]
+async fn a_secret_in_an_unpushed_commit_below_the_merge_base_is_refused() {
+    let s = scratch();
+    // An unpushed commit on the default branch, which the feature branch is made from.
+    s.commit("main", &[(".env", Some(b"TOKEN=1\n"))]);
+    let tip = s.commit("dots/fix", &[("src/fix.rs", Some(b"fn fix() {}\n"))]);
+    let err = s
+        .deploy("ok", &DeployMode::Push, &[approved("dots/fix", &tip)])
+        .await
+        .unwrap_err();
+    assert!(err.contains(": .env. Remove"), "{err}");
+    assert_eq!(s.remote_tip("dots/fix"), None);
 }
 
 #[tokio::test]
