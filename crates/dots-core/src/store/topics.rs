@@ -322,6 +322,15 @@ impl Store {
         Ok(res.rows_affected() > 0)
     }
 
+    /// Forgets the run's session: it starts a fresh one (topic tools spec section 4.4).
+    pub async fn clear_session(&self, id: &str) -> Result<()> {
+        sqlx::query("UPDATE runs SET session_id = NULL WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     /// Sets a run's `queued_at`, for tests that need runs in a known order.
     #[doc(hidden)]
     pub async fn set_run_queued_at(&self, id: &str, queued_at: &str) -> Result<()> {

@@ -498,6 +498,30 @@ impl Runner {
         true
     }
 
+    /// For a run whose topic a move or merge changed (its restart mark, taken here): the run
+    /// with its session cleared, stored and in hand, and the topic's runs before it. A `resume`
+    /// finishes an approved call in its own session and leaves the mark for the next run.
+    async fn restart_if_moved(&self, run: &Run) -> Result<Option<(Run, Vec<Run>)>> {
+        if run.session_id.is_none() || run.trigger == TriggerKind::Resume {
+            return Ok(None);
+        }
+        if !self.store.take_topic_restart(&run.root_run_id).await? {
+            return Ok(None);
+        }
+        self.store.clear_session(&run.id).await?;
+        let mut fresh = run.clone();
+        fresh.session_id = None;
+        let so_far = self
+            .store
+            .list_thread(&run.root_run_id)
+            .await?
+            .into_iter()
+            .filter(|r| r.id != run.id && r.queued_at <= run.queued_at)
+            .collect();
+        tracing::info!(run = %run.id, "the topic changed: a fresh session");
+        Ok(Some((fresh, so_far)))
+    }
+
     /// Makes the run's open tools reachable through the MCP gateway (`POST /mcp/s/<server>`,
     /// spec section 5) until the run ends.
     pub fn register_tools(&self, run_id: &str, tools: Arc<RunTools>) {
@@ -1129,6 +1153,13 @@ impl Runner {
         if let Some(reason) = engine.unavailable() {
             return Err(Error::Other(reason));
         }
+        // A topic a move or merge changed starts its next run afresh, told what the topic said
+        // so far (topic tools spec section 4.4).
+        let restarted = self.restart_if_moved(run).await?;
+        let (run, so_far) = match &restarted {
+            Some((fresh, so_far)) => (fresh, so_far.as_slice()),
+            None => (run, &[][..]),
+        };
         // A run of a workflow step works in the project's repo (teams spec section 8). One that
         // continues the thread of a step that has ended works there no more, nor for the
         // workflow: it fails before its workspace is touched.
@@ -1332,6 +1363,7 @@ impl Runner {
                     .instructions()
                     .then(|| crate::instructions::model_name(dot.spec.engine)),
                 instructions_changed,
+                so_far,
             },
         );
         // A chat's first prompt lists the workflows it may start (teams spec section 7).
