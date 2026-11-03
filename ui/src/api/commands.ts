@@ -15,6 +15,8 @@ import type {
   Preset,
   Schedule,
   Settings,
+  SetupProposal,
+  SetupRequest,
   SourceCreds,
 } from "./types";
 
@@ -130,6 +132,17 @@ export const commands = {
   /// `workspaceId`: the workspace of that account it starts in; null for the default one.
   createDot: (spec: DotSpec, orgId: string | null = null, workspaceId: string | null = null) =>
     call(T.Dot, "create_dot", { spec, orgId, workspaceId }),
+  /// Asks the setup agent for the setup view `id`: its questions, or a checked proposal. A newer
+  /// request of the same id cancels the one before.
+  setupAsk: (id: string, request: SetupRequest) =>
+    call(T.SetupAnswer, "setup_ask", { id, request }),
+  setupCancel: (id: string) => call(nothing, "setup_cancel", { id }),
+  /// Creates the proposed dot and starts its first chat. `orgId`, `workspaceId` as `createDot`.
+  setupApply: (
+    proposal: SetupProposal,
+    orgId: string | null = null,
+    workspaceId: string | null = null,
+  ) => call(T.SetupApplied, "setup_apply", { proposal, orgId, workspaceId }),
   /// Moves a dot to another workspace of its account.
   moveDot: (dotId: string, workspaceId: string) =>
     call(T.Dot, "dot_move", { dotId, workspaceId }),

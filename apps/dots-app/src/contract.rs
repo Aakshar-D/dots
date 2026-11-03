@@ -29,6 +29,7 @@ use dots_core::policy::{allow_candidates, Action, Policy, Preset};
 use dots_core::schedule::Schedule;
 use dots_core::scheduler::MAX_ATTEMPTS;
 use dots_core::settings::{Settings, MAX_CONCURRENT_RUNS, MAX_GLOBAL_INSTRUCTIONS};
+use dots_core::setup::{SetupAnswer, SetupApplied, SetupProposal, SetupRequest, SetupRound};
 use dots_core::skill_creator::{DraftRequest, DraftSummary};
 use dots_core::vault::org::{
     BaoAuth, CreatedInvite, DraftView, EditOutcome, InviteOffer, InviteState, InviteView,
@@ -1424,6 +1425,60 @@ pub fn samples() -> Value {
             model: "sonnet".into(),
             current: Some("---\nname: pr-tests\n---\nList the changed functions.\n".into()),
             change: Some("Mention snapshot tests".into()),
+        },
+    ]);
+    let proposal = SetupProposal {
+        name: "Downloads digest".into(),
+        instructions: "Read the Downloads folder and tell me what is new.".into(),
+        folder: Some("C:/Users/me/Dots/downloads-digest".into()),
+        schedule: Some(Schedule::cron("0 0 9 * * 1-5")),
+        preset: Preset::ReadOnly,
+        extras: vec!["web".into(), "mcp:github".into()],
+        uses: Uses {
+            mcp_servers: vec!["github".into()],
+            ..Uses::default()
+        },
+        first_message: "Start with today's new files.".into(),
+        notes: "Runs on weekdays at 9.".into(),
+    };
+    samples["SetupRequest"] = to([
+        SetupRequest {
+            description: "Every weekday at 9, read my Downloads folder".into(),
+            rounds: vec![SetupRound {
+                questions: vec!["Which folder?".into()],
+                answers: vec!["Downloads".into()],
+            }],
+            current: None,
+            change: None,
+            skip: false,
+        },
+        SetupRequest {
+            description: "Every weekday at 9, read my Downloads folder".into(),
+            rounds: vec![],
+            current: Some(proposal.clone()),
+            change: Some("Run at 8 instead".into()),
+            skip: true,
+        },
+    ]);
+    samples["SetupAnswer"] = to([
+        SetupAnswer::Questions {
+            questions: vec!["Which folder?".into(), "How often?".into()],
+        },
+        SetupAnswer::Proposal {
+            proposal,
+            new_dot_root: "C:/Users/me/Dots".into(),
+        },
+    ]);
+    samples["SetupApplied"] = to([
+        SetupApplied {
+            dot: dot(),
+            run_id: Some("01J0RUN".into()),
+            run_error: None,
+        },
+        SetupApplied {
+            dot: dot(),
+            run_id: None,
+            run_error: Some("The first run could not start.".into()),
         },
     ]);
     samples["EnvEntry"] = to([
