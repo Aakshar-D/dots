@@ -355,16 +355,29 @@ impl Store {
     /// not listed.
     pub async fn unreviewed_thread_ends(&self) -> Result<Vec<Run>> {
         let rows = sqlx::query(&format!(
-            "SELECT {RUN_COLUMNS} FROM runs r \
-             WHERE r.reviewed_at IS NULL AND r.status IN ('succeeded', 'failed', 'cancelled') \
-             AND (r.status = 'failed' OR r.branch IS NOT NULL) \
-             AND r.id = (SELECT x.id FROM runs x WHERE x.root_run_id = r.root_run_id \
-                         ORDER BY x.queued_at DESC, x.id DESC LIMIT 1) \
-             ORDER BY r.ended_at DESC, r.id DESC"
+            "SELECT {RUN_COLUMNS} FROM runs r              WHERE r.reviewed_at IS NULL AND r.status IN ('succeeded', 'failed', 'cancelled')              AND (r.status = 'failed' OR r.branch IS NOT NULL)              ORDER BY r.ended_at DESC, r.id DESC"
         ))
         .fetch_all(&self.pool)
         .await?;
-        rows.iter().map(run_from_row).collect()
+        let candidates = rows.iter().map(run_from_row).collect::<Result<Vec<_>>>()?;
+        // A thread's end is the last run along its line (`line_order`), not the newest by time:
+        // a move or merge hangs older runs after newer ones (topic tools spec section 4.6).
+        let mut ends: std::collections::HashMap<String, Option<String>> = Default::default();
+        let mut out = Vec::new();
+        for run in candidates {
+            if !ends.contains_key(&run.root_run_id) {
+                let end = self
+                    .list_thread(&run.root_run_id)
+                    .await?
+                    .pop()
+                    .map(|r| r.id);
+                ends.insert(run.root_run_id.clone(), end);
+            }
+            if ends[&run.root_run_id].as_deref() == Some(run.id.as_str()) {
+                out.push(run);
+            }
+        }
+        Ok(out)
     }
 
     /// Sets `reviewed_at` on every run of the lineage that has none; returns the runs changed.

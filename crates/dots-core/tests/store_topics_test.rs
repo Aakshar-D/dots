@@ -442,3 +442,23 @@ async fn a_topic_with_something_waiting_is_not_archived() {
     let roots: Vec<&str> = archived.iter().map(|i| i.root_run_id.as_str()).collect();
     assert_eq!(roots, vec![idle.id.as_str()]);
 }
+
+#[tokio::test]
+async fn the_inbox_names_the_moved_tail_as_its_topic_s_end() {
+    let (_d, store) = temp_store().await;
+    let d = dot(&store, "a").await;
+    let a1 = chat(&store, &d, None, &at(0)).await;
+    let a2 = chat(&store, &d, Some(&a1), &at(1)).await;
+    store.set_status(&a2.id, RunStatus::Failed).await.unwrap();
+    let b1 = chat(&store, &d, None, &at(10)).await;
+    store.set_status(&b1.id, RunStatus::Failed).await.unwrap();
+    let ends = |runs: Vec<Run>| runs.into_iter().map(|r| r.id).collect::<Vec<_>>();
+    let before = ends(store.unreviewed_thread_ends().await.unwrap());
+    assert!(before.contains(&a2.id) && before.contains(&b1.id));
+
+    // Moved after b1, the older a2 is b's end, though b1 is newer.
+    store.move_runs(&a2.id, Some(&b1.id)).await.unwrap();
+    let after = ends(store.unreviewed_thread_ends().await.unwrap());
+    assert!(after.contains(&a2.id), "{after:?}");
+    assert!(!after.contains(&b1.id), "{after:?}");
+}
