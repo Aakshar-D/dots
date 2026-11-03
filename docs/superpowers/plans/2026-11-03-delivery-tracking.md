@@ -93,7 +93,7 @@
 - Consumes: Task 1 (`mark_delivered`, `mark_undelivered`, `overdue_undelivered`, `set_run_queued_at`, `WaitReason`).
 - Produces:
   - `impl WaitReason { pub fn text(self) -> &'static str }`, which returns the Global Constraints texts.
-  - `pub struct WaitFacts { pub usage_held: bool, pub runner_held: bool, pub dot_enabled: bool, pub running: usize, pub max_concurrent: usize }` and `pub fn wait_reason(f: &WaitFacts) -> WaitReason` (in `delivery.rs`, the precedence from Global Constraints).
+  - `pub struct WaitFacts { pub usage_held: bool, pub runner_held: bool, pub dot_has_active_run: bool, pub running: usize, pub max_concurrent: usize }` and `pub fn wait_reason(f: &WaitFacts) -> WaitReason` (in `delivery.rs`, the precedence from Global Constraints).
   - `Store::running_count(&self) -> Result<usize>` (`status = 'running'`).
   - `Runner::is_held(&self) -> bool`; `Runner::max_concurrent(&self) -> usize`; `Runner::usage_held_ids(&self) -> Result<HashSet<String>>`. The last one is the `held_run_ids` of `limits.state(&self.queued_runs().await?, self.running_background_claude())`, and empty without limits.
   - `Runner::fill_wait_reasons(&self, runs: &mut [Run]) -> Result<()>`: sets `wait_reason` for each `queued` run whose `delivery == Some(Waiting)`, and `None` for every other run. It reads the facts once per call (held ids, running count, each dot's `enabled` with a small cache).
