@@ -253,6 +253,7 @@ describe("a dot's Watchers tab", () => {
     backend.on("watcher_add", () => folder);
     const { user } = await openTab();
     const dialog = await add(user, "Folder", "New folder watcher");
+    expect(within(dialog).getByRole("group", { name: "Watch hours" })).toBeVisible();
     expect(within(dialog).getByRole("radio", { name: "Any time" })).toBeChecked();
     await user.click(within(dialog).getByRole("radio", { name: "Only at these times" }));
     for (const day of ["Mon", "Tue", "Wed", "Thu", "Fri"]) {

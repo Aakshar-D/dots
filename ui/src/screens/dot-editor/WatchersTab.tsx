@@ -478,7 +478,7 @@ function WatcherForm(props: {
             </>
           )}
           <fieldset className="flex flex-col gap-2">
-            <legend className="mb-1 w-full text-sm font-medium">Hours</legend>
+            <legend className="mb-1 w-full text-sm font-medium">Watch hours</legend>
             <div className="flex flex-wrap gap-4">
               <label className="flex items-center gap-2 text-sm">
                 <input

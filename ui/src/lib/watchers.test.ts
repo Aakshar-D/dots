@@ -10,7 +10,7 @@ import {
   watcherSummary,
   watcherTitle,
 } from "@/lib/watchers";
-import { localTime } from "@/lib/format";
+import { localTime, localWeekdayTime } from "@/lib/format";
 import { sample } from "@/test/fixtures";
 
 const [folder, email, github] = sample.watchers as [Watcher, Watcher, Watcher];
@@ -105,9 +105,9 @@ describe("what a watcher's hours hold back", () => {
     expect(watcherHoursLine({ ...at(TODAY), held_count: 0 }, new Date(today.getTime() - 3_600_000))).toBe(
       `Outside hours · until ${localTime(TODAY)}`,
     );
-    const line = watcherHoursLine(at(MONDAY), sat);
-    expect(line).toMatch(/^Outside hours · 4 held until Mon /);
-    expect(line).toContain(localTime(MONDAY));
+    expect(watcherHoursLine(at(MONDAY), sat)).toBe(
+      `Outside hours · 4 held until ${localWeekdayTime(MONDAY, sat.getTime())}`,
+    );
   });
 
   it("is empty without a next opening", () => {
