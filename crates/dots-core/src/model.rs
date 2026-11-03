@@ -316,19 +316,25 @@ impl NewRun {
     }
 
     /// The run that sends `run`'s message again (crash resend spec section 2): the same
-    /// trigger, payload, parent and topic, `retry_of` = `run`. Its session, folder, branch and
-    /// base commit are the parent's, as when the message was first sent; without a parent it
-    /// starts afresh. Nothing `run` itself set while it worked is kept.
+    /// trigger, payload, parent and topic, `retry_of` = `run`. Its session is the parent's, as
+    /// when the message was first sent (none without a parent). It works in `run`'s folder when
+    /// `run` had one, so a worktree `run` made is used again, not left where no review lists it
+    /// (spec section 4.1); else in the parent's.
     pub fn resend_of(run: &Run, parent: Option<&Run>) -> Self {
         let mut new = Self::new(&run.dot_id, run.trigger);
         new.payload = run.payload.clone();
         new.parent_run_id = run.parent_run_id.clone();
         new.root_run_id = Some(run.root_run_id.clone());
-        if let Some(parent) = parent {
-            new.session_id = parent.session_id.clone();
+        new.session_id = parent.and_then(|p| p.session_id.clone());
+        let parent_base = parent.and_then(|p| p.base_commit.clone());
+        if run.workspace_path.is_some() {
+            new.workspace_path = run.workspace_path.clone();
+            new.branch = run.branch.clone();
+            new.base_commit = run.base_commit.clone().or(parent_base);
+        } else if let Some(parent) = parent {
             new.workspace_path = parent.workspace_path.clone();
             new.branch = parent.branch.clone();
-            new.base_commit = parent.base_commit.clone();
+            new.base_commit = parent_base;
         }
         new.retry_of = Some(run.id.clone());
         new

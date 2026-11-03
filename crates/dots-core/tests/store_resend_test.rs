@@ -6,6 +6,8 @@ use common::{spec, temp_store};
 use dots_core::model::{NewRun, Run, RunStatus, TriggerKind};
 use dots_core::store::Store;
 use serde_json::json;
+use sqlx::sqlite::SqliteConnectOptions;
+use sqlx::ConnectOptions;
 
 /// A run of `trigger` that was working when Dots stopped.
 async fn running(store: &Store, new: NewRun) -> Run {
@@ -82,10 +84,12 @@ async fn an_interrupted_message_is_resent() {
     );
     assert_eq!(again.root_run_id, fresh.root_run_id);
     assert_eq!(again.parent_run_id, None);
-    // A new chat starts afresh: nothing of the interrupted attempt is kept.
+    // A new chat starts a new session, in the folder the interrupted run made: that folder is
+    // not left behind where no review lists it.
     assert_eq!(again.session_id, None);
-    assert_eq!(again.workspace_path, None);
-    assert_eq!(again.branch, None);
+    assert_eq!(again.workspace_path.as_deref(), Some("/tmp/own"));
+    assert_eq!(again.branch.as_deref(), Some("dots/own"));
+    assert_eq!(again.base_commit.as_deref(), Some("abc"));
 
     let again = resends_of(&store, &dot.id, &reply.id).await;
     assert_eq!(again.len(), 1);
@@ -193,4 +197,55 @@ async fn recovering_twice_resends_once() {
             .len(),
         1
     );
+}
+
+#[tokio::test]
+async fn a_message_that_called_a_tool_is_not_resent() {
+    let (_d, store) = temp_store().await;
+    let dot = store.create_dot(&spec("a"), None, "default").await.unwrap();
+    // A call no one was asked about may have changed something: it could be done twice.
+    let run = running(&store, message(&dot.id, "write it")).await;
+    store
+        .append_event(&run.id, "tool_call", &json!({"tool": "Bash"}))
+        .await
+        .unwrap();
+    // Text alone changed nothing.
+    let talk = running(&store, message(&dot.id, "say it")).await;
+    store
+        .append_event(&talk.id, "text", &json!({"text": "Sure."}))
+        .await
+        .unwrap();
+
+    store.recover_interrupted().await.unwrap();
+    let failed = store.get_run(&run.id).await.unwrap();
+    assert_eq!(failed.status, RunStatus::Failed);
+    assert_eq!(failed.error.as_deref(), Some("interrupted"));
+    assert!(resends_of(&store, &dot.id, &run.id).await.is_empty());
+    assert_eq!(resends_of(&store, &dot.id, &talk.id).await.len(), 1);
+}
+
+#[tokio::test]
+async fn a_step_chat_is_not_resent() {
+    let (dir, store) = temp_store().await;
+    let dot = store.create_dot(&spec("a"), None, "default").await.unwrap();
+    let run = running(&store, message(&dot.id, "for the step")).await;
+    // Named a step without building a workflow: the step row itself does not matter here.
+    let mut conn = SqliteConnectOptions::new()
+        .filename(dir.path().join("dots.db"))
+        .foreign_keys(false)
+        .connect()
+        .await
+        .unwrap();
+    sqlx::query("UPDATE runs SET workflow_step_run_id = 'STEP' WHERE id = ?")
+        .bind(&run.id)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+
+    store.recover_interrupted().await.unwrap();
+    assert_eq!(
+        store.get_run(&run.id).await.unwrap().status,
+        RunStatus::Failed
+    );
+    assert!(resends_of(&store, &dot.id, &run.id).await.is_empty());
 }

@@ -136,7 +136,7 @@ async fn tries_before(conn: &mut SqliteConnection, id: &str) -> Result<i64> {
 }
 
 /// Sends again the interrupted run `id` when it carried a person's message (crash resend spec
-/// section 3): a chat run of no workflow step, with no approved call that may have run, sent
+/// section 3): a chat run of no workflow step that made no tool call and has no approved call, sent
 /// fewer than `MAX_RESENDS` times before. One sent that often fails with the reason.
 async fn resend_interrupted(conn: &mut SqliteConnection, id: &str) -> Result<()> {
     let run = run_in(conn, id).await?;
@@ -151,7 +151,9 @@ async fn resend_interrupted(conn: &mut SqliteConnection, id: &str) -> Result<()>
     .bind(id)
     .fetch_one(&mut *conn)
     .await?;
-    if approved {
+    // So could any call it made, asked about or not: the scheduler's rule for a retry
+    // (Scheduler v2 spec §6). No run event says whether a call was read-only.
+    if approved || super::schedules::called_a_tool(conn, id).await? {
         return Ok(());
     }
     if tries_before(conn, id).await? >= MAX_RESENDS {
