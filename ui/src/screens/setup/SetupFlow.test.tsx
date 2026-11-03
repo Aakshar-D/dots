@@ -237,6 +237,41 @@ describe("setting up a dot by describing it", () => {
     expect(router.state.location.pathname).toBe("/home");
   });
 
+  it("shows a name clash after a failed change, not the old error", async () => {
+    const { user } = await onCard();
+    await user.type(screen.getByRole("textbox", { name: "What should change?" }), "Run at 8");
+    backend.on("setup_ask", () => {
+      throw { kind: "invalid", message: FAILED };
+    });
+    await user.click(screen.getByRole("button", { name: "Ask for changes" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(FAILED);
+    backend.on("setup_apply", () => {
+      throw { kind: "conflict", message: 'A dot named "X" already exists' };
+    });
+    await user.click(screen.getByRole("button", { name: "Run setup" }));
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent('A dot named "X" already exists'),
+    );
+    expect(screen.getByRole("alert")).not.toHaveTextContent(FAILED);
+  });
+
+  it("keeps Run setup off while the schedule cannot be saved", async () => {
+    const { user } = await onCard();
+    expect(screen.getByRole("button", { name: "Run setup" })).toBeEnabled();
+    await user.selectOptions(screen.getByRole("combobox", { name: "Kind" }), "cron");
+    expect(await screen.findByText("Write a cron expression.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Run setup" })).toBeDisabled();
+  });
+
+  it("sends New dot to the composer on the empty home, without a second setup", async () => {
+    const { user } = renderApp("/home");
+    const box = await screen.findByRole("textbox", { name: HEADING });
+    const column = screen.getByRole("navigation", { name: "Dots" });
+    await user.click(within(column).getByRole("button", { name: "New dot" }));
+    expect(box).toHaveFocus();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
   it("cancels the request when the view goes away while the agent works", async () => {
     backend.on("setup_ask", () => later<SetupAnswer>().answer);
     backend.on("setup_cancel", () => null);
@@ -263,7 +298,7 @@ describe("setting up a dot by describing it", () => {
   it("confirms Start over when a card is on screen", async () => {
     const { user } = await onCard();
     await user.click(screen.getByRole("button", { name: "Start over" }));
-    const confirm = await screen.findByRole("alertdialog", { name: "Start over?" });
+    const confirm = await screen.findByRole("alertdialog", { name: "Discard the proposed dot?" });
     await user.click(within(confirm).getByRole("button", { name: "Start over" }));
     expect(await screen.findByRole("textbox", { name: HEADING })).toHaveValue("");
     expect(screen.queryByRole("textbox", { name: "Name" })).toBeNull();
@@ -285,6 +320,66 @@ describe("setting up a dot by describing it", () => {
 });
 
 describe("New dot", () => {
+  const reader = { ...sample.dot, id: "dot-a", name: "reader" };
+
+  /// The home with `reader` open and the New dot dialog showing.
+  async function openDialog() {
+    backend.on("dot_overview", () => [{ ...sample.overview, dot: reader }]);
+    const view = renderApp("/home/dot-a");
+    await screen.findByRole("heading", { level: 1, name: "reader" });
+    const column = screen.getByRole("navigation", { name: "Dots" });
+    await view.user.click(within(column).getByRole("button", { name: "New dot" }));
+    const dialog = await screen.findByRole("dialog", { name: "New dot" });
+    return { ...view, dialog };
+  }
+
+  it("opens the new dot's conversation after Run setup", async () => {
+    backend.on("setup_ask", () => proposed());
+    const dot = { ...sample.dot, id: "dot-new", name: "Downloads digest" };
+    backend.on("setup_apply", () => {
+      // The overview that lists the new dot comes back a moment later, as the real one may.
+      backend.on(
+        "dot_overview",
+        () =>
+          new Promise((give) =>
+            setTimeout(
+              () => give([{ ...sample.overview, dot }, { ...sample.overview, dot: reader }]),
+              100,
+            ),
+          ),
+      );
+      return { dot, run_id: "run-1", run_error: null };
+    });
+    const { user, dialog, router } = await openDialog();
+    await user.type(within(dialog).getByRole("textbox", { name: "What should the dot do?" }), "x");
+    await user.click(within(dialog).getByRole("button", { name: "Set it up" }));
+    await user.click(await within(dialog).findByRole("button", { name: "Run setup" }));
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "Downloads digest" }),
+    ).toBeVisible();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(router.state.location.pathname).toBe("/home/dot-new");
+  });
+
+  it("asks before closing with a proposed dot", async () => {
+    backend.on("setup_ask", () => proposed());
+    const { user, dialog } = await openDialog();
+    await user.type(within(dialog).getByRole("textbox", { name: "What should the dot do?" }), "x");
+    await user.click(within(dialog).getByRole("button", { name: "Set it up" }));
+    await within(dialog).findByRole("button", { name: "Run setup" });
+    await user.keyboard("{Escape}");
+    const confirm = await screen.findByRole("alertdialog", { name: "Discard the proposed dot?" });
+    await user.click(within(confirm).getByRole("button", { name: "Keep it" }));
+    expect(screen.getByRole("dialog", { name: "New dot" })).toBeVisible();
+    await user.keyboard("{Escape}");
+    await user.click(
+      within(
+        await screen.findByRole("alertdialog", { name: "Discard the proposed dot?" }),
+      ).getByRole("button", { name: "Close" }),
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
   it("opens the setup in a dialog, with the form link", async () => {
     const dot = { ...sample.dot, id: "dot-a", name: "reader" };
     backend.on("dot_overview", () => [{ ...sample.overview, dot }]);

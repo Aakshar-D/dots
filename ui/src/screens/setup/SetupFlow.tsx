@@ -18,7 +18,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { nameError } from "@/lib/dot-rules";
+import { nameError, scheduleError } from "@/lib/dot-rules";
 import { errorMessage } from "@/lib/notify";
 import { invalidateDots, keys } from "@/lib/query";
 import { PERSONAL } from "@/lib/scope";
@@ -37,7 +37,36 @@ const MAX_TEXT = 4000;
 /// The setup agent's view (setup agent spec §5): describe a task, answer at most two short
 /// question rounds, edit the proposed dot on one card, and Run setup. Used on the empty home
 /// and in the New dot dialog; `onDone` is called once the dot is made.
-export function SetupFlow(props: { onDone?: () => void; title?: string }) {
+/// The confirmation before a proposed dot is thrown away: by Start over, or by closing the New
+/// dot dialog. `action` names what it does.
+export function DiscardConfirm(props: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  action: string;
+  onConfirm: () => void;
+}) {
+  return (
+    <AlertDialog open={props.open} onOpenChange={props.onOpenChange}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Discard the proposed dot?</AlertDialogTitle>
+          <AlertDialogDescription>It has not been made yet.</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Keep it</AlertDialogCancel>
+          <AlertDialogAction onClick={props.onConfirm}>{props.action}</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
+export function SetupFlow(props: {
+  onDone?: () => void;
+  title?: string;
+  /// Told whether a proposed dot is on hand, so that a dialog can confirm before closing.
+  onProposal?: (has: boolean) => void;
+}) {
   const title = props.title ?? "What should your first dot do?";
   const qc = useQueryClient();
   const navigate = useNavigate();
@@ -64,6 +93,10 @@ export function SetupFlow(props: { onDone?: () => void; title?: string }) {
   // Whether the claude CLI was found, to say what a failure most likely means.
   const status = useQuery({ queryKey: keys.status, queryFn: commands.status }).data;
   const noCli = status !== undefined && status.claude.program === null;
+
+  const has = proposal !== null;
+  const { onProposal } = props;
+  useEffect(() => onProposal?.(has), [has, onProposal]);
 
   // A view that goes away while the agent works ends the CLI.
   useEffect(
@@ -147,6 +180,7 @@ export function SetupFlow(props: { onDone?: () => void; title?: string }) {
   async function runSetup() {
     if (!proposal) return;
     setApplying(true);
+    setError(null);
     setApplyError(null);
     try {
       // The dot goes to the account and workspace in view when Run setup is pressed.
@@ -156,6 +190,9 @@ export function SetupFlow(props: { onDone?: () => void; title?: string }) {
       const applied = await commands.setupApply(proposal, org, workspace);
       invalidateDots(qc);
       qc.setQueryData(keys.dot(applied.dot.id), applied.dot);
+      // The home finds the dot it opens in the overview: without the new dot there, it would
+      // send the person back to another one.
+      await qc.refetchQueries({ queryKey: keys.overview });
       if (applied.run_error !== null) {
         toast.error(`The dot was created but its first run did not start: ${applied.run_error}`);
       }
@@ -170,9 +207,10 @@ export function SetupFlow(props: { onDone?: () => void; title?: string }) {
   const ready =
     proposal !== null &&
     nameError(proposal.name) === undefined &&
-    proposal.instructions.trim() !== "";
+    proposal.instructions.trim() !== "" &&
+    scheduleError(proposal.schedule) === undefined;
   return (
-    <div className="flex w-full flex-col gap-4">
+    <div data-setup-flow tabIndex={-1} className="flex w-full flex-col gap-4 outline-none">
       {stage === "describe" && (
         <>
           <h2 id={`${ids}-title`} className="text-lg font-medium">
@@ -180,6 +218,7 @@ export function SetupFlow(props: { onDone?: () => void; title?: string }) {
           </h2>
           <Textarea
             aria-labelledby={`${ids}-title`}
+            data-setup-composer
             rows={4}
             maxLength={MAX_TEXT}
             placeholder="For example: every weekday at 9, read my Downloads folder and tell me what's new"
@@ -286,18 +325,12 @@ export function SetupFlow(props: { onDone?: () => void; title?: string }) {
       >
         Fill in the form instead
       </Link>
-      <AlertDialog open={confirming} onOpenChange={setConfirming}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Start over?</AlertDialogTitle>
-            <AlertDialogDescription>The proposed dot is not kept.</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Keep it</AlertDialogCancel>
-            <AlertDialogAction onClick={startOver}>Start over</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <DiscardConfirm
+        open={confirming}
+        onOpenChange={setConfirming}
+        action="Start over"
+        onConfirm={startOver}
+      />
     </div>
   );
 }

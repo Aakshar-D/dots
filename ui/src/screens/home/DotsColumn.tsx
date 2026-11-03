@@ -36,6 +36,13 @@ export function DotsColumn({ rows, openId }: { rows: DotOverview[]; openId: stri
   const refusal = useScopeRefusal("edit");
   // New dot opens the setup view in a dialog; the form stays at /dots/new.
   const [creating, setCreating] = useState(false);
+  // With no dot in view the home already shows the setup view: New dot goes there rather than
+  // opening a second one.
+  function newDot() {
+    const flow = document.querySelector<HTMLElement>("[data-setup-flow]");
+    if (rows.length > 0 || !flow) return setCreating(true);
+    (flow.querySelector<HTMLElement>("[data-setup-composer]") ?? flow).focus();
+  }
   // Up and Down move the focus to the dot above or below, Home and End to the first and the
   // last; Enter (the link's own) opens the dot in focus. Moving opens nothing, so that passing
   // over dots neither loads them nor marks their questions read.
@@ -77,7 +84,7 @@ export function DotsColumn({ rows, openId }: { rows: DotOverview[]; openId: stri
             type="button"
             variant="ghost"
             className="w-full justify-start"
-            onClick={() => setCreating(true)}
+            onClick={newDot}
           >
             <Plus aria-hidden />
             New dot
