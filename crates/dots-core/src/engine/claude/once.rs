@@ -1,8 +1,10 @@
 //! One request to the `claude` CLI outside a dot run (skill creator spec §5): no tools, no MCP
 //! servers, no settings files and no saved session. The answer's text comes back.
 
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -34,6 +36,109 @@ pub enum OnceFailure {
     TimedOut,
     /// The CLI failed: its error, or how it exited.
     Failed(String),
+    /// There is no CLI to ask (`OnceRunner` only; `ask_once` is given one).
+    NoCli,
+}
+
+/// What a request without a CLI tells the person.
+pub const NO_CLI: &str = "claude CLI not found: install Claude Code or set its path in Settings";
+
+/// The requests being answered, at most one per id: the skill creator's drafts and the setup
+/// agent's requests. Each runs `ask_once` in a new empty folder of its own under `dir`, removed
+/// afterwards, and ends on `cancel`, on a newer request of the same id, on the time limit or
+/// when Dots shuts down. Requests of other ids are left alone.
+pub struct OnceRunner {
+    program: Option<PathBuf>,
+    env: Vec<(String, String)>,
+    dir: PathBuf,
+    limit: Duration,
+    shutdown: CancellationToken,
+    /// By id: a number for the request, and what cancels it.
+    running: Mutex<HashMap<String, (u64, CancellationToken)>>,
+    next: Mutex<u64>,
+}
+
+impl OnceRunner {
+    /// `program` is the CLI the runtime found, `None` when there is none.
+    pub fn new(
+        program: Option<PathBuf>,
+        env: Vec<(String, String)>,
+        dir: PathBuf,
+        limit: Duration,
+        shutdown: CancellationToken,
+    ) -> OnceRunner {
+        OnceRunner {
+            program,
+            env,
+            dir,
+            limit,
+            shutdown,
+            running: Mutex::new(HashMap::new()),
+            next: Mutex::new(0),
+        }
+    }
+
+    /// Asks the CLI for `id` and returns the answer's text. The id's older request, if one is
+    /// running, is cancelled first, also when there is no CLI (`NoCli`).
+    pub async fn run(
+        &self,
+        id: &str,
+        system_prompt: &str,
+        model: &str,
+        prompt: &str,
+    ) -> Result<String, OnceFailure> {
+        let Some(program) = self.program.as_deref() else {
+            self.cancel(id);
+            return Err(OnceFailure::NoCli);
+        };
+        let token = self.shutdown.child_token();
+        let number = {
+            let mut next = self.next.lock().unwrap();
+            *next += 1;
+            *next
+        };
+        let previous = self
+            .running
+            .lock()
+            .unwrap()
+            .insert(id.to_string(), (number, token.clone()));
+        if let Some((_, previous)) = previous {
+            previous.cancel();
+        }
+        let cwd = self.dir.join(crate::util::new_id());
+        let asked = match std::fs::create_dir_all(&cwd) {
+            Ok(()) => {
+                let once = Once {
+                    program,
+                    env: &self.env,
+                    cwd: &cwd,
+                    model,
+                    system_prompt,
+                    prompt,
+                    limit: self.limit,
+                };
+                let asked = ask_once(&once, &token).await;
+                let _ = std::fs::remove_dir_all(&cwd);
+                asked
+            }
+            Err(e) => Err(OnceFailure::Failed(format!(
+                "could not make {}: {e}",
+                cwd.display()
+            ))),
+        };
+        let mut running = self.running.lock().unwrap();
+        if running.get(id).is_some_and(|(n, _)| *n == number) {
+            running.remove(id);
+        }
+        asked
+    }
+
+    /// Cancels the id's request, if one is running.
+    pub fn cancel(&self, id: &str) {
+        if let Some((_, token)) = self.running.lock().unwrap().remove(id) {
+            token.cancel();
+        }
+    }
 }
 
 /// The command line of a request: one turn, no built-in tools (`--tools ""`), no MCP servers

@@ -437,3 +437,26 @@ async fn apply_default_folder_gets_a_suffix_when_taken() {
             .join(format!("{}-2", folder_name("Downloads digest")))
     );
 }
+
+#[tokio::test]
+async fn apply_default_folder_inside_git_gets_worktree() {
+    let repo = tempfile::tempdir().unwrap();
+    let ok = std::process::Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(repo.path())
+        .status()
+        .unwrap()
+        .success();
+    assert!(ok);
+    let root = repo.path().join("Dots");
+    let t = start_with(answering("Done."), |cfg| cfg.new_dot_root = root.clone()).await;
+    let applied =
+        t.rt.setup_apply(proposal("Downloads digest"), None, None)
+            .await
+            .unwrap();
+    assert_eq!(
+        PathBuf::from(&applied.dot.spec.workdir),
+        root.join(folder_name("Downloads digest"))
+    );
+    assert_eq!(applied.dot.spec.workspace_mode, WorkspaceMode::Worktree);
+}

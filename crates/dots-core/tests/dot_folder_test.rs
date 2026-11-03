@@ -159,3 +159,22 @@ async fn stored_worktree_dot_without_repo_keeps_other_fields_editable() {
     }
     rt.shutdown();
 }
+
+#[tokio::test]
+async fn failed_create_keeps_an_empty_folder_it_did_not_make() {
+    let t = start().await;
+    // A dot named "Inbox helper" exists, with a folder elsewhere.
+    let elsewhere = t.dir.path().join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let mut s = spec("Inbox helper");
+    s.workdir = elsewhere.to_string_lossy().to_string();
+    t.rt.create_dot(s, None, None).await.unwrap();
+    // The default folder of the name is there already, empty.
+    let there = t.root.join("inbox-helper");
+    std::fs::create_dir_all(&there).unwrap();
+    let mut s = spec("inbox HELPER");
+    s.workdir = String::new();
+    let err = t.rt.create_dot(s, None, None).await.unwrap_err();
+    assert!(matches!(err, Error::Conflict(_)), "{err:?}");
+    assert!(there.is_dir());
+}

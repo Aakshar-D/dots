@@ -134,8 +134,9 @@ pub async fn is_git_repo(path: &Path) -> bool {
 }
 
 /// Makes and returns the first free `<root>/<folder_name>[-N]`: one that does not exist or
-/// is empty. Missing parents are created.
-pub async fn default_folder(root: &Path, name: &str) -> Result<PathBuf> {
+/// is empty. Missing parents are created. The flag is true when this call made the folder,
+/// false when it was there already, empty: only a folder it made may be removed again.
+pub async fn default_folder(root: &Path, name: &str) -> Result<(PathBuf, bool)> {
     let base = crate::model::folder_name(name);
     for n in 1u32..10_000 {
         let dir = if n == 1 {
@@ -143,14 +144,14 @@ pub async fn default_folder(root: &Path, name: &str) -> Result<PathBuf> {
         } else {
             root.join(format!("{base}-{n}"))
         };
-        let free = match tokio::fs::read_dir(&dir).await {
-            Ok(mut entries) => entries.next_entry().await?.is_none(),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
-            Err(_) => false,
+        let (free, missing) = match tokio::fs::read_dir(&dir).await {
+            Ok(mut entries) => (entries.next_entry().await?.is_none(), false),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (true, true),
+            Err(_) => (false, false),
         };
         if free {
             tokio::fs::create_dir_all(&dir).await?;
-            return Ok(dir);
+            return Ok((dir, missing));
         }
     }
     Err(Error::Other(format!(
@@ -1096,24 +1097,18 @@ impl Runtime {
             .filter(|f| !f.is_empty())
             .map(str::to_string);
         let p = check_proposal(p, &ctx, false)?;
-        let (workdir, mode) = match (&named, p.folder.as_deref()) {
-            (None, _) => (String::new(), WorkspaceMode::Folder),
-            (Some(_), Some(checked)) if Path::new(checked).is_dir() => {
-                let mode = if is_git_repo(Path::new(checked)).await {
-                    WorkspaceMode::Worktree
-                } else {
-                    WorkspaceMode::Folder
-                };
-                (checked.to_string(), mode)
-            }
+        let workdir = match (&named, p.folder.as_deref()) {
+            (None, _) => String::new(),
+            (Some(_), Some(checked)) if Path::new(checked).is_dir() => checked.to_string(),
             (Some(folder), _) => {
                 return Err(Error::Invalid(format!(
                     "{folder} is not a folder on this PC."
                 )))
             }
         };
+        // Worktree mode, which `create_dot` turns into folder mode outside git.
         let mut spec = DotSpec::new(&p.name, &p.instructions, &workdir);
-        spec.workspace_mode = mode;
+        spec.workspace_mode = WorkspaceMode::Worktree;
         spec.schedule = p.schedule.clone();
         spec.policy = setup_policy(p.preset, &p.extras);
         spec.uses = p.uses.clone();
@@ -1249,9 +1244,10 @@ impl Runtime {
         // A blank folder gets a new one of its own; remembered so a failed create removes it.
         let mut made: Option<PathBuf> = None;
         if spec.workdir.trim().is_empty() {
-            let dir = default_folder(&self.new_dot_root, &spec.name).await?;
+            let (dir, created) = default_folder(&self.new_dot_root, &spec.name).await?;
             spec.workdir = dir.to_string_lossy().into_owned();
-            made = Some(dir);
+            // A folder that was there already, empty, may be another dot's: it stays.
+            made = created.then_some(dir);
         }
         // Worktree mode needs git; outside it the dot runs in the folder itself.
         if spec.workspace_mode == WorkspaceMode::Worktree
