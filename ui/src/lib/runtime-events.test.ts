@@ -120,6 +120,21 @@ describe("runtime events and the query cache", () => {
     for (const key of untouched) expect(stale(qc, key), key.join("/")).toBe(false);
   });
 
+  it("marks the dot's skips, the overview and the dots stale when a slot is skipped", () => {
+    const qc = createQueryClient();
+    const lists = [keys.scheduleSkips(sample.dot.id), keys.overview, keys.dots];
+    const untouched = [keys.scheduleSkips("other"), keys.inbox, keys.runs(sample.dot.id)];
+    for (const key of [...lists, ...untouched]) qc.setQueryData(key, []);
+
+    applyRuntimeEvent(qc, {
+      type: "schedule_skipped",
+      dot_id: sample.dot.id,
+      skip: sample.scheduleSkip,
+    });
+    for (const key of lists) expect(stale(qc, key), key.join("/")).toBe(true);
+    for (const key of untouched) expect(stale(qc, key), key.join("/")).toBe(false);
+  });
+
   it("marks the dot's proposed instructions and the inbox stale when a proposal changes", () => {
     const qc = createQueryClient();
     const lists = [keys.instructionProposals(sample.dot.id), keys.inbox];

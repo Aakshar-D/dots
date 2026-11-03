@@ -324,6 +324,9 @@ export const commands = {
   /// The pending follow-ups, soonest first; of one dot with `dotId`.
   followUpsList: (dotId: string | null) =>
     call(T.FollowUp.array(), "follow_ups_list", { dotId }),
+  /// The slots skipped because the dot was busy, newest first (at most 50).
+  scheduleSkips: (dotId: string, limit?: number) =>
+    call(T.ScheduleSkip.array(), "schedule_skips", { dotId, limit }),
   /// Rejects with kind `conflict` once the follow-up fired, was skipped or was cancelled.
   followUpCancel: (id: string) => call(T.FollowUp, "follow_up_cancel", { id }),
 

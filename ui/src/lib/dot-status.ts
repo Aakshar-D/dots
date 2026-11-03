@@ -1,5 +1,5 @@
 // What the home's column says about each dot (chat-first home spec, section 3).
-import type { DotOverview, FollowUp, Message } from "@/api/types";
+import type { DotOverview, FollowUp, Message, ScheduleView } from "@/api/types";
 import { localTime, relativeTime } from "@/lib/format";
 import { chatText, oneLine } from "@/lib/home-topics";
 import { isOpenQuestion } from "@/lib/messages";
@@ -63,6 +63,17 @@ export function lastLine(row: DotOverview): string {
   const run = row.last_run;
   if (run === null) return "";
   return oneLine(run.summary) || oneLine(run.error) || oneLine(chatText(run));
+}
+
+/// "Last skipped 09:00 · 3 skipped since the last run" for a schedule that skipped a slot
+/// because the dot was busy; without the count when no run has been skipped since the last run;
+/// "" when it never skipped.
+export function skipLine(view: ScheduleView | null | undefined): string {
+  if (!view?.last_skipped_at) return "";
+  const last = `Last skipped ${localTime(view.last_skipped_at)}`;
+  return view.skipped_since_run > 0
+    ? `${last} · ${view.skipped_since_run} skipped since the last run`
+    : last;
 }
 
 /// "next 02:00" for the next scheduled fire, else when the dot's next follow-up fires ("Next

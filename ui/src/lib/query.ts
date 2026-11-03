@@ -74,6 +74,8 @@ export const keys = {
   diff: (runId: string) => ["diff", runId] as const,
   messages: (dotId: string | null) => ["messages", dotId] as const,
   followUps: (dotId: string | null) => ["follow-ups", dotId] as const,
+  /// The slots a dot skipped because it was busy.
+  scheduleSkips: (dotId: string) => ["schedule-skips", dotId] as const,
   memories: (dotId: string) => ["memories", dotId] as const,
   /// The instructions a dot proposed (conversational chat spec section 4).
   instructionProposals: (dotId: string) => ["instruction-proposals", dotId] as const,

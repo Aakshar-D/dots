@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { DotOverview, Message, Run } from "@/api/types";
-import { dotStatus, lastLine, nextLine, sortDots } from "@/lib/dot-status";
+import { dotStatus, lastLine, nextLine, skipLine, sortDots } from "@/lib/dot-status";
 import { localTime } from "@/lib/format";
 import { sample } from "@/test/fixtures";
 
@@ -90,5 +90,20 @@ describe("the column", () => {
     expect(nextLine(scheduled, [followUp])).toBe(`next ${localTime(attention.next_fire)}`);
     expect(nextLine(row("a"), [followUp])).toBe("Next follow-up in 3 h");
     expect(nextLine(row("a"), [{ ...followUp, dot_id: "dot-b" }])).toBe("");
+  });
+
+  it("tells the last skipped slot and the skips since the last run", () => {
+    const last = "2026-10-09T09:00:00Z";
+    const skipped = (n: number, at: string | null) => ({
+      ...attention,
+      last_skipped_at: at,
+      skipped_since_run: n,
+    });
+    expect(skipLine(skipped(3, last))).toBe(
+      `Last skipped ${localTime(last)} · 3 skipped since the last run`,
+    );
+    expect(skipLine(skipped(0, last))).toBe(`Last skipped ${localTime(last)}`);
+    expect(skipLine(skipped(0, null))).toBe("");
+    expect(skipLine(null)).toBe("");
   });
 });

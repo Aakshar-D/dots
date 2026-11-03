@@ -63,6 +63,8 @@ describe("commands", () => {
     await commands.messageMarkRead("m1");
     reply = async () => fixture.FollowUp;
     expect(await commands.followUpsList(null)).toEqual(fixture.FollowUp);
+    reply = async () => [fixture.ScheduleSkip];
+    expect(await commands.scheduleSkips("d1")).toEqual([fixture.ScheduleSkip]);
     reply = async () => fixture.FollowUp[0];
     await commands.followUpCancel("f1");
     expect(calls).toEqual([
@@ -72,6 +74,7 @@ describe("commands", () => {
       ["message_dismiss", { id: "m1" }],
       ["message_mark_read", { id: "m1" }],
       ["follow_ups_list", { dotId: null }],
+      ["schedule_skips", { dotId: "d1", limit: undefined }],
       ["follow_up_cancel", { id: "f1" }],
     ]);
   });

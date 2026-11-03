@@ -5,7 +5,7 @@ import type { Approval, Message, Run, RunEventRecord } from "@/api/types";
 import { localTime } from "@/lib/format";
 import { backend } from "@/test/backend";
 import { sample } from "@/test/fixtures";
-import { chat, dot, home, reply, said, scheduled } from "@/test/home";
+import { chat, dot, home, overview, reply, said, scheduled } from "@/test/home";
 import { renderApp } from "@/test/render";
 
 const conversation = () => screen.getByRole("region", { name: "Conversation" });
@@ -101,6 +101,56 @@ describe("a dot's conversation", () => {
     const view = within(conversation());
     expect(await view.findByText("Done, as you asked.")).toBeVisible();
     expect(view.getByText("reply r1")).toBeVisible();
+  });
+
+  it("shows skipped slots among the topics in time order, apart from the messages", async () => {
+    const early = scheduled("early", "09:00");
+    const later = scheduled("later", "11:00");
+    home([early, later]);
+    const skip = { ...sample.scheduleSkip, dot_id: dot.id };
+    backend.on("schedule_skips", () => [
+      { ...skip, id: "s2", slot_at: "2026-10-09T12:00:00Z" },
+      { ...skip, id: "s1", slot_at: "2026-10-09T10:00:00Z" },
+    ]);
+    renderApp(`/home/${dot.id}`);
+    const view = within(await screen.findByRole("region", { name: "Conversation" }));
+    const lines = await view.findAllByText(/Schedule skipped at .*: still working on the previous run/);
+    expect(lines).toHaveLength(2);
+    const first = await card(early);
+    const second = await card(later);
+    const after = (a: Node, b: Node) => a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING;
+    // early, the 10:00 skip, later, the 12:00 skip.
+    expect(after(first, lines[0])).toBeTruthy();
+    expect(after(lines[0], second)).toBeTruthy();
+    expect(after(second, lines[1])).toBeTruthy();
+    expect(backend.callsTo("schedule_skips")).toEqual([{ dotId: dot.id, limit: undefined }]);
+    // Skips are never messages: the dot's unread count is whatever the overview says.
+    expect(backend.callsTo("messages_list").every((a) => a.dotId !== undefined)).toBe(true);
+  });
+
+  it("tells the last skipped slot in the dot's header, and nothing without one", async () => {
+    home([scheduled("cron", "09:00")]);
+    const state = sample.overview.schedule_state!;
+    const last = "2026-10-09T09:00:00Z";
+    backend.on("dot_overview", () => [
+      { ...overview, schedule_state: { ...state, last_skipped_at: last, skipped_since_run: 2 } },
+    ]);
+    renderApp(`/home/${dot.id}`);
+    expect(
+      await screen.findByText(`Last skipped ${localTime(last)} · 2 skipped since the last run`),
+    ).toBeVisible();
+  });
+
+  it("shows no skip line in the header of a dot that never skipped", async () => {
+    const run = scheduled("cron", "09:00");
+    home([run]);
+    const state = sample.overview.schedule_state!;
+    backend.on("dot_overview", () => [
+      { ...overview, schedule_state: { ...state, last_skipped_at: null, skipped_since_run: 0 } },
+    ]);
+    renderApp(`/home/${dot.id}`);
+    await card(run);
+    expect(screen.queryByText(/Last skipped/)).toBeNull();
   });
 
   it("shows the last 20 run topics of a dot that never chatted", async () => {

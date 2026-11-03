@@ -38,6 +38,8 @@ export const sample = {
   /// An open question with the choices "yes" and "no", an answered one, a dismissed one, and a
   /// read note of Dots' own.
   messages: T.Message.array().parse(contract.Message),
+  /// A slot skipped because the dot was busy with its previous run.
+  scheduleSkip: T.ScheduleSkip.parse(contract.ScheduleSkip),
   /// A pending follow-up and a fired one.
   followUps: T.FollowUp.array().parse(contract.FollowUp),
   /// A pinned memory the dot saved in a run, and one the person wrote.
@@ -173,6 +175,8 @@ export function installDefaults(): void {
   // No dot has checked in or scheduled anything. A question on screen is marked read.
   backend.on("messages_list", () => []);
   backend.on("follow_ups_list", () => []);
+  // No dot has skipped a slot.
+  backend.on("schedule_skips", () => []);
   // No dot remembers anything.
   backend.on("memories_list", () => []);
   backend.on("watchers_list", () => []);

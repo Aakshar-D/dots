@@ -6,7 +6,7 @@ import { CommandError, commands } from "@/api/commands";
 import type { DotOverview } from "@/api/types";
 import { LoadErrors } from "@/components/ErrorNote";
 import { Button } from "@/components/ui/button";
-import { dotStatus } from "@/lib/dot-status";
+import { dotStatus, skipLine } from "@/lib/dot-status";
 import { keys } from "@/lib/query";
 import { DotHeader } from "@/screens/home/DotHeader";
 import { HistoryMenu } from "@/screens/home/HistoryMenu";
@@ -50,7 +50,11 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
   if (gone) return <Navigate to={`/home/${dot.id}`} replace />;
   return (
     <div className="flex min-w-0 flex-1 flex-col">
-      <DotHeader dot={dot} status={dotStatus(row, allMessages, held)}>
+      <DotHeader
+        dot={dot}
+        status={dotStatus(row, allMessages, held)}
+        skipLine={skipLine(row.schedule_state)}
+      >
         <HistoryMenu dotId={dot.id} topics={view.older} />
         <Button size="sm" variant="ghost" onClick={() => setPick({ kind: "new" })}>
           New topic
@@ -76,6 +80,7 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
           topics={view.pending ? [] : view.shown}
           checkIns={view.checkIns}
           dotName={dot.name}
+          skipsDotId={rootRunId === undefined ? dot.id : undefined}
           proposals={proposals}
           onReply={(topic) => setPick({ kind: "topic", rootId: topic.rootId })}
         >
