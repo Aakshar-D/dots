@@ -1101,6 +1101,8 @@ pub fn samples() -> Value {
                     run_id: "01J0RUN0".into(),
                     error: Some("model server unreachable".into()),
                 }),
+                last_skipped_at: Some("2026-10-09T12:00:00+01:00".into()),
+                skipped_since_run: 2,
             }),
             needs_you: 0,
             unread: 0,

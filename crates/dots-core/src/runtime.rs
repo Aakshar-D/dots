@@ -23,7 +23,7 @@ use crate::library_service::LibraryService;
 use crate::model::{
     Approval, AttentionRun, ClaudeStatus, Dot, DotOverview, DotSpec, EngineKind, Inbox,
     MessageKind, NewRun, PendingApproval, ReviewRun, Run, RunEventRecord, RunStatus,
-    ScheduleChange, ScheduleView, SettingsSaved, Status, TriggerKind, WorktreeDiff,
+    ScheduleChange, ScheduleSkip, ScheduleView, SettingsSaved, Status, TriggerKind, WorktreeDiff,
 };
 use crate::policy::{allow_candidates, Action, Rule, RuleCandidate};
 use crate::runner::{Runner, RunnerConfig};
@@ -623,14 +623,31 @@ impl Runtime {
             },
             None => None,
         };
-        Ok(Some(ScheduleView::new(
-            &state,
-            schedule,
-            dot.spec.enabled,
-            attention,
-            now,
-            &Local,
-        )))
+        let mut view =
+            ScheduleView::new(&state, schedule, dot.spec.enabled, attention, now, &Local);
+        view.last_skipped_at = self
+            .store
+            .schedule_skips(&dot.id, 1)
+            .await?
+            .into_iter()
+            .next()
+            .map(|skip| skip.slot_at);
+        let last_run = self.store.last_schedule_run_queued_at(&dot.id).await?;
+        view.skipped_since_run = self.store.skips_since(&dot.id, last_run.as_deref()).await?;
+        Ok(Some(view))
+    }
+
+    /// The dot's kept schedule skips, newest slot first: `limit` of them (default and most 50).
+    /// `NotFound` for an unknown dot.
+    pub async fn schedule_skips(
+        &self,
+        dot_id: &str,
+        limit: Option<u32>,
+    ) -> Result<Vec<ScheduleSkip>> {
+        self.store.get_dot(dot_id).await?;
+        self.store
+            .schedule_skips(dot_id, limit.unwrap_or(50).min(50))
+            .await
     }
 
     /// The next `count` (1 to 10) slots of a schedule saved now, RFC 3339 in local time, within

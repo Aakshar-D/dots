@@ -115,4 +115,15 @@ impl Store {
         .await?;
         Ok(n as u32)
     }
+
+    /// When the dot's newest run started by its schedule was queued, if it has one.
+    pub async fn last_schedule_run_queued_at(&self, dot_id: &str) -> Result<Option<String>> {
+        Ok(sqlx::query_scalar(
+            "SELECT queued_at FROM runs WHERE dot_id = ? AND trigger_kind = 'schedule' \
+             ORDER BY queued_at DESC, id DESC LIMIT 1",
+        )
+        .bind(dot_id)
+        .fetch_optional(&self.pool)
+        .await?)
+    }
 }
