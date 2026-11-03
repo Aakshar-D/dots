@@ -262,6 +262,13 @@ describe("the dot editor, stored dot", () => {
     return held;
   }
 
+  it("does not show the new-dot folder hint", async () => {
+    stored();
+    renderApp(path);
+    expect(await screen.findByLabelText("Folder")).toBeVisible();
+    expect(screen.queryByText("Leave blank and Dots makes a new folder for this dot.")).toBeNull();
+  });
+
   it("loads the dot and saves a change", async () => {
     stored();
     const { user } = renderApp(path);

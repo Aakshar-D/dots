@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use common::{init_repo, spec};
 use dots_core::model::WorkspaceMode;
+use dots_core::store::Store;
 use dots_core::{Config, Error, Runtime};
 use tempfile::TempDir;
 
@@ -122,4 +123,39 @@ async fn update_blank_workdir_refused() {
         Err(Error::Invalid(m)) => assert_eq!(m, "workdir must not be empty"),
         other => panic!("expected invalid, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn stored_worktree_dot_without_repo_keeps_other_fields_editable() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("data");
+    let plain = dir.path().join("plain");
+    std::fs::create_dir_all(&plain).unwrap();
+    let dot = {
+        let store = Store::open(&data.join("dots.db")).await.unwrap();
+        let mut s = spec("Gone");
+        s.workdir = plain.to_string_lossy().to_string();
+        s.workspace_mode = WorkspaceMode::Worktree;
+        store.create_dot(&s, None, "default").await.unwrap()
+    };
+    let mut cfg = Config::new(data);
+    cfg.port = 0;
+    cfg.claude_path = Some(PathBuf::from(env!("CARGO_BIN_EXE_fake-claude")));
+    let rt = Runtime::start(cfg).await.unwrap();
+
+    let mut edited = dot.spec.clone();
+    edited.instructions = "Do something else.".into();
+    let saved = rt.update_dot(&dot.id, edited).await.unwrap();
+    assert_eq!(saved.spec.instructions, "Do something else.");
+    assert_eq!(saved.spec.workspace_mode, WorkspaceMode::Worktree);
+
+    let other = dir.path().join("other");
+    std::fs::create_dir_all(&other).unwrap();
+    let mut moved = saved.spec.clone();
+    moved.workdir = other.to_string_lossy().to_string();
+    match rt.update_dot(&dot.id, moved).await {
+        Err(Error::Invalid(m)) => assert_eq!(m, REFUSAL),
+        other => panic!("expected refusal, got {other:?}"),
+    }
+    rt.shutdown();
 }

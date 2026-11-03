@@ -267,7 +267,7 @@ export function DotForm(props: {
           label="Folder"
           htmlFor="dot-workdir"
           error={errors.workdir}
-          hint="Leave blank and Dots makes a new folder for this dot."
+          hint={props.existing ? undefined : "Leave blank and Dots makes a new folder for this dot."}
         >
           <div className="flex gap-2">
             <Input

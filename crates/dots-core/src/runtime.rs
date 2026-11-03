@@ -1336,7 +1336,10 @@ impl Runtime {
         if spec.variables != old.spec.variables {
             self.require_dot(&old, Permission::GrantEntries).await?;
         }
+        // Only a change to the mode or the folder is refused: a stored dot whose repository
+        // has gone can still have its other fields edited.
         if spec.workspace_mode == WorkspaceMode::Worktree
+            && (spec.workspace_mode != old.spec.workspace_mode || spec.workdir != old.spec.workdir)
             && !spec.workdir.trim().is_empty()
             && !is_git_repo(Path::new(spec.workdir.trim())).await
         {

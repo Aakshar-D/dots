@@ -49,10 +49,11 @@ describe("dot editor rules", () => {
   });
 
   it("checks the name the way the core does", () => {
-    for (const name of ["", "has space", "ünï", "x".repeat(65)]) {
+    const bad = ["", " lead", "trail ", "two  spaces", "has/slash", "Résumé", "ünï", "x".repeat(65)];
+    for (const name of bad) {
       expect(specErrors({ ...good, name }).name, name).toBeDefined();
     }
-    for (const name of ["a", "nightly-tests_2", "x".repeat(64)]) {
+    for (const name of ["a", "has space", "v1.2 bot", "nightly-tests_2", "x".repeat(64)]) {
       expect(specErrors({ ...good, name }).name, name).toBeUndefined();
     }
   });
