@@ -492,6 +492,17 @@ fn follow_ups() -> Vec<FollowUp> {
     ]
 }
 
+fn schedule_skip() -> ScheduleSkip {
+    ScheduleSkip {
+        id: "01J0SKIP".into(),
+        dot_id: "01J0DOT".into(),
+        slot_at: "2026-10-09T11:00:00Z".into(),
+        reason: "busy".into(),
+        run_id: Some("01J0RUN".into()),
+        created_at: "2026-10-09T11:00:01Z".into(),
+    }
+}
+
 fn run() -> Run {
     Run {
         id: "01J0RUN".into(),
@@ -1101,7 +1112,7 @@ pub fn samples() -> Value {
                     run_id: "01J0RUN0".into(),
                     error: Some("model server unreachable".into()),
                 }),
-                last_skipped_at: Some("2026-10-09T12:00:00+01:00".into()),
+                last_skipped_at: Some("2026-10-09T11:00:00Z".into()),
                 skipped_since_run: 2,
             }),
             needs_you: 0,
@@ -1252,6 +1263,7 @@ pub fn samples() -> Value {
         }),
     });
     // Past the `json!` macro's recursion limit, so added here.
+    samples["ScheduleSkip"] = to(schedule_skip());
     samples["ContextDocuments"] = to(context_documents());
     samples["Message"] = to(messages());
     samples["FollowUp"] = to(follow_ups());
@@ -1280,6 +1292,10 @@ pub fn samples() -> Value {
             }),
             to(RuntimeEvent::FollowUpsUpdated {
                 dot_id: "01J0DOT".into(),
+            }),
+            to(RuntimeEvent::ScheduleSkipped {
+                dot_id: "01J0DOT".into(),
+                skip: schedule_skip(),
             }),
             to(RuntimeEvent::DotSeen {
                 dot_id: "01J0DOT".into(),

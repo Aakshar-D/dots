@@ -595,6 +595,23 @@ mod tests {
     }
 
     #[test]
+    fn a_skipped_slot_notifies_nobody() {
+        let mut n = Notifier::default();
+        let ev = RuntimeEvent::ScheduleSkipped {
+            dot_id: "d".into(),
+            skip: dots_core::model::ScheduleSkip {
+                id: "s".into(),
+                dot_id: "d".into(),
+                slot_at: "2026-10-09T12:00:00Z".into(),
+                reason: "busy".into(),
+                run_id: Some("r".into()),
+                created_at: "2026-10-09T12:00:01Z".into(),
+            },
+        };
+        assert_eq!(n.decide(&ev), None);
+    }
+
+    #[test]
     fn a_library_update_does_not_notify_but_may_change_the_inbox() {
         let mut n = Notifier::default();
         let ev = RuntimeEvent::LibraryUpdated {
