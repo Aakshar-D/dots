@@ -11,7 +11,7 @@ use dots_core::engine::claude::args::{
 use dots_core::engine::claude::parse::parse_line;
 use dots_core::engine::{EngineEvent, RunContext};
 use dots_core::model::WorkspaceMode;
-use dots_core::policy::{Policy, Preset};
+use dots_core::policy::{Action, Policy, Preset, Rule, PLUMBING_TOOLS};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
@@ -165,7 +165,9 @@ fn argv_contains_required_flags_in_order() {
          --strict-mcp-config --setting-sources  --allowedTools Read LS Glob Grep Skill \
          mcp__dots__notify mcp__dots__ask mcp__dots__follow_up mcp__dots__remember \
          mcp__dots__forget mcp__dots__recall mcp__dots__propose_app mcp__dots__copy_app \
-         --disallowedTools Write Edit NotebookEdit Bash PowerShell"
+         TodoWrite Task Agent ExitPlanMode EnterPlanMode ToolSearch ListMcpResourcesTool \
+         ReadMcpResourceTool BashOutput KillShell KillBash \
+         --disallowedTools Write Edit NotebookEdit Bash PowerShell --settings "
         ),
         "{joined}"
     );
@@ -176,6 +178,46 @@ fn argv_contains_required_flags_in_order() {
         !args.contains(&"p".to_string()),
         "prompt must not be in argv"
     );
+}
+
+#[test]
+fn argv_asks_for_private_folders_and_never_for_plumbing() {
+    let mut c = ctx(None);
+    c.dot.spec.policy = Policy::preset(Preset::Trusted);
+    c.dot.spec.policy.rules.push(Rule::new("TodoWrite", Action::Deny));
+    let args = build_args(&c, Path::new("m.json"));
+    let allowed: Vec<&String> = args
+        .iter()
+        .skip_while(|a| *a != "--allowedTools")
+        .skip(1)
+        .take_while(|a| !a.starts_with("--"))
+        .collect();
+    for tool in PLUMBING_TOOLS.iter().filter(|t| **t != "TodoWrite") {
+        assert!(allowed.iter().any(|a| a == tool), "{tool} in {allowed:?}");
+    }
+    // A denied plumbing tool is not also allowed.
+    assert!(!allowed.iter().any(|a| *a == "TodoWrite"));
+    let i = args.iter().position(|a| a == "--settings").expect("--settings");
+    let settings: serde_json::Value = serde_json::from_str(&args[i + 1]).unwrap();
+    let ask: Vec<&str> = settings["permissions"]["ask"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    for rule in [
+        "Read(//**/.ssh/**)",
+        "Edit(//**/.env)",
+        "Edit(//**/.aws/**)",
+        "Read(//**/.env.*)",
+        "Bash(*.ssh*)",
+        "PowerShell(*.npmrc*)",
+    ] {
+        assert!(ask.contains(&rule), "{rule} in {ask:?}");
+    }
+    // The settings come with user settings too.
+    c.dot.spec.use_user_settings = true;
+    assert!(build_args(&c, Path::new("m.json")).contains(&"--settings".to_string()));
 }
 
 #[test]

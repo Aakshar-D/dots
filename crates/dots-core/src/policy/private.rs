@@ -328,7 +328,8 @@ pub fn cli_private_ask_rules() -> Vec<String> {
         .collect();
     paths.extend(vault_tails.iter().cloned());
     let mut rules = Vec::new();
-    for tool in ["Read", "Edit", "Write"] {
+    // The CLI reads `Edit` rules for every file-editing tool and ignores `Write` ones.
+    for tool in ["Read", "Edit"] {
         for p in &paths {
             rules.push(format!("{tool}(//**/{p})"));
             if !p.starts_with(".env") {

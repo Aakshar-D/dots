@@ -46,7 +46,7 @@ Three small guards around approvals:
 
 ### 3.4 The Claude CLI
 
-The CLI allows a call that matches `--allowedTools` itself, without asking Dots (a preset's bare `Read` would read `~/.ssh/id_rsa`). So every Claude run also gets `--settings {"permissions":{"ask":[...]}}` with ask rules for the private places: for each file tool `Tool(//**/<place>)` and `Tool(//**/<place>/**)` (and the vault's absolute path), for `Bash` and `PowerShell` `Tool(*<place>*)`. An ask rule beats an allow rule in the CLI (probed on CLI 2.1.317: `--allowedTools Read` plus `ask: ["Read(//**/.env)"]` sends the call to the permission prompt; without it the file is read). The CLI then asks Dots' `approve` tool, and §3.3 decides. These rules are broad (a command that mentions `.env` in any way goes to Dots); Dots' own matching is the precise one.
+The CLI allows a call that matches `--allowedTools` itself, without asking Dots (a preset's bare `Read` would read `~/.ssh/id_rsa`). So every Claude run also gets `--settings {"permissions":{"ask":[...]}}` with ask rules for the private places: for `Read` and `Edit` (the CLI applies `Edit` rules to every editing tool and ignores `Write` ones) `Tool(//**/<place>)` and `Tool(//**/<place>/**)` (and the vault as `<data folder name>/vault`), for `Bash` and `PowerShell` `Tool(*<place>*)`. An ask rule beats an allow rule in the CLI (probed on CLI 2.1.317: `--allowedTools Read` plus `ask: ["Read(//**/.env)"]` sends the call to the permission prompt; without it the file is read). The CLI then asks Dots' `approve` tool, and §3.3 decides. These rules are broad (a command that mentions `.env` in any way goes to Dots); Dots' own matching is the precise one.
 
 ## 4. The "Always allowed" list
 

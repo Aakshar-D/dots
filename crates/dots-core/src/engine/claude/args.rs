@@ -5,6 +5,7 @@ use serde_json::{json, Value};
 use crate::checkins::Tool;
 use crate::engine::RunContext;
 use crate::model::EngineKind;
+use crate::policy::{cli_private_ask_rules, PLUMBING_TOOLS};
 
 pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
     let spec = &ctx.dot.spec;
@@ -75,6 +76,14 @@ pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
     if ctx.tools.instructions() {
         allow.push(crate::instructions::model_name(EngineKind::Claude).to_string());
     }
+    // The model's plumbing tools never ask (approval guards spec section 5), unless a deny
+    // rule names one: that one stays in `--disallowedTools` alone.
+    allow.extend(
+        PLUMBING_TOOLS
+            .iter()
+            .filter(|t| !deny.iter().any(|d| d == *t))
+            .map(|t| t.to_string()),
+    );
     if !allow.is_empty() {
         a.push("--allowedTools".into());
         a.extend(allow);
@@ -83,6 +92,12 @@ pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
         a.push("--disallowedTools".into());
         a.extend(deny);
     }
+    // The CLI allows a call that matches `--allowedTools` without asking Dots, so the private
+    // folders get ask rules of the CLI's own: an ask rule beats an allow rule there, and the
+    // CLI then asks `approve`, where `Policy::resolve_in` decides (approval guards spec
+    // section 3.4).
+    a.push("--settings".into());
+    a.push(json!({ "permissions": { "ask": cli_private_ask_rules() } }).to_string());
     for dir in ctx.tools.plugin_dirs() {
         a.push("--plugin-dir".into());
         a.push(dir.to_string_lossy().to_string());
