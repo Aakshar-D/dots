@@ -263,3 +263,54 @@ async fn without_a_home_folder_nothing_is_found() {
     let rt = Runtime::start(cfg).await.unwrap();
     assert!(rt.scan_claude_agents().await.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn a_path_given_twice_is_imported_once() {
+    let rt = start().await;
+    let a = rt.user_agent("a.md", &agent("a", "", "One."));
+    let path = a.to_string_lossy().into_owned();
+    let done = rt
+        .rt
+        .import_claude_agents(vec![path.clone(), path], None, None)
+        .await
+        .unwrap();
+    assert_eq!(done.created.len(), 1);
+    assert!(done.failed.is_empty(), "{:?}", done.failed);
+}
+
+#[tokio::test]
+async fn imports_at_the_same_time_never_pick_the_same_name() {
+    let rt = start().await;
+    let a = rt.user_agent("a.md", &agent("helper", "", "One."));
+    let paths = vec![a.to_string_lossy().into_owned()];
+    let (one, two, three) = tokio::join!(
+        rt.rt.import_claude_agents(paths.clone(), None, None),
+        rt.rt.import_claude_agents(paths.clone(), None, None),
+        rt.rt.import_claude_agents(paths, None, None),
+    );
+    let mut names: Vec<String> = [one, two, three]
+        .into_iter()
+        .flat_map(|r| r.unwrap().created)
+        .map(|d| d.spec.name)
+        .collect();
+    names.sort();
+    assert_eq!(names, ["helper", "helper-2", "helper-3"]);
+}
+
+#[tokio::test]
+async fn only_projects_of_the_workspace_in_view_are_scanned() {
+    let rt = start().await;
+    let ops = rt.rt.personal_workspace_add("Ops").await.unwrap();
+    let project_dir = rt.dir.path().join("ops-project");
+    let tester = under(&project_dir, ".claude/agents/tester.md");
+    write(&tester, &agent("tester", "", "Test."));
+    let mut elsewhere = spec("in-ops");
+    elsewhere.workdir = project_dir.to_string_lossy().into_owned();
+    rt.rt
+        .create_dot(elsewhere, None, Some(ops.id.clone()))
+        .await
+        .unwrap();
+    assert!(rt.scan().await.is_empty());
+    rt.rt.set_current_scope("personal", &ops.id).await.unwrap();
+    assert_eq!(rt.scan().await.len(), 1);
+}

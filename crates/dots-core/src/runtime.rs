@@ -157,6 +157,8 @@ pub struct Runtime {
     limits: Arc<crate::limits::Limits>,
     /// Where Claude Code's agents are looked for (`Config::claude_home`).
     claude_home: Option<PathBuf>,
+    /// Makes agent imports run one at a time (`import_claude_agents`).
+    import_lock: Mutex<()>,
     shutdown: CancellationToken,
 }
 
@@ -493,6 +495,7 @@ impl Runtime {
             org_timers,
             limits,
             claude_home: cfg.claude_home.clone(),
+            import_lock: Mutex::new(()),
             shutdown,
         })
     }
@@ -1096,14 +1099,23 @@ impl Runtime {
         Ok(dot)
     }
 
-    /// The folders an agent scan reads: the home folder's agents, each dot's workdir, and each
-    /// installed Claude Code plugin (import agents spec section 3).
-    fn agent_sources(&self, dots: &[Dot]) -> crate::claude_agents::AgentSources {
+    /// The folders an agent scan reads: the home folder's agents, the workdir of each dot in the
+    /// account and workspace in view (`scope`), and each installed Claude Code plugin (import
+    /// agents spec section 3).
+    fn agent_sources(
+        &self,
+        dots: &[Dot],
+        scope: &crate::accounts::CurrentScope,
+    ) -> crate::claude_agents::AgentSources {
         let Some(home) = &self.claude_home else {
             return Default::default();
         };
         let mut projects: Vec<(PathBuf, crate::model::WorkspaceMode)> = Vec::new();
-        for dot in dots {
+        let in_view = |dot: &&Dot| {
+            dot.org_id.as_deref().unwrap_or(crate::accounts::PERSONAL) == scope.account
+                && dot.workspace_id == scope.workspace
+        };
+        for dot in dots.iter().filter(in_view) {
             let dir = PathBuf::from(&dot.spec.workdir);
             if dot.spec.workdir.trim().is_empty() || projects.iter().any(|(p, _)| *p == dir) {
                 continue;
@@ -1130,7 +1142,8 @@ impl Runtime {
     async fn agent_scan(&self) -> Result<(Vec<crate::claude_agents::Found>, Vec<String>)> {
         let dots = self.store.list_dots().await?;
         let names: Vec<String> = dots.iter().map(|d| d.spec.name.clone()).collect();
-        let sources = self.agent_sources(&dots);
+        let scope = self.current_scope().await?;
+        let sources = self.agent_sources(&dots, &scope);
         let found =
             tokio::task::spawn_blocking(move || crate::claude_agents::scan(&sources, &names))
                 .await
@@ -1151,8 +1164,11 @@ impl Runtime {
 
     /// Makes a dot of each agent file in `paths`, in the account `org_id` and workspace
     /// `workspace_id` as `create_dot` does. Only a file a fresh scan finds and can read is
-    /// imported, as it reads now; a taken name gets a number. An agent that fails is named in
-    /// `failed` and the others go on.
+    /// imported, as it reads now, and a path given twice once; a taken name gets a number. An
+    /// agent that fails is named in `failed` and the others go on. Imports run one at a time
+    /// and read the dots' names when they start, so two never pick the same name; a dot made
+    /// meanwhile under that name (the store refuses a second) moves the import on to the next
+    /// number.
     pub async fn import_claude_agents(
         &self,
         paths: Vec<String>,
@@ -1166,6 +1182,7 @@ impl Runtime {
         self.check_workspace(org_id.as_deref(), &workspace).await?;
         self.require_in(org_id.as_deref(), &workspace, Permission::EditDots)
             .await?;
+        let _one_at_a_time = self.import_lock.lock().await;
         let (found, names) = self.agent_scan().await?;
         let mut taken: std::collections::BTreeSet<String> =
             names.iter().map(|n| n.to_lowercase()).collect();
@@ -1173,7 +1190,11 @@ impl Runtime {
             created: Vec::new(),
             failed: Vec::new(),
         };
+        let mut given = std::collections::BTreeSet::new();
         for path in paths {
+            if !given.insert(path.clone()) {
+                continue;
+            }
             let fail = |reason: String| ImportFailure {
                 path: path.clone(),
                 reason,
@@ -1189,23 +1210,34 @@ impl Runtime {
                 done.failed.push(fail(reason));
                 continue;
             };
-            let name = free_name(&item.listed.name, &mut taken);
-            let (workdir, mode) = match &item.project {
-                Some((dir, mode)) => (dir.clone(), *mode),
-                None => {
-                    let dir = self.data_dir.join("agents").join(&name);
-                    if let Err(e) = std::fs::create_dir_all(&dir) {
-                        done.failed.push(fail(e.to_string()));
-                        continue;
+            // A few names in turn, for a dot made under the picked one meanwhile.
+            let mut outcome = Err(Error::Other("no name was free".into()));
+            for _ in 0..5 {
+                let name = free_name(&item.listed.name, &mut taken);
+                let (workdir, mode, made) = match &item.project {
+                    Some((dir, mode)) => (dir.clone(), *mode, false),
+                    None => {
+                        let dir = self.data_dir.join("agents").join(&name);
+                        let made = !dir.exists();
+                        if let Err(e) = std::fs::create_dir_all(&dir) {
+                            outcome = Err(e.into());
+                            break;
+                        }
+                        (dir, crate::model::WorkspaceMode::Folder, made)
                     }
-                    (dir, crate::model::WorkspaceMode::Folder)
+                };
+                let spec = agent_spec(agent, &name, &workdir.to_string_lossy(), mode);
+                outcome = self
+                    .create_dot(spec, org_id.clone(), workspace_id.clone())
+                    .await;
+                if outcome.is_err() && made {
+                    let _ = std::fs::remove_dir(&workdir);
                 }
-            };
-            let spec = agent_spec(agent, &name, &workdir.to_string_lossy(), mode);
-            match self
-                .create_dot(spec, org_id.clone(), workspace_id.clone())
-                .await
-            {
+                if !matches!(outcome, Err(Error::Conflict(_))) {
+                    break;
+                }
+            }
+            match outcome {
                 Ok(dot) => done.created.push(dot),
                 Err(e) => done.failed.push(fail(e.to_string())),
             }
