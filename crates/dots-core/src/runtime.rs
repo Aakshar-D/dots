@@ -19,6 +19,7 @@ use crate::engine::local::{self, LocalEngine};
 use crate::engine::{Engine, UnavailableEngine};
 use crate::events::{new_bus, Bus, RuntimeEvent};
 use crate::followups::FollowUps;
+use crate::library::LibraryKind;
 use crate::library_service::LibraryService;
 use crate::model::{
     Approval, AttentionRun, ClaudeStatus, Dot, DotOverview, DotSpec, EngineKind, Inbox,
@@ -31,6 +32,10 @@ use crate::schedule::{upcoming, Schedule};
 use crate::scheduler::{Clock, Scheduler, SystemClock};
 use crate::server::{self, ServerState};
 use crate::settings::Settings;
+use crate::setup::{
+    check_proposal, setup_policy, SetupAnswer, SetupApplied, SetupContext, SetupDrafts,
+    SetupLibrary, SetupProposal, SetupRequest,
+};
 use crate::skill_creator::SkillDrafts;
 use crate::store::Store;
 use crate::vault::org::{
@@ -164,6 +169,11 @@ pub struct Runtime {
     library: LibraryService,
     vault: Vault,
     skill_drafts: SkillDrafts,
+    /// The setup agent's requests (setup agent spec §9).
+    setup_drafts: SetupDrafts,
+    /// Makes `setup_apply` check a name and create its dot in one step, so a second press of
+    /// Run setup meets the first one's dot instead of making a second.
+    setup_lock: Mutex<()>,
     clock: Arc<dyn Clock>,
     port: u16,
     server_error: Option<String>,
@@ -514,6 +524,14 @@ impl Runtime {
                 cfg.draft_limit,
                 shutdown.clone(),
             ),
+            setup_drafts: SetupDrafts::new(
+                claude_program.clone(),
+                cfg.claude_env.clone(),
+                cfg.data_dir.join(DRAFTS_DIR),
+                cfg.draft_limit,
+                shutdown.clone(),
+            ),
+            setup_lock: Mutex::new(()),
             claude_program,
             claude_version,
             data_dir: cfg.data_dir.clone(),
@@ -991,6 +1009,127 @@ impl Runtime {
     /// creator spec §5).
     pub fn skill_drafts(&self) -> &SkillDrafts {
         &self.skill_drafts
+    }
+
+    /// What the setup agent is told besides the request (setup agent spec §6): today, the
+    /// local UTC offset, the home folder, where new dots get their folder, the Library (without
+    /// the MCP servers a plugin brings, as the editor lists it) and the existing dots' names.
+    pub async fn setup_context(&self) -> Result<SetupContext> {
+        let now = Local::now();
+        let home = ["USERPROFILE", "HOME"]
+            .iter()
+            .filter_map(std::env::var_os)
+            .find(|h| !h.is_empty())
+            .map(|h| h.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let mut library = SetupLibrary::default();
+        for entry in self.library.list().await? {
+            let item = &entry.item;
+            if item.owner_id.is_some() {
+                continue;
+            }
+            let name = item.name.clone();
+            match item.kind() {
+                LibraryKind::Skill => {
+                    let description = entry
+                        .skill
+                        .as_ref()
+                        .map(|s| s.description.clone())
+                        .unwrap_or_default();
+                    library.skills.push((name, description));
+                }
+                LibraryKind::McpServer => library.mcp_servers.push(name),
+                LibraryKind::Plugin => library.plugins.push(name),
+                LibraryKind::Context => library.context.push(name),
+                LibraryKind::App => {}
+            }
+        }
+        let dot_names = self
+            .store
+            .list_dots()
+            .await?
+            .into_iter()
+            .map(|d| d.spec.name)
+            .collect();
+        Ok(SetupContext {
+            today: now.format("%Y-%m-%d (%A)").to_string(),
+            utc_offset: now.format("%:z").to_string(),
+            home,
+            new_dot_root: self.new_dot_root.to_string_lossy().into_owned(),
+            library,
+            dot_names,
+        })
+    }
+
+    /// Asks the setup agent for the setup `id` (`setup_ask`, setup agent spec §6): its
+    /// questions, or a checked proposal. A newer request of the same id cancels the one before;
+    /// other ids are left alone. It is the person's own action: never queued, never held.
+    pub async fn setup_ask(&self, id: &str, req: SetupRequest) -> Result<SetupAnswer> {
+        let ctx = self.setup_context().await?;
+        self.setup_drafts.ask(id, &ctx, &req).await
+    }
+
+    /// Cancels the setup's request, if one is being answered (`setup_cancel`).
+    pub fn setup_cancel(&self, id: &str) {
+        self.setup_drafts.cancel(id);
+    }
+
+    /// Creates the proposed dot and starts its first chat (`setup_apply`, setup agent spec
+    /// §9). The proposal is checked again, with a name clash a `Conflict`; a folder it names
+    /// must be a folder on this PC (`Invalid`), and no folder gets a new default one, which a
+    /// failed create removes again. The dot works in a worktree inside git and in the folder
+    /// itself outside it. When the first chat cannot start, the dot stays and `run_error`
+    /// says why.
+    pub async fn setup_apply(
+        &self,
+        p: SetupProposal,
+        org: Option<String>,
+        workspace: Option<String>,
+    ) -> Result<SetupApplied> {
+        // Held until the dot is stored: a second Run setup meets its name.
+        let one_at_a_time = self.setup_lock.lock().await;
+        let ctx = self.setup_context().await?;
+        let named = p
+            .folder
+            .as_deref()
+            .map(str::trim)
+            .filter(|f| !f.is_empty())
+            .map(str::to_string);
+        let p = check_proposal(p, &ctx, false)?;
+        let (workdir, mode) = match (&named, p.folder.as_deref()) {
+            (None, _) => (String::new(), WorkspaceMode::Folder),
+            (Some(_), Some(checked)) if Path::new(checked).is_dir() => {
+                let mode = if is_git_repo(Path::new(checked)).await {
+                    WorkspaceMode::Worktree
+                } else {
+                    WorkspaceMode::Folder
+                };
+                (checked.to_string(), mode)
+            }
+            (Some(folder), _) => {
+                return Err(Error::Invalid(format!(
+                    "{folder} is not a folder on this PC."
+                )))
+            }
+        };
+        let mut spec = DotSpec::new(&p.name, &p.instructions, &workdir);
+        spec.workspace_mode = mode;
+        spec.schedule = p.schedule.clone();
+        spec.policy = setup_policy(p.preset, &p.extras);
+        spec.uses = p.uses.clone();
+        // A blank workdir gets the default folder in `create_dot`, which removes it again
+        // when the create fails.
+        let dot = self.create_dot(spec, org, workspace).await?;
+        drop(one_at_a_time);
+        let (run_id, run_error) = match self.chat(&dot.id, &p.first_message, None).await {
+            Ok(run) => (Some(run.id), None),
+            Err(e) => (None, Some(e.to_string())),
+        };
+        Ok(SetupApplied {
+            dot,
+            run_id,
+            run_error,
+        })
     }
 
     /// The dots' notes and questions: what the `message_*` commands call (check-ins spec

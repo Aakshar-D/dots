@@ -31,7 +31,7 @@ async fn start() -> T {
 }
 
 fn same(a: &str, b: &std::path::Path) -> bool {
-    PathBuf::from(a) == b
+    std::path::Path::new(a) == b
 }
 
 #[tokio::test]

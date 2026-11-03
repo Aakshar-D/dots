@@ -2,17 +2,22 @@
 //! person's description into one dot, the check of its answer, and the extras a proposal may
 //! add to its preset.
 
-use std::collections::BTreeSet;
-use std::path::Path;
+use std::collections::{BTreeSet, HashMap};
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::Duration;
 
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use tokio_util::sync::CancellationToken;
 
+use crate::engine::claude::once::{ask_once, Once, OnceFailure};
 use crate::library::{check_name, LibraryKind, Uses};
+use crate::model::Dot;
 use crate::policy::{Action, Policy, Preset, Rule};
 use crate::schedule::Schedule;
-use crate::skill_creator::{unwrap_fence, MAX_REQUEST_CHARS};
+use crate::skill_creator::{unwrap_fence, DEFAULT_MODEL, MAX_REQUEST_CHARS};
 use crate::{Error, Result};
 
 /// The system prompt of the setup agent (spec §6, §6.1, §6.3).
@@ -627,4 +632,127 @@ pub fn setup_policy(preset: Preset, extras: &[String]) -> Policy {
         policy.preset = Preset::Custom;
     }
     policy
+}
+
+/// What `Runtime::setup_apply` made: the dot, and its first chat run or why that did not start
+/// (spec §9: the dot stays when its first run cannot start).
+#[derive(Debug, Clone, Serialize)]
+pub struct SetupApplied {
+    pub dot: Dot,
+    pub run_id: Option<String>,
+    pub run_error: Option<String>,
+}
+
+/// The setup requests being answered, at most one per setup view (spec §9). The same runner as
+/// the skill creator's drafts (`SkillDrafts`): one `claude -p` call with no tools, in an empty
+/// folder of its own, ended by `cancel`, a newer request of the same view, or the time limit.
+/// It is the person's own action, so it never waits in the run queue nor for a usage-limit
+/// hold.
+pub struct SetupDrafts {
+    program: Option<PathBuf>,
+    env: Vec<(String, String)>,
+    /// Each request's CLI starts in a new empty folder in here.
+    dir: PathBuf,
+    limit: Duration,
+    shutdown: CancellationToken,
+    /// By setup id: a number for the request, and what cancels it.
+    running: Mutex<HashMap<String, (u64, CancellationToken)>>,
+    next: Mutex<u64>,
+}
+
+impl SetupDrafts {
+    /// `program` is the CLI the runtime found, `None` when there is none.
+    pub fn new(
+        program: Option<PathBuf>,
+        env: Vec<(String, String)>,
+        dir: PathBuf,
+        limit: Duration,
+        shutdown: CancellationToken,
+    ) -> SetupDrafts {
+        SetupDrafts {
+            program,
+            env,
+            dir,
+            limit,
+            shutdown,
+            running: Mutex::new(HashMap::new()),
+            next: Mutex::new(0),
+        }
+    }
+
+    /// Asks the agent for the setup `id` (`setup_ask`) and returns its checked answer. A
+    /// request the same setup made before is cancelled first. A request `setup_prompt` refuses
+    /// is `Invalid` before the CLI starts; the CLI's error, `cancel` and the time limit fail it
+    /// with text a person reads.
+    pub async fn ask(
+        &self,
+        id: &str,
+        ctx: &SetupContext,
+        req: &SetupRequest,
+    ) -> Result<SetupAnswer> {
+        let prompt = setup_prompt(ctx, req)?;
+        let Some(program) = self.program.clone() else {
+            return Err(Error::Other(
+                "claude CLI not found: install Claude Code or set its path in Settings".into(),
+            ));
+        };
+        let token = self.shutdown.child_token();
+        let number = {
+            let mut next = self.next.lock().unwrap();
+            *next += 1;
+            *next
+        };
+        let previous = self
+            .running
+            .lock()
+            .unwrap()
+            .insert(id.to_string(), (number, token.clone()));
+        if let Some((_, previous)) = previous {
+            previous.cancel();
+        }
+        let cwd = self.dir.join(crate::util::new_id());
+        let asked = match std::fs::create_dir_all(&cwd) {
+            Ok(()) => {
+                let once = Once {
+                    program: &program,
+                    env: &self.env,
+                    cwd: &cwd,
+                    model: DEFAULT_MODEL,
+                    system_prompt: SETUP_INSTRUCTIONS,
+                    prompt: &prompt,
+                    limit: self.limit,
+                };
+                let asked = ask_once(&once, &token).await;
+                let _ = std::fs::remove_dir_all(&cwd);
+                asked
+            }
+            Err(e) => Err(OnceFailure::Failed(format!(
+                "could not make {}: {e}",
+                cwd.display()
+            ))),
+        };
+        {
+            let mut running = self.running.lock().unwrap();
+            if running.get(id).is_some_and(|(n, _)| *n == number) {
+                running.remove(id);
+            }
+        }
+        match asked {
+            Ok(answer) => check_setup_answer(&answer, ctx, req),
+            Err(OnceFailure::Cancelled) => Err(Error::Other("The setup was cancelled.".into())),
+            Err(OnceFailure::TimedOut) => Err(Error::Other(
+                "Claude took too long to set up the dot.".into(),
+            )),
+            Err(OnceFailure::Failed(e)) => Err(Error::Other(format!(
+                "Claude could not set up the dot: {e}"
+            ))),
+        }
+    }
+
+    /// Cancels the setup's request, if one is being answered (`setup_cancel`).
+    pub fn cancel(&self, id: &str) {
+        if let Some((_, token)) = self.running.lock().unwrap().remove(id) {
+            token.cancel();
+        }
+    }
 }
