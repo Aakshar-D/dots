@@ -620,7 +620,8 @@ pub async fn discard_delivery(state: State<'_, AppState>, run_id: String) -> Res
     Ok(state.rt()?.discard_delivery(&run_id).await?)
 }
 
-/// Today's chat messages to `dot_id`: sent, delivered and not delivered.
+/// Today's sends to `dot_id`, whatever started them (a resume continues a send and is left
+/// out): sent, delivered and not delivered.
 #[tauri::command]
 pub async fn delivery_today(state: State<'_, AppState>, dot_id: String) -> Res<DeliveryCounts> {
     Ok(state.rt()?.delivery_today(&dot_id).await?)

@@ -196,7 +196,8 @@ const runShape = {
 };
 export const Run = z.strictObject(runShape);
 
-/// Today's chat messages to a dot.
+/// Today's sends to a dot, whatever started them (resumes left out): sent, delivered and not
+/// delivered.
 export const DeliveryCounts = z.strictObject({
   sent: z.number().int(),
   delivered: z.number().int(),

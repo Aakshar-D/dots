@@ -18,7 +18,7 @@ Success: a chat message that never reaches the dot shows "Not delivered: <reason
 - **Waiting**: sent, not delivered, not ended.
 - **Overdue**: waiting for more than **5 minutes** since `queued_at`.
 - **Not delivered**: the run ended without ever being delivered (it failed or was cancelled before its engine started), or it has waited **30 minutes**. A run held on purpose for the usage limit never becomes not delivered by waiting (§3.4).
-- **Wait reason**: why a waiting run has not started: `busy` (the concurrency limit is full), `usage_hold` (held for the usage limit), `updating` (the runner is held for an update), `dot_off` (the dot is disabled), `queued` (none of these; just next in line).
+- **Wait reason**: why a waiting run has not started: `busy` (the concurrency limit is full), `usage_hold` (held for the usage limit), `updating` (the runner is held for an update), `dot_busy` (another run of the same dot is active: the dispatcher starts one run per dot), `queued` (none of these; just next in line).
 
 ## 3. Behaviour (decided with the owner)
 
@@ -71,8 +71,8 @@ ALTER TABLE runs ADD COLUMN dismissed_at TEXT;    -- the person retried or disca
 
 ### 4.3 Wait reasons and the 30-minute mark
 
-- **`Runtime::wait_reason(run) -> Option<WaitReason>`** for a queued run: `usage_hold` if the run is held by the usage-limit hold; `updating` if the runner is held; `dot_off` if the dot is disabled; `busy` if the running count is at `max_concurrent_runs`; else `queued`. Exposed on `Run` as `wait_reason: Option<String>` when the run is queued *(builder: computed when runs are read for the UI; it may be momentarily stale)*.
-- **A delivery sweeper** (a small task in the runtime, every 30 seconds, using the scheduler's `Clock` so tests can drive it): for each queued, undelivered, not-dismissed run with `queued_at` older than 30 minutes and wait reason not `usage_hold`, `mark_undelivered(reason = <wait reason text>)` and emit `RunUpdated`. *(The 5-minute heads-up needs no core state: the UI computes it from `queued_at`.)*
+- **`Runtime::wait_reason(run) -> Option<WaitReason>`** for a queued run: `usage_hold` if the run is held by the usage-limit hold; `updating` if the runner is held; `dot_busy` if another run of the same dot (not of a workflow step) is active in the runner; `busy` if the runner's slots in use are at `max_concurrent_runs`; else `queued`. Exposed on `Run` as `wait_reason: Option<String>` when the run is queued *(builder: computed when runs are read for the UI; it may be momentarily stale)*.
+- **A delivery sweeper** (a small task in the runtime, every 30 seconds, using the scheduler's `Clock` so tests can drive it): for each queued, undelivered, not-dismissed run with `queued_at` older than 30 minutes, wait reason not `usage_hold` and not held for a member's role (members spec §6.3), `mark_undelivered(reason = <wait reason text>)` (which marks only a run still `queued`) and emit `RunUpdated`. *(The 5-minute heads-up needs no core state: the UI computes it from `queued_at`.)*
 
 ### 4.4 Retry and Discard
 
@@ -94,7 +94,7 @@ ALTER TABLE runs ADD COLUMN dismissed_at TEXT;    -- the person retried or disca
 ## 6. UI
 
 - **On a chat message / run card** (wherever a run's live state shows in the conversation and on the run view):
-  - waiting ≥ 5 min: muted **"Waiting `<n>` min · `<reason>`"**, reason texts: `busy` → "other runs are busy", `usage_hold` → "held for the usage limit", `updating` → "Dots is updating", `dot_off` → "this dot is turned off", `queued` → "next in line";
+  - waiting ≥ 5 min: muted **"Waiting `<n>` min · `<reason>`"**, reason texts: `busy` → "other runs are busy", `usage_hold` → "held for the usage limit", `updating` → "Dots is updating", `dot_busy` → "this dot is busy with another run", `queued` → "next in line";
   - not delivered (and not dismissed): **"Not delivered: `<reason>`"** in the warning colour, with **Retry** and **Discard** buttons; errors from either show next to them;
   - dismissed: a muted "Not delivered" with no buttons.
 - **Dot header menu**: a line **"Today: `<s>` sent · `<d>` delivered · `<u>` not delivered"** (refreshes on `run_updated` for that dot).
