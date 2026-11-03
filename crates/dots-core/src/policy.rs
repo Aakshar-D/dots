@@ -14,6 +14,13 @@ use serde_json::Value;
 use crate::library::{check_name, LibraryKind};
 use crate::{Error, Result};
 
+mod private;
+
+pub use private::{
+    cli_private_ask_rules, pattern_touches_private, register_vault, touches_private,
+    PRIVATE_REFUSAL,
+};
+
 str_enum!(Action { Allow => "allow", Ask => "ask", Deny => "deny" });
 str_enum!(Preset {
     ReadOnly => "read-only",

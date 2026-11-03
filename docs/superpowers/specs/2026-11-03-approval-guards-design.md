@@ -30,7 +30,7 @@ Three small guards around approvals:
 ### 3.2 Matching
 
 - Case-insensitive on every system (fails closed on Linux and macOS, where the folders are lower-case anyway). `/` and `\` are the same.
-- `~`, `%NAME%`, `$NAME`, `${NAME}` and `$env:NAME` are expanded from the environment before matching.
+- `~` and the folder variables (`USERPROFILE`, `HOME`, `APPDATA`, `LOCALAPPDATA`, `DOTS_DATA_DIR`, in their `%NAME%`, `$NAME`, `${NAME}` and `$env:NAME` forms) are expanded from the environment before matching. Other variables are not: `PATH` could name anything.
 - The home-folder entries and the Windows entries match as **path parts anywhere in the path**, not only under the real home folder: `C:\Users\other\.ssh\id_rsa`, `/home/me/.aws/credentials`, `../../.ssh/config` and `project/.npmrc` all count. *My call:* this is simpler than resolving every way of naming the home folder, and a project's own `.npmrc` or `.docker/config.json` holds tokens too. The cost is an extra question for such files, never a missed one.
 - Quotes, backticks and `^` are dropped before matching (`.ss''h` is `.ssh`); trailing dots and spaces of a part are dropped (`.ssh.` is `.ssh` on Windows).
 - A wildcard part that starts with `.` (`.env*`, `.ss?`, `.*`) counts when it could match a private name. A wildcard part that does not start with a dot (`*`, `**`) does not: such patterns skip hidden files in the tools that use them, and treating them as private would make every search ask.
