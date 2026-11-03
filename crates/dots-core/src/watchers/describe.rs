@@ -117,9 +117,45 @@ fn has_paths(payload: &Value) -> bool {
         .is_some_and(|a| a.iter().any(|x| x["path"].is_string()))
 }
 
+/// Said after an opening's body that was cut to fit its share of the budget.
+pub const SHORTENED: &str = "…(shortened)";
+
+/// The most characters each body may keep so that, together, they fit `budget`: `None` when
+/// they fit whole. Every body gets an equal share; a body shorter than its share keeps all of
+/// it, and what it leaves is shared out again among the longer ones.
+fn body_limit(lengths: &[usize], budget: usize) -> Option<usize> {
+    if lengths.iter().sum::<usize>() <= budget {
+        return None;
+    }
+    let mut sorted = lengths.to_vec();
+    sorted.sort_unstable();
+    let mut left = budget;
+    for (i, len) in sorted.iter().enumerate() {
+        let share = left / (sorted.len() - i);
+        if *len > share {
+            return Some(share);
+        }
+        left -= len;
+    }
+    None
+}
+
+/// The body cut to `limit` characters (on a character boundary), and whether it was cut.
+fn cut_body(body: &str, limit: Option<usize>) -> (&str, bool) {
+    match limit.and_then(|n| body.char_indices().nth(n)) {
+        Some((at, _)) => (&body[..at], true),
+        None => (body, false),
+    }
+}
+
 /// An email's or a GitHub event's free text under "Content from outside", with its prefix;
 /// nothing for a folder event or one without text.
 fn outside_text(payload: &Value) -> String {
+    outside_text_within(payload, None)
+}
+
+/// `outside_text`, the body cut to `limit` characters and marked `SHORTENED` when it was longer.
+fn outside_text_within(payload: &Value, limit: Option<usize>) -> String {
     let (prefix, label, heading) = match field(payload, "source") {
         "email" => (EMAIL_PREFIX, "Subject", field(payload, "subject")),
         "github" => (GITHUB_PREFIX, "Title", field(payload, "title")),
@@ -135,8 +171,13 @@ fn outside_text(payload: &Value) -> String {
         out.push_str(&format!("{label}: {heading}\n\n"));
     }
     if !body.is_empty() {
+        let (body, cut) = cut_body(body, limit);
         let fence = "`".repeat((longest_backticks(body) + 1).max(3));
         out.push_str(&format!("{fence}text\n{body}\n{fence}\n\n"));
+        if cut {
+            out.push_str(SHORTENED);
+            out.push_str("\n\n");
+        }
     }
     out
 }
@@ -164,10 +205,18 @@ pub fn section(payload: &Value, now: DateTime<Local>) -> String {
 
 /// An opening run's section: the first line, each event as a single event's lines are, the
 /// run's attachments (named `<event>-<name>`), and the count of the events it does not carry.
+/// The events' bodies together keep to `MAX_OPENING_BODY_CHARS` (shared out by `body_limit`);
+/// each body cut is marked, and every event is still listed.
 fn opening_section(payload: &Value, held: &[Value], watcher: &str, time: &str) -> String {
     let mut out = format!(
         "## Trigger\n\n- kind: watcher\n- watcher: {watcher}\n- time: {time}\n\n{OPENING_LINE}\n\n"
     );
+    let lengths: Vec<usize> = held
+        .iter()
+        .filter(|e| matches!(field(e, "source"), "email" | "github"))
+        .map(|e| field(e, "body").chars().count())
+        .collect();
+    let limit = body_limit(&lengths, super::MAX_OPENING_BODY_CHARS);
     for (i, event) in held.iter().enumerate() {
         let what = trigger_line(event).unwrap_or_else(|| "an event".to_string());
         out.push_str(&format!(
@@ -175,7 +224,7 @@ fn opening_section(payload: &Value, held: &[Value], watcher: &str, time: &str) -
             i + 1,
             event_json(event)
         ));
-        out.push_str(&outside_text(event));
+        out.push_str(&outside_text_within(event, limit));
     }
     if let Some(attachments) = payload["attachments"].as_array().filter(|a| !a.is_empty()) {
         out.push_str(&format!(

@@ -12,8 +12,10 @@ use common::{fake_dot, fake_run};
 use dots_core::model::{EmailConfig, TriggerKind, WatcherConfig, WorkspaceMode};
 use dots_core::prompt::build_prompt;
 use dots_core::watchers::describe::{
-    trigger_line, ATTACHMENTS_NOTE, EMAIL_PREFIX, GITHUB_PREFIX, OPENING_LINE, OUTSIDE_HEADING,
+    section, trigger_line, ATTACHMENTS_NOTE, EMAIL_PREFIX, GITHUB_PREFIX, OPENING_LINE,
+    OUTSIDE_HEADING, SHORTENED,
 };
+use dots_core::watchers::MAX_OPENING_BODY_CHARS;
 use dots_core::watchers::{Failure, Sources};
 use serde_json::{json, Value};
 
@@ -247,4 +249,76 @@ fn an_opening_runs_prompt_lists_the_held_events_and_counts_the_rest() {
     let p = prompt(payload);
     assert!(!p.contains("more."), "{p}");
     assert!(!p.contains(ATTACHMENTS_NOTE), "{p}");
+}
+
+/// The text of every ```text fence in `section`.
+fn fenced_bodies(section: &str) -> Vec<&str> {
+    section
+        .split(
+            "```text
+",
+        )
+        .skip(1)
+        .map(|rest| {
+            rest.split_once(
+                "
+```",
+            )
+            .expect("a closed fence")
+            .0
+        })
+        .collect()
+}
+
+fn opening(bodies: &[String]) -> Value {
+    let held: Vec<Value> = bodies.iter().map(|b| email(b)).collect();
+    json!({
+        "watcher_id": "W2", "watcher_name": "Billing mail", "held": held, "held_more": 0,
+        "held_since": "2026-10-24T08:00:00.000Z", "attachments": [],
+    })
+}
+
+/// Final review I4: an opening's outside text has a total budget. 100 bodies of 20,000
+/// characters each get an equal share; each is cut on a character boundary and marked, and
+/// every event is still listed.
+#[test]
+fn an_openings_outside_text_is_cut_to_its_budget_and_marked() {
+    assert_eq!(MAX_OPENING_BODY_CHARS, 150_000);
+    // Multi-byte characters: a cut on a byte would panic or split one.
+    let bodies: Vec<String> = (0..100).map(|_| "é".repeat(20_000)).collect();
+    let s = section(&opening(&bodies), now());
+    let fenced = fenced_bodies(&s);
+    assert_eq!(fenced.len(), 100);
+    let total: usize = fenced.iter().map(|b| b.chars().count()).sum();
+    assert!(total <= MAX_OPENING_BODY_CHARS, "{total}");
+    assert!(fenced.iter().all(|b| b.chars().count() == 1_500));
+    assert_eq!(s.matches(SHORTENED).count(), 100);
+    assert_eq!(s.matches("### Event ").count(), 100);
+    assert!(s.contains(
+        "### Event 100
+"
+    ));
+}
+
+/// Final review I4: short bodies keep their text and leave their unused share to the long ones.
+#[test]
+fn short_bodies_are_kept_whole_and_leave_their_share_to_the_long_ones() {
+    let mut bodies: Vec<String> = (0..50).map(|i| format!("short {i}")).collect();
+    bodies.extend((0..50).map(|_| "a".repeat(20_000)));
+    let s = section(&opening(&bodies), now());
+    let fenced = fenced_bodies(&s);
+    assert_eq!(fenced.len(), 100);
+    for (i, body) in fenced.iter().take(50).enumerate() {
+        assert_eq!(*body, format!("short {i}"));
+    }
+    let short: usize = bodies[..50].iter().map(|b| b.chars().count()).sum();
+    let share = (MAX_OPENING_BODY_CHARS - short) / 50;
+    assert!(fenced[50..].iter().all(|b| b.chars().count() == share));
+    let total: usize = fenced.iter().map(|b| b.chars().count()).sum();
+    assert!(total <= MAX_OPENING_BODY_CHARS, "{total}");
+    assert_eq!(s.matches(SHORTENED).count(), 50);
+    // Within the budget, nothing is cut.
+    let s = section(&opening(&["a".repeat(20_000), "b".repeat(20_000)]), now());
+    assert!(!s.contains(SHORTENED));
+    assert_eq!(fenced_bodies(&s)[1], "b".repeat(20_000));
 }

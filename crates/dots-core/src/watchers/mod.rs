@@ -46,6 +46,9 @@ pub const GIVE_UP_AFTER: TimeDelta = TimeDelta::minutes(60);
 pub const BACKOFF_MINUTES: [i64; 4] = [1, 2, 5, 10];
 /// The most text of an email body or a GitHub event a run gets.
 pub const MAX_BODY_CHARS: usize = 20_000;
+/// The most outside text (the held events' bodies, together) an opening run's prompt carries:
+/// 100 bodies of `MAX_BODY_CHARS` would not fit the model's context (`describe` shares it out).
+pub const MAX_OPENING_BODY_CHARS: usize = 150_000;
 
 /// The held events an opening run carries in full; only these keep their files (watch hours
 /// spec section 3).

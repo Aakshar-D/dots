@@ -1350,7 +1350,9 @@ pub struct Watcher {
     pub updated_at: String,
     /// Events held for its next opening (the store counts them).
     pub held_count: u32,
-    /// The next opening, RFC 3339 UTC; the store leaves it `None` and the service fills it.
+    /// The next opening, RFC 3339 in local time with its offset (as `2026-10-26T09:00:00+01:00`),
+    /// set only while the watcher is outside its hours; the store leaves it `None` and the
+    /// service fills it.
     pub next_opening: Option<String>,
 }
 
