@@ -135,6 +135,17 @@ describe("runtime events and the query cache", () => {
     for (const key of untouched) expect(stale(qc, key), key.join("/")).toBe(false);
   });
 
+  it("marks the dot's topics, runs and threads stale when its topics change", () => {
+    const qc = createQueryClient();
+    const lists = [keys.topics(sample.dot.id), keys.runs(sample.dot.id), keys.thread("r1")];
+    const untouched = [keys.topics("other"), keys.inbox, keys.overview];
+    for (const key of [...lists, ...untouched]) qc.setQueryData(key, []);
+
+    applyRuntimeEvent(qc, { type: "topics_changed", dot_id: sample.dot.id });
+    for (const key of lists) expect(stale(qc, key), key.join("/")).toBe(true);
+    for (const key of untouched) expect(stale(qc, key), key.join("/")).toBe(false);
+  });
+
   it("marks the dot's proposed instructions and the inbox stale when a proposal changes", () => {
     const qc = createQueryClient();
     const lists = [keys.instructionProposals(sample.dot.id), keys.inbox];

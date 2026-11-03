@@ -10,6 +10,7 @@ const schemas: Record<SampleName, { parse: (v: unknown) => unknown }> = {
   DotSpec: T.DotSpec,
   Schedule: T.Schedule.array(),
   ScheduleSkip: T.ScheduleSkip,
+  TopicInfo: T.TopicInfo,
   NewDotSpec: T.DotSpec,
   Dot: T.Dot,
   Run: T.Run,

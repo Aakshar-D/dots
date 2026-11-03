@@ -71,6 +71,13 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
         invalidate(qc, queryKey);
       }
       break;
+    case "topics_changed":
+      // The dot's topic rows, and its runs and threads: a move or merge changes which topic a
+      // run is in, and no `run_updated` says so.
+      for (const queryKey of [keys.topics(event.dot_id), ["thread"], ["runs"]]) {
+        invalidate(qc, queryKey);
+      }
+      break;
     case "library_updated":
       // The Library lists, the Inbox group of a changed tool list, and what shows the dots that
       // use the item: removing it takes it out of them, and no dot event says so. An app's row,

@@ -327,6 +327,19 @@ export const commands = {
   /// The slots skipped because the dot was busy, newest first (at most 50).
   scheduleSkips: (dotId: string, limit?: number) =>
     call(T.ScheduleSkip.array(), "schedule_skips", { dotId, limit }),
+  /// The rows of the dot's topics: names and archive marks (topic tools spec section 5).
+  listTopics: (dotId: string) => call(T.TopicInfo.array(), "list_topics", { dotId }),
+  /// Names a topic by its root run; null or blank clears the name.
+  renameTopic: (rootRunId: string, title: string | null) =>
+    call(T.TopicInfo, "rename_topic", { rootRunId, title }),
+  setTopicArchived: (rootRunId: string, archived: boolean) =>
+    call(T.TopicInfo, "set_topic_archived", { rootRunId, archived }),
+  /// Moves a run and its replies to another topic of its dot, or to a new topic (null); the
+  /// root of the topic it is now in. Refusals come in words to show as they are.
+  moveRun: (runId: string, toRootRunId: string | null) =>
+    call(z.string(), "move_run", { runId, toRootRunId }),
+  mergeTopics: (fromRootRunId: string, intoRootRunId: string) =>
+    call(nothing, "merge_topics", { fromRootRunId, intoRootRunId }),
   /// Rejects with kind `conflict` once the follow-up fired, was skipped or was cancelled.
   followUpCancel: (id: string) => call(T.FollowUp, "follow_up_cancel", { id }),
 
