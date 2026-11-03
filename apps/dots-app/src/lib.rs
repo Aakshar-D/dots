@@ -36,6 +36,8 @@ macro_rules! command_list {
 command_list![
     startup_error,
     status,
+    problem_report,
+    save_problem_report,
     mark_claude_tested,
     get_settings,
     chatgpt_account,
