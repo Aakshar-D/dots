@@ -79,10 +79,27 @@ fn schedule_json(spec: &DotSpec) -> Result<Option<String>> {
 fn map_unique(e: sqlx::Error, name: &str) -> Error {
     if let sqlx::Error::Database(db) = &e {
         if db.is_unique_violation() {
-            return Error::Conflict(format!("a dot named {name:?} already exists"));
+            return name_taken(name);
         }
     }
     e.into()
+}
+
+fn name_taken(name: &str) -> Error {
+    Error::Conflict(format!("a dot named {name:?} already exists"))
+}
+
+/// Whether another dot (not `id`) has `name` in any letter case. The UNIQUE index on `name`
+/// is case-sensitive, so this is checked apart.
+async fn clashes_in_case(tx: &mut sqlx::SqliteConnection, name: &str, id: &str) -> Result<bool> {
+    Ok(
+        sqlx::query("SELECT 1 FROM dots WHERE name = ? COLLATE NOCASE AND id != ?")
+            .bind(name)
+            .bind(id)
+            .fetch_optional(tx)
+            .await?
+            .is_some(),
+    )
 }
 
 impl Store {
@@ -131,6 +148,9 @@ impl Store {
         let id = new_id();
         let ts = now();
         let mut tx = self.pool.begin().await?;
+        if clashes_in_case(&mut tx, &spec.name, &id).await? {
+            return Err(name_taken(&spec.name));
+        }
         sqlx::query(
             "INSERT INTO dots (id, name, instructions, engine, model, endpoint_url, workdir, \
              workspace_mode, schedule, webhook_token, policy, uses, variables, browser, \
@@ -215,6 +235,9 @@ impl Store {
         spec.variables = self.synced_grants(Some(&stored.uses), &spec).await?;
         let spec = &spec;
         let mut tx = self.pool.begin().await?;
+        if spec.name != stored.name && clashes_in_case(&mut tx, &spec.name, id).await? {
+            return Err(name_taken(&spec.name));
+        }
         let res = sqlx::query(
             "UPDATE dots SET name = ?, instructions = ?, engine = ?, model = ?, endpoint_url = ?, \
              workdir = ?, workspace_mode = ?, schedule = ?, policy = ?, uses = ?, variables = ?, \

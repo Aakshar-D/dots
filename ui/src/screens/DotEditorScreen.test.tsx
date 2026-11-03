@@ -43,14 +43,25 @@ describe("the dot editor, new dot", () => {
     expect(screen.queryByText("Say what the dot should do.")).toBeNull();
     await user.click(screen.getByRole("button", { name: "Create dot" }));
     expect(screen.getByRole("alert")).toHaveTextContent("Fix the marked fields");
-    expect(screen.getByText("Use 1 to 64 letters, digits, '-' or '_'.")).toBeVisible();
+    expect(screen.getByText("Use 1 to 64 letters, digits, spaces, '-', '_' or '.'.")).toBeVisible();
     expect(screen.getByText("Say what the dot should do.")).toBeVisible();
     expect(screen.getByText("Choose the folder the dot works in.")).toBeVisible();
     expect(backend.callsTo("create_dot")).toEqual([]);
 
     // The marks follow the typing.
     await user.type(screen.getByLabelText("Name"), "nightly");
-    expect(screen.queryByText("Use 1 to 64 letters, digits, '-' or '_'.")).toBeNull();
+    expect(screen.queryByText("Use 1 to 64 letters, digits, spaces, '-', '_' or '.'.")).toBeNull();
+  });
+
+  it("accepts a name with a space and rejects two spaces in a row", async () => {
+    const { user } = renderApp("/dots/new");
+    const rule = "Use 1 to 64 letters, digits, spaces, '-', '_' or '.'.";
+    await screen.findByLabelText("Name");
+    await user.click(screen.getByRole("button", { name: "Create dot" }));
+    await user.type(screen.getByLabelText("Name"), "Test dot");
+    expect(screen.queryByText(rule)).toBeNull();
+    await user.type(screen.getByLabelText("Name"), "  two");
+    expect(screen.getByText(rule)).toBeVisible();
   });
 
   it("asks a local dot for its endpoint and hides what only Claude dots have", async () => {

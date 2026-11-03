@@ -13,7 +13,12 @@ const whole = (min: number, max: number, message: string) =>
 const QUIET_MESSAGE = `The quiet limit must be a whole number of minutes, 1 to ${LIMITS.max_quiet_limit_secs / 60}.`;
 
 const Fields = z.object({
-  name: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/, "Use 1 to 64 letters, digits, '-' or '_'."),
+  name: z
+    .string()
+    .regex(
+      /^(?! )(?!.*  )(?!.* $)[A-Za-z0-9 ._-]{1,64}$/,
+      "Use 1 to 64 letters, digits, spaces, '-', '_' or '.'.",
+    ),
   instructions: filled("Say what the dot should do."),
   model: filled("Name the model to use."),
   workdir: filled("Choose the folder the dot works in."),
