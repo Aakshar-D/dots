@@ -12,7 +12,7 @@ pub mod folder;
 pub mod github;
 pub mod hours;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -28,8 +28,8 @@ pub use cap::{FLOOD_CAP, FLOOD_WINDOW};
 
 use crate::events::{Bus, RuntimeEvent};
 use crate::model::{
-    EmailConfig, FolderConfig, GithubConfig, NewRun, PausedReason, Run, TriggerKind, Watcher,
-    WatcherConfig, WatcherKind,
+    EmailConfig, FolderConfig, GithubConfig, NewRun, PausedReason, Run, TriggerKind, WatchHours,
+    Watcher, WatcherConfig, WatcherKind,
 };
 use crate::runner::Runner;
 use crate::scheduler::Clock;
@@ -46,6 +46,10 @@ pub const GIVE_UP_AFTER: TimeDelta = TimeDelta::minutes(60);
 pub const BACKOFF_MINUTES: [i64; 4] = [1, 2, 5, 10];
 /// The most text of an email body or a GitHub event a run gets.
 pub const MAX_BODY_CHARS: usize = 20_000;
+
+/// The held events an opening run carries in full; only these keep their files (watch hours
+/// spec section 3).
+pub const HELD_IN_FULL: u32 = 100;
 
 /// A watcher's name is 1 to 80 characters (spec section 3).
 pub const MAX_NAME_CHARS: usize = 80;
@@ -280,6 +284,8 @@ pub enum Fired {
     Capped,
     /// The watcher, its dot or Dots is paused or off: nothing was done.
     Off,
+    /// Outside the watcher's hours (or at its opening): the event is kept for the opening run.
+    Held,
 }
 
 /// When a polling watcher checks next.
@@ -322,6 +328,8 @@ pub struct WatcherDeps {
     pub acting: Arc<ActingTracker>,
     pub data_dir: PathBuf,
     pub sources: Sources,
+    /// The time zone watch hours are read in: `chrono::Local` in the app.
+    pub zone: Arc<dyn hours::Zone>,
 }
 
 /// The watchers service (spec sections 5 and 7): one task per running watcher, the one door
@@ -340,6 +348,9 @@ pub struct Watchers {
     /// One lock per watcher: two checks of it never run at once, and a change of its config
     /// waits for the check in flight (whose cursor would otherwise be written back).
     checks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// The watchers at their opening: what they find now is held for the opening run, even
+    /// inside their hours.
+    opening: Mutex<HashSet<String>>,
 }
 
 impl Watchers {
@@ -354,6 +365,7 @@ impl Watchers {
             logins: Mutex::new(HashMap::new()),
             etags: Mutex::new(HashMap::new()),
             checks: Mutex::new(HashMap::new()),
+            opening: Mutex::new(HashSet::new()),
         })
     }
 
@@ -418,13 +430,20 @@ impl Watchers {
         self.deps.store.list_watchers(dot_id).await
     }
 
-    pub async fn add(&self, dot_id: &str, name: &str, config: WatcherConfig) -> Result<Watcher> {
+    pub async fn add(
+        &self,
+        dot_id: &str,
+        name: &str,
+        config: WatcherConfig,
+        hours: Option<WatchHours>,
+    ) -> Result<Watcher> {
         let name = check_name(name)?;
         let config = check_config(&self.deps.store, &config).await?;
+        let hours = hours.as_ref().map(hours::check_hours).transpose()?;
         let watcher = self
             .deps
             .store
-            .add_watcher(dot_id, &name, &config, None)
+            .add_watcher(dot_id, &name, &config, hours.as_ref())
             .await?;
         self.changed(&watcher);
         Ok(watcher)
@@ -440,17 +459,24 @@ impl Watchers {
             .clone()
     }
 
-    pub async fn update(&self, id: &str, name: &str, config: WatcherConfig) -> Result<Watcher> {
+    pub async fn update(
+        &self,
+        id: &str,
+        name: &str,
+        config: WatcherConfig,
+        hours: Option<WatchHours>,
+    ) -> Result<Watcher> {
         // A check in flight finishes first: its cursor is then cleared, not written back.
         let check = self.check_lock(id);
         let _no_check = check.lock().await;
         self.deps.store.get_watcher(id).await?;
         let name = check_name(name)?;
         let config = check_config(&self.deps.store, &config).await?;
+        let hours = hours.as_ref().map(hours::check_hours).transpose()?;
         let watcher = self
             .deps
             .store
-            .update_watcher(id, &name, &config, None)
+            .update_watcher(id, &name, &config, hours.as_ref())
             .await?;
         self.backoffs.lock().unwrap().remove(id);
         self.forget_remote(id);
@@ -511,8 +537,30 @@ impl Watchers {
         Ok(())
     }
 
+    /// Marks the watcher as at its opening (or no longer): while it is, `fire` holds what it
+    /// gets even inside its hours, so the opening poll's events join the opening run.
+    #[doc(hidden)]
+    pub fn set_opening(&self, watcher_id: &str, opening: bool) {
+        let mut set = self.opening.lock().unwrap();
+        if opening {
+            set.insert(watcher_id.to_string());
+        } else {
+            set.remove(watcher_id);
+        }
+    }
+
+    /// Whether `fire` holds the watcher's events now: it has hours and is outside them, or is
+    /// at its opening.
+    fn holds(&self, watcher: &Watcher, now: DateTime<Utc>) -> bool {
+        let Some(hours) = &watcher.hours else {
+            return false;
+        };
+        self.opening.lock().unwrap().contains(&watcher.id) || !self.deps.zone.is_inside(hours, now)
+    }
+
     /// The one door every event goes through (spec section 5): one queued `watcher` run, unless
-    /// the watcher, its dot or Dots is paused or off, or the hour is full.
+    /// the watcher, its dot or Dots is paused or off, the watcher is outside its hours (the
+    /// event is held), or the hour is full.
     pub async fn fire(&self, watcher_id: &str, event: SourceEvent) -> Result<Fired> {
         let watcher = self.deps.store.get_watcher(watcher_id).await?;
         if self.is_paused() || !watcher.enabled || watcher.paused_reason.is_some() {
@@ -522,14 +570,18 @@ impl Watchers {
             return Ok(Fired::Off);
         }
         let now = self.deps.clock.now();
-        if !cap::take(&self.deps.store, &watcher.id, now).await? {
-            self.pause(&watcher.id, PausedReason::Flood, None).await?;
-            return Ok(Fired::Capped);
-        }
         let mut payload = event.payload;
         if let Value::Object(map) = &mut payload {
             map.insert("watcher_id".into(), Value::String(watcher.id.clone()));
             map.insert("watcher_name".into(), Value::String(watcher.name.clone()));
+        }
+        if self.holds(&watcher, now) {
+            self.hold(&watcher, &payload, &event.files, now).await?;
+            return Ok(Fired::Held);
+        }
+        if !cap::take(&self.deps.store, &watcher.id, now).await? {
+            self.pause(&watcher.id, PausedReason::Flood, None).await?;
+            return Ok(Fired::Capped);
         }
         let run_id = new_id();
         self.files.stage(&watcher.id, &run_id, &event.files)?;
@@ -553,6 +605,34 @@ impl Watchers {
             .await?;
         self.updated(&watcher);
         Ok(Fired::Run(Box::new(run)))
+    }
+
+    /// Keeps an event for the watcher's opening run. Its files are staged under the held folder
+    /// only while fewer than `HELD_IN_FULL` events are held, so a flood cannot fill the disk;
+    /// the held row names them.
+    async fn hold(
+        &self,
+        watcher: &Watcher,
+        payload: &Value,
+        files: &[(String, Vec<u8>)],
+        now: DateTime<Utc>,
+    ) -> Result<()> {
+        let store = &self.deps.store;
+        let staged = !files.is_empty() && store.held_count(&watcher.id).await? < HELD_IN_FULL;
+        let names = staged.then(|| Value::from_iter(files.iter().map(|(name, _)| name.as_str())));
+        let held = store
+            .hold_event(&watcher.id, payload, names.as_ref(), now)
+            .await?;
+        if staged {
+            if let Err(e) = self.files.stage_held(&watcher.id, &held.id, files) {
+                // Not held after all: the source tries the event again.
+                self.files.remove_held(&watcher.id, &held.id);
+                store.unhold_event(&held.id).await?;
+                return Err(e);
+            }
+        }
+        self.updated(watcher);
+        Ok(())
     }
 
     /// A source failed: a transient failure is retried by the backoff, until it has lasted

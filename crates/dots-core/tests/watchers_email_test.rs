@@ -7,7 +7,7 @@ mod common;
 
 use chrono::TimeDelta;
 use common::fake_mail::{mail, FakeMail, MailSpec};
-use common::watchers::{t0, Harness};
+use common::watchers::{saturday_10, t0, weekdays_9_to_18, Harness};
 use dots_core::model::{Dot, EmailConfig, PausedReason, Watcher, WatcherConfig};
 use dots_core::watchers::email::{imap_folder_name, login_refused, no_label};
 use dots_core::watchers::{entry_gone, Failure, Poll, Sources};
@@ -388,4 +388,41 @@ async fn two_checks_at_once_fire_a_mail_once() {
     a.unwrap();
     b.unwrap();
     assert_eq!(h.runs(&dot.id).await.len(), 1);
+}
+
+/// Watch hours: an email that arrives outside the hours is held, and the cursor moves past it,
+/// so the next check holds nothing new; its attachment is staged under the held folder.
+#[tokio::test]
+async fn an_email_outside_hours_is_held_and_the_cursor_moves_past_it() {
+    let (h, fake, dot, w) = setup(|_| {}).await;
+    h.watchers
+        .update(
+            &w.id,
+            "Billing mail",
+            w.config.clone(),
+            Some(weekdays_9_to_18()),
+        )
+        .await
+        .unwrap();
+    h.watchers.poll_now(&w.id).await.unwrap();
+    h.clock.set(saturday_10());
+    let mut spec = MailSpec::new("1@acme.com", "Billing <billing@acme.com>", "Invoice 1");
+    spec.attachments = vec![("a.pdf", b"%PDF".to_vec())];
+    fake.deliver("INBOX", mail(spec));
+    h.watchers.poll_now(&w.id).await.unwrap();
+    assert!(h.runs(&dot.id).await.is_empty());
+    let held = h.store.held_events(&w.id).await.unwrap();
+    assert_eq!(held.len(), 1);
+    assert_eq!(held[0].payload["subject"], "Invoice 1");
+    assert_eq!(held[0].payload["watcher_id"], json!(w.id));
+    assert_eq!(held[0].files, Some(json!(["a.pdf"])));
+    let staged = h.watchers.files().held_dir(&w.id, &held[0].id);
+    assert_eq!(std::fs::read(staged.join("a.pdf")).unwrap(), b"%PDF");
+    assert_eq!(
+        h.store.get_watcher_cursor(&w.id).await.unwrap(),
+        Some(json!({"uid_validity": 1, "last_uid": 1}))
+    );
+    h.watchers.poll_now(&w.id).await.unwrap();
+    assert_eq!(h.store.held_count(&w.id).await.unwrap(), 1);
+    assert!(h.runs(&dot.id).await.is_empty());
 }

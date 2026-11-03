@@ -104,4 +104,13 @@ impl Store {
     pub async fn drop_held(&self, watcher_id: &str) -> Result<Vec<HeldEvent>> {
         self.take_held(watcher_id).await
     }
+
+    /// Removes one held event (its files could not be staged).
+    pub async fn unhold_event(&self, id: &str) -> Result<()> {
+        sqlx::query("DELETE FROM watcher_held WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
 }

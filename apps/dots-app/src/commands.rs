@@ -1482,7 +1482,10 @@ pub async fn watcher_add(
     name: String,
     config: WatcherConfig,
 ) -> Res<Watcher> {
-    Ok(state.rt()?.watcher_add(&dot_id, &name, config).await?)
+    Ok(state
+        .rt()?
+        .watcher_add(&dot_id, &name, config, None)
+        .await?)
 }
 
 /// Changes a watcher's name and config; a new config starts it again from now.
@@ -1493,7 +1496,7 @@ pub async fn watcher_update(
     name: String,
     config: WatcherConfig,
 ) -> Res<Watcher> {
-    Ok(state.rt()?.watcher_update(&id, &name, config).await?)
+    Ok(state.rt()?.watcher_update(&id, &name, config, None).await?)
 }
 
 #[tauri::command]

@@ -1,6 +1,8 @@
 //! Files a watcher stages for a run (watchers spec section 4.2): an email's attachments, saved
 //! under Dots' data folder at fetch time (`<root>/<watcher_id>/<run_id>/`) with safe names, at
-//! most `MAX_ATTACHMENTS_BYTES` per email in all.
+//! most `MAX_ATTACHMENTS_BYTES` per email in all. An event held outside its watcher's hours
+//! (watch hours spec section 4.2) has its files under `<root>/<watcher_id>/held/<held_id>/`
+//! until the opening run takes them.
 
 use std::path::{Path, PathBuf};
 
@@ -29,11 +31,26 @@ fn remove_dir(dir: &Path) {
     }
 }
 
+/// Saves `files` into `dir`; nothing (not even the folder) when there are none.
+fn stage_into(dir: &Path, files: &[(String, Vec<u8>)]) -> Result<()> {
+    if files.is_empty() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(dir)?;
+    for (name, bytes) in files {
+        std::fs::write(dir.join(name), bytes)?;
+    }
+    Ok(())
+}
+
 /// The most an email's attachments may weigh in all; larger ones are listed, not saved.
 pub const MAX_ATTACHMENTS_BYTES: usize = 25 * 1024 * 1024;
 
 /// The longest safe name, in characters.
 const MAX_NAME_CHARS: usize = 120;
+
+/// The folder, beside a watcher's run folders, of its held events' files.
+const HELD: &str = "held";
 
 const RESERVED: [&str; 6] = ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"];
 
@@ -130,15 +147,27 @@ impl WatcherFiles {
 
     /// Saves `files` (safe names already) for the run.
     pub fn stage(&self, watcher_id: &str, run_id: &str, files: &[(String, Vec<u8>)]) -> Result<()> {
-        if files.is_empty() {
-            return Ok(());
-        }
-        let dir = self.stage_dir(watcher_id, run_id);
-        std::fs::create_dir_all(&dir)?;
-        for (name, bytes) in files {
-            std::fs::write(dir.join(name), bytes)?;
-        }
-        Ok(())
+        stage_into(&self.stage_dir(watcher_id, run_id), files)
+    }
+
+    /// Where the files of a held event live.
+    pub fn held_dir(&self, watcher_id: &str, held_id: &str) -> PathBuf {
+        self.root.join(watcher_id).join(HELD).join(held_id)
+    }
+
+    /// Saves `files` (safe names already) for a held event.
+    pub fn stage_held(
+        &self,
+        watcher_id: &str,
+        held_id: &str,
+        files: &[(String, Vec<u8>)],
+    ) -> Result<()> {
+        stage_into(&self.held_dir(watcher_id, held_id), files)
+    }
+
+    /// Removes a held event's files.
+    pub fn remove_held(&self, watcher_id: &str, held_id: &str) {
+        remove_dir(&self.held_dir(watcher_id, held_id));
     }
 
     /// Removes everything staged for the watcher (it was deleted).
@@ -222,8 +251,8 @@ impl WatcherFiles {
         }
     }
 
-    /// Removes what a crash left: the folders of watchers that are gone, and of runs that are
-    /// gone or whose thread has no run left to come.
+    /// Removes what a crash left: the folders of watchers that are gone, of runs that are gone
+    /// or whose thread has no run left to come, and of held events no longer held.
     pub async fn sweep(&self, store: &Store) {
         let Ok(watchers) = std::fs::read_dir(&self.root) else {
             return;
@@ -239,6 +268,10 @@ impl WatcherFiles {
             };
             for run in runs.flatten() {
                 let run_id = run.file_name().to_string_lossy().to_string();
+                if run_id == HELD {
+                    self.sweep_held(store, &id, &run.path()).await;
+                    continue;
+                }
                 let keep = match store.get_run(&run_id).await {
                     Ok(r) => thread_open(store, &r.root_run_id).await.unwrap_or(true),
                     Err(_) => false,
@@ -246,6 +279,22 @@ impl WatcherFiles {
                 if !keep {
                     remove_dir(&run.path());
                 }
+            }
+        }
+    }
+
+    /// Removes the folders under a watcher's `held` whose event is no longer held.
+    async fn sweep_held(&self, store: &Store, watcher_id: &str, dir: &Path) {
+        let Ok(held) = store.held_events(watcher_id).await else {
+            return;
+        };
+        let Ok(folders) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for folder in folders.flatten() {
+            let held_id = folder.file_name().to_string_lossy().to_string();
+            if !held.iter().any(|e| e.id == held_id) {
+                remove_dir(&folder.path());
             }
         }
     }

@@ -2,7 +2,7 @@
 //! the maths of when they are open. Times are the wall clock of the time zone given, which is
 //! this computer's local time in production.
 
-use chrono::{DateTime, Datelike, NaiveDate, TimeDelta, TimeZone, Weekday};
+use chrono::{DateTime, Datelike, NaiveDate, TimeDelta, TimeZone, Utc, Weekday};
 
 use crate::model::WatchHours;
 use crate::schedule::resolve;
@@ -58,4 +58,23 @@ pub fn next_opening<Tz: TimeZone + 'static>(h: &WatchHours, after: &DateTime<Tz>
         .filter_map(|d| resolve(&tz, d.and_time(h.start)))
         .find(|t| t > after)
         .unwrap_or_else(|| after.clone())
+}
+
+/// The time zone a watcher's hours are read in: `chrono::Local` in the app, a fixed zone in
+/// tests. Any chrono time zone is one.
+pub trait Zone: Send + Sync {
+    /// Whether the instant `at` is inside the hours, on this zone's wall clock.
+    fn is_inside(&self, hours: &WatchHours, at: DateTime<Utc>) -> bool;
+    /// The hours' first opening strictly after `after`.
+    fn next_opening(&self, hours: &WatchHours, after: DateTime<Utc>) -> DateTime<Utc>;
+}
+
+impl<Tz: TimeZone + Send + Sync + 'static> Zone for Tz {
+    fn is_inside(&self, hours: &WatchHours, at: DateTime<Utc>) -> bool {
+        is_inside(hours, &at.with_timezone(self))
+    }
+
+    fn next_opening(&self, hours: &WatchHours, after: DateTime<Utc>) -> DateTime<Utc> {
+        next_opening(hours, &after.with_timezone(self)).with_timezone(&Utc)
+    }
 }

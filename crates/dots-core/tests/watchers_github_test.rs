@@ -5,7 +5,7 @@
 mod common;
 
 use chrono::TimeDelta;
-use common::watchers::{t0, Harness};
+use common::watchers::{saturday_10, t0, weekdays_9_to_18, Harness};
 use dots_core::model::{Dot, GithubConfig, GithubEvent, PausedReason, Watcher, WatcherConfig};
 use dots_core::watchers::github::{cannot_see, server_error, token_refused};
 use dots_core::watchers::{Poll, Sources};
@@ -823,4 +823,44 @@ async fn only_lists_are_asked_again_with_their_etag() {
     detail().mount(&server).await;
     h.watchers.poll_now(&w.id).await.unwrap();
     server.verify().await;
+}
+
+/// Watch hours: an issue opened outside the hours is held, and the repo's cursor moves past
+/// it, so the next check holds nothing new.
+#[tokio::test]
+async fn an_issue_outside_hours_is_held_and_the_cursor_moves_past_it() {
+    let (h, server, dot, w) = setup(|c| c.events = vec![GithubEvent::Issue]).await;
+    h.watchers
+        .update(
+            &w.id,
+            "Repo events",
+            w.config.clone(),
+            Some(weekdays_9_to_18()),
+        )
+        .await
+        .unwrap();
+    serve(&server, &[("/repos/owner/repo/issues", json!([]))]).await;
+    h.watchers.poll_now(&w.id).await.unwrap();
+    h.clock.set(saturday_10());
+    serve(
+        &server,
+        &[(
+            "/repos/owner/repo/issues",
+            json!([issue(1012, 12, "Crash on start", "alice", &[])]),
+        )],
+    )
+    .await;
+    h.watchers.poll_now(&w.id).await.unwrap();
+    assert!(h.runs(&dot.id).await.is_empty());
+    let held = h.store.held_events(&w.id).await.unwrap();
+    assert_eq!(held.len(), 1);
+    assert_eq!(held[0].payload["title"], "Crash on start");
+    assert_eq!(held[0].payload["watcher_name"], "Repo events");
+    h.watchers.poll_now(&w.id).await.unwrap();
+    assert_eq!(h.store.held_count(&w.id).await.unwrap(), 1);
+    assert!(h.runs(&dot.id).await.is_empty());
+    assert_eq!(
+        h.store.get_watcher(&w.id).await.unwrap().paused_reason,
+        None
+    );
 }

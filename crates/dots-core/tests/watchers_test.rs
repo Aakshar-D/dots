@@ -6,8 +6,10 @@ mod common;
 
 use chrono::TimeDelta;
 use common::clock::FakeClock;
-use common::watchers::{after, t0, Harness};
-use dots_core::model::{FolderConfig, PausedReason, RunStatus, TriggerKind, WatcherConfig};
+use common::watchers::{after, saturday_10, t0, weekdays_9_to_18, Harness};
+use dots_core::model::{
+    FolderConfig, PausedReason, RunStatus, TriggerKind, WatchHours, WatcherConfig,
+};
 use dots_core::util::timestamp;
 use dots_core::watchers::{ActingTracker, Backoff, Failure, Fired, Poll, SourceEvent};
 use serde_json::json;
@@ -239,4 +241,181 @@ async fn a_permanent_failure_pauses_at_once_and_a_transient_one_after_an_hour_of
         Poll::Stopped
     );
     assert_eq!(h.paused(), vec![(w.id.clone(), Some(refused.into()))]);
+}
+
+async fn setup_hours(
+    hours: Option<WatchHours>,
+) -> (Harness, dots_core::model::Dot, dots_core::model::Watcher) {
+    let h = Harness::new().await;
+    let dot = h.dot("invoices").await;
+    let path = h.folder("in");
+    let config = WatcherConfig::Folder(FolderConfig::new(&Harness::path_text(&path)));
+    let w = match hours {
+        Some(hours) => {
+            h.watcher_with_hours(&dot, "Invoices folder", config, hours)
+                .await
+        }
+        None => h.watcher(&dot, "Invoices folder", config).await,
+    };
+    (h, dot, w)
+}
+
+fn with_file(name: &str) -> SourceEvent {
+    let mut event = created(name);
+    event.files = vec![(name.to_string(), b"%PDF".to_vec())];
+    event
+}
+
+#[tokio::test]
+async fn an_event_outside_hours_is_held_not_run() {
+    let (mut h, dot, w) = setup_hours(Some(weekdays_9_to_18())).await;
+    h.clock.set(saturday_10());
+    h.updated();
+    assert!(matches!(
+        h.watchers.fire(&w.id, created("a.pdf")).await.unwrap(),
+        Fired::Held
+    ));
+    assert!(h.runs(&dot.id).await.is_empty());
+    assert_eq!(h.store.held_count(&w.id).await.unwrap(), 1);
+    let held = h.store.held_events(&w.id).await.unwrap();
+    assert_eq!(
+        held[0].payload,
+        json!({"source": "folder", "event": "created", "path": "C:/in/a.pdf",
+            "relative": "a.pdf", "size": 3, "watcher_id": w.id, "watcher_name": "Invoices folder"})
+    );
+    assert_eq!(held[0].files, None);
+    assert_eq!(held[0].held_at, timestamp(saturday_10()));
+    assert_eq!(h.updated(), vec![w.id.clone()]);
+    // Holding does not count against the hour's cap.
+    for _ in 0..25 {
+        assert!(matches!(
+            h.watchers.fire(&w.id, created("b.pdf")).await.unwrap(),
+            Fired::Held
+        ));
+    }
+    assert_eq!(
+        h.store.get_watcher(&w.id).await.unwrap().paused_reason,
+        None
+    );
+}
+
+#[tokio::test]
+async fn an_event_inside_hours_runs_as_today() {
+    let (h, dot, w) = setup_hours(Some(weekdays_9_to_18())).await;
+    assert!(matches!(
+        h.watchers.fire(&w.id, created("a.pdf")).await.unwrap(),
+        Fired::Run(_)
+    ));
+    assert_eq!(h.runs(&dot.id).await.len(), 1);
+    assert_eq!(h.store.held_count(&w.id).await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn a_watcher_without_hours_runs_any_time() {
+    let (h, dot, w) = setup_hours(None).await;
+    h.clock.set(saturday_10());
+    assert!(matches!(
+        h.watchers.fire(&w.id, created("a.pdf")).await.unwrap(),
+        Fired::Run(_)
+    ));
+    assert_eq!(h.runs(&dot.id).await.len(), 1);
+    assert_eq!(h.store.held_count(&w.id).await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn a_watcher_off_outside_hours_holds_nothing() {
+    let (h, _dot, w) = setup_hours(Some(weekdays_9_to_18())).await;
+    h.clock.set(saturday_10());
+    h.watchers.set_enabled(&w.id, false).await.unwrap();
+    assert!(matches!(
+        h.watchers.fire(&w.id, created("a.pdf")).await.unwrap(),
+        Fired::Off
+    ));
+    h.watchers.set_enabled(&w.id, true).await.unwrap();
+    h.watchers.set_paused(true);
+    assert!(matches!(
+        h.watchers.fire(&w.id, created("a.pdf")).await.unwrap(),
+        Fired::Off
+    ));
+    assert_eq!(h.store.held_count(&w.id).await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn a_watcher_at_its_opening_holds_even_inside_its_hours() {
+    let (h, dot, w) = setup_hours(Some(weekdays_9_to_18())).await;
+    h.watchers.set_opening(&w.id, true);
+    assert!(matches!(
+        h.watchers.fire(&w.id, created("a.pdf")).await.unwrap(),
+        Fired::Held
+    ));
+    h.watchers.set_opening(&w.id, false);
+    assert!(matches!(
+        h.watchers.fire(&w.id, created("b.pdf")).await.unwrap(),
+        Fired::Run(_)
+    ));
+    assert_eq!(h.runs(&dot.id).await.len(), 1);
+    assert_eq!(h.store.held_count(&w.id).await.unwrap(), 1);
+}
+
+#[tokio::test]
+async fn the_101st_held_event_stages_no_files() {
+    let (h, _dot, w) = setup_hours(Some(weekdays_9_to_18())).await;
+    h.clock.set(saturday_10());
+    for i in 0..101 {
+        assert!(matches!(
+            h.watchers
+                .fire(&w.id, with_file(&format!("{i}.pdf")))
+                .await
+                .unwrap(),
+            Fired::Held
+        ));
+    }
+    let held = h.store.held_events(&w.id).await.unwrap();
+    assert_eq!(held.len(), 101);
+    let files = h.watchers.files();
+    for (i, event) in held.iter().take(100).enumerate() {
+        let name = format!("{i}.pdf");
+        assert_eq!(event.files, Some(json!([name])));
+        let dir = files.held_dir(&w.id, &event.id);
+        assert_eq!(std::fs::read(dir.join(&name)).unwrap(), b"%PDF");
+    }
+    assert_eq!(held[100].payload["relative"], "100.pdf");
+    assert_eq!(held[100].files, None);
+    assert!(!files.held_dir(&w.id, &held[100].id).exists());
+}
+
+#[tokio::test]
+async fn hours_are_checked_and_saved_in_week_order() {
+    let (h, dot, w) = setup_hours(None).await;
+    let config = w.config.clone();
+    let mut none = weekdays_9_to_18();
+    none.days.clear();
+    let refused = h
+        .watchers
+        .add(&dot.id, "x", config.clone(), Some(none.clone()))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&refused, dots_core::Error::Invalid(m) if m == "Watch hours need at least one day."),
+        "{refused}"
+    );
+    assert!(h
+        .watchers
+        .update(&w.id, "x", config.clone(), Some(none))
+        .await
+        .is_err());
+    let mut shuffled = weekdays_9_to_18();
+    shuffled.days.reverse();
+    let saved = h
+        .watchers
+        .update(&w.id, "Invoices folder", config.clone(), Some(shuffled))
+        .await
+        .unwrap();
+    assert_eq!(saved.hours, Some(weekdays_9_to_18()));
+    let cleared = h
+        .watchers
+        .update(&w.id, "Invoices folder", config, None)
+        .await
+        .unwrap();
+    assert_eq!(cleared.hours, None);
 }

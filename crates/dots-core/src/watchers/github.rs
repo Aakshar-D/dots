@@ -316,7 +316,8 @@ impl Poller<'_> {
             .fire(&self.watcher.id, SourceEvent::new(payload))
             .await
         {
-            Ok(Fired::Run(_)) => Ok(()),
+            // A held event was taken too: the cursor moves past it.
+            Ok(Fired::Run(_)) | Ok(Fired::Held) => Ok(()),
             Ok(Fired::Capped) | Ok(Fired::Off) => Err(Stop::Halt),
             Err(e) => Err(own(e)),
         }

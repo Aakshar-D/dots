@@ -321,7 +321,8 @@ async fn read_new(
             None => tracing::warn!(watcher = %watcher.id, uid, "an email could not be read"),
             Some(mail) if matches(config, &mail) => {
                 match service.fire(&watcher.id, to_event(mail)).await? {
-                    Fired::Run(_) => {}
+                    // A held event was taken too: the cursor moves past it.
+                    Fired::Run(_) | Fired::Held => {}
                     Fired::Capped | Fired::Off => return Ok(None),
                 }
             }

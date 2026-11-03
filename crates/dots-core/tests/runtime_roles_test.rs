@@ -457,6 +457,7 @@ async fn viewer_cannot_answer_or_change_through_the_other_doors() {
             &dot.id,
             "inbox",
             WatcherConfig::Folder(FolderConfig::new(&folder)),
+            None,
         )
         .await
         .unwrap();
@@ -530,11 +531,17 @@ async fn viewer_cannot_answer_or_change_through_the_other_doors() {
     assert_eq!(store.list_memories(&dot.id).await.unwrap(), vec![memory]);
     let config = WatcherConfig::Folder(FolderConfig::new(&folder));
     assert_eq!(
-        refused(t.rt.watcher_add(&dot.id, "more", config.clone()).await),
+        refused(
+            t.rt.watcher_add(&dot.id, "more", config.clone(), None)
+                .await
+        ),
         edit
     );
     assert_eq!(
-        refused(t.rt.watcher_update(&watcher.id, "renamed", config).await),
+        refused(
+            t.rt.watcher_update(&watcher.id, "renamed", config, None)
+                .await
+        ),
         edit
     );
     assert_eq!(
