@@ -22,6 +22,7 @@ mod limits;
 mod memories;
 mod messages;
 mod orgs;
+mod report;
 mod runs;
 mod schedules;
 mod settings;
@@ -49,6 +50,7 @@ pub use held::HeldEvent;
 pub use invites::{DraftRow, InviteRow};
 pub use limits::LimitReading;
 pub use memories::Added;
+pub use report::ReportCounts;
 pub use workspaces::WorkspaceRow;
 
 impl Store {

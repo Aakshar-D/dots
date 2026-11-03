@@ -39,15 +39,15 @@
 - [ ] **Step 4: Run** again: PASS.
 - [ ] **Step 5: Commit** `feat(core): a problem report with scrubbed recent log lines`.
 
-### Task 2: Core: counts and `Runtime::problem_report`
+### Task 2: Core: counts and `report::build`
 
 **Files:**
 - Create: `crates/dots-core/src/store/report.rs` (register in `store/mod.rs`)
-- Modify: `crates/dots-core/src/runtime.rs`
+- Modify: `crates/dots-core/src/report.rs`
 - Test: `crates/dots-core/tests/report_test.rs`
 
 - [ ] **Step 1: Failing tests:** `report_counts` (distinct engines sorted, dots count, runs in window, failed in window, nothing before `since`).
-- [ ] **Step 2: Run:** fail. **Step 3: Implement** `Store::report_counts` and `Runtime::problem_report`. **Step 4: Run:** pass.
+- [ ] **Step 2: Run:** fail. **Step 3: Implement** `Store::report_counts`, `report::facts` and `report::build`. **Step 4: Run:** pass.
 - [ ] **Step 5: Commit** `feat(core): the problem report counts dots and recent runs`.
 
 ### Task 3: App commands

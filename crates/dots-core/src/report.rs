@@ -6,10 +6,12 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
-use chrono::{DateTime, FixedOffset};
+use chrono::{DateTime, FixedOffset, Local, Utc};
 use regex::Regex;
 
+use crate::store::Store;
 use crate::vault::redact;
+use crate::Result;
 
 /// How many log lines a report carries at most.
 pub const LOG_LINES: usize = 200;
@@ -290,4 +292,51 @@ pub fn home_dir() -> Option<String> {
         .ok()
         .filter(|h| !h.is_empty())
         .or_else(|| std::env::var("HOME").ok().filter(|h| !h.is_empty()))
+}
+
+/// The facts about this copy of Dots: `app_version`, the system, and the store's counts over
+/// the last 24 hours.
+pub async fn facts(store: &Store, app_version: &str) -> Result<ReportFacts> {
+    let counts = store
+        .report_counts(Utc::now() - chrono::Duration::hours(24))
+        .await?;
+    Ok(ReportFacts {
+        app_version: app_version.to_string(),
+        os: std::env::consts::OS.to_string(),
+        arch: std::env::consts::ARCH.to_string(),
+        engines: counts.engines,
+        dots: counts.dots,
+        runs_24h: counts.runs,
+        failed_24h: counts.failed,
+    })
+}
+
+/// The whole report, made now in local time: the facts, the person's `description`, and, when
+/// `include_logs`, the last `LOG_LINES` lines of the logs in `log_dir` (none when there is no
+/// log folder).
+pub async fn build(
+    store: &Store,
+    app_version: &str,
+    log_dir: Option<&Path>,
+    description: &str,
+    include_logs: bool,
+) -> Result<String> {
+    let facts = facts(store, app_version).await?;
+    let logs = match (include_logs, log_dir) {
+        (false, _) => LogSection::NotIncluded,
+        (true, None) => LogSection::NoLog,
+        (true, Some(dir)) => {
+            let dir = dir.to_path_buf();
+            let home = home_dir();
+            tokio::task::spawn_blocking(move || read_log_tail(&dir, LOG_LINES, home.as_deref()))
+                .await
+                .unwrap_or(LogSection::NoLog)
+        }
+    };
+    Ok(render(
+        &facts,
+        description,
+        &logs,
+        Local::now().fixed_offset(),
+    ))
 }

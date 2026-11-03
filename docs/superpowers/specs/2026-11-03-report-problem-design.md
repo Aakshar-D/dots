@@ -63,11 +63,11 @@ When log lines are not included, the log section reads `== Recent log lines ==` 
 New module `dots_core::report`:
 
 - `pub struct ReportFacts { app_version, os, arch, engines: Vec<String>, dots: u32, runs_24h: u32, failed_24h: u32 }`.
-- `Store::report_counts(since: DateTime<Utc>) -> Result<(Vec<String>, u32, u32, u32)>` style query (distinct engines, dot count, runs with `queued_at >= since`, of those `status = 'failed'`), in a new `store/report.rs`.
-- `report::recent_log_lines(dir: &Path, max: usize) -> Vec<String>` (raw tail, §3).
-- `report::scrub_line(line: &str, home: Option<&str>) -> String`, `report::is_foreign_output(line) -> bool`.
-- `report::render(facts, description, logs: Option<LogTail>, made: DateTime<FixedOffset>) -> String`.
-- `Runtime::problem_report(app_version, log_dir: Option<&Path>, description, include_logs) -> Result<String>`.
+- `Store::report_counts(since: DateTime<Utc>) -> Result<ReportCounts>` (distinct engines, dot count, runs with `queued_at >= since`, of those `status = 'failed'`), in a new `store/report.rs`.
+- `report::read_log_tail(dir: &Path, max: usize, home: Option<&str>) -> LogSection` (tail, drop, scrub, §3).
+- `report::scrub_line(line, home) -> String`, `report::scrub_text(text) -> String`, `report::is_foreign_output(line) -> bool`.
+- `report::render(facts, description, logs: &LogSection, made: DateTime<FixedOffset>) -> String`, `report::file_name(made)`.
+- `report::build(store, app_version, log_dir: Option<&Path>, description, include_logs) -> Result<String>` (a free function over the `Store`, not a `Runtime` method: it needs nothing else, and tests need no runtime).
 
 ## 6. App
 

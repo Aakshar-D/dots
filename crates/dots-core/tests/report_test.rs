@@ -291,3 +291,100 @@ fn the_report_says_what_is_missing() {
 fn the_file_name_carries_the_local_time() {
     assert_eq!(file_name(made()), "dots-report-20261103-1405.txt");
 }
+
+mod common;
+
+use chrono::{Duration, Utc};
+use dots_core::model::{EngineKind, NewRun, RunStatus, TriggerKind};
+
+#[tokio::test]
+async fn the_counts_cover_dots_engines_and_recent_runs() {
+    let (_d, store) = common::temp_store().await;
+    let empty = store
+        .report_counts(Utc::now() - Duration::hours(24))
+        .await
+        .unwrap();
+    assert_eq!(empty.engines, Vec::<String>::new());
+    assert_eq!((empty.dots, empty.runs, empty.failed), (0, 0, 0));
+
+    let a = store
+        .create_dot(&common::spec("a"), None, "default")
+        .await
+        .unwrap();
+    store
+        .create_dot(&common::spec("b"), None, "default")
+        .await
+        .unwrap();
+    let mut local = common::spec("c");
+    local.engine = EngineKind::Local;
+    local.endpoint_url = Some("http://127.0.0.1:1234".into());
+    store.create_dot(&local, None, "default").await.unwrap();
+
+    for status in [
+        RunStatus::Succeeded,
+        RunStatus::Failed,
+        RunStatus::Failed,
+        RunStatus::Running,
+    ] {
+        let run = store
+            .create_run(&NewRun::new(&a.id, TriggerKind::Manual))
+            .await
+            .unwrap();
+        store.set_status(&run.id, status).await.unwrap();
+    }
+
+    let counts = store
+        .report_counts(Utc::now() - Duration::hours(24))
+        .await
+        .unwrap();
+    assert_eq!(
+        counts.engines,
+        vec!["claude".to_string(), "local".to_string()]
+    );
+    assert_eq!((counts.dots, counts.runs, counts.failed), (3, 4, 2));
+
+    // Runs queued before the window are not counted.
+    let later = store
+        .report_counts(Utc::now() + Duration::hours(1))
+        .await
+        .unwrap();
+    assert_eq!((later.dots, later.runs, later.failed), (3, 0, 0));
+}
+
+#[tokio::test]
+async fn the_runtime_builds_the_whole_report() {
+    let (_d, store) = common::temp_store().await;
+    store
+        .create_dot(&common::spec("a"), None, "default")
+        .await
+        .unwrap();
+    let logs = tempfile::tempdir().unwrap();
+    write(
+        logs.path(),
+        "dots.2026-11-03.log",
+        &[line("INFO", "dots_app", "starting Dots 0.3.0")],
+    );
+    let facts = dots_core::report::facts(&store, "9.9.9").await.unwrap();
+    assert_eq!(facts.app_version, "9.9.9");
+    assert_eq!(facts.os, std::env::consts::OS);
+    assert_eq!(facts.arch, std::env::consts::ARCH);
+    assert_eq!(facts.dots, 1);
+
+    let text = dots_core::report::build(&store, "9.9.9", Some(logs.path()), "It broke", true)
+        .await
+        .unwrap();
+    assert!(text.contains("Version: 9.9.9\n"));
+    assert!(text.contains("starting Dots 0.3.0"));
+    assert!(text.contains("It broke"));
+    // The dot's name and instructions are never read for it.
+    assert!(!text.contains("Do the thing."));
+
+    let off = dots_core::report::build(&store, "9.9.9", Some(logs.path()), "", false)
+        .await
+        .unwrap();
+    assert!(off.ends_with("(not included)\n"));
+    let none = dots_core::report::build(&store, "9.9.9", None, "", true)
+        .await
+        .unwrap();
+    assert!(none.ends_with("(no log found)\n"));
+}
