@@ -10,6 +10,7 @@ pub mod email;
 pub mod files;
 pub mod folder;
 pub mod github;
+pub mod hours;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

@@ -1,4 +1,4 @@
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, NaiveTime, TimeZone, Utc, Weekday};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -1318,6 +1318,18 @@ impl WatcherConfig {
             WatcherConfig::Github(c) => Some(&c.secret),
         }
     }
+}
+
+/// The days and the time range a watcher listens in, in this computer's local time. A range
+/// whose `start` is after its `end` runs overnight and belongs to the day it starts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WatchHours {
+    #[serde(with = "crate::schedule::weekdays")]
+    pub days: Vec<Weekday>,
+    #[serde(with = "crate::schedule::local_time")]
+    pub start: NaiveTime,
+    #[serde(with = "crate::schedule::local_time")]
+    pub end: NaiveTime,
 }
 
 /// A watcher of a dot (watchers spec section 3). `enabled` is the person's switch;
