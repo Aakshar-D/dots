@@ -63,7 +63,6 @@ fn matching_ignores_case_slashes_and_trailing_dots() {
 fn ordinary_files_are_not_private() {
     for path in [
         "src/main.rs",
-        ".envrc",
         "environment.ts",
         "docs/ssh.md",
         ".config/other/x",
@@ -119,7 +118,7 @@ fn shell_commands_that_mention_a_private_place_are_private() {
         "git status",
         "cargo test",
         "echo $env:PATH",
-        "direnv allow .envrc",
+        "direnv allow",
     ] {
         assert!(!touches_private("Bash", &bash(cmd), None), "{cmd}");
     }
@@ -298,5 +297,93 @@ mod resolve {
         let offered = allow_candidates("Read", &read(&file), None);
         let patterns: Vec<&str> = offered.iter().map(|c| c.pattern.as_str()).collect();
         assert_eq!(patterns, vec![format!("Read({file})")]);
+    }
+}
+
+mod review {
+    use std::path::Path;
+
+    use dots_core::policy::touches_private;
+    use serde_json::json;
+
+    use super::{bash, home, read};
+
+    #[test]
+    fn a_search_or_listing_of_a_folder_that_holds_a_private_place_is_private() {
+        let home = home();
+        for tool in ["Grep", "Glob", "LS"] {
+            assert!(touches_private(tool, &json!({ "path": "~", "pattern": "x" }), None), "{tool} ~");
+            assert!(touches_private(tool, &json!({ "path": &home, "pattern": "x" }), None), "{tool} home");
+            assert!(
+                touches_private(tool, &json!({ "path": "~/.config", "pattern": "x" }), None),
+                "{tool} ~/.config"
+            );
+            // No path: the run's folder, here the home folder.
+            assert!(
+                touches_private(tool, &json!({ "pattern": "x" }), Some(Path::new(&home))),
+                "{tool} in home"
+            );
+            // A folder that holds none is not.
+            assert!(
+                !touches_private(tool, &json!({ "path": "~/projects/app", "pattern": "x" }), None),
+                "{tool} ~/projects/app"
+            );
+        }
+        // Reading one file in the home folder is not a search of it.
+        assert!(!touches_private("Read", &read("~/notes.txt"), None));
+    }
+
+    #[test]
+    fn braces_wildcards_and_escapes_do_not_hide_a_private_place() {
+        for cmd in [
+            "cat ~/.ss{h,}/id_rsa",
+            "cat ~/.{ssh,aws}/*",
+            "cat ~/*ssh/id_rsa",
+            "cat ~/?ssh/config",
+            "cat ~/[.]ssh/config",
+            "cat ~/**/id_rsa",
+            "cat ~/.s\\sh/config",
+            "cat ${env:USERPROFILE}/.aws/credentials",
+            "cat ~/*/config",
+            "cat ~/.config/x/../gh/hosts.yml",
+        ] {
+            assert!(touches_private("Bash", &bash(cmd), None), "{cmd}");
+        }
+        for pattern in ["~/*ssh/*", "~/**/config", "~/*/id_rsa"] {
+            assert!(touches_private("Glob", &json!({ "pattern": pattern }), None), "{pattern}");
+        }
+        // Wildcards elsewhere stay ordinary.
+        assert!(!touches_private("Glob", &json!({ "pattern": "src/**/*.rs" }), None));
+        assert!(!touches_private("Bash", &bash("ls ~/*.txt"), None));
+        assert!(!touches_private("Bash", &bash("echo a,b {x}"), None));
+    }
+
+    #[test]
+    fn dot_dot_is_resolved_before_matching_a_place_of_two_parts() {
+        assert!(touches_private("Read", &read("~/.config/x/../gh/hosts.yml"), None));
+        assert!(touches_private("Read", &read("C:/Users/me/AppData/Roaming/Microsoft/x/../Credentials/a"), None));
+    }
+
+    #[test]
+    fn secret_files_are_private_wherever_they_are() {
+        for path in [
+            ".envrc",
+            "config/prod.env",
+            ".env-staging",
+            "certs/server.pem",
+            "certs/server.key",
+            "certs/client.p12",
+            "certs/client.pfx",
+            "keys/id_rsa",
+            "keys/id_rsa.pub",
+            "keys/id_ed25519",
+            "keys/id_ecdsa_sk",
+        ] {
+            assert!(touches_private("Read", &read(path), None), "{path}");
+        }
+        assert!(touches_private("Glob", &json!({ "pattern": "**/*.pem" }), None));
+        for path in ["src/keyboard.rs", "docs/environment.md", "src/monkey.ts", "README.md"] {
+            assert!(!touches_private("Read", &read(path), None), "{path}");
+        }
     }
 }

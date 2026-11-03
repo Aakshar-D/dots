@@ -15,7 +15,7 @@ Three small guards around approvals:
 ## 2. Words
 
 - **Private place**: a folder or file from the fixed list in §3.1.
-- **Touches a private place** (a call): a file tool's path (or a Glob/Grep pattern) names a private place or something inside one; or a shell command's text mentions one.
+- **Touches a private place** (a call): a file tool's path (or a Glob/Grep pattern) names a private place or something inside one; a search or listing (`Grep`, `Glob`, `LS`) starts in a folder that holds one (`~`, `~/.config`, or the run's folder when it is such a folder); or a shell command's text mentions one. Reading one file in the home folder is not a search of it.
 - **Plumbing tool**: a tool from the fixed list in §5.
 
 ## 3. Private-folder guard
@@ -23,7 +23,7 @@ Three small guards around approvals:
 ### 3.1 The list (fixed, not editable)
 
 - In the home folder (`~`): `.ssh`, `.aws`, `.gnupg`, `.kube`, `.docker`, `.config/gh`, `.azure`, `.claude/.credentials.json`, `.netrc`, `.npmrc`, `.pypirc`, `.git-credentials`.
-- Any `.env` file, and any `.env.<something>` file (`.env.local`, `.env.production`, also `.env.example`), wherever it is.
+- Secret files, wherever they are: `.env`, `.env.<something>` (also `.env.example`), `.env-<something>`, `.envrc`, `<name>.env`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, and SSH keys by name (`id_rsa*`, `id_ed25519*`, `id_ecdsa*`, so also their `.pub` files).
 - Windows: `%APPDATA%\Microsoft\Credentials`, `%APPDATA%\Microsoft\Protect` (and the same under `%LOCALAPPDATA%`, which also holds credential files).
 - Dots' own vault folder: `<data dir>/vault`.
 
@@ -32,8 +32,8 @@ Three small guards around approvals:
 - Case-insensitive on every system (fails closed on Linux and macOS, where the folders are lower-case anyway). `/` and `\` are the same.
 - `~` and the folder variables (`USERPROFILE`, `HOME`, `APPDATA`, `LOCALAPPDATA`, `DOTS_DATA_DIR`, in their `%NAME%`, `$NAME`, `${NAME}` and `$env:NAME` forms) are expanded from the environment before matching. Other variables are not: `PATH` could name anything.
 - The home-folder entries and the Windows entries match as **path parts anywhere in the path**, not only under the real home folder: `C:\Users\other\.ssh\id_rsa`, `/home/me/.aws/credentials`, `../../.ssh/config` and `project/.npmrc` all count. *My call:* this is simpler than resolving every way of naming the home folder, and a project's own `.npmrc` or `.docker/config.json` holds tokens too. The cost is an extra question for such files, never a missed one.
-- Quotes, backticks and `^` are dropped before matching (`.ss''h` is `.ssh`); trailing dots and spaces of a part are dropped (`.ssh.` is `.ssh` on Windows).
-- A wildcard part that starts with `.` (`.env*`, `.ss?`, `.*`) counts when it could match a private name. A wildcard part that does not start with a dot (`*`, `**`) does not: such patterns skip hidden files in the tools that use them, and treating them as private would make every search ask.
+- Quotes, backticks and `^` are dropped before matching (`.ss''h` is `.ssh`); trailing dots and spaces of a part are dropped (`.ssh.` is `.ssh` on Windows). A command word is also read with its backslash escapes removed (`.s\sh`), and every reading of its brace alternations is judged (`.ss{h,}`, `.{ssh,aws}`). `..` is resolved before a place of two parts is matched (`~/.config/x/../gh`), and the path is matched as written too.
+- A wildcard part with a letter or digit in it (`*ssh`, `?ssh`, `[.]ssh`, `.env*`, `*.pem`) counts when it could match a private name. A part without one (`*`, `**`, `*.*`) counts only by where it is: when a private place lies below the folder before it and the pattern has `**` or the part matches the place's next part (`~/*/id_rsa`, `~/**/x`). Otherwise every search would ask.
 - The vault matches by its absolute path (after `..` is resolved), and a relative file path is also judged joined to the run's folder.
 - Best effort for shell commands, as for deny rules today: a command can still build a path at run time. The worktree and the CLI lists stay the real boundary.
 

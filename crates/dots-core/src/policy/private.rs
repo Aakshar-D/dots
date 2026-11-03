@@ -2,8 +2,9 @@
 //! keys, tokens and credentials, and whether a call or a rule pattern touches one.
 //!
 //! Matching is lexical and fails closed: case-insensitive, `/` and `\` alike, the home folder's
-//! entries matched as path parts anywhere in a path. A shell command can still build a path at
-//! run time; as for deny rules, the worktree and the CLI lists stay the real boundary.
+//! entries matched as path parts anywhere in a path, brace alternations expanded, wildcards
+//! tried against the private names. A shell command can still build a path at run time; as for
+//! deny rules, the worktree and the CLI lists stay the real boundary.
 
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
@@ -35,22 +36,49 @@ const PLACES: &[&[&str]] = &[
     &["Microsoft", "Protect"],
 ];
 
-/// Names a wildcard part (`.env*`, `.ss?`) is tried against.
-const HIDDEN_NAMES: &[&str] = &[
+/// Names a wildcard part (`*ssh`, `.env*`, `*.pem`) is tried against: the one-part places and
+/// an example of each kind of secret file (`is_secret_file`). A part with no letter or digit
+/// (`*`, `*.*`) is not tried, or every search would ask; where it sits decides instead
+/// (`wildcard_reaches`).
+const WILDCARD_NAMES: &[&str] = &[
     ".ssh",
     ".aws",
     ".gnupg",
     ".kube",
     ".docker",
     ".azure",
-    ".credentials.json",
     ".netrc",
     ".npmrc",
     ".pypirc",
     ".git-credentials",
     ".env",
     ".env.local",
+    ".env-local",
+    ".envrc",
+    "prod.env",
+    "server.pem",
+    "server.key",
+    "client.p12",
+    "client.pfx",
+    "id_rsa",
+    "id_ed25519",
+    "id_ecdsa",
 ];
+
+/// Secret files by name, wherever they are (spec section 3.1).
+fn is_secret_file(part: &str) -> bool {
+    part == ".env"
+        || part == ".envrc"
+        || part.starts_with(".env.")
+        || part.starts_with(".env-")
+        || (part.len() > 4 && part.ends_with(".env"))
+        || [".pem", ".key", ".p12", ".pfx"]
+            .iter()
+            .any(|ext| part.len() > ext.len() && part.ends_with(ext))
+        || ["id_rsa", "id_ed25519", "id_ecdsa"]
+            .iter()
+            .any(|key| part.starts_with(key))
+}
 
 /// The folder variables expanded before matching. Only these: another variable (`PATH`) could
 /// name anything.
@@ -62,12 +90,19 @@ const FOLDER_VARS: &[&str] = &[
     "dots_data_dir",
 ];
 
-/// Characters that separate the paths of a command.
-const SEPARATORS: &[char] = &[';', '|', '&', '(', ')', '{', '}', '<', '>', ',', '='];
+/// Characters that separate the words of a command.
+const SEPARATORS: &[char] = &[';', '|', '&', '(', ')', '<', '>', '='];
+/// Characters a word is also split at, after its brace alternations are expanded.
+const SUB_SEPARATORS: &[char] = &['{', '}', ','];
 
 fn vaults() -> &'static Mutex<Vec<String>> {
     static VAULTS: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
     VAULTS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// The registered vault folders. A poisoned lock still holds a usable list.
+fn vault_list() -> Vec<String> {
+    vaults().lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
 /// Adds Dots' vault folder (`<data dir>/vault`) to the private places. A runtime registers its
@@ -75,7 +110,7 @@ fn vaults() -> &'static Mutex<Vec<String>> {
 pub fn register_vault(path: &Path) {
     let (abs, key) = lexical_normalize(&path.to_string_lossy());
     if abs {
-        let mut v = vaults().lock().unwrap();
+        let mut v = vaults().lock().unwrap_or_else(|e| e.into_inner());
         if !v.contains(&key) {
             v.push(key);
         }
@@ -102,7 +137,7 @@ fn folder_var(name: &str) -> Option<String> {
 }
 
 /// Lower-cases `text`, drops quotes and escape characters, and expands `~` and the folder
-/// variables in their `%NAME%`, `$env:NAME`, `${NAME}` and `$NAME` forms.
+/// variables in their `%NAME%`, `$env:NAME`, `${env:NAME}`, `${NAME}` and `$NAME` forms.
 fn expand(text: &str) -> String {
     let mut s: String = text
         .to_lowercase()
@@ -116,6 +151,7 @@ fn expand(text: &str) -> String {
         let value = value.to_lowercase();
         for form in [
             format!("%{name}%"),
+            format!("${{env:{name}}}"),
             format!("$env:{name}"),
             format!("${{{name}}}"),
         ] {
@@ -141,10 +177,12 @@ fn expand(text: &str) -> String {
         let mut prev: Option<char> = None;
         let chars: Vec<char> = s.chars().collect();
         for (i, &c) in chars.iter().enumerate() {
-            let starts = prev.is_none_or(|p| p.is_whitespace() || SEPARATORS.contains(&p));
-            let ends = chars
-                .get(i + 1)
-                .is_none_or(|n| matches!(n, '/' | '\\') || n.is_whitespace());
+            let starts = prev.is_none_or(|p| {
+                p.is_whitespace() || SEPARATORS.contains(&p) || SUB_SEPARATORS.contains(&p)
+            });
+            let ends = chars.get(i + 1).is_none_or(|n| {
+                matches!(n, '/' | '\\' | ',' | '}') || n.is_whitespace()
+            });
             if c == '~' && starts && ends {
                 out.push_str(&home);
             } else {
@@ -157,6 +195,33 @@ fn expand(text: &str) -> String {
     s
 }
 
+/// Every reading of `word` with its brace alternations expanded (`.ss{h,}` is `.ssh` and
+/// `.ss`), the word itself first. At most 64 readings.
+fn brace_variants(word: &str) -> Vec<String> {
+    let mut done: Vec<String> = vec![word.to_string()];
+    let mut todo: Vec<String> = vec![word.to_string()];
+    while let Some(w) = todo.pop() {
+        // The first innermost group: a `{` with no `{` before its `}`.
+        let Some(close) = w.find('}') else { continue };
+        let Some(open) = w[..close].rfind('{') else { continue };
+        let inner = &w[open + 1..close];
+        if !inner.contains(',') {
+            continue;
+        }
+        for alt in inner.split(',') {
+            let next = format!("{}{alt}{}", &w[..open], &w[close + 1..]);
+            if done.len() >= 64 {
+                return done;
+            }
+            if !done.contains(&next) {
+                done.push(next.clone());
+                todo.push(next);
+            }
+        }
+    }
+    done
+}
+
 /// The parts of an expanded path: split at `/`, `\` and `:`, trailing dots and spaces dropped.
 fn parts(path: &str) -> Vec<&str> {
     path.split(['/', '\\', ':'])
@@ -165,13 +230,30 @@ fn parts(path: &str) -> Vec<&str> {
         .collect()
 }
 
-fn is_env_file(part: &str) -> bool {
-    part == ".env" || part.starts_with(".env.")
+fn is_wildcard(part: &str) -> bool {
+    part.contains(['*', '?', '['])
 }
 
-/// True when the expanded, lower-case `path` names a private place or something inside one.
-fn expanded_path_is_private(path: &str) -> bool {
-    let parts = parts(path);
+/// A wildcard part as `glob_matches` reads it: a `[...]` class becomes `?`.
+fn as_glob(part: &str) -> String {
+    let mut out = String::with_capacity(part.len());
+    let mut in_class = false;
+    for c in part.chars() {
+        match c {
+            '[' if !in_class => in_class = true,
+            ']' if in_class => {
+                in_class = false;
+                out.push('?');
+            }
+            _ if in_class => {}
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// True when the parts name a private place, a secret file, or a wildcard that could match one.
+fn names_private(parts: &[&str]) -> bool {
     let named = PLACES.iter().any(|place| {
         parts.windows(place.len()).any(|w| {
             w.iter()
@@ -180,86 +262,11 @@ fn expanded_path_is_private(path: &str) -> bool {
         })
     });
     let wildcard = |p: &str| {
-        p.starts_with('.')
-            && p.contains(['*', '?', '['])
-            && HIDDEN_NAMES.iter().any(|n| glob_matches(p, n))
+        is_wildcard(p)
+            && p.chars().any(|c| c.is_ascii_alphanumeric())
+            && WILDCARD_NAMES.iter().any(|n| glob_matches(&as_glob(p), n))
     };
-    if named || parts.iter().any(|p| is_env_file(p) || wildcard(p)) {
-        return true;
-    }
-    let (abs, normalized) = lexical_normalize(path);
-    abs && vaults()
-        .lock()
-        .unwrap()
-        .iter()
-        .any(|v| inside(&normalized, v))
-}
-
-/// `path` is `dir` or below it (both normalized).
-fn inside(path: &str, dir: &str) -> bool {
-    let dir = dir.trim_end_matches('/');
-    path == dir || path.starts_with(&format!("{dir}/"))
-}
-
-/// True when one path (a file tool's path, a Glob pattern, a rule's path) names a private place.
-fn path_is_private(raw: &str) -> bool {
-    expanded_path_is_private(&expand(raw))
-}
-
-/// True when a command's text mentions a private place.
-fn text_is_private(text: &str) -> bool {
-    let s = expand(text);
-    if s.split(|c: char| c.is_whitespace() || SEPARATORS.contains(&c))
-        .any(expanded_path_is_private)
-    {
-        return true;
-    }
-    // A vault path with a space in it is split above: look for it in the whole text too.
-    let flat = s.replace('\\', "/");
-    vaults().lock().unwrap().iter().any(|v| flat.contains(v.as_str()))
-}
-
-/// True when a call of `tool` touches a private place: a file tool's path (or its Glob/Grep
-/// pattern) names one, or a shell command mentions one. A relative path is also judged inside
-/// `workspace`, and a call without a path is judged at `workspace` itself. Other tools are
-/// never judged.
-pub fn touches_private(tool: &str, input: &Value, workspace: Option<&Path>) -> bool {
-    let tool = tool.trim();
-    if COMMAND_TOOLS.contains(&tool) {
-        return input
-            .get("command")
-            .and_then(Value::as_str)
-            .is_some_and(text_is_private);
-    }
-    if !FILE_TOOLS.contains(&tool) {
-        return false;
-    }
-    let field = |key: &str| input.get(key).and_then(Value::as_str);
-    let mut paths: Vec<&str> = input_path(input).into_iter().collect();
-    let extra = match tool {
-        "Glob" => field("pattern"),
-        "Grep" => field("glob"),
-        _ => None,
-    };
-    let has_path = !paths.is_empty();
-    paths.extend(extra);
-    let ws = workspace.map(|w| w.to_string_lossy().into_owned());
-    if !has_path {
-        if let Some(ws) = &ws {
-            paths.push(ws);
-        }
-    }
-    paths.iter().any(|raw| {
-        if path_is_private(raw) {
-            return true;
-        }
-        let expanded = expand(raw);
-        let relative = !lexical_normalize(&expanded).0;
-        relative
-            && ws
-                .as_deref()
-                .is_some_and(|ws| expanded_path_is_private(&expand(&format!("{ws}/{expanded}"))))
-    })
+    named || parts.iter().any(|p| is_secret_file(p) || wildcard(p))
 }
 
 /// The private folders on this machine as absolute, normalized paths: the home folder's
@@ -282,8 +289,137 @@ fn concrete_places() -> Vec<String> {
             add(&base, &place.join("/"));
         }
     }
-    out.extend(vaults().lock().unwrap().iter().cloned());
+    out.extend(vault_list());
     out
+}
+
+/// `path` is `dir` or below it (both normalized).
+fn inside(path: &str, dir: &str) -> bool {
+    let dir = dir.trim_end_matches('/');
+    path == dir || path.starts_with(&format!("{dir}/"))
+}
+
+/// True when a normalized, absolute path with wildcards could reach a private place: below the
+/// folder before its first wildcard part lies a private place, and the pattern has `**` or its
+/// first wildcard part matches the next part of that place (`~/*/id_rsa` reaches `~/.ssh`).
+fn wildcard_reaches(normalized: &str) -> bool {
+    let comps: Vec<&str> = normalized.split('/').collect();
+    let Some(i) = comps.iter().position(|c| is_wildcard(c)) else {
+        return false;
+    };
+    let base = comps[..i].join("/");
+    let deep = comps[i..].iter().any(|c| c.contains("**"));
+    let first = as_glob(comps[i]);
+    concrete_places().iter().any(|place| {
+        let Some(rest) = place.strip_prefix(&format!("{}/", base.trim_end_matches('/'))) else {
+            return false;
+        };
+        let next = rest.split('/').next().unwrap_or("");
+        deep || glob_matches(&first, next)
+    })
+}
+
+/// True when the expanded, lower-case `path` names a private place or something inside one,
+/// read as it is and with its `..` resolved.
+fn expanded_path_is_private(path: &str) -> bool {
+    if names_private(&parts(path)) {
+        return true;
+    }
+    let (abs, normalized) = lexical_normalize(path);
+    if names_private(&parts(&normalized)) {
+        return true;
+    }
+    abs && (vault_list().iter().any(|v| inside(&normalized, v)) || wildcard_reaches(&normalized))
+}
+
+/// True when one path (a file tool's path, a Glob pattern, a rule's path) names a private place,
+/// in any reading of its brace alternations.
+fn path_is_private(raw: &str) -> bool {
+    brace_variants(&expand(raw))
+        .iter()
+        .any(|p| expanded_path_is_private(p))
+}
+
+/// True when a command's text mentions a private place. Each word is read with its brace
+/// alternations expanded, split at braces and commas, and with its backslash escapes removed
+/// (`.s\sh`) as well as with `\` as a folder separator.
+fn text_is_private(text: &str) -> bool {
+    let s = expand(text);
+    let words = s.split(|c: char| c.is_whitespace() || SEPARATORS.contains(&c));
+    for word in words.filter(|w| !w.is_empty()) {
+        let mut readings = brace_variants(word);
+        readings.extend(word.split(SUB_SEPARATORS).map(str::to_string));
+        for reading in readings {
+            let unescaped = reading.replace('\\', "");
+            if expanded_path_is_private(&reading) || expanded_path_is_private(&unescaped) {
+                return true;
+            }
+        }
+    }
+    // A vault path with a space in it is split above: look for it in the whole text too.
+    let flat = s.replace('\\', "/");
+    vault_list().iter().any(|v| flat.contains(v.as_str()))
+}
+
+/// True when the folder a search or listing starts from holds a private place (or is one).
+fn holds_private(dir: &str) -> bool {
+    let (abs, normalized) = lexical_normalize(dir);
+    abs && concrete_places().iter().any(|place| inside(place, &normalized))
+}
+
+/// True when a call of `tool` touches a private place: a file tool's path (or its Glob/Grep
+/// pattern) names one, or a shell command mentions one. A relative path is also judged inside
+/// `workspace`, and a call without a path is judged at `workspace` itself. A search or listing
+/// (`Grep`, `Glob`, `LS`) also touches one when its folder holds one (`~`, `~/.config`). Other
+/// tools are never judged.
+pub fn touches_private(tool: &str, input: &Value, workspace: Option<&Path>) -> bool {
+    let tool = tool.trim();
+    if COMMAND_TOOLS.contains(&tool) {
+        return input
+            .get("command")
+            .and_then(Value::as_str)
+            .is_some_and(text_is_private);
+    }
+    if !FILE_TOOLS.contains(&tool) {
+        return false;
+    }
+    let field = |key: &str| input.get(key).and_then(Value::as_str);
+    let ws = workspace.map(|w| w.to_string_lossy().into_owned());
+    // An expanded path made absolute against the run's folder where it is relative.
+    let resolved = |raw: &str| -> Option<String> {
+        let expanded = expand(raw);
+        if lexical_normalize(&expanded).0 {
+            Some(expanded)
+        } else {
+            ws.as_deref().map(|ws| expand(&format!("{ws}/{expanded}")))
+        }
+    };
+    let path = input_path(input);
+    let mut paths: Vec<String> = path.iter().map(|p| p.to_string()).collect();
+    match tool {
+        // A Glob pattern is read inside its folder.
+        "Glob" => paths.extend(field("pattern").map(|pattern| match path {
+            Some(dir) if !lexical_normalize(&expand(pattern)).0 => format!("{dir}/{pattern}"),
+            _ => pattern.to_string(),
+        })),
+        "Grep" => paths.extend(field("glob").map(str::to_string)),
+        _ => {}
+    }
+    if path.is_none() {
+        paths.extend(ws.clone());
+    }
+    let named = paths.iter().any(|raw| {
+        path_is_private(raw)
+            || resolved(raw)
+                .filter(|r| r != &expand(raw))
+                .is_some_and(|r| path_is_private(&r))
+    });
+    if named {
+        return true;
+    }
+    let searches = matches!(tool, "Grep" | "Glob" | "LS");
+    let dir = path.map(str::to_string).or_else(|| ws.clone());
+    searches && dir.and_then(|d| resolved(&d)).is_some_and(|d| holds_private(&d))
 }
 
 /// True when a rule pattern names a private place (`Read(~/.ssh/**)`, `Bash(cat .env)`) or
@@ -314,11 +450,8 @@ pub fn pattern_touches_private(pattern: &str) -> bool {
 /// rule in the CLI, which then asks Dots' `approve` tool, and `Policy::resolve_in` decides.
 /// Broad on purpose: Dots' own matching is the precise one.
 pub fn cli_private_ask_rules() -> Vec<String> {
-    let mut paths: Vec<String> = PLACES.iter().map(|p| p.join("/")).collect();
-    paths.extend([".env".to_string(), ".env.*".to_string()]);
-    let vault_tails: Vec<String> = vaults()
-        .lock()
-        .unwrap()
+    let mut dirs: Vec<String> = PLACES.iter().map(|p| p.join("/")).collect();
+    let vault_tails: Vec<String> = vault_list()
         .iter()
         .filter_map(|v| {
             let mut it = v.rsplit('/');
@@ -326,21 +459,29 @@ pub fn cli_private_ask_rules() -> Vec<String> {
             Some(format!("{parent}/{last}"))
         })
         .collect();
-    paths.extend(vault_tails.iter().cloned());
+    dirs.extend(vault_tails.iter().cloned());
+    let files = [
+        ".env", ".env.*", ".env-*", ".envrc", "*.env", "*.pem", "*.key", "*.p12", "*.pfx",
+        "id_rsa*", "id_ed25519*", "id_ecdsa*",
+    ];
     let mut rules = Vec::new();
     // The CLI reads `Edit` rules for every file-editing tool and ignores `Write` ones.
     for tool in ["Read", "Edit"] {
-        for p in &paths {
-            rules.push(format!("{tool}(//**/{p})"));
-            if !p.starts_with(".env") {
-                rules.push(format!("{tool}(//**/{p}/**)"));
-            }
+        for d in &dirs {
+            rules.push(format!("{tool}(//**/{d})"));
+            rules.push(format!("{tool}(//**/{d}/**)"));
+        }
+        for f in files {
+            rules.push(format!("{tool}(//**/{f})"));
         }
     }
     let mut words: Vec<String> = PLACES
         .iter()
         .flat_map(|p| [p.join("/"), p.join("\\")])
-        .chain([".env".to_string()])
+        .chain(
+            [".env", ".pem", ".key", ".p12", ".pfx", "id_rsa", "id_ed25519", "id_ecdsa"]
+                .map(String::from),
+        )
         .chain(
             vault_tails
                 .iter()
