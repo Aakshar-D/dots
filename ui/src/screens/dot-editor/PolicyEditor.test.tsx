@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, expect, it } from "vitest";
@@ -70,5 +70,56 @@ describe("the policy editor", () => {
     await user.selectOptions(screen.getByLabelText("Preset"), "custom");
     expect(policy()).toEqual({ ...sandboxed, preset: "custom" });
     expect(backend.callsTo("policy_preset")).toEqual([]);
+  });
+});
+
+describe("the always-allowed list", () => {
+  const ruled: Policy = {
+    preset: "sandboxed",
+    rules: [
+      { tool: "Read", action: "allow" },
+      { tool: "Bash(git status:*)", action: "allow" },
+      { tool: "Bash(git push:*)", action: "ask" },
+      { tool: "Read(**/.git/**)", action: "deny" },
+      { tool: "Notify", action: "allow" },
+      { tool: "Memory", action: "allow" },
+      { tool: "WebFetch(domain:example.com)", action: "allow" },
+    ],
+    default: "ask",
+    mcp_default: "ask",
+  };
+  const list = () => screen.getByRole("list", { name: "Always allowed" });
+
+  it("shows the allow rules in words, without Dots' own tools", () => {
+    setup(ruled);
+    const items = within(list()).getAllByRole("listitem");
+    expect(items.map((item) => item.textContent)).toEqual([
+      expect.stringContaining("Read: every call"),
+      expect.stringContaining("Bash: commands that start with git status"),
+      expect.stringContaining("WebFetch: example.com and its subdomains"),
+    ]);
+    expect(within(items[1]).getByText("Bash(git status:*)")).toBeVisible();
+  });
+
+  it("takes a rule back with Remove, and the policy becomes custom", async () => {
+    const { user, policy } = setup(ruled);
+    await user.click(
+      screen.getByRole("button", { name: "Remove Bash: commands that start with git status" }),
+    );
+    expect(policy().preset).toBe("custom");
+    expect(policy().rules.map((r) => r.tool)).toEqual([
+      "Read",
+      "Bash(git push:*)",
+      "Read(**/.git/**)",
+      "Notify",
+      "Memory",
+      "WebFetch(domain:example.com)",
+    ]);
+    expect(within(list()).getAllByRole("listitem")).toHaveLength(2);
+  });
+
+  it("says when nothing is always allowed", () => {
+    setup({ ...ruled, rules: [{ tool: "Notify", action: "allow" }] });
+    expect(screen.getByText("Nothing is always allowed.")).toBeVisible();
   });
 });
