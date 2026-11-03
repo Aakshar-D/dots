@@ -1035,7 +1035,16 @@ async fn a_local_step_asks_for_a_send_back_and_a_closed_step_records_nothing() {
         ],
     )
     .await;
-    let wr = until(&t, &wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded).await;
+    // The review's send-back is performed when its step ends: "Build it" runs again.
+    let wr = until(&t, &wr.id, |wr| {
+        wr.send_backs == 1
+            && wr
+                .steps
+                .iter()
+                .any(|s| s.step_id == "build" && s.attempt == 2)
+    })
+    .await;
+    assert_eq!(wr.send_back.as_ref().map(|s| s.to.as_str()), Some("build"));
     let reqs = llm.requests();
     assert_eq!(workflow_tools(&reqs[1]), ["send_back"]);
     let review = prompt(&reqs[1]);
@@ -1130,7 +1139,16 @@ async fn a_claude_step_reports_and_sends_back_through_dots_own_server() {
         ],
     )
     .await;
-    let wr = until(&t, &wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded).await;
+    // The review's send-back is performed when its step ends: "Build it" runs again.
+    let wr = until(&t, &wr.id, |wr| {
+        wr.send_backs == 1
+            && wr
+                .steps
+                .iter()
+                .any(|s| s.step_id == "build" && s.attempt == 2)
+    })
+    .await;
+    assert_eq!(wr.send_back.as_ref().map(|s| s.to.as_str()), Some("build"));
     let recorded: Value =
         serde_json::from_str(&std::fs::read_to_string(&t.args_out).unwrap()).unwrap();
     let args: Vec<String> = serde_json::from_value(recorded["args"].clone()).unwrap();

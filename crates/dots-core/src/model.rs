@@ -1135,6 +1135,8 @@ pub struct WorkflowRun {
     /// The limits now: the definition's, raised by "Add budget".
     pub budget: crate::workflow::Budget,
     pub send_backs: u32,
+    /// The last send-back: the one performed last, or the one held at the cap (`held`).
+    pub send_back: Option<SendBack>,
     /// Dot runs of the workflow run, resume children included.
     pub spent_runs: u32,
     /// New input plus output tokens of those runs: `tokens_in - tokens_cache_read + tokens_out`.
@@ -1147,6 +1149,28 @@ pub struct WorkflowRun {
     pub started_at: String,
     pub ended_at: Option<String>,
     pub steps: Vec<StepRun>,
+}
+
+/// Work sent back to an earlier agent step (teams spec sections 5.4 and 9): by the person from
+/// a check, or by an agent step that asked for it with `send_back`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SendBack {
+    /// The id of the step that sent it back.
+    pub from: String,
+    /// The id of the agent step it goes back to.
+    pub to: String,
+    pub note: String,
+    pub by: SentBy,
+    /// Held at the cap of send-backs: not performed until the person allows it.
+    pub held: bool,
+}
+
+/// Who sent work back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SentBy {
+    Person,
+    Agent,
 }
 
 /// Input for `Store::create_workflow_run`.
@@ -1172,6 +1196,7 @@ pub struct WorkflowRunChange {
     pub current_step: Option<Option<String>>,
     pub budget: Option<crate::workflow::Budget>,
     pub send_backs: Option<u32>,
+    pub send_back: Option<Option<SendBack>>,
     pub active_ms: Option<u64>,
     pub clock_at: Option<Option<String>>,
     pub error: Option<Option<String>>,

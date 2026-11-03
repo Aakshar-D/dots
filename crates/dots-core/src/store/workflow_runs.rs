@@ -15,7 +15,7 @@ use crate::{Error, Result};
 
 const WR_COLUMNS: &str = "id, workflow_id, team_id, definition, project_id, project, task, \
     trigger_kind, origin_run_id, test, status, waiting_on, current_step, budget, send_backs, \
-    active_ms, error, started_at, ended_at";
+    send_back, active_ms, error, started_at, ended_at";
 const STEP_COLUMNS: &str = "id, workflow_run_id, step_id, attempt, status, handoff, decision, \
     error, outcome, notice, send_back, started_at, ended_at";
 
@@ -111,6 +111,9 @@ impl Store {
             current_step: row.try_get("current_step")?,
             budget: serde_json::from_str(&row.try_get::<String, _>("budget")?)?,
             send_backs: row.try_get::<i64, _>("send_backs")? as u32,
+            send_back: opt_json(row.try_get("send_back")?)?
+                .map(serde_json::from_value)
+                .transpose()?,
             spent_runs: runs as u32,
             spent_tokens: tokens.max(0) as u64,
             spent_cache_read: cached.max(0) as u64,
@@ -257,6 +260,12 @@ impl Store {
         }
         if let Some(n) = change.send_backs {
             set("send_backs", Some(n.to_string()));
+        }
+        if let Some(s) = &change.send_back {
+            set(
+                "send_back",
+                s.as_ref().map(serde_json::to_string).transpose()?,
+            );
         }
         if let Some(ms) = change.active_ms {
             set("active_ms", Some(ms.to_string()));

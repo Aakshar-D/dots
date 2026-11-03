@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use tokio::sync::Semaphore;
 
-use super::{next_of, Workflows};
+use super::Workflows;
 use crate::model::{
     Handoff, Run, StepRun, StepRunChange, StepRunStatus, WorkflowRun, WorkflowRunStatus,
 };
@@ -133,7 +133,8 @@ impl Workflows {
     /// Starts the job that ends the agent step run `step_run`, whose runs `runs` have all
     /// ended with the newest of its own thread succeeded (and, for a delegate step, every
     /// member reported to it): it builds the step's hand-off (`handoff_of`, Dots'
-    /// commit included), then succeeds the step run with it and begins the step after it.
+    /// commit included), then succeeds the step run with it and moves on: the send-back its
+    /// agent asked for, else the step after it.
     pub(super) fn start_hand_off(&self, wr: &WorkflowRun, step_run: &StepRun, runs: Vec<Run>) {
         let wr = wr.clone();
         let step_run_id = step_run.id.clone();
@@ -188,7 +189,8 @@ impl Workflows {
             )
             .await?;
         self.step_ended(&wr, &step.id);
+        // The send-back its agent asked for goes now (`send_back`), else the next step.
         let wr = self.store.get_workflow_run(&wr.id).await?;
-        self.begin_or_finish(&wr, next_of(&wr, &step.id)).await
+        self.move_on(&wr, step).await
     }
 }

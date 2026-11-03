@@ -137,7 +137,9 @@ impl Workflows {
             } => d.total,
             _ => 0,
         };
-        let left = total.saturating_sub(members.len() as u32);
+        // Counted over every attempt of the step, as `start_member` counts them.
+        let started = self.store.step_members_started(&step_run.id).await?;
+        let left = total.saturating_sub(started);
         // A lead that is no longer a dot fails its continued run, and with it the step.
         let engine = match self.store.get_dot(&last.dot_id).await {
             Ok(dot) => dot.spec.engine,

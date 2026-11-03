@@ -13,3 +13,6 @@ CREATE TABLE workflow_step_members (
     created_at TEXT NOT NULL
 );
 CREATE INDEX workflow_step_members_step ON workflow_step_members(step_run_id, created_at);
+-- The last send-back of a workflow run (teams spec sections 5.4 and 9), JSON
+-- `{"from", "to", "note", "by", "held"}`: the one performed, or the one held at the cap.
+ALTER TABLE workflow_runs ADD COLUMN send_back TEXT;

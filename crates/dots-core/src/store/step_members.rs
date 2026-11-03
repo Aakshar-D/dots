@@ -78,6 +78,23 @@ impl Store {
         .collect()
     }
 
+    /// How many members the delegate step of the step run `step_run_id` has started in its
+    /// workflow run, over every step run of that step (teams spec section 5.4: a send-back to
+    /// the step goes on counting against its `total`).
+    pub async fn step_members_started(&self, step_run_id: &str) -> Result<u32> {
+        let n: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM workflow_step_members m \
+             JOIN workflow_step_runs s ON s.id = m.step_run_id \
+             JOIN workflow_step_runs o ON o.workflow_run_id = s.workflow_run_id \
+             AND o.step_id = s.step_id \
+             WHERE o.id = ?",
+        )
+        .bind(step_run_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(n as u32)
+    }
+
     /// The member whose thread has the root run `root_run_id`, if it is a member's thread.
     pub async fn step_member(&self, root_run_id: &str) -> Result<Option<StepMember>> {
         sqlx::query(&format!(

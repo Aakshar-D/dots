@@ -7,10 +7,12 @@
 //! of a step changes, when a question is posted or answered, when it is woken, and every
 //! `TICK`. Slow work a step needs (an agent step's hand-off) runs as a job outside the loop's
 //! lock (`jobs`). A delegate step's run may start other members, whose results continue it
-//! (`delegate`).
+//! (`delegate`). A check or an agent step may send the work back to an earlier agent step,
+//! which goes on where it left off (`send_back`).
 
 mod delegate;
 mod jobs;
+mod send_back;
 mod tools;
 
 pub use tools::STEP_CLOSED;
@@ -875,9 +877,7 @@ impl Workflows {
             Some((StepRunStatus::Running, step_run)) => {
                 self.watch_agent(&wr, step, &step_run).await
             }
-            Some((StepRunStatus::Succeeded, _)) => {
-                self.begin_or_finish(&wr, next_of(&wr, &current)).await
-            }
+            Some((StepRunStatus::Succeeded, _)) => self.move_on(&wr, step).await,
             // A move cut off between its two writes (a crash, a store error) leaves the run
             // `Running` behind a step that is failed or waiting for the person: put the run
             // where the person can act on it.
@@ -1008,7 +1008,7 @@ impl Workflows {
                         // Read again: the hand-offs before the step include the paths the
                         // branches just taken chose.
                         let wr = self.store.get_workflow_run(&wr.id).await?;
-                        self.queue_agent_run(&wr, step, &step_run).await?;
+                        self.queue_first(&wr, step, &step_run).await?;
                         self.updated(&self.store.get_workflow_run(&wr.id).await?);
                     }
                 }
@@ -1119,12 +1119,15 @@ impl Workflows {
     }
 
     /// Queues the run of an agent step's member, with the `## Workflow` section and the branch
-    /// it starts from in its payload (sections 5.2 and 6).
+    /// it starts from in its payload (sections 5.2 and 6). `again` starts afresh a step that
+    /// went back but whose earlier session cannot be resumed (`send_back`): from the branch it
+    /// names, with the send-back's message in the section.
     async fn queue_agent_run(
         &self,
         wr: &WorkflowRun,
         step: &Step,
         step_run: &StepRun,
+        again: Option<&send_back::Again>,
     ) -> Result<Run> {
         let StepKind::Agent { member, .. } = &step.kind else {
             return Err(Error::Other(format!(
@@ -1132,14 +1135,20 @@ impl Workflows {
                 step.id
             )));
         };
-        let section = self.section(wr, step, step_run).await?;
+        let section = self
+            .section(wr, step, step_run, again.map(|a| a.message.as_str()))
+            .await?;
+        let start = match again {
+            Some(again) => again.start.clone(),
+            None => start_branch(wr, &step.id),
+        };
         let mut new = NewRun::new(member, TriggerKind::Workflow);
         new.workflow_step_run_id = Some(step_run.id.clone());
         new.payload = Some(json!({
             "workflow": {
                 "workflow_run_id": wr.id,
                 "step_id": step.id,
-                "start": start_branch(wr, &step.id),
+                "start": start,
                 "section": section,
             }
         }));
@@ -1168,8 +1177,15 @@ impl Workflows {
     /// The `## Workflow` section of the prompt of `step` (section 5.2). Its place counts every
     /// step of the tree in run order, branches and the paths not taken included. It names the
     /// workflow tools the step's runs have (section 7), as the member's model knows them, unless
-    /// its policy denies `Workflow` outright (the runner then offers none).
-    async fn section(&self, wr: &WorkflowRun, step: &Step, step_run: &StepRun) -> Result<String> {
+    /// its policy denies `Workflow` outright (the runner then offers none). `sent` is what a
+    /// step that went back and starts afresh is told about the send-back.
+    async fn section(
+        &self,
+        wr: &WorkflowRun,
+        step: &Step,
+        step_run: &StepRun,
+        sent: Option<&str>,
+    ) -> Result<String> {
         let StepKind::Agent { member, job, .. } = &step.kind else {
             return Ok(String::new());
         };
@@ -1220,6 +1236,11 @@ impl Workflows {
             out.push_str(&tools);
             out.push('\n');
         }
+        if let Some(sent) = sent {
+            out.push_str("### Sent back\n\n");
+            out.push_str(sent.trim());
+            out.push_str("\n\n");
+        }
         out.push_str(
             "When you are done, end with a summary of what you did: the next step gets it.\n",
         );
@@ -1243,16 +1264,7 @@ impl Workflows {
         let members = self.store.step_members(&step_run.id).await?;
         let own = delegate::own_runs(&runs, &members);
         let Some(last) = own.last().copied() else {
-            if let StepKind::Agent { member, .. } = &step.kind {
-                if let Some(error) = self.member_refusal(member).await? {
-                    return self.fail_step(wr, step, step_run, &error).await;
-                }
-            }
-            if let Some(limit) = budget_reached(wr) {
-                return self.wait_on_budget(wr, &limit).await;
-            }
-            self.queue_agent_run(wr, step, step_run).await?;
-            return Ok(());
+            return self.start_agent(wr, step, step_run).await;
         };
         if own.iter().any(|r| !r.status.is_terminal()) {
             return Ok(());
@@ -1276,6 +1288,21 @@ impl Workflows {
         // The hand-off runs Dots' commit, up to two minutes: not under the lock.
         self.start_hand_off(wr, step_run, runs);
         Ok(())
+    }
+
+    /// Starts the first run of the agent step run `step_run`, which has none (`queue_first`),
+    /// unless its member may not run, which fails it, or a limit is reached, which waits for
+    /// the person.
+    async fn start_agent(&self, wr: &WorkflowRun, step: &Step, step_run: &StepRun) -> Result<()> {
+        if let StepKind::Agent { member, .. } = &step.kind {
+            if let Some(error) = self.member_refusal(member).await? {
+                return self.fail_step(wr, step, step_run, &error).await;
+            }
+        }
+        if let Some(limit) = budget_reached(wr) {
+            return self.wait_on_budget(wr, &limit).await;
+        }
+        self.queue_first(wr, step, step_run).await
     }
 
     /// Fails a step: the workflow run waits for the person to retry it or stop (section 8).

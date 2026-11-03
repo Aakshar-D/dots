@@ -12,8 +12,9 @@ use dots_core::events::{new_bus, Bus, RuntimeEvent};
 use dots_core::followups::FollowUps;
 use dots_core::model::{
     Dot, EngineKind, FollowUpStatus, MemberHandoff, MemberSpec, NewRun, ProjectSpec, Run,
-    RunStatus, StepRunStatus, TeamSpec, TriggerKind, WaitingOn, WorkflowRun, WorkflowRunStatus,
-    WorkflowSpec, WorkflowTrigger, WorkspaceMode,
+    RunStatus, SendBack, SentBy, StepRun, StepRunChange, StepRunStatus, TeamSpec, TriggerKind,
+    WaitingOn, WorkflowRun, WorkflowRunChange, WorkflowRunStatus, WorkflowSpec, WorkflowTrigger,
+    WorkspaceMode,
 };
 use dots_core::runner::{Runner, RunnerConfig};
 use dots_core::scheduler::{Clock, SystemClock};
@@ -62,6 +63,12 @@ enum Act {
     /// Waits for a permit of `Team::held`, then writes a file into its workspace and finishes
     /// with this summary.
     Await(&'static str, &'static str),
+    /// Calls `send_back` with (step name, note), as the run's model would, keeping the answer
+    /// (`Team::answers`); then does the act given.
+    SendBack(&'static str, &'static str, Box<Act>),
+    /// Starts no session: writes the file given, if any, into its workspace and finishes with
+    /// this summary, so the run cannot be resumed.
+    NoSession(Option<&'static str>, &'static str),
 }
 
 /// Plays each dot's acts in order, one per run (the last one again once they run out), and
@@ -143,12 +150,29 @@ impl Engine for Team {
         let answers = self.answers.clone();
         let (tx, rx) = mpsc::channel(8);
         tokio::spawn(async move {
-            let session = format!("session-{}", ctx.run_id);
-            let _ = tx
-                .send(EngineEvent::SessionStarted {
-                    session_id: session,
-                })
-                .await;
+            if !matches!(act, Act::NoSession(..)) {
+                // A resumed run goes on in the session it was given.
+                let session = ctx
+                    .session_id
+                    .clone()
+                    .unwrap_or_else(|| format!("session-{}", ctx.run_id));
+                let _ = tx
+                    .send(EngineEvent::SessionStarted {
+                        session_id: session,
+                    })
+                    .await;
+            }
+            if let Act::SendBack(to, note, then) = act {
+                let workflows = workflows.clone().and_then(|w| w.upgrade());
+                let workflows = workflows.expect("the workflows");
+                let input = json!({"to_step": to, "note": note});
+                let answer = match ctx.tools.step() {
+                    Some(step) => workflows.call_send_back(&ctx.run_id, step, &input).await,
+                    None => Err("this run has no step tools".to_string()),
+                };
+                answers.lock().unwrap().push(answer);
+                act = *then;
+            }
             if let Act::Start(calls, then) = act {
                 let workflows = workflows.and_then(|w| w.upgrade()).expect("the workflows");
                 for (member, task) in calls {
@@ -214,7 +238,13 @@ impl Engine for Team {
                     EngineEvent::Finished { summary: s.into() }
                 }
                 Act::Say(s) => EngineEvent::Finished { summary: s },
-                Act::Start(..) => unreachable!("played above"),
+                Act::Start(..) | Act::SendBack(..) => unreachable!("played above"),
+                Act::NoSession(file, s) => {
+                    if let Some(file) = file {
+                        std::fs::write(ctx.workspace.join(file), s).unwrap();
+                    }
+                    EngineEvent::Finished { summary: s.into() }
+                }
                 Act::Await(file, s) => {
                     held.acquire().await.unwrap().forget();
                     std::fs::write(ctx.workspace.join(file), s).unwrap();
@@ -251,6 +281,8 @@ struct World {
     project: String,
     helper: Dot,
     dev: Dot,
+    /// Stops the workflows' loop, as Dots stopping does.
+    stop_loop: CancellationToken,
 }
 
 async fn worktree_dot(store: &Store, dir: &Path, name: &str) -> Dot {
@@ -297,7 +329,8 @@ async fn world_with(clock: Arc<dyn Clock>, budget: Budget) -> World {
     runner.spawn_dispatcher(CancellationToken::new());
     let workflows = Workflows::new(store.clone(), bus.clone(), runner.clone(), clock);
     let _ = engine.workflows.set(Arc::downgrade(&workflows));
-    workflows.spawn(CancellationToken::new());
+    let stop_loop = CancellationToken::new();
+    workflows.spawn(stop_loop.clone());
     let repo = dir.path().join("project");
     init_repo(&repo);
     let helper = worktree_dot(&store, dir.path(), "helper").await;
@@ -348,6 +381,7 @@ async fn world_with(clock: Arc<dyn Clock>, budget: Budget) -> World {
         project,
         helper,
         dev,
+        stop_loop,
     }
 }
 
@@ -2546,4 +2580,828 @@ async fn a_member_interrupted_by_a_restart_is_reported_as_failed_and_the_lead_go
     assert_eq!(handoff.members.len(), 1);
     assert_eq!(handoff.members[0].status, RunStatus::Failed);
     assert_eq!(handoff.members[0].summary, "interrupted");
+}
+
+/// An agent step of `member` that may send the work back to the steps `to`.
+fn sending_back(id: &str, name: &str, member: &Dot, job: &str, to: &[&str]) -> Step {
+    let mut step = agent(id, name, member, job);
+    if let StepKind::Agent {
+        can_send_back_to, ..
+    } = &mut step.kind
+    {
+        *can_send_back_to = to.iter().map(|s| s.to_string()).collect();
+    }
+    step
+}
+
+/// The step runs of the workflow run as (step id, attempt, status), in the order made.
+fn attempts(wr: &WorkflowRun) -> Vec<(&str, u32, StepRunStatus)> {
+    wr.steps
+        .iter()
+        .map(|s| (s.step_id.as_str(), s.attempt, s.status))
+        .collect()
+}
+
+/// The newest step run of `step`.
+fn newest<'a>(wr: &'a WorkflowRun, step: &str) -> &'a StepRun {
+    wr.steps.iter().rev().find(|s| s.step_id == step).unwrap()
+}
+
+/// Waiting on the check `step`, which has had `n` step runs.
+fn at(step: &'static str, n: usize) -> impl Fn(&WorkflowRun) -> bool {
+    move |wr| {
+        waits_on(WaitingOn::Check)(wr)
+            && wr.current_step.as_deref() == Some(step)
+            && wr.steps.iter().filter(|s| s.step_id == step).count() == n
+    }
+}
+
+/// Waiting on the check `check`, which has had `n` step runs.
+fn at_check(n: usize) -> impl Fn(&WorkflowRun) -> bool {
+    at("check", n)
+}
+
+impl World {
+    /// The runs of the step run `step_run`, oldest first.
+    async fn runs_of(&self, step_run: &str) -> Vec<Run> {
+        self.store.runs_of_step_run(step_run).await.unwrap()
+    }
+
+    /// As `until`, with a pass of `workflows` before each look, for a test whose loop is
+    /// stopped.
+    async fn until_passing(
+        &self,
+        workflows: &Workflows,
+        id: &str,
+        done: impl Fn(&WorkflowRun) -> bool,
+    ) -> WorkflowRun {
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        loop {
+            workflows.pass().await.unwrap();
+            let wr = self.store.get_workflow_run(id).await.unwrap();
+            if done(&wr) {
+                return wr;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "workflow run {id} did not get there: {wr:#?}"
+            );
+            tokio::time::sleep(Duration::from_millis(30)).await;
+        }
+    }
+}
+
+/// The person's send-back of `note` from the check `check` to the step `to`.
+fn by_person(check: &str, to: &str, note: &str, held: bool) -> Option<SendBack> {
+    Some(SendBack {
+        from: check.into(),
+        to: to.into(),
+        note: note.into(),
+        by: SentBy::Person,
+        held,
+    })
+}
+
+#[tokio::test]
+async fn the_person_sends_back_from_a_check_and_the_step_goes_on_in_its_own_session() {
+    let w = world().await;
+    w.engine.set(
+        &w.helper.spec.name,
+        vec![Act::Finish("Task: make the icon visible.")],
+    );
+    w.engine.set(
+        &w.dev.spec.name,
+        vec![
+            Act::Write("icon.txt", "Made the icon visible."),
+            Act::Write("dark.txt", "Used the light set."),
+        ],
+    );
+    let flow = w.standard().await;
+    let wr = w.start(&flow).await;
+    let wr = w.until(&wr.id, at_check(1)).await;
+    let first = w.runs_of(&newest(&wr, "dev").id).await.remove(0);
+    let branch = first.branch.clone().unwrap();
+
+    let sent = w
+        .workflows
+        .send_back_check(&wr.id, "  Use the light icon set.  ")
+        .await
+        .unwrap();
+    assert_eq!(sent.send_backs, 1);
+    assert_eq!(
+        sent.send_back,
+        by_person("check", "dev", "Use the light icon set.", false)
+    );
+    let decided = &sent.steps[2];
+    assert_eq!(decided.status, StepRunStatus::Succeeded);
+    assert_eq!(
+        decided.decision,
+        Some(json!({"decision": "sent_back", "note": "Use the light icon set."}))
+    );
+
+    // The check waits again, on the dev's new work.
+    let wr = w.until(&wr.id, at_check(2)).await;
+    assert_eq!(
+        attempts(&wr),
+        [
+            ("helper", 1, StepRunStatus::Succeeded),
+            ("dev", 1, StepRunStatus::Succeeded),
+            ("check", 1, StepRunStatus::Succeeded),
+            ("dev", 2, StepRunStatus::Succeeded),
+            ("check", 2, StepRunStatus::Waiting),
+        ]
+    );
+    // The dev's run is continued for the new step run: the same session, worktree and branch.
+    let again = newest(&wr, "dev");
+    let runs = w.runs_of(&again.id).await;
+    assert_eq!(runs.len(), 1);
+    let run = &runs[0];
+    assert_eq!(run.parent_run_id.as_deref(), Some(first.id.as_str()));
+    assert_eq!(run.root_run_id, first.root_run_id);
+    assert!(run.session_id.is_some());
+    assert_eq!(run.session_id, first.session_id);
+    assert_eq!(run.workspace_path, first.workspace_path);
+    assert_eq!(run.branch.as_deref(), Some(branch.as_str()));
+    assert_eq!(run.workflow_step_run_id.as_deref(), Some(again.id.as_str()));
+    assert_eq!(
+        w.engine.prompts_of("dev")[1],
+        "The person sent this back: Use the light icon set."
+    );
+    // Its new commit is on that branch, over the first one, and the hand-off names it.
+    let handoff = again.handoff.clone().unwrap();
+    assert_eq!(handoff.summary, "Used the light set.");
+    assert_eq!(handoff.branches.len(), 1);
+    assert_eq!(handoff.branches[0].branch, branch);
+    assert_eq!(
+        git_out(&w.repo, &["show", &format!("{branch}:dark.txt")]),
+        "Used the light set."
+    );
+    assert_eq!(
+        git_out(&w.repo, &["show", &format!("{branch}:icon.txt")]),
+        "Made the icon visible."
+    );
+    // The step before the target does not run again.
+    assert_eq!(w.engine.prompts_of("helper").len(), 1);
+    assert_eq!(wr.spent_runs, 3);
+
+    let done = w.workflows.approve_check(&wr.id, None).await.unwrap();
+    assert_eq!(done.status, WorkflowRunStatus::Succeeded);
+    assert_eq!(
+        done.steps[4].handoff.as_ref().unwrap().summary,
+        "Used the light set."
+    );
+}
+
+#[tokio::test]
+async fn an_agents_send_back_goes_when_its_step_ends_and_the_steps_between_run_again() {
+    let w = world().await;
+    w.engine.set(
+        &w.dev.spec.name,
+        vec![
+            Act::Write("icon.txt", "Made the icon visible."),
+            Act::Write("dark.txt", "Used the light set."),
+        ],
+    );
+    w.engine.set(
+        &w.helper.spec.name,
+        vec![
+            Act::Write("notes.txt", "Notes one."),
+            // The review makes no change: its branch is gone when it runs again.
+            Act::SendBack(
+                "build",
+                "Use the light set.",
+                Box::new(Act::Finish("Sent it back.")),
+            ),
+            Act::Write("notes.txt", "Notes two."),
+            Act::Write("review.txt", "Looks right now."),
+        ],
+    );
+    let flow = w
+        .workflow(
+            "Fix",
+            vec![
+                agent("build", "Build", &w.dev, "Fix the bug."),
+                agent("notes", "Notes", &w.helper, "Write release notes."),
+                sending_back("review", "Review", &w.helper, "Review it.", &["build"]),
+                check("check"),
+            ],
+        )
+        .await;
+    let wr = w.start(&flow).await;
+    let wr = w.until(&wr.id, at_check(1)).await;
+    assert_eq!(
+        attempts(&wr),
+        [
+            ("build", 1, StepRunStatus::Succeeded),
+            ("notes", 1, StepRunStatus::Succeeded),
+            ("review", 1, StepRunStatus::Succeeded),
+            ("build", 2, StepRunStatus::Succeeded),
+            ("notes", 2, StepRunStatus::Succeeded),
+            ("review", 2, StepRunStatus::Succeeded),
+            ("check", 1, StepRunStatus::Waiting),
+        ]
+    );
+    assert_eq!(
+        w.engine.answers(),
+        [Ok(
+            "Sent back to \"Build\". End your turn now: the work goes back when you finish."
+                .to_string()
+        )]
+    );
+    assert_eq!(wr.send_backs, 1);
+    assert_eq!(
+        wr.send_back,
+        Some(SendBack {
+            from: "review".into(),
+            to: "build".into(),
+            note: "Use the light set.".into(),
+            by: SentBy::Agent,
+            held: false,
+        })
+    );
+    assert_eq!(
+        wr.steps[2].send_back,
+        Some(json!({"to": "build", "note": "Use the light set."}))
+    );
+    assert_eq!(newest(&wr, "review").send_back, None);
+    assert_eq!(
+        w.engine.prompts_of("dev")[1],
+        "The step \"Review\" sent this back: Use the light set."
+    );
+
+    // The notes step is continued with the build's new hand-off. Its branch still has its
+    // notes, so it is told to merge the new work in.
+    let build = newest(&wr, "build").handoff.clone().unwrap().branches[0]
+        .branch
+        .clone();
+    let notes_first = w.runs_of(&wr.steps[1].id).await.remove(0);
+    let notes_again = w.runs_of(&newest(&wr, "notes").id).await.remove(0);
+    assert_eq!(
+        notes_again.parent_run_id.as_deref(),
+        Some(notes_first.id.as_str())
+    );
+    assert_eq!(notes_again.session_id, notes_first.session_id);
+    let helper = w.engine.prompts_of("helper");
+    assert_eq!(helper.len(), 4);
+    assert_eq!(
+        helper[2],
+        format!(
+            "Work was sent back to \"Build\" and has run again. Its new hand-off:\n\n\
+             Used the light set.\n\nBranches: {build}\n\nYour branch still has your earlier \
+             commits: merge \"{build}\" into it before you go on.\n\nUpdate your work to match, \
+             then end with a new summary."
+        )
+    );
+
+    // The review is continued with the notes' new hand-off. Its branch was gone, so its
+    // worktree is made again on that branch from the notes' new tip.
+    let notes = newest(&wr, "notes").handoff.clone().unwrap().branches[0]
+        .branch
+        .clone();
+    assert_eq!(
+        helper[3],
+        format!(
+            "Work was sent back to \"Build\" and has run again. Its new hand-off:\n\n\
+             Notes two.\n\nBranches: {notes}\n\nUpdate your work to match, then end with a new \
+             summary."
+        )
+    );
+    let review_first = w.runs_of(&wr.steps[2].id).await.remove(0);
+    let review_again = w.runs_of(&newest(&wr, "review").id).await.remove(0);
+    assert_eq!(
+        review_again.parent_run_id.as_deref(),
+        Some(review_first.id.as_str())
+    );
+    assert_eq!(review_again.session_id, review_first.session_id);
+    assert_eq!(review_again.branch, review_first.branch);
+    let tip = git_out(&w.repo, &["rev-parse", &format!("refs/heads/{notes}")]);
+    assert_eq!(review_again.base_commit.as_deref(), Some(tip.as_str()));
+    assert_ne!(review_again.base_commit, review_first.base_commit);
+    let review = review_again.branch.clone().unwrap();
+    assert_eq!(
+        git_out(&w.repo, &["show", &format!("{review}:notes.txt")]),
+        "Notes two."
+    );
+    assert_eq!(
+        git_out(&w.repo, &["show", &format!("{review}:review.txt")]),
+        "Looks right now."
+    );
+    // The check shows the review's new work.
+    assert_eq!(
+        newest(&wr, "review").handoff.as_ref().unwrap().branches[0].branch,
+        review
+    );
+}
+
+#[tokio::test]
+async fn past_the_cap_a_send_back_waits_until_the_person_allows_one_more() {
+    let budget = Budget {
+        max_runs: 50,
+        ..Budget::default()
+    };
+    let w = world_with(Arc::new(SystemClock), budget).await;
+    w.engine.set(
+        &w.dev.spec.name,
+        vec![Act::Write("icon.txt", "Made the icon visible.")],
+    );
+    let flow = w
+        .workflow(
+            "Fix",
+            vec![
+                agent("dev", "Fix it", &w.dev, "Fix the bug."),
+                check("check"),
+            ],
+        )
+        .await;
+    let wr = w.start(&flow).await;
+    for (n, note) in ["One.", "Two.", "Three."].into_iter().enumerate() {
+        w.until(&wr.id, at_check(n + 1)).await;
+        let sent = w.workflows.send_back_check(&wr.id, note).await.unwrap();
+        assert_eq!(sent.send_backs, n as u32 + 1);
+    }
+    w.until(&wr.id, at_check(4)).await;
+
+    // The fourth is held: nothing goes back, and a pass leaves it waiting.
+    let held = w.workflows.send_back_check(&wr.id, "Four.").await.unwrap();
+    assert_eq!(held.status, WorkflowRunStatus::Waiting);
+    assert_eq!(held.waiting_on, Some(WaitingOn::SendBacks));
+    assert_eq!(
+        held.error.as_deref(),
+        Some("Send-back limit reached: 3 of 3")
+    );
+    assert_eq!(held.send_backs, 3);
+    assert_eq!(held.send_back, by_person("check", "dev", "Four.", true));
+    assert_eq!(held.current_step.as_deref(), Some("check"));
+    w.workflows.pass().await.unwrap();
+    let still = w.store.get_workflow_run(&wr.id).await.unwrap();
+    assert_eq!(still.waiting_on, Some(WaitingOn::SendBacks));
+    assert_eq!(still.steps.iter().filter(|s| s.step_id == "dev").count(), 4);
+    assert_eq!(w.engine.prompts_of("dev").len(), 4);
+    assert!(matches!(
+        w.workflows.approve_check(&wr.id, None).await,
+        Err(Error::Conflict(_))
+    ));
+
+    let allowed = w.workflows.allow_send_back(&wr.id).await.unwrap();
+    assert_eq!(allowed.budget.max_send_backs, 4);
+    assert_eq!(allowed.send_backs, 4);
+    assert_eq!(allowed.status, WorkflowRunStatus::Running);
+    assert_eq!(allowed.error, None);
+    assert_eq!(allowed.send_back, by_person("check", "dev", "Four.", false));
+    let wr = w.until(&wr.id, at_check(5)).await;
+    let dev = w.engine.prompts_of("dev");
+    assert_eq!(dev.len(), 5);
+    assert_eq!(dev[4], "The person sent this back: Four.");
+    match w.workflows.allow_send_back(&wr.id).await {
+        Err(Error::Conflict(m)) => assert_eq!(
+            m,
+            format!(
+                "workflow run {} is not waiting at its send-back limit",
+                wr.id
+            )
+        ),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_send_back_past_the_runs_limit_waits_on_budget_then_goes_on() {
+    let budget = Budget {
+        max_runs: 1,
+        ..Budget::default()
+    };
+    let w = world_with(Arc::new(SystemClock), budget).await;
+    w.engine.set(
+        &w.dev.spec.name,
+        vec![
+            Act::Write("icon.txt", "Made the icon visible."),
+            Act::Write("dark.txt", "Used the light set."),
+        ],
+    );
+    let flow = w
+        .workflow(
+            "Fix",
+            vec![
+                agent("dev", "Fix it", &w.dev, "Fix the bug."),
+                check("check"),
+            ],
+        )
+        .await;
+    let wr = w.start(&flow).await;
+    w.until(&wr.id, at_check(1)).await;
+    let sent = w
+        .workflows
+        .send_back_check(&wr.id, "Use the light set.")
+        .await
+        .unwrap();
+    assert_eq!(sent.waiting_on, Some(WaitingOn::Budget));
+    assert_eq!(sent.error.as_deref(), Some("Budget reached: runs, 1 of 1"));
+    assert_eq!(sent.send_backs, 1);
+    assert_eq!(sent.current_step.as_deref(), Some("dev"));
+    let again = newest(&sent, "dev");
+    assert_eq!((again.attempt, again.status), (2, StepRunStatus::Running));
+    assert!(w.runs_of(&again.id).await.is_empty());
+
+    w.workflows.add_budget(&wr.id).await.unwrap();
+    w.until(&wr.id, at_check(2)).await;
+    let dev = w.engine.prompts_of("dev");
+    assert_eq!(dev.len(), 2);
+    assert_eq!(dev[1], "The person sent this back: Use the light set.");
+}
+
+#[tokio::test]
+async fn a_step_whose_session_cannot_be_resumed_starts_again_and_says_so() {
+    let w = world().await;
+    w.engine.set(
+        &w.helper.spec.name,
+        vec![
+            Act::NoSession(None, "Task: make the icon visible."),
+            Act::Finish("Task: use the light set."),
+        ],
+    );
+    w.engine.set(
+        &w.dev.spec.name,
+        vec![
+            Act::NoSession(Some("icon.txt"), "Made the icon visible."),
+            Act::Write("dark.txt", "Used the light set."),
+        ],
+    );
+    let flow = w
+        .workflow(
+            "Fix",
+            vec![
+                agent("helper", "Write the task", &w.helper, "Write the task."),
+                Step {
+                    id: "task".into(),
+                    name: "Task check".into(),
+                    kind: StepKind::Check { send_back_to: None },
+                },
+                agent("dev", "Fix it", &w.dev, "Fix the bug."),
+                check("check"),
+            ],
+        )
+        .await;
+    let wr = w.start(&flow).await;
+
+    // The helper made no change: it starts again as it started the first time.
+    let wr = w.until(&wr.id, at("task", 1)).await;
+    w.workflows
+        .send_back_check(&wr.id, "Say which icon.")
+        .await
+        .unwrap();
+    let wr = w.until(&wr.id, at("task", 2)).await;
+    let helper = newest(&wr, "helper");
+    assert_eq!(
+        helper.notice.as_deref(),
+        Some("Started again from the start: the earlier session could not be resumed.")
+    );
+    let fresh = w.runs_of(&helper.id).await.remove(0);
+    assert_eq!(fresh.trigger, TriggerKind::Workflow);
+    assert_eq!(fresh.parent_run_id, None);
+    assert_eq!(
+        fresh.payload.as_ref().unwrap()["workflow"]["start"],
+        json!(null)
+    );
+    let prompt = &w.engine.prompts_of("helper")[1];
+    for part in [
+        "## Workflow",
+        "### Your job in this step\n\nWrite the task.",
+        "### Sent back\n\nThe person sent this back: Say which icon.\n\nWhen you are done",
+    ] {
+        assert!(prompt.contains(part), "missing {part:?} in:\n{prompt}");
+    }
+    assert_eq!(wr.steps[0].notice, None);
+
+    // The dev made a change: it starts again from its old branch.
+    w.workflows.approve_check(&wr.id, None).await.unwrap();
+    let wr = w.until(&wr.id, at_check(1)).await;
+    let old = w.runs_of(&newest(&wr, "dev").id).await.remove(0);
+    let old_branch = old.branch.clone().unwrap();
+    w.workflows
+        .send_back_check(&wr.id, "Use the light set.")
+        .await
+        .unwrap();
+    let wr = w.until(&wr.id, at_check(2)).await;
+    let dev = newest(&wr, "dev");
+    assert_eq!(
+        dev.notice.clone(),
+        Some(format!(
+            "Started again from \"{old_branch}\": the earlier session could not be resumed."
+        ))
+    );
+    let fresh = w.runs_of(&dev.id).await.remove(0);
+    assert_eq!(fresh.parent_run_id, None);
+    assert_eq!(
+        fresh.payload.as_ref().unwrap()["workflow"]["start"],
+        json!(format!("refs/heads/{old_branch}"))
+    );
+    let prompt = &w.engine.prompts_of("dev")[1];
+    assert!(
+        prompt.contains("### Sent back\n\nThe person sent this back: Use the light set.\n\n"),
+        "{prompt}"
+    );
+    let branch = &dev.handoff.as_ref().unwrap().branches[0].branch;
+    assert_ne!(branch, &old_branch);
+    assert_eq!(
+        git_out(&w.repo, &["show", &format!("{branch}:icon.txt")]),
+        "Made the icon visible."
+    );
+    assert_eq!(
+        git_out(&w.repo, &["show", &format!("{branch}:dark.txt")]),
+        "Used the light set."
+    );
+}
+
+#[tokio::test]
+async fn a_send_back_to_a_delegate_step_continues_the_delegating_run() {
+    let w = world().await;
+    w.engine.set(
+        &w.helper.spec.name,
+        vec![
+            Act::Start(
+                vec![("dev", "Part one.")],
+                Box::new(Act::Finish("Started.")),
+            ),
+            Act::Finish("Merged it."),
+            Act::Finish("Took the note."),
+        ],
+    );
+    w.engine.set(
+        &w.dev.spec.name,
+        vec![Act::Write("one.txt", "Part one done.")],
+    );
+    let flow = w
+        .workflow(
+            "Fix",
+            vec![
+                delegating("split", "Split it", &w.helper, &[&w.dev], 3, 6),
+                check("check"),
+            ],
+        )
+        .await;
+    let wr = w.start(&flow).await;
+    let wr = w.until(&wr.id, at_check(1)).await;
+    let first = newest(&wr, "split");
+    let members = w.store.step_members(&first.id).await.unwrap();
+    assert_eq!(members.len(), 1);
+    let lead = w
+        .runs_of(&first.id)
+        .await
+        .into_iter()
+        .rev()
+        .find(|r| !members.iter().any(|m| m.run_id == r.root_run_id))
+        .unwrap();
+    w.workflows
+        .send_back_check(&wr.id, "Split it finer.")
+        .await
+        .unwrap();
+    let wr = w.until(&wr.id, at_check(2)).await;
+    let again = newest(&wr, "split");
+    let runs = w.runs_of(&again.id).await;
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].parent_run_id.as_deref(), Some(lead.id.as_str()));
+    assert_eq!(runs[0].root_run_id, lead.root_run_id);
+    assert_eq!(runs[0].session_id, lead.session_id);
+    assert_eq!(
+        w.engine.prompts_of("helper")[2],
+        "The person sent this back: Split it finer."
+    );
+    // It started no member this time; the member did not run again.
+    assert!(w.store.step_members(&again.id).await.unwrap().is_empty());
+    assert_eq!(w.engine.prompts_of("dev").len(), 1);
+    let handoff = again.handoff.clone().unwrap();
+    assert_eq!(handoff.summary, "Took the note.");
+    assert!(handoff.members.is_empty());
+}
+
+#[tokio::test]
+async fn send_back_check_refuses_a_bad_note_a_check_with_no_agent_before_it_and_no_check() {
+    let w = world().await;
+    let flow = w.workflow("Look", vec![check("check")]).await;
+    let wr = w.start(&flow).await;
+    let wr = w.until(&wr.id, at_check(1)).await;
+    let long = "x".repeat(8_001);
+    for note in ["", "   ", long.as_str()] {
+        match w.workflows.send_back_check(&wr.id, note).await {
+            Err(Error::Invalid(m)) => assert_eq!(m, "the note must be 1 to 8,000 characters"),
+            other => panic!("{other:?}"),
+        }
+    }
+    match w.workflows.send_back_check(&wr.id, "Redo it.").await {
+        Err(Error::Invalid(m)) => assert_eq!(
+            m,
+            "the check \"Your check\" has no agent step before it to send the work back to"
+        ),
+        other => panic!("{other:?}"),
+    }
+    // Nothing was written.
+    let still = w.store.get_workflow_run(&wr.id).await.unwrap();
+    assert_eq!(attempts(&still), [("check", 1, StepRunStatus::Waiting)]);
+    assert_eq!(still.waiting_on, Some(WaitingOn::Check));
+    assert_eq!((still.send_backs, still.send_back.clone()), (0, None));
+
+    w.workflows.approve_check(&wr.id, None).await.unwrap();
+    match w.workflows.send_back_check(&wr.id, "Redo it.").await {
+        Err(Error::Conflict(m)) => assert_eq!(
+            m,
+            format!("workflow run {} is not waiting for a check", wr.id)
+        ),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_send_back_cut_off_by_a_restart_is_finished_by_the_next_pass_once() {
+    let w = world().await;
+    w.engine.set(
+        &w.dev.spec.name,
+        vec![
+            Act::Write("icon.txt", "Made the icon visible."),
+            Act::Write("light.txt", "Used the light set."),
+            Act::Write("dark.txt", "Used the dark set."),
+        ],
+    );
+    let flow = w
+        .workflow(
+            "Fix",
+            vec![
+                agent("dev", "Fix it", &w.dev, "Fix the bug."),
+                check("check"),
+            ],
+        )
+        .await;
+    let wr = w.start(&flow).await;
+    let wr = w.until(&wr.id, at_check(1)).await;
+    // Dots stops, with the loop, while the person's send-back is half made.
+    w.stop_loop.cancel();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let restarted = || {
+        Workflows::new(
+            w.store.clone(),
+            new_bus(),
+            w.runner.clone(),
+            Arc::new(SystemClock),
+        )
+    };
+    let decide = |note: &str| StepRunChange {
+        status: Some(StepRunStatus::Succeeded),
+        decision: Some(Some(json!({"decision": "sent_back", "note": note}))),
+        ..Default::default()
+    };
+
+    // Cut off after the check was decided: nothing went back yet. The next passes send it
+    // back once.
+    w.store
+        .set_step_run(&newest(&wr, "check").id, &decide("Use the light set."))
+        .await
+        .unwrap();
+    w.store
+        .set_workflow_run(
+            &wr.id,
+            &WorkflowRunChange {
+                status: Some(WorkflowRunStatus::Running),
+                waiting_on: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let first = restarted();
+    first.pass().await.unwrap();
+    first.pass().await.unwrap();
+    let moved = w.store.get_workflow_run(&wr.id).await.unwrap();
+    assert_eq!(moved.send_backs, 1);
+    assert_eq!(moved.current_step.as_deref(), Some("dev"));
+    let dev2 = newest(&moved, "dev").clone();
+    assert_eq!(dev2.attempt, 2);
+    assert_eq!(w.runs_of(&dev2.id).await.len(), 1);
+    let wr = w.until_passing(&first, &wr.id, at_check(2)).await;
+    assert_eq!(
+        w.engine.prompts_of("dev")[1],
+        "The person sent this back: Use the light set."
+    );
+
+    // Cut off after the dev's new step run was made and the run moved to it, before its run
+    // was queued: the next passes queue the continuation once.
+    w.store
+        .set_step_run(&newest(&wr, "check").id, &decide("Use the dark set."))
+        .await
+        .unwrap();
+    let dev3 = w
+        .store
+        .create_step_run(&wr.id, "dev", 3, StepRunStatus::Running)
+        .await
+        .unwrap();
+    w.store
+        .set_workflow_run(
+            &wr.id,
+            &WorkflowRunChange {
+                status: Some(WorkflowRunStatus::Running),
+                waiting_on: Some(None),
+                current_step: Some(Some("dev".into())),
+                send_backs: Some(2),
+                send_back: Some(by_person("check", "dev", "Use the dark set.", false)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let second = restarted();
+    second.pass().await.unwrap();
+    second.pass().await.unwrap();
+    let runs = w.runs_of(&dev3.id).await;
+    assert_eq!(runs.len(), 1);
+    let dev2_run = w.runs_of(&dev2.id).await.remove(0);
+    assert_eq!(runs[0].parent_run_id.as_deref(), Some(dev2_run.id.as_str()));
+    let wr = w.until_passing(&second, &wr.id, at_check(3)).await;
+    assert_eq!(wr.send_backs, 2);
+    assert_eq!(
+        w.engine.prompts_of("dev")[2],
+        "The person sent this back: Use the dark set."
+    );
+    assert_eq!(
+        attempts(&wr),
+        [
+            ("dev", 1, StepRunStatus::Succeeded),
+            ("check", 1, StepRunStatus::Succeeded),
+            ("dev", 2, StepRunStatus::Succeeded),
+            ("check", 2, StepRunStatus::Succeeded),
+            ("dev", 3, StepRunStatus::Succeeded),
+            ("check", 3, StepRunStatus::Waiting),
+        ]
+    );
+    assert_eq!(w.engine.prompts_of("dev").len(), 3);
+}
+
+#[tokio::test]
+async fn a_delegate_step_sent_back_counts_its_total_over_every_attempt() {
+    let w = world().await;
+    w.engine.set(
+        &w.helper.spec.name,
+        vec![
+            Act::Start(
+                vec![("dev", "Part one.")],
+                Box::new(Act::Finish("Started.")),
+            ),
+            Act::Finish("Merged it."),
+            Act::Start(
+                vec![("dev", "Part two."), ("dev", "Part three.")],
+                Box::new(Act::Finish("Started again.")),
+            ),
+            Act::Finish("Done again."),
+        ],
+    );
+    w.engine.set(
+        &w.dev.spec.name,
+        vec![Act::Finish("Part one done."), Act::Finish("Part two done.")],
+    );
+    let flow = w
+        .workflow(
+            "Fix",
+            vec![
+                delegating("split", "Split it", &w.helper, &[&w.dev], 2, 2),
+                check("check"),
+            ],
+        )
+        .await;
+    let wr = w.start(&flow).await;
+    w.until(&wr.id, at_check(1)).await;
+    let helper = w.engine.prompts_of("helper");
+    assert!(
+        helper[1].ends_with(
+            "You may start 1 more with `mcp__dots__start_member`, or end with your summary of \
+             the step."
+        ),
+        "{}",
+        helper[1]
+    );
+    w.workflows
+        .send_back_check(&wr.id, "Split it finer.")
+        .await
+        .unwrap();
+    let wr = w.until(&wr.id, at_check(2)).await;
+    // The member started in the first attempt counts: the second may start one more, and the
+    // third is refused.
+    assert_eq!(
+        w.engine.answers(),
+        [
+            Ok("Started \"dev\".".to_string()),
+            Ok("Started \"dev\".".to_string()),
+            Err("Not started: you have started 2 members, the most this step allows.".into()),
+        ]
+    );
+    let again = newest(&wr, "split");
+    assert_eq!(w.store.step_members(&again.id).await.unwrap().len(), 1);
+    assert_eq!(w.store.step_members_started(&again.id).await.unwrap(), 2);
+    let helper = w.engine.prompts_of("helper");
+    assert_eq!(helper.len(), 4);
+    assert_eq!(helper[2], "The person sent this back: Split it finer.");
+    assert!(
+        helper[3].contains("#### dev: Part two.")
+            && helper[3]
+                .ends_with("You may start no more members: end with your summary of the step."),
+        "{}",
+        helper[3]
+    );
+    assert_eq!(again.handoff.as_ref().unwrap().summary, "Done again.");
 }

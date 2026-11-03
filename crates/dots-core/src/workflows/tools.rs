@@ -120,13 +120,16 @@ impl Workflows {
         member: &StartableMember,
         task: &str,
     ) -> Result<std::result::Result<String, String>> {
-        let members = self.store.step_members(&step.step_run_id).await?;
-        if members.len() as u32 >= delegate.total {
+        // `total` counts the members the step started in every attempt (section 5.4), and
+        // `at_once` those of this one that are running now.
+        let started = self.store.step_members_started(&step.step_run_id).await?;
+        if started >= delegate.total {
             return Ok(Err(format!(
                 "Not started: you have started {} members, the most this step allows.",
                 delegate.total
             )));
         }
+        let members = self.store.step_members(&step.step_run_id).await?;
         let runs = self.store.runs_of_step_run(&step.step_run_id).await?;
         let running = members.iter().filter(|m| member_running(&runs, m)).count();
         if running as u32 >= delegate.at_once {
