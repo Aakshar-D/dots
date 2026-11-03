@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use common::{git_out, init_repo, spec, temp_store};
 use dots_core::checkins::CheckIns;
+use dots_core::deploy::{DeployResult, DeployedBranch, Deployer};
 use dots_core::engine::{Engine, EngineEvent, RunContext};
 use dots_core::events::{new_bus, Bus, RuntimeEvent};
 use dots_core::followups::FollowUps;
@@ -21,7 +22,8 @@ use dots_core::scheduler::{Clock, SystemClock};
 use dots_core::store::Store;
 use dots_core::team_tools::{DelegateTools, SendBackTarget, StartableMember, StepTools, Tool};
 use dots_core::workflow::{
-    BranchOn, BranchPath, Budget, Definition, Delegate, DeployMode, Step, StepKind, Trigger,
+    BranchOn, BranchPath, Budget, Definition, Delegate, DeployMode, MergeMethod, Step, StepKind,
+    Trigger,
 };
 use dots_core::workflows::{StartRequest, Workflows, ENDED_STEP_THREAD};
 use dots_core::Error;
@@ -653,37 +655,27 @@ async fn a_disabled_member_fails_its_step() {
 }
 
 #[tokio::test]
-async fn a_deploy_step_fails_as_not_built_yet() {
+async fn a_deploy_after_a_check_that_showed_no_branch_ships_nothing() {
     let w = world().await;
-    let deploy = Step {
-        id: "ship".into(),
-        name: "Ship".into(),
-        kind: StepKind::Deploy {
-            mode: DeployMode::Push,
-        },
-    };
-    let flow = w.workflow("Deploy", vec![check("check"), deploy]).await;
+    let flow = w
+        .workflow("Deploy", vec![check("check"), ship(DeployMode::Push)])
+        .await;
     let wr = w.start(&flow).await;
     let wr = w.until(&wr.id, waits_on(WaitingOn::Check)).await;
     w.workflows.approve_check(&wr.id, None).await.unwrap();
-    let wr = w.until(&wr.id, waits_on(WaitingOn::StepFailed)).await;
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
     assert_eq!(
-        wr.error.as_deref(),
-        Some("Ship: this kind of step is not built yet")
+        wr.steps[0].decision.as_ref().unwrap()["branches"],
+        json!([])
     );
-    assert_eq!(wr.current_step.as_deref(), Some("ship"));
-    // A retry tries it again, and it fails again.
-    w.workflows.retry_step(&wr.id).await.unwrap();
-    let wr = w.until(&wr.id, waits_on(WaitingOn::StepFailed)).await;
-    let attempts: Vec<_> = wr
-        .steps
-        .iter()
-        .filter(|s| s.step_id == "ship")
-        .map(|s| (s.attempt, s.status))
-        .collect();
     assert_eq!(
-        attempts,
-        [(1, StepRunStatus::Failed), (2, StepRunStatus::Failed)]
+        newest(&wr, "ship").deploy_result,
+        Some(DeployResult {
+            branches: vec![],
+            ready: false
+        })
     );
 }
 
@@ -3404,4 +3396,533 @@ async fn a_delegate_step_sent_back_counts_its_total_over_every_attempt() {
         helper[3]
     );
     assert_eq!(again.handoff.as_ref().unwrap().summary, "Done again.");
+}
+
+/// A deploy step `ship` named "Ship".
+fn ship(mode: DeployMode) -> Step {
+    Step {
+        id: "ship".into(),
+        name: "Ship".into(),
+        kind: StepKind::Deploy { mode },
+    }
+}
+
+impl World {
+    /// Gives the project a bare repository as its `origin` (with `main` pushed) and the
+    /// workflows the fake `gh` answering as `gh_mode`, which logs its calls to `gh.log`. Its
+    /// settings go to its own calls only, so tests running at once do not share them.
+    fn shipping_to_origin(&self, gh_mode: &str) {
+        git_out(self.dir.path(), &["init", "-q", "--bare", "remote.git"]);
+        let remote = self.dir.path().join("remote.git");
+        git_out(
+            &self.repo,
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+        );
+        git_out(&self.repo, &["push", "-q", "origin", "main"]);
+        let log = self.dir.path().join("gh.log");
+        self.workflows.set_deployer(Deployer {
+            gh: PathBuf::from(env!("CARGO_BIN_EXE_fake-gh")),
+            env: vec![
+                ("FAKE_GH_LOG".into(), log.to_string_lossy().to_string()),
+                ("FAKE_GH_MODE".into(), gh_mode.into()),
+            ],
+        });
+    }
+
+    /// The commit `branch` points at on `origin`, if it was pushed there.
+    fn remote_tip(&self, branch: &str) -> Option<String> {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(self.dir.path().join("remote.git"))
+            .args(["rev-parse", "--verify", "--quiet"])
+            .arg(format!("refs/heads/{branch}"))
+            .output()
+            .unwrap();
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+    }
+
+    /// The fake `gh`'s calls, one argument list each.
+    fn gh_calls(&self) -> Vec<Vec<String>> {
+        let text = std::fs::read_to_string(self.dir.path().join("gh.log")).unwrap_or_default();
+        text.lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
+    }
+
+    /// The flow "Ship": the dev fixes the bug (writing `fix.txt`), the person checks, then the
+    /// step "Ship" deploys as `mode`.
+    async fn ship_flow(&self, mode: DeployMode) -> String {
+        self.engine.set(
+            &self.dev.spec.name,
+            vec![Act::Write("fix.txt", "Fixed the icon.")],
+        );
+        self.workflow(
+            "Ship",
+            vec![
+                agent("dev", "Fix it", &self.dev, "Fix the bug."),
+                check("check"),
+                ship(mode),
+            ],
+        )
+        .await
+    }
+
+    /// Starts a run of `flow` (a test run with `test`) and waits for its check. Gives the
+    /// workflow run, the dev's branch and its tip.
+    async fn at_the_check(&self, flow: &str, test: bool) -> (WorkflowRun, String, String) {
+        let wr = self
+            .workflows
+            .start(StartRequest {
+                workflow_id: flow.into(),
+                project_id: self.project.clone(),
+                task: "The tray icon is invisible in dark mode.".into(),
+                trigger: WorkflowTrigger::Manual,
+                origin_run_id: None,
+                test,
+            })
+            .await
+            .unwrap();
+        let wr = self.until(&wr.id, waits_on(WaitingOn::Check)).await;
+        let branch = newest(&wr, "dev").handoff.as_ref().unwrap().branches[0]
+            .branch
+            .clone();
+        let tip = git_out(&self.repo, &["rev-parse", &format!("refs/heads/{branch}")]);
+        (wr, branch, tip)
+    }
+
+    /// Holds every job at a gate, approves the check the workflow run `id` waits on, and
+    /// waits until the deploy's job is held. Gives the deploy's step run id and the gate.
+    async fn approved_and_held(&self, id: &str) -> (String, Arc<tokio::sync::Semaphore>) {
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        self.workflows.hold_jobs(Some(gate.clone()));
+        let wr = self.workflows.approve_check(id, None).await.unwrap();
+        let step_run = newest(&wr, "ship").clone();
+        assert_eq!(step_run.status, StepRunStatus::Running);
+        assert!(self.workflows.has_job(&step_run.id));
+        (step_run.id, gate)
+    }
+
+    /// Moves `branch` on by one empty commit, made outside any worktree, as someone working
+    /// on it after the approval would. Gives the new tip.
+    fn commit_after(&self, branch: &str) -> String {
+        let tip = git_out(&self.repo, &["rev-parse", &format!("refs/heads/{branch}")]);
+        let tree = format!("{tip}^{{tree}}");
+        let later = git_out(
+            &self.repo,
+            &["commit-tree", &tree, "-p", &tip, "-m", "Later."],
+        );
+        git_out(
+            &self.repo,
+            &["update-ref", &format!("refs/heads/{branch}"), &later],
+        );
+        later
+    }
+}
+
+/// What a push deploy did to `branch` at `commit`.
+fn pushed(branch: &str, commit: &str) -> DeployedBranch {
+    DeployedBranch {
+        branch: branch.into(),
+        commit: commit.into(),
+        pushed: true,
+        pr_url: None,
+        auto_merge: false,
+    }
+}
+
+#[tokio::test]
+async fn a_push_deploy_lands_the_commit_the_check_approved_on_the_remote() {
+    let w = world().await;
+    w.shipping_to_origin("ok");
+    let flow = w.ship_flow(DeployMode::Push).await;
+    let (wr, branch, tip) = w.at_the_check(&flow, false).await;
+    assert_eq!(w.remote_tip(&branch), None);
+    w.workflows
+        .approve_check(&wr.id, Some("Ship it."))
+        .await
+        .unwrap();
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    // The approval recorded the tip it showed, and the deploy pushed exactly that.
+    assert_eq!(
+        newest(&wr, "check").decision,
+        Some(json!({
+            "decision": "approved",
+            "note": "Ship it.",
+            "branches": [{"branch": branch, "commit": tip}],
+        }))
+    );
+    assert_eq!(w.remote_tip(&branch), Some(tip.clone()));
+    let ship = newest(&wr, "ship");
+    assert_eq!(ship.status, StepRunStatus::Succeeded);
+    assert_eq!(
+        ship.deploy_result,
+        Some(DeployResult {
+            branches: vec![pushed(&branch, &tip)],
+            ready: false,
+        })
+    );
+    assert!(w.gh_calls().is_empty());
+}
+
+#[tokio::test]
+async fn a_pr_merge_deploy_opens_a_pull_request_and_sets_it_to_merge() {
+    let w = world().await;
+    w.shipping_to_origin("ok");
+    let flow = w
+        .ship_flow(DeployMode::PrMerge {
+            merge_method: MergeMethod::default(),
+        })
+        .await;
+    let (wr, branch, tip) = w.at_the_check(&flow, false).await;
+    w.workflows.approve_check(&wr.id, None).await.unwrap();
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    assert_eq!(w.remote_tip(&branch), Some(tip.clone()));
+    let url = "https://github.com/o/r/pull/1";
+    // Against the default branch, titled with the task, with the approved summary as the body,
+    // then auto-merge by squashing.
+    let calls: Vec<Vec<&str>> = vec![
+        vec!["--version"],
+        vec![
+            "pr",
+            "view",
+            &branch,
+            "--json",
+            "url,state",
+            "--jq",
+            "select(.state == \"OPEN\") | .url",
+        ],
+        vec![
+            "pr",
+            "create",
+            "--head",
+            &branch,
+            "--base",
+            "main",
+            "--title",
+            "The tray icon is invisible in dark mode.",
+            "--body",
+            "Fixed the icon.",
+        ],
+        vec!["pr", "merge", url, "--auto", "--squash"],
+    ];
+    assert_eq!(w.gh_calls(), calls);
+    assert_eq!(
+        newest(&wr, "ship").deploy_result,
+        Some(DeployResult {
+            branches: vec![DeployedBranch {
+                pr_url: Some(url.into()),
+                auto_merge: true,
+                ..pushed(&branch, &tip)
+            }],
+            ready: false,
+        })
+    );
+}
+
+#[tokio::test]
+async fn a_test_run_pushes_nothing_and_lists_the_branch_as_ready() {
+    let w = world().await;
+    w.shipping_to_origin("ok");
+    let flow = w
+        .ship_flow(DeployMode::PrMerge {
+            merge_method: MergeMethod::Rebase,
+        })
+        .await;
+    let (wr, branch, tip) = w.at_the_check(&flow, true).await;
+    w.workflows.approve_check(&wr.id, None).await.unwrap();
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    assert_eq!(
+        newest(&wr, "ship").deploy_result,
+        Some(DeployResult {
+            branches: vec![DeployedBranch {
+                pushed: false,
+                ..pushed(&branch, &tip)
+            }],
+            ready: true,
+        })
+    );
+    assert_eq!(w.remote_tip(&branch), None);
+    assert!(w.gh_calls().is_empty());
+}
+
+#[tokio::test]
+async fn a_branch_changed_after_the_approval_fails_the_deploy_until_it_is_put_back() {
+    let w = world().await;
+    w.shipping_to_origin("ok");
+    let flow = w.ship_flow(DeployMode::Push).await;
+    let (wr, branch, tip) = w.at_the_check(&flow, false).await;
+    let (_, gate) = w.approved_and_held(&wr.id).await;
+    w.commit_after(&branch);
+    w.workflows.hold_jobs(None);
+    gate.add_permits(1);
+    let failed = w.until(&wr.id, waits_on(WaitingOn::StepFailed)).await;
+    assert_eq!(
+        failed.error.as_deref(),
+        Some("Ship: The branch changed after it was approved.")
+    );
+    assert_eq!(newest(&failed, "ship").deploy_result, None);
+    assert_eq!(w.remote_tip(&branch), None);
+    // Put back where it was approved, a retry deploys it.
+    git_out(
+        &w.repo,
+        &["update-ref", &format!("refs/heads/{branch}"), &tip],
+    );
+    w.workflows.retry_step(&wr.id).await.unwrap();
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    assert_eq!(w.remote_tip(&branch), Some(tip));
+    assert_eq!(
+        attempts(&wr),
+        [
+            ("dev", 1, StepRunStatus::Succeeded),
+            ("check", 1, StepRunStatus::Succeeded),
+            ("ship", 1, StepRunStatus::Failed),
+            ("ship", 2, StepRunStatus::Succeeded),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_deploy_refuses_a_branch_that_holds_a_secret() {
+    let w = world().await;
+    w.shipping_to_origin("ok");
+    w.engine
+        .set(&w.dev.spec.name, vec![Act::Write(".env", "TOKEN=abc")]);
+    let flow = w
+        .workflow(
+            "Ship",
+            vec![
+                agent("dev", "Fix it", &w.dev, "Fix the bug."),
+                check("check"),
+                ship(DeployMode::Pr),
+            ],
+        )
+        .await;
+    let (wr, branch, _) = w.at_the_check(&flow, false).await;
+    w.workflows.approve_check(&wr.id, None).await.unwrap();
+    let wr = w.until(&wr.id, waits_on(WaitingOn::StepFailed)).await;
+    assert_eq!(
+        wr.error,
+        Some(format!(
+            "Ship: Not pushed: {branch} holds files that look like secrets or are over 10 MB: \
+             .env. Remove them from the branch, then retry the step."
+        ))
+    );
+    assert_eq!(w.remote_tip(&branch), None);
+    assert!(w.gh_calls().is_empty());
+}
+
+#[tokio::test]
+async fn a_failed_gh_fails_the_deploy_with_its_message_and_keeps_the_push() {
+    let w = world().await;
+    w.shipping_to_origin("fail-merge");
+    let flow = w
+        .ship_flow(DeployMode::PrMerge {
+            merge_method: MergeMethod::Merge,
+        })
+        .await;
+    let (wr, branch, tip) = w.at_the_check(&flow, false).await;
+    w.workflows.approve_check(&wr.id, None).await.unwrap();
+    let wr = w.until(&wr.id, waits_on(WaitingOn::StepFailed)).await;
+    assert_eq!(
+        wr.error.as_deref(),
+        Some(
+            "Ship: gh pr merge failed: GraphQL: Pull request Auto merge is not allowed for this \
+             repository (enablePullRequestAutoMerge)"
+        )
+    );
+    assert_eq!(newest(&wr, "ship").status, StepRunStatus::Failed);
+    // Nothing already done is undone.
+    assert_eq!(w.remote_tip(&branch), Some(tip));
+    assert_eq!(w.gh_calls().last().unwrap()[1], "merge");
+}
+
+#[tokio::test]
+async fn a_deploy_cut_off_by_a_restart_fails_interrupted_and_is_not_pushed_until_retried() {
+    let w = world().await;
+    w.shipping_to_origin("ok");
+    let flow = w.ship_flow(DeployMode::Push).await;
+    let (wr, branch, tip) = w.at_the_check(&flow, false).await;
+    let (step_run, gate) = w.approved_and_held(&wr.id).await;
+    // Dots stops while the deploy waits: its loop ends and its job is dropped unwritten.
+    w.stop_loop.cancel();
+    gate.close();
+    w.job_ended(&step_run).await;
+    let fresh = Workflows::new(
+        w.store.clone(),
+        new_bus(),
+        w.runner.clone(),
+        Arc::new(SystemClock),
+    );
+    fresh.pass().await.unwrap();
+    let failed = w.store.get_workflow_run(&wr.id).await.unwrap();
+    assert_eq!(failed.waiting_on, Some(WaitingOn::StepFailed));
+    assert_eq!(failed.error.as_deref(), Some("Ship: interrupted"));
+    // Further passes leave it waiting: nothing is pushed without the person.
+    fresh.pass().await.unwrap();
+    assert_eq!(w.remote_tip(&branch), None);
+    fresh.retry_step(&wr.id).await.unwrap();
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    assert_eq!(w.remote_tip(&branch), Some(tip));
+    assert_eq!(newest(&wr, "ship").attempt, 2);
+}
+
+#[tokio::test]
+async fn a_stop_during_a_held_deploy_wins_and_nothing_is_pushed() {
+    let w = world().await;
+    w.shipping_to_origin("ok");
+    let flow = w.ship_flow(DeployMode::Push).await;
+    let (wr, branch, _) = w.at_the_check(&flow, false).await;
+    let (step_run, gate) = w.approved_and_held(&wr.id).await;
+    w.workflows.stop(&wr.id).await.unwrap();
+    gate.add_permits(1);
+    w.job_ended(&step_run).await;
+    w.workflows.pass().await.unwrap();
+    let wr = w.store.get_workflow_run(&wr.id).await.unwrap();
+    assert_eq!(wr.status, WorkflowRunStatus::Cancelled);
+    let ship = newest(&wr, "ship");
+    assert_eq!(ship.status, StepRunStatus::Cancelled);
+    assert_eq!(ship.deploy_result, None);
+    assert_eq!(w.remote_tip(&branch), None);
+}
+
+#[tokio::test]
+async fn a_member_deploy_runs_the_members_step_and_a_test_run_lists_the_branch_instead() {
+    let w = world().await;
+    w.engine.set(
+        &w.helper.spec.name,
+        vec![Act::Write("release.txt", "Tagged the release.")],
+    );
+    let flow = w
+        .ship_flow(DeployMode::Member {
+            member: w.helper.id.clone(),
+            job: "Tag a release.".into(),
+        })
+        .await;
+    let (wr, branch, tip) = w.at_the_check(&flow, false).await;
+    w.workflows.approve_check(&wr.id, None).await.unwrap();
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    // The member's run is the step's: its job, its place, and the approved work to start from.
+    let prompts = w.engine.prompts_of("helper");
+    assert_eq!(prompts.len(), 1);
+    for part in [
+        "- Step: Ship (3 of 3)",
+        "### Your job in this step\n\nTag a release.",
+        "#### Fix it\n\nFixed the icon.",
+    ] {
+        assert!(
+            prompts[0].contains(part),
+            "missing {part:?} in:\n{}",
+            prompts[0]
+        );
+    }
+    let ship = newest(&wr, "ship");
+    let runs = w.runs_of(&ship.id).await;
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].dot_id, w.helper.id);
+    assert_eq!(ship.deploy_result, None);
+    let handoff = ship.handoff.as_ref().unwrap();
+    assert_eq!(handoff.summary, "Tagged the release.");
+    let release = &handoff.branches[0].branch;
+    assert_eq!(
+        git_out(&w.repo, &["show", &format!("{release}:fix.txt")]),
+        "Fixed the icon."
+    );
+    assert_eq!(
+        git_out(&w.repo, &["merge-base", "--is-ancestor", &tip, release]),
+        ""
+    );
+    assert_ne!(release, &branch);
+
+    // A test run starts no one: the deploy lists the branch as ready.
+    let (wr, branch, tip) = w.at_the_check(&flow, true).await;
+    w.workflows.approve_check(&wr.id, None).await.unwrap();
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    assert_eq!(w.engine.prompts_of("helper").len(), 1);
+    assert_eq!(
+        newest(&wr, "ship").deploy_result,
+        Some(DeployResult {
+            branches: vec![DeployedBranch {
+                pushed: false,
+                ..pushed(&branch, &tip)
+            }],
+            ready: true,
+        })
+    );
+}
+
+#[tokio::test]
+async fn a_deploy_after_a_delegate_step_pushes_the_members_branches() {
+    let w = world().await;
+    w.shipping_to_origin("ok");
+    w.engine.set(
+        &w.helper.spec.name,
+        vec![
+            Act::Start(
+                vec![("dev", "Part one."), ("dev", "Part two.")],
+                Box::new(Act::Finish("Started two.")),
+            ),
+            Act::Finish("Both are in."),
+        ],
+    );
+    w.engine.set(
+        &w.dev.spec.name,
+        vec![
+            Act::Write("one.txt", "Part one done."),
+            Act::Write("two.txt", "Part two done."),
+        ],
+    );
+    let flow = w
+        .workflow(
+            "Split",
+            vec![
+                delegating("split", "Split it", &w.helper, &[&w.dev], 2, 2),
+                check("check"),
+                ship(DeployMode::Push),
+            ],
+        )
+        .await;
+    let wr = w.start(&flow).await;
+    let wr = w.until(&wr.id, waits_on(WaitingOn::Check)).await;
+    // The lead merged nothing, so the check shows each member's branch (section 6.2).
+    let shown: Vec<String> = newest(&wr, "split")
+        .handoff
+        .as_ref()
+        .unwrap()
+        .branches
+        .iter()
+        .map(|b| b.branch.clone())
+        .collect();
+    assert_eq!(shown.len(), 2);
+    w.workflows.approve_check(&wr.id, None).await.unwrap();
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    let result = newest(&wr, "ship").deploy_result.clone().unwrap();
+    let tips: Vec<String> = shown
+        .iter()
+        .map(|b| git_out(&w.repo, &["rev-parse", &format!("refs/heads/{b}")]))
+        .collect();
+    assert_eq!(
+        result.branches,
+        [pushed(&shown[0], &tips[0]), pushed(&shown[1], &tips[1])]
+    );
+    for (b, tip) in shown.iter().zip(&tips) {
+        assert_eq!(w.remote_tip(b).as_ref(), Some(tip));
+    }
 }

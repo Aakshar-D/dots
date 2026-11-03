@@ -5,16 +5,19 @@
 //! by a pass that reads the workflow runs in flight from the store and does what each one's
 //! state calls for, so a restart or a lost event never loses a step. The loop passes when a run
 //! of a step changes, when a question is posted or answered, when it is woken, and every
-//! `TICK`. Slow work a step needs (an agent step's hand-off) runs as a job outside the loop's
-//! lock (`jobs`). A delegate step's run may start other members, whose results continue it
-//! (`delegate`). A check or an agent step may send the work back to an earlier agent step,
-//! which goes on where it left off (`send_back`).
+//! `TICK`. Slow work a step needs (an agent step's hand-off, a deploy) runs as a job outside the
+//! loop's lock (`jobs`). A delegate step's run may start other members, whose results continue
+//! it (`delegate`). A check or an agent step may send the work back to an earlier agent step,
+//! which goes on where it left off (`send_back`). A deploy step ships the branches its check
+//! approved (`deploy_step`).
 
 mod delegate;
+mod deploy_step;
 mod jobs;
 mod send_back;
 mod tools;
 
+pub use deploy_step::{INTERRUPTED, NO_APPROVAL, NO_DEFAULT_BRANCH};
 pub use tools::STEP_CLOSED;
 
 use std::collections::HashSet;
@@ -30,6 +33,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::accounts::Permission;
+use crate::deploy::Deployer;
 use crate::events::{Bus, RuntimeEvent};
 use crate::model::{
     BranchRef, Handoff, NewRun, NewWorkflowRun, Run, RunStatus, StartableWorkflow, StepMember,
@@ -54,8 +58,6 @@ pub const MAX_HANDOFF_SUMMARY: usize = 4_000;
 /// would work in the project's worktree outside the workflow.
 pub const ENDED_STEP_THREAD: &str =
     "this chat was a step of a workflow, and the step has ended; start a new chat";
-/// Why a step of a kind Dots cannot run yet (a deploy) fails when it begins.
-pub const NOT_BUILT: &str = "this kind of step is not built yet";
 /// How often the loop passes while nothing wakes it.
 pub const TICK: Duration = Duration::from_secs(30);
 /// The most one tick counts into a run's `active_ms`. The loop passes at least every `TICK`, so
@@ -96,6 +98,9 @@ pub struct Workflows {
     jobs: std::sync::Mutex<HashSet<String>>,
     /// For tests: the gate jobs wait on before their slow part (`hold_jobs`).
     gate: std::sync::Mutex<Option<Arc<Semaphore>>>,
+    /// What deploy steps push and open pull requests with (`set_deployer`); unset, `gh` from
+    /// the PATH.
+    deployer: OnceLock<Deployer>,
 }
 
 /// The newest step run of `step_id`.
@@ -222,12 +227,12 @@ fn choose<'a>(
     }
 }
 
-/// The hand-offs of the agent steps that ran before the step `id` (`ran_before`), oldest
-/// first: each step's newest succeeded run.
+/// The hand-offs of the steps a member worked on that ran before the step `id` (`ran_before`):
+/// agent steps and `member` deploys, oldest first, each step's newest succeeded run.
 fn handoffs_before<'a>(wr: &'a WorkflowRun, id: &str) -> Vec<(&'a Step, &'a Handoff)> {
     ran_before(wr, id)
         .into_iter()
-        .filter(|s| matches!(s.kind, StepKind::Agent { .. }))
+        .filter(|s| deploy_step::worker(wr, s).is_some())
         .filter_map(|s| Some((s, succeeded(wr, &s.id)?.handoff.as_ref()?)))
         .collect()
 }
@@ -357,6 +362,7 @@ impl Workflows {
             this: this.clone(),
             jobs: std::sync::Mutex::new(HashSet::new()),
             gate: std::sync::Mutex::new(None),
+            deployer: OnceLock::new(),
         })
     }
 
@@ -381,12 +387,14 @@ impl Workflows {
     /// Announces what a step that ended changed beyond its row: the follow-ups its runs
     /// scheduled are cancelled with it (`Store::set_step_run`).
     fn step_ended(&self, wr: &WorkflowRun, step_id: &str) {
-        if let Some(step) = wr.definition.step(step_id) {
-            if let StepKind::Agent { member, .. } = &step.kind {
-                let _ = self.bus.send(RuntimeEvent::FollowUpsUpdated {
-                    dot_id: member.clone(),
-                });
-            }
+        if let Some((member, _)) = wr
+            .definition
+            .step(step_id)
+            .and_then(|step| deploy_step::worker(wr, step))
+        {
+            let _ = self.bus.send(RuntimeEvent::FollowUpsUpdated {
+                dot_id: member.to_string(),
+            });
         }
     }
 
@@ -652,7 +660,8 @@ impl Workflows {
     }
 
     /// Approves the check the workflow run waits on (section 5.4): the check passes the hand-off
-    /// it was shown on, and the workflow goes on.
+    /// it was shown on, with the tip of each of its branches (section 6.2), and the workflow
+    /// goes on.
     pub async fn approve_check(&self, id: &str, note: Option<&str>) -> Result<WorkflowRun> {
         let _one = self.lock.lock().await;
         let wr = self.store.get_workflow_run(id).await?;
@@ -675,13 +684,16 @@ impl Workflows {
             .map(|(_, h)| (*h).clone())
             .unwrap_or_default();
         let note = note.map(str::trim).filter(|n| !n.is_empty());
+        // The tips the person approved: a deploy after the check pushes exactly these.
+        let branches = deploy_step::tips(Path::new(&wr.project.repo_path), &shown).await;
+        let decision = json!({"decision": "approved", "note": note, "branches": branches});
         self.store
             .set_step_run(
                 &step_run.id,
                 &StepRunChange {
                     status: Some(StepRunStatus::Succeeded),
                     handoff: Some(Some(shown)),
-                    decision: Some(Some(json!({"decision": "approved", "note": note}))),
+                    decision: Some(Some(decision)),
                     ..Default::default()
                 },
             )
@@ -874,6 +886,13 @@ impl Workflows {
                 let next = self.take_branch(&wr, step, Some(&step_run)).await?;
                 self.begin_or_finish(&wr, next).await
             }
+            // A deploy with no member to watch: its job runs, or Dots stopped during it.
+            Some((StepRunStatus::Running, step_run))
+                if matches!(step.kind, StepKind::Deploy { .. })
+                    && deploy_step::worker(&wr, step).is_none() =>
+            {
+                self.watch_deploy(&wr, step, &step_run).await
+            }
             Some((StepRunStatus::Running, step_run)) => {
                 self.watch_agent(&wr, step, &step_run).await
             }
@@ -946,8 +965,9 @@ impl Workflows {
     }
 
     /// Begins `step`, a step of `wr`'s definition: an agent step queues its member's run, a
-    /// check waits for the person, and a branch takes its path at once and begins the step
-    /// that path leads to (past the last step, the workflow run has succeeded).
+    /// check waits for the person, a deploy deploys (`deploy_step`), and a branch takes its path
+    /// at once and begins the step that path leads to (past the last step, the workflow run has
+    /// succeeded).
     async fn begin_step<'a>(&self, wr: &'a WorkflowRun, step: &'a Step) -> Result<()> {
         let mut step = step;
         // A loop, not a call of itself: a branch whose path starts with a branch takes both
@@ -1013,23 +1033,7 @@ impl Workflows {
                     }
                 }
             }
-            // A definition may hold one already; the run waits on it as on a failed step.
-            StepKind::Deploy { .. } => {
-                let step_run = self
-                    .store
-                    .create_step_run(&wr.id, &step.id, attempt, StepRunStatus::Failed)
-                    .await?;
-                self.store
-                    .set_workflow_run(
-                        &wr.id,
-                        &WorkflowRunChange {
-                            current_step: Some(Some(step.id.clone())),
-                            ..Default::default()
-                        },
-                    )
-                    .await?;
-                self.fail_step(wr, step, &step_run, NOT_BUILT).await?;
-            }
+            StepKind::Deploy { .. } => self.begin_deploy(wr, step, attempt).await?,
             StepKind::Branch { .. } => {}
         }
         Ok(())
@@ -1129,7 +1133,7 @@ impl Workflows {
         step_run: &StepRun,
         again: Option<&send_back::Again>,
     ) -> Result<Run> {
-        let StepKind::Agent { member, .. } = &step.kind else {
+        let Some((member, _)) = deploy_step::worker(wr, step) else {
             return Err(Error::Other(format!(
                 "step {} is not an agent step",
                 step.id
@@ -1186,7 +1190,7 @@ impl Workflows {
         step_run: &StepRun,
         sent: Option<&str>,
     ) -> Result<String> {
-        let StepKind::Agent { member, job, .. } = &step.kind else {
+        let Some((member, job)) = deploy_step::worker(wr, step) else {
             return Ok(String::new());
         };
         let (team, you, workflow) = self.names(wr, member).await?;
@@ -1294,7 +1298,7 @@ impl Workflows {
     /// unless its member may not run, which fails it, or a limit is reached, which waits for
     /// the person.
     async fn start_agent(&self, wr: &WorkflowRun, step: &Step, step_run: &StepRun) -> Result<()> {
-        if let StepKind::Agent { member, .. } = &step.kind {
+        if let Some((member, _)) = deploy_step::worker(wr, step) {
             if let Some(error) = self.member_refusal(member).await? {
                 return self.fail_step(wr, step, step_run, &error).await;
             }

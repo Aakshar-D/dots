@@ -97,7 +97,7 @@ impl Workflows {
 
     /// Waits on the test gate, if one is set. `false`: the gate was closed, and the job ends
     /// here without a write.
-    async fn through_gate(&self) -> bool {
+    pub(super) async fn through_gate(&self) -> bool {
         let gate = self.gate.lock().unwrap_or_else(|e| e.into_inner()).clone();
         match gate {
             Some(gate) => match gate.acquire().await {

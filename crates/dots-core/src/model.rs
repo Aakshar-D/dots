@@ -1110,6 +1110,8 @@ pub struct StepRun {
     /// The send-back an agent step asked for (`send_back`), the last call's:
     /// `{"to": <step id>, "note": ...}`, performed when the step succeeds.
     pub send_back: Option<Value>,
+    /// What a deploy step did: the branches it pushed or listed as ready.
+    pub deploy_result: Option<crate::deploy::DeployResult>,
     pub started_at: String,
     pub ended_at: Option<String>,
 }
@@ -1210,6 +1212,7 @@ pub struct StepRunChange {
     pub decision: Option<Option<Value>>,
     pub error: Option<Option<String>>,
     pub notice: Option<Option<String>>,
+    pub deploy_result: Option<Option<crate::deploy::DeployResult>>,
 }
 
 /// A workflow a member may start from a chat (`start_workflow`, teams spec section 7): turned

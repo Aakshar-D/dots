@@ -17,7 +17,7 @@ const WR_COLUMNS: &str = "id, workflow_id, team_id, definition, project_id, proj
     trigger_kind, origin_run_id, test, status, waiting_on, current_step, budget, send_backs, \
     send_back, active_ms, error, started_at, ended_at";
 const STEP_COLUMNS: &str = "id, workflow_run_id, step_id, attempt, status, handoff, decision, \
-    error, outcome, notice, send_back, started_at, ended_at";
+    error, outcome, notice, send_back, deploy_result, started_at, ended_at";
 
 fn step_from_row(row: &SqliteRow) -> Result<StepRun> {
     Ok(StepRun {
@@ -34,6 +34,9 @@ fn step_from_row(row: &SqliteRow) -> Result<StepRun> {
         outcome: row.try_get("outcome")?,
         notice: row.try_get("notice")?,
         send_back: opt_json(row.try_get("send_back")?)?,
+        deploy_result: opt_json(row.try_get("deploy_result")?)?
+            .map(serde_json::from_value)
+            .transpose()?,
         started_at: row.try_get("started_at")?,
         ended_at: row.try_get("ended_at")?,
     })
@@ -384,6 +387,14 @@ impl Store {
         if let Some(n) = &change.notice {
             sqlx::query("UPDATE workflow_step_runs SET notice = ? WHERE id = ?")
                 .bind(n)
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+        }
+        if let Some(r) = &change.deploy_result {
+            let text = r.as_ref().map(serde_json::to_string).transpose()?;
+            sqlx::query("UPDATE workflow_step_runs SET deploy_result = ? WHERE id = ?")
+                .bind(text)
                 .bind(id)
                 .execute(&mut *tx)
                 .await?;

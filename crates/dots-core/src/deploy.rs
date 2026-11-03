@@ -61,16 +61,19 @@ const ERROR_LINES: usize = 3;
 const ERROR_CHARS: usize = 600;
 
 /// Runs deploys. `gh` is the GitHub CLI to run: `"gh"` (found on the PATH) unless a test sets
-/// another program.
+/// another program. `env` is set on each `gh` call beside Dots' own environment (empty, unless a
+/// test gives its fake `gh` its settings this way, so tests running at once never share them).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Deployer {
     pub gh: PathBuf,
+    pub env: Vec<(String, String)>,
 }
 
 impl Default for Deployer {
     fn default() -> Self {
         Deployer {
             gh: PathBuf::from("gh"),
+            env: Vec::new(),
         }
     }
 }
@@ -231,6 +234,7 @@ impl Deployer {
         let mut cmd = Command::new(&self.gh);
         cmd.args(args)
             .current_dir(repo)
+            .envs(self.env.iter().map(|(k, v)| (k, v)))
             .env("GH_PROMPT_DISABLED", "1");
         run(tool, &mut cmd, None).await
     }

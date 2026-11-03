@@ -16,3 +16,6 @@ CREATE INDEX workflow_step_members_step ON workflow_step_members(step_run_id, cr
 -- The last send-back of a workflow run (teams spec sections 5.4 and 9), JSON
 -- `{"from", "to", "note", "by", "held"}`: the one performed, or the one held at the cap.
 ALTER TABLE workflow_runs ADD COLUMN send_back TEXT;
+-- What a deploy step did (teams spec section 5.5), JSON `{"branches": [{"branch", "commit",
+-- "pushed", "pr_url", "auto_merge"}], "ready"}`.
+ALTER TABLE workflow_step_runs ADD COLUMN deploy_result TEXT;

@@ -116,6 +116,7 @@ impl Scratch {
 fn fake_gh() -> Deployer {
     Deployer {
         gh: PathBuf::from(env!("CARGO_BIN_EXE_fake-gh")),
+        env: Vec::new(),
     }
 }
 
@@ -335,6 +336,7 @@ async fn a_missing_gh_fails_before_anything_is_pushed() {
     let tip = s.commit("dots/fix", &[("src/fix.rs", Some(b"fn fix() {}\n"))]);
     let deployer = Deployer {
         gh: s.dir.path().join("no-such-gh.exe"),
+        env: Vec::new(),
     };
     let err = deployer
         .deploy(
