@@ -47,6 +47,9 @@ pub const SKILLS_DIR: &str = "skills";
 /// The data folder's folder where each skill draft's CLI starts (skill creator spec §5).
 pub const DRAFTS_DIR: &str = "drafts";
 
+/// Retry's and Discard's refusal for a message the dispatcher has just claimed.
+const JUST_REACHED: &str = "this message has just reached the dot";
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub data_dir: PathBuf,
@@ -1442,9 +1445,12 @@ impl Runtime {
                 ));
             }
             // The parent is taken from this reading of the thread, in which it has ended. A
-            // dismissed run (retried or discarded, delivery tracking spec section 3.9) is not
-            // part of the conversation any more: the end is the last run without a dismissal.
-            let live = thread.iter().rfind(|r| r.dismissed_at.is_none());
+            // message that never reached the dot and was retried or discarded (delivery
+            // tracking spec section 3.9) is not part of the conversation: the end is the last
+            // run that is not one of those.
+            let live = thread
+                .iter()
+                .rfind(|r| r.dismissed_at.is_none() || r.delivered_at.is_some());
             let Some(parent) = live.filter(|r| r.id == pid) else {
                 return Err(Error::Conflict(
                     "this chat has a newer message than the one you replied to; open the chat \
@@ -1548,10 +1554,12 @@ impl Runtime {
         if run.status == RunStatus::Queued {
             return match self.runner.cancel_if_queued(run_id).await? {
                 Some(run) => Ok(run),
-                None => Err(Error::Conflict(
-                    "this message has just reached the dot".into(),
-                )),
+                None => Err(Error::Conflict(JUST_REACHED.into())),
             };
+        }
+        // Claimed by the dispatcher: its engine is starting on it, so it stays.
+        if !run.status.is_terminal() {
+            return Err(Error::Conflict(JUST_REACHED.into()));
         }
         match self.store.dismiss_run(run_id, self.clock.now()).await? {
             Some(run) => Ok(run),

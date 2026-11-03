@@ -1670,15 +1670,15 @@ impl Runner {
         Err(already(&self.store.get_run(run_id).await?))
     }
 
-    /// Cancels the run only if it is still `queued` (or awaiting an approval) and the runner
-    /// does not hold it, as `cancel` does for such a run: its approvals expire, its attachments
-    /// go, and the change is announced. `None` when it was not (for example, the dispatcher
-    /// claimed it a moment earlier).
+    /// Cancels the run only if it is still `queued` and the runner does not hold it, as
+    /// `cancel` does for such a run: its approvals expire, its attachments go, and the change
+    /// is announced. `None` when it was not (for example, the dispatcher claimed it a moment
+    /// earlier); a run awaiting an approval reached its dot and is left alone.
     pub async fn cancel_if_queued(&self, run_id: &str) -> Result<Option<Run>> {
         if self.active.lock().unwrap().contains_key(run_id) {
             return Ok(None);
         }
-        self.cancel_inactive(run_id).await
+        self.cancel_inactive_with(run_id, true).await
     }
 
     /// Flags a held run as cancelled by the user. `None` if the runner does not hold it,
@@ -1698,11 +1698,20 @@ impl Runner {
     /// Cancels a `queued` or `awaiting_approval` run that the runner does not hold, expiring
     /// its pending approvals and removing an unchanged worktree of a parked run.
     async fn cancel_inactive(&self, run_id: &str) -> Result<Option<Run>> {
+        self.cancel_inactive_with(run_id, false).await
+    }
+
+    /// `cancel_inactive`, for a `queued` run only when `queued_only`.
+    async fn cancel_inactive_with(&self, run_id: &str, queued_only: bool) -> Result<Option<Run>> {
         // Serialised with `maybe_resume` so a cancel never interleaves with a resume.
         let (prior, cancelled) = {
             let _guard = self.resume_lock.lock().await;
             let prior = self.store.get_run(run_id).await?;
-            let cancelled = self.store.cancel_if_inactive(run_id).await?;
+            let cancelled = if queued_only {
+                self.store.cancel_if_queued(run_id).await?
+            } else {
+                self.store.cancel_if_inactive(run_id).await?
+            };
             if cancelled.is_some() {
                 if let Err(e) = self.store.expire_pending_for_run(run_id).await {
                     tracing::warn!(run = %run_id, "expiring approvals failed: {e}");

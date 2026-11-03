@@ -601,19 +601,22 @@ impl Store {
         Ok(Some(self.get_run(id).await?))
     }
 
-    /// Marks a run dismissed (retried or discarded). `None` if it already was, which guards
-    /// against a double Retry.
+    /// Marks a run dismissed (retried or discarded), only while it is queued or has ended: a
+    /// run the dispatcher has claimed is reaching its dot and stays. `None` if it already was
+    /// dismissed (which guards against a double Retry) or is running or awaiting an approval.
     pub async fn dismiss_run(
         &self,
         id: &str,
         at: chrono::DateTime<chrono::Utc>,
     ) -> Result<Option<Run>> {
-        let res =
-            sqlx::query("UPDATE runs SET dismissed_at = ? WHERE id = ? AND dismissed_at IS NULL")
-                .bind(timestamp(at))
-                .bind(id)
-                .execute(&self.pool)
-                .await?;
+        let res = sqlx::query(
+            "UPDATE runs SET dismissed_at = ? WHERE id = ? AND dismissed_at IS NULL \
+             AND status NOT IN ('running', 'awaiting_approval')",
+        )
+        .bind(timestamp(at))
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
         if res.rows_affected() == 0 {
             return Ok(None);
         }
@@ -842,12 +845,24 @@ impl Store {
     /// Atomically cancels a run that is `queued` or `awaiting_approval`.
     /// Returns `None` when the run is in any other state (nothing changed).
     pub async fn cancel_if_inactive(&self, id: &str) -> Result<Option<Run>> {
-        let res = sqlx::query(
+        self.cancel_if_status(id, "('queued', 'awaiting_approval')")
+            .await
+    }
+
+    /// `cancel_if_inactive` for a `queued` run only: one awaiting an approval reached its dot
+    /// and is left alone. `None` when the run is not queued (nothing changed).
+    pub async fn cancel_if_queued(&self, id: &str) -> Result<Option<Run>> {
+        self.cancel_if_status(id, "('queued')").await
+    }
+
+    /// Cancels the run if its status is in `statuses`, an SQL list of literals.
+    async fn cancel_if_status(&self, id: &str, statuses: &str) -> Result<Option<Run>> {
+        let res = sqlx::query(&format!(
             "UPDATE runs SET status = 'cancelled', ended_at = ?1, quiet_since = NULL, \
              dismissed_at = CASE WHEN undelivered_at IS NOT NULL \
               THEN COALESCE(dismissed_at, ?1) ELSE dismissed_at END \
-             WHERE id = ?2 AND status IN ('queued', 'awaiting_approval')",
-        )
+             WHERE id = ?2 AND status IN {statuses}"
+        ))
         .bind(now())
         .bind(id)
         .execute(&self.pool)

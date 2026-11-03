@@ -5,7 +5,8 @@ mod common;
 
 use std::path::PathBuf;
 
-use chrono::{TimeDelta, Utc};
+use chrono::{Local, TimeDelta, TimeZone, Utc};
+use common::clock::FakeClock;
 use common::spec;
 use dots_core::model::{
     DeliveryCounts, Dot, DotSpec, NewRun, Run, RunStatus, TriggerKind, WorkspaceMode,
@@ -171,14 +172,41 @@ async fn a_refused_retry_leaves_the_message_retryable() {
     let dot = dot(&rt, &dir).await;
     let p = succeeded(&rt, chat_run(&dot, "Hello", None), Some(T1), "s1").await;
     let old = failed_undelivered(&rt, chat_run(&dot, "And then?", Some(&p)), T2).await;
-    // A run of the thread is still queued, so the chat path refuses a follow-up.
-    queued(&rt, chat_run(&dot, "Meanwhile", Some(&p)), Some(T3)).await;
+    // A run of the thread is still queued, so the chat path refuses a follow-up. It keeps its
+    // real queue time, so the 30-minute sweeper cannot mark it.
+    queued(&rt, chat_run(&dot, "Meanwhile", Some(&p)), None).await;
 
     let refused = rt.retry_delivery(&old.id).await;
     assert!(matches!(refused, Err(Error::Conflict(_))), "{refused:?}");
     let old = rt.get_run(&old.id).await.unwrap();
     assert_eq!(old.dismissed_at, None);
     assert_eq!(needs_you(&rt, &dot).await, 1);
+    rt.shutdown();
+}
+
+#[tokio::test]
+async fn a_message_that_has_just_reached_the_dot_is_neither_retried_nor_discarded() {
+    let dir = tempfile::tempdir().unwrap();
+    let rt = start(&dir).await;
+    let dot = dot(&rt, &dir).await;
+    let run = queued(&rt, chat_run(&dot, "Ship it", None), None).await;
+    rt.store()
+        .mark_undelivered(&run.id, "Dots is updating", Utc::now())
+        .await
+        .unwrap()
+        .unwrap();
+    // The dispatcher claims it; its engine has not started yet.
+    assert!(rt.store().claim_run(&run.id).await.unwrap());
+
+    let r = rt.retry_delivery(&run.id).await;
+    assert!(matches!(r, Err(Error::Conflict(_))), "{r:?}");
+    let d = rt.discard_delivery(&run.id).await;
+    assert!(matches!(d, Err(Error::Conflict(_))), "{d:?}");
+
+    let run = rt.get_run(&run.id).await.unwrap();
+    assert_eq!(run.status, RunStatus::Running);
+    assert_eq!(run.dismissed_at, None);
+    assert_eq!(rt.list_runs(Some(&dot.id), 100).await.unwrap().len(), 1);
     rt.shutdown();
 }
 
@@ -288,28 +316,33 @@ async fn retry_of_a_waiting_message_cancels_it_and_sends_it_again() {
 #[tokio::test]
 async fn delivery_today_counts_the_dot() {
     let dir = tempfile::tempdir().unwrap();
-    let rt = start(&dir).await;
+    // The runtime's clock stands at local noon of a fixed day, far from either midnight.
+    let now = Local
+        .with_ymd_and_hms(2026, 11, 3, 12, 0, 0)
+        .single()
+        .unwrap()
+        .with_timezone(&Utc);
+    let mut cfg = Config::new(dir.path().join("data"));
+    cfg.port = 0;
+    cfg.claude_path = Some(PathBuf::from(env!("CARGO_BIN_EXE_fake-claude")));
+    cfg.clock = FakeClock::new(now);
+    let rt = Runtime::start(cfg).await.unwrap();
+    rt.hold_runs(true).await;
     let dot = dot(&rt, &dir).await;
-    let now = Utc::now();
     let one = timestamp(now - TimeDelta::seconds(1));
     let two = timestamp(now - TimeDelta::seconds(2));
     succeeded(&rt, chat_run(&dot, "Hi", None), Some(&two), "s1").await;
     failed_undelivered(&rt, chat_run(&dot, "Hello?", None), &one).await;
 
     let counts = rt.delivery_today(&dot.id).await.unwrap();
-    // Just after local midnight the two may straddle the day; allow for that.
-    if counts.sent == 2 {
-        assert_eq!(
-            counts,
-            DeliveryCounts {
-                sent: 2,
-                delivered: 1,
-                not_delivered: 1
-            }
-        );
-    } else {
-        assert!(counts.sent == 1, "{counts:?}");
-    }
+    assert_eq!(
+        counts,
+        DeliveryCounts {
+            sent: 2,
+            delivered: 1,
+            not_delivered: 1
+        }
+    );
 
     let unknown = rt.delivery_today("no-such-dot").await;
     assert!(matches!(unknown, Err(Error::NotFound(_))), "{unknown:?}");
