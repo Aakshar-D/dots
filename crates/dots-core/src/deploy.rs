@@ -155,7 +155,7 @@ impl Deployer {
         // Found missing before the first push, so a deploy that cannot open its pull requests
         // pushes nothing.
         if pr {
-            self.gh(repo, "gh", &["--version"]).await?;
+            self.gh(repo, "gh", &["--version"], None).await?;
         }
         for (b, done) in branches.iter().zip(&mut result.branches) {
             push(repo, remote, b).await?;
@@ -163,7 +163,7 @@ impl Deployer {
             if !pr {
                 continue;
             }
-            let url = match self.open_pr(repo, &b.branch).await? {
+            let url = match self.open_pr(repo, &b.branch, base).await? {
                 Some(url) => url,
                 None => self.create_pr(repo, base, &b.branch, title, body).await?,
             };
@@ -175,7 +175,7 @@ impl Deployer {
                     MergeMethod::Rebase => "--rebase",
                 };
                 let args = ["pr", "merge", url.as_str(), "--auto", method];
-                let out = self.gh(repo, "gh pr merge", &args).await?;
+                let out = self.gh(repo, "gh pr merge", &args, None).await?;
                 succeeded("gh pr merge", &out)?;
                 done.auto_merge = true;
             }
@@ -183,23 +183,46 @@ impl Deployer {
         Ok(result)
     }
 
-    /// The URL of the open pull request for `branch`, if there is one. A failed lookup counts
-    /// as none: creating one then fails with gh's own message.
-    async fn open_pr(&self, repo: &Path, branch: &str) -> Result<Option<String>, String> {
-        // `gh pr view <branch>` also finds a closed or merged pull request: only an open one is
-        // reused, so a branch pushed again after a merge gets a new one.
+    /// The URL of the open pull request of `branch` into `base` in this repository, if there is
+    /// one. `gh pr list` is asked for the open pull requests of the head and base (the
+    /// `--flag=value` form, so no value is read as a flag) and the answer is read here: only the
+    /// first entry whose head is `branch` and base is `base`, and that is not from a fork, is
+    /// reused, so a branch pushed again after a merge, or for another base, gets a new one. A
+    /// failed lookup (a non-zero exit, or output that is not a JSON array) counts as none:
+    /// creating one then fails with gh's own message.
+    async fn open_pr(
+        &self,
+        repo: &Path,
+        branch: &str,
+        base: &str,
+    ) -> Result<Option<String>, String> {
+        let head = format!("--head={branch}");
+        let base_arg = format!("--base={base}");
         let args = [
             "pr",
-            "view",
-            branch,
-            "--json",
-            "url,state",
-            "--jq",
-            "select(.state == \"OPEN\") | .url",
+            "list",
+            head.as_str(),
+            base_arg.as_str(),
+            "--state=open",
+            "--json=url,headRefName,baseRefName,isCrossRepository",
         ];
-        let out = self.gh(repo, "gh pr view", &args).await?;
-        let url = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        Ok((out.status.success() && !url.is_empty()).then_some(url))
+        let out = self.gh(repo, "gh pr list", &args, None).await?;
+        if !out.status.success() {
+            return Ok(None);
+        }
+        let Ok(serde_json::Value::Array(list)) = serde_json::from_slice(&out.stdout) else {
+            return Ok(None);
+        };
+        Ok(list
+            .iter()
+            .find(|e| {
+                e["headRefName"].as_str() == Some(branch)
+                    && e["baseRefName"].as_str() == Some(base)
+                    && e["isCrossRepository"].as_bool() == Some(false)
+            })
+            .and_then(|e| e["url"].as_str())
+            .filter(|u| !u.is_empty())
+            .map(str::to_string))
     }
 
     /// Opens a pull request of `branch` into `base` and returns its URL, which `gh` prints as
@@ -213,10 +236,20 @@ impl Deployer {
         body: &str,
     ) -> Result<String, String> {
         let title = pr_title(title, branch);
+        let head = format!("--head={branch}");
+        let base = format!("--base={base}");
+        let title = format!("--title={title}");
         let args = [
-            "pr", "create", "--head", branch, "--base", base, "--title", &title, "--body", body,
+            "pr",
+            "create",
+            head.as_str(),
+            base.as_str(),
+            title.as_str(),
+            "--body-file=-",
         ];
-        let out = self.gh(repo, "gh pr create", &args).await?;
+        let out = self
+            .gh(repo, "gh pr create", &args, Some(body.as_bytes().to_vec()))
+            .await?;
         let stdout = succeeded("gh pr create", &out)?;
         stdout
             .lines()
@@ -226,15 +259,21 @@ impl Deployer {
             .ok_or_else(|| "gh pr create printed no pull request URL.".to_string())
     }
 
-    /// Runs `gh` in `repo`, without prompts. Exiting with an error is not an `Err` here: the
+    /// Runs `gh` in `repo`, without prompts, feeding it `input` on stdin. Exiting with an error is not an `Err` here: the
     /// caller decides what it means.
-    async fn gh(&self, repo: &Path, tool: &str, args: &[&str]) -> Result<Output, String> {
+    async fn gh(
+        &self,
+        repo: &Path,
+        tool: &str,
+        args: &[&str],
+        input: Option<Vec<u8>>,
+    ) -> Result<Output, String> {
         let mut cmd = Command::new(&self.gh);
         cmd.args(args)
             .current_dir(repo)
             .envs(self.env.iter().map(|(k, v)| (k, v)))
             .env("GH_PROMPT_DISABLED", "1");
-        run(tool, &mut cmd, None).await
+        run(tool, &mut cmd, input).await
     }
 }
 
@@ -380,8 +419,9 @@ async fn guard(repo: &Path, remote: &str, _base: &str, b: &ApprovedBranch) -> Re
         list.push_str(&format!(" and {} more", refused.len() - LISTED_FILES));
     }
     Err(format!(
-        "Not pushed: {} holds files that look like secrets or are over 10 MB: {list}. Remove \
-         them from the branch, then retry the step.",
+        "Not pushed: {} has commits that hold files that look like secrets or are over 10 MB: \
+         {list}. Rewrite the branch so none of the commits it would push holds them, then retry \
+         the step.",
         b.branch
     ))
 }

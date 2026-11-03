@@ -1210,35 +1210,20 @@ impl Workflows {
         // A member deploy is shown only what the check approved, each branch at its commit.
         if matches!(step.kind, StepKind::Deploy { .. }) {
             if let Ok((branches, summary)) = deploy_step::approved(wr, &step.id) {
-                out.push_str(
-                    "### Earlier steps
-
-#### Approved
-
-",
-                );
+                out.push_str("### Earlier steps\n\n#### Approved\n\n");
                 let summary = summary.trim();
                 out.push_str(if summary.is_empty() {
                     "(no summary)"
                 } else {
                     summary
                 });
-                out.push_str(
-                    "
-
-",
-                );
+                out.push_str("\n\n");
                 if !branches.is_empty() {
                     let named: Vec<String> = branches
                         .iter()
                         .map(|b| format!("{} (commit {})", b.branch, b.commit))
                         .collect();
-                    out.push_str(&format!(
-                        "Branches: {}
-
-",
-                        named.join(", ")
-                    ));
+                    out.push_str(&format!("Branches: {}\n\n", named.join(", ")));
                 }
             }
         }

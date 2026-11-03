@@ -193,22 +193,30 @@ async fn pr_pushes_then_opens_a_pull_request_against_the_base() {
     assert!(!result.ready);
     let calls = s.gh_calls();
     assert_eq!(calls[0], strings(&["--version"]));
-    let view = calls_of(&calls, "view");
-    assert_eq!(view.len(), 1);
-    assert_eq!(view[0][2], "dots/fix");
+    assert_eq!(
+        calls_of(&calls, "list"),
+        vec![strings(&[
+            "pr",
+            "list",
+            "--head=dots/fix",
+            "--base=main",
+            "--state=open",
+            "--json=url,headRefName,baseRefName,isCrossRepository",
+        ])]
+    );
+    assert_eq!(
+        std::fs::read_to_string(format!("{}.body", s.log().display())).unwrap(),
+        "The summary."
+    );
     assert_eq!(
         calls_of(&calls, "create"),
         vec![strings(&[
             "pr",
             "create",
-            "--head",
-            "dots/fix",
-            "--base",
-            "main",
-            "--title",
-            "Fix the bug",
-            "--body",
-            "The summary.",
+            "--head=dots/fix",
+            "--base=main",
+            "--title=Fix the bug",
+            "--body-file=-",
         ])]
     );
     assert!(calls_of(&calls, "merge").is_empty());
@@ -237,8 +245,12 @@ async fn a_long_title_is_cut_to_256_characters() {
             .unwrap();
     }
     let create = calls_of(&s.gh_calls(), "create");
-    assert_eq!(create[0][7], "é".repeat(256));
-    assert_eq!(create[0][9], "");
+    assert_eq!(create[0][4], format!("--title={}", "é".repeat(256)));
+    assert_eq!(create[0][5], "--body-file=-");
+    assert_eq!(
+        std::fs::read_to_string(format!("{}.body", s.log().display())).unwrap(),
+        ""
+    );
 }
 
 #[tokio::test]
@@ -254,6 +266,44 @@ async fn an_open_pull_request_for_the_branch_is_reused() {
         Some("https://github.com/o/r/pull/7")
     );
     assert!(calls_of(&s.gh_calls(), "create").is_empty());
+}
+
+#[tokio::test]
+async fn an_open_pr_into_another_base_is_not_reused() {
+    let s = scratch();
+    let tip = s.commit("dots/fix", &[("src/fix.rs", Some(b"fn fix() {}\n"))]);
+    let result = s
+        .deploy(
+            "existing-other-base",
+            &DeployMode::Pr,
+            &[approved("dots/fix", &tip)],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        result.branches[0].pr_url.as_deref(),
+        Some("https://github.com/o/r/pull/1")
+    );
+    assert_eq!(calls_of(&s.gh_calls(), "create").len(), 1);
+}
+
+#[tokio::test]
+async fn an_open_pr_from_a_fork_is_not_reused() {
+    let s = scratch();
+    let tip = s.commit("dots/fix", &[("src/fix.rs", Some(b"fn fix() {}\n"))]);
+    let result = s
+        .deploy(
+            "existing-fork",
+            &DeployMode::Pr,
+            &[approved("dots/fix", &tip)],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        result.branches[0].pr_url.as_deref(),
+        Some("https://github.com/o/r/pull/1")
+    );
+    assert_eq!(calls_of(&s.gh_calls(), "create").len(), 1);
 }
 
 #[tokio::test]
@@ -409,8 +459,9 @@ async fn files_that_look_like_secrets_or_are_too_big_refuse_the_deploy() {
         .unwrap_err();
     assert_eq!(
         err,
-        "Not pushed: dots/fix holds files that look like secrets or are over 10 MB: .env, \
-         big.bin, config/id_rsa, x.PEM. Remove them from the branch, then retry the step."
+        "Not pushed: dots/fix has commits that hold files that look like secrets or are over 10 MB: \
+         .env, big.bin, config/id_rsa, x.PEM. Rewrite the branch so none of the commits it would \
+         push holds them, then retry the step."
     );
     assert_eq!(s.remote_tip("dots/fix"), None);
     assert!(s.gh_calls().is_empty(), "refused before gh runs");
@@ -446,8 +497,9 @@ async fn a_refusal_names_ten_files_and_counts_the_rest() {
     assert_eq!(
         err,
         format!(
-            "Not pushed: dots/keys holds files that look like secrets or are over 10 MB: \
-             {listed} and 2 more. Remove them from the branch, then retry the step."
+            "Not pushed: dots/keys has commits that hold files that look like secrets or are over 10 MB: \
+             {listed} and 2 more. Rewrite the branch so none of the commits it would push holds \
+             them, then retry the step."
         )
     );
 }
@@ -466,7 +518,7 @@ async fn a_secret_added_and_then_deleted_on_the_branch_is_refused() {
         .deploy("ok", &DeployMode::Pr, std::slice::from_ref(&branch))
         .await
         .unwrap_err();
-    assert!(err.contains(": .env. Remove"), "{err}");
+    assert!(err.contains(": .env. Rewrite"), "{err}");
     assert_eq!(s.remote_tip("dots/fix"), None);
     assert!(s.gh_calls().is_empty(), "refused before gh runs");
 
@@ -476,7 +528,7 @@ async fn a_secret_added_and_then_deleted_on_the_branch_is_refused() {
         .deploy("ok", &DeployMode::Push, &[branch])
         .await
         .unwrap_err();
-    assert!(err.contains(": .env. Remove"), "{err}");
+    assert!(err.contains(": .env. Rewrite"), "{err}");
     assert_eq!(s.remote_tip("dots/fix"), None);
 }
 
@@ -493,7 +545,7 @@ async fn a_huge_file_added_and_then_deleted_on_the_branch_is_refused() {
         .deploy("ok", &DeployMode::Push, &[approved("dots/fix", &tip)])
         .await
         .unwrap_err();
-    assert!(err.contains(": big.bin. Remove"), "{err}");
+    assert!(err.contains(": big.bin. Rewrite"), "{err}");
     assert_eq!(s.remote_tip("dots/fix"), None);
 }
 
@@ -507,7 +559,7 @@ async fn a_secret_in_an_unpushed_commit_below_the_merge_base_is_refused() {
         .deploy("ok", &DeployMode::Push, &[approved("dots/fix", &tip)])
         .await
         .unwrap_err();
-    assert!(err.contains(": .env. Remove"), "{err}");
+    assert!(err.contains(": .env. Rewrite"), "{err}");
     assert_eq!(s.remote_tip("dots/fix"), None);
 }
 
@@ -523,7 +575,7 @@ async fn a_given_base_does_not_hide_unpushed_commits_below_it() {
         .deploy("ok", &DeployMode::Push, &[branch])
         .await
         .unwrap_err();
-    assert!(err.contains(": .env. Remove"), "{err}");
+    assert!(err.contains(": .env. Rewrite"), "{err}");
     assert_eq!(s.remote_tip("dots/fix"), None);
 }
 
@@ -543,7 +595,7 @@ async fn a_forged_tracking_ref_does_not_hide_an_unpushed_commit() {
         .deploy("ok", &DeployMode::Push, &[approved("dots/fix", &tip)])
         .await
         .unwrap_err();
-    assert!(err.contains(": .env. Remove"), "{err}");
+    assert!(err.contains(": .env. Rewrite"), "{err}");
     assert_eq!(s.remote_tip("dots/fix"), None);
 }
 
@@ -580,7 +632,7 @@ async fn a_root_commit_is_scanned_whatever_the_log_config() {
         .deploy("ok", &DeployMode::Push, &[approved("dots/root", &tip)])
         .await
         .unwrap_err();
-    assert!(err.contains(": .env. Remove"), "{err}");
+    assert!(err.contains(": .env. Rewrite"), "{err}");
     assert_eq!(s.remote_tip("dots/root"), None);
 }
 
@@ -596,7 +648,7 @@ async fn the_same_content_under_a_secrets_name_is_refused() {
         .await
         .unwrap_err();
     // Found only through the tree, and named with its directory.
-    assert!(err.contains(": config/.env. Remove"), "{err}");
+    assert!(err.contains(": config/.env. Rewrite"), "{err}");
 }
 
 /// Deploys `branches` to `remote` with the fake `gh` in mode `ok`.
@@ -653,7 +705,7 @@ async fn a_replace_ref_does_not_hide_a_secret() {
         .deploy("ok", &DeployMode::Pr, &[approved("dots/leak", &leak)])
         .await
         .unwrap_err();
-    assert!(err.contains(": .env. Remove"), "{err}");
+    assert!(err.contains(": .env. Rewrite"), "{err}");
     assert_eq!(s.remote_tip("dots/leak"), None);
     assert!(s.gh_calls().is_empty(), "refused before gh runs");
 }
@@ -673,7 +725,7 @@ async fn the_scan_asks_the_push_url() {
         .deploy("ok", &DeployMode::Push, &[approved("dots/leak", &leak)])
         .await
         .unwrap_err();
-    assert!(err.contains(": .env. Remove"), "{err}");
+    assert!(err.contains(": .env. Rewrite"), "{err}");
     assert_eq!(tip_in(&push, "dots/leak"), None);
 }
 
@@ -725,7 +777,7 @@ async fn a_deploy_to_an_empty_remote_scans_the_whole_history() {
     )
     .await
     .unwrap_err();
-    assert!(err.contains(": old/.env. Remove"), "{err}");
+    assert!(err.contains(": old/.env. Rewrite"), "{err}");
     assert_eq!(tip_in(&empty, "dots/fix"), None);
     // `origin` has that history, so the same branch goes there.
     s.deploy("ok", &DeployMode::Push, &[approved("dots/fix", &tip)])

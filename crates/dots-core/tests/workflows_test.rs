@@ -3586,28 +3586,24 @@ async fn a_pr_merge_deploy_opens_a_pull_request_and_sets_it_to_merge() {
     let url = "https://github.com/o/r/pull/1";
     // Against the default branch, titled with the task, with the approved summary as the body,
     // then auto-merge by squashing.
+    let head = format!("--head={branch}");
     let calls: Vec<Vec<&str>> = vec![
         vec!["--version"],
         vec![
             "pr",
-            "view",
-            &branch,
-            "--json",
-            "url,state",
-            "--jq",
-            "select(.state == \"OPEN\") | .url",
+            "list",
+            &head,
+            "--base=main",
+            "--state=open",
+            "--json=url,headRefName,baseRefName,isCrossRepository",
         ],
         vec![
             "pr",
             "create",
-            "--head",
-            &branch,
-            "--base",
-            "main",
-            "--title",
-            "The tray icon is invisible in dark mode.",
-            "--body",
-            "Fixed the icon.",
+            &head,
+            "--base=main",
+            "--title=The tray icon is invisible in dark mode.",
+            "--body-file=-",
         ],
         vec!["pr", "merge", url, "--auto", "--squash"],
     ];
@@ -3713,8 +3709,9 @@ async fn a_deploy_refuses_a_branch_that_holds_a_secret() {
     assert_eq!(
         wr.error,
         Some(format!(
-            "Ship: Not pushed: {branch} holds files that look like secrets or are over 10 MB: \
-             .env. Remove them from the branch, then retry the step."
+            "Ship: Not pushed: {branch} has commits that hold files that look like secrets or are \
+             over 10 MB: .env. Rewrite the branch so none of the commits it would push holds \
+             them, then retry the step."
         ))
     );
     assert_eq!(w.remote_tip(&branch), None);
