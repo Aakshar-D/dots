@@ -414,3 +414,125 @@ fn instructions_name_the_rules() {
         assert!(SETUP_INSTRUCTIONS.contains(part), "missing {part:?}");
     }
 }
+
+#[test]
+fn proposal_folder_must_be_a_full_local_path() {
+    for folder in [
+        ".",
+        r"..\x",
+        r"\host\share",
+        r"\?\C:\Windows",
+        "//host/share",
+    ] {
+        let mut p = proposal();
+        p.folder = Some(folder.into());
+        let p = check_proposal(p, &ctx(), true).unwrap();
+        assert_eq!(p.folder, None, "{folder}");
+        assert!(p.notes.contains(folder), "{folder}: {}", p.notes);
+    }
+    let mut p = proposal();
+    p.folder = Some("  ".into());
+    let p = check_proposal(p, &ctx(), true).unwrap();
+    assert_eq!(p.folder, None);
+    assert_eq!(p.notes, "");
+}
+
+#[test]
+fn proposal_custom_preset_becomes_sandboxed() {
+    let mut p = proposal();
+    p.preset = Preset::Custom;
+    let p = check_proposal(p, &ctx(), false).unwrap();
+    assert_eq!(p.preset, Preset::Sandboxed);
+    assert!(!p.notes.is_empty());
+    let p = check_proposal(proposal(), &ctx(), false).unwrap();
+    assert_eq!(p.preset, Preset::ReadOnly);
+}
+
+#[test]
+fn extras_are_exact() {
+    let mut c = ctx();
+    c.library.mcp_servers.push("Bad Name".into());
+    let mut p = proposal();
+    p.uses.mcp_servers = vec!["gmail".into(), "Bad Name".into()];
+    p.extras = vec![
+        " web".into(),
+        "web ".into(),
+        "mcp:Bad Name".into(),
+        "mcp: gmail".into(),
+        "mcp:gmail".into(),
+    ];
+    let p = check_proposal(p, &c, true).unwrap();
+    assert_eq!(p.extras, vec!["mcp:gmail".to_string()]);
+    assert!(
+        p.notes.contains("\" web\"") || p.notes.contains(" web"),
+        "{}",
+        p.notes
+    );
+
+    let policy = |extras: &[&str]| {
+        let extras: Vec<String> = extras.iter().map(|e| e.to_string()).collect();
+        setup_policy(Preset::ReadOnly, &extras)
+    };
+    for odd in [
+        " web",
+        "WEB",
+        "mcp:",
+        "mcp:Bad Name",
+        "mcp:a__b",
+        "mcp: gmail",
+        "root",
+    ] {
+        assert_eq!(
+            policy(&[odd]),
+            Policy::preset(Preset::ReadOnly),
+            "{odd:?} must add nothing"
+        );
+    }
+}
+
+#[test]
+fn proposal_schedule_must_still_run() {
+    let past = json!({ "rule": { "kind": "once", "at": "2020-01-01T09:00" } });
+    let p = checked(json!({ "schedule": past }));
+    assert_eq!(p.schedule, None);
+    assert!(!p.notes.is_empty());
+    let ended = json!({
+        "rule": { "kind": "daily", "time": "09:00" },
+        "until": { "date": "2020-01-01T08:00" }
+    });
+    let p = checked(json!({ "schedule": ended }));
+    assert_eq!(p.schedule, None);
+    let future = json!({ "rule": { "kind": "once", "at": "2099-01-01T09:00" } });
+    let p = checked(json!({ "schedule": future }));
+    assert!(p.schedule.is_some());
+    assert_eq!(p.notes, "");
+}
+
+#[test]
+fn prompt_rejects_bad_rounds() {
+    let invalid = |r: &SetupRequest| {
+        assert!(
+            matches!(setup_prompt(&ctx(), r), Err(Error::Invalid(_))),
+            "{r:?}"
+        )
+    };
+    let mut three = req();
+    three.rounds = vec![round(1), round(2), round(3)];
+    invalid(&three);
+    let mut extra_answer = req();
+    let mut r = round(1);
+    r.answers.push("Another answer.".into());
+    extra_answer.rounds = vec![r];
+    invalid(&extra_answer);
+    let mut long_answer = req();
+    let mut r = round(1);
+    r.answers = vec!["x".repeat(4001)];
+    long_answer.rounds = vec![r];
+    invalid(&long_answer);
+    // Fewer answers than questions is fine: a question may be left blank.
+    let mut fewer = req();
+    let mut r = round(1);
+    r.questions.push("Another?".into());
+    fewer.rounds = vec![r];
+    assert!(setup_prompt(&ctx(), &fewer).is_ok());
+}

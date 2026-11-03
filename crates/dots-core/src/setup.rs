@@ -5,10 +5,11 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
+use chrono::Local;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::library::Uses;
+use crate::library::{check_name, LibraryKind, Uses};
 use crate::policy::{Action, Policy, Preset, Rule};
 use crate::schedule::Schedule;
 use crate::skill_creator::{unwrap_fence, MAX_REQUEST_CHARS};
@@ -82,6 +83,8 @@ const UNREADABLE: &str = "The setup agent's answer could not be read. Try again.
 const FAILED: &str = "Setup could not finish. Try describing the task again, or fill in the form.";
 
 const MAX_QUESTIONS: usize = 3;
+/// The most rounds of questions before the agent must propose.
+const MAX_ROUNDS: usize = 2;
 const MAX_QUESTION_CHARS: usize = 300;
 /// The most a proposal's instructions may hold, in characters; longer ones are cut.
 pub const MAX_INSTRUCTIONS_CHARS: usize = 4000;
@@ -168,7 +171,7 @@ pub struct SetupContext {
 /// The agent must answer with a proposal: the person skipped the questions, asked for a
 /// change, or has answered two rounds already.
 pub fn must_propose(req: &SetupRequest) -> bool {
-    req.skip || req.current.is_some() || req.rounds.len() >= 2
+    req.skip || req.current.is_some() || req.rounds.len() >= MAX_ROUNDS
 }
 
 fn invalid<T>(m: impl Into<String>) -> Result<T> {
@@ -176,8 +179,8 @@ fn invalid<T>(m: impl Into<String>) -> Result<T> {
 }
 
 /// The request's text, sent on the CLI's stdin. `Invalid` for an empty description, a
-/// description or change over `MAX_REQUEST_CHARS`, and a change without a current proposal
-/// (or the reverse).
+/// description, change or answer over `MAX_REQUEST_CHARS`, more than two rounds, a round with
+/// more answers than questions, and a change without a current proposal (or the reverse).
 pub fn setup_prompt(ctx: &SetupContext, req: &SetupRequest) -> Result<String> {
     let description = req.description.trim();
     if description.is_empty() {
@@ -188,6 +191,19 @@ pub fn setup_prompt(ctx: &SetupContext, req: &SetupRequest) -> Result<String> {
         return invalid(format!(
             "Describe the task in at most {MAX_REQUEST_CHARS} characters."
         ));
+    }
+    if req.rounds.len() > MAX_ROUNDS {
+        return invalid(format!("Answer at most {MAX_ROUNDS} rounds of questions."));
+    }
+    for round in &req.rounds {
+        if round.answers.len() > round.questions.len() {
+            return invalid("A round has more answers than questions.");
+        }
+        if round.answers.iter().any(|a| too_long(a.trim())) {
+            return invalid(format!(
+                "Answer each question in at most {MAX_REQUEST_CHARS} characters."
+            ));
+        }
     }
     let change = match (req.current.as_ref(), req.change.as_deref().map(str::trim)) {
         (None, None) => None,
@@ -359,10 +375,7 @@ fn read_proposal(mut p: Map<String, Value>, notes: &mut Vec<String>) -> Result<S
         _ => None,
     };
     let preset = preset.unwrap_or_else(|| {
-        notes.push(
-            "Set what it may do to sandboxed: the setup agent picked no preset Dots knows."
-                .to_string(),
-        );
+        notes.push(CUSTOM_NOTE.to_string());
         Preset::Sandboxed
     });
     p.insert("preset".into(), serde_json::to_value(preset)?);
@@ -389,6 +402,9 @@ fn read_proposal(mut p: Map<String, Value>, notes: &mut Vec<String>) -> Result<S
         Err(_) => unreadable(),
     }
 }
+
+const CUSTOM_NOTE: &str =
+    "Set what it may do to sandboxed: the setup agent picked no preset Dots knows.";
 
 const SCHEDULE_NOTE: &str =
     "Left out the schedule: Dots could not use it. It runs only when you talk to it; set a schedule in the editor.";
@@ -417,6 +433,13 @@ pub fn check_proposal(
 
     if p.instructions.trim().is_empty() {
         return invalid("Write what the dot should do.");
+    }
+
+    // The preset: `custom` is a person's own rules in the editor; a proposal is a preset plus
+    // extras, so it holds the same rule here as in the agent's answer.
+    if p.preset == Preset::Custom {
+        p.preset = Preset::Sandboxed;
+        notes.push(CUSTOM_NOTE.to_string());
     }
 
     // The name.
@@ -466,7 +489,16 @@ pub fn check_proposal(
     if let Some(folder) = p.folder.take() {
         let folder = folder.trim().to_string();
         if !folder.is_empty() {
-            if Path::new(&folder).is_dir() {
+            // Only a full local path is looked at on disk: a relative path would be read
+            // against Dots' own folder, and a `\` path may reach another PC or a device.
+            let path = Path::new(&folder);
+            let local =
+                path.is_absolute() && !folder.starts_with("\\\\") && !folder.starts_with("//");
+            if !local {
+                notes.push(format!(
+                    "{folder} is not a full path to a folder on this PC, so Dots makes a new folder for this dot."
+                ));
+            } else if path.is_dir() {
                 p.folder = Some(folder);
             } else {
                 notes.push(format!(
@@ -477,7 +509,11 @@ pub fn check_proposal(
     }
 
     // The schedule.
-    if p.schedule.as_ref().is_some_and(|s| s.validate().is_err()) {
+    // As the store checks it on save: valid, and with a slot still to come.
+    let now = Local::now();
+    let unusable =
+        |s: &Schedule| s.validate().is_err() || s.check_runs_after(&now, &Local).is_err();
+    if p.schedule.as_ref().is_some_and(unusable) {
         p.schedule = None;
         notes.push(SCHEDULE_NOTE.to_string());
     }
@@ -515,7 +551,10 @@ pub fn check_proposal(
         let extra = extra.as_str();
         let keep = if extra == "web" {
             true
-        } else if let Some(server) = extra.strip_prefix("mcp:") {
+        } else if let Some(server) = extra
+            .strip_prefix("mcp:")
+            .filter(|s| check_name(LibraryKind::McpServer, s).is_ok())
+        {
             if servers.iter().any(|s| s == server) {
                 true
             } else {
@@ -562,16 +601,20 @@ fn repair_name(name: &str) -> String {
 /// The policy of a proposal (spec §6.3): the pure preset with no extras; with any, the
 /// preset's rules plus an allow rule per extra, and the preset field `custom`. `web` allows
 /// `WebFetch` and `WebSearch`, `mcp:<server>` allows `mcp__<server>__*`; an extra Dots does not
-/// know adds nothing. Deny rules of the preset still win.
+/// know adds nothing, and nothing is trimmed: `extras` must be a proposal's that passed
+/// `check_proposal`. Deny rules of the preset still win.
 pub fn setup_policy(preset: Preset, extras: &[String]) -> Policy {
     let mut policy = Policy::preset(preset);
     let mut added = Vec::new();
     for extra in extras {
-        let extra = extra.trim();
+        let extra = extra.as_str();
         if extra == "web" {
             added.push(Rule::new("WebFetch", Action::Allow));
             added.push(Rule::new("WebSearch", Action::Allow));
-        } else if let Some(server) = extra.strip_prefix("mcp:").filter(|s| !s.is_empty()) {
+        } else if let Some(server) = extra
+            .strip_prefix("mcp:")
+            .filter(|s| check_name(LibraryKind::McpServer, s).is_ok())
+        {
             added.push(Rule::new(&format!("mcp__{server}__*"), Action::Allow));
         }
     }
