@@ -68,6 +68,10 @@ pub enum Notice {
         dot_id: String,
         minutes: u64,
     },
+    /// A chat message did not reach its dot (delivery tracking spec section 3.5).
+    NotDelivered {
+        run: Box<Run>,
+    },
 }
 
 /// Decides which events notify: approval requests, a run moving from queued or running into
@@ -78,12 +82,17 @@ pub enum Notice {
 /// itself: it is retried, or its schedule needs attention, which notifies. A run first seen
 /// in a final state (e.g. marked reviewed) and a parked run closed by a decision do not
 /// notify either. A run that parks on an approval request this notifier has announced does
-/// not notify a second time: one park, one notification.
+/// not notify a second time: one park, one notification. A chat message that did not get
+/// there notifies once, when it is seen working (or queued, for the sweeper's mark) and then
+/// marked not delivered; background runs notify as before.
 #[derive(Default)]
 pub struct Notifier {
     active: HashMap<String, RunStatus>,
     /// Runs with an announced approval request that have neither parked nor ended since.
     asked: HashSet<String>,
+    /// Chat runs already announced as not delivered. Never cleared, not even by `forget`, so a
+    /// run is not announced twice (a refused retry, a restart of the stream).
+    undelivered_told: HashSet<String>,
 }
 
 impl Notifier {
@@ -116,6 +125,17 @@ impl Notifier {
                 let told = !matches!(run.status, RunStatus::Queued | RunStatus::Running)
                     && self.asked.remove(&run.id);
                 let was_working = matches!(prev, Some(RunStatus::Queued | RunStatus::Running));
+                let newly = run.trigger == TriggerKind::Chat
+                    && run.undelivered_at.is_some()
+                    && run.dismissed_at.is_none()
+                    && run.delivered_at.is_none()
+                    && (was_working || run.status == RunStatus::Queued)
+                    && self.undelivered_told.insert(run.id.clone());
+                if newly {
+                    return Some(Notice::NotDelivered {
+                        run: Box::new(run.clone()),
+                    });
+                }
                 let ended = match run.status {
                     RunStatus::Succeeded => true,
                     RunStatus::Failed => run.trigger != TriggerKind::Schedule,
@@ -278,6 +298,13 @@ pub fn notice_text(notice: &Notice, dot_name: &str) -> (String, String) {
             format!("{dot_name} has gone quiet"),
             format!("No output for {minutes} min. Open it to stop it or keep waiting."),
         ),
+        Notice::NotDelivered { run } => (
+            format!("{dot_name} didn't get your message"),
+            first_line(
+                run.undelivered_reason.as_deref(),
+                "It did not reach the dot.",
+            ),
+        ),
     }
 }
 
@@ -288,7 +315,9 @@ pub fn notice_text(notice: &Notice, dot_name: &str) -> (String, String) {
 pub fn notice_route(notice: &Notice, dot_id: &str) -> String {
     match notice {
         Notice::ApprovalNeeded { run_id, .. } => format!("/chat/{dot_id}/{run_id}"),
-        Notice::RunEnded { run } => format!("/chat/{dot_id}/{}", run.id),
+        Notice::RunEnded { run } | Notice::NotDelivered { run } => {
+            format!("/chat/{dot_id}/{}", run.id)
+        }
         Notice::RunQuiet { run_id, .. } => format!("/chat/{dot_id}/{run_id}"),
         Notice::ScheduleFailed { .. } | Notice::MessagePosted { .. } => format!("/home/{dot_id}"),
         Notice::WatcherPaused { .. } => format!("/dots/{dot_id}?tab=watchers"),
@@ -351,7 +380,7 @@ async fn notify(app: &AppHandle, rt: &Runtime, notice: &Notice) {
     }
     let dot_id = match notice {
         Notice::ApprovalNeeded { run_id, .. } => rt.get_run(run_id).await.map(|r| r.dot_id).ok(),
-        Notice::RunEnded { run } => Some(run.dot_id.clone()),
+        Notice::RunEnded { run } | Notice::NotDelivered { run } => Some(run.dot_id.clone()),
         Notice::ScheduleFailed { dot_id, .. } => Some(dot_id.clone()),
         Notice::MessagePosted { message } => Some(message.dot_id.clone()),
         Notice::WatcherPaused { dot_id, .. } => Some(dot_id.clone()),
@@ -567,6 +596,106 @@ mod tests {
         );
     }
 
+    /// `run(..)` as the app sees it after the mark: not delivered.
+    fn marked(id: &str, status: RunStatus, trigger: TriggerKind) -> RuntimeEvent {
+        RuntimeEvent::RunUpdated {
+            run: Run {
+                undelivered_at: Some("t".into()),
+                undelivered_reason: Some("claude CLI not found".into()),
+                ..run(id, status, trigger)
+            },
+        }
+    }
+
+    fn plain(id: &str, status: RunStatus, trigger: TriggerKind) -> RuntimeEvent {
+        RuntimeEvent::RunUpdated {
+            run: run(id, status, trigger),
+        }
+    }
+
+    #[test]
+    fn a_chat_message_not_delivered_notifies_once() {
+        let mut n = Notifier::default();
+        let chat = TriggerKind::Chat;
+        assert_eq!(n.decide(&plain("c", Queued, chat)), None);
+        assert_eq!(n.decide(&plain("c", Running, chat)), None);
+        let failed = marked("c", Failed, chat);
+        let Some(Notice::NotDelivered { run }) = n.decide(&failed) else {
+            panic!("expected NotDelivered");
+        };
+        assert_eq!(run.id, "c");
+        assert_eq!(n.decide(&failed), None);
+    }
+
+    #[test]
+    fn a_chat_run_marked_twice_notifies_once() {
+        let mut n = Notifier::default();
+        let chat = TriggerKind::Chat;
+        // The sweeper's mark: still queued.
+        assert!(matches!(
+            n.decide(&marked("c", Queued, chat)),
+            Some(Notice::NotDelivered { .. })
+        ));
+        // Delivered after a retry.
+        let delivered = RuntimeEvent::RunUpdated {
+            run: Run {
+                delivered_at: Some("t".into()),
+                ..run("c", Running, chat)
+            },
+        };
+        assert_eq!(n.decide(&delivered), None);
+        n.forget();
+        assert_eq!(n.decide(&marked("c", Queued, chat)), None);
+        assert_eq!(n.decide(&marked("c", Failed, chat)), None);
+    }
+
+    #[test]
+    fn a_background_run_not_delivered_does_not_notify_as_such() {
+        let mut n = Notifier::default();
+        let w = TriggerKind::Watcher;
+        assert_eq!(n.decide(&plain("w", Running, w)), None);
+        assert!(matches!(
+            n.decide(&marked("w", Failed, w)),
+            Some(Notice::RunEnded { .. })
+        ));
+        let s = TriggerKind::Schedule;
+        assert_eq!(n.decide(&plain("s", Running, s)), None);
+        assert_eq!(n.decide(&marked("s", Failed, s)), None);
+        assert_eq!(n.decide(&marked("s2", Queued, s)), None);
+    }
+
+    #[test]
+    fn a_dismissed_or_first_seen_ended_run_stays_quiet() {
+        let mut n = Notifier::default();
+        let chat = TriggerKind::Chat;
+        // First seen in a final state (e.g. "Mark reviewed").
+        assert_eq!(n.decide(&marked("old", Failed, chat)), None);
+        // Dismissed while it was working: quiet.
+        assert_eq!(n.decide(&plain("d", Running, chat)), None);
+        let dismissed = RuntimeEvent::RunUpdated {
+            run: Run {
+                undelivered_at: Some("t".into()),
+                dismissed_at: Some("t".into()),
+                ..run("d", Failed, chat)
+            },
+        };
+        assert_eq!(n.decide(&dismissed), None);
+        // A refused retry un-dismisses it: still told nothing before, so it may tell once; a
+        // run already told never tells again.
+        assert_eq!(n.decide(&plain("e", Running, chat)), None);
+        assert!(n.decide(&marked("e", Failed, chat)).is_some());
+        let dismissed_e = RuntimeEvent::RunUpdated {
+            run: Run {
+                undelivered_at: Some("t".into()),
+                dismissed_at: Some("t".into()),
+                ..run("e", Failed, chat)
+            },
+        };
+        assert_eq!(n.decide(&dismissed_e), None);
+        assert_eq!(n.decide(&marked("e", Failed, chat)), None);
+        assert_eq!(n.decide(&marked("e", Queued, chat)), None);
+    }
+
     #[test]
     fn approval_requests_notify_and_run_events_do_not() {
         let mut n = Notifier::default();
@@ -695,6 +824,23 @@ mod tests {
                 "nightly is waiting for your approval".into(),
                 "All green.".into()
             )
+        );
+        let undelivered = |reason: Option<&str>| Notice::NotDelivered {
+            run: Box::new(Run {
+                undelivered_reason: reason.map(str::to_string),
+                ..run("r", Failed, TriggerKind::Chat)
+            }),
+        };
+        assert_eq!(
+            notice_text(&undelivered(Some("claude CLI not found")), "nightly"),
+            (
+                "nightly didn't get your message".into(),
+                "claude CLI not found".into()
+            )
+        );
+        assert_eq!(
+            notice_text(&undelivered(None), "nightly").1,
+            "It did not reach the dot."
         );
         let ask = Notice::ApprovalNeeded {
             run_id: "r".into(),
@@ -1026,6 +1172,10 @@ mod tests {
             minutes: 10,
         };
         assert_eq!(notice_route(&quiet_run, "d"), "/chat/d/r3");
+        let undelivered = Notice::NotDelivered {
+            run: Box::new(run("r", Failed, TriggerKind::Chat)),
+        };
+        assert_eq!(notice_route(&undelivered, "d"), "/chat/d/r");
         let failed = Notice::ScheduleFailed {
             dot_id: "d".into(),
             error: None,
@@ -1113,5 +1263,9 @@ mod tests {
             minutes: 10,
         };
         assert_eq!(notice_route(&quiet_run, "d"), "/chat/d/r");
+        let undelivered = Notice::NotDelivered {
+            run: Box::new(run("r", Failed, TriggerKind::Chat)),
+        };
+        assert_eq!(notice_route(&undelivered, "d"), "/chat/d/r");
     }
 }

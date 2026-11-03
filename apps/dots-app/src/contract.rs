@@ -565,6 +565,38 @@ fn run() -> Run {
     }
 }
 
+/// A chat message that did not get there.
+fn run_not_delivered() -> Run {
+    Run {
+        trigger: TriggerKind::Chat,
+        payload: None,
+        status: RunStatus::Failed,
+        error: Some("claude CLI not found".into()),
+        summary: None,
+        delivered_at: None,
+        undelivered_at: Some(TS.into()),
+        undelivered_reason: Some("claude CLI not found".into()),
+        delivery: Some(Delivery::NotDelivered),
+        ..run()
+    }
+}
+
+/// A chat message still waiting because the dot is busy.
+fn run_waiting() -> Run {
+    Run {
+        trigger: TriggerKind::Chat,
+        payload: None,
+        status: RunStatus::Queued,
+        summary: None,
+        started_at: None,
+        ended_at: None,
+        delivered_at: None,
+        delivery: Some(Delivery::Waiting),
+        wait_reason: Some(WaitReason::Busy),
+        ..run()
+    }
+}
+
 /// The Usage page's week: a Claude dot and a local one.
 fn usage_summary() -> UsageSummary {
     UsageSummary {
@@ -1294,6 +1326,15 @@ pub fn samples() -> Value {
     });
     // Past the `json!` macro's recursion limit, so added here.
     samples["ScheduleSkip"] = to(schedule_skip());
+    samples["RunNotDelivered"] = to(run_not_delivered());
+    samples["RunWaiting"] = to(run_waiting());
+    samples["DeliveryCounts"] = to(DeliveryCounts {
+        sent: 5,
+        delivered: 4,
+        not_delivered: 1,
+    });
+    samples["Enums"]["Delivery"] = to(Delivery::ALL);
+    samples["Enums"]["WaitReason"] = to(WaitReason::ALL);
     samples["ContextDocuments"] = to(context_documents());
     samples["Message"] = to(messages());
     samples["FollowUp"] = to(follow_ups());
