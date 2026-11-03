@@ -255,6 +255,18 @@ describe("the New dot button", () => {
     expect(button).toHaveAttribute("aria-disabled", "true");
   });
 
+  it("hides the setup composer on the empty home where the person is a Viewer", async () => {
+    const title = "Acme Engineering: a Viewer can't create or change dots. Ask an Admin or Owner.";
+    backend.on("org_list", () => [viewer]);
+    backend.on("scope_get", () => ({ account: "acme-eng", workspace: "default" }));
+    backend.on("dot_overview", () => []);
+    spaces(title, ["default", "payments"]);
+    renderApp("/home");
+    expect(await screen.findByText(title, { selector: "p" })).toBeVisible();
+    expect(screen.queryByRole("textbox", { name: "What should your first dot do?" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Set it up" })).toBeNull();
+  });
+
   it("is on in Personal", async () => {
     backend.on("dot_overview", () => []);
     renderApp("/home");

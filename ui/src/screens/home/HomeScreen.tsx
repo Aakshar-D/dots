@@ -4,6 +4,7 @@ import { Navigate, useNavigate, useParams } from "react-router";
 
 import { commands } from "@/api/commands";
 import { ErrorNote } from "@/components/ErrorNote";
+import { useScopeRefusal } from "@/lib/access";
 import { sortDots } from "@/lib/dot-status";
 import { keys } from "@/lib/query";
 import { notifyError } from "@/lib/notify";
@@ -19,11 +20,13 @@ import { DotsColumn } from "@/screens/home/DotsColumn";
 import { lastDot } from "@/screens/home/last-dot";
 import { SetupFlow } from "@/screens/setup/SetupFlow";
 
-/// No dot yet: the setup view, to describe the first one (setup agent spec §4).
+/// No dot yet: the setup view, to describe the first one (setup agent spec §4). Where the role
+/// in the account in view refuses making dots, the reason New dot gives instead.
 function EmptyHome() {
+  const refusal = useScopeRefusal("edit");
   return (
     <div className="m-auto flex w-full max-w-xl flex-col gap-3 p-6">
-      <SetupFlow />
+      {refusal ? <p className="text-muted-foreground">{refusal}</p> : <SetupFlow />}
     </div>
   );
 }
