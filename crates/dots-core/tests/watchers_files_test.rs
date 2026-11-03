@@ -125,6 +125,7 @@ async fn the_sweep_removes_what_no_watcher_or_open_thread_needs() {
             &dot.id,
             "Mail",
             &WatcherConfig::Email(EmailConfig::new("me@gmail.com", "GMAIL_APP_PASSWORD")),
+            None,
         )
         .await
         .unwrap();

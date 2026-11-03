@@ -421,7 +421,11 @@ impl Watchers {
     pub async fn add(&self, dot_id: &str, name: &str, config: WatcherConfig) -> Result<Watcher> {
         let name = check_name(name)?;
         let config = check_config(&self.deps.store, &config).await?;
-        let watcher = self.deps.store.add_watcher(dot_id, &name, &config).await?;
+        let watcher = self
+            .deps
+            .store
+            .add_watcher(dot_id, &name, &config, None)
+            .await?;
         self.changed(&watcher);
         Ok(watcher)
     }
@@ -443,7 +447,11 @@ impl Watchers {
         self.deps.store.get_watcher(id).await?;
         let name = check_name(name)?;
         let config = check_config(&self.deps.store, &config).await?;
-        let watcher = self.deps.store.update_watcher(id, &name, &config).await?;
+        let watcher = self
+            .deps
+            .store
+            .update_watcher(id, &name, &config, None)
+            .await?;
         self.backoffs.lock().unwrap().remove(id);
         self.forget_remote(id);
         self.changed(&watcher);

@@ -420,12 +420,15 @@ fn watchers() -> Vec<Watcher> {
             events: FolderEvent::ALL.to_vec(),
             recursive: true,
         }),
+        hours: None,
         enabled: true,
         paused_reason: None,
         last_error: None,
         last_event_at: Some(TS.into()),
         created_at: TS.into(),
         updated_at: TS.into(),
+        held_count: 0,
+        next_opening: None,
     };
     vec![
         folder.clone(),

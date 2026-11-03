@@ -14,6 +14,7 @@ mod browser;
 mod dots;
 mod env;
 mod follow_ups;
+mod held;
 mod instructions;
 mod invites;
 mod library;
@@ -44,6 +45,7 @@ pub struct Store {
 }
 
 pub use api_keys::ApiKeyRow;
+pub use held::HeldEvent;
 pub use invites::{DraftRow, InviteRow};
 pub use limits::LimitReading;
 pub use memories::Added;

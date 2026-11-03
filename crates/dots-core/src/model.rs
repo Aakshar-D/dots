@@ -1340,12 +1340,18 @@ pub struct Watcher {
     pub dot_id: String,
     pub name: String,
     pub config: WatcherConfig,
+    /// When it listens; `None` is any time.
+    pub hours: Option<WatchHours>,
     pub enabled: bool,
     pub paused_reason: Option<PausedReason>,
     pub last_error: Option<String>,
     pub last_event_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    /// Events held for its next opening (the store counts them).
+    pub held_count: u32,
+    /// The next opening, RFC 3339 UTC; the store leaves it `None` and the service fills it.
+    pub next_opening: Option<String>,
 }
 
 impl Watcher {
