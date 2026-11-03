@@ -84,7 +84,7 @@ export function olderTopics(topics: Topic[], shown: Topic[]): Topic[] {
 /// The newest run of a topic that was not dismissed (Retry or Discard), else the newest: what a
 /// reply continues.
 export function lastRun(topic: Topic): Run {
-  return [...topic.runs].reverse().find((run) => !run.dismissed_at) ?? topic.runs.at(-1)!;
+  return [...topic.runs].reverse().find((run) => !run.dismissed_at || run.delivered_at) ?? topic.runs.at(-1)!;
 }
 
 /// The topic a message goes to by default: the current chat topic of those shown, whatever ran
