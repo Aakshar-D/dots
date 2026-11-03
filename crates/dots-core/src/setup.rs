@@ -64,6 +64,9 @@ To propose the dot, answer:
   "sandboxed": May edit files in its folder and run a few safe git commands. Asks before anything else.
   "trusted": May run commands without asking.
   Never pick "trusted" unless the person asked for it in their own words. A task that saves files needs at least "sandboxed".
+  A "read-only" dot can only use Read, Glob and Grep. It cannot run commands, so it cannot see file dates or sizes, though Glob lists files newest first.
+  Write instructions that use only what the chosen preset allows.
+  When the task needs file dates, sizes or commands, pick "sandboxed" and say in "notes" that each command will ask for approval; or, if you keep a smaller preset, say in "notes" what the dot cannot do.
 - "extras": permissions added on top of the preset so the dot can run without stopping to ask. Only these two exist:
   "web": reads websites and searches the web without asking. Add it only when the task reads websites.
   "mcp:<server>": uses that MCP server without asking, for example "mcp:gmail". Add it only for a server you also put in "uses" and the task needs.

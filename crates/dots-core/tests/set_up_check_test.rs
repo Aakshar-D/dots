@@ -416,6 +416,24 @@ fn instructions_name_the_rules() {
 }
 
 #[test]
+fn prompt_says_what_each_preset_lets_the_dot_do() {
+    for part in [
+        // A read-only dot's tools, and what it cannot do with them.
+        "A \"read-only\" dot can only use Read, Glob and Grep",
+        "It cannot run commands, so it cannot see file dates or sizes",
+        "Glob lists files newest first",
+        // Instructions keep to the preset.
+        "Write instructions that use only what the chosen preset allows",
+        // A task that needs more: sandboxed with a note, or a note of what it cannot do.
+        "When the task needs file dates, sizes or commands, pick \"sandboxed\"",
+        "say in \"notes\" that each command will ask for approval",
+        "say in \"notes\" what the dot cannot do",
+    ] {
+        assert!(SETUP_INSTRUCTIONS.contains(part), "missing {part:?}");
+    }
+}
+
+#[test]
 fn proposal_folder_must_be_a_full_local_path() {
     for folder in [
         ".",
