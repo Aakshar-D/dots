@@ -12,7 +12,7 @@ use common::{fake_dot, fake_run};
 use dots_core::model::{EmailConfig, TriggerKind, WatcherConfig, WorkspaceMode};
 use dots_core::prompt::build_prompt;
 use dots_core::watchers::describe::{
-    trigger_line, ATTACHMENTS_NOTE, EMAIL_PREFIX, GITHUB_PREFIX, OUTSIDE_HEADING,
+    trigger_line, ATTACHMENTS_NOTE, EMAIL_PREFIX, GITHUB_PREFIX, OPENING_LINE, OUTSIDE_HEADING,
 };
 use dots_core::watchers::{Failure, Sources};
 use serde_json::{json, Value};
@@ -207,4 +207,44 @@ async fn the_app_password_never_appears_in_an_error_a_payload_a_prompt_or_an_eve
     }
     assert!(all.contains("watcher_updated"));
     assert!(!all.contains(PASS));
+}
+
+/// Watch hours: the opening run's prompt says the events came while the watcher was outside
+/// its hours, describes each as a single event's is, and counts the ones it does not carry.
+#[test]
+fn an_opening_runs_prompt_lists_the_held_events_and_counts_the_rest() {
+    let payload = json!({
+        "watcher_id": "W2", "watcher_name": "Billing mail",
+        "held": [email("Please pay by Friday."), folder("created")],
+        "held_more": 30, "held_since": "2026-10-24T08:00:00.000Z",
+        "attachments": [{"name": "1-a.pdf", "size": 4, "path": "C:/w/attachments/R/1-a.pdf", "event": 1}],
+    });
+    let p = prompt(payload);
+    let time = now().format("%Y-%m-%d %H:%M:%S %:z").to_string();
+    let first = format!(
+        "## Trigger\n\n- kind: watcher\n- watcher: Billing mail\n- time: {time}\n\n{OPENING_LINE}\n\n### Event 1\n\n- what: Email from billing@acme.com: Invoice 12\n- event:\n\n```json\n"
+    );
+    assert!(p.contains(&first), "{p}");
+    assert_eq!(
+        OPENING_LINE,
+        "While you were away (outside this watcher's hours), these came in:"
+    );
+    // The email's text, under its heading and prefix.
+    assert!(p.contains(&format!(
+        "{OUTSIDE_HEADING}\n\n{EMAIL_PREFIX}\n\nSubject: Invoice 12\n\n```text\nPlease pay by Friday.\n```\n\n### Event 2\n\n- what: New file in Invoices folder: invoice-12.pdf\n"
+    )), "{p}");
+    // The attachments, with their note, and the count of the rest last.
+    assert!(p.contains(ATTACHMENTS_NOTE), "{p}");
+    assert!(p.contains("C:/w/attachments/R/1-a.pdf"), "{p}");
+    assert!(p.contains("…and 30 more.\n\n## Standing rules"), "{p}");
+    assert!(!p.contains("held_since"), "{p}");
+    // Nothing more held: no count.
+    let payload = json!({
+        "watcher_id": "W1", "watcher_name": "Invoices folder",
+        "held": [folder("created")], "held_more": 0,
+        "held_since": "2026-10-24T08:00:00.000Z", "attachments": [],
+    });
+    let p = prompt(payload);
+    assert!(!p.contains("more."), "{p}");
+    assert!(!p.contains(ATTACHMENTS_NOTE), "{p}");
 }

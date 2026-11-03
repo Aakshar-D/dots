@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, TimeDelta, Utc};
-use serde_json::Value;
+use serde_json::{json, Value};
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -332,13 +332,32 @@ pub struct WatcherDeps {
     pub zone: Arc<dyn hours::Zone>,
 }
 
+/// A running watcher's task: what it was started with, and how to stop it.
+struct Task {
+    config: WatcherConfig,
+    hours: Option<WatchHours>,
+    token: CancellationToken,
+}
+
+/// While alive, the watcher is at its opening (`Watchers::opening`); dropped, it is not.
+struct AtOpening<'a> {
+    service: &'a Watchers,
+    watcher_id: &'a str,
+}
+
+impl Drop for AtOpening<'_> {
+    fn drop(&mut self) {
+        self.service.set_opening(self.watcher_id, false);
+    }
+}
+
 /// The watchers service (spec sections 5 and 7): one task per running watcher, the one door
 /// every event goes through (`fire`), and where sources report failures.
 pub struct Watchers {
     deps: WatcherDeps,
     paused: AtomicBool,
     reload: Notify,
-    tasks: Mutex<HashMap<String, (WatcherConfig, CancellationToken)>>,
+    tasks: Mutex<HashMap<String, Task>>,
     backoffs: Mutex<HashMap<String, Backoff>>,
     files: files::WatcherFiles,
     /// The GitHub login behind each watcher's token, asked once.
@@ -351,6 +370,12 @@ pub struct Watchers {
     /// The watchers at their opening: what they find now is held for the opening run, even
     /// inside their hours.
     opening: Mutex<HashSet<String>>,
+    /// One lock per watcher that `fire`, the opening and dropping what is held all take: an
+    /// event `fire` decides to hold is stored before an opening takes the held events, so none
+    /// is left behind for the next opening (watch hours spec section 3.8).
+    gates: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// The watchers whose stored hours could not be used, already said in the log.
+    warned: Mutex<HashSet<String>>,
 }
 
 impl Watchers {
@@ -366,6 +391,8 @@ impl Watchers {
             etags: Mutex::new(HashMap::new()),
             checks: Mutex::new(HashMap::new()),
             opening: Mutex::new(HashSet::new()),
+            gates: Mutex::new(HashMap::new()),
+            warned: Mutex::new(HashSet::new()),
         })
     }
 
@@ -383,8 +410,8 @@ impl Watchers {
                     _ = this.reload.notified() => {}
                 }
             }
-            for (_, (_, token)) in this.tasks.lock().unwrap().drain() {
-                token.cancel();
+            for (_, task) in this.tasks.lock().unwrap().drain() {
+                task.token.cancel();
             }
         })
     }
@@ -427,7 +454,87 @@ impl Watchers {
 
     pub async fn list(&self, dot_id: &str) -> Result<Vec<Watcher>> {
         self.deps.store.get_dot(dot_id).await?;
-        self.deps.store.list_watchers(dot_id).await
+        let watchers = self.deps.store.list_watchers(dot_id).await?;
+        Ok(watchers.into_iter().map(|w| self.with_opening(w)).collect())
+    }
+
+    /// The watcher as stored, with its next opening when it is outside its hours now.
+    async fn get(&self, id: &str) -> Result<Watcher> {
+        let watcher = self.deps.store.get_watcher(id).await?;
+        Ok(self.with_opening(watcher))
+    }
+
+    /// Sets `next_opening` (RFC 3339, local time) when the watcher is outside its hours now.
+    fn with_opening(&self, mut watcher: Watcher) -> Watcher {
+        let now = self.deps.clock.now();
+        watcher.next_opening = self
+            .hours_of(&watcher)
+            .and_then(|hours| self.opens_at(&watcher.id, hours, now))
+            .map(|at| self.deps.zone.rfc3339(at));
+        watcher
+    }
+
+    /// The watcher's hours, if they can be used. Hours that fail their check (only a damaged
+    /// row can hold them) count as none, so the watcher neither holds forever nor waits for an
+    /// opening that never comes; said once in the log.
+    fn hours_of<'a>(&self, watcher: &'a Watcher) -> Option<&'a WatchHours> {
+        let hours = watcher.hours.as_ref()?;
+        if hours::check_hours(hours).is_ok() {
+            return Some(hours);
+        }
+        self.warn_once(
+            &watcher.id,
+            "its watch hours are not valid; reading them as any time",
+        );
+        None
+    }
+
+    fn warn_once(&self, watcher_id: &str, what: &str) {
+        if self.warned.lock().unwrap().insert(watcher_id.to_string()) {
+            tracing::warn!(watcher = watcher_id, "{what}");
+        }
+    }
+
+    /// The hours' next opening after `now`; `None` (said once) when the maths gives one that is
+    /// not in the future, so no wait ever spins: the watcher then counts as inside.
+    fn next_opening(
+        &self,
+        watcher_id: &str,
+        hours: &WatchHours,
+        now: DateTime<Utc>,
+    ) -> Option<DateTime<Utc>> {
+        let at = self.deps.zone.next_opening(hours, now);
+        if at > now {
+            return Some(at);
+        }
+        self.warn_once(
+            watcher_id,
+            "its next opening is not in the future; reading its hours as any time",
+        );
+        None
+    }
+
+    /// When the watcher opens next, if it is outside its hours at `now`; `None` inside.
+    fn opens_at(
+        &self,
+        watcher_id: &str,
+        hours: &WatchHours,
+        now: DateTime<Utc>,
+    ) -> Option<DateTime<Utc>> {
+        if self.deps.zone.is_inside(hours, now) {
+            return None;
+        }
+        self.next_opening(watcher_id, hours, now)
+    }
+
+    /// The lock of the watcher's held events (`gates`).
+    fn gate(&self, id: &str) -> Arc<tokio::sync::Mutex<()>> {
+        self.gates
+            .lock()
+            .unwrap()
+            .entry(id.to_string())
+            .or_default()
+            .clone()
     }
 
     pub async fn add(
@@ -446,7 +553,7 @@ impl Watchers {
             .add_watcher(dot_id, &name, &config, hours.as_ref())
             .await?;
         self.changed(&watcher);
-        Ok(watcher)
+        Ok(self.with_opening(watcher))
     }
 
     /// The lock of the watcher's checks.
@@ -468,7 +575,7 @@ impl Watchers {
     ) -> Result<Watcher> {
         // A check in flight finishes first: its cursor is then cleared, not written back.
         let check = self.check_lock(id);
-        let _no_check = check.lock().await;
+        let no_check = check.lock().await;
         self.deps.store.get_watcher(id).await?;
         let name = check_name(name)?;
         let config = check_config(&self.deps.store, &config).await?;
@@ -478,13 +585,19 @@ impl Watchers {
             .store
             .update_watcher(id, &name, &config, hours.as_ref())
             .await?;
+        drop(no_check);
         self.backoffs.lock().unwrap().remove(id);
         self.forget_remote(id);
+        // Hours removed, or changed so that now is inside: what it holds goes now.
+        self.release(id).await?;
         self.changed(&watcher);
-        Ok(watcher)
+        self.get(id).await
     }
 
     pub async fn delete(&self, id: &str) -> Result<()> {
+        let gate = self.gate(id);
+        let _gate = gate.lock().await;
+        // Its held events go with its row, their files with its folder.
         let watcher = self.deps.store.delete_watcher(id).await?;
         self.files.forget_watcher(id);
         self.backoffs.lock().unwrap().remove(id);
@@ -494,22 +607,58 @@ impl Watchers {
         Ok(())
     }
 
+    /// Turns the watcher on or off. Turned off, it drops what it holds; turned on inside its
+    /// hours, it releases what it holds.
     pub async fn set_enabled(&self, id: &str, enabled: bool) -> Result<Watcher> {
         let watcher = self.deps.store.set_watcher_enabled(id, enabled).await?;
+        if enabled {
+            self.release(id).await?;
+        } else {
+            self.drop_held(id).await?;
+        }
         self.changed(&watcher);
-        Ok(watcher)
+        self.get(id).await
     }
 
     /// The person resumes a watcher Dots paused; nothing happens to one that was not paused.
+    /// Resumed inside its hours, it releases what it holds.
     pub async fn resume(&self, id: &str) -> Result<Watcher> {
         let watcher = self.deps.store.get_watcher(id).await?;
         if watcher.paused_reason.is_none() {
-            return Ok(watcher);
+            return Ok(self.with_opening(watcher));
         }
         let watcher = self.deps.store.resume_watcher(id).await?;
         self.backoffs.lock().unwrap().remove(id);
+        self.release(id).await?;
         self.changed(&watcher);
-        Ok(watcher)
+        self.get(id).await
+    }
+
+    /// Drops the watcher's held events and their files (it was turned off).
+    async fn drop_held(&self, id: &str) -> Result<()> {
+        let gate = self.gate(id);
+        let _gate = gate.lock().await;
+        for event in self.deps.store.drop_held(id).await? {
+            self.files.remove_held(id, &event.id);
+        }
+        Ok(())
+    }
+
+    /// The release rule (watch hours spec section 3.8): a watcher that holds events while
+    /// inside its hours releases them at once, in one opening run.
+    async fn release(&self, id: &str) -> Result<()> {
+        let watcher = self.deps.store.get_watcher(id).await?;
+        if watcher.held_count == 0 {
+            return Ok(());
+        }
+        let now = self.deps.clock.now();
+        if let Some(hours) = self.hours_of(&watcher) {
+            if self.opens_at(id, hours, now).is_some() {
+                return Ok(());
+            }
+        }
+        self.open(id).await?;
+        Ok(())
     }
 
     /// Dots pauses the watcher. Announced once: a watcher paused already stays as it is.
@@ -552,21 +701,30 @@ impl Watchers {
     /// Whether `fire` holds the watcher's events now: it has hours and is outside them, or is
     /// at its opening.
     fn holds(&self, watcher: &Watcher, now: DateTime<Utc>) -> bool {
-        let Some(hours) = &watcher.hours else {
+        let Some(hours) = self.hours_of(watcher) else {
             return false;
         };
-        self.opening.lock().unwrap().contains(&watcher.id) || !self.deps.zone.is_inside(hours, now)
+        self.opening.lock().unwrap().contains(&watcher.id)
+            || self.opens_at(&watcher.id, hours, now).is_some()
+    }
+
+    /// Whether the watcher, its dot or Dots is paused or off: then nothing is done.
+    async fn is_off(&self, watcher: &Watcher) -> Result<bool> {
+        if self.is_paused() || !watcher.enabled || watcher.paused_reason.is_some() {
+            return Ok(true);
+        }
+        Ok(!self.deps.store.get_dot(&watcher.dot_id).await?.spec.enabled)
     }
 
     /// The one door every event goes through (spec section 5): one queued `watcher` run, unless
     /// the watcher, its dot or Dots is paused or off, the watcher is outside its hours (the
     /// event is held), or the hour is full.
     pub async fn fire(&self, watcher_id: &str, event: SourceEvent) -> Result<Fired> {
+        // Whether to hold is decided, and the event held, before an opening can take.
+        let gate = self.gate(watcher_id);
+        let _gate = gate.lock().await;
         let watcher = self.deps.store.get_watcher(watcher_id).await?;
-        if self.is_paused() || !watcher.enabled || watcher.paused_reason.is_some() {
-            return Ok(Fired::Off);
-        }
-        if !self.deps.store.get_dot(&watcher.dot_id).await?.spec.enabled {
+        if self.is_off(&watcher).await? {
             return Ok(Fired::Off);
         }
         let now = self.deps.clock.now();
@@ -601,6 +759,85 @@ impl Watchers {
         };
         self.deps
             .store
+            .touch_watcher_event(&watcher.id, &timestamp(now))
+            .await?;
+        self.updated(&watcher);
+        Ok(Fired::Run(Box::new(run)))
+    }
+
+    /// The opening (watch hours spec section 4.4): one `watcher` run carrying the held events,
+    /// the first `HELD_IN_FULL` in full, oldest first, with their files, and the count of the
+    /// rest. It passes `fire`'s checks and the flood cap before anything is taken: `Off` (also
+    /// when nothing is held) and `Capped` (the watcher pauses as flooded) keep the events.
+    pub async fn open(&self, watcher_id: &str) -> Result<Fired> {
+        let gate = self.gate(watcher_id);
+        let _gate = gate.lock().await;
+        let store = &self.deps.store;
+        let watcher = store.get_watcher(watcher_id).await?;
+        if watcher.held_count == 0 || self.is_off(&watcher).await? {
+            return Ok(Fired::Off);
+        }
+        let now = self.deps.clock.now();
+        if !cap::take(store, &watcher.id, now).await? {
+            self.pause(&watcher.id, PausedReason::Flood, None).await?;
+            return Ok(Fired::Capped);
+        }
+        let held = store.held_events(&watcher.id).await?;
+        let Some(since) = held.first().map(|e| e.held_at.clone()) else {
+            return Ok(Fired::Off);
+        };
+        let run_id = new_id();
+        let in_full = held.len().min(HELD_IN_FULL as usize);
+        let mut carried = Vec::with_capacity(in_full);
+        let mut attachments = Vec::new();
+        // Each moved file and the held event it came from, to put back if no run is made.
+        let mut moved = Vec::new();
+        for (i, event) in held.iter().take(in_full).enumerate() {
+            carried.push(event.payload.clone());
+            let names: Vec<String> = event
+                .files
+                .as_ref()
+                .and_then(Value::as_array)
+                .map(|names| {
+                    names
+                        .iter()
+                        .filter_map(|n| n.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let files = self
+                .files
+                .take_held_files(&watcher.id, &event.id, &names, &run_id, i + 1);
+            for file in files {
+                moved.push((event.id.clone(), file.clone()));
+                attachments.push(file);
+            }
+        }
+        let payload = json!({
+            "watcher_id": watcher.id,
+            "watcher_name": watcher.name,
+            "held": carried,
+            "held_more": held.len() - in_full,
+            "held_since": since,
+            "attachments": attachments,
+        });
+        let mut new = NewRun::new(&watcher.dot_id, TriggerKind::Watcher);
+        new.id = Some(run_id.clone());
+        new.payload = Some(payload);
+        let run = match self.deps.runner.enqueue(new).await {
+            Ok(run) => run,
+            Err(e) => {
+                // No run: the events stay held, with their files.
+                self.files.return_held_files(&watcher.id, &run_id, &moved);
+                return Err(e);
+            }
+        };
+        // Taken only now that the run is made. The gate keeps any hold out meanwhile, so these
+        // are the events the run carries.
+        for event in store.take_held(&watcher.id).await? {
+            self.files.remove_held(&watcher.id, &event.id);
+        }
+        store
             .touch_watcher_event(&watcher.id, &timestamp(now))
             .await?;
         self.updated(&watcher);
@@ -714,6 +951,7 @@ impl Watchers {
             self.files.forget_watcher(id);
             self.backoffs.lock().unwrap().remove(id);
             self.checks.lock().unwrap().remove(id);
+            self.gates.lock().unwrap().remove(id);
             self.forget_remote(id);
             self.stop_task(id);
         }
@@ -726,8 +964,8 @@ impl Watchers {
     }
 
     fn stop_task(&self, id: &str) {
-        if let Some((_, token)) = self.tasks.lock().unwrap().remove(id) {
-            token.cancel();
+        if let Some(task) = self.tasks.lock().unwrap().remove(id) {
+            task.token.cancel();
         }
     }
 
@@ -757,35 +995,107 @@ impl Watchers {
             .collect())
     }
 
-    /// Stops the tasks of watchers that should not run or whose config changed, and starts the
-    /// missing ones.
+    /// Stops the tasks of watchers that should not run or whose config or hours changed, and
+    /// starts the missing ones. A watcher whose task starts (Dots starting, the watcher resumed,
+    /// turned on or edited, Dots or its dot no longer paused) first releases what it holds if
+    /// it is inside its hours (the release rule), before any new event of it can fire.
     async fn reconcile(self: &Arc<Self>, shutdown: &CancellationToken) -> Result<()> {
         let wanted = self.should_run().await?;
+        let starting: Vec<Watcher> = {
+            let mut tasks = self.tasks.lock().unwrap();
+            tasks.retain(|id, task| {
+                let keep = wanted
+                    .get(id)
+                    .is_some_and(|w| w.config == task.config && w.hours == task.hours);
+                if !keep {
+                    task.token.cancel();
+                }
+                keep
+            });
+            wanted
+                .into_values()
+                .filter(|w| !tasks.contains_key(&w.id))
+                .collect()
+        };
+        for watcher in starting.iter().filter(|w| w.held_count > 0) {
+            if let Err(e) = self.release(&watcher.id).await {
+                tracing::warn!(watcher = %watcher.id, "releasing held events failed: {e}");
+            }
+        }
         let mut tasks = self.tasks.lock().unwrap();
-        tasks.retain(|id, (config, token)| {
-            let keep = wanted.get(id).map(|w| &w.config) == Some(config);
-            if !keep {
-                token.cancel();
-            }
-            keep
-        });
-        for (id, watcher) in wanted {
-            if tasks.contains_key(&id) {
-                continue;
-            }
+        for watcher in starting {
+            let id = watcher.id.clone();
             let token = shutdown.child_token();
+            let hours = self.hours_of(&watcher).cloned();
             let started = match watcher.kind() {
-                WatcherKind::Folder => self.start_watch(&watcher, &token),
+                WatcherKind::Folder => {
+                    let started = self.start_watch(&watcher, &token);
+                    if let (true, Some(hours)) = (started, &hours) {
+                        self.start_openings(&id, hours.clone(), &token);
+                    }
+                    started
+                }
                 WatcherKind::Email | WatcherKind::Github => {
-                    self.start_polls(&id, &token);
+                    self.start_polls(&id, hours, &token);
                     true
                 }
             };
             if started {
-                tasks.insert(id, (watcher.config, token));
+                let task = Task {
+                    config: watcher.config,
+                    hours: watcher.hours,
+                    token,
+                };
+                tasks.insert(id, task);
             }
         }
         Ok(())
+    }
+
+    /// A folder watcher with hours: at each opening, its dot runs once with what it held.
+    fn start_openings(self: &Arc<Self>, id: &str, hours: WatchHours, token: &CancellationToken) {
+        let this = self.clone();
+        let id = id.to_string();
+        let token = token.clone();
+        tokio::spawn(async move {
+            loop {
+                let now = this.deps.clock.now();
+                let Some(at) = this.next_opening(&id, &hours, now) else {
+                    // No opening in the future: the hours count as any time, nothing to wait for.
+                    token.cancelled().await;
+                    break;
+                };
+                tokio::select! {
+                    _ = this.deps.clock.sleep_until(at) => {}
+                    _ = token.cancelled() => break,
+                }
+                if let Err(e) = this.open(&id).await {
+                    tracing::warn!(watcher = %id, "the opening failed: {e}");
+                }
+            }
+        });
+    }
+
+    /// An email or GitHub watcher's check at its opening: what it finds is held, then its dot
+    /// runs once with that and everything held before.
+    async fn opening_poll(&self, id: &str) -> Result<Poll> {
+        let polled = {
+            self.set_opening(id, true);
+            let _at_opening = AtOpening {
+                service: self,
+                watcher_id: id,
+            };
+            self.poll_now(id).await
+        };
+        if let Err(e) = self.open(id).await {
+            tracing::warn!(watcher = %id, "the opening failed: {e}");
+        }
+        polled
+    }
+
+    /// Whether the watcher holds events (a failure to tell counts as no).
+    async fn holding(&self, id: &str) -> bool {
+        self.deps.store.held_count(id).await.is_ok_and(|n| n > 0)
     }
 
     /// A folder watcher's OS watch; false when it could not start (its failure is reported).
@@ -829,14 +1139,39 @@ impl Watchers {
         self.tasks.lock().unwrap().keys().cloned().collect()
     }
 
-    /// A polling watcher's loop: check, then sleep until the time the check gave.
-    fn start_polls(self: &Arc<Self>, id: &str, token: &CancellationToken) {
+    /// A polling watcher's loop: check, then sleep until the time the check gave. Outside its
+    /// hours it does not check (watch hours spec section 4.5): it sleeps until the opening and
+    /// checks then; a wake-up that falls outside the hours (a backoff, the next minute) sleeps
+    /// on until the opening.
+    fn start_polls(
+        self: &Arc<Self>,
+        id: &str,
+        hours: Option<WatchHours>,
+        token: &CancellationToken,
+    ) {
         let this = self.clone();
         let id = id.to_string();
         let token = token.clone();
         tokio::spawn(async move {
             loop {
-                match this.poll_now(&id).await {
+                let now = this.deps.clock.now();
+                let opening = hours.as_ref().and_then(|h| this.opens_at(&id, h, now));
+                let polled = match opening {
+                    Some(at) => {
+                        tokio::select! {
+                            _ = this.deps.clock.sleep_until(at) => {}
+                            _ = token.cancelled() => break,
+                        }
+                        this.opening_poll(&id).await
+                    }
+                    // Inside with events still held (an opening that was off or capped): the
+                    // check is the opening's, so they go first, with what it finds.
+                    None if hours.is_some() && this.holding(&id).await => {
+                        this.opening_poll(&id).await
+                    }
+                    None => this.poll_now(&id).await,
+                };
+                match polled {
                     Ok(Poll::Next(at)) => {
                         tokio::select! {
                             _ = this.deps.clock.sleep_until(at) => {}

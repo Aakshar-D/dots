@@ -6,7 +6,7 @@ mod common;
 
 use chrono::TimeDelta;
 use common::clock::FakeClock;
-use common::watchers::{after, saturday_10, t0, weekdays_9_to_18, Harness};
+use common::watchers::{after, monday_9, saturday_10, t0, weekdays_9_to_18, Harness};
 use dots_core::model::{
     FolderConfig, PausedReason, RunStatus, TriggerKind, WatchHours, WatcherConfig,
 };
@@ -418,4 +418,333 @@ async fn hours_are_checked_and_saved_in_week_order() {
         .await
         .unwrap();
     assert_eq!(cleared.hours, None);
+}
+
+/// Every day, 00:00 to 23:59: inside at any moment but the last minute of a day.
+fn all_day() -> WatchHours {
+    use chrono::{NaiveTime, Weekday};
+    WatchHours {
+        days: vec![
+            Weekday::Mon,
+            Weekday::Tue,
+            Weekday::Wed,
+            Weekday::Thu,
+            Weekday::Fri,
+            Weekday::Sat,
+            Weekday::Sun,
+        ],
+        start: NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
+        end: NaiveTime::from_hms_opt(23, 59, 0).unwrap(),
+    }
+}
+
+/// Holds `n` events on Saturday, one second apart, oldest first.
+async fn hold(h: &Harness, w: &dots_core::model::Watcher, n: usize, files: bool) {
+    for i in 0..n {
+        h.clock.set(saturday_10() + TimeDelta::seconds(i as i64));
+        let name = format!("{i}.pdf");
+        let event = if files {
+            with_file(&name)
+        } else {
+            created(&name)
+        };
+        assert!(matches!(
+            h.watchers.fire(&w.id, event).await.unwrap(),
+            Fired::Held
+        ));
+    }
+}
+
+fn held_names(run: &dots_core::model::Run) -> Vec<String> {
+    run.payload.as_ref().unwrap()["held"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["relative"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[tokio::test]
+async fn the_opening_runs_once_with_everything_held() {
+    let (h, dot, w) = setup_hours(Some(weekdays_9_to_18())).await;
+    hold(&h, &w, 3, false).await;
+    h.start();
+    // The folder watcher's opening timer sleeps until Monday 09:00.
+    assert_eq!(h.clock.nth_sleep(1).await, monday_9());
+    assert!(h.runs(&dot.id).await.is_empty());
+    h.clock.set(monday_9());
+    let runs = h.wait_runs(&dot.id, 1, 10).await;
+    let p = runs[0].payload.as_ref().unwrap();
+    assert_eq!(p["watcher_id"], json!(w.id));
+    assert_eq!(p["watcher_name"], "Invoices folder");
+    assert_eq!(held_names(&runs[0]), ["0.pdf", "1.pdf", "2.pdf"]);
+    assert_eq!(p["held"][0]["watcher_id"], json!(w.id));
+    assert_eq!(p["held_more"], 0);
+    assert_eq!(p["held_since"], json!(timestamp(saturday_10())));
+    assert_eq!(p["attachments"], json!([]));
+    // The timer waits for the next opening once the opening is done (the run is made before
+    // the held events are taken); nothing more runs.
+    assert_eq!(h.clock.nth_sleep(2).await, monday_9() + TimeDelta::days(1));
+    assert_eq!(h.store.held_count(&w.id).await.unwrap(), 0);
+    h.still(&dot.id, 1, 1).await;
+}
+
+#[tokio::test]
+async fn the_opening_carries_100_and_counts_the_rest() {
+    let (h, dot, w) = setup_hours(Some(weekdays_9_to_18())).await;
+    hold(&h, &w, 130, false).await;
+    h.clock.set(monday_9());
+    let Fired::Run(run) = h.watchers.open(&w.id).await.unwrap() else {
+        panic!("a run")
+    };
+    let names = held_names(&run);
+    assert_eq!(names.len(), 100);
+    assert_eq!(names[0], "0.pdf");
+    assert_eq!(names[99], "99.pdf");
+    assert_eq!(run.payload.as_ref().unwrap()["held_more"], 30);
+    assert_eq!(h.runs(&dot.id).await.len(), 1);
+    assert_eq!(h.store.held_count(&w.id).await.unwrap(), 0);
+    // Nothing is held: a second opening does nothing.
+    assert!(matches!(h.watchers.open(&w.id).await.unwrap(), Fired::Off));
+}
+
+#[tokio::test]
+async fn the_opening_counts_once_against_the_flood_cap() {
+    let (h, dot, w) = setup_hours(Some(weekdays_9_to_18())).await;
+    hold(&h, &w, 30, false).await;
+    h.clock.set(monday_9());
+    assert!(matches!(
+        h.watchers.open(&w.id).await.unwrap(),
+        Fired::Run(_)
+    ));
+    for _ in 0..19 {
+        assert!(matches!(
+            h.watchers.fire(&w.id, created("a.pdf")).await.unwrap(),
+            Fired::Run(_)
+        ));
+    }
+    assert!(matches!(
+        h.watchers.fire(&w.id, created("b.pdf")).await.unwrap(),
+        Fired::Capped
+    ));
+    assert_eq!(h.runs(&dot.id).await.len(), 20);
+}
+
+#[tokio::test]
+async fn an_off_or_capped_opening_keeps_the_events() {
+    let (h, dot, w) = setup_hours(Some(weekdays_9_to_18())).await;
+    hold(&h, &w, 2, true).await;
+    h.clock.set(monday_9());
+    h.watchers.set_paused(true);
+    assert!(matches!(h.watchers.open(&w.id).await.unwrap(), Fired::Off));
+    assert_eq!(h.store.held_count(&w.id).await.unwrap(), 2);
+    h.watchers.set_paused(false);
+    for _ in 0..20 {
+        assert!(matches!(
+            h.watchers.fire(&w.id, created("a.pdf")).await.unwrap(),
+            Fired::Run(_)
+        ));
+    }
+    assert!(matches!(
+        h.watchers.open(&w.id).await.unwrap(),
+        Fired::Capped
+    ));
+    assert_eq!(h.runs(&dot.id).await.len(), 20);
+    let paused = h.store.get_watcher(&w.id).await.unwrap();
+    assert_eq!(paused.paused_reason, Some(PausedReason::Flood));
+    assert_eq!(paused.held_count, 2);
+    // Their files are kept too.
+    for event in h.store.held_events(&w.id).await.unwrap() {
+        assert!(h.watchers.files().held_dir(&w.id, &event.id).is_dir());
+    }
+}
+
+/// Review Focus 2: Dots closed at the opening and started after it releases once, not once
+/// at start and again from the timer.
+#[tokio::test]
+async fn held_events_are_released_at_start_once() {
+    let (mut h, dot, w) = setup_hours(Some(weekdays_9_to_18())).await;
+    hold(&h, &w, 2, false).await;
+    h.clock.set(monday_9() + TimeDelta::minutes(30));
+    h.restart();
+    h.start();
+    let runs = h.wait_runs(&dot.id, 1, 10).await;
+    assert_eq!(held_names(&runs[0]), ["0.pdf", "1.pdf"]);
+    // The opening timer waits for Tuesday's opening, which finds nothing held.
+    assert_eq!(h.clock.nth_sleep(1).await, monday_9() + TimeDelta::days(1));
+    h.clock.set(monday_9() + TimeDelta::days(1));
+    assert_eq!(h.clock.nth_sleep(2).await, monday_9() + TimeDelta::days(2));
+    h.still(&dot.id, 1, 1).await;
+}
+
+/// Review Focus 5: hours edited from 09–18 to 00–23:59 while holding release at once.
+#[tokio::test]
+async fn editing_hours_so_now_is_inside_releases_at_once() {
+    let (h, dot, w) = setup_hours(Some(weekdays_9_to_18())).await;
+    hold(&h, &w, 2, false).await;
+    // Edited but still outside: kept.
+    let mut later = weekdays_9_to_18();
+    later.start = chrono::NaiveTime::from_hms_opt(11, 0, 0).unwrap();
+    let saved = h
+        .watchers
+        .update(&w.id, "Invoices folder", w.config.clone(), Some(later))
+        .await
+        .unwrap();
+    assert_eq!(saved.held_count, 2);
+    assert!(h.runs(&dot.id).await.is_empty());
+    let saved = h
+        .watchers
+        .update(&w.id, "Invoices folder", w.config.clone(), Some(all_day()))
+        .await
+        .unwrap();
+    let runs = h.runs(&dot.id).await;
+    assert_eq!(runs.len(), 1);
+    assert_eq!(held_names(&runs[0]), ["0.pdf", "1.pdf"]);
+    assert_eq!(saved.held_count, 0);
+    assert_eq!(saved.next_opening, None);
+}
+
+#[tokio::test]
+async fn removing_hours_releases_at_once() {
+    let (h, dot, w) = setup_hours(Some(weekdays_9_to_18())).await;
+    hold(&h, &w, 2, false).await;
+    let saved = h
+        .watchers
+        .update(&w.id, "Invoices folder", w.config.clone(), None)
+        .await
+        .unwrap();
+    assert_eq!(h.runs(&dot.id).await.len(), 1);
+    assert_eq!(saved.held_count, 0);
+}
+
+#[tokio::test]
+async fn resuming_inside_hours_releases() {
+    let (h, dot, w) = setup_hours(Some(weekdays_9_to_18())).await;
+    hold(&h, &w, 2, false).await;
+    // Resumed outside its hours: still held.
+    h.watchers
+        .pause(&w.id, PausedReason::Flood, None)
+        .await
+        .unwrap();
+    let resumed = h.watchers.resume(&w.id).await.unwrap();
+    assert_eq!(resumed.held_count, 2);
+    assert!(h.runs(&dot.id).await.is_empty());
+    h.clock.set(monday_9() + TimeDelta::hours(1));
+    h.watchers
+        .pause(&w.id, PausedReason::Flood, None)
+        .await
+        .unwrap();
+    let resumed = h.watchers.resume(&w.id).await.unwrap();
+    assert_eq!(resumed.held_count, 0);
+    let runs = h.runs(&dot.id).await;
+    assert_eq!(runs.len(), 1);
+    assert_eq!(held_names(&runs[0]), ["0.pdf", "1.pdf"]);
+}
+
+#[tokio::test]
+async fn turning_off_drops_held_events_and_their_files() {
+    let (h, dot, w) = setup_hours(Some(weekdays_9_to_18())).await;
+    hold(&h, &w, 2, true).await;
+    let held = h.store.held_events(&w.id).await.unwrap();
+    let off = h.watchers.set_enabled(&w.id, false).await.unwrap();
+    assert_eq!(off.held_count, 0);
+    assert_eq!(h.store.held_count(&w.id).await.unwrap(), 0);
+    for event in &held {
+        assert!(!h.watchers.files().held_dir(&w.id, &event.id).exists());
+    }
+    h.clock.set(monday_9());
+    h.watchers.set_enabled(&w.id, true).await.unwrap();
+    assert!(h.runs(&dot.id).await.is_empty());
+}
+
+#[tokio::test]
+async fn deleting_drops() {
+    let (h, _dot, w) = setup_hours(Some(weekdays_9_to_18())).await;
+    hold(&h, &w, 2, true).await;
+    let held = h.store.held_events(&w.id).await.unwrap();
+    h.watchers.delete(&w.id).await.unwrap();
+    assert_eq!(h.store.held_count(&w.id).await.unwrap(), 0);
+    for event in &held {
+        assert!(!h.watchers.files().held_dir(&w.id, &event.id).exists());
+    }
+}
+
+#[tokio::test]
+async fn next_opening_is_set_outside_the_hours_and_none_inside() {
+    let (h, dot, w) = setup_hours(Some(weekdays_9_to_18())).await;
+    assert_eq!(
+        h.watchers.list(&dot.id).await.unwrap()[0].next_opening,
+        None
+    );
+    h.clock.set(saturday_10());
+    let listed = &h.watchers.list(&dot.id).await.unwrap()[0];
+    assert_eq!(
+        listed.next_opening.as_deref(),
+        Some("2026-10-26T09:00:00+01:00")
+    );
+    let resumed = h.watchers.resume(&w.id).await.unwrap();
+    assert_eq!(
+        resumed.next_opening.as_deref(),
+        Some("2026-10-26T09:00:00+01:00")
+    );
+    let off = h.watchers.set_enabled(&w.id, false).await.unwrap();
+    assert!(off.next_opening.is_some());
+    let none = h
+        .watchers
+        .update(&w.id, "Invoices folder", w.config.clone(), None)
+        .await
+        .unwrap();
+    assert_eq!(none.next_opening, None);
+}
+
+/// Carried over: a held row's files are best-effort; one that is gone is left out of the
+/// opening, which still runs with every event.
+#[tokio::test]
+async fn a_held_file_that_is_gone_is_left_out_of_the_opening() {
+    let (h, dot, w) = setup_hours(Some(weekdays_9_to_18())).await;
+    hold(&h, &w, 2, true).await;
+    let held = h.store.held_events(&w.id).await.unwrap();
+    let files = h.watchers.files();
+    std::fs::remove_file(files.held_dir(&w.id, &held[0].id).join("0.pdf")).unwrap();
+    h.clock.set(monday_9());
+    let Fired::Run(run) = h.watchers.open(&w.id).await.unwrap() else {
+        panic!("a run")
+    };
+    assert_eq!(held_names(&run), ["0.pdf", "1.pdf"]);
+    assert_eq!(
+        run.payload.as_ref().unwrap()["attachments"],
+        json!([{"name": "2-1.pdf", "size": 4, "path": null, "event": 2}])
+    );
+    let staged = files.stage_dir(&w.id, &run.id);
+    assert_eq!(std::fs::read(staged.join("2-1.pdf")).unwrap(), b"%PDF");
+    for event in &held {
+        assert!(!files.held_dir(&w.id, &event.id).exists());
+    }
+    assert_eq!(h.runs(&dot.id).await.len(), 1);
+}
+
+/// Carried over from Task 1: hours that fail their check (only a damaged row can hold them)
+/// count as any time; the service neither holds forever nor spins on an opening in the past.
+#[tokio::test]
+async fn hours_that_fail_their_check_count_as_any_time() {
+    let (h, dot, w) = setup_hours(None).await;
+    let mut broken = weekdays_9_to_18();
+    broken.days.clear();
+    h.store
+        .update_watcher(&w.id, &w.name, &w.config, Some(&broken))
+        .await
+        .unwrap();
+    h.clock.set(saturday_10());
+    assert!(matches!(
+        h.watchers.fire(&w.id, created("a.pdf")).await.unwrap(),
+        Fired::Run(_)
+    ));
+    assert_eq!(
+        h.watchers.list(&dot.id).await.unwrap()[0].next_opening,
+        None
+    );
+    h.start();
+    h.watching(&w.id).await;
+    h.still(&dot.id, 1, 1).await;
+    assert_eq!(h.clock.sleeps(), 0);
 }

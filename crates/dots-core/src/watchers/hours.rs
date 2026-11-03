@@ -67,14 +67,25 @@ pub trait Zone: Send + Sync {
     fn is_inside(&self, hours: &WatchHours, at: DateTime<Utc>) -> bool;
     /// The hours' first opening strictly after `after`.
     fn next_opening(&self, hours: &WatchHours, after: DateTime<Utc>) -> DateTime<Utc>;
+    /// The instant in RFC 3339 with this zone's offset, to the second.
+    fn rfc3339(&self, at: DateTime<Utc>) -> String;
 }
 
-impl<Tz: TimeZone + Send + Sync + 'static> Zone for Tz {
+impl<Tz> Zone for Tz
+where
+    Tz: TimeZone + Send + Sync + 'static,
+    Tz::Offset: std::fmt::Display,
+{
     fn is_inside(&self, hours: &WatchHours, at: DateTime<Utc>) -> bool {
         is_inside(hours, &at.with_timezone(self))
     }
 
     fn next_opening(&self, hours: &WatchHours, after: DateTime<Utc>) -> DateTime<Utc> {
         next_opening(hours, &after.with_timezone(self)).with_timezone(&Utc)
+    }
+
+    fn rfc3339(&self, at: DateTime<Utc>) -> String {
+        at.with_timezone(self)
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, false)
     }
 }

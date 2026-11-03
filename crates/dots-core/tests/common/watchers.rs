@@ -54,6 +54,14 @@ pub fn saturday_10() -> DateTime<Utc> {
         .with_timezone(&Utc)
 }
 
+/// Monday 26 October 2026, 09:00 in `TestTz` (UTC+1 from 25 October): `weekdays_9_to_18`
+/// opens, the first time after `saturday_10`.
+pub fn monday_9() -> DateTime<Utc> {
+    DateTime::parse_from_rfc3339("2026-10-26T08:00:00.000Z")
+        .unwrap()
+        .with_timezone(&Utc)
+}
+
 pub struct Harness {
     pub dir: TempDir,
     pub store: Store,
