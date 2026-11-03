@@ -42,4 +42,11 @@ impl Store {
             failed: count(failed),
         })
     }
+
+    /// The name of every dot, for the report to hide them.
+    pub async fn dot_names(&self) -> Result<Vec<String>> {
+        Ok(sqlx::query_scalar("SELECT name FROM dots ORDER BY name")
+            .fetch_all(&self.pool)
+            .await?)
+    }
 }

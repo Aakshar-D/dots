@@ -1,7 +1,7 @@
 use chrono::{DateTime, FixedOffset};
 use dots_core::report::{
     file_name, is_foreign_output, read_log_tail, render, scrub_line, scrub_text, LogSection,
-    ReportFacts,
+    ReportFacts, Scrubber,
 };
 
 const HOME: &str = r"C:\Users\Asha";
@@ -37,7 +37,7 @@ fn the_tail_reads_back_into_older_files_when_the_newest_is_short() {
     write(dir.path(), "dots.2026-11-03.log", &numbered("new", 3));
     std::fs::write(dir.path().join("other.txt"), "not a log\n").unwrap();
 
-    let (lines, left_out) = lines_of(read_log_tail(dir.path(), 9, None));
+    let (lines, left_out) = lines_of(read_log_tail(dir.path(), 9, &Scrubber::new(&[], None)));
     assert_eq!(left_out, 0);
     assert_eq!(lines.len(), 9);
     // Oldest first: two from the oldest file, then all of the middle and the newest.
@@ -51,7 +51,7 @@ fn the_tail_reads_back_into_older_files_when_the_newest_is_short() {
 fn the_tail_keeps_only_the_newest_lines_of_a_long_file() {
     let dir = tempfile::tempdir().unwrap();
     write(dir.path(), "dots.2026-11-03.log", &numbered("n", 500));
-    let (lines, _) = lines_of(read_log_tail(dir.path(), 200, None));
+    let (lines, _) = lines_of(read_log_tail(dir.path(), 200, &Scrubber::new(&[], None)));
     assert_eq!(lines.len(), 200);
     assert!(lines[0].ends_with("n 300"));
     assert!(lines[199].ends_with("n 499"));
@@ -62,12 +62,12 @@ fn no_log_folder_is_no_log_not_an_error() {
     let dir = tempfile::tempdir().unwrap();
     let missing = dir.path().join("logs");
     assert!(matches!(
-        read_log_tail(&missing, 200, None),
+        read_log_tail(&missing, 200, &Scrubber::new(&[], None)),
         LogSection::NoLog
     ));
     std::fs::create_dir_all(&missing).unwrap();
     assert!(matches!(
-        read_log_tail(&missing, 200, None),
+        read_log_tail(&missing, 200, &Scrubber::new(&[], None)),
         LogSection::NoLog
     ));
 }
@@ -112,9 +112,11 @@ fn server_and_helper_output_is_left_out_and_counted() {
             mcp_own.clone(),
         ],
     );
-    let (lines, left_out) = lines_of(read_log_tail(dir.path(), 200, None));
+    let (lines, left_out) = lines_of(read_log_tail(dir.path(), 200, &Scrubber::new(&[], None)));
     assert_eq!(left_out, 3);
-    assert_eq!(lines, vec![own, mcp_own]);
+    // The browser host's own lines say what it could not do with a download: hidden.
+    let own_hidden = format!("{} [message hidden]", &own[..own.find(": ").unwrap() + 1]);
+    assert_eq!(lines, vec![own_hidden, mcp_own]);
 }
 
 #[test]
@@ -199,9 +201,11 @@ fn emails_and_the_home_folder_are_hidden() {
         r"C:\\Users\\Asha\\projects\\site",
     ] {
         let out = scrub_line(&format!("opened {spelling}"), Some(HOME));
-        assert!(out.starts_with("opened ~"), "{spelling}: {out}");
+        assert_eq!(out, "opened [path]", "{spelling}");
         assert!(!out.to_lowercase().contains("asha"), "{out}");
     }
+    // A home folder that is not a path the path rule knows still becomes `~`.
+    assert_eq!(scrub_line("in /opt/asha/x", Some("/opt/asha")), "in ~/x");
     // A home folder that is too short to be one is left alone.
     assert_eq!(scrub_line("a/b", Some("/")), "a/b");
 }
