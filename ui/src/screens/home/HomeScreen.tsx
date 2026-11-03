@@ -1,10 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { Link, Navigate, useNavigate, useParams } from "react-router";
+import { Navigate, useNavigate, useParams } from "react-router";
 
 import { commands } from "@/api/commands";
 import { ErrorNote } from "@/components/ErrorNote";
-import { Button } from "@/components/ui/button";
 import { sortDots } from "@/lib/dot-status";
 import { keys } from "@/lib/query";
 import { notifyError } from "@/lib/notify";
@@ -18,18 +17,13 @@ import {
 import { DotPane } from "@/screens/home/DotPane";
 import { DotsColumn } from "@/screens/home/DotsColumn";
 import { lastDot } from "@/screens/home/last-dot";
+import { SetupFlow } from "@/screens/setup/SetupFlow";
 
-/// No dot yet: what a dot is, and the way to make one.
+/// No dot yet: the setup view, to describe the first one (setup agent spec §4).
 function EmptyHome() {
   return (
-    <div className="m-auto flex max-w-sm flex-col items-center gap-3 p-6 text-center">
-      <p className="text-muted-foreground">
-        A dot is an agent with instructions, a folder to work in, and a schedule or a webhook
-        that starts it. You talk to it here.
-      </p>
-      <Button asChild>
-        <Link to="/dots/new">Create your first dot</Link>
-      </Button>
+    <div className="m-auto flex w-full max-w-xl flex-col gap-3 p-6">
+      <SetupFlow />
     </div>
   );
 }

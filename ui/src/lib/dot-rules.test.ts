@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { Schedule, ScheduleRule } from "@/api/types";
 import {
   everyRule,
+  folderName,
   localDateTimeIn,
   scheduleError,
   scheduleOf,
@@ -196,5 +197,15 @@ describe("schedule rules", () => {
     expect(everyRule(60, everyAnchored)).toEqual({ kind: "every", minutes: 60, anchor: null });
     expect(everyRule(90, daily)).toEqual({ kind: "every", minutes: 90, anchor: null });
     expect(everyRule(90, null)).toEqual({ kind: "every", minutes: 90, anchor: null });
+  });
+});
+
+describe("folderName", () => {
+  it("makes a folder name of a dot name as the core does", () => {
+    expect(folderName("Downloads digest")).toBe("downloads-digest");
+    expect(folderName("Résumé bot")).toBe("r-sum-bot");
+    expect(folderName("日本")).toBe("dot");
+    expect(folderName("  --a.b__c--  ")).toBe("a-b-c");
+    expect(folderName(`${"a".repeat(39)} b`)).toBe("a".repeat(39));
   });
 });

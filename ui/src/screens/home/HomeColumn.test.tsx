@@ -60,16 +60,15 @@ describe("the home's dots column", () => {
     expect(
       third.getByText(`next ${localTime(nightly.schedule_state!.next_fire)}`),
     ).toBeVisible();
-    expect(screen.getByRole("link", { name: "New dot" })).toHaveAttribute("href", "/dots/new");
+    expect(screen.getByRole("button", { name: "New dot" })).toBeVisible();
   });
 
   it("starts with New dot, then the heading over the list", async () => {
     backend.on("dot_overview", () => [reader, shopper]);
     renderApp(`/home/${reader.dot.id}`);
     const view = within(await screen.findByRole("navigation", { name: "Dots" }));
-    const create = view.getByRole("link", { name: "New dot" });
+    const create = view.getByRole("button", { name: "New dot" });
     expect(create).toHaveTextContent("New dot");
-    expect(create).toHaveAttribute("href", "/dots/new");
     const heading = view.getByRole("heading", { name: "Dots" });
     const list = view.getByRole("list");
     const before = (a: Node, b: Node) =>
@@ -158,10 +157,15 @@ describe("the home's dots column", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe(`/home/${shopper.dot.id}`));
   });
 
-  it("offers to create the first dot when there is none", async () => {
+  it("offers to set up the first dot when there is none", async () => {
     renderApp("/home");
-    const create = await screen.findByRole("link", { name: "Create your first dot" });
-    expect(create).toHaveAttribute("href", "/dots/new");
+    expect(
+      await screen.findByRole("heading", { name: "What should your first dot do?" }),
+    ).toBeVisible();
+    expect(screen.getByRole("link", { name: "Fill in the form instead" })).toHaveAttribute(
+      "href",
+      "/dots/new",
+    );
     expect(screen.getByRole("navigation", { name: "Main" })).toBeVisible();
   });
 
@@ -224,7 +228,7 @@ describe("the New dot button", () => {
     backend.on("dot_overview", () => []);
     spaces(title, ["default", "payments"]);
     renderApp("/home");
-    // The link is swapped for a disabled button once the account's role is known.
+    // The button is turned off once the account's role is known.
     const button = await waitFor(() => {
       const nav = within(screen.getByRole("navigation", { name: "Dots" }));
       const found = nav.getByRole("button", { name: "New dot" });
@@ -255,8 +259,8 @@ describe("the New dot button", () => {
     backend.on("dot_overview", () => []);
     renderApp("/home");
     const nav = within(await screen.findByRole("navigation", { name: "Dots" }));
-    const link = await nav.findByRole("link", { name: "New dot" });
-    expect(link).toHaveAttribute("href", "/dots/new");
-    expect(link).not.toHaveAttribute("aria-disabled");
+    const button = await nav.findByRole("button", { name: "New dot" });
+    expect(button).toBeEnabled();
+    expect(button).not.toHaveAttribute("aria-disabled");
   });
 });

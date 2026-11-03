@@ -47,6 +47,22 @@ const Fields = z.object({
     .nullable(),
 });
 
+/// The folder name of a dot name, as the core's `folder_name` makes it: lower case, each run of
+/// characters other than ASCII letters and digits one `-`, trimmed of `-`, at most 40
+/// characters; `dot` when nothing is left.
+export function folderName(name: string): string {
+  const dashed = name
+    .replace(/[^A-Za-z0-9]+/gu, "-")
+    .toLowerCase()
+    .replace(/^-+|-+$/g, "");
+  return dashed.slice(0, 40).replace(/^-+|-+$/g, "") || "dot";
+}
+
+/// Why `name` cannot name a dot; undefined when it can.
+export function nameError(name: string): string | undefined {
+  return Fields.shape.name.safeParse(name).error?.issues[0]?.message;
+}
+
 /// What is wrong with a draft, by field. Empty when it can be saved.
 /// A new dot may leave its folder blank: the core makes one.
 export function specErrors(spec: DotSpec, isNew = false): SpecErrors {
