@@ -256,7 +256,9 @@ describe("setting up a dot by describing it", () => {
     expect(run).toBeEnabled();
     await user.click(run);
     await waitFor(() =>
-      expect(backend.callsTo("setup_apply")[0]?.proposal.first_message).toBe(""),
+      expect(backend.callsTo("setup_apply")).toEqual([
+        { proposal: { ...proposal, first_message: "" }, orgId: null, workspaceId: null },
+      ]),
     );
   });
 
