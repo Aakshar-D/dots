@@ -43,14 +43,36 @@ const RISKY_TOOLS: &[&str] = &[
     "WebFetch",
 ];
 
+/// The `tools` an agent file gives.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgentTools {
+    /// No `tools` key: the agent has every tool.
+    All,
+    /// The tools it lists (maybe none).
+    Listed(Vec<String>),
+    /// A `tools` value Dots cannot read: it must not be taken as "every tool".
+    Unreadable,
+}
+
+impl AgentTools {
+    /// The tools as the import dialog shows them: `None` for every tool, nothing listed for an
+    /// unreadable value.
+    pub fn shown(&self) -> Option<Vec<String>> {
+        match self {
+            AgentTools::All => None,
+            AgentTools::Listed(tools) => Some(tools.clone()),
+            AgentTools::Unreadable => Some(Vec::new()),
+        }
+    }
+}
+
 /// What an agent file says, before it becomes a dot.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentFile {
     /// The frontmatter `name`, else the file name without `.md`, as written.
     pub name: String,
     pub description: Option<String>,
-    /// `None` when the file lists no tools (the agent has them all).
-    pub tools: Option<Vec<String>>,
+    pub tools: AgentTools,
     pub model: Option<String>,
     /// The body, trimmed; never empty.
     pub prompt: String,
@@ -65,7 +87,7 @@ pub fn read_agent(path: &Path) -> Result<AgentFile, String> {
     }
     let text = fs::read_to_string(path).map_err(|e| e.to_string())?;
     let fm = parse_frontmatter(&text);
-    if fm.fields.is_empty() && fm.lists.is_empty() {
+    if !fm.parsed {
         return Err("it has no frontmatter Dots can read".into());
     }
     let prompt = fm.body.trim().to_string();
@@ -85,7 +107,11 @@ pub fn read_agent(path: &Path) -> Result<AgentFile, String> {
     Ok(AgentFile {
         name: field("name").unwrap_or(stem),
         description: field("description"),
-        tools: fm.list("tools"),
+        tools: if fm.unreadable.contains("tools") {
+            AgentTools::Unreadable
+        } else {
+            fm.list("tools").map_or(AgentTools::All, AgentTools::Listed)
+        },
         model: field("model"),
         prompt,
     })
@@ -139,10 +165,30 @@ pub fn dot_name(raw: &str) -> String {
     out.truncate(64);
     let out = out.trim_end_matches('-');
     if out.is_empty() {
-        "agent".into()
-    } else {
-        out.to_string()
+        return "agent".into();
     }
+    // A name Windows keeps for a device, with or without an extension, would make a folder
+    // (the agent's workdir) that cannot be used.
+    let stem = raw
+        .trim()
+        .split('.')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if is_reserved(&stem) || is_reserved(&out.to_ascii_lowercase()) {
+        let keep = out.len().min(64 - "-agent".len());
+        return format!("{}-agent", out[..keep].trim_end_matches('-'));
+    }
+    out.to_string()
+}
+
+/// A Windows device name: `con`, `prn`, `aux`, `nul`, `com1`-`com9`, `lpt1`-`lpt9`.
+fn is_reserved(name: &str) -> bool {
+    if matches!(name, "con" | "prn" | "aux" | "nul") {
+        return true;
+    }
+    let digit = |rest: &str| rest.len() == 1 && rest.chars().all(|c| ('1'..='9').contains(&c));
+    name.strip_prefix("com").is_some_and(digit) || name.strip_prefix("lpt").is_some_and(digit)
 }
 
 /// The dot's model for an agent's `model`: Dots' own `sonnet`, `opus` or `haiku`; a full id as
@@ -166,17 +212,23 @@ fn preset_tool_allow(rule: &Rule) -> bool {
             || rule.tool.starts_with("Bash(git "))
 }
 
-/// The dot's policy for an agent's tool list, and what the person should know about it. No
-/// list gives the Sandboxed preset. A list gives the Custom preset (default ask) with an allow
-/// rule for each known safe tool and an ask rule for each risky one; unknown names and MCP
-/// tools are left out and named.
-pub fn agent_policy(tools: Option<&[String]>) -> (Policy, Vec<String>) {
-    let Some(tools) = tools else {
-        return (Policy::preset(Preset::Sandboxed), Vec::new());
-    };
+/// The dot's policy for an agent's tools, and what the person should know about it. No list
+/// gives the Sandboxed preset. A list gives the Custom preset (default ask) without its own
+/// allows of file and command tools, with an allow rule for each known safe tool and an ask
+/// rule for each risky one; unknown names and MCP tools are left out and named. A value Dots
+/// cannot read gives that policy with nothing listed: only Dots' own tools run without asking.
+pub fn agent_policy(tools: &AgentTools) -> (Policy, Vec<String>) {
     let mut policy = Policy::preset(Preset::Custom);
     policy.default = Action::Ask;
     policy.rules.retain(|r| !preset_tool_allow(r));
+    let tools = match tools {
+        AgentTools::All => return (Policy::preset(Preset::Sandboxed), Vec::new()),
+        AgentTools::Unreadable => {
+            let warning = "Its tools could not be read, so every tool asks before each use.";
+            return (policy, vec![warning.into()]);
+        }
+        AgentTools::Listed(tools) => tools,
+    };
     let mut warnings = Vec::new();
     let mut seen: Vec<&str> = Vec::new();
     for tool in tools {

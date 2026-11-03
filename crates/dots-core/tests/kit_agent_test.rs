@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::Path;
 
-use dots_core::kit::{agent_files, agent_model, agent_policy, dot_name, read_agent};
+use dots_core::kit::{agent_files, agent_model, agent_policy, dot_name, read_agent, AgentTools};
 use dots_core::policy::{Action, Policy, Preset};
 use serde_json::json;
 use tempfile::tempdir;
@@ -28,7 +28,7 @@ fn an_agent_file_gives_its_fields_and_prompt() {
     let agent = read_agent(&path).unwrap();
     assert_eq!(agent.name, "code-reviewer");
     assert_eq!(agent.description.as_deref(), Some("Reviews code"));
-    assert_eq!(agent.tools, Some(tools(&["Read", "Grep"])));
+    assert_eq!(agent.tools, AgentTools::Listed(tools(&["Read", "Grep"])));
     assert_eq!(agent.model.as_deref(), Some("opus"));
     assert_eq!(agent.prompt, "You review code.");
 }
@@ -43,7 +43,7 @@ fn tools_may_be_a_yaml_list_and_the_name_falls_back_to_the_file() {
     );
     let agent = read_agent(&path).unwrap();
     assert_eq!(agent.name, "helper");
-    assert_eq!(agent.tools, Some(tools(&["Read", "Bash"])));
+    assert_eq!(agent.tools, AgentTools::Listed(tools(&["Read", "Bash"])));
     assert_eq!(agent.model, None);
 }
 
@@ -92,7 +92,7 @@ fn models_map_to_dots_ids() {
 
 #[test]
 fn no_tools_listed_gives_the_sandboxed_preset() {
-    let (policy, warnings) = agent_policy(None);
+    let (policy, warnings) = agent_policy(&AgentTools::All);
     assert_eq!(policy, Policy::preset(Preset::Sandboxed));
     assert!(warnings.is_empty());
 }
@@ -108,7 +108,7 @@ fn listed_tools_are_allowed_and_risky_ones_ask() {
         "Frobnicate",
         "mcp__gh__issue",
     ]);
-    let (policy, warnings) = agent_policy(Some(&listed));
+    let (policy, warnings) = agent_policy(&AgentTools::Listed(listed));
     policy.validate().unwrap();
     assert_eq!(policy.preset, Preset::Custom);
     assert_eq!(policy.default, Action::Ask);
@@ -171,4 +171,81 @@ fn agent_files_are_found_in_nested_folders() {
         .collect();
     assert_eq!(found, ["a.md", "team/b.md"]);
     assert!(agent_files(&dir.path().join("missing")).is_empty());
+}
+
+/// Every allow rule of `policy` is one of Dots' own tools: no file, command or web tool runs
+/// without asking.
+fn allows_only_dots_tools(policy: &Policy) {
+    let file_tools = [
+        "Read", "LS", "Glob", "Grep", "Write", "Edit", "Bash", "WebFetch",
+    ];
+    for rule in policy.rules.iter().filter(|r| r.action == Action::Allow) {
+        assert!(
+            !file_tools
+                .iter()
+                .any(|t| rule.tool == *t || rule.tool.starts_with(&format!("{t}("))),
+            "{rule:?}"
+        );
+    }
+    assert_eq!(policy.default, Action::Ask);
+    assert_eq!(
+        policy.resolve("Write", &json!({"file_path": "a.txt"})),
+        Action::Ask
+    );
+    assert_eq!(
+        policy.resolve("Bash", &json!({"command": "git status"})),
+        Action::Ask
+    );
+    assert_eq!(
+        policy.resolve("Read", &json!({"file_path": "a.txt"})),
+        Action::Ask
+    );
+}
+
+#[test]
+fn tools_dots_cannot_read_give_the_most_careful_policy() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("odd.md");
+    write(&path, "---\nname: odd\ntools: [Read, [Bash]]\n---\nDo.\n");
+    let agent = read_agent(&path).unwrap();
+    assert_eq!(agent.tools, AgentTools::Unreadable);
+    let (policy, warnings) = agent_policy(&agent.tools);
+    policy.validate().unwrap();
+    allows_only_dots_tools(&policy);
+    assert!(
+        warnings.iter().any(|w| w.contains("could not be read")),
+        "{warnings:?}"
+    );
+}
+
+#[test]
+fn an_empty_tools_key_allows_no_tool() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("bare.md");
+    write(&path, "---\nname: bare\ntools:\n---\nDo.\n");
+    let agent = read_agent(&path).unwrap();
+    assert_eq!(agent.tools, AgentTools::Listed(Vec::new()));
+    allows_only_dots_tools(&agent_policy(&agent.tools).0);
+}
+
+#[test]
+fn an_empty_frontmatter_takes_the_file_name() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("plain-helper.md");
+    write(&path, "---\n---\nHelp out.\n");
+    let agent = read_agent(&path).unwrap();
+    assert_eq!(agent.name, "plain-helper");
+    assert_eq!(agent.tools, AgentTools::All);
+}
+
+#[test]
+fn windows_reserved_names_get_a_suffix() {
+    for raw in [
+        "con", "PRN", "Aux", "nul", "com1", "COM9", "lpt1", "LPT9", "con.txt", "nul.md",
+    ] {
+        let name = dot_name(raw);
+        assert!(name.ends_with("-agent"), "{raw} -> {name}");
+    }
+    assert_eq!(dot_name("console"), "console");
+    assert_eq!(dot_name("com10"), "com10");
 }

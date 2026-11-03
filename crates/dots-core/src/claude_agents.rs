@@ -107,8 +107,8 @@ fn entry(
             listed.name = dot_name(&agent.name);
             listed.description = agent.description.clone();
             listed.model = agent.model.clone();
-            listed.tools = agent.tools.clone();
-            listed.warnings = agent_policy(agent.tools.as_deref()).1;
+            listed.tools = agent.tools.shown();
+            listed.warnings = agent_policy(&agent.tools).1;
             listed.already_imported = taken.contains(&listed.name.to_lowercase());
         }
         Err(reason) => {
@@ -183,6 +183,6 @@ pub fn agent_spec(agent: &AgentFile, name: &str, workdir: &str, mode: WorkspaceM
         spec.model = model;
     }
     spec.workspace_mode = mode;
-    spec.policy = agent_policy(agent.tools.as_deref()).0;
+    spec.policy = agent_policy(&agent.tools).0;
     spec
 }

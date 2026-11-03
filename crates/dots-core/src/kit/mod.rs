@@ -11,7 +11,8 @@ mod run_dirs;
 mod skill;
 
 pub use agent::{
-    agent_files, agent_model, agent_policy, dot_name, read_agent, AgentFile, MAX_AGENT_BYTES,
+    agent_files, agent_model, agent_policy, dot_name, read_agent, AgentFile, AgentTools,
+    MAX_AGENT_BYTES,
 };
 pub use frontmatter::{parse_frontmatter, remove_field, Frontmatter};
 pub use installed::{
