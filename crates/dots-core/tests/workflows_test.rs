@@ -3821,7 +3821,7 @@ async fn a_member_deploy_runs_the_members_step_and_a_test_run_lists_the_branch_i
     for part in [
         "- Step: Ship (3 of 3)",
         "### Your job in this step\n\nTag a release.",
-        "#### Fix it\n\nFixed the icon.",
+        "#### Approved\n\nFixed the icon.",
     ] {
         assert!(
             prompts[0].contains(part),
@@ -4116,4 +4116,108 @@ async fn a_pr_deploy_needs_a_default_branch_and_a_push_deploy_does_not() {
     w.until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
         .await;
     assert_eq!(w.remote_tip(&branch), Some(tip));
+}
+
+/// The flow "Late": A (the dev) writes `a.txt`, the person checks, B (the dev) writes more,
+/// then a member deploy by the helper, then `steps_after`.
+async fn late_member_deploy(w: &World, steps_after: Vec<Step>) -> String {
+    let mut steps = vec![
+        agent("dev", "Fix it", &w.dev, "Fix the bug."),
+        check("check"),
+        agent("more", "More", &w.dev, "Do more."),
+        ship(DeployMode::Member {
+            member: w.helper.id.clone(),
+            job: "Tag a release.".into(),
+        }),
+    ];
+    steps.extend(steps_after);
+    w.workflow("Late", steps).await
+}
+
+#[tokio::test]
+async fn a_member_deploy_run_again_after_a_send_back_starts_from_the_approved_commit() {
+    let w = world().await;
+    w.engine.set(
+        &w.dev.spec.name,
+        vec![
+            Act::Write("a.txt", "Approved work."),
+            Act::Write("b.txt", "Work nobody approved."),
+            Act::Write("b2.txt", "More work nobody approved."),
+        ],
+    );
+    w.engine.set(
+        &w.helper.spec.name,
+        vec![
+            Act::Write("release.txt", "Tagged the release."),
+            Act::SendBack(
+                "more",
+                "Do it again.",
+                Box::new(Act::Finish("Sent it back.")),
+            ),
+            Act::Write("release2.txt", "Tagged again."),
+            Act::Finish("Reviewed."),
+        ],
+    );
+    let flow = late_member_deploy(
+        &w,
+        vec![sending_back(
+            "review",
+            "Review",
+            &w.helper,
+            "Review it.",
+            &["more"],
+        )],
+    )
+    .await;
+    let (wr, branch, tip) = w.at_the_check(&flow, false).await;
+    w.workflows.approve_check(&wr.id, None).await.unwrap();
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    let ships: Vec<_> = wr.steps.iter().filter(|s| s.step_id == "ship").collect();
+    assert_eq!(ships.len(), 2);
+    let b_branch = newest(&wr, "more").handoff.as_ref().unwrap().branches[0]
+        .branch
+        .clone();
+    let prompts = w.engine.prompts_of("helper");
+    for (i, ship) in ships.iter().enumerate() {
+        let runs = w.runs_of(&ship.id).await;
+        assert_eq!(runs.len(), 1);
+        let start = runs[0].payload.as_ref().unwrap().pointer("/workflow/start");
+        assert_eq!(start, Some(&json!(tip)), "attempt {}", i + 1);
+        // The prompts of the two attempts (the review's run is between them) name only the
+        // approved branch and its commit, not the later step's branch.
+        let prompt = &prompts[if i == 0 { 0 } else { 2 }];
+        assert!(
+            prompt.contains(&format!("{branch} (commit {tip})")),
+            "{prompt}"
+        );
+        assert!(!prompt.contains(&b_branch), "{prompt}");
+        assert!(prompt.contains("### Your job in this step\n\nTag a release."));
+    }
+}
+
+#[tokio::test]
+async fn a_member_deploy_after_a_later_step_is_refused_if_the_approved_branch_moved() {
+    let w = world().await;
+    w.engine.set(
+        &w.dev.spec.name,
+        vec![
+            Act::Write("a.txt", "Approved work."),
+            Act::Await("b.txt", "B done."),
+        ],
+    );
+    let flow = late_member_deploy(&w, vec![]).await;
+    let (wr, branch, _) = w.at_the_check(&flow, false).await;
+    w.workflows.approve_check(&wr.id, None).await.unwrap();
+    // While the later step runs, a commit lands on the approved branch.
+    w.commit_after(&branch);
+    w.engine.held.add_permits(1);
+    let failed = w.until(&wr.id, waits_on(WaitingOn::StepFailed)).await;
+    assert_eq!(
+        failed.error.as_deref(),
+        Some("Ship: The branch changed after it was approved.")
+    );
+    assert!(w.runs_of(&newest(&failed, "ship").id).await.is_empty());
+    assert_eq!(w.engine.prompts_of("helper").len(), 0);
 }

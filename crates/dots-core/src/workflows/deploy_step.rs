@@ -25,7 +25,8 @@ use crate::{Error, Result};
 /// approved before Dots recorded them, or one that sent the work back.
 pub const NO_APPROVAL: &str = "the check before it recorded no approved branches";
 /// Why a `pr` or `pr_merge` deploy fails when the project's default branch cannot be
-/// found (a `push` deploy needs none): the project names none, the remote's `HEAD` names none, and the repo is on no branch.
+/// found (a `push` deploy needs none): the project names none, the remote's `HEAD` names none,
+/// and the repo is on no branch.
 pub const NO_DEFAULT_BRANCH: &str =
     "the project's default branch could not be found; set it on the project";
 /// Why a deploy step Dots stopped during fails, as plan A words an interrupted run.
@@ -66,7 +67,7 @@ pub(super) async fn tips(repo: &Path, shown: &Handoff) -> Vec<Value> {
 /// path approved, at the commits it recorded, each with the commit its work started from (the
 /// hand-off's `base_commit`, for the secret scan); and the summary that check showed, for a
 /// pull request's body.
-fn approved(
+pub(super) fn approved(
     wr: &WorkflowRun,
     id: &str,
 ) -> std::result::Result<(Vec<ApprovedBranch>, String), String> {

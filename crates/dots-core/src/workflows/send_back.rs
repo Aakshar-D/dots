@@ -339,6 +339,12 @@ impl Workflows {
         step: &Step,
         step_run: &StepRun,
     ) -> Result<()> {
+        // A deploy's member never goes on in an old session or from a live branch: it starts
+        // fresh from the commit the check approved (`deploy_step::member_start`).
+        if matches!(step.kind, StepKind::Deploy { .. }) {
+            self.queue_agent_run(wr, step, step_run, None).await?;
+            return Ok(());
+        }
         let earlier = wr.steps.iter().rev().find(|s| {
             s.step_id == step.id && s.id != step_run.id && s.status == StepRunStatus::Succeeded
         });

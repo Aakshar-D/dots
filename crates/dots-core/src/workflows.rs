@@ -1207,7 +1207,46 @@ impl Workflows {
         out.push_str("\n\n### Your job in this step\n\n");
         out.push_str(job.trim());
         out.push_str("\n\n");
-        let earlier = handoffs_before(wr, &step.id);
+        // A member deploy is shown only what the check approved, each branch at its commit.
+        if matches!(step.kind, StepKind::Deploy { .. }) {
+            if let Ok((branches, summary)) = deploy_step::approved(wr, &step.id) {
+                out.push_str(
+                    "### Earlier steps
+
+#### Approved
+
+",
+                );
+                let summary = summary.trim();
+                out.push_str(if summary.is_empty() {
+                    "(no summary)"
+                } else {
+                    summary
+                });
+                out.push_str(
+                    "
+
+",
+                );
+                if !branches.is_empty() {
+                    let named: Vec<String> = branches
+                        .iter()
+                        .map(|b| format!("{} (commit {})", b.branch, b.commit))
+                        .collect();
+                    out.push_str(&format!(
+                        "Branches: {}
+
+",
+                        named.join(", ")
+                    ));
+                }
+            }
+        }
+        let earlier = if matches!(step.kind, StepKind::Deploy { .. }) {
+            Vec::new()
+        } else {
+            handoffs_before(wr, &step.id)
+        };
         if !earlier.is_empty() {
             out.push_str("### Earlier steps\n\n");
             for (s, h) in earlier {
