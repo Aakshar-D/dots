@@ -48,12 +48,15 @@ const Fields = z.object({
 });
 
 /// What is wrong with a draft, by field. Empty when it can be saved.
-export function specErrors(spec: DotSpec): SpecErrors {
+/// A new dot may leave its folder blank: the core makes one.
+export function specErrors(spec: DotSpec, isNew = false): SpecErrors {
   const errors: SpecErrors = {};
   const fields = Fields.safeParse(spec);
   if (!fields.success) {
     for (const issue of fields.error.issues) {
-      errors[issue.path[0] as keyof DotSpec] ??= issue.message;
+      const field = issue.path[0] as keyof DotSpec;
+      if (isNew && field === "workdir") continue;
+      errors[field] ??= issue.message;
     }
   }
   if (spec.engine === "local") {

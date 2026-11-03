@@ -263,7 +263,12 @@ export function DotForm(props: {
       </Section>
 
       <Section title="Workspace">
-        <Field label="Folder" htmlFor="dot-workdir" error={errors.workdir}>
+        <Field
+          label="Folder"
+          htmlFor="dot-workdir"
+          error={errors.workdir}
+          hint="Leave blank and Dots makes a new folder for this dot."
+        >
           <div className="flex gap-2">
             <Input
               id="dot-workdir"

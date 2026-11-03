@@ -44,6 +44,10 @@ describe("dot editor rules", () => {
     ]);
   });
 
+  it("lets a new dot leave its folder blank", () => {
+    expect(Object.keys(specErrors(blankSpec, true)).sort()).toEqual(["instructions", "name"]);
+  });
+
   it("checks the name the way the core does", () => {
     for (const name of ["", "has space", "ünï", "x".repeat(65)]) {
       expect(specErrors({ ...good, name }).name, name).toBeDefined();

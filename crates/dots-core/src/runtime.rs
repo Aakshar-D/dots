@@ -23,7 +23,7 @@ use crate::library_service::LibraryService;
 use crate::model::{
     Approval, AttentionRun, ClaudeStatus, Dot, DotOverview, DotSpec, EngineKind, Inbox,
     MessageKind, NewRun, PendingApproval, ReviewRun, Run, RunEventRecord, RunStatus,
-    ScheduleChange, ScheduleView, SettingsSaved, Status, TriggerKind, WorktreeDiff,
+    ScheduleChange, ScheduleView, SettingsSaved, Status, TriggerKind, WorkspaceMode, WorktreeDiff,
 };
 use crate::policy::{allow_candidates, Action, Rule, RuleCandidate};
 use crate::runner::{Runner, RunnerConfig};
@@ -73,12 +73,18 @@ pub struct Config {
     /// `Config::new` leaves them out, so a test starts with no app unless it asks for them;
     /// the app's configuration has them.
     pub bundled_apps: bool,
+    /// Where a dot created without a folder gets one: `<new_dot_root>\<folder name>`. The app
+    /// uses `%USERPROFILE%\Dots`; `Config::new` keeps it inside the data folder, so a test
+    /// never touches the home folder.
+    pub new_dot_root: PathBuf,
 }
 
 impl Config {
     pub fn new(data_dir: impl Into<PathBuf>) -> Self {
+        let data_dir = data_dir.into();
         Self {
-            data_dir: data_dir.into(),
+            new_dot_root: data_dir.join("new-dots"),
+            data_dir,
             port: 47321,
             bind_wait: server::BIND_WAIT,
             max_concurrent_runs: 2,
@@ -101,8 +107,51 @@ impl Config {
         cfg.claude_path = settings.claude_path.as_ref().map(PathBuf::from);
         cfg.secrets = None;
         cfg.bundled_apps = true;
+        let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"));
+        if let Some(home) = home.filter(|h| !h.is_empty()) {
+            cfg.new_dot_root = PathBuf::from(home).join("Dots");
+        }
         cfg
     }
+}
+
+/// Why a dot cannot use worktree mode on a folder that is not a git repository.
+pub const NOT_A_REPO: &str =
+    "This folder is not a git repository. Choose 'The folder itself' or pick a git folder.";
+
+/// True when `path` is a folder inside a git work tree.
+pub async fn is_git_repo(path: &Path) -> bool {
+    path.is_dir()
+        && crate::workspace::git(path, &["rev-parse", "--is-inside-work-tree"])
+            .await
+            .unwrap_or_default()
+            == "true"
+}
+
+/// Makes and returns the first free `<root>/<folder_name>[-N]`: one that does not exist or
+/// is empty. Missing parents are created.
+pub async fn default_folder(root: &Path, name: &str) -> Result<PathBuf> {
+    let base = crate::model::folder_name(name);
+    for n in 1u32..10_000 {
+        let dir = if n == 1 {
+            root.join(&base)
+        } else {
+            root.join(format!("{base}-{n}"))
+        };
+        let free = match tokio::fs::read_dir(&dir).await {
+            Ok(mut entries) => entries.next_entry().await?.is_none(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
+            Err(_) => false,
+        };
+        if free {
+            tokio::fs::create_dir_all(&dir).await?;
+            return Ok(dir);
+        }
+    }
+    Err(Error::Other(format!(
+        "no free folder for '{name}' in {}",
+        root.display()
+    )))
 }
 
 pub struct Runtime {
@@ -121,6 +170,7 @@ pub struct Runtime {
     claude_program: Option<PathBuf>,
     claude_version: Option<String>,
     data_dir: PathBuf,
+    new_dot_root: PathBuf,
     /// The stored settings when the runtime started, and now.
     started: Settings,
     settings: Mutex<Settings>,
@@ -467,6 +517,7 @@ impl Runtime {
             claude_program,
             claude_version,
             data_dir: cfg.data_dir.clone(),
+            new_dot_root: cfg.new_dot_root.clone(),
             started: settings.clone(),
             settings: Mutex::new(settings),
             chat_lock: follow_ups.thread_lock(),
@@ -1034,7 +1085,7 @@ impl Runtime {
     /// changing dots, and giving it secrets when it is granted any (members spec §6.3).
     pub async fn create_dot(
         &self,
-        spec: DotSpec,
+        mut spec: DotSpec,
         org_id: Option<String>,
         workspace_id: Option<String>,
     ) -> Result<Dot> {
@@ -1056,10 +1107,33 @@ impl Runtime {
             self.require_in(org_id.as_deref(), workspace_id, Permission::GrantEntries)
                 .await?;
         }
-        let dot = self
+        // A blank folder gets a new one of its own; remembered so a failed create removes it.
+        let mut made: Option<PathBuf> = None;
+        if spec.workdir.trim().is_empty() {
+            let dir = default_folder(&self.new_dot_root, &spec.name).await?;
+            spec.workdir = dir.to_string_lossy().into_owned();
+            made = Some(dir);
+        }
+        // Worktree mode needs git; outside it the dot runs in the folder itself.
+        if spec.workspace_mode == WorkspaceMode::Worktree
+            && !is_git_repo(Path::new(spec.workdir.trim())).await
+        {
+            spec.workspace_mode = WorkspaceMode::Folder;
+        }
+        let created = self
             .store
             .create_dot(&spec, org_id.as_deref(), workspace_id)
-            .await?;
+            .await;
+        let dot = match created {
+            Ok(dot) => dot,
+            Err(e) => {
+                if let Some(dir) = made {
+                    // Only removes an empty folder.
+                    let _ = tokio::fs::remove_dir(dir).await;
+                }
+                return Err(e);
+            }
+        };
         self.sync_schedule(&dot, false).await?;
         self.scheduler.reload();
         self.watchers.reload();
@@ -1261,6 +1335,12 @@ impl Runtime {
         self.require_dot(&old, Permission::EditDots).await?;
         if spec.variables != old.spec.variables {
             self.require_dot(&old, Permission::GrantEntries).await?;
+        }
+        if spec.workspace_mode == WorkspaceMode::Worktree
+            && !spec.workdir.trim().is_empty()
+            && !is_git_repo(Path::new(spec.workdir.trim())).await
+        {
+            return Err(Error::Invalid(NOT_A_REPO.into()));
         }
         let was_enabled = old.spec.enabled;
         let dot = self.store.update_dot(id, &spec).await?;

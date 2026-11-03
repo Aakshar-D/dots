@@ -101,7 +101,7 @@ function Editor(props: {
   const changed = hashKey([schedule]) !== hashKey([scheduleOf(stored)]);
   const objection = sendable && preview.isError ? errorMessage(preview.error) : undefined;
 
-  const errors = specErrors(draft.spec);
+  const errors = specErrors(draft.spec, isNew);
   if (objection && changed) errors.schedule ??= objection;
 
   function submit() {
@@ -193,7 +193,11 @@ function NewDot() {
         const dot = await commands.createDot(spec, org, workspace);
         invalidateDots(qc);
         qc.setQueryData(keys.dot(dot.id), dot);
-        toast.success("Dot created");
+        toast.success(
+          spec.workspace_mode === "worktree" && dot.workspace_mode === "folder"
+            ? "Dot created. Runs in the folder itself, because it is not a git repository."
+            : "Dot created",
+        );
         void navigate(`/dots/${dot.id}`);
       }}
     />

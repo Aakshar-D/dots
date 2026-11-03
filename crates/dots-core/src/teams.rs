@@ -8,7 +8,6 @@ use crate::events::{Bus, RuntimeEvent};
 use crate::model::{Project, ProjectSpec, Team, TeamSpec, Workflow, WorkflowSpec};
 use crate::store::Store;
 use crate::vault::org::Orgs;
-use crate::workspace::git;
 use crate::{Error, Result};
 
 /// Cheap to clone.
@@ -24,14 +23,7 @@ pub struct Teams {
 /// Refuses a project folder that is not a git repo.
 pub(crate) async fn check_repo(repo_path: &str) -> Result<()> {
     let path = Path::new(repo_path.trim());
-    let inside = if path.is_dir() {
-        git(path, &["rev-parse", "--is-inside-work-tree"])
-            .await
-            .unwrap_or_default()
-    } else {
-        String::new()
-    };
-    if inside != "true" {
+    if !crate::runtime::is_git_repo(path).await {
         return Err(Error::Invalid(format!(
             "{} is not a git repository",
             path.display()
