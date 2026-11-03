@@ -448,7 +448,7 @@ export const ScheduleSkip = z.strictObject({
   created_at: z.string(),
 });
 
-export const RuntimeEvent =z.discriminatedUnion("type", [
+export const RuntimeEvent = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("run_updated"), run: Run }),
   z.strictObject({ type: z.literal("run_event"), event: RunEventRecord }),
   // A running run went quiet, or spoke again (quiet_since null); a `run_updated` comes with it.

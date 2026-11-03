@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { DotOverview, Message, Run } from "@/api/types";
 import { dotStatus, lastLine, nextLine, skipLine, sortDots } from "@/lib/dot-status";
-import { localTime } from "@/lib/format";
+import { localDateTime, localTime } from "@/lib/format";
 import { sample } from "@/test/fixtures";
 
 /// An enabled dot named `name` with no schedule and no run.
@@ -99,11 +99,31 @@ describe("the column", () => {
       last_skipped_at: at,
       skipped_since_run: n,
     });
-    expect(skipLine(skipped(3, last))).toBe(
+    const sameDay = Date.parse("2026-10-09T11:00:00Z");
+    expect(skipLine(skipped(3, last), sameDay)).toBe(
       `Last skipped ${localTime(last)} · 3 skipped since the last run`,
     );
-    expect(skipLine(skipped(0, last))).toBe(`Last skipped ${localTime(last)}`);
-    expect(skipLine(skipped(0, null))).toBe("");
+    expect(skipLine(skipped(0, last), sameDay)).toBe(`Last skipped ${localTime(last)}`);
+    expect(skipLine(skipped(0, null), sameDay)).toBe("");
     expect(skipLine(null)).toBe("");
+  });
+
+  it("says the date of a last skip that was not today", () => {
+    const last = "2026-10-09T09:00:00Z";
+    const view = { ...attention, last_skipped_at: last, skipped_since_run: 0 };
+    const weeksLater = Date.parse("2026-11-03T11:00:00Z");
+    expect(skipLine(view, weeksLater)).toBe(`Last skipped ${localDateTime(last)}`);
+  });
+
+  it("shows 50+ when the skips since the last run reach the number the core keeps", () => {
+    const last = "2026-10-09T09:00:00Z";
+    const now = Date.parse("2026-10-09T11:00:00Z");
+    const skipped = (n: number) => ({ ...attention, last_skipped_at: last, skipped_since_run: n });
+    expect(skipLine(skipped(49), now)).toBe(
+      `Last skipped ${localTime(last)} · 49 skipped since the last run`,
+    );
+    expect(skipLine(skipped(50), now)).toBe(
+      `Last skipped ${localTime(last)} · 50+ skipped since the last run`,
+    );
   });
 });

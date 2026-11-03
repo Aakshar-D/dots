@@ -1,5 +1,5 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { Approval, Message, Run, RunEventRecord } from "@/api/types";
 import { localTime } from "@/lib/format";
@@ -170,10 +170,25 @@ describe("a dot's conversation", () => {
     backend.on("dot_overview", () => [
       { ...overview, schedule_state: { ...state, last_skipped_at: last, skipped_since_run: 2 } },
     ]);
+    // Only the clock is faked (to the day of the skip), so nothing waits.
+    vi.useFakeTimers({ toFake: ["Date"], now: Date.parse("2026-10-09T11:00:00Z") });
+    try {
+      renderApp(`/home/${dot.id}`);
+      expect(
+        await screen.findByText(`Last skipped ${localTime(last)} · 2 skipped since the last run`),
+      ).toBeVisible();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows a failed load of the skipped slots, as it does for the proposals", async () => {
+    home([scheduled("cron", "09:00")]);
+    backend.on("schedule_skips", () => {
+      throw { kind: "internal", message: "could not read the skipped slots" };
+    });
     renderApp(`/home/${dot.id}`);
-    expect(
-      await screen.findByText(`Last skipped ${localTime(last)} · 2 skipped since the last run`),
-    ).toBeVisible();
+    expect(await screen.findByText("could not read the skipped slots")).toBeVisible();
   });
 
   it("shows no skip line in the header of a dot that never skipped", async () => {

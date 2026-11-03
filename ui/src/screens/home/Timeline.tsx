@@ -64,12 +64,12 @@ export function Timeline(props: {
   // The slots skipped because the dot was busy: a query of their own, never messages, so they
   // cannot change what is unread. They stand among the topics by time.
   const skipsOf = props.skipsDotId ?? null;
-  const skips =
-    useQuery({
-      queryKey: keys.scheduleSkips(skipsOf ?? ""),
-      queryFn: () => commands.scheduleSkips(skipsOf!),
-      enabled: skipsOf !== null,
-    }).data ?? [];
+  const skipsQuery = useQuery({
+    queryKey: keys.scheduleSkips(skipsOf ?? ""),
+    queryFn: () => commands.scheduleSkips(skipsOf!),
+    enabled: skipsOf !== null,
+  });
+  const skips = skipsQuery.data ?? [];
   const entries = mergeSkips(topics, skips);
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
@@ -84,6 +84,7 @@ export function Timeline(props: {
         <div className="mx-auto flex w-full max-w-[720px] flex-col gap-6 px-4 py-4">
           {props.children}
           {proposals.isError && <ErrorNote error={proposals.error} />}
+          {skipsQuery.isError && <ErrorNote error={skipsQuery.error} />}
           {entries.map((entry) => {
             if ("skip" in entry) return <SkipLine key={entry.skip.id} skip={entry.skip} />;
             const topic = entry.topic;

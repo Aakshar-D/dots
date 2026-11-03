@@ -1,6 +1,6 @@
 // What the home's column says about each dot (chat-first home spec, section 3).
 import type { DotOverview, FollowUp, Message, ScheduleView } from "@/api/types";
-import { localTime, relativeTime } from "@/lib/format";
+import { localDayTime, localTime, relativeTime } from "@/lib/format";
 import { chatText, oneLine } from "@/lib/home-topics";
 import { isOpenQuestion } from "@/lib/messages";
 
@@ -65,15 +65,20 @@ export function lastLine(row: DotOverview): string {
   return oneLine(run.summary) || oneLine(run.error) || oneLine(chatText(run));
 }
 
+/// How many skipped slots the core keeps per dot (KEPT_PER_DOT in store/skips.rs): a count at
+/// this is a floor, not the number.
+const SKIPS_KEPT = 50;
+
 /// "Last skipped 09:00 · 3 skipped since the last run" for a schedule that skipped a slot
-/// because the dot was busy; without the count when no run has been skipped since the last run;
-/// "" when it never skipped.
-export function skipLine(view: ScheduleView | null | undefined): string {
+/// because the dot was busy (the date too when that was not today); without the count when no
+/// run has been skipped since the last run; "50+" at the number the core keeps; "" when it
+/// never skipped.
+export function skipLine(view: ScheduleView | null | undefined, now: number = Date.now()): string {
   if (!view?.last_skipped_at) return "";
-  const last = `Last skipped ${localTime(view.last_skipped_at)}`;
-  return view.skipped_since_run > 0
-    ? `${last} · ${view.skipped_since_run} skipped since the last run`
-    : last;
+  const last = `Last skipped ${localDayTime(view.last_skipped_at, now)}`;
+  const n = view.skipped_since_run;
+  if (n <= 0) return last;
+  return `${last} · ${n >= SKIPS_KEPT ? `${SKIPS_KEPT}+` : n} skipped since the last run`;
 }
 
 /// "next 02:00" for the next scheduled fire, else when the dot's next follow-up fires ("Next
