@@ -81,6 +81,48 @@ fn a_comma_string_reads_as_a_list() {
 }
 
 #[test]
+fn flow_lists_split_on_commas_outside_quotes() {
+    let fm = parse_frontmatter("---\ntools: [\"Read\", 'Bash(git log, x)', \"a]b\"]\n---\n");
+    assert_eq!(
+        fm.list("tools").unwrap(),
+        ["Read", "Bash(git log, x)", "a]b"]
+    );
+    assert!(fm.unreadable.is_empty());
+}
+
+#[test]
+fn a_list_dots_cannot_read_is_marked_unreadable() {
+    for text in [
+        "---\ntools: [Read, [Bash]]\n---\n",
+        "---\ntools: {a: b}\n---\n",
+        "---\ntools: &x [Read]\n---\n",
+        "---\ntools:\n  - Read\n    - Bash\n---\n",
+        "---\ntools:\n  - [Read]\n---\n",
+        "---\ntools:\n  nested: map\n---\n",
+        "---\ntools: [\"Read, Grep]\n---\n",
+    ] {
+        let fm = parse_frontmatter(text);
+        assert!(fm.unreadable.contains("tools"), "{text:?}: {fm:?}");
+        assert!(fm.list("tools").is_none(), "{text:?}");
+        assert!(fm.parsed, "{text:?}");
+    }
+}
+
+#[test]
+fn a_bare_key_is_an_empty_list() {
+    let fm = parse_frontmatter("---\ntools:\nname: x\n---\n");
+    assert_eq!(fm.list("tools").unwrap(), Vec::<String>::new());
+    assert!(fm.unreadable.is_empty());
+}
+
+#[test]
+fn parsed_tells_an_empty_frontmatter_from_a_broken_or_missing_one() {
+    assert!(parse_frontmatter("---\n---\nbody\n").parsed);
+    assert!(!parse_frontmatter("---\nname: x\nname: y\n---\n").parsed);
+    assert!(!parse_frontmatter("# no frontmatter\n").parsed);
+}
+
+#[test]
 fn allowed_tools_as_a_string_is_a_field() {
     let text = "---\nallowed-tools: Bash(git *) Read\n---\n";
     assert_eq!(field(text, "allowed-tools").unwrap(), "Bash(git *) Read");

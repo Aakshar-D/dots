@@ -3,7 +3,7 @@
 //! or flow `[a, b]`), which are kept apart from the scalars. Nested maps and anything else are
 //! skipped. As in Claude Code, a frontmatter that does not parse gives no fields at all.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// A file split into its frontmatter fields and its body.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -12,6 +12,13 @@ pub struct Frontmatter {
     pub fields: BTreeMap<String, String>,
     /// Top-level keys whose value is a simple list of scalars. Empty when `fields` is.
     pub lists: BTreeMap<String, Vec<String>>,
+    /// Top-level keys whose value is a collection this reader cannot follow (a nested map or
+    /// list, an anchor, a flow list it cannot split). Such a key is in neither map, so a caller
+    /// that must not take it as missing checks here.
+    pub unreadable: BTreeSet<String>,
+    /// A closed frontmatter was found and read (it may be empty). False when there is none,
+    /// it never closes, or it does not parse.
+    pub parsed: bool,
     /// What follows the frontmatter; the whole text when there is none.
     pub body: String,
 }
@@ -53,11 +60,19 @@ pub fn parse_frontmatter(text: &str) -> Frontmatter {
             ..Frontmatter::default()
         };
     };
-    let (fields, lists) = parse_map(&lines[1..close]).unwrap_or_default();
-    Frontmatter {
-        fields,
-        lists,
-        body: lines[close + 1..].join("\n"),
+    let body = lines[close + 1..].join("\n");
+    match parse_map(&lines[1..close]) {
+        Some((fields, lists, unreadable)) => Frontmatter {
+            fields,
+            lists,
+            unreadable,
+            parsed: true,
+            body,
+        },
+        None => Frontmatter {
+            body,
+            ..Frontmatter::default()
+        },
     }
 }
 
@@ -78,7 +93,11 @@ impl Frontmatter {
     }
 }
 
-type Maps = (BTreeMap<String, String>, BTreeMap<String, Vec<String>>);
+type Maps = (
+    BTreeMap<String, String>,
+    BTreeMap<String, Vec<String>>,
+    BTreeSet<String>,
+);
 
 /// One list item or flow item as a string: quotes taken off, a trailing comment dropped.
 /// `None` for an item that is itself a collection or a broken quote.
@@ -93,10 +112,11 @@ fn list_item(raw: &str) -> Option<String> {
 }
 
 /// The items of block list lines (`- item` each, at one indent), or `None` when the lines are
-/// not that (a nested map, a nested list, an item over several lines).
+/// not that (a nested map, a nested list, an item over several lines). No lines at all (a bare
+/// `key:`) is an empty list.
 fn block_list(lines: &[&str]) -> Option<Vec<String>> {
     let mut items = Vec::new();
-    let mut at = None;
+    let mut at: Option<usize> = None;
     for line in lines {
         if is_blank(line) || is_comment(line) {
             continue;
@@ -113,25 +133,49 @@ fn block_list(lines: &[&str]) -> Option<Vec<String>> {
             items.push(item);
         }
     }
-    at.map(|_| items)
+    Some(items)
 }
 
-/// The items of a flow list `[a, b]` over these lines, or `None` when it is not one simple
-/// list (nested collections).
+/// The items of a flow list `[a, b]` over these lines, split at the commas outside quotes, or
+/// `None` when it is not one simple list (a nested collection, an unclosed quote or bracket,
+/// text after it).
 fn flow_list(lines: &[&str]) -> Option<Vec<String>> {
     let joined = lines.iter().map(|l| l.trim()).collect::<Vec<_>>().join(" ");
     let inner = joined.strip_prefix('[')?;
-    let end = inner.rfind(']')?;
-    let tail = inner[end + 1..].trim();
+    let mut raw_items: Vec<&str> = Vec::new();
+    let mut quote: Option<char> = None;
+    let mut start = 0;
+    let mut end = None;
+    let mut chars = inner.char_indices();
+    while let Some((i, c)) = chars.next() {
+        match quote {
+            Some('"') if c == '\\' => {
+                chars.next();
+            }
+            Some(q) if c == q => quote = None,
+            Some(_) => {}
+            None => match c {
+                '"' | '\'' => quote = Some(c),
+                ',' => {
+                    raw_items.push(&inner[start..i]);
+                    start = i + 1;
+                }
+                ']' => {
+                    raw_items.push(&inner[start..i]);
+                    end = Some(i);
+                    break;
+                }
+                '[' | '{' | '}' => return None,
+                _ => {}
+            },
+        }
+    }
+    let tail = inner[end? + 1..].trim();
     if !(tail.is_empty() || tail.starts_with('#')) {
         return None;
     }
-    let inner = &inner[..end];
-    if inner.contains(['[', ']', '{', '}']) {
-        return None;
-    }
     let mut items = Vec::new();
-    for part in inner.split(',') {
+    for part in raw_items {
         let item = list_item(part)?;
         if !item.is_empty() {
             items.push(item);
@@ -183,6 +227,7 @@ fn plain_ok(s: &str) -> bool {
 fn parse_map(lines: &[&str]) -> Option<Maps> {
     let mut fields = BTreeMap::new();
     let mut lists = BTreeMap::new();
+    let mut unreadable = BTreeSet::new();
     let mut seen = Vec::new();
     let mut i = 0;
     while i < lines.len() {
@@ -214,8 +259,13 @@ fn parse_map(lines: &[&str]) -> Option<Maps> {
                 {
                     end += 1;
                 }
-                if let Some(items) = block_list(&lines[i..end]) {
-                    lists.insert(key.clone(), items);
+                match block_list(&lines[i..end]) {
+                    Some(items) => {
+                        lists.insert(key.clone(), items);
+                    }
+                    None => {
+                        unreadable.insert(key.clone());
+                    }
                 }
             }
             Some('|') | Some('>') => {
@@ -230,11 +280,14 @@ fn parse_map(lines: &[&str]) -> Option<Maps> {
                     depth += bracket_depth(lines[end]);
                     end += 1;
                 }
-                if rest.starts_with('[') {
-                    let mut flow = vec![rest];
-                    flow.extend_from_slice(&lines[i..end]);
-                    if let Some(items) = flow_list(&flow) {
+                let mut flow = vec![rest];
+                flow.extend_from_slice(&lines[i..end]);
+                match flow_list(&flow) {
+                    Some(items) => {
                         lists.insert(key.clone(), items);
+                    }
+                    None => {
+                        unreadable.insert(key.clone());
                     }
                 }
             }
@@ -248,6 +301,7 @@ fn parse_map(lines: &[&str]) -> Option<Maps> {
                 while end < lines.len() && (is_blank(lines[end]) || indent(lines[end]) > 0) {
                     end += 1;
                 }
+                unreadable.insert(key.clone());
             }
             Some(_) => {
                 let mut text = without_comment(rest).to_string();
@@ -276,7 +330,7 @@ fn parse_map(lines: &[&str]) -> Option<Maps> {
         }
         i = end;
     }
-    Some((fields, lists))
+    Some((fields, lists, unreadable))
 }
 
 fn bracket_depth(s: &str) -> i32 {
