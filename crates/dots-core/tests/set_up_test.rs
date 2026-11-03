@@ -521,8 +521,6 @@ async fn apply_returns_the_notes_of_its_own_check() {
         applied.notes,
         "Left out the extra telepathy: Dots does not know it."
     );
-    // A runtime of its own: a second create while the first dot's run starts is another matter.
-    let t = start(answering("Done.")).await;
     let clean =
         t.rt.setup_apply(proposal("Other digest"), None, None)
             .await
@@ -539,4 +537,18 @@ async fn apply_with_a_blank_first_message_starts_no_chat() {
     assert!(applied.run_id.is_none());
     assert!(applied.run_error.is_none(), "{:?}", applied.run_error);
     assert!(t.rt.get_dot(&applied.dot.id).await.is_ok());
+}
+
+#[tokio::test]
+async fn apply_right_after_another_apply_makes_both_dots() {
+    // The first dot's chat run is being stored and started while the second is created.
+    for round in 0..5 {
+        let t = start(answering("Done.")).await;
+        t.rt.setup_apply(proposal("Downloads digest"), None, None)
+            .await
+            .unwrap();
+        let second = t.rt.setup_apply(proposal("Other digest"), None, None).await;
+        assert!(second.is_ok(), "round {round}: {second:?}");
+        assert_eq!(t.rt.list_dots().await.unwrap().len(), 2);
+    }
 }

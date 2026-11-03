@@ -147,7 +147,10 @@ impl Store {
         let spec = &spec;
         let id = new_id();
         let ts = now();
-        let mut tx = self.pool.begin().await?;
+        // The write lock up front: the clash check reads before the insert, and a deferred
+        // transaction that reads and then writes fails at once (busy) when another writer
+        // committed in between.
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         if clashes_in_case(&mut tx, &spec.name, &id).await? {
             return Err(name_taken(&spec.name));
         }
@@ -234,7 +237,8 @@ impl Store {
         let mut spec = prepared(spec, stored.schedule.as_ref())?;
         spec.variables = self.synced_grants(Some(&stored.uses), &spec).await?;
         let spec = &spec;
-        let mut tx = self.pool.begin().await?;
+        // The write lock up front, as in `create_dot`: the clash check reads before the update.
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         if spec.name != stored.name && clashes_in_case(&mut tx, &spec.name, id).await? {
             return Err(name_taken(&spec.name));
         }
