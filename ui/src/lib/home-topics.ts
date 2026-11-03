@@ -11,7 +11,7 @@ export type Topic = {
   /// The topic's oldest run known here: its root, or the oldest run of it that was loaded when
   /// the root is older than what was loaded.
   root: Run;
-  /// Its runs, oldest first.
+  /// Its runs along its line (`lineOrder`): oldest first, unless runs were moved in.
   runs: Run[];
   /// "chat" when the root is a chat run; "run" when a schedule, a webhook, Run now or a
   /// follow-up started it.
@@ -35,9 +35,45 @@ export function isActive(run: Run): boolean {
 
 const byQueued = (a: Run, b: Run) => a.queued_at.localeCompare(b.queued_at);
 
+/// Runs of one topic read along its line, as the core reads them (`store::runs::line_order`):
+/// each run after its parent, the children of one run by queue time. A move or merge hangs older
+/// runs after newer ones, so time alone would put them in the middle. A run whose parent is not
+/// among them starts a line of its own, by queue time.
+export function lineOrder(runs: Run[]): Run[] {
+  const sorted = [...runs].sort(byQueued);
+  const ids = new Set(sorted.map((run) => run.id));
+  const children = new Map<string, Run[]>();
+  const starts: Run[] = [];
+  for (const run of sorted) {
+    const parent = run.parent_run_id;
+    if (parent !== null && parent !== run.id && ids.has(parent)) {
+      children.set(parent, [...(children.get(parent) ?? []), run]);
+    } else {
+      starts.push(run);
+    }
+  }
+  const order: Run[] = [];
+  const seen = new Set<string>();
+  const stack = [...starts].reverse();
+  for (;;) {
+    while (stack.length > 0) {
+      const run = stack.pop()!;
+      if (seen.has(run.id)) continue;
+      seen.add(run.id);
+      order.push(run);
+      stack.push(...[...(children.get(run.id) ?? [])].reverse());
+    }
+    // A cycle of parents (never written by Dots) would hide its runs: they follow by time.
+    const left = sorted.find((run) => !seen.has(run.id));
+    if (left === undefined) break;
+    stack.push(left);
+  }
+  return order;
+}
+
 /// The topic of one line of runs, given in any order and none missing between them.
 export function topicOf(runs: Run[]): Topic {
-  const sorted = [...runs].sort(byQueued);
+  const sorted = lineOrder(runs);
   const root = sorted.find((run) => run.id === run.root_run_id) ?? sorted[0];
   return {
     rootId: sorted[0].root_run_id,

@@ -7,6 +7,7 @@ import {
   conversation,
   currentTopic,
   defaultTarget,
+  lastRun,
   liveTopics,
   olderTopics,
   oneLine,
@@ -159,5 +160,19 @@ describe("topic rows", () => {
     expect(ids(shown)).toEqual(["b"]);
     expect(ids(olderTopics(live, shown))).toEqual([]);
     expect(ids(archivedTopics(topics))).toEqual(["c", "a"]);
+  });
+});
+
+describe("a topic's line", () => {
+  it("reads along the parent links, so runs moved in from older times come last", () => {
+    const b = root("b", 10);
+    const b2 = reply("b2", b, 11);
+    // Moved in: older than b's runs, hung after b2.
+    const a2 = root("a2", 1, { root_run_id: "b", parent_run_id: "b2" });
+    const a3 = root("a3", 2, { root_run_id: "b", parent_run_id: "a2" });
+    const topic = topicOf([a3, b, a2, b2]);
+    expect(topic.runs.map((r) => r.id)).toEqual(["b", "b2", "a2", "a3"]);
+    expect(topic.root.id).toBe("b");
+    expect(lastRun(topic).id).toBe("a3");
   });
 });

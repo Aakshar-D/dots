@@ -64,6 +64,8 @@ describe("runtime events and the query cache", () => {
       keys.thread(run.root_run_id),
       keys.runs(run.dot_id),
       [...keys.runs(run.dot_id), "chat"],
+      // A run added to an archived topic brings it back.
+      keys.topics(run.dot_id),
       keys.diff(run.id),
       keys.overview,
       keys.inbox,

@@ -12,9 +12,11 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
     case "run_updated":
       // Lists and views a run shows up in. The prefixes cover every dot's and thread's key. The
       // run's approvals are among them: a run that ends takes its pending ones with it.
+      // The topic rows too: a run added to an archived topic brings it back.
       for (const queryKey of [
         ["thread"],
         ["runs"],
+        ["topics"],
         ["diff"],
         keys.overview,
         keys.inbox,
