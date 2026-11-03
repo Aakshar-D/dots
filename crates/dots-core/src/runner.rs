@@ -498,17 +498,19 @@ impl Runner {
         true
     }
 
-    /// For a run whose topic a move or merge changed (its restart mark, taken here): the run
-    /// with its session cleared, stored and in hand, and the topic's runs before it. A `resume`
-    /// finishes an approved call in its own session and leaves the mark for the next run.
+    /// For a run whose topic a move or merge changed (its restart mark): the run without its
+    /// session, in hand only, and the topic's runs before it along its line. The mark is taken
+    /// only once a run that restarted has used its fresh session (`finish`: it succeeded or
+    /// waits for an approval), so a run that fails first, or a crash, leaves it for the next
+    /// one; the stored session stays, so the topic can still be replied to. A `resume`
+    /// finishes an approved call in its own session and leaves the mark alone.
     async fn restart_if_moved(&self, run: &Run) -> Result<Option<(Run, Vec<Run>)>> {
-        if run.session_id.is_none() || run.trigger == TriggerKind::Resume {
+        if run.trigger == TriggerKind::Resume {
             return Ok(None);
         }
-        if !self.store.take_topic_restart(&run.root_run_id).await? {
+        if !self.store.topic_restart_pending(&run.root_run_id).await? {
             return Ok(None);
         }
-        self.store.clear_session(&run.id).await?;
         let mut fresh = run.clone();
         fresh.session_id = None;
         let so_far = self
@@ -516,7 +518,7 @@ impl Runner {
             .list_thread(&run.root_run_id)
             .await?
             .into_iter()
-            .filter(|r| r.id != run.id && r.queued_at <= run.queued_at)
+            .take_while(|r| r.id != run.id)
             .collect();
         tracing::info!(run = %run.id, "the topic changed: a fresh session");
         Ok(Some((fresh, so_far)))
@@ -1569,6 +1571,14 @@ impl Runner {
                 quiet_stopped,
             )
             .await?;
+        // A run that restarted its topic's session and got to use it spends the mark.
+        if restarted.is_some()
+            && matches!(status, RunStatus::Succeeded | RunStatus::AwaitingApproval)
+        {
+            if let Err(e) = self.store.take_topic_restart(&run.root_run_id).await {
+                tracing::warn!(run = %run.id, "clearing the topic's restart mark failed: {e}");
+            }
+        }
         self.emit_run(&finished);
         Ok(())
     }

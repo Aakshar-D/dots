@@ -15,6 +15,21 @@ struct Rt {
     args_out: PathBuf,
 }
 
+/// Where the fake CLI reads its script.
+fn script_path(dir: &TempDir) -> PathBuf {
+    dir.path().join("script.json")
+}
+
+/// The fake CLI's usual script: a session and a success.
+fn succeeds(dir: &TempDir) {
+    let script = serde_json::json!([
+        {"emit": {"type": "system", "subtype": "init", "session_id": "$SESSION"}},
+        {"emit": {"type": "result", "subtype": "success", "is_error": false,
+                  "result": "fake done", "usage": {"input_tokens": 1, "output_tokens": 1}}}
+    ]);
+    std::fs::write(script_path(dir), script.to_string()).unwrap();
+}
+
 async fn start() -> Rt {
     let dir = tempfile::tempdir().unwrap();
     let args_out = dir.path().join("args.json");
@@ -25,6 +40,11 @@ async fn start() -> Rt {
         "FAKE_CLAUDE_ARGS_OUT".into(),
         args_out.to_string_lossy().to_string(),
     ));
+    cfg.claude_env.push((
+        "FAKE_CLAUDE_SCRIPT".into(),
+        script_path(&dir).to_string_lossy().to_string(),
+    ));
+    succeeds(&dir);
     let rt = Runtime::start(cfg).await.unwrap();
     Rt { dir, rt, args_out }
 }
@@ -82,10 +102,13 @@ async fn a_topic_a_message_moved_into_starts_afresh_with_what_was_said() {
     }
     assert!(changed, "topics_changed announced");
 
-    // The target's next message starts a fresh session and is told the topic so far.
+    // The target reads along its line: its own run, then the moved one, which is its end; a
+    // reply to that end is taken.
     let thread = t.rt.run_thread(&b1.id).await.unwrap();
-    let last = thread.last().unwrap().id.clone();
-    let next = t.said(&dot.id, "and the tap?", Some(&last)).await;
+    let ids: Vec<&str> = thread.iter().map(|r| r.id.as_str()).collect();
+    assert_eq!(ids, vec![b1.id.as_str(), a2.id.as_str()]);
+    // The target's next message starts a fresh session and is told the topic so far.
+    let next = t.said(&dot.id, "and the tap?", Some(&a2.id)).await;
     let (prompt, args) = t.last();
     assert!(!resumes(&args), "{args:?}");
     let so_far = prompt
@@ -140,5 +163,51 @@ async fn topics_are_renamed_archived_and_merged_and_a_message_unarchives() {
     assert_eq!(t.rt.run_thread(&a1.id).await.unwrap().len(), 3);
     let rows = t.rt.list_topics(&dot.id).await.unwrap();
     assert!(rows.iter().all(|r| r.root_run_id != b1.id));
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn a_fresh_start_that_fails_leaves_the_next_run_to_start_afresh() {
+    let t = start().await;
+    let dot =
+        t.rt.create_dot(folder_spec(&t.dir, "again"), None, None)
+            .await
+            .unwrap();
+    let a1 = t.said(&dot.id, "plan the trip", None).await;
+    let a2 = t.said(&dot.id, "book the train", Some(&a1.id)).await;
+    t.rt.move_run(&a2.id, None).await.unwrap();
+
+    // The first run after the move fails.
+    std::fs::write(
+        script_path(&t.dir),
+        serde_json::json!([
+            {"emit": {"type": "system", "subtype": "init", "session_id": "$SESSION"}},
+            {"emit": {"type": "result", "subtype": "error_during_execution", "is_error": true,
+                      "result": "boom", "usage": {"input_tokens": 1, "output_tokens": 1}}}
+        ])
+        .to_string(),
+    )
+    .unwrap();
+    let failed =
+        t.rt.chat(&dot.id, "and the hotel?", Some(&a1.id))
+            .await
+            .unwrap();
+    wait_status(t.rt.store(), &failed.id, RunStatus::Failed, 15).await;
+    let (prompt, args) = t.last();
+    assert!(!resumes(&args));
+    assert!(prompt.contains("## This conversation so far"));
+
+    // The next one starts afresh again, and is told the topic so far.
+    succeeds(&t.dir);
+    let next = t.said(&dot.id, "try again", Some(&failed.id)).await;
+    let (prompt, args) = t.last();
+    assert!(!resumes(&args), "{args:?}");
+    assert!(prompt.contains("## This conversation so far"));
+    assert!(prompt.contains("plan the trip"));
+
+    // Spent by the run that worked.
+    t.said(&dot.id, "thanks", Some(&next.id)).await;
+    let (_, args) = t.last();
+    assert!(resumes(&args));
     t.rt.shutdown();
 }

@@ -683,3 +683,27 @@ fn only_a_chat_run_can_be_typed() {
         None
     )));
 }
+
+#[test]
+fn a_topic_s_conversation_so_far_names_its_newest_runs_only() {
+    let runs: Vec<Run> = (0..25)
+        .map(|i| {
+            let mut run = fake_run(
+                TriggerKind::Chat,
+                Some(json!({"message": format!("message {i}"), "typed": true})),
+                None,
+            );
+            run.id = format!("R{i}");
+            run.summary = Some("x".repeat(400));
+            run
+        })
+        .collect();
+    let text = dots_core::prompt::conversation_so_far(&runs);
+    assert!(text.starts_with("(5 earlier messages omitted)\n"), "{text}");
+    assert!(!text.contains("message 4\n"));
+    assert!(text.contains("- The person: message 5\n"));
+    assert!(text.contains("- The person: message 24\n"));
+    assert_eq!(text.matches("- The person:").count(), 20);
+    // Each reply is still cut.
+    assert!(text.contains(&format!("  You: {}…\n", "x".repeat(300))));
+}

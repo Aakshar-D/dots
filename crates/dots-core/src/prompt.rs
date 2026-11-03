@@ -137,6 +137,9 @@ pub fn recent_runs(runs: &[Run]) -> String {
     out
 }
 
+/// The most runs a topic's conversation so far names: the newest.
+pub const SO_FAR_RUNS: usize = 20;
+
 /// The line under a topic's conversation so far.
 pub const SO_FAR_NOTE: &str = "Messages were moved between topics, so this conversation starts \
     afresh. These are its earlier messages and your replies, oldest first; anything you remember \
@@ -144,7 +147,8 @@ pub const SO_FAR_NOTE: &str = "Messages were moved between topics, so this conve
 
 /// A topic's earlier runs for a fresh session (topic tools spec section 4.4): for each, what
 /// the person said (their message or answer), else what started it, and the run's summary or
-/// error, each cut to `RECENT_TEXT` characters.
+/// error, each cut to `RECENT_TEXT` characters; the newest `SO_FAR_RUNS` of them, after a line
+/// saying how many were left out.
 pub fn conversation_so_far(runs: &[Run]) -> String {
     let cut = |text: &str| {
         let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -155,7 +159,11 @@ pub fn conversation_so_far(runs: &[Run]) -> String {
         out
     };
     let mut out = String::new();
-    for run in runs {
+    let skip = runs.len().saturating_sub(SO_FAR_RUNS);
+    if skip > 0 {
+        out.push_str(&format!("({skip} earlier messages omitted)\n"));
+    }
+    for run in &runs[skip..] {
         let said = run.payload.as_ref().and_then(|p| {
             p.get("answer")
                 .or_else(|| p.get("message"))
