@@ -99,4 +99,28 @@ describe("the policy editor", () => {
     await user.selectOptions(screen.getByLabelText("Preset"), "custom");
     expect(screen.getByLabelText("Rule 1 tool")).toBeVisible();
   });
+
+  it("opens the rules when they have an error", () => {
+    const onChange = () => {};
+    const { rerender } = render(<PolicyEditor policy={sandboxed} onChange={onChange} />);
+    expect(screen.getByText("Show rules")).toBeVisible();
+    rerender(
+      <PolicyEditor policy={sandboxed} onChange={onChange} error="Rule 1 needs a tool." />,
+    );
+    expect(screen.getByText("Hide rules")).toBeVisible();
+    expect(screen.getByText("Rule 1 needs a tool.")).toBeVisible();
+  });
+
+  it("starts with the rules open when they have an error", () => {
+    render(<PolicyEditor policy={sandboxed} onChange={() => {}} error="Rule 1 needs a tool." />);
+    expect(screen.getByText("Hide rules")).toBeVisible();
+  });
+
+  it("opens the rules when the policy becomes custom from outside", () => {
+    const onChange = () => {};
+    const { rerender } = render(<PolicyEditor policy={sandboxed} onChange={onChange} />);
+    expect(screen.getByText("Show rules")).toBeVisible();
+    rerender(<PolicyEditor policy={{ ...sandboxed, preset: "custom" }} onChange={onChange} />);
+    expect(screen.getByText("Hide rules")).toBeVisible();
+  });
 });

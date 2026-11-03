@@ -25,8 +25,18 @@ export function PolicyEditor(props: {
   error?: string;
 }) {
   const { policy, onChange } = props;
-  // Named presets keep their rules folded; a custom policy shows them from the start.
-  const [open, setOpen] = useState(policy.preset === "custom");
+  // Named presets keep their rules folded; a custom policy or a rule error shows them from the
+  // start.
+  const [open, setOpen] = useState(policy.preset === "custom" || Boolean(props.error));
+  // The rules also open when they get an error, and when the policy turns custom from outside
+  // (a template, a reset, the card), not only on mount.
+  const [seen, setSeen] = useState({ preset: policy.preset, error: props.error });
+  if (seen.preset !== policy.preset || seen.error !== props.error) {
+    const turnedCustom = policy.preset === "custom" && seen.preset !== "custom";
+    const newError = props.error !== undefined && props.error !== "" && props.error !== seen.error;
+    if (turnedCustom || newError) setOpen(true);
+    setSeen({ preset: policy.preset, error: props.error });
+  }
   const custom = (change: Partial<Policy>) => onChange({ ...policy, ...change, preset: "custom" });
   const setRule = (index: number, change: Partial<Rule>) =>
     custom({ rules: policy.rules.map((r, i) => (i === index ? { ...r, ...change } : r)) });
