@@ -93,6 +93,7 @@ command_list![
     webhook_url,
     preview_schedule,
     policy_preset,
+    rules_touch_private,
     new_dot_spec,
     test_endpoint,
     run_now,

@@ -163,6 +163,10 @@ export const commands = {
   previewSchedule: (schedule: Schedule, count: number) =>
     call(text.array(), "preview_schedule", { schedule, count }),
   policyPreset: (preset: Preset) => call(T.Policy, "policy_preset", { preset }),
+  /// For each rule pattern, whether it names or covers a private folder: such an allow rule
+  /// always asks.
+  rulesTouchPrivate: (patterns: string[]) =>
+    call(z.boolean().array(), "rules_touch_private", { patterns }),
   newDotSpec: () => call(T.DotSpec, "new_dot_spec"),
   testEndpoint: (endpoint: string, model: string) =>
     call(text, "test_endpoint", { endpoint, model }),
