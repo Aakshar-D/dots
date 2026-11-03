@@ -83,20 +83,21 @@ impl Store {
         rows.iter().map(held_from_row).collect()
     }
 
-    /// Takes every held event: returned oldest first and deleted, in one transaction.
+    /// Takes every held event: deleted and returned by one statement (so a hold landing
+    /// meanwhile cannot make it fail), then sorted oldest first by `held_at`, then `rowid`.
     pub async fn take_held(&self, watcher_id: &str) -> Result<Vec<HeldEvent>> {
-        let mut tx = self.pool.begin().await?;
-        let rows = sqlx::query(SELECT)
-            .bind(watcher_id)
-            .fetch_all(&mut *tx)
-            .await?;
-        let held = rows.iter().map(held_from_row).collect::<Result<Vec<_>>>()?;
-        sqlx::query("DELETE FROM watcher_held WHERE watcher_id = ?")
-            .bind(watcher_id)
-            .execute(&mut *tx)
-            .await?;
-        tx.commit().await?;
-        Ok(held)
+        let rows = sqlx::query(
+            "DELETE FROM watcher_held WHERE watcher_id = ?              RETURNING id, watcher_id, payload, files, held_at, rowid AS row_no",
+        )
+        .bind(watcher_id)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut held = rows
+            .iter()
+            .map(|row| Ok((row.try_get::<i64, _>("row_no")?, held_from_row(row)?)))
+            .collect::<Result<Vec<_>>>()?;
+        held.sort_by(|(a_no, a), (b_no, b)| (&a.held_at, a_no).cmp(&(&b.held_at, b_no)));
+        Ok(held.into_iter().map(|(_, h)| h).collect())
     }
 
     /// Drops every held event; they are returned so their staged files can be removed.

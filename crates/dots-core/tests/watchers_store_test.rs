@@ -647,3 +647,44 @@ async fn held_events_are_counted_listed_oldest_first_taken_dropped_and_cascade()
     store.delete_watcher(&w2.id).await.unwrap();
     assert!(store.held_events(&w2.id).await.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn a_bad_stored_hours_value_reads_as_none_and_hides_no_watcher() {
+    let (dir, store) = temp_store().await;
+    let dot = store
+        .create_dot(&spec("bad"), None, "default")
+        .await
+        .unwrap();
+    let good = store
+        .add_watcher(&dot.id, "Good", &email(), Some(&hours()))
+        .await
+        .unwrap();
+    tick().await;
+    let bad = store
+        .add_watcher(&dot.id, "Bad", &folder("C:/in"), Some(&hours()))
+        .await
+        .unwrap();
+    let raw = sqlx::sqlite::SqlitePool::connect_with(
+        sqlx::sqlite::SqliteConnectOptions::new().filename(dir.path().join("dots.db")),
+    )
+    .await
+    .unwrap();
+    sqlx::query("UPDATE watchers SET hours = 'garbage' WHERE id = ?")
+        .bind(&bad.id)
+        .execute(&raw)
+        .await
+        .unwrap();
+    raw.close().await;
+    let listed = store.list_watchers(&dot.id).await.unwrap();
+    assert_eq!(listed.len(), 2);
+    assert_eq!(listed[0].hours, Some(hours()));
+    assert_eq!(
+        (listed[1].id.as_str(), &listed[1].hours),
+        (bad.id.as_str(), &None)
+    );
+    assert_eq!(store.all_watchers().await.unwrap().len(), 2);
+    assert_eq!(
+        store.get_watcher(&good.id).await.unwrap().hours,
+        Some(hours())
+    );
+}

@@ -17,16 +17,31 @@ const COLUMNS: &str = "id, dot_id, name, config, hours, enabled, paused_reason, 
                        (SELECT COUNT(*) FROM watcher_held h WHERE h.watcher_id = watchers.id) \
                        AS held_count";
 
+/// A stored `hours` that no longer parses reads as any time, so one bad row does not hide
+/// every watcher.
+fn stored_hours(raw: Option<&str>, id: &str) -> Option<WatchHours> {
+    let raw = raw?;
+    match serde_json::from_str(raw) {
+        Ok(hours) => Some(hours),
+        Err(e) => {
+            let prefix: String = raw.chars().take(40).collect();
+            tracing::warn!(watcher = id, value = %prefix, "unreadable watch hours, reading as any time: {e}");
+            None
+        }
+    }
+}
+
 fn watcher_from_row(row: &SqliteRow) -> Result<Watcher> {
     let config: String = row.try_get("config")?;
     let paused: Option<String> = row.try_get("paused_reason")?;
     let hours: Option<String> = row.try_get("hours")?;
+    let id: String = row.try_get("id")?;
     Ok(Watcher {
-        id: row.try_get("id")?,
+        id: id.clone(),
         dot_id: row.try_get("dot_id")?,
         name: row.try_get("name")?,
         config: serde_json::from_str(&config)?,
-        hours: hours.as_deref().map(serde_json::from_str).transpose()?,
+        hours: stored_hours(hours.as_deref(), &id),
         enabled: row.try_get::<i64, _>("enabled")? != 0,
         paused_reason: paused.as_deref().map(PausedReason::parse).transpose()?,
         last_error: row.try_get("last_error")?,
