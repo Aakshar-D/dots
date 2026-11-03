@@ -56,6 +56,8 @@ pub const TOOLS: &[(&str, &str)] = &[
     ("propose_app", "ProposeApp"),
     ("copy_app", "ProposeApp"),
     ("start_workflow", "Workflow"),
+    ("report_outcome", "Workflow"),
+    ("send_back", "Workflow"),
     ("propose_instructions", "Instructions"),
 ];
 
@@ -94,18 +96,22 @@ pub fn alias(name: &str) -> Option<&'static str> {
 }
 
 /// The local tool behind a policy alias (`Bash` is `shell`): what an approval's `tool` names.
-/// The memory tools share `Memory`, and `propose_app` and `copy_app` share `ProposeApp`:
-/// `local_name_for` tells them apart by the call's input.
+/// The memory tools share `Memory`, `propose_app` and `copy_app` share `ProposeApp`, and the
+/// workflow tools share `Workflow`: `local_name_for` tells them apart by the call's input.
 pub fn local_name(alias: &str) -> Option<&'static str> {
     TOOLS.iter().find(|(_, a)| *a == alias).map(|(n, _)| *n)
 }
 
 /// The local tool of an approval's call: `local_name`, or for `Memory` the memory tool whose
-/// argument the input holds (`memory::Tool::for_input`), or for `ProposeApp` `copy_app` when
-/// the input names an app.
+/// argument the input holds (`memory::Tool::for_input`), for `Workflow` likewise the workflow
+/// tool (`team_tools::Tool::for_input`), or for `ProposeApp` `copy_app` when the input names
+/// an app.
 pub fn local_name_for(alias: &str, input: &Value) -> Option<&'static str> {
     if alias == crate::memory::POLICY_NAME {
         return Some(crate::memory::Tool::for_input(input).name());
+    }
+    if alias == crate::team_tools::POLICY_NAME {
+        return Some(crate::team_tools::Tool::for_input(input).name());
     }
     if alias == crate::apps::PROPOSE_POLICY && input.get("app").is_some() {
         return Some(crate::apps::propose::COPY_TOOL);
@@ -200,6 +206,8 @@ const ARGS: &[(&str, Params)] = &[
             ("task", Str, true),
         ],
     ),
+    ("report_outcome", &[("outcome", Str, true)]),
+    ("send_back", &[("to_step", Str, true), ("note", Str, true)]),
     (
         "propose_instructions",
         &[("instructions", Str, true), ("reason", Str, true)],

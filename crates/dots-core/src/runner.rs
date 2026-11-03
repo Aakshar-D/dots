@@ -1262,6 +1262,19 @@ impl Runner {
         } else {
             tools
         };
+        // A run of an open agent step has the step's workflow tools, under the same rule. A step
+        // that cannot be read is logged; the run goes on without them.
+        let tools = if workflow_off {
+            tools
+        } else {
+            match crate::team_tools::for_run(&self.store, run).await {
+                Ok(step) => tools.with_step(step),
+                Err(e) => {
+                    tracing::warn!(run = %run.id, "reading the step's workflow tools failed: {e}");
+                    tools
+                }
+            }
+        };
         // A run of a chat the person started may propose new instructions for its dot
         // (conversational chat spec section 4), unless its policy denies `Instructions`
         // outright: the tool is then neither offered nor named.

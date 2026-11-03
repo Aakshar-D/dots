@@ -120,10 +120,14 @@ pub async fn handle(State(s): State<ServerState>, headers: HeaderMap, body: Byte
             if let Some(apps) = run_apps(&s, &run_id) {
                 tools.extend(apps.mcp_schemas());
             }
-            // A chat run of a member that may start a workflow (teams spec section 7).
-            if has_startable(&s, &run_id) {
-                tools.push(TeamTool::StartWorkflow.mcp_schema());
-            }
+            // The workflow tools the run has (teams spec section 7): `start_workflow` for a chat
+            // run of a member that may start a workflow, a step's tools for a run of its step.
+            tools.extend(
+                TeamTool::ALL
+                    .into_iter()
+                    .filter(|t| offers(&s, &run_id, *t))
+                    .map(TeamTool::mcp_schema),
+            );
             // A run of a chat the person started (conversational chat spec section 4).
             if has_instructions(&s, &run_id) {
                 tools.push(crate::instructions::mcp_schema());
@@ -139,7 +143,8 @@ pub async fn handle(State(s): State<ServerState>, headers: HeaderMap, body: Byte
                 (Some(crate::instructions::TOOL), _) => call_instructions(&s, &run_id, &req).await,
                 (_, Some(tool)) => call_check_in(&s, &run_id, &req, tool).await,
                 (Some(n), None) if TeamTool::from_name(n).is_some() => {
-                    call_workflow(&s, &run_id, &req).await
+                    let tool = TeamTool::from_name(n).expect("a workflow tool");
+                    call_workflow(&s, &run_id, &req, tool).await
                 }
                 (Some(n), None) if MemoryTool::from_name(n).is_some() => {
                     let tool = MemoryTool::from_name(n).expect("a memory tool");
@@ -214,22 +219,28 @@ async fn call_instructions(
     )
 }
 
-/// The run may start a team workflow, so `start_workflow` is one of its tools.
-fn has_startable(s: &ServerState, run_id: &str) -> bool {
+/// The run has the workflow tool `tool` (`RunTools::offers`).
+fn offers(s: &ServerState, run_id: &str, tool: TeamTool) -> bool {
     s.runner
         .run_tools(run_id)
-        .is_some_and(|tools| !tools.startable().is_empty())
+        .is_some_and(|tools| tools.offers(tool))
 }
 
-/// Checks a `start_workflow` call against the dot's policy under `Workflow`, waiting for an
-/// approval when a rule asks, and starts the workflow (teams spec section 7). A call that is not
-/// performed is a tool result with `isError`, as for the check-in tools.
-async fn call_workflow(s: &ServerState, run_id: &str, req: &Value) -> Result<Value, (i64, String)> {
+/// Checks a call of the workflow tool `tool` against the dot's policy under `Workflow`, waiting
+/// for an approval when a rule asks, and has `Workflows` perform it (teams spec section 7). A
+/// call that is not performed is a tool result with `isError`, as for the check-in tools; a
+/// tool the run does not have is unknown.
+async fn call_workflow(
+    s: &ServerState,
+    run_id: &str,
+    req: &Value,
+    tool: TeamTool,
+) -> Result<Value, (i64, String)> {
     let (Some(checkins), Some(tools)) = (
         s.runner.checkins(),
         s.runner
             .run_tools(run_id)
-            .filter(|tools| !tools.startable().is_empty()),
+            .filter(|tools| tools.offers(tool)),
     ) else {
         return Err((-32602, "unknown tool".to_string()));
     };
@@ -245,7 +256,7 @@ async fn call_workflow(s: &ServerState, run_id: &str, req: &Value) -> Result<Val
         Some(_) => return Err((-32602, "params.arguments must be an object".to_string())),
     };
     // Only the tool's own arguments, as the local engine's `prepare` keeps.
-    let own = TeamTool::StartWorkflow.properties();
+    let own = tool.properties();
     if let (Value::Object(args), Value::Object(own)) = (&mut input, &own) {
         args.retain(|key, _| own.contains_key(key));
     }
@@ -254,15 +265,23 @@ async fn call_workflow(s: &ServerState, run_id: &str, req: &Value) -> Result<Val
         Ok(PermissionOutcome::Deny { message }) => return Ok(not_performed(&message)),
         Err(e) => return Ok(not_performed(&format!("permission check failed: {e}"))),
     };
-    Ok(
-        match workflows
-            .call_start(run_id, tools.startable(), &input)
-            .await
-        {
-            Ok(text) => json!({ "content": [{ "type": "text", "text": text }] }),
-            Err(text) => not_performed(&text),
-        },
-    )
+    let done = match (tool, tools.step()) {
+        (TeamTool::StartWorkflow, _) => {
+            workflows
+                .call_start(run_id, tools.startable(), &input)
+                .await
+        }
+        (TeamTool::ReportOutcome, Some(step)) => {
+            workflows.call_report_outcome(run_id, step, &input).await
+        }
+        (TeamTool::SendBack, Some(step)) => workflows.call_send_back(run_id, step, &input).await,
+        // `offers` gives no other tool yet.
+        _ => return Err((-32602, "unknown tool".to_string())),
+    };
+    Ok(match done {
+        Ok(text) => json!({ "content": [{ "type": "text", "text": text }] }),
+        Err(text) => not_performed(&text),
+    })
 }
 
 /// The run has context collections open, so `context` is one of its tools.

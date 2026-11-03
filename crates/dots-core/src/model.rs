@@ -1080,6 +1080,9 @@ pub struct StepRun {
     /// What the run page says about this attempt beyond its status, such as a send-back that
     /// had to start fresh.
     pub notice: Option<String>,
+    /// The send-back an agent step asked for (`send_back`), the last call's:
+    /// `{"to": <step id>, "note": ...}`, performed when the step succeeds.
+    pub send_back: Option<Value>,
     pub started_at: String,
     pub ended_at: Option<String>,
 }

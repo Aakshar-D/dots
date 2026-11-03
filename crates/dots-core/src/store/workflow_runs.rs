@@ -17,7 +17,7 @@ const WR_COLUMNS: &str = "id, workflow_id, team_id, definition, project_id, proj
     trigger_kind, origin_run_id, test, status, waiting_on, current_step, budget, send_backs, \
     active_ms, error, started_at, ended_at";
 const STEP_COLUMNS: &str = "id, workflow_run_id, step_id, attempt, status, handoff, decision, \
-    error, outcome, notice, started_at, ended_at";
+    error, outcome, notice, send_back, started_at, ended_at";
 
 fn step_from_row(row: &SqliteRow) -> Result<StepRun> {
     Ok(StepRun {
@@ -33,6 +33,7 @@ fn step_from_row(row: &SqliteRow) -> Result<StepRun> {
         error: row.try_get("error")?,
         outcome: row.try_get("outcome")?,
         notice: row.try_get("notice")?,
+        send_back: opt_json(row.try_get("send_back")?)?,
         started_at: row.try_get("started_at")?,
         ended_at: row.try_get("ended_at")?,
     })
@@ -391,6 +392,24 @@ impl Store {
     ) -> Result<StepRun> {
         let done = sqlx::query("UPDATE workflow_step_runs SET outcome = ? WHERE id = ?")
             .bind(outcome)
+            .bind(step_run_id)
+            .execute(&self.pool)
+            .await?;
+        if done.rows_affected() == 0 {
+            return Err(Error::NotFound(format!("step run {step_run_id}")));
+        }
+        self.get_step_run(step_run_id).await
+    }
+
+    /// Records the send-back an agent step asked for (`{"to": <step id>, "note": ...}`), or
+    /// clears it, unchecked: the tool checks it. `Error::NotFound` for an unknown step run.
+    pub async fn set_step_send_back(
+        &self,
+        step_run_id: &str,
+        send_back: Option<&Value>,
+    ) -> Result<StepRun> {
+        let done = sqlx::query("UPDATE workflow_step_runs SET send_back = ? WHERE id = ?")
+            .bind(send_back.map(Value::to_string))
             .bind(step_run_id)
             .execute(&self.pool)
             .await?;

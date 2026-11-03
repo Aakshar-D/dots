@@ -1,11 +1,14 @@
 //! The workflow tools (teams and workflows spec section 7), on both engines as the check-in
 //! tools are: built in on the local engine, tools of Dots' own `dots` MCP server on the Claude
 //! engine. All of them go under the one policy name `Workflow`. This module holds their names,
-//! descriptions and arguments; `Workflows` performs a call.
+//! descriptions and arguments, and which of them a run has; `Workflows` performs a call.
 
 use serde_json::{json, Value};
 
-use crate::model::{EngineKind, StartableWorkflow};
+use crate::model::{EngineKind, Run, StartableWorkflow, StepRunStatus};
+use crate::store::Store;
+use crate::workflow::{Definition, Step, StepKind};
+use crate::Result;
 
 /// The policy name of every workflow tool.
 pub const POLICY_NAME: &str = "Workflow";
@@ -15,18 +18,46 @@ const START_DESCRIPTION: &str = "Start one of the team workflows listed under \"
     name and the task: what the person wants, written so the team can act on it without asking \
     again. Tell the person it started; its progress shows in this chat.";
 
+const START_MEMBER_DESCRIPTION: &str = "Start another member of the team on part of this \
+    step's work: one of the members listed under \"Workflow\" as those you may start. Give the \
+    member's name and the task: what they should do, written so they can act on it without \
+    asking again. They work on their own; you are told when they finish.";
+
+const REPORT_DESCRIPTION: &str = "Report how this step of the workflow came out: one of the \
+    outcomes listed under \"Workflow\". The workflow goes on by the outcome you report; if you \
+    report again, the last one counts. Report it before you end with your summary.";
+
+const SEND_BACK_DESCRIPTION: &str = "Send the work back to an earlier step of the workflow, \
+    one of those listed under \"Workflow\", when it must be redone there. Give the step's name \
+    and a note that says what to change. Then end your turn: the work goes back when you \
+    finish. If you send back again, the last one counts.";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Tool {
     StartWorkflow,
+    /// A delegate step's run starts a member (section 5.3).
+    StartMember,
+    /// An agent step's run reports its outcome, for a branch on outcome after it.
+    ReportOutcome,
+    /// An agent step's run asks for its work to go back to an earlier step (section 5.4).
+    SendBack,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 1] = [Tool::StartWorkflow];
+    pub const ALL: [Tool; 4] = [
+        Tool::StartWorkflow,
+        Tool::StartMember,
+        Tool::ReportOutcome,
+        Tool::SendBack,
+    ];
 
     /// The name a model calls the tool by on the local engine, and the `dots` server's tool.
     pub fn name(self) -> &'static str {
         match self {
             Tool::StartWorkflow => "start_workflow",
+            Tool::StartMember => "start_member",
+            Tool::ReportOutcome => "report_outcome",
+            Tool::SendBack => "send_back",
         }
     }
 
@@ -34,15 +65,27 @@ impl Tool {
         Tool::ALL.into_iter().find(|t| t.name() == name)
     }
 
-    /// The tool a `Workflow` call with `input` is for, by its arguments.
-    pub fn for_input(_input: &Value) -> Tool {
-        Tool::StartWorkflow
+    /// The tool a `Workflow` call with `input` is for, by its arguments: each of the others has
+    /// one that `start_workflow` lacks.
+    pub fn for_input(input: &Value) -> Tool {
+        if input.get("outcome").is_some() {
+            Tool::ReportOutcome
+        } else if input.get("to_step").is_some() {
+            Tool::SendBack
+        } else if input.get("member").is_some() {
+            Tool::StartMember
+        } else {
+            Tool::StartWorkflow
+        }
     }
 
     /// The name the run's model knows the tool by.
     pub fn model_name(self, engine: EngineKind) -> &'static str {
         match (engine, self) {
             (EngineKind::Claude, Tool::StartWorkflow) => "mcp__dots__start_workflow",
+            (EngineKind::Claude, Tool::StartMember) => "mcp__dots__start_member",
+            (EngineKind::Claude, Tool::ReportOutcome) => "mcp__dots__report_outcome",
+            (EngineKind::Claude, Tool::SendBack) => "mcp__dots__send_back",
             (EngineKind::Local, tool) => tool.name(),
         }
     }
@@ -50,6 +93,9 @@ impl Tool {
     pub fn description(self) -> &'static str {
         match self {
             Tool::StartWorkflow => START_DESCRIPTION,
+            Tool::StartMember => START_MEMBER_DESCRIPTION,
+            Tool::ReportOutcome => REPORT_DESCRIPTION,
+            Tool::SendBack => SEND_BACK_DESCRIPTION,
         }
     }
 
@@ -62,12 +108,26 @@ impl Tool {
                 "project": s("The project's name, as listed for that workflow"),
                 "task": s("The task, up to 8,000 characters")
             }),
+            Tool::StartMember => json!({
+                "member": s("The member's name, as listed"),
+                "task": s("The task, up to 8,000 characters")
+            }),
+            Tool::ReportOutcome => json!({
+                "outcome": s("The outcome, as listed")
+            }),
+            Tool::SendBack => json!({
+                "to_step": s("The name of the step to send the work back to, as listed"),
+                "note": s("What to change, up to 8,000 characters")
+            }),
         }
     }
 
     pub fn required(self) -> &'static [&'static str] {
         match self {
             Tool::StartWorkflow => &["workflow", "project", "task"],
+            Tool::StartMember => &["member", "task"],
+            Tool::ReportOutcome => &["outcome"],
+            Tool::SendBack => &["to_step", "note"],
         }
     }
 
@@ -109,4 +169,116 @@ pub fn prompt_section(startable: &[StartableWorkflow], engine: EngineKind) -> St
         Tool::StartWorkflow.model_name(engine)
     ));
     out
+}
+
+/// An earlier step a step may send its work back to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SendBackTarget {
+    pub step_id: String,
+    pub name: String,
+}
+
+/// The workflow tools of a run that works for an open agent step (section 7): what the step
+/// declares, read from the workflow run's definition when the run starts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StepTools {
+    pub step_run_id: String,
+    pub step_id: String,
+    /// The outcome labels it may report, trimmed, in the definition's order.
+    pub outcomes: Vec<String>,
+    /// The steps it may send its work back to, in the definition's order.
+    pub send_back_to: Vec<SendBackTarget>,
+}
+
+impl StepTools {
+    /// The tools of the step run `step_run_id` of `step`, an agent step of `definition`; `None`
+    /// for a step of another kind.
+    pub fn of(step_run_id: &str, step: &Step, definition: &Definition) -> Option<StepTools> {
+        let StepKind::Agent {
+            can_send_back_to,
+            outcomes,
+            ..
+        } = &step.kind
+        else {
+            return None;
+        };
+        Some(StepTools {
+            step_run_id: step_run_id.to_string(),
+            step_id: step.id.clone(),
+            outcomes: outcomes.iter().map(|o| o.trim().to_string()).collect(),
+            // Validation keeps only earlier agent steps here; a definition that names a step it
+            // no longer has gives that step no target.
+            send_back_to: can_send_back_to
+                .iter()
+                .filter_map(|id| definition.step(id))
+                .map(|s| SendBackTarget {
+                    step_id: s.id.clone(),
+                    name: s.name.clone(),
+                })
+                .collect(),
+        })
+    }
+
+    /// Whether the run has `tool`: `report_outcome` with outcomes to report, `send_back` with
+    /// steps to send back to. `start_member` is not offered yet, nor is `start_workflow`, which
+    /// is a chat's tool.
+    pub fn offers(&self, tool: Tool) -> bool {
+        match tool {
+            Tool::ReportOutcome => !self.outcomes.is_empty(),
+            Tool::SendBack => !self.send_back_to.is_empty(),
+            Tool::StartWorkflow | Tool::StartMember => false,
+        }
+    }
+
+    /// The lines of the `## Workflow` section that name the run's tools as its model knows
+    /// them, with the outcomes and the steps it may send back to; empty without any.
+    pub fn prompt_lines(&self, engine: EngineKind) -> String {
+        let mut out = String::new();
+        if self.offers(Tool::ReportOutcome) {
+            out.push_str(&format!(
+                "- Report how the step came out with `{}`, one of: {}. The workflow goes on by \
+                 the outcome you report.\n",
+                Tool::ReportOutcome.model_name(engine),
+                quoted(self.outcomes.iter().map(String::as_str))
+            ));
+        }
+        if self.offers(Tool::SendBack) {
+            out.push_str(&format!(
+                "- If the work must be redone in an earlier step, send it back with `{}` to one \
+                 of: {}, with a note that says what to change.\n",
+                Tool::SendBack.model_name(engine),
+                quoted(self.send_back_to.iter().map(|t| t.name.as_str()))
+            ));
+        }
+        out
+    }
+}
+
+/// `names` in double quotes, separated by commas: `"a", "b"`.
+pub fn quoted<'a>(names: impl Iterator<Item = &'a str>) -> String {
+    names
+        .map(|n| format!("\"{n}\""))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The workflow tools of `run`: those of the agent step it works for while that step is open
+/// (its step run `running` or `waiting`). A run in a member's thread gets none (task 5's rule:
+/// a run whose `root_run_id` has a `workflow_step_members` row); nor does any other run.
+pub async fn for_run(store: &Store, run: &Run) -> Result<Option<StepTools>> {
+    let Some(step_run_id) = &run.workflow_step_run_id else {
+        return Ok(None);
+    };
+    let step_run = store.get_step_run(step_run_id).await?;
+    if !matches!(
+        step_run.status,
+        StepRunStatus::Running | StepRunStatus::Waiting
+    ) {
+        return Ok(None);
+    }
+    let wr = store.get_workflow_run(&step_run.workflow_run_id).await?;
+    Ok(wr
+        .definition
+        .step(&step_run.step_id)
+        .and_then(|step| StepTools::of(&step_run.id, step, &wr.definition)))
 }

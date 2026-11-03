@@ -293,6 +293,46 @@ async fn step_runs_record_their_outcome_and_notice() {
 }
 
 #[tokio::test]
+async fn a_step_run_records_the_send_back_it_asked_for() {
+    let f = fixture().await;
+    let wr = f.store.create_workflow_run(&f.new).await.unwrap();
+    let step = f
+        .store
+        .create_step_run(&wr.id, "a", 1, StepRunStatus::Running)
+        .await
+        .unwrap();
+    assert_eq!(step.send_back, None);
+    let asked = json!({"to": "a", "note": "Use the light icon."});
+    let recorded = f
+        .store
+        .set_step_send_back(&step.id, Some(&asked))
+        .await
+        .unwrap();
+    assert_eq!(recorded.send_back, Some(asked.clone()));
+    // The workflow run reads it with its steps, and a change that does not name it keeps it.
+    let done = f
+        .store
+        .set_step_run(
+            &step.id,
+            &StepRunChange {
+                status: Some(StepRunStatus::Succeeded),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(done.send_back, Some(asked.clone()));
+    let read = f.store.get_workflow_run(&wr.id).await.unwrap();
+    assert_eq!(read.steps[0].send_back, Some(asked));
+    let cleared = f.store.set_step_send_back(&step.id, None).await.unwrap();
+    assert_eq!(cleared.send_back, None);
+    assert!(matches!(
+        f.store.set_step_send_back("nope", None).await,
+        Err(Error::NotFound(_))
+    ));
+}
+
+#[tokio::test]
 async fn a_continuing_run_keeps_its_parents_step_and_spend_is_summed() {
     let f = fixture().await;
     let wr = f.store.create_workflow_run(&f.new).await.unwrap();

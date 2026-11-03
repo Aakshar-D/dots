@@ -18,6 +18,7 @@ use dots_core::model::{
 use dots_core::runner::{Runner, RunnerConfig};
 use dots_core::scheduler::{Clock, SystemClock};
 use dots_core::store::Store;
+use dots_core::team_tools::{SendBackTarget, StepTools, Tool};
 use dots_core::workflow::{
     BranchOn, BranchPath, Budget, Definition, DeployMode, Step, StepKind, Trigger,
 };
@@ -58,11 +59,12 @@ enum Act {
 }
 
 /// Plays each dot's acts in order, one per run (the last one again once they run out), and
-/// keeps each run's prompt.
+/// keeps each run's prompt and workflow tools.
 struct Team {
     store: Store,
     acts: Mutex<HashMap<String, VecDeque<Act>>>,
     prompts: Mutex<Vec<(String, String)>>,
+    step_tools: Mutex<Vec<(String, Option<StepTools>)>>,
     gate: Arc<tokio::sync::Notify>,
 }
 
@@ -93,6 +95,16 @@ impl Team {
             .map(|(_, p)| p.clone())
             .collect()
     }
+
+    fn step_tools_of(&self, dot: &str) -> Vec<Option<StepTools>> {
+        self.step_tools
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(d, _)| d == dot)
+            .map(|(_, t)| t.clone())
+            .collect()
+    }
 }
 
 #[async_trait::async_trait]
@@ -103,6 +115,10 @@ impl Engine for Team {
             .lock()
             .unwrap()
             .push((name.clone(), ctx.prompt.clone()));
+        self.step_tools
+            .lock()
+            .unwrap()
+            .push((name.clone(), ctx.tools.step().cloned()));
         let act = self.act(&name);
         let store = self.store.clone();
         let gate = self.gate.clone();
@@ -220,6 +236,7 @@ async fn world_with(clock: Arc<dyn Clock>, budget: Budget) -> World {
         store: store.clone(),
         acts: Mutex::new(HashMap::new()),
         prompts: Mutex::new(Vec::new()),
+        step_tools: Mutex::new(Vec::new()),
         gate: Arc::new(tokio::sync::Notify::new()),
     });
     let mut engines: HashMap<EngineKind, Arc<dyn Engine>> = HashMap::new();
@@ -1885,4 +1902,55 @@ async fn a_lost_hand_off_is_built_again_by_a_later_pass() {
     );
     // One attempt of each step: the step run lost its job, not its place.
     assert!(wr.steps.iter().all(|s| s.attempt == 1));
+}
+
+#[tokio::test]
+async fn a_step_s_runs_get_its_workflow_tools_and_its_prompt_names_them() {
+    let w = world().await;
+    let mut review = reporting("review", "Review it", &w.dev, &["fixed", "needs_info"]);
+    if let StepKind::Agent {
+        can_send_back_to, ..
+    } = &mut review.kind
+    {
+        *can_send_back_to = vec!["write".into()];
+    }
+    let flow = w
+        .workflow(
+            "Review",
+            vec![
+                agent("write", "Write the task", &w.helper, "Write it."),
+                review,
+            ],
+        )
+        .await;
+    let wr = w.start(&flow).await;
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    // A step that declares neither outcomes nor send-backs offers no tool, and its prompt names
+    // none.
+    let write = w.engine.step_tools_of("helper").remove(0).unwrap();
+    assert_eq!(write.step_run_id, wr.steps[0].id);
+    assert!(Tool::ALL.iter().all(|t| !write.offers(*t)));
+    assert!(!w.engine.prompts_of("helper")[0].contains("### Workflow tools"));
+    // The review step's run gets its step run, its outcomes and its targets by name.
+    assert_eq!(
+        w.engine.step_tools_of("dev"),
+        [Some(StepTools {
+            step_run_id: wr.steps[1].id.clone(),
+            step_id: "review".into(),
+            outcomes: vec!["fixed".into(), "needs_info".into()],
+            send_back_to: vec![SendBackTarget {
+                step_id: "write".into(),
+                name: "Write the task".into(),
+            }],
+        })]
+    );
+    let prompt = &w.engine.prompts_of("dev")[0];
+    assert!(
+        prompt.contains(
+            "### Workflow tools\n\n- Report how the step came out with `mcp__dots__report_outcome`, one of: \"fixed\", \"needs_info\". The workflow goes on by the outcome you report.\n- If the work must be redone in an earlier step, send it back with `mcp__dots__send_back` to one of: \"Write the task\", with a note that says what to change.\n\nWhen you are done, end with a summary"
+        ),
+        "{prompt}"
+    );
 }

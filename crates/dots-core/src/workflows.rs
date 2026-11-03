@@ -9,6 +9,9 @@
 //! lock (`jobs`).
 
 mod jobs;
+mod tools;
+
+pub use tools::STEP_CLOSED;
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -32,6 +35,7 @@ use crate::model::{
 use crate::runner::Runner;
 use crate::scheduler::Clock;
 use crate::store::Store;
+use crate::team_tools::StepTools;
 use crate::util::timestamp;
 use crate::vault::org::Orgs;
 use crate::workflow::{BranchOn, BranchPath, Budget, Step, StepKind};
@@ -1075,7 +1079,7 @@ impl Workflows {
                 step.id
             )));
         };
-        let section = self.section(wr, step).await?;
+        let section = self.section(wr, step, step_run).await?;
         let mut new = NewRun::new(member, TriggerKind::Workflow);
         new.workflow_step_run_id = Some(step_run.id.clone());
         new.payload = Some(json!({
@@ -1090,8 +1094,10 @@ impl Workflows {
     }
 
     /// The `## Workflow` section of the prompt of `step` (section 5.2). Its place counts every
-    /// step of the tree in run order, branches and the paths not taken included.
-    async fn section(&self, wr: &WorkflowRun, step: &Step) -> Result<String> {
+    /// step of the tree in run order, branches and the paths not taken included. It names the
+    /// workflow tools the step's runs have (section 7), as the member's model knows them, unless
+    /// its policy denies `Workflow` outright (the runner then offers none).
+    async fn section(&self, wr: &WorkflowRun, step: &Step, step_run: &StepRun) -> Result<String> {
         let StepKind::Agent { member, job, .. } = &step.kind else {
             return Ok(String::new());
         };
@@ -1146,6 +1152,21 @@ impl Workflows {
                     out.push_str(&format!("Branches: {}\n\n", names.join(", ")));
                 }
             }
+        }
+        let dot = self.store.get_dot(member).await.ok().filter(|dot| {
+            dot.spec
+                .policy
+                .resolve(crate::policy::WORKFLOW_TOOL, &serde_json::Value::Null)
+                != crate::policy::Action::Deny
+        });
+        let tools = match (dot, StepTools::of(&step_run.id, step, &wr.definition)) {
+            (Some(dot), Some(tools)) => tools.prompt_lines(dot.spec.engine),
+            _ => String::new(),
+        };
+        if !tools.is_empty() {
+            out.push_str("### Workflow tools\n\n");
+            out.push_str(&tools);
+            out.push('\n');
         }
         out.push_str(
             "When you are done, end with a summary of what you did: the next step gets it.\n",

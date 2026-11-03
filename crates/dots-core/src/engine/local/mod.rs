@@ -447,19 +447,20 @@ impl Session {
                 None => ToolOutput::err(format!("{} is not available in this run", call.name)),
             };
         }
-        if crate::team_tools::Tool::from_name(call.name).is_some() {
+        if let Some(tool) = crate::team_tools::Tool::from_name(call.name) {
             let workflows = self.checkins.as_ref().and_then(CheckIns::workflows);
             return match workflows {
-                Some(workflows) if !self.ctx.tools.startable().is_empty() => {
+                Some(workflows) => {
                     tools::team::run(
                         &workflows,
                         &self.ctx.run_id,
-                        self.ctx.tools.startable(),
+                        &self.ctx.tools,
+                        tool,
                         &call.input,
                     )
                     .await
                 }
-                _ => ToolOutput::err(format!("{} is not available in this run", call.name)),
+                None => ToolOutput::err(format!("{} is not available in this run", call.name)),
             };
         }
         if call.name == crate::instructions::TOOL {
