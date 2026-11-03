@@ -468,7 +468,7 @@ async fn a_secret_added_and_then_deleted_on_the_branch_is_refused() {
     assert_eq!(s.remote_tip("dots/fix"), None);
     assert!(s.gh_calls().is_empty(), "refused before gh runs");
 
-    // An explicit base is scanned from, in place of the merge-base; the remote's tracking refs still bound the scan.
+    // A given base does not narrow the scan: it covers whatever the push would send.
     branch.base = Some(base);
     let err = s
         .deploy("ok", &DeployMode::Push, &[branch])
@@ -526,19 +526,72 @@ async fn a_given_base_does_not_hide_unpushed_commits_below_it() {
 }
 
 #[tokio::test]
-async fn without_tracking_refs_the_scan_starts_from_the_given_base() {
+async fn a_forged_tracking_ref_does_not_hide_an_unpushed_commit() {
     let s = scratch();
-    git_out(&s.repo, &["update-ref", "-d", "refs/remotes/origin/main"]);
-    let with_secret = s.commit("dots/fix", &[("id_ed25519.pub", Some(b"ssh-ed25519\n"))]);
-    let tip = s.commit("dots/fix", &[("src/fix.rs", Some(b"fn fix() {}\n"))]);
-    let mut branch = approved("dots/fix", &tip);
+    let leaked = s.commit("dots/leak", &[(".env", Some(b"TOKEN=1\n"))]);
+    // A local claim that the remote has it; the bare remote does not.
+    git_out(&s.repo, &["update-ref", "refs/remotes/origin/x", &leaked]);
+    git_out(&s.repo, &["checkout", "-q", "-b", "dots/fix", "dots/leak"]);
+    std::fs::write(s.repo.join("fix.rs"), "fn fix() {}\n").unwrap();
+    git_out(&s.repo, &["add", "-A"]);
+    git_out(&s.repo, &["commit", "-q", "-m", "work"]);
+    let tip = git_out(&s.repo, &["rev-parse", "HEAD"]);
+    git_out(&s.repo, &["checkout", "-q", "main"]);
     let err = s
-        .deploy("ok", &DeployMode::Push, std::slice::from_ref(&branch))
+        .deploy("ok", &DeployMode::Push, &[approved("dots/fix", &tip)])
         .await
         .unwrap_err();
-    assert!(err.contains(": id_ed25519.pub. Remove"), "{err}");
-    // From the commit that added it, only `src/fix.rs` changed.
-    branch.base = Some(with_secret);
-    s.deploy("ok", &DeployMode::Push, &[branch]).await.unwrap();
+    assert!(err.contains(": .env. Remove"), "{err}");
+    assert_eq!(s.remote_tip("dots/fix"), None);
+}
+
+#[tokio::test]
+async fn a_merge_of_a_pushed_branch_holding_a_secret_is_not_refused() {
+    let s = scratch();
+    // `main` gains a key file after the branch point and is pushed; the branch merges it.
+    let first = s.commit("dots/fix", &[("src/fix.rs", Some(b"fn fix() {}\n"))]);
+    s.commit("main", &[("server.key", Some(b"key\n"))]);
+    git_out(&s.repo, &["push", "-q", "origin", "main"]);
+    git_out(&s.repo, &["checkout", "-q", "dots/fix"]);
+    git_out(&s.repo, &["merge", "-q", "--no-ff", "-m", "merge", "main"]);
+    let tip = git_out(&s.repo, &["rev-parse", "HEAD"]);
+    git_out(&s.repo, &["checkout", "-q", "main"]);
+    assert_ne!(first, tip);
+    s.deploy("ok", &DeployMode::Push, &[approved("dots/fix", &tip)])
+        .await
+        .unwrap();
     assert_eq!(s.remote_tip("dots/fix"), Some(tip));
+}
+
+#[tokio::test]
+async fn a_root_commit_is_scanned_whatever_the_log_config() {
+    let s = scratch();
+    git_out(&s.repo, &["config", "log.showRoot", "false"]);
+    git_out(&s.repo, &["checkout", "-q", "--orphan", "dots/root"]);
+    git_out(&s.repo, &["rm", "-rfq", "."]);
+    std::fs::write(s.repo.join(".env"), "TOKEN=1\n").unwrap();
+    git_out(&s.repo, &["add", "-A"]);
+    git_out(&s.repo, &["commit", "-q", "-m", "root"]);
+    let tip = git_out(&s.repo, &["rev-parse", "HEAD"]);
+    git_out(&s.repo, &["checkout", "-q", "main"]);
+    let err = s
+        .deploy("ok", &DeployMode::Push, &[approved("dots/root", &tip)])
+        .await
+        .unwrap_err();
+    assert!(err.contains(": .env. Remove"), "{err}");
+    assert_eq!(s.remote_tip("dots/root"), None);
+}
+
+#[tokio::test]
+async fn the_same_content_under_a_secrets_name_is_refused() {
+    let s = scratch();
+    let tip = s.commit(
+        "dots/fix",
+        &[("a.txt", Some(b"same\n")), ("config/.env", Some(b"same\n"))],
+    );
+    let err = s
+        .deploy("ok", &DeployMode::Push, &[approved("dots/fix", &tip)])
+        .await
+        .unwrap_err();
+    assert!(err.contains(".env. Remove"), "{err}");
 }

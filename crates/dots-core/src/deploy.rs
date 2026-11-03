@@ -80,8 +80,8 @@ impl Default for Deployer {
 pub struct ApprovedBranch {
     pub branch: String,
     pub commit: String,
-    /// The commit the branch's work started from, for the scan of the files it changed. `None`:
-    /// the merge-base of the branch with the project's default branch.
+    /// The commit the branch's work started from. The secret scan does not use it: it covers
+    /// whatever the push would send.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base: Option<String>,
 }
@@ -254,75 +254,58 @@ async fn check_tip(repo: &Path, b: &ApprovedBranch) -> Result<(), String> {
     Ok(())
 }
 
-/// The secret and size check of one branch: every file in every commit the push would send,
-/// even one deleted again by a later commit, as the history it pushes keeps it. Only what the
-/// remote already has is skipped: its tracking refs when it has any (a given `base` does not
-/// narrow that), else the commits up to the given `base`, else up to the merge-base with the
-/// project's default branch.
-async fn guard(repo: &Path, remote: &str, base: &str, b: &ApprovedBranch) -> Result<(), String> {
-    let mut args: Vec<String> = [
-        "log",
-        "-z",
-        "--raw",
-        "--no-renames",
-        "--diff-filter=d",
-        "--format=",
-        "--no-abbrev",
-        "--diff-merges=separate",
-        "--not",
-    ]
-    .map(String::from)
-    .to_vec();
-    let tracking = format!("refs/remotes/{remote}/");
-    let refs = [
-        "for-each-ref",
-        "--count=1",
-        "--format=%(refname)",
-        &tracking,
-    ];
-    let out = run("git for-each-ref", &mut git(repo, &refs), None).await?;
-    let has_tracking = !succeeded("git for-each-ref", &out)?.trim().is_empty();
-    match &b.base {
-        _ if has_tracking => args.push(format!("--remotes={remote}")),
-        Some(from) => args.push(from.clone()),
-        None => {
-            let default = crate::workspace::default_branch_ref(repo, base, remote).await;
-            let mb = ["merge-base", "--end-of-options", &default, &b.commit];
-            let out = run("git merge-base", &mut git(repo, &mb), None).await?;
-            args.push(succeeded("git merge-base", &out)?.trim().to_string());
+/// The secret and size check of one branch: every file among the objects its push would send,
+/// even one deleted again by a later commit, as the history it pushes keeps it. What is sent is
+/// measured against the object ids `git ls-remote` reports for the remote, not local refs.
+async fn guard(repo: &Path, remote: &str, _base: &str, b: &ApprovedBranch) -> Result<(), String> {
+    // What the server has: every id it lists, the tips and the tags it peels.
+    let args = ["ls-remote", "--end-of-options", remote];
+    let mut cmd = git(repo, &args);
+    cmd.env("GIT_TERMINAL_PROMPT", "0");
+    let out = run("git ls-remote", &mut cmd, None).await?;
+    let have: std::collections::BTreeSet<String> = succeeded("git ls-remote", &out)?
+        .lines()
+        .filter_map(|l| l.split_whitespace().next())
+        .filter(|id| is_object_id(id))
+        .map(str::to_string)
+        .collect();
+    // The objects reachable from the commit and not from anything the server has, on stdin so
+    // that a long list is no long command line. The commit was matched to a ref by `check_tip`.
+    let mut input = format!("{}\n", b.commit.trim());
+    if !have.is_empty() {
+        input.push_str("--not\n");
+        for id in &have {
+            input.push_str(id);
+            input.push('\n');
         }
     }
-    // The second `--not` turns the selection back on for the commit itself.
-    args.extend(["--not", "--end-of-options"].map(String::from));
-    args.push(b.commit.clone());
-    let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    let out = run("git log", &mut git(repo, &args), None).await?;
-    let raw = succeeded("git log", &out)?;
-    // Plumbing output, so no setting of the repository changes it; `d` leaves deleted files
-    // out, and with renames off a renamed file shows as added under its new name.
-    let mut files: std::collections::BTreeSet<(String, Option<String>)> = Default::default();
-    let mut fields = raw.split('\0').filter(|f| !f.is_empty());
-    while let Some(meta) = fields.next() {
-        let path = fields.next();
-        let (Some(rest), Some(path)) = (meta.strip_prefix(':'), path) else {
-            return Err("git log printed a record that could not be read.".to_string());
+    let args = ["rev-list", "--objects", "--ignore-missing", "--stdin"];
+    let out = run(
+        "git rev-list",
+        &mut git(repo, &args),
+        Some(input.into_bytes()),
+    )
+    .await?;
+    let mut listed: Vec<(String, Option<String>)> = Vec::new();
+    for line in succeeded("git rev-list", &out)?.lines() {
+        let (id, path) = match line.split_once(' ') {
+            Some((id, path)) => (id, Some(path.to_string())),
+            None => (line, None),
         };
-        // `:<old mode> <new mode> <old id> <new id> <status>`; a submodule (mode 160000) is a
-        // commit of another repository, not a file with a size.
-        let meta: Vec<&str> = rest.split(' ').collect();
-        let blob = match (meta.get(1), meta.get(3)) {
-            (Some(&mode), Some(&id)) if mode != "160000" => Some(id.to_string()),
-            (Some(_), Some(_)) => None,
-            _ => return Err("git log printed a record that could not be read.".to_string()),
-        };
-        files.insert((path.to_string(), blob));
+        if !is_object_id(id) {
+            return Err("git rev-list printed a line that could not be read.".to_string());
+        }
+        listed.push((id.to_string(), path));
     }
-    let ids: std::collections::BTreeSet<&str> =
-        files.iter().filter_map(|(_, id)| id.as_deref()).collect();
-    let mut sizes = std::collections::HashMap::new();
+    let ids: std::collections::BTreeSet<&str> = listed.iter().map(|(id, _)| id.as_str()).collect();
+    // The type and size of each object. A line that cannot be read leaves the object out.
+    let mut kinds: std::collections::HashMap<String, (String, u64)> = Default::default();
     if !ids.is_empty() {
         let input: String = ids.iter().map(|id| format!("{id}\n")).collect();
-        let args = ["cat-file", "--batch-check=%(objectname) %(objectsize)"];
+        let args = [
+            "cat-file",
+            "--batch-check=%(objectname) %(objecttype) %(objectsize)",
+        ];
         let out = run(
             "git cat-file",
             &mut git(repo, &args),
@@ -330,27 +313,64 @@ async fn guard(repo: &Path, remote: &str, base: &str, b: &ApprovedBranch) -> Res
         )
         .await?;
         for line in succeeded("git cat-file", &out)?.lines() {
-            if let Some((id, size)) = line.split_once(' ') {
+            let parts: Vec<&str> = line.split(' ').collect();
+            if let [id, kind, size] = parts[..] {
                 if let Ok(size) = size.trim().parse::<u64>() {
-                    sizes.insert(id.to_string(), size);
+                    kinds.insert(id.to_string(), (kind.to_string(), size));
                 }
             }
         }
     }
-    // A file whose size cannot be read is refused: the check fails closed.
-    let refused: std::collections::BTreeSet<String> = files
+    // A blob is listed once, under the first path it was found at: the names the sent trees
+    // give it are read as well, so the same content under a secret's name is still seen.
+    let blobs: std::collections::HashSet<&str> = kinds
         .iter()
-        .filter_map(|(path, id)| {
-            let size = id.as_ref().map(|id| sizes.get(id).copied());
-            if looks_secret(path) || size.flatten().is_some_and(|s| s > MAX_FILE_BYTES) {
-                Some(path.clone())
-            } else if size == Some(None) {
-                Some(format!("{path} (size unknown)"))
-            } else {
-                None
-            }
-        })
+        .filter(|(_, (kind, _))| kind == "blob")
+        .map(|(id, _)| id.as_str())
         .collect();
+    let trees: String = kinds
+        .iter()
+        .filter(|(_, (kind, _))| kind == "tree")
+        .map(|(id, _)| format!("{id}\n"))
+        .collect();
+    let mut names: Vec<String> = Vec::new();
+    if !trees.is_empty() {
+        let out = run(
+            "git cat-file",
+            &mut git(repo, &["cat-file", "--batch"]),
+            Some(trees.into_bytes()),
+        )
+        .await?;
+        if !out.status.success() {
+            succeeded("git cat-file", &out)?;
+        }
+        names = tree_names(&out.stdout, &blobs)
+            .ok_or_else(|| "git cat-file printed a tree that could not be read.".to_string())?;
+    }
+    let mut refused: std::collections::BTreeSet<String> = Default::default();
+    for (id, path) in &listed {
+        let Some(path) = path else { continue };
+        match kinds.get(id) {
+            Some((kind, size)) if kind == "blob" => {
+                if looks_secret(path) || *size > MAX_FILE_BYTES {
+                    refused.insert(path.clone());
+                }
+            }
+            // A tree or a commit has no size to check; a submodule is not listed at all.
+            Some(_) => {}
+            // Cannot be told what it is: refused, the check fails closed.
+            None => {
+                refused.insert(format!("{path} (size unknown)"));
+            }
+        }
+    }
+    // A name the sent trees give is shown only when no path above already ends with it.
+    for name in names.into_iter().filter(|n| looks_secret(n)) {
+        let covered = |p: &String| p == &name || p.ends_with(&format!("/{name}"));
+        if !refused.iter().any(covered) {
+            refused.insert(name);
+        }
+    }
     if refused.is_empty() {
         return Ok(());
     }
@@ -364,6 +384,46 @@ async fn guard(repo: &Path, remote: &str, base: &str, b: &ApprovedBranch) -> Res
          them from the branch, then retry the step.",
         b.branch
     ))
+}
+
+/// Whether `s` is a full object id (40 or 64 hex digits).
+fn is_object_id(s: &str) -> bool {
+    matches!(s.len(), 40 | 64) && s.bytes().all(|c| c.is_ascii_hexdigit())
+}
+
+/// The names of the entries in `batch`, the output of `git cat-file --batch` for trees, whose
+/// object is one of `blobs`. `None` when the output does not parse.
+fn tree_names(batch: &[u8], blobs: &std::collections::HashSet<&str>) -> Option<Vec<String>> {
+    let mut names = Vec::new();
+    let mut at = 0;
+    while at < batch.len() {
+        let eol = at + batch[at..].iter().position(|&c| c == b'\n')?;
+        let header = std::str::from_utf8(&batch[at..eol]).ok()?;
+        let parts: Vec<&str> = header.split(' ').collect();
+        let [id, kind, size] = parts[..] else {
+            return None;
+        };
+        if kind != "tree" {
+            return None;
+        }
+        let size: usize = size.parse().ok()?;
+        let body = batch.get(eol + 1..eol + 1 + size)?;
+        let hash_len = id.len() / 2;
+        let mut rest = body;
+        while !rest.is_empty() {
+            let space = rest.iter().position(|&c| c == b' ')?;
+            let nul = space + 1 + rest[space + 1..].iter().position(|&c| c == 0)?;
+            let name = String::from_utf8_lossy(&rest[space + 1..nul]).into_owned();
+            let hash = rest.get(nul + 1..nul + 1 + hash_len)?;
+            let hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();
+            if blobs.contains(hex.as_str()) {
+                names.push(name);
+            }
+            rest = &rest[nul + 1 + hash_len..];
+        }
+        at = eol + 1 + size + 1;
+    }
+    Some(names)
 }
 
 /// Whether the file name of `path` matches [`SECRET_NAMES`].
