@@ -114,10 +114,12 @@ pub const MEMORY_RULE: &str =
     "a Memory rule takes no argument: the rule Memory covers remember, forget and recall";
 
 /// The model's own bookkeeping tools (approval guards spec section 5): its to-do list, its plan
-/// mode, starting a sub-agent (whose own calls are checked one by one), finding tools and MCP
-/// resources, and reading or stopping its own background shells. Every preset and default
-/// allows them; only a deny rule stops them. `WebSearch` and `WebFetch` (which leave the
-/// machine) and `Workflow` (which starts real work) are not among them.
+/// mode, starting a sub-agent (whose own calls are checked one by one), finding tools, listing
+/// MCP resources, and reading or stopping its own background shells. Every preset and default
+/// allows them; only a deny or an ask rule the person wrote decides otherwise. `WebSearch` and
+/// `WebFetch` (which leave the machine), `Workflow` (which starts real work) and
+/// `ReadMcpResourceTool` (which can read a `file://` resource past the private-folder guard)
+/// are not among them.
 pub const PLUMBING_TOOLS: &[&str] = &[
     "TodoWrite",
     "Task",
@@ -126,7 +128,6 @@ pub const PLUMBING_TOOLS: &[&str] = &[
     "EnterPlanMode",
     "ToolSearch",
     "ListMcpResourcesTool",
-    "ReadMcpResourceTool",
     "BashOutput",
     "KillShell",
     "KillBash",
@@ -264,11 +265,10 @@ impl Policy {
     pub fn resolve_in(&self, tool: &str, input: &Value, workspace: Option<&Path>) -> Action {
         let ws = workspace_key(workspace);
         if PLUMBING_TOOLS.contains(&tool.trim()) {
-            return if self.rule_matches(Action::Deny, tool, input, ws.as_deref()) {
-                Action::Deny
-            } else {
-                Action::Allow
-            };
+            return [Action::Deny, Action::Ask]
+                .into_iter()
+                .find(|a| self.rule_matches(*a, tool, input, ws.as_deref()))
+                .unwrap_or(Action::Allow);
         }
         match self.resolve_rules(tool, input, ws.as_deref()) {
             Action::Allow if touches_private(tool, input, workspace) => Action::Ask,
@@ -322,6 +322,14 @@ impl Policy {
     pub fn denied_by_rule(&self, tool: &str, input: &Value, workspace: Option<&Path>) -> bool {
         let ws = workspace_key(workspace);
         self.rule_matches(Action::Deny, tool, input, ws.as_deref())
+    }
+
+    /// True when the plumbing tool `tool` is allowed without asking: no deny or ask rule of
+    /// this policy matches it (approval guards spec section 5). The Claude engine leaves the
+    /// others out of the CLI's allow list.
+    pub fn plumbing_allowed(&self, tool: &str) -> bool {
+        PLUMBING_TOOLS.contains(&tool.trim())
+            && self.resolve_in(tool, &Value::Null, None) == Action::Allow
     }
 
     /// True if a rule with this `action` matches the call. `ws` comes from `workspace_key`.

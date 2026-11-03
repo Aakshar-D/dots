@@ -64,11 +64,11 @@ Remove takes the rule out of the policy through the editor's existing change pat
 
 ## 5. Harmless tools approved automatically
 
-`PLUMBING_TOOLS` in core: `TodoWrite`, `Task`, `Agent`, `ExitPlanMode`, `EnterPlanMode`, `ToolSearch`, `ListMcpResourcesTool`, `ReadMcpResourceTool`, `BashOutput`, `KillShell`, `KillBash`.
+`PLUMBING_TOOLS` in core: `TodoWrite`, `Task`, `Agent`, `ExitPlanMode`, `EnterPlanMode`, `ToolSearch`, `ListMcpResourcesTool`, `BashOutput`, `KillShell`, `KillBash`.
 
-- `Policy::resolve_in` resolves them to **allow** under every preset and default, unless a deny rule matches the call (then deny). Ask rules and the default are not consulted for them.
-- `build_args` adds them to the CLI's `--allowedTools`, so the CLI never asks. A deny rule still reaches `--disallowedTools`, which the CLI puts first.
-- **Not** on the list: `WebSearch` and `WebFetch` (they send data off the machine) and `Workflow` (it starts real work). They keep their rules.
+- `Policy::resolve_in` resolves them to **allow** under every preset and default, unless a rule the person wrote decides otherwise: a deny rule (deny) or an ask rule (ask). The default is not consulted for them.
+- `build_args` adds them to the CLI's `--allowedTools`, so the CLI never asks, except one a deny or ask rule matches (read as `resolve_in` reads rules, so `Todo*` counts).
+- **Not** on the list: `WebSearch` and `WebFetch` (they send data off the machine), `Workflow` (it starts real work) and `ReadMcpResourceTool` (it can read a `file://` resource past the private-folder guard). They keep their rules.
 - `Task`/`Agent` start a sub-agent; its own tool calls are checked one by one as usual, so allowing the start allows nothing else.
 
 ## 6. Testing

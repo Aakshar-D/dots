@@ -166,7 +166,7 @@ fn argv_contains_required_flags_in_order() {
          mcp__dots__notify mcp__dots__ask mcp__dots__follow_up mcp__dots__remember \
          mcp__dots__forget mcp__dots__recall mcp__dots__propose_app mcp__dots__copy_app \
          TodoWrite Task Agent ExitPlanMode EnterPlanMode ToolSearch ListMcpResourcesTool \
-         ReadMcpResourceTool BashOutput KillShell KillBash \
+         BashOutput KillShell KillBash \
          --disallowedTools Write Edit NotebookEdit Bash PowerShell --settings "
         ),
         "{joined}"
@@ -184,7 +184,9 @@ fn argv_contains_required_flags_in_order() {
 fn argv_asks_for_private_folders_and_never_for_plumbing() {
     let mut c = ctx(None);
     c.dot.spec.policy = Policy::preset(Preset::Trusted);
-    c.dot.spec.policy.rules.push(Rule::new("TodoWrite", Action::Deny));
+    // A prefix deny and an ask rule keep their tools out of the allow list.
+    c.dot.spec.policy.rules.push(Rule::new("Todo*", Action::Deny));
+    c.dot.spec.policy.rules.push(Rule::new("Agent", Action::Ask));
     let args = build_args(&c, Path::new("m.json"));
     let allowed: Vec<&String> = args
         .iter()
@@ -192,11 +194,11 @@ fn argv_asks_for_private_folders_and_never_for_plumbing() {
         .skip(1)
         .take_while(|a| !a.starts_with("--"))
         .collect();
-    for tool in PLUMBING_TOOLS.iter().filter(|t| **t != "TodoWrite") {
+    for tool in PLUMBING_TOOLS.iter().filter(|t| !["TodoWrite", "Agent"].contains(*t)) {
         assert!(allowed.iter().any(|a| a == tool), "{tool} in {allowed:?}");
     }
-    // A denied plumbing tool is not also allowed.
-    assert!(!allowed.iter().any(|a| *a == "TodoWrite"));
+    // A denied or asked plumbing tool is not also allowed.
+    assert!(!allowed.iter().any(|a| *a == "TodoWrite" || *a == "Agent"));
     let i = args.iter().position(|a| a == "--settings").expect("--settings");
     let settings: serde_json::Value = serde_json::from_str(&args[i + 1]).unwrap();
     let ask: Vec<&str> = settings["permissions"]["ask"]

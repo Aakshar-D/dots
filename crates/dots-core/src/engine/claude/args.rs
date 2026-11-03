@@ -76,12 +76,13 @@ pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
     if ctx.tools.instructions() {
         allow.push(crate::instructions::model_name(EngineKind::Claude).to_string());
     }
-    // The model's plumbing tools never ask (approval guards spec section 5), unless a deny
-    // rule names one: that one stays in `--disallowedTools` alone.
+    // The model's plumbing tools never ask (approval guards spec section 5), unless a deny or
+    // an ask rule matches one, as `Policy::resolve_in` reads it: that one is left to the
+    // other lists and to the `approve` tool.
     allow.extend(
         PLUMBING_TOOLS
             .iter()
-            .filter(|t| !deny.iter().any(|d| d == *t))
+            .filter(|t| spec.policy.plumbing_allowed(t))
             .map(|t| t.to_string()),
     );
     if !allow.is_empty() {

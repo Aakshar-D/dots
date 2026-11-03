@@ -249,7 +249,6 @@ mod resolve {
             "EnterPlanMode",
             "ToolSearch",
             "ListMcpResourcesTool",
-            "ReadMcpResourceTool",
             "BashOutput",
             "KillShell",
             "KillBash",
@@ -264,11 +263,12 @@ mod resolve {
             }
             let mut p = Policy::preset(Preset::Sandboxed);
             p.rules.push(Rule::new(tool, Action::Ask));
-            assert_eq!(p.resolve(tool, &json!({})), Action::Allow, "{tool} with an ask rule");
+            assert_eq!(p.resolve(tool, &json!({})), Action::Ask, "{tool} with an ask rule");
             p.rules.push(Rule::new(tool, Action::Deny));
             assert_eq!(p.resolve(tool, &json!({})), Action::Deny, "{tool} with a deny rule");
         }
-        for tool in ["WebSearch", "WebFetch", "Workflow"] {
+        // Not plumbing: they leave the machine, start real work, or read a `file://` resource.
+        for tool in ["WebSearch", "WebFetch", "Workflow", "ReadMcpResourceTool"] {
             assert!(!PLUMBING_TOOLS.contains(&tool), "{tool}");
         }
         assert_eq!(
