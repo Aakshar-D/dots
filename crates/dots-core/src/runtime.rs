@@ -25,7 +25,10 @@ use crate::model::{
     MessageKind, NewRun, PendingApproval, ReviewRun, Run, RunEventRecord, RunStatus,
     ScheduleChange, ScheduleSkip, ScheduleView, SettingsSaved, Status, TriggerKind, WorktreeDiff,
 };
-use crate::policy::{allow_candidates, Action, Rule, RuleCandidate};
+use crate::policy::{
+    allow_candidates, pattern_touches_private, touches_private, Action, Rule, RuleCandidate,
+    PRIVATE_REFUSAL,
+};
 use crate::runner::{Runner, RunnerConfig};
 use crate::schedule::{upcoming, Schedule};
 use crate::scheduler::{Clock, Scheduler, SystemClock};
@@ -1472,6 +1475,15 @@ impl Runtime {
         Ok(allow_candidates(&approval.tool, &approval.input, workspace))
     }
 
+    /// True when the call of this approval touches a private folder (approval guards spec
+    /// section 3): it always asks, and no rule can be saved with its approval.
+    pub async fn approval_touches_private(&self, approval_id: &str) -> Result<bool> {
+        let approval = self.store.get_approval(approval_id).await?;
+        let run = self.store.get_run(&approval.run_id).await?;
+        let workspace = run.workspace_path.as_deref().map(Path::new);
+        Ok(touches_private(&approval.tool, &approval.input, workspace))
+    }
+
     /// The person's answer on an app proposal's card (app library spec section 6.2): "Add to
     /// library" (or "Update") adds the app first, and a failure there leaves the card waiting;
     /// then the proposal is decided and the dot's thread continues with what the person decided,
@@ -1659,6 +1671,10 @@ impl Runtime {
                 ))
             }
             Some(pattern) => {
+                // Said first, so the refusal names the reason rather than "not offered".
+                if self.approval_touches_private(id).await? || pattern_touches_private(&pattern) {
+                    return Err(Error::Invalid(PRIVATE_REFUSAL.into()));
+                }
                 let offered = self.approval_rule_candidates(id).await?;
                 if !offered.iter().any(|c| c.pattern == pattern) {
                     return Err(Error::Invalid(format!(
