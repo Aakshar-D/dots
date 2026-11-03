@@ -20,6 +20,7 @@ async fn an_empty_table_gives_the_defaults() {
     assert_eq!(s.global_instructions, "");
     assert!(s.notify_on_notes);
     assert_eq!(s.quiet_limit_secs, 600);
+    assert_eq!(s.auto_archive_days, 30);
 }
 
 #[tokio::test]
@@ -42,6 +43,7 @@ async fn settings_round_trip() {
         auto_install_updates: true,
         publish_token: Some("GH_PUBLISH".into()),
         quiet_limit_secs: 900,
+        auto_archive_days: 7,
     };
     store.put_settings(&s).await.unwrap();
     assert_eq!(store.get_settings().await.unwrap(), s);
@@ -113,6 +115,10 @@ async fn invalid_settings_are_rejected_and_not_stored() {
         (
             |s| s.quiet_limit_secs = 86_401,
             "quiet_limit_secs must be between 60 and 86400",
+        ),
+        (
+            |s| s.auto_archive_days = 3651,
+            "auto_archive_days must be between 0 and 3650",
         ),
         // Settings has no "off": only a dot can turn the watchdog off, with 0.
         (

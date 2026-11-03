@@ -35,6 +35,8 @@ pub const CATCH_UP_WINDOW: TimeDelta = TimeDelta::hours(24);
 /// The longest sleep between passes. Timers do not follow the wall clock across system sleep
 /// or a clock change, so the loop looks at the clock again at least this often.
 pub const MAX_SLEEP: TimeDelta = TimeDelta::seconds(60);
+/// How often at most a pass archives idle topics (topic tools spec section 4.5).
+pub const TOPIC_SWEEP_EVERY: TimeDelta = TimeDelta::hours(1);
 /// The wait before a pass that failed is tried again.
 pub const ERROR_WAIT: TimeDelta = TimeDelta::seconds(30);
 /// The attempts an occurrence has at most: the run of its slot and five retries (spec §6).
@@ -97,6 +99,8 @@ pub struct Scheduler {
     resumed: AtomicBool,
     /// The runs the rows watched at the end of the last pass: the end of one wakes the loop.
     watched: Mutex<HashSet<String>>,
+    /// When the last pass archived idle topics.
+    swept_at: Mutex<Option<DateTime<Utc>>>,
 }
 
 impl Scheduler {
@@ -115,6 +119,7 @@ impl Scheduler {
             paused: AtomicBool::new(false),
             resumed: AtomicBool::new(false),
             watched: Mutex::new(HashSet::new()),
+            swept_at: Mutex::new(None),
         })
     }
 
@@ -250,7 +255,38 @@ impl Scheduler {
         }
         *self.watched.lock().unwrap() = watched;
         self.clear_attention(now).await?;
+        self.archive_idle_topics(now).await;
         Ok(wake)
+    }
+
+    /// Archives the topics idle for `auto_archive_days` (topic tools spec section 4.5), at most
+    /// once every `TOPIC_SWEEP_EVERY`. A failure is logged and tried at the next sweep; it does
+    /// not hold up the schedules.
+    async fn archive_idle_topics(&self, now: DateTime<Utc>) {
+        {
+            let mut swept = self.swept_at.lock().unwrap();
+            if swept.is_some_and(|at| now - at < TOPIC_SWEEP_EVERY && now >= at) {
+                return;
+            }
+            *swept = Some(now);
+        }
+        let days = match self.store.get_settings().await {
+            Ok(settings) => settings.auto_archive_days,
+            Err(e) => {
+                tracing::warn!("reading the settings for the topic sweep failed: {e}");
+                return;
+            }
+        };
+        match self.store.archive_idle_topics(now, days).await {
+            Ok(archived) => {
+                let dots: HashSet<String> = archived.into_iter().map(|t| t.dot_id).collect();
+                for dot_id in dots {
+                    tracing::info!(dot = %dot_id, "idle topics archived");
+                    let _ = self.bus.send(RuntimeEvent::TopicsChanged { dot_id });
+                }
+            }
+            Err(e) => tracing::warn!("archiving idle topics failed: {e}"),
+        }
     }
 
     /// "Needs attention" also clears when a later manual or scheduled run of the dot succeeds
