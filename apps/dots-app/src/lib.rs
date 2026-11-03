@@ -76,6 +76,8 @@ command_list![
     get_dot,
     dot_variables,
     create_dot,
+    scan_claude_agents,
+    import_claude_agents,
     dot_move,
     dot_access,
     workspace_list,

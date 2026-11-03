@@ -11,6 +11,7 @@ use dots_core::accounts::{
     CurrentScope, DotAccess, Identity, Membership, Refusals, Role, WorkspaceRole, WorkspaceView,
 };
 use dots_core::browser::BrowserStatus;
+use dots_core::claude_agents::{AgentImport, AgentSourceKind, ImportFailure, ScannedAgent};
 use dots_core::context::Document;
 use dots_core::engine::EngineEvent;
 use dots_core::events::RuntimeEvent;
@@ -1267,6 +1268,14 @@ pub fn samples() -> Value {
     });
     // Past the `json!` macro's recursion limit, so added here.
     samples["ScheduleSkip"] = to(schedule_skip());
+    samples["ScannedAgent"] = to(scanned_agents());
+    samples["AgentImport"] = to(AgentImport {
+        created: vec![dot()],
+        failed: vec![ImportFailure {
+            path: "C:/Users/u/.claude/agents/empty.md".into(),
+            reason: "it has no instructions".into(),
+        }],
+    });
     samples["ContextDocuments"] = to(context_documents());
     samples["Message"] = to(messages());
     samples["FollowUp"] = to(follow_ups());
@@ -2240,6 +2249,57 @@ fn edit_outcomes() -> Vec<EditOutcome> {
         },
         EditOutcome::Draft {
             draft: draft_view(),
+        },
+    ]
+}
+
+/// An agent of each source, one with warnings, one already a dot and one that can't be read.
+fn scanned_agents() -> Vec<ScannedAgent> {
+    let agent = |source, path: &str, name: &str| ScannedAgent {
+        source,
+        plugin: None,
+        project: None,
+        path: path.into(),
+        name: name.into(),
+        description: Some(format!("The {name} agent")),
+        model: Some("sonnet".into()),
+        tools: None,
+        warnings: Vec::new(),
+        already_imported: false,
+        error: None,
+    };
+    vec![
+        ScannedAgent {
+            tools: Some(vec!["Read".into(), "Bash".into(), "Frob".into()]),
+            warnings: vec![
+                "Bash asks before each use.".into(),
+                "Frob is left out: Dots does not know this tool.".into(),
+            ],
+            ..agent(
+                AgentSourceKind::User,
+                "C:/Users/u/.claude/agents/reviewer.md",
+                "reviewer",
+            )
+        },
+        ScannedAgent {
+            project: Some("C:/code/app".into()),
+            already_imported: true,
+            ..agent(
+                AgentSourceKind::Project,
+                "C:/code/app/.claude/agents/tester.md",
+                "tester",
+            )
+        },
+        ScannedAgent {
+            plugin: Some("pdf-tools".into()),
+            description: None,
+            model: None,
+            error: Some("it has no instructions".into()),
+            ..agent(
+                AgentSourceKind::Plugin,
+                "C:/plugins/pdf-tools/agents/pdf.md",
+                "pdf",
+            )
         },
     ]
 }

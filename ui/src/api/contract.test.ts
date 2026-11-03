@@ -12,6 +12,8 @@ const schemas: Record<SampleName, { parse: (v: unknown) => unknown }> = {
   ScheduleSkip: T.ScheduleSkip,
   NewDotSpec: T.DotSpec,
   Dot: T.Dot,
+  ScannedAgent: T.ScannedAgent.array(),
+  AgentImport: T.AgentImport,
   Run: T.Run,
   RunEventRecord: T.RunEventRecord,
   RunEventData: T.RunEventData.array(),

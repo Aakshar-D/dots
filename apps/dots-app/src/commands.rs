@@ -22,6 +22,7 @@ use dots_core::apps::screen::{AppFile, AppRow};
 use dots_core::apps::wake::RunLink;
 use dots_core::apps::AppCall;
 use dots_core::browser::BrowserStatus;
+use dots_core::claude_agents::{AgentImport, ScannedAgent};
 use dots_core::kit::InstalledPlugin;
 use dots_core::library::{LibraryConfig, LibraryItem, McpCatalog, McpServerConfig};
 use dots_core::library_service::{
@@ -443,6 +444,28 @@ pub async fn create_dot(
     workspace_id: Option<String>,
 ) -> Res<Dot> {
     Ok(state.rt()?.create_dot(spec, org_id, workspace_id).await?)
+}
+
+/// The Claude Code agents on this PC (user, project and plugin folders), each with the dot it
+/// would become.
+#[tauri::command]
+pub async fn scan_claude_agents(state: State<'_, AppState>) -> Res<Vec<ScannedAgent>> {
+    Ok(state.rt()?.scan_claude_agents().await?)
+}
+
+/// Makes a dot of each agent file in `paths`, which a fresh scan must find; in the account
+/// `org_id` (`None` for Personal) and its workspace `workspace_id` (`None` for the default one).
+#[tauri::command]
+pub async fn import_claude_agents(
+    state: State<'_, AppState>,
+    paths: Vec<String>,
+    org_id: Option<String>,
+    workspace_id: Option<String>,
+) -> Res<AgentImport> {
+    Ok(state
+        .rt()?
+        .import_claude_agents(paths, org_id, workspace_id)
+        .await?)
 }
 
 /// Moves a dot to another workspace of its account.

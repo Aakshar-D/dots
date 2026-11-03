@@ -994,6 +994,27 @@ export const InstalledPlugin = z.strictObject({
   version: nullable(z.string()),
   exists: z.boolean(),
 });
+// A Claude Code agent file found on this PC and the dot it would become (import agents spec).
+export const AgentSourceKind = z.enum(["user", "project", "plugin"]);
+export const ScannedAgent = z.strictObject({
+  source: AgentSourceKind,
+  plugin: nullable(z.string()),
+  project: nullable(z.string()),
+  path: z.string(),
+  name: z.string(),
+  description: nullable(z.string()),
+  model: nullable(z.string()),
+  // null: the file lists no tools, so the agent has them all.
+  tools: nullable(z.array(z.string())),
+  warnings: z.array(z.string()),
+  already_imported: z.boolean(),
+  // Why the file can't be imported; null when it can.
+  error: nullable(z.string()),
+});
+export const AgentImport = z.strictObject({
+  created: z.array(Dot),
+  failed: z.array(z.strictObject({ path: z.string(), reason: z.string() })),
+});
 // Whether the environment of Dots sets a variable. Never its value.
 export const EnvVariable = z.strictObject({ name: z.string(), set: z.boolean() });
 export const EntryKind = z.enum(["plain", "secret"]);
@@ -1608,6 +1629,9 @@ export type ScannedSkill = z.infer<typeof ScannedSkill>;
 export type DraftRequest = z.infer<typeof DraftRequest>;
 export type DraftSummary = z.infer<typeof DraftSummary>;
 export type InstalledPlugin = z.infer<typeof InstalledPlugin>;
+export type AgentSourceKind = z.infer<typeof AgentSourceKind>;
+export type ScannedAgent = z.infer<typeof ScannedAgent>;
+export type AgentImport = z.infer<typeof AgentImport>;
 export type EnvVariable = z.infer<typeof EnvVariable>;
 export type EntryKind = z.infer<typeof EntryKind>;
 export type EnvEntry = z.infer<typeof EnvEntry>;
