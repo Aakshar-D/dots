@@ -388,6 +388,15 @@ impl Runtime {
             );
         }
         runner.spawn_dispatcher(shutdown.clone());
+        // A run that waits 30 minutes without reaching its dot is marked not delivered
+        // (delivery tracking spec section 3).
+        Arc::new(crate::delivery::DeliverySweeper::new(
+            store.clone(),
+            runner.clone(),
+            bus.clone(),
+            cfg.clock.clone(),
+        ))
+        .spawn(shutdown.clone());
         // The runs apps start are queued as the runner's, and apps hear when a run of a topic
         // they started ends (app library spec section 7).
         let starting = Arc::downgrade(&runner);
@@ -670,17 +679,35 @@ impl Runtime {
 
     /// Newest first; `limit` is clamped to 1..=500.
     pub async fn list_runs(&self, dot_id: Option<&str>, limit: i64) -> Result<Vec<Run>> {
-        self.store.list_runs(dot_id, limit.clamp(1, 500)).await
+        let mut runs = self.store.list_runs(dot_id, limit.clamp(1, 500)).await?;
+        self.runner.fill_wait_reasons(&mut runs).await?;
+        Ok(runs)
     }
 
     pub async fn get_run(&self, id: &str) -> Result<Run> {
-        self.store.get_run(id).await
+        let mut run = self.store.get_run(id).await?;
+        self.runner
+            .fill_wait_reasons(std::slice::from_mut(&mut run))
+            .await?;
+        Ok(run)
+    }
+
+    /// Why `run` is still waiting to reach its dot; `None` unless it is queued and not yet
+    /// delivered (delivery tracking spec section 3).
+    pub async fn wait_reason(&self, run: &Run) -> Result<Option<crate::model::WaitReason>> {
+        let mut run = run.clone();
+        self.runner
+            .fill_wait_reasons(std::slice::from_mut(&mut run))
+            .await?;
+        Ok(run.wait_reason)
     }
 
     /// The whole lineage (root, resumes, chat follow-ups) `run_id` belongs to, oldest first.
     pub async fn run_thread(&self, run_id: &str) -> Result<Vec<Run>> {
         let run = self.store.get_run(run_id).await?;
-        self.store.list_thread(&run.root_run_id).await
+        let mut runs = self.store.list_thread(&run.root_run_id).await?;
+        self.runner.fill_wait_reasons(&mut runs).await?;
+        Ok(runs)
     }
 
     pub async fn list_run_events(

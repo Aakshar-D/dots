@@ -410,6 +410,26 @@ impl Store {
         .await?)
     }
 
+    /// How many runs are `running` (delivery tracking: a queued run waits while they fill
+    /// the runner's slots).
+    pub async fn running_count(&self) -> Result<usize> {
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE status = 'running'")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(n as usize)
+    }
+
+    /// The dots with a run, not of a workflow step, that is running or waiting for an
+    /// approval: the dispatcher starts no other run of theirs (delivery tracking, `dot_busy`).
+    pub async fn busy_dot_ids(&self) -> Result<Vec<String>> {
+        Ok(sqlx::query_scalar(
+            "SELECT DISTINCT dot_id FROM runs WHERE status IN ('running', 'awaiting_approval') \
+             AND workflow_step_run_id IS NULL ORDER BY dot_id",
+        )
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
     /// How many runs have not ended: queued, running or waiting for an approval (updates UI
     /// spec section 4.2, the idle install).
     pub async fn unfinished_run_count(&self) -> Result<usize> {
@@ -538,6 +558,15 @@ impl Store {
         id: &str,
         at: chrono::DateTime<chrono::Utc>,
     ) -> Result<Option<Run>> {
+        if !self.set_delivered(id, at).await? {
+            return Ok(None);
+        }
+        Ok(Some(self.get_run(id).await?))
+    }
+
+    /// `mark_delivered`'s write alone: whether it changed the row. For the runner, whose run
+    /// must not fail when only reading the row back for the announcement fails.
+    pub async fn set_delivered(&self, id: &str, at: chrono::DateTime<chrono::Utc>) -> Result<bool> {
         let res = sqlx::query(
             "UPDATE runs SET delivered_at = ?, undelivered_at = NULL, undelivered_reason = NULL \
              WHERE id = ? AND delivered_at IS NULL",
@@ -546,10 +575,7 @@ impl Store {
         .bind(id)
         .execute(&self.pool)
         .await?;
-        if res.rows_affected() == 0 {
-            return Ok(None);
-        }
-        Ok(Some(self.get_run(id).await?))
+        Ok(res.rows_affected() == 1)
     }
 
     /// Marks a run not delivered, only while it is neither delivered, marked nor dismissed.
