@@ -8,7 +8,8 @@ use crate::util::{new_id, now};
 use crate::vault::redact::global;
 use crate::{Error, Result};
 
-pub(super) const RUN_COLUMNS: &str = "id, dot_id, root_run_id, parent_run_id, trigger_kind, payload, status, \
+pub(super) const RUN_COLUMNS: &str =
+    "id, dot_id, root_run_id, parent_run_id, trigger_kind, payload, status, \
     session_id, workspace_path, branch, base_commit, summary, error, tokens_in, tokens_out, \
     queued_at, started_at, ended_at, reviewed_at, retry_of, workflow_step_run_id, \
     tokens_cache_read, cost_usd, hold_released, quiet_since, quiet_limit_secs, \

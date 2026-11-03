@@ -21,7 +21,10 @@ fn at(minutes: i64) -> String {
 }
 
 async fn dot(store: &Store, name: &str) -> Dot {
-    store.create_dot(&spec(name), None, "default").await.unwrap()
+    store
+        .create_dot(&spec(name), None, "default")
+        .await
+        .unwrap()
 }
 
 /// An ended chat run queued at `queued`, continuing `parent` (none starts a topic).
@@ -97,7 +100,12 @@ async fn only_a_topic_s_root_names_it() {
     let d = dot(&store, "a").await;
     let root = chat(&store, &d, None, &at(0)).await;
     let reply = chat(&store, &d, Some(&root), &at(1)).await;
-    invalid(store.set_topic_title(&reply.id, Some("x")).await.unwrap_err());
+    invalid(
+        store
+            .set_topic_title(&reply.id, Some("x"))
+            .await
+            .unwrap_err(),
+    );
     invalid(
         store
             .set_topic_archived(&reply.id, true, t(NOW))
@@ -151,15 +159,27 @@ async fn a_message_moves_with_its_replies_to_another_topic() {
         .map(|r| r.id)
         .collect();
     // Read by time: the moved runs are older than b's.
-    assert_eq!(b, vec![a2.id.clone(), a3.id.clone(), b1.id.clone(), b2.id.clone()]);
+    assert_eq!(
+        b,
+        vec![a2.id.clone(), a3.id.clone(), b1.id.clone(), b2.id.clone()]
+    );
     let moved = store.get_run(&a2.id).await.unwrap();
     assert_eq!(moved.parent_run_id.as_deref(), Some(b2.id.as_str()));
     assert_eq!(
-        store.get_run(&a3.id).await.unwrap().parent_run_id.as_deref(),
+        store
+            .get_run(&a3.id)
+            .await
+            .unwrap()
+            .parent_run_id
+            .as_deref(),
         Some(a2.id.as_str())
     );
     assert_eq!(
-        store.get_instruction_proposal("p1").await.unwrap().root_run_id,
+        store
+            .get_instruction_proposal("p1")
+            .await
+            .unwrap()
+            .root_run_id,
         b1.id
     );
     // Both topics start their next run afresh, once.
@@ -237,7 +257,12 @@ async fn a_topic_an_app_started_is_not_moved() {
         .unwrap();
     let a1 = chat(&store, &d, None, &at(5)).await;
     let a2 = chat(&store, &d, Some(&a1), &at(6)).await;
-    invalid(store.move_runs(&a2.id, Some(&app_root.id)).await.unwrap_err());
+    invalid(
+        store
+            .move_runs(&a2.id, Some(&app_root.id))
+            .await
+            .unwrap_err(),
+    );
     invalid(store.merge_topics(&app_root.id, &a1.id).await.unwrap_err());
 }
 
@@ -261,7 +286,12 @@ async fn a_merge_joins_two_topics_under_the_second() {
         .collect();
     assert_eq!(b, vec![a1.id.clone(), a2.id.clone(), b1.id.clone()]);
     assert_eq!(
-        store.get_run(&a1.id).await.unwrap().parent_run_id.as_deref(),
+        store
+            .get_run(&a1.id)
+            .await
+            .unwrap()
+            .parent_run_id
+            .as_deref(),
         Some(b1.id.as_str())
     );
     let topics = store.list_topics(&d.id).await.unwrap();
@@ -319,7 +349,10 @@ async fn idle_topics_are_archived_but_not_the_current_or_newest_or_busy_one() {
     let archived = store.archive_idle_topics(now, 30).await.unwrap();
     let roots: Vec<&str> = archived.iter().map(|i| i.root_run_id.as_str()).collect();
     assert_eq!(roots, vec![old.id.as_str()]);
-    assert_eq!(archived[0].archived_at.as_deref(), Some(timestamp(now).as_str()));
+    assert_eq!(
+        archived[0].archived_at.as_deref(),
+        Some(timestamp(now).as_str())
+    );
     for left in [&busy, &kept, &current, &e_current, &manual] {
         let info = store.topic_info(&left.id).await.unwrap();
         assert!(info.and_then(|i| i.archived_at).is_none(), "{}", left.id);

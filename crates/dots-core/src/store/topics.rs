@@ -271,7 +271,9 @@ impl Store {
     /// `into` is marked to restart its session.
     pub async fn merge_topics(&self, from: &str, into: &str) -> Result<()> {
         if from == into {
-            return Err(Error::Invalid("a topic cannot be merged into itself".into()));
+            return Err(Error::Invalid(
+                "a topic cannot be merged into itself".into(),
+            ));
         }
         let mut tx = self.pool.begin().await?;
         // A write first, so the checks below and the merge are one step.

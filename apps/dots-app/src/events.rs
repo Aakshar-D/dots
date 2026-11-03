@@ -614,9 +614,7 @@ mod tests {
     #[test]
     fn a_change_to_topics_notifies_nobody() {
         let mut n = Notifier::default();
-        let ev = RuntimeEvent::TopicsChanged {
-            dot_id: "d".into(),
-        };
+        let ev = RuntimeEvent::TopicsChanged { dot_id: "d".into() };
         assert_eq!(n.decide(&ev), None);
     }
 

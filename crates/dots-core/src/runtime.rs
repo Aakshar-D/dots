@@ -1446,7 +1446,11 @@ impl Runtime {
         if let Some(root) = root {
             match self.store.topic_info(&root).await {
                 Ok(Some(info)) if info.archived_at.is_some() => {
-                    match self.store.set_topic_archived(&root, false, Utc::now()).await {
+                    match self
+                        .store
+                        .set_topic_archived(&root, false, Utc::now())
+                        .await
+                    {
                         Ok(_) => self.topics_changed(dot_id),
                         Err(e) => tracing::warn!(topic = %root, "unarchiving failed: {e}"),
                     }
