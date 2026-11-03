@@ -133,25 +133,62 @@ pub async fn is_git_repo(path: &Path) -> bool {
             == "true"
 }
 
-/// Makes and returns the first free `<root>/<folder_name>[-N]`: one that does not exist or
-/// is empty. Missing parents are created. The flag is true when this call made the folder,
-/// false when it was there already, empty: only a folder it made may be removed again.
-pub async fn default_folder(root: &Path, name: &str) -> Result<(PathBuf, bool)> {
+/// True when a dot may work in a worktree of `path`: the folder is the top level of a git
+/// repository (`git rev-parse --show-toplevel` names it) and `HEAD` names a commit. A folder that
+/// only sits inside a repository would get a checkout of the whole outer repository, and a
+/// repository with no commit has nothing to check out.
+pub async fn worktree_ready(path: &Path) -> bool {
+    if !path.is_dir() {
+        return false;
+    }
+    let Ok(top) = crate::workspace::git(path, &["rev-parse", "--show-toplevel"]).await else {
+        return false;
+    };
+    let same = match (std::fs::canonicalize(&top), std::fs::canonicalize(path)) {
+        (Ok(top), Ok(path)) => top == path,
+        _ => false,
+    };
+    same && crate::workspace::git(path, &["rev-parse", "--verify", "--quiet", "HEAD^{commit}"])
+        .await
+        .is_ok()
+}
+
+/// Claims and returns the first free `<root>/<folder_name>[-N]`, missing parents created. A
+/// candidate is skipped when a stored dot works in it (`used`); otherwise it is claimed by
+/// making it, so two creates at once never get the same folder, or, when it is there already,
+/// taken only if empty. The flag is true when this call made the folder, false when it was
+/// there already, empty: only a folder it made may be removed again.
+pub async fn default_folder(root: &Path, name: &str, used: &[PathBuf]) -> Result<(PathBuf, bool)> {
     let base = crate::model::folder_name(name);
+    tokio::fs::create_dir_all(root).await?;
+    let same = |a: &Path, b: &Path| {
+        a == b
+            || matches!(
+                (std::fs::canonicalize(a), std::fs::canonicalize(b)),
+                (Ok(a), Ok(b)) if a == b
+            )
+    };
     for n in 1u32..10_000 {
         let dir = if n == 1 {
             root.join(&base)
         } else {
             root.join(format!("{base}-{n}"))
         };
-        let (free, missing) = match tokio::fs::read_dir(&dir).await {
-            Ok(mut entries) => (entries.next_entry().await?.is_none(), false),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (true, true),
-            Err(_) => (false, false),
-        };
-        if free {
-            tokio::fs::create_dir_all(&dir).await?;
-            return Ok((dir, missing));
+        if used.iter().any(|u| same(u, &dir)) {
+            continue;
+        }
+        match tokio::fs::create_dir(&dir).await {
+            Ok(()) => return Ok((dir, true)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                let empty = match tokio::fs::read_dir(&dir).await {
+                    Ok(mut entries) => entries.next_entry().await?.is_none(),
+                    Err(_) => false,
+                };
+                if empty {
+                    return Ok((dir, false));
+                }
+            }
+            Err(e) => return Err(e.into()),
         }
     }
     Err(Error::Other(format!(
@@ -1078,8 +1115,8 @@ impl Runtime {
     /// Creates the proposed dot and starts its first chat (`setup_apply`, setup agent spec
     /// §9). The proposal is checked again, with a name clash a `Conflict`; a folder it names
     /// must be a folder on this PC (`Invalid`), and no folder gets a new default one, which a
-    /// failed create removes again. The dot works in a worktree inside git and in the folder
-    /// itself outside it. When the first chat cannot start, the dot stays and `run_error`
+    /// failed create removes again. The dot works in a worktree when its folder is the top level
+    /// of a git repository with a commit, and in the folder itself otherwise. When the first chat cannot start, the dot stays and `run_error`
     /// says why.
     pub async fn setup_apply(
         &self,
@@ -1106,7 +1143,8 @@ impl Runtime {
                 )))
             }
         };
-        // Worktree mode, which `create_dot` turns into folder mode outside git.
+        // Worktree mode, which `create_dot` turns into folder mode unless the folder is a
+        // repository's top level with a commit, and always for a folder it makes.
         let mut spec = DotSpec::new(&p.name, &p.instructions, &workdir);
         spec.workspace_mode = WorkspaceMode::Worktree;
         spec.schedule = p.schedule.clone();
@@ -1244,14 +1282,25 @@ impl Runtime {
         // A blank folder gets a new one of its own; remembered so a failed create removes it.
         let mut made: Option<PathBuf> = None;
         if spec.workdir.trim().is_empty() {
-            let (dir, created) = default_folder(&self.new_dot_root, &spec.name).await?;
+            let used: Vec<PathBuf> = self
+                .store
+                .list_dots()
+                .await?
+                .into_iter()
+                .map(|d| PathBuf::from(d.spec.workdir.trim()))
+                .collect();
+            let (dir, created) = default_folder(&self.new_dot_root, &spec.name, &used).await?;
             spec.workdir = dir.to_string_lossy().into_owned();
             // A folder that was there already, empty, may be another dot's: it stays.
             made = created.then_some(dir);
+            // A folder Dots made is never a repository's top level: a worktree would check out
+            // whatever repository it happens to sit in.
+            spec.workspace_mode = WorkspaceMode::Folder;
         }
-        // Worktree mode needs git; outside it the dot runs in the folder itself.
+        // Worktree mode needs the top level of a repository with a commit; elsewhere the dot
+        // runs in the folder itself.
         if spec.workspace_mode == WorkspaceMode::Worktree
-            && !is_git_repo(Path::new(spec.workdir.trim())).await
+            && !worktree_ready(Path::new(spec.workdir.trim())).await
         {
             spec.workspace_mode = WorkspaceMode::Folder;
         }
@@ -1476,7 +1525,7 @@ impl Runtime {
         if spec.workspace_mode == WorkspaceMode::Worktree
             && (spec.workspace_mode != old.spec.workspace_mode || spec.workdir != old.spec.workdir)
             && !spec.workdir.trim().is_empty()
-            && !is_git_repo(Path::new(spec.workdir.trim())).await
+            && !worktree_ready(Path::new(spec.workdir.trim())).await
         {
             return Err(Error::Invalid(NOT_A_REPO.into()));
         }

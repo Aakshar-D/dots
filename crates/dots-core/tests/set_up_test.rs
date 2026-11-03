@@ -308,17 +308,46 @@ async fn apply_creates_dot_and_chat() {
     );
 }
 
+/// Runs git in `dir` and asserts it succeeded.
+fn git(dir: &std::path::Path, args: &[&str]) {
+    let ok = std::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .status()
+        .unwrap()
+        .success();
+    assert!(ok, "git {args:?}");
+}
+
+/// Makes `dir` a git repository, with one commit when `commit` is true.
+fn git_repo(dir: &std::path::Path, commit: bool) {
+    std::fs::create_dir_all(dir).unwrap();
+    git(dir, &["init", "-q"]);
+    if commit {
+        git(
+            dir,
+            &[
+                "-c",
+                "user.name=dots",
+                "-c",
+                "user.email=dots@example.com",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "init",
+            ],
+        );
+    }
+}
+
 #[tokio::test]
 async fn apply_git_folder_gets_worktree() {
     let t = start(answering("Done.")).await;
     let repo = tempfile::tempdir().unwrap();
-    let ok = std::process::Command::new("git")
-        .args(["init", "-q"])
-        .current_dir(repo.path())
-        .status()
-        .unwrap()
-        .success();
-    assert!(ok);
+    git_repo(repo.path(), true);
     let mut p = proposal("Repo helper");
     p.folder = Some(repo.path().to_string_lossy().into_owned());
     let applied = t.rt.setup_apply(p, None, None).await.unwrap();
@@ -329,6 +358,31 @@ async fn apply_git_folder_gets_worktree() {
     );
     // No default folder was made.
     assert!(!t.root.join(folder_name("Repo helper")).exists());
+}
+
+#[tokio::test]
+async fn apply_git_folder_without_a_commit_gets_folder_mode() {
+    let t = start(answering("Done.")).await;
+    let repo = tempfile::tempdir().unwrap();
+    git_repo(repo.path(), false);
+    let mut p = proposal("Repo helper");
+    p.folder = Some(repo.path().to_string_lossy().into_owned());
+    let applied = t.rt.setup_apply(p, None, None).await.unwrap();
+    assert_eq!(applied.dot.spec.workspace_mode, WorkspaceMode::Folder);
+}
+
+#[tokio::test]
+async fn apply_subfolder_of_a_repo_gets_folder_mode() {
+    let t = start(answering("Done.")).await;
+    let repo = tempfile::tempdir().unwrap();
+    git_repo(repo.path(), true);
+    let sub = repo.path().join("notes");
+    std::fs::create_dir_all(&sub).unwrap();
+    let mut p = proposal("Notes helper");
+    p.folder = Some(sub.to_string_lossy().into_owned());
+    let applied = t.rt.setup_apply(p, None, None).await.unwrap();
+    assert_eq!(applied.dot.spec.workspace_mode, WorkspaceMode::Folder);
+    assert_eq!(PathBuf::from(&applied.dot.spec.workdir), sub);
 }
 
 #[tokio::test]
@@ -439,15 +493,9 @@ async fn apply_default_folder_gets_a_suffix_when_taken() {
 }
 
 #[tokio::test]
-async fn apply_default_folder_inside_git_gets_worktree() {
+async fn apply_default_folder_inside_git_gets_folder_mode() {
     let repo = tempfile::tempdir().unwrap();
-    let ok = std::process::Command::new("git")
-        .args(["init", "-q"])
-        .current_dir(repo.path())
-        .status()
-        .unwrap()
-        .success();
-    assert!(ok);
+    git_repo(repo.path(), true);
     let root = repo.path().join("Dots");
     let t = start_with(answering("Done."), |cfg| cfg.new_dot_root = root.clone()).await;
     let applied =
@@ -458,5 +506,6 @@ async fn apply_default_folder_inside_git_gets_worktree() {
         PathBuf::from(&applied.dot.spec.workdir),
         root.join(folder_name("Downloads digest"))
     );
-    assert_eq!(applied.dot.spec.workspace_mode, WorkspaceMode::Worktree);
+    // A folder Dots made itself runs in the folder, never in a checkout of the outer repo.
+    assert_eq!(applied.dot.spec.workspace_mode, WorkspaceMode::Folder);
 }
