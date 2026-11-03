@@ -81,4 +81,39 @@ describe("report a problem", () => {
     await waitFor(() => expect(backend.callsTo("save_problem_report")).toHaveLength(1));
     expect(screen.queryByText(/^Saved to/)).toBeNull();
   });
+
+  it("cannot copy or save an old preview while a new one is being made", async () => {
+    const { user } = settings();
+    let release: () => void = () => {};
+    const dialog = await openDialog(user);
+    await waitFor(() => expect(preview(dialog)).toHaveTextContent("starting Dots"));
+    const copy = within(dialog).getByRole("button", { name: "Copy" });
+    const save = within(dialog).getByRole("button", { name: "Save to file…" });
+    expect(copy).toBeEnabled();
+
+    // Typing: the preview still shows the old text until the new one comes.
+    await user.type(within(dialog).getByLabelText("What went wrong?"), "x");
+    expect(copy).toBeDisabled();
+    expect(save).toBeDisabled();
+    await waitFor(() => expect(preview(dialog)).toHaveTextContent("x"));
+    await waitFor(() => expect(copy).toBeEnabled());
+
+    // Unticking the box: disabled until the report without log lines arrives.
+    backend.on(
+      "problem_report",
+      () =>
+        new Promise<string>((resolve) => {
+          release = () => resolve(`${REPORT}x\n== Recent log lines ==\n(not included)\n`);
+        }),
+    );
+    await user.click(within(dialog).getByLabelText("Include recent log lines"));
+    await waitFor(() =>
+      expect(backend.callsTo("problem_report").at(-1)).toMatchObject({ includeLogs: false }),
+    );
+    expect(copy).toBeDisabled();
+    expect(save).toBeDisabled();
+    release();
+    await waitFor(() => expect(preview(dialog)).toHaveTextContent("(not included)"));
+    await waitFor(() => expect(copy).toBeEnabled());
+  });
 });

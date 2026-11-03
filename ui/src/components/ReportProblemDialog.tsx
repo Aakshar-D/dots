@@ -38,6 +38,10 @@ export function ReportProblemDialog(props: {
     gcTime: 0,
   });
   const text = report.data;
+  // Copy and Save take only the preview of what is asked for now: not an older one shown
+  // while the text settles or a new report is made.
+  const current = description === settled && !report.isPlaceholderData && !report.isFetching;
+  const ready = text !== undefined && current;
   const save = useMutation({
     mutationFn: (t: string) => commands.saveProblemReport(t),
     onSuccess: (path) => {
@@ -87,9 +91,9 @@ export function ReportProblemDialog(props: {
           <Button
             type="button"
             variant="outline"
-            disabled={text === undefined}
+            disabled={!ready}
             onClick={() =>
-              text !== undefined &&
+              ready &&
               navigator.clipboard
                 .writeText(text)
                 .then(() => toast.success("Copied the report"), notifyError)
@@ -99,8 +103,8 @@ export function ReportProblemDialog(props: {
           </Button>
           <Button
             type="button"
-            disabled={text === undefined || save.isPending}
-            onClick={() => text !== undefined && save.mutate(text)}
+            disabled={!ready || save.isPending}
+            onClick={() => ready && save.mutate(text)}
           >
             <Save aria-hidden /> Save to file…
           </Button>
