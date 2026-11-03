@@ -287,17 +287,19 @@ describe("a dot's Watchers tab", () => {
   it("shows a core refusal of the hours in the dialog's alert", async () => {
     holding([]);
     backend.on("watcher_add", () => {
-      throw { kind: "invalid", message: "Pick at least one day." };
+      throw { kind: "invalid", message: "Watch hours need at least one day." };
     });
     const { user } = await openTab();
     const dialog = await add(user, "Folder", "New folder watcher");
     await user.click(within(dialog).getByRole("radio", { name: "Only at these times" }));
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
-    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Pick at least one day.");
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Watch hours need at least one day.");
   });
 
   it("shows what a watcher's hours hold back beside its state", async () => {
-    holding([folder, email]);
+    // An opening still ahead: one that has passed shows no line.
+    const ahead = new Date(Date.now() + 2 * 86_400_000).toISOString();
+    holding([{ ...folder, next_opening: ahead }, email]);
     await openTab();
     await screen.findByRole("list", { name: "Watchers" });
     const [f, e] = items() as [HTMLElement, HTMLElement];

@@ -46,9 +46,12 @@ export function watcherState(w: Watcher): string {
 }
 
 /// What a watcher's hours hold back right now, beside its state: "Outside hours · 4 held until
-/// Mon 9:00 AM". "" when it is open (no next opening). `now` is the moment "today" is judged at.
+/// Mon 9:00 AM". "" when it is open (no next opening) or the opening it was given has passed (the
+/// watcher has opened since it was read). `now` is the moment "today" and "passed" are judged at.
 export function watcherHoursLine(w: Watcher, now: Date): string {
   if (w.next_opening === null) return "";
+  const opens = Date.parse(w.next_opening);
+  if (!Number.isNaN(opens) && opens <= now.getTime()) return "";
   const until = `until ${localWeekdayTime(w.next_opening, now.getTime())}`;
   return w.held_count > 0
     ? `Outside hours · ${w.held_count} held ${until}`
