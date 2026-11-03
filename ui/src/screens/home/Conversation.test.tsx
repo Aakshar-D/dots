@@ -374,6 +374,16 @@ describe("a dot's conversation", () => {
     await waitFor(() => expect(backend.callsTo("resend_run")).toEqual([{ runId: "a" }]));
   });
 
+  it("does not offer to send again a failed message of a workflow step", async () => {
+    home([
+      chat("a", "10:00", { status: "failed", error: "interrupted", workflow_step_run_id: "step-1" }),
+    ]);
+    renderApp(`/home/${dot.id}`);
+    const view = within(await screen.findByRole("region", { name: "Conversation" }));
+    expect(await view.findByText("interrupted")).toBeVisible();
+    expect(view.queryByRole("button", { name: "Send again" })).toBeNull();
+  });
+
   it("does not offer to send again a failed run that was not a message", async () => {
     const run = scheduled("a", "10:00", { status: "failed", summary: null, error: "interrupted" });
     home([run]);

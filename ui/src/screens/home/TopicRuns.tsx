@@ -70,7 +70,9 @@ export function TopicRuns(props: {
         <InstructionsCard key={proposal.id} proposal={proposal} dotName={dotName} busy={busy} />
       ))}
       {failure && <Failure>{failure}</Failure>}
-      {latest?.status === "failed" && latest.trigger === "chat" && <SendAgain run={latest} />}
+      {latest?.status === "failed" &&
+        latest.trigger === "chat" &&
+        latest.workflow_step_run_id === null && <SendAgain run={latest} />}
     </div>
   );
 }
