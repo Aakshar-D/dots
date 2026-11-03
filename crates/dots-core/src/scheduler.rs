@@ -324,14 +324,14 @@ impl Scheduler {
             let new = fire.then(|| scheduled_run(dot, due, late >= ON_TIME, attempt));
             match self
                 .store
-                .record_slot(&dot.id, due, new.as_ref(), now)
+                .record_slot(&dot.id, due, new.as_ref(), false, now)
                 .await
             {
                 Ok(start) => {
                     last = due;
                     row_slot = timestamp(due);
                     match start {
-                        SlotStart::Skipped => {
+                        SlotStart::Skipped | SlotStart::Busy(_) => {
                             tracing::info!(dot = %dot.spec.name, slot = %due, "missed slot skipped");
                         }
                         SlotStart::Enqueued(run) => {
@@ -396,7 +396,7 @@ impl Scheduler {
                                 );
                                 watch = Some(run.id);
                             }
-                            SlotStart::Skipped => {}
+                            SlotStart::Skipped | SlotStart::Busy(_) => {}
                         }
                         retry = None;
                         self.updated(&dot.id);

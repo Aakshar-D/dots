@@ -379,6 +379,22 @@ pub enum SlotStart {
     Enqueued(Run),
     /// The dot's queued run serves it.
     Coalesced(Run),
+    /// The dot was busy with a run, so a repeating slot was skipped and recorded: no run.
+    Busy(ScheduleSkip),
+}
+
+/// A slot that was not run (`schedule_skips`): the dot was still busy with an earlier run.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScheduleSkip {
+    pub id: String,
+    pub dot_id: String,
+    /// The slot's time, RFC 3339 UTC.
+    pub slot_at: String,
+    /// `"busy"`, the only reason for now.
+    pub reason: String,
+    /// The run that made the dot busy, if known.
+    pub run_id: Option<String>,
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -11,6 +11,7 @@ use sqlx::sqlite::{SqliteConnection, SqliteRow};
 use sqlx::Row;
 
 use super::runs::insert_run;
+use super::skips::{busy_run_id, insert_skip};
 use super::Store;
 use crate::model::{
     NeedsAttention, NewRun, PendingRetry, ScheduleChange, ScheduleState, ScheduleStatus, SlotStart,
@@ -168,6 +169,8 @@ impl Store {
     /// is inserted otherwise. Either way `last_slot_at = at`; a fired slot also counts, its
     /// run becomes the watched run, and a pending retry of an older slot is dropped (the
     /// caller gives `new` the dropped retry's `attempt`, so the count runs on).
+    /// With `skip_when_busy`, a fired slot whose dot has a running or approval-waiting run is
+    /// recorded as a skip instead (`SlotStart::Busy`): no run, no count, the retry kept.
     /// `Conflict`, and nothing is written, when the dot has no row or its `last_slot_at` is
     /// not before `at` (the row was reset or handled the slot after the caller read it).
     pub async fn record_slot(
@@ -175,6 +178,7 @@ impl Store {
         dot_id: &str,
         at: DateTime<Utc>,
         fire: Option<&NewRun>,
+        skip_when_busy: bool,
         now: DateTime<Utc>,
     ) -> Result<SlotStart> {
         let slot = timestamp(at);
@@ -201,6 +205,15 @@ impl Store {
             tx.commit().await?;
             return Ok(SlotStart::Skipped);
         };
+        if skip_when_busy {
+            // Inside the transaction, after the guarded update took the write lock: the busy
+            // check and the slot are one step. A pending retry and `fired_count` stay as they are.
+            if let Some(busy_run) = busy_run_id(&mut tx, dot_id).await? {
+                let skip = insert_skip(&mut tx, dot_id, &slot, &busy_run, now).await?;
+                tx.commit().await?;
+                return Ok(SlotStart::Busy(skip));
+            }
+        }
         let (run_id, joined) = start_or_join(&mut tx, new).await?;
         sqlx::query(
             "UPDATE schedule_state SET fired_count = fired_count + 1, watch_run_id = ?, \

@@ -24,6 +24,7 @@ mod orgs;
 mod runs;
 mod schedules;
 mod settings;
+mod skips;
 mod teams;
 #[doc(hidden)]
 pub use teams::TEAM_ORG_BACKFILL_SQL;

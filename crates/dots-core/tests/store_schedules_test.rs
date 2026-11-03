@@ -184,7 +184,7 @@ async fn a_skipped_slot_moves_last_slot_at_only() {
     let before = state(&store, &dot).await;
 
     let start = store
-        .record_slot(&dot.id, t(T1), None, t(T2))
+        .record_slot(&dot.id, t(T1), None, false, t(T2))
         .await
         .unwrap();
     assert_eq!(start, SlotStart::Skipped);
@@ -208,7 +208,7 @@ async fn a_fired_slot_enqueues_counts_watches_and_drops_the_retry() {
 
     let new = scheduled_run(&dot, "2026-10-14T12:00:00+02:00");
     let SlotStart::Enqueued(run) = store
-        .record_slot(&dot.id, t(T1), Some(&new), t(T2))
+        .record_slot(&dot.id, t(T1), Some(&new), false, t(T2))
         .await
         .unwrap()
     else {
@@ -247,7 +247,7 @@ async fn a_schedule_slot_does_not_join_a_queued_watcher_run() {
             .await
             .unwrap();
         let start = store
-            .record_slot(&dot.id, t(T1), Some(&scheduled_run(&dot, T1)), t(T1))
+            .record_slot(&dot.id, t(T1), Some(&scheduled_run(&dot, T1)), false, t(T1))
             .await
             .unwrap();
         assert!(matches!(start, SlotStart::Enqueued(_)), "{trigger:?}");
@@ -261,7 +261,7 @@ async fn a_schedule_slot_joins_a_queued_schedule_run() {
     let dot = scheduled(&store, "a").await;
     let queued = store.create_run(&scheduled_run(&dot, T0)).await.unwrap();
     let start = store
-        .record_slot(&dot.id, t(T1), Some(&scheduled_run(&dot, T1)), t(T1))
+        .record_slot(&dot.id, t(T1), Some(&scheduled_run(&dot, T1)), false, t(T1))
         .await
         .unwrap();
     assert_eq!(start, SlotStart::Coalesced(queued));
@@ -278,7 +278,7 @@ async fn a_slot_joins_the_queued_run() {
         .unwrap();
 
     let start = store
-        .record_slot(&dot.id, t(T1), Some(&scheduled_run(&dot, T1)), t(T1))
+        .record_slot(&dot.id, t(T1), Some(&scheduled_run(&dot, T1)), false, t(T1))
         .await
         .unwrap();
     assert_eq!(start, SlotStart::Coalesced(queued.clone()));
@@ -296,7 +296,7 @@ async fn a_slot_that_is_not_newer_than_the_last_one_is_refused() {
     let (_d, store) = temp_store().await;
     let dot = scheduled(&store, "a").await;
     store
-        .record_slot(&dot.id, t(T1), None, t(T1))
+        .record_slot(&dot.id, t(T1), None, false, t(T1))
         .await
         .unwrap();
     let before = state(&store, &dot).await;
@@ -309,7 +309,7 @@ async fn a_slot_that_is_not_newer_than_the_last_one_is_refused() {
         (&"no-such-dot".to_string(), T2),
     ] {
         let err = store
-            .record_slot(dot_id, t(at), Some(&scheduled_run(&dot, at)), t(T3))
+            .record_slot(dot_id, t(at), Some(&scheduled_run(&dot, at)), false, t(T3))
             .await
             .unwrap_err();
         assert!(matches!(err, Error::Conflict(_)), "{err:?}");
@@ -324,7 +324,7 @@ async fn a_retry_starts_a_run_without_counting() {
     let dot = scheduled(&store, "a").await;
     let failed = failed_run(&store, &dot).await;
     store
-        .record_slot(&dot.id, t(T1), None, t(T1))
+        .record_slot(&dot.id, t(T1), None, false, t(T1))
         .await
         .unwrap();
     busy(&store, &dot, &failed).await;
