@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use chrono::TimeDelta;
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Offset, TimeDelta, TimeZone, Utc};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -62,6 +62,32 @@ pub fn wait_reason(f: &WaitFacts) -> WaitReason {
         WaitReason::Busy
     } else {
         WaitReason::Queued
+    }
+}
+
+/// The local day of `now` in `tz` as `[start, end)` in UTC (delivery tracking spec section
+/// 3.8): local midnight of `now`'s local date and of the next date. A midnight that occurs
+/// twice is its earlier instant; one in a gap is the first valid instant after it. Write both
+/// with `util::timestamp` before comparing them with stored times.
+pub fn local_day_bounds<Tz: TimeZone>(
+    now: DateTime<Utc>,
+    tz: &Tz,
+) -> (DateTime<Utc>, DateTime<Utc>) {
+    let date = now.with_timezone(tz).date_naive();
+    let next = date.succ_opt().unwrap_or(date);
+    (midnight(tz, date, now), midnight(tz, next, now))
+}
+
+/// Local midnight of `date` in `tz` as an instant (`schedule::resolve`'s rules: earliest of
+/// two, forward out of a gap). Should `tz` give no instant at all, `now`'s offset is used.
+fn midnight<Tz: TimeZone>(tz: &Tz, date: NaiveDate, now: DateTime<Utc>) -> DateTime<Utc> {
+    let local: NaiveDateTime = date.and_time(NaiveTime::MIN);
+    match crate::schedule::resolve(tz, local) {
+        Some(t) => t.with_timezone(&Utc),
+        None => {
+            let offset = now.with_timezone(tz).offset().fix().local_minus_utc();
+            (local - TimeDelta::seconds(offset as i64)).and_utc()
+        }
     }
 }
 

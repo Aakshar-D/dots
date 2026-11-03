@@ -645,6 +645,11 @@ impl Store {
 
     /// The dot's sends queued in `[day_start, day_end)`; a resume run continues a send and is
     /// left out (delivery tracking spec section 3.9).
+    ///
+    /// `queued_at` is compared as text, so both bounds must be written as stored times are:
+    /// with `util::timestamp` (RFC 3339 UTC, milliseconds, `Z`). Any other spelling of the same
+    /// instant (`+00:00`, no milliseconds) sorts differently, and a run queued exactly at
+    /// midnight would land in the wrong day.
     pub async fn delivery_counts(
         &self,
         dot_id: &str,

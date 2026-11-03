@@ -21,8 +21,8 @@ use crate::events::{new_bus, Bus, RuntimeEvent};
 use crate::followups::FollowUps;
 use crate::library_service::LibraryService;
 use crate::model::{
-    Approval, AttentionRun, ClaudeStatus, Dot, DotOverview, DotSpec, EngineKind, Inbox,
-    MessageKind, NewRun, PendingApproval, ReviewRun, Run, RunEventRecord, RunStatus,
+    Approval, AttentionRun, ClaudeStatus, DeliveryCounts, Dot, DotOverview, DotSpec, EngineKind,
+    Inbox, MessageKind, NewRun, PendingApproval, ReviewRun, Run, RunEventRecord, RunStatus,
     ScheduleChange, ScheduleSkip, ScheduleView, SettingsSaved, Status, TriggerKind, WorktreeDiff,
 };
 use crate::policy::{allow_candidates, Action, Rule, RuleCandidate};
@@ -1441,8 +1441,11 @@ impl Runtime {
                     .into(),
                 ));
             }
-            // The parent is taken from this reading of the thread, in which it has ended.
-            let Some(parent) = thread.last().filter(|r| r.id == pid) else {
+            // The parent is taken from this reading of the thread, in which it has ended. A
+            // dismissed run (retried or discarded, delivery tracking spec section 3.9) is not
+            // part of the conversation any more: the end is the last run without a dismissal.
+            let live = thread.iter().rfind(|r| r.dismissed_at.is_none());
+            let Some(parent) = live.filter(|r| r.id == pid) else {
                 return Err(Error::Conflict(
                     "this chat has a newer message than the one you replied to; open the chat \
                      again, then send your message"
@@ -1472,6 +1475,108 @@ impl Runtime {
 
     pub async fn cancel_run(&self, run_id: &str) -> Result<Run> {
         self.runner.cancel(run_id).await
+    }
+
+    /// Sends a chat message that did not get there again (delivery tracking spec sections 3.9
+    /// and 4.4): the old run is dismissed (cancelled first if it still waits), then the same
+    /// text goes through the chat path at the old run's place in the thread. A send the chat
+    /// path refuses leaves the old run as it was, so the person can try again. Returns the new
+    /// run. `NotFound` for an unknown run; `Conflict` unless it is a chat message marked not
+    /// delivered and not yet retried or discarded.
+    pub async fn retry_delivery(&self, run_id: &str) -> Result<Run> {
+        let run = self.dismiss_undelivered(run_id).await?;
+        let text = ["answer", "message"].iter().find_map(|k| {
+            run.payload
+                .as_ref()
+                .and_then(|p| p.get(*k))
+                .and_then(|v| v.as_str())
+                .map(str::to_owned)
+        });
+        let Some(text) = text else {
+            let old = self.store.undismiss_run(run_id).await?;
+            self.emit_run_updated(old);
+            return Err(Error::Invalid(
+                "this message has no text to send again".into(),
+            ));
+        };
+        match self
+            .chat(&run.dot_id, &text, run.parent_run_id.as_deref())
+            .await
+        {
+            Ok(new) => {
+                self.emit_run_updated(run);
+                Ok(new)
+            }
+            Err(e) => {
+                match self.store.undismiss_run(run_id).await {
+                    Ok(old) => self.emit_run_updated(old),
+                    Err(u) => tracing::warn!(run = %run_id, "undoing a refused retry failed: {u}"),
+                }
+                Err(e)
+            }
+        }
+    }
+
+    /// Puts away a chat message that did not get there (delivery tracking spec section 4.4):
+    /// the run is dismissed, and cancelled first if it still waits so it never starts later.
+    /// Returns the dismissed run. Same refusals as `retry_delivery`.
+    pub async fn discard_delivery(&self, run_id: &str) -> Result<Run> {
+        let run = self.dismiss_undelivered(run_id).await?;
+        self.emit_run_updated(run.clone());
+        Ok(run)
+    }
+
+    /// Retry's and Discard's first steps: checks the run and dismisses it, cancelling it if it
+    /// is still queued (the cancel's write dismisses a marked run). Returns the dismissed run.
+    async fn dismiss_undelivered(&self, run_id: &str) -> Result<Run> {
+        let run = self.store.get_run(run_id).await?;
+        if run.trigger != TriggerKind::Chat {
+            return Err(Error::Conflict(
+                "only a chat message can be retried or discarded".into(),
+            ));
+        }
+        if run.undelivered_at.is_none() || run.delivered_at.is_some() {
+            return Err(Error::Conflict(
+                "this message is not marked as not delivered".into(),
+            ));
+        }
+        if run.dismissed_at.is_some() {
+            return Err(Error::Conflict(
+                "this message was already retried or discarded".into(),
+            ));
+        }
+        if run.status == RunStatus::Queued {
+            return match self.runner.cancel_if_queued(run_id).await? {
+                Some(run) => Ok(run),
+                None => Err(Error::Conflict(
+                    "this message has just reached the dot".into(),
+                )),
+            };
+        }
+        match self.store.dismiss_run(run_id, self.clock.now()).await? {
+            Some(run) => Ok(run),
+            None => Err(Error::Conflict(
+                "this message was already retried or discarded".into(),
+            )),
+        }
+    }
+
+    fn emit_run_updated(&self, run: Run) {
+        let _ = self.bus.send(RuntimeEvent::RunUpdated { run });
+    }
+
+    /// The dot's sends today, local time (delivery tracking spec sections 3.8 and 4.5).
+    /// `NotFound` for an unknown dot.
+    pub async fn delivery_today(&self, dot_id: &str) -> Result<DeliveryCounts> {
+        self.store.get_dot(dot_id).await?;
+        let (start, end) = crate::delivery::local_day_bounds(self.clock.now(), &Local);
+        self.store
+            .delivery_counts(
+                dot_id,
+                &crate::util::timestamp(start),
+                &crate::util::timestamp(end),
+            )
+            .await
     }
 
     /// Keep waiting on a quiet run (stuck-run watchdog spec section 4.4): the mark goes and the

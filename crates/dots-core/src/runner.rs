@@ -1670,6 +1670,17 @@ impl Runner {
         Err(already(&self.store.get_run(run_id).await?))
     }
 
+    /// Cancels the run only if it is still `queued` (or awaiting an approval) and the runner
+    /// does not hold it, as `cancel` does for such a run: its approvals expire, its attachments
+    /// go, and the change is announced. `None` when it was not (for example, the dispatcher
+    /// claimed it a moment earlier).
+    pub async fn cancel_if_queued(&self, run_id: &str) -> Result<Option<Run>> {
+        if self.active.lock().unwrap().contains_key(run_id) {
+            return Ok(None);
+        }
+        self.cancel_inactive(run_id).await
+    }
+
     /// Flags a held run as cancelled by the user. `None` if the runner does not hold it,
     /// otherwise whether this was the first cancel request for the run.
     fn signal_cancel(&self, run_id: &str) -> Option<bool> {

@@ -10,8 +10,9 @@ use std::time::Duration;
 
 use chrono::{DateTime, TimeDelta, Utc};
 use common::clock::FakeClock;
+use common::tz::TestTz;
 use common::{spec, temp_store};
-use dots_core::delivery::DeliverySweeper;
+use dots_core::delivery::{local_day_bounds, DeliverySweeper};
 use dots_core::engine::scripted::{ScriptedEngine, Step};
 use dots_core::engine::{Engine, EngineEvent};
 use dots_core::events::{new_bus, Bus, RuntimeEvent};
@@ -228,4 +229,109 @@ async fn the_sweeper_runs_on_the_clock() {
         .await
         .expect("the sweeper did not stop")
         .unwrap();
+}
+
+fn utc(s: &str) -> DateTime<Utc> {
+    DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
+}
+
+#[test]
+fn local_day_bounds_follow_local_midnight() {
+    // TestTz is UTC+1 in November: local midnight is 23:00 UTC.
+    let (start, end) = local_day_bounds(utc("2026-11-03T22:59:59Z"), &TestTz);
+    assert_eq!(start, utc("2026-11-02T23:00:00Z"));
+    assert_eq!(end, utc("2026-11-03T23:00:00Z"));
+
+    let (start, end) = local_day_bounds(utc("2026-11-03T23:00:00Z"), &TestTz);
+    assert_eq!(start, utc("2026-11-03T23:00:00Z"));
+    assert_eq!(end, utc("2026-11-04T23:00:00Z"));
+
+    // Spring forward: the clocks go from 02:00 to 03:00, so the day is 23 hours long.
+    let (start, end) = local_day_bounds(utc("2026-03-29T12:00:00Z"), &TestTz);
+    assert_eq!(start, utc("2026-03-28T23:00:00Z"));
+    assert_eq!(end, utc("2026-03-29T22:00:00Z"));
+    assert_eq!(end - start, TimeDelta::hours(23));
+}
+
+/// A zone whose clocks skip midnight: on 2026-11-03 they go from 00:00 to 01:00 (UTC+1 to
+/// UTC+2 at 2026-11-02T23:00Z).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MidnightGapTz;
+
+impl chrono::TimeZone for MidnightGapTz {
+    type Offset = chrono::FixedOffset;
+
+    fn from_offset(_: &chrono::FixedOffset) -> Self {
+        MidnightGapTz
+    }
+
+    fn offset_from_local_date(
+        &self,
+        local: &chrono::NaiveDate,
+    ) -> chrono::LocalResult<chrono::FixedOffset> {
+        self.offset_from_local_datetime(&local.and_hms_opt(0, 0, 0).unwrap())
+    }
+
+    fn offset_from_local_datetime(
+        &self,
+        local: &chrono::NaiveDateTime,
+    ) -> chrono::LocalResult<chrono::FixedOffset> {
+        let fits: Vec<chrono::FixedOffset> = [7200, 3600]
+            .into_iter()
+            .map(|s| chrono::FixedOffset::east_opt(s).unwrap())
+            .filter(|o| {
+                let at = *local - TimeDelta::seconds(o.local_minus_utc() as i64);
+                self.offset_from_utc_datetime(&at) == *o
+            })
+            .collect();
+        match fits[..] {
+            [o] => chrono::LocalResult::Single(o),
+            [a, b] => chrono::LocalResult::Ambiguous(a, b),
+            _ => chrono::LocalResult::None,
+        }
+    }
+
+    fn offset_from_utc_date(&self, utc: &chrono::NaiveDate) -> chrono::FixedOffset {
+        self.offset_from_utc_datetime(&utc.and_hms_opt(0, 0, 0).unwrap())
+    }
+
+    fn offset_from_utc_datetime(&self, at: &chrono::NaiveDateTime) -> chrono::FixedOffset {
+        let change = utc("2026-11-02T23:00:00Z").naive_utc();
+        chrono::FixedOffset::east_opt(if *at >= change { 7200 } else { 3600 }).unwrap()
+    }
+}
+
+#[test]
+fn a_day_whose_midnight_is_skipped_starts_at_the_first_valid_instant() {
+    let (start, end) = local_day_bounds(utc("2026-11-03T12:00:00Z"), &MidnightGapTz);
+    // Local 00:00 on 3 November does not exist; the day starts at 01:00 local, the change.
+    assert_eq!(start, utc("2026-11-02T23:00:00Z"));
+    assert_eq!(end, utc("2026-11-03T22:00:00Z"));
+}
+
+#[tokio::test]
+async fn today_counts_a_run_queued_at_local_midnight_and_one_just_before_the_next() {
+    let e = env().await;
+    let dot = e.dot("a").await;
+    let (start, end) = local_day_bounds(utc("2026-11-03T12:00:00Z"), &TestTz);
+    // Local 00:00:00.000 and 23:59:59.999 on 3 November count; the instants just outside do not.
+    for at in [
+        "2026-11-02T22:59:59.999Z",
+        "2026-11-02T23:00:00.000Z",
+        "2026-11-03T22:59:59.999Z",
+        "2026-11-03T23:00:00.000Z",
+    ] {
+        let run = e
+            .store
+            .create_run(&NewRun::new(&dot.id, TriggerKind::Chat))
+            .await
+            .unwrap();
+        e.store.set_run_queued_at(&run.id, at).await.unwrap();
+    }
+    let counts = e
+        .store
+        .delivery_counts(&dot.id, &timestamp(start), &timestamp(end))
+        .await
+        .unwrap();
+    assert_eq!(counts.sent, 2);
 }
