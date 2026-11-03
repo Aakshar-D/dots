@@ -6,6 +6,7 @@ import {
   conversation,
   currentTopic,
   defaultTarget,
+  lastRun,
   olderTopics,
   oneLine,
   topicOf,
@@ -126,5 +127,21 @@ describe("topics", () => {
     expect(oneLine(" one\ntwo ")).toBe("one");
     expect(oneLine(null)).toBe("");
     expect(oneLine("abcdef", 3)).toBe("abc…");
+  });
+});
+
+describe("lastRun", () => {
+  it("skips a dismissed last run, so a reply continues the live line", () => {
+    const a = root("a", 0);
+    const retried = reply("a2", a, 10);
+    const dismissed = reply("a3", a, 20);
+    const topic = topicOf([a, retried, { ...dismissed, dismissed_at: "2026-10-09T10:21:00Z" }]);
+    expect(lastRun(topic).id).toBe("a2");
+  });
+
+  it("is the last run when all are dismissed or none is", () => {
+    const a = { ...root("a", 0), dismissed_at: "2026-10-09T10:21:00Z" };
+    expect(lastRun(topicOf([a])).id).toBe("a");
+    expect(lastRun(topicOf([root("b", 0), reply("b2", root("b", 0), 5)])).id).toBe("b2");
   });
 });

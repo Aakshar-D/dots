@@ -172,6 +172,10 @@ export const commands = {
     call(T.Run, "chat", { dotId, message, parentRunId }),
   cancelRun: (runId: string) => call(T.Run, "cancel_run", { runId }),
   keepWaiting: (runId: string) => call(nothing, "keep_waiting", { runId }),
+  /// Send a chat message that did not get there again; rejects with `conflict` when it just did.
+  retryDelivery: (runId: string) => call(T.Run, "retry_delivery", { runId }),
+  discardDelivery: (runId: string) => call(T.Run, "discard_delivery", { runId }),
+  deliveryToday: (dotId: string) => call(T.DeliveryCounts, "delivery_today", { dotId }),
   listRuns: (dotId: string | null, limit: number) =>
     call(T.Run.array(), "list_runs", { dotId, limit }),
   getRun: (id: string) => call(T.Run, "get_run", { id }),

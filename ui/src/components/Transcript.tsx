@@ -1,4 +1,5 @@
 import { Fragment, type ReactNode } from "react";
+import { DeliveryLine } from "@/components/DeliveryLine";
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "cn";
 import { Brain, ChevronRight, Info } from "lucide-react";
@@ -471,6 +472,7 @@ export function Transcript(props: {
                   {message}
                 </p>
               )}
+              <DeliveryLine run={run} />
               {!conversation && (items.length > 0 || checkIns.length > 0) && (
                 <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
                   <span aria-hidden className="size-1.5 rounded-full bg-primary" />
@@ -500,7 +502,7 @@ export function Transcript(props: {
                   />
                 ),
               )}
-              {conversation && run.trigger === "chat" && run.status === "cancelled" && (
+              {conversation && run.trigger === "chat" && run.status === "cancelled" && !run.undelivered_at && (
                 <p className="text-xs text-muted-foreground">Cancelled</p>
               )}
               {items.length === 0 && message === null && run.status === "queued" && (

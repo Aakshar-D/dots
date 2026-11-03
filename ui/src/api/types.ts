@@ -60,6 +60,11 @@ export const LibraryKind = z.enum(["mcp_server", "skill", "plugin", "context", "
 // accepted.
 export const CatalogStatus = z.enum(["accepted", "changed", "unreachable", "unchecked"]);
 
+// Whether a chat message reached its dot (delivery tracking spec section 3).
+export const Delivery = z.enum(["delivered", "waiting", "not_delivered"]);
+// Why a message is still waiting.
+export const WaitReason = z.enum(["busy", "usage_hold", "updating", "dot_busy", "queued"]);
+
 export const Rule = z.strictObject({ tool: z.string(), action: Action });
 export const Policy = z.strictObject({
   preset: Preset,
@@ -179,8 +184,25 @@ const runShape = {
   quiet_limit_secs: nullable(z.number().int()),
   // The watchdog stopped the run for being quiet.
   quiet_stopped: z.boolean(),
+  // When the message reached its dot's engine; null until then.
+  delivered_at: nullable(z.string()),
+  // When the core marked it as not delivered, and why.
+  undelivered_at: nullable(z.string()),
+  undelivered_reason: nullable(z.string()),
+  // The person chose Retry or Discard for a message that did not get there.
+  dismissed_at: nullable(z.string()),
+  delivery: nullable(Delivery),
+  wait_reason: nullable(WaitReason),
 };
 export const Run = z.strictObject(runShape);
+
+/// Today's chat messages to a dot.
+export const DeliveryCounts = z.strictObject({
+  sent: z.number().int(),
+  delivered: z.number().int(),
+  not_delivered: z.number().int(),
+});
+export type DeliveryCounts = z.infer<typeof DeliveryCounts>;
 
 export const RunEventRecord = z.strictObject({
   run_id: z.string(),

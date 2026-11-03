@@ -478,4 +478,22 @@ describe("what the self-QA found", () => {
     expect(await screen.findByText("question current")).toBeVisible();
     expect(screen.queryByText("run gone")).toBeNull();
   });
+
+  it("shows Not delivered above the retry's bubble, and no Cancelled", async () => {
+    const first = chat("a", "10:00", {
+      status: "cancelled",
+      delivery: "not_delivered",
+      undelivered_at: "2026-10-09T10:30:00.000Z",
+      undelivered_reason: "claude CLI not found",
+      dismissed_at: "2026-10-09T10:31:00.000Z",
+    });
+    home([first, reply("b", first, "10:32")]);
+    renderApp(`/home/${dot.id}`);
+    const view = within(await screen.findByRole("region", { name: "Conversation" }));
+    const line = await view.findByText("Not delivered");
+    const retry = await view.findByText("reply b");
+    expect(line.compareDocumentPosition(retry) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(view.queryByText("Cancelled")).toBeNull();
+    expect(view.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
 });
