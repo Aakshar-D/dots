@@ -468,7 +468,7 @@ async fn a_secret_added_and_then_deleted_on_the_branch_is_refused() {
     assert_eq!(s.remote_tip("dots/fix"), None);
     assert!(s.gh_calls().is_empty(), "refused before gh runs");
 
-    // An explicit base is scanned from, in place of the remote's refs: still every commit after it.
+    // An explicit base is scanned from, in place of the merge-base; the remote's tracking refs still bound the scan.
     branch.base = Some(base);
     let err = s
         .deploy("ok", &DeployMode::Push, &[branch])
@@ -510,8 +510,25 @@ async fn a_secret_in_an_unpushed_commit_below_the_merge_base_is_refused() {
 }
 
 #[tokio::test]
-async fn the_scan_starts_from_the_given_base() {
+async fn a_given_base_does_not_hide_unpushed_commits_below_it() {
     let s = scratch();
+    // An unpushed commit the branch's work started from, given as its base.
+    let below = s.commit("main", &[(".env", Some(b"TOKEN=1\n"))]);
+    let tip = s.commit("dots/fix", &[("src/fix.rs", Some(b"fn fix() {}\n"))]);
+    let mut branch = approved("dots/fix", &tip);
+    branch.base = Some(below);
+    let err = s
+        .deploy("ok", &DeployMode::Push, &[branch])
+        .await
+        .unwrap_err();
+    assert!(err.contains(": .env. Remove"), "{err}");
+    assert_eq!(s.remote_tip("dots/fix"), None);
+}
+
+#[tokio::test]
+async fn without_tracking_refs_the_scan_starts_from_the_given_base() {
+    let s = scratch();
+    git_out(&s.repo, &["update-ref", "-d", "refs/remotes/origin/main"]);
     let with_secret = s.commit("dots/fix", &[("id_ed25519.pub", Some(b"ssh-ed25519\n"))]);
     let tip = s.commit("dots/fix", &[("src/fix.rs", Some(b"fn fix() {}\n"))]);
     let mut branch = approved("dots/fix", &tip);

@@ -255,9 +255,10 @@ async fn check_tip(repo: &Path, b: &ApprovedBranch) -> Result<(), String> {
 }
 
 /// The secret and size check of one branch: every file in every commit the push would send,
-/// even one deleted again by a later commit, as the history it pushes keeps it. With a given
-/// `base`, the commits after it; else the commits the remote's tracking refs lack, or, when the
-/// remote has none, those after the merge-base with the project's default branch.
+/// even one deleted again by a later commit, as the history it pushes keeps it. Only what the
+/// remote already has is skipped: its tracking refs when it has any (a given `base` does not
+/// narrow that), else the commits up to the given `base`, else up to the merge-base with the
+/// project's default branch.
 async fn guard(repo: &Path, remote: &str, base: &str, b: &ApprovedBranch) -> Result<(), String> {
     let mut args: Vec<String> = [
         "log",
@@ -282,8 +283,8 @@ async fn guard(repo: &Path, remote: &str, base: &str, b: &ApprovedBranch) -> Res
     let out = run("git for-each-ref", &mut git(repo, &refs), None).await?;
     let has_tracking = !succeeded("git for-each-ref", &out)?.trim().is_empty();
     match &b.base {
+        _ if has_tracking => args.push(format!("--remotes={remote}")),
         Some(from) => args.push(from.clone()),
-        None if has_tracking => args.push(format!("--remotes={remote}")),
         None => {
             let default = crate::workspace::default_branch_ref(repo, base, remote).await;
             let mb = ["merge-base", "--end-of-options", &default, &b.commit];
