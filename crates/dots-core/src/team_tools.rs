@@ -178,6 +178,23 @@ pub struct SendBackTarget {
     pub name: String,
 }
 
+/// A member a delegate step may start.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StartableMember {
+    pub dot_id: String,
+    pub name: String,
+}
+
+/// What a delegate step's run may start (section 5.3): the members, and how many at once and
+/// in all.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DelegateTools {
+    /// In the definition's order.
+    pub may_start: Vec<StartableMember>,
+    pub at_once: u32,
+    pub total: u32,
+}
+
 /// The workflow tools of a run that works for an open agent step (section 7): what the step
 /// declares, read from the workflow run's definition when the run starts.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -188,15 +205,19 @@ pub struct StepTools {
     pub outcomes: Vec<String>,
     /// The steps it may send its work back to, in the definition's order.
     pub send_back_to: Vec<SendBackTarget>,
+    /// For a delegate step, the members it may start.
+    pub delegate: Option<DelegateTools>,
 }
 
 impl StepTools {
     /// The tools of the step run `step_run_id` of `step`, an agent step of `definition`; `None`
-    /// for a step of another kind.
+    /// for a step of another kind. The members a delegate step may start are named by their
+    /// dot ids here: `read` names them as the store has them.
     pub fn of(step_run_id: &str, step: &Step, definition: &Definition) -> Option<StepTools> {
         let StepKind::Agent {
             can_send_back_to,
             outcomes,
+            delegate,
             ..
         } = &step.kind
         else {
@@ -216,24 +237,84 @@ impl StepTools {
                     name: s.name.clone(),
                 })
                 .collect(),
+            delegate: delegate.as_ref().map(|d| DelegateTools {
+                may_start: d
+                    .may_start
+                    .iter()
+                    .map(|id| StartableMember {
+                        dot_id: id.clone(),
+                        name: id.clone(),
+                    })
+                    .collect(),
+                at_once: d.at_once,
+                total: d.total,
+            }),
         })
     }
 
+    /// `of`, with the members a delegate step may start named as their dots are now. A member
+    /// that is no longer a dot is left out: it could not be started.
+    pub async fn read(
+        store: &Store,
+        step_run_id: &str,
+        step: &Step,
+        definition: &Definition,
+    ) -> Result<Option<StepTools>> {
+        let Some(mut tools) = StepTools::of(step_run_id, step, definition) else {
+            return Ok(None);
+        };
+        if let Some(delegate) = &mut tools.delegate {
+            let mut named = Vec::new();
+            for member in &delegate.may_start {
+                match store.get_dot(&member.dot_id).await {
+                    Ok(dot) => named.push(StartableMember {
+                        dot_id: dot.id,
+                        name: dot.spec.name,
+                    }),
+                    Err(crate::Error::NotFound(_)) => {}
+                    Err(e) => return Err(e),
+                }
+            }
+            delegate.may_start = named;
+        }
+        Ok(Some(tools))
+    }
+
     /// Whether the run has `tool`: `report_outcome` with outcomes to report, `send_back` with
-    /// steps to send back to. `start_member` is not offered yet, nor is `start_workflow`, which
-    /// is a chat's tool.
+    /// steps to send back to, `start_member` with members to start. Never `start_workflow`,
+    /// which is a chat's tool.
     pub fn offers(&self, tool: Tool) -> bool {
         match tool {
             Tool::ReportOutcome => !self.outcomes.is_empty(),
             Tool::SendBack => !self.send_back_to.is_empty(),
-            Tool::StartWorkflow | Tool::StartMember => false,
+            Tool::StartMember => self
+                .delegate
+                .as_ref()
+                .is_some_and(|d| !d.may_start.is_empty()),
+            Tool::StartWorkflow => false,
         }
     }
 
     /// The lines of the `## Workflow` section that name the run's tools as its model knows
-    /// them, with the outcomes and the steps it may send back to; empty without any.
+    /// them, with the members it may start and its limits, the outcomes and the steps it may
+    /// send back to; empty without any.
     pub fn prompt_lines(&self, engine: EngineKind) -> String {
         let mut out = String::new();
+        if let Some(d) = self
+            .delegate
+            .as_ref()
+            .filter(|_| self.offers(Tool::StartMember))
+        {
+            out.push_str(&format!(
+                "- Start other members of the team on parts of the work with `{}`, one of: {}. \
+                 At most {} may run at once, and {} in all. End your turn once you have started \
+                 them: you are told when they finish.\n",
+                Tool::StartMember.model_name(engine),
+                quoted(d.may_start.iter().map(|m| m.name.as_str())),
+                d.at_once,
+                d.total
+            ));
+        }
         if self.offers(Tool::ReportOutcome) {
             out.push_str(&format!(
                 "- Report how the step came out with `{}`, one of: {}. The workflow goes on by \
@@ -263,12 +344,15 @@ pub fn quoted<'a>(names: impl Iterator<Item = &'a str>) -> String {
 }
 
 /// The workflow tools of `run`: those of the agent step it works for while that step is open
-/// (its step run `running` or `waiting`). A run in a member's thread gets none (task 5's rule:
-/// a run whose `root_run_id` has a `workflow_step_members` row); nor does any other run.
+/// (its step run `running` or `waiting`). A run in the thread of a member a delegate step
+/// started (its root run is a member's) gets none; nor does any other run.
 pub async fn for_run(store: &Store, run: &Run) -> Result<Option<StepTools>> {
     let Some(step_run_id) = &run.workflow_step_run_id else {
         return Ok(None);
     };
+    if store.step_member(&run.root_run_id).await?.is_some() {
+        return Ok(None);
+    }
     let step_run = store.get_step_run(step_run_id).await?;
     if !matches!(
         step_run.status,
@@ -277,8 +361,8 @@ pub async fn for_run(store: &Store, run: &Run) -> Result<Option<StepTools>> {
         return Ok(None);
     }
     let wr = store.get_workflow_run(&step_run.workflow_run_id).await?;
-    Ok(wr
-        .definition
-        .step(&step_run.step_id)
-        .and_then(|step| StepTools::of(&step_run.id, step, &wr.definition)))
+    match wr.definition.step(&step_run.step_id) {
+        Some(step) => StepTools::read(store, &step_run.id, step, &wr.definition).await,
+        None => Ok(None),
+    }
 }

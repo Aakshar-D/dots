@@ -1,5 +1,5 @@
-//! The workflow tools of the local engine (`start_workflow`, `report_outcome`, `send_back`;
-//! policy name `Workflow`): built in, as the check-in tools are (teams spec section 7). What
+//! The workflow tools of the local engine (`start_workflow`, `start_member`, `report_outcome`,
+//! `send_back`; policy name `Workflow`): built in, as the check-in tools are (teams spec section 7). What
 //! they do is `crate::workflows`, which the Claude engine's `dots` MCP server also uses.
 
 use serde_json::Value;
@@ -37,6 +37,7 @@ pub async fn run(
             return ToolOutput::err(format!("{} is not available in this run", t.name()))
         }
         (Tool::StartWorkflow, _) => workflows.call_start(run_id, tools.startable(), input).await,
+        (Tool::StartMember, Some(step)) => workflows.call_start_member(run_id, step, input).await,
         (Tool::ReportOutcome, Some(step)) => {
             workflows.call_report_outcome(run_id, step, input).await
         }

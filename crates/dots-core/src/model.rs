@@ -1060,6 +1060,33 @@ pub struct Handoff {
     pub summary: String,
     pub branches: Vec<BranchRef>,
     pub outcome: Option<String>,
+    /// For a delegate step, what each member it started handed back, in the order started.
+    #[serde(default)]
+    pub members: Vec<MemberHandoff>,
+}
+
+/// What a member a delegate step started handed back (teams spec section 6): its thread's end.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemberHandoff {
+    pub dot_id: String,
+    pub task: String,
+    /// How its thread ended: `succeeded`, `failed` or `cancelled`.
+    pub status: RunStatus,
+    pub summary: String,
+    /// Its branch, while that still exists.
+    pub branch: Option<String>,
+}
+
+/// A member a delegate step's run started (`start_member`, teams spec section 5.3): the root
+/// run of its thread, and whether the delegating run has been told how it ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StepMember {
+    pub run_id: String,
+    pub step_run_id: String,
+    pub dot_id: String,
+    pub task: String,
+    pub reported: bool,
+    pub created_at: String,
 }
 
 /// One step's execution inside a workflow run. Times are RFC 3339 UTC.

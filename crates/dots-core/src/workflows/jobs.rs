@@ -131,7 +131,8 @@ impl Workflows {
     }
 
     /// Starts the job that ends the agent step run `step_run`, whose runs `runs` have all
-    /// ended with the newest succeeded: it builds the step's hand-off (`handoff_of`, Dots'
+    /// ended with the newest of its own thread succeeded (and, for a delegate step, every
+    /// member reported to it): it builds the step's hand-off (`handoff_of`, Dots'
     /// commit included), then succeeds the step run with it and begins the step after it.
     pub(super) fn start_hand_off(&self, wr: &WorkflowRun, step_run: &StepRun, runs: Vec<Run>) {
         let wr = wr.clone();
@@ -146,7 +147,10 @@ impl Workflows {
         if !self.through_gate().await {
             return Ok(());
         }
-        let built = self.handoff_of(&wr, &runs).await;
+        // The members cannot change unread: a member started meanwhile adds a run, and the
+        // runs are compared below.
+        let members = self.store.step_members(&step_run_id).await?;
+        let built = self.handoff_of(&wr, &members, &runs).await;
         let _one = self.lock.lock().await;
         let Some((wr, step_run)) = self.still_open(&wr.id, &step_run_id).await? else {
             return Ok(());

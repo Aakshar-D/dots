@@ -6,8 +6,10 @@
 //! state calls for, so a restart or a lost event never loses a step. The loop passes when a run
 //! of a step changes, when a question is posted or answered, when it is woken, and every
 //! `TICK`. Slow work a step needs (an agent step's hand-off) runs as a job outside the loop's
-//! lock (`jobs`).
+//! lock (`jobs`). A delegate step's run may start other members, whose results continue it
+//! (`delegate`).
 
+mod delegate;
 mod jobs;
 mod tools;
 
@@ -28,8 +30,8 @@ use tokio_util::sync::CancellationToken;
 use crate::accounts::Permission;
 use crate::events::{Bus, RuntimeEvent};
 use crate::model::{
-    BranchRef, Handoff, NewRun, NewWorkflowRun, Run, RunStatus, StartableWorkflow, StepRun,
-    StepRunChange, StepRunStatus, TriggerKind, WaitingOn, WorkflowRun, WorkflowRunChange,
+    BranchRef, Handoff, NewRun, NewWorkflowRun, Run, RunStatus, StartableWorkflow, StepMember,
+    StepRun, StepRunChange, StepRunStatus, TriggerKind, WaitingOn, WorkflowRun, WorkflowRunChange,
     WorkflowRunStatus, WorkflowTrigger,
 };
 use crate::runner::Runner;
@@ -286,6 +288,57 @@ fn cut(text: &str, max: usize) -> String {
     let mut out: String = text.chars().take(keep).collect();
     out.push_str(MARK);
     out
+}
+
+/// Where a step's prompt places it: the project, and the step with its number among all the
+/// steps of the tree, branches and the paths not taken included.
+fn place(wr: &WorkflowRun, step: &Step) -> String {
+    format!(
+        "- Project: {} ({})\n- Step: {} ({} of {})\n\n",
+        wr.project.name,
+        wr.project.repo_path,
+        step.name,
+        wr.definition.position(&step.id).unwrap_or_default() + 1,
+        wr.definition.all().len()
+    )
+}
+
+/// Whether the branch `branch` exists in `repo`, as a branch (a tag of that name is not it).
+async fn branch_exists(repo: &Path, branch: &str) -> bool {
+    git(
+        repo,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "--end-of-options",
+            &format!("refs/heads/{branch}"),
+        ],
+    )
+    .await
+    .is_ok()
+}
+
+/// Whether the branch `branch` has commits since `base`, the commit its worktree started on;
+/// without a base, whether it exists.
+async fn has_commits(repo: &Path, branch: &str, base: Option<&str>) -> bool {
+    let Some(base) = base else {
+        return branch_exists(repo, branch).await;
+    };
+    let range = format!("{base}..refs/heads/{branch}");
+    git(repo, &["rev-list", "--count", "--end-of-options", &range])
+        .await
+        .is_ok_and(|n| n.trim().parse::<u64>().is_ok_and(|n| n > 0))
+}
+
+/// The hand-off's reference to `branch`, the branch of `run`.
+fn branch_ref(run: &Run, branch: String) -> BranchRef {
+    BranchRef {
+        run_id: run.id.clone(),
+        branch,
+        worktree_path: run.workspace_path.clone().unwrap_or_default(),
+        base_commit: run.base_commit.clone(),
+    }
 }
 
 impl Workflows {
@@ -1093,6 +1146,25 @@ impl Workflows {
         self.runner.enqueue(new).await
     }
 
+    /// How a prompt of a run of `member` names its place: the team's name, who the member is
+    /// in it (`the <role>`, else `a member`) and the workflow's name.
+    async fn names(&self, wr: &WorkflowRun, member: &str) -> Result<(String, String, String)> {
+        let team = self.store.get_team(&wr.team_id).await?;
+        let you = team
+            .members
+            .iter()
+            .find(|m| m.dot_id == member)
+            .map(|m| m.role.trim().to_string())
+            .filter(|r| !r.is_empty())
+            .map_or("a member".to_string(), |r| format!("the {r}"));
+        let workflow = match &wr.workflow_id {
+            Some(id) => self.store.get_workflow(id).await.ok().map(|w| w.spec.name),
+            None => None,
+        }
+        .unwrap_or_else(|| "this workflow".to_string());
+        Ok((team.name, you, workflow))
+    }
+
     /// The `## Workflow` section of the prompt of `step` (section 5.2). Its place counts every
     /// step of the tree in run order, branches and the paths not taken included. It names the
     /// workflow tools the step's runs have (section 7), as the member's model knows them, unless
@@ -1101,35 +1173,12 @@ impl Workflows {
         let StepKind::Agent { member, job, .. } = &step.kind else {
             return Ok(String::new());
         };
-        let team = self.store.get_team(&wr.team_id).await?;
-        let role = team
-            .members
-            .iter()
-            .find(|m| &m.dot_id == member)
-            .map(|m| m.role.trim().to_string())
-            .filter(|r| !r.is_empty());
-        let workflow = match &wr.workflow_id {
-            Some(id) => self.store.get_workflow(id).await.ok().map(|w| w.spec.name),
-            None => None,
-        }
-        .unwrap_or_else(|| "this workflow".to_string());
+        let (team, you, workflow) = self.names(wr, member).await?;
         let mut out = String::from("## Workflow\n\n");
         out.push_str(&format!(
-            "You are {} of the team \"{}\", doing one step of the workflow \"{}\".\n\n",
-            role.map_or("a member".to_string(), |r| format!("the {r}")),
-            team.name,
-            workflow
+            "You are {you} of the team \"{team}\", doing one step of the workflow \"{workflow}\".\n\n"
         ));
-        out.push_str(&format!(
-            "- Project: {} ({})\n",
-            wr.project.name, wr.project.repo_path
-        ));
-        out.push_str(&format!(
-            "- Step: {} ({} of {})\n\n",
-            step.name,
-            wr.definition.position(&step.id).unwrap_or_default() + 1,
-            wr.definition.all().len()
-        ));
+        out.push_str(&place(wr, step));
         out.push_str("### Task\n\n");
         out.push_str(wr.task.trim());
         out.push_str("\n\n### Your job in this step\n\n");
@@ -1159,9 +1208,12 @@ impl Workflows {
                 .resolve(crate::policy::WORKFLOW_TOOL, &serde_json::Value::Null)
                 != crate::policy::Action::Deny
         });
-        let tools = match (dot, StepTools::of(&step_run.id, step, &wr.definition)) {
-            (Some(dot), Some(tools)) => tools.prompt_lines(dot.spec.engine),
-            _ => String::new(),
+        let tools = match dot {
+            Some(dot) => StepTools::read(&self.store, &step_run.id, step, &wr.definition)
+                .await?
+                .map(|tools| tools.prompt_lines(dot.spec.engine))
+                .unwrap_or_default(),
+            None => String::new(),
         };
         if !tools.is_empty() {
             out.push_str("### Workflow tools\n\n");
@@ -1174,11 +1226,13 @@ impl Workflows {
         Ok(out)
     }
 
-    /// Watches an agent step's runs: it ends when its newest run's thread has ended and no
-    /// question of it waits for the person, by the job that builds its hand-off (unless one is
-    /// in flight). A step whose run is gone gets one again, as a step that begins does: unless
-    /// its member may not run, which fails it, or a limit is reached, which waits for the
-    /// person.
+    /// Watches an agent step's runs: it ends when its own thread has ended and no question of
+    /// it waits for the person, by the job that builds its hand-off (unless one is in flight).
+    /// A delegate step also waits for the threads of the members it started, and continues its
+    /// own thread with their results (`delegate`). An own thread that failed fails the step,
+    /// and cancels the members still running. A step whose run is gone gets one again, as a
+    /// step that begins does: unless its member may not run, which fails it, or a limit is
+    /// reached, which waits for the person.
     async fn watch_agent(&self, wr: &WorkflowRun, step: &Step, step_run: &StepRun) -> Result<()> {
         // The question first: an answer closes it and stores the run that continues the thread
         // in one transaction, so once it reads as closed, the runs read next include that run.
@@ -1186,7 +1240,9 @@ impl Workflows {
             return Ok(());
         }
         let runs = self.store.runs_of_step_run(&step_run.id).await?;
-        let Some(last) = runs.last() else {
+        let members = self.store.step_members(&step_run.id).await?;
+        let own = delegate::own_runs(&runs, &members);
+        let Some(last) = own.last().copied() else {
             if let StepKind::Agent { member, .. } = &step.kind {
                 if let Some(error) = self.member_refusal(member).await? {
                     return self.fail_step(wr, step, step_run, &error).await;
@@ -1198,7 +1254,7 @@ impl Workflows {
             self.queue_agent_run(wr, step, step_run).await?;
             return Ok(());
         };
-        if runs.iter().any(|r| !r.status.is_terminal()) {
+        if own.iter().any(|r| !r.status.is_terminal()) {
             return Ok(());
         }
         if last.status != RunStatus::Succeeded {
@@ -1206,7 +1262,16 @@ impl Workflows {
                 RunStatus::Cancelled => "the run was cancelled".to_string(),
                 _ => "the run failed".to_string(),
             });
-            return self.fail_step(wr, step, step_run, &error).await;
+            self.fail_step(wr, step, step_run, &error).await?;
+            self.cancel_members(&runs, &members).await;
+            return Ok(());
+        }
+        if !members.is_empty()
+            && !self
+                .members_done(wr, step, step_run, last, &members, &runs)
+                .await?
+        {
+            return Ok(());
         }
         // The hand-off runs Dots' commit, up to two minutes: not under the lock.
         self.start_hand_off(wr, step_run, runs);
@@ -1248,44 +1313,48 @@ impl Workflows {
         Ok(())
     }
 
-    /// What a finished agent step hands on (section 6): its newest run's summary, and the
-    /// branch of its thread when the branch still exists (a worktree with no change was
-    /// removed with its branch). What the thread left uncommitted is committed first. The
-    /// outcome is the caller's: the step run's. Slow, and run by a job without the lock.
-    async fn handoff_of(&self, wr: &WorkflowRun, runs: &[Run]) -> Handoff {
-        let last = runs.last();
-        let summary = last.and_then(|r| r.summary.clone()).unwrap_or_default();
+    /// What a finished agent step hands on (section 6): its own thread's newest summary, and
+    /// the branch of that thread when the branch still exists (a worktree with no change was
+    /// removed with its branch). What the thread left uncommitted is committed first. A
+    /// delegate step also hands on what each member it started handed back, and its branches
+    /// are those of section 6.2: its own branch when it has commits (the delegating run merged
+    /// the members' work), else each member's branch that exists. The outcome is the caller's:
+    /// the step run's. Slow, and run by a job without the lock.
+    async fn handoff_of(&self, wr: &WorkflowRun, members: &[StepMember], runs: &[Run]) -> Handoff {
+        let own = delegate::own_runs(runs, members);
+        let summary = own
+            .last()
+            .and_then(|r| r.summary.clone())
+            .unwrap_or_default();
+        let repo = Path::new(&wr.project.repo_path);
         let mut branches = Vec::new();
-        if let Some(run) = runs.iter().rev().find(|r| r.branch.is_some()) {
+        if let Some(run) = own.iter().rev().find(|r| r.branch.is_some()) {
             // Dots' commit, should the run's end not have made it (section 6.1): the next step
             // starts from this branch's tip.
             self.runner.commit_step_work(run).await;
             let branch = run.branch.clone().unwrap_or_default();
-            let exists = git(
-                Path::new(&wr.project.repo_path),
-                &[
-                    "rev-parse",
-                    "--verify",
-                    "--quiet",
-                    "--end-of-options",
-                    &format!("refs/heads/{branch}"),
-                ],
-            )
-            .await
-            .is_ok();
-            if exists {
-                branches.push(BranchRef {
-                    run_id: run.id.clone(),
-                    branch,
-                    worktree_path: run.workspace_path.clone().unwrap_or_default(),
-                    base_commit: run.base_commit.clone(),
-                });
+            if branch_exists(repo, &branch).await
+                && (members.is_empty()
+                    || has_commits(repo, &branch, run.base_commit.as_deref()).await)
+            {
+                branches.push(branch_ref(run, branch));
             }
+        }
+        let mut handed = Vec::new();
+        let mut member_branches = Vec::new();
+        for member in members {
+            let (end, branch) = self.member_end(wr, member, runs, true).await;
+            handed.push(end);
+            member_branches.extend(branch);
+        }
+        if branches.is_empty() {
+            branches = member_branches;
         }
         Handoff {
             summary: cut(&summary, MAX_HANDOFF_SUMMARY),
             branches,
             outcome: None,
+            members: handed,
         }
     }
 }

@@ -11,16 +11,16 @@ use dots_core::engine::{Engine, EngineEvent, RunContext};
 use dots_core::events::{new_bus, Bus, RuntimeEvent};
 use dots_core::followups::FollowUps;
 use dots_core::model::{
-    Dot, EngineKind, FollowUpStatus, MemberSpec, NewRun, ProjectSpec, RunStatus, StepRunStatus,
-    TeamSpec, TriggerKind, WaitingOn, WorkflowRun, WorkflowRunStatus, WorkflowSpec,
-    WorkflowTrigger, WorkspaceMode,
+    Dot, EngineKind, FollowUpStatus, MemberHandoff, MemberSpec, NewRun, ProjectSpec, Run,
+    RunStatus, StepRunStatus, TeamSpec, TriggerKind, WaitingOn, WorkflowRun, WorkflowRunStatus,
+    WorkflowSpec, WorkflowTrigger, WorkspaceMode,
 };
 use dots_core::runner::{Runner, RunnerConfig};
 use dots_core::scheduler::{Clock, SystemClock};
 use dots_core::store::Store;
-use dots_core::team_tools::{SendBackTarget, StepTools, Tool};
+use dots_core::team_tools::{DelegateTools, SendBackTarget, StartableMember, StepTools, Tool};
 use dots_core::workflow::{
-    BranchOn, BranchPath, Budget, Definition, DeployMode, Step, StepKind, Trigger,
+    BranchOn, BranchPath, Budget, Definition, Delegate, DeployMode, Step, StepKind, Trigger,
 };
 use dots_core::workflows::{StartRequest, Workflows, ENDED_STEP_THREAD};
 use dots_core::Error;
@@ -56,6 +56,12 @@ enum Act {
     WriteAndTag(&'static str, &'static str),
     /// Finishes with this summary, made at run time.
     Say(String),
+    /// Calls `start_member` with each (member, task), as the run's model would, keeping the
+    /// answers (`Team::answers`); then does the act given.
+    Start(Vec<(&'static str, &'static str)>, Box<Act>),
+    /// Waits for a permit of `Team::held`, then writes a file into its workspace and finishes
+    /// with this summary.
+    Await(&'static str, &'static str),
 }
 
 /// Plays each dot's acts in order, one per run (the last one again once they run out), and
@@ -66,6 +72,12 @@ struct Team {
     prompts: Mutex<Vec<(String, String)>>,
     step_tools: Mutex<Vec<(String, Option<StepTools>)>>,
     gate: Arc<tokio::sync::Notify>,
+    /// What `Act::Await` waits on: one permit per run.
+    held: Arc<tokio::sync::Semaphore>,
+    /// The workflows the runs' `start_member` calls go to.
+    workflows: std::sync::OnceLock<std::sync::Weak<Workflows>>,
+    /// The answers of the `start_member` calls, in the order made.
+    answers: Arc<Mutex<Vec<Result<String, String>>>>,
 }
 
 impl Team {
@@ -105,6 +117,10 @@ impl Team {
             .map(|(_, t)| t.clone())
             .collect()
     }
+
+    fn answers(&self) -> Vec<Result<String, String>> {
+        self.answers.lock().unwrap().clone()
+    }
 }
 
 #[async_trait::async_trait]
@@ -119,9 +135,12 @@ impl Engine for Team {
             .lock()
             .unwrap()
             .push((name.clone(), ctx.tools.step().cloned()));
-        let act = self.act(&name);
+        let mut act = self.act(&name);
         let store = self.store.clone();
         let gate = self.gate.clone();
+        let held = self.held.clone();
+        let workflows = self.workflows.get().cloned();
+        let answers = self.answers.clone();
         let (tx, rx) = mpsc::channel(8);
         tokio::spawn(async move {
             let session = format!("session-{}", ctx.run_id);
@@ -130,6 +149,18 @@ impl Engine for Team {
                     session_id: session,
                 })
                 .await;
+            if let Act::Start(calls, then) = act {
+                let workflows = workflows.and_then(|w| w.upgrade()).expect("the workflows");
+                for (member, task) in calls {
+                    let input = json!({"member": member, "task": task});
+                    let answer = match ctx.tools.step() {
+                        Some(step) => workflows.call_start_member(&ctx.run_id, step, &input).await,
+                        None => Err("this run has no step tools".to_string()),
+                    };
+                    answers.lock().unwrap().push(answer);
+                }
+                act = *then;
+            }
             let end = match act {
                 Act::Finish(s) => EngineEvent::Finished { summary: s.into() },
                 Act::Write(file, s) => {
@@ -183,6 +214,12 @@ impl Engine for Team {
                     EngineEvent::Finished { summary: s.into() }
                 }
                 Act::Say(s) => EngineEvent::Finished { summary: s },
+                Act::Start(..) => unreachable!("played above"),
+                Act::Await(file, s) => {
+                    held.acquire().await.unwrap().forget();
+                    std::fs::write(ctx.workspace.join(file), s).unwrap();
+                    EngineEvent::Finished { summary: s.into() }
+                }
                 Act::Schedule(s) => {
                     let now = chrono::Utc::now();
                     let due = now + chrono::TimeDelta::hours(1);
@@ -238,6 +275,9 @@ async fn world_with(clock: Arc<dyn Clock>, budget: Budget) -> World {
         prompts: Mutex::new(Vec::new()),
         step_tools: Mutex::new(Vec::new()),
         gate: Arc::new(tokio::sync::Notify::new()),
+        held: Arc::new(tokio::sync::Semaphore::new(0)),
+        workflows: std::sync::OnceLock::new(),
+        answers: Arc::new(Mutex::new(Vec::new())),
     });
     let mut engines: HashMap<EngineKind, Arc<dyn Engine>> = HashMap::new();
     engines.insert(EngineKind::Claude, engine.clone());
@@ -256,6 +296,7 @@ async fn world_with(clock: Arc<dyn Clock>, budget: Budget) -> World {
     );
     runner.spawn_dispatcher(CancellationToken::new());
     let workflows = Workflows::new(store.clone(), bus.clone(), runner.clone(), clock);
+    let _ = engine.workflows.set(Arc::downgrade(&workflows));
     workflows.spawn(CancellationToken::new());
     let repo = dir.path().join("project");
     init_repo(&repo);
@@ -1944,6 +1985,7 @@ async fn a_step_s_runs_get_its_workflow_tools_and_its_prompt_names_them() {
                 step_id: "write".into(),
                 name: "Write the task".into(),
             }],
+            delegate: None,
         })]
     );
     let prompt = &w.engine.prompts_of("dev")[0];
@@ -1953,4 +1995,555 @@ async fn a_step_s_runs_get_its_workflow_tools_and_its_prompt_names_them() {
         ),
         "{prompt}"
     );
+}
+
+/// A delegate step of `lead` that may start `may_start`, `at_once` at a time and `total` in
+/// all.
+fn delegating(
+    id: &str,
+    name: &str,
+    lead: &Dot,
+    may_start: &[&Dot],
+    at_once: u32,
+    total: u32,
+) -> Step {
+    Step {
+        id: id.into(),
+        name: name.into(),
+        kind: StepKind::Agent {
+            member: lead.id.clone(),
+            job: "Split the work.".into(),
+            can_send_back_to: vec![],
+            outcomes: vec![],
+            delegate: Some(Delegate {
+                may_start: may_start.iter().map(|d| d.id.clone()).collect(),
+                at_once,
+                total,
+            }),
+        },
+    }
+}
+
+impl World {
+    /// The id of the step run of `step` once the workflow run `id` has one.
+    async fn step_run_of(&self, id: &str, step: &str) -> String {
+        self.until(id, |wr| wr.steps.iter().any(|s| s.step_id == step))
+            .await
+            .steps
+            .iter()
+            .find(|s| s.step_id == step)
+            .unwrap()
+            .id
+            .clone()
+    }
+
+    /// The first runs of the members the step run `step` started, in the order started, once
+    /// there are `n` of them and each is `status` (a running one, once its workspace is made).
+    async fn members_are(&self, step: &str, n: usize, status: RunStatus) -> Vec<Run> {
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        loop {
+            let mut runs = Vec::new();
+            for m in self.store.step_members(step).await.unwrap() {
+                runs.push(self.store.get_run(&m.run_id).await.unwrap());
+            }
+            let ready = |r: &Run| {
+                r.status == status && (status != RunStatus::Running || r.workspace_path.is_some())
+            };
+            if runs.len() == n && runs.iter().all(ready) {
+                return runs;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the members are not {status:?}: {runs:#?}"
+            );
+            tokio::time::sleep(Duration::from_millis(30)).await;
+        }
+    }
+
+    /// The first run of the step run `step`'s own thread, once it is `status`.
+    async fn lead_is(&self, step: &str, status: RunStatus) -> Run {
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        loop {
+            let runs = self.store.runs_of_step_run(step).await.unwrap();
+            if let Some(run) = runs.first().filter(|r| r.status == status) {
+                return run.clone();
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the lead is not {status:?}: {runs:#?}"
+            );
+            tokio::time::sleep(Duration::from_millis(30)).await;
+        }
+    }
+}
+
+/// What a member's thread ended with, as the hand-off has it.
+fn handed(
+    dot: &Dot,
+    task: &str,
+    status: RunStatus,
+    summary: &str,
+    branch: Option<&str>,
+) -> MemberHandoff {
+    MemberHandoff {
+        dot_id: dot.id.clone(),
+        task: task.into(),
+        status,
+        summary: summary.into(),
+        branch: branch.map(str::to_string),
+    }
+}
+
+#[tokio::test]
+async fn a_delegate_step_runs_its_members_at_once_and_is_continued_with_their_results() {
+    let w = world().await;
+    let light = "Make the icon light.\nUse the light set.";
+    w.engine.set(
+        &w.helper.spec.name,
+        vec![
+            Act::Write("plan.txt", "The plan."),
+            Act::Start(
+                vec![("Dev", light), ("dev", "Make the menu dark.")],
+                Box::new(Act::Finish("Started two.")),
+            ),
+            Act::Finish("Both are in."),
+        ],
+    );
+    w.engine.set(
+        &w.dev.spec.name,
+        vec![Act::Await("part.txt", "Did my part.")],
+    );
+    let flow = w
+        .workflow(
+            "Fix",
+            vec![
+                agent("plan", "Plan it", &w.helper, "Plan."),
+                delegating("split", "Split it", &w.helper, &[&w.dev], 3, 6),
+            ],
+        )
+        .await;
+    let wr = w.start(&flow).await;
+    let split = w.step_run_of(&wr.id, "split").await;
+    // Both members run at once, each in a worktree of its own, while the lead's run has
+    // ended and the step waits for them.
+    let members = w.members_are(&split, 2, RunStatus::Running).await;
+    assert_ne!(members[0].workspace_path, members[1].workspace_path);
+    assert_ne!(members[0].branch, members[1].branch);
+    w.lead_is(&split, RunStatus::Succeeded).await;
+    w.workflows.pass().await.unwrap();
+    let held = w.store.get_workflow_run(&wr.id).await.unwrap();
+    assert_eq!(held.steps[1].status, StepRunStatus::Running);
+    assert_eq!(w.engine.prompts_of("helper").len(), 2);
+    assert_eq!(
+        w.engine.answers(),
+        [
+            Ok("Started \"dev\".".to_string()),
+            Ok("Started \"dev\".".to_string())
+        ]
+    );
+    w.engine.held.add_permits(2);
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    let b: Vec<String> = members.iter().map(|m| m.branch.clone().unwrap()).collect();
+    // The lead is continued once, with both results.
+    let helper = w.engine.prompts_of("helper");
+    assert_eq!(helper.len(), 3);
+    assert_eq!(
+        helper[2],
+        format!(
+            "The members you started have finished:\n\n\
+             #### dev: Make the icon light.\n\nStatus: succeeded\nBranch: {}\n\nDid my part.\n\n\
+             #### dev: Make the menu dark.\n\nStatus: succeeded\nBranch: {}\n\nDid my part.\n\n\
+             You may start 4 more with `mcp__dots__start_member`, or end with your summary of \
+             the step.",
+            b[0], b[1]
+        )
+    );
+    // The lead's prompt names its tool; the members' name their part, and they have no tools.
+    assert!(
+        helper[1].contains(
+            "### Workflow tools\n\n- Start other members of the team on parts of the work with \
+             `mcp__dots__start_member`, one of: \"dev\". At most 3 may run at once, and 6 in all. \
+             End your turn once you have started them: you are told when they finish.\n\n\
+             When you are done"
+        ),
+        "{}",
+        helper[1]
+    );
+    let lead_tools = w.engine.step_tools_of("helper")[1].clone().unwrap();
+    assert_eq!(
+        lead_tools.delegate,
+        Some(DelegateTools {
+            may_start: vec![StartableMember {
+                dot_id: w.dev.id.clone(),
+                name: "dev".into(),
+            }],
+            at_once: 3,
+            total: 6,
+        })
+    );
+    assert_eq!(w.engine.step_tools_of("dev"), [None, None]);
+    for prompt in w.engine.prompts_of("dev") {
+        for part in [
+            "## Workflow\n\nYou are the dev agent of the team \"Dots management\". helper started \
+             you on part of one step of the workflow \"Fix\".",
+            "- Step: Split it (2 of 2)",
+            "### Task\n\nThe tray icon is invisible in dark mode.",
+            "When you are done, end with a summary of what you did: helper gets it.",
+        ] {
+            assert!(prompt.contains(part), "missing {part:?} in:\n{prompt}");
+        }
+        assert!(!prompt.contains("### Workflow tools"), "{prompt}");
+    }
+    assert!(w
+        .engine
+        .prompts_of("dev")
+        .iter()
+        .any(|p| p.contains(&format!("### Your part\n\n{light}\n\n"))));
+    // Both started from the step's start, the plan's branch, and kept their work.
+    for branch in &b {
+        assert_eq!(
+            git_out(&w.repo, &["show", &format!("{branch}:plan.txt")]),
+            "The plan."
+        );
+        assert_eq!(
+            git_out(&w.repo, &["show", &format!("{branch}:part.txt")]),
+            "Did my part."
+        );
+    }
+    // The lead made no change: the hand-off carries the members' branches.
+    let handoff = wr.steps[1].handoff.clone().unwrap();
+    assert_eq!(handoff.summary, "Both are in.");
+    assert_eq!(
+        handoff.members,
+        [
+            handed(
+                &w.dev,
+                light,
+                RunStatus::Succeeded,
+                "Did my part.",
+                Some(&b[0])
+            ),
+            handed(
+                &w.dev,
+                "Make the menu dark.",
+                RunStatus::Succeeded,
+                "Did my part.",
+                Some(&b[1])
+            ),
+        ]
+    );
+    let branches: Vec<&str> = handoff.branches.iter().map(|r| r.branch.as_str()).collect();
+    assert_eq!(branches, [b[0].as_str(), b[1].as_str()]);
+    assert_eq!(handoff.branches[0].run_id, members[0].id);
+    // The plan's run, the lead's two and the members' two.
+    assert_eq!(wr.spent_runs, 5);
+}
+
+#[tokio::test]
+async fn a_lead_that_merged_its_members_work_hands_on_its_own_branch_alone() {
+    let w = world().await;
+    w.engine.set(
+        &w.helper.spec.name,
+        vec![
+            Act::Start(
+                vec![("dev", "Part one.")],
+                Box::new(Act::Finish("Started.")),
+            ),
+            Act::Write("merged.txt", "Merged."),
+        ],
+    );
+    w.engine
+        .set(&w.dev.spec.name, vec![Act::Write("part.txt", "Did it.")]);
+    let flow = w
+        .workflow(
+            "Fix",
+            vec![delegating("split", "Split it", &w.helper, &[&w.dev], 3, 6)],
+        )
+        .await;
+    let wr = w.start(&flow).await;
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    let split = &wr.steps[0];
+    let members = w.members_are(&split.id, 1, RunStatus::Succeeded).await;
+    let lead = w.lead_is(&split.id, RunStatus::Succeeded).await;
+    let handoff = split.handoff.clone().unwrap();
+    let own = lead.branch.clone().unwrap();
+    let branches: Vec<&str> = handoff.branches.iter().map(|r| r.branch.as_str()).collect();
+    assert_eq!(branches, [own.as_str()]);
+    assert_eq!(
+        git_out(&w.repo, &["show", &format!("{own}:merged.txt")]),
+        "Merged."
+    );
+    // The member's branch is still named in its part of the hand-off.
+    let member_branch = members[0].branch.clone().unwrap();
+    assert_eq!(
+        handoff.members,
+        [handed(
+            &w.dev,
+            "Part one.",
+            RunStatus::Succeeded,
+            "Did it.",
+            Some(&member_branch)
+        )]
+    );
+    assert_eq!(handoff.summary, "Merged.");
+}
+
+#[tokio::test]
+async fn start_member_refuses_other_dots_bad_tasks_and_more_than_its_limits_allow() {
+    let w = world().await;
+    w.engine.set(
+        &w.helper.spec.name,
+        vec![
+            Act::Start(
+                vec![
+                    ("Helper", "Do it."),
+                    ("dev", "  "),
+                    ("DEV", "Part one."),
+                    ("dev", "Part two."),
+                ],
+                Box::new(Act::Finish("Started one.")),
+            ),
+            Act::Start(
+                vec![("dev", "Part two.")],
+                Box::new(Act::Finish("Started two.")),
+            ),
+            Act::Start(
+                vec![("dev", "Part three.")],
+                Box::new(Act::Finish("All in.")),
+            ),
+        ],
+    );
+    w.engine
+        .set(&w.dev.spec.name, vec![Act::Await("part.txt", "Did it.")]);
+    let flow = w
+        .workflow(
+            "Fix",
+            vec![delegating("split", "Split it", &w.helper, &[&w.dev], 1, 2)],
+        )
+        .await;
+    let wr = w.start(&flow).await;
+    let split = w.step_run_of(&wr.id, "split").await;
+    // The first member holds until the lead's run has made its calls.
+    w.lead_is(&split, RunStatus::Succeeded).await;
+    w.engine.held.add_permits(2);
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    let started = Ok("Started \"dev\".".to_string());
+    assert_eq!(
+        w.engine.answers(),
+        [
+            Err("\"Helper\" is not a member you may start; you may start: \"dev\".".to_string()),
+            Err(
+                "Give a task of 1 to 8,000 characters that says what the member should do."
+                    .to_string()
+            ),
+            started.clone(),
+            Err(
+                "Not started: 1 members you started are still running, and at most 1 may run \
+                 at once. End your turn; you will be told when they finish."
+                    .to_string()
+            ),
+            started,
+            Err("Not started: you have started 2 members, the most this step allows.".to_string()),
+        ]
+    );
+    let helper = w.engine.prompts_of("helper");
+    assert_eq!(helper.len(), 3);
+    assert!(
+        helper[1].contains("#### dev: Part one.\n\nStatus: succeeded\n")
+            && helper[1].ends_with(
+                "You may start 1 more with `mcp__dots__start_member`, or end with your summary \
+                 of the step."
+            ),
+        "{}",
+        helper[1]
+    );
+    assert!(
+        helper[2].contains("#### dev: Part two.\n\nStatus: succeeded\n")
+            && !helper[2].contains("Part one.")
+            && helper[2]
+                .ends_with("You may start no more members: end with your summary of the step."),
+        "{}",
+        helper[2]
+    );
+    let handoff = wr.steps[0].handoff.clone().unwrap();
+    let tasks: Vec<&str> = handoff.members.iter().map(|m| m.task.as_str()).collect();
+    assert_eq!(tasks, ["Part one.", "Part two."]);
+    assert_eq!(handoff.summary, "All in.");
+}
+
+#[tokio::test]
+async fn a_member_past_the_budget_is_refused_and_the_lead_waits_on_budget_to_go_on() {
+    let budget = Budget {
+        max_runs: 2,
+        ..Budget::default()
+    };
+    let w = world_with(Arc::new(SystemClock), budget).await;
+    w.engine.set(
+        &w.helper.spec.name,
+        vec![
+            Act::Start(
+                vec![("dev", "Part one."), ("dev", "Part two.")],
+                Box::new(Act::Finish("Started.")),
+            ),
+            Act::Finish("Done."),
+        ],
+    );
+    w.engine
+        .set(&w.dev.spec.name, vec![Act::Fail("no disk left")]);
+    let flow = w
+        .workflow(
+            "Fix",
+            vec![delegating("split", "Split it", &w.helper, &[&w.dev], 3, 6)],
+        )
+        .await;
+    let wr = w.start(&flow).await;
+    // The lead's run and the first member's spent the two runs.
+    let held = w.until(&wr.id, waits_on(WaitingOn::Budget)).await;
+    assert_eq!(held.error.as_deref(), Some("Budget reached: runs, 2 of 2"));
+    assert_eq!(held.steps[0].status, StepRunStatus::Running);
+    assert_eq!(
+        w.engine.answers(),
+        [
+            Ok("Started \"dev\".".to_string()),
+            Err("Not started: Budget reached: runs, 2 of 2.".to_string()),
+        ]
+    );
+    assert_eq!(w.engine.prompts_of("helper").len(), 1);
+    // More budget lets the lead go on, told of the member that failed: not fatal to the step.
+    w.workflows.add_budget(&wr.id).await.unwrap();
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    let told = &w.engine.prompts_of("helper")[1];
+    assert!(
+        told.contains("#### dev: Part one.\n\nStatus: failed\nBranch: none\n\nno disk left\n\n"),
+        "{told}"
+    );
+    let handoff = wr.steps[0].handoff.clone().unwrap();
+    assert_eq!(
+        handoff.members,
+        [handed(
+            &w.dev,
+            "Part one.",
+            RunStatus::Failed,
+            "no disk left",
+            None
+        )]
+    );
+    assert!(handoff.branches.is_empty());
+    assert_eq!(wr.spent_runs, 3);
+}
+
+#[tokio::test]
+async fn a_lead_that_fails_cancels_its_running_members_and_fails_the_step() {
+    let w = world().await;
+    w.engine.set(
+        &w.helper.spec.name,
+        vec![Act::Start(
+            vec![("dev", "Part one.")],
+            Box::new(Act::Fail("lost the plan")),
+        )],
+    );
+    w.engine.set(&w.dev.spec.name, vec![Act::Hold]);
+    let flow = w
+        .workflow(
+            "Fix",
+            vec![delegating("split", "Split it", &w.helper, &[&w.dev], 3, 6)],
+        )
+        .await;
+    let wr = w.start(&flow).await;
+    let wr = w.until(&wr.id, waits_on(WaitingOn::StepFailed)).await;
+    assert_eq!(wr.error.as_deref(), Some("Split it: lost the plan"));
+    assert_eq!(wr.steps[0].status, StepRunStatus::Failed);
+    let member = w.store.step_members(&wr.steps[0].id).await.unwrap()[0]
+        .run_id
+        .clone();
+    common::wait_status(&w.store, &member, RunStatus::Cancelled, 60).await;
+    assert_eq!(w.engine.prompts_of("helper").len(), 1);
+}
+
+#[tokio::test]
+async fn stopping_a_delegate_step_cancels_its_members() {
+    let w = world().await;
+    w.engine.set(
+        &w.helper.spec.name,
+        vec![Act::Start(
+            vec![("dev", "Part one.")],
+            Box::new(Act::Finish("Started.")),
+        )],
+    );
+    w.engine.set(&w.dev.spec.name, vec![Act::Hold]);
+    let flow = w
+        .workflow(
+            "Fix",
+            vec![delegating("split", "Split it", &w.helper, &[&w.dev], 3, 6)],
+        )
+        .await;
+    let wr = w.start(&flow).await;
+    let split = w.step_run_of(&wr.id, "split").await;
+    let member = w.members_are(&split, 1, RunStatus::Running).await.remove(0);
+    let stopped = w.workflows.stop(&wr.id).await.unwrap();
+    assert_eq!(stopped.status, WorkflowRunStatus::Cancelled);
+    assert_eq!(stopped.steps[0].status, StepRunStatus::Cancelled);
+    common::wait_status(&w.store, &member.id, RunStatus::Cancelled, 60).await;
+    assert_eq!(w.engine.prompts_of("helper").len(), 1);
+}
+
+#[tokio::test]
+async fn a_member_interrupted_by_a_restart_is_reported_as_failed_and_the_lead_goes_on() {
+    let w = world().await;
+    w.engine.set(
+        &w.helper.spec.name,
+        vec![
+            Act::Start(
+                vec![("dev", "Part one.")],
+                Box::new(Act::Finish("Started.")),
+            ),
+            Act::Finish("Went on without it."),
+        ],
+    );
+    w.engine.set(&w.dev.spec.name, vec![Act::Hold]);
+    let flow = w
+        .workflow(
+            "Fix",
+            vec![delegating("split", "Split it", &w.helper, &[&w.dev], 3, 6)],
+        )
+        .await;
+    let wr = w.start(&flow).await;
+    let split = w.step_run_of(&wr.id, "split").await;
+    let member = w.members_are(&split, 1, RunStatus::Running).await.remove(0);
+    w.lead_is(&split, RunStatus::Succeeded).await;
+    // As Dots does at start after a crash: the running member is failed as interrupted, and
+    // a new loop's first pass continues the lead, which waited for it.
+    let interrupted = w.store.recover_interrupted().await.unwrap();
+    assert_eq!(interrupted, std::slice::from_ref(&member.id));
+    let fresh = Workflows::new(
+        w.store.clone(),
+        new_bus(),
+        w.runner.clone(),
+        Arc::new(SystemClock),
+    );
+    fresh.pass().await.unwrap();
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    let helper = w.engine.prompts_of("helper");
+    assert_eq!(helper.len(), 2, "the lead was continued once");
+    assert!(
+        helper[1].contains("#### dev: Part one.\n\nStatus: failed\nBranch: ")
+            && helper[1].contains("\n\ninterrupted\n\n"),
+        "{}",
+        helper[1]
+    );
+    let handoff = wr.steps[0].handoff.clone().unwrap();
+    assert_eq!(handoff.summary, "Went on without it.");
+    assert_eq!(handoff.members.len(), 1);
+    assert_eq!(handoff.members[0].status, RunStatus::Failed);
+    assert_eq!(handoff.members[0].summary, "interrupted");
 }

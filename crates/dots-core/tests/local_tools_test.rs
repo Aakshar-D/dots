@@ -157,12 +157,12 @@ fn prepare_validates_calls_before_the_policy() {
     // tools and the three memory tools, which an engine with check-ins adds
     // (`checkins::schemas`, `memory::schemas`), `propose_app` and `copy_app`, which an engine
     // with apps adds, `start_workflow`, which a chat run that may start a workflow gets, and
-    // `report_outcome` and `send_back`, which a run of an open agent step gets
+    // `start_member`, `report_outcome` and `send_back`, which a run of an open agent step gets
     // (`team::schemas`), and `propose_instructions`, which a run of a chat the person started
     // gets (`instructions::schema`).
     assert_eq!(
         tools::schemas().as_array().unwrap().len(),
-        tools::TOOLS.len() - 14
+        tools::TOOLS.len() - 15
     );
 }
 
@@ -225,6 +225,10 @@ fn a_prepared_input_passes_prepare_again_unchanged() {
         (
             "start_workflow",
             json!({"workflow": "Fix", "project": "Dots", "task": "Fix the icon."}),
+        ),
+        (
+            "start_member",
+            json!({"member": "dev", "task": "Fix the icon."}),
         ),
         ("report_outcome", json!({"outcome": "fixed"})),
         (

@@ -56,6 +56,7 @@ pub const TOOLS: &[(&str, &str)] = &[
     ("propose_app", "ProposeApp"),
     ("copy_app", "ProposeApp"),
     ("start_workflow", "Workflow"),
+    ("start_member", "Workflow"),
     ("report_outcome", "Workflow"),
     ("send_back", "Workflow"),
     ("propose_instructions", "Instructions"),
@@ -205,6 +206,10 @@ const ARGS: &[(&str, Params)] = &[
             ("project", Str, true),
             ("task", Str, true),
         ],
+    ),
+    (
+        "start_member",
+        &[("member", Str, true), ("task", Str, true)],
     ),
     ("report_outcome", &[("outcome", Str, true)]),
     ("send_back", &[("to_step", Str, true), ("note", Str, true)]),

@@ -1,7 +1,8 @@
 //! `start_workflow` (teams spec section 7): every preset allows `Workflow`, a rule names it
 //! alone, migration 0015 gives it to stored policies; a chat run of a member that a chat
 //! trigger names lists the workflows it may start and starts one, on both engines. A run of an
-//! open agent step reports its outcome and asks for a send-back, on both engines.
+//! open agent step reports its outcome and asks for a send-back, and a delegate step's run
+//! starts a member, on both engines.
 
 mod common;
 mod llm;
@@ -17,7 +18,9 @@ use dots_core::model::{
 use dots_core::policy::{Action, Policy, Preset, Rule, APP_TOOLS, WORKFLOW_RULE, WORKFLOW_TOOL};
 use dots_core::store::Store;
 use dots_core::team_tools::{self, StepTools};
-use dots_core::workflow::{BranchOn, BranchPath, Budget, Definition, Step, StepKind, Trigger};
+use dots_core::workflow::{
+    BranchOn, BranchPath, Budget, Definition, Delegate, Step, StepKind, Trigger,
+};
 use dots_core::workflows::STEP_CLOSED;
 use dots_core::{Config, Runtime};
 use llm::{call, messages, text, tool_result, Llm};
@@ -1264,5 +1267,196 @@ async fn a_step_of_a_dot_whose_policy_denies_workflow_has_no_workflow_tools() {
         tool_names(&first)
     );
     assert!(!prompt(&first).contains("### Workflow tools"));
+    t.rt.shutdown();
+}
+
+/// A delegate step of `lead` that may start `member`, one at a time and once in all.
+fn delegate_step(lead: &Dot, member: &Dot) -> Step {
+    Step {
+        id: "split".into(),
+        name: "Split it".into(),
+        kind: StepKind::Agent {
+            member: lead.id.clone(),
+            job: "Split it.".into(),
+            can_send_back_to: vec![],
+            outcomes: vec![],
+            delegate: Some(Delegate {
+                may_start: vec![member.id.clone()],
+                at_once: 1,
+                total: 1,
+            }),
+        },
+    }
+}
+
+/// The text of the last message the person's side sent in a recorded request.
+fn last_user(req: &Value) -> String {
+    messages(req)
+        .iter()
+        .rev()
+        .find(|m| m["role"] == "user")
+        .and_then(|m| m["content"].as_str())
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// The local engine: a delegate step's run is offered `start_member`, its call starts the
+/// member, whose run has no workflow tool, and the lead's thread is continued with the
+/// member's result.
+#[tokio::test]
+async fn a_local_lead_starts_a_member_and_is_told_how_it_went() {
+    let t = start(json!([])).await;
+    let lead_llm = Llm::start(vec![
+        call(
+            "c1",
+            "start_member",
+            json!({"member": "DEV", "task": "Make the icon light."}),
+        ),
+        text("Started."),
+        text("All in."),
+    ])
+    .await;
+    let dev_llm = Llm::start(vec![text("Made it light.")]).await;
+    let lead =
+        t.rt.create_dot(local_spec(&t, &lead_llm.endpoint(), "lead"), None, None)
+            .await
+            .unwrap();
+    let dev =
+        t.rt.create_dot(local_spec(&t, &dev_llm.endpoint(), "dev"), None, None)
+            .await
+            .unwrap();
+    let wr = run_steps(&t, &[&lead, &dev], vec![delegate_step(&lead, &dev)]).await;
+    let wr = until(&t, &wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded).await;
+    let reqs = lead_llm.requests();
+    assert_eq!(reqs.len(), 3);
+    assert_eq!(workflow_tools(&reqs[0]), ["start_member"]);
+    let first = prompt(&reqs[0]);
+    assert!(
+        first.contains(
+            "### Workflow tools\n\n- Start other members of the team on parts of the work with \
+             `start_member`, one of: \"dev\". At most 1 may run at once, and 1 in all. End your \
+             turn once you have started them: you are told when they finish.\n"
+        ),
+        "{first}"
+    );
+    assert_eq!(tool_result(&reqs[1], "c1"), "Started \"dev\".");
+    // The member's run has no workflow tool, and its prompt names its part.
+    let member = dev_llm.requests().remove(0);
+    assert!(
+        workflow_tools(&member).is_empty(),
+        "{:?}",
+        tool_names(&member)
+    );
+    let part = prompt(&member);
+    assert!(
+        part.contains("### Your part\n\nMake the icon light.")
+            && !part.contains("### Workflow tools"),
+        "{part}"
+    );
+    // The lead goes on in its thread, with its tool, told of the member.
+    assert_eq!(workflow_tools(&reqs[2]), ["start_member"]);
+    assert_eq!(
+        last_user(&reqs[2]),
+        "The members you started have finished:\n\n#### dev: Make the icon light.\n\n\
+         Status: succeeded\nBranch: none\n\nMade it light.\n\n\
+         You may start no more members: end with your summary of the step."
+    );
+    let handoff = wr.steps[0].handoff.clone().unwrap();
+    assert_eq!(handoff.summary, "All in.");
+    assert_eq!(handoff.members.len(), 1);
+    assert_eq!(handoff.members[0].summary, "Made it light.");
+    t.rt.shutdown();
+}
+
+/// The Claude engine: Dots' own server lists `start_member` to a delegate step's run and
+/// performs it, the CLI may call it without asking, and a call past `total` (the continued
+/// run plays the same script) is refused.
+#[tokio::test]
+async fn a_claude_lead_starts_a_member_through_dots_own_server() {
+    let t = start(json!([
+        {"emit": {"type": "system", "subtype": "init", "session_id": "$SESSION"}},
+        {"mcp_list": "dots"},
+        {"mcp_call": {"server": "dots", "tool": "start_member",
+                      "arguments": {"member": "dev", "task": "Make it."}}},
+        {"emit": {"type": "result", "subtype": "success", "is_error": false, "result": "done",
+                  "usage": {"input_tokens": 1, "output_tokens": 1}}}
+    ]))
+    .await;
+    let llm = Llm::start(vec![text("Made it.")]).await;
+    let dev =
+        t.rt.create_dot(local_spec(&t, &llm.endpoint(), "dev"), None, None)
+            .await
+            .unwrap();
+    let mut s = spec("lead");
+    s.workdir = t.dir.path().to_string_lossy().to_string();
+    s.workspace_mode = WorkspaceMode::Folder;
+    s.policy = Policy::preset(Preset::Trusted);
+    let lead = t.rt.create_dot(s, None, None).await.unwrap();
+    let wr = run_steps(&t, &[&lead, &dev], vec![delegate_step(&lead, &dev)]).await;
+    let wr = until(&t, &wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded).await;
+    let recorded: Value =
+        serde_json::from_str(&std::fs::read_to_string(&t.args_out).unwrap()).unwrap();
+    let args: Vec<String> = serde_json::from_value(recorded["args"].clone()).unwrap();
+    let allowed: Vec<&str> = args
+        .iter()
+        .skip_while(|a| *a != "--allowedTools")
+        .skip(1)
+        .take_while(|a| !a.starts_with("--"))
+        .map(String::as_str)
+        .filter(|a| {
+            WORKFLOW_TOOLS
+                .iter()
+                .any(|t| *a == format!("mcp__dots__{t}"))
+        })
+        .collect();
+    assert_eq!(allowed, ["mcp__dots__start_member"], "{args:?}");
+    // The args are the continued run's: its prompt is the member's result.
+    let told = recorded["prompt"].as_str().unwrap();
+    assert!(
+        told.contains("#### dev: Make it.\n\nStatus: succeeded\nBranch: none\n\nMade it.\n\n"),
+        "{told}"
+    );
+    let runs =
+        t.rt.store()
+            .runs_of_step_run(&wr.steps[0].id)
+            .await
+            .unwrap();
+    let members = t.rt.store().step_members(&wr.steps[0].id).await.unwrap();
+    let own: Vec<_> = runs
+        .iter()
+        .filter(|r| !members.iter().any(|m| m.run_id == r.root_run_id))
+        .collect();
+    assert_eq!(own.len(), 2);
+    let mut answers = Vec::new();
+    for run in &own {
+        let events = t.rt.store().list_events(&run.id, 0).await.unwrap();
+        let listed = events.iter().find(|e| e.kind == "raw").unwrap();
+        let listed: Value = serde_json::from_str(listed.data["line"].as_str().unwrap()).unwrap();
+        let listed: Vec<&str> = listed["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .filter(|n| WORKFLOW_TOOLS.contains(n))
+            .collect();
+        assert_eq!(listed, ["start_member"]);
+        answers.extend(events.iter().filter(|e| e.kind == "tool_result").map(|e| {
+            (
+                e.data["output"].as_str().unwrap().to_string(),
+                e.data["is_error"].as_bool().unwrap(),
+            )
+        }));
+    }
+    assert_eq!(
+        answers,
+        [
+            ("Started \"dev\".".to_string(), false),
+            (
+                "Not started: you have started 1 members, the most this step allows.".to_string(),
+                true
+            ),
+        ]
+    );
+    assert_eq!(members.len(), 1);
     t.rt.shutdown();
 }

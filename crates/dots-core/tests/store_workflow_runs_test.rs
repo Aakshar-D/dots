@@ -196,6 +196,7 @@ async fn step_runs_record_their_hand_off_and_decision() {
         summary: "Fixed.".into(),
         branches: vec![],
         outcome: None,
+        members: vec![],
     };
     let done = f
         .store
@@ -476,4 +477,92 @@ async fn a_workflow_run_waits_on_the_person_through_a_parked_run_an_approval_or_
     assert!(waits().await.unwrap());
     f.store.dismiss_question(&question.id).await.unwrap();
     assert!(!waits().await.unwrap());
+}
+
+#[tokio::test]
+async fn a_member_is_added_with_its_run_and_reported_with_the_run_that_continues_the_step() {
+    let f = fixture().await;
+    let wr = f.store.create_workflow_run(&f.new).await.unwrap();
+    let step = f
+        .store
+        .create_step_run(&wr.id, "a", 1, StepRunStatus::Running)
+        .await
+        .unwrap();
+    let mut lead = NewRun::new(&f.dot, TriggerKind::Workflow);
+    lead.workflow_step_run_id = Some(step.id.clone());
+    let lead = f.store.create_run(&lead).await.unwrap();
+    assert_eq!(f.store.step_member(&lead.root_run_id).await.unwrap(), None);
+    // A member's first run is its thread's root, and works for the step.
+    let mut new = NewRun::new(&f.dot, TriggerKind::Workflow);
+    new.workflow_step_run_id = Some(step.id.clone());
+    let one = f.store.add_step_member(&new, "Part one.").await.unwrap();
+    let two = f.store.add_step_member(&new, "Part two.").await.unwrap();
+    assert_eq!(one.root_run_id, one.id);
+    assert_eq!(one.workflow_step_run_id.as_deref(), Some(step.id.as_str()));
+    let members = f.store.step_members(&step.id).await.unwrap();
+    let rows: Vec<_> = members
+        .iter()
+        .map(|m| {
+            (
+                m.run_id.as_str(),
+                m.dot_id.as_str(),
+                m.task.as_str(),
+                m.reported,
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            (one.id.as_str(), f.dot.as_str(), "Part one.", false),
+            (two.id.as_str(), f.dot.as_str(), "Part two.", false),
+        ]
+    );
+    assert_eq!(
+        f.store.step_member(&one.id).await.unwrap().as_ref(),
+        Some(&members[0])
+    );
+    // Both count against the budget, with the lead's run.
+    assert_eq!(
+        f.store.get_workflow_run(&wr.id).await.unwrap().spent_runs,
+        3
+    );
+    // The run that tells the lead is stored with the members marked reported, once.
+    let mut told = NewRun::new(&f.dot, TriggerKind::Chat);
+    told.parent_run_id = Some(lead.id.clone());
+    told.root_run_id = Some(lead.root_run_id.clone());
+    told.workflow_step_run_id = Some(step.id.clone());
+    let reported = vec![one.id.clone()];
+    let run = f.store.report_step_members(&told, &reported).await.unwrap();
+    assert_eq!(run.root_run_id, lead.id);
+    let members = f.store.step_members(&step.id).await.unwrap();
+    assert_eq!(
+        members.iter().map(|m| m.reported).collect::<Vec<_>>(),
+        [true, false]
+    );
+    let both = vec![two.id.clone(), one.id.clone()];
+    assert!(matches!(
+        f.store.report_step_members(&told, &both).await,
+        Err(Error::Conflict(_))
+    ));
+    // Nothing of the refused one was stored: the second member is still to report, and the
+    // thread has no third run.
+    assert!(!f.store.step_members(&step.id).await.unwrap()[1].reported);
+    assert_eq!(f.store.list_thread(&lead.id).await.unwrap().len(), 2);
+    // A step that has ended takes in no member.
+    f.store
+        .set_step_run(
+            &step.id,
+            &StepRunChange {
+                status: Some(StepRunStatus::Cancelled),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        f.store.add_step_member(&new, "Part three.").await,
+        Err(Error::Conflict(_))
+    ));
+    assert_eq!(f.store.step_members(&step.id).await.unwrap().len(), 2);
 }

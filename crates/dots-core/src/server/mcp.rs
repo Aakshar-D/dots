@@ -271,11 +271,14 @@ async fn call_workflow(
                 .call_start(run_id, tools.startable(), &input)
                 .await
         }
+        (TeamTool::StartMember, Some(step)) => {
+            workflows.call_start_member(run_id, step, &input).await
+        }
         (TeamTool::ReportOutcome, Some(step)) => {
             workflows.call_report_outcome(run_id, step, &input).await
         }
         (TeamTool::SendBack, Some(step)) => workflows.call_send_back(run_id, step, &input).await,
-        // `offers` gives no other tool yet.
+        // `offers` gives a step's tools only to a run that has a step.
         _ => return Err((-32602, "unknown tool".to_string())),
     };
     Ok(match done {
