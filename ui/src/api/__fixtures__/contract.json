@@ -598,6 +598,11 @@
     "schedule_skips",
     "get_run",
     "run_thread",
+    "list_topics",
+    "rename_topic",
+    "set_topic_archived",
+    "move_run",
+    "merge_topics",
     "list_run_events",
     "approvals_for_run",
     "decide_approval",
@@ -3855,6 +3860,10 @@
     },
     {
       "dot_id": "01J0DOT",
+      "type": "topics_changed"
+    },
+    {
+      "dot_id": "01J0DOT",
       "type": "dot_seen"
     },
     {
@@ -4232,6 +4241,7 @@
     "slot_at": "2026-10-09T11:00:00Z"
   },
   "Settings": {
+    "auto_archive_days": 30,
     "auto_install_updates": false,
     "autostart": true,
     "claude_path": null,
@@ -4254,6 +4264,7 @@
   "SettingsSaved": {
     "restart_required": true,
     "settings": {
+      "auto_archive_days": 30,
       "auto_install_updates": false,
       "autostart": true,
       "claude_path": null,
@@ -4332,6 +4343,12 @@
       "server_id": "01J0SRV"
     }
   ],
+  "TopicInfo": {
+    "archived_at": "2026-11-04T09:00:00.000Z",
+    "dot_id": "01J0DOT",
+    "root_run_id": "01J0RUN",
+    "title": "Trip plans"
+  },
   "UpdateNote": [
     {
       "state": "none"

@@ -29,7 +29,7 @@ use dots_core::library_service::{
 };
 use dots_core::model::{
     Approval, Dot, DotOverview, DotSpec, FollowUp, Inbox, Memory, Message, Run, RunEventRecord,
-    ScheduleSkip, SettingsSaved, Status, Watcher, WatcherConfig, WorktreeDiff,
+    ScheduleSkip, SettingsSaved, Status, TopicInfo, Watcher, WatcherConfig, WorktreeDiff,
 };
 use dots_core::policy::{Policy, Preset, RuleCandidate};
 use dots_core::schedule::Schedule;
@@ -629,6 +629,65 @@ pub async fn schedule_skips(
 #[tauri::command]
 pub async fn get_run(state: State<'_, AppState>, id: String) -> Res<Run> {
     Ok(state.rt()?.get_run(&id).await?)
+}
+
+/// The rows of `dot_id`'s topics: their titles and archive marks (topic tools spec section 5).
+#[tauri::command]
+pub async fn list_topics(state: State<'_, AppState>, dot_id: String) -> Res<Vec<TopicInfo>> {
+    Ok(state.rt()?.list_topics(&dot_id).await?)
+}
+
+/// Names the topic whose root is `root_run_id`; `None` or blank clears the name.
+#[tauri::command]
+pub async fn rename_topic(
+    state: State<'_, AppState>,
+    root_run_id: String,
+    title: Option<String>,
+) -> Res<TopicInfo> {
+    Ok(state
+        .rt()?
+        .rename_topic(&root_run_id, title.as_deref())
+        .await?)
+}
+
+/// Archives or unarchives the topic whose root is `root_run_id`.
+#[tauri::command]
+pub async fn set_topic_archived(
+    state: State<'_, AppState>,
+    root_run_id: String,
+    archived: bool,
+) -> Res<TopicInfo> {
+    Ok(state
+        .rt()?
+        .set_topic_archived(&root_run_id, archived)
+        .await?)
+}
+
+/// Moves the run and its replies to the topic `to_root_run_id`, or to a new topic; returns the
+/// root of the topic the run is now in.
+#[tauri::command]
+pub async fn move_run(
+    state: State<'_, AppState>,
+    run_id: String,
+    to_root_run_id: Option<String>,
+) -> Res<String> {
+    Ok(state
+        .rt()?
+        .move_run(&run_id, to_root_run_id.as_deref())
+        .await?)
+}
+
+/// Merges the topic `from_root_run_id` into the topic `into_root_run_id` of the same dot.
+#[tauri::command]
+pub async fn merge_topics(
+    state: State<'_, AppState>,
+    from_root_run_id: String,
+    into_root_run_id: String,
+) -> Res<()> {
+    Ok(state
+        .rt()?
+        .merge_topics(&from_root_run_id, &into_root_run_id)
+        .await?)
 }
 
 #[tauri::command]
