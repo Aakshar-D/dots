@@ -347,7 +347,10 @@ impl Store {
              + (SELECT COUNT(*) FROM app_proposals p WHERE p.dot_id = d.id \
               AND p.status = 'pending') \
              + (SELECT COUNT(*) FROM runs q WHERE q.dot_id = d.id AND q.status = 'running' \
-              AND q.quiet_since IS NOT NULL) AS needs_you, \
+              AND q.quiet_since IS NOT NULL) \
+             + (SELECT COUNT(*) FROM runs u WHERE u.dot_id = d.id AND u.trigger_kind = 'chat' \
+              AND u.undelivered_at IS NOT NULL AND u.dismissed_at IS NULL \
+              AND u.delivered_at IS NULL) AS needs_you, \
              CASE WHEN d.seen_at IS NULL THEN 0 ELSE \
              (SELECT COUNT(*) FROM runs r WHERE r.dot_id = d.id \
               AND r.status IN ('succeeded', 'failed', 'cancelled') AND r.ended_at > d.seen_at) \

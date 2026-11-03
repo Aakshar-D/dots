@@ -422,6 +422,12 @@ mod tests {
             quiet_since: None,
             quiet_limit_secs: None,
             quiet_stopped: false,
+            delivered_at: None,
+            undelivered_at: None,
+            undelivered_reason: None,
+            dismissed_at: None,
+            delivery: None,
+            wait_reason: None,
         }
     }
 

@@ -556,6 +556,12 @@ fn run() -> Run {
         quiet_since: None,
         quiet_limit_secs: None,
         quiet_stopped: false,
+        delivered_at: Some(TS.into()),
+        undelivered_at: None,
+        undelivered_reason: None,
+        dismissed_at: None,
+        delivery: Some(dots_core::model::Delivery::Delivered),
+        wait_reason: None,
     }
 }
 

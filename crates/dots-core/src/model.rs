@@ -32,6 +32,49 @@ str_enum!(RunStatus {
     Failed => "failed",
     Cancelled => "cancelled",
 });
+str_enum!(Delivery {
+    Delivered => "delivered",
+    Waiting => "waiting",
+    NotDelivered => "not_delivered",
+});
+str_enum!(WaitReason {
+    Busy => "busy",
+    UsageHold => "usage_hold",
+    Updating => "updating",
+    DotBusy => "dot_busy",
+    Queued => "queued",
+});
+
+impl Delivery {
+    /// Whether a run reached its dot (delivery tracking spec section 2): `delivered_at` means
+    /// delivered; else `undelivered_at` means not delivered; else a run still to end is waiting.
+    /// `None` for a run that ended with neither mark (cancelled before it started, or history
+    /// from before migration 0029).
+    pub fn of(
+        status: RunStatus,
+        delivered_at: Option<&str>,
+        undelivered_at: Option<&str>,
+    ) -> Option<Delivery> {
+        if delivered_at.is_some() {
+            Some(Delivery::Delivered)
+        } else if undelivered_at.is_some() {
+            Some(Delivery::NotDelivered)
+        } else if !status.is_terminal() {
+            Some(Delivery::Waiting)
+        } else {
+            None
+        }
+    }
+}
+
+/// A dot's sends for one day (delivery tracking spec section 3.9).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeliveryCounts {
+    pub sent: u32,
+    pub delivered: u32,
+    pub not_delivered: u32,
+}
+
 str_enum!(ApprovalStatus {
     Pending => "pending",
     Approved => "approved",
@@ -274,6 +317,23 @@ pub struct Run {
     pub quiet_limit_secs: Option<u64>,
     /// The watchdog stopped this run for being quiet too long.
     pub quiet_stopped: bool,
+    /// When the run's engine started on it (delivery tracking spec section 2).
+    #[serde(default)]
+    pub delivered_at: Option<String>,
+    /// When the run was marked not delivered; cleared if it is delivered later.
+    #[serde(default)]
+    pub undelivered_at: Option<String>,
+    #[serde(default)]
+    pub undelivered_reason: Option<String>,
+    /// When the person retried or discarded the run, or it was cancelled after its mark.
+    #[serde(default)]
+    pub dismissed_at: Option<String>,
+    /// Computed from the columns above and the status; see `Delivery::of`.
+    #[serde(default)]
+    pub delivery: Option<Delivery>,
+    /// Why a waiting run has not started. The store leaves it `None`; the runtime fills it.
+    #[serde(default)]
+    pub wait_reason: Option<WaitReason>,
 }
 
 /// Input for `Store::create_run`. `root_run_id: None` makes the run its own root.
