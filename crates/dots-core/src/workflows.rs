@@ -40,6 +40,8 @@ pub const MAX_HANDOFF_SUMMARY: usize = 4_000;
 /// would work in the project's worktree outside the workflow.
 pub const ENDED_STEP_THREAD: &str =
     "this chat was a step of a workflow, and the step has ended; start a new chat";
+/// Why a step of a kind Dots cannot run yet (a branch, a deploy) fails when it begins.
+pub const NOT_BUILT: &str = "this kind of step is not built yet";
 /// How often the loop passes while nothing wakes it.
 pub const TICK: Duration = Duration::from_secs(30);
 /// The most one tick counts into a run's `active_ms`. The loop passes at least every `TICK`, so
@@ -74,6 +76,12 @@ pub struct Workflows {
     /// The orgs a team's account role is read from (members spec §6.3); without them, an
     /// account's team acts as `legacy`.
     orgs: OnceLock<Orgs>,
+}
+
+/// The place of the top-level step `id` in the definition's list. Runs move along that list
+/// for now; a branch step, the only one with steps inside it, fails when it begins.
+fn index_of(wr: &WorkflowRun, id: &str) -> Option<usize> {
+    wr.definition.steps.iter().position(|s| s.id == id)
 }
 
 /// The newest step run of `step_id`.
@@ -193,7 +201,7 @@ impl Workflows {
     /// Announces what a step that ended changed beyond its row: the follow-ups its runs
     /// scheduled are cancelled with it (`Store::set_step_run`).
     fn step_ended(&self, wr: &WorkflowRun, step_id: &str) {
-        if let Some((_, step)) = wr.definition.step(step_id) {
+        if let Some(step) = wr.definition.step(step_id) {
             if let StepKind::Agent { member, .. } = &step.kind {
                 let _ = self.bus.send(RuntimeEvent::FollowUpsUpdated {
                     dot_id: member.clone(),
@@ -305,9 +313,7 @@ impl Workflows {
         let held_retry = running.current_step.as_deref().and_then(|current| {
             let failed =
                 latest(&running, current).is_some_and(|s| s.status == StepRunStatus::Failed);
-            failed
-                .then(|| running.definition.step(current).map(|(i, _)| i))
-                .flatten()
+            failed.then(|| index_of(&running, current)).flatten()
         });
         match held_retry {
             Some(index) => self.begin_step(&running, index).await?,
@@ -484,7 +490,7 @@ impl Workflows {
                 "workflow run {id} is not waiting for a check"
             )));
         };
-        let index = wr.definition.step(&step_run.step_id).map_or(0, |(i, _)| i);
+        let index = index_of(&wr, &step_run.step_id).unwrap_or(0);
         let shown = handoffs_before(&wr, index)
             .last()
             .map(|(_, h)| (*h).clone())
@@ -525,7 +531,7 @@ impl Workflows {
         let wr = self.tick(&wr).await?;
         let index = match (&wr.status, &wr.waiting_on, &wr.current_step) {
             (WorkflowRunStatus::Waiting, Some(WaitingOn::StepFailed), Some(current)) => {
-                wr.definition.step(current).map(|(i, _)| i)
+                index_of(&wr, current)
             }
             _ => None,
         };
@@ -671,7 +677,7 @@ impl Workflows {
         let Some(current) = wr.current_step.clone() else {
             return self.begin_step(&wr, 0).await;
         };
-        let Some((index, _)) = wr.definition.step(&current) else {
+        let Some(index) = index_of(&wr, &current) else {
             return Err(Error::Other(format!(
                 "step {current} is not in the workflow"
             )));
@@ -745,7 +751,7 @@ impl Workflows {
         };
         let attempt = wr.steps.iter().filter(|s| s.step_id == step.id).count() as u32 + 1;
         match &step.kind {
-            StepKind::Check {} => {
+            StepKind::Check { .. } => {
                 self.store
                     .create_step_run(&wr.id, &step.id, attempt, StepRunStatus::Waiting)
                     .await?;
@@ -795,6 +801,23 @@ impl Workflows {
                         self.updated(&self.store.get_workflow_run(&wr.id).await?);
                     }
                 }
+            }
+            // A definition may hold them already; the run waits on them as on a failed step.
+            StepKind::Branch { .. } | StepKind::Deploy { .. } => {
+                let step_run = self
+                    .store
+                    .create_step_run(&wr.id, &step.id, attempt, StepRunStatus::Failed)
+                    .await?;
+                self.store
+                    .set_workflow_run(
+                        &wr.id,
+                        &WorkflowRunChange {
+                            current_step: Some(Some(step.id.clone())),
+                            ..Default::default()
+                        },
+                    )
+                    .await?;
+                self.fail_step(wr, step, &step_run, NOT_BUILT).await?;
             }
         }
         Ok(())
@@ -861,7 +884,7 @@ impl Workflows {
     /// The `## Workflow` section of the prompt of the step at `index` (section 5.2).
     async fn section(&self, wr: &WorkflowRun, index: usize) -> Result<String> {
         let step = &wr.definition.steps[index];
-        let StepKind::Agent { member, job } = &step.kind else {
+        let StepKind::Agent { member, job, .. } = &step.kind else {
             return Ok(String::new());
         };
         let team = self.store.get_team(&wr.team_id).await?;

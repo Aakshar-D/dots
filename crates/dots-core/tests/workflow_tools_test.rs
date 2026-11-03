@@ -175,7 +175,7 @@ async fn team_of(t: &Rt, helper: &Dot) -> String {
     let check = Step {
         id: "check".into(),
         name: "Your check".into(),
-        kind: StepKind::Check {},
+        kind: StepKind::Check { send_back_to: None },
     };
     team_with(t, helper, vec![check]).await.0
 }
@@ -392,7 +392,7 @@ fn workflow_spec(name: &str, trigger: Trigger) -> WorkflowSpec {
             steps: vec![Step {
                 id: "check".into(),
                 name: "Your check".into(),
-                kind: StepKind::Check {},
+                kind: StepKind::Check { send_back_to: None },
             }],
             budget: Budget::default(),
         },
@@ -422,6 +422,9 @@ async fn the_answer_to_a_workflow_steps_question_may_not_start_a_workflow() {
             kind: StepKind::Agent {
                 member: helper.id.clone(),
                 job: "Fix.".into(),
+                can_send_back_to: vec![],
+                outcomes: vec![],
+                delegate: None,
             },
         }],
     )
@@ -588,6 +591,9 @@ async fn a_reply_in_the_chat_of_a_step_that_has_ended_is_refused() {
             kind: StepKind::Agent {
                 member: helper.id.clone(),
                 job: "Fix.".into(),
+                can_send_back_to: vec![],
+                outcomes: vec![],
+                delegate: None,
             },
         }],
     )

@@ -78,6 +78,9 @@ async fn step_run_in(
             kind: StepKind::Agent {
                 member: dot.id.clone(),
                 job: "Work.".into(),
+                can_send_back_to: vec![],
+                outcomes: vec![],
+                delegate: None,
             },
         }],
         budget: Budget::default(),

@@ -43,6 +43,9 @@ fn flow(name: &str, member: &str) -> WorkflowSpec {
                 kind: StepKind::Agent {
                     member: member.into(),
                     job: "Fix it.".into(),
+                    can_send_back_to: vec![],
+                    outcomes: vec![],
+                    delegate: None,
                 },
             }],
             budget: Budget::default(),

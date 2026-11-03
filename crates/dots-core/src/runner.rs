@@ -976,7 +976,7 @@ impl Runner {
         let step_name = workflow_run
             .definition
             .step(&step.step_id)
-            .map(|(_, s)| s.name.clone())
+            .map(|s| s.name.clone())
             .unwrap_or(step.step_id);
         Ok(Some(StepContext {
             repo: workflow_run.project.repo_path,

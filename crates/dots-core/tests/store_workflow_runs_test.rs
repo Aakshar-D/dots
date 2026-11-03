@@ -55,6 +55,9 @@ async fn fixture() -> Fixture {
             kind: StepKind::Agent {
                 member: dot.clone(),
                 job: "Fix it.".into(),
+                can_send_back_to: vec![],
+                outcomes: vec![],
+                delegate: None,
             },
         }],
         budget: Budget {

@@ -18,7 +18,9 @@ use dots_core::model::{
 use dots_core::runner::{Runner, RunnerConfig};
 use dots_core::scheduler::{Clock, SystemClock};
 use dots_core::store::Store;
-use dots_core::workflow::{Budget, Definition, Step, StepKind, Trigger};
+use dots_core::workflow::{
+    BranchOn, BranchPath, Budget, Definition, DeployMode, Step, StepKind, Trigger,
+};
 use dots_core::workflows::{StartRequest, Workflows, ENDED_STEP_THREAD};
 use dots_core::Error;
 use serde_json::json;
@@ -298,6 +300,9 @@ fn agent(id: &str, name: &str, member: &Dot, job: &str) -> Step {
         kind: StepKind::Agent {
             member: member.id.clone(),
             job: job.into(),
+            can_send_back_to: vec![],
+            outcomes: vec![],
+            delegate: None,
         },
     }
 }
@@ -306,7 +311,7 @@ fn check(id: &str) -> Step {
     Step {
         id: id.into(),
         name: "Your check".into(),
-        kind: StepKind::Check {},
+        kind: StepKind::Check { send_back_to: None },
     }
 }
 
@@ -553,6 +558,60 @@ async fn a_disabled_member_fails_its_step() {
     let wr = w.until(&wr.id, waits_on(WaitingOn::StepFailed)).await;
     assert_eq!(wr.error.as_deref(), Some("Fix it: dev is disabled"));
     assert_eq!(wr.spent_runs, 0);
+}
+
+#[tokio::test]
+async fn a_branch_or_deploy_step_fails_as_not_built_yet() {
+    let w = world().await;
+    let branch = Step {
+        id: "pick".into(),
+        name: "Pick".into(),
+        kind: StepKind::Branch {
+            on: BranchOn::Project,
+            paths: vec![BranchPath {
+                label: "Dots".into(),
+                steps: vec![check("inner")],
+            }],
+            otherwise: vec![],
+        },
+    };
+    let flow = w.workflow("Branch", vec![branch]).await;
+    let wr = w.start(&flow).await;
+    let wr = w.until(&wr.id, waits_on(WaitingOn::StepFailed)).await;
+    assert_eq!(
+        wr.error.as_deref(),
+        Some("Pick: this kind of step is not built yet")
+    );
+    assert_eq!(wr.current_step.as_deref(), Some("pick"));
+    let deploy = Step {
+        id: "ship".into(),
+        name: "Ship".into(),
+        kind: StepKind::Deploy {
+            mode: DeployMode::Push,
+        },
+    };
+    let flow = w.workflow("Deploy", vec![check("check"), deploy]).await;
+    let wr = w.start(&flow).await;
+    let wr = w.until(&wr.id, waits_on(WaitingOn::Check)).await;
+    w.workflows.approve_check(&wr.id, None).await.unwrap();
+    let wr = w.until(&wr.id, waits_on(WaitingOn::StepFailed)).await;
+    assert_eq!(
+        wr.error.as_deref(),
+        Some("Ship: this kind of step is not built yet")
+    );
+    // A retry tries it again, and it fails again.
+    w.workflows.retry_step(&wr.id).await.unwrap();
+    let wr = w.until(&wr.id, waits_on(WaitingOn::StepFailed)).await;
+    let attempts: Vec<_> = wr
+        .steps
+        .iter()
+        .filter(|s| s.step_id == "ship")
+        .map(|s| (s.attempt, s.status))
+        .collect();
+    assert_eq!(
+        attempts,
+        [(1, StepRunStatus::Failed), (2, StepRunStatus::Failed)]
+    );
 }
 
 #[tokio::test]
