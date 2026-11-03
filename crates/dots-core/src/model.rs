@@ -255,7 +255,8 @@ pub struct Run {
     pub ended_at: Option<String>,
     /// Set when the user marked the run reviewed or discarded its worktree.
     pub reviewed_at: Option<String>,
-    /// The failed scheduled run that this run retries.
+    /// The failed run that this run retries: a scheduled run's, or a person's message sent
+    /// again (crash resend spec).
     pub retry_of: Option<String>,
     /// What the run would cost on the API, as the `claude` CLI reported it; `None` for a local
     /// run and for a Claude run whose CLI gave none (usage and limits spec section 5).
@@ -313,7 +314,33 @@ impl NewRun {
             workflow_step_run_id: None,
         }
     }
+
+    /// The run that sends `run`'s message again (crash resend spec section 2): the same
+    /// trigger, payload, parent and topic, `retry_of` = `run`. Its session, folder, branch and
+    /// base commit are the parent's, as when the message was first sent; without a parent it
+    /// starts afresh. Nothing `run` itself set while it worked is kept.
+    pub fn resend_of(run: &Run, parent: Option<&Run>) -> Self {
+        let mut new = Self::new(&run.dot_id, run.trigger);
+        new.payload = run.payload.clone();
+        new.parent_run_id = run.parent_run_id.clone();
+        new.root_run_id = Some(run.root_run_id.clone());
+        if let Some(parent) = parent {
+            new.session_id = parent.session_id.clone();
+            new.workspace_path = parent.workspace_path.clone();
+            new.branch = parent.branch.clone();
+            new.base_commit = parent.base_commit.clone();
+        }
+        new.retry_of = Some(run.id.clone());
+        new
+    }
 }
+
+/// The payload key of a message Dots sent again after it restarted, and its value (crash
+/// resend spec section 3.4).
+pub const RESENT: &str = "resent";
+pub const RESENT_AFTER_RESTART: &str = "restart";
+/// How many times Dots sends a message again after restarts (crash resend spec section 3.3).
+pub const MAX_RESENDS: i64 = 3;
 
 str_enum!(ScheduleStatus {
     Active => "active",
