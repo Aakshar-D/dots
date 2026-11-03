@@ -43,6 +43,12 @@ pub enum RuntimeEvent {
         dot_id: String,
         skip: ScheduleSkip,
     },
+    /// The dot's topics changed beyond a run (topic tools spec section 4.3): a topic was
+    /// named, archived or unarchived, or runs moved between topics. Its runs, threads and topic
+    /// rows are read again.
+    TopicsChanged {
+        dot_id: String,
+    },
     /// The dot's schedule needs attention: an occurrence failed in the end (Scheduler v2 spec
     /// §6). Published once, when the flag goes from clear to set, with the failed run and its
     /// error; a `ScheduleUpdated` for the row goes with it. The app notifies on it.
