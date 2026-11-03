@@ -6,7 +6,8 @@ use std::path::PathBuf;
 
 use common::fake_dot;
 use dots_core::engine::claude::args::{
-    build_args, gateway_entry, mcp_config, resolve_claude, resolve_in_dirs,
+    build_args, cli_settings, gateway_entry, mcp_config, resolve_claude, resolve_in_dirs,
+    settings_path,
 };
 use dots_core::engine::claude::parse::parse_line;
 use dots_core::engine::{EngineEvent, RunContext};
@@ -167,7 +168,8 @@ fn argv_contains_required_flags_in_order() {
          mcp__dots__forget mcp__dots__recall mcp__dots__propose_app mcp__dots__copy_app \
          TodoWrite Task Agent ExitPlanMode EnterPlanMode ToolSearch ListMcpResourcesTool \
          BashOutput KillShell KillBash \
-         --disallowedTools Write Edit NotebookEdit Bash PowerShell --settings "
+         --disallowedTools Write Edit NotebookEdit Bash PowerShell \
+         --settings C:/data/mcp-RUN1.settings.json"
         ),
         "{joined}"
     );
@@ -199,8 +201,11 @@ fn argv_asks_for_private_folders_and_never_for_plumbing() {
     }
     // A denied or asked plumbing tool is not also allowed.
     assert!(!allowed.iter().any(|a| *a == "TodoWrite" || *a == "Agent"));
+    // The settings go in a file next to the MCP config, never inline: a configured `.cmd`
+    // program would hand an inline JSON argument to cmd.exe.
     let i = args.iter().position(|a| a == "--settings").expect("--settings");
-    let settings: serde_json::Value = serde_json::from_str(&args[i + 1]).unwrap();
+    assert_eq!(args[i + 1], settings_path(Path::new("m.json")).to_string_lossy());
+    let settings = cli_settings();
     let ask: Vec<&str> = settings["permissions"]["ask"]
         .as_array()
         .unwrap()

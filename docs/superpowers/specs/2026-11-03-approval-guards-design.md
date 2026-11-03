@@ -48,6 +48,12 @@ Three small guards around approvals:
 
 The CLI allows a call that matches `--allowedTools` itself, without asking Dots (a preset's bare `Read` would read `~/.ssh/id_rsa`). So every Claude run also gets `--settings {"permissions":{"ask":[...]}}` with ask rules for the private places: for `Read` and `Edit` (the CLI applies `Edit` rules to every editing tool and ignores `Write` ones) `Tool(//**/<place>)` and `Tool(//**/<place>/**)` (and the vault as `<data folder name>/vault`), for `Bash` and `PowerShell` `Tool(*<place>*)`. An ask rule beats an allow rule in the CLI (probed on CLI 2.1.317: `--allowedTools Read` plus `ask: ["Read(//**/.env)"]` sends the call to the permission prompt; without it the file is read). The CLI then asks Dots' `approve` tool, and §3.3 decides. These rules are broad (a command that mentions `.env` in any way goes to Dots); Dots' own matching is the precise one.
 
+The settings go in a file next to the run's MCP config (`mcp-<run>.settings.json`, removed with it), not inline: `claude_path` may name a `.cmd`, and cmd.exe would read the JSON's quotes and `*` itself.
+
+Probed on CLI 2.1.317 (2026-11-03): `//**/<name>` rules catch Windows absolute paths in both `\` and `/` form. An absolute rule must spell the drive as `//c/Users/...`; `//C:/Users/...` matches nothing. A rule on a folder also covers everything below it.
+
+Known gap: the CLI checks a search only against the folder it starts in, so `Grep` over `~` (with a preset's bare `Grep` allowed) reads `~/.ssh` without asking Dots. Dots' own check (§3.3) catches it, but the CLI never asks. An ask rule on the home folder would close it, but it would also send every file read in every run (worktrees live under `%LOCALAPPDATA%`) through Dots' `approve` tool. Left for the owner to decide.
+
 ## 4. The "Always allowed" list
 
 In the dot editor's policy section, above the raw rules, a list **"Always allowed"** shows the dot's allow rules in words, each with **Remove**:

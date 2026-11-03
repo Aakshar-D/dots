@@ -94,11 +94,11 @@ pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
         a.extend(deny);
     }
     // The CLI allows a call that matches `--allowedTools` without asking Dots, so the private
-    // folders get ask rules of the CLI's own: an ask rule beats an allow rule there, and the
-    // CLI then asks `approve`, where `Policy::resolve_in` decides (approval guards spec
-    // section 3.4).
+    // folders get ask rules of the CLI's own (`cli_settings`, written by the engine next to
+    // the MCP config): an ask rule beats an allow rule there, and the CLI then asks
+    // `approve`, where `Policy::resolve_in` decides (approval guards spec section 3.4).
     a.push("--settings".into());
-    a.push(json!({ "permissions": { "ask": cli_private_ask_rules() } }).to_string());
+    a.push(settings_path(mcp_config_path).to_string_lossy().to_string());
     for dir in ctx.tools.plugin_dirs() {
         a.push("--plugin-dir".into());
         a.push(dir.to_string_lossy().to_string());
@@ -108,6 +108,18 @@ pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
         a.push(session.clone());
     }
     a
+}
+
+/// The run's `--settings` file, next to its `--mcp-config` (`mcp-RUN.json` gives
+/// `mcp-RUN.settings.json`). A file and not an inline argument: a configured program may be a
+/// `.cmd`, and cmd.exe would read the JSON's quotes and `*` itself.
+pub fn settings_path(mcp_config_path: &Path) -> PathBuf {
+    mcp_config_path.with_extension("settings.json")
+}
+
+/// What the run's `--settings` file holds: the CLI's ask rules for the private folders.
+pub fn cli_settings() -> Value {
+    json!({ "permissions": { "ask": cli_private_ask_rules() } })
 }
 
 /// The run's `--mcp-config`: Dots' own `dots` server and, for each MCP session the run has open,
