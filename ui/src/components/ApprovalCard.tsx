@@ -47,6 +47,8 @@ function ToolApprovalCard({ approval, dotName }: { approval: Approval; dotName?:
   const privateCall = useQuery({
     queryKey: keys.approvalPrivate(approval.id),
     queryFn: () => commands.approvalTouchesPrivate(approval.id),
+    // A failed check only leaves the line out: the core still refuses a rule for such a call.
+    retry: false,
   });
   // The narrowest rule comes first and is the one chosen until the user picks another.
   const chosen = picked ?? offered[0]?.pattern ?? null;

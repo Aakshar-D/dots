@@ -516,6 +516,22 @@ describe("saving a rule with an approval", () => {
     );
   });
 
+  it("keeps the card whole when the private-folder check fails", async () => {
+    waiting();
+    backend.on("approval_touches_private", () => {
+      throw { kind: "internal", message: "database is locked" };
+    });
+    const { user, listening } = renderApp("/inbox");
+    const shown = await card();
+    await listening();
+    await waitFor(() => expect(backend.callsTo("approval_touches_private").length).toBe(1));
+    expect(within(shown).queryByText(/private folder/)).toBeNull();
+    // The core still refuses a rule for a private call, so the rules are offered as usual.
+    await within(shown).findByRole("button", opener);
+    await user.click(within(shown).getByRole("button", { name: "Approve" }));
+    await waitFor(() => expect(backend.callsTo("decide_approval")).toHaveLength(1));
+  });
+
   it("says nothing of private folders for an ordinary call", async () => {
     waiting([]);
     const { listening } = renderApp("/inbox");

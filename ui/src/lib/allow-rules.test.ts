@@ -29,14 +29,21 @@ describe("an allow rule in words", () => {
       "Ask",
       "FollowUp",
       "Memory",
-      "Workflow",
       "App",
       "ProposeApp",
       "Instructions",
     ]) {
       expect(isDotsOwnRule(tool)).toBe(true);
     }
-    for (const tool of ["Read", "Bash(git status:*)", "mcp__github__*", "WebFetch", "App(notes)"]) {
+    for (const tool of [
+      "Read",
+      "Bash(git status:*)",
+      "mcp__github__*",
+      "WebFetch",
+      "App(notes)",
+      // Starting a workflow is real work: a saved allow is shown so it can be taken back.
+      "Workflow",
+    ]) {
       expect(isDotsOwnRule(tool)).toBe(false);
     }
   });

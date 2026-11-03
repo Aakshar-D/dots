@@ -123,3 +123,43 @@ describe("the always-allowed list", () => {
     expect(screen.getByText("Nothing is always allowed.")).toBeVisible();
   });
 });
+
+describe("an always-allowed rule that covers a private folder", () => {
+  it("says it always asks", async () => {
+    backend.on("rules_touch_private", ({ patterns }) =>
+      (patterns as string[]).map((p) => p === "Read(~/.ssh/**)"),
+    );
+    setup({
+      preset: "custom",
+      rules: [
+        { tool: "Read(src/**)", action: "allow" },
+        { tool: "Read(~/.ssh/**)", action: "allow" },
+      ],
+      default: "ask",
+      mcp_default: "ask",
+    });
+    const items = within(screen.getByRole("list", { name: "Always allowed" })).getAllByRole(
+      "listitem",
+    );
+    expect(await within(items[1]).findByText("Always asks: private folder")).toBeVisible();
+    expect(within(items[0]).queryByText("Always asks: private folder")).toBeNull();
+    expect(backend.callsTo("rules_touch_private")).toEqual([
+      { patterns: ["Read(src/**)", "Read(~/.ssh/**)"] },
+    ]);
+  });
+
+  it("shows the list as it is when the check fails", async () => {
+    backend.on("rules_touch_private", () => {
+      throw { kind: "internal", message: "no" };
+    });
+    setup({
+      preset: "custom",
+      rules: [{ tool: "Read(src/**)", action: "allow" }],
+      default: "ask",
+      mcp_default: "ask",
+    });
+    await waitFor(() => expect(backend.callsTo("rules_touch_private").length).toBe(1));
+    expect(screen.getByText("Read: everything under src/")).toBeVisible();
+    expect(screen.queryByText("Always asks: private folder")).toBeNull();
+  });
+});

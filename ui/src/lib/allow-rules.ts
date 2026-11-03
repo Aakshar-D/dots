@@ -2,7 +2,8 @@
 // guards spec section 4). The rule's own text is shown beside these words.
 
 /// Dots' own tools, which every preset allows and which never reach the person's machine: the
-/// list leaves out their bare rules. A rule with an argument (`App(notes)`) is shown.
+/// list leaves out their bare rules. A rule with an argument (`App(notes)`) is shown, and so is
+/// `Workflow`, which starts real work.
 const DOTS_OWN = new Set([
   "Skill",
   "Context",
@@ -10,7 +11,6 @@ const DOTS_OWN = new Set([
   "Ask",
   "FollowUp",
   "Memory",
-  "Workflow",
   "App",
   "ProposeApp",
   "Instructions",
