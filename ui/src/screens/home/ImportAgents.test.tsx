@@ -2,7 +2,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import type { AgentImport, ScannedAgent } from "@/api/types";
-import { backend } from "@/test/backend";
+import { backend, later } from "@/test/backend";
 import { sample } from "@/test/fixtures";
 import { renderApp } from "@/test/render";
 
@@ -88,6 +88,28 @@ describe("importing Claude Code agents", () => {
     );
     expect(await dialog.findByText("Made reviewer")).toBeVisible();
     expect(dialog.getByText(`${pdf.path}: conflict: a dot named "pdf" already exists`)).toBeVisible();
+  });
+
+  it("keeps imported agents unticked and waits for the new scan before importing again", async () => {
+    backend.on("import_claude_agents", () => ({
+      created: [{ ...sample.dot, id: "d-rev", name: "reviewer" }],
+      failed: [],
+    }));
+    const { dialog, user } = await open([reviewer]);
+    // The scan after the import is slow, and still shows the agent as not imported.
+    const rescan = later<ScannedAgent[]>();
+    backend.on("scan_claude_agents", () => rescan.answer);
+    await user.click(dialog.getByRole("button", { name: "Import 1 agent" }));
+    expect(await dialog.findByText("Made reviewer")).toBeVisible();
+    expect(dialog.getByRole("checkbox", { name: "reviewer" })).not.toBeChecked();
+    expect(dialog.getByRole("button", { name: "Import 0 agents" })).toBeDisabled();
+    await user.click(dialog.getByRole("checkbox", { name: "reviewer" }));
+    expect(dialog.getByRole("button", { name: "Import 1 agent" })).toBeDisabled();
+    rescan.give([{ ...reviewer, already_imported: true }]);
+    await waitFor(() =>
+      expect(dialog.getByRole("button", { name: "Import 1 agent" })).toBeEnabled(),
+    );
+    expect(backend.callsTo("import_claude_agents")).toHaveLength(1);
   });
 
   it("says when nothing was found", async () => {

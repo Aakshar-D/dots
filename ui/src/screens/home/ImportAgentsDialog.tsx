@@ -39,7 +39,11 @@ function grouped(agents: ScannedAgent[]): [string, ScannedAgent[]][] {
 /// What the agent's dot would run with: its model and its tools.
 function summary(agent: ScannedAgent): string {
   const model = agent.model && agent.model !== "inherit" ? agent.model : "default";
-  const tools = agent.tools ? `Tools ${agent.tools.join(", ")}` : "All tools";
+  const tools = !agent.tools
+    ? "All tools"
+    : agent.tools.length === 0
+      ? "No tools listed"
+      : `Tools ${agent.tools.join(", ")}`;
   return `Model ${model} · ${tools}`;
 }
 
@@ -67,11 +71,13 @@ export function ImportAgentsDialog({ onClose }: { onClose: () => void }) {
       const orgId = scope && scope.account !== PERSONAL ? scope.account : null;
       const done = await commands.importClaudeAgents(chosen, orgId, scope?.workspace ?? null);
       setResult(done);
-      invalidateDots(qc);
-      void qc.invalidateQueries({ queryKey: keys.claudeAgents });
-      setPicked({});
+      // What was sent stays unticked: the scan still shows it as not imported until it is
+      // read again, and importing it twice would make a second dot.
+      setPicked((now) => ({ ...now, ...Object.fromEntries(chosen.map((path) => [path, false])) }));
       const made = done.created.length;
       if (made > 0) toast.success(made === 1 ? "1 dot made" : `${made} dots made`);
+      invalidateDots(qc);
+      await qc.invalidateQueries({ queryKey: keys.claudeAgents });
     } catch (e) {
       setError(errorMessage(e));
     }
