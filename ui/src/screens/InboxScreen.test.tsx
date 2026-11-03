@@ -497,6 +497,34 @@ describe("saving a rule with an approval", () => {
     expect(within(shown).getByRole("button", { name: "Approve" })).toBeEnabled();
   });
 
+  it("says why a call that touches a private folder offers no rule", async () => {
+    waiting([]);
+    backend.on("approval_touches_private", () => true);
+    const { user } = renderApp("/inbox");
+    const shown = await card();
+    expect(
+      await within(shown).findByText("This touches a private folder, so it always asks."),
+    ).toBeVisible();
+    expect(backend.callsTo("approval_touches_private")[0]).toEqual({ id: approval.id });
+    expect(within(shown).queryByRole("button", opener)).toBeNull();
+    // The one call can still be approved.
+    await user.click(within(shown).getByRole("button", { name: "Approve" }));
+    await waitFor(() =>
+      expect(backend.callsTo("decide_approval")).toEqual([
+        { id: approval.id, approved: true, note: null, allowRule: null },
+      ]),
+    );
+  });
+
+  it("says nothing of private folders for an ordinary call", async () => {
+    waiting([]);
+    const { listening } = renderApp("/inbox");
+    const shown = await card();
+    await listening();
+    await waitFor(() => expect(backend.callsTo("approval_touches_private").length).toBeGreaterThan(0));
+    expect(within(shown).queryByText(/private folder/)).toBeNull();
+  });
+
   it("says that the rules could not be loaded, and the call can still be decided", async () => {
     waiting();
     backend.on("approval_rule_candidates", () => {

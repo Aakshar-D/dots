@@ -42,6 +42,12 @@ function ToolApprovalCard({ approval, dotName }: { approval: Approval; dotName?:
     queryFn: () => commands.approvalRuleCandidates(approval.id),
   });
   const offered = rules.data ?? [];
+  // A call that touches a private folder always asks: the core offers no rule for it, and the
+  // card says why.
+  const privateCall = useQuery({
+    queryKey: keys.approvalPrivate(approval.id),
+    queryFn: () => commands.approvalTouchesPrivate(approval.id),
+  });
   // The narrowest rule comes first and is the one chosen until the user picks another.
   const chosen = picked ?? offered[0]?.pattern ?? null;
   const decide = useMutation({
@@ -119,6 +125,11 @@ function ToolApprovalCard({ approval, dotName }: { approval: Approval; dotName?:
           </Button>
         )}
       </div>
+      {privateCall.data === true && (
+        <p className="text-xs text-muted-foreground">
+          This touches a private folder, so it always asks.
+        </p>
+      )}
       {rules.isError && (
         <p className="text-xs text-muted-foreground">
           The rules that could be saved with this approval could not be loaded. You can still
