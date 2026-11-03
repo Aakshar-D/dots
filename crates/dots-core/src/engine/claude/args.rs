@@ -7,6 +7,9 @@ use crate::engine::RunContext;
 use crate::model::EngineKind;
 use crate::policy::{cli_private_ask_rules, PLUMBING_TOOLS};
 
+/// The CLI's search and listing tools, never in its allow list.
+const SEARCH_TOOLS: &[&str] = &["Grep", "Glob", "LS"];
+
 pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
     let spec = &ctx.dot.spec;
     let mut a: Vec<String> = vec![
@@ -34,6 +37,14 @@ pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
         String::new()
     });
     let (mut allow, deny) = spec.policy.cli_lists();
+    // Searches and listings always reach `approve`, even where the policy allows them: the CLI
+    // checks a search only against the folder it starts in, and Dots also asks when that
+    // folder holds a private place (approval guards spec section 3.4). Dots answers the rest
+    // with an allow at once.
+    allow.retain(|rule| {
+        let name = rule.split('(').next().unwrap_or(rule).trim();
+        !SEARCH_TOOLS.contains(&name)
+    });
     // The gateway checks every call of a run's MCP server (spec section 4), so the CLI does not
     // ask the `approve` tool for them first.
     allow.extend(

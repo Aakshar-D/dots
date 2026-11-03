@@ -52,7 +52,7 @@ The settings go in a file next to the run's MCP config (`mcp-<run>.settings.json
 
 Probed on CLI 2.1.317 (2026-11-03): `//**/<name>` rules catch Windows absolute paths in both `\` and `/` form. An absolute rule must spell the drive as `//c/Users/...`; `//C:/Users/...` matches nothing. A rule on a folder also covers everything below it.
 
-Known gap: the CLI checks a search only against the folder it starts in, so `Grep` over `~` (with a preset's bare `Grep` allowed) reads `~/.ssh` without asking Dots. Dots' own check (§3.3) catches it, but the CLI never asks. An ask rule on the home folder would close it, but it would also send every file read in every run (worktrees live under `%LOCALAPPDATA%`) through Dots' `approve` tool. Left for the owner to decide.
+The CLI checks a search only against the folder it starts in, so a `Grep` over `~` would read `~/.ssh` under a preset's bare `Grep`. So `Grep`, `Glob` and `LS` never go in `--allowedTools`, even when the policy allows them (owner's decision, 2026-11-03): every search reaches `approve`, Dots answers an ordinary one with an allow at once (no prompt), and asks only when the search starts in a folder that holds a private place (§3.3). `Read` stays in the allow list: a single file is caught by the ask rules above.
 
 ## 4. The "Always allowed" list
 

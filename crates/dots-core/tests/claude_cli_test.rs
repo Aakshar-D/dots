@@ -163,7 +163,7 @@ fn argv_contains_required_flags_in_order() {
         joined.starts_with(
             "-p --output-format stream-json --verbose --model haiku --max-turns 12 \
          --permission-prompt-tool mcp__dots__approve --mcp-config C:/data/mcp-RUN1.json \
-         --strict-mcp-config --setting-sources  --allowedTools Read LS Glob Grep Skill \
+         --strict-mcp-config --setting-sources  --allowedTools Read Skill \
          mcp__dots__notify mcp__dots__ask mcp__dots__follow_up mcp__dots__remember \
          mcp__dots__forget mcp__dots__recall mcp__dots__propose_app mcp__dots__copy_app \
          TodoWrite Task Agent ExitPlanMode EnterPlanMode ToolSearch ListMcpResourcesTool \
@@ -199,6 +199,21 @@ fn argv_asks_for_private_folders_and_never_for_plumbing() {
     for tool in PLUMBING_TOOLS.iter().filter(|t| !["TodoWrite", "Agent"].contains(*t)) {
         assert!(allowed.iter().any(|a| a == tool), "{tool} in {allowed:?}");
     }
+    // Searches always reach `approve`, so Dots can judge the folder they start in.
+    c.dot.spec.policy.rules.push(Rule::new("Grep(src/**)", Action::Allow));
+    let searched = build_args(&c, Path::new("m.json"));
+    let allowed_now: Vec<&String> = searched
+        .iter()
+        .skip_while(|a| *a != "--allowedTools")
+        .skip(1)
+        .take_while(|a| !a.starts_with("--"))
+        .collect();
+    assert!(
+        !allowed_now
+            .iter()
+            .any(|a| ["Grep", "Glob", "LS"].iter().any(|t| a == t || a.starts_with(&format!("{t}(")))),
+        "{allowed_now:?}"
+    );
     // A denied or asked plumbing tool is not also allowed.
     assert!(!allowed.iter().any(|a| *a == "TodoWrite" || *a == "Agent"));
     // The settings go in a file next to the MCP config, never inline: a configured `.cmd`
