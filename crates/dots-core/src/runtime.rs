@@ -152,6 +152,11 @@ pub struct Runtime {
 impl Runtime {
     pub async fn start(cfg: Config) -> Result<Runtime> {
         std::fs::create_dir_all(&cfg.data_dir)?;
+        // The vault folder is a private place: no rule allows a call into it (approval guards
+        // spec section 3.1).
+        if let Ok(data) = std::path::absolute(&cfg.data_dir) {
+            crate::policy::register_vault(&data.join(OFFLINE_DIR));
+        }
         let store = Store::open(&cfg.data_dir.join(crate::store::DB_FILE)).await?;
         let settings = store.get_settings().await?;
         let secrets = match &cfg.secrets {
