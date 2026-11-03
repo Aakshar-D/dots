@@ -1062,8 +1062,8 @@ async fn grep_refuses_a_file_root_the_policy_denies() {
     for policy in [&read_only, &by_rule] {
         assert_eq!(
             policy.resolve_in("Grep", &dot_env, Some(p)),
-            Action::Allow,
-            "the gate lets the call through"
+            Action::Ask,
+            "an `.env` file is a private place: the gate asks (approval guards spec section 3)"
         );
         let out = run_filtered(p, policy, "grep", dot_env.clone()).await;
         assert_eq!(out, root_denied(".env"));
