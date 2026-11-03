@@ -5,10 +5,12 @@ import {
   defaultWatcherName,
   folderInside,
   watcherEventLine,
+  watcherHoursLine,
   watcherState,
   watcherSummary,
   watcherTitle,
 } from "@/lib/watchers";
+import { localTime } from "@/lib/format";
 import { sample } from "@/test/fixtures";
 
 const [folder, email, github] = sample.watchers as [Watcher, Watcher, Watcher];
@@ -85,5 +87,30 @@ describe("what a watcher says about itself", () => {
     expect(folderInside("C:\\work", "C:\\work")).toBe(true);
     expect(folderInside("C:\\workshop", "C:\\work")).toBe(false);
     expect(folderInside("D:\\in", "C:\\work")).toBe(false);
+  });
+});
+
+describe("what a watcher's hours hold back", () => {
+  const at = (iso: string) => ({ ...folder, held_count: 4, next_opening: iso });
+  const TODAY = "2026-10-10T09:00:00+02:00";
+  // 09:00 on Mon 2026-10-12, judged from the middle of Sat 2026-10-10.
+  const MONDAY = "2026-10-12T09:00:00+02:00";
+  const sat = new Date(2026, 9, 10, 12, 0);
+
+  it("says what is held and until when, today as a time and later as a weekday and time", () => {
+    const today = new Date(TODAY);
+    expect(watcherHoursLine(at(TODAY), new Date(today.getTime() - 3_600_000))).toBe(
+      `Outside hours · 4 held until ${localTime(TODAY)}`,
+    );
+    expect(watcherHoursLine({ ...at(TODAY), held_count: 0 }, new Date(today.getTime() - 3_600_000))).toBe(
+      `Outside hours · until ${localTime(TODAY)}`,
+    );
+    const line = watcherHoursLine(at(MONDAY), sat);
+    expect(line).toMatch(/^Outside hours · 4 held until Mon /);
+    expect(line).toContain(localTime(MONDAY));
+  });
+
+  it("is empty without a next opening", () => {
+    expect(watcherHoursLine({ ...folder, next_opening: null }, sat)).toBe("");
   });
 });

@@ -51,6 +51,7 @@ const schemas: Record<SampleName, { parse: (v: unknown) => unknown }> = {
   FollowUp: T.FollowUp.array(),
   Memory: T.Memory.array(),
   Watcher: T.Watcher.array(),
+  WatchHours: T.WatchHours,
   BrowserStatus: T.BrowserStatus,
   AppRow: T.AppRow.array(),
   KeptData: T.KeptData.array(),

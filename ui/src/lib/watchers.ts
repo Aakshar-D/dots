@@ -1,3 +1,4 @@
+import { localWeekdayTime } from "@/lib/format";
 import type { GithubEvent, Run, Watcher, WatcherConfig } from "@/api/types";
 
 /// How a watcher's GitHub events read in its summary.
@@ -42,6 +43,16 @@ export function watcherState(w: Watcher): string {
   if (w.paused_reason === "flood") return "paused: too many runs";
   if (w.paused_reason === "error") return `paused: ${w.last_error ?? "an error"}`;
   return w.enabled ? "on" : "paused by you";
+}
+
+/// What a watcher's hours hold back right now, beside its state: "Outside hours · 4 held until
+/// Mon 9:00 AM". "" when it is open (no next opening). `now` is the moment "today" is judged at.
+export function watcherHoursLine(w: Watcher, now: Date): string {
+  if (w.next_opening === null) return "";
+  const until = `until ${localWeekdayTime(w.next_opening, now.getTime())}`;
+  return w.held_count > 0
+    ? `Outside hours · ${w.held_count} held ${until}`
+    : `Outside hours · ${until}`;
 }
 
 const text = (v: unknown) => (typeof v === "string" ? v : "");
