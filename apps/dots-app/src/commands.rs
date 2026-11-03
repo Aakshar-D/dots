@@ -596,6 +596,12 @@ pub async fn chat(
         .await?)
 }
 
+/// "Send again": queues a failed chat message once more in its topic.
+#[tauri::command]
+pub async fn resend_run(state: State<'_, AppState>, run_id: String) -> Res<Run> {
+    Ok(state.rt()?.resend(&run_id).await?)
+}
+
 #[tauri::command]
 pub async fn cancel_run(state: State<'_, AppState>, run_id: String) -> Res<Run> {
     Ok(state.rt()?.cancel_run(&run_id).await?)

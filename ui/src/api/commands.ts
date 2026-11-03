@@ -170,6 +170,8 @@ export const commands = {
   runNow: (dotId: string) => call(T.Run, "run_now", { dotId }),
   chat: (dotId: string, message: string, parentRunId: string | null) =>
     call(T.Run, "chat", { dotId, message, parentRunId }),
+  /// Send again: a failed chat message, queued once more in its topic.
+  resendRun: (runId: string) => call(T.Run, "resend_run", { runId }),
   cancelRun: (runId: string) => call(T.Run, "cancel_run", { runId }),
   keepWaiting: (runId: string) => call(nothing, "keep_waiting", { runId }),
   listRuns: (dotId: string | null, limit: number) =>

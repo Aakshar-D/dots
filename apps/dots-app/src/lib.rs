@@ -97,6 +97,7 @@ command_list![
     test_endpoint,
     run_now,
     chat,
+    resend_run,
     cancel_run,
     keep_waiting,
     list_runs,
