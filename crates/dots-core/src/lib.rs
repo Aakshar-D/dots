@@ -7,6 +7,7 @@ pub mod apps;
 pub mod browser;
 pub mod chatgpt;
 pub mod checkins;
+pub mod claude_agents;
 pub mod context;
 pub mod engine;
 pub mod error;
