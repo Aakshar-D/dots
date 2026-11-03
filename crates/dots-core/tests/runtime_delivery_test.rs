@@ -348,3 +348,35 @@ async fn delivery_today_counts_the_dot() {
     assert!(matches!(unknown, Err(Error::NotFound(_))), "{unknown:?}");
     rt.shutdown();
 }
+
+/// Why a run waits only explains the wait: when it cannot be read, the runs are still listed
+/// and read, with no reason (here the dots table is gone, so the usage hold cannot be read).
+#[tokio::test]
+async fn a_wait_reason_that_cannot_be_read_fails_no_read_of_the_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    let rt = start(&dir).await;
+    let dot = dot(&rt, &dir).await;
+    let run = queued(&rt, chat_run(&dot, "Ship it", None), None).await;
+    assert!(rt.get_run(&run.id).await.unwrap().wait_reason.is_some());
+
+    let db = dir.path().join("data").join(dots_core::store::DB_FILE);
+    let pool = sqlx::sqlite::SqlitePool::connect_with(
+        sqlx::sqlite::SqliteConnectOptions::new().filename(&db),
+    )
+    .await
+    .unwrap();
+    sqlx::query("ALTER TABLE dots RENAME TO dots_gone")
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+
+    let listed = rt.list_runs(Some(&dot.id), 100).await.unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].wait_reason, None);
+    assert_eq!(rt.get_run(&run.id).await.unwrap().wait_reason, None);
+    let thread = rt.run_thread(&run.id).await.unwrap();
+    assert_eq!(thread.len(), 1);
+    assert_eq!(thread[0].wait_reason, None);
+    rt.shutdown();
+}

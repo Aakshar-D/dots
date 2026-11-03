@@ -133,6 +133,44 @@ async fn mark_undelivered_skips_delivered_and_dismissed_runs() {
     );
 }
 
+/// The sweeper reads its overdue runs, then marks them: a run cancelled or claimed between the
+/// read and the mark is not marked (spec section 3.9.1: a cancelled run is never "not
+/// delivered").
+#[tokio::test]
+async fn mark_undelivered_skips_a_run_cancelled_or_claimed_after_the_sweep_read_it() {
+    let (_dir, store) = temp_store().await;
+    let d = dot(&store, "race").await;
+    let cancelled = queued(&store, &d, TriggerKind::Chat).await;
+    let claimed_run = queued(&store, &d, TriggerKind::Chat).await;
+    for id in [&cancelled.id, &claimed_run.id] {
+        store
+            .set_run_queued_at(id, "2026-11-03T09:00:00.000Z")
+            .await
+            .unwrap();
+    }
+    let overdue = store
+        .overdue_undelivered("2026-11-03T09:30:00.000Z")
+        .await
+        .unwrap();
+    assert_eq!(overdue.len(), 2);
+
+    store
+        .cancel_if_inactive(&cancelled.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(store.claim_run(&claimed_run.id).await.unwrap());
+    for run in &overdue {
+        assert!(store
+            .mark_undelivered(&run.id, "next in line", at("2026-11-03T09:31:00Z"))
+            .await
+            .unwrap()
+            .is_none());
+        assert_eq!(store.get_run(&run.id).await.unwrap().undelivered_at, None);
+    }
+    assert_eq!(store.dot_counts(&d).await.unwrap().0, 0);
+}
+
 #[tokio::test]
 async fn a_failed_run_never_delivered_is_marked_in_the_same_write() {
     let (_dir, store) = temp_store().await;
@@ -220,12 +258,14 @@ async fn a_cancelled_run_is_not_marked() {
     assert!(m.undelivered_at.is_some());
     assert!(m.dismissed_at.is_some());
 
-    let m2 = claimed(&store, &d, TriggerKind::Chat).await;
-    // Marked while claimed (the sweeper only marks queued runs, but the write is general).
+    // Marked while queued, then claimed and cancelled: the mark stays and the run is dismissed.
+    let m2 = queued(&store, &d, TriggerKind::Chat).await;
     store
         .mark_undelivered(&m2.id, "waited", at("2026-11-03T10:00:00Z"))
         .await
+        .unwrap()
         .unwrap();
+    assert!(store.claim_run(&m2.id).await.unwrap());
     let m2 = store
         .finish_run(&m2.id, RunStatus::Cancelled, None, None)
         .await

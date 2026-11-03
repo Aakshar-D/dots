@@ -41,10 +41,10 @@ pub struct WaitFacts {
     pub usage_held: bool,
     /// The runner's queue is held (an update is installing).
     pub runner_held: bool,
-    /// Another run of its dot is running or waiting for an approval: the dispatcher starts one
-    /// run per dot.
+    /// Another run of its dot, not of a workflow step, is active in the runner: the dispatcher
+    /// starts one run per dot.
     pub dot_has_active_run: bool,
-    /// Runs running now.
+    /// The runner's slots in use now.
     pub running: usize,
     pub max_concurrent: usize,
 }
@@ -92,7 +92,8 @@ fn midnight<Tz: TimeZone>(tz: &Tz, date: NaiveDate, now: DateTime<Utc>) -> DateT
 }
 
 /// Marks the runs that waited 30 minutes without reaching their dot (delivery tracking spec
-/// section 3), every 30 seconds of its clock. A run held for the usage limit is left alone.
+/// section 3), every 30 seconds of its clock. A run held for the usage limit or for a member's
+/// role is left alone: both holds are deliberate.
 pub struct DeliverySweeper {
     store: Store,
     runner: Arc<Runner>,
@@ -128,6 +129,11 @@ impl DeliverySweeper {
                 Some(WaitReason::UsageHold) | None => continue,
                 Some(reason) => reason,
             };
+            // A run held for its member's role waits until the role returns (members spec
+            // section 6.3), as deliberately as the usage hold.
+            if self.runner.role_hold(&run).await?.is_some() {
+                continue;
+            }
             if let Some(row) = self
                 .store
                 .mark_undelivered(&run.id, reason.text(), now)

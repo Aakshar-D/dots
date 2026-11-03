@@ -680,18 +680,27 @@ impl Runtime {
             .collect())
     }
 
+    /// Sets why each waiting run waits (`Runner::fill_wait_reasons`). The reason only explains
+    /// a wait, so failing to read it fails nothing: it is logged and every reason left `None`.
+    async fn fill_wait_reasons(&self, runs: &mut [Run]) {
+        if let Err(e) = self.runner.fill_wait_reasons(runs).await {
+            tracing::warn!("reading why runs wait failed: {e}");
+            for run in runs.iter_mut() {
+                run.wait_reason = None;
+            }
+        }
+    }
+
     /// Newest first; `limit` is clamped to 1..=500.
     pub async fn list_runs(&self, dot_id: Option<&str>, limit: i64) -> Result<Vec<Run>> {
         let mut runs = self.store.list_runs(dot_id, limit.clamp(1, 500)).await?;
-        self.runner.fill_wait_reasons(&mut runs).await?;
+        self.fill_wait_reasons(&mut runs).await;
         Ok(runs)
     }
 
     pub async fn get_run(&self, id: &str) -> Result<Run> {
         let mut run = self.store.get_run(id).await?;
-        self.runner
-            .fill_wait_reasons(std::slice::from_mut(&mut run))
-            .await?;
+        self.fill_wait_reasons(std::slice::from_mut(&mut run)).await;
         Ok(run)
     }
 
@@ -709,7 +718,7 @@ impl Runtime {
     pub async fn run_thread(&self, run_id: &str) -> Result<Vec<Run>> {
         let run = self.store.get_run(run_id).await?;
         let mut runs = self.store.list_thread(&run.root_run_id).await?;
-        self.runner.fill_wait_reasons(&mut runs).await?;
+        self.fill_wait_reasons(&mut runs).await;
         Ok(runs)
     }
 

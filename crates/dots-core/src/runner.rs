@@ -322,6 +322,8 @@ impl Runner {
 
     /// Sets why each waiting run waits (delivery tracking spec section 3): each `queued` run
     /// not yet delivered gets its reason, every other run `None`. The facts are read once.
+    /// The slots in use and the busy dots are the runner's own, exactly what `dispatch_once`
+    /// checks: a run parked or waiting for an approval has left them and keeps no dot busy.
     pub async fn fill_wait_reasons(&self, runs: &mut [Run]) -> Result<()> {
         let waiting =
             |r: &Run| r.status == RunStatus::Queued && r.delivery == Some(Delivery::Waiting);
@@ -332,8 +334,15 @@ impl Runner {
             return Ok(());
         }
         let usage_held = self.usage_held_ids().await?;
-        let busy_dots: HashSet<String> = self.store.busy_dot_ids().await?.into_iter().collect();
-        let running = self.store.running_count().await?;
+        let (running, busy_dots) = {
+            let active = self.active.lock().unwrap();
+            let busy: HashSet<String> = active
+                .values()
+                .filter(|a| !a.workflow)
+                .map(|a| a.dot_id.clone())
+                .collect();
+            (active.len(), busy)
+        };
         let runner_held = self.is_held();
         for run in runs.iter_mut() {
             run.wait_reason = waiting(run).then(|| {

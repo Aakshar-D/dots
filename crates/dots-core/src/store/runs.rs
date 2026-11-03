@@ -410,26 +410,6 @@ impl Store {
         .await?)
     }
 
-    /// How many runs are `running` (delivery tracking: a queued run waits while they fill
-    /// the runner's slots).
-    pub async fn running_count(&self) -> Result<usize> {
-        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE status = 'running'")
-            .fetch_one(&self.pool)
-            .await?;
-        Ok(n as usize)
-    }
-
-    /// The dots with a run, not of a workflow step, that is running or waiting for an
-    /// approval: the dispatcher starts no other run of theirs (delivery tracking, `dot_busy`).
-    pub async fn busy_dot_ids(&self) -> Result<Vec<String>> {
-        Ok(sqlx::query_scalar(
-            "SELECT DISTINCT dot_id FROM runs WHERE status IN ('running', 'awaiting_approval') \
-             AND workflow_step_run_id IS NULL ORDER BY dot_id",
-        )
-        .fetch_all(&self.pool)
-        .await?)
-    }
-
     /// How many runs have not ended: queued, running or waiting for an approval (updates UI
     /// spec section 4.2, the idle install).
     pub async fn unfinished_run_count(&self) -> Result<usize> {
@@ -578,8 +558,9 @@ impl Store {
         Ok(res.rows_affected() == 1)
     }
 
-    /// Marks a run not delivered, only while it is neither delivered, marked nor dismissed.
-    /// `None` otherwise (nothing changed).
+    /// Marks a run not delivered, only while it is still queued and neither delivered, marked
+    /// nor dismissed: a run just cancelled or claimed by the dispatcher is never "not
+    /// delivered" (delivery tracking spec section 3.9.1). `None` otherwise (nothing changed).
     pub async fn mark_undelivered(
         &self,
         id: &str,
@@ -588,7 +569,8 @@ impl Store {
     ) -> Result<Option<Run>> {
         let res = sqlx::query(
             "UPDATE runs SET undelivered_at = ?, undelivered_reason = ? WHERE id = ? \
-             AND delivered_at IS NULL AND undelivered_at IS NULL AND dismissed_at IS NULL",
+             AND status = 'queued' AND delivered_at IS NULL AND undelivered_at IS NULL \
+             AND dismissed_at IS NULL",
         )
         .bind(timestamp(at))
         .bind(reason)

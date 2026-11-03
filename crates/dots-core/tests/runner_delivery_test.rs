@@ -108,9 +108,14 @@ async fn still(max: usize) -> Env {
 
 /// A runner with a dispatcher, its engine `engine`.
 async fn moving(engine: Arc<dyn Engine>) -> Env {
+    moving_max(engine, 4).await
+}
+
+/// A runner with a dispatcher running at most `max` runs at once, its engine `engine`.
+async fn moving_max(engine: Arc<dyn Engine>, max: usize) -> Env {
     let (dir, store) = temp_store().await;
     let bus = new_bus();
-    let runner = runner(&store, &bus, &dir, engine, 4);
+    let runner = runner(&store, &bus, &dir, engine, max);
     runner.spawn_dispatcher(CancellationToken::new());
     Env {
         dir,
@@ -217,24 +222,59 @@ async fn the_runner_held() {
     assert_eq!(e.reason(&run.id).await, Some(WaitReason::Updating));
 }
 
+/// An engine that works for a long time: its run stays active in the runner.
+fn working() -> Arc<dyn Engine> {
+    Arc::new(ScriptedEngine::new(vec![
+        Step::Sleep(Duration::from_secs(60)),
+        finished(),
+    ]))
+}
+
 #[tokio::test]
 async fn the_dot_busy() {
-    let e = still(4).await;
+    let e = moving_max(working(), 4).await;
     let dot = e.dot("a").await;
-    let other = e.queue(&dot, TriggerKind::Manual).await;
+    let other = e
+        .runner
+        .enqueue(NewRun::new(&dot.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    wait_status(&e.store, &other.id, RunStatus::Running, 10).await;
     let run = e.queue(&dot, TriggerKind::Chat).await;
-    assert!(e.store.claim_run(&other.id).await.unwrap());
     assert_eq!(e.reason(&run.id).await, Some(WaitReason::DotBusy));
 }
 
 #[tokio::test]
 async fn busy() {
-    let e = still(1).await;
+    let e = moving_max(working(), 1).await;
     let (a, b) = (e.dot("a").await, e.dot("b").await);
-    let other = e.queue(&b, TriggerKind::Manual).await;
+    let other = e
+        .runner
+        .enqueue(NewRun::new(&b.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    wait_status(&e.store, &other.id, RunStatus::Running, 10).await;
     let run = e.queue(&a, TriggerKind::Chat).await;
-    assert!(e.store.claim_run(&other.id).await.unwrap());
     assert_eq!(e.reason(&run.id).await, Some(WaitReason::Busy));
+}
+
+/// The waits read the runner's own slots, as the dispatcher does: a run the store calls running
+/// or waiting for an approval, but the runner does not hold (parked for an approval), takes no
+/// slot and keeps no dot busy.
+#[tokio::test]
+async fn a_run_the_runner_does_not_hold_keeps_no_dot_busy() {
+    let e = still(1).await;
+    let dot = e.dot("a").await;
+    let parked = e.queue(&dot, TriggerKind::Manual).await;
+    let claimed = e.queue(&dot, TriggerKind::Manual).await;
+    let run = e.queue(&dot, TriggerKind::Chat).await;
+    assert!(e.store.claim_run(&parked.id).await.unwrap());
+    e.store
+        .set_status(&parked.id, RunStatus::AwaitingApproval)
+        .await
+        .unwrap();
+    assert!(e.store.claim_run(&claimed.id).await.unwrap());
+    assert_eq!(e.reason(&run.id).await, Some(WaitReason::Queued));
 }
 
 #[tokio::test]
