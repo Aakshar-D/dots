@@ -2,7 +2,7 @@
 
 mod common;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use common::{git_out, init_repo};
 use dots_core::deploy::{ApprovedBranch, Deployer, BRANCH_CHANGED, GH_MISSING};
@@ -593,5 +593,159 @@ async fn the_same_content_under_a_secrets_name_is_refused() {
         .deploy("ok", &DeployMode::Push, &[approved("dots/fix", &tip)])
         .await
         .unwrap_err();
-    assert!(err.contains(".env. Remove"), "{err}");
+    // Found only through the tree, and named with its directory.
+    assert!(err.contains(": config/.env. Remove"), "{err}");
+}
+
+/// Deploys `branches` to `remote` with the fake `gh` in mode `ok`.
+async fn deploy_to(
+    s: &Scratch,
+    remote: &str,
+    mode: &DeployMode,
+    branches: &[ApprovedBranch],
+) -> Result<dots_core::deploy::DeployResult, String> {
+    let _held = GH.lock().await;
+    std::env::set_var("FAKE_GH_LOG", s.log());
+    std::env::set_var("FAKE_GH_MODE", "ok");
+    fake_gh()
+        .deploy(
+            &s.repo,
+            remote,
+            "main",
+            mode,
+            branches,
+            "Fix the bug",
+            "The summary.",
+        )
+        .await
+}
+
+/// A new empty bare repository `name` beside the scratch repository.
+fn bare(s: &Scratch, name: &str) -> PathBuf {
+    git_out(s.dir.path(), &["init", "-q", "--bare", name]);
+    s.dir.path().join(name)
+}
+
+/// The commit `branch` points at in the bare repository `repo`, if it is there.
+fn tip_in(repo: &Path, branch: &str) -> Option<String> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["rev-parse", "--verify", "--quiet"])
+        .arg(format!("refs/heads/{branch}"))
+        .output()
+        .unwrap();
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+#[tokio::test]
+async fn a_replace_ref_does_not_hide_a_secret() {
+    let s = scratch();
+    let leak = s.commit("dots/leak", &[(".env", Some(b"TOKEN=1\n"))]);
+    let clean = s.commit("dots/clean", &[("src/fix.rs", Some(b"fn fix() {}\n"))]);
+    // Reading `leak` now gives `clean`, but a push sends `leak` itself.
+    git_out(&s.repo, &["replace", &leak, &clean]);
+    let err = s
+        .deploy("ok", &DeployMode::Pr, &[approved("dots/leak", &leak)])
+        .await
+        .unwrap_err();
+    assert!(err.contains(": .env. Remove"), "{err}");
+    assert_eq!(s.remote_tip("dots/leak"), None);
+    assert!(s.gh_calls().is_empty(), "refused before gh runs");
+}
+
+#[tokio::test]
+async fn the_scan_asks_the_push_url() {
+    let s = scratch();
+    // The fetch URL already has the secret; the push goes to an empty repository.
+    let leak = s.commit("dots/leak", &[(".env", Some(b"TOKEN=1\n"))]);
+    git_out(&s.repo, &["push", "-q", "origin", "dots/leak"]);
+    let push = bare(&s, "push.git");
+    git_out(
+        &s.repo,
+        &["config", "remote.origin.pushurl", push.to_str().unwrap()],
+    );
+    let err = s
+        .deploy("ok", &DeployMode::Push, &[approved("dots/leak", &leak)])
+        .await
+        .unwrap_err();
+    assert!(err.contains(": .env. Remove"), "{err}");
+    assert_eq!(tip_in(&push, "dots/leak"), None);
+}
+
+#[tokio::test]
+async fn a_remote_or_push_url_that_starts_with_a_dash_is_refused() {
+    let s = scratch();
+    let tip = s.commit("dots/fix", &[("src/fix.rs", Some(b"fn fix() {}\n"))]);
+    let err = deploy_to(
+        &s,
+        "--upload-pack=x",
+        &DeployMode::Pr,
+        &[approved("dots/fix", &tip)],
+    )
+    .await
+    .unwrap_err();
+    assert!(err.starts_with("git remote get-url failed:"), "{err}");
+
+    git_out(
+        &s.repo,
+        &["config", "--", "remote.origin.pushurl", "--upload-pack=x"],
+    );
+    let err = s
+        .deploy("ok", &DeployMode::Pr, &[approved("dots/fix", &tip)])
+        .await
+        .unwrap_err();
+    assert!(err.starts_with("git ls-remote failed:"), "{err}");
+    assert_eq!(s.remote_tip("dots/fix"), None);
+    assert!(s.gh_calls().is_empty(), "refused before gh runs");
+}
+
+#[tokio::test]
+async fn a_deploy_to_an_empty_remote_scans_the_whole_history() {
+    let s = scratch();
+    let empty = bare(&s, "empty.git");
+    git_out(
+        &s.repo,
+        &["remote", "add", "empty", empty.to_str().unwrap()],
+    );
+    // A secret added and deleted on `main`, which `origin` has and `empty` does not.
+    s.commit("main", &[("old/.env", Some(b"TOKEN=1\n"))]);
+    s.commit("main", &[("old/.env", None)]);
+    git_out(&s.repo, &["push", "-q", "origin", "main"]);
+    let tip = s.commit("dots/fix", &[("src/fix.rs", Some(b"fn fix() {}\n"))]);
+    let err = deploy_to(
+        &s,
+        "empty",
+        &DeployMode::Push,
+        &[approved("dots/fix", &tip)],
+    )
+    .await
+    .unwrap_err();
+    assert!(err.contains(": old/.env. Remove"), "{err}");
+    assert_eq!(tip_in(&empty, "dots/fix"), None);
+    // `origin` has that history, so the same branch goes there.
+    s.deploy("ok", &DeployMode::Push, &[approved("dots/fix", &tip)])
+        .await
+        .unwrap();
+    assert_eq!(s.remote_tip("dots/fix"), Some(tip));
+
+    // A clean history goes to an empty remote.
+    let s = scratch();
+    let empty = bare(&s, "empty.git");
+    git_out(
+        &s.repo,
+        &["remote", "add", "empty", empty.to_str().unwrap()],
+    );
+    let tip = s.commit("dots/fix", &[("src/fix.rs", Some(b"fn fix() {}\n"))]);
+    deploy_to(
+        &s,
+        "empty",
+        &DeployMode::Push,
+        &[approved("dots/fix", &tip)],
+    )
+    .await
+    .unwrap();
+    assert_eq!(tip_in(&empty, "dots/fix"), Some(tip));
 }

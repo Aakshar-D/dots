@@ -256,28 +256,18 @@ async fn check_tip(repo: &Path, b: &ApprovedBranch) -> Result<(), String> {
 
 /// The secret and size check of one branch: every file among the objects its push would send,
 /// even one deleted again by a later commit, as the history it pushes keeps it. What is sent is
-/// measured against the object ids `git ls-remote` reports for the remote, not local refs.
+/// measured against the object ids `git ls-remote` reports for the URLs the push goes to, not
+/// local refs. Replace refs are ignored (see [`git`]), as the push ignores them.
 async fn guard(repo: &Path, remote: &str, _base: &str, b: &ApprovedBranch) -> Result<(), String> {
-    // What the server has: every id it lists, the tips and the tags it peels.
-    let args = ["ls-remote", "--end-of-options", remote];
-    let mut cmd = git(repo, &args);
-    cmd.env("GIT_TERMINAL_PROMPT", "0");
-    let out = run("git ls-remote", &mut cmd, None).await?;
-    let have: std::collections::BTreeSet<String> = succeeded("git ls-remote", &out)?
-        .lines()
-        .filter_map(|l| l.split_whitespace().next())
-        .filter(|id| is_object_id(id))
-        .map(str::to_string)
-        .collect();
+    let have = server_ids(repo, remote).await?;
     // The objects reachable from the commit and not from anything the server has, on stdin so
-    // that a long list is no long command line. The commit was matched to a ref by `check_tip`.
+    // that a long list is no long command line. The commit was matched to a ref by `check_tip`;
+    // each excluded id is given as `^<id>`, which every git version reads on stdin.
     let mut input = format!("{}\n", b.commit.trim());
-    if !have.is_empty() {
-        input.push_str("--not\n");
-        for id in &have {
-            input.push_str(id);
-            input.push('\n');
-        }
+    for id in &have {
+        input.push('^');
+        input.push_str(id);
+        input.push('\n');
     }
     let args = ["rev-list", "--objects", "--ignore-missing", "--stdin"];
     let out = run(
@@ -323,10 +313,14 @@ async fn guard(repo: &Path, remote: &str, _base: &str, b: &ApprovedBranch) -> Re
     }
     // A blob is listed once, under the first path it was found at: the names the sent trees
     // give it are read as well, so the same content under a secret's name is still seen.
-    let blobs: std::collections::HashSet<&str> = kinds
+    let blobs: std::collections::HashSet<Vec<u8>> = kinds
         .iter()
         .filter(|(_, (kind, _))| kind == "blob")
-        .map(|(id, _)| id.as_str())
+        .filter_map(|(id, _)| id_bytes(id))
+        .collect();
+    let tree_paths: std::collections::HashMap<&str, &str> = listed
+        .iter()
+        .filter_map(|(id, path)| Some((id.as_str(), path.as_deref()?)))
         .collect();
     let trees: String = kinds
         .iter()
@@ -344,7 +338,7 @@ async fn guard(repo: &Path, remote: &str, _base: &str, b: &ApprovedBranch) -> Re
         if !out.status.success() {
             succeeded("git cat-file", &out)?;
         }
-        names = tree_names(&out.stdout, &blobs)
+        names = tree_names(&out.stdout, &blobs, &tree_paths)
             .ok_or_else(|| "git cat-file printed a tree that could not be read.".to_string())?;
     }
     let mut refused: std::collections::BTreeSet<String> = Default::default();
@@ -364,13 +358,9 @@ async fn guard(repo: &Path, remote: &str, _base: &str, b: &ApprovedBranch) -> Re
             }
         }
     }
-    // A name the sent trees give is shown only when no path above already ends with it.
-    for name in names.into_iter().filter(|n| looks_secret(n)) {
-        let covered = |p: &String| p == &name || p.ends_with(&format!("/{name}"));
-        if !refused.iter().any(covered) {
-            refused.insert(name);
-        }
-    }
+    // The paths the sent trees give a sent blob under a secret's name; one already listed
+    // above is the same string, so it is named once.
+    refused.extend(names);
     if refused.is_empty() {
         return Ok(());
     }
@@ -386,14 +376,87 @@ async fn guard(repo: &Path, remote: &str, _base: &str, b: &ApprovedBranch) -> Re
     ))
 }
 
+/// The object ids the server a push to `remote` would go to already has: every id `git
+/// ls-remote` lists for its push URL (`remote.<name>.pushurl` and `pushInsteadOf` applied), the
+/// tips and the tags it peels. A remote with several push URLs pushes to each, so only the ids
+/// every one of them lists count. A remote name or URL that starts with `-` is refused, so
+/// neither is read as an option.
+async fn server_ids(
+    repo: &Path,
+    remote: &str,
+) -> Result<std::collections::BTreeSet<String>, String> {
+    if remote.starts_with('-') {
+        return Err("git remote get-url failed: the remote's name starts with \"-\"".to_string());
+    }
+    let args = [
+        "remote",
+        "get-url",
+        "--push",
+        "--all",
+        "--end-of-options",
+        remote,
+    ];
+    let out = run("git remote get-url", &mut git(repo, &args), None).await?;
+    let urls: Vec<String> = succeeded("git remote get-url", &out)?
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect();
+    if urls.is_empty() {
+        return Err("git remote get-url failed: the remote has no URL".to_string());
+    }
+    let mut have: Option<std::collections::BTreeSet<String>> = None;
+    for url in &urls {
+        if url.starts_with('-') {
+            return Err(
+                "git ls-remote failed: the remote's push URL starts with \"-\"".to_string(),
+            );
+        }
+        let args = ["ls-remote", "--end-of-options", url.as_str()];
+        let mut cmd = git(repo, &args);
+        cmd.env("GIT_TERMINAL_PROMPT", "0");
+        let out = run("git ls-remote", &mut cmd, None).await?;
+        let ids: std::collections::BTreeSet<String> = succeeded("git ls-remote", &out)?
+            .lines()
+            .filter_map(|l| l.split_whitespace().next())
+            .filter(|id| is_object_id(id))
+            .map(str::to_ascii_lowercase)
+            .collect();
+        have = Some(match have {
+            None => ids,
+            Some(have) => have.intersection(&ids).cloned().collect(),
+        });
+    }
+    Ok(have.unwrap_or_default())
+}
+
 /// Whether `s` is a full object id (40 or 64 hex digits).
 fn is_object_id(s: &str) -> bool {
     matches!(s.len(), 40 | 64) && s.bytes().all(|c| c.is_ascii_hexdigit())
 }
 
-/// The names of the entries in `batch`, the output of `git cat-file --batch` for trees, whose
-/// object is one of `blobs`. `None` when the output does not parse.
-fn tree_names(batch: &[u8], blobs: &std::collections::HashSet<&str>) -> Option<Vec<String>> {
+/// The raw bytes of the hex object id `id`, or `None` when it is not hex.
+fn id_bytes(id: &str) -> Option<Vec<u8>> {
+    if !id.len().is_multiple_of(2) {
+        return None;
+    }
+    (0..id.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(id.get(i..i + 2)?, 16).ok())
+        .collect()
+}
+
+/// The paths of the entries in `batch`, the output of `git cat-file --batch` for trees, whose
+/// object is one of `blobs` (raw ids) and whose name looks like a secret. A path is the tree's
+/// path in `tree_paths` (by hex id, as `git rev-list --objects` printed it; empty for a root
+/// tree) joined with the entry's name: a tree found at several paths is given at the first one
+/// rev-list found, and a tree it gave no path at all gives the bare name. `None` when the
+/// output does not parse.
+fn tree_names(
+    batch: &[u8],
+    blobs: &std::collections::HashSet<Vec<u8>>,
+    tree_paths: &std::collections::HashMap<&str, &str>,
+) -> Option<Vec<String>> {
     let mut names = Vec::new();
     let mut at = 0;
     while at < batch.len() {
@@ -408,16 +471,22 @@ fn tree_names(batch: &[u8], blobs: &std::collections::HashSet<&str>) -> Option<V
         }
         let size: usize = size.parse().ok()?;
         let body = batch.get(eol + 1..eol + 1 + size)?;
+        let dir = tree_paths.get(id).copied().unwrap_or("");
         let hash_len = id.len() / 2;
         let mut rest = body;
         while !rest.is_empty() {
             let space = rest.iter().position(|&c| c == b' ')?;
             let nul = space + 1 + rest[space + 1..].iter().position(|&c| c == 0)?;
-            let name = String::from_utf8_lossy(&rest[space + 1..nul]).into_owned();
             let hash = rest.get(nul + 1..nul + 1 + hash_len)?;
-            let hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();
-            if blobs.contains(hex.as_str()) {
-                names.push(name);
+            if blobs.contains(hash) {
+                let name = String::from_utf8_lossy(&rest[space + 1..nul]);
+                if looks_secret(&name) {
+                    names.push(if dir.is_empty() {
+                        name.into_owned()
+                    } else {
+                        format!("{dir}/{name}")
+                    });
+                }
             }
             rest = &rest[nul + 1 + hash_len..];
         }
@@ -460,10 +529,15 @@ async fn push(repo: &Path, remote: &str, b: &ApprovedBranch) -> Result<(), Strin
     succeeded("git push", &out).map(drop)
 }
 
-/// `git -C <repo> <args>`.
+/// `git -C <repo> <args>`, with replace refs (`refs/replace/*`) ignored: `git push` sends the
+/// objects themselves, so the scan must read those, not what a replace ref puts in their place.
+/// Set on each command, not the process, so commands run at once never share it.
 fn git(repo: &Path, args: &[&str]) -> Command {
     let mut cmd = Command::new("git");
-    cmd.arg("-C").arg(repo).args(args);
+    cmd.arg("-C")
+        .arg(repo)
+        .args(args)
+        .env("GIT_NO_REPLACE_OBJECTS", "1");
     cmd
 }
 
@@ -554,7 +628,38 @@ fn strip_userinfo(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::strip_userinfo;
+    use super::{id_bytes, strip_userinfo, tree_names};
+
+    #[test]
+    fn tree_names_gives_full_paths_of_sent_blobs_under_secret_names_only() {
+        let tree = "aa".repeat(20);
+        let sent = "11".repeat(20);
+        let kept = "22".repeat(20);
+        let mut body = Vec::new();
+        for (name, id) in [(".env", &sent), ("a.txt", &sent), ("b.key", &kept)] {
+            body.extend_from_slice(format!("100644 {name}\0").as_bytes());
+            body.extend_from_slice(&id_bytes(id).unwrap());
+        }
+        let mut batch = format!("{tree} tree {}\n", body.len()).into_bytes();
+        batch.extend_from_slice(&body);
+        batch.push(b'\n');
+        let blobs = [id_bytes(&sent).unwrap()].into_iter().collect();
+        let mut paths = std::collections::HashMap::new();
+        paths.insert(tree.as_str(), "config");
+        assert_eq!(
+            tree_names(&batch, &blobs, &paths),
+            Some(vec!["config/.env".to_string()])
+        );
+        paths.insert(tree.as_str(), "");
+        assert_eq!(
+            tree_names(&batch, &blobs, &paths),
+            Some(vec![".env".to_string()])
+        );
+        assert_eq!(tree_names(&batch[..batch.len() - 3], &blobs, &paths), None);
+        assert_eq!(id_bytes("0aFf"), Some(vec![0x0a, 0xff]));
+        assert_eq!(id_bytes("0g"), None);
+        assert_eq!(id_bytes("abc"), None);
+    }
 
     #[test]
     fn url_userinfo_is_cut_out_of_a_quoted_error() {
