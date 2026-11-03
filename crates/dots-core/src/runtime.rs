@@ -1133,7 +1133,15 @@ impl Runtime {
             .map(str::trim)
             .filter(|f| !f.is_empty())
             .map(str::to_string);
+        let before = p.notes.clone();
         let p = check_proposal(p, &ctx, false)?;
+        // Only what this check added: the card already showed the proposal's own notes.
+        let notes = p
+            .notes
+            .strip_prefix(before.as_str())
+            .unwrap_or(&p.notes)
+            .trim()
+            .to_string();
         let workdir = match (&named, p.folder.as_deref()) {
             (None, _) => String::new(),
             (Some(_), Some(checked)) if Path::new(checked).is_dir() => checked.to_string(),
@@ -1154,14 +1162,20 @@ impl Runtime {
         // when the create fails.
         let dot = self.create_dot(spec, org, workspace).await?;
         drop(one_at_a_time);
-        let (run_id, run_error) = match self.chat(&dot.id, &p.first_message, None).await {
-            Ok(run) => (Some(run.id), None),
-            Err(e) => (None, Some(e.to_string())),
+        // A blank first message, cleared on the card, starts no chat.
+        let (run_id, run_error) = if p.first_message.trim().is_empty() {
+            (None, None)
+        } else {
+            match self.chat(&dot.id, &p.first_message, None).await {
+                Ok(run) => (Some(run.id), None),
+                Err(e) => (None, Some(e.to_string())),
+            }
         };
         Ok(SetupApplied {
             dot,
             run_id,
             run_error,
+            notes,
         })
     }
 

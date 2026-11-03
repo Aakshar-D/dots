@@ -633,13 +633,16 @@ pub fn setup_policy(preset: Preset, extras: &[String]) -> Policy {
     policy
 }
 
-/// What `Runtime::setup_apply` made: the dot, and its first chat run or why that did not start
-/// (spec §9: the dot stays when its first run cannot start).
+/// What `Runtime::setup_apply` made: the dot, its first chat run or why that did not start (spec
+/// §9: the dot stays when its first run cannot start), and the notes of its own check. A blank
+/// first message starts no chat.
 #[derive(Debug, Clone, Serialize)]
 pub struct SetupApplied {
     pub dot: Dot,
     pub run_id: Option<String>,
     pub run_error: Option<String>,
+    /// What the check at apply time changed in the proposal, one line each; empty when nothing.
+    pub notes: String,
 }
 
 /// The setup requests being answered, at most one per setup view (spec §9). The same runner as

@@ -1474,11 +1474,13 @@ pub fn samples() -> Value {
             dot: dot(),
             run_id: Some("01J0RUN".into()),
             run_error: None,
+            notes: String::new(),
         },
         SetupApplied {
             dot: dot(),
             run_id: None,
             run_error: Some("The first run could not start.".into()),
+            notes: "Left out the extra telepathy: Dots does not know it.".into(),
         },
     ]);
     samples["EnvEntry"] = to([

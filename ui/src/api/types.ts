@@ -1000,6 +1000,8 @@ export const SetupApplied = z.strictObject({
   dot: Dot,
   run_id: nullable(z.string()),
   run_error: nullable(z.string()),
+  // What the check at apply time changed in the proposal; empty when nothing.
+  notes: z.string(),
 });
 // The name and description the Library will show for a draft that can be saved.
 export const DraftSummary = z.strictObject({

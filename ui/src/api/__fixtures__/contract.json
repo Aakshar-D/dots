@@ -4463,6 +4463,7 @@
         "workspace_id": "default",
         "workspace_mode": "worktree"
       },
+      "notes": "",
       "run_error": null,
       "run_id": "01J0RUN"
     },
@@ -4632,6 +4633,7 @@
         "workspace_id": "default",
         "workspace_mode": "worktree"
       },
+      "notes": "Left out the extra telepathy: Dots does not know it.",
       "run_error": "The first run could not start.",
       "run_id": null
     }

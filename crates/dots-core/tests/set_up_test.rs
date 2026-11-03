@@ -509,3 +509,34 @@ async fn apply_default_folder_inside_git_gets_folder_mode() {
     // A folder Dots made itself runs in the folder, never in a checkout of the outer repo.
     assert_eq!(applied.dot.spec.workspace_mode, WorkspaceMode::Folder);
 }
+
+#[tokio::test]
+async fn apply_returns_the_notes_of_its_own_check() {
+    let t = start(answering("Done.")).await;
+    let mut p = proposal("Downloads digest");
+    p.extras = vec!["web".into(), "telepathy".into()];
+    p.notes = "I assumed weekdays.".into();
+    let applied = t.rt.setup_apply(p, None, None).await.unwrap();
+    assert_eq!(
+        applied.notes,
+        "Left out the extra telepathy: Dots does not know it."
+    );
+    // A runtime of its own: a second create while the first dot's run starts is another matter.
+    let t = start(answering("Done.")).await;
+    let clean =
+        t.rt.setup_apply(proposal("Other digest"), None, None)
+            .await
+            .unwrap();
+    assert_eq!(clean.notes, "");
+}
+
+#[tokio::test]
+async fn apply_with_a_blank_first_message_starts_no_chat() {
+    let t = start(answering("Done.")).await;
+    let mut p = proposal("Quiet digest");
+    p.first_message = "  ".into();
+    let applied = t.rt.setup_apply(p, None, None).await.unwrap();
+    assert!(applied.run_id.is_none());
+    assert!(applied.run_error.is_none(), "{:?}", applied.run_error);
+    assert!(t.rt.get_dot(&applied.dot.id).await.is_ok());
+}
