@@ -5,16 +5,20 @@
 //! by a pass that reads the workflow runs in flight from the store and does what each one's
 //! state calls for, so a restart or a lost event never loses a step. The loop passes when a run
 //! of a step changes, when a question is posted or answered, when it is woken, and every
-//! `TICK`.
+//! `TICK`. Slow work a step needs (an agent step's hand-off) runs as a job outside the loop's
+//! lock (`jobs`).
 
+mod jobs;
+
+use std::collections::HashSet;
 use std::path::Path;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, Weak};
 use std::time::Duration;
 
 use serde_json::json;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::Receiver;
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::{Mutex, Notify, Semaphore};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -78,6 +82,12 @@ pub struct Workflows {
     /// The orgs a team's account role is read from (members spec §6.3); without them, an
     /// account's team acts as `legacy`.
     orgs: OnceLock<Orgs>,
+    /// These workflows, for a job to act on from its own task (`jobs`).
+    this: Weak<Self>,
+    /// The step runs with a job in flight: a pass starts no second one.
+    jobs: std::sync::Mutex<HashSet<String>>,
+    /// For tests: the gate jobs wait on before their slow part (`hold_jobs`).
+    gate: std::sync::Mutex<Option<Arc<Semaphore>>>,
 }
 
 /// The newest step run of `step_id`.
@@ -276,7 +286,7 @@ fn cut(text: &str, max: usize) -> String {
 
 impl Workflows {
     pub fn new(store: Store, bus: Bus, runner: Arc<Runner>, clock: Arc<dyn Clock>) -> Arc<Self> {
-        Arc::new(Self {
+        Arc::new_cyclic(|this| Self {
             store,
             bus,
             runner,
@@ -285,6 +295,9 @@ impl Workflows {
             lock: Mutex::new(()),
             start_lock: Mutex::new(()),
             orgs: OnceLock::new(),
+            this: this.clone(),
+            jobs: std::sync::Mutex::new(HashSet::new()),
+            gate: std::sync::Mutex::new(None),
         })
     }
 
@@ -1141,9 +1154,10 @@ impl Workflows {
     }
 
     /// Watches an agent step's runs: it ends when its newest run's thread has ended and no
-    /// question of it waits for the person. A step whose run is gone gets one again, as a step
-    /// that begins does: unless its member may not run, which fails it, or a limit is reached,
-    /// which waits for the person.
+    /// question of it waits for the person, by the job that builds its hand-off (unless one is
+    /// in flight). A step whose run is gone gets one again, as a step that begins does: unless
+    /// its member may not run, which fails it, or a limit is reached, which waits for the
+    /// person.
     async fn watch_agent(&self, wr: &WorkflowRun, step: &Step, step_run: &StepRun) -> Result<()> {
         // The question first: an answer closes it and stores the run that continues the thread
         // in one transaction, so once it reads as closed, the runs read next include that run.
@@ -1173,25 +1187,9 @@ impl Workflows {
             });
             return self.fail_step(wr, step, step_run, &error).await;
         }
-        // Read again: the outcome its run reported may have come after `step_run` was read.
-        let outcome = self.store.get_step_run(&step_run.id).await?.outcome;
-        let handoff = Handoff {
-            outcome,
-            ..self.handoff_of(wr, &runs).await
-        };
-        self.store
-            .set_step_run(
-                &step_run.id,
-                &StepRunChange {
-                    status: Some(StepRunStatus::Succeeded),
-                    handoff: Some(Some(handoff)),
-                    ..Default::default()
-                },
-            )
-            .await?;
-        self.step_ended(wr, &step.id);
-        let wr = self.store.get_workflow_run(&wr.id).await?;
-        self.begin_or_finish(&wr, next_of(&wr, &step.id)).await
+        // The hand-off runs Dots' commit, up to two minutes: not under the lock.
+        self.start_hand_off(wr, step_run, runs);
+        Ok(())
     }
 
     /// Fails a step: the workflow run waits for the person to retry it or stop (section 8).
@@ -1232,7 +1230,7 @@ impl Workflows {
     /// What a finished agent step hands on (section 6): its newest run's summary, and the
     /// branch of its thread when the branch still exists (a worktree with no change was
     /// removed with its branch). What the thread left uncommitted is committed first. The
-    /// outcome is the caller's: the step run's.
+    /// outcome is the caller's: the step run's. Slow, and run by a job without the lock.
     async fn handoff_of(&self, wr: &WorkflowRun, runs: &[Run]) -> Handoff {
         let last = runs.last();
         let summary = last.and_then(|r| r.summary.clone()).unwrap_or_default();

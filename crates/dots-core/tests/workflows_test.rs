@@ -1760,3 +1760,129 @@ async fn a_pass_finishes_a_branch_cut_off_before_it_chose() {
     assert_eq!(ran(&wr), ["check", "pick", "dots"]);
     assert_eq!(chose(&wr, "pick").as_deref(), Some("Dots"));
 }
+
+impl World {
+    /// Holds every hand-off job at its gate (`Workflows::hold_jobs`), starts a run of `flow`
+    /// and waits until its first step's runs have ended and its hand-off job is held. Gives the
+    /// workflow run, the step run's id and the gate.
+    async fn held_hand_off(
+        &self,
+        flow: &str,
+    ) -> (WorkflowRun, String, Arc<tokio::sync::Semaphore>) {
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        self.workflows.hold_jobs(Some(gate.clone()));
+        let wr = self.start(flow).await;
+        let step = self.until(&wr.id, |wr| !wr.steps.is_empty()).await.steps[0]
+            .id
+            .clone();
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        while !self.workflows.has_job(&step) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "no hand-off job started"
+            );
+            tokio::time::sleep(Duration::from_millis(30)).await;
+        }
+        (wr, step, gate)
+    }
+
+    /// Waits until the step run `step` has no job in flight.
+    async fn job_ended(&self, step: &str) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        while self.workflows.has_job(step) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the hand-off job did not end"
+            );
+            tokio::time::sleep(Duration::from_millis(30)).await;
+        }
+    }
+
+    /// A two-step flow whose first step writes a file: its hand-off has a commit to make.
+    async fn two_steps(&self) -> String {
+        self.engine.set(
+            &self.dev.spec.name,
+            vec![Act::Write("one.txt", "First."), Act::Finish("Second.")],
+        );
+        self.workflow(
+            "Two",
+            vec![
+                agent("one", "First", &self.dev, "Start."),
+                agent("two", "Second", &self.dev, "Go on."),
+            ],
+        )
+        .await
+    }
+}
+
+#[tokio::test]
+async fn a_hand_off_being_built_holds_up_neither_the_loop_nor_a_stop() {
+    let w = world().await;
+    let flow = w.two_steps().await;
+    let (held, step, _gate) = w.held_hand_off(&flow).await;
+    let wr = w.store.get_workflow_run(&held.id).await.unwrap();
+    assert_eq!(wr.steps[0].status, StepRunStatus::Running);
+    assert!(wr.steps[0].handoff.is_none());
+    // Another workflow run moves meanwhile: the loop begins its check, and the person's
+    // approval ends it.
+    let checked = w.workflow("Check", vec![check("check")]).await;
+    let other = w.start(&checked).await;
+    let other = w.until(&other.id, waits_on(WaitingOn::Check)).await;
+    let done = tokio::time::timeout(
+        Duration::from_secs(10),
+        w.workflows.approve_check(&other.id, None),
+    )
+    .await
+    .expect("the approval waited on the job")
+    .unwrap();
+    assert_eq!(done.status, WorkflowRunStatus::Succeeded);
+    // Stopping the run whose hand-off is held does not wait for it.
+    let stopped = tokio::time::timeout(Duration::from_secs(10), w.workflows.stop(&held.id))
+        .await
+        .expect("the stop waited on the job")
+        .unwrap();
+    assert_eq!(stopped.status, WorkflowRunStatus::Cancelled);
+    assert!(w.workflows.has_job(&step));
+}
+
+#[tokio::test]
+async fn a_stop_during_a_hand_off_wins() {
+    let w = world().await;
+    let flow = w.two_steps().await;
+    let (held, step, gate) = w.held_hand_off(&flow).await;
+    w.workflows.stop(&held.id).await.unwrap();
+    // The job goes on to build the hand-off, then finds the step cancelled.
+    gate.add_permits(1);
+    w.job_ended(&step).await;
+    w.workflows.pass().await.unwrap();
+    let wr = w.store.get_workflow_run(&held.id).await.unwrap();
+    assert_eq!(wr.status, WorkflowRunStatus::Cancelled);
+    assert_eq!(ran(&wr), ["one"]);
+    assert_eq!(wr.steps[0].status, StepRunStatus::Cancelled);
+    assert!(wr.steps[0].handoff.is_none());
+    assert_eq!(w.engine.prompts_of("dev").len(), 1);
+}
+
+#[tokio::test]
+async fn a_lost_hand_off_is_built_again_by_a_later_pass() {
+    let w = world().await;
+    let flow = w.two_steps().await;
+    let (held, step, gate) = w.held_hand_off(&flow).await;
+    // The job is dropped before it writes, as Dots stopping there would drop it; the jobs
+    // after it are let through.
+    w.workflows.hold_jobs(None);
+    gate.close();
+    w.job_ended(&step).await;
+    w.workflows.pass().await.unwrap();
+    let wr = w
+        .until(&held.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    assert_eq!(ran(&wr), ["one", "two"]);
+    let first = &wr.steps[0].handoff.as_ref().unwrap().branches[0].branch;
+    assert_eq!(
+        git_out(&w.repo, &["show", &format!("{first}:one.txt")]),
+        "First."
+    );
+    // One attempt of each step: the step run lost its job, not its place.
+    assert!(wr.steps.iter().all(|s| s.attempt == 1));
+}
