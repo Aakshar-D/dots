@@ -32,6 +32,7 @@ pub mod schedule;
 pub mod scheduler;
 pub mod server;
 pub mod settings;
+pub mod setup;
 pub mod skill_creator;
 pub mod store;
 pub mod team_tools;
