@@ -106,6 +106,15 @@ export function SetupCard(props: {
           onChange={(e) => set("instructions", e.target.value)}
         />
       </Field>
+      <Field label="First message" htmlFor={`${id}-first`}>
+        <Textarea
+          id={`${id}-first`}
+          rows={2}
+          className="field-sizing-content"
+          value={proposal.first_message}
+          onChange={(e) => set("first_message", e.target.value)}
+        />
+      </Field>
       <Part title="When it runs">
         {proposal.schedule === null && (
           <p className="text-sm text-muted-foreground">Only when you talk to it</p>
@@ -138,6 +147,7 @@ export function SetupCard(props: {
       </Part>
       <Part title="What it may do">
         {preset && <p className="text-sm">{preset[2]}</p>}
+        {preset && proposal.extras.length > 0 && <p className="text-sm">Plus the extras below.</p>}
         <NativeSelect
           aria-label="Permissions"
           value={proposal.preset}

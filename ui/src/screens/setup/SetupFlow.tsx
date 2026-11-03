@@ -34,9 +34,6 @@ type Back = Exclude<Stage, "asking">;
 
 const MAX_TEXT = 4000;
 
-/// The setup agent's view (setup agent spec §5): describe a task, answer at most two short
-/// question rounds, edit the proposed dot on one card, and Run setup. Used on the empty home
-/// and in the New dot dialog; `onDone` is called once the dot is made.
 /// The confirmation before a proposed dot is thrown away: by Start over, or by closing the New
 /// dot dialog. `action` names what it does.
 export function DiscardConfirm(props: {
@@ -61,11 +58,16 @@ export function DiscardConfirm(props: {
   );
 }
 
+/// The setup agent's view (setup agent spec §5): describe a task, answer at most two short
+/// question rounds, edit the proposed dot on one card, and Run setup. Used on the empty home
+/// and in the New dot dialog; `onDone` is called once the dot is made.
 export function SetupFlow(props: {
   onDone?: () => void;
   title?: string;
   /// Told whether a proposed dot is on hand, so that a dialog can confirm before closing.
   onProposal?: (has: boolean) => void;
+  /// Told whether Run setup is making the dot, so that a dialog stays open meanwhile.
+  onApplying?: (applying: boolean) => void;
 }) {
   const title = props.title ?? "What should your first dot do?";
   const qc = useQueryClient();
@@ -97,6 +99,8 @@ export function SetupFlow(props: {
   const has = proposal !== null;
   const { onProposal } = props;
   useEffect(() => onProposal?.(has), [has, onProposal]);
+  const { onApplying } = props;
+  useEffect(() => onApplying?.(applying), [applying, onApplying]);
 
   // A view that goes away while the agent works ends the CLI.
   useEffect(
@@ -196,6 +200,8 @@ export function SetupFlow(props: {
       if (applied.run_error !== null) {
         toast.error(`The dot was created but its first run did not start: ${applied.run_error}`);
       }
+      // What the check at Run setup changed, which the card did not show.
+      if (applied.notes.trim() !== "") toast(applied.notes);
       props.onDone?.();
       void navigate(`/home/${applied.dot.id}`);
     } catch (e) {

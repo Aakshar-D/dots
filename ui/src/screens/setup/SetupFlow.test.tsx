@@ -191,7 +191,7 @@ describe("setting up a dot by describing it", () => {
     ]);
     const dot = { ...sample.dot, id: "dot-new", name: "My digest", org_id: null };
     backend.on("dot_overview", () => [{ ...sample.overview, dot }]);
-    applied.give({ dot, run_id: "run-1", run_error: null });
+    applied.give({ dot, run_id: "run-1", run_error: null, notes: "" });
     await waitFor(() => expect(router.state.location.pathname).toBe("/home/dot-new"));
   });
 
@@ -212,13 +212,77 @@ describe("setting up a dot by describing it", () => {
     const dot = { ...sample.dot, id: "dot-new" };
     backend.on("setup_apply", () => {
       backend.on("dot_overview", () => [{ ...sample.overview, dot }]);
-      return { dot, run_id: null, run_error: "the queue is full" };
+      return { dot, run_id: null, run_error: "the queue is full", notes: "" };
     });
     const { user } = await onCard();
     await user.click(screen.getByRole("button", { name: "Run setup" }));
     expect(
       await screen.findByText(
         "The dot was created but its first run did not start: the queue is full",
+      ),
+    ).toBeVisible();
+  });
+
+  it("shows the first message after What it does, and Run setup sends it as edited", async () => {
+    backend.on("setup_apply", () => {
+      throw { kind: "internal", message: "stop here" };
+    });
+    const { user } = await onCard();
+    const first = screen.getByRole("textbox", { name: "First message" });
+    expect(first).toHaveValue(proposal.first_message);
+    const does = screen.getByRole("textbox", { name: "What it does" });
+    expect(does.compareDocumentPosition(first) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await user.clear(first);
+    await user.type(first, "Show me yesterday's files.");
+    await user.click(screen.getByRole("button", { name: "Run setup" }));
+    await waitFor(() =>
+      expect(backend.callsTo("setup_apply")).toEqual([
+        {
+          proposal: { ...proposal, first_message: "Show me yesterday's files." },
+          orgId: null,
+          workspaceId: null,
+        },
+      ]),
+    );
+  });
+
+  it("allows a blank first message", async () => {
+    backend.on("setup_apply", () => {
+      throw { kind: "internal", message: "stop here" };
+    });
+    const { user } = await onCard();
+    await user.clear(screen.getByRole("textbox", { name: "First message" }));
+    const run = screen.getByRole("button", { name: "Run setup" });
+    expect(run).toBeEnabled();
+    await user.click(run);
+    await waitFor(() =>
+      expect(backend.callsTo("setup_apply")[0]?.proposal.first_message).toBe(""),
+    );
+  });
+
+  it("shows what the check at Run setup changed", async () => {
+    const dot = { ...sample.dot, id: "dot-new" };
+    const notes = "Left out the extra telepathy: Dots does not know it.";
+    backend.on("setup_apply", () => {
+      backend.on("dot_overview", () => [{ ...sample.overview, dot }]);
+      return { dot, run_id: "run-1", run_error: null, notes };
+    });
+    const { user } = await onCard();
+    await user.click(screen.getByRole("button", { name: "Run setup" }));
+    expect(await screen.findByText(notes)).toBeVisible();
+  });
+
+  it("says the extras add to the preset sentence, only while there are extras", async () => {
+    const { user } = await onCard();
+    expect(screen.getByText("Plus the extras below.")).toBeVisible();
+    await user.click(
+      screen.getByRole("button", { name: "Remove Read websites and search the web without asking" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Remove Use gmail without asking" }));
+    expect(screen.queryByText("Plus the extras below.")).toBeNull();
+    expect(
+      screen.getByText(
+        "May read files. Never writes, runs commands, reads websites or uses MCP servers.",
       ),
     ).toBeVisible();
   });
@@ -348,7 +412,7 @@ describe("New dot", () => {
             ),
           ),
       );
-      return { dot, run_id: "run-1", run_error: null };
+      return { dot, run_id: "run-1", run_error: null, notes: "" };
     });
     const { user, dialog, router } = await openDialog();
     await user.type(within(dialog).getByRole("textbox", { name: "What should the dot do?" }), "x");
@@ -378,6 +442,26 @@ describe("New dot", () => {
       ).getByRole("button", { name: "Close" }),
     );
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("cannot be closed while Run setup is making the dot", async () => {
+    backend.on("setup_ask", () => proposed());
+    const applied = later<SetupApplied>();
+    backend.on("setup_apply", () => applied.answer);
+    const { user, dialog, router } = await openDialog();
+    await user.type(within(dialog).getByRole("textbox", { name: "What should the dot do?" }), "x");
+    await user.click(within(dialog).getByRole("button", { name: "Set it up" }));
+    await user.click(await within(dialog).findByRole("button", { name: "Run setup" }));
+    await waitFor(() => expect(backend.callsTo("setup_apply")).toHaveLength(1));
+    expect(within(dialog).queryByRole("button", { name: "Close" })).toBeNull();
+    await user.keyboard("{Escape}");
+    await user.click(document.querySelector<HTMLElement>('[data-slot="dialog-overlay"]')!);
+    expect(screen.getByRole("dialog", { name: "New dot" })).toBeVisible();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    const dot = { ...sample.dot, id: "dot-new", name: "Downloads digest" };
+    backend.on("dot_overview", () => [{ ...sample.overview, dot }, { ...sample.overview, dot: reader }]);
+    applied.give({ dot, run_id: "run-1", run_error: null, notes: "" });
+    await waitFor(() => expect(router.state.location.pathname).toBe("/home/dot-new"));
   });
 
   it("opens the setup in a dialog, with the form link", async () => {
