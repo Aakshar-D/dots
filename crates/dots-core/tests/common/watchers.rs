@@ -281,6 +281,16 @@ impl Harness {
         out
     }
 
+    /// Runs `sql` behind the store's back (a trigger that makes a write fail, say).
+    pub async fn exec(&self, sql: &str) {
+        let opts = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(self.dir.path().join("dots.db"))
+            .foreign_keys(true);
+        let pool = sqlx::SqlitePool::connect_with(opts).await.unwrap();
+        sqlx::query(sql).execute(&pool).await.unwrap();
+        pool.close().await;
+    }
+
     pub fn path_text(path: &Path) -> String {
         path.to_string_lossy().to_string()
     }

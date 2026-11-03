@@ -585,12 +585,12 @@ impl Watchers {
             .store
             .update_watcher(id, &name, &config, hours.as_ref())
             .await?;
-        drop(no_check);
         self.backoffs.lock().unwrap().remove(id);
         self.forget_remote(id);
-        // Hours removed, or changed so that now is inside: what it holds goes now.
-        self.release(id).await?;
+        drop(no_check);
         self.changed(&watcher);
+        // Hours removed, or changed so that now is inside: what it holds goes now.
+        self.release_now(id).await;
         self.get(id).await
     }
 
@@ -611,12 +611,12 @@ impl Watchers {
     /// hours, it releases what it holds.
     pub async fn set_enabled(&self, id: &str, enabled: bool) -> Result<Watcher> {
         let watcher = self.deps.store.set_watcher_enabled(id, enabled).await?;
+        self.changed(&watcher);
         if enabled {
-            self.release(id).await?;
+            self.release_now(id).await;
         } else {
             self.drop_held(id).await?;
         }
-        self.changed(&watcher);
         self.get(id).await
     }
 
@@ -629,8 +629,8 @@ impl Watchers {
         }
         let watcher = self.deps.store.resume_watcher(id).await?;
         self.backoffs.lock().unwrap().remove(id);
-        self.release(id).await?;
         self.changed(&watcher);
+        self.release_now(id).await;
         self.get(id).await
     }
 
@@ -644,8 +644,18 @@ impl Watchers {
         Ok(())
     }
 
-    /// The release rule (watch hours spec section 3.8): a watcher that holds events while
-    /// inside its hours releases them at once, in one opening run.
+    /// `release` after the person's change, which is saved and announced already: a failure is
+    /// logged, not returned, and the release is tried again when the watcher's task restarts.
+    async fn release_now(&self, id: &str) {
+        if let Err(e) = self.release(id).await {
+            tracing::warn!(watcher = id, "releasing held events failed: {e}");
+        }
+    }
+
+    /// The release rule (watch hours spec section 3.8): a watcher that holds events releases
+    /// them at once, in one opening run, when it is inside its hours now or an opening has
+    /// passed since the oldest of them was held (Dots was closed or paused over it, or the
+    /// watcher was paused or off).
     async fn release(&self, id: &str) -> Result<()> {
         let watcher = self.deps.store.get_watcher(id).await?;
         if watcher.held_count == 0 {
@@ -653,12 +663,31 @@ impl Watchers {
         }
         let now = self.deps.clock.now();
         if let Some(hours) = self.hours_of(&watcher) {
-            if self.opens_at(id, hours, now).is_some() {
+            if self.opens_at(id, hours, now).is_some()
+                && !self.missed_opening(id, hours, now).await?
+            {
                 return Ok(());
             }
         }
         self.open(id).await?;
         Ok(())
+    }
+
+    /// Whether one of the hours' openings came, at or before `now`, after the watcher's oldest
+    /// held event was held.
+    async fn missed_opening(
+        &self,
+        id: &str,
+        hours: &WatchHours,
+        now: DateTime<Utc>,
+    ) -> Result<bool> {
+        let Some(oldest) = self.deps.store.oldest_held_at(id).await? else {
+            return Ok(false);
+        };
+        let oldest = DateTime::parse_from_rfc3339(&oldest)
+            .map_err(|e| Error::Other(format!("held_at {oldest}: {e}")))?
+            .with_timezone(&Utc);
+        Ok(self.deps.zone.next_opening(hours, oldest) <= now)
     }
 
     /// Dots pauses the watcher. Announced once: a watcher paused already stays as it is.
@@ -824,17 +853,19 @@ impl Watchers {
         let mut new = NewRun::new(&watcher.dot_id, TriggerKind::Watcher);
         new.id = Some(run_id.clone());
         new.payload = Some(payload);
-        let run = match self.deps.runner.enqueue(new).await {
-            Ok(run) => run,
+        // The run is made and the events taken in one step. The gate keeps any hold out since
+        // they were read, so the events taken are the ones the run carries and counts.
+        let ids: Vec<String> = held.iter().map(|e| e.id.clone()).collect();
+        let (run, taken) = match store.open_held(&watcher.id, &ids, &new).await {
+            Ok(opened) => opened,
             Err(e) => {
                 // No run: the events stay held, with their files.
                 self.files.return_held_files(&watcher.id, &run_id, &moved);
                 return Err(e);
             }
         };
-        // Taken only now that the run is made. The gate keeps any hold out meanwhile, so these
-        // are the events the run carries.
-        for event in store.take_held(&watcher.id).await? {
+        self.deps.runner.enqueued(&run);
+        for event in taken {
             self.files.remove_held(&watcher.id, &event.id);
         }
         store
@@ -1052,7 +1083,10 @@ impl Watchers {
         Ok(())
     }
 
-    /// A folder watcher with hours: at each opening, its dot runs once with what it held.
+    /// A folder watcher with hours: at each opening, its dot runs once with what it held. An
+    /// opening that fails with an error (not off or capped) is tried again after the backoff's
+    /// waits (1, 2, 5, 10, then every 10 minutes), so few enough to stay under the flood cap,
+    /// rather than at the next opening.
     fn start_openings(self: &Arc<Self>, id: &str, hours: WatchHours, token: &CancellationToken) {
         let this = self.clone();
         let id = id.to_string();
@@ -1069,8 +1103,16 @@ impl Watchers {
                     _ = this.deps.clock.sleep_until(at) => {}
                     _ = token.cancelled() => break,
                 }
-                if let Err(e) = this.open(&id).await {
+                let mut attempt = 0;
+                while let Err(e) = this.open(&id).await {
                     tracing::warn!(watcher = %id, "the opening failed: {e}");
+                    let wait = BACKOFF_MINUTES.get(attempt).copied().unwrap_or(10);
+                    attempt += 1;
+                    let retry = this.deps.clock.now() + TimeDelta::minutes(wait);
+                    tokio::select! {
+                        _ = this.deps.clock.sleep_until(retry) => {}
+                        _ = token.cancelled() => return,
+                    }
                 }
             }
         });

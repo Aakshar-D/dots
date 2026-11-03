@@ -748,3 +748,165 @@ async fn hours_that_fail_their_check_count_as_any_time() {
     h.still(&dot.id, 1, 1).await;
     assert_eq!(h.clock.sleeps(), 0);
 }
+
+/// Monday 26 October 2026, 19:00 in `TestTz`: after the day's window, outside again.
+fn monday_19() -> chrono::DateTime<chrono::Utc> {
+    monday_9() + TimeDelta::hours(10)
+}
+
+/// Final review I1 (spec section 3.8): Dots closed over the whole opening and started outside
+/// the hours again releases what it held, once; the timer then waits for the next opening.
+#[tokio::test]
+async fn held_events_are_released_at_start_after_a_missed_opening() {
+    let (mut h, dot, w) = setup_hours(Some(weekdays_9_to_18())).await;
+    hold(&h, &w, 2, true).await;
+    h.clock.set(monday_19());
+    h.restart();
+    h.start();
+    let runs = h.wait_runs(&dot.id, 1, 10).await;
+    assert_eq!(held_names(&runs[0]), ["0.pdf", "1.pdf"]);
+    assert_eq!(
+        runs[0].payload.as_ref().unwrap()["held_since"],
+        json!(timestamp(saturday_10()))
+    );
+    assert_eq!(h.store.held_count(&w.id).await.unwrap(), 0);
+    assert_eq!(h.clock.nth_sleep(1).await, monday_9() + TimeDelta::days(1));
+    h.still(&dot.id, 1, 1).await;
+}
+
+/// Final review I1: Dots paused across a whole window and unpaused outside the hours releases.
+#[tokio::test]
+async fn held_events_are_released_when_dots_is_unpaused_after_a_missed_opening() {
+    let (h, dot, w) = setup_hours(Some(weekdays_9_to_18())).await;
+    hold(&h, &w, 2, false).await;
+    h.watchers.set_paused(true);
+    h.start();
+    h.clock.set(monday_19());
+    h.still(&dot.id, 0, 1).await;
+    h.watchers.set_paused(false);
+    let runs = h.wait_runs(&dot.id, 1, 10).await;
+    assert_eq!(held_names(&runs[0]), ["0.pdf", "1.pdf"]);
+    assert_eq!(h.store.held_count(&w.id).await.unwrap(), 0);
+    h.still(&dot.id, 1, 1).await;
+}
+
+/// Final review I1: a resume outside the hours releases when an opening has passed since the
+/// oldest held event; with no opening passed it keeps them (`resuming_inside_hours_releases`).
+#[tokio::test]
+async fn resuming_after_a_missed_opening_releases() {
+    let (h, dot, w) = setup_hours(Some(weekdays_9_to_18())).await;
+    hold(&h, &w, 2, false).await;
+    h.watchers
+        .pause(&w.id, PausedReason::Flood, None)
+        .await
+        .unwrap();
+    h.clock.set(monday_19());
+    let resumed = h.watchers.resume(&w.id).await.unwrap();
+    assert_eq!(resumed.held_count, 0);
+    let runs = h.runs(&dot.id).await;
+    assert_eq!(runs.len(), 1);
+    assert_eq!(held_names(&runs[0]), ["0.pdf", "1.pdf"]);
+}
+
+/// Final review I2: the run and the taking of the held events are one step. A failure of it
+/// (here the delete of the held rows refused) leaves no run, the events held and their files
+/// back in their held folders; once it works, one run carries them and nothing stays held.
+#[tokio::test]
+async fn an_opening_that_cannot_take_the_held_events_makes_no_run_and_keeps_them() {
+    let (h, dot, w) = setup_hours(Some(weekdays_9_to_18())).await;
+    hold(&h, &w, 2, true).await;
+    let held = h.store.held_events(&w.id).await.unwrap();
+    h.exec(
+        "CREATE TRIGGER keep_held BEFORE DELETE ON watcher_held \
+         BEGIN SELECT RAISE(ABORT, 'refused'); END",
+    )
+    .await;
+    h.clock.set(monday_9());
+    assert!(h.watchers.open(&w.id).await.is_err());
+    assert!(h.runs(&dot.id).await.is_empty());
+    assert_eq!(h.store.held_events(&w.id).await.unwrap(), held);
+    let files = h.watchers.files();
+    for (i, event) in held.iter().enumerate() {
+        let file = files.held_dir(&w.id, &event.id).join(format!("{i}.pdf"));
+        assert_eq!(std::fs::read(file).unwrap(), b"%PDF");
+    }
+    h.exec("DROP TRIGGER keep_held").await;
+    let Fired::Run(run) = h.watchers.open(&w.id).await.unwrap() else {
+        panic!("a run")
+    };
+    assert_eq!(held_names(&run), ["0.pdf", "1.pdf"]);
+    assert_eq!(h.runs(&dot.id).await.len(), 1);
+    assert_eq!(h.store.held_count(&w.id).await.unwrap(), 0);
+    for event in &held {
+        assert!(!files.held_dir(&w.id, &event.id).exists());
+    }
+    let staged = files.stage_dir(&w.id, &run.id);
+    assert_eq!(std::fs::read(staged.join("1-0.pdf")).unwrap(), b"%PDF");
+    assert_eq!(std::fs::read(staged.join("2-1.pdf")).unwrap(), b"%PDF");
+}
+
+/// Final review I3: an edit whose release fails is still saved, announced and answered; the
+/// events stay held for the next try.
+#[tokio::test]
+async fn an_edit_whose_release_fails_is_still_announced() {
+    let (mut h, dot, w) = setup_hours(Some(weekdays_9_to_18())).await;
+    hold(&h, &w, 2, false).await;
+    h.updated();
+    h.exec(
+        "CREATE TRIGGER no_runs BEFORE INSERT ON runs BEGIN SELECT RAISE(FAIL, 'disk full'); END",
+    )
+    .await;
+    let saved = h
+        .watchers
+        .update(&w.id, "Renamed", w.config.clone(), Some(all_day()))
+        .await
+        .unwrap();
+    assert_eq!(saved.name, "Renamed");
+    assert_eq!(saved.held_count, 2);
+    assert!(h.updated().contains(&w.id));
+    assert!(h.runs(&dot.id).await.is_empty());
+    // Turned on (off behind the service's back, so the events stay) and resumed: the same.
+    h.store.set_watcher_enabled(&w.id, false).await.unwrap();
+    h.updated();
+    let on = h.watchers.set_enabled(&w.id, true).await.unwrap();
+    assert!(on.enabled);
+    assert_eq!(on.held_count, 2);
+    assert!(h.updated().contains(&w.id));
+    h.watchers
+        .pause(&w.id, PausedReason::Flood, None)
+        .await
+        .unwrap();
+    h.updated();
+    let resumed = h.watchers.resume(&w.id).await.unwrap();
+    assert_eq!(resumed.paused_reason, None);
+    assert_eq!(resumed.held_count, 2);
+    assert!(h.updated().contains(&w.id));
+    assert!(h.runs(&dot.id).await.is_empty());
+}
+
+/// Final review M2: a folder watcher's opening that fails is tried again after the backoff's
+/// first wait (1 minute), not at the next day's opening.
+#[tokio::test]
+async fn a_failed_folder_opening_is_tried_again_after_a_minute() {
+    let (h, dot, w) = setup_hours(Some(weekdays_9_to_18())).await;
+    hold(&h, &w, 2, false).await;
+    h.start();
+    assert_eq!(h.clock.nth_sleep(1).await, monday_9());
+    h.exec(
+        "CREATE TRIGGER no_runs BEFORE INSERT ON runs BEGIN SELECT RAISE(FAIL, 'disk full'); END",
+    )
+    .await;
+    h.clock.set(monday_9());
+    assert_eq!(
+        h.clock.nth_sleep(2).await,
+        monday_9() + TimeDelta::minutes(1)
+    );
+    assert!(h.runs(&dot.id).await.is_empty());
+    assert_eq!(h.store.held_count(&w.id).await.unwrap(), 2);
+    h.exec("DROP TRIGGER no_runs").await;
+    h.clock.set(monday_9() + TimeDelta::minutes(1));
+    let runs = h.wait_runs(&dot.id, 1, 10).await;
+    assert_eq!(held_names(&runs[0]), ["0.pdf", "1.pdf"]);
+    assert_eq!(h.clock.nth_sleep(3).await, monday_9() + TimeDelta::days(1));
+    h.still(&dot.id, 1, 1).await;
+}
