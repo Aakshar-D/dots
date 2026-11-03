@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Textarea } from "@/components/ui/textarea";
-import { folderName, nameError, scheduleError, scheduleOf } from "@/lib/dot-rules";
+import { PRESET_SENTENCES, folderName, nameError, scheduleError, scheduleOf } from "@/lib/dot-rules";
 import { errorMessage, notifyError } from "@/lib/notify";
 import { keys } from "@/lib/query";
 import { useDebounced } from "@/lib/use-debounced";
@@ -18,17 +18,9 @@ import { ScheduleEditor } from "@/screens/dot-editor/ScheduleEditor";
 
 /// The presets the setup card offers, each in one plain sentence (setup agent spec §6).
 const PRESETS: [Preset, string, string][] = [
-  [
-    "read-only",
-    "Read-only",
-    "May read files. Never writes, runs commands, reads websites or uses MCP servers.",
-  ],
-  [
-    "sandboxed",
-    "Sandboxed",
-    "May edit files in its folder and run a few safe git commands. Asks before anything else.",
-  ],
-  ["trusted", "Trusted", "May run commands without asking."],
+  ["read-only", "Read-only", PRESET_SENTENCES["read-only"]],
+  ["sandboxed", "Sandboxed", PRESET_SENTENCES.sandboxed],
+  ["trusted", "Trusted", PRESET_SENTENCES.trusted],
 ];
 
 /// An extra of the proposal in plain words.

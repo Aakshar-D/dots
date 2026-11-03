@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
 
 import { commands } from "@/api/commands";
@@ -6,6 +7,7 @@ import { Field } from "@/components/Field";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
+import { PRESET_SENTENCES } from "@/lib/dot-rules";
 import { notifyError } from "@/lib/notify";
 
 const PRESETS: Record<Preset, string> = {
@@ -23,12 +25,17 @@ export function PolicyEditor(props: {
   error?: string;
 }) {
   const { policy, onChange } = props;
+  // Named presets keep their rules folded; a custom policy shows them from the start.
+  const [open, setOpen] = useState(policy.preset === "custom");
   const custom = (change: Partial<Policy>) => onChange({ ...policy, ...change, preset: "custom" });
   const setRule = (index: number, change: Partial<Rule>) =>
     custom({ rules: policy.rules.map((r, i) => (i === index ? { ...r, ...change } : r)) });
 
   function choosePreset(preset: Preset) {
-    if (preset === "custom") return custom({});
+    if (preset === "custom") {
+      setOpen(true);
+      return custom({});
+    }
     commands.policyPreset(preset).then(onChange, notifyError);
   }
 
@@ -47,67 +54,79 @@ export function PolicyEditor(props: {
           ))}
         </NativeSelect>
       </Field>
-      <div className="flex flex-col gap-1.5">
-        <span className="text-sm font-medium">Rules</span>
-        <p className="text-xs text-muted-foreground">
-          A rule names a tool, optionally with a pattern: <code>Bash(git status:*)</code>,{" "}
-          <code>Read(src/**)</code>, <code>mcp__github__*</code>. Deny wins over ask, and ask over
-          allow.
-        </p>
-        {policy.rules.map((rule, i) => (
-          <div key={i} className="flex items-center gap-2">
-            <Input
-              aria-label={`Rule ${i + 1} tool`}
-              className="font-mono"
-              value={rule.tool}
-              onChange={(e) => setRule(i, { tool: e.target.value })}
-            />
-            <NativeSelect
-              aria-label={`Rule ${i + 1} action`}
-              value={rule.action}
-              onChange={(e) => setRule(i, { action: Action.parse(e.target.value) })}
-            >
-              {Action.options.map((a) => (
-                <option key={a}>{a}</option>
-              ))}
-            </NativeSelect>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              aria-label={`Remove rule ${i + 1}`}
-              onClick={() => custom({ rules: policy.rules.filter((_, j) => j !== i) })}
-            >
-              <Trash2 aria-hidden />
-            </Button>
-          </div>
-        ))}
-        {props.error && <p className="text-xs text-destructive">{props.error}</p>}
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="self-start"
-          onClick={() => custom({ rules: [...policy.rules, { tool: "", action: "ask" }] })}
-        >
-          <Plus aria-hidden /> Add rule
-        </Button>
-      </div>
-      <Field
-        label="Anything else"
-        htmlFor="policy-default"
-        hint="What happens to a tool call no rule matches."
+      <p className="text-xs text-muted-foreground">
+        {policy.preset === "custom" ? "Your own rules." : PRESET_SENTENCES[policy.preset]}
+      </p>
+      <details
+        className="flex flex-col gap-3"
+        open={open}
+        onToggle={(e) => setOpen(e.currentTarget.open)}
       >
-        <NativeSelect
-          id="policy-default"
-          value={policy.default}
-          onChange={(e) => custom({ default: Action.parse(e.target.value) })}
-        >
-          {Action.options.map((a) => (
-            <option key={a}>{a}</option>
+        <summary className="cursor-pointer text-sm font-medium">
+          {open ? "Hide rules" : "Show rules"}
+        </summary>
+        <div className="flex flex-col gap-1.5">
+          <span className="text-sm font-medium">Rules</span>
+          <p className="text-xs text-muted-foreground">
+            A rule names a tool, optionally with a pattern: <code>Bash(git status:*)</code>,{" "}
+            <code>Read(src/**)</code>, <code>mcp__github__*</code>. Deny wins over ask, and ask over
+            allow.
+          </p>
+          {policy.rules.map((rule, i) => (
+            <div key={i} className="flex items-center gap-2">
+              <Input
+                aria-label={`Rule ${i + 1} tool`}
+                className="font-mono"
+                value={rule.tool}
+                onChange={(e) => setRule(i, { tool: e.target.value })}
+              />
+              <NativeSelect
+                aria-label={`Rule ${i + 1} action`}
+                value={rule.action}
+                onChange={(e) => setRule(i, { action: Action.parse(e.target.value) })}
+              >
+                {Action.options.map((a) => (
+                  <option key={a}>{a}</option>
+                ))}
+              </NativeSelect>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                aria-label={`Remove rule ${i + 1}`}
+                onClick={() => custom({ rules: policy.rules.filter((_, j) => j !== i) })}
+              >
+                <Trash2 aria-hidden />
+              </Button>
+            </div>
           ))}
-        </NativeSelect>
-      </Field>
+          {props.error && <p className="text-xs text-destructive">{props.error}</p>}
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="self-start"
+            onClick={() => custom({ rules: [...policy.rules, { tool: "", action: "ask" }] })}
+          >
+            <Plus aria-hidden /> Add rule
+          </Button>
+        </div>
+        <Field
+          label="Anything else"
+          htmlFor="policy-default"
+          hint="What happens to a tool call no rule matches."
+        >
+          <NativeSelect
+            id="policy-default"
+            value={policy.default}
+            onChange={(e) => custom({ default: Action.parse(e.target.value) })}
+          >
+            {Action.options.map((a) => (
+              <option key={a}>{a}</option>
+            ))}
+          </NativeSelect>
+        </Field>
+      </details>
     </div>
   );
 }

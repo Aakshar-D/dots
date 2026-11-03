@@ -61,6 +61,7 @@ describe("the app frame", () => {
   });
 
   it("warns about a taken port, a missing or untested CLI, a restart and a pause", async () => {
+    backend.on("dot_overview", () => [idle]);
     backend.on("status", () => ({
       ...quietStatus,
       server_error: "could not listen on 127.0.0.1:47321: address in use",
@@ -77,6 +78,19 @@ describe("the app frame", () => {
     expect(screen.getAllByRole("link", { name: "Open Settings" })).toHaveLength(2);
   });
 
+  it("keeps the untested-CLI banner away until the person has a dot", async () => {
+    backend.on("status", () => ({
+      ...quietStatus,
+      claude: { ...quietStatus.claude, version: "2.1.300", mismatch: true },
+    }));
+    backend.on("dot_overview", () => []);
+    const { listening } = renderApp("/dots");
+    await screen.findByRole("navigation", { name: "Main" });
+    await listening();
+    await waitFor(() => expect(backend.callsTo("dot_overview").length).toBeGreaterThan(0));
+    expect(screen.queryByText(/has not been tested/)).toBeNull();
+  });
+
   it("shows no banner when nothing needs attention", async () => {
     const { listening } = renderApp("/dots");
     await screen.findByRole("navigation", { name: "Main" });
@@ -90,6 +104,7 @@ describe("the app frame", () => {
       ...quietStatus,
       claude: { ...quietStatus.claude, version: "2.1.300", mismatch: true },
     };
+    backend.on("dot_overview", () => [idle]);
     backend.on("status", () => untested);
     backend.on("mark_claude_tested", () => quietStatus);
     const { user } = renderApp("/dots");
@@ -104,6 +119,7 @@ describe("the app frame", () => {
       claude: { ...quietStatus.claude, version: "2.1.300", mismatch: true },
     };
     let now: Status = untested;
+    backend.on("dot_overview", () => [idle]);
     backend.on("status", () => now);
     backend.on("mark_claude_tested", () => (now = quietStatus));
     const { user, listening, queryClient } = renderApp("/dots");

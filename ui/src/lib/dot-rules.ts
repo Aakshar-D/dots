@@ -228,3 +228,11 @@ export function specOf(dot: DotSpec): DotSpec {
     enabled: dot.enabled,
   };
 }
+
+/// The three named presets in one plain sentence each (setup agent spec §6).
+export const PRESET_SENTENCES = {
+  "read-only": "May read files. Never writes, runs commands, reads websites or uses MCP servers.",
+  sandboxed:
+    "May edit files in its folder and run a few safe git commands. Asks before anything else.",
+  trusted: "May run commands without asking.",
+} as const;
