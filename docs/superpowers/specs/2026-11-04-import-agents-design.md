@@ -53,3 +53,12 @@ Commands `scan_claude_agents` and `import_claude_agents`; registered in `command
 
 - Keeping an imported dot in step with its file later.
 - `disallowedTools`, hooks, `color`, MCP servers of an agent.
+
+## 8. Review changes (2026-11-04)
+
+- A `tools` value the reader cannot follow (nested brackets, anchors, nested block items, an unclosed quote) is marked unreadable, never taken as missing: the dot gets the Custom policy with nothing allowed but Dots' own tools, and the preview says its tools could not be read. A bare `tools:` is an empty list (the same policy, without the warning). Flow lists split at commas outside quotes.
+- A file with an empty frontmatter (`---` then `---`) is imported under its file name.
+- Names Windows keeps for devices (`con`, `prn`, `aux`, `nul`, `com1`-`com9`, `lpt1`-`lpt9`, also with an extension) get `-agent` added.
+- Imports run one at a time behind a lock and read the dots' names inside it; a `Conflict` from the store (dot names are unique) moves on to the next number. A path given twice is imported once. A folder made for a dot that then fails is removed.
+- The project scan reads only the dots of the account and workspace in view.
+- The dialog keeps what it sent unticked and keeps Import off until the agents are read again.
