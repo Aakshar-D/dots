@@ -1,16 +1,19 @@
 import { describe, expect, it } from "vitest";
 
-import type { Run } from "@/api/types";
+import type { Run, TopicInfo } from "@/api/types";
 import { localTime } from "@/lib/format";
 import {
+  archivedTopics,
   conversation,
   currentTopic,
   defaultTarget,
+  liveTopics,
   olderTopics,
   oneLine,
   topicOf,
   topicsOf,
   topicTitle,
+  withInfo,
 } from "@/lib/home-topics";
 import { sample } from "@/test/fixtures";
 
@@ -126,5 +129,35 @@ describe("topics", () => {
     expect(oneLine(" one\ntwo ")).toBe("one");
     expect(oneLine(null)).toBe("");
     expect(oneLine("abcdef", 3)).toBe("abc…");
+  });
+});
+
+describe("topic rows", () => {
+  const info = (root_run_id: string, over: Partial<TopicInfo> = {}): TopicInfo => ({
+    root_run_id,
+    dot_id: sample.run.dot_id,
+    title: null,
+    archived_at: null,
+    ...over,
+  });
+
+  it("names a topic by the title the person gave it", () => {
+    const [a, b] = withInfo(topicsOf([root("a", 0), root("b", 5)]), [
+      info("a", { title: "Trip plans" }),
+    ]);
+    expect(topicTitle(a)).toBe("Trip plans");
+    expect(topicTitle(b)).toBe("message of b");
+  });
+
+  it("leaves archived topics out of the conversation and History, and lists them apart", () => {
+    const topics = withInfo(topicsOf([root("a", 0), root("b", 5), root("c", 10)]), [
+      info("a", { archived_at: "2026-10-10T00:00:00Z" }),
+      info("c", { archived_at: "2026-10-10T00:00:00Z" }),
+    ]);
+    const live = liveTopics(topics);
+    const shown = conversation(live);
+    expect(ids(shown)).toEqual(["b"]);
+    expect(ids(olderTopics(live, shown))).toEqual([]);
+    expect(ids(archivedTopics(topics))).toEqual(["c", "a"]);
   });
 });

@@ -1,6 +1,6 @@
 // A dot's runs as topics, and which of them make its conversation on the home (chat-first home
 // spec, section 2).
-import type { Run } from "@/api/types";
+import type { Run, TopicInfo } from "@/api/types";
 import { localTime } from "@/lib/format";
 import { watcherTitle } from "@/lib/watchers";
 
@@ -16,6 +16,10 @@ export type Topic = {
   /// "chat" when the root is a chat run; "run" when a schedule, a webhook, Run now or a
   /// follow-up started it.
   kind: "chat" | "run";
+  /// The name the person gave it (its `topics` row), shown instead of the derived one.
+  title?: string | null;
+  /// Archived: left out of the conversation and History, listed under Archived.
+  archived?: boolean;
 };
 
 /// How many run topics make the conversation of a dot that has no chat topic.
@@ -52,6 +56,29 @@ export function topicsOf(runs: Run[]): Topic[] {
     lines.set(run.root_run_id, line);
   }
   return [...lines.values()].map(topicOf).sort((a, b) => byQueued(a.root, b.root));
+}
+
+/// The topics with what their rows say: the person's name for each, and whether it is archived
+/// (topic tools spec section 6). A topic without a row is active and untitled.
+export function withInfo(topics: Topic[], infos: TopicInfo[]): Topic[] {
+  const rows = new Map(infos.map((info) => [info.root_run_id, info]));
+  return topics.map((topic) => {
+    const row = rows.get(topic.rootId);
+    return row ? { ...topic, title: row.title, archived: row.archived_at !== null } : topic;
+  });
+}
+
+/// The topics that are not archived, in their order.
+export function liveTopics(topics: Topic[]): Topic[] {
+  return topics.filter((topic) => !topic.archived);
+}
+
+/// The archived topics, newest first, `HISTORY` at most.
+export function archivedTopics(topics: Topic[]): Topic[] {
+  return topics
+    .filter((topic) => topic.archived)
+    .reverse()
+    .slice(0, HISTORY);
 }
 
 /// The newest chat topic, by the time its root was queued.
@@ -137,9 +164,10 @@ export function chatText(run: Run): string | null {
   return typeof message === "string" ? message : null;
 }
 
-/// A topic's name: the first line of its root's message for a chat topic, else its trigger and
-/// the time it was queued ("Scheduled · 08:00").
+/// A topic's name: the one the person gave it; else the first line of its root's message for a
+/// chat topic, else its trigger and the time it was queued ("Scheduled · 08:00").
 export function topicTitle(topic: Topic): string {
+  if (topic.title) return topic.title;
   if (topic.kind === "chat") return oneLine(chatText(topic.root), 60) || "Chat";
   // A watcher's run says what woke the dot (watchers spec section 8).
   if (topic.root.trigger === "watcher") {
