@@ -113,6 +113,25 @@ fn ask_wins(tool: &str) -> bool {
 pub const MEMORY_RULE: &str =
     "a Memory rule takes no argument: the rule Memory covers remember, forget and recall";
 
+/// The model's own bookkeeping tools (approval guards spec section 5): its to-do list, its plan
+/// mode, starting a sub-agent (whose own calls are checked one by one), finding tools and MCP
+/// resources, and reading or stopping its own background shells. Every preset and default
+/// allows them; only a deny rule stops them. `WebSearch` and `WebFetch` (which leave the
+/// machine) and `Workflow` (which starts real work) are not among them.
+pub const PLUMBING_TOOLS: &[&str] = &[
+    "TodoWrite",
+    "Task",
+    "Agent",
+    "ExitPlanMode",
+    "EnterPlanMode",
+    "ToolSearch",
+    "ListMcpResourcesTool",
+    "ReadMcpResourceTool",
+    "BashOutput",
+    "KillShell",
+    "KillBash",
+];
+
 const READ_TOOLS: &[&str] = &["Read", "LS", "Glob", "Grep"];
 const COMMAND_TOOLS: &[&str] = &["Bash", "PowerShell"];
 /// Commands that run whatever follows them: a prefix rule through one would allow any command.
@@ -237,8 +256,28 @@ impl Policy {
     }
 
     /// Like `resolve`, but absolute file paths inside `workspace` are treated as relative to it.
+    ///
+    /// Two guards come on top (approval guards spec sections 3 and 5): a plumbing tool
+    /// (`PLUMBING_TOOLS`) is allowed unless a deny rule matches it, and a call that touches a
+    /// private place (`touches_private`) is never allowed without asking, whatever rule,
+    /// preset or default would allow it.
     pub fn resolve_in(&self, tool: &str, input: &Value, workspace: Option<&Path>) -> Action {
         let ws = workspace_key(workspace);
+        if PLUMBING_TOOLS.contains(&tool.trim()) {
+            return if self.rule_matches(Action::Deny, tool, input, ws.as_deref()) {
+                Action::Deny
+            } else {
+                Action::Allow
+            };
+        }
+        match self.resolve_rules(tool, input, ws.as_deref()) {
+            Action::Allow if touches_private(tool, input, workspace) => Action::Ask,
+            action => action,
+        }
+    }
+
+    /// Deny > allow > ask (ask > allow for `ask_wins` tools), then `default`.
+    fn resolve_rules(&self, tool: &str, input: &Value, ws: Option<&str>) -> Action {
         // A check-in tool or `Memory` set to ask means it, even under the preset's allow
         // (check-ins spec section 4, dot memory spec section 3); every other tool keeps
         // deny > allow > ask, where a narrow allow beats a broad ask.
@@ -248,7 +287,7 @@ impl Policy {
             [Action::Deny, Action::Allow, Action::Ask]
         };
         for action in order {
-            if self.rule_matches(action, tool, input, ws.as_deref()) {
+            if self.rule_matches(action, tool, input, ws) {
                 return action;
             }
         }
@@ -796,7 +835,13 @@ fn tidy_path(raw: &str) -> (bool, String) {
 /// A bare command or file tool (`Bash`, `Write`) and a one-token command prefix (`Bash(git:*)`)
 /// are never offered. Every candidate returned is a valid rule that, as an allow rule, matches
 /// this call: one that is not is left out, so the caller can save any of them unchecked.
+///
+/// A call that touches a private place gets none, and no candidate names or covers a private
+/// place (approval guards spec section 3.3).
 pub fn allow_candidates(tool: &str, input: &Value, workspace: Option<&Path>) -> Vec<RuleCandidate> {
+    if touches_private(tool, input, workspace) {
+        return Vec::new();
+    }
     // A browser call offers its site's rules and nothing else (browser spec section 3.6).
     if let Some(candidates) = crate::browser::gate::rule_candidates(tool, input) {
         return candidates;
@@ -918,6 +963,7 @@ pub fn allow_candidates(tool: &str, input: &Value, workspace: Option<&Path>) -> 
             mcp_default: Action::Ask,
         };
         if rule.validate().is_ok()
+            && !pattern_touches_private(&pattern)
             && pattern_matches(&pattern, tool, input, Action::Allow, ws.as_deref())
             && !out.iter().any(|c| c.pattern == pattern)
         {

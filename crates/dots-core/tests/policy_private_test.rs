@@ -188,3 +188,115 @@ fn a_rule_pattern_that_names_or_covers_a_private_place_is_private() {
     }
     assert!(!pattern_touches_private(&format!("Read({home}/projects/**)")));
 }
+
+mod resolve {
+    use dots_core::policy::{
+        allow_candidates, Action, Policy, Preset, Rule, PLUMBING_TOOLS,
+    };
+    use serde_json::json;
+
+    use super::{bash, home, read};
+
+    #[test]
+    fn a_private_call_asks_under_every_preset_that_would_allow_it() {
+        let ssh = read("~/.ssh/id_rsa");
+        assert_eq!(Policy::preset(Preset::Trusted).resolve("Read", &ssh), Action::Ask);
+        assert_eq!(Policy::preset(Preset::Sandboxed).resolve("Read", &ssh), Action::Ask);
+        assert_eq!(Policy::preset(Preset::ReadOnly).resolve("Read", &ssh), Action::Ask);
+        assert_eq!(
+            Policy::preset(Preset::Trusted).resolve("Bash", &bash("cat ~/.aws/credentials")),
+            Action::Ask
+        );
+        // `Edit(./**)` allows inside the folder, but not a `.env` there.
+        assert_eq!(
+            Policy::preset(Preset::Sandboxed).resolve("Edit", &read(".env")),
+            Action::Ask
+        );
+        let mut p = Policy::preset(Preset::Custom);
+        p.default = Action::Allow;
+        p.rules.push(Rule::new("Read(**)", Action::Allow));
+        p.rules.push(Rule::new("Bash(cat:*)", Action::Allow));
+        assert_eq!(p.resolve("Read", &read("app/.env.local")), Action::Ask);
+        assert_eq!(p.resolve("Bash", &bash("cat .npmrc")), Action::Ask);
+        // Ordinary calls are unchanged.
+        assert_eq!(p.resolve("Read", &read("src/a.rs")), Action::Allow);
+        assert_eq!(p.resolve("Bash", &bash("cat README.md")), Action::Allow);
+    }
+
+    #[test]
+    fn a_deny_still_wins_over_a_private_call() {
+        let mut p = Policy::preset(Preset::Trusted);
+        p.rules.push(Rule::new("Read(**/.env)", Action::Deny));
+        assert_eq!(p.resolve("Read", &read(".env")), Action::Deny);
+        // ReadOnly denies writes by rule.
+        assert_eq!(
+            Policy::preset(Preset::ReadOnly).resolve("Write", &read("~/.ssh/config")),
+            Action::Deny
+        );
+        // A default deny stays deny.
+        let mut p = Policy::preset(Preset::Custom);
+        p.rules.clear();
+        p.default = Action::Deny;
+        assert_eq!(p.resolve("Read", &read("~/.ssh/id_rsa")), Action::Deny);
+    }
+
+    #[test]
+    fn plumbing_tools_are_allowed_under_every_preset_unless_denied() {
+        for tool in [
+            "TodoWrite",
+            "Task",
+            "Agent",
+            "ExitPlanMode",
+            "EnterPlanMode",
+            "ToolSearch",
+            "ListMcpResourcesTool",
+            "ReadMcpResourceTool",
+            "BashOutput",
+            "KillShell",
+            "KillBash",
+        ] {
+            assert!(PLUMBING_TOOLS.contains(&tool), "{tool}");
+            for preset in [Preset::ReadOnly, Preset::Sandboxed, Preset::Trusted, Preset::Custom] {
+                assert_eq!(
+                    Policy::preset(preset).resolve(tool, &json!({})),
+                    Action::Allow,
+                    "{tool} under {preset:?}"
+                );
+            }
+            let mut p = Policy::preset(Preset::Sandboxed);
+            p.rules.push(Rule::new(tool, Action::Ask));
+            assert_eq!(p.resolve(tool, &json!({})), Action::Allow, "{tool} with an ask rule");
+            p.rules.push(Rule::new(tool, Action::Deny));
+            assert_eq!(p.resolve(tool, &json!({})), Action::Deny, "{tool} with a deny rule");
+        }
+        for tool in ["WebSearch", "WebFetch", "Workflow"] {
+            assert!(!PLUMBING_TOOLS.contains(&tool), "{tool}");
+        }
+        assert_eq!(
+            Policy::preset(Preset::ReadOnly).resolve("WebSearch", &json!({})),
+            Action::Deny
+        );
+    }
+
+    #[test]
+    fn no_rule_is_offered_for_a_private_call() {
+        assert!(allow_candidates("Read", &read("~/.ssh/id_rsa"), None).is_empty());
+        assert!(allow_candidates("Read", &read("C:/Users/me/.ssh/id_rsa"), None).is_empty());
+        assert!(allow_candidates("Edit", &read("app/.env"), None).is_empty());
+        assert!(allow_candidates("Bash", &bash("cat C:/Users/me/.aws/credentials"), None).is_empty());
+        assert!(allow_candidates("Bash", &bash("cat .env"), None).is_empty());
+        // Ordinary calls still get their rules.
+        assert!(!allow_candidates("Read", &read("src/a.rs"), None).is_empty());
+        assert!(!allow_candidates("Bash", &bash("git log --oneline"), None).is_empty());
+    }
+
+    #[test]
+    fn no_offered_rule_covers_a_private_place() {
+        // A file in the home folder: "everything under" the home folder would cover `~/.ssh`.
+        let home = home().replace('\\', "/");
+        let file = format!("{home}/notes.txt");
+        let offered = allow_candidates("Read", &read(&file), None);
+        let patterns: Vec<&str> = offered.iter().map(|c| c.pattern.as_str()).collect();
+        assert_eq!(patterns, vec![format!("Read({file})")]);
+    }
+}
