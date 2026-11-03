@@ -1440,26 +1440,9 @@ impl Runtime {
             new.branch = parent.branch.clone();
             new.base_commit = parent.base_commit.clone();
         }
-        let root = new.root_run_id.clone();
-        let run = self.runner.enqueue(new).await?;
-        // A message into an archived topic brings it back (topic tools spec section 3.2).
-        if let Some(root) = root {
-            match self.store.topic_info(&root).await {
-                Ok(Some(info)) if info.archived_at.is_some() => {
-                    match self
-                        .store
-                        .set_topic_archived(&root, false, Utc::now())
-                        .await
-                    {
-                        Ok(_) => self.topics_changed(dot_id),
-                        Err(e) => tracing::warn!(topic = %root, "unarchiving failed: {e}"),
-                    }
-                }
-                Ok(_) => {}
-                Err(e) => tracing::warn!(topic = %root, "reading the topic failed: {e}"),
-            }
-        }
-        Ok(run)
+        // A run added to an archived topic brings it back (`insert_run`); `run_updated`
+        // refreshes the topic rows.
+        self.runner.enqueue(new).await
     }
 
     fn topics_changed(&self, dot_id: &str) {

@@ -158,10 +158,10 @@ async fn a_message_moves_with_its_replies_to_another_topic() {
         .into_iter()
         .map(|r| r.id)
         .collect();
-    // Read by time: the moved runs are older than b's.
+    // Read along the line: the target's runs, then the moved ones, though they are older.
     assert_eq!(
         b,
-        vec![a2.id.clone(), a3.id.clone(), b1.id.clone(), b2.id.clone()]
+        vec![b1.id.clone(), b2.id.clone(), a2.id.clone(), a3.id.clone()]
     );
     let moved = store.get_run(&a2.id).await.unwrap();
     assert_eq!(moved.parent_run_id.as_deref(), Some(b2.id.as_str()));
@@ -284,7 +284,7 @@ async fn a_merge_joins_two_topics_under_the_second() {
         .into_iter()
         .map(|r| r.id)
         .collect();
-    assert_eq!(b, vec![a1.id.clone(), a2.id.clone(), b1.id.clone()]);
+    assert_eq!(b, vec![b1.id.clone(), a1.id.clone(), a2.id.clone()]);
     assert_eq!(
         store
             .get_run(&a1.id)
@@ -359,4 +359,86 @@ async fn idle_topics_are_archived_but_not_the_current_or_newest_or_busy_one() {
     }
     // Archived ones are not archived again.
     assert!(store.archive_idle_topics(now, 30).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn unused_grants_follow_the_moved_runs_and_an_archived_target_comes_back() {
+    let (_d, store) = temp_store().await;
+    let d = dot(&store, "a").await;
+    let a1 = chat(&store, &d, None, &at(0)).await;
+    let a2 = chat(&store, &d, Some(&a1), &at(1)).await;
+    let b1 = chat(&store, &d, None, &at(10)).await;
+    store
+        .create_mcp_grant(&a1.id, "Bash", "h1", None)
+        .await
+        .unwrap();
+    store
+        .set_topic_archived(&b1.id, true, t(NOW))
+        .await
+        .unwrap();
+
+    store.move_runs(&a2.id, Some(&b1.id)).await.unwrap();
+    assert!(!store.take_grant(&a1.id, "Bash", "h1").await.unwrap());
+    assert!(store.take_grant(&b1.id, "Bash", "h1").await.unwrap());
+    let info = store.topic_info(&b1.id).await.unwrap().unwrap();
+    assert_eq!(info.archived_at, None);
+
+    // A merge into an archived topic brings it back too.
+    let c1 = chat(&store, &d, None, &at(20)).await;
+    store
+        .set_topic_archived(&b1.id, true, t(NOW))
+        .await
+        .unwrap();
+    store.merge_topics(&c1.id, &b1.id).await.unwrap();
+    let info = store.topic_info(&b1.id).await.unwrap().unwrap();
+    assert_eq!(info.archived_at, None);
+}
+
+#[tokio::test]
+async fn a_run_added_to_an_archived_topic_unarchives_it() {
+    let (_d, store) = temp_store().await;
+    let d = dot(&store, "a").await;
+    let a1 = chat(&store, &d, None, &at(0)).await;
+    store
+        .set_topic_archived(&a1.id, true, t(NOW))
+        .await
+        .unwrap();
+    // Any run, not only a person's message: here a follow-up.
+    let mut new = NewRun::new(&d.id, TriggerKind::FollowUp);
+    new.parent_run_id = Some(a1.id.clone());
+    new.root_run_id = Some(a1.id.clone());
+    store.create_run(&new).await.unwrap();
+    let info = store.topic_info(&a1.id).await.unwrap().unwrap();
+    assert_eq!(info.archived_at, None);
+}
+
+#[tokio::test]
+async fn a_topic_with_something_waiting_is_not_archived() {
+    let (_d, store) = temp_store().await;
+    let d = dot(&store, "a").await;
+    let asks = chat(&store, &d, None, &at(0)).await;
+    let follows = chat(&store, &d, None, &at(1)).await;
+    let idle = chat(&store, &d, None, &at(2)).await;
+    let _current = chat(&store, &d, None, &at(3)).await;
+    store
+        .add_question(&d.id, &asks.id, "Which one?", None)
+        .await
+        .unwrap()
+        .unwrap();
+    let now = t("2026-11-01T09:00:00.000Z") + Duration::days(40);
+    store
+        .add_follow_up(
+            &d.id,
+            &follows.id,
+            now + Duration::days(1),
+            "check",
+            10,
+            now,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let archived = store.archive_idle_topics(now, 30).await.unwrap();
+    let roots: Vec<&str> = archived.iter().map(|i| i.root_run_id.as_str()).collect();
+    assert_eq!(roots, vec![idle.id.as_str()]);
 }

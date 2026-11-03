@@ -68,6 +68,48 @@ fn event_from_row(row: &SqliteRow) -> Result<RunEventRecord> {
     })
 }
 
+/// A topic's runs read along its line (topic tools spec section 7): each run after its parent,
+/// the children of one run by `queued_at`. A move or merge hangs older runs after newer ones,
+/// so time alone would put them in the middle. `runs` is in `queued_at` order; a run whose
+/// parent is not among them starts a line of its own, in that order.
+pub fn line_order(runs: Vec<Run>) -> Vec<Run> {
+    use std::collections::{HashMap, HashSet};
+    let ids: HashSet<&str> = runs.iter().map(|r| r.id.as_str()).collect();
+    let mut children: HashMap<&str, Vec<usize>> = HashMap::new();
+    let mut starts = Vec::new();
+    for (i, run) in runs.iter().enumerate() {
+        match run
+            .parent_run_id
+            .as_deref()
+            .filter(|p| ids.contains(p) && *p != run.id)
+        {
+            Some(parent) => children.entry(parent).or_default().push(i),
+            None => starts.push(i),
+        }
+    }
+    let mut order = Vec::with_capacity(runs.len());
+    let mut seen = vec![false; runs.len()];
+    let mut stack: Vec<usize> = starts.into_iter().rev().collect();
+    loop {
+        while let Some(i) = stack.pop() {
+            if std::mem::replace(&mut seen[i], true) {
+                continue;
+            }
+            order.push(i);
+            if let Some(kids) = children.get(runs[i].id.as_str()) {
+                stack.extend(kids.iter().rev());
+            }
+        }
+        // A cycle of parents (never written by Dots) would hide its runs: they follow by time.
+        match seen.iter().position(|s| !s) {
+            Some(i) => stack.push(i),
+            None => break,
+        }
+    }
+    let mut slots: Vec<Option<Run>> = runs.into_iter().map(Some).collect();
+    order.into_iter().filter_map(|i| slots[i].take()).collect()
+}
+
 pub(super) async fn insert_run(conn: &mut SqliteConnection, new: &NewRun) -> Result<String> {
     let id = new.id.clone().unwrap_or_else(new_id);
     let root = new.root_run_id.clone().unwrap_or_else(|| id.clone());
@@ -102,7 +144,16 @@ pub(super) async fn insert_run(conn: &mut SqliteConnection, new: &NewRun) -> Res
     .bind(&new.retry_of)
     .bind(&new.workflow_step_run_id)
     .bind(&new.parent_run_id)
-    .execute(conn)
+    .execute(&mut *conn)
+    .await?;
+    // A run added to an archived topic brings it back (topic tools spec section 3.2).
+    sqlx::query(
+        "UPDATE topics SET archived_at = NULL, unarchived_at = ? \
+         WHERE root_run_id = ? AND archived_at IS NOT NULL",
+    )
+    .bind(now())
+    .bind(&root)
+    .execute(&mut *conn)
     .await?;
     Ok(id)
 }
@@ -250,7 +301,8 @@ impl Store {
         .bind(root_run_id)
         .fetch_all(&self.pool)
         .await?;
-        rows.iter().map(run_from_row).collect()
+        let runs = rows.iter().map(run_from_row).collect::<Result<Vec<_>>>()?;
+        Ok(line_order(runs))
     }
 
     /// The `limit` newest ended runs of `dot_id` outside the lineage `root_run_id`, latest end

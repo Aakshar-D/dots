@@ -8,10 +8,10 @@ use chrono::{DateTime, TimeDelta, Utc};
 use sqlx::sqlite::{SqliteConnection, SqliteRow};
 use sqlx::Row;
 
-use super::runs::{run_from_row, RUN_COLUMNS};
+use super::runs::{line_order, run_from_row, RUN_COLUMNS};
 use super::Store;
 use crate::model::{Run, TopicInfo};
-use crate::util::timestamp;
+use crate::util::{now, timestamp};
 use crate::{Error, Result};
 
 /// The longest title a topic takes, in characters.
@@ -42,7 +42,8 @@ async fn thread(conn: &mut SqliteConnection, root: &str) -> Result<Vec<Run>> {
     .bind(root)
     .fetch_all(&mut *conn)
     .await?;
-    rows.iter().map(run_from_row).collect()
+    let runs = rows.iter().map(run_from_row).collect::<Result<Vec<_>>>()?;
+    Ok(line_order(runs))
 }
 
 /// The topic whose root is `root`, oldest first; `NotFound` when no run has that id, `Invalid`
@@ -97,6 +98,19 @@ async fn mark_restart(conn: &mut SqliteConnection, root: &str, dot_id: &str) -> 
     )
     .bind(root)
     .bind(dot_id)
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
+/// Brings back the topic `root` if it was archived: what was moved or merged into it is wanted.
+async fn unarchive(conn: &mut SqliteConnection, root: &str) -> Result<()> {
+    sqlx::query(
+        "UPDATE topics SET archived_at = NULL, unarchived_at = ? \
+         WHERE root_run_id = ? AND archived_at IS NOT NULL",
+    )
+    .bind(now())
+    .bind(root)
     .execute(&mut *conn)
     .await?;
     Ok(())
@@ -255,6 +269,16 @@ impl Store {
         let new_root = to.unwrap_or(run_id).to_string();
         let ids = moved_set(run_id, &source);
         set_root(&mut tx, &ids, &new_root).await?;
+        // The unused one-shot grants were made for the work at the end of the line, where an
+        // approved call goes on: they follow it when it moves.
+        let tail = source.last().map(|r| r.id.as_str());
+        if tail.is_some_and(|t| ids.iter().any(|id| id == t)) {
+            sqlx::query("UPDATE grants SET root_run_id = ? WHERE root_run_id = ? AND used = 0")
+                .bind(&new_root)
+                .bind(&source_root)
+                .execute(&mut *tx)
+                .await?;
+        }
         sqlx::query("UPDATE runs SET parent_run_id = ? WHERE id = ?")
             .bind(&parent)
             .bind(run_id)
@@ -262,6 +286,7 @@ impl Store {
             .await?;
         mark_restart(&mut tx, &source_root, &dot_id).await?;
         mark_restart(&mut tx, &new_root, &dot_id).await?;
+        unarchive(&mut tx, &new_root).await?;
         tx.commit().await?;
         Ok(new_root)
     }
@@ -310,8 +335,19 @@ impl Store {
             .execute(&mut *tx)
             .await?;
         mark_restart(&mut tx, into, &dot_id).await?;
+        unarchive(&mut tx, into).await?;
         tx.commit().await?;
         Ok(())
+    }
+
+    /// Whether the topic is marked to start its next run afresh; the mark stays until taken.
+    pub async fn topic_restart_pending(&self, root: &str) -> Result<bool> {
+        let mark: Option<i64> =
+            sqlx::query_scalar("SELECT restart FROM topics WHERE root_run_id = ?")
+                .bind(root)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(mark == Some(1))
     }
 
     /// Takes the topic's restart mark: true once after a move or merge changed it.
@@ -322,15 +358,6 @@ impl Store {
                 .execute(&self.pool)
                 .await?;
         Ok(res.rows_affected() > 0)
-    }
-
-    /// Forgets the run's session: it starts a fresh one (topic tools spec section 4.4).
-    pub async fn clear_session(&self, id: &str) -> Result<()> {
-        sqlx::query("UPDATE runs SET session_id = NULL WHERE id = ?")
-            .bind(id)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
     }
 
     /// Sets a run's `queued_at`, for tests that need runs in a known order.
@@ -346,8 +373,9 @@ impl Store {
 
     /// Archives every topic idle for more than `days` days at `now` (topic tools spec section
     /// 3.3) and returns their rows; `days == 0` archives nothing. A dot's current topic (its
-    /// newest chat topic), its most recently active topic and a topic with a run that has not
-    /// ended are left alone.
+    /// newest chat topic), its most recently active topic, a topic with a run that has not
+    /// ended, and one with something waiting (a pending follow-up, an open question, a pending
+    /// app or instructions proposal) are left alone.
     pub async fn archive_idle_topics(
         &self,
         now: DateTime<Utc>,
@@ -359,7 +387,17 @@ impl Store {
         let cutoff = timestamp(now - TimeDelta::days(i64::from(days)));
         let rows = sqlx::query(
             "SELECT g.root, g.dot_id, g.last_at, g.active, t.archived_at, t.unarchived_at, \
-                    root.trigger_kind, root.queued_at AS root_queued \
+                    root.trigger_kind, root.queued_at AS root_queued, \
+                    (SELECT COUNT(*) FROM runs x WHERE x.root_run_id = g.root AND ( \
+                       EXISTS (SELECT 1 FROM follow_ups f \
+                               WHERE f.from_run_id = x.id AND f.status = 'pending') \
+                       OR EXISTS (SELECT 1 FROM messages m WHERE m.run_id = x.id \
+                                  AND m.kind = 'question' AND m.answered_at IS NULL \
+                                  AND m.dismissed_at IS NULL) \
+                       OR EXISTS (SELECT 1 FROM app_proposals p \
+                                  WHERE p.run_id = x.id AND p.status = 'pending') \
+                       OR EXISTS (SELECT 1 FROM instruction_proposals p \
+                                  WHERE p.run_id = x.id AND p.status = 'pending'))) AS waiting \
              FROM (SELECT root_run_id AS root, dot_id, \
                           MAX(MAX(queued_at, COALESCE(ended_at, ''))) AS last_at, \
                           SUM(status IN ('queued', 'running', 'awaiting_approval')) AS active \
@@ -386,7 +424,8 @@ impl Store {
                 root: row.try_get("root")?,
                 dot_id: row.try_get("dot_id")?,
                 last: unarchived.filter(|u| *u > last).unwrap_or(last),
-                active: row.try_get::<i64, _>("active")? > 0,
+                active: row.try_get::<i64, _>("active")? > 0
+                    || row.try_get::<i64, _>("waiting")? > 0,
                 archived: row.try_get::<Option<String>, _>("archived_at")?.is_some(),
                 chat: row.try_get::<String, _>("trigger_kind")? == "chat",
                 root_queued: row.try_get("root_queued")?,
