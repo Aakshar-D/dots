@@ -21,12 +21,12 @@ Today a topic is only a line of runs sharing `runs.root_run_id`; it has no row, 
 ## 3. Behaviour (decided with the owner)
 
 1. **Rename**: a topic gets a title (trimmed, at most 100 characters; empty clears it). History, the archived list and the move and merge pickers show it instead of the title derived from the first message.
-2. **Archive / unarchive**: an archived topic is left out of the conversation, History's list and the pickers, and listed under **Archived** in History, where it can be opened and unarchived. Sending a message into an archived topic (its route still opens it) unarchives it.
-3. **Auto-archive**: a setting, **archive topics idle for N days** (default 30, 0 = off, at most 3650). A periodic sweep archives the topics whose last activity is older than that, never a dot's current topic (newest chat topic), never its most recently active topic, never one with an active run.
-4. **Move a message**: move a run's moved set to another topic of the same dot, or to a new topic. The moved runs get the target's root; the moved run's parent becomes the target's last run (by `queued_at`), or none for a new topic, where the moved run becomes the root. Inside a topic runs are read by time, so moved runs stand among the target's by when they were queued.
+2. **Archive / unarchive**: an archived topic is left out of the conversation, History's list and the pickers, and listed under **Archived** in History, where it can be opened and unarchived. Any run added to an archived topic (a message, an answer, a follow-up; `insert_run`) unarchives it, and so does a move or merge into it.
+3. **Auto-archive**: a setting, **archive topics idle for N days** (default 30, 0 = off, at most 3650). A periodic sweep archives the topics whose last activity is older than that, never a dot's current topic (newest chat topic), never its most recently active topic, never one with an active run or with something waiting (a pending follow-up, an open question, a pending app or instructions proposal).
+4. **Move a message**: move a run's moved set to another topic of the same dot, or to a new topic. The moved runs get the target's root; the moved run's parent becomes the target's last run (by `queued_at`), or none for a new topic, where the moved run becomes the root. Inside a topic runs are read **along the line** (§4.6), so moved runs come after the target's runs, and a reply continues the moved tail.
 5. **Merge**: merge topic A into topic B of the same dot: all of A's runs get B's root, A's root's parent becomes B's last run, A's row goes. B keeps its title and archived state.
 6. **Refusals** (nothing changes): a run or topic of another dot; a target that is the source; moving a topic's root (that is a merge); a topic (source or target) with an active run, or whose follow-up decision is being made; a topic with a workflow step's run in it; a topic an app started (`app_topics`), which the app tracks by its root.
-7. **Session continuity**: a Claude session (and a local one, rebuilt from `parent_run_id`) remembers the runs it ran, not the topic's runs after a move. So every topic a move or merge changes (the source, the target, a new one) is marked to **restart**: the next run in it that would resume a session (any trigger but `resume`, which must finish an approved call in its session) starts a fresh session instead, and its prompt carries the topic's runs so far (§4.4). The mark goes with that run.
+7. **Session continuity**: a Claude session (and a local one, rebuilt from `parent_run_id`) remembers the runs it ran, not the topic's runs after a move. So every topic a move or merge changes (the source, the target, a new one) is marked to **restart**: the next run in it that would resume a session (any trigger but `resume`, which must finish an approved call in its session) starts a fresh session instead, and its prompt carries the topic's runs so far (§4.4). The mark stays until a restarted run has used its fresh session (it succeeded or waits for an approval), so a run that fails first, or a crash, leaves it for the next run.
 
 ## 4. Core
 
@@ -50,7 +50,7 @@ No `last_active_at` column: activity is read from the runs, which are already in
 
 - `TopicInfo { root_run_id, dot_id, title: Option<String>, archived_at: Option<String> }` (model).
 - `list_topics(dot_id)`, `set_topic_title`, `set_topic_archived(root, archived, now)` (unarchive sets `unarchived_at`), upserting the row.
-- `move_runs(run_id, to: Option<&str>) -> String` and `merge_topics(from, into)`: check every refusal of §3.6 and write in one transaction; they also move `app_proposals.root_run_id` and `instruction_proposals.root_run_id` of the moved runs, and a merge moves A's `grants` to B. They set `restart` on every changed topic.
+- `move_runs(run_id, to: Option<&str>) -> String` and `merge_topics(from, into)`: check every refusal of §3.6 and write in one transaction; they also move `app_proposals.root_run_id` and `instruction_proposals.root_run_id` of the moved runs; a merge moves A's `grants` to B, and a move takes the source's unused grants along with the line's tail (the work an approved call goes on in). Messages (check-ins) and follow-ups name their run, not its topic, so they follow it unchanged. They set `restart` on every changed topic.
 - `take_topic_restart(root) -> bool`; `archive_idle_topics(now, days) -> Vec<(dot_id, root)>`.
 
 ### 4.3 Runtime
@@ -59,7 +59,11 @@ No `last_active_at` column: activity is read from the runs, which are already in
 
 ### 4.4 Restart (runner)
 
-Before a run's workspace and prompt are made: when the run has a `session_id`, is not a `resume`, and `take_topic_restart(root)` is true, the run's `session_id` is cleared (stored and in hand). Its prompt is then a first prompt, with **`## This conversation so far`** before the message: each earlier run of the topic by time, the person's message (typed or answered) and the run's summary, cut like the recent-runs list.
+Before a run's workspace and prompt are made: when the run has a `session_id`, is not a `resume`, and `take_topic_restart(root)` is true, the run's `session_id` is cleared (stored and in hand). The stored session is kept (so the topic can still be replied to if the run fails); only the engine is started without it. Its prompt is then a first prompt, with **`## This conversation so far`** before the message: the newest 20 earlier runs of the topic along its line (after "(N earlier messages omitted)"), the person's message (typed or answered) and the run's summary, cut like the recent-runs list.
+
+### 4.6 Line order
+
+`list_thread` (and the UI's `topicOf`) read a topic's runs along the parent links: each run after its parent, the children of one run by `queued_at`, then by id; a run whose parent is not in the topic starts a line of its own by time. Chosen over a stored position column: it needs no backfill and no write on every insert, and it is right for any topic whose parent links are, which every insert keeps. The Inbox's "thread end" query still uses the newest run by time.
 
 ### 4.5 Auto-archive sweep
 
