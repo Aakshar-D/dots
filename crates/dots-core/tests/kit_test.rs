@@ -61,6 +61,26 @@ fn lists_and_maps_are_ignored_and_the_rest_is_kept() {
 }
 
 #[test]
+fn simple_lists_are_kept_apart_from_the_fields() {
+    let text = "---\nname: pdf\nallowed-tools:\n  - Bash(git *)\n  - \"Read\"\ntools: [a, 'b',\n  c]\nmeta:\n  nested: yes\nlist2:\n- a # note\n- b\nempty: []\n---\n";
+    let fm = parse_frontmatter(text);
+    assert_eq!(fm.list("allowed-tools").unwrap(), ["Bash(git *)", "Read"]);
+    assert_eq!(fm.list("tools").unwrap(), ["a", "b", "c"]);
+    assert_eq!(fm.list("list2").unwrap(), ["a", "b"]);
+    assert_eq!(fm.list("empty").unwrap(), Vec::<String>::new());
+    assert!(fm.list("meta").is_none(), "a map is not a list");
+    assert!(!fm.fields.contains_key("tools"));
+}
+
+#[test]
+fn a_comma_string_reads_as_a_list() {
+    let fm = parse_frontmatter("---\ntools: Read, Grep ,Glob,\n---\n");
+    assert_eq!(fm.list("tools").unwrap(), ["Read", "Grep", "Glob"]);
+    assert_eq!(fm.fields["tools"], "Read, Grep ,Glob,");
+    assert!(fm.list("missing").is_none());
+}
+
+#[test]
 fn allowed_tools_as_a_string_is_a_field() {
     let text = "---\nallowed-tools: Bash(git *) Read\n---\n";
     assert_eq!(field(text, "allowed-tools").unwrap(), "Bash(git *) Read");

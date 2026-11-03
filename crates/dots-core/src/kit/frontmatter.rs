@@ -1,5 +1,6 @@
 //! The YAML frontmatter of a `SKILL.md` or a command file, read by hand: top-level `key: value`
-//! pairs, quoted values, `>` and `|` block scalars. Lists, nested maps and flow collections are
+//! pairs, quoted values, `>` and `|` block scalars, and simple lists of scalars (block `- item`
+//! or flow `[a, b]`), which are kept apart from the scalars. Nested maps and anything else are
 //! skipped. As in Claude Code, a frontmatter that does not parse gives no fields at all.
 
 use std::collections::BTreeMap;
@@ -9,6 +10,8 @@ use std::collections::BTreeMap;
 pub struct Frontmatter {
     /// Top-level keys whose value is a scalar. Empty when there is no frontmatter or it is broken.
     pub fields: BTreeMap<String, String>,
+    /// Top-level keys whose value is a simple list of scalars. Empty when `fields` is.
+    pub lists: BTreeMap<String, Vec<String>>,
     /// What follows the frontmatter; the whole text when there is none.
     pub body: String,
 }
@@ -39,21 +42,102 @@ pub fn parse_frontmatter(text: &str) -> Frontmatter {
     let lines: Vec<&str> = text.lines().collect();
     if lines.first().is_none_or(|l| !is_open(l)) {
         return Frontmatter {
-            fields: BTreeMap::new(),
             body: text.to_string(),
+            ..Frontmatter::default()
         };
     }
     let Some(close) = (1..lines.len()).find(|&i| is_close(lines[i])) else {
         // Never closed: no frontmatter, as in Claude Code.
         return Frontmatter {
-            fields: BTreeMap::new(),
             body: lines[1..].join("\n"),
+            ..Frontmatter::default()
         };
     };
+    let (fields, lists) = parse_map(&lines[1..close]).unwrap_or_default();
     Frontmatter {
-        fields: parse_map(&lines[1..close]).unwrap_or_default(),
+        fields,
+        lists,
         body: lines[close + 1..].join("\n"),
     }
+}
+
+impl Frontmatter {
+    /// The list under `key`: a YAML list, or a scalar split at its commas (Claude Code writes
+    /// `tools: Read, Grep`). Empty items are dropped. `None` when the key is not there.
+    pub fn list(&self, key: &str) -> Option<Vec<String>> {
+        if let Some(items) = self.lists.get(key) {
+            return Some(items.clone());
+        }
+        self.fields.get(key).map(|v| {
+            v.split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+                .collect()
+        })
+    }
+}
+
+type Maps = (BTreeMap<String, String>, BTreeMap<String, Vec<String>>);
+
+/// One list item or flow item as a string: quotes taken off, a trailing comment dropped.
+/// `None` for an item that is itself a collection or a broken quote.
+fn list_item(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    match raw.chars().next() {
+        None => Some(String::new()),
+        Some(q @ ('"' | '\'')) => quoted(q, raw, &[]).map(|(t, _)| t),
+        Some('[' | '{' | '&' | '*' | '!' | '|' | '>') => None,
+        Some(_) => Some(without_comment(raw).to_string()),
+    }
+}
+
+/// The items of block list lines (`- item` each, at one indent), or `None` when the lines are
+/// not that (a nested map, a nested list, an item over several lines).
+fn block_list(lines: &[&str]) -> Option<Vec<String>> {
+    let mut items = Vec::new();
+    let mut at = None;
+    for line in lines {
+        if is_blank(line) || is_comment(line) {
+            continue;
+        }
+        if *at.get_or_insert(indent(line)) != indent(line) {
+            return None;
+        }
+        let trimmed = line.trim_start_matches([' ', '\t']);
+        let item = trimmed
+            .strip_prefix("- ")
+            .or((trimmed.trim_end() == "-").then_some(""))?;
+        let item = list_item(item)?;
+        if !item.is_empty() {
+            items.push(item);
+        }
+    }
+    at.map(|_| items)
+}
+
+/// The items of a flow list `[a, b]` over these lines, or `None` when it is not one simple
+/// list (nested collections).
+fn flow_list(lines: &[&str]) -> Option<Vec<String>> {
+    let joined = lines.iter().map(|l| l.trim()).collect::<Vec<_>>().join(" ");
+    let inner = joined.strip_prefix('[')?;
+    let end = inner.rfind(']')?;
+    let tail = inner[end + 1..].trim();
+    if !(tail.is_empty() || tail.starts_with('#')) {
+        return None;
+    }
+    let inner = &inner[..end];
+    if inner.contains(['[', ']', '{', '}']) {
+        return None;
+    }
+    let mut items = Vec::new();
+    for part in inner.split(',') {
+        let item = list_item(part)?;
+        if !item.is_empty() {
+            items.push(item);
+        }
+    }
+    Some(items)
 }
 
 /// The key of a top-level line and the text after its colon. `None` when the line is not
@@ -96,8 +180,9 @@ fn plain_ok(s: &str) -> bool {
     !(s.contains(": ") || s.contains(":\t") || s.ends_with(':'))
 }
 
-fn parse_map(lines: &[&str]) -> Option<BTreeMap<String, String>> {
+fn parse_map(lines: &[&str]) -> Option<Maps> {
     let mut fields = BTreeMap::new();
+    let mut lists = BTreeMap::new();
     let mut seen = Vec::new();
     let mut i = 0;
     while i < lines.len() {
@@ -129,6 +214,9 @@ fn parse_map(lines: &[&str]) -> Option<BTreeMap<String, String>> {
                 {
                     end += 1;
                 }
+                if let Some(items) = block_list(&lines[i..end]) {
+                    lists.insert(key.clone(), items);
+                }
             }
             Some('|') | Some('>') => {
                 while end < lines.len() && (is_blank(lines[end]) || indent(lines[end]) > 0) {
@@ -141,6 +229,13 @@ fn parse_map(lines: &[&str]) -> Option<BTreeMap<String, String>> {
                 while depth > 0 && end < lines.len() {
                     depth += bracket_depth(lines[end]);
                     end += 1;
+                }
+                if rest.starts_with('[') {
+                    let mut flow = vec![rest];
+                    flow.extend_from_slice(&lines[i..end]);
+                    if let Some(items) = flow_list(&flow) {
+                        lists.insert(key.clone(), items);
+                    }
                 }
             }
             Some(q @ ('"' | '\'')) => {
@@ -181,7 +276,7 @@ fn parse_map(lines: &[&str]) -> Option<BTreeMap<String, String>> {
         }
         i = end;
     }
-    Some(fields)
+    Some((fields, lists))
 }
 
 fn bracket_depth(s: &str) -> i32 {
