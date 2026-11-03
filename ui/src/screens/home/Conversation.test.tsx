@@ -124,8 +124,43 @@ describe("a dot's conversation", () => {
     expect(after(lines[0], second)).toBeTruthy();
     expect(after(second, lines[1])).toBeTruthy();
     expect(backend.callsTo("schedule_skips")).toEqual([{ dotId: dot.id, limit: undefined }]);
-    // Skips are never messages: the dot's unread count is whatever the overview says.
-    expect(backend.callsTo("messages_list").every((a) => a.dotId !== undefined)).toBe(true);
+  });
+
+  it("never counts skipped slots as unread, in the column or on the rail", async () => {
+    const run = scheduled("cron", "09:00");
+    home([run]);
+    const state = sample.overview.schedule_state!;
+    // Known counts: 2 unread on the dot, 2 in the Home total, 3 skips since the last run.
+    backend.on("dot_overview", () => [
+      {
+        ...overview,
+        unread: 2,
+        schedule_state: { ...state, last_skipped_at: "2026-10-09T10:00:00Z", skipped_since_run: 3 },
+      },
+    ]);
+    backend.on("unread_total", () => 2);
+    const skip = { ...sample.scheduleSkip, dot_id: dot.id };
+    const skips = [1, 2, 3].map((n) => ({ ...skip, id: `s${n}`, slot_at: `2026-10-09T10:0${n}:00Z` }));
+    backend.on("schedule_skips", () => skips);
+    renderApp(`/home/${dot.id}`);
+    const view = within(await screen.findByRole("region", { name: "Conversation" }));
+    expect(await view.findAllByText(/Schedule skipped at/)).toHaveLength(3);
+    const counts = () => {
+      const rail = screen.getByRole("navigation", { name: "Main" });
+      const column = screen.getByRole("navigation", { name: "Dots" });
+      return [
+        within(rail).getByRole("link", { name: /^Home, \d+ unread$/ }).getAttribute("aria-label"),
+        within(column).getByText(/^\d+ unread$/).textContent,
+      ];
+    };
+    await waitFor(() => expect(counts()).toEqual(["Home, 2 unread", "2 unread"]));
+
+    // A new skip arrives: the skip lines and the overview are read again, the counts stay.
+    const before = backend.callsTo("schedule_skips").length;
+    act(() => backend.emit("runtime", { type: "schedule_skipped", dot_id: dot.id, skip: skips[0] }));
+    await waitFor(() => expect(backend.callsTo("schedule_skips").length).toBeGreaterThan(before));
+    await waitFor(() => expect(backend.callsTo("dot_overview").length).toBeGreaterThan(1));
+    expect(counts()).toEqual(["Home, 2 unread", "2 unread"]);
   });
 
   it("tells the last skipped slot in the dot's header, and nothing without one", async () => {
