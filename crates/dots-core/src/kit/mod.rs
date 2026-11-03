@@ -3,12 +3,16 @@
 //! and the per-run plugin folders the Claude engine passes with `--plugin-dir`. It reads and
 //! copies folders only; the Library, the runs and the engines call it.
 
+mod agent;
 mod frontmatter;
 mod installed;
 mod plugin;
 mod run_dirs;
 mod skill;
 
+pub use agent::{
+    agent_files, agent_model, agent_policy, dot_name, read_agent, AgentFile, MAX_AGENT_BYTES,
+};
 pub use frontmatter::{parse_frontmatter, remove_field, Frontmatter};
 pub use installed::{
     find_installed, installed_plugins, plugins_root, read_installed, InstalledPlugin,
