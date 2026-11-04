@@ -249,3 +249,64 @@ async fn a_step_chat_is_not_resent() {
     );
     assert!(resends_of(&store, &dot.id, &run.id).await.is_empty());
 }
+
+#[tokio::test]
+async fn a_resent_message_is_not_left_as_not_delivered_and_keeps_its_files() {
+    let (_d, store) = temp_store().await;
+    let dot = store.create_dot(&spec("a"), None, "default").await.unwrap();
+    // Interrupted before its engine started: recovery marks it not delivered.
+    let mut new = message(&dot.id, "see the file");
+    new.payload.as_mut().unwrap()["attachments"] =
+        json!([{ "id": "att1", "name": "a.txt", "size": 3 }]);
+    store
+        .insert_staged_attachment("att1", &dot.id, "a.txt", 3)
+        .await
+        .unwrap();
+    let run = store
+        .create_chat_run(&new, &[("att1".into(), "a.txt".into())], None, None)
+        .await
+        .unwrap();
+    assert!(store.claim_run(&run.id).await.unwrap());
+
+    store.recover_interrupted().await.unwrap();
+    let old = store.get_run(&run.id).await.unwrap();
+    assert!(old.undelivered_at.is_some());
+    // Dots retried it: it is not waiting on the person in Needs you.
+    assert!(old.dismissed_at.is_some());
+    assert!(store.undelivered_chat_runs().await.unwrap().is_empty());
+    let again = resends_of(&store, &dot.id, &run.id).await;
+    assert_eq!(again.len(), 1);
+    assert_eq!(
+        again[0].payload.as_ref().unwrap()["attachments"],
+        json!([{ "id": "att1", "name": "a.txt", "size": 3 }])
+    );
+    // The file goes with the message, as a Retry's does.
+    assert!(store.run_attachments(&run.id).await.unwrap().is_empty());
+    let files = store.run_attachments(&again[0].id).await.unwrap();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].id, "att1");
+}
+
+#[tokio::test]
+async fn a_message_not_resent_stays_not_delivered_for_the_person() {
+    let (_d, store) = temp_store().await;
+    let dot = store.create_dot(&spec("a"), None, "default").await.unwrap();
+    let mut current = running(&store, message(&dot.id, "again")).await;
+    for _ in 0..3 {
+        store.recover_interrupted().await.unwrap();
+        let next = resends_of(&store, &dot.id, &current.id).await;
+        assert!(store.claim_run(&next[0].id).await.unwrap());
+        current = next[0].clone();
+    }
+    store.recover_interrupted().await.unwrap();
+    let last = store.get_run(&current.id).await.unwrap();
+    assert!(last.dismissed_at.is_none());
+    let waiting: Vec<String> = store
+        .undelivered_chat_runs()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|r| r.id)
+        .collect();
+    assert_eq!(waiting, vec![current.id.clone()]);
+}

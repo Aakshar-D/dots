@@ -174,13 +174,17 @@ async fn resend_interrupted(conn: &mut SqliteConnection, id: &str) -> Result<()>
         return Ok(());
     }
     if tries_before(conn, id).await? >= MAX_RESENDS {
-        sqlx::query("UPDATE runs SET error = ? WHERE id = ?")
-            .bind(format!(
-                "interrupted; stopped resending after {MAX_RESENDS} tries"
-            ))
-            .bind(id)
-            .execute(&mut *conn)
-            .await?;
+        // Left for the person: not delivered, it shows in Needs you with Retry and Discard.
+        sqlx::query(
+            "UPDATE runs SET error = ?1, undelivered_reason = CASE WHEN delivered_at IS NULL \
+             THEN ?1 ELSE undelivered_reason END WHERE id = ?2",
+        )
+        .bind(format!(
+            "interrupted; stopped resending after {MAX_RESENDS} tries"
+        ))
+        .bind(id)
+        .execute(&mut *conn)
+        .await?;
         return Ok(());
     }
     let parent = match &run.parent_run_id {
@@ -192,6 +196,22 @@ async fn resend_interrupted(conn: &mut SqliteConnection, id: &str) -> Result<()>
         payload.insert(RESENT.into(), Value::from(RESENT_AFTER_RESTART));
     }
     let resent = insert_run(conn, &new).await?;
+    // The resend is the message's Retry (delivery tracking spec section 3.9): its files go
+    // with it, and a run that never reached the dot is dismissed, so it waits on no one in
+    // Needs you.
+    sqlx::query("UPDATE chat_attachments SET run_id = ? WHERE run_id = ?")
+        .bind(&resent)
+        .bind(id)
+        .execute(&mut *conn)
+        .await?;
+    sqlx::query(
+        "UPDATE runs SET dismissed_at = ? WHERE id = ? AND delivered_at IS NULL \
+         AND undelivered_at IS NOT NULL AND dismissed_at IS NULL",
+    )
+    .bind(now())
+    .bind(id)
+    .execute(&mut *conn)
+    .await?;
     tracing::info!(run = %id, resent = %resent, "sent an interrupted message again");
     Ok(())
 }
