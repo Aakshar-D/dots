@@ -106,7 +106,7 @@ function core(full: Inbox, messages: Message[], marks: InboxMark[] = []) {
 
 /// Picks `preset` from the Snooze menu of `within`.
 async function snooze(user: ReturnType<typeof renderApp>["user"], where: HTMLElement, preset: string) {
-  await user.click(within(where).getByRole("button", { name: "Snooze" }));
+  await user.click(within(where).getByRole("button", { name: /^Snooze: / }));
   await user.click(await screen.findByRole("menuitem", { name: preset }));
 }
 
@@ -127,7 +127,9 @@ describe("Snooze and Done in the Inbox", () => {
     expect(within(list).getByRole("listitem")).toHaveTextContent(
       `courier asks: Ship it? · ${backText(until, Date.now())}`,
     );
-    await user.click(within(list).getByRole("button", { name: "Unsnooze" }));
+    await user.click(
+      within(list).getByRole("button", { name: "Unsnooze: courier asks: Ship it?" }),
+    );
     await waitFor(() =>
       expect(backend.callsTo("inbox_unsnooze")).toEqual([{ item: { kind: "message", id: "m1" } }]),
     );
@@ -139,16 +141,42 @@ describe("Snooze and Done in the Inbox", () => {
     core({ ...empty, watchers: [watcher] }, []);
     const { user } = renderApp("/inbox");
     const row = await screen.findByRole("listitem", { name: `${watcher.name} paused` });
-    await user.click(within(row).getByRole("button", { name: "Done" }));
+    const done = within(row).getByRole("button", {
+      name: `Done: ${watcher.dot_name}'s watcher ${watcher.name}`,
+    });
+    await user.click(done);
+    // The row is gone; focus is not left on the page's body.
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Inbox" })),
+    );
     const key = { kind: "watcher", id: `${watcher.watcher_id}@${watcher.at}` };
     await waitFor(() => expect(backend.callsTo("inbox_done")).toEqual([{ item: key }]));
 
-    await user.click(await screen.findByRole("button", { name: "Done (1)" }));
+    const toggle = await screen.findByRole("button", { name: "Done (1)" });
+    // It controls the list only while the list is there.
+    expect(toggle).not.toHaveAttribute("aria-controls");
+    await user.click(toggle);
     const list = screen.getByRole("list", { name: "Done" });
+    expect(toggle).toHaveAttribute("aria-controls", list.id);
     expect(within(list).getByRole("listitem")).toHaveTextContent(/ · Done just now/);
-    await user.click(within(list).getByRole("button", { name: "Undo" }));
+    await user.click(within(list).getByRole("button", { name: /^Undo: / }));
     await waitFor(() => expect(backend.callsTo("inbox_undo_done")).toEqual([{ item: key }]));
     expect(await screen.findByRole("listitem", { name: `${watcher.name} paused` })).toBeVisible();
+  });
+
+  it("focus_goes_to_the_section_heading_after_done", async () => {
+    const other: Message = { ...question, id: "m2", text: "Or wait?" };
+    core(empty, [question, other]);
+    const { user } = renderApp("/inbox");
+    const cards = await screen.findAllByRole("listitem", { name: "Question from courier" });
+    expect(cards).toHaveLength(2);
+    await user.click(within(cards[0]).getByRole("button", { name: "Done: courier's question" }));
+    await waitFor(() =>
+      expect(screen.getAllByRole("listitem", { name: "Question from courier" })).toHaveLength(1),
+    );
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Messages" })),
+    );
   });
 
   it("approvals_have_no_done", async () => {
@@ -158,7 +186,7 @@ describe("Snooze and Done in the Inbox", () => {
     const group = await screen.findByRole("group", {
       name: `Approvals asked by ${second.dot_name}`,
     });
-    expect(within(group).queryByRole("button", { name: "Done" })).toBeNull();
+    expect(within(group).queryByRole("button", { name: /^Done/ })).toBeNull();
     await snooze(user, group, "In 1 hour");
     await waitFor(() =>
       expect(backend.callsTo("inbox_snooze").map((a) => a.items)).toEqual([
@@ -208,7 +236,11 @@ describe("Snooze and Done in the Inbox", () => {
       "href",
       `/chat/${undelivered.dot_id}/${undelivered.id}`,
     );
-    expect(within(row).getByRole("button", { name: "Done" })).toBeVisible();
+    expect(
+      within(row).getByRole("button", {
+        name: `Done: ${undelivered.dot_name}'s message that was not delivered`,
+      }),
+    ).toBeVisible();
   });
 
   it("everything_hidden_shows_the_empty_state_and_the_lists", async () => {

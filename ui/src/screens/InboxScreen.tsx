@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Inbox as InboxIcon, Play } from "lucide-react";
-import type { ReactNode } from "react";
+import { useCallback, useEffect, useRef, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router";
 
 import { commands } from "@/api/commands";
@@ -22,7 +22,7 @@ import { ApprovalCard } from "@/components/ApprovalCard";
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { EmptyState } from "@/components/EmptyState";
 import { ErrorNote } from "@/components/ErrorNote";
-import { InboxActions } from "@/components/InboxActions";
+import { InboxActed, InboxActions } from "@/components/InboxActions";
 import { InstructionsCard } from "@/components/InstructionsCard";
 import { MessageCard } from "@/components/MessageCard";
 import { Page } from "@/components/Page";
@@ -434,7 +434,8 @@ function Section(props: { id: string; title: string; count: number; children: Re
   if (props.count === 0) return null;
   return (
     <section aria-labelledby={props.id} className="flex flex-col gap-2">
-      <h2 id={props.id} className="font-semibold">
+      {/* Focusable from code: focus lands here when an item of the section was put away. */}
+      <h2 id={props.id} tabIndex={-1} className="font-semibold outline-none">
         {props.title}
       </h2>
       {props.children}
@@ -460,6 +461,24 @@ export function InboxScreen() {
     queryKey: keys.messages(null),
     queryFn: () => commands.messagesList(null),
   });
+  // After Snooze or Done the item's row goes, and focus with it: once the Inbox has reloaded,
+  // focus moves to the heading of the section it was in, or to the page's when that is gone.
+  const focusTo = useRef<string | null | undefined>(undefined);
+  const acted = useCallback((headingId: string | null) => {
+    focusTo.current = headingId;
+  }, []);
+  useEffect(() => {
+    if (focusTo.current === undefined) return;
+    const active = document.activeElement;
+    if (active !== null && active !== document.body) return;
+    const heading =
+      (focusTo.current !== null ? document.getElementById(focusTo.current) : null) ??
+      document.querySelector<HTMLElement>("h1");
+    focusTo.current = undefined;
+    if (heading === null) return;
+    if (!heading.hasAttribute("tabindex")) heading.setAttribute("tabindex", "-1");
+    heading.focus();
+  }, [inbox.data, messages.data]);
   if (inbox.isPending || messages.isPending) return <Page title="Inbox" />;
   if (inbox.isError) {
     return (
@@ -486,56 +505,66 @@ export function InboxScreen() {
   const [tools, backTools] = split(data.tools_changed, toolsKey, back);
   const [runs, backRuns] = split(data.review_runs, reviewKey, back);
 
-  const act = (key: InboxKey) => <InboxActions items={[key]} done />;
+  const act = (key: InboxKey, what: string) => <InboxActions items={[key]} done what={what} />;
   const row = {
     message: (m: Message) => (
-      <MessageCard key={m.id} message={m} actions={act(messageKey(m))} />
+      <MessageCard
+        key={m.id}
+        message={m}
+        actions={act(messageKey(m), `${m.dot_name}'s ${m.kind === "question" ? "question" : "note"}`)}
+      />
     ),
     approvals: (group: RunApprovals) => (
       <RunApprovalsGroup
         key={group.runId}
         group={group}
         // An approval is decided, not marked done: the group snoozes each call it shows.
-        actions={<InboxActions items={group.approvals.map(approvalKey)} done={false} />}
+        actions={
+          <InboxActions
+            items={group.approvals.map(approvalKey)}
+            done={false}
+            what={`approvals asked by ${group.dotName}`}
+          />
+        }
       />
     ),
     undelivered: (item: UndeliveredMessage) => (
-      <NotDeliveredRow key={item.id} item={item} actions={act(notDeliveredKey(item))} />
+      <NotDeliveredRow key={item.id} item={item} actions={act(notDeliveredKey(item), `${item.dot_name}'s message that was not delivered`)} />
     ),
     review: (item: PendingAppReview) => (
-      <AppReviewRow key={item.proposal.id} item={item} actions={act(appReviewKey(item))} />
+      <AppReviewRow key={item.proposal.id} item={item} actions={act(appReviewKey(item), `${item.dot_name}'s app to review`)} />
     ),
     instructions: (item: PendingInstructions) => (
       <InstructionsRow
         key={item.proposal.id}
         item={item}
-        actions={act(instructionsKey(item))}
+        actions={act(instructionsKey(item), `${item.dot_name}'s new instructions`)}
       />
     ),
     attention: (item: NeedsAttention) => (
-      <AttentionRow key={item.dot_id} item={item} actions={act(attentionKey(item))} />
+      <AttentionRow key={item.dot_id} item={item} actions={act(attentionKey(item), `${item.dot_name}'s schedule`)} />
     ),
     teamScope: (item: TeamScopeIssue) => (
       <TeamScopeRow
         key={`${item.team_id}/${item.dot_id}`}
         item={item}
-        actions={act(teamScopeKey(item))}
+        actions={act(teamScopeKey(item), `${item.dot_name} in team ${item.team_name}`)}
       />
     ),
     watcher: (item: PausedWatcher) => (
-      <PausedWatcherRow key={item.watcher_id} item={item} actions={act(watcherKey(item))} />
+      <PausedWatcherRow key={item.watcher_id} item={item} actions={act(watcherKey(item), `${item.dot_name}'s watcher ${item.name}`)} />
     ),
     held: (item: HeldRun) => (
-      <HeldRunRow key={item.run_id} item={item} actions={act(heldKey(item))} />
+      <HeldRunRow key={item.run_id} item={item} actions={act(heldKey(item), `${item.dot_name}'s run waiting to run`)} />
     ),
     tools: (item: ToolsChanged) => (
       <ToolsChangedRow
         key={`${item.server_id}/${item.scope}`}
         item={item}
-        actions={act(toolsKey(item))}
+        actions={act(toolsKey(item), `${item.name} tools`)}
       />
     ),
-    run: (run: ReviewRun) => <ReviewRow key={run.id} run={run} actions={act(reviewKey(run))} />,
+    run: (run: ReviewRun) => <ReviewRow key={run.id} run={run} actions={act(reviewKey(run), `${run.dot_name}'s run to review`)} />,
   };
 
   // Back from snooze: each item's own card or row, in the order they came back (newest
@@ -587,57 +616,59 @@ export function InboxScreen() {
     instructions.length === 0 &&
     reviews.length === 0;
   return (
-    <Page title="Inbox">
-      {messages.isError && <ErrorNote error={messages.error} />}
-      {nothing && (
-        <EmptyState icon={InboxIcon}>
-          Nothing waits for you. Questions and notes from dots, approvals a dot asks for,
-          messages that did not reach a dot, apps sent for review, schedules that need
-          attention, paused watchers and finished runs to review show up here.
-        </EmptyState>
-      )}
-      <Section id="inbox-back" title="Back from snooze" count={backList.length}>
-        <div className="flex flex-col gap-2">{backList}</div>
-      </Section>
-      <Section id="inbox-messages" title="Messages" count={waiting.length}>
-        <ul className="flex flex-col gap-2">{waiting.map(row.message)}</ul>
-      </Section>
-      <Section id="inbox-approvals" title="Approvals" count={approvals.length}>
-        {byRun(approvals).map(row.approvals)}
-      </Section>
-      <Section id="inbox-not-delivered" title="Not delivered" count={undelivered.length}>
-        <ul className="flex flex-col gap-2">{undelivered.map(row.undelivered)}</ul>
-      </Section>
-      <Section id="inbox-app-reviews" title="Apps to review" count={reviews.length}>
-        <ul className="flex flex-col gap-2">{reviews.map(row.review)}</ul>
-      </Section>
-      <Section id="inbox-instructions" title="New instructions" count={instructions.length}>
-        <ul className="flex flex-col gap-2">{instructions.map(row.instructions)}</ul>
-      </Section>
-      <Section
-        id="inbox-attention"
-        title="Needs attention"
-        count={attention.length + teamScope.length}
-      >
-        <ul className="flex flex-col gap-2">
-          {attention.map(row.attention)}
-          {teamScope.map(row.teamScope)}
-        </ul>
-      </Section>
-      <Section id="inbox-watchers" title="Paused watchers" count={watchers.length}>
-        <ul className="flex flex-col gap-2">{watchers.map(row.watcher)}</ul>
-      </Section>
-      <Section id="inbox-held" title="Waiting to run" count={held.length}>
-        <ul className="flex flex-col gap-2">{held.map(row.held)}</ul>
-      </Section>
-      <Section id="inbox-tools" title="Tools changed" count={tools.length}>
-        <ul className="flex flex-col gap-2">{tools.map(row.tools)}</ul>
-      </Section>
-      <Section id="inbox-runs" title="Runs to review" count={runs.length}>
-        <ul className="flex flex-col gap-2">{runs.map(row.run)}</ul>
-      </Section>
-      <MarkedList key="snoozed" title="Snoozed" marks={data.snoozed} />
-      <MarkedList key="done" title="Done" marks={data.done} />
-    </Page>
+    <InboxActed.Provider value={acted}>
+      <Page title="Inbox">
+        {messages.isError && <ErrorNote error={messages.error} />}
+        {nothing && (
+          <EmptyState icon={InboxIcon}>
+            Nothing waits for you. Questions and notes from dots, approvals a dot asks for,
+            messages that did not reach a dot, apps sent for review, schedules that need
+            attention, paused watchers and finished runs to review show up here.
+          </EmptyState>
+        )}
+        <Section id="inbox-back" title="Back from snooze" count={backList.length}>
+          <div className="flex flex-col gap-2">{backList}</div>
+        </Section>
+        <Section id="inbox-messages" title="Messages" count={waiting.length}>
+          <ul className="flex flex-col gap-2">{waiting.map(row.message)}</ul>
+        </Section>
+        <Section id="inbox-approvals" title="Approvals" count={approvals.length}>
+          {byRun(approvals).map(row.approvals)}
+        </Section>
+        <Section id="inbox-not-delivered" title="Not delivered" count={undelivered.length}>
+          <ul className="flex flex-col gap-2">{undelivered.map(row.undelivered)}</ul>
+        </Section>
+        <Section id="inbox-app-reviews" title="Apps to review" count={reviews.length}>
+          <ul className="flex flex-col gap-2">{reviews.map(row.review)}</ul>
+        </Section>
+        <Section id="inbox-instructions" title="New instructions" count={instructions.length}>
+          <ul className="flex flex-col gap-2">{instructions.map(row.instructions)}</ul>
+        </Section>
+        <Section
+          id="inbox-attention"
+          title="Needs attention"
+          count={attention.length + teamScope.length}
+        >
+          <ul className="flex flex-col gap-2">
+            {attention.map(row.attention)}
+            {teamScope.map(row.teamScope)}
+          </ul>
+        </Section>
+        <Section id="inbox-watchers" title="Paused watchers" count={watchers.length}>
+          <ul className="flex flex-col gap-2">{watchers.map(row.watcher)}</ul>
+        </Section>
+        <Section id="inbox-held" title="Waiting to run" count={held.length}>
+          <ul className="flex flex-col gap-2">{held.map(row.held)}</ul>
+        </Section>
+        <Section id="inbox-tools" title="Tools changed" count={tools.length}>
+          <ul className="flex flex-col gap-2">{tools.map(row.tools)}</ul>
+        </Section>
+        <Section id="inbox-runs" title="Runs to review" count={runs.length}>
+          <ul className="flex flex-col gap-2">{runs.map(row.run)}</ul>
+        </Section>
+        <MarkedList key="snoozed" title="Snoozed" marks={data.snoozed} />
+        <MarkedList key="done" title="Done" marks={data.done} />
+      </Page>
+    </InboxActed.Provider>
   );
 }

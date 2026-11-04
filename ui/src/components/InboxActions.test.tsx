@@ -1,5 +1,5 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -14,7 +14,7 @@ const question: InboxKey = { kind: "message", id: "m1" };
 function show(items: InboxKey[], done: boolean) {
   render(
     <QueryClientProvider client={createQueryClient()}>
-      <InboxActions items={items} done={done} />
+      <InboxActions items={items} done={done} what="courier's question" />
       <Toaster />
     </QueryClientProvider>,
   );
@@ -35,7 +35,7 @@ describe("Snooze and Done on an Inbox item", () => {
 
   it("snoozes until a preset", async () => {
     const user = show([question], true);
-    await user.click(screen.getByRole("button", { name: "Snooze" }));
+    await user.click(screen.getByRole("button", { name: "Snooze: courier's question" }));
     expect(
       (await screen.findAllByRole("menuitem")).map((item) => item.textContent),
     ).toEqual([
@@ -55,7 +55,7 @@ describe("Snooze and Done on an Inbox item", () => {
 
   it("refuses a picked time that is not in the future", async () => {
     const user = show([question], true);
-    await user.click(screen.getByRole("button", { name: "Snooze" }));
+    await user.click(screen.getByRole("button", { name: "Snooze: courier's question" }));
     await user.click(await screen.findByRole("menuitem", { name: "Pick a date and time…" }));
     const dialog = await screen.findByRole("dialog", { name: "Snooze until" });
     const field = screen.getByLabelText("Date and time");
@@ -77,9 +77,48 @@ describe("Snooze and Done on an Inbox item", () => {
     );
   });
 
+  it("drops a preset that passed while the menu was open", async () => {
+    vi.setSystemTime(new Date(2026, 10, 4, 17, 59, 40));
+    const user = show([question], true);
+    await user.click(screen.getByRole("button", { name: "Snooze: courier's question" }));
+    const evening = await screen.findByRole("menuitem", { name: "This evening (6 PM)" });
+    vi.setSystemTime(new Date(2026, 10, 4, 18, 0, 5));
+    await user.click(evening);
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    expect(backend.callsTo("inbox_snooze")).toEqual([]);
+  });
+
+  it("checks a picked time again when Snooze is pressed", async () => {
+    const user = show([question], true);
+    await user.click(screen.getByRole("button", { name: "Snooze: courier's question" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Pick a date and time…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Snooze until" });
+    const field = screen.getByLabelText("Date and time");
+    await user.clear(field);
+    await user.type(field, "2026-11-04T10:01");
+    const confirm = within(dialog).getByRole("button", { name: "Snooze" });
+    expect(confirm).toBeEnabled();
+    // The minute passes before the button is pressed.
+    vi.setSystemTime(new Date(2026, 10, 4, 10, 2));
+    await user.click(confirm);
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Pick a time in the future.");
+    expect(backend.callsTo("inbox_snooze")).toEqual([]);
+  });
+
+  it("gives focus back to Snooze when the dialog closes", async () => {
+    const user = show([question], true);
+    const trigger = screen.getByRole("button", { name: "Snooze: courier's question" });
+    await user.click(trigger);
+    await user.click(await screen.findByRole("menuitem", { name: "Pick a date and time…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Snooze until" });
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+
   it("marks one item done", async () => {
     const user = show([question], true);
-    await user.click(screen.getByRole("button", { name: "Done" }));
+    await user.click(screen.getByRole("button", { name: "Done: courier's question" }));
     await waitFor(() => expect(backend.callsTo("inbox_done")).toEqual([{ item: question }]));
   });
 
@@ -89,8 +128,8 @@ describe("Snooze and Done on an Inbox item", () => {
       { kind: "approval", id: "a2" },
     ];
     const user = show(approvals, false);
-    expect(screen.queryByRole("button", { name: "Done" })).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Snooze" }));
+    expect(screen.queryByRole("button", { name: /^Done/ })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Snooze: courier's question" }));
     await user.click(await screen.findByRole("menuitem", { name: "In 1 hour" }));
     await waitFor(() =>
       expect(backend.callsTo("inbox_snooze")).toEqual([
@@ -104,7 +143,7 @@ describe("Snooze and Done on an Inbox item", () => {
       throw { kind: "not_found", message: "That is no longer in the Inbox." };
     });
     const user = show([question], true);
-    await user.click(screen.getByRole("button", { name: "Done" }));
+    await user.click(screen.getByRole("button", { name: "Done: courier's question" }));
     expect(await screen.findByText("That is no longer in the Inbox.")).toBeVisible();
   });
 });

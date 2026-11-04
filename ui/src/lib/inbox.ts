@@ -54,7 +54,9 @@ export function keyString(k: InboxKey): string {
 
 /// Every item of the Inbox and the waiting messages, in the core's order: messages, approvals,
 /// not delivered, runs to review, attention, tools changed, watchers, held runs, instructions,
-/// apps to review, team scope problems.
+/// apps to review, team scope problems. Only the tests call it: it is the contract check's
+/// entry point (spec section 8), which compares these keys with the core's `InboxKeys`, so the
+/// per-kind key functions the screen uses cannot drift from the core. Not dead code.
 export function inboxKeys(inbox: Inbox, messages: Message[]): InboxKey[] {
   return [
     ...messages.filter(waits).map(messageKey),

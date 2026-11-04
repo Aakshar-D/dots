@@ -27,7 +27,8 @@ export function MarkedList({ title, marks }: { title: "Snoozed" | "Done"; marks:
         size="sm"
         className="self-start"
         aria-expanded={open}
-        aria-controls={id}
+        // The list is in the page only while open.
+        aria-controls={open ? id : undefined}
         onClick={() => setOpen(!open)}
       >
         <Chevron aria-hidden />
@@ -69,6 +70,7 @@ function MarkedRow({ mark }: { mark: InboxMark }) {
         size="xs"
         variant="outline"
         disabled={undo.isPending}
+        aria-label={`${snoozed ? "Unsnooze" : "Undo"}: ${mark.title}`}
         onClick={onSingleClick(() => undo.mutate())}
       >
         {snoozed ? "Unsnooze" : "Undo"}

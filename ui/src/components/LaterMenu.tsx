@@ -1,6 +1,6 @@
 import { Clock } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -19,14 +19,18 @@ const ITEM =
 
 /// A menu of later times (snooze and done spec section 6): the presets as of when it opens,
 /// and "Pick a date and time…", which asks for one in a dialog. `label` names the button, the
-/// dialog (`<label> until`) and its confirm button. Send later reuses it.
+/// dialog (`<label> until`) and its confirm button; `name`, when given, is the button's
+/// accessible name (it names the item too). Send later reuses it.
 export function LaterMenu(props: {
   label: string;
+  name?: string;
   onPick: (at: Date) => void;
   disabled?: boolean;
 }) {
   const [presets, setPresets] = useState<LaterPreset[]>([]);
   const [picking, setPicking] = useState(false);
+  // The dialog is opened from a menu item that is gone once it closes: focus goes back here.
+  const trigger = useRef<HTMLButtonElement>(null);
   return (
     <>
       <DropdownMenu.Root
@@ -35,8 +39,8 @@ export function LaterMenu(props: {
         // once it is past 6 PM, however long the screen was open.
         onOpenChange={(open) => open && setPresets(laterPresets(new Date()))}
       >
-        <DropdownMenu.Trigger asChild>
-          <Button size="xs" variant="ghost" disabled={props.disabled}>
+        <DropdownMenu.Trigger asChild ref={trigger}>
+          <Button size="xs" variant="ghost" disabled={props.disabled} aria-label={props.name}>
             <Clock aria-hidden />
             {props.label}
           </Button>
@@ -50,7 +54,9 @@ export function LaterMenu(props: {
               <DropdownMenu.Item
                 key={preset.id}
                 className={ITEM}
-                onSelect={() => props.onPick(preset.at)}
+                // A preset that passed while the menu was open (6 PM came) is dropped: the
+                // menu just closes.
+                onSelect={() => isLater(preset.at, new Date()) && props.onPick(preset.at)}
               >
                 {preset.label}
               </DropdownMenu.Item>
@@ -70,6 +76,7 @@ export function LaterMenu(props: {
             props.onPick(at);
           }}
           onClose={() => setPicking(false)}
+          returnFocus={() => trigger.current?.focus()}
         />
       )}
     </>
@@ -77,15 +84,28 @@ export function LaterMenu(props: {
 }
 
 /// Asks for a date and time; one not in the future (or more than a year ahead) is refused.
-function PickDialog(props: { label: string; onPick: (at: Date) => void; onClose: () => void }) {
+function PickDialog(props: {
+  label: string;
+  onPick: (at: Date) => void;
+  onClose: () => void;
+  returnFocus: () => void;
+}) {
   const id = useId();
   // Starts an hour ahead, to the minute: a time that is taken as it is.
   const [value, setValue] = useState(() => toPicker(new Date(Date.now() + 3_600_000)));
+  // Set when Snooze was pressed after the time passed, so the refusal shows at once.
+  const [, setChecked] = useState(0);
   const at = fromPicker(value);
   const ok = at !== null && isLater(at, new Date());
   return (
     <Dialog open onOpenChange={(open) => !open && props.onClose()}>
-      <DialogContent aria-describedby={undefined}>
+      <DialogContent
+        aria-describedby={undefined}
+        onCloseAutoFocus={(e) => {
+          e.preventDefault();
+          props.returnFocus();
+        }}
+      >
         <DialogHeader>
           <DialogTitle>{props.label} until</DialogTitle>
         </DialogHeader>
@@ -93,7 +113,9 @@ function PickDialog(props: { label: string; onPick: (at: Date) => void; onClose:
           className="flex flex-col gap-2"
           onSubmit={(e) => {
             e.preventDefault();
-            if (ok && at) props.onPick(at);
+            // Checked again now: the time may have passed since it was typed.
+            if (at !== null && isLater(at, new Date())) props.onPick(at);
+            else setChecked(Date.now());
           }}
         >
           <Label htmlFor={id}>Date and time</Label>
