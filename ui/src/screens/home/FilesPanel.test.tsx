@@ -84,16 +84,18 @@ describe("the Files panel", () => {
     expect(view.queryByRole("button", { name: "Show out.md in folder" })).toBeNull();
   });
 
-  it("a program is not a button, but can be shown in its folder", async () => {
+  it("a file Dots doesn't open is not a button, says why, and can be shown in its folder", async () => {
+    const why = "Dots only opens documents, images and media. Use Show in folder.";
     withFiles([file({ path: "C:\\work\\run.ps1", name: "run.ps1", can_open: false })]);
     renderApp(`/home/${dot.id}`);
     const view = within(await panel());
     expect(view.queryByRole("button", { name: "run.ps1" })).toBeNull();
-    expect(view.getByText("run.ps1")).toHaveAttribute(
-      "title",
-      "Dots doesn't open programs or scripts. Use Show in folder.",
-    );
-    expect(view.getByRole("button", { name: "Show run.ps1 in folder" })).toBeVisible();
+    expect(view.getByText("run.ps1")).toHaveAttribute("title", why);
+    // Said in the open, and read out with the folder button: not only in a tooltip.
+    expect(view.getByText(why)).toBeVisible();
+    expect(
+      view.getByRole("button", { name: "Show run.ps1 in folder" }),
+    ).toHaveAccessibleDescription(why);
   });
 
   it("hides with the toggle and remembers it", async () => {

@@ -665,7 +665,8 @@ pub async fn conversation_files(
 }
 
 /// Opens a file of the Files panel with its default app. The core answers the path from its
-/// own list, so the webview cannot open a path of its own, and it never opens a program.
+/// own list, so the webview cannot open a path of its own, and it opens only documents, images
+/// and media.
 #[tauri::command]
 pub async fn conversation_file_open(
     app: AppHandle,

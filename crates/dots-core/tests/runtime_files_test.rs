@@ -169,7 +169,9 @@ async fn written_files_come_from_every_tool() {
     assert_eq!(got, want);
     for f in &files {
         assert_eq!(f.source, FileSource::Written);
-        assert!(f.exists && f.can_open, "{f:?}");
+        assert!(f.exists, "{f:?}");
+        // A notebook is not a document Dots opens (attachments spec section 4.5.1).
+        assert_eq!(f.can_open, f.name != "n.ipynb", "{f:?}");
         assert_eq!(f.run_id, run.id);
     }
     let a = files.iter().find(|f| f.name == "a.md").unwrap();
@@ -320,6 +322,78 @@ async fn a_program_is_listed_but_not_opened() {
             .await
             .unwrap();
     assert_eq!(target, script);
+}
+
+/// A dot names a script with a trailing dot or space, or as a stream of a document: Windows
+/// would open the script itself. Such a name is not listed, and the script under its real
+/// name is listed but never opened.
+#[tokio::test]
+async fn a_name_windows_rewrites_never_opens() {
+    let t = start().await;
+    let d = dot(&t, "trickster").await;
+    let run = chat_run(&t, &d, None, 1, &[]).await;
+    touch(&ws(&t).join("run.cmd"));
+    touch(&ws(&t).join("a.exe.pdf"));
+    touch(&ws(&t).join("a.pdf.exe"));
+    touch(&ws(&t).join("x.docm"));
+    touch(&ws(&t).join("x.html"));
+    let base = ws(&t).to_string_lossy().to_string();
+    for name in ["run.cmd.", "run.cmd ", "a.pdf:evil.exe"] {
+        tool(
+            &t,
+            &run,
+            1,
+            "Write",
+            json!({"file_path": format!("{base}/{name}")}),
+        )
+        .await;
+    }
+    for name in ["RUN.CMD", "a.exe.pdf", "a.pdf.exe", "x.docm", "x.html"] {
+        tool(
+            &t,
+            &run,
+            2,
+            "Write",
+            json!({"file_path": format!("{base}/{name}")}),
+        )
+        .await;
+    }
+    let files = list(&t, &d, &[&run]).await;
+    let mut shown: Vec<(String, bool)> =
+        files.iter().map(|f| (f.name.clone(), f.can_open)).collect();
+    shown.sort();
+    assert_eq!(
+        shown,
+        vec![
+            ("RUN.CMD".to_string(), false),
+            ("a.exe.pdf".to_string(), true),
+            ("a.pdf.exe".to_string(), false),
+            ("x.docm".to_string(), false),
+            ("x.html".to_string(), false),
+        ]
+    );
+    let roots = [run.id.clone()];
+    for name in [
+        "run.cmd.",
+        "run.cmd ",
+        "RUN.CMD",
+        "a.pdf.exe",
+        "x.docm",
+        "x.html",
+    ] {
+        let e =
+            t.rt.conversation_file_target(&d.id, &roots, &format!("{base}/{name}"), true)
+                .await
+                .unwrap_err();
+        assert!(
+            matches!(&e, Error::Invalid(m) if m == PROGRAM)
+                || matches!(&e, Error::NotFound(m) if m == NOT_THERE),
+            "{name}: {e:?}"
+        );
+    }
+    t.rt.conversation_file_target(&d.id, &roots, &format!("{base}/a.exe.pdf"), true)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]

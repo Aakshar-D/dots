@@ -1251,7 +1251,13 @@ impl Runtime {
                 workspace.join(named)
             };
             let path = crate::chat_files::normalize(&joined);
-            if !crate::chat_files::is_inside(&path, &workspace) {
+            // A name Windows would read as another file (`run.cmd.`, `a.pdf:x.exe`) is left
+            // out: the list names files as they really are (attachments spec section 4.5.1).
+            let plain = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(crate::chat_files::plain_name);
+            if !plain || !crate::chat_files::is_inside(&path, &workspace) {
                 continue;
             }
             found.push((path, FileSource::Written, w.run_id, w.at));
@@ -1283,7 +1289,7 @@ impl Runtime {
                         run_id,
                         at,
                         exists: false,
-                        can_open: crate::chat_files::can_open(&path),
+                        can_open: false,
                     },
                 )),
             }
@@ -1292,6 +1298,7 @@ impl Runtime {
             .into_iter()
             .map(|(_, mut row)| {
                 row.exists = Path::new(&row.path).is_file();
+                row.can_open = row.exists && crate::chat_files::can_open_file(Path::new(&row.path));
                 row
             })
             .collect();
@@ -1300,7 +1307,8 @@ impl Runtime {
     }
 
     /// The file of the Files panel at `path`, to open (`open`) or to show in its folder: only a
-    /// path the list names and that is a file now. A program or script is never opened.
+    /// path the list names and that is a file now. Only a document, image or media file is
+    /// opened (`can_open_file`).
     pub async fn conversation_file_target(
         &self,
         dot_id: &str,

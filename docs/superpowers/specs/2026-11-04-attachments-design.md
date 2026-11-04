@@ -108,14 +108,23 @@ The person attached these files to this message. They are in your workspace and 
 
 - **`Runtime::conversation_files(dot_id, root_run_ids) -> Vec<ConversationFile>`**:
   - **attached**: the topic's files (as in §4.4) of the given topics. Path: the workspace copy if it is a file now, else the stored copy. `at` = the run's `queued_at`.
-  - **written**: `run_events` with `kind = 'tool_call'` of runs in the given topics (all triggers), whose tool is `Write`, `Edit`, `MultiEdit`, `NotebookEdit` (Claude) or `write_file`, `edit_file` (local engine). The path is `input.file_path`, or `input.notebook_path`. A relative path is joined to the run's `workspace_path`. Paths are normalized lexically. **Only paths inside the run's workspace are listed** *(builder's call: the owner's rule that paths stay inside the workspace; a call to a path outside, even a refused one, is left out)*. `at` = the event's `ts`.
+  - **written**: `run_events` with `kind = 'tool_call'` of runs in the given topics (all triggers), whose tool is `Write`, `Edit`, `MultiEdit`, `NotebookEdit` (Claude) or `write_file`, `edit_file` (local engine). The path is `input.file_path`, or `input.notebook_path`. A relative path is joined to the run's `workspace_path`. Paths are normalized lexically. A path whose file name ends in a dot or a space, or holds a `:`, is left out: Windows reads `run.cmd.` as `run.cmd` and `a.pdf:x.exe` as a stream of `a.pdf`, so the list would name a file other than the one it opens. **Only paths inside the run's workspace are listed** *(builder's call: the owner's rule that paths stay inside the workspace; a call to a path outside, even a refused one, is left out)*. `at` = the event's `ts`.
   - Merged by path (ignoring case on Windows). Each path keeps its newest `at`. It is `attached` if any of its sources is an attachment. Sorted newest first, then by path.
-  - `exists` = the path is a file now. `can_open` = its extension is not a program or script (§4.5.1).
+  - `exists` = the path is a file now. `can_open` = it exists and Dots may open it (§4.5.1).
 - **`Runtime::conversation_file_target(dot_id, root_run_ids, path) -> PathBuf`**: recomputes the list and answers the entry's path. It answers `NotFound` (`this file is no longer there`) when it is not listed or does not exist, so the app never opens a path the UI made up. "Open" also requires `can_open`.
 
-#### 4.5.1 Programs are never opened *(builder's call)*
+#### 4.5.1 Only documents, images and media are opened *(decided in the final review)*
 
-Opening a file runs its default handler. For a `.exe` or `.ps1` the dot wrote, that means running it. These extensions are shown but not opened; "Show in folder" still works: `exe com bat cmd ps1 psm1 vbs vbe js jse wsf wsh msi msp scr hta lnk url cpl reg jar pif application gadget msc scf inf appref-ms`. Refusal: `Dots doesn't open programs or scripts. Use Show in folder.`
+Opening a file runs its default program. For a `.exe`, `.ps1`, `.py` or a macro document the dot wrote, that means running code as the person, outside every approval rule. So "Open" uses an **allow-list**, not a block list. Only these extensions open:
+
+- documents and text: `pdf txt md rtf csv tsv json xml yaml yml toml log`;
+- images: `png jpg jpeg gif webp bmp tif tiff ico heic`;
+- audio and video: `mp3 wav m4a ogg flac mp4 mov webm mkv avi`;
+- Office documents without macros: `docx xlsx pptx odt ods odp`.
+
+Left out on purpose: `html`/`htm` and `svg` (a browser runs their script), macro formats (`docm`, `xlsm`, `pptm`), archives and disk images, and names without an extension. Everything else is listed, but only "Show in folder" works.
+
+The extension is read from the file name, lower-cased, and only when the name is plain: a name that ends in a dot or a space, or holds a `:`, never opens. The file must also be the one its name says: its canonical path (`std::fs::canonicalize`) must have the same file name, ignoring case on Windows, and that name must pass the same check. So `run.cmd.`, `run.cmd `, `RUN.CMD`, `a.pdf.exe`, `x.docm`, `x.html` and `a.pdf:evil.exe` never open, and `a.exe.pdf` does. The check is made when the list is made and again on "Open", which recomputes the list. Refusal: `Dots only opens documents, images and media. Use Show in folder.`
 
 ### 4.6 Send later *(adapt to the send-later code as merged)*
 
@@ -150,13 +159,13 @@ Opening a file runs its default handler. For a `.exe` or `.ps1` the dot wrote, t
   - at send, a staged file that is gone: **"An attached file is no longer there. Remove it and attach it again."**
 - Send is enabled with text or with at least one file, and never while a file is still being added.
 - The person's bubble: the text, then the files as chips (name · size), not clickable.
-- Header toggle: button **"Files"** with `aria-pressed`, title **"Hide files"** / **"Show files"**. It shows only when the conversation has files.
+- Header toggle: button **"Files"** with `aria-pressed`, title **"Hide files"** / **"Show files"**. It shows only when the conversation has files, and, like the panel, not below the `md` width.
 - Panel (`aside`, `aria-label="Files"`, heading **"Files"**), one row per file:
   - the name, as a button that opens the file (title: the full path);
   - under it, muted: **"Attached · `<day time>`"** or **"Changed by `<dot>` · `<day time>`"** (`localDayTime`);
   - a folder button: `aria-label` **"Show `<name>` in folder"**, title **"Show in folder"**;
   - a gone file: muted name, **"Gone"**, and no buttons;
-  - a program: the name is not a button, and its title is **"Dots doesn't open programs or scripts. Use Show in folder."**
+  - a file Dots does not open (§4.5.1): the name is not a button, its title is **"Dots only opens documents, images and media. Use Show in folder."**, and the same text is shown under it, muted, and is the folder button's description (`aria-describedby`), so keyboard and screen-reader users get it too.
   - errors from open and reveal show as the usual error toast.
 - The hide choice is kept per device in `localStorage` under **`dots.home.files`** (`"hidden"`, or absent for shown), like `dots.theme` and `dots.home.dot`. It is one choice for all dots. Shown is the default.
 
@@ -179,7 +188,7 @@ Opening a file runs its default handler. For a `.exe` or `.ps1` the dot wrote, t
 - Staging: the 25 MB limit at exactly `MAX_FILE_BYTES` (accepted) and one byte over (refused); a folder, a link and a missing path are each refused with their text; bytes with a hostile name.
 - Runner: copies before the engine starts; refreshes only missing files; never overwrites; `.gitignore` written; refuses a junctioned `attachments`; fails the run when its own file cannot be placed; worktree cleanup still removes an unchanged worktree that holds attachments; watcher removal leaves chat topics alone.
 - Prompt: the exact block in a first prompt, a resumed chat and after "Runs since your last message"; files only.
-- Files list: written paths from each tool and engine; relative paths joined; outside paths left out; merge and order; gone; `can_open`; the target check refuses an unlisted path.
+- Files list: written paths from each tool and engine; relative paths joined; outside paths left out; merge and order; gone; `can_open` by the allow-list (`run.cmd.`, `run.cmd `, `RUN.CMD`, `a.pdf.exe`, `x.docm`, `x.html` refused, `a.exe.pdf` opens, `a.pdf:evil.exe` not listed); the target check refuses an unlisted path.
 - App: the raw-bytes command; open and reveal resolve through the core; contract.
 - UI: paperclip, drop, paste; limits and refusal texts; chip removal calls `attachment_remove`; send passes the ids and clears the chips; bubble chips; the panel rows, gone, programs, toggle and its memory.
 

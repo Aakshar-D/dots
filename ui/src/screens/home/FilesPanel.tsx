@@ -1,5 +1,6 @@
 import { cn } from "cn";
 import { FileText, FolderOpen } from "lucide-react";
+import { useId } from "react";
 
 import { commands } from "@/api/commands";
 import type { ConversationFile } from "@/api/types";
@@ -7,7 +8,8 @@ import { Button } from "@/components/ui/button";
 import { localDayTime } from "@/lib/format";
 import { notifyError } from "@/lib/notify";
 
-const PROGRAM = "Dots doesn't open programs or scripts. Use Show in folder.";
+/// Why a listed file has no Open (attachments spec section 4.5.1).
+const NOT_OPENED = "Dots only opens documents, images and media. Use Show in folder.";
 
 /// The Files panel beside the conversation (attachments spec section 6): the files the person
 /// attached and the files the dot wrote or edited, newest first. A name opens its file, the
@@ -20,6 +22,7 @@ export function FilesPanel(props: {
   files: ConversationFile[];
 }) {
   const { dotId, roots } = props;
+  const ids = useId();
   const openFile = (path: string) =>
     commands.conversationFileOpen(dotId, roots, path).catch(notifyError);
   const reveal = (path: string) =>
@@ -31,8 +34,10 @@ export function FilesPanel(props: {
     >
       <h2 className="px-1 text-sm font-semibold">Files</h2>
       <ul className="flex flex-col gap-1">
-        {props.files.map((f) => {
+        {props.files.map((f, i) => {
           const what = f.source === "attached" ? "Attached" : `Changed by ${props.dotName}`;
+          const notOpened = f.exists && !f.can_open;
+          const why = `${ids}-why-${i}`;
           return (
             <li
               key={f.path}
@@ -51,7 +56,7 @@ export function FilesPanel(props: {
                   </button>
                 ) : (
                   <span
-                    title={f.exists ? PROGRAM : f.path}
+                    title={f.exists ? NOT_OPENED : f.path}
                     className={cn("truncate text-sm", !f.exists && "text-muted-foreground")}
                   >
                     {f.name}
@@ -60,12 +65,18 @@ export function FilesPanel(props: {
                 <span className="text-xs text-muted-foreground">
                   {f.exists ? `${what} · ${localDayTime(f.at)}` : "Gone"}
                 </span>
+                {notOpened && (
+                  <span id={why} className="text-xs text-muted-foreground">
+                    {NOT_OPENED}
+                  </span>
+                )}
               </div>
               {f.exists && (
                 <Button
                   size="icon-xs"
                   variant="ghost"
                   aria-label={`Show ${f.name} in folder`}
+                  aria-describedby={notOpened ? why : undefined}
                   title="Show in folder"
                   onClick={() => void reveal(f.path)}
                 >
@@ -80,13 +91,15 @@ export function FilesPanel(props: {
   );
 }
 
-/// The header's toggle of the Files panel: pressed while the panel shows.
+/// The header's toggle of the Files panel: pressed while the panel shows. Like the panel, it is
+/// not drawn below the `md` breakpoint.
 export function FilesToggle(props: { hidden: boolean; onToggle: () => void }) {
   return (
     <Button
       size="sm"
       variant="ghost"
       aria-pressed={!props.hidden}
+      className="hidden md:inline-flex"
       title={props.hidden ? "Show files" : "Hide files"}
       onClick={props.onToggle}
     >

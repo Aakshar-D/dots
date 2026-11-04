@@ -25,7 +25,7 @@ pub const WORKSPACE_DIR: &str = "attachments";
 
 pub const TOO_MANY: &str = "You can attach up to 10 files to a message.";
 pub const GONE: &str = "An attached file is no longer there. Remove it and attach it again.";
-pub const PROGRAM: &str = "Dots doesn't open programs or scripts. Use Show in folder.";
+pub const PROGRAM: &str = "Dots only opens documents, images and media. Use Show in folder.";
 pub const NOT_THERE: &str = "this file is no longer there";
 /// The start of a run's error when a file of its own message could not be put in place.
 pub const COPY_FAILED: &str = "could not put the attached files in the workspace";
@@ -38,48 +38,63 @@ fn unreadable(name: &str, e: impl std::fmt::Display) -> Error {
     Error::Invalid(format!("{name} could not be read: {e}"))
 }
 
-/// Extensions Dots shows but never opens: opening runs them (attachments spec section 4.5.1).
-const PROGRAMS: [&str; 28] = [
-    "exe",
-    "com",
-    "bat",
-    "cmd",
-    "ps1",
-    "psm1",
-    "vbs",
-    "vbe",
-    "js",
-    "jse",
-    "wsf",
-    "wsh",
-    "msi",
-    "msp",
-    "scr",
-    "hta",
-    "lnk",
-    "url",
-    "cpl",
-    "reg",
-    "jar",
-    "pif",
-    "application",
-    "gadget",
-    "msc",
-    "scf",
-    "inf",
-    "appref-ms",
+/// The extensions "Open" accepts (attachments spec section 4.5.1): documents, images and media
+/// whose default program does not run code from the file. Anything else is listed, but only
+/// shown in its folder.
+const OPENABLE: [&str; 38] = [
+    // Documents and text.
+    "pdf", "txt", "md", "rtf", "csv", "tsv", "json", "xml", "yaml", "yml", "toml", "log",
+    // Images.
+    "png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff", "ico", "heic",
+    // Audio and video.
+    "mp3", "wav", "m4a", "ogg", "flac", "mp4", "mov", "webm", "mkv", "avi",
+    // Office documents without macros.
+    "docx", "xlsx", "pptx", "odt", "ods", "odp",
 ];
 
-/// Whether Dots may open the file with its default handler: its extension is not a program's
-/// or a script's.
+/// Whether `name` is a file name Windows keeps as it is: no trailing dot or space (Windows drops
+/// them, so `run.cmd.` names `run.cmd`) and no `:` (`a.pdf:x.exe` names a stream of `a.pdf`).
+pub fn plain_name(name: &str) -> bool {
+    !name.contains(':') && name.trim_end_matches(['.', ' ']) == name
+}
+
+/// Whether Dots may open the file at `path` with its default program, by its name alone: a
+/// plain name (`plain_name`) whose extension, ignoring case, is in the allow-list.
 pub fn can_open(path: &Path) -> bool {
-    match path.extension() {
-        Some(ext) => {
-            let ext = ext.to_string_lossy().to_ascii_lowercase();
-            !PROGRAMS.contains(&ext.as_str())
-        }
-        None => true,
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    if !plain_name(name) {
+        return false;
     }
+    let lower = name.to_ascii_lowercase();
+    match Path::new(&lower).extension().and_then(|e| e.to_str()) {
+        Some(ext) => OPENABLE.contains(&ext),
+        None => false,
+    }
+}
+
+/// Whether Dots may open the file at `path` now: `can_open` by its name, and the file it really
+/// is (its canonical path) has that same name, ignoring case on Windows, and is a file.
+pub fn can_open_file(path: &Path) -> bool {
+    if !can_open(path) {
+        return false;
+    }
+    let Ok(real) = std::fs::canonicalize(path) else {
+        return false;
+    };
+    if !real.is_file() || !can_open(&real) {
+        return false;
+    }
+    let same = |a: &std::ffi::OsStr, b: &std::ffi::OsStr| {
+        let (a, b) = (a.to_string_lossy(), b.to_string_lossy());
+        if cfg!(windows) {
+            a.to_lowercase() == b.to_lowercase()
+        } else {
+            a == b
+        }
+    };
+    matches!((path.file_name(), real.file_name()), (Some(a), Some(b)) if same(a, b))
 }
 
 /// A size as the UI's `formatBytes` writes it: `240 B`, `2.4 KB`, `30 MB`.

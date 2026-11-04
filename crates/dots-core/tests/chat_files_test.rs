@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use dots_core::chat_files::{can_open, human_size, ChatFiles, MAX_FILE_BYTES};
+use dots_core::chat_files::{can_open, can_open_file, human_size, ChatFiles, MAX_FILE_BYTES};
 use dots_core::Error;
 
 fn invalid(e: Error) -> String {
@@ -140,10 +140,67 @@ fn human_size_matches_the_ui() {
 }
 
 #[test]
-fn programs_cannot_be_opened() {
-    assert!(!can_open(Path::new("a.PS1")));
-    assert!(!can_open(Path::new("C:\\x\\setup.exe")));
-    assert!(!can_open(Path::new("app.appref-ms")));
-    assert!(can_open(Path::new("r.pdf")));
-    assert!(can_open(Path::new("README")));
+fn only_documents_images_and_media_open() {
+    for name in [
+        "r.pdf",
+        "a.exe.pdf",
+        "N.TXT",
+        "x.md",
+        "x.csv",
+        "x.json",
+        "x.yml",
+        "x.log",
+        "p.PNG",
+        "p.jpeg",
+        "p.heic",
+        "s.mp3",
+        "v.mkv",
+        "d.docx",
+        "d.xlsx",
+        "d.pptx",
+        "d.odt",
+    ] {
+        assert!(can_open(Path::new(name)), "{name}");
+    }
+    for name in [
+        "a.PS1",
+        "C:\\x\\setup.exe",
+        "app.appref-ms",
+        "README",
+        "run.cmd.",
+        "run.cmd ",
+        "run.cmd. . ",
+        "RUN.CMD",
+        "a.pdf.exe",
+        "a.pdf.",
+        "a.pdf ",
+        "x.docm",
+        "x.xlsm",
+        "x.html",
+        "x.htm",
+        "x.svg",
+        "cleanup.py",
+        "a.sh",
+        "a.zip",
+        "a.iso",
+        "a.pdf:evil.exe",
+        "a.exe:x.pdf",
+        ".pdf",
+    ] {
+        assert!(!can_open(Path::new(name)), "{name}");
+    }
+}
+
+#[test]
+fn a_file_opens_only_by_the_name_it_really_has() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("run.cmd"), "x").unwrap();
+    std::fs::write(dir.path().join("r.pdf"), "x").unwrap();
+    assert!(can_open_file(&dir.path().join("r.pdf")));
+    assert!(!can_open_file(&dir.path().join("run.cmd")));
+    assert!(!can_open_file(&dir.path().join("missing.pdf")));
+    // Windows drops trailing dots and spaces: these name run.cmd, and r.pdf.
+    assert!(!can_open_file(&dir.path().join("run.cmd.")));
+    assert!(!can_open_file(&dir.path().join("run.cmd ")));
+    assert!(!can_open_file(&dir.path().join("r.pdf.")));
 }

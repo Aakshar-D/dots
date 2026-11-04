@@ -533,7 +533,8 @@ pub struct ConversationFile {
     pub at: String,
     /// The path is a file now.
     pub exists: bool,
-    /// Dots may open it: it is not a program or a script.
+    /// Dots may open it: it is a document, image or media file, by the name it really has
+    /// (attachments spec section 4.5.1).
     pub can_open: bool,
 }
 
