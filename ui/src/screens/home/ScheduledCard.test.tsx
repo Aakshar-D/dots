@@ -148,6 +148,28 @@ describe("a scheduled message's card", () => {
     expect(editTime(at(-MIN), now)).toEqual(new Date(now + 60 * MIN));
   });
 
+  it("saves a files-only message with no text", async () => {
+    const message = row({ text: "", attachments: [{ id: "A1", name: "r.pdf", size: 2458 }] });
+    backend.on("edit_scheduled_message", (args) => ({ ...message, due_at: args.dueAt as string }));
+    const user = userEvent.setup();
+    const { card } = show(message);
+    await user.click(within(card).getByRole("button", { name: "Edit" }));
+    const save = within(card).getByRole("button", { name: "Save" });
+    expect(save).toBeEnabled();
+    await user.click(save);
+    await waitFor(() => expect(backend.callsTo("edit_scheduled_message")).toHaveLength(1));
+    expect(backend.callsTo("edit_scheduled_message")[0].text).toBe("");
+  });
+
+  it("does not save a message left with neither text nor files", async () => {
+    const message = row({ attachments: [] });
+    const user = userEvent.setup();
+    const { card } = show(message);
+    await user.click(within(card).getByRole("button", { name: "Edit" }));
+    await user.clear(within(card).getByLabelText("Scheduled message"));
+    expect(within(card).getByRole("button", { name: "Save" })).toBeDisabled();
+  });
+
   it("discards an edit", async () => {
     const message = row();
     const user = userEvent.setup();

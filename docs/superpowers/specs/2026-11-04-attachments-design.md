@@ -133,7 +133,8 @@ The extension is read from the file name, lower-cased, and only when the name is
 
 - Scheduling with files: the schedule command takes `attachment_ids`. In the transaction that stores the scheduled message, those unsent rows get its `scheduled_id`. The same checks as §4.3 apply, except the names, which are fixed when it sends.
 - When it sends (the sweep, or "Send now"), the send path calls the chat path with the scheduled message's rows and its id. The rows link to the new run as in §4.3.
-- Cancel: the rows go with the scheduled message (cascade), and their folders are removed right away (the startup sweep is the backstop). Edit changes the text only; the files stay. To change the files, cancel and schedule again.
+- Cancel: the rows go with the scheduled message (cascade), and their folders are removed right away (the startup sweep is the backstop). Edit changes the text and the time only; the files stay. A message that waits with files may be saved with no text, in the core and in the card's Edit form. To change the files, cancel and schedule again.
+
 - If send later sends into a new conversation because the old one is gone, the files go there. Their names are fixed against that topic.
 - The scheduled card shows the files as chips, without ×.
 

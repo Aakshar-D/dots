@@ -202,7 +202,7 @@ export function editTime(dueAt: string, now: number): Date {
   return due - now < 2 * 60_000 ? new Date(now + 3_600_000) : new Date(due);
 }
 
-/// Edit: the text and the time, saved together.
+/// Edit: the text and the time, saved together. The text may be empty when files go with it.
 function EditForm(props: {
   message: ScheduledMessage;
   pending: boolean;
@@ -214,6 +214,8 @@ function EditForm(props: {
   const [text, setText] = useState(props.message.text);
   const [at, setAt] = useState(() => toPicker(editTime(props.message.due_at, Date.now())));
   const picked = fromPicker(at);
+  // A message that waits with files may have no text (attachments spec section 4.6).
+  const hasFiles = props.message.attachments.length > 0;
   return (
     <form
       className="flex w-full max-w-[75%] flex-col gap-2 self-end"
@@ -235,7 +237,7 @@ function EditForm(props: {
         <Button
           type="submit"
           size="xs"
-          disabled={props.pending || picked === null || text.trim() === ""}
+          disabled={props.pending || picked === null || (text.trim() === "" && !hasFiles)}
         >
           Save
         </Button>
