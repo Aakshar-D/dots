@@ -30,8 +30,8 @@ use dots_core::library_service::{
 };
 use dots_core::model::{
     Approval, DeliveryCounts, Dot, DotOverview, DotSpec, FollowUp, Inbox, Memory, Message, Run,
-    RunEventRecord, ScheduleSkip, SettingsSaved, Status, WatchHours, Watcher, WatcherConfig,
-    WorktreeDiff,
+    RunEventRecord, ScheduleSkip, ScheduledMessage, SettingsSaved, Status, WatchHours, Watcher,
+    WatcherConfig, WorktreeDiff,
 };
 use dots_core::policy::{Policy, Preset, RuleCandidate};
 use dots_core::schedule::Schedule;
@@ -626,6 +626,60 @@ pub async fn discard_delivery(state: State<'_, AppState>, run_id: String) -> Res
 #[tauri::command]
 pub async fn delivery_today(state: State<'_, AppState>, dot_id: String) -> Res<DeliveryCounts> {
     Ok(state.rt()?.delivery_today(&dot_id).await?)
+}
+
+/// Schedules `text` to `dot_id` at `due_at` (RFC 3339), in the topic of `root_run_id` or as a
+/// new topic (send later spec section 4.4).
+#[tauri::command]
+pub async fn schedule_message(
+    state: State<'_, AppState>,
+    dot_id: String,
+    text: String,
+    root_run_id: Option<String>,
+    due_at: String,
+) -> Res<ScheduledMessage> {
+    Ok(state
+        .rt()?
+        .schedule_message(&dot_id, &text, root_run_id.as_deref(), &due_at)
+        .await?)
+}
+
+/// The dot's pending scheduled messages, in due order.
+#[tauri::command]
+pub async fn scheduled_messages(
+    state: State<'_, AppState>,
+    dot_id: String,
+) -> Res<Vec<ScheduledMessage>> {
+    Ok(state.rt()?.scheduled_messages(&dot_id).await?)
+}
+
+/// **Send now** on a scheduled message.
+#[tauri::command]
+pub async fn send_scheduled_now(state: State<'_, AppState>, id: String) -> Res<ScheduledMessage> {
+    Ok(state.rt()?.send_scheduled_now(&id).await?)
+}
+
+/// **Edit** of a scheduled message: its text and time.
+#[tauri::command]
+pub async fn edit_scheduled_message(
+    state: State<'_, AppState>,
+    id: String,
+    text: String,
+    due_at: String,
+) -> Res<ScheduledMessage> {
+    Ok(state
+        .rt()?
+        .edit_scheduled_message(&id, &text, &due_at)
+        .await?)
+}
+
+/// **Cancel** of a scheduled message.
+#[tauri::command]
+pub async fn cancel_scheduled_message(
+    state: State<'_, AppState>,
+    id: String,
+) -> Res<ScheduledMessage> {
+    Ok(state.rt()?.cancel_scheduled_message(&id).await?)
 }
 
 #[tauri::command]

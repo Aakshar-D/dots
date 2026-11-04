@@ -597,6 +597,11 @@
     "retry_delivery",
     "discard_delivery",
     "delivery_today",
+    "schedule_message",
+    "scheduled_messages",
+    "send_scheduled_now",
+    "edit_scheduled_message",
+    "cancel_scheduled_message",
     "list_runs",
     "schedule_skips",
     "get_run",
@@ -1488,6 +1493,18 @@
       "active",
       "completed",
       "expired"
+    ],
+    "ScheduledStatus": [
+      "scheduled",
+      "sending",
+      "sent",
+      "failed",
+      "cancelled"
+    ],
+    "ScheduledWait": [
+      "busy",
+      "approval",
+      "usage_limit"
     ],
     "TriggerKind": [
       "schedule",
@@ -3921,6 +3938,50 @@
     "workflow_step_run_id": null,
     "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
   },
+  "RunSentLate": {
+    "base_commit": "0123abcd",
+    "branch": "dots/nightly-tests/01J0RUN",
+    "cost_usd": 1.32,
+    "delivered_at": "2026-10-09T12:00:00.000Z",
+    "delivery": "delivered",
+    "dismissed_at": null,
+    "dot_id": "01J0DOT",
+    "ended_at": "2026-10-09T12:00:00.000Z",
+    "error": null,
+    "hold_released": false,
+    "id": "01J0RUN5",
+    "parent_run_id": null,
+    "payload": {
+      "message": "Ship the release notes.",
+      "send_later": {
+        "due_at": "2026-11-05T09:00:00.000Z",
+        "id": "01J0SCHED",
+        "late": true,
+        "new_topic": false
+      },
+      "typed": true
+    },
+    "queued_at": "2026-10-09T12:00:00.000Z",
+    "quiet_limit_secs": null,
+    "quiet_since": null,
+    "quiet_stopped": false,
+    "retry_of": null,
+    "reviewed_at": null,
+    "root_run_id": "01J0RUN",
+    "session_id": "sess-1",
+    "started_at": "2026-10-09T12:00:00.000Z",
+    "status": "succeeded",
+    "summary": "All tests pass.",
+    "tokens_cache_read": 0,
+    "tokens_in": 1200,
+    "tokens_out": 340,
+    "trigger": "chat",
+    "undelivered_at": null,
+    "undelivered_reason": null,
+    "wait_reason": null,
+    "workflow_step_run_id": null,
+    "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
+  },
   "RunWaiting": {
     "base_commit": "0123abcd",
     "branch": "dots/nightly-tests/01J0RUN",
@@ -4474,6 +4535,40 @@
         }
       ],
       "type": "snooze_ended"
+    },
+    {
+      "message": {
+        "created_at": "2026-10-09T12:00:00.000Z",
+        "dot_id": "01J0DOT",
+        "due_at": "2026-11-05T09:00:00.000Z",
+        "error": null,
+        "id": "01J0SCHED",
+        "root_run_id": "01J0RUN",
+        "run_id": null,
+        "sent_at": null,
+        "status": "scheduled",
+        "text": "Ship the release notes.",
+        "updated_at": "2026-10-09T12:00:00.000Z",
+        "waiting": "busy"
+      },
+      "type": "scheduled_message_updated"
+    },
+    {
+      "message": {
+        "created_at": "2026-10-09T12:00:00.000Z",
+        "dot_id": "01J0DOT",
+        "due_at": "2026-11-05T09:00:00.000Z",
+        "error": "dot 'builder': its org 'acme' was removed",
+        "id": "01J0SCHED2",
+        "root_run_id": null,
+        "run_id": null,
+        "sent_at": null,
+        "status": "failed",
+        "text": "Ship the release notes.",
+        "updated_at": "2026-10-09T12:00:00.000Z",
+        "waiting": null
+      },
+      "type": "scheduled_message_updated"
     }
   ],
   "ScannedSkill": [
@@ -4557,6 +4652,34 @@
     "reason": "busy",
     "run_id": "01J0RUN",
     "slot_at": "2026-10-09T11:00:00Z"
+  },
+  "ScheduledMessage": {
+    "created_at": "2026-10-09T12:00:00.000Z",
+    "dot_id": "01J0DOT",
+    "due_at": "2026-11-05T09:00:00.000Z",
+    "error": null,
+    "id": "01J0SCHED",
+    "root_run_id": "01J0RUN",
+    "run_id": null,
+    "sent_at": null,
+    "status": "scheduled",
+    "text": "Ship the release notes.",
+    "updated_at": "2026-10-09T12:00:00.000Z",
+    "waiting": "busy"
+  },
+  "ScheduledMessageFailed": {
+    "created_at": "2026-10-09T12:00:00.000Z",
+    "dot_id": "01J0DOT",
+    "due_at": "2026-11-05T09:00:00.000Z",
+    "error": "dot 'builder': its org 'acme' was removed",
+    "id": "01J0SCHED2",
+    "root_run_id": null,
+    "run_id": null,
+    "sent_at": null,
+    "status": "failed",
+    "text": "Ship the release notes.",
+    "updated_at": "2026-10-09T12:00:00.000Z",
+    "waiting": null
   },
   "Settings": {
     "auto_install_updates": false,

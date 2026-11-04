@@ -1727,7 +1727,62 @@ pub fn samples() -> Value {
         },
     ]);
     inbox_marks_samples(&mut samples);
+    send_later_samples(&mut samples);
     samples
+}
+
+/// Send later (send later spec section 5): a scheduled message waiting for its topic, one that
+/// failed, their enums and event, and a chat run a scheduled message became, sent late.
+fn send_later_samples(samples: &mut Value) {
+    let waiting = ScheduledMessage {
+        id: "01J0SCHED".into(),
+        dot_id: "01J0DOT".into(),
+        root_run_id: Some("01J0RUN".into()),
+        text: "Ship the release notes.".into(),
+        due_at: "2026-11-05T09:00:00.000Z".into(),
+        status: ScheduledStatus::Scheduled,
+        waiting: Some(ScheduledWait::Busy),
+        error: None,
+        run_id: None,
+        sent_at: None,
+        created_at: TS.into(),
+        updated_at: TS.into(),
+    };
+    let failed = ScheduledMessage {
+        id: "01J0SCHED2".into(),
+        root_run_id: None,
+        status: ScheduledStatus::Failed,
+        waiting: None,
+        error: Some("dot 'builder': its org 'acme' was removed".into()),
+        ..waiting.clone()
+    };
+    let sent_late = Run {
+        id: "01J0RUN5".into(),
+        trigger: TriggerKind::Chat,
+        payload: Some(json!({
+            "message": "Ship the release notes.",
+            "typed": true,
+            "send_later": to(SentLater {
+                id: "01J0SCHED".into(),
+                due_at: "2026-11-05T09:00:00.000Z".into(),
+                late: true,
+                new_topic: false,
+            }),
+        })),
+        ..run()
+    };
+    samples["ScheduledMessage"] = to(&waiting);
+    samples["ScheduledMessageFailed"] = to(&failed);
+    samples["RunSentLate"] = to(sent_late);
+    samples["Enums"]["ScheduledStatus"] = to(ScheduledStatus::ALL);
+    samples["Enums"]["ScheduledWait"] = to(ScheduledWait::ALL);
+    samples["RuntimeEvent"]
+        .as_array_mut()
+        .expect("the RuntimeEvent samples")
+        .extend([
+            to(RuntimeEvent::ScheduledMessageUpdated { message: waiting }),
+            to(RuntimeEvent::ScheduledMessageUpdated { message: failed }),
+        ]);
 }
 
 /// Snooze and Done (snooze and done spec section 5): the Inbox's new sections, its marks and
