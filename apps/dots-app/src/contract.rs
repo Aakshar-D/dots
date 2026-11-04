@@ -407,6 +407,22 @@ fn memories() -> Vec<Memory> {
     ]
 }
 
+/// Weekdays, nine to six, in the computer's local time.
+fn watch_hours() -> WatchHours {
+    use chrono::{NaiveTime, Weekday};
+    WatchHours {
+        days: vec![
+            Weekday::Mon,
+            Weekday::Tue,
+            Weekday::Wed,
+            Weekday::Thu,
+            Weekday::Fri,
+        ],
+        start: NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+        end: NaiveTime::from_hms_opt(18, 0, 0).unwrap(),
+    }
+}
+
 /// A folder watcher that is on, an email one Dots paused on an error, a GitHub one it paused on
 /// a flood (watchers spec sections 3 and 4).
 fn watchers() -> Vec<Watcher> {
@@ -420,15 +436,23 @@ fn watchers() -> Vec<Watcher> {
             events: FolderEvent::ALL.to_vec(),
             recursive: true,
         }),
+        hours: None,
         enabled: true,
         paused_reason: None,
         last_error: None,
         last_event_at: Some(TS.into()),
         created_at: TS.into(),
         updated_at: TS.into(),
+        held_count: 0,
+        next_opening: None,
     };
     vec![
-        folder.clone(),
+        Watcher {
+            hours: Some(watch_hours()),
+            held_count: 4,
+            next_opening: Some("2026-10-26T09:00:00+01:00".into()),
+            ..folder.clone()
+        },
         Watcher {
             id: "01J0WAT2".into(),
             name: "Billing mail".into(),
@@ -1269,6 +1293,7 @@ pub fn samples() -> Value {
     samples["FollowUp"] = to(follow_ups());
     samples["Memory"] = to(memories());
     samples["Watcher"] = to(watchers());
+    samples["WatchHours"] = to(watch_hours());
     // Usage and limits (spec sections 5 and 6).
     samples["LimitsState"] = to(limits_states());
     samples["UsageSummary"] = to(usage_summary());

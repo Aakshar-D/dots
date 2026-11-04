@@ -1,4 +1,4 @@
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, NaiveTime, TimeZone, Utc, Weekday};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -1414,6 +1414,18 @@ impl WatcherConfig {
     }
 }
 
+/// The days and the time range a watcher listens in, in this computer's local time. A range
+/// whose `start` is after its `end` runs overnight and belongs to the day it starts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WatchHours {
+    #[serde(with = "crate::schedule::weekdays")]
+    pub days: Vec<Weekday>,
+    #[serde(with = "crate::schedule::local_time")]
+    pub start: NaiveTime,
+    #[serde(with = "crate::schedule::local_time")]
+    pub end: NaiveTime,
+}
+
 /// A watcher of a dot (watchers spec section 3). `enabled` is the person's switch;
 /// `paused_reason` is set when Dots paused it. Times are RFC 3339 UTC (`util::now`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1422,12 +1434,20 @@ pub struct Watcher {
     pub dot_id: String,
     pub name: String,
     pub config: WatcherConfig,
+    /// When it listens; `None` is any time.
+    pub hours: Option<WatchHours>,
     pub enabled: bool,
     pub paused_reason: Option<PausedReason>,
     pub last_error: Option<String>,
     pub last_event_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    /// Events held for its next opening (the store counts them).
+    pub held_count: u32,
+    /// The next opening, RFC 3339 in local time with its offset (as `2026-10-26T09:00:00+01:00`),
+    /// set only while the watcher is outside its hours; the store leaves it `None` and the
+    /// service fills it.
+    pub next_opening: Option<String>,
 }
 
 impl Watcher {

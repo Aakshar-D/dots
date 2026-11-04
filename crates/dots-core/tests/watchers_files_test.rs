@@ -125,6 +125,7 @@ async fn the_sweep_removes_what_no_watcher_or_open_thread_needs() {
             &dot.id,
             "Mail",
             &WatcherConfig::Email(EmailConfig::new("me@gmail.com", "GMAIL_APP_PASSWORD")),
+            None,
         )
         .await
         .unwrap();
@@ -171,4 +172,52 @@ fn more_names_windows_or_people_misread_are_made_safe() {
     assert!(names.iter().all(|n| n.chars().count() <= 120), "{names:?}");
     assert_ne!(names[0].to_lowercase(), names[1].to_lowercase());
     assert!(names[1].ends_with(" (2).pdf"), "{}", names[1]);
+}
+
+/// Review Focus 3: a held event's files stay through the sweep while its row is there; a held
+/// folder whose row is gone is removed.
+#[tokio::test]
+async fn held_folders_survive_the_sweep() {
+    let (dir, store) = temp_store().await;
+    let files = WatcherFiles::new(dir.path().join("watchers"));
+    let dot = store
+        .create_dot(&spec("mail"), None, "default")
+        .await
+        .unwrap();
+    let w = store
+        .add_watcher(
+            &dot.id,
+            "Mail",
+            &WatcherConfig::Email(EmailConfig::new("me@gmail.com", "GMAIL_APP_PASSWORD")),
+            None,
+        )
+        .await
+        .unwrap();
+    let held = store
+        .hold_event(
+            &w.id,
+            &json!({"source": "email"}),
+            Some(&json!(["a.pdf"])),
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+    for id in [held.id.as_str(), "GONE"] {
+        files
+            .stage_held(&w.id, id, &[("a.pdf".into(), b"x".to_vec())])
+            .unwrap();
+    }
+    assert_eq!(
+        files.held_dir(&w.id, &held.id),
+        dir.path()
+            .join("watchers")
+            .join(&w.id)
+            .join("held")
+            .join(&held.id)
+    );
+    files.sweep(&store).await;
+    assert!(files.held_dir(&w.id, &held.id).join("a.pdf").is_file());
+    assert!(!files.held_dir(&w.id, "GONE").exists());
+    files.remove_held(&w.id, &held.id);
+    assert!(!files.held_dir(&w.id, &held.id).exists());
 }

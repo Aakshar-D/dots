@@ -418,10 +418,10 @@ export const commands = {
     call(T.InstructionProposal, "instruction_proposal_decide", { id, approve }),
 
   watchersList: (dotId: string) => call(T.Watcher.array(), "watchers_list", { dotId }),
-  watcherAdd: (dotId: string, name: string, config: T.WatcherConfig) =>
-    call(T.Watcher, "watcher_add", { dotId, name, config }),
-  watcherUpdate: (id: string, name: string, config: T.WatcherConfig) =>
-    call(T.Watcher, "watcher_update", { id, name, config }),
+  watcherAdd: (dotId: string, name: string, config: T.WatcherConfig, hours: T.WatchHours | null) =>
+    call(T.Watcher, "watcher_add", { dotId, name, config, hours }),
+  watcherUpdate: (id: string, name: string, config: T.WatcherConfig, hours: T.WatchHours | null) =>
+    call(T.Watcher, "watcher_update", { id, name, config, hours }),
   watcherDelete: (id: string) => call(nothing, "watcher_delete", { id }),
   watcherSetEnabled: (id: string, enabled: boolean) =>
     call(T.Watcher, "watcher_set_enabled", { id, enabled }),

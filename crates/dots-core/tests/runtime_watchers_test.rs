@@ -73,13 +73,13 @@ async fn the_person_adds_lists_changes_switches_and_deletes_watchers() {
     let dot = folder_dot(&t, "invoices").await;
     let mut events = t.rt.subscribe();
     let w =
-        t.rt.watcher_add(&dot.id, " Invoices folder ", folder(&t, "in"))
+        t.rt.watcher_add(&dot.id, " Invoices folder ", folder(&t, "in"), None)
             .await
             .unwrap();
     assert_eq!(w.name, "Invoices folder");
     assert_eq!(t.rt.watchers_list(&dot.id).await.unwrap(), vec![w.clone()]);
     let renamed =
-        t.rt.watcher_update(&w.id, "Bills", folder(&t, "in"))
+        t.rt.watcher_update(&w.id, "Bills", folder(&t, "in"), None)
             .await
             .unwrap();
     assert_eq!(renamed.name, "Bills");
@@ -100,13 +100,13 @@ async fn the_person_adds_lists_changes_switches_and_deletes_watchers() {
     let gone = t.rt.watcher_delete(&w.id).await.unwrap_err();
     assert!(matches!(gone, Error::NotFound(_)), "{gone:?}");
     let unknown =
-        t.rt.watcher_add("NODOT", "x", folder(&t, "in"))
+        t.rt.watcher_add("NODOT", "x", folder(&t, "in"), None)
             .await
             .unwrap_err();
     assert!(matches!(unknown, Error::NotFound(_)), "{unknown:?}");
     assert_eq!(
         refusal(
-            t.rt.watcher_add(&dot.id, " ", folder(&t, "in"))
+            t.rt.watcher_add(&dot.id, " ", folder(&t, "in"), None)
                 .await
                 .unwrap_err()
         ),
@@ -132,7 +132,7 @@ async fn a_watcher_paused_by_dots_waits_in_the_inbox_and_counts_for_its_dot() {
     let t = start(None).await;
     let dot = folder_dot(&t, "invoices").await;
     let w =
-        t.rt.watcher_add(&dot.id, "Invoices folder", folder(&t, "in"))
+        t.rt.watcher_add(&dot.id, "Invoices folder", folder(&t, "in"), None)
             .await
             .unwrap();
     let error = "The folder C:/in no longer exists.";
@@ -192,7 +192,7 @@ async fn pausing_schedules_pauses_watchers_and_a_deleted_dot_takes_its_watchers(
 
     let dot = folder_dot(&t, "gone").await;
     let w =
-        t.rt.watcher_add(&dot.id, "In", folder(&t, "in"))
+        t.rt.watcher_add(&dot.id, "In", folder(&t, "in"), None)
             .await
             .unwrap();
     t.rt.delete_dot(&dot.id).await.unwrap();
@@ -251,6 +251,7 @@ async fn a_dot_that_writes_into_its_watched_folder_does_not_wake_itself() {
             &dot.id,
             "Work folder",
             WatcherConfig::Folder(FolderConfig::new(&work.to_string_lossy())),
+            None,
         )
         .await
         .unwrap();
@@ -324,7 +325,7 @@ fn invoice_event() -> dots_core::watchers::SourceEvent {
 
 async fn email_watcher(t: &Rt, dot: &dots_core::model::Dot) -> dots_core::model::Watcher {
     let config = dots_core::model::EmailConfig::new("me@gmail.com", "GMAIL_APP_PASSWORD");
-    t.rt.watcher_add(&dot.id, "Billing mail", WatcherConfig::Email(config))
+    t.rt.watcher_add(&dot.id, "Billing mail", WatcherConfig::Email(config), None)
         .await
         .unwrap()
 }

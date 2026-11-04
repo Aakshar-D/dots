@@ -414,6 +414,14 @@ export const GithubConfig = z.strictObject({
   branches: z.array(z.string()),
 });
 export const WatcherConfig = z.discriminatedUnion("kind", [FolderConfig, EmailConfig, GithubConfig]);
+export const WatchDay = z.enum(["mon", "tue", "wed", "thu", "fri", "sat", "sun"]);
+// The days and the times of day a watcher starts its dot; "HH:MM" local time, an end before the
+// start runs past midnight.
+export const WatchHours = z.strictObject({
+  days: z.array(WatchDay),
+  start: z.string(),
+  end: z.string(),
+});
 export const Watcher = z.strictObject({
   id: z.string(),
   dot_id: z.string(),
@@ -425,6 +433,11 @@ export const Watcher = z.strictObject({
   last_event_at: nullable(z.string()),
   created_at: z.string(),
   updated_at: z.string(),
+  hours: nullable(WatchHours),
+  // Events held outside the hours, waiting for the next opening.
+  held_count: z.number(),
+  // The next opening, RFC 3339 with offset; null when there are no hours or it is open now.
+  next_opening: nullable(z.string()),
 });
 // A watcher Dots paused, as the Inbox lists it.
 export const PausedWatcher = z.strictObject({
@@ -1657,6 +1670,8 @@ export type FolderConfig = z.infer<typeof FolderConfig>;
 export type EmailConfig = z.infer<typeof EmailConfig>;
 export type GithubConfig = z.infer<typeof GithubConfig>;
 export type WatcherConfig = z.infer<typeof WatcherConfig>;
+export type WatchDay = z.infer<typeof WatchDay>;
+export type WatchHours = z.infer<typeof WatchHours>;
 export type Watcher = z.infer<typeof Watcher>;
 export type PausedWatcher = z.infer<typeof PausedWatcher>;
 export type UpdateNote = z.infer<typeof UpdateNote>;

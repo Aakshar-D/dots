@@ -415,6 +415,7 @@ impl Runtime {
             acting,
             data_dir: cfg.data_dir.clone(),
             sources: cfg.watcher_sources.clone(),
+            zone: Arc::new(chrono::Local),
         });
         watchers.set_paused(settings.schedules_paused);
         watchers.spawn(shutdown.clone());
@@ -2131,9 +2132,10 @@ impl Runtime {
         dot_id: &str,
         name: &str,
         config: crate::model::WatcherConfig,
+        hours: Option<crate::model::WatchHours>,
     ) -> Result<crate::model::Watcher> {
         self.require_for_dot(dot_id, Permission::EditDots).await?;
-        self.watchers.add(dot_id, name, config).await
+        self.watchers.add(dot_id, name, config, hours).await
     }
 
     pub async fn watcher_update(
@@ -2141,9 +2143,10 @@ impl Runtime {
         id: &str,
         name: &str,
         config: crate::model::WatcherConfig,
+        hours: Option<crate::model::WatchHours>,
     ) -> Result<crate::model::Watcher> {
         self.require_for_watcher(id).await?;
-        self.watchers.update(id, name, config).await
+        self.watchers.update(id, name, config, hours).await
     }
 
     pub async fn watcher_delete(&self, id: &str) -> Result<()> {

@@ -4462,6 +4462,17 @@
     ],
     "since": "2026-10-09T12:00:00.000Z"
   },
+  "WatchHours": {
+    "days": [
+      "mon",
+      "tue",
+      "wed",
+      "thu",
+      "fri"
+    ],
+    "end": "18:00",
+    "start": "09:00"
+  },
   "Watcher": [
     {
       "config": {
@@ -4478,10 +4489,23 @@
       "created_at": "2026-10-09T12:00:00.000Z",
       "dot_id": "01J0DOT",
       "enabled": true,
+      "held_count": 4,
+      "hours": {
+        "days": [
+          "mon",
+          "tue",
+          "wed",
+          "thu",
+          "fri"
+        ],
+        "end": "18:00",
+        "start": "09:00"
+      },
       "id": "01J0WAT1",
       "last_error": null,
       "last_event_at": "2026-10-09T12:00:00.000Z",
       "name": "Invoices folder",
+      "next_opening": "2026-10-26T09:00:00+01:00",
       "paused_reason": null,
       "updated_at": "2026-10-09T12:00:00.000Z"
     },
@@ -4498,10 +4522,13 @@
       "created_at": "2026-10-09T12:00:00.000Z",
       "dot_id": "01J0DOT",
       "enabled": true,
+      "held_count": 0,
+      "hours": null,
       "id": "01J0WAT2",
       "last_error": "Gmail refused the app password for me@gmail.com, or IMAP is off for it.",
       "last_event_at": null,
       "name": "Billing mail",
+      "next_opening": null,
       "paused_reason": "error",
       "updated_at": "2026-10-09T12:00:00.000Z"
     },
@@ -4524,10 +4551,13 @@
       "created_at": "2026-10-09T12:00:00.000Z",
       "dot_id": "01J0DOT",
       "enabled": true,
+      "held_count": 0,
+      "hours": null,
       "id": "01J0WAT3",
       "last_error": null,
       "last_event_at": "2026-10-09T12:00:00.000Z",
       "name": "Repo events",
+      "next_opening": null,
       "paused_reason": "flood",
       "updated_at": "2026-10-09T12:00:00.000Z"
     }
