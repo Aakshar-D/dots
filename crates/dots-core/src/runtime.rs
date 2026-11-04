@@ -19,7 +19,7 @@ use crate::engine::local::{self, LocalEngine};
 use crate::engine::{Engine, UnavailableEngine};
 use crate::events::{new_bus, Bus, RuntimeEvent};
 use crate::followups::FollowUps;
-use crate::inbox::{self, InboxEntry, InboxKey, InboxKind, MarkState};
+use crate::inbox::{self, InboxEntry, InboxKey, InboxKind, InboxMark, MarkState};
 use crate::library_service::LibraryService;
 use crate::model::{
     Approval, AttentionRun, ClaudeStatus, DeliveryCounts, Dot, DotOverview, DotSpec, EngineKind,
@@ -999,6 +999,69 @@ impl Runtime {
         }
         let _ = self.bus.send(RuntimeEvent::InboxUpdated);
         Ok(())
+    }
+
+    /// One wake pass (snooze and done spec section 4.5): deletes the marks of items that left
+    /// the Inbox on their own, then brings back every snooze whose time came, also one that
+    /// passed while Dots was closed. Sends `InboxUpdated` when anything changed, and one
+    /// `SnoozeEnded` for everything that woke. Returns the marks that woke, in Inbox order.
+    pub async fn wake_snoozed(&self) -> Result<Vec<InboxMark>> {
+        if self.store.count_marks().await? == 0 {
+            return Ok(Vec::new());
+        }
+        let entries = self.inbox_entries().await?;
+        let keys: HashSet<InboxKey> = entries.iter().map(|e| e.key.clone()).collect();
+        let pruned = self.store.prune_marks(&keys).await?;
+        let now = timestamp(self.clock.now());
+        let woke: HashSet<InboxKey> = self.store.wake_due(&now).await?.into_iter().collect();
+        let items: Vec<InboxMark> = entries
+            .into_iter()
+            .filter(|e| woke.contains(&e.key))
+            .map(|e| InboxMark {
+                kind: e.key.kind,
+                id: e.key.id,
+                title: e.title,
+                dot_id: e.dot_id,
+                snoozed_until: None,
+                done_at: None,
+                back_at: Some(now.clone()),
+            })
+            .collect();
+        if pruned > 0 || !woke.is_empty() {
+            let _ = self.bus.send(RuntimeEvent::InboxUpdated);
+        }
+        if !items.is_empty() {
+            let _ = self.bus.send(RuntimeEvent::SnoozeEnded {
+                items: items.clone(),
+            });
+        }
+        Ok(items)
+    }
+
+    /// Runs a wake pass at once, then one every 30 seconds of the clock, until shutdown or
+    /// until the runtime is dropped (it is held weakly). The app starts it once its event
+    /// forwarder listens, so the first pass's notice is heard. Each wait is measured from the
+    /// start of the pass before it.
+    pub fn spawn_snooze_waker(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
+        let runtime = Arc::downgrade(self);
+        let clock = self.clock.clone();
+        let shutdown = self.shutdown.clone();
+        tokio::spawn(async move {
+            loop {
+                let next = clock.now() + inbox::WAKE_EVERY;
+                let Some(rt) = runtime.upgrade() else {
+                    return;
+                };
+                if let Err(e) = rt.wake_snoozed().await {
+                    tracing::warn!("waking snoozed items failed: {e}");
+                }
+                drop(rt);
+                tokio::select! {
+                    _ = shutdown.cancelled() => return,
+                    _ = clock.sleep_until(next) => {}
+                }
+            }
+        })
     }
 
     /// Clears the dot's "Needs attention" (Scheduler v2 spec §8); the schedule is not
