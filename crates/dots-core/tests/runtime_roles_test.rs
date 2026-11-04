@@ -274,6 +274,57 @@ async fn viewer_cannot_create_edit_run_or_answer() {
     t.rt.shutdown();
 }
 
+/// The conversation is a read, so a Viewer sees its scheduled messages (send later spec
+/// section 4.4), but cannot schedule, send, edit or cancel one.
+#[tokio::test]
+async fn a_viewer_sees_scheduled_messages_but_cannot_change_them() {
+    let t = Rt::start().await;
+    t.join_as("member").await;
+    let dot =
+        t.rt.create_dot(t.triage(), Some(ACME.into()), None)
+            .await
+            .unwrap();
+    let due = timestamp(t.clock.now() + TimeDelta::hours(1));
+    let message =
+        t.rt.schedule_message(&dot.id, "Ship it", None, &due)
+            .await
+            .unwrap();
+    t.become_(2, Some("viewer")).await;
+
+    assert_eq!(
+        t.rt.scheduled_messages(&dot.id).await.unwrap(),
+        std::slice::from_ref(&message)
+    );
+    let run_text = viewer_cant("run dots");
+    assert_eq!(
+        refused(t.rt.schedule_message(&dot.id, "Again", None, &due).await),
+        run_text
+    );
+    assert_eq!(
+        refused(t.rt.send_scheduled_now(&message.id).await),
+        run_text
+    );
+    assert_eq!(
+        refused(
+            t.rt.edit_scheduled_message(&message.id, "Other", &due)
+                .await
+        ),
+        run_text
+    );
+    assert_eq!(
+        refused(t.rt.cancel_scheduled_message(&message.id).await),
+        run_text
+    );
+    assert_eq!(
+        t.rt.store()
+            .get_scheduled_message(&message.id)
+            .await
+            .unwrap(),
+        message
+    );
+    t.rt.shutdown();
+}
+
 #[tokio::test]
 async fn member_can_create_and_run() {
     let t = Rt::start().await;

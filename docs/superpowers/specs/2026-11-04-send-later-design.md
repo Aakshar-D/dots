@@ -111,7 +111,7 @@ Every change is one conditional `UPDATE … WHERE status IN (…)`, so the sende
 - **`cancel_scheduled_message(id)`**: only from `scheduled` or `failed` → `cancelled`; calls `release_staged(id)`.
 - **Races**: the conditional updates decide. The sender claimed it first → Edit and Cancel answer `Conflict("This message is being sent now.")` or, once sent, `Conflict("This message has already been sent.")`; the UI shows that and the card turns into the sent message. Cancel or Edit first → the sender's claim finds nothing and moves on. Two Send nows → one sends, the other gets `Conflict`.
 - **`scheduled_messages(dot_id)`**: the pending rows (`scheduled`, `sending`, `failed`), ordered `due_at, id`.
-- All of these need the `RunDots` permission on the dot (`require_run` for schedule and Send now; `require_for_dot(RunDots)` for Edit, Cancel and the list).
+- The changes need the `RunDots` permission on the dot (`require_run` for schedule and Send now; `require_for_dot(RunDots)` for Edit and Cancel). The list is a read and needs only `View`, as the conversation does: a Viewer sees the cards (and cannot use their buttons).
 
 ### 4.5 The sender, restarts, and sleep
 

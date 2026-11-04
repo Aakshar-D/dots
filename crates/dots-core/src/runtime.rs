@@ -2759,9 +2759,10 @@ impl Runtime {
         Ok(message)
     }
 
-    /// The dot's pending scheduled messages (scheduled, sending or failed), in due order.
+    /// The dot's pending scheduled messages (scheduled, sending or failed), in due order. A
+    /// read, so it needs only `View`, as the conversation does: a Viewer sees the cards too.
     pub async fn scheduled_messages(&self, dot_id: &str) -> Result<Vec<ScheduledMessage>> {
-        self.require_for_dot(dot_id, Permission::RunDots).await?;
+        self.require_for_dot(dot_id, Permission::View).await?;
         self.store.pending_scheduled_messages(dot_id).await
     }
 
