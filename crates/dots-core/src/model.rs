@@ -49,7 +49,7 @@ impl Delivery {
     /// Whether a run reached its dot (delivery tracking spec section 2): `delivered_at` means
     /// delivered; else `undelivered_at` means not delivered; else a run still to end is waiting.
     /// `None` for a run that ended with neither mark (cancelled before it started, or history
-    /// from before migration 0029).
+    /// from before migration 0030).
     pub fn of(
         status: RunStatus,
         delivered_at: Option<&str>,
