@@ -137,7 +137,7 @@ The extension is read from the file name, lower-cased, and only when the name is
 
 ### 4.7 Startup sweep and deleting a dot
 
-- At start, next to `watcher_files.sweep`, `ChatFiles::sweep`: delete rows with `run_id` NULL and `scheduled_id` NULL (no chat box survives a restart), then remove every folder under `<data>/chat-files/` that has no row.
+- At start, next to `watcher_files.sweep`, `ChatFiles::sweep`: delete rows with `run_id` NULL and `scheduled_id` NULL (no chat box survives a restart), and rows with `run_id` NULL held by a scheduled message that is `cancelled` or `sent` (Dots stopped before it released them), then remove every folder under `<data>/chat-files/` that has no row.
 - `delete_dot` reads the dot's attachment ids before the delete and removes their folders after it.
 
 ## 5. App

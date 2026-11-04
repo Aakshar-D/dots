@@ -118,6 +118,50 @@ async fn the_sweep_removes_unsent_files_and_stray_folders() {
     assert!(files_root(&dir).join(&sent.id).join("b.txt").is_file());
 }
 
+/// Dots stopped between cancelling a scheduled message and releasing its files: the sweep
+/// releases them. A message still scheduled keeps its files.
+#[tokio::test]
+async fn the_sweep_releases_the_files_of_a_cancelled_scheduled_message() {
+    let dir = tempfile::tempdir().unwrap();
+    let rt = runtime(&dir).await;
+    let dot = folder_dot(&rt, &dir).await;
+    let held = rt
+        .add_attachment_bytes(&dot.id, "a.txt", b"a")
+        .await
+        .unwrap();
+    let kept = rt
+        .add_attachment_bytes(&dot.id, "b.txt", b"b")
+        .await
+        .unwrap();
+    let store = rt.store();
+    let now = chrono::Utc::now();
+    let due = (now + chrono::Duration::hours(1)).to_rfc3339();
+    let cancelled = store
+        .insert_scheduled_with_files(&dot.id, None, "", &due, now, &[held.id.clone()])
+        .await
+        .unwrap();
+    store
+        .insert_scheduled_with_files(&dot.id, None, "", &due, now, &[kept.id.clone()])
+        .await
+        .unwrap();
+    // Cancelled in the store only: the release that follows never ran.
+    store
+        .cancel_scheduled_message(&cancelled.id, now)
+        .await
+        .unwrap()
+        .unwrap();
+
+    ChatFiles::new(files_root(&dir)).sweep(store).await;
+
+    assert!(matches!(
+        store.get_attachment(&held.id).await,
+        Err(Error::NotFound(_))
+    ));
+    assert!(!files_root(&dir).join(&held.id).exists());
+    assert!(store.get_attachment(&kept.id).await.is_ok());
+    assert!(files_root(&dir).join(&kept.id).join("b.txt").is_file());
+}
+
 #[tokio::test]
 async fn deleting_a_dot_removes_its_stored_files() {
     let dir = tempfile::tempdir().unwrap();

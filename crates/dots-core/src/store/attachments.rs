@@ -140,11 +140,14 @@ impl Store {
         rows.iter().map(attachment_from_row).collect()
     }
 
-    /// Deletes every staged row (no chat box survives a restart) and returns their ids.
+    /// Deletes every staged row (no chat box survives a restart), and every unsent row of a
+    /// scheduled message that was cancelled or sent (its release did not happen), and returns
+    /// their ids.
     pub async fn delete_unsent_attachments(&self) -> Result<Vec<String>> {
         Ok(sqlx::query_scalar(
-            "DELETE FROM chat_attachments WHERE run_id IS NULL AND scheduled_id IS NULL \
-             RETURNING id",
+            "DELETE FROM chat_attachments WHERE run_id IS NULL AND (scheduled_id IS NULL \
+             OR scheduled_id IN (SELECT id FROM scheduled_messages \
+             WHERE status IN ('cancelled', 'sent'))) RETURNING id",
         )
         .fetch_all(&self.pool)
         .await?)
