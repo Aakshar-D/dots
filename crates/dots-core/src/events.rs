@@ -3,7 +3,8 @@ use tokio::sync::broadcast;
 
 use crate::inbox::InboxMark;
 use crate::model::{
-    Approval, Message, PausedReason, Run, RunEventRecord, ScheduleSkip, WorkflowRun,
+    Approval, Message, PausedReason, Run, RunEventRecord, ScheduleSkip, ScheduledMessage,
+    WorkflowRun,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -43,6 +44,11 @@ pub enum RuntimeEvent {
     ScheduleSkipped {
         dot_id: String,
         skip: ScheduleSkip,
+    },
+    /// A scheduled message was scheduled, edited, cancelled, sent or failed, or its waiting
+    /// reason changed (send later spec section 4.5). The app notifies on a new failure.
+    ScheduledMessageUpdated {
+        message: ScheduledMessage,
     },
     /// The dot's schedule needs attention: an occurrence failed in the end (Scheduler v2 spec
     /// §6). Published once, when the flag goes from clear to set, with the failed run and its
