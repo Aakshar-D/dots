@@ -415,6 +415,21 @@ pub fn spawn_forwarder(app: AppHandle, rt: Arc<Runtime>) {
     });
 }
 
+/// The dot a notice is about, as the notice names it. An approval names only its run, so its
+/// dot is looked up in `notify`.
+pub fn notice_dot(notice: &Notice) -> Option<String> {
+    match notice {
+        Notice::ApprovalNeeded { .. } => None,
+        Notice::RunEnded { run } | Notice::NotDelivered { run } => Some(run.dot_id.clone()),
+        Notice::ScheduleFailed { dot_id, .. } => Some(dot_id.clone()),
+        Notice::MessagePosted { message } => Some(message.dot_id.clone()),
+        Notice::WatcherPaused { dot_id, .. } => Some(dot_id.clone()),
+        Notice::RunQuiet { dot_id, .. } => Some(dot_id.clone()),
+        // About the Inbox, not one dot: the person asked to be reminded, so never quiet.
+        Notice::Hold { .. } | Notice::BackFromSnooze { .. } => None,
+    }
+}
+
 async fn notify(app: &AppHandle, rt: &Runtime, notice: &Notice) {
     if let Notice::MessagePosted { message } = notice {
         if !message_notifies(message, rt.settings().await.notify_on_notes) {
@@ -423,13 +438,7 @@ async fn notify(app: &AppHandle, rt: &Runtime, notice: &Notice) {
     }
     let dot_id = match notice {
         Notice::ApprovalNeeded { run_id, .. } => rt.get_run(run_id).await.map(|r| r.dot_id).ok(),
-        Notice::RunEnded { run } | Notice::NotDelivered { run } => Some(run.dot_id.clone()),
-        Notice::ScheduleFailed { dot_id, .. } => Some(dot_id.clone()),
-        Notice::MessagePosted { message } => Some(message.dot_id.clone()),
-        Notice::WatcherPaused { dot_id, .. } => Some(dot_id.clone()),
-        Notice::RunQuiet { dot_id, .. } => Some(dot_id.clone()),
-        // About the Inbox, not one dot: the person asked to be reminded, so never quiet.
-        Notice::Hold { .. } | Notice::BackFromSnooze { .. } => None,
+        _ => notice_dot(notice),
     };
     // Nothing for the dot whose conversation the person is reading (needs-you spec 4.2).
     if quiet(dot_id.as_deref(), rt.viewing().as_deref()) {
@@ -1363,9 +1372,14 @@ mod tests {
             items: vec![mark("courier asks: Ship it?")],
         };
         assert_eq!(notice_route(&notice, ""), "/inbox");
-        // It is about no dot: the Inbox, and never quiet, whichever dot is viewed.
-        assert_eq!(click_route(&notice, None), "/inbox");
-        assert!(!quiet(None, Some("d")));
+        // It is about no dot, though its item has one: the Inbox, and never quiet, also while
+        // that dot is viewed.
+        assert_eq!(notice_dot(&notice), None);
+        assert_eq!(
+            click_route(&notice, notice_dot(&notice).as_deref()),
+            "/inbox"
+        );
+        assert!(!quiet(notice_dot(&notice).as_deref(), Some("d")));
     }
 
     #[test]
