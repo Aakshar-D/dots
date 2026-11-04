@@ -24,7 +24,7 @@ Success: from the Dots column, "Import from Claude Code" lists every agent found
    - `description`: Dots has no description field, so it is shown in the preview only and nothing is added to the prompt.
    - `instructions`: the body, trimmed. An empty body is an error ("has no instructions").
    - `engine`: claude. `model`: `sonnet`/`opus`/`haiku` as they are (Dots uses these aliases); `inherit` or none gives the `DotSpec::new` default; any other value is kept as a full model id.
-   - `workdir`: a project agent gets its project folder and the workspace mode of the dot that has that folder. Any other agent gets `<data dir>/agents/<dot name>` (made at import) in folder mode (*builder's call*: Dots has no default workdir and worktree mode needs a git repository).
+   - `workdir`: a project agent gets its project folder and the workspace mode of the dot that has that folder. Any other agent gets a folder of its own as any dot made without one does (`create_dot` with a blank workdir: `%USERPROFILE%\Dots\<name>`, folder mode, removed again if the create fails).
    - Everything else: the `DotSpec::new` defaults.
 4. **Policy**:
    - No `tools` listed: the Sandboxed preset.
@@ -62,3 +62,4 @@ Commands `scan_claude_agents` and `import_claude_agents`; registered in `command
 - Imports run one at a time behind a lock and read the dots' names inside it; a `Conflict` from the store (dot names are unique) moves on to the next number. A path given twice is imported once. A folder made for a dot that then fails is removed.
 - The project scan reads only the dots of the account and workspace in view.
 - The dialog keeps what it sent unticked and keeps Import off until the agents are read again.
+- After the approval guards (master): the model's bookkeeping tools (`PLUMBING_TOOLS`: `TodoWrite`, `Task`, `Agent`, plan mode, `ToolSearch`, its shells) are allowed by every policy, so a listed one adds no rule and is not called unknown. The private-folder guard turns any allow on a private place into ask, imported dots included.

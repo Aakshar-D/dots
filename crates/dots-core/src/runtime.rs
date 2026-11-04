@@ -1903,7 +1903,7 @@ impl Runtime {
     /// agent that fails is named in `failed` and the others go on. Imports run one at a time
     /// and read the dots' names when they start, so two never pick the same name; a dot made
     /// meanwhile under that name (the store refuses a second) moves the import on to the next
-    /// number.
+    /// number. An agent that is not a project's gets a new folder as a dot made without one.
     pub async fn import_claude_agents(
         &self,
         paths: Vec<String>,
@@ -1949,25 +1949,16 @@ impl Runtime {
             let mut outcome = Err(Error::Other("no name was free".into()));
             for _ in 0..5 {
                 let name = free_name(&item.listed.name, &mut taken);
-                let (workdir, mode, made) = match &item.project {
-                    Some((dir, mode)) => (dir.clone(), *mode, false),
-                    None => {
-                        let dir = self.data_dir.join("agents").join(&name);
-                        let made = !dir.exists();
-                        if let Err(e) = std::fs::create_dir_all(&dir) {
-                            outcome = Err(e.into());
-                            break;
-                        }
-                        (dir, crate::model::WorkspaceMode::Folder, made)
-                    }
+                // A project agent works in its project; any other gets a folder of its own from
+                // `create_dot` (a blank workdir), which removes it again if the create fails.
+                let (workdir, mode) = match &item.project {
+                    Some((dir, mode)) => (dir.to_string_lossy().into_owned(), *mode),
+                    None => (String::new(), crate::model::WorkspaceMode::Folder),
                 };
-                let spec = agent_spec(agent, &name, &workdir.to_string_lossy(), mode);
+                let spec = agent_spec(agent, &name, &workdir, mode);
                 outcome = self
                     .create_dot(spec, org_id.clone(), workspace_id.clone())
                     .await;
-                if outcome.is_err() && made {
-                    let _ = std::fs::remove_dir(&workdir);
-                }
                 if !matches!(outcome, Err(Error::Conflict(_))) {
                     break;
                 }

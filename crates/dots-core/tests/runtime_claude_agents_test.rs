@@ -179,13 +179,12 @@ async fn an_import_makes_dots_from_the_files() {
         Action::Ask
     );
     assert_eq!(r.workspace_mode, WorkspaceMode::Folder);
-    let own = rt
-        .dir
-        .path()
-        .join("data")
-        .join("agents")
-        .join("code-reviewer");
-    assert_eq!(PathBuf::from(&r.workdir), own);
+    // A folder of its own where a dot made without one gets it (`Config::new_dot_root`).
+    let own = PathBuf::from(&r.workdir);
+    assert_eq!(
+        own.parent().unwrap(),
+        rt.dir.path().join("data").join("new-dots")
+    );
     assert!(own.is_dir());
 
     let t = &done.created[1].spec;
