@@ -290,26 +290,4 @@ impl Store {
             })
             .collect()
     }
-
-    /// The topics' files with their runs (attachments spec section 4.5): `(attachment, run)`.
-    pub async fn topics_attachments(
-        &self,
-        dot_id: &str,
-        roots: &[String],
-    ) -> Result<Vec<(ChatAttachment, Run)>> {
-        let mut out = Vec::new();
-        for root in roots {
-            for a in self.topic_attachments(root).await? {
-                if a.dot_id != dot_id {
-                    continue;
-                }
-                let Some(run_id) = a.run_id.clone() else {
-                    continue;
-                };
-                let run = self.get_run(&run_id).await?;
-                out.push((a, run));
-            }
-        }
-        Ok(out)
-    }
 }

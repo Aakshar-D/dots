@@ -243,7 +243,7 @@ async fn a_deleted_file_is_gone() {
     assert_eq!(files.len(), 1);
     assert!(!files[0].exists);
     let e =
-        t.rt.conversation_file_target(&d.id, &[run.id.clone()], &files[0].path, false)
+        t.rt.conversation_file_target(&d.id, std::slice::from_ref(&run.id), &files[0].path, false)
             .await
             .unwrap_err();
     assert!(matches!(&e, Error::NotFound(m) if m == NOT_THERE), "{e:?}");
@@ -334,7 +334,7 @@ async fn topics_of_another_dot_are_ignored() {
     assert!(list(&t, &mine, &[&run]).await.is_empty());
     assert_eq!(list(&t, &theirs, &[&run]).await.len(), 1);
     let e =
-        t.rt.conversation_files("NODOT", &[run.id.clone()])
+        t.rt.conversation_files("NODOT", std::slice::from_ref(&run.id))
             .await
             .unwrap_err();
     assert!(matches!(e, Error::NotFound(_)), "{e:?}");
