@@ -41,6 +41,11 @@ export function Composer(props: {
   const [text, setText] = useState("");
   const files = props.files ?? [];
   const canAttach = (props.canAttach ?? false) && !props.disabled;
+  // Read when the picker closes: the box may have become unable to take files meanwhile.
+  const canAttachNow = useRef(canAttach);
+  useEffect(() => {
+    canAttachNow.current = canAttach;
+  }, [canAttach]);
   const adding = files.some((f) => f.size === null);
   const hasText = text.trim() !== "";
   // Files count as something to send only while they can be sent: not with an answer.
@@ -83,7 +88,8 @@ export function Composer(props: {
   }
   async function pick() {
     const picked = await open({ multiple: true, directory: false, title: "Attach files" });
-    if (picked === null) return;
+    // Picked while the box became disabled or started an answer: not added (section 3.1.11).
+    if (picked === null || !canAttachNow.current) return;
     const paths = Array.isArray(picked) ? picked : [picked];
     if (paths.length > 0) props.onAddPaths?.(paths);
   }
