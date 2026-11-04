@@ -484,6 +484,26 @@ export const ScheduleSkip = z.strictObject({
   created_at: z.string(),
 });
 
+// Send later (send later spec section 4.1): a chat message the person wrote for Dots to send
+// at `due_at` (RFC 3339 UTC) to the topic `root_run_id` (null: a new topic). Pending while
+// scheduled, sending or failed; `waiting` says why a due one has not gone yet.
+export const ScheduledStatus = z.enum(["scheduled", "sending", "sent", "failed", "cancelled"]);
+export const ScheduledWait = z.enum(["busy", "approval", "usage_limit"]);
+export const ScheduledMessage = z.strictObject({
+  id: z.string(),
+  dot_id: z.string(),
+  root_run_id: nullable(z.string()),
+  text: z.string(),
+  due_at: z.string(),
+  status: ScheduledStatus,
+  waiting: nullable(ScheduledWait),
+  error: nullable(z.string()),
+  run_id: nullable(z.string()),
+  sent_at: nullable(z.string()),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
 // Snooze and Done on the Inbox (snooze and done spec section 4.1): an item's kind and its id
 // as it is now, so a mark never hides a later item with the same subject.
 export const InboxKind = z.enum([
@@ -581,6 +601,9 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("inbox_updated") }),
   // Snoozed items came back in one wake pass (the app notifies); an `inbox_updated` goes with it.
   z.strictObject({ type: z.literal("snooze_ended"), items: z.array(InboxMark) }),
+  // A scheduled message was scheduled, edited, cancelled, sent or failed, or its waiting reason
+  // changed (the app notifies on a failure).
+  z.strictObject({ type: z.literal("scheduled_message_updated"), message: ScheduledMessage }),
   // A new limit reading, or a hold that started, ended or changed what it holds; `change` is
   // set when a hold started or ended (the app notifies).
   z.strictObject({
@@ -1623,6 +1646,9 @@ export type SettingsSaved = z.infer<typeof SettingsSaved>;
 export type BrowserStatus = z.infer<typeof BrowserStatus>;
 export type ScheduleView = z.infer<typeof ScheduleView>;
 export type ScheduleSkip = z.infer<typeof ScheduleSkip>;
+export type ScheduledStatus = z.infer<typeof ScheduledStatus>;
+export type ScheduledWait = z.infer<typeof ScheduledWait>;
+export type ScheduledMessage = z.infer<typeof ScheduledMessage>;
 export type DotOverview = z.infer<typeof DotOverview>;
 export type PendingApproval = z.infer<typeof PendingApproval>;
 export type ReviewRun = z.infer<typeof ReviewRun>;

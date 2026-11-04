@@ -48,8 +48,17 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
   const [pick, setPick] = useState<ReplyPick>({ kind: "default" });
   // The current conversation, loaded and with nothing in it, greets like a new chat
   // (conversational chat spec section 5). A failed load shows its errors instead.
+  // Scheduled messages wait as cards in the conversation, so a dot with one does not greet.
+  const scheduled = useQuery({
+    queryKey: keys.scheduledMessages(dot.id),
+    queryFn: () => commands.scheduledMessages(dot.id),
+  });
   const greeting =
-    rootRunId === undefined && !view.pending && view.list.isSuccess && view.shown.length === 0;
+    rootRunId === undefined &&
+    !view.pending &&
+    view.list.isSuccess &&
+    view.shown.length === 0 &&
+    (scheduled.data?.length ?? 0) === 0;
   if (gone) return <Navigate to={`/home/${dot.id}`} replace />;
   return (
     <div className="flex min-w-0 flex-1 flex-col">
@@ -84,6 +93,7 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
           checkIns={view.checkIns}
           dotName={dot.name}
           skipsDotId={rootRunId === undefined ? dot.id : undefined}
+          scheduledFor={{ dotId: dot.id, root: rootRunId }}
           proposals={proposals}
           onReply={(topic) => setPick({ kind: "topic", rootId: topic.rootId })}
         >

@@ -177,6 +177,19 @@ export const commands = {
   retryDelivery: (runId: string) => call(T.Run, "retry_delivery", { runId }),
   discardDelivery: (runId: string) => call(T.Run, "discard_delivery", { runId }),
   deliveryToday: (dotId: string) => call(T.DeliveryCounts, "delivery_today", { dotId }),
+  /// Send later: schedules `text` at `dueAt` (RFC 3339) in the topic `rootRunId`, or as a new
+  /// topic. Rejects with kind `invalid` for a time under a minute or over a year ahead.
+  scheduleMessage: (dotId: string, text: string, rootRunId: string | null, dueAt: string) =>
+    call(T.ScheduledMessage, "schedule_message", { dotId, text, rootRunId, dueAt }),
+  /// The dot's pending scheduled messages, in due order.
+  scheduledMessages: (dotId: string) =>
+    call(T.ScheduledMessage.array(), "scheduled_messages", { dotId }),
+  /// These reject with kind `conflict` once the message is being sent, was sent or cancelled.
+  sendScheduledNow: (id: string) => call(T.ScheduledMessage, "send_scheduled_now", { id }),
+  editScheduledMessage: (id: string, text: string, dueAt: string) =>
+    call(T.ScheduledMessage, "edit_scheduled_message", { id, text, dueAt }),
+  cancelScheduledMessage: (id: string) =>
+    call(T.ScheduledMessage, "cancel_scheduled_message", { id }),
   listRuns: (dotId: string | null, limit: number) =>
     call(T.Run.array(), "list_runs", { dotId, limit }),
   getRun: (id: string) => call(T.Run, "get_run", { id }),

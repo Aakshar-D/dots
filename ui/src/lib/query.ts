@@ -71,6 +71,8 @@ export const keys = {
   /// run_updated refreshes it.
   deliveryToday: (dotId: string) => ["runs", dotId, "delivery-today"] as const,
   thread: (runId: string) => ["thread", runId] as const,
+  /// A dot's pending scheduled messages (Send later).
+  scheduledMessages: (dotId: string) => ["scheduled-messages", dotId] as const,
   events: (runId: string) => ["events", runId] as const,
   approvals: (runId: string) => ["approvals", runId] as const,
   approvalRules: (approvalId: string) => ["approval-rules", approvalId] as const,

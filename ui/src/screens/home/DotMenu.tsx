@@ -34,6 +34,12 @@ export function DotMenu({ dot }: { dot: Dot }) {
     queryFn: () => commands.deliveryToday(dot.id),
     enabled: open,
   }).data;
+  // The messages waiting to be sent later (send later spec section 6).
+  const scheduled = useQuery({
+    queryKey: keys.scheduledMessages(dot.id),
+    queryFn: () => commands.scheduledMessages(dot.id),
+    enabled: open,
+  }).data;
   const setEnabled = useMutation({
     ...setDotEnabledMutation,
     // The editor fills its form from the cached dot when it opens, so that copy must never be
@@ -96,6 +102,11 @@ export function DotMenu({ dot }: { dot: Dot }) {
           {today && (
             <DropdownMenu.Label className="px-2 py-1.5 text-xs text-muted-foreground">
               {`Today: ${today.sent} sent · ${today.delivered} delivered · ${today.not_delivered} not delivered`}
+            </DropdownMenu.Label>
+          )}
+          {scheduled !== undefined && scheduled.length > 0 && (
+            <DropdownMenu.Label className="px-2 py-1.5 text-xs text-muted-foreground">
+              {`${scheduled.length} scheduled`}
             </DropdownMenu.Label>
           )}
         </DropdownMenu.Content>

@@ -16,7 +16,7 @@ import {
 } from "@/lib/home-topics";
 import { isOpenQuestion } from "@/lib/messages";
 import { notifyError } from "@/lib/notify";
-import { invalidate } from "@/lib/query";
+import { invalidate, keys } from "@/lib/query";
 import { onSingleClick } from "@/lib/single-click";
 import { Composer } from "@/screens/home/Composer";
 
@@ -104,6 +104,16 @@ export function ReplyArea(props: {
     onError: (error) => {
       notifyError(error);
       return reload();
+    },
+  });
+  // Send later: the text in the box goes to the reply target at `at`. A refusal is shown by
+  // the menu that asked (a notice, or the dialog's alert).
+  const schedule = useMutation({
+    mutationFn: ({ text, at }: { text: string; at: Date }) =>
+      commands.scheduleMessage(dotId, text, target?.rootId ?? null, at.toISOString()),
+    onSuccess: () => {
+      onPick({ kind: "default" });
+      invalidate(qc, keys.scheduledMessages(dotId));
     },
   });
   const answer = useMutation({
@@ -228,6 +238,9 @@ export function ReplyArea(props: {
         hint={hint}
         onSend={(message) =>
           answering ? answer.mutateAsync(message) : send.mutateAsync(message)
+        }
+        onSchedule={
+          answering ? undefined : (text, at) => schedule.mutateAsync({ text, at })
         }
       />
     </div>

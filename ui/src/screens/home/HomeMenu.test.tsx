@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { Dot } from "@/api/types";
 import { localTime } from "@/lib/format";
 import { backend, later } from "@/test/backend";
+import { sample } from "@/test/fixtures";
 import { chat, dot, home, overview, scheduled } from "@/test/home";
 import { renderApp } from "@/test/render";
 
@@ -210,5 +211,27 @@ describe("the dot's menu", () => {
     counts = { sent: 6, delivered: 5, not_delivered: 1 };
     act(() => backend.emit("runtime", { type: "run_updated", run: chat("r1", "10:00") }));
     expect(await within(menu).findByText("Today: 6 sent · 5 delivered · 1 not delivered")).toBeVisible();
+  });
+
+  it("counts the messages scheduled to the dot, and says nothing without one", async () => {
+    home([]);
+    backend.on("delivery_today", () => ({ sent: 0, delivered: 0, not_delivered: 0 }));
+    let rows = [sample.scheduledMessage, sample.scheduledFailed];
+    backend.on("scheduled_messages", () => rows);
+    const { user } = renderApp(`/home/${dot.id}`);
+    const menu = await openMenu(user);
+    expect(await within(menu).findByText("2 scheduled")).toBeVisible();
+    await user.keyboard("{Escape}");
+
+    rows = [];
+    act(() =>
+      backend.emit("runtime", {
+        type: "scheduled_message_updated",
+        message: { ...sample.scheduledMessage, status: "cancelled" },
+      }),
+    );
+    const again = await openMenu(user);
+    await within(again).findByText(/^Today:/);
+    await waitFor(() => expect(within(again).queryByText(/scheduled$/)).toBeNull());
   });
 });

@@ -24,6 +24,7 @@ mod memories;
 mod messages;
 mod orgs;
 mod runs;
+mod scheduled_messages;
 mod schedules;
 mod settings;
 mod skips;

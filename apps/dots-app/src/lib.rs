@@ -102,6 +102,11 @@ command_list![
     retry_delivery,
     discard_delivery,
     delivery_today,
+    schedule_message,
+    scheduled_messages,
+    send_scheduled_now,
+    edit_scheduled_message,
+    cancel_scheduled_message,
     list_runs,
     schedule_skips,
     get_run,
@@ -299,6 +304,9 @@ fn setup(app: &AppHandle, panics_logged: bool) -> Result<(), Box<dyn std::error:
         let waker = rt.clone();
         tauri::async_runtime::spawn(async move {
             waker.spawn_snooze_waker();
+            // The sender of scheduled messages (send later spec section 4.5): its first pass
+            // sends what came due while Dots was closed, and a failure's notice is heard.
+            waker.spawn_send_later();
         });
     }
     // Managed whenever the data folder is known, so the fatal page can go back too (updates UI

@@ -459,6 +459,55 @@ pub enum SlotStart {
     Busy(ScheduleSkip),
 }
 
+str_enum!(ScheduledStatus {
+    Scheduled => "scheduled",
+    Sending => "sending",
+    Sent => "sent",
+    Failed => "failed",
+    Cancelled => "cancelled",
+});
+str_enum!(ScheduledWait {
+    Busy => "busy",
+    Approval => "approval",
+    UsageLimit => "usage_limit",
+});
+
+/// A message the person wrote for Dots to send later (`scheduled_messages`, send later spec
+/// section 4.1).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScheduledMessage {
+    pub id: String,
+    pub dot_id: String,
+    /// The topic it was written in; `None` starts a new topic.
+    pub root_run_id: Option<String>,
+    pub text: String,
+    /// When it is due, RFC 3339 UTC.
+    pub due_at: String,
+    pub status: ScheduledStatus,
+    /// Why a due message has not gone yet.
+    pub waiting: Option<ScheduledWait>,
+    /// Why it was not sent (`failed`).
+    pub error: Option<String>,
+    /// The chat run it became (`sent`).
+    pub run_id: Option<String>,
+    pub sent_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// The note in the payload of a chat run that a scheduled message became (send later spec
+/// section 4.3).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SentLater {
+    /// The scheduled message's id.
+    pub id: String,
+    pub due_at: String,
+    /// Sent more than a minute after `due_at`.
+    pub late: bool,
+    /// Sent as a new topic because the one it was written in could not be continued.
+    pub new_topic: bool,
+}
+
 /// A slot that was not run (`schedule_skips`): the dot was still busy with an earlier run.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ScheduleSkip {
