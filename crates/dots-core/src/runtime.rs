@@ -434,6 +434,8 @@ impl Runtime {
         );
         workflows.set_orgs(orgs.clone());
         workflows.spawn(shutdown.clone());
+        // Scheduled workflows start from the scheduler's pass (teams spec section 5.1).
+        scheduler.set_workflows(workflows.clone());
         // The workflow tools reach the workflow runs through the check-ins (teams spec
         // section 7).
         checkins.set_workflows(&workflows);
