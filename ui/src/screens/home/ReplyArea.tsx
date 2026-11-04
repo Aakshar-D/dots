@@ -3,10 +3,11 @@ import { X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 
-import { commands } from "@/api/commands";
+import { commands, toCommandError } from "@/api/commands";
 import type { Message } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { orgRemovedText, useDotOrg } from "@/lib/dot-org";
+import { useFileDrop } from "@/lib/file-drop";
 import {
   defaultTarget,
   isActive,
@@ -16,9 +17,27 @@ import {
 } from "@/lib/home-topics";
 import { isOpenQuestion } from "@/lib/messages";
 import { notifyError } from "@/lib/notify";
-import { invalidate } from "@/lib/query";
+import { invalidate, keys } from "@/lib/query";
 import { onSingleClick } from "@/lib/single-click";
 import { Composer } from "@/screens/home/Composer";
+import { useStaged, type StagedFiles } from "@/screens/home/staged-files";
+
+/// The core's text for a staged file that is gone or was taken by another send.
+const GONE = "An attached file is no longer there. Remove it and attach it again.";
+
+/// Calls `go` with the staged ids, which are not removed while it is on its way.
+async function carrying<T>(staged: StagedFiles, go: (ids: string[]) => Promise<T>): Promise<T> {
+  const ids = staged.ids();
+  staged.sending(ids);
+  try {
+    const done = await go(ids);
+    staged.settled(ids, true);
+    return done;
+  } catch (error) {
+    staged.settled(ids, false);
+    throw error;
+  }
+}
 
 /// Which topic the next message goes to: the default, one the person chose with Reply, or a
 /// new topic (chat-first home spec, section 5).
@@ -57,14 +76,17 @@ export function ReplyArea(props: {
   const { dotId, dotName, shown, pick, onPick, olderRoot } = props;
   const qc = useQueryClient();
   const navigate = useNavigate();
-  const target = replyTarget(pick, shown, olderRoot);
+  const picked = replyTarget(pick, shown, olderRoot);
+  // A topic with nothing left to continue (its only message was discarded) gets a new topic.
+  const continues = picked !== undefined ? lastRun(picked) : undefined;
+  const target = continues !== undefined ? picked : undefined;
   const { removed } = useDotOrg(props.orgId);
   const blocked = removed && props.orgId !== null ? orgRemovedText(props.orgId) : undefined;
   const busy = target?.runs.some(isActive) ?? false;
   const approving = target?.runs.some((run) => run.status === "awaiting_approval") ?? false;
   // A reply resumes the last run's session. A run that ended before its engine had one (a
   // failed start, a cancel while queued) leaves nothing to resume: the core refuses it.
-  const closed = target !== undefined && !busy && lastRun(target).session_id === null;
+  const closed = continues !== undefined && !busy && continues.session_id === null;
   const runIds = new Set(shown.flatMap((topic) => topic.runs.map((run) => run.id)));
   const open = props.checkIns.filter(
     (m) => m.run_id !== null && runIds.has(m.run_id) && isOpenQuestion(m),
@@ -88,10 +110,12 @@ export function ReplyArea(props: {
   const follow = (rootId: string) => {
     if (olderRoot !== undefined && rootId !== olderRoot) void navigate(`/home/${dotId}`);
   };
+  const staged = useStaged();
   const send = useMutation({
     mutationFn: (message: string) =>
-      commands.chat(dotId, message, target ? lastRun(target).id : null),
+      carrying(staged, (ids) => commands.chat(dotId, message, continues?.id ?? null, ids)),
     onSuccess: (run) => {
+      staged.sent();
       onPick({ kind: "default" });
       follow(run.root_run_id);
       return reload();
@@ -99,8 +123,24 @@ export function ReplyArea(props: {
     // The core refuses a message when the topic it holds is ahead of this one. So the topics
     // are loaded again after any refusal, and the composer follows what they bring.
     onError: (error) => {
-      notifyError(error);
+      // A staged file that is gone is said under the chips, where it can be removed.
+      // When the box has gone, it is said as any other refusal.
+      if (toCommandError(error).message !== GONE || !staged.refuse(GONE)) notifyError(error);
       return reload();
+    },
+  });
+  // Send later: the text in the box goes to the reply target at `at`. A refusal is shown by
+  // the menu that asked (a notice, or the dialog's alert).
+  const schedule = useMutation({
+    mutationFn: ({ text, at }: { text: string; at: Date }) =>
+      carrying(staged, (ids) =>
+        commands.scheduleMessage(dotId, text, target?.rootId ?? null, at.toISOString(), ids),
+      ),
+    onSuccess: () => {
+      // The files wait with the scheduled message now.
+      staged.sent();
+      onPick({ kind: "default" });
+      invalidate(qc, keys.scheduledMessages(dotId));
     },
   });
   const answer = useMutation({
@@ -149,6 +189,12 @@ export function ReplyArea(props: {
         : closed
           ? "This topic cannot be continued"
           : `Message ${dotName}…`;
+  const composerDisabled =
+    blocked !== undefined ||
+    (answering ? questionBusy || answer.isPending : busy || send.isPending || closed);
+  // Files go with messages, not answers; and only into a box that can send.
+  const canAttach = !answering;
+  const dragging = useFileDrop(canAttach && !composerDisabled, staged.addPaths);
   return (
     <div className="mx-auto flex w-full max-w-[720px] flex-col gap-2 px-4 pb-4">
       {blocked && (
@@ -218,13 +264,20 @@ export function ReplyArea(props: {
         )}
       </div>
       <Composer
-        disabled={
-          blocked !== undefined ||
-          (answering ? questionBusy || answer.isPending : busy || send.isPending || closed)
-        }
+        disabled={composerDisabled}
         hint={hint}
+        files={staged.files}
+        onAddPaths={staged.addPaths}
+        onAddFiles={staged.addFiles}
+        onRemove={staged.remove}
+        refusals={staged.refusals}
+        canAttach={canAttach}
+        dragging={dragging}
         onSend={(message) =>
           answering ? answer.mutateAsync(message) : send.mutateAsync(message)
+        }
+        onSchedule={
+          answering ? undefined : (text, at) => schedule.mutateAsync({ text, at })
         }
       />
     </div>

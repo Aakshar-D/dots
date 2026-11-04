@@ -1,8 +1,10 @@
 use serde::Serialize;
 use tokio::sync::broadcast;
 
+use crate::inbox::InboxMark;
 use crate::model::{
-    Approval, Message, PausedReason, Run, RunEventRecord, ScheduleSkip, WorkflowRun,
+    Approval, Message, PausedReason, Run, RunEventRecord, ScheduleSkip, ScheduledMessage,
+    WorkflowRun,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -42,6 +44,11 @@ pub enum RuntimeEvent {
     ScheduleSkipped {
         dot_id: String,
         skip: ScheduleSkip,
+    },
+    /// A scheduled message was scheduled, edited, cancelled, sent or failed, or its waiting
+    /// reason changed (send later spec section 4.5). The app notifies on a new failure.
+    ScheduledMessageUpdated {
+        message: ScheduledMessage,
     },
     /// The dot's schedule needs attention: an occurrence failed in the end (Scheduler v2 spec
     /// §6). Published once, when the flag goes from clear to set, with the failed run and its
@@ -138,6 +145,15 @@ pub enum RuntimeEvent {
     /// what Settings, the Env tab and the Library show of it.
     OrgUpdated {
         org_id: String,
+    },
+    /// An Inbox item was snoozed, unsnoozed, marked done or undone, came back from snooze, or
+    /// its mark went because it left (snooze and done spec section 4.4): the Inbox and the
+    /// counts read again.
+    InboxUpdated,
+    /// Snoozed items came back at their time, in one wake pass (spec section 4.5). The app
+    /// notifies once for them all. An `InboxUpdated` goes with it.
+    SnoozeEnded {
+        items: Vec<InboxMark>,
     },
 }
 

@@ -5,6 +5,10 @@ use serde_json::{json, Value};
 use crate::checkins::Tool;
 use crate::engine::RunContext;
 use crate::model::EngineKind;
+use crate::policy::{cli_private_ask_rules, PLUMBING_TOOLS};
+
+/// The CLI's search and listing tools, never in its allow list.
+const SEARCH_TOOLS: &[&str] = &["Grep", "Glob", "LS"];
 
 pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
     let spec = &ctx.dot.spec;
@@ -33,6 +37,14 @@ pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
         String::new()
     });
     let (mut allow, deny) = spec.policy.cli_lists();
+    // Searches and listings always reach `approve`, even where the policy allows them: the CLI
+    // checks a search only against the folder it starts in, and Dots also asks when that
+    // folder holds a private place (approval guards spec section 3.4). Dots answers the rest
+    // with an allow at once.
+    allow.retain(|rule| {
+        let name = rule.split('(').next().unwrap_or(rule).trim();
+        !SEARCH_TOOLS.contains(&name)
+    });
     // The gateway checks every call of a run's MCP server (spec section 4), so the CLI does not
     // ask the `approve` tool for them first.
     allow.extend(
@@ -62,19 +74,28 @@ pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
     if let Some(apps) = ctx.tools.apps() {
         allow.extend(apps.model_names(EngineKind::Claude));
     }
-    // And of `start_workflow`, for a run that may start a workflow (teams spec section 7).
-    if !ctx.tools.startable().is_empty() {
-        allow.push(
-            crate::team_tools::Tool::StartWorkflow
-                .model_name(EngineKind::Claude)
-                .to_string(),
-        );
-    }
+    // And of the workflow tools the run has (teams spec section 7): `start_workflow` for a run
+    // that may start a workflow, a step's tools for a run of an open agent step.
+    allow.extend(
+        crate::team_tools::Tool::ALL
+            .into_iter()
+            .filter(|t| ctx.tools.offers(*t))
+            .map(|t| t.model_name(EngineKind::Claude).to_string()),
+    );
     // And of `propose_instructions`, for a run of a chat the person started (conversational
     // chat spec section 4).
     if ctx.tools.instructions() {
         allow.push(crate::instructions::model_name(EngineKind::Claude).to_string());
     }
+    // The model's plumbing tools never ask (approval guards spec section 5), unless a deny or
+    // an ask rule matches one, as `Policy::resolve_in` reads it: that one is left to the
+    // other lists and to the `approve` tool.
+    allow.extend(
+        PLUMBING_TOOLS
+            .iter()
+            .filter(|t| spec.policy.plumbing_allowed(t))
+            .map(|t| t.to_string()),
+    );
     if !allow.is_empty() {
         a.push("--allowedTools".into());
         a.extend(allow);
@@ -83,6 +104,12 @@ pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
         a.push("--disallowedTools".into());
         a.extend(deny);
     }
+    // The CLI allows a call that matches `--allowedTools` without asking Dots, so the private
+    // folders get ask rules of the CLI's own (`cli_settings`, written by the engine next to
+    // the MCP config): an ask rule beats an allow rule there, and the CLI then asks
+    // `approve`, where `Policy::resolve_in` decides (approval guards spec section 3.4).
+    a.push("--settings".into());
+    a.push(settings_path(mcp_config_path).to_string_lossy().to_string());
     for dir in ctx.tools.plugin_dirs() {
         a.push("--plugin-dir".into());
         a.push(dir.to_string_lossy().to_string());
@@ -92,6 +119,18 @@ pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
         a.push(session.clone());
     }
     a
+}
+
+/// The run's `--settings` file, next to its `--mcp-config` (`mcp-RUN.json` gives
+/// `mcp-RUN.settings.json`). A file and not an inline argument: a configured program may be a
+/// `.cmd`, and cmd.exe would read the JSON's quotes and `*` itself.
+pub fn settings_path(mcp_config_path: &Path) -> PathBuf {
+    mcp_config_path.with_extension("settings.json")
+}
+
+/// What the run's `--settings` file holds: the CLI's ask rules for the private folders.
+pub fn cli_settings() -> Value {
+    json!({ "permissions": { "ask": cli_private_ask_rules() } })
 }
 
 /// The run's `--mcp-config`: Dots' own `dots` server and, for each MCP session the run has open,

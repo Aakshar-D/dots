@@ -841,6 +841,50 @@ async fn approving_with_a_rule_writes_the_decision_and_the_policy_together() {
 }
 
 #[tokio::test]
+async fn no_allow_rule_is_saved_for_a_private_folder() {
+    let (_d, store) = temp_store().await;
+    let dot = store.create_dot(&spec("a"), None, "default").await.unwrap();
+    let run = store
+        .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    // The call touches a private folder: no rule is saved with its approval.
+    let ssh = store
+        .create_approval(&run.id, "Read", &json!({"file_path": "~/.ssh/id_rsa"}))
+        .await
+        .unwrap();
+    let rule = Rule::new("Read(~/.ssh/id_rsa)", Action::Allow);
+    let err = store
+        .approve_with_rule(&ssh.id, None, true, &rule)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, Error::Invalid(m) if m.contains("private folder")),
+        "{err:?}"
+    );
+    assert_eq!(
+        store.get_approval(&ssh.id).await.unwrap().status,
+        ApprovalStatus::Pending
+    );
+    assert_eq!(store.get_dot(&dot.id).await.unwrap(), dot);
+    // An ordinary call with a rule that names a private folder: refused too.
+    let plain = store
+        .create_approval(&run.id, "Read", &json!({"file_path": "a.txt"}))
+        .await
+        .unwrap();
+    let wide = Rule::new("Read(**/.env)", Action::Allow);
+    let err = store
+        .approve_with_rule(&plain.id, None, true, &wide)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::Invalid(_)), "{err:?}");
+    assert_eq!(store.get_dot(&dot.id).await.unwrap(), dot);
+    // A one-time approval still works.
+    let once = store.decide_approval(&ssh.id, true, None).await.unwrap();
+    assert_eq!(once.status, ApprovalStatus::Approved);
+}
+
+#[tokio::test]
 async fn a_rule_the_policy_already_holds_keeps_the_preset() {
     let (_d, store) = temp_store().await;
     let dot = store.create_dot(&spec("a"), None, "default").await.unwrap();

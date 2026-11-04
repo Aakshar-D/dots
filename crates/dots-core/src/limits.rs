@@ -32,13 +32,18 @@ pub const STOPPED_BY_LIMIT: &str = "stopped by Claude's usage limit";
 pub const HOLD_ENDED: &str = "Held runs are starting";
 pub const NOT_HELD: &str = "This run is not held.";
 
+/// How the refusal of a run at Claude's limit begins (`limit_reached`).
+const LIMIT_REACHED: &str = "Claude's limit is reached until ";
+
 /// "Claude's limit is reached until 15:10." `until` in local time: the time alone when it is
 /// today, else the weekday too.
 pub fn limit_reached(until: DateTime<Utc>, now: DateTime<Utc>) -> String {
-    format!(
-        "Claude's limit is reached until {}.",
-        local_time(until, now)
-    )
+    format!("{LIMIT_REACHED}{}.", local_time(until, now))
+}
+
+/// Whether `text` is the refusal of a run at Claude's limit (`limit_reached`).
+pub fn is_limit_reached(text: &str) -> bool {
+    text.starts_with(LIMIT_REACHED)
 }
 
 /// "Dots is holding background runs: Claude 5-hour usage is at 64%"

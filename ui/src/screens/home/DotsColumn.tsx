@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "cn";
 import { Plus } from "lucide-react";
-import type { KeyboardEvent } from "react";
+import { useState, type KeyboardEvent } from "react";
 import { Link } from "react-router";
 
 import { commands } from "@/api/commands";
@@ -13,6 +13,7 @@ import { dotStatus, lastLine, nextLine } from "@/lib/dot-status";
 import { keys } from "@/lib/query";
 import { StatusMark } from "@/screens/home/StatusMark";
 import { UnreadBadge } from "@/screens/home/UnreadBadge";
+import { NewDotDialog } from "@/screens/setup/NewDotDialog";
 
 /// The home's list of dots, like a list of chat contacts (chat-first home spec, section 3).
 /// `rows` come sorted; `openId` is the dot whose conversation is open.
@@ -29,10 +30,22 @@ export function DotsColumn({ rows, openId }: { rows: DotOverview[]; openId: stri
   // A dot whose queued run waits for Claude usage says so rather than "running".
   const held =
     useQuery({ queryKey: keys.limits, queryFn: commands.limitsGet }).data?.held_run_ids ?? [];
+  // A question the person snoozed or marked done does not make the dot wait for them.
+  const hidden =
+    useQuery({ queryKey: keys.inbox, queryFn: commands.inbox }).data?.hidden_messages ?? [];
   // A dot whose org is no longer joined says so; the orgs are asked for only when a dot has one.
   const orgs = useOrgList(rows.some((row) => row.dot.org_id !== null));
   // A Viewer, or a PC off the member list, can't make a dot in the account it works in.
   const refusal = useScopeRefusal("edit");
+  // New dot opens the setup view in a dialog; the form stays at /dots/new.
+  const [creating, setCreating] = useState(false);
+  // With no dot in view the home already shows the setup view: New dot goes there rather than
+  // opening a second one.
+  function newDot() {
+    const flow = document.querySelector<HTMLElement>("[data-setup-flow]");
+    if (rows.length > 0 || !flow) return setCreating(true);
+    (flow.querySelector<HTMLElement>("[data-setup-composer]") ?? flow).focus();
+  }
   // Up and Down move the focus to the dot above or below, Home and End to the first and the
   // last; Enter (the link's own) opens the dot in focus. Moving opens nothing, so that passing
   // over dots neither loads them nor marks their questions read.
@@ -70,13 +83,17 @@ export function DotsColumn({ rows, openId }: { rows: DotOverview[]; openId: stri
             New dot
           </Button>
         ) : (
-          <Button asChild variant="ghost" className="w-full justify-start">
-            <Link to="/dots/new">
-              <Plus aria-hidden />
-              New dot
-            </Link>
+          <Button
+            type="button"
+            variant="ghost"
+            className="w-full justify-start"
+            onClick={newDot}
+          >
+            <Plus aria-hidden />
+            New dot
           </Button>
         )}
+        {creating && <NewDotDialog onClose={() => setCreating(false)} />}
         {refusal && (
           <span id="new-dot-refusal" className="sr-only">
             {refusal}
@@ -100,7 +117,7 @@ export function DotsColumn({ rows, openId }: { rows: DotOverview[]; openId: stri
                 )}
               >
                 <span className="flex items-center gap-2">
-                  <StatusMark status={dotStatus(row, messages, held)} />
+                  <StatusMark status={dotStatus(row, messages, held, hidden)} />
                   <span className="truncate font-medium">{row.dot.name}</span>
                   <UnreadBadge row={row} />
                 </span>

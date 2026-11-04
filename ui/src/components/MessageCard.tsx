@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import { toast } from "sonner";
 
@@ -14,8 +14,9 @@ import { onSingleClick } from "@/lib/single-click";
 
 /// A dot's question or note in the Inbox (check-ins spec section 9). A question offers its
 /// choices, a reply box and Dismiss; a note offers Mark read. A question shown here counts as
-/// read, and stays open until it is answered or dismissed.
-export function MessageCard({ message }: { message: Message }) {
+/// read, and stays open until it is answered or dismissed. `actions` go at the right end of its
+/// header (the Inbox's Snooze and Done).
+export function MessageCard({ message, actions }: { message: Message; actions?: ReactNode }) {
   const qc = useQueryClient();
   const [text, setText] = useState("");
   // What a change shows up in: the messages, and the thread and runs an answer adds a run to.
@@ -54,30 +55,36 @@ export function MessageCard({ message }: { message: Message }) {
       aria-label={`${question ? "Question" : "Note"} from ${message.dot_name}`}
       className="flex flex-col gap-2 rounded-lg border p-3"
     >
-      <p className="flex items-center gap-2 text-xs text-muted-foreground">
-        <Link to={`/dots/${message.dot_id}`} className="font-medium text-foreground hover:underline">
-          {message.dot_name}
-        </Link>
-        <span>
-          {question ? "asks" : "says"} · {relativeTime(message.created_at)}
-        </span>
-        {message.run_id && (
-          <Link to={`/runs/${message.run_id}`} className="hover:underline">
-            Open the run
+      <div className="flex items-center gap-2">
+        <p className="flex min-w-0 flex-1 items-center gap-2 text-xs text-muted-foreground">
+          <Link
+            to={`/dots/${message.dot_id}`}
+            className="font-medium text-foreground hover:underline"
+          >
+            {message.dot_name}
           </Link>
-        )}
-        {/* The old chat address of the run opens its topic, in the conversation or alone. */}
-        <Link
-          to={
-            message.run_id
-              ? `/chat/${message.dot_id}/${message.run_id}`
-              : `/home/${message.dot_id}`
-          }
-          className="hover:underline"
-        >
-          Open conversation
-        </Link>
-      </p>
+          <span>
+            {question ? "asks" : "says"} · {relativeTime(message.created_at)}
+          </span>
+          {message.run_id && (
+            <Link to={`/runs/${message.run_id}`} className="hover:underline">
+              Open the run
+            </Link>
+          )}
+          {/* The old chat address of the run opens its topic, in the conversation or alone. */}
+          <Link
+            to={
+              message.run_id
+                ? `/chat/${message.dot_id}/${message.run_id}`
+                : `/home/${message.dot_id}`
+            }
+            className="hover:underline"
+          >
+            Open conversation
+          </Link>
+        </p>
+        {actions}
+      </div>
       <p className="whitespace-pre-wrap">{message.text}</p>
       {question ? (
         <>

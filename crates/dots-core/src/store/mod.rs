@@ -10,11 +10,13 @@ use crate::Result;
 mod api_keys;
 mod approvals;
 mod apps;
+mod attachments;
 mod browser;
 mod dots;
 mod env;
 mod follow_ups;
 mod held;
+mod inbox_marks;
 mod instructions;
 mod invites;
 mod library;
@@ -24,15 +26,18 @@ mod messages;
 mod orgs;
 mod report;
 mod runs;
+mod scheduled_messages;
 mod schedules;
 mod settings;
 mod skips;
+mod step_members;
 mod teams;
 #[doc(hidden)]
 pub use teams::TEAM_ORG_BACKFILL_SQL;
 mod upgrade;
 mod watchers;
 mod workflow_runs;
+mod workflow_schedules;
 mod workspaces;
 
 pub(crate) use upgrade::{auth_scheme, var_name};
@@ -46,6 +51,7 @@ pub struct Store {
 }
 
 pub use api_keys::ApiKeyRow;
+pub use attachments::{WrittenFile, WRITING_TOOLS};
 pub use held::HeldEvent;
 pub use invites::{DraftRow, InviteRow};
 pub use limits::LimitReading;

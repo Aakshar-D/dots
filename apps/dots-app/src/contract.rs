@@ -29,6 +29,7 @@ use dots_core::policy::{allow_candidates, Action, Policy, Preset};
 use dots_core::schedule::Schedule;
 use dots_core::scheduler::MAX_ATTEMPTS;
 use dots_core::settings::{Settings, MAX_CONCURRENT_RUNS, MAX_GLOBAL_INSTRUCTIONS};
+use dots_core::setup::{SetupAnswer, SetupApplied, SetupProposal, SetupRequest, SetupRound};
 use dots_core::skill_creator::{DraftRequest, DraftSummary};
 use dots_core::vault::org::{
     BaoAuth, CreatedInvite, DraftView, EditOutcome, InviteOffer, InviteState, InviteView,
@@ -407,6 +408,22 @@ fn memories() -> Vec<Memory> {
     ]
 }
 
+/// Weekdays, nine to six, in the computer's local time.
+fn watch_hours() -> WatchHours {
+    use chrono::{NaiveTime, Weekday};
+    WatchHours {
+        days: vec![
+            Weekday::Mon,
+            Weekday::Tue,
+            Weekday::Wed,
+            Weekday::Thu,
+            Weekday::Fri,
+        ],
+        start: NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+        end: NaiveTime::from_hms_opt(18, 0, 0).unwrap(),
+    }
+}
+
 /// A folder watcher that is on, an email one Dots paused on an error, a GitHub one it paused on
 /// a flood (watchers spec sections 3 and 4).
 fn watchers() -> Vec<Watcher> {
@@ -431,7 +448,12 @@ fn watchers() -> Vec<Watcher> {
         next_opening: None,
     };
     vec![
-        folder.clone(),
+        Watcher {
+            hours: Some(watch_hours()),
+            held_count: 4,
+            next_opening: Some("2026-10-26T09:00:00+01:00".into()),
+            ..folder.clone()
+        },
         Watcher {
             id: "01J0WAT2".into(),
             name: "Billing mail".into(),
@@ -535,6 +557,44 @@ fn run() -> Run {
         quiet_since: None,
         quiet_limit_secs: None,
         quiet_stopped: false,
+        delivered_at: Some(TS.into()),
+        undelivered_at: None,
+        undelivered_reason: None,
+        dismissed_at: None,
+        delivery: Some(dots_core::model::Delivery::Delivered),
+        wait_reason: None,
+    }
+}
+
+/// A chat message that did not get there.
+fn run_not_delivered() -> Run {
+    Run {
+        trigger: TriggerKind::Chat,
+        payload: None,
+        status: RunStatus::Failed,
+        error: Some("claude CLI not found".into()),
+        summary: None,
+        delivered_at: None,
+        undelivered_at: Some(TS.into()),
+        undelivered_reason: Some("claude CLI not found".into()),
+        delivery: Some(Delivery::NotDelivered),
+        ..run()
+    }
+}
+
+/// A chat message still waiting because the dot is busy.
+fn run_waiting() -> Run {
+    Run {
+        trigger: TriggerKind::Chat,
+        payload: None,
+        status: RunStatus::Queued,
+        summary: None,
+        started_at: None,
+        ended_at: None,
+        delivered_at: None,
+        delivery: Some(Delivery::Waiting),
+        wait_reason: Some(WaitReason::Busy),
+        ..run()
     }
 }
 
@@ -1170,6 +1230,11 @@ pub fn samples() -> Value {
                 dot_name: "nightly-tests".into(),
                 reason: "nightly-tests is in another workspace than the crew team.".into(),
             }],
+            not_delivered: vec![],
+            back: vec![],
+            snoozed: vec![],
+            done: vec![],
+            hidden_messages: vec![],
         }),
         // What `library_add` takes and the Library commands answer: a config of every kind and
         // transport, and entries of every kind (a plugin's own server among them).
@@ -1267,11 +1332,21 @@ pub fn samples() -> Value {
     });
     // Past the `json!` macro's recursion limit, so added here.
     samples["ScheduleSkip"] = to(schedule_skip());
+    samples["RunNotDelivered"] = to(run_not_delivered());
+    samples["RunWaiting"] = to(run_waiting());
+    samples["DeliveryCounts"] = to(DeliveryCounts {
+        sent: 5,
+        delivered: 4,
+        not_delivered: 1,
+    });
+    samples["Enums"]["Delivery"] = to(Delivery::ALL);
+    samples["Enums"]["WaitReason"] = to(WaitReason::ALL);
     samples["ContextDocuments"] = to(context_documents());
     samples["Message"] = to(messages());
     samples["FollowUp"] = to(follow_ups());
     samples["Memory"] = to(memories());
     samples["Watcher"] = to(watchers());
+    samples["WatchHours"] = to(watch_hours());
     // Usage and limits (spec sections 5 and 6).
     samples["LimitsState"] = to(limits_states());
     samples["UsageSummary"] = to(usage_summary());
@@ -1445,6 +1520,62 @@ pub fn samples() -> Value {
             model: "sonnet".into(),
             current: Some("---\nname: pr-tests\n---\nList the changed functions.\n".into()),
             change: Some("Mention snapshot tests".into()),
+        },
+    ]);
+    let proposal = SetupProposal {
+        name: "Downloads digest".into(),
+        instructions: "Read the Downloads folder and tell me what is new.".into(),
+        folder: Some("C:/Users/me/Dots/downloads-digest".into()),
+        schedule: Some(Schedule::cron("0 0 9 * * 1-5")),
+        preset: Preset::ReadOnly,
+        extras: vec!["web".into(), "mcp:github".into()],
+        uses: Uses {
+            mcp_servers: vec!["github".into()],
+            ..Uses::default()
+        },
+        first_message: "Start with today's new files.".into(),
+        notes: "Runs on weekdays at 9.".into(),
+    };
+    samples["SetupRequest"] = to([
+        SetupRequest {
+            description: "Every weekday at 9, read my Downloads folder".into(),
+            rounds: vec![SetupRound {
+                questions: vec!["Which folder?".into()],
+                answers: vec!["Downloads".into()],
+            }],
+            current: None,
+            change: None,
+            skip: false,
+        },
+        SetupRequest {
+            description: "Every weekday at 9, read my Downloads folder".into(),
+            rounds: vec![],
+            current: Some(proposal.clone()),
+            change: Some("Run at 8 instead".into()),
+            skip: true,
+        },
+    ]);
+    samples["SetupAnswer"] = to([
+        SetupAnswer::Questions {
+            questions: vec!["Which folder?".into(), "How often?".into()],
+        },
+        SetupAnswer::Proposal {
+            proposal,
+            new_dot_root: "C:/Users/me/Dots".into(),
+        },
+    ]);
+    samples["SetupApplied"] = to([
+        SetupApplied {
+            dot: dot(),
+            run_id: Some("01J0RUN".into()),
+            run_error: None,
+            notes: String::new(),
+        },
+        SetupApplied {
+            dot: dot(),
+            run_id: None,
+            run_error: Some("The first run could not start.".into()),
+            notes: "Left out the extra telepathy: Dots does not know it.".into(),
         },
     ]);
     samples["EnvEntry"] = to([
@@ -1652,7 +1783,169 @@ pub fn samples() -> Value {
             workspaces: BTreeMap::from([("platform".to_string(), WorkspaceRole::Admin)]),
         },
     ]);
+    inbox_marks_samples(&mut samples);
+    send_later_samples(&mut samples);
+    attachments_samples(&mut samples);
     samples
+}
+
+/// Attachments in chat (attachments spec section 5): a staged file, a chat run with a file,
+/// two rows of the Files panel (one gone) and their source.
+fn attachments_samples(samples: &mut Value) {
+    samples["StagedAttachment"] = to(StagedAttachment {
+        id: "01J0ATT".into(),
+        name: "report.pdf".into(),
+        size: 2458,
+    });
+    samples["RunWithAttachments"] = to(Run {
+        id: "01J0RUN6".into(),
+        trigger: TriggerKind::Chat,
+        payload: Some(json!({
+            "message": "Shorten the report.",
+            "typed": true,
+            "attachments": [{ "id": "01J0ATT", "name": "report.pdf", "size": 2458 }],
+        })),
+        ..run()
+    });
+    samples["ConversationFile"] = to(ConversationFile {
+        path: "C:\\work\\attachments\\01J0RUN6\\report.pdf".into(),
+        name: "report.pdf".into(),
+        source: FileSource::Attached,
+        run_id: "01J0RUN6".into(),
+        at: TS.into(),
+        exists: true,
+        can_open: true,
+    });
+    samples["ConversationFileGone"] = to(ConversationFile {
+        path: "C:\\work\\out\\summary.md".into(),
+        name: "summary.md".into(),
+        source: FileSource::Written,
+        run_id: "01J0RUN6".into(),
+        at: TS.into(),
+        exists: false,
+        can_open: true,
+    });
+    samples["Enums"]["FileSource"] = to(FileSource::ALL);
+}
+
+/// Send later (send later spec section 5): a scheduled message waiting for its topic, one that
+/// failed, their enums and event, and a chat run a scheduled message became, sent late.
+fn send_later_samples(samples: &mut Value) {
+    let waiting = ScheduledMessage {
+        id: "01J0SCHED".into(),
+        dot_id: "01J0DOT".into(),
+        root_run_id: Some("01J0RUN".into()),
+        text: "Ship the release notes.".into(),
+        due_at: "2026-11-05T09:00:00.000Z".into(),
+        status: ScheduledStatus::Scheduled,
+        waiting: Some(ScheduledWait::Busy),
+        error: None,
+        run_id: None,
+        sent_at: None,
+        created_at: TS.into(),
+        updated_at: TS.into(),
+        attachments: vec![StagedAttachment {
+            id: "01J0ATT2".into(),
+            name: "notes.pdf".into(),
+            size: 31_457,
+        }],
+    };
+    let failed = ScheduledMessage {
+        id: "01J0SCHED2".into(),
+        root_run_id: None,
+        status: ScheduledStatus::Failed,
+        waiting: None,
+        error: Some("dot 'builder': its org 'acme' was removed".into()),
+        ..waiting.clone()
+    };
+    let sent_late = Run {
+        id: "01J0RUN5".into(),
+        trigger: TriggerKind::Chat,
+        payload: Some(json!({
+            "message": "Ship the release notes.",
+            "typed": true,
+            "send_later": to(SentLater {
+                id: "01J0SCHED".into(),
+                due_at: "2026-11-05T09:00:00.000Z".into(),
+                late: true,
+                new_topic: false,
+            }),
+        })),
+        ..run()
+    };
+    samples["ScheduledMessage"] = to(&waiting);
+    samples["ScheduledMessageFailed"] = to(&failed);
+    samples["RunSentLate"] = to(sent_late);
+    samples["Enums"]["ScheduledStatus"] = to(ScheduledStatus::ALL);
+    samples["Enums"]["ScheduledWait"] = to(ScheduledWait::ALL);
+    samples["RuntimeEvent"]
+        .as_array_mut()
+        .expect("the RuntimeEvent samples")
+        .extend([
+            to(RuntimeEvent::ScheduledMessageUpdated { message: waiting }),
+            to(RuntimeEvent::ScheduledMessageUpdated { message: failed }),
+        ]);
+}
+
+/// Snooze and Done (snooze and done spec section 5): the Inbox's new sections, its marks and
+/// keys, the two events, and `InboxKeys`, the keys the core gives the Inbox and messages of
+/// these samples, so the UI's own key rules are checked against the core's. Last, because
+/// the Inbox sample is complete only once `apps_samples` added its app review.
+fn inbox_marks_samples(samples: &mut Value) {
+    use dots_core::inbox::{entries, InboxKind, InboxMark};
+
+    let mut inbox: Inbox =
+        serde_json::from_value(samples["Inbox"].clone()).expect("the Inbox sample");
+    inbox.not_delivered = vec![UndeliveredMessage {
+        run: run_not_delivered(),
+        dot_name: "nightly-tests".into(),
+    }];
+    let messages = messages();
+    let all = entries(&inbox, &messages);
+    let mark = |kind: InboxKind| {
+        let e = all
+            .iter()
+            .find(|e| e.key.kind == kind)
+            .expect("an item of the kind");
+        InboxMark {
+            kind,
+            id: e.key.id.clone(),
+            title: e.title.clone(),
+            dot_id: e.dot_id.clone(),
+            snoozed_until: None,
+            done_at: None,
+            back_at: None,
+        }
+    };
+    let back = InboxMark {
+        back_at: Some(TS.into()),
+        ..mark(InboxKind::Review)
+    };
+    let snoozed = InboxMark {
+        snoozed_until: Some("2026-10-21T09:00:00Z".into()),
+        ..mark(InboxKind::Message)
+    };
+    // A mark of an item that has no dot.
+    let done = InboxMark {
+        done_at: Some(TS.into()),
+        ..mark(InboxKind::Tools)
+    };
+    inbox.hidden_messages = vec![snoozed.id.clone()];
+    inbox.back = vec![back.clone()];
+    inbox.snoozed = vec![snoozed.clone()];
+    inbox.done = vec![done.clone()];
+    samples["InboxKeys"] = to(all.iter().map(|e| &e.key).collect::<Vec<_>>());
+    samples["InboxKey"] = to([back.key(), snoozed.key(), done.key()]);
+    samples["InboxMark"] = to([back.clone(), snoozed, done]);
+    samples["Inbox"] = to(&inbox);
+    samples["Enums"]["InboxKind"] = to(InboxKind::ALL);
+    samples["RuntimeEvent"]
+        .as_array_mut()
+        .expect("the RuntimeEvent samples")
+        .extend([
+            to(RuntimeEvent::InboxUpdated),
+            to(RuntimeEvent::SnoozeEnded { items: vec![back] }),
+        ]);
 }
 
 /// Instructions a dot proposed (conversational chat spec section 4), with `status`.
