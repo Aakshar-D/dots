@@ -164,7 +164,6 @@ fn same_entry(checked: &std::fs::Metadata, opened: &std::fs::Metadata) -> bool {
 }
 
 /// Whether `path` is missing or a real folder, never a link.
-
 fn missing_or_real_dir(path: &Path) -> std::io::Result<()> {
     match std::fs::symlink_metadata(path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -509,7 +508,6 @@ impl ChatFiles {
             )));
         }
         let copied = std::io::copy(&mut from, &mut out).and_then(|_| out.flush());
-
         if let Err(e) = copied {
             drop(out);
             let _ = std::fs::remove_file(&to);

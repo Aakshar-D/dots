@@ -76,7 +76,6 @@ CREATE INDEX chat_attachments_run ON chat_attachments(run_id);
 - `MAX_FILES = 10`, `MAX_FILE_BYTES = 25 * 1024 * 1024`.
 - **From a path** (picker, drop): `symlink_metadata`. A link (symlink or junction) is refused, a folder is refused, and a size over the limit is refused before anything is read. The file is then opened without following a link (on Windows with `FILE_FLAG_OPEN_REPARSE_POINT`; on Unix the opened file's device and inode must match the checked entry), and the handle is checked again, so a file swapped for a link after the check is refused too. The copy then reads at most `MAX_FILE_BYTES + 1` bytes, so a file that grows while it is copied is refused too. Paths come from the UI, the way a dot's workdir does today. The UI is trusted to pass what the person picked.
 - **From bytes** (paste): the same size limit, with the name from the UI made safe. The UI refuses a pasted file over the limit by its `File.size`, with the same text, before it reads its bytes, so a pasted video of gigabytes is never read into the webview's memory or sent over IPC. The core still checks.
-
 - Both check the dot (`get_dot`, `require_run`), insert the row (`run_id` and `scheduled_id` NULL) and answer `StagedAttachment { id, name, size }`.
 - **Removing** a staged file deletes its row and folder only while `run_id` and `scheduled_id` are both NULL. Otherwise it is a `Conflict`.
 
@@ -91,7 +90,6 @@ CREATE INDEX chat_attachments_run ON chat_attachments(run_id);
 
 - In the runner, right after the workspace is prepared and next to the watchers' `copy_attachments`, `copy_chat_files` lists the topic's files and copies those that are missing into `<workspace>/attachments/<root>/`. The topic's files are the rows linked to runs of the topic, leaving out runs that were dismissed and never delivered. The `.gitignore` (`*`) is written if it is missing.
 - **Safety while copying**: the root id must be letters and digits only. `attachments` and `attachments/<root>` must each be missing or a real folder, never a link or junction. Each file is created with `create_new`, so a link planted at its name is never followed. The canonical parent folder must be inside the canonical workspace. After each file is created, its canonical parent must still be the topic folder (a folder swapped for a junction in between); if not, the new file is removed before anything is written to it. When a check fails, the file is not copied.
-
 - A file that is already at its name is never overwritten. For an earlier message's file that is the dot's edit, and is fine. For a file of **this run's own message**, anything there other than Dots' own unchanged copy (a run started again) means the dot would be told the wrong file is the attached one, so it counts as not placed. Names are chosen so that this does not happen (§3.1.5); it is a backstop. A Retry after a run that edited its own message's file therefore fails the same way, and the person attaches the file again.
 - If a file of **this run's own message** cannot be put in place, the run fails before its engine starts with `could not put the attached files in the workspace: <error>`. Delivery tracking then marks it not delivered, with Retry. An earlier message's file that fails is logged and recorded as a notice on the run: `Dots could not copy <name> into the workspace: <error>`.
 - **The prompt**: the message text gets this block when the run's payload has attachments. The block is added in all three places the message goes: a first prompt, a resumed chat, and a message after "runs since your last message":
@@ -134,7 +132,6 @@ The extension is read from the file name, lower-cased, and only when the name is
 - Scheduling with files: the schedule command takes `attachment_ids`. In the transaction that stores the scheduled message, those unsent rows get its `scheduled_id`. The same checks as §4.3 apply, except the names, which are fixed when it sends.
 - When it sends (the sweep, or "Send now"), the send path calls the chat path with the scheduled message's rows and its id. The rows link to the new run as in §4.3.
 - Cancel: the rows go with the scheduled message (cascade), and their folders are removed right away (the startup sweep is the backstop). Edit changes the text and the time only; the files stay. A message that waits with files may be saved with no text, in the core and in the card's Edit form. To change the files, cancel and schedule again.
-
 - If send later sends into a new conversation because the old one is gone, the files go there. Their names are fixed against that topic.
 - The scheduled card shows the files as chips, without ×.
 
@@ -191,13 +188,11 @@ The extension is read from the file name, lower-cased, and only when the name is
 
 - Store: link in the same transaction as the run (no claim without rows); a partial link rolls back; names unique within a topic, ignoring case, with `.gitignore`, a watcher root's file names and the folder's entries taken; Retry relinks; the topic's files leave out dismissed undelivered runs; the sweep removes unsent rows and stray folders but keeps sent and scheduled ones.
 - Staging: the 25 MB limit at exactly `MAX_FILE_BYTES` (accepted) and one byte over (refused); a folder, a link and a missing path are each refused with their text; bytes with a hostile name.
-- Runner: copies before the engine starts; refreshes only missing files; never overwrites; `.gitignore` written; refuses a junctioned `attachments`; fails the run when its own file cannot be placed, or when something else is at its name;
- worktree cleanup still removes an unchanged worktree that holds attachments, and keeps one where the dot edited an attachment or wrote a file beside it;
- watcher removal leaves chat topics alone.
+- Runner: copies before the engine starts; refreshes only missing files; never overwrites; `.gitignore` written; refuses a junctioned `attachments`; fails the run when its own file cannot be placed, or when something else is at its name; worktree cleanup still removes an unchanged worktree that holds attachments, and keeps one where the dot edited an attachment or wrote a file beside it; watcher removal leaves chat topics alone.
 - Prompt: the exact block in a first prompt, a resumed chat and after "Runs since your last message"; files only.
 - Files list: written paths from each tool and engine; relative paths joined; outside paths left out; merge and order; gone; `can_open` by the allow-list (`run.cmd.`, `run.cmd `, `RUN.CMD`, `a.pdf.exe`, `x.docm`, `x.html` refused, `a.exe.pdf` opens, `a.pdf:evil.exe` not listed); the target check refuses an unlisted path.
 - App: the raw-bytes command; open and reveal resolve through the core; contract.
-- UI: paperclip, drop, paste; limits and refusal texts; chip removal calls `attachment_remove`; send passes the ids and clears the chips; bubble chips; the panel rows, gone, programs, toggle and its memory.
+- UI: paperclip, drop, paste; limits and refusal texts; chip removal calls `attachment_remove`; send passes the ids and clears the chips; bubble chips; the panel rows, gone, files Dots does not open (said in the open and on the folder button), toggle and its memory; a pasted file over 25 MB refused before it is read; files kept across a History topic and under a send on its way; a picker that closes after the box began an answer adds nothing; a files-only scheduled message can be edited.
 
 ## 9. Collisions with parallel work
 
