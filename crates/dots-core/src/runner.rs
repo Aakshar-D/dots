@@ -430,6 +430,30 @@ impl Runner {
         Ok(())
     }
 
+    /// Whether the run's topic folder under `attachments/` holds the dot's work: an attachment
+    /// it edited or a file it added (`ChatFiles::changed_in`). A failure to tell counts as
+    /// changed, so nothing is removed on a guess.
+    async fn chat_files_changed(&self, run: &Run, workspace: &Path) -> bool {
+        let Some(files) = self.chat_files.get() else {
+            return false;
+        };
+        let topic = match self.store.topic_attachments(&run.root_run_id).await {
+            Ok(topic) => topic,
+            Err(e) => {
+                tracing::warn!(run = %run.id, "reading the topic's files failed: {e}");
+                return true;
+            }
+        };
+        let (files, root, workspace) = (
+            files.clone(),
+            run.root_run_id.clone(),
+            workspace.to_path_buf(),
+        );
+        tokio::task::spawn_blocking(move || files.changed_in(&root, &topic, &workspace))
+            .await
+            .unwrap_or(true)
+    }
+
     /// Copies a watcher thread's staged attachments into the run's workspace; for the thread's
     /// root, stores and announces the payload with their paths, and answers the stored run.
     async fn copy_attachments(&self, run: &Run, workspace: &Path) -> Option<Run> {
@@ -1113,7 +1137,9 @@ impl Runner {
 
     /// What happens to a run's worktree when the run stops for good: a run of a workflow step has
     /// what it left uncommitted committed by Dots (teams spec section 6.1; a failure is a notice
-    /// on the run), then an unchanged worktree is removed. Errors are logged, never returned.
+    /// on the run), then an unchanged worktree is removed. A worktree whose chat files the dot
+    /// edited, or wrote beside, is kept (attachments spec section 7). Errors are logged, never
+    /// returned.
     async fn finish_workspace(
         &self,
         run: &Run,
@@ -1130,6 +1156,11 @@ impl Runner {
                     tracing::warn!(run = %run.id, "recording the notice failed: {e}");
                 }
             }
+        }
+        if ws_dot.spec.workspace_mode == WorkspaceMode::Worktree
+            && self.chat_files_changed(run, &prepared.path).await
+        {
+            return;
         }
         if let Err(e) = self.workspaces.cleanup_if_unchanged(ws_dot, prepared).await {
             tracing::warn!(run = %run.id, "workspace cleanup failed: {e}");

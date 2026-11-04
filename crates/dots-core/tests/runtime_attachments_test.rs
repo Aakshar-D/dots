@@ -356,6 +356,74 @@ async fn a_reply_finds_its_files_in_a_restored_worktree() {
     assert!(git_out(&repo, &["status", "--porcelain"]).is_empty());
 }
 
+/// A runtime on the fake CLI that plays the script at `script`, its queue held.
+async fn start_scripted(script: &Path) -> Rt {
+    let dir = tempfile::tempdir().unwrap();
+    let args_out = dir.path().join("args.json");
+    let mut cfg = Config::new(dir.path().join("data"));
+    cfg.port = 0;
+    cfg.claude_path = Some(PathBuf::from(env!("CARGO_BIN_EXE_fake-claude")));
+    cfg.claude_env.push((
+        "FAKE_CLAUDE_ARGS_OUT".into(),
+        args_out.to_string_lossy().to_string(),
+    ));
+    cfg.claude_env.push((
+        "FAKE_CLAUDE_SCRIPT".into(),
+        script.to_string_lossy().to_string(),
+    ));
+    let rt = Runtime::start(cfg).await.unwrap();
+    rt.hold_runs(true).await;
+    Rt { dir, rt, args_out }
+}
+
+/// A script whose engine writes `text` at `path` (relative to its workspace), then succeeds.
+fn writes(path: &str, text: &str) -> String {
+    json!([
+        {"emit": {"type": "system", "subtype": "init", "session_id": "$SESSION"}},
+        {"write": {"path": path, "text": text}},
+        {"emit": {"type": "result", "subtype": "success", "is_error": false,
+                  "result": "done", "usage": {"input_tokens": 1, "output_tokens": 1}}},
+    ])
+    .to_string()
+}
+
+/// A worktree dot's run that edits an attachment, or writes a file beside it: the worktree is
+/// kept, so the dot's work is not lost with it (attachments spec section 7).
+#[tokio::test]
+async fn a_worktree_keeps_what_the_dot_did_to_its_attachments() {
+    for (written, text) in [("a.txt", "shortened"), ("a-short.txt", "new")] {
+        let scripts = tempfile::tempdir().unwrap();
+        let script = scripts.path().join("script.json");
+        let t = start_scripted(&script).await;
+        let repo = t.dir.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        init_repo(&repo);
+        let mut s = spec("editor");
+        s.workdir = repo.to_string_lossy().to_string();
+        s.workspace_mode = WorkspaceMode::Worktree;
+        let dot = t.rt.create_dot(s, None, None).await.unwrap();
+        let a = stage(&t, &dot, "a.txt", "A").await;
+        let run =
+            t.rt.chat_with_files(&dot.id, "shorten", None, &ids(&[&a]))
+                .await
+                .unwrap();
+        let path = format!("attachments/{}/{written}", run.id);
+        std::fs::write(&script, writes(&path, text)).unwrap();
+        t.rt.hold_runs(false).await;
+        let ended = wait_status(t.rt.store(), &run.id, RunStatus::Succeeded, 30).await;
+        let tree = PathBuf::from(ended.workspace_path.clone().unwrap());
+        assert!(
+            tree.exists(),
+            "{written}: the worktree went with the dot's work"
+        );
+        assert_eq!(
+            std::fs::read_to_string(tree.join(&path)).unwrap(),
+            text,
+            "{written}"
+        );
+    }
+}
+
 #[cfg(windows)]
 fn junction(link: &Path, target: &Path) -> bool {
     std::process::Command::new("cmd")

@@ -160,6 +160,32 @@ fn real_dir(path: &Path) -> std::io::Result<()> {
     }
 }
 
+/// Whether `copy` is a real file (never a link) with the same bytes as `original`. Any failure
+/// to read either answers false.
+fn same_bytes(copy: &Path, original: &Path) -> bool {
+    let compare = || -> std::io::Result<bool> {
+        let meta = std::fs::symlink_metadata(copy)?;
+        if is_link(&meta) || !meta.is_file() || meta.len() != std::fs::metadata(original)?.len() {
+            return Ok(false);
+        }
+        let mut a = std::io::BufReader::new(std::fs::File::open(copy)?);
+        let mut b = std::io::BufReader::new(std::fs::File::open(original)?);
+        let (mut x, mut y) = ([0u8; 8192], [0u8; 8192]);
+        loop {
+            let n = a.read(&mut x)?;
+            if n == 0 {
+                // Same length, so the original is done too.
+                return Ok(true);
+            }
+            b.read_exact(&mut y[..n])?;
+            if x[..n] != y[..n] {
+                return Ok(false);
+            }
+        }
+    };
+    compare().unwrap_or(false)
+}
+
 /// Whether the topic root id may name a folder: letters and digits only.
 fn plain_id(id: &str) -> bool {
     !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric())
@@ -438,6 +464,47 @@ impl ChatFiles {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => tracing::warn!(dir = %dir.display(), "removing an attached file failed: {e}"),
         }
+    }
+
+    /// Whether the topic's folder in `workspace` holds anything other than Dots' own copies of
+    /// `files`, unchanged: an entry with no file of that name, a link or a folder, or a file
+    /// whose bytes differ from its stored copy (attachments spec section 7). A worktree with
+    /// such a folder is not removed as unchanged, though git ignores the folder. Anything that
+    /// cannot be read counts as changed.
+    pub fn changed_in(
+        &self,
+        root_run_id: &str,
+        files: &[ChatAttachment],
+        workspace: &Path,
+    ) -> bool {
+        if !plain_id(root_run_id) {
+            return false;
+        }
+        let dir = topic_dir(workspace, root_run_id);
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return false,
+            Err(_) => return true,
+        };
+        for entry in entries {
+            let Ok(entry) = entry else {
+                return true;
+            };
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name == IGNORE_FILE {
+                continue;
+            }
+            let Some(file) = files
+                .iter()
+                .find(|f| f.name.as_deref() == Some(name.as_str()))
+            else {
+                return true;
+            };
+            if !same_bytes(&entry.path(), &self.stored_path(file)) {
+                return true;
+            }
+        }
+        false
     }
 
     /// At start (attachments spec section 4.7): staged rows go (no chat box survives a
