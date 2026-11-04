@@ -152,6 +152,15 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
       invalidate(qc, keys.inbox);
       invalidate(qc, keys.overview);
       break;
+    case "inbox_updated":
+      // An item was snoozed, unsnoozed, marked done or undone, or came back: the Inbox, and
+      // the counts under the overview (the dots' badges and the Home total).
+      invalidate(qc, keys.inbox);
+      invalidate(qc, keys.overview);
+      break;
+    case "snooze_ended":
+      // For the notification; the `inbox_updated` sent with it refreshes the screens.
+      break;
     case "limits_updated":
       // The rail's bars read the limits; the Inbox's held runs and the Usage page follow.
       qc.setQueryData(keys.limits, event.limits);

@@ -113,6 +113,10 @@ command_list![
     decide_run_approvals,
     inbox,
     inbox_count,
+    inbox_snooze,
+    inbox_unsnooze,
+    inbox_done,
+    inbox_undo_done,
     dismiss_schedule_attention,
     worktree_diff,
     discard_worktree,
@@ -290,6 +294,12 @@ fn setup(app: &AppHandle, panics_logged: bool) -> Result<(), Box<dyn std::error:
         // A click on a notification opens what it is about (needs-you spec section 4.2).
         notify_routes::listen(app);
         events::spawn_forwarder(app.clone(), rt.clone());
+        // After the forwarder subscribes, so the first pass's notice is heard (snooze and done
+        // spec section 4.5). Spawned from the async runtime, which the waker's task needs.
+        let waker = rt.clone();
+        tauri::async_runtime::spawn(async move {
+            waker.spawn_snooze_waker();
+        });
     }
     // Managed whenever the data folder is known, so the fatal page can go back too (updates UI
     // spec section 4.4); only the checks need the runtime. What a failed install left is read

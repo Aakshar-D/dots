@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,11 +19,13 @@ use crate::engine::local::{self, LocalEngine};
 use crate::engine::{Engine, UnavailableEngine};
 use crate::events::{new_bus, Bus, RuntimeEvent};
 use crate::followups::FollowUps;
+use crate::inbox::{self, InboxEntry, InboxKey, InboxKind, InboxMark, MarkState};
 use crate::library_service::LibraryService;
 use crate::model::{
     Approval, AttentionRun, ClaudeStatus, DeliveryCounts, Dot, DotOverview, DotSpec, EngineKind,
     Inbox, MessageKind, NewRun, PendingApproval, ReviewRun, Run, RunEventRecord, RunStatus,
-    ScheduleChange, ScheduleSkip, ScheduleView, SettingsSaved, Status, TriggerKind, WorktreeDiff,
+    ScheduleChange, ScheduleSkip, ScheduleView, SettingsSaved, Status, TriggerKind,
+    UndeliveredMessage, WorktreeDiff,
 };
 use crate::policy::{allow_candidates, Action, Rule, RuleCandidate};
 use crate::runner::{Runner, RunnerConfig};
@@ -33,6 +35,7 @@ use crate::server::{self, ServerState};
 use crate::settings::Settings;
 use crate::skill_creator::SkillDrafts;
 use crate::store::Store;
+use crate::util::timestamp;
 use crate::vault::org::{
     http_client, os_protector, CreatedInvite, EditOutcome, JoinPreview, MembersView, OrgStatus,
     OrgSummary, OrgTimers, Orgs, RequestPreview, SourceCreds, OFFLINE_DIR,
@@ -738,10 +741,11 @@ impl Runtime {
         self.store.approvals_for_run(run_id).await
     }
 
-    /// Pending approvals, the finished, unreviewed thread ends that failed or kept a worktree
-    /// with changes, the schedules that need attention, and the MCP servers whose tool list
-    /// waits for review.
-    pub async fn inbox(&self) -> Result<Inbox> {
+    /// The whole Inbox, hidden items included, and the messages that wait: pending approvals,
+    /// the finished, unreviewed thread ends that failed or kept a worktree with changes, the
+    /// chat messages not delivered (not listed as runs to review too), the schedules that need
+    /// attention, the MCP servers whose tool list waits for review, and the rest.
+    async fn full_inbox(&self) -> Result<(Inbox, Vec<crate::model::Message>)> {
         let mut names = std::collections::HashMap::new();
         for dot in self.store.list_dots().await? {
             names.insert(dot.id, dot.spec.name);
@@ -756,11 +760,28 @@ impl Runtime {
                 approval,
             });
         }
+        let not_delivered: Vec<UndeliveredMessage> = self
+            .store
+            .undelivered_chat_runs()
+            .await?
+            .into_iter()
+            .map(|run| UndeliveredMessage {
+                dot_name: name(&run.dot_id),
+                run,
+            })
+            .collect();
+        // A chat message that did not reach its dot is listed under Not delivered until it is
+        // retried or discarded, and then it was dealt with: never as a run to review.
         let review_runs = self
             .store
             .unreviewed_thread_ends()
             .await?
             .into_iter()
+            .filter(|run| {
+                !(run.trigger == TriggerKind::Chat
+                    && run.undelivered_at.is_some()
+                    && run.delivered_at.is_none())
+            })
             .filter_map(|run| {
                 let worktree_exists = run.branch.is_some()
                     && run
@@ -795,7 +816,7 @@ impl Runtime {
                 proposal,
             })
             .collect();
-        Ok(Inbox {
+        let inbox = Inbox {
             approvals,
             review_runs,
             attention: self.store.list_schedule_attention().await?,
@@ -805,7 +826,88 @@ impl Runtime {
             instructions,
             app_reviews,
             team_scope: self.store.team_scope_issues().await?,
-        })
+            not_delivered,
+            back: Vec::new(),
+            snoozed: Vec::new(),
+            done: Vec::new(),
+            hidden_messages: Vec::new(),
+        };
+        Ok((inbox, self.store.waiting_messages().await?))
+    }
+
+    /// The Inbox as the person sees it (snooze and done spec section 4.3): every section
+    /// without the items snoozed or marked done, and the marks of the items still listed in
+    /// `back`, `snoozed` and `done` (the Done list only for 7 days).
+    pub async fn inbox(&self) -> Result<Inbox> {
+        let (mut inbox, messages) = self.full_inbox().await?;
+        let entries: HashMap<InboxKey, InboxEntry> = inbox::entries(&inbox, &messages)
+            .into_iter()
+            .map(|e| (e.key.clone(), e))
+            .collect();
+        let listed_since = timestamp(self.clock.now() - inbox::DONE_LISTED_FOR);
+        let mut hidden = HashSet::new();
+        for mut mark in self.store.list_marks().await? {
+            let Some(entry) = entries.get(&mark.key()) else {
+                continue;
+            };
+            mark.title = entry.title.clone();
+            mark.dot_id = entry.dot_id.clone();
+            if mark.back_at.is_some() {
+                inbox.back.push(mark);
+                continue;
+            }
+            hidden.insert(mark.key());
+            if mark.snoozed_until.is_some() {
+                inbox.snoozed.push(mark);
+            } else if mark.done_at.as_deref() >= Some(listed_since.as_str()) {
+                inbox.done.push(mark);
+            }
+        }
+        // Newest back and done first, soonest snooze first; ties by key, so the order holds.
+        inbox
+            .back
+            .sort_by(|a, b| b.back_at.cmp(&a.back_at).then(a.id.cmp(&b.id)));
+        inbox
+            .snoozed
+            .sort_by(|a, b| a.snoozed_until.cmp(&b.snoozed_until).then(a.id.cmp(&b.id)));
+        inbox
+            .done
+            .sort_by(|a, b| b.done_at.cmp(&a.done_at).then(a.id.cmp(&b.id)));
+        let shown = |kind: InboxKind, id: &str| !hidden.contains(&InboxKey::new(kind, id));
+        inbox
+            .approvals
+            .retain(|a| shown(InboxKind::Approval, &a.approval.id));
+        inbox
+            .not_delivered
+            .retain(|u| shown(InboxKind::NotDelivered, &u.run.id));
+        inbox
+            .review_runs
+            .retain(|r| shown(InboxKind::Review, &r.run.id));
+        inbox
+            .attention
+            .retain(|a| shown(InboxKind::Attention, &a.run_id));
+        inbox
+            .tools_changed
+            .retain(|t| shown(InboxKind::Tools, &format!("{}/{}", t.server_id, t.scope)));
+        inbox
+            .watchers
+            .retain(|w| shown(InboxKind::Watcher, &format!("{}@{}", w.watcher_id, w.at)));
+        inbox.held.retain(|h| shown(InboxKind::Held, &h.run_id));
+        inbox
+            .instructions
+            .retain(|i| shown(InboxKind::Instructions, &i.proposal.id));
+        inbox
+            .app_reviews
+            .retain(|r| shown(InboxKind::AppReview, &r.proposal.id));
+        inbox
+            .team_scope
+            .retain(|t| shown(InboxKind::TeamScope, &format!("{}/{}", t.team_id, t.dot_id)));
+        inbox.hidden_messages = messages
+            .iter()
+            .filter(|m| !shown(InboxKind::Message, &m.id))
+            .map(|m| m.id.clone())
+            .collect();
+        Ok(inbox)
     }
 
     pub async fn inbox_count(&self) -> Result<usize> {
@@ -823,7 +925,156 @@ impl Runtime {
             + inbox.app_reviews.len()
             // A team with a member outside its account or workspace (accounts design §6.3).
             + inbox.team_scope.len()
+            // A chat message that did not reach its dot (snooze and done spec section 3.9.7).
+            + inbox.not_delivered.len()
             + self.store.count_waiting_messages().await?)
+    }
+
+    /// The keys of everything in the Inbox now, hidden items included.
+    async fn inbox_entries(&self) -> Result<Vec<InboxEntry>> {
+        let (inbox, messages) = self.full_inbox().await?;
+        Ok(inbox::entries(&inbox, &messages))
+    }
+
+    /// `NotFound` unless every one of `items` is in the Inbox now.
+    async fn ensure_in_inbox(&self, items: &[InboxKey]) -> Result<()> {
+        let keys: HashSet<InboxKey> = self
+            .inbox_entries()
+            .await?
+            .into_iter()
+            .map(|e| e.key)
+            .collect();
+        if items.iter().all(|k| keys.contains(k)) {
+            Ok(())
+        } else {
+            Err(Error::NotFound("That is no longer in the Inbox.".into()))
+        }
+    }
+
+    /// Hides `items` until `until` (snooze and done spec section 4.4): later than now and at
+    /// most 365 days ahead. All of them or none.
+    pub async fn inbox_snooze(&self, items: &[InboxKey], until: DateTime<Utc>) -> Result<()> {
+        if items.is_empty() {
+            return Err(Error::Invalid("Pick something to snooze.".into()));
+        }
+        let now = self.clock.now();
+        if until <= now || until > now + inbox::SNOOZE_REACH {
+            return Err(Error::Invalid("Pick a time in the future.".into()));
+        }
+        self.ensure_in_inbox(items).await?;
+        self.store
+            .snooze_marks(items, &timestamp(until), &timestamp(now))
+            .await?;
+        let _ = self.bus.send(RuntimeEvent::InboxUpdated);
+        Ok(())
+    }
+
+    /// Marks the item done: hidden from the Inbox and the counts, with no time. An approval is
+    /// decided, not marked done.
+    pub async fn inbox_done(&self, item: &InboxKey) -> Result<()> {
+        if item.kind == InboxKind::Approval {
+            return Err(Error::Conflict(
+                "An approval is decided, not marked done.".into(),
+            ));
+        }
+        self.ensure_in_inbox(std::slice::from_ref(item)).await?;
+        self.store
+            .done_mark(item, &timestamp(self.clock.now()))
+            .await?;
+        let _ = self.bus.send(RuntimeEvent::InboxUpdated);
+        Ok(())
+    }
+
+    /// **Unsnooze**: puts a snoozed item back as it was, with no tag. A back mark is taken too,
+    /// so Unsnooze pressed just as the pass wakes the item is not an error.
+    pub async fn inbox_unsnooze(&self, item: &InboxKey) -> Result<()> {
+        if !self.store.delete_mark_if(item, MarkState::Snoozed).await? {
+            return Err(Error::NotFound("That is not snoozed.".into()));
+        }
+        let _ = self.bus.send(RuntimeEvent::InboxUpdated);
+        Ok(())
+    }
+
+    /// **Undo** on a done item: puts it back as it was.
+    pub async fn inbox_undo_done(&self, item: &InboxKey) -> Result<()> {
+        if !self.store.delete_mark_if(item, MarkState::Done).await? {
+            return Err(Error::NotFound("That is not done.".into()));
+        }
+        let _ = self.bus.send(RuntimeEvent::InboxUpdated);
+        Ok(())
+    }
+
+    /// One wake pass (snooze and done spec section 4.5): deletes the marks of items that left
+    /// the Inbox on their own, then brings back every snooze whose time came, also one that
+    /// passed while Dots was closed. Sends `InboxUpdated` when anything changed, and one
+    /// `SnoozeEnded` for everything that woke. Returns the marks that woke, in Inbox order.
+    pub async fn wake_snoozed(&self) -> Result<Vec<InboxMark>> {
+        if self.store.count_marks().await? == 0 {
+            return Ok(Vec::new());
+        }
+        // A mark made from here on is newer than the snapshot, which may not hold its item yet.
+        let now = timestamp(self.clock.now());
+        let mut entries = self.inbox_entries().await?;
+        let keys: HashSet<InboxKey> = entries.iter().map(|e| e.key.clone()).collect();
+        let pruned = self.store.prune_marks(&keys, &now).await?;
+        let woke: HashSet<InboxKey> = self.store.wake_due(&now).await?.into_iter().collect();
+        if !woke.is_empty() {
+            // An item that left since the snapshot is not announced; its mark goes next pass.
+            // The woken marks are already back, so a failed re-read keeps the first snapshot
+            // rather than losing their notice.
+            match self.inbox_entries().await {
+                Ok(fresh) => entries = fresh,
+                Err(e) => tracing::warn!("re-reading the Inbox after a wake failed: {e}"),
+            }
+        }
+        let items: Vec<InboxMark> = entries
+            .into_iter()
+            .filter(|e| woke.contains(&e.key))
+            .map(|e| InboxMark {
+                kind: e.key.kind,
+                id: e.key.id,
+                title: e.title,
+                dot_id: e.dot_id,
+                snoozed_until: None,
+                done_at: None,
+                back_at: Some(now.clone()),
+            })
+            .collect();
+        if pruned > 0 || !woke.is_empty() {
+            let _ = self.bus.send(RuntimeEvent::InboxUpdated);
+        }
+        if !items.is_empty() {
+            let _ = self.bus.send(RuntimeEvent::SnoozeEnded {
+                items: items.clone(),
+            });
+        }
+        Ok(items)
+    }
+
+    /// Runs a wake pass at once, then one every 30 seconds of the clock, until shutdown or
+    /// until the runtime is dropped (it is held weakly). The app starts it once its event
+    /// forwarder listens, so the first pass's notice is heard. Each wait is measured from the
+    /// start of the pass before it.
+    pub fn spawn_snooze_waker(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
+        let runtime = Arc::downgrade(self);
+        let clock = self.clock.clone();
+        let shutdown = self.shutdown.clone();
+        tokio::spawn(async move {
+            loop {
+                let next = clock.now() + inbox::WAKE_EVERY;
+                let Some(rt) = runtime.upgrade() else {
+                    return;
+                };
+                if let Err(e) = rt.wake_snoozed().await {
+                    tracing::warn!("waking snoozed items failed: {e}");
+                }
+                drop(rt);
+                tokio::select! {
+                    _ = shutdown.cancelled() => return,
+                    _ = clock.sleep_until(next) => {}
+                }
+            }
+        })
     }
 
     /// Clears the dot's "Needs attention" (Scheduler v2 spec §8); the schedule is not
@@ -1825,12 +2076,15 @@ impl Runtime {
         }
     }
 
-    /// Gives every pending approval of one run the same answer, in the order they were asked,
-    /// and resumes the run once. An approval that is no longer pending when its turn comes is
-    /// left out of the result. No rule can be saved this way.
+    /// Gives pending approvals of one run the same answer, in the order they were asked, and
+    /// resumes the run once. With `only`, just the approvals of the run whose ids it lists
+    /// (what the person was shown: a snoozed approval of the same run is not decided with
+    /// them); without it, every pending approval of the run. An approval that is no longer
+    /// pending when its turn comes is left out of the result. No rule can be saved this way.
     pub async fn decide_run_approvals(
         &self,
         run_id: &str,
+        only: Option<&[String]>,
         approved: bool,
         note: Option<String>,
     ) -> Result<Vec<Approval>> {
@@ -1839,7 +2093,11 @@ impl Runtime {
         let mut decided = Vec::new();
         let mut parked = false;
         let mut failure = None;
-        for pending in self.store.pending_for_run(run_id).await? {
+        let pending = self.store.pending_for_run(run_id).await?;
+        let shown = pending
+            .into_iter()
+            .filter(|a| only.is_none_or(|ids| ids.contains(&a.id)));
+        for pending in shown {
             match self.hub.decide(&pending.id, approved, note.clone()).await {
                 Ok(DecideEffect::Live(a)) => decided.push(a),
                 Ok(DecideEffect::Parked(a)) => {

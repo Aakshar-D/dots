@@ -484,6 +484,34 @@ export const ScheduleSkip = z.strictObject({
   created_at: z.string(),
 });
 
+// Snooze and Done on the Inbox (snooze and done spec section 4.1): an item's kind and its id
+// as it is now, so a mark never hides a later item with the same subject.
+export const InboxKind = z.enum([
+  "message",
+  "approval",
+  "review",
+  "not_delivered",
+  "attention",
+  "watcher",
+  "held",
+  "tools",
+  "instructions",
+  "app_review",
+  "team_scope",
+]);
+export const InboxKey = z.strictObject({ kind: InboxKind, id: z.string() });
+// A mark on an Inbox item, in exactly one state (RFC 3339 UTC times). `dot_id` is null for
+// tools that changed.
+export const InboxMark = z.strictObject({
+  kind: InboxKind,
+  id: z.string(),
+  title: z.string(),
+  dot_id: nullable(z.string()),
+  snoozed_until: nullable(z.string()),
+  done_at: nullable(z.string()),
+  back_at: nullable(z.string()),
+});
+
 export const RuntimeEvent = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("run_updated"), run: Run }),
   z.strictObject({ type: z.literal("run_event"), event: RunEventRecord }),
@@ -549,6 +577,10 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
   // An org was joined, updated, fetched (by Refresh, its timer or the start-up fetch) or
   // removed: its status, policy or values may have changed.
   z.strictObject({ type: z.literal("org_updated"), org_id: z.string() }),
+  // An Inbox item was snoozed, unsnoozed, marked done or undone, came back, or its mark went.
+  z.strictObject({ type: z.literal("inbox_updated") }),
+  // Snoozed items came back in one wake pass (the app notifies); an `inbox_updated` goes with it.
+  z.strictObject({ type: z.literal("snooze_ended"), items: z.array(InboxMark) }),
   // A new limit reading, or a hold that started, ended or changed what it holds; `change` is
   // set when a hold started or ended (the app notifies).
   z.strictObject({
@@ -644,6 +676,11 @@ export const ReviewRun = z.strictObject({
   dot_name: z.string(),
   worktree_exists: z.boolean(),
 });
+// A chat message that did not reach its dot, not retried or discarded yet.
+export const UndeliveredMessage = z.strictObject({
+  ...runShape,
+  dot_name: z.string(),
+});
 // A schedule whose occurrence failed in the end ("Needs attention").
 export const NeedsAttention = z.strictObject({
   dot_id: z.string(),
@@ -702,6 +739,17 @@ export const Inbox = z.strictObject({
   app_reviews: z.array(z.lazy(() => PendingAppReview)),
   // Teams with a member dot outside the team's account or workspace.
   team_scope: z.array(z.lazy(() => TeamScopeIssue)),
+  // Chat messages that did not reach their dot, newest first; not in `review_runs`.
+  not_delivered: z.array(UndeliveredMessage).default([]),
+  // Marks of items back from snooze, newest first. The items stay in their sections.
+  back: z.array(InboxMark).default([]),
+  // Marks of snoozed items, soonest back first. The items are left out of their sections.
+  snoozed: z.array(InboxMark).default([]),
+  // Marks of items done in the last 7 days, newest first. Left out of their sections too.
+  done: z.array(InboxMark).default([]),
+  // The waiting messages that are hidden (snoozed, or done however long ago): the questions
+  // and notes come with the messages, so the Inbox leaves these out.
+  hidden_messages: z.array(z.string()).default([]),
 });
 // A member dot that is not in its team's account or workspace, as the Inbox lists it.
 export const TeamScopeIssue = z.strictObject({
@@ -1582,6 +1630,10 @@ export type NeedsAttention = z.infer<typeof NeedsAttention>;
 export type DotRef = z.infer<typeof DotRef>;
 export type ToolsChanged = z.infer<typeof ToolsChanged>;
 export type Inbox = z.infer<typeof Inbox>;
+export type InboxKind = z.infer<typeof InboxKind>;
+export type InboxKey = z.infer<typeof InboxKey>;
+export type InboxMark = z.infer<typeof InboxMark>;
+export type UndeliveredMessage = z.infer<typeof UndeliveredMessage>;
 export type InstructionProposal = z.infer<typeof InstructionProposal>;
 export type PendingInstructions = z.infer<typeof PendingInstructions>;
 export type McpServerConfig = z.infer<typeof McpServerConfig>;

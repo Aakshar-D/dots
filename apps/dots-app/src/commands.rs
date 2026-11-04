@@ -22,6 +22,7 @@ use dots_core::apps::screen::{AppFile, AppRow};
 use dots_core::apps::wake::RunLink;
 use dots_core::apps::AppCall;
 use dots_core::browser::BrowserStatus;
+use dots_core::inbox::InboxKey;
 use dots_core::kit::InstalledPlugin;
 use dots_core::library::{LibraryConfig, LibraryItem, McpCatalog, McpServerConfig};
 use dots_core::library_service::{
@@ -696,12 +697,13 @@ pub async fn approval_rule_candidates(
 pub async fn decide_run_approvals(
     state: State<'_, AppState>,
     run_id: String,
+    ids: Vec<String>,
     approved: bool,
     note: Option<String>,
 ) -> Res<Vec<Approval>> {
     Ok(state
         .rt()?
-        .decide_run_approvals(&run_id, approved, note)
+        .decide_run_approvals(&run_id, Some(&ids), approved, note)
         .await?)
 }
 
@@ -713,6 +715,37 @@ pub async fn inbox(state: State<'_, AppState>) -> Res<Inbox> {
 #[tauri::command]
 pub async fn inbox_count(state: State<'_, AppState>) -> Res<usize> {
     Ok(state.rt()?.inbox_count().await?)
+}
+
+/// Hides Inbox items until `until`, an RFC 3339 time (snooze and done spec section 5).
+#[tauri::command]
+pub async fn inbox_snooze(
+    state: State<'_, AppState>,
+    items: Vec<InboxKey>,
+    until: String,
+) -> Res<()> {
+    let until = chrono::DateTime::parse_from_rfc3339(&until)
+        .map_err(|_| dots_core::Error::Invalid("Pick a time in the future.".into()))?
+        .with_timezone(&chrono::Utc);
+    Ok(state.rt()?.inbox_snooze(&items, until).await?)
+}
+
+/// **Unsnooze**: puts a snoozed item back.
+#[tauri::command]
+pub async fn inbox_unsnooze(state: State<'_, AppState>, item: InboxKey) -> Res<()> {
+    Ok(state.rt()?.inbox_unsnooze(&item).await?)
+}
+
+/// Marks an Inbox item done (not an approval).
+#[tauri::command]
+pub async fn inbox_done(state: State<'_, AppState>, item: InboxKey) -> Res<()> {
+    Ok(state.rt()?.inbox_done(&item).await?)
+}
+
+/// **Undo** on a done item.
+#[tauri::command]
+pub async fn inbox_undo_done(state: State<'_, AppState>, item: InboxKey) -> Res<()> {
+    Ok(state.rt()?.inbox_undo_done(&item).await?)
 }
 
 /// Clears the "Needs attention" of the dot's schedule.
