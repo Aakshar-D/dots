@@ -8,6 +8,7 @@ use crate::events::{Bus, RuntimeEvent};
 use crate::model::{Project, ProjectSpec, Team, TeamSpec, Workflow, WorkflowSpec};
 use crate::store::Store;
 use crate::vault::org::Orgs;
+use crate::workspace::git;
 use crate::{Error, Result};
 
 /// Cheap to clone.
