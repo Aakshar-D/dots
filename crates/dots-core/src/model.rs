@@ -492,6 +492,32 @@ pub struct SentLater {
     pub new_topic: bool,
 }
 
+/// A file the person attached to a chat message (`chat_attachments`, attachments spec section
+/// 4.1). Staged while `run_id` and `scheduled_id` are both `None`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChatAttachment {
+    pub id: String,
+    pub dot_id: String,
+    /// The chat run it went with.
+    pub run_id: Option<String>,
+    /// The scheduled message it waits with (send later).
+    pub scheduled_id: Option<String>,
+    /// Its safe name as added: Dots' copy is `<data>/chat-files/<id>/<file_name>`.
+    pub file_name: String,
+    /// Its name in `attachments/<topic>/`, fixed when it is sent.
+    pub name: Option<String>,
+    pub size: u64,
+    pub created_at: String,
+}
+
+/// A file just added to a chat box: what the chip shows, and the id the send passes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StagedAttachment {
+    pub id: String,
+    pub name: String,
+    pub size: u64,
+}
+
 /// A slot that was not run (`schedule_skips`): the dot was still busy with an earlier run.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ScheduleSkip {

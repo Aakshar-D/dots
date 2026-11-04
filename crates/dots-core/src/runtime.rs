@@ -25,7 +25,8 @@ use crate::model::{
     Approval, AttentionRun, ClaudeStatus, DeliveryCounts, Dot, DotOverview, DotSpec, EngineKind,
     Inbox, MessageKind, NewRun, PendingApproval, ReviewRun, Run, RunEventRecord, RunStatus,
     ScheduleChange, ScheduleSkip, ScheduleView, ScheduledMessage, ScheduledStatus, ScheduledWait,
-    SentLater, SettingsSaved, Status, TriggerKind, UndeliveredMessage, WorktreeDiff,
+    SentLater, SettingsSaved, StagedAttachment, Status, TriggerKind, UndeliveredMessage,
+    WorktreeDiff,
 };
 use crate::policy::{allow_candidates, Action, Rule, RuleCandidate};
 use crate::runner::{Runner, RunnerConfig};
@@ -155,6 +156,8 @@ pub struct Runtime {
     limits: Arc<crate::limits::Limits>,
     /// Wakes the send later loop: a message was scheduled or edited (send later spec 4.5).
     send_later_wake: Arc<tokio::sync::Notify>,
+    /// The stored copies of files attached to chat messages (attachments spec section 4.2).
+    chat_files: crate::chat_files::ChatFiles,
     shutdown: CancellationToken,
 }
 
@@ -347,6 +350,11 @@ impl Runtime {
             crate::watchers::files::WatcherFiles::new(cfg.data_dir.join("watchers"));
         watcher_files.sweep(&store).await;
         runner.set_watcher_files(watcher_files);
+        // Files attached to chat messages; staged ones and a crash's leftovers go (attachments
+        // spec section 4.7).
+        let chat_files =
+            crate::chat_files::ChatFiles::new(cfg.data_dir.join(crate::chat_files::DIR));
+        chat_files.sweep(&store).await;
         // Which dots are acting, for the folder watchers (watchers spec section 4.1).
         let acting = crate::watchers::ActingTracker::new(cfg.clock.clone());
         runner.set_acting(acting.clone());
@@ -509,6 +517,7 @@ impl Runtime {
             org_timers,
             limits,
             send_later_wake: Arc::new(tokio::sync::Notify::new()),
+            chat_files,
             shutdown,
         })
     }
@@ -1608,7 +1617,13 @@ impl Runtime {
             .into_iter()
             .map(|w| w.id)
             .collect();
+        let attachments = self.store.attachment_ids_of_dot(id).await?;
         self.store.delete_dot_if_idle(id).await?;
+        // Its attached files' rows went with it; their stored copies go too (attachments spec
+        // section 4.7).
+        for a in &attachments {
+            self.chat_files.remove(a);
+        }
         // Its proposals' rows went with it; their files go too (app library spec section 6.2).
         for p in &proposals {
             self.apps.drop_proposed(&p.id).await;
@@ -1666,6 +1681,75 @@ impl Runtime {
         self.runner
             .enqueue(NewRun::new(dot_id, TriggerKind::Manual))
             .await
+    }
+
+    /// Stages the file at `path` (picked or dropped) for a chat message to the dot
+    /// (attachments spec section 4.2). Refused with a reason for a link, a folder, a file over
+    /// 25 MB or one that cannot be read.
+    pub async fn add_attachment_path(&self, dot_id: &str, path: &Path) -> Result<StagedAttachment> {
+        let dot = self.store.get_dot(dot_id).await?;
+        self.require_run(&dot).await?;
+        let id = crate::util::new_id();
+        let files = self.chat_files.clone();
+        let from = path.to_path_buf();
+        let staged_id = id.clone();
+        let (name, size) =
+            tokio::task::spawn_blocking(move || files.stage_path(&staged_id, &from))
+                .await
+                .map_err(|e| Error::Other(format!("staging a file failed: {e}")))??;
+        self.record_staged(&id, dot_id, name, size).await
+    }
+
+    /// Stages `bytes` (a pasted image) named `name` for a chat message to the dot.
+    pub async fn add_attachment_bytes(
+        &self,
+        dot_id: &str,
+        name: &str,
+        bytes: &[u8],
+    ) -> Result<StagedAttachment> {
+        let dot = self.store.get_dot(dot_id).await?;
+        self.require_run(&dot).await?;
+        let id = crate::util::new_id();
+        let (name, size) = self.chat_files.stage_bytes(&id, name, bytes)?;
+        self.record_staged(&id, dot_id, name, size).await
+    }
+
+    /// Records a stored copy's row; a failed insert removes the copy.
+    async fn record_staged(
+        &self,
+        id: &str,
+        dot_id: &str,
+        name: String,
+        size: u64,
+    ) -> Result<StagedAttachment> {
+        match self
+            .store
+            .insert_staged_attachment(id, dot_id, &name, size)
+            .await
+        {
+            Ok(_) => Ok(StagedAttachment {
+                id: id.to_string(),
+                name,
+                size,
+            }),
+            Err(e) => {
+                self.chat_files.remove(id);
+                Err(e)
+            }
+        }
+    }
+
+    /// Removes a staged file (its chip's ×, or the chat box going away unsent). `Conflict`
+    /// once a message took it; `NotFound` for an unknown id.
+    pub async fn remove_attachment(&self, id: &str) -> Result<()> {
+        let attachment = self.store.get_attachment(id).await?;
+        if !self.store.remove_unsent_attachment(id).await? {
+            return Err(Error::Conflict(
+                "this file was already sent with a message".into(),
+            ));
+        }
+        self.chat_files.remove(&attachment.id);
+        Ok(())
     }
 
     pub async fn chat(
