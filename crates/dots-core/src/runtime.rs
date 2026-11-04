@@ -3066,9 +3066,27 @@ impl Runtime {
         root_run_id: Option<&str>,
         due_at: &str,
     ) -> Result<ScheduledMessage> {
-        if text.trim().is_empty() {
+        self.schedule_message_with_files(dot_id, text, root_run_id, due_at, &[])
+            .await
+    }
+
+    /// `schedule_message` with staged files (attachments spec section 4.6): they are held for
+    /// the message until it is sent, and their names are fixed then. It may be files only.
+    pub async fn schedule_message_with_files(
+        &self,
+        dot_id: &str,
+        text: &str,
+        root_run_id: Option<&str>,
+        due_at: &str,
+        attachment_ids: &[String],
+    ) -> Result<ScheduledMessage> {
+        if attachment_ids.len() > crate::chat_files::MAX_FILES {
+            return Err(Error::Invalid(crate::chat_files::TOO_MANY.into()));
+        }
+        if text.trim().is_empty() && attachment_ids.is_empty() {
             return Err(Error::Invalid("message must not be empty".into()));
         }
+        let files = self.files_to_send(dot_id, attachment_ids, None).await?;
         let dot = self.store.get_dot(dot_id).await?;
         self.require_run(&dot).await?;
         let now = self.clock.now();
@@ -3085,20 +3103,50 @@ impl Runtime {
             }
             None => None,
         };
-        let message = self
+        let mut message = self
             .store
-            .insert_scheduled_message(dot_id, root.as_deref(), text, &due_at, now)
+            .insert_scheduled_with_files(
+                dot_id,
+                root.as_deref(),
+                text,
+                &due_at,
+                now,
+                attachment_ids,
+            )
             .await?;
+        message.attachments = files
+            .iter()
+            .map(|f| StagedAttachment {
+                id: f.id.clone(),
+                name: f.file_name.clone(),
+                size: f.size,
+            })
+            .collect();
         self.scheduled_updated(&message);
         self.send_later_wake.notify_one();
         Ok(message)
     }
 
-    /// The dot's pending scheduled messages (scheduled, sending or failed), in due order. A
-    /// read, so it needs only `View`, as the conversation does: a Viewer sees the cards too.
+    /// The dot's pending scheduled messages (scheduled, sending or failed), in due order, each
+    /// with the files it waits with. A read, so it needs only `View`, as the conversation does:
+    /// a Viewer sees the cards too.
     pub async fn scheduled_messages(&self, dot_id: &str) -> Result<Vec<ScheduledMessage>> {
         self.require_for_dot(dot_id, Permission::View).await?;
-        self.store.pending_scheduled_messages(dot_id).await
+        let mut messages = self.store.pending_scheduled_messages(dot_id).await?;
+        for m in &mut messages {
+            m.attachments = self
+                .store
+                .scheduled_attachments(&m.id)
+                .await?
+                .into_iter()
+                .map(|f| StagedAttachment {
+                    id: f.id,
+                    name: f.file_name,
+                    size: f.size,
+                })
+                .collect();
+        }
+        Ok(messages)
     }
 
     /// Edit: new text and time for a message that is scheduled or failed; it is scheduled
@@ -3109,7 +3157,8 @@ impl Runtime {
         text: &str,
         due_at: &str,
     ) -> Result<ScheduledMessage> {
-        if text.trim().is_empty() {
+        // Edit changes the text only: a message with files may have none.
+        if text.trim().is_empty() && self.store.scheduled_attachments(id).await?.is_empty() {
             return Err(Error::Invalid("message must not be empty".into()));
         }
         let current = self.store.get_scheduled_message(id).await?;
@@ -3250,7 +3299,7 @@ impl Runtime {
                 _ => Ok(current),
             };
         };
-        let extra = self.chat_extra_for(&claimed, now, fallback);
+        let extra = self.chat_extra_for(&claimed, now, fallback).await?;
         let sent = self
             .chat_with(&claimed.dot_id, &claimed.text, parent.as_deref(), extra)
             .await;
@@ -3258,6 +3307,12 @@ impl Runtime {
             Ok(run) => {
                 self.store
                     .mark_scheduled_sent(&claimed.id, &run.id, now)
+                    .await?
+            }
+            // A held file is gone: waiting would not bring it back.
+            Err(Error::Conflict(m)) if m == crate::chat_files::GONE => {
+                self.store
+                    .mark_scheduled_failed(&claimed.id, &m, now)
                     .await?
             }
             Err(Error::Conflict(_)) => {
@@ -3329,26 +3384,47 @@ impl Runtime {
 
     /// What a scheduled message's chat run carries besides its text (send later spec section
     /// 4.3): the one place they are built, which attachments extends with its files.
-    fn chat_extra_for(
+    async fn chat_extra_for(
         &self,
         message: &ScheduledMessage,
         sent_at: DateTime<Utc>,
         new_topic: bool,
-    ) -> ChatExtra {
-        ChatExtra {
+    ) -> Result<ChatExtra> {
+        // The files it waits with go with it (attachments spec section 4.6).
+        let attachment_ids = self
+            .store
+            .scheduled_attachments(&message.id)
+            .await?
+            .into_iter()
+            .map(|a| a.id)
+            .collect();
+        Ok(ChatExtra {
             send_later: Some(SentLater {
                 id: message.id.clone(),
                 due_at: message.due_at.clone(),
                 late: crate::send_later::is_late(&message.due_at, sent_at),
                 new_topic,
             }),
-            ..ChatExtra::default()
-        }
+            attachment_ids,
+            scheduled_id: Some(message.id.clone()),
+            carry_from: None,
+        })
     }
 
-    /// Frees what a cancelled message had staged. Nothing yet: attachments stages its files
-    /// here (send later spec section 4.3).
-    async fn release_staged(&self, _id: &str) {}
+    /// Frees the files a cancelled message held: their rows and stored copies (attachments
+    /// spec section 4.6). A failure is logged; the startup sweep is the backstop.
+    async fn release_staged(&self, id: &str) {
+        match self.store.delete_scheduled_attachments(id).await {
+            Ok(ids) => {
+                for a in ids {
+                    self.chat_files.remove(&a);
+                }
+            }
+            Err(e) => {
+                tracing::warn!(scheduled = %id, "removing a cancelled message's files failed: {e}")
+            }
+        }
+    }
 
     /// The refusal for a message no longer scheduled or failed, by what it is now.
     async fn not_changeable(&self, id: &str) -> Error {

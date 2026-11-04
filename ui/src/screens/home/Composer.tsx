@@ -139,7 +139,7 @@ export function Composer(props: {
           }}
           className="field-sizing-content max-h-40 min-w-0 flex-1 resize-none overflow-y-auto bg-transparent px-1.5 py-1 text-base outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed md:text-sm"
         />
-        {props.onSchedule && <SendLaterMenu disabled={!canSend || !hasText} onPick={schedule} />}
+        {props.onSchedule && <SendLaterMenu disabled={!canSend} onPick={schedule} />}
         <Button
           size="icon-sm"
           className="shrink-0 rounded-full"

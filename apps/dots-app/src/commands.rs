@@ -778,7 +778,7 @@ pub async fn delivery_today(state: State<'_, AppState>, dot_id: String) -> Res<D
 }
 
 /// Schedules `text` to `dot_id` at `due_at` (RFC 3339), in the topic of `root_run_id` or as a
-/// new topic (send later spec section 4.4).
+/// new topic (send later spec section 4.4), with the staged files `attachment_ids`.
 #[tauri::command]
 pub async fn schedule_message(
     state: State<'_, AppState>,
@@ -786,10 +786,17 @@ pub async fn schedule_message(
     text: String,
     root_run_id: Option<String>,
     due_at: String,
+    attachment_ids: Option<Vec<String>>,
 ) -> Res<ScheduledMessage> {
     Ok(state
         .rt()?
-        .schedule_message(&dot_id, &text, root_run_id.as_deref(), &due_at)
+        .schedule_message_with_files(
+            &dot_id,
+            &text,
+            root_run_id.as_deref(),
+            &due_at,
+            &attachment_ids.unwrap_or_default(),
+        )
         .await?)
 }
 

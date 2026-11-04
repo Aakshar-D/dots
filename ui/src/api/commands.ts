@@ -231,8 +231,22 @@ export const commands = {
   deliveryToday: (dotId: string) => call(T.DeliveryCounts, "delivery_today", { dotId }),
   /// Send later: schedules `text` at `dueAt` (RFC 3339) in the topic `rootRunId`, or as a new
   /// topic. Rejects with kind `invalid` for a time under a minute or over a year ahead.
-  scheduleMessage: (dotId: string, text: string, rootRunId: string | null, dueAt: string) =>
-    call(T.ScheduledMessage, "schedule_message", { dotId, text, rootRunId, dueAt }),
+  /// `attachmentIds`: staged files it waits with (attachments spec section 4.6); only sent
+  /// when there are some.
+  scheduleMessage: (
+    dotId: string,
+    text: string,
+    rootRunId: string | null,
+    dueAt: string,
+    attachmentIds: string[] = [],
+  ) =>
+    call(
+      T.ScheduledMessage,
+      "schedule_message",
+      attachmentIds.length > 0
+        ? { dotId, text, rootRunId, dueAt, attachmentIds }
+        : { dotId, text, rootRunId, dueAt },
+    ),
   /// The dot's pending scheduled messages, in due order.
   scheduledMessages: (dotId: string) =>
     call(T.ScheduledMessage.array(), "scheduled_messages", { dotId }),

@@ -242,3 +242,15 @@ describe("scheduledTarget", () => {
     expect(scheduledTarget(row({ root_run_id: "gone" }), topics, "a")).toBe("an older topic");
   });
 });
+
+describe("a scheduled message with files", () => {
+  it("lists the files it waits with, without a way to remove them", () => {
+    const { card } = show(
+      row({ text: "", attachments: [{ id: "A1", name: "r.pdf", size: 2458 }] }),
+    );
+    const files = within(within(card).getByRole("list", { name: "Attached files" }));
+    expect(files.getByText("r.pdf")).toBeVisible();
+    expect(files.getByText("2.4 KB")).toBeVisible();
+    expect(files.queryByRole("button")).toBeNull();
+  });
+});

@@ -530,6 +530,8 @@ export const ScheduledMessage = z.strictObject({
   sent_at: nullable(z.string()),
   created_at: z.string(),
   updated_at: z.string(),
+  // The files it waits with (attachments spec section 4.6).
+  attachments: z.array(StagedAttachment),
 });
 
 // Snooze and Done on the Inbox (snooze and done spec section 4.1): an item's kind and its id

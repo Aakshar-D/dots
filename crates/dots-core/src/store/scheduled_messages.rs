@@ -29,6 +29,7 @@ fn message_from_row(row: &SqliteRow) -> Result<ScheduledMessage> {
         sent_at: row.try_get("sent_at")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
+        attachments: Vec::new(),
     })
 }
 
@@ -43,8 +44,25 @@ impl Store {
         due_at: &str,
         now: DateTime<Utc>,
     ) -> Result<ScheduledMessage> {
+        self.insert_scheduled_with_files(dot_id, root_run_id, text, due_at, now, &[])
+            .await
+    }
+
+    /// `insert_scheduled_message`, holding the staged files `attachment_ids` for it in the same
+    /// transaction (attachments spec section 4.6). A file that is not a staged file of the dot
+    /// is a `Conflict`, and nothing is stored.
+    pub async fn insert_scheduled_with_files(
+        &self,
+        dot_id: &str,
+        root_run_id: Option<&str>,
+        text: &str,
+        due_at: &str,
+        now: DateTime<Utc>,
+        attachment_ids: &[String],
+    ) -> Result<ScheduledMessage> {
         let id = new_id();
         let ts = timestamp(now);
+        let mut tx = self.pool.begin().await?;
         sqlx::query(
             "INSERT INTO scheduled_messages (id, dot_id, root_run_id, text, due_at, status, \
              created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'scheduled', ?, ?)",
@@ -56,8 +74,13 @@ impl Store {
         .bind(due_at)
         .bind(&ts)
         .bind(&ts)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+        if let Err(e) = Store::hold_for_scheduled(&mut tx, &id, dot_id, attachment_ids).await {
+            tx.rollback().await?;
+            return Err(e);
+        }
+        tx.commit().await?;
         self.get_scheduled_message(&id).await
     }
 

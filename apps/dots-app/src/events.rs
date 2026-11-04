@@ -1390,6 +1390,7 @@ mod tests {
             sent_at: None,
             created_at: "2026-11-04T09:00:00.000Z".into(),
             updated_at: updated_at.into(),
+            attachments: Vec::new(),
         }
     }
 

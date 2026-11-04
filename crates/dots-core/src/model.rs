@@ -477,6 +477,10 @@ pub struct ScheduledMessage {
     pub sent_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    /// The files it waits with (attachments spec section 4.6), as its card shows them. Filled
+    /// where the person sees it (`Runtime::scheduled_messages`); empty elsewhere.
+    #[serde(default)]
+    pub attachments: Vec<StagedAttachment>,
 }
 
 /// The note in the payload of a chat run that a scheduled message became (send later spec

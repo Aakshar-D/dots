@@ -1787,6 +1787,11 @@ fn send_later_samples(samples: &mut Value) {
         sent_at: None,
         created_at: TS.into(),
         updated_at: TS.into(),
+        attachments: vec![StagedAttachment {
+            id: "01J0ATT2".into(),
+            name: "notes.pdf".into(),
+            size: 31_457,
+        }],
     };
     let failed = ScheduledMessage {
         id: "01J0SCHED2".into(),

@@ -208,8 +208,16 @@ export function ReplyArea(props: {
   // the menu that asked (a notice, or the dialog's alert).
   const schedule = useMutation({
     mutationFn: ({ text, at }: { text: string; at: Date }) =>
-      commands.scheduleMessage(dotId, text, target?.rootId ?? null, at.toISOString()),
+      commands.scheduleMessage(
+        dotId,
+        text,
+        target?.rootId ?? null,
+        at.toISOString(),
+        staged.ids(),
+      ),
     onSuccess: () => {
+      // The files wait with the scheduled message now.
+      staged.sent();
       onPick({ kind: "default" });
       invalidate(qc, keys.scheduledMessages(dotId));
     },
