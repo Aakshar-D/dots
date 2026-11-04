@@ -19,12 +19,19 @@ export const STATUS_LABEL: Record<DotStatus, string> = {
 /// Waiting (a run waits for an approval, or the dot asked a question still open), held (its
 /// queued run is held for Claude usage), running (a run is queued or running), attention (its
 /// schedule needs attention), off (disabled), else idle. `messages`: any messages; only the
-/// dot's open questions count. `held`: the ids of the runs held for Claude usage.
-export function dotStatus(row: DotOverview, messages: Message[], held: string[] = []): DotStatus {
+/// dot's open questions count. `held`: the ids of the runs held for Claude usage. `hidden`:
+/// the messages the person snoozed or marked done (`Inbox.hidden_messages`), which do not
+/// count, as in the needs-you counts.
+export function dotStatus(
+  row: DotOverview,
+  messages: Message[],
+  held: string[] = [],
+  hidden: string[] = [],
+): DotStatus {
   const active = row.active_run;
   if (
     active?.status === "awaiting_approval" ||
-    messages.some((m) => m.dot_id === row.dot.id && isOpenQuestion(m))
+    messages.some((m) => m.dot_id === row.dot.id && isOpenQuestion(m) && !hidden.includes(m.id))
   ) {
     return "waiting";
   }

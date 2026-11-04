@@ -33,6 +33,9 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
   ).filter((p) => p.status === "pending");
   const held =
     useQuery({ queryKey: keys.limits, queryFn: commands.limitsGet }).data?.held_run_ids ?? [];
+  // A question the person snoozed or marked done does not make the dot wait for them.
+  const hidden =
+    useQuery({ queryKey: keys.inbox, queryFn: commands.inbox }).data?.hidden_messages ?? [];
   useEffect(() => rememberDot(dot.id), [dot.id]);
   useViewing(dot.id);
   const view = useConversation(dot.id, rootRunId);
@@ -52,7 +55,7 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
     <div className="flex min-w-0 flex-1 flex-col">
       <DotHeader
         dot={dot}
-        status={dotStatus(row, allMessages, held)}
+        status={dotStatus(row, allMessages, held, hidden)}
         skipLine={skipLine(row.schedule_state)}
       >
         <HistoryMenu dotId={dot.id} topics={view.older} />
