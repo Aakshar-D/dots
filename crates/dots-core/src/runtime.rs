@@ -1018,7 +1018,12 @@ impl Runtime {
         let woke: HashSet<InboxKey> = self.store.wake_due(&now).await?.into_iter().collect();
         if !woke.is_empty() {
             // An item that left since the snapshot is not announced; its mark goes next pass.
-            entries = self.inbox_entries().await?;
+            // The woken marks are already back, so a failed re-read keeps the first snapshot
+            // rather than losing their notice.
+            match self.inbox_entries().await {
+                Ok(fresh) => entries = fresh,
+                Err(e) => tracing::warn!("re-reading the Inbox after a wake failed: {e}"),
+            }
         }
         let items: Vec<InboxMark> = entries
             .into_iter()
