@@ -29,7 +29,7 @@ Success: every Inbox card has **Snooze** (approvals) or **Snooze** and **Done** 
 5. **Coming back**: a notification **"Back from snooze: `<item>`"**. The item returns at the **top** of the Inbox with a **"Back from snooze"** tag, and the counts include it again. Snoozes are stored in the database, so they survive restarts. A sweep on the `Clock` wakes items whose time passed, also those that passed while Dots was closed.
 6. **Done** hides the item from the Inbox and every count. It moves to a collapsed **Done** section at the bottom, with **Undo**. Items done more than 7 days ago drop off that list.
 7. **An item that leaves on its own** just leaves: from the Inbox, the Snoozed list or the Done list. No notification.
-8. **Snoozing an approval** does not change how the approval waits or parks. It only hides it. The run still waits, the approval card in the conversation still shows, and deciding it there takes it away.
+8. **Snoozing an approval** does not change how the approval waits or parks. It only hides it. The run still waits, the approval card in the conversation still shows, and deciding it there takes it away. **Approve all** and **Deny all** decide only the calls their group lists, never a snoozed call of the same run (§3.9.12).
 
 ### 3.9 Builder's calls
 
@@ -39,11 +39,13 @@ Success: every Inbox card has **Snooze** (approvals) or **Snooze** and **Done** 
 4. **The 7 days are for the Done list only.** A done item that has not left on its own stays hidden after 7 days, and it is no longer listed. (Otherwise an unread note marked done would come back after a week.) Its mark is deleted when it leaves on its own.
 5. **Done does not change the item.** A note marked done is not marked read, a question marked done stays open in the conversation, and a run to review marked done is not marked reviewed. Done is about the Inbox only.
 6. **Approvals are snoozed per run**, as the Inbox groups them: the group's **Snooze** snoozes each approval it shows. A call the run asks for later is a new item and shows.
-7. **The Inbox gains a "Not delivered" section.** It has none today: a not-delivered chat message counts in its dot's needs-you but is listed only as a failed run to review, and the 30-minute ones are not listed at all. The section lists chat runs that are not delivered and not dismissed, with the existing delivery line (Retry, Discard). Those runs are left out of "Runs to review", so nothing is listed twice.
+7. **The Inbox gains a "Not delivered" section.** It has none today: a not-delivered chat message counts in its dot's needs-you but is listed only as a failed run to review, and the 30-minute ones are not listed at all. The section lists chat runs that are not delivered and not dismissed, with the existing delivery line (Retry, Discard). **Every** undelivered chat run (`trigger = chat`, `undelivered_at` set, `delivered_at` null) is left out of "Runs to review", dismissed (discarded or retried) ones included: nothing is listed twice, and a message the person discarded is dealt with, so it does not come back as a failed run to review.
 8. **Wake timing**: the sweep runs once when Dots starts and then every 30 seconds. An item comes back at the first sweep at or after its time, so up to 30 seconds late. It stays hidden until then, so the notification and the item arrive together.
 9. **One notification per sweep.** One item gives "Back from snooze: `<title>`". Several items woken in the same sweep (typically after a restart) give one notification, "Back from snooze: `<n>` items". It is shown even while the person is reading that dot's conversation, because they asked to be reminded.
 10. **Snooze limits**: the time must be in the future and at most 365 days ahead.
 11. **The Inbox rail count** is computed by one shared UI function, and it now counts team-scope problems as the core's `inbox_count` already does.
+12. **A batch decides what it showed.** A run's approvals can be split between Snoozed, Back from snooze and Approvals, so an approvals group may list only some of its run's pending calls. **Approve all** / **Deny all** therefore send the ids of the calls the group lists, and the core decides only those that are still pending, in the order they were asked. The confirmation says "these calls", not "every call this run waits for".
+13. **A dot's status mark** in the Dots column and the dot's header leaves out hidden questions, as its counts do: a snoozed or done question does not make it "waiting for you". A run that waits for an approval still does (§3.8).
 
 ## 4. Core
 
@@ -96,41 +98,45 @@ CREATE INDEX inbox_marks_due ON inbox_marks (snoozed_until) WHERE snoozed_until 
   - `snoozed`: marks of snoozed items still listed, soonest `snoozed_until` first;
   - `done`: marks of done items still listed with `done_at` in the last 7 days, newest first.
   - Each mark comes with the item's `title` and `dot_id` (`None` for `tools`).
-- The questions and notes stay in `messages_list`, as today. The UI leaves out the hidden ones using `snoozed` and `done` (§6).
+  - `hidden_messages`: the ids of the waiting messages that are hidden for any reason, a done one older than 7 days included (it is no longer in `done`, §3.9.4, but still hidden and left out of the counts).
+- The questions and notes stay in `messages_list`, as today. The UI leaves out the hidden ones using `hidden_messages` (§6).
 - `inbox_count()` counts the shown sections, `not_delivered` included, and the waiting messages that are not hidden.
 
 ### 4.4 Snooze, Done and their undo
 
 - **`inbox_snooze(items, until)`**: `Invalid` when `items` is empty, or `until` is not after now or more than 365 days ahead ("Pick a time in the future."). `NotFound("That is no longer in the Inbox.")` when any item is not in the full Inbox. Otherwise, in one transaction, every item gets `snoozed_until = until` (its done or back state cleared).
 - **`inbox_done(item)`**: `Conflict("An approval is decided, not marked done.")` for `approval`; `NotFound` as above. Otherwise `done_at = now`.
-- **`inbox_unsnooze(item)`**: deletes a snoozed mark; `NotFound("That is not snoozed.")` otherwise.
+- **`inbox_unsnooze(item)`**: deletes a snoozed mark, or a back mark (Unsnooze pressed just as the pass wakes the item ends the same way: shown, no tag); `NotFound("That is not snoozed.")` otherwise.
 - **`inbox_undo_done(item)`**: deletes a done mark; `NotFound("That is not done.")` otherwise.
 - Each one sends **`RuntimeEvent::InboxUpdated`**.
 
 ### 4.5 The wake sweep
 
-- **`Runtime::wake_snoozed()`**, one pass. With no marks it does nothing. Otherwise it builds the full Inbox's keys once, deletes every mark whose item has left (§3.7), then wakes each snoozed mark with `snoozed_until <= now`: it sets `back_at = now` and clears `snoozed_until`. If anything changed, it sends `InboxUpdated`. If anything woke, it also sends **`RuntimeEvent::SnoozeEnded { items }`** with the woken marks and their titles.
+- **`Runtime::wake_snoozed()`**, one pass. With no marks it does nothing. Otherwise it reads `now`, builds the full Inbox's keys, and deletes every mark **made before `now`** (`marked_at < now`) whose item has left (§3.7). A mark made while the pass runs may be for an item the snapshot does not hold yet, so it waits for the next pass. It then wakes each snoozed mark with `snoozed_until <= now`: it sets `back_at = now` and clears `snoozed_until`. When something woke, it reads the Inbox again, so an item that left meanwhile is not announced (its mark goes at the next pass). If anything changed, it sends `InboxUpdated`. If anything woke, it also sends **`RuntimeEvent::SnoozeEnded { items }`** with the woken marks still in the Inbox and their titles.
+- **A mark of an unknown kind** (written by a later build, then downgraded) is skipped by `list_marks` and `wake_due`, with one warning in the log, so the Inbox and the pass still work. The pass deletes it as an item that left.
 - **`Runtime::spawn_snooze_waker(self: &Arc<Self>)`** runs one pass at once and then one every 30 seconds of the runtime's `Clock`, until shutdown. The app starts it right after the event forwarder subscribes, so the first pass's notification is heard. It holds the runtime weakly. *(Builder's call: the pass needs the whole Inbox, which only the runtime builds, so it cannot be spawned inside `Runtime::start` as the delivery sweeper is.)*
 
 ## 5. App
 
 - Commands `inbox_snooze(items, until)`, `inbox_unsnooze(item)`, `inbox_done(item)`, `inbox_undo_done(item)`. `items` and `item` are `InboxKey { kind, id }`, and `until` is RFC 3339.
+- `decide_run_approvals(run_id, ids, approved, note)` takes the ids the group lists (§3.9.12). `Runtime::decide_run_approvals(run_id, only: Option<&[String]>, approved, note)` decides only the run's pending approvals in `only`; `None` keeps the old meaning (every pending approval of the run) for the core's other callers.
 - `lib.rs` setup calls `rt.spawn_snooze_waker()` after `events::spawn_forwarder`.
-- Notifier: `SnoozeEnded` gives `Notice::BackFromSnooze { items }`, with the texts in §3.9.9. Body for one item: `It is at the top of your Inbox.`; for several, their titles joined with `; ` and cut to 120 characters. The route is `/inbox`. It has no dot, so it is never quiet.
+- Notifier: `SnoozeEnded` gives `Notice::BackFromSnooze { items }`, with the texts in §3.9.9. Body for one item: `It is at the top of your Inbox.`; for several, their titles joined with `; ` and cut to 120 characters. The route is `/inbox`. It has no dot (`notice_dot` gives `None` for it, though its items have dots), so it is never quiet.
 - The tray already refreshes on every event that is not a run event, so `InboxUpdated` refreshes it.
 - Contract fixture: `Inbox`'s new fields, `InboxMark`, `InboxKey`, `Enums.InboxKind`, the two events, the four commands, and **`InboxKeys`**: the keys the core gives the sample Inbox and sample message, so the UI's own key functions are checked against the core's.
 
 ## 6. UI
 
 - **Card actions** (right end of every row or card header): **Snooze** (a menu button with a clock icon) and **Done** (check icon). An approvals group has **Snooze** only, in its header line.
-- **Snooze menu**: `In 1 hour` · `This evening (6 PM)` · `Tomorrow morning (9 AM)` · `Next week (Monday 9 AM)` · `Pick a date and time…`. The last one opens a dialog titled **Snooze until**, with a `Date and time` field (`datetime-local`), and **Snooze** / **Cancel** buttons. A time not in the future shows `Pick a time in the future.` and Snooze stays off.
+- **Snooze menu**: `In 1 hour` · `This evening (6 PM)` · `Tomorrow morning (9 AM)` · `Next week (Monday 9 AM)` · `Pick a date and time…`. The last one opens a dialog titled **Snooze until**, with a `Date and time` field (`datetime-local`), and **Snooze** / **Cancel** buttons. A time not in the future shows `Pick a time in the future.` and Snooze stays off. The time is checked again when Snooze is pressed, and a preset that passed while the menu was open (6 PM came) is dropped: the menu just closes.
+- **Accessibility**: Snooze and Done are named with their item (`Snooze: courier's question`), and Unsnooze and Undo with the mark's title (`Unsnooze: courier asks: Ship it?`). After Snooze or Done, focus moves to the heading of the item's section, or to the page's heading when the section is gone. Closing the **Snooze until** dialog gives focus back to the Snooze button. The Snoozed and Done toggles set `aria-controls` only while their list is shown.
 - **Back from snooze**: the top section, heading **Back from snooze**, lists the back items with their own cards, newest first. Each card has a small **Back from snooze** tag.
 - **Not delivered**: a section after Approvals. Each row shows the dot's name, the message's first line, the delivery line (`Not delivered: <reason>`, Retry, Discard), and **Open** (`/chat/<dot>/<run>`).
 - **Snoozed** (collapsed, at the bottom): a toggle **Snoozed (`<n>`)**. Each row shows `<title> · Back <when>` and **Unsnooze**. `<when>` is the time alone for today (`6:00 PM`), the weekday and time within 6 days (`Mon 9:00 AM`), else the local date and time.
 - **Done** (collapsed, last): a toggle **Done (`<n>`)**. Each row shows `<title> · Done <relative time>` and **Undo**.
 - Both toggles are closed at first and stay as the person left them while the screen is open. Neither one shows when it is empty.
 - **Empty state**: when nothing is shown, the existing empty state with its copy, which now mentions "messages that did not reach a dot". The Snoozed and Done toggles still show below it when they have items.
-- **Counts**: the rail's Inbox count comes from one function (`inboxWaiting`), which leaves out hidden messages and adds `not_delivered` and `team_scope`. The Home count and the dot badges come from the core's counts.
+- **Counts**: the rail's Inbox count comes from one function (`inboxWaiting`), which leaves out hidden messages (`hidden_messages`) and adds `not_delivered` and `team_scope`. The Home count and the dot badges come from the core's counts.
 - **Live**: `inbox_updated` refreshes the Inbox and the overview (the unread total is under it). `snooze_ended` refreshes nothing itself, because an `inbox_updated` goes with it. `message_posted` and `message_updated` already refresh the messages.
 
 ## 7. Edge cases
@@ -143,14 +149,17 @@ CREATE INDEX inbox_marks_due ON inbox_marks (snoozed_until) WHERE snoozed_until 
 - **Runs held for usage** count as one Inbox line, however many there are. Snoozing every held run takes the line out of the count. Snoozing some of them leaves it in.
 - **A dot deleted**: its items leave, and their marks go at the next pass.
 - **Clock moved backward**: a snooze simply wakes later. Nothing is lost.
+- **Marked while a pass runs**: the mark is newer than the pass's snapshot, so it is kept (§4.5).
+- **Unsnooze pressed as the pass wakes the item**: no error; the item shows with no tag (§4.4).
+- **An item that leaves and comes back with the same key between two passes** (a not-delivered message marked done, then retried and failed again): if a pass ran while it was gone, its mark was deleted and it shows again. That is §3.7 as written: it left.
 
 ## 8. Testing
 
 - Store: snooze, done, unsnooze and undo-done states and errors; the check constraint; `wake_due` wakes only marks due by the given time; `prune_marks` keeps only the keys given; `dot_counts` and `count_waiting_messages` leave out hidden items, kind by kind; a back mark counts again.
-- Runtime: each section filtered; `back`, `snoozed` and `done` lists and their order; Done list drop-off at 7 days with the item still hidden (`FakeClock`); approval Done refused; validation errors; an item that left is not listed; the Not delivered section and its removal from Runs to review; `inbox_count`.
-- Wake sweep (`FakeClock`): wakes at its time and not before; one `SnoozeEnded` per pass; nothing for an item that left; a restart wakes what came due while closed.
-- App: commands; the notice texts and route; one notice for several items; the notice is not quiet for the viewed dot; contract and `InboxKeys`.
-- UI: `later.ts` presets at fixed local times (6 PM boundary, Monday, the last day of a month); `inboxKeys` against the fixture; the Snooze menu and dialog; Done and Undo; Unsnooze; the Back section first, with the tag; the rail count with a snoozed message; approvals without Done.
+- Runtime: a batch decides only the ids given and leaves a snoozed approval of the same run pending; each section filtered; `back`, `snoozed` and `done` lists and their order; Done list drop-off at 7 days with the item still hidden (`FakeClock`); approval Done refused; validation errors; an item that left is not listed; the Not delivered section and its removal from Runs to review; `inbox_count`.
+- Wake sweep (`FakeClock`): wakes at its time and not before; one `SnoozeEnded` per pass; nothing for an item that left; a restart wakes what came due while closed; a mark made since the pass began is kept; Unsnooze after the wake. Store: `prune_marks` keeps marks made at or after its time; a row of an unknown kind is skipped.
+- App: commands; the notice texts and route; one notice for several items; `notice_dot` is `None` for Back from snooze, so it is not quiet for the viewed dot; contract and `InboxKeys`.
+- UI: `later.ts` presets at fixed local times (6 PM boundary, Monday, the last day of a month); `inboxKeys` against the fixture; the Snooze menu and dialog; Done and Undo; Unsnooze; the Back section first, with the tag; the rail count with a snoozed message; approvals without Done; the batch sends the group's ids; a hidden question does not make the dot's status "waiting"; a passed preset and a passed picked time; the accessible names, focus after Done and after the dialog, and `aria-controls`.
 
 ## 9. Collisions with parallel work
 
