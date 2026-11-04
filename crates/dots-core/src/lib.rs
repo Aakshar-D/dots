@@ -13,6 +13,7 @@ pub mod engine;
 pub mod error;
 pub mod events;
 pub mod followups;
+pub mod inbox;
 pub mod instructions;
 pub mod kit;
 pub mod library;

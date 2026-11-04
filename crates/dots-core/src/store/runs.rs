@@ -333,6 +333,19 @@ impl Store {
         rows.iter().map(run_from_row).collect()
     }
 
+    /// Chat runs marked not delivered that the person has not retried or discarded and that
+    /// were not delivered after all: the Inbox's "Not delivered" section, newest mark first.
+    pub async fn undelivered_chat_runs(&self) -> Result<Vec<Run>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {RUN_COLUMNS} FROM runs WHERE trigger_kind = 'chat' \
+             AND undelivered_at IS NOT NULL AND dismissed_at IS NULL AND delivered_at IS NULL \
+             ORDER BY undelivered_at DESC, id DESC"
+        ))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(run_from_row).collect()
+    }
+
     /// Sets `reviewed_at` on every run of the lineage that has none; returns the runs changed.
     pub async fn mark_thread_reviewed(&self, root_run_id: &str) -> Result<Vec<Run>> {
         let ids: Vec<String> = sqlx::query_scalar(
