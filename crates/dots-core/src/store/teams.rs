@@ -10,13 +10,14 @@ use crate::model::{
     TeamSpec, Workflow, WorkflowSpec,
 };
 use crate::schedule::Schedule;
-use crate::util::{new_id, now};
+use crate::util::{ct_eq, new_id, new_token, now, token_hash};
 use crate::workflow::Trigger;
 use crate::{Error, Result};
 
 const PROJECT_COLUMNS: &str =
     "id, team_id, name, repo_path, default_branch, remote, created_at, updated_at";
-const WORKFLOW_COLUMNS: &str = "id, team_id, name, definition, enabled, created_at, updated_at";
+const WORKFLOW_COLUMNS: &str =
+    "id, team_id, name, definition, enabled, webhook_token, created_at, updated_at";
 
 /// A unique name taken: `Conflict` with `taken`; a member that is not a dot: `Invalid`; any
 /// other error as it is.
@@ -65,6 +66,9 @@ fn workflow_from_row(row: &SqliteRow, members: &[String]) -> Result<Workflow> {
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
         problem,
+        has_webhook_token: row
+            .try_get::<Option<String>, _>("webhook_token")?
+            .is_some_and(|t| !t.is_empty()),
         spec,
     })
 }
@@ -464,6 +468,35 @@ impl Store {
         .ok_or_else(|| Error::NotFound(format!("workflow {id}")))?;
         let team_id: String = row.try_get("team_id")?;
         workflow_from_row(&row, &self.team_member_ids(&team_id).await?)
+    }
+
+    /// Whether `token` is the workflow's webhook token, compared by its hash in constant time,
+    /// as a dot's (`check_webhook_token`). A workflow without one takes none.
+    pub async fn check_workflow_token(&self, id: &str, token: &str) -> Result<bool> {
+        let stored: Option<Option<String>> =
+            sqlx::query_scalar("SELECT webhook_token FROM workflows WHERE id = ?")
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await?;
+        let stored = stored.ok_or_else(|| Error::NotFound(format!("workflow {id}")))?;
+        Ok(stored.is_some_and(|stored| !stored.is_empty() && ct_eq(&token_hash(token), &stored)))
+    }
+
+    /// Makes the workflow a new webhook token and returns it: the only time it is shown. Only
+    /// its hash is kept, and the old token stops working.
+    pub async fn regenerate_workflow_token(&self, id: &str) -> Result<String> {
+        let token = new_token();
+        let res =
+            sqlx::query("UPDATE workflows SET webhook_token = ?, updated_at = ? WHERE id = ?")
+                .bind(token_hash(&token))
+                .bind(now())
+                .bind(id)
+                .execute(&self.pool)
+                .await?;
+        if res.rows_affected() == 0 {
+            return Err(Error::NotFound(format!("workflow {id}")));
+        }
+        Ok(token)
     }
 
     /// The workflows `dot_id` may start from a chat (teams spec section 7), by team and name.

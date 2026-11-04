@@ -824,6 +824,87 @@ async fn a_webhook_is_refused_when_the_role_cannot_run_dots() {
     t.rt.shutdown();
 }
 
+/// A workflow's webhook (teams spec section 5.1) in an account that does not let this PC run
+/// dots is refused with 403 and the refusal's words, and starts nothing; a Viewer may not make
+/// it a new token either.
+#[tokio::test]
+async fn a_workflow_webhook_is_refused_when_the_role_cannot_run_dots() {
+    let t = Rt::start().await;
+    t.join_as("member").await;
+    let dot =
+        t.rt.create_dot(t.triage(), Some(ACME.into()), None)
+            .await
+            .unwrap();
+    let store = t.rt.store();
+    let team =
+        t.rt.teams()
+            .create(&TeamSpec {
+                name: "crew".into(),
+                description: String::new(),
+                members: vec![MemberSpec {
+                    dot_id: dot.id.clone(),
+                    role: String::new(),
+                }],
+                org_id: Some(ACME.into()),
+                workspace_id: "default".into(),
+            })
+            .await
+            .unwrap();
+    // Added in the store: the folder is not a git repo, which the store does not check, and
+    // the role is refused before the repo is looked at.
+    store
+        .add_project(
+            &team.id,
+            &ProjectSpec {
+                name: "repo".into(),
+                repo_path: t.dir.path().to_string_lossy().to_string(),
+                default_branch: None,
+                remote: "origin".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let mut spec = flow(&dot.id);
+    spec.definition.trigger = Trigger::Webhook {
+        task: Some("Fix it.".into()),
+        project: Some("repo".into()),
+    };
+    let workflow = t.rt.teams().create_workflow(&team.id, &spec).await.unwrap();
+    let token =
+        t.rt.teams()
+            .regenerate_workflow_token(&workflow.id)
+            .await
+            .unwrap();
+    let url = format!(
+        "http://127.0.0.1:{}/workflows/{}/trigger",
+        t.rt.port(),
+        workflow.id
+    );
+    let call = || reqwest::Client::new().post(&url).bearer_auth(&token).send();
+
+    t.become_(2, Some("viewer")).await;
+    let resp = call().await.unwrap();
+    assert_eq!(resp.status(), 403);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"], viewer_cant("run dots"));
+    assert_eq!(
+        refused(t.rt.teams().regenerate_workflow_token(&workflow.id).await),
+        viewer_cant("create or change dots")
+    );
+
+    t.become_(3, None).await;
+    let resp = call().await.unwrap();
+    assert_eq!(resp.status(), 403);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"], "Acme Engineering: you were removed from it.");
+    assert!(store
+        .list_workflow_runs(Some(&team.id), 100)
+        .await
+        .unwrap()
+        .is_empty());
+    t.rt.shutdown();
+}
+
 /// A PC waiting for, or removed from, the member list may still clean up the account's dots:
 /// switch them off or delete them. Switching one on or changing it stays refused.
 #[tokio::test]

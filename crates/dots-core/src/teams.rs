@@ -21,6 +21,16 @@ pub struct Teams {
     orgs: Option<Orgs>,
 }
 
+/// The team's project named `name`, compared without case and surrounding spaces, as a chat's
+/// `start_workflow` and a branch on project match it: how a schedule or webhook trigger's
+/// project name, or a webhook body's, is found.
+pub fn project_named<'a>(team: &'a Team, name: &str) -> Option<&'a Project> {
+    let wanted = name.trim();
+    team.projects
+        .iter()
+        .find(|p| p.spec.name.trim().eq_ignore_ascii_case(wanted))
+}
+
 /// Refuses a project folder that is not a git repo.
 pub(crate) async fn check_repo(repo_path: &str) -> Result<()> {
     let path = Path::new(repo_path.trim());
@@ -187,6 +197,16 @@ impl Teams {
         let workflow = self.store.update_workflow(id, spec).await?;
         self.workflow_updated(&workflow.team_id, id);
         Ok(workflow)
+    }
+
+    /// Makes the workflow a new webhook token and returns it: the only time it is shown
+    /// (section 5.1). The old token stops working at once.
+    pub async fn regenerate_workflow_token(&self, id: &str) -> Result<String> {
+        let team_id = self.store.get_workflow(id).await?.team_id;
+        self.require_edit_team(&team_id).await?;
+        let token = self.store.regenerate_workflow_token(id).await?;
+        self.workflow_updated(&team_id, id);
+        Ok(token)
     }
 
     pub async fn delete_workflow(&self, id: &str) -> Result<()> {

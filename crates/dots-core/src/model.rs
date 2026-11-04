@@ -1012,6 +1012,9 @@ pub struct Workflow {
     /// Why it cannot start now, when the team changed under it (a member it names was deleted
     /// or removed): the refusal its definition would get if it were saved now.
     pub problem: Option<String>,
+    /// Whether the workflow has a webhook token. The token is shown once, when it is made;
+    /// Dots keeps only its hash, as a dot's (section 5.1).
+    pub has_webhook_token: bool,
     #[serde(flatten)]
     pub spec: WorkflowSpec,
 }

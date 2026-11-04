@@ -212,15 +212,10 @@ impl Scheduler {
 /// among its team's projects, with the trigger's task. `Workflows::start` refuses what it
 /// refuses for any start.
 async fn start(workflows: &Workflows, s: &Scheduled<'_>) -> Result<WorkflowRun> {
-    let wanted = s.project.trim();
-    let Some(project) = s
-        .team
-        .projects
-        .iter()
-        .find(|p| p.spec.name.trim().eq_ignore_ascii_case(wanted))
-    else {
+    let Some(project) = crate::teams::project_named(s.team, s.project) else {
         return Err(Error::NotFound(format!(
-            "the team has no project named \"{wanted}\""
+            "the team has no project named \"{}\"",
+            s.project.trim()
         )));
     };
     workflows

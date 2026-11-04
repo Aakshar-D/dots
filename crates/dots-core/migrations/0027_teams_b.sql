@@ -30,3 +30,6 @@ CREATE TABLE workflow_schedule_state (
     fired_count  INTEGER NOT NULL DEFAULT 0,
     updated_at   TEXT NOT NULL
 );
+-- The hash of a workflow's webhook token (teams spec section 5.1), kept as a dot's is
+-- (`util::token_hash`); NULL when it has none. The token itself is shown once, when it is made.
+ALTER TABLE workflows ADD COLUMN webhook_token TEXT;
