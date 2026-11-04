@@ -67,6 +67,10 @@ export const keys = {
   schedulePreview: (schedule: Schedule | null) => ["schedule-preview", schedule] as const,
   webhookUrl: (dotId: string) => ["webhook-url", dotId] as const,
   runs: (dotId: string) => ["runs", dotId] as const,
+  /// The Files panel of a conversation (its topics' roots), under the runs' key: a run that
+  /// changes may have attached or written a file.
+  conversationFiles: (dotId: string, roots: string[]) =>
+    ["runs", dotId, "files", ...roots] as const,
   /// Today's sent, delivered and not delivered counts for a dot, under the runs' key so a
   /// run_updated refreshes it.
   deliveryToday: (dotId: string) => ["runs", dotId, "delivery-today"] as const,
