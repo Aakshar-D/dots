@@ -137,11 +137,11 @@ async fn the_sweep_releases_the_files_of_a_cancelled_scheduled_message() {
     let now = chrono::Utc::now();
     let due = (now + chrono::Duration::hours(1)).to_rfc3339();
     let cancelled = store
-        .insert_scheduled_with_files(&dot.id, None, "", &due, now, &[held.id.clone()])
+        .insert_scheduled_with_files(&dot.id, None, "", &due, now, std::slice::from_ref(&held.id))
         .await
         .unwrap();
     store
-        .insert_scheduled_with_files(&dot.id, None, "", &due, now, &[kept.id.clone()])
+        .insert_scheduled_with_files(&dot.id, None, "", &due, now, std::slice::from_ref(&kept.id))
         .await
         .unwrap();
     // Cancelled in the store only: the release that follows never ran.
