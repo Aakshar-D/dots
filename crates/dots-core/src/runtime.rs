@@ -983,7 +983,8 @@ impl Runtime {
         Ok(())
     }
 
-    /// **Unsnooze**: puts a snoozed item back as it was, with no tag.
+    /// **Unsnooze**: puts a snoozed item back as it was, with no tag. A back mark is taken too,
+    /// so Unsnooze pressed just as the pass wakes the item is not an error.
     pub async fn inbox_unsnooze(&self, item: &InboxKey) -> Result<()> {
         if !self.store.delete_mark_if(item, MarkState::Snoozed).await? {
             return Err(Error::NotFound("That is not snoozed.".into()));
@@ -1009,11 +1010,16 @@ impl Runtime {
         if self.store.count_marks().await? == 0 {
             return Ok(Vec::new());
         }
-        let entries = self.inbox_entries().await?;
-        let keys: HashSet<InboxKey> = entries.iter().map(|e| e.key.clone()).collect();
-        let pruned = self.store.prune_marks(&keys).await?;
+        // A mark made from here on is newer than the snapshot, which may not hold its item yet.
         let now = timestamp(self.clock.now());
+        let mut entries = self.inbox_entries().await?;
+        let keys: HashSet<InboxKey> = entries.iter().map(|e| e.key.clone()).collect();
+        let pruned = self.store.prune_marks(&keys, &now).await?;
         let woke: HashSet<InboxKey> = self.store.wake_due(&now).await?.into_iter().collect();
+        if !woke.is_empty() {
+            // An item that left since the snapshot is not announced; its mark goes next pass.
+            entries = self.inbox_entries().await?;
+        }
         let items: Vec<InboxMark> = entries
             .into_iter()
             .filter(|e| woke.contains(&e.key))

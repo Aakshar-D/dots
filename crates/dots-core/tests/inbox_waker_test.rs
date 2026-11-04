@@ -235,6 +235,9 @@ async fn the_waker_runs_on_the_clock() {
     snooze(&rt, &[key(&gone)], t0() + TimeDelta::hours(1)).await;
     rt.reply(&gone.id, "yes").await.unwrap();
     snooze(&rt, &[key(&later)], t0() + TimeDelta::seconds(10)).await;
+    // A pass prunes only marks made before it began.
+    let start = t0() + TimeDelta::seconds(1);
+    clock.set(start);
 
     let mut events = rt.subscribe();
     let _waker = rt.spawn_snooze_waker();
@@ -246,7 +249,7 @@ async fn the_waker_runs_on_the_clock() {
     assert_eq!(rt.inbox().await.unwrap().snoozed.len(), 1);
 
     // Its next pass is 30 seconds of the clock after the first.
-    clock.set(t0() + TimeDelta::seconds(30));
+    clock.set(start + TimeDelta::seconds(30));
     let items = next(&mut events, ended).await;
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].key(), key(&later));
@@ -264,4 +267,36 @@ async fn no_marks_no_work() {
     assert!(rt.wake_snoozed().await.unwrap().is_empty());
     assert!(inbox_events(&mut events).is_empty());
     rt.shutdown();
+}
+
+#[tokio::test]
+async fn unsnooze_just_after_the_wake_shows_the_item_without_its_tag() {
+    let dir = tempfile::tempdir().unwrap();
+    let (rt, clock) = runtime(&dir.path().join("data"), t0()).await;
+    let dot = dot(&rt, &dir).await;
+    let q = question(&rt, &dot, "Ship it?").await;
+    snooze(&rt, &[key(&q)], t0() + TimeDelta::hours(1)).await;
+    clock.set(t0() + TimeDelta::hours(1));
+    assert_eq!(rt.wake_snoozed().await.unwrap().len(), 1);
+    // The person pressed Unsnooze before the Inbox showed the item back.
+    rt.inbox_unsnooze(&key(&q)).await.unwrap();
+    let inbox = rt.inbox().await.unwrap();
+    assert!(inbox.back.is_empty() && inbox.snoozed.is_empty());
+    assert_eq!(rt.inbox_count().await.unwrap(), 1);
+}
+
+#[tokio::test]
+async fn a_pass_keeps_a_mark_made_since_it_began() {
+    let dir = tempfile::tempdir().unwrap();
+    let (rt, clock) = runtime(&dir.path().join("data"), t0()).await;
+    let dot = dot(&rt, &dir).await;
+    let q = question(&rt, &dot, "Ship it?").await;
+    snooze(&rt, &[key(&q)], t0() + TimeDelta::hours(1)).await;
+    rt.reply(&q.id, "yes").await.unwrap();
+    // Same instant: the mark is not older than the pass, so it stays for now.
+    assert!(rt.wake_snoozed().await.unwrap().is_empty());
+    assert_eq!(rt.store().count_marks().await.unwrap(), 1);
+    clock.set(t0() + TimeDelta::seconds(30));
+    rt.wake_snoozed().await.unwrap();
+    assert_eq!(rt.store().count_marks().await.unwrap(), 0);
 }

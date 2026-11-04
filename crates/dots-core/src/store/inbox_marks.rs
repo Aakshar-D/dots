@@ -2,6 +2,7 @@
 //! section 4.2). A mark is always in exactly one state; the table's check holds it.
 
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use sqlx::sqlite::SqliteRow;
 use sqlx::Row;
@@ -10,16 +11,33 @@ use super::Store;
 use crate::inbox::{InboxKey, InboxKind, InboxMark, MarkState};
 use crate::Result;
 
-fn mark_from_row(row: &SqliteRow) -> Result<InboxMark> {
-    Ok(InboxMark {
-        kind: InboxKind::parse(&row.try_get::<String, _>("kind")?)?,
+/// The mark of a row, or `None` for a kind this build does not know (a later build wrote it):
+/// such a row is skipped, not an error, so the Inbox still loads. It is logged once.
+fn mark_from_row(row: &SqliteRow) -> Result<Option<InboxMark>> {
+    let Some(kind) = known_kind(&row.try_get::<String, _>("kind")?) else {
+        return Ok(None);
+    };
+    Ok(Some(InboxMark {
+        kind,
         id: row.try_get("item_id")?,
         title: String::new(),
         dot_id: None,
         snoozed_until: row.try_get("snoozed_until")?,
         done_at: row.try_get("done_at")?,
         back_at: row.try_get("back_at")?,
-    })
+    }))
+}
+
+fn known_kind(kind: &str) -> Option<InboxKind> {
+    static LOGGED: AtomicBool = AtomicBool::new(false);
+    let parsed = InboxKind::parse(kind).ok();
+    if parsed.is_none() && !LOGGED.swap(true, Ordering::Relaxed) {
+        tracing::warn!(
+            kind,
+            "skipping Inbox marks of a kind this build does not know"
+        );
+    }
+    parsed
 }
 
 impl Store {
@@ -61,14 +79,16 @@ impl Store {
         Ok(())
     }
 
-    /// Deletes the item's mark only if it is in `state`; true when one was deleted.
+    /// Deletes the item's mark only if it is in `state`; true when one was deleted. `Snoozed`
+    /// also takes a back mark: Unsnooze pressed as the pass wakes the item ends the same way,
+    /// shown with no tag.
     pub async fn delete_mark_if(&self, key: &InboxKey, state: MarkState) -> Result<bool> {
-        let column = match state {
-            MarkState::Snoozed => "snoozed_until",
-            MarkState::Done => "done_at",
+        let held = match state {
+            MarkState::Snoozed => "(snoozed_until IS NOT NULL OR back_at IS NOT NULL)",
+            MarkState::Done => "done_at IS NOT NULL",
         };
         let res = sqlx::query(&format!(
-            "DELETE FROM inbox_marks WHERE kind = ? AND item_id = ? AND {column} IS NOT NULL"
+            "DELETE FROM inbox_marks WHERE kind = ? AND item_id = ? AND {held}"
         ))
         .bind(key.kind.as_str())
         .bind(&key.id)
@@ -85,7 +105,8 @@ impl Store {
         )
         .fetch_all(&self.pool)
         .await?;
-        rows.iter().map(mark_from_row).collect()
+        let marks: Result<Vec<Option<InboxMark>>> = rows.iter().map(mark_from_row).collect();
+        Ok(marks?.into_iter().flatten().collect())
     }
 
     pub async fn count_marks(&self) -> Result<usize> {
@@ -95,11 +116,13 @@ impl Store {
         Ok(n as usize)
     }
 
-    /// Deletes the marks whose item is not in `keep` (it left the Inbox on its own), and
-    /// returns how many went.
-    pub async fn prune_marks(&self, keep: &HashSet<InboxKey>) -> Result<usize> {
+    /// Deletes the marks made before `made_before` whose item is not in `keep` (it left the
+    /// Inbox on its own), and returns how many went. A mark made at or after `made_before` is
+    /// newer than the Inbox `keep` was read from, so its item may simply be missing from it.
+    pub async fn prune_marks(&self, keep: &HashSet<InboxKey>, made_before: &str) -> Result<usize> {
         let mut tx = self.pool.begin().await?;
-        let rows = sqlx::query("SELECT kind, item_id FROM inbox_marks")
+        let rows = sqlx::query("SELECT kind, item_id FROM inbox_marks WHERE marked_at < ?")
+            .bind(made_before)
             .fetch_all(&mut *tx)
             .await?;
         let mut gone = 0;
@@ -132,13 +155,12 @@ impl Store {
         .bind(now)
         .fetch_all(&self.pool)
         .await?;
-        rows.iter()
-            .map(|row| {
-                Ok(InboxKey::new(
-                    InboxKind::parse(&row.try_get::<String, _>("kind")?)?,
-                    row.try_get::<String, _>("item_id")?,
-                ))
-            })
-            .collect()
+        let mut woke = Vec::new();
+        for row in &rows {
+            if let Some(kind) = known_kind(&row.try_get::<String, _>("kind")?) {
+                woke.push(InboxKey::new(kind, row.try_get::<String, _>("item_id")?));
+            }
+        }
+        Ok(woke)
     }
 }

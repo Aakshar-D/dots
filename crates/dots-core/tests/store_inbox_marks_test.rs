@@ -140,7 +140,7 @@ async fn prune_marks_keeps_only_given_keys() {
         .unwrap();
     store.done_mark(&c, T).await.unwrap();
     let keep: HashSet<InboxKey> = [a.clone(), c.clone()].into_iter().collect();
-    assert_eq!(store.prune_marks(&keep).await.unwrap(), 1);
+    assert_eq!(store.prune_marks(&keep, &at(1)).await.unwrap(), 1);
     let left: HashSet<InboxKey> = store
         .list_marks()
         .await
@@ -149,6 +149,67 @@ async fn prune_marks_keeps_only_given_keys() {
         .map(|m| m.key())
         .collect();
     assert_eq!(left, keep);
+}
+
+#[tokio::test]
+async fn prune_marks_keeps_a_mark_made_after_the_pass_began() {
+    let (_dir, store) = temp_store().await;
+    let old = key(InboxKind::Message, "old");
+    let new = key(InboxKind::Message, "new");
+    store.done_mark(&old, &at(0)).await.unwrap();
+    // Marked after the pass read the Inbox, so the item is not in its keys.
+    store.done_mark(&new, &at(2)).await.unwrap();
+    assert_eq!(store.prune_marks(&HashSet::new(), &at(1)).await.unwrap(), 1);
+    let left: Vec<InboxKey> = store
+        .list_marks()
+        .await
+        .unwrap()
+        .iter()
+        .map(|m| m.key())
+        .collect();
+    assert_eq!(left, vec![new]);
+}
+
+#[tokio::test]
+async fn a_mark_of_an_unknown_kind_is_skipped() {
+    let (dir, store) = temp_store().await;
+    let known = key(InboxKind::Message, "m1");
+    store
+        .snooze_marks(std::slice::from_ref(&known), &at(1), T)
+        .await
+        .unwrap();
+    // A later build wrote a kind this one does not know.
+    sqlx::query(
+        "INSERT INTO inbox_marks (kind, item_id, snoozed_until, marked_at)          VALUES ('later', 'x1', ?, ?)",
+    )
+    .bind(at(1))
+    .bind(T)
+    .execute(&raw_pool(&dir).await)
+    .await
+    .unwrap();
+    let listed: Vec<InboxKey> = store
+        .list_marks()
+        .await
+        .unwrap()
+        .iter()
+        .map(|m| m.key())
+        .collect();
+    assert_eq!(listed, vec![known.clone()]);
+    assert_eq!(store.wake_due(&at(1)).await.unwrap(), vec![known]);
+}
+
+#[tokio::test]
+async fn unsnoozing_also_takes_a_back_mark() {
+    let (_dir, store) = temp_store().await;
+    let k = key(InboxKind::Message, "m1");
+    store
+        .snooze_marks(std::slice::from_ref(&k), &at(1), T)
+        .await
+        .unwrap();
+    store.wake_due(&at(1)).await.unwrap();
+    // The pass woke it just as the person pressed Unsnooze: the end state is the same.
+    assert!(store.delete_mark_if(&k, MarkState::Snoozed).await.unwrap());
+    assert_eq!(store.count_marks().await.unwrap(), 0);
 }
 
 fn proposal(dot: &Dot, run: &Run, id: &str) -> AppProposal {
