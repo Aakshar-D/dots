@@ -2155,6 +2155,13 @@ impl Runtime {
                 "only a message that failed can be sent again".into(),
             ));
         }
+        // A message that never reached the dot has its own Retry (delivery tracking spec
+        // section 3.9), which also clears it from Needs you.
+        if run.delivered_at.is_none() && run.undelivered_at.is_some() {
+            return Err(Error::Conflict(
+                "this message did not reach the dot; use Retry on it".into(),
+            ));
+        }
         let dot = self.store.get_dot(&run.dot_id).await?;
         self.require_run(&dot).await?;
         self.refuse_at_the_limit(&dot)?;
@@ -2182,7 +2189,13 @@ impl Runtime {
         if let Some(serde_json::Value::Object(payload)) = &mut new.payload {
             payload.remove(crate::model::RESENT);
         }
-        self.runner.enqueue(new).await
+        // Its files go with it, as a Retry's do (attachments spec section 4.3).
+        let run = self
+            .store
+            .create_chat_run(&new, &[], None, Some(run_id))
+            .await?;
+        self.runner.enqueued(&run);
+        Ok(run)
     }
 
     pub async fn cancel_run(&self, run_id: &str) -> Result<Run> {

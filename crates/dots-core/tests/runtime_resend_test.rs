@@ -31,6 +31,11 @@ async fn dot(rt: &Runtime, dir: &TempDir) -> Dot {
 async fn ended(rt: &Runtime, new: NewRun, status: RunStatus) -> Run {
     let run = rt.store().create_run(&new).await.unwrap();
     rt.store().claim_run(&run.id).await.unwrap();
+    // Its engine had started on it: the message got there.
+    rt.store()
+        .mark_delivered(&run.id, chrono::Utc::now())
+        .await
+        .unwrap();
     rt.store()
         .finish_run(&run.id, status, None, Some("interrupted"))
         .await
@@ -94,4 +99,62 @@ async fn only_a_failed_message_that_ends_its_topic_is_sent_again() {
         rt.resend(&failed.id).await,
         Err(Error::Conflict(_))
     ));
+}
+
+#[tokio::test]
+async fn a_message_that_never_got_there_is_left_to_retry() {
+    let dir = TempDir::new().unwrap();
+    let rt = start(&dir).await;
+    let dot = dot(&rt, &dir).await;
+    let run = rt
+        .store()
+        .create_run(&message(&dot.id, "hi"))
+        .await
+        .unwrap();
+    rt.store().claim_run(&run.id).await.unwrap();
+    rt.store()
+        .finish_run(&run.id, RunStatus::Failed, None, Some("engine: boom"))
+        .await
+        .unwrap();
+    // Not delivered: its Retry (delivery tracking) sends it again, not Send again.
+    assert!(matches!(rt.resend(&run.id).await, Err(Error::Conflict(_))));
+}
+
+#[tokio::test]
+async fn files_go_with_a_message_sent_again() {
+    let dir = TempDir::new().unwrap();
+    let rt = start(&dir).await;
+    let dot = dot(&rt, &dir).await;
+    rt.store()
+        .insert_staged_attachment("att1", &dot.id, "a.txt", 3)
+        .await
+        .unwrap();
+    let mut new = message(&dot.id, "see the file");
+    new.payload.as_mut().unwrap()["attachments"] =
+        json!([{ "id": "att1", "name": "a.txt", "size": 3 }]);
+    let run = rt
+        .store()
+        .create_chat_run(&new, &[("att1".into(), "a.txt".into())], None, None)
+        .await
+        .unwrap();
+    rt.store().claim_run(&run.id).await.unwrap();
+    rt.store()
+        .mark_delivered(&run.id, chrono::Utc::now())
+        .await
+        .unwrap();
+    rt.store()
+        .finish_run(&run.id, RunStatus::Failed, None, Some("interrupted"))
+        .await
+        .unwrap();
+
+    let again = rt.resend(&run.id).await.unwrap();
+    assert!(rt
+        .store()
+        .run_attachments(&run.id)
+        .await
+        .unwrap()
+        .is_empty());
+    let files = rt.store().run_attachments(&again.id).await.unwrap();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].id, "att1");
 }
