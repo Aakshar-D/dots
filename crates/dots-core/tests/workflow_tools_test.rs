@@ -1221,6 +1221,127 @@ async fn a_claude_step_reports_and_sends_back_through_dots_own_server() {
     t.rt.shutdown();
 }
 
+/// The local engine: a step that declares neither outcomes nor send-backs is offered neither
+/// tool, and a call of either is refused and records nothing.
+#[tokio::test]
+async fn a_local_step_not_offered_report_outcome_or_send_back_is_refused_both() {
+    let t = start(json!([])).await;
+    let llm = Llm::start(vec![
+        call("c1", "report_outcome", json!({"outcome": "done"})),
+        call(
+            "c2",
+            "send_back",
+            json!({"to_step": "Build it", "note": "Again."}),
+        ),
+        text("Done."),
+    ])
+    .await;
+    let helper =
+        t.rt.create_dot(local_spec(&t, &llm.endpoint(), "helper"), None, None)
+            .await
+            .unwrap();
+    let wr = run_steps(
+        &t,
+        &[&helper],
+        vec![agent_step("review", "Review it", &helper, &[], &[])],
+    )
+    .await;
+    let wr = until(&t, &wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded).await;
+    let reqs = llm.requests();
+    assert!(
+        workflow_tools(&reqs[0]).is_empty(),
+        "{:?}",
+        tool_names(&reqs[0])
+    );
+    assert_eq!(
+        tool_result(&reqs[1], "c1"),
+        "report_outcome is not available in this run"
+    );
+    assert_eq!(
+        tool_result(&reqs[2], "c2"),
+        "send_back is not available in this run"
+    );
+    let ran: Vec<&str> = wr.steps.iter().map(|s| s.step_id.as_str()).collect();
+    assert_eq!(ran, ["review"]);
+    assert_eq!(wr.steps[0].outcome, None);
+    assert_eq!(wr.steps[0].send_back, None);
+    assert_eq!(wr.send_backs, 0);
+    assert_eq!(wr.send_back, None);
+    t.rt.shutdown();
+}
+
+/// The Claude engine: Dots' own server neither lists nor performs `report_outcome` and
+/// `send_back` for a step that does not offer them, and nothing is recorded.
+#[tokio::test]
+async fn a_claude_step_not_offered_report_outcome_or_send_back_is_refused_both() {
+    let t = start(json!([
+        {"emit": {"type": "system", "subtype": "init", "session_id": "$SESSION"}},
+        {"mcp_list": "dots"},
+        {"mcp_call": {"server": "dots", "tool": "report_outcome",
+                      "arguments": {"outcome": "done"}}},
+        {"mcp_call": {"server": "dots", "tool": "send_back",
+                      "arguments": {"to_step": "Review it", "note": "Again."}}},
+        {"emit": {"type": "result", "subtype": "success", "is_error": false, "result": "done",
+                  "usage": {"input_tokens": 1, "output_tokens": 1}}}
+    ]))
+    .await;
+    let mut s = spec("reviewer");
+    s.workdir = t.dir.path().to_string_lossy().to_string();
+    s.workspace_mode = WorkspaceMode::Folder;
+    s.policy = Policy::preset(Preset::Trusted);
+    let reviewer = t.rt.create_dot(s, None, None).await.unwrap();
+    let wr = run_steps(
+        &t,
+        &[&reviewer],
+        vec![agent_step("review", "Review it", &reviewer, &[], &[])],
+    )
+    .await;
+    let wr = until(&t, &wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded).await;
+    let recorded: Value =
+        serde_json::from_str(&std::fs::read_to_string(&t.args_out).unwrap()).unwrap();
+    let args: Vec<String> = serde_json::from_value(recorded["args"].clone()).unwrap();
+    assert!(
+        !args.iter().any(|a| WORKFLOW_TOOLS
+            .iter()
+            .any(|t| *a == format!("mcp__dots__{t}"))),
+        "{args:?}"
+    );
+    assert!(!recorded["prompt"]
+        .as_str()
+        .unwrap()
+        .contains("### Workflow tools"));
+    let step_run = &wr.steps[0];
+    let run =
+        t.rt.store()
+            .runs_of_step_run(&step_run.id)
+            .await
+            .unwrap()
+            .remove(0);
+    let events = t.rt.store().list_events(&run.id, 0).await.unwrap();
+    let listed = events.iter().find(|e| e.kind == "raw").unwrap();
+    let listed: Value = serde_json::from_str(listed.data["line"].as_str().unwrap()).unwrap();
+    let listed: Vec<&str> = listed["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .filter(|n| WORKFLOW_TOOLS.contains(n))
+        .collect();
+    assert!(listed.is_empty(), "{listed:?}");
+    // Both calls were answered as unknown tools (an error, so no text), not performed.
+    let results: Vec<&str> = events
+        .iter()
+        .filter(|e| e.kind == "tool_result")
+        .map(|e| e.data["output"].as_str().unwrap())
+        .collect();
+    assert_eq!(results, ["", ""]);
+    assert_eq!(step_run.outcome, None);
+    assert_eq!(step_run.send_back, None);
+    assert_eq!(wr.send_backs, 0);
+    assert_eq!(wr.steps.len(), 1);
+    t.rt.shutdown();
+}
+
 /// The plain Sandboxed preset asks before a step's run reports its outcome (policy
 /// `Workflow`); nothing is recorded until the person allows it.
 #[tokio::test]

@@ -237,18 +237,40 @@ fn handoffs_before<'a>(wr: &'a WorkflowRun, id: &str) -> Vec<(&'a Step, &'a Hand
         .collect()
 }
 
+/// The newest of `handoffs` that has branches. A step that changed nothing hands on none (its
+/// worktree went with its branch), so the work it saw is still the branches before it.
+fn newest_with_branches<'a>(handoffs: &[(&'a Step, &'a Handoff)]) -> Option<&'a Handoff> {
+    handoffs
+        .iter()
+        .rev()
+        .map(|(_, h)| *h)
+        .find(|h| !h.branches.is_empty())
+}
+
 /// The branch the step `id` starts from (section 6): the newest earlier hand-off that has
 /// branches, when it has exactly one, as its full ref (a tag of the same name must not stand
 /// in for it). `None` starts from the project's default branch.
 fn start_branch(wr: &WorkflowRun, id: &str) -> Option<String> {
-    let newest = handoffs_before(wr, id)
-        .into_iter()
-        .rev()
-        .find(|(_, h)| !h.branches.is_empty())?;
-    match newest.1.branches.as_slice() {
+    let newest = newest_with_branches(&handoffs_before(wr, id))?;
+    match newest.branches.as_slice() {
         [only] => Some(format!("refs/heads/{}", only.branch)),
         _ => None,
     }
+}
+
+/// The hand-off the check `id` shows (sections 5.4 and 6.2): the newest earlier one, with the
+/// branches of the newest earlier one that has branches, as `start_branch` finds them. A step
+/// that changed nothing (a reviewer that only read) so leaves the branch it was shown to the
+/// check, and a deploy after it ships that branch.
+fn shown_at(wr: &WorkflowRun, id: &str) -> Handoff {
+    let before = handoffs_before(wr, id);
+    let mut shown = before.last().map(|(_, h)| (*h).clone()).unwrap_or_default();
+    if shown.branches.is_empty() {
+        if let Some(h) = newest_with_branches(&before) {
+            shown.branches = h.branches.clone();
+        }
+    }
+    shown
 }
 
 /// The limit the workflow run has reached, if any (section 9), as the person reads it: a new
@@ -679,10 +701,7 @@ impl Workflows {
                 "workflow run {id} is not waiting for a check"
             )));
         };
-        let shown = handoffs_before(&wr, &step_run.step_id)
-            .last()
-            .map(|(_, h)| (*h).clone())
-            .unwrap_or_default();
+        let shown = shown_at(&wr, &step_run.step_id);
         let note = note.map(str::trim).filter(|n| !n.is_empty());
         // The tips the person approved: a deploy after the check pushes exactly these.
         let branches = deploy_step::tips(Path::new(&wr.project.repo_path), &shown).await;
@@ -1009,10 +1028,7 @@ impl Workflows {
                 } else {
                     StepRunStatus::Running
                 };
-                let step_run = self
-                    .store
-                    .create_step_run(&wr.id, &step.id, attempt, status)
-                    .await?;
+                let step_run = self.step_run_to_begin(wr, step, status).await?;
                 self.store
                     .set_workflow_run(
                         &wr.id,
@@ -1033,7 +1049,7 @@ impl Workflows {
                     }
                 }
             }
-            StepKind::Deploy { .. } => self.begin_deploy(wr, step, attempt).await?,
+            StepKind::Deploy { .. } => self.begin_deploy(wr, step).await?,
             StepKind::Branch { .. } => {}
         }
         Ok(())
@@ -1061,9 +1077,7 @@ impl Workflows {
         let step_run = match step_run {
             Some(run) => run.clone(),
             None => {
-                let attempt = next_attempt(wr, &step.id);
-                self.store
-                    .create_step_run(&wr.id, &step.id, attempt, StepRunStatus::Running)
+                self.step_run_to_begin(wr, step, StepRunStatus::Running)
                     .await?
             }
         };
@@ -1091,6 +1105,28 @@ impl Workflows {
             .map_or(otherwise.as_slice(), |p| p.steps.as_slice())
             .first();
         Ok(first.or_else(|| wr.definition.next_after(&step.id)))
+    }
+
+    /// The step run `step` begins on (an agent step, a branch, a deploy), which then becomes
+    /// the current step in a second write: the newest step run of `step` when it is `Running`
+    /// and has no runs, as a begin cut off between those two writes (Dots stopped) left it, so
+    /// it is not left running beside a new attempt; else a new one, its next attempt, with
+    /// `status`. Every step run of a step being begun has otherwise ended, as
+    /// `perform_send_back` also relies on.
+    async fn step_run_to_begin(
+        &self,
+        wr: &WorkflowRun,
+        step: &Step,
+        status: StepRunStatus,
+    ) -> Result<StepRun> {
+        if let Some(cut) = latest(wr, &step.id).filter(|s| s.status == StepRunStatus::Running) {
+            if self.store.runs_of_step_run(&cut.id).await?.is_empty() {
+                return Ok(cut.clone());
+            }
+        }
+        self.store
+            .create_step_run(&wr.id, &step.id, next_attempt(wr, &step.id), status)
+            .await
     }
 
     /// Puts the workflow run in wait for the person to add budget, past `limit` (section 9).
@@ -1351,12 +1387,25 @@ impl Workflows {
         step_run: &StepRun,
         error: &str,
     ) -> Result<()> {
+        self.fail_step_with(wr, step, step_run, error, None).await
+    }
+
+    /// `fail_step`, with what a deploy did before it failed, kept in the same write.
+    async fn fail_step_with(
+        &self,
+        wr: &WorkflowRun,
+        step: &Step,
+        step_run: &StepRun,
+        error: &str,
+        deploy_result: Option<crate::deploy::DeployResult>,
+    ) -> Result<()> {
         self.store
             .set_step_run(
                 &step_run.id,
                 &StepRunChange {
                     status: Some(StepRunStatus::Failed),
                     error: Some(Some(error.to_string())),
+                    deploy_result: deploy_result.map(Some),
                     ..Default::default()
                 },
             )

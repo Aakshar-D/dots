@@ -674,7 +674,8 @@ async fn a_deploy_after_a_check_that_showed_no_branch_ships_nothing() {
         newest(&wr, "ship").deploy_result,
         Some(DeployResult {
             branches: vec![],
-            ready: false
+            ready: false,
+            error: None,
         })
     );
 }
@@ -3680,8 +3681,12 @@ async fn a_push_deploy_lands_the_commit_the_check_approved_on_the_remote() {
         Some(DeployResult {
             branches: vec![pushed(&branch, &tip)],
             ready: false,
+            error: None,
         })
     );
+    // A deploy that succeeded records no error, not even a null one.
+    let result = serde_json::to_value(&ship.deploy_result).unwrap();
+    assert!(result.get("error").is_none(), "{result}");
     assert!(w.gh_calls().is_empty());
 }
 
@@ -3734,6 +3739,7 @@ async fn a_pr_merge_deploy_opens_a_pull_request_and_sets_it_to_merge() {
                 ..pushed(&branch, &tip)
             }],
             ready: false,
+            error: None,
         })
     );
 }
@@ -3760,6 +3766,7 @@ async fn a_test_run_pushes_nothing_and_lists_the_branch_as_ready() {
                 ..pushed(&branch, &tip)
             }],
             ready: true,
+            error: None,
         })
     );
     assert_eq!(w.remote_tip(&branch), None);
@@ -3781,7 +3788,21 @@ async fn a_branch_changed_after_the_approval_fails_the_deploy_until_it_is_put_ba
         failed.error.as_deref(),
         Some("Ship: The branch changed after it was approved.")
     );
-    assert_eq!(newest(&failed, "ship").deploy_result, None);
+    // Refused before any push: the branch is recorded as not pushed, with the error.
+    assert_eq!(
+        serde_json::to_value(&newest(&failed, "ship").deploy_result).unwrap(),
+        json!({
+            "branches": [{
+                "branch": branch,
+                "commit": tip,
+                "pushed": false,
+                "pr_url": null,
+                "auto_merge": false,
+            }],
+            "ready": false,
+            "error": "The branch changed after it was approved.",
+        })
+    );
     assert_eq!(w.remote_tip(&branch), None);
     // Put back where it was approved, a retry deploys it.
     git_out(
@@ -3831,6 +3852,14 @@ async fn a_deploy_refuses_a_branch_that_holds_a_secret() {
              them, then retry the step."
         ))
     );
+    // Refused before any push: the branch is recorded as not pushed, with the error.
+    let result = serde_json::to_value(&newest(&wr, "ship").deploy_result).unwrap();
+    assert_eq!(result["branches"][0]["branch"], json!(branch));
+    assert_eq!(result["branches"][0]["pushed"], json!(false));
+    assert_eq!(
+        result["error"].as_str(),
+        wr.error.as_deref().and_then(|e| e.strip_prefix("Ship: "))
+    );
     assert_eq!(w.remote_tip(&branch), None);
     assert!(w.gh_calls().is_empty());
 }
@@ -3855,9 +3884,25 @@ async fn a_failed_gh_fails_the_deploy_with_its_message_and_keeps_the_push() {
         )
     );
     assert_eq!(newest(&wr, "ship").status, StepRunStatus::Failed);
-    // Nothing already done is undone.
-    assert_eq!(w.remote_tip(&branch), Some(tip));
+    // Nothing already done is undone, and what was done is kept with the error: the branch
+    // pushed and the pull request, to merge by hand.
+    assert_eq!(w.remote_tip(&branch), Some(tip.clone()));
     assert_eq!(w.gh_calls().last().unwrap()[1], "merge");
+    assert_eq!(
+        serde_json::to_value(&newest(&wr, "ship").deploy_result).unwrap(),
+        json!({
+            "branches": [{
+                "branch": branch,
+                "commit": tip,
+                "pushed": true,
+                "pr_url": "https://github.com/o/r/pull/1",
+                "auto_merge": false,
+            }],
+            "ready": false,
+            "error": "gh pr merge failed: GraphQL: Pull request Auto merge is not allowed for \
+                      this repository (enablePullRequestAutoMerge)",
+        })
+    );
 }
 
 #[tokio::test]
@@ -3976,6 +4021,7 @@ async fn a_member_deploy_runs_the_members_step_and_a_test_run_lists_the_branch_i
                 ..pushed(&branch, &tip)
             }],
             ready: true,
+            error: None,
         })
     );
 }
@@ -4334,4 +4380,327 @@ async fn a_member_deploy_after_a_later_step_is_refused_if_the_approved_branch_mo
     );
     assert!(w.runs_of(&newest(&failed, "ship").id).await.is_empty());
     assert_eq!(w.engine.prompts_of("helper").len(), 0);
+}
+
+#[tokio::test]
+async fn a_check_after_a_step_that_changed_nothing_shows_and_ships_the_earlier_branch() {
+    let w = world().await;
+    w.shipping_to_origin("ok");
+    w.engine.set(
+        &w.dev.spec.name,
+        vec![Act::Write("fix.txt", "Fixed the icon.")],
+    );
+    w.engine.set(
+        &w.helper.spec.name,
+        vec![Act::Finish("Read it: it is right.")],
+    );
+    let flow = w
+        .workflow(
+            "Reviewed",
+            vec![
+                agent("dev", "Fix it", &w.dev, "Fix the bug."),
+                agent("review", "Review it", &w.helper, "Review the fix."),
+                check("check"),
+                ship(DeployMode::Push),
+            ],
+        )
+        .await;
+    let wr = w.start(&flow).await;
+    let wr = w.until(&wr.id, waits_on(WaitingOn::Check)).await;
+    let built = newest(&wr, "dev").handoff.clone().unwrap().branches;
+    let branch = built[0].branch.clone();
+    let tip = git_out(&w.repo, &["rev-parse", &format!("refs/heads/{branch}")]);
+    // The reviewer changed nothing: its branch is gone with its worktree.
+    assert!(newest(&wr, "review")
+        .handoff
+        .as_ref()
+        .unwrap()
+        .branches
+        .is_empty());
+    w.workflows.approve_check(&wr.id, None).await.unwrap();
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    // The check showed the reviewer's summary with the builder's branch, and approved its tip.
+    let check = newest(&wr, "check");
+    let shown = check.handoff.as_ref().unwrap();
+    assert_eq!(shown.summary, "Read it: it is right.");
+    assert_eq!(shown.branches, built);
+    assert_eq!(
+        check.decision.as_ref().unwrap()["branches"],
+        json!([{"branch": branch, "commit": tip}])
+    );
+    // The deploy pushed it.
+    assert_eq!(w.remote_tip(&branch), Some(tip.clone()));
+    assert_eq!(
+        newest(&wr, "ship").deploy_result.as_ref().unwrap().branches,
+        [pushed(&branch, &tip)]
+    );
+}
+
+#[tokio::test]
+async fn an_outcome_step_sent_back_is_told_to_report_again_and_the_branch_takes_the_new_path() {
+    let w = world().await;
+    w.engine.set(&w.dev.spec.name, vec![Act::Gate, Act::Gate]);
+    let flow = w
+        .workflow(
+            "Triage",
+            vec![
+                reporting("triage", "Triage", &w.dev, &["fixed", "needs_info"]),
+                branch(
+                    "route",
+                    BranchOn::Outcome,
+                    vec![
+                        ("fixed", vec![check("check")]),
+                        (
+                            "needs_info",
+                            vec![agent("ask", "Ask", &w.helper, "Ask the person.")],
+                        ),
+                    ],
+                    vec![],
+                ),
+            ],
+        )
+        .await;
+    let wr = w.start(&flow).await;
+    let first = w.until(&wr.id, |wr| !wr.steps.is_empty()).await.steps[0].clone();
+    w.store
+        .set_step_outcome(&first.id, Some("fixed"))
+        .await
+        .unwrap();
+    w.engine.gate.notify_one();
+    let wr = w.until(&wr.id, at_check(1)).await;
+    assert_eq!(chose(&wr, "route").as_deref(), Some("fixed"));
+    w.workflows
+        .send_back_check(&wr.id, "Ask the person first.")
+        .await
+        .unwrap();
+    let again = w
+        .until(&wr.id, |wr| {
+            wr.steps
+                .iter()
+                .any(|s| s.step_id == "triage" && s.attempt == 2)
+        })
+        .await;
+    let again = newest(&again, "triage").clone();
+    assert_eq!(again.outcome, None);
+    // The continued run is told its earlier outcome no longer counts, and reports another.
+    w.store
+        .set_step_outcome(&again.id, Some("needs_info"))
+        .await
+        .unwrap();
+    w.engine.gate.notify_one();
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    assert_eq!(
+        ran(&wr),
+        ["triage", "route", "check", "triage", "route", "ask"]
+    );
+    assert_eq!(chose(&wr, "route").as_deref(), Some("needs_info"));
+    assert_eq!(
+        w.engine.prompts_of("dev")[1],
+        "The person sent this back: Ask the person first.\n\nReport the outcome again with \
+         `mcp__dots__report_outcome`, one of: \"fixed\", \"needs_info\": the earlier one no \
+         longer counts."
+    );
+}
+
+#[tokio::test]
+async fn a_send_back_to_a_name_several_steps_share_is_refused_naming_them() {
+    let w = world().await;
+    w.engine.set(&w.dev.spec.name, vec![Act::Gate]);
+    let flow = w
+        .workflow("Fix", vec![agent("dev", "Fix it", &w.dev, "Fix.")])
+        .await;
+    let wr = w.start(&flow).await;
+    let step_run = w.until(&wr.id, |wr| !wr.steps.is_empty()).await.steps[0].clone();
+    let target = |id: &str, name: &str| SendBackTarget {
+        step_id: id.into(),
+        name: name.into(),
+    };
+    let tools = StepTools {
+        step_run_id: step_run.id.clone(),
+        step_id: "dev".into(),
+        outcomes: vec![],
+        send_back_to: vec![
+            target("a", "Build it"),
+            target("b", "Review"),
+            target("c", "build IT"),
+        ],
+        delegate: None,
+    };
+    let refused = w
+        .workflows
+        .call_send_back(
+            "run",
+            &tools,
+            &json!({"to_step": "BUILD IT", "note": "Again."}),
+        )
+        .await;
+    assert_eq!(
+        refused,
+        Err(
+            "\"BUILD IT\" names more than one step you can send work back to: \"Build it\", \
+             \"build IT\". Nothing was recorded."
+                .to_string()
+        )
+    );
+    let after = w.store.get_step_run(&step_run.id).await.unwrap();
+    assert_eq!(after.send_back, None);
+    w.workflows.stop(&wr.id).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_hand_off_whose_steps_runs_changed_while_it_was_built_writes_nothing() {
+    let w = world().await;
+    w.engine.set(
+        &w.dev.spec.name,
+        vec![
+            Act::Write("one.txt", "First."),
+            Act::Gate,
+            Act::Finish("Second."),
+        ],
+    );
+    let flow = w
+        .workflow(
+            "Two",
+            vec![
+                agent("one", "First", &w.dev, "Start."),
+                agent("two", "Second", &w.dev, "Go on."),
+            ],
+        )
+        .await;
+    let (held, step, gate) = w.held_hand_off(&flow).await;
+    // The person's message joins the step's thread while its hand-off is built.
+    let run = w.runs_of(&step).await.remove(0);
+    let mut new = NewRun::new(&w.dev.id, TriggerKind::Chat);
+    new.payload = Some(json!({"message": "And the tooltip?"}));
+    new.parent_run_id = Some(run.id.clone());
+    new.root_run_id = Some(run.root_run_id.clone());
+    new.session_id = run.session_id.clone();
+    new.workspace_path = run.workspace_path.clone();
+    new.branch = run.branch.clone();
+    new.base_commit = run.base_commit.clone();
+    let reply = w.runner.enqueue(new).await.unwrap();
+    assert_eq!(reply.workflow_step_run_id.as_deref(), Some(step.as_str()));
+    w.workflows.hold_jobs(None);
+    gate.add_permits(1);
+    w.job_ended(&step).await;
+    // The job read runs that changed since: it wrote nothing, and the step is still open.
+    let wr = w.store.get_workflow_run(&held.id).await.unwrap();
+    assert_eq!(ran(&wr), ["one"]);
+    assert_eq!(wr.steps[0].status, StepRunStatus::Running);
+    assert!(wr.steps[0].handoff.is_none());
+    // Once the reply has ended, the hand-off is built again with its work.
+    w.engine.gate.notify_one();
+    let wr = w
+        .until(&held.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    assert_eq!(ran(&wr), ["one", "two"]);
+    assert_eq!(wr.steps[0].handoff.as_ref().unwrap().summary, "through");
+    assert!(wr.steps.iter().all(|s| s.attempt == 1));
+}
+
+/// Starts a run of `flow`, whose first step is a check, and leaves it as a move cut off after
+/// the check would: the check succeeded with `decision` and a step run of `next` made, but the
+/// workflow run not yet moved to it. Gives the workflow run's id and that step run's id.
+async fn cut_off_after_the_check(
+    w: &World,
+    flow: &str,
+    next: &str,
+    decision: Option<serde_json::Value>,
+) -> (String, String) {
+    let wr = w.start(flow).await;
+    let wr = w.until(&wr.id, waits_on(WaitingOn::Check)).await;
+    w.store
+        .set_step_run(
+            &wr.steps[0].id,
+            &StepRunChange {
+                status: Some(StepRunStatus::Succeeded),
+                decision: Some(decision),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let orphan = w
+        .store
+        .create_step_run(&wr.id, next, 1, StepRunStatus::Running)
+        .await
+        .unwrap();
+    w.store
+        .set_workflow_run(
+            &wr.id,
+            &WorkflowRunChange {
+                status: Some(WorkflowRunStatus::Running),
+                waiting_on: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    w.workflows.pass().await.unwrap();
+    (wr.id, orphan.id)
+}
+
+#[tokio::test]
+async fn a_step_run_cut_off_before_the_workflow_run_moved_to_it_is_used_not_left_running() {
+    let w = world().await;
+    let done = |wr: &WorkflowRun| wr.status == WorkflowRunStatus::Succeeded;
+    // An agent step.
+    let flow = w
+        .workflow(
+            "Agent",
+            vec![check("check"), agent("dev", "Fix it", &w.dev, "Fix.")],
+        )
+        .await;
+    let (id, orphan) = cut_off_after_the_check(&w, &flow, "dev", None).await;
+    let wr = w.until(&id, done).await;
+    assert_eq!(
+        attempts(&wr),
+        [
+            ("check", 1, StepRunStatus::Succeeded),
+            ("dev", 1, StepRunStatus::Succeeded),
+        ]
+    );
+    assert_eq!(newest(&wr, "dev").id, orphan);
+    assert_eq!(w.runs_of(&orphan).await.len(), 1);
+
+    // A branch.
+    let flow = w
+        .workflow(
+            "Branch",
+            vec![
+                check("check"),
+                branch(
+                    "pick",
+                    BranchOn::Project,
+                    vec![("Dots", vec![agent("dots", "Dots", &w.dev, "Work.")])],
+                    vec![],
+                ),
+            ],
+        )
+        .await;
+    let (id, orphan) = cut_off_after_the_check(&w, &flow, "pick", None).await;
+    let wr = w.until(&id, done).await;
+    assert_eq!(ran(&wr), ["check", "pick", "dots"]);
+    assert_eq!(newest(&wr, "pick").id, orphan);
+    assert_eq!(chose(&wr, "pick").as_deref(), Some("Dots"));
+
+    // A deploy.
+    let flow = w
+        .workflow("Deploy", vec![check("check"), ship(DeployMode::Branch)])
+        .await;
+    let approved = json!({"decision": "approved", "note": null, "branches": []});
+    let (id, orphan) = cut_off_after_the_check(&w, &flow, "ship", Some(approved)).await;
+    let wr = w.until(&id, done).await;
+    assert_eq!(
+        attempts(&wr),
+        [
+            ("check", 1, StepRunStatus::Succeeded),
+            ("ship", 1, StepRunStatus::Succeeded),
+        ]
+    );
+    assert_eq!(newest(&wr, "ship").id, orphan);
 }

@@ -13,7 +13,9 @@ use std::path::Path;
 use serde_json::{json, Value};
 
 use super::{ran_before, succeeded, Workflows};
-use crate::deploy::{check_tips, ApprovedBranch, DeployResult, Deployer, BRANCH_CHANGED};
+use crate::deploy::{
+    check_tips, ApprovedBranch, DeployFailure, DeployResult, Deployer, BRANCH_CHANGED,
+};
 use crate::model::{
     Handoff, ProjectSpec, StepRun, StepRunChange, StepRunStatus, WorkflowRun, WorkflowRunChange,
 };
@@ -156,22 +158,17 @@ impl Workflows {
         self.deployer.get().cloned().unwrap_or_default()
     }
 
-    /// Begins the deploy step `step` as its attempt `attempt`: a step run that stays `Running`
-    /// while a job deploys. In a real run, a deploy of mode `member` checks that the approved
-    /// branches are unchanged and then runs as an agent step of that member (`start_agent`).
-    pub(super) async fn begin_deploy(
-        &self,
-        wr: &WorkflowRun,
-        step: &Step,
-        attempt: u32,
-    ) -> Result<()> {
+    /// Begins the deploy step `step` as its next attempt: a step run that stays `Running` while
+    /// a job deploys. In a real run, a deploy of mode `member` checks that the approved branches
+    /// are unchanged and then runs as an agent step of that member (`start_agent`).
+    pub(super) async fn begin_deploy(&self, wr: &WorkflowRun, step: &Step) -> Result<()> {
         if !matches!(step.kind, StepKind::Deploy { .. }) {
             return Err(Error::Other(format!("step {} is not a deploy", step.id)));
         }
         let member = worker(wr, step).is_some();
+        // A step run a begin cut off before the move below left running is used, not doubled.
         let step_run = self
-            .store
-            .create_step_run(&wr.id, &step.id, attempt, StepRunStatus::Running)
+            .step_run_to_begin(wr, step, StepRunStatus::Running)
             .await?;
         let wr = self
             .store
@@ -279,29 +276,46 @@ impl Workflows {
                 let wr = self.store.get_workflow_run(&wr.id).await?;
                 self.move_on(&wr, step).await
             }
-            Err(error) => self.fail_step(&wr, step, &step_run, &error).await,
+            // What it did before the error is kept with it, in the write that fails the step:
+            // a branch already pushed, a pull request already open.
+            Err((error, done)) => {
+                let result = DeployResult {
+                    error: Some(error.clone()),
+                    ..done
+                };
+                self.fail_step_with(&wr, step, &step_run, &error, Some(result))
+                    .await
+            }
         }
     }
 
     /// Deploys the step `step_id` of `wr` as its mode says (`branch` in a test run), on the
     /// project's repo and remote, titled with the task and with the approved summary as the
-    /// body. Slow: run without the lock.
+    /// body. `Err` is the error with what was done before it (no branches when the approved
+    /// ones cannot be read). Slow: run without the lock.
     async fn deploy_now(
         &self,
         wr: &WorkflowRun,
         step_id: &str,
-    ) -> std::result::Result<DeployResult, String> {
+    ) -> std::result::Result<DeployResult, DeployFailure> {
+        let unread = |error: String| (error, DeployResult::not_pushed(&[]));
         let mode = match wr.definition.step(step_id).map(|s| &s.kind) {
             Some(StepKind::Deploy { .. }) if wr.test => DeployMode::Branch,
             Some(StepKind::Deploy { mode }) => mode.clone(),
-            _ => return Err(format!("step {step_id} is not a deploy")),
+            _ => return Err(unread(format!("step {step_id} is not a deploy"))),
         };
-        let (branches, summary) = approved(wr, step_id)?;
+        let (branches, summary) = approved(wr, step_id).map_err(unread)?;
         let repo = Path::new(&wr.project.repo_path);
         let base = match mode {
-            DeployMode::Pr | DeployMode::PrMerge { .. } => base_branch(repo, &wr.project)
-                .await
-                .ok_or_else(|| NO_DEFAULT_BRANCH.to_string())?,
+            DeployMode::Pr | DeployMode::PrMerge { .. } => {
+                match base_branch(repo, &wr.project).await {
+                    Some(base) => base,
+                    None => {
+                        let none = DeployResult::not_pushed(&branches);
+                        return Err((NO_DEFAULT_BRANCH.to_string(), none));
+                    }
+                }
+            }
             _ => String::new(),
         };
         self.deployer()

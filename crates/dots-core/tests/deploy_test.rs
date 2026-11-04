@@ -5,7 +5,9 @@ mod common;
 use std::path::{Path, PathBuf};
 
 use common::{git_out, init_repo};
-use dots_core::deploy::{ApprovedBranch, Deployer, BRANCH_CHANGED, GH_MISSING};
+use dots_core::deploy::{
+    ApprovedBranch, DeployFailure, DeployedBranch, Deployer, BRANCH_CHANGED, GH_MISSING,
+};
 use dots_core::workflow::{DeployMode, MergeMethod};
 use tempfile::TempDir;
 
@@ -96,6 +98,18 @@ impl Scratch {
         mode: &DeployMode,
         branches: &[ApprovedBranch],
     ) -> Result<dots_core::deploy::DeployResult, String> {
+        self.deploy_keeping(gh_mode, mode, branches)
+            .await
+            .map_err(|(error, _)| error)
+    }
+
+    /// `deploy`, with what a failed deploy did kept beside its error.
+    async fn deploy_keeping(
+        &self,
+        gh_mode: &str,
+        mode: &DeployMode,
+        branches: &[ApprovedBranch],
+    ) -> Result<dots_core::deploy::DeployResult, DeployFailure> {
         let _held = GH.lock().await;
         std::env::set_var("FAKE_GH_LOG", self.log());
         std::env::set_var("FAKE_GH_MODE", gh_mode);
@@ -367,8 +381,8 @@ async fn a_failed_auto_merge_fails_with_ghs_message_and_keeps_the_push() {
     let mode = DeployMode::PrMerge {
         merge_method: MergeMethod::Squash,
     };
-    let err = s
-        .deploy("fail-merge", &mode, &[approved("dots/fix", &tip)])
+    let (err, done) = s
+        .deploy_keeping("fail-merge", &mode, &[approved("dots/fix", &tip)])
         .await
         .unwrap_err();
     assert_eq!(
@@ -376,6 +390,18 @@ async fn a_failed_auto_merge_fails_with_ghs_message_and_keeps_the_push() {
         "gh pr merge failed: GraphQL: Pull request Auto merge is not allowed for this \
          repository (enablePullRequestAutoMerge)"
     );
+    // What was done before the error is given back with it: the push and the pull request.
+    assert_eq!(
+        done.branches,
+        [DeployedBranch {
+            branch: "dots/fix".into(),
+            commit: tip.clone(),
+            pushed: true,
+            pr_url: Some("https://github.com/o/r/pull/1".into()),
+            auto_merge: false,
+        }]
+    );
+    assert!(!done.ready);
     assert_eq!(s.remote_tip("dots/fix"), Some(tip), "nothing is undone");
     assert_eq!(calls_of(&s.gh_calls(), "create").len(), 1);
 }
@@ -388,7 +414,7 @@ async fn a_missing_gh_fails_before_anything_is_pushed() {
         gh: s.dir.path().join("no-such-gh.exe"),
         env: Vec::new(),
     };
-    let err = deployer
+    let (err, done) = deployer
         .deploy(
             &s.repo,
             "origin",
@@ -403,6 +429,11 @@ async fn a_missing_gh_fails_before_anything_is_pushed() {
     assert_eq!(err, GH_MISSING);
     assert_eq!(err, "gh is not installed or not on the PATH");
     assert_eq!(s.remote_tip("dots/fix"), None);
+    // The branch is given back as not pushed.
+    assert_eq!(done.branches.len(), 1);
+    assert_eq!(done.branches[0].branch, "dots/fix");
+    assert!(!done.branches[0].pushed);
+    assert_eq!(done.error, None);
 }
 
 #[tokio::test]
@@ -672,6 +703,7 @@ async fn deploy_to(
             "The summary.",
         )
         .await
+        .map_err(|(error, _)| error)
 }
 
 /// A new empty bare repository `name` beside the scratch repository.

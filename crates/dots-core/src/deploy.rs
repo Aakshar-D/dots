@@ -100,34 +100,25 @@ pub struct DeployedBranch {
 }
 
 /// What a deploy did, kept as the step run's `deploy_result`. `ready` is set when the branches
-/// were kept as they are and listed as ready (mode `branch`) rather than pushed.
+/// were kept as they are and listed as ready (mode `branch`) rather than pushed. `error` is the
+/// step's error when the deploy failed part way (spec section 4: pushed branches, PR URLs,
+/// errors); it is left out of a deploy that succeeded.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeployResult {
     pub branches: Vec<DeployedBranch>,
     pub ready: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
-impl Deployer {
-    /// Deploys `branches` of the repository at `repo` as `mode` says: `branch` (and `member`,
-    /// which the workflow turns into an agent step before it gets here) pushes nothing; `push`
-    /// pushes each branch to `remote`; `pr` also opens a pull request against `base` (or reuses
-    /// the open one, so a retry does not fail) titled with the first line of `title` and with
-    /// `body` as its text; `pr_merge` also sets it to merge once GitHub allows. Before anything
-    /// is pushed, every branch must still be at its approved commit and must hold no file that
-    /// looks like a secret or is too big. `Err` is the step's error.
-    #[allow(clippy::too_many_arguments)]
-    pub async fn deploy(
-        &self,
-        repo: &Path,
-        remote: &str,
-        base: &str,
-        mode: &DeployMode,
-        branches: &[ApprovedBranch],
-        title: &str,
-        body: &str,
-    ) -> Result<DeployResult, String> {
-        check_tips(repo, branches).await?;
-        let mut result = DeployResult {
+/// A deploy that failed: the step's error, and what it had done by then (each branch with
+/// `pushed` and `pr_url` as far as it got; `error` is left unset).
+pub type DeployFailure = (String, DeployResult);
+
+impl DeployResult {
+    /// `branches` as a deploy finds them before it does anything: none pushed yet.
+    pub fn not_pushed(branches: &[ApprovedBranch]) -> DeployResult {
+        DeployResult {
             branches: branches
                 .iter()
                 .map(|b| DeployedBranch {
@@ -139,11 +130,59 @@ impl Deployer {
                 })
                 .collect(),
             ready: false,
-        };
+            error: None,
+        }
+    }
+}
+
+impl Deployer {
+    /// Deploys `branches` of the repository at `repo` as `mode` says: `branch` (and `member`,
+    /// which the workflow turns into an agent step before it gets here) pushes nothing; `push`
+    /// pushes each branch to `remote`; `pr` also opens a pull request against `base` (or reuses
+    /// the open one, so a retry does not fail) titled with the first line of `title` and with
+    /// `body` as its text; `pr_merge` also sets it to merge once GitHub allows. Before anything
+    /// is pushed, every branch must still be at its approved commit and must hold no file that
+    /// looks like a secret or is too big. `Err` is the step's error, with what was done before
+    /// it (a failure before the first push: every branch not pushed).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn deploy(
+        &self,
+        repo: &Path,
+        remote: &str,
+        base: &str,
+        mode: &DeployMode,
+        branches: &[ApprovedBranch],
+        title: &str,
+        body: &str,
+    ) -> Result<DeployResult, DeployFailure> {
+        let mut result = DeployResult::not_pushed(branches);
+        match self
+            .deploy_into(&mut result, repo, remote, base, mode, branches, title, body)
+            .await
+        {
+            Ok(()) => Ok(result),
+            Err(error) => Err((error, result)),
+        }
+    }
+
+    /// `deploy`, noting in `result` what is done as it goes, so a failure part way keeps it.
+    #[allow(clippy::too_many_arguments)]
+    async fn deploy_into(
+        &self,
+        result: &mut DeployResult,
+        repo: &Path,
+        remote: &str,
+        base: &str,
+        mode: &DeployMode,
+        branches: &[ApprovedBranch],
+        title: &str,
+        body: &str,
+    ) -> Result<(), String> {
+        check_tips(repo, branches).await?;
         let (pr, merge) = match mode {
             DeployMode::Branch | DeployMode::Member { .. } => {
                 result.ready = true;
-                return Ok(result);
+                return Ok(());
             }
             DeployMode::Push => (false, None),
             DeployMode::Pr => (true, None),
@@ -180,7 +219,7 @@ impl Deployer {
                 done.auto_merge = true;
             }
         }
-        Ok(result)
+        Ok(())
     }
 
     /// The URL of the open pull request of `branch` into `base` in this repository, if there is

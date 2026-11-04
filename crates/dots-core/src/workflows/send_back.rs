@@ -19,15 +19,15 @@ use serde_json::json;
 
 use super::delegate::own_runs;
 use super::{
-    branch_exists, handoffs_before, latest, next_attempt, next_of, ran_before, start_branch,
-    Workflows, MAX_TASK,
+    branch_exists, handoffs_before, latest, next_attempt, next_of, ran_before, shown_at,
+    start_branch, Workflows, MAX_TASK,
 };
 use crate::accounts::Permission;
 use crate::model::{
     SendBack, SentBy, StepRun, StepRunChange, StepRunStatus, WaitingOn, WorkflowRun,
     WorkflowRunChange, WorkflowRunStatus,
 };
-use crate::team_tools::quoted;
+use crate::team_tools::{quoted, StepTools, Tool};
 use crate::workflow::{Step, StepKind};
 use crate::workspace::git;
 use crate::{Error, Result};
@@ -175,10 +175,7 @@ impl Workflows {
                 check.name
             )));
         }
-        let shown = handoffs_before(&wr, &check.id)
-            .last()
-            .map(|(_, h)| (*h).clone())
-            .unwrap_or_default();
+        let shown = shown_at(&wr, &check.id);
         self.store
             .set_step_run(
                 &step_run.id,
@@ -330,7 +327,8 @@ impl Workflows {
     /// succeeded step run's own thread is continued, with the same session, worktree and
     /// branch (for a delegate step, the delegating run). The target of the workflow run's last
     /// send-back is told the note; a step after it gets the newest hand-off before it, and a
-    /// worktree it no longer has is made again from that hand-off's tip. A last run without a
+    /// worktree it no longer has is made again from that hand-off's tip. Either is also told to
+    /// report its outcome again, when it has outcomes to report (`outcome_again`). A last run without a
     /// session starts afresh, from its old branch while that exists, and the step run's notice
     /// says so. Any other step starts afresh as usual (`queue_agent_run`).
     pub(super) async fn queue_first(
@@ -362,10 +360,14 @@ impl Workflows {
             None => false,
         };
         let target = wr.send_back.as_ref().filter(|s| !s.held && s.to == step.id);
-        let message = match target {
+        let mut message = match target {
             Some(send) => sent_message(wr, send),
             None => rerun_message(wr, step, kept),
         };
+        if let Some(again) = self.outcome_again(wr, step, step_run).await {
+            message.push_str("\n\n");
+            message.push_str(&again);
+        }
         match last.filter(|r| r.session_id.is_some()) {
             Some(last) => {
                 let mut new = crate::checkins::continuation(last, last, message, None);
@@ -411,5 +413,35 @@ impl Workflows {
             }
         }
         Ok(())
+    }
+
+    /// What a step that runs again after a send-back is told about its outcome (section 5.6),
+    /// when it declares outcomes and its runs have `report_outcome` (its member's policy does
+    /// not deny `Workflow` outright, as `section` reads it): the new step run starts with none,
+    /// so a branch on outcome after it would take `otherwise` unless it reports again. The
+    /// tool is named as the member's model knows it.
+    async fn outcome_again(
+        &self,
+        wr: &WorkflowRun,
+        step: &Step,
+        step_run: &StepRun,
+    ) -> Option<String> {
+        let tools = StepTools::of(&step_run.id, step, &wr.definition)
+            .filter(|t| t.offers(Tool::ReportOutcome))?;
+        let (member, _) = super::deploy_step::worker(wr, step)?;
+        let dot = self.store.get_dot(member).await.ok()?;
+        let denied = dot
+            .spec
+            .policy
+            .resolve(crate::policy::WORKFLOW_TOOL, &serde_json::Value::Null)
+            == crate::policy::Action::Deny;
+        if denied {
+            return None;
+        }
+        Some(format!(
+            "Report the outcome again with `{}`, one of: {}: the earlier one no longer counts.",
+            Tool::ReportOutcome.model_name(dot.spec.engine),
+            quoted(tools.outcomes.iter().map(String::as_str))
+        ))
     }
 }

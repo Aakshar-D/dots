@@ -222,8 +222,8 @@ impl Workflows {
     }
 
     /// Performs an allowed `send_back` call of the run `run_id`, which works for the step of
-    /// `step`: `to_step` names one of the steps it may send back to, without case, and the
-    /// note is 1 to 8,000 characters. It is recorded on the step run, and performed when the
+    /// `step`: `to_step` names one of the steps it may send back to, without case (a name
+    /// several of them share is refused), and the note is 1 to 8,000 characters. It is recorded on the step run, and performed when the
     /// step succeeds. `Ok` is the text the model gets; `Err` a tool error, in one sentence.
     pub async fn call_send_back(
         &self,
@@ -234,15 +234,27 @@ impl Workflows {
         let _one = self.lock.lock().await;
         self.step_open(run_id, step).await?;
         let (to, note) = (arg(input, "to_step"), arg(input, "note"));
-        let Some(target) = step
+        let named: Vec<_> = step
             .send_back_to
             .iter()
-            .find(|t| t.name.trim().eq_ignore_ascii_case(&to))
-        else {
-            return Err(format!(
-                "You can send work back only to: {}.",
-                quoted(step.send_back_to.iter().map(|t| t.name.as_str()))
-            ));
+            .filter(|t| t.name.trim().eq_ignore_ascii_case(&to))
+            .collect();
+        let target = match named.as_slice() {
+            [one] => *one,
+            [] => {
+                return Err(format!(
+                    "You can send work back only to: {}.",
+                    quoted(step.send_back_to.iter().map(|t| t.name.as_str()))
+                ))
+            }
+            // Steps' names need not differ: the work must not go to one picked by order.
+            several => {
+                return Err(format!(
+                    "\"{to}\" names more than one step you can send work back to: {}. Nothing \
+                     was recorded.",
+                    quoted(several.iter().map(|t| t.name.as_str()))
+                ))
+            }
         };
         if note.is_empty() || note.chars().count() > MAX_TASK {
             return Err("Give a note of 1 to 8,000 characters that says what to change.".into());
