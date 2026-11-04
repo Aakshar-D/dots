@@ -38,12 +38,12 @@ Success: a message with a 3 MB PDF and a pasted screenshot reaches the dot as tw
 6. **A pasted image** is named `Pasted image.<ext>` (png, jpg, gif or webp from its type; png otherwise) unless the clipboard file has a name other than `image.png`.
 7. **A message may be files only** (empty text). It is refused only when it has neither text nor files.
 8. **When files are removed**:
-   - a staged file: when its chip's × is pressed; when the chat box goes away unsent (the dot pane closes); and, as a backstop, at the next start of Dots;
+   - a staged file: when its chip's × is pressed; when the chat box goes away unsent (the dot pane closes); and, as a backstop, at the next start of Dots. The files belong to the dot's pane, not to the topic it shows: opening a History topic and coming back keeps them. Files that a send or a schedule on its way carries are not removed when the pane closes under it; if that send then fails, they are removed;
    - stored copies: when their dot is deleted. A sweep at startup also removes any folder under `<data>/chat-files/` that has no row;
    - workspace copies: Dots never deletes files in the person's own folder (folder mode). The person may delete `attachments/` themselves; it comes back at the topic's next run. In worktree mode they go with the worktree (cleanup, Discard). Topics are never deleted on their own, so "the rest of the conversation" means as long as the dot exists.
 9. **A topic a watcher started** already has a watcher folder at `attachments/<root id>/`. That folder is removed after each run. A reply there with files puts them in the same folder. They are removed with it after the run and copied back before the next one. Nothing else changes for watchers.
 10. **Retry** of a message that was not delivered (delivery tracking) moves its files to the new message. **Discard** leaves them with the dismissed message: they are no longer copied, and the Files panel no longer lists them.
-11. **Answering a question** ("Reply to question") sends no files. While answering, the paperclip is disabled and drops and pastes are ignored. Files already in the box stay there for the next message.
+11. **Answering a question** ("Reply to question") sends no files. While answering, the paperclip is disabled and drops and pastes are ignored. Files picked in a picker that was open when the box began an answer, or became disabled, are not added either. Files already in the box stay there for the next message.
 12. **Drop target**: the whole window, while a conversation's chat box can send. While files are dragged over the window, the chat box shows "Drop files to attach". Tauri gives a drop to the window as a whole, so hit-testing the box would gain nothing.
 13. **No thumbnails** in chips. The CSP allows no `blob:` images, and a chip only needs the name and size.
 
@@ -75,7 +75,8 @@ CREATE INDEX chat_attachments_run ON chat_attachments(run_id);
 
 - `MAX_FILES = 10`, `MAX_FILE_BYTES = 25 * 1024 * 1024`.
 - **From a path** (picker, drop): `symlink_metadata`. A link (symlink or junction) is refused, a folder is refused, and a size over the limit is refused before anything is read. The file is then opened without following a link (on Windows with `FILE_FLAG_OPEN_REPARSE_POINT`; on Unix the opened file's device and inode must match the checked entry), and the handle is checked again, so a file swapped for a link after the check is refused too. The copy then reads at most `MAX_FILE_BYTES + 1` bytes, so a file that grows while it is copied is refused too. Paths come from the UI, the way a dot's workdir does today. The UI is trusted to pass what the person picked.
-- **From bytes** (paste): the same size limit, with the name from the UI made safe.
+- **From bytes** (paste): the same size limit, with the name from the UI made safe. The UI refuses a pasted file over the limit by its `File.size`, with the same text, before it reads its bytes, so a pasted video of gigabytes is never read into the webview's memory or sent over IPC. The core still checks.
+
 - Both check the dot (`get_dot`, `require_run`), insert the row (`run_id` and `scheduled_id` NULL) and answer `StagedAttachment { id, name, size }`.
 - **Removing** a staged file deletes its row and folder only while `run_id` and `scheduled_id` are both NULL. Otherwise it is a `Conflict`.
 

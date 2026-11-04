@@ -18,6 +18,7 @@ import {
 import { DotPane } from "@/screens/home/DotPane";
 import { DotsColumn } from "@/screens/home/DotsColumn";
 import { lastDot } from "@/screens/home/last-dot";
+import { StagedFilesProvider } from "@/screens/home/staged-files";
 
 /// No dot yet: what a dot is, and the way to make one.
 function EmptyHome() {
@@ -120,7 +121,12 @@ export function HomeScreen() {
     const row = rows.find((r) => r.dot.id === dotId);
     if (row) {
       // An older topic, or the conversation again, opens with its own reply target and scroll.
-      pane = <DotPane key={`${row.dot.id}/${rootRunId ?? ""}`} row={row} rootRunId={rootRunId} />;
+      // The files in the chat box stay with the dot (attachments spec section 3.1.8).
+      pane = (
+        <StagedFilesProvider key={row.dot.id} dotId={row.dot.id}>
+          <DotPane key={`${row.dot.id}/${rootRunId ?? ""}`} row={row} rootRunId={rootRunId} />
+        </StagedFilesProvider>
+      );
     } else if (waiting && handled !== dotId && orgs === undefined && orgList.isError) {
       // The dot's account can't be told without the joined accounts.
       pane = (

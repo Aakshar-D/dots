@@ -126,6 +126,97 @@ describe("attaching files to a message", () => {
     expect(await within(chips()!).findByText("Pasted image.png")).toBeVisible();
   });
 
+  it("refuses a pasted file over 25 MB by its size, without reading it", async () => {
+    home([chat("a", "10:00")]);
+    staging();
+    renderApp(`/home/${dot.id}`);
+    const input = await readyBox();
+    const big = new File([new Uint8Array([1])], "clip.mp4", { type: "video/mp4" });
+    Object.defineProperty(big, "size", { value: 25 * 1024 * 1024 + 1 });
+    let read = false;
+    Object.defineProperty(big, "arrayBuffer", {
+      value: () => {
+        read = true;
+        return Promise.resolve(new ArrayBuffer(1));
+      },
+    });
+    const small = new File([new Uint8Array([1, 2, 3])], "image.png", { type: "image/png" });
+    fireEvent.paste(input, { clipboardData: { files: [big, small], getData: () => "" } });
+    expect(await screen.findByRole("alert")).toHaveTextContent("clip.mp4 is larger than 25 MB.");
+    await waitFor(() => expect(backend.callsTo("attachment_add_bytes")).toHaveLength(1));
+    expect(read).toBe(false);
+    expect(await within(chips()!).findByText("Pasted image.png")).toBeVisible();
+  });
+
+  it("does not add files picked while the box began an answer", async () => {
+    home([chat("a", "10:00")]);
+    staging();
+    backend.on("messages_list", () => [{ ...sample.messages[0], run_id: "a" }]);
+    const picked = later<string[]>();
+    backend.on("dialog_open", () => picked.answer);
+    const { user } = renderApp(`/home/${dot.id}`);
+    const bar = await screen.findByRole("region", { name: "Open question" });
+    await readyBox();
+    await user.click(screen.getByRole("button", { name: "Attach files" }));
+    await user.click(within(bar).getByRole("button", { name: "Reply to question" }));
+    await act(async () => picked.give(["C:\\late.txt"]));
+    expect(backend.callsTo("attachment_add_path")).toEqual([]);
+    expect(chips()).toBeNull();
+  });
+
+  it("says under the chips when a file was gone at send", async () => {
+    home([chat("a", "10:00")]);
+    staging();
+    backend.on("chat", () => {
+      throw {
+        kind: "conflict",
+        message: "An attached file is no longer there. Remove it and attach it again.",
+      };
+    });
+    const { user } = renderApp(`/home/${dot.id}`);
+    await readyBox();
+    drop(["C:\\one.txt"]);
+    await waitFor(() => expect(send()).toBeEnabled());
+    await user.click(send());
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "An attached file is no longer there. Remove it and attach it again.",
+    );
+    expect(within(chips()!).getByText("one.txt")).toBeVisible();
+  });
+
+  it("keeps the files in the box while an older topic is open", async () => {
+    const old = chat("old", "08:00");
+    home([old, chat("current", "10:00")]);
+    staging();
+    const { router } = renderApp(`/home/${dot.id}`);
+    await readyBox();
+    drop(["C:\\kept.txt"]);
+    await waitFor(() => expect(within(chips()!).getByText("2.4 KB")).toBeVisible());
+    await act(() => router.navigate(`/home/${dot.id}/old`));
+    expect(await screen.findByText("Back to the current conversation")).toBeVisible();
+    expect(within(chips()!).getByText("kept.txt")).toBeVisible();
+    await act(() => router.navigate(`/home/${dot.id}`));
+    await waitFor(() => expect(screen.queryByText("Back to the current conversation")).toBeNull());
+    expect(within(chips()!).getByText("kept.txt")).toBeVisible();
+    expect(backend.callsTo("attachment_remove")).toEqual([]);
+  });
+
+  it("a send on its way keeps its files when the conversation goes away", async () => {
+    home([chat("a", "10:00")]);
+    staging();
+    const sent = later<unknown>();
+    backend.on("chat", () => sent.answer);
+    const { user, unmount } = renderApp(`/home/${dot.id}`);
+    await readyBox();
+    drop(["C:\\going.txt"]);
+    await waitFor(() => expect(send()).toBeEnabled());
+    await user.click(send());
+    await waitFor(() => expect(backend.callsTo("chat")).toHaveLength(1));
+    unmount();
+    await act(async () => sent.give(chat("b", "10:01")));
+    expect(backend.callsTo("attachment_remove")).toEqual([]);
+  });
+
   it("removing a chip unstages its file", async () => {
     home([chat("a", "10:00")]);
     staging();

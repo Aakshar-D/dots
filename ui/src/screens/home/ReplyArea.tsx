@@ -1,12 +1,11 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 
 import { commands, toCommandError } from "@/api/commands";
-import type { Message, StagedAttachment } from "@/api/types";
+import type { Message } from "@/api/types";
 import { Button } from "@/components/ui/button";
-import { pastedName, room, TOO_MANY } from "@/lib/attachments";
 import { orgRemovedText, useDotOrg } from "@/lib/dot-org";
 import { useFileDrop } from "@/lib/file-drop";
 import {
@@ -20,98 +19,24 @@ import { isOpenQuestion } from "@/lib/messages";
 import { notifyError } from "@/lib/notify";
 import { invalidate, keys } from "@/lib/query";
 import { onSingleClick } from "@/lib/single-click";
-import { Composer, type ComposerFile } from "@/screens/home/Composer";
+import { Composer } from "@/screens/home/Composer";
+import { useStaged, type StagedFiles } from "@/screens/home/staged-files";
 
 /// The core's text for a staged file that is gone or was taken by another send.
 const GONE = "An attached file is no longer there. Remove it and attach it again.";
 
-/// A file in the chat box: its chip, and its staged id once the core has it.
-type Staged = ComposerFile & { id: string | null };
-
-/// The files in the chat box (attachments spec sections 3 and 6): each is staged by the core the
-/// moment it is added. Refusals say why a file was not added; they clear on the next add or a
-/// send. Files the box still holds when it goes away are removed from the core.
-function useStagedFiles(dotId: string) {
-  const [files, setFiles] = useState<Staged[]>([]);
-  const [refusals, setRefusals] = useState<string[]>([]);
-  const current = useRef<Staged[]>([]);
-  const next = useRef(0);
-  const mounted = useRef(true);
-  const update = (change: (files: Staged[]) => Staged[]) => {
-    current.current = change(current.current);
-    setFiles(current.current);
-  };
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-      for (const f of current.current) {
-        if (f.id !== null) void commands.attachmentRemove(f.id).catch(() => {});
-      }
-      current.current = [];
-    };
-  }, []);
-  function add(items: { name: string; stage: () => Promise<StagedAttachment> }[]) {
-    const { take, refused } = room(current.current.length, items.length);
-    const said: string[] = refused ? [TOO_MANY] : [];
-    setRefusals(said);
-    for (const item of items.slice(0, take)) {
-      const key = `f${next.current++}`;
-      update((fs) => [...fs, { key, name: item.name, size: null, id: null }]);
-      item.stage().then(
-        (staged) => {
-          if (!mounted.current) {
-            void commands.attachmentRemove(staged.id).catch(() => {});
-            return;
-          }
-          update((fs) =>
-            fs.map((f) => (f.key === key ? { key, name: staged.name, size: staged.size, id: staged.id } : f)),
-          );
-        },
-        (error: unknown) => {
-          if (!mounted.current) return;
-          update((fs) => fs.filter((f) => f.key !== key));
-          setRefusals((rs) => [...rs, toCommandError(error).message]);
-        },
-      );
-    }
+/// Calls `go` with the staged ids, which are not removed while it is on its way.
+async function carrying<T>(staged: StagedFiles, go: (ids: string[]) => Promise<T>): Promise<T> {
+  const ids = staged.ids();
+  staged.sending(ids);
+  try {
+    const done = await go(ids);
+    staged.settled(ids, true);
+    return done;
+  } catch (error) {
+    staged.settled(ids, false);
+    throw error;
   }
-  return {
-    files,
-    refusals,
-    ids: () => current.current.flatMap((f) => (f.id === null ? [] : [f.id])),
-    addPaths: (paths: string[]) =>
-      add(
-        paths.map((path) => ({
-          name: path.split(/[\\/]/).pop() ?? path,
-          stage: () => commands.attachmentAddPath(dotId, path),
-        })),
-      ),
-    addFiles: (pasted: File[]) =>
-      add(
-        pasted.map((file) => {
-          const name = pastedName(file);
-          return {
-            name,
-            stage: async () =>
-              commands.attachmentAddBytes(dotId, name, new Uint8Array(await file.arrayBuffer())),
-          };
-        }),
-      ),
-    remove: (key: string) => {
-      const f = current.current.find((x) => x.key === key);
-      if (f === undefined || f.id === null) return;
-      update((fs) => fs.filter((x) => x.key !== key));
-      void commands.attachmentRemove(f.id).catch(() => {});
-    },
-    /// The files went with a message: the box is empty again.
-    sent: () => {
-      update(() => []);
-      setRefusals([]);
-    },
-    refuse: (text: string) => setRefusals([text]),
-    clearRefusals: () => setRefusals([]),
-  };
 }
 
 /// Which topic the next message goes to: the default, one the person chose with Reply, or a
@@ -185,10 +110,10 @@ export function ReplyArea(props: {
   const follow = (rootId: string) => {
     if (olderRoot !== undefined && rootId !== olderRoot) void navigate(`/home/${dotId}`);
   };
-  const staged = useStagedFiles(dotId);
+  const staged = useStaged();
   const send = useMutation({
     mutationFn: (message: string) =>
-      commands.chat(dotId, message, continues?.id ?? null, staged.ids()),
+      carrying(staged, (ids) => commands.chat(dotId, message, continues?.id ?? null, ids)),
     onSuccess: (run) => {
       staged.sent();
       onPick({ kind: "default" });
@@ -199,8 +124,8 @@ export function ReplyArea(props: {
     // are loaded again after any refusal, and the composer follows what they bring.
     onError: (error) => {
       // A staged file that is gone is said under the chips, where it can be removed.
-      if (toCommandError(error).message === GONE) staged.refuse(GONE);
-      else notifyError(error);
+      // When the box has gone, it is said as any other refusal.
+      if (toCommandError(error).message !== GONE || !staged.refuse(GONE)) notifyError(error);
       return reload();
     },
   });
@@ -208,12 +133,8 @@ export function ReplyArea(props: {
   // the menu that asked (a notice, or the dialog's alert).
   const schedule = useMutation({
     mutationFn: ({ text, at }: { text: string; at: Date }) =>
-      commands.scheduleMessage(
-        dotId,
-        text,
-        target?.rootId ?? null,
-        at.toISOString(),
-        staged.ids(),
+      carrying(staged, (ids) =>
+        commands.scheduleMessage(dotId, text, target?.rootId ?? null, at.toISOString(), ids),
       ),
     onSuccess: () => {
       // The files wait with the scheduled message now.
