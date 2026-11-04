@@ -592,6 +592,12 @@
     "test_endpoint",
     "run_now",
     "chat",
+    "attachment_add_path",
+    "attachment_add_bytes",
+    "attachment_remove",
+    "conversation_files",
+    "conversation_file_open",
+    "conversation_file_reveal",
     "cancel_run",
     "keep_waiting",
     "retry_delivery",
@@ -727,6 +733,24 @@
     ],
     "total": 42,
     "truncated": true
+  },
+  "ConversationFile": {
+    "at": "2026-10-09T12:00:00.000Z",
+    "can_open": true,
+    "exists": true,
+    "name": "report.pdf",
+    "path": "C:\\work\\attachments\\01J0RUN6\\report.pdf",
+    "run_id": "01J0RUN6",
+    "source": "attached"
+  },
+  "ConversationFileGone": {
+    "at": "2026-10-09T12:00:00.000Z",
+    "can_open": true,
+    "exists": false,
+    "name": "summary.md",
+    "path": "C:\\work\\out\\summary.md",
+    "run_id": "01J0RUN6",
+    "source": "written"
   },
   "CreatedApiKey": {
     "key": {
@@ -1382,6 +1406,10 @@
     "EntryKind": [
       "plain",
       "secret"
+    ],
+    "FileSource": [
+      "attached",
+      "written"
     ],
     "FileStatus": [
       "added",
@@ -4017,6 +4045,51 @@
     "workflow_step_run_id": null,
     "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
   },
+  "RunWithAttachments": {
+    "base_commit": "0123abcd",
+    "branch": "dots/nightly-tests/01J0RUN",
+    "cost_usd": 1.32,
+    "delivered_at": "2026-10-09T12:00:00.000Z",
+    "delivery": "delivered",
+    "dismissed_at": null,
+    "dot_id": "01J0DOT",
+    "ended_at": "2026-10-09T12:00:00.000Z",
+    "error": null,
+    "hold_released": false,
+    "id": "01J0RUN6",
+    "parent_run_id": null,
+    "payload": {
+      "attachments": [
+        {
+          "id": "01J0ATT",
+          "name": "report.pdf",
+          "size": 2458
+        }
+      ],
+      "message": "Shorten the report.",
+      "typed": true
+    },
+    "queued_at": "2026-10-09T12:00:00.000Z",
+    "quiet_limit_secs": null,
+    "quiet_since": null,
+    "quiet_stopped": false,
+    "retry_of": null,
+    "reviewed_at": null,
+    "root_run_id": "01J0RUN",
+    "session_id": "sess-1",
+    "started_at": "2026-10-09T12:00:00.000Z",
+    "status": "succeeded",
+    "summary": "All tests pass.",
+    "tokens_cache_read": 0,
+    "tokens_in": 1200,
+    "tokens_out": 340,
+    "trigger": "chat",
+    "undelivered_at": null,
+    "undelivered_reason": null,
+    "wait_reason": null,
+    "workflow_step_run_id": null,
+    "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
+  },
   "RuntimeEvent": [
     {
       "run": {
@@ -4538,6 +4611,13 @@
     },
     {
       "message": {
+        "attachments": [
+          {
+            "id": "01J0ATT2",
+            "name": "notes.pdf",
+            "size": 31457
+          }
+        ],
         "created_at": "2026-10-09T12:00:00.000Z",
         "dot_id": "01J0DOT",
         "due_at": "2026-11-05T09:00:00.000Z",
@@ -4555,6 +4635,13 @@
     },
     {
       "message": {
+        "attachments": [
+          {
+            "id": "01J0ATT2",
+            "name": "notes.pdf",
+            "size": 31457
+          }
+        ],
         "created_at": "2026-10-09T12:00:00.000Z",
         "dot_id": "01J0DOT",
         "due_at": "2026-11-05T09:00:00.000Z",
@@ -4654,6 +4741,13 @@
     "slot_at": "2026-10-09T11:00:00Z"
   },
   "ScheduledMessage": {
+    "attachments": [
+      {
+        "id": "01J0ATT2",
+        "name": "notes.pdf",
+        "size": 31457
+      }
+    ],
     "created_at": "2026-10-09T12:00:00.000Z",
     "dot_id": "01J0DOT",
     "due_at": "2026-11-05T09:00:00.000Z",
@@ -4668,6 +4762,13 @@
     "waiting": "busy"
   },
   "ScheduledMessageFailed": {
+    "attachments": [
+      {
+        "id": "01J0ATT2",
+        "name": "notes.pdf",
+        "size": 31457
+      }
+    ],
     "created_at": "2026-10-09T12:00:00.000Z",
     "dot_id": "01J0DOT",
     "due_at": "2026-11-05T09:00:00.000Z",
@@ -4744,6 +4845,11 @@
       "kind": "age"
     }
   ],
+  "StagedAttachment": {
+    "id": "01J0ATT",
+    "name": "report.pdf",
+    "size": 2458
+  },
   "StartupError": {
     "backup": "C:/Users/u/AppData/Local/dots/backups/dots-0.1.0-2026-10-20-091700.db",
     "go_back": "0.1.0",

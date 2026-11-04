@@ -30,6 +30,12 @@ pub const CANCELLED: &str = "This message was cancelled.";
 pub struct ChatExtra {
     /// The note of a scheduled message, written into the run's payload as `send_later`.
     pub send_later: Option<SentLater>,
+    /// The staged files the message carries (attachments spec section 4.3), by id.
+    pub attachment_ids: Vec<String>,
+    /// The scheduled message whose held files these are: they may be held by it.
+    pub scheduled_id: Option<String>,
+    /// Retry: the message whose files move to the new one, keeping their names.
+    pub carry_from: Option<String>,
 }
 
 /// Where a due message goes, decided at send time.

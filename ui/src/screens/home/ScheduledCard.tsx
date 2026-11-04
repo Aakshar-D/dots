@@ -4,6 +4,7 @@ import { useId, useState } from "react";
 
 import { commands } from "@/api/commands";
 import type { ScheduledMessage } from "@/api/types";
+import { AttachmentChip } from "@/components/AttachmentChip";
 import { ErrorNote } from "@/components/ErrorNote";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -134,9 +135,23 @@ export function ScheduledCard(props: {
           }}
         />
       ) : (
-        <p className="max-w-[75%] self-end rounded-2xl rounded-br-sm border border-dashed bg-bubble/60 px-3.5 py-2 break-words whitespace-pre-wrap text-bubble-foreground">
-          {message.text}
-        </p>
+        message.text !== "" && (
+          <p className="max-w-[75%] self-end rounded-2xl rounded-br-sm border border-dashed bg-bubble/60 px-3.5 py-2 break-words whitespace-pre-wrap text-bubble-foreground">
+            {message.text}
+          </p>
+        )
+      )}
+      {message.attachments.length > 0 && (
+        <ul
+          aria-label="Attached files"
+          className="flex max-w-[75%] flex-wrap justify-end gap-1.5 self-end"
+        >
+          {message.attachments.map((f) => (
+            <li key={f.id} className="max-w-full min-w-0">
+              <AttachmentChip name={f.name} size={f.size} />
+            </li>
+          ))}
+        </ul>
       )}
       {status}
       {message.status !== "sending" && !editing && (
@@ -187,7 +202,7 @@ export function editTime(dueAt: string, now: number): Date {
   return due - now < 2 * 60_000 ? new Date(now + 3_600_000) : new Date(due);
 }
 
-/// Edit: the text and the time, saved together.
+/// Edit: the text and the time, saved together. The text may be empty when files go with it.
 function EditForm(props: {
   message: ScheduledMessage;
   pending: boolean;
@@ -199,6 +214,8 @@ function EditForm(props: {
   const [text, setText] = useState(props.message.text);
   const [at, setAt] = useState(() => toPicker(editTime(props.message.due_at, Date.now())));
   const picked = fromPicker(at);
+  // A message that waits with files may have no text (attachments spec section 4.6).
+  const hasFiles = props.message.attachments.length > 0;
   return (
     <form
       className="flex w-full max-w-[75%] flex-col gap-2 self-end"
@@ -220,7 +237,7 @@ function EditForm(props: {
         <Button
           type="submit"
           size="xs"
-          disabled={props.pending || picked === null || text.trim() === ""}
+          disabled={props.pending || picked === null || (text.trim() === "" && !hasFiles)}
         >
           Save
         </Button>

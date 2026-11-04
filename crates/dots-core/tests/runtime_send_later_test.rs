@@ -1007,3 +1007,197 @@ async fn the_sender_sends_once_after_a_restart() {
     rt.shutdown();
     sender.await.unwrap();
 }
+
+// Attachments (attachments spec section 4.6): a scheduled message holds its files until it is
+// sent, Cancel removes them, and they go with it into whatever topic it is sent to.
+
+fn chat_files(dir: &TempDir) -> PathBuf {
+    dir.path().join("data").join(dots_core::chat_files::DIR)
+}
+
+async fn staged(rt: &Runtime, dot: &Dot, name: &str) -> dots_core::model::StagedAttachment {
+    rt.add_attachment_bytes(&dot.id, name, b"file")
+        .await
+        .unwrap()
+}
+
+async fn schedule_files(
+    rt: &Runtime,
+    dot: &Dot,
+    root: Option<&Run>,
+    text: &str,
+    ids: &[String],
+) -> ScheduledMessage {
+    rt.schedule_message_with_files(&dot.id, text, root.map(|r| r.id.as_str()), &at(hour()), ids)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_scheduled_message_keeps_its_files_until_it_sends() {
+    let dir = tempfile::tempdir().unwrap();
+    let (rt, clock) = start(&dir).await;
+    let dot = dot(&rt, &dir).await;
+    let p = topic(&rt, &dot).await;
+    let a = staged(&rt, &dot, "r.pdf").await;
+    let message = schedule_files(&rt, &dot, Some(&p), "", std::slice::from_ref(&a.id)).await;
+    assert_eq!(message.text, "");
+    let listed = rt.scheduled_messages(&dot.id).await.unwrap();
+    assert_eq!(listed[0].attachments, vec![a.clone()]);
+    let row_of = |id: String| {
+        let rt = &rt;
+        async move { rt.store().get_attachment(&id).await.unwrap() }
+    };
+    assert_eq!(
+        row_of(a.id.clone()).await.scheduled_id,
+        Some(message.id.clone())
+    );
+    // Held: not removable as a staged file, and kept by the startup sweep.
+    let e = rt.remove_attachment(&a.id).await.unwrap_err();
+    assert!(matches!(e, Error::Conflict(_)), "{e:?}");
+    dots_core::chat_files::ChatFiles::new(chat_files(&dir))
+        .sweep(rt.store())
+        .await;
+    assert!(chat_files(&dir).join(&a.id).join("r.pdf").is_file());
+    // Edit changes the text only; the files stay.
+    rt.edit_scheduled_message(&message.id, "Now with text", &at(hour()))
+        .await
+        .unwrap();
+    assert_eq!(
+        row_of(a.id.clone()).await.scheduled_id,
+        Some(message.id.clone())
+    );
+
+    clock.set(t0() + hour());
+    rt.send_due().await.unwrap();
+    let r = sent_run(&rt, &message).await;
+    assert_eq!(r.parent_run_id.as_deref(), Some(p.id.as_str()));
+    assert_eq!(
+        r.payload.as_ref().unwrap()["attachments"],
+        json!([{"id": a.id, "name": "r.pdf", "size": 4}])
+    );
+    let row = row_of(a.id.clone()).await;
+    assert_eq!(row.run_id.as_deref(), Some(r.id.as_str()));
+    assert_eq!(row.scheduled_id, None);
+    rt.shutdown();
+}
+
+#[tokio::test]
+async fn scheduling_checks_the_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let (rt, _clock) = start(&dir).await;
+    let dot = dot(&rt, &dir).await;
+    let eleven: Vec<String> = (0..11).map(|i| format!("X{i}")).collect();
+    let e = rt
+        .schedule_message_with_files(&dot.id, "hi", None, &at(hour()), &eleven)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&e, Error::Invalid(m) if m == dots_core::chat_files::TOO_MANY),
+        "{e:?}"
+    );
+    let e = rt
+        .schedule_message_with_files(&dot.id, "hi", None, &at(hour()), &["NOSUCH".to_string()])
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&e, Error::Conflict(m) if m == dots_core::chat_files::GONE),
+        "{e:?}"
+    );
+    let e = rt
+        .schedule_message_with_files(&dot.id, " ", None, &at(hour()), &[])
+        .await
+        .unwrap_err();
+    assert!(matches!(e, Error::Invalid(_)), "{e:?}");
+    // A file held by one scheduled message cannot go with another.
+    let a = staged(&rt, &dot, "a.txt").await;
+    schedule_files(&rt, &dot, None, "one", std::slice::from_ref(&a.id)).await;
+    let e = rt
+        .schedule_message_with_files(
+            &dot.id,
+            "two",
+            None,
+            &at(hour()),
+            std::slice::from_ref(&a.id),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(e, Error::Conflict(_)), "{e:?}");
+    assert_eq!(rt.scheduled_messages(&dot.id).await.unwrap().len(), 1);
+    rt.shutdown();
+}
+
+#[tokio::test]
+async fn cancelling_a_scheduled_message_removes_its_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let (rt, _clock) = start(&dir).await;
+    let dot = dot(&rt, &dir).await;
+    let a = staged(&rt, &dot, "a.txt").await;
+    let message = schedule_files(&rt, &dot, None, "hi", std::slice::from_ref(&a.id)).await;
+    rt.cancel_scheduled_message(&message.id).await.unwrap();
+    assert!(matches!(
+        rt.store().get_attachment(&a.id).await,
+        Err(Error::NotFound(_))
+    ));
+    assert!(!chat_files(&dir).join(&a.id).exists());
+    rt.shutdown();
+}
+
+#[tokio::test]
+async fn send_now_carries_the_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let (rt, _clock) = start(&dir).await;
+    let dot = dot(&rt, &dir).await;
+    let a = staged(&rt, &dot, "a.txt").await;
+    let message = schedule_files(&rt, &dot, None, "hi", std::slice::from_ref(&a.id)).await;
+    let sent = rt.send_scheduled_now(&message.id).await.unwrap();
+    assert_eq!(sent.status, ScheduledStatus::Sent);
+    let r = sent_run(&rt, &message).await;
+    assert_eq!(
+        r.payload.as_ref().unwrap()["attachments"][0]["id"],
+        json!(a.id)
+    );
+    let row = rt.store().get_attachment(&a.id).await.unwrap();
+    assert_eq!(row.run_id.as_deref(), Some(r.id.as_str()));
+    rt.shutdown();
+}
+
+#[tokio::test]
+async fn a_scheduled_message_to_a_gone_conversation_takes_its_files_along() {
+    let dir = tempfile::tempdir().unwrap();
+    let (rt, clock) = start(&dir).await;
+    let dot = dot(&rt, &dir).await;
+    // Its topic's only run failed before the dot had a session: it cannot be continued.
+    let p = rt.chat(&dot.id, "Hello", None).await.unwrap();
+    let p = end(&rt, &p, None).await;
+    let a = staged(&rt, &dot, ".gitignore").await;
+    let message = schedule_files(&rt, &dot, Some(&p), "hi", std::slice::from_ref(&a.id)).await;
+    clock.set(t0() + hour());
+    rt.send_due().await.unwrap();
+    let r = sent_run(&rt, &message).await;
+    assert_eq!(r.root_run_id, r.id);
+    assert_eq!(note(&r)["new_topic"], true);
+    // Named against the new topic.
+    assert_eq!(
+        r.payload.as_ref().unwrap()["attachments"][0]["name"],
+        json!(".gitignore (2)")
+    );
+    rt.shutdown();
+}
+
+#[tokio::test]
+async fn a_scheduled_message_whose_file_is_gone_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let (rt, clock) = start(&dir).await;
+    let dot = dot(&rt, &dir).await;
+    let a = staged(&rt, &dot, "a.txt").await;
+    let message = schedule_files(&rt, &dot, None, "hi", std::slice::from_ref(&a.id)).await;
+    std::fs::remove_dir_all(chat_files(&dir).join(&a.id)).unwrap();
+    clock.set(t0() + hour());
+    rt.send_due().await.unwrap();
+    let failed = row(&rt, &message.id).await;
+    assert_eq!(failed.status, ScheduledStatus::Failed, "{failed:?}");
+    assert_eq!(failed.error.as_deref(), Some(dots_core::chat_files::GONE));
+    assert_eq!(runs_of(&rt, &dot).await, 0);
+    rt.shutdown();
+}

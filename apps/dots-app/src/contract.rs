@@ -1728,7 +1728,47 @@ pub fn samples() -> Value {
     ]);
     inbox_marks_samples(&mut samples);
     send_later_samples(&mut samples);
+    attachments_samples(&mut samples);
     samples
+}
+
+/// Attachments in chat (attachments spec section 5): a staged file, a chat run with a file,
+/// two rows of the Files panel (one gone) and their source.
+fn attachments_samples(samples: &mut Value) {
+    samples["StagedAttachment"] = to(StagedAttachment {
+        id: "01J0ATT".into(),
+        name: "report.pdf".into(),
+        size: 2458,
+    });
+    samples["RunWithAttachments"] = to(Run {
+        id: "01J0RUN6".into(),
+        trigger: TriggerKind::Chat,
+        payload: Some(json!({
+            "message": "Shorten the report.",
+            "typed": true,
+            "attachments": [{ "id": "01J0ATT", "name": "report.pdf", "size": 2458 }],
+        })),
+        ..run()
+    });
+    samples["ConversationFile"] = to(ConversationFile {
+        path: "C:\\work\\attachments\\01J0RUN6\\report.pdf".into(),
+        name: "report.pdf".into(),
+        source: FileSource::Attached,
+        run_id: "01J0RUN6".into(),
+        at: TS.into(),
+        exists: true,
+        can_open: true,
+    });
+    samples["ConversationFileGone"] = to(ConversationFile {
+        path: "C:\\work\\out\\summary.md".into(),
+        name: "summary.md".into(),
+        source: FileSource::Written,
+        run_id: "01J0RUN6".into(),
+        at: TS.into(),
+        exists: false,
+        can_open: true,
+    });
+    samples["Enums"]["FileSource"] = to(FileSource::ALL);
 }
 
 /// Send later (send later spec section 5): a scheduled message waiting for its topic, one that
@@ -1747,6 +1787,11 @@ fn send_later_samples(samples: &mut Value) {
         sent_at: None,
         created_at: TS.into(),
         updated_at: TS.into(),
+        attachments: vec![StagedAttachment {
+            id: "01J0ATT2".into(),
+            name: "notes.pdf".into(),
+            size: 31_457,
+        }],
     };
     let failed = ScheduledMessage {
         id: "01J0SCHED2".into(),

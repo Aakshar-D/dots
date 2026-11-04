@@ -10,6 +10,7 @@ use crate::Result;
 mod api_keys;
 mod approvals;
 mod apps;
+mod attachments;
 mod browser;
 mod dots;
 mod env;
@@ -49,6 +50,7 @@ pub struct Store {
 }
 
 pub use api_keys::ApiKeyRow;
+pub use attachments::{WrittenFile, WRITING_TOOLS};
 pub use held::HeldEvent;
 pub use invites::{DraftRow, InviteRow};
 pub use limits::LimitReading;

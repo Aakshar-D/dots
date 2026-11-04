@@ -62,6 +62,29 @@ async function call<S extends z.ZodType>(
   return parsed.data;
 }
 
+/// A command whose argument is raw bytes, with `headers` beside them (`tauri::ipc::Request`):
+/// a file's bytes never travel as a JSON list of numbers.
+async function callRaw<S extends z.ZodType>(
+  schema: S,
+  cmd: string,
+  bytes: Uint8Array,
+  headers: Record<string, string>,
+): Promise<z.infer<S>> {
+  let answer: unknown;
+  try {
+    answer = await invoke(cmd, bytes, { headers });
+  } catch (e) {
+    throw toCommandError(e);
+  }
+  const parsed = schema.safeParse(answer);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    const at = issue.path.join(".") || "the answer";
+    throw new CommandError("internal", `${cmd}: unexpected ${at}: ${issue.message}`);
+  }
+  return parsed.data;
+}
+
 // Commands without a result answer `null` (or nothing at all).
 const nothing = z
   .null()
@@ -169,8 +192,37 @@ export const commands = {
     call(text, "test_endpoint", { endpoint, model }),
 
   runNow: (dotId: string) => call(T.Run, "run_now", { dotId }),
-  chat: (dotId: string, message: string, parentRunId: string | null) =>
-    call(T.Run, "chat", { dotId, message, parentRunId }),
+  /// `attachmentIds`: staged files the message carries (attachments spec section 4.3); only
+  /// sent when there are some.
+  chat: (dotId: string, message: string, parentRunId: string | null, attachmentIds: string[] = []) =>
+    call(
+      T.Run,
+      "chat",
+      attachmentIds.length > 0
+        ? { dotId, message, parentRunId, attachmentIds }
+        : { dotId, message, parentRunId },
+    ),
+  /// Stages a picked or dropped file for a chat message. Rejects with kind `invalid` and the
+  /// reason for a folder, a link, a file over 25 MB or one that cannot be read.
+  attachmentAddPath: (dotId: string, path: string) =>
+    call(T.StagedAttachment, "attachment_add_path", { dotId, path }),
+  /// Stages pasted bytes named `name`, sent raw with the dot and the name as headers.
+  attachmentAddBytes: (dotId: string, name: string, bytes: Uint8Array) =>
+    callRaw(T.StagedAttachment, "attachment_add_bytes", bytes, {
+      "x-dots-dot": dotId,
+      "x-dots-name": encodeURIComponent(name),
+    }),
+  /// Removes a staged file; rejects with `conflict` once a message took it.
+  attachmentRemove: (id: string) => call(nothing, "attachment_remove", { id }),
+  /// The Files panel's rows for the topics `rootRunIds` of the dot, newest first.
+  conversationFiles: (dotId: string, rootRunIds: string[]) =>
+    call(T.ConversationFile.array(), "conversation_files", { dotId, rootRunIds }),
+  /// Opens a listed file; rejects with `not_found` when it is gone and `invalid` for a program.
+  conversationFileOpen: (dotId: string, rootRunIds: string[], path: string) =>
+    call(nothing, "conversation_file_open", { dotId, rootRunIds, path }),
+  /// Shows a listed file in its folder.
+  conversationFileReveal: (dotId: string, rootRunIds: string[], path: string) =>
+    call(nothing, "conversation_file_reveal", { dotId, rootRunIds, path }),
   cancelRun: (runId: string) => call(T.Run, "cancel_run", { runId }),
   keepWaiting: (runId: string) => call(nothing, "keep_waiting", { runId }),
   /// Send a chat message that did not get there again; rejects with `conflict` when it just did.
@@ -179,8 +231,22 @@ export const commands = {
   deliveryToday: (dotId: string) => call(T.DeliveryCounts, "delivery_today", { dotId }),
   /// Send later: schedules `text` at `dueAt` (RFC 3339) in the topic `rootRunId`, or as a new
   /// topic. Rejects with kind `invalid` for a time under a minute or over a year ahead.
-  scheduleMessage: (dotId: string, text: string, rootRunId: string | null, dueAt: string) =>
-    call(T.ScheduledMessage, "schedule_message", { dotId, text, rootRunId, dueAt }),
+  /// `attachmentIds`: staged files it waits with (attachments spec section 4.6); only sent
+  /// when there are some.
+  scheduleMessage: (
+    dotId: string,
+    text: string,
+    rootRunId: string | null,
+    dueAt: string,
+    attachmentIds: string[] = [],
+  ) =>
+    call(
+      T.ScheduledMessage,
+      "schedule_message",
+      attachmentIds.length > 0
+        ? { dotId, text, rootRunId, dueAt, attachmentIds }
+        : { dotId, text, rootRunId, dueAt },
+    ),
   /// The dot's pending scheduled messages, in due order.
   scheduledMessages: (dotId: string) =>
     call(T.ScheduledMessage.array(), "scheduled_messages", { dotId }),

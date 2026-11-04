@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -174,6 +174,49 @@ describe("the Send later menu", () => {
     expect(screen.getByRole("button", { name: "Send later" })).toBeDisabled();
     await user.type(box(), "Ship it");
     expect(screen.getByRole("button", { name: "Send later" })).toBeEnabled();
+  });
+
+  it("schedules the files in the box with the text, and clears them", async () => {
+    home([chat("a", "10:00")]);
+    scheduling();
+    let n = 0;
+    backend.on("attachment_add_path", (args) => ({
+      id: `S${++n}`,
+      name: String(args.path).split(/[\/]/).pop(),
+      size: 2458,
+    }));
+    backend.on("attachment_remove", () => null);
+    const { user, unmount } = renderApp(`/home/${dot.id}`);
+    await readyBox();
+    act(() =>
+      backend.emit("drag-drop", {
+        type: "drop",
+        paths: ["C:\r.pdf", "C:\s.pdf"],
+        position: { x: 0, y: 0 },
+      }),
+    );
+    const files = await screen.findByRole("list", { name: "Attached files" });
+    await waitFor(() => expect(within(files).getAllByText("2.4 KB")).toHaveLength(2));
+    // Files alone may be scheduled.
+    const menu = await openMenu(user);
+    await user.click(within(menu).getByRole("menuitem", { name: /In 1 hour/ }));
+    await waitFor(() =>
+      expect(backend.callsTo("schedule_message")).toEqual([
+        {
+          dotId: dot.id,
+          text: "",
+          rootRunId: "a",
+          dueAt: AT.toISOString(),
+          attachmentIds: ["S1", "S2"],
+        },
+      ]),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("list", { name: "Attached files" })).toBeNull(),
+    );
+    unmount();
+    // They wait with the message: leaving removes nothing.
+    expect(backend.callsTo("attachment_remove")).toEqual([]);
   });
 
   it("is hidden while answering a question", async () => {

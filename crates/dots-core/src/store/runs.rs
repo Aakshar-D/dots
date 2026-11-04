@@ -533,6 +533,18 @@ impl Store {
         Ok(())
     }
 
+    /// Sets an event's `ts`, for tests of the Files panel.
+    #[doc(hidden)]
+    pub async fn set_event_ts(&self, run_id: &str, seq: i64, ts: &str) -> Result<()> {
+        sqlx::query("UPDATE run_events SET ts = ? WHERE run_id = ? AND seq = ?")
+            .bind(ts)
+            .bind(run_id)
+            .bind(seq)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     /// Sets a run's `queued_at`, for tests of delivery tracking.
     #[doc(hidden)]
     pub async fn set_run_queued_at(&self, id: &str, at: &str) -> Result<()> {

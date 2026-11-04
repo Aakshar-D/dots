@@ -136,6 +136,8 @@ export function installDefaults(): void {
   }));
   // No dot proposed instructions.
   backend.on("instruction_proposals_list", () => []);
+  // No conversation has files (the Files panel).
+  backend.on("conversation_files", () => []);
   // An approval card asks for these when it shows; by default the core offers no rule.
   backend.on("approval_rule_candidates", () => []);
   // A conversation asks for the dot's app proposals; by default it has none.

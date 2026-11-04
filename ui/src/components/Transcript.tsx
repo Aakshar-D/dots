@@ -14,9 +14,11 @@ import {
   type Run,
   type RunEventRecord,
 } from "@/api/types";
+import { AttachmentChip } from "@/components/AttachmentChip";
 import { BrowserCall } from "@/components/BrowserCall";
 import { Markdown } from "@/components/Markdown";
 import { StatusBadge } from "@/components/StatusBadge";
+import { messageAttachments } from "@/lib/attachments";
 import { appTitle, isActive } from "@/lib/home-topics";
 import { localDateTime, localTime } from "@/lib/format";
 import { mcpToolLabel } from "@/lib/mcp-tool";
@@ -442,6 +444,8 @@ export function Transcript(props: {
     <div className="flex flex-col gap-4">
       {props.runs.map((run, i) => {
         const message = chatMessage(run);
+        // The files a person's message carried (attachments spec section 6).
+        const files = run.trigger === "chat" ? messageAttachments(run) : [];
         const last = i === props.runs.length - 1;
         const items = transcriptItems(props.events.get(run.id) ?? []).filter(
           (item) => !(last && item.type === "error" && item.text === props.shownError),
@@ -462,7 +466,7 @@ export function Transcript(props: {
             <FollowUpLine run={run} />
             <WatcherLine run={run} />
             <div className="flex flex-col gap-2">
-              {message !== null && (
+              {message !== null && (message !== "" || files.length === 0) && (
                 <p
                   data-from="person"
                   className={cn(
@@ -472,6 +476,21 @@ export function Transcript(props: {
                 >
                   {message}
                 </p>
+              )}
+              {files.length > 0 && (
+                <ul
+                  aria-label="Attached files"
+                  className={cn(
+                    "flex flex-wrap justify-end gap-1.5 self-end",
+                    conversation ? "max-w-[75%]" : "max-w-[80%]",
+                  )}
+                >
+                  {files.map((f) => (
+                    <li key={f.id} className="min-w-0 max-w-full">
+                      <AttachmentChip name={f.name} size={f.size} />
+                    </li>
+                  ))}
+                </ul>
               )}
               {sentLaterLines(run).map((line) => (
                 <p key={line} className="self-end text-xs text-muted-foreground">

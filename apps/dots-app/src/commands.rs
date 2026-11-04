@@ -29,9 +29,9 @@ use dots_core::library_service::{
     ContextDocuments, EnvVariable, LibraryEntry, McpProbe, ScannedSkill,
 };
 use dots_core::model::{
-    Approval, DeliveryCounts, Dot, DotOverview, DotSpec, FollowUp, Inbox, Memory, Message, Run,
-    RunEventRecord, ScheduleSkip, ScheduledMessage, SettingsSaved, Status, WatchHours, Watcher,
-    WatcherConfig, WorktreeDiff,
+    Approval, ConversationFile, DeliveryCounts, Dot, DotOverview, DotSpec, FollowUp, Inbox, Memory,
+    Message, Run, RunEventRecord, ScheduleSkip, ScheduledMessage, SettingsSaved, StagedAttachment,
+    Status, WatchHours, Watcher, WatcherConfig, WorktreeDiff,
 };
 use dots_core::policy::{Policy, Preset, RuleCandidate};
 use dots_core::schedule::Schedule;
@@ -585,17 +585,167 @@ pub async fn run_now(state: State<'_, AppState>, dot_id: String) -> Res<Run> {
     Ok(state.rt()?.run_now(&dot_id).await?)
 }
 
+/// A chat message, with the staged files it carries (attachments spec section 5).
 #[tauri::command]
 pub async fn chat(
     state: State<'_, AppState>,
     dot_id: String,
     message: String,
     parent_run_id: Option<String>,
+    attachment_ids: Option<Vec<String>>,
 ) -> Res<Run> {
     Ok(state
         .rt()?
-        .chat(&dot_id, &message, parent_run_id.as_deref())
+        .chat_with_files(
+            &dot_id,
+            &message,
+            parent_run_id.as_deref(),
+            &attachment_ids.unwrap_or_default(),
+        )
         .await?)
+}
+
+/// Stages a picked or dropped file for a chat message to `dot_id` (attachments spec section
+/// 4.2). The path is what the person picked or dropped.
+#[tauri::command]
+pub async fn attachment_add_path(
+    state: State<'_, AppState>,
+    dot_id: String,
+    path: String,
+) -> Res<StagedAttachment> {
+    Ok(state
+        .rt()?
+        .add_attachment_path(&dot_id, std::path::Path::new(&path))
+        .await?)
+}
+
+/// Stages pasted bytes: the raw body is the file, the headers `x-dots-dot` (the dot) and
+/// `x-dots-name` (its name, percent-encoded) say what it is.
+#[tauri::command]
+pub async fn attachment_add_bytes(
+    state: State<'_, AppState>,
+    request: tauri::ipc::Request<'_>,
+) -> Res<StagedAttachment> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err(invalid("expected the file's bytes"));
+    };
+    let header = |name: &str| {
+        request
+            .headers()
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .and_then(percent_decode)
+            .ok_or_else(|| invalid(&format!("missing the {name} header")))
+    };
+    let dot_id = header("x-dots-dot")?;
+    let name = header("x-dots-name")?;
+    Ok(state
+        .rt()?
+        .add_attachment_bytes(&dot_id, &name, bytes)
+        .await?)
+}
+
+/// Removes a staged file (its chip's ×, or a chat box that went away unsent).
+#[tauri::command]
+pub async fn attachment_remove(state: State<'_, AppState>, id: String) -> Res<()> {
+    Ok(state.rt()?.remove_attachment(&id).await?)
+}
+
+/// The Files panel of the conversation made of the topics `root_run_ids`.
+#[tauri::command]
+pub async fn conversation_files(
+    state: State<'_, AppState>,
+    dot_id: String,
+    root_run_ids: Vec<String>,
+) -> Res<Vec<ConversationFile>> {
+    Ok(state
+        .rt()?
+        .conversation_files(&dot_id, &root_run_ids)
+        .await?)
+}
+
+/// Opens a file of the Files panel with its default app. The core answers the path from its
+/// own list, so the webview cannot open a path of its own, and it opens only documents, images
+/// and media.
+#[tauri::command]
+pub async fn conversation_file_open(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    dot_id: String,
+    root_run_ids: Vec<String>,
+    path: String,
+) -> Res<()> {
+    let path = state
+        .rt()?
+        .conversation_file_target(&dot_id, &root_run_ids, &path, true)
+        .await?;
+    app.opener()
+        .open_path(path.to_string_lossy(), None::<&str>)
+        .map_err(|e| CmdError::internal(format!("could not open {}: {e}", path.display())))
+}
+
+/// Shows a file of the Files panel in its folder.
+#[tauri::command]
+pub async fn conversation_file_reveal(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    dot_id: String,
+    root_run_ids: Vec<String>,
+    path: String,
+) -> Res<()> {
+    let path = state
+        .rt()?
+        .conversation_file_target(&dot_id, &root_run_ids, &path, false)
+        .await?;
+    app.opener()
+        .reveal_item_in_dir(&path)
+        .map_err(|e| CmdError::internal(format!("could not show {}: {e}", path.display())))
+}
+
+fn invalid(message: &str) -> CmdError {
+    CmdError {
+        kind: crate::error::CmdErrorKind::Invalid,
+        message: message.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod attachment_tests {
+    use super::percent_decode;
+
+    #[test]
+    fn names_come_percent_decoded() {
+        assert_eq!(
+            percent_decode("Pasted%20image.png").as_deref(),
+            Some("Pasted image.png")
+        );
+        assert_eq!(
+            percent_decode("r%C3%A9sum%C3%A9.pdf").as_deref(),
+            Some("résumé.pdf")
+        );
+        assert_eq!(percent_decode("plain").as_deref(), Some("plain"));
+        assert_eq!(percent_decode("bad%2"), None);
+        assert_eq!(percent_decode("bad%zz"), None);
+        assert_eq!(percent_decode("%FF"), None);
+    }
+}
+
+/// `%XX` escapes decoded, as UTF-8; `None` for a bad escape or text that is not UTF-8.
+pub(crate) fn percent_decode(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hex = std::str::from_utf8(bytes.get(i + 1..i + 3)?).ok()?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
 }
 
 #[tauri::command]
@@ -629,7 +779,7 @@ pub async fn delivery_today(state: State<'_, AppState>, dot_id: String) -> Res<D
 }
 
 /// Schedules `text` to `dot_id` at `due_at` (RFC 3339), in the topic of `root_run_id` or as a
-/// new topic (send later spec section 4.4).
+/// new topic (send later spec section 4.4), with the staged files `attachment_ids`.
 #[tauri::command]
 pub async fn schedule_message(
     state: State<'_, AppState>,
@@ -637,10 +787,17 @@ pub async fn schedule_message(
     text: String,
     root_run_id: Option<String>,
     due_at: String,
+    attachment_ids: Option<Vec<String>>,
 ) -> Res<ScheduledMessage> {
     Ok(state
         .rt()?
-        .schedule_message(&dot_id, &text, root_run_id.as_deref(), &due_at)
+        .schedule_message_with_files(
+            &dot_id,
+            &text,
+            root_run_id.as_deref(),
+            &due_at,
+            &attachment_ids.unwrap_or_default(),
+        )
         .await?)
 }
 

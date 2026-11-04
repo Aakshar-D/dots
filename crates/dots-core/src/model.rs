@@ -493,6 +493,10 @@ pub struct ScheduledMessage {
     pub sent_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    /// The files it waits with (attachments spec section 4.6), as its card shows them. Filled
+    /// where the person sees it (`Runtime::scheduled_messages`); empty elsewhere.
+    #[serde(default)]
+    pub attachments: Vec<StagedAttachment>,
 }
 
 /// The note in the payload of a chat run that a scheduled message became (send later spec
@@ -506,6 +510,60 @@ pub struct SentLater {
     pub late: bool,
     /// Sent as a new topic because the one it was written in could not be continued.
     pub new_topic: bool,
+}
+
+/// A file the person attached to a chat message (`chat_attachments`, attachments spec section
+/// 4.1). Staged while `run_id` and `scheduled_id` are both `None`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChatAttachment {
+    pub id: String,
+    pub dot_id: String,
+    /// The chat run it went with.
+    pub run_id: Option<String>,
+    /// The scheduled message it waits with (send later).
+    pub scheduled_id: Option<String>,
+    /// Its safe name as added: Dots' copy is `<data>/chat-files/<id>/<file_name>`.
+    pub file_name: String,
+    /// Its name in `attachments/<topic>/`, fixed when it is sent.
+    pub name: Option<String>,
+    pub size: u64,
+    pub created_at: String,
+    /// When Dots first put it in its topic's folder (`None` until then). A placed file is
+    /// taken as it is there from then on: the dot or the person may have edited it.
+    #[serde(default)]
+    pub placed_at: Option<String>,
+}
+
+str_enum!(FileSource {
+    Attached => "attached",
+    Written => "written",
+});
+
+/// A row of the Files panel (attachments spec section 4.5): a file the person attached in the
+/// conversation, or one the dot wrote or edited there.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConversationFile {
+    /// Where it is now: an attachment's workspace copy, else Dots' own copy.
+    pub path: String,
+    pub name: String,
+    pub source: FileSource,
+    /// The run it came with (the newest, for a file listed more than once).
+    pub run_id: String,
+    /// When: the message's queue time, or the tool call's time; the newest.
+    pub at: String,
+    /// The path is a file now.
+    pub exists: bool,
+    /// Dots may open it: it is a document, image or media file, by the name it really has
+    /// (attachments spec section 4.5.1).
+    pub can_open: bool,
+}
+
+/// A file just added to a chat box: what the chip shows, and the id the send passes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StagedAttachment {
+    pub id: String,
+    pub name: String,
+    pub size: u64,
 }
 
 /// A slot that was not run (`schedule_skips`): the dot was still busy with an earlier run.

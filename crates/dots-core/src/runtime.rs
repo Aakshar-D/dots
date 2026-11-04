@@ -22,10 +22,11 @@ use crate::followups::FollowUps;
 use crate::inbox::{self, InboxEntry, InboxKey, InboxKind, InboxMark, MarkState};
 use crate::library_service::LibraryService;
 use crate::model::{
-    Approval, AttentionRun, ClaudeStatus, DeliveryCounts, Dot, DotOverview, DotSpec, EngineKind,
-    Inbox, MessageKind, NewRun, PendingApproval, ReviewRun, Run, RunEventRecord, RunStatus,
-    ScheduleChange, ScheduleSkip, ScheduleView, ScheduledMessage, ScheduledStatus, ScheduledWait,
-    SentLater, SettingsSaved, Status, TriggerKind, UndeliveredMessage, WorktreeDiff,
+    Approval, AttentionRun, ClaudeStatus, ConversationFile, DeliveryCounts, Dot, DotOverview,
+    DotSpec, EngineKind, FileSource, Inbox, MessageKind, NewRun, PendingApproval, ReviewRun, Run,
+    RunEventRecord, RunStatus, ScheduleChange, ScheduleSkip, ScheduleView, ScheduledMessage,
+    ScheduledStatus, ScheduledWait, SentLater, SettingsSaved, StagedAttachment, Status,
+    TriggerKind, UndeliveredMessage, WorktreeDiff,
 };
 use crate::policy::{allow_candidates, Action, Rule, RuleCandidate};
 use crate::runner::{Runner, RunnerConfig};
@@ -155,6 +156,8 @@ pub struct Runtime {
     limits: Arc<crate::limits::Limits>,
     /// Wakes the send later loop: a message was scheduled or edited (send later spec 4.5).
     send_later_wake: Arc<tokio::sync::Notify>,
+    /// The stored copies of files attached to chat messages (attachments spec section 4.2).
+    chat_files: crate::chat_files::ChatFiles,
     shutdown: CancellationToken,
 }
 
@@ -347,6 +350,12 @@ impl Runtime {
             crate::watchers::files::WatcherFiles::new(cfg.data_dir.join("watchers"));
         watcher_files.sweep(&store).await;
         runner.set_watcher_files(watcher_files);
+        // Files attached to chat messages; staged ones and a crash's leftovers go (attachments
+        // spec section 4.7).
+        let chat_files =
+            crate::chat_files::ChatFiles::new(cfg.data_dir.join(crate::chat_files::DIR));
+        chat_files.sweep(&store).await;
+        runner.set_chat_files(chat_files.clone());
         // Which dots are acting, for the folder watchers (watchers spec section 4.1).
         let acting = crate::watchers::ActingTracker::new(cfg.clock.clone());
         runner.set_acting(acting.clone());
@@ -511,6 +520,7 @@ impl Runtime {
             org_timers,
             limits,
             send_later_wake: Arc::new(tokio::sync::Notify::new()),
+            chat_files,
             shutdown,
         })
     }
@@ -1183,6 +1193,146 @@ impl Runtime {
         Ok(path)
     }
 
+    /// The Files panel's rows for the topics `roots` of the dot (attachments spec section 4.5):
+    /// the files attached in them and the files the dot wrote or edited, inside each run's
+    /// workspace only, merged by path and newest first. A root of another dot is left out.
+    pub async fn conversation_files(
+        &self,
+        dot_id: &str,
+        roots: &[String],
+    ) -> Result<Vec<ConversationFile>> {
+        self.store.get_dot(dot_id).await?;
+        let mut mine: Vec<String> = Vec::new();
+        for root in roots {
+            match self.store.get_run(root).await {
+                Ok(run) if run.dot_id == dot_id && !mine.contains(&run.root_run_id) => {
+                    mine.push(run.root_run_id)
+                }
+                Ok(_) | Err(Error::NotFound(_)) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        let mut found: Vec<(PathBuf, FileSource, String, String)> = Vec::new();
+        for root in &mine {
+            let thread = self.store.list_thread(root).await?;
+            // The topic's workspace: its newest run that has one.
+            let workspace = thread
+                .iter()
+                .rev()
+                .find_map(|r| r.workspace_path.as_deref().map(PathBuf::from));
+            for a in self.store.topic_attachments(root).await? {
+                let Some(run) = thread.iter().find(|r| a.run_id.as_ref() == Some(&r.id)) else {
+                    continue;
+                };
+                let copy = match (&workspace, &a.name) {
+                    (Some(ws), Some(name)) => {
+                        Some(crate::chat_files::topic_dir(ws, root).join(name))
+                    }
+                    _ => None,
+                };
+                let path = match copy {
+                    Some(copy) if copy.is_file() => copy,
+                    _ => self.chat_files.stored_path(&a),
+                };
+                found.push((
+                    path,
+                    FileSource::Attached,
+                    run.id.clone(),
+                    run.queued_at.clone(),
+                ));
+            }
+        }
+        for w in self.store.written_files(dot_id, &mine).await? {
+            let Some(workspace) = w.workspace_path.as_deref().map(PathBuf::from) else {
+                continue;
+            };
+            let named = PathBuf::from(&w.path);
+            let joined = if named.is_absolute() {
+                named
+            } else {
+                workspace.join(named)
+            };
+            let path = crate::chat_files::normalize(&joined);
+            // A name Windows would read as another file (`run.cmd.`, `a.pdf:x.exe`) is left
+            // out: the list names files as they really are (attachments spec section 4.5.1).
+            let plain = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(crate::chat_files::plain_name);
+            if !plain || !crate::chat_files::is_inside(&path, &workspace) {
+                continue;
+            }
+            found.push((path, FileSource::Written, w.run_id, w.at));
+        }
+        // One row per path (ignoring case on Windows): the newest time, Attached if any is.
+        let mut rows: Vec<(String, ConversationFile)> = Vec::new();
+        for (path, source, run_id, at) in found {
+            let key = crate::chat_files::path_key(&path);
+            match rows.iter_mut().find(|(k, _)| *k == key) {
+                Some((_, row)) => {
+                    if at > row.at {
+                        row.at = at;
+                        row.run_id = run_id;
+                    }
+                    if source == FileSource::Attached && row.source != FileSource::Attached {
+                        row.source = FileSource::Attached;
+                        row.path = path.to_string_lossy().to_string();
+                    }
+                }
+                None => rows.push((
+                    key,
+                    ConversationFile {
+                        name: path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_default(),
+                        path: path.to_string_lossy().to_string(),
+                        source,
+                        run_id,
+                        at,
+                        exists: false,
+                        can_open: false,
+                    },
+                )),
+            }
+        }
+        let mut files: Vec<ConversationFile> = rows
+            .into_iter()
+            .map(|(_, mut row)| {
+                row.exists = Path::new(&row.path).is_file();
+                row.can_open = row.exists && crate::chat_files::can_open_file(Path::new(&row.path));
+                row
+            })
+            .collect();
+        files.sort_by(|a, b| b.at.cmp(&a.at).then_with(|| a.path.cmp(&b.path)));
+        Ok(files)
+    }
+
+    /// The file of the Files panel at `path`, to open (`open`) or to show in its folder: only a
+    /// path the list names and that is a file now. Only a document, image or media file is
+    /// opened (`can_open_file`).
+    pub async fn conversation_file_target(
+        &self,
+        dot_id: &str,
+        roots: &[String],
+        path: &str,
+        open: bool,
+    ) -> Result<PathBuf> {
+        let key = crate::chat_files::path_key(Path::new(path));
+        let listed = self
+            .conversation_files(dot_id, roots)
+            .await?
+            .into_iter()
+            .find(|f| crate::chat_files::path_key(Path::new(&f.path)) == key);
+        let Some(file) = listed.filter(|f| f.exists) else {
+            return Err(Error::NotFound(crate::chat_files::NOT_THERE.into()));
+        };
+        if open && !file.can_open {
+            return Err(Error::Invalid(crate::chat_files::PROGRAM.into()));
+        }
+        Ok(PathBuf::from(file.path))
+    }
+
     async fn ensure_thread_idle(&self, root_run_id: &str) -> Result<()> {
         if let Some(r) = self
             .store
@@ -1610,7 +1760,13 @@ impl Runtime {
             .into_iter()
             .map(|w| w.id)
             .collect();
+        let attachments = self.store.attachment_ids_of_dot(id).await?;
         self.store.delete_dot_if_idle(id).await?;
+        // Its attached files' rows went with it; their stored copies go too (attachments spec
+        // section 4.7).
+        for a in &attachments {
+            self.chat_files.remove(a);
+        }
         // Its proposals' rows went with it; their files go too (app library spec section 6.2).
         for p in &proposals {
             self.apps.drop_proposed(&p.id).await;
@@ -1670,6 +1826,74 @@ impl Runtime {
             .await
     }
 
+    /// Stages the file at `path` (picked or dropped) for a chat message to the dot
+    /// (attachments spec section 4.2). Refused with a reason for a link, a folder, a file over
+    /// 25 MB or one that cannot be read.
+    pub async fn add_attachment_path(&self, dot_id: &str, path: &Path) -> Result<StagedAttachment> {
+        let dot = self.store.get_dot(dot_id).await?;
+        self.require_run(&dot).await?;
+        let id = crate::util::new_id();
+        let files = self.chat_files.clone();
+        let from = path.to_path_buf();
+        let staged_id = id.clone();
+        let (name, size) = tokio::task::spawn_blocking(move || files.stage_path(&staged_id, &from))
+            .await
+            .map_err(|e| Error::Other(format!("staging a file failed: {e}")))??;
+        self.record_staged(&id, dot_id, name, size).await
+    }
+
+    /// Stages `bytes` (a pasted image) named `name` for a chat message to the dot.
+    pub async fn add_attachment_bytes(
+        &self,
+        dot_id: &str,
+        name: &str,
+        bytes: &[u8],
+    ) -> Result<StagedAttachment> {
+        let dot = self.store.get_dot(dot_id).await?;
+        self.require_run(&dot).await?;
+        let id = crate::util::new_id();
+        let (name, size) = self.chat_files.stage_bytes(&id, name, bytes)?;
+        self.record_staged(&id, dot_id, name, size).await
+    }
+
+    /// Records a stored copy's row; a failed insert removes the copy.
+    async fn record_staged(
+        &self,
+        id: &str,
+        dot_id: &str,
+        name: String,
+        size: u64,
+    ) -> Result<StagedAttachment> {
+        match self
+            .store
+            .insert_staged_attachment(id, dot_id, &name, size)
+            .await
+        {
+            Ok(_) => Ok(StagedAttachment {
+                id: id.to_string(),
+                name,
+                size,
+            }),
+            Err(e) => {
+                self.chat_files.remove(id);
+                Err(e)
+            }
+        }
+    }
+
+    /// Removes a staged file (its chip's ×, or the chat box going away unsent). `Conflict`
+    /// once a message took it; `NotFound` for an unknown id.
+    pub async fn remove_attachment(&self, id: &str) -> Result<()> {
+        let attachment = self.store.get_attachment(id).await?;
+        if !self.store.remove_unsent_attachment(id).await? {
+            return Err(Error::Conflict(
+                "this file was already sent with a message".into(),
+            ));
+        }
+        self.chat_files.remove(&attachment.id);
+        Ok(())
+    }
+
     pub async fn chat(
         &self,
         dot_id: &str,
@@ -1678,6 +1902,94 @@ impl Runtime {
     ) -> Result<Run> {
         self.chat_with(dot_id, message, parent_run_id, ChatExtra::default())
             .await
+    }
+
+    /// The chat path with files (attachments spec section 4.3): `attachment_ids` are staged
+    /// files of this dot. The message may be files only.
+    pub async fn chat_with_files(
+        &self,
+        dot_id: &str,
+        message: &str,
+        parent_run_id: Option<&str>,
+        attachment_ids: &[String],
+    ) -> Result<Run> {
+        let extra = ChatExtra {
+            attachment_ids: attachment_ids.to_vec(),
+            ..ChatExtra::default()
+        };
+        self.chat_with(dot_id, message, parent_run_id, extra).await
+    }
+
+    /// The names a new file of the topic `root` may not take: its chat files', its root's
+    /// files when a watcher started it (they share the folder), and every entry in its folder
+    /// in `workspace` now, such as a file the dot made there (attachments spec section 3.1.5).
+    async fn taken_names(&self, root: &str, workspace: Option<&str>) -> Result<Vec<String>> {
+        let mut names = self.store.topic_attachment_names(root).await?;
+        let first = self.store.get_run(root).await?;
+        if first.trigger == TriggerKind::Watcher {
+            let listed = first
+                .payload
+                .as_ref()
+                .and_then(|p| p.get("attachments"))
+                .and_then(|a| a.as_array());
+            for a in listed.into_iter().flatten() {
+                if let Some(name) = a.get("name").and_then(|n| n.as_str()) {
+                    names.push(name.to_string());
+                }
+            }
+        }
+        if let Some(ws) = workspace {
+            let dir = crate::chat_files::topic_dir(Path::new(ws), root);
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    names.push(entry.file_name().to_string_lossy().to_string());
+                }
+            }
+        }
+        Ok(names)
+    }
+
+    /// Checks the files a message names before anything is written (attachments spec section
+    /// 4.3): each is a file of this dot that no message took (or that `scheduled_id` holds),
+    /// and its stored copy is there. Answers them in order.
+    async fn files_to_send(
+        &self,
+        dot_id: &str,
+        ids: &[String],
+        scheduled_id: Option<&str>,
+    ) -> Result<Vec<crate::model::ChatAttachment>> {
+        if ids.len() > crate::chat_files::MAX_FILES {
+            return Err(Error::Invalid(crate::chat_files::TOO_MANY.into()));
+        }
+        let gone = || Error::Conflict(crate::chat_files::GONE.into());
+        let mut files = Vec::with_capacity(ids.len());
+        for id in ids {
+            if files
+                .iter()
+                .any(|f: &crate::model::ChatAttachment| &f.id == id)
+            {
+                return Err(gone());
+            }
+            let a = match self.store.get_attachment(id).await {
+                Ok(a) => a,
+                Err(Error::NotFound(_)) => return Err(gone()),
+                Err(e) => return Err(e),
+            };
+            let held_here = match (&a.scheduled_id, scheduled_id) {
+                (None, _) => true,
+                (Some(held), Some(by)) => held == by,
+                (Some(_), None) => false,
+            };
+            if a.dot_id != dot_id
+                || a.run_id.is_some()
+                || !held_here
+                || !self.chat_files.stored_path(&a).is_file()
+            {
+                return Err(gone());
+            }
+            files.push(a);
+        }
+        Ok(files)
     }
 
     /// The chat path (`chat`), with what the run carries besides its text (send later spec
@@ -1689,19 +2001,28 @@ impl Runtime {
         parent_run_id: Option<&str>,
         extra: ChatExtra,
     ) -> Result<Run> {
-        if message.trim().is_empty() {
+        // Retry: the files of the message sent again go with it, keeping their names.
+        let carried = match &extra.carry_from {
+            Some(old) => self.store.run_attachments(old).await?,
+            None => Vec::new(),
+        };
+        // A message may be files only (attachments spec section 3.1).
+        if message.trim().is_empty() && extra.attachment_ids.is_empty() && carried.is_empty() {
             return Err(Error::Invalid("message must not be empty".into()));
         }
+        let files = self
+            .files_to_send(dot_id, &extra.attachment_ids, extra.scheduled_id.as_deref())
+            .await?;
         let dot = self.store.get_dot(dot_id).await?;
         self.require_run(&dot).await?;
         self.refuse_at_the_limit(&dot)?;
         let mut new = NewRun::new(dot_id, TriggerKind::Chat);
+        new.id = Some(crate::util::new_id());
         // The person typed it (conversational chat spec section 3).
         let mut payload = json!({ "message": message, crate::prompt::TYPED: true });
         if let Some(note) = &extra.send_later {
             payload["send_later"] = serde_json::to_value(note)?;
         }
-        new.payload = Some(payload);
         // Held until the new run is stored: of two follow-ups sent at once, the second must
         // find the first one's run in the thread.
         let _one_at_a_time = self.chat_lock.lock().await;
@@ -1766,7 +2087,53 @@ impl Runtime {
             new.branch = parent.branch.clone();
             new.base_commit = parent.base_commit.clone();
         }
-        self.runner.enqueue(new).await
+        // Names are fixed now, unique in the topic ignoring case, with the names it already
+        // has, a watcher root's files, whatever is in its folder now and `.gitignore` taken
+        // (attachments spec section 3.1).
+        let mut links = Vec::with_capacity(files.len());
+        if !files.is_empty() {
+            let mut all = match &new.root_run_id {
+                Some(root) => {
+                    self.taken_names(root, new.workspace_path.as_deref())
+                        .await?
+                }
+                None => Vec::new(),
+            };
+            all.push(crate::chat_files::IGNORE_FILE.to_string());
+            let mut seen = HashSet::new();
+            all.retain(|n| seen.insert(n.to_lowercase()));
+            let taken = all.len();
+            all.extend(files.iter().map(|f| f.file_name.clone()));
+            let unique = crate::watchers::files::unique_names(&all);
+            for (f, name) in files.iter().zip(unique.into_iter().skip(taken)) {
+                links.push((f.id.clone(), name));
+            }
+        }
+        if !carried.is_empty() || !links.is_empty() {
+            let mut listed: Vec<serde_json::Value> = carried
+                .iter()
+                .map(|a| json!({ "id": a.id, "name": a.name, "size": a.size }))
+                .collect();
+            listed.extend(
+                files
+                    .iter()
+                    .zip(&links)
+                    .map(|(f, (id, name))| json!({ "id": id, "name": name, "size": f.size })),
+            );
+            payload["attachments"] = serde_json::Value::Array(listed);
+        }
+        new.payload = Some(payload);
+        let run = self
+            .store
+            .create_chat_run(
+                &new,
+                &links,
+                extra.scheduled_id.as_deref(),
+                extra.carry_from.as_deref(),
+            )
+            .await?;
+        self.runner.enqueued(&run);
+        Ok(run)
     }
 
     pub async fn cancel_run(&self, run_id: &str) -> Result<Run> {
@@ -1795,8 +2162,13 @@ impl Runtime {
                 "this message has no text to send again".into(),
             ));
         };
+        // Its files move to the new message (attachments spec section 4.3).
+        let extra = ChatExtra {
+            carry_from: Some(run.id.clone()),
+            ..ChatExtra::default()
+        };
         match self
-            .chat(&run.dot_id, &text, run.parent_run_id.as_deref())
+            .chat_with(&run.dot_id, &text, run.parent_run_id.as_deref(), extra)
             .await
         {
             Ok(new) => {
@@ -2739,9 +3111,27 @@ impl Runtime {
         root_run_id: Option<&str>,
         due_at: &str,
     ) -> Result<ScheduledMessage> {
-        if text.trim().is_empty() {
+        self.schedule_message_with_files(dot_id, text, root_run_id, due_at, &[])
+            .await
+    }
+
+    /// `schedule_message` with staged files (attachments spec section 4.6): they are held for
+    /// the message until it is sent, and their names are fixed then. It may be files only.
+    pub async fn schedule_message_with_files(
+        &self,
+        dot_id: &str,
+        text: &str,
+        root_run_id: Option<&str>,
+        due_at: &str,
+        attachment_ids: &[String],
+    ) -> Result<ScheduledMessage> {
+        if attachment_ids.len() > crate::chat_files::MAX_FILES {
+            return Err(Error::Invalid(crate::chat_files::TOO_MANY.into()));
+        }
+        if text.trim().is_empty() && attachment_ids.is_empty() {
             return Err(Error::Invalid("message must not be empty".into()));
         }
+        let files = self.files_to_send(dot_id, attachment_ids, None).await?;
         let dot = self.store.get_dot(dot_id).await?;
         self.require_run(&dot).await?;
         let now = self.clock.now();
@@ -2758,20 +3148,50 @@ impl Runtime {
             }
             None => None,
         };
-        let message = self
+        let mut message = self
             .store
-            .insert_scheduled_message(dot_id, root.as_deref(), text, &due_at, now)
+            .insert_scheduled_with_files(
+                dot_id,
+                root.as_deref(),
+                text,
+                &due_at,
+                now,
+                attachment_ids,
+            )
             .await?;
+        message.attachments = files
+            .iter()
+            .map(|f| StagedAttachment {
+                id: f.id.clone(),
+                name: f.file_name.clone(),
+                size: f.size,
+            })
+            .collect();
         self.scheduled_updated(&message);
         self.send_later_wake.notify_one();
         Ok(message)
     }
 
-    /// The dot's pending scheduled messages (scheduled, sending or failed), in due order. A
-    /// read, so it needs only `View`, as the conversation does: a Viewer sees the cards too.
+    /// The dot's pending scheduled messages (scheduled, sending or failed), in due order, each
+    /// with the files it waits with. A read, so it needs only `View`, as the conversation does:
+    /// a Viewer sees the cards too.
     pub async fn scheduled_messages(&self, dot_id: &str) -> Result<Vec<ScheduledMessage>> {
         self.require_for_dot(dot_id, Permission::View).await?;
-        self.store.pending_scheduled_messages(dot_id).await
+        let mut messages = self.store.pending_scheduled_messages(dot_id).await?;
+        for m in &mut messages {
+            m.attachments = self
+                .store
+                .scheduled_attachments(&m.id)
+                .await?
+                .into_iter()
+                .map(|f| StagedAttachment {
+                    id: f.id,
+                    name: f.file_name,
+                    size: f.size,
+                })
+                .collect();
+        }
+        Ok(messages)
     }
 
     /// Edit: new text and time for a message that is scheduled or failed; it is scheduled
@@ -2782,7 +3202,8 @@ impl Runtime {
         text: &str,
         due_at: &str,
     ) -> Result<ScheduledMessage> {
-        if text.trim().is_empty() {
+        // Edit changes the text only: a message with files may have none.
+        if text.trim().is_empty() && self.store.scheduled_attachments(id).await?.is_empty() {
             return Err(Error::Invalid("message must not be empty".into()));
         }
         let current = self.store.get_scheduled_message(id).await?;
@@ -2923,7 +3344,7 @@ impl Runtime {
                 _ => Ok(current),
             };
         };
-        let extra = self.chat_extra_for(&claimed, now, fallback);
+        let extra = self.chat_extra_for(&claimed, now, fallback).await?;
         let sent = self
             .chat_with(&claimed.dot_id, &claimed.text, parent.as_deref(), extra)
             .await;
@@ -2931,6 +3352,12 @@ impl Runtime {
             Ok(run) => {
                 self.store
                     .mark_scheduled_sent(&claimed.id, &run.id, now)
+                    .await?
+            }
+            // A held file is gone: waiting would not bring it back.
+            Err(Error::Conflict(m)) if m == crate::chat_files::GONE => {
+                self.store
+                    .mark_scheduled_failed(&claimed.id, &m, now)
                     .await?
             }
             Err(Error::Conflict(_)) => {
@@ -3002,25 +3429,47 @@ impl Runtime {
 
     /// What a scheduled message's chat run carries besides its text (send later spec section
     /// 4.3): the one place they are built, which attachments extends with its files.
-    fn chat_extra_for(
+    async fn chat_extra_for(
         &self,
         message: &ScheduledMessage,
         sent_at: DateTime<Utc>,
         new_topic: bool,
-    ) -> ChatExtra {
-        ChatExtra {
+    ) -> Result<ChatExtra> {
+        // The files it waits with go with it (attachments spec section 4.6).
+        let attachment_ids = self
+            .store
+            .scheduled_attachments(&message.id)
+            .await?
+            .into_iter()
+            .map(|a| a.id)
+            .collect();
+        Ok(ChatExtra {
             send_later: Some(SentLater {
                 id: message.id.clone(),
                 due_at: message.due_at.clone(),
                 late: crate::send_later::is_late(&message.due_at, sent_at),
                 new_topic,
             }),
-        }
+            attachment_ids,
+            scheduled_id: Some(message.id.clone()),
+            carry_from: None,
+        })
     }
 
-    /// Frees what a cancelled message had staged. Nothing yet: attachments stages its files
-    /// here (send later spec section 4.3).
-    async fn release_staged(&self, _id: &str) {}
+    /// Frees the files a cancelled message held: their rows and stored copies (attachments
+    /// spec section 4.6). A failure is logged; the startup sweep is the backstop.
+    async fn release_staged(&self, id: &str) {
+        match self.store.delete_scheduled_attachments(id).await {
+            Ok(ids) => {
+                for a in ids {
+                    self.chat_files.remove(&a);
+                }
+            }
+            Err(e) => {
+                tracing::warn!(scheduled = %id, "removing a cancelled message's files failed: {e}")
+            }
+        }
+    }
 
     /// The refusal for a message no longer scheduled or failed, by what it is now.
     async fn not_changeable(&self, id: &str) -> Error {
