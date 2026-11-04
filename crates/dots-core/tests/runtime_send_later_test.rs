@@ -198,7 +198,7 @@ async fn scheduling_validates_and_lists() {
     assert_eq!(message.due_at, at(hour()));
     assert_eq!(
         rt.scheduled_messages(&dot.id).await.unwrap(),
-        [message.clone()]
+        std::slice::from_ref(&message)
     );
     assert_eq!(updates(&mut rx), [message]);
     rt.shutdown();
