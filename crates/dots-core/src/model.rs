@@ -370,6 +370,22 @@ pub struct ScheduleChange {
     pub if_last_slot_at: Option<String>,
 }
 
+/// Where a scheduled workflow's schedule stands: its `workflow_schedule_state` row (teams spec
+/// section 5.1). A dot's row without what catching up and retrying need. Times are RFC 3339
+/// UTC (`util::timestamp`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkflowScheduleState {
+    pub workflow_id: String,
+    /// The schedule's JSON when the row was made or reset (`Schedule::rule_key`).
+    pub rule_key: String,
+    pub status: ScheduleStatus,
+    /// The newest slot handled: started, skipped or refused.
+    pub last_slot_at: String,
+    /// Slots that started a workflow run.
+    pub fired_count: u32,
+    pub updated_at: String,
+}
+
 /// What `Store::record_slot` and `Store::start_retry` did with a slot or a retry.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SlotStart {

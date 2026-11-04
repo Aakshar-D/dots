@@ -1,5 +1,6 @@
 //! The rows of teams, their members and projects, and their workflows (teams spec section 4).
 
+use chrono::{Local, SubsecRound, Utc};
 use sqlx::sqlite::SqliteRow;
 use sqlx::Row;
 
@@ -8,7 +9,9 @@ use crate::model::{
     MemberSpec, Project, ProjectSpec, StartableWorkflow, Team, TeamMember, TeamScopeIssue,
     TeamSpec, Workflow, WorkflowSpec,
 };
+use crate::schedule::Schedule;
 use crate::util::{new_id, now};
+use crate::workflow::Trigger;
 use crate::{Error, Result};
 
 const PROJECT_COLUMNS: &str =
@@ -64,6 +67,31 @@ fn workflow_from_row(row: &SqliteRow, members: &[String]) -> Result<Workflow> {
         problem,
         spec,
     })
+}
+
+/// The schedule of a schedule trigger.
+fn trigger_schedule(spec: &WorkflowSpec) -> Option<&Schedule> {
+    match &spec.definition.trigger {
+        Trigger::Schedule { schedule, .. } => Some(schedule),
+        _ => None,
+    }
+}
+
+/// The spec as it is stored: a schedule trigger's schedule prepared against `previous`, the
+/// stored one, as a dot's is (`Schedule::prepare_save`: the `Every` anchor, and the refusal of
+/// a new or changed schedule that would never run).
+fn prepared(spec: &WorkflowSpec, previous: Option<&Schedule>) -> Result<WorkflowSpec> {
+    let mut spec = spec.clone();
+    if let Trigger::Schedule { schedule, .. } = &mut spec.definition.trigger {
+        // Whole milliseconds, as `util::now()`: the stored anchor reads back the same.
+        schedule
+            .prepare_save(previous, Utc::now().trunc_subsecs(3), &Local)
+            .map_err(|e| match e {
+                Error::Invalid(m) => Error::Invalid(format!("the trigger's schedule: {m}")),
+                e => e,
+            })?;
+    }
+    Ok(spec)
 }
 
 /// The backfill of `0019_accounts.sql`, kept here so a test can run it again. It must match the
@@ -360,10 +388,12 @@ impl Store {
         project_from_row(&row)
     }
 
-    /// Creates a workflow of the team, validated against its members.
+    /// Creates a workflow of the team, validated against its members, its schedule prepared
+    /// (`prepared`).
     pub async fn create_workflow(&self, team_id: &str, spec: &WorkflowSpec) -> Result<Workflow> {
         self.get_team(team_id).await?;
         spec.validate(&self.team_member_ids(team_id).await?)?;
+        let spec = &prepared(spec, None)?;
         let id = new_id();
         let ts = now();
         sqlx::query(
@@ -388,10 +418,13 @@ impl Store {
         self.get_workflow(&id).await
     }
 
-    /// Replaces a workflow's name, definition and switch, validated against its team's members.
+    /// Replaces a workflow's name, definition and switch, validated against its team's members,
+    /// its schedule prepared against the stored one (`prepared`).
     pub async fn update_workflow(&self, id: &str, spec: &WorkflowSpec) -> Result<Workflow> {
-        let team_id = self.get_workflow(id).await?.team_id;
+        let stored = self.get_workflow(id).await?;
+        let team_id = stored.team_id.clone();
         spec.validate(&self.team_member_ids(&team_id).await?)?;
+        let spec = &prepared(spec, trigger_schedule(&stored.spec))?;
         sqlx::query(
             "UPDATE workflows SET name = ?, definition = ?, enabled = ?, updated_at = ? \
              WHERE id = ?",

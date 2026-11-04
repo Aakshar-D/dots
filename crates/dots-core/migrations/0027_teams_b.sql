@@ -19,3 +19,14 @@ ALTER TABLE workflow_runs ADD COLUMN send_back TEXT;
 -- What a deploy step did (teams spec section 5.5), JSON `{"branches": [{"branch", "commit",
 -- "pushed", "pr_url", "auto_merge"}], "ready"}`.
 ALTER TABLE workflow_step_runs ADD COLUMN deploy_result TEXT;
+-- Where each scheduled workflow's schedule stands (teams spec section 5.1), as `schedule_state`
+-- keeps a dot's, but with no watched run, retry or attention: workflow schedules never catch
+-- up and never retry. The scheduler makes and resets a row in its pass.
+CREATE TABLE workflow_schedule_state (
+    workflow_id  TEXT PRIMARY KEY REFERENCES workflows(id) ON DELETE CASCADE,
+    rule_key     TEXT NOT NULL,
+    status       TEXT NOT NULL,
+    last_slot_at TEXT NOT NULL,
+    fired_count  INTEGER NOT NULL DEFAULT 0,
+    updated_at   TEXT NOT NULL
+);

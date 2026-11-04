@@ -2,11 +2,14 @@
 //! the enabled dots, then sleeps until the next slot, a waiting retry or 60 s, whichever is
 //! first. `reload()`, a pause or resume, and the end of a watched run wake it at once. The
 //! pass also judges the outcome of each occurrence and retries it or flags it (spec §6).
+//! It fires the scheduled workflows too (`workflow_slots`, teams spec section 5.1).
+
+mod workflow_slots;
 
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Local, SubsecRound, TimeDelta, Utc};
@@ -26,6 +29,7 @@ use crate::runner::Runner;
 use crate::schedule::{due_slot, next_slot, Schedule, Until};
 use crate::store::Store;
 use crate::util::timestamp;
+use crate::workflows::Workflows;
 use crate::{Error, Result};
 
 /// A slot handled less than this after its time is on time; later it is missed.
@@ -97,6 +101,9 @@ pub struct Scheduler {
     resumed: AtomicBool,
     /// The runs the rows watched at the end of the last pass: the end of one wakes the loop.
     watched: Mutex<HashSet<String>>,
+    /// What scheduled workflows are started with (`set_workflows`); unset, the pass leaves
+    /// workflows alone.
+    workflows: OnceLock<Arc<Workflows>>,
 }
 
 impl Scheduler {
@@ -115,7 +122,15 @@ impl Scheduler {
             paused: AtomicBool::new(false),
             resumed: AtomicBool::new(false),
             watched: Mutex::new(HashSet::new()),
+            workflows: OnceLock::new(),
         })
+    }
+
+    /// Sets, once, what the pass starts scheduled workflows with (teams spec section 5.1), and
+    /// wakes the loop so its next pass sees them.
+    pub fn set_workflows(&self, workflows: Arc<Workflows>) {
+        let _ = self.workflows.set(workflows);
+        self.reload();
     }
 
     /// While paused no pass runs: nothing fires and no retry starts. A resume does not catch
@@ -174,14 +189,20 @@ impl Scheduler {
         })
     }
 
-    /// Returns when a run the rows watch has ended (its `RunUpdated`), or when events were
-    /// lost and one may have.
+    /// Returns when a run the rows watch has ended (its `RunUpdated`), when a workflow or a
+    /// team changed while workflows are set (a schedule trigger saved, a workflow turned on or
+    /// off, a member removed), or when events were lost and one may have.
     async fn watched_run_ended(&self, events: &mut Receiver<RuntimeEvent>) {
         loop {
             match events.recv().await {
                 Ok(RuntimeEvent::RunUpdated { run })
                     if run.status.is_terminal()
                         && self.watched.lock().unwrap().contains(&run.id) =>
+                {
+                    return
+                }
+                Ok(RuntimeEvent::WorkflowUpdated { .. } | RuntimeEvent::TeamUpdated { .. })
+                    if self.workflows.get().is_some() =>
                 {
                     return
                 }
@@ -211,6 +232,11 @@ impl Scheduler {
                     self.resumed.store(true, Ordering::SeqCst);
                     return Err(e);
                 }
+            }
+            if let Err(e) = self.store.resume_workflow_schedules(now).await {
+                // Kept too: the dots' rows moving again is harmless.
+                self.resumed.store(true, Ordering::SeqCst);
+                return Err(e);
             }
         }
         self.pass(now).await.map(Some)
@@ -250,6 +276,9 @@ impl Scheduler {
         }
         *self.watched.lock().unwrap() = watched;
         self.clear_attention(now).await?;
+        if let Some(next) = self.workflow_pass(now).await? {
+            wake = wake.min(next);
+        }
         Ok(wake)
     }
 
