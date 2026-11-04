@@ -9,6 +9,7 @@ pub mod chatgpt;
 pub mod checkins;
 pub mod context;
 pub mod delivery;
+pub mod deploy;
 pub mod engine;
 pub mod error;
 pub mod events;
