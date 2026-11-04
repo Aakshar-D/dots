@@ -2089,7 +2089,7 @@ impl Runtime {
         let pending = self.store.pending_for_run(run_id).await?;
         let shown = pending
             .into_iter()
-            .filter(|a| only.is_none_or(|ids| ids.iter().any(|id| *id == a.id)));
+            .filter(|a| only.is_none_or(|ids| ids.contains(&a.id)));
         for pending in shown {
             match self.hub.decide(&pending.id, approved, note.clone()).await {
                 Ok(DecideEffect::Live(a)) => decided.push(a),
