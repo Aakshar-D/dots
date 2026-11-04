@@ -172,10 +172,9 @@ impl Session {
         if let Some(apps) = self.ctx.tools.apps() {
             out.extend(apps.function_schemas());
         }
-        // A chat run of a member that may start a workflow (teams spec section 7).
-        if !self.ctx.tools.startable().is_empty() {
-            out.push(tools::team::start_schema());
-        }
+        // The workflow tools the run has (teams spec section 7): `start_workflow` for a chat run
+        // of a member that may start a workflow, a step's tools for a run of its step.
+        out.extend(tools::team::schemas(&self.ctx.tools));
         // A run of a chat the person started (conversational chat spec section 4).
         if self.ctx.tools.instructions() && self.checkins.is_some() {
             out.push(tools::instructions::schema());

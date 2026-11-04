@@ -40,7 +40,7 @@ Owner's calls: skip with a reason; busy = running or waiting on the person, chat
 
 ### 4.2 Recording a skip
 
-- **Migration 0027** (`0027_schedule_skips.sql`):
+- **Migration 0028** (`0028_schedule_skips.sql`):
 
 ```sql
 CREATE TABLE schedule_skips (
@@ -100,7 +100,7 @@ CREATE INDEX schedule_skips_dot ON schedule_skips(dot_id, slot_at);
 
 ## 9. Collisions with parallel work
 
-Small additions to shared files: core `scheduler.rs`, `store/schedules.rs`, `store/runs.rs` (busy query) or a new `store/skips.rs`, `model.rs`, core `events.rs`, `runtime.rs`, migration 0027 (tell the parallel developer it is taken); app `commands.rs`, `lib.rs`, `contract.rs`; UI `api/types.ts`, `commands.ts`, `lib/runtime-events.ts`, the home timeline, `ScheduleEditor.tsx`. New UI code in a new file (`ui/src/screens/home/SkipLine.tsx`).
+Small additions to shared files: core `scheduler.rs`, `store/schedules.rs`, `store/runs.rs` (busy query) or a new `store/skips.rs`, `model.rs`, core `events.rs`, `runtime.rs`, migration 0028 (tell the parallel developer it is taken); app `commands.rs`, `lib.rs`, `contract.rs`; UI `api/types.ts`, `commands.ts`, `lib/runtime-events.ts`, the home timeline, `ScheduleEditor.tsx`. New UI code in a new file (`ui/src/screens/home/SkipLine.tsx`).
 
 ## 10. Not in this part
 

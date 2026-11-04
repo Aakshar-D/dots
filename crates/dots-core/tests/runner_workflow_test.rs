@@ -20,6 +20,10 @@ use tempfile::TempDir;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+/// How long a test waits for a run to get somewhere, in seconds: generous, because under a full
+/// test run git on Windows can take seconds per command.
+const WAIT: u64 = 60;
+
 fn runner_with(store: &Store, dir: &TempDir, engine: Arc<dyn Engine>, max: usize) -> Arc<Runner> {
     let mut engines: HashMap<EngineKind, Arc<dyn Engine>> = HashMap::new();
     engines.insert(EngineKind::Claude, engine);
@@ -78,6 +82,9 @@ async fn step_run_in(
             kind: StepKind::Agent {
                 member: dot.id.clone(),
                 job: "Work.".into(),
+                can_send_back_to: vec![],
+                outcomes: vec![],
+                delegate: None,
             },
         }],
         budget: Budget::default(),
@@ -151,15 +158,15 @@ async fn two_workflow_runs_of_one_dot_run_at_once() {
     let step = step_run(&store, &dir, &dev).await;
     let a = queue(&runner, &dev, Some(&step)).await;
     let b = queue(&runner, &dev, Some(&step)).await;
-    wait_status(&store, &a.id, RunStatus::Running, 5).await;
-    wait_status(&store, &b.id, RunStatus::Running, 5).await;
+    wait_status(&store, &a.id, RunStatus::Running, WAIT).await;
+    wait_status(&store, &b.id, RunStatus::Running, WAIT).await;
     // Both at once: the first is still running when the second starts.
     assert_eq!(
         store.get_run(&a.id).await.unwrap().status,
         RunStatus::Running
     );
-    wait_status(&store, &a.id, RunStatus::Succeeded, 5).await;
-    wait_status(&store, &b.id, RunStatus::Succeeded, 5).await;
+    wait_status(&store, &a.id, RunStatus::Succeeded, WAIT).await;
+    wait_status(&store, &b.id, RunStatus::Succeeded, WAIT).await;
 }
 
 #[tokio::test]
@@ -170,11 +177,11 @@ async fn ordinary_runs_wait_only_for_ordinary_runs() {
     let dev = folder_dot(&store, &dir, "dev").await;
     let step = step_run(&store, &dir, &dev).await;
     let first = queue(&runner, &dev, None).await;
-    wait_status(&store, &first.id, RunStatus::Running, 5).await;
+    wait_status(&store, &first.id, RunStatus::Running, WAIT).await;
     let second = queue(&runner, &dev, None).await;
     let flow = queue(&runner, &dev, Some(&step)).await;
     // The workflow run starts beside the ordinary one; the second ordinary one waits.
-    wait_status(&store, &flow.id, RunStatus::Running, 5).await;
+    wait_status(&store, &flow.id, RunStatus::Running, WAIT).await;
     assert_eq!(
         store.get_run(&first.id).await.unwrap().status,
         RunStatus::Running
@@ -183,8 +190,8 @@ async fn ordinary_runs_wait_only_for_ordinary_runs() {
         store.get_run(&second.id).await.unwrap().status,
         RunStatus::Queued
     );
-    wait_status(&store, &first.id, RunStatus::Succeeded, 5).await;
-    wait_status(&store, &second.id, RunStatus::Succeeded, 5).await;
+    wait_status(&store, &first.id, RunStatus::Succeeded, WAIT).await;
+    wait_status(&store, &second.id, RunStatus::Succeeded, WAIT).await;
 }
 
 #[tokio::test]
@@ -195,16 +202,16 @@ async fn an_ordinary_run_does_not_wait_for_a_running_workflow_run() {
     let dev = folder_dot(&store, &dir, "dev").await;
     let step = step_run(&store, &dir, &dev).await;
     let flow = queue(&runner, &dev, Some(&step)).await;
-    wait_status(&store, &flow.id, RunStatus::Running, 5).await;
+    wait_status(&store, &flow.id, RunStatus::Running, WAIT).await;
     let plain = queue(&runner, &dev, None).await;
-    wait_status(&store, &plain.id, RunStatus::Running, 5).await;
+    wait_status(&store, &plain.id, RunStatus::Running, WAIT).await;
     // Both at once: the workflow run is still running when the ordinary one starts.
     assert_eq!(
         store.get_run(&flow.id).await.unwrap().status,
         RunStatus::Running
     );
-    wait_status(&store, &flow.id, RunStatus::Succeeded, 5).await;
-    wait_status(&store, &plain.id, RunStatus::Succeeded, 5).await;
+    wait_status(&store, &flow.id, RunStatus::Succeeded, WAIT).await;
+    wait_status(&store, &plain.id, RunStatus::Succeeded, WAIT).await;
 }
 
 #[tokio::test]
@@ -216,12 +223,12 @@ async fn the_concurrency_limit_still_holds_for_workflow_runs() {
     let step = step_run(&store, &dir, &dev).await;
     let a = queue(&runner, &dev, Some(&step)).await;
     let b = queue(&runner, &dev, Some(&step)).await;
-    wait_status(&store, &a.id, RunStatus::Running, 5).await;
+    wait_status(&store, &a.id, RunStatus::Running, WAIT).await;
     assert_eq!(
         store.get_run(&b.id).await.unwrap().status,
         RunStatus::Queued
     );
-    wait_status(&store, &b.id, RunStatus::Succeeded, 5).await;
+    wait_status(&store, &b.id, RunStatus::Succeeded, WAIT).await;
 }
 
 /// Writes `file` into its workspace (when given), keeps each prompt, and finishes.
@@ -294,7 +301,7 @@ async fn a_step_works_in_a_worktree_of_the_project_from_its_start() {
         json!({"workflow": {"start": "feature"}}),
     )
     .await;
-    let run = wait_status(&store, &run.id, RunStatus::Succeeded, 10).await;
+    let run = wait_status(&store, &run.id, RunStatus::Succeeded, WAIT).await;
     assert_eq!(run.base_commit.as_deref(), Some(tip.as_str()));
     let branch = run.branch.clone().unwrap();
     assert_eq!(branch, format!("dots/dev/{}", run.id));
@@ -345,7 +352,7 @@ async fn the_commit_skips_the_repos_hooks() {
     let dev = worktree_dot(&store, &dir, "dev").await;
     let step = step_run_in(&store, &dev, &project, None).await;
     let run = queue_with(&runner, &dev, &step, json!({})).await;
-    let run = wait_status(&store, &run.id, RunStatus::Succeeded, 10).await;
+    let run = wait_status(&store, &run.id, RunStatus::Succeeded, WAIT).await;
     let branch = run.branch.unwrap();
     assert_eq!(
         git_out(&project, &["show", &format!("{branch}:fix.txt")]),
@@ -379,12 +386,12 @@ async fn a_projects_default_branch_is_its_branch_before_a_tag_and_else_the_remot
     let dev = worktree_dot(&store, &dir, "dev").await;
     let step = step_run_in(&store, &dev, &project, Some("main")).await;
     let run = queue_with(&runner, &dev, &step, json!({})).await;
-    let run = wait_status(&store, &run.id, RunStatus::Succeeded, 10).await;
+    let run = wait_status(&store, &run.id, RunStatus::Succeeded, WAIT).await;
     assert_eq!(run.base_commit.as_deref(), Some(tip.as_str()));
     let other = worktree_dot(&store, &dir, "other").await;
     let step = step_run_in(&store, &other, &project, Some("release")).await;
     let run = queue_with(&runner, &other, &step, json!({})).await;
-    let run = wait_status(&store, &run.id, RunStatus::Succeeded, 10).await;
+    let run = wait_status(&store, &run.id, RunStatus::Succeeded, WAIT).await;
     assert_eq!(run.base_commit.as_deref(), Some(first.as_str()));
 }
 
@@ -398,7 +405,7 @@ async fn a_step_with_nothing_to_commit_leaves_no_worktree() {
     let dev = worktree_dot(&store, &dir, "dev").await;
     let step = step_run_in(&store, &dev, &project, Some("main")).await;
     let run = queue_with(&runner, &dev, &step, json!({})).await;
-    let run = wait_status(&store, &run.id, RunStatus::Succeeded, 10).await;
+    let run = wait_status(&store, &run.id, RunStatus::Succeeded, WAIT).await;
     assert!(!std::path::Path::new(run.workspace_path.as_deref().unwrap()).exists());
 }
 
@@ -412,7 +419,7 @@ async fn a_start_that_is_not_in_the_repo_fails_the_run() {
     let dev = worktree_dot(&store, &dir, "dev").await;
     let step = step_run_in(&store, &dev, &project, None).await;
     let run = queue_with(&runner, &dev, &step, json!({"workflow": {"start": "nope"}})).await;
-    let run = wait_status(&store, &run.id, RunStatus::Failed, 10).await;
+    let run = wait_status(&store, &run.id, RunStatus::Failed, WAIT).await;
     assert!(
         run.error
             .as_deref()
@@ -441,7 +448,7 @@ async fn a_step_run_gets_the_workflow_section_in_its_prompt() {
         json!({"workflow": {"section": section}}),
     )
     .await;
-    wait_status(&store, &run.id, RunStatus::Succeeded, 10).await;
+    wait_status(&store, &run.id, RunStatus::Succeeded, WAIT).await;
     let prompt = engine.prompts.lock().unwrap()[0].clone();
     assert!(prompt.starts_with("Do the thing."), "{prompt}");
     assert!(

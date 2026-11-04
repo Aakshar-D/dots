@@ -16,7 +16,7 @@
 - Only repeating schedules skip. `Rule::Once` slots and retries (`Store::start_retry`) never skip.
 - A busy skip does not change `fired_count`, does not drop a pending retry, and moves `last_slot_at` to the slot.
 - Missed-slot rules (late / catch-up) are unchanged; busy is checked only for a slot that would otherwise fire.
-- Keep the newest 50 skips per dot. Migration `0027_schedule_skips.sql` (schema verbatim from spec §4.2).
+- Keep the newest 50 skips per dot. Migration `0028_schedule_skips.sql` (schema verbatim from spec §4.2).
 - Event `schedule_skipped { dot_id, skip }`, plus the existing `schedule_updated`. No notification, no Needs you.
 - Conversation line: `Schedule skipped at <local time>: still working on the previous run` (date prefixed when not today).
 - Header line: `Last skipped <local time> · <n> skipped since the last run` (drop `· <n> skipped since the last run` when n = 0).
@@ -37,7 +37,7 @@
 ### Task 1: Storage: busy check, skips table, `record_slot`
 
 **Files:**
-- Create: `crates/dots-core/migrations/0027_schedule_skips.sql`
+- Create: `crates/dots-core/migrations/0028_schedule_skips.sql`
 - Modify: `crates/dots-core/src/model.rs` (`SlotStart` :375, new `ScheduleSkip`)
 - Modify: `crates/dots-core/src/store/schedules.rs` (`record_slot` :173)
 - Create: `crates/dots-core/src/store/skips.rs` (register in `store/mod.rs`)

@@ -184,6 +184,8 @@ pub struct RunTools {
     apps: Option<Arc<crate::apps::RunApps>>,
     /// The workflows a chat run may start (teams spec section 7); none for other runs.
     startable: Vec<crate::model::StartableWorkflow>,
+    /// The workflow tools of a run that works for an open agent step (teams spec section 7).
+    step: Option<crate::team_tools::StepTools>,
     /// The run may propose new instructions for its dot (conversational chat spec section 4).
     instructions: bool,
 }
@@ -260,6 +262,20 @@ impl RunTools {
         &self.startable
     }
 
+    /// The workflow tools of the agent step the run works for, while that step is open.
+    pub fn step(&self) -> Option<&crate::team_tools::StepTools> {
+        self.step.as_ref()
+    }
+
+    /// Whether the run has the workflow tool `tool` (teams spec section 7): `start_workflow`
+    /// with workflows to start, a step's tools as its `StepTools` offer them.
+    pub fn offers(&self, tool: crate::team_tools::Tool) -> bool {
+        match tool {
+            crate::team_tools::Tool::StartWorkflow => !self.startable.is_empty(),
+            _ => self.step.as_ref().is_some_and(|step| step.offers(tool)),
+        }
+    }
+
     /// The run may propose new instructions with `propose_instructions`.
     pub fn instructions(&self) -> bool {
         self.instructions
@@ -274,6 +290,12 @@ impl RunTools {
     /// The run's tools with the workflows it may start.
     pub fn with_startable(mut self, startable: Vec<crate::model::StartableWorkflow>) -> RunTools {
         self.startable = startable;
+        self
+    }
+
+    /// The run's tools with the workflow tools of the step it works for.
+    pub fn with_step(mut self, step: Option<crate::team_tools::StepTools>) -> RunTools {
+        self.step = step;
         self
     }
 

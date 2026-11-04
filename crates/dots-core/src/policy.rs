@@ -77,7 +77,8 @@ pub const APP_TOOLS: [&str; 2] = [crate::apps::APP_POLICY, crate::apps::PROPOSE_
 /// The refusal of a rule `ProposeApp(...)`.
 pub const PROPOSE_RULE: &str = "a ProposeApp rule names no argument";
 
-/// Dots' own workflow tools (`start_workflow`) by their one policy name (teams spec section 7):
+/// Dots' own workflow tools (`start_workflow`, a step's `report_outcome` and `send_back`) by
+/// their one policy name (teams spec section 7):
 /// treated as `Memory` is. A rule names it alone: `Workflow(...)` is refused.
 pub const WORKFLOW_TOOL: &str = crate::team_tools::POLICY_NAME;
 
