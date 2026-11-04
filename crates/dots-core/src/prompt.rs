@@ -186,12 +186,14 @@ pub fn build_prompt_full(
         instructions_tool,
         instructions_changed,
     } = parts;
-    let message = run
+    let text = run
         .payload
         .as_ref()
         .and_then(|p| p.get("message"))
         .and_then(Value::as_str)
         .unwrap_or_default();
+    let with_files = with_attachments(run, workspace, text);
+    let message = with_files.as_str();
     // A person's message that resumes its topic names the runs that ended since the topic's
     // last one (conversational chat spec section 3.1).
     if is_typed(run) && run.session_id.is_some() && (instructions_changed || !recent.is_empty()) {
@@ -343,6 +345,40 @@ pub fn build_prompt_full(
         out.push('\n');
     }
     out
+}
+
+/// A chat message's text with the block naming its attached files (attachments spec section
+/// 4.4), after a blank line, or the block alone when the text is empty. Only a chat run's
+/// files are named: a watcher's attachments are part of its own section.
+fn with_attachments(run: &Run, workspace: &Path, text: &str) -> String {
+    if run.trigger != TriggerKind::Chat {
+        return text.to_string();
+    }
+    let files: Vec<(std::path::PathBuf, u64)> = run
+        .payload
+        .as_ref()
+        .and_then(|p| p.get("attachments"))
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .filter_map(|a| {
+                    let name = a.get("name")?.as_str()?;
+                    let size = a.get("size")?.as_u64()?;
+                    let dir = crate::chat_files::topic_dir(workspace, &run.root_run_id);
+                    Some((dir.join(name), size))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if files.is_empty() {
+        return text.to_string();
+    }
+    let block = crate::chat_files::prompt_block(&files);
+    if text.is_empty() {
+        block
+    } else {
+        format!("{text}\n\n{block}")
+    }
 }
 
 /// The `## Workflow` section a workflow run wrote into the payload of a step's run.

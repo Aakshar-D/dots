@@ -10,10 +10,13 @@ use crate::Result;
 mod api_keys;
 mod approvals;
 mod apps;
+mod attachments;
 mod browser;
 mod dots;
 mod env;
 mod follow_ups;
+mod held;
+mod inbox_marks;
 mod instructions;
 mod invites;
 mod library;
@@ -22,8 +25,10 @@ mod memories;
 mod messages;
 mod orgs;
 mod runs;
+mod scheduled_messages;
 mod schedules;
 mod settings;
+mod skips;
 mod step_members;
 mod teams;
 #[doc(hidden)]
@@ -45,6 +50,8 @@ pub struct Store {
 }
 
 pub use api_keys::ApiKeyRow;
+pub use attachments::{WrittenFile, WRITING_TOOLS};
+pub use held::HeldEvent;
 pub use invites::{DraftRow, InviteRow};
 pub use limits::LimitReading;
 pub use memories::Added;

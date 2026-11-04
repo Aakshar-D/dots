@@ -43,12 +43,12 @@ describe("commands", () => {
     reply = async () => fixture.RuleCandidate;
     expect(await commands.approvalRuleCandidates("a1")).toEqual(fixture.RuleCandidate);
     reply = async () => [fixture.Approval];
-    expect(await commands.decideRunApprovals("r1", true, null)).toEqual([fixture.Approval]);
+    expect(await commands.decideRunApprovals("r1", ["a1", "a2"], true, null)).toEqual([fixture.Approval]);
     expect(calls).toEqual([
       ["decide_approval", { id: "a1", approved: true, note: null, allowRule: "Bash(git push)" }],
       ["decide_approval", { id: "a1", approved: false, note: "no", allowRule: null }],
       ["approval_rule_candidates", { id: "a1" }],
-      ["decide_run_approvals", { runId: "r1", approved: true, note: null }],
+      ["decide_run_approvals", { runId: "r1", ids: ["a1", "a2"], approved: true, note: null }],
     ]);
   });
 
@@ -63,6 +63,8 @@ describe("commands", () => {
     await commands.messageMarkRead("m1");
     reply = async () => fixture.FollowUp;
     expect(await commands.followUpsList(null)).toEqual(fixture.FollowUp);
+    reply = async () => [fixture.ScheduleSkip];
+    expect(await commands.scheduleSkips("d1")).toEqual([fixture.ScheduleSkip]);
     reply = async () => fixture.FollowUp[0];
     await commands.followUpCancel("f1");
     expect(calls).toEqual([
@@ -72,6 +74,7 @@ describe("commands", () => {
       ["message_dismiss", { id: "m1" }],
       ["message_mark_read", { id: "m1" }],
       ["follow_ups_list", { dotId: null }],
+      ["schedule_skips", { dotId: "d1", limit: undefined }],
       ["follow_up_cancel", { id: "f1" }],
     ]);
   });

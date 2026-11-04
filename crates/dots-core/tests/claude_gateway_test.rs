@@ -245,8 +245,15 @@ async fn a_claude_run_reaches_its_servers_through_the_gateway_only() {
     let received = fake.received("tools/call");
     assert_eq!(received.len(), 1);
     assert_eq!(received[0]["params"]["arguments"], json!({"q": "a"}));
-    // The run's tools are gone with it.
-    assert!(e.runner.run_tools(&run.id).is_none());
+    // The run's tools are gone with it: the runner lets go of them just after the run ends.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while e.runner.run_tools(&run.id).is_some() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the runner kept the run's tools"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     assert!(fake.gone_within(Duration::from_secs(10)).await);
 }
 

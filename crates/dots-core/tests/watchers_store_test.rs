@@ -9,8 +9,9 @@ use common::{spec, temp_store};
 use dots_core::events::RuntimeEvent;
 use dots_core::model::{
     EmailConfig, FolderConfig, FolderEvent, GithubConfig, GithubEvent, NewRun, PausedReason,
-    PausedWatcher, TriggerKind, WatcherConfig, WatcherKind,
+    PausedWatcher, TriggerKind, WatchHours, WatcherConfig, WatcherKind,
 };
+use dots_core::store::Store;
 use dots_core::util::timestamp;
 use dots_core::vault::{EntryKind, Vault};
 use dots_core::watchers::{
@@ -59,16 +60,25 @@ async fn watchers_are_added_listed_changed_and_deleted_and_go_with_their_dot() {
         .await
         .unwrap();
     let a = store
-        .add_watcher(&dot.id, "Invoices folder", &folder("C:/Users/me/Invoices"))
+        .add_watcher(
+            &dot.id,
+            "Invoices folder",
+            &folder("C:/Users/me/Invoices"),
+            None,
+        )
         .await
         .unwrap();
     tick().await;
-    let b = store.add_watcher(&dot.id, "Mail", &email()).await.unwrap();
+    let b = store
+        .add_watcher(&dot.id, "Mail", &email(), None)
+        .await
+        .unwrap();
     store
         .add_watcher(
             &other.id,
             "Repo",
             &WatcherConfig::Github(GithubConfig::new(&["owner/repo"], "GITHUB_TOKEN")),
+            None,
         )
         .await
         .unwrap();
@@ -82,7 +92,10 @@ async fn watchers_are_added_listed_changed_and_deleted_and_go_with_their_dot() {
         vec![a.clone(), b.clone()]
     );
     assert_eq!(store.get_watcher(&a.id).await.unwrap(), a);
-    let unknown = store.add_watcher("NODOT", "x", &email()).await.unwrap_err();
+    let unknown = store
+        .add_watcher("NODOT", "x", &email(), None)
+        .await
+        .unwrap_err();
     assert!(matches!(unknown, Error::NotFound(_)), "{unknown:?}");
 
     // A changed config starts the watcher again from now: its cursor goes.
@@ -96,7 +109,7 @@ async fn watchers_are_added_listed_changed_and_deleted_and_go_with_their_dot() {
     let labelled = WatcherConfig::Email(labelled);
     tick().await;
     let b2 = store
-        .update_watcher(&b.id, "Dots mail", &labelled)
+        .update_watcher(&b.id, "Dots mail", &labelled, None)
         .await
         .unwrap();
     assert_eq!((b2.name.as_str(), &b2.config), ("Dots mail", &labelled));
@@ -108,7 +121,7 @@ async fn watchers_are_added_listed_changed_and_deleted_and_go_with_their_dot() {
         .await
         .unwrap();
     store
-        .update_watcher(&b.id, "Renamed", &labelled)
+        .update_watcher(&b.id, "Renamed", &labelled, None)
         .await
         .unwrap();
     assert_eq!(store.get_watcher_cursor(&b.id).await.unwrap(), Some(cursor));
@@ -139,7 +152,7 @@ async fn dots_pauses_a_watcher_once_and_the_person_resumes_it() {
         .await
         .unwrap();
     let w = store
-        .add_watcher(&dot.id, "Invoices folder", &folder("C:/in"))
+        .add_watcher(&dot.id, "Invoices folder", &folder("C:/in"), None)
         .await
         .unwrap();
     let at = timestamp(t0());
@@ -211,7 +224,7 @@ async fn a_watcher_takes_at_most_20_fires_in_a_sliding_hour() {
         .await
         .unwrap();
     let w = store
-        .add_watcher(&dot.id, "Busy", &folder("C:/in"))
+        .add_watcher(&dot.id, "Busy", &folder("C:/in"), None)
         .await
         .unwrap();
     let hour = TimeDelta::hours(1);
@@ -462,4 +475,216 @@ async fn an_empty_folder_field_asks_for_a_folder() {
     let refused = message(check_config(&store, &folder("  ")).await.unwrap_err());
     assert_eq!(refused, dots_core::watchers::FOLDER_RULE);
     assert_eq!(dots_core::watchers::FOLDER_RULE, "Choose a folder.");
+}
+
+fn hours() -> WatchHours {
+    serde_json::from_value(json!({"days": ["mon", "tue"], "start": "09:00", "end": "18:00"}))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_watchers_hours_are_kept_on_add_and_update_and_none_means_any_time() {
+    let (_dir, store) = temp_store().await;
+    let dot = store
+        .create_dot(&spec("hrs"), None, "default")
+        .await
+        .unwrap();
+    let a = store
+        .add_watcher(&dot.id, "Mail", &email(), Some(&hours()))
+        .await
+        .unwrap();
+    assert_eq!(a.hours, Some(hours()));
+    assert_eq!((a.held_count, a.next_opening.clone()), (0, None));
+    assert_eq!(store.get_watcher(&a.id).await.unwrap().hours, Some(hours()));
+    let b = store
+        .add_watcher(&dot.id, "Folder", &folder("C:/in"), None)
+        .await
+        .unwrap();
+    assert_eq!(b.hours, None);
+
+    // An update that keeps the config keeps the cursor and changes the hours.
+    let cursor = json!({"uid_validity": 7, "last_uid": 41});
+    store
+        .set_watcher_cursor(&a.id, Some(&cursor))
+        .await
+        .unwrap();
+    let mut other = hours();
+    other.end = chrono::NaiveTime::from_hms_opt(20, 0, 0).unwrap();
+    let a2 = store
+        .update_watcher(&a.id, "Mail", &email(), Some(&other))
+        .await
+        .unwrap();
+    assert_eq!(a2.hours, Some(other));
+    assert_eq!(store.get_watcher_cursor(&a.id).await.unwrap(), Some(cursor));
+    let a3 = store
+        .update_watcher(&a.id, "Mail", &email(), None)
+        .await
+        .unwrap();
+    assert_eq!(a3.hours, None);
+}
+
+#[tokio::test]
+async fn a_watcher_stored_before_migration_0029_reads_hours_none() {
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("dots.db");
+    let opts = SqliteConnectOptions::new()
+        .filename(&path)
+        .create_if_missing(true);
+    let pool = SqlitePool::connect_with(opts).await.unwrap();
+    let mut before = sqlx::migrate!("./migrations");
+    before.migrations = before
+        .migrations
+        .iter()
+        .filter(|m| m.version <= 28)
+        .cloned()
+        .collect::<Vec<_>>()
+        .into();
+    before.run(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO dots (id, name, instructions, engine, model, workdir, workspace_mode,          webhook_token, policy, max_turns, timeout_secs, approval_wait_secs,          created_at, updated_at) VALUES ('D1', 'old', 'Do it.', 'claude', 'sonnet',          'C:/tmp/repo', 'worktree', 't', ?, 40, 1800, 240, '2026-10-01T00:00:00.000Z',          '2026-10-01T00:00:00.000Z')",
+    )
+    .bind(
+        serde_json::to_string(&dots_core::policy::Policy::preset(
+            dots_core::policy::Preset::Sandboxed,
+        ))
+        .unwrap(),
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO watchers (id, dot_id, kind, name, config, enabled, created_at, updated_at)          VALUES ('W1', 'D1', 'folder', 'old', ?, 1, '2026-10-01T00:00:00.000Z',          '2026-10-01T00:00:00.000Z')",
+    )
+    .bind(serde_json::to_string(&folder("C:/in")).unwrap())
+    .execute(&pool)
+    .await
+    .unwrap();
+    pool.close().await;
+
+    let store = Store::open(&path).await.unwrap();
+    let w = store.get_watcher("W1").await.unwrap();
+    assert_eq!((w.hours, w.held_count), (None, 0));
+}
+
+#[tokio::test]
+async fn held_events_are_counted_listed_oldest_first_taken_dropped_and_cascade() {
+    let (_dir, store) = temp_store().await;
+    let dot = store
+        .create_dot(&spec("held"), None, "default")
+        .await
+        .unwrap();
+    let w = store
+        .add_watcher(&dot.id, "Mail", &email(), Some(&hours()))
+        .await
+        .unwrap();
+    let w2 = store
+        .add_watcher(&dot.id, "Mail 2", &email(), None)
+        .await
+        .unwrap();
+    // Held out of order: the listing goes by held_at.
+    let late = store
+        .hold_event(&w.id, &json!({"n": 3}), None, t0() + TimeDelta::seconds(2))
+        .await
+        .unwrap();
+    let files = json!([{"name": "a.pdf", "path": "C:/held/a.pdf"}]);
+    let first = store
+        .hold_event(&w.id, &json!({"n": 1}), Some(&files), t0())
+        .await
+        .unwrap();
+    let mid = store
+        .hold_event(&w.id, &json!({"n": 2}), None, t0() + TimeDelta::seconds(1))
+        .await
+        .unwrap();
+    store
+        .hold_event(&w2.id, &json!({"n": 9}), None, t0())
+        .await
+        .unwrap();
+    assert_eq!(first.held_at, timestamp(t0()));
+    assert_eq!(store.held_count(&w.id).await.unwrap(), 3);
+    assert_eq!(store.get_watcher(&w.id).await.unwrap().held_count, 3);
+    let listed = store.list_watchers(&dot.id).await.unwrap();
+    assert_eq!(
+        listed.iter().map(|w| w.held_count).collect::<Vec<_>>(),
+        vec![3, 1]
+    );
+    assert_eq!(store.all_watchers().await.unwrap()[0].held_count, 3);
+    let held = store.held_events(&w.id).await.unwrap();
+    assert_eq!(held, vec![first.clone(), mid.clone(), late.clone()]);
+    assert_eq!(held[0].files, Some(files));
+
+    let taken = store.take_held(&w.id).await.unwrap();
+    assert_eq!(taken, vec![first, mid, late]);
+    assert_eq!(store.held_count(&w.id).await.unwrap(), 0);
+    assert!(store.take_held(&w.id).await.unwrap().is_empty());
+    assert_eq!(store.held_count(&w2.id).await.unwrap(), 1);
+
+    for n in 0..2 {
+        store
+            .hold_event(&w.id, &json!({"n": n}), None, t0() + TimeDelta::seconds(n))
+            .await
+            .unwrap();
+    }
+    let dropped = store.drop_held(&w.id).await.unwrap();
+    assert_eq!(
+        dropped
+            .iter()
+            .map(|h| h.payload["n"].clone())
+            .collect::<Vec<_>>(),
+        vec![json!(0), json!(1)]
+    );
+    assert_eq!(store.held_count(&w.id).await.unwrap(), 0);
+
+    store
+        .hold_event(
+            &w2.id,
+            &json!({"n": 10}),
+            None,
+            t0() + TimeDelta::seconds(1),
+        )
+        .await
+        .unwrap();
+    store.delete_watcher(&w2.id).await.unwrap();
+    assert!(store.held_events(&w2.id).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_bad_stored_hours_value_reads_as_none_and_hides_no_watcher() {
+    let (dir, store) = temp_store().await;
+    let dot = store
+        .create_dot(&spec("bad"), None, "default")
+        .await
+        .unwrap();
+    let good = store
+        .add_watcher(&dot.id, "Good", &email(), Some(&hours()))
+        .await
+        .unwrap();
+    tick().await;
+    let bad = store
+        .add_watcher(&dot.id, "Bad", &folder("C:/in"), Some(&hours()))
+        .await
+        .unwrap();
+    let raw = sqlx::sqlite::SqlitePool::connect_with(
+        sqlx::sqlite::SqliteConnectOptions::new().filename(dir.path().join("dots.db")),
+    )
+    .await
+    .unwrap();
+    sqlx::query("UPDATE watchers SET hours = 'garbage' WHERE id = ?")
+        .bind(&bad.id)
+        .execute(&raw)
+        .await
+        .unwrap();
+    raw.close().await;
+    let listed = store.list_watchers(&dot.id).await.unwrap();
+    assert_eq!(listed.len(), 2);
+    assert_eq!(listed[0].hours, Some(hours()));
+    assert_eq!(
+        (listed[1].id.as_str(), &listed[1].hours),
+        (bad.id.as_str(), &None)
+    );
+    assert_eq!(store.all_watchers().await.unwrap().len(), 2);
+    assert_eq!(
+        store.get_watcher(&good.id).await.unwrap().hours,
+        Some(hours())
+    );
 }

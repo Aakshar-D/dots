@@ -8,6 +8,8 @@ import { commands } from "@/api/commands";
 import type {
   FolderEvent,
   GithubEvent,
+  WatchDay,
+  WatchHours,
   Watcher,
   WatcherConfig,
   WatcherKind,
@@ -33,7 +35,13 @@ import { Textarea } from "@/components/ui/textarea";
 import { localDateTime } from "@/lib/format";
 import { errorMessage, notifyError } from "@/lib/notify";
 import { invalidate, keys } from "@/lib/query";
-import { defaultWatcherName, folderInside, watcherState, watcherSummary } from "@/lib/watchers";
+import {
+  defaultWatcherName,
+  folderInside,
+  watcherHoursLine,
+  watcherState,
+  watcherSummary,
+} from "@/lib/watchers";
 import { VariableDialog } from "@/screens/library/EnvTab";
 
 const ICONS = { folder: Folder, email: Mail, github: GitPullRequest } as const;
@@ -60,6 +68,23 @@ const GITHUB_EVENTS: [GithubEvent, string][] = [
   ["push", "Pushes"],
   ["ci", "CI runs"],
 ];
+
+const DAYS: [WatchDay, string][] = [
+  ["mon", "Mon"],
+  ["tue", "Tue"],
+  ["wed", "Wed"],
+  ["thu", "Thu"],
+  ["fri", "Fri"],
+  ["sat", "Sat"],
+  ["sun", "Sun"],
+];
+
+/// The hours "Only at these times" starts with: weekdays, office hours.
+const OFFICE_HOURS: WatchHours = {
+  days: ["mon", "tue", "wed", "thu", "fri"],
+  start: "09:00",
+  end: "17:00",
+};
 
 /// What a new watcher of `kind` starts with.
 function blank(kind: WatcherKind): WatcherConfig {
@@ -180,11 +205,19 @@ function WatcherForm(props: {
   const [authors, setAuthors] = useState(github?.authors.join(", ") ?? "");
   const [branches, setBranches] = useState(github?.branches.join(", ") ?? "");
   const shownName = named ? name : defaultWatcherName(config);
+  // The hours as edited; a watcher keeps its own until the person changes them.
+  const [limited, setLimited] = useState(props.watcher?.hours != null);
+  const [days, setDays] = useState<WatchDay[]>((props.watcher?.hours ?? OFFICE_HOURS).days);
+  const [start, setStart] = useState((props.watcher?.hours ?? OFFICE_HOURS).start);
+  const [end, setEnd] = useState((props.watcher?.hours ?? OFFICE_HOURS).end);
+  const hours: WatchHours | null = limited
+    ? { days: DAYS.map(([d]) => d).filter((d) => days.includes(d)), start, end }
+    : null;
   const save = useMutation({
     mutationFn: (c: WatcherConfig) =>
       props.watcher
-        ? commands.watcherUpdate(props.watcher.id, shownName, c)
-        : commands.watcherAdd(props.dotId, shownName, c),
+        ? commands.watcherUpdate(props.watcher.id, shownName, c, hours)
+        : commands.watcherAdd(props.dotId, shownName, c, hours),
     onSuccess: () => props.onClose(),
     onSettled: () => {
       invalidate(qc, keys.watchers(props.dotId));
@@ -444,6 +477,73 @@ function WatcherForm(props: {
               </Field>
             </>
           )}
+          <fieldset className="flex flex-col gap-2">
+            <legend className="mb-1 w-full text-sm font-medium">Watch hours</legend>
+            <div className="flex flex-wrap gap-4">
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="radio"
+                  name="watcher-hours"
+                  checked={!limited}
+                  onChange={() => setLimited(false)}
+                />
+                Any time
+              </label>
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="radio"
+                  name="watcher-hours"
+                  checked={limited}
+                  onChange={() => setLimited(true)}
+                />
+                Only at these times
+              </label>
+            </div>
+            {limited && (
+              <>
+                <div role="group" aria-label="Days" className="flex flex-wrap gap-1">
+                  {DAYS.map(([day, label]) => {
+                    const on = days.includes(day);
+                    return (
+                      <Button
+                        key={day}
+                        type="button"
+                        size="sm"
+                        variant={on ? "default" : "outline"}
+                        aria-pressed={on}
+                        onClick={() =>
+                          setDays((d) => (on ? d.filter((x) => x !== day) : [...d, day]))
+                        }
+                      >
+                        {label}
+                      </Button>
+                    );
+                  })}
+                </div>
+                <div className="flex gap-3">
+                  <Field label="Start" htmlFor="watcher-hours-start">
+                    <Input
+                      id="watcher-hours-start"
+                      type="time"
+                      value={start}
+                      onChange={(e) => setStart(e.target.value)}
+                    />
+                  </Field>
+                  <Field label="End" htmlFor="watcher-hours-end">
+                    <Input
+                      id="watcher-hours-end"
+                      type="time"
+                      value={end}
+                      onChange={(e) => setEnd(e.target.value)}
+                    />
+                  </Field>
+                </div>
+                {end !== "" && start !== "" && end < start && (
+                  <p className="text-sm text-muted-foreground">Ends the next day</p>
+                )}
+              </>
+            )}
+          </fieldset>
         </div>
         {save.error && (
           <p role="alert" className="text-sm text-destructive">
@@ -564,6 +664,11 @@ export function WatchersTab({ dotId }: { dotId: string }) {
                   >
                     {watcherState(w)}
                   </p>
+                  {watcherHoursLine(w, new Date()) && (
+                    <p className="text-xs text-muted-foreground">
+                      {watcherHoursLine(w, new Date())}
+                    </p>
+                  )}
                 </div>
                 <div className="ml-auto flex items-center gap-3">
                   <div className="flex h-8 items-center gap-2">

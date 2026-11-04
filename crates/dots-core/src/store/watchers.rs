@@ -8,27 +8,48 @@ use sqlx::sqlite::SqliteRow;
 use sqlx::Row;
 
 use super::Store;
-use crate::model::{PausedReason, PausedWatcher, Watcher, WatcherConfig, WatcherKind};
+use crate::model::{PausedReason, PausedWatcher, WatchHours, Watcher, WatcherConfig, WatcherKind};
 use crate::util::{new_id, now, timestamp};
 use crate::{Error, Result};
 
-const COLUMNS: &str = "id, dot_id, name, config, enabled, paused_reason, last_error, \
-                       last_event_at, created_at, updated_at";
+const COLUMNS: &str = "id, dot_id, name, config, hours, enabled, paused_reason, \
+                       last_error, last_event_at, created_at, updated_at, \
+                       (SELECT COUNT(*) FROM watcher_held h WHERE h.watcher_id = watchers.id) \
+                       AS held_count";
+
+/// A stored `hours` that no longer parses reads as any time, so one bad row does not hide
+/// every watcher.
+fn stored_hours(raw: Option<&str>, id: &str) -> Option<WatchHours> {
+    let raw = raw?;
+    match serde_json::from_str(raw) {
+        Ok(hours) => Some(hours),
+        Err(e) => {
+            let prefix: String = raw.chars().take(40).collect();
+            tracing::warn!(watcher = id, value = %prefix, "unreadable watch hours, reading as any time: {e}");
+            None
+        }
+    }
+}
 
 fn watcher_from_row(row: &SqliteRow) -> Result<Watcher> {
     let config: String = row.try_get("config")?;
     let paused: Option<String> = row.try_get("paused_reason")?;
+    let hours: Option<String> = row.try_get("hours")?;
+    let id: String = row.try_get("id")?;
     Ok(Watcher {
-        id: row.try_get("id")?,
+        id: id.clone(),
         dot_id: row.try_get("dot_id")?,
         name: row.try_get("name")?,
         config: serde_json::from_str(&config)?,
+        hours: stored_hours(hours.as_deref(), &id),
         enabled: row.try_get::<i64, _>("enabled")? != 0,
         paused_reason: paused.as_deref().map(PausedReason::parse).transpose()?,
         last_error: row.try_get("last_error")?,
         last_event_at: row.try_get("last_event_at")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
+        held_count: row.try_get::<i64, _>("held_count")? as u32,
+        next_opening: None,
     })
 }
 
@@ -68,19 +89,21 @@ impl Store {
         dot_id: &str,
         name: &str,
         config: &WatcherConfig,
+        hours: Option<&WatchHours>,
     ) -> Result<Watcher> {
         self.get_dot(dot_id).await?;
         let id = new_id();
         let at = now();
         sqlx::query(
-            "INSERT INTO watchers (id, dot_id, kind, name, config, enabled, created_at, \
-             updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?)",
+            "INSERT INTO watchers (id, dot_id, kind, name, config, hours, enabled, \
+             created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)",
         )
         .bind(&id)
         .bind(dot_id)
         .bind(config.kind().as_str())
         .bind(name)
         .bind(serde_json::to_string(config)?)
+        .bind(hours.map(serde_json::to_string).transpose()?)
         .bind(&at)
         .bind(&at)
         .execute(&self.pool)
@@ -95,6 +118,7 @@ impl Store {
         id: &str,
         name: &str,
         config: &WatcherConfig,
+        hours: Option<&WatchHours>,
     ) -> Result<Watcher> {
         let before = self.get_watcher(id).await?;
         let cursor = if &before.config == config {
@@ -103,12 +127,13 @@ impl Store {
             "NULL"
         };
         sqlx::query(&format!(
-            "UPDATE watchers SET name = ?, kind = ?, config = ?, cursor = {cursor}, \
+            "UPDATE watchers SET name = ?, kind = ?, config = ?, hours = ?, cursor = {cursor}, \
              updated_at = ? WHERE id = ?"
         ))
         .bind(name)
         .bind(config.kind().as_str())
         .bind(serde_json::to_string(config)?)
+        .bind(hours.map(serde_json::to_string).transpose()?)
         .bind(now())
         .bind(id)
         .execute(&self.pool)

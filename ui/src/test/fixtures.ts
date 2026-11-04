@@ -24,13 +24,19 @@ export const sample = {
   contextDocuments: T.ContextDocuments.parse(contract.ContextDocuments),
   installedPlugins: T.InstalledPlugin.array().parse(contract.InstalledPlugin),
   probe: T.McpProbe.parse(contract.McpProbe),
-  inbox: T.Inbox.parse(contract.Inbox),
+  /// The contract's Inbox without its snooze and done marks, which are there for the shapes.
+  inbox: { ...T.Inbox.parse(contract.Inbox), back: [], snoozed: [], done: [], hidden_messages: [] },
   /// Holding two runs at 64% of the 5-hour window, then nothing held.
   limits: T.LimitsState.array().parse(contract.LimitsState),
   /// A week: nightly-tests (Claude, heaviest) and local-summarizer (local, no cost).
   usage: T.UsageSummary.parse(contract.UsageSummary),
   pageStates: T.PageState.array().parse(contract.PageState),
   diff: T.WorktreeDiff.parse(contract.WorktreeDiff),
+  /// A scheduled message waiting for its busy topic, and one that failed.
+  scheduledMessage: T.ScheduledMessage.parse(contract.ScheduledMessage),
+  scheduledFailed: T.ScheduledMessage.parse(contract.ScheduledMessageFailed),
+  /// A chat run a scheduled message became, sent late.
+  runSentLate: T.Run.parse(contract.RunSentLate),
   startupError: T.StartupError.parse(contract.StartupError),
   /// One schedule of each kind: once; every with an anchor and a count; every without an
   /// anchor; daily until a date; weekly; cron.
@@ -38,6 +44,8 @@ export const sample = {
   /// An open question with the choices "yes" and "no", an answered one, a dismissed one, and a
   /// read note of Dots' own.
   messages: T.Message.array().parse(contract.Message),
+  /// A slot skipped because the dot was busy with its previous run.
+  scheduleSkip: T.ScheduleSkip.parse(contract.ScheduleSkip),
   /// A pending follow-up and a fired one.
   followUps: T.FollowUp.array().parse(contract.FollowUp),
   /// A pinned memory the dot saved in a run, and one the person wrote.
@@ -124,13 +132,18 @@ export function installDefaults(): void {
     attention: [],
     tools_changed: [],
     watchers: [], held: [], instructions: [], app_reviews: [], team_scope: [],
+    not_delivered: [], back: [], snoozed: [], done: [], hidden_messages: [],
   }));
   // No dot proposed instructions.
   backend.on("instruction_proposals_list", () => []);
+  // No conversation has files (the Files panel).
+  backend.on("conversation_files", () => []);
   // An approval card asks for these when it shows; by default the core offers no rule.
   backend.on("approval_rule_candidates", () => []);
   // A conversation asks for the dot's app proposals; by default it has none.
   backend.on("app_proposals_list", () => []);
+  // A conversation and the dot menu ask for the dot's scheduled messages; by default none.
+  backend.on("scheduled_messages", () => []);
   backend.on("dot_overview", () => []);
   backend.on("list_dots", () => []);
   backend.on("get_settings", () => sample.settings);
@@ -173,6 +186,8 @@ export function installDefaults(): void {
   // No dot has checked in or scheduled anything. A question on screen is marked read.
   backend.on("messages_list", () => []);
   backend.on("follow_ups_list", () => []);
+  // No dot has skipped a slot.
+  backend.on("schedule_skips", () => []);
   // No dot remembers anything.
   backend.on("memories_list", () => []);
   backend.on("watchers_list", () => []);

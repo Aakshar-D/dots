@@ -20,15 +20,15 @@ describe("the watcher commands", () => {
     backend.on("watcher_resume", () => email);
     backend.on("watcher_delete", () => null);
     expect(await commands.watchersList("dot-a")).toEqual(sample.watchers);
-    expect(await commands.watcherAdd("dot-a", "Invoices folder", folder.config)).toEqual(folder);
-    await commands.watcherUpdate(folder.id, "Bills", folder.config);
+    expect(await commands.watcherAdd("dot-a", "Invoices folder", folder.config, null)).toEqual(folder);
+    await commands.watcherUpdate(folder.id, "Bills", folder.config, folder.hours);
     await commands.watcherSetEnabled(folder.id, false);
     expect(await commands.watcherResume(email.id)).toEqual(email);
     expect(await commands.watcherDelete(folder.id)).toBeNull();
     expect(backend.calls).toEqual([
       ["watchers_list", { dotId: "dot-a" }],
-      ["watcher_add", { dotId: "dot-a", name: "Invoices folder", config: folder.config }],
-      ["watcher_update", { id: folder.id, name: "Bills", config: folder.config }],
+      ["watcher_add", { dotId: "dot-a", name: "Invoices folder", config: folder.config, hours: null }],
+      ["watcher_update", { id: folder.id, name: "Bills", config: folder.config, hours: folder.hours }],
       ["watcher_set_enabled", { id: folder.id, enabled: false }],
       ["watcher_resume", { id: email.id }],
       ["watcher_delete", { id: folder.id }],

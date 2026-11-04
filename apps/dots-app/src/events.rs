@@ -5,8 +5,12 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use dots_core::events::RuntimeEvent;
+use dots_core::inbox::InboxMark;
 use dots_core::limits::HoldChange;
-use dots_core::model::{Message, MessageKind, PausedReason, Run, RunStatus, TriggerKind};
+use dots_core::model::{
+    Message, MessageKind, PausedReason, Run, RunStatus, ScheduledMessage, ScheduledStatus,
+    TriggerKind,
+};
 use dots_core::Runtime;
 use serde_json::Value;
 use tauri::{AppHandle, Emitter};
@@ -68,6 +72,20 @@ pub enum Notice {
         dot_id: String,
         minutes: u64,
     },
+    /// A chat message did not reach its dot (delivery tracking spec section 3.5).
+    NotDelivered {
+        run: Box<Run>,
+    },
+    /// Snoozed Inbox items came back at their time (snooze and done spec section 3.5): one
+    /// notice per wake pass, however many. It has no dot, so it is never quiet.
+    BackFromSnooze {
+        items: Vec<InboxMark>,
+    },
+    /// A scheduled message could not be sent (send later spec section 5): once per message and
+    /// failure.
+    ScheduledNotSent {
+        message: Box<ScheduledMessage>,
+    },
 }
 
 /// Decides which events notify: approval requests, a run moving from queued or running into
@@ -78,12 +96,21 @@ pub enum Notice {
 /// itself: it is retried, or its schedule needs attention, which notifies. A run first seen
 /// in a final state (e.g. marked reviewed) and a parked run closed by a decision do not
 /// notify either. A run that parks on an approval request this notifier has announced does
-/// not notify a second time: one park, one notification.
+/// not notify a second time: one park, one notification. A chat message that did not get
+/// there notifies once, when it is seen working (or queued, for the sweeper's mark) and then
+/// marked not delivered; background runs notify as before.
 #[derive(Default)]
 pub struct Notifier {
     active: HashMap<String, RunStatus>,
     /// Runs with an announced approval request that have neither parked nor ended since.
     asked: HashSet<String>,
+    /// Chat runs already announced as not delivered. Never cleared, not even by `forget`, so a
+    /// run is not announced twice (a refused retry, a restart of the stream).
+    undelivered_told: HashSet<String>,
+    /// Scheduled messages announced as not sent, by id and the `updated_at` of the failure.
+    /// Never cleared: a failure is told once, and a message that fails again after an Edit
+    /// (a new `updated_at`) is told again.
+    not_sent_told: HashSet<(String, String)>,
 }
 
 impl Notifier {
@@ -116,6 +143,17 @@ impl Notifier {
                 let told = !matches!(run.status, RunStatus::Queued | RunStatus::Running)
                     && self.asked.remove(&run.id);
                 let was_working = matches!(prev, Some(RunStatus::Queued | RunStatus::Running));
+                let newly = run.trigger == TriggerKind::Chat
+                    && run.undelivered_at.is_some()
+                    && run.dismissed_at.is_none()
+                    && run.delivered_at.is_none()
+                    && (was_working || run.status == RunStatus::Queued)
+                    && self.undelivered_told.insert(run.id.clone());
+                if newly {
+                    return Some(Notice::NotDelivered {
+                        run: Box::new(run.clone()),
+                    });
+                }
                 let ended = match run.status {
                     RunStatus::Succeeded => true,
                     RunStatus::Failed => run.trigger != TriggerKind::Schedule,
@@ -164,6 +202,21 @@ impl Notifier {
             } => Some(Notice::Hold {
                 change: change.clone(),
             }),
+            RuntimeEvent::SnoozeEnded { items } if !items.is_empty() => {
+                Some(Notice::BackFromSnooze {
+                    items: items.clone(),
+                })
+            }
+            RuntimeEvent::ScheduledMessageUpdated { message }
+                if message.status == ScheduledStatus::Failed
+                    && self
+                        .not_sent_told
+                        .insert((message.id.clone(), message.updated_at.clone())) =>
+            {
+                Some(Notice::ScheduledNotSent {
+                    message: Box::new(message.clone()),
+                })
+            }
             _ => None,
         }
     }
@@ -174,11 +227,7 @@ fn first_line(text: Option<&str>, fallback: &str) -> String {
     let line = text
         .and_then(|t| t.lines().map(str::trim).find(|l| !l.is_empty()))
         .unwrap_or(fallback);
-    if line.chars().count() > 200 {
-        line.chars().take(199).collect::<String>() + "…"
-    } else {
-        line.to_string()
-    }
+    cut(line, 200)
 }
 
 /// A one-line preview of a call's input, as the UI's `toolPreview` shows it: its `command`,
@@ -278,6 +327,42 @@ pub fn notice_text(notice: &Notice, dot_name: &str) -> (String, String) {
             format!("{dot_name} has gone quiet"),
             format!("No output for {minutes} min. Open it to stop it or keep waiting."),
         ),
+        Notice::NotDelivered { run } => (
+            format!("{dot_name} didn't get your message"),
+            first_line(
+                run.undelivered_reason.as_deref(),
+                "It did not reach the dot.",
+            ),
+        ),
+        Notice::ScheduledNotSent { message } => (
+            format!("{dot_name} didn't get your scheduled message"),
+            first_line(message.error.as_deref(), "It could not be sent."),
+        ),
+        Notice::BackFromSnooze { items } => match items.as_slice() {
+            [one] => (
+                format!("Back from snooze: {}", one.title),
+                "It is at the top of your Inbox.".to_string(),
+            ),
+            many => {
+                let titles: Vec<&str> = many.iter().map(|m| m.title.as_str()).collect();
+                (
+                    format!("Back from snooze: {} items", many.len()),
+                    cut(&titles.join("; "), BACK_BODY_MAX),
+                )
+            }
+        },
+    }
+}
+
+/// The body of a notice for several items back from snooze, at most this many characters.
+const BACK_BODY_MAX: usize = 120;
+
+/// `text` cut to `max` characters with `…`.
+fn cut(text: &str, max: usize) -> String {
+    if text.chars().count() > max {
+        text.chars().take(max - 1).collect::<String>() + "…"
+    } else {
+        text.to_string()
     }
 }
 
@@ -288,11 +373,41 @@ pub fn notice_text(notice: &Notice, dot_name: &str) -> (String, String) {
 pub fn notice_route(notice: &Notice, dot_id: &str) -> String {
     match notice {
         Notice::ApprovalNeeded { run_id, .. } => format!("/chat/{dot_id}/{run_id}"),
-        Notice::RunEnded { run } => format!("/chat/{dot_id}/{}", run.id),
+        Notice::RunEnded { run } | Notice::NotDelivered { run } => {
+            format!("/chat/{dot_id}/{}", run.id)
+        }
         Notice::RunQuiet { run_id, .. } => format!("/chat/{dot_id}/{run_id}"),
-        Notice::ScheduleFailed { .. } | Notice::MessagePosted { .. } => format!("/home/{dot_id}"),
+        Notice::ScheduleFailed { .. }
+        | Notice::MessagePosted { .. }
+        | Notice::ScheduledNotSent { .. } => format!("/home/{dot_id}"),
         Notice::WatcherPaused { .. } => format!("/dots/{dot_id}?tab=watchers"),
         Notice::Hold { .. } => "/usage".to_string(),
+        Notice::BackFromSnooze { .. } => "/inbox".to_string(),
+    }
+}
+
+/// Where a click on the notice goes, given its dot: a notice that is about no dot (the hold,
+/// items back from snooze) has its own route, and one whose dot is unknown opens the home.
+pub fn click_route(notice: &Notice, dot_id: Option<&str>) -> String {
+    match (dot_id, notice) {
+        (_, Notice::Hold { .. } | Notice::BackFromSnooze { .. }) => notice_route(notice, ""),
+        (Some(id), _) => notice_route(notice, id),
+        (None, _) => "/home".to_string(),
+    }
+}
+
+/// The dot a notice is about, when the notice names it (an approval names only its run).
+pub fn notice_dot(notice: &Notice) -> Option<&str> {
+    match notice {
+        Notice::ApprovalNeeded { .. } => None,
+        Notice::RunEnded { run } | Notice::NotDelivered { run } => Some(&run.dot_id),
+        Notice::ScheduleFailed { dot_id, .. }
+        | Notice::WatcherPaused { dot_id, .. }
+        | Notice::RunQuiet { dot_id, .. } => Some(dot_id),
+        Notice::MessagePosted { message } => Some(&message.dot_id),
+        Notice::ScheduledNotSent { message } => Some(&message.dot_id),
+        // About the Inbox, not one dot: the person asked to be reminded, so never quiet.
+        Notice::Hold { .. } | Notice::BackFromSnooze { .. } => None,
     }
 }
 
@@ -351,12 +466,7 @@ async fn notify(app: &AppHandle, rt: &Runtime, notice: &Notice) {
     }
     let dot_id = match notice {
         Notice::ApprovalNeeded { run_id, .. } => rt.get_run(run_id).await.map(|r| r.dot_id).ok(),
-        Notice::RunEnded { run } => Some(run.dot_id.clone()),
-        Notice::ScheduleFailed { dot_id, .. } => Some(dot_id.clone()),
-        Notice::MessagePosted { message } => Some(message.dot_id.clone()),
-        Notice::WatcherPaused { dot_id, .. } => Some(dot_id.clone()),
-        Notice::RunQuiet { dot_id, .. } => Some(dot_id.clone()),
-        Notice::Hold { .. } => None,
+        other => notice_dot(other).map(str::to_string),
     };
     // Nothing for the dot whose conversation the person is reading (needs-you spec 4.2).
     if quiet(dot_id.as_deref(), rt.viewing().as_deref()) {
@@ -368,11 +478,7 @@ async fn notify(app: &AppHandle, rt: &Runtime, notice: &Notice) {
     };
     let (title, body) = notice_text(notice, name.as_deref().unwrap_or("A dot"));
     // A click opens what the notice is about; without its dot, the home.
-    let route = match (&dot_id, notice) {
-        (_, Notice::Hold { .. }) => notice_route(notice, ""),
-        (Some(id), _) => notice_route(notice, id),
-        (None, _) => "/home".to_string(),
-    };
+    let route = click_route(notice, dot_id.as_deref());
     let id = notify_routes::remember(app, route);
     let shown = app
         .notification()
@@ -422,6 +528,12 @@ mod tests {
             quiet_since: None,
             quiet_limit_secs: None,
             quiet_stopped: false,
+            delivered_at: None,
+            undelivered_at: None,
+            undelivered_reason: None,
+            dismissed_at: None,
+            delivery: None,
+            wait_reason: None,
         }
     }
 
@@ -561,6 +673,106 @@ mod tests {
         );
     }
 
+    /// `run(..)` as the app sees it after the mark: not delivered.
+    fn marked(id: &str, status: RunStatus, trigger: TriggerKind) -> RuntimeEvent {
+        RuntimeEvent::RunUpdated {
+            run: Run {
+                undelivered_at: Some("t".into()),
+                undelivered_reason: Some("claude CLI not found".into()),
+                ..run(id, status, trigger)
+            },
+        }
+    }
+
+    fn plain(id: &str, status: RunStatus, trigger: TriggerKind) -> RuntimeEvent {
+        RuntimeEvent::RunUpdated {
+            run: run(id, status, trigger),
+        }
+    }
+
+    #[test]
+    fn a_chat_message_not_delivered_notifies_once() {
+        let mut n = Notifier::default();
+        let chat = TriggerKind::Chat;
+        assert_eq!(n.decide(&plain("c", Queued, chat)), None);
+        assert_eq!(n.decide(&plain("c", Running, chat)), None);
+        let failed = marked("c", Failed, chat);
+        let Some(Notice::NotDelivered { run }) = n.decide(&failed) else {
+            panic!("expected NotDelivered");
+        };
+        assert_eq!(run.id, "c");
+        assert_eq!(n.decide(&failed), None);
+    }
+
+    #[test]
+    fn a_chat_run_marked_twice_notifies_once() {
+        let mut n = Notifier::default();
+        let chat = TriggerKind::Chat;
+        // The sweeper's mark: still queued.
+        assert!(matches!(
+            n.decide(&marked("c", Queued, chat)),
+            Some(Notice::NotDelivered { .. })
+        ));
+        // Delivered after a retry.
+        let delivered = RuntimeEvent::RunUpdated {
+            run: Run {
+                delivered_at: Some("t".into()),
+                ..run("c", Running, chat)
+            },
+        };
+        assert_eq!(n.decide(&delivered), None);
+        n.forget();
+        assert_eq!(n.decide(&marked("c", Queued, chat)), None);
+        assert_eq!(n.decide(&marked("c", Failed, chat)), None);
+    }
+
+    #[test]
+    fn a_background_run_not_delivered_does_not_notify_as_such() {
+        let mut n = Notifier::default();
+        let w = TriggerKind::Watcher;
+        assert_eq!(n.decide(&plain("w", Running, w)), None);
+        assert!(matches!(
+            n.decide(&marked("w", Failed, w)),
+            Some(Notice::RunEnded { .. })
+        ));
+        let s = TriggerKind::Schedule;
+        assert_eq!(n.decide(&plain("s", Running, s)), None);
+        assert_eq!(n.decide(&marked("s", Failed, s)), None);
+        assert_eq!(n.decide(&marked("s2", Queued, s)), None);
+    }
+
+    #[test]
+    fn a_dismissed_or_first_seen_ended_run_stays_quiet() {
+        let mut n = Notifier::default();
+        let chat = TriggerKind::Chat;
+        // First seen in a final state (e.g. "Mark reviewed").
+        assert_eq!(n.decide(&marked("old", Failed, chat)), None);
+        // Dismissed while it was working: quiet.
+        assert_eq!(n.decide(&plain("d", Running, chat)), None);
+        let dismissed = RuntimeEvent::RunUpdated {
+            run: Run {
+                undelivered_at: Some("t".into()),
+                dismissed_at: Some("t".into()),
+                ..run("d", Failed, chat)
+            },
+        };
+        assert_eq!(n.decide(&dismissed), None);
+        // A refused retry un-dismisses it: still told nothing before, so it may tell once; a
+        // run already told never tells again.
+        assert_eq!(n.decide(&plain("e", Running, chat)), None);
+        assert!(n.decide(&marked("e", Failed, chat)).is_some());
+        let dismissed_e = RuntimeEvent::RunUpdated {
+            run: Run {
+                undelivered_at: Some("t".into()),
+                dismissed_at: Some("t".into()),
+                ..run("e", Failed, chat)
+            },
+        };
+        assert_eq!(n.decide(&dismissed_e), None);
+        assert_eq!(n.decide(&marked("e", Failed, chat)), None);
+        assert_eq!(n.decide(&marked("e", Queued, chat)), None);
+    }
+
     #[test]
     fn approval_requests_notify_and_run_events_do_not() {
         let mut n = Notifier::default();
@@ -592,6 +804,23 @@ mod tests {
         assert_eq!(n.decide(&ev), None);
         // The row holds "Needs attention", which the Inbox lists.
         assert!(affects_inbox(&ev));
+    }
+
+    #[test]
+    fn a_skipped_slot_notifies_nobody() {
+        let mut n = Notifier::default();
+        let ev = RuntimeEvent::ScheduleSkipped {
+            dot_id: "d".into(),
+            skip: dots_core::model::ScheduleSkip {
+                id: "s".into(),
+                dot_id: "d".into(),
+                slot_at: "2026-10-09T12:00:00Z".into(),
+                reason: "busy".into(),
+                run_id: Some("r".into()),
+                created_at: "2026-10-09T12:00:01Z".into(),
+            },
+        };
+        assert_eq!(n.decide(&ev), None);
     }
 
     #[test]
@@ -671,6 +900,37 @@ mod tests {
             (
                 "nightly is waiting for your approval".into(),
                 "All green.".into()
+            )
+        );
+        let undelivered = |reason: Option<&str>| Notice::NotDelivered {
+            run: Box::new(Run {
+                undelivered_reason: reason.map(str::to_string),
+                ..run("r", Failed, TriggerKind::Chat)
+            }),
+        };
+        assert_eq!(
+            notice_text(&undelivered(Some("claude CLI not found")), "nightly"),
+            (
+                "nightly didn't get your message".into(),
+                "claude CLI not found".into()
+            )
+        );
+        assert_eq!(
+            notice_text(&undelivered(None), "nightly").1,
+            "It did not reach the dot."
+        );
+        let not_sent = Notice::ScheduledNotSent {
+            message: Box::new(scheduled(
+                ScheduledStatus::Failed,
+                Some("dot 'nightly': its org 'acme' was removed\nmore"),
+                "u1",
+            )),
+        };
+        assert_eq!(
+            notice_text(&not_sent, "nightly"),
+            (
+                "nightly didn't get your scheduled message".into(),
+                "dot 'nightly': its org 'acme' was removed".into()
             )
         );
         let ask = Notice::ApprovalNeeded {
@@ -1003,6 +1263,10 @@ mod tests {
             minutes: 10,
         };
         assert_eq!(notice_route(&quiet_run, "d"), "/chat/d/r3");
+        let undelivered = Notice::NotDelivered {
+            run: Box::new(run("r", Failed, TriggerKind::Chat)),
+        };
+        assert_eq!(notice_route(&undelivered, "d"), "/chat/d/r");
         let failed = Notice::ScheduleFailed {
             dot_id: "d".into(),
             error: None,
@@ -1014,6 +1278,11 @@ mod tests {
             };
             assert_eq!(notice_route(&message, "d"), "/home/d");
         }
+        let not_sent = Notice::ScheduledNotSent {
+            message: Box::new(scheduled(ScheduledStatus::Failed, Some("no"), "u1")),
+        };
+        assert_eq!(notice_route(&not_sent, "d"), "/home/d");
+        assert_eq!(click_route(&not_sent, Some("d")), "/home/d");
     }
 
     fn quiet_event(since: Option<&str>, limit: Option<u64>) -> RuntimeEvent {
@@ -1090,5 +1359,157 @@ mod tests {
             minutes: 10,
         };
         assert_eq!(notice_route(&quiet_run, "d"), "/chat/d/r");
+        let undelivered = Notice::NotDelivered {
+            run: Box::new(run("r", Failed, TriggerKind::Chat)),
+        };
+        assert_eq!(notice_route(&undelivered, "d"), "/chat/d/r");
+        // A scheduled message that was not sent names its dot, so it is quiet for that dot.
+        let not_sent = Notice::ScheduledNotSent {
+            message: Box::new(scheduled(ScheduledStatus::Failed, Some("no"), "u1")),
+        };
+        assert_eq!(notice_dot(&not_sent), Some("d"));
+        assert!(quiet(notice_dot(&not_sent), Some("d")));
+        assert!(!quiet(notice_dot(&not_sent), Some("other")));
+    }
+
+    fn scheduled(
+        status: ScheduledStatus,
+        error: Option<&str>,
+        updated_at: &str,
+    ) -> ScheduledMessage {
+        ScheduledMessage {
+            id: "s1".into(),
+            dot_id: "d".into(),
+            root_run_id: None,
+            text: "Ship it".into(),
+            due_at: "2026-11-05T09:00:00.000Z".into(),
+            status,
+            waiting: None,
+            error: error.map(str::to_string),
+            run_id: None,
+            sent_at: None,
+            created_at: "2026-11-04T09:00:00.000Z".into(),
+            updated_at: updated_at.into(),
+            attachments: Vec::new(),
+        }
+    }
+
+    fn scheduled_event(m: ScheduledMessage) -> RuntimeEvent {
+        RuntimeEvent::ScheduledMessageUpdated { message: m }
+    }
+
+    #[test]
+    fn a_failed_scheduled_message_notifies_once() {
+        let mut n = Notifier::default();
+        let failed = scheduled(ScheduledStatus::Failed, Some("org removed"), "u1");
+        assert_eq!(
+            n.decide(&scheduled_event(failed.clone())),
+            Some(Notice::ScheduledNotSent {
+                message: Box::new(failed.clone())
+            })
+        );
+        assert_eq!(n.decide(&scheduled_event(failed.clone())), None);
+        // Not even after a lag.
+        n.forget();
+        assert_eq!(n.decide(&scheduled_event(failed)), None);
+        // Edited, then failed again: a new failure.
+        let again = scheduled(ScheduledStatus::Failed, Some("org removed"), "u2");
+        assert!(n.decide(&scheduled_event(again)).is_some());
+    }
+
+    #[test]
+    fn scheduled_messages_otherwise_stay_quiet() {
+        let mut n = Notifier::default();
+        for status in [
+            ScheduledStatus::Scheduled,
+            ScheduledStatus::Sending,
+            ScheduledStatus::Sent,
+            ScheduledStatus::Cancelled,
+        ] {
+            assert_eq!(
+                n.decide(&scheduled_event(scheduled(status, None, "u1"))),
+                None
+            );
+        }
+        let waiting = ScheduledMessage {
+            waiting: Some(dots_core::model::ScheduledWait::Busy),
+            ..scheduled(ScheduledStatus::Scheduled, None, "u3")
+        };
+        assert_eq!(n.decide(&scheduled_event(waiting)), None);
+    }
+
+    fn mark(title: &str) -> InboxMark {
+        InboxMark {
+            kind: dots_core::inbox::InboxKind::Message,
+            id: title.into(),
+            title: title.into(),
+            dot_id: Some("d".into()),
+            snoozed_until: None,
+            done_at: None,
+            back_at: Some("t".into()),
+        }
+    }
+
+    #[test]
+    fn back_from_snooze_texts() {
+        let one = Notice::BackFromSnooze {
+            items: vec![mark("courier asks: Ship it?")],
+        };
+        assert_eq!(
+            notice_text(&one, "A dot"),
+            (
+                "Back from snooze: courier asks: Ship it?".to_string(),
+                "It is at the top of your Inbox.".to_string()
+            )
+        );
+        let three = Notice::BackFromSnooze {
+            items: vec![
+                mark("courier asks: Ship it?"),
+                mark("courier: run to review"),
+                mark("nightly's schedule needs attention"),
+            ],
+        };
+        assert_eq!(
+            notice_text(&three, "A dot"),
+            (
+                "Back from snooze: 3 items".to_string(),
+                "courier asks: Ship it?; courier: run to review; nightly's schedule needs attention"
+                    .to_string()
+            )
+        );
+        let long = Notice::BackFromSnooze {
+            items: vec![mark(&"a".repeat(80)), mark(&"b".repeat(80))],
+        };
+        let (_, body) = notice_text(&long, "A dot");
+        assert_eq!(body.chars().count(), 120);
+        assert!(body.starts_with(&"a".repeat(80)));
+        assert!(body.ends_with('…'));
+    }
+
+    #[test]
+    fn back_from_snooze_opens_the_inbox() {
+        let notice = Notice::BackFromSnooze {
+            items: vec![mark("courier asks: Ship it?")],
+        };
+        assert_eq!(notice_route(&notice, ""), "/inbox");
+        // It is about no dot, though its item has one: the Inbox, and never quiet, also while
+        // that dot is viewed.
+        assert_eq!(notice_dot(&notice), None);
+        assert_eq!(click_route(&notice, notice_dot(&notice)), "/inbox");
+        assert!(!quiet(notice_dot(&notice), Some("d")));
+    }
+
+    #[test]
+    fn snooze_ended_notifies_once_per_event() {
+        let mut n = Notifier::default();
+        let items = vec![mark("one"), mark("two")];
+        assert_eq!(
+            n.decide(&RuntimeEvent::SnoozeEnded {
+                items: items.clone()
+            }),
+            Some(Notice::BackFromSnooze { items })
+        );
+        assert_eq!(n.decide(&RuntimeEvent::InboxUpdated), None);
+        assert_eq!(n.decide(&RuntimeEvent::SnoozeEnded { items: vec![] }), None);
     }
 }

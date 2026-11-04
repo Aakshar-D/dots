@@ -1,6 +1,6 @@
 // What the home's column says about each dot (chat-first home spec, section 3).
-import type { DotOverview, FollowUp, Message } from "@/api/types";
-import { localTime, relativeTime } from "@/lib/format";
+import type { DotOverview, FollowUp, Message, ScheduleView } from "@/api/types";
+import { localDayTime, localTime, relativeTime } from "@/lib/format";
 import { chatText, oneLine } from "@/lib/home-topics";
 import { isOpenQuestion } from "@/lib/messages";
 
@@ -19,12 +19,19 @@ export const STATUS_LABEL: Record<DotStatus, string> = {
 /// Waiting (a run waits for an approval, or the dot asked a question still open), held (its
 /// queued run is held for Claude usage), running (a run is queued or running), attention (its
 /// schedule needs attention), off (disabled), else idle. `messages`: any messages; only the
-/// dot's open questions count. `held`: the ids of the runs held for Claude usage.
-export function dotStatus(row: DotOverview, messages: Message[], held: string[] = []): DotStatus {
+/// dot's open questions count. `held`: the ids of the runs held for Claude usage. `hidden`:
+/// the messages the person snoozed or marked done (`Inbox.hidden_messages`), which do not
+/// count, as in the needs-you counts.
+export function dotStatus(
+  row: DotOverview,
+  messages: Message[],
+  held: string[] = [],
+  hidden: string[] = [],
+): DotStatus {
   const active = row.active_run;
   if (
     active?.status === "awaiting_approval" ||
-    messages.some((m) => m.dot_id === row.dot.id && isOpenQuestion(m))
+    messages.some((m) => m.dot_id === row.dot.id && isOpenQuestion(m) && !hidden.includes(m.id))
   ) {
     return "waiting";
   }
@@ -63,6 +70,22 @@ export function lastLine(row: DotOverview): string {
   const run = row.last_run;
   if (run === null) return "";
   return oneLine(run.summary) || oneLine(run.error) || oneLine(chatText(run));
+}
+
+/// How many skipped slots the core keeps per dot (KEPT_PER_DOT in store/skips.rs): a count at
+/// this is a floor, not the number.
+const SKIPS_KEPT = 50;
+
+/// "Last skipped 09:00 · 3 skipped since the last run" for a schedule that skipped a slot
+/// because the dot was busy (the date too when that was not today); without the count when no
+/// run has been skipped since the last run; "50+" at the number the core keeps; "" when it
+/// never skipped.
+export function skipLine(view: ScheduleView | null | undefined, now: number = Date.now()): string {
+  if (!view?.last_skipped_at) return "";
+  const last = `Last skipped ${localDayTime(view.last_skipped_at, now)}`;
+  const n = view.skipped_since_run;
+  if (n <= 0) return last;
+  return `${last} · ${n >= SKIPS_KEPT ? `${SKIPS_KEPT}+` : n} skipped since the last run`;
 }
 
 /// "next 02:00" for the next scheduled fire, else when the dot's next follow-up fires ("Next

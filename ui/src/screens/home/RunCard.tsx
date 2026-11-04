@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { DeliveryLine } from "@/components/DeliveryLine";
 import { Link } from "react-router";
 
 import { commands } from "@/api/commands";
@@ -57,6 +58,7 @@ export function RunCard(props: {
       {summary && <p className="text-muted-foreground">{summary}</p>}
       <RunNumbers run={run} />
       <HeldNote run={run} />
+      <DeliveryLine run={run} />
       {error && <p className="text-destructive">{error}</p>}
       {waiting && approvals.isError && <ErrorNote error={approvals.error} />}
       {pending.map((approval) => (

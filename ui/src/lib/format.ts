@@ -1,5 +1,6 @@
 const dateTime = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 const timeOfDay = new Intl.DateTimeFormat(undefined, { timeStyle: "short" });
+const weekday = new Intl.DateTimeFormat(undefined, { weekday: "short" });
 
 /// A size in bytes as a person reads it: "240 B", "2.4 KB", "1.5 MB".
 export function formatBytes(bytes: number): string {
@@ -25,6 +26,28 @@ export function localTime(iso: string | null | undefined): string {
   if (!iso) return "";
   const t = Date.parse(iso);
   return Number.isNaN(t) ? iso : timeOfDay.format(t);
+}
+
+/// The time of day of a timestamp from today, else its date and time (a time of day alone would
+/// read as today). `now` is the moment "today" is judged at.
+export function localDayTime(iso: string | null | undefined, now: number = Date.now()): string {
+  if (!iso) return "";
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return iso;
+  return new Date(t).toDateString() === new Date(now).toDateString()
+    ? timeOfDay.format(t)
+    : dateTime.format(t);
+}
+
+/// The time of day of a timestamp from today, else its weekday and time of day ("Mon 9:00 AM"),
+/// for a time within the week ahead. `now` is the moment "today" is judged at.
+export function localWeekdayTime(iso: string | null | undefined, now: number = Date.now()): string {
+  if (!iso) return "";
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return iso;
+  return new Date(t).toDateString() === new Date(now).toDateString()
+    ? timeOfDay.format(t)
+    : `${weekday.format(t)} ${timeOfDay.format(t)}`;
 }
 
 /// "45s", "3m 05s", "2h 07m". Without an end the run is still going: measured up to `now`.

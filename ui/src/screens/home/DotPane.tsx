@@ -6,9 +6,11 @@ import { CommandError, commands } from "@/api/commands";
 import type { DotOverview } from "@/api/types";
 import { LoadErrors } from "@/components/ErrorNote";
 import { Button } from "@/components/ui/button";
-import { dotStatus } from "@/lib/dot-status";
+import { dotStatus, skipLine } from "@/lib/dot-status";
 import { keys } from "@/lib/query";
 import { DotHeader } from "@/screens/home/DotHeader";
+import { FilesPanel, FilesToggle } from "@/screens/home/FilesPanel";
+import { filesHidden, setFilesHidden } from "@/screens/home/files-pref";
 import { HistoryMenu } from "@/screens/home/HistoryMenu";
 import { rememberDot } from "@/screens/home/last-dot";
 import { ReplyArea, type ReplyPick } from "@/screens/home/ReplyArea";
@@ -33,6 +35,9 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
   ).filter((p) => p.status === "pending");
   const held =
     useQuery({ queryKey: keys.limits, queryFn: commands.limitsGet }).data?.held_run_ids ?? [];
+  // A question the person snoozed or marked done does not make the dot wait for them.
+  const hidden =
+    useQuery({ queryKey: keys.inbox, queryFn: commands.inbox }).data?.hidden_messages ?? [];
   useEffect(() => rememberDot(dot.id), [dot.id]);
   useViewing(dot.id);
   const view = useConversation(dot.id, rootRunId);
@@ -45,12 +50,41 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
   const [pick, setPick] = useState<ReplyPick>({ kind: "default" });
   // The current conversation, loaded and with nothing in it, greets like a new chat
   // (conversational chat spec section 5). A failed load shows its errors instead.
+  // Scheduled messages wait as cards in the conversation, so a dot with one does not greet.
+  const scheduled = useQuery({
+    queryKey: keys.scheduledMessages(dot.id),
+    queryFn: () => commands.scheduledMessages(dot.id),
+  });
   const greeting =
-    rootRunId === undefined && !view.pending && view.list.isSuccess && view.shown.length === 0;
+    rootRunId === undefined &&
+    !view.pending &&
+    view.list.isSuccess &&
+    view.shown.length === 0 &&
+    (scheduled.data?.length ?? 0) === 0;
+  // The Files panel (attachments spec section 6): the files of the topics shown.
+  const roots = view.shown.map((t) => t.rootId);
+  const files =
+    useQuery({
+      queryKey: keys.conversationFiles(dot.id, roots),
+      queryFn: () => commands.conversationFiles(dot.id, roots),
+      enabled: roots.length > 0,
+    }).data ?? [];
+  const hasFiles = roots.length > 0 && files.length > 0;
+  const [panelHidden, setPanelHidden] = useState(filesHidden);
+  const toggleFiles = () => {
+    setFilesHidden(!panelHidden);
+    setPanelHidden(!panelHidden);
+  };
   if (gone) return <Navigate to={`/home/${dot.id}`} replace />;
   return (
+    <div className="flex min-w-0 flex-1">
     <div className="flex min-w-0 flex-1 flex-col">
-      <DotHeader dot={dot} status={dotStatus(row, allMessages, held)}>
+      <DotHeader
+        dot={dot}
+        status={dotStatus(row, allMessages, held, hidden)}
+        skipLine={skipLine(row.schedule_state)}
+      >
+        {hasFiles && <FilesToggle hidden={panelHidden} onToggle={toggleFiles} />}
         <HistoryMenu dotId={dot.id} topics={view.older} />
         <Button size="sm" variant="ghost" onClick={() => setPick({ kind: "new" })}>
           New topic
@@ -76,6 +110,8 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
           topics={view.pending ? [] : view.shown}
           checkIns={view.checkIns}
           dotName={dot.name}
+          skipsDotId={rootRunId === undefined ? dot.id : undefined}
+          scheduledFor={{ dotId: dot.id, root: rootRunId }}
           proposals={proposals}
           onReply={(topic) => setPick({ kind: "topic", rootId: topic.rootId })}
         >
@@ -97,6 +133,10 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
         />
       )}
       {greeting && <div aria-hidden className="flex-1" />}
+    </div>
+    {hasFiles && !panelHidden && (
+      <FilesPanel dotId={dot.id} dotName={dot.name} roots={roots} files={files} />
+    )}
     </div>
   );
 }

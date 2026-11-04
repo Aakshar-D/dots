@@ -9,6 +9,7 @@ mod common;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use chrono::TimeDelta;
 use common::apps::write_app;
 use common::clock::FakeClock;
 use common::fake_openbao::FakeOpenBao;
@@ -26,6 +27,8 @@ use dots_core::model::{
     DotSpec, FolderConfig, HoldReason, MemberSpec, NewRun, NewWorkflowRun, ProjectSpec, RunStatus,
     TeamSpec, TriggerKind, WatcherConfig, WorkflowSpec, WorkflowTrigger, WorkspaceMode,
 };
+use dots_core::scheduler::Clock;
+use dots_core::util::timestamp;
 use dots_core::vault::org::{OrgStatus, Orgs};
 use dots_core::vault::{DotScope, Grants, MemorySecrets};
 use dots_core::workflow::{Budget, Definition, Step, StepKind, Trigger};
@@ -51,6 +54,7 @@ struct Rt {
     bao: FakeOpenBao,
     keys: KeyPair,
     secrets: Arc<MemorySecrets>,
+    clock: Arc<FakeClock>,
 }
 
 impl Rt {
@@ -66,7 +70,8 @@ impl Rt {
         let args_out = dir.path().join("args.json");
         let mut cfg = Config::new(dir.path().join("data"));
         cfg.port = 0;
-        cfg.clock = FakeClock::new(at(START));
+        let clock = FakeClock::new(at(START));
+        cfg.clock = clock.clone();
         cfg.secrets = Some(secrets.clone());
         cfg.claude_path = Some(PathBuf::from(env!("CARGO_BIN_EXE_fake-claude")));
         cfg.claude_env.push((
@@ -81,6 +86,7 @@ impl Rt {
             bao,
             keys,
             secrets,
+            clock,
         }
     }
 
@@ -239,7 +245,7 @@ async fn viewer_cannot_create_edit_run_or_answer() {
         answer
     );
     assert_eq!(
-        refused(t.rt.decide_run_approvals(&run.id, true, None).await),
+        refused(t.rt.decide_run_approvals(&run.id, None, true, None).await),
         answer
     );
     let still = t.rt.store().get_approval(&approval.id).await.unwrap();
@@ -264,6 +270,57 @@ async fn viewer_cannot_create_edit_run_or_answer() {
     assert_eq!(
         refused(accounts::require(Some(t.orgs()), Some(ACME), Permission::ManageMembers).await),
         viewer_cant("manage members")
+    );
+    t.rt.shutdown();
+}
+
+/// The conversation is a read, so a Viewer sees its scheduled messages (send later spec
+/// section 4.4), but cannot schedule, send, edit or cancel one.
+#[tokio::test]
+async fn a_viewer_sees_scheduled_messages_but_cannot_change_them() {
+    let t = Rt::start().await;
+    t.join_as("member").await;
+    let dot =
+        t.rt.create_dot(t.triage(), Some(ACME.into()), None)
+            .await
+            .unwrap();
+    let due = timestamp(t.clock.now() + TimeDelta::hours(1));
+    let message =
+        t.rt.schedule_message(&dot.id, "Ship it", None, &due)
+            .await
+            .unwrap();
+    t.become_(2, Some("viewer")).await;
+
+    assert_eq!(
+        t.rt.scheduled_messages(&dot.id).await.unwrap(),
+        std::slice::from_ref(&message)
+    );
+    let run_text = viewer_cant("run dots");
+    assert_eq!(
+        refused(t.rt.schedule_message(&dot.id, "Again", None, &due).await),
+        run_text
+    );
+    assert_eq!(
+        refused(t.rt.send_scheduled_now(&message.id).await),
+        run_text
+    );
+    assert_eq!(
+        refused(
+            t.rt.edit_scheduled_message(&message.id, "Other", &due)
+                .await
+        ),
+        run_text
+    );
+    assert_eq!(
+        refused(t.rt.cancel_scheduled_message(&message.id).await),
+        run_text
+    );
+    assert_eq!(
+        t.rt.store()
+            .get_scheduled_message(&message.id)
+            .await
+            .unwrap(),
+        message
     );
     t.rt.shutdown();
 }
@@ -460,6 +517,7 @@ async fn viewer_cannot_answer_or_change_through_the_other_doors() {
             &dot.id,
             "inbox",
             WatcherConfig::Folder(FolderConfig::new(&folder)),
+            None,
         )
         .await
         .unwrap();
@@ -533,11 +591,17 @@ async fn viewer_cannot_answer_or_change_through_the_other_doors() {
     assert_eq!(store.list_memories(&dot.id).await.unwrap(), vec![memory]);
     let config = WatcherConfig::Folder(FolderConfig::new(&folder));
     assert_eq!(
-        refused(t.rt.watcher_add(&dot.id, "more", config.clone()).await),
+        refused(
+            t.rt.watcher_add(&dot.id, "more", config.clone(), None)
+                .await
+        ),
         edit
     );
     assert_eq!(
-        refused(t.rt.watcher_update(&watcher.id, "renamed", config).await),
+        refused(
+            t.rt.watcher_update(&watcher.id, "renamed", config, None)
+                .await
+        ),
         edit
     );
     assert_eq!(
@@ -723,6 +787,65 @@ async fn release_refused_for_role_hold() {
         t.rt.store().get_run(&run.id).await.unwrap().status,
         RunStatus::Queued
     );
+    t.rt.shutdown();
+}
+
+/// The delivery sweeper leaves a run held for a role alone, as it does one held for the usage
+/// limit: both holds are deliberate (delivery tracking spec section 3). A personal dot's
+/// message, queued later, shows the sweep ran past it.
+#[tokio::test]
+async fn the_delivery_sweeper_never_marks_a_role_hold() {
+    let t = Rt::start().await;
+    t.join_as("member").await;
+    let dot =
+        t.rt.create_dot(t.triage(), Some(ACME.into()), None)
+            .await
+            .unwrap();
+    let mut solo = spec("solo");
+    solo.workdir = t.dir.path().to_string_lossy().to_string();
+    solo.workspace_mode = WorkspaceMode::Folder;
+    let personal = t.rt.create_dot(solo, None, None).await.unwrap();
+    t.become_(2, Some("viewer")).await;
+    t.rt.hold_runs(true).await;
+    let store = t.rt.store();
+    let held = store
+        .create_run(&NewRun::new(&dot.id, TriggerKind::Schedule))
+        .await
+        .unwrap();
+    let control = store
+        .create_run(&NewRun::new(&personal.id, TriggerKind::Chat))
+        .await
+        .unwrap();
+    let start = t.clock.now();
+    for (id, ago) in [(&held.id, 2), (&control.id, 1)] {
+        store
+            .set_run_queued_at(id, &timestamp(start - TimeDelta::hours(ago)))
+            .await
+            .unwrap();
+    }
+
+    // The sweeper sleeps 30 s of the clock between sweeps: step it until the message is marked.
+    let mut step = 0;
+    let control = loop {
+        let run = store.get_run(&control.id).await.unwrap();
+        if run.undelivered_at.is_some() {
+            break run;
+        }
+        step += 1;
+        assert!(
+            step <= 100,
+            "the sweeper never marked the personal dot's message"
+        );
+        t.clock.set(start + TimeDelta::seconds(30 * step));
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    };
+    assert_eq!(
+        control.undelivered_reason.as_deref(),
+        Some("Dots is updating")
+    );
+    let held = store.get_run(&held.id).await.unwrap();
+    assert_eq!(held.status, RunStatus::Queued);
+    assert_eq!(held.undelivered_at, None);
     t.rt.shutdown();
 }
 
