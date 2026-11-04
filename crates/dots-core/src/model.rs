@@ -510,6 +510,29 @@ pub struct ChatAttachment {
     pub created_at: String,
 }
 
+str_enum!(FileSource {
+    Attached => "attached",
+    Written => "written",
+});
+
+/// A row of the Files panel (attachments spec section 4.5): a file the person attached in the
+/// conversation, or one the dot wrote or edited there.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConversationFile {
+    /// Where it is now: an attachment's workspace copy, else Dots' own copy.
+    pub path: String,
+    pub name: String,
+    pub source: FileSource,
+    /// The run it came with (the newest, for a file listed more than once).
+    pub run_id: String,
+    /// When: the message's queue time, or the tool call's time; the newest.
+    pub at: String,
+    /// The path is a file now.
+    pub exists: bool,
+    /// Dots may open it: it is not a program or a script.
+    pub can_open: bool,
+}
+
 /// A file just added to a chat box: what the chip shows, and the id the send passes.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StagedAttachment {

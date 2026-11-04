@@ -22,11 +22,11 @@ use crate::followups::FollowUps;
 use crate::inbox::{self, InboxEntry, InboxKey, InboxKind, InboxMark, MarkState};
 use crate::library_service::LibraryService;
 use crate::model::{
-    Approval, AttentionRun, ClaudeStatus, DeliveryCounts, Dot, DotOverview, DotSpec, EngineKind,
-    Inbox, MessageKind, NewRun, PendingApproval, ReviewRun, Run, RunEventRecord, RunStatus,
-    ScheduleChange, ScheduleSkip, ScheduleView, ScheduledMessage, ScheduledStatus, ScheduledWait,
-    SentLater, SettingsSaved, StagedAttachment, Status, TriggerKind, UndeliveredMessage,
-    WorktreeDiff,
+    Approval, AttentionRun, ClaudeStatus, ConversationFile, DeliveryCounts, Dot, DotOverview,
+    DotSpec, EngineKind, FileSource, Inbox, MessageKind, NewRun, PendingApproval, ReviewRun, Run,
+    RunEventRecord, RunStatus, ScheduleChange, ScheduleSkip, ScheduleView, ScheduledMessage,
+    ScheduledStatus, ScheduledWait, SentLater, SettingsSaved, StagedAttachment, Status,
+    TriggerKind, UndeliveredMessage, WorktreeDiff,
 };
 use crate::policy::{allow_candidates, Action, Rule, RuleCandidate};
 use crate::runner::{Runner, RunnerConfig};
@@ -1189,6 +1189,138 @@ impl Runtime {
             )));
         }
         Ok(path)
+    }
+
+    /// The Files panel's rows for the topics `roots` of the dot (attachments spec section 4.5):
+    /// the files attached in them and the files the dot wrote or edited, inside each run's
+    /// workspace only, merged by path and newest first. A root of another dot is left out.
+    pub async fn conversation_files(
+        &self,
+        dot_id: &str,
+        roots: &[String],
+    ) -> Result<Vec<ConversationFile>> {
+        self.store.get_dot(dot_id).await?;
+        let mut mine: Vec<String> = Vec::new();
+        for root in roots {
+            match self.store.get_run(root).await {
+                Ok(run) if run.dot_id == dot_id && !mine.contains(&run.root_run_id) => {
+                    mine.push(run.root_run_id)
+                }
+                Ok(_) | Err(Error::NotFound(_)) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        let mut found: Vec<(PathBuf, FileSource, String, String)> = Vec::new();
+        for root in &mine {
+            let thread = self.store.list_thread(root).await?;
+            // The topic's workspace: its newest run that has one.
+            let workspace = thread
+                .iter()
+                .rev()
+                .find_map(|r| r.workspace_path.as_deref().map(PathBuf::from));
+            for a in self.store.topic_attachments(root).await? {
+                let Some(run) = thread.iter().find(|r| a.run_id.as_ref() == Some(&r.id)) else {
+                    continue;
+                };
+                let copy = match (&workspace, &a.name) {
+                    (Some(ws), Some(name)) => {
+                        Some(crate::chat_files::topic_dir(ws, root).join(name))
+                    }
+                    _ => None,
+                };
+                let path = match copy {
+                    Some(copy) if copy.is_file() => copy,
+                    _ => self.chat_files.stored_path(&a),
+                };
+                found.push((
+                    path,
+                    FileSource::Attached,
+                    run.id.clone(),
+                    run.queued_at.clone(),
+                ));
+            }
+        }
+        for w in self.store.written_files(dot_id, &mine).await? {
+            let Some(workspace) = w.workspace_path.as_deref().map(PathBuf::from) else {
+                continue;
+            };
+            let named = PathBuf::from(&w.path);
+            let joined = if named.is_absolute() {
+                named
+            } else {
+                workspace.join(named)
+            };
+            let path = crate::chat_files::normalize(&joined);
+            if !crate::chat_files::is_inside(&path, &workspace) {
+                continue;
+            }
+            found.push((path, FileSource::Written, w.run_id, w.at));
+        }
+        // One row per path (ignoring case on Windows): the newest time, Attached if any is.
+        let mut rows: Vec<(String, ConversationFile)> = Vec::new();
+        for (path, source, run_id, at) in found {
+            let key = crate::chat_files::path_key(&path);
+            match rows.iter_mut().find(|(k, _)| *k == key) {
+                Some((_, row)) => {
+                    if at > row.at {
+                        row.at = at;
+                        row.run_id = run_id;
+                    }
+                    if source == FileSource::Attached && row.source != FileSource::Attached {
+                        row.source = FileSource::Attached;
+                        row.path = path.to_string_lossy().to_string();
+                    }
+                }
+                None => rows.push((
+                    key,
+                    ConversationFile {
+                        name: path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_default(),
+                        path: path.to_string_lossy().to_string(),
+                        source,
+                        run_id,
+                        at,
+                        exists: false,
+                        can_open: crate::chat_files::can_open(&path),
+                    },
+                )),
+            }
+        }
+        let mut files: Vec<ConversationFile> = rows
+            .into_iter()
+            .map(|(_, mut row)| {
+                row.exists = Path::new(&row.path).is_file();
+                row
+            })
+            .collect();
+        files.sort_by(|a, b| b.at.cmp(&a.at).then_with(|| a.path.cmp(&b.path)));
+        Ok(files)
+    }
+
+    /// The file of the Files panel at `path`, to open (`open`) or to show in its folder: only a
+    /// path the list names and that is a file now. A program or script is never opened.
+    pub async fn conversation_file_target(
+        &self,
+        dot_id: &str,
+        roots: &[String],
+        path: &str,
+        open: bool,
+    ) -> Result<PathBuf> {
+        let key = crate::chat_files::path_key(Path::new(path));
+        let listed = self
+            .conversation_files(dot_id, roots)
+            .await?
+            .into_iter()
+            .find(|f| crate::chat_files::path_key(Path::new(&f.path)) == key);
+        let Some(file) = listed.filter(|f| f.exists) else {
+            return Err(Error::NotFound(crate::chat_files::NOT_THERE.into()));
+        };
+        if open && !file.can_open {
+            return Err(Error::Invalid(crate::chat_files::PROGRAM.into()));
+        }
+        Ok(PathBuf::from(file.path))
     }
 
     async fn ensure_thread_idle(&self, root_run_id: &str) -> Result<()> {

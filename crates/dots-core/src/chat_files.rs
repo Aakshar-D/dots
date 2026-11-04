@@ -163,6 +163,58 @@ pub fn prompt_block(files: &[(PathBuf, u64)]) -> String {
     out
 }
 
+/// `path` with `.` dropped and `..` applied, without touching the disk. A `..` above the root
+/// is dropped.
+pub fn normalize(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for c in path.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !matches!(
+                    out.components().next_back(),
+                    None | Some(Component::RootDir) | Some(Component::Prefix(_))
+                ) {
+                    out.pop();
+                }
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// A path's key for comparing: normalized, with `/` and `\` alike, and ignoring case on
+/// Windows.
+pub fn path_key(path: &Path) -> String {
+    let text = normalize(path).to_string_lossy().replace('\\', "/");
+    if cfg!(windows) {
+        text.to_lowercase()
+    } else {
+        text
+    }
+}
+
+/// Whether `path` is inside `workspace`, by its normalized text and, when it exists, by where
+/// it really is (a link inside that points out does not count).
+pub fn is_inside(path: &Path, workspace: &Path) -> bool {
+    let p = path_key(path);
+    let w = path_key(workspace);
+    let w = w.trim_end_matches('/');
+    if !p.starts_with(&format!("{w}/")) {
+        return false;
+    }
+    match (
+        std::fs::canonicalize(path),
+        std::fs::canonicalize(workspace),
+    ) {
+        (Ok(real), Ok(base)) => real.starts_with(&base),
+        (Err(_), _) => true,
+        (Ok(_), Err(_)) => false,
+    }
+}
+
 /// Where a topic's files go in a workspace.
 pub fn topic_dir(workspace: &Path, root_run_id: &str) -> PathBuf {
     workspace.join(WORKSPACE_DIR).join(root_run_id)
