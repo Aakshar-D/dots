@@ -1,4 +1,4 @@
-//! Delivery tracking's storage (spec sections 2, 3.9 and 4.1): the columns from migration 0029,
+//! Delivery tracking's storage (spec sections 2, 3.9 and 4.1): the columns from migration 0030,
 //! the marks a run gets as it ends, the day's counts and the Needs you term.
 
 mod common;
@@ -525,7 +525,7 @@ async fn a_requeue_is_not_a_second_send() {
 }
 
 #[tokio::test]
-async fn migration_0029_backfills_history() {
+async fn migration_0030_backfills_history() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("dots.db");
     let opts = SqliteConnectOptions::new()
@@ -536,7 +536,7 @@ async fn migration_0029_backfills_history() {
     before.migrations = before
         .migrations
         .iter()
-        .filter(|m| m.version < 29)
+        .filter(|m| m.version < 30)
         .cloned()
         .collect::<Vec<_>>()
         .into();

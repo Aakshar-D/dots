@@ -41,7 +41,7 @@ Owner's calls: delivered = engine started; overdue 5 min; not-delivered mark + R
 ### 3.9 Decided after the builder check *(my calls)*
 
 1. **Cancels are not "not delivered".** A run cancelled before delivery — by the person (Cancel), or by Dots (a dot disabled or deleted, `cancel_if_inactive`, Discard itself) — is shown as cancelled, as today. Not delivered comes only from: a run that **failed** before its engine started (including `interrupted` at restart), or **30 minutes of waiting**.
-2. **Existing runs at the upgrade**: migration 0029 sets `delivered_at = started_at` for every existing run with a `started_at`, and `dismissed_at = ended_at` for every existing ended run without one, so history never floods Needs you or today's counts.
+2. **Existing runs at the upgrade**: migration 0030 sets `delivered_at = started_at` for every existing run with a `started_at`, and `dismissed_at = ended_at` for every existing ended run without one, so history never floods Needs you or today's counts.
 3. **Retry of a chat message**: dismiss the old run (and cancel it if still queued), then send the same text through the chat path **with the old run's own `parent_run_id`** (the same place in the thread; a first message becomes a new first message). Do this in that order, so the chat path's "the parent is the last run and every run has ended" rules hold. The conversation shows the dismissed one as a muted "Not delivered" line above the new message.
 4. **Retry and Discard are for chat messages only.** `retry_delivery` / `discard_delivery` return `Conflict` for other triggers; background runs show their delivery state but no buttons (retrying them could re-fire side effects: watcher events, follow-up chains, workflow steps, API calls).
 5. **Counts** count run rows created by a send: every trigger except rows that only continue an earlier run (approval-resume children and usage-hold requeues are the same send, not a new one). `delivered` = rows with `delivered_at`; `not_delivered` = rows with `undelivered_at` and no `delivered_at` (live state), dismissed ones included. A retry is a second send.
@@ -51,7 +51,7 @@ Owner's calls: delivered = engine started; overdue 5 min; not-delivered mark + R
 
 ### 4.1 Storage
 
-- **Migration 0029** (`0029_delivery.sql`; 0027/0028 are skip-when-busy's and watch hours'):
+- **Migration 0030** (`0030_delivery.sql`; 0027 is master's teams_b, 0028/0029 are skip-when-busy's and watch hours'):
 
 ```sql
 ALTER TABLE runs ADD COLUMN delivered_at TEXT;    -- engine started on it (RFC 3339 UTC)
@@ -121,7 +121,7 @@ ALTER TABLE runs ADD COLUMN dismissed_at TEXT;    -- the person retried or disca
 
 ## 9. Collisions with parallel work
 
-Stacked on #47 (watch hours) for the migration order; migration 0029. Shared files: `runner.rs`, `store/runs.rs`, `store/dots.rs`, `model.rs`, `runtime.rs`, app `commands.rs` / `events.rs` / `contract.rs`, UI conversation components, `api/types.ts`. Parallel branches crash-resend and approval-guards also touch `runner.rs` / `runtime.rs` / `commands.rs`; expect mechanical conflicts and a contract regeneration when merging.
+Stacked on #47 (watch hours) for the migration order; migration 0030. Shared files: `runner.rs`, `store/runs.rs`, `store/dots.rs`, `model.rs`, `runtime.rs`, app `commands.rs` / `events.rs` / `contract.rs`, UI conversation components, `api/types.ts`. Parallel branches crash-resend and approval-guards also touch `runner.rs` / `runtime.rs` / `commands.rs`; expect mechanical conflicts and a contract regeneration when merging.
 
 ## 10. Not in this part
 

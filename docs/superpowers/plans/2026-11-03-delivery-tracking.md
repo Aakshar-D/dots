@@ -4,7 +4,7 @@
 
 **Goal:** Every run says whether it reached its dot: delivered (the engine started on it), waiting (and why), or not delivered. A chat message that never got there offers Retry and Discard, counts in Needs you and notifies once. Each dot's header menu shows today's counts.
 
-**Architecture:** Four new `runs` columns (migration 0029). `Run` gains a computed `delivery` and a `wait_reason` that is filled when runs are read for the UI. The store writes the not-delivered mark in the same statement that ends a failed run. The runner marks a run delivered right after `engine.start` returns `Ok`. A small `delivery` module holds the wait-reason rule, the local-day bounds and a 30-second sweeper on the scheduler's `Clock`. The runtime adds chat-only Retry and Discard, plus today's counts. The app adds three commands and one notice. The UI shows one delivery line per run, and a counts line in the dot menu.
+**Architecture:** Four new `runs` columns (migration 0030). `Run` gains a computed `delivery` and a `wait_reason` that is filled when runs are read for the UI. The store writes the not-delivered mark in the same statement that ends a failed run. The runner marks a run delivered right after `engine.start` returns `Ok`. A small `delivery` module holds the wait-reason rule, the local-day bounds and a 30-second sweeper on the scheduler's `Clock`. The runtime adds chat-only Retry and Discard, plus today's counts. The app adds three commands and one notice. The UI shows one delivery line per run, and a counts line in the dot menu.
 
 **Tech Stack:** Rust (tokio, sqlx/SQLite, chrono), Tauri 2, React + TypeScript (zod, vitest, TanStack Query).
 
@@ -15,7 +15,7 @@
 - Delivered = `engine.start(ctx)` returned `Ok` in the runner. Recorded once in `runs.delivered_at` and never cleared, not even by a usage-hold `requeue_run`.
 - Overdue (UI only) at **5 minutes** since `queued_at`. Not delivered at **30 minutes** of waiting (sweeper), never while the wait reason is `usage_hold`. The run stays queued, and if it starts later it becomes delivered and the mark clears.
 - Not delivered at the end only when the run ends **`failed`** with no `delivered_at`. The reason is the first line of its error (`interrupted` for `recover_interrupted`). A **cancel** never marks a run not delivered (§3.9.1).
-- Migration `0029_delivery.sql`. Use the four `ALTER TABLE` lines from spec §4.1 verbatim, then the backfill `UPDATE runs SET delivered_at = started_at WHERE started_at IS NOT NULL;` and then `UPDATE runs SET dismissed_at = ended_at WHERE ended_at IS NOT NULL AND delivered_at IS NULL;`.
+- Migration `0030_delivery.sql`. Use the four `ALTER TABLE` lines from spec §4.1 verbatim, then the backfill `UPDATE runs SET delivered_at = started_at WHERE started_at IS NOT NULL;` and then `UPDATE runs SET dismissed_at = ended_at WHERE ended_at IS NOT NULL AND delivered_at IS NULL;`.
 - `delivery` values: `delivered` | `waiting` | `not_delivered`. Wait reasons: `busy` | `usage_hold` | `updating` | `dot_busy` | `queued`.
 - Wait-reason precedence: `usage_hold`, then `updating`, then `dot_busy` (another run of the same dot is running or awaiting approval — the dispatcher starts one run per dot), then `busy` (the store's running count ≥ `max_concurrent`), then `queued`.
 - Reason texts (UI line and the sweeper's `undelivered_reason`, verbatim): `busy` → `other runs are busy`, `usage_hold` → `held for the usage limit`, `updating` → `Dots is updating`, `dot_busy` → `this dot is busy with another run`, `queued` → `next in line`.
@@ -40,7 +40,7 @@
 ### Task 1: Storage — columns, delivery, end-of-run marks, counts, Needs you
 
 **Files:**
-- Create: `crates/dots-core/migrations/0029_delivery.sql` (Global Constraints)
+- Create: `crates/dots-core/migrations/0030_delivery.sql` (Global Constraints)
 - Modify: `crates/dots-core/src/model.rs` (`Run` :237; new `Delivery`, `DeliveryCounts`)
 - Modify: `crates/dots-core/src/store/runs.rs` (`RUN_COLUMNS` :11, `run_from_row` :17, `finish_run_with` :612, `fail_if_running` :636, `cancel_if_inactive` :654, `recover_interrupted` :683; new functions next to `set_run_times` :494)
 - Modify: `crates/dots-core/src/store/dots.rs` (`dot_counts` :338, one more `+ (SELECT COUNT(*) ...)` term in `needs_you`)
@@ -49,7 +49,7 @@
 
 **Interfaces:**
 - Produces:
-  - `str_enum!(Delivery { Delivered => "delivered", Waiting => "waiting", NotDelivered => "not_delivered" })`, plus `Delivery::of(status: RunStatus, delivered_at: Option<&str>, undelivered_at: Option<&str>) -> Option<Delivery>`. The rule: `delivered_at` → `Delivered`; else `undelivered_at` → `NotDelivered`; else not terminal → `Waiting`; else `None` (ended without either mark: cancelled before start, or history from before 0029).
+  - `str_enum!(Delivery { Delivered => "delivered", Waiting => "waiting", NotDelivered => "not_delivered" })`, plus `Delivery::of(status: RunStatus, delivered_at: Option<&str>, undelivered_at: Option<&str>) -> Option<Delivery>`. The rule: `delivered_at` → `Delivered`; else `undelivered_at` → `NotDelivered`; else not terminal → `Waiting`; else `None` (ended without either mark: cancelled before start, or history from before 0030).
   - New `Run` fields: `delivered_at`, `undelivered_at`, `undelivered_reason`, `dismissed_at` (all `Option<String>`, `#[serde(default)]`); `delivery: Option<Delivery>` (computed in `run_from_row`, `#[serde(default)]`); `wait_reason: Option<WaitReason>` (`#[serde(default)]`; the store always leaves it `None`, Task 2 fills it). Declare `WaitReason` in this task as `str_enum!(WaitReason { Busy => "busy", UsageHold => "usage_hold", Updating => "updating", DotBusy => "dot_busy", Queued => "queued" })` so every `Run` literal changes only once.
   - `pub struct DeliveryCounts { pub sent: u32, pub delivered: u32, pub not_delivered: u32 }` (Serialize, Deserialize, Clone, Debug, PartialEq, Eq).
   - `Store::mark_delivered(&self, id: &str, at: DateTime<Utc>) -> Result<Option<Run>>`: sets `delivered_at` only where it is null, and clears `undelivered_at`/`undelivered_reason` in the same statement. Returns `None` when it was already delivered (nothing changed).
@@ -74,7 +74,7 @@
   - `needs_you_counts_undelivered_chat_runs_only`: a failed undelivered chat run raises `dot_counts(dot).0` by 1. A watcher run that failed undelivered does not. After `dismiss_run` it drops back. A run marked and then delivered does not count.
   - `delivery_counts_cover_the_day_and_leave_out_resumes`, for the day `[2026-11-03T00:00:00.000Z, 2026-11-04T00:00:00.000Z)`: two chat runs (one delivered, one marked and dismissed), one schedule run queued at `2026-11-03T23:59:59.999Z`, one run at `2026-11-04T00:00:00.000Z` (outside), and one `resume` run (left out). Result: `{ sent: 3, delivered: 1, not_delivered: 1 }`.
   - `a_requeue_is_not_a_second_send` (Review Focus 5): claim, `mark_delivered`, `requeue_run`. Then `delivered_at` is still set, `delivery == Some(Delivered)`, and `sent == 1`.
-  - `migration_0029_backfills_history`: migrate to versions `< 29` (pattern `store_quiet_test.rs:49`). Insert one ended run with `started_at`, and one ended run without it. Open the `Store`. The first has `delivered_at == started_at` and `dismissed_at == None`. The second has `delivered_at == None`, `dismissed_at == ended_at` and `delivery == None`. `dot_counts(..).0 == 0`.
+  - `migration_0030_backfills_history`: migrate to versions `< 30` (pattern `store_quiet_test.rs:49`). Insert one ended run with `started_at`, and one ended run without it. Open the `Store`. The first has `delivered_at == started_at` and `dismissed_at == None`. The second has `delivered_at == None`, `dismissed_at == ended_at` and `delivery == None`. `dot_counts(..).0 == 0`.
 - [ ] **Step 2: Run** `cargo test -p dots-core --test store_delivery_test`. Expected: compile errors (no columns, no fields, no functions).
 - [ ] **Step 3: Implement.** Add the migration, the model types, the store functions and the extra `needs_you` term. Add the new columns to `RUN_COLUMNS` and fill the `Run` fields in `run_from_row`. Update the three `Run` literals: `delivered_at` set and `delivery: Some(Delivered)` in the contract sample, everything else `None`.
 - [ ] **Step 4: Run** `cargo test -p dots-core --test store_delivery_test --test store_runs_test --test store_quiet_test --test runtime_seen_test --test store_dots_test` and `cargo build -p dots-app --tests`. Expected: PASS / compiles.
@@ -217,7 +217,7 @@
 ### Task 6: Whole-branch check and pull request
 
 - [ ] **Step 1: Run** CI's steps: `cargo fmt --all -- --check`; `cargo clippy -p dots-core -p dots-app --all-targets -- -D warnings`; `cargo test -p dots-core --locked --no-fail-fast -- --skip preview_schedule_lists_the_next_fire_times` (twice); `cargo test -p dots-app --locked`; `node --test tools/release/release.test.mjs`; `cd ui; bun run typecheck; bun run test`. Expected: all pass, in both core runs.
-- [ ] **Step 2: Push** `feat/delivery-tracking` and open the PR with base `feat/watch-hours`. Note in the body that it is stacked on #47 (and #47 on #46), that it adds migration 0029, and the rulings this plan made (Task 1 cancel/dismiss, Task 3 `chat` parent rule and Retry text, `delivery: Option`).
+- [ ] **Step 2: Push** `feat/delivery-tracking` and open the PR with base `feat/watch-hours`. Note in the body that it is stacked on #47 (and #47 on #46), that it adds migration 0030, and the rulings this plan made (Task 1 cancel/dismiss, Task 3 `chat` parent rule and Retry text, `delivery: Option`).
 
 ## Rulings (controller, after drafting)
 
