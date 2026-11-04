@@ -71,7 +71,7 @@ A title uses the first line of any text and is cut to 80 characters with `…`. 
 
 ### 4.2 Storage
 
-- **Migration 0031** (`0031_inbox_marks.sql`; 0029 is delivery tracking, 0030 is taken by topic-tools):
+- **Migration 0031** (`0031_inbox_marks.sql`; 0030 is delivery tracking (moved up one after master's 0027_teams_b)):
 
 ```sql
 CREATE TABLE inbox_marks (
@@ -163,7 +163,7 @@ CREATE INDEX inbox_marks_due ON inbox_marks (snoozed_until) WHERE snoozed_until 
 
 ## 9. Collisions with parallel work
 
-Stacked on delivery tracking (`feat/delivery-tracking`). It uses migration 0031, and 0030 is topic-tools on a parallel branch: sqlx applies a lower version merged later. Send later (`feat/send-later`, 0032) is stacked on this branch and reuses `later.ts` and `LaterMenu`. Shared files: `runtime.rs` (`inbox`), `store/dots.rs` (`dot_counts`), `store/messages.rs`, `model.rs`, `events.rs` (core and app), `contract.rs`, `InboxScreen.tsx`, `Layout.tsx`, `api/types.ts`, `runtime-events.ts`.
+Stacked on delivery tracking (`feat/delivery-tracking`). It uses migration 0031; 0030 is delivery tracking (moved up one after master's 0027_teams_b), so topic-tools' `0030_topics` must take a new number. Send later (`feat/send-later`, 0032) is stacked on this branch and reuses `later.ts` and `LaterMenu`. Shared files: `runtime.rs` (`inbox`), `store/dots.rs` (`dot_counts`), `store/messages.rs`, `model.rs`, `events.rs` (core and app), `contract.rs`, `InboxScreen.tsx`, `Layout.tsx`, `api/types.ts`, `runtime-events.ts`.
 
 ## 10. Not in this part
 
