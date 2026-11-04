@@ -1,7 +1,9 @@
 use serde::Serialize;
 use tokio::sync::broadcast;
 
-use crate::model::{Approval, Message, PausedReason, Run, RunEventRecord, WorkflowRun};
+use crate::model::{
+    Approval, Message, PausedReason, Run, RunEventRecord, ScheduleSkip, WorkflowRun,
+};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -34,6 +36,12 @@ pub enum RuntimeEvent {
     /// The dot's schedule row (`schedule_state`) was made, changed or deleted.
     ScheduleUpdated {
         dot_id: String,
+    },
+    /// A repeating slot came due while the dot was busy with a run and was not run (skip when
+    /// busy spec section 4). A `ScheduleUpdated` for the row follows.
+    ScheduleSkipped {
+        dot_id: String,
+        skip: ScheduleSkip,
     },
     /// The dot's schedule needs attention: an occurrence failed in the end (Scheduler v2 spec
     /// §6). Published once, when the flag goes from clear to set, with the failed run and its

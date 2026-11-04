@@ -27,6 +27,17 @@ export function localTime(iso: string | null | undefined): string {
   return Number.isNaN(t) ? iso : timeOfDay.format(t);
 }
 
+/// The time of day of a timestamp from today, else its date and time (a time of day alone would
+/// read as today). `now` is the moment "today" is judged at.
+export function localDayTime(iso: string | null | undefined, now: number = Date.now()): string {
+  if (!iso) return "";
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return iso;
+  return new Date(t).toDateString() === new Date(now).toDateString()
+    ? timeOfDay.format(t)
+    : dateTime.format(t);
+}
+
 /// "45s", "3m 05s", "2h 07m". Without an end the run is still going: measured up to `now`.
 export function duration(
   startIso: string | null,

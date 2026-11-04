@@ -65,6 +65,12 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
       // Dots list and the Inbox show.
       for (const queryKey of [keys.dots, keys.overview, keys.inbox]) invalidate(qc, queryKey);
       break;
+    case "schedule_skipped":
+      // The skip line in the conversation, and the header's count (the dots' schedule state).
+      for (const queryKey of [keys.scheduleSkips(event.dot_id), keys.overview, keys.dots]) {
+        invalidate(qc, queryKey);
+      }
+      break;
     case "library_updated":
       // The Library lists, the Inbox group of a changed tool list, and what shows the dots that
       // use the item: removing it takes it out of them, and no dot event says so. An app's row,

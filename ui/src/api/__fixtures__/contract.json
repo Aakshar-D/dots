@@ -595,6 +595,7 @@
     "cancel_run",
     "keep_waiting",
     "list_runs",
+    "schedule_skips",
     "get_run",
     "run_thread",
     "list_run_events",
@@ -1128,9 +1129,11 @@
         "run_id": "01J0RUN0"
       },
       "fired_count": 3,
+      "last_skipped_at": "2026-10-09T11:00:00Z",
       "next_fire": "2026-10-10T02:00:00+01:00",
       "retry_at": "2026-10-09T13:02:00+01:00",
       "retry_attempt": 2,
+      "skipped_since_run": 2,
       "status": "active"
     },
     "unread": 0
@@ -3840,6 +3843,18 @@
     },
     {
       "dot_id": "01J0DOT",
+      "skip": {
+        "created_at": "2026-10-09T11:00:01Z",
+        "dot_id": "01J0DOT",
+        "id": "01J0SKIP",
+        "reason": "busy",
+        "run_id": "01J0RUN",
+        "slot_at": "2026-10-09T11:00:00Z"
+      },
+      "type": "schedule_skipped"
+    },
+    {
+      "dot_id": "01J0DOT",
       "type": "dot_seen"
     },
     {
@@ -4208,6 +4223,14 @@
       "until": null
     }
   ],
+  "ScheduleSkip": {
+    "created_at": "2026-10-09T11:00:01Z",
+    "dot_id": "01J0DOT",
+    "id": "01J0SKIP",
+    "reason": "busy",
+    "run_id": "01J0RUN",
+    "slot_at": "2026-10-09T11:00:00Z"
+  },
   "Settings": {
     "auto_install_updates": false,
     "autostart": true,

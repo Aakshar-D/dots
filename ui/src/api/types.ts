@@ -438,6 +438,16 @@ export const PausedWatcher = z.strictObject({
   at: z.string(),
 });
 
+// A slot that came due while the dot was busy with its previous run, and was skipped (UTC).
+export const ScheduleSkip = z.strictObject({
+  id: z.string(),
+  dot_id: z.string(),
+  slot_at: z.string(),
+  reason: z.string(),
+  run_id: nullable(z.string()),
+  created_at: z.string(),
+});
+
 export const RuntimeEvent = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("run_updated"), run: Run }),
   z.strictObject({ type: z.literal("run_event"), event: RunEventRecord }),
@@ -454,6 +464,8 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("approval_updated"), approval: Approval }),
   // The dot's schedule row was made, changed or deleted.
   z.strictObject({ type: z.literal("schedule_updated"), dot_id: z.string() }),
+  // A slot was skipped because the dot was busy (sent with a `schedule_updated`).
+  z.strictObject({ type: z.literal("schedule_skipped"), dot_id: z.string(), skip: ScheduleSkip }),
   // A Library item was added, changed, removed or checked (an MCP server's catalog included).
   z.strictObject({ type: z.literal("library_updated"), item_id: z.string() }),
   // The dot's schedule needs attention now (sent once, with a `schedule_updated`).
@@ -569,6 +581,9 @@ export const ScheduleView = z.strictObject({
   retry_at: nullable(z.string()),
   retry_attempt: nullable(z.number().int()),
   attention: nullable(z.strictObject({ run_id: z.string(), error: nullable(z.string()) })),
+  // The last slot skipped because the dot was busy (UTC), and the skips since its last run.
+  last_skipped_at: nullable(z.string()),
+  skipped_since_run: z.number().int(),
 });
 
 export const DotOverview = z.strictObject({
@@ -1523,6 +1538,7 @@ export type Settings = z.infer<typeof Settings>;
 export type SettingsSaved = z.infer<typeof SettingsSaved>;
 export type BrowserStatus = z.infer<typeof BrowserStatus>;
 export type ScheduleView = z.infer<typeof ScheduleView>;
+export type ScheduleSkip = z.infer<typeof ScheduleSkip>;
 export type DotOverview = z.infer<typeof DotOverview>;
 export type PendingApproval = z.infer<typeof PendingApproval>;
 export type ReviewRun = z.infer<typeof ReviewRun>;

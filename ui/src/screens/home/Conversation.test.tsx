@@ -1,11 +1,11 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { Approval, Message, Run, RunEventRecord } from "@/api/types";
 import { localTime } from "@/lib/format";
 import { backend } from "@/test/backend";
 import { sample } from "@/test/fixtures";
-import { chat, dot, home, reply, said, scheduled } from "@/test/home";
+import { chat, dot, home, overview, reply, said, scheduled } from "@/test/home";
 import { renderApp } from "@/test/render";
 
 const conversation = () => screen.getByRole("region", { name: "Conversation" });
@@ -101,6 +101,106 @@ describe("a dot's conversation", () => {
     const view = within(conversation());
     expect(await view.findByText("Done, as you asked.")).toBeVisible();
     expect(view.getByText("reply r1")).toBeVisible();
+  });
+
+  it("shows skipped slots among the topics in time order, apart from the messages", async () => {
+    const early = scheduled("early", "09:00");
+    const later = scheduled("later", "11:00");
+    home([early, later]);
+    const skip = { ...sample.scheduleSkip, dot_id: dot.id };
+    backend.on("schedule_skips", () => [
+      { ...skip, id: "s2", slot_at: "2026-10-09T12:00:00Z" },
+      { ...skip, id: "s1", slot_at: "2026-10-09T10:00:00Z" },
+    ]);
+    renderApp(`/home/${dot.id}`);
+    const view = within(await screen.findByRole("region", { name: "Conversation" }));
+    const lines = await view.findAllByText(/Schedule skipped at .*: still working on the previous run/);
+    expect(lines).toHaveLength(2);
+    const first = await card(early);
+    const second = await card(later);
+    const after = (a: Node, b: Node) => a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING;
+    // early, the 10:00 skip, later, the 12:00 skip.
+    expect(after(first, lines[0])).toBeTruthy();
+    expect(after(lines[0], second)).toBeTruthy();
+    expect(after(second, lines[1])).toBeTruthy();
+    expect(backend.callsTo("schedule_skips")).toEqual([{ dotId: dot.id, limit: undefined }]);
+  });
+
+  it("never counts skipped slots as unread, in the column or on the rail", async () => {
+    const run = scheduled("cron", "09:00");
+    home([run]);
+    const state = sample.overview.schedule_state!;
+    // Known counts: 2 unread on the dot, 2 in the Home total, 3 skips since the last run.
+    backend.on("dot_overview", () => [
+      {
+        ...overview,
+        unread: 2,
+        schedule_state: { ...state, last_skipped_at: "2026-10-09T10:00:00Z", skipped_since_run: 3 },
+      },
+    ]);
+    backend.on("unread_total", () => 2);
+    const skip = { ...sample.scheduleSkip, dot_id: dot.id };
+    const skips = [1, 2, 3].map((n) => ({ ...skip, id: `s${n}`, slot_at: `2026-10-09T10:0${n}:00Z` }));
+    backend.on("schedule_skips", () => skips);
+    renderApp(`/home/${dot.id}`);
+    const view = within(await screen.findByRole("region", { name: "Conversation" }));
+    expect(await view.findAllByText(/Schedule skipped at/)).toHaveLength(3);
+    const counts = () => {
+      const rail = screen.getByRole("navigation", { name: "Main" });
+      const column = screen.getByRole("navigation", { name: "Dots" });
+      return [
+        within(rail).getByRole("link", { name: /^Home, \d+ unread$/ }).getAttribute("aria-label"),
+        within(column).getByText(/^\d+ unread$/).textContent,
+      ];
+    };
+    await waitFor(() => expect(counts()).toEqual(["Home, 2 unread", "2 unread"]));
+
+    // A new skip arrives: the skip lines and the overview are read again, the counts stay.
+    const before = backend.callsTo("schedule_skips").length;
+    act(() => backend.emit("runtime", { type: "schedule_skipped", dot_id: dot.id, skip: skips[0] }));
+    await waitFor(() => expect(backend.callsTo("schedule_skips").length).toBeGreaterThan(before));
+    await waitFor(() => expect(backend.callsTo("dot_overview").length).toBeGreaterThan(1));
+    expect(counts()).toEqual(["Home, 2 unread", "2 unread"]);
+  });
+
+  it("tells the last skipped slot in the dot's header, and nothing without one", async () => {
+    home([scheduled("cron", "09:00")]);
+    const state = sample.overview.schedule_state!;
+    const last = "2026-10-09T09:00:00Z";
+    backend.on("dot_overview", () => [
+      { ...overview, schedule_state: { ...state, last_skipped_at: last, skipped_since_run: 2 } },
+    ]);
+    // Only the clock is faked (to the day of the skip), so nothing waits.
+    vi.useFakeTimers({ toFake: ["Date"], now: Date.parse("2026-10-09T11:00:00Z") });
+    try {
+      renderApp(`/home/${dot.id}`);
+      expect(
+        await screen.findByText(`Last skipped ${localTime(last)} · 2 skipped since the last run`),
+      ).toBeVisible();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows a failed load of the skipped slots, as it does for the proposals", async () => {
+    home([scheduled("cron", "09:00")]);
+    backend.on("schedule_skips", () => {
+      throw { kind: "internal", message: "could not read the skipped slots" };
+    });
+    renderApp(`/home/${dot.id}`);
+    expect(await screen.findByText("could not read the skipped slots")).toBeVisible();
+  });
+
+  it("shows no skip line in the header of a dot that never skipped", async () => {
+    const run = scheduled("cron", "09:00");
+    home([run]);
+    const state = sample.overview.schedule_state!;
+    backend.on("dot_overview", () => [
+      { ...overview, schedule_state: { ...state, last_skipped_at: null, skipped_since_run: 0 } },
+    ]);
+    renderApp(`/home/${dot.id}`);
+    await card(run);
+    expect(screen.queryByText(/Last skipped/)).toBeNull();
   });
 
   it("shows the last 20 run topics of a dot that never chatted", async () => {

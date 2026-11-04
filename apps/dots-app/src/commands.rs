@@ -29,7 +29,7 @@ use dots_core::library_service::{
 };
 use dots_core::model::{
     Approval, Dot, DotOverview, DotSpec, FollowUp, Inbox, Memory, Message, Run, RunEventRecord,
-    SettingsSaved, Status, Watcher, WatcherConfig, WorktreeDiff,
+    ScheduleSkip, SettingsSaved, Status, Watcher, WatcherConfig, WorktreeDiff,
 };
 use dots_core::policy::{Policy, Preset, RuleCandidate};
 use dots_core::schedule::Schedule;
@@ -614,6 +614,16 @@ pub async fn list_runs(
     limit: i64,
 ) -> Res<Vec<Run>> {
     Ok(state.rt()?.list_runs(dot_id.as_deref(), limit).await?)
+}
+
+/// The slots of `dot_id`'s schedule that were skipped because the dot was busy, newest first.
+#[tauri::command]
+pub async fn schedule_skips(
+    state: State<'_, AppState>,
+    dot_id: String,
+    limit: Option<u32>,
+) -> Res<Vec<ScheduleSkip>> {
+    Ok(state.rt()?.schedule_skips(&dot_id, limit).await?)
 }
 
 #[tauri::command]

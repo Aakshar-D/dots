@@ -24,6 +24,7 @@ mod orgs;
 mod runs;
 mod schedules;
 mod settings;
+mod skips;
 mod step_members;
 mod teams;
 #[doc(hidden)]

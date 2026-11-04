@@ -100,6 +100,7 @@ command_list![
     cancel_run,
     keep_waiting,
     list_runs,
+    schedule_skips,
     get_run,
     run_thread,
     list_run_events,

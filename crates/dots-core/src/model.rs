@@ -395,6 +395,22 @@ pub enum SlotStart {
     Enqueued(Run),
     /// The dot's queued run serves it.
     Coalesced(Run),
+    /// The dot was busy with a run, so a repeating slot was skipped and recorded: no run.
+    Busy(ScheduleSkip),
+}
+
+/// A slot that was not run (`schedule_skips`): the dot was still busy with an earlier run.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScheduleSkip {
+    pub id: String,
+    pub dot_id: String,
+    /// The slot's time, RFC 3339 UTC.
+    pub slot_at: String,
+    /// `"busy"`, the only reason for now.
+    pub reason: String,
+    /// The run that made the dot busy, if known.
+    pub run_id: Option<String>,
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -478,11 +494,16 @@ pub struct ScheduleView {
     pub retry_at: Option<String>,
     pub retry_attempt: Option<u32>,
     pub attention: Option<AttentionRun>,
+    /// The slot time of the newest kept skip, RFC 3339; `None` when none was skipped.
+    pub last_skipped_at: Option<String>,
+    /// How many kept skips came after the dot's newest scheduled run was queued.
+    pub skipped_since_run: u32,
 }
 
 impl ScheduleView {
     /// The view of `state`, the row of a dot with `schedule`, at `now`, with times in `tz`.
-    /// `attention` is the run the row's `attention_run_id` names.
+    /// `attention` is the run the row's `attention_run_id` names. The skip fields start empty;
+    /// the runtime fills them from the skips it reads.
     pub fn new<Tz>(
         state: &ScheduleState,
         schedule: &Schedule,
@@ -518,6 +539,8 @@ impl ScheduleView {
             }),
             retry_attempt: retry.map(|r| r.attempt),
             attention,
+            last_skipped_at: None,
+            skipped_since_run: 0,
         }
     }
 }

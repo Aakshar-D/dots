@@ -9,6 +9,7 @@ type SampleName = Exclude<keyof typeof fixture, "Enums" | "Limits" | "Commands">
 const schemas: Record<SampleName, { parse: (v: unknown) => unknown }> = {
   DotSpec: T.DotSpec,
   Schedule: T.Schedule.array(),
+  ScheduleSkip: T.ScheduleSkip,
   NewDotSpec: T.DotSpec,
   Dot: T.Dot,
   Run: T.Run,
