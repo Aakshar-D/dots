@@ -15,11 +15,11 @@
 - Topic identity stays the root run id. No backfill; no row = active, untitled.
 - Every refusal of spec §3.6 is checked inside the writing transaction.
 - Restart: never on a `resume` run. Marks only set by move/merge, taken by the runner.
-- Migration `0029_topics.sql`. Commits carry no AI trailer.
+- Migration `0030_topics.sql`. Commits carry no AI trailer.
 
 ### Task 1: Storage
 
-**Files:** create `migrations/0029_topics.sql`, `src/store/topics.rs`; modify `src/model.rs`, `src/store/mod.rs`. Test: `tests/store_topics_test.rs`.
+**Files:** create `migrations/0030_topics.sql`, `src/store/topics.rs`; modify `src/model.rs`, `src/store/mod.rs`. Test: `tests/store_topics_test.rs`.
 
 - [ ] Failing tests: rename/archive rows; move to a topic and to a new topic (roots, parent, restart marks, proposals); merge; refusals (root, active run, other dot, same topic, workflow step, app topic); sweep exclusions.
 - [ ] Implement; run `cargo test -p dots-core --test store_topics_test`; commit `feat(core): topics keep a title, an archive mark, and can be moved and merged`.
