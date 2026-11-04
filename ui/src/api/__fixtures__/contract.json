@@ -595,6 +595,9 @@
     "chat",
     "cancel_run",
     "keep_waiting",
+    "retry_delivery",
+    "discard_delivery",
+    "delivery_today",
     "list_runs",
     "schedule_skips",
     "get_run",
@@ -746,6 +749,11 @@
   "CurrentScope": {
     "account": "personal",
     "workspace": "default"
+  },
+  "DeliveryCounts": {
+    "delivered": 4,
+    "not_delivered": 1,
+    "sent": 5
   },
   "Dot": {
     "approval_wait_secs": 240,
@@ -1097,6 +1105,9 @@
       "base_commit": "0123abcd",
       "branch": "dots/nightly-tests/01J0RUN",
       "cost_usd": 1.32,
+      "delivered_at": "2026-10-09T12:00:00.000Z",
+      "delivery": "delivered",
+      "dismissed_at": null,
       "dot_id": "01J0DOT",
       "ended_at": "2026-10-09T12:00:00.000Z",
       "error": null,
@@ -1121,6 +1132,9 @@
       "tokens_in": 1200,
       "tokens_out": 340,
       "trigger": "schedule",
+      "undelivered_at": null,
+      "undelivered_reason": null,
+      "wait_reason": null,
       "workflow_step_run_id": null,
       "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
     },
@@ -1349,6 +1363,11 @@
       "internal",
       "cancelled"
     ],
+    "Delivery": [
+      "delivered",
+      "waiting",
+      "not_delivered"
+    ],
     "EngineKind": [
       "claude",
       "local"
@@ -1475,6 +1494,13 @@
     "ValueSource": [
       "org",
       "personal"
+    ],
+    "WaitReason": [
+      "busy",
+      "usage_hold",
+      "updating",
+      "dot_busy",
+      "queued"
     ],
     "WatcherKind": [
       "folder",
@@ -1751,6 +1777,9 @@
         "base_commit": "0123abcd",
         "branch": "dots/nightly-tests/01J0RUN",
         "cost_usd": 1.32,
+        "delivered_at": "2026-10-09T12:00:00.000Z",
+        "delivery": "delivered",
+        "dismissed_at": null,
         "dot_id": "01J0DOT",
         "dot_name": "nightly-tests",
         "ended_at": "2026-10-09T12:00:00.000Z",
@@ -1776,6 +1805,9 @@
         "tokens_in": 1200,
         "tokens_out": 340,
         "trigger": "schedule",
+        "undelivered_at": null,
+        "undelivered_reason": null,
+        "wait_reason": null,
         "workflow_step_run_id": null,
         "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN",
         "worktree_exists": true
@@ -3553,6 +3585,9 @@
     "base_commit": "0123abcd",
     "branch": "dots/nightly-tests/01J0RUN",
     "cost_usd": 1.32,
+    "delivered_at": "2026-10-09T12:00:00.000Z",
+    "delivery": "delivered",
+    "dismissed_at": null,
     "dot_id": "01J0DOT",
     "ended_at": "2026-10-09T12:00:00.000Z",
     "error": null,
@@ -3577,6 +3612,9 @@
     "tokens_in": 1200,
     "tokens_out": 340,
     "trigger": "schedule",
+    "undelivered_at": null,
+    "undelivered_reason": null,
+    "wait_reason": null,
     "workflow_step_run_id": null,
     "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
   },
@@ -3666,12 +3704,85 @@
     "dot_id": "01J0DOT",
     "root_run_id": "01J0RUN"
   },
+  "RunNotDelivered": {
+    "base_commit": "0123abcd",
+    "branch": "dots/nightly-tests/01J0RUN",
+    "cost_usd": 1.32,
+    "delivered_at": null,
+    "delivery": "not_delivered",
+    "dismissed_at": null,
+    "dot_id": "01J0DOT",
+    "ended_at": "2026-10-09T12:00:00.000Z",
+    "error": "claude CLI not found",
+    "hold_released": false,
+    "id": "01J0RUN",
+    "parent_run_id": null,
+    "payload": null,
+    "queued_at": "2026-10-09T12:00:00.000Z",
+    "quiet_limit_secs": null,
+    "quiet_since": null,
+    "quiet_stopped": false,
+    "retry_of": null,
+    "reviewed_at": null,
+    "root_run_id": "01J0RUN",
+    "session_id": "sess-1",
+    "started_at": "2026-10-09T12:00:00.000Z",
+    "status": "failed",
+    "summary": null,
+    "tokens_cache_read": 0,
+    "tokens_in": 1200,
+    "tokens_out": 340,
+    "trigger": "chat",
+    "undelivered_at": "2026-10-09T12:00:00.000Z",
+    "undelivered_reason": "claude CLI not found",
+    "wait_reason": null,
+    "workflow_step_run_id": null,
+    "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
+  },
+  "RunWaiting": {
+    "base_commit": "0123abcd",
+    "branch": "dots/nightly-tests/01J0RUN",
+    "cost_usd": 1.32,
+    "delivered_at": null,
+    "delivery": "waiting",
+    "dismissed_at": null,
+    "dot_id": "01J0DOT",
+    "ended_at": null,
+    "error": null,
+    "hold_released": false,
+    "id": "01J0RUN",
+    "parent_run_id": null,
+    "payload": null,
+    "queued_at": "2026-10-09T12:00:00.000Z",
+    "quiet_limit_secs": null,
+    "quiet_since": null,
+    "quiet_stopped": false,
+    "retry_of": null,
+    "reviewed_at": null,
+    "root_run_id": "01J0RUN",
+    "session_id": "sess-1",
+    "started_at": null,
+    "status": "queued",
+    "summary": null,
+    "tokens_cache_read": 0,
+    "tokens_in": 1200,
+    "tokens_out": 340,
+    "trigger": "chat",
+    "undelivered_at": null,
+    "undelivered_reason": null,
+    "wait_reason": "busy",
+    "workflow_step_run_id": null,
+    "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
+  },
   "RuntimeEvent": [
     {
       "run": {
         "base_commit": null,
         "branch": null,
         "cost_usd": 1.32,
+        "delivered_at": "2026-10-09T12:00:00.000Z",
+        "delivery": "delivered",
+        "dismissed_at": null,
         "dot_id": "01J0DOT",
         "ended_at": null,
         "error": null,
@@ -3697,6 +3808,9 @@
         "tokens_in": 0,
         "tokens_out": 0,
         "trigger": "schedule",
+        "undelivered_at": null,
+        "undelivered_reason": null,
+        "wait_reason": null,
         "workflow_step_run_id": null,
         "workspace_path": null
       },
@@ -4063,6 +4177,9 @@
         "base_commit": "0123abcd",
         "branch": "dots/nightly-tests/01J0RUN",
         "cost_usd": 1.32,
+        "delivered_at": "2026-10-09T12:00:00.000Z",
+        "delivery": "delivered",
+        "dismissed_at": null,
         "dot_id": "01J0DOT",
         "ended_at": "2026-10-09T12:00:00.000Z",
         "error": null,
@@ -4093,6 +4210,9 @@
         "tokens_in": 1200,
         "tokens_out": 340,
         "trigger": "watcher",
+        "undelivered_at": null,
+        "undelivered_reason": null,
+        "wait_reason": null,
         "workflow_step_run_id": null,
         "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
       },
@@ -4117,6 +4237,9 @@
         "base_commit": "0123abcd",
         "branch": "dots/nightly-tests/01J0RUN",
         "cost_usd": 1.32,
+        "delivered_at": "2026-10-09T12:00:00.000Z",
+        "delivery": "delivered",
+        "dismissed_at": null,
         "dot_id": "01J0DOT",
         "ended_at": "2026-10-09T12:00:00.000Z",
         "error": null,
@@ -4141,6 +4264,9 @@
         "tokens_in": 1200,
         "tokens_out": 340,
         "trigger": "schedule",
+        "undelivered_at": null,
+        "undelivered_reason": null,
+        "wait_reason": null,
         "workflow_step_run_id": null,
         "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
       },
@@ -4464,6 +4590,17 @@
     ],
     "since": "2026-10-09T12:00:00.000Z"
   },
+  "WatchHours": {
+    "days": [
+      "mon",
+      "tue",
+      "wed",
+      "thu",
+      "fri"
+    ],
+    "end": "18:00",
+    "start": "09:00"
+  },
   "Watcher": [
     {
       "config": {
@@ -4480,10 +4617,23 @@
       "created_at": "2026-10-09T12:00:00.000Z",
       "dot_id": "01J0DOT",
       "enabled": true,
+      "held_count": 4,
+      "hours": {
+        "days": [
+          "mon",
+          "tue",
+          "wed",
+          "thu",
+          "fri"
+        ],
+        "end": "18:00",
+        "start": "09:00"
+      },
       "id": "01J0WAT1",
       "last_error": null,
       "last_event_at": "2026-10-09T12:00:00.000Z",
       "name": "Invoices folder",
+      "next_opening": "2026-10-26T09:00:00+01:00",
       "paused_reason": null,
       "updated_at": "2026-10-09T12:00:00.000Z"
     },
@@ -4500,10 +4650,13 @@
       "created_at": "2026-10-09T12:00:00.000Z",
       "dot_id": "01J0DOT",
       "enabled": true,
+      "held_count": 0,
+      "hours": null,
       "id": "01J0WAT2",
       "last_error": "Gmail refused the app password for me@gmail.com, or IMAP is off for it.",
       "last_event_at": null,
       "name": "Billing mail",
+      "next_opening": null,
       "paused_reason": "error",
       "updated_at": "2026-10-09T12:00:00.000Z"
     },
@@ -4526,10 +4679,13 @@
       "created_at": "2026-10-09T12:00:00.000Z",
       "dot_id": "01J0DOT",
       "enabled": true,
+      "held_count": 0,
+      "hours": null,
       "id": "01J0WAT3",
       "last_error": null,
       "last_event_at": "2026-10-09T12:00:00.000Z",
       "name": "Repo events",
+      "next_opening": null,
       "paused_reason": "flood",
       "updated_at": "2026-10-09T12:00:00.000Z"
     }

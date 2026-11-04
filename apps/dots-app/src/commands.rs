@@ -28,8 +28,9 @@ use dots_core::library_service::{
     ContextDocuments, EnvVariable, LibraryEntry, McpProbe, ScannedSkill,
 };
 use dots_core::model::{
-    Approval, Dot, DotOverview, DotSpec, FollowUp, Inbox, Memory, Message, Run, RunEventRecord,
-    ScheduleSkip, SettingsSaved, Status, Watcher, WatcherConfig, WorktreeDiff,
+    Approval, DeliveryCounts, Dot, DotOverview, DotSpec, FollowUp, Inbox, Memory, Message, Run,
+    RunEventRecord, ScheduleSkip, SettingsSaved, Status, WatchHours, Watcher, WatcherConfig,
+    WorktreeDiff,
 };
 use dots_core::policy::{Policy, Preset, RuleCandidate};
 use dots_core::schedule::Schedule;
@@ -615,6 +616,25 @@ pub async fn cancel_run(state: State<'_, AppState>, run_id: String) -> Res<Run> 
 #[tauri::command]
 pub async fn keep_waiting(state: State<'_, AppState>, run_id: String) -> Res<()> {
     Ok(state.rt()?.keep_waiting(&run_id).await?)
+}
+
+/// Send again a chat message that did not get there.
+#[tauri::command]
+pub async fn retry_delivery(state: State<'_, AppState>, run_id: String) -> Res<Run> {
+    Ok(state.rt()?.retry_delivery(&run_id).await?)
+}
+
+/// Give up on a chat message that did not get there.
+#[tauri::command]
+pub async fn discard_delivery(state: State<'_, AppState>, run_id: String) -> Res<Run> {
+    Ok(state.rt()?.discard_delivery(&run_id).await?)
+}
+
+/// Today's sends to `dot_id`, whatever started them (a resume continues a send and is left
+/// out): sent, delivered and not delivered.
+#[tauri::command]
+pub async fn delivery_today(state: State<'_, AppState>, dot_id: String) -> Res<DeliveryCounts> {
+    Ok(state.rt()?.delivery_today(&dot_id).await?)
 }
 
 #[tauri::command]
@@ -1498,10 +1518,11 @@ pub async fn watcher_add(
     dot_id: String,
     name: String,
     config: WatcherConfig,
+    hours: Option<WatchHours>,
 ) -> Res<Watcher> {
     Ok(state
         .rt()?
-        .watcher_add(&dot_id, &name, config, None)
+        .watcher_add(&dot_id, &name, config, hours)
         .await?)
 }
 
@@ -1512,8 +1533,12 @@ pub async fn watcher_update(
     id: String,
     name: String,
     config: WatcherConfig,
+    hours: Option<WatchHours>,
 ) -> Res<Watcher> {
-    Ok(state.rt()?.watcher_update(&id, &name, config, None).await?)
+    Ok(state
+        .rt()?
+        .watcher_update(&id, &name, config, hours)
+        .await?)
 }
 
 #[tauri::command]

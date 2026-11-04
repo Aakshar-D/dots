@@ -9,6 +9,7 @@ mod common;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use chrono::TimeDelta;
 use common::apps::write_app;
 use common::clock::FakeClock;
 use common::fake_openbao::FakeOpenBao;
@@ -26,6 +27,8 @@ use dots_core::model::{
     DotSpec, FolderConfig, HoldReason, MemberSpec, NewRun, NewWorkflowRun, ProjectSpec, RunStatus,
     TeamSpec, TriggerKind, WatcherConfig, WorkflowSpec, WorkflowTrigger, WorkspaceMode,
 };
+use dots_core::scheduler::Clock;
+use dots_core::util::timestamp;
 use dots_core::vault::org::{OrgStatus, Orgs};
 use dots_core::vault::{DotScope, Grants, MemorySecrets};
 use dots_core::workflow::{Budget, Definition, Step, StepKind, Trigger};
@@ -51,6 +54,7 @@ struct Rt {
     bao: FakeOpenBao,
     keys: KeyPair,
     secrets: Arc<MemorySecrets>,
+    clock: Arc<FakeClock>,
 }
 
 impl Rt {
@@ -66,7 +70,8 @@ impl Rt {
         let args_out = dir.path().join("args.json");
         let mut cfg = Config::new(dir.path().join("data"));
         cfg.port = 0;
-        cfg.clock = FakeClock::new(at(START));
+        let clock = FakeClock::new(at(START));
+        cfg.clock = clock.clone();
         cfg.secrets = Some(secrets.clone());
         cfg.claude_path = Some(PathBuf::from(env!("CARGO_BIN_EXE_fake-claude")));
         cfg.claude_env.push((
@@ -81,6 +86,7 @@ impl Rt {
             bao,
             keys,
             secrets,
+            clock,
         }
     }
 
@@ -408,6 +414,9 @@ fn flow(member: &str) -> WorkflowSpec {
                 kind: StepKind::Agent {
                     member: member.into(),
                     job: "Fix it.".into(),
+                    can_send_back_to: vec![],
+                    outcomes: vec![],
+                    delegate: None,
                 },
             }],
             budget: Budget::default(),
@@ -730,6 +739,65 @@ async fn release_refused_for_role_hold() {
     t.rt.shutdown();
 }
 
+/// The delivery sweeper leaves a run held for a role alone, as it does one held for the usage
+/// limit: both holds are deliberate (delivery tracking spec section 3). A personal dot's
+/// message, queued later, shows the sweep ran past it.
+#[tokio::test]
+async fn the_delivery_sweeper_never_marks_a_role_hold() {
+    let t = Rt::start().await;
+    t.join_as("member").await;
+    let dot =
+        t.rt.create_dot(t.triage(), Some(ACME.into()), None)
+            .await
+            .unwrap();
+    let mut solo = spec("solo");
+    solo.workdir = t.dir.path().to_string_lossy().to_string();
+    solo.workspace_mode = WorkspaceMode::Folder;
+    let personal = t.rt.create_dot(solo, None, None).await.unwrap();
+    t.become_(2, Some("viewer")).await;
+    t.rt.hold_runs(true).await;
+    let store = t.rt.store();
+    let held = store
+        .create_run(&NewRun::new(&dot.id, TriggerKind::Schedule))
+        .await
+        .unwrap();
+    let control = store
+        .create_run(&NewRun::new(&personal.id, TriggerKind::Chat))
+        .await
+        .unwrap();
+    let start = t.clock.now();
+    for (id, ago) in [(&held.id, 2), (&control.id, 1)] {
+        store
+            .set_run_queued_at(id, &timestamp(start - TimeDelta::hours(ago)))
+            .await
+            .unwrap();
+    }
+
+    // The sweeper sleeps 30 s of the clock between sweeps: step it until the message is marked.
+    let mut step = 0;
+    let control = loop {
+        let run = store.get_run(&control.id).await.unwrap();
+        if run.undelivered_at.is_some() {
+            break run;
+        }
+        step += 1;
+        assert!(
+            step <= 100,
+            "the sweeper never marked the personal dot's message"
+        );
+        t.clock.set(start + TimeDelta::seconds(30 * step));
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    };
+    assert_eq!(
+        control.undelivered_reason.as_deref(),
+        Some("Dots is updating")
+    );
+    let held = store.get_run(&held.id).await.unwrap();
+    assert_eq!(held.status, RunStatus::Queued);
+    assert_eq!(held.undelivered_at, None);
+    t.rt.shutdown();
+}
+
 /// A phase 1 org whose token's ACL grants only `env` and `policy`: OpenBao refuses the roster
 /// with a 403. That is no roster, not a revoked token: the legacy account joins, stays
 /// connected on refresh, and keeps its values and its offline copy.
@@ -825,6 +893,87 @@ async fn a_webhook_is_refused_when_the_role_cannot_run_dots() {
     let body: Value = resp.json().await.unwrap();
     assert_eq!(body["error"], "Acme Engineering: you were removed from it.");
     assert_eq!(t.runs(&dot.id).await, 0);
+    t.rt.shutdown();
+}
+
+/// A workflow's webhook (teams spec section 5.1) in an account that does not let this PC run
+/// dots is refused with 403 and the refusal's words, and starts nothing; a Viewer may not make
+/// it a new token either.
+#[tokio::test]
+async fn a_workflow_webhook_is_refused_when_the_role_cannot_run_dots() {
+    let t = Rt::start().await;
+    t.join_as("member").await;
+    let dot =
+        t.rt.create_dot(t.triage(), Some(ACME.into()), None)
+            .await
+            .unwrap();
+    let store = t.rt.store();
+    let team =
+        t.rt.teams()
+            .create(&TeamSpec {
+                name: "crew".into(),
+                description: String::new(),
+                members: vec![MemberSpec {
+                    dot_id: dot.id.clone(),
+                    role: String::new(),
+                }],
+                org_id: Some(ACME.into()),
+                workspace_id: "default".into(),
+            })
+            .await
+            .unwrap();
+    // Added in the store: the folder is not a git repo, which the store does not check, and
+    // the role is refused before the repo is looked at.
+    store
+        .add_project(
+            &team.id,
+            &ProjectSpec {
+                name: "repo".into(),
+                repo_path: t.dir.path().to_string_lossy().to_string(),
+                default_branch: None,
+                remote: "origin".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let mut spec = flow(&dot.id);
+    spec.definition.trigger = Trigger::Webhook {
+        task: Some("Fix it.".into()),
+        project: Some("repo".into()),
+    };
+    let workflow = t.rt.teams().create_workflow(&team.id, &spec).await.unwrap();
+    let token =
+        t.rt.teams()
+            .regenerate_workflow_token(&workflow.id)
+            .await
+            .unwrap();
+    let url = format!(
+        "http://127.0.0.1:{}/workflows/{}/trigger",
+        t.rt.port(),
+        workflow.id
+    );
+    let call = || reqwest::Client::new().post(&url).bearer_auth(&token).send();
+
+    t.become_(2, Some("viewer")).await;
+    let resp = call().await.unwrap();
+    assert_eq!(resp.status(), 403);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"], viewer_cant("run dots"));
+    assert_eq!(
+        refused(t.rt.teams().regenerate_workflow_token(&workflow.id).await),
+        viewer_cant("create or change dots")
+    );
+
+    t.become_(3, None).await;
+    let resp = call().await.unwrap();
+    assert_eq!(resp.status(), 403);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"], "Acme Engineering: you were removed from it.");
+    assert!(store
+        .list_workflow_runs(Some(&team.id), 100)
+        .await
+        .unwrap()
+        .is_empty());
     t.rt.shutdown();
 }
 

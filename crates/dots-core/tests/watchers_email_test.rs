@@ -7,10 +7,10 @@ mod common;
 
 use chrono::TimeDelta;
 use common::fake_mail::{mail, FakeMail, MailSpec};
-use common::watchers::{saturday_10, t0, weekdays_9_to_18, Harness};
+use common::watchers::{monday_9, saturday_10, t0, weekdays_9_to_18, Harness};
 use dots_core::model::{Dot, EmailConfig, PausedReason, Watcher, WatcherConfig};
 use dots_core::watchers::email::{imap_folder_name, login_refused, no_label};
-use dots_core::watchers::{entry_gone, Failure, Poll, Sources};
+use dots_core::watchers::{entry_gone, Failure, Fired, Poll, Sources};
 use serde_json::json;
 
 const PASS: &str = "app-pass-1234567890";
@@ -425,4 +425,131 @@ async fn an_email_outside_hours_is_held_and_the_cursor_moves_past_it() {
     h.watchers.poll_now(&w.id).await.unwrap();
     assert_eq!(h.store.held_count(&w.id).await.unwrap(), 1);
     assert!(h.runs(&dot.id).await.is_empty());
+}
+
+/// An email watcher with Monday-to-Friday hours, its cursor set on Friday, with `invoice(1)`
+/// held on Saturday by a check made then.
+async fn held_overnight(f: impl FnOnce(&mut MailSpec)) -> (Harness, FakeMail, Dot, Watcher) {
+    let (h, fake, dot, w) = setup(|_| {}).await;
+    h.watchers.poll_now(&w.id).await.unwrap();
+    h.watchers
+        .update(
+            &w.id,
+            "Billing mail",
+            w.config.clone(),
+            Some(weekdays_9_to_18()),
+        )
+        .await
+        .unwrap();
+    h.clock.set(saturday_10());
+    let mut spec = MailSpec::new("1@acme.com", "Billing <billing@acme.com>", "Invoice 1");
+    f(&mut spec);
+    fake.deliver("INBOX", mail(spec));
+    h.watchers.poll_now(&w.id).await.unwrap();
+    assert_eq!(h.store.held_count(&w.id).await.unwrap(), 1);
+    (h, fake, dot, w)
+}
+
+/// Outside its hours the watcher does not check; at the opening its check holds what it finds,
+/// which joins the events held before in one run.
+#[tokio::test]
+async fn no_check_outside_hours_and_the_opening_check_joins_the_held_mail_in_one_run() {
+    let (h, fake, dot, w) = held_overnight(|_| {}).await;
+    fake.clear_commands();
+    h.start();
+    assert_eq!(h.clock.nth_sleep(1).await, monday_9());
+    fake.deliver("INBOX", invoice(2));
+    assert!(fake.commands().is_empty(), "{:?}", fake.commands());
+    h.clock.set(monday_9());
+    let runs = h.wait_runs(&dot.id, 1, 10).await;
+    let p = runs[0].payload.as_ref().unwrap();
+    let subjects: Vec<&str> = p["held"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["subject"].as_str().unwrap())
+        .collect();
+    assert_eq!(subjects, ["Invoice 1", "Invoice 2"]);
+    assert_eq!(p["watcher_id"], json!(w.id));
+    // The next sleep begins once the opening is done (the run is made before the held events
+    // are taken); then it checks every minute again, and new mail runs one by one.
+    assert_eq!(
+        h.clock.nth_sleep(2).await,
+        monday_9() + TimeDelta::minutes(1)
+    );
+    assert_eq!(h.store.held_count(&w.id).await.unwrap(), 0);
+    assert_eq!(
+        h.store.get_watcher_cursor(&w.id).await.unwrap(),
+        Some(json!({"uid_validity": 1, "last_uid": 2}))
+    );
+    fake.deliver("INBOX", invoice(3));
+    h.clock.set(monday_9() + TimeDelta::minutes(1));
+    let runs = h.wait_runs(&dot.id, 2, 10).await;
+    assert_eq!(runs[1].payload.as_ref().unwrap()["subject"], "Invoice 3");
+}
+
+/// A check that fails at 17:59 backs off a minute, to 18:00, outside the hours: there it waits
+/// for the opening instead of checking.
+#[tokio::test]
+async fn a_backoff_that_ends_outside_hours_waits_for_the_opening() {
+    let (h, fake, _dot, w) = setup(|_| {}).await;
+    h.watchers.poll_now(&w.id).await.unwrap();
+    h.watchers
+        .update(
+            &w.id,
+            "Billing mail",
+            w.config.clone(),
+            Some(weekdays_9_to_18()),
+        )
+        .await
+        .unwrap();
+    // Friday 17:59 in TestTz (UTC+2 that day).
+    let friday_1759 = t0() + TimeDelta::hours(6) + TimeDelta::minutes(59);
+    h.clock.set(friday_1759);
+    fake.fail_next(Failure::Transient("down".into()));
+    h.start();
+    // The failed check backs off to 18:00; there it sleeps until Monday, without a check.
+    assert_eq!(
+        h.clock.nth_sleep(1).await,
+        friday_1759 + TimeDelta::minutes(1)
+    );
+    fake.clear_commands();
+    h.clock.set(friday_1759 + TimeDelta::minutes(2));
+    assert_eq!(h.clock.nth_sleep(2).await, monday_9());
+    assert!(fake.commands().is_empty(), "{:?}", fake.commands());
+}
+
+/// Review Focus 3: an attachment held overnight reaches the opening run's staging and, from
+/// there, its workspace.
+#[tokio::test]
+async fn an_email_attachment_held_overnight_reaches_the_run() {
+    let (h, _fake, dot, w) = held_overnight(|m| {
+        m.attachments = vec![("a.pdf", b"%PDF".to_vec())];
+    })
+    .await;
+    let held = h.store.held_events(&w.id).await.unwrap();
+    h.clock.set(monday_9());
+    let Fired::Run(run) = h.watchers.open(&w.id).await.unwrap() else {
+        panic!("a run")
+    };
+    let p = run.payload.as_ref().unwrap();
+    assert_eq!(
+        p["attachments"],
+        json!([{"name": "1-a.pdf", "size": 4, "path": null, "event": 1}])
+    );
+    assert_eq!(
+        p["held"][0]["attachments"],
+        json!([{"name": "a.pdf", "size": 4, "path": null}])
+    );
+    let files = h.watchers.files();
+    assert!(!files.held_dir(&w.id, &held[0].id).exists());
+    let workspace = h.folder("workspace");
+    let copied = files.copy_into(&run, &workspace).unwrap().unwrap();
+    let to = workspace.join("attachments").join(&run.id).join("1-a.pdf");
+    assert_eq!(std::fs::read(&to).unwrap(), b"%PDF");
+    assert_eq!(
+        copied["attachments"][0]["path"],
+        json!(to.to_string_lossy())
+    );
+    assert_eq!(h.runs(&dot.id).await.len(), 1);
 }

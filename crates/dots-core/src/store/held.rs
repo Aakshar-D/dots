@@ -6,9 +6,11 @@ use serde_json::Value;
 use sqlx::sqlite::SqliteRow;
 use sqlx::Row;
 
+use super::runs::insert_run;
 use super::Store;
+use crate::model::{NewRun, Run};
 use crate::util::{new_id, timestamp};
-use crate::Result;
+use crate::{Error, Result};
 
 /// An event held for a watcher: its payload as `fire` would have used it, and the files staged
 /// for it, if any.
@@ -98,6 +100,51 @@ impl Store {
             .collect::<Result<Vec<_>>>()?;
         held.sort_by(|(a_no, a), (b_no, b)| (&a.held_at, a_no).cmp(&(&b.held_at, b_no)));
         Ok(held.into_iter().map(|(_, h)| h).collect())
+    }
+
+    /// When the oldest held event was held (`held_at`), if the watcher holds any.
+    pub async fn oldest_held_at(&self, watcher_id: &str) -> Result<Option<String>> {
+        let at = sqlx::query_scalar("SELECT MIN(held_at) FROM watcher_held WHERE watcher_id = ?")
+            .bind(watcher_id)
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(at)
+    }
+
+    /// The opening's one step (watch hours spec section 4.4): queues `new` and takes the
+    /// watcher's held events, in one transaction, so they are never both carried by a run and
+    /// still held, nor gone without one. `ids` are the events the run carries or counts; when
+    /// the events taken are not exactly those, nothing is written (`Conflict`). The caller
+    /// announces the run (`Runner::enqueued`).
+    pub async fn open_held(
+        &self,
+        watcher_id: &str,
+        ids: &[String],
+        new: &NewRun,
+    ) -> Result<(Run, Vec<HeldEvent>)> {
+        let mut tx = self.pool.begin().await?;
+        let run_id = insert_run(&mut tx, new).await?;
+        let rows = sqlx::query(
+            "DELETE FROM watcher_held WHERE watcher_id = ? \
+             RETURNING id, watcher_id, payload, files, held_at",
+        )
+        .bind(watcher_id)
+        .fetch_all(&mut *tx)
+        .await?;
+        let taken = rows.iter().map(held_from_row).collect::<Result<Vec<_>>>()?;
+        let mut taken_ids: Vec<&str> = taken.iter().map(|e| e.id.as_str()).collect();
+        let mut read_ids: Vec<&str> = ids.iter().map(String::as_str).collect();
+        taken_ids.sort_unstable();
+        read_ids.sort_unstable();
+        if taken_ids != read_ids {
+            tx.rollback().await?;
+            return Err(Error::Conflict(format!(
+                "the held events of watcher {watcher_id} changed while it opened"
+            )));
+        }
+        tx.commit().await?;
+        let run = self.get_run(&run_id).await?;
+        Ok((run, taken))
     }
 
     /// Drops every held event; they are returned so their staged files can be removed.

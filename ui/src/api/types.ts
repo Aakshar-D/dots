@@ -60,6 +60,11 @@ export const LibraryKind = z.enum(["mcp_server", "skill", "plugin", "context", "
 // accepted.
 export const CatalogStatus = z.enum(["accepted", "changed", "unreachable", "unchecked"]);
 
+// Whether a chat message reached its dot (delivery tracking spec section 3).
+export const Delivery = z.enum(["delivered", "waiting", "not_delivered"]);
+// Why a message is still waiting.
+export const WaitReason = z.enum(["busy", "usage_hold", "updating", "dot_busy", "queued"]);
+
 export const Rule = z.strictObject({ tool: z.string(), action: Action });
 export const Policy = z.strictObject({
   preset: Preset,
@@ -179,8 +184,26 @@ const runShape = {
   quiet_limit_secs: nullable(z.number().int()),
   // The watchdog stopped the run for being quiet.
   quiet_stopped: z.boolean(),
+  // When the message reached its dot's engine; null until then.
+  delivered_at: nullable(z.string()),
+  // When the core marked it as not delivered, and why.
+  undelivered_at: nullable(z.string()),
+  undelivered_reason: nullable(z.string()),
+  // The person chose Retry or Discard for a message that did not get there.
+  dismissed_at: nullable(z.string()),
+  delivery: nullable(Delivery),
+  wait_reason: nullable(WaitReason),
 };
 export const Run = z.strictObject(runShape);
+
+/// Today's sends to a dot, whatever started them (resumes left out): sent, delivered and not
+/// delivered.
+export const DeliveryCounts = z.strictObject({
+  sent: z.number().int(),
+  delivered: z.number().int(),
+  not_delivered: z.number().int(),
+});
+export type DeliveryCounts = z.infer<typeof DeliveryCounts>;
 
 export const RunEventRecord = z.strictObject({
   run_id: z.string(),
@@ -414,6 +437,14 @@ export const GithubConfig = z.strictObject({
   branches: z.array(z.string()),
 });
 export const WatcherConfig = z.discriminatedUnion("kind", [FolderConfig, EmailConfig, GithubConfig]);
+export const WatchDay = z.enum(["mon", "tue", "wed", "thu", "fri", "sat", "sun"]);
+// The days and the times of day a watcher starts its dot; "HH:MM" local time, an end before the
+// start runs past midnight.
+export const WatchHours = z.strictObject({
+  days: z.array(WatchDay),
+  start: z.string(),
+  end: z.string(),
+});
 export const Watcher = z.strictObject({
   id: z.string(),
   dot_id: z.string(),
@@ -425,6 +456,11 @@ export const Watcher = z.strictObject({
   last_event_at: nullable(z.string()),
   created_at: z.string(),
   updated_at: z.string(),
+  hours: nullable(WatchHours),
+  // Events held outside the hours, waiting for the next opening.
+  held_count: z.number(),
+  // The next opening, RFC 3339 with offset; null when there are no hours or it is open now.
+  next_opening: nullable(z.string()),
 });
 // A watcher Dots paused, as the Inbox lists it.
 export const PausedWatcher = z.strictObject({
@@ -1657,6 +1693,8 @@ export type FolderConfig = z.infer<typeof FolderConfig>;
 export type EmailConfig = z.infer<typeof EmailConfig>;
 export type GithubConfig = z.infer<typeof GithubConfig>;
 export type WatcherConfig = z.infer<typeof WatcherConfig>;
+export type WatchDay = z.infer<typeof WatchDay>;
+export type WatchHours = z.infer<typeof WatchHours>;
 export type Watcher = z.infer<typeof Watcher>;
 export type PausedWatcher = z.infer<typeof PausedWatcher>;
 export type UpdateNote = z.infer<typeof UpdateNote>;

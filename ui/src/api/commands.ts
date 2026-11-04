@@ -176,6 +176,10 @@ export const commands = {
     call(T.Run, "chat", { dotId, message, parentRunId }),
   cancelRun: (runId: string) => call(T.Run, "cancel_run", { runId }),
   keepWaiting: (runId: string) => call(nothing, "keep_waiting", { runId }),
+  /// Send a chat message that did not get there again; rejects with `conflict` when it just did.
+  retryDelivery: (runId: string) => call(T.Run, "retry_delivery", { runId }),
+  discardDelivery: (runId: string) => call(T.Run, "discard_delivery", { runId }),
+  deliveryToday: (dotId: string) => call(T.DeliveryCounts, "delivery_today", { dotId }),
   listRuns: (dotId: string | null, limit: number) =>
     call(T.Run.array(), "list_runs", { dotId, limit }),
   getRun: (id: string) => call(T.Run, "get_run", { id }),
@@ -425,10 +429,10 @@ export const commands = {
     call(T.InstructionProposal, "instruction_proposal_decide", { id, approve }),
 
   watchersList: (dotId: string) => call(T.Watcher.array(), "watchers_list", { dotId }),
-  watcherAdd: (dotId: string, name: string, config: T.WatcherConfig) =>
-    call(T.Watcher, "watcher_add", { dotId, name, config }),
-  watcherUpdate: (id: string, name: string, config: T.WatcherConfig) =>
-    call(T.Watcher, "watcher_update", { id, name, config }),
+  watcherAdd: (dotId: string, name: string, config: T.WatcherConfig, hours: T.WatchHours | null) =>
+    call(T.Watcher, "watcher_add", { dotId, name, config, hours }),
+  watcherUpdate: (id: string, name: string, config: T.WatcherConfig, hours: T.WatchHours | null) =>
+    call(T.Watcher, "watcher_update", { id, name, config, hours }),
   watcherDelete: (id: string) => call(nothing, "watcher_delete", { id }),
   watcherSetEnabled: (id: string, enabled: boolean) =>
     call(T.Watcher, "watcher_set_enabled", { id, enabled }),

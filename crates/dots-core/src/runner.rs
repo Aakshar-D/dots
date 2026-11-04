@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -14,12 +14,13 @@ use serde_json::{json, Value};
 
 use crate::approvals::grant_key;
 use crate::checkins::{CheckIns, Tool as CheckInTool};
+use crate::delivery::{wait_reason, WaitFacts};
 use crate::engine::{Engine, EngineEvent, RunContext};
 use crate::events::{Bus, RuntimeEvent};
 use crate::limits::{is_background, Admit, Limits, QueuedRun, STOPPED_BY_LIMIT};
 use crate::model::{
-    effective_quiet_limit, ApprovalStatus, Dot, EngineKind, NewRun, Run, RunStatus, TriggerKind,
-    WorkspaceMode,
+    effective_quiet_limit, ApprovalStatus, Delivery, Dot, EngineKind, NewRun, Run, RunStatus,
+    TriggerKind, WorkspaceMode,
 };
 use crate::prompt::{build_prompt_full, context_tool_name, PromptParts};
 use crate::run_tools::{CloseOnDrop, OpenRequest, RunTools};
@@ -308,6 +309,56 @@ impl Runner {
             .values()
             .filter(|a| a.background_claude)
             .count()
+    }
+
+    /// The ids of the queued runs the usage limits hold now; none without limits.
+    pub async fn usage_held_ids(&self) -> Result<HashSet<String>> {
+        let Some(limits) = self.limits.get() else {
+            return Ok(HashSet::new());
+        };
+        let state = limits.state(&self.queued_runs().await?, self.running_background_claude());
+        Ok(state.held_run_ids.into_iter().collect())
+    }
+
+    /// Sets why each waiting run waits (delivery tracking spec section 3): each `queued` run
+    /// not yet delivered gets its reason, every other run `None`. The facts are read once.
+    /// The slots in use and the busy dots are the runner's own, exactly what `dispatch_once`
+    /// checks: a run parked or waiting for an approval has left them and keeps no dot busy.
+    pub async fn fill_wait_reasons(&self, runs: &mut [Run]) -> Result<()> {
+        let waiting =
+            |r: &Run| r.status == RunStatus::Queued && r.delivery == Some(Delivery::Waiting);
+        if !runs.iter().any(waiting) {
+            for run in runs.iter_mut() {
+                run.wait_reason = None;
+            }
+            return Ok(());
+        }
+        let usage_held = self.usage_held_ids().await?;
+        let (running, busy_dots) = {
+            let active = self.active.lock().unwrap();
+            let busy: HashSet<String> = active
+                .values()
+                .filter(|a| !a.workflow)
+                .map(|a| a.dot_id.clone())
+                .collect();
+            (active.len(), busy)
+        };
+        let runner_held = self.is_held();
+        for run in runs.iter_mut() {
+            run.wait_reason = waiting(run).then(|| {
+                wait_reason(&WaitFacts {
+                    usage_held: usage_held.contains(&run.id),
+                    runner_held,
+                    // A run of a workflow step neither waits for its dot's other runs nor
+                    // keeps them waiting (teams spec section 8).
+                    dot_has_active_run: run.workflow_step_run_id.is_none()
+                        && busy_dots.contains(&run.dot_id),
+                    running,
+                    max_concurrent: self.cfg.max_concurrent,
+                })
+            });
+        }
+        Ok(())
     }
 
     /// The vault runs resolve their dots' variables from (env vault spec §8). Set once, before
@@ -608,6 +659,16 @@ impl Runner {
         } else {
             self.wake.notify_one();
         }
+    }
+
+    /// Whether the queue is held (`set_held`).
+    pub fn is_held(&self) -> bool {
+        self.held.load(Ordering::SeqCst)
+    }
+
+    /// How many runs the runner runs at once.
+    pub fn max_concurrent(&self) -> usize {
+        self.cfg.max_concurrent
     }
 
     pub async fn dispatch_once(self: &Arc<Self>) -> Result<usize> {
@@ -976,7 +1037,7 @@ impl Runner {
         let step_name = workflow_run
             .definition
             .step(&step.step_id)
-            .map(|(_, s)| s.name.clone())
+            .map(|s| s.name.clone())
             .unwrap_or(step.step_id);
         Ok(Some(StepContext {
             repo: workflow_run.project.repo_path,
@@ -1133,6 +1194,18 @@ impl Runner {
         // continues the thread of a step that has ended works there no more, nor for the
         // workflow: it fails before its workspace is touched.
         if self.store.in_ended_step_thread(run).await? {
+            // A Stop closed the run's own step after the run turned `Running`, before its
+            // cancel reached the run: it ends cancelled, as the Stop meant, not failed.
+            let stopped = match &run.workflow_step_run_id {
+                Some(id) => {
+                    self.store.get_step_run(id).await?.status
+                        == crate::model::StepRunStatus::Cancelled
+                }
+                None => false,
+            };
+            if stopped {
+                return self.finish_cancelled_before_start(&run.id).await;
+            }
             return Err(Error::Other(
                 crate::workflows::ENDED_STEP_THREAD.to_string(),
             ));
@@ -1262,6 +1335,19 @@ impl Runner {
         } else {
             tools
         };
+        // A run of an open agent step has the step's workflow tools, under the same rule. A step
+        // that cannot be read is logged; the run goes on without them.
+        let tools = if workflow_off {
+            tools
+        } else {
+            match crate::team_tools::for_run(&self.store, run).await {
+                Ok(step) => tools.with_step(step),
+                Err(e) => {
+                    tracing::warn!(run = %run.id, "reading the step's workflow tools failed: {e}");
+                    tools
+                }
+            }
+        };
         // A run of a chat the person started may propose new instructions for its dot
         // (conversational chat spec section 4), unless its policy denies `Instructions`
         // outright: the tool is then neither offered nor named.
@@ -1354,6 +1440,20 @@ impl Runner {
         };
         self.store.set_run_quiet_limit(&run.id, quiet_secs).await?;
         let mut rx = engine.start(ctx).await?;
+        // The engine has the message: the run reached its dot (delivery tracking spec
+        // section 2). Recorded once; a requeued run keeps its first delivery. A failed write
+        // fails the run; a failed read for the announcement only is logged, as for the
+        // workspace above.
+        if self
+            .store
+            .set_delivered(&run.id, chrono::Utc::now())
+            .await?
+        {
+            match self.store.get_run(&run.id).await {
+                Ok(row) => self.emit_run(&row),
+                Err(e) => tracing::warn!(run = %run.id, "announcing the delivery failed: {e}"),
+            }
+        }
 
         let deadline = Instant::now() + Duration::from_secs(dot.spec.timeout_secs);
         let mut grace: Option<Instant> = None;
@@ -1604,6 +1704,17 @@ impl Runner {
         Err(already(&self.store.get_run(run_id).await?))
     }
 
+    /// Cancels the run only if it is still `queued` and the runner does not hold it, as
+    /// `cancel` does for such a run: its approvals expire, its attachments go, and the change
+    /// is announced. `None` when it was not (for example, the dispatcher claimed it a moment
+    /// earlier); a run awaiting an approval reached its dot and is left alone.
+    pub async fn cancel_if_queued(&self, run_id: &str) -> Result<Option<Run>> {
+        if self.active.lock().unwrap().contains_key(run_id) {
+            return Ok(None);
+        }
+        self.cancel_inactive_with(run_id, true).await
+    }
+
     /// Flags a held run as cancelled by the user. `None` if the runner does not hold it,
     /// otherwise whether this was the first cancel request for the run.
     fn signal_cancel(&self, run_id: &str) -> Option<bool> {
@@ -1621,11 +1732,20 @@ impl Runner {
     /// Cancels a `queued` or `awaiting_approval` run that the runner does not hold, expiring
     /// its pending approvals and removing an unchanged worktree of a parked run.
     async fn cancel_inactive(&self, run_id: &str) -> Result<Option<Run>> {
+        self.cancel_inactive_with(run_id, false).await
+    }
+
+    /// `cancel_inactive`, for a `queued` run only when `queued_only`.
+    async fn cancel_inactive_with(&self, run_id: &str, queued_only: bool) -> Result<Option<Run>> {
         // Serialised with `maybe_resume` so a cancel never interleaves with a resume.
         let (prior, cancelled) = {
             let _guard = self.resume_lock.lock().await;
             let prior = self.store.get_run(run_id).await?;
-            let cancelled = self.store.cancel_if_inactive(run_id).await?;
+            let cancelled = if queued_only {
+                self.store.cancel_if_queued(run_id).await?
+            } else {
+                self.store.cancel_if_inactive(run_id).await?
+            };
             if cancelled.is_some() {
                 if let Err(e) = self.store.expire_pending_for_run(run_id).await {
                     tracing::warn!(run = %run_id, "expiring approvals failed: {e}");
