@@ -375,6 +375,77 @@ describe("a dot's conversation", () => {
     expect(view.getByRole("alert")).toHaveTextContent("engine: boom");
   });
 
+  it("says a message was resent after Dots restarted, and not for one sent once", async () => {
+    home([
+      chat("a", "10:00", { status: "failed", error: "interrupted" }),
+      chat("b", "10:01", {
+        root_run_id: "a",
+        retry_of: "a",
+        payload: { message: "question a", resent: "restart" },
+      }),
+    ]);
+    renderApp(`/home/${dot.id}`);
+    const view = within(await screen.findByRole("region", { name: "Conversation" }));
+    expect(await view.findAllByText("question a")).toHaveLength(2);
+    expect(view.getAllByText("Resent after Dots restarted")).toHaveLength(1);
+    // Only the topic's last run is failed-and-last; the resend succeeded, so no Send again.
+    expect(view.queryByRole("button", { name: "Send again" })).toBeNull();
+  });
+
+  it("offers one way to send a message that never got there again: its Retry", async () => {
+    home([
+      chat("a", "10:00", {
+        status: "failed",
+        error: "interrupted",
+        delivered_at: null,
+        undelivered_at: "2026-10-09T10:00:30.000Z",
+        undelivered_reason: "interrupted",
+        dismissed_at: null,
+        delivery: "not_delivered",
+      }),
+    ]);
+    renderApp(`/home/${dot.id}`);
+    const view = within(await screen.findByRole("region", { name: "Conversation" }));
+    expect(await view.findByRole("button", { name: "Retry" })).toBeVisible();
+    expect(view.queryByRole("button", { name: "Send again" })).toBeNull();
+  });
+
+  it("offers to send a failed message again", async () => {
+    home([
+      chat("a", "10:00", {
+        status: "failed",
+        error: "interrupted",
+        delivered_at: "2026-10-09T10:00:05.000Z",
+        delivery: "delivered",
+      }),
+    ]);
+    backend.on("resend_run", () =>
+      chat("b", "10:05", { status: "queued", root_run_id: "a", retry_of: "a" }),
+    );
+    renderApp(`/home/${dot.id}`);
+    const view = within(await screen.findByRole("region", { name: "Conversation" }));
+    fireEvent.click(await view.findByRole("button", { name: "Send again" }));
+    await waitFor(() => expect(backend.callsTo("resend_run")).toEqual([{ runId: "a" }]));
+  });
+
+  it("does not offer to send again a failed message of a workflow step", async () => {
+    home([
+      chat("a", "10:00", { status: "failed", error: "interrupted", workflow_step_run_id: "step-1" }),
+    ]);
+    renderApp(`/home/${dot.id}`);
+    const view = within(await screen.findByRole("region", { name: "Conversation" }));
+    expect(await view.findByText("interrupted")).toBeVisible();
+    expect(view.queryByRole("button", { name: "Send again" })).toBeNull();
+  });
+
+  it("does not offer to send again a failed run that was not a message", async () => {
+    const run = scheduled("a", "10:00", { status: "failed", summary: null, error: "interrupted" });
+    home([run]);
+    renderApp(`/home/${dot.id}`);
+    expect(within(await card(run)).getByText("interrupted")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Send again" })).toBeNull();
+  });
+
   it("shows a failed load of a topic's events and keeps what did load", async () => {
     home([chat("a", "10:00")]);
     backend.on("list_run_events", () => {

@@ -5,6 +5,7 @@ use sqlx::Row;
 use super::{opt_json, Store};
 use crate::model::{
     Delivery, DeliveryCounts, EngineKind, NewRun, Run, RunEventRecord, RunStatus, TriggerKind,
+    MAX_RESENDS, RESENT, RESENT_AFTER_RESTART,
 };
 use crate::util::{new_id, now, timestamp};
 use crate::vault::redact::global;
@@ -123,6 +124,96 @@ pub(super) async fn insert_run(conn: &mut SqliteConnection, new: &NewRun) -> Res
     .execute(conn)
     .await?;
     Ok(id)
+}
+
+/// The run `id` read in `conn`.
+async fn run_in(conn: &mut SqliteConnection, id: &str) -> Result<Run> {
+    let row = sqlx::query(&format!("SELECT {RUN_COLUMNS} FROM runs WHERE id = ?"))
+        .bind(id)
+        .fetch_optional(conn)
+        .await?
+        .ok_or_else(|| Error::NotFound(format!("run {id}")))?;
+    run_from_row(&row)
+}
+
+/// How many times the message of `id` was sent before it: the `retry_of` links from `id` back
+/// to its first run (crash resend spec section 2).
+async fn tries_before(conn: &mut SqliteConnection, id: &str) -> Result<i64> {
+    let n = sqlx::query_scalar(
+        "WITH RECURSIVE chain(id, n) AS ( \
+           SELECT retry_of, 1 FROM runs WHERE id = ? AND retry_of IS NOT NULL \
+           UNION ALL SELECT r.retry_of, c.n + 1 FROM runs r JOIN chain c ON r.id = c.id \
+           WHERE r.retry_of IS NOT NULL AND c.n < 100) \
+         SELECT COALESCE(MAX(n), 0) FROM chain",
+    )
+    .bind(id)
+    .fetch_one(conn)
+    .await?;
+    Ok(n)
+}
+
+/// Sends again the interrupted run `id` when it carried a person's message (crash resend spec
+/// section 3): a chat run of no workflow step that made no tool call and has no approved call, sent
+/// fewer than `MAX_RESENDS` times before. One sent that often fails with the reason.
+async fn resend_interrupted(conn: &mut SqliteConnection, id: &str) -> Result<()> {
+    let run = run_in(conn, id).await?;
+    if run.trigger != TriggerKind::Chat || run.workflow_step_run_id.is_some() {
+        return Ok(());
+    }
+    // An approved call may have run: sending the message again could do it twice.
+    let approved: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM approvals WHERE run_id = ? \
+         AND (status = 'approved' OR apply_state = 'unknown'))",
+    )
+    .bind(id)
+    .fetch_one(&mut *conn)
+    .await?;
+    // So could any call it made, asked about or not: the scheduler's rule for a retry
+    // (Scheduler v2 spec §6). No run event says whether a call was read-only.
+    if approved || super::schedules::called_a_tool(conn, id).await? {
+        return Ok(());
+    }
+    if tries_before(conn, id).await? >= MAX_RESENDS {
+        // Left for the person: not delivered, it shows in Needs you with Retry and Discard.
+        sqlx::query(
+            "UPDATE runs SET error = ?1, undelivered_reason = CASE WHEN delivered_at IS NULL \
+             THEN ?1 ELSE undelivered_reason END WHERE id = ?2",
+        )
+        .bind(format!(
+            "interrupted; stopped resending after {MAX_RESENDS} tries"
+        ))
+        .bind(id)
+        .execute(&mut *conn)
+        .await?;
+        return Ok(());
+    }
+    let parent = match &run.parent_run_id {
+        Some(pid) => Some(run_in(conn, pid).await?),
+        None => None,
+    };
+    let mut new = NewRun::resend_of(&run, parent.as_ref());
+    if let Some(Value::Object(payload)) = &mut new.payload {
+        payload.insert(RESENT.into(), Value::from(RESENT_AFTER_RESTART));
+    }
+    let resent = insert_run(conn, &new).await?;
+    // The resend is the message's Retry (delivery tracking spec section 3.9): its files go
+    // with it, and a run that never reached the dot is dismissed, so it waits on no one in
+    // Needs you.
+    sqlx::query("UPDATE chat_attachments SET run_id = ? WHERE run_id = ?")
+        .bind(&resent)
+        .bind(id)
+        .execute(&mut *conn)
+        .await?;
+    sqlx::query(
+        "UPDATE runs SET dismissed_at = ? WHERE id = ? AND delivered_at IS NULL \
+         AND undelivered_at IS NOT NULL AND dismissed_at IS NULL",
+    )
+    .bind(now())
+    .bind(id)
+    .execute(&mut *conn)
+    .await?;
+    tracing::info!(run = %id, resent = %resent, "sent an interrupted message again");
+    Ok(())
 }
 
 impl Store {
@@ -893,7 +984,9 @@ impl Store {
     /// same transaction, expires their pending approvals (no engine is left to act on them)
     /// and closes the approved calls they were performing (`applying` becomes `unknown`,
     /// `queued` becomes `skipped`). Also closes every call left `applying`, and every call left
-    /// `queued` whose resume run is neither queued nor running. Returns the interrupted runs.
+    /// `queued` whose resume run is neither queued nor running. A person's message among them
+    /// is queued again (`resend_interrupted`), in the same transaction, so a recovery cut short
+    /// does nothing and the next one does it all. Returns the interrupted runs.
     pub async fn recover_interrupted(&self) -> Result<Vec<String>> {
         let ts = now();
         let mut tx = self.pool.begin().await?;
@@ -944,6 +1037,9 @@ impl Store {
         )
         .execute(&mut *tx)
         .await?;
+        for id in &ids {
+            resend_interrupted(&mut tx, id).await?;
+        }
         tx.commit().await?;
         Ok(ids)
     }

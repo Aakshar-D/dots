@@ -2425,6 +2425,60 @@ impl Runtime {
         Ok(run)
     }
 
+    /// **Send again** (crash resend spec section 3.6): queues the failed chat run `run_id`'s
+    /// message once more, in its topic, with `retry_of` = `run_id`. Checked as a reply is: the
+    /// person may run the dot, the usage limit is not reached, and the run is the last of its
+    /// topic, which has nothing working. Refusals are `Conflict` with text the UI shows.
+    pub async fn resend(&self, run_id: &str) -> Result<Run> {
+        let run = self.store.get_run(run_id).await?;
+        if run.trigger != TriggerKind::Chat || run.status != RunStatus::Failed {
+            return Err(Error::Conflict(
+                "only a message that failed can be sent again".into(),
+            ));
+        }
+        // A message that never reached the dot has its own Retry (delivery tracking spec
+        // section 3.9), which also clears it from Needs you.
+        if run.delivered_at.is_none() && run.undelivered_at.is_some() {
+            return Err(Error::Conflict(
+                "this message did not reach the dot; use Retry on it".into(),
+            ));
+        }
+        let dot = self.store.get_dot(&run.dot_id).await?;
+        self.require_run(&dot).await?;
+        self.refuse_at_the_limit(&dot)?;
+        let _one_at_a_time = self.chat_lock.lock().await;
+        if self.follow_ups.deciding(&run.root_run_id) {
+            return Err(Error::Conflict(crate::checkins::DECIDING.into()));
+        }
+        let thread = self.store.list_thread(&run.root_run_id).await?;
+        if thread.iter().any(|r| !r.status.is_terminal())
+            || thread.last().map(|r| r.id.as_str()) != Some(run_id)
+        {
+            return Err(Error::Conflict(
+                "this chat has moved on since this message; send a new message instead".into(),
+            ));
+        }
+        if self.store.in_ended_step_thread(&run).await? {
+            return Err(Error::Conflict(crate::workflows::ENDED_STEP_THREAD.into()));
+        }
+        let parent = match &run.parent_run_id {
+            Some(pid) => Some(self.store.get_run(pid).await?),
+            None => None,
+        };
+        let mut new = NewRun::resend_of(&run, parent.as_ref());
+        // Sent by the person: no note that Dots resent it.
+        if let Some(serde_json::Value::Object(payload)) = &mut new.payload {
+            payload.remove(crate::model::RESENT);
+        }
+        // Its files go with it, as a Retry's do (attachments spec section 4.3).
+        let run = self
+            .store
+            .create_chat_run(&new, &[], None, Some(run_id))
+            .await?;
+        self.runner.enqueued(&run);
+        Ok(run)
+    }
+
     pub async fn cancel_run(&self, run_id: &str) -> Result<Run> {
         self.runner.cancel(run_id).await
     }

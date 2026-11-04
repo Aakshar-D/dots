@@ -101,6 +101,7 @@ command_list![
     test_endpoint,
     run_now,
     chat,
+    resend_run,
     attachment_add_path,
     attachment_add_bytes,
     attachment_remove,

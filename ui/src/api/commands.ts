@@ -240,6 +240,8 @@ export const commands = {
   /// Shows a listed file in its folder.
   conversationFileReveal: (dotId: string, rootRunIds: string[], path: string) =>
     call(nothing, "conversation_file_reveal", { dotId, rootRunIds, path }),
+  /// Send again: a failed chat message, queued once more in its topic.
+  resendRun: (runId: string) => call(T.Run, "resend_run", { runId }),
   cancelRun: (runId: string) => call(T.Run, "cancel_run", { runId }),
   keepWaiting: (runId: string) => call(nothing, "keep_waiting", { runId }),
   /// Send a chat message that did not get there again; rejects with `conflict` when it just did.

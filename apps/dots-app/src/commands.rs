@@ -649,6 +649,12 @@ pub async fn chat(
         .await?)
 }
 
+/// "Send again": queues a failed chat message once more in its topic.
+#[tauri::command]
+pub async fn resend_run(state: State<'_, AppState>, run_id: String) -> Res<Run> {
+    Ok(state.rt()?.resend(&run_id).await?)
+}
+
 /// Stages a picked or dropped file for a chat message to `dot_id` (attachments spec section
 /// 4.2). The path is what the person picked or dropped.
 #[tauri::command]
