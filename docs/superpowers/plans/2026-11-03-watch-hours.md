@@ -23,7 +23,7 @@
 - Only the first 100 held events of a watcher keep attachments; beyond that, files are not staged.
 - Row copy: `Outside hours · <n> held until <HH:MM>` (weekday before the time when not today, e.g. `until Mon 09:00`); drop `· <n> held` when 0.
 - Editor copy: section `Watch hours`, choices `Any time` / `Only at these times`, hint `Ends the next day` when end < start.
-- Migration `0028_watch_hours.sql` (0027 exists on this branch).
+- Migration `0029_watch_hours.sql` (0027 is master's teams_b, 0028 is skip-when-busy's).
 - Rust builds on this machine need `C:\Program Files\LLVM\bin` on PATH. No AI trailer in commits.
 - Tests must use the fake clock and `TestTz` (no wall-clock waits, no same-millisecond row-order dependence, no dispatcher).
 
@@ -61,7 +61,7 @@
 ### Task 2: Storage — hours column, held table
 
 **Files:**
-- Create: `crates/dots-core/migrations/0028_watch_hours.sql` (spec §4.2 verbatim)
+- Create: `crates/dots-core/migrations/0029_watch_hours.sql` (spec §4.2 verbatim)
 - Create: `crates/dots-core/src/store/held.rs` (register in `store/mod.rs`)
 - Modify: `crates/dots-core/src/store/watchers.rs` (`COLUMNS` :15, `watcher_from_row` :18, `add_watcher` :66, `update_watcher` :93), `crates/dots-core/src/model.rs` (`Watcher` :1326)
 - Modify: every `Watcher { .. }` literal (`apps/dots-app/src/contract.rs` `fn watchers()` :412, tests)
@@ -75,7 +75,7 @@
   - `pub struct HeldEvent { pub id: String, pub watcher_id: String, pub payload: Value, pub files: Option<Value>, pub held_at: String }`
   - `Store::hold_event(watcher_id, payload: &Value, files: Option<&Value>, at: DateTime<Utc>) -> Result<HeldEvent>`; `Store::held_count(watcher_id) -> Result<u32>`; `Store::held_events(watcher_id) -> Result<Vec<HeldEvent>>` (oldest first: `held_at, rowid`); `Store::take_held(watcher_id) -> Result<Vec<HeldEvent>>` (select + delete in one transaction, oldest first); `Store::drop_held(watcher_id) -> Result<Vec<HeldEvent>>` (same, returned so files can be removed).
 
-- [ ] **Step 1: Write the failing tests**: hours round-trip on add and update; a pre-0028 row reads `hours == None` (migrate to 0027 first, pattern `store_browser_test.rs:76`); `held_count` on `get_watcher`/`list_watchers`; hold three events at t, t+1s, t+2s → `held_events` oldest first; `take_held` returns them and leaves 0; `drop_held` likewise; deleting the watcher cascades the held rows.
+- [ ] **Step 1: Write the failing tests**: hours round-trip on add and update; a pre-0029 row reads `hours == None` (migrate to 0028 first, pattern `store_browser_test.rs:76`); `held_count` on `get_watcher`/`list_watchers`; hold three events at t, t+1s, t+2s → `held_events` oldest first; `take_held` returns them and leaves 0; `drop_held` likewise; deleting the watcher cascades the held rows.
 - [ ] **Step 2: Run** `cargo test -p dots-core --test watchers_store_test`. Expected: compile errors.
 - [ ] **Step 3: Implement**; callers of `add_watcher`/`update_watcher` pass `None` for now (Task 3 threads hours through `Watchers::add/update`).
 - [ ] **Step 4: Run** the watcher test files (`watchers_*_test.rs`, `runtime_watchers_test.rs`) and `cargo build -p dots-app --tests`. Expected: PASS / compiles.

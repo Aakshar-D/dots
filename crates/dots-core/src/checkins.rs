@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use crate::events::{Bus, RuntimeEvent};
 use crate::followups::{parse_time, FollowUps};
 use crate::memory::Memories;
-use crate::model::{EngineKind, Message, NewRun, Run, RunStatus, TriggerKind};
+use crate::model::{EngineKind, Message, NewRun, Run, RunStatus, StepRunStatus, TriggerKind};
 use crate::runner::Runner;
 use crate::store::Store;
 use crate::{Error, Result};
@@ -357,6 +357,17 @@ impl CheckIns {
 
     async fn perform(&self, run_id: &str, request: Request) -> Result<String> {
         let run = self.store.get_run(run_id).await?;
+        let workflows = self.workflows();
+        // A run of a workflow step asks and schedules only while its step is open (teams spec
+        // section 8), and holds the workflow loop's lock until it has, so a Stop cannot dismiss
+        // the step's questions and cancel its follow-ups in between. A note is harmless.
+        let _open = match (&request, run.workflow_step_run_id.as_deref()) {
+            (Request::Ask { .. } | Request::FollowUp { .. }, Some(step_run_id)) => {
+                self.hold_open_step(workflows.as_deref(), step_run_id)
+                    .await?
+            }
+            _ => None,
+        };
         match request {
             Request::Notify { text } => {
                 let sent = self
@@ -393,6 +404,27 @@ impl CheckIns {
                     local_label(due)
                 ))
             }
+        }
+    }
+
+    /// The workflow loop's lock while the step run `step_run_id` is open
+    /// (`Workflows::lock_open_step`); without the workflow runs, only the step's status is read.
+    /// `Invalid` with `STEP_CLOSED` once the step has ended.
+    async fn hold_open_step<'a>(
+        &self,
+        workflows: Option<&'a crate::workflows::Workflows>,
+        step_run_id: &str,
+    ) -> Result<Option<tokio::sync::MutexGuard<'a, ()>>> {
+        let closed = || Error::Invalid(crate::workflows::STEP_CLOSED.to_string());
+        match workflows {
+            Some(workflows) => match workflows.lock_open_step(step_run_id).await? {
+                Some(one) => Ok(Some(one)),
+                None => Err(closed()),
+            },
+            None => match self.store.get_step_run(step_run_id).await?.status {
+                StepRunStatus::Running | StepRunStatus::Waiting => Ok(None),
+                _ => Err(closed()),
+            },
         }
     }
 

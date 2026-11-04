@@ -25,6 +25,7 @@ pub mod gateway;
 pub mod mcp;
 pub mod v1;
 pub mod webhook;
+pub mod workflow_webhook;
 
 pub const MAX_WEBHOOK_BODY: usize = 256 * 1024;
 pub const MAX_MCP_BODY: usize = 16 * 1024 * 1024;
@@ -44,6 +45,11 @@ pub fn router(state: ServerState) -> Router {
         .route(
             "/dots/{id}/trigger",
             post(webhook::trigger).layer(DefaultBodyLimit::max(MAX_WEBHOOK_BODY)),
+        )
+        // A workflow's webhook (teams spec section 5.1).
+        .route(
+            "/workflows/{id}/trigger",
+            post(workflow_webhook::trigger).layer(DefaultBodyLimit::max(MAX_WEBHOOK_BODY)),
         )
         // The API of a workspace's keys (accounts spec §10).
         .route("/v1/dots", get(v1::list_dots))

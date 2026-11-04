@@ -524,7 +524,7 @@ async fn a_watchers_hours_are_kept_on_add_and_update_and_none_means_any_time() {
 }
 
 #[tokio::test]
-async fn a_watcher_stored_before_migration_0028_reads_hours_none() {
+async fn a_watcher_stored_before_migration_0029_reads_hours_none() {
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("dots.db");
@@ -536,7 +536,7 @@ async fn a_watcher_stored_before_migration_0028_reads_hours_none() {
     before.migrations = before
         .migrations
         .iter()
-        .filter(|m| m.version <= 27)
+        .filter(|m| m.version <= 28)
         .cloned()
         .collect::<Vec<_>>()
         .into();
