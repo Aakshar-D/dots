@@ -1,12 +1,14 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 
-import { commands } from "@/api/commands";
-import type { Message } from "@/api/types";
+import { commands, toCommandError } from "@/api/commands";
+import type { Message, StagedAttachment } from "@/api/types";
 import { Button } from "@/components/ui/button";
+import { pastedName, room, TOO_MANY } from "@/lib/attachments";
 import { orgRemovedText, useDotOrg } from "@/lib/dot-org";
+import { useFileDrop } from "@/lib/file-drop";
 import {
   defaultTarget,
   isActive,
@@ -18,7 +20,99 @@ import { isOpenQuestion } from "@/lib/messages";
 import { notifyError } from "@/lib/notify";
 import { invalidate, keys } from "@/lib/query";
 import { onSingleClick } from "@/lib/single-click";
-import { Composer } from "@/screens/home/Composer";
+import { Composer, type ComposerFile } from "@/screens/home/Composer";
+
+/// The core's text for a staged file that is gone or was taken by another send.
+const GONE = "An attached file is no longer there. Remove it and attach it again.";
+
+/// A file in the chat box: its chip, and its staged id once the core has it.
+type Staged = ComposerFile & { id: string | null };
+
+/// The files in the chat box (attachments spec sections 3 and 6): each is staged by the core the
+/// moment it is added. Refusals say why a file was not added; they clear on the next add or a
+/// send. Files the box still holds when it goes away are removed from the core.
+function useStagedFiles(dotId: string) {
+  const [files, setFiles] = useState<Staged[]>([]);
+  const [refusals, setRefusals] = useState<string[]>([]);
+  const current = useRef<Staged[]>([]);
+  const next = useRef(0);
+  const mounted = useRef(true);
+  const update = (change: (files: Staged[]) => Staged[]) => {
+    current.current = change(current.current);
+    setFiles(current.current);
+  };
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      for (const f of current.current) {
+        if (f.id !== null) void commands.attachmentRemove(f.id).catch(() => {});
+      }
+      current.current = [];
+    };
+  }, []);
+  function add(items: { name: string; stage: () => Promise<StagedAttachment> }[]) {
+    const { take, refused } = room(current.current.length, items.length);
+    const said: string[] = refused ? [TOO_MANY] : [];
+    setRefusals(said);
+    for (const item of items.slice(0, take)) {
+      const key = `f${next.current++}`;
+      update((fs) => [...fs, { key, name: item.name, size: null, id: null }]);
+      item.stage().then(
+        (staged) => {
+          if (!mounted.current) {
+            void commands.attachmentRemove(staged.id).catch(() => {});
+            return;
+          }
+          update((fs) =>
+            fs.map((f) => (f.key === key ? { key, name: staged.name, size: staged.size, id: staged.id } : f)),
+          );
+        },
+        (error: unknown) => {
+          if (!mounted.current) return;
+          update((fs) => fs.filter((f) => f.key !== key));
+          setRefusals((rs) => [...rs, toCommandError(error).message]);
+        },
+      );
+    }
+  }
+  return {
+    files,
+    refusals,
+    ids: () => current.current.flatMap((f) => (f.id === null ? [] : [f.id])),
+    addPaths: (paths: string[]) =>
+      add(
+        paths.map((path) => ({
+          name: path.split(/[\\/]/).pop() ?? path,
+          stage: () => commands.attachmentAddPath(dotId, path),
+        })),
+      ),
+    addFiles: (pasted: File[]) =>
+      add(
+        pasted.map((file) => {
+          const name = pastedName(file);
+          return {
+            name,
+            stage: async () =>
+              commands.attachmentAddBytes(dotId, name, new Uint8Array(await file.arrayBuffer())),
+          };
+        }),
+      ),
+    remove: (key: string) => {
+      const f = current.current.find((x) => x.key === key);
+      if (f === undefined || f.id === null) return;
+      update((fs) => fs.filter((x) => x.key !== key));
+      void commands.attachmentRemove(f.id).catch(() => {});
+    },
+    /// The files went with a message: the box is empty again.
+    sent: () => {
+      update(() => []);
+      setRefusals([]);
+    },
+    refuse: (text: string) => setRefusals([text]),
+    clearRefusals: () => setRefusals([]),
+  };
+}
 
 /// Which topic the next message goes to: the default, one the person chose with Reply, or a
 /// new topic (chat-first home spec, section 5).
@@ -91,10 +185,12 @@ export function ReplyArea(props: {
   const follow = (rootId: string) => {
     if (olderRoot !== undefined && rootId !== olderRoot) void navigate(`/home/${dotId}`);
   };
+  const staged = useStagedFiles(dotId);
   const send = useMutation({
     mutationFn: (message: string) =>
-      commands.chat(dotId, message, continues?.id ?? null),
+      commands.chat(dotId, message, continues?.id ?? null, staged.ids()),
     onSuccess: (run) => {
+      staged.sent();
       onPick({ kind: "default" });
       follow(run.root_run_id);
       return reload();
@@ -102,7 +198,9 @@ export function ReplyArea(props: {
     // The core refuses a message when the topic it holds is ahead of this one. So the topics
     // are loaded again after any refusal, and the composer follows what they bring.
     onError: (error) => {
-      notifyError(error);
+      // A staged file that is gone is said under the chips, where it can be removed.
+      if (toCommandError(error).message === GONE) staged.refuse(GONE);
+      else notifyError(error);
       return reload();
     },
   });
@@ -162,6 +260,12 @@ export function ReplyArea(props: {
         : closed
           ? "This topic cannot be continued"
           : `Message ${dotName}…`;
+  const composerDisabled =
+    blocked !== undefined ||
+    (answering ? questionBusy || answer.isPending : busy || send.isPending || closed);
+  // Files go with messages, not answers; and only into a box that can send.
+  const canAttach = !answering;
+  const dragging = useFileDrop(canAttach && !composerDisabled, staged.addPaths);
   return (
     <div className="mx-auto flex w-full max-w-[720px] flex-col gap-2 px-4 pb-4">
       {blocked && (
@@ -231,11 +335,15 @@ export function ReplyArea(props: {
         )}
       </div>
       <Composer
-        disabled={
-          blocked !== undefined ||
-          (answering ? questionBusy || answer.isPending : busy || send.isPending || closed)
-        }
+        disabled={composerDisabled}
         hint={hint}
+        files={staged.files}
+        onAddPaths={staged.addPaths}
+        onAddFiles={staged.addFiles}
+        onRemove={staged.remove}
+        refusals={staged.refusals}
+        canAttach={canAttach}
+        dragging={dragging}
         onSend={(message) =>
           answering ? answer.mutateAsync(message) : send.mutateAsync(message)
         }

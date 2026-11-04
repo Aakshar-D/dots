@@ -489,6 +489,34 @@ export const ScheduleSkip = z.strictObject({
 // scheduled, sending or failed; `waiting` says why a due one has not gone yet.
 export const ScheduledStatus = z.enum(["scheduled", "sending", "sent", "failed", "cancelled"]);
 export const ScheduledWait = z.enum(["busy", "approval", "usage_limit"]);
+// Attachments in chat (attachments spec sections 4 and 5): a file in the chat box, staged in
+// Dots' data folder; a file a message carries (`payload.attachments`); and a row of the Files
+// panel.
+export const StagedAttachment = z.strictObject({
+  id: z.string(),
+  name: z.string(),
+  size: z.number().int(),
+});
+export type StagedAttachment = z.infer<typeof StagedAttachment>;
+export const MessageAttachment = z.object({
+  id: z.string(),
+  name: z.string(),
+  size: z.number().int(),
+});
+export type MessageAttachment = z.infer<typeof MessageAttachment>;
+export const FileSource = z.enum(["attached", "written"]);
+export type FileSource = z.infer<typeof FileSource>;
+export const ConversationFile = z.strictObject({
+  path: z.string(),
+  name: z.string(),
+  source: FileSource,
+  run_id: z.string(),
+  at: z.string(),
+  exists: z.boolean(),
+  can_open: z.boolean(),
+});
+export type ConversationFile = z.infer<typeof ConversationFile>;
+
 export const ScheduledMessage = z.strictObject({
   id: z.string(),
   dot_id: z.string(),

@@ -1,7 +1,9 @@
+import { open } from "@tauri-apps/plugin-dialog";
 import { cn } from "cn";
-import { ArrowUp } from "lucide-react";
+import { ArrowUp, Paperclip } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
+import { AttachmentChip } from "@/components/AttachmentChip";
 import { Button } from "@/components/ui/button";
 import { useComposerReport } from "@/lib/use-activity";
 import { SendLaterMenu } from "@/screens/home/SendLaterMenu";
@@ -17,14 +19,33 @@ export const SCHEDULE_EMPTY = "Type a message to schedule.";
 /// send has succeeded; a refused message stays for another try. With `onSchedule`, an arrow
 /// beside Send schedules the text for later instead (send later spec section 6), usable
 /// exactly when Send is; the text is cleared once it is scheduled.
+///
+/// Files (attachments spec section 6): the paperclip picks files, a paste of files adds them,
+/// and each shows as a chip under the text. A message may be files only. Send waits for every
+/// file still being added. The caller owns the files (`files`, `onAddPaths`, `onAddFiles`,
+/// `onRemove`), says why one was refused (`refusals`), and whether files can be added now
+/// (`canAttach`: not while answering a question). `dragging`: files are dragged over the window.
 export function Composer(props: {
   disabled: boolean;
   hint: string;
   onSend: (message: string) => Promise<unknown>;
   onSchedule?: (message: string, at: Date) => Promise<unknown>;
+  files?: ComposerFile[];
+  onAddPaths?: (paths: string[]) => void;
+  onAddFiles?: (files: File[]) => void;
+  onRemove?: (key: string) => void;
+  refusals?: string[];
+  canAttach?: boolean;
+  dragging?: boolean;
 }) {
   const [text, setText] = useState("");
+  const files = props.files ?? [];
+  const canAttach = (props.canAttach ?? false) && !props.disabled;
+  const adding = files.some((f) => f.size === null);
   const hasText = text.trim() !== "";
+  // Files count as something to send only while they can be sent: not with an answer.
+  const hasContent = hasText || (props.canAttach === true && files.length > 0);
+  const canSend = hasContent && !adding && !props.disabled;
   // An idle install never closes Dots over a message being written.
   useComposerReport(hasText);
   const box = useRef<HTMLTextAreaElement>(null);
@@ -42,7 +63,7 @@ export function Composer(props: {
   }, [props.disabled]);
   function send() {
     const message = text.trim();
-    if (message === "" || props.disabled) return;
+    if (!canSend) return;
     // The mutation's onError reports a failure; here it only keeps the text.
     props.onSend(message).then(
       () => setText(""),
@@ -55,49 +76,104 @@ export function Composer(props: {
   function schedule(at: Date): Promise<unknown> {
     const message = text.trim();
     if (props.disabled || !props.onSchedule) return Promise.reject(new Error(SCHEDULE_LOCKED));
-    if (message === "") return Promise.reject(new Error(SCHEDULE_EMPTY));
+    if (!hasContent) return Promise.reject(new Error(SCHEDULE_EMPTY));
+    // Files still being added hold Send back, and so they hold this back too.
+    if (!canSend) return Promise.reject(new Error(SCHEDULE_LOCKED));
     return props.onSchedule(message, at).then(() => setText(""));
   }
+  async function pick() {
+    const picked = await open({ multiple: true, directory: false, title: "Attach files" });
+    if (picked === null) return;
+    const paths = Array.isArray(picked) ? picked : [picked];
+    if (paths.length > 0) props.onAddPaths?.(paths);
+  }
+  const refusals = props.refusals ?? [];
   return (
-    // The box draws the focus ring for the text inside it, which has none of its own.
-    <div
-      className={cn(
-        "flex items-end gap-2 rounded-2xl border bg-card p-2 shadow-xs focus-within:border-ring focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-ring",
-        props.disabled && "cursor-not-allowed opacity-60",
+    <div className="flex flex-col gap-1.5">
+      {props.dragging && (
+        <p className="px-1 text-sm text-muted-foreground">Drop files to attach</p>
       )}
-    >
-      <label htmlFor="chat-message" className="sr-only">
-        Message
-      </label>
-      <textarea
-        id="chat-message"
-        ref={box}
-        rows={1}
-        placeholder={props.hint}
-        disabled={props.disabled}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.shiftKey) {
-            e.preventDefault();
-            send();
-          }
-        }}
-        className="field-sizing-content max-h-40 min-w-0 flex-1 resize-none overflow-y-auto bg-transparent px-1.5 py-1 text-base outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed md:text-sm"
-      />
-      {props.onSchedule && (
-        <SendLaterMenu disabled={props.disabled || !hasText} onPick={schedule} />
-      )}
-      <Button
-        size="icon-sm"
-        className="shrink-0 rounded-full"
-        aria-label="Send"
-        title="Send"
-        disabled={props.disabled || !hasText}
-        onClick={send}
+      {/* The box draws the focus ring for the text inside it, which has none of its own. */}
+      <div
+        className={cn(
+          "flex items-end gap-2 rounded-2xl border bg-card p-2 shadow-xs focus-within:border-ring focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-ring",
+          props.disabled && "cursor-not-allowed opacity-60",
+          props.dragging && "border-dashed border-ring",
+        )}
       >
-        <ArrowUp aria-hidden />
-      </Button>
+        {props.onAddPaths && (
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            className="shrink-0 rounded-full"
+            aria-label="Attach files"
+            title="Attach files"
+            disabled={!canAttach}
+            onClick={() => void pick()}
+          >
+            <Paperclip aria-hidden />
+          </Button>
+        )}
+        <label htmlFor="chat-message" className="sr-only">
+          Message
+        </label>
+        <textarea
+          id="chat-message"
+          ref={box}
+          rows={1}
+          placeholder={props.hint}
+          disabled={props.disabled}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onPaste={(e) => {
+            const pasted = Array.from(e.clipboardData?.files ?? []);
+            if (pasted.length === 0 || !canAttach || !props.onAddFiles) return;
+            e.preventDefault();
+            props.onAddFiles(pasted);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              send();
+            }
+          }}
+          className="field-sizing-content max-h-40 min-w-0 flex-1 resize-none overflow-y-auto bg-transparent px-1.5 py-1 text-base outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed md:text-sm"
+        />
+        {props.onSchedule && <SendLaterMenu disabled={!canSend || !hasText} onPick={schedule} />}
+        <Button
+          size="icon-sm"
+          className="shrink-0 rounded-full"
+          aria-label="Send"
+          title="Send"
+          disabled={!canSend}
+          onClick={send}
+        >
+          <ArrowUp aria-hidden />
+        </Button>
+      </div>
+      {files.length > 0 && (
+        <ul aria-label="Attached files" className="flex flex-wrap gap-1.5 px-1">
+          {files.map((f) => (
+            <li key={f.key} className="max-w-full min-w-0">
+              <AttachmentChip
+                name={f.name}
+                size={f.size}
+                onRemove={
+                  f.size === null || !props.onRemove ? undefined : () => props.onRemove?.(f.key)
+                }
+              />
+            </li>
+          ))}
+        </ul>
+      )}
+      {refusals.map((r) => (
+        <p key={r} role="alert" className="px-1 text-xs text-destructive">
+          {r}
+        </p>
+      ))}
     </div>
   );
 }
+
+/// A file in the chat box: `size` null while it is being added.
+export type ComposerFile = { key: string; name: string; size: number | null };
