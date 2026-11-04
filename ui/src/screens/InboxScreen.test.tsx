@@ -21,16 +21,38 @@ const failedRun = {
 
 /// An Inbox as a test writes it: without paused watchers, held runs, proposed instructions,
 /// apps to review or team scope problems unless it says so.
-type InboxSpec = Omit<Inbox, "watchers" | "held" | "instructions" | "app_reviews" | "team_scope"> &
-  Partial<Pick<Inbox, "watchers" | "held" | "instructions" | "app_reviews" | "team_scope">>;
+type Optional =
+  | "watchers"
+  | "held"
+  | "instructions"
+  | "app_reviews"
+  | "team_scope"
+  | "not_delivered"
+  | "back"
+  | "snoozed"
+  | "done"
+  | "hidden_messages";
+type InboxSpec = Omit<Inbox, Optional> & Partial<Pick<Inbox, Optional>>;
+const none = {
+  watchers: [],
+  held: [],
+  instructions: [],
+  app_reviews: [],
+  team_scope: [],
+  not_delivered: [],
+  back: [],
+  snoozed: [],
+  done: [],
+  hidden_messages: [],
+};
 
 /// An inbox the test can empty, the way a decision or a review does.
 function inbox(initial: InboxSpec) {
-  let current: Inbox = { watchers: [], held: [], instructions: [], app_reviews: [], team_scope: [], ...initial };
+  let current: Inbox = { ...none, ...initial };
   backend.on("inbox", () => current);
   return {
     set: (next: InboxSpec) => {
-      current = { watchers: [], held: [], instructions: [], app_reviews: [], team_scope: [], ...next };
+      current = { ...none, ...next };
     },
   };
 }
@@ -535,6 +557,7 @@ describe("the approvals of one run", () => {
     held: [], instructions: [],
     app_reviews: [],
     team_scope: [],
+    not_delivered: [], back: [], snoozed: [], done: [], hidden_messages: [],
   };
   const answered = [approval, second].map((a) => ({ ...sample.approval, id: a.id }));
 
@@ -710,6 +733,7 @@ describe("a schedule that needs attention", () => {
     held: [], instructions: [],
     app_reviews: [],
     team_scope: [],
+    not_delivered: [], back: [], snoozed: [], done: [], hidden_messages: [],
   };
   const only = (attention: Inbox["attention"]): Inbox => ({ ...empty, attention });
   const item = () => screen.findByRole("listitem", { name: `${flagged.dot_name} needs attention` });

@@ -126,6 +126,7 @@ export function installDefaults(): void {
     attention: [],
     tools_changed: [],
     watchers: [], held: [], instructions: [], app_reviews: [], team_scope: [],
+    not_delivered: [], back: [], snoozed: [], done: [], hidden_messages: [],
   }));
   // No dot proposed instructions.
   backend.on("instruction_proposals_list", () => []);

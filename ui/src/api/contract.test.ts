@@ -27,6 +27,9 @@ const schemas: Record<SampleName, { parse: (v: unknown) => unknown }> = {
   SettingsSaved: T.SettingsSaved,
   DotOverview: T.DotOverview,
   Inbox: T.Inbox,
+  InboxKey: T.InboxKey.array(),
+  InboxMark: T.InboxMark.array(),
+  InboxKeys: T.InboxKey.array(),
   LibraryConfig: T.LibraryConfig.array(),
   McpServerConfig: T.McpServerConfig.array(),
   LibraryItem: T.LibraryItem.array(),
@@ -118,6 +121,7 @@ const enums: Record<keyof typeof fixture.Enums, { options: readonly string[] }> 
   PersonalMode: T.PersonalMode,
   InviteState: T.InviteState,
   WorkspaceRole: T.WorkspaceRole,
+  InboxKind: T.InboxKind,
 };
 
 describe("Rust/TypeScript contract", () => {

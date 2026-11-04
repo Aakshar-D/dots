@@ -10,6 +10,7 @@ import type {
   DotSpec,
   DraftRequest,
   EntryKind,
+  InboxKey,
   LibraryConfig,
   McpServerConfig,
   Preset,
@@ -198,6 +199,16 @@ export const commands = {
     call(T.Approval.array(), "decide_run_approvals", { runId, approved, note }),
   inbox: () => call(T.Inbox, "inbox"),
   inboxCount: () => call(z.number().int(), "inbox_count"),
+  /// Hides Inbox items until `until` (RFC 3339). Rejects with kind `invalid` for a time not in
+  /// the future or more than 365 days ahead, and `not_found` when an item left the Inbox.
+  inboxSnooze: (items: InboxKey[], until: string) =>
+    call(nothing, "inbox_snooze", { items, until }),
+  /// Puts a snoozed item back as it was.
+  inboxUnsnooze: (item: InboxKey) => call(nothing, "inbox_unsnooze", { item }),
+  /// Marks an item done; an approval is refused with kind `conflict`.
+  inboxDone: (item: InboxKey) => call(nothing, "inbox_done", { item }),
+  /// Puts a done item back as it was.
+  inboxUndoDone: (item: InboxKey) => call(nothing, "inbox_undo_done", { item }),
   /// Clears the "Needs attention" of the dot's schedule; nothing happens when it is not set.
   /// Rejects with kind `not_found` when the dot has no schedule.
   dismissScheduleAttention: (dotId: string) =>
