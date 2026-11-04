@@ -80,7 +80,7 @@ scheduled ──(sender or Send now claims it)──▶ sending ──▶ sent
     └──(Edit)── failed ──(Send now)──▶ sending;  failed ──(Cancel)──▶ cancelled
 ```
 
-Every change is one conditional `UPDATE … WHERE status IN (…)`, so the sender, Send now, Edit and Cancel never both win (§4.4).
+Every change is one conditional `UPDATE … WHERE status IN (…)`, so the sender, Send now, Edit and Cancel never both win (§4.4). The sender's writes to a `scheduled` row (the claim, a waiting reason, `failed`) also need it to be due at that moment, so a pass that read a row before an Edit moved it later changes nothing.
 
 ### 4.2 Sending one message
 
@@ -94,7 +94,7 @@ Every change is one conditional `UPDATE … WHERE status IN (…)`, so the sende
    - else **reply** to that end.
 3. **The Claude limit**: `limits.rejected_until()` set for a Claude dot → **wait** (`usage_limit`).
 4. **Claim**: `scheduled → sending`. Lost (edited, cancelled or claimed meanwhile) → nothing more.
-5. **Send** through the chat path with the payload note (§4.3). The chat path takes its lock and checks again; a `Conflict` there means the thread moved since step 2 → back to `scheduled` with `waiting = busy`, tried on the next pass. Any other error → `failed`.
+5. **Send** through the chat path with the payload note (§4.3). The chat path takes its lock and checks again; a `Conflict` there means the thread moved since step 2 → back to `scheduled` with `waiting = busy`, tried on the next pass. Its refusal at Claude's limit (`refuse_at_the_limit`: the limit was reached since step 3) → back to `scheduled` with `waiting = usage_limit`. Any other error → `failed`, with its own reason, even while the limit is reached.
 6. **Done**: `sent`, `run_id`, `sent_at`, `waiting`/`error` cleared.
 
 ### 4.3 The chat path and the payload note
@@ -106,10 +106,10 @@ Every change is one conditional `UPDATE … WHERE status IN (…)`, so the sende
 ### 4.4 Send now, Edit, Cancel and their races
 
 - **`schedule_message(dot_id, text, root_run_id, due_at)`**: text not empty; `due_at` RFC 3339, 1 minute to 365 days after the clock's now (`Invalid` with the §6 texts); `require_run`; a `root_run_id` must be a run of this dot. Wakes the sender.
-- **`send_scheduled_now(id)`**: the row must be `scheduled` or `failed` (`Conflict` otherwise, §6 texts). Sets `due_at = now` (so it is never "late"), clears `error`, then §4.2 at once. Returns the row: `sent`, or still `scheduled` with `waiting` (it goes when the topic is free), or `failed`.
+- **`send_scheduled_now(id)`**: the row must be `scheduled` or `failed` (`Conflict` otherwise, §6 texts). Sets `due_at = now`, clears `error`, then §4.2 at once. Returns the row: `sent`, or still `scheduled` with `waiting` (it goes when the topic is free), or `failed`. From then on the press is the message's due time: sent at once it is never late; if it has to wait more than a minute for its topic, it is "Sent late (was due `<the time Send now was pressed>`)", which is when the person asked for it. The time it was first scheduled for is not kept.
 - **`edit_scheduled_message(id, text, due_at)`**: same checks as scheduling; only from `scheduled` or `failed`; sets `status = scheduled`, clears `waiting` and `error`. Wakes the sender.
 - **`cancel_scheduled_message(id)`**: only from `scheduled` or `failed` → `cancelled`; calls `release_staged(id)`.
-- **Races**: the conditional updates decide. The sender claimed it first → Edit and Cancel answer `Conflict("This message is being sent now.")` or, once sent, `Conflict("This message has already been sent.")`; the UI shows that and the card turns into the sent message. Cancel or Edit first → the sender's claim finds nothing and moves on. Two Send nows → one sends, the other gets `Conflict`.
+- **Races**: the conditional updates decide. The sender claimed it first → Edit and Cancel answer `Conflict("This message is being sent now.")` or, once sent, `Conflict("This message has already been sent.")`; the UI shows that and the card turns into the sent message. Cancel or Edit first → the sender's claim finds nothing and moves on. Two Send nows → one sends, the other gets `Conflict`, whether it lost at the reset or at the claim.
 - **`scheduled_messages(dot_id)`**: the pending rows (`scheduled`, `sending`, `failed`), ordered `due_at, id`.
 - The changes need the `RunDots` permission on the dot (`require_run` for schedule and Send now; `require_for_dot(RunDots)` for Edit and Cancel). The list is a read and needs only `View`, as the conversation does: a Viewer sees the cards (and cannot use their buttons).
 
@@ -118,6 +118,7 @@ Every change is one conditional `UPDATE … WHERE status IN (…)`, so the sende
 - **The sender** is a loop on the runtime's `Clock`: one pass sends every row with `status = scheduled` and `due_at <= now` (in `due_at, id` order); then it sleeps until the earliest future `due_at` or **30 seconds**, whichever is sooner, or until woken by a schedule or an edit. The 30-second cap retries waiting messages and catches up after the PC sleeps. *(builder's call)*
 - It needs the whole runtime (the chat path's checks and lock), so it is started with **`Runtime::spawn_send_later(self: &Arc<Self>) -> JoinHandle<()>`**, which the app calls right after it puts the runtime in an `Arc` (`startup.rs`), and stops on the runtime's shutdown token. *(builder's call: `Runtime::start` returns a plain `Runtime`)*
 - **At start** (`Runtime::start`, after `recover_interrupted`): a row left in `sending` by a crash is `sent` if a run's payload has `send_later.id` equal to its id (that run becomes its `run_id`), else back to `scheduled`. So a crash never sends twice and never loses a message.
+- **Each pass** first does the first half of that: a row `sending` whose run is stored is `sent` (the write after the chat path failed, e.g. the database was busy), so its card does not stay "Sending…" until the next start. A row with no run yet is left alone: it may be on its way through the chat path.
 - The first pass runs at once: everything that came due while Dots was closed goes then, marked late.
 - **Events**: `RuntimeEvent::ScheduledMessageUpdated { message: ScheduledMessage }` on every change of a row (scheduled, edited, waiting changed, sent, failed, cancelled). A pass that finds the same waiting reason again sends nothing. The new run's own `RunUpdated` goes as usual.
 
@@ -131,9 +132,9 @@ Every change is one conditional `UPDATE … WHERE status IN (…)`, so the sende
 ## 6. UI
 
 **Composer** (`Composer.tsx`): beside Send, a small chevron button (`aria-label` and title **"Send later"**) that opens a menu titled **"Send later"**:
-- one item per preset from the presets helper, its label on the left and its time on the right, muted (`localWeekdayTime`, e.g. "Thu 9:00 AM");
+- one item per preset from the presets helper, its label on the left and its time on the right, muted (`localWeekdayTime`, e.g. "Thu 9:00 AM"); a preset less than a minute away (6 PM at 5:59:30) is not offered, as the core would refuse it;
 - **"Pick a date and time…"** opens a small dialog **"Send later"** with a `datetime-local` field labelled **"Date and time"** and buttons **"Schedule"** and **"Cancel"**.
-- Choosing schedules the text in the box for the reply target; on success the box is cleared, as after Send.
+- Choosing schedules the text in the box for the reply target; on success the box is cleared, as after Send. If the box was locked meanwhile (the topic turned busy while the dialog was open) or emptied, nothing is scheduled and the dialog stays open with **"You can't schedule a message right now. Try again once you can send one."** or **"Type a message to schedule."**
 - Refusals (shown in the dialog, or as the usual error notice from the menu): **"Pick a time at least a minute from now."**, **"Pick a time within the next year."**
 
 **Card** (`ScheduledCard`, at the end of the conversation, §3.1.11), `role="region"`, `aria-label` **"Scheduled message"**:
@@ -145,7 +146,7 @@ Every change is one conditional `UPDATE … WHERE status IN (…)`, so the sende
   - `waiting = busy`: **"Due · waiting for `<dot>` to finish this topic"**; `approval`: **"Due · waiting for your approval in this topic"**; `usage_limit`: **"Due · waiting for the usage limit to reset"**;
   - `failed`: **"Not sent: `<error>`"** in the warning colour (`text-needs`).
 - buttons **"Send now"**, **"Edit"**, **"Cancel"** (none while `sending`).
-- **Edit** turns the card into a form: a text box labelled **"Scheduled message"**, a `datetime-local` field labelled **"Send at"** (filled with the current time), buttons **"Save"** and **"Discard changes"**. Errors from any button show under them (`role="alert"`), e.g. **"This message has already been sent."**, **"This message is being sent now."**, **"This message was cancelled."**
+- **Edit** turns the card into a form: a text box labelled **"Scheduled message"**, a `datetime-local` field labelled **"Send at"** (filled with the message's time, or an hour from now for a message that is due or less than two minutes away, whose own time would be refused), buttons **"Save"** and **"Discard changes"**. Errors from any button show under them (`role="alert"`), e.g. **"This message has already been sent."**, **"This message is being sent now."**, **"This message was cancelled."**
 
 **The sent message** (`Transcript.tsx`, under the person's bubble of a chat run whose payload has `send_later`), muted:
 - late: **"Sent late (was due `<time>`)"**, `<time>` = `localDayTime(due_at, queued_at)` (e.g. "Sent late (was due 9:00 AM)");
@@ -170,10 +171,11 @@ Every change is one conditional `UPDATE … WHERE status IN (…)`, so the sende
 ## 8. Testing
 
 - Store: insert and read; pending list order; due list; conditional claim / edit / cancel (each only from its states); recovery of `sending` with and without a run carrying its id.
-- Send (fake clock, `hold_runs(true)`): reply to the topic's end; a reply after a message the person typed meanwhile; new topic for no root, a missing root and an end without a session (with `new_topic`); waits for a busy topic and for approval, then sends; waits for the Claude limit; failed for an org removed; `late` true at 2 minutes, false at 30 seconds; two due for one topic go in order.
-- Races: Edit and Cancel after the claim → `Conflict`; the sender after Cancel sends nothing; two Send nows send once.
+- Send (fake clock, `hold_runs(true)`): reply to the topic's end; a reply after a message the person typed meanwhile; new topic for no root, a missing root, a root of another dot, an end without a session and an ended workflow step's thread (with `new_topic`); waits for a busy topic and for approval, then sends; waits for the Claude limit, also when the chat path refuses at it after the target was read, while another refusal at the limit fails; failed for an org removed; `late` true at 2 minutes, false at 30 seconds; two due for one topic go in order; a pass settles a `sending` row whose run is stored.
+- Races: Edit and Cancel after the claim → `Conflict`; the sender after Cancel sends nothing; a stale pass neither sets a waiting reason on nor fails a row an Edit moved later; two Send nows, one after the other and at once, send once.
 - Validation: past, under a minute, over 365 days, empty text, a root of another dot.
-- Loop: `spawn_send_later` sends at the due time on the fake clock and once after a restart.
+- Loop: `spawn_send_later` sends at the due time on the fake clock; a due message waiting on a busy topic is sent by the loop alone once the topic is free (the 30-second cap); after a restart its first pass sends what came due, once.
+- Roles: a Viewer reads the list and is refused schedule, Send now, Edit and Cancel.
 - App: commands; one failed notice per row; none for the viewed dot; contract.
 - UI: the countdown texts at fixed `now`; the composer menu calls `schedule_message` with the preset's ISO time and the reply target's root; the custom dialog's refusals; card buttons and their errors; the edit form; "Sent late (was due …)", "Sent as scheduled", the new-topic note; the menu's "N scheduled".
 
