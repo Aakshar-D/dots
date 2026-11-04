@@ -133,7 +133,38 @@ fn is_link(meta: &std::fs::Metadata) -> bool {
     false
 }
 
+/// Opens `path` to read without following a link at its last part: on Windows the link itself
+/// is opened (`FILE_FLAG_OPEN_REPARSE_POINT`), so its handle says it is one.
+fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    options.open(path)
+}
+
+/// Whether the opened file is the entry `checked` described. On Unix the device and inode must
+/// match (a link swapped in opens its target, another inode); on Windows the handle of a link
+/// is the link itself, which `is_link` refuses.
+fn same_entry(checked: &std::fs::Metadata, opened: &std::fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        checked.dev() == opened.dev() && checked.ino() == opened.ino()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (checked, opened);
+        true
+    }
+}
+
 /// Whether `path` is missing or a real folder, never a link.
+
 fn missing_or_real_dir(path: &Path) -> std::io::Result<()> {
     match std::fs::symlink_metadata(path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -308,8 +339,15 @@ impl ChatFiles {
         if meta.len() > MAX_FILE_BYTES {
             return Err(too_large(&name));
         }
-        let source = std::fs::File::open(from).map_err(|e| unreadable(&name, e))?;
+        // Opened without following a link, and checked again on the handle: a file swapped for
+        // a link after the check above is refused too.
+        let source = open_no_follow(from).map_err(|e| unreadable(&name, e))?;
         let opened = source.metadata().map_err(|e| unreadable(&name, e))?;
+        if is_link(&opened) || !same_entry(&meta, &opened) {
+            return Err(Error::Invalid(format!(
+                "{name} is a link. Attach the file it points to instead."
+            )));
+        }
         if !opened.is_file() {
             return Err(unreadable(&name, "it is not a file"));
         }
@@ -457,10 +495,21 @@ impl ChatFiles {
         {
             Ok(out) => out,
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return taken(),
-
             Err(e) => return Err(e),
         };
+        // The folder may have been swapped for a link since it was checked: the new file must
+        // be in it, or it goes before anything is written to it.
+        let inside = std::fs::canonicalize(&to).is_ok_and(|real| real.parent() == Some(dir));
+        if !inside {
+            drop(out);
+            let _ = std::fs::remove_file(&to);
+            return Err(std::io::Error::other(format!(
+                "{} is outside the workspace",
+                to.display()
+            )));
+        }
         let copied = std::io::copy(&mut from, &mut out).and_then(|_| out.flush());
+
         if let Err(e) = copied {
             drop(out);
             let _ = std::fs::remove_file(&to);
