@@ -179,7 +179,7 @@ async fn edit_and_cancel_only_from_scheduled_or_failed() {
     assert_eq!(edited.status, ScheduledStatus::Scheduled);
 
     store
-        .mark_scheduled_failed(&id, "org removed", t0())
+        .mark_scheduled_failed(&id, "org removed", later())
         .await
         .unwrap()
         .unwrap();
@@ -192,7 +192,7 @@ async fn edit_and_cancel_only_from_scheduled_or_failed() {
     assert_eq!(edited.error, None);
 
     store
-        .mark_scheduled_failed(&id, "org removed", t0())
+        .mark_scheduled_failed(&id, "org removed", later())
         .await
         .unwrap()
         .unwrap();
@@ -258,6 +258,50 @@ async fn waiting_changes_only_when_it_differs() {
     assert_eq!(back.waiting, Some(ScheduledWait::Approval));
 }
 
+/// A pass reads every due row first; an Edit that moved one later meanwhile wins over the
+/// pass's stale waiting reason and its stale refusal.
+#[tokio::test]
+async fn a_message_not_yet_due_neither_waits_nor_fails() {
+    let (_d, store) = temp_store().await;
+    let dot = dot(&store).await;
+    let id = message(&store, &dot, TimeDelta::hours(1)).await;
+    assert_eq!(
+        store
+            .set_scheduled_waiting(&id, ScheduledWait::Busy, t0())
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        store
+            .mark_scheduled_failed(&id, "org removed", t0())
+            .await
+            .unwrap(),
+        None
+    );
+    let row = store.get_scheduled_message(&id).await.unwrap();
+    assert_eq!(row.status, ScheduledStatus::Scheduled);
+    assert_eq!((row.waiting, row.error), (None, None));
+
+    // From `sending` (a send that lost its race, or was refused) the due time does not matter.
+    let sending = message(&store, &dot, TimeDelta::zero()).await;
+    store
+        .claim_scheduled_message(&sending, t0())
+        .await
+        .unwrap()
+        .unwrap();
+    store
+        .edit_scheduled_message(&id, "x", &at(TimeDelta::hours(3)), t0())
+        .await
+        .unwrap();
+    let failed = store
+        .mark_scheduled_failed(&sending, "org removed", t0() - TimeDelta::hours(1))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(failed.status, ScheduledStatus::Failed);
+}
+
 #[tokio::test]
 async fn sent_and_failed_record_their_outcome() {
     let (_d, store) = temp_store().await;
@@ -299,8 +343,9 @@ async fn reset_for_send_now_moves_due_at_to_now() {
     let dot = dot(&store).await;
     let id = message(&store, &dot, TimeDelta::days(1)).await;
     store
-        .mark_scheduled_failed(&id, "org removed", t0())
+        .mark_scheduled_failed(&id, "org removed", later())
         .await
+        .unwrap()
         .unwrap();
     let reset = store.reset_for_send_now(&id, t0()).await.unwrap().unwrap();
     assert_eq!(reset.due_at, timestamp(t0()));
@@ -339,6 +384,39 @@ async fn recovery_finds_the_run_a_crash_left() {
     let second = store.get_scheduled_message(&second).await.unwrap();
     assert_eq!(second.status, ScheduledStatus::Scheduled);
     assert_eq!(second.run_id, None);
+}
+
+/// While Dots runs, only a send whose run is stored is settled: a row with no run yet may be
+/// on its way through the chat path.
+#[tokio::test]
+async fn a_send_with_its_run_stored_is_settled_and_one_on_its_way_is_left() {
+    let (_d, store) = temp_store().await;
+    let dot = dot(&store).await;
+    let stored = message(&store, &dot, TimeDelta::zero()).await;
+    let on_its_way = message(&store, &dot, TimeDelta::zero()).await;
+    for id in [&stored, &on_its_way] {
+        store.claim_scheduled_message(id, t0()).await.unwrap();
+    }
+    let mut new = NewRun::new(&dot.id, TriggerKind::Chat);
+    new.payload = Some(json!({
+        "message": "Ship it",
+        "typed": true,
+        "send_later": { "id": stored, "due_at": at(TimeDelta::zero()), "late": false, "new_topic": false },
+    }));
+    let run = store.create_run(&new).await.unwrap();
+
+    let changed = store.settle_sending_with_runs(later()).await.unwrap();
+    assert_eq!(changed.len(), 1);
+    assert_eq!(changed[0].id, stored);
+    assert_eq!(changed[0].status, ScheduledStatus::Sent);
+    assert_eq!(changed[0].run_id.as_deref(), Some(run.id.as_str()));
+    let left = store.get_scheduled_message(&on_its_way).await.unwrap();
+    assert_eq!(left.status, ScheduledStatus::Sending);
+    assert!(store
+        .settle_sending_with_runs(later())
+        .await
+        .unwrap()
+        .is_empty());
 }
 
 #[tokio::test]

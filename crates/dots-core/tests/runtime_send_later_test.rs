@@ -12,14 +12,16 @@ use std::time::Duration;
 
 use chrono::{DateTime, TimeDelta, Utc};
 use common::clock::FakeClock;
-use common::{spec, wait_status};
+use common::{init_repo, spec};
 use dots_core::events::RuntimeEvent;
 use dots_core::model::{
-    Dot, DotSpec, NewRun, Run, RunStatus, ScheduledMessage, ScheduledStatus, ScheduledWait,
-    TriggerKind, WorkspaceMode,
+    Dot, DotSpec, MemberSpec, NewRun, NewWorkflowRun, ProjectSpec, Run, RunStatus,
+    ScheduledMessage, ScheduledStatus, ScheduledWait, StepRunChange, StepRunStatus, TeamSpec,
+    TriggerKind, WorkflowSpec, WorkflowTrigger, WorkspaceMode,
 };
-use dots_core::send_later::{SendTarget, ALREADY_SENT, BEING_SENT, TOO_FAR, TOO_SOON};
+use dots_core::send_later::{SendTarget, ALREADY_SENT, BEING_SENT, SEND_EVERY, TOO_FAR, TOO_SOON};
 use dots_core::util::timestamp;
+use dots_core::workflow::{Budget, Definition, Step, StepKind, Trigger};
 use dots_core::{Config, Error, Runtime};
 use serde_json::{json, Value};
 use tempfile::TempDir;
@@ -302,6 +304,21 @@ async fn an_approval_in_the_topic_waits_with_its_reason() {
         row(&rt, &message.id).await.waiting,
         Some(ScheduledWait::Approval)
     );
+    assert_eq!(runs_of(&rt, &dot).await, 2);
+
+    // Approved, and the run ended: the next pass replies to it.
+    let store = rt.store();
+    store.mark_delivered(&q.id, Utc::now()).await.unwrap();
+    store.set_session(&q.id, "s1").await.unwrap();
+    store
+        .finish_run(&q.id, RunStatus::Succeeded, Some("deployed"), None)
+        .await
+        .unwrap();
+    clock.set(t0() + hour() + SEND_EVERY);
+    rt.send_due().await.unwrap();
+    let r = sent_run(&rt, &message).await;
+    assert_eq!(r.parent_run_id.as_deref(), Some(q.id.as_str()));
+    assert_eq!(row(&rt, &message.id).await.waiting, None);
     rt.shutdown();
 }
 
@@ -352,11 +369,26 @@ async fn a_topic_that_cannot_continue_gets_a_new_topic() {
         .insert_scheduled_message(&dot.id, Some("01NOSUCHRUN"), "Ship it", &at(hour()), t0())
         .await
         .unwrap();
+    // Its root is a run of another dot (only the store could write that).
+    let other = rt
+        .create_dot(folder_spec("other", &dir), None, None)
+        .await
+        .unwrap();
+    let foreign = topic(&rt, &other).await;
+    let elsewhere = rt
+        .store()
+        .insert_scheduled_message(&dot.id, Some(&foreign.id), "Ship it", &at(hour()), t0())
+        .await
+        .unwrap();
+    // Its topic is a workflow step's thread, and the step has ended.
+    let step_run = ended_step_thread(&rt, &dot, &dir).await;
+    let step = schedule(&rt, &dot, Some(&step_run), hour()).await;
 
     clock.set(t0() + hour());
     rt.send_due().await.unwrap();
-    for message in [&no_session, &gone] {
+    for message in [&no_session, &gone, &elsewhere, &step] {
         let r = sent_run(&rt, message).await;
+        assert_eq!(r.dot_id, dot.id);
         assert_eq!(r.parent_run_id, None);
         assert_eq!(r.root_run_id, r.id);
         assert_eq!(note(&r)["new_topic"], true);
@@ -364,41 +396,105 @@ async fn a_topic_that_cannot_continue_gets_a_new_topic() {
     rt.shutdown();
 }
 
+/// A run of `dot` for a workflow step, answered with a session, whose step has ended since.
+async fn ended_step_thread(rt: &Runtime, dot: &Dot, dir: &TempDir) -> Run {
+    let store = rt.store();
+    let team = store
+        .create_team(&TeamSpec {
+            org_id: None,
+            workspace_id: "default".into(),
+            name: "T".into(),
+            description: String::new(),
+            members: vec![MemberSpec {
+                dot_id: dot.id.clone(),
+                role: "dev".into(),
+            }],
+        })
+        .await
+        .unwrap();
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    let project = ProjectSpec {
+        name: "Dots".into(),
+        repo_path: repo.to_string_lossy().to_string(),
+        default_branch: None,
+        remote: "origin".into(),
+    };
+    let project_id = store.add_project(&team.id, &project).await.unwrap().id;
+    let definition = Definition {
+        trigger: Trigger::Manual,
+        steps: vec![Step {
+            id: "a".into(),
+            name: "Work".into(),
+            kind: StepKind::Agent {
+                member: dot.id.clone(),
+                job: "Fix it.".into(),
+            },
+        }],
+        budget: Budget::default(),
+    };
+    let workflow = store
+        .create_workflow(
+            &team.id,
+            &WorkflowSpec {
+                name: "Fix".into(),
+                definition: definition.clone(),
+                enabled: true,
+            },
+        )
+        .await
+        .unwrap();
+    let wr = store
+        .create_workflow_run(&NewWorkflowRun {
+            workflow_id: workflow.id,
+            team_id: team.id,
+            definition,
+            project_id,
+            project,
+            task: "The tray icon is invisible.".into(),
+            trigger: WorkflowTrigger::Manual,
+            origin_run_id: None,
+            test: false,
+        })
+        .await
+        .unwrap();
+    let step = store
+        .create_step_run(&wr.id, "a", 1, StepRunStatus::Running)
+        .await
+        .unwrap();
+    let mut new = NewRun::new(&dot.id, TriggerKind::Workflow);
+    new.workflow_step_run_id = Some(step.id.clone());
+    let run = store.create_run(&new).await.unwrap();
+    let run = end(rt, &run, Some("s1")).await;
+    store
+        .set_step_run(
+            &step.id,
+            &StepRunChange {
+                status: Some(StepRunStatus::Succeeded),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(store.in_ended_step_thread(&run).await.unwrap());
+    run
+}
+
+/// Claude's reading as a run's `rate_limit_event` records it: rejected until `until`. (How a
+/// CLI line becomes this reading is the limits tests' part.)
+async fn reject_until(rt: &Runtime, until: DateTime<Utc>) {
+    rt.limits()
+        .record_reset("rejected", Vec::new(), Some(&timestamp(until)))
+        .await
+        .unwrap();
+    assert!(rt.limits_get().await.unwrap().rejected_until.is_some());
+}
+
 #[tokio::test]
 async fn the_usage_limit_waits() {
     let dir = tempfile::tempdir().unwrap();
-    let clock = FakeClock::new(t0());
-    let script = dir.path().join("script.json");
-    let resets = (t0() + TimeDelta::hours(2)).timestamp();
-    std::fs::write(
-        &script,
-        json!([
-            {"emit": {"type": "system", "subtype": "init", "session_id": "$SESSION"}},
-            {"emit": {"type": "rate_limit_event", "rate_limit_info": {
-                "status": "rejected", "resetsAt": resets, "rateLimitType": "five_hour",
-                "unifiedWindows": {"five_hour": {"utilization": 1.0, "resetsAt": resets, "status": "rejected"}}
-            }}},
-            {"emit": {"type": "result", "subtype": "success", "is_error": false,
-                "result": "done", "usage": {"input_tokens": 1, "output_tokens": 1}}}
-        ])
-        .to_string(),
-    )
-    .unwrap();
-    let mut cfg = config(&dir.path().join("data"), &clock);
-    cfg.claude_env.push((
-        "FAKE_CLAUDE_SCRIPT".into(),
-        script.to_string_lossy().to_string(),
-    ));
-    let rt = Runtime::start(cfg).await.unwrap();
-    // A run of another dot brings Claude's reading: rejected until T0+2h.
-    let reader = rt
-        .create_dot(folder_spec("reader", &dir), None, None)
-        .await
-        .unwrap();
-    let read = rt.run_now(&reader.id).await.unwrap();
-    wait_status(rt.store(), &read.id, RunStatus::Succeeded, 15).await;
-    rt.hold_runs(true).await;
-    assert!(rt.limits_get().await.unwrap().rejected_until.is_some());
+    let (rt, clock) = start(&dir).await;
+    reject_until(&rt, t0() + TimeDelta::hours(2)).await;
 
     let dot = dot(&rt, &dir).await;
     let message = schedule(&rt, &dot, None, hour()).await;
@@ -412,6 +508,43 @@ async fn the_usage_limit_waits() {
     rt.send_due().await.unwrap();
     let r = sent_run(&rt, &message).await;
     assert_eq!(note(&r)["late"], true);
+    rt.shutdown();
+}
+
+/// The chat path refuses at Claude's limit after the target was read: the message waits for
+/// the reset. Any other refusal at the limit is not a wait: it fails with its own reason.
+#[tokio::test]
+async fn a_limit_reached_after_the_target_was_read_waits() {
+    let dir = tempfile::tempdir().unwrap();
+    let (rt, clock) = start(&dir).await;
+    let dot = dot(&rt, &dir).await;
+    let message = schedule(&rt, &dot, None, hour()).await;
+    clock.set(t0() + hour());
+    reject_until(&rt, t0() + TimeDelta::hours(2)).await;
+
+    let out = rt
+        .send_scheduled_to(
+            row(&rt, &message.id).await,
+            SendTarget::New { fallback: false },
+        )
+        .await
+        .unwrap();
+    assert_eq!(out.status, ScheduledStatus::Scheduled);
+    assert_eq!(out.waiting, Some(ScheduledWait::UsageLimit));
+
+    // A message the chat path refuses for its text (only the store could write it).
+    let blank = rt
+        .store()
+        .insert_scheduled_message(&dot.id, None, " ", &at(TimeDelta::zero()), t0())
+        .await
+        .unwrap();
+    let out = rt
+        .send_scheduled_to(blank, SendTarget::New { fallback: false })
+        .await
+        .unwrap();
+    assert_eq!(out.status, ScheduledStatus::Failed);
+    assert_eq!(out.error.as_deref(), Some("message must not be empty"));
+    assert_eq!(runs_of(&rt, &dot).await, 0);
     rt.shutdown();
 }
 
@@ -598,7 +731,7 @@ async fn send_now_sends_at_once_and_is_not_late() {
     // A failed message of a dot that may run again.
     let failed = rt
         .store()
-        .insert_scheduled_message(&dot.id, None, "Again", &at(hour()), t0())
+        .insert_scheduled_message(&dot.id, None, "Again", &at(TimeDelta::zero()), t0())
         .await
         .unwrap();
     rt.store()
@@ -609,6 +742,59 @@ async fn send_now_sends_at_once_and_is_not_late() {
     assert_eq!(sent.status, ScheduledStatus::Sent);
     assert_eq!(sent.error, None);
     assert_eq!(runs_of(&rt, &dot).await, 2);
+    rt.shutdown();
+}
+
+/// Two Send nows at once: one sends, the other is refused (send later spec section 4.4).
+#[tokio::test]
+async fn two_send_nows_at_once_send_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let (rt, _clock) = start(&dir).await;
+    let dot = dot(&rt, &dir).await;
+    let message = schedule(&rt, &dot, None, TimeDelta::days(1)).await;
+
+    let (a, b) = tokio::join!(
+        rt.send_scheduled_now(&message.id),
+        rt.send_scheduled_now(&message.id)
+    );
+    let (sent, refused): (Vec<_>, Vec<_>) = [a, b].into_iter().partition(|r| r.is_ok());
+    assert_eq!(sent.len(), 1, "{sent:?} {refused:?}");
+    assert_eq!(sent[0].as_ref().unwrap().status, ScheduledStatus::Sent);
+    let text = conflict(refused.into_iter().next().unwrap().unwrap_err());
+    assert!(text == BEING_SENT || text == ALREADY_SENT, "{text}");
+    assert_eq!(runs_of(&rt, &dot).await, 1);
+    rt.shutdown();
+}
+
+/// A send whose run was stored but whose row was not marked sent (the write failed) is settled
+/// by the next pass, not left "Sending…" until the next start.
+#[tokio::test]
+async fn a_pass_settles_a_send_whose_last_write_failed() {
+    let dir = tempfile::tempdir().unwrap();
+    let (rt, clock) = start(&dir).await;
+    let dot = dot(&rt, &dir).await;
+    let message = schedule(&rt, &dot, None, hour()).await;
+    clock.set(t0() + hour());
+    rt.store()
+        .claim_scheduled_message(&message.id, t0() + hour())
+        .await
+        .unwrap()
+        .unwrap();
+    let mut new = NewRun::new(&dot.id, TriggerKind::Chat);
+    new.payload = Some(json!({
+        "message": "Ship it", "typed": true,
+        "send_later": { "id": message.id, "due_at": message.due_at, "late": false, "new_topic": false },
+    }));
+    let run = rt.store().create_run(&new).await.unwrap();
+    let mut rx = rt.subscribe();
+
+    let changed = rt.send_due().await.unwrap();
+    assert_eq!(changed.len(), 1);
+    let sent = row(&rt, &message.id).await;
+    assert_eq!(sent.status, ScheduledStatus::Sent);
+    assert_eq!(sent.run_id.as_deref(), Some(run.id.as_str()));
+    assert_eq!(updates(&mut rx), [sent]);
+    assert_eq!(runs_of(&rt, &dot).await, 1);
     rt.shutdown();
 }
 
@@ -695,6 +881,126 @@ async fn the_sender_sends_on_the_clock() {
     .expect("the sender sent the message at its time");
     assert_eq!(sent.sent_at, Some(at(TimeDelta::minutes(5))));
     assert_eq!(runs_of(&rt, &dot).await, 1);
+    rt.shutdown();
+    sender.await.unwrap();
+}
+
+/// The next `ScheduledMessageUpdated` of the row `id` that is sent, waiting at most `wait`.
+async fn sent_within(
+    rx: &mut Receiver<RuntimeEvent>,
+    id: &str,
+    wait: Duration,
+) -> Option<ScheduledMessage> {
+    tokio::time::timeout(wait, async {
+        loop {
+            match rx.recv().await {
+                Ok(RuntimeEvent::ScheduledMessageUpdated { message })
+                    if message.id == id && message.status == ScheduledStatus::Sent =>
+                {
+                    return message;
+                }
+                Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                Err(e) => panic!("the event bus closed: {e}"),
+            }
+        }
+    })
+    .await
+    .ok()
+}
+
+/// A due message that waits on a busy topic is sent by the loop itself once the topic is free:
+/// its 30-second cap tries again, with no schedule or edit to wake it. The clock is moved 30
+/// seconds at a time until the row is sent, as the loop may not be asleep yet at the first move.
+#[tokio::test]
+async fn the_sender_retries_a_waiting_message_by_itself() {
+    let dir = tempfile::tempdir().unwrap();
+    let (rt, clock) = start(&dir).await;
+    let rt = Arc::new(rt);
+    let dot = dot(&rt, &dir).await;
+    let p = topic(&rt, &dot).await;
+    let message = schedule(&rt, &dot, Some(&p), TimeDelta::minutes(5)).await;
+    let q = rt.chat(&dot.id, "And then?", Some(&p.id)).await.unwrap();
+    clock.set(t0() + TimeDelta::minutes(5));
+    let mut rx = rt.subscribe();
+    let sender = rt.spawn_send_later();
+
+    // The first pass finds the topic busy.
+    let waiting = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Ok(RuntimeEvent::ScheduledMessageUpdated { message: m }) = rx.recv().await {
+                if m.id == message.id && m.waiting == Some(ScheduledWait::Busy) {
+                    return m;
+                }
+            }
+        }
+    })
+    .await
+    .expect("the first pass found the topic busy");
+    assert_eq!(waiting.status, ScheduledStatus::Scheduled);
+
+    end(&rt, &q, Some("s1")).await;
+    let mut sent = None;
+    for _ in 0..50 {
+        clock.set(clock_now(&clock) + SEND_EVERY);
+        sent = sent_within(&mut rx, &message.id, Duration::from_millis(200)).await;
+        if sent.is_some() {
+            break;
+        }
+    }
+    let sent = sent.expect("the sender sent the waiting message once the topic was free");
+    let r = rt.get_run(sent.run_id.as_deref().unwrap()).await.unwrap();
+    assert_eq!(r.parent_run_id.as_deref(), Some(q.id.as_str()));
+    assert_eq!(runs_of(&rt, &dot).await, 3);
+    rt.shutdown();
+    sender.await.unwrap();
+}
+
+/// Dots was closed over the due time: after a restart the loop's first pass sends the message,
+/// late, and only once; the one a crash left with its run stored is not sent again.
+#[tokio::test]
+async fn the_sender_sends_once_after_a_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("data");
+    let (rt, _clock) = runtime_at(&data, t0()).await;
+    let dot = dot(&rt, &dir).await;
+    let p = topic(&rt, &dot).await;
+    let message = schedule(&rt, &dot, Some(&p), hour()).await;
+    let stored = rt
+        .store()
+        .insert_scheduled_message(&dot.id, None, "Stored", &at(TimeDelta::zero()), t0())
+        .await
+        .unwrap();
+    rt.store()
+        .claim_scheduled_message(&stored.id, t0())
+        .await
+        .unwrap()
+        .unwrap();
+    let mut new = NewRun::new(&dot.id, TriggerKind::Chat);
+    new.payload = Some(json!({
+        "message": "Stored", "typed": true,
+        "send_later": { "id": stored.id, "due_at": stored.due_at, "late": false, "new_topic": false },
+    }));
+    let stored_run = rt.store().create_run(&new).await.unwrap();
+    end(&rt, &stored_run, Some("s2")).await;
+    rt.shutdown();
+    drop(rt);
+
+    let (rt, _clock) = runtime_at(&data, t0() + TimeDelta::hours(3)).await;
+    let rt = Arc::new(rt);
+    let mut rx = rt.subscribe();
+    let sender = rt.spawn_send_later();
+    // The first pass, with no move of the clock.
+    let sent = sent_within(&mut rx, &message.id, Duration::from_secs(10))
+        .await
+        .expect("the first pass sent the message that came due while Dots was closed");
+    let r = rt.get_run(sent.run_id.as_deref().unwrap()).await.unwrap();
+    assert_eq!(r.parent_run_id.as_deref(), Some(p.id.as_str()));
+    assert_eq!(note(&r)["late"], true);
+    let stored = row(&rt, &stored.id).await;
+    assert_eq!(stored.status, ScheduledStatus::Sent);
+    assert_eq!(stored.run_id.as_deref(), Some(stored_run.id.as_str()));
+    // The topic's first run, the one the crash left, and this one.
+    assert_eq!(runs_of(&rt, &dot).await, 3);
     rt.shutdown();
     sender.await.unwrap();
 }

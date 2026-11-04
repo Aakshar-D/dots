@@ -24,8 +24,8 @@ use crate::library_service::LibraryService;
 use crate::model::{
     Approval, AttentionRun, ClaudeStatus, DeliveryCounts, Dot, DotOverview, DotSpec, EngineKind,
     Inbox, MessageKind, NewRun, PendingApproval, ReviewRun, Run, RunEventRecord, RunStatus,
-    ScheduleChange, ScheduleSkip, ScheduleView, ScheduledMessage, ScheduledWait, SentLater,
-    SettingsSaved, Status, TriggerKind, UndeliveredMessage, WorktreeDiff,
+    ScheduleChange, ScheduleSkip, ScheduleView, ScheduledMessage, ScheduledStatus, ScheduledWait,
+    SentLater, SettingsSaved, Status, TriggerKind, UndeliveredMessage, WorktreeDiff,
 };
 use crate::policy::{allow_candidates, Action, Rule, RuleCandidate};
 use crate::runner::{Runner, RunnerConfig};
@@ -2676,6 +2676,12 @@ impl Runtime {
         }
     }
 
+    /// Claude's usage limits. Tests record a reading through it.
+    #[doc(hidden)]
+    pub fn limits(&self) -> &Arc<crate::limits::Limits> {
+        &self.limits
+    }
+
     /// The Inbox's held runs, oldest first.
     async fn held_runs(
         &self,
@@ -2823,16 +2829,24 @@ impl Runtime {
             return Err(self.not_changeable(id).await);
         };
         self.scheduled_updated(&message);
-        self.send_scheduled(message).await
+        self.send_scheduled(message, By::SendNow).await
     }
 
     /// One pass of the sender: every scheduled message that is due, in due order. A message
     /// that fails to be handled is logged and the pass goes on. Returns the rows that changed.
     pub async fn send_due(&self) -> Result<Vec<ScheduledMessage>> {
+        // A send whose run was stored but whose row was not marked sent (a failed write) is
+        // sent: the row follows its run now, not only at the next start.
+        let mut changed = self
+            .store
+            .settle_sending_with_runs(self.clock.now())
+            .await?;
+        for message in &changed {
+            self.scheduled_updated(message);
+        }
         let now = timestamp(self.clock.now());
-        let mut changed = Vec::new();
         for message in self.store.due_scheduled_messages(&now).await? {
-            match self.send_scheduled(message.clone()).await {
+            match self.send_scheduled(message.clone(), By::Sender).await {
                 Ok(row) if row != message => changed.push(row),
                 Ok(_) => {}
                 Err(e) => {
@@ -2845,7 +2859,7 @@ impl Runtime {
 
     /// Sends one due message (send later spec section 4.2): refused for good, it fails; else
     /// its target is read from its topic, and it is claimed and sent through the chat path.
-    async fn send_scheduled(&self, message: ScheduledMessage) -> Result<ScheduledMessage> {
+    async fn send_scheduled(&self, message: ScheduledMessage, by: By) -> Result<ScheduledMessage> {
         let dot = self.store.get_dot(&message.dot_id).await?;
         if let Err(e) = self.require_run(&dot).await {
             let failed = self
@@ -2859,7 +2873,7 @@ impl Runtime {
             return self.settled(&message.id, failed).await;
         }
         let target = self.send_target(&dot, &message).await?;
-        self.send_scheduled_to(message, target).await
+        self.send_scheduled_by(message, target, by).await
     }
 
     /// Steps 4 to 6 of sending (send later spec section 4.2), for a target already chosen: a
@@ -2871,6 +2885,16 @@ impl Runtime {
         &self,
         message: ScheduledMessage,
         target: SendTarget,
+    ) -> Result<ScheduledMessage> {
+        self.send_scheduled_by(message, target, By::Sender).await
+    }
+
+    /// `send_scheduled_to`, for the sender or for Send now.
+    async fn send_scheduled_by(
+        &self,
+        message: ScheduledMessage,
+        target: SendTarget,
+        by: By,
     ) -> Result<ScheduledMessage> {
         let now = self.clock.now();
         let (parent, fallback) = match target {
@@ -2884,9 +2908,18 @@ impl Runtime {
             SendTarget::Reply { parent_run_id } => (Some(parent_run_id), false),
             SendTarget::New { fallback } => (None, fallback),
         };
-        // Lost to an Edit, a Cancel or another send meanwhile: nothing more to do.
+        // Lost to an Edit, a Cancel or another send meanwhile: nothing more to do. A Send now
+        // that lost to another send or a Cancel is refused, as one that came later would be
+        // (send later spec section 4.4).
         let Some(claimed) = self.store.claim_scheduled_message(&message.id, now).await? else {
-            return self.store.get_scheduled_message(&message.id).await;
+            let current = self.store.get_scheduled_message(&message.id).await?;
+            return match (by, current.status) {
+                (
+                    By::SendNow,
+                    ScheduledStatus::Sending | ScheduledStatus::Sent | ScheduledStatus::Cancelled,
+                ) => Err(crate::send_later::not_changeable(current.status)),
+                _ => Ok(current),
+            };
         };
         let extra = self.chat_extra_for(&claimed, now, fallback);
         let sent = self
@@ -2903,7 +2936,8 @@ impl Runtime {
                     .set_scheduled_waiting(&claimed.id, ScheduledWait::Busy, now)
                     .await?
             }
-            Err(_) if self.at_the_limit(&claimed.dot_id).await? => {
+            // Claude's limit was reached after the target was read: wait for it to reset.
+            Err(Error::Invalid(m)) if crate::limits::is_limit_reached(&m) => {
                 self.store
                     .set_scheduled_waiting(&claimed.id, ScheduledWait::UsageLimit, now)
                     .await?
@@ -3054,6 +3088,13 @@ impl Runtime {
             }
         })
     }
+}
+
+/// Who sends a scheduled message: the sender's pass, or the person's Send now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum By {
+    Sender,
+    SendNow,
 }
 
 /// A Personal workspace's name, trimmed; it needs one.

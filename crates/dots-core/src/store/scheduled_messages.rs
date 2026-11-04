@@ -142,7 +142,8 @@ impl Store {
     }
 
     /// A due message that cannot go yet: `scheduled` with the reason `wait`. From `sending`
-    /// (a send that lost its race) always; from `scheduled` only when the reason differs, so a
+    /// (a send that lost its race) always; from `scheduled` only when it is still due at `now`
+    /// (an Edit may have moved it later since the pass read it) and the reason differs, so a
     /// pass that finds the same reason again changes nothing (`None`).
     pub async fn set_scheduled_waiting(
         &self,
@@ -153,7 +154,8 @@ impl Store {
         let ts = timestamp(now);
         self.change_scheduled(
             "UPDATE scheduled_messages SET status = 'scheduled', waiting = ?1, updated_at = ?2 \
-             WHERE id = ?3 AND (status = 'sending' OR (status = 'scheduled' AND waiting IS NOT ?1))",
+             WHERE id = ?3 AND (status = 'sending' \
+             OR (status = 'scheduled' AND due_at <= ?2 AND waiting IS NOT ?1))",
             &[Some(wait.as_str()), Some(&ts), Some(id)],
         )
         .await
@@ -175,7 +177,8 @@ impl Store {
         .await
     }
 
-    /// A message that cannot be sent: `failed` with `error`, from `scheduled` or `sending`.
+    /// A message that cannot be sent: `failed` with `error`, from `sending`, or from `scheduled`
+    /// while it is due at `now` (an Edit may have moved it later since the pass read it).
     pub async fn mark_scheduled_failed(
         &self,
         id: &str,
@@ -184,8 +187,9 @@ impl Store {
     ) -> Result<Option<ScheduledMessage>> {
         let ts = timestamp(now);
         self.change_scheduled(
-            "UPDATE scheduled_messages SET status = 'failed', error = ?, waiting = NULL, \
-             updated_at = ? WHERE id = ? AND status IN ('scheduled', 'sending')",
+            "UPDATE scheduled_messages SET status = 'failed', error = ?1, waiting = NULL, \
+             updated_at = ?2 WHERE id = ?3 \
+             AND (status = 'sending' OR (status = 'scheduled' AND due_at <= ?2))",
             &[Some(error), Some(&ts), Some(id)],
         )
         .await
@@ -241,20 +245,25 @@ impl Store {
         .await
     }
 
-    /// At start (send later spec section 4.5): a row a crash left `sending` is `sent` when a
-    /// run carries its id in `send_later.id` (that run, queued then, is its send), else
-    /// `scheduled` again. Returns the rows changed.
-    pub async fn recover_sending_messages(
+    /// The ids of the rows being sent.
+    async fn sending_ids(&self) -> Result<Vec<String>> {
+        Ok(
+            sqlx::query_scalar("SELECT id FROM scheduled_messages WHERE status = 'sending'")
+                .fetch_all(&self.pool)
+                .await?,
+        )
+    }
+
+    /// A row `sending` whose run is stored (a run carries its id in `send_later.id`: that run,
+    /// queued then, is its send) is `sent`, as that run. The sender's pass does this for a
+    /// send whose last write failed; the start does it after a crash. Returns the rows changed.
+    pub async fn settle_sending_with_runs(
         &self,
         now: DateTime<Utc>,
     ) -> Result<Vec<ScheduledMessage>> {
         let ts = timestamp(now);
-        let ids: Vec<String> =
-            sqlx::query_scalar("SELECT id FROM scheduled_messages WHERE status = 'sending'")
-                .fetch_all(&self.pool)
-                .await?;
         let mut out = Vec::new();
-        for id in ids {
+        for id in self.sending_ids().await? {
             let run: Option<(String, String)> = sqlx::query_as(
                 "SELECT id, queued_at FROM runs \
                  WHERE json_extract(payload, '$.send_later.id') = ? \
@@ -263,25 +272,39 @@ impl Store {
             .bind(&id)
             .fetch_optional(&self.pool)
             .await?;
-            let changed = match run {
-                Some((run_id, queued_at)) => {
-                    self.change_scheduled(
+            if let Some((run_id, queued_at)) = run {
+                let changed = self
+                    .change_scheduled(
                         "UPDATE scheduled_messages SET status = 'sent', run_id = ?1, \
                          sent_at = ?2, updated_at = ?3, waiting = NULL, error = NULL \
                          WHERE id = ?4 AND status = 'sending'",
                         &[Some(&run_id), Some(&queued_at), Some(&ts), Some(&id)],
                     )
-                    .await?
-                }
-                None => {
-                    self.change_scheduled(
-                        "UPDATE scheduled_messages SET status = 'scheduled', updated_at = ? \
-                         WHERE id = ? AND status = 'sending'",
-                        &[Some(&ts), Some(&id)],
-                    )
-                    .await?
-                }
-            };
+                    .await?;
+                out.extend(changed);
+            }
+        }
+        Ok(out)
+    }
+
+    /// At start (send later spec section 4.5): a row a crash left `sending` is `sent` when its
+    /// run is stored (`settle_sending_with_runs`), else `scheduled` again. Only at start: while
+    /// Dots runs, a row with no run yet may be on its way through the chat path. Returns the
+    /// rows changed.
+    pub async fn recover_sending_messages(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<ScheduledMessage>> {
+        let ts = timestamp(now);
+        let mut out = self.settle_sending_with_runs(now).await?;
+        for id in self.sending_ids().await? {
+            let changed = self
+                .change_scheduled(
+                    "UPDATE scheduled_messages SET status = 'scheduled', updated_at = ? \
+                     WHERE id = ? AND status = 'sending'",
+                    &[Some(&ts), Some(&id)],
+                )
+                .await?;
             out.extend(changed);
         }
         Ok(out)
