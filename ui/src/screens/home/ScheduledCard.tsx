@@ -179,6 +179,14 @@ export function ScheduledCard(props: {
   );
 }
 
+/// The time the Edit form starts with: the message's own, or an hour from `now` for one that is
+/// due or within two minutes of it (its own time would be refused: the core takes a time at
+/// least a minute ahead, and the field drops the seconds).
+export function editTime(dueAt: string, now: number): Date {
+  const due = Date.parse(dueAt);
+  return due - now < 2 * 60_000 ? new Date(now + 3_600_000) : new Date(due);
+}
+
 /// Edit: the text and the time, saved together.
 function EditForm(props: {
   message: ScheduledMessage;
@@ -189,7 +197,7 @@ function EditForm(props: {
   const textId = useId();
   const atId = useId();
   const [text, setText] = useState(props.message.text);
-  const [at, setAt] = useState(() => toPicker(new Date(props.message.due_at)));
+  const [at, setAt] = useState(() => toPicker(editTime(props.message.due_at, Date.now())));
   const picked = fromPicker(at);
   return (
     <form

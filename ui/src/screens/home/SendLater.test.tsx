@@ -1,19 +1,28 @@
-import { screen, waitFor, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ScheduledMessage } from "@/api/types";
-import { toPicker } from "@/lib/later";
+import { toPicker, type LaterPreset } from "@/lib/later";
+import { Composer, SCHEDULE_LOCKED } from "@/screens/home/Composer";
 import { backend } from "@/test/backend";
 import { sample } from "@/test/fixtures";
 import { chat, dot, home, reply } from "@/test/home";
 import { renderApp } from "@/test/render";
 
-/// The one preset these tests offer: in an hour, at a fixed time.
-const AT = new Date("2026-11-05T09:00:00.000Z");
+/// The one preset these tests offer: in an hour, at a time fixed when the tests load.
+const AT = new Date(Date.now() + 3_600_000);
+/// Other presets a test offers instead, given the time the menu opens at.
+const offer = vi.hoisted(() => ({ presets: null as null | ((now: Date) => LaterPreset[]) }));
 vi.mock("@/lib/later", async (actual) => ({
   ...(await actual<typeof import("@/lib/later")>()),
-  laterPresets: () => [{ id: "hour", label: "In 1 hour", at: AT }],
+  laterPresets: (now: Date) =>
+    offer.presets?.(now) ?? [{ id: "hour", label: "In 1 hour", at: AT }],
 }));
+
+afterEach(() => {
+  offer.presets = null;
+});
 
 const box = () => screen.getByLabelText("Message");
 async function readyBox() {
@@ -114,6 +123,39 @@ describe("the Send later menu", () => {
       "Pick a time at least a minute from now.",
     );
     expect(box()).toHaveValue("Ship it");
+  });
+
+  it("does not offer a preset less than a minute away", async () => {
+    home([chat("a", "10:00")]);
+    offer.presets = (now) => [
+      { id: "evening", label: "This evening (6 PM)", at: new Date(now.getTime() + 30_000) },
+      { id: "hour", label: "In 1 hour", at: AT },
+    ];
+    const { user } = renderApp(`/home/${dot.id}`);
+    await user.type(await readyBox(), "Ship it");
+    const menu = await openMenu(user);
+    expect(within(menu).getByRole("menuitem", { name: /In 1 hour/ })).toBeVisible();
+    expect(within(menu).queryByRole("menuitem", { name: /This evening/ })).toBeNull();
+  });
+
+  it("refuses in the dialog when the box was locked meanwhile", async () => {
+    const onSchedule = vi.fn(() => Promise.resolve());
+    const onSend = () => Promise.resolve();
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <Composer disabled={false} hint="" onSend={onSend} onSchedule={onSchedule} />,
+    );
+    await user.type(screen.getByLabelText("Message"), "Ship it");
+    const menu = await openMenu(user);
+    await user.click(within(menu).getByRole("menuitem", { name: "Pick a date and time…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Send later" });
+    // The topic turned busy: the box is locked, as Send is.
+    rerender(<Composer disabled hint="" onSend={onSend} onSchedule={onSchedule} />);
+    await user.click(within(dialog).getByRole("button", { name: "Schedule" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(SCHEDULE_LOCKED);
+    expect(screen.getByRole("dialog", { name: "Send later" })).toBeVisible();
+    expect(onSchedule).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Message")).toHaveValue("Ship it");
   });
 
   it("is locked when Send is", async () => {

@@ -6,6 +6,11 @@ import { Button } from "@/components/ui/button";
 import { useComposerReport } from "@/lib/use-activity";
 import { SendLaterMenu } from "@/screens/home/SendLaterMenu";
 
+/// Why Send later did nothing: the box was locked, as Send is, or emptied meanwhile.
+export const SCHEDULE_LOCKED =
+  "You can't schedule a message right now. Try again once you can send one.";
+export const SCHEDULE_EMPTY = "Type a message to schedule.";
+
 /// Where a message is typed: one rounded box holding the text and, at its bottom right, the send
 /// button (conversational chat spec section 5). The text grows with what is typed, up to a few
 /// lines, then scrolls. Enter sends; Shift+Enter starts a new line. The text is cleared once the
@@ -44,10 +49,13 @@ export function Composer(props: {
       () => {},
     );
   }
-  /// Rejects with the refusal, which the menu shows; the text stays for another try.
+  /// Rejects with the refusal, which the menu shows; the text stays for another try. The
+  /// box may have been locked or emptied while the dialog was open: that is a refusal too, so
+  /// the dialog does not close as if the message were scheduled.
   function schedule(at: Date): Promise<unknown> {
     const message = text.trim();
-    if (message === "" || props.disabled || !props.onSchedule) return Promise.resolve();
+    if (props.disabled || !props.onSchedule) return Promise.reject(new Error(SCHEDULE_LOCKED));
+    if (message === "") return Promise.reject(new Error(SCHEDULE_EMPTY));
     return props.onSchedule(message, at).then(() => setText(""));
   }
   return (

@@ -11,7 +11,12 @@ import { createQueryClient } from "@/lib/query";
 import { backend } from "@/test/backend";
 import { sample } from "@/test/fixtures";
 import { chat } from "@/test/home";
-import { ScheduledCard, ScheduledCards, scheduledTarget } from "@/screens/home/ScheduledCard";
+import {
+  editTime,
+  ScheduledCard,
+  ScheduledCards,
+  scheduledTarget,
+} from "@/screens/home/ScheduledCard";
 
 const NOW = new Date(2026, 10, 4, 10, 0);
 const MIN = 60_000;
@@ -83,6 +88,9 @@ describe("a scheduled message's card", () => {
   });
 
   it("calls the core from Send now, Edit and Cancel", async () => {
+    // Before its time, so the edit starts with it.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
     const message = row();
     backend.on("send_scheduled_now", () => ({ ...message, status: "sent" }));
     backend.on("cancel_scheduled_message", () => ({ ...message, status: "cancelled" }));
@@ -118,6 +126,26 @@ describe("a scheduled message's card", () => {
       ]),
     );
     await waitFor(() => expect(within(card).queryByLabelText("Send at")).toBeNull());
+  });
+
+  it("starts the edit of a message already due an hour from now", async () => {
+    const message = row({ waiting: "busy", due_at: new Date(Date.now() - 5 * MIN).toISOString() });
+    const user = userEvent.setup();
+    const { card } = show(message);
+    const opened = Date.now();
+    await user.click(within(card).getByRole("button", { name: "Edit" }));
+    const field = within(card).getByLabelText("Send at");
+    const shown = fromPicker((field as HTMLInputElement).value)!.getTime();
+    // An hour from when the form opened, to the minute.
+    expect(shown).toBeGreaterThanOrEqual(opened + 59 * MIN);
+    expect(shown).toBeLessThanOrEqual(Date.now() + 60 * MIN);
+  });
+
+  it("keeps a message's own time for the edit unless it is due or within two minutes", () => {
+    const now = NOW.getTime();
+    expect(editTime(at(3 * MIN), now)).toEqual(new Date(at(3 * MIN)));
+    expect(editTime(at(90_000), now)).toEqual(new Date(now + 60 * MIN));
+    expect(editTime(at(-MIN), now)).toEqual(new Date(now + 60 * MIN));
   });
 
   it("discards an edit", async () => {

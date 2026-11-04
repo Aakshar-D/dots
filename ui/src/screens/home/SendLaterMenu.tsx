@@ -19,9 +19,15 @@ import { errorMessage, notifyError } from "@/lib/notify";
 const ITEM =
   "flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 outline-none select-none data-[highlighted]:bg-accent";
 
-/// The presets of `@/lib/later` with Send later's names: the Monday preset says when it is.
-function presets(now: Date): LaterPreset[] {
-  return laterPresets(now).map((p) => (p.id === "next_week" ? { ...p, label: "Monday 9 AM" } : p));
+/// How soon a message may be scheduled: the core refuses less than a minute ahead.
+const MIN_AHEAD_MS = 60_000;
+
+/// The presets of `@/lib/later` with Send later's names: the Monday preset says when it is. A
+/// preset less than a minute away (6 PM at 5:59:30) is not offered: the core would refuse it.
+export function sendLaterPresets(now: Date): LaterPreset[] {
+  return laterPresets(now)
+    .filter((p) => p.at.getTime() - now.getTime() >= MIN_AHEAD_MS)
+    .map((p) => (p.id === "next_week" ? { ...p, label: "Monday 9 AM" } : p));
 }
 
 /// The arrow beside Send (send later spec section 6): a menu of the later presets, each with
@@ -38,7 +44,7 @@ export function SendLaterMenu(props: {
       <DropdownMenu.Root
         modal={false}
         // Worked out when the menu opens, so a preset that has passed is not offered.
-        onOpenChange={(open) => open && setShown(presets(new Date()))}
+        onOpenChange={(open) => open && setShown(sendLaterPresets(new Date()))}
       >
         <DropdownMenu.Trigger asChild>
           <Button
@@ -64,6 +70,8 @@ export function SendLaterMenu(props: {
               <DropdownMenu.Item
                 key={preset.id}
                 className={ITEM}
+                // A menu left open goes stale: a preset that has come within a minute is
+                // refused by the core, and the refusal shows as usual.
                 onSelect={() => void props.onPick(preset.at).catch(notifyError)}
               >
                 <span className="flex-1">{preset.label}</span>
