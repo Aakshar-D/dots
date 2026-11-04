@@ -249,3 +249,18 @@ fn windows_reserved_names_get_a_suffix() {
     assert_eq!(dot_name("console"), "console");
     assert_eq!(dot_name("com10"), "com10");
 }
+
+#[test]
+fn plumbing_tools_need_no_rule_of_their_own() {
+    let listed = tools(&["TodoWrite", "Task", "ToolSearch", "KillBash", "Read"]);
+    let (policy, warnings) = agent_policy(&AgentTools::Listed(listed));
+    assert!(warnings.is_empty(), "{warnings:?}");
+    for tool in ["TodoWrite", "Task", "ToolSearch", "KillBash"] {
+        assert!(policy.rules.iter().all(|r| r.tool != tool), "{tool}");
+        assert_eq!(policy.resolve(tool, &json!({})), Action::Allow, "{tool}");
+    }
+    assert!(policy
+        .rules
+        .iter()
+        .any(|r| r.tool == "Read" && r.action == Action::Allow));
+}

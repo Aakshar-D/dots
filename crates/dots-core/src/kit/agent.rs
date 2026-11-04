@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::frontmatter::parse_frontmatter;
-use crate::policy::{Action, Policy, Preset, Rule};
+use crate::policy::{Action, Policy, Preset, Rule, PLUMBING_TOOLS};
 
 /// An agent file larger than this is not read.
 pub const MAX_AGENT_BYTES: u64 = 256 * 1024;
@@ -14,21 +14,16 @@ pub const MAX_AGENT_BYTES: u64 = 256 * 1024;
 /// How deep `agent_files` looks under its folder.
 const MAX_DEPTH: usize = 6;
 
-/// Tools an import allows by their bare name.
+/// Tools an import allows by their bare name. The model's bookkeeping tools
+/// (`PLUMBING_TOOLS`) need no rule: every policy allows them.
 const SAFE_TOOLS: &[&str] = &[
     "Read",
     "LS",
     "Glob",
     "Grep",
     "WebSearch",
-    "TodoWrite",
-    "Task",
-    "Agent",
     "NotebookRead",
     "Skill",
-    "BashOutput",
-    "KillShell",
-    "ExitPlanMode",
 ];
 
 /// Tools an import never allows bare: a rule of the name alone would let them run anything or
@@ -237,6 +232,9 @@ pub fn agent_policy(tools: &AgentTools) -> (Policy, Vec<String>) {
             continue;
         }
         seen.push(tool);
+        if PLUMBING_TOOLS.contains(&tool) {
+            continue;
+        }
         if SAFE_TOOLS.contains(&tool) {
             policy.rules.push(Rule::new(tool, Action::Allow));
         } else if RISKY_TOOLS.contains(&tool) {
