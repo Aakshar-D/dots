@@ -1229,6 +1229,11 @@ pub fn samples() -> Value {
                 dot_name: "nightly-tests".into(),
                 reason: "nightly-tests is in another workspace than the crew team.".into(),
             }],
+            not_delivered: vec![],
+            back: vec![],
+            snoozed: vec![],
+            done: vec![],
+            hidden_messages: vec![],
         }),
         // What `library_add` takes and the Library commands answer: a config of every kind and
         // transport, and entries of every kind (a plugin's own server among them).

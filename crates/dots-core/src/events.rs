@@ -1,6 +1,7 @@
 use serde::Serialize;
 use tokio::sync::broadcast;
 
+use crate::inbox::InboxMark;
 use crate::model::{
     Approval, Message, PausedReason, Run, RunEventRecord, ScheduleSkip, WorkflowRun,
 };
@@ -138,6 +139,15 @@ pub enum RuntimeEvent {
     /// what Settings, the Env tab and the Library show of it.
     OrgUpdated {
         org_id: String,
+    },
+    /// An Inbox item was snoozed, unsnoozed, marked done or undone, came back from snooze, or
+    /// its mark went because it left (snooze and done spec section 4.4): the Inbox and the
+    /// counts read again.
+    InboxUpdated,
+    /// Snoozed items came back at their time, in one wake pass (spec section 4.5). The app
+    /// notifies once for them all. An `InboxUpdated` goes with it.
+    SnoozeEnded {
+        items: Vec<InboxMark>,
     },
 }
 

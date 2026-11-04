@@ -678,6 +678,36 @@ pub struct Inbox {
     /// a team's members had to share them (accounts design section 6.3).
     #[serde(default)]
     pub team_scope: Vec<TeamScopeIssue>,
+    /// Chat messages that did not reach their dot and that the person has not retried or
+    /// discarded, newest mark first (snooze and done spec section 3.9.7). They are not in
+    /// `review_runs`.
+    #[serde(default)]
+    pub not_delivered: Vec<UndeliveredMessage>,
+    /// Marks of items back from snooze, still in the Inbox, newest first (snooze and done spec
+    /// section 4.3). The items stay in their sections.
+    #[serde(default)]
+    pub back: Vec<crate::inbox::InboxMark>,
+    /// Marks of snoozed items still in the Inbox, soonest back first. The items are left out
+    /// of their sections.
+    #[serde(default)]
+    pub snoozed: Vec<crate::inbox::InboxMark>,
+    /// Marks of items done in the last 7 days and still in the Inbox, newest first. The items
+    /// are left out of their sections.
+    #[serde(default)]
+    pub done: Vec<crate::inbox::InboxMark>,
+    /// The waiting messages that are hidden (snoozed, or done however long ago). The questions
+    /// and notes are listed with the messages, not here, so this tells the UI which to leave
+    /// out once a done one is no longer in `done`.
+    #[serde(default)]
+    pub hidden_messages: Vec<String>,
+}
+
+/// A chat run that did not reach its dot, as the Inbox lists it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UndeliveredMessage {
+    #[serde(flatten)]
+    pub run: Run,
+    pub dot_name: String,
 }
 
 /// A member dot that is not in its team's account or workspace, as the Inbox lists it.
