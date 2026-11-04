@@ -32,6 +32,11 @@ export const sample = {
   usage: T.UsageSummary.parse(contract.UsageSummary),
   pageStates: T.PageState.array().parse(contract.PageState),
   diff: T.WorktreeDiff.parse(contract.WorktreeDiff),
+  /// A scheduled message waiting for its busy topic, and one that failed.
+  scheduledMessage: T.ScheduledMessage.parse(contract.ScheduledMessage),
+  scheduledFailed: T.ScheduledMessage.parse(contract.ScheduledMessageFailed),
+  /// A chat run a scheduled message became, sent late.
+  runSentLate: T.Run.parse(contract.RunSentLate),
   startupError: T.StartupError.parse(contract.StartupError),
   /// One schedule of each kind: once; every with an anchor and a count; every without an
   /// anchor; daily until a date; weekly; cron.
@@ -135,6 +140,8 @@ export function installDefaults(): void {
   backend.on("approval_rule_candidates", () => []);
   // A conversation asks for the dot's app proposals; by default it has none.
   backend.on("app_proposals_list", () => []);
+  // A conversation and the dot menu ask for the dot's scheduled messages; by default none.
+  backend.on("scheduled_messages", () => []);
   backend.on("dot_overview", () => []);
   backend.on("list_dots", () => []);
   backend.on("get_settings", () => sample.settings);

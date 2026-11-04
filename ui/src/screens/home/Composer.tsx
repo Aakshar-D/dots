@@ -4,15 +4,19 @@ import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { useComposerReport } from "@/lib/use-activity";
+import { SendLaterMenu } from "@/screens/home/SendLaterMenu";
 
 /// Where a message is typed: one rounded box holding the text and, at its bottom right, the send
 /// button (conversational chat spec section 5). The text grows with what is typed, up to a few
 /// lines, then scrolls. Enter sends; Shift+Enter starts a new line. The text is cleared once the
-/// send has succeeded; a refused message stays for another try.
+/// send has succeeded; a refused message stays for another try. With `onSchedule`, an arrow
+/// beside Send schedules the text for later instead (send later spec section 6), usable
+/// exactly when Send is; the text is cleared once it is scheduled.
 export function Composer(props: {
   disabled: boolean;
   hint: string;
   onSend: (message: string) => Promise<unknown>;
+  onSchedule?: (message: string, at: Date) => Promise<unknown>;
 }) {
   const [text, setText] = useState("");
   const hasText = text.trim() !== "";
@@ -39,6 +43,12 @@ export function Composer(props: {
       () => setText(""),
       () => {},
     );
+  }
+  /// Rejects with the refusal, which the menu shows; the text stays for another try.
+  function schedule(at: Date): Promise<unknown> {
+    const message = text.trim();
+    if (message === "" || props.disabled || !props.onSchedule) return Promise.resolve();
+    return props.onSchedule(message, at).then(() => setText(""));
   }
   return (
     // The box draws the focus ring for the text inside it, which has none of its own.
@@ -67,6 +77,9 @@ export function Composer(props: {
         }}
         className="field-sizing-content max-h-40 min-w-0 flex-1 resize-none overflow-y-auto bg-transparent px-1.5 py-1 text-base outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed md:text-sm"
       />
+      {props.onSchedule && (
+        <SendLaterMenu disabled={props.disabled || !hasText} onPick={schedule} />
+      )}
       <Button
         size="icon-sm"
         className="shrink-0 rounded-full"
