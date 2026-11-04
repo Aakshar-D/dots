@@ -15,9 +15,9 @@ use crate::{Error, Result};
 
 const WR_COLUMNS: &str = "id, workflow_id, team_id, definition, project_id, project, task, \
     trigger_kind, origin_run_id, test, status, waiting_on, current_step, budget, send_backs, \
-    active_ms, error, started_at, ended_at";
+    send_back, active_ms, error, started_at, ended_at";
 const STEP_COLUMNS: &str = "id, workflow_run_id, step_id, attempt, status, handoff, decision, \
-    error, started_at, ended_at";
+    error, outcome, notice, send_back, deploy_result, started_at, ended_at";
 
 fn step_from_row(row: &SqliteRow) -> Result<StepRun> {
     Ok(StepRun {
@@ -31,6 +31,12 @@ fn step_from_row(row: &SqliteRow) -> Result<StepRun> {
             .transpose()?,
         decision: opt_json(row.try_get("decision")?)?,
         error: row.try_get("error")?,
+        outcome: row.try_get("outcome")?,
+        notice: row.try_get("notice")?,
+        send_back: opt_json(row.try_get("send_back")?)?,
+        deploy_result: opt_json(row.try_get("deploy_result")?)?
+            .map(serde_json::from_value)
+            .transpose()?,
         started_at: row.try_get("started_at")?,
         ended_at: row.try_get("ended_at")?,
     })
@@ -108,6 +114,9 @@ impl Store {
             current_step: row.try_get("current_step")?,
             budget: serde_json::from_str(&row.try_get::<String, _>("budget")?)?,
             send_backs: row.try_get::<i64, _>("send_backs")? as u32,
+            send_back: opt_json(row.try_get("send_back")?)?
+                .map(serde_json::from_value)
+                .transpose()?,
             spent_runs: runs as u32,
             spent_tokens: tokens.max(0) as u64,
             spent_cache_read: cached.max(0) as u64,
@@ -255,6 +264,12 @@ impl Store {
         if let Some(n) = change.send_backs {
             set("send_backs", Some(n.to_string()));
         }
+        if let Some(s) = &change.send_back {
+            set(
+                "send_back",
+                s.as_ref().map(serde_json::to_string).transpose()?,
+            );
+        }
         if let Some(ms) = change.active_ms {
             set("active_ms", Some(ms.to_string()));
         }
@@ -369,8 +384,59 @@ impl Store {
                 .execute(&mut *tx)
                 .await?;
         }
+        if let Some(n) = &change.notice {
+            sqlx::query("UPDATE workflow_step_runs SET notice = ? WHERE id = ?")
+                .bind(n)
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+        }
+        if let Some(r) = &change.deploy_result {
+            let text = r.as_ref().map(serde_json::to_string).transpose()?;
+            sqlx::query("UPDATE workflow_step_runs SET deploy_result = ? WHERE id = ?")
+                .bind(text)
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+        }
         tx.commit().await?;
         self.get_step_run(id).await
+    }
+
+    /// Records the outcome label the step run's agent reported (`None` clears it). The label
+    /// is not checked here: the tool that reports it checks it against the step's outcomes.
+    pub async fn set_step_outcome(
+        &self,
+        step_run_id: &str,
+        outcome: Option<&str>,
+    ) -> Result<StepRun> {
+        let done = sqlx::query("UPDATE workflow_step_runs SET outcome = ? WHERE id = ?")
+            .bind(outcome)
+            .bind(step_run_id)
+            .execute(&self.pool)
+            .await?;
+        if done.rows_affected() == 0 {
+            return Err(Error::NotFound(format!("step run {step_run_id}")));
+        }
+        self.get_step_run(step_run_id).await
+    }
+
+    /// Records the send-back an agent step asked for (`{"to": <step id>, "note": ...}`), or
+    /// clears it, unchecked: the tool checks it. `Error::NotFound` for an unknown step run.
+    pub async fn set_step_send_back(
+        &self,
+        step_run_id: &str,
+        send_back: Option<&Value>,
+    ) -> Result<StepRun> {
+        let done = sqlx::query("UPDATE workflow_step_runs SET send_back = ? WHERE id = ?")
+            .bind(send_back.map(Value::to_string))
+            .bind(step_run_id)
+            .execute(&self.pool)
+            .await?;
+        if done.rows_affected() == 0 {
+            return Err(Error::NotFound(format!("step run {step_run_id}")));
+        }
+        self.get_step_run(step_run_id).await
     }
 
     /// Dismisses the questions the step's runs asked that are still open (a stopped workflow

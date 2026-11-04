@@ -588,13 +588,28 @@
     "webhook_url",
     "preview_schedule",
     "policy_preset",
+    "rules_touch_private",
     "new_dot_spec",
     "test_endpoint",
     "run_now",
     "chat",
     "resend_run",
+    "attachment_add_path",
+    "attachment_add_bytes",
+    "attachment_remove",
+    "conversation_files",
+    "conversation_file_open",
+    "conversation_file_reveal",
     "cancel_run",
     "keep_waiting",
+    "retry_delivery",
+    "discard_delivery",
+    "delivery_today",
+    "schedule_message",
+    "scheduled_messages",
+    "send_scheduled_now",
+    "edit_scheduled_message",
+    "cancel_scheduled_message",
     "list_runs",
     "schedule_skips",
     "get_run",
@@ -603,9 +618,14 @@
     "approvals_for_run",
     "decide_approval",
     "approval_rule_candidates",
+    "approval_touches_private",
     "decide_run_approvals",
     "inbox",
     "inbox_count",
+    "inbox_snooze",
+    "inbox_unsnooze",
+    "inbox_done",
+    "inbox_undo_done",
     "dismiss_schedule_attention",
     "worktree_diff",
     "discard_worktree",
@@ -717,6 +737,24 @@
     "total": 42,
     "truncated": true
   },
+  "ConversationFile": {
+    "at": "2026-10-09T12:00:00.000Z",
+    "can_open": true,
+    "exists": true,
+    "name": "report.pdf",
+    "path": "C:\\work\\attachments\\01J0RUN6\\report.pdf",
+    "run_id": "01J0RUN6",
+    "source": "attached"
+  },
+  "ConversationFileGone": {
+    "at": "2026-10-09T12:00:00.000Z",
+    "can_open": true,
+    "exists": false,
+    "name": "summary.md",
+    "path": "C:\\work\\out\\summary.md",
+    "run_id": "01J0RUN6",
+    "source": "written"
+  },
   "CreatedApiKey": {
     "key": {
       "created_at": "2026-10-09T12:00:00.000Z",
@@ -745,6 +783,11 @@
   "CurrentScope": {
     "account": "personal",
     "workspace": "default"
+  },
+  "DeliveryCounts": {
+    "delivered": 4,
+    "not_delivered": 1,
+    "sent": 5
   },
   "Dot": {
     "approval_wait_secs": 240,
@@ -1096,6 +1139,9 @@
       "base_commit": "0123abcd",
       "branch": "dots/nightly-tests/01J0RUN",
       "cost_usd": 1.32,
+      "delivered_at": "2026-10-09T12:00:00.000Z",
+      "delivery": "delivered",
+      "dismissed_at": null,
       "dot_id": "01J0DOT",
       "ended_at": "2026-10-09T12:00:00.000Z",
       "error": null,
@@ -1120,6 +1166,9 @@
       "tokens_in": 1200,
       "tokens_out": 340,
       "trigger": "schedule",
+      "undelivered_at": null,
+      "undelivered_reason": null,
+      "wait_reason": null,
       "workflow_step_run_id": null,
       "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
     },
@@ -1348,6 +1397,11 @@
       "internal",
       "cancelled"
     ],
+    "Delivery": [
+      "delivered",
+      "waiting",
+      "not_delivered"
+    ],
     "EngineKind": [
       "claude",
       "local"
@@ -1355,6 +1409,10 @@
     "EntryKind": [
       "plain",
       "secret"
+    ],
+    "FileSource": [
+      "attached",
+      "written"
     ],
     "FileStatus": [
       "added",
@@ -1392,6 +1450,19 @@
       "policy_invalid",
       "org_removed",
       "not_member"
+    ],
+    "InboxKind": [
+      "message",
+      "approval",
+      "review",
+      "not_delivered",
+      "attention",
+      "watcher",
+      "held",
+      "tools",
+      "instructions",
+      "app_review",
+      "team_scope"
     ],
     "InstructionStatus": [
       "pending",
@@ -1454,6 +1525,18 @@
       "completed",
       "expired"
     ],
+    "ScheduledStatus": [
+      "scheduled",
+      "sending",
+      "sent",
+      "failed",
+      "cancelled"
+    ],
+    "ScheduledWait": [
+      "busy",
+      "approval",
+      "usage_limit"
+    ],
     "TriggerKind": [
       "schedule",
       "webhook",
@@ -1474,6 +1557,13 @@
     "ValueSource": [
       "org",
       "personal"
+    ],
+    "WaitReason": [
+      "busy",
+      "usage_hold",
+      "updating",
+      "dot_busy",
+      "queued"
     ],
     "WatcherKind": [
       "folder",
@@ -1701,6 +1791,28 @@
         "run_id": "01J0RUN"
       }
     ],
+    "back": [
+      {
+        "back_at": "2026-10-09T12:00:00.000Z",
+        "done_at": null,
+        "dot_id": "01J0DOT",
+        "id": "01J0RUN",
+        "kind": "review",
+        "snoozed_until": null,
+        "title": "nightly-tests: run to review"
+      }
+    ],
+    "done": [
+      {
+        "back_at": null,
+        "done_at": "2026-10-09T12:00:00.000Z",
+        "dot_id": null,
+        "id": "01J0SRV/personal",
+        "kind": "tools",
+        "snoozed_until": null,
+        "title": "github tools changed"
+      }
+    ],
     "held": [
       {
         "dot_id": "01J0DOT",
@@ -1727,6 +1839,9 @@
         "trigger": "watcher"
       }
     ],
+    "hidden_messages": [
+      "01J0MSG1"
+    ],
     "instructions": [
       {
         "dot_name": "shopper",
@@ -1745,11 +1860,52 @@
         }
       }
     ],
+    "not_delivered": [
+      {
+        "base_commit": "0123abcd",
+        "branch": "dots/nightly-tests/01J0RUN",
+        "cost_usd": 1.32,
+        "delivered_at": null,
+        "delivery": "not_delivered",
+        "dismissed_at": null,
+        "dot_id": "01J0DOT",
+        "dot_name": "nightly-tests",
+        "ended_at": "2026-10-09T12:00:00.000Z",
+        "error": "claude CLI not found",
+        "hold_released": false,
+        "id": "01J0RUN",
+        "parent_run_id": null,
+        "payload": null,
+        "queued_at": "2026-10-09T12:00:00.000Z",
+        "quiet_limit_secs": null,
+        "quiet_since": null,
+        "quiet_stopped": false,
+        "retry_of": null,
+        "reviewed_at": null,
+        "root_run_id": "01J0RUN",
+        "session_id": "sess-1",
+        "started_at": "2026-10-09T12:00:00.000Z",
+        "status": "failed",
+        "summary": null,
+        "tokens_cache_read": 0,
+        "tokens_in": 1200,
+        "tokens_out": 340,
+        "trigger": "chat",
+        "undelivered_at": "2026-10-09T12:00:00.000Z",
+        "undelivered_reason": "claude CLI not found",
+        "wait_reason": null,
+        "workflow_step_run_id": null,
+        "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
+      }
+    ],
     "review_runs": [
       {
         "base_commit": "0123abcd",
         "branch": "dots/nightly-tests/01J0RUN",
         "cost_usd": 1.32,
+        "delivered_at": "2026-10-09T12:00:00.000Z",
+        "delivery": "delivered",
+        "dismissed_at": null,
         "dot_id": "01J0DOT",
         "dot_name": "nightly-tests",
         "ended_at": "2026-10-09T12:00:00.000Z",
@@ -1775,9 +1931,23 @@
         "tokens_in": 1200,
         "tokens_out": 340,
         "trigger": "schedule",
+        "undelivered_at": null,
+        "undelivered_reason": null,
+        "wait_reason": null,
         "workflow_step_run_id": null,
         "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN",
         "worktree_exists": true
+      }
+    ],
+    "snoozed": [
+      {
+        "back_at": null,
+        "done_at": null,
+        "dot_id": "01J0DOT",
+        "id": "01J0MSG1",
+        "kind": "message",
+        "snoozed_until": "2026-10-21T09:00:00Z",
+        "title": "nightly-tests asks: Ship the release?"
       }
     ],
     "team_scope": [
@@ -1815,6 +1985,99 @@
       }
     ]
   },
+  "InboxKey": [
+    {
+      "id": "01J0RUN",
+      "kind": "review"
+    },
+    {
+      "id": "01J0MSG1",
+      "kind": "message"
+    },
+    {
+      "id": "01J0SRV/personal",
+      "kind": "tools"
+    }
+  ],
+  "InboxKeys": [
+    {
+      "id": "01J0MSG1",
+      "kind": "message"
+    },
+    {
+      "id": "01J0APR",
+      "kind": "approval"
+    },
+    {
+      "id": "01J0RUN",
+      "kind": "not_delivered"
+    },
+    {
+      "id": "01J0RUN",
+      "kind": "review"
+    },
+    {
+      "id": "01J0RUN",
+      "kind": "attention"
+    },
+    {
+      "id": "01J0SRV/personal",
+      "kind": "tools"
+    },
+    {
+      "id": "01J0WAT2@2026-10-09T12:00:00.000Z",
+      "kind": "watcher"
+    },
+    {
+      "id": "01J0RUN4",
+      "kind": "held"
+    },
+    {
+      "id": "01J0RUN5",
+      "kind": "held"
+    },
+    {
+      "id": "01J0INS",
+      "kind": "instructions"
+    },
+    {
+      "id": "01J0PROP",
+      "kind": "app_review"
+    },
+    {
+      "id": "01J0TEAM/01J0DOT",
+      "kind": "team_scope"
+    }
+  ],
+  "InboxMark": [
+    {
+      "back_at": "2026-10-09T12:00:00.000Z",
+      "done_at": null,
+      "dot_id": "01J0DOT",
+      "id": "01J0RUN",
+      "kind": "review",
+      "snoozed_until": null,
+      "title": "nightly-tests: run to review"
+    },
+    {
+      "back_at": null,
+      "done_at": null,
+      "dot_id": "01J0DOT",
+      "id": "01J0MSG1",
+      "kind": "message",
+      "snoozed_until": "2026-10-21T09:00:00Z",
+      "title": "nightly-tests asks: Ship the release?"
+    },
+    {
+      "back_at": null,
+      "done_at": "2026-10-09T12:00:00.000Z",
+      "dot_id": null,
+      "id": "01J0SRV/personal",
+      "kind": "tools",
+      "snoozed_until": null,
+      "title": "github tools changed"
+    }
+  ],
   "InstalledPlugin": [
     {
       "exists": true,
@@ -3552,6 +3815,9 @@
     "base_commit": "0123abcd",
     "branch": "dots/nightly-tests/01J0RUN",
     "cost_usd": 1.32,
+    "delivered_at": "2026-10-09T12:00:00.000Z",
+    "delivery": "delivered",
+    "dismissed_at": null,
     "dot_id": "01J0DOT",
     "ended_at": "2026-10-09T12:00:00.000Z",
     "error": null,
@@ -3576,6 +3842,9 @@
     "tokens_in": 1200,
     "tokens_out": 340,
     "trigger": "schedule",
+    "undelivered_at": null,
+    "undelivered_reason": null,
+    "wait_reason": null,
     "workflow_step_run_id": null,
     "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
   },
@@ -3665,12 +3934,174 @@
     "dot_id": "01J0DOT",
     "root_run_id": "01J0RUN"
   },
+  "RunNotDelivered": {
+    "base_commit": "0123abcd",
+    "branch": "dots/nightly-tests/01J0RUN",
+    "cost_usd": 1.32,
+    "delivered_at": null,
+    "delivery": "not_delivered",
+    "dismissed_at": null,
+    "dot_id": "01J0DOT",
+    "ended_at": "2026-10-09T12:00:00.000Z",
+    "error": "claude CLI not found",
+    "hold_released": false,
+    "id": "01J0RUN",
+    "parent_run_id": null,
+    "payload": null,
+    "queued_at": "2026-10-09T12:00:00.000Z",
+    "quiet_limit_secs": null,
+    "quiet_since": null,
+    "quiet_stopped": false,
+    "retry_of": null,
+    "reviewed_at": null,
+    "root_run_id": "01J0RUN",
+    "session_id": "sess-1",
+    "started_at": "2026-10-09T12:00:00.000Z",
+    "status": "failed",
+    "summary": null,
+    "tokens_cache_read": 0,
+    "tokens_in": 1200,
+    "tokens_out": 340,
+    "trigger": "chat",
+    "undelivered_at": "2026-10-09T12:00:00.000Z",
+    "undelivered_reason": "claude CLI not found",
+    "wait_reason": null,
+    "workflow_step_run_id": null,
+    "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
+  },
+  "RunSentLate": {
+    "base_commit": "0123abcd",
+    "branch": "dots/nightly-tests/01J0RUN",
+    "cost_usd": 1.32,
+    "delivered_at": "2026-10-09T12:00:00.000Z",
+    "delivery": "delivered",
+    "dismissed_at": null,
+    "dot_id": "01J0DOT",
+    "ended_at": "2026-10-09T12:00:00.000Z",
+    "error": null,
+    "hold_released": false,
+    "id": "01J0RUN5",
+    "parent_run_id": null,
+    "payload": {
+      "message": "Ship the release notes.",
+      "send_later": {
+        "due_at": "2026-11-05T09:00:00.000Z",
+        "id": "01J0SCHED",
+        "late": true,
+        "new_topic": false
+      },
+      "typed": true
+    },
+    "queued_at": "2026-10-09T12:00:00.000Z",
+    "quiet_limit_secs": null,
+    "quiet_since": null,
+    "quiet_stopped": false,
+    "retry_of": null,
+    "reviewed_at": null,
+    "root_run_id": "01J0RUN",
+    "session_id": "sess-1",
+    "started_at": "2026-10-09T12:00:00.000Z",
+    "status": "succeeded",
+    "summary": "All tests pass.",
+    "tokens_cache_read": 0,
+    "tokens_in": 1200,
+    "tokens_out": 340,
+    "trigger": "chat",
+    "undelivered_at": null,
+    "undelivered_reason": null,
+    "wait_reason": null,
+    "workflow_step_run_id": null,
+    "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
+  },
+  "RunWaiting": {
+    "base_commit": "0123abcd",
+    "branch": "dots/nightly-tests/01J0RUN",
+    "cost_usd": 1.32,
+    "delivered_at": null,
+    "delivery": "waiting",
+    "dismissed_at": null,
+    "dot_id": "01J0DOT",
+    "ended_at": null,
+    "error": null,
+    "hold_released": false,
+    "id": "01J0RUN",
+    "parent_run_id": null,
+    "payload": null,
+    "queued_at": "2026-10-09T12:00:00.000Z",
+    "quiet_limit_secs": null,
+    "quiet_since": null,
+    "quiet_stopped": false,
+    "retry_of": null,
+    "reviewed_at": null,
+    "root_run_id": "01J0RUN",
+    "session_id": "sess-1",
+    "started_at": null,
+    "status": "queued",
+    "summary": null,
+    "tokens_cache_read": 0,
+    "tokens_in": 1200,
+    "tokens_out": 340,
+    "trigger": "chat",
+    "undelivered_at": null,
+    "undelivered_reason": null,
+    "wait_reason": "busy",
+    "workflow_step_run_id": null,
+    "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
+  },
+  "RunWithAttachments": {
+    "base_commit": "0123abcd",
+    "branch": "dots/nightly-tests/01J0RUN",
+    "cost_usd": 1.32,
+    "delivered_at": "2026-10-09T12:00:00.000Z",
+    "delivery": "delivered",
+    "dismissed_at": null,
+    "dot_id": "01J0DOT",
+    "ended_at": "2026-10-09T12:00:00.000Z",
+    "error": null,
+    "hold_released": false,
+    "id": "01J0RUN6",
+    "parent_run_id": null,
+    "payload": {
+      "attachments": [
+        {
+          "id": "01J0ATT",
+          "name": "report.pdf",
+          "size": 2458
+        }
+      ],
+      "message": "Shorten the report.",
+      "typed": true
+    },
+    "queued_at": "2026-10-09T12:00:00.000Z",
+    "quiet_limit_secs": null,
+    "quiet_since": null,
+    "quiet_stopped": false,
+    "retry_of": null,
+    "reviewed_at": null,
+    "root_run_id": "01J0RUN",
+    "session_id": "sess-1",
+    "started_at": "2026-10-09T12:00:00.000Z",
+    "status": "succeeded",
+    "summary": "All tests pass.",
+    "tokens_cache_read": 0,
+    "tokens_in": 1200,
+    "tokens_out": 340,
+    "trigger": "chat",
+    "undelivered_at": null,
+    "undelivered_reason": null,
+    "wait_reason": null,
+    "workflow_step_run_id": null,
+    "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
+  },
   "RuntimeEvent": [
     {
       "run": {
         "base_commit": null,
         "branch": null,
         "cost_usd": 1.32,
+        "delivered_at": "2026-10-09T12:00:00.000Z",
+        "delivery": "delivered",
+        "dismissed_at": null,
         "dot_id": "01J0DOT",
         "ended_at": null,
         "error": null,
@@ -3696,6 +4127,9 @@
         "tokens_in": 0,
         "tokens_out": 0,
         "trigger": "schedule",
+        "undelivered_at": null,
+        "undelivered_reason": null,
+        "wait_reason": null,
         "workflow_step_run_id": null,
         "workspace_path": null
       },
@@ -4062,6 +4496,9 @@
         "base_commit": "0123abcd",
         "branch": "dots/nightly-tests/01J0RUN",
         "cost_usd": 1.32,
+        "delivered_at": "2026-10-09T12:00:00.000Z",
+        "delivery": "delivered",
+        "dismissed_at": null,
         "dot_id": "01J0DOT",
         "ended_at": "2026-10-09T12:00:00.000Z",
         "error": null,
@@ -4092,6 +4529,9 @@
         "tokens_in": 1200,
         "tokens_out": 340,
         "trigger": "watcher",
+        "undelivered_at": null,
+        "undelivered_reason": null,
+        "wait_reason": null,
         "workflow_step_run_id": null,
         "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
       },
@@ -4116,6 +4556,9 @@
         "base_commit": "0123abcd",
         "branch": "dots/nightly-tests/01J0RUN",
         "cost_usd": 1.32,
+        "delivered_at": "2026-10-09T12:00:00.000Z",
+        "delivery": "delivered",
+        "dismissed_at": null,
         "dot_id": "01J0DOT",
         "ended_at": "2026-10-09T12:00:00.000Z",
         "error": null,
@@ -4140,6 +4583,9 @@
         "tokens_in": 1200,
         "tokens_out": 340,
         "trigger": "schedule",
+        "undelivered_at": null,
+        "undelivered_reason": null,
+        "wait_reason": null,
         "workflow_step_run_id": null,
         "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
       },
@@ -4148,6 +4594,71 @@
     {
       "org_id": "acme-eng",
       "type": "org_updated"
+    },
+    {
+      "type": "inbox_updated"
+    },
+    {
+      "items": [
+        {
+          "back_at": "2026-10-09T12:00:00.000Z",
+          "done_at": null,
+          "dot_id": "01J0DOT",
+          "id": "01J0RUN",
+          "kind": "review",
+          "snoozed_until": null,
+          "title": "nightly-tests: run to review"
+        }
+      ],
+      "type": "snooze_ended"
+    },
+    {
+      "message": {
+        "attachments": [
+          {
+            "id": "01J0ATT2",
+            "name": "notes.pdf",
+            "size": 31457
+          }
+        ],
+        "created_at": "2026-10-09T12:00:00.000Z",
+        "dot_id": "01J0DOT",
+        "due_at": "2026-11-05T09:00:00.000Z",
+        "error": null,
+        "id": "01J0SCHED",
+        "root_run_id": "01J0RUN",
+        "run_id": null,
+        "sent_at": null,
+        "status": "scheduled",
+        "text": "Ship the release notes.",
+        "updated_at": "2026-10-09T12:00:00.000Z",
+        "waiting": "busy"
+      },
+      "type": "scheduled_message_updated"
+    },
+    {
+      "message": {
+        "attachments": [
+          {
+            "id": "01J0ATT2",
+            "name": "notes.pdf",
+            "size": 31457
+          }
+        ],
+        "created_at": "2026-10-09T12:00:00.000Z",
+        "dot_id": "01J0DOT",
+        "due_at": "2026-11-05T09:00:00.000Z",
+        "error": "dot 'builder': its org 'acme' was removed",
+        "id": "01J0SCHED2",
+        "root_run_id": null,
+        "run_id": null,
+        "sent_at": null,
+        "status": "failed",
+        "text": "Ship the release notes.",
+        "updated_at": "2026-10-09T12:00:00.000Z",
+        "waiting": null
+      },
+      "type": "scheduled_message_updated"
     }
   ],
   "ScannedSkill": [
@@ -4232,6 +4743,48 @@
     "run_id": "01J0RUN",
     "slot_at": "2026-10-09T11:00:00Z"
   },
+  "ScheduledMessage": {
+    "attachments": [
+      {
+        "id": "01J0ATT2",
+        "name": "notes.pdf",
+        "size": 31457
+      }
+    ],
+    "created_at": "2026-10-09T12:00:00.000Z",
+    "dot_id": "01J0DOT",
+    "due_at": "2026-11-05T09:00:00.000Z",
+    "error": null,
+    "id": "01J0SCHED",
+    "root_run_id": "01J0RUN",
+    "run_id": null,
+    "sent_at": null,
+    "status": "scheduled",
+    "text": "Ship the release notes.",
+    "updated_at": "2026-10-09T12:00:00.000Z",
+    "waiting": "busy"
+  },
+  "ScheduledMessageFailed": {
+    "attachments": [
+      {
+        "id": "01J0ATT2",
+        "name": "notes.pdf",
+        "size": 31457
+      }
+    ],
+    "created_at": "2026-10-09T12:00:00.000Z",
+    "dot_id": "01J0DOT",
+    "due_at": "2026-11-05T09:00:00.000Z",
+    "error": "dot 'builder': its org 'acme' was removed",
+    "id": "01J0SCHED2",
+    "root_run_id": null,
+    "run_id": null,
+    "sent_at": null,
+    "status": "failed",
+    "text": "Ship the release notes.",
+    "updated_at": "2026-10-09T12:00:00.000Z",
+    "waiting": null
+  },
   "Settings": {
     "auto_install_updates": false,
     "autostart": true,
@@ -4295,6 +4848,11 @@
       "kind": "age"
     }
   ],
+  "StagedAttachment": {
+    "id": "01J0ATT",
+    "name": "report.pdf",
+    "size": 2458
+  },
   "StartupError": {
     "backup": "C:/Users/u/AppData/Local/dots/backups/dots-0.1.0-2026-10-20-091700.db",
     "go_back": "0.1.0",
@@ -4463,6 +5021,17 @@
     ],
     "since": "2026-10-09T12:00:00.000Z"
   },
+  "WatchHours": {
+    "days": [
+      "mon",
+      "tue",
+      "wed",
+      "thu",
+      "fri"
+    ],
+    "end": "18:00",
+    "start": "09:00"
+  },
   "Watcher": [
     {
       "config": {
@@ -4479,10 +5048,23 @@
       "created_at": "2026-10-09T12:00:00.000Z",
       "dot_id": "01J0DOT",
       "enabled": true,
+      "held_count": 4,
+      "hours": {
+        "days": [
+          "mon",
+          "tue",
+          "wed",
+          "thu",
+          "fri"
+        ],
+        "end": "18:00",
+        "start": "09:00"
+      },
       "id": "01J0WAT1",
       "last_error": null,
       "last_event_at": "2026-10-09T12:00:00.000Z",
       "name": "Invoices folder",
+      "next_opening": "2026-10-26T09:00:00+01:00",
       "paused_reason": null,
       "updated_at": "2026-10-09T12:00:00.000Z"
     },
@@ -4499,10 +5081,13 @@
       "created_at": "2026-10-09T12:00:00.000Z",
       "dot_id": "01J0DOT",
       "enabled": true,
+      "held_count": 0,
+      "hours": null,
       "id": "01J0WAT2",
       "last_error": "Gmail refused the app password for me@gmail.com, or IMAP is off for it.",
       "last_event_at": null,
       "name": "Billing mail",
+      "next_opening": null,
       "paused_reason": "error",
       "updated_at": "2026-10-09T12:00:00.000Z"
     },
@@ -4525,10 +5110,13 @@
       "created_at": "2026-10-09T12:00:00.000Z",
       "dot_id": "01J0DOT",
       "enabled": true,
+      "held_count": 0,
+      "hours": null,
       "id": "01J0WAT3",
       "last_error": null,
       "last_event_at": "2026-10-09T12:00:00.000Z",
       "name": "Repo events",
+      "next_opening": null,
       "paused_reason": "flood",
       "updated_at": "2026-10-09T12:00:00.000Z"
     }

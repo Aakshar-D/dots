@@ -29,6 +29,9 @@ export function DotsColumn({ rows, openId }: { rows: DotOverview[]; openId: stri
   // A dot whose queued run waits for Claude usage says so rather than "running".
   const held =
     useQuery({ queryKey: keys.limits, queryFn: commands.limitsGet }).data?.held_run_ids ?? [];
+  // A question the person snoozed or marked done does not make the dot wait for them.
+  const hidden =
+    useQuery({ queryKey: keys.inbox, queryFn: commands.inbox }).data?.hidden_messages ?? [];
   // A dot whose org is no longer joined says so; the orgs are asked for only when a dot has one.
   const orgs = useOrgList(rows.some((row) => row.dot.org_id !== null));
   // A Viewer, or a PC off the member list, can't make a dot in the account it works in.
@@ -100,7 +103,7 @@ export function DotsColumn({ rows, openId }: { rows: DotOverview[]; openId: stri
                 )}
               >
                 <span className="flex items-center gap-2">
-                  <StatusMark status={dotStatus(row, messages, held)} />
+                  <StatusMark status={dotStatus(row, messages, held, hidden)} />
                   <span className="truncate font-medium">{row.dot.name}</span>
                   <UnreadBadge row={row} />
                 </span>

@@ -5,7 +5,7 @@
 mod common;
 
 use chrono::TimeDelta;
-use common::watchers::{saturday_10, t0, weekdays_9_to_18, Harness};
+use common::watchers::{monday_9, saturday_10, t0, weekdays_9_to_18, Harness};
 use dots_core::model::{Dot, GithubConfig, GithubEvent, PausedReason, Watcher, WatcherConfig};
 use dots_core::watchers::github::{cannot_see, server_error, token_refused};
 use dots_core::watchers::{Poll, Sources};
@@ -863,4 +863,83 @@ async fn an_issue_outside_hours_is_held_and_the_cursor_moves_past_it() {
         h.store.get_watcher(&w.id).await.unwrap().paused_reason,
         None
     );
+}
+
+/// Review Focus 4: outside its hours the watcher asks GitHub nothing; at the opening, an issue
+/// and a pull request its check finds join one run, and the cursor ends past both.
+#[tokio::test]
+async fn no_request_outside_hours_and_the_opening_check_runs_once_with_every_kind() {
+    let (mut h, server, dot, w) = setup(|c| {
+        c.events = vec![GithubEvent::Issue, GithubEvent::PullRequest];
+    })
+    .await;
+    serve(
+        &server,
+        &[
+            ("/repos/owner/repo/issues", json!([])),
+            ("/repos/owner/repo/pulls", json!([])),
+            ("/repos/owner/repo/issues/events", json!([])),
+        ],
+    )
+    .await;
+    h.watchers.poll_now(&w.id).await.unwrap();
+    h.watchers
+        .update(
+            &w.id,
+            "Repo events",
+            w.config.clone(),
+            Some(weekdays_9_to_18()),
+        )
+        .await
+        .unwrap();
+    h.clock.set(saturday_10());
+    serve(
+        &server,
+        &[
+            (
+                "/repos/owner/repo/issues",
+                json!([issue(1012, 12, "Crash on start", "alice", &[])]),
+            ),
+            (
+                "/repos/owner/repo/pulls",
+                json!([pull(2006, 6, "Add export", false)]),
+            ),
+            ("/repos/owner/repo/issues/events", json!([])),
+        ],
+    )
+    .await;
+    h.start();
+    assert_eq!(h.clock.nth_sleep(1).await, monday_9());
+    assert!(server.received_requests().await.unwrap().is_empty());
+    h.clock.set(monday_9());
+    let runs = h.wait_runs(&dot.id, 1, 10).await;
+    let p = runs[0].payload.as_ref().unwrap();
+    let kinds: Vec<(&str, &str)> = p["held"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| (e["event"].as_str().unwrap(), e["title"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        kinds,
+        [("issue", "Crash on start"), ("pull_request", "Add export")]
+    );
+    // The next sleep begins once the opening is done (the run is made before the held events
+    // are taken).
+    assert_eq!(
+        h.clock.nth_sleep(2).await,
+        monday_9() + TimeDelta::minutes(1)
+    );
+    assert_eq!(h.store.held_count(&w.id).await.unwrap(), 0);
+    let cursor = h.store.get_watcher_cursor(&w.id).await.unwrap().unwrap();
+    let repo = &cursor["repos"]["owner/repo"];
+    assert_eq!(
+        (repo["issue"].clone(), repo["pull"].clone()),
+        (json!(1012), json!(2006))
+    );
+    // A later check finds nothing new.
+    h.clock.set(monday_9() + TimeDelta::minutes(1));
+    h.clock.nth_sleep(3).await;
+    assert_eq!(h.runs(&dot.id).await.len(), 1);
+    assert!(h.paused().is_empty());
 }

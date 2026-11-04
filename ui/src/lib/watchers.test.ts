@@ -5,10 +5,12 @@ import {
   defaultWatcherName,
   folderInside,
   watcherEventLine,
+  watcherHoursLine,
   watcherState,
   watcherSummary,
   watcherTitle,
 } from "@/lib/watchers";
+import { localTime, localWeekdayTime } from "@/lib/format";
 import { sample } from "@/test/fixtures";
 
 const [folder, email, github] = sample.watchers as [Watcher, Watcher, Watcher];
@@ -85,5 +87,35 @@ describe("what a watcher says about itself", () => {
     expect(folderInside("C:\\work", "C:\\work")).toBe(true);
     expect(folderInside("C:\\workshop", "C:\\work")).toBe(false);
     expect(folderInside("D:\\in", "C:\\work")).toBe(false);
+  });
+});
+
+describe("what a watcher's hours hold back", () => {
+  const at = (iso: string) => ({ ...folder, held_count: 4, next_opening: iso });
+  // Built with the local constructor, so "today" is the same local day in every time zone.
+  const nowToday = new Date(2026, 9, 10, 8, 0);
+  const TODAY = new Date(2026, 9, 10, 9, 0).toISOString();
+  // 09:00 on Mon 2026-10-12, judged from the middle of Sat 2026-10-10.
+  const MONDAY = new Date(2026, 9, 12, 9, 0).toISOString();
+  const sat = new Date(2026, 9, 10, 12, 0);
+
+  it("says what is held and until when, today as a time and later as a weekday and time", () => {
+    expect(watcherHoursLine(at(TODAY), nowToday)).toBe(`Outside hours · 4 held until ${localTime(TODAY)}`);
+    expect(watcherHoursLine({ ...at(TODAY), held_count: 0 }, nowToday)).toBe(
+      `Outside hours · until ${localTime(TODAY)}`,
+    );
+    const later = watcherHoursLine(at(MONDAY), sat);
+    expect(later).toBe(`Outside hours · 4 held until ${localWeekdayTime(MONDAY, sat.getTime())}`);
+    // Another day names its weekday: not the bare time of today's form.
+    expect(later).not.toBe(`Outside hours · 4 held until ${localTime(MONDAY)}`);
+  });
+
+  it("is empty without a next opening", () => {
+    expect(watcherHoursLine({ ...folder, next_opening: null }, sat)).toBe("");
+  });
+
+  it("is empty once the opening it was given has passed", () => {
+    expect(watcherHoursLine(at(TODAY), sat)).toBe("");
+    expect(watcherHoursLine(at(TODAY), new Date(TODAY))).toBe("");
   });
 });

@@ -3,7 +3,7 @@
 - Date: 2026-11-03
 - Status: approved (owner reviewed this document, 2026-11-03)
 - Part of: Tier 1 of the build list (reliability first), third of seven. The stuck-run watchdog is merged (#45); skip-when-busy is in review (#46).
-- Builds on: `2026-10-23-watchers-design.md` (watchers, `Watchers::fire`, the flood cap, polling), `2026-11-03-skip-when-busy-design.md` (migration 0027).
+- Builds on: `2026-10-23-watchers-design.md` (watchers, `Watchers::fire`, the flood cap, polling), `2026-11-03-skip-when-busy-design.md` (migration 0028).
 
 ## 1. Goal
 
@@ -56,7 +56,7 @@ Owner's calls: hold and run once at the opening; per watcher; days + one range, 
 
 ### 4.2 Storage
 
-- **Migration 0028** (`0028_watch_hours.sql`; 0027 is taken by skip-when-busy, which merges first):
+- **Migration 0029** (`0029_watch_hours.sql`; 0027 is master's teams_b and 0028 is skip-when-busy's, which merges first):
 
 ```sql
 ALTER TABLE watchers ADD COLUMN hours TEXT;   -- JSON WatchHours, null = any time
@@ -128,7 +128,7 @@ Email and GitHub watchers do not poll while outside their hours; their next poll
 
 ## 9. Collisions with parallel work
 
-Migration 0028 (0027 is skip-when-busy's; merge #46 first). Shared files: `watchers/mod.rs`, `watchers/describe.rs`, `watchers/files.rs`, `store/watchers.rs`, `model.rs`, core `events.rs` (unchanged event), app `commands.rs` / `contract.rs`, UI `WatchersTab.tsx`, `api/types.ts`. New: `watchers/hours.rs`, `store/held.rs`.
+Migration 0029 (0028 is skip-when-busy's; merge #46 first). Shared files: `watchers/mod.rs`, `watchers/describe.rs`, `watchers/files.rs`, `store/watchers.rs`, `model.rs`, core `events.rs` (unchanged event), app `commands.rs` / `contract.rs`, UI `WatchersTab.tsx`, `api/types.ts`. New: `watchers/hours.rs`, `store/held.rs`.
 
 ## 10. Not in this part
 

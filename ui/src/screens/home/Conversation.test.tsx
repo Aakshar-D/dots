@@ -2,7 +2,7 @@ import { act, fireEvent, screen, waitFor, within } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest";
 
 import type { Approval, Message, Run, RunEventRecord } from "@/api/types";
-import { localTime } from "@/lib/format";
+import { localDayTime, localTime } from "@/lib/format";
 import { backend } from "@/test/backend";
 import { sample } from "@/test/fixtures";
 import { chat, dot, home, overview, reply, said, scheduled } from "@/test/home";
@@ -287,6 +287,35 @@ describe("a dot's conversation", () => {
     expect(await screen.findByText("question current")).toBeVisible();
   });
 
+  it("says under a message that was sent later whether it went late, and a new topic", async () => {
+    const late = chat("late", "10:00", {
+      payload: {
+        message: "Ship it",
+        typed: true,
+        send_later: { id: "s1", due_at: "2026-10-09T09:00:00.000Z", late: true, new_topic: true },
+      },
+    });
+    home([late]);
+    renderApp(`/home/${dot.id}`);
+    const view = within(await screen.findByRole("region", { name: "Conversation" }));
+    const due = localDayTime("2026-10-09T09:00:00.000Z", Date.parse(late.queued_at));
+    expect(await view.findByText(`Sent late (was due ${due})`)).toBeVisible();
+    expect(
+      view.getByText("Started a new topic: the one it was written in can't be continued."),
+    ).toBeVisible();
+  });
+
+  it("shows the scheduled messages after the topics, and does not greet a dot with one", async () => {
+    home([]);
+    backend.on("scheduled_messages", () => [{ ...sample.scheduledMessage, root_run_id: null }]);
+    renderApp(`/home/${dot.id}`);
+    const view = within(await screen.findByRole("region", { name: "Conversation" }));
+    const card = await view.findByRole("region", { name: "Scheduled message" });
+    expect(card).toHaveTextContent(sample.scheduledMessage.text);
+    expect(card).toHaveTextContent("· new topic");
+    expect(screen.queryByText(`Ask ${dot.name} something`)).toBeNull();
+  });
+
   it("greets with the dot's name over the composer when the conversation is empty", async () => {
     home([]);
     renderApp(`/home/${dot.id}`);
@@ -523,5 +552,23 @@ describe("what the self-QA found", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe(`/home/${dot.id}`));
     expect(await screen.findByText("question current")).toBeVisible();
     expect(screen.queryByText("run gone")).toBeNull();
+  });
+
+  it("shows Not delivered above the retry's bubble, and no Cancelled", async () => {
+    const first = chat("a", "10:00", {
+      status: "cancelled",
+      delivery: "not_delivered",
+      undelivered_at: "2026-10-09T10:30:00.000Z",
+      undelivered_reason: "claude CLI not found",
+      dismissed_at: "2026-10-09T10:31:00.000Z",
+    });
+    home([first, reply("b", first, "10:32")]);
+    renderApp(`/home/${dot.id}`);
+    const view = within(await screen.findByRole("region", { name: "Conversation" }));
+    const line = await view.findByText("Not delivered");
+    const retry = await view.findByText("reply b");
+    expect(line.compareDocumentPosition(retry) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(view.queryByText("Cancelled")).toBeNull();
+    expect(view.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 });

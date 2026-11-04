@@ -1,6 +1,8 @@
 //! `start_workflow` (teams spec section 7): every preset allows `Workflow`, a rule names it
 //! alone, migration 0015 gives it to stored policies; a chat run of a member that a chat
-//! trigger names lists the workflows it may start and starts one, on both engines.
+//! trigger names lists the workflows it may start and starts one, on both engines. A run of an
+//! open agent step reports its outcome and asks for a send-back, and a delegate step's run
+//! starts a member, on both engines.
 
 mod common;
 mod llm;
@@ -10,12 +12,16 @@ use std::time::Duration;
 
 use common::{init_repo, spec, wait_status};
 use dots_core::model::{
-    Dot, DotSpec, EngineKind, MemberSpec, ProjectSpec, RunStatus, TeamSpec, WaitingOn,
+    Dot, DotSpec, EngineKind, MemberSpec, ProjectSpec, RunStatus, TeamSpec, WaitingOn, WorkflowRun,
     WorkflowRunStatus, WorkflowSpec, WorkflowTrigger, WorkspaceMode,
 };
 use dots_core::policy::{Action, Policy, Preset, Rule, APP_TOOLS, WORKFLOW_RULE, WORKFLOW_TOOL};
 use dots_core::store::Store;
-use dots_core::workflow::{Budget, Definition, Step, StepKind, Trigger};
+use dots_core::team_tools::{self, StepTools};
+use dots_core::workflow::{
+    BranchOn, BranchPath, Budget, Definition, Delegate, Step, StepKind, Trigger,
+};
+use dots_core::workflows::STEP_CLOSED;
 use dots_core::{Config, Runtime};
 use llm::{call, messages, text, tool_result, Llm};
 use serde_json::{json, Value};
@@ -175,7 +181,7 @@ async fn team_of(t: &Rt, helper: &Dot) -> String {
     let check = Step {
         id: "check".into(),
         name: "Your check".into(),
-        kind: StepKind::Check {},
+        kind: StepKind::Check { send_back_to: None },
     };
     team_with(t, helper, vec![check]).await.0
 }
@@ -392,7 +398,7 @@ fn workflow_spec(name: &str, trigger: Trigger) -> WorkflowSpec {
             steps: vec![Step {
                 id: "check".into(),
                 name: "Your check".into(),
-                kind: StepKind::Check {},
+                kind: StepKind::Check { send_back_to: None },
             }],
             budget: Budget::default(),
         },
@@ -422,6 +428,9 @@ async fn the_answer_to_a_workflow_steps_question_may_not_start_a_workflow() {
             kind: StepKind::Agent {
                 member: helper.id.clone(),
                 job: "Fix.".into(),
+                can_send_back_to: vec![],
+                outcomes: vec![],
+                delegate: None,
             },
         }],
     )
@@ -588,6 +597,9 @@ async fn a_reply_in_the_chat_of_a_step_that_has_ended_is_refused() {
             kind: StepKind::Agent {
                 member: helper.id.clone(),
                 job: "Fix.".into(),
+                can_send_back_to: vec![],
+                outcomes: vec![],
+                delegate: None,
             },
         }],
     )
@@ -743,5 +755,847 @@ async fn a_sandboxed_dot_is_offered_start_workflow_and_asks_before_it_starts_one
         .unwrap();
     wait_status(t.rt.store(), &chat.id, RunStatus::Succeeded, 30).await;
     assert_eq!(t.rt.workflows().list(None, 10).await.unwrap().len(), 1);
+    t.rt.shutdown();
+}
+
+/// An agent step of `member` with the outcomes it may report and the steps it may send back to.
+fn agent_step(id: &str, name: &str, member: &Dot, outcomes: &[&str], back: &[&str]) -> Step {
+    Step {
+        id: id.into(),
+        name: name.into(),
+        kind: StepKind::Agent {
+            member: member.id.clone(),
+            job: format!("{name}."),
+            can_send_back_to: back.iter().map(|s| s.to_string()).collect(),
+            outcomes: outcomes.iter().map(|s| s.to_string()).collect(),
+            delegate: None,
+        },
+    }
+}
+
+/// A team of `members` with the project "Dots" and a manual workflow "Steps" of `steps`;
+/// starts a run of it.
+async fn run_steps(t: &Rt, members: &[&Dot], steps: Vec<Step>) -> WorkflowRun {
+    let team =
+        t.rt.teams()
+            .create(&TeamSpec {
+                org_id: None,
+                workspace_id: "default".into(),
+                name: "Dots management".into(),
+                description: String::new(),
+                members: members
+                    .iter()
+                    .map(|d| MemberSpec {
+                        dot_id: d.id.clone(),
+                        role: format!("{} agent", d.spec.name),
+                    })
+                    .collect(),
+            })
+            .await
+            .unwrap();
+    let repo = t.dir.path().join("repo");
+    init_repo(&repo);
+    t.rt.teams()
+        .add_project(
+            &team.id,
+            &ProjectSpec {
+                name: "Dots".into(),
+                repo_path: repo.to_string_lossy().to_string(),
+                default_branch: None,
+                remote: "origin".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let flow =
+        t.rt.teams()
+            .create_workflow(
+                &team.id,
+                &WorkflowSpec {
+                    name: "Steps".into(),
+                    definition: Definition {
+                        trigger: Trigger::Manual,
+                        steps,
+                        budget: Budget::default(),
+                    },
+                    enabled: true,
+                },
+            )
+            .await
+            .unwrap();
+    let project =
+        t.rt.store()
+            .get_team_project_id(&flow.id, "Dots")
+            .await
+            .unwrap();
+    t.rt.workflows()
+        .start(dots_core::workflows::StartRequest {
+            workflow_id: flow.id,
+            project_id: project,
+            task: "Fix the icon.".into(),
+            trigger: WorkflowTrigger::Manual,
+            origin_run_id: None,
+            test: false,
+        })
+        .await
+        .unwrap()
+}
+
+/// The workflow run once `done` holds of it, within 30 s.
+async fn until(t: &Rt, id: &str, done: impl Fn(&WorkflowRun) -> bool) -> WorkflowRun {
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let wr = t.rt.workflows().get(id).await.unwrap();
+        if done(&wr) {
+            return wr;
+        }
+        assert!(std::time::Instant::now() < deadline, "{wr:#?}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+const WORKFLOW_TOOLS: [&str; 4] = [
+    "start_workflow",
+    "start_member",
+    "report_outcome",
+    "send_back",
+];
+
+/// The workflow tools among the request's tools.
+fn workflow_tools(req: &Value) -> Vec<String> {
+    tool_names(req)
+        .into_iter()
+        .filter(|n| WORKFLOW_TOOLS.contains(&n.as_str()))
+        .collect()
+}
+
+/// The local engine: a step with outcomes reports one, the run that carries the person's answer
+/// to its question (a later run of its thread) still has the tool, the last report counts, and
+/// the branch after it takes that outcome's path. A step without outcomes or send-backs has no
+/// workflow tool.
+#[tokio::test]
+async fn a_local_step_reports_its_outcome_and_the_branch_after_it_takes_that_path() {
+    let t = start(json!([])).await;
+    let llm = Llm::start(vec![
+        text("Built."),
+        call("c1", "ask", json!({"question": "Light or dark icon?"})),
+        text("Asked."),
+        call("c2", "report_outcome", json!({"outcome": "maybe"})),
+        call("c3", "report_outcome", json!({"outcome": "approved"})),
+        call("c4", "report_outcome", json!({"outcome": " Changes "})),
+        text("Needs changes."),
+        text("Fixed."),
+    ])
+    .await;
+    let helper =
+        t.rt.create_dot(local_spec(&t, &llm.endpoint(), "helper"), None, None)
+            .await
+            .unwrap();
+    let route = Step {
+        id: "route".into(),
+        name: "Route".into(),
+        kind: StepKind::Branch {
+            on: BranchOn::Outcome,
+            paths: vec![
+                BranchPath {
+                    label: "approved".into(),
+                    steps: vec![Step {
+                        id: "check".into(),
+                        name: "Your check".into(),
+                        kind: StepKind::Check { send_back_to: None },
+                    }],
+                },
+                BranchPath {
+                    label: "changes".into(),
+                    steps: vec![agent_step("fix", "Fix it", &helper, &[], &[])],
+                },
+            ],
+            otherwise: vec![],
+        },
+    };
+    let wr = run_steps(
+        &t,
+        &[&helper],
+        vec![
+            agent_step("build", "Build it", &helper, &[], &[]),
+            agent_step(
+                "review",
+                "Review it",
+                &helper,
+                &["approved", "changes"],
+                &[],
+            ),
+            route,
+        ],
+    )
+    .await;
+    let question = loop {
+        let open =
+            t.rt.store()
+                .list_messages(Some(&helper.id))
+                .await
+                .unwrap()
+                .into_iter()
+                .find(|m| m.answered_at.is_none());
+        if let Some(q) = open {
+            break q;
+        }
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    };
+    wait_status(
+        t.rt.store(),
+        question.run_id.as_deref().unwrap(),
+        RunStatus::Succeeded,
+        30,
+    )
+    .await;
+    let answer = t.rt.reply(&question.id, "The light one.").await.unwrap();
+    let wr = until(&t, &wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded).await;
+    let reqs = llm.requests();
+    // The build step has no workflow tool; the review step only `report_outcome`, in its first
+    // run and in the run that carries the answer.
+    assert!(
+        workflow_tools(&reqs[0]).is_empty(),
+        "{:?}",
+        tool_names(&reqs[0])
+    );
+    assert!(!prompt(&reqs[0]).contains("### Workflow tools"));
+    assert_eq!(workflow_tools(&reqs[1]), ["report_outcome"]);
+    assert_eq!(workflow_tools(&reqs[3]), ["report_outcome"]);
+    let review = prompt(&reqs[1]);
+    assert!(
+        review.contains(
+            "### Workflow tools\n\n- Report how the step came out with `report_outcome`, one of: \"approved\", \"changes\". The workflow goes on by the outcome you report.\n\nWhen you are done"
+        ),
+        "{review}"
+    );
+    assert_eq!(
+        tool_result(&reqs[4], "c2"),
+        "\"maybe\" is not an outcome of this step; use one of: \"approved\", \"changes\"."
+    );
+    assert_eq!(tool_result(&reqs[5], "c3"), "Outcome recorded.");
+    assert_eq!(tool_result(&reqs[6], "c4"), "Outcome recorded.");
+    // The last report counts, as the step declares it; the branch took its path.
+    let ran: Vec<&str> = wr.steps.iter().map(|s| s.step_id.as_str()).collect();
+    assert_eq!(ran, ["build", "review", "route", "fix"]);
+    assert_eq!(wr.steps[1].outcome.as_deref(), Some("changes"));
+    assert_eq!(
+        wr.steps[1].handoff.as_ref().unwrap().outcome.as_deref(),
+        Some("changes")
+    );
+    assert_eq!(wr.steps[2].decision, Some(json!({"path": "changes"})));
+    assert_eq!(
+        answer.workflow_step_run_id.as_deref(),
+        Some(wr.steps[1].id.as_str())
+    );
+    t.rt.shutdown();
+}
+
+/// The local engine: `send_back` names an earlier step by name without case and needs a note;
+/// the last call is recorded on the step run. Once the step has ended, its runs have no
+/// workflow tools, and a call made with the tools a run had records nothing.
+#[tokio::test]
+async fn a_local_step_asks_for_a_send_back_and_a_closed_step_records_nothing() {
+    let t = start(json!([])).await;
+    let llm = Llm::start(vec![
+        text("Built."),
+        call(
+            "c1",
+            "send_back",
+            json!({"to_step": "Nowhere", "note": "x"}),
+        ),
+        call(
+            "c2",
+            "send_back",
+            json!({"to_step": "build it", "note": "  "}),
+        ),
+        call(
+            "c3",
+            "send_back",
+            json!({"to_step": "Build it", "note": "First try."}),
+        ),
+        call(
+            "c4",
+            "send_back",
+            json!({"to_step": "BUILD IT", "note": " Use the light icon. ", "extra": 1}),
+        ),
+        text("Sent back."),
+    ])
+    .await;
+    let helper =
+        t.rt.create_dot(local_spec(&t, &llm.endpoint(), "helper"), None, None)
+            .await
+            .unwrap();
+    let wr = run_steps(
+        &t,
+        &[&helper],
+        vec![
+            agent_step("build", "Build it", &helper, &[], &[]),
+            agent_step("review", "Review it", &helper, &[], &["build"]),
+        ],
+    )
+    .await;
+    // The review's send-back is performed when its step ends: "Build it" runs again.
+    let wr = until(&t, &wr.id, |wr| {
+        wr.send_backs == 1
+            && wr
+                .steps
+                .iter()
+                .any(|s| s.step_id == "build" && s.attempt == 2)
+    })
+    .await;
+    assert_eq!(wr.send_back.as_ref().map(|s| s.to.as_str()), Some("build"));
+    let reqs = llm.requests();
+    assert_eq!(workflow_tools(&reqs[1]), ["send_back"]);
+    let review = prompt(&reqs[1]);
+    assert!(
+        review.contains(
+            "### Workflow tools\n\n- If the work must be redone in an earlier step, send it back with `send_back` to one of: \"Build it\", with a note that says what to change.\n"
+        ),
+        "{review}"
+    );
+    let answers: Vec<String> = (1..=4)
+        .map(|i| tool_result(&reqs[i + 1], &format!("c{i}")))
+        .collect();
+    let sent = "Sent back to \"Build it\". End your turn now: the work goes back when you finish.";
+    assert_eq!(
+        answers,
+        [
+            "You can send work back only to: \"Build it\".",
+            "Give a note of 1 to 8,000 characters that says what to change.",
+            sent,
+            sent,
+        ]
+    );
+    let step_run = &wr.steps[1];
+    assert_eq!(
+        step_run.send_back,
+        Some(json!({"to": "build", "note": "Use the light icon."}))
+    );
+    assert_eq!(step_run.outcome, None);
+    // The step has ended: a run of its thread has no workflow tools, and a call made with
+    // those its run had is refused.
+    let run =
+        t.rt.store()
+            .runs_of_step_run(&step_run.id)
+            .await
+            .unwrap()
+            .remove(0);
+    assert_eq!(team_tools::for_run(t.rt.store(), &run).await.unwrap(), None);
+    let step = wr.definition.step("review").unwrap();
+    let tools = StepTools::of(&step_run.id, step, &wr.definition).unwrap();
+    let refused =
+        t.rt.workflows()
+            .call_send_back(
+                &run.id,
+                &tools,
+                &json!({"to_step": "Build it", "note": "Again."}),
+            )
+            .await;
+    assert_eq!(refused, Err(STEP_CLOSED.to_string()));
+    let refused =
+        t.rt.workflows()
+            .call_report_outcome(&run.id, &tools, &json!({"outcome": "x"}))
+            .await;
+    assert_eq!(refused, Err(STEP_CLOSED.to_string()));
+    let after = t.rt.store().get_step_run(&step_run.id).await.unwrap();
+    assert_eq!(after.send_back, step_run.send_back);
+    assert_eq!(after.outcome, None);
+    t.rt.shutdown();
+}
+
+/// The Claude engine: Dots' own server lists a step's tools and performs them, the CLI may call
+/// them without asking (Dots checks each call itself), and the prompt names them as the CLI's
+/// model knows them.
+#[tokio::test]
+async fn a_claude_step_reports_and_sends_back_through_dots_own_server() {
+    let t = start(json!([
+        {"emit": {"type": "system", "subtype": "init", "session_id": "$SESSION"}},
+        {"mcp_list": "dots"},
+        {"mcp_call": {"server": "dots", "tool": "report_outcome",
+                      "arguments": {"outcome": "approved"}}},
+        {"mcp_call": {"server": "dots", "tool": "send_back",
+                      "arguments": {"to_step": "build it", "note": "Again."}}},
+        {"emit": {"type": "result", "subtype": "success", "is_error": false, "result": "done",
+                  "usage": {"input_tokens": 1, "output_tokens": 1}}}
+    ]))
+    .await;
+    let llm = Llm::start(vec![text("Built.")]).await;
+    let builder =
+        t.rt.create_dot(local_spec(&t, &llm.endpoint(), "builder"), None, None)
+            .await
+            .unwrap();
+    let mut s = spec("reviewer");
+    s.workdir = t.dir.path().to_string_lossy().to_string();
+    s.workspace_mode = WorkspaceMode::Folder;
+    s.policy = Policy::preset(Preset::Trusted);
+    let reviewer = t.rt.create_dot(s, None, None).await.unwrap();
+    let wr = run_steps(
+        &t,
+        &[&builder, &reviewer],
+        vec![
+            agent_step("build", "Build it", &builder, &[], &[]),
+            agent_step("review", "Review it", &reviewer, &["approved"], &["build"]),
+        ],
+    )
+    .await;
+    // The review's send-back is performed when its step ends: "Build it" runs again.
+    let wr = until(&t, &wr.id, |wr| {
+        wr.send_backs == 1
+            && wr
+                .steps
+                .iter()
+                .any(|s| s.step_id == "build" && s.attempt == 2)
+    })
+    .await;
+    assert_eq!(wr.send_back.as_ref().map(|s| s.to.as_str()), Some("build"));
+    let recorded: Value =
+        serde_json::from_str(&std::fs::read_to_string(&t.args_out).unwrap()).unwrap();
+    let args: Vec<String> = serde_json::from_value(recorded["args"].clone()).unwrap();
+    let allowed: Vec<&str> = args
+        .iter()
+        .skip_while(|a| *a != "--allowedTools")
+        .skip(1)
+        .take_while(|a| !a.starts_with("--"))
+        .map(String::as_str)
+        .filter(|a| {
+            WORKFLOW_TOOLS
+                .iter()
+                .any(|t| *a == format!("mcp__dots__{t}"))
+        })
+        .collect();
+    assert_eq!(
+        allowed,
+        ["mcp__dots__report_outcome", "mcp__dots__send_back"],
+        "{args:?}"
+    );
+    let prompt = recorded["prompt"].as_str().unwrap();
+    assert!(
+        prompt.contains("with `mcp__dots__report_outcome`, one of: \"approved\".")
+            && prompt.contains("send it back with `mcp__dots__send_back` to one of: \"Build it\","),
+        "{prompt}"
+    );
+    let step_run = &wr.steps[1];
+    let run =
+        t.rt.store()
+            .runs_of_step_run(&step_run.id)
+            .await
+            .unwrap()
+            .remove(0);
+    let events = t.rt.store().list_events(&run.id, 0).await.unwrap();
+    let listed = events.iter().find(|e| e.kind == "raw").unwrap();
+    let listed: Value = serde_json::from_str(listed.data["line"].as_str().unwrap()).unwrap();
+    let listed: Vec<&str> = listed["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .filter(|n| WORKFLOW_TOOLS.contains(n))
+        .collect();
+    assert_eq!(listed, ["report_outcome", "send_back"]);
+    let results: Vec<(&str, bool)> = events
+        .iter()
+        .filter(|e| e.kind == "tool_result")
+        .map(|e| {
+            (
+                e.data["output"].as_str().unwrap(),
+                e.data["is_error"].as_bool().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        results,
+        [
+            ("Outcome recorded.", false),
+            (
+                "Sent back to \"Build it\". End your turn now: the work goes back when you finish.",
+                false
+            ),
+        ]
+    );
+    assert_eq!(step_run.outcome.as_deref(), Some("approved"));
+    assert_eq!(
+        step_run.send_back,
+        Some(json!({"to": "build", "note": "Again."}))
+    );
+    t.rt.shutdown();
+}
+
+/// The local engine: a step that declares neither outcomes nor send-backs is offered neither
+/// tool, and a call of either is refused and records nothing.
+#[tokio::test]
+async fn a_local_step_not_offered_report_outcome_or_send_back_is_refused_both() {
+    let t = start(json!([])).await;
+    let llm = Llm::start(vec![
+        call("c1", "report_outcome", json!({"outcome": "done"})),
+        call(
+            "c2",
+            "send_back",
+            json!({"to_step": "Build it", "note": "Again."}),
+        ),
+        text("Done."),
+    ])
+    .await;
+    let helper =
+        t.rt.create_dot(local_spec(&t, &llm.endpoint(), "helper"), None, None)
+            .await
+            .unwrap();
+    let wr = run_steps(
+        &t,
+        &[&helper],
+        vec![agent_step("review", "Review it", &helper, &[], &[])],
+    )
+    .await;
+    let wr = until(&t, &wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded).await;
+    let reqs = llm.requests();
+    assert!(
+        workflow_tools(&reqs[0]).is_empty(),
+        "{:?}",
+        tool_names(&reqs[0])
+    );
+    assert_eq!(
+        tool_result(&reqs[1], "c1"),
+        "report_outcome is not available in this run"
+    );
+    assert_eq!(
+        tool_result(&reqs[2], "c2"),
+        "send_back is not available in this run"
+    );
+    let ran: Vec<&str> = wr.steps.iter().map(|s| s.step_id.as_str()).collect();
+    assert_eq!(ran, ["review"]);
+    assert_eq!(wr.steps[0].outcome, None);
+    assert_eq!(wr.steps[0].send_back, None);
+    assert_eq!(wr.send_backs, 0);
+    assert_eq!(wr.send_back, None);
+    t.rt.shutdown();
+}
+
+/// The Claude engine: Dots' own server neither lists nor performs `report_outcome` and
+/// `send_back` for a step that does not offer them, and nothing is recorded.
+#[tokio::test]
+async fn a_claude_step_not_offered_report_outcome_or_send_back_is_refused_both() {
+    let t = start(json!([
+        {"emit": {"type": "system", "subtype": "init", "session_id": "$SESSION"}},
+        {"mcp_list": "dots"},
+        {"mcp_call": {"server": "dots", "tool": "report_outcome",
+                      "arguments": {"outcome": "done"}}},
+        {"mcp_call": {"server": "dots", "tool": "send_back",
+                      "arguments": {"to_step": "Review it", "note": "Again."}}},
+        {"emit": {"type": "result", "subtype": "success", "is_error": false, "result": "done",
+                  "usage": {"input_tokens": 1, "output_tokens": 1}}}
+    ]))
+    .await;
+    let mut s = spec("reviewer");
+    s.workdir = t.dir.path().to_string_lossy().to_string();
+    s.workspace_mode = WorkspaceMode::Folder;
+    s.policy = Policy::preset(Preset::Trusted);
+    let reviewer = t.rt.create_dot(s, None, None).await.unwrap();
+    let wr = run_steps(
+        &t,
+        &[&reviewer],
+        vec![agent_step("review", "Review it", &reviewer, &[], &[])],
+    )
+    .await;
+    let wr = until(&t, &wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded).await;
+    let recorded: Value =
+        serde_json::from_str(&std::fs::read_to_string(&t.args_out).unwrap()).unwrap();
+    let args: Vec<String> = serde_json::from_value(recorded["args"].clone()).unwrap();
+    assert!(
+        !args.iter().any(|a| WORKFLOW_TOOLS
+            .iter()
+            .any(|t| *a == format!("mcp__dots__{t}"))),
+        "{args:?}"
+    );
+    assert!(!recorded["prompt"]
+        .as_str()
+        .unwrap()
+        .contains("### Workflow tools"));
+    let step_run = &wr.steps[0];
+    let run =
+        t.rt.store()
+            .runs_of_step_run(&step_run.id)
+            .await
+            .unwrap()
+            .remove(0);
+    let events = t.rt.store().list_events(&run.id, 0).await.unwrap();
+    let listed = events.iter().find(|e| e.kind == "raw").unwrap();
+    let listed: Value = serde_json::from_str(listed.data["line"].as_str().unwrap()).unwrap();
+    let listed: Vec<&str> = listed["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .filter(|n| WORKFLOW_TOOLS.contains(n))
+        .collect();
+    assert!(listed.is_empty(), "{listed:?}");
+    // Both calls were answered as unknown tools (an error, so no text), not performed.
+    let results: Vec<&str> = events
+        .iter()
+        .filter(|e| e.kind == "tool_result")
+        .map(|e| e.data["output"].as_str().unwrap())
+        .collect();
+    assert_eq!(results, ["", ""]);
+    assert_eq!(step_run.outcome, None);
+    assert_eq!(step_run.send_back, None);
+    assert_eq!(wr.send_backs, 0);
+    assert_eq!(wr.steps.len(), 1);
+    t.rt.shutdown();
+}
+
+/// The plain Sandboxed preset asks before a step's run reports its outcome (policy
+/// `Workflow`); nothing is recorded until the person allows it.
+#[tokio::test]
+async fn a_sandboxed_step_asks_before_it_reports_an_outcome() {
+    let t = start(json!([])).await;
+    let llm = Llm::start(vec![
+        call("c1", "report_outcome", json!({"outcome": "done"})),
+        text("Reported."),
+    ])
+    .await;
+    let mut s = local_spec(&t, &llm.endpoint(), "helper");
+    s.policy = Policy::preset(Preset::Sandboxed);
+    s.approval_wait_secs = 30;
+    let helper = t.rt.create_dot(s, None, None).await.unwrap();
+    let mut events = t.rt.subscribe();
+    let wr = run_steps(
+        &t,
+        &[&helper],
+        vec![agent_step("review", "Review it", &helper, &["done"], &[])],
+    )
+    .await;
+    let approval = loop {
+        if let dots_core::events::RuntimeEvent::ApprovalRequested { approval } =
+            events.recv().await.unwrap()
+        {
+            break approval;
+        }
+    };
+    assert_eq!(approval.tool, "Workflow");
+    assert_eq!(approval.input, json!({"outcome": "done"}));
+    let held = t.rt.workflows().get(&wr.id).await.unwrap();
+    assert_eq!(held.steps[0].outcome, None);
+    t.rt.decide_approval(&approval.id, true, None, None)
+        .await
+        .unwrap();
+    let wr = until(&t, &wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded).await;
+    assert_eq!(wr.steps[0].outcome.as_deref(), Some("done"));
+    assert_eq!(tool_result(&llm.requests()[1], "c1"), "Outcome recorded.");
+    t.rt.shutdown();
+}
+
+/// A step of a dot whose policy denies `Workflow` outright has neither the tools nor their
+/// lines in its prompt.
+#[tokio::test]
+async fn a_step_of_a_dot_whose_policy_denies_workflow_has_no_workflow_tools() {
+    let t = start(json!([])).await;
+    let llm = Llm::start(vec![text("Done.")]).await;
+    let mut s = local_spec(&t, &llm.endpoint(), "helper");
+    s.policy.rules.push(Rule::new("Workflow", Action::Deny));
+    let helper = t.rt.create_dot(s, None, None).await.unwrap();
+    let wr = run_steps(
+        &t,
+        &[&helper],
+        vec![agent_step("review", "Review it", &helper, &["done"], &[])],
+    )
+    .await;
+    until(&t, &wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded).await;
+    let first = llm.requests()[0].clone();
+    assert!(
+        workflow_tools(&first).is_empty(),
+        "{:?}",
+        tool_names(&first)
+    );
+    assert!(!prompt(&first).contains("### Workflow tools"));
+    t.rt.shutdown();
+}
+
+/// A delegate step of `lead` that may start `member`, one at a time and once in all.
+fn delegate_step(lead: &Dot, member: &Dot) -> Step {
+    Step {
+        id: "split".into(),
+        name: "Split it".into(),
+        kind: StepKind::Agent {
+            member: lead.id.clone(),
+            job: "Split it.".into(),
+            can_send_back_to: vec![],
+            outcomes: vec![],
+            delegate: Some(Delegate {
+                may_start: vec![member.id.clone()],
+                at_once: 1,
+                total: 1,
+            }),
+        },
+    }
+}
+
+/// The text of the last message the person's side sent in a recorded request.
+fn last_user(req: &Value) -> String {
+    messages(req)
+        .iter()
+        .rev()
+        .find(|m| m["role"] == "user")
+        .and_then(|m| m["content"].as_str())
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// The local engine: a delegate step's run is offered `start_member`, its call starts the
+/// member, whose run has no workflow tool, and the lead's thread is continued with the
+/// member's result.
+#[tokio::test]
+async fn a_local_lead_starts_a_member_and_is_told_how_it_went() {
+    let t = start(json!([])).await;
+    let lead_llm = Llm::start(vec![
+        call(
+            "c1",
+            "start_member",
+            json!({"member": "DEV", "task": "Make the icon light."}),
+        ),
+        text("Started."),
+        text("All in."),
+    ])
+    .await;
+    let dev_llm = Llm::start(vec![text("Made it light.")]).await;
+    let lead =
+        t.rt.create_dot(local_spec(&t, &lead_llm.endpoint(), "lead"), None, None)
+            .await
+            .unwrap();
+    let dev =
+        t.rt.create_dot(local_spec(&t, &dev_llm.endpoint(), "dev"), None, None)
+            .await
+            .unwrap();
+    let wr = run_steps(&t, &[&lead, &dev], vec![delegate_step(&lead, &dev)]).await;
+    let wr = until(&t, &wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded).await;
+    let reqs = lead_llm.requests();
+    assert_eq!(reqs.len(), 3);
+    assert_eq!(workflow_tools(&reqs[0]), ["start_member"]);
+    let first = prompt(&reqs[0]);
+    assert!(
+        first.contains(
+            "### Workflow tools\n\n- Start other members of the team on parts of the work with \
+             `start_member`, one of: \"dev\". At most 1 may run at once, and 1 in all. End your \
+             turn once you have started them: you are told when they finish.\n"
+        ),
+        "{first}"
+    );
+    assert_eq!(tool_result(&reqs[1], "c1"), "Started \"dev\".");
+    // The member's run has no workflow tool, and its prompt names its part.
+    let member = dev_llm.requests().remove(0);
+    assert!(
+        workflow_tools(&member).is_empty(),
+        "{:?}",
+        tool_names(&member)
+    );
+    let part = prompt(&member);
+    assert!(
+        part.contains("### Your part\n\nMake the icon light.")
+            && !part.contains("### Workflow tools"),
+        "{part}"
+    );
+    // The lead goes on in its thread, with its tool, told of the member.
+    assert_eq!(workflow_tools(&reqs[2]), ["start_member"]);
+    assert_eq!(
+        last_user(&reqs[2]),
+        "The members you started have finished:\n\n#### dev: Make the icon light.\n\n\
+         Status: succeeded\nBranch: none\n\nMade it light.\n\n\
+         You may start no more members: end with your summary of the step."
+    );
+    let handoff = wr.steps[0].handoff.clone().unwrap();
+    assert_eq!(handoff.summary, "All in.");
+    assert_eq!(handoff.members.len(), 1);
+    assert_eq!(handoff.members[0].summary, "Made it light.");
+    t.rt.shutdown();
+}
+
+/// The Claude engine: Dots' own server lists `start_member` to a delegate step's run and
+/// performs it, the CLI may call it without asking, and a call past `total` (the continued
+/// run plays the same script) is refused.
+#[tokio::test]
+async fn a_claude_lead_starts_a_member_through_dots_own_server() {
+    let t = start(json!([
+        {"emit": {"type": "system", "subtype": "init", "session_id": "$SESSION"}},
+        {"mcp_list": "dots"},
+        {"mcp_call": {"server": "dots", "tool": "start_member",
+                      "arguments": {"member": "dev", "task": "Make it."}}},
+        {"emit": {"type": "result", "subtype": "success", "is_error": false, "result": "done",
+                  "usage": {"input_tokens": 1, "output_tokens": 1}}}
+    ]))
+    .await;
+    let llm = Llm::start(vec![text("Made it.")]).await;
+    let dev =
+        t.rt.create_dot(local_spec(&t, &llm.endpoint(), "dev"), None, None)
+            .await
+            .unwrap();
+    let mut s = spec("lead");
+    s.workdir = t.dir.path().to_string_lossy().to_string();
+    s.workspace_mode = WorkspaceMode::Folder;
+    s.policy = Policy::preset(Preset::Trusted);
+    let lead = t.rt.create_dot(s, None, None).await.unwrap();
+    let wr = run_steps(&t, &[&lead, &dev], vec![delegate_step(&lead, &dev)]).await;
+    let wr = until(&t, &wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded).await;
+    let recorded: Value =
+        serde_json::from_str(&std::fs::read_to_string(&t.args_out).unwrap()).unwrap();
+    let args: Vec<String> = serde_json::from_value(recorded["args"].clone()).unwrap();
+    let allowed: Vec<&str> = args
+        .iter()
+        .skip_while(|a| *a != "--allowedTools")
+        .skip(1)
+        .take_while(|a| !a.starts_with("--"))
+        .map(String::as_str)
+        .filter(|a| {
+            WORKFLOW_TOOLS
+                .iter()
+                .any(|t| *a == format!("mcp__dots__{t}"))
+        })
+        .collect();
+    assert_eq!(allowed, ["mcp__dots__start_member"], "{args:?}");
+    // The args are the continued run's: its prompt is the member's result.
+    let told = recorded["prompt"].as_str().unwrap();
+    assert!(
+        told.contains("#### dev: Make it.\n\nStatus: succeeded\nBranch: none\n\nMade it.\n\n"),
+        "{told}"
+    );
+    let runs =
+        t.rt.store()
+            .runs_of_step_run(&wr.steps[0].id)
+            .await
+            .unwrap();
+    let members = t.rt.store().step_members(&wr.steps[0].id).await.unwrap();
+    let own: Vec<_> = runs
+        .iter()
+        .filter(|r| !members.iter().any(|m| m.run_id == r.root_run_id))
+        .collect();
+    assert_eq!(own.len(), 2);
+    let mut answers = Vec::new();
+    for run in &own {
+        let events = t.rt.store().list_events(&run.id, 0).await.unwrap();
+        let listed = events.iter().find(|e| e.kind == "raw").unwrap();
+        let listed: Value = serde_json::from_str(listed.data["line"].as_str().unwrap()).unwrap();
+        let listed: Vec<&str> = listed["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .filter(|n| WORKFLOW_TOOLS.contains(n))
+            .collect();
+        assert_eq!(listed, ["start_member"]);
+        answers.extend(events.iter().filter(|e| e.kind == "tool_result").map(|e| {
+            (
+                e.data["output"].as_str().unwrap().to_string(),
+                e.data["is_error"].as_bool().unwrap(),
+            )
+        }));
+    }
+    assert_eq!(
+        answers,
+        [
+            ("Started \"dev\".".to_string(), false),
+            (
+                "Not started: you have started 1 members, the most this step allows.".to_string(),
+                true
+            ),
+        ]
+    );
+    assert_eq!(members.len(), 1);
     t.rt.shutdown();
 }

@@ -4,7 +4,9 @@ use sqlx::Row;
 
 use super::Store;
 use crate::model::{ApplyState, Approval, ApprovalStatus};
-use crate::policy::{Policy, Preset, Rule};
+use crate::policy::{
+    pattern_touches_private, touches_private, Action, Policy, Preset, Rule, PRIVATE_REFUSAL,
+};
 use crate::util::{json_hash, new_id, now};
 use crate::vault::redact::global;
 use crate::{Error, Result};
@@ -178,6 +180,19 @@ impl Store {
         } else {
             ApprovalStatus::Denied
         };
+        // No allow rule is saved for a call that touches a private folder, nor one that names
+        // or covers a private folder (approval guards spec section 3.3). The caller offers none;
+        // this holds whoever calls.
+        if let Some(rule) = rule.filter(|r| r.action == Action::Allow) {
+            let approval = self.get_approval(id).await?;
+            let run = self.get_run(&approval.run_id).await?;
+            let workspace = run.workspace_path.as_deref().map(std::path::Path::new);
+            if touches_private(&approval.tool, &approval.input, workspace)
+                || pattern_touches_private(&rule.tool)
+            {
+                return Err(Error::Invalid(PRIVATE_REFUSAL.into()));
+            }
+        }
         let mut tx = self.pool.begin().await?;
         // The guarded update goes first: it takes the write lock, so the policy read below
         // cannot be overtaken by another writer of the dot.

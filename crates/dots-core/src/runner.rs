@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -14,12 +14,13 @@ use serde_json::{json, Value};
 
 use crate::approvals::grant_key;
 use crate::checkins::{CheckIns, Tool as CheckInTool};
+use crate::delivery::{wait_reason, WaitFacts};
 use crate::engine::{Engine, EngineEvent, RunContext};
 use crate::events::{Bus, RuntimeEvent};
 use crate::limits::{is_background, Admit, Limits, QueuedRun, STOPPED_BY_LIMIT};
 use crate::model::{
-    effective_quiet_limit, ApprovalStatus, Dot, EngineKind, NewRun, Run, RunStatus, TriggerKind,
-    WorkspaceMode,
+    effective_quiet_limit, ApprovalStatus, Delivery, Dot, EngineKind, NewRun, Run, RunStatus,
+    TriggerKind, WorkspaceMode,
 };
 use crate::prompt::{build_prompt_full, context_tool_name, PromptParts};
 use crate::run_tools::{CloseOnDrop, OpenRequest, RunTools};
@@ -159,6 +160,9 @@ pub struct Runner {
     /// Where watchers staged their runs' files (watchers spec section 4.2), set once by the
     /// runtime (`set_watcher_files`).
     watcher_files: OnceLock<crate::watchers::files::WatcherFiles>,
+    /// The stored copies of files attached to chat messages (attachments spec section 4.4),
+    /// set once by the runtime (`set_chat_files`).
+    chat_files: OnceLock<crate::chat_files::ChatFiles>,
     /// Claude's usage limits (usage and limits spec section 4), set once by the runtime
     /// (`set_limits`). Without them no run is held.
     limits: OnceLock<Arc<Limits>>,
@@ -190,6 +194,7 @@ impl Runner {
             apps: OnceLock::new(),
             acting: OnceLock::new(),
             watcher_files: OnceLock::new(),
+            chat_files: OnceLock::new(),
             limits: OnceLock::new(),
         })
     }
@@ -310,6 +315,56 @@ impl Runner {
             .count()
     }
 
+    /// The ids of the queued runs the usage limits hold now; none without limits.
+    pub async fn usage_held_ids(&self) -> Result<HashSet<String>> {
+        let Some(limits) = self.limits.get() else {
+            return Ok(HashSet::new());
+        };
+        let state = limits.state(&self.queued_runs().await?, self.running_background_claude());
+        Ok(state.held_run_ids.into_iter().collect())
+    }
+
+    /// Sets why each waiting run waits (delivery tracking spec section 3): each `queued` run
+    /// not yet delivered gets its reason, every other run `None`. The facts are read once.
+    /// The slots in use and the busy dots are the runner's own, exactly what `dispatch_once`
+    /// checks: a run parked or waiting for an approval has left them and keeps no dot busy.
+    pub async fn fill_wait_reasons(&self, runs: &mut [Run]) -> Result<()> {
+        let waiting =
+            |r: &Run| r.status == RunStatus::Queued && r.delivery == Some(Delivery::Waiting);
+        if !runs.iter().any(waiting) {
+            for run in runs.iter_mut() {
+                run.wait_reason = None;
+            }
+            return Ok(());
+        }
+        let usage_held = self.usage_held_ids().await?;
+        let (running, busy_dots) = {
+            let active = self.active.lock().unwrap();
+            let busy: HashSet<String> = active
+                .values()
+                .filter(|a| !a.workflow)
+                .map(|a| a.dot_id.clone())
+                .collect();
+            (active.len(), busy)
+        };
+        let runner_held = self.is_held();
+        for run in runs.iter_mut() {
+            run.wait_reason = waiting(run).then(|| {
+                wait_reason(&WaitFacts {
+                    usage_held: usage_held.contains(&run.id),
+                    runner_held,
+                    // A run of a workflow step neither waits for its dot's other runs nor
+                    // keeps them waiting (teams spec section 8).
+                    dot_has_active_run: run.workflow_step_run_id.is_none()
+                        && busy_dots.contains(&run.dot_id),
+                    running,
+                    max_concurrent: self.cfg.max_concurrent,
+                })
+            });
+        }
+        Ok(())
+    }
+
     /// The vault runs resolve their dots' variables from (env vault spec §8). Set once, before
     /// any run starts.
     pub fn set_vault(&self, vault: Vault) {
@@ -324,6 +379,96 @@ impl Runner {
     /// Where watchers staged their runs' files. Set once, before any run starts.
     pub fn set_watcher_files(&self, files: crate::watchers::files::WatcherFiles) {
         let _ = self.watcher_files.set(files);
+    }
+
+    /// Where files attached to chat messages are stored. Set once, before any run starts.
+    pub fn set_chat_files(&self, files: crate::chat_files::ChatFiles) {
+        let _ = self.chat_files.set(files);
+    }
+
+    /// Puts the files of the run's topic that are missing into its workspace (attachments
+    /// spec section 4.4). A file of this run's own message that cannot be put there fails the
+    /// run before its engine starts; an earlier message's file is a notice on the run.
+    async fn copy_chat_files(&self, run: &Run, workspace: &Path) -> Result<()> {
+        let Some(files) = self.chat_files.get() else {
+            return Ok(());
+        };
+        let topic = self.store.topic_attachments(&run.root_run_id).await?;
+        if topic.is_empty() {
+            return Ok(());
+        }
+        let (files, root, workspace, run_id) = (
+            files.clone(),
+            run.root_run_id.clone(),
+            workspace.to_path_buf(),
+            run.id.clone(),
+        );
+        let listed = topic.clone();
+        let failed = tokio::task::spawn_blocking(move || {
+            files.copy_into(&root, &listed, &workspace, &run_id)
+        })
+        .await
+        .map_err(|e| Error::Other(format!("copying the attached files failed: {e}")))?;
+        // The files now in place are marked, before any engine starts: from then on each is
+        // taken as it is there (attachments spec section 4.4). A failed mark only means its
+        // name is checked again next time.
+        let placed: Vec<String> = topic
+            .iter()
+            .filter(|f| f.name.is_some() && f.placed_at.is_none())
+            .filter(|f| !failed.iter().any(|(id, _)| *id == f.id))
+            .map(|f| f.id.clone())
+            .collect();
+        if !placed.is_empty() {
+            let at = crate::util::timestamp(chrono::Utc::now());
+            if let Err(e) = self.store.mark_attachments_placed(&placed, &at).await {
+                tracing::warn!(run = %run.id, "marking the attached files placed failed: {e}");
+            }
+        }
+        let mut notices = Vec::new();
+        for (id, e) in failed {
+            let Some(file) = topic.iter().find(|f| f.id == id) else {
+                continue;
+            };
+            if file.run_id.as_deref() == Some(run.id.as_str()) {
+                return Err(Error::Other(format!(
+                    "{}: {e}",
+                    crate::chat_files::COPY_FAILED
+                )));
+            }
+            let name = file.name.clone().unwrap_or_else(|| file.file_name.clone());
+            tracing::warn!(run = %run.id, file = %name, "copying an attached file failed: {e}");
+            notices.push(format!(
+                "Dots could not copy {name} into the workspace: {e}"
+            ));
+        }
+        for text in notices {
+            self.record(&run.id, &EngineEvent::Notice { text }).await?;
+        }
+        Ok(())
+    }
+
+    /// Whether the run's topic folder under `attachments/` holds the dot's work: an attachment
+    /// it edited or a file it added (`ChatFiles::changed_in`). A failure to tell counts as
+    /// changed, so nothing is removed on a guess.
+    async fn chat_files_changed(&self, run: &Run, workspace: &Path) -> bool {
+        let Some(files) = self.chat_files.get() else {
+            return false;
+        };
+        let topic = match self.store.topic_attachments(&run.root_run_id).await {
+            Ok(topic) => topic,
+            Err(e) => {
+                tracing::warn!(run = %run.id, "reading the topic's files failed: {e}");
+                return true;
+            }
+        };
+        let (files, root, workspace) = (
+            files.clone(),
+            run.root_run_id.clone(),
+            workspace.to_path_buf(),
+        );
+        tokio::task::spawn_blocking(move || files.changed_in(&root, &topic, &workspace))
+            .await
+            .unwrap_or(true)
     }
 
     /// Copies a watcher thread's staged attachments into the run's workspace; for the thread's
@@ -359,10 +504,20 @@ impl Runner {
         }
     }
 
-    /// Removes a watcher run's attachments from its workspace.
-    fn remove_attachments(&self, workspace: &Path, root_run_id: &str) {
-        if self.watcher_files.get().is_some() {
-            crate::watchers::files::WatcherFiles::remove_copy(workspace, root_run_id);
+    /// Removes a watcher topic's attachments from its workspace. A chat topic's files stay
+    /// for the rest of the conversation (attachments spec section 4.4).
+    async fn remove_attachments(&self, workspace: &Path, root_run_id: &str) {
+        if self.watcher_files.get().is_none() {
+            return;
+        }
+        match self.store.get_run(root_run_id).await {
+            Ok(root) if root.trigger == TriggerKind::Watcher => {
+                crate::watchers::files::WatcherFiles::remove_copy(workspace, root_run_id);
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(run = %root_run_id, "reading a topic's first run failed: {e}")
+            }
         }
     }
 
@@ -610,6 +765,16 @@ impl Runner {
         }
     }
 
+    /// Whether the queue is held (`set_held`).
+    pub fn is_held(&self) -> bool {
+        self.held.load(Ordering::SeqCst)
+    }
+
+    /// How many runs the runner runs at once.
+    pub fn max_concurrent(&self) -> usize {
+        self.cfg.max_concurrent
+    }
+
     pub async fn dispatch_once(self: &Arc<Self>) -> Result<usize> {
         let _pass = self.pass.lock().await;
         if self.held.load(Ordering::SeqCst) {
@@ -768,7 +933,8 @@ impl Runner {
         // An error path may have left a watcher run's attachments in its workspace.
         if let Ok(stored) = self.store.get_run(&run_id).await {
             if let Some(path) = &stored.workspace_path {
-                self.remove_attachments(Path::new(path), &stored.root_run_id);
+                self.remove_attachments(Path::new(path), &stored.root_run_id)
+                    .await;
             }
         }
         self.forget_run(&run_id);
@@ -976,7 +1142,7 @@ impl Runner {
         let step_name = workflow_run
             .definition
             .step(&step.step_id)
-            .map(|(_, s)| s.name.clone())
+            .map(|s| s.name.clone())
             .unwrap_or(step.step_id);
         Ok(Some(StepContext {
             repo: workflow_run.project.repo_path,
@@ -988,7 +1154,9 @@ impl Runner {
 
     /// What happens to a run's worktree when the run stops for good: a run of a workflow step has
     /// what it left uncommitted committed by Dots (teams spec section 6.1; a failure is a notice
-    /// on the run), then an unchanged worktree is removed. Errors are logged, never returned.
+    /// on the run), then an unchanged worktree is removed. A worktree whose chat files the dot
+    /// edited, or wrote beside, is kept (attachments spec section 7). Errors are logged, never
+    /// returned.
     async fn finish_workspace(
         &self,
         run: &Run,
@@ -1005,6 +1173,11 @@ impl Runner {
                     tracing::warn!(run = %run.id, "recording the notice failed: {e}");
                 }
             }
+        }
+        if ws_dot.spec.workspace_mode == WorkspaceMode::Worktree
+            && self.chat_files_changed(run, &prepared.path).await
+        {
+            return;
         }
         if let Err(e) = self.workspaces.cleanup_if_unchanged(ws_dot, prepared).await {
             tracing::warn!(run = %run.id, "workspace cleanup failed: {e}");
@@ -1133,6 +1306,18 @@ impl Runner {
         // continues the thread of a step that has ended works there no more, nor for the
         // workflow: it fails before its workspace is touched.
         if self.store.in_ended_step_thread(run).await? {
+            // A Stop closed the run's own step after the run turned `Running`, before its
+            // cancel reached the run: it ends cancelled, as the Stop meant, not failed.
+            let stopped = match &run.workflow_step_run_id {
+                Some(id) => {
+                    self.store.get_step_run(id).await?.status
+                        == crate::model::StepRunStatus::Cancelled
+                }
+                None => false,
+            };
+            if stopped {
+                return self.finish_cancelled_before_start(&run.id).await;
+            }
             return Err(Error::Other(
                 crate::workflows::ENDED_STEP_THREAD.to_string(),
             ));
@@ -1212,6 +1397,8 @@ impl Runner {
         // A watcher run's attachments, in its workspace for the run (watchers spec §4.2).
         let refreshed = self.copy_attachments(run, &prepared.path).await;
         let run = refreshed.as_ref().unwrap_or(run);
+        // The topic's chat files, missing ones copied again (attachments spec section 4.4).
+        self.copy_chat_files(run, &prepared.path).await?;
         // The run's MCP sessions, skills and plugin folders (MCP/skills spec section 5), each
         // server with the variables its dot grants it, in the dot's scope (env vault spec §8).
         let (tools, mut notices) = RunTools::open(OpenRequest {
@@ -1262,6 +1449,19 @@ impl Runner {
         } else {
             tools
         };
+        // A run of an open agent step has the step's workflow tools, under the same rule. A step
+        // that cannot be read is logged; the run goes on without them.
+        let tools = if workflow_off {
+            tools
+        } else {
+            match crate::team_tools::for_run(&self.store, run).await {
+                Ok(step) => tools.with_step(step),
+                Err(e) => {
+                    tracing::warn!(run = %run.id, "reading the step's workflow tools failed: {e}");
+                    tools
+                }
+            }
+        };
         // A run of a chat the person started may propose new instructions for its dot
         // (conversational chat spec section 4), unless its policy denies `Instructions`
         // outright: the tool is then neither offered nor named.
@@ -1284,7 +1484,8 @@ impl Runner {
         let _closer = CloseOnDrop(tools.clone());
         if cancel.is_cancelled() {
             tools.close().await;
-            self.remove_attachments(&prepared.path, &run.root_run_id);
+            self.remove_attachments(&prepared.path, &run.root_run_id)
+                .await;
             if let Err(e) = self
                 .workspaces
                 .cleanup_if_unchanged(&ws_dot, &prepared)
@@ -1354,6 +1555,20 @@ impl Runner {
         };
         self.store.set_run_quiet_limit(&run.id, quiet_secs).await?;
         let mut rx = engine.start(ctx).await?;
+        // The engine has the message: the run reached its dot (delivery tracking spec
+        // section 2). Recorded once; a requeued run keeps its first delivery. A failed write
+        // fails the run; a failed read for the announcement only is logged, as for the
+        // workspace above.
+        if self
+            .store
+            .set_delivered(&run.id, chrono::Utc::now())
+            .await?
+        {
+            match self.store.get_run(&run.id).await {
+                Ok(row) => self.emit_run(&row),
+                Err(e) => tracing::warn!(run = %run.id, "announcing the delivery failed: {e}"),
+            }
+        }
 
         let deadline = Instant::now() + Duration::from_secs(dot.spec.timeout_secs);
         let mut grace: Option<Instant> = None;
@@ -1456,7 +1671,8 @@ impl Runner {
         }
         tools.close().await;
         // Gone before the worktree's "unchanged" check: they are never a run's changes.
-        self.remove_attachments(&prepared.path, &run.root_run_id);
+        self.remove_attachments(&prepared.path, &run.root_run_id)
+            .await;
 
         let user_cancelled = by_user.load(Ordering::SeqCst);
         let waiting = self.store.has_pending_for_run(&run.id).await?
@@ -1604,6 +1820,17 @@ impl Runner {
         Err(already(&self.store.get_run(run_id).await?))
     }
 
+    /// Cancels the run only if it is still `queued` and the runner does not hold it, as
+    /// `cancel` does for such a run: its approvals expire, its attachments go, and the change
+    /// is announced. `None` when it was not (for example, the dispatcher claimed it a moment
+    /// earlier); a run awaiting an approval reached its dot and is left alone.
+    pub async fn cancel_if_queued(&self, run_id: &str) -> Result<Option<Run>> {
+        if self.active.lock().unwrap().contains_key(run_id) {
+            return Ok(None);
+        }
+        self.cancel_inactive_with(run_id, true).await
+    }
+
     /// Flags a held run as cancelled by the user. `None` if the runner does not hold it,
     /// otherwise whether this was the first cancel request for the run.
     fn signal_cancel(&self, run_id: &str) -> Option<bool> {
@@ -1621,11 +1848,20 @@ impl Runner {
     /// Cancels a `queued` or `awaiting_approval` run that the runner does not hold, expiring
     /// its pending approvals and removing an unchanged worktree of a parked run.
     async fn cancel_inactive(&self, run_id: &str) -> Result<Option<Run>> {
+        self.cancel_inactive_with(run_id, false).await
+    }
+
+    /// `cancel_inactive`, for a `queued` run only when `queued_only`.
+    async fn cancel_inactive_with(&self, run_id: &str, queued_only: bool) -> Result<Option<Run>> {
         // Serialised with `maybe_resume` so a cancel never interleaves with a resume.
         let (prior, cancelled) = {
             let _guard = self.resume_lock.lock().await;
             let prior = self.store.get_run(run_id).await?;
-            let cancelled = self.store.cancel_if_inactive(run_id).await?;
+            let cancelled = if queued_only {
+                self.store.cancel_if_queued(run_id).await?
+            } else {
+                self.store.cancel_if_inactive(run_id).await?
+            };
             if cancelled.is_some() {
                 if let Err(e) = self.store.expire_pending_for_run(run_id).await {
                     tracing::warn!(run = %run_id, "expiring approvals failed: {e}");
