@@ -276,6 +276,53 @@ async fn an_attachment_falls_back_to_its_stored_copy() {
     assert_eq!(files[0].run_id, run.id);
 }
 
+/// A message that never reached the dot and was discarded is not part of the conversation:
+/// its files are neither the topic's files nor in the panel. Once delivered, a dismissed
+/// message's files stay (attachments spec section 3.1.10).
+#[tokio::test]
+async fn a_discarded_undelivered_message_takes_its_files_out_of_the_topic() {
+    let t = start().await;
+    let d = dot(&t, "discarder").await;
+    let a =
+        t.rt.add_attachment_bytes(&d.id, "a.pdf", b"a")
+            .await
+            .unwrap();
+    let b =
+        t.rt.add_attachment_bytes(&d.id, "b.pdf", b"b")
+            .await
+            .unwrap();
+    let root = chat_run(&t, &d, None, 1, &[(a.id.clone(), "a.pdf".into())]).await;
+    let store = t.rt.store();
+    store
+        .mark_delivered(&root.id, chrono::Utc::now())
+        .await
+        .unwrap();
+    let reply = chat_run(&t, &d, Some(&root), 2, &[(b.id.clone(), "b.pdf".into())]).await;
+    let names = |files: Vec<ConversationFile>| -> Vec<String> {
+        files.into_iter().map(|f| f.name).collect()
+    };
+    assert_eq!(names(list(&t, &d, &[&root]).await), vec!["b.pdf", "a.pdf"]);
+    store
+        .dismiss_run(&reply.id, chrono::Utc::now())
+        .await
+        .unwrap()
+        .unwrap();
+    store
+        .dismiss_run(&root.id, chrono::Utc::now())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(names(list(&t, &d, &[&root]).await), vec!["a.pdf"]);
+    let topic: Vec<String> = store
+        .topic_attachments(&root.id)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|f| f.id)
+        .collect();
+    assert_eq!(topic, vec![a.id.clone()]);
+}
+
 #[tokio::test]
 async fn a_path_not_in_the_list_is_not_opened() {
     let t = start().await;
