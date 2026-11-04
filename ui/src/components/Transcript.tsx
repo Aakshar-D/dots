@@ -21,6 +21,7 @@ import { appTitle, isActive } from "@/lib/home-topics";
 import { localDateTime, localTime } from "@/lib/format";
 import { mcpToolLabel } from "@/lib/mcp-tool";
 import { keys } from "@/lib/query";
+import { sentLaterLines } from "@/lib/send-later";
 import { watcherTitle } from "@/lib/watchers";
 import {
   checkInLine,
@@ -472,6 +473,11 @@ export function Transcript(props: {
                   {message}
                 </p>
               )}
+              {sentLaterLines(run).map((line) => (
+                <p key={line} className="self-end text-xs text-muted-foreground">
+                  {line}
+                </p>
+              ))}
               <DeliveryLine run={run} />
               {!conversation && (items.length > 0 || checkIns.length > 0) && (
                 <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
