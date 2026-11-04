@@ -10,6 +10,7 @@ import type { Topic } from "@/lib/home-topics";
 import { keys } from "@/lib/query";
 import { useStickToBottom } from "@/lib/use-stick-to-bottom";
 import { RunCard } from "@/screens/home/RunCard";
+import { ScheduledCards } from "@/screens/home/ScheduledCard";
 import { SkipLine } from "@/screens/home/SkipLine";
 import { TopicRuns } from "@/screens/home/TopicRuns";
 
@@ -48,6 +49,9 @@ export function Timeline(props: {
   proposals: InstructionProposal[];
   /// The dot's topics a message may be moved to ("Move to topic…"); none offers no move.
   moveTargets?: Topic[];
+  /// The dot whose scheduled messages wait as cards after the topics; with `root` (an older
+  /// topic on its own), only those of that topic.
+  scheduledFor?: { dotId: string; root?: string };
   /// Reply on a run card: makes its topic the reply target.
   onReply: (topic: Topic) => void;
   /// Shown above the topics: a failed load, or what to do when there is none.
@@ -120,6 +124,14 @@ export function Timeline(props: {
               </div>
             );
           })}
+          {props.scheduledFor && (
+            <ScheduledCards
+              dotId={props.scheduledFor.dotId}
+              dotName={dotName}
+              topics={topics}
+              root={props.scheduledFor.root}
+            />
+          )}
         </div>
       </section>
       {behind && (

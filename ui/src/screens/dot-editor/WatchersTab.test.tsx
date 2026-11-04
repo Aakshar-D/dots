@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import type { UserEvent } from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
@@ -104,6 +104,7 @@ describe("a dot's Watchers tab", () => {
           dotId: sample.dot.id,
           name: "Invoices folder",
           config: { kind: "folder", path: INVOICES, pattern: "*.pdf", events: ["created", "changed", "deleted"], recursive: true },
+          hours: null,
         },
       ]),
     );
@@ -164,6 +165,7 @@ describe("a dot's Watchers tab", () => {
             kind: "email", address: "me@gmail.com", secret: "GMAIL_APP_PASSWORD", label: "INBOX",
             from: "billing@acme.com", subject: "invoice", has_attachment: null,
           },
+          hours: null,
         },
       ]),
     );
@@ -191,6 +193,7 @@ describe("a dot's Watchers tab", () => {
             kind: "github", repos: ["owner/repo", "owner/other"], events: ["issue", "pull_request", "comment"],
             secret: "GITHUB_TOKEN", label: null, authors: [], skip_bots: true, branches: [],
           },
+          hours: null,
         },
       ]),
     );
@@ -210,9 +213,98 @@ describe("a dot's Watchers tab", () => {
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() =>
       expect(backend.callsTo("watcher_update")).toEqual([
-        { id: folder.id, name: "Invoices folder", config: { ...folder.config, pattern: "invoice-*.pdf" } },
+        { id: folder.id, name: "Invoices folder", config: { ...folder.config, pattern: "invoice-*.pdf" }, hours: folder.hours },
       ]),
     );
+  });
+
+  it("keeps a watcher's hours when only its name is edited", async () => {
+    holding([folder]);
+    backend.on("watcher_update", () => folder);
+    expect(folder.hours).not.toBeNull();
+    const { user } = await openTab();
+    await screen.findByRole("list", { name: "Watchers" });
+    await user.click(within(items()[0]!).getByRole("button", { name: "Edit" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edit Invoices folder" });
+    expect(within(dialog).getByRole("radio", { name: "Only at these times" })).toBeChecked();
+    const name = within(dialog).getByLabelText("Name");
+    await user.clear(name);
+    await user.type(name, "Bills");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(backend.callsTo("watcher_update")).toEqual([
+        { id: folder.id, name: "Bills", config: folder.config, hours: folder.hours },
+      ]),
+    );
+  });
+
+  it("opens a watcher without hours on Any time", async () => {
+    holding([email]);
+    const { user } = await openTab();
+    await screen.findByRole("list", { name: "Watchers" });
+    await user.click(within(items()[0]!).getByRole("button", { name: "Edit" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edit Billing mail" });
+    expect(within(dialog).getByRole("radio", { name: "Any time" })).toBeChecked();
+    expect(within(dialog).queryByRole("button", { name: "Mon" })).toBeNull();
+  });
+
+  it("saves the days and times chosen under Only at these times", async () => {
+    holding([]);
+    backend.on("watcher_add", () => folder);
+    const { user } = await openTab();
+    const dialog = await add(user, "Folder", "New folder watcher");
+    expect(within(dialog).getByRole("group", { name: "Watch hours" })).toBeVisible();
+    expect(within(dialog).getByRole("radio", { name: "Any time" })).toBeChecked();
+    await user.click(within(dialog).getByRole("radio", { name: "Only at these times" }));
+    for (const day of ["Mon", "Tue", "Wed", "Thu", "Fri"]) {
+      expect(within(dialog).getByRole("button", { name: day })).toHaveAttribute("aria-pressed", "true");
+    }
+    expect(within(dialog).getByRole("button", { name: "Sat" })).toHaveAttribute("aria-pressed", "false");
+    await user.click(within(dialog).getByRole("button", { name: "Sat" }));
+    expect(within(dialog).getByRole("button", { name: "Sat" })).toHaveAttribute("aria-pressed", "true");
+    await user.click(within(dialog).getByRole("button", { name: "Sat" }));
+    fireEvent.change(within(dialog).getByLabelText("Start"), { target: { value: "09:00" } });
+    fireEvent.change(within(dialog).getByLabelText("End"), { target: { value: "18:00" } });
+    expect(within(dialog).queryByText("Ends the next day")).toBeNull();
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(backend.callsTo("watcher_add")[0]).toMatchObject({
+        hours: { days: ["mon", "tue", "wed", "thu", "fri"], start: "09:00", end: "18:00" },
+      }),
+    );
+  });
+
+  it("notes an end before the start as ending the next day", async () => {
+    holding([]);
+    const { user } = await openTab();
+    const dialog = await add(user, "Folder", "New folder watcher");
+    await user.click(within(dialog).getByRole("radio", { name: "Only at these times" }));
+    fireEvent.change(within(dialog).getByLabelText("Start"), { target: { value: "22:00" } });
+    fireEvent.change(within(dialog).getByLabelText("End"), { target: { value: "06:00" } });
+    expect(within(dialog).getByText("Ends the next day")).toBeVisible();
+  });
+
+  it("shows a core refusal of the hours in the dialog's alert", async () => {
+    holding([]);
+    backend.on("watcher_add", () => {
+      throw { kind: "invalid", message: "Watch hours need at least one day." };
+    });
+    const { user } = await openTab();
+    const dialog = await add(user, "Folder", "New folder watcher");
+    await user.click(within(dialog).getByRole("radio", { name: "Only at these times" }));
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Watch hours need at least one day.");
+  });
+
+  it("shows what a watcher's hours hold back beside its state", async () => {
+    // An opening still ahead: one that has passed shows no line.
+    const ahead = new Date(Date.now() + 2 * 86_400_000).toISOString();
+    holding([{ ...folder, next_opening: ahead }, email]);
+    await openTab();
+    await screen.findByRole("list", { name: "Watchers" });
+    const [f, e] = items() as [HTMLElement, HTMLElement];
+    expect(within(f).getByText(/^Outside hours · 4 held until /)).toBeVisible();
+    expect(within(e).queryByText(/Outside hours/)).toBeNull();
   });
 
   it("shows the core's refusal in the form and keeps it open", async () => {

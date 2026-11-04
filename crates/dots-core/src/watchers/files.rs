@@ -170,6 +170,62 @@ impl WatcherFiles {
         remove_dir(&self.held_dir(watcher_id, held_id));
     }
 
+    /// Moves the files of the `n`th event of an opening run (`names`, as its held row lists
+    /// them) into the run's staging as `<n>-<name>`, and answers each moved file's attachment
+    /// entry. A file that is gone, or cannot be moved, is left out with a warning: the held
+    /// row's list is best-effort, and the event still goes into the run.
+    pub fn take_held_files(
+        &self,
+        watcher_id: &str,
+        held_id: &str,
+        names: &[String],
+        run_id: &str,
+        n: usize,
+    ) -> Vec<Value> {
+        let from_dir = self.held_dir(watcher_id, held_id);
+        let to_dir = self.stage_dir(watcher_id, run_id);
+        let mut moved = Vec::new();
+        for name in names {
+            let from = from_dir.join(name);
+            let staged_name = format!("{n}-{name}");
+            let outcome = std::fs::metadata(&from).and_then(|meta| {
+                std::fs::create_dir_all(&to_dir)?;
+                std::fs::rename(&from, to_dir.join(&staged_name))?;
+                Ok(meta.len())
+            });
+            match outcome {
+                Ok(size) => moved.push(serde_json::json!({
+                    "name": staged_name, "size": size, "path": null, "event": n,
+                })),
+                Err(e) => tracing::warn!(
+                    watcher = watcher_id, held = held_id, file = %name,
+                    "a held file could not be moved to its opening run, left out: {e}"
+                ),
+            }
+        }
+        moved
+    }
+
+    /// Undoes `take_held_files` for a run that was not made: each staged file (`<n>-<name>`)
+    /// goes back under its held event, and the run's staging goes.
+    pub fn return_held_files(&self, watcher_id: &str, run_id: &str, held: &[(String, Value)]) {
+        let staged = self.stage_dir(watcher_id, run_id);
+        for (held_id, attachment) in held {
+            let Some(staged_name) = attachment["name"].as_str() else {
+                continue;
+            };
+            let n = attachment["event"].as_u64().unwrap_or_default();
+            let name = staged_name
+                .strip_prefix(&format!("{n}-"))
+                .unwrap_or(staged_name);
+            let back = self.held_dir(watcher_id, held_id).join(name);
+            if let Err(e) = std::fs::rename(staged.join(staged_name), &back) {
+                tracing::warn!(watcher = watcher_id, held = %held_id, "returning a held file failed: {e}");
+            }
+        }
+        remove_dir(&staged);
+    }
+
     /// Removes everything staged for the watcher (it was deleted).
     pub fn forget_watcher(&self, watcher_id: &str) {
         remove_dir(&self.root.join(watcher_id));

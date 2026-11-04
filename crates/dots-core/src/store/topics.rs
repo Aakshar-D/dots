@@ -360,17 +360,6 @@ impl Store {
         Ok(res.rows_affected() > 0)
     }
 
-    /// Sets a run's `queued_at`, for tests that need runs in a known order.
-    #[doc(hidden)]
-    pub async fn set_run_queued_at(&self, id: &str, queued_at: &str) -> Result<()> {
-        sqlx::query("UPDATE runs SET queued_at = ? WHERE id = ?")
-            .bind(queued_at)
-            .bind(id)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
-    }
-
     /// Archives every topic idle for more than `days` days at `now` (topic tools spec section
     /// 3.3) and returns their rows; `days == 0` archives nothing. A dot's current topic (its
     /// newest chat topic), its most recently active topic, a topic with a run that has not

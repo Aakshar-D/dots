@@ -24,6 +24,15 @@ const attention = sample.overview.schedule_state!;
 const [openQuestion] = sample.messages;
 
 describe("a dot's status mark", () => {
+  it("is not waiting for a question the person snoozed or marked done", () => {
+    const question: Message = { ...openQuestion, dot_id: "dot-a" };
+    expect(dotStatus(row("a"), [question])).toBe("waiting");
+    expect(dotStatus(row("a"), [question], [], [question.id])).toBe("idle");
+    // A run that waits for an approval still waits, snoozed or not (spec section 3.8).
+    const waits = row("a", { active_run: run("awaiting_approval") });
+    expect(dotStatus(waits, [question], [], [question.id])).toBe("waiting");
+  });
+
   it("takes the first that matches: waiting, running, attention, off, idle", () => {
     const question: Message = { ...openQuestion, dot_id: "dot-a" };
     const off = { ...sample.dot, id: "dot-a", name: "a", enabled: false };

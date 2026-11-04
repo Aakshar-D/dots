@@ -1,4 +1,5 @@
 import { Fragment, type ReactNode } from "react";
+import { DeliveryLine } from "@/components/DeliveryLine";
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "cn";
 import { Brain, ChevronRight, Info } from "lucide-react";
@@ -13,13 +14,16 @@ import {
   type Run,
   type RunEventRecord,
 } from "@/api/types";
+import { AttachmentChip } from "@/components/AttachmentChip";
 import { BrowserCall } from "@/components/BrowserCall";
 import { Markdown } from "@/components/Markdown";
 import { StatusBadge } from "@/components/StatusBadge";
+import { messageAttachments } from "@/lib/attachments";
 import { appTitle, isActive } from "@/lib/home-topics";
 import { localDateTime, localTime } from "@/lib/format";
 import { mcpToolLabel } from "@/lib/mcp-tool";
 import { keys } from "@/lib/query";
+import { sentLaterLines } from "@/lib/send-later";
 import { watcherTitle } from "@/lib/watchers";
 import {
   checkInLine,
@@ -60,6 +64,14 @@ function chatMessage(run: Run): string | null {
   const { answer, message } = run.payload as Record<string, unknown>;
   if (typeof answer === "string") return answer;
   return typeof message === "string" ? message : null;
+}
+
+/// Whether Dots sent this chat message again after it restarted (crash resend spec section 3.4).
+function resentAfterRestart(run: Run): boolean {
+  if (run.trigger !== "chat" || typeof run.payload !== "object" || run.payload === null) {
+    return false;
+  }
+  return (run.payload as Record<string, unknown>).resent === "restart";
 }
 
 /// What the scheduler wrote into the payload of a run it started: the slot, whether the slot
@@ -442,6 +454,8 @@ export function Transcript(props: {
     <div className="flex flex-col gap-4">
       {props.runs.map((run, i) => {
         const message = chatMessage(run);
+        // The files a person's message carried (attachments spec section 6).
+        const files = run.trigger === "chat" ? messageAttachments(run) : [];
         const last = i === props.runs.length - 1;
         const items = transcriptItems(props.events.get(run.id) ?? []).filter(
           (item) => !(last && item.type === "error" && item.text === props.shownError),
@@ -462,7 +476,7 @@ export function Transcript(props: {
             <FollowUpLine run={run} />
             <WatcherLine run={run} />
             <div className="flex flex-col gap-2">
-              {message !== null && (
+              {message !== null && (message !== "" || files.length === 0) && (
                 <p
                   data-from="person"
                   className={cn(
@@ -474,6 +488,30 @@ export function Transcript(props: {
                 </p>
               )}
               {message !== null && props.messageAction?.(run)}
+              {files.length > 0 && (
+                <ul
+                  aria-label="Attached files"
+                  className={cn(
+                    "flex flex-wrap justify-end gap-1.5 self-end",
+                    conversation ? "max-w-[75%]" : "max-w-[80%]",
+                  )}
+                >
+                  {files.map((f) => (
+                    <li key={f.id} className="min-w-0 max-w-full">
+                      <AttachmentChip name={f.name} size={f.size} />
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {sentLaterLines(run).map((line) => (
+                <p key={line} className="self-end text-xs text-muted-foreground">
+                  {line}
+                </p>
+              ))}
+              {resentAfterRestart(run) && (
+                <p className="self-end text-xs text-muted-foreground">Resent after Dots restarted</p>
+              )}
+              <DeliveryLine run={run} />
               {!conversation && (items.length > 0 || checkIns.length > 0) && (
                 <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
                   <span aria-hidden className="size-1.5 rounded-full bg-primary" />
@@ -503,7 +541,7 @@ export function Transcript(props: {
                   />
                 ),
               )}
-              {conversation && run.trigger === "chat" && run.status === "cancelled" && (
+              {conversation && run.trigger === "chat" && run.status === "cancelled" && !run.undelivered_at && (
                 <p className="text-xs text-muted-foreground">Cancelled</p>
               )}
               {items.length === 0 && message === null && run.status === "queued" && (

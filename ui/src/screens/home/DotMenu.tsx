@@ -1,6 +1,7 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, ChevronDown } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
+import { useState } from "react";
 import { useNavigate } from "react-router";
 
 import { commands } from "@/api/commands";
@@ -27,6 +28,18 @@ export function DotMenu({ dot }: { dot: Dot }) {
     onSuccess: () => invalidate(qc, ["runs"]),
     onError: notifyError,
   });
+  const [open, setOpen] = useState(false);
+  const today = useQuery({
+    queryKey: keys.deliveryToday(dot.id),
+    queryFn: () => commands.deliveryToday(dot.id),
+    enabled: open,
+  }).data;
+  // The messages waiting to be sent later (send later spec section 6).
+  const scheduled = useQuery({
+    queryKey: keys.scheduledMessages(dot.id),
+    queryFn: () => commands.scheduledMessages(dot.id),
+    enabled: open,
+  }).data;
   const setEnabled = useMutation({
     ...setDotEnabledMutation,
     // The editor fills its form from the cached dot when it opens, so that copy must never be
@@ -39,7 +52,7 @@ export function DotMenu({ dot }: { dot: Dot }) {
     onError: notifyError,
   });
   return (
-    <DropdownMenu.Root modal={false}>
+    <DropdownMenu.Root modal={false} open={open} onOpenChange={setOpen}>
       <DropdownMenu.Trigger asChild>
         {/* Named by the dot's name; the tooltip says what it opens. */}
         <Button
@@ -54,7 +67,7 @@ export function DotMenu({ dot }: { dot: Dot }) {
       <DropdownMenu.Portal>
         <DropdownMenu.Content
           align="start"
-          className="z-50 w-48 rounded-md border bg-popover p-1 text-sm text-popover-foreground shadow-md"
+          className="z-50 w-64 rounded-md border bg-popover p-1 text-sm text-popover-foreground shadow-md"
         >
           <DropdownMenu.Item className={ITEM} onSelect={() => void navigate(`/dots/${dot.id}`)}>
             Edit
@@ -86,6 +99,16 @@ export function DotMenu({ dot }: { dot: Dot }) {
             </span>
             Enabled
           </DropdownMenu.CheckboxItem>
+          {today && (
+            <DropdownMenu.Label className="px-2 py-1.5 text-xs text-muted-foreground">
+              {`Today: ${today.sent} sent · ${today.delivered} delivered · ${today.not_delivered} not delivered`}
+            </DropdownMenu.Label>
+          )}
+          {scheduled !== undefined && scheduled.length > 0 && (
+            <DropdownMenu.Label className="px-2 py-1.5 text-xs text-muted-foreground">
+              {`${scheduled.length} scheduled`}
+            </DropdownMenu.Label>
+          )}
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>

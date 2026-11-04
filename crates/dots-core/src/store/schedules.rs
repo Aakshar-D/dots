@@ -288,18 +288,8 @@ impl Store {
     /// Whether `run_id`, or a run it resumes (up its chain of parked parents), has a
     /// `tool_call` event: it may have changed something, so it is not retried (spec §6).
     pub async fn called_a_tool(&self, run_id: &str) -> Result<bool> {
-        let called = sqlx::query_scalar(
-            "WITH RECURSIVE chain(id) AS ( \
-               SELECT ? \
-               UNION SELECT r.parent_run_id FROM runs r JOIN chain c ON r.id = c.id \
-               WHERE r.trigger_kind = 'resume' AND r.parent_run_id IS NOT NULL) \
-             SELECT EXISTS (SELECT 1 FROM run_events \
-               WHERE kind = 'tool_call' AND run_id IN (SELECT id FROM chain))",
-        )
-        .bind(run_id)
-        .fetch_one(&self.pool)
-        .await?;
-        Ok(called)
+        let mut conn = self.pool.acquire().await?;
+        called_a_tool(&mut conn, run_id).await
     }
 
     /// Whether a manual or scheduled run of `dot_id` queued after `run_id` has succeeded. A
@@ -410,4 +400,21 @@ impl Store {
         tx.commit().await?;
         state_from_row(&row).map(Some)
     }
+}
+
+/// `Store::called_a_tool` read in `conn`; recovery asks it inside its transaction (crash
+/// resend spec section 3.2).
+pub(super) async fn called_a_tool(conn: &mut sqlx::SqliteConnection, run_id: &str) -> Result<bool> {
+    let called = sqlx::query_scalar(
+        "WITH RECURSIVE chain(id) AS ( \
+           SELECT ? \
+           UNION SELECT r.parent_run_id FROM runs r JOIN chain c ON r.id = c.id \
+           WHERE r.trigger_kind = 'resume' AND r.parent_run_id IS NOT NULL) \
+         SELECT EXISTS (SELECT 1 FROM run_events \
+           WHERE kind = 'tool_call' AND run_id IN (SELECT id FROM chain))",
+    )
+    .bind(run_id)
+    .fetch_one(conn)
+    .await?;
+    Ok(called)
 }

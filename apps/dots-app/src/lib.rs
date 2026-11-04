@@ -36,6 +36,8 @@ macro_rules! command_list {
 command_list![
     startup_error,
     status,
+    problem_report,
+    save_problem_report,
     mark_claude_tested,
     get_settings,
     chatgpt_account,
@@ -76,6 +78,11 @@ command_list![
     get_dot,
     dot_variables,
     create_dot,
+    scan_claude_agents,
+    import_claude_agents,
+    setup_ask,
+    setup_cancel,
+    setup_apply,
     dot_move,
     dot_access,
     workspace_list,
@@ -93,12 +100,28 @@ command_list![
     webhook_url,
     preview_schedule,
     policy_preset,
+    rules_touch_private,
     new_dot_spec,
     test_endpoint,
     run_now,
     chat,
+    resend_run,
+    attachment_add_path,
+    attachment_add_bytes,
+    attachment_remove,
+    conversation_files,
+    conversation_file_open,
+    conversation_file_reveal,
     cancel_run,
     keep_waiting,
+    retry_delivery,
+    discard_delivery,
+    delivery_today,
+    schedule_message,
+    scheduled_messages,
+    send_scheduled_now,
+    edit_scheduled_message,
+    cancel_scheduled_message,
     list_runs,
     schedule_skips,
     get_run,
@@ -112,9 +135,14 @@ command_list![
     approvals_for_run,
     decide_approval,
     approval_rule_candidates,
+    approval_touches_private,
     decide_run_approvals,
     inbox,
     inbox_count,
+    inbox_snooze,
+    inbox_unsnooze,
+    inbox_done,
+    inbox_undo_done,
     dismiss_schedule_attention,
     worktree_diff,
     discard_worktree,
@@ -292,6 +320,15 @@ fn setup(app: &AppHandle, panics_logged: bool) -> Result<(), Box<dyn std::error:
         // A click on a notification opens what it is about (needs-you spec section 4.2).
         notify_routes::listen(app);
         events::spawn_forwarder(app.clone(), rt.clone());
+        // After the forwarder subscribes, so the first pass's notice is heard (snooze and done
+        // spec section 4.5). Spawned from the async runtime, which the waker's task needs.
+        let waker = rt.clone();
+        tauri::async_runtime::spawn(async move {
+            waker.spawn_snooze_waker();
+            // The sender of scheduled messages (send later spec section 4.5): its first pass
+            // sends what came due while Dots was closed, and a failure's notice is heard.
+            waker.spawn_send_later();
+        });
     }
     // Managed whenever the data folder is known, so the fatal page can go back too (updates UI
     // spec section 4.4); only the checks need the runtime. What a failed install left is read

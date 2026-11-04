@@ -32,6 +32,49 @@ str_enum!(RunStatus {
     Failed => "failed",
     Cancelled => "cancelled",
 });
+str_enum!(Delivery {
+    Delivered => "delivered",
+    Waiting => "waiting",
+    NotDelivered => "not_delivered",
+});
+str_enum!(WaitReason {
+    Busy => "busy",
+    UsageHold => "usage_hold",
+    Updating => "updating",
+    DotBusy => "dot_busy",
+    Queued => "queued",
+});
+
+impl Delivery {
+    /// Whether a run reached its dot (delivery tracking spec section 2): `delivered_at` means
+    /// delivered; else `undelivered_at` means not delivered; else a run still to end is waiting.
+    /// `None` for a run that ended with neither mark (cancelled before it started, or history
+    /// from before migration 0030).
+    pub fn of(
+        status: RunStatus,
+        delivered_at: Option<&str>,
+        undelivered_at: Option<&str>,
+    ) -> Option<Delivery> {
+        if delivered_at.is_some() {
+            Some(Delivery::Delivered)
+        } else if undelivered_at.is_some() {
+            Some(Delivery::NotDelivered)
+        } else if !status.is_terminal() {
+            Some(Delivery::Waiting)
+        } else {
+            None
+        }
+    }
+}
+
+/// A dot's sends for one day (delivery tracking spec section 3.9).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeliveryCounts {
+    pub sent: u32,
+    pub delivered: u32,
+    pub not_delivered: u32,
+}
+
 str_enum!(ApprovalStatus {
     Pending => "pending",
     Approved => "approved",
@@ -126,6 +169,27 @@ pub struct DotSpec {
     pub enabled: bool,
 }
 
+/// A dot's name as a folder or branch name: lower case, each run of characters that are not
+/// ASCII letters or digits one `-`, trimmed of `-`, cut to 40 characters; `dot` when nothing
+/// is left.
+pub fn folder_name(name: &str) -> String {
+    let mut out = String::new();
+    for c in name.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+        } else if !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    let cut: String = out.trim_matches('-').chars().take(40).collect();
+    let cut = cut.trim_matches('-');
+    if cut.is_empty() {
+        "dot".to_string()
+    } else {
+        cut.to_string()
+    }
+}
+
 impl DotSpec {
     pub fn new(name: &str, instructions: &str, workdir: &str) -> Self {
         Self {
@@ -157,12 +221,15 @@ impl DotSpec {
         }
         let name_ok = !self.name.is_empty()
             && self.name.len() <= 64
+            && !self.name.starts_with(' ')
+            && !self.name.ends_with(' ')
+            && !self.name.contains("  ")
             && self
                 .name
                 .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '-' | '_' | '.'));
         if !name_ok {
-            return invalid("name must be 1-64 characters of A-Z, a-z, 0-9, '-' or '_'");
+            return invalid("Use 1 to 64 letters, digits, spaces, '-', '_' or '.'.");
         }
         if self.instructions.trim().is_empty() {
             return invalid("instructions must not be empty");
@@ -255,7 +322,8 @@ pub struct Run {
     pub ended_at: Option<String>,
     /// Set when the user marked the run reviewed or discarded its worktree.
     pub reviewed_at: Option<String>,
-    /// The failed scheduled run that this run retries.
+    /// The failed run that this run retries: a scheduled run's, or a person's message sent
+    /// again (crash resend spec).
     pub retry_of: Option<String>,
     /// What the run would cost on the API, as the `claude` CLI reported it; `None` for a local
     /// run and for a Claude run whose CLI gave none (usage and limits spec section 5).
@@ -274,6 +342,23 @@ pub struct Run {
     pub quiet_limit_secs: Option<u64>,
     /// The watchdog stopped this run for being quiet too long.
     pub quiet_stopped: bool,
+    /// When the run's engine started on it (delivery tracking spec section 2).
+    #[serde(default)]
+    pub delivered_at: Option<String>,
+    /// When the run was marked not delivered; cleared if it is delivered later.
+    #[serde(default)]
+    pub undelivered_at: Option<String>,
+    #[serde(default)]
+    pub undelivered_reason: Option<String>,
+    /// When the person retried or discarded the run, or it was cancelled after its mark.
+    #[serde(default)]
+    pub dismissed_at: Option<String>,
+    /// Computed from the columns above and the status; see `Delivery::of`.
+    #[serde(default)]
+    pub delivery: Option<Delivery>,
+    /// Why a waiting run has not started. The store leaves it `None`; the runtime fills it.
+    #[serde(default)]
+    pub wait_reason: Option<WaitReason>,
 }
 
 /// Input for `Store::create_run`. `root_run_id: None` makes the run its own root.
@@ -313,7 +398,39 @@ impl NewRun {
             workflow_step_run_id: None,
         }
     }
+
+    /// The run that sends `run`'s message again (crash resend spec section 2): the same
+    /// trigger, payload, parent and topic, `retry_of` = `run`. Its session is the parent's, as
+    /// when the message was first sent (none without a parent). It works in `run`'s folder when
+    /// `run` had one, so a worktree `run` made is used again, not left where no review lists it
+    /// (spec section 4.1); else in the parent's.
+    pub fn resend_of(run: &Run, parent: Option<&Run>) -> Self {
+        let mut new = Self::new(&run.dot_id, run.trigger);
+        new.payload = run.payload.clone();
+        new.parent_run_id = run.parent_run_id.clone();
+        new.root_run_id = Some(run.root_run_id.clone());
+        new.session_id = parent.and_then(|p| p.session_id.clone());
+        let parent_base = parent.and_then(|p| p.base_commit.clone());
+        if run.workspace_path.is_some() {
+            new.workspace_path = run.workspace_path.clone();
+            new.branch = run.branch.clone();
+            new.base_commit = run.base_commit.clone().or(parent_base);
+        } else if let Some(parent) = parent {
+            new.workspace_path = parent.workspace_path.clone();
+            new.branch = parent.branch.clone();
+            new.base_commit = parent_base;
+        }
+        new.retry_of = Some(run.id.clone());
+        new
+    }
 }
+
+/// The payload key of a message Dots sent again after it restarted, and its value (crash
+/// resend spec section 3.4).
+pub const RESENT: &str = "resent";
+pub const RESENT_AFTER_RESTART: &str = "restart";
+/// How many times Dots sends a message again after restarts (crash resend spec section 3.3).
+pub const MAX_RESENDS: i64 = 3;
 
 str_enum!(ScheduleStatus {
     Active => "active",
@@ -370,6 +487,22 @@ pub struct ScheduleChange {
     pub if_last_slot_at: Option<String>,
 }
 
+/// Where a scheduled workflow's schedule stands: its `workflow_schedule_state` row (teams spec
+/// section 5.1). A dot's row without what catching up and retrying need. Times are RFC 3339
+/// UTC (`util::timestamp`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkflowScheduleState {
+    pub workflow_id: String,
+    /// The schedule's JSON when the row was made or reset (`Schedule::rule_key`).
+    pub rule_key: String,
+    pub status: ScheduleStatus,
+    /// The newest slot handled: started, skipped or refused.
+    pub last_slot_at: String,
+    /// Slots that started a workflow run.
+    pub fired_count: u32,
+    pub updated_at: String,
+}
+
 /// What `Store::record_slot` and `Store::start_retry` did with a slot or a retry.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SlotStart {
@@ -394,6 +527,113 @@ pub struct TopicInfo {
     pub title: Option<String>,
     /// When it was archived, by the person or by the idle sweep.
     pub archived_at: Option<String>,
+}
+
+str_enum!(ScheduledStatus {
+    Scheduled => "scheduled",
+    Sending => "sending",
+    Sent => "sent",
+    Failed => "failed",
+    Cancelled => "cancelled",
+});
+str_enum!(ScheduledWait {
+    Busy => "busy",
+    Approval => "approval",
+    UsageLimit => "usage_limit",
+});
+
+/// A message the person wrote for Dots to send later (`scheduled_messages`, send later spec
+/// section 4.1).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScheduledMessage {
+    pub id: String,
+    pub dot_id: String,
+    /// The topic it was written in; `None` starts a new topic.
+    pub root_run_id: Option<String>,
+    pub text: String,
+    /// When it is due, RFC 3339 UTC.
+    pub due_at: String,
+    pub status: ScheduledStatus,
+    /// Why a due message has not gone yet.
+    pub waiting: Option<ScheduledWait>,
+    /// Why it was not sent (`failed`).
+    pub error: Option<String>,
+    /// The chat run it became (`sent`).
+    pub run_id: Option<String>,
+    pub sent_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    /// The files it waits with (attachments spec section 4.6), as its card shows them. Filled
+    /// where the person sees it (`Runtime::scheduled_messages`); empty elsewhere.
+    #[serde(default)]
+    pub attachments: Vec<StagedAttachment>,
+}
+
+/// The note in the payload of a chat run that a scheduled message became (send later spec
+/// section 4.3).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SentLater {
+    /// The scheduled message's id.
+    pub id: String,
+    pub due_at: String,
+    /// Sent more than a minute after `due_at`.
+    pub late: bool,
+    /// Sent as a new topic because the one it was written in could not be continued.
+    pub new_topic: bool,
+}
+
+/// A file the person attached to a chat message (`chat_attachments`, attachments spec section
+/// 4.1). Staged while `run_id` and `scheduled_id` are both `None`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChatAttachment {
+    pub id: String,
+    pub dot_id: String,
+    /// The chat run it went with.
+    pub run_id: Option<String>,
+    /// The scheduled message it waits with (send later).
+    pub scheduled_id: Option<String>,
+    /// Its safe name as added: Dots' copy is `<data>/chat-files/<id>/<file_name>`.
+    pub file_name: String,
+    /// Its name in `attachments/<topic>/`, fixed when it is sent.
+    pub name: Option<String>,
+    pub size: u64,
+    pub created_at: String,
+    /// When Dots first put it in its topic's folder (`None` until then). A placed file is
+    /// taken as it is there from then on: the dot or the person may have edited it.
+    #[serde(default)]
+    pub placed_at: Option<String>,
+}
+
+str_enum!(FileSource {
+    Attached => "attached",
+    Written => "written",
+});
+
+/// A row of the Files panel (attachments spec section 4.5): a file the person attached in the
+/// conversation, or one the dot wrote or edited there.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConversationFile {
+    /// Where it is now: an attachment's workspace copy, else Dots' own copy.
+    pub path: String,
+    pub name: String,
+    pub source: FileSource,
+    /// The run it came with (the newest, for a file listed more than once).
+    pub run_id: String,
+    /// When: the message's queue time, or the tool call's time; the newest.
+    pub at: String,
+    /// The path is a file now.
+    pub exists: bool,
+    /// Dots may open it: it is a document, image or media file, by the name it really has
+    /// (attachments spec section 4.5.1).
+    pub can_open: bool,
+}
+
+/// A file just added to a chat box: what the chip shows, and the id the send passes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StagedAttachment {
+    pub id: String,
+    pub name: String,
+    pub size: u64,
 }
 
 /// A slot that was not run (`schedule_skips`): the dot was still busy with an earlier run.
@@ -631,6 +871,36 @@ pub struct Inbox {
     /// a team's members had to share them (accounts design section 6.3).
     #[serde(default)]
     pub team_scope: Vec<TeamScopeIssue>,
+    /// Chat messages that did not reach their dot and that the person has not retried or
+    /// discarded, newest mark first (snooze and done spec section 3.9.7). They are not in
+    /// `review_runs`.
+    #[serde(default)]
+    pub not_delivered: Vec<UndeliveredMessage>,
+    /// Marks of items back from snooze, still in the Inbox, newest first (snooze and done spec
+    /// section 4.3). The items stay in their sections.
+    #[serde(default)]
+    pub back: Vec<crate::inbox::InboxMark>,
+    /// Marks of snoozed items still in the Inbox, soonest back first. The items are left out
+    /// of their sections.
+    #[serde(default)]
+    pub snoozed: Vec<crate::inbox::InboxMark>,
+    /// Marks of items done in the last 7 days and still in the Inbox, newest first. The items
+    /// are left out of their sections.
+    #[serde(default)]
+    pub done: Vec<crate::inbox::InboxMark>,
+    /// The waiting messages that are hidden (snoozed, or done however long ago). The questions
+    /// and notes are listed with the messages, not here, so this tells the UI which to leave
+    /// out once a done one is no longer in `done`.
+    #[serde(default)]
+    pub hidden_messages: Vec<String>,
+}
+
+/// A chat run that did not reach its dot, as the Inbox lists it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UndeliveredMessage {
+    #[serde(flatten)]
+    pub run: Run,
+    pub dot_name: String,
 }
 
 /// A member dot that is not in its team's account or workspace, as the Inbox lists it.
@@ -875,7 +1145,9 @@ fn check_name(what: &str, name: &str) -> Result<()> {
 }
 
 /// A git name Dots passes on a command line (a remote or a branch): no leading `-`, so it can
-/// never be read as an option, and only `A-Z a-z 0-9 . _ / -`.
+/// never be read as an option, and only `A-Z a-z 0-9 . _ / -`. Nor what git refuses in a ref
+/// name among those characters (`git check-ref-format`): `..`, a trailing `/`, and a part
+/// between `/`s that ends in `.lock`, which would otherwise fail only once a run uses it.
 fn check_git_name(what: &str, name: &str) -> Result<()> {
     let ok = !name.is_empty()
         && !name.starts_with('-')
@@ -885,6 +1157,14 @@ fn check_git_name(what: &str, name: &str) -> Result<()> {
     if !ok {
         return Err(Error::Invalid(format!(
             "{what} must be letters, digits, '.', '_', '/' or '-', not starting with '-'"
+        )));
+    }
+    if name.contains("..")
+        || name.ends_with('/')
+        || name.split('/').any(|part| part.ends_with(".lock"))
+    {
+        return Err(Error::Invalid(format!(
+            "{what} must not contain '..' or end with '/', and no part of it may end with '.lock'"
         )));
     }
     Ok(())
@@ -1032,6 +1312,9 @@ pub struct Workflow {
     /// Why it cannot start now, when the team changed under it (a member it names was deleted
     /// or removed): the refusal its definition would get if it were saved now.
     pub problem: Option<String>,
+    /// Whether the workflow has a webhook token. The token is shown once, when it is made;
+    /// Dots keeps only its hash, as a dot's (section 5.1).
+    pub has_webhook_token: bool,
     #[serde(flatten)]
     pub spec: WorkflowSpec,
 }
@@ -1096,6 +1379,33 @@ pub struct Handoff {
     pub summary: String,
     pub branches: Vec<BranchRef>,
     pub outcome: Option<String>,
+    /// For a delegate step, what each member it started handed back, in the order started.
+    #[serde(default)]
+    pub members: Vec<MemberHandoff>,
+}
+
+/// What a member a delegate step started handed back (teams spec section 6): its thread's end.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemberHandoff {
+    pub dot_id: String,
+    pub task: String,
+    /// How its thread ended: `succeeded`, `failed` or `cancelled`.
+    pub status: RunStatus,
+    pub summary: String,
+    /// Its branch, while that still exists.
+    pub branch: Option<String>,
+}
+
+/// A member a delegate step's run started (`start_member`, teams spec section 5.3): the root
+/// run of its thread, and whether the delegating run has been told how it ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StepMember {
+    pub run_id: String,
+    pub step_run_id: String,
+    pub dot_id: String,
+    pub task: String,
+    pub reported: bool,
+    pub created_at: String,
 }
 
 /// One step's execution inside a workflow run. Times are RFC 3339 UTC.
@@ -1110,6 +1420,17 @@ pub struct StepRun {
     /// A check's decision: `{"decision": "approved" | "sent_back", "note": ...}`.
     pub decision: Option<Value>,
     pub error: Option<String>,
+    /// The outcome label an agent step reported (`report_outcome`), copied into its hand-off
+    /// when it succeeds.
+    pub outcome: Option<String>,
+    /// What the run page says about this attempt beyond its status, such as a send-back that
+    /// had to start fresh.
+    pub notice: Option<String>,
+    /// The send-back an agent step asked for (`send_back`), the last call's:
+    /// `{"to": <step id>, "note": ...}`, performed when the step succeeds.
+    pub send_back: Option<Value>,
+    /// What a deploy step did: the branches it pushed or listed as ready.
+    pub deploy_result: Option<crate::deploy::DeployResult>,
     pub started_at: String,
     pub ended_at: Option<String>,
 }
@@ -1135,6 +1456,8 @@ pub struct WorkflowRun {
     /// The limits now: the definition's, raised by "Add budget".
     pub budget: crate::workflow::Budget,
     pub send_backs: u32,
+    /// The last send-back: the one performed last, or the one held at the cap (`held`).
+    pub send_back: Option<SendBack>,
     /// Dot runs of the workflow run, resume children included.
     pub spent_runs: u32,
     /// New input plus output tokens of those runs: `tokens_in - tokens_cache_read + tokens_out`.
@@ -1147,6 +1470,28 @@ pub struct WorkflowRun {
     pub started_at: String,
     pub ended_at: Option<String>,
     pub steps: Vec<StepRun>,
+}
+
+/// Work sent back to an earlier agent step (teams spec sections 5.4 and 9): by the person from
+/// a check, or by an agent step that asked for it with `send_back`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SendBack {
+    /// The id of the step that sent it back.
+    pub from: String,
+    /// The id of the agent step it goes back to.
+    pub to: String,
+    pub note: String,
+    pub by: SentBy,
+    /// Held at the cap of send-backs: not performed until the person allows it.
+    pub held: bool,
+}
+
+/// Who sent work back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SentBy {
+    Person,
+    Agent,
 }
 
 /// Input for `Store::create_workflow_run`.
@@ -1172,6 +1517,7 @@ pub struct WorkflowRunChange {
     pub current_step: Option<Option<String>>,
     pub budget: Option<crate::workflow::Budget>,
     pub send_backs: Option<u32>,
+    pub send_back: Option<Option<SendBack>>,
     pub active_ms: Option<u64>,
     pub clock_at: Option<Option<String>>,
     pub error: Option<Option<String>>,
@@ -1184,6 +1530,8 @@ pub struct StepRunChange {
     pub handoff: Option<Option<Handoff>>,
     pub decision: Option<Option<Value>>,
     pub error: Option<Option<String>>,
+    pub notice: Option<Option<String>>,
+    pub deploy_result: Option<Option<crate::deploy::DeployResult>>,
 }
 
 /// A workflow a member may start from a chat (`start_workflow`, teams spec section 7): turned
@@ -1363,7 +1711,9 @@ pub struct Watcher {
     pub updated_at: String,
     /// Events held for its next opening (the store counts them).
     pub held_count: u32,
-    /// The next opening, RFC 3339 UTC; the store leaves it `None` and the service fills it.
+    /// The next opening, RFC 3339 in local time with its offset (as `2026-10-26T09:00:00+01:00`),
+    /// set only while the watcher is outside its hours; the store leaves it `None` and the
+    /// service fills it.
     pub next_opening: Option<String>,
 }
 

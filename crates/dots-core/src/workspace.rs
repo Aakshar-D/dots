@@ -321,7 +321,11 @@ impl WorkspaceManager {
         .map_err(|_| Error::Invalid(format!("{start} is not a branch or commit of the repo")))?;
         tokio::fs::create_dir_all(&self.root).await?;
         let path = self.root.join(run_id);
-        let branch = format!("dots/{}/{}", dot.spec.name, run_id);
+        let branch = format!(
+            "dots/{}/{}",
+            crate::model::folder_name(&dot.spec.name),
+            run_id
+        );
         let path_str = path.to_string_lossy().to_string();
         if let Err(e) = git(
             &workdir,

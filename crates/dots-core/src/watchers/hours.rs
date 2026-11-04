@@ -51,7 +51,8 @@ pub fn is_inside<Tz: TimeZone>(h: &WatchHours, at: &DateTime<Tz>) -> bool {
 pub fn next_opening<Tz: TimeZone + 'static>(h: &WatchHours, after: &DateTime<Tz>) -> DateTime<Tz> {
     let tz = after.timezone();
     let first = after.naive_local().date() - TimeDelta::days(1);
-    // Eight days cover a full week plus the margin for offset changes.
+    // Nine days, from the day before `after` to a week after it: the same weekday a week on is
+    // reached when that day's start has passed, and the day before covers offset changes.
     (0..9)
         .map(|n| first + TimeDelta::days(n))
         .filter(|d| h.days.contains(&d.weekday()))
@@ -67,14 +68,25 @@ pub trait Zone: Send + Sync {
     fn is_inside(&self, hours: &WatchHours, at: DateTime<Utc>) -> bool;
     /// The hours' first opening strictly after `after`.
     fn next_opening(&self, hours: &WatchHours, after: DateTime<Utc>) -> DateTime<Utc>;
+    /// The instant in RFC 3339 with this zone's offset, to the second.
+    fn rfc3339(&self, at: DateTime<Utc>) -> String;
 }
 
-impl<Tz: TimeZone + Send + Sync + 'static> Zone for Tz {
+impl<Tz> Zone for Tz
+where
+    Tz: TimeZone + Send + Sync + 'static,
+    Tz::Offset: std::fmt::Display,
+{
     fn is_inside(&self, hours: &WatchHours, at: DateTime<Utc>) -> bool {
         is_inside(hours, &at.with_timezone(self))
     }
 
     fn next_opening(&self, hours: &WatchHours, after: DateTime<Utc>) -> DateTime<Utc> {
         next_opening(hours, &after.with_timezone(self)).with_timezone(&Utc)
+    }
+
+    fn rfc3339(&self, at: DateTime<Utc>) -> String {
+        at.with_timezone(self)
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, false)
     }
 }

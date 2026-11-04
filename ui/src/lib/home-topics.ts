@@ -144,9 +144,12 @@ export function olderTopics(topics: Topic[], shown: Topic[]): Topic[] {
     .slice(0, HISTORY);
 }
 
-/// The newest run of a topic: what a reply continues.
-export function lastRun(topic: Topic): Run {
-  return topic.runs.at(-1)!;
+/// What a reply continues: the newest run of a topic, skipping only the runs dismissed (Retry
+/// or Discard) and never delivered; a dismissed run that reached its dot still counts, as in
+/// the core. Undefined when every run is one of those (the topic's only message was
+/// discarded): nothing is left to continue, so a message starts a new topic.
+export function lastRun(topic: Topic): Run | undefined {
+  return [...topic.runs].reverse().find((run) => !run.dismissed_at || run.delivered_at);
 }
 
 /// The topic a message goes to by default: the current chat topic of those shown, whatever ran

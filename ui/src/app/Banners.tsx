@@ -319,7 +319,7 @@ export function Banners() {
           {settings}
         </Banner>
       )}
-      {claude.mismatch && (
+      {claude.mismatch && !!overview.data?.length && (
         <Banner tone="warning">
           <span className="flex-1">
             Claude CLI {claude.version} has not been tested with Dots (tested:{" "}

@@ -54,6 +54,14 @@ pub fn saturday_10() -> DateTime<Utc> {
         .with_timezone(&Utc)
 }
 
+/// Monday 26 October 2026, 09:00 in `TestTz` (UTC+1 from 25 October): `weekdays_9_to_18`
+/// opens, the first time after `saturday_10`.
+pub fn monday_9() -> DateTime<Utc> {
+    DateTime::parse_from_rfc3339("2026-10-26T08:00:00.000Z")
+        .unwrap()
+        .with_timezone(&Utc)
+}
+
 pub struct Harness {
     pub dir: TempDir,
     pub store: Store,
@@ -271,6 +279,16 @@ impl Harness {
             }
         }
         out
+    }
+
+    /// Runs `sql` behind the store's back (a trigger that makes a write fail, say).
+    pub async fn exec(&self, sql: &str) {
+        let opts = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(self.dir.path().join("dots.db"))
+            .foreign_keys(true);
+        let pool = sqlx::SqlitePool::connect_with(opts).await.unwrap();
+        sqlx::query(sql).execute(&pool).await.unwrap();
+        pool.close().await;
     }
 
     pub fn path_text(path: &Path) -> String {

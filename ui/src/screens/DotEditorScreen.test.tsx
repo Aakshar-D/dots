@@ -37,20 +37,63 @@ describe("the dot editor, new dot", () => {
     expect(await screen.findByText("Dot created")).toBeVisible();
   });
 
+  it("saves with a blank folder", async () => {
+    backend.on("create_dot", (args) => ({ ...dot, ...(args.spec as object), id: "dot-new" }));
+    backend.on("get_dot", () => ({ ...dot, id: "dot-new", name: "nightly" }));
+    const { user, router } = renderApp("/dots/new");
+    await user.type(await screen.findByLabelText("Name"), "nightly");
+    await user.type(screen.getByLabelText("Instructions"), "Run the tests.");
+    await user.click(screen.getByRole("button", { name: "Create dot" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/dots/dot-new"));
+    expect(backend.callsTo("create_dot")).toHaveLength(1);
+  });
+
+  it("says so when the core made a worktree dot run in the folder itself", async () => {
+    backend.on("create_dot", (args) => ({
+      ...dot,
+      ...(args.spec as object),
+      workspace_mode: "folder",
+      id: "dot-new",
+    }));
+    backend.on("get_dot", () => ({ ...dot, id: "dot-new", name: "nightly" }));
+    const { user } = renderApp("/dots/new");
+    await user.type(await screen.findByLabelText("Name"), "nightly");
+    await user.type(screen.getByLabelText("Instructions"), "Run the tests.");
+    await user.click(screen.getByRole("button", { name: "Create dot" }));
+    expect(
+      await screen.findByText(
+        "Dot created. Runs in the folder itself, because it is not a git repository.",
+      ),
+    ).toBeVisible();
+  });
+
   it("marks what is missing instead of saving, and only after a save was tried", async () => {
     const { user } = renderApp("/dots/new");
     await screen.findByLabelText("Name");
     expect(screen.queryByText("Say what the dot should do.")).toBeNull();
     await user.click(screen.getByRole("button", { name: "Create dot" }));
     expect(screen.getByRole("alert")).toHaveTextContent("Fix the marked fields");
-    expect(screen.getByText("Use 1 to 64 letters, digits, '-' or '_'.")).toBeVisible();
+    expect(screen.getByText("Use 1 to 64 letters, digits, spaces, '-', '_' or '.'.")).toBeVisible();
     expect(screen.getByText("Say what the dot should do.")).toBeVisible();
-    expect(screen.getByText("Choose the folder the dot works in.")).toBeVisible();
+    // A new dot may leave the folder blank.
+    expect(screen.queryByText("Choose the folder the dot works in.")).toBeNull();
+    expect(screen.getByText("Leave blank and Dots makes a new folder for this dot.")).toBeVisible();
     expect(backend.callsTo("create_dot")).toEqual([]);
 
     // The marks follow the typing.
     await user.type(screen.getByLabelText("Name"), "nightly");
-    expect(screen.queryByText("Use 1 to 64 letters, digits, '-' or '_'.")).toBeNull();
+    expect(screen.queryByText("Use 1 to 64 letters, digits, spaces, '-', '_' or '.'.")).toBeNull();
+  });
+
+  it("accepts a name with a space and rejects two spaces in a row", async () => {
+    const { user } = renderApp("/dots/new");
+    const rule = "Use 1 to 64 letters, digits, spaces, '-', '_' or '.'.";
+    await screen.findByLabelText("Name");
+    await user.click(screen.getByRole("button", { name: "Create dot" }));
+    await user.type(screen.getByLabelText("Name"), "Test dot");
+    expect(screen.queryByText(rule)).toBeNull();
+    await user.type(screen.getByLabelText("Name"), "  two");
+    expect(screen.getByText(rule)).toBeVisible();
   });
 
   it("asks a local dot for its endpoint and hides what only Claude dots have", async () => {
@@ -218,6 +261,13 @@ describe("the dot editor, stored dot", () => {
     });
     return held;
   }
+
+  it("does not show the new-dot folder hint", async () => {
+    stored();
+    renderApp(path);
+    expect(await screen.findByLabelText("Folder")).toBeVisible();
+    expect(screen.queryByText("Leave blank and Dots makes a new folder for this dot.")).toBeNull();
+  });
 
   it("loads the dot and saves a change", async () => {
     stored();
@@ -525,10 +575,11 @@ describe("the dot editor, stored dot", () => {
       attention: [],
       tools_changed: [],
       watchers: [], held: [], instructions: [], app_reviews: [], team_scope: [],
+      not_delivered: [], back: [], snoozed: [], done: [], hidden_messages: [],
     };
     backend.on("inbox", () => waiting);
     backend.on("delete_dot", () => {
-      waiting = { approvals: [], review_runs: [], attention: [], tools_changed: [], watchers: [], held: [], instructions: [], app_reviews: [], team_scope: [] };
+      waiting = { approvals: [], review_runs: [], attention: [], tools_changed: [], watchers: [], held: [], instructions: [], app_reviews: [], team_scope: [], not_delivered: [], back: [], snoozed: [], done: [], hidden_messages: [] };
       return null;
     });
     const { user, router } = renderApp(path);
