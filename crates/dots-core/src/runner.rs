@@ -1133,6 +1133,18 @@ impl Runner {
         // continues the thread of a step that has ended works there no more, nor for the
         // workflow: it fails before its workspace is touched.
         if self.store.in_ended_step_thread(run).await? {
+            // A Stop closed the run's own step after the run turned `Running`, before its
+            // cancel reached the run: it ends cancelled, as the Stop meant, not failed.
+            let stopped = match &run.workflow_step_run_id {
+                Some(id) => {
+                    self.store.get_step_run(id).await?.status
+                        == crate::model::StepRunStatus::Cancelled
+                }
+                None => false,
+            };
+            if stopped {
+                return self.finish_cancelled_before_start(&run.id).await;
+            }
             return Err(Error::Other(
                 crate::workflows::ENDED_STEP_THREAD.to_string(),
             ));

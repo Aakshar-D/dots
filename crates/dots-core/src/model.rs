@@ -855,7 +855,9 @@ fn check_name(what: &str, name: &str) -> Result<()> {
 }
 
 /// A git name Dots passes on a command line (a remote or a branch): no leading `-`, so it can
-/// never be read as an option, and only `A-Z a-z 0-9 . _ / -`.
+/// never be read as an option, and only `A-Z a-z 0-9 . _ / -`. Nor what git refuses in a ref
+/// name among those characters (`git check-ref-format`): `..`, a trailing `/`, and a part
+/// between `/`s that ends in `.lock`, which would otherwise fail only once a run uses it.
 fn check_git_name(what: &str, name: &str) -> Result<()> {
     let ok = !name.is_empty()
         && !name.starts_with('-')
@@ -865,6 +867,14 @@ fn check_git_name(what: &str, name: &str) -> Result<()> {
     if !ok {
         return Err(Error::Invalid(format!(
             "{what} must be letters, digits, '.', '_', '/' or '-', not starting with '-'"
+        )));
+    }
+    if name.contains("..")
+        || name.ends_with('/')
+        || name.split('/').any(|part| part.ends_with(".lock"))
+    {
+        return Err(Error::Invalid(format!(
+            "{what} must not contain '..' or end with '/', and no part of it may end with '.lock'"
         )));
     }
     Ok(())

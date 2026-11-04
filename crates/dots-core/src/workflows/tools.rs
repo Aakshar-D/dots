@@ -2,7 +2,8 @@
 //! them: `start_member` starts a member on part of a delegate step's work, `report_outcome`
 //! records the step's outcome, `send_back` the send-back it asks for. Each call is made under
 //! the loop's lock, so it cannot cross a step that ends: a call whose step has closed records
-//! nothing. The last call of `report_outcome` and of `send_back` wins.
+//! nothing. The last call of `report_outcome` and of `send_back` wins. A step's runs ask and
+//! schedule follow-ups under the same lock (`lock_open_step`).
 
 use serde_json::{json, Value};
 
@@ -43,6 +44,19 @@ fn outcome_of<'a>(outcomes: &'a [String], given: &str) -> Option<&'a str> {
 }
 
 impl Workflows {
+    /// The loop's lock, held while the step run `step_run_id` is open (running or waiting), for
+    /// a question or a follow-up one of its runs asks for (`CheckIns`): a Stop or the step's end
+    /// closes the step under the same lock, so the call cannot cross it and leave a question
+    /// open or a follow-up pending in a step that has ended. `None` once the step has ended.
+    pub async fn lock_open_step(
+        &self,
+        step_run_id: &str,
+    ) -> Result<Option<tokio::sync::MutexGuard<'_, ()>>> {
+        let one = self.lock.lock().await;
+        let status = self.store.get_step_run(step_run_id).await?.status;
+        Ok(matches!(status, StepRunStatus::Running | StepRunStatus::Waiting).then_some(one))
+    }
+
     /// Whether the step run of `step` is still open; `Err` is the tool's answer. Called under
     /// the lock.
     async fn step_open(&self, run_id: &str, step: &StepTools) -> std::result::Result<(), String> {

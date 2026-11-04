@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use common::{git_out, init_repo, spec, temp_store};
-use dots_core::checkins::CheckIns;
+use dots_core::checkins::{CheckIns, Tool as CheckIn};
 use dots_core::deploy::{DeployResult, DeployedBranch, Deployer};
 use dots_core::engine::{Engine, EngineEvent, RunContext};
 use dots_core::events::{new_bus, Bus, RuntimeEvent};
@@ -25,7 +25,7 @@ use dots_core::workflow::{
     BranchOn, BranchPath, Budget, Definition, Delegate, DeployMode, MergeMethod, Step, StepKind,
     Trigger,
 };
-use dots_core::workflows::{StartRequest, Workflows, ENDED_STEP_THREAD};
+use dots_core::workflows::{StartRequest, Workflows, ENDED_STEP_THREAD, STEP_CLOSED};
 use dots_core::Error;
 use serde_json::json;
 use tempfile::TempDir;
@@ -1348,6 +1348,123 @@ async fn stopping_dismisses_its_steps_questions_and_cancels_their_follow_ups() {
         w.store.list_runs(Some(&w.dev.id), 10).await.unwrap().len(),
         1
     );
+}
+
+#[tokio::test]
+async fn a_step_s_run_asks_and_schedules_follow_ups_only_while_its_step_is_open() {
+    let w = world().await;
+    w.engine.set(&w.dev.spec.name, vec![Act::Hold]);
+    let flow = w
+        .workflow("Fix", vec![agent("dev", "Fix it", &w.dev, "Fix.")])
+        .await;
+    let wr = w.start(&flow).await;
+    let step = w.until(&wr.id, |wr| !wr.steps.is_empty()).await.steps[0]
+        .id
+        .clone();
+    let run = loop {
+        let runs = w.store.runs_of_step_run(&step).await.unwrap();
+        if let Some(r) = runs.first().filter(|r| r.status == RunStatus::Running) {
+            break r.clone();
+        }
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    };
+    let follow_ups = FollowUps::new(w.store.clone(), w.bus.clone(), Arc::new(SystemClock));
+    let checkins = CheckIns::new(w.store.clone(), w.bus.clone(), follow_ups.clone());
+    checkins.set_workflows(&w.workflows);
+    let ask = json!({"question": "Which icon set?"});
+    let later = json!({"note": "Look again.", "in": "1h"});
+    // While the step is open, its run schedules a follow-up as any run does.
+    let scheduled = checkins.call(&run.id, CheckIn::FollowUp, &later).await;
+    assert!(scheduled.unwrap().starts_with("Follow-up "));
+    w.workflows.stop(&wr.id).await.unwrap();
+    assert!(w
+        .store
+        .list_pending_follow_ups(Some(&w.dev.id))
+        .await
+        .unwrap()
+        .is_empty());
+    // A call that comes after the Stop closed the step, while the engine has not yet ended the
+    // run, is refused and records nothing; with and without the workflow runs.
+    let bare = CheckIns::new(w.store.clone(), w.bus.clone(), follow_ups);
+    for checkins in [&checkins, &bare] {
+        for (tool, input) in [(CheckIn::Ask, &ask), (CheckIn::FollowUp, &later)] {
+            assert_eq!(
+                checkins.call(&run.id, tool, input).await,
+                Err(STEP_CLOSED.to_string())
+            );
+        }
+    }
+    let messages = w.store.list_messages(Some(&w.dev.id)).await.unwrap();
+    assert!(messages
+        .iter()
+        .all(|m| m.run_id.as_deref() != Some(run.id.as_str())));
+    assert!(w
+        .store
+        .list_pending_follow_ups(Some(&w.dev.id))
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+/// The window a Stop can hit: the step's run has turned `Running`, and the step is closed
+/// before the runner reads it and before the Stop's cancel reaches the run. The queue is held
+/// so the run is claimed only once its step is closed as a Stop closes it; nothing cancels the
+/// run itself.
+#[tokio::test]
+async fn a_run_whose_step_was_stopped_before_its_engine_started_ends_cancelled() {
+    let w = world().await;
+    w.engine.set(&w.dev.spec.name, vec![Act::Hold]);
+    let flow = w
+        .workflow("Fix", vec![agent("dev", "Fix it", &w.dev, "Fix.")])
+        .await;
+    w.runner.set_held(true).await;
+    let wr = w.start(&flow).await;
+    let step = w.until(&wr.id, |wr| !wr.steps.is_empty()).await.steps[0]
+        .id
+        .clone();
+    let run = loop {
+        let runs = w.store.runs_of_step_run(&step).await.unwrap();
+        if let Some(r) = runs.first() {
+            break r.clone();
+        }
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    };
+    assert_eq!(run.status, RunStatus::Queued);
+    w.store
+        .set_step_run(
+            &step,
+            &StepRunChange {
+                status: Some(StepRunStatus::Cancelled),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    w.store
+        .set_workflow_run(
+            &wr.id,
+            &WorkflowRunChange {
+                status: Some(WorkflowRunStatus::Cancelled),
+                waiting_on: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    w.runner.set_held(false).await;
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    let ended = loop {
+        let r = w.store.get_run(&run.id).await.unwrap();
+        if r.status.is_terminal() {
+            break r;
+        }
+        assert!(std::time::Instant::now() < deadline, "the run never ended");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    assert_eq!(ended.status, RunStatus::Cancelled);
+    assert_eq!(ended.error, None);
+    // The engine never started.
+    assert!(w.engine.prompts_of(&w.dev.spec.name).is_empty());
 }
 
 #[tokio::test]
