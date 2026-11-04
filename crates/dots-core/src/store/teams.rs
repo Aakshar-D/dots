@@ -1,5 +1,6 @@
 //! The rows of teams, their members and projects, and their workflows (teams spec section 4).
 
+use chrono::{Local, SubsecRound, Utc};
 use sqlx::sqlite::SqliteRow;
 use sqlx::Row;
 
@@ -8,12 +9,15 @@ use crate::model::{
     MemberSpec, Project, ProjectSpec, StartableWorkflow, Team, TeamMember, TeamScopeIssue,
     TeamSpec, Workflow, WorkflowSpec,
 };
-use crate::util::{new_id, now};
+use crate::schedule::Schedule;
+use crate::util::{ct_eq, new_id, new_token, now, token_hash};
+use crate::workflow::Trigger;
 use crate::{Error, Result};
 
 const PROJECT_COLUMNS: &str =
     "id, team_id, name, repo_path, default_branch, remote, created_at, updated_at";
-const WORKFLOW_COLUMNS: &str = "id, team_id, name, definition, enabled, created_at, updated_at";
+const WORKFLOW_COLUMNS: &str =
+    "id, team_id, name, definition, enabled, webhook_token, created_at, updated_at";
 
 /// A unique name taken: `Conflict` with `taken`; a member that is not a dot: `Invalid`; any
 /// other error as it is.
@@ -62,8 +66,36 @@ fn workflow_from_row(row: &SqliteRow, members: &[String]) -> Result<Workflow> {
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
         problem,
+        has_webhook_token: row
+            .try_get::<Option<String>, _>("webhook_token")?
+            .is_some_and(|t| !t.is_empty()),
         spec,
     })
+}
+
+/// The schedule of a schedule trigger.
+fn trigger_schedule(spec: &WorkflowSpec) -> Option<&Schedule> {
+    match &spec.definition.trigger {
+        Trigger::Schedule { schedule, .. } => Some(schedule),
+        _ => None,
+    }
+}
+
+/// The spec as it is stored: a schedule trigger's schedule prepared against `previous`, the
+/// stored one, as a dot's is (`Schedule::prepare_save`: the `Every` anchor, and the refusal of
+/// a new or changed schedule that would never run).
+fn prepared(spec: &WorkflowSpec, previous: Option<&Schedule>) -> Result<WorkflowSpec> {
+    let mut spec = spec.clone();
+    if let Trigger::Schedule { schedule, .. } = &mut spec.definition.trigger {
+        // Whole milliseconds, as `util::now()`: the stored anchor reads back the same.
+        schedule
+            .prepare_save(previous, Utc::now().trunc_subsecs(3), &Local)
+            .map_err(|e| match e {
+                Error::Invalid(m) => Error::Invalid(format!("the trigger's schedule: {m}")),
+                e => e,
+            })?;
+    }
+    Ok(spec)
 }
 
 /// The backfill of `0019_accounts.sql`, kept here so a test can run it again. It must match the
@@ -360,10 +392,12 @@ impl Store {
         project_from_row(&row)
     }
 
-    /// Creates a workflow of the team, validated against its members.
+    /// Creates a workflow of the team, validated against its members, its schedule prepared
+    /// (`prepared`).
     pub async fn create_workflow(&self, team_id: &str, spec: &WorkflowSpec) -> Result<Workflow> {
         self.get_team(team_id).await?;
         spec.validate(&self.team_member_ids(team_id).await?)?;
+        let spec = &prepared(spec, None)?;
         let id = new_id();
         let ts = now();
         sqlx::query(
@@ -388,10 +422,13 @@ impl Store {
         self.get_workflow(&id).await
     }
 
-    /// Replaces a workflow's name, definition and switch, validated against its team's members.
+    /// Replaces a workflow's name, definition and switch, validated against its team's members,
+    /// its schedule prepared against the stored one (`prepared`).
     pub async fn update_workflow(&self, id: &str, spec: &WorkflowSpec) -> Result<Workflow> {
-        let team_id = self.get_workflow(id).await?.team_id;
+        let stored = self.get_workflow(id).await?;
+        let team_id = stored.team_id.clone();
         spec.validate(&self.team_member_ids(&team_id).await?)?;
+        let spec = &prepared(spec, trigger_schedule(&stored.spec))?;
         sqlx::query(
             "UPDATE workflows SET name = ?, definition = ?, enabled = ?, updated_at = ? \
              WHERE id = ?",
@@ -431,6 +468,35 @@ impl Store {
         .ok_or_else(|| Error::NotFound(format!("workflow {id}")))?;
         let team_id: String = row.try_get("team_id")?;
         workflow_from_row(&row, &self.team_member_ids(&team_id).await?)
+    }
+
+    /// Whether `token` is the workflow's webhook token, compared by its hash in constant time,
+    /// as a dot's (`check_webhook_token`). A workflow without one takes none.
+    pub async fn check_workflow_token(&self, id: &str, token: &str) -> Result<bool> {
+        let stored: Option<Option<String>> =
+            sqlx::query_scalar("SELECT webhook_token FROM workflows WHERE id = ?")
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await?;
+        let stored = stored.ok_or_else(|| Error::NotFound(format!("workflow {id}")))?;
+        Ok(stored.is_some_and(|stored| !stored.is_empty() && ct_eq(&token_hash(token), &stored)))
+    }
+
+    /// Makes the workflow a new webhook token and returns it: the only time it is shown. Only
+    /// its hash is kept, and the old token stops working.
+    pub async fn regenerate_workflow_token(&self, id: &str) -> Result<String> {
+        let token = new_token();
+        let res =
+            sqlx::query("UPDATE workflows SET webhook_token = ?, updated_at = ? WHERE id = ?")
+                .bind(token_hash(&token))
+                .bind(now())
+                .bind(id)
+                .execute(&self.pool)
+                .await?;
+        if res.rows_affected() == 0 {
+            return Err(Error::NotFound(format!("workflow {id}")));
+        }
+        Ok(token)
     }
 
     /// The workflows `dot_id` may start from a chat (teams spec section 7), by team and name.

@@ -156,12 +156,13 @@ fn prepare_validates_calls_before_the_policy() {
     // (`skill::schema`) and context collections (`context::schema`), the three check-in
     // tools and the three memory tools, which an engine with check-ins adds
     // (`checkins::schemas`, `memory::schemas`), `propose_app` and `copy_app`, which an engine
-    // with apps adds, `start_workflow`, which a chat run that may start a workflow gets
-    // (`team::start_schema`), and `propose_instructions`, which a run of a chat the person
-    // started gets (`instructions::schema`).
+    // with apps adds, `start_workflow`, which a chat run that may start a workflow gets, and
+    // `start_member`, `report_outcome` and `send_back`, which a run of an open agent step gets
+    // (`team::schemas`), and `propose_instructions`, which a run of a chat the person started
+    // gets (`instructions::schema`).
     assert_eq!(
         tools::schemas().as_array().unwrap().len(),
-        tools::TOOLS.len() - 12
+        tools::TOOLS.len() - 15
     );
 }
 
@@ -226,6 +227,15 @@ fn a_prepared_input_passes_prepare_again_unchanged() {
             json!({"workflow": "Fix", "project": "Dots", "task": "Fix the icon."}),
         ),
         (
+            "start_member",
+            json!({"member": "dev", "task": "Fix the icon."}),
+        ),
+        ("report_outcome", json!({"outcome": "fixed"})),
+        (
+            "send_back",
+            json!({"to_step": "Build", "note": "Use the light icon."}),
+        ),
+        (
             "propose_instructions",
             json!({"instructions": "Do it twice.", "reason": "Twice"}),
         ),
@@ -244,12 +254,15 @@ fn a_prepared_input_passes_prepare_again_unchanged() {
     // Every local tool was checked, and the two name maps are each other's inverse.
     let all: std::collections::BTreeSet<&str> = tools::TOOLS.iter().map(|(n, _)| *n).collect();
     assert_eq!(tools_seen, all);
-    // The memory tools share `Memory`, which names the first of them, and `copy_app` shares
-    // `ProposeApp` with `propose_app` (`local_name_for` tells them apart by the call's input,
-    // checked above).
+    // The memory tools share `Memory`, which names the first of them, `copy_app` shares
+    // `ProposeApp` with `propose_app`, and the workflow tools share `Workflow`, which names
+    // `start_workflow` (`local_name_for` tells them apart by the call's input, checked above).
     for (name, alias) in tools::TOOLS {
         assert_eq!(tools::alias(name), Some(*alias));
-        if (*alias != "Memory" || *name == "remember") && *name != "copy_app" {
+        if (*alias != "Memory" || *name == "remember")
+            && *name != "copy_app"
+            && (*alias != "Workflow" || *name == "start_workflow")
+        {
             assert_eq!(tools::local_name(alias), Some(*name));
         }
     }
