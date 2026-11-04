@@ -49,4 +49,20 @@ impl Store {
             .fetch_all(&self.pool)
             .await?)
     }
+
+    /// The name of every workflow, for the report to hide them.
+    pub async fn workflow_names(&self) -> Result<Vec<String>> {
+        Ok(
+            sqlx::query_scalar("SELECT name FROM workflows ORDER BY name")
+                .fetch_all(&self.pool)
+                .await?,
+        )
+    }
+
+    /// The name of every team, for the report to hide them.
+    pub async fn team_names(&self) -> Result<Vec<String>> {
+        Ok(sqlx::query_scalar("SELECT name FROM teams ORDER BY name")
+            .fetch_all(&self.pool)
+            .await?)
+    }
 }

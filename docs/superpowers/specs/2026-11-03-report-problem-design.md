@@ -33,6 +33,7 @@ Success: from Settings, one dialog shows exactly the text that will be shared, a
     - every `dots_core::mcp::http` line (`describe` of an HTTP error can hold the server's answer);
     - every other `dots_core::browser::host` line (download file names, `host.rs` 276, 427, 439).
   - **Dot names:** `dots_core::scheduler` logs `dot = <name>` at many sites. Every current dot name (read from the store) becomes `[dot]`: longest first, whole words, any case. The log itself keeps them.
+  - **Workflow and team names, file names** (added with delivery tracking, attachments and workflow schedules): `scheduler::workflow_slots` logs `workflow = <name>`, so every workflow name becomes `[workflow]` and every team name `[team]`, as dot names do. The runner (attached files) and `watchers::files` (held files) log `file = <name>`; the value of every `file=` field, up to the next field, becomes `[file]`.
   - **Panics:** a panic's first line is kept and scrubbed; its continuation lines become `[n more lines hidden]`.
   - **Private keys:** from a `-----BEGIN` line through its `-----END` line, everything is dropped; the line that opens the block keeps what came before it, then `[private key hidden]`.
 - **Scrubbing, every kept line, in order:**

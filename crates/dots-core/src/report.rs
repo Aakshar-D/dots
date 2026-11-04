@@ -2,6 +2,7 @@
 //! sends themselves. It holds their own words, a few facts about this copy of Dots, and the
 //! recent log lines, scrubbed again. Nothing a dot said, was told or worked on is read for it.
 
+use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -180,9 +181,35 @@ fn home_pattern(home: &str) -> Option<Regex> {
     Regex::new(&format!(r"(?i){}", parts.join(r"(?:\\\\|\\|/)"))).ok()
 }
 
-/// Scrubs log lines for a report: secrets, the names of the dots, paths, emails and the home
-/// folder (spec §3).
+/// A field that names a file the person attached or a watcher held: `file=<name>`. The name
+/// runs to the next field (` key=`) or the end of the line, spaces and all.
+static FILE_FIELD: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\bfile=").expect("the file field compiles"));
+static NEXT_FIELD: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r" [a-z_]+=").expect("the next field compiles"));
+
+/// `text` with the value of every `file=` field as `[file]`.
+fn hide_file_fields(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(m) = FILE_FIELD.find(rest) {
+        out.push_str(&rest[..m.end()]);
+        out.push_str("[file]");
+        let after = &rest[m.end()..];
+        rest = match NEXT_FIELD.find(after) {
+            Some(next) => &after[next.start()..],
+            None => "",
+        };
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Scrubs log lines for a report: secrets, the names of the dots, workflows and teams, file
+/// names, paths, emails and the home folder (spec §3).
 pub struct Scrubber {
+    /// Every name to hide, in lower case, with what takes its place.
+    labels: HashMap<String, &'static str>,
     names: Option<Regex>,
     home: Option<Regex>,
 }
@@ -190,16 +217,30 @@ pub struct Scrubber {
 impl Scrubber {
     /// `dot_names` are the names of every dot, hidden as `[dot]`; `home` the home folder.
     pub fn new(dot_names: &[String], home: Option<&str>) -> Scrubber {
-        let mut names: Vec<&str> = dot_names
-            .iter()
-            .map(|n| n.trim())
-            .filter(|n| !n.is_empty())
-            .collect();
+        let mut s = Scrubber {
+            labels: HashMap::new(),
+            names: None,
+            home: home.and_then(home_pattern),
+        };
+        s.add_names(dot_names, "[dot]");
+        s
+    }
+
+    /// Hides `names` as `label` too (`[workflow]`, `[team]`).
+    pub fn hiding(mut self, names: &[String], label: &'static str) -> Scrubber {
+        self.add_names(names, label);
+        self
+    }
+
+    fn add_names(&mut self, names: &[String], label: &'static str) {
+        for name in names.iter().map(|n| n.trim()).filter(|n| !n.is_empty()) {
+            self.labels.entry(name.to_lowercase()).or_insert(label);
+        }
+        let mut all: Vec<&str> = self.labels.keys().map(String::as_str).collect();
         // Longest first, so a name that holds another is hidden whole.
-        names.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
-        names.dedup();
+        all.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
         let word = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
-        let alternatives: Vec<String> = names
+        let alternatives: Vec<String> = all
             .iter()
             .map(|n| {
                 let start = if word(n.chars().next()) { r"\b" } else { "" };
@@ -207,24 +248,27 @@ impl Scrubber {
                 format!("{start}{}{end}", regex::escape(n))
             })
             .collect();
-        let names = if alternatives.is_empty() {
+        self.names = if alternatives.is_empty() {
             None
         } else {
             Regex::new(&format!("(?i)(?:{})", alternatives.join("|"))).ok()
         };
-        Scrubber {
-            names,
-            home: home.and_then(home_pattern),
-        }
     }
 
-    /// A log line as a report carries it: `scrub_text`, the dots' names as `[dot]`, paths as
-    /// `[path]` with their extension, emails as `[email]`, and what is left of the home folder
-    /// as `~`.
+    /// A log line as a report carries it: `scrub_text`, file fields as `[file]`, the names as
+    /// their labels, paths as `[path]` with their extension, emails as `[email]`, and what is
+    /// left of the home folder as `~`.
     pub fn line(&self, line: &str) -> String {
-        let mut out = scrub_text(line);
+        let mut out = hide_file_fields(&scrub_text(line));
         if let Some(names) = &self.names {
-            out = names.replace_all(&out, "[dot]").into_owned();
+            out = names
+                .replace_all(&out, |c: &regex::Captures| {
+                    self.labels
+                        .get(&c[0].to_lowercase())
+                        .copied()
+                        .unwrap_or("[dot]")
+                })
+                .into_owned();
         }
         out = PATH
             .replace_all(&out, |c: &regex::Captures| {
@@ -521,8 +565,9 @@ pub async fn build(
         (true, None) => LogSection::NoLog,
         (true, Some(dir)) => {
             let dir = dir.to_path_buf();
-            let names = store.dot_names().await?;
-            let scrubber = Scrubber::new(&names, home_dir().as_deref());
+            let scrubber = Scrubber::new(&store.dot_names().await?, home_dir().as_deref())
+                .hiding(&store.workflow_names().await?, "[workflow]")
+                .hiding(&store.team_names().await?, "[team]");
             tokio::task::spawn_blocking(move || read_log_tail(&dir, LOG_LINES, &scrubber))
                 .await
                 .unwrap_or(LogSection::NoLog)

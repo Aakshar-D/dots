@@ -276,3 +276,96 @@ async fn the_report_hides_the_names_of_the_dots_in_the_store() {
     assert!(!text.to_lowercase().contains("payroll"), "{text}");
     assert!(text.contains("fired dot=[dot] run=01ABC"), "{text}");
 }
+
+#[test]
+fn file_names_in_a_file_field_are_hidden() {
+    let lines = [
+        line(
+            "WARN",
+            "dots_core::runner",
+            "copying an attached file failed: denied run=01ABC file=Q3 board minutes.pdf",
+        ),
+        line(
+            "WARN",
+            "dots_core::watchers::files",
+            "a held file could not be moved to its opening run, left out: busy watcher=w1 held=h1 file=salaries.xlsx",
+        ),
+    ];
+    let out = tail_of(&lines, &plain());
+    assert!(out[0].ends_with("run=01ABC file=[file]"), "{}", out[0]);
+    assert!(out[1].ends_with("held=h1 file=[file]"), "{}", out[1]);
+    // A field after the file name stays.
+    let s = plain().line("x file=notes final.md run=01ABC");
+    assert_eq!(s, "x file=[file] run=01ABC");
+}
+
+#[tokio::test]
+async fn the_report_hides_the_names_of_workflows_and_teams() {
+    use dots_core::model::{MemberSpec, TeamSpec, WorkflowSpec};
+    use dots_core::workflow::{Budget, Definition, Step, StepKind, Trigger};
+    let (_d, store) = common::temp_store().await;
+    let dot = store
+        .create_dot(&common::spec("helper"), None, "default")
+        .await
+        .unwrap();
+    let team = store
+        .create_team(&TeamSpec {
+            org_id: None,
+            workspace_id: "default".into(),
+            name: "finance-crew".into(),
+            description: String::new(),
+            members: vec![MemberSpec {
+                dot_id: dot.id.clone(),
+                role: String::new(),
+            }],
+        })
+        .await
+        .unwrap();
+    let definition = Definition {
+        trigger: Trigger::Manual,
+        steps: vec![Step {
+            id: "a".into(),
+            name: "Work".into(),
+            kind: StepKind::Agent {
+                member: dot.id.clone(),
+                job: "Work.".into(),
+                can_send_back_to: vec![],
+                outcomes: vec![],
+                delegate: None,
+            },
+        }],
+        budget: Budget::default(),
+    };
+    store
+        .create_workflow(
+            &team.id,
+            &WorkflowSpec {
+                name: "month-close".into(),
+                definition,
+                enabled: true,
+            },
+        )
+        .await
+        .unwrap();
+    let logs = tempfile::tempdir().unwrap();
+    std::fs::write(
+        logs.path().join("dots.2026-11-03.log"),
+        [
+            line(
+                "INFO",
+                "dots_core::scheduler::workflow_slots",
+                "workflow schedule completed workflow=month-close",
+            ),
+            line("INFO", "dots_core::teams", "team finance-crew changed"),
+        ]
+        .join("\n"),
+    )
+    .unwrap();
+    let text = dots_core::report::build(&store, "0.3.0", Some(logs.path()), "", true)
+        .await
+        .unwrap();
+    assert!(!text.contains("month-close"), "{text}");
+    assert!(!text.contains("finance-crew"), "{text}");
+    assert!(text.contains("workflow=[workflow]"), "{text}");
+    assert!(text.contains("team [team] changed"), "{text}");
+}
