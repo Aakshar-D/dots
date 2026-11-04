@@ -10,7 +10,7 @@
     },
     "ui": {
       "name": "dots-ui",
-      "version": "0.3.0",
+      "version": "0.1.0",
       "dependencies": {
         "@fontsource-variable/geist": "5.3.0",
         "@tailwindcss/vite": "4.3.3",
