@@ -409,6 +409,21 @@ impl Runner {
         })
         .await
         .map_err(|e| Error::Other(format!("copying the attached files failed: {e}")))?;
+        // The files now in place are marked, before any engine starts: from then on each is
+        // taken as it is there (attachments spec section 4.4). A failed mark only means its
+        // name is checked again next time.
+        let placed: Vec<String> = topic
+            .iter()
+            .filter(|f| f.name.is_some() && f.placed_at.is_none())
+            .filter(|f| !failed.iter().any(|(id, _)| *id == f.id))
+            .map(|f| f.id.clone())
+            .collect();
+        if !placed.is_empty() {
+            let at = crate::util::timestamp(chrono::Utc::now());
+            if let Err(e) = self.store.mark_attachments_placed(&placed, &at).await {
+                tracing::warn!(run = %run.id, "marking the attached files placed failed: {e}");
+            }
+        }
         let mut notices = Vec::new();
         for (id, e) in failed {
             let Some(file) = topic.iter().find(|f| f.id == id) else {

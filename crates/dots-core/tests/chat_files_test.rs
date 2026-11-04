@@ -4,6 +4,7 @@
 use std::path::Path;
 
 use dots_core::chat_files::{can_open, can_open_file, human_size, ChatFiles, MAX_FILE_BYTES};
+use dots_core::model::ChatAttachment;
 use dots_core::Error;
 
 fn invalid(e: Error) -> String {
@@ -11,6 +12,64 @@ fn invalid(e: Error) -> String {
         Error::Invalid(m) => m,
         other => panic!("expected Invalid, got {other:?}"),
     }
+}
+
+/// A file of run `R1`'s own message, staged as `A1` and named `a.txt`, placed or not.
+fn own_file(files: &ChatFiles, placed_at: Option<&str>) -> ChatAttachment {
+    let (file_name, size) = files.stage_bytes("A1", "a.txt", b"A").unwrap();
+    ChatAttachment {
+        id: "A1".into(),
+        dot_id: "D".into(),
+        run_id: Some("R1".into()),
+        scheduled_id: None,
+        file_name,
+        name: Some("a.txt".into()),
+        size,
+        created_at: "2026-11-04T09:00:00.000Z".into(),
+        placed_at: placed_at.map(str::to_string),
+    }
+}
+
+/// The same run started again (after a crash) finds its own file there, edited: accepted as
+/// it is once it was placed, refused while it never was.
+#[test]
+fn a_placed_file_is_taken_as_it_is_when_its_run_starts_again() {
+    for (placed, fails) in [(None, true), (Some("2026-11-04T09:00:01.000Z"), false)] {
+        let dir = tempfile::tempdir().unwrap();
+        let files = ChatFiles::new(dir.path().join("chat-files"));
+        let ws = dir.path().join("ws");
+        let topic = ws.join("attachments").join("R1");
+        std::fs::create_dir_all(&topic).unwrap();
+        std::fs::write(topic.join("a.txt"), "edited").unwrap();
+        let file = own_file(&files, placed);
+        let failed = files.copy_into("R1", std::slice::from_ref(&file), &ws, "R1");
+        assert_eq!(failed.len(), usize::from(fails), "{placed:?}");
+        assert_eq!(
+            std::fs::read_to_string(topic.join("a.txt")).unwrap(),
+            "edited"
+        );
+    }
+}
+
+/// `changed_in` tells an untouched copy from an edited one, also when the edit keeps the size.
+#[test]
+fn changed_in_sees_an_edit_of_the_same_size() {
+    let dir = tempfile::tempdir().unwrap();
+    let files = ChatFiles::new(dir.path().join("chat-files"));
+    let ws = dir.path().join("ws");
+    std::fs::create_dir_all(&ws).unwrap();
+    let file = own_file(&files, None);
+    assert!(files
+        .copy_into("R1", std::slice::from_ref(&file), &ws, "R1")
+        .is_empty());
+    let placed = ChatAttachment {
+        placed_at: Some(dots_core::util::timestamp(chrono::Utc::now())),
+        ..file
+    };
+    assert!(!files.changed_in("R1", std::slice::from_ref(&placed), &ws));
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    std::fs::write(ws.join("attachments").join("R1").join("a.txt"), "B").unwrap();
+    assert!(files.changed_in("R1", std::slice::from_ref(&placed), &ws));
 }
 
 #[test]

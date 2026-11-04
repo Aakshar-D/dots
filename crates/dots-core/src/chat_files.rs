@@ -190,6 +190,37 @@ fn real_dir(path: &Path) -> std::io::Result<()> {
     }
 }
 
+/// Whether the workspace copy at `copy` is, by its metadata alone, the one Dots placed: a real
+/// file of the attachment's size, last written more than `MTIME_SLACK` before it was marked
+/// placed. `place` dates each copy `BACKDATE` back, and the mark follows before any engine
+/// starts, so an edit is always written later than that, even on a file system that keeps
+/// times to two seconds. Anything else (not marked, unreadable) answers false, and the bytes
+/// decide.
+fn untouched(copy: &Path, file: &ChatAttachment) -> bool {
+    let Some(placed) = file
+        .placed_at
+        .as_deref()
+        .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+    else {
+        return false;
+    };
+    let Ok(meta) = std::fs::symlink_metadata(copy) else {
+        return false;
+    };
+    if is_link(&meta) || !meta.is_file() || meta.len() != file.size {
+        return false;
+    }
+    let Ok(written) = meta.modified() else {
+        return false;
+    };
+    chrono::DateTime::<chrono::Utc>::from(written + MTIME_SLACK) < placed
+}
+
+/// How far a file system may round a write time (FAT keeps two seconds).
+const MTIME_SLACK: std::time::Duration = std::time::Duration::from_secs(2);
+/// How far back `place` dates a copy it wrote, so `untouched` can tell it from an edit.
+const BACKDATE: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// Whether `copy` is a real file (never a link) with the same bytes as `original`. Any failure
 /// to read either answers false.
 fn same_bytes(copy: &Path, original: &Path) -> bool {
@@ -395,9 +426,10 @@ impl ChatFiles {
     /// `.gitignore` of `*` (attachments spec section 4.4). A file that is there is never
     /// overwritten: the dot may have edited it. Nothing is written through a link: `attachments`
     /// and the topic folder must each be missing or a real folder inside the workspace, and each
-    /// file is created new. A file of `run_id`'s own message whose name is taken by anything
-    /// but Dots' unchanged copy is not placed: the dot would be told the wrong file is the
-    /// attached one. Answers the files it could not place, by id, with why.
+    /// file is created new. A file of `run_id`'s own message that was never placed, whose name
+    /// is taken by anything but Dots' unchanged copy, is not placed: the dot would be told the
+    /// wrong file is the attached one. A file placed before (`placed_at`) is taken as it is, as
+    /// an earlier message's is. Answers the files it could not place, by id, with why.
     pub fn copy_into(
         &self,
         root_run_id: &str,
@@ -421,7 +453,8 @@ impl ChatFiles {
         };
         let mut failed = Vec::new();
         for f in placed {
-            let own = f.run_id.as_deref() == Some(run_id);
+            // Its name must be free only the first time it is placed.
+            let own = f.run_id.as_deref() == Some(run_id) && f.placed_at.is_none();
             if let Err(e) = self.place(f, &dir, own) {
                 failed.push((f.id.clone(), Error::Other(e.to_string())));
             }
@@ -463,8 +496,8 @@ impl ChatFiles {
     }
 
     /// Copies one stored file into `dir` when nothing is at its name. For a file of the run's
-    /// `own` message, something else at its name is an error; Dots' own unchanged copy (the run
-    /// started again) is fine.
+    /// `own` message never placed before, something else at its name is an error; Dots' own
+    /// unchanged copy (a crash before it was marked placed) is fine.
     fn place(&self, f: &ChatAttachment, dir: &Path, own: bool) -> std::io::Result<()> {
         let name = f.name.as_deref().unwrap_or_default();
         if Path::new(name).file_name().map(|n| n.to_string_lossy()) != Some(name.into())
@@ -512,6 +545,11 @@ impl ChatFiles {
             drop(out);
             let _ = std::fs::remove_file(&to);
             return Err(e);
+        }
+        // Dated back, so that a later edit is told from it by its time (`untouched`). If that
+        // fails, the bytes are compared instead.
+        if let Some(then) = std::time::SystemTime::now().checked_sub(BACKDATE) {
+            let _ = out.set_modified(then);
         }
         Ok(())
     }
@@ -563,7 +601,9 @@ impl ChatFiles {
             else {
                 return true;
             };
-            if !same_bytes(&entry.path(), &self.stored_path(file)) {
+            if !untouched(&entry.path(), file)
+                && !same_bytes(&entry.path(), &self.stored_path(file))
+            {
                 return true;
             }
         }

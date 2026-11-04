@@ -242,6 +242,55 @@ async fn another_file_at_a_new_attachments_name_fails_the_run() {
     }
 }
 
+/// A message whose run placed one of its files and then failed on another: the placed file,
+/// edited in the meantime, is accepted as it is when Retry sends the message again.
+#[tokio::test]
+async fn retry_keeps_an_edit_to_a_file_the_first_try_placed() {
+    let t = start(true).await;
+    let dot = folder_dot(&t, "again").await;
+    let a = stage(&t, &dot, "a.txt", "A").await;
+    let b = stage(&t, &dot, "b.txt", "B").await;
+    let root = t.rt.chat(&dot.id, "hello", None).await.unwrap();
+    let root = end(&t, &root).await;
+    let run =
+        t.rt.chat_with_files(&dot.id, "read", Some(&root.id), &ids(&[&a, &b]))
+            .await
+            .unwrap();
+    let folder = work(&t).join("attachments").join(&root.id);
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("b.txt"), "someone else's").unwrap();
+    t.rt.hold_runs(false).await;
+    let failed = wait_status(t.rt.store(), &run.id, RunStatus::Failed, 30).await;
+    assert!(failed.error.unwrap_or_default().starts_with(COPY_FAILED));
+    assert!(t
+        .rt
+        .store()
+        .get_attachment(&a.id)
+        .await
+        .unwrap()
+        .placed_at
+        .is_some());
+    assert!(t
+        .rt
+        .store()
+        .get_attachment(&b.id)
+        .await
+        .unwrap()
+        .placed_at
+        .is_none());
+    // The person edits the placed file and clears the way for the other.
+    std::fs::write(folder.join("a.txt"), "A, edited").unwrap();
+    std::fs::remove_file(folder.join("b.txt")).unwrap();
+    let again = t.rt.retry_delivery(&run.id).await.unwrap();
+    assert_eq!(again.root_run_id, root.id);
+    wait_status(t.rt.store(), &again.id, RunStatus::Succeeded, 30).await;
+    assert_eq!(
+        std::fs::read_to_string(folder.join("a.txt")).unwrap(),
+        "A, edited"
+    );
+    assert_eq!(std::fs::read_to_string(folder.join("b.txt")).unwrap(), "B");
+}
+
 #[tokio::test]
 async fn limits_and_ownership_are_checked() {
     let t = start(true).await;

@@ -15,7 +15,7 @@ use crate::util::now;
 use crate::{Error, Result};
 
 const COLUMNS: &str = "a.id, a.dot_id, a.run_id, a.scheduled_id, a.file_name, a.name, a.size, \
-                       a.created_at";
+                       a.created_at, a.placed_at";
 
 fn attachment_from_row(row: &SqliteRow) -> Result<ChatAttachment> {
     Ok(ChatAttachment {
@@ -27,6 +27,7 @@ fn attachment_from_row(row: &SqliteRow) -> Result<ChatAttachment> {
         name: row.try_get("name")?,
         size: row.try_get::<i64, _>("size")?.max(0) as u64,
         created_at: row.try_get("created_at")?,
+        placed_at: row.try_get("placed_at")?,
     })
 }
 
@@ -105,6 +106,21 @@ impl Store {
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected() > 0)
+    }
+
+    /// Records that Dots put the files `ids` in their topic's folder, at `at`. A file already
+    /// marked keeps its first time.
+    pub async fn mark_attachments_placed(&self, ids: &[String], at: &str) -> Result<()> {
+        for id in ids {
+            sqlx::query(
+                "UPDATE chat_attachments SET placed_at = ? WHERE id = ? AND placed_at IS NULL",
+            )
+            .bind(at)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        }
+        Ok(())
     }
 
     /// The files of the topic rooted at `root_run_id`, in the order their messages were queued.

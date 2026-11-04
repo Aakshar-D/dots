@@ -512,6 +512,10 @@ pub struct ChatAttachment {
     pub name: Option<String>,
     pub size: u64,
     pub created_at: String,
+    /// When Dots first put it in its topic's folder (`None` until then). A placed file is
+    /// taken as it is there from then on: the dot or the person may have edited it.
+    #[serde(default)]
+    pub placed_at: Option<String>,
 }
 
 str_enum!(FileSource {
