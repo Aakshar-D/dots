@@ -608,6 +608,10 @@
     "decide_run_approvals",
     "inbox",
     "inbox_count",
+    "inbox_snooze",
+    "inbox_unsnooze",
+    "inbox_done",
+    "inbox_undo_done",
     "dismiss_schedule_attention",
     "worktree_diff",
     "discard_worktree",
@@ -1411,6 +1415,19 @@
       "org_removed",
       "not_member"
     ],
+    "InboxKind": [
+      "message",
+      "approval",
+      "review",
+      "not_delivered",
+      "attention",
+      "watcher",
+      "held",
+      "tools",
+      "instructions",
+      "app_review",
+      "team_scope"
+    ],
     "InstructionStatus": [
       "pending",
       "approved",
@@ -1726,6 +1743,28 @@
         "run_id": "01J0RUN"
       }
     ],
+    "back": [
+      {
+        "back_at": "2026-10-09T12:00:00.000Z",
+        "done_at": null,
+        "dot_id": "01J0DOT",
+        "id": "01J0RUN",
+        "kind": "review",
+        "snoozed_until": null,
+        "title": "nightly-tests: run to review"
+      }
+    ],
+    "done": [
+      {
+        "back_at": null,
+        "done_at": "2026-10-09T12:00:00.000Z",
+        "dot_id": null,
+        "id": "01J0SRV/personal",
+        "kind": "tools",
+        "snoozed_until": null,
+        "title": "github tools changed"
+      }
+    ],
     "held": [
       {
         "dot_id": "01J0DOT",
@@ -1752,6 +1791,9 @@
         "trigger": "watcher"
       }
     ],
+    "hidden_messages": [
+      "01J0MSG1"
+    ],
     "instructions": [
       {
         "dot_name": "shopper",
@@ -1768,6 +1810,44 @@
           "run_id": "01J0RUN",
           "status": "pending"
         }
+      }
+    ],
+    "not_delivered": [
+      {
+        "base_commit": "0123abcd",
+        "branch": "dots/nightly-tests/01J0RUN",
+        "cost_usd": 1.32,
+        "delivered_at": null,
+        "delivery": "not_delivered",
+        "dismissed_at": null,
+        "dot_id": "01J0DOT",
+        "dot_name": "nightly-tests",
+        "ended_at": "2026-10-09T12:00:00.000Z",
+        "error": "claude CLI not found",
+        "hold_released": false,
+        "id": "01J0RUN",
+        "parent_run_id": null,
+        "payload": null,
+        "queued_at": "2026-10-09T12:00:00.000Z",
+        "quiet_limit_secs": null,
+        "quiet_since": null,
+        "quiet_stopped": false,
+        "retry_of": null,
+        "reviewed_at": null,
+        "root_run_id": "01J0RUN",
+        "session_id": "sess-1",
+        "started_at": "2026-10-09T12:00:00.000Z",
+        "status": "failed",
+        "summary": null,
+        "tokens_cache_read": 0,
+        "tokens_in": 1200,
+        "tokens_out": 340,
+        "trigger": "chat",
+        "undelivered_at": "2026-10-09T12:00:00.000Z",
+        "undelivered_reason": "claude CLI not found",
+        "wait_reason": null,
+        "workflow_step_run_id": null,
+        "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
       }
     ],
     "review_runs": [
@@ -1811,6 +1891,17 @@
         "worktree_exists": true
       }
     ],
+    "snoozed": [
+      {
+        "back_at": null,
+        "done_at": null,
+        "dot_id": "01J0DOT",
+        "id": "01J0MSG1",
+        "kind": "message",
+        "snoozed_until": "2026-10-21T09:00:00Z",
+        "title": "nightly-tests asks: Ship the release?"
+      }
+    ],
     "team_scope": [
       {
         "dot_id": "01J0DOT",
@@ -1846,6 +1937,99 @@
       }
     ]
   },
+  "InboxKey": [
+    {
+      "id": "01J0RUN",
+      "kind": "review"
+    },
+    {
+      "id": "01J0MSG1",
+      "kind": "message"
+    },
+    {
+      "id": "01J0SRV/personal",
+      "kind": "tools"
+    }
+  ],
+  "InboxKeys": [
+    {
+      "id": "01J0MSG1",
+      "kind": "message"
+    },
+    {
+      "id": "01J0APR",
+      "kind": "approval"
+    },
+    {
+      "id": "01J0RUN",
+      "kind": "not_delivered"
+    },
+    {
+      "id": "01J0RUN",
+      "kind": "review"
+    },
+    {
+      "id": "01J0RUN",
+      "kind": "attention"
+    },
+    {
+      "id": "01J0SRV/personal",
+      "kind": "tools"
+    },
+    {
+      "id": "01J0WAT2@2026-10-09T12:00:00.000Z",
+      "kind": "watcher"
+    },
+    {
+      "id": "01J0RUN4",
+      "kind": "held"
+    },
+    {
+      "id": "01J0RUN5",
+      "kind": "held"
+    },
+    {
+      "id": "01J0INS",
+      "kind": "instructions"
+    },
+    {
+      "id": "01J0PROP",
+      "kind": "app_review"
+    },
+    {
+      "id": "01J0TEAM/01J0DOT",
+      "kind": "team_scope"
+    }
+  ],
+  "InboxMark": [
+    {
+      "back_at": "2026-10-09T12:00:00.000Z",
+      "done_at": null,
+      "dot_id": "01J0DOT",
+      "id": "01J0RUN",
+      "kind": "review",
+      "snoozed_until": null,
+      "title": "nightly-tests: run to review"
+    },
+    {
+      "back_at": null,
+      "done_at": null,
+      "dot_id": "01J0DOT",
+      "id": "01J0MSG1",
+      "kind": "message",
+      "snoozed_until": "2026-10-21T09:00:00Z",
+      "title": "nightly-tests asks: Ship the release?"
+    },
+    {
+      "back_at": null,
+      "done_at": "2026-10-09T12:00:00.000Z",
+      "dot_id": null,
+      "id": "01J0SRV/personal",
+      "kind": "tools",
+      "snoozed_until": null,
+      "title": "github tools changed"
+    }
+  ],
   "InstalledPlugin": [
     {
       "exists": true,
@@ -4273,6 +4457,23 @@
     {
       "org_id": "acme-eng",
       "type": "org_updated"
+    },
+    {
+      "type": "inbox_updated"
+    },
+    {
+      "items": [
+        {
+          "back_at": "2026-10-09T12:00:00.000Z",
+          "done_at": null,
+          "dot_id": "01J0DOT",
+          "id": "01J0RUN",
+          "kind": "review",
+          "snoozed_until": null,
+          "title": "nightly-tests: run to review"
+        }
+      ],
+      "type": "snooze_ended"
     }
   ],
   "ScannedSkill": [

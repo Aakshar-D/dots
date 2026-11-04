@@ -1726,7 +1726,69 @@ pub fn samples() -> Value {
             workspaces: BTreeMap::from([("platform".to_string(), WorkspaceRole::Admin)]),
         },
     ]);
+    inbox_marks_samples(&mut samples);
     samples
+}
+
+/// Snooze and Done (snooze and done spec section 5): the Inbox's new sections, its marks and
+/// keys, the two events, and `InboxKeys`, the keys the core gives the Inbox and messages of
+/// these samples, so the UI's own key rules are checked against the core's. Last, because
+/// the Inbox sample is complete only once `apps_samples` added its app review.
+fn inbox_marks_samples(samples: &mut Value) {
+    use dots_core::inbox::{entries, InboxKind, InboxMark};
+
+    let mut inbox: Inbox =
+        serde_json::from_value(samples["Inbox"].clone()).expect("the Inbox sample");
+    inbox.not_delivered = vec![UndeliveredMessage {
+        run: run_not_delivered(),
+        dot_name: "nightly-tests".into(),
+    }];
+    let messages = messages();
+    let all = entries(&inbox, &messages);
+    let mark = |kind: InboxKind| {
+        let e = all
+            .iter()
+            .find(|e| e.key.kind == kind)
+            .expect("an item of the kind");
+        InboxMark {
+            kind,
+            id: e.key.id.clone(),
+            title: e.title.clone(),
+            dot_id: e.dot_id.clone(),
+            snoozed_until: None,
+            done_at: None,
+            back_at: None,
+        }
+    };
+    let back = InboxMark {
+        back_at: Some(TS.into()),
+        ..mark(InboxKind::Review)
+    };
+    let snoozed = InboxMark {
+        snoozed_until: Some("2026-10-21T09:00:00Z".into()),
+        ..mark(InboxKind::Message)
+    };
+    // A mark of an item that has no dot.
+    let done = InboxMark {
+        done_at: Some(TS.into()),
+        ..mark(InboxKind::Tools)
+    };
+    inbox.hidden_messages = vec![snoozed.id.clone()];
+    inbox.back = vec![back.clone()];
+    inbox.snoozed = vec![snoozed.clone()];
+    inbox.done = vec![done.clone()];
+    samples["InboxKeys"] = to(all.iter().map(|e| &e.key).collect::<Vec<_>>());
+    samples["InboxKey"] = to([back.key(), snoozed.key(), done.key()]);
+    samples["InboxMark"] = to([back.clone(), snoozed, done]);
+    samples["Inbox"] = to(&inbox);
+    samples["Enums"]["InboxKind"] = to(InboxKind::ALL);
+    samples["RuntimeEvent"]
+        .as_array_mut()
+        .expect("the RuntimeEvent samples")
+        .extend([
+            to(RuntimeEvent::InboxUpdated),
+            to(RuntimeEvent::SnoozeEnded { items: vec![back] }),
+        ]);
 }
 
 /// Instructions a dot proposed (conversational chat spec section 4), with `status`.

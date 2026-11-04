@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use dots_core::events::RuntimeEvent;
+use dots_core::inbox::InboxMark;
 use dots_core::limits::HoldChange;
 use dots_core::model::{Message, MessageKind, PausedReason, Run, RunStatus, TriggerKind};
 use dots_core::Runtime;
@@ -71,6 +72,11 @@ pub enum Notice {
     /// A chat message did not reach its dot (delivery tracking spec section 3.5).
     NotDelivered {
         run: Box<Run>,
+    },
+    /// Snoozed Inbox items came back at their time (snooze and done spec section 3.5): one
+    /// notice per wake pass, however many. It has no dot, so it is never quiet.
+    BackFromSnooze {
+        items: Vec<InboxMark>,
     },
 }
 
@@ -184,6 +190,11 @@ impl Notifier {
             } => Some(Notice::Hold {
                 change: change.clone(),
             }),
+            RuntimeEvent::SnoozeEnded { items } if !items.is_empty() => {
+                Some(Notice::BackFromSnooze {
+                    items: items.clone(),
+                })
+            }
             _ => None,
         }
     }
@@ -194,11 +205,7 @@ fn first_line(text: Option<&str>, fallback: &str) -> String {
     let line = text
         .and_then(|t| t.lines().map(str::trim).find(|l| !l.is_empty()))
         .unwrap_or(fallback);
-    if line.chars().count() > 200 {
-        line.chars().take(199).collect::<String>() + "…"
-    } else {
-        line.to_string()
-    }
+    cut(line, 200)
 }
 
 /// A one-line preview of a call's input, as the UI's `toolPreview` shows it: its `command`,
@@ -305,6 +312,31 @@ pub fn notice_text(notice: &Notice, dot_name: &str) -> (String, String) {
                 "It did not reach the dot.",
             ),
         ),
+        Notice::BackFromSnooze { items } => match items.as_slice() {
+            [one] => (
+                format!("Back from snooze: {}", one.title),
+                "It is at the top of your Inbox.".to_string(),
+            ),
+            many => {
+                let titles: Vec<&str> = many.iter().map(|m| m.title.as_str()).collect();
+                (
+                    format!("Back from snooze: {} items", many.len()),
+                    cut(&titles.join("; "), BACK_BODY_MAX),
+                )
+            }
+        },
+    }
+}
+
+/// The body of a notice for several items back from snooze, at most this many characters.
+const BACK_BODY_MAX: usize = 120;
+
+/// `text` cut to `max` characters with `…`.
+fn cut(text: &str, max: usize) -> String {
+    if text.chars().count() > max {
+        text.chars().take(max - 1).collect::<String>() + "…"
+    } else {
+        text.to_string()
     }
 }
 
@@ -322,6 +354,17 @@ pub fn notice_route(notice: &Notice, dot_id: &str) -> String {
         Notice::ScheduleFailed { .. } | Notice::MessagePosted { .. } => format!("/home/{dot_id}"),
         Notice::WatcherPaused { .. } => format!("/dots/{dot_id}?tab=watchers"),
         Notice::Hold { .. } => "/usage".to_string(),
+        Notice::BackFromSnooze { .. } => "/inbox".to_string(),
+    }
+}
+
+/// Where a click on the notice goes, given its dot: a notice that is about no dot (the hold,
+/// items back from snooze) has its own route, and one whose dot is unknown opens the home.
+pub fn click_route(notice: &Notice, dot_id: Option<&str>) -> String {
+    match (dot_id, notice) {
+        (_, Notice::Hold { .. } | Notice::BackFromSnooze { .. }) => notice_route(notice, ""),
+        (Some(id), _) => notice_route(notice, id),
+        (None, _) => "/home".to_string(),
     }
 }
 
@@ -385,7 +428,8 @@ async fn notify(app: &AppHandle, rt: &Runtime, notice: &Notice) {
         Notice::MessagePosted { message } => Some(message.dot_id.clone()),
         Notice::WatcherPaused { dot_id, .. } => Some(dot_id.clone()),
         Notice::RunQuiet { dot_id, .. } => Some(dot_id.clone()),
-        Notice::Hold { .. } => None,
+        // About the Inbox, not one dot: the person asked to be reminded, so never quiet.
+        Notice::Hold { .. } | Notice::BackFromSnooze { .. } => None,
     };
     // Nothing for the dot whose conversation the person is reading (needs-you spec 4.2).
     if quiet(dot_id.as_deref(), rt.viewing().as_deref()) {
@@ -397,11 +441,7 @@ async fn notify(app: &AppHandle, rt: &Runtime, notice: &Notice) {
     };
     let (title, body) = notice_text(notice, name.as_deref().unwrap_or("A dot"));
     // A click opens what the notice is about; without its dot, the home.
-    let route = match (&dot_id, notice) {
-        (_, Notice::Hold { .. }) => notice_route(notice, ""),
-        (Some(id), _) => notice_route(notice, id),
-        (None, _) => "/home".to_string(),
-    };
+    let route = click_route(notice, dot_id.as_deref());
     let id = notify_routes::remember(app, route);
     let shown = app
         .notification()
@@ -1267,5 +1307,78 @@ mod tests {
             run: Box::new(run("r", Failed, TriggerKind::Chat)),
         };
         assert_eq!(notice_route(&undelivered, "d"), "/chat/d/r");
+    }
+
+    fn mark(title: &str) -> InboxMark {
+        InboxMark {
+            kind: dots_core::inbox::InboxKind::Message,
+            id: title.into(),
+            title: title.into(),
+            dot_id: Some("d".into()),
+            snoozed_until: None,
+            done_at: None,
+            back_at: Some("t".into()),
+        }
+    }
+
+    #[test]
+    fn back_from_snooze_texts() {
+        let one = Notice::BackFromSnooze {
+            items: vec![mark("courier asks: Ship it?")],
+        };
+        assert_eq!(
+            notice_text(&one, "A dot"),
+            (
+                "Back from snooze: courier asks: Ship it?".to_string(),
+                "It is at the top of your Inbox.".to_string()
+            )
+        );
+        let three = Notice::BackFromSnooze {
+            items: vec![
+                mark("courier asks: Ship it?"),
+                mark("courier: run to review"),
+                mark("nightly's schedule needs attention"),
+            ],
+        };
+        assert_eq!(
+            notice_text(&three, "A dot"),
+            (
+                "Back from snooze: 3 items".to_string(),
+                "courier asks: Ship it?; courier: run to review; nightly's schedule needs attention"
+                    .to_string()
+            )
+        );
+        let long = Notice::BackFromSnooze {
+            items: vec![mark(&"a".repeat(80)), mark(&"b".repeat(80))],
+        };
+        let (_, body) = notice_text(&long, "A dot");
+        assert_eq!(body.chars().count(), 120);
+        assert!(body.starts_with(&"a".repeat(80)));
+        assert!(body.ends_with('…'));
+    }
+
+    #[test]
+    fn back_from_snooze_opens_the_inbox() {
+        let notice = Notice::BackFromSnooze {
+            items: vec![mark("courier asks: Ship it?")],
+        };
+        assert_eq!(notice_route(&notice, ""), "/inbox");
+        // It is about no dot: the Inbox, and never quiet, whichever dot is viewed.
+        assert_eq!(click_route(&notice, None), "/inbox");
+        assert!(!quiet(None, Some("d")));
+    }
+
+    #[test]
+    fn snooze_ended_notifies_once_per_event() {
+        let mut n = Notifier::default();
+        let items = vec![mark("one"), mark("two")];
+        assert_eq!(
+            n.decide(&RuntimeEvent::SnoozeEnded {
+                items: items.clone()
+            }),
+            Some(Notice::BackFromSnooze { items })
+        );
+        assert_eq!(n.decide(&RuntimeEvent::InboxUpdated), None);
+        assert_eq!(n.decide(&RuntimeEvent::SnoozeEnded { items: vec![] }), None);
     }
 }
