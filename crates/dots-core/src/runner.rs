@@ -160,6 +160,9 @@ pub struct Runner {
     /// Where watchers staged their runs' files (watchers spec section 4.2), set once by the
     /// runtime (`set_watcher_files`).
     watcher_files: OnceLock<crate::watchers::files::WatcherFiles>,
+    /// The stored copies of files attached to chat messages (attachments spec section 4.4),
+    /// set once by the runtime (`set_chat_files`).
+    chat_files: OnceLock<crate::chat_files::ChatFiles>,
     /// Claude's usage limits (usage and limits spec section 4), set once by the runtime
     /// (`set_limits`). Without them no run is held.
     limits: OnceLock<Arc<Limits>>,
@@ -191,6 +194,7 @@ impl Runner {
             apps: OnceLock::new(),
             acting: OnceLock::new(),
             watcher_files: OnceLock::new(),
+            chat_files: OnceLock::new(),
             limits: OnceLock::new(),
         })
     }
@@ -377,6 +381,55 @@ impl Runner {
         let _ = self.watcher_files.set(files);
     }
 
+    /// Where files attached to chat messages are stored. Set once, before any run starts.
+    pub fn set_chat_files(&self, files: crate::chat_files::ChatFiles) {
+        let _ = self.chat_files.set(files);
+    }
+
+    /// Puts the files of the run's topic that are missing into its workspace (attachments
+    /// spec section 4.4). A file of this run's own message that cannot be put there fails the
+    /// run before its engine starts; an earlier message's file is a notice on the run.
+    async fn copy_chat_files(&self, run: &Run, workspace: &Path) -> Result<()> {
+        let Some(files) = self.chat_files.get() else {
+            return Ok(());
+        };
+        let topic = self.store.topic_attachments(&run.root_run_id).await?;
+        if topic.is_empty() {
+            return Ok(());
+        }
+        let (files, root, workspace) = (
+            files.clone(),
+            run.root_run_id.clone(),
+            workspace.to_path_buf(),
+        );
+        let listed = topic.clone();
+        let failed =
+            tokio::task::spawn_blocking(move || files.copy_into(&root, &listed, &workspace))
+                .await
+                .map_err(|e| Error::Other(format!("copying the attached files failed: {e}")))?;
+        let mut notices = Vec::new();
+        for (id, e) in failed {
+            let Some(file) = topic.iter().find(|f| f.id == id) else {
+                continue;
+            };
+            if file.run_id.as_deref() == Some(run.id.as_str()) {
+                return Err(Error::Other(format!(
+                    "{}: {e}",
+                    crate::chat_files::COPY_FAILED
+                )));
+            }
+            let name = file.name.clone().unwrap_or_else(|| file.file_name.clone());
+            tracing::warn!(run = %run.id, file = %name, "copying an attached file failed: {e}");
+            notices.push(format!(
+                "Dots could not copy {name} into the workspace: {e}"
+            ));
+        }
+        for text in notices {
+            self.record(&run.id, &EngineEvent::Notice { text }).await?;
+        }
+        Ok(())
+    }
+
     /// Copies a watcher thread's staged attachments into the run's workspace; for the thread's
     /// root, stores and announces the payload with their paths, and answers the stored run.
     async fn copy_attachments(&self, run: &Run, workspace: &Path) -> Option<Run> {
@@ -410,10 +463,20 @@ impl Runner {
         }
     }
 
-    /// Removes a watcher run's attachments from its workspace.
-    fn remove_attachments(&self, workspace: &Path, root_run_id: &str) {
-        if self.watcher_files.get().is_some() {
-            crate::watchers::files::WatcherFiles::remove_copy(workspace, root_run_id);
+    /// Removes a watcher topic's attachments from its workspace. A chat topic's files stay
+    /// for the rest of the conversation (attachments spec section 4.4).
+    async fn remove_attachments(&self, workspace: &Path, root_run_id: &str) {
+        if self.watcher_files.get().is_none() {
+            return;
+        }
+        match self.store.get_run(root_run_id).await {
+            Ok(root) if root.trigger == TriggerKind::Watcher => {
+                crate::watchers::files::WatcherFiles::remove_copy(workspace, root_run_id);
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(run = %root_run_id, "reading a topic's first run failed: {e}")
+            }
         }
     }
 
@@ -829,7 +892,8 @@ impl Runner {
         // An error path may have left a watcher run's attachments in its workspace.
         if let Ok(stored) = self.store.get_run(&run_id).await {
             if let Some(path) = &stored.workspace_path {
-                self.remove_attachments(Path::new(path), &stored.root_run_id);
+                self.remove_attachments(Path::new(path), &stored.root_run_id)
+                    .await;
             }
         }
         self.forget_run(&run_id);
@@ -1273,6 +1337,8 @@ impl Runner {
         // A watcher run's attachments, in its workspace for the run (watchers spec §4.2).
         let refreshed = self.copy_attachments(run, &prepared.path).await;
         let run = refreshed.as_ref().unwrap_or(run);
+        // The topic's chat files, missing ones copied again (attachments spec section 4.4).
+        self.copy_chat_files(run, &prepared.path).await?;
         // The run's MCP sessions, skills and plugin folders (MCP/skills spec section 5), each
         // server with the variables its dot grants it, in the dot's scope (env vault spec §8).
         let (tools, mut notices) = RunTools::open(OpenRequest {
@@ -1345,7 +1411,8 @@ impl Runner {
         let _closer = CloseOnDrop(tools.clone());
         if cancel.is_cancelled() {
             tools.close().await;
-            self.remove_attachments(&prepared.path, &run.root_run_id);
+            self.remove_attachments(&prepared.path, &run.root_run_id)
+                .await;
             if let Err(e) = self
                 .workspaces
                 .cleanup_if_unchanged(&ws_dot, &prepared)
@@ -1531,7 +1598,8 @@ impl Runner {
         }
         tools.close().await;
         // Gone before the worktree's "unchanged" check: they are never a run's changes.
-        self.remove_attachments(&prepared.path, &run.root_run_id);
+        self.remove_attachments(&prepared.path, &run.root_run_id)
+            .await;
 
         let user_cancelled = by_user.load(Ordering::SeqCst);
         let waiting = self.store.has_pending_for_run(&run.id).await?

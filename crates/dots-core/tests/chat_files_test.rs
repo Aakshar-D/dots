@@ -117,7 +117,10 @@ fn bytes_get_a_safe_name() {
     let (name, size) = files.stage_bytes("A1", "..\\..\\CON.png", b"x").unwrap();
     assert_eq!(name, "_CON.png");
     assert_eq!(size, 1);
-    assert_eq!(std::fs::read(root.join("A1").join("_CON.png")).unwrap(), b"x");
+    assert_eq!(
+        std::fs::read(root.join("A1").join("_CON.png")).unwrap(),
+        b"x"
+    );
     // Too many bytes are refused like a file.
     let big = vec![0u8; MAX_FILE_BYTES as usize + 1];
     assert_eq!(

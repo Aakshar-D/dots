@@ -9,8 +9,8 @@ use crate::Result;
 
 mod api_keys;
 mod approvals;
-mod attachments;
 mod apps;
+mod attachments;
 mod browser;
 mod dots;
 mod env;

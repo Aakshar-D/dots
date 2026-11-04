@@ -261,6 +261,105 @@ impl ChatFiles {
         outcome
     }
 
+    /// Puts the topic's `files` that are missing into `<workspace>/attachments/<root>/`, with a
+    /// `.gitignore` of `*` (attachments spec section 4.4). A file that is there is never
+    /// overwritten: the dot may have edited it. Nothing is written through a link: `attachments`
+    /// and the topic folder must each be missing or a real folder inside the workspace, and each
+    /// file is created new. Answers the files it could not place, by id, with why.
+    pub fn copy_into(
+        &self,
+        root_run_id: &str,
+        files: &[ChatAttachment],
+        workspace: &Path,
+    ) -> Vec<(String, Error)> {
+        let placed: Vec<&ChatAttachment> = files.iter().filter(|f| f.name.is_some()).collect();
+        if placed.is_empty() {
+            return Vec::new();
+        }
+        let dir = match self.topic_folder(root_run_id, workspace) {
+            Ok(dir) => dir,
+            Err(e) => {
+                let text = e.to_string();
+                return placed
+                    .iter()
+                    .map(|f| (f.id.clone(), Error::Other(text.clone())))
+                    .collect();
+            }
+        };
+        let mut failed = Vec::new();
+        for f in placed {
+            if let Err(e) = self.place(f, &dir) {
+                failed.push((f.id.clone(), Error::Other(e.to_string())));
+            }
+        }
+        failed
+    }
+
+    /// The topic's folder in the workspace, made safe to write into: both levels real folders
+    /// (never links), inside the canonical workspace, with the `.gitignore` in place.
+    fn topic_folder(&self, root_run_id: &str, workspace: &Path) -> std::io::Result<PathBuf> {
+        if !plain_id(root_run_id) {
+            return Err(std::io::Error::other(format!(
+                "{root_run_id} is not a topic id"
+            )));
+        }
+        let all = workspace.join(WORKSPACE_DIR);
+        real_dir(&all)?;
+        let dir = all.join(root_run_id);
+        real_dir(&dir)?;
+        let inside = std::fs::canonicalize(workspace)?;
+        let canonical = std::fs::canonicalize(&dir)?;
+        // Two levels below the workspace itself: no link anywhere on the way.
+        if canonical.parent().and_then(Path::parent) != Some(inside.as_path()) {
+            return Err(std::io::Error::other(format!(
+                "{} is outside the workspace",
+                dir.display()
+            )));
+        }
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(canonical.join(IGNORE_FILE))
+        {
+            Ok(mut f) => f.write_all(b"*\n")?,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e),
+        }
+        Ok(canonical)
+    }
+
+    /// Copies one stored file into `dir` when nothing is at its name.
+    fn place(&self, f: &ChatAttachment, dir: &Path) -> std::io::Result<()> {
+        let name = f.name.as_deref().unwrap_or_default();
+        if Path::new(name).file_name().map(|n| n.to_string_lossy()) != Some(name.into())
+            || name == IGNORE_FILE
+        {
+            return Err(std::io::Error::other(format!("{name} is not a file name")));
+        }
+        let to = dir.join(name);
+        // There already, as a file, a folder or a link: left as it is.
+        if std::fs::symlink_metadata(&to).is_ok() {
+            return Ok(());
+        }
+        let mut from = std::fs::File::open(self.stored_path(f))?;
+        let mut out = match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&to)
+        {
+            Ok(out) => out,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Ok(()),
+            Err(e) => return Err(e),
+        };
+        let copied = std::io::copy(&mut from, &mut out).and_then(|_| out.flush());
+        if let Err(e) = copied {
+            drop(out);
+            let _ = std::fs::remove_file(&to);
+            return Err(e);
+        }
+        Ok(())
+    }
+
     /// Removes attachment `id`'s stored copy. A failure is logged.
     pub fn remove(&self, id: &str) {
         if !plain_id(id) {
