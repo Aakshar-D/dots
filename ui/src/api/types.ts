@@ -1117,6 +1117,44 @@ export const DraftRequest = z.strictObject({
   current: nullable(z.string()),
   change: nullable(z.string()),
 });
+// The setup agent's view (setup agent spec §6).
+export const SetupRound = z.strictObject({
+  questions: z.array(z.string()),
+  answers: z.array(z.string()),
+});
+export const SetupProposal = z.strictObject({
+  name: z.string(),
+  instructions: z.string(),
+  folder: nullable(z.string()),
+  schedule: nullable(Schedule),
+  preset: Preset,
+  extras: z.array(z.string()),
+  uses: Uses,
+  first_message: z.string(),
+  notes: z.string(),
+});
+export const SetupRequest = z.strictObject({
+  description: z.string(),
+  rounds: z.array(SetupRound),
+  current: nullable(SetupProposal),
+  change: nullable(z.string()),
+  skip: z.boolean(),
+});
+export const SetupAnswer = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("questions"), questions: z.array(z.string()) }),
+  z.strictObject({
+    kind: z.literal("proposal"),
+    proposal: SetupProposal,
+    new_dot_root: z.string(),
+  }),
+]);
+export const SetupApplied = z.strictObject({
+  dot: Dot,
+  run_id: nullable(z.string()),
+  run_error: nullable(z.string()),
+  // What the check at apply time changed in the proposal; empty when nothing.
+  notes: z.string(),
+});
 // The name and description the Library will show for a draft that can be saved.
 export const DraftSummary = z.strictObject({
   name: z.string(),
@@ -1750,6 +1788,11 @@ export type ContextDocuments = z.infer<typeof ContextDocuments>;
 export type McpProbe = z.infer<typeof McpProbe>;
 export type ScannedSkill = z.infer<typeof ScannedSkill>;
 export type DraftRequest = z.infer<typeof DraftRequest>;
+export type SetupRound = z.infer<typeof SetupRound>;
+export type SetupProposal = z.infer<typeof SetupProposal>;
+export type SetupRequest = z.infer<typeof SetupRequest>;
+export type SetupAnswer = z.infer<typeof SetupAnswer>;
+export type SetupApplied = z.infer<typeof SetupApplied>;
 export type DraftSummary = z.infer<typeof DraftSummary>;
 export type InstalledPlugin = z.infer<typeof InstalledPlugin>;
 export type EnvVariable = z.infer<typeof EnvVariable>;

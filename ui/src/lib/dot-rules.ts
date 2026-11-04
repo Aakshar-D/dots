@@ -13,7 +13,12 @@ const whole = (min: number, max: number, message: string) =>
 const QUIET_MESSAGE = `The quiet limit must be a whole number of minutes, 1 to ${LIMITS.max_quiet_limit_secs / 60}.`;
 
 const Fields = z.object({
-  name: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/, "Use 1 to 64 letters, digits, '-' or '_'."),
+  name: z
+    .string()
+    .regex(
+      /^(?! )(?!.*  )(?!.* $)[A-Za-z0-9 ._-]{1,64}$/,
+      "Use 1 to 64 letters, digits, spaces, '-', '_' or '.'.",
+    ),
   instructions: filled("Say what the dot should do."),
   model: filled("Name the model to use."),
   workdir: filled("Choose the folder the dot works in."),
@@ -42,13 +47,32 @@ const Fields = z.object({
     .nullable(),
 });
 
+/// The folder name of a dot name, as the core's `folder_name` makes it: lower case, each run of
+/// characters other than ASCII letters and digits one `-`, trimmed of `-`, at most 40
+/// characters; `dot` when nothing is left.
+export function folderName(name: string): string {
+  const dashed = name
+    .replace(/[^A-Za-z0-9]+/gu, "-")
+    .toLowerCase()
+    .replace(/^-+|-+$/g, "");
+  return dashed.slice(0, 40).replace(/^-+|-+$/g, "") || "dot";
+}
+
+/// Why `name` cannot name a dot; undefined when it can.
+export function nameError(name: string): string | undefined {
+  return Fields.shape.name.safeParse(name).error?.issues[0]?.message;
+}
+
 /// What is wrong with a draft, by field. Empty when it can be saved.
-export function specErrors(spec: DotSpec): SpecErrors {
+/// A new dot may leave its folder blank: the core makes one.
+export function specErrors(spec: DotSpec, isNew = false): SpecErrors {
   const errors: SpecErrors = {};
   const fields = Fields.safeParse(spec);
   if (!fields.success) {
     for (const issue of fields.error.issues) {
-      errors[issue.path[0] as keyof DotSpec] ??= issue.message;
+      const field = issue.path[0] as keyof DotSpec;
+      if (isNew && field === "workdir") continue;
+      errors[field] ??= issue.message;
     }
   }
   if (spec.engine === "local") {
@@ -204,3 +228,11 @@ export function specOf(dot: DotSpec): DotSpec {
     enabled: dot.enabled,
   };
 }
+
+/// The three named presets in one plain sentence each (setup agent spec §6).
+export const PRESET_SENTENCES = {
+  "read-only": "May read files. Never writes, runs commands, reads websites or uses MCP servers.",
+  sandboxed:
+    "May edit files in its folder and run a few safe git commands. Asks before anything else.",
+  trusted: "May run commands without asking.",
+} as const;

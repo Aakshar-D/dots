@@ -571,6 +571,9 @@
     "get_dot",
     "dot_variables",
     "create_dot",
+    "setup_ask",
+    "setup_cancel",
+    "setup_apply",
     "dot_move",
     "dot_access",
     "workspace_list",
@@ -4827,6 +4830,443 @@
       "tested_claude_version": "2.1.295"
     }
   },
+  "SetupAnswer": [
+    {
+      "kind": "questions",
+      "questions": [
+        "Which folder?",
+        "How often?"
+      ]
+    },
+    {
+      "kind": "proposal",
+      "new_dot_root": "C:/Users/me/Dots",
+      "proposal": {
+        "extras": [
+          "web",
+          "mcp:github"
+        ],
+        "first_message": "Start with today's new files.",
+        "folder": "C:/Users/me/Dots/downloads-digest",
+        "instructions": "Read the Downloads folder and tell me what is new.",
+        "name": "Downloads digest",
+        "notes": "Runs on weekdays at 9.",
+        "preset": "read-only",
+        "schedule": {
+          "catch_up": false,
+          "rule": {
+            "expr": "0 0 9 * * 1-5",
+            "kind": "cron"
+          },
+          "until": null
+        },
+        "uses": {
+          "apps": [],
+          "context": [],
+          "mcp_servers": [
+            "github"
+          ],
+          "plugins": [],
+          "skills": []
+        }
+      }
+    }
+  ],
+  "SetupApplied": [
+    {
+      "dot": {
+        "approval_wait_secs": 240,
+        "browser": false,
+        "created_at": "2026-10-09T12:00:00.000Z",
+        "enabled": true,
+        "endpoint_url": null,
+        "engine": "claude",
+        "has_webhook_token": true,
+        "id": "01J0DOT",
+        "instructions": "Run the tests and summarize failures.",
+        "max_turns": 40,
+        "model": "sonnet",
+        "name": "nightly-tests",
+        "org_id": null,
+        "policy": {
+          "default": "ask",
+          "mcp_default": "ask",
+          "preset": "sandboxed",
+          "rules": [
+            {
+              "action": "allow",
+              "tool": "Read"
+            },
+            {
+              "action": "allow",
+              "tool": "LS"
+            },
+            {
+              "action": "allow",
+              "tool": "Glob"
+            },
+            {
+              "action": "allow",
+              "tool": "Grep"
+            },
+            {
+              "action": "allow",
+              "tool": "Write(./**)"
+            },
+            {
+              "action": "allow",
+              "tool": "Edit(./**)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git status:*)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git diff:*)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git add:*)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.git/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.git)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.git/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.git)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.claude/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.claude)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.claude/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.claude)"
+            },
+            {
+              "action": "allow",
+              "tool": "Skill"
+            },
+            {
+              "action": "allow",
+              "tool": "Context"
+            },
+            {
+              "action": "allow",
+              "tool": "Notify"
+            },
+            {
+              "action": "allow",
+              "tool": "Ask"
+            },
+            {
+              "action": "allow",
+              "tool": "FollowUp"
+            },
+            {
+              "action": "allow",
+              "tool": "Memory"
+            },
+            {
+              "action": "ask",
+              "tool": "Workflow"
+            },
+            {
+              "action": "allow",
+              "tool": "App"
+            },
+            {
+              "action": "allow",
+              "tool": "ProposeApp"
+            },
+            {
+              "action": "allow",
+              "tool": "Instructions"
+            }
+          ]
+        },
+        "quiet_limit_secs": null,
+        "schedule": {
+          "catch_up": false,
+          "rule": {
+            "expr": "0 0 2 * * *",
+            "kind": "cron"
+          },
+          "until": null
+        },
+        "seen_at": "2026-10-09T12:00:00.000Z",
+        "timeout_secs": 1800,
+        "updated_at": "2026-10-09T12:00:00.000Z",
+        "use_global_instructions": true,
+        "use_user_settings": false,
+        "uses": {
+          "apps": [
+            "projects"
+          ],
+          "context": [
+            "company"
+          ],
+          "mcp_servers": [
+            "github"
+          ],
+          "plugins": [
+            "pdf-tools"
+          ],
+          "skills": [
+            "pdf"
+          ]
+        },
+        "variables": {},
+        "workdir": "C:/dev/app",
+        "workspace_id": "default",
+        "workspace_mode": "worktree"
+      },
+      "notes": "",
+      "run_error": null,
+      "run_id": "01J0RUN"
+    },
+    {
+      "dot": {
+        "approval_wait_secs": 240,
+        "browser": false,
+        "created_at": "2026-10-09T12:00:00.000Z",
+        "enabled": true,
+        "endpoint_url": null,
+        "engine": "claude",
+        "has_webhook_token": true,
+        "id": "01J0DOT",
+        "instructions": "Run the tests and summarize failures.",
+        "max_turns": 40,
+        "model": "sonnet",
+        "name": "nightly-tests",
+        "org_id": null,
+        "policy": {
+          "default": "ask",
+          "mcp_default": "ask",
+          "preset": "sandboxed",
+          "rules": [
+            {
+              "action": "allow",
+              "tool": "Read"
+            },
+            {
+              "action": "allow",
+              "tool": "LS"
+            },
+            {
+              "action": "allow",
+              "tool": "Glob"
+            },
+            {
+              "action": "allow",
+              "tool": "Grep"
+            },
+            {
+              "action": "allow",
+              "tool": "Write(./**)"
+            },
+            {
+              "action": "allow",
+              "tool": "Edit(./**)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git status:*)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git diff:*)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git add:*)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.git/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.git)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.git/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.git)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.claude/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.claude)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.claude/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.claude)"
+            },
+            {
+              "action": "allow",
+              "tool": "Skill"
+            },
+            {
+              "action": "allow",
+              "tool": "Context"
+            },
+            {
+              "action": "allow",
+              "tool": "Notify"
+            },
+            {
+              "action": "allow",
+              "tool": "Ask"
+            },
+            {
+              "action": "allow",
+              "tool": "FollowUp"
+            },
+            {
+              "action": "allow",
+              "tool": "Memory"
+            },
+            {
+              "action": "ask",
+              "tool": "Workflow"
+            },
+            {
+              "action": "allow",
+              "tool": "App"
+            },
+            {
+              "action": "allow",
+              "tool": "ProposeApp"
+            },
+            {
+              "action": "allow",
+              "tool": "Instructions"
+            }
+          ]
+        },
+        "quiet_limit_secs": null,
+        "schedule": {
+          "catch_up": false,
+          "rule": {
+            "expr": "0 0 2 * * *",
+            "kind": "cron"
+          },
+          "until": null
+        },
+        "seen_at": "2026-10-09T12:00:00.000Z",
+        "timeout_secs": 1800,
+        "updated_at": "2026-10-09T12:00:00.000Z",
+        "use_global_instructions": true,
+        "use_user_settings": false,
+        "uses": {
+          "apps": [
+            "projects"
+          ],
+          "context": [
+            "company"
+          ],
+          "mcp_servers": [
+            "github"
+          ],
+          "plugins": [
+            "pdf-tools"
+          ],
+          "skills": [
+            "pdf"
+          ]
+        },
+        "variables": {},
+        "workdir": "C:/dev/app",
+        "workspace_id": "default",
+        "workspace_mode": "worktree"
+      },
+      "notes": "Left out the extra telepathy: Dots does not know it.",
+      "run_error": "The first run could not start.",
+      "run_id": null
+    }
+  ],
+  "SetupRequest": [
+    {
+      "change": null,
+      "current": null,
+      "description": "Every weekday at 9, read my Downloads folder",
+      "rounds": [
+        {
+          "answers": [
+            "Downloads"
+          ],
+          "questions": [
+            "Which folder?"
+          ]
+        }
+      ],
+      "skip": false
+    },
+    {
+      "change": "Run at 8 instead",
+      "current": {
+        "extras": [
+          "web",
+          "mcp:github"
+        ],
+        "first_message": "Start with today's new files.",
+        "folder": "C:/Users/me/Dots/downloads-digest",
+        "instructions": "Read the Downloads folder and tell me what is new.",
+        "name": "Downloads digest",
+        "notes": "Runs on weekdays at 9.",
+        "preset": "read-only",
+        "schedule": {
+          "catch_up": false,
+          "rule": {
+            "expr": "0 0 9 * * 1-5",
+            "kind": "cron"
+          },
+          "until": null
+        },
+        "uses": {
+          "apps": [],
+          "context": [],
+          "mcp_servers": [
+            "github"
+          ],
+          "plugins": [],
+          "skills": []
+        }
+      },
+      "description": "Every weekday at 9, read my Downloads folder",
+      "rounds": [],
+      "skip": true
+    }
+  ],
   "SourceCreds": [
     {
       "kind": "token",

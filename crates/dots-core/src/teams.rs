@@ -34,14 +34,7 @@ pub fn project_named<'a>(team: &'a Team, name: &str) -> Option<&'a Project> {
 /// Refuses a project folder that is not a git repo.
 pub(crate) async fn check_repo(repo_path: &str) -> Result<()> {
     let path = Path::new(repo_path.trim());
-    let inside = if path.is_dir() {
-        git(path, &["rev-parse", "--is-inside-work-tree"])
-            .await
-            .unwrap_or_default()
-    } else {
-        String::new()
-    };
-    if inside != "true" {
+    if !crate::runtime::is_git_repo(path).await {
         return Err(Error::Invalid(format!(
             "{} is not a git repository",
             path.display()

@@ -169,6 +169,27 @@ pub struct DotSpec {
     pub enabled: bool,
 }
 
+/// A dot's name as a folder or branch name: lower case, each run of characters that are not
+/// ASCII letters or digits one `-`, trimmed of `-`, cut to 40 characters; `dot` when nothing
+/// is left.
+pub fn folder_name(name: &str) -> String {
+    let mut out = String::new();
+    for c in name.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+        } else if !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    let cut: String = out.trim_matches('-').chars().take(40).collect();
+    let cut = cut.trim_matches('-');
+    if cut.is_empty() {
+        "dot".to_string()
+    } else {
+        cut.to_string()
+    }
+}
+
 impl DotSpec {
     pub fn new(name: &str, instructions: &str, workdir: &str) -> Self {
         Self {
@@ -200,12 +221,15 @@ impl DotSpec {
         }
         let name_ok = !self.name.is_empty()
             && self.name.len() <= 64
+            && !self.name.starts_with(' ')
+            && !self.name.ends_with(' ')
+            && !self.name.contains("  ")
             && self
                 .name
                 .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '-' | '_' | '.'));
         if !name_ok {
-            return invalid("name must be 1-64 characters of A-Z, a-z, 0-9, '-' or '_'");
+            return invalid("Use 1 to 64 letters, digits, spaces, '-', '_' or '.'.");
         }
         if self.instructions.trim().is_empty() {
             return invalid("instructions must not be empty");

@@ -63,6 +63,8 @@ describe("the home's routes", () => {
     expect(within(inbox).getByText("10")).toBeVisible();
     await user.click(within(rail).getByRole("link", { name: "Home" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/home"));
-    expect(await screen.findByRole("link", { name: "Create your first dot" })).toBeVisible();
+    expect(
+      await screen.findByRole("heading", { name: "What should your first dot do?" }),
+    ).toBeVisible();
   });
 });

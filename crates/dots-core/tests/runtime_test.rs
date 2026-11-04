@@ -625,6 +625,8 @@ async fn update_dot_workspace_change_conflicts_while_runs_are_active() {
     moved.workdir = t.dir.path().join("elsewhere").to_string_lossy().to_string();
     let res = t.rt.update_dot(&dot.id, moved.clone()).await;
     assert!(matches!(res, Err(Error::Conflict(_))), "{res:?}");
+    // Worktree mode needs a git folder, or the core refuses it before the active run matters.
+    init_repo(t.dir.path());
     let mut remoded = dot.spec.clone();
     remoded.workspace_mode = WorkspaceMode::Worktree;
     let res = t.rt.update_dot(&dot.id, remoded).await;

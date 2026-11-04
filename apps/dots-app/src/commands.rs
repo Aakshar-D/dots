@@ -36,6 +36,7 @@ use dots_core::model::{
 use dots_core::policy::{Policy, Preset, RuleCandidate};
 use dots_core::schedule::Schedule;
 use dots_core::settings::Settings;
+use dots_core::setup::{SetupAnswer, SetupApplied, SetupProposal, SetupRequest};
 use dots_core::skill_creator::{check_draft, DraftRequest, DraftSummary};
 use dots_core::vault::org::{
     CreatedInvite, EditOutcome, JoinPreview, MembersView, OrgEntry, OrgSummary, RequestPreview,
@@ -445,6 +446,39 @@ pub async fn create_dot(
     workspace_id: Option<String>,
 ) -> Res<Dot> {
     Ok(state.rt()?.create_dot(spec, org_id, workspace_id).await?)
+}
+
+/// Asks the setup agent for the setup view `id` (setup agent spec §6): its questions, or a
+/// checked proposal. A newer request of the same id cancels the one before.
+#[tauri::command]
+pub async fn setup_ask(
+    state: State<'_, AppState>,
+    id: String,
+    request: SetupRequest,
+) -> Res<SetupAnswer> {
+    Ok(state.rt()?.setup_ask(&id, request).await?)
+}
+
+/// Ends the setup's request, if one is being answered; its `setup_ask` then fails.
+#[tauri::command]
+pub fn setup_cancel(state: State<'_, AppState>, id: String) -> Res<()> {
+    state.rt()?.setup_cancel(&id);
+    Ok(())
+}
+
+/// Creates the proposed dot and starts its first chat. `org_id` and `workspace_id` are as
+/// for `create_dot`.
+#[tauri::command]
+pub async fn setup_apply(
+    state: State<'_, AppState>,
+    proposal: SetupProposal,
+    org_id: Option<String>,
+    workspace_id: Option<String>,
+) -> Res<SetupApplied> {
+    Ok(state
+        .rt()?
+        .setup_apply(proposal, org_id, workspace_id)
+        .await?)
 }
 
 /// Moves a dot to another workspace of its account.

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { Schedule, ScheduleRule } from "@/api/types";
 import {
   everyRule,
+  folderName,
   localDateTimeIn,
   scheduleError,
   scheduleOf,
@@ -44,11 +45,16 @@ describe("dot editor rules", () => {
     ]);
   });
 
+  it("lets a new dot leave its folder blank", () => {
+    expect(Object.keys(specErrors(blankSpec, true)).sort()).toEqual(["instructions", "name"]);
+  });
+
   it("checks the name the way the core does", () => {
-    for (const name of ["", "has space", "ünï", "x".repeat(65)]) {
+    const bad = ["", " lead", "trail ", "two  spaces", "has/slash", "Résumé", "ünï", "x".repeat(65)];
+    for (const name of bad) {
       expect(specErrors({ ...good, name }).name, name).toBeDefined();
     }
-    for (const name of ["a", "nightly-tests_2", "x".repeat(64)]) {
+    for (const name of ["a", "has space", "v1.2 bot", "nightly-tests_2", "x".repeat(64)]) {
       expect(specErrors({ ...good, name }).name, name).toBeUndefined();
     }
   });
@@ -191,5 +197,15 @@ describe("schedule rules", () => {
     expect(everyRule(60, everyAnchored)).toEqual({ kind: "every", minutes: 60, anchor: null });
     expect(everyRule(90, daily)).toEqual({ kind: "every", minutes: 90, anchor: null });
     expect(everyRule(90, null)).toEqual({ kind: "every", minutes: 90, anchor: null });
+  });
+});
+
+describe("folderName", () => {
+  it("makes a folder name of a dot name as the core does", () => {
+    expect(folderName("Downloads digest")).toBe("downloads-digest");
+    expect(folderName("Résumé bot")).toBe("r-sum-bot");
+    expect(folderName("日本")).toBe("dot");
+    expect(folderName("  --a.b__c--  ")).toBe("a-b-c");
+    expect(folderName(`${"a".repeat(39)} b`)).toBe("a".repeat(39));
   });
 });

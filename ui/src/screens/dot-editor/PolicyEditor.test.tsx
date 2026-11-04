@@ -40,12 +40,14 @@ describe("the policy editor", () => {
     const { user, policy } = setup();
     await user.selectOptions(screen.getByLabelText("Preset"), "read-only");
     await waitFor(() => expect(policy()).toEqual(readOnly));
+    await user.click(screen.getByText("Show rules"));
     expect(backend.callsTo("policy_preset")).toEqual([{ preset: "read-only" }]);
     expect(screen.getByLabelText("Anything else")).toHaveValue("deny");
   });
 
   it("becomes custom when a rule, the rule list or the default is edited", async () => {
     const { user, policy } = setup();
+    await user.click(screen.getByText("Show rules"));
     await user.selectOptions(screen.getByLabelText("Rule 2 action"), "deny");
     expect(policy()).toEqual({
       ...sandboxed,
@@ -70,6 +72,56 @@ describe("the policy editor", () => {
     await user.selectOptions(screen.getByLabelText("Preset"), "custom");
     expect(policy()).toEqual({ ...sandboxed, preset: "custom" });
     expect(backend.callsTo("policy_preset")).toEqual([]);
+  });
+
+  it("folds the rules under a one-line sentence for a named preset", async () => {
+    const { user } = setup();
+    expect(screen.getByLabelText("Preset")).toHaveValue("sandboxed");
+    expect(
+      screen.getByText(
+        "May edit files in its folder and run a few safe git commands. Asks before anything else.",
+      ),
+    ).toBeVisible();
+    expect(screen.getByLabelText("Rule 1 tool")).not.toBeVisible();
+    await user.click(screen.getByText("Show rules"));
+    expect(screen.getByLabelText("Rule 1 tool")).toBeVisible();
+  });
+
+  it("shows the rules at once for a custom policy", () => {
+    setup({ ...sandboxed, preset: "custom" });
+    expect(screen.getByText("Your own rules.")).toBeVisible();
+    expect(screen.getByLabelText("Rule 1 tool")).toBeVisible();
+  });
+
+  it("opens the rules when Custom is picked while they are folded", async () => {
+    const { user } = setup();
+    expect(screen.getByLabelText("Rule 1 tool")).not.toBeVisible();
+    await user.selectOptions(screen.getByLabelText("Preset"), "custom");
+    expect(screen.getByLabelText("Rule 1 tool")).toBeVisible();
+  });
+
+  it("opens the rules when they have an error", () => {
+    const onChange = () => {};
+    const { rerender } = render(<PolicyEditor policy={sandboxed} onChange={onChange} />);
+    expect(screen.getByText("Show rules")).toBeVisible();
+    rerender(
+      <PolicyEditor policy={sandboxed} onChange={onChange} error="Rule 1 needs a tool." />,
+    );
+    expect(screen.getByText("Hide rules")).toBeVisible();
+    expect(screen.getByText("Rule 1 needs a tool.")).toBeVisible();
+  });
+
+  it("starts with the rules open when they have an error", () => {
+    render(<PolicyEditor policy={sandboxed} onChange={() => {}} error="Rule 1 needs a tool." />);
+    expect(screen.getByText("Hide rules")).toBeVisible();
+  });
+
+  it("opens the rules when the policy becomes custom from outside", () => {
+    const onChange = () => {};
+    const { rerender } = render(<PolicyEditor policy={sandboxed} onChange={onChange} />);
+    expect(screen.getByText("Show rules")).toBeVisible();
+    rerender(<PolicyEditor policy={{ ...sandboxed, preset: "custom" }} onChange={onChange} />);
+    expect(screen.getByText("Hide rules")).toBeVisible();
   });
 });
 

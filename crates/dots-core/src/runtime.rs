@@ -20,13 +20,14 @@ use crate::engine::{Engine, UnavailableEngine};
 use crate::events::{new_bus, Bus, RuntimeEvent};
 use crate::followups::FollowUps;
 use crate::inbox::{self, InboxEntry, InboxKey, InboxKind, InboxMark, MarkState};
+use crate::library::LibraryKind;
 use crate::library_service::LibraryService;
 use crate::model::{
     Approval, AttentionRun, ClaudeStatus, ConversationFile, DeliveryCounts, Dot, DotOverview,
     DotSpec, EngineKind, FileSource, Inbox, MessageKind, NewRun, PendingApproval, ReviewRun, Run,
     RunEventRecord, RunStatus, ScheduleChange, ScheduleSkip, ScheduleView, ScheduledMessage,
     ScheduledStatus, ScheduledWait, SentLater, SettingsSaved, StagedAttachment, Status,
-    TriggerKind, UndeliveredMessage, WorktreeDiff,
+    TriggerKind, UndeliveredMessage, WorkspaceMode, WorktreeDiff,
 };
 use crate::policy::{
     allow_candidates, pattern_touches_private, touches_private, Action, Rule, RuleCandidate,
@@ -38,6 +39,10 @@ use crate::scheduler::{Clock, Scheduler, SystemClock};
 use crate::send_later::{ChatExtra, SendTarget};
 use crate::server::{self, ServerState};
 use crate::settings::Settings;
+use crate::setup::{
+    check_proposal, setup_policy, SetupAnswer, SetupApplied, SetupContext, SetupDrafts,
+    SetupLibrary, SetupProposal, SetupRequest,
+};
 use crate::skill_creator::SkillDrafts;
 use crate::store::Store;
 use crate::util::timestamp;
@@ -84,12 +89,18 @@ pub struct Config {
     /// `Config::new` leaves them out, so a test starts with no app unless it asks for them;
     /// the app's configuration has them.
     pub bundled_apps: bool,
+    /// Where a dot created without a folder gets one: `<new_dot_root>\<folder name>`. The app
+    /// uses `%USERPROFILE%\Dots`; `Config::new` keeps it inside the data folder, so a test
+    /// never touches the home folder.
+    pub new_dot_root: PathBuf,
 }
 
 impl Config {
     pub fn new(data_dir: impl Into<PathBuf>) -> Self {
+        let data_dir = data_dir.into();
         Self {
-            data_dir: data_dir.into(),
+            new_dot_root: data_dir.join("new-dots"),
+            data_dir,
             port: 47321,
             bind_wait: server::BIND_WAIT,
             max_concurrent_runs: 2,
@@ -112,8 +123,89 @@ impl Config {
         cfg.claude_path = settings.claude_path.as_ref().map(PathBuf::from);
         cfg.secrets = None;
         cfg.bundled_apps = true;
+        let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"));
+        if let Some(home) = home.filter(|h| !h.is_empty()) {
+            cfg.new_dot_root = PathBuf::from(home).join("Dots");
+        }
         cfg
     }
+}
+
+/// Why a dot cannot use worktree mode on a folder that is not a git repository.
+pub const NOT_A_REPO: &str =
+    "This folder is not a git repository. Choose 'The folder itself' or pick a git folder.";
+
+/// True when `path` is a folder inside a git work tree.
+pub async fn is_git_repo(path: &Path) -> bool {
+    path.is_dir()
+        && crate::workspace::git(path, &["rev-parse", "--is-inside-work-tree"])
+            .await
+            .unwrap_or_default()
+            == "true"
+}
+
+/// True when a dot may work in a worktree of `path`: the folder is the top level of a git
+/// repository (`git rev-parse --show-toplevel` names it) and `HEAD` names a commit. A folder that
+/// only sits inside a repository would get a checkout of the whole outer repository, and a
+/// repository with no commit has nothing to check out.
+pub async fn worktree_ready(path: &Path) -> bool {
+    if !path.is_dir() {
+        return false;
+    }
+    let Ok(top) = crate::workspace::git(path, &["rev-parse", "--show-toplevel"]).await else {
+        return false;
+    };
+    let same = match (std::fs::canonicalize(&top), std::fs::canonicalize(path)) {
+        (Ok(top), Ok(path)) => top == path,
+        _ => false,
+    };
+    same && crate::workspace::git(path, &["rev-parse", "--verify", "--quiet", "HEAD^{commit}"])
+        .await
+        .is_ok()
+}
+
+/// Claims and returns the first free `<root>/<folder_name>[-N]`, missing parents created. A
+/// candidate is skipped when a stored dot works in it (`used`); otherwise it is claimed by
+/// making it, so two creates at once never get the same folder, or, when it is there already,
+/// taken only if empty. The flag is true when this call made the folder, false when it was
+/// there already, empty: only a folder it made may be removed again.
+pub async fn default_folder(root: &Path, name: &str, used: &[PathBuf]) -> Result<(PathBuf, bool)> {
+    let base = crate::model::folder_name(name);
+    tokio::fs::create_dir_all(root).await?;
+    let same = |a: &Path, b: &Path| {
+        a == b
+            || matches!(
+                (std::fs::canonicalize(a), std::fs::canonicalize(b)),
+                (Ok(a), Ok(b)) if a == b
+            )
+    };
+    for n in 1u32..10_000 {
+        let dir = if n == 1 {
+            root.join(&base)
+        } else {
+            root.join(format!("{base}-{n}"))
+        };
+        if used.iter().any(|u| same(u, &dir)) {
+            continue;
+        }
+        match tokio::fs::create_dir(&dir).await {
+            Ok(()) => return Ok((dir, true)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                let empty = match tokio::fs::read_dir(&dir).await {
+                    Ok(mut entries) => entries.next_entry().await?.is_none(),
+                    Err(_) => false,
+                };
+                if empty {
+                    return Ok((dir, false));
+                }
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Err(Error::Other(format!(
+        "no free folder for '{name}' in {}",
+        root.display()
+    )))
 }
 
 pub struct Runtime {
@@ -126,12 +218,18 @@ pub struct Runtime {
     library: LibraryService,
     vault: Vault,
     skill_drafts: SkillDrafts,
+    /// The setup agent's requests (setup agent spec §9).
+    setup_drafts: SetupDrafts,
+    /// Makes `setup_apply` check a name and create its dot in one step, so a second press of
+    /// Run setup meets the first one's dot instead of making a second.
+    setup_lock: Mutex<()>,
     clock: Arc<dyn Clock>,
     port: u16,
     server_error: Option<String>,
     claude_program: Option<PathBuf>,
     claude_version: Option<String>,
     data_dir: PathBuf,
+    new_dot_root: PathBuf,
     /// The stored settings when the runtime started, and now.
     started: Settings,
     settings: Mutex<Settings>,
@@ -511,9 +609,18 @@ impl Runtime {
                 cfg.draft_limit,
                 shutdown.clone(),
             ),
+            setup_drafts: SetupDrafts::new(
+                claude_program.clone(),
+                cfg.claude_env.clone(),
+                cfg.data_dir.join(DRAFTS_DIR),
+                cfg.draft_limit,
+                shutdown.clone(),
+            ),
+            setup_lock: Mutex::new(()),
             claude_program,
             claude_version,
             data_dir: cfg.data_dir.clone(),
+            new_dot_root: cfg.new_dot_root.clone(),
             started: settings.clone(),
             settings: Mutex::new(settings),
             chat_lock: follow_ups.thread_lock(),
@@ -1423,6 +1530,136 @@ impl Runtime {
         &self.skill_drafts
     }
 
+    /// What the setup agent is told besides the request (setup agent spec §6): today, the
+    /// local UTC offset, the home folder, where new dots get their folder, the Library (without
+    /// the MCP servers a plugin brings, as the editor lists it) and the existing dots' names.
+    pub async fn setup_context(&self) -> Result<SetupContext> {
+        let now = Local::now();
+        let home = ["USERPROFILE", "HOME"]
+            .iter()
+            .filter_map(std::env::var_os)
+            .find(|h| !h.is_empty())
+            .map(|h| h.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let mut library = SetupLibrary::default();
+        for entry in self.library.list().await? {
+            let item = &entry.item;
+            if item.owner_id.is_some() {
+                continue;
+            }
+            let name = item.name.clone();
+            match item.kind() {
+                LibraryKind::Skill => {
+                    let description = entry
+                        .skill
+                        .as_ref()
+                        .map(|s| s.description.clone())
+                        .unwrap_or_default();
+                    library.skills.push((name, description));
+                }
+                LibraryKind::McpServer => library.mcp_servers.push(name),
+                LibraryKind::Plugin => library.plugins.push(name),
+                LibraryKind::Context => library.context.push(name),
+                LibraryKind::App => {}
+            }
+        }
+        let dot_names = self
+            .store
+            .list_dots()
+            .await?
+            .into_iter()
+            .map(|d| d.spec.name)
+            .collect();
+        Ok(SetupContext {
+            today: now.format("%Y-%m-%d (%A)").to_string(),
+            utc_offset: now.format("%:z").to_string(),
+            home,
+            new_dot_root: self.new_dot_root.to_string_lossy().into_owned(),
+            library,
+            dot_names,
+        })
+    }
+
+    /// Asks the setup agent for the setup `id` (`setup_ask`, setup agent spec §6): its
+    /// questions, or a checked proposal. A newer request of the same id cancels the one before;
+    /// other ids are left alone. It is the person's own action: never queued, never held.
+    pub async fn setup_ask(&self, id: &str, req: SetupRequest) -> Result<SetupAnswer> {
+        let ctx = self.setup_context().await?;
+        self.setup_drafts.ask(id, &ctx, &req).await
+    }
+
+    /// Cancels the setup's request, if one is being answered (`setup_cancel`).
+    pub fn setup_cancel(&self, id: &str) {
+        self.setup_drafts.cancel(id);
+    }
+
+    /// Creates the proposed dot and starts its first chat (`setup_apply`, setup agent spec
+    /// §9). The proposal is checked again, with a name clash a `Conflict`; a folder it names
+    /// must be a folder on this PC (`Invalid`), and no folder gets a new default one, which a
+    /// failed create removes again. The dot works in a worktree when its folder is the top level
+    /// of a git repository with a commit, and in the folder itself otherwise. When the first chat cannot start, the dot stays and `run_error`
+    /// says why.
+    pub async fn setup_apply(
+        &self,
+        p: SetupProposal,
+        org: Option<String>,
+        workspace: Option<String>,
+    ) -> Result<SetupApplied> {
+        // Held until the dot is stored: a second Run setup meets its name.
+        let one_at_a_time = self.setup_lock.lock().await;
+        let ctx = self.setup_context().await?;
+        let named = p
+            .folder
+            .as_deref()
+            .map(str::trim)
+            .filter(|f| !f.is_empty())
+            .map(str::to_string);
+        let before = p.notes.clone();
+        let p = check_proposal(p, &ctx, false)?;
+        // Only what this check added: the card already showed the proposal's own notes.
+        let notes = p
+            .notes
+            .strip_prefix(before.as_str())
+            .unwrap_or(&p.notes)
+            .trim()
+            .to_string();
+        let workdir = match (&named, p.folder.as_deref()) {
+            (None, _) => String::new(),
+            (Some(_), Some(checked)) if Path::new(checked).is_dir() => checked.to_string(),
+            (Some(folder), _) => {
+                return Err(Error::Invalid(format!(
+                    "{folder} is not a folder on this PC."
+                )))
+            }
+        };
+        // Worktree mode, which `create_dot` turns into folder mode unless the folder is a
+        // repository's top level with a commit, and always for a folder it makes.
+        let mut spec = DotSpec::new(&p.name, &p.instructions, &workdir);
+        spec.workspace_mode = WorkspaceMode::Worktree;
+        spec.schedule = p.schedule.clone();
+        spec.policy = setup_policy(p.preset, &p.extras);
+        spec.uses = p.uses.clone();
+        // A blank workdir gets the default folder in `create_dot`, which removes it again
+        // when the create fails.
+        let dot = self.create_dot(spec, org, workspace).await?;
+        drop(one_at_a_time);
+        // A blank first message, cleared on the card, starts no chat.
+        let (run_id, run_error) = if p.first_message.trim().is_empty() {
+            (None, None)
+        } else {
+            match self.chat(&dot.id, &p.first_message, None).await {
+                Ok(run) => (Some(run.id), None),
+                Err(e) => (None, Some(e.to_string())),
+            }
+        };
+        Ok(SetupApplied {
+            dot,
+            run_id,
+            run_error,
+            notes,
+        })
+    }
+
     /// The dots' notes and questions: what the `message_*` commands call (check-ins spec
     /// section 10). Answering a question is `reply`.
     pub fn checkins(&self) -> &CheckIns {
@@ -1515,7 +1752,7 @@ impl Runtime {
     /// changing dots, and giving it secrets when it is granted any (members spec §6.3).
     pub async fn create_dot(
         &self,
-        spec: DotSpec,
+        mut spec: DotSpec,
         org_id: Option<String>,
         workspace_id: Option<String>,
     ) -> Result<Dot> {
@@ -1537,10 +1774,45 @@ impl Runtime {
             self.require_in(org_id.as_deref(), workspace_id, Permission::GrantEntries)
                 .await?;
         }
-        let dot = self
+        // A blank folder gets a new one of its own; remembered so a failed create removes it.
+        let mut made: Option<PathBuf> = None;
+        if spec.workdir.trim().is_empty() {
+            let used: Vec<PathBuf> = self
+                .store
+                .list_dots()
+                .await?
+                .into_iter()
+                .map(|d| PathBuf::from(d.spec.workdir.trim()))
+                .collect();
+            let (dir, created) = default_folder(&self.new_dot_root, &spec.name, &used).await?;
+            spec.workdir = dir.to_string_lossy().into_owned();
+            // A folder that was there already, empty, may be another dot's: it stays.
+            made = created.then_some(dir);
+            // A folder Dots made is never a repository's top level: a worktree would check out
+            // whatever repository it happens to sit in.
+            spec.workspace_mode = WorkspaceMode::Folder;
+        }
+        // Worktree mode needs the top level of a repository with a commit; elsewhere the dot
+        // runs in the folder itself.
+        if spec.workspace_mode == WorkspaceMode::Worktree
+            && !worktree_ready(Path::new(spec.workdir.trim())).await
+        {
+            spec.workspace_mode = WorkspaceMode::Folder;
+        }
+        let created = self
             .store
             .create_dot(&spec, org_id.as_deref(), workspace_id)
-            .await?;
+            .await;
+        let dot = match created {
+            Ok(dot) => dot,
+            Err(e) => {
+                if let Some(dir) = made {
+                    // Only removes an empty folder.
+                    let _ = tokio::fs::remove_dir(dir).await;
+                }
+                return Err(e);
+            }
+        };
         self.sync_schedule(&dot, false).await?;
         self.scheduler.reload();
         self.watchers.reload();
@@ -1742,6 +2014,15 @@ impl Runtime {
         self.require_dot(&old, Permission::EditDots).await?;
         if spec.variables != old.spec.variables {
             self.require_dot(&old, Permission::GrantEntries).await?;
+        }
+        // Only a change to the mode or the folder is refused: a stored dot whose repository
+        // has gone can still have its other fields edited.
+        if spec.workspace_mode == WorkspaceMode::Worktree
+            && (spec.workspace_mode != old.spec.workspace_mode || spec.workdir != old.spec.workdir)
+            && !spec.workdir.trim().is_empty()
+            && !worktree_ready(Path::new(spec.workdir.trim())).await
+        {
+            return Err(Error::Invalid(NOT_A_REPO.into()));
         }
         let was_enabled = old.spec.enabled;
         let dot = self.store.update_dot(id, &spec).await?;
