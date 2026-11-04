@@ -131,13 +131,99 @@ async fn set_root(conn: &mut SqliteConnection, ids: &[String], root: &str) -> Re
     Ok(())
 }
 
-/// The ids of `run` and the runs that descend from it in `runs` (by `parent_run_id`).
+/// Gives each file of the runs `moving` that takes a name the topic `target` has (in any
+/// case) a name of its own, with ` (2)`… as a message's files get (attachments spec section
+/// 3.1), in its row and in its run's payload, and marks it not placed: the next run puts it in
+/// the topic's folder under that name. Call before the runs take the target's root.
+async fn rename_clashing_files(
+    conn: &mut SqliteConnection,
+    moving: &[String],
+    target: &str,
+) -> Result<()> {
+    let marks = vec!["?"; moving.len()].join(", ");
+    let sql = format!(
+        "SELECT a.name FROM chat_attachments a JOIN runs r ON r.id = a.run_id \
+         WHERE r.root_run_id = ? AND a.name IS NOT NULL AND a.run_id NOT IN ({marks})"
+    );
+    let mut q = sqlx::query_scalar::<_, String>(&sql).bind(target);
+    for id in moving {
+        q = q.bind(id);
+    }
+    let mut taken = q.fetch_all(&mut *conn).await?;
+    // A watcher's root names the files it staged in the same folder.
+    let root_payload: Option<Option<String>> =
+        sqlx::query_scalar("SELECT payload FROM runs WHERE id = ? AND trigger_kind = 'watcher'")
+            .bind(target)
+            .fetch_optional(&mut *conn)
+            .await?;
+    if let Some(Some(payload)) = root_payload {
+        let payload: serde_json::Value = serde_json::from_str(&payload)?;
+        for a in payload["attachments"].as_array().into_iter().flatten() {
+            if let Some(name) = a["name"].as_str() {
+                taken.push(name.to_string());
+            }
+        }
+    }
+    let sql = format!(
+        "SELECT a.id, a.run_id, a.name FROM chat_attachments a JOIN runs r ON r.id = a.run_id \
+         WHERE a.run_id IN ({marks}) AND a.name IS NOT NULL ORDER BY r.queued_at, r.id, a.id"
+    );
+    let mut q = sqlx::query_as::<_, (String, String, String)>(&sql);
+    for id in moving {
+        q = q.bind(id);
+    }
+    let files = q.fetch_all(&mut *conn).await?;
+    if files.is_empty() {
+        return Ok(());
+    }
+    let mut seen = HashSet::new();
+    taken.retain(|n| seen.insert(n.to_lowercase()));
+    let first = taken.len();
+    let mut all = taken;
+    all.extend(files.iter().map(|(_, _, name)| name.clone()));
+    let unique = crate::watchers::files::unique_names(&all);
+    for ((id, run_id, name), new) in files.iter().zip(unique.into_iter().skip(first)) {
+        if *name == new {
+            continue;
+        }
+        sqlx::query("UPDATE chat_attachments SET name = ?, placed_at = NULL WHERE id = ?")
+            .bind(&new)
+            .bind(id)
+            .execute(&mut *conn)
+            .await?;
+        let payload: Option<String> = sqlx::query_scalar("SELECT payload FROM runs WHERE id = ?")
+            .bind(run_id)
+            .fetch_one(&mut *conn)
+            .await?;
+        let Some(payload) = payload else { continue };
+        let mut payload: serde_json::Value = serde_json::from_str(&payload)?;
+        if let Some(list) = payload
+            .get_mut("attachments")
+            .and_then(|a| a.as_array_mut())
+        {
+            for a in list.iter_mut().filter(|a| a["id"] == id.as_str()) {
+                a["name"] = serde_json::Value::String(new.clone());
+            }
+        }
+        sqlx::query("UPDATE runs SET payload = ? WHERE id = ?")
+            .bind(payload.to_string())
+            .bind(run_id)
+            .execute(&mut *conn)
+            .await?;
+    }
+    Ok(())
+}
+
+/// The ids of `run` and the runs that descend from it in `runs` (by `parent_run_id`), and the
+/// runs that resent one of them (`retry_of`: Send again and Retry make a sibling of the
+/// message, which belongs with it), with theirs.
 fn moved_set(run: &str, runs: &[Run]) -> Vec<String> {
     let mut set: HashSet<&str> = HashSet::from([run]);
     loop {
         let before = set.len();
         for r in runs {
-            if r.parent_run_id.as_deref().is_some_and(|p| set.contains(p)) {
+            let follows = |of: &Option<String>| of.as_deref().is_some_and(|p| set.contains(p));
+            if follows(&r.parent_run_id) || follows(&r.retry_of) {
                 set.insert(&r.id);
             }
         }
@@ -268,6 +354,9 @@ impl Store {
         };
         let new_root = to.unwrap_or(run_id).to_string();
         let ids = moved_set(run_id, &source);
+        if let Some(target) = to {
+            rename_clashing_files(&mut tx, &ids, target).await?;
+        }
         set_root(&mut tx, &ids, &new_root).await?;
         // The unused one-shot grants were made for the work at the end of the line, where an
         // approved call goes on: they follow it when it moves.
@@ -318,7 +407,17 @@ impl Store {
         check_changeable(&mut tx, &target).await?;
         let last = target.last().map(|r| r.id.clone());
         let ids: Vec<String> = source.iter().map(|r| r.id.clone()).collect();
+        rename_clashing_files(&mut tx, &ids, into).await?;
         set_root(&mut tx, &ids, into).await?;
+        // A message the person scheduled for the merged topic goes to the one it joined.
+        sqlx::query(
+            "UPDATE scheduled_messages SET root_run_id = ? \
+             WHERE root_run_id = ? AND status IN ('scheduled', 'sending', 'failed')",
+        )
+        .bind(into)
+        .bind(from)
+        .execute(&mut *tx)
+        .await?;
         sqlx::query("UPDATE runs SET parent_run_id = ? WHERE id = ?")
             .bind(&last)
             .bind(from)

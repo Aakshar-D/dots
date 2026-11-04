@@ -15,7 +15,8 @@ Today a topic is only a line of runs sharing `runs.root_run_id`; it has no row, 
 - **Topic**: as in the chat-first home spec: a root run and the runs that continued it (`root_run_id`). The root's id stays the topic's identity (and its address, `/home/:dotId/:rootRunId`).
 - **Topic row**: an optional `topics` row holding what a topic has beyond its runs. A topic with no row is active and untitled; no backfill.
 - **Active run**: one that has not ended (`queued`, `running`, `awaiting_approval`; `RunStatus::is_terminal` is false).
-- **Moved set** of a run: the run and its descendants in its topic (by `parent_run_id`). In a one-line topic that is the run and everything after it.
+- **Moved set** of a run: the run and its descendants in its topic (by `parent_run_id`), and the runs that resent one of them (`retry_of`: Send again and Retry make a sibling of the message) with theirs. In a one-line topic that is the run and everything after it.
+- **Files**: a message's attached files (`chat_attachments`) belong to its run, so they move with it; their delivery marks are the run's own. A moved file whose name the target topic already has (in any case) is renamed with ` (2)`… in its row and its run's payload, and marked not placed, so the next run puts it in the target's `attachments/<root>/` folder. The copy the dot may have edited in the old topic's folder stays there; the target gets the file as it was attached. A merge also re-keys the messages scheduled for the merged topic.
 - **Last activity** of a topic: the latest `queued_at` or `ended_at` of its runs, or the time it was last unarchived if later.
 
 ## 3. Behaviour (decided with the owner)

@@ -462,3 +462,106 @@ async fn the_inbox_names_the_moved_tail_as_its_topic_s_end() {
     assert!(after.contains(&a2.id), "{after:?}");
     assert!(!after.contains(&b1.id), "{after:?}");
 }
+
+/// A chat run continuing `parent` that carries the attachment `id` named `name`.
+async fn with_file(
+    store: &Store,
+    dot: &Dot,
+    parent: &Run,
+    queued: &str,
+    id: &str,
+    name: &str,
+) -> Run {
+    store
+        .insert_staged_attachment(id, &dot.id, name, 10)
+        .await
+        .unwrap();
+    let mut new = NewRun::new(&dot.id, TriggerKind::Chat);
+    new.payload = Some(json!({ "message": "see file", "typed": true,
+        "attachments": [{ "id": id, "name": name, "size": 10 }] }));
+    new.parent_run_id = Some(parent.id.clone());
+    new.root_run_id = Some(parent.root_run_id.clone());
+    let run = store
+        .create_chat_run(&new, &[(id.to_string(), name.to_string())], None, None)
+        .await
+        .unwrap();
+    store.set_run_queued_at(&run.id, queued).await.unwrap();
+    store
+        .set_status(&run.id, RunStatus::Succeeded)
+        .await
+        .unwrap();
+    store.get_run(&run.id).await.unwrap()
+}
+
+#[tokio::test]
+async fn a_moved_file_whose_name_the_target_has_gets_a_name_of_its_own() {
+    let (_d, store) = temp_store().await;
+    let d = dot(&store, "a").await;
+    let a1 = chat(&store, &d, None, &at(0)).await;
+    let a2 = with_file(&store, &d, &a1, &at(1), "F1", "r.pdf").await;
+    let b1 = chat(&store, &d, None, &at(10)).await;
+    with_file(&store, &d, &b1, &at(11), "F2", "R.pdf").await;
+    store
+        .mark_attachments_placed(&["F1".to_string()], &at(2))
+        .await
+        .unwrap();
+
+    store.move_runs(&a2.id, Some(&b1.id)).await.unwrap();
+    let moved = store.get_attachment("F1").await.unwrap();
+    assert_eq!(moved.name.as_deref(), Some("r (2).pdf"));
+    // Not placed under its new name yet: the next run puts it in the topic's folder.
+    assert_eq!(moved.placed_at, None);
+    assert_eq!(
+        store.get_attachment("F2").await.unwrap().name.as_deref(),
+        Some("R.pdf")
+    );
+    let run = store.get_run(&a2.id).await.unwrap();
+    assert_eq!(run.payload.unwrap()["attachments"][0]["name"], "r (2).pdf");
+    let names: Vec<String> = store
+        .topic_attachments(&b1.id)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter_map(|a| a.name)
+        .collect();
+    assert_eq!(names.len(), 2);
+}
+
+#[tokio::test]
+async fn a_resend_moves_with_the_message_it_resent() {
+    let (_d, store) = temp_store().await;
+    let d = dot(&store, "a").await;
+    let a1 = chat(&store, &d, None, &at(0)).await;
+    let a2 = chat(&store, &d, Some(&a1), &at(1)).await;
+    store.set_status(&a2.id, RunStatus::Failed).await.unwrap();
+    // Send again: a sibling of the failed run, along `retry_of`.
+    let mut new = NewRun::new(&d.id, TriggerKind::Chat);
+    new.parent_run_id = Some(a1.id.clone());
+    new.root_run_id = Some(a1.id.clone());
+    new.retry_of = Some(a2.id.clone());
+    let again = store.create_run(&new).await.unwrap();
+    store.set_run_queued_at(&again.id, &at(2)).await.unwrap();
+    store
+        .set_status(&again.id, RunStatus::Succeeded)
+        .await
+        .unwrap();
+
+    let root = store.move_runs(&a2.id, None).await.unwrap();
+    assert_eq!(store.get_run(&again.id).await.unwrap().root_run_id, root);
+    assert_eq!(store.list_thread(&a1.id).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn a_merge_takes_the_messages_scheduled_for_the_merged_topic() {
+    let (_d, store) = temp_store().await;
+    let d = dot(&store, "a").await;
+    let a1 = chat(&store, &d, None, &at(0)).await;
+    let b1 = chat(&store, &d, None, &at(10)).await;
+    let later = store
+        .insert_scheduled_message(&d.id, Some(&a1.id), "later", NOW, t(NOW))
+        .await
+        .unwrap();
+    store.merge_topics(&a1.id, &b1.id).await.unwrap();
+    let later = store.get_scheduled_message(&later.id).await.unwrap();
+    assert_eq!(later.root_run_id.as_deref(), Some(b1.id.as_str()));
+}
