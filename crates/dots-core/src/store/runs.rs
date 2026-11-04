@@ -465,7 +465,10 @@ impl Store {
     /// not listed.
     pub async fn unreviewed_thread_ends(&self) -> Result<Vec<Run>> {
         let rows = sqlx::query(&format!(
-            "SELECT {RUN_COLUMNS} FROM runs r              WHERE r.reviewed_at IS NULL AND r.status IN ('succeeded', 'failed', 'cancelled')              AND (r.status = 'failed' OR r.branch IS NOT NULL)              ORDER BY r.ended_at DESC, r.id DESC"
+            "SELECT {RUN_COLUMNS} FROM runs r \
+             WHERE r.reviewed_at IS NULL AND r.status IN ('succeeded', 'failed', 'cancelled') \
+             AND (r.status = 'failed' OR r.branch IS NOT NULL) \
+             ORDER BY r.ended_at DESC, r.id DESC"
         ))
         .fetch_all(&self.pool)
         .await?;
