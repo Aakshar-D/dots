@@ -358,12 +358,15 @@ impl ChatFiles {
     /// `.gitignore` of `*` (attachments spec section 4.4). A file that is there is never
     /// overwritten: the dot may have edited it. Nothing is written through a link: `attachments`
     /// and the topic folder must each be missing or a real folder inside the workspace, and each
-    /// file is created new. Answers the files it could not place, by id, with why.
+    /// file is created new. A file of `run_id`'s own message whose name is taken by anything
+    /// but Dots' unchanged copy is not placed: the dot would be told the wrong file is the
+    /// attached one. Answers the files it could not place, by id, with why.
     pub fn copy_into(
         &self,
         root_run_id: &str,
         files: &[ChatAttachment],
         workspace: &Path,
+        run_id: &str,
     ) -> Vec<(String, Error)> {
         let placed: Vec<&ChatAttachment> = files.iter().filter(|f| f.name.is_some()).collect();
         if placed.is_empty() {
@@ -381,7 +384,8 @@ impl ChatFiles {
         };
         let mut failed = Vec::new();
         for f in placed {
-            if let Err(e) = self.place(f, &dir) {
+            let own = f.run_id.as_deref() == Some(run_id);
+            if let Err(e) = self.place(f, &dir, own) {
                 failed.push((f.id.clone(), Error::Other(e.to_string())));
             }
         }
@@ -421,8 +425,10 @@ impl ChatFiles {
         Ok(canonical)
     }
 
-    /// Copies one stored file into `dir` when nothing is at its name.
-    fn place(&self, f: &ChatAttachment, dir: &Path) -> std::io::Result<()> {
+    /// Copies one stored file into `dir` when nothing is at its name. For a file of the run's
+    /// `own` message, something else at its name is an error; Dots' own unchanged copy (the run
+    /// started again) is fine.
+    fn place(&self, f: &ChatAttachment, dir: &Path, own: bool) -> std::io::Result<()> {
         let name = f.name.as_deref().unwrap_or_default();
         if Path::new(name).file_name().map(|n| n.to_string_lossy()) != Some(name.into())
             || name == IGNORE_FILE
@@ -430,9 +436,18 @@ impl ChatFiles {
             return Err(std::io::Error::other(format!("{name} is not a file name")));
         }
         let to = dir.join(name);
+        let taken = || {
+            if own && !same_bytes(&to, &self.stored_path(f)) {
+                Err(std::io::Error::other(format!(
+                    "something else is already at {name} in the topic's folder"
+                )))
+            } else {
+                Ok(())
+            }
+        };
         // There already, as a file, a folder or a link: left as it is.
         if std::fs::symlink_metadata(&to).is_ok() {
-            return Ok(());
+            return taken();
         }
         let mut from = std::fs::File::open(self.stored_path(f))?;
         let mut out = match std::fs::OpenOptions::new()
@@ -441,7 +456,8 @@ impl ChatFiles {
             .open(&to)
         {
             Ok(out) => out,
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return taken(),
+
             Err(e) => return Err(e),
         };
         let copied = std::io::copy(&mut from, &mut out).and_then(|_| out.flush());

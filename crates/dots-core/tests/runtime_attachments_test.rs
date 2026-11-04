@@ -164,6 +164,84 @@ async fn names_are_unique_within_a_topic() {
     assert_eq!(row.run_id.as_deref(), Some(reply.id.as_str()));
 }
 
+/// A reply in a watcher's topic: the email's files share the topic folder, so their names are
+/// taken (attachments spec section 3.1.5).
+#[tokio::test]
+async fn a_reply_in_a_watcher_topic_does_not_take_an_email_file_name() {
+    let t = start(true).await;
+    let dot = folder_dot(&t, "mailer").await;
+    let mut new = NewRun::new(&dot.id, TriggerKind::Watcher);
+    new.payload = Some(json!({
+        "message": "an email",
+        "attachments": [{"name": "invoice.pdf", "path": "x"}, {"name": "notes.txt"}],
+    }));
+    new.workspace_path = Some(work(&t).to_string_lossy().to_string());
+    let root = t.rt.store().create_run(&new).await.unwrap();
+    let root = end(&t, &root).await;
+    let mine = stage(&t, &dot, "invoice.pdf", "mine").await;
+    let notes = stage(&t, &dot, "NOTES.txt", "mine too").await;
+    let reply =
+        t.rt.chat_with_files(&dot.id, "fixed", Some(&root.id), &ids(&[&mine, &notes]))
+            .await
+            .unwrap();
+    assert_eq!(names(&reply), vec!["invoice (2).pdf", "NOTES (2).txt"]);
+}
+
+/// A file the dot made in the topic folder takes its name: an attached file of the same name
+/// gets another, and never stands for the dot's file.
+#[tokio::test]
+async fn a_file_the_dot_made_in_the_topic_folder_takes_its_name() {
+    let t = start(false).await;
+    let dot = folder_dot(&t, "maker").await;
+    let a = stage(&t, &dot, "a.txt", "A").await;
+    let first =
+        t.rt.chat_with_files(&dot.id, "one", None, &ids(&[&a]))
+            .await
+            .unwrap();
+    let first = wait_status(t.rt.store(), &first.id, RunStatus::Succeeded, 30).await;
+    let folder = work(&t).join("attachments").join(&first.id);
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("summary.txt"), "the dot's").unwrap();
+    let mine = stage(&t, &dot, "summary.txt", "the person's").await;
+    let reply =
+        t.rt.chat_with_files(&dot.id, "two", Some(&first.id), &ids(&[&mine]))
+            .await
+            .unwrap();
+    assert_eq!(names(&reply), vec!["summary (2).txt"]);
+}
+
+/// Something else at the name of this message's own file, when the run starts: the run fails
+/// rather than point the dot at the wrong file. Dots' own unchanged copy there (a run started
+/// again) is fine.
+#[tokio::test]
+async fn another_file_at_a_new_attachments_name_fails_the_run() {
+    for (there, fails) in [("someone else's", true), ("A", false)] {
+        let t = start(true).await;
+        let dot = folder_dot(&t, "strict").await;
+        let a = stage(&t, &dot, "a.txt", "A").await;
+        let run =
+            t.rt.chat_with_files(&dot.id, "read", None, &ids(&[&a]))
+                .await
+                .unwrap();
+        let folder = work(&t).join("attachments").join(&run.id);
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("a.txt"), there).unwrap();
+        t.rt.hold_runs(false).await;
+        if fails {
+            let failed = wait_status(t.rt.store(), &run.id, RunStatus::Failed, 30).await;
+            let error = failed.error.clone().unwrap_or_default();
+            assert!(error.starts_with(COPY_FAILED), "{error}");
+            assert!(!t.args_out.exists(), "the engine started");
+        } else {
+            wait_status(t.rt.store(), &run.id, RunStatus::Succeeded, 30).await;
+        }
+        assert_eq!(
+            std::fs::read_to_string(folder.join("a.txt")).unwrap(),
+            there
+        );
+    }
+}
+
 #[tokio::test]
 async fn limits_and_ownership_are_checked() {
     let t = start(true).await;

@@ -1918,6 +1918,35 @@ impl Runtime {
         self.chat_with(dot_id, message, parent_run_id, extra).await
     }
 
+    /// The names a new file of the topic `root` may not take: its chat files', its root's
+    /// files when a watcher started it (they share the folder), and every entry in its folder
+    /// in `workspace` now, such as a file the dot made there (attachments spec section 3.1.5).
+    async fn taken_names(&self, root: &str, workspace: Option<&str>) -> Result<Vec<String>> {
+        let mut names = self.store.topic_attachment_names(root).await?;
+        let first = self.store.get_run(root).await?;
+        if first.trigger == TriggerKind::Watcher {
+            let listed = first
+                .payload
+                .as_ref()
+                .and_then(|p| p.get("attachments"))
+                .and_then(|a| a.as_array());
+            for a in listed.into_iter().flatten() {
+                if let Some(name) = a.get("name").and_then(|n| n.as_str()) {
+                    names.push(name.to_string());
+                }
+            }
+        }
+        if let Some(ws) = workspace {
+            let dir = crate::chat_files::topic_dir(Path::new(ws), root);
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    names.push(entry.file_name().to_string_lossy().to_string());
+                }
+            }
+        }
+        Ok(names)
+    }
+
     /// Checks the files a message names before anything is written (attachments spec section
     /// 4.3): each is a file of this dot that no message took (or that `scheduled_id` holds),
     /// and its stored copy is there. Answers them in order.
@@ -2057,14 +2086,20 @@ impl Runtime {
             new.base_commit = parent.base_commit.clone();
         }
         // Names are fixed now, unique in the topic ignoring case, with the names it already
-        // has and `.gitignore` taken (attachments spec section 3.1).
+        // has, a watcher root's files, whatever is in its folder now and `.gitignore` taken
+        // (attachments spec section 3.1).
         let mut links = Vec::with_capacity(files.len());
         if !files.is_empty() {
             let mut all = match &new.root_run_id {
-                Some(root) => self.store.topic_attachment_names(root).await?,
+                Some(root) => {
+                    self.taken_names(root, new.workspace_path.as_deref())
+                        .await?
+                }
                 None => Vec::new(),
             };
             all.push(crate::chat_files::IGNORE_FILE.to_string());
+            let mut seen = HashSet::new();
+            all.retain(|n| seen.insert(n.to_lowercase()));
             let taken = all.len();
             all.extend(files.iter().map(|f| f.file_name.clone()));
             let unique = crate::watchers::files::unique_names(&all);

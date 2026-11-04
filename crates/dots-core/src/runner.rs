@@ -397,16 +397,18 @@ impl Runner {
         if topic.is_empty() {
             return Ok(());
         }
-        let (files, root, workspace) = (
+        let (files, root, workspace, run_id) = (
             files.clone(),
             run.root_run_id.clone(),
             workspace.to_path_buf(),
+            run.id.clone(),
         );
         let listed = topic.clone();
-        let failed =
-            tokio::task::spawn_blocking(move || files.copy_into(&root, &listed, &workspace))
-                .await
-                .map_err(|e| Error::Other(format!("copying the attached files failed: {e}")))?;
+        let failed = tokio::task::spawn_blocking(move || {
+            files.copy_into(&root, &listed, &workspace, &run_id)
+        })
+        .await
+        .map_err(|e| Error::Other(format!("copying the attached files failed: {e}")))?;
         let mut notices = Vec::new();
         for (id, e) in failed {
             let Some(file) = topic.iter().find(|f| f.id == id) else {
