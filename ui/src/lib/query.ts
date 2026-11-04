@@ -67,6 +67,9 @@ export const keys = {
   schedulePreview: (schedule: Schedule | null) => ["schedule-preview", schedule] as const,
   webhookUrl: (dotId: string) => ["webhook-url", dotId] as const,
   runs: (dotId: string) => ["runs", dotId] as const,
+  /// Today's sent, delivered and not delivered counts for a dot, under the runs' key so a
+  /// run_updated refreshes it.
+  deliveryToday: (dotId: string) => ["runs", dotId, "delivery-today"] as const,
   thread: (runId: string) => ["thread", runId] as const,
   events: (runId: string) => ["events", runId] as const,
   approvals: (runId: string) => ["approvals", runId] as const,

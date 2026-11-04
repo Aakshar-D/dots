@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { Dot } from "@/api/types";
 import { localTime } from "@/lib/format";
 import { backend, later } from "@/test/backend";
-import { dot, home, overview, scheduled } from "@/test/home";
+import { chat, dot, home, overview, scheduled } from "@/test/home";
 import { renderApp } from "@/test/render";
 
 /// Opens the menu under the dot's name in the header.
@@ -196,5 +196,19 @@ describe("the dot's menu", () => {
     await act(async () => answer.fail({ kind: "internal", message: "database is locked" }));
     expect(await screen.findByLabelText("Enabled")).toBeChecked();
     expect(screen.getByText("database is locked")).toBeVisible();
+  });
+
+  it("shows today's counts, and fetches them again when a run of the dot changes", async () => {
+    home([]);
+    let counts = { sent: 5, delivered: 4, not_delivered: 1 };
+    backend.on("delivery_today", () => counts);
+    const { user } = renderApp(`/home/${dot.id}`);
+    const menu = await openMenu(user);
+    expect(await within(menu).findByText("Today: 5 sent · 4 delivered · 1 not delivered")).toBeVisible();
+    expect(backend.callsTo("delivery_today")).toEqual([{ dotId: dot.id }]);
+
+    counts = { sent: 6, delivered: 5, not_delivered: 1 };
+    act(() => backend.emit("runtime", { type: "run_updated", run: chat("r1", "10:00") }));
+    expect(await within(menu).findByText("Today: 6 sent · 5 delivered · 1 not delivered")).toBeVisible();
   });
 });

@@ -21,8 +21,8 @@ use crate::events::{new_bus, Bus, RuntimeEvent};
 use crate::followups::FollowUps;
 use crate::library_service::LibraryService;
 use crate::model::{
-    Approval, AttentionRun, ClaudeStatus, Dot, DotOverview, DotSpec, EngineKind, Inbox,
-    MessageKind, NewRun, PendingApproval, ReviewRun, Run, RunEventRecord, RunStatus,
+    Approval, AttentionRun, ClaudeStatus, DeliveryCounts, Dot, DotOverview, DotSpec, EngineKind,
+    Inbox, MessageKind, NewRun, PendingApproval, ReviewRun, Run, RunEventRecord, RunStatus,
     ScheduleChange, ScheduleSkip, ScheduleView, SettingsSaved, Status, TriggerKind, WorktreeDiff,
 };
 use crate::policy::{allow_candidates, Action, Rule, RuleCandidate};
@@ -46,6 +46,9 @@ pub const SKILLS_DIR: &str = "skills";
 
 /// The data folder's folder where each skill draft's CLI starts (skill creator spec §5).
 pub const DRAFTS_DIR: &str = "drafts";
+
+/// Retry's and Discard's refusal for a message the dispatcher has just claimed.
+const JUST_REACHED: &str = "this message has just reached the dot";
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -388,6 +391,15 @@ impl Runtime {
             );
         }
         runner.spawn_dispatcher(shutdown.clone());
+        // A run that waits 30 minutes without reaching its dot is marked not delivered
+        // (delivery tracking spec section 3).
+        Arc::new(crate::delivery::DeliverySweeper::new(
+            store.clone(),
+            runner.clone(),
+            bus.clone(),
+            cfg.clock.clone(),
+        ))
+        .spawn(shutdown.clone());
         // The runs apps start are queued as the runner's, and apps hear when a run of a topic
         // they started ends (app library spec section 7).
         let starting = Arc::downgrade(&runner);
@@ -670,19 +682,46 @@ impl Runtime {
             .collect())
     }
 
+    /// Sets why each waiting run waits (`Runner::fill_wait_reasons`). The reason only explains
+    /// a wait, so failing to read it fails nothing: it is logged and every reason left `None`.
+    async fn fill_wait_reasons(&self, runs: &mut [Run]) {
+        if let Err(e) = self.runner.fill_wait_reasons(runs).await {
+            tracing::warn!("reading why runs wait failed: {e}");
+            for run in runs.iter_mut() {
+                run.wait_reason = None;
+            }
+        }
+    }
+
     /// Newest first; `limit` is clamped to 1..=500.
     pub async fn list_runs(&self, dot_id: Option<&str>, limit: i64) -> Result<Vec<Run>> {
-        self.store.list_runs(dot_id, limit.clamp(1, 500)).await
+        let mut runs = self.store.list_runs(dot_id, limit.clamp(1, 500)).await?;
+        self.fill_wait_reasons(&mut runs).await;
+        Ok(runs)
     }
 
     pub async fn get_run(&self, id: &str) -> Result<Run> {
-        self.store.get_run(id).await
+        let mut run = self.store.get_run(id).await?;
+        self.fill_wait_reasons(std::slice::from_mut(&mut run)).await;
+        Ok(run)
+    }
+
+    /// Why `run` is still waiting to reach its dot; `None` unless it is queued and not yet
+    /// delivered (delivery tracking spec section 3).
+    pub async fn wait_reason(&self, run: &Run) -> Result<Option<crate::model::WaitReason>> {
+        let mut run = run.clone();
+        self.runner
+            .fill_wait_reasons(std::slice::from_mut(&mut run))
+            .await?;
+        Ok(run.wait_reason)
     }
 
     /// The whole lineage (root, resumes, chat follow-ups) `run_id` belongs to, oldest first.
     pub async fn run_thread(&self, run_id: &str) -> Result<Vec<Run>> {
         let run = self.store.get_run(run_id).await?;
-        self.store.list_thread(&run.root_run_id).await
+        let mut runs = self.store.list_thread(&run.root_run_id).await?;
+        self.fill_wait_reasons(&mut runs).await;
+        Ok(runs)
     }
 
     pub async fn list_run_events(
@@ -1416,8 +1455,14 @@ impl Runtime {
                     .into(),
                 ));
             }
-            // The parent is taken from this reading of the thread, in which it has ended.
-            let Some(parent) = thread.last().filter(|r| r.id == pid) else {
+            // The parent is taken from this reading of the thread, in which it has ended. A
+            // message that never reached the dot and was retried or discarded (delivery
+            // tracking spec section 3.9) is not part of the conversation: the end is the last
+            // run that is not one of those.
+            let live = thread
+                .iter()
+                .rfind(|r| r.dismissed_at.is_none() || r.delivered_at.is_some());
+            let Some(parent) = live.filter(|r| r.id == pid) else {
                 return Err(Error::Conflict(
                     "this chat has a newer message than the one you replied to; open the chat \
                      again, then send your message"
@@ -1447,6 +1492,110 @@ impl Runtime {
 
     pub async fn cancel_run(&self, run_id: &str) -> Result<Run> {
         self.runner.cancel(run_id).await
+    }
+
+    /// Sends a chat message that did not get there again (delivery tracking spec sections 3.9
+    /// and 4.4): the old run is dismissed (cancelled first if it still waits), then the same
+    /// text goes through the chat path at the old run's place in the thread. A send the chat
+    /// path refuses leaves the old run as it was, so the person can try again. Returns the new
+    /// run. `NotFound` for an unknown run; `Conflict` unless it is a chat message marked not
+    /// delivered and not yet retried or discarded.
+    pub async fn retry_delivery(&self, run_id: &str) -> Result<Run> {
+        let run = self.dismiss_undelivered(run_id).await?;
+        let text = ["answer", "message"].iter().find_map(|k| {
+            run.payload
+                .as_ref()
+                .and_then(|p| p.get(*k))
+                .and_then(|v| v.as_str())
+                .map(str::to_owned)
+        });
+        let Some(text) = text else {
+            let old = self.store.undismiss_run(run_id).await?;
+            self.emit_run_updated(old);
+            return Err(Error::Invalid(
+                "this message has no text to send again".into(),
+            ));
+        };
+        match self
+            .chat(&run.dot_id, &text, run.parent_run_id.as_deref())
+            .await
+        {
+            Ok(new) => {
+                self.emit_run_updated(run);
+                Ok(new)
+            }
+            Err(e) => {
+                match self.store.undismiss_run(run_id).await {
+                    Ok(old) => self.emit_run_updated(old),
+                    Err(u) => tracing::warn!(run = %run_id, "undoing a refused retry failed: {u}"),
+                }
+                Err(e)
+            }
+        }
+    }
+
+    /// Puts away a chat message that did not get there (delivery tracking spec section 4.4):
+    /// the run is dismissed, and cancelled first if it still waits so it never starts later.
+    /// Returns the dismissed run. Same refusals as `retry_delivery`.
+    pub async fn discard_delivery(&self, run_id: &str) -> Result<Run> {
+        let run = self.dismiss_undelivered(run_id).await?;
+        self.emit_run_updated(run.clone());
+        Ok(run)
+    }
+
+    /// Retry's and Discard's first steps: checks the run and dismisses it, cancelling it if it
+    /// is still queued (the cancel's write dismisses a marked run). Returns the dismissed run.
+    async fn dismiss_undelivered(&self, run_id: &str) -> Result<Run> {
+        let run = self.store.get_run(run_id).await?;
+        if run.trigger != TriggerKind::Chat {
+            return Err(Error::Conflict(
+                "only a chat message can be retried or discarded".into(),
+            ));
+        }
+        if run.undelivered_at.is_none() || run.delivered_at.is_some() {
+            return Err(Error::Conflict(
+                "this message is not marked as not delivered".into(),
+            ));
+        }
+        if run.dismissed_at.is_some() {
+            return Err(Error::Conflict(
+                "this message was already retried or discarded".into(),
+            ));
+        }
+        if run.status == RunStatus::Queued {
+            return match self.runner.cancel_if_queued(run_id).await? {
+                Some(run) => Ok(run),
+                None => Err(Error::Conflict(JUST_REACHED.into())),
+            };
+        }
+        // Claimed by the dispatcher: its engine is starting on it, so it stays.
+        if !run.status.is_terminal() {
+            return Err(Error::Conflict(JUST_REACHED.into()));
+        }
+        match self.store.dismiss_run(run_id, self.clock.now()).await? {
+            Some(run) => Ok(run),
+            None => Err(Error::Conflict(
+                "this message was already retried or discarded".into(),
+            )),
+        }
+    }
+
+    fn emit_run_updated(&self, run: Run) {
+        let _ = self.bus.send(RuntimeEvent::RunUpdated { run });
+    }
+
+    /// The dot's sends today, local time (delivery tracking spec sections 3.8 and 4.5).
+    /// `NotFound` for an unknown dot.
+    pub async fn delivery_today(&self, dot_id: &str) -> Result<DeliveryCounts> {
+        self.store.get_dot(dot_id).await?;
+        let (start, end) = crate::delivery::local_day_bounds(self.clock.now(), &Local);
+        self.store
+            .delivery_counts(
+                dot_id,
+                &crate::util::timestamp(start),
+                &crate::util::timestamp(end),
+            )
+            .await
     }
 
     /// Keep waiting on a quiet run (stuck-run watchdog spec section 4.4): the mark goes and the

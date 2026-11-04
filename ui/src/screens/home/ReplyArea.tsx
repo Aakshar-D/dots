@@ -57,14 +57,17 @@ export function ReplyArea(props: {
   const { dotId, dotName, shown, pick, onPick, olderRoot } = props;
   const qc = useQueryClient();
   const navigate = useNavigate();
-  const target = replyTarget(pick, shown, olderRoot);
+  const picked = replyTarget(pick, shown, olderRoot);
+  // A topic with nothing left to continue (its only message was discarded) gets a new topic.
+  const continues = picked !== undefined ? lastRun(picked) : undefined;
+  const target = continues !== undefined ? picked : undefined;
   const { removed } = useDotOrg(props.orgId);
   const blocked = removed && props.orgId !== null ? orgRemovedText(props.orgId) : undefined;
   const busy = target?.runs.some(isActive) ?? false;
   const approving = target?.runs.some((run) => run.status === "awaiting_approval") ?? false;
   // A reply resumes the last run's session. A run that ended before its engine had one (a
   // failed start, a cancel while queued) leaves nothing to resume: the core refuses it.
-  const closed = target !== undefined && !busy && lastRun(target).session_id === null;
+  const closed = continues !== undefined && !busy && continues.session_id === null;
   const runIds = new Set(shown.flatMap((topic) => topic.runs.map((run) => run.id)));
   const open = props.checkIns.filter(
     (m) => m.run_id !== null && runIds.has(m.run_id) && isOpenQuestion(m),
@@ -90,7 +93,7 @@ export function ReplyArea(props: {
   };
   const send = useMutation({
     mutationFn: (message: string) =>
-      commands.chat(dotId, message, target ? lastRun(target).id : null),
+      commands.chat(dotId, message, continues?.id ?? null),
     onSuccess: (run) => {
       onPick({ kind: "default" });
       follow(run.root_run_id);
