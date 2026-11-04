@@ -109,6 +109,24 @@ describe("runtime events and the query cache", () => {
     ]);
   });
 
+  it("marks the inbox and the overview stale when the Inbox's marks change", () => {
+    const qc = createQueryClient();
+    for (const key of [keys.inbox, keys.overview, keys.dots]) qc.setQueryData(key, []);
+    applyRuntimeEvent(qc, { type: "inbox_updated" });
+    expect([stale(qc, keys.inbox), stale(qc, keys.overview), stale(qc, keys.dots)]).toEqual([
+      true,
+      true,
+      false,
+    ]);
+  });
+
+  it("leaves the caches to the inbox update that comes with items back from snooze", () => {
+    const qc = createQueryClient();
+    for (const key of [keys.inbox, keys.overview]) qc.setQueryData(key, []);
+    applyRuntimeEvent(qc, { type: "snooze_ended", items: [] });
+    expect([stale(qc, keys.inbox), stale(qc, keys.overview)]).toEqual([false, false]);
+  });
+
   it("marks the dots, the overview and the inbox stale on a schedule update", () => {
     const qc = createQueryClient();
     const lists = [keys.dots, keys.overview, keys.inbox];

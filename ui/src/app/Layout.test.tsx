@@ -35,8 +35,9 @@ describe("the app frame", () => {
     }
     // One pending approval, one run to review, one schedule that needs attention, one MCP
     // server whose tools changed, one paused watcher, the runs held for Claude usage, one
-    // proposed instruction and one app sent for review.
-    expect(await within(nav).findByRole("link", { name: "Inbox, 8 waiting" })).toBeVisible();
+    // proposed instruction, one app sent for review, one team scope problem and one message
+    // that did not reach its dot.
+    expect(await within(nav).findByRole("link", { name: "Inbox, 10 waiting" })).toBeVisible();
   });
 
   it("counts approvals of the dots of an account that is not the current one", async () => {
@@ -45,7 +46,7 @@ describe("the app frame", () => {
     backend.on("dot_overview", () => [{ ...idle, dot: { ...sample.dot, org_id: null } }]);
     renderApp("/dots");
     const nav = await screen.findByRole("navigation", { name: "Main" });
-    expect(await within(nav).findByRole("link", { name: "Inbox, 8 waiting" })).toBeVisible();
+    expect(await within(nav).findByRole("link", { name: "Inbox, 10 waiting" })).toBeVisible();
   });
 
   it("shows why Dots could not start instead of the app", async () => {
@@ -361,7 +362,7 @@ describe("the app frame", () => {
     await listening();
     backend.on("inbox", () => sample.inbox);
     act(() => backend.emit("runtime", { type: "approval_requested", approval: sample.approval }));
-    expect(await within(nav).findByRole("link", { name: "Inbox, 8 waiting" })).toBeVisible();
+    expect(await within(nav).findByRole("link", { name: "Inbox, 10 waiting" })).toBeVisible();
   });
 });
 

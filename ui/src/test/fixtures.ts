@@ -24,7 +24,8 @@ export const sample = {
   contextDocuments: T.ContextDocuments.parse(contract.ContextDocuments),
   installedPlugins: T.InstalledPlugin.array().parse(contract.InstalledPlugin),
   probe: T.McpProbe.parse(contract.McpProbe),
-  inbox: T.Inbox.parse(contract.Inbox),
+  /// The contract's Inbox without its snooze and done marks, which are there for the shapes.
+  inbox: { ...T.Inbox.parse(contract.Inbox), back: [], snoozed: [], done: [], hidden_messages: [] },
   /// Holding two runs at 64% of the 5-hour window, then nothing held.
   limits: T.LimitsState.array().parse(contract.LimitsState),
   /// A week: nightly-tests (Claude, heaviest) and local-summarizer (local, no cost).
