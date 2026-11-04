@@ -75,7 +75,11 @@ fn ordinary_files_are_not_private() {
 
 #[test]
 fn every_file_tool_and_its_path_fields_count() {
-    assert!(touches_private("Write", &read("~/.ssh/authorized_keys"), None));
+    assert!(touches_private(
+        "Write",
+        &read("~/.ssh/authorized_keys"),
+        None
+    ));
     assert!(touches_private("Edit", &read(".env"), None));
     assert!(touches_private(
         "NotebookEdit",
@@ -83,18 +87,38 @@ fn every_file_tool_and_its_path_fields_count() {
         None
     ));
     assert!(touches_private("LS", &json!({ "path": "~/.ssh" }), None));
-    assert!(touches_private("Glob", &json!({ "pattern": "**/.env*" }), None));
-    assert!(touches_private("Glob", &json!({ "pattern": "~/.ss?/*" }), None));
+    assert!(touches_private(
+        "Glob",
+        &json!({ "pattern": "**/.env*" }),
+        None
+    ));
+    assert!(touches_private(
+        "Glob",
+        &json!({ "pattern": "~/.ss?/*" }),
+        None
+    ));
     assert!(touches_private(
         "Grep",
         &json!({ "pattern": "x", "glob": ".env.*" }),
         None
     ));
     // A search pattern is a regular expression, not a path.
-    assert!(!touches_private("Grep", &json!({ "pattern": ".ssh" }), None));
+    assert!(!touches_private(
+        "Grep",
+        &json!({ "pattern": ".ssh" }),
+        None
+    ));
     // A wildcard that does not start with a dot skips hidden files.
-    assert!(!touches_private("Glob", &json!({ "pattern": "**/*" }), None));
-    assert!(!touches_private("Grep", &json!({ "pattern": "x", "glob": "*.rs" }), None));
+    assert!(!touches_private(
+        "Glob",
+        &json!({ "pattern": "**/*" }),
+        None
+    ));
+    assert!(!touches_private(
+        "Grep",
+        &json!({ "pattern": "x", "glob": "*.rs" }),
+        None
+    ));
 }
 
 #[test]
@@ -131,7 +155,11 @@ fn other_tools_are_not_judged() {
         &json!({ "url": "https://x.test/.env" }),
         None
     ));
-    assert!(!touches_private("TodoWrite", &json!({ "todos": [".env"] }), None));
+    assert!(!touches_private(
+        "TodoWrite",
+        &json!({ "todos": [".env"] }),
+        None
+    ));
 }
 
 #[test]
@@ -144,17 +172,33 @@ fn the_vault_is_private_by_its_absolute_path() {
     let upper = vault.to_uppercase();
     assert!(touches_private("Read", &read(&upper), None));
     let through = data.join("worktrees").join("..").join("vault").join("x");
-    assert!(touches_private("Read", &read(&through.to_string_lossy()), None));
+    assert!(touches_private(
+        "Read",
+        &read(&through.to_string_lossy()),
+        None
+    ));
     let cmd = format!("cat \"{}\"", data.join("vault").join("x").display());
     assert!(touches_private("Bash", &bash(&cmd), None));
     // The data folder's other parts are not private.
     let other = data.join("worktrees").join("run").join("a.txt");
-    assert!(!touches_private("Read", &read(&other.to_string_lossy()), None));
+    assert!(!touches_private(
+        "Read",
+        &read(&other.to_string_lossy()),
+        None
+    ));
     // A relative path is also judged inside the run's folder.
     let ws = data.join("vault");
-    assert!(touches_private("Read", &read("x.txt"), Some(Path::new(&ws))));
+    assert!(touches_private(
+        "Read",
+        &read("x.txt"),
+        Some(Path::new(&ws))
+    ));
     let ws = data.join("worktrees").join("run");
-    assert!(!touches_private("Read", &read("x.txt"), Some(Path::new(&ws))));
+    assert!(!touches_private(
+        "Read",
+        &read("x.txt"),
+        Some(Path::new(&ws))
+    ));
 }
 
 #[test]
@@ -185,13 +229,13 @@ fn a_rule_pattern_that_names_or_covers_a_private_place_is_private() {
     ] {
         assert!(!pattern_touches_private(pattern), "{pattern}");
     }
-    assert!(!pattern_touches_private(&format!("Read({home}/projects/**)")));
+    assert!(!pattern_touches_private(&format!(
+        "Read({home}/projects/**)"
+    )));
 }
 
 mod resolve {
-    use dots_core::policy::{
-        allow_candidates, Action, Policy, Preset, Rule, PLUMBING_TOOLS,
-    };
+    use dots_core::policy::{allow_candidates, Action, Policy, Preset, Rule, PLUMBING_TOOLS};
     use serde_json::json;
 
     use super::{bash, home, read};
@@ -199,9 +243,18 @@ mod resolve {
     #[test]
     fn a_private_call_asks_under_every_preset_that_would_allow_it() {
         let ssh = read("~/.ssh/id_rsa");
-        assert_eq!(Policy::preset(Preset::Trusted).resolve("Read", &ssh), Action::Ask);
-        assert_eq!(Policy::preset(Preset::Sandboxed).resolve("Read", &ssh), Action::Ask);
-        assert_eq!(Policy::preset(Preset::ReadOnly).resolve("Read", &ssh), Action::Ask);
+        assert_eq!(
+            Policy::preset(Preset::Trusted).resolve("Read", &ssh),
+            Action::Ask
+        );
+        assert_eq!(
+            Policy::preset(Preset::Sandboxed).resolve("Read", &ssh),
+            Action::Ask
+        );
+        assert_eq!(
+            Policy::preset(Preset::ReadOnly).resolve("Read", &ssh),
+            Action::Ask
+        );
         assert_eq!(
             Policy::preset(Preset::Trusted).resolve("Bash", &bash("cat ~/.aws/credentials")),
             Action::Ask
@@ -254,7 +307,12 @@ mod resolve {
             "KillBash",
         ] {
             assert!(PLUMBING_TOOLS.contains(&tool), "{tool}");
-            for preset in [Preset::ReadOnly, Preset::Sandboxed, Preset::Trusted, Preset::Custom] {
+            for preset in [
+                Preset::ReadOnly,
+                Preset::Sandboxed,
+                Preset::Trusted,
+                Preset::Custom,
+            ] {
                 assert_eq!(
                     Policy::preset(preset).resolve(tool, &json!({})),
                     Action::Allow,
@@ -263,9 +321,17 @@ mod resolve {
             }
             let mut p = Policy::preset(Preset::Sandboxed);
             p.rules.push(Rule::new(tool, Action::Ask));
-            assert_eq!(p.resolve(tool, &json!({})), Action::Ask, "{tool} with an ask rule");
+            assert_eq!(
+                p.resolve(tool, &json!({})),
+                Action::Ask,
+                "{tool} with an ask rule"
+            );
             p.rules.push(Rule::new(tool, Action::Deny));
-            assert_eq!(p.resolve(tool, &json!({})), Action::Deny, "{tool} with a deny rule");
+            assert_eq!(
+                p.resolve(tool, &json!({})),
+                Action::Deny,
+                "{tool} with a deny rule"
+            );
         }
         // Not plumbing: they leave the machine, start real work, or read a `file://` resource.
         for tool in ["WebSearch", "WebFetch", "Workflow", "ReadMcpResourceTool"] {
@@ -282,7 +348,9 @@ mod resolve {
         assert!(allow_candidates("Read", &read("~/.ssh/id_rsa"), None).is_empty());
         assert!(allow_candidates("Read", &read("C:/Users/me/.ssh/id_rsa"), None).is_empty());
         assert!(allow_candidates("Edit", &read("app/.env"), None).is_empty());
-        assert!(allow_candidates("Bash", &bash("cat C:/Users/me/.aws/credentials"), None).is_empty());
+        assert!(
+            allow_candidates("Bash", &bash("cat C:/Users/me/.aws/credentials"), None).is_empty()
+        );
         assert!(allow_candidates("Bash", &bash("cat .env"), None).is_empty());
         // Ordinary calls still get their rules.
         assert!(!allow_candidates("Read", &read("src/a.rs"), None).is_empty());
@@ -312,8 +380,14 @@ mod review {
     fn a_search_or_listing_of_a_folder_that_holds_a_private_place_is_private() {
         let home = home();
         for tool in ["Grep", "Glob", "LS"] {
-            assert!(touches_private(tool, &json!({ "path": "~", "pattern": "x" }), None), "{tool} ~");
-            assert!(touches_private(tool, &json!({ "path": &home, "pattern": "x" }), None), "{tool} home");
+            assert!(
+                touches_private(tool, &json!({ "path": "~", "pattern": "x" }), None),
+                "{tool} ~"
+            );
+            assert!(
+                touches_private(tool, &json!({ "path": &home, "pattern": "x" }), None),
+                "{tool} home"
+            );
             assert!(
                 touches_private(tool, &json!({ "path": "~/.config", "pattern": "x" }), None),
                 "{tool} ~/.config"
@@ -325,7 +399,11 @@ mod review {
             );
             // A folder that holds none is not.
             assert!(
-                !touches_private(tool, &json!({ "path": "~/projects/app", "pattern": "x" }), None),
+                !touches_private(
+                    tool,
+                    &json!({ "path": "~/projects/app", "pattern": "x" }),
+                    None
+                ),
                 "{tool} ~/projects/app"
             );
         }
@@ -350,18 +428,33 @@ mod review {
             assert!(touches_private("Bash", &bash(cmd), None), "{cmd}");
         }
         for pattern in ["~/*ssh/*", "~/**/config", "~/*/id_rsa"] {
-            assert!(touches_private("Glob", &json!({ "pattern": pattern }), None), "{pattern}");
+            assert!(
+                touches_private("Glob", &json!({ "pattern": pattern }), None),
+                "{pattern}"
+            );
         }
         // Wildcards elsewhere stay ordinary.
-        assert!(!touches_private("Glob", &json!({ "pattern": "src/**/*.rs" }), None));
+        assert!(!touches_private(
+            "Glob",
+            &json!({ "pattern": "src/**/*.rs" }),
+            None
+        ));
         assert!(!touches_private("Bash", &bash("ls ~/*.txt"), None));
         assert!(!touches_private("Bash", &bash("echo a,b {x}"), None));
     }
 
     #[test]
     fn dot_dot_is_resolved_before_matching_a_place_of_two_parts() {
-        assert!(touches_private("Read", &read("~/.config/x/../gh/hosts.yml"), None));
-        assert!(touches_private("Read", &read("C:/Users/me/AppData/Roaming/Microsoft/x/../Credentials/a"), None));
+        assert!(touches_private(
+            "Read",
+            &read("~/.config/x/../gh/hosts.yml"),
+            None
+        ));
+        assert!(touches_private(
+            "Read",
+            &read("C:/Users/me/AppData/Roaming/Microsoft/x/../Credentials/a"),
+            None
+        ));
     }
 
     #[test]
@@ -381,8 +474,17 @@ mod review {
         ] {
             assert!(touches_private("Read", &read(path), None), "{path}");
         }
-        assert!(touches_private("Glob", &json!({ "pattern": "**/*.pem" }), None));
-        for path in ["src/keyboard.rs", "docs/environment.md", "src/monkey.ts", "README.md"] {
+        assert!(touches_private(
+            "Glob",
+            &json!({ "pattern": "**/*.pem" }),
+            None
+        ));
+        for path in [
+            "src/keyboard.rs",
+            "docs/environment.md",
+            "src/monkey.ts",
+            "README.md",
+        ] {
             assert!(!touches_private("Read", &read(path), None), "{path}");
         }
     }

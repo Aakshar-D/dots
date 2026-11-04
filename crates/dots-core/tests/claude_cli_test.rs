@@ -187,8 +187,16 @@ fn argv_asks_for_private_folders_and_never_for_plumbing() {
     let mut c = ctx(None);
     c.dot.spec.policy = Policy::preset(Preset::Trusted);
     // A prefix deny and an ask rule keep their tools out of the allow list.
-    c.dot.spec.policy.rules.push(Rule::new("Todo*", Action::Deny));
-    c.dot.spec.policy.rules.push(Rule::new("Agent", Action::Ask));
+    c.dot
+        .spec
+        .policy
+        .rules
+        .push(Rule::new("Todo*", Action::Deny));
+    c.dot
+        .spec
+        .policy
+        .rules
+        .push(Rule::new("Agent", Action::Ask));
     let args = build_args(&c, Path::new("m.json"));
     let allowed: Vec<&String> = args
         .iter()
@@ -196,11 +204,18 @@ fn argv_asks_for_private_folders_and_never_for_plumbing() {
         .skip(1)
         .take_while(|a| !a.starts_with("--"))
         .collect();
-    for tool in PLUMBING_TOOLS.iter().filter(|t| !["TodoWrite", "Agent"].contains(*t)) {
+    for tool in PLUMBING_TOOLS
+        .iter()
+        .filter(|t| !["TodoWrite", "Agent"].contains(*t))
+    {
         assert!(allowed.iter().any(|a| a == tool), "{tool} in {allowed:?}");
     }
     // Searches always reach `approve`, so Dots can judge the folder they start in.
-    c.dot.spec.policy.rules.push(Rule::new("Grep(src/**)", Action::Allow));
+    c.dot
+        .spec
+        .policy
+        .rules
+        .push(Rule::new("Grep(src/**)", Action::Allow));
     let searched = build_args(&c, Path::new("m.json"));
     let allowed_now: Vec<&String> = searched
         .iter()
@@ -209,17 +224,23 @@ fn argv_asks_for_private_folders_and_never_for_plumbing() {
         .take_while(|a| !a.starts_with("--"))
         .collect();
     assert!(
-        !allowed_now
+        !allowed_now.iter().any(|a| ["Grep", "Glob", "LS"]
             .iter()
-            .any(|a| ["Grep", "Glob", "LS"].iter().any(|t| a == t || a.starts_with(&format!("{t}(")))),
+            .any(|t| a == t || a.starts_with(&format!("{t}(")))),
         "{allowed_now:?}"
     );
     // A denied or asked plumbing tool is not also allowed.
     assert!(!allowed.iter().any(|a| *a == "TodoWrite" || *a == "Agent"));
     // The settings go in a file next to the MCP config, never inline: a configured `.cmd`
     // program would hand an inline JSON argument to cmd.exe.
-    let i = args.iter().position(|a| a == "--settings").expect("--settings");
-    assert_eq!(args[i + 1], settings_path(Path::new("m.json")).to_string_lossy());
+    let i = args
+        .iter()
+        .position(|a| a == "--settings")
+        .expect("--settings");
+    assert_eq!(
+        args[i + 1],
+        settings_path(Path::new("m.json")).to_string_lossy()
+    );
     let settings = cli_settings();
     let ask: Vec<&str> = settings["permissions"]["ask"]
         .as_array()

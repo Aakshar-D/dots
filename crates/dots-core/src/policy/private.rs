@@ -180,9 +180,9 @@ fn expand(text: &str) -> String {
             let starts = prev.is_none_or(|p| {
                 p.is_whitespace() || SEPARATORS.contains(&p) || SUB_SEPARATORS.contains(&p)
             });
-            let ends = chars.get(i + 1).is_none_or(|n| {
-                matches!(n, '/' | '\\' | ',' | '}') || n.is_whitespace()
-            });
+            let ends = chars
+                .get(i + 1)
+                .is_none_or(|n| matches!(n, '/' | '\\' | ',' | '}') || n.is_whitespace());
             if c == '~' && starts && ends {
                 out.push_str(&home);
             } else {
@@ -203,7 +203,9 @@ fn brace_variants(word: &str) -> Vec<String> {
     while let Some(w) = todo.pop() {
         // The first innermost group: a `{` with no `{` before its `}`.
         let Some(close) = w.find('}') else { continue };
-        let Some(open) = w[..close].rfind('{') else { continue };
+        let Some(open) = w[..close].rfind('{') else {
+            continue;
+        };
         let inner = &w[open + 1..close];
         if !inner.contains(',') {
             continue;
@@ -364,7 +366,9 @@ fn text_is_private(text: &str) -> bool {
 /// True when the folder a search or listing starts from holds a private place (or is one).
 fn holds_private(dir: &str) -> bool {
     let (abs, normalized) = lexical_normalize(dir);
-    abs && concrete_places().iter().any(|place| inside(place, &normalized))
+    abs && concrete_places()
+        .iter()
+        .any(|place| inside(place, &normalized))
 }
 
 /// True when a call of `tool` touches a private place: a file tool's path (or its Glob/Grep
@@ -419,7 +423,10 @@ pub fn touches_private(tool: &str, input: &Value, workspace: Option<&Path>) -> b
     }
     let searches = matches!(tool, "Grep" | "Glob" | "LS");
     let dir = path.map(str::to_string).or_else(|| ws.clone());
-    searches && dir.and_then(|d| resolved(&d)).is_some_and(|d| holds_private(&d))
+    searches
+        && dir
+            .and_then(|d| resolved(&d))
+            .is_some_and(|d| holds_private(&d))
 }
 
 /// True when a rule pattern names a private place (`Read(~/.ssh/**)`, `Bash(cat .env)`) or
@@ -427,10 +434,7 @@ pub fn touches_private(tool: &str, input: &Value, workspace: Option<&Path>) -> b
 /// does.
 pub fn pattern_touches_private(pattern: &str) -> bool {
     let pattern = pattern.trim();
-    let Some((tool, spec)) = pattern
-        .strip_suffix(')')
-        .and_then(|p| p.split_once('('))
-    else {
+    let Some((tool, spec)) = pattern.strip_suffix(')').and_then(|p| p.split_once('(')) else {
         return false;
     };
     if COMMAND_TOOLS.contains(&tool) {
@@ -461,8 +465,18 @@ pub fn cli_private_ask_rules() -> Vec<String> {
         .collect();
     dirs.extend(vault_tails.iter().cloned());
     let files = [
-        ".env", ".env.*", ".env-*", ".envrc", "*.env", "*.pem", "*.key", "*.p12", "*.pfx",
-        "id_rsa*", "id_ed25519*", "id_ecdsa*",
+        ".env",
+        ".env.*",
+        ".env-*",
+        ".envrc",
+        "*.env",
+        "*.pem",
+        "*.key",
+        "*.p12",
+        "*.pfx",
+        "id_rsa*",
+        "id_ed25519*",
+        "id_ecdsa*",
     ];
     let mut rules = Vec::new();
     // The CLI reads `Edit` rules for every file-editing tool and ignores `Write` ones.
@@ -479,8 +493,17 @@ pub fn cli_private_ask_rules() -> Vec<String> {
         .iter()
         .flat_map(|p| [p.join("/"), p.join("\\")])
         .chain(
-            [".env", ".pem", ".key", ".p12", ".pfx", "id_rsa", "id_ed25519", "id_ecdsa"]
-                .map(String::from),
+            [
+                ".env",
+                ".pem",
+                ".key",
+                ".p12",
+                ".pfx",
+                "id_rsa",
+                "id_ed25519",
+                "id_ecdsa",
+            ]
+            .map(String::from),
         )
         .chain(
             vault_tails

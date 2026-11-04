@@ -4,7 +4,9 @@ use std::path::PathBuf;
 
 use common::{init_repo, spec, wait_status};
 use dots_core::checkins::Tool;
-use dots_core::model::{ApprovalStatus, DotSpec, MessageKind, NewRun, RunStatus, TriggerKind, WorkspaceMode};
+use dots_core::model::{
+    ApprovalStatus, DotSpec, MessageKind, NewRun, RunStatus, TriggerKind, WorkspaceMode,
+};
 use dots_core::store::Store;
 use dots_core::{Config, Error, Runtime};
 use serde_json::{json, Value};
@@ -795,7 +797,12 @@ async fn a_private_folder_gets_no_rule_and_a_forged_one_is_refused() {
             .unwrap()
             .remove(0);
     assert!(t.rt.approval_touches_private(&approval.id).await.unwrap());
-    assert!(t.rt.approval_rule_candidates(&approval.id).await.unwrap().is_empty());
+    assert!(t
+        .rt
+        .approval_rule_candidates(&approval.id)
+        .await
+        .unwrap()
+        .is_empty());
     let err =
         t.rt.decide_approval(&approval.id, true, None, Some("Bash(cat .env)".into()))
             .await
@@ -806,9 +813,15 @@ async fn a_private_folder_gets_no_rule_and_a_forged_one_is_refused() {
     );
     let still = t.rt.store().get_approval(&approval.id).await.unwrap();
     assert_eq!(still.status, ApprovalStatus::Pending);
-    assert_eq!(t.rt.get_dot(&dot.id).await.unwrap().spec.policy, dot.spec.policy);
+    assert_eq!(
+        t.rt.get_dot(&dot.id).await.unwrap().spec.policy,
+        dot.spec.policy
+    );
     // Approving the one call still works.
-    let once = t.rt.decide_approval(&approval.id, true, None, None).await.unwrap();
+    let once =
+        t.rt.decide_approval(&approval.id, true, None, None)
+            .await
+            .unwrap();
     assert_eq!(once.status, ApprovalStatus::Approved);
     t.rt.shutdown();
 }

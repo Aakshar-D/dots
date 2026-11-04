@@ -862,7 +862,10 @@ async fn no_allow_rule_is_saved_for_a_private_folder() {
         matches!(&err, Error::Invalid(m) if m.contains("private folder")),
         "{err:?}"
     );
-    assert_eq!(store.get_approval(&ssh.id).await.unwrap().status, ApprovalStatus::Pending);
+    assert_eq!(
+        store.get_approval(&ssh.id).await.unwrap().status,
+        ApprovalStatus::Pending
+    );
     assert_eq!(store.get_dot(&dot.id).await.unwrap(), dot);
     // An ordinary call with a rule that names a private folder: refused too.
     let plain = store
