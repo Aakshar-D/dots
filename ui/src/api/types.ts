@@ -484,6 +484,16 @@ export const ScheduleSkip = z.strictObject({
   created_at: z.string(),
 });
 
+// What a topic has beyond its runs: a name the person gave it and when it was archived. A topic
+// without a row is active and untitled (topic tools spec section 4.2).
+export const TopicInfo = z.strictObject({
+  root_run_id: z.string(),
+  dot_id: z.string(),
+  title: nullable(z.string()),
+  archived_at: nullable(z.string()),
+});
+export type TopicInfo = z.infer<typeof TopicInfo>;
+
 // Send later (send later spec section 4.1): a chat message the person wrote for Dots to send
 // at `due_at` (RFC 3339 UTC) to the topic `root_run_id` (null: a new topic). Pending while
 // scheduled, sending or failed; `waiting` says why a due one has not gone yet.
@@ -580,6 +590,8 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("schedule_updated"), dot_id: z.string() }),
   // A slot was skipped because the dot was busy (sent with a `schedule_updated`).
   z.strictObject({ type: z.literal("schedule_skipped"), dot_id: z.string(), skip: ScheduleSkip }),
+  // A topic of the dot was named, archived or unarchived, or runs moved between its topics.
+  z.strictObject({ type: z.literal("topics_changed"), dot_id: z.string() }),
   // A Library item was added, changed, removed or checked (an MCP server's catalog included).
   z.strictObject({ type: z.literal("library_updated"), item_id: z.string() }),
   // The dot's schedule needs attention now (sent once, with a `schedule_updated`).
@@ -681,6 +693,8 @@ export const Settings = z.strictObject({
   publish_token: nullable(z.string()),
   // Seconds a run may stay quiet before it is stopped (60 to 86400); a dot may override it.
   quiet_limit_secs: z.number().int(),
+  // A topic idle for this many days is archived; 0 never (topic tools spec section 3.3).
+  auto_archive_days: z.number().int(),
 });
 export const SettingsSaved = z.strictObject({
   settings: Settings,

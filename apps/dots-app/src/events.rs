@@ -824,6 +824,13 @@ mod tests {
     }
 
     #[test]
+    fn a_change_to_topics_notifies_nobody() {
+        let mut n = Notifier::default();
+        let ev = RuntimeEvent::TopicsChanged { dot_id: "d".into() };
+        assert_eq!(n.decide(&ev), None);
+    }
+
+    #[test]
     fn a_library_update_does_not_notify_but_may_change_the_inbox() {
         let mut n = Notifier::default();
         let ev = RuntimeEvent::LibraryUpdated {

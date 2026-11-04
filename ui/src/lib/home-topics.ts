@@ -1,6 +1,6 @@
 // A dot's runs as topics, and which of them make its conversation on the home (chat-first home
 // spec, section 2).
-import type { Run } from "@/api/types";
+import type { Run, TopicInfo } from "@/api/types";
 import { localTime } from "@/lib/format";
 import { watcherTitle } from "@/lib/watchers";
 
@@ -11,11 +11,15 @@ export type Topic = {
   /// The topic's oldest run known here: its root, or the oldest run of it that was loaded when
   /// the root is older than what was loaded.
   root: Run;
-  /// Its runs, oldest first.
+  /// Its runs along its line (`lineOrder`): oldest first, unless runs were moved in.
   runs: Run[];
   /// "chat" when the root is a chat run; "run" when a schedule, a webhook, Run now or a
   /// follow-up started it.
   kind: "chat" | "run";
+  /// The name the person gave it (its `topics` row), shown instead of the derived one.
+  title?: string | null;
+  /// Archived: left out of the conversation and History, listed under Archived.
+  archived?: boolean;
 };
 
 /// How many run topics make the conversation of a dot that has no chat topic.
@@ -31,9 +35,45 @@ export function isActive(run: Run): boolean {
 
 const byQueued = (a: Run, b: Run) => a.queued_at.localeCompare(b.queued_at);
 
+/// Runs of one topic read along its line, as the core reads them (`store::runs::line_order`):
+/// each run after its parent, the children of one run by queue time. A move or merge hangs older
+/// runs after newer ones, so time alone would put them in the middle. A run whose parent is not
+/// among them starts a line of its own, by queue time.
+export function lineOrder(runs: Run[]): Run[] {
+  const sorted = [...runs].sort(byQueued);
+  const ids = new Set(sorted.map((run) => run.id));
+  const children = new Map<string, Run[]>();
+  const starts: Run[] = [];
+  for (const run of sorted) {
+    const parent = run.parent_run_id;
+    if (parent !== null && parent !== run.id && ids.has(parent)) {
+      children.set(parent, [...(children.get(parent) ?? []), run]);
+    } else {
+      starts.push(run);
+    }
+  }
+  const order: Run[] = [];
+  const seen = new Set<string>();
+  const stack = [...starts].reverse();
+  for (;;) {
+    while (stack.length > 0) {
+      const run = stack.pop()!;
+      if (seen.has(run.id)) continue;
+      seen.add(run.id);
+      order.push(run);
+      stack.push(...[...(children.get(run.id) ?? [])].reverse());
+    }
+    // A cycle of parents (never written by Dots) would hide its runs: they follow by time.
+    const left = sorted.find((run) => !seen.has(run.id));
+    if (left === undefined) break;
+    stack.push(left);
+  }
+  return order;
+}
+
 /// The topic of one line of runs, given in any order and none missing between them.
 export function topicOf(runs: Run[]): Topic {
-  const sorted = [...runs].sort(byQueued);
+  const sorted = lineOrder(runs);
   const root = sorted.find((run) => run.id === run.root_run_id) ?? sorted[0];
   return {
     rootId: sorted[0].root_run_id,
@@ -52,6 +92,29 @@ export function topicsOf(runs: Run[]): Topic[] {
     lines.set(run.root_run_id, line);
   }
   return [...lines.values()].map(topicOf).sort((a, b) => byQueued(a.root, b.root));
+}
+
+/// The topics with what their rows say: the person's name for each, and whether it is archived
+/// (topic tools spec section 6). A topic without a row is active and untitled.
+export function withInfo(topics: Topic[], infos: TopicInfo[]): Topic[] {
+  const rows = new Map(infos.map((info) => [info.root_run_id, info]));
+  return topics.map((topic) => {
+    const row = rows.get(topic.rootId);
+    return row ? { ...topic, title: row.title, archived: row.archived_at !== null } : topic;
+  });
+}
+
+/// The topics that are not archived, in their order.
+export function liveTopics(topics: Topic[]): Topic[] {
+  return topics.filter((topic) => !topic.archived);
+}
+
+/// The archived topics, newest first, `HISTORY` at most.
+export function archivedTopics(topics: Topic[]): Topic[] {
+  return topics
+    .filter((topic) => topic.archived)
+    .reverse()
+    .slice(0, HISTORY);
 }
 
 /// The newest chat topic, by the time its root was queued.
@@ -140,9 +203,10 @@ export function chatText(run: Run): string | null {
   return typeof message === "string" ? message : null;
 }
 
-/// A topic's name: the first line of its root's message for a chat topic, else its trigger and
-/// the time it was queued ("Scheduled · 08:00").
+/// A topic's name: the one the person gave it; else the first line of its root's message for a
+/// chat topic, else its trigger and the time it was queued ("Scheduled · 08:00").
 export function topicTitle(topic: Topic): string {
+  if (topic.title) return topic.title;
   if (topic.kind === "chat") return oneLine(chatText(topic.root), 60) || "Chat";
   // A watcher's run says what woke the dot (watchers spec section 8).
   if (topic.root.trigger === "watcher") {

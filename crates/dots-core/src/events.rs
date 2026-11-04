@@ -45,6 +45,12 @@ pub enum RuntimeEvent {
         dot_id: String,
         skip: ScheduleSkip,
     },
+    /// The dot's topics changed beyond a run (topic tools spec section 4.3): a topic was
+    /// named, archived or unarchived, or runs moved between topics. Its runs, threads and topic
+    /// rows are read again.
+    TopicsChanged {
+        dot_id: String,
+    },
     /// A scheduled message was scheduled, edited, cancelled, sent or failed, or its waiting
     /// reason changed (send later spec section 4.5). The app notifies on a new failure.
     ScheduledMessageUpdated {

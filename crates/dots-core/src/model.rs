@@ -516,6 +516,19 @@ pub enum SlotStart {
     Busy(ScheduleSkip),
 }
 
+/// What a topic has beyond its runs (topic tools spec section 4.2): a `topics` row. A topic
+/// with none is active and untitled.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TopicInfo {
+    /// The topic's root run: its identity.
+    pub root_run_id: String,
+    pub dot_id: String,
+    /// The name the person gave it, shown instead of the one taken from its first message.
+    pub title: Option<String>,
+    /// When it was archived, by the person or by the idle sweep.
+    pub archived_at: Option<String>,
+}
+
 str_enum!(ScheduledStatus {
     Scheduled => "scheduled",
     Sending => "sending",

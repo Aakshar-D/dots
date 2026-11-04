@@ -433,6 +433,8 @@ export function Transcript(props: {
   /// (its bubble says it, whoever wrote the message), a cancelled one marked "Cancelled", and
   /// each group of tool steps as one line that opens to its chips.
   variant?: "run" | "conversation";
+  /// Shown under the person's message of a run, such as "Move to topic…".
+  messageAction?: (run: Run) => ReactNode;
 }) {
   const conversation = props.variant === "conversation";
   const many = props.runs.length > 1;
@@ -485,6 +487,7 @@ export function Transcript(props: {
                   {message}
                 </p>
               )}
+              {message !== null && props.messageAction?.(run)}
               {files.length > 0 && (
                 <ul
                   aria-label="Attached files"

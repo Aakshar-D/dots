@@ -1333,6 +1333,12 @@ pub fn samples() -> Value {
     });
     // Past the `json!` macro's recursion limit, so added here.
     samples["ScheduleSkip"] = to(schedule_skip());
+    samples["TopicInfo"] = to(TopicInfo {
+        root_run_id: "01J0RUN".into(),
+        dot_id: "01J0DOT".into(),
+        title: Some("Trip plans".into()),
+        archived_at: Some("2026-11-04T09:00:00.000Z".into()),
+    });
     samples["ScannedAgent"] = to(scanned_agents());
     samples["AgentImport"] = to(AgentImport {
         created: vec![dot()],
@@ -1383,6 +1389,9 @@ pub fn samples() -> Value {
             to(RuntimeEvent::ScheduleSkipped {
                 dot_id: "01J0DOT".into(),
                 skip: schedule_skip(),
+            }),
+            to(RuntimeEvent::TopicsChanged {
+                dot_id: "01J0DOT".into(),
             }),
             to(RuntimeEvent::DotSeen {
                 dot_id: "01J0DOT".into(),

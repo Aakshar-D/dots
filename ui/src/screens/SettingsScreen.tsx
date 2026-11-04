@@ -24,7 +24,17 @@ import { Accounts } from "./Accounts";
 import { ProfileSection } from "./ProfileSection";
 import { UpdatesSection } from "@/screens/UpdatesSection";
 
-type Errors = { port?: string; max?: string; global?: string; share?: string; quiet?: string };
+type Errors = {
+  port?: string;
+  max?: string;
+  global?: string;
+  share?: string;
+  quiet?: string;
+  archive?: string;
+};
+
+/// The most days the idle-topic setting takes (`settings::MAX_AUTO_ARCHIVE_DAYS`).
+const MAX_AUTO_ARCHIVE_DAYS = 3650;
 
 /// The core's words for a hold share out of bounds (usage and limits spec section 4).
 const SHARE_RULE = "A share is 10 to 100%, in steps of 5.";
@@ -39,7 +49,11 @@ export function settingsErrors(
     Partial<
       Pick<
         Settings,
-        "global_instructions" | "hold_share_five_hour" | "hold_share_weekly" | "quiet_limit_secs"
+        | "global_instructions"
+        | "hold_share_five_hour"
+        | "hold_share_weekly"
+        | "quiet_limit_secs"
+        | "auto_archive_days"
       >
     >,
 ): Errors {
@@ -62,6 +76,10 @@ export function settingsErrors(
     !(whole(quiet, LIMITS.min_quiet_limit_secs, LIMITS.max_quiet_limit_secs) && quiet % 60 === 0)
   ) {
     errors.quiet = `The quiet limit must be a whole number of minutes, 1 to ${LIMITS.max_quiet_limit_secs / 60}.`;
+  }
+  const archive = draft.auto_archive_days;
+  if (archive !== undefined && !whole(archive, 0, MAX_AUTO_ARCHIVE_DAYS)) {
+    errors.archive = `Days must be a whole number, 0 to ${MAX_AUTO_ARCHIVE_DAYS} (0 never archives).`;
   }
   return errors;
 }
@@ -222,7 +240,7 @@ function Form({ stored, status }: { stored: Settings; status: Status | undefined
       actions={
         <Button
           size="sm"
-          disabled={save.isPending || errors.quiet !== undefined}
+          disabled={save.isPending || errors.quiet !== undefined || errors.archive !== undefined}
           onClick={submit}
         >
           Save
@@ -336,6 +354,20 @@ function Form({ stored, status }: { stored: Settings; status: Status | undefined
             className="w-40"
             value={shown(draft.quiet_limit_secs / 60)}
             onChange={(e) => set({ quiet_limit_secs: numberOf(e.target.value) * 60 })}
+          />
+        </Field>
+        <Field
+          label="Archive topics idle for (days)"
+          htmlFor="settings-archive"
+          error={errors.archive}
+          hint="A topic with no messages or runs for this many days moves to History's Archived list. A dot's current topic is never archived. 0 never archives."
+        >
+          <Input
+            id="settings-archive"
+            type="number"
+            className="w-40"
+            value={shown(draft.auto_archive_days)}
+            onChange={(e) => set({ auto_archive_days: numberOf(e.target.value) })}
           />
         </Field>
       </Section>

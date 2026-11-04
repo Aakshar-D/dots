@@ -2631,6 +2631,80 @@ impl Runtime {
         Ok(run)
     }
 
+    fn topics_changed(&self, dot_id: &str) {
+        let _ = self.bus.send(RuntimeEvent::TopicsChanged {
+            dot_id: dot_id.to_string(),
+        });
+    }
+
+    /// The rows of the dot's topics: titles and archive marks (topic tools spec section 4.3).
+    pub async fn list_topics(&self, dot_id: &str) -> Result<Vec<crate::model::TopicInfo>> {
+        self.store.get_dot(dot_id).await?;
+        self.store.list_topics(dot_id).await
+    }
+
+    /// Names the topic whose root is `root` (`None` or blank clears the name).
+    pub async fn rename_topic(
+        &self,
+        root: &str,
+        title: Option<&str>,
+    ) -> Result<crate::model::TopicInfo> {
+        self.require_for_run(root, Permission::RunDots).await?;
+        let info = self.store.set_topic_title(root, title).await?;
+        self.topics_changed(&info.dot_id);
+        Ok(info)
+    }
+
+    /// Archives or unarchives the topic whose root is `root`.
+    pub async fn set_topic_archived(
+        &self,
+        root: &str,
+        archived: bool,
+    ) -> Result<crate::model::TopicInfo> {
+        self.require_for_run(root, Permission::RunDots).await?;
+        let info = self
+            .store
+            .set_topic_archived(root, archived, Utc::now())
+            .await?;
+        self.topics_changed(&info.dot_id);
+        Ok(info)
+    }
+
+    /// Moves the run `run_id` and its replies to the topic `to`, or to a new topic (`None`)
+    /// (topic tools spec section 3.4). Returns the root of the topic the run is now in.
+    pub async fn move_run(&self, run_id: &str, to: Option<&str>) -> Result<String> {
+        let run = self.store.get_run(run_id).await?;
+        self.require_for_dot(&run.dot_id, Permission::RunDots)
+            .await?;
+        // Under the lock a message to a topic takes, so none is sent into the line being cut.
+        let lock = self.follow_ups.thread_lock();
+        let _one_at_a_time = lock.lock().await;
+        for root in std::iter::once(run.root_run_id.as_str()).chain(to) {
+            if self.follow_ups.deciding(root) {
+                return Err(Error::Conflict(crate::checkins::DECIDING.into()));
+            }
+        }
+        let root = self.store.move_runs(run_id, to).await?;
+        self.topics_changed(&run.dot_id);
+        Ok(root)
+    }
+
+    /// Merges the topic `from` into the topic `into` of the same dot (topic tools spec section
+    /// 3.5).
+    pub async fn merge_topics(&self, from: &str, into: &str) -> Result<()> {
+        let run = self.store.get_run(into).await?;
+        self.require_for_dot(&run.dot_id, Permission::RunDots)
+            .await?;
+        let lock = self.follow_ups.thread_lock();
+        let _one_at_a_time = lock.lock().await;
+        if self.follow_ups.deciding(from) || self.follow_ups.deciding(into) {
+            return Err(Error::Conflict(crate::checkins::DECIDING.into()));
+        }
+        self.store.merge_topics(from, into).await?;
+        self.topics_changed(&run.dot_id);
+        Ok(())
+    }
+
     pub async fn cancel_run(&self, run_id: &str) -> Result<Run> {
         self.runner.cancel(run_id).await
     }

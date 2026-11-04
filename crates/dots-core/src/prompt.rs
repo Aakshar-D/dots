@@ -67,6 +67,9 @@ pub struct PromptParts<'a> {
     /// A person's message that resumes its topic: the dot's instructions changed after the
     /// topic's last run was queued, so the prompt names them as they are now.
     pub instructions_changed: bool,
+    /// The topic's earlier runs, oldest first, when a move or merge changed the topic and its
+    /// session starts afresh (topic tools spec section 4.4); empty otherwise.
+    pub so_far: &'a [Run],
 }
 
 /// The most runs a person's chat message names (conversational chat spec section 3.1).
@@ -134,6 +137,56 @@ pub fn recent_runs(runs: &[Run]) -> String {
     out
 }
 
+/// The most runs a topic's conversation so far names: the newest.
+pub const SO_FAR_RUNS: usize = 20;
+
+/// The line under a topic's conversation so far.
+pub const SO_FAR_NOTE: &str = "Messages were moved between topics, so this conversation starts \
+    afresh. These are its earlier messages and your replies, oldest first; anything you remember \
+    that is not here belongs to another topic.";
+
+/// A topic's earlier runs for a fresh session (topic tools spec section 4.4): for each, what
+/// the person said (their message or answer), else what started it, and the run's summary or
+/// error, each cut to `RECENT_TEXT` characters; the newest `SO_FAR_RUNS` of them, after a line
+/// saying how many were left out.
+pub fn conversation_so_far(runs: &[Run]) -> String {
+    let cut = |text: &str| {
+        let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        let mut out: String = text.chars().take(RECENT_TEXT).collect();
+        if out.len() < text.len() {
+            out.push('…');
+        }
+        out
+    };
+    let mut out = String::new();
+    let skip = runs.len().saturating_sub(SO_FAR_RUNS);
+    if skip > 0 {
+        out.push_str(&format!("({skip} earlier messages omitted)\n"));
+    }
+    for run in &runs[skip..] {
+        let said = run.payload.as_ref().and_then(|p| {
+            p.get("answer")
+                .or_else(|| p.get("message"))
+                .and_then(Value::as_str)
+        });
+        match said {
+            Some(text) if run.trigger == TriggerKind::Chat => {
+                out.push_str(&format!("- The person: {}\n", cut(text)))
+            }
+            _ => out.push_str(&format!("- {}\n", trigger_label(run.trigger))),
+        }
+        let reply = run
+            .summary
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .or(run.error.as_deref());
+        if let Some(reply) = reply {
+            out.push_str(&format!("  You: {}\n", cut(reply)));
+        }
+    }
+    out
+}
+
 /// The prompt of `run` for a dot without memories (`build_prompt_with_memories`).
 pub fn build_prompt(
     dot: &Dot,
@@ -185,6 +238,7 @@ pub fn build_prompt_full(
         recent,
         instructions_tool,
         instructions_changed,
+        so_far,
     } = parts;
     let text = run
         .payload
@@ -260,6 +314,13 @@ pub fn build_prompt_full(
             ),
             None => NO_INSTRUCTIONS_TOOL.to_string(),
         });
+        out.push('\n');
+    }
+    if !so_far.is_empty() {
+        out.push_str("## This conversation so far\n\n");
+        out.push_str(SO_FAR_NOTE);
+        out.push_str("\n\n");
+        out.push_str(&conversation_so_far(so_far));
         out.push('\n');
     }
     if run.trigger == TriggerKind::Chat {

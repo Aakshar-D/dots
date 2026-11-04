@@ -2,10 +2,13 @@ import { useQueries, useQuery } from "@tanstack/react-query";
 
 import { commands } from "@/api/commands";
 import {
+  archivedTopics,
   conversation,
+  liveTopics,
   olderTopics,
   topicOf,
   topicsOf,
+  withInfo,
   type Topic,
 } from "@/lib/home-topics";
 import { keys } from "@/lib/query";
@@ -16,14 +19,22 @@ export const LOADED_RUNS = 200;
 /// What a dot's side of the home shows (chat-first home spec, section 4.3): the dot's topics
 /// from its newest runs; the topics shown, each loaded whole with `run_thread` (the
 /// conversation, or the older topic `rootRunId` alone); the topics History offers; and the
-/// dot's notes and questions, oldest first.
+/// dot's notes and questions, oldest first. Archived topics are left out of the conversation
+/// and History's list, and offered apart.
 export function useConversation(dotId: string, rootRunId: string | undefined) {
   const list = useQuery({
     // Its own key under "runs": the dot editor lists the same dot's runs with another limit.
     queryKey: [...keys.runs(dotId), "home"],
     queryFn: () => commands.listRuns(dotId, LOADED_RUNS),
   });
-  const topics = topicsOf(list.data ?? []);
+  // The topics' rows: names the person gave, and which are archived (topic tools spec 6).
+  const rows = useQuery({
+    queryKey: keys.topics(dotId),
+    queryFn: () => commands.listTopics(dotId),
+  });
+  const infos = rows.data ?? [];
+  const all = withInfo(topicsOf(list.data ?? []), infos);
+  const topics = liveTopics(all);
   const current = conversation(topics);
   const roots = rootRunId !== undefined ? [rootRunId] : current.map((topic) => topic.rootId);
   const threads = useQueries({
@@ -35,7 +46,7 @@ export function useConversation(dotId: string, rootRunId: string | undefined) {
   // A thread on its way shows as far as the list has it.
   const shown: Topic[] = roots.flatMap((root, i) => {
     const runs = threads[i]?.data ?? topics.find((topic) => topic.rootId === root)?.runs ?? [];
-    return runs.length === 0 ? [] : [topicOf(runs)];
+    return runs.length === 0 ? [] : withInfo([topicOf(runs)], infos);
   });
   const messages = useQuery({
     queryKey: keys.messages(dotId),
@@ -49,6 +60,10 @@ export function useConversation(dotId: string, rootRunId: string | undefined) {
     threads,
     shown,
     older: olderTopics(topics, current),
+    /// The archived topics, newest first: History's Archived section.
+    archived: archivedTopics(all),
+    /// The topics that are not archived, oldest first: what a move or merge may pick.
+    topics,
     checkIns,
     /// Nothing to show yet: the list, or the older topic, is still on its way.
     pending: list.isPending || (rootRunId !== undefined && threads[0]?.isPending === true),

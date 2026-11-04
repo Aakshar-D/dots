@@ -328,3 +328,27 @@ describe("the quiet limit setting", () => {
     expect(settingsErrors({ ...base, quiet_limit_secs: 90 })).toHaveProperty("quiet");
   });
 });
+
+describe("the auto-archive setting", () => {
+  it("saves the days after which an idle topic is archived, 0 for never", async () => {
+    saving();
+    const { user } = renderApp("/settings");
+    const field = await screen.findByLabelText("Archive topics idle for (days)");
+    expect(field).toHaveValue(stored.auto_archive_days);
+    await user.clear(field);
+    await user.type(field, "0");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("Saved")).toBeVisible();
+    expect(backend.callsTo("update_settings")).toEqual([
+      { settings: { ...stored, auto_archive_days: 0 } },
+    ]);
+  });
+
+  it("checks the days", () => {
+    const base = { port: 47321, max_concurrent_runs: 4 };
+    expect(settingsErrors({ ...base, auto_archive_days: 0 })).toEqual({});
+    expect(settingsErrors({ ...base, auto_archive_days: 3650 })).toEqual({});
+    expect(settingsErrors({ ...base, auto_archive_days: 3651 })).toHaveProperty("archive");
+    expect(settingsErrors({ ...base, auto_archive_days: 1.5 })).toHaveProperty("archive");
+  });
+});

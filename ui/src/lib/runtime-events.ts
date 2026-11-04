@@ -12,9 +12,11 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
     case "run_updated":
       // Lists and views a run shows up in. The prefixes cover every dot's and thread's key. The
       // run's approvals are among them: a run that ends takes its pending ones with it.
+      // The topic rows too: a run added to an archived topic brings it back.
       for (const queryKey of [
         ["thread"],
         ["runs"],
+        ["topics"],
         ["diff"],
         keys.overview,
         keys.inbox,
@@ -68,6 +70,13 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
     case "schedule_skipped":
       // The skip line in the conversation, and the header's count (the dots' schedule state).
       for (const queryKey of [keys.scheduleSkips(event.dot_id), keys.overview, keys.dots]) {
+        invalidate(qc, queryKey);
+      }
+      break;
+    case "topics_changed":
+      // The dot's topic rows, and its runs and threads: a move or merge changes which topic a
+      // run is in, and no `run_updated` says so.
+      for (const queryKey of [keys.topics(event.dot_id), ["thread"], ["runs"]]) {
         invalidate(qc, queryKey);
       }
       break;

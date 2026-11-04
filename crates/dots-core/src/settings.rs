@@ -14,6 +14,8 @@ pub const TESTED_CLAUDE_VERSION: &str = "2.1.295";
 pub const MAX_CONCURRENT_RUNS: usize = 16;
 /// The longest global instructions, in bytes (context library spec section 2).
 pub const MAX_GLOBAL_INSTRUCTIONS: usize = 32 * 1024;
+/// The most days `auto_archive_days` takes (ten years).
+pub const MAX_AUTO_ARCHIVE_DAYS: u32 = 3650;
 /// The words when a hold share is out of bounds (usage and limits spec section 4).
 pub const SHARE_RULE: &str = "A share is 10 to 100%, in steps of 5.";
 
@@ -50,6 +52,8 @@ pub struct Settings {
     /// How long a run may go without output before the watchdog stops it, unless the dot sets
     /// its own (stuck-run watchdog spec section 4.3). 60 to 86400.
     pub quiet_limit_secs: u64,
+    /// A topic idle for this many days is archived (topic tools spec section 3.3); 0 never.
+    pub auto_archive_days: u32,
 }
 
 impl Default for Settings {
@@ -71,6 +75,7 @@ impl Default for Settings {
             auto_install_updates: false,
             publish_token: None,
             quiet_limit_secs: 600,
+            auto_archive_days: 30,
         }
     }
 }
@@ -114,6 +119,9 @@ impl Settings {
         }
         if !(MIN_QUIET_LIMIT_SECS..=MAX_QUIET_LIMIT_SECS).contains(&self.quiet_limit_secs) {
             return invalid("quiet_limit_secs must be between 60 and 86400");
+        }
+        if self.auto_archive_days > MAX_AUTO_ARCHIVE_DAYS {
+            return invalid("auto_archive_days must be between 0 and 3650");
         }
         Ok(())
     }

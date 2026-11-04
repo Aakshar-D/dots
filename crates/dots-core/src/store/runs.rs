@@ -11,7 +11,8 @@ use crate::util::{new_id, now, timestamp};
 use crate::vault::redact::global;
 use crate::{Error, Result};
 
-const RUN_COLUMNS: &str = "id, dot_id, root_run_id, parent_run_id, trigger_kind, payload, status, \
+pub(super) const RUN_COLUMNS: &str =
+    "id, dot_id, root_run_id, parent_run_id, trigger_kind, payload, status, \
     session_id, workspace_path, branch, base_commit, summary, error, tokens_in, tokens_out, \
     queued_at, started_at, ended_at, reviewed_at, retry_of, workflow_step_run_id, \
     tokens_cache_read, cost_usd, hold_released, quiet_since, quiet_limit_secs, \
@@ -25,7 +26,7 @@ fn undelivered_reason(error: Option<&str>) -> String {
         .to_string()
 }
 
-fn run_from_row(row: &SqliteRow) -> Result<Run> {
+pub(super) fn run_from_row(row: &SqliteRow) -> Result<Run> {
     let status = RunStatus::parse(&row.try_get::<String, _>("status")?)?;
     let delivered_at: Option<String> = row.try_get("delivered_at")?;
     let undelivered_at: Option<String> = row.try_get("undelivered_at")?;
@@ -87,6 +88,48 @@ fn event_from_row(row: &SqliteRow) -> Result<RunEventRecord> {
     })
 }
 
+/// A topic's runs read along its line (topic tools spec section 7): each run after its parent,
+/// the children of one run by `queued_at`. A move or merge hangs older runs after newer ones,
+/// so time alone would put them in the middle. `runs` is in `queued_at` order; a run whose
+/// parent is not among them starts a line of its own, in that order.
+pub fn line_order(runs: Vec<Run>) -> Vec<Run> {
+    use std::collections::{HashMap, HashSet};
+    let ids: HashSet<&str> = runs.iter().map(|r| r.id.as_str()).collect();
+    let mut children: HashMap<&str, Vec<usize>> = HashMap::new();
+    let mut starts = Vec::new();
+    for (i, run) in runs.iter().enumerate() {
+        match run
+            .parent_run_id
+            .as_deref()
+            .filter(|p| ids.contains(p) && *p != run.id)
+        {
+            Some(parent) => children.entry(parent).or_default().push(i),
+            None => starts.push(i),
+        }
+    }
+    let mut order = Vec::with_capacity(runs.len());
+    let mut seen = vec![false; runs.len()];
+    let mut stack: Vec<usize> = starts.into_iter().rev().collect();
+    loop {
+        while let Some(i) = stack.pop() {
+            if std::mem::replace(&mut seen[i], true) {
+                continue;
+            }
+            order.push(i);
+            if let Some(kids) = children.get(runs[i].id.as_str()) {
+                stack.extend(kids.iter().rev());
+            }
+        }
+        // A cycle of parents (never written by Dots) would hide its runs: they follow by time.
+        match seen.iter().position(|s| !s) {
+            Some(i) => stack.push(i),
+            None => break,
+        }
+    }
+    let mut slots: Vec<Option<Run>> = runs.into_iter().map(Some).collect();
+    order.into_iter().filter_map(|i| slots[i].take()).collect()
+}
+
 pub(super) async fn insert_run(conn: &mut SqliteConnection, new: &NewRun) -> Result<String> {
     let id = new.id.clone().unwrap_or_else(new_id);
     let root = new.root_run_id.clone().unwrap_or_else(|| id.clone());
@@ -121,7 +164,16 @@ pub(super) async fn insert_run(conn: &mut SqliteConnection, new: &NewRun) -> Res
     .bind(&new.retry_of)
     .bind(&new.workflow_step_run_id)
     .bind(&new.parent_run_id)
-    .execute(conn)
+    .execute(&mut *conn)
+    .await?;
+    // A run added to an archived topic brings it back (topic tools spec section 3.2).
+    sqlx::query(
+        "UPDATE topics SET archived_at = NULL, unarchived_at = ? \
+         WHERE root_run_id = ? AND archived_at IS NOT NULL",
+    )
+    .bind(now())
+    .bind(&root)
+    .execute(&mut *conn)
     .await?;
     Ok(id)
 }
@@ -359,7 +411,8 @@ impl Store {
         .bind(root_run_id)
         .fetch_all(&self.pool)
         .await?;
-        rows.iter().map(run_from_row).collect()
+        let runs = rows.iter().map(run_from_row).collect::<Result<Vec<_>>>()?;
+        Ok(line_order(runs))
     }
 
     /// The `limit` newest ended runs of `dot_id` outside the lineage `root_run_id`, latest end
@@ -415,13 +468,29 @@ impl Store {
             "SELECT {RUN_COLUMNS} FROM runs r \
              WHERE r.reviewed_at IS NULL AND r.status IN ('succeeded', 'failed', 'cancelled') \
              AND (r.status = 'failed' OR r.branch IS NOT NULL) \
-             AND r.id = (SELECT x.id FROM runs x WHERE x.root_run_id = r.root_run_id \
-                         ORDER BY x.queued_at DESC, x.id DESC LIMIT 1) \
              ORDER BY r.ended_at DESC, r.id DESC"
         ))
         .fetch_all(&self.pool)
         .await?;
-        rows.iter().map(run_from_row).collect()
+        let candidates = rows.iter().map(run_from_row).collect::<Result<Vec<_>>>()?;
+        // A thread's end is the last run along its line (`line_order`), not the newest by time:
+        // a move or merge hangs older runs after newer ones (topic tools spec section 4.6).
+        let mut ends: std::collections::HashMap<String, Option<String>> = Default::default();
+        let mut out = Vec::new();
+        for run in candidates {
+            if !ends.contains_key(&run.root_run_id) {
+                let end = self
+                    .list_thread(&run.root_run_id)
+                    .await?
+                    .pop()
+                    .map(|r| r.id);
+                ends.insert(run.root_run_id.clone(), end);
+            }
+            if ends[&run.root_run_id].as_deref() == Some(run.id.as_str()) {
+                out.push(run);
+            }
+        }
+        Ok(out)
     }
 
     /// Chat runs marked not delivered that the person has not retried or discarded and that

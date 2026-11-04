@@ -80,6 +80,15 @@ describe("commands", () => {
     expect(await commands.followUpsList(null)).toEqual(fixture.FollowUp);
     reply = async () => [fixture.ScheduleSkip];
     expect(await commands.scheduleSkips("d1")).toEqual([fixture.ScheduleSkip]);
+    reply = async () => [fixture.TopicInfo];
+    expect(await commands.listTopics("d1")).toEqual([fixture.TopicInfo]);
+    reply = async () => fixture.TopicInfo;
+    await commands.renameTopic("r1", "Trip");
+    await commands.setTopicArchived("r1", true);
+    reply = async () => "r2";
+    expect(await commands.moveRun("r3", "r2")).toBe("r2");
+    reply = async () => null;
+    await commands.mergeTopics("r1", "r2");
     reply = async () => fixture.FollowUp[0];
     await commands.followUpCancel("f1");
     expect(calls).toEqual([
@@ -90,6 +99,11 @@ describe("commands", () => {
       ["message_mark_read", { id: "m1" }],
       ["follow_ups_list", { dotId: null }],
       ["schedule_skips", { dotId: "d1", limit: undefined }],
+      ["list_topics", { dotId: "d1" }],
+      ["rename_topic", { rootRunId: "r1", title: "Trip" }],
+      ["set_topic_archived", { rootRunId: "r1", archived: true }],
+      ["move_run", { runId: "r3", toRootRunId: "r2" }],
+      ["merge_topics", { fromRootRunId: "r1", intoRootRunId: "r2" }],
       ["follow_up_cancel", { id: "f1" }],
     ]);
   });

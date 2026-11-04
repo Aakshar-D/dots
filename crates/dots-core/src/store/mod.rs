@@ -32,6 +32,7 @@ mod settings;
 mod skips;
 mod step_members;
 mod teams;
+mod topics;
 #[doc(hidden)]
 pub use teams::TEAM_ORG_BACKFILL_SQL;
 mod upgrade;

@@ -12,9 +12,11 @@ import { DotHeader } from "@/screens/home/DotHeader";
 import { FilesPanel, FilesToggle } from "@/screens/home/FilesPanel";
 import { filesHidden, setFilesHidden } from "@/screens/home/files-pref";
 import { HistoryMenu } from "@/screens/home/HistoryMenu";
+import { currentTopic } from "@/lib/home-topics";
 import { rememberDot } from "@/screens/home/last-dot";
 import { ReplyArea, type ReplyPick } from "@/screens/home/ReplyArea";
 import { Timeline } from "@/screens/home/Timeline";
+import { TopicMenu } from "@/screens/home/TopicTools";
 import { useConversation } from "@/screens/home/use-conversation";
 import { useViewing } from "@/screens/home/use-viewing";
 
@@ -61,6 +63,9 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
     view.list.isSuccess &&
     view.shown.length === 0 &&
     (scheduled.data?.length ?? 0) === 0;
+  // The topic the header's topic menu acts on: the older topic shown alone, else the current
+  // topic of the conversation.
+  const viewed = rootRunId !== undefined ? view.shown[0] : currentTopic(view.shown);
   // The Files panel (attachments spec section 6): the files of the topics shown.
   const roots = view.shown.map((t) => t.rootId);
   const files =
@@ -85,10 +90,17 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
         skipLine={skipLine(row.schedule_state)}
       >
         {hasFiles && <FilesToggle hidden={panelHidden} onToggle={toggleFiles} />}
-        <HistoryMenu dotId={dot.id} topics={view.older} />
+        <HistoryMenu dotId={dot.id} topics={view.older} archived={view.archived} />
         <Button size="sm" variant="ghost" onClick={() => setPick({ kind: "new" })}>
           New topic
         </Button>
+        {viewed && (
+          <TopicMenu
+            dotId={dot.id}
+            topic={viewed}
+            others={view.topics.filter((topic) => topic.rootId !== viewed.rootId)}
+          />
+        )}
       </DotHeader>
       {rootRunId !== undefined && (
         <p className="mx-auto w-full max-w-[720px] px-4 py-1.5 text-xs text-muted-foreground">
@@ -113,6 +125,7 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
           skipsDotId={rootRunId === undefined ? dot.id : undefined}
           scheduledFor={{ dotId: dot.id, root: rootRunId }}
           proposals={proposals}
+          moveTargets={view.topics}
           onReply={(topic) => setPick({ kind: "topic", rootId: topic.rootId })}
         >
           <LoadErrors queries={[view.list, ...view.threads]} />

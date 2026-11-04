@@ -9,11 +9,12 @@ import { LoadErrors } from "@/components/ErrorNote";
 import { InstructionsCard } from "@/components/InstructionsCard";
 import { Failure, Transcript } from "@/components/Transcript";
 import { Button } from "@/components/ui/button";
-import { isActive } from "@/lib/home-topics";
+import { isActive, type Topic } from "@/lib/home-topics";
 import { errorMessage } from "@/lib/notify";
 import { eventsQuery, invalidate, keys } from "@/lib/query";
 
 import { QuietCard } from "./QuietCard";
+import { MoveToTopic } from "./TopicTools";
 
 /// Runs of one topic as the chat shows a thread: each run's message, the dot's text, its tool
 /// steps, check-ins and browser calls (`Transcript`), the calls Dots performed, a card per
@@ -25,6 +26,8 @@ export function TopicRuns(props: {
   dotName: string;
   /// The dot's waiting proposals; the topic shows those its runs made.
   proposals?: InstructionProposal[];
+  /// The dot's topics a message the person sent may be moved to; none offers no move.
+  moveTargets?: Topic[];
 }) {
   const { runs, dotName } = props;
   const qc = useQueryClient();
@@ -58,6 +61,14 @@ export function TopicRuns(props: {
         messages={checkIns}
         dotName={dotName}
         variant="conversation"
+        messageAction={
+          props.moveTargets &&
+          ((run) =>
+            // A topic's first message moves only with its whole topic (a merge).
+            run.id !== run.root_run_id && !isActive(run) ? (
+              <MoveToTopic run={run} topics={props.moveTargets!} />
+            ) : null)
+        }
       />
       <LoadErrors queries={[...events, ...approvals]} />
       <AppliedCalls approvals={asked} />

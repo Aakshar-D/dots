@@ -1,17 +1,20 @@
 import { describe, expect, it } from "vitest";
 
-import type { Run } from "@/api/types";
+import type { Run, TopicInfo } from "@/api/types";
 import { localTime } from "@/lib/format";
 import {
+  archivedTopics,
   conversation,
   currentTopic,
   defaultTarget,
   lastRun,
+  liveTopics,
   olderTopics,
   oneLine,
   topicOf,
   topicsOf,
   topicTitle,
+  withInfo,
 } from "@/lib/home-topics";
 import { sample } from "@/test/fixtures";
 
@@ -127,6 +130,50 @@ describe("topics", () => {
     expect(oneLine(" one\ntwo ")).toBe("one");
     expect(oneLine(null)).toBe("");
     expect(oneLine("abcdef", 3)).toBe("abc…");
+  });
+});
+
+describe("topic rows", () => {
+  const info = (root_run_id: string, over: Partial<TopicInfo> = {}): TopicInfo => ({
+    root_run_id,
+    dot_id: sample.run.dot_id,
+    title: null,
+    archived_at: null,
+    ...over,
+  });
+
+  it("names a topic by the title the person gave it", () => {
+    const [a, b] = withInfo(topicsOf([root("a", 0), root("b", 5)]), [
+      info("a", { title: "Trip plans" }),
+    ]);
+    expect(topicTitle(a)).toBe("Trip plans");
+    expect(topicTitle(b)).toBe("message of b");
+  });
+
+  it("leaves archived topics out of the conversation and History, and lists them apart", () => {
+    const topics = withInfo(topicsOf([root("a", 0), root("b", 5), root("c", 10)]), [
+      info("a", { archived_at: "2026-10-10T00:00:00Z" }),
+      info("c", { archived_at: "2026-10-10T00:00:00Z" }),
+    ]);
+    const live = liveTopics(topics);
+    const shown = conversation(live);
+    expect(ids(shown)).toEqual(["b"]);
+    expect(ids(olderTopics(live, shown))).toEqual([]);
+    expect(ids(archivedTopics(topics))).toEqual(["c", "a"]);
+  });
+});
+
+describe("a topic's line", () => {
+  it("reads along the parent links, so runs moved in from older times come last", () => {
+    const b = root("b", 10);
+    const b2 = reply("b2", b, 11);
+    // Moved in: older than b's runs, hung after b2.
+    const a2 = root("a2", 1, { root_run_id: "b", parent_run_id: "b2" });
+    const a3 = root("a3", 2, { root_run_id: "b", parent_run_id: "a2" });
+    const topic = topicOf([a3, b, a2, b2]);
+    expect(topic.runs.map((r) => r.id)).toEqual(["b", "b2", "a2", "a3"]);
+    expect(topic.root.id).toBe("b");
+    expect(lastRun(topic)?.id).toBe("a3");
   });
 });
 
