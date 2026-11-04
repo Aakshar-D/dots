@@ -69,10 +69,20 @@ export const keys = {
   schedulePreview: (schedule: Schedule | null) => ["schedule-preview", schedule] as const,
   webhookUrl: (dotId: string) => ["webhook-url", dotId] as const,
   runs: (dotId: string) => ["runs", dotId] as const,
+  /// The Files panel of a conversation (its topics' roots), under the runs' key: a run that
+  /// changes may have attached or written a file.
+  conversationFiles: (dotId: string, roots: string[]) =>
+    ["runs", dotId, "files", ...roots] as const,
+  /// Today's sent, delivered and not delivered counts for a dot, under the runs' key so a
+  /// run_updated refreshes it.
+  deliveryToday: (dotId: string) => ["runs", dotId, "delivery-today"] as const,
   thread: (runId: string) => ["thread", runId] as const,
+  /// A dot's pending scheduled messages (Send later).
+  scheduledMessages: (dotId: string) => ["scheduled-messages", dotId] as const,
   events: (runId: string) => ["events", runId] as const,
   approvals: (runId: string) => ["approvals", runId] as const,
   approvalRules: (approvalId: string) => ["approval-rules", approvalId] as const,
+  approvalPrivate: (approvalId: string) => ["approval-private", approvalId] as const,
   diff: (runId: string) => ["diff", runId] as const,
   messages: (dotId: string | null) => ["messages", dotId] as const,
   followUps: (dotId: string | null) => ["follow-ups", dotId] as const,

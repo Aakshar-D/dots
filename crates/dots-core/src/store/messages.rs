@@ -7,6 +7,7 @@ use sqlx::Row;
 
 use super::runs::insert_run;
 use super::Store;
+use crate::inbox::{hidden_sql, InboxKind};
 use crate::model::{Message, MessageKind, NewRun, Run};
 use crate::util::{new_id, now};
 use crate::vault::redact::global;
@@ -162,11 +163,26 @@ impl Store {
         rows.iter().map(message_from_row).collect()
     }
 
-    /// The messages that wait for the person: open questions and unread notes.
+    /// Every message that waits for the person, of every dot, ordered as `list_messages`.
+    pub async fn waiting_messages(&self) -> Result<Vec<Message>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {MESSAGE_COLUMNS} FROM messages m JOIN dots d ON d.id = m.dot_id \
+             WHERE {WAITS} ORDER BY m.created_at DESC, m.id DESC"
+        ))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(message_from_row).collect()
+    }
+
+    /// The messages that wait for the person, open questions and unread notes, but not those
+    /// the person snoozed or marked done.
     pub async fn count_waiting_messages(&self) -> Result<usize> {
-        let n: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM messages m WHERE {WAITS}"))
-            .fetch_one(&self.pool)
-            .await?;
+        let n: i64 = sqlx::query_scalar(&format!(
+            "SELECT COUNT(*) FROM messages m WHERE {WAITS} AND {}",
+            hidden_sql(InboxKind::Message, "m.id")
+        ))
+        .fetch_one(&self.pool)
+        .await?;
         Ok(n as usize)
     }
 

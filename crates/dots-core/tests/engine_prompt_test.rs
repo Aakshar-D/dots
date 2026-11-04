@@ -683,3 +683,113 @@ fn only_a_chat_run_can_be_typed() {
         None
     )));
 }
+
+/// A person's message with one attached file (attachments spec section 4.4).
+fn with_file(message: &str, session: Option<&str>) -> Run {
+    fake_run(
+        TriggerKind::Chat,
+        Some(json!({"message": message, "typed": true,
+            "attachments": [{"id": "A1", "name": "r.pdf", "size": 2458}]})),
+        session,
+    )
+}
+
+fn attached_block() -> String {
+    let path = Path::new("W")
+        .join("attachments")
+        .join("RUN1")
+        .join("r.pdf");
+    format!(
+        "## Attached files\n\nThe person attached these files to this message. They are in \
+         your workspace and stay there for the rest of this conversation:\n\n- {} (2.4 KB)\n",
+        path.display()
+    )
+}
+
+#[test]
+fn a_first_prompt_names_the_attached_files_after_the_message() {
+    let dot = fake_dot("d", Path::new("C:/repo"), WorkspaceMode::Folder);
+    let p = build_prompt(
+        &dot,
+        &with_file("Shorten it", None),
+        Path::new("W"),
+        at(),
+        "",
+        &[],
+    );
+    let expected = format!(
+        "## Message from the user\n\nShorten it\n\n{}",
+        attached_block()
+    );
+    assert!(p.contains(&expected), "{p}");
+}
+
+#[test]
+fn a_resumed_chat_is_the_message_and_its_files() {
+    let dot = fake_dot("d", Path::new("C:/repo"), WorkspaceMode::Folder);
+    let p = build_prompt(
+        &dot,
+        &with_file("Shorten it", Some("s")),
+        Path::new("W"),
+        at(),
+        "",
+        &[],
+    );
+    assert_eq!(p, format!("Shorten it\n\n{}", attached_block()));
+}
+
+#[test]
+fn after_the_runs_since_the_files_follow_the_message() {
+    let dot = fake_dot("d", Path::new("C:/repo"), WorkspaceMode::Folder);
+    let recent = [ended(
+        TriggerKind::Schedule,
+        RunStatus::Succeeded,
+        Some("ok"),
+        None,
+    )];
+    let parts = PromptParts {
+        recent: &recent,
+        ..PromptParts::default()
+    };
+    let p = build_prompt_full(
+        &dot,
+        &with_file("Shorten it", Some("s")),
+        Path::new("W"),
+        at(),
+        "",
+        parts,
+    );
+    assert!(
+        p.ends_with(&format!(
+            "## Message from the user\n\nShorten it\n\n{}",
+            attached_block()
+        )),
+        "{p}"
+    );
+}
+
+#[test]
+fn a_files_only_message_is_the_block_alone() {
+    let dot = fake_dot("d", Path::new("C:/repo"), WorkspaceMode::Folder);
+    let p = build_prompt(
+        &dot,
+        &with_file("", Some("s")),
+        Path::new("W"),
+        at(),
+        "",
+        &[],
+    );
+    assert_eq!(p, attached_block());
+}
+
+#[test]
+fn a_watcher_run_s_attachments_are_not_a_chat_block() {
+    let dot = fake_dot("d", Path::new("C:/repo"), WorkspaceMode::Folder);
+    let run = fake_run(
+        TriggerKind::Watcher,
+        Some(json!({"message": "x", "attachments": [{"name": "r.pdf", "size": 1, "path": null}]})),
+        None,
+    );
+    let p = build_prompt(&dot, &run, Path::new("W"), at(), "", &[]);
+    assert!(!p.contains("## Attached files"), "{p}");
+}

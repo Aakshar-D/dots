@@ -8,6 +8,7 @@ import { LIMITS, type Settings, type Status } from "@/api/types";
 import { AppearanceSetting } from "@/components/AppearanceSetting";
 import { BrowserSettings } from "@/components/BrowserSettings";
 import { ErrorNote } from "@/components/ErrorNote";
+import { ReportProblemDialog } from "@/components/ReportProblemDialog";
 import { Field } from "@/components/Field";
 import { Page } from "@/components/Page";
 import { Button } from "@/components/ui/button";
@@ -71,6 +72,25 @@ function Section(props: { title: string; children: ReactNode }) {
       <legend className="px-1 text-sm font-semibold">{props.title}</legend>
       {props.children}
     </fieldset>
+  );
+}
+
+/// Settings › Help: report a problem (report a problem spec §2).
+function HelpSection() {
+  const [reporting, setReporting] = useState(false);
+  return (
+    <Section title="Help">
+      <p className="text-xs text-muted-foreground">
+        Something not working? Make a report to send to whoever helps you with Dots. You see all
+        of it before you copy or save it.
+      </p>
+      <div>
+        <Button type="button" size="sm" variant="outline" onClick={() => setReporting(true)}>
+          Report a problem
+        </Button>
+      </div>
+      {reporting && <ReportProblemDialog open onOpenChange={setReporting} />}
+    </Section>
   );
 }
 
@@ -376,6 +396,8 @@ function Form({ stored, status }: { stored: Settings; status: Status | undefined
         publishToken={draft.publish_token}
         onPublishToken={(publish_token) => set({ publish_token })}
       />
+
+      <HelpSection />
 
       <Section title="Claude Code CLI">
         <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-xs">

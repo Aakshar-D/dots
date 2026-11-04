@@ -91,9 +91,11 @@ fn longest_backticks(text: &str) -> usize {
     longest
 }
 
-/// The run's `## Trigger` section (spec section 5).
-pub fn section(payload: &Value, now: DateTime<Local>) -> String {
-    let what = trigger_line(payload).unwrap_or_else(|| "an event".to_string());
+/// The first line of an opening run's events (watch hours spec section 4.4).
+pub const OPENING_LINE: &str = "While you were away (outside this watcher's hours), these came in:";
+
+/// The event's fields without its free text or the watcher's own, as pretty JSON.
+fn event_json(payload: &Value) -> String {
     let mut event: Vec<(String, Value)> = payload
         .as_object()
         .map(|o| {
@@ -105,39 +107,138 @@ pub fn section(payload: &Value, now: DateTime<Local>) -> String {
         .unwrap_or_default();
     event.sort_by(|a, b| a.0.cmp(&b.0));
     let event: Map<String, Value> = event.into_iter().collect();
-    let mut out = format!(
-        "## Trigger\n\n- kind: watcher\n- watcher: {}\n- what: {what}\n- time: {}\n- event:\n\n```json\n{}\n```\n\n",
-        one_line(field(payload, "watcher_name")),
-        now.format("%Y-%m-%d %H:%M:%S %:z"),
-        serde_json::to_string_pretty(&Value::Object(event)).unwrap_or_default()
-    );
-    let has_paths = payload["attachments"]
+    serde_json::to_string_pretty(&Value::Object(event)).unwrap_or_default()
+}
+
+/// Whether any of the payload's attachments has its path (it was copied into the workspace).
+fn has_paths(payload: &Value) -> bool {
+    payload["attachments"]
         .as_array()
-        .is_some_and(|a| a.iter().any(|x| x["path"].is_string()));
-    if has_paths {
-        out.push_str(ATTACHMENTS_NOTE);
-        out.push_str("\n\n");
+        .is_some_and(|a| a.iter().any(|x| x["path"].is_string()))
+}
+
+/// Said after an opening's body that was cut to fit its share of the budget.
+pub const SHORTENED: &str = "…(shortened)";
+
+/// The most characters each body may keep so that, together, they fit `budget`: `None` when
+/// they fit whole. Every body gets an equal share; a body shorter than its share keeps all of
+/// it, and what it leaves is shared out again among the longer ones.
+fn body_limit(lengths: &[usize], budget: usize) -> Option<usize> {
+    if lengths.iter().sum::<usize>() <= budget {
+        return None;
     }
+    let mut sorted = lengths.to_vec();
+    sorted.sort_unstable();
+    let mut left = budget;
+    for (i, len) in sorted.iter().enumerate() {
+        let share = left / (sorted.len() - i);
+        if *len > share {
+            return Some(share);
+        }
+        left -= len;
+    }
+    None
+}
+
+/// The body cut to `limit` characters (on a character boundary), and whether it was cut.
+fn cut_body(body: &str, limit: Option<usize>) -> (&str, bool) {
+    match limit.and_then(|n| body.char_indices().nth(n)) {
+        Some((at, _)) => (&body[..at], true),
+        None => (body, false),
+    }
+}
+
+/// An email's or a GitHub event's free text under "Content from outside", with its prefix;
+/// nothing for a folder event or one without text.
+fn outside_text(payload: &Value) -> String {
+    outside_text_within(payload, None)
+}
+
+/// `outside_text`, the body cut to `limit` characters and marked `SHORTENED` when it was longer.
+fn outside_text_within(payload: &Value, limit: Option<usize>) -> String {
     let (prefix, label, heading) = match field(payload, "source") {
         "email" => (EMAIL_PREFIX, "Subject", field(payload, "subject")),
         "github" => (GITHUB_PREFIX, "Title", field(payload, "title")),
-        _ => return out,
+        _ => return String::new(),
     };
     let heading = one_line(heading);
     let body = field(payload, "body");
     if heading.is_empty() && body.is_empty() {
-        return out;
+        return String::new();
     }
-    out.push_str(OUTSIDE_HEADING);
-    out.push_str("\n\n");
-    out.push_str(prefix);
-    out.push_str("\n\n");
+    let mut out = format!("{OUTSIDE_HEADING}\n\n{prefix}\n\n");
     if !heading.is_empty() {
         out.push_str(&format!("{label}: {heading}\n\n"));
     }
     if !body.is_empty() {
+        let (body, cut) = cut_body(body, limit);
         let fence = "`".repeat((longest_backticks(body) + 1).max(3));
         out.push_str(&format!("{fence}text\n{body}\n{fence}\n\n"));
+        if cut {
+            out.push_str(SHORTENED);
+            out.push_str("\n\n");
+        }
+    }
+    out
+}
+
+/// The run's `## Trigger` section (spec section 5); an opening run's lists the events it
+/// carries (watch hours spec section 4.4).
+pub fn section(payload: &Value, now: DateTime<Local>) -> String {
+    let time = now.format("%Y-%m-%d %H:%M:%S %:z").to_string();
+    let watcher = one_line(field(payload, "watcher_name"));
+    if let Some(held) = payload["held"].as_array() {
+        return opening_section(payload, held, &watcher, &time);
+    }
+    let what = trigger_line(payload).unwrap_or_else(|| "an event".to_string());
+    let mut out = format!(
+        "## Trigger\n\n- kind: watcher\n- watcher: {watcher}\n- what: {what}\n- time: {time}\n- event:\n\n```json\n{}\n```\n\n",
+        event_json(payload)
+    );
+    if has_paths(payload) {
+        out.push_str(ATTACHMENTS_NOTE);
+        out.push_str("\n\n");
+    }
+    out.push_str(&outside_text(payload));
+    out
+}
+
+/// An opening run's section: the first line, each event as a single event's lines are, the
+/// run's attachments (named `<event>-<name>`), and the count of the events it does not carry.
+/// The events' bodies together keep to `MAX_OPENING_BODY_CHARS` (shared out by `body_limit`);
+/// each body cut is marked, and every event is still listed.
+fn opening_section(payload: &Value, held: &[Value], watcher: &str, time: &str) -> String {
+    let mut out = format!(
+        "## Trigger\n\n- kind: watcher\n- watcher: {watcher}\n- time: {time}\n\n{OPENING_LINE}\n\n"
+    );
+    let lengths: Vec<usize> = held
+        .iter()
+        .filter(|e| matches!(field(e, "source"), "email" | "github"))
+        .map(|e| field(e, "body").chars().count())
+        .collect();
+    let limit = body_limit(&lengths, super::MAX_OPENING_BODY_CHARS);
+    for (i, event) in held.iter().enumerate() {
+        let what = trigger_line(event).unwrap_or_else(|| "an event".to_string());
+        out.push_str(&format!(
+            "### Event {}\n\n- what: {what}\n- event:\n\n```json\n{}\n```\n\n",
+            i + 1,
+            event_json(event)
+        ));
+        out.push_str(&outside_text_within(event, limit));
+    }
+    if let Some(attachments) = payload["attachments"].as_array().filter(|a| !a.is_empty()) {
+        out.push_str(&format!(
+            "### Attachments\n\n```json\n{}\n```\n\n",
+            serde_json::to_string_pretty(attachments).unwrap_or_default()
+        ));
+        if has_paths(payload) {
+            out.push_str(ATTACHMENTS_NOTE);
+            out.push_str("\n\n");
+        }
+    }
+    let more = payload["held_more"].as_u64().unwrap_or_default();
+    if more > 0 {
+        out.push_str(&format!("…and {more} more.\n\n"));
     }
     out
 }

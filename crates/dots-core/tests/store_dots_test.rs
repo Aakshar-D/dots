@@ -66,7 +66,7 @@ async fn duplicate_name_conflicts() {
 #[tokio::test]
 async fn invalid_specs_are_rejected() {
     let (_d, store) = temp_store().await;
-    let bad_name = spec("has space");
+    let bad_name = spec("has/slash");
     let mut local_no_endpoint = spec("loc");
     local_no_endpoint.engine = EngineKind::Local;
     let mut five_field_cron = spec("cron5");

@@ -10,11 +10,14 @@ import type {
   DotSpec,
   DraftRequest,
   EntryKind,
+  InboxKey,
   LibraryConfig,
   McpServerConfig,
   Preset,
   Schedule,
   Settings,
+  SetupProposal,
+  SetupRequest,
   SourceCreds,
 } from "./types";
 
@@ -61,6 +64,29 @@ async function call<S extends z.ZodType>(
   return parsed.data;
 }
 
+/// A command whose argument is raw bytes, with `headers` beside them (`tauri::ipc::Request`):
+/// a file's bytes never travel as a JSON list of numbers.
+async function callRaw<S extends z.ZodType>(
+  schema: S,
+  cmd: string,
+  bytes: Uint8Array,
+  headers: Record<string, string>,
+): Promise<z.infer<S>> {
+  let answer: unknown;
+  try {
+    answer = await invoke(cmd, bytes, { headers });
+  } catch (e) {
+    throw toCommandError(e);
+  }
+  const parsed = schema.safeParse(answer);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    const at = issue.path.join(".") || "the answer";
+    throw new CommandError("internal", `${cmd}: unexpected ${at}: ${issue.message}`);
+  }
+  return parsed.data;
+}
+
 // Commands without a result answer `null` (or nothing at all).
 const nothing = z
   .null()
@@ -71,6 +97,12 @@ const text = z.string();
 export const commands = {
   startupError: () => call(T.StartupError.nullable(), "startup_error"),
   status: () => call(T.Status, "status"),
+  /// The problem report's text: what is previewed, copied and saved.
+  problemReport: (description: string, includeLogs: boolean) =>
+    call(z.string(), "problem_report", { description, includeLogs }),
+  /// Saves `text` where the person chooses in the native save dialog; the path, or null.
+  saveProblemReport: (text: string) =>
+    call(z.string().nullable(), "save_problem_report", { text }),
   chatGptAccount: () => call(T.ChatGptStatus, "chatgpt_account"),
   chatGptSignIn: () => call(T.ChatGptStatus, "chatgpt_sign_in"),
   chatGptSignOut: () => call(T.ChatGptStatus, "chatgpt_sign_out"),
@@ -139,6 +171,17 @@ export const commands = {
     orgId: string | null = null,
     workspaceId: string | null = null,
   ) => call(T.AgentImport, "import_claude_agents", { paths, orgId, workspaceId }),
+  /// Asks the setup agent for the setup view `id`: its questions, or a checked proposal. A newer
+  /// request of the same id cancels the one before.
+  setupAsk: (id: string, request: SetupRequest) =>
+    call(T.SetupAnswer, "setup_ask", { id, request }),
+  setupCancel: (id: string) => call(nothing, "setup_cancel", { id }),
+  /// Creates the proposed dot and starts its first chat. `orgId`, `workspaceId` as `createDot`.
+  setupApply: (
+    proposal: SetupProposal,
+    orgId: string | null = null,
+    workspaceId: string | null = null,
+  ) => call(T.SetupApplied, "setup_apply", { proposal, orgId, workspaceId }),
   /// Moves a dot to another workspace of its account.
   moveDot: (dotId: string, workspaceId: string) =>
     call(T.Dot, "dot_move", { dotId, workspaceId }),
@@ -172,15 +215,81 @@ export const commands = {
   previewSchedule: (schedule: Schedule, count: number) =>
     call(text.array(), "preview_schedule", { schedule, count }),
   policyPreset: (preset: Preset) => call(T.Policy, "policy_preset", { preset }),
+  /// For each rule pattern, whether it names or covers a private folder: such an allow rule
+  /// always asks.
+  rulesTouchPrivate: (patterns: string[]) =>
+    call(z.boolean().array(), "rules_touch_private", { patterns }),
   newDotSpec: () => call(T.DotSpec, "new_dot_spec"),
   testEndpoint: (endpoint: string, model: string) =>
     call(text, "test_endpoint", { endpoint, model }),
 
   runNow: (dotId: string) => call(T.Run, "run_now", { dotId }),
-  chat: (dotId: string, message: string, parentRunId: string | null) =>
-    call(T.Run, "chat", { dotId, message, parentRunId }),
+  /// `attachmentIds`: staged files the message carries (attachments spec section 4.3); only
+  /// sent when there are some.
+  chat: (dotId: string, message: string, parentRunId: string | null, attachmentIds: string[] = []) =>
+    call(
+      T.Run,
+      "chat",
+      attachmentIds.length > 0
+        ? { dotId, message, parentRunId, attachmentIds }
+        : { dotId, message, parentRunId },
+    ),
+  /// Stages a picked or dropped file for a chat message. Rejects with kind `invalid` and the
+  /// reason for a folder, a link, a file over 25 MB or one that cannot be read.
+  attachmentAddPath: (dotId: string, path: string) =>
+    call(T.StagedAttachment, "attachment_add_path", { dotId, path }),
+  /// Stages pasted bytes named `name`, sent raw with the dot and the name as headers.
+  attachmentAddBytes: (dotId: string, name: string, bytes: Uint8Array) =>
+    callRaw(T.StagedAttachment, "attachment_add_bytes", bytes, {
+      "x-dots-dot": dotId,
+      "x-dots-name": encodeURIComponent(name),
+    }),
+  /// Removes a staged file; rejects with `conflict` once a message took it.
+  attachmentRemove: (id: string) => call(nothing, "attachment_remove", { id }),
+  /// The Files panel's rows for the topics `rootRunIds` of the dot, newest first.
+  conversationFiles: (dotId: string, rootRunIds: string[]) =>
+    call(T.ConversationFile.array(), "conversation_files", { dotId, rootRunIds }),
+  /// Opens a listed file; rejects with `not_found` when it is gone and `invalid` for a program.
+  conversationFileOpen: (dotId: string, rootRunIds: string[], path: string) =>
+    call(nothing, "conversation_file_open", { dotId, rootRunIds, path }),
+  /// Shows a listed file in its folder.
+  conversationFileReveal: (dotId: string, rootRunIds: string[], path: string) =>
+    call(nothing, "conversation_file_reveal", { dotId, rootRunIds, path }),
+  /// Send again: a failed chat message, queued once more in its topic.
+  resendRun: (runId: string) => call(T.Run, "resend_run", { runId }),
   cancelRun: (runId: string) => call(T.Run, "cancel_run", { runId }),
   keepWaiting: (runId: string) => call(nothing, "keep_waiting", { runId }),
+  /// Send a chat message that did not get there again; rejects with `conflict` when it just did.
+  retryDelivery: (runId: string) => call(T.Run, "retry_delivery", { runId }),
+  discardDelivery: (runId: string) => call(T.Run, "discard_delivery", { runId }),
+  deliveryToday: (dotId: string) => call(T.DeliveryCounts, "delivery_today", { dotId }),
+  /// Send later: schedules `text` at `dueAt` (RFC 3339) in the topic `rootRunId`, or as a new
+  /// topic. Rejects with kind `invalid` for a time under a minute or over a year ahead.
+  /// `attachmentIds`: staged files it waits with (attachments spec section 4.6); only sent
+  /// when there are some.
+  scheduleMessage: (
+    dotId: string,
+    text: string,
+    rootRunId: string | null,
+    dueAt: string,
+    attachmentIds: string[] = [],
+  ) =>
+    call(
+      T.ScheduledMessage,
+      "schedule_message",
+      attachmentIds.length > 0
+        ? { dotId, text, rootRunId, dueAt, attachmentIds }
+        : { dotId, text, rootRunId, dueAt },
+    ),
+  /// The dot's pending scheduled messages, in due order.
+  scheduledMessages: (dotId: string) =>
+    call(T.ScheduledMessage.array(), "scheduled_messages", { dotId }),
+  /// These reject with kind `conflict` once the message is being sent, was sent or cancelled.
+  sendScheduledNow: (id: string) => call(T.ScheduledMessage, "send_scheduled_now", { id }),
+  editScheduledMessage: (id: string, text: string, dueAt: string) =>
+    call(T.ScheduledMessage, "edit_scheduled_message", { id, text, dueAt }),
+  cancelScheduledMessage: (id: string) =>
+    call(T.ScheduledMessage, "cancel_scheduled_message", { id }),
   listRuns: (dotId: string | null, limit: number) =>
     call(T.Run.array(), "list_runs", { dotId, limit }),
   getRun: (id: string) => call(T.Run, "get_run", { id }),
@@ -197,12 +306,27 @@ export const commands = {
   /// the call can only be approved one at a time.
   approvalRuleCandidates: (id: string) =>
     call(T.RuleCandidate.array(), "approval_rule_candidates", { id }),
+  /// True when the call touches a private folder (keys, tokens, `.env` files): it always asks,
+  /// and no rule can be saved with its approval.
+  approvalTouchesPrivate: (id: string) => call(z.boolean(), "approval_touches_private", { id }),
   /// Gives every pending approval of one run the same answer, in the order they were asked.
   /// Answers the approvals it decided.
-  decideRunApprovals: (runId: string, approved: boolean, note: string | null) =>
-    call(T.Approval.array(), "decide_run_approvals", { runId, approved, note }),
+  /// Decides only `ids`, the calls of the run the person was shown: a snoozed call of the same
+  /// run is not decided with them.
+  decideRunApprovals: (runId: string, ids: string[], approved: boolean, note: string | null) =>
+    call(T.Approval.array(), "decide_run_approvals", { runId, ids, approved, note }),
   inbox: () => call(T.Inbox, "inbox"),
   inboxCount: () => call(z.number().int(), "inbox_count"),
+  /// Hides Inbox items until `until` (RFC 3339). Rejects with kind `invalid` for a time not in
+  /// the future or more than 365 days ahead, and `not_found` when an item left the Inbox.
+  inboxSnooze: (items: InboxKey[], until: string) =>
+    call(nothing, "inbox_snooze", { items, until }),
+  /// Puts a snoozed item back as it was.
+  inboxUnsnooze: (item: InboxKey) => call(nothing, "inbox_unsnooze", { item }),
+  /// Marks an item done; an approval is refused with kind `conflict`.
+  inboxDone: (item: InboxKey) => call(nothing, "inbox_done", { item }),
+  /// Puts a done item back as it was.
+  inboxUndoDone: (item: InboxKey) => call(nothing, "inbox_undo_done", { item }),
   /// Clears the "Needs attention" of the dot's schedule; nothing happens when it is not set.
   /// Rejects with kind `not_found` when the dot has no schedule.
   dismissScheduleAttention: (dotId: string) =>
@@ -427,10 +551,10 @@ export const commands = {
     call(T.InstructionProposal, "instruction_proposal_decide", { id, approve }),
 
   watchersList: (dotId: string) => call(T.Watcher.array(), "watchers_list", { dotId }),
-  watcherAdd: (dotId: string, name: string, config: T.WatcherConfig) =>
-    call(T.Watcher, "watcher_add", { dotId, name, config }),
-  watcherUpdate: (id: string, name: string, config: T.WatcherConfig) =>
-    call(T.Watcher, "watcher_update", { id, name, config }),
+  watcherAdd: (dotId: string, name: string, config: T.WatcherConfig, hours: T.WatchHours | null) =>
+    call(T.Watcher, "watcher_add", { dotId, name, config, hours }),
+  watcherUpdate: (id: string, name: string, config: T.WatcherConfig, hours: T.WatchHours | null) =>
+    call(T.Watcher, "watcher_update", { id, name, config, hours }),
   watcherDelete: (id: string) => call(nothing, "watcher_delete", { id }),
   watcherSetEnabled: (id: string, enabled: boolean) =>
     call(T.Watcher, "watcher_set_enabled", { id, enabled }),

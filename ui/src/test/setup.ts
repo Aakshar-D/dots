@@ -14,7 +14,24 @@ configure({ asyncUtilTimeout: 5000 });
 // (the api tests) takes precedence.
 vi.mock("@tauri-apps/api/core", async () => {
   const { backend } = await import("./backend");
-  return { invoke: (cmd: string, args?: Record<string, unknown>) => backend.invoke(cmd, args) };
+  return {
+    // A raw call (bytes with headers, `attachment_add_bytes`) is recorded as its headers with
+    // the bytes beside them.
+    invoke: (cmd: string, args?: unknown, options?: { headers?: Record<string, string> }) =>
+      options?.headers !== undefined
+        ? backend.invoke(cmd, { ...options.headers, bytes: args })
+        : backend.invoke(cmd, args as Record<string, unknown> | undefined),
+  };
+});
+// Files dragged over and dropped on the window: the test emits `drag-drop` events.
+vi.mock("@tauri-apps/api/webview", async () => {
+  const { backend } = await import("./backend");
+  return {
+    getCurrentWebview: () => ({
+      onDragDropEvent: (handler: (e: { payload: unknown }) => void) =>
+        backend.listen("drag-drop", (e) => handler(e)),
+    }),
+  };
 });
 vi.mock("@tauri-apps/api/event", async () => {
   const { backend } = await import("./backend");

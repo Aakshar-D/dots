@@ -23,18 +23,21 @@ use dots_core::apps::wake::RunLink;
 use dots_core::apps::AppCall;
 use dots_core::browser::BrowserStatus;
 use dots_core::claude_agents::{AgentImport, ScannedAgent};
+use dots_core::inbox::InboxKey;
 use dots_core::kit::InstalledPlugin;
 use dots_core::library::{LibraryConfig, LibraryItem, McpCatalog, McpServerConfig};
 use dots_core::library_service::{
     ContextDocuments, EnvVariable, LibraryEntry, McpProbe, ScannedSkill,
 };
 use dots_core::model::{
-    Approval, Dot, DotOverview, DotSpec, FollowUp, Inbox, Memory, Message, Run, RunEventRecord,
-    ScheduleSkip, SettingsSaved, Status, Watcher, WatcherConfig, WorktreeDiff,
+    Approval, ConversationFile, DeliveryCounts, Dot, DotOverview, DotSpec, FollowUp, Inbox, Memory,
+    Message, Run, RunEventRecord, ScheduleSkip, ScheduledMessage, SettingsSaved, StagedAttachment,
+    Status, WatchHours, Watcher, WatcherConfig, WorktreeDiff,
 };
 use dots_core::policy::{Policy, Preset, RuleCandidate};
 use dots_core::schedule::Schedule;
 use dots_core::settings::Settings;
+use dots_core::setup::{SetupAnswer, SetupApplied, SetupProposal, SetupRequest};
 use dots_core::skill_creator::{check_draft, DraftRequest, DraftSummary};
 use dots_core::vault::org::{
     CreatedInvite, EditOutcome, JoinPreview, MembersView, OrgEntry, OrgSummary, RequestPreview,
@@ -62,6 +65,47 @@ pub fn startup_error(state: State<'_, AppState>) -> Option<StartupError> {
 #[tauri::command]
 pub async fn status(state: State<'_, AppState>) -> Res<Status> {
     Ok(state.rt()?.status().await)
+}
+
+/// The problem report's text (report a problem spec §4), for the preview, Copy and Save.
+#[tauri::command]
+pub async fn problem_report(
+    state: State<'_, AppState>,
+    description: String,
+    include_logs: bool,
+) -> Res<String> {
+    let rt = state.rt()?;
+    Ok(dots_core::report::build(
+        rt.store(),
+        env!("CARGO_PKG_VERSION"),
+        state.log_dir(),
+        &description,
+        include_logs,
+    )
+    .await?)
+}
+
+/// Saves the previewed report where the person chooses in the native save dialog; the path, or
+/// none when cancelled. The UI gives the text, never the place.
+#[tauri::command]
+pub async fn save_problem_report(app: AppHandle, text: String) -> Res<Option<String>> {
+    use tauri_plugin_dialog::DialogExt;
+    let name = dots_core::report::file_name(chrono::Local::now().fixed_offset());
+    let Some(path) = app
+        .dialog()
+        .file()
+        .set_file_name(&name)
+        .add_filter("Text", &["txt"])
+        .blocking_save_file()
+    else {
+        return Ok(None);
+    };
+    let path = path
+        .into_path()
+        .map_err(|e| CmdError::internal(format!("that place cannot be written: {e}")))?;
+    std::fs::write(&path, text)
+        .map_err(|e| CmdError::internal(format!("could not write {}: {e}", path.display())))?;
+    Ok(Some(path.to_string_lossy().into_owned()))
 }
 
 #[tauri::command]
@@ -468,6 +512,39 @@ pub async fn import_claude_agents(
         .await?)
 }
 
+/// Asks the setup agent for the setup view `id` (setup agent spec §6): its questions, or a
+/// checked proposal. A newer request of the same id cancels the one before.
+#[tauri::command]
+pub async fn setup_ask(
+    state: State<'_, AppState>,
+    id: String,
+    request: SetupRequest,
+) -> Res<SetupAnswer> {
+    Ok(state.rt()?.setup_ask(&id, request).await?)
+}
+
+/// Ends the setup's request, if one is being answered; its `setup_ask` then fails.
+#[tauri::command]
+pub fn setup_cancel(state: State<'_, AppState>, id: String) -> Res<()> {
+    state.rt()?.setup_cancel(&id);
+    Ok(())
+}
+
+/// Creates the proposed dot and starts its first chat. `org_id` and `workspace_id` are as
+/// for `create_dot`.
+#[tauri::command]
+pub async fn setup_apply(
+    state: State<'_, AppState>,
+    proposal: SetupProposal,
+    org_id: Option<String>,
+    workspace_id: Option<String>,
+) -> Res<SetupApplied> {
+    Ok(state
+        .rt()?
+        .setup_apply(proposal, org_id, workspace_id)
+        .await?)
+}
+
 /// Moves a dot to another workspace of its account.
 #[tauri::command]
 pub async fn dot_move(
@@ -586,6 +663,16 @@ pub fn policy_preset(preset: Preset) -> Policy {
     Policy::preset(preset)
 }
 
+/// For each rule pattern, whether it names or covers a private folder (approval guards spec
+/// section 4): such an allow rule never allows without asking, and the editor says so.
+#[tauri::command]
+pub fn rules_touch_private(patterns: Vec<String>) -> Vec<bool> {
+    patterns
+        .iter()
+        .map(|p| dots_core::policy::pattern_touches_private(p))
+        .collect()
+}
+
 /// A dot with the core's defaults and nothing filled in, for the "New dot" form.
 #[tauri::command]
 pub fn new_dot_spec() -> DotSpec {
@@ -606,17 +693,173 @@ pub async fn run_now(state: State<'_, AppState>, dot_id: String) -> Res<Run> {
     Ok(state.rt()?.run_now(&dot_id).await?)
 }
 
+/// A chat message, with the staged files it carries (attachments spec section 5).
 #[tauri::command]
 pub async fn chat(
     state: State<'_, AppState>,
     dot_id: String,
     message: String,
     parent_run_id: Option<String>,
+    attachment_ids: Option<Vec<String>>,
 ) -> Res<Run> {
     Ok(state
         .rt()?
-        .chat(&dot_id, &message, parent_run_id.as_deref())
+        .chat_with_files(
+            &dot_id,
+            &message,
+            parent_run_id.as_deref(),
+            &attachment_ids.unwrap_or_default(),
+        )
         .await?)
+}
+
+/// "Send again": queues a failed chat message once more in its topic.
+#[tauri::command]
+pub async fn resend_run(state: State<'_, AppState>, run_id: String) -> Res<Run> {
+    Ok(state.rt()?.resend(&run_id).await?)
+}
+
+/// Stages a picked or dropped file for a chat message to `dot_id` (attachments spec section
+/// 4.2). The path is what the person picked or dropped.
+#[tauri::command]
+pub async fn attachment_add_path(
+    state: State<'_, AppState>,
+    dot_id: String,
+    path: String,
+) -> Res<StagedAttachment> {
+    Ok(state
+        .rt()?
+        .add_attachment_path(&dot_id, std::path::Path::new(&path))
+        .await?)
+}
+
+/// Stages pasted bytes: the raw body is the file, the headers `x-dots-dot` (the dot) and
+/// `x-dots-name` (its name, percent-encoded) say what it is.
+#[tauri::command]
+pub async fn attachment_add_bytes(
+    state: State<'_, AppState>,
+    request: tauri::ipc::Request<'_>,
+) -> Res<StagedAttachment> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err(invalid("expected the file's bytes"));
+    };
+    let header = |name: &str| {
+        request
+            .headers()
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .and_then(percent_decode)
+            .ok_or_else(|| invalid(&format!("missing the {name} header")))
+    };
+    let dot_id = header("x-dots-dot")?;
+    let name = header("x-dots-name")?;
+    Ok(state
+        .rt()?
+        .add_attachment_bytes(&dot_id, &name, bytes)
+        .await?)
+}
+
+/// Removes a staged file (its chip's ×, or a chat box that went away unsent).
+#[tauri::command]
+pub async fn attachment_remove(state: State<'_, AppState>, id: String) -> Res<()> {
+    Ok(state.rt()?.remove_attachment(&id).await?)
+}
+
+/// The Files panel of the conversation made of the topics `root_run_ids`.
+#[tauri::command]
+pub async fn conversation_files(
+    state: State<'_, AppState>,
+    dot_id: String,
+    root_run_ids: Vec<String>,
+) -> Res<Vec<ConversationFile>> {
+    Ok(state
+        .rt()?
+        .conversation_files(&dot_id, &root_run_ids)
+        .await?)
+}
+
+/// Opens a file of the Files panel with its default app. The core answers the path from its
+/// own list, so the webview cannot open a path of its own, and it opens only documents, images
+/// and media.
+#[tauri::command]
+pub async fn conversation_file_open(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    dot_id: String,
+    root_run_ids: Vec<String>,
+    path: String,
+) -> Res<()> {
+    let path = state
+        .rt()?
+        .conversation_file_target(&dot_id, &root_run_ids, &path, true)
+        .await?;
+    app.opener()
+        .open_path(path.to_string_lossy(), None::<&str>)
+        .map_err(|e| CmdError::internal(format!("could not open {}: {e}", path.display())))
+}
+
+/// Shows a file of the Files panel in its folder.
+#[tauri::command]
+pub async fn conversation_file_reveal(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    dot_id: String,
+    root_run_ids: Vec<String>,
+    path: String,
+) -> Res<()> {
+    let path = state
+        .rt()?
+        .conversation_file_target(&dot_id, &root_run_ids, &path, false)
+        .await?;
+    app.opener()
+        .reveal_item_in_dir(&path)
+        .map_err(|e| CmdError::internal(format!("could not show {}: {e}", path.display())))
+}
+
+fn invalid(message: &str) -> CmdError {
+    CmdError {
+        kind: crate::error::CmdErrorKind::Invalid,
+        message: message.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod attachment_tests {
+    use super::percent_decode;
+
+    #[test]
+    fn names_come_percent_decoded() {
+        assert_eq!(
+            percent_decode("Pasted%20image.png").as_deref(),
+            Some("Pasted image.png")
+        );
+        assert_eq!(
+            percent_decode("r%C3%A9sum%C3%A9.pdf").as_deref(),
+            Some("résumé.pdf")
+        );
+        assert_eq!(percent_decode("plain").as_deref(), Some("plain"));
+        assert_eq!(percent_decode("bad%2"), None);
+        assert_eq!(percent_decode("bad%zz"), None);
+        assert_eq!(percent_decode("%FF"), None);
+    }
+}
+
+/// `%XX` escapes decoded, as UTF-8; `None` for a bad escape or text that is not UTF-8.
+pub(crate) fn percent_decode(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hex = std::str::from_utf8(bytes.get(i + 1..i + 3)?).ok()?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
 }
 
 #[tauri::command]
@@ -628,6 +871,86 @@ pub async fn cancel_run(state: State<'_, AppState>, run_id: String) -> Res<Run> 
 #[tauri::command]
 pub async fn keep_waiting(state: State<'_, AppState>, run_id: String) -> Res<()> {
     Ok(state.rt()?.keep_waiting(&run_id).await?)
+}
+
+/// Send again a chat message that did not get there.
+#[tauri::command]
+pub async fn retry_delivery(state: State<'_, AppState>, run_id: String) -> Res<Run> {
+    Ok(state.rt()?.retry_delivery(&run_id).await?)
+}
+
+/// Give up on a chat message that did not get there.
+#[tauri::command]
+pub async fn discard_delivery(state: State<'_, AppState>, run_id: String) -> Res<Run> {
+    Ok(state.rt()?.discard_delivery(&run_id).await?)
+}
+
+/// Today's sends to `dot_id`, whatever started them (a resume continues a send and is left
+/// out): sent, delivered and not delivered.
+#[tauri::command]
+pub async fn delivery_today(state: State<'_, AppState>, dot_id: String) -> Res<DeliveryCounts> {
+    Ok(state.rt()?.delivery_today(&dot_id).await?)
+}
+
+/// Schedules `text` to `dot_id` at `due_at` (RFC 3339), in the topic of `root_run_id` or as a
+/// new topic (send later spec section 4.4), with the staged files `attachment_ids`.
+#[tauri::command]
+pub async fn schedule_message(
+    state: State<'_, AppState>,
+    dot_id: String,
+    text: String,
+    root_run_id: Option<String>,
+    due_at: String,
+    attachment_ids: Option<Vec<String>>,
+) -> Res<ScheduledMessage> {
+    Ok(state
+        .rt()?
+        .schedule_message_with_files(
+            &dot_id,
+            &text,
+            root_run_id.as_deref(),
+            &due_at,
+            &attachment_ids.unwrap_or_default(),
+        )
+        .await?)
+}
+
+/// The dot's pending scheduled messages, in due order.
+#[tauri::command]
+pub async fn scheduled_messages(
+    state: State<'_, AppState>,
+    dot_id: String,
+) -> Res<Vec<ScheduledMessage>> {
+    Ok(state.rt()?.scheduled_messages(&dot_id).await?)
+}
+
+/// **Send now** on a scheduled message.
+#[tauri::command]
+pub async fn send_scheduled_now(state: State<'_, AppState>, id: String) -> Res<ScheduledMessage> {
+    Ok(state.rt()?.send_scheduled_now(&id).await?)
+}
+
+/// **Edit** of a scheduled message: its text and time.
+#[tauri::command]
+pub async fn edit_scheduled_message(
+    state: State<'_, AppState>,
+    id: String,
+    text: String,
+    due_at: String,
+) -> Res<ScheduledMessage> {
+    Ok(state
+        .rt()?
+        .edit_scheduled_message(&id, &text, &due_at)
+        .await?)
+}
+
+/// **Cancel** of a scheduled message.
+#[tauri::command]
+pub async fn cancel_scheduled_message(
+    state: State<'_, AppState>,
+    id: String,
+) -> Res<ScheduledMessage> {
+    Ok(state.rt()?.cancel_scheduled_message(&id).await?)
 }
 
 #[tauri::command]
@@ -695,16 +1018,24 @@ pub async fn approval_rule_candidates(
     Ok(state.rt()?.approval_rule_candidates(&id).await?)
 }
 
+/// True when the call touches a private folder: it always asks, and no rule can be saved with
+/// its approval (approval guards spec section 3.3).
+#[tauri::command]
+pub async fn approval_touches_private(state: State<'_, AppState>, id: String) -> Res<bool> {
+    Ok(state.rt()?.approval_touches_private(&id).await?)
+}
+
 #[tauri::command]
 pub async fn decide_run_approvals(
     state: State<'_, AppState>,
     run_id: String,
+    ids: Vec<String>,
     approved: bool,
     note: Option<String>,
 ) -> Res<Vec<Approval>> {
     Ok(state
         .rt()?
-        .decide_run_approvals(&run_id, approved, note)
+        .decide_run_approvals(&run_id, Some(&ids), approved, note)
         .await?)
 }
 
@@ -716,6 +1047,37 @@ pub async fn inbox(state: State<'_, AppState>) -> Res<Inbox> {
 #[tauri::command]
 pub async fn inbox_count(state: State<'_, AppState>) -> Res<usize> {
     Ok(state.rt()?.inbox_count().await?)
+}
+
+/// Hides Inbox items until `until`, an RFC 3339 time (snooze and done spec section 5).
+#[tauri::command]
+pub async fn inbox_snooze(
+    state: State<'_, AppState>,
+    items: Vec<InboxKey>,
+    until: String,
+) -> Res<()> {
+    let until = chrono::DateTime::parse_from_rfc3339(&until)
+        .map_err(|_| dots_core::Error::Invalid("Pick a time in the future.".into()))?
+        .with_timezone(&chrono::Utc);
+    Ok(state.rt()?.inbox_snooze(&items, until).await?)
+}
+
+/// **Unsnooze**: puts a snoozed item back.
+#[tauri::command]
+pub async fn inbox_unsnooze(state: State<'_, AppState>, item: InboxKey) -> Res<()> {
+    Ok(state.rt()?.inbox_unsnooze(&item).await?)
+}
+
+/// Marks an Inbox item done (not an approval).
+#[tauri::command]
+pub async fn inbox_done(state: State<'_, AppState>, item: InboxKey) -> Res<()> {
+    Ok(state.rt()?.inbox_done(&item).await?)
+}
+
+/// **Undo** on a done item.
+#[tauri::command]
+pub async fn inbox_undo_done(state: State<'_, AppState>, item: InboxKey) -> Res<()> {
+    Ok(state.rt()?.inbox_undo_done(&item).await?)
 }
 
 /// Clears the "Needs attention" of the dot's schedule.
@@ -1504,10 +1866,11 @@ pub async fn watcher_add(
     dot_id: String,
     name: String,
     config: WatcherConfig,
+    hours: Option<WatchHours>,
 ) -> Res<Watcher> {
     Ok(state
         .rt()?
-        .watcher_add(&dot_id, &name, config, None)
+        .watcher_add(&dot_id, &name, config, hours)
         .await?)
 }
 
@@ -1518,8 +1881,12 @@ pub async fn watcher_update(
     id: String,
     name: String,
     config: WatcherConfig,
+    hours: Option<WatchHours>,
 ) -> Res<Watcher> {
-    Ok(state.rt()?.watcher_update(&id, &name, config, None).await?)
+    Ok(state
+        .rt()?
+        .watcher_update(&id, &name, config, hours)
+        .await?)
 }
 
 #[tauri::command]

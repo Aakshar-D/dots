@@ -60,6 +60,11 @@ export const LibraryKind = z.enum(["mcp_server", "skill", "plugin", "context", "
 // accepted.
 export const CatalogStatus = z.enum(["accepted", "changed", "unreachable", "unchecked"]);
 
+// Whether a chat message reached its dot (delivery tracking spec section 3).
+export const Delivery = z.enum(["delivered", "waiting", "not_delivered"]);
+// Why a message is still waiting.
+export const WaitReason = z.enum(["busy", "usage_hold", "updating", "dot_busy", "queued"]);
+
 export const Rule = z.strictObject({ tool: z.string(), action: Action });
 export const Policy = z.strictObject({
   preset: Preset,
@@ -179,8 +184,26 @@ const runShape = {
   quiet_limit_secs: nullable(z.number().int()),
   // The watchdog stopped the run for being quiet.
   quiet_stopped: z.boolean(),
+  // When the message reached its dot's engine; null until then.
+  delivered_at: nullable(z.string()),
+  // When the core marked it as not delivered, and why.
+  undelivered_at: nullable(z.string()),
+  undelivered_reason: nullable(z.string()),
+  // The person chose Retry or Discard for a message that did not get there.
+  dismissed_at: nullable(z.string()),
+  delivery: nullable(Delivery),
+  wait_reason: nullable(WaitReason),
 };
 export const Run = z.strictObject(runShape);
+
+/// Today's sends to a dot, whatever started them (resumes left out): sent, delivered and not
+/// delivered.
+export const DeliveryCounts = z.strictObject({
+  sent: z.number().int(),
+  delivered: z.number().int(),
+  not_delivered: z.number().int(),
+});
+export type DeliveryCounts = z.infer<typeof DeliveryCounts>;
 
 export const RunEventRecord = z.strictObject({
   run_id: z.string(),
@@ -414,6 +437,14 @@ export const GithubConfig = z.strictObject({
   branches: z.array(z.string()),
 });
 export const WatcherConfig = z.discriminatedUnion("kind", [FolderConfig, EmailConfig, GithubConfig]);
+export const WatchDay = z.enum(["mon", "tue", "wed", "thu", "fri", "sat", "sun"]);
+// The days and the times of day a watcher starts its dot; "HH:MM" local time, an end before the
+// start runs past midnight.
+export const WatchHours = z.strictObject({
+  days: z.array(WatchDay),
+  start: z.string(),
+  end: z.string(),
+});
 export const Watcher = z.strictObject({
   id: z.string(),
   dot_id: z.string(),
@@ -425,6 +456,11 @@ export const Watcher = z.strictObject({
   last_event_at: nullable(z.string()),
   created_at: z.string(),
   updated_at: z.string(),
+  hours: nullable(WatchHours),
+  // Events held outside the hours, waiting for the next opening.
+  held_count: z.number(),
+  // The next opening, RFC 3339 with offset; null when there are no hours or it is open now.
+  next_opening: nullable(z.string()),
 });
 // A watcher Dots paused, as the Inbox lists it.
 export const PausedWatcher = z.strictObject({
@@ -446,6 +482,84 @@ export const ScheduleSkip = z.strictObject({
   reason: z.string(),
   run_id: nullable(z.string()),
   created_at: z.string(),
+});
+
+// Send later (send later spec section 4.1): a chat message the person wrote for Dots to send
+// at `due_at` (RFC 3339 UTC) to the topic `root_run_id` (null: a new topic). Pending while
+// scheduled, sending or failed; `waiting` says why a due one has not gone yet.
+export const ScheduledStatus = z.enum(["scheduled", "sending", "sent", "failed", "cancelled"]);
+export const ScheduledWait = z.enum(["busy", "approval", "usage_limit"]);
+// Attachments in chat (attachments spec sections 4 and 5): a file in the chat box, staged in
+// Dots' data folder; a file a message carries (`payload.attachments`); and a row of the Files
+// panel.
+export const StagedAttachment = z.strictObject({
+  id: z.string(),
+  name: z.string(),
+  size: z.number().int(),
+});
+export type StagedAttachment = z.infer<typeof StagedAttachment>;
+export const MessageAttachment = z.object({
+  id: z.string(),
+  name: z.string(),
+  size: z.number().int(),
+});
+export type MessageAttachment = z.infer<typeof MessageAttachment>;
+export const FileSource = z.enum(["attached", "written"]);
+export type FileSource = z.infer<typeof FileSource>;
+export const ConversationFile = z.strictObject({
+  path: z.string(),
+  name: z.string(),
+  source: FileSource,
+  run_id: z.string(),
+  at: z.string(),
+  exists: z.boolean(),
+  can_open: z.boolean(),
+});
+export type ConversationFile = z.infer<typeof ConversationFile>;
+
+export const ScheduledMessage = z.strictObject({
+  id: z.string(),
+  dot_id: z.string(),
+  root_run_id: nullable(z.string()),
+  text: z.string(),
+  due_at: z.string(),
+  status: ScheduledStatus,
+  waiting: nullable(ScheduledWait),
+  error: nullable(z.string()),
+  run_id: nullable(z.string()),
+  sent_at: nullable(z.string()),
+  created_at: z.string(),
+  updated_at: z.string(),
+  // The files it waits with (attachments spec section 4.6).
+  attachments: z.array(StagedAttachment),
+});
+
+// Snooze and Done on the Inbox (snooze and done spec section 4.1): an item's kind and its id
+// as it is now, so a mark never hides a later item with the same subject.
+export const InboxKind = z.enum([
+  "message",
+  "approval",
+  "review",
+  "not_delivered",
+  "attention",
+  "watcher",
+  "held",
+  "tools",
+  "instructions",
+  "app_review",
+  "team_scope",
+]);
+export const InboxKey = z.strictObject({ kind: InboxKind, id: z.string() });
+// A mark on an Inbox item, in exactly one state (RFC 3339 UTC times). `dot_id` is null for
+// tools that changed.
+export const InboxMark = z.strictObject({
+  kind: InboxKind,
+  id: z.string(),
+  title: z.string(),
+  dot_id: nullable(z.string()),
+  snoozed_until: nullable(z.string()),
+  done_at: nullable(z.string()),
+  back_at: nullable(z.string()),
 });
 
 export const RuntimeEvent = z.discriminatedUnion("type", [
@@ -513,6 +627,13 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
   // An org was joined, updated, fetched (by Refresh, its timer or the start-up fetch) or
   // removed: its status, policy or values may have changed.
   z.strictObject({ type: z.literal("org_updated"), org_id: z.string() }),
+  // An Inbox item was snoozed, unsnoozed, marked done or undone, came back, or its mark went.
+  z.strictObject({ type: z.literal("inbox_updated") }),
+  // Snoozed items came back in one wake pass (the app notifies); an `inbox_updated` goes with it.
+  z.strictObject({ type: z.literal("snooze_ended"), items: z.array(InboxMark) }),
+  // A scheduled message was scheduled, edited, cancelled, sent or failed, or its waiting reason
+  // changed (the app notifies on a failure).
+  z.strictObject({ type: z.literal("scheduled_message_updated"), message: ScheduledMessage }),
   // A new limit reading, or a hold that started, ended or changed what it holds; `change` is
   // set when a hold started or ended (the app notifies).
   z.strictObject({
@@ -608,6 +729,11 @@ export const ReviewRun = z.strictObject({
   dot_name: z.string(),
   worktree_exists: z.boolean(),
 });
+// A chat message that did not reach its dot, not retried or discarded yet.
+export const UndeliveredMessage = z.strictObject({
+  ...runShape,
+  dot_name: z.string(),
+});
 // A schedule whose occurrence failed in the end ("Needs attention").
 export const NeedsAttention = z.strictObject({
   dot_id: z.string(),
@@ -666,6 +792,17 @@ export const Inbox = z.strictObject({
   app_reviews: z.array(z.lazy(() => PendingAppReview)),
   // Teams with a member dot outside the team's account or workspace.
   team_scope: z.array(z.lazy(() => TeamScopeIssue)),
+  // Chat messages that did not reach their dot, newest first; not in `review_runs`.
+  not_delivered: z.array(UndeliveredMessage).default([]),
+  // Marks of items back from snooze, newest first. The items stay in their sections.
+  back: z.array(InboxMark).default([]),
+  // Marks of snoozed items, soonest back first. The items are left out of their sections.
+  snoozed: z.array(InboxMark).default([]),
+  // Marks of items done in the last 7 days, newest first. Left out of their sections too.
+  done: z.array(InboxMark).default([]),
+  // The waiting messages that are hidden (snoozed, or done however long ago): the questions
+  // and notes come with the messages, so the Inbox leaves these out.
+  hidden_messages: z.array(z.string()).default([]),
 });
 // A member dot that is not in its team's account or workspace, as the Inbox lists it.
 export const TeamScopeIssue = z.strictObject({
@@ -979,6 +1116,44 @@ export const DraftRequest = z.strictObject({
   model: z.string(),
   current: nullable(z.string()),
   change: nullable(z.string()),
+});
+// The setup agent's view (setup agent spec §6).
+export const SetupRound = z.strictObject({
+  questions: z.array(z.string()),
+  answers: z.array(z.string()),
+});
+export const SetupProposal = z.strictObject({
+  name: z.string(),
+  instructions: z.string(),
+  folder: nullable(z.string()),
+  schedule: nullable(Schedule),
+  preset: Preset,
+  extras: z.array(z.string()),
+  uses: Uses,
+  first_message: z.string(),
+  notes: z.string(),
+});
+export const SetupRequest = z.strictObject({
+  description: z.string(),
+  rounds: z.array(SetupRound),
+  current: nullable(SetupProposal),
+  change: nullable(z.string()),
+  skip: z.boolean(),
+});
+export const SetupAnswer = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("questions"), questions: z.array(z.string()) }),
+  z.strictObject({
+    kind: z.literal("proposal"),
+    proposal: SetupProposal,
+    new_dot_root: z.string(),
+  }),
+]);
+export const SetupApplied = z.strictObject({
+  dot: Dot,
+  run_id: nullable(z.string()),
+  run_error: nullable(z.string()),
+  // What the check at apply time changed in the proposal; empty when nothing.
+  notes: z.string(),
 });
 // The name and description the Library will show for a draft that can be saved.
 export const DraftSummary = z.strictObject({
@@ -1560,6 +1735,9 @@ export type SettingsSaved = z.infer<typeof SettingsSaved>;
 export type BrowserStatus = z.infer<typeof BrowserStatus>;
 export type ScheduleView = z.infer<typeof ScheduleView>;
 export type ScheduleSkip = z.infer<typeof ScheduleSkip>;
+export type ScheduledStatus = z.infer<typeof ScheduledStatus>;
+export type ScheduledWait = z.infer<typeof ScheduledWait>;
+export type ScheduledMessage = z.infer<typeof ScheduledMessage>;
 export type DotOverview = z.infer<typeof DotOverview>;
 export type PendingApproval = z.infer<typeof PendingApproval>;
 export type ReviewRun = z.infer<typeof ReviewRun>;
@@ -1567,6 +1745,10 @@ export type NeedsAttention = z.infer<typeof NeedsAttention>;
 export type DotRef = z.infer<typeof DotRef>;
 export type ToolsChanged = z.infer<typeof ToolsChanged>;
 export type Inbox = z.infer<typeof Inbox>;
+export type InboxKind = z.infer<typeof InboxKind>;
+export type InboxKey = z.infer<typeof InboxKey>;
+export type InboxMark = z.infer<typeof InboxMark>;
+export type UndeliveredMessage = z.infer<typeof UndeliveredMessage>;
 export type InstructionProposal = z.infer<typeof InstructionProposal>;
 export type PendingInstructions = z.infer<typeof PendingInstructions>;
 export type McpServerConfig = z.infer<typeof McpServerConfig>;
@@ -1627,6 +1809,11 @@ export type ContextDocuments = z.infer<typeof ContextDocuments>;
 export type McpProbe = z.infer<typeof McpProbe>;
 export type ScannedSkill = z.infer<typeof ScannedSkill>;
 export type DraftRequest = z.infer<typeof DraftRequest>;
+export type SetupRound = z.infer<typeof SetupRound>;
+export type SetupProposal = z.infer<typeof SetupProposal>;
+export type SetupRequest = z.infer<typeof SetupRequest>;
+export type SetupAnswer = z.infer<typeof SetupAnswer>;
+export type SetupApplied = z.infer<typeof SetupApplied>;
 export type DraftSummary = z.infer<typeof DraftSummary>;
 export type InstalledPlugin = z.infer<typeof InstalledPlugin>;
 export type AgentSourceKind = z.infer<typeof AgentSourceKind>;
@@ -1681,6 +1868,8 @@ export type FolderConfig = z.infer<typeof FolderConfig>;
 export type EmailConfig = z.infer<typeof EmailConfig>;
 export type GithubConfig = z.infer<typeof GithubConfig>;
 export type WatcherConfig = z.infer<typeof WatcherConfig>;
+export type WatchDay = z.infer<typeof WatchDay>;
+export type WatchHours = z.infer<typeof WatchHours>;
 export type Watcher = z.infer<typeof Watcher>;
 export type PausedWatcher = z.infer<typeof PausedWatcher>;
 export type UpdateNote = z.infer<typeof UpdateNote>;
