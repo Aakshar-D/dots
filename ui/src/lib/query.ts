@@ -33,6 +33,8 @@ export const keys = {
   inbox: ["inbox"] as const,
   library: ["library"] as const,
   installedPlugins: ["installed-plugins"] as const,
+  /// The Claude Code agents on this PC, for the import dialog.
+  claudeAgents: ["claude-agents"] as const,
   environmentVariables: (names: string[]) => ["environment-variables", names] as const,
   env: ["env"] as const,
   envImport: ["env-import"] as const,

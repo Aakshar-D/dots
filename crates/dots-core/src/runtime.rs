@@ -89,6 +89,10 @@ pub struct Config {
     /// `Config::new` leaves them out, so a test starts with no app unless it asks for them;
     /// the app's configuration has them.
     pub bundled_apps: bool,
+    /// The home folder whose `.claude` holds the Claude Code agents and plugins an import reads
+    /// (import agents spec section 4). `Config::new` has none, so a test never reads the real
+    /// one; the app's configuration has the person's.
+    pub claude_home: Option<PathBuf>,
     /// Where a dot created without a folder gets one: `<new_dot_root>\<folder name>`. The app
     /// uses `%USERPROFILE%\Dots`; `Config::new` keeps it inside the data folder, so a test
     /// never touches the home folder.
@@ -112,6 +116,7 @@ impl Config {
             secrets: Some(Arc::new(MemorySecrets::new())),
             watcher_sources: crate::watchers::Sources::default(),
             bundled_apps: false,
+            claude_home: None,
         }
     }
 
@@ -123,6 +128,10 @@ impl Config {
         cfg.claude_path = settings.claude_path.as_ref().map(PathBuf::from);
         cfg.secrets = None;
         cfg.bundled_apps = true;
+        cfg.claude_home = ["USERPROFILE", "HOME"]
+            .iter()
+            .find_map(|k| std::env::var(k).ok().filter(|v| !v.trim().is_empty()))
+            .map(PathBuf::from);
         let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"));
         if let Some(home) = home.filter(|h| !h.is_empty()) {
             cfg.new_dot_root = PathBuf::from(home).join("Dots");
@@ -255,6 +264,10 @@ pub struct Runtime {
     org_timers: OrgTimers,
     /// Claude's usage limits (usage and limits spec section 4).
     limits: Arc<crate::limits::Limits>,
+    /// Where Claude Code's agents are looked for (`Config::claude_home`).
+    claude_home: Option<PathBuf>,
+    /// Makes agent imports run one at a time (`import_claude_agents`).
+    import_lock: Mutex<()>,
     /// Wakes the send later loop: a message was scheduled or edited (send later spec 4.5).
     send_later_wake: Arc<tokio::sync::Notify>,
     /// The stored copies of files attached to chat messages (attachments spec section 4.2).
@@ -634,6 +647,8 @@ impl Runtime {
             orgs,
             org_timers,
             limits,
+            claude_home: cfg.claude_home.clone(),
+            import_lock: Mutex::new(()),
             send_later_wake: Arc::new(tokio::sync::Notify::new()),
             chat_files,
             shutdown,
@@ -1817,6 +1832,143 @@ impl Runtime {
         self.scheduler.reload();
         self.watchers.reload();
         Ok(dot)
+    }
+
+    /// The folders an agent scan reads: the home folder's agents, the workdir of each dot in the
+    /// account and workspace in view (`scope`), and each installed Claude Code plugin (import
+    /// agents spec section 3).
+    fn agent_sources(
+        &self,
+        dots: &[Dot],
+        scope: &crate::accounts::CurrentScope,
+    ) -> crate::claude_agents::AgentSources {
+        let Some(home) = &self.claude_home else {
+            return Default::default();
+        };
+        let mut projects: Vec<(PathBuf, crate::model::WorkspaceMode)> = Vec::new();
+        let in_view = |dot: &&Dot| {
+            dot.org_id.as_deref().unwrap_or(crate::accounts::PERSONAL) == scope.account
+                && dot.workspace_id == scope.workspace
+        };
+        for dot in dots.iter().filter(in_view) {
+            let dir = PathBuf::from(&dot.spec.workdir);
+            if dot.spec.workdir.trim().is_empty() || projects.iter().any(|(p, _)| *p == dir) {
+                continue;
+            }
+            projects.push((dir, dot.spec.workspace_mode));
+        }
+        let home_text = home.to_string_lossy().into_owned();
+        let env = |key: &str| match key {
+            "USERPROFILE" | "HOME" => Some(home_text.clone()),
+            other => crate::library_service::process_env(other),
+        };
+        let plugins = crate::kit::installed_plugins(&env)
+            .into_iter()
+            .filter(|p| p.exists)
+            .map(|p| (p.name, p.install_path))
+            .collect();
+        crate::claude_agents::AgentSources {
+            user: Some(home.join(".claude").join("agents")),
+            projects,
+            plugins,
+        }
+    }
+
+    async fn agent_scan(&self) -> Result<(Vec<crate::claude_agents::Found>, Vec<String>)> {
+        let dots = self.store.list_dots().await?;
+        let names: Vec<String> = dots.iter().map(|d| d.spec.name.clone()).collect();
+        let scope = self.current_scope().await?;
+        let sources = self.agent_sources(&dots, &scope);
+        let found =
+            tokio::task::spawn_blocking(move || crate::claude_agents::scan(&sources, &names))
+                .await
+                .map_err(|e| Error::Other(e.to_string()))?;
+        Ok((found, dots.into_iter().map(|d| d.spec.name).collect()))
+    }
+
+    /// The Claude Code agents on this PC, each with the dot it would become.
+    pub async fn scan_claude_agents(&self) -> Result<Vec<crate::claude_agents::ScannedAgent>> {
+        Ok(self
+            .agent_scan()
+            .await?
+            .0
+            .into_iter()
+            .map(|f| f.listed)
+            .collect())
+    }
+
+    /// Makes a dot of each agent file in `paths`, in the account `org_id` and workspace
+    /// `workspace_id` as `create_dot` does. Only a file a fresh scan finds and can read is
+    /// imported, as it reads now, and a path given twice once; a taken name gets a number. An
+    /// agent that fails is named in `failed` and the others go on. Imports run one at a time
+    /// and read the dots' names when they start, so two never pick the same name; a dot made
+    /// meanwhile under that name (the store refuses a second) moves the import on to the next
+    /// number. An agent that is not a project's gets a new folder as a dot made without one.
+    pub async fn import_claude_agents(
+        &self,
+        paths: Vec<String>,
+        org_id: Option<String>,
+        workspace_id: Option<String>,
+    ) -> Result<crate::claude_agents::AgentImport> {
+        use crate::claude_agents::{agent_spec, free_name, AgentImport, ImportFailure};
+        let workspace = workspace_id
+            .clone()
+            .unwrap_or_else(|| crate::accounts::DEFAULT_WORKSPACE.into());
+        self.check_workspace(org_id.as_deref(), &workspace).await?;
+        self.require_in(org_id.as_deref(), &workspace, Permission::EditDots)
+            .await?;
+        let _one_at_a_time = self.import_lock.lock().await;
+        let (found, names) = self.agent_scan().await?;
+        let mut taken: std::collections::BTreeSet<String> =
+            names.iter().map(|n| n.to_lowercase()).collect();
+        let mut done = AgentImport {
+            created: Vec::new(),
+            failed: Vec::new(),
+        };
+        let mut given = std::collections::BTreeSet::new();
+        for path in paths {
+            if !given.insert(path.clone()) {
+                continue;
+            }
+            let fail = |reason: String| ImportFailure {
+                path: path.clone(),
+                reason,
+            };
+            let Some(item) = found.iter().find(|f| f.listed.path == path) else {
+                done.failed.push(fail(
+                    "it was not found by a scan of the Claude Code agent folders".into(),
+                ));
+                continue;
+            };
+            let Some(agent) = &item.agent else {
+                let reason = item.listed.error.clone().unwrap_or_default();
+                done.failed.push(fail(reason));
+                continue;
+            };
+            // A few names in turn, for a dot made under the picked one meanwhile.
+            let mut outcome = Err(Error::Other("no name was free".into()));
+            for _ in 0..5 {
+                let name = free_name(&item.listed.name, &mut taken);
+                // A project agent works in its project; any other gets a folder of its own from
+                // `create_dot` (a blank workdir), which removes it again if the create fails.
+                let (workdir, mode) = match &item.project {
+                    Some((dir, mode)) => (dir.to_string_lossy().into_owned(), *mode),
+                    None => (String::new(), crate::model::WorkspaceMode::Folder),
+                };
+                let spec = agent_spec(agent, &name, &workdir, mode);
+                outcome = self
+                    .create_dot(spec, org_id.clone(), workspace_id.clone())
+                    .await;
+                if !matches!(outcome, Err(Error::Conflict(_))) {
+                    break;
+                }
+            }
+            match outcome {
+                Ok(dot) => done.created.push(dot),
+                Err(e) => done.failed.push(fail(e.to_string())),
+            }
+        }
+        Ok(done)
     }
 
     /// Refuses a workspace the account (`None` is Personal) doesn't have.

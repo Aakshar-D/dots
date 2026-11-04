@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "cn";
-import { Plus } from "lucide-react";
+import { Download, Plus } from "lucide-react";
 import { useState, type KeyboardEvent } from "react";
 import { Link } from "react-router";
 
@@ -11,6 +11,7 @@ import { useScopeRefusal } from "@/lib/access";
 import { orgRemoved, orgRemovedText, useOrgList } from "@/lib/dot-org";
 import { dotStatus, lastLine, nextLine } from "@/lib/dot-status";
 import { keys } from "@/lib/query";
+import { ImportAgentsDialog } from "@/screens/home/ImportAgentsDialog";
 import { StatusMark } from "@/screens/home/StatusMark";
 import { UnreadBadge } from "@/screens/home/UnreadBadge";
 import { NewDotDialog } from "@/screens/setup/NewDotDialog";
@@ -37,6 +38,7 @@ export function DotsColumn({ rows, openId }: { rows: DotOverview[]; openId: stri
   const orgs = useOrgList(rows.some((row) => row.dot.org_id !== null));
   // A Viewer, or a PC off the member list, can't make a dot in the account it works in.
   const refusal = useScopeRefusal("edit");
+  const [importing, setImporting] = useState(false);
   // New dot opens the setup view in a dialog; the form stays at /dots/new.
   const [creating, setCreating] = useState(false);
   // With no dot in view the home already shows the setup view: New dot goes there rather than
@@ -99,6 +101,19 @@ export function DotsColumn({ rows, openId }: { rows: DotOverview[]; openId: stri
             {refusal}
           </span>
         )}
+        {/* Claude Code agents become dots in the same account, so the same refusal hides it. */}
+        {!refusal && (
+          <Button
+            type="button"
+            variant="ghost"
+            className="w-full justify-start text-muted-foreground"
+            onClick={() => setImporting(true)}
+          >
+            <Download aria-hidden />
+            Import from Claude Code
+          </Button>
+        )}
+        {importing && <ImportAgentsDialog onClose={() => setImporting(false)} />}
       </div>
       <h2 className="px-4 pt-3 pb-1 text-xs font-medium text-muted-foreground">Dots</h2>
       <ul className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-auto px-2 pb-2" onKeyDown={onKeyDown}>

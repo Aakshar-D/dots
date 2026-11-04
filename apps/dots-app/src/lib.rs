@@ -78,6 +78,8 @@ command_list![
     get_dot,
     dot_variables,
     create_dot,
+    scan_claude_agents,
+    import_claude_agents,
     setup_ask,
     setup_cancel,
     setup_apply,

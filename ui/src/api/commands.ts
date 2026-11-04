@@ -162,6 +162,15 @@ export const commands = {
   /// `workspaceId`: the workspace of that account it starts in; null for the default one.
   createDot: (spec: DotSpec, orgId: string | null = null, workspaceId: string | null = null) =>
     call(T.Dot, "create_dot", { spec, orgId, workspaceId }),
+  /// The Claude Code agents on this PC, each with the dot it would become.
+  scanClaudeAgents: () => call(T.ScannedAgent.array(), "scan_claude_agents"),
+  /// Makes a dot of each agent file in `paths` (as a fresh scan finds them), in the account
+  /// `orgId` (null for Personal) and its workspace `workspaceId` (null for the default one).
+  importClaudeAgents: (
+    paths: string[],
+    orgId: string | null = null,
+    workspaceId: string | null = null,
+  ) => call(T.AgentImport, "import_claude_agents", { paths, orgId, workspaceId }),
   /// Asks the setup agent for the setup view `id`: its questions, or a checked proposal. A newer
   /// request of the same id cancels the one before.
   setupAsk: (id: string, request: SetupRequest) =>

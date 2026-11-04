@@ -52,6 +52,21 @@ describe("commands", () => {
     ]);
   });
 
+  it("scans and imports Claude Code agents as the core names them", async () => {
+    reply = async () => fixture.ScannedAgent;
+    expect(await commands.scanClaudeAgents()).toEqual(fixture.ScannedAgent);
+    reply = async () => fixture.AgentImport;
+    expect(await commands.importClaudeAgents(["C:/a.md"], "acme", "platform")).toEqual(
+      fixture.AgentImport,
+    );
+    await commands.importClaudeAgents(["C:/b.md"]);
+    expect(calls).toEqual([
+      ["scan_claude_agents", undefined],
+      ["import_claude_agents", { paths: ["C:/a.md"], orgId: "acme", workspaceId: "platform" }],
+      ["import_claude_agents", { paths: ["C:/b.md"], orgId: null, workspaceId: null }],
+    ]);
+  });
+
   it("sends the check-in commands as the core names them", async () => {
     reply = async () => fixture.Message;
     expect(await commands.messagesList(null)).toEqual(fixture.Message);
