@@ -30,7 +30,7 @@ Today a topic is only a line of runs sharing `runs.root_run_id`; it has no row, 
 
 ## 4. Core
 
-### 4.1 Migration 0030
+### 4.1 Migration 0035
 
 ```sql
 CREATE TABLE topics (
