@@ -29,6 +29,7 @@ pub mod proc;
 pub mod prompt;
 pub mod publish;
 pub mod releases;
+pub mod report;
 pub mod run_tools;
 pub mod runner;
 pub mod runtime;

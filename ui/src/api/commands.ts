@@ -97,6 +97,12 @@ const text = z.string();
 export const commands = {
   startupError: () => call(T.StartupError.nullable(), "startup_error"),
   status: () => call(T.Status, "status"),
+  /// The problem report's text: what is previewed, copied and saved.
+  problemReport: (description: string, includeLogs: boolean) =>
+    call(z.string(), "problem_report", { description, includeLogs }),
+  /// Saves `text` where the person chooses in the native save dialog; the path, or null.
+  saveProblemReport: (text: string) =>
+    call(z.string().nullable(), "save_problem_report", { text }),
   chatGptAccount: () => call(T.ChatGptStatus, "chatgpt_account"),
   chatGptSignIn: () => call(T.ChatGptStatus, "chatgpt_sign_in"),
   chatGptSignOut: () => call(T.ChatGptStatus, "chatgpt_sign_out"),

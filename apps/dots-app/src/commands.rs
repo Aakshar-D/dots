@@ -66,6 +66,47 @@ pub async fn status(state: State<'_, AppState>) -> Res<Status> {
     Ok(state.rt()?.status().await)
 }
 
+/// The problem report's text (report a problem spec §4), for the preview, Copy and Save.
+#[tauri::command]
+pub async fn problem_report(
+    state: State<'_, AppState>,
+    description: String,
+    include_logs: bool,
+) -> Res<String> {
+    let rt = state.rt()?;
+    Ok(dots_core::report::build(
+        rt.store(),
+        env!("CARGO_PKG_VERSION"),
+        state.log_dir(),
+        &description,
+        include_logs,
+    )
+    .await?)
+}
+
+/// Saves the previewed report where the person chooses in the native save dialog; the path, or
+/// none when cancelled. The UI gives the text, never the place.
+#[tauri::command]
+pub async fn save_problem_report(app: AppHandle, text: String) -> Res<Option<String>> {
+    use tauri_plugin_dialog::DialogExt;
+    let name = dots_core::report::file_name(chrono::Local::now().fixed_offset());
+    let Some(path) = app
+        .dialog()
+        .file()
+        .set_file_name(&name)
+        .add_filter("Text", &["txt"])
+        .blocking_save_file()
+    else {
+        return Ok(None);
+    };
+    let path = path
+        .into_path()
+        .map_err(|e| CmdError::internal(format!("that place cannot be written: {e}")))?;
+    std::fs::write(&path, text)
+        .map_err(|e| CmdError::internal(format!("could not write {}: {e}", path.display())))?;
+    Ok(Some(path.to_string_lossy().into_owned()))
+}
+
 #[tauri::command]
 pub async fn mark_claude_tested(state: State<'_, AppState>) -> Res<Status> {
     Ok(state.rt()?.mark_claude_tested().await?)
