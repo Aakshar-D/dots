@@ -43,6 +43,9 @@ fn flow(name: &str, member: &str) -> WorkflowSpec {
                 kind: StepKind::Agent {
                     member: member.into(),
                     job: "Fix it.".into(),
+                    can_send_back_to: vec![],
+                    outcomes: vec![],
+                    delegate: None,
                 },
             }],
             budget: Budget::default(),
@@ -208,6 +211,78 @@ async fn a_project_is_a_git_repo_with_safe_git_names() {
     assert_eq!(p2.spec.default_branch.as_deref(), Some("main"));
     teams.delete_project(&p.id).await.unwrap();
     assert!(teams.get(&t.id).await.unwrap().projects.is_empty());
+}
+
+#[tokio::test]
+async fn a_project_refuses_names_git_refuses_and_a_default_branch_with_its_remote() {
+    let (dir, store) = temp_store().await;
+    let teams = Teams::new(store.clone(), new_bus());
+    let t = teams.create(&team("T", &[])).await.unwrap();
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    let p = teams
+        .add_project(&t.id, &project("Dots", &repo))
+        .await
+        .unwrap();
+    let with_branch = |branch: &str| {
+        let mut spec = project("Dots", &repo);
+        spec.default_branch = Some(branch.into());
+        spec
+    };
+    // What git refuses in a ref name: `..`, a trailing `/`, a part that ends in `.lock`.
+    for bad in ["fix..main", "feature/", "main.lock", "release.lock/1"] {
+        assert!(
+            matches!(
+                teams.update_project(&p.id, &with_branch(bad)).await,
+                Err(Error::Invalid(m)) if m == "the default branch must not contain '..' or end \
+                    with '/', and no part of it may end with '.lock'"
+            ),
+            "{bad} was not refused"
+        );
+    }
+    let mut remote = project("Dots", &repo);
+    remote.remote = "up..stream".into();
+    assert!(matches!(
+        teams.update_project(&p.id, &remote).await,
+        Err(Error::Invalid(m)) if m == "the remote must not contain '..' or end with '/', and no \
+            part of it may end with '.lock'"
+    ));
+    for good in ["release/1.0", "feature/lock", "main.locked"] {
+        let saved = teams
+            .update_project(&p.id, &with_branch(good))
+            .await
+            .unwrap();
+        assert_eq!(saved.spec.default_branch.as_deref(), Some(good));
+    }
+    // The project's own remote in front, though the repo has no remote yet.
+    assert!(matches!(
+        teams.update_project(&p.id, &with_branch("origin/main")).await,
+        Err(Error::Invalid(m)) if m == "give the default branch without the remote: \"main\", \
+            not \"origin/main\""
+    ));
+    // Another of the repo's remotes in front: a branch name until the repo has that remote.
+    let saved = teams
+        .update_project(&p.id, &with_branch("upstream/main"))
+        .await
+        .unwrap();
+    assert_eq!(saved.spec.default_branch.as_deref(), Some("upstream/main"));
+    let upstream = dir.path().join("upstream");
+    init_repo(&upstream);
+    common::git_out(
+        &repo,
+        &["remote", "add", "upstream", &upstream.to_string_lossy()],
+    );
+    assert!(matches!(
+        teams.update_project(&p.id, &with_branch("upstream/main")).await,
+        Err(Error::Invalid(m)) if m == "give the default branch without the remote: \"main\", \
+            not \"upstream/main\""
+    ));
+    let mut added = with_branch("upstream/main");
+    added.name = "Other".into();
+    assert!(matches!(
+        teams.add_project(&t.id, &added).await,
+        Err(Error::Invalid(m)) if m.starts_with("give the default branch without the remote")
+    ));
 }
 
 #[tokio::test]

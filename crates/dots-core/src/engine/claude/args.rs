@@ -62,14 +62,14 @@ pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
     if let Some(apps) = ctx.tools.apps() {
         allow.extend(apps.model_names(EngineKind::Claude));
     }
-    // And of `start_workflow`, for a run that may start a workflow (teams spec section 7).
-    if !ctx.tools.startable().is_empty() {
-        allow.push(
-            crate::team_tools::Tool::StartWorkflow
-                .model_name(EngineKind::Claude)
-                .to_string(),
-        );
-    }
+    // And of the workflow tools the run has (teams spec section 7): `start_workflow` for a run
+    // that may start a workflow, a step's tools for a run of an open agent step.
+    allow.extend(
+        crate::team_tools::Tool::ALL
+            .into_iter()
+            .filter(|t| ctx.tools.offers(*t))
+            .map(|t| t.model_name(EngineKind::Claude).to_string()),
+    );
     // And of `propose_instructions`, for a run of a chat the person started (conversational
     // chat spec section 4).
     if ctx.tools.instructions() {

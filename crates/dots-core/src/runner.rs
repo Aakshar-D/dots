@@ -976,7 +976,7 @@ impl Runner {
         let step_name = workflow_run
             .definition
             .step(&step.step_id)
-            .map(|(_, s)| s.name.clone())
+            .map(|s| s.name.clone())
             .unwrap_or(step.step_id);
         Ok(Some(StepContext {
             repo: workflow_run.project.repo_path,
@@ -1133,6 +1133,18 @@ impl Runner {
         // continues the thread of a step that has ended works there no more, nor for the
         // workflow: it fails before its workspace is touched.
         if self.store.in_ended_step_thread(run).await? {
+            // A Stop closed the run's own step after the run turned `Running`, before its
+            // cancel reached the run: it ends cancelled, as the Stop meant, not failed.
+            let stopped = match &run.workflow_step_run_id {
+                Some(id) => {
+                    self.store.get_step_run(id).await?.status
+                        == crate::model::StepRunStatus::Cancelled
+                }
+                None => false,
+            };
+            if stopped {
+                return self.finish_cancelled_before_start(&run.id).await;
+            }
             return Err(Error::Other(
                 crate::workflows::ENDED_STEP_THREAD.to_string(),
             ));
@@ -1261,6 +1273,19 @@ impl Runner {
             tools.with_startable(startable)
         } else {
             tools
+        };
+        // A run of an open agent step has the step's workflow tools, under the same rule. A step
+        // that cannot be read is logged; the run goes on without them.
+        let tools = if workflow_off {
+            tools
+        } else {
+            match crate::team_tools::for_run(&self.store, run).await {
+                Ok(step) => tools.with_step(step),
+                Err(e) => {
+                    tracing::warn!(run = %run.id, "reading the step's workflow tools failed: {e}");
+                    tools
+                }
+            }
         };
         // A run of a chat the person started may propose new instructions for its dot
         // (conversational chat spec section 4), unless its policy denies `Instructions`
