@@ -145,8 +145,14 @@ fn more_secret_shapes_are_scrubbed() {
         ("url https://h/x?key=AIzaSyA12345&pw=letmein", "letmein"),
         ("aws ASIAABCDEFGHIJKLMNOP in use", "ASIAABCDEFGHIJKLMNOP"),
         ("key sk-ant-api03-AbCdEfGhIjKlMnOpQrSt", "AbCdEfGhIjKlMnOp"),
-        (concat!("slack xox", "a-2-12345678901-abcdefghij"), "abcdefghij"),
-        (concat!("slack xox", "r-12345678901-abcdefghijkl"), "abcdefghijkl"),
+        (
+            concat!("slack xox", "a-2-12345678901-abcdefghij"),
+            "abcdefghij",
+        ),
+        (
+            concat!("slack xox", "r-12345678901-abcdefghijkl"),
+            "abcdefghijkl",
+        ),
         (
             "app ghs_abcdefghijklmnopqrstuvwxyz0123456789",
             "ghs_abcdefgh",
