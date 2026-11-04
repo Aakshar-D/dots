@@ -187,6 +187,10 @@ export const commands = {
   previewSchedule: (schedule: Schedule, count: number) =>
     call(text.array(), "preview_schedule", { schedule, count }),
   policyPreset: (preset: Preset) => call(T.Policy, "policy_preset", { preset }),
+  /// For each rule pattern, whether it names or covers a private folder: such an allow rule
+  /// always asks.
+  rulesTouchPrivate: (patterns: string[]) =>
+    call(z.boolean().array(), "rules_touch_private", { patterns }),
   newDotSpec: () => call(T.DotSpec, "new_dot_spec"),
   testEndpoint: (endpoint: string, model: string) =>
     call(text, "test_endpoint", { endpoint, model }),
@@ -272,6 +276,9 @@ export const commands = {
   /// the call can only be approved one at a time.
   approvalRuleCandidates: (id: string) =>
     call(T.RuleCandidate.array(), "approval_rule_candidates", { id }),
+  /// True when the call touches a private folder (keys, tokens, `.env` files): it always asks,
+  /// and no rule can be saved with its approval.
+  approvalTouchesPrivate: (id: string) => call(z.boolean(), "approval_touches_private", { id }),
   /// Gives every pending approval of one run the same answer, in the order they were asked.
   /// Answers the approvals it decided.
   /// Decides only `ids`, the calls of the run the person was shown: a snoozed call of the same

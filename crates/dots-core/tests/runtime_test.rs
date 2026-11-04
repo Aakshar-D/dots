@@ -4,7 +4,9 @@ use std::path::PathBuf;
 
 use common::{init_repo, spec, wait_status};
 use dots_core::checkins::Tool;
-use dots_core::model::{DotSpec, MessageKind, NewRun, RunStatus, TriggerKind, WorkspaceMode};
+use dots_core::model::{
+    ApprovalStatus, DotSpec, MessageKind, NewRun, RunStatus, TriggerKind, WorkspaceMode,
+};
 use dots_core::store::Store;
 use dots_core::{Config, Error, Runtime};
 use serde_json::{json, Value};
@@ -749,6 +751,7 @@ async fn a_rule_can_be_saved_with_the_approval_of_a_claude_dot() {
             .map(|c| c.pattern)
             .collect();
     assert_eq!(offered, vec!["Bash(git push)"]);
+    assert!(!t.rt.approval_touches_private(&approval.id).await.unwrap());
     t.rt.decide_approval(&approval.id, true, None, Some("Bash(git push)".into()))
         .await
         .unwrap();
@@ -771,6 +774,56 @@ async fn a_rule_can_be_saved_with_the_approval_of_a_claude_dot() {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
     panic!("no resume run");
+}
+
+#[tokio::test]
+async fn a_private_folder_gets_no_rule_and_a_forged_one_is_refused() {
+    let script = json!([
+        {"emit": {"type": "system", "subtype": "init", "session_id": "$SESSION"}},
+        {"approve": {"tool_name": "Bash", "input": {"command": "cat .env"}}},
+        {"emit": {"type": "result", "subtype": "success", "is_error": false, "result": "ok",
+                  "usage": {"input_tokens": 1, "output_tokens": 1}}}
+    ]);
+    let t = start(Some(script), None).await;
+    let mut s = folder_spec(&t.dir, "private");
+    s.approval_wait_secs = 0;
+    let dot = t.rt.create_dot(s, None, None).await.unwrap();
+    let parent = t.rt.run_now(&dot.id).await.unwrap();
+    wait_status(t.rt.store(), &parent.id, RunStatus::AwaitingApproval, 15).await;
+    let approval =
+        t.rt.store()
+            .list_pending_approvals()
+            .await
+            .unwrap()
+            .remove(0);
+    assert!(t.rt.approval_touches_private(&approval.id).await.unwrap());
+    assert!(t
+        .rt
+        .approval_rule_candidates(&approval.id)
+        .await
+        .unwrap()
+        .is_empty());
+    let err =
+        t.rt.decide_approval(&approval.id, true, None, Some("Bash(cat .env)".into()))
+            .await
+            .unwrap_err();
+    assert!(
+        matches!(&err, Error::Invalid(m) if m.contains("private folder")),
+        "{err:?}"
+    );
+    let still = t.rt.store().get_approval(&approval.id).await.unwrap();
+    assert_eq!(still.status, ApprovalStatus::Pending);
+    assert_eq!(
+        t.rt.get_dot(&dot.id).await.unwrap().spec.policy,
+        dot.spec.policy
+    );
+    // Approving the one call still works.
+    let once =
+        t.rt.decide_approval(&approval.id, true, None, None)
+            .await
+            .unwrap();
+    assert_eq!(once.status, ApprovalStatus::Approved);
+    t.rt.shutdown();
 }
 
 #[tokio::test]

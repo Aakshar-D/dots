@@ -634,13 +634,13 @@ fn absolute_deny_patterns_match_workspace_relative_inputs() {
         Action::Allow,
     );
     let read = |path: &str| p.resolve_in("Read", &json!({"file_path": path}), Some(ws));
-    assert_eq!(read("keys/id_rsa"), Action::Deny);
+    assert_eq!(read("keys/signing.txt"), Action::Deny);
     assert_eq!(read("keys"), Action::Deny);
-    assert_eq!(read("./keys/../keys/id_rsa"), Action::Deny);
+    assert_eq!(read("./keys/../keys/signing.txt"), Action::Deny);
     // Leaving the workspace and re-entering it must still hit the absolute deny.
-    assert_eq!(read("../repo/keys/id_rsa"), Action::Deny);
+    assert_eq!(read("../repo/keys/signing.txt"), Action::Deny);
     // A sibling outside the workspace is not the denied directory.
-    assert_eq!(read("../other/keys/id_rsa"), Action::Allow);
+    assert_eq!(read("../other/keys/signing.txt"), Action::Allow);
     assert_eq!(read("src/main.rs"), Action::Allow);
     assert_eq!(
         p.resolve_in("Edit", &json!({"file_path": "Cargo.toml"}), Some(ws)),
@@ -648,7 +648,7 @@ fn absolute_deny_patterns_match_workspace_relative_inputs() {
     );
     // Without a workspace a relative input cannot be placed, so only relative patterns apply.
     assert_eq!(
-        p.resolve("Read", &json!({"file_path": "keys/id_rsa"})),
+        p.resolve("Read", &json!({"file_path": "keys/signing.txt"})),
         Action::Allow
     );
 }
