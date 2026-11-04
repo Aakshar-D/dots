@@ -46,7 +46,13 @@ The dispatcher's first pass picks the queued resends up.
 
 `Runtime::resend(run_id) -> Result<Run>`: the run must be a failed `chat` run; permission and limit as `chat`; under `chat_lock`, the topic has no active run and the run is its last; then it enqueues the resend (§4.1 fields, no note). Shared builder: `NewRun::resend_of(run, parent)`. Errors are `Conflict` with text the UI shows as it is.
 
-## 5. App and UI
+### 4.3 With delivery tracking and attachments (merged from master)
+
+- Recovery marks an interrupted run that never reached its dot as not delivered (`interrupted`). When Dots resends it, the resend is that message's Retry: the old run is dismissed in the same transaction, so it leaves no Needs you item or notice, and the conversation shows it as a muted "Not delivered" above the resent message. A message that is not resent stays not delivered for the person, with its Retry and Discard. At the limit its reason is `interrupted; stopped resending after 3 tries`.
+- The message's files (`chat_attachments`) move to the resend, in the same transaction, as a Retry's do. Send again moves them too (`create_chat_run` with `carry_from`).
+- One button per message: a failed message that never got there has the delivery line's **Retry** (and Discard). **Send again** is only for one that got there and failed afterwards; the core refuses Send again for a not-delivered message.
+
+
 
 - Command `resend_run(run_id) -> Run`, registered and in the contract.
 - `Transcript`: a chat run whose payload has `resent: "restart"` shows a muted line "Resent after Dots restarted" under its bubble.

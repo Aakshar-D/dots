@@ -70,9 +70,11 @@ export function TopicRuns(props: {
         <InstructionsCard key={proposal.id} proposal={proposal} dotName={dotName} busy={busy} />
       ))}
       {failure && <Failure>{failure}</Failure>}
+      {/* A message that never got there has its own Retry on its delivery line instead. */}
       {latest?.status === "failed" &&
         latest.trigger === "chat" &&
-        latest.workflow_step_run_id === null && <SendAgain run={latest} />}
+        latest.workflow_step_run_id === null &&
+        latest.delivery !== "not_delivered" && <SendAgain run={latest} />}
     </div>
   );
 }

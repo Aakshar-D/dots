@@ -392,8 +392,33 @@ describe("a dot's conversation", () => {
     expect(view.queryByRole("button", { name: "Send again" })).toBeNull();
   });
 
+  it("offers one way to send a message that never got there again: its Retry", async () => {
+    home([
+      chat("a", "10:00", {
+        status: "failed",
+        error: "interrupted",
+        delivered_at: null,
+        undelivered_at: "2026-10-09T10:00:30.000Z",
+        undelivered_reason: "interrupted",
+        dismissed_at: null,
+        delivery: "not_delivered",
+      }),
+    ]);
+    renderApp(`/home/${dot.id}`);
+    const view = within(await screen.findByRole("region", { name: "Conversation" }));
+    expect(await view.findByRole("button", { name: "Retry" })).toBeVisible();
+    expect(view.queryByRole("button", { name: "Send again" })).toBeNull();
+  });
+
   it("offers to send a failed message again", async () => {
-    home([chat("a", "10:00", { status: "failed", error: "interrupted" })]);
+    home([
+      chat("a", "10:00", {
+        status: "failed",
+        error: "interrupted",
+        delivered_at: "2026-10-09T10:00:05.000Z",
+        delivery: "delivered",
+      }),
+    ]);
     backend.on("resend_run", () =>
       chat("b", "10:05", { status: "queued", root_run_id: "a", retry_of: "a" }),
     );
