@@ -140,6 +140,10 @@ export function installDefaults(): void {
   backend.on("conversation_files", () => []);
   // An approval card asks for these when it shows; by default the core offers no rule.
   backend.on("approval_rule_candidates", () => []);
+  // And whether the call touches a private folder; by default it does not.
+  backend.on("approval_touches_private", () => false);
+  // The policy editor asks which always-allowed rules cover a private folder; by default none.
+  backend.on("rules_touch_private", ({ patterns }) => (patterns as string[]).map(() => false));
   // A conversation asks for the dot's app proposals; by default it has none.
   backend.on("app_proposals_list", () => []);
   // A conversation and the dot menu ask for the dot's scheduled messages; by default none.

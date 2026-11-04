@@ -80,6 +80,7 @@ export const keys = {
   events: (runId: string) => ["events", runId] as const,
   approvals: (runId: string) => ["approvals", runId] as const,
   approvalRules: (approvalId: string) => ["approval-rules", approvalId] as const,
+  approvalPrivate: (approvalId: string) => ["approval-private", approvalId] as const,
   diff: (runId: string) => ["diff", runId] as const,
   messages: (dotId: string | null) => ["messages", dotId] as const,
   followUps: (dotId: string | null) => ["follow-ups", dotId] as const,

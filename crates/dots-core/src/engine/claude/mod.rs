@@ -92,6 +92,12 @@ impl Engine for ClaudeEngine {
             &serde_json::to_vec_pretty(&args::mcp_config(&ctx))?,
         )
         .await?;
+        let settings_path = args::settings_path(&mcp_path);
+        write_private(
+            &settings_path,
+            &serde_json::to_vec_pretty(&args::cli_settings())?,
+        )
+        .await?;
 
         let mut cmd = Command::new(&self.program);
         // Dots' environment stays out; the dot's shell grants go in (env vault spec §8).
@@ -126,6 +132,7 @@ impl Engine for ClaudeEngine {
             Ok(c) => c,
             Err(e) => {
                 let _ = tokio::fs::remove_file(&mcp_path).await;
+                let _ = tokio::fs::remove_file(&settings_path).await;
                 return Err(Error::Other(format!(
                     "failed to start {}: {e}",
                     self.program.display()
@@ -231,6 +238,7 @@ impl Engine for ClaudeEngine {
                 let _ = tx.send(EngineEvent::Failed { error }).await;
             }
             let _ = tokio::fs::remove_file(&mcp_path).await;
+            let _ = tokio::fs::remove_file(&settings_path).await;
         });
         Ok(rx)
     }

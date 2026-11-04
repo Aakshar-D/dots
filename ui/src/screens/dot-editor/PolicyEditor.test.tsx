@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, expect, it } from "vitest";
@@ -122,5 +122,96 @@ describe("the policy editor", () => {
     expect(screen.getByText("Show rules")).toBeVisible();
     rerender(<PolicyEditor policy={{ ...sandboxed, preset: "custom" }} onChange={onChange} />);
     expect(screen.getByText("Hide rules")).toBeVisible();
+  });
+});
+
+describe("the always-allowed list", () => {
+  const ruled: Policy = {
+    preset: "sandboxed",
+    rules: [
+      { tool: "Read", action: "allow" },
+      { tool: "Bash(git status:*)", action: "allow" },
+      { tool: "Bash(git push:*)", action: "ask" },
+      { tool: "Read(**/.git/**)", action: "deny" },
+      { tool: "Notify", action: "allow" },
+      { tool: "Memory", action: "allow" },
+      { tool: "WebFetch(domain:example.com)", action: "allow" },
+    ],
+    default: "ask",
+    mcp_default: "ask",
+  };
+  const list = () => screen.getByRole("list", { name: "Always allowed" });
+
+  it("shows the allow rules in words, without Dots' own tools", () => {
+    setup(ruled);
+    const items = within(list()).getAllByRole("listitem");
+    expect(items.map((item) => item.textContent)).toEqual([
+      expect.stringContaining("Read: every call"),
+      expect.stringContaining("Bash: commands that start with git status"),
+      expect.stringContaining("WebFetch: example.com and its subdomains"),
+    ]);
+    expect(within(items[1]).getByText("Bash(git status:*)")).toBeVisible();
+  });
+
+  it("takes a rule back with Remove, and the policy becomes custom", async () => {
+    const { user, policy } = setup(ruled);
+    await user.click(
+      screen.getByRole("button", { name: "Remove Bash: commands that start with git status" }),
+    );
+    expect(policy().preset).toBe("custom");
+    expect(policy().rules.map((r) => r.tool)).toEqual([
+      "Read",
+      "Bash(git push:*)",
+      "Read(**/.git/**)",
+      "Notify",
+      "Memory",
+      "WebFetch(domain:example.com)",
+    ]);
+    expect(within(list()).getAllByRole("listitem")).toHaveLength(2);
+  });
+
+  it("says when nothing is always allowed", () => {
+    setup({ ...ruled, rules: [{ tool: "Notify", action: "allow" }] });
+    expect(screen.getByText("Nothing is always allowed.")).toBeVisible();
+  });
+});
+
+describe("an always-allowed rule that covers a private folder", () => {
+  it("says it always asks", async () => {
+    backend.on("rules_touch_private", ({ patterns }) =>
+      (patterns as string[]).map((p) => p === "Read(~/.ssh/**)"),
+    );
+    setup({
+      preset: "custom",
+      rules: [
+        { tool: "Read(src/**)", action: "allow" },
+        { tool: "Read(~/.ssh/**)", action: "allow" },
+      ],
+      default: "ask",
+      mcp_default: "ask",
+    });
+    const items = within(screen.getByRole("list", { name: "Always allowed" })).getAllByRole(
+      "listitem",
+    );
+    expect(await within(items[1]).findByText("Always asks: private folder")).toBeVisible();
+    expect(within(items[0]).queryByText("Always asks: private folder")).toBeNull();
+    expect(backend.callsTo("rules_touch_private")).toEqual([
+      { patterns: ["Read(src/**)", "Read(~/.ssh/**)"] },
+    ]);
+  });
+
+  it("shows the list as it is when the check fails", async () => {
+    backend.on("rules_touch_private", () => {
+      throw { kind: "internal", message: "no" };
+    });
+    setup({
+      preset: "custom",
+      rules: [{ tool: "Read(src/**)", action: "allow" }],
+      default: "ask",
+      mcp_default: "ask",
+    });
+    await waitFor(() => expect(backend.callsTo("rules_touch_private").length).toBe(1));
+    expect(screen.getByText("Read: everything under src/")).toBeVisible();
+    expect(screen.queryByText("Always asks: private folder")).toBeNull();
   });
 });

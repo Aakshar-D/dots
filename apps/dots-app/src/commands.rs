@@ -599,6 +599,16 @@ pub fn policy_preset(preset: Preset) -> Policy {
     Policy::preset(preset)
 }
 
+/// For each rule pattern, whether it names or covers a private folder (approval guards spec
+/// section 4): such an allow rule never allows without asking, and the editor says so.
+#[tauri::command]
+pub fn rules_touch_private(patterns: Vec<String>) -> Vec<bool> {
+    patterns
+        .iter()
+        .map(|p| dots_core::policy::pattern_touches_private(p))
+        .collect()
+}
+
 /// A dot with the core's defaults and nothing filled in, for the "New dot" form.
 #[tauri::command]
 pub fn new_dot_spec() -> DotSpec {
@@ -936,6 +946,13 @@ pub async fn approval_rule_candidates(
     id: String,
 ) -> Res<Vec<RuleCandidate>> {
     Ok(state.rt()?.approval_rule_candidates(&id).await?)
+}
+
+/// True when the call touches a private folder: it always asks, and no rule can be saved with
+/// its approval (approval guards spec section 3.3).
+#[tauri::command]
+pub async fn approval_touches_private(state: State<'_, AppState>, id: String) -> Res<bool> {
+    Ok(state.rt()?.approval_touches_private(&id).await?)
 }
 
 #[tauri::command]

@@ -6,12 +6,13 @@ use std::path::PathBuf;
 
 use common::fake_dot;
 use dots_core::engine::claude::args::{
-    build_args, gateway_entry, mcp_config, resolve_claude, resolve_in_dirs,
+    build_args, cli_settings, gateway_entry, mcp_config, resolve_claude, resolve_in_dirs,
+    settings_path,
 };
 use dots_core::engine::claude::parse::parse_line;
 use dots_core::engine::{EngineEvent, RunContext};
 use dots_core::model::WorkspaceMode;
-use dots_core::policy::{Policy, Preset};
+use dots_core::policy::{Action, Policy, Preset, Rule, PLUMBING_TOOLS};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
@@ -162,10 +163,13 @@ fn argv_contains_required_flags_in_order() {
         joined.starts_with(
             "-p --output-format stream-json --verbose --model haiku --max-turns 12 \
          --permission-prompt-tool mcp__dots__approve --mcp-config C:/data/mcp-RUN1.json \
-         --strict-mcp-config --setting-sources  --allowedTools Read LS Glob Grep Skill \
+         --strict-mcp-config --setting-sources  --allowedTools Read Skill \
          mcp__dots__notify mcp__dots__ask mcp__dots__follow_up mcp__dots__remember \
          mcp__dots__forget mcp__dots__recall mcp__dots__propose_app mcp__dots__copy_app \
-         --disallowedTools Write Edit NotebookEdit Bash PowerShell"
+         TodoWrite Task Agent ExitPlanMode EnterPlanMode ToolSearch ListMcpResourcesTool \
+         BashOutput KillShell KillBash \
+         --disallowedTools Write Edit NotebookEdit Bash PowerShell \
+         --settings C:/data/mcp-RUN1.settings.json"
         ),
         "{joined}"
     );
@@ -176,6 +180,87 @@ fn argv_contains_required_flags_in_order() {
         !args.contains(&"p".to_string()),
         "prompt must not be in argv"
     );
+}
+
+#[test]
+fn argv_asks_for_private_folders_and_never_for_plumbing() {
+    let mut c = ctx(None);
+    c.dot.spec.policy = Policy::preset(Preset::Trusted);
+    // A prefix deny and an ask rule keep their tools out of the allow list.
+    c.dot
+        .spec
+        .policy
+        .rules
+        .push(Rule::new("Todo*", Action::Deny));
+    c.dot
+        .spec
+        .policy
+        .rules
+        .push(Rule::new("Agent", Action::Ask));
+    let args = build_args(&c, Path::new("m.json"));
+    let allowed: Vec<&String> = args
+        .iter()
+        .skip_while(|a| *a != "--allowedTools")
+        .skip(1)
+        .take_while(|a| !a.starts_with("--"))
+        .collect();
+    for tool in PLUMBING_TOOLS
+        .iter()
+        .filter(|t| !["TodoWrite", "Agent"].contains(*t))
+    {
+        assert!(allowed.iter().any(|a| a == tool), "{tool} in {allowed:?}");
+    }
+    // Searches always reach `approve`, so Dots can judge the folder they start in.
+    c.dot
+        .spec
+        .policy
+        .rules
+        .push(Rule::new("Grep(src/**)", Action::Allow));
+    let searched = build_args(&c, Path::new("m.json"));
+    let allowed_now: Vec<&String> = searched
+        .iter()
+        .skip_while(|a| *a != "--allowedTools")
+        .skip(1)
+        .take_while(|a| !a.starts_with("--"))
+        .collect();
+    assert!(
+        !allowed_now.iter().any(|a| ["Grep", "Glob", "LS"]
+            .iter()
+            .any(|t| a == t || a.starts_with(&format!("{t}(")))),
+        "{allowed_now:?}"
+    );
+    // A denied or asked plumbing tool is not also allowed.
+    assert!(!allowed.iter().any(|a| *a == "TodoWrite" || *a == "Agent"));
+    // The settings go in a file next to the MCP config, never inline: a configured `.cmd`
+    // program would hand an inline JSON argument to cmd.exe.
+    let i = args
+        .iter()
+        .position(|a| a == "--settings")
+        .expect("--settings");
+    assert_eq!(
+        args[i + 1],
+        settings_path(Path::new("m.json")).to_string_lossy()
+    );
+    let settings = cli_settings();
+    let ask: Vec<&str> = settings["permissions"]["ask"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    for rule in [
+        "Read(//**/.ssh/**)",
+        "Edit(//**/.env)",
+        "Edit(//**/.aws/**)",
+        "Read(//**/.env.*)",
+        "Bash(*.ssh*)",
+        "PowerShell(*.npmrc*)",
+    ] {
+        assert!(ask.contains(&rule), "{rule} in {ask:?}");
+    }
+    // The settings come with user settings too.
+    c.dot.spec.use_user_settings = true;
+    assert!(build_args(&c, Path::new("m.json")).contains(&"--settings".to_string()));
 }
 
 #[test]

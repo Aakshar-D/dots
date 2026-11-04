@@ -1,5 +1,5 @@
-import { useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
+import { useEffect, useId, useState } from "react";
 
 import { commands } from "@/api/commands";
 import { Action, Preset, type Policy, type Rule } from "@/api/types";
@@ -7,6 +7,7 @@ import { Field } from "@/components/Field";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
+import { describeAllowRule, isDotsOwnRule } from "@/lib/allow-rules";
 import { PRESET_SENTENCES } from "@/lib/dot-rules";
 import { notifyError } from "@/lib/notify";
 
@@ -67,6 +68,10 @@ export function PolicyEditor(props: {
       <p className="text-xs text-muted-foreground">
         {policy.preset === "custom" ? "Your own rules." : PRESET_SENTENCES[policy.preset]}
       </p>
+      <AlwaysAllowed
+        rules={policy.rules}
+        onRemove={(index) => custom({ rules: policy.rules.filter((_, j) => j !== index) })}
+      />
       <details
         className="flex flex-col gap-3"
         open={open}
@@ -137,6 +142,74 @@ export function PolicyEditor(props: {
           </NativeSelect>
         </Field>
       </details>
+    </div>
+  );
+}
+
+/// The dot's allow rules in words, each with Remove: what it may do without asking. Dots' own
+/// tools, which every preset allows, are left out. Removing a rule goes through the same change
+/// as any rule edit, and is saved with the form.
+function AlwaysAllowed(props: { rules: Rule[]; onRemove: (index: number) => void }) {
+  const allowed = props.rules
+    .map((rule, index) => ({ rule, index }))
+    .filter(({ rule }) => rule.action === "allow" && rule.tool.trim() && !isDotsOwnRule(rule.tool));
+  const labelId = useId();
+  // Which of the rules cover a private folder, as the core reads them. A failed check leaves
+  // every rule unmarked.
+  const patterns = allowed.map(({ rule }) => rule.tool);
+  const key = JSON.stringify(patterns);
+  const [privateRules, setPrivateRules] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    let current = true;
+    const asked: string[] = JSON.parse(key);
+    if (asked.length === 0) return;
+    commands.rulesTouchPrivate(asked).then(
+      (flags) => {
+        if (current) setPrivateRules(new Set(asked.filter((_, i) => flags[i])));
+      },
+      () => {
+        if (current) setPrivateRules(new Set());
+      },
+    );
+    return () => {
+      current = false;
+    };
+  }, [key]);
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span id={labelId} className="text-sm font-medium">
+        Always allowed
+      </span>
+      {allowed.length === 0 ? (
+        <p className="text-xs text-muted-foreground">Nothing is always allowed.</p>
+      ) : (
+        <ul aria-labelledby={labelId} className="flex flex-col gap-1">
+          {allowed.map(({ rule, index }) => {
+            const words = describeAllowRule(rule.tool);
+            return (
+              <li key={index} className="flex items-center gap-2 text-sm">
+                <span className="min-w-0 flex-1">
+                  {words} <code className="font-mono text-xs text-muted-foreground">{rule.tool}</code>
+                  {privateRules.has(rule.tool) && (
+                    <span className="ml-2 text-xs text-muted-foreground">
+                      Always asks: private folder
+                    </span>
+                  )}
+                </span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  aria-label={`Remove ${words}`}
+                  onClick={() => props.onRemove(index)}
+                >
+                  Remove
+                </Button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </div>
   );
 }
