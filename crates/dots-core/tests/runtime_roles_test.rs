@@ -245,7 +245,7 @@ async fn viewer_cannot_create_edit_run_or_answer() {
         answer
     );
     assert_eq!(
-        refused(t.rt.decide_run_approvals(&run.id, true, None).await),
+        refused(t.rt.decide_run_approvals(&run.id, None, true, None).await),
         answer
     );
     let still = t.rt.store().get_approval(&approval.id).await.unwrap();

@@ -598,7 +598,7 @@ async fn deciding_a_runs_approvals_together_performs_them_in_order_and_resumes_o
     assert_eq!(pending.len(), 3);
 
     let decided =
-        t.rt.decide_run_approvals(&parent.id, true, None)
+        t.rt.decide_run_approvals(&parent.id, None, true, None)
             .await
             .unwrap();
     let ids = |list: &[Approval]| list.iter().map(|a| a.id.clone()).collect::<Vec<_>>();
@@ -656,7 +656,7 @@ async fn a_batch_given_while_the_run_still_works_is_carried_out_when_it_ends() {
     );
 
     let decided =
-        t.rt.decide_run_approvals(&parent.id, true, None)
+        t.rt.decide_run_approvals(&parent.id, None, true, None)
             .await
             .unwrap();
     assert_eq!(decided.len(), 2);
@@ -708,7 +708,7 @@ async fn a_batch_leaves_out_what_was_decided_meanwhile() {
     );
 
     let decided =
-        t.rt.decide_run_approvals(&parent.id, true, None)
+        t.rt.decide_run_approvals(&parent.id, None, true, None)
             .await
             .unwrap();
     let ids: Vec<&str> = decided.iter().map(|a| a.id.as_str()).collect();
@@ -736,7 +736,7 @@ async fn denying_a_runs_approvals_together_closes_the_run_or_resumes_it_once() {
     let dot = t.rt.create_dot(s, None, None).await.unwrap();
     let (parent, pending) = park(&t, &dot.id).await;
     let decided =
-        t.rt.decide_run_approvals(&parent.id, false, None)
+        t.rt.decide_run_approvals(&parent.id, None, false, None)
             .await
             .unwrap();
     assert_eq!(decided.len(), pending.len());
@@ -762,7 +762,7 @@ async fn denying_a_runs_approvals_together_closes_the_run_or_resumes_it_once() {
     s.approval_wait_secs = 0;
     let dot = t.rt.create_dot(s, None, None).await.unwrap();
     let (parent, _pending) = park(&t, &dot.id).await;
-    t.rt.decide_run_approvals(&parent.id, false, Some("not now".into()))
+    t.rt.decide_run_approvals(&parent.id, None, false, Some("not now".into()))
         .await
         .unwrap();
     let child = resume_run(&t, &dot.id).await;
@@ -805,7 +805,7 @@ async fn a_batch_answers_a_run_that_still_waits_and_changes_nothing_else() {
         }
     }
     let decided =
-        t.rt.decide_run_approvals(&run.id, true, None)
+        t.rt.decide_run_approvals(&run.id, None, true, None)
             .await
             .unwrap();
     assert_eq!(decided.len(), 1);
@@ -824,12 +824,12 @@ async fn a_batch_answers_a_run_that_still_waits_and_changes_nothing_else() {
 
     // A run with nothing pending, and a run that does not exist.
     let again =
-        t.rt.decide_run_approvals(&run.id, true, None)
+        t.rt.decide_run_approvals(&run.id, None, true, None)
             .await
             .unwrap();
     assert!(again.is_empty());
     let err =
-        t.rt.decide_run_approvals("no-such-run", true, None)
+        t.rt.decide_run_approvals("no-such-run", None, true, None)
             .await
             .unwrap_err();
     assert!(matches!(err, Error::NotFound(_)), "{err:?}");

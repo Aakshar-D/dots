@@ -697,12 +697,13 @@ pub async fn approval_rule_candidates(
 pub async fn decide_run_approvals(
     state: State<'_, AppState>,
     run_id: String,
+    ids: Vec<String>,
     approved: bool,
     note: Option<String>,
 ) -> Res<Vec<Approval>> {
     Ok(state
         .rt()?
-        .decide_run_approvals(&run_id, approved, note)
+        .decide_run_approvals(&run_id, Some(&ids), approved, note)
         .await?)
 }
 

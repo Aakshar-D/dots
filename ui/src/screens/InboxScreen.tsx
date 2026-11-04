@@ -292,7 +292,14 @@ function ToolsChangedRow({ item, actions }: { item: ToolsChanged; actions?: Reac
 function RunBatch({ group }: { group: RunApprovals }) {
   const qc = useQueryClient();
   const decideAll = useMutation({
-    mutationFn: (approved: boolean) => commands.decideRunApprovals(group.runId, approved, null),
+    // Only the calls listed here: the run may also wait for a call the person snoozed.
+    mutationFn: (approved: boolean) =>
+      commands.decideRunApprovals(
+        group.runId,
+        group.approvals.map((approval) => approval.id),
+        approved,
+        null,
+      ),
     onSuccess: () => {
       invalidate(qc, keys.inbox);
       invalidate(qc, keys.approvals(group.runId));
@@ -313,7 +320,7 @@ function RunBatch({ group }: { group: RunApprovals }) {
         title={`Approve all ${count} calls?`}
         description={
           <>
-            {group.dotName} may perform every call this run waits for, in the order it asked:
+            {group.dotName} may perform these calls, in the order it asked:
             {calls}
           </>
         }
@@ -327,7 +334,7 @@ function RunBatch({ group }: { group: RunApprovals }) {
         title={`Deny all ${count} calls?`}
         description={
           <>
-            {group.dotName} may perform none of the calls this run waits for, and gets no note:
+            {group.dotName} may perform none of these calls, and gets no note:
             {calls}
           </>
         }

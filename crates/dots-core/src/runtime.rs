@@ -2063,12 +2063,15 @@ impl Runtime {
         }
     }
 
-    /// Gives every pending approval of one run the same answer, in the order they were asked,
-    /// and resumes the run once. An approval that is no longer pending when its turn comes is
-    /// left out of the result. No rule can be saved this way.
+    /// Gives pending approvals of one run the same answer, in the order they were asked, and
+    /// resumes the run once. With `only`, just the approvals of the run whose ids it lists
+    /// (what the person was shown: a snoozed approval of the same run is not decided with
+    /// them); without it, every pending approval of the run. An approval that is no longer
+    /// pending when its turn comes is left out of the result. No rule can be saved this way.
     pub async fn decide_run_approvals(
         &self,
         run_id: &str,
+        only: Option<&[String]>,
         approved: bool,
         note: Option<String>,
     ) -> Result<Vec<Approval>> {
@@ -2077,7 +2080,11 @@ impl Runtime {
         let mut decided = Vec::new();
         let mut parked = false;
         let mut failure = None;
-        for pending in self.store.pending_for_run(run_id).await? {
+        let pending = self.store.pending_for_run(run_id).await?;
+        let shown = pending
+            .into_iter()
+            .filter(|a| only.is_none_or(|ids| ids.iter().any(|id| *id == a.id)));
+        for pending in shown {
             match self.hub.decide(&pending.id, approved, note.clone()).await {
                 Ok(DecideEffect::Live(a)) => decided.push(a),
                 Ok(DecideEffect::Parked(a)) => {

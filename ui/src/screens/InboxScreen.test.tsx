@@ -622,7 +622,8 @@ describe("the approvals of one run", () => {
     await user.click(await screen.findByRole("button", { name: confirm }));
     expect(await screen.findByText(/Nothing waits for you/)).toBeVisible();
     expect(backend.callsTo("decide_run_approvals")).toEqual([
-      { runId: approval.run_id, approved, note: null },
+      // Only the calls the confirmation listed: never a snoozed call of the same run.
+      { runId: approval.run_id, ids: [approval.id, second.id], approved, note: null },
     ]);
     // One command for the run, and none per call.
     expect(backend.callsTo("decide_approval")).toEqual([]);

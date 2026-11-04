@@ -17,8 +17,8 @@ use dots_core::inbox::{entries, title_cut, InboxKey, InboxKind};
 use dots_core::instructions::{InstructionProposal, InstructionStatus};
 use dots_core::limits::FIVE_HOUR;
 use dots_core::model::{
-    Approval, Dot, DotSpec, FolderConfig, Message, NewRun, PausedReason, Run, RunStatus,
-    ScheduleChange, TriggerKind, WatcherConfig, WorkspaceMode,
+    Approval, ApprovalStatus, Dot, DotSpec, FolderConfig, Message, NewRun, PausedReason, Run,
+    RunStatus, ScheduleChange, TriggerKind, WatcherConfig, WorkspaceMode,
 };
 use dots_core::schedule::Schedule;
 use dots_core::scheduler::Clock;
@@ -663,4 +663,60 @@ async fn each_change_sends_inbox_updated() {
     // A refused call sends nothing.
     assert!(t.rt.inbox_undo_done(&k).await.is_err());
     assert_eq!(updates(&mut events), 0);
+}
+
+#[tokio::test]
+async fn a_batch_decides_only_the_approvals_it_was_given() {
+    let t = start().await;
+    let dot = t.dot("courier").await;
+    let first = t.approval(&dot).await;
+    let run_id = first.run_id.clone();
+    let mut asked = vec![first];
+    for _ in 0..2 {
+        asked.push(
+            t.store()
+                .create_approval(&run_id, "Bash", &json!({"command": "ls"}))
+                .await
+                .unwrap(),
+        );
+    }
+    let other = t.approval(&dot).await;
+    // The person snoozes the first call; the Inbox then shows the other two of the run.
+    t.snooze(&[key(InboxKind::Approval, &asked[0].id)], 60)
+        .await;
+    let shown: Vec<String> =
+        t.rt.inbox()
+            .await
+            .unwrap()
+            .approvals
+            .iter()
+            .filter(|a| a.approval.run_id == run_id)
+            .map(|a| a.approval.id.clone())
+            .collect();
+    assert_eq!(shown, vec![asked[1].id.clone(), asked[2].id.clone()]);
+
+    // An id of another run is not decided through this run.
+    let mut given = shown.clone();
+    given.push(other.id.clone());
+    let decided =
+        t.rt.decide_run_approvals(&run_id, Some(&given), true, None)
+            .await
+            .unwrap();
+    let ids: Vec<String> = decided.iter().map(|a| a.id.clone()).collect();
+    assert_eq!(ids, shown);
+    for (approval, want) in [
+        (&asked[0], ApprovalStatus::Pending),
+        (&other, ApprovalStatus::Pending),
+        (&asked[1], ApprovalStatus::Approved),
+        (&asked[2], ApprovalStatus::Approved),
+    ] {
+        let now = t.store().get_approval(&approval.id).await.unwrap();
+        assert_eq!(now.status, want, "{}", approval.id);
+    }
+    // The snoozed call is still snoozed, and its run still waits for it.
+    assert_eq!(t.rt.inbox().await.unwrap().snoozed.len(), 1);
+    assert_eq!(
+        t.store().get_run(&run_id).await.unwrap().status,
+        RunStatus::AwaitingApproval
+    );
 }

@@ -195,8 +195,10 @@ export const commands = {
     call(T.RuleCandidate.array(), "approval_rule_candidates", { id }),
   /// Gives every pending approval of one run the same answer, in the order they were asked.
   /// Answers the approvals it decided.
-  decideRunApprovals: (runId: string, approved: boolean, note: string | null) =>
-    call(T.Approval.array(), "decide_run_approvals", { runId, approved, note }),
+  /// Decides only `ids`, the calls of the run the person was shown: a snoozed call of the same
+  /// run is not decided with them.
+  decideRunApprovals: (runId: string, ids: string[], approved: boolean, note: string | null) =>
+    call(T.Approval.array(), "decide_run_approvals", { runId, ids, approved, note }),
   inbox: () => call(T.Inbox, "inbox"),
   inboxCount: () => call(z.number().int(), "inbox_count"),
   /// Hides Inbox items until `until` (RFC 3339). Rejects with kind `invalid` for a time not in
