@@ -80,7 +80,7 @@ pub(crate) enum StoredGrant {
     /// It cannot be read back (a write cut off, a part deleted outside Dots): only signing in
     /// again helps.
     Corrupt,
-    Present(OAuthGrant),
+    Present(Box<OAuthGrant>),
 }
 
 /// The sign-in grant kept for the connector `id`.
@@ -89,7 +89,7 @@ pub(crate) fn load_grant(vault: &Vault, id: &str) -> Result<StoredGrant> {
         Parts::Missing => StoredGrant::Missing,
         Parts::Corrupt => StoredGrant::Corrupt,
         Parts::Value(text) => match serde_json::from_str(&text) {
-            Ok(grant) => StoredGrant::Present(grant),
+            Ok(grant) => StoredGrant::Present(Box::new(grant)),
             Err(_) => StoredGrant::Corrupt,
         },
     })
@@ -328,7 +328,7 @@ pub async fn refresh_if_due(
     let mut grant = match load_grant(vault, &item.name)? {
         StoredGrant::Missing => return Ok(Freshness::Fresh),
         StoredGrant::Corrupt => return Ok(Freshness::NeedsSignIn(sign_in_again(&item.name))),
-        StoredGrant::Present(grant) => grant,
+        StoredGrant::Present(grant) => *grant,
     };
     if grant.needs_sign_in {
         return Ok(Freshness::NeedsSignIn(sign_in_again(&item.name)));
