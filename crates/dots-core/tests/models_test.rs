@@ -91,7 +91,8 @@ async fn local_says_what_went_wrong() {
         .await
         .unwrap_err()
         .to_string();
-    assert!(e.contains("404") && e.contains("no such route"), "{e}");
+    // The status, not the reply's text.
+    assert!(e.contains("404") && !e.contains("no such route"), "{e}");
 
     let garbled = MockServer::start().await;
     Mock::given(method("GET"))
@@ -103,7 +104,7 @@ async fn local_says_what_went_wrong() {
         .await
         .unwrap_err()
         .to_string();
-    assert!(e.contains("model list"), "{e}");
+    assert!(e.contains("model list") && !e.contains("<html>"), "{e}");
 
     // Nothing listens on port 1.
     let e = list_models(EngineKind::Local, Some("http://127.0.0.1:1"))
@@ -111,4 +112,44 @@ async fn local_says_what_went_wrong() {
         .unwrap_err()
         .to_string();
     assert!(e.contains("could not reach"), "{e}");
+}
+
+/// A server that counts the requests it gets, and one that redirects every request to it.
+async fn redirect_pair(method_name: &str) -> (MockServer, MockServer) {
+    let elsewhere = MockServer::start().await;
+    Mock::given(method(method_name))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": [{"id": "x"}]})))
+        .mount(&elsewhere)
+        .await;
+    let bouncer = MockServer::start().await;
+    Mock::given(method(method_name))
+        .respond_with(
+            ResponseTemplate::new(307)
+                .insert_header("Location", format!("{}/v1/models", elsewhere.uri())),
+        )
+        .mount(&bouncer)
+        .await;
+    (bouncer, elsewhere)
+}
+
+#[tokio::test]
+async fn local_does_not_follow_a_redirect() {
+    let (bouncer, elsewhere) = redirect_pair("GET").await;
+    let e = list_models(EngineKind::Local, Some(&bouncer.uri()))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("307") && e.contains("redirect"), "{e}");
+    assert!(elsewhere.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn the_endpoint_test_does_not_follow_a_redirect() {
+    let (bouncer, elsewhere) = redirect_pair("POST").await;
+    let e = dots_core::engine::local::probe(&bouncer.uri(), "m")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("307") && e.contains("redirect"), "{e}");
+    assert!(elsewhere.received_requests().await.unwrap().is_empty());
 }

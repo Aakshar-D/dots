@@ -29,12 +29,15 @@ pub fn models_url(endpoint: &str) -> String {
 const MODELS_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// The model ids `endpoint` lists at `/v1/models` (OpenAI-compatible: `{"data": [{"id"}]}`),
-/// in its order; entries without an id are skipped. The caller checks the endpoint first.
+/// in its order; entries without an id are skipped. The caller checks the endpoint first. A
+/// redirect is not followed: the endpoint the person named is the only one asked. An error
+/// names the status or the reason, never the reply's text.
 pub async fn fetch_models(endpoint: &str) -> Result<Vec<String>> {
     let url = models_url(endpoint);
     let http = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(10))
         .timeout(MODELS_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .expect("building the HTTP client never fails without TLS options");
     let resp = http
@@ -43,25 +46,22 @@ pub async fn fetch_models(endpoint: &str) -> Result<Vec<String>> {
         .await
         .map_err(|e| Error::Other(format!("could not reach {url}: {e}")))?;
     let status = resp.status();
+    if status.is_redirection() {
+        return Err(Error::Other(format!(
+            "local endpoint answered {status}, a redirect, which Dots does not follow"
+        )));
+    }
+    if !status.is_success() {
+        return Err(Error::Other(format!("local endpoint returned {status}")));
+    }
     let text = resp
         .text()
         .await
         .map_err(|e| Error::Other(format!("reading the reply from {url} failed: {e}")))?;
-    if !status.is_success() {
-        return Err(Error::Other(format!(
-            "local endpoint returned {status}: {}",
-            snippet(&text)
-        )));
-    }
     let list = serde_json::from_str::<Value>(&text)
         .ok()
         .and_then(|v| v.get("data").and_then(Value::as_array).cloned())
-        .ok_or_else(|| {
-            Error::Other(format!(
-                "{url} did not answer with a model list: {}",
-                snippet(&text)
-            ))
-        })?;
+        .ok_or_else(|| Error::Other(format!("{url} did not answer with a model list")))?;
     Ok(list
         .iter()
         .filter_map(|m| m.get("id").and_then(Value::as_str))
@@ -112,8 +112,11 @@ pub struct ChatClient {
 
 impl ChatClient {
     pub fn new(retry_delays: Vec<Duration>) -> Self {
+        // A redirect is not followed: a run's instructions and files go only to the endpoint
+        // the person named.
         let http = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .expect("building the HTTP client never fails without TLS options");
         Self { http, retry_delays }
@@ -165,6 +168,11 @@ impl ChatClient {
         let text = resp.text().await.map_err(|e| {
             SendError::Retryable(format!("reading the reply from {url} failed: {e}"))
         })?;
+        if status.is_redirection() {
+            return Err(SendError::Fatal(format!(
+                "local endpoint answered {status}, a redirect, which Dots does not follow"
+            )));
+        }
         if status.is_server_error() {
             return Err(SendError::Retryable(format!(
                 "local endpoint returned {status}: {}",
