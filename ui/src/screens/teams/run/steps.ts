@@ -10,7 +10,7 @@ import type {
 } from "@/api/types";
 import { formatTokens } from "@/lib/usage-format";
 
-import { agentsBefore, findStep } from "../builder/draft";
+import { agentsBefore, allSteps, findStep } from "../builder/draft";
 import { DEFAULT_BUDGET } from "../format";
 
 /// The newest step run of each step, by step id: what the run page shows on the step's card. A
@@ -49,6 +49,53 @@ export function sendBackTarget(steps: Step[], checkId: string): AgentStep | unde
     return to?.kind === "agent" ? to : undefined;
   }
   return agentsBefore(steps, checkId).at(-1);
+}
+
+/// A step on the chat card's line of steps (section 10.4): its name and its newest step run's
+/// state, as the card says it.
+export type CardStep = {
+  id: string;
+  name: string;
+  status: StepRunStatus | "not_reached";
+  label: string;
+};
+
+/// The chat card's line of steps (section 10.4), in the definition's order. A branch step gives
+/// way to the steps of the path it took; before it decided, to a path one of whose steps already
+/// ran, else it stands for its paths, not reached. A path not taken is left out.
+export function cardSteps(run: Pick<WorkflowRun, "definition" | "steps">): CardStep[] {
+  const latest = latestStepRuns(run);
+  const ran = (steps: Step[]) => allSteps(steps).some((step) => latest.has(step.id));
+  const out: CardStep[] = [];
+  const walk = (steps: Step[]) => {
+    for (const step of steps) {
+      if (step.kind === "branch") {
+        const taken = pathTaken(latest.get(step.id));
+        const path =
+          taken === undefined
+            ? [...step.paths.map((p) => p.steps), step.otherwise].find(ran)
+            : taken === null
+              ? step.otherwise
+              : step.paths.find((p) => p.label === taken)?.steps;
+        if (path) {
+          walk(path);
+          continue;
+        }
+      }
+      const status = latest.get(step.id)?.status ?? "not_reached";
+      out.push({
+        id: step.id,
+        name: step.name.trim() || step.id,
+        status,
+        label:
+          step.kind === "check" && status === "waiting"
+            ? "Waiting for you"
+            : STEP_STATUS_LABEL[status],
+      });
+    }
+  };
+  walk(run.definition.steps);
+  return out;
 }
 
 /// The name of the step `id` in the run's definition, or the id when it has none.

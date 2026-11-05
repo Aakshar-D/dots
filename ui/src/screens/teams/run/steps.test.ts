@@ -5,6 +5,7 @@ import { sample } from "@/test/fixtures";
 
 import {
   budgetReached,
+  cardSteps,
   joinAnd,
   latestStepRuns,
   limits,
@@ -14,7 +15,7 @@ import {
   stepRunLinks,
 } from "./steps";
 
-const [waiting, done, , , budget] = sample.workflowRuns as [
+const [waiting, done, held, , budget] = sample.workflowRuns as [
   WorkflowRun,
   WorkflowRun,
   WorkflowRun,
@@ -101,5 +102,30 @@ describe("the run page's steps", () => {
       { id: "01J0RUN5", label: "dots/nightly-tests/01J0RUN5", status: null },
     ]);
     expect(stepRunLinks(latestStepRuns(waiting).get("review")!, runs, nameOf).step).toEqual([]);
+  });
+
+  it("lines up the chat card's steps along the path taken, else the path whose step ran", () => {
+    const line = (run: Pick<WorkflowRun, "definition" | "steps">) =>
+      cardSteps(run).map(({ id, status, label }) => [id, status, label]);
+    expect(line(waiting)).toEqual([
+      ["build", "succeeded", "Done"],
+      ["review", "waiting", "Waiting for you"],
+      ["ship", "not_reached", "Not reached"],
+    ]);
+    // The held send-back waits in Otherwise, which no decision of the branch names yet.
+    expect(line(held)).toEqual([
+      ["build", "not_reached", "Not reached"],
+      ["design", "waiting", "Waiting"],
+    ]);
+    // Before anything ran, the branch stands for its paths.
+    expect(line({ ...waiting, steps: [] })).toEqual([
+      ["build", "not_reached", "Not reached"],
+      ["route", "not_reached", "Not reached"],
+    ]);
+    const otherwise = { ...waiting.steps[1]!, decision: { path: null } };
+    expect(line({ ...waiting, steps: [waiting.steps[0]!, otherwise] }).map(([id]) => id)).toEqual(
+      ["build", "design"],
+    );
+    expect(cardSteps(waiting).map((s) => s.name)).toEqual(["Build", "Review", "Ship"]);
   });
 });

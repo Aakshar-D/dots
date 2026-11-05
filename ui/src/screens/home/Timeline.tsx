@@ -11,6 +11,7 @@ import { keys } from "@/lib/query";
 import { useStickToBottom } from "@/lib/use-stick-to-bottom";
 import { RunCard } from "@/screens/home/RunCard";
 import { TopicRuns } from "@/screens/home/TopicRuns";
+import { useStartedWorkflows } from "@/screens/teams/run/WorkflowCard";
 
 /// The topics shown, in order: a chat topic as a transcript, a run topic as a card with the
 /// runs that continued it under it. It stays at the bottom as things arrive unless the person
@@ -36,6 +37,8 @@ export function Timeline(props: {
     queryFn: () => commands.appProposalsList(dotId),
     enabled: dotId !== null,
   });
+  // The cards of the workflows the shown runs started, from one query for all of them.
+  const workflows = useStartedWorkflows(topics.flatMap((topic) => topic.runs.map((r) => r.id)));
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
       <section
@@ -49,6 +52,7 @@ export function Timeline(props: {
         <div className="mx-auto flex w-full max-w-[720px] flex-col gap-6 px-4 py-4">
           {props.children}
           {proposals.isError && <ErrorNote error={proposals.error} />}
+          {workflows.error && <ErrorNote error={workflows.error} />}
           {topics.map((topic) =>
             topic.kind === "chat" ? (
               <TopicRuns
@@ -57,6 +61,7 @@ export function Timeline(props: {
                 checkIns={checkIns}
                 dotName={dotName}
                 proposals={props.proposals}
+                workflows={workflows.byRun}
               />
             ) : (
               <div key={topic.rootId} className="flex flex-col gap-4">
@@ -69,7 +74,12 @@ export function Timeline(props: {
                 {/* An app the run sent for review waits under its card. */}
                 <AppReviews runs={topic.runs.slice(0, 1)} dotName={dotName} />
                 {topic.runs.length > 1 && (
-                  <TopicRuns runs={topic.runs.slice(1)} checkIns={checkIns} dotName={dotName} />
+                  <TopicRuns
+                    runs={topic.runs.slice(1)}
+                    checkIns={checkIns}
+                    dotName={dotName}
+                    workflows={workflows.byRun}
+                  />
                 )}
               </div>
             ),
