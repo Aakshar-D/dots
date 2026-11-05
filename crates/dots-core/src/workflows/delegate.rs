@@ -9,7 +9,8 @@
 use std::path::Path;
 
 use super::{
-    branch_exists, branch_ref, budget_reached, cut, place, Workflows, MAX_HANDOFF_SUMMARY,
+    branch_exists, branch_ref, budget_reached, cut, merged_into, place, Workflows,
+    MAX_HANDOFF_SUMMARY,
 };
 use crate::model::{
     BranchRef, EngineKind, MemberHandoff, Run, RunStatus, StepMember, StepRun, WorkflowRun,
@@ -33,6 +34,29 @@ fn thread_of<'a>(runs: &'a [Run], member: &StepMember) -> Vec<&'a Run> {
     runs.iter()
         .filter(|r| r.root_run_id == member.run_id)
         .collect()
+}
+
+/// The branches a step hands on, so what a check after it shows and a deploy after it ships
+/// (section 6.2, with the person's ancestor rule of 2026-11-04). `lead` is the step's own
+/// branch, for a delegate step only when it has commits; `members` are the branches of the
+/// members it started that still exist, in the order started. With a lead branch: that branch,
+/// then each member branch whose tip is not an ancestor of the lead's tip (work the lead did not
+/// merge). Without one: every member branch. A step with no members hands on its own branch.
+pub(super) async fn handed_branches(
+    repo: &Path,
+    lead: Option<BranchRef>,
+    members: Vec<BranchRef>,
+) -> Vec<BranchRef> {
+    let Some(lead) = lead else {
+        return members;
+    };
+    let mut out = vec![lead];
+    for member in members {
+        if !merged_into(repo, &member.branch, &out[0].branch).await {
+            out.push(member);
+        }
+    }
+    out
 }
 
 /// Whether the thread of `member` has a run that has not ended (queued ones included).

@@ -48,6 +48,10 @@ pub const SECRET_NAMES: &[&str] = &[
 /// The error of a deploy whose branch no longer points at the commit its check approved.
 pub const BRANCH_CHANGED: &str = "The branch changed after it was approved.";
 
+/// The error of a `push`, `pr` or `pr_merge` deploy given no branch (the person's decision of
+/// 2026-11-04): it would succeed having shipped nothing. Mode `branch` lists none and succeeds.
+pub const NOTHING_TO_SHIP: &str = "Nothing to ship: the check approved no branch.";
+
 /// The error of a `pr` or `pr_merge` deploy when `gh` cannot be started.
 pub const GH_MISSING: &str = "gh is not installed or not on the PATH";
 
@@ -142,8 +146,9 @@ impl Deployer {
     /// the open one, so a retry does not fail) titled with the first line of `title` and with
     /// `body` as its text; `pr_merge` also sets it to merge once GitHub allows. Before anything
     /// is pushed, every branch must still be at its approved commit and must hold no file that
-    /// looks like a secret or is too big. `Err` is the step's error, with what was done before
-    /// it (a failure before the first push: every branch not pushed).
+    /// looks like a secret or is too big; `push`, `pr` and `pr_merge` with no branch fail
+    /// (`NOTHING_TO_SHIP`). `Err` is the step's error, with what was done before it (a failure
+    /// before the first push: every branch not pushed).
     #[allow(clippy::too_many_arguments)]
     pub async fn deploy(
         &self,
@@ -188,6 +193,9 @@ impl Deployer {
             DeployMode::Pr => (true, None),
             DeployMode::PrMerge { merge_method } => (true, Some(*merge_method)),
         };
+        if branches.is_empty() {
+            return Err(NOTHING_TO_SHIP.to_string());
+        }
         for b in branches {
             guard(repo, remote, base, b).await?;
         }

@@ -292,7 +292,8 @@ impl Workflows {
     /// Deploys the step `step_id` of `wr` as its mode says (`branch` in a test run), on the
     /// project's repo and remote, titled with the task and with the approved summary as the
     /// body. `Err` is the error with what was done before it (no branches when the approved
-    /// ones cannot be read). Slow: run without the lock.
+    /// ones cannot be read); a check that approved no branch fails a `push`, `pr` or
+    /// `pr_merge` (`NOTHING_TO_SHIP`). Slow: run without the lock.
     async fn deploy_now(
         &self,
         wr: &WorkflowRun,
@@ -307,7 +308,9 @@ impl Workflows {
         let (branches, summary) = approved(wr, step_id).map_err(unread)?;
         let repo = Path::new(&wr.project.repo_path);
         let base = match mode {
-            DeployMode::Pr | DeployMode::PrMerge { .. } => {
+            // With no branch there is no pull request to open: the deployer fails it as
+            // `NOTHING_TO_SHIP`, whatever the default branch.
+            DeployMode::Pr | DeployMode::PrMerge { .. } if !branches.is_empty() => {
                 match base_branch(repo, &wr.project).await {
                     Some(base) => base,
                     None => {

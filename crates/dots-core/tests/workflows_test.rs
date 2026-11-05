@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use common::{git_out, init_repo, spec, temp_store};
 use dots_core::checkins::{CheckIns, Tool as CheckIn};
-use dots_core::deploy::{DeployResult, DeployedBranch, Deployer};
+use dots_core::deploy::{DeployResult, DeployedBranch, Deployer, NOTHING_TO_SHIP};
 use dots_core::engine::{Engine, EngineEvent, RunContext};
 use dots_core::events::{new_bus, Bus, RuntimeEvent};
 use dots_core::followups::FollowUps;
@@ -71,6 +71,23 @@ enum Act {
     /// Starts no session: writes the file given, if any, into its workspace and finishes with
     /// this summary, so the run cannot be resumed.
     NoSession(Option<&'static str>, &'static str),
+    /// Merges into its branch (`git merge --no-ff`) the branch of the first member its step
+    /// run started, in the order started, whose branch still exists; then writes a file into
+    /// its workspace and finishes with this summary.
+    MergeFirst(&'static str, &'static str),
+}
+
+/// Whether the branch `branch` exists in the repository of `dir`.
+fn branch_in(dir: &Path, branch: &str) -> bool {
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["rev-parse", "--verify", "--quiet"])
+        .arg(format!("refs/heads/{branch}"))
+        .output()
+        .unwrap()
+        .status
+        .success()
 }
 
 /// Plays each dot's acts in order, one per run (the last one again once they run out), and
@@ -245,6 +262,23 @@ impl Engine for Team {
                     if let Some(file) = file {
                         std::fs::write(ctx.workspace.join(file), s).unwrap();
                     }
+                    EngineEvent::Finished { summary: s.into() }
+                }
+                Act::MergeFirst(file, s) => {
+                    let run = store.get_run(&ctx.run_id).await.unwrap();
+                    let step_run = run.workflow_step_run_id.expect("a step's run");
+                    let mut first = None;
+                    for m in store.step_members(&step_run).await.unwrap() {
+                        let branch = store.get_run(&m.run_id).await.unwrap().branch;
+                        if let Some(b) = branch.filter(|b| branch_in(&ctx.workspace, b)) {
+                            first = Some(b);
+                            break;
+                        }
+                    }
+                    let first = first.expect("a member's branch");
+                    let args = ["merge", "--no-ff", "-q", "-m", "Merge a part.", &first];
+                    git_out(&ctx.workspace, &args);
+                    std::fs::write(ctx.workspace.join(file), s).unwrap();
                     EngineEvent::Finished { summary: s.into() }
                 }
                 Act::Await(file, s) => {
@@ -655,10 +689,54 @@ async fn a_disabled_member_fails_its_step() {
 }
 
 #[tokio::test]
-async fn a_deploy_after_a_check_that_showed_no_branch_ships_nothing() {
+async fn a_deploy_after_a_check_that_showed_no_branch_fails_unless_it_only_lists_branches() {
     let w = world().await;
+    w.shipping_to_origin("ok");
+    // On no branch, so a pull request's base could not be found either: nothing to ship is
+    // what the step says.
+    git_out(&w.repo, &["checkout", "-q", "--detach"]);
+    let modes = [
+        DeployMode::Push,
+        DeployMode::Pr,
+        DeployMode::PrMerge {
+            merge_method: MergeMethod::Squash,
+        },
+    ];
+    for (n, mode) in modes.into_iter().enumerate() {
+        let flow = w
+            .workflow(&format!("Deploy {n}"), vec![check("check"), ship(mode)])
+            .await;
+        let wr = w.start(&flow).await;
+        let wr = w.until(&wr.id, waits_on(WaitingOn::Check)).await;
+        w.workflows.approve_check(&wr.id, None).await.unwrap();
+        let wr = w.until(&wr.id, waits_on(WaitingOn::StepFailed)).await;
+        assert_eq!(
+            wr.steps[0].decision.as_ref().unwrap()["branches"],
+            json!([])
+        );
+        assert_eq!(
+            wr.error.as_deref(),
+            Some("Ship: Nothing to ship: the check approved no branch.")
+        );
+        let ship = newest(&wr, "ship");
+        assert_eq!(ship.status, StepRunStatus::Failed);
+        assert_eq!(
+            ship.deploy_result,
+            Some(DeployResult {
+                branches: vec![],
+                ready: false,
+                error: Some(NOTHING_TO_SHIP.into()),
+            })
+        );
+        w.workflows.stop(&wr.id).await.unwrap();
+    }
+    assert!(w.gh_calls().is_empty());
+    // Mode `branch` lists the branches it was given: none, and it succeeds.
     let flow = w
-        .workflow("Deploy", vec![check("check"), ship(DeployMode::Push)])
+        .workflow(
+            "Deploy branch",
+            vec![check("check"), ship(DeployMode::Branch)],
+        )
         .await;
     let wr = w.start(&flow).await;
     let wr = w.until(&wr.id, waits_on(WaitingOn::Check)).await;
@@ -667,14 +745,10 @@ async fn a_deploy_after_a_check_that_showed_no_branch_ships_nothing() {
         .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
         .await;
     assert_eq!(
-        wr.steps[0].decision.as_ref().unwrap()["branches"],
-        json!([])
-    );
-    assert_eq!(
         newest(&wr, "ship").deploy_result,
         Some(DeployResult {
             branches: vec![],
-            ready: false,
+            ready: true,
             error: None,
         })
     );
@@ -2395,7 +2469,7 @@ async fn a_lead_that_merged_its_members_work_hands_on_its_own_branch_alone() {
                 vec![("dev", "Part one.")],
                 Box::new(Act::Finish("Started.")),
             ),
-            Act::Write("merged.txt", "Merged."),
+            Act::MergeFirst("merged.txt", "Merged."),
         ],
     );
     w.engine
@@ -2421,6 +2495,10 @@ async fn a_lead_that_merged_its_members_work_hands_on_its_own_branch_alone() {
         git_out(&w.repo, &["show", &format!("{own}:merged.txt")]),
         "Merged."
     );
+    assert_eq!(
+        git_out(&w.repo, &["show", &format!("{own}:part.txt")]),
+        "Did it."
+    );
     // The member's branch is still named in its part of the hand-off.
     let member_branch = members[0].branch.clone().unwrap();
     assert_eq!(
@@ -2434,6 +2512,105 @@ async fn a_lead_that_merged_its_members_work_hands_on_its_own_branch_alone() {
         )]
     );
     assert_eq!(handoff.summary, "Merged.");
+}
+
+#[tokio::test]
+async fn a_check_shows_and_a_deploy_ships_the_member_branches_its_lead_did_not_merge() {
+    let w = world().await;
+    w.shipping_to_origin("ok");
+    w.engine.set(
+        &w.helper.spec.name,
+        vec![
+            Act::Start(
+                vec![
+                    ("dev", "Part one."),
+                    ("dev", "Part two."),
+                    ("dev", "Part three."),
+                ],
+                Box::new(Act::Finish("Started three.")),
+            ),
+            Act::MergeFirst("merged.txt", "Merged one part."),
+        ],
+    );
+    // Two members change something; the third changes nothing, so its branch goes with its
+    // worktree.
+    w.engine.set(
+        &w.dev.spec.name,
+        vec![
+            Act::Write("one.txt", "One done."),
+            Act::Write("two.txt", "Two done."),
+            Act::Finish("Nothing to change."),
+        ],
+    );
+    let flow = w
+        .workflow(
+            "Split",
+            vec![
+                delegating("split", "Split it", &w.helper, &[&w.dev], 3, 6),
+                check("check"),
+                ship(DeployMode::Push),
+            ],
+        )
+        .await;
+    let wr = w.start(&flow).await;
+    let wr = w.until(&wr.id, waits_on(WaitingOn::Check)).await;
+    let split = newest(&wr, "split").clone();
+    let members = w.members_are(&split.id, 3, RunStatus::Succeeded).await;
+    let lead = w.lead_is(&split.id, RunStatus::Succeeded).await;
+    let own = lead.branch.clone().unwrap();
+    let kept: Vec<String> = members
+        .iter()
+        .filter_map(|m| m.branch.clone())
+        .filter(|b| branch_in(&w.repo, b))
+        .collect();
+    assert_eq!(kept.len(), 2, "{members:#?}");
+    let (merged, other) = (&kept[0], &kept[1]);
+    // The lead merged the first part: its branch has commits and the first member's tip is
+    // in it, but not the second's.
+    git_out(&w.repo, &["merge-base", "--is-ancestor", merged, &own]);
+    assert_ne!(
+        git_out(&w.repo, &["rev-parse", merged]),
+        git_out(&w.repo, &["rev-parse", &own])
+    );
+    // The check shows the lead's branch, then the member branch it did not merge; the
+    // merged one and the one that is gone are left out.
+    let handoff = split.handoff.clone().unwrap();
+    let shown: Vec<&str> = handoff.branches.iter().map(|b| b.branch.as_str()).collect();
+    assert_eq!(shown, [own.as_str(), other.as_str()]);
+    // The lead's branch is named by the newest run of its thread: the one that merged.
+    let named = w.store.get_run(&handoff.branches[0].run_id).await.unwrap();
+    assert_eq!(named.root_run_id, lead.id);
+    assert_eq!(handoff.members.len(), 3);
+    assert_eq!(
+        handoff
+            .members
+            .iter()
+            .filter(|m| m.branch.is_none())
+            .count(),
+        1
+    );
+    // The approval records the tips of exactly those branches, and the deploy pushes them.
+    let tip = |b: &str| git_out(&w.repo, &["rev-parse", &format!("refs/heads/{b}")]);
+    let (own_tip, other_tip) = (tip(&own), tip(other));
+    let approved = w.workflows.approve_check(&wr.id, None).await.unwrap();
+    assert_eq!(
+        newest(&approved, "check").decision.as_ref().unwrap()["branches"],
+        json!([
+            {"branch": own, "commit": own_tip},
+            {"branch": other, "commit": other_tip},
+        ])
+    );
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    let result = newest(&wr, "ship").deploy_result.clone().unwrap();
+    assert_eq!(
+        result.branches,
+        [pushed(&own, &own_tip), pushed(other, &other_tip)]
+    );
+    assert_eq!(w.remote_tip(&own), Some(own_tip));
+    assert_eq!(w.remote_tip(other), Some(other_tip));
+    assert_eq!(w.remote_tip(merged), None);
 }
 
 #[tokio::test]

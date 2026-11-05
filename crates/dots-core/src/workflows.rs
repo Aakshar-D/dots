@@ -360,6 +360,22 @@ async fn has_commits(repo: &Path, branch: &str, base: Option<&str>) -> bool {
         .is_ok_and(|n| n.trim().parse::<u64>().is_ok_and(|n| n > 0))
 }
 
+/// Whether the tip of the branch `branch` is an ancestor of the tip of the branch `of`, or the
+/// same commit: all the work of `branch` is in `of`. `false` when git cannot tell (a branch
+/// gone), so the branch is shown rather than hidden.
+async fn merged_into(repo: &Path, branch: &str, of: &str) -> bool {
+    let branch = format!("refs/heads/{branch}");
+    let of = format!("refs/heads/{of}");
+    let args = [
+        "merge-base",
+        "--is-ancestor",
+        "--end-of-options",
+        &branch,
+        &of,
+    ];
+    git(repo, &args).await.is_ok()
+}
+
 /// The hand-off's reference to `branch`, the branch of `run`.
 fn branch_ref(run: &Run, branch: String) -> BranchRef {
     BranchRef {
@@ -1431,9 +1447,11 @@ impl Workflows {
     /// the branch of that thread when the branch still exists (a worktree with no change was
     /// removed with its branch). What the thread left uncommitted is committed first. A
     /// delegate step also hands on what each member it started handed back, and its branches
-    /// are those of section 6.2: its own branch when it has commits (the delegating run merged
-    /// the members' work), else each member's branch that exists. The outcome is the caller's:
-    /// the step run's. Slow, and run by a job without the lock.
+    /// are those of section 6.2 (`delegate::handed_branches`): its own branch when it has
+    /// commits, with each member's branch that exists and that it did not merge; else each
+    /// member's branch that exists. A check after the step shows these, and a deploy after it
+    /// ships them. The outcome is the caller's: the step run's. Slow, and run by a job without
+    /// the lock.
     async fn handoff_of(&self, wr: &WorkflowRun, members: &[StepMember], runs: &[Run]) -> Handoff {
         let own = delegate::own_runs(runs, members);
         let summary = own
@@ -1441,7 +1459,7 @@ impl Workflows {
             .and_then(|r| r.summary.clone())
             .unwrap_or_default();
         let repo = Path::new(&wr.project.repo_path);
-        let mut branches = Vec::new();
+        let mut lead = None;
         if let Some(run) = own.iter().rev().find(|r| r.branch.is_some()) {
             // Dots' commit, should the run's end not have made it (section 6.1): the next step
             // starts from this branch's tip.
@@ -1451,7 +1469,7 @@ impl Workflows {
                 && (members.is_empty()
                     || has_commits(repo, &branch, run.base_commit.as_deref()).await)
             {
-                branches.push(branch_ref(run, branch));
+                lead = Some(branch_ref(run, branch));
             }
         }
         let mut handed = Vec::new();
@@ -1461,9 +1479,7 @@ impl Workflows {
             handed.push(end);
             member_branches.extend(branch);
         }
-        if branches.is_empty() {
-            branches = member_branches;
-        }
+        let branches = delegate::handed_branches(repo, lead, member_branches).await;
         Handoff {
             summary: cut(&summary, MAX_HANDOFF_SUMMARY),
             branches,
