@@ -5,6 +5,7 @@ import { useState, type ReactNode } from "react";
 import { commands } from "@/api/commands";
 import { EngineKind, WorkspaceMode, type Dot, type DotSpec } from "@/api/types";
 import { Field } from "@/components/Field";
+import { ModelPicker, useModels } from "@/components/ModelPicker";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -151,6 +152,7 @@ export function DotForm(props: {
   const orgId = props.existing ? props.existing.org_id : draft.org;
   const set = <K extends keyof DotSpec>(key: K, value: DotSpec[K]) =>
     props.onChange({ ...draft, spec: { ...spec, [key]: value } });
+  const models = useModels(spec.engine, spec.endpoint_url);
 
   function browse() {
     open({ directory: true, title: "Choose the folder the dot works in" }).then((picked) => {
@@ -228,17 +230,13 @@ export function DotForm(props: {
           </NativeSelect>
         </Field>
         <Field label="Model" htmlFor="dot-model" error={errors.model}>
-          <Input
+          <ModelPicker
             id="dot-model"
-            list={spec.engine === "claude" ? "claude-models" : undefined}
             value={spec.model}
-            onChange={(e) => set("model", e.target.value)}
+            onChange={(model) => set("model", model)}
+            options={models.options}
+            note={models.note}
           />
-          <datalist id="claude-models">
-            <option value="sonnet" />
-            <option value="opus" />
-            <option value="haiku" />
-          </datalist>
         </Field>
         {spec.engine === "local" && (
           <Field

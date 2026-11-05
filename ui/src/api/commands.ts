@@ -9,6 +9,7 @@ import type {
   CmdErrorKind,
   DotSpec,
   DraftRequest,
+  EngineKind,
   EntryKind,
   InboxKey,
   LibraryConfig,
@@ -219,7 +220,12 @@ export const commands = {
   /// always asks.
   rulesTouchPrivate: (patterns: string[]) =>
     call(z.boolean().array(), "rules_touch_private", { patterns }),
+  /// A blank dot; its model is the default model of Settings.
   newDotSpec: () => call(T.DotSpec, "new_dot_spec"),
+  /// The models a dot of `engine` can pick: the Claude list, or what the local `endpoint`
+  /// lists. Rejects with the reason an endpoint's list could not be read.
+  listModels: (engine: EngineKind, endpoint: string | null) =>
+    call(T.ModelOption.array(), "list_models", { engine, endpoint }),
   testEndpoint: (endpoint: string, model: string) =>
     call(text, "test_endpoint", { endpoint, model }),
 

@@ -66,6 +66,8 @@ export const keys = {
   /// member list) marks it stale.
   dotAccess: (id: string) => ["dot", id, "access"] as const,
   newDotSpec: ["new-dot-spec"] as const,
+  /// The models of an engine, or of a local endpoint (model switcher spec section 2.1).
+  models: (engine: string, endpoint: string | null) => ["models", engine, endpoint] as const,
   schedulePreview: (schedule: Schedule | null) => ["schedule-preview", schedule] as const,
   webhookUrl: (dotId: string) => ["webhook-url", dotId] as const,
   runs: (dotId: string) => ["runs", dotId] as const,

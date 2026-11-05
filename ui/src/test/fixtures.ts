@@ -80,7 +80,12 @@ export const sample = {
   /// Ben's request answering his invite; then one with no invite whose email is Asha's, with a
   /// problem.
   requestPreviews: T.RequestPreview.array().parse(contract.RequestPreview),
+  /// The Claude models (Opus, Sonnet, Haiku), then one a local endpoint lists.
+  models: T.ModelOption.array().parse(contract.ModelOption),
 };
+
+/// What `list_models` answers for the Claude engine.
+export const claudeModels = sample.models.filter((m) => m.hint !== "");
 
 /// What `new_dot_spec` answers: the core's defaults with nothing filled in.
 /// What a workspace or a dot refuses when it refuses nothing (`Refusals`, `DotAccess`).
@@ -186,6 +191,10 @@ export function installDefaults(): void {
   // No grant has a status: the editor shows each as it shows a grant not saved yet.
   backend.on("dot_variables", () => []);
   backend.on("new_dot_spec", () => blankSpec);
+  // The Claude list; a local endpoint lists one model.
+  backend.on("list_models", (args) =>
+    args.engine === "claude" ? claudeModels : sample.models.filter((m) => m.hint === ""),
+  );
   backend.on("list_runs", () => []);
   // No dot has checked in or scheduled anything. A question on screen is marked read.
   backend.on("messages_list", () => []);

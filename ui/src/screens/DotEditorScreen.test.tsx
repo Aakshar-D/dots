@@ -2,11 +2,12 @@ import { act, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import type { Inbox, Schedule } from "@/api/types";
+import { CUSTOM } from "@/components/ModelPicker";
 import { specOf } from "@/lib/dot-rules";
 import { localDateTime } from "@/lib/format";
 import { invalidateDots } from "@/lib/query";
 import { backend } from "@/test/backend";
-import { blankSpec, sample } from "@/test/fixtures";
+import { blankSpec, claudeModels, sample } from "@/test/fixtures";
 import { renderApp } from "@/test/render";
 
 const dot = sample.dot;
@@ -111,6 +112,73 @@ describe("the dot editor, new dot", () => {
     expect(within(offered).getAllByRole("option", { hidden: true })[0]).toHaveValue(
       sample.settings.local_endpoints[0],
     );
+  });
+
+  it("picks the model from the Claude list, starting with the default model", async () => {
+    backend.on("create_dot", (args) => ({ ...dot, ...(args.spec as object), id: "dot-new" }));
+    backend.on("get_dot", () => ({ ...dot, id: "dot-new" }));
+    // The default model of Settings, as `new_dot_spec` answers with it.
+    backend.on("new_dot_spec", () => ({ ...blankSpec, model: "opus" }));
+    const { user, router } = renderApp("/dots/new");
+    const model = await screen.findByLabelText("Model");
+    await within(model).findByRole("option", { name: "Sonnet" });
+    expect(model).toHaveValue("opus");
+    expect(screen.getByText(claudeModels[0].hint)).toBeVisible();
+    await user.selectOptions(model, "Haiku");
+    await user.type(screen.getByLabelText("Name"), "nightly");
+    await user.type(screen.getByLabelText("Instructions"), "Run the tests.");
+    await user.click(screen.getByRole("button", { name: "Create dot" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/dots/dot-new"));
+    expect(backend.callsTo("create_dot")[0]).toMatchObject({ spec: { model: "haiku" } });
+  });
+
+  it("takes any model id through Custom…, and still wants one", async () => {
+    const { user } = renderApp("/dots/new");
+    const model = await screen.findByLabelText("Model");
+    await within(model).findByRole("option", { name: "Opus" });
+    await user.selectOptions(model, "Custom…");
+    const box = screen.getByRole("textbox", { name: "Custom model ID" });
+    expect(box).toHaveValue("sonnet");
+    await user.clear(box);
+    // Emptied, the box stays for another id.
+    expect(screen.getByRole("textbox", { name: "Custom model ID" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Create dot" }));
+    expect(screen.getByText("Name the model to use.")).toBeVisible();
+    await user.type(box, "claude-opus-4-1");
+    expect(screen.queryByText("Name the model to use.")).toBeNull();
+  });
+
+  it("lists a local endpoint's models", async () => {
+    const { user } = renderApp("/dots/new");
+    await user.selectOptions(await screen.findByLabelText("Engine"), "local");
+    expect(
+      screen.getByText("Set the endpoint to list its models, or pick Custom… to type a model ID."),
+    ).toBeVisible();
+    await user.type(screen.getByLabelText("Endpoint"), "http://127.0.0.1:1234");
+    const model = screen.getByLabelText("Model");
+    const listed = sample.models.filter((m) => m.hint === "");
+    await user.selectOptions(
+      model,
+      await within(model).findByRole("option", { name: listed[0].label }),
+    );
+    expect(model).toHaveValue(listed[0].id);
+    expect(backend.callsTo("list_models")).toContainEqual({
+      engine: "local",
+      endpoint: "http://127.0.0.1:1234",
+    });
+  });
+
+  it("says why an endpoint's models could not be listed", async () => {
+    backend.on("list_models", (args) => {
+      if (args.engine === "claude") return claudeModels;
+      throw { kind: "internal", message: "could not reach http://127.0.0.1:1234/v1/models." };
+    });
+    const { user } = renderApp("/dots/new");
+    await user.selectOptions(await screen.findByLabelText("Engine"), "local");
+    await user.type(screen.getByLabelText("Endpoint"), "http://127.0.0.1:1234");
+    expect(
+      await screen.findByText(/Could not list the endpoint's models: could not reach/),
+    ).toBeVisible();
   });
 
   it("takes the folder from the native picker", async () => {
@@ -390,6 +458,18 @@ describe("the dot editor, stored dot", () => {
   });
 
   const endpoint = "http://127.0.0.1:1234";
+
+  it("shows a model not in the list as Custom with its id", async () => {
+    const held = stored();
+    held.dot = { ...dot, model: "claude-opus-4-1" };
+    renderApp(path);
+    const model = await screen.findByLabelText("Model");
+    await within(model).findByRole("option", { name: "Opus" });
+    expect(model).toHaveValue(CUSTOM);
+    expect(screen.getByRole("textbox", { name: "Custom model ID" })).toHaveValue(
+      "claude-opus-4-1",
+    );
+  });
 
   it("keeps the Library items a dot uses when it is switched to the local engine", async () => {
     stored();
