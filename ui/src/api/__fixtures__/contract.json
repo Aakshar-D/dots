@@ -879,6 +879,11 @@
     "memory_add",
     "memory_update",
     "memory_delete",
+    "intents_list",
+    "intent_create",
+    "intent_update",
+    "intent_set_done",
+    "intent_delete",
     "apps_list",
     "app_call",
     "app_files",
@@ -2330,6 +2335,63 @@
       "status": "replaced"
     }
   ],
+  "Intent": [
+    {
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "done_at": null,
+      "dot_id": "01J0DOT",
+      "due_date": null,
+      "id": "01J0GOAL1",
+      "org_id": "acme-eng",
+      "text": "Ship the spring report",
+      "urgent": true,
+      "workspace_id": "platform"
+    },
+    {
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "done_at": null,
+      "dot_id": null,
+      "due_date": "2026-10-14",
+      "id": "01J0GOAL2",
+      "org_id": "acme-eng",
+      "text": "Book the venue",
+      "urgent": false,
+      "workspace_id": "platform"
+    },
+    {
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "done_at": "2026-10-09T12:00:00.000Z",
+      "dot_id": null,
+      "due_date": "2026-10-14",
+      "id": "01J0GOAL3",
+      "org_id": "acme-eng",
+      "text": "Renew the passport",
+      "urgent": false,
+      "workspace_id": "platform"
+    }
+  ],
+  "IntentFields": {
+    "dot_id": "01J0DOT",
+    "due_date": "2026-10-14",
+    "text": "Book the venue",
+    "urgent": false
+  },
+  "IntentsView": {
+    "intents": [
+      {
+        "created_at": "2026-10-09T12:00:00.000Z",
+        "done_at": null,
+        "dot_id": "01J0DOT",
+        "due_date": null,
+        "id": "01J0GOAL1",
+        "org_id": "acme-eng",
+        "text": "Ship the spring report",
+        "urgent": true,
+        "workspace_id": "platform"
+      }
+    ],
+    "refusal": "Acme Engineering: a Viewer in the Platform workspace can't change goals. Ask an Admin or Owner."
+  },
   "JoinPreview": [
     {
       "address": "https://bao.acme.internal",
@@ -4850,6 +4912,11 @@
         "waiting": null
       },
       "type": "scheduled_message_updated"
+    },
+    {
+      "org_id": null,
+      "type": "intents_updated",
+      "workspace_id": "default"
     }
   ],
   "ScannedAgent": [

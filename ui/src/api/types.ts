@@ -385,6 +385,35 @@ export const FollowUp = z.strictObject({
   created_at: z.string(),
 });
 
+// One of the person's goals (Intents), in the account (`org_id`, null for Personal) and
+// workspace it was added in. `due_date` is a calendar date, YYYY-MM-DD; times are RFC 3339 UTC.
+export const Intent = z.strictObject({
+  id: z.string(),
+  org_id: nullable(z.string()),
+  workspace_id: z.string(),
+  text: z.string(),
+  due_date: nullable(z.string()),
+  // Shown under Now, whatever its date.
+  urgent: z.boolean(),
+  // The dot it is handed to; null when it has none, or that dot was deleted.
+  dot_id: nullable(z.string()),
+  created_at: z.string(),
+  // When it was marked done; null while it is open.
+  done_at: nullable(z.string()),
+});
+// The goals of one workspace, and why this PC may not change them (null when it may).
+export const IntentsView = z.strictObject({
+  intents: z.array(Intent),
+  refusal: nullable(z.string()),
+});
+// What the person writes for a goal, on create and on every change (a change replaces all four).
+export const IntentFields = z.strictObject({
+  text: z.string(),
+  due_date: nullable(z.string()),
+  urgent: z.boolean(),
+  dot_id: nullable(z.string()),
+});
+
 export const MemorySource = z.enum(["dot", "person"]);
 // One thing a dot remembers across runs (dot memory spec section 2). Times are RFC 3339 UTC.
 export const Memory = z.strictObject({
@@ -643,6 +672,13 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("inbox_updated") }),
   // Snoozed items came back in one wake pass (the app notifies); an `inbox_updated` goes with it.
   z.strictObject({ type: z.literal("snooze_ended"), items: z.array(InboxMark) }),
+  // A goal of the workspace was added, changed, done or undone, or deleted, or a deleted dot
+  // left it unlinked: the Intents screen reads it again.
+  z.strictObject({
+    type: z.literal("intents_updated"),
+    org_id: nullable(z.string()),
+    workspace_id: z.string(),
+  }),
   // A scheduled message was scheduled, edited, cancelled, sent or failed, or its waiting reason
   // changed (the app notifies on a failure).
   z.strictObject({ type: z.literal("scheduled_message_updated"), message: ScheduledMessage }),
@@ -1874,6 +1910,9 @@ export type Message = z.infer<typeof Message>;
 export type FollowUp = z.infer<typeof FollowUp>;
 export type MemorySource = z.infer<typeof MemorySource>;
 export type Memory = z.infer<typeof Memory>;
+export type Intent = z.infer<typeof Intent>;
+export type IntentsView = z.infer<typeof IntentsView>;
+export type IntentFields = z.infer<typeof IntentFields>;
 export type WatcherKind = z.infer<typeof WatcherKind>;
 export type PausedReason = z.infer<typeof PausedReason>;
 export type FolderEvent = z.infer<typeof FolderEvent>;
