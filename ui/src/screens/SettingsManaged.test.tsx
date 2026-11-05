@@ -15,13 +15,13 @@ const none = {
 
 describe("Settings: the company's Claude Code policy", () => {
   it("says when none was found", async () => {
-    renderApp("/settings");
+    renderApp("/settings/claude");
     expect(await screen.findByText("None found")).toBeVisible();
   });
 
   it("shows where a policy was found", async () => {
     backend.on("managed_policy", () => ({ ...none, path: "/etc/claude-code/managed-settings.json" }));
-    renderApp("/settings");
+    renderApp("/settings/claude");
     await waitFor(() =>
       expect(screen.getByTestId("managed-policy")).toHaveTextContent(
         "Found at /etc/claude-code/managed-settings.json",
@@ -35,7 +35,7 @@ describe("Settings: the company's Claude Code policy", () => {
       path: "C:/p/managed-settings.json",
       error: "Couldn't read your company's Claude Code policy at C:/p/managed-settings.json: bad",
     }));
-    renderApp("/settings");
+    renderApp("/settings/claude");
     expect(await screen.findByText(/Couldn't read your company's Claude Code policy/)).toBeVisible();
   });
 });

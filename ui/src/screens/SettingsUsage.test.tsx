@@ -14,7 +14,7 @@ function settings() {
     current = args.settings as Settings;
     return { settings: current, restart_required: false };
   });
-  return renderApp("/settings");
+  return renderApp("/settings/claude");
 }
 
 describe("the Claude usage settings", () => {

@@ -50,7 +50,7 @@ function settings(start: UsageCountsState = OFF) {
     return current;
   });
   backend.on("usage_counts_preview", () => REPORT);
-  return renderApp("/settings");
+  return renderApp("/settings/help");
 }
 
 const section = () => screen.findByRole("group", { name: "Share usage counts" });

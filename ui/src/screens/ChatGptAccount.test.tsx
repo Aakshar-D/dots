@@ -16,7 +16,7 @@ describe("ChatGPT account in Settings", () => {
       ...signedOut, configured: false,
       setup_error: "ChatGPT sign-in needs a registered OpenAI client for Dots.",
     }));
-    renderApp("/settings");
+    renderApp("/settings/account");
     expect(await screen.findByRole("button", { name: "Sign in with ChatGPT" })).toBeDisabled();
     expect(await screen.findByText(/needs a registered OpenAI client/)).toBeVisible();
     expect(backend.callsTo("chatgpt_sign_in")).toEqual([]);
@@ -29,7 +29,7 @@ describe("ChatGPT account in Settings", () => {
       backend.on("chatgpt_account", () => result);
       return result;
     }));
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/account");
     await user.click(await screen.findByRole("button", { name: "Sign in with ChatGPT" }));
     expect(await screen.findByText("Complete sign-in in your browser.")).toBeVisible();
     expect(screen.getByRole("button", { name: "Signing in…"})).toBeDisabled();
@@ -45,7 +45,7 @@ describe("ChatGPT account in Settings", () => {
     backend.on("chatgpt_sign_in", () => {
       throw { kind: "invalid", message: "Sign-in could not be verified. Try again." };
     });
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/account");
     await user.click(await screen.findByRole("button", { name: "Sign in with ChatGPT" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Sign-in could not be verified");
     expect(screen.getByRole("button", { name: "Sign in with ChatGPT" })).toBeEnabled();
@@ -57,7 +57,7 @@ describe("ChatGPT account in Settings", () => {
       backend.on("chatgpt_account", () => signedOut);
       return signedOut;
     });
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/account");
     await user.click(await screen.findByRole("button", { name: "Sign out" }));
     await waitFor(() => expect(screen.queryByText("alex@example.com")).toBeNull());
     expect(screen.getByRole("button", { name: "Sign in with ChatGPT" })).toBeEnabled();
@@ -76,7 +76,7 @@ describe("ChatGPT account in Settings", () => {
       login.fail({ kind: "cancelled", message: "Sign-in cancelled." });
       return signedOut;
     });
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/account");
     await user.click(await screen.findByRole("button", { name: "Sign in with ChatGPT" }));
     await user.click(await screen.findByRole("button", { name: "Cancel sign-in" }));
     expect(await screen.findByRole("button", { name: "Sign in with ChatGPT" })).toBeEnabled();

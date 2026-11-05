@@ -59,7 +59,7 @@ describe("Settings, Accounts", () => {
   it("lists each org with its status in the tone of that status", async () => {
     const statuses = sample.orgs.map((org, i) => ({ ...org, id: `org-${i}`, name: `Org ${i}` }));
     orgs(statuses);
-    renderApp("/settings");
+    renderApp("/settings/account");
     // Plain while it works; the attention colour while it works from its copy, has a policy it
     // refused or waits; the error colour once its values are gone.
     const tones: Record<OrgSummary["status"], string | null> = {
@@ -88,7 +88,7 @@ describe("Settings, Accounts", () => {
 
   it("shows the source, the key, the times and, when asked, the policy", async () => {
     orgs([acme]);
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/account");
     const item = await row("Acme Engineering");
     expect(item).toHaveTextContent("OpenBao at https://bao.acme.internal");
     expect(within(item).getByText(acme.key_fingerprint)).toBeVisible();
@@ -103,7 +103,7 @@ describe("Settings, Accounts", () => {
   });
 
   it("says when no org is joined", async () => {
-    renderApp("/settings");
+    renderApp("/settings/account");
     expect(
       await within(await section()).findByText("No account is joined on this PC."),
     ).toBeVisible();
@@ -116,7 +116,7 @@ describe("Settings, Accounts", () => {
       list.set([offline]);
       return offline;
     });
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/account");
     const item = await row("Acme Engineering");
     await user.click(within(item).getByRole("button", { name: "Refresh" }));
     expect(await screen.findByText(offline.status_text)).toBeVisible();
@@ -129,7 +129,7 @@ describe("Settings, Accounts", () => {
       list.set([]);
       return null;
     });
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/account");
     await user.click(within(await row("Acme Engineering")).getByRole("button", { name: "Remove" }));
     let ask = await screen.findByRole("alertdialog", { name: "Remove Acme Engineering?" });
     expect(ask).toHaveTextContent(
@@ -154,7 +154,7 @@ describe("Settings, Accounts", () => {
     backend.on("org_preview", () => newCode);
     const joined = later<OrgSummary>();
     backend.on("org_join", () => joined.answer);
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/account");
     const dialog = await preview(user);
 
     expect(within(dialog).getByRole("heading", { name: "Join an account" })).toBeVisible();
@@ -187,7 +187,7 @@ describe("Settings, Accounts", () => {
     orgs([]);
     backend.on("org_preview", () => ({ ...newCode, auth: "userpass" }) satisfies JoinPreview);
     backend.on("org_join", () => acme);
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/account");
     const dialog = await preview(user);
     await user.click(within(dialog).getByRole("button", { name: "Continue" }));
     expect(within(dialog).queryByLabelText("Token")).toBeNull();
@@ -214,7 +214,7 @@ describe("Settings, Accounts", () => {
       auth: null,
     }));
     backend.on("org_join", () => acme);
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/account");
     const dialog = await preview(user);
     expect(dialog).toHaveTextContent("Infisical at https://app.infisical.com");
     await user.click(within(dialog).getByRole("button", { name: "Continue" }));
@@ -255,7 +255,7 @@ describe("Settings, Accounts", () => {
       },
     ];
     backend.on("org_join", () => answers.shift()!());
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/account");
     const dialog = await preview(user);
     expect(dialog).toHaveTextContent(`SOPS file at ${pending.address}`);
     await user.click(within(dialog).getByRole("button", { name: "Continue" }));
@@ -295,7 +295,7 @@ describe("Settings, Accounts", () => {
     orgs([acme]);
     backend.on("org_preview", () => keyChange);
     backend.on("org_update", () => ({ ...acme, key_fingerprint: keyChange.key_fingerprint }));
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/account");
     const dialog = await preview(user, "Acme Engineering");
     expect(
       within(dialog).getByRole("heading", { name: "Update Acme Engineering" }),
@@ -338,7 +338,7 @@ describe("Settings, Accounts", () => {
     } satisfies JoinPreview;
     backend.on("org_preview", () => keyOnly);
     backend.on("org_update", () => acme);
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/account");
     const dialog = await preview(user, "Acme Engineering");
     await user.click(within(dialog).getByRole("button", { name: "Continue" }));
 
@@ -355,7 +355,7 @@ describe("Settings, Accounts", () => {
   it("warns of a new key by the preview's flag, not by the words of a line", async () => {
     orgs([acme]);
     backend.on("org_preview", () => ({ ...keyChange, key_changed: false }));
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/account");
     const dialog = await preview(user, "Acme Engineering");
     const changes = within(dialog).getByRole("list", { name: "What changes" });
     for (const line of within(changes).getAllByRole("listitem")) {
@@ -369,7 +369,7 @@ describe("Settings, Accounts", () => {
     backend.on("org_update", () => {
       throw { kind: "cancelled", message: "the org was not updated" };
     });
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/account");
     const dialog = await preview(user, "Acme Engineering");
     await user.click(within(dialog).getByRole("button", { name: "Continue" }));
     await user.type(within(dialog).getByLabelText("Token"), TOKEN);
@@ -395,7 +395,7 @@ describe("Settings, Accounts", () => {
   it("reads a .dotsorg file and previews its text", async () => {
     orgs([]);
     backend.on("org_preview", () => newCode);
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/account");
     await user.click(within(await section()).getByRole("button", { name: "Join an account" }));
     const dialog = await screen.findByRole("dialog");
     // As the admin guide says: a code whose SOPS URL carries a token holds a secret.
@@ -422,7 +422,7 @@ describe("Settings, Accounts", () => {
     backend.on("org_join", () => {
       throw { kind: "internal", message: failure };
     });
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/account");
     await user.click(within(await section()).getByRole("button", { name: "Join an account" }));
     let dialog = await screen.findByRole("dialog");
     await user.type(within(dialog).getByLabelText("Join code"), "nonsense");
@@ -443,7 +443,7 @@ describe("Settings, Accounts", () => {
   it("refuses a code for an org joined already, or for another org on Update", async () => {
     orgs([acme]);
     backend.on("org_preview", () => ({ ...newCode, existing: true }));
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/account");
     let dialog = await preview(user);
     expect(
       await within(dialog).findByText(
@@ -464,7 +464,7 @@ describe("Settings, Accounts", () => {
 
   it("asks for the list again when an org is updated", async () => {
     const list = orgs([acme]);
-    const { listening } = renderApp("/settings");
+    const { listening } = renderApp("/settings/account");
     await row("Acme Engineering");
     await listening();
     const revoked = sample.orgs.find((o) => o.status === "revoked")!;
@@ -483,7 +483,7 @@ describe("Settings, Accounts, membership", () => {
 
   it("shows the role, and the size and number of the member list", async () => {
     orgs([named({ membership: "active", role: "viewer", member_count: 4, roster_seq: 3 })]);
-    renderApp("/settings");
+    renderApp("/settings/account");
     const r = await row(acme.name);
     expect(within(r).getByText("Viewer")).toBeVisible();
     expect(within(r).getByText("4 members · list #3")).toBeVisible();
@@ -494,7 +494,7 @@ describe("Settings, Accounts, membership", () => {
       named({ membership: "waiting", role: null, status_text: "connected", not_member_text: WAITING }),
     ]);
     backend.on("identity_get", () => sample.identity);
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/account");
     const r = await row(acme.name);
     expect(within(r).getByText(WAITING)).toBeVisible();
     expect(within(r).queryByText("connected")).toBeNull();
@@ -511,7 +511,7 @@ describe("Settings, Accounts, membership", () => {
         not_member_text: CHANGED,
       }),
     ]);
-    renderApp("/settings");
+    renderApp("/settings/account");
     const r = await row(acme.name);
     expect(within(r).getAllByText(/Dots ID changed/)).toHaveLength(1);
     expect(within(r).getByText(`${CHANGED} (offline)`)).toBeVisible();
@@ -526,7 +526,7 @@ describe("Settings, Accounts, membership", () => {
         not_member_text: REMOVED,
       }),
     ]);
-    renderApp("/settings");
+    renderApp("/settings/account");
     const r = await row(acme.name);
     expect(within(r).getByText(REMOVED)).toBeVisible();
     expect(within(r).queryByText("Removed from Acme Engineering")).toBeNull();
@@ -541,7 +541,7 @@ describe("Settings, Accounts, membership", () => {
         status_text: `connected; member list not accepted: ${error}`,
       }),
     ]);
-    renderApp("/settings");
+    renderApp("/settings/account");
     const r = await row(acme.name);
     expect(within(r).getAllByText(new RegExp(error))).toHaveLength(1);
   });
@@ -560,7 +560,7 @@ describe("Settings, Accounts, invites and request codes", () => {
   it("join preview shows the offered role and expiry", async () => {
     orgs([]);
     backend.on("org_preview", () => invited({ role: "admin" }));
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/account");
     const dialog = await preview(user);
     expect(
       within(dialog).getByText(`Invited as Admin \u00b7 expires ${localDateTime(EXPIRES)}`),
@@ -571,7 +571,7 @@ describe("Settings, Accounts, invites and request codes", () => {
   it("expired invite disables Continue", async () => {
     orgs([]);
     backend.on("org_preview", () => invited({ expires_at: "2020-01-01T00:00:00Z" }));
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/account");
     const dialog = await preview(user);
     expect(within(dialog).getByText("This invite has expired. Ask for a new one.")).toBeVisible();
     expect(within(dialog).getByRole("button", { name: "Continue" })).toBeDisabled();
@@ -588,7 +588,7 @@ describe("Settings, Accounts, invites and request codes", () => {
       email: String(args.email),
     }));
     backend.on("org_join", () => ({ ...pending(), request_code: REQUEST }));
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/account");
     const dialog = await preview(user);
     await user.click(within(dialog).getByRole("button", { name: "Continue" }));
     const join = within(dialog).getByRole("button", { name: "Join" });
@@ -608,7 +608,7 @@ describe("Settings, Accounts, invites and request codes", () => {
     backend.on("identity_get", () => Promise.reject({ kind: "internal", message: "no identity" }));
     backend.on("org_preview", () => ({ ...invited(), source_kind: "sops", auth: null }));
     backend.on("org_sops_key", () => AGE_KEY);
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/account");
     const dialog = await preview(user);
     await user.click(within(dialog).getByRole("button", { name: "Continue" }));
     expect(await within(dialog).findByText(/no identity/)).toBeVisible();
@@ -621,7 +621,7 @@ describe("Settings, Accounts, invites and request codes", () => {
     backend.on("org_preview", () => ({ ...invited(), source_kind: "sops", auth: null }));
     backend.on("org_sops_key", () => AGE_KEY);
     backend.on("org_join", () => ({ ...pending(), request_code: REQUEST }));
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/account");
     const dialog = await preview(user);
     await user.click(within(dialog).getByRole("button", { name: "Continue" }));
     await user.click(within(dialog).getByRole("button", { name: "Join" }));
@@ -640,7 +640,7 @@ describe("Settings, Accounts, invites and request codes", () => {
       list.set([next]);
       return next;
     });
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/account");
     const r = await row(waiting.name);
     expect(within(r).queryByLabelText("Request code")).toBeNull();
     await user.click(within(r).getByRole("button", { name: "Request access" }));
@@ -651,7 +651,7 @@ describe("Settings, Accounts, invites and request codes", () => {
 
   it("request code copies to the clipboard", async () => {
     orgs([{ ...waitingOrg(), request_code: REQUEST }]);
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/account");
     const r = await row(waitingOrg().name);
     await user.click(await within(r).findByRole("button", { name: "Copy request code" }));
     expect(await navigator.clipboard.readText()).toBe(REQUEST);

@@ -122,7 +122,7 @@ export function AccountSwitcher() {
   }
   function manage() {
     setOpen(false);
-    navigate("/settings#accounts");
+    navigate("/settings/account");
   }
   function onMenuKey(e: React.KeyboardEvent) {
     if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;

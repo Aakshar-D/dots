@@ -54,7 +54,7 @@ function account(opts: { keys?: ApiKeyView[]; spaces?: WorkspaceView[]; url?: st
 }
 
 async function keysTab() {
-  const view = renderApp("/settings");
+  const view = renderApp("/settings/account");
   const section = await screen.findByRole("group", { name: "Accounts" });
   const row = await within(section).findByRole("listitem", { name: "Acme Engineering" });
   await view.user.click(within(row).getByRole("tab", { name: "API keys" }));
@@ -125,7 +125,7 @@ describe("Settings, Accounts, API keys", () => {
     await router.navigate("/home");
     await waitFor(() => expect(screen.queryByRole("group", { name: "Accounts" })).toBeNull());
     backend.on("api_key_list", () => [key({ last_used_at: "2026-10-03T10:00:00Z" })]);
-    await router.navigate("/settings");
+    await router.navigate("/settings/account");
     const section = await screen.findByRole("group", { name: "Accounts" });
     const row = await within(section).findByRole("listitem", { name: "Acme Engineering" });
     await user.click(within(row).getByRole("tab", { name: "API keys" }));
