@@ -108,6 +108,7 @@ command_list![
     managed_policy_check,
     rules_touch_private,
     new_dot_spec,
+    list_models,
     test_endpoint,
     run_now,
     chat,

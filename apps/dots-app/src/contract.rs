@@ -1303,7 +1303,7 @@ pub fn samples() -> Value {
         }),
         "CmdError": to(CmdError { kind: CmdErrorKind::Conflict, message: "run 01J0RUN is already succeeded".into() }),
         "RunEventData": engine_events(),
-        "NewDotSpec": to(crate::commands::new_dot_spec()),
+        "NewDotSpec": to(dots_core::models::new_dot_spec(&Settings::default(), "", "", "")),
         "Commands": crate::COMMANDS,
         "Enums": {
             "EngineKind": EngineKind::ALL,
@@ -1596,6 +1596,16 @@ pub fn samples() -> Value {
     samples["BrowserStatus"] = to(BrowserStatus {
         edge: Some("C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe".into()),
         npx: Some("C:/Program Files/nodejs/npx.cmd".into()),
+    });
+    // The Claude list, then a model a local endpoint lists (no hint).
+    samples["ModelOption"] = to({
+        let mut models = dots_core::models::claude_models();
+        models.push(dots_core::models::ModelOption {
+            id: "qwen2.5-coder-7b".into(),
+            label: "qwen2.5-coder-7b".into(),
+            hint: String::new(),
+        });
+        models
     });
     samples["DraftRequest"] = to([
         DraftRequest {

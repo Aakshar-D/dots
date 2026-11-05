@@ -31,9 +31,10 @@ use dots_core::library_service::{
     ContextDocuments, EnvVariable, LibraryEntry, McpProbe, ScannedSkill,
 };
 use dots_core::model::{
-    Approval, ConversationFile, DeliveryCounts, Dot, DotOverview, DotSpec, FollowUp, Inbox, Intent,
-    Memory, Message, Run, RunEventRecord, ScheduleSkip, ScheduledMessage, SettingsSaved,
-    StagedAttachment, Status, TopicInfo, WatchHours, Watcher, WatcherConfig, WorktreeDiff,
+    Approval, ConversationFile, DeliveryCounts, Dot, DotOverview, DotSpec, EngineKind, FollowUp,
+    Inbox, Intent, Memory, Message, Run, RunEventRecord, ScheduleSkip, ScheduledMessage,
+    SettingsSaved, StagedAttachment, Status, TopicInfo, WatchHours, Watcher, WatcherConfig,
+    WorktreeDiff,
 };
 use dots_core::policy::{Policy, Preset, RuleCandidate};
 use dots_core::schedule::Schedule;
@@ -721,10 +722,21 @@ pub fn rules_touch_private(patterns: Vec<String>) -> Vec<bool> {
         .collect()
 }
 
-/// A dot with the core's defaults and nothing filled in, for the "New dot" form.
+/// A dot with the core's defaults and nothing filled in, for the "New dot" form. Its model is
+/// the default model of Settings (model switcher spec section 2.2).
 #[tauri::command]
-pub fn new_dot_spec() -> DotSpec {
-    DotSpec::new("", "", "")
+pub async fn new_dot_spec(state: State<'_, AppState>) -> Res<DotSpec> {
+    Ok(state.rt()?.new_dot_spec("", "", "").await)
+}
+
+/// The models a dot of `engine` can pick: the Claude list, or what the local `endpoint` lists
+/// (model switcher spec section 2.1). The error says why an endpoint's list could not be read.
+#[tauri::command]
+pub async fn list_models(
+    engine: EngineKind,
+    endpoint: Option<String>,
+) -> Res<Vec<dots_core::models::ModelOption>> {
+    Ok(dots_core::models::list_models(engine, endpoint.as_deref()).await?)
 }
 
 #[tauri::command]

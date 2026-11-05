@@ -710,6 +710,13 @@ impl Runtime {
         self.settings.lock().await.clone()
     }
 
+    /// A dot with the core's defaults and the model of Settings (model switcher spec section
+    /// 2.2): what every dot made from the UI starts from.
+    pub async fn new_dot_spec(&self, name: &str, instructions: &str, workdir: &str) -> DotSpec {
+        let settings = self.settings.lock().await;
+        crate::models::new_dot_spec(&settings, name, instructions, workdir)
+    }
+
     /// Validates and stores `next`. Port, concurrency and the `claude` path apply after a
     /// restart (`restart_required`); autostart is the app's job. The stored `schedules_paused`
     /// and `tested_claude_version` are kept whatever `next` says: only `set_schedules_paused`
@@ -743,6 +750,8 @@ impl Runtime {
         let mut current = self.settings.lock().await;
         let mut next = current.clone();
         change(&mut next);
+        // As the store keeps it, so the live copy reads the same as the stored one.
+        next.default_model = next.default_model.trim().to_string();
         self.store.put_settings(&next).await?;
         self.scheduler.set_paused(next.schedules_paused);
         self.watchers.set_paused(next.schedules_paused);
@@ -1673,7 +1682,7 @@ impl Runtime {
         };
         // Worktree mode, which `create_dot` turns into folder mode unless the folder is a
         // repository's top level with a commit, and always for a folder it makes.
-        let mut spec = DotSpec::new(&p.name, &p.instructions, &workdir);
+        let mut spec = self.new_dot_spec(&p.name, &p.instructions, &workdir).await;
         spec.workspace_mode = WorkspaceMode::Worktree;
         spec.schedule = p.schedule.clone();
         spec.policy = setup_policy(p.preset, &p.extras);
@@ -1950,6 +1959,7 @@ impl Runtime {
             failed: Vec::new(),
         };
         let mut given = std::collections::BTreeSet::new();
+        let default_model = self.settings.lock().await.default_model.clone();
         for path in paths {
             if !given.insert(path.clone()) {
                 continue;
@@ -1979,7 +1989,11 @@ impl Runtime {
                     Some((dir, mode)) => (dir.to_string_lossy().into_owned(), *mode),
                     None => (String::new(), crate::model::WorkspaceMode::Folder),
                 };
-                let spec = agent_spec(agent, &name, &workdir, mode);
+                let mut spec = agent_spec(agent, &name, &workdir, mode);
+                // An agent that names no model starts with the default one.
+                if crate::kit::agent_model(agent.model.as_deref()).is_none() {
+                    spec.model = default_model.clone();
+                }
                 outcome = self
                     .create_dot(spec, org_id.clone(), workspace_id.clone())
                     .await;

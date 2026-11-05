@@ -19,6 +19,7 @@ const schemas: Record<SampleName, { parse: (v: unknown) => unknown }> = {
   ConversationFile: T.ConversationFile,
   ConversationFileGone: T.ConversationFile,
   NewDotSpec: T.DotSpec,
+  ModelOption: T.ModelOption.array(),
   Dot: T.Dot,
   ScannedAgent: T.ScannedAgent.array(),
   AgentImport: T.AgentImport,

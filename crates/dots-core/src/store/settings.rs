@@ -86,6 +86,17 @@ impl Store {
     /// Validates `settings` and stores every field in one transaction.
     pub async fn put_settings(&self, settings: &Settings) -> Result<()> {
         settings.validate()?;
+        // The default model is stored without the spaces around it.
+        let trimmed;
+        let settings = if settings.default_model.trim() == settings.default_model {
+            settings
+        } else {
+            trimmed = Settings {
+                default_model: settings.default_model.trim().to_string(),
+                ..settings.clone()
+            };
+            &trimmed
+        };
         let Value::Object(fields) = serde_json::to_value(settings)? else {
             unreachable!("Settings serializes to a JSON object");
         };

@@ -235,7 +235,12 @@ export const commands = {
   /// The same, with where this policy of a dot on `engine` would skip what they keep.
   managedPolicyCheck: (engine: EngineKind, policy: Policy) =>
     call(T.ManagedCheck, "managed_policy_check", { engine, policy }),
+  /// A blank dot; its model is the default model of Settings.
   newDotSpec: () => call(T.DotSpec, "new_dot_spec"),
+  /// The models a dot of `engine` can pick: the Claude list, or what the local `endpoint`
+  /// lists. Rejects with the reason an endpoint's list could not be read.
+  listModels: (engine: EngineKind, endpoint: string | null) =>
+    call(T.ModelOption.array(), "list_models", { engine, endpoint }),
   testEndpoint: (endpoint: string, model: string) =>
     call(text, "test_endpoint", { endpoint, model }),
 

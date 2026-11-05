@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { dotStatus, skipLine } from "@/lib/dot-status";
 import { keys } from "@/lib/query";
 import { DotHeader } from "@/screens/home/DotHeader";
+import { DotModelSwitch } from "@/screens/home/DotModelSwitch";
 import { FilesPanel, FilesToggle } from "@/screens/home/FilesPanel";
 import { filesHidden, setFilesHidden } from "@/screens/home/files-pref";
 import { HistoryMenu } from "@/screens/home/HistoryMenu";
@@ -106,6 +107,7 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
         status={dotStatus(row, allMessages, held, hidden)}
         skipLine={skipLine(row.schedule_state)}
       >
+        <DotModelSwitch dot={dot} />
         {hasFiles && <FilesToggle hidden={panelHidden} onToggle={toggleFiles} />}
         <HistoryMenu dotId={dot.id} topics={view.older} archived={view.archived} />
         <Button size="sm" variant="ghost" onClick={() => setPick({ kind: "new" })}>

@@ -734,6 +734,15 @@ export const Status = z.strictObject({
   data_dir: z.string(),
 });
 
+/// One model in a picker (model switcher spec section 2.1): the id a dot stores, the name shown
+/// and what it is for ("" for a model a local endpoint lists).
+export const ModelOption = z.strictObject({
+  id: z.string(),
+  label: z.string(),
+  hint: z.string(),
+});
+export type ModelOption = z.infer<typeof ModelOption>;
+
 export const Settings = z.strictObject({
   port: z.number().int(),
   max_concurrent_runs: z.number().int(),
@@ -759,6 +768,8 @@ export const Settings = z.strictObject({
   quiet_limit_secs: z.number().int(),
   // A topic idle for this many days is archived; 0 never (topic tools spec section 3.3).
   auto_archive_days: z.number().int(),
+  // The model a new Claude dot starts with (model switcher spec section 2.2).
+  default_model: z.string(),
 });
 export const SettingsSaved = z.strictObject({
   settings: Settings,

@@ -12,6 +12,7 @@ import { BrowserSettings } from "@/components/BrowserSettings";
 import { ErrorNote } from "@/components/ErrorNote";
 import { ReportProblemDialog } from "@/components/ReportProblemDialog";
 import { Field } from "@/components/Field";
+import { ModelPicker, useModels } from "@/components/ModelPicker";
 import { Page } from "@/components/Page";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -34,6 +35,7 @@ type Errors = {
   share?: string;
   quiet?: string;
   archive?: string;
+  model?: string;
 };
 
 /// The Settings tabs, in the order they are listed; each id is its URL, `/settings/<id>`.
@@ -61,6 +63,7 @@ const ERROR_TAB: Record<keyof Errors, TabId> = {
   archive: "runs",
   global: "instructions",
   share: "claude",
+  model: "claude",
 };
 
 /// The most days the idle-topic setting takes (`settings::MAX_AUTO_ARCHIVE_DAYS`).
@@ -84,6 +87,7 @@ export function settingsErrors(
         | "hold_share_weekly"
         | "quiet_limit_secs"
         | "auto_archive_days"
+        | "default_model"
       >
     >,
 ): Errors {
@@ -110,6 +114,9 @@ export function settingsErrors(
   const archive = draft.auto_archive_days;
   if (archive !== undefined && !whole(archive, 0, MAX_AUTO_ARCHIVE_DAYS)) {
     errors.archive = `Days must be a whole number, 0 to ${MAX_AUTO_ARCHIVE_DAYS} (0 never archives).`;
+  }
+  if (draft.default_model !== undefined && draft.default_model.trim() === "") {
+    errors.model = "Name the model new dots start with.";
   }
   return errors;
 }
@@ -212,11 +219,14 @@ function Form({
   const [endpointError, setEndpointError] = useState<string>();
   const [tried, setTried] = useState(false);
   const set = (change: Partial<Settings>) => setDraft({ ...draft, ...change });
+  const claudeModels = useModels("claude", null);
 
   const save = useMutation({
     mutationFn: commands.updateSettings,
     onSuccess: (saved) => {
       qc.setQueryData(keys.settings, saved.settings);
+      // A new dot starts with the default model.
+      invalidate(qc, keys.newDotSpec);
       // A token chosen for publishing is checked at once (updates UI spec section 5.1).
       commands
         .publisherCheck()
@@ -371,6 +381,22 @@ function Form({
     claude: (
       <>
         <Section title="Claude Code CLI">
+          <Field
+            label="Default model"
+            htmlFor="settings-default-model"
+            error={tried ? errors.model : undefined}
+          >
+            <ModelPicker
+              id="settings-default-model"
+              value={draft.default_model}
+              onChange={(default_model) => set({ default_model })}
+              options={claudeModels.options}
+            />
+            <p className="text-xs text-muted-foreground">
+              New dots start with this model. Existing dots keep theirs; change a dot's model in
+              its editor or above its conversation.
+            </p>
+          </Field>
           <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-xs">
             <dt className="text-muted-foreground">In use</dt>
             <dd className="min-w-0 font-mono break-all">{claude?.program ?? "not found"}</dd>
