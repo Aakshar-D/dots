@@ -96,6 +96,10 @@ pub enum McpError {
     /// version, a broken connection.
     #[error("{0}")]
     Protocol(String),
+    /// The http server refused the request's credentials (HTTP 401): a sign-in connector's
+    /// token may be refreshed and the request tried again.
+    #[error("the server answered HTTP 401 Unauthorized")]
+    Unauthorized,
 }
 
 impl From<McpError> for Error {

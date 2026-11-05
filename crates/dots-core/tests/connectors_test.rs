@@ -35,15 +35,18 @@ use tokio_util::sync::CancellationToken;
 struct Rt {
     dir: TempDir,
     rt: Runtime,
+    /// The runtime's secret store, to damage what it keeps.
+    secrets: Arc<MemorySecrets>,
 }
 
 async fn start() -> Rt {
     let dir = tempfile::tempdir().unwrap();
     let mut cfg = Config::new(dir.path().join("data"));
     cfg.port = 0;
-    cfg.secrets = Some(Arc::new(MemorySecrets::new()));
+    let secrets = Arc::new(MemorySecrets::new());
+    cfg.secrets = Some(secrets.clone());
     let rt = Runtime::start(cfg).await.unwrap();
-    Rt { dir, rt }
+    Rt { dir, rt, secrets }
 }
 
 impl Rt {
@@ -299,6 +302,8 @@ struct Auth {
     registrations: u32,
     /// The server publishes no protected resource metadata (the 2025-03-26 form).
     no_metadata: bool,
+    /// The 401 names sign-in details on another site.
+    foreign_metadata: bool,
 }
 
 type Shared = Arc<Mutex<Auth>>;
@@ -417,9 +422,15 @@ async fn mcp(State(s): State<Shared>, headers: HeaderMap, Json(msg): Json<Value>
         let challenge = format!(
             "Bearer resource_metadata=\"{base}/.well-known/oauth-protected-resource/mcp\", scope=\"read write\""
         );
-        let no_metadata = s.lock().unwrap().no_metadata;
+        let (no_metadata, foreign) = {
+            let a = s.lock().unwrap();
+            (a.no_metadata, a.foreign_metadata)
+        };
         let value = if no_metadata {
             "Bearer realm=\"OAuth\"".to_string()
+        } else if foreign {
+            "Bearer resource_metadata=\"http://localhost:9/.well-known/oauth-protected-resource\""
+                .to_string()
         } else {
             challenge
         };
@@ -767,7 +778,7 @@ async fn an_auth_server_without_registration_is_refused() {
     })))
     .mount(&server)
     .await;
-    let e = oauth::auth_server(&oauth::client(), &server.uri())
+    let e = oauth::auth_server(&oauth::client(), &server.uri(), true)
         .await
         .unwrap_err();
     assert!(e.to_string().contains("register"), "{e}");
@@ -833,4 +844,176 @@ async fn a_run_refreshes_a_refused_token_and_leaves_out_a_sign_in_that_is_over()
             .any(|n| n == "runapp: sign in again on the Connectors screen"),
         "{notices:?}"
     );
+}
+
+#[tokio::test]
+async fn disconnect_runs_again_and_a_server_removed_in_the_library_takes_its_key_with_it() {
+    let t = start().await;
+    let fake = FakeMcp::new(json!({"tools": [tool("search", true)]}));
+    let connector = key_connector(&fake);
+    let entry =
+        t.rt.connect_with(&connector, &values("fk_secret"), &[])
+            .await
+            .unwrap();
+    let has_key = |t: &Rt| {
+        let vault = t.rt.vault().clone();
+        async move {
+            vault
+                .list()
+                .await
+                .unwrap()
+                .iter()
+                .any(|v| v.name == "CONNECTOR_FAKEAPP_TOKEN")
+        }
+    };
+    assert!(has_key(&t).await);
+    // Removed on the Library screen: its key goes too.
+    t.rt.library()
+        .remove(entry.server_id.as_deref().unwrap(), true)
+        .await
+        .unwrap();
+    assert!(!has_key(&t).await);
+    // Disconnecting what is already gone is no error, and can be done again.
+    t.rt.disconnect_with(&connector).await.unwrap();
+    t.rt.disconnect_with(&connector).await.unwrap();
+}
+
+#[tokio::test]
+async fn disconnect_forgets_a_key_left_behind_without_a_server() {
+    let t = start().await;
+    let fake = FakeMcp::new(json!({"tools": [tool("search", true)]}));
+    let connector = key_connector(&fake);
+    t.rt.vault()
+        .add("CONNECTOR_FAKEAPP_TOKEN", EntryKind::Secret, "fk_left")
+        .await
+        .unwrap();
+    t.rt.disconnect_with(&connector).await.unwrap();
+    assert!(t.rt.vault().list().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_sign_in_that_cannot_be_read_back_asks_to_sign_in_again() {
+    let auth = fake_auth(3600).await;
+    let base = auth.lock().unwrap().base.clone();
+    let t = start().await;
+    let connector = oauth_connector(&base, "damaged");
+    let entry =
+        t.rt.sign_in_with(&connector, &[], browser, Duration::from_secs(20))
+            .await
+            .unwrap();
+    assert_eq!(entry.state, ConnectorState::Connected);
+    // A part of the stored grant is overwritten outside Dots: it no longer matches its marker.
+    use dots_core::vault::SecretStore;
+    t.secrets.put("connector/damaged/oauth/0", "{}").unwrap();
+    let entry = t.rt.connector_entry_for(&connector).await.unwrap();
+    assert_eq!(entry.state, ConnectorState::NeedsSignIn);
+    // Its token expiring now would have been refreshed; a damaged grant is never taken as fresh.
+    let id = entry.server_id.unwrap();
+    auth.lock().unwrap().access = "revoked".into();
+    let catalog =
+        t.rt.library()
+            .check(&id, &DotScope::Personal)
+            .await
+            .unwrap();
+    assert!(catalog.error.unwrap().contains("sign in again"));
+    assert_eq!(auth.lock().unwrap().refreshes, 0);
+}
+
+#[tokio::test]
+async fn sign_in_details_on_another_site_are_refused() {
+    let auth = fake_auth(3600).await;
+    let base = {
+        let mut a = auth.lock().unwrap();
+        a.foreign_metadata = true;
+        a.base.clone()
+    };
+    let e = oauth::discover(&oauth::client(), &format!("{base}/mcp"))
+        .await
+        .unwrap_err();
+    assert!(e.to_string().contains("another site"), "{e}");
+}
+
+#[tokio::test]
+async fn a_registration_with_a_secret_and_no_client_authentication_drops_the_secret() {
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::path("/register"))
+        .respond_with(wiremock::ResponseTemplate::new(201).set_body_json(json!({
+            "client_id": "c1",
+            "client_secret": "hush",
+            "token_endpoint_auth_method": "none",
+        })))
+        .mount(&server)
+        .await;
+    let auth = oauth::AuthServer {
+        issuer: server.uri(),
+        authorization_endpoint: format!("{}/authorize", server.uri()),
+        token_endpoint: format!("{}/token", server.uri()),
+        registration_endpoint: Some(format!("{}/register", server.uri())),
+        code_challenge_methods_supported: vec!["S256".into()],
+        token_endpoint_auth_methods_supported: vec![],
+    };
+    let client = oauth::register(&oauth::client(), &auth, "http://127.0.0.1:1/callback")
+        .await
+        .unwrap();
+    assert_eq!(client.client_secret, None);
+    assert_eq!(client.auth_method, "none");
+}
+
+#[tokio::test]
+async fn the_time_limit_covers_discovery_too() {
+    // A server that never answers in time: the limit still ends the sign-in.
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::any())
+        .respond_with(wiremock::ResponseTemplate::new(401).set_delay(Duration::from_secs(20)))
+        .mount(&server)
+        .await;
+    let started = std::time::Instant::now();
+    let e = oauth::sign_in(
+        &format!("{}/mcp", server.uri()),
+        |_| Ok(()),
+        Duration::from_millis(300),
+        CancellationToken::new(),
+    )
+    .await
+    .err()
+    .unwrap();
+    assert!(e.to_string().contains("timed out"), "{e}");
+    assert!(started.elapsed() < Duration::from_secs(5));
+}
+
+#[tokio::test]
+async fn an_http_server_off_this_pc_cannot_sign_in() {
+    let e = oauth::discover(&oauth::client(), "http://mcp.example.com/mcp")
+        .await
+        .unwrap_err();
+    assert!(e.to_string().contains("https"), "{e}");
+}
+
+#[tokio::test]
+async fn a_refused_token_that_was_refreshed_meanwhile_is_not_refreshed_again() {
+    let auth = fake_auth(3600).await;
+    let base = auth.lock().unwrap().base.clone();
+    let t = start().await;
+    let connector = oauth_connector(&base, "raced");
+    t.rt.sign_in_with(&connector, &[], browser, Duration::from_secs(20))
+        .await
+        .unwrap();
+    let item =
+        t.rt.store()
+            .find_library_item(LibraryKind::McpServer, "raced")
+            .await
+            .unwrap()
+            .unwrap();
+    // Another run refreshed already: the token this one sent is not the stored one.
+    let fresh = dots_core::connectors::refresh_if_due(t.rt.vault(), &item, Some("an-old-token"))
+        .await
+        .unwrap();
+    assert_eq!(fresh, dots_core::connectors::Freshness::Fresh);
+    assert_eq!(auth.lock().unwrap().refreshes, 0);
+    // The stored token itself refused: refreshed.
+    let sent = auth.lock().unwrap().access.clone();
+    dots_core::connectors::refresh_if_due(t.rt.vault(), &item, Some(&sent))
+        .await
+        .unwrap();
+    assert_eq!(auth.lock().unwrap().refreshes, 1);
 }

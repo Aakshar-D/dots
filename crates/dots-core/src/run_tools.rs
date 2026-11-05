@@ -22,7 +22,7 @@ use tokio::task::{JoinHandle, JoinSet};
 use tokio_util::sync::CancellationToken;
 use zeroize::Zeroizing;
 
-use crate::connectors::{refresh_if_due, signs_in, Freshness};
+use crate::connectors::{refresh_if_due, signs_in, token_variable, Freshness};
 use crate::context::{self, Collection};
 use crate::events::Bus;
 use crate::kit::{self, KitPlugin, KitSkill, PluginInfo, RunKit, SkillInfo};
@@ -411,9 +411,17 @@ impl RunTools {
             };
             // A sign-in connector's token is refreshed first when it is about to expire; one
             // whose refresh was refused is left out, with what to do (connectors spec §5).
-            if let Freshness::NeedsSignIn(notice) = refresh_if_due(vault, &item, false).await? {
-                notices.push(notice);
-                continue;
+            match refresh_if_due(vault, &item, None).await {
+                Ok(Freshness::Fresh) => {}
+                Ok(Freshness::NeedsSignIn(notice)) => {
+                    notices.push(notice);
+                    continue;
+                }
+                Err(e) => {
+                    tracing::warn!("{}: checking its sign-in failed: {e}", item.name);
+                    notices.push(format!("{}: its sign-in could not be read: {e}", item.name));
+                    continue;
+                }
             }
             let consumer = Consumer::Mcp(item.name.clone());
             match vault
@@ -435,15 +443,22 @@ impl RunTools {
         // A sign-in connector whose server refused its token at the start: the token is
         // refreshed and the server opened once more.
         for i in 0..items.len() {
-            let refused =
-                matches!(&opened[i], Err(McpError::Protocol(m)) if m.contains("HTTP 401"));
+            let refused = matches!(&opened[i], Err(McpError::Unauthorized));
             let item = items[i].0.clone();
             if !refused || !signs_in(&item) {
                 continue;
             }
-            if let Freshness::NeedsSignIn(notice) = refresh_if_due(vault, &item, true).await? {
-                notices.push(notice);
-                continue;
+            let sent = items[i].1.get(&token_variable(&item)).unwrap_or_default();
+            match refresh_if_due(vault, &item, Some(&sent)).await {
+                Ok(Freshness::Fresh) => {}
+                Ok(Freshness::NeedsSignIn(notice)) => {
+                    notices.push(notice);
+                    continue;
+                }
+                Err(e) => {
+                    tracing::warn!("{}: refreshing its sign-in failed: {e}", item.name);
+                    continue;
+                }
             }
             let LibraryConfig::McpServer(config) = &item.config else {
                 continue;

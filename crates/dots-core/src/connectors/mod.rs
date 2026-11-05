@@ -25,6 +25,7 @@ use crate::library::{CatalogStatus, LibraryConfig, LibraryItem, LibraryKind, Mcp
 use crate::library_service::LibraryEntry;
 use crate::mcp::oauth::{self, OAuthGrant, RefreshFailure};
 use crate::model::DotRef;
+use crate::vault::service::Parts;
 use crate::vault::{DotScope, EntryKind, Vault, MAX_SECRET_BYTES};
 use crate::{Error, Result, Runtime};
 
@@ -73,12 +74,51 @@ fn grant_key(id: &str) -> String {
     format!("connector/{id}/oauth")
 }
 
+/// What is kept of a connector's sign-in.
+pub(crate) enum StoredGrant {
+    Missing,
+    /// It cannot be read back (a write cut off, a part deleted outside Dots): only signing in
+    /// again helps.
+    Corrupt,
+    Present(OAuthGrant),
+}
+
 /// The sign-in grant kept for the connector `id`.
-pub(crate) fn load_grant(vault: &Vault, id: &str) -> Result<Option<OAuthGrant>> {
-    match vault.get_parts(&grant_key(id))? {
-        Some(text) => Ok(serde_json::from_str(&text).ok()),
-        None => Ok(None),
+pub(crate) fn load_grant(vault: &Vault, id: &str) -> Result<StoredGrant> {
+    Ok(match vault.get_parts(&grant_key(id))? {
+        Parts::Missing => StoredGrant::Missing,
+        Parts::Corrupt => StoredGrant::Corrupt,
+        Parts::Value(text) => match serde_json::from_str(&text) {
+            Ok(grant) => StoredGrant::Present(grant),
+            Err(_) => StoredGrant::Corrupt,
+        },
+    })
+}
+
+/// Forgets what Dots keeps for the connector `id`: its Personal variables `variables` and its
+/// sign-in grant. What is already gone is not an error.
+pub(crate) async fn forget(vault: &Vault, id: &str, variables: &[String]) -> Result<()> {
+    for name in variables {
+        match vault.remove(name).await {
+            Ok(()) | Err(Error::NotFound(_)) => {}
+            Err(e) => return Err(e),
+        }
     }
+    vault.delete_parts(&grant_key(id))
+}
+
+/// The Personal variables a connector's server item reads that Dots made for it
+/// (`CONNECTOR_<NAME>_…`), for `forget` when the item leaves the Library.
+pub(crate) fn owned_variables(item: &LibraryItem) -> Vec<String> {
+    let LibraryConfig::McpServer(config) = &item.config else {
+        return Vec::new();
+    };
+    let own = catalog::variable_for(&item.name, "");
+    config
+        .variables()
+        .into_iter()
+        .filter(|v| v.starts_with(&own))
+        .collect()
 }
 
 fn save_grant(vault: &Vault, id: &str, grant: &OAuthGrant) -> Result<()> {
@@ -250,35 +290,70 @@ pub enum Freshness {
     NeedsSignIn(String),
 }
 
-/// One refresh at a time: a server that rotates refresh tokens refuses the old one.
-static REFRESHING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+/// One refresh at a time per connector: a server that rotates refresh tokens refuses the old
+/// one.
+fn refresh_lock(id: &str) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    static LOCKS: std::sync::OnceLock<
+        Mutex<HashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>>,
+    > = std::sync::OnceLock::new();
+    LOCKS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap()
+        .entry(id.to_string())
+        .or_default()
+        .clone()
+}
 
 fn sign_in_again(name: &str) -> String {
     format!("{name}: sign in again on the Connectors screen")
 }
 
 /// Refreshes the access token of the sign-in connector whose server `item` is, when it expires
-/// within `REFRESH_MARGIN` or `force` (the server answered 401). Any other item is `Fresh`. A
-/// refresh the server refuses marks the connector "needs sign-in again"; one that fails for
-/// another reason keeps the old token and is logged.
-pub async fn refresh_if_due(vault: &Vault, item: &LibraryItem, force: bool) -> Result<Freshness> {
+/// within `REFRESH_MARGIN`, or when `refused` names the token the server just answered 401 to.
+/// A refused token that is no longer the stored one was refreshed meanwhile by another run or
+/// check, so it is not refreshed again. Any other item is `Fresh`. A refresh the server refuses,
+/// or a grant that cannot be read back, marks the connector "needs sign-in again"; a refresh
+/// that fails for another reason keeps the old token and is logged.
+pub async fn refresh_if_due(
+    vault: &Vault,
+    item: &LibraryItem,
+    refused: Option<&str>,
+) -> Result<Freshness> {
     if !signs_in(item) {
         return Ok(Freshness::Fresh);
     }
-    let _turn = REFRESHING.lock().await;
-    let Some(mut grant) = load_grant(vault, &item.name)? else {
-        return Ok(Freshness::Fresh);
+    let lock = refresh_lock(&item.name);
+    let _turn = lock.lock().await;
+    let mut grant = match load_grant(vault, &item.name)? {
+        StoredGrant::Missing => return Ok(Freshness::Fresh),
+        StoredGrant::Corrupt => return Ok(Freshness::NeedsSignIn(sign_in_again(&item.name))),
+        StoredGrant::Present(grant) => grant,
     };
     if grant.needs_sign_in {
         return Ok(Freshness::NeedsSignIn(sign_in_again(&item.name)));
     }
-    if !force && !grant.expires_within(Utc::now(), REFRESH_MARGIN) {
-        return Ok(Freshness::Fresh);
+    match refused {
+        None if !grant.expires_within(Utc::now(), REFRESH_MARGIN) => {
+            return Ok(Freshness::Fresh);
+        }
+        Some(sent) => {
+            let token = catalog::variable_for(&item.name, "ACCESS_TOKEN");
+            let stored = vault.personal_value(&token).await?;
+            if stored.as_deref().is_some_and(|now| now.as_str() != sent) {
+                return Ok(Freshness::Fresh);
+            }
+        }
+        None => {}
     }
     match oauth::refresh(&oauth::client(), &grant).await {
         Ok(signed) => {
-            store_token(vault, &item.name, &item.name, &signed.access_token).await?;
+            // The grant first: it holds the new refresh token, which a rotating server will not
+            // give again. A failure to keep the access token after it only costs a refresh.
             save_grant(vault, &item.name, &signed.grant)?;
+            if let Err(e) = store_token(vault, &item.name, &item.name, &signed.access_token).await {
+                tracing::warn!("{}: keeping the refreshed token failed: {e}", item.name);
+            }
             Ok(Freshness::Fresh)
         }
         Err(RefreshFailure::Rejected) => {
@@ -291,6 +366,11 @@ pub async fn refresh_if_due(vault: &Vault, item: &LibraryItem, force: bool) -> R
             Ok(Freshness::Fresh)
         }
     }
+}
+
+/// The variable a sign-in connector's server `item` sends its access token from.
+pub fn token_variable(item: &LibraryItem) -> String {
+    catalog::variable_for(&item.name, "ACCESS_TOKEN")
 }
 
 /// Whether `item` is a sign-in connector's server: an http server that sends its connector's
@@ -430,9 +510,11 @@ impl Runtime {
             .and_then(|t| t.as_array().map(Vec::len));
         out.state = ConnectorState::Connected;
         if out.connector.auth == AuthKind::OAuth {
-            let grant = load_grant(self.vault(), &out.connector.id)?;
-            if grant.as_ref().is_none_or(|g| g.needs_sign_in) || !entry.missing_variables.is_empty()
-            {
+            let signed_in = matches!(
+                load_grant(self.vault(), &out.connector.id)?,
+                StoredGrant::Present(g) if !g.needs_sign_in
+            );
+            if !signed_in || !entry.missing_variables.is_empty() {
                 out.state = ConnectorState::NeedsSignIn;
                 out.error = Some(format!(
                     "{} needs you to sign in again.",
@@ -648,24 +730,23 @@ impl Runtime {
         self.connector(id).await
     }
 
-    /// `connector_disconnect` for `connector`, which need not be in the catalog (tests).
+    /// `connector_disconnect` for `connector`, which need not be in the catalog (tests). It can
+    /// be run again: a server already gone is no error, and the values and sign-in are always
+    /// forgotten, so what a removal cut off part way left behind goes too. A server of the
+    /// person's own with the connector's name is left alone.
     pub async fn disconnect_with(&self, connector: &Connector) -> Result<()> {
-        let Some(item) = self.connector_item_with(connector).await? else {
-            return Err(Error::NotFound(format!(
-                "{} is not connected",
-                connector.name
-            )));
-        };
-        self.apply_dots(&connector.id, &[]).await?;
-        self.library().remove(&item.id, true).await?;
-        for name in connector.variables() {
-            match self.vault().remove(&name).await {
-                Ok(()) | Err(Error::NotFound(_)) => {}
-                Err(e) => return Err(e),
+        match self.connector_item_with(connector).await {
+            Ok(Some(item)) => {
+                self.apply_dots(&connector.id, &[]).await?;
+                match self.library().remove(&item.id, true).await {
+                    Ok(()) | Err(Error::NotFound(_)) => {}
+                    Err(e) => return Err(e),
+                }
             }
+            Ok(None) | Err(Error::Conflict(_)) => {}
+            Err(e) => return Err(e),
         }
-        self.vault().delete_parts(&grant_key(&connector.id))?;
-        Ok(())
+        forget(self.vault(), &connector.id, &connector.variables()).await
     }
 
     /// Signs in to the sign-in connector `id` and gives it to the Personal dots `dot_ids`

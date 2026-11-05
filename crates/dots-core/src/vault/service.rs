@@ -229,9 +229,11 @@ impl Vault {
     }
 
     /// Stores `value` in the secret store under `<prefix>/0`, `<prefix>/1`, … in parts of at
-    /// most `PART_BYTES`, so a value longer than one secret fits; parts left from a longer value
-    /// before are deleted. For what Dots keeps for itself (a connector's sign-in), not a
-    /// Personal variable.
+    /// most `PART_BYTES`, so a value longer than one secret fits, and then, last, the marker
+    /// `<prefix>/n`: the number of parts and the SHA-256 of the value. A write cut off part way
+    /// leaves a marker that does not match, so `get_parts` reads it as `Corrupt`, never as a
+    /// value made of old and new parts. Parts left from a longer value before are deleted. For
+    /// what Dots keeps for itself (a connector's sign-in), not a Personal variable.
     pub(crate) fn put_parts(&self, prefix: &str, value: &str) -> Result<()> {
         let mut parts = Vec::new();
         let mut rest = value;
@@ -246,6 +248,8 @@ impl Vault {
         for (i, part) in parts.iter().enumerate() {
             self.secrets.put(&format!("{prefix}/{i}"), part)?;
         }
+        self.secrets
+            .put(&format!("{prefix}/n"), &marker(parts.len(), value))?;
         let mut i = parts.len();
         while self.secrets.get(&format!("{prefix}/{i}"))?.is_some() {
             self.secrets.delete(&format!("{prefix}/{i}"))?;
@@ -254,15 +258,33 @@ impl Vault {
         Ok(())
     }
 
-    /// The value `put_parts` stored under `prefix`, if any.
-    pub(crate) fn get_parts(&self, prefix: &str) -> Result<Option<Zeroizing<String>>> {
+    /// The value `put_parts` stored under `prefix`: `Missing` when there is none, `Corrupt`
+    /// when its parts do not match its marker (a write cut off, a part deleted outside Dots).
+    pub(crate) fn get_parts(&self, prefix: &str) -> Result<Parts> {
+        let Some(mark) = self.secrets.get(&format!("{prefix}/n"))? else {
+            return Ok(if self.secrets.get(&format!("{prefix}/0"))?.is_some() {
+                Parts::Corrupt
+            } else {
+                Parts::Missing
+            });
+        };
+        let Some(count) = mark
+            .split_once(':')
+            .and_then(|(n, _)| n.parse::<usize>().ok())
+        else {
+            return Ok(Parts::Corrupt);
+        };
         let mut value = Zeroizing::new(String::new());
-        let mut i = 0;
-        while let Some(part) = self.secrets.get(&format!("{prefix}/{i}"))? {
-            value.push_str(&part);
-            i += 1;
+        for i in 0..count {
+            match self.secrets.get(&format!("{prefix}/{i}"))? {
+                Some(part) => value.push_str(&part),
+                None => return Ok(Parts::Corrupt),
+            }
         }
-        Ok((i > 0).then_some(value))
+        if marker(count, &value) != *mark {
+            return Ok(Parts::Corrupt);
+        }
+        Ok(Parts::Value(value))
     }
 
     /// Deletes every part `put_parts` stored under `prefix`.
@@ -279,4 +301,21 @@ impl Vault {
             .await?
             .ok_or_else(|| crate::Error::NotFound(format!("no variable named {name}")))
     }
+}
+
+/// What `Vault::get_parts` found.
+pub(crate) enum Parts {
+    Missing,
+    Corrupt,
+    Value(Zeroizing<String>),
+}
+
+/// The marker of a value stored in `count` parts: `<count>:<sha256 hex>`.
+fn marker(count: usize, value: &str) -> String {
+    use sha2::Digest;
+    let hash: String = sha2::Sha256::digest(value.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    format!("{count}:{hash}")
 }

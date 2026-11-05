@@ -58,10 +58,14 @@ pub struct Discovered {
     /// The scope to ask for: the 401's, else the metadata's `scopes_supported`, else none.
     pub scope: Option<String>,
     pub server: AuthServer,
+    /// The server is on this PC's loopback interface (tests, local servers): then, and only
+    /// then, the flow may use http on loopback hosts.
+    pub loopback: bool,
 }
 
-/// The client Dots registered with an authorization server.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// The client Dots registered with an authorization server. Its `Debug` never shows the
+/// secret.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Registration {
     pub client_id: String,
     /// Set when the server made Dots a confidential client.
@@ -69,6 +73,16 @@ pub struct Registration {
     pub client_secret: Option<String>,
     /// `none`, `client_secret_basic` or `client_secret_post`.
     pub auth_method: String,
+}
+
+impl std::fmt::Debug for Registration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Registration")
+            .field("client_id", &self.client_id)
+            .field("has_secret", &self.client_secret.is_some())
+            .field("auth_method", &self.auth_method)
+            .finish()
+    }
 }
 
 /// What a refresh needs, kept between runs. Holds the refresh token and the client secret:
@@ -89,6 +103,9 @@ pub struct OAuthGrant {
     /// A refresh was refused: only signing in again helps.
     #[serde(default)]
     pub needs_sign_in: bool,
+    /// When these tokens were given (the sign-in or the last refresh).
+    #[serde(default)]
+    pub refreshed_at: Option<DateTime<Utc>>,
 }
 
 impl std::fmt::Debug for OAuthGrant {
@@ -142,22 +159,31 @@ pub fn client() -> Client {
         .expect("an http client")
 }
 
-/// Whether a URL may carry the flow: https, or http on a loopback host (tests and local
-/// servers). No credentials in it, no fragment.
-fn secure(url: &Url) -> bool {
-    let loopback = matches!(
+/// The longest metadata, registration or token answer Dots reads.
+const MAX_BODY: usize = 256 * 1024;
+/// The longest token lifetime Dots takes from a server: ten years.
+const MAX_EXPIRES_IN: i64 = 10 * 365 * 24 * 60 * 60;
+
+/// Whether a URL's host is this PC's loopback interface.
+fn is_loopback(url: &Url) -> bool {
+    matches!(
         url.host_str(),
         Some("127.0.0.1") | Some("localhost") | Some("[::1]")
-    );
-    (url.scheme() == "https" || (url.scheme() == "http" && loopback))
+    )
+}
+
+/// Whether a URL may carry the flow: https, or, when `loopback_ok` (the MCP server itself is on
+/// loopback), http on a loopback host. No credentials in it, no fragment.
+fn secure(url: &Url, loopback_ok: bool) -> bool {
+    (url.scheme() == "https" || (url.scheme() == "http" && loopback_ok && is_loopback(url)))
         && url.username().is_empty()
         && url.password().is_none()
         && url.fragment().is_none()
 }
 
-fn parse_secure(text: &str, what: &str) -> Result<Url> {
+fn parse_secure(text: &str, what: &str, loopback_ok: bool) -> Result<Url> {
     let url = Url::parse(text).map_err(|_| invalid(format!("the {what} is not a valid URL")))?;
-    if !secure(&url) {
+    if !secure(&url, loopback_ok) {
         return Err(invalid(format!("the {what} is not an https URL")));
     }
     Ok(url)
@@ -249,8 +275,30 @@ async fn get_json<T: for<'de> Deserialize<'de>>(http: &Client, url: &str) -> Res
     if !response.status().is_success() {
         return Ok(None);
     }
-    let body = response.bytes().await.map_err(|_| unreachable_error())?;
-    Ok(serde_json::from_slice(&body).ok())
+    Ok(read_json(response).await)
+}
+
+/// A response's body, or `None` when it cannot be read or is longer than `MAX_BODY`.
+async fn read_capped(mut response: reqwest::Response) -> Option<Vec<u8>> {
+    if response
+        .content_length()
+        .is_some_and(|n| n > MAX_BODY as u64)
+    {
+        return None;
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.ok()? {
+        if body.len() + chunk.len() > MAX_BODY {
+            return None;
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Some(body)
+}
+
+/// A response's body read as JSON, within `MAX_BODY`.
+async fn read_json<T: for<'de> Deserialize<'de>>(response: reqwest::Response) -> Option<T> {
+    serde_json::from_slice(&read_capped(response).await?).ok()
 }
 
 fn unreachable_error() -> Error {
@@ -259,7 +307,9 @@ fn unreachable_error() -> Error {
 
 /// Finds where and how to sign in to the MCP server at `server_url`.
 pub async fn discover(http: &Client, server_url: &str) -> Result<Discovered> {
-    let server = parse_secure(server_url, "server URL")?;
+    // The server URL itself may be http only on loopback (a local server, or a test's).
+    let server = parse_secure(server_url, "server URL", true)?;
+    let loopback = is_loopback(&server);
     // An `initialize` without a token: a server that wants sign-in answers 401 and names its
     // metadata.
     let probe = serde_json::json!({
@@ -300,7 +350,11 @@ pub async fn discover(http: &Client, server_url: &str) -> Result<Discovered> {
     };
     let places = match param("resource_metadata") {
         Some(url) => {
-            parse_secure(&url, "resource metadata URL")?;
+            let at = parse_secure(&url, "resource metadata URL", loopback)?;
+            // Only the server's own site may say where it signs in.
+            if at.origin() != server.origin() {
+                return Err(invalid("the server's sign-in details are on another site"));
+            }
             vec![url]
         }
         None => well_known(&server, "oauth-protected-resource"),
@@ -315,7 +369,7 @@ pub async fn discover(http: &Client, server_url: &str) -> Result<Discovered> {
     let (resource, issuer, scopes) = match metadata {
         Some(m) => {
             let resource = m.resource.unwrap_or_else(|| server_url.to_string());
-            let at = parse_secure(&resource, "resource")?;
+            let at = parse_secure(&resource, "resource", loopback)?;
             if at.origin() != server.origin() {
                 return Err(invalid(
                     "the server's metadata names a resource on another site",
@@ -336,7 +390,7 @@ pub async fn discover(http: &Client, server_url: &str) -> Result<Discovered> {
             Vec::new(),
         ),
     };
-    let auth = auth_server(http, &issuer).await?;
+    let auth = auth_server(http, &issuer, loopback).await?;
     let scope = param("scope")
         .filter(|s| !s.trim().is_empty())
         .or_else(|| (!scopes.is_empty()).then(|| scopes.join(" ")));
@@ -344,13 +398,15 @@ pub async fn discover(http: &Client, server_url: &str) -> Result<Discovered> {
         resource,
         scope,
         server: auth,
+        loopback,
     })
 }
 
 /// The metadata of the authorization server `issuer`, checked: it names itself, offers S256,
-/// lets clients register, and every endpoint is https.
-pub async fn auth_server(http: &Client, issuer: &str) -> Result<AuthServer> {
-    let url = parse_secure(issuer, "sign-in server")?;
+/// lets clients register, and every endpoint is https (or http on loopback, when
+/// `loopback_ok`).
+pub async fn auth_server(http: &Client, issuer: &str, loopback_ok: bool) -> Result<AuthServer> {
+    let url = parse_secure(issuer, "sign-in server", loopback_ok)?;
     let origin = url.origin().ascii_serialization();
     let path = url.path().trim_end_matches('/');
     let places = if path.is_empty() {
@@ -387,11 +443,15 @@ pub async fn auth_server(http: &Client, issuer: &str) -> Result<AuthServer> {
             "the sign-in server does not offer PKCE (S256), so Dots does not sign in to it",
         ));
     }
-    parse_secure(&meta.authorization_endpoint, "authorization endpoint")?;
-    parse_secure(&meta.token_endpoint, "token endpoint")?;
+    parse_secure(
+        &meta.authorization_endpoint,
+        "authorization endpoint",
+        loopback_ok,
+    )?;
+    parse_secure(&meta.token_endpoint, "token endpoint", loopback_ok)?;
     match &meta.registration_endpoint {
         Some(r) => {
-            parse_secure(r, "registration endpoint")?;
+            parse_secure(r, "registration endpoint", loopback_ok)?;
         }
         None => {
             return Err(invalid(
@@ -441,24 +501,28 @@ pub async fn register(
             response.status().as_u16()
         )));
     }
-    let answer: RegistrationAnswer = response
-        .json()
+    let answer: RegistrationAnswer = read_json(response)
         .await
-        .map_err(|_| invalid("the sign-in server's registration answer could not be read"))?;
+        .ok_or_else(|| invalid("the sign-in server's registration answer could not be read"))?;
     if answer.client_id.trim().is_empty() {
         return Err(invalid("the sign-in server gave no client id"));
     }
-    let auth_method = match (
-        &answer.client_secret,
-        answer.token_endpoint_auth_method.as_deref(),
-    ) {
+    // A secret together with `none` contradicts itself: Dots stays a public client and drops
+    // the secret.
+    let method = answer.token_endpoint_auth_method.as_deref();
+    let secret = answer
+        .client_secret
+        .clone()
+        .filter(|s| !s.is_empty())
+        .filter(|_| method != Some("none"));
+    let auth_method = match (&secret, method) {
         (None, _) => "none".to_string(),
         (Some(_), Some("client_secret_post")) => "client_secret_post".to_string(),
         (Some(_), _) => "client_secret_basic".to_string(),
     };
     Ok(Registration {
         client_id: answer.client_id,
-        client_secret: answer.client_secret.filter(|s| !s.is_empty()),
+        client_secret: secret,
         auth_method,
     })
 }
@@ -544,13 +608,14 @@ fn signed(
     let expires_at = answer
         .expires_in
         .filter(|s| *s > 0)
-        .map(|s| Utc::now() + chrono::Duration::seconds(s));
+        .map(|s| Utc::now() + chrono::Duration::seconds(s.min(MAX_EXPIRES_IN)));
     Ok(Signed {
         grant: OAuthGrant {
             refresh_token: answer.refresh_token.or(previous_refresh),
             scope: answer.scope.or(base.scope.clone()),
             expires_at,
             needs_sign_in: false,
+            refreshed_at: Some(Utc::now()),
             ..base
         },
         access_token: Zeroizing::new(answer.access_token),
@@ -576,8 +641,8 @@ pub async fn refresh(
         .map_err(|_| RefreshFailure::Failed("could not reach the sign-in server".into()))?;
     let status = response.status();
     if !status.is_success() {
-        let body = response.bytes().await.unwrap_or_default();
-        let error = serde_json::from_slice::<TokenError>(&body)
+        let error = read_json::<TokenError>(response)
+            .await
             .map(|e| e.error)
             .unwrap_or_default();
         let refused = matches!(
@@ -594,7 +659,7 @@ pub async fn refresh(
             ))
         });
     }
-    let answer: TokenAnswer = response.json().await.map_err(|_| {
+    let answer: TokenAnswer = read_json(response).await.ok_or_else(|| {
         RefreshFailure::Failed("the sign-in server's answer could not be read".into())
     })?;
     signed(answer, grant.clone(), Some(refresh_token))
@@ -603,13 +668,26 @@ pub async fn refresh(
 
 /// Signs in to the MCP server at `server_url`: discovery, registration, the browser, the code
 /// exchange. `open_browser` opens the authorization URL. Ends with an error after `limit`, or
-/// when `cancel` fires ("Sign-in cancelled.", a `Conflict`).
+/// when `cancel` fires ("Sign-in cancelled.", a `Conflict`), whichever step it is at.
 pub async fn sign_in<F>(
     server_url: &str,
     open_browser: F,
     limit: Duration,
     cancel: CancellationToken,
 ) -> Result<Signed>
+where
+    F: FnOnce(&str) -> Result<()> + Send,
+{
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => Err(Error::Conflict("Sign-in cancelled.".into())),
+        _ = tokio::time::sleep(limit) => Err(Error::Other("Sign-in timed out. Try again.".into())),
+        result = sign_in_flow(server_url, open_browser) => result,
+    }
+}
+
+/// `sign_in` without its limit and cancel.
+async fn sign_in_flow<F>(server_url: &str, open_browser: F) -> Result<Signed>
 where
     F: FnOnce(&str) -> Result<()> + Send,
 {
@@ -645,6 +723,7 @@ where
     let mut authorize = parse_secure(
         &discovered.server.authorization_endpoint,
         "authorization endpoint",
+        discovered.loopback,
     )?;
     {
         let mut query = authorize.query_pairs_mut();
@@ -662,7 +741,7 @@ where
         }
     }
 
-    let flow = async {
+    {
         open_browser(authorize.as_str())?;
         let code = receive
             .await
@@ -683,10 +762,9 @@ where
                 response.status().as_u16()
             )));
         }
-        let answer: TokenAnswer = response
-            .json()
+        let answer: TokenAnswer = read_json(response)
             .await
-            .map_err(|_| invalid("the sign-in server's answer could not be read"))?;
+            .ok_or_else(|| invalid("the sign-in server's answer could not be read"))?;
         let base = OAuthGrant {
             client: client.clone(),
             issuer: discovered.server.issuer.clone(),
@@ -696,14 +774,9 @@ where
             refresh_token: None,
             expires_at: None,
             needs_sign_in: false,
+            refreshed_at: None,
         };
         signed(answer, base, None)
-    };
-    tokio::select! {
-        biased;
-        _ = cancel.cancelled() => Err(Error::Conflict("Sign-in cancelled.".into())),
-        _ = tokio::time::sleep(limit) => Err(Error::Other("Sign-in timed out. Try again.".into())),
-        result = flow => result,
     }
 }
 
@@ -814,7 +887,13 @@ mod tests {
 
     #[test]
     fn only_https_or_loopback_http_carries_the_flow() {
-        let ok = |u: &str| secure(&Url::parse(u).unwrap());
+        let ok = |u: &str| secure(&Url::parse(u).unwrap(), true);
+        // http on loopback only when the server itself is on loopback.
+        assert!(!secure(
+            &Url::parse("http://127.0.0.1:8080/x").unwrap(),
+            false
+        ));
+        assert!(secure(&Url::parse("https://a.example/x").unwrap(), false));
         assert!(ok("https://mcp.example/mcp"));
         assert!(ok("http://127.0.0.1:8080/x"));
         assert!(ok("http://localhost/x"));
@@ -856,6 +935,7 @@ mod tests {
             refresh_token: Some("r".into()),
             expires_at: Some(now + chrono::Duration::minutes(3)),
             needs_sign_in: false,
+            refreshed_at: None,
         };
         assert!(grant.expires_within(now, Duration::from_secs(300)));
         grant.expires_at = Some(now + chrono::Duration::hours(1));
@@ -864,5 +944,13 @@ mod tests {
         assert!(!grant.expires_within(now, Duration::from_secs(300)));
         // The debug form never shows the refresh token.
         assert!(!format!("{grant:?}").contains("\"r\""));
+        // Nor the client secret.
+        let client = Registration {
+            client_id: "c".into(),
+            client_secret: Some("hush".into()),
+            auth_method: "client_secret_basic".into(),
+        };
+        assert!(!format!("{client:?}").contains("hush"));
+        assert!(!format!("{:?}", OAuthGrant { client, ..grant }).contains("hush"));
     }
 }

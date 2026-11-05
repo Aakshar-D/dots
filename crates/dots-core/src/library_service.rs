@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::accounts::Permission;
-use crate::connectors::{refresh_if_due, signs_in, Freshness};
+use crate::connectors::{refresh_if_due, signs_in, token_variable, Freshness};
 use crate::context::{self, Document};
 use crate::events::{Bus, RuntimeEvent};
 use crate::kit::{self, InstalledPlugin, PluginInfo};
@@ -713,6 +713,15 @@ impl LibraryService {
         let owned = self.store.owned_library_items(id).await?;
         self.store.remove_library_item(id).await?;
         publish(&self.bus, id);
+        // A connector's server takes its values and sign-in with it, whichever screen removed it
+        // (connectors spec §4): nothing else reads `CONNECTOR_<NAME>_…`.
+        if item.kind() == LibraryKind::McpServer && item.owner_id.is_none() {
+            let variables = crate::connectors::owned_variables(&item);
+            let ours = !variables.is_empty() || signs_in(&item);
+            if ours {
+                crate::connectors::forget(&self.vault, &item.name, &variables).await?;
+            }
+        }
         for server in owned {
             publish(&self.bus, &server.id);
         }
@@ -1039,7 +1048,7 @@ impl LibraryService {
             )));
         };
         // A sign-in connector's token is refreshed first when it is about to expire.
-        if let Freshness::NeedsSignIn(why) = refresh_if_due(&self.vault, item, false).await? {
+        if let Freshness::NeedsSignIn(why) = refresh_if_due(&self.vault, item, None).await? {
             let catalog = self
                 .store
                 .record_catalog_failure(&item.id, scope.key(), &why)
@@ -1091,9 +1100,12 @@ impl LibraryService {
         let key = scope.key();
         let mut opened = open_and_list(&item.name, config, &env, SessionOptions::default()).await;
         // A sign-in connector whose token the server refused: refreshed, and checked again.
-        let refused = matches!(&opened, Err(McpError::Protocol(m)) if m.contains("HTTP 401"));
+        let refused = matches!(&opened, Err(McpError::Unauthorized));
         if refused && signs_in(item) {
-            if let Freshness::NeedsSignIn(why) = refresh_if_due(&self.vault, item, true).await? {
+            let sent = env.get(&token_variable(item)).unwrap_or_default();
+            if let Freshness::NeedsSignIn(why) =
+                refresh_if_due(&self.vault, item, Some(&sent)).await?
+            {
                 let catalog = self
                     .store
                     .record_catalog_failure(&item.id, key, &why)
