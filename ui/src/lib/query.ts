@@ -23,6 +23,7 @@ export function createQueryClient(): QueryClient {
 export const keys = {
   startupError: ["startup-error"] as const,
   status: ["status"] as const,
+  managedPolicy: ["managed-policy"] as const,
   update: ["update"] as const,
   settings: ["settings"] as const,
   chatGptAccount: ["chatgpt-account"] as const,

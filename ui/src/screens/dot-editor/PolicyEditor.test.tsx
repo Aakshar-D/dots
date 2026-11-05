@@ -215,3 +215,40 @@ describe("an always-allowed rule that covers a private folder", () => {
     expect(screen.queryByText("Always asks: private folder")).toBeNull();
   });
 });
+
+describe("the company's Claude Code policy", () => {
+  const managed = {
+    path: "C:/Program Files/ClaudeCode/managed-settings.json",
+    blocks_skipping_asks: false,
+    forced_ask: ["Bash(git push:*)"],
+    forced_deny: [],
+    managed_rules_only: false,
+    error: null,
+  };
+  const conflict = { kind: "ask", rule: "Bash(git push:*)", dot_rule: "everything else" };
+
+  it("says what will still ask, with the policy file", async () => {
+    backend.on("managed_policy_check", () => ({ managed, conflicts: [conflict] }));
+    setup();
+    const note = await screen.findByRole("note");
+    expect(note).toHaveTextContent("keeps asking turned on");
+    expect(note).toHaveTextContent("git push");
+    expect(note).toHaveTextContent(managed.path);
+  });
+
+  it("says nothing when the policy does not conflict", async () => {
+    backend.on("managed_policy_check", () => ({ managed, conflicts: [] }));
+    setup();
+    await waitFor(() => expect(backend.callsTo("managed_policy_check").length).toBe(1));
+    expect(screen.queryByRole("note")).toBeNull();
+  });
+
+  it("is not asked about a dot that does not run on the Claude CLI", () => {
+    function Host() {
+      const [policy, setPolicy] = useState(sandboxed);
+      return <PolicyEditor policy={policy} onChange={setPolicy} engine="local" />;
+    }
+    render(<Host />);
+    expect(backend.callsTo("managed_policy_check")).toEqual([]);
+  });
+});

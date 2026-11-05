@@ -96,6 +96,15 @@ export const quietStatus: T.Status = {
 
 /// The answers every screen's frame needs: a started app with nothing to warn about, no dots
 /// and an empty inbox. A test replaces what it cares about with `backend.on`.
+const noManagedPolicy = {
+  path: null,
+  blocks_skipping_asks: false,
+  forced_ask: [],
+  forced_deny: [],
+  managed_rules_only: false,
+  error: null,
+};
+
 export function installDefaults(): void {
   backend.on("startup_error", () => null);
   backend.on("status", () => quietStatus);
@@ -144,6 +153,9 @@ export function installDefaults(): void {
   backend.on("approval_touches_private", () => false);
   // The policy editor asks which always-allowed rules cover a private folder; by default none.
   backend.on("rules_touch_private", ({ patterns }) => (patterns as string[]).map(() => false));
+  // No company Claude Code policy is installed on this PC.
+  backend.on("managed_policy", () => noManagedPolicy);
+  backend.on("managed_policy_check", () => ({ managed: noManagedPolicy, conflicts: [] }));
   // A conversation asks for the dot's app proposals; by default it has none.
   backend.on("app_proposals_list", () => []);
   // A conversation and the dot menu ask for the dot's scheduled messages; by default none.
