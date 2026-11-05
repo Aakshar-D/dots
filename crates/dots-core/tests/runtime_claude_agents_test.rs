@@ -196,6 +196,31 @@ async fn an_import_makes_dots_from_the_files() {
 }
 
 #[tokio::test]
+async fn an_agent_that_names_no_model_gets_the_default_model() {
+    let rt = start().await;
+    let mut s = rt.rt.settings().await;
+    s.default_model = "opus".into();
+    rt.rt.update_settings(s).await.unwrap();
+    let plain = rt.user_agent("plain.md", &agent("plain", "", "Help."));
+    let named = rt.user_agent(
+        "named.md",
+        &agent(
+            "named",
+            "model: haiku
+",
+            "Help.",
+        ),
+    );
+    let paths = vec![
+        plain.to_string_lossy().into_owned(),
+        named.to_string_lossy().into_owned(),
+    ];
+    let done = rt.rt.import_claude_agents(paths, None, None).await.unwrap();
+    let models: Vec<&str> = done.created.iter().map(|d| d.spec.model.as_str()).collect();
+    assert_eq!(models, ["opus", "haiku"]);
+}
+
+#[tokio::test]
 async fn a_taken_name_gets_a_number() {
     let rt = start().await;
     rt.rt.create_dot(spec("helper"), None, None).await.unwrap();

@@ -197,6 +197,32 @@ async fn updating_settings_reports_when_a_restart_is_needed() {
 }
 
 #[tokio::test]
+async fn a_new_dot_starts_with_the_default_model_and_old_dots_keep_theirs() {
+    let dir = tempfile::tempdir().unwrap();
+    let rt = Runtime::start(config(&dir)).await.unwrap();
+    assert_eq!(rt.new_dot_spec("", "", "").await.model, "sonnet");
+    let old = rt
+        .create_dot(folder_spec(&dir, "old"), None, None)
+        .await
+        .unwrap();
+
+    let mut s = rt.settings().await;
+    s.default_model = "opus".into();
+    rt.update_settings(s).await.unwrap();
+    let blank = rt.new_dot_spec("n", "i", "w").await;
+    assert_eq!(blank.model, "opus");
+    assert_eq!(
+        (blank.name.as_str(), blank.engine),
+        ("n", EngineKind::Claude)
+    );
+    assert_eq!(
+        rt.get_dot(&old.id).await.unwrap().spec.model,
+        old.spec.model
+    );
+    rt.shutdown();
+}
+
+#[tokio::test]
 async fn saving_settings_keeps_the_pause_and_the_tested_version() {
     let dir = tempfile::tempdir().unwrap();
     let mut cfg = config(&dir);

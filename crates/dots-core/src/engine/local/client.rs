@@ -18,6 +18,59 @@ pub fn completions_url(endpoint: &str) -> String {
     format!("{base}/v1/chat/completions")
 }
 
+/// `{endpoint}/v1/models`, read as `completions_url` reads the endpoint.
+pub fn models_url(endpoint: &str) -> String {
+    let base = endpoint.trim().trim_end_matches('/');
+    let base = base.strip_suffix("/v1").unwrap_or(base);
+    format!("{base}/v1/models")
+}
+
+/// How long listing an endpoint's models may take.
+const MODELS_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// The model ids `endpoint` lists at `/v1/models` (OpenAI-compatible: `{"data": [{"id"}]}`),
+/// in its order; entries without an id are skipped. The caller checks the endpoint first.
+pub async fn fetch_models(endpoint: &str) -> Result<Vec<String>> {
+    let url = models_url(endpoint);
+    let http = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(MODELS_TIMEOUT)
+        .build()
+        .expect("building the HTTP client never fails without TLS options");
+    let resp = http
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| Error::Other(format!("could not reach {url}: {e}")))?;
+    let status = resp.status();
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| Error::Other(format!("reading the reply from {url} failed: {e}")))?;
+    if !status.is_success() {
+        return Err(Error::Other(format!(
+            "local endpoint returned {status}: {}",
+            snippet(&text)
+        )));
+    }
+    let list = serde_json::from_str::<Value>(&text)
+        .ok()
+        .and_then(|v| v.get("data").and_then(Value::as_array).cloned())
+        .ok_or_else(|| {
+            Error::Other(format!(
+                "{url} did not answer with a model list: {}",
+                snippet(&text)
+            ))
+        })?;
+    Ok(list
+        .iter()
+        .filter_map(|m| m.get("id").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(String::from)
+        .collect())
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolCallRequest {
     pub id: String,
