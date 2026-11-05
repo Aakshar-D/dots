@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::accounts::Permission;
+use crate::connectors::{refresh_if_due, signs_in, Freshness};
 use crate::context::{self, Document};
 use crate::events::{Bus, RuntimeEvent};
 use crate::kit::{self, InstalledPlugin, PluginInfo};
@@ -1037,6 +1038,15 @@ impl LibraryService {
                 item.name
             )));
         };
+        // A sign-in connector's token is refreshed first when it is about to expire.
+        if let Freshness::NeedsSignIn(why) = refresh_if_due(&self.vault, item, false).await? {
+            let catalog = self
+                .store
+                .record_catalog_failure(&item.id, scope.key(), &why)
+                .await?;
+            publish(&self.bus, &item.id);
+            return Ok(catalog);
+        }
         let consumer = Consumer::Mcp(item.name.clone());
         let resolved = self
             .vault
@@ -1079,7 +1089,27 @@ impl LibraryService {
             }
         }
         let key = scope.key();
-        match open_and_list(&item.name, config, &env, SessionOptions::default()).await {
+        let mut opened = open_and_list(&item.name, config, &env, SessionOptions::default()).await;
+        // A sign-in connector whose token the server refused: refreshed, and checked again.
+        let refused = matches!(&opened, Err(McpError::Protocol(m)) if m.contains("HTTP 401"));
+        if refused && signs_in(item) {
+            if let Freshness::NeedsSignIn(why) = refresh_if_due(&self.vault, item, true).await? {
+                let catalog = self
+                    .store
+                    .record_catalog_failure(&item.id, key, &why)
+                    .await?;
+                publish(&self.bus, &item.id);
+                return Ok(catalog);
+            }
+            if let Ok(env) = self
+                .vault
+                .check_values(scope, &consumer, &config.variables())
+                .await?
+            {
+                opened = open_and_list(&item.name, config, &env, SessionOptions::default()).await;
+            }
+        }
+        match opened {
             Ok((session, tools)) => {
                 session.close().await;
                 record_check(&self.store, &self.bus, &item.id, key, Ok(&tools)).await

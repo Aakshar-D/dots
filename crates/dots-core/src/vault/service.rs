@@ -17,6 +17,9 @@ use crate::Result;
 /// Where the personal variables' secrets are kept in the secret store.
 const PERSONAL_PREFIX: &str = "personal/";
 
+/// The longest part `put_parts` writes, in bytes: under one secret's limit.
+const PART_BYTES: usize = 2000;
+
 /// The secret store key of the personal variable `name`.
 fn personal_key(name: &str) -> String {
     format!("{PERSONAL_PREFIX}{name}")
@@ -223,6 +226,51 @@ impl Vault {
                     .then_some(true)
             }
         })
+    }
+
+    /// Stores `value` in the secret store under `<prefix>/0`, `<prefix>/1`, … in parts of at
+    /// most `PART_BYTES`, so a value longer than one secret fits; parts left from a longer value
+    /// before are deleted. For what Dots keeps for itself (a connector's sign-in), not a
+    /// Personal variable.
+    pub(crate) fn put_parts(&self, prefix: &str, value: &str) -> Result<()> {
+        let mut parts = Vec::new();
+        let mut rest = value;
+        while !rest.is_empty() {
+            let mut end = rest.len().min(PART_BYTES);
+            while !rest.is_char_boundary(end) {
+                end -= 1;
+            }
+            parts.push(&rest[..end]);
+            rest = &rest[end..];
+        }
+        for (i, part) in parts.iter().enumerate() {
+            self.secrets.put(&format!("{prefix}/{i}"), part)?;
+        }
+        let mut i = parts.len();
+        while self.secrets.get(&format!("{prefix}/{i}"))?.is_some() {
+            self.secrets.delete(&format!("{prefix}/{i}"))?;
+            i += 1;
+        }
+        Ok(())
+    }
+
+    /// The value `put_parts` stored under `prefix`, if any.
+    pub(crate) fn get_parts(&self, prefix: &str) -> Result<Option<Zeroizing<String>>> {
+        let mut value = Zeroizing::new(String::new());
+        let mut i = 0;
+        while let Some(part) = self.secrets.get(&format!("{prefix}/{i}"))? {
+            value.push_str(&part);
+            i += 1;
+        }
+        Ok((i > 0).then_some(value))
+    }
+
+    /// Deletes every part `put_parts` stored under `prefix`.
+    pub(crate) fn delete_parts(&self, prefix: &str) -> Result<()> {
+        for key in self.secrets.keys(&format!("{prefix}/"))? {
+            self.secrets.delete(&key)?;
+        }
+        Ok(())
     }
 
     async fn get(&self, name: &str) -> Result<EnvEntry> {
