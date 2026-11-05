@@ -1,4 +1,12 @@
-import type { AgentStep, DeployMode, DeployStep, Step, Trigger } from "@/api/types";
+import type {
+  AgentStep,
+  BranchOn,
+  DeployMode,
+  DeployStep,
+  MergeMethod,
+  Step,
+  Trigger,
+} from "@/api/types";
 
 import { taskLine, TRIGGER_LABEL } from "../format";
 import { findStep, type StepKindName } from "./draft";
@@ -19,6 +27,28 @@ export const DEPLOY_LABEL: Record<DeployMode, string> = {
   pr_merge: "Pushes, opens a pull request and merges it",
   member: "A member deploys",
 };
+
+/// The deploy modes as the settings sheet offers them, in its order.
+export const MODE_OPTIONS: [DeployMode, string][] = [
+  ["branch", "Keep the branches"],
+  ["push", "Push"],
+  ["pr", "Push and open a pull request"],
+  ["pr_merge", "Push, open a pull request and merge it"],
+  ["member", "A member deploys"],
+];
+
+/// How `gh pr merge` merges, as the settings sheet offers it.
+export const MERGE_OPTIONS: [MergeMethod, string][] = [
+  ["squash", "Squash"],
+  ["merge", "Merge commit"],
+  ["rebase", "Rebase"],
+];
+
+/// What a branch step goes by, as the settings sheet offers it.
+export const ON_OPTIONS: [BranchOn, string][] = [
+  ["outcome", "The outcome reported before it"],
+  ["project", "The project"],
+];
 
 /// A team member's name by dot id; an id that is no member shows as itself.
 export type NameOf = (dotId: string) => string;

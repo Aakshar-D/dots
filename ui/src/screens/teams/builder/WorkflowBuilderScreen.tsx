@@ -22,7 +22,7 @@ import { useDebounced } from "@/lib/use-debounced";
 import { plural } from "@/screens/library/parts";
 
 import { RunNowDialog } from "../RunNowDialog";
-import { BudgetCard, StepSheet, TriggerCard } from "./cards";
+import { BudgetCard, TriggerCard } from "./cards";
 import {
   deleteStep,
   findStep,
@@ -36,6 +36,8 @@ import {
 } from "./draft";
 import type { NameOf } from "./labels";
 import { type Builder, BuilderProvider, StepList } from "./StepList";
+import { StepSheet } from "./StepSheet";
+import { TriggerSheet } from "./TriggerSheet";
 
 /// How long the draft must stay unchanged before the live check asks the core about it.
 export const CHECK_DELAY_MS = 300;
@@ -86,6 +88,7 @@ function WorkflowBuilder({ team, workflow }: { team: Team; workflow: Workflow })
   const [draft, setDraft] = useState(stored);
   const [refusal, setRefusal] = useState<string>();
   const [openId, setOpenId] = useState<string | null>(null);
+  const [triggerOpen, setTriggerOpen] = useState(false);
   const [testing, setTesting] = useState<Workflow | null>(null);
   const cards = useRef(new Map<string, HTMLElement>());
   const [focusId, setFocusId] = useState<string | null>(null);
@@ -180,13 +183,10 @@ function WorkflowBuilder({ team, workflow }: { team: Team; workflow: Workflow })
     },
   };
 
+  // A Test run starts while the workflow is off (Task 10's call), so only a problem, a check
+  // under way or a team with no project holds it back.
   const testBlocked =
-    blocked ??
-    (!draft.enabled
-      ? "Turn it on first."
-      : team.projects.length === 0
-        ? "Add a project to the team first."
-        : undefined);
+    blocked ?? (team.projects.length === 0 ? "Add a project to the team first." : undefined);
   /// Test run saves the draft first (section 5.1: it runs the saved definition), then asks for
   /// the task and the project.
   async function testRun() {
@@ -280,7 +280,11 @@ function WorkflowBuilder({ team, workflow }: { team: Team; workflow: Workflow })
         )}
       </header>
       <div className="mx-auto flex w-full max-w-2xl flex-col items-stretch">
-        <TriggerCard trigger={draft.definition.trigger} nameOf={nameOf} />
+        <TriggerCard
+          trigger={draft.definition.trigger}
+          nameOf={nameOf}
+          onOpen={() => setTriggerOpen(true)}
+        />
         <BuilderProvider value={builder}>
           <StepList steps={draft.definition.steps} list={TOP} prefix="" name="the workflow" top />
         </BuilderProvider>
@@ -293,8 +297,21 @@ function WorkflowBuilder({ team, workflow }: { team: Team; workflow: Workflow })
       </div>
       <StepSheet
         step={open}
+        steps={draft.definition.steps}
+        team={team}
+        nameOf={nameOf}
         onChange={(step) => editSteps((steps) => updateStep(steps, step.id, () => step))}
         onClose={() => setOpenId(null)}
+      />
+      <TriggerSheet
+        open={triggerOpen}
+        trigger={draft.definition.trigger}
+        enabled={draft.enabled}
+        workflow={workflow}
+        team={team}
+        nameOf={nameOf}
+        onChange={(trigger) => edit((d) => ({ ...d, definition: { ...d.definition, trigger } }))}
+        onClose={() => setTriggerOpen(false)}
       />
       {testing && (
         <RunNowDialog

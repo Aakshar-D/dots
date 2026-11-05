@@ -1,30 +1,45 @@
+import { Settings2 } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import type { Budget, Step, Trigger } from "@/api/types";
+import type { Budget, Trigger } from "@/api/types";
 import { Field } from "@/components/Field";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
 
-import { KIND_LABEL, type NameOf, triggerSummary } from "./labels";
+import { type NameOf, triggerSummary } from "./labels";
 
-/// The trigger card, first and in the accent (section 10.2): what starts the workflow.
-export function TriggerCard({ trigger, nameOf }: { trigger: Trigger; nameOf: NameOf }) {
-  const [title, detail] = triggerSummary(trigger, nameOf);
+/// The trigger card, first and in the accent (section 10.2): what starts the workflow. A click
+/// on it, Enter on it or its settings button opens the trigger's settings.
+export function TriggerCard(props: { trigger: Trigger; nameOf: NameOf; onOpen: () => void }) {
+  const { trigger } = props;
+  const [title, detail] = triggerSummary(trigger, props.nameOf);
   return (
     <div
       role="group"
       aria-label="Trigger"
+      tabIndex={0}
       data-kind={trigger.kind}
-      className="flex w-full flex-col gap-0.5 rounded-xl border border-primary bg-card p-3"
+      onClick={(e) => !(e.target as Element).closest("button") && props.onOpen()}
+      onKeyDown={(e) => {
+        if (e.key !== "Enter" || e.target !== e.currentTarget) return;
+        e.preventDefault();
+        props.onOpen();
+      }}
+      className="flex w-full items-start gap-2 rounded-xl border border-primary bg-card p-3 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
     >
-      <span className="font-semibold">When: {title}</span>
-      <span className="text-xs text-muted-foreground">{detail}</span>
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="font-semibold">When: {title}</span>
+        <span className="text-xs text-muted-foreground">{detail}</span>
+      </div>
+      <Button
+        variant="ghost"
+        size="icon-xs"
+        aria-label="Settings of the trigger"
+        title="Settings"
+        onClick={props.onOpen}
+      >
+        <Settings2 aria-hidden />
+      </Button>
     </div>
   );
 }
@@ -71,8 +86,8 @@ const limitOf = (text: string) => {
 };
 
 /// One limit. Its text is kept as typed, so a field can be emptied on the way to a new number;
-/// the draft gets the number it reads as.
-function LimitField(props: {
+/// the draft gets the number it reads as. A delegate's at once and total use it too.
+export function LimitField(props: {
   id: string;
   label: string;
   value: number;
@@ -98,36 +113,5 @@ function LimitField(props: {
         }}
       />
     </Field>
-  );
-}
-
-/// The side sheet of a step's settings (section 10.2), open while `step` is set. It edits the
-/// draft in place: the step's name for now; the fields of each kind join it later.
-export function StepSheet(props: {
-  step: Step | undefined;
-  onChange: (step: Step) => void;
-  onClose: () => void;
-}) {
-  const { step } = props;
-  return (
-    <Sheet open={step !== undefined} onOpenChange={(open) => !open && props.onClose()}>
-      {step && (
-        <SheetContent>
-          <SheetHeader>
-            <SheetTitle>{KIND_LABEL[step.kind]} settings</SheetTitle>
-            <SheetDescription>
-              Changes go into the draft at once. Save keeps them.
-            </SheetDescription>
-          </SheetHeader>
-          <Field label="Name" htmlFor="step-name" hint="Shown on the card and on the run page.">
-            <Input
-              id="step-name"
-              value={step.name}
-              onChange={(e) => props.onChange({ ...step, name: e.target.value })}
-            />
-          </Field>
-        </SheetContent>
-      )}
-    </Sheet>
   );
 }

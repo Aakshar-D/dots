@@ -1,9 +1,17 @@
 import { describe, expect, it } from "vitest";
 
-import { Step, type Team, type Workflow } from "@/api/types";
+import {
+  type BranchStep,
+  type DeployStep,
+  Step,
+  type Team,
+  type Trigger,
+  type Workflow,
+} from "@/api/types";
 import { sample } from "@/test/fixtures";
 
 import {
+  agentsBefore,
   allSteps,
   canMove,
   deleteStep,
@@ -11,10 +19,16 @@ import {
   insertStep,
   locateStep,
   moveStep,
+  newPathLabel,
   newStep,
   nextStepId,
+  outcomeSource,
+  stepsBefore,
+  toggled,
   TOP,
   updateStep,
+  withMode,
+  withTriggerKind,
 } from "./draft";
 
 const [crew] = sample.teams as [Team, Team];
@@ -172,5 +186,80 @@ describe("the builder's draft", () => {
     expect(canMove(fixSteps, "ship", 1)).toBe(false);
     expect(canMove(fixSteps, "design", -1)).toBe(false);
     expect(canMove(fixSteps, "nope", 1)).toBe(false);
+  });
+
+  it("finds the steps before a step on its path, as the core's before does", () => {
+    const names = (steps: Step[]) => steps.map((s) => s.id);
+    // Inside a path: the steps before the branch, the branch, then the path's earlier steps.
+    expect(names(stepsBefore(fixSteps, "ship"))).toEqual(["build", "route", "review"]);
+    // Otherwise does not see the paths beside it.
+    expect(names(stepsBefore(fixSteps, "design"))).toEqual(["build", "route"]);
+    expect(stepsBefore(fixSteps, "build")).toEqual([]);
+    expect(stepsBefore(fixSteps, "nope")).toEqual([]);
+    expect(names(agentsBefore(fixSteps, "review"))).toEqual(["build"]);
+    expect(agentsBefore(fixSteps, "build")).toEqual([]);
+    expect(outcomeSource(fixSteps, "route")?.outcomes).toEqual(["fixed", "needs_design"]);
+    expect(outcomeSource(fixSteps, "build")).toBeUndefined();
+  });
+
+  it("gives a deploy of a new mode and a trigger of a new kind defaults a save takes", () => {
+    const ship = findStep(fixSteps, "ship") as DeployStep;
+    expect(withMode(ship, "pr_merge", crew)).toBe(ship);
+    expect(withMode(ship, "push", crew)).toEqual({
+      id: "ship",
+      name: "Ship",
+      kind: "deploy",
+      mode: "push",
+    });
+    const member = withMode(ship, "member", crew);
+    expect(member).toEqual({
+      id: "ship",
+      name: "Ship",
+      kind: "deploy",
+      mode: "member",
+      member: "01J0DOT",
+      job: "Deploy what was approved.",
+    });
+    expect(withMode(member, "pr_merge", crew)).toMatchObject({ merge_method: "squash" });
+    for (const mode of ["branch", "push", "pr", "pr_merge", "member"] as const) {
+      expect(Step.safeParse(withMode(ship, mode, crew)).success).toBe(true);
+    }
+
+    const daily = (nightly.definition.trigger as Extract<Trigger, { kind: "schedule" }>).schedule;
+    const manual: Trigger = { kind: "manual" };
+    expect(withTriggerKind(manual, "chat", crew, daily)).toEqual({
+      kind: "chat",
+      starters: ["01J0DOT"],
+    });
+    expect(withTriggerKind(manual, "schedule", crew, daily)).toEqual({
+      kind: "schedule",
+      schedule: daily,
+      task: "",
+      project: "Dots",
+    });
+    expect(withTriggerKind(manual, "webhook", crew, daily)).toEqual({
+      kind: "webhook",
+      task: null,
+      project: null,
+    });
+    // A schedule's task and project become a webhook's fallbacks, and come back.
+    const hook = withTriggerKind(nightly.definition.trigger, "webhook", crew, daily);
+    expect(hook).toEqual({ kind: "webhook", task: "Update the dependencies.", project: "Dots" });
+    expect(withTriggerKind(hook, "schedule", crew, daily)).toEqual(nightly.definition.trigger);
+    expect(withTriggerKind(hook, "manual", crew, daily)).toEqual(manual);
+    expect(withTriggerKind(hook, "webhook", crew, daily)).toBe(hook);
+  });
+
+  it("names a new path after a free outcome or project, else Path n, and ticks a choice once", () => {
+    const route = findStep(fixSteps, "route") as BranchStep;
+    expect(newPathLabel(route, ["fixed", "needs_design"])).toBe("needs_design");
+    // Labels are compared without case, as the core compares them.
+    expect(newPathLabel(route, ["FIXED"])).toBe("Path 1");
+    const taken = { ...route, paths: [...route.paths, { label: "path 1", steps: [] }] };
+    expect(newPathLabel(taken, [])).toBe("Path 2");
+
+    expect(toggled(["a"], "b", true)).toEqual(["a", "b"]);
+    expect(toggled(["a", "b"], "a", true)).toEqual(["a", "b"]);
+    expect(toggled(["a", "b"], "a", false)).toEqual(["b"]);
   });
 });

@@ -14,7 +14,13 @@ const none: SchedulePreview = { times: [], pending: false };
 
 function setup(
   initial: Schedule | null,
-  more: { stored?: Schedule | null; error?: string; preview?: SchedulePreview } = {},
+  more: {
+    stored?: Schedule | null;
+    error?: string;
+    preview?: SchedulePreview;
+    required?: boolean;
+    catchUp?: boolean;
+  } = {},
 ) {
   let latest = initial;
   let changes = 0;
@@ -31,6 +37,8 @@ function setup(
         }}
         error={more.error}
         preview={more.preview ?? none}
+        required={more.required}
+        catchUp={more.catchUp}
       />
     );
   }
@@ -192,6 +200,20 @@ describe("the schedule editor", () => {
     await user.click(screen.getByLabelText("Catch up a missed run"));
     expect(schedule()?.catch_up).toBe(false);
     expect(schedule()?.rule).toEqual(weekly.rule);
+  });
+
+  it("offers no None and no catch-up to a workflow's trigger", () => {
+    setup(weekly, { required: true, catchUp: false });
+    expect(within(kind()).getAllByRole("option").map((o) => o.getAttribute("value"))).toEqual([
+      "once",
+      "every",
+      "daily",
+      "weekly",
+      "cron",
+    ]);
+    expect(screen.queryByLabelText("Catch up a missed run")).toBeNull();
+    // The stop is still asked.
+    expect(screen.getByRole("group", { name: "Stop" })).toBeVisible();
   });
 
   it("keeps the cron field as it was, and gives the stored rule back", async () => {

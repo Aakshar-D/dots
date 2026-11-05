@@ -362,7 +362,7 @@ describe("the workflow builder", () => {
     expect(screen.queryByRole("group", { name: "Step 2: Review" })).not.toBeInTheDocument();
   });
 
-  it("saves the draft before a test run, then asks for its task", async () => {
+  it("saves the draft before a test run, then asks for its task, on or off", async () => {
     const { user } = open(nightly);
     const name = await screen.findByRole("textbox", { name: "Workflow name" });
     await user.type(name, " 2");
@@ -373,9 +373,17 @@ describe("the workflow builder", () => {
     expect(backend.callsTo("workflow_update")[0]).toMatchObject({ spec: { name: "Nightly 2" } });
     await user.keyboard("{Escape}");
 
-    // A workflow that is off cannot start, so its test run waits until it is on.
+    // A Test run starts while the workflow is off, so turning it off holds Test run back no
+    // more: it saves the switch, then asks for the task.
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await user.click(screen.getByRole("switch", { name: "On" }));
-    expect(screen.getByRole("button", { name: "Test run" })).toBeDisabled();
+    const test = screen.getByRole("button", { name: "Test run" });
+    await waitFor(() => expect(test).toBeEnabled());
+    expect(test).not.toHaveAttribute("title");
+    await user.click(test);
+    expect(await screen.findByRole("dialog", { name: "Test run Nightly 2" })).toBeVisible();
+    expect(backend.callsTo("workflow_update")).toHaveLength(2);
+    expect(backend.callsTo("workflow_update")[1]).toMatchObject({ spec: { enabled: false } });
   });
 
   it("deletes the workflow after asking, then goes back to the team page", async () => {
