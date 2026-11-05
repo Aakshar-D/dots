@@ -1,10 +1,11 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 import { toast } from "sonner";
 
 import { commands } from "@/api/commands";
 import type { Dot } from "@/api/types";
 import { ModelPicker, useModels } from "@/components/ModelPicker";
-import { useDotAccess } from "@/lib/access";
+import { useDotAccessQuery } from "@/lib/access";
 import { specOf } from "@/lib/dot-rules";
 import { notifyError } from "@/lib/notify";
 import { invalidateDots, keys } from "@/lib/query";
@@ -19,7 +20,10 @@ export const NEXT_REPLY =
 export function DotModelSwitch({ dot }: { dot: Dot }) {
   const qc = useQueryClient();
   const models = useModels(dot.engine, dot.endpoint_url);
-  const refusal = useDotAccess(dot.id)?.edit ?? undefined;
+  const access = useDotAccessQuery(dot.id);
+  const refusal = access.data?.edit ?? undefined;
+  // A refused change starts the picker afresh, so a Custom box it showed goes too.
+  const [refused, setRefused] = useState(0);
   const save = useMutation({
     mutationFn: async (model: string) => {
       const now = await commands.getDot(dot.id);
@@ -33,7 +37,10 @@ export function DotModelSwitch({ dot }: { dot: Dot }) {
       toast.success(`${saved.name} will use ${label} from its next reply.`);
     },
     onSettled: () => invalidateDots(qc),
-    onError: notifyError,
+    onError: (e) => {
+      setRefused((n) => n + 1);
+      notifyError(e);
+    },
   });
   const value = save.isPending ? save.variables : dot.model;
   const id = `dot-model-switch-${dot.id}`;
@@ -44,12 +51,14 @@ export function DotModelSwitch({ dot }: { dot: Dot }) {
       </label>
       <ModelPicker
         // A new picker when the dot's model changes, so a refused change goes back to it.
-        key={`${dot.id}:${dot.model}`}
+        key={`${dot.id}:${dot.model}:${refused}`}
         id={id}
         ariaLabel="Model for the next reply"
         compact
         commit
-        disabled={save.isPending || refusal !== undefined}
+        // Off until it is known whether the person may edit the dot. If that cannot be read,
+        // the core still refuses a change it does not allow.
+        disabled={save.isPending || access.isPending || refusal !== undefined}
         value={value}
         options={models.options}
         onChange={(model) => save.mutate(model)}
