@@ -168,6 +168,38 @@
     }
 }
 
+/* The working line's phrase: a soft light that sweeps across the words while a dot works. */
+.working-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--muted-foreground) 0%,
+    var(--muted-foreground) 35%,
+    var(--foreground) 50%,
+    var(--muted-foreground) 65%,
+    var(--muted-foreground) 100%
+  );
+  background-size: 250% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  animation: working-shimmer 2.2s linear infinite;
+}
+@keyframes working-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -150% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .working-shimmer {
+    animation: none;
+    background: none;
+    color: var(--muted-foreground);
+  }
+}
+
 /* Reduced motion: the running pulse and every transition stop (spec section 6). */
 @media (prefers-reduced-motion: reduce) {
   *,

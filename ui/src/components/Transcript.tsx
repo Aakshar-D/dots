@@ -19,6 +19,7 @@ import { BrowserCall } from "@/components/BrowserCall";
 import { Markdown } from "@/components/Markdown";
 import { StatusBadge } from "@/components/StatusBadge";
 import { messageAttachments } from "@/lib/attachments";
+import { WorkingLine } from "@/components/WorkingLine";
 import { appTitle, isActive } from "@/lib/home-topics";
 import { localDateTime, localTime } from "@/lib/format";
 import { mcpToolLabel } from "@/lib/mcp-tool";
@@ -543,6 +544,9 @@ export function Transcript(props: {
               )}
               {conversation && run.trigger === "chat" && run.status === "cancelled" && !run.undelivered_at && (
                 <p className="text-xs text-muted-foreground">Cancelled</p>
+              )}
+              {run.status === "running" && (
+                <WorkingLine seed={run.id} since={run.started_at} dotName={props.dotName} />
               )}
               {items.length === 0 && message === null && run.status === "queued" && (
                 <p className="text-muted-foreground">Waiting to start.</p>
