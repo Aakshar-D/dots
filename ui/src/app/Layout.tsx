@@ -7,6 +7,7 @@ import {
   Library as LibraryIcon,
   Rocket,
   Settings as SettingsIcon,
+  UsersRound,
 } from "lucide-react";
 import { useEffect } from "react";
 import { NavLink, Outlet } from "react-router";
@@ -27,6 +28,7 @@ const LINKS = [
   { to: "/inbox", label: "Inbox", icon: InboxIcon },
   { to: "/apps", label: "Apps", icon: LayoutGrid },
   { to: "/library", label: "Library", icon: LibraryIcon },
+  { to: "/teams", label: "Teams", icon: UsersRound },
   { to: "/settings", label: "Settings", icon: SettingsIcon },
 ];
 /// Only a publisher sees it (updates UI spec section 5.1).

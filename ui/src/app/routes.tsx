@@ -11,6 +11,8 @@ import { LibraryScreen } from "@/screens/library/LibraryScreen";
 import { RunScreen } from "@/screens/RunScreen";
 import { SettingsScreen } from "@/screens/SettingsScreen";
 import { ReleasesScreen } from "@/screens/ReleasesScreen";
+import { TeamScreen } from "@/screens/teams/TeamScreen";
+import { TeamsScreen } from "@/screens/teams/TeamsScreen";
 import { UsageScreen } from "@/screens/UsageScreen";
 
 export const routes: RouteObject[] = [
@@ -34,6 +36,8 @@ export const routes: RouteObject[] = [
       { path: "chat", element: <Navigate to="/home" replace /> },
       { path: "chat/:dotId", element: <ChatRedirect /> },
       { path: "chat/:dotId/:runId", element: <ChatRedirect /> },
+      { path: "teams", element: <TeamsScreen /> },
+      { path: "teams/:teamId", element: <TeamScreen /> },
       { path: "settings", element: <SettingsScreen /> },
       { path: "usage", element: <UsageScreen /> },
       { path: "releases", element: <ReleasesScreen /> },
