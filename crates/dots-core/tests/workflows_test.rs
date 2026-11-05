@@ -3953,6 +3953,74 @@ async fn a_test_run_pushes_nothing_and_lists_the_branch_as_ready() {
 }
 
 #[tokio::test]
+async fn open_folder_finds_a_project_s_repo_and_a_ready_branch_s_worktree_by_id_only() {
+    let w = world().await;
+    w.shipping_to_origin("ok");
+    let flow = w.ship_flow(DeployMode::Push).await;
+    let no_ready =
+        |id: &str, branch: &str| format!("workflow run {id} has no ready branch {branch}");
+
+    assert_eq!(
+        w.workflows.project_folder(&w.project).await.unwrap(),
+        w.repo
+    );
+    assert!(matches!(
+        w.workflows.project_folder("nope").await,
+        Err(Error::NotFound(m)) if m == "project nope"
+    ));
+
+    // A test run's deploy lists the branch as ready; until then, nothing is.
+    let (wr, branch, _) = w.at_the_check(&flow, true).await;
+    assert!(matches!(
+        w.workflows.branch_folder(&wr.id, &branch).await,
+        Err(Error::Invalid(m)) if m == no_ready(&wr.id, &branch)
+    ));
+    w.approve(&wr.id, None).await.unwrap();
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    let worktree =
+        PathBuf::from(&newest(&wr, "dev").handoff.as_ref().unwrap().branches[0].worktree_path);
+    assert!(worktree.is_dir());
+    assert_eq!(
+        w.workflows.branch_folder(&wr.id, &branch).await.unwrap(),
+        worktree
+    );
+    // Only a branch the run lists as ready: never another ref or a path.
+    for other in ["main", "HEAD", "..", worktree.to_str().unwrap()] {
+        assert!(matches!(
+            w.workflows.branch_folder(&wr.id, other).await,
+            Err(Error::Invalid(m)) if m == no_ready(&wr.id, other)
+        ));
+    }
+
+    // A pushed branch is not ready: its folder is not offered.
+    let (pushed, pushed_branch, _) = w.at_the_check(&flow, false).await;
+    w.approve(&pushed.id, None).await.unwrap();
+    let pushed = w
+        .until(&pushed.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    assert!(
+        !newest(&pushed, "ship")
+            .deploy_result
+            .as_ref()
+            .unwrap()
+            .ready
+    );
+    assert!(matches!(
+        w.workflows.branch_folder(&pushed.id, &pushed_branch).await,
+        Err(Error::Invalid(m)) if m == no_ready(&pushed.id, &pushed_branch)
+    ));
+
+    // A folder that is gone is said to be gone.
+    std::fs::remove_dir_all(&worktree).unwrap();
+    assert!(matches!(
+        w.workflows.branch_folder(&wr.id, &branch).await,
+        Err(Error::NotFound(m)) if m == format!("folder {} no longer exists", worktree.display())
+    ));
+}
+
+#[tokio::test]
 async fn a_branch_changed_after_the_approval_fails_the_deploy_until_it_is_put_back() {
     let w = world().await;
     w.shipping_to_origin("ok");

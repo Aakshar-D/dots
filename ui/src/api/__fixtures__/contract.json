@@ -524,6 +524,32 @@
       "state": "failed"
     }
   ],
+  "CheckTip": [
+    {
+      "branch": "dots/nightly-tests/01J0RUN5",
+      "commit": "2222222222222222222222222222222222222222"
+    },
+    {
+      "branch": "dots/reviewer/01J0RUN6",
+      "commit": null
+    }
+  ],
+  "CheckView": {
+    "branches": [
+      {
+        "branch": "dots/nightly-tests/01J0RUN5",
+        "commit": "2222222222222222222222222222222222222222",
+        "run_id": "01J0RUN5"
+      },
+      {
+        "branch": "dots/reviewer/01J0RUN6",
+        "commit": null,
+        "run_id": "01J0RUN6"
+      }
+    ],
+    "step_id": "review",
+    "summary": "Made the icon dark on a light taskbar."
+  },
   "CmdError": {
     "kind": "conflict",
     "message": "run 01J0RUN is already succeeded"
@@ -701,7 +727,36 @@
     "watcher_resume",
     "limits_get",
     "usage_summary",
-    "run_release_hold"
+    "run_release_hold",
+    "teams_list",
+    "team_get",
+    "team_create",
+    "team_update",
+    "team_delete",
+    "project_add",
+    "project_update",
+    "project_delete",
+    "open_project_folder",
+    "workflows_list",
+    "workflow_get",
+    "workflow_create",
+    "workflow_update",
+    "workflow_delete",
+    "workflow_check_spec",
+    "workflow_webhook_url",
+    "regenerate_workflow_token",
+    "workflow_runs_list",
+    "workflow_runs_for_origins",
+    "workflow_run_get",
+    "workflow_run_start",
+    "workflow_check",
+    "workflow_branch_diff",
+    "workflow_approve",
+    "workflow_send_back",
+    "workflow_add_budget",
+    "workflow_allow_send_back",
+    "workflow_retry_step",
+    "workflow_stop"
   ],
   "ContextDocuments": {
     "complete": true,
@@ -1450,6 +1505,14 @@
       "completed",
       "expired"
     ],
+    "StepRunStatus": [
+      "running",
+      "waiting",
+      "succeeded",
+      "failed",
+      "cancelled",
+      "skipped"
+    ],
     "TriggerKind": [
       "schedule",
       "webhook",
@@ -1481,6 +1544,19 @@
       "folder",
       "email",
       "github"
+    ],
+    "WorkflowRunStatus": [
+      "running",
+      "waiting",
+      "succeeded",
+      "failed",
+      "cancelled"
+    ],
+    "WorkflowTrigger": [
+      "chat",
+      "manual",
+      "schedule",
+      "webhook"
     ],
     "WorkspaceMode": [
       "worktree",
@@ -3434,6 +3510,30 @@
       }
     }
   ],
+  "Project": {
+    "created_at": "2026-10-09T12:00:00.000Z",
+    "default_branch": "main",
+    "id": "01J0PRJ",
+    "name": "Dots",
+    "remote": "origin",
+    "repo_path": "C:/Users/u/src/dots",
+    "team_id": "01J0TEAM",
+    "updated_at": "2026-10-09T12:00:00.000Z"
+  },
+  "ProjectSpec": [
+    {
+      "default_branch": "main",
+      "name": "Dots",
+      "remote": "origin",
+      "repo_path": "C:/Users/u/src/dots"
+    },
+    {
+      "default_branch": null,
+      "name": "Dots",
+      "remote": "origin",
+      "repo_path": "C:/Users/u/src/dots"
+    }
+  ],
   "PublisherStatus": [
     {
       "state": {
@@ -4153,6 +4253,212 @@
     {
       "org_id": "acme-eng",
       "type": "org_updated"
+    },
+    {
+      "team_id": "01J0TEAM",
+      "type": "team_updated"
+    },
+    {
+      "team_id": "01J0TEAM",
+      "type": "workflow_updated",
+      "workflow_id": "01J0WFL"
+    },
+    {
+      "run": {
+        "active_ms": 300000,
+        "budget": {
+          "max_minutes": 120,
+          "max_runs": 10,
+          "max_send_backs": 3,
+          "max_tokens": 1500000
+        },
+        "current_step": "review",
+        "definition": {
+          "budget": {
+            "max_minutes": 120,
+            "max_runs": 10,
+            "max_send_backs": 3,
+            "max_tokens": 1500000
+          },
+          "steps": [
+            {
+              "can_send_back_to": [],
+              "delegate": {
+                "at_once": 2,
+                "may_start": [
+                  "01J0DOT2"
+                ],
+                "total": 4
+              },
+              "id": "build",
+              "job": "Fix the bug and say whether it is fixed.",
+              "kind": "agent",
+              "member": "01J0DOT",
+              "name": "Build",
+              "outcomes": [
+                "fixed",
+                "needs_design"
+              ]
+            },
+            {
+              "id": "route",
+              "kind": "branch",
+              "name": "Fixed?",
+              "on": "outcome",
+              "otherwise": [
+                {
+                  "can_send_back_to": [
+                    "build"
+                  ],
+                  "delegate": null,
+                  "id": "design",
+                  "job": "Propose a design.",
+                  "kind": "agent",
+                  "member": "01J0DOT2",
+                  "name": "Design",
+                  "outcomes": []
+                }
+              ],
+              "paths": [
+                {
+                  "label": "fixed",
+                  "steps": [
+                    {
+                      "id": "review",
+                      "kind": "check",
+                      "name": "Review",
+                      "send_back_to": "build"
+                    },
+                    {
+                      "id": "ship",
+                      "kind": "deploy",
+                      "merge_method": "squash",
+                      "mode": "pr_merge",
+                      "name": "Ship"
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "trigger": {
+            "kind": "chat",
+            "starters": [
+              "01J0DOT"
+            ]
+          }
+        },
+        "ended_at": null,
+        "error": null,
+        "id": "01J0WFR",
+        "origin_run_id": "01J0RUN",
+        "project": {
+          "default_branch": "main",
+          "name": "Dots",
+          "remote": "origin",
+          "repo_path": "C:/Users/u/src/dots"
+        },
+        "project_id": "01J0PRJ",
+        "send_back": null,
+        "send_backs": 0,
+        "spent_cache_read": 900000,
+        "spent_runs": 3,
+        "spent_tokens": 120000,
+        "started_at": "2026-10-09T12:00:00.000Z",
+        "status": "waiting",
+        "steps": [
+          {
+            "attempt": 1,
+            "decision": null,
+            "deploy_result": null,
+            "ended_at": "2026-10-09T12:00:00.000Z",
+            "error": null,
+            "handoff": {
+              "branches": [
+                {
+                  "base_commit": "1111111111111111111111111111111111111111",
+                  "branch": "dots/nightly-tests/01J0RUN5",
+                  "run_id": "01J0RUN5",
+                  "worktree_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN5"
+                },
+                {
+                  "base_commit": "1111111111111111111111111111111111111111",
+                  "branch": "dots/reviewer/01J0RUN6",
+                  "run_id": "01J0RUN6",
+                  "worktree_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN6"
+                }
+              ],
+              "members": [
+                {
+                  "branch": "dots/reviewer/01J0RUN6",
+                  "dot_id": "01J0DOT2",
+                  "status": "succeeded",
+                  "summary": "It shows on both.",
+                  "task": "Check the icon on Windows 10."
+                },
+                {
+                  "branch": null,
+                  "dot_id": "01J0DOT2",
+                  "status": "failed",
+                  "summary": "No high-contrast theme on this PC.",
+                  "task": "Check the high-contrast theme."
+                }
+              ],
+              "outcome": "fixed",
+              "summary": "Made the icon dark on a light taskbar."
+            },
+            "id": "01J0STP1",
+            "notice": null,
+            "outcome": "fixed",
+            "send_back": null,
+            "started_at": "2026-10-09T12:00:00.000Z",
+            "status": "succeeded",
+            "step_id": "build",
+            "workflow_run_id": "01J0WFR"
+          },
+          {
+            "attempt": 1,
+            "decision": {
+              "path": "fixed"
+            },
+            "deploy_result": null,
+            "ended_at": "2026-10-09T12:00:00.000Z",
+            "error": null,
+            "handoff": null,
+            "id": "01J0STP2",
+            "notice": null,
+            "outcome": null,
+            "send_back": null,
+            "started_at": "2026-10-09T12:00:00.000Z",
+            "status": "succeeded",
+            "step_id": "route",
+            "workflow_run_id": "01J0WFR"
+          },
+          {
+            "attempt": 1,
+            "decision": null,
+            "deploy_result": null,
+            "ended_at": null,
+            "error": null,
+            "handoff": null,
+            "id": "01J0STP3",
+            "notice": null,
+            "outcome": null,
+            "send_back": null,
+            "started_at": "2026-10-09T12:00:00.000Z",
+            "status": "waiting",
+            "step_id": "review",
+            "workflow_run_id": "01J0WFR"
+          }
+        ],
+        "task": "The tray icon is invisible on a light taskbar.\nIt shows on a dark one.",
+        "team_id": "01J0TEAM",
+        "test": false,
+        "trigger": "chat",
+        "waiting_on": "check",
+        "workflow_id": "01J0WFL"
+      },
+      "type": "workflow_run_updated"
     }
   ],
   "ScannedSkill": [
@@ -4310,6 +4616,78 @@
     "restart_required": false,
     "schedules_paused": false,
     "server_error": null
+  },
+  "Team": [
+    {
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "description": "Fixes and ships Dots.",
+      "id": "01J0TEAM",
+      "members": [
+        {
+          "dot_id": "01J0DOT",
+          "dot_name": "nightly-tests",
+          "role": "dev agent"
+        },
+        {
+          "dot_id": "01J0DOT2",
+          "dot_name": "reviewer",
+          "role": ""
+        }
+      ],
+      "name": "crew",
+      "org_id": null,
+      "projects": [
+        {
+          "created_at": "2026-10-09T12:00:00.000Z",
+          "default_branch": "main",
+          "id": "01J0PRJ",
+          "name": "Dots",
+          "remote": "origin",
+          "repo_path": "C:/Users/u/src/dots",
+          "team_id": "01J0TEAM",
+          "updated_at": "2026-10-09T12:00:00.000Z"
+        },
+        {
+          "created_at": "2026-10-09T12:00:00.000Z",
+          "default_branch": null,
+          "id": "01J0PRJ2",
+          "name": "Site",
+          "remote": "upstream",
+          "repo_path": "C:/Users/u/src/site",
+          "team_id": "01J0TEAM",
+          "updated_at": "2026-10-09T12:00:00.000Z"
+        }
+      ],
+      "updated_at": "2026-10-09T12:00:00.000Z",
+      "workspace_id": "default"
+    },
+    {
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "description": "",
+      "id": "01J0TEAM2",
+      "members": [],
+      "name": "platform",
+      "org_id": "acme-eng",
+      "projects": [],
+      "updated_at": "2026-10-09T12:00:00.000Z",
+      "workspace_id": "platform"
+    }
+  ],
+  "TeamSpec": {
+    "description": "Fixes and ships Dots.",
+    "members": [
+      {
+        "dot_id": "01J0DOT",
+        "role": "dev agent"
+      },
+      {
+        "dot_id": "01J0DOT2",
+        "role": ""
+      }
+    ],
+    "name": "crew",
+    "org_id": null,
+    "workspace_id": "default"
   },
   "ToolsChanged": [
     {
@@ -4528,6 +4906,1519 @@
       "name": "Repo events",
       "paused_reason": "flood",
       "updated_at": "2026-10-09T12:00:00.000Z"
+    }
+  ],
+  "Workflow": [
+    {
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "definition": {
+        "budget": {
+          "max_minutes": 120,
+          "max_runs": 10,
+          "max_send_backs": 3,
+          "max_tokens": 1500000
+        },
+        "steps": [
+          {
+            "can_send_back_to": [],
+            "delegate": {
+              "at_once": 2,
+              "may_start": [
+                "01J0DOT2"
+              ],
+              "total": 4
+            },
+            "id": "build",
+            "job": "Fix the bug and say whether it is fixed.",
+            "kind": "agent",
+            "member": "01J0DOT",
+            "name": "Build",
+            "outcomes": [
+              "fixed",
+              "needs_design"
+            ]
+          },
+          {
+            "id": "route",
+            "kind": "branch",
+            "name": "Fixed?",
+            "on": "outcome",
+            "otherwise": [
+              {
+                "can_send_back_to": [
+                  "build"
+                ],
+                "delegate": null,
+                "id": "design",
+                "job": "Propose a design.",
+                "kind": "agent",
+                "member": "01J0DOT2",
+                "name": "Design",
+                "outcomes": []
+              }
+            ],
+            "paths": [
+              {
+                "label": "fixed",
+                "steps": [
+                  {
+                    "id": "review",
+                    "kind": "check",
+                    "name": "Review",
+                    "send_back_to": "build"
+                  },
+                  {
+                    "id": "ship",
+                    "kind": "deploy",
+                    "merge_method": "squash",
+                    "mode": "pr_merge",
+                    "name": "Ship"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "trigger": {
+          "kind": "chat",
+          "starters": [
+            "01J0DOT"
+          ]
+        }
+      },
+      "enabled": true,
+      "has_webhook_token": false,
+      "id": "01J0WFL",
+      "last_run": {
+        "id": "01J0WFR",
+        "started_at": "2026-10-09T12:00:00.000Z",
+        "status": "waiting",
+        "test": false
+      },
+      "name": "Fix and ship",
+      "problem": null,
+      "runs_in_flight": 1,
+      "team_id": "01J0TEAM",
+      "updated_at": "2026-10-09T12:00:00.000Z"
+    },
+    {
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "definition": {
+        "budget": {
+          "max_minutes": 30,
+          "max_runs": 4,
+          "max_send_backs": 1,
+          "max_tokens": 200000
+        },
+        "steps": [
+          {
+            "can_send_back_to": [],
+            "delegate": null,
+            "id": "work",
+            "job": "Do the task.",
+            "kind": "agent",
+            "member": "01J0GONE",
+            "name": "Work",
+            "outcomes": []
+          },
+          {
+            "id": "check",
+            "kind": "check",
+            "name": "Review",
+            "send_back_to": null
+          },
+          {
+            "id": "push",
+            "kind": "deploy",
+            "mode": "push",
+            "name": "Ship"
+          }
+        ],
+        "trigger": {
+          "kind": "manual"
+        }
+      },
+      "enabled": false,
+      "has_webhook_token": false,
+      "id": "01J0WFL2",
+      "last_run": {
+        "id": "01J0WFR4",
+        "started_at": "2026-10-09T12:00:00.000Z",
+        "status": "succeeded",
+        "test": true
+      },
+      "name": "Push it",
+      "problem": "step \"Work\": 01J0GONE is not a member of the team",
+      "runs_in_flight": 0,
+      "team_id": "01J0TEAM",
+      "updated_at": "2026-10-09T12:00:00.000Z"
+    },
+    {
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "definition": {
+        "budget": {
+          "max_minutes": 120,
+          "max_runs": 10,
+          "max_send_backs": 3,
+          "max_tokens": 1500000
+        },
+        "steps": [
+          {
+            "can_send_back_to": [],
+            "delegate": null,
+            "id": "work",
+            "job": "Do the task.",
+            "kind": "agent",
+            "member": "01J0DOT",
+            "name": "Work",
+            "outcomes": []
+          },
+          {
+            "id": "check",
+            "kind": "check",
+            "name": "Review",
+            "send_back_to": null
+          },
+          {
+            "id": "by-project",
+            "kind": "branch",
+            "name": "Which project",
+            "on": "project",
+            "otherwise": [],
+            "paths": [
+              {
+                "label": "Dots",
+                "steps": [
+                  {
+                    "id": "pr",
+                    "kind": "deploy",
+                    "mode": "pr",
+                    "name": "Ship"
+                  }
+                ]
+              },
+              {
+                "label": "Site",
+                "steps": [
+                  {
+                    "id": "keep",
+                    "kind": "deploy",
+                    "mode": "branch",
+                    "name": "Ship"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "trigger": {
+          "kind": "schedule",
+          "project": "Dots",
+          "schedule": {
+            "catch_up": false,
+            "rule": {
+              "kind": "daily",
+              "time": "09:00"
+            },
+            "until": null
+          },
+          "task": "Update the dependencies."
+        }
+      },
+      "enabled": true,
+      "has_webhook_token": false,
+      "id": "01J0WFL3",
+      "last_run": null,
+      "name": "Nightly",
+      "problem": null,
+      "runs_in_flight": 0,
+      "team_id": "01J0TEAM",
+      "updated_at": "2026-10-09T12:00:00.000Z"
+    },
+    {
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "definition": {
+        "budget": {
+          "max_minutes": 120,
+          "max_runs": 10,
+          "max_send_backs": 3,
+          "max_tokens": 1500000
+        },
+        "steps": [
+          {
+            "can_send_back_to": [],
+            "delegate": null,
+            "id": "work",
+            "job": "Do the task.",
+            "kind": "agent",
+            "member": "01J0DOT",
+            "name": "Work",
+            "outcomes": []
+          },
+          {
+            "id": "check",
+            "kind": "check",
+            "name": "Review",
+            "send_back_to": null
+          },
+          {
+            "id": "release",
+            "job": "Release what was approved.",
+            "kind": "deploy",
+            "member": "01J0DOT2",
+            "mode": "member",
+            "name": "Ship"
+          }
+        ],
+        "trigger": {
+          "kind": "webhook",
+          "project": null,
+          "task": "Look at the newest issue."
+        }
+      },
+      "enabled": true,
+      "has_webhook_token": true,
+      "id": "01J0WFL4",
+      "last_run": null,
+      "name": "On issue",
+      "problem": null,
+      "runs_in_flight": 0,
+      "team_id": "01J0TEAM",
+      "updated_at": "2026-10-09T12:00:00.000Z"
+    }
+  ],
+  "WorkflowProblem": [
+    {
+      "message": "step \"Work\": 01J0GONE is not a member of the team",
+      "step_id": "work"
+    },
+    {
+      "message": "a workflow name must be 1 to 64 characters",
+      "step_id": null
+    }
+  ],
+  "WorkflowRun": [
+    {
+      "active_ms": 300000,
+      "budget": {
+        "max_minutes": 120,
+        "max_runs": 10,
+        "max_send_backs": 3,
+        "max_tokens": 1500000
+      },
+      "current_step": "review",
+      "definition": {
+        "budget": {
+          "max_minutes": 120,
+          "max_runs": 10,
+          "max_send_backs": 3,
+          "max_tokens": 1500000
+        },
+        "steps": [
+          {
+            "can_send_back_to": [],
+            "delegate": {
+              "at_once": 2,
+              "may_start": [
+                "01J0DOT2"
+              ],
+              "total": 4
+            },
+            "id": "build",
+            "job": "Fix the bug and say whether it is fixed.",
+            "kind": "agent",
+            "member": "01J0DOT",
+            "name": "Build",
+            "outcomes": [
+              "fixed",
+              "needs_design"
+            ]
+          },
+          {
+            "id": "route",
+            "kind": "branch",
+            "name": "Fixed?",
+            "on": "outcome",
+            "otherwise": [
+              {
+                "can_send_back_to": [
+                  "build"
+                ],
+                "delegate": null,
+                "id": "design",
+                "job": "Propose a design.",
+                "kind": "agent",
+                "member": "01J0DOT2",
+                "name": "Design",
+                "outcomes": []
+              }
+            ],
+            "paths": [
+              {
+                "label": "fixed",
+                "steps": [
+                  {
+                    "id": "review",
+                    "kind": "check",
+                    "name": "Review",
+                    "send_back_to": "build"
+                  },
+                  {
+                    "id": "ship",
+                    "kind": "deploy",
+                    "merge_method": "squash",
+                    "mode": "pr_merge",
+                    "name": "Ship"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "trigger": {
+          "kind": "chat",
+          "starters": [
+            "01J0DOT"
+          ]
+        }
+      },
+      "ended_at": null,
+      "error": null,
+      "id": "01J0WFR",
+      "origin_run_id": "01J0RUN",
+      "project": {
+        "default_branch": "main",
+        "name": "Dots",
+        "remote": "origin",
+        "repo_path": "C:/Users/u/src/dots"
+      },
+      "project_id": "01J0PRJ",
+      "send_back": null,
+      "send_backs": 0,
+      "spent_cache_read": 900000,
+      "spent_runs": 3,
+      "spent_tokens": 120000,
+      "started_at": "2026-10-09T12:00:00.000Z",
+      "status": "waiting",
+      "steps": [
+        {
+          "attempt": 1,
+          "decision": null,
+          "deploy_result": null,
+          "ended_at": "2026-10-09T12:00:00.000Z",
+          "error": null,
+          "handoff": {
+            "branches": [
+              {
+                "base_commit": "1111111111111111111111111111111111111111",
+                "branch": "dots/nightly-tests/01J0RUN5",
+                "run_id": "01J0RUN5",
+                "worktree_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN5"
+              },
+              {
+                "base_commit": "1111111111111111111111111111111111111111",
+                "branch": "dots/reviewer/01J0RUN6",
+                "run_id": "01J0RUN6",
+                "worktree_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN6"
+              }
+            ],
+            "members": [
+              {
+                "branch": "dots/reviewer/01J0RUN6",
+                "dot_id": "01J0DOT2",
+                "status": "succeeded",
+                "summary": "It shows on both.",
+                "task": "Check the icon on Windows 10."
+              },
+              {
+                "branch": null,
+                "dot_id": "01J0DOT2",
+                "status": "failed",
+                "summary": "No high-contrast theme on this PC.",
+                "task": "Check the high-contrast theme."
+              }
+            ],
+            "outcome": "fixed",
+            "summary": "Made the icon dark on a light taskbar."
+          },
+          "id": "01J0STP1",
+          "notice": null,
+          "outcome": "fixed",
+          "send_back": null,
+          "started_at": "2026-10-09T12:00:00.000Z",
+          "status": "succeeded",
+          "step_id": "build",
+          "workflow_run_id": "01J0WFR"
+        },
+        {
+          "attempt": 1,
+          "decision": {
+            "path": "fixed"
+          },
+          "deploy_result": null,
+          "ended_at": "2026-10-09T12:00:00.000Z",
+          "error": null,
+          "handoff": null,
+          "id": "01J0STP2",
+          "notice": null,
+          "outcome": null,
+          "send_back": null,
+          "started_at": "2026-10-09T12:00:00.000Z",
+          "status": "succeeded",
+          "step_id": "route",
+          "workflow_run_id": "01J0WFR"
+        },
+        {
+          "attempt": 1,
+          "decision": null,
+          "deploy_result": null,
+          "ended_at": null,
+          "error": null,
+          "handoff": null,
+          "id": "01J0STP3",
+          "notice": null,
+          "outcome": null,
+          "send_back": null,
+          "started_at": "2026-10-09T12:00:00.000Z",
+          "status": "waiting",
+          "step_id": "review",
+          "workflow_run_id": "01J0WFR"
+        }
+      ],
+      "task": "The tray icon is invisible on a light taskbar.\nIt shows on a dark one.",
+      "team_id": "01J0TEAM",
+      "test": false,
+      "trigger": "chat",
+      "waiting_on": "check",
+      "workflow_id": "01J0WFL"
+    },
+    {
+      "active_ms": 300000,
+      "budget": {
+        "max_minutes": 120,
+        "max_runs": 10,
+        "max_send_backs": 3,
+        "max_tokens": 1500000
+      },
+      "current_step": null,
+      "definition": {
+        "budget": {
+          "max_minutes": 120,
+          "max_runs": 10,
+          "max_send_backs": 3,
+          "max_tokens": 1500000
+        },
+        "steps": [
+          {
+            "can_send_back_to": [],
+            "delegate": {
+              "at_once": 2,
+              "may_start": [
+                "01J0DOT2"
+              ],
+              "total": 4
+            },
+            "id": "build",
+            "job": "Fix the bug and say whether it is fixed.",
+            "kind": "agent",
+            "member": "01J0DOT",
+            "name": "Build",
+            "outcomes": [
+              "fixed",
+              "needs_design"
+            ]
+          },
+          {
+            "id": "route",
+            "kind": "branch",
+            "name": "Fixed?",
+            "on": "outcome",
+            "otherwise": [
+              {
+                "can_send_back_to": [
+                  "build"
+                ],
+                "delegate": null,
+                "id": "design",
+                "job": "Propose a design.",
+                "kind": "agent",
+                "member": "01J0DOT2",
+                "name": "Design",
+                "outcomes": []
+              }
+            ],
+            "paths": [
+              {
+                "label": "fixed",
+                "steps": [
+                  {
+                    "id": "review",
+                    "kind": "check",
+                    "name": "Review",
+                    "send_back_to": "build"
+                  },
+                  {
+                    "id": "ship",
+                    "kind": "deploy",
+                    "merge_method": "squash",
+                    "mode": "pr_merge",
+                    "name": "Ship"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "trigger": {
+          "kind": "chat",
+          "starters": [
+            "01J0DOT"
+          ]
+        }
+      },
+      "ended_at": "2026-10-09T12:00:00.000Z",
+      "error": null,
+      "id": "01J0WFR2",
+      "origin_run_id": "01J0RUN",
+      "project": {
+        "default_branch": "main",
+        "name": "Dots",
+        "remote": "origin",
+        "repo_path": "C:/Users/u/src/dots"
+      },
+      "project_id": "01J0PRJ",
+      "send_back": {
+        "by": "person",
+        "from": "review",
+        "held": false,
+        "note": "Keep the old icon for dark mode.",
+        "to": "build"
+      },
+      "send_backs": 1,
+      "spent_cache_read": 900000,
+      "spent_runs": 3,
+      "spent_tokens": 120000,
+      "started_at": "2026-10-09T12:00:00.000Z",
+      "status": "succeeded",
+      "steps": [
+        {
+          "attempt": 1,
+          "decision": null,
+          "deploy_result": null,
+          "ended_at": "2026-10-09T12:00:00.000Z",
+          "error": null,
+          "handoff": {
+            "branches": [
+              {
+                "base_commit": "1111111111111111111111111111111111111111",
+                "branch": "dots/nightly-tests/01J0RUN5",
+                "run_id": "01J0RUN5",
+                "worktree_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN5"
+              },
+              {
+                "base_commit": "1111111111111111111111111111111111111111",
+                "branch": "dots/reviewer/01J0RUN6",
+                "run_id": "01J0RUN6",
+                "worktree_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN6"
+              }
+            ],
+            "members": [
+              {
+                "branch": "dots/reviewer/01J0RUN6",
+                "dot_id": "01J0DOT2",
+                "status": "succeeded",
+                "summary": "It shows on both.",
+                "task": "Check the icon on Windows 10."
+              },
+              {
+                "branch": null,
+                "dot_id": "01J0DOT2",
+                "status": "failed",
+                "summary": "No high-contrast theme on this PC.",
+                "task": "Check the high-contrast theme."
+              }
+            ],
+            "outcome": "fixed",
+            "summary": "Made the icon dark on a light taskbar."
+          },
+          "id": "01J0STP1",
+          "notice": null,
+          "outcome": "fixed",
+          "send_back": null,
+          "started_at": "2026-10-09T12:00:00.000Z",
+          "status": "succeeded",
+          "step_id": "build",
+          "workflow_run_id": "01J0WFR"
+        },
+        {
+          "attempt": 1,
+          "decision": {
+            "path": "fixed"
+          },
+          "deploy_result": null,
+          "ended_at": "2026-10-09T12:00:00.000Z",
+          "error": null,
+          "handoff": null,
+          "id": "01J0STP2",
+          "notice": null,
+          "outcome": null,
+          "send_back": null,
+          "started_at": "2026-10-09T12:00:00.000Z",
+          "status": "succeeded",
+          "step_id": "route",
+          "workflow_run_id": "01J0WFR"
+        },
+        {
+          "attempt": 1,
+          "decision": {
+            "decision": "sent_back",
+            "note": "Keep the old icon for dark mode."
+          },
+          "deploy_result": null,
+          "ended_at": "2026-10-09T12:00:00.000Z",
+          "error": null,
+          "handoff": null,
+          "id": "01J0STP3",
+          "notice": null,
+          "outcome": null,
+          "send_back": null,
+          "started_at": "2026-10-09T12:00:00.000Z",
+          "status": "succeeded",
+          "step_id": "review",
+          "workflow_run_id": "01J0WFR"
+        },
+        {
+          "attempt": 2,
+          "decision": null,
+          "deploy_result": null,
+          "ended_at": "2026-10-09T12:00:00.000Z",
+          "error": null,
+          "handoff": {
+            "branches": [
+              {
+                "base_commit": "1111111111111111111111111111111111111111",
+                "branch": "dots/nightly-tests/01J0RUN5",
+                "run_id": "01J0RUN5",
+                "worktree_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN5"
+              },
+              {
+                "base_commit": "1111111111111111111111111111111111111111",
+                "branch": "dots/reviewer/01J0RUN6",
+                "run_id": "01J0RUN6",
+                "worktree_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN6"
+              }
+            ],
+            "members": [
+              {
+                "branch": "dots/reviewer/01J0RUN6",
+                "dot_id": "01J0DOT2",
+                "status": "succeeded",
+                "summary": "It shows on both.",
+                "task": "Check the icon on Windows 10."
+              },
+              {
+                "branch": null,
+                "dot_id": "01J0DOT2",
+                "status": "failed",
+                "summary": "No high-contrast theme on this PC.",
+                "task": "Check the high-contrast theme."
+              }
+            ],
+            "outcome": "fixed",
+            "summary": "Made the icon dark on a light taskbar."
+          },
+          "id": "01J0STP9",
+          "notice": "Its earlier chat could not go on, so it started fresh.",
+          "outcome": "fixed",
+          "send_back": null,
+          "started_at": "2026-10-09T12:00:00.000Z",
+          "status": "succeeded",
+          "step_id": "build",
+          "workflow_run_id": "01J0WFR"
+        },
+        {
+          "attempt": 1,
+          "decision": {
+            "path": "fixed"
+          },
+          "deploy_result": null,
+          "ended_at": "2026-10-09T12:00:00.000Z",
+          "error": null,
+          "handoff": null,
+          "id": "01J0STPA",
+          "notice": null,
+          "outcome": null,
+          "send_back": null,
+          "started_at": "2026-10-09T12:00:00.000Z",
+          "status": "succeeded",
+          "step_id": "route",
+          "workflow_run_id": "01J0WFR"
+        },
+        {
+          "attempt": 2,
+          "decision": {
+            "branches": [
+              {
+                "branch": "dots/nightly-tests/01J0RUN5",
+                "commit": "2222222222222222222222222222222222222222"
+              },
+              {
+                "branch": "dots/reviewer/01J0RUN6",
+                "commit": null
+              }
+            ],
+            "decision": "approved",
+            "note": null
+          },
+          "deploy_result": null,
+          "ended_at": "2026-10-09T12:00:00.000Z",
+          "error": null,
+          "handoff": {
+            "branches": [
+              {
+                "base_commit": "1111111111111111111111111111111111111111",
+                "branch": "dots/nightly-tests/01J0RUN5",
+                "run_id": "01J0RUN5",
+                "worktree_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN5"
+              },
+              {
+                "base_commit": "1111111111111111111111111111111111111111",
+                "branch": "dots/reviewer/01J0RUN6",
+                "run_id": "01J0RUN6",
+                "worktree_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN6"
+              }
+            ],
+            "members": [
+              {
+                "branch": "dots/reviewer/01J0RUN6",
+                "dot_id": "01J0DOT2",
+                "status": "succeeded",
+                "summary": "It shows on both.",
+                "task": "Check the icon on Windows 10."
+              },
+              {
+                "branch": null,
+                "dot_id": "01J0DOT2",
+                "status": "failed",
+                "summary": "No high-contrast theme on this PC.",
+                "task": "Check the high-contrast theme."
+              }
+            ],
+            "outcome": "fixed",
+            "summary": "Made the icon dark on a light taskbar."
+          },
+          "id": "01J0STP4",
+          "notice": null,
+          "outcome": null,
+          "send_back": null,
+          "started_at": "2026-10-09T12:00:00.000Z",
+          "status": "succeeded",
+          "step_id": "review",
+          "workflow_run_id": "01J0WFR"
+        },
+        {
+          "attempt": 1,
+          "decision": null,
+          "deploy_result": {
+            "branches": [
+              {
+                "auto_merge": true,
+                "branch": "dots/nightly-tests/01J0RUN5",
+                "commit": "2222222222222222222222222222222222222222",
+                "pr_url": "https://github.com/Aakshar-D/dots/pull/40",
+                "pushed": true
+              }
+            ],
+            "ready": false
+          },
+          "ended_at": "2026-10-09T12:00:00.000Z",
+          "error": null,
+          "handoff": null,
+          "id": "01J0STP5",
+          "notice": null,
+          "outcome": null,
+          "send_back": null,
+          "started_at": "2026-10-09T12:00:00.000Z",
+          "status": "succeeded",
+          "step_id": "ship",
+          "workflow_run_id": "01J0WFR"
+        }
+      ],
+      "task": "The tray icon is invisible on a light taskbar.\nIt shows on a dark one.",
+      "team_id": "01J0TEAM",
+      "test": false,
+      "trigger": "chat",
+      "waiting_on": null,
+      "workflow_id": "01J0WFL"
+    },
+    {
+      "active_ms": 300000,
+      "budget": {
+        "max_minutes": 120,
+        "max_runs": 10,
+        "max_send_backs": 3,
+        "max_tokens": 1500000
+      },
+      "current_step": "design",
+      "definition": {
+        "budget": {
+          "max_minutes": 120,
+          "max_runs": 10,
+          "max_send_backs": 3,
+          "max_tokens": 1500000
+        },
+        "steps": [
+          {
+            "can_send_back_to": [],
+            "delegate": {
+              "at_once": 2,
+              "may_start": [
+                "01J0DOT2"
+              ],
+              "total": 4
+            },
+            "id": "build",
+            "job": "Fix the bug and say whether it is fixed.",
+            "kind": "agent",
+            "member": "01J0DOT",
+            "name": "Build",
+            "outcomes": [
+              "fixed",
+              "needs_design"
+            ]
+          },
+          {
+            "id": "route",
+            "kind": "branch",
+            "name": "Fixed?",
+            "on": "outcome",
+            "otherwise": [
+              {
+                "can_send_back_to": [
+                  "build"
+                ],
+                "delegate": null,
+                "id": "design",
+                "job": "Propose a design.",
+                "kind": "agent",
+                "member": "01J0DOT2",
+                "name": "Design",
+                "outcomes": []
+              }
+            ],
+            "paths": [
+              {
+                "label": "fixed",
+                "steps": [
+                  {
+                    "id": "review",
+                    "kind": "check",
+                    "name": "Review",
+                    "send_back_to": "build"
+                  },
+                  {
+                    "id": "ship",
+                    "kind": "deploy",
+                    "merge_method": "squash",
+                    "mode": "pr_merge",
+                    "name": "Ship"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "trigger": {
+          "kind": "chat",
+          "starters": [
+            "01J0DOT"
+          ]
+        }
+      },
+      "ended_at": null,
+      "error": null,
+      "id": "01J0WFR3",
+      "origin_run_id": "01J0RUN",
+      "project": {
+        "default_branch": "main",
+        "name": "Dots",
+        "remote": "origin",
+        "repo_path": "C:/Users/u/src/dots"
+      },
+      "project_id": "01J0PRJ",
+      "send_back": {
+        "by": "agent",
+        "from": "design",
+        "held": true,
+        "note": "The icon needs a new shape first.",
+        "to": "build"
+      },
+      "send_backs": 3,
+      "spent_cache_read": 900000,
+      "spent_runs": 3,
+      "spent_tokens": 120000,
+      "started_at": "2026-10-09T12:00:00.000Z",
+      "status": "waiting",
+      "steps": [
+        {
+          "attempt": 1,
+          "decision": null,
+          "deploy_result": null,
+          "ended_at": null,
+          "error": null,
+          "handoff": null,
+          "id": "01J0STP6",
+          "notice": null,
+          "outcome": null,
+          "send_back": {
+            "note": "The icon needs a new shape first.",
+            "to": "build"
+          },
+          "started_at": "2026-10-09T12:00:00.000Z",
+          "status": "waiting",
+          "step_id": "design",
+          "workflow_run_id": "01J0WFR"
+        }
+      ],
+      "task": "The tray icon is invisible on a light taskbar.\nIt shows on a dark one.",
+      "team_id": "01J0TEAM",
+      "test": false,
+      "trigger": "chat",
+      "waiting_on": "send_backs",
+      "workflow_id": "01J0WFL"
+    },
+    {
+      "active_ms": 300000,
+      "budget": {
+        "max_minutes": 120,
+        "max_runs": 10,
+        "max_send_backs": 3,
+        "max_tokens": 1500000
+      },
+      "current_step": "ship",
+      "definition": {
+        "budget": {
+          "max_minutes": 120,
+          "max_runs": 10,
+          "max_send_backs": 3,
+          "max_tokens": 1500000
+        },
+        "steps": [
+          {
+            "can_send_back_to": [],
+            "delegate": {
+              "at_once": 2,
+              "may_start": [
+                "01J0DOT2"
+              ],
+              "total": 4
+            },
+            "id": "build",
+            "job": "Fix the bug and say whether it is fixed.",
+            "kind": "agent",
+            "member": "01J0DOT",
+            "name": "Build",
+            "outcomes": [
+              "fixed",
+              "needs_design"
+            ]
+          },
+          {
+            "id": "route",
+            "kind": "branch",
+            "name": "Fixed?",
+            "on": "outcome",
+            "otherwise": [
+              {
+                "can_send_back_to": [
+                  "build"
+                ],
+                "delegate": null,
+                "id": "design",
+                "job": "Propose a design.",
+                "kind": "agent",
+                "member": "01J0DOT2",
+                "name": "Design",
+                "outcomes": []
+              }
+            ],
+            "paths": [
+              {
+                "label": "fixed",
+                "steps": [
+                  {
+                    "id": "review",
+                    "kind": "check",
+                    "name": "Review",
+                    "send_back_to": "build"
+                  },
+                  {
+                    "id": "ship",
+                    "kind": "deploy",
+                    "merge_method": "squash",
+                    "mode": "pr_merge",
+                    "name": "Ship"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "trigger": {
+          "kind": "chat",
+          "starters": [
+            "01J0DOT"
+          ]
+        }
+      },
+      "ended_at": null,
+      "error": "Ship: gh: could not create the pull request",
+      "id": "01J0WFR4",
+      "origin_run_id": null,
+      "project": {
+        "default_branch": "main",
+        "name": "Dots",
+        "remote": "origin",
+        "repo_path": "C:/Users/u/src/dots"
+      },
+      "project_id": "01J0PRJ",
+      "send_back": null,
+      "send_backs": 0,
+      "spent_cache_read": 900000,
+      "spent_runs": 3,
+      "spent_tokens": 120000,
+      "started_at": "2026-10-09T12:00:00.000Z",
+      "status": "waiting",
+      "steps": [
+        {
+          "attempt": 1,
+          "decision": null,
+          "deploy_result": {
+            "branches": [
+              {
+                "auto_merge": false,
+                "branch": "dots/nightly-tests/01J0RUN5",
+                "commit": "2222222222222222222222222222222222222222",
+                "pr_url": null,
+                "pushed": true
+              },
+              {
+                "auto_merge": false,
+                "branch": "dots/reviewer/01J0RUN6",
+                "commit": "3333333333333333333333333333333333333333",
+                "pr_url": null,
+                "pushed": false
+              }
+            ],
+            "error": "gh: could not create the pull request",
+            "ready": false
+          },
+          "ended_at": "2026-10-09T12:00:00.000Z",
+          "error": "gh: could not create the pull request",
+          "handoff": null,
+          "id": "01J0STP7",
+          "notice": null,
+          "outcome": null,
+          "send_back": null,
+          "started_at": "2026-10-09T12:00:00.000Z",
+          "status": "failed",
+          "step_id": "ship",
+          "workflow_run_id": "01J0WFR"
+        }
+      ],
+      "task": "The tray icon is invisible on a light taskbar.\nIt shows on a dark one.",
+      "team_id": "01J0TEAM",
+      "test": true,
+      "trigger": "manual",
+      "waiting_on": "step_failed",
+      "workflow_id": "01J0WFL"
+    },
+    {
+      "active_ms": 300000,
+      "budget": {
+        "max_minutes": 120,
+        "max_runs": 3,
+        "max_send_backs": 3,
+        "max_tokens": 1500000
+      },
+      "current_step": "keep",
+      "definition": {
+        "budget": {
+          "max_minutes": 120,
+          "max_runs": 10,
+          "max_send_backs": 3,
+          "max_tokens": 1500000
+        },
+        "steps": [
+          {
+            "can_send_back_to": [],
+            "delegate": null,
+            "id": "work",
+            "job": "Do the task.",
+            "kind": "agent",
+            "member": "01J0DOT",
+            "name": "Work",
+            "outcomes": []
+          },
+          {
+            "id": "check",
+            "kind": "check",
+            "name": "Review",
+            "send_back_to": null
+          },
+          {
+            "id": "by-project",
+            "kind": "branch",
+            "name": "Which project",
+            "on": "project",
+            "otherwise": [],
+            "paths": [
+              {
+                "label": "Dots",
+                "steps": [
+                  {
+                    "id": "pr",
+                    "kind": "deploy",
+                    "mode": "pr",
+                    "name": "Ship"
+                  }
+                ]
+              },
+              {
+                "label": "Site",
+                "steps": [
+                  {
+                    "id": "keep",
+                    "kind": "deploy",
+                    "mode": "branch",
+                    "name": "Ship"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "trigger": {
+          "kind": "schedule",
+          "project": "Dots",
+          "schedule": {
+            "catch_up": false,
+            "rule": {
+              "kind": "daily",
+              "time": "09:00"
+            },
+            "until": null
+          },
+          "task": "Update the dependencies."
+        }
+      },
+      "ended_at": null,
+      "error": null,
+      "id": "01J0WFR5",
+      "origin_run_id": null,
+      "project": {
+        "default_branch": null,
+        "name": "Site",
+        "remote": "upstream",
+        "repo_path": "C:/Users/u/src/site"
+      },
+      "project_id": null,
+      "send_back": null,
+      "send_backs": 0,
+      "spent_cache_read": 900000,
+      "spent_runs": 3,
+      "spent_tokens": 120000,
+      "started_at": "2026-10-09T12:00:00.000Z",
+      "status": "waiting",
+      "steps": [
+        {
+          "attempt": 1,
+          "decision": null,
+          "deploy_result": {
+            "branches": [
+              {
+                "auto_merge": false,
+                "branch": "dots/nightly-tests/01J0RUN5",
+                "commit": "2222222222222222222222222222222222222222",
+                "pr_url": null,
+                "pushed": false
+              }
+            ],
+            "ready": true
+          },
+          "ended_at": "2026-10-09T12:00:00.000Z",
+          "error": null,
+          "handoff": null,
+          "id": "01J0STP8",
+          "notice": null,
+          "outcome": null,
+          "send_back": null,
+          "started_at": "2026-10-09T12:00:00.000Z",
+          "status": "succeeded",
+          "step_id": "keep",
+          "workflow_run_id": "01J0WFR"
+        }
+      ],
+      "task": "The tray icon is invisible on a light taskbar.\nIt shows on a dark one.",
+      "team_id": "01J0TEAM",
+      "test": false,
+      "trigger": "manual",
+      "waiting_on": "budget",
+      "workflow_id": null
+    }
+  ],
+  "WorkflowRunFilter": [
+    {
+      "limit": 20,
+      "statuses": [
+        "running",
+        "waiting"
+      ],
+      "team_id": "01J0TEAM",
+      "workflow_id": "01J0WFL"
+    },
+    {
+      "limit": null,
+      "statuses": [],
+      "team_id": null,
+      "workflow_id": null
+    }
+  ],
+  "WorkflowSpec": [
+    {
+      "definition": {
+        "budget": {
+          "max_minutes": 120,
+          "max_runs": 10,
+          "max_send_backs": 3,
+          "max_tokens": 1500000
+        },
+        "steps": [
+          {
+            "can_send_back_to": [],
+            "delegate": {
+              "at_once": 2,
+              "may_start": [
+                "01J0DOT2"
+              ],
+              "total": 4
+            },
+            "id": "build",
+            "job": "Fix the bug and say whether it is fixed.",
+            "kind": "agent",
+            "member": "01J0DOT",
+            "name": "Build",
+            "outcomes": [
+              "fixed",
+              "needs_design"
+            ]
+          },
+          {
+            "id": "route",
+            "kind": "branch",
+            "name": "Fixed?",
+            "on": "outcome",
+            "otherwise": [
+              {
+                "can_send_back_to": [
+                  "build"
+                ],
+                "delegate": null,
+                "id": "design",
+                "job": "Propose a design.",
+                "kind": "agent",
+                "member": "01J0DOT2",
+                "name": "Design",
+                "outcomes": []
+              }
+            ],
+            "paths": [
+              {
+                "label": "fixed",
+                "steps": [
+                  {
+                    "id": "review",
+                    "kind": "check",
+                    "name": "Review",
+                    "send_back_to": "build"
+                  },
+                  {
+                    "id": "ship",
+                    "kind": "deploy",
+                    "merge_method": "squash",
+                    "mode": "pr_merge",
+                    "name": "Ship"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "trigger": {
+          "kind": "chat",
+          "starters": [
+            "01J0DOT"
+          ]
+        }
+      },
+      "enabled": true,
+      "name": "Fix and ship"
+    },
+    {
+      "definition": {
+        "budget": {
+          "max_minutes": 30,
+          "max_runs": 4,
+          "max_send_backs": 1,
+          "max_tokens": 200000
+        },
+        "steps": [
+          {
+            "can_send_back_to": [],
+            "delegate": null,
+            "id": "work",
+            "job": "Do the task.",
+            "kind": "agent",
+            "member": "01J0GONE",
+            "name": "Work",
+            "outcomes": []
+          },
+          {
+            "id": "check",
+            "kind": "check",
+            "name": "Review",
+            "send_back_to": null
+          },
+          {
+            "id": "push",
+            "kind": "deploy",
+            "mode": "push",
+            "name": "Ship"
+          }
+        ],
+        "trigger": {
+          "kind": "manual"
+        }
+      },
+      "enabled": false,
+      "name": "Push it"
+    },
+    {
+      "definition": {
+        "budget": {
+          "max_minutes": 120,
+          "max_runs": 10,
+          "max_send_backs": 3,
+          "max_tokens": 1500000
+        },
+        "steps": [
+          {
+            "can_send_back_to": [],
+            "delegate": null,
+            "id": "work",
+            "job": "Do the task.",
+            "kind": "agent",
+            "member": "01J0DOT",
+            "name": "Work",
+            "outcomes": []
+          },
+          {
+            "id": "check",
+            "kind": "check",
+            "name": "Review",
+            "send_back_to": null
+          },
+          {
+            "id": "by-project",
+            "kind": "branch",
+            "name": "Which project",
+            "on": "project",
+            "otherwise": [],
+            "paths": [
+              {
+                "label": "Dots",
+                "steps": [
+                  {
+                    "id": "pr",
+                    "kind": "deploy",
+                    "mode": "pr",
+                    "name": "Ship"
+                  }
+                ]
+              },
+              {
+                "label": "Site",
+                "steps": [
+                  {
+                    "id": "keep",
+                    "kind": "deploy",
+                    "mode": "branch",
+                    "name": "Ship"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "trigger": {
+          "kind": "schedule",
+          "project": "Dots",
+          "schedule": {
+            "catch_up": false,
+            "rule": {
+              "kind": "daily",
+              "time": "09:00"
+            },
+            "until": null
+          },
+          "task": "Update the dependencies."
+        }
+      },
+      "enabled": true,
+      "name": "Nightly"
+    },
+    {
+      "definition": {
+        "budget": {
+          "max_minutes": 120,
+          "max_runs": 10,
+          "max_send_backs": 3,
+          "max_tokens": 1500000
+        },
+        "steps": [
+          {
+            "can_send_back_to": [],
+            "delegate": null,
+            "id": "work",
+            "job": "Do the task.",
+            "kind": "agent",
+            "member": "01J0DOT",
+            "name": "Work",
+            "outcomes": []
+          },
+          {
+            "id": "check",
+            "kind": "check",
+            "name": "Review",
+            "send_back_to": null
+          },
+          {
+            "id": "release",
+            "job": "Release what was approved.",
+            "kind": "deploy",
+            "member": "01J0DOT2",
+            "mode": "member",
+            "name": "Ship"
+          }
+        ],
+        "trigger": {
+          "kind": "webhook",
+          "project": null,
+          "task": "Look at the newest issue."
+        }
+      },
+      "enabled": true,
+      "name": "On issue"
     }
   ],
   "WorkspaceView": [

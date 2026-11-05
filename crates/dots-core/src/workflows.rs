@@ -9,11 +9,13 @@
 //! loop's lock (`jobs`). A delegate step's run may start other members, whose results continue
 //! it (`delegate`). A check or an agent step may send the work back to an earlier agent step,
 //! which goes on where it left off (`send_back`). A deploy step ships the branches its check
-//! approved (`deploy_step`), at the tips the person was shown (`check`).
+//! approved (`deploy_step`), at the tips the person was shown (`check`). "Open folder" finds a
+//! project's folder and a ready branch's worktree by id (`folder`).
 
 mod check;
 mod delegate;
 mod deploy_step;
+mod folder;
 mod jobs;
 mod send_back;
 mod tools;

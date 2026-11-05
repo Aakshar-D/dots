@@ -44,6 +44,8 @@ use crate::error::{CmdError, CmdErrorKind};
 use crate::state::StartupError;
 use crate::update::UpdateNote;
 
+mod teams;
+
 const TS: &str = "2026-10-09T12:00:00.000Z";
 
 /// How the core refuses a Viewer in the Platform workspace of Acme Engineering.
@@ -1475,6 +1477,7 @@ pub fn samples() -> Value {
     ]);
     samples["Enums"]["EntryKind"] = to(EntryKind::ALL);
     apps_samples(&mut samples);
+    teams::teams_samples(&mut samples);
     samples["InstructionProposal"] = to(dots_core::instructions::InstructionStatus::ALL
         .iter()
         .enumerate()

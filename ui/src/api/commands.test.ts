@@ -308,6 +308,127 @@ describe("commands", () => {
     expect((await failure(commands.environmentVariables(["A"]))).kind).toBe("internal");
   });
 
+  it("sends the team, project and workflow commands as the core names them", async () => {
+    const team = T.TeamSpec.parse(fixture.TeamSpec);
+    const project = T.ProjectSpec.parse(fixture.ProjectSpec[0]);
+    const spec = T.WorkflowSpec.parse(fixture.WorkflowSpec[0]);
+    reply = async () => fixture.Team;
+    expect(await commands.teamsList()).toEqual(fixture.Team);
+    reply = async () => fixture.Team[0];
+    await commands.teamGet("t1");
+    await commands.teamCreate(team);
+    await commands.teamUpdate("t1", team);
+    reply = async () => null;
+    expect(await commands.teamDelete("t1")).toBeNull();
+    reply = async () => fixture.Project;
+    await commands.projectAdd("t1", project);
+    await commands.projectUpdate("p1", project);
+    reply = async () => null;
+    await commands.projectDelete("p1");
+    await commands.openProjectFolder("p1");
+    await commands.openBranchFolder("w1", "dots/dev/01J0RUN");
+    reply = async () => fixture.Workflow;
+    expect(await commands.workflowsList("t1")).toEqual(fixture.Workflow);
+    reply = async () => fixture.Workflow[0];
+    await commands.workflowGet("f1");
+    await commands.workflowCreate("t1", spec);
+    await commands.workflowUpdate("f1", spec);
+    reply = async () => null;
+    await commands.workflowDelete("f1");
+    expect(await commands.workflowCheckSpec("t1", spec)).toBeNull();
+    reply = async () => fixture.WorkflowProblem[0];
+    expect(await commands.workflowCheckSpec("t1", spec)).toEqual(fixture.WorkflowProblem[0]);
+    reply = async () => "http://127.0.0.1:47321/workflows/f1/trigger";
+    expect(await commands.workflowWebhookUrl("f1")).toBe(
+      "http://127.0.0.1:47321/workflows/f1/trigger",
+    );
+    reply = async () => "token";
+    expect(await commands.regenerateWorkflowToken("f1")).toBe("token");
+    expect(calls).toEqual([
+      ["teams_list", undefined],
+      ["team_get", { id: "t1" }],
+      ["team_create", { spec: team }],
+      ["team_update", { id: "t1", spec: team }],
+      ["team_delete", { id: "t1" }],
+      ["project_add", { teamId: "t1", spec: project }],
+      ["project_update", { id: "p1", spec: project }],
+      ["project_delete", { id: "p1" }],
+      ["open_project_folder", { projectId: "p1", workflowRunId: null, branch: null }],
+      [
+        "open_project_folder",
+        { projectId: null, workflowRunId: "w1", branch: "dots/dev/01J0RUN" },
+      ],
+      ["workflows_list", { teamId: "t1" }],
+      ["workflow_get", { id: "f1" }],
+      ["workflow_create", { teamId: "t1", spec }],
+      ["workflow_update", { id: "f1", spec }],
+      ["workflow_delete", { id: "f1" }],
+      ["workflow_check_spec", { teamId: "t1", spec }],
+      ["workflow_check_spec", { teamId: "t1", spec }],
+      ["workflow_webhook_url", { id: "f1" }],
+      ["regenerate_workflow_token", { id: "f1" }],
+    ]);
+  });
+
+  it("sends the workflow run commands as the core names them, with the tips the check showed", async () => {
+    const tips = T.CheckTip.array().parse(fixture.CheckTip);
+    reply = async () => fixture.WorkflowRun;
+    expect(await commands.workflowRunsList({ team_id: "t1", statuses: ["waiting"] })).toEqual(
+      fixture.WorkflowRun,
+    );
+    await commands.workflowRunsList({});
+    await commands.workflowRunsForOrigins(["r1", "r2"]);
+    reply = async () => fixture.WorkflowRun[0];
+    await commands.workflowRunGet("w1");
+    await commands.workflowRunStart("f1", "p1", "Fix the icon.", false);
+    await commands.workflowRunStart("f1", "p1", "Fix the icon.", true);
+    reply = async () => fixture.CheckView;
+    expect(await commands.workflowCheck("w1")).toEqual(fixture.CheckView);
+    reply = async () => fixture.WorktreeDiff;
+    expect(await commands.workflowBranchDiff("w1", "dots/dev/01J0RUN", "abc")).toEqual(
+      fixture.WorktreeDiff,
+    );
+    reply = async () => fixture.WorkflowRun[1];
+    await commands.workflowApprove("w1", null, tips);
+    await commands.workflowApprove("w1", "Looks right.", []);
+    await commands.workflowSendBack("w1", "Keep the old icon.");
+    await commands.workflowAddBudget("w1");
+    await commands.workflowAllowSendBack("w1");
+    await commands.workflowRetryStep("w1");
+    await commands.workflowStop("w1");
+    expect(calls).toEqual([
+      ["workflow_runs_list", { filter: { team_id: "t1", statuses: ["waiting"] } }],
+      ["workflow_runs_list", { filter: {} }],
+      ["workflow_runs_for_origins", { runIds: ["r1", "r2"] }],
+      ["workflow_run_get", { id: "w1" }],
+      [
+        "workflow_run_start",
+        { workflowId: "f1", projectId: "p1", task: "Fix the icon.", test: false },
+      ],
+      [
+        "workflow_run_start",
+        { workflowId: "f1", projectId: "p1", task: "Fix the icon.", test: true },
+      ],
+      ["workflow_check", { id: "w1" }],
+      ["workflow_branch_diff", { id: "w1", branch: "dots/dev/01J0RUN", commit: "abc" }],
+      ["workflow_approve", { id: "w1", note: null, tips }],
+      ["workflow_approve", { id: "w1", note: "Looks right.", tips: [] }],
+      ["workflow_send_back", { id: "w1", note: "Keep the old icon." }],
+      ["workflow_add_budget", { id: "w1" }],
+      ["workflow_allow_send_back", { id: "w1" }],
+      ["workflow_retry_step", { id: "w1" }],
+      ["workflow_stop", { id: "w1" }],
+    ]);
+    // A gone branch is sent as null, the way the check showed it.
+    expect(tips.map((t) => t.commit)).toContain(null);
+  });
+
+  it("refuses a workflow run in a shape it does not know", async () => {
+    const [run] = fixture.WorkflowRun;
+    reply = async () => ({ ...run, steps: [{ ...run.steps[0], extra: 1 }] });
+    expect((await failure(commands.workflowRunGet("w1"))).kind).toBe("internal");
+  });
+
   it("invokes exactly the commands the app registers", async () => {
     // A wrapper calls `invoke` before it first waits, so calling each one without arguments
     // lists the names with no backend. Their answers, mostly rejections here, do not matter.

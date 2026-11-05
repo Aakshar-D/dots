@@ -78,6 +78,17 @@ const schemas: Record<SampleName, { parse: (v: unknown) => unknown }> = {
   ApiKeyView: T.ApiKeyView.array(),
   CreatedApiKey: T.CreatedApiKey,
   RosterEdit: T.RosterEdit.array(),
+  Team: T.Team.array(),
+  TeamSpec: T.TeamSpec,
+  Project: T.Project,
+  ProjectSpec: T.ProjectSpec.array(),
+  WorkflowSpec: T.WorkflowSpec.array(),
+  Workflow: T.Workflow.array(),
+  WorkflowProblem: T.WorkflowProblem.array(),
+  WorkflowRunFilter: T.WorkflowRunFilter.array(),
+  WorkflowRun: T.WorkflowRun.array(),
+  CheckView: T.CheckView,
+  CheckTip: T.CheckTip.array(),
 };
 
 // The UI parses live data with these schemas, so it must know every variant the core has.
@@ -107,6 +118,9 @@ const enums: Record<keyof typeof fixture.Enums, { options: readonly string[] }> 
   FolderEvent: T.FolderEvent,
   GithubEvent: T.GithubEvent,
   WaitingOn: T.WaitingOn,
+  WorkflowTrigger: T.WorkflowTrigger,
+  WorkflowRunStatus: T.WorkflowRunStatus,
+  StepRunStatus: T.StepRunStatus,
   GrantState: T.GrantState,
   ValueSource: T.ValueSource,
   PersonalMode: T.PersonalMode,

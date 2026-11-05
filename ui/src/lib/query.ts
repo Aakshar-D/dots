@@ -1,7 +1,13 @@
 import { QueryClient, useIsMutating, type QueryKey } from "@tanstack/react-query";
 
 import { commands } from "@/api/commands";
-import type { RunEventRecord, Schedule, Status } from "@/api/types";
+import type {
+  RunEventRecord,
+  Schedule,
+  Status,
+  WorkflowRunFilter,
+  WorkflowSpec,
+} from "@/api/types";
 
 /// Data stays fresh until a runtime event or a mutation marks it stale (lib/runtime-events.ts):
 /// the backend tells the UI when something changed, so nothing polls.
@@ -91,6 +97,28 @@ export const keys = {
   releasesPage: ["releases-page"] as const,
   releaseNotes: (version: string) => ["release-notes", version] as const,
   usage: (period: string) => ["usage", period] as const,
+  /// Every team, and below it each team with its members and projects.
+  teams: ["teams"] as const,
+  team: (id: string) => ["teams", id] as const,
+  /// A team's workflows, and one workflow. Both say what runs in flight and the last run, which
+  /// change with a workflow run as well.
+  workflows: (teamId: string) => ["workflows", teamId] as const,
+  workflow: (id: string) => ["workflow", id] as const,
+  /// The builder's live check of its draft, which reads the team's members.
+  workflowProblem: (teamId: string, spec: WorkflowSpec) =>
+    ["workflow-problem", teamId, spec] as const,
+  workflowWebhookUrl: (id: string) => ["workflow-webhook-url", id] as const,
+  /// Lists of workflow runs: by filter (the team page), and the runs chat runs started (a
+  /// conversation's cards). Any workflow run event marks them all stale.
+  workflowRuns: (filter: Partial<WorkflowRunFilter>) =>
+    ["workflow-runs", "list", filter] as const,
+  workflowRunsForOrigins: (runIds: string[]) => ["workflow-runs", "origins", runIds] as const,
+  /// A workflow run, and below it what its check shows and a branch's diff: its event marks them
+  /// stale.
+  workflowRun: (id: string) => ["workflow-run", id] as const,
+  workflowCheck: (id: string) => ["workflow-run", id, "check"] as const,
+  workflowBranchDiff: (id: string, branch: string, commit: string) =>
+    ["workflow-run", id, "diff", branch, commit] as const,
 };
 
 type DotSwitch = { id: string; enabled: boolean };

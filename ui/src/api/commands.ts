@@ -427,4 +427,69 @@ export const commands = {
   limitsGet: () => call(T.LimitsState, "limits_get"),
   usageSummary: (period: T.UsagePeriod) => call(T.UsageSummary, "usage_summary", { period }),
   runReleaseHold: (runId: string) => call(T.Run, "run_release_hold", { runId }),
+
+  // Teams, their projects and workflows (teams spec section 10). A refusal carries the core's
+  // sentence: kind `invalid` for a rule broken, `conflict` for a taken name or a state that
+  // moved on, `not_allowed` for a role that may not.
+  teamsList: () => call(T.Team.array(), "teams_list"),
+  teamGet: (id: string) => call(T.Team, "team_get", { id }),
+  teamCreate: (spec: T.TeamSpec) => call(T.Team, "team_create", { spec }),
+  teamUpdate: (id: string, spec: T.TeamSpec) => call(T.Team, "team_update", { id, spec }),
+  /// Stops the team's runs in flight, then deletes it with its projects and workflows.
+  teamDelete: (id: string) => call(nothing, "team_delete", { id }),
+  /// Rejects with kind `invalid` when the folder is not a git repo.
+  projectAdd: (teamId: string, spec: T.ProjectSpec) =>
+    call(T.Project, "project_add", { teamId, spec }),
+  projectUpdate: (id: string, spec: T.ProjectSpec) =>
+    call(T.Project, "project_update", { id, spec }),
+  projectDelete: (id: string) => call(nothing, "project_delete", { id }),
+  /// Opens the project's repo folder in Explorer. Rejects with kind `not_found` once it is gone.
+  openProjectFolder: (projectId: string) =>
+    call(nothing, "open_project_folder", { projectId, workflowRunId: null, branch: null }),
+  /// Opens the worktree of a branch the workflow run's deploy listed as ready.
+  openBranchFolder: (workflowRunId: string, branch: string) =>
+    call(nothing, "open_project_folder", { projectId: null, workflowRunId, branch }),
+  workflowsList: (teamId: string) => call(T.Workflow.array(), "workflows_list", { teamId }),
+  workflowGet: (id: string) => call(T.Workflow, "workflow_get", { id }),
+  workflowCreate: (teamId: string, spec: T.WorkflowSpec) =>
+    call(T.Workflow, "workflow_create", { teamId, spec }),
+  /// Saves the builder's draft; runs in flight keep the definition they started with.
+  workflowUpdate: (id: string, spec: T.WorkflowSpec) =>
+    call(T.Workflow, "workflow_update", { id, spec }),
+  workflowDelete: (id: string) => call(nothing, "workflow_delete", { id }),
+  /// The builder's live check: the first refusal a save would give, or null.
+  workflowCheckSpec: (teamId: string, spec: T.WorkflowSpec) =>
+    call(T.WorkflowProblem.nullable(), "workflow_check_spec", { teamId, spec }),
+  /// Rejects with kind `conflict` while the local server is not running.
+  workflowWebhookUrl: (id: string) => call(text, "workflow_webhook_url", { id }),
+  /// A new token, shown this once; the old one stops working.
+  regenerateWorkflowToken: (id: string) => call(text, "regenerate_workflow_token", { id }),
+
+  // Workflow runs (teams spec sections 5 to 10).
+  /// Newest first; a field left out of `filter` does not narrow the list.
+  workflowRunsList: (filter: Partial<T.WorkflowRunFilter>) =>
+    call(T.WorkflowRun.array(), "workflow_runs_list", { filter }),
+  /// The runs the chat runs `runIds` started, oldest first: a conversation's cards.
+  workflowRunsForOrigins: (runIds: string[]) =>
+    call(T.WorkflowRun.array(), "workflow_runs_for_origins", { runIds }),
+  workflowRunGet: (id: string) => call(T.WorkflowRun, "workflow_run_get", { id }),
+  /// "Run now", or "Test run" with `test`: its deploys push nothing.
+  workflowRunStart: (workflowId: string, projectId: string, task: string, test: boolean) =>
+    call(T.WorkflowRun, "workflow_run_start", { workflowId, projectId, task, test }),
+  /// What the check the run waits on shows. Rejects with kind `conflict` when it waits on none.
+  workflowCheck: (id: string) => call(T.CheckView, "workflow_check", { id }),
+  /// A branch's committed work from the project's default branch, at `commit`.
+  workflowBranchDiff: (id: string, branch: string, commit: string) =>
+    call(T.WorktreeDiff, "workflow_branch_diff", { id, branch, commit }),
+  /// Approves with the tips the check showed. Rejects with kind `conflict` when a branch moved
+  /// since: the check is read again.
+  workflowApprove: (id: string, note: string | null, tips: T.CheckTip[]) =>
+    call(T.WorkflowRun, "workflow_approve", { id, note, tips }),
+  workflowSendBack: (id: string, note: string) =>
+    call(T.WorkflowRun, "workflow_send_back", { id, note }),
+  workflowAddBudget: (id: string) => call(T.WorkflowRun, "workflow_add_budget", { id }),
+  /// Lets the send-back held at the cap go on.
+  workflowAllowSendBack: (id: string) => call(T.WorkflowRun, "workflow_allow_send_back", { id }),
+  workflowRetryStep: (id: string) => call(T.WorkflowRun, "workflow_retry_step", { id }),
+  workflowStop: (id: string) => call(T.WorkflowRun, "workflow_stop", { id }),
 };
