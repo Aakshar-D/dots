@@ -20,6 +20,9 @@ export const sample = {
   library: T.LibraryEntry.array().parse(contract.LibraryEntry),
   /// The same items without the extras of a list entry: what `library_add` answers.
   libraryItems: T.LibraryItem.array().parse(contract.LibraryItem),
+  /// Every connector: Gmail and Linear connected, GitHub failing, Notion needing sign-in, Slack's
+  /// name taken, the Google ones coming soon, the rest not connected.
+  connectors: T.ConnectorEntry.array().parse(contract.ConnectorEntry),
   scannedSkills: T.ScannedSkill.array().parse(contract.ScannedSkill),
   contextDocuments: T.ContextDocuments.parse(contract.ContextDocuments),
   installedPlugins: T.InstalledPlugin.array().parse(contract.InstalledPlugin),
@@ -187,6 +190,9 @@ export function installDefaults(): void {
   // Neither Microsoft Edge nor Node.js was found.
   backend.on("browser_status", () => ({ edge: null, npx: null }));
   backend.on("library_list", () => []);
+  backend.on("connector_list", () => sample.connectors);
+  // Node.js is new enough for every connector that needs it.
+  backend.on("connector_runtime", () => ({ needed: null, found: null, ok: true }));
   backend.on("installed_claude_plugins", () => []);
   backend.on("environment_variables", (args) =>
     (args.names as string[]).map((name) => ({ name, set: true })),

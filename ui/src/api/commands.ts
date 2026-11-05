@@ -358,6 +358,19 @@ export const commands = {
   markReviewed: (runId: string) => call(T.Run, "mark_reviewed", { runId }),
   openRunFolder: (runId: string) => call(nothing, "open_run_folder", { runId }),
 
+  // Connectors (connectors spec §6).
+  connectorList: () => call(T.ConnectorEntry.array(), "connector_list"),
+  connectorRuntime: (id: string) => call(T.RuntimeCheck, "connector_runtime", { id }),
+  connectorOpenPage: (id: string, page: "instructions" | "source" | "runtime") =>
+    call(nothing, "connector_open_page", { id, page }),
+  connectorConnect: (id: string, values: Record<string, string>, dotIds: string[]) =>
+    call(T.ConnectorEntry, "connector_connect", { id, values, dotIds }),
+  connectorSignIn: (id: string, dotIds: string[]) =>
+    call(T.ConnectorEntry, "connector_sign_in", { id, dotIds }),
+  connectorSignInCancel: (id: string) => call(nothing, "connector_sign_in_cancel", { id }),
+  connectorSetDots: (id: string, dotIds: string[]) =>
+    call(T.ConnectorEntry, "connector_set_dots", { id, dotIds }),
+  connectorDisconnect: (id: string) => call(T.ConnectorEntry, "connector_disconnect", { id }),
   libraryList: () => call(T.LibraryEntry.array(), "library_list"),
   /// `accept`: the fingerprint `libraryProbe` answered. The list the server gives now is accepted
   /// only when it has that fingerprint; with `null` a server is saved unchecked and not started.

@@ -108,6 +108,8 @@ const schemas: Record<SampleName, { parse: (v: unknown) => unknown }> = {
   ApiKeyView: T.ApiKeyView.array(),
   CreatedApiKey: T.CreatedApiKey,
   RosterEdit: T.RosterEdit.array(),
+  ConnectorEntry: T.ConnectorEntry.array(),
+  RuntimeCheck: T.RuntimeCheck.array(),
 };
 
 // The UI parses live data with these schemas, so it must know every variant the core has.
@@ -147,6 +149,10 @@ const enums: Record<keyof typeof fixture.Enums, { options: readonly string[] }> 
   InviteState: T.InviteState,
   WorkspaceRole: T.WorkspaceRole,
   InboxKind: T.InboxKind,
+  ConnectorState: T.ConnectorState,
+  AuthKind: T.AuthKind,
+  Trust: T.Trust,
+  Category: T.Category,
 };
 
 describe("Rust/TypeScript contract", () => {

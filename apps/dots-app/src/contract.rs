@@ -1711,6 +1711,7 @@ pub fn samples() -> Value {
         },
     ]);
     samples["Enums"]["EntryKind"] = to(EntryKind::ALL);
+    connector_samples(&mut samples);
     apps_samples(&mut samples);
     samples["InstructionProposal"] = to(dots_core::instructions::InstructionStatus::ALL
         .iter()
@@ -2752,6 +2753,84 @@ fn source_creds() -> Value {
         .map(|v| serde_json::from_value(v).expect("sample sign-in details"))
         .collect();
     to(read)
+}
+
+/// Every connector of the catalog, in every state the screen shows, and the runtime checks.
+fn connector_samples(samples: &mut Value) {
+    use dots_core::connectors::{
+        catalog, AuthKind, Category, ConnectorEntry, ConnectorState, RuntimeCheck, Trust,
+    };
+    let dot = DotRef {
+        id: "01J0DOT".into(),
+        name: "nightly-tests".into(),
+    };
+    let entries: Vec<ConnectorEntry> = catalog()
+        .into_iter()
+        .map(|connector| {
+            let (state, error) = match connector.id.as_str() {
+                _ if connector.auth == AuthKind::ComingSoon => (ConnectorState::ComingSoon, None),
+                "gmail" | "linear" => (ConnectorState::Connected, None),
+                "github" => (
+                    ConnectorState::Error,
+                    Some("the server answered HTTP 401 Unauthorized".to_string()),
+                ),
+                "notion" => (
+                    ConnectorState::NeedsSignIn,
+                    Some("Notion needs you to sign in again.".to_string()),
+                ),
+                "slack" => (
+                    ConnectorState::NameTaken,
+                    Some("The Library already has an MCP server named slack of your own.".into()),
+                ),
+                _ => (ConnectorState::NotConnected, None),
+            };
+            let connected = !matches!(
+                state,
+                ConnectorState::NotConnected
+                    | ConnectorState::ComingSoon
+                    | ConnectorState::NameTaken
+            );
+            ConnectorEntry {
+                server_id: connected.then(|| format!("01J0C{}", connector.id.len())),
+                used_by: if connected { vec![dot.clone()] } else { vec![] },
+                tools: connected.then_some(12),
+                catalog_status: connected.then_some(if state == ConnectorState::Error {
+                    CatalogStatus::Unreachable
+                } else {
+                    CatalogStatus::Accepted
+                }),
+                state,
+                error,
+                connector,
+            }
+        })
+        .collect();
+    samples["ConnectorEntry"] = to(entries);
+    let node = catalog()
+        .into_iter()
+        .find_map(|c| c.runtime)
+        .expect("a connector needs Node.js");
+    samples["RuntimeCheck"] = to([
+        RuntimeCheck {
+            needed: None,
+            found: None,
+            ok: true,
+        },
+        RuntimeCheck {
+            needed: Some(node.clone()),
+            found: Some("v24.18.0".into()),
+            ok: true,
+        },
+        RuntimeCheck {
+            needed: Some(node),
+            found: None,
+            ok: false,
+        },
+    ]);
+    samples["Enums"]["ConnectorState"] = to(ConnectorState::ALL);
+    samples["Enums"]["AuthKind"] = to(AuthKind::ALL);
+    samples["Enums"]["Trust"] = to(Trust::ALL);
+    samples["Enums"]["Category"] = to(Category::ALL);
 }
 
 #[cfg(test)]

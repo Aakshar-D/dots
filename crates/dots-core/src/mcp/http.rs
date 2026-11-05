@@ -156,6 +156,9 @@ impl Inner {
             self.peer.stop();
             return Err(McpError::Stopped);
         }
+        if status == StatusCode::UNAUTHORIZED {
+            return Err(McpError::Unauthorized);
+        }
         if !status.is_success() {
             return Err(McpError::Protocol(format!(
                 "the server answered HTTP {status}"

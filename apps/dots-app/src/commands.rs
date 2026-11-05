@@ -23,6 +23,7 @@ use dots_core::apps::wake::RunLink;
 use dots_core::apps::AppCall;
 use dots_core::browser::BrowserStatus;
 use dots_core::claude_agents::{AgentImport, ScannedAgent};
+use dots_core::connectors::{self, ConnectorEntry, RuntimeCheck};
 use dots_core::inbox::InboxKey;
 use dots_core::intents::{IntentFields, IntentsView};
 use dots_core::kit::InstalledPlugin;
@@ -1231,6 +1232,119 @@ pub async fn open_run_folder(
     app.opener()
         .open_path(path.to_string_lossy(), None::<&str>)
         .map_err(|e| CmdError::internal(format!("could not open {}: {e}", path.display())))
+}
+
+/// Every connector with its state (connectors spec §6). No value, token or grant is in it.
+#[tauri::command]
+pub async fn connector_list(state: State<'_, AppState>) -> Res<Vec<ConnectorEntry>> {
+    Ok(state.rt()?.connectors().await?)
+}
+
+/// Whether this PC has the program a stdio connector needs (Node.js).
+#[tauri::command]
+pub async fn connector_runtime(id: String) -> Res<RuntimeCheck> {
+    let connector = connectors::find(&id)
+        .ok_or_else(|| dots_core::Error::NotFound(format!("no connector named {id}")))?;
+    Ok(connectors::runtime_check(&connector).await)
+}
+
+/// Opens a connector's page in the browser: its instructions (`instructions`), its maker's
+/// code or guide (`source`), or where to get the program it needs (`runtime`). The address is
+/// the catalog's, so the webview cannot open one of its own.
+#[tauri::command]
+pub fn connector_open_page(app: AppHandle, id: String, page: String) -> Res<()> {
+    let connector = connectors::find(&id)
+        .ok_or_else(|| dots_core::Error::NotFound(format!("no connector named {id}")))?;
+    let url = match page.as_str() {
+        "instructions" => connector.instructions.open_url.clone(),
+        "source" => connector.source_url.clone(),
+        "runtime" => connector
+            .runtime
+            .as_ref()
+            .map(|r| r.download_url.clone())
+            .ok_or_else(|| invalid("this connector needs no program"))?,
+        _ => return Err(invalid("unknown page")),
+    };
+    app.opener()
+        .open_url(&url, None::<&str>)
+        .map_err(|e| CmdError::internal(format!("could not open {url}: {e}")))
+}
+
+/// Connects a key connector with `values` (field key to text) and gives it to the Personal
+/// dots `dot_ids`. The values are checked first; then the Library's question is asked in a
+/// native dialog (`confirm::connector_confirmed`), and a refusal answers `cancelled` with
+/// nothing stored or run.
+#[tauri::command]
+pub async fn connector_connect(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    values: std::collections::BTreeMap<String, String>,
+    dot_ids: Vec<String>,
+) -> Res<ConnectorEntry> {
+    let rt = state.rt()?;
+    let (connector, config) = connectors::plan(&id, connectors::AuthKind::Key)?;
+    connectors::check_values(&connector, &values)?;
+    confirm::connector_confirmed(&rt, &connector, config, |title, message| {
+        confirm::ask(&app, title, message)
+    })
+    .await?;
+    Ok(rt.connector_connect(&id, &values, &dot_ids).await?)
+}
+
+/// Signs in to a sign-in connector in the system browser and gives it to the Personal dots
+/// `dot_ids`, after the Library's question in a native dialog. Ends when the person finishes
+/// in the browser, after 5 minutes, or on `connector_sign_in_cancel` (`cancelled`).
+#[tauri::command]
+pub async fn connector_sign_in(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    dot_ids: Vec<String>,
+) -> Res<ConnectorEntry> {
+    let rt = state.rt()?;
+    let (connector, config) = connectors::plan(&id, connectors::AuthKind::OAuth)?;
+    confirm::connector_confirmed(&rt, &connector, config, |title, message| {
+        confirm::ask(&app, title, message)
+    })
+    .await?;
+    rt.connector_sign_in(&id, &dot_ids, |url| {
+        app.opener().open_url(url, None::<&str>).map_err(|_| {
+            dots_core::Error::Other(
+                "Could not open your browser. Check your default browser and try again.".into(),
+            )
+        })
+    })
+    .await
+    .map_err(|error| match error {
+        dots_core::Error::Conflict(message) if message == "Sign-in cancelled." => {
+            CmdError::cancelled(message)
+        }
+        other => other.into(),
+    })
+}
+
+/// Cancels the sign-in to `id` in progress, if any.
+#[tauri::command]
+pub fn connector_sign_in_cancel(id: String) {
+    connectors::cancel_sign_in(&id);
+}
+
+/// Gives a connected connector to exactly the Personal dots `dot_ids`.
+#[tauri::command]
+pub async fn connector_set_dots(
+    state: State<'_, AppState>,
+    id: String,
+    dot_ids: Vec<String>,
+) -> Res<ConnectorEntry> {
+    Ok(state.rt()?.connector_set_dots(&id, &dot_ids).await?)
+}
+
+/// Disconnects a connector: its dots stop using it, its Library server is removed, and its
+/// values and sign-in are forgotten.
+#[tauri::command]
+pub async fn connector_disconnect(state: State<'_, AppState>, id: String) -> Res<ConnectorEntry> {
+    Ok(state.rt()?.connector_disconnect(&id).await?)
 }
 
 /// Every Library item with its users, catalog and, for a skill or plugin, what its folder holds.

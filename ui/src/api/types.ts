@@ -1998,3 +1998,86 @@ export type PublisherStatus = z.infer<typeof PublisherStatus>;
 export type PageState = z.infer<typeof PageState>;
 export type Stage = z.infer<typeof Stage>;
 export type Trial = z.infer<typeof Trial>;
+
+// Connectors (connectors spec §3, §6): the apps Dots connects with a key or a sign-in. An entry
+// never holds a value, a token or a grant.
+export const ConnectorState = z.enum([
+  "not_connected",
+  "connected",
+  "needs_sign_in",
+  "error",
+  "name_taken",
+  "coming_soon",
+]);
+export const AuthKind = z.enum(["key", "oauth", "coming_soon"]);
+export const Trust = z.enum(["official", "community"]);
+export const Category = z.enum(["communication", "work", "developer", "search", "files", "business"]);
+export const ServerTemplate = z.discriminatedUnion("transport", [
+  z.strictObject({ transport: z.literal("http"), url: z.string(), bearer: nullable(z.string()) }),
+  z.strictObject({
+    transport: z.literal("stdio"),
+    command: z.string(),
+    args: z.array(z.string()),
+    env: z.record(z.string(), z.string()),
+  }),
+]);
+export const RuntimeNeed = z.strictObject({
+  name: z.string(),
+  command: z.string(),
+  min_major: z.number().int(),
+  download_url: z.string(),
+});
+export const FieldFormat = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("any") }),
+  z.strictObject({ kind: z.literal("prefix"), prefixes: z.array(z.string()) }),
+  z.strictObject({ kind: z.literal("email") }),
+  z.strictObject({ kind: z.literal("letters"), length: z.number().int() }),
+]);
+export const KeyField = z.strictObject({
+  key: z.string(),
+  label: z.string(),
+  variable: z.string(),
+  secret: z.boolean(),
+  placeholder: z.string(),
+  hint: z.string(),
+  format: FieldFormat,
+  strip_spaces: z.boolean(),
+});
+export const ConnectorEntry = z.strictObject({
+  id: z.string(),
+  name: z.string(),
+  description: z.string(),
+  category: Category,
+  icon: z.string(),
+  // Who makes the MCP server, and whether that is the app's own company.
+  maker: z.string(),
+  trust: Trust,
+  source_url: z.string(),
+  auth: AuthKind,
+  server: nullable(ServerTemplate),
+  runtime: nullable(RuntimeNeed),
+  fields: z.array(KeyField),
+  instructions: z.strictObject({
+    steps: z.array(z.string()),
+    open_url: z.string(),
+    open_label: z.string(),
+  }),
+  abilities: z.array(z.string()),
+  note: nullable(z.string()),
+  state: ConnectorState,
+  // The Library server of a connected connector.
+  server_id: nullable(z.string()),
+  used_by: z.array(DotRef),
+  error: nullable(z.string()),
+  tools: nullable(z.number().int()),
+  catalog_status: nullable(CatalogStatus),
+});
+export const RuntimeCheck = z.strictObject({
+  needed: nullable(RuntimeNeed),
+  found: nullable(z.string()),
+  ok: z.boolean(),
+});
+export type ConnectorState = z.infer<typeof ConnectorState>;
+export type ConnectorEntry = z.infer<typeof ConnectorEntry>;
+export type KeyField = z.infer<typeof KeyField>;
+export type RuntimeCheck = z.infer<typeof RuntimeCheck>;
