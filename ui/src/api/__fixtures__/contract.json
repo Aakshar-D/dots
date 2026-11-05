@@ -770,6 +770,8 @@
     "webhook_url",
     "preview_schedule",
     "policy_preset",
+    "managed_policy",
+    "managed_policy_check",
     "rules_touch_private",
     "new_dot_spec",
     "test_endpoint",
@@ -3079,6 +3081,47 @@
       ]
     }
   ],
+  "ManagedCheck": {
+    "conflicts": [
+      {
+        "dot_rule": "everything else",
+        "kind": "deny",
+        "rule": "WebFetch"
+      }
+    ],
+    "managed": {
+      "blocks_skipping_asks": true,
+      "error": null,
+      "forced_ask": [
+        "Bash(git push:*)"
+      ],
+      "forced_deny": [
+        "WebFetch"
+      ],
+      "managed_rules_only": false,
+      "path": "C:/Program Files/ClaudeCode/managed-settings.json"
+    }
+  },
+  "ManagedPolicy": {
+    "blocks_skipping_asks": true,
+    "error": null,
+    "forced_ask": [
+      "Bash(git push:*)"
+    ],
+    "forced_deny": [
+      "WebFetch"
+    ],
+    "managed_rules_only": false,
+    "path": "C:/Program Files/ClaudeCode/managed-settings.json"
+  },
+  "ManagedPolicyUnread": {
+    "blocks_skipping_asks": false,
+    "error": "Couldn't read your company's Claude Code policy at C:/Program Files/ClaudeCode/managed-settings.json: expected value at line 1 column 3",
+    "forced_ask": [],
+    "forced_deny": [],
+    "managed_rules_only": false,
+    "path": "C:/Program Files/ClaudeCode/managed-settings.json"
+  },
   "McpCatalog": {
     "accepted_fingerprint": "fp-accepted",
     "accepted_tools": [

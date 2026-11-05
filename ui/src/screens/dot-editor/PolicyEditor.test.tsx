@@ -215,3 +215,51 @@ describe("an always-allowed rule that covers a private folder", () => {
     expect(screen.queryByText("Always asks: private folder")).toBeNull();
   });
 });
+
+describe("the company's Claude Code policy", () => {
+  const managed = {
+    path: "C:/Program Files/ClaudeCode/managed-settings.json",
+    blocks_skipping_asks: false,
+    forced_ask: ["Bash(git push:*)"],
+    forced_deny: ["WebFetch"],
+    managed_rules_only: false,
+    error: null,
+  };
+  const conflict = { kind: "deny", rule: "WebFetch", dot_rule: "everything else" };
+
+  it("says what is refused, with the policy file and the ask line", async () => {
+    backend.on("managed_policy_check", () => ({ managed, conflicts: [conflict] }));
+    setup();
+    const note = await screen.findByRole("note");
+    expect(note).toHaveTextContent("refuses these for every dot");
+    expect(note).toHaveTextContent("WebFetch");
+    expect(note).toHaveTextContent("Dots' own approval check");
+    expect(note).toHaveTextContent(managed.path);
+  });
+
+  it("has no ask line when the policy has no ask rules", async () => {
+    backend.on("managed_policy_check", () => ({
+      managed: { ...managed, forced_ask: [] },
+      conflicts: [conflict],
+    }));
+    setup();
+    const note = await screen.findByRole("note");
+    expect(note).not.toHaveTextContent("approval check");
+  });
+
+  it("says nothing when the policy does not conflict", async () => {
+    backend.on("managed_policy_check", () => ({ managed, conflicts: [] }));
+    setup();
+    await waitFor(() => expect(backend.callsTo("managed_policy_check").length).toBe(1));
+    expect(screen.queryByRole("note")).toBeNull();
+  });
+
+  it("is not asked about a dot that does not run on the Claude CLI", () => {
+    function Host() {
+      const [policy, setPolicy] = useState(sandboxed);
+      return <PolicyEditor policy={policy} onChange={setPolicy} engine="local" />;
+    }
+    render(<Host />);
+    expect(backend.callsTo("managed_policy_check")).toEqual([]);
+  });
+});

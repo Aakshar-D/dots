@@ -15,6 +15,7 @@ import { PRESET_SENTENCES, folderName, nameError, scheduleError, scheduleOf } fr
 import { errorMessage, notifyError } from "@/lib/notify";
 import { keys } from "@/lib/query";
 import { useDebounced } from "@/lib/use-debounced";
+import { ManagedPolicyNotice, useManagedCheckForPreset } from "@/screens/ManagedPolicyNotice";
 import { ScheduleEditor } from "@/screens/dot-editor/ScheduleEditor";
 
 /// The presets the setup card offers, each in one plain sentence (setup agent spec §6).
@@ -79,6 +80,7 @@ export function SetupCard(props: {
     onChange({ ...proposal, uses, extras });
   }
 
+  const managed = useManagedCheckForPreset(proposal.preset);
   const preset = PRESETS.find(([p]) => p === proposal.preset);
   const used = USES.flatMap((kind) => proposal.uses[kind].map((item) => [kind, item] as const));
   return (
@@ -163,6 +165,7 @@ export function SetupCard(props: {
             </option>
           ))}
         </NativeSelect>
+        <ManagedPolicyNotice check={managed} />
         {proposal.extras.length > 0 && (
           <ul className="flex flex-col gap-1">
             {proposal.extras.map((extra) => {

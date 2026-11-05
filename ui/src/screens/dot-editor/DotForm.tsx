@@ -320,6 +320,7 @@ export function DotForm(props: {
       <Section title="Permissions">
         <PolicyEditor
           policy={spec.policy}
+          engine={spec.engine}
           onChange={(policy) => set("policy", policy)}
           error={errors.policy}
         />

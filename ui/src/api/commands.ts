@@ -9,10 +9,12 @@ import type {
   CmdErrorKind,
   DotSpec,
   DraftRequest,
+  EngineKind,
   EntryKind,
   InboxKey,
   LibraryConfig,
   McpServerConfig,
+  Policy,
   Preset,
   Schedule,
   Settings,
@@ -219,6 +221,11 @@ export const commands = {
   /// always asks.
   rulesTouchPrivate: (patterns: string[]) =>
     call(z.boolean().array(), "rules_touch_private", { patterns }),
+  /// The company's Claude Code managed settings (managed policy).
+  managedPolicy: () => call(T.ManagedPolicy, "managed_policy"),
+  /// The same, with where this policy of a dot on `engine` would skip what they keep.
+  managedPolicyCheck: (engine: EngineKind, policy: Policy) =>
+    call(T.ManagedCheck, "managed_policy_check", { engine, policy }),
   newDotSpec: () => call(T.DotSpec, "new_dot_spec"),
   testEndpoint: (endpoint: string, model: string) =>
     call(text, "test_endpoint", { endpoint, model }),
