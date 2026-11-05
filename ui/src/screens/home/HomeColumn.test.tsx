@@ -2,6 +2,7 @@ import { act, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import type { DotOverview, Message, Run } from "@/api/types";
+import { avatarFor } from "@/lib/dot-avatar";
 import { localTime } from "@/lib/format";
 import { backend } from "@/test/backend";
 import { allowed, sample } from "@/test/fixtures";
@@ -39,6 +40,21 @@ const column = () => screen.getByRole("navigation", { name: "Dots" });
 const item = (name: string) => within(column()).getByRole("listitem", { name });
 
 describe("the home's dots column", () => {
+  it("shows each dot's generated avatar, seeded by its id", async () => {
+    backend.on("dot_overview", () => [reader, shopper]);
+    renderApp("/home");
+    await within(await screen.findByRole("navigation", { name: "Dots" })).findByRole(
+      "listitem",
+      { name: "shopper" },
+    );
+    for (const r of [reader, shopper]) {
+      const svg = item(r.dot.name).querySelector("svg[data-avatar]");
+      expect(svg).not.toBeNull();
+      expect(svg).toHaveAttribute("aria-hidden", "true");
+      expect(svg).toHaveAttribute("data-avatar", avatarFor(r.dot.id).shape);
+    }
+  });
+
   it("lists the dots newest activity first, with status, last line and next run", async () => {
     backend.on("dot_overview", () => [idle, nightly, reader, shopper]);
     renderApp("/home");

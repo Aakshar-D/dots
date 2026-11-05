@@ -50,6 +50,8 @@ export const sample = {
   followUps: T.FollowUp.array().parse(contract.FollowUp),
   /// A pinned memory the dot saved in a run, and one the person wrote.
   memories: T.Memory.array().parse(contract.Memory),
+  /// An urgent goal handed to a dot, one with a due date, and a done one.
+  intents: T.Intent.array().parse(contract.Intent),
   /// A folder watcher that is on, an email one paused on an error, a GitHub one paused on a flood.
   watchers: T.Watcher.array().parse(contract.Watcher),
   /// This install's Dots ID, with a name and email set.
@@ -96,6 +98,15 @@ export const quietStatus: T.Status = {
 
 /// The answers every screen's frame needs: a started app with nothing to warn about, no dots
 /// and an empty inbox. A test replaces what it cares about with `backend.on`.
+const noManagedPolicy = {
+  path: null,
+  blocks_skipping_asks: false,
+  forced_ask: [],
+  forced_deny: [],
+  managed_rules_only: false,
+  error: null,
+};
+
 export function installDefaults(): void {
   backend.on("startup_error", () => null);
   backend.on("status", () => quietStatus);
@@ -144,6 +155,9 @@ export function installDefaults(): void {
   backend.on("approval_touches_private", () => false);
   // The policy editor asks which always-allowed rules cover a private folder; by default none.
   backend.on("rules_touch_private", ({ patterns }) => (patterns as string[]).map(() => false));
+  // No company Claude Code policy is installed on this PC.
+  backend.on("managed_policy", () => noManagedPolicy);
+  backend.on("managed_policy_check", () => ({ managed: noManagedPolicy, conflicts: [] }));
   // A conversation asks for the dot's app proposals; by default it has none.
   backend.on("app_proposals_list", () => []);
   // A conversation and the dot menu ask for the dot's scheduled messages; by default none.
@@ -204,6 +218,8 @@ export function installDefaults(): void {
   backend.on("schedule_skips", () => []);
   // No dot remembers anything.
   backend.on("memories_list", () => []);
+  // No goals yet, and the person may change them.
+  backend.on("intents_list", () => ({ intents: [], refusal: null }));
   backend.on("watchers_list", () => []);
   // Nothing is unread; looking at a dot and saying which one is viewed are taken.
   backend.on("unread_total", () => 0);

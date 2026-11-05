@@ -12,6 +12,7 @@ import { orgRemoved, orgRemovedText, useOrgList } from "@/lib/dot-org";
 import { dotStatus, lastLine, nextLine } from "@/lib/dot-status";
 import { keys } from "@/lib/query";
 import { ImportAgentsDialog } from "@/screens/home/ImportAgentsDialog";
+import { DotAvatar } from "@/components/DotAvatar";
 import { StatusMark } from "@/screens/home/StatusMark";
 import { UnreadBadge } from "@/screens/home/UnreadBadge";
 import { NewDotDialog } from "@/screens/setup/NewDotDialog";
@@ -132,17 +133,18 @@ export function DotsColumn({ rows, openId }: { rows: DotOverview[]; openId: stri
                 )}
               >
                 <span className="flex items-center gap-2">
+                  <DotAvatar seed={row.dot.id} />
                   <StatusMark status={dotStatus(row, messages, held, hidden)} />
                   <span className="truncate font-medium">{row.dot.name}</span>
                   <UnreadBadge row={row} />
                 </span>
-                <span className="truncate pl-4.5 text-xs text-muted-foreground">
+                <span className="truncate pl-10.5 text-xs text-muted-foreground">
                   {lastLine(row)}
                 </span>
-                {next && <span className="pl-4.5 text-xs text-muted-foreground">{next}</span>}
+                {next && <span className="pl-10.5 text-xs text-muted-foreground">{next}</span>}
                 {row.dot.org_id !== null && orgRemoved(row.dot, orgs) && (
                   <span
-                    className="pl-4.5 text-xs text-destructive"
+                    className="pl-10.5 text-xs text-destructive"
                     title={orgRemovedText(row.dot.org_id)}
                   >
                     account removed

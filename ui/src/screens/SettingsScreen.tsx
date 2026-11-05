@@ -235,6 +235,7 @@ function Form({ stored, status }: { stored: Settings; status: Status | undefined
   }
 
   const claude = status?.claude;
+  const managed = useQuery({ queryKey: keys.managedPolicy, queryFn: commands.managedPolicy }).data;
   return (
     <Page
       title="Settings"
@@ -442,6 +443,19 @@ function Form({ stored, status }: { stored: Settings; status: Status | undefined
           <dd>{claude?.version ?? "unknown"}</dd>
           <dt className="text-muted-foreground">Tested with</dt>
           <dd>{claude?.tested_version ?? ""}</dd>
+          <dt className="text-muted-foreground">Company policy</dt>
+          <dd className="min-w-0" data-testid="managed-policy">
+            {managed === undefined
+              ? ""
+              : managed.path === null
+                ? "None found"
+                : (
+                    <>
+                      Found at <span className="font-mono break-all">{managed.path}</span>
+                    </>
+                  )}
+            {managed?.error && <span className="block text-destructive">{managed.error}</span>}
+          </dd>
         </dl>
         {claude?.mismatch && (
           <div className="flex items-center gap-3">

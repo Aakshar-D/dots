@@ -9,10 +9,13 @@ import type {
   CmdErrorKind,
   DotSpec,
   DraftRequest,
+  EngineKind,
   EntryKind,
   InboxKey,
+  IntentFields,
   LibraryConfig,
   McpServerConfig,
+  Policy,
   Preset,
   Schedule,
   Settings,
@@ -227,6 +230,11 @@ export const commands = {
   /// always asks.
   rulesTouchPrivate: (patterns: string[]) =>
     call(z.boolean().array(), "rules_touch_private", { patterns }),
+  /// The company's Claude Code managed settings (managed policy).
+  managedPolicy: () => call(T.ManagedPolicy, "managed_policy"),
+  /// The same, with where this policy of a dot on `engine` would skip what they keep.
+  managedPolicyCheck: (engine: EngineKind, policy: Policy) =>
+    call(T.ManagedCheck, "managed_policy_check", { engine, policy }),
   newDotSpec: () => call(T.DotSpec, "new_dot_spec"),
   testEndpoint: (endpoint: string, model: string) =>
     call(text, "test_endpoint", { endpoint, model }),
@@ -511,6 +519,20 @@ export const commands = {
   memoryUpdate: (id: string, text: string | null, pinned: boolean | null) =>
     call(T.Memory, "memory_update", { id, text, pinned }),
   memoryDelete: (id: string) => call(nothing, "memory_delete", { id }),
+  /// The goals of the workspace `workspace` of `scope` ("personal" or an org id), and why
+  /// this PC may not change them (Intents).
+  intentsList: (scope: string, workspace: string) =>
+    call(T.IntentsView, "intents_list", { scope, workspace }),
+  /// Adds a goal. Rejects with the core's sentence (kind `invalid`, or `not_allowed` for a
+  /// role that can't change goals).
+  intentCreate: (scope: string, workspace: string, fields: IntentFields) =>
+    call(T.Intent, "intent_create", { scope, workspace, fields }),
+  /// Replaces a goal's text, due date, urgency and dot.
+  intentUpdate: (id: string, fields: IntentFields) =>
+    call(T.Intent, "intent_update", { id, fields }),
+  /// Marks a goal done, or open again.
+  intentSetDone: (id: string, done: boolean) => call(T.Intent, "intent_set_done", { id, done }),
+  intentDelete: (id: string) => call(nothing, "intent_delete", { id }),
 
   /// The installed apps, with the dots that use each and the error that keeps one out of runs.
   appsList: () => call(T.AppRow.array(), "apps_list"),

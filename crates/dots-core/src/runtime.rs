@@ -2226,7 +2226,15 @@ impl Runtime {
             .map(|w| w.id)
             .collect();
         let attachments = self.store.attachment_ids_of_dot(id).await?;
+        let had_goals = self.store.count_intents_of_dot(id).await? > 0;
         self.store.delete_dot_if_idle(id).await?;
+        // Its goals stay, unlinked (`ON DELETE SET NULL`).
+        if had_goals {
+            let _ = self.bus.send(RuntimeEvent::IntentsUpdated {
+                org_id: dot.org_id.clone(),
+                workspace_id: dot.workspace_id.clone(),
+            });
+        }
         // Its attached files' rows went with it; their stored copies go too (attachments spec
         // section 4.7).
         for a in &attachments {
@@ -3490,6 +3498,136 @@ fn watch_viewing(store: Store, bus: Bus, viewing: Viewing, shutdown: Cancellatio
             }
         }
     });
+}
+
+/// The person's goals (Intents). A goal lives in the account and workspace it was added in;
+/// changing one needs a role that may change goals there (`Permission::EditGoals`).
+impl Runtime {
+    /// The goals of the workspace `workspace_id` of `scope` (`personal` or an org id), oldest
+    /// first, and why this PC may not change them.
+    pub async fn intents_list(
+        &self,
+        scope: &str,
+        workspace_id: &str,
+    ) -> Result<crate::intents::IntentsView> {
+        let org_id = org_of_scope(scope);
+        self.check_workspace(org_id, workspace_id).await?;
+        self.require_in(org_id, workspace_id, Permission::View)
+            .await?;
+        let refusal = match self
+            .require_in(org_id, workspace_id, Permission::EditGoals)
+            .await
+        {
+            Err(Error::NotAllowed(text)) => Some(text),
+            Err(e) => return Err(e),
+            Ok(()) => None,
+        };
+        Ok(crate::intents::IntentsView {
+            intents: self.store.list_intents(org_id, workspace_id).await?,
+            refusal,
+        })
+    }
+
+    /// Adds a goal to the workspace `workspace_id` of `scope`.
+    pub async fn intent_create(
+        &self,
+        scope: &str,
+        workspace_id: &str,
+        fields: crate::intents::IntentFields,
+    ) -> Result<crate::model::Intent> {
+        let org_id = org_of_scope(scope);
+        self.check_workspace(org_id, workspace_id).await?;
+        self.require_in(org_id, workspace_id, Permission::EditGoals)
+            .await?;
+        let fields = crate::intents::clean(fields)?;
+        self.check_intent_dot(org_id, workspace_id, fields.dot_id.as_deref())
+            .await?;
+        let intent = self.store.add_intent(org_id, workspace_id, &fields).await?;
+        self.intents_updated(&intent);
+        Ok(intent)
+    }
+
+    /// Replaces the goal's text, due date, urgency and dot.
+    pub async fn intent_update(
+        &self,
+        id: &str,
+        fields: crate::intents::IntentFields,
+    ) -> Result<crate::model::Intent> {
+        let old = self.require_for_intent(id).await?;
+        let fields = crate::intents::clean(fields)?;
+        self.check_intent_dot(
+            old.org_id.as_deref(),
+            &old.workspace_id,
+            fields.dot_id.as_deref(),
+        )
+        .await?;
+        let intent = self.store.set_intent_fields(id, &fields).await?;
+        self.intents_updated(&intent);
+        Ok(intent)
+    }
+
+    /// Marks the goal done, or open again.
+    pub async fn intent_set_done(&self, id: &str, done: bool) -> Result<crate::model::Intent> {
+        self.require_for_intent(id).await?;
+        let intent = self.store.set_intent_done(id, done).await?;
+        self.intents_updated(&intent);
+        Ok(intent)
+    }
+
+    /// Deletes the goal.
+    pub async fn intent_delete(&self, id: &str) -> Result<()> {
+        let old = self.require_for_intent(id).await?;
+        self.store.delete_intent(id).await?;
+        self.intents_updated(&old);
+        Ok(())
+    }
+
+    /// The goal `id`, once this PC may change goals in its workspace.
+    async fn require_for_intent(&self, id: &str) -> Result<crate::model::Intent> {
+        let intent = self.store.get_intent(id).await?;
+        self.require_in(
+            intent.org_id.as_deref(),
+            &intent.workspace_id,
+            Permission::EditGoals,
+        )
+        .await?;
+        Ok(intent)
+    }
+
+    /// A goal may be handed only to a dot of its own account and workspace.
+    async fn check_intent_dot(
+        &self,
+        org_id: Option<&str>,
+        workspace_id: &str,
+        dot_id: Option<&str>,
+    ) -> Result<()> {
+        let Some(dot_id) = dot_id else {
+            return Ok(());
+        };
+        let dot = match self.store.get_dot(dot_id).await {
+            Ok(dot) => dot,
+            Err(Error::NotFound(_)) => {
+                return Err(Error::Invalid(crate::intents::NO_DOT.into()));
+            }
+            Err(e) => return Err(e),
+        };
+        if dot.org_id.as_deref() != org_id || dot.workspace_id != workspace_id {
+            return Err(Error::Invalid(crate::intents::OTHER_WORKSPACE.into()));
+        }
+        Ok(())
+    }
+
+    fn intents_updated(&self, intent: &crate::model::Intent) {
+        let _ = self.bus.send(RuntimeEvent::IntentsUpdated {
+            org_id: intent.org_id.clone(),
+            workspace_id: intent.workspace_id.clone(),
+        });
+    }
+}
+
+/// The org of a scope (`personal` or an org id): `None` for Personal.
+fn org_of_scope(scope: &str) -> Option<&str> {
+    (scope != crate::accounts::PERSONAL).then_some(scope)
 }
 
 /// What each dot remembers, the person's side (dot memory spec section 4). The text rules of
