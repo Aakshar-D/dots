@@ -6,7 +6,10 @@ use std::sync::Arc;
 
 use dots_core::events::RuntimeEvent;
 use dots_core::limits::HoldChange;
-use dots_core::model::{Message, MessageKind, PausedReason, Run, RunStatus, TriggerKind};
+use dots_core::model::{
+    Message, MessageKind, PausedReason, Run, RunStatus, TriggerKind, WaitingOn, WorkflowRun,
+    WorkflowRunStatus,
+};
 use dots_core::Runtime;
 use serde_json::Value;
 use tauri::{AppHandle, Emitter};
@@ -68,6 +71,45 @@ pub enum Notice {
         dot_id: String,
         minutes: u64,
     },
+    /// A workflow run waits on the person or ended (teams spec section 10.5). Told once each
+    /// time the run moves into that state.
+    Workflow {
+        run: Box<WorkflowRun>,
+        about: WorkflowNotice,
+    },
+}
+
+/// What a workflow run's notice is about (teams spec section 10.5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkflowNotice {
+    /// It waits on the person's check.
+    Check,
+    /// It reached a limit of its budget.
+    Budget,
+    /// It holds a send-back past the cap of send-backs.
+    SendBacks,
+    /// A step failed, and the run waits for Retry step or Stop: this is how a workflow run
+    /// fails (spec section 5.5), so it is told as "failed".
+    StepFailed,
+    Finished,
+    Failed,
+}
+
+impl WorkflowNotice {
+    /// What a workflow run in `status`, waiting on `waiting_on`, tells the person. `None`
+    /// while it runs, once it is cancelled (the person stopped it), and for a wait that names
+    /// nothing.
+    pub fn of(status: WorkflowRunStatus, waiting_on: Option<WaitingOn>) -> Option<Self> {
+        match (status, waiting_on) {
+            (WorkflowRunStatus::Waiting, Some(WaitingOn::Check)) => Some(Self::Check),
+            (WorkflowRunStatus::Waiting, Some(WaitingOn::Budget)) => Some(Self::Budget),
+            (WorkflowRunStatus::Waiting, Some(WaitingOn::SendBacks)) => Some(Self::SendBacks),
+            (WorkflowRunStatus::Waiting, Some(WaitingOn::StepFailed)) => Some(Self::StepFailed),
+            (WorkflowRunStatus::Succeeded, _) => Some(Self::Finished),
+            (WorkflowRunStatus::Failed, _) => Some(Self::Failed),
+            _ => None,
+        }
+    }
 }
 
 /// Decides which events notify: approval requests, a run moving from queued or running into
@@ -78,12 +120,53 @@ pub enum Notice {
 /// itself: it is retried, or its schedule needs attention, which notifies. A run first seen
 /// in a final state (e.g. marked reviewed) and a parked run closed by a decision do not
 /// notify either. A run that parks on an approval request this notifier has announced does
-/// not notify a second time: one park, one notification.
+/// not notify a second time: one park, one notification. A workflow step's runs (members
+/// included) never notify that they finished or failed: the workflow run tells what matters
+/// (teams spec section 10.5); their questions, approvals and parks notify as any run's.
+///
+/// A workflow run notifies when it moves into a wait on the person, finishes or fails, once
+/// per move: an update that repeats its status, its wait and its current step run is quiet.
+/// A wait on a new step run is a new move (a second check right after an approval, a retried
+/// step that fails again). A workflow run first seen waiting or ended notifies too: the core
+/// publishes a run when it moves or the person acts on it, so a run first seen there moved
+/// while the app was not listening (Dots restarted in the middle of a step).
 #[derive(Default)]
 pub struct Notifier {
     active: HashMap<String, RunStatus>,
     /// Runs with an announced approval request that have neither parked nor ended since.
     asked: HashSet<String>,
+    /// Where each workflow run seen was last, ended runs included, so that an ended run
+    /// published again is not told twice. Workflow runs are few (each one waits on the
+    /// person's check or budget), so they are kept until a lag clears them.
+    workflows: HashMap<String, Moved>,
+}
+
+/// Where a workflow run is, as far as its notices go: its status, its wait, and the newest
+/// step run of its current step.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Moved {
+    status: WorkflowRunStatus,
+    waiting_on: Option<WaitingOn>,
+    step_run: Option<String>,
+}
+
+impl Moved {
+    /// Where `run` is now.
+    fn of(run: &WorkflowRun) -> Self {
+        let step_run = run.current_step.as_deref().and_then(|current| {
+            // Step runs are oldest first.
+            run.steps
+                .iter()
+                .rev()
+                .find(|s| s.step_id == current)
+                .map(|s| s.id.clone())
+        });
+        Moved {
+            status: run.status,
+            waiting_on: run.waiting_on,
+            step_run,
+        }
+    }
 }
 
 impl Notifier {
@@ -93,6 +176,7 @@ impl Notifier {
     pub fn forget(&mut self) {
         self.active.clear();
         self.asked.clear();
+        self.workflows.clear();
     }
 
     pub fn decide(&mut self, ev: &RuntimeEvent) -> Option<Notice> {
@@ -116,9 +200,11 @@ impl Notifier {
                 let told = !matches!(run.status, RunStatus::Queued | RunStatus::Running)
                     && self.asked.remove(&run.id);
                 let was_working = matches!(prev, Some(RunStatus::Queued | RunStatus::Running));
+                // A step's run is quiet when it ends: its workflow run tells the person.
+                let step = run.workflow_step_run_id.is_some();
                 let ended = match run.status {
-                    RunStatus::Succeeded => true,
-                    RunStatus::Failed => run.trigger != TriggerKind::Schedule,
+                    RunStatus::Succeeded => !step,
+                    RunStatus::Failed => run.trigger != TriggerKind::Schedule && !step,
                     RunStatus::AwaitingApproval => !told,
                     _ => false,
                 };
@@ -164,6 +250,26 @@ impl Notifier {
             } => Some(Notice::Hold {
                 change: change.clone(),
             }),
+            RuntimeEvent::WorkflowRunUpdated { run } => {
+                let now = Moved::of(run);
+                let prev = self.workflows.insert(run.id.clone(), now.clone());
+                if prev.as_ref() == Some(&now) {
+                    return None;
+                }
+                let about = WorkflowNotice::of(run.status, run.waiting_on)?;
+                // Its wait on the failed step was the "failed" notice already.
+                let told = prev.is_some_and(|p| {
+                    p.status == WorkflowRunStatus::Waiting
+                        && p.waiting_on == Some(WaitingOn::StepFailed)
+                });
+                if about == WorkflowNotice::Failed && told {
+                    return None;
+                }
+                Some(Notice::Workflow {
+                    run: Box::new(run.clone()),
+                    about,
+                })
+            }
             _ => None,
         }
     }
@@ -212,6 +318,7 @@ pub fn call_preview(input: &Value) -> Option<String> {
 
 /// (title, body) of the notification (needs-you spec section 4.2). None sends the person to
 /// the Inbox: a click on the notification opens what it is about (`notice_route`).
+/// `dot_name` is the name of the dot the notice is about, or of a workflow run's team.
 pub fn notice_text(notice: &Notice, dot_name: &str) -> (String, String) {
     match notice {
         Notice::ApprovalNeeded { tool, input, .. } => (
@@ -278,15 +385,61 @@ pub fn notice_text(notice: &Notice, dot_name: &str) -> (String, String) {
             format!("{dot_name} has gone quiet"),
             format!("No output for {minutes} min. Open it to stop it or keep waiting."),
         ),
+        // For a workflow run, the name given is its team's.
+        Notice::Workflow { run, about } => workflow_text(run, *about, dot_name),
+    }
+}
+
+/// (title, body) of a workflow run's notice, in the needs-you wording (teams spec section
+/// 10.5); `team` is the name of the run's team. A test run's title says so.
+fn workflow_text(run: &WorkflowRun, about: WorkflowNotice, team: &str) -> (String, String) {
+    let task = first_line(Some(run.task.as_str()), "A task.");
+    let step = run
+        .current_step
+        .as_deref()
+        .and_then(|id| run.definition.step(id))
+        .map(|s| s.name.as_str());
+    // "<step name>: <task's first line>", or the task alone before any step.
+    let at_step = match step {
+        Some(name) => first_line(Some(format!("{name}: {task}").as_str()), &task),
+        None => task.clone(),
+    };
+    let (title, body) = match about {
+        WorkflowNotice::Check => (format!("{team} needs your check"), at_step),
+        WorkflowNotice::Budget => (
+            format!("{team} hit its budget"),
+            dots_core::workflows::budget_reached(run)
+                .unwrap_or_else(|| first_line(run.error.as_deref(), &task)),
+        ),
+        WorkflowNotice::SendBacks => (
+            format!("{team} hit its send-back limit"),
+            format!(
+                "send-backs, {} of {}",
+                run.send_backs, run.budget.max_send_backs
+            ),
+        ),
+        // The run's error names the step: "<step name>: <what failed>".
+        WorkflowNotice::StepFailed => (
+            format!("{team} failed"),
+            first_line(run.error.as_deref(), &at_step),
+        ),
+        WorkflowNotice::Finished => (format!("{team} finished"), task),
+        WorkflowNotice::Failed => (format!("{team} failed"), task),
+    };
+    if run.test {
+        (format!("{title} (test)"), body)
+    } else {
+        (title, body)
     }
 }
 
 /// Where a click on the notice goes: the conversation of the run (`/chat/<dot>/<run>`, which
 /// the home opens on the run's topic) for a run or an approval, the dot's conversation
-/// (`/home/<dot>`) for a question, a note or a schedule, and the dot's Watchers tab for a
-/// watcher Dots paused.
+/// (`/home/<dot>`) for a question, a note or a schedule, the dot's Watchers tab for a
+/// watcher Dots paused, and the run page (`/workflow-runs/<id>`) for a workflow run.
 pub fn notice_route(notice: &Notice, dot_id: &str) -> String {
     match notice {
+        Notice::Workflow { run, .. } => format!("/workflow-runs/{}", run.id),
         Notice::ApprovalNeeded { run_id, .. } => format!("/chat/{dot_id}/{run_id}"),
         Notice::RunEnded { run } => format!("/chat/{dot_id}/{}", run.id),
         Notice::RunQuiet { run_id, .. } => format!("/chat/{dot_id}/{run_id}"),
@@ -356,20 +509,29 @@ async fn notify(app: &AppHandle, rt: &Runtime, notice: &Notice) {
         Notice::MessagePosted { message } => Some(message.dot_id.clone()),
         Notice::WatcherPaused { dot_id, .. } => Some(dot_id.clone()),
         Notice::RunQuiet { dot_id, .. } => Some(dot_id.clone()),
+        // The dot whose chat started the workflow run shows its card in that chat.
+        Notice::Workflow { run, .. } => match &run.origin_run_id {
+            Some(origin) => rt.get_run(origin).await.map(|r| r.dot_id).ok(),
+            None => None,
+        },
         Notice::Hold { .. } => None,
     };
     // Nothing for the dot whose conversation the person is reading (needs-you spec 4.2).
     if quiet(dot_id.as_deref(), rt.viewing().as_deref()) {
         return;
     }
-    let name = match &dot_id {
-        Some(id) => rt.get_dot(id).await.map(|d| d.spec.name).ok(),
-        None => None,
+    let name = match (notice, &dot_id) {
+        (Notice::Workflow { run, .. }, _) => {
+            let team = rt.teams().get(&run.team_id).await.map(|t| t.name).ok();
+            Some(team.unwrap_or_else(|| "A team".to_string()))
+        }
+        (_, Some(id)) => rt.get_dot(id).await.map(|d| d.spec.name).ok(),
+        (_, None) => None,
     };
     let (title, body) = notice_text(notice, name.as_deref().unwrap_or("A dot"));
     // A click opens what the notice is about; without its dot, the home.
     let route = match (&dot_id, notice) {
-        (_, Notice::Hold { .. }) => notice_route(notice, ""),
+        (_, Notice::Hold { .. } | Notice::Workflow { .. }) => notice_route(notice, ""),
         (Some(id), _) => notice_route(notice, id),
         (None, _) => "/home".to_string(),
     };
@@ -1090,5 +1252,384 @@ mod tests {
             minutes: 10,
         };
         assert_eq!(notice_route(&quiet_run, "d"), "/chat/d/r");
+    }
+
+    /// A workflow run of team `t` at its check step "Review" (no step run yet), with a task
+    /// of two lines.
+    fn workflow_run(
+        id: &str,
+        status: WorkflowRunStatus,
+        waiting_on: Option<WaitingOn>,
+    ) -> WorkflowRun {
+        use dots_core::model::{ProjectSpec, WorkflowTrigger};
+        WorkflowRun {
+            id: id.into(),
+            workflow_id: Some("wf".into()),
+            team_id: "t".into(),
+            definition: serde_json::from_value(json!({
+                "trigger": {"kind": "manual"},
+                "steps": [
+                    {"id": "work", "name": "Work", "kind": "agent", "member": "d", "job": "Fix it."},
+                    {"id": "review", "name": "Review", "kind": "check"},
+                    {"id": "recheck", "name": "Second look", "kind": "check"},
+                    {"id": "ship", "name": "Ship", "kind": "deploy", "mode": "push"}
+                ]
+            }))
+            .unwrap(),
+            project_id: Some("p".into()),
+            project: ProjectSpec {
+                name: "Dots".into(),
+                repo_path: "C:/src/dots".into(),
+                default_branch: None,
+                remote: "origin".into(),
+            },
+            task: "\n  Fix the flaky test.\nIt fails on CI.".into(),
+            trigger: WorkflowTrigger::Manual,
+            origin_run_id: None,
+            test: false,
+            status,
+            waiting_on,
+            current_step: Some("review".into()),
+            budget: dots_core::workflow::Budget::default(),
+            send_backs: 0,
+            send_back: None,
+            spent_runs: 0,
+            spent_tokens: 0,
+            spent_cache_read: 0,
+            active_ms: 0,
+            error: None,
+            started_at: "t".into(),
+            ended_at: None,
+            steps: vec![],
+        }
+    }
+
+    /// Feeds `seq` as WorkflowRunUpdated events for one workflow run; what each told.
+    fn workflow_told(
+        n: &mut Notifier,
+        id: &str,
+        seq: &[(WorkflowRunStatus, Option<WaitingOn>)],
+    ) -> Vec<Option<WorkflowNotice>> {
+        seq.iter()
+            .map(|(status, waiting_on)| {
+                let ev = RuntimeEvent::WorkflowRunUpdated {
+                    run: workflow_run(id, *status, *waiting_on),
+                };
+                n.decide(&ev).map(|notice| match notice {
+                    Notice::Workflow { about, .. } => about,
+                    other => panic!("not a workflow notice: {other:?}"),
+                })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_workflow_run_notifies_once_per_wait_and_when_it_ends() {
+        use WaitingOn as On;
+        use WorkflowNotice as W;
+        use WorkflowRunStatus::{
+            Cancelled as WCancelled, Failed as WFailed, Running as WRunning,
+            Succeeded as WSucceeded, Waiting,
+        };
+        let mut n = Notifier::default();
+        // Each wait on the person notifies as the run moves into it; an update that repeats
+        // the status and the wait (its spend moved) is quiet.
+        assert_eq!(
+            workflow_told(
+                &mut n,
+                "w",
+                &[
+                    (WRunning, None),
+                    (WRunning, None),
+                    (Waiting, Some(On::Check)),
+                    (Waiting, Some(On::Check)),
+                    (WRunning, None),
+                    (Waiting, Some(On::Budget)),
+                    (WRunning, None),
+                    (Waiting, Some(On::SendBacks)),
+                    (WRunning, None),
+                    (Waiting, Some(On::StepFailed)),
+                    (WRunning, None),
+                    (Waiting, Some(On::Check)),
+                    (WSucceeded, None),
+                    (WSucceeded, None),
+                ]
+            ),
+            [
+                None,
+                None,
+                Some(W::Check),
+                None,
+                None,
+                Some(W::Budget),
+                None,
+                Some(W::SendBacks),
+                None,
+                Some(W::StepFailed),
+                None,
+                Some(W::Check),
+                Some(W::Finished),
+                None,
+            ]
+        );
+        // The person stopped it: nothing to tell.
+        assert_eq!(
+            workflow_told(
+                &mut n,
+                "c",
+                &[
+                    (WRunning, None),
+                    (Waiting, Some(On::Check)),
+                    (WCancelled, None)
+                ]
+            ),
+            [None, Some(W::Check), None]
+        );
+        // A run that fails after its wait on the failed step was told then; one that fails
+        // otherwise is told now.
+        assert_eq!(
+            workflow_told(
+                &mut n,
+                "f",
+                &[
+                    (WRunning, None),
+                    (Waiting, Some(On::StepFailed)),
+                    (WFailed, None)
+                ]
+            ),
+            [None, Some(W::StepFailed), None]
+        );
+        assert_eq!(
+            workflow_told(&mut n, "g", &[(WRunning, None), (WFailed, None)]),
+            [None, Some(W::Failed)]
+        );
+        // First seen waiting (it moved while the app was not listening): told; a wait that
+        // names nothing is not.
+        assert_eq!(
+            workflow_told(&mut n, "late", &[(Waiting, Some(On::Check))]),
+            [Some(W::Check)]
+        );
+        assert_eq!(workflow_told(&mut n, "odd", &[(Waiting, None)]), [None]);
+        // A dot run's events never tell about a workflow run.
+        assert_eq!(
+            notified(&mut n, "w", TriggerKind::Manual, &[Running]),
+            [false]
+        );
+        // After a lag the notifier starts again, workflow runs included.
+        n.forget();
+        assert!(n.workflows.is_empty());
+        assert_eq!(
+            workflow_told(&mut n, "w", &[(WSucceeded, None)]),
+            [Some(W::Finished)]
+        );
+    }
+
+    /// `run` at step `step_id`, whose newest step run is `step_run_id`.
+    fn at_step(run: WorkflowRun, step_id: &str, step_run_id: &str) -> WorkflowRun {
+        use dots_core::model::{StepRun, StepRunStatus};
+        let step_run = StepRun {
+            id: step_run_id.into(),
+            workflow_run_id: run.id.clone(),
+            step_id: step_id.into(),
+            attempt: 1,
+            status: StepRunStatus::Waiting,
+            handoff: None,
+            decision: None,
+            error: None,
+            outcome: None,
+            notice: None,
+            send_back: None,
+            deploy_result: None,
+            started_at: "t".into(),
+            ended_at: None,
+        };
+        let mut steps = run.steps.clone();
+        steps.push(step_run);
+        WorkflowRun {
+            current_step: Some(step_id.into()),
+            steps,
+            ..run
+        }
+    }
+
+    #[test]
+    fn a_wait_on_a_new_step_run_is_a_new_notice() {
+        use WaitingOn as On;
+        use WorkflowRunStatus::Waiting;
+        let mut n = Notifier::default();
+        let mut told = |run: WorkflowRun| {
+            n.decide(&RuntimeEvent::WorkflowRunUpdated { run })
+                .map(|notice| notice_text(&notice, "crew"))
+        };
+        // Approving the first check moves the run straight to a second one: no running
+        // update between them.
+        let first = at_step(workflow_run("w", Waiting, Some(On::Check)), "review", "s1");
+        let second = at_step(first.clone(), "recheck", "s2");
+        assert!(told(first.clone()).is_some());
+        assert_eq!(told(first), None);
+        assert_eq!(
+            told(second.clone()),
+            Some((
+                "crew needs your check".into(),
+                "Second look: Fix the flaky test.".into()
+            ))
+        );
+        assert_eq!(told(second.clone()), None);
+        // Retry step makes a new attempt; if it fails again, that is told again.
+        let failed = WorkflowRun {
+            waiting_on: Some(On::StepFailed),
+            error: Some("Ship: gh is not installed".into()),
+            ..at_step(second, "ship", "s3")
+        };
+        assert!(told(failed.clone()).is_some());
+        assert_eq!(told(failed.clone()), None);
+        let again = at_step(failed, "ship", "s4");
+        assert_eq!(
+            told(again),
+            Some(("crew failed".into(), "Ship: gh is not installed".into()))
+        );
+    }
+
+    #[test]
+    fn workflow_notices_say_what_waits_and_open_the_run_page() {
+        use WaitingOn as On;
+        use WorkflowRunStatus::{Failed as WFailed, Succeeded as WSucceeded, Waiting};
+        let told = |run: WorkflowRun| {
+            let about = WorkflowNotice::of(run.status, run.waiting_on).expect("a notice");
+            Notice::Workflow {
+                run: Box::new(run),
+                about,
+            }
+        };
+        let check = told(workflow_run("w1", Waiting, Some(On::Check)));
+        assert_eq!(
+            notice_text(&check, "crew"),
+            (
+                "crew needs your check".into(),
+                "Review: Fix the flaky test.".into()
+            )
+        );
+        assert_eq!(notice_route(&check, ""), "/workflow-runs/w1");
+        assert_eq!(notice_route(&check, "d"), "/workflow-runs/w1");
+        let budget = told(WorkflowRun {
+            spent_runs: 10,
+            error: Some("Budget reached: runs, 10 of 10".into()),
+            ..workflow_run("w2", Waiting, Some(On::Budget))
+        });
+        assert_eq!(
+            notice_text(&budget, "crew"),
+            ("crew hit its budget".into(), "runs, 10 of 10".into())
+        );
+        let send_backs = told(WorkflowRun {
+            send_backs: 3,
+            ..workflow_run("w3", Waiting, Some(On::SendBacks))
+        });
+        assert_eq!(
+            notice_text(&send_backs, "crew"),
+            (
+                "crew hit its send-back limit".into(),
+                "send-backs, 3 of 3".into()
+            )
+        );
+        let step_failed = told(WorkflowRun {
+            current_step: Some("ship".into()),
+            error: Some("Ship: git push was rejected\nhint: fetch first".into()),
+            ..workflow_run("w4", Waiting, Some(On::StepFailed))
+        });
+        assert_eq!(
+            notice_text(&step_failed, "crew"),
+            ("crew failed".into(), "Ship: git push was rejected".into())
+        );
+        let cases = [
+            (WSucceeded, false, "crew finished"),
+            (WFailed, false, "crew failed"),
+            (WSucceeded, true, "crew finished (test)"),
+            (WFailed, true, "crew failed (test)"),
+        ];
+        for (status, test, title) in cases {
+            let ended = told(WorkflowRun {
+                test,
+                ..workflow_run("w5", status, None)
+            });
+            assert_eq!(
+                notice_text(&ended, "crew"),
+                (title.to_string(), "Fix the flaky test.".to_string())
+            );
+        }
+        // A test run says so on every notice; before its first step, the task alone.
+        let early = told(WorkflowRun {
+            test: true,
+            current_step: None,
+            ..workflow_run("w6", Waiting, Some(On::Check))
+        });
+        assert_eq!(
+            notice_text(&early, "crew"),
+            (
+                "crew needs your check (test)".into(),
+                "Fix the flaky test.".into()
+            )
+        );
+        // Without the limit's text (the run's budget was raised since), the run's error.
+        let raised = told(WorkflowRun {
+            error: Some("Budget reached: tokens, 2 of 1".into()),
+            ..workflow_run("w7", Waiting, Some(On::Budget))
+        });
+        assert_eq!(
+            notice_text(&raised, "crew").1,
+            "Budget reached: tokens, 2 of 1"
+        );
+        for notice in [check, budget, send_backs, step_failed, early, raised] {
+            let (t, b) = notice_text(&notice, "crew");
+            assert!(!t.contains("Inbox") && !b.contains("Inbox"), "{t} / {b}");
+        }
+    }
+
+    #[test]
+    fn a_step_s_runs_never_notify_that_they_ended_but_their_approvals_do() {
+        let mut n = Notifier::default();
+        let step_run = |id: &str, status| RuntimeEvent::RunUpdated {
+            run: Run {
+                workflow_step_run_id: Some("s1".into()),
+                ..run(id, status, TriggerKind::Workflow)
+            },
+        };
+        let told = |n: &mut Notifier, id: &str, seq: &[RunStatus]| -> Vec<bool> {
+            seq.iter()
+                .map(|s| n.decide(&step_run(id, *s)).is_some())
+                .collect()
+        };
+        assert_eq!(
+            told(&mut n, "ok", &[Queued, Running, Succeeded]),
+            [false, false, false]
+        );
+        assert_eq!(
+            told(&mut n, "bad", &[Queued, Running, Failed]),
+            [false, false, false]
+        );
+        // A chat reply made while the step is open inherits the step: quiet too, even when
+        // the watchdog stopped it.
+        let reply = RuntimeEvent::RunUpdated {
+            run: Run {
+                workflow_step_run_id: Some("s1".into()),
+                quiet_stopped: true,
+                ..run("reply", Failed, TriggerKind::Chat)
+            },
+        };
+        assert!(n.decide(&step_run("reply", Running)).is_none());
+        assert_eq!(n.decide(&reply), None);
+        // Its approvals notify, and so does a park on a request nobody announced.
+        assert!(matches!(
+            n.decide(&asked("ask")),
+            Some(Notice::ApprovalNeeded { .. })
+        ));
+        assert_eq!(
+            told(&mut n, "park", &[Queued, Running, AwaitingApproval]),
+            [false, false, true]
+        );
+        // The same run outside a workflow notifies as before.
+        assert_eq!(
+            notified(&mut n, "own", TriggerKind::Manual, &[Running, Succeeded]),
+            [false, true]
+        );
     }
 }
