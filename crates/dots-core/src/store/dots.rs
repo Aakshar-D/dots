@@ -62,6 +62,8 @@ pub(super) fn dot_from_row(row: &SqliteRow) -> Result<Dot> {
 fn prepared(spec: &DotSpec, previous: Option<&Schedule>) -> Result<DotSpec> {
     spec.validate()?;
     let mut spec = spec.clone();
+    // A model id is stored without the spaces around it (model switcher spec section 2.3).
+    spec.model = spec.model.trim().to_string();
     if let Some(schedule) = &mut spec.schedule {
         // Whole milliseconds, as `util::now()`: the stored anchor reads back the same.
         schedule.prepare_save(previous, Utc::now().trunc_subsecs(3), &Local)?;

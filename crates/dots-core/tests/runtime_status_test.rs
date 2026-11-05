@@ -207,8 +207,13 @@ async fn a_new_dot_starts_with_the_default_model_and_old_dots_keep_theirs() {
         .unwrap();
 
     let mut s = rt.settings().await;
-    s.default_model = "opus".into();
+    s.default_model = " opus ".into();
     rt.update_settings(s).await.unwrap();
+    assert_eq!(rt.settings().await.default_model, "opus");
+    assert_eq!(
+        rt.store().get_settings().await.unwrap().default_model,
+        "opus"
+    );
     let blank = rt.new_dot_spec("n", "i", "w").await;
     assert_eq!(blank.model, "opus");
     assert_eq!(
@@ -219,6 +224,11 @@ async fn a_new_dot_starts_with_the_default_model_and_old_dots_keep_theirs() {
         rt.get_dot(&old.id).await.unwrap().spec.model,
         old.spec.model
     );
+    // A dot's model is saved without the spaces around it.
+    let mut spaced = old.spec.clone();
+    spaced.model = "  claude-opus-4-1 ".into();
+    let saved = rt.update_dot(&old.id, spaced).await.unwrap();
+    assert_eq!(saved.spec.model, "claude-opus-4-1");
     rt.shutdown();
 }
 

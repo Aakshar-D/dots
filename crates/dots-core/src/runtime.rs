@@ -732,6 +732,8 @@ impl Runtime {
         let mut current = self.settings.lock().await;
         let mut next = current.clone();
         change(&mut next);
+        // As the store keeps it, so the live copy reads the same as the stored one.
+        next.default_model = next.default_model.trim().to_string();
         self.store.put_settings(&next).await?;
         self.scheduler.set_paused(next.schedules_paused);
         self.watchers.set_paused(next.schedules_paused);
