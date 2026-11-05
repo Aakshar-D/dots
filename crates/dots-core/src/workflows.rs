@@ -461,8 +461,8 @@ impl Workflows {
     }
 
     /// Starts a run of a workflow on one of its team's projects. Refused for a workflow that is
-    /// turned off or has a `problem`, a project of another team or whose folder is no longer a
-    /// git repo, and a task that is blank or longer than `MAX_TASK`.
+    /// turned off (except a Test run) or has a `problem`, a project of another team or whose
+    /// folder is no longer a git repo, and a task that is blank or longer than `MAX_TASK`.
     pub async fn start(&self, req: StartRequest) -> Result<WorkflowRun> {
         let task = req.task.trim();
         if task.is_empty() || task.chars().count() > MAX_TASK {
@@ -473,7 +473,11 @@ impl Workflows {
         let workflow = self.store.get_workflow(&req.workflow_id).await?;
         self.require(&workflow.team_id, Permission::RunDots).await?;
         let name = &workflow.spec.name;
-        if !workflow.spec.enabled {
+        // `enabled` arms the chat, schedule and webhook triggers and Run now. A Test run (the
+        // person's manual start with `test`) starts while the workflow is off, so a new
+        // workflow can be tried before it is armed.
+        let test_run = req.test && matches!(req.trigger, WorkflowTrigger::Manual);
+        if !workflow.spec.enabled && !test_run {
             return Err(Error::Conflict(format!("workflow {name} is turned off")));
         }
         if let Some(problem) = &workflow.problem {

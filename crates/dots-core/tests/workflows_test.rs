@@ -965,6 +965,71 @@ async fn what_a_start_refuses() {
 }
 
 #[tokio::test]
+async fn a_test_run_starts_while_its_workflow_is_off_and_run_now_does_not() {
+    let w = world().await;
+    let flow = w.standard().await;
+    let mut spec = w.store.get_workflow(&flow).await.unwrap().spec;
+    spec.enabled = false;
+    w.store.update_workflow(&flow, &spec).await.unwrap();
+    let run_now = StartRequest {
+        workflow_id: flow.clone(),
+        project_id: w.project.clone(),
+        task: "The tray icon is invisible in dark mode.".into(),
+        trigger: WorkflowTrigger::Manual,
+        origin_run_id: None,
+        test: false,
+    };
+    // Run now (a manual start that is not a test) is still refused, with the same words.
+    assert!(matches!(
+        w.workflows.start(run_now.clone()).await,
+        Err(Error::Conflict(m)) if m == "workflow Fix is turned off"
+    ));
+    // Only the manual trigger may test an off workflow: a start from a trigger `enabled` arms
+    // is refused even when it asks for a test.
+    for trigger in [
+        WorkflowTrigger::Chat,
+        WorkflowTrigger::Schedule,
+        WorkflowTrigger::Webhook,
+    ] {
+        assert!(matches!(
+            w.workflows
+                .start(StartRequest { trigger, test: true, ..run_now.clone() })
+                .await,
+            Err(Error::Conflict(m)) if m == "workflow Fix is turned off"
+        ));
+    }
+    assert!(w
+        .store
+        .list_workflow_runs(None, 10)
+        .await
+        .unwrap()
+        .is_empty());
+    // A Test run starts, is flagged `test`, and goes on to the check as any run does.
+    let started = w
+        .workflows
+        .start(StartRequest {
+            test: true,
+            ..run_now.clone()
+        })
+        .await
+        .unwrap();
+    assert!(started.test);
+    assert_eq!(started.trigger, WorkflowTrigger::Manual);
+    assert_eq!(started.status, WorkflowRunStatus::Running);
+    let wr = w.until(&started.id, waits_on(WaitingOn::Check)).await;
+    assert!(wr.test);
+    // The workflow is still off, and Run now is still refused.
+    assert!(!w.store.get_workflow(&flow).await.unwrap().spec.enabled);
+    assert!(matches!(
+        w.workflows.start(run_now).await,
+        Err(Error::Conflict(m)) if m == "workflow Fix is turned off"
+    ));
+    let runs = w.store.list_workflow_runs(None, 10).await.unwrap();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].id, started.id);
+}
+
+#[tokio::test]
 async fn a_team_with_runs_in_flight_is_deleted_by_stopping_them_first() {
     let w = world().await;
     w.engine.set(&w.dev.spec.name, vec![Act::Hold]);
